@@ -33,3 +33,5 @@ Branch `worktree-sidebar-status-icons`, desktop only, with no Remote contract ch
 - Ideas from t3code: visibility-leased PR reads (IntersectionObserver), cross-fading status into hover actions, and a richer hover card.
 
 Related: [[chat-row-states]], [[chat-pull-requests]].
+
+- 2026-11-19: the sidebar chat list became one keyboard collection with typeahead, multi-select, a bulk Delete bar and focus recovery; see [[sidebar-chat-collection]].

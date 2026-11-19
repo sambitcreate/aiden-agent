@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { afterEach, test } from "node:test";
 import * as React from "react";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { useRovingRows } from "./roving-rows";
+import { TYPEAHEAD_TIMEOUT_MS, useRovingRows } from "./roving-rows";
 
 afterEach(cleanup);
 
@@ -13,14 +13,14 @@ interface Row {
 }
 
 /** A folder of chats like the sidebar's: the folder row, then its chats, each with a ••• button. */
-function List({ rows, current, onToggle }: { rows: Row[]; current?: string; onToggle?: () => void }) {
+function List({ rows, current, onToggle, dir }: { rows: Row[]; current?: string; onToggle?: () => void; dir?: "rtl" }) {
   const ref = React.useRef<HTMLDivElement>(null);
   useRovingRows(ref);
   const [open, setOpen] = React.useState(true);
   return (
     <>
       <button type="button">Before</button>
-      <div ref={ref}>
+      <div ref={ref} dir={dir}>
         <div data-roving-group>
           <div data-roving-row>
             <button
@@ -139,4 +139,90 @@ test("rows that arrive later join the list without adding Tab stops", async () =
   rerender(<List rows={[...ROWS, { id: "d", title: "Delta" }]} current="d" />);
   await act(() => new Promise((resolve) => setTimeout(resolve, 0)));
   assert.deepEqual(tabStops(), ["Before", "Delta", "More for Delta", "After"]);
+});
+
+test("in a right-to-left layout → and ← swap: → goes back to the folder and closes it, ← opens it", () => {
+  let toggles = 0;
+  render(<List rows={ROWS} current="b" dir="rtl" onToggle={() => (toggles += 1)} />);
+  button("Bravo").focus();
+  fireEvent.keyDown(document.activeElement!, { key: "ArrowRight" });
+  assert.equal(document.activeElement, button("Folder"));
+  fireEvent.keyDown(document.activeElement!, { key: "ArrowRight" });
+  assert.equal(toggles, 1);
+  assert.equal(screen.queryByRole("button", { name: "Bravo" }), null);
+  fireEvent.keyDown(document.activeElement!, { key: "ArrowLeft" });
+  assert.equal(toggles, 2);
+});
+
+const typeaheadPause = () => act(() => new Promise((resolve) => setTimeout(resolve, TYPEAHEAD_TIMEOUT_MS + 20)));
+
+test("typing a title's first letters moves to it; the query clears after 500 ms", async () => {
+  const rows = [...ROWS, { id: "e", title: "Écho" }, { id: "f", title: "Bravo two" }];
+  render(<List rows={rows} current="a" />);
+  button("Alpha").focus();
+  fireEvent.keyDown(document.activeElement!, { key: "b" });
+  assert.equal(document.activeElement, button("Bravo"));
+  // A longer query keeps the current match while it still fits, Space included.
+  for (const key of ["r", "a", "v", "o", " ", "t"]) fireEvent.keyDown(document.activeElement!, { key });
+  assert.equal(document.activeElement, button("Bravo two"));
+  await typeaheadPause();
+  // Accents and case are ignored.
+  fireEvent.keyDown(document.activeElement!, { key: "E" });
+  assert.equal(document.activeElement, button("Écho"));
+  await typeaheadPause();
+  // The same letter again steps through the rows that start with it, wrapping round.
+  const focused = () => document.activeElement?.textContent;
+  fireEvent.keyDown(document.activeElement!, { key: "b" });
+  assert.equal(focused(), "Bravo two");
+  fireEvent.keyDown(document.activeElement!, { key: "b" });
+  assert.equal(focused(), "Bravo");
+  fireEvent.keyDown(document.activeElement!, { key: "b" });
+  assert.equal(focused(), "Bravo two");
+});
+
+test("after a click on a row, typed letters are left for the message box", () => {
+  render(<List rows={ROWS} current="a" />);
+  fireEvent.pointerDown(button("Alpha"));
+  act(() => button("Alpha").focus());
+  fireEvent.pointerUp(button("Alpha"));
+  const notHandled = fireEvent.keyDown(button("Alpha"), { key: "c" });
+  assert.equal(notHandled, true);
+  assert.equal(document.activeElement, button("Alpha"));
+  // Moving by keyboard hands typing to the list.
+  fireEvent.keyDown(button("Alpha"), { key: "ArrowDown" });
+  fireEvent.keyDown(document.activeElement!, { key: "c" });
+  assert.equal(document.activeElement, button("Charlie"));
+});
+
+test("focus that script moves to a row keeps the way the person last arrived", () => {
+  render(<List rows={ROWS} current="a" />);
+  fireEvent.pointerDown(button("Alpha"));
+  act(() => button("Alpha").focus());
+  // A dialog closing returns focus to another row: a mouse user's letters still go to the message box.
+  act(() => button("Bravo").focus());
+  assert.equal(fireEvent.keyDown(button("Bravo"), { key: "c" }), true);
+  // The app's modality says the keyboard brought focus here (Tab, F6).
+  act(() => button("After").focus());
+  document.documentElement.setAttribute("data-input-modality", "keyboard");
+  try {
+    act(() => button("Alpha").focus());
+    fireEvent.keyDown(button("Alpha"), { key: "c" });
+    assert.equal(document.activeElement?.textContent, "Charlie");
+  } finally {
+    document.documentElement.removeAttribute("data-input-modality");
+  }
+});
+
+test("when the focused row goes, focus moves to the row in its place, or the one before when it was last", async () => {
+  const { rerender } = render(<List rows={ROWS} current="a" />);
+  act(() => button("Bravo").focus());
+  rerender(<List rows={[ROWS[0]!, ROWS[2]!]} current="a" />);
+  await act(() => Promise.resolve());
+  assert.equal(document.activeElement, button("Charlie"));
+  rerender(<List rows={[ROWS[0]!]} current="a" />);
+  await act(() => Promise.resolve());
+  assert.equal(document.activeElement, button("Alpha"));
+  rerender(<List rows={[]} />);
+  await act(() => Promise.resolve());
+  assert.equal(document.activeElement, button("Folder"));
 });

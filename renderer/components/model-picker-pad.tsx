@@ -24,6 +24,7 @@ import {
 } from "../lib/model-pad-layout";
 import { ModelPadLattice } from "./model-pad-lattice";
 import { ProviderIcon } from "./provider-icon";
+import { isEscapeKey } from "../lib/dismiss-key";
 
 const PAD_CENTER: ModelPoint = { x: 0.5, y: 0.5 };
 
@@ -336,7 +337,7 @@ export function ModelPickerPad({
       }
       return;
     }
-    if (event.key === "Escape" && activeValueRef.current !== selectedValue) {
+    if (isEscapeKey(event) && activeValueRef.current !== selectedValue) {
       event.preventDefault();
       event.stopPropagation();
       activeValueRef.current = selectedValue;

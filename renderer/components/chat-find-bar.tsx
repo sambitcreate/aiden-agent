@@ -13,6 +13,7 @@ import {
   findChatMatches,
   paintChatMatches,
 } from "../lib/chat-find";
+import { isEscapeKey } from "../lib/dismiss-key";
 
 const REFRESH_DELAY_MS = 120;
 
@@ -124,7 +125,7 @@ export function ChatFindBar({ request, onClose }: { request: number; onClose(): 
       className="flex items-center gap-1 rounded-card bg-popover p-1 shadow-popover"
       // Esc closes from any control in the bar, not only the search field.
       onKeyDown={(event) => {
-        if (event.key !== "Escape" || event.nativeEvent.isComposing) return;
+        if (!isEscapeKey(event)) return;
         event.preventDefault();
         event.stopPropagation();
         close();

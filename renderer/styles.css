@@ -1,4 +1,8 @@
 @import "tailwindcss";
+/* Reduce Motion follows Aiden's own setting, never the OS query alone: the appearance
+   runtime writes :root[data-reduce-motion] and folds the system in only for System. */
+@custom-variant motion-reduce (&:where(:root[data-reduce-motion="true"] *));
+@custom-variant motion-safe (&:where(:root:not([data-reduce-motion="true"]) *));
 /* Onboarding feature-tour art (code-drawn tiles; see renderer/components/onboarding-art). */
 @import "./components/onboarding-art/onboarding-art.css";
 
@@ -112,7 +116,7 @@
 .device-tools-input { min-width: 0; flex: 1 1 8rem; }
 .device-tools-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 .device-tools-mono { min-width: 0; max-width: 100%; font-family: var(--font-mono); font-size: var(--text-small); }
-@media (prefers-reduced-motion: reduce) { .device-tools *, .device-duo-controls * { transition: none !important; } }
+:root[data-reduce-motion="true"] :is(.device-tools, .device-duo-controls) * { transition: none !important; }
 /* Device power features. Element frames are the overlay's content, so they carry a thin accent edge. */
 .device-ax-overlay, .device-touch-dots { position: absolute; inset: 0; z-index: 1; pointer-events: none; }
 .device-ax-frame { position: absolute; box-sizing: border-box; border-radius: 3px; background: color-mix(in srgb, var(--status-accent) 9%, transparent); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--status-accent) 65%, transparent); }
@@ -141,7 +145,8 @@
 .device-screenshot-group { display: inline-flex; align-items: center; }
 .device-screenshot-group > .device-screenshot-menu { width: 18px; padding: 0; }
 .device-screenshot-group > .device-screenshot-menu svg { width: 12px; height: 12px; }
-@media (prefers-reduced-motion: reduce) { .device-record-indicator[data-recording] .device-record-dot { animation: none; } .device-event-log-chevron { transition: none; } }
+:root[data-reduce-motion="true"] .device-record-indicator[data-recording] .device-record-dot { animation: none; }
+:root[data-reduce-motion="true"] .device-event-log-chevron { transition: none; }
 .browser-start-page { width: 100%; overflow-y: auto; padding: 24px; }
 .browser-start-page section + section { margin-top: 28px; }
 .browser-start-page h3 { display: flex; align-items: center; gap: 7px; margin: 0 0 9px; color: var(--text-secondary); font-size: calc(var(--ui-font-size) - 1px); font-weight: 550; }
@@ -205,7 +210,7 @@
 .browser-annotation-footer { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .browser-tab-select:focus-visible, .browser-tab-close:focus-visible, .browser-select:focus-visible, .browser-recent-row > button:focus-visible, .browser-annotation-details summary:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
 @keyframes browser-loading { 0% { transform: scaleX(.08); opacity: .45; } 75% { transform: scaleX(.8); opacity: .7; } 100% { transform: scaleX(1); opacity: .2; } }
-@media (prefers-reduced-motion: reduce) { .browser-chrome[data-loading="true"]::after { animation: none; opacity: .55; } }
+:root[data-reduce-motion="true"] .browser-chrome[data-loading="true"]::after { animation: none; opacity: .55; }
 
 @theme inline {
   --color-primary: var(--text-primary);
@@ -236,6 +241,7 @@
   --color-status-warning-surface: var(--status-warning-surface);
   --color-accent: var(--accent);
   --color-accent-text: var(--accent-text);
+  --color-match: var(--text-match);
   --color-accent-foreground: var(--accent-foreground);
   --color-accent-hover: var(--accent-hover);
   --color-accent-active: var(--accent-active);
@@ -307,6 +313,8 @@
   --default-transition-timing-function: var(--motion-easing);
 }
 :root {
+  /* The matched part of a label in a search result (pickers, the palette). */
+  --text-match: var(--accent-text);
   color-scheme: light;
   font-family: var(--font-ui-family);
   --font-ui-family:
@@ -321,6 +329,8 @@
   --motion-easing: cubic-bezier(0.16, 1, 0.3, 1);
   --motion-large-duration: 360ms;
   --motion-large-easing: cubic-bezier(0.22, 1, 0.36, 1);
+  /* Material's decelerate curve: hover lifts, tooltips and quick popover entrances. */
+  --motion-decelerate-easing: cubic-bezier(0, 0, 0.2, 1);
   --motion-popup-scale: 0.96;
   --motion-press-distance: 1px;
   --text-primary: #3D3F41;
@@ -582,6 +592,11 @@ body {
 /* Activity marks are excluded: they freeze on their own still pose (see .aiden-mark),
    and collapsing their tracks to 0.001ms would end them on a last frame instead.
    A generated image's arrival keeps its short opacity fade (see .image-scan). */
+:root[data-reduce-motion="true"] {
+  /* Anything timed from the tokens, including generated UI that receives them, lands at once. */
+  --motion-duration: 0ms;
+  --motion-large-duration: 0ms;
+}
 :root[data-reduce-motion="true"] *:not(.aiden-mark, .aiden-mark *, .image-scan-result),
 :root[data-reduce-motion="true"] *::before,
 :root[data-reduce-motion="true"] *::after {
@@ -622,7 +637,7 @@ body {
 
 /* A context chip that appears mid-chat (the pull request chip) uses the shared popup entry. */
 :root[data-reduce-motion="false"] .composer-context-chip-enter {
-  animation: aiden-pill-enter 200ms cubic-bezier(0.19, 1, 0.22, 1);
+  animation: aiden-pill-enter var(--motion-duration) var(--motion-easing);
 }
 
 .composer-shell {
@@ -670,7 +685,7 @@ body {
 }
 
 .ask-user-question-shell {
-  animation: ask-user-question-in 180ms cubic-bezier(0.19, 1, 0.22, 1) both;
+  animation: ask-user-question-in var(--motion-duration) var(--motion-easing) both;
 }
 
 .ask-user-question-icon,
@@ -1011,11 +1026,9 @@ textarea {
   margin-bottom: 6px;
 }
 
-@media (prefers-reduced-motion: reduce) {
-  .aiden-inline-visual-frame,
-  .aiden-inline-visual-caption {
-    transition: none;
-  }
+:root[data-reduce-motion="true"] .aiden-inline-visual-frame,
+:root[data-reduce-motion="true"] .aiden-inline-visual-caption {
+  transition: none;
 }
 
 /* A reasoning disclosure's body folds on a grid track so it can ease between
@@ -1281,7 +1294,7 @@ textarea {
   border: 2px solid transparent;
   box-shadow: var(--elevation-control);
   transition:
-    transform 150ms cubic-bezier(0, 0, 0.2, 1),
+    transform 150ms var(--motion-decelerate-easing),
     box-shadow 120ms ease-out;
 }
 
@@ -1371,7 +1384,7 @@ textarea {
   transform: translate(-50%, 3px) scale(var(--motion-popup-scale));
   transition:
     opacity 120ms ease-out,
-    transform 150ms cubic-bezier(0, 0, 0.2, 1);
+    transform 150ms var(--motion-decelerate-easing);
   pointer-events: none;
   text-align: left;
   white-space: nowrap;
@@ -1549,9 +1562,9 @@ textarea {
 .model-pad-knob {
   color: var(--model-pad-knob-foreground);
   transition:
-    background-color 250ms cubic-bezier(0.25, 1, 0.5, 1),
-    box-shadow 250ms cubic-bezier(0.25, 1, 0.5, 1),
-    color 250ms cubic-bezier(0.25, 1, 0.5, 1);
+    background-color 250ms var(--motion-large-easing),
+    box-shadow 250ms var(--motion-large-easing),
+    color 250ms var(--motion-large-easing);
 }
 
 .model-pad-knob[data-confirmed="true"] {
@@ -1944,13 +1957,13 @@ textarea {
   height: var(--terminal-drawer-height);
   opacity: 1;
   transition:
-    height 300ms cubic-bezier(0.19, 1, 0.22, 1),
+    height 300ms var(--motion-easing),
     opacity 180ms ease-out,
     border-color 180ms ease-out;
 }
 
 .terminal-drawer[data-state="open"] {
-  animation: aiden-terminal-drawer-in 300ms cubic-bezier(0.19, 1, 0.22, 1) both;
+  animation: aiden-terminal-drawer-in 300ms var(--motion-easing) both;
 }
 
 .terminal-drawer[data-state="closed"] {
@@ -2148,7 +2161,7 @@ textarea {
 
 :root[data-reduce-motion="false"]
   .composer-slash-palette[data-presence="visible"] {
-  animation: aiden-slash-palette-in 150ms cubic-bezier(0, 0, 0.2, 1) both;
+  animation: aiden-slash-palette-in 150ms var(--motion-decelerate-easing) both;
 }
 
 :root[data-reduce-motion="false"]
@@ -2210,7 +2223,7 @@ textarea {
 }
 
 :root[data-reduce-motion="false"] [data-slot="dialog-content"][data-state="open"] {
-  animation: aiden-dialog-in 10ms cubic-bezier(0, 0, 0.2, 1);
+  animation: aiden-dialog-in 10ms var(--motion-decelerate-easing);
 }
 :root[data-reduce-motion="false"] [data-slot="dialog-content"][data-state="closed"] {
   animation: aiden-dialog-out 120ms ease-in;
@@ -2232,11 +2245,11 @@ textarea {
   animation: aiden-chat-title-previous-out 200ms ease-out both;
 }
 :root[data-reduce-motion="false"] .chat-title-reveal-character {
-  animation: aiden-chat-title-character-in 160ms cubic-bezier(0.19, 1, 0.22, 1)
+  animation: aiden-chat-title-character-in 160ms var(--motion-easing)
     both;
 }
 :root[data-reduce-motion="false"] .quick-view-card[data-state="open"] {
-  animation: aiden-environment-summary-in 180ms cubic-bezier(0, 0, 0.2, 1) both;
+  animation: aiden-environment-summary-in var(--motion-duration) var(--motion-decelerate-easing) both;
 }
 :root[data-reduce-motion="false"] .quick-view-card[data-state="closed"] {
   animation: aiden-environment-summary-out 120ms ease-in both;
@@ -2255,26 +2268,21 @@ textarea {
 :root[data-reduce-motion="false"] .quick-view-card-slot[data-entering] {
   animation: quick-view-card-enter var(--motion-large-duration) var(--motion-large-easing) both;
 }
-@media (prefers-reduced-motion: reduce) {
-  .quick-view-card-slot[data-entering] {
-    animation: none;
-  }
-}
 :root[data-reduce-motion="false"] .app-update-banner[data-state="open"] {
-  animation: aiden-app-update-banner-in 150ms cubic-bezier(0.19, 1, 0.22, 1)
+  animation: aiden-app-update-banner-in 150ms var(--motion-easing)
     both;
 }
 :root[data-reduce-motion="false"] .app-update-banner[data-state="closed"] {
   animation: aiden-app-update-banner-out 120ms ease-in both;
 }
 :root[data-reduce-motion="false"] .assistant-automation-approval[data-state="open"] {
-  animation: aiden-app-update-banner-in 150ms cubic-bezier(0.19, 1, 0.22, 1) both;
+  animation: aiden-app-update-banner-in 150ms var(--motion-easing) both;
 }
 :root[data-reduce-motion="false"] .scheduled-task-detail[data-state="open"] {
-  animation: aiden-app-update-banner-in 150ms cubic-bezier(0.19, 1, 0.22, 1) both;
+  animation: aiden-app-update-banner-in 150ms var(--motion-easing) both;
 }
 :root[data-reduce-motion="false"] .usage-data-notice[data-state="open"] {
-  animation: aiden-app-update-banner-in 150ms cubic-bezier(0.19, 1, 0.22, 1) both;
+  animation: aiden-app-update-banner-in 150ms var(--motion-easing) both;
 }
 :root[data-reduce-motion="false"] .agent-thinking-shimmer {
   color: transparent;
@@ -2319,7 +2327,7 @@ textarea {
 }
 
 :root[data-reduce-motion="false"] .reasoning-surface[data-streaming="true"] {
-  animation: aiden-reasoning-surface-in 220ms cubic-bezier(0.16, 1, 0.3, 1) both;
+  animation: aiden-reasoning-surface-in var(--motion-duration) var(--motion-easing) both;
 }
 
 :root[data-reduce-motion="false"] .reasoning-body {
@@ -2342,7 +2350,7 @@ textarea {
   overflow: hidden;
   text-overflow: ellipsis;
   vertical-align: bottom;
-  animation: aiden-reasoning-line-in 220ms cubic-bezier(0.16, 1, 0.3, 1) both;
+  animation: aiden-reasoning-line-in var(--motion-duration) var(--motion-easing) both;
 }
 
 @keyframes aiden-reasoning-line-in {
@@ -2382,7 +2390,7 @@ textarea {
 :root[data-reduce-motion="false"]
   .activity-feed[data-animate="true"][data-presence="visible"],
 :root[data-reduce-motion="false"] .agent-event-in {
-  animation: aiden-agent-event-in 200ms cubic-bezier(0.16, 1, 0.3, 1) both;
+  animation: aiden-agent-event-in var(--motion-duration) var(--motion-easing) both;
 }
 
 :root[data-reduce-motion="false"]
@@ -3006,7 +3014,7 @@ textarea {
 }
 
 :root[data-reduce-motion="false"] .device-mini-player {
-  animation: device-mini-player-enter 150ms cubic-bezier(0.23, 1, 0.32, 1);
+  animation: device-mini-player-enter 150ms var(--motion-large-easing);
 }
 
 :root[data-reduce-motion="false"] .device-mini-player-settle {
@@ -3045,30 +3053,15 @@ textarea {
 }
 
 .aiden-pill {
-  animation: aiden-pill-enter 200ms cubic-bezier(0.19, 1, 0.22, 1);
+  animation: aiden-pill-enter var(--motion-duration) var(--motion-easing);
 }
 
-@media (prefers-reduced-motion: reduce) {
-  .model-pad-chip,
-  .model-pad-knob,
-  .model-pad-marker-label,
-  .model-pad-marker-visual,
-  .model-pad-metric-chip,
-  .model-pad-model,
-  .model-pad-node {
-    transition: none;
-  }
-
-  .terminal-drawer {
-    animation: none;
-  }
-
-  .aiden-pill {
-    animation: none;
-  }
+:root[data-reduce-motion="true"] .aiden-pill {
+  animation: none;
 }
 
 :root[data-reduce-motion="true"] .model-pad-chip,
+:root[data-reduce-motion="true"] .model-pad-knob,
 :root[data-reduce-motion="true"] .model-pad-marker-label,
 :root[data-reduce-motion="true"] .model-pad-marker-visual,
 :root[data-reduce-motion="true"] .model-pad-metric-chip,
@@ -3091,14 +3084,11 @@ textarea {
 :root[data-reduce-motion="false"] [data-slot="button"]:active:not(:disabled):not([class*="translate-"]) { translate: 0 var(--motion-press-distance); }
 .button-press-feedback:active:not(:disabled) { scale: 0.96; }
 :root[data-reduce-motion="true"] .button-press-feedback { scale: none !important; }
-@media (prefers-reduced-motion: reduce) {
-  .button-press-feedback { scale: none !important; }
-}
 
 /* Busy send pill: a new mode rolls its label in, and holding the label fills it
    toward the moment the mode menu opens (BUSY_SEND_HOLD_MS). */
 :root[data-reduce-motion="false"] .busy-send-label {
-  animation: aiden-busy-send-label-in 220ms cubic-bezier(0.19, 1, 0.22, 1) both;
+  animation: aiden-busy-send-label-in var(--motion-duration) var(--motion-easing) both;
 }
 .busy-send-button [data-holding]::before {
   content: "";
@@ -3117,9 +3107,6 @@ textarea {
 }
 @keyframes aiden-busy-send-hold {
   to { transform: scaleX(1); }
-}
-@media (prefers-reduced-motion: reduce) {
-  .busy-send-label, .busy-send-button [data-holding]::before { animation: none !important; }
 }
 
 /* Aiden Live's window-level control: one compact pill. A leading Helix glyph
@@ -3228,11 +3215,6 @@ textarea {
 :root[data-reduce-motion="true"] .aiden-live-trigger:active {
   transform: none;
 }
-@media (prefers-reduced-motion: reduce) {
-  .aiden-live-trigger { transition: none !important; }
-  .aiden-live-trigger:hover,
-  .aiden-live-trigger:active { transform: none !important; }
-}
 .aiden-live-mark {
   position: relative;
   display: grid;
@@ -3243,16 +3225,12 @@ textarea {
   min-height: 2.5rem;
   color: var(--accent);
   transform: scale(calc(0.94 + var(--aiden-live-level, 0) * 0.06));
-  transition: opacity 300ms ease, transform 420ms cubic-bezier(.22, 1, .36, 1);
+  transition: opacity 300ms ease, transform 420ms var(--motion-large-easing);
 }
 .aiden-live-mark > .aiden-mark { width: 100% !important; height: 100% !important; animation: aiden-live-mark-in 280ms ease both; }
 @keyframes aiden-live-mark-in { from { opacity: 0; } to { opacity: 1; } }
 :root[data-reduce-motion="true"] .aiden-live-mark { transition: none; }
 :root[data-reduce-motion="true"] .aiden-live-mark > .aiden-mark { animation: none; }
-@media (prefers-reduced-motion: reduce) {
-  .aiden-live-mark { transition: none !important; }
-  .aiden-live-mark > .aiden-mark { animation: none; }
-}
 
 /* ───────── Activity marks ─────────
    Shared geometry and timing: docs/activity-marks.md (also drawn natively on iOS and Android).
@@ -3264,9 +3242,6 @@ textarea {
 .aiden-mark[data-offscreen] *,
 :root[data-document-hidden] .aiden-mark * { animation-play-state: paused !important; }
 :root[data-reduce-motion="true"] .aiden-mark * { animation-play-state: paused !important; }
-@media (prefers-reduced-motion: reduce) {
-  .aiden-mark * { animation-play-state: paused !important; }
-}
 
 /* Tri-step: a third of a turn with a small overshoot, then a rest. */
 .aiden-mark[data-aiden-mark="tri-step"] .aiden-mark-turn { transform-origin: 12px 12px; animation: aiden-mark-tri 2.7s infinite; }
@@ -3333,10 +3308,6 @@ textarea {
 /* Under Reduce Motion a working face holds the glance's look-aside pose instead,
    so it still reads as working without moving. */
 :root[data-reduce-motion="true"] .bot-avatar[data-working] .bot-avatar-eyes { transform: translateX(-2.6px); }
-@media (prefers-reduced-motion: reduce) {
-  .bot-avatar[data-working] * { animation: none !important; }
-  .bot-avatar[data-working] .bot-avatar-eyes { transform: translateX(-2.6px); }
-}
 
 /* Helix family (Live). Position and depth run on the same period with depth a
    quarter behind (per-circle delays are inline), so the strands read as
@@ -3663,10 +3634,8 @@ textarea {
   color: var(--status-accent);
   font-size: var(--text-small);
 }
-@media (prefers-reduced-motion: no-preference) {
-  :root:not([data-reduce-motion="true"]) .live-ribbon-pill {
-    animation: live-ribbon-in var(--motion-duration) var(--motion-easing) both;
-  }
+:root:not([data-reduce-motion="true"]) .live-ribbon-pill {
+  animation: live-ribbon-in var(--motion-duration) var(--motion-easing) both;
 }
 @keyframes live-ribbon-in {
   from { opacity: 0; translate: 0 6px; }
@@ -3893,11 +3862,6 @@ textarea {
 @keyframes live-outline-in {
   from {
     opacity: 0;
-  }
-}
-@media (prefers-reduced-motion: reduce) {
-  .live-outline {
-    animation: none;
   }
 }
 :root[data-reduce-motion="true"] .live-outline {

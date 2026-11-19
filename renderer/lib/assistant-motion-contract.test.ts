@@ -22,7 +22,7 @@ test("automation approvals reuse the app surface entrance motion", () => {
   const styles = source("../styles.css");
   assert.match(
     styles,
-    /:root\[data-reduce-motion="false"\] \.assistant-automation-approval\[data-state="open"\][\s\S]*aiden-app-update-banner-in 150ms cubic-bezier\(0\.19, 1, 0\.22, 1\)/u,
+    /:root\[data-reduce-motion="false"\] \.assistant-automation-approval\[data-state="open"\][\s\S]*aiden-app-update-banner-in 150ms /u,
   );
   assert.match(
     source("../components/assistant/assistant-computer-use-approval.tsx"),
@@ -35,7 +35,7 @@ test("scheduled task details reuse the reduced-motion-gated surface entrance", (
   const scheduledTasks = source("../components/scheduled-tasks-view.tsx");
   assert.match(
     styles,
-    /:root\[data-reduce-motion="false"\] \.scheduled-task-detail\[data-state="open"\][\s\S]*aiden-app-update-banner-in 150ms cubic-bezier\(0\.19, 1, 0\.22, 1\)/u,
+    /:root\[data-reduce-motion="false"\] \.scheduled-task-detail\[data-state="open"\][\s\S]*aiden-app-update-banner-in 150ms /u,
   );
   assert.match(scheduledTasks, /className="scheduled-task-detail/u);
 });

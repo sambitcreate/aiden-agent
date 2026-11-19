@@ -21,6 +21,7 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 // Weights affect scheduling only; newly discovered specs always run.
 export const E2E_SHARD_COUNT = 4;
 export const FILE_SECONDS = Object.freeze({
+  "accessibility.spec.ts": 15,
   "app-controls.spec.ts": 59,
   "assistant-scheduled-profile.spec.ts": 67,
   "bot-browser.spec.ts": 21,
