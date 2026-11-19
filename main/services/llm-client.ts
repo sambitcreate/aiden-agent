@@ -1502,8 +1502,10 @@ async function prepareGeneration(
       ? await webSearchService.availability()
       : undefined;
   const subagentWebEnabled = subagentWebAvailability?.ready === true;
+  // An unattended follow-up declares the subagent tool but refuses its call,
+  // so it never connects the servers a child could use.
   const discoveredSubagentMcpInventory =
-    allowSubagents && childMcpRollout && subagentRunStore.selection === "v2"
+    allowSubagents && childMcpRollout && subagentRunStore.selection === "v2" && options.unattended !== true
       ? await resolveProductionSubagentMcpInventory(signal, { disabledMcpServerIds: workspaceDisabledMcpServerIds })
       : [];
   const botSubagentMcpConnectionIdentities =

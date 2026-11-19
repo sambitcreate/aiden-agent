@@ -54,21 +54,21 @@ export interface NoticeDeliveryDeps {
   onError?(error: unknown): void;
 }
 
-/** Unattended turns one chat may start in an hour; more notices are only recorded. */
 /**
  * How the unattended follow-up turn runs. It declares the chat's tools so its
  * request extends the chat's cached prefix; the client refuses what nobody is
- * there to approve or watch (hooks, Computer Use) when the call arrives.
- * Subagents and connectors stay withheld: offering them would start MCP
+ * there to approve or watch (hooks, Computer Use, subagents) when the call
+ * arrives, and never resolves a subagent's connector inventory for it.
+ * The chat's own connectors stay withheld: declaring them would start MCP
  * connections in a run nobody started.
  */
 export const UNATTENDED_FOLLOW_UP_GENERATION = Object.freeze({
   usageSource: "chat",
   unattended: true,
-  allowSubagents: false,
   allowMcpTools: false,
 } as const);
 
+/** Unattended turns one chat may start in an hour; more notices are only recorded. */
 export const MAX_WAKES_PER_CHAT_PER_HOUR = 6;
 const WAKE_WINDOW_MS = 60 * 60 * 1000;
 const MAX_ATTEMPTS = 4;

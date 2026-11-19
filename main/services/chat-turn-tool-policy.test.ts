@@ -17,7 +17,7 @@ test("the chat's declarations depend on the chat alone", () => {
 
 test("an attended turn on this computer refuses nothing", () => {
   const refuse = chatTurnToolRefusal(workspace, { ...attended, inlineVisuals: "automatic" });
-  for (const name of ["hooks", "computer_use", "form_fill", "workspace_artifact", "render_artifact", "render_ui", "read_file"]) {
+  for (const name of ["hooks", "computer_use", "form_fill", "subagent", "workspace_artifact", "render_artifact", "render_ui", "read_file"]) {
     assert.equal(refuse(name), undefined, name);
   }
 });
@@ -27,7 +27,7 @@ test("an unattended follow-up refuses what needs someone watching, and says why"
     { ...workspace, usageSource: UNATTENDED_FOLLOW_UP_GENERATION.usageSource },
     { ...attended, unattended: UNATTENDED_FOLLOW_UP_GENERATION.unattended },
   );
-  for (const name of ["hooks", "computer_use", "form_fill"]) {
+  for (const name of ["hooks", "computer_use", "form_fill", "subagent"]) {
     assert.match(refuse(name) ?? "", new RegExp(`^${name} is not available in this turn: nobody is watching this follow-up`, "u"), name);
   }
   assert.equal(refuse("workspace_artifact"), undefined, "a follow-up's artifact still shows on this computer");

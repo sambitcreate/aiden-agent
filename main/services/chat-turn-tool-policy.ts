@@ -15,6 +15,7 @@ import { generativeUiUnavailableReason } from "./generative-ui-extension.js";
 import { hooksToolUnavailableReason, offersHooksTool, type HooksToolSurface } from "./hooks-tool.js";
 
 const FORM_FILL_TOOL_NAME = "form_fill";
+const SUBAGENT_TOOL_NAME = "subagent";
 
 /** The chat's own surface: fixed for every turn of the chat. */
 export type ChatToolSurface = Omit<HooksToolSurface, "unattended" | "remoteAudience">;
@@ -47,6 +48,9 @@ export function chatTurnToolRefusal(
     if (hooks) return hooks;
     if (turn.unattended && (name === COMPUTER_USE_TOOL_NAME || name === FORM_FILL_TOOL_NAME)) {
       return `${name} is not available in this turn: nobody is watching this follow-up to grant Computer Use. Describe what you would do on screen instead.`;
+    }
+    if (turn.unattended && name === SUBAGENT_TOOL_NAME) {
+      return `${SUBAGENT_TOOL_NAME} is not available in this turn: nobody is watching this follow-up to approve or follow a subagent run. Do the work yourself or say what you would delegate.`;
     }
     if (turn.remoteAudience && (name === COMPUTER_USE_TOOL_NAME || name === FORM_FILL_TOOL_NAME)) {
       return `${name} is not available in this turn: the request came from a paired device, and Computer Use is granted only on this computer. Describe what you would do on screen instead.`;

@@ -44,6 +44,8 @@ import type { AppControlContext, AppControlsService } from "./app-controls-core.
 import { chatToolOffers, chatTurnToolRefusal, type ChatToolSurface, type ChatTurnAudience } from "./chat-turn-tool-policy.js";
 import { remoteGenerationSurface } from "./conversation-surface-generation.js";
 import { UNATTENDED_FOLLOW_UP_GENERATION } from "./follow-through/notice-delivery.js";
+import { assembleAgentTools } from "./agent-tool-assembly.js";
+import { subagentsAllowedForGeneration } from "./subagents/eligibility.js";
 import { createGenerativeUiExtension, shouldEnableGenerativeUiExtension } from "./generative-ui-extension.js";
 import { ROUTINE_NOTES_TOOL } from "./bot-runtime/bot-tool-policy.js";
 import type { PiAgentRuntimeExtension } from "./pi-agent-runtime-harness.js";
@@ -599,25 +601,80 @@ describe("prompt prefix stability: tool list identical across turns", () => {
     }
   });
 
+  // The chat's declarations built the way llm-client builds them: the
+  // generation options pass through subagent eligibility and the real tool
+  // assembly, with the main-process sources replaced by fixed ones.
+  type GenerationToolOptions = { usageSource: "chat"; unattended?: boolean; allowSubagents?: boolean; allowMcpTools?: boolean };
+  const attendedGeneration: GenerationToolOptions = { usageSource: "chat" };
+  const followUpGeneration: GenerationToolOptions = UNATTENDED_FOLLOW_UP_GENERATION;
+  const linearServer = mcpServerTool("linear", "Linear", "Issue tracker tools.");
+  const subagentTool = textTool("subagent", "Start a focused subagent; call with action list for what it can use.");
+  const assembledChatTools = async (options: GenerationToolOptions) => {
+    const allowSubagents = subagentsAllowedForGeneration({
+      assistantMode: false,
+      allowSubagents: options.allowSubagents !== false,
+      usageSource: options.usageSource,
+      workspaceId: "workspace",
+      folderPath: "/workspace",
+      permission: "ask",
+    });
+    const assembled = await assembleAgentTools({
+      workspaceId: "workspace",
+      permission: "ask",
+      allowScheduling: false,
+      includeCodingTools: false,
+      allowMcpTools: options.allowMcpTools,
+      allowSubagents,
+      createSubagentTool: () => subagentTool,
+    }, {
+      configuredMcpTools: async () => [linearServer],
+      webSearchToolForGeneration: async () => undefined,
+      skillsEnabled: async () => false,
+      skillSnapshot: async () => undefined,
+    });
+    return [...chatTools(workspaceSurface), ...assembled];
+  };
+  const followUpAudience: ChatTurnAudience = { ...attended, unattended: UNATTENDED_FOLLOW_UP_GENERATION.unattended };
+  const followUpSurface: ChatToolSurface = { ...workspaceSurface, usageSource: UNATTENDED_FOLLOW_UP_GENERATION.usageSource };
+
   test("an unattended follow-up declares the chat's tools and refuses what nobody can approve", async () => {
-    assert.notEqual((UNATTENDED_FOLLOW_UP_GENERATION as { allowComputerUse?: boolean }).allowComputerUse, false, "Computer Use is not withheld");
-    const followUp: ChatTurnAudience = { ...attended, unattended: UNATTENDED_FOLLOW_UP_GENERATION.unattended };
-    const surface: ChatToolSurface = { ...workspaceSurface, usageSource: UNATTENDED_FOLLOW_UP_GENERATION.usageSource };
+    // A chat without connectors: everything the chat declares, the follow-up declares.
+    const withoutConnectors = async (options: GenerationToolOptions) => (await assembledChatTools(options)).filter((tool) => tool !== linearServer);
     const { previous, current } = await twoTurns(
       {},
-      { assembly: await workspaceChat({ tools: chatTools(workspaceSurface) }) },
-      { assembly: await workspaceChat({ tools: chatTools(surface) }) },
+      { assembly: await workspaceChat({ tools: await withoutConnectors(attendedGeneration) }) },
+      { assembly: await workspaceChat({ tools: await withoutConnectors(followUpGeneration) }) },
     );
     assert.deepEqual(comparePromptRequests(previous, current), {});
     assert.ok(current.carries("List, propose and test this chat's hooks."), "hooks stays declared");
-    const refuse = chatTurnToolRefusal(surface, followUp);
-    assert.match(refuse("hooks") ?? "", /not available in this turn.*follow-up/su);
-    assert.match(refuse("computer_use") ?? "", /not available in this turn.*follow-up/su);
+    assert.ok(current.carries("Start a focused subagent"), "the subagent tool stays declared");
+    const refuse = chatTurnToolRefusal(followUpSurface, followUpAudience);
+    for (const name of ["hooks", "computer_use", "subagent"]) {
+      assert.match(refuse(name) ?? "", /not available in this turn.*follow-up/su, name);
+    }
     assert.equal(refuse("read_file"), undefined);
     const refuseAttended = chatTurnToolRefusal(workspaceSurface, attended);
-    assert.equal(refuseAttended("hooks"), undefined);
-    assert.equal(refuseAttended("computer_use"), undefined);
+    for (const name of ["hooks", "computer_use", "subagent"]) assert.equal(refuseAttended(name), undefined, name);
   });
+
+  test(
+    "an unattended follow-up in a chat with connectors keeps the chat's connector section",
+    { todo: "phase 3: declare the chat's connectors from its frozen inventory without connecting, and refuse the calls" },
+    async () => {
+      const attendedTools = await assembledChatTools(attendedGeneration);
+      assert.ok(attendedTools.includes(linearServer), "the attended turn declares the connector");
+      // The section is built from the turn's connector tools, as llm-client builds it.
+      const { previous, current } = await twoTurns(
+        { lateMcp: { tools: () => [], pending: () => 0 } },
+        { assembly: await workspaceChat({ tools: attendedTools }) },
+        { assembly: await workspaceChat({ tools: await assembledChatTools(followUpGeneration) }) },
+      );
+      // A connector's tools are reached through codemode; the chat's
+      // `<mcp_servers>` section of system is what the follow-up drops.
+      assert.ok(previous.carries("Issue tracker tools."), "the attended turn lists the connector");
+      assert.deepEqual(comparePromptRequests(previous, current), {});
+    },
+  );
 
   for (const { wire, midConversationSystem, label } of wires) {
     test(`a remote-audience turn and a turn on this computer (${label})`, async () => {
@@ -689,6 +746,20 @@ describe("prompt prefix stability: causes fixed by later phases", () => {
       assert.deepEqual(comparePromptRequests(lastOf(one), next!), {});
     });
   }
+
+  test(
+    "loading a tool mid-turn leaves the next step's prefix unchanged (Anthropic Messages)",
+    { todo: "phase 8: deferred tool declarations keep a loaded tool out of the cached tool list on this wire" },
+    async () => {
+      // Without in-place system messages the loaded tool joins the one tool
+      // list, so the step after the load re-reads the tools cache.
+      const harness = createPromptPrefixHarness();
+      const requests = await loadClassify(harness);
+      assert.equal(requests.length, 2);
+      assert.ok(requests[1]!.carries("Returns one label from the configured set."), "declared once loaded");
+      assert.deepEqual(comparePromptRequests(requests[0]!, requests[1]!), {});
+    },
+  );
 
   test("a tool loaded on one turn leaves the next turn's tools on the wire unchanged (Anthropic Messages)", async () => {
     // The collapsed tool list already carried the loaded tool on turn 1's last step.
