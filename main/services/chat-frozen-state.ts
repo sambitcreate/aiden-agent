@@ -155,6 +155,32 @@ export function memoryLines(block: string): string[] {
   return block.split("\n").filter((line) => MEMORY_LINE.test(line));
 }
 
+const MEMORY_MARKER = /\[memory:/iu;
+
+function comparable(text: string): string {
+  return text.normalize("NFKC").toLowerCase().replace(/\s+/gu, " ").trim();
+}
+
+/**
+ * `text` without a line that could restate a memory fact: every line with a
+ * `[memory:` marker, and every line containing the text of one of `facts`
+ * (memory fact lines), compared without case or spacing differences.
+ * `restated` is true when a fact's text still appears across the kept lines,
+ * so a caller can refuse the text altogether.
+ */
+export function withoutStatedMemoryFacts(
+  text: string,
+  facts: readonly string[],
+): { text: string; restated: boolean } {
+  const factTexts = [...new Set(facts.map((line) => comparable(line.replace(MEMORY_LINE, ""))))]
+    .filter((fact) => fact.length > 0);
+  const kept = text
+    .split("\n")
+    .filter((line) => !MEMORY_MARKER.test(line) && !factTexts.some((fact) => comparable(line).includes(fact)));
+  const joined = comparable(kept.join(" "));
+  return { text: kept.join("\n"), restated: factTexts.some((fact) => joined.includes(fact)) };
+}
+
 function factHash(line: string): string {
   return createHash("sha256").update(line).digest("hex").slice(0, 32);
 }

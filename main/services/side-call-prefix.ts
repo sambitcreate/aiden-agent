@@ -63,6 +63,8 @@ export interface SideCallPrefix {
   readonly expiresAt: number;
   /** The parent's reply to that request. */
   readonly response: AssistantMessage;
+  /** Reads the facts the chat may be told now, when the request was recorded with it. */
+  readonly approvedMemoryFacts?: ApprovedMemoryFacts;
 }
 
 /**
@@ -107,7 +109,6 @@ interface PendingEntry extends Omit<SideCallPrefix, "response"> {
   response?: AssistantMessage;
   /** The memory fact lines the request states, in system or a user message. */
   memoryFacts: readonly string[];
-  approvedMemoryFacts?: ApprovedMemoryFacts;
 }
 
 function textsOf(content: unknown): string[] {
@@ -125,7 +126,7 @@ function textsOf(content: unknown): string[] {
  * added since the head. Tool results are not scanned; a recall result is the
  * tool's output, not the state phase 3 scrubs.
  */
-function memoryFactsIn(context: TranscriptContext): string[] {
+export function memoryFactLinesIn(context: TranscriptContext): string[] {
   const texts: string[] = [];
   const systemPrompt = (context as { systemPrompt?: unknown }).systemPrompt;
   if (typeof systemPrompt === "string") texts.push(systemPrompt);
@@ -224,7 +225,7 @@ export function createSideCallPrefixLedger(
         provider: model.provider,
         modelId: model.id,
         context: declarationsOnly(context),
-        memoryFacts: memoryFactsIn(context),
+        memoryFacts: memoryFactLinesIn(context),
         ...(approvedMemoryFacts ? { approvedMemoryFacts } : {}),
         options: {
           sessionId: options?.sessionId,
@@ -264,7 +265,7 @@ export function createSideCallPrefixLedger(
       }
       // The chat may have moved on, or the cache lapsed, during the read.
       if (entries.get(chatKey) !== entry || now() >= entry.expiresAt) return undefined;
-      const { memoryFacts: _facts, approvedMemoryFacts: _reader, ...prefix } = entry;
+      const { memoryFacts: _facts, ...prefix } = entry;
       return prefix as SideCallPrefix;
     },
     forget(chatKey) {

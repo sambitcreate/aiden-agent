@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { compactionEngineFrom, type CompactionEngine } from "../../renderer/shared/compaction.js";
 import { compileVccInWorker } from "./pi-vcc/worker-client.js";
 import { VccError } from "./pi-vcc/errors.js";
@@ -13,6 +14,7 @@ import {
   type RetryCallbacks,
   type RetryPolicy,
   type Usage,
+  type UserMessage,
   normalizeContext,
 } from "@earendil-works/pi-ai";
 import type { ResolvedModelRuntime } from "./model-runtime-core.js";
@@ -23,7 +25,15 @@ import {
   modelCallRetryDelayMs,
 } from "./model-call-retry.js";
 import { modelRetainsSystemUpdates, retainedTailSystemTokens } from "./generation-context.js";
-import { withoutMemoryFacts, withoutMemoryFactsBranch } from "./chat-frozen-state.js";
+import { memoryLines, withoutMemoryFacts, withoutMemoryFactsBranch, withoutStatedMemoryFacts } from "./chat-frozen-state.js";
+import {
+  memoryFactLinesIn,
+  sideCallContinuation,
+  sideCallModelKey,
+  type ApprovedMemoryFacts,
+  type SideCallPrefix,
+} from "./side-call-prefix.js";
+import type { CompactionPrecomputeSnapshot, CompactionPrecomputes } from "./compaction-precompute.js";
 import { isUsageLimitFailure } from "./usage-limit-core.js";
 import type { PiSessionEntry, PiSessionPort } from "./pi-session-port.js";
 
@@ -104,6 +114,129 @@ export interface PiCompactionCoordinatorOptions {
   summaryRetry?: RetryPolicy;
   /** Native Pi retry lifecycle callbacks for the isolated summary request. */
   summaryRetryCallbacks?: RetryCallbacks;
+  /**
+   * The chat's last foreground request (see side-call-prefix). When the
+   * journal still ends at its reply, a threshold or manual summary is sent
+   * as its continuation, so the provider reads the prefix it already cached.
+   * Overflow and the local engine never use it.
+   */
+  cachedPrefix?: () => Promise<SideCallPrefix | undefined>;
+  /**
+   * The memory fact lines the chat may be told now. A summary written on the
+   * cached prefix is filtered against them and the facts the prefix states.
+   */
+  approvedMemoryFacts?: ApprovedMemoryFacts;
+  /**
+   * Background summaries for an attended chat whose turn ends close to its
+   * trigger. The next turn boundary applies one only if the chat has not
+   * moved since; see compaction-precompute.
+   */
+  precompute?: {
+    registry: CompactionPrecomputes;
+    chatKey: string;
+    /** Whether a summary may start now: the chat is attended and generating. */
+    allowed: () => boolean;
+    /** Share of the trigger at which one starts. Defaults to 0.8. */
+    fraction?: number;
+  };
+}
+
+/**
+ * The instruction a cached-prefix summary appends as the last user message.
+ * It asks for Pi's checkpoint format and for no memory fact; the reply is
+ * still filtered before anything is stored.
+ */
+export function cachedPrefixSummaryInstruction(customInstructions?: string): string {
+  const lines = [
+    "Stop here and write a checkpoint summary of this conversation so far, for another assistant that will continue the work. Do not answer or continue the conversation and do not call any tool: reply with the summary only.",
+    "",
+    "Use this EXACT format:",
+    "",
+    "## Goal",
+    "[What is the user trying to accomplish? Can be multiple items if the session covers different tasks.]",
+    "",
+    "## Constraints & Preferences",
+    "- [Any constraints, preferences, or requirements mentioned by user]",
+    "- [Or \"(none)\" if none were mentioned]",
+    "",
+    "## Progress",
+    "### Done",
+    "- [x] [Completed tasks/changes]",
+    "",
+    "### In Progress",
+    "- [ ] [Current work]",
+    "",
+    "### Blocked",
+    "- [Issues preventing progress, if any]",
+    "",
+    "## Key Decisions",
+    "- **[Decision]**: [Brief rationale]",
+    "",
+    "## Next Steps",
+    "1. [Ordered list of what should happen next]",
+    "",
+    "## Critical Context",
+    "- [Any data, examples, or references needed to continue]",
+    "- [Or \"(none)\" if not applicable]",
+    "",
+    "Keep each section concise. Preserve exact file paths, function names, and error messages. Include what any earlier summary in the conversation records. The latest messages stay in the conversation word for word after this summary.",
+    "",
+    "Do not restate memory: leave out every `[memory:...]` line and every fact from the person's saved memory. The assistant is told the current memory separately.",
+  ];
+  if (customInstructions) lines.push("", `Additional focus: ${customInstructions}`);
+  return lines.join("\n");
+}
+
+/** Pi's file lists for a checkpoint: read-only files, then modified ones. */
+function checkpointFileLists(fileOps: CompactionPreparation["fileOps"]) {
+  const modified = new Set([...fileOps.edited, ...fileOps.written]);
+  const readFiles = [...fileOps.read].filter((file) => !modified.has(file)).sort();
+  const modifiedFiles = [...modified].sort();
+  const sections: string[] = [];
+  if (readFiles.length > 0) sections.push(`<read-files>\n${readFiles.join("\n")}\n</read-files>`);
+  if (modifiedFiles.length > 0) sections.push(`<modified-files>\n${modifiedFiles.join("\n")}\n</modified-files>`);
+  return { readFiles, modifiedFiles, text: sections.length > 0 ? `\n\n${sections.join("\n\n")}` : "" };
+}
+
+function memoryKeyOf(lines: readonly string[]): string {
+  return createHash("sha256").update(JSON.stringify([...lines].sort())).digest("hex");
+}
+
+/** Hash of the messages a request built from the journal would send. */
+function contextKeyOf(messages: readonly AgentMessage[]): string {
+  return createHash("sha256").update(JSON.stringify(messages)).digest("hex");
+}
+
+/**
+ * Every memory fact line anywhere in the branch: messages, state updates,
+ * tool results and earlier summaries.
+ */
+function memoryFactLinesInBranch(branch: readonly PiSessionEntry[]): string[] {
+  const lines = new Set<string>();
+  const visit = (value: unknown, depth: number): void => {
+    if (typeof value === "string") {
+      for (const line of memoryLines(value)) lines.add(line);
+      return;
+    }
+    if (depth > 8 || !value || typeof value !== "object") return;
+    for (const item of Array.isArray(value) ? value : Object.values(value)) visit(item, depth + 1);
+  };
+  for (const entry of branch) visit(entry, 0);
+  return [...lines];
+}
+
+class MemoryFactInSummaryError extends Error {
+  constructor() {
+    super("The compaction summary still stated a memory fact, so it was not stored.");
+    this.name = "MemoryFactInSummaryError";
+  }
+}
+
+class CompactionAbortedError extends Error {
+  constructor() {
+    super("Compaction was cancelled.");
+    this.name = "CompactionAbortedError";
+  }
 }
 
 class PiCompactionSessionError extends Error {
@@ -296,6 +429,192 @@ export class PiCompactionCoordinator {
     this.activeAbortController?.abort();
   }
 
+  /**
+   * The chat's cached prefix when a summary can continue it: the same model,
+   * and the journal's context still ends at the prefix's reply, so the
+   * continuation covers everything the next request would send.
+   */
+  private async usablePrefix(contextMessages?: readonly AgentMessage[]): Promise<SideCallPrefix | undefined> {
+    if (!this.options.cachedPrefix || compactionEngineFrom(this.options.engine) === "vcc") return undefined;
+    let prefix: SideCallPrefix | undefined;
+    try {
+      prefix = await this.options.cachedPrefix();
+    } catch {
+      return undefined;
+    }
+    if (!prefix?.response.usage || prefix.modelKey !== sideCallModelKey(this.options.model)) return undefined;
+    let messages: readonly AgentMessage[];
+    try {
+      messages = contextMessages ?? (await this.options.session.buildContext()).messages;
+    } catch {
+      return undefined;
+    }
+    const tail = messages[messages.length - 1];
+    const reply = prefix.response;
+    return tail?.role === "assistant" &&
+      tail.timestamp === reply.timestamp &&
+      tail.provider === reply.provider &&
+      tail.model === reply.model &&
+      tail.stopReason === reply.stopReason
+      ? prefix
+      : undefined;
+  }
+
+  /** The memory fact lines the chat may be told now; none when the store cannot be read. */
+  private async approvedFactLines(): Promise<readonly string[]> {
+    try {
+      return (await this.options.approvedMemoryFacts?.()) ?? [];
+    } catch {
+      return [];
+    }
+  }
+
+  /** Hash of the approved memory fact lines; undefined when the store cannot be read. */
+  private async memoryKey(): Promise<string | undefined> {
+    try {
+      return memoryKeyOf((await this.options.approvedMemoryFacts?.()) ?? []);
+    } catch {
+      return undefined;
+    }
+  }
+
+  /**
+   * One summary request sent as the prefix's continuation. Undefined, so the
+   * caller sends Pi's isolated and scrubbed request instead, when it would
+   * not fit, fails, is cut off, calls a tool, or still states a memory fact
+   * after every line that could restate one is removed.
+   */
+  private async cachedSummary(
+    prefix: SideCallPrefix,
+    preparation: CompactionPreparation,
+    signal: AbortSignal,
+    customInstructions?: string,
+  ): Promise<CompactResult | undefined> {
+    const model = this.options.model;
+    const maxTokens = Math.min(Math.floor(0.8 * this.settings.reserveTokens), model.maxTokens);
+    const instruction: UserMessage = {
+      role: "user",
+      content: [{ type: "text", text: cachedPrefixSummaryInstruction(customInstructions) }],
+      timestamp: Date.now(),
+    };
+    const inputTokens = calculateContextTokens(prefix.response.usage) + estimateTokens(instruction);
+    if (maxTokens <= 0 || inputTokens + maxTokens > model.contextWindow) return undefined;
+    // The filter covers the facts the request states and every fact the
+    // chat may be told now, which a recall result in the prefix can quote.
+    const approvedMemoryFacts = this.options.approvedMemoryFacts ?? prefix.approvedMemoryFacts;
+    let facts: readonly string[];
+    try {
+      facts = [...memoryFactLinesIn(prefix.context), ...((await approvedMemoryFacts?.()) ?? [])];
+    } catch {
+      // Without the approved facts the filter cannot be complete.
+      return undefined;
+    }
+    const request = sideCallContinuation(prefix, [instruction], { signal, maxTokens });
+    let reply: AssistantMessage;
+    try {
+      reply = await this.options.models.completeSimple(model, request.context, request.options);
+    } catch {
+      if (signal.aborted) throw new CompactionAbortedError();
+      return undefined;
+    }
+    if (signal.aborted) throw new CompactionAbortedError();
+    if (reply.stopReason !== "stop") return undefined;
+    const text = reply.content
+      .flatMap((part) => (part.type === "text" ? [part.text] : []))
+      .join("\n")
+      .trim();
+    const filtered = withoutStatedMemoryFacts(text, facts);
+    const summary = filtered.text.trim();
+    if (!summary || filtered.restated) return undefined;
+    const files = checkpointFileLists(preparation.fileOps);
+    return {
+      summary: summary + files.text,
+      tokensBefore: preparation.tokensBefore,
+      retainedTail: preparation.retainedTail,
+      ...(reply.usage ? { usage: reply.usage } : {}),
+      details: { readFiles: files.readFiles, modifiedFiles: files.modifiedFiles },
+    };
+  }
+
+  /**
+   * After a turn ends close to the trigger, starts its summary in the
+   * background on the cached prefix. Only the model call runs after this
+   * returns; it never writes the journal.
+   */
+  private async startPrecompute(contextTokens: number): Promise<void> {
+    const precompute = this.options.precompute;
+    if (
+      !precompute ||
+      !this.settings.enabled ||
+      this.options.summaryInstructions ||
+      compactionEngineFrom(this.options.engine) === "vcc"
+    ) {
+      return;
+    }
+    const trigger = this.options.model.contextWindow - this.settings.reserveTokens;
+    if (contextTokens < trigger * (precompute.fraction ?? 0.8) || !precompute.allowed()) return;
+    let branch;
+    try {
+      branch = await this.options.session.getBranch();
+    } catch {
+      return;
+    }
+    const prepared = prepareCompaction(branch, this.settings);
+    const preparation = prepared.ok ? prepared.value : undefined;
+    if (!preparation || ![...preparation.messagesToSummarize, ...preparation.turnPrefixMessages].some((message) => message.role !== "system")) {
+      return;
+    }
+    let messages: readonly AgentMessage[];
+    try {
+      messages = (await this.options.session.buildContext(branch)).messages;
+    } catch {
+      return;
+    }
+    const prefix = await this.usablePrefix(messages);
+    const memoryKey = await this.memoryKey();
+    if (!prefix || memoryKey === undefined || !precompute.allowed()) return;
+    const snapshot: CompactionPrecomputeSnapshot = {
+      contextKey: contextKeyOf(messages),
+      modelKey: prefix.modelKey,
+      memoryKey,
+    };
+    const engine = compactionEngineFrom(this.options.engine);
+    precompute.registry.start(precompute.chatKey, snapshot, async (signal) => {
+      const result = await this.cachedSummary(prefix, preparation, signal);
+      return result && { ...result, details: { ...(result.details as Record<string, unknown>), engine, version: 1 } };
+    });
+  }
+
+  /**
+   * The chat's background summary when it was written for the journal as it
+   * is now. Every other entry for the chat is aborted and dropped.
+   */
+  private async takePrecomputed(): Promise<CompactResult | undefined> {
+    const precompute = this.options.precompute;
+    if (!precompute) return undefined;
+    if (!this.settings.enabled || this.options.summaryInstructions || !precompute.registry.has(precompute.chatKey)) {
+      precompute.registry.discard(precompute.chatKey);
+      return undefined;
+    }
+    let contextKey: string;
+    try {
+      contextKey = contextKeyOf((await this.options.session.buildContext()).messages);
+    } catch {
+      precompute.registry.discard(precompute.chatKey);
+      return undefined;
+    }
+    const memoryKey = await this.memoryKey();
+    if (memoryKey === undefined) {
+      precompute.registry.discard(precompute.chatKey);
+      return undefined;
+    }
+    return precompute.registry.take(precompute.chatKey, {
+      contextKey,
+      modelKey: sideCallModelKey(this.options.model),
+      memoryKey,
+    });
+  }
+
   private isCurrentModel(message: AssistantMessage): boolean {
     return (
       message.provider === this.options.model.provider &&
@@ -357,6 +676,11 @@ export class PiCompactionCoordinator {
 
   /** Compact the prior durable tail before a new user entry is appended. */
   async prepareForPrompt(): Promise<PiCompactionCheckResult> {
+    const precomputed = await this.takePrecomputed();
+    if (precomputed) {
+      const applied = await this.run("threshold", false, false, precomputed);
+      if (applied.compacted) return applied;
+    }
     const context = await this.options.session.buildContext();
     const previousAssistant = [...context.messages]
       .reverse()
@@ -371,6 +695,7 @@ export class PiCompactionCoordinator {
     const result = await this.check(previousAssistant, {
       includeAborted: true,
       allowProviderRetry: false,
+      startsBackgroundSummary: false,
     });
     // This check repairs the previous turn; retry admission belongs only to
     // the new top-level operation and is reset by beginPrompt().
@@ -457,6 +782,8 @@ export class PiCompactionCoordinator {
       allowProviderRetry?: boolean;
       /** Current in-memory agent context, which may omit durable failed attempts. */
       liveMessages?: readonly AgentMessage[];
+      /** False at a turn boundary: a summary started there would cover a branch the new turn moves past. */
+      startsBackgroundSummary?: boolean;
     } = {},
   ): Promise<PiCompactionCheckResult> {
     if (!this.settings.enabled) return { compacted: false, shouldRetry: false };
@@ -647,15 +974,20 @@ export class PiCompactionCoordinator {
       }
     }
 
-    return shouldCompact(contextTokens, contextWindow, this.settings)
-      ? this.run("threshold", false)
-      : { compacted: false, shouldRetry: false };
+    if (shouldCompact(contextTokens, contextWindow, this.settings)) return this.run("threshold", false);
+    if (options.startsBackgroundSummary !== false && assistantMessage.stopReason === "stop") {
+      // A failed precompute only means the next boundary compacts as before.
+      await this.startPrecompute(contextTokens).catch(() => undefined);
+    }
+    return { compacted: false, shouldRetry: false };
   }
 
   private async run(
     reason: PiCompactionReason,
     willRetry: boolean,
     requireEffectiveInput = false,
+    /** A background summary written for this exact branch; publishes it without a model call. */
+    precomputed?: CompactResult,
   ): Promise<PiCompactionCheckResult> {
     const startedAt = performance.now();
     const engine = compactionEngineFrom(this.options.engine);
@@ -691,10 +1023,12 @@ export class PiCompactionCoordinator {
       started = true;
       this.options.onEvent?.({ type: "start", reason });
       let customInstructions: string | undefined;
-      try {
-        customInstructions = (await this.options.summaryInstructions?.(reason, abortController.signal))?.trim() || undefined;
-      } catch {
-        customInstructions = undefined;
+      if (!precomputed) {
+        try {
+          customInstructions = (await this.options.summaryInstructions?.(reason, abortController.signal))?.trim() || undefined;
+        } catch {
+          customInstructions = undefined;
+        }
       }
       // The summary is permanent and outlives the memory facts it could
       // quote, so no fact line in a `<state_update>` reaches the summarizer;
@@ -736,8 +1070,20 @@ export class PiCompactionCoordinator {
         return compactResult.value;
       };
       let result: CompactResult;
-      if (engine === "vcc") {
+      // Overflow recovery keeps Pi's isolated request: the prefix it would
+      // continue is the one that no longer fits.
+      const prefix = precomputed || engine === "vcc" || reason === "overflow" ? undefined : await this.usablePrefix();
+      const cached = prefix
+        ? await this.cachedSummary(prefix, preparation, abortController.signal, customInstructions)
+        : undefined;
+      if (precomputed) {
+        // The summary was written for these same messages; the tail and
+        // token count come from this branch, which the commit marker moved.
+        result = { ...precomputed, retainedTail: preparation.retainedTail, tokensBefore: preparation.tokensBefore };
+      } else if (engine === "vcc") {
         result = await compileLocal();
+      } else if (cached) {
+        result = cached;
       } else {
         try {
           result = await summarize(summaryPreparation);
@@ -799,6 +1145,13 @@ export class PiCompactionCoordinator {
           recoveryStage = "checkpoint";
         }
       }
+      // Whichever path wrote it, the stored summary keeps no line that states
+      // a memory fact the branch ever held (removed ones too) or one the chat
+      // may be told now. A fact split across kept lines fails the compaction.
+      const facts = [...memoryFactLinesInBranch(branch), ...(await this.approvedFactLines())];
+      const kept = withoutStatedMemoryFacts(result.summary, facts);
+      if (kept.restated) throw new MemoryFactInSummaryError();
+      result = { ...result, summary: kept.text };
       if (abortController.signal.aborted) {
         this.options.onEvent?.({
           type: "end",

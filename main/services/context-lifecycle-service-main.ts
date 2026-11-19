@@ -5,6 +5,7 @@ import { compactionEngineFrom } from "../../renderer/shared/compaction.js";
 import { customModelThinkingLevels } from "../../renderer/shared/custom-model-options.js";
 import { ANTHROPIC_PROVIDER_ID } from "./anthropic-provider.js";
 import { chatStore } from "./chat-store.js";
+import { chatPromptPrefixCompacted } from "./chat-prompt-cache-state.js";
 import { OPENAI_CODEX_PROVIDER_ID } from "./codex-provider.js";
 import { configStore } from "./config-store.js";
 import { ContextLifecycleService } from "./context-lifecycle-service.js";
@@ -21,6 +22,7 @@ import { isPackagedRuntime } from "../runtime-mode.js";
 import { assistantUsageRecord, isLocalModelProvider } from "./usage-accounting.js";
 import { spending } from "./spending-main.js";
 import { responseCostUsd, spendCounts } from "./spending-service.js";
+import { chatSideCallPrefixes } from "./side-call-prefix.js";
 import { usageStore } from "./usage-store.js";
 import {
   createWorkspaceChatHooks,
@@ -98,7 +100,12 @@ export const contextLifecycleService = new ContextLifecycleService({
     });
   },
   // The next SessionStart reports `compact`, as after a compaction in a turn.
-  compacted: (chat) => markWorkspaceChatCompacted(chat.id),
+  // The summary rewrote the prefix, so no side call or background summary continues the old one.
+  compacted: (chat) => {
+    markWorkspaceChatCompacted(chat.id);
+    chatPromptPrefixCompacted(chat.id);
+  },
+  cachedPrefix: (chatId) => chatSideCallPrefixes.latest(chatId),
   resolveThinkingLevel: async (chat, audience, runtime) => {
     const settings = await configStore.getSettings();
     const requested =

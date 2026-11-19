@@ -55,6 +55,7 @@ import { createGenerationContextTransform, updateGenerationContextOptions, type 
 import { createMcpServersSectionRefresher } from "./mcp-server-instructions.js";
 import { diffPromptPrefix, fingerprintPromptPrefix, type PromptPrefixDifference, type PromptPrefixFingerprint } from "./pi-cache-telemetry.js";
 import { PiAgentRuntimeHarness } from "./pi-agent-runtime-harness.js";
+import type { PiCompactionCoordinatorOptions } from "./pi-compaction-core.js";
 import { convertToLlm } from "./pi-legacy-harness.js";
 import { chatMessageToPiMessage } from "./generation-messages.js";
 import { AIDEN_CHAT_MESSAGE_MARKER, syncChatMessagesToPiSession } from "./pi-compaction-session-store.js";
@@ -97,6 +98,11 @@ export interface PromptPrefixHarnessOptions {
    * llm-client wraps its provider stream (the side-call prefix ledger).
    */
   wrapStream?: (streamFn: StreamFn) => StreamFn;
+  /**
+   * Compaction options each turn's coordinator gets on top of the harness's
+   * own, read when the turn starts (llm-client builds them per generation).
+   */
+  compaction?: () => Partial<Omit<PiCompactionCoordinatorOptions, "session" | "model">>;
 }
 
 export type PromptPrefixTurnInput = {
@@ -193,6 +199,8 @@ export interface PromptPrefixHarness {
   executeNestedToolCall: PiAgentRuntimeHarness["executeNestedToolCall"];
   /** The chat state the journal records (`journaledChatState` of its branch). */
   journaledChatState(): Promise<JournaledChatState>;
+  /** The chat's journal, created by the first turn. */
+  journal(): Promise<PiSessionPort>;
 }
 
 function hash(value: unknown): string {
@@ -511,7 +519,7 @@ export function createPromptPrefixHarness(options: PromptPrefixHarnessOptions = 
       }),
       durability: {
         session,
-        compaction: { models: createModels(), model, thinkingLevel: "off" },
+        compaction: { models: createModels(), model, thinkingLevel: "off", ...options.compaction?.() },
         // llm-client's sync: the prompt, its following messages and the head
         // entry in one append, skipped together when the journal holds it.
         appendInput: async (journalSession, _message, followingMessages) => {
@@ -553,6 +561,10 @@ export function createPromptPrefixHarness(options: PromptPrefixHarnessOptions = 
     callableTools: () => runtime?.getCallableTools() ?? [],
     agentState: () => runtime?.state,
     journaledChatState: async () => journaledChatState(journal ? await (await journal).getBranch() : []),
+    journal: () => {
+      if (!journal) throw new Error("No prompt prefix harness turn has run.");
+      return journal;
+    },
     executeNestedToolCall: (...args) => {
       if (!runtime) throw new Error("No prompt prefix harness turn is running.");
       return runtime.executeNestedToolCall(...args);

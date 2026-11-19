@@ -304,6 +304,7 @@ import {
 } from "./generation-context.js";
 import { promptCacheTtlMs } from "./prompt-cache-lifetimes.js";
 import { chatPromptCacheTelemetry, chatPromptPrefixCompacted } from "./chat-prompt-cache-state.js";
+import { chatCompactionPrecomputes } from "./compaction-precompute.js";
 import {
   invalidateChatContextJournal,
   lastPromptCacheMiss,
@@ -4122,6 +4123,20 @@ export const llmClient = {
           );
         }
       };
+      // The person can still see this turn: it was not stopped and its window
+      // is open. Cache warming and background summaries run only then.
+      const generationAttended = () => {
+        const generation = active.get(streamId) ?? initializing.get(streamId);
+        return !!generation && generation.owner === owner && !generation.cancelRequested &&
+          !generation.rendererDetached && !owner.isDestroyed();
+      };
+      const approvedChatMemoryFacts = async () =>
+        memoryExtension && (await memoryEnabledForChat(configStore, generationChat))
+          ? approvedMemoryFactLines([memoryExtension])
+          : [];
+      // btw, the advisor and compaction continue the chat's last request.
+      // Agent harnesses and Bot chats keep no such request.
+      const keepsSideCallPrefix = !harnessProvider && preparedBotContext === undefined;
       const compactionOptions = {
         engine: compactionEngine,
         models: createPiCompactionModels(runtime, (message) => {
@@ -4144,6 +4159,30 @@ export const llmClient = {
         },
         signal: initialization.controller.signal,
         onEvent: onCompactionEvent,
+        // A summary is the chat's cached prefix with the summary instruction
+        // appended, so it reads the cache. Close to the trigger, an attended
+        // turn writes it in the background and the next turn applies it.
+        ...(keepsSideCallPrefix
+          ? {
+              cachedPrefix: () => chatSideCallPrefixes.latest(params.chatId),
+              approvedMemoryFacts: approvedChatMemoryFacts,
+              precompute: {
+                registry: chatCompactionPrecomputes,
+                chatKey: params.chatId,
+                allowed: () =>
+                  generationAttended() &&
+                  canWarmForegroundChat({
+                    enabled: true,
+                    local: isLocalModelProvider(runtime.provider),
+                    bot: Boolean(preparedBotContext),
+                    owner,
+                    usageSource: options.usageSource,
+                    interactionSurface: options.interactionSurface,
+                    mode: authoritativeMode,
+                  }),
+              },
+            }
+          : {}),
         // PreCompact: every compaction inside a turn (threshold, overflow and
         // the emergency checkpoint) is "auto"; hook context becomes summary
         // instructions, bounded by each hook's timeout, and errors add none.
@@ -4352,11 +4391,7 @@ export const llmClient = {
         cacheWarmer = new PiCacheWarmer({
           signal: initialization.controller.signal,
           enabled: async () => (await configStore.getSettings()).cacheWarmingEnabled === true,
-          isCurrent: () => {
-            const generation = active.get(streamId) ?? initializing.get(streamId);
-            return !!generation && generation.owner === owner && !generation.cancelRequested &&
-              !generation.rendererDetached && !owner.isDestroyed();
-          },
+          isCurrent: generationAttended,
           resolveRuntime: (signal) => resolveModelRuntime(params.providerId, params.model, signal, params.chatId),
           recordUsage: async (message, freshRuntime) => {
             chatPromptCacheTelemetry.observeWarm(params.chatId, message);
@@ -4402,16 +4437,13 @@ export const llmClient = {
       // chats have no side calls, so their requests are not kept. A side
       // call reads the store again: a request stating a memory fact the
       // person has since removed or turned off is not continued.
-      const prefixedStream = harnessProvider || preparedBotContext !== undefined
-        ? measuredStream
-        : withSideCallPrefixLedger(measuredStream, {
+      const prefixedStream = keepsSideCallPrefix
+        ? withSideCallPrefixLedger(measuredStream, {
             ledger: chatSideCallPrefixes,
             chatKey: params.chatId,
-            approvedMemoryFacts: async () =>
-              memoryExtension && (await memoryEnabledForChat(configStore, generationChat))
-                ? approvedMemoryFactLines([memoryExtension])
-                : [],
-          });
+            approvedMemoryFacts: approvedChatMemoryFacts,
+          })
+        : measuredStream;
       const warmedStream = cacheWarmer ? withPiCacheWarming(prefixedStream, cacheWarmer) : prefixedStream;
       // Device-local pace: Pi calls the stream function once per model
       // response, right before the provider request, so the wrapper marks
@@ -6367,6 +6399,9 @@ export const llmClient = {
       }
       return false;
     }
+    // A summary written in the background for this chat is not applied after Stop.
+    const stoppedChatId = initialization?.chatId ?? generation?.chatId;
+    if (stoppedChatId) chatCompactionPrecomputes.discard(stoppedChatId);
     if (initialization) {
       initialization.cancelRequested = true;
       initialization.cancellationOrigin = origin;
