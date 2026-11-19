@@ -1,4 +1,4 @@
-import { assertArtifactFilePath, WorkspaceArtifactFileDeniedError } from "./file-policy.js";
+import { artifactFileAllowed, assertArtifactFilePath, WorkspaceArtifactFileDeniedError } from "./file-policy.js";
 import { createHash } from "node:crypto";
 import * as fs from "node:fs/promises";
 import {
@@ -40,6 +40,13 @@ export interface WorkspaceArtifactRunnerDependencies {
   runArgv: (options: ArgvPlanOptions) => Promise<BoundedShellCommandResult>;
   /** Reads a workspace-relative file inside the folder; rejects paths that leave it. */
   readFile: (root: string, file: string, signal: AbortSignal | undefined) => Promise<string>;
+  /**
+   * Whether the file policy admits a file now, without reading it
+   * (`artifactFileAllowed`, the default). A read kept across a save is
+   * checked with it, since the file may have become a link or a credential
+   * alias since it was read.
+   */
+  fileAllowed?: (root: string, file: string) => Promise<boolean>;
   /** Environment for shell commands (the agent's shell PATH and variables). */
   env: () => NodeJS.ProcessEnv;
   store: Pick<WorkspaceArtifactStore, "get" | "saveSnapshot">;
@@ -219,6 +226,7 @@ function cancelledResults(sources: readonly WorkspaceArtifactSourceV1[]): Source
 }
 
 export function createWorkspaceArtifactRunner(dependencies: WorkspaceArtifactRunnerDependencies) {
+  const fileAllowed = dependencies.fileAllowed ?? artifactFileAllowed;
   const inFlight = new Map<string, SharedRefresh>();
   const generations = new Map<string, number>();
   /** Runs still going, per page. */
@@ -360,6 +368,13 @@ export function createWorkspaceArtifactRunner(dependencies: WorkspaceArtifactRun
     const fullKey = `${view.digest}\0${approved}\0${context.permission}\0${folderPath ?? ""}`;
     const reused =
       folderError === undefined ? reusableReads(view, options.reuseFrom, approved, { ...context, folderPath }, Date.now()) : {};
+    // A kept file read still has to pass the file policy now; one that does not is read again, and that read is refused as usual.
+    for (const source of view.artifact.sources) {
+      if (source.kind !== "file" || !(source.name in reused)) continue;
+      const allowed = await fileAllowed(folderPath!, source.file).catch(() => false);
+      if (!allowed) delete reused[source.name];
+    }
+    if (signal?.aborted) return cancelledResults(view.artifact.sources);
     const reusedNames = Object.keys(reused).sort();
     const key = reusedNames.length ? `${fullKey}\0reuse\0${reusedNames.join("\0")}` : fullKey;
     let shared = inFlight.get(id);

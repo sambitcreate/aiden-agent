@@ -196,6 +196,29 @@ test("a read kept across a save still follows the access the page has now", asyn
   assert.equal(commands.length, 1);
 });
 
+test("a file read kept across a save is read again, and refused, once the file has become a link out of the workspace", async (t) => {
+  const { runner, store, folder, context } = await setup(t, { sources: [FILE] });
+  const first = await runner.refresh("ws1", "art1", context("full"));
+  assert.equal(first.todo!.status, "ok");
+  const before = (await store.get("ws1", "art1"))!.artifact;
+  await store.replace("ws1", "art1", { title: "Open PRs", visual: before.visual, sources: [FILE], actions: [ECHO], refresh: before.refresh });
+  // Unchanged, a fresh read is kept rather than read again.
+  await fs.writeFile(path.join(folder, "TODO.md"), "edited since\n");
+  const kept = await runner.refresh("ws1", "art1", context("full"), undefined, { reuseFrom: before });
+  assert.equal(kept.todo!.at, first.todo!.at);
+  // Now TODO.md leads outside the folder: the kept read is not handed back.
+  const outside = path.join(path.dirname(folder), "secret.md");
+  await fs.writeFile(outside, "outside\n");
+  await fs.rm(path.join(folder, "TODO.md"));
+  await fs.symlink(outside, path.join(folder, "TODO.md"));
+  const renamed = (await store.get("ws1", "art1"))!.artifact;
+  await store.replace("ws1", "art1", { title: "PRs again", visual: renamed.visual, sources: [FILE], actions: [ECHO], refresh: renamed.refresh });
+  const refused = await runner.refresh("ws1", "art1", context("full"), undefined, { reuseFrom: renamed });
+  assert.equal(refused.todo!.status, "error");
+  assert.equal(refused.todo!.error, "TODO.md is missing or leads outside the workspace folder.");
+  assert.equal(refused.todo!.dataJson, undefined, "the earlier data is not kept");
+});
+
 test("a failing source reports why and keeps the data it had", async (t) => {
   const { runner, store, context } = await setup(t, { sources: [SHELL] });
   await runner.refresh("ws1", "art1", context("full"));
