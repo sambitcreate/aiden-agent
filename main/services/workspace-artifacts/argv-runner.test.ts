@@ -486,7 +486,6 @@ test("in a workspace that is a folder of a larger repository, git reaches no fil
     ["git grep TOPSECRET -- {{file}}", ":/", /file must name a file inside the workspace/u],
     ["git ls-files {{file}}", ":/", /file must name a file inside the workspace/u],
     ["git log -p -- {{file}}", ":(top)secret", /file must name a file inside the workspace/u],
-    ["git diff {{file}}", "*", /file must name a file inside the workspace/u],
     ["git show {{rev}}", "HEAD:secret/s", /rev must be a git revision there/u],
     ["git show {{rev}}", "HEAD:../secret/s", /rev must be a git revision there/u],
     ["git log -p {{rev}}", ":/one", /rev must be a git revision there/u],
@@ -511,6 +510,9 @@ test("in a workspace that is a folder of a larger repository, git reaches no fil
   assert.doesNotMatch(fromRoot.stdout, /TOPSECRET/u);
   assert.notEqual(fromRoot.exitCode, 0);
 
+  // A glob in a value names a file called `*`, so it diffs nothing outside the workspace.
+  const globbed = await runResolved(resolve("git diff {{file}}", ["*"]), ws);
+  assert.doesNotMatch(globbed.stdout, /EDITED|TOPSECRET/u);
   // Pathspec magic a template writes itself is read literally too, so it matches nothing outside.
   const listed = await runResolved(resolve("git ls-files :/ {{file}}", ["f"]), ws);
   assert.equal(listed.stdout, "f\n");
@@ -535,6 +537,32 @@ test("in a workspace that is a folder of a larger repository, git reaches no fil
   const reset = await runResolved(resolve("git reset {{rev}} f", ["HEAD"]), ws);
   assert.equal(reset.exitCode, 0, reset.stderr);
   assert.equal(git(["diff", "--cached", "--name-only"]), "secret/s\n");
+});
+
+test("git reads * ? [ in a file value as part of the file's name, in every command of a chain", async (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "aiden-artifact-literal-"));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const git = (args: string[]) => execFileSync("git", args, { cwd: dir, encoding: "utf8" });
+  fs.mkdirSync(path.join(dir, "app", "[id]"), { recursive: true });
+  for (const file of ["app/[id]/page.tsx", "app/a.tsx", "app/b.tsx", "app/i"]) fs.writeFileSync(path.join(dir, file), "x\n");
+  git(["init", "-q", "-b", "main"]);
+  const add = (command: string, value: string) => {
+    const action = parseWorkspaceArtifactActions([{ name: "a", label: "A", command, params: [{ name: "file" }] }])[0]!;
+    return runResolved(resolveWorkspaceArtifactCommand(action, [value]), dir);
+  };
+  const staged = () => git(["diff", "--cached", "--name-only"]);
+  // A Next.js route folder is a plain file name.
+  const route = await add("git status --short >/dev/null && git add {{file}}", "app/[id]/page.tsx");
+  assert.equal(route.exitCode, 0, route.stderr);
+  assert.equal(staged(), "app/[id]/page.tsx\n");
+  // A glob matches no file of that literal name, so nothing more is staged.
+  for (const value of ["app/*.tsx", "app/?.tsx", "app/[i]"]) {
+    const ran = await add("git status --short >/dev/null && git add {{file}}", value);
+    assert.notEqual(ran.exitCode, 0, value);
+    assert.equal(staged(), "app/[id]/page.tsx\n", value);
+  }
+  // A leading : (pathspec magic) is still refused.
+  assert.throws(() => add("git add {{file}}", ":(glob)app/*"), /file must name a file inside the workspace: no leading :/u);
 });
 
 test("a branch value for git checkout never discards a file's uncommitted edits", async (t) => {

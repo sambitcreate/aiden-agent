@@ -23,9 +23,9 @@
  * - a GitHub search (`--search`) is text without a `repo:`, `org:` or
  *   `user:` qualifier, which would search past this repository;
  * - `path`: a file inside the workspace (also `test -e {{file}}` and test's
- *   other file operators, which would tell whether an outside path exists). In git it also has no `:` and no
- *   `* ? [`, which git reads as pathspec magic (`:/`, `:(top)`) or a glob
- *   that reaches past the workspace when it is a folder inside a repository.
+ *   other file operators, which would tell whether an outside path exists). In git it also has no leading
+ *   `:`, the form of pathspec magic (`:/`, `:(top)`) that reaches past the workspace when it is a folder
+ *   inside a repository; git runs with `GIT_LITERAL_PATHSPECS=1`, so `* ? [` name themselves.
  *
  * Pure and Electron-free; `workspace-artifact-template.ts` uses it.
  */
