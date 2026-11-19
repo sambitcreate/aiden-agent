@@ -165,22 +165,28 @@ function useMarkdownPlugins(content: string, richLinks: boolean, streaming = fal
   };
 }
 
+// Chat fences offer the SVG Preview toggle; restricted (render_ui) Markdown does not.
+function renderMarkdownCode(
+  { className, children, ...props }: React.ComponentProps<"code">,
+  previewable: boolean,
+) {
+  const match = /language-(\w+)/.exec(className || "");
+  const text = String(children ?? "");
+  const isBlock = !!match || text.includes("\n");
+  if (isBlock) {
+    const open = (props as { "data-open-fence"?: string })["data-open-fence"] === "true";
+    return <CodeBlock code={text} lang={match?.[1]} plain={open} previewable={previewable} />;
+  }
+  return (
+    <code className="rounded-md bg-well px-1.5 py-0.5 font-mono text-[0.9em]">{children}</code>
+  );
+}
+
 const components: Components = {
   img: ({ src, alt, title }) => <TranscriptImage key={src} src={src} alt={alt} title={title} />,
   // Unwrap <pre> — CodeBlock renders its own container/scroller.
   pre: ({ children }) => <>{children}</>,
-  code: ({ className, children, ...props }) => {
-    const match = /language-(\w+)/.exec(className || "");
-    const text = String(children ?? "");
-    const isBlock = !!match || text.includes("\n");
-    if (isBlock) {
-      const open = (props as { "data-open-fence"?: string })["data-open-fence"] === "true";
-      return <CodeBlock code={text} lang={match?.[1]} plain={open} />;
-    }
-    return (
-      <code className="rounded-md bg-well px-1.5 py-0.5 font-mono text-[0.9em]">{children}</code>
-    );
-  },
+  code: (props) => renderMarkdownCode(props, true),
   a: ({ node, children, href, ...props }) => {
     void node;
     const {
@@ -231,6 +237,7 @@ function RestrictedLink({ href, children }: { href?: string; children?: React.Re
 /** Same as `components`, except that nothing remote loads and no link navigates directly. */
 const restrictedComponents: Components = {
   ...components,
+  code: (props) => renderMarkdownCode(props, false),
   img: ({ alt }) => (alt ? <span className="text-secondary">{alt}</span> : null),
   a: ({ href, children }) => <RestrictedLink href={href}>{children}</RestrictedLink>,
 };

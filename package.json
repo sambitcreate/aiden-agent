@@ -250,7 +250,7 @@
     "test:e2e:follow-through": "npm run type-check:e2e && npm run build && playwright test tests/e2e/follow-through-lifecycle.spec.ts --config=playwright.config.ts --fail-on-flaky-tests",
     "test:e2e:workspace-panel": "npm run type-check:e2e && npm run build && playwright test tests/e2e/workspace-panel.spec.ts --config=playwright.config.ts --fail-on-flaky-tests",
     "test:app-controls": "tsx --test main/services/app-controls-core.test.ts main/services/aiden-app-navigation.test.ts renderer/components/app-controls-panel.test.tsx",
-    "test:transcript-images": "tsx --test main/services/transcript-image-fetch.test.ts main/handlers/transcript-images.test.ts renderer/components/transcript-image.test.tsx renderer/components/markdown-math.test.tsx",
+    "test:transcript-images": "tsx --test main/services/transcript-image-fetch.test.ts main/handlers/transcript-images.test.ts renderer/components/transcript-image.test.tsx renderer/components/markdown-math.test.tsx renderer/lib/svg-fence-preview.test.ts renderer/components/code-block.test.tsx",
     "test:work-details": "tsx --test renderer/lib/work-details.test.ts renderer/components/chat-preferences.test.tsx renderer/components/reasoning-block.test.tsx renderer/lib/reasoning-disclosure.test.ts renderer/components/activity-feed.test.tsx renderer/main/bots/bot-activity-recap.test.tsx",
     "test:e2e:space": "bash scripts/cua-space-e2e.sh",
     "pretest:bot-open-work": "npm run build:lease-flock",

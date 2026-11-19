@@ -2251,22 +2251,55 @@ class AidenChatTest {
         val message = fixtureVisualMessage()
         val (html, ui) = message.visuals.orEmpty()
         // With snapshots, both visuals get rows.
-        assertEquals(listOf(html.id, ui.id), aidenVisualsWithRows(message).map { it.id })
+        assertEquals(listOf(html.id, ui.id), aidenVisualsWithRows(message, viewerAvailable = false).map { it.id })
 
         // Without one, the html visual is represented only by its notice; the ui visual keeps its fallback row.
         val noSnapshots = message.copy(attachments = emptyList())
-        assertEquals(listOf(ui.id), aidenVisualsWithRows(noSnapshots).map { it.id })
-        assertEquals(listOf(html.id), aidenUnsupportedHtmlArtifacts(noSnapshots).map { it.id })
+        assertEquals(listOf(ui.id), aidenVisualsWithRows(noSnapshots, viewerAvailable = false).map { it.id })
+        assertEquals(listOf(html.id), aidenUnsupportedHtmlArtifacts(noSnapshots, viewerAvailable = false).map { it.id })
 
         // A ui visual with neither snapshot nor fallback text still shows its title.
         val bareUi = noSnapshots.copy(visuals = listOf(ui.copy(fallbackText = null)))
-        assertEquals(listOf(ui.id), aidenVisualsWithRows(bareUi).map { it.id })
+        assertEquals(listOf(ui.id), aidenVisualsWithRows(bareUi, viewerAvailable = false).map { it.id })
 
         // The chronological transcript built from those visuals carries no html row either.
         val rows = AidenChronologicalProjection.rows(
-            noSnapshots.text, "", noSnapshots.timeline, aidenVisualsWithRows(noSnapshots)
+            noSnapshots.text, "", noSnapshots.timeline, aidenVisualsWithRows(noSnapshots, viewerAvailable = false)
         )!!
         assertEquals(listOf(ui.id), rows.mapNotNull { it.visual?.id })
+    }
+
+    @Test
+    fun htmlVisualWithoutSnapshotGetsRowWhenViewerAvailable() {
+        val message = fixtureVisualMessage()
+        val withoutSnapshot = message.copy(
+            visuals = message.visuals?.map {
+                if (it.id == "artifact_fixture_01") it.copy(snapshotAttachmentId = null) else it
+            }
+        )
+        assertNull(withoutSnapshot.visuals?.first { it.id == "artifact_fixture_01" }?.snapshotAttachmentId)
+
+        // The Mac offers the viewer: the visual can still be opened, so it gets its row
+        // and the "can't view" notice goes away.
+        assertTrue("artifact_fixture_01" in aidenVisualsWithRows(withoutSnapshot, viewerAvailable = true).map { it.id })
+        assertEquals(emptyList<AidenHtmlArtifact>(), aidenUnsupportedHtmlArtifacts(withoutSnapshot, viewerAvailable = true))
+
+        // Without the viewer nothing can open it: notice kept, no row.
+        assertFalse("artifact_fixture_01" in aidenVisualsWithRows(withoutSnapshot, viewerAvailable = false).map { it.id })
+        assertEquals(
+            listOf("artifact_fixture_01"),
+            aidenUnsupportedHtmlArtifacts(withoutSnapshot, viewerAvailable = false).map { it.id }
+        )
+
+        // An older Mac without visuals has no visual id to open: the notice stays either way.
+        val legacy = message.copy(visuals = null)
+        for (viewerAvailable in listOf(true, false)) {
+            assertEquals(
+                listOf("artifact_fixture_01"),
+                aidenUnsupportedHtmlArtifacts(legacy, viewerAvailable).map { it.id }
+            )
+            assertEquals(emptyList<AidenChatVisual>(), aidenVisualsWithRows(legacy, viewerAvailable))
+        }
     }
 
     @Test
@@ -2309,16 +2342,16 @@ class AidenChatTest {
     @Test
     fun htmlArtifactNoticeIsSuppressedOnlyWhenItsVisualHasASnapshot() {
         val message = fixtureVisualMessage()
-        assertEquals(emptyList<AidenHtmlArtifact>(), aidenUnsupportedHtmlArtifacts(message))
+        assertEquals(emptyList<AidenHtmlArtifact>(), aidenUnsupportedHtmlArtifacts(message, viewerAvailable = false))
 
         val withoutSnapshot = message.copy(visuals = message.visuals?.map { it.copy(snapshotAttachmentId = null) })
-        assertEquals(listOf("artifact_fixture_01"), aidenUnsupportedHtmlArtifacts(withoutSnapshot).map { it.id })
+        assertEquals(listOf("artifact_fixture_01"), aidenUnsupportedHtmlArtifacts(withoutSnapshot, viewerAvailable = false).map { it.id })
 
         val snapshotMissing = message.copy(attachments = emptyList())
-        assertEquals(listOf("artifact_fixture_01"), aidenUnsupportedHtmlArtifacts(snapshotMissing).map { it.id })
+        assertEquals(listOf("artifact_fixture_01"), aidenUnsupportedHtmlArtifacts(snapshotMissing, viewerAvailable = false).map { it.id })
 
         val noVisuals = message.copy(visuals = null)
-        assertEquals(listOf("artifact_fixture_01"), aidenUnsupportedHtmlArtifacts(noVisuals).map { it.id })
+        assertEquals(listOf("artifact_fixture_01"), aidenUnsupportedHtmlArtifacts(noVisuals, viewerAvailable = false).map { it.id })
     }
 
     @Test

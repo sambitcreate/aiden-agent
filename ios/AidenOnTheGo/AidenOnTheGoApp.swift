@@ -126,6 +126,12 @@ struct AidenOnTheGoApp: App {
 #if DEBUG
                     if AidenInboxFixtureView.isRequested {
                         AidenInboxFixtureView()
+                    } else if AidenPreviewFixtureView.isRequested {
+                        AidenPreviewFixtureView()
+                    } else if AidenSVGFixtureView.isRequested {
+                        AidenSVGFixtureView()
+                    } else if AidenWorkspaceHTMLFixtureView.isRequested {
+                        AidenWorkspaceHTMLFixtureView(coordinator: remoteCoordinator)
                     } else {
                         ContentView(coordinator: remoteCoordinator, inboxStore: inboxStore)
                     }

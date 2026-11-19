@@ -1465,6 +1465,8 @@
         "main/services/transcript-image-fetch.test.ts",
         "main/handlers/transcript-images.test.ts",
         "renderer/components/transcript-image.test.tsx",
+        "renderer/lib/svg-fence-preview.test.ts",
+        "renderer/components/code-block.test.tsx",
         "renderer/lib/work-details.test.ts",
         "renderer/components/chat-preferences.test.tsx",
         "renderer/main/bots/bot-open-work-page.test.tsx",
