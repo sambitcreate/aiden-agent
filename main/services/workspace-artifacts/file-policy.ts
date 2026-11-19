@@ -43,6 +43,15 @@ export function assertArtifactFilePath(file: string): void {
  */
 const missingOrOutside = (file: string) => `${file} is missing or leads outside the workspace folder.`;
 
+/**
+ * A file the system would not let Aiden read for a reason of its own (a
+ * folder on the path is a file, or may not be entered). The system's message
+ * names the folder's full path, so the page is told only this.
+ */
+export class WorkspaceArtifactFileUnreadableError extends Error {
+  constructor(file: string) { super(`${file} cannot be read.`); }
+}
+
 /** Whether a part of `file` that exists inside `root` is a link. */
 async function linkOnPath(root: string, file: string): Promise<boolean> {
   let at = root;
@@ -69,7 +78,9 @@ async function admittedFile(root: string, file: string) {
   } catch (error) {
     // Past a link the path may lead anywhere: whether something is missing out there is not the page's to learn.
     if (await linkOnPath(identity.path, file)) throw new WorkspaceArtifactFileDeniedError(missingOrOutside(file));
-    throw error;
+    // A missing file is the one failure the page is told in its own words; the runner says there is no file there.
+    if ((error as NodeJS.ErrnoException | undefined)?.code === "ENOENT") throw error;
+    throw new WorkspaceArtifactFileUnreadableError(file);
   }
   const relative = path.relative(identity.path, canonical);
   if (!relative || relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) throw new WorkspaceArtifactFileDeniedError(missingOrOutside(file));

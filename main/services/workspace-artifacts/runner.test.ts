@@ -362,12 +362,16 @@ test("file sources explain problems in terms of the page, within the source size
     sources: [
       { name: "missing", kind: "file", file: "nope.md", parse: "text" },
       { name: "big", kind: "file", file: "big.txt", parse: "text" },
+      // A path through a file: the system's error would name the workspace's full path.
+      { name: "through", kind: "file", file: "a.txt/x", parse: "text" },
     ],
   });
   await fs.writeFile(path.join(folder, "big.txt"), "x".repeat(300 * 1024));
+  await fs.writeFile(path.join(folder, "a.txt"), "a");
   const results = await runner.refresh("ws1", "art1", context("full"));
   assert.equal(results.missing!.error, "There is no file at nope.md.");
   assert.equal(results.big!.error, "big.txt is larger than the 256 KiB an artifact can read.");
+  assert.equal(results.through!.error, "a.txt/x cannot be read.");
 });
 
 test("a failing command reports the start and the end of what it printed, and bad JSON says where", async (t) => {
