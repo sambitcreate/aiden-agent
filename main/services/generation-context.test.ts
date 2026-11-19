@@ -16,13 +16,13 @@ import {
   createGenerationContextTransform,
   estimateContextBreakdown,
   estimateStaticContextTokens,
-  limitComputerUseImages,
-  limitBrowserSnapshotImages,
   projectChatContextPressure,
   projectNextContextUsage,
   projectMessagesForModel,
+  trimRequestScreenshots,
   updateGenerationContextOptions,
 } from "./generation-context.js";
+import { OLDER_BROWSER_SCREENSHOT_NOTE, OLDER_COMPUTER_SCREENSHOT_NOTE } from "./screenshot-trimming.js";
 import { createMcpServersSectionRefresher, renderMcpServersSection } from "./mcp-server-instructions.js";
 import { markMcpAgentTool } from "./mcp-tool-identity.js";
 import { configuredCompactionReserveTokens } from "../../renderer/shared/compaction.js";
@@ -213,131 +213,90 @@ test("projects model-neutral image history only for vision requests", () => {
   assert.equal(JSON.stringify(neutral).includes("private-image"), true);
 });
 
-test("limitComputerUseImages keeps the newest screenshots and leaves other results alone", () => {
-  const messages: AgentMessage[] = [user("Use the desktop.")];
-  for (let index = 0; index < 5; index += 1) {
-    const id = `cu-${index}`;
+test("Computer Use screenshots stay until a ninth arrives, then the newest three stay and other results are untouched", () => {
+  const conversation = (captures: number): AgentMessage[] => {
+    const messages: AgentMessage[] = [user("Use the desktop.")];
+    for (let index = 0; index < captures; index += 1) {
+      const id = `cu-${index}`;
+      messages.push(
+        assistant(id, "computer_use"),
+        toolResult(
+          id,
+          [
+            { type: "text", text: `capture-${index}` },
+            { type: "image", data: `img-${index}`, mimeType: "image/png" },
+          ],
+          "computer_use",
+        ),
+        assistant(`cu-text-${index}`, "computer_use"),
+        toolResult(`cu-text-${index}`, `status-${index}`, "computer_use"),
+      );
+    }
+    const otherImage = toolResult(
+      "other-image",
+      [
+        { type: "text", text: "unrelated image" },
+        { type: "image", data: "other", mimeType: "image/png" },
+      ],
+      "read_file",
+    );
+    messages.push(assistant("other-image"), otherImage);
+    return messages;
+  };
+  const eight = conversation(8);
+  assert.equal(trimRequestScreenshots(eight), eight, "eight screenshots are carried as they are");
+
+  const nine = conversation(9);
+  const trimmed = trimRequestScreenshots(nine);
+  const captures = trimmed.filter(
+    (message): message is ToolResultMessage =>
+      message.role === "toolResult" && message.toolName === "computer_use" &&
+      message.content.some((part) => part.type === "text" && part.text.startsWith("capture-")),
+  );
+  assert.equal(captures.length, 9);
+  const images = captures.flatMap((result) => result.content.flatMap((part) => (part.type === "image" ? [part.data] : [])));
+  assert.deepEqual(images, ["img-6", "img-7", "img-8"]);
+  for (const result of captures.slice(0, 6)) {
+    assert.deepEqual(
+      result.content.map((part) => (part.type === "text" ? part.text : part.type)),
+      [`capture-${captures.indexOf(result)}`, OLDER_COMPUTER_SCREENSHOT_NOTE],
+      "a cut screenshot leaves the fixed note where it was and keeps its text",
+    );
+  }
+  assert.equal(trimmed[trimmed.length - 1], nine[nine.length - 1], "another tool's image is neither counted nor cut");
+  nine.forEach((message, index) => {
+    if (message.role === "toolResult" && message.toolCallId.startsWith("cu-text-")) {
+      assert.equal(trimmed[index], message, "a text-only result is the same object");
+    }
+  });
+  assert.equal((nine[2] as ToolResultMessage).content[1]?.type, "image", "the journal keeps every screenshot");
+});
+
+test("compactGenerationContext always applies the screenshot batch cut", () => {
+  const messages: AgentMessage[] = [user("Hello")];
+  for (let index = 1; index <= 9; index += 1) {
     messages.push(
-      assistant(id, "computer_use"),
+      assistant(`cu-${index}`, "computer_use"),
       toolResult(
-        id,
+        `cu-${index}`,
         [
-          { type: "text", text: `capture-${index}` },
-          { type: "image", data: `img-${index}`, mimeType: "image/png" },
+          { type: "text", text: `capture ${index}` },
+          { type: "image", data: `image-${index}`, mimeType: "image/png" },
         ],
         "computer_use",
       ),
-      assistant(`cu-text-${index}`, "computer_use"),
-      toolResult(`cu-text-${index}`, `status-${index}`, "computer_use"),
     );
   }
-  const otherImage = toolResult(
-    "other-image",
-    [
-      { type: "text", text: "unrelated image" },
-      { type: "image", data: "other", mimeType: "image/png" },
-    ],
-    "read_file",
-  );
-  messages.push(assistant("other-image"), otherImage);
-  const limited = limitComputerUseImages(messages, 3);
-  const computerUseResults = limited.filter(
-    (message): message is ToolResultMessage =>
-      message.role === "toolResult" && message.toolName === "computer_use",
-  );
-  const captures = computerUseResults.filter((result) =>
-    result.content.some(
-      (part) => part.type === "text" && part.text.startsWith("capture-"),
-    ),
-  );
-  assert.equal(computerUseResults.length, 10);
-  assert.equal(
-    computerUseResults.filter((r) => r.content.some((p) => p.type === "image"))
-      .length,
-    3,
-  );
-  assert.equal(
-    captures[0]?.content.some((part) => part.type === "image"),
-    false,
-  );
-  assert.equal(
-    captures[1]?.content.some((part) => part.type === "image"),
-    false,
-  );
-  assert.equal(
-    captures[2]?.content.some((part) => part.type === "image"),
-    true,
-  );
-  assert.equal(
-    captures[4]?.content.some((part) => part.type === "image"),
-    true,
-  );
-  assert.equal(limited[limited.length - 1], otherImage);
-  assert.equal(
-    otherImage.content.some((part) => part.type === "image"),
-    true,
-  );
-  assert.match(
-    String(
-      captures[0]?.content[0]?.type === "text"
-        ? captures[0].content[0].text
-        : "",
-    ),
-    /capture-0/u,
-  );
-});
-
-test("compactGenerationContext always applies computer_use image retention", () => {
-  const messages: AgentMessage[] = [
-    user("Hello"),
-    assistant("cu-1", "computer_use"),
-    toolResult(
-      "cu-1",
-      [
-        { type: "text", text: "first" },
-        { type: "image", data: "one", mimeType: "image/png" },
-      ],
-      "computer_use",
-    ),
-    assistant("cu-2", "computer_use"),
-    toolResult(
-      "cu-2",
-      [
-        { type: "text", text: "second" },
-        { type: "image", data: "two", mimeType: "image/png" },
-      ],
-      "computer_use",
-    ),
-    assistant("cu-3", "computer_use"),
-    toolResult(
-      "cu-3",
-      [
-        { type: "text", text: "third" },
-        { type: "image", data: "three", mimeType: "image/png" },
-      ],
-      "computer_use",
-    ),
-    assistant("cu-4", "computer_use"),
-    toolResult(
-      "cu-4",
-      [
-        { type: "text", text: "fourth" },
-        { type: "image", data: "four", mimeType: "image/png" },
-      ],
-      "computer_use",
-    ),
-  ];
   const result = compactGenerationContext(messages, options);
-  const imagesKept = result.messages.filter(
-    (message): message is ToolResultMessage =>
-      message.role === "toolResult" &&
-      message.toolName === "computer_use" &&
-      message.content.some((part) => part.type === "image"),
+  const imagesKept = result.messages.flatMap((message) =>
+    message.role === "toolResult" && message.toolName === "computer_use"
+      ? message.content.flatMap((part) => (part.type === "image" ? [part.data] : []))
+      : [],
   );
-  assert.equal(imagesKept.length, 3);
+  assert.deepEqual(imagesKept, ["image-7", "image-8", "image-9"]);
 });
 
-test("browser image history preserves text, errors, pairing and the newest three results independently of Computer Use", () => {
+test("browser and Computer Use screenshots share one batch cut that keeps the newest, and text, errors and pairing survive it", () => {
   const messages: AgentMessage[] = [user("Inspect the browser and the desktop.")];
   for (let index = 0; index < 6; index += 1) {
     for (const toolName of ["browser_snapshot", "computer_use"]) {
@@ -358,6 +317,8 @@ test("browser image history preserves text, errors, pairing and the newest three
   for (const name of ["browser_snapshot", "computer_use"]) {
     const results = projected.messages.filter((message): message is ToolResultMessage => message.role === "toolResult" && message.toolName === name);
     const images = results.flatMap((result) => result.content.filter((part) => part.type === "image").map((part) => part.data));
+    // Twelve screenshots alternate between the tools: the ninth (browser 4)
+    // cuts the kept ones to the newest three, and three more follow.
     assert.deepEqual(images, [3, 4, 5].map((index) => `${name}-${index}`));
     const oldest = results.find((result) => result.toolCallId === `${name}-0`)!;
     assert.equal(oldest.isError, true);
@@ -367,18 +328,24 @@ test("browser image history preserves text, errors, pairing and the newest three
   assert.deepEqual(projectNextContextUsage(messages, options), projectNextContextUsage(projected.messages, options));
 });
 
-test("browser screenshot projection counts image-bearing results and leaves other images and journal objects intact", () => {
+test("browser screenshot projection counts every image, cuts within a result, and leaves other images and journal objects intact", () => {
   const messages: AgentMessage[] = [user("Compare snapshots")];
-  for (let index = 0; index < 4; index += 1) {
+  for (let index = 0; index < 5; index += 1) {
     messages.push(assistant(`browser-${index}`, "browser_snapshot"), toolResult(`browser-${index}`, [{ type: "text", text: `page-${index}` }, { type: "image", data: `first-${index}`, mimeType: "image/png" }, { type: "image", data: `second-${index}`, mimeType: "image/png" }], "browser_snapshot"));
   }
   const unrelated = toolResult("read", [{ type: "image", data: "attachment", mimeType: "image/png" }]);
   messages.push(assistant("read"), unrelated);
-  const projected = limitBrowserSnapshotImages(messages);
+  const fourResults = messages.slice(0, 9);
+  assert.equal(trimRequestScreenshots(fourResults), fourResults, "eight images, two per result, are carried as they are");
+  const projected = trimRequestScreenshots(messages);
   assert.equal(projected[projected.length - 1], unrelated);
-  assert.equal(projected.filter((message) => message.role === "toolResult").flatMap((message) => message.role === "toolResult" ? message.content.filter((part) => part.type === "image") : []).length, 7);
+  const images = projected.flatMap((message) => message.role === "toolResult" ? message.content.flatMap((part) => (part.type === "image" ? [part.data] : [])) : []);
+  // The ninth image (the first of result 4) cuts the ten down to the newest three; one more follows.
+  assert.deepEqual(images, ["first-3", "second-3", "first-4", "second-4", "attachment"]);
+  const third = projected[6] as ToolResultMessage;
+  assert.deepEqual(third.content.map((part) => (part.type === "text" ? part.text : part.type)), ["page-2", OLDER_BROWSER_SCREENSHOT_NOTE, OLDER_BROWSER_SCREENSHOT_NOTE]);
   assert.equal((messages[2] as ToolResultMessage).content.length, 3);
-  assert.equal(limitBrowserSnapshotImages(messages, Number.POSITIVE_INFINITY), messages);
+  assert.equal((messages[2] as ToolResultMessage).content[1]?.type, "image");
   const textOnly = compactGenerationContext(messages, { ...options, supportsImages: false });
   assert.equal(JSON.stringify(textOnly.messages).includes('"type":"image"'), false);
   assert.match(JSON.stringify(textOnly.messages), /private journal/);

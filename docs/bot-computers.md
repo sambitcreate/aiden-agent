@@ -318,9 +318,12 @@ marked assumed until they are recorded on an Apple-silicon Mac:
   "Guest driver lane"). Its actions are `capture`, `click`,
   `double_click`, `right_click`, `drag`, `scroll`, `type`, `key`, `wait` and
   `verify`. Screenshots are JPEG, at most 1280 pixels on the long side, at
-  quality 70, and coordinates are pixels of the newest screenshot. Each request
-  to the model carries only the newest three screenshots; older ones become a
-  short note there, and the transcript keeps them all. A Bot whose model has no
+  quality 70, and coordinates are pixels of the newest screenshot. Requests to
+  the model trim screenshots in batches, shared with workspace chats and the
+  browser: every screenshot is carried until more than eight are kept or they
+  pass 25 MiB, and then the oldest are cut in one go to the newest three within
+  15 MiB. Each cut one becomes a fixed short note there, and the transcript
+  keeps them all. A Bot whose model has no
   image input gets only `computer_shell`.
 - **A stated intent on every change.** Each `click`, `double_click`,
   `right_click`, `drag`, `scroll`, `type` and `key` needs a short intent, such

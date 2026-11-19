@@ -72,6 +72,7 @@ import {
   type PromptPrefixWire,
   type RecordedPromptRequest,
 } from "./prompt-prefix-harness.js";
+import { OLDER_COMPUTER_SCREENSHOT_NOTE } from "./screenshot-trimming.js";
 
 function textTool(name: string, description: string, output = "ok"): AgentTool {
   return {
@@ -1237,22 +1238,32 @@ describe("prompt prefix stability: causes fixed by later phases", () => {
     assert.deepEqual(comparePromptRequests(lastOf([two!]), three!), {});
   });
 
-  test("a fourth screenshot leaves earlier messages unchanged", { todo: "phase 7: screenshot trimming in batches" }, async () => {
+  test("screenshots leave earlier messages unchanged until the ninth, which cuts them to the newest three", async () => {
     screenshotCount = 0;
     const harness = createPromptPrefixHarness();
-    const steps = Array.from({ length: 4 }, (_, index) =>
+    const steps = Array.from({ length: 10 }, (_, index) =>
       fauxAssistantMessage(fauxToolCall("computer_use", { action: `look-${index}` }), { stopReason: "toolUse" }));
     const requests = await harness.turn({
-      prompt: "Check the screen four times.",
+      prompt: "Check the screen ten times.",
       assembly: await workspaceChat({ tools: [computerUseTool] }),
       responses: [...steps, fauxAssistantMessage("Done.")],
     });
-    assert.equal(requests.length, 5);
-    const newest = Buffer.from(`png-${screenshotCount}`).toString("base64");
-    assert.equal(screenshotCount, 4);
-    assert.ok(requests[4]!.carries(newest), "the last request still carries the newest screenshot");
+    assert.equal(requests.length, 11);
+    assert.equal(screenshotCount, 10);
+    const png = (n: number) => Buffer.from(`png-${n}`).toString("base64");
+    const carried = (request: RecordedPromptRequest) =>
+      Array.from({ length: screenshotCount }, (_, index) => index + 1).filter((n) => request.carries(png(n)));
+    // Request n + 1 follows the nth screenshot. The ninth passes eight kept
+    // screenshots, so request 10 is the one cut; every other request extends
+    // the one before it.
     for (let index = 1; index < requests.length; index += 1) {
-      assert.deepEqual(comparePromptRequests(requests[index - 1]!, requests[index]!), {}, `step ${index + 1}`);
+      const comparison = comparePromptRequests(requests[index - 1]!, requests[index]!);
+      if (index === 9) assert.equal(comparison.wire?.kind, "messages", "the cut edits an earlier message");
+      else assert.deepEqual(comparison, {}, `request ${index + 1}`);
     }
+    assert.deepEqual(carried(requests[8]!), [1, 2, 3, 4, 5, 6, 7, 8]);
+    assert.deepEqual(carried(requests[9]!), [7, 8, 9], "the cut keeps the newest three");
+    assert.deepEqual(carried(requests[10]!), [7, 8, 9, 10]);
+    assert.ok(requests[10]!.carries(OLDER_COMPUTER_SCREENSHOT_NOTE), "a cut screenshot leaves its note");
   });
 });

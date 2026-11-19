@@ -23,7 +23,7 @@ import { botComputerCandidates } from "./bot-computer-candidates.js";
 import { createBotRegistry, type BotExtensionDeps } from "./bot-extension.js";
 import { createBotHandoffs, ruleHandoffRequest } from "./bot-handoffs.js";
 import { ruleAskUnattendedBlock } from "./bot-handoff-text.js";
-import { BOT_OLDER_COMPUTER_CAPTURE_NOTE } from "./bot-images.js";
+import { OLDER_COMPUTER_SCREENSHOT_NOTE } from "../screenshot-trimming.js";
 import type { BotToolCandidate } from "./bot-tool-assembly.js";
 import { botIngressAllowsTool, botToolApprovalSummary, botToolVerdict, type BotToolFacts } from "./bot-tool-policy.js";
 import { assemblyDeps, assemblyState, FULL_GRANTS, testAuthority, type AssemblyDepsOptions } from "./test-support/assembly-fixtures.js";
@@ -552,7 +552,7 @@ test("an everyday step in its own computer runs without a card", async () => {
   }
 });
 
-test("a Bot's request carries only its newest three captures, and its transcript keeps every one", async () => {
+test("a Bot's request carries its captures until a ninth cuts them to the newest three, and its transcript keeps every one", async () => {
   const computer = fakeComputer();
   const seen: Array<{ images: number; notes: number }> = [];
   const step = (reply: () => ReturnType<typeof fauxAssistantMessage>) => (context: { messages: readonly Message[] }) => {
@@ -562,23 +562,23 @@ test("a Bot's request carries only its newest three captures, and its transcript
       if (message.role !== "toolResult" || message.toolName !== "computer") continue;
       for (const part of message.content) {
         if (part.type === "image") images += 1;
-        else if (part.text === BOT_OLDER_COMPUTER_CAPTURE_NOTE) notes += 1;
+        else if (part.text === OLDER_COMPUTER_SCREENSHOT_NOTE) notes += 1;
       }
     }
     seen.push({ images, notes });
     return reply();
   };
   const fauxModels = createFauxModels([
-    ...["one", "two", "three", "four", "five"].map((id) => step(() => capture(id))),
+    ...["one", "two", "three", "four", "five", "six", "seven", "eight", "nine"].map((id) => step(() => capture(id))),
     step(() => fauxAssistantMessage("looked")),
   ]);
   const { harness, root } = await botTurn(computerDeps(computer), fauxModels);
   try {
     await (await root.submit({ type: "input", content: "watch the screen", requestId: "desk-1" }, ctx)).wait(ctx);
-    assert.deepEqual(seen.map(({ images }) => images), [0, 1, 2, 3, 3, 3]);
-    assert.deepEqual(seen[seen.length - 1], { images: 3, notes: 2 }, "the two oldest captures became notes");
+    assert.deepEqual(seen.map(({ images }) => images), [0, 1, 2, 3, 4, 5, 6, 7, 8, 3]);
+    assert.deepEqual(seen[seen.length - 1], { images: 3, notes: 6 }, "the six oldest captures became notes");
     const kept = (await toolResults(root)).filter((result) => result.toolName === "computer");
-    assert.equal(kept.length, 5);
+    assert.equal(kept.length, 9);
     for (const result of kept) assert.ok(result.content.some((part) => part.type === "image"), "the transcript keeps every capture");
   } finally {
     await harness.close(ctx);

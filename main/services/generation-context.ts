@@ -22,6 +22,8 @@ import type { PiDiscoverableTool } from "./pi-tool-discovery.js";
 import type { PiRuntimeTool } from "./pi-runtime-tool.js";
 
 import { promptCacheTtlMs } from "./prompt-cache-lifetimes.js";
+import { trimScreenshots } from "./screenshot-trimming.js";
+
 const TOOL_RESULT_TEXT_LIMIT_CHARS = 32_000;
 const RECENT_TOOL_OUTPUT_BUDGET_TOKENS = 40_000;
 const MIN_RECENT_TOOL_RESULTS = 2;
@@ -417,48 +419,16 @@ export function projectMessagesForModel(
   });
 }
 
-function limitToolResultImages(
-  messages: AgentMessage[],
-  toolName: string,
-  keep: number,
-): AgentMessage[] {
-  const imageIndexes: number[] = [];
-  for (let index = 0; index < messages.length; index += 1) {
-    const message = messages[index];
-    if (
-      message?.role === "toolResult" &&
-      message.toolName === toolName &&
-      message.content.some((part) => part.type === "image")
-    ) {
-      imageIndexes.push(index);
-    }
-  }
-  const keepCount = Number.isFinite(keep)
-    ? Math.max(0, Math.floor(keep))
-    : imageIndexes.length;
-  if (imageIndexes.length <= keepCount) return messages;
-  const strip = new Set(imageIndexes.slice(0, imageIndexes.length - keepCount));
-  return messages.map((message, index) => {
-    if (!strip.has(index) || !isToolResult(message)) return message;
-    return {
-      ...message,
-      content: message.content.filter((part) => part.type !== "image"),
-    };
-  });
-}
-
-/** Keep only the newest Computer Use screenshots while preserving every text result. */
-export function limitComputerUseImages(messages: AgentMessage[], keep = 3): AgentMessage[] {
-  return limitToolResultImages(messages, "computer_use", keep);
-}
-
-/** Browser history has its own image allowance; this projection never edits the journal. */
-export function limitBrowserSnapshotImages(messages: AgentMessage[], keep = 3): AgentMessage[] {
-  return limitToolResultImages(messages, "browser_snapshot", keep);
+/**
+ * The request's Computer Use and browser screenshots, trimmed in batches
+ * (`screenshot-trimming.ts`). This projection never edits the journal.
+ */
+export function trimRequestScreenshots(messages: AgentMessage[]): AgentMessage[] {
+  return trimScreenshots(messages) as AgentMessage[];
 }
 
 function projectRequestMessages(messages: readonly AgentMessage[], supportsImages: boolean): AgentMessage[] {
-  return limitBrowserSnapshotImages(limitComputerUseImages(projectMessagesForModel(messages, supportsImages)));
+  return trimRequestScreenshots(projectMessagesForModel(messages, supportsImages));
 }
 
 const TOOL_OUTPUT_RECOVERY_NOTICE =

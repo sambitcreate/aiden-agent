@@ -102,14 +102,8 @@ import type {
   BotHandoffRule,
 } from "../../../renderer/shared/bot-handoffs.js";
 import { handoffSkippedText, ruleHandoffDoneBlock, ruleUnattendedBlock } from "./bot-handoff-text.js";
-import {
-  BOT_BROWSER_SNAPSHOT_IMAGES_KEPT,
-  BOT_COMPUTER_CAPTURE_IMAGES_KEPT,
-  BOT_OLDER_COMPUTER_CAPTURE_NOTE,
-  withImageReferences,
-  withNewestToolImages,
-} from "./bot-images.js";
-import { BOT_COMPUTER_TOOL_NAME } from "../bot-computers/types.js";
+import { withImageReferences } from "./bot-images.js";
+import { trimScreenshots } from "../screenshot-trimming.js";
 import { withheldUntilDisclosed } from "./bot-tool-disclosure.js";
 import { LOAD_TOOLS_TOOL_NAME, createOnDemandTools, withheldUntilLoaded } from "../on-demand-tools.js";
 import { adaptAidenTool, type BotToolCall, type DurableTool, type ToolReplay } from "./tool-adapter.js";
@@ -1568,8 +1562,9 @@ export function createBotRegistry(botId: string, deps: BotExtensionDeps): BotReg
         // Telegram and person turns share one cached tool list.
         messages = withoutTools(messages, withheldUntilDisclosed(messages));
         if (onDemandNames.size > 0) messages = withoutTools(messages, withheldUntilLoaded(messages, onDemandNames));
-        messages = withNewestToolImages(messages, "browser_snapshot", BOT_BROWSER_SNAPSHOT_IMAGES_KEPT);
-        messages = withNewestToolImages(messages, BOT_COMPUTER_TOOL_NAME, BOT_COMPUTER_CAPTURE_IMAGES_KEPT, BOT_OLDER_COMPUTER_CAPTURE_NOTE);
+        // Screenshots are cut in batches, shared with workspace chats, so
+        // earlier messages stay byte-identical between cuts.
+        messages = trimScreenshots(messages);
         if (deps.imageInput !== undefined && !(await deps.imageInput(botId))) messages = withImageReferences(messages);
         messages = withoutRemovedMemory(messages);
         messages = await withPromptTail(messages);
