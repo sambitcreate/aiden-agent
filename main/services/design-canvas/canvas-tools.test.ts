@@ -1173,6 +1173,18 @@ test("a page's workspace path names its frame wherever a frame id goes, preferri
   const removed = await call("canvas_remove_frame", { id: "design/home.html" });
   assert.equal(removed.status, "removed");
   assert.deepEqual((await store.get("chat-1")).frames.map((frame) => frame.id).sort(), ["home-desktop", "label", arrow.frame.id].sort());
+
+  // Two frames on the page on screen show it: the path could mean either, so it names neither.
+  await store.update("chat-1", (doc) => showPage(doc, "page-1"));
+  const copy = await call("canvas_place_frame", { kind: "file", title: "Home dark", path: "design/home.html", duplicate: true });
+  const unclear = await call("canvas_update_frame", { id: "design/home.html", x: 5000 });
+  assert.equal(unclear.status, "error");
+  assert.ok(unclear.message.includes('"home-desktop"') && unclear.message.includes(`"${copy.frame.id}"`), "the refusal lists the frames it could mean");
+  const after = await store.get("chat-1");
+  assert.ok(after.frames.every((frame) => frame.x !== 5000), "no frame moved");
+  const unclearEnd = await call("canvas_place_frame", { kind: "connector", title: "To home", from: { frameId: "label" }, to: { frameId: "design/home.html" } });
+  assert.equal(unclearEnd.status, "error", "an arrow's end is refused the same way");
+  assert.equal((await call("canvas_update_frame", { id: copy.frame.id, x: 5000 })).frame.id, copy.frame.id, "its id still names it");
 });
 
 const overlaps = (a: { x: number; y: number; w: number; h: number }, b: { x: number; y: number; w: number; h: number }) =>
@@ -1201,6 +1213,19 @@ test("nextTo puts a frame beside another, past any frame in the way, and in that
 
   assert.equal((await call("canvas_place_frame", { kind: "note", title: "X", nextTo: { frameId: page.frame.id }, x: 1, y: 1 })).status, "error");
   assert.equal((await call("canvas_place_frame", { kind: "note", title: "X", nextTo: { frameId: "missing" } })).status, "error");
+
+  // An arrow has no side to stand beside, and a page's own frame cannot go beside itself.
+  const arrow = await call("canvas_place_frame", { kind: "connector", title: "Flow", from: { frameId: first.frame.id }, to: { frameId: second.frame.id } });
+  const besideArrow = await call("canvas_place_frame", { kind: "note", title: "X", nextTo: { frameId: arrow.frame.id } });
+  assert.equal(besideArrow.status, "error");
+  assert.match(besideArrow.message, /not a connector/u);
+  const before = (await store.get("chat-1")).frames;
+  const besideItself = await call("canvas_place_frame", { kind: "file", title: "Home", path: "design/home.html", nextTo: { frameId: page.frame.id } });
+  assert.equal(besideItself.status, "error");
+  assert.match(besideItself.message, /duplicate: true/u, "the refusal says how to show it twice");
+  assert.deepEqual((await store.get("chat-1")).frames, before, "nothing changed");
+  const beside = await call("canvas_place_frame", { kind: "file", title: "Home copy", path: "design/home.html", duplicate: true, nextTo: { frameId: page.frame.id } });
+  assert.equal(beside.placed, "copy");
 });
 
 test("canvas_build draws boxes and the arrows between them in one call, and refs name its boxes", async (t) => {

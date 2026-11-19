@@ -487,6 +487,24 @@ function applyStyle(frame: DesignFrame, patch: StylePatch): DesignFrame {
   return next;
 }
 
+/**
+ * The frame a tool call names by id or page path (see `designFrameByIdOrPath`).
+ * Named by the page it shows, it must be the only frame on its canvas page
+ * that shows it (another canvas page's copy is not the one meant), so a tool
+ * never changes whichever of two came first.
+ */
+function frameByRef(doc: DesignCanvas, value: unknown): DesignFrame | undefined {
+  const frame = designFrameByIdOrPath(doc, value);
+  if (!frame || frame.id === value) return frame;
+  const meant = doc.frames.filter((entry) => entry.kind === "file" && entry.path === frame.path && entry.pageId === frame.pageId);
+  if (meant.length > 1) {
+    throw new CanvasToolError(
+      `${frame.path} is shown in ${meant.length} frames (${meant.slice(0, 10).map((entry) => `"${entry.id}"`).join(", ")}). Name the one you mean by its id.`,
+    );
+  }
+  return frame;
+}
+
 /** A connector end from a tool call: on a frame of the page (by id), or at a point. */
 function endOf(doc: DesignCanvas, value: unknown, field: string, pageId: string, self?: string): DesignConnectorEnd {
   if (typeof value !== "object" || value === null) {
@@ -494,7 +512,7 @@ function endOf(doc: DesignCanvas, value: unknown, field: string, pageId: string,
   }
   const raw = value as Record<string, unknown>;
   if (raw.frameId !== undefined && raw.frameId !== null && raw.frameId !== "") {
-    const frame = designFrameByIdOrPath(doc, raw.frameId);
+    const frame = frameByRef(doc, raw.frameId);
     if (!frame || frame.pageId !== pageId || frame.id === self || !canAttachTo(frame)) {
       throw new CanvasToolError(
         `${field}.frameId must be the id of a frame on the same page that is not an arrow, line or drawing, or the path of a page that frame shows.`,
@@ -830,12 +848,19 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
   };
 
   const frameIn = (doc: DesignCanvas, id: unknown): DesignFrame => {
-    const frame = designFrameByIdOrPath(doc, id);
+    const frame = frameByRef(doc, id);
     if (!frame) {
       throw new CanvasToolError(
         "No frame on this canvas has that id or shows that page. Call canvas_read for the current frames, or canvas_place_frame to put the page on the canvas.",
       );
     }
+    return frame;
+  };
+
+  /** A frame something goes beside: any frame but a connector, which has no side to go on. */
+  const besideFrame = (doc: DesignCanvas, id: unknown): DesignFrame => {
+    const frame = frameIn(doc, id);
+    if (frame.kind === "connector") throw new CanvasToolError("nextTo must name a frame, not a connector.");
     return frame;
   };
 
@@ -958,7 +983,7 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
             const id = newId();
             return edit<Record<string, unknown>>((doc) => {
               // Beside a frame, on its page unless another is named.
-              const anchor = nextTo ? frameIn(doc, nextTo.frameId) : undefined;
+              const anchor = nextTo ? besideFrame(doc, nextTo.frameId) : undefined;
               const pageId = anchor && (p.page === undefined || p.page === null || p.page === "") ? anchor.pageId : pageOf(doc, p.page);
               if (anchor && anchor.pageId !== pageId) {
                 throw new CanvasToolError("nextTo must name a frame on the page it goes on.");
@@ -987,6 +1012,11 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
                 candidates.find((entry) => (entry.designWidth ?? DESIGN_DEFAULT_FILE_WIDTH) === width) ??
                 candidates.find((entry) => entry.createdBy === "aiden") ??
                 candidates[0];
+              if (anchor && adopted && anchor.id === adopted.id) {
+                throw new CanvasToolError(
+                  `nextTo names "${adopted.id}", the frame this page already has, which is the one it would move. Name another frame, or pass duplicate: true for a second frame beside it.`,
+                );
+              }
               // A reused frame may name the locked group it is already in. Beside
               // a frame, it joins that frame's plain group unless one is named.
               const namedGroup = p.groupId === undefined && anchor ? groupBeside(doc, anchor) : p.groupId;
@@ -2003,7 +2033,7 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
             }
 
             return edit<Record<string, unknown>>((doc) => {
-              const anchor = nextTo ? frameIn(doc, nextTo.frameId) : undefined;
+              const anchor = nextTo ? besideFrame(doc, nextTo.frameId) : undefined;
               const pageId = anchor && (p.page === undefined || p.page === null || p.page === "") ? anchor.pageId : pageOf(doc, p.page);
               if (anchor && anchor.pageId !== pageId) throw new CanvasToolError("nextTo must name a frame on the page it goes on.");
               const added = boxes.length + lines.length + (groupTitle !== undefined ? 1 : 0);
