@@ -86,6 +86,7 @@ import { createVisionAnalysisTool, INSPECT_IMAGE_TOOL_NAME } from "./vision-anal
 import {
   buildPinnedCodingTools,
   summarizeToolCall,
+  writeWorkspaceBinaryFile,
 } from "./coding-tools.js";
 import {
   BOT_FILE_TOOL_NAMES,
@@ -548,7 +549,7 @@ import { createDesignModeTool, DESIGN_MODE_TOOL_NAME } from "./design-canvas/des
 import { chatSurface } from "../../renderer/shared/chat-visibility.js";
 import { CANVAS_STATUS_SECTION, canvasPromptLine, withCanvasStatusNote } from "../../renderer/shared/design-canvas/canvas-summary.js";
 import { withJournaledCanvasStatusNote } from "./design-canvas/status-note.js";
-import { placeArtifactsOnCanvas, type CanvasArtifact } from "./design-canvas/artifact-frames.js";
+import { placeArtifactsOnCanvas, placeImagesOnCanvas, type CanvasArtifact } from "./design-canvas/artifact-frames.js";
 import { createDesignPageScanner, placeWrittenPagesOnCanvas, writtenPagePath } from "./design-canvas/written-pages.js";
 import { inspectDesignFrame } from "./design-canvas/frame-render.js";
 import { inspectDesignPage } from "./design-canvas/inspect.js";
@@ -2337,6 +2338,53 @@ async function prepareGeneration(
       resolveRuntime: (providerId, modelId, requestSignal) => resolveModelRuntime(providerId, modelId, requestSignal, chat.id),
     });
     const operationProviders = [runtime.provider, ...savedOperationProviders];
+    // generate_image may keep its image as a workspace file where this chat
+    // could write one with write_file, and put it on the design canvas where
+    // the canvas tools could. Both re-check the workspace when they run.
+    const imageRoot = folderPath;
+    const imageWorkspaceUnchanged = async () => {
+      const current = workspace ? await configStore.getWorkspace(workspace.id) : undefined;
+      return current !== undefined && current.folderPath === imageRoot && current.permission !== "none";
+    };
+    const imageSaving =
+      imageRoot &&
+      !botContext &&
+      !assistantMode &&
+      permission !== "none" &&
+      permission !== "read-only" &&
+      !options.excludeToolNames?.has("write_file")
+        ? {
+            saveImage: async (relativePath: string, image: { data: string }, saveSignal?: AbortSignal) => {
+              if (!(await imageWorkspaceUnchanged())) throw new Error("This chat's workspace folder changed or lost file access.");
+              return await writeWorkspaceBinaryFile(imageRoot, relativePath, Buffer.from(image.data, "base64"), {
+                ...(saveSignal ? { signal: saveSignal } : {}),
+              });
+            },
+            ...(!options.excludeToolNames?.has("canvas_place_frame") &&
+            designCanvasToolsAllowed({ ...designTurn, designMode: true })
+              ? {
+                  placeImages: async (images: readonly { path: string; width: number; height: number }[]) => {
+                    const allowed = async () => (await designModeOn()) && (await imageWorkspaceUnchanged());
+                    if (!(await allowed())) return null;
+                    const frameIds = await placeImagesOnCanvas({
+                      chatId: params.chatId,
+                      images,
+                      ...(params.designView?.viewSize ? { viewSize: params.designView.viewSize } : {}),
+                      shouldSave: allowed,
+                      store: designCanvasStore,
+                      broadcast: announceCanvasChange,
+                      newId: randomUUID,
+                    });
+                    if (frameIds === null) return null;
+                    if (frameIds.length > 0 && !browserOwner.isDestroyed()) {
+                      browserOwner.send("designCanvas:focus", { chatId: params.chatId, frameIds });
+                    }
+                    return { frameIds };
+                  },
+                }
+              : {}),
+          }
+        : {};
     generationExtensions.push({
       id: "aiden.model-operations",
       systemPrompt: piModelOperationsSystemPrompt({
@@ -2354,6 +2402,7 @@ async function prepareGeneration(
         resolveImage: modelImageReferences.resolveImage,
         resolveImages: modelImageReferences.resolveImages,
         onImage: displayImageRuntime.presentGeneratedImage,
+        ...imageSaving,
         // Account at the provider-call boundary, not at nested/parent tool events.
         onUsage: async (record) => {
           // Image providers are always hosted; chat provider deployments never apply to them.
