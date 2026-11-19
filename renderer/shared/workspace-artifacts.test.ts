@@ -281,6 +281,8 @@ test("an option that takes its value only joined is refused with advice that sav
       ["git log --decorate={{d}} -- {{file}}", ["short", "notes.md"], undefined],
       ["git diff --color={{c}} -- {{file}}", ["never", "notes.md"], undefined],
       ["git log --stat={{n}} -- {{file}}", ["1", "notes.md"], undefined],
+      ["git diff -M{{n}} -- {{file}}", ["50%", "notes.md"], undefined],
+      ["git diff -B{{n}} -- {{file}}", ["50%", "notes.md"], undefined],
       ["tail -n+{{n}} notes.md", ["2"], undefined],
     ] as const) {
       let message = "";
@@ -313,6 +315,20 @@ test("an option that takes its value only joined is refused with advice that sav
       assert.equal(result.status, 0, `${followed}: ${result.stderr}`);
       assert.ok(expected(result.stdout), `${followed} printed ${JSON.stringify(result.stdout)}`);
     }
+    // That advice, followed with a fixed similarity score, saves, and git
+    // takes the score: a rename that kept two of its three lines is one at
+    // 50% and not at 90%.
+    git("mv", "notes.md", "moved.md");
+    fs.writeFileSync(path.join(repo, "moved.md"), "one\ntwo\nfour\n");
+    git("commit", "-qam", "move");
+    const renamed = /^R\d+\tnotes\.md\tmoved\.md$/mu;
+    for (const option of ["-M50%", "-M5", "-M.5", "-C50%", "-B50%/60% -M50%", "--find-renames=50%", "--find-copies=50%", "-pM50%"]) {
+      const result = run(`git diff --name-status ${option} {{rev}}`, ["HEAD~1"]);
+      assert.equal(result.status, 0, `${option}: ${result.stderr}`);
+      assert.match(result.stdout, renamed, option);
+    }
+    assert.doesNotMatch(run("git diff --name-status -M90% {{rev}}", ["HEAD~1"]).stdout, renamed);
+    assert.throws(() => save("git diff -Mx {{rev}}"), /git diff with -Mx, an option Aiden does not check/u);
   } finally {
     fs.rmSync(repo, { recursive: true, force: true });
   }

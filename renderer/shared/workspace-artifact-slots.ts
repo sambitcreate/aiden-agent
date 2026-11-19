@@ -101,6 +101,13 @@ export interface SlotSpec {
    * with the joined form to write instead.
    */
   joined?: Readonly<Record<string, string>>;
+  /**
+   * Short options whose value is optional and only ever in their own word, as
+   * letters: git diff's `-M`, `-C` and `-B` alone, or with a fixed similarity
+   * score (`-M50%`, `-M5`, `-B50%/60%`). The rest of the word is the score;
+   * the next word is never it.
+   */
+  scores?: string;
   /** `-5` means a count (`head -5`, `git log -1`). */
   digits?: boolean;
   /** The program reads no options: every word is an operand (`echo`, `printf`, `test`). */
@@ -347,11 +354,12 @@ const GIT_SPECS: Readonly<Record<string, SlotSpec>> = {
   show: logLike("git show"),
   diff: {
     name: "git diff",
-    flags: "pusbwRazMC",
+    flags: "pusbwRaz",
+    scores: "MCB",
     long: [
       "stat", "shortstat", "numstat", "name-only", "name-status", "cached", "staged", "patch", "no-patch", "no-color", "quiet", "exit-code",
       "ignore-all-space", "ignore-space-change", "text", "minimal", "histogram", "patience", "color", "word-diff", "merge-base", "find-renames",
-      "find-copies",
+      "find-copies", "break-rewrites",
     ],
     values: { "-O": READS_ANY_FILE, "--output": WRITES_FILE, "-U --unified": null, "--diff-filter": null },
     joined: UNIFIED_JOINED,
@@ -850,6 +858,12 @@ function walk(spec: SlotSpec, args: Args, from: number): { positions: Map<number
         }
         break;
       }
+      if (spec.scores?.includes(letters[at]!)) {
+        // The rest of the word, if any, is a fixed score such as 50%.
+        if (!/^[\d.%/]*$/u.test(letters.slice(at + 1).join(""))) return unknown(arg);
+        has.add(name);
+        break;
+      }
       if (!spec.flags?.includes(letters[at]!)) return unknown(name);
       has.add(name);
     }
@@ -1022,6 +1036,7 @@ const LISTED_OPTIONS = 24;
 function checkedOptions(spec: SlotSpec): string {
   const names = [
     ...[...(spec.flags ?? "")].map((letter) => `-${letter}`),
+    ...[...(spec.scores ?? "")].map((letter) => `-${letter}`),
     ...(spec.long ?? []).map((name) => `--${name}`),
     ...Object.keys(spec.values ?? {}).flatMap((key) => key.split(" ")),
   ];
