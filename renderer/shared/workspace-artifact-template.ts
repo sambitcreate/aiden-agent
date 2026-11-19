@@ -611,6 +611,11 @@ function joinedProblem(word: TemplateWord, program: string, args: readonly (stri
     if (fixed !== undefined) {
       return `${name} cannot be joined to the option ${lone}: page data cannot fill ${lone}, which takes its value only joined to it. Write ${fixed.replace(/\{\{n\}\}/gu, name)}.`;
     }
+    // Advise the separate word only where the table takes page data there.
+    const apart = [...args.slice(0, at), option, undefined, ...args.slice(at + 1)];
+    const alone: TemplateWord = { parts: word.parts.filter((part) => "param" in part), quoted: false, start: word.start, end: word.end };
+    const found = placeholderSlot(program, apart, at + 1, alone);
+    if ("problem" in found) return `${name} cannot be joined to the option ${option}, and page data may not be passed ${found.problem}`;
     return `${name} cannot be joined to the option ${option}. Pass it as a separate word: ${option} ${name}.`;
   }
   if (program === "tail" && "text" in head && head.text === "+" && before !== undefined && /^(?:-n|--lines|-c|--bytes)$/u.test(before)) {

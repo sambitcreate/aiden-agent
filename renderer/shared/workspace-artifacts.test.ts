@@ -232,6 +232,9 @@ test("an option that takes its value only joined is refused with advice that sav
     ["git log --pretty={{fmt}} -- {{file}}", "--pretty={{fmt}}"],
     ["git log --format {{fmt}} -- {{file}}", "--format {{fmt}}"],
     ["git show --pretty={{fmt}} {{rev}}", "--pretty={{fmt}}"],
+    ["git log -U{{n}} -p -- {{file}}", "-U{{n}}"],
+    ["git show -U{{n}} {{rev}}", "-U{{n}}"],
+    ["git log --unified={{n}} -p -- {{file}}", "--unified={{n}}"],
     ["git pull -j{{n}} origin {{branch}}", "-j{{n}}"],
     ["git pull --jobs={{n}} origin {{branch}}", "--jobs={{n}}"],
     ["grep --context={{n}} -e {{p}} notes.md", "--context={{n}}"],
@@ -248,6 +251,25 @@ test("an option that takes its value only joined is refused with advice that sav
     const advice = /Write (?:a fixed )?(.+?)(?:,? or |\.(?: |$))/u.exec(message)?.[1];
     assert.ok(advice, `${command}: no form to write in ${message}`);
     const followed = command.replace(written, advice!);
+    assert.equal(save(followed).length, 1, `${command} -> ${followed}`);
+  }
+  // Any other joined option is told to take the value as a separate word only
+  // where that form saves; where it would not, the refusal says why instead.
+  for (const command of ["git log -n{{n}} -- {{file}}", "head -n{{n}} notes.md", "rg -C{{n}} {{p}} notes.md", "git log -L{{n}},+3:notes.md", "git log -W{{n}} -- {{file}}"]) {
+    let message = "";
+    try {
+      save(command);
+    } catch (error) {
+      message = (error as Error).message;
+    }
+    assert.ok(message, `${command} was accepted`);
+    const apart = /Pass it as a separate word: (\S+ \{\{\w+\}\})\./u.exec(message)?.[1];
+    if (apart === undefined) {
+      assert.match(message, /and page data may not be passed/u, command);
+      assert.throws(() => save(command.replace(/(-\w)(\{\{\w+\}\})/u, "$1 $2")), /actions\[0\]: /u, `${command} written apart`);
+      continue;
+    }
+    const followed = command.replace(apart.replace(" ", ""), apart);
     assert.equal(save(followed).length, 1, `${command} -> ${followed}`);
   }
 });

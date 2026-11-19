@@ -274,8 +274,11 @@ const LOG_VALUES: Record<string, ValueEntry> = {
   "--format": null,
   "--pretty": null,
   "--date": null,
+  "-U --unified": null,
 };
-const LOG_JOINED = { "--format": "a fixed --format=%h", "--pretty": "a fixed --pretty=oneline" };
+/** git diff, log and show take -U's value (lines of context) only joined: `-U {{n}}` reads the value as a revision or file. */
+const UNIFIED_JOINED = { "-U --unified": "a fixed -U5 or --unified=5" };
+const LOG_JOINED = { "--format": "a fixed --format=%h", "--pretty": "a fixed --pretty=oneline", ...UNIFIED_JOINED };
 const logLike = (name: string): SlotSpec => ({
   name,
   flags: "pcmsuziEFP",
@@ -345,7 +348,7 @@ const GIT_SPECS: Readonly<Record<string, SlotSpec>> = {
       "find-copies",
     ],
     values: { "-O": READS_ANY_FILE, "--output": WRITES_FILE, "-U --unified": null, "--diff-filter": null },
-    joined: { "-U --unified": "a fixed -U5 or --unified=5" },
+    joined: UNIFIED_JOINED,
     ...files("revisions or files in the workspace"),
   },
   branch: {
