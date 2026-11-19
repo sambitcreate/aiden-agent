@@ -137,6 +137,13 @@ export interface PiCompactionCoordinatorOptions {
    */
   approvedMemoryFacts?: ApprovedMemoryFacts;
   /**
+   * Every memory fact line the journal itself holds, when `session` reads it
+   * with removed facts projected out (`withoutForgottenFactsSession`). A
+   * summary may restate none of them either: chat text can still state a
+   * fact the person removed, and the projected branch no longer names it.
+   */
+  journalMemoryFacts?: () => Promise<readonly string[]>;
+  /**
    * Background summaries for an attended chat whose turn ends close to its
    * trigger. One is stored only when compaction is due and the chat has only
    * been appended to since; see compaction-precompute.
@@ -1169,9 +1176,14 @@ export class PiCompactionCoordinator {
       }
       started = true;
       this.options.onEvent?.({ type: "start", reason });
-      // Every memory fact the branch ever held (removed ones too) and every
-      // one the chat may be told now; no stored summary may state one.
-      const facts = [...memoryFactLinesInBranch(branch), ...(await this.approvedFactLines())];
+      // Every memory fact the journal ever held (removed ones too, also when
+      // this branch reads them projected out) and every one the chat may be
+      // told now; no stored summary may state one.
+      const facts = [
+        ...memoryFactLinesInBranch(branch),
+        ...((await this.options.journalMemoryFacts?.()) ?? []),
+        ...(await this.approvedFactLines()),
+      ];
       // A background summary that no longer fits, or states a fact, is
       // dropped without a word, and this compaction runs as usual.
       let precomputed = reason === "threshold" ? await this.takePrecomputed(branch, preparation) : undefined;

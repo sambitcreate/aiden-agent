@@ -434,6 +434,7 @@ import {
   chatStateRequestMessages,
   extensionChatState,
   journaledChatState,
+  memoryFactLinesInBranch,
   planChatTurnState,
   turnNoteMessage,
   withHeadChatState,
@@ -3953,6 +3954,9 @@ export const llmClient = {
       // From here on the turn reads the journal without the memory facts the
       // person removed or turned off: its model context, an in-turn
       // compaction's summary input, and history recall.
+      // A compaction still scrubs those facts from its summary, so it reads
+      // them from the journal as written.
+      const journalWithForgottenFacts = piSession;
       piSession = withoutForgottenFactsSession(piSession, currentChatState);
       const headBranch = chatStatePlan.head.branch ?? undefined;
       const headPermission = chatStatePlan.head.permission;
@@ -4132,6 +4136,7 @@ export const llmClient = {
         }),
         model,
         thinkingLevel,
+        journalMemoryFacts: async () => memoryFactLinesInBranch(await journalWithForgottenFacts.getBranch()),
         settings: {
           ...DEFAULT_COMPACTION_SETTINGS,
           ...compactionBudget,

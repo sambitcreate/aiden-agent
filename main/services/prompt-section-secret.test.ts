@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
-import { chmod, lstat, mkdir, mkdtemp, readFile, readdir, rm, stat, symlink, writeFile } from "node:fs/promises";
+import { spawn } from "node:child_process";
+import { chmod, lstat, mkdir, mkdtemp, readFile, readdir, rename, rm, stat, symlink, unlink, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { after, beforeEach, test } from "node:test";
 import {
   PROMPT_SECTION_KEY_FILE,
@@ -102,4 +104,61 @@ test("a read-only data folder gives one stable key for the run and creates nothi
   } finally {
     await chmod(readOnly, 0o700);
   }
+});
+
+/** Another app process asking for the key in `dir`; resolves to the key it settled on, in hex. */
+function keyInAnotherProcess(dir: string): Promise<string> {
+  const moduleUrl = new URL("./prompt-section-secret.ts", import.meta.url).href;
+  const script = `const m = await import(${JSON.stringify(moduleUrl)}); process.stdout.write(m.promptSectionDeviceKey(${JSON.stringify(dir)}).toString("hex"));`;
+  return new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, ["--import", "tsx", "--input-type=module", "--eval", script], {
+      cwd: path.dirname(fileURLToPath(import.meta.url)),
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let out = "";
+    let err = "";
+    child.stdout.on("data", (chunk) => (out += chunk));
+    child.stderr.on("data", (chunk) => (err += chunk));
+    child.on("error", reject);
+    child.on("exit", (code) => (code === 0 ? resolve(out) : reject(new Error(`child exited ${code}: ${err}`))));
+  });
+}
+
+test("a process repairing a damaged key waits for the one already replacing it and keeps that key", async () => {
+  const dir = await dataDir();
+  const file = path.join(dir, PROMPT_SECTION_KEY_FILE);
+  await writeFile(file, "not a key\n");
+  // Another process is mid-replacement: it holds the lock.
+  await writeFile(`${file}.lock`, "");
+  const waiting = keyInAnotherProcess(dir);
+  await new Promise((resolve) => setTimeout(resolve, 600));
+  const published = "cd".repeat(32);
+  await writeFile(`${file}.new`, `${published}\n`, { mode: 0o600 });
+  await rename(`${file}.new`, file);
+  await unlink(`${file}.lock`);
+
+  assert.equal(await waiting, published, "both processes derive chat secrets from one key");
+  assert.equal((await readFile(file, "utf8")).trim(), published);
+  assert.deepEqual(await readdir(dir), [PROMPT_SECTION_KEY_FILE], "no temp or lock file is left behind");
+});
+
+test("a lock left by a process that died does not block the key for good", async () => {
+  const dir = await dataDir();
+  const file = path.join(dir, PROMPT_SECTION_KEY_FILE);
+  await writeFile(file, "not a key\n");
+  await writeFile(`${file}.lock`, "");
+  const longAgo = new Date(Date.now() - 60_000);
+  await utimes(`${file}.lock`, longAgo, longAgo);
+
+  const key = promptSectionDeviceKey(dir);
+  assert.equal((await readFile(file, "utf8")).trim(), key.toString("hex"), "the repaired key is stored for later launches");
+  assert.deepEqual(await readdir(dir), [PROMPT_SECTION_KEY_FILE]);
+});
+
+test("processes starting together on a damaged key file all settle on one key", async () => {
+  const dir = await dataDir();
+  await writeFile(path.join(dir, PROMPT_SECTION_KEY_FILE), "not a key\n");
+  const keys = await Promise.all(Array.from({ length: 6 }, () => keyInAnotherProcess(dir)));
+  assert.equal(new Set(keys).size, 1);
+  assert.equal((await readFile(path.join(dir, PROMPT_SECTION_KEY_FILE), "utf8")).trim(), keys[0]);
 });

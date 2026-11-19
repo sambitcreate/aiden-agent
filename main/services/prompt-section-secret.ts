@@ -7,7 +7,7 @@
 // The key is never sent anywhere; only values derived from it reach a prompt.
 
 import { createHmac, randomBytes } from "node:crypto";
-import { chmodSync, linkSync, lstatSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, closeSync, linkSync, lstatSync, openSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import * as path from "node:path";
 
 export const PROMPT_SECTION_KEY_FILE = "prompt-section-key";
@@ -49,11 +49,52 @@ function removeQuietly(file: string): void {
   }
 }
 
+/** How long a key writer may hold the lock before others treat it as abandoned. */
+const LOCK_STALE_MS = 10_000;
+/** How long a process waits for another's lock before using a key for this run only. */
+const LOCK_WAIT_MS = 2_000;
+
+function pause(ms: number): void {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+/**
+ * Runs `replace` while holding `<file>.lock`, created exclusively, so only one
+ * process at a time can replace the key file; each replacement reads the file
+ * again first. A lock left behind by a process that died is broken once it is
+ * older than LOCK_STALE_MS. Undefined when the lock stays held past
+ * LOCK_WAIT_MS.
+ */
+function withKeyLock(file: string, replace: () => Buffer | undefined): Buffer | undefined {
+  const lock = `${file}.lock`;
+  const deadline = Date.now() + LOCK_WAIT_MS;
+  for (;;) {
+    try {
+      closeSync(openSync(lock, "wx", 0o600));
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException)?.code !== "EEXIST") throw error;
+      try {
+        if (Date.now() - lstatSync(lock).mtimeMs > LOCK_STALE_MS) removeQuietly(lock);
+      } catch {
+        // Released meanwhile.
+      }
+      if (Date.now() > deadline) return undefined;
+      pause(20);
+      continue;
+    }
+    try {
+      return replace();
+    } finally {
+      removeQuietly(lock);
+    }
+  }
+}
+
 /**
  * Publishes `key` at `file` only if no key is there yet. The file appears
- * whole (a hard link to a finished temp file), so a concurrent reader never
- * sees it empty. Returns the key that ends up stored: ours, or the one a
- * concurrent creator published first.
+ * whole (a hard link to, or a rename of, a finished temp file), so a
+ * concurrent reader never sees it empty. Returns the key that ends up stored:
+ * ours, or the one a concurrent creator published first.
  */
 function publishKey(file: string, key: Buffer): Buffer | undefined {
   const temp = writeTemp(file, key);
@@ -62,22 +103,18 @@ function publishKey(file: string, key: Buffer): Buffer | undefined {
     return key;
   } catch (error) {
     const code = (error as NodeJS.ErrnoException)?.code;
-    if (code === "EPERM" || code === "ENOTSUP" || code === "ENOSYS") {
-      // No hard links on this volume: move the finished file into place
-      // unless a key appeared meanwhile.
-      const present = readKey(file);
-      if (present) return present;
+    if (code !== "EEXIST" && code !== "EPERM" && code !== "ENOTSUP" && code !== "ENOSYS") throw error;
+    // A key is already there, or this volume has no hard links. Unless a
+    // valid key is stored, move the finished file into place in one step
+    // under the lock, so two processes never each publish their own: the
+    // second reads the first one's key. rename replaces a damaged file or a
+    // symlink itself rather than writing through it.
+    return readKey(file) ?? withKeyLock(file, () => {
+      const stored = readKey(file);
+      if (stored) return stored;
       renameSync(temp, file);
       return readKey(file);
-    }
-    if (code !== "EEXIST") throw error;
-    const stored = readKey(file);
-    if (stored) return stored;
-    // Damaged (or not a plain file): replace it in one step. rename replaces a
-    // symlink itself rather than writing through it. Read back so two
-    // processes repairing at once settle on whichever key landed last.
-    renameSync(temp, file);
-    return readKey(file);
+    });
   } finally {
     removeQuietly(temp);
   }

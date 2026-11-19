@@ -45,7 +45,7 @@ import { createPiSessionPort, type PiSessionPort } from "./pi-session-port.js";
 import { migratePiSessionJournal } from "./pi-session-migration.js";
 import { upgradeOldPiV4File } from "./pi-session-v4-upgrade.js";
 import { hookContextMessage } from "./workspace-chat-hooks.js";
-import { chatStateRecord, chatStateUpdateMessage, type ChatTurnState } from "./chat-frozen-state.js";
+import { chatStateRecord, chatStateUpdateMessage, memoryFactLinesInBranch, withoutForgottenFactsSession, type ChatTurnState } from "./chat-frozen-state.js";
 import { compileVcc } from "./pi-vcc/compiler.js";
 import { rememberStableHead, withPromptCacheBreakpoints } from "./prompt-cache-breakpoints.js";
 
@@ -225,6 +225,37 @@ for (const trigger of ["automatic", "manual"] as const) {
     );
   });
 }
+
+test("a summary does not keep a removed fact the chat also stated, when the turn reads the journal with it projected out", async () => {
+  const { faux, models, model } = compactionFixture();
+  faux.setResponses([
+    () => fauxAssistantMessage(`${structuredSummary("Continue.")}\n- REMOVED_FACT_CANARY deploys on Fridays.`),
+  ]);
+  const journal = await memorySession("memory-facts-forgotten");
+  await journal.appendMessage(user("REMOVED_FACT_CANARY deploys on Fridays, so plan around it.", 0));
+  await historyWithMemoryUpdates(journal, model);
+  // The person removed m2; the turn reads the journal without it.
+  const current: ChatTurnState = {
+    branch: "main",
+    permission: "ask",
+    memory: "Memory:\n- [memory:m3] KEPT_FACT_CANARY uses pnpm.",
+    canvas: "",
+  };
+  const result = await new PiCompactionCoordinator({
+    session: withoutForgottenFactsSession(journal, current),
+    journalMemoryFacts: async () => memoryFactLinesInBranch(await journal.getBranch()),
+    models,
+    model,
+    thinkingLevel: "off",
+    settings: { enabled: true, reserveTokens: 100, keepRecentTokens: 100 },
+  }).compact();
+
+  assert.equal(result.compacted, true, result.errorMessage);
+  const checkpoint = [...(await journal.getEntries())].reverse().find((entry) => entry.type === "compaction");
+  assert.ok(checkpoint?.type === "compaction");
+  assert.doesNotMatch(checkpoint.summary, /REMOVED_FACT_CANARY/u);
+  assert.match(checkpoint.summary, /Continue\./u, "the rest of the summary is kept");
+});
 
 test("a local compaction keeps a retained tail whose state update carries a memory fact", async () => {
   const { faux, models, model } = compactionFixture();
