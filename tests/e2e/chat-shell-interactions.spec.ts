@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { colorContrastRatio, getPresetVariant, resolveThemeTokens } from "../../renderer/shared/appearance";
-import { chooseFolderlessWorkspace, expect, expectSquircleButtons, finishLmStudioOnboarding, test, type AidenE2e } from "./fixtures";
+import { chooseFolderlessWorkspace, composerPrimaryButton, expect, expectSquircleButtons, finishLmStudioOnboarding, test, type AidenE2e } from "./fixtures";
 
 const PASTED_IMAGE_NAME = "Pasted image.png";
 const PRIMARY_MODIFIER = process.platform === "darwin" ? "Meta" : "Control";
@@ -665,7 +665,7 @@ test.describe("with a workspace", () => {
       permission,
       page.getByRole("button", { name: /^Selected model: /u }),
       page.getByRole("button", { name: "Start voice input" }),
-      page.getByRole("button", { name: /^(Send|Queue) message$/u }),
+      composerPrimaryButton(page),
     ];
     for (const width of [900, 600, 520, 420]) {
       await composer.evaluate((element, px) => {

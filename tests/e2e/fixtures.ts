@@ -784,6 +784,17 @@ export async function finishLmStudioOnboarding(page: Page): Promise<void> {
 }
 
 /**
+ * The composer's last button once nothing is running: Send (or Queue), or,
+ * where Aiden Live can start (macOS) and the draft is empty, the Live button
+ * that takes Send's place.
+ */
+export function composerPrimaryButton(page: Page): Locator {
+  return page.getByRole("button", {
+    name: /^(Send message|Queue message|Set up Aiden Live|Start Aiden Live)$/u,
+  });
+}
+
+/**
  * Moves the new chat into a workspace with no folder. A fresh install starts
  * in No workspace, which has a hidden folder, so folder-free states need a
  * folderless workspace of their own.
