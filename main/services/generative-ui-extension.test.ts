@@ -5,6 +5,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import {
   createGenerativeUiExtension,
+  createGenerativeUiExtensionRuntime,
   GENERATIVE_UI_EXTENSION_ID,
   GENERATIVE_UI_TOOL_NAME,
   generativeUiUnavailableReason,
@@ -213,14 +214,16 @@ test("a remote turn tells the model its visuals arrive as still images", () => {
     workspaceId: "workspace", providerId: "provider", model: "model",
     onTurnAccepted: () => undefined,
   });
-  const remote = createGenerativeUiExtension({
+  const remote = createGenerativeUiExtensionRuntime({
     workspaceRoot: undefined,
     onArtifact: () => undefined,
     audience: surface.options.visualAudience,
   });
-  assert.match(remote.systemPrompt ?? "", /still image/iu);
-  const desktop = createGenerativeUiExtension({ workspaceRoot: undefined, onArtifact: () => undefined });
-  assert.doesNotMatch(desktop.systemPrompt ?? "", /still image/iu);
+  assert.match(remote.turnNote, /still image/iu);
+  const desktop = createGenerativeUiExtensionRuntime({ workspaceRoot: undefined, onArtifact: () => undefined });
+  assert.equal(desktop.turnNote, "");
+  // The audience is told after the message, so system is the same on both.
+  assert.equal(remote.extension.systemPrompt, desktop.extension.systemPrompt);
 });
 
 test("path rendering is refused without a workspace while inline html works", async () => {
@@ -262,12 +265,13 @@ test("the system prompt points the model at the guide and keeps replies complete
   const extension = createGenerativeUiExtension({ workspaceRoot: undefined, onArtifact: () => undefined });
   assert.match(extension.systemPrompt ?? "", /visualize_guide/u);
   assert.match(extension.systemPrompt ?? "", /takeaway/iu);
-  const preferred = createGenerativeUiExtension({
+  const preferred = createGenerativeUiExtensionRuntime({
     workspaceRoot: undefined,
     preferArtifactThisTurn: true,
     onArtifact: () => undefined,
   });
-  assert.match(preferred.systemPrompt ?? "", /\/visualize/u);
+  assert.match(preferred.turnNote, /\/visualize/u);
+  assert.equal(preferred.extension.systemPrompt, extension.systemPrompt);
 });
 
 test("with the design canvas offered, mockups and pages go to design files rather than inline visuals", () => {
@@ -282,14 +286,15 @@ test("with the design canvas offered, mockups and pages go to design files rathe
   assert.doesNotMatch(chat.prompt, /design canvas/iu);
 
   for (const preferArtifactThisTurn of [false, true]) {
-    const canvas = steering(
-      createGenerativeUiExtension({
-        workspaceRoot: undefined,
-        designCanvas: true,
-        preferArtifactThisTurn,
-        onArtifact: () => undefined,
-      }),
-    );
+    const runtime = createGenerativeUiExtensionRuntime({
+      workspaceRoot: undefined,
+      designCanvas: true,
+      preferArtifactThisTurn,
+      onArtifact: () => undefined,
+    });
+    const steered = steering(runtime.extension);
+    // The /visualize note rides after the message; it counts as steering too.
+    const canvas = { ...steered, prompt: `${steered.prompt} ${runtime.turnNote}` };
     for (const text of [canvas.prompt, canvas.description]) {
       assert.match(text, /design\/\*\.html/u);
       assert.match(text, /design canvas/iu);

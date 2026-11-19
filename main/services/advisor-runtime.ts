@@ -190,7 +190,19 @@ export interface AdvisorExtensionInput {
     questions: AskUserQuestionV1[],
     signal?: AbortSignal,
   ): Promise<AskUserQuestionResponseV1>;
+  /**
+   * Whether the chooser can be shown changes from one turn to the next in this
+   * chat (a paired device that cannot show question prompts). System then
+   * states guidance true either way, and the host sends
+   * `ADVISOR_NO_CHOOSER_TURN_NOTE` after a prompt whose turn has no
+   * `requestQuestionnaire`, so the cached prefix does not follow the device.
+   */
+  chooserByTurn?: boolean;
 }
+
+/** The turn note for a turn that cannot show the Advisor model chooser (`chooserByTurn`). */
+export const ADVISOR_NO_CHOOSER_TURN_NOTE =
+  "The Advisor model chooser cannot be shown for this message. Call advisor only when the latest user request explicitly names both exact reviewer IDs; first state the Advisor transfer notice visibly, then pass both IDs. Otherwise do not call advisor.";
 
 export interface AdvisorToolDetails {
   status: "running" | "completed" | "failed" | "cancelled" | "blocked";
@@ -438,14 +450,18 @@ async function chooseAdvisorSelection(
   return questionnaireSelection(response, choices, candidates, effort);
 }
 
-function executorPrompt(candidates: readonly AdvisorCandidate[], canAskUser: boolean): string {
+function executorPrompt(candidates: readonly AdvisorCandidate[], chooser: "always" | "by-turn" | "never"): string {
   const catalog = candidates
     .slice(0, MAX_ADVISOR_PROMPT_CANDIDATES)
     .map((candidate) => `- ${candidateDescriptor(candidate)}`)
     .join("\n");
-  const selectionGuidance = canAskUser
-    ? "If the latest user request explicitly names an available reviewer provider and model, first state the Advisor transfer notice visibly, then pass both exact IDs to advisor. Otherwise call advisor without either ID: Aiden will pause and use Ask User Question so the user chooses for this consultation."
-    : "This surface cannot show the Advisor model chooser. Call advisor only when the latest user request explicitly names both exact reviewer IDs; first state the Advisor transfer notice visibly, then pass both IDs. Otherwise do not call advisor.";
+  const selectionGuidance =
+    chooser === "never"
+      ? "This surface cannot show the Advisor model chooser. Call advisor only when the latest user request explicitly names both exact reviewer IDs; first state the Advisor transfer notice visibly, then pass both IDs. Otherwise do not call advisor."
+      : "If the latest user request explicitly names an available reviewer provider and model, first state the Advisor transfer notice visibly, then pass both exact IDs to advisor. Otherwise call advisor without either ID: Aiden will pause and use Ask User Question so the user chooses for this consultation." +
+        (chooser === "by-turn"
+          ? " When a note after the user's message says the chooser cannot be shown for that message, follow the note instead."
+          : "");
   const omitted = Math.max(0, candidates.length - MAX_ADVISOR_PROMPT_CANDIDATES);
   const omittedNotice = omitted > 0 ? `\n- …and ${omitted} more configured targets` : "";
   return `${ADVISOR_EXECUTOR_GUIDANCE}\n\nAdvisor transfer notice: ${ADVISOR_TRANSFER_NOTICE}\n\n${selectionGuidance}\n\nConfigured reviewer targets (exact provider/model IDs):\n${catalog}${omittedNotice}`;
@@ -528,7 +544,9 @@ export class AdvisorRuntime {
           );
           if (!selection) {
             return normalResult(
-              "The user did not choose an advisor provider and model. Continue without a consultation and do not ask again in this response.",
+              input.requestQuestionnaire
+                ? "The user did not choose an advisor provider and model. Continue without a consultation and do not ask again in this response."
+                : "The Advisor model chooser cannot be shown in this turn, and this call did not name both exact reviewer IDs. Continue without a consultation and do not ask again in this response.",
               { status: signal?.aborted ? "cancelled" : "blocked" },
             );
           }
@@ -699,7 +717,10 @@ export class AdvisorRuntime {
 
     return {
       id: ADVISOR_EXTENSION_ID,
-      systemPrompt: executorPrompt(candidates, input.requestQuestionnaire !== undefined),
+      systemPrompt: executorPrompt(
+        candidates,
+        input.chooserByTurn ? "by-turn" : input.requestQuestionnaire ? "always" : "never",
+      ),
       tools: [tool],
     };
   }

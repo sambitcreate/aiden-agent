@@ -169,7 +169,7 @@ export interface GenerativeUiExtensionOptions {
   /** Registers render_ui (Aiden's native catalog) when the host can present it. */
   onUiVisual?: RenderUiToolOptions["onUiVisual"];
   existingChatUiCount?: number;
-  /** The turn came from a paired device, which shows each visual as a snapshot. */
+  /** The turn came from a paired device, which shows each visual as a snapshot (a turn note, not system). */
   audience?: "remote";
   /**
    * The design canvas is offered this turn: pages, screens and UI mockups go
@@ -237,9 +237,37 @@ function resolveWorkspaceRoot(workspaceRoot: string) {
   };
 }
 
+/**
+ * What this turn adds to the chat-level visual guidance: /visualize, and a
+ * paired device that shows each visual as a still image. Both change from one
+ * message to the next, so they ride after the prompt (the host's turn note)
+ * rather than in system, where they would rewrite the cached prefix. "" when
+ * neither applies.
+ */
+export function generativeUiTurnNote(turn: {
+  visualize: boolean;
+  designCanvas: boolean;
+  audience?: "remote";
+}): string {
+  const notes: string[] = [];
+  if (turn.visualize) {
+    notes.push(
+      turn.designCanvas
+        ? "The user invoked /visualize for this message; prefer render_artifact when a chart or diagram would help."
+        : "The user invoked /visualize for this message; prefer render_artifact when a chart, diagram, dashboard, or interactive mockup would help.",
+    );
+  }
+  if (turn.audience === "remote") {
+    notes.push(
+      "This message was sent from a paired device such as a phone. There the user sees each visual as a still image (a snapshot of the column layout) with its text description, so its controls do nothing until they open the chat on this computer: make the first view carry the answer, keep text legible at phone width, and prefer the column layout.",
+    );
+  }
+  return notes.join(" ");
+}
+
 export function createGenerativeUiExtensionRuntime(
   options: GenerativeUiExtensionOptions,
-): { extension: PiAgentRuntimeExtension } {
+): { extension: PiAgentRuntimeExtension; turnNote: string } {
   const workspace = options.workspaceRoot ? resolveWorkspaceRoot(options.workspaceRoot) : undefined;
   const existingChatHtmlBytes = options.existingChatHtmlBytes ?? 0;
   const existingChatHtmlCount = options.existingChatHtmlCount ?? 0;
@@ -440,6 +468,11 @@ export function createGenerativeUiExtensionRuntime(
   );
 
   return {
+    turnNote: generativeUiTurnNote({
+      visualize: options.preferArtifactThisTurn === true,
+      designCanvas,
+      ...(options.audience ? { audience: options.audience } : {}),
+    }),
     extension: {
       id: GENERATIVE_UI_EXTENSION_ID,
       systemPrompt:
@@ -450,15 +483,7 @@ export function createGenerativeUiExtensionRuntime(
         (designCanvas ? "a multi-panel chart or wide table" : "a dashboard, UI mockup, multi-panel layout, or wide table") +
         ", and it will span the chat pane and follow the window size. Either way its width changes with the window, so build it fluid. Before your first visual in a conversation, call visualize_guide with the modules you need (catalog for render_ui; design, html, charts, interactive for render_artifact). Keep the reply complete without the visual: state the key takeaway in a sentence. Never load remote scripts or call network APIs from a visual, and do not claim inline visuals are unavailable while these tools are present." +
         (designCanvas ? DESIGN_CANVAS_VISUALS_NOTE : "") +
-        (options.onRequest ? ON_REQUEST_VISUALS_NOTE : "") +
-        (options.preferArtifactThisTurn
-          ? designCanvas
-            ? " The user invoked /visualize for this turn; prefer render_artifact when a chart or diagram would help."
-            : " The user invoked /visualize for this turn; prefer render_artifact when a chart, diagram, dashboard, or interactive mockup would help."
-          : "") +
-        (options.audience === "remote"
-          ? " This message was sent from a paired device such as a phone. There the user sees each visual as a still image (a snapshot of the column layout) with its text description, so its controls do nothing until they open the chat on this computer: make the first view carry the answer, keep text legible at phone width, and prefer the column layout."
-          : ""),
+        (options.onRequest ? ON_REQUEST_VISUALS_NOTE : ""),
       tools: (options.onUiVisual
         ? [
             tool,

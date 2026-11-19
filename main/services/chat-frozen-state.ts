@@ -163,6 +163,28 @@ export function chatStateUpdateMessage(from: ChatTurnState, to: ChatTurnState, t
   };
 }
 
+/** The hidden host message with notes about one message's audience or request. */
+export const TURN_NOTE_CUSTOM_TYPE = "aiden-turn-note";
+
+/**
+ * Notes that hold for one message only (sent from a paired device, /visualize,
+ * no Advisor chooser), journaled right after that prompt the way hook context
+ * is. System stays the same for every message of the chat, and later requests
+ * repeat the note with the message it belongs to. Undefined when there is no
+ * note.
+ */
+export function turnNoteMessage(notes: readonly string[], timestamp: number): AgentMessage | undefined {
+  const present = notes.map((note) => note.trim()).filter((note) => note.length > 0);
+  if (present.length === 0) return undefined;
+  return {
+    role: "custom",
+    customType: TURN_NOTE_CUSTOM_TYPE,
+    content: ["<turn_note>", "About the user's message above:", ...present, "</turn_note>"].join("\n"),
+    display: false,
+    timestamp,
+  };
+}
+
 /**
  * This turn's head and update. `journaled` is `journaledChatState` of the
  * branch the model context is built from, or undefined when that context is

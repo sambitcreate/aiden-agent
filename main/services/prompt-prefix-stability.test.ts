@@ -10,6 +10,7 @@
 // drops the information instead of moving it fails.
 
 import assert from "node:assert/strict";
+import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -34,6 +35,7 @@ import { assembleChatPrompt, buildWorkspaceChatBasePrompt, type ChatPromptAssemb
 import { buildSystemPrompt, type ChatSystemPromptPermission } from "./chat-system-prompt.js";
 import { createMemoryExtension } from "./memory-context.js";
 import { hookContextMessage, hookTurnContextText } from "./workspace-chat-hooks.js";
+import { turnNoteMessage } from "./chat-frozen-state.js";
 import { fingerprintPromptPrefix } from "./pi-cache-telemetry.js";
 import type { MemoryFact, MemoryScope, MemoryStore } from "./memory-store.js";
 import { markMcpAgentTool } from "./mcp-tool-identity.js";
@@ -48,7 +50,7 @@ import { UNATTENDED_FOLLOW_UP_GENERATION } from "./follow-through/notice-deliver
 import { owedTurnStartRequest } from "./chat-owed-turn-start.js";
 import { assembleAgentTools } from "./agent-tool-assembly.js";
 import { subagentsAllowedForGeneration } from "./subagents/eligibility.js";
-import { createGenerativeUiExtension, shouldEnableGenerativeUiExtension } from "./generative-ui-extension.js";
+import { createGenerativeUiExtensionRuntime, shouldEnableGenerativeUiExtension } from "./generative-ui-extension.js";
 import { createAskUserQuestionExtension, shouldEnableAskUserQuestionExtension } from "./ask-user-question-extension.js";
 import { ROUTINE_NOTES_TOOL } from "./bot-runtime/bot-tool-policy.js";
 import type { PiAgentRuntimeExtension } from "./pi-agent-runtime-harness.js";
@@ -130,7 +132,10 @@ async function workspaceChat(options: {
   });
 }
 
-type TurnHead = { assembly: ChatPromptAssembly } | { systemPrompt: string; tools: AgentTool[] } | { chatState: PromptPrefixChatState };
+type TurnHead = ({ assembly: ChatPromptAssembly } | { systemPrompt: string; tools: AgentTool[] } | { chatState: PromptPrefixChatState }) & {
+  /** Host messages journaled right after the prompt (hook context, a turn note). */
+  following?: (promptTimestamp: number) => AgentMessage[];
+};
 
 /**
  * A workspace chat whose branch, permission, memory and canvas the harness
@@ -621,17 +626,24 @@ describe("prompt prefix stability: tool list identical across turns", () => {
     const visuals = (visualize: boolean) => {
       const turn = { usageSource: "chat" as const, assistantMode: false, permission: "ask" as const, excluded: false, inlineVisuals: "on_request" as const };
       assert.equal(shouldEnableGenerativeUiExtension(turn), true, "On request declares the drawing tools on every turn");
-      return createGenerativeUiExtension({
+      return createGenerativeUiExtensionRuntime({
         workspaceRoot: undefined, onArtifact: () => undefined, onUiVisual: () => undefined, onRequest: true, preferArtifactThisTurn: visualize,
       });
     };
+    const plainTurn = visuals(false);
+    const visualizeTurn = visuals(true);
+    // llm-client journals the turn's note right after its prompt.
+    const note = (timestamp: number) => [turnNoteMessage([visualizeTurn.turnNote], timestamp)!];
     const { previous, current } = await twoTurns(
       {},
-      { assembly: await workspaceChat({ tools: chatTools(workspaceSurface), extensions: [visuals(false)] }) },
-      { assembly: await workspaceChat({ tools: chatTools(workspaceSurface), extensions: [visuals(true)] }) },
+      { assembly: await workspaceChat({ tools: chatTools(workspaceSurface), extensions: [plainTurn.extension] }) },
+      { assembly: await workspaceChat({ tools: chatTools(workspaceSurface), extensions: [visualizeTurn.extension] }), following: note },
     );
-    assert.deepEqual(toolsOf(current), toolsOf(previous));
+    assert.deepEqual(comparePromptRequests(previous, current), {}, "tools and system are the same; /visualize rides after the prompt");
     assert.ok(current.carries("render_artifact"), "the drawing tools stay declared");
+    const texts = userTexts(current);
+    assert.equal(texts[texts.length - 2], "Now list the files.");
+    assert.match(texts[texts.length - 1] ?? "", /<turn_note>[\s\S]*\/visualize[\s\S]*<\/turn_note>/u);
     const plain = chatTurnToolRefusal(workspaceSurface, chatTurnAudienceFor({}, { inlineVisuals: "on_request" }));
     assert.match(plain("render_artifact") ?? "", /not available in this turn.*\/visualize/su);
     assert.equal(chatTurnToolRefusal(workspaceSurface, chatTurnAudienceFor({}, { inlineVisuals: "on_request", visualize: true }))("render_artifact"), undefined);
@@ -768,14 +780,22 @@ describe("prompt prefix stability: tool list identical across turns", () => {
         ...(fromPhone ? {} : { open: async () => ({ opened: true }) }),
         present: () => undefined,
       });
+      const visuals = (fromPhone: boolean) => createGenerativeUiExtensionRuntime({
+        workspaceRoot: undefined, onArtifact: () => undefined, ...(fromPhone ? { audience: remote.options.visualAudience } : {}),
+      });
       const head = async (fromPhone: boolean) => workspaceChat({
         tools: [...chatTools(workspaceSurface), ...appTools(fromPhone)],
-        extensions: [createGenerativeUiExtension({
-          workspaceRoot: undefined, onArtifact: () => undefined, ...(fromPhone ? { audience: remote.options.visualAudience } : {}),
-        })],
+        extensions: [visuals(fromPhone).extension],
       });
-      const { previous, current } = await twoTurns({ wire, midConversationSystem }, { assembly: await head(false) }, { assembly: await head(true) });
-      assert.deepEqual(toolsOf(current), toolsOf(previous));
+      const phoneNote = (timestamp: number) => [turnNoteMessage([visuals(true).turnNote], timestamp)!];
+      const { previous, current } = await twoTurns(
+        { wire, midConversationSystem },
+        { assembly: await head(false) },
+        { assembly: await head(true), following: phoneNote },
+      );
+      assert.deepEqual(comparePromptRequests(previous, current), {}, "the phone audience rides after the prompt, not in system");
+      const texts = userTexts(current);
+      assert.match(texts[texts.length - 1] ?? "", /<turn_note>[\s\S]*still image[\s\S]*<\/turn_note>/u);
       const fromPhone = chatTurnToolRefusal(workspaceSurface, chatTurnAudienceFor(remote.options, {}));
       assert.match(fromPhone("workspace_artifact") ?? "", /not available in this turn.*paired device/su);
       assert.match(fromPhone("hooks") ?? "", /paired device/u);

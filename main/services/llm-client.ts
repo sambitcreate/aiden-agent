@@ -291,7 +291,7 @@ import { captureRootIdentity } from "./acp/client-files.js";
 import { createAcpScratchDirectories } from "./acp/scratch-directory.js";
 import { isAcpHarnessProvider } from "../../renderer/shared/acp-harness.js";
 import { advisorRuntime } from "./advisor-runtime-main.js";
-import { ADVISOR_TOOL_NAME } from "./advisor-runtime.js";
+import { ADVISOR_NO_CHOOSER_TURN_NOTE, ADVISOR_TOOL_NAME, type AdvisorExtensionInput } from "./advisor-runtime.js";
 import { snapshotAdvisorRuntimeMessages } from "./advisor-context.js";
 import { persistGenerationInitializationTerminal } from "./generation-initialization-terminal.js";
 import type { GenerationCancellationOrigin } from "../../renderer/shared/generation-timeline.js";
@@ -432,6 +432,7 @@ import {
   journaledChatState,
   planChatTurnState,
   recordChatHead,
+  turnNoteMessage,
   withHeadChatState,
 } from "./chat-frozen-state.js";
 import { assembleChatPrompt, buildWorkspaceChatBasePrompt } from "./chat-prompt-assembly.js";
@@ -2366,6 +2367,8 @@ async function prepareGeneration(
         .filter((tool) => !options.excludeToolNames?.has(tool.name)),
     });
   }
+  // /visualize and a paired-device audience go after this turn's prompt, not in system.
+  let generativeUiTurnNote = "";
   if (
     !botContext &&
     shouldEnableGenerativeUiExtension({
@@ -2454,6 +2457,7 @@ async function prepareGeneration(
         return true;
       },
     });
+    generativeUiTurnNote = generativeUiRuntime.turnNote;
     generationExtensions.push(generativeUiRuntime.extension);
   }
   if (offerWorkspaceArtifacts && workspace) {
@@ -2725,6 +2729,7 @@ async function prepareGeneration(
     git,
     tools,
     generationExtensions,
+    generativeUiTurnNote,
     modelImageReferences,
     lateMcpDiscovery,
     displayedImages,
@@ -3124,6 +3129,7 @@ export const llmClient = {
       git,
       tools: setupTools,
       generationExtensions,
+      generativeUiTurnNote,
       modelImageReferences,
       lateMcpDiscovery,
       displayedImages,
@@ -3774,6 +3780,41 @@ export const llmClient = {
         tools,
         baseRuntimeExtensions,
       ).tools;
+      const advisorChooser: Pick<AdvisorExtensionInput, "requestQuestionnaire"> = shouldEnableAskUserQuestionExtension({
+        usageSource: options.usageSource,
+        interactionSurface: options.interactionSurface,
+        assistantMode: authoritativeMode !== undefined,
+        botBound: preparedBotContext !== undefined,
+        rendererOwner: owner.id !== 0,
+        remoteOwner: owner.kind === "remote",
+        // The advisor's model chooser asks through the same prompt, so a
+        // device that cannot show one gets no chooser.
+        excluded:
+          (options.excludeToolNames?.has(ASK_USER_QUESTION_TOOL_NAME) ?? false) ||
+          options.questionPromptsUnavailable === true,
+      })
+        ? {
+            requestQuestionnaire: (
+              toolCallId: string,
+              questions: Parameters<typeof questionnaires.request>[0]["questions"],
+              requestSignal?: AbortSignal,
+            ) =>
+              questionnaires.request(
+                {
+                  streamId,
+                  toolCallId,
+                  questions,
+                  // The advisor picker falls back to its default model on
+                  // timeout; only unattended owners get a deadline here.
+                  timeoutMs: resolveAskUserQuestionTimeoutMs(undefined, {
+                    unattended: owner.kind === "remote",
+                  }),
+                },
+                owner.documentId,
+                requestSignal,
+              ),
+          }
+        : {};
       const advisorExtension = await advisorRuntime.extensionForGeneration({
         scope: {
           usageSource: options.usageSource,
@@ -3792,42 +3833,12 @@ export const llmClient = {
         executorTools: toolsBeforeAdvisor,
         getLiveMessages: (toolCallId) =>
           candidate ? snapshotAdvisorRuntimeMessages(candidate.state, toolCallId) : [],
-        ...(shouldEnableAskUserQuestionExtension({
-          usageSource: options.usageSource,
-          interactionSurface: options.interactionSurface,
-          assistantMode: authoritativeMode !== undefined,
-          botBound: preparedBotContext !== undefined,
-          rendererOwner: owner.id !== 0,
-          remoteOwner: owner.kind === "remote",
-          // The advisor's model chooser asks through the same prompt, so a
-          // device that cannot show one gets no chooser.
-          excluded:
-            (options.excludeToolNames?.has(ASK_USER_QUESTION_TOOL_NAME) ?? false) ||
-            options.questionPromptsUnavailable === true,
-        })
-          ? {
-              requestQuestionnaire: (
-                toolCallId: string,
-                questions: Parameters<typeof questionnaires.request>[0]["questions"],
-                requestSignal?: AbortSignal,
-              ) =>
-                questionnaires.request(
-                  {
-                    streamId,
-                    toolCallId,
-                    questions,
-                    // The advisor picker falls back to its default model on
-                    // timeout; only unattended owners get a deadline here.
-                    timeoutMs: resolveAskUserQuestionTimeoutMs(undefined, {
-                      unattended: owner.kind === "remote",
-                    }),
-                  },
-                  owner.documentId,
-                  requestSignal,
-                ),
-            }
-          : {}),
+        // Whether this turn can show the chooser follows the device that sent
+        // it; system says so for both cases and a turn note names this one.
+        chooserByTurn: true,
+        ...advisorChooser,
       });
+      const advisorTurnNote = advisorExtension && !advisorChooser.requestQuestionnaire ? ADVISOR_NO_CHOOSER_TURN_NOTE : "";
       const codemodeExtension: PiAgentRuntimeExtension | undefined =
         workspaceCodemodeEnabled({
             workspaceId,
@@ -4172,6 +4183,9 @@ export const llmClient = {
         ? [
             ...(hookTurnContext ? [hookContextMessage(hookTurnContext, currentPromptMessage.timestamp)] : []),
             ...(chatStatePlan.update ? [chatStatePlan.update(currentPromptMessage.timestamp)] : []),
+            ...[turnNoteMessage([generativeUiTurnNote, advisorTurnNote], currentPromptMessage.timestamp)].filter(
+              (note): note is AgentMessage => note !== undefined,
+            ),
           ]
         : [];
       // One read of the journal's whole branch gives both the model context

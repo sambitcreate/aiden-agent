@@ -7,6 +7,8 @@ import {
   journaledChatState,
   planChatTurnState,
   recordChatHead,
+  TURN_NOTE_CUSTOM_TYPE,
+  turnNoteMessage,
 } from "./chat-frozen-state.js";
 import { createPiSessionPort } from "./pi-session-port.js";
 import { InMemorySessionRepo } from "./pi-session-repository-port.js";
@@ -154,4 +156,18 @@ test("malformed head and update entries are ignored", async () => {
   const next = planChatTurnState({ journaled: state, current: base, prompt: true });
   assert.equal(next.reheaded, true);
   assert.equal(next.update, undefined);
+});
+
+test("a turn note is a hidden message only when some note applies", async () => {
+  assert.equal(turnNoteMessage(["", "  "], 1), undefined, "a plain turn journals nothing after its prompt");
+  const note = turnNoteMessage(["Sent from a phone.", "", "No chooser."], 7)!;
+  assert.equal((note as { customType?: string }).customType, TURN_NOTE_CUSTOM_TYPE);
+  assert.equal((note as { display?: boolean }).display, false);
+  assert.equal(note.timestamp, 7);
+  assert.match(textOf(note), /^<turn_note>\n[^\n]*\nSent from a phone\.\nNo chooser\.\n<\/turn_note>$/u);
+  // It does not read as a state announcement, so the frozen state is unaffected.
+  const port = await journal();
+  await runTurn(port, base);
+  await port.appendMessage(note);
+  assert.deepEqual(journaledChatState(await port.getBranch()).announced, base);
 });
