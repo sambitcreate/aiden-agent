@@ -22,7 +22,7 @@ export const AIDEN_DESIGN_SKILL = Object.freeze({
     "- Keep design/ tidy: one shared design/tokens.css (colours, type, spacing and radii as CSS variables, with the dark look) linked by every screen, and one HTML file per screen with a clear name (design/home.html, design/checkout-mobile.html). Put images and fonts beside them (design/assets/) and link everything with relative paths.",
     "- Designs have no network. Never link a CDN, web font or remote image: anything a page needs must be a file in the workspace. Inline SVG and data: URLs work.",
     `- For charts, maths and Aiden's own styles, use the built-in libraries at /__aiden/lib/<name>: ${GENERATIVE_UI_HOST_LIBS.join(", ")}.`,
-    '- Add data-aiden-src="<file>:<line>" to meaningful elements (sections, headings, buttons, cards) so the person can point at them. Keep every data-aiden-comment attribute you find; it ties the person\'s comments to that element.',
+    '- Add data-aiden-src="<file>" (the page\'s own path, no line number; lines move as the page changes) to meaningful elements (sections, headings, buttons, cards) so the person can point at them. Keep every data-aiden-comment attribute you find; it ties the person\'s comments to that element.',
     '- Declare the screen\'s width in its head, such as <meta name="aiden-design-width" content="390"> for a phone, and build phone screens at full screen height.',
     "- When the person wants options, make at most 3 directions that differ in a way that matters (layout, type, colour or tone), not three tints of one idea.",
     "",

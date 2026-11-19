@@ -195,7 +195,7 @@ As built in P4e, the canvas never hands the page the pointer: it keeps the click
   - It uses the element under the pointer.
   - Alt widens the pick to the parent.
   - A lasso selection with Shift is not built.
-- **Source stamps:** when Aiden writes HTML it adds `data-aiden-src="<file>:<line>"` to meaningful elements, and the bridge reports the nearest stamp. Files without stamps still work, with a selector and text only.
+- **Source stamps:** when Aiden writes HTML it adds `data-aiden-src="<file>"` to meaningful elements, and the bridge reports the nearest stamp. Aiden no longer writes line numbers, which go stale as the page changes; an older `file:line` stamp still narrows an in-place text edit to that line and the 30 after it first, and when the text is not there the whole file is searched, where it must appear exactly once. Files without stamps still work, with a selector and text only.
 
 ### 5.6 Comments, pointing and annotating
 
@@ -256,7 +256,7 @@ type DesignComment = {
   // x, y: from the frame's top left for a comment on a frame, canvas units otherwise
   anchor?: {
     commentId: string; selector: string; text: string; tag: string;
-    sourcePath?: string;              // "file:line", the nearest data-aiden-src
+    sourcePath?: string;              // "file" (older pages: "file:line"), the nearest data-aiden-src
     rect?: { x: number; y: number; w: number; h: number }; // where the element was, page pixels
     point?: [number, number];         // the pin, page pixels; moves with the element
     html?: string;                    // the element's markup, at most 1,500 characters

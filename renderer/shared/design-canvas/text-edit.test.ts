@@ -49,6 +49,18 @@ test("text in the title, a style or a comment never counts, but two real places 
   assert.match(footer.source, /<title>Pricing<\/title>/u);
 });
 
+test("a stamp whose line went stale still finds text that is in the file once, but never guesses between two", () => {
+  // The stamp says line 20, past both places; the words are only in the paragraph.
+  const plan = planDesignTextEdit(PAGE, [{ before: "Tom & Jerry's plan", after: "Our plan" }], stampLine("design/hero.html:20", "design/hero.html"));
+  assert.ok(plan.ok);
+  assert.match(plan.source, /<p>Our plan<\/p>/u);
+  // "Pricing" is on the page twice, so a stale stamp cannot pick one.
+  assert.deepEqual(
+    planDesignTextEdit(PAGE, [{ before: "Pricing", after: "Plans" }], stampLine("design/hero.html:20", "design/hero.html")),
+    { ok: false, reason: "ambiguous" },
+  );
+});
+
 test("a part of a longer text is not a text node, and missing or blank text is not found", () => {
   assert.deepEqual(planDesignTextEdit(PAGE, [{ before: "Ship", after: "Sail" }]), { ok: false, reason: "not-found" });
   assert.deepEqual(planDesignTextEdit(PAGE, [{ before: "Nowhere", after: "x" }]), { ok: false, reason: "not-found" });

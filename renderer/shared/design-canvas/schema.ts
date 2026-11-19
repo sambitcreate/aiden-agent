@@ -148,7 +148,7 @@ export type DesignCommentAnchor = {
   selector: string;
   text: string;
   tag: string;
-  /** The nearest `data-aiden-src` stamp, `file:line`. */
+  /** The nearest `data-aiden-src` stamp: the file, or `file:line` on older pages. */
   sourcePath?: string;
   /** Where the element was when last found. */
   rect?: DesignRect;

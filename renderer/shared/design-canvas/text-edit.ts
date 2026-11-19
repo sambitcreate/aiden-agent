@@ -4,9 +4,11 @@
 // The page reports each text node it changed, as the browser read it (with
 // entities decoded). A change lands only when its old text is found exactly
 // once in the file's markup, outside tags, scripts, styles, comments and the
-// title; when the edited element carries a `data-aiden-src` stamp, only that
-// line and the few after it count. Anything else is the person's to hand to
-// Aiden instead. Pure, so it is tested without a file.
+// title. When the edited element's `data-aiden-src` stamp names a line, that
+// line and the few after it are searched first; a stamp gone stale (the file
+// changed under it, or it never had a line) falls back to the whole file,
+// which still has to hold the text exactly once. Anything else is the
+// person's to hand to Aiden instead. Pure, so it is tested without a file.
 
 export type DesignTextChange = { before: string; after: string };
 
@@ -129,7 +131,9 @@ export function planDesignTextEdit(
   let next = source;
   for (const change of real) {
     if (change.before.trim().length === 0) return { ok: false, reason: "not-found" };
-    const at = findOnce(next, change.before, line);
+    // A stale line misses: look through the whole file, where the text must still be unique.
+    let at = findOnce(next, change.before, line);
+    if (at === "not-found" && line !== undefined) at = findOnce(next, change.before, undefined);
     if (typeof at === "string") return { ok: false, reason: at };
     next = next.slice(0, at.start) + escapeDesignText(change.after) + next.slice(at.end);
   }
