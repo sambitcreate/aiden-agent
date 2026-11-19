@@ -129,6 +129,36 @@ test("the output cap, the deadline and cancelling stop every command and leave n
   }
 });
 
+test("a workspace file reached through a symbolic link that leaves the folder is not read", async (t) => {
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), "aiden-argv-links-"));
+  t.after(() => fs.rmSync(base, { recursive: true, force: true }));
+  const workspace = path.join(base, "workspace");
+  const outside = path.join(base, "outside");
+  fs.mkdirSync(path.join(workspace, "notes"), { recursive: true });
+  fs.mkdirSync(outside);
+  fs.writeFileSync(path.join(outside, "secret.txt"), "top secret\n");
+  fs.writeFileSync(path.join(workspace, "notes", "today.md"), "inside\n");
+  fs.symlinkSync(outside, path.join(workspace, "away"));
+  fs.symlinkSync(path.join(outside, "secret.txt"), path.join(workspace, "secret-link.txt"));
+  fs.symlinkSync(path.join(workspace, "notes"), path.join(workspace, "notes-link"));
+  const action = (command: string): WorkspaceArtifactActionV1 => parseWorkspaceArtifactActions([{ name: "a", label: "A", command, params: [{ name: "file" }] }])[0]!;
+  const read = (command: string, value: string) => runResolved(resolveWorkspaceArtifactCommand(action(command), [value]), workspace);
+  // Each value is relative and stays inside as text, so only its real path gives it away.
+  for (const value of ["away/secret.txt", "secret-link.txt", "away/missing.txt", "away/../away/secret.txt", "notes-link/../away/secret.txt"]) {
+    for (const command of ["cat {{file}}", "grep -c secret {{file}}", "head -n 1 {{file}} || echo fallback"]) {
+      const result = await read(command, value);
+      assert.doesNotMatch(result.stdout, /top secret|^1$/mu, `${command} with ${value}`);
+      assert.match(result.stderr, /leads outside the workspace through a symbolic link, so it was not run/u, `${command} with ${value}`);
+    }
+  }
+  // The refused command never ran; the rest of the template follows its status as a shell would.
+  assert.equal((await read("head -n 1 {{file}} || echo fallback", "away/secret.txt")).stdout, "fallback\n");
+  // A link that stays inside the folder, and a file that does not exist yet, still work.
+  assert.equal((await read("cat {{file}}", "notes-link/today.md")).stdout, "inside\n");
+  assert.equal((await read("cat {{file}}", "notes/today.md")).stdout, "inside\n");
+  assert.match((await read("cat {{file}}", "notes/new.md")).stderr, /No such file/u);
+});
+
 test("everyday templates do what their preview would do in a shell", async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "aiden-argv-preview-"));
   try {

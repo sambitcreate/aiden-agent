@@ -50,6 +50,45 @@ export async function findProgramOnPath(program: string, env: NodeJS.ProcessEnv)
   return undefined;
 }
 
+/**
+ * The real path of `candidate`, or of its nearest ancestor that exists (a
+ * file a command may create). Followed through symbolic links before `..`,
+ * as the system follows them when the program opens it.
+ */
+async function realPathOrAncestor(candidate: string): Promise<string | undefined> {
+  for (let current = candidate; ; current = path.dirname(current)) {
+    try {
+      return await fs.realpath(current);
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      // A loop, a permission error and the like: not provably inside.
+      if (code !== "ENOENT" && code !== "ENOTDIR") return undefined;
+      if (path.dirname(current) === current) return undefined;
+    }
+  }
+}
+
+function isWithin(root: string, real: string): boolean {
+  const relative = path.relative(root, real);
+  return relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative);
+}
+
+/**
+ * Whether a workspace-file argument reaches outside the workspace once
+ * symbolic links are followed. Its text was already checked (relative, no
+ * `..` that climbs out), but a link inside the folder can point anywhere.
+ * Both the path as the system resolves it and as git normalizes it must stay
+ * inside the folder's real path.
+ */
+async function leadsOutside(root: string | undefined, cwd: string, argument: string): Promise<boolean> {
+  if (root === undefined) return true;
+  for (const candidate of [`${cwd}${path.sep}${argument}`, path.resolve(cwd, argument)]) {
+    const real = await realPathOrAncestor(candidate);
+    if (real === undefined || !isWithin(root, real)) return true;
+  }
+  return false;
+}
+
 function statusOf(code: number | null, signal: NodeJS.Signals | null): number {
   if (code !== null) return code;
   const number = signal ? (osConstants.signals as Record<string, number>)[signal] : undefined;
@@ -107,6 +146,9 @@ export async function runArgvPlan(options: ArgvPlanOptions): Promise<BoundedShel
   }, options.timeoutMs);
   timeout.unref?.();
 
+  let workspaceRoot: Promise<string | undefined> | undefined;
+  /** The workspace folder's real path, read once on first use; undefined when it can't be read. */
+  const root = () => (workspaceRoot ??= fs.realpath(options.cwd).catch(() => undefined));
   /** Runs one pipeline and settles with its status: the last command's. */
   const runPipeline = async (pipeline: WorkspaceArtifactArgvStep["pipeline"]): Promise<number> => {
     const programs: string[] = [];
@@ -117,6 +159,16 @@ export async function runArgvPlan(options: ArgvPlanOptions): Promise<BoundedShel
         return 127;
       }
       programs.push(found);
+    }
+    // Checked just before the pipeline starts, so a link an earlier command made counts too.
+    for (const command of pipeline) {
+      for (const index of command.paths ?? []) {
+        const argument = command.argv[index]!;
+        if (await leadsOutside(await root(), options.cwd, argument)) {
+          captureStderr(`${command.argv[0]}: ${argument}: leads outside the workspace through a symbolic link, so it was not run\n`);
+          return 126;
+        }
+      }
     }
     if (stopped) return 1;
     const waits: Promise<number>[] = [];

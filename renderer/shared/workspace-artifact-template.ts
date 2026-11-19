@@ -35,6 +35,12 @@ export interface WorkspaceArtifactArgvCommand {
   argv: string[];
   /** In the order written; each moves stdout or stderr as the shell would. */
   redirects: WorkspaceArtifactRedirect[];
+  /**
+   * Indices into `argv` of arguments filled from a workspace-file slot. The
+   * text was checked to stay inside the workspace; the runner also checks
+   * each one's real path, through symbolic links, just before the command runs.
+   */
+  paths?: number[];
 }
 
 /** A pipeline and how it follows the one before (the first is always `;`). */
@@ -655,9 +661,13 @@ export function workspaceArtifactValueProblem(steps: readonly TemplateStep[], va
 export function fillWorkspaceArtifactTemplate(steps: readonly TemplateStep[], value: (name: string) => string): WorkspaceArtifactArgvStep[] {
   return steps.map((step) => ({
     connector: step.connector,
-    pipeline: step.pipeline.map((command) => ({
-      argv: command.words.map((word) => word.parts.map((part) => ("text" in part ? part.text : value(part.param))).join("")),
-      redirects: [...command.redirects],
-    })),
+    pipeline: step.pipeline.map((command) => {
+      const paths = command.words.flatMap((word, index) => (word.parts.some((part) => "param" in part && part.slot?.rule === "path") ? [index] : []));
+      return {
+        argv: command.words.map((word) => word.parts.map((part) => ("text" in part ? part.text : value(part.param))).join("")),
+        redirects: [...command.redirects],
+        ...(paths.length > 0 ? { paths } : {}),
+      };
+    }),
   }));
 }
