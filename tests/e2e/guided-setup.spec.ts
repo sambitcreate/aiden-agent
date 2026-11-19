@@ -169,7 +169,7 @@ test("New bot from just a name, then disable a tool in the Advanced tab", async 
   // The Bot's name in its chat opens its settings in the side panel.
   await page.getByRole("button", { name: "Meal Planner settings", exact: true }).click();
   await expect(page.getByRole("tab", { name: "Advanced", exact: true })).toHaveAttribute("aria-selected", "true");
-  await expect(page.getByText(/^Everything Aiden can use on this Mac/u)).toBeVisible();
+  await expect(page.getByText(/^Everything Aiden can use on this (?:Mac|computer)\b/u)).toBeVisible();
   await page.getByRole("button", { name: "Disable a tool", exact: true }).click();
   await page.getByRole("dialog", { name: "Disable a tool", exact: true }).getByRole("option", { name: /^Run commands/u }).click();
   await expect(page.getByRole("button", { name: "Turn on Run commands", exact: true })).toBeVisible();

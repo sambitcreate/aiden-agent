@@ -3950,6 +3950,7 @@
       ],
       "get": {
         "operationId": "streamEvents",
+        "description": "Resumable SSE stream for one device-owned turn. Last-Event-ID or after is the last delivered decimal sequence; a cursor ahead of the stream head returns 400 invalid_request. Contract revision 65: for after < earliest - 1 (where earliest is the oldest retained journal sequence), the server synthesizes a connection-local nonterminal snapshot at sequence = earliest - 1 with nextSequence = earliest, then replays every retained journal event from earliest onward (including the terminal event on finished streams), leaving the journal and other subscribers untouched. Devices holding stream:snapshot-reasons receive reason: gap | reset on snapshot payloads; other devices receive the three-key snapshot payload.",
         "x-aiden-archived-access": "readable",
         "x-aiden-capability": "chat:read",
         "parameters": [
@@ -10129,7 +10130,8 @@
                 "bot:templates",
                 "approval:cards",
                 "approvals:settings",
-                "chat:continue-in-new-chat"
+                "chat:continue-in-new-chat",
+                "stream:snapshot-reasons"
               ]
             },
             "uniqueItems": true
@@ -10189,7 +10191,8 @@
                 "bot:templates",
                 "approval:cards",
                 "approvals:settings",
-                "chat:continue-in-new-chat"
+                "chat:continue-in-new-chat",
+                "stream:snapshot-reasons"
               ]
             },
             "uniqueItems": true
@@ -10352,7 +10355,8 @@
                 "bot:templates",
                 "approval:cards",
                 "approvals:settings",
-                "chat:continue-in-new-chat"
+                "chat:continue-in-new-chat",
+                "stream:snapshot-reasons"
               ]
             },
             "uniqueItems": true
@@ -10421,7 +10425,8 @@
                 "bot:templates",
                 "approval:cards",
                 "approvals:settings",
-                "chat:continue-in-new-chat"
+                "chat:continue-in-new-chat",
+                "stream:snapshot-reasons"
               ]
             },
             "uniqueItems": true
@@ -15411,6 +15416,14 @@
                     "turnId": {
                       "type": "string",
                       "maxLength": 128
+                    },
+                    "reason": {
+                      "type": "string",
+                      "enum": [
+                        "gap",
+                        "reset"
+                      ],
+                      "description": "Contract revision 65, sent only to devices holding stream:snapshot-reasons: gap for a reader-local retention gap or aggregate-budget replacement, reset for a provider projection reset."
                     },
                     "nextSequence": {
                       "type": "integer",

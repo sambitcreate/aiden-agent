@@ -22,7 +22,8 @@ import {
 import { createTelegramConfig } from "./telegram-config.js";
 import { isTelegramFolderWorkspace } from "./telegram-workspace-core.js";
 import type { TelegramWorkspaceResolution } from "./telegram-turn.js";
-import { createTelegramServiceCore } from "./telegram-service-core.js";
+import { createTelegramServiceCore, telegramBotBindingKey } from "./telegram-service-core.js";
+import { createTelegramButtonStore, planTelegramReply } from "./telegram-outbound.js";
 import { contextLifecycleService } from "../context-lifecycle-service-main.js";
 import { createTelegramLifecycleAdapter } from "../context-lifecycle-adapters.js";
 import { transcribe } from "../transcription.js";
@@ -358,6 +359,10 @@ export function createTelegramService(profileName = DEFAULT_TELEGRAM_PROFILE) {
     profile,
   });
   let threadProvisioning = Promise.resolve();
+  const buttonStore = createTelegramButtonStore(
+    () => Date.now(),
+    { file: path.join(app.getPath("userData"), "telegram-bot-outbox", profile, "buttons.json") },
+  );
   // Bot-bound messages go to the Bot's durable session; replies leave through
   // a persisted outbox so a restart never regenerates or silently drops them.
   const botIngress: TelegramBotIngress | undefined = hostPlatformCapabilities().bots
@@ -371,10 +376,55 @@ export function createTelegramService(profileName = DEFAULT_TELEGRAM_PROFILE) {
               .botSessionRuntime()
               .then((runtime) => runtime.awaitReply(botId, submissionId, signal)),
         },
-        deliver: async ({ chatId, threadId, text,botId,botIncarnation }) => {
-          for (const chunk of chunkForTelegram(markdownToTelegramHtml(text))) {
-            if(botIncarnation){if(!botId || String((await botStore.get(botId))?.createdAt)!==botIncarnation || await (await import("../bot-runtime/bot-session-service.js")).botSessionDeletionPending(app.getPath("userData"),botId))throw new Error("This Telegram result belongs to a retired Bot.");}
-            await api.sendMessage({ chatId, threadId, text: chunk, parseMode: "HTML", disablePreview: true });
+        deliver: async ({ chatId, threadId, ownerUserId, text, botId, botIncarnation }) => {
+          const assertLiveIncarnation = async () => {
+            if (botIncarnation) {
+              if (
+                !botId ||
+                String((await botStore.get(botId))?.createdAt) !== botIncarnation ||
+                await (await import("../bot-runtime/bot-session-service.js")).botSessionDeletionPending(app.getPath("userData"), botId)
+              ) {
+                throw new Error("This Telegram result belongs to a retired Bot.");
+              }
+            }
+          };
+          let markdown = text;
+          let replyMarkup: import("./telegram-bot-api.js").TelegramInlineKeyboardMarkup | undefined;
+          const registeredIds: string[] = [];
+          if (/^<!--[ \t]*telegram_button\b/imu.test(text)) {
+            const currentBinding = await telegramBotBindings.resolve(profile, chatId, threadId);
+            if (currentBinding && currentBinding.enabled && currentBinding.ownerUserId === ownerUserId) {
+              const planned = planTelegramReply(text, (action) => {
+                const id = buttonStore.register(action, {
+                  profile,
+                  chatId,
+                  threadId,
+                  ownerUserId,
+                  bindingKey: telegramBotBindingKey(currentBinding),
+                });
+                registeredIds.push(id);
+                return id;
+              });
+              markdown = planned.markdown;
+              replyMarkup = planned.replyMarkup;
+            }
+          }
+          const chunks = chunkForTelegram(markdownToTelegramHtml(markdown));
+          for (let index = 0; index < chunks.length; index += 1) {
+            await assertLiveIncarnation();
+            const isLast = index === chunks.length - 1;
+            const sent = await api.sendMessage({
+              chatId,
+              threadId,
+              text: chunks[index]!,
+              parseMode: "HTML",
+              disablePreview: true,
+              ...(isLast && replyMarkup ? { replyMarkup } : {}),
+            });
+            if (isLast && replyMarkup && registeredIds.length > 0) {
+              buttonStore.bindMessage(registeredIds, sent.message_id);
+              await buttonStore.flush();
+            }
           }
         },
         // A routine result goes out only while the Bot is still bound, on, to that chat.
@@ -394,6 +444,33 @@ export function createTelegramService(profileName = DEFAULT_TELEGRAM_PROFILE) {
         onError: (message, cause) => logger.error("telegram", `[${profile}] ${message}`, cause),
       })
     : undefined;
+  const botSession = hostPlatformCapabilities().bots
+    ? {
+        state: async (botId: string) =>
+          (await import("../bot-runtime/bot-session-main.js"))
+            .botSessionRuntime()
+            .then((runtime) => runtime.state(botId)),
+        stop: async (botId: string, options?: { expectedSubmissionId?: string }) => {
+          const [{ botSessionRuntime }, { stopWithIntents }, { botTurnIntents }] = await Promise.all([
+            import("../bot-runtime/bot-session-main.js"),
+            import("../bot-runtime/bot-turn-intents.js"),
+            import("../bot-runtime/bot-turn-intents-main.js"),
+          ]);
+          const runtime = await botSessionRuntime();
+          return stopWithIntents(botTurnIntents, botId, async () => {
+            const next = await runtime.stop(botId, options);
+            if (
+              options?.expectedSubmissionId !== undefined &&
+              next.kind === "running" &&
+              next.submissionId !== options.expectedSubmissionId
+            ) {
+              botTurnIntents.announce(botId, "stopCancelled");
+            }
+            return next;
+          });
+        },
+      }
+    : undefined;
   if (botIngress) {
     void import("../bot-runtime/bot-session-main.js")
       .then(({ initializeBotSessionRuntime, onBotSessionStateChange }) => {
@@ -406,7 +483,9 @@ export function createTelegramService(profileName = DEFAULT_TELEGRAM_PROFILE) {
   }
   const core = createTelegramServiceCore({
     profile,
+    buttonStore,
     ...(botIngress ? { botIngress } : {}),
+    ...(botSession ? { botSession } : {}),
     assertBotBindingStoreHealthy: () => telegramBotBindings.assertHealthy(),
     resolveBotBinding: async ({
       profile: bindingProfile,

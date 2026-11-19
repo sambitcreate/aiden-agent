@@ -283,8 +283,10 @@ class AidenChatViewModel(
     }
     private val _hasActiveStream = MutableStateFlow(false)
     val hasActiveStream: StateFlow<Boolean> = _hasActiveStream.asStateFlow()
+    private var gapRecoveryStreamId: String? = null
     private var activeStreamId: String? = null
         set(value) {
+            if (value != gapRecoveryStreamId) gapRecoveryStreamId = null
             field = value
             _hasActiveStream.value = value != null
         }
@@ -2112,8 +2114,11 @@ class AidenChatViewModel(
                         if (event.streamId != stream.streamId) return@firstOrNull false
                         clearRecoveryWarning()
                         if (event.sequence <= stream.lastSequence) return@firstOrNull false
-                        if (event.sequence != stream.lastSequence + 1) reconcileChat()
-                        apply(event)
+                        val hasSequenceGap = event.sequence != stream.lastSequence + 1
+                        if (event.type != AidenRemoteEventType.SNAPSHOT && hasSequenceGap) {
+                            reconcileChat()
+                        }
+                        apply(event, hasSequenceGap = hasSequenceGap)
                         // A terminal frame ends transport even if the authoritative
                         // transcript fetch failed and needs independent retries.
                         if (event.terminal || activeStreamId != stream.streamId) return@firstOrNull true
@@ -2185,22 +2190,35 @@ class AidenChatViewModel(
         }
     }
 
-    private suspend fun apply(event: AidenRemoteStreamEvent) {
+    private suspend fun apply(event: AidenRemoteStreamEvent, hasSequenceGap: Boolean = false) {
         if (activeStreamId != event.streamId) return
         val isDelta = event.type == AidenRemoteEventType.TEXT_DELTA || event.type == AidenRemoteEventType.REASONING_DELTA
         // Timeline offsets and terminal states describe the text received so far,
-        // so everything received is shown first, including a held word.
-        if (!isDelta) {
+        // so everything received is shown first, including a held word. Snapshots
+        // replace or suppress live text, so queued fragments must be dropped instead.
+        if (!isDelta && event.type != AidenRemoteEventType.SNAPSHOT && gapRecoveryStreamId != event.streamId) {
             liveTranscript.flush()
             liveReveal.flush()
         }
         when (event.type) {
             AidenRemoteEventType.SNAPSHOT -> {
-                _streamState.value = AidenStreamState.RECONCILING
-                if (_chat.value?.isBotChat == true) {
-                    liveTranscript.reset()
+                val alreadyInGapRecovery = gapRecoveryStreamId == event.streamId
+                val isReset = event.payload?.reason == "reset" && !hasSequenceGap && !alreadyInGapRecovery
+                liveTranscript.reset()
+                liveReveal.reset()
+                if (isReset) {
+                    _streamState.value = AidenStreamState.RECONCILING
+                    reconcileChat()
+                } else {
+                    gapRecoveryStreamId = event.streamId
+                    if (!alreadyInGapRecovery) {
+                        _tools.value = emptyList()
+                        _activityTimeline.value = null
+                        _streamState.value = AidenStreamState.RECONCILING
+                        reconcileChat()
+                        recoverGapStreamAuthority(event.streamId)
+                    }
                 }
-                reconcileChat()
             }
             AidenRemoteEventType.STATUS -> {
                 val stateStr = event.payload?.state
@@ -2210,6 +2228,11 @@ class AidenChatViewModel(
                 if (state != null) {
                     if (state == AidenStreamState.WAITING_FOR_APPROVAL) {
                         restorePendingApproval(event.streamId)
+                    } else if (gapRecoveryStreamId == event.streamId && (_pendingApproval.value != null || _pendingQuestion.value != null)) {
+                        restorePendingApproval(event.streamId)
+                        if (_pendingApproval.value == null && _pendingQuestion.value == null && _streamState.value?.isTerminal != true) {
+                            _streamState.value = state
+                        }
                     } else {
                         _streamState.value = state
                         _pendingApproval.value = null
@@ -2218,13 +2241,21 @@ class AidenChatViewModel(
                 }
             }
             AidenRemoteEventType.TEXT_DELTA -> {
-                val delta = event.payload?.text ?: ""
-                liveTranscript.appendText(delta)
-                _streamState.value = AidenStreamState.RUNNING
+                if (gapRecoveryStreamId == event.streamId) {
+                    if (_pendingApproval.value == null && _pendingQuestion.value == null) {
+                        _streamState.value = AidenStreamState.RUNNING
+                    }
+                } else {
+                    val delta = event.payload?.text ?: ""
+                    liveTranscript.appendText(delta)
+                    _streamState.value = AidenStreamState.RUNNING
+                }
             }
             AidenRemoteEventType.REASONING_DELTA -> {
-                val delta = event.payload?.text ?: ""
-                liveTranscript.appendReasoning(delta)
+                if (gapRecoveryStreamId != event.streamId) {
+                    val delta = event.payload?.text ?: ""
+                    liveTranscript.appendReasoning(delta)
+                }
             }
             AidenRemoteEventType.TOOL_STARTED -> {
                 val id = event.payload?.toolId
@@ -2281,12 +2312,43 @@ class AidenChatViewModel(
             AidenRemoteEventType.DONE -> {
                 _pendingApproval.value = null
                 _pendingQuestion.value = null
+                if (gapRecoveryStreamId == event.streamId) {
+                    val messageId = event.payload?.messageId
+                    if (messageId != null && _chat.value?.messages?.any { it.id == messageId } == true) {
+                        liveTranscript.reset()
+                        liveReveal.reset()
+                        _tools.value = emptyList()
+                        _activityTimeline.value = null
+                    }
+                }
                 _streamState.value = AidenStreamState.DONE
                 endedReply = event.payload?.messageId?.let { EndedReply(event.streamId, it) }
                 finishStream(event.streamId)
             }
             AidenRemoteEventType.HEARTBEAT -> {}
             else -> {}
+        }
+    }
+
+    private suspend fun recoverGapStreamAuthority(streamId: String) {
+        val client = activeClient() ?: return
+        if (activeStreamId != streamId || _streamState.value?.isTerminal == true) return
+        try {
+            val status = client.streamStatus(chatId, streamId)
+            if (activeClient() !== client || activeStreamId != streamId ||
+                status.streamId != streamId || status.chatId != chatId ||
+                _streamState.value?.isTerminal == true
+            ) return
+            if (status.state.isTerminal) {
+                _pendingApproval.value = null
+                _pendingQuestion.value = null
+                return
+            }
+            apply(status, streamId)
+        } catch (e: Exception) {
+            if (e is CancellationException) throw e
+            // Gap authority probes are best-effort: the stream's replayed tail
+            // and normal disconnect recovery still run if the status read fails.
         }
     }
 

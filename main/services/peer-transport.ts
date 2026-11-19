@@ -225,6 +225,7 @@ export type PeerTransportErrorCode =
 export type PeerConnectionFailure = "timeout" | "dns" | "refused" | "network" | "tls" | "unreachable" | "invalid_response";
 
 export function peerConnectionFailure(error: unknown): PeerConnectionFailure {
+  if (isPeerIdentityTlsError(error)) return "tls";
   const code = (error as { code?: unknown } | null)?.code;
   if (code === "ENOTFOUND" || code === "EAI_AGAIN") return "dns";
   if (code === "ECONNREFUSED") return "refused";
@@ -234,12 +235,28 @@ export function peerConnectionFailure(error: unknown): PeerConnectionFailure {
   return "unreachable";
 }
 
+/** Main-process provenance for `identity_changed`: TLS handshake/pin vs authenticated `/server` `instanceId`. */
+export type PeerIdentityErrorSource = "tls" | "instance";
+
+export interface PeerTransportErrorOptions {
+  identitySource?: PeerIdentityErrorSource;
+  /**
+   * Main-process recovery disposition set by `PeerHostRegistry` after checking
+   * whether a `"tls"` identity failure occurred on a saved private-CA `.local` LAN route.
+   */
+  retryableIdentity?: boolean;
+}
+
 export class PeerTransportError extends Error {
+  readonly identitySource?: PeerIdentityErrorSource;
+  readonly retryableIdentity?: boolean;
+
   constructor(
     readonly code: PeerTransportErrorCode,
     readonly status?: number,
     readonly remote?: PeerRemoteError,
     readonly failure?: PeerConnectionFailure,
+    options?: PeerTransportErrorOptions,
   ) {
     super(
       code === "authentication_required"
@@ -252,6 +269,16 @@ export class PeerTransportError extends Error {
             ? remote.message
           : "The other device could not complete this request.",
     );
+    if (options?.identitySource !== undefined) this.identitySource = options.identitySource;
+    if (options?.retryableIdentity !== undefined) this.retryableIdentity = options.retryableIdentity;
+  }
+
+  withRetryableIdentity(retryable: boolean): PeerTransportError {
+    if (this.retryableIdentity === retryable) return this;
+    return new PeerTransportError(this.code, this.status, this.remote, this.failure, {
+      ...(this.identitySource === undefined ? {} : { identitySource: this.identitySource }),
+      retryableIdentity: retryable,
+    });
   }
 }
 
@@ -625,16 +652,18 @@ export class PeerTransport {
         finish(new PeerTransportError("unavailable", undefined, undefined, "timeout"));
         request.destroy();
       };
-      request.on("error", (error: Error & { code?: unknown }) =>
+      request.on("error", (error: Error & { code?: unknown }) => {
+        const identity = isPeerIdentityTlsError(error);
         finish(
           new PeerTransportError(
-            isPeerIdentityTlsError(error) ? "identity_changed" : "unavailable",
+            identity ? "identity_changed" : "unavailable",
             undefined,
             undefined,
             peerConnectionFailure(error),
+            identity ? { identitySource: "tls" } : undefined,
           ),
-        ),
-      );
+        );
+      });
       request.setTimeout(streaming ? 60_000 : deadlineMs, timedOut);
       deadline = setTimeout(timedOut, deadlineMs);
       if (streaming) sessionDeadline = setTimeout(capped, PEER_STREAM_SESSION_MS);

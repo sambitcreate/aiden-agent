@@ -266,7 +266,11 @@ export function DictationShortcutSettings() {
       await settingsApi.set(next);
       await qc.invalidateQueries({ queryKey: queryKeys.settings });
     } catch {
-      toast.error("Aiden couldn’t change dictation settings. Your desktop may not support hold shortcuts or the request was cancelled.");
+      toast.error(
+        next.dictationActivationMode !== undefined
+          ? "Aiden couldn’t change dictation settings. Your desktop may not support hold shortcuts or the request was cancelled."
+          : "Couldn’t change dictation settings.",
+      );
     } finally { setHoldBusy(false); }
   };
 
@@ -332,6 +336,7 @@ export function DictationShortcutSettings() {
           : "Press the shortcut again to stop manually."}
       >
         <Switch
+          aria-label="Stop after silence"
           checked={silenceStop}
           onCheckedChange={(value) => void patch({ dictationSilenceStop: value })}
         />
@@ -341,6 +346,7 @@ export function DictationShortcutSettings() {
         description="Optionally polish punctuation and filler words with your current chat model before pasting. That sends the transcript to the model. The original words stay if cleanup fails."
       >
         <Switch
+          aria-label="Clean up transcript"
           checked={cleanup}
           onCheckedChange={(value) => void patch({ dictationCleanup: value })}
         />
@@ -350,6 +356,7 @@ export function DictationShortcutSettings() {
         description="Short start, stop, and done cues from the dictation pill. Off by default."
       >
         <Switch
+          aria-label="Play sounds"
           checked={sounds}
           onCheckedChange={(value) => void patch({ dictationSounds: value })}
         />

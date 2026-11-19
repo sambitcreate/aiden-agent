@@ -196,6 +196,28 @@ struct AidenBotMemoryEditFixture: Decodable, Equatable {
     private enum CodingKeys: String, CodingKey { case request, response, errors }
 }
 
+/// Contract revision 65 (`stream:snapshot-reasons`): reader-local gap snapshot
+/// replay, legacy reason-less projection, and provider reset.
+struct AidenStreamRecoveryContractFixture: Decodable, Equatable, Sendable {
+    let capability: AidenRemoteCapability
+    let gapEvents: [AidenRemoteStreamEvent]
+    let legacyGapSnapshot: AidenRemoteStreamEvent
+    let resetEvents: [AidenRemoteStreamEvent]
+
+    init(from decoder: Decoder) throws {
+        try fixtureRequireKeys(decoder, ["capability", "gapEvents", "legacyGapSnapshot", "resetEvents"])
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        capability = try values.decode(AidenRemoteCapability.self, forKey: .capability)
+        gapEvents = try values.decode([AidenRemoteStreamEvent].self, forKey: .gapEvents)
+        legacyGapSnapshot = try values.decode(AidenRemoteStreamEvent.self, forKey: .legacyGapSnapshot)
+        resetEvents = try values.decode([AidenRemoteStreamEvent].self, forKey: .resetEvents)
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case capability, gapEvents, legacyGapSnapshot, resetEvents
+    }
+}
+
 struct AidenBotLegacyNonNegotiatingFixture: Decodable, Equatable {
     let pairingExchange: AidenRemotePairing.PairingExchange
     let server: AidenServer
@@ -499,6 +521,7 @@ struct AidenRemoteContractFixture: Decodable {
     let error: AidenRemoteErrorEnvelope
     let runControlError: AidenRemoteErrorEnvelope?
     let phoneRunEvents: [AidenRemoteRunEvent]
+    let streamRecovery: AidenStreamRecoveryContractFixture?
 
     // swiftlint:disable:next function_body_length
     init(from decoder: Decoder) throws {
@@ -586,6 +609,10 @@ struct AidenRemoteContractFixture: Decodable {
         error = try values.decode(AidenRemoteErrorEnvelope.self, forKey: .error)
         runControlError = try values.decodeIfPresent(AidenRemoteErrorEnvelope.self, forKey: .runControlError)
         phoneRunEvents = try values.decodeIfPresent([AidenRemoteRunEvent].self, forKey: .phoneRunEvents) ?? []
+        streamRecovery = try values.decodeIfPresent(
+            AidenStreamRecoveryContractFixture.self,
+            forKey: .streamRecovery
+        )
 
         let summaryTimestamps = try values.decode(BotTimestampProjection.self, forKey: .botSummary)
         let listTimestamps = try values.decode(BotListTimestampProjection.self, forKey: .botList)
@@ -689,7 +716,7 @@ struct AidenRemoteContractFixture: Decodable {
         case botRoutineNotifications, botSessionCards, botHandoffs, botIssues, scheduleCards
         case taskProgress, agentRoster, agentInterrupt, deviceCapabilitiesUpdate, chatProgressEvents
         case streamStatus, streamApproval, streamInput, question, chatSkills, events, speechStatus, speechTranscription
-        case scheduleRunNotification, error, runControlError, phoneRunEvents
+        case scheduleRunNotification, error, runControlError, phoneRunEvents, streamRecovery
     }
 }
 

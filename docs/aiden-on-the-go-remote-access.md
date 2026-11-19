@@ -77,7 +77,7 @@ On macOS, Aiden asks for Local Network access the first time it looks for other 
 
 When a paired computer is asleep or unreachable, its rows stay in the sidebar marked stale and read-only, and actions are disabled until it returns. Aiden reconnects on its own after sleep, unlock or a network change; choose **Reconnect** to try at once. Nothing is queued while a computer is offline.
 
-If a computer reached over the local network presents a different identity, Aiden blocks it and asks you to pair again rather than trust the new key. Use **Re-pair** from its **···** menu in **Control other devices**. Under the same menu, **Rename locally** changes the name only on this Mac, and **Forget** removes it from this Mac.
+If a `.local` connection on the local network presents an unverified certificate (for example when another device answers the same Bonjour name or the host's key changed), Aiden rejects it without sending credentials, tries any saved Tailscale route, and otherwise backs off so **Reconnect**, wake or the scheduled retry can try again with the saved hostname, CA and key pin. When an authenticated `/server` check reports a different installation, or a non-`.local` route fails identity verification, Aiden blocks the host instead of retrying. If you expected the computer's key or installation to change, use **Re-pair** from its **···** menu in **Control other devices**. Under the same menu, **Rename locally** changes the name only on this Mac, and **Forget** removes it from this Mac.
 
 ## Chat models
 

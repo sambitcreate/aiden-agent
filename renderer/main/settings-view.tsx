@@ -237,7 +237,15 @@ export function SettingsView({ initialSection }: { initialSection?: SettingsSect
   const descriptions = React.useMemo(() => settingsDescriptions(localComputerNoun(capabilities.platform)), [capabilities.platform]);
   const [search, setSearch] = React.useState("");
 
-  const anchorRequest = useLocation({ select: (location) => location.state.aidenSettingsAnchor });
+  // The location changes a moment before the page's search does, so for one render the page
+  // still shows the last section under the next location. A request counts only for the
+  // section it was made for; otherwise leaving the Links spot for Appearance asks for the
+  // Links row again on the way out, and that smooth scroll outlives the reset to the top.
+  const anchorRequest = useLocation({
+    select: (location) => location.search.section === initialSection
+      ? location.state.aidenSettingsAnchor ?? 0
+      : null,
+  });
   const query = search.trim().toLocaleLowerCase();
   const section = resolveSettingsSection(initialSection, capabilities);
   const pages = availableSettingsPages(capabilities);
@@ -249,6 +257,20 @@ export function SettingsView({ initialSection }: { initialSection?: SettingsSect
   const open = (next: SettingsSection) =>
     void navigate({ ...settingsLocation(next), replace: true });
   const ActiveSection = CONTENT[section];
+  // Each section is its own scrollport for the router's scroll restoration, so a page, a tab
+  // or an anchor opens without the last one's offset: the router copies a saved offset only
+  // to the same ID. An anchor (Links on Appearance, Bot messaging on Approvals) gets its own
+  // ID too, so going from it to its page starts at the top; the anchor's own scroll request
+  // then moves it to its spot.
+  const scrollId = `settings-${section}`;
+  const contentRef = React.useRef<HTMLDivElement>(null);
+  // The scrollport stays mounted across tabs (so focus stays on the tab you chose), so the
+  // new tab starts at the top here. This runs before the router's own restore, which then
+  // puts Back and Forward back on the entry's own offset.
+  React.useLayoutEffect(() => {
+    const viewport = contentRef.current?.closest<HTMLElement>("[data-scroll-restoration-id]");
+    if (viewport) viewport.scrollTop = 0;
+  }, [scrollId]);
 
   return (
     <SplitView
@@ -338,15 +360,15 @@ export function SettingsView({ initialSection }: { initialSection?: SettingsSect
         </Sidebar>
       }
     >
-      <ScrollArea className="h-full" title="Settings">
-        <div className="settings-responsive mx-auto w-full max-w-5xl px-5 py-6">
+      <ScrollArea className="h-full" title="Settings" scrollRestorationId={scrollId}>
+        <div ref={contentRef} className="settings-responsive mx-auto w-full max-w-5xl px-5 py-6">
           <SettingsPage
             heading={!OWN_HEADING.has(activePage.id)}
             title={activePage.title}
             description={descriptions[section]}
           >
             <SettingsPageTabs page={activePage} section={section} onSelect={open}>
-              <SettingsAnchorContext.Provider value={isSettingsAnchor(section) ? { section, request: anchorRequest ?? 0 } : null}>
+              <SettingsAnchorContext.Provider value={isSettingsAnchor(section) && anchorRequest !== null ? { section, request: anchorRequest } : null}>
                 <SettingsLiveGuard section={section}>
                   <ActiveSection />
                 </SettingsLiveGuard>

@@ -84,6 +84,7 @@ export function RootView() {
 
 function RootContent() {
   const navigate = useNavigate();
+  const router = useRouter();
   const queryClient = useQueryClient();
   const environmentPanel = useEnvironmentPanel();
   const botPanel = useBotPanelActions();
@@ -205,6 +206,8 @@ function RootContent() {
       toast.info(navigationBlockedReason);
       return;
     }
+    // Already in Settings: stay on the page that's open rather than stack a second entry.
+    if (router.state.location.pathname === "/settings") return;
     void navigate({ to: "/settings" });
   });
   const openStudio = React.useCallback(
@@ -232,7 +235,6 @@ function RootContent() {
   useCommandHandler("scheduled.open", () => goTo("/scheduled"));
   useCommandHandler("profile.open", () => goTo("/profile"));
   // ⌘[ and ⌘] walk the same in-app history as the title bar's arrows.
-  const router = useRouter();
   const historyEntryIndex = useRouterState({
     select: (state) => (state.location.state as { __TSR_index?: number }).__TSR_index,
   });

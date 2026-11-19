@@ -5,6 +5,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-libra
 import { QueryClientProvider } from "@tanstack/react-query";
 import { installBotTestIpc } from "../../main/bots/test-dom";
 import { createBotTestQueryClient } from "../../main/bots/test-providers";
+import { AppCapabilitiesProvider, DISABLED_APP_CAPABILITIES, type AppCapabilities } from "../../lib/app-capabilities";
 import type { AppSettings } from "../../lib/types";
 import { LimitsSettings } from "./limits-settings";
 
@@ -18,7 +19,7 @@ const METERED = { id: "openai", models: ["fast"], baseUrl: "https://api.openai.c
 
 async function mount(
   settings: Partial<AppSettings> = {},
-  options: { hold?: boolean; settingsFail?: boolean; providers?: unknown[] } = {},
+  options: { hold?: boolean; settingsFail?: boolean; providers?: unknown[]; platform?: AppCapabilities["platform"] } = {},
 ) {
   let stored: Partial<AppSettings> = { ...settings };
   const held: Held[] = [];
@@ -57,9 +58,11 @@ async function mount(
     },
   });
   render(
-    <QueryClientProvider client={createBotTestQueryClient()}>
-      <LimitsSettings />
-    </QueryClientProvider>,
+    <AppCapabilitiesProvider capabilities={{ ...DISABLED_APP_CAPABILITIES, platform: options.platform ?? "darwin" }}>
+      <QueryClientProvider client={createBotTestQueryClient()}>
+        <LimitsSettings />
+      </QueryClientProvider>
+    </AppCapabilitiesProvider>,
   );
   // Controls stay disabled until settings have loaded.
   const warming = await screen.findByRole("switch", { name: "Warm prompt caches during active chats" });
@@ -94,7 +97,15 @@ test("spending limits wait for a provider that bills by the request; a sign-in o
   ];
   await mount({}, { providers: free });
   await screen.findByText("Nothing here costs money yet");
+  await screen.findByText(/models on this Mac are \$0/u);
   assert.equal(screen.queryByRole("combobox", { name: "Spending limit for each chat" }), null);
+});
+
+test("on Linux the no-cost note names the computer, not a Mac", async () => {
+  const local = [{ id: "ollama", models: ["llama"], baseUrl: "http://127.0.0.1:11434/v1", hasKey: true }];
+  await mount({}, { providers: local, platform: "linux" });
+  await screen.findByText(/models on this computer are \$0/u);
+  assert.equal(screen.queryByText(/\bMac\b/u), null);
 });
 
 test("a limit already set stays in reach even with no paid provider, so it can be changed or cleared", async () => {

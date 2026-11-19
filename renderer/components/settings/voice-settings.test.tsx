@@ -103,6 +103,11 @@ test("cloud transcription offers the common cloud languages", async () => {
   assert.ok(!options.includes("Cantonese"));
 });
 
+test("the cloud Model picker is named by its row and offers the provider's models", async () => {
+  mount({ voiceProvider: "openai" }, { kind: "ready", provider: "openai", automatic: false }, []);
+  assert.deepEqual(await optionsOf("Model"), ["whisper-1", "gpt-4o-transcribe", "gpt-4o-mini-transcribe"]);
+});
+
 test("Translate to English appears only for a model that can translate", async () => {
   mount({ localVoiceModel: "parakeet-v3" }, localReady("parakeet-v3", true), ["parakeet-v3", "canary-180m-flash"]);
   await screen.findByText("Automatic — using On-device (Parakeet TDT 0.6B v3)");

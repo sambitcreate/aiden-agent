@@ -131,3 +131,26 @@ test("a model without a faster build gets no offer, even on Apple silicon", asyn
   await screen.findByText("Whisper Large v3 Turbo");
   assert.equal(screen.queryByRole("button", { name: /Download and Use/ }), null);
 });
+
+test("Download and Use keeps the faster build chosen when the model list answers after settings", async () => {
+  let installed = ["parakeet-v3"];
+  let downloaded = false;
+  const models = () => {
+    const list = localModelsTestCatalog(installed, { appleSilicon: true });
+    // After the download, main is slow to list models while settings answer at once.
+    return downloaded ? new Promise<LocalVoiceModel[]>((resolve) => setTimeout(() => resolve(list), 60)) : list;
+  };
+  const calls = mount({ localVoiceModel: "parakeet-v3" }, models as () => LocalVoiceModel[], {
+    "localModels:download": (id: unknown) => {
+      installed = [...installed, id as string];
+      downloaded = true;
+    },
+  });
+  fireEvent.click(await screen.findByRole("button", { name: /Download and Use/ }));
+  await screen.findByText("Parakeet TDT 0.6B v3 · Metal");
+  // Let any late effect run against the settled lists.
+  await new Promise((resolve) => setTimeout(resolve, 120));
+  const patches = calls.filter((call) => call.channel === "settings:set").map((call) => call.args[0]);
+  assert.deepEqual(patches, [{ localVoiceModel: "parakeet-v3-metal" }]);
+  screen.getByText("Parakeet TDT 0.6B v3 · Metal");
+});

@@ -22,6 +22,7 @@ export * from "./speech.ts";
 export * from "./remote.ts";
 export { aidenMcpClientSnippets, renderAppConnection } from "./apps-display.ts";
 export { daemonRemoteSummary, showStartupPairing } from "./serve-command.ts";
+export { renderPairingTerminal, renderQrRows } from "./pairing-display.ts";
 export { resolveTailscaleBinary } from "../../../main/services/aiden-remote-tailscale.js";
 export * from "./usage-ledger.ts";
 export * from "./extensions/artifacts.ts";
