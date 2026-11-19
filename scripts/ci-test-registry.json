@@ -399,6 +399,7 @@
         "main/handlers/workspace-artifacts.test.ts",
         "main/services/workspace-artifacts/runner.test.ts",
         "main/services/workspace-artifacts/argv-runner.test.ts",
+        "main/services/workspace-artifacts/data-shape.test.ts",
         "main/services/workspace-artifacts/file-policy.linux.test.ts",
         "main/services/web-fetch.test.ts",
         "main/services/web-extract-core.test.ts",

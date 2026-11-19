@@ -21,6 +21,7 @@ import {
   workspaceArtifactCommandsNeedApproval,
   type WorkspaceArtifactPermission,
   type WorkspaceArtifactSourceResultV1,
+  type WorkspaceArtifactSourceV1,
   type WorkspaceArtifactsChangedEvent,
   workspaceArtifactCommandAccess,
   type WorkspaceArtifactV1,
@@ -30,6 +31,7 @@ import type { ToolApprovalPreview } from "../../../renderer/shared/tool-approval
 import { declarePiRuntimeReplay } from "../pi-runtime-tool.js";
 import { declareOnDemandSummary } from "../on-demand-tools.js";
 import { checkWorkspaceArtifactPage, describeWorkspaceArtifactPageCheck } from "./check.js";
+import { describeSourceData } from "./data-shape.js";
 import type { WorkspaceArtifactActionResult } from "./runner.js";
 import { workspaceArtifactDigest, type WorkspaceArtifactContent, type WorkspaceArtifactStore } from "./store.js";
 
@@ -38,7 +40,10 @@ export { WORKSPACE_ARTIFACT_TOOL_NAME };
 const MAX_MARKUP_CHARS = 400_000;
 const MAX_REPORTED_DIAGNOSTICS = 12;
 
-type Operation = "create" | "update" | "list" | "delete" | "run" | "restore";
+type Operation = "create" | "update" | "list" | "get" | "check" | "delete" | "run" | "restore";
+
+/** Why `get` has no markup to show, and what to do instead. */
+const MARKUP_NOT_KEPT = `Aiden did not keep this version's markup: it was saved before Aiden kept page markup, imported from a file, or longer than ${WORKSPACE_ARTIFACT_LIMITS.markupChars.toLocaleString("en-US")} characters. To change the page, send the whole markup in an update.`;
 
 interface ArtifactToolInput {
   operation?: unknown;
@@ -53,6 +58,8 @@ interface ArtifactToolInput {
   refresh?: unknown;
   action?: unknown;
   args?: unknown;
+  offset?: unknown;
+  length?: unknown;
 }
 
 export interface WorkspaceArtifactToolOptions {
@@ -78,6 +85,15 @@ export interface WorkspaceArtifactToolOptions {
     signal: AbortSignal | undefined,
   ) => Promise<Record<string, WorkspaceArtifactSourceResultV1>>;
   /**
+   * Runs these sources once and saves nothing, for `check`. `approved` says
+   * whether the person allowed these exact shell commands.
+   */
+  check?: (
+    sources: readonly WorkspaceArtifactSourceV1[],
+    approved: boolean,
+    signal: AbortSignal | undefined,
+  ) => Promise<Record<string, WorkspaceArtifactSourceResultV1>>;
+  /**
    * Runs one of a saved page's actions, as its button would. A page whose
    * command digest is no longer `expectedDigest` does not run.
    */
@@ -97,13 +113,15 @@ function operationOf(input: ArtifactToolInput): Operation {
     value === "create" ||
     value === "update" ||
     value === "list" ||
+    value === "get" ||
+    value === "check" ||
     value === "delete" ||
     value === "run" ||
     value === "restore"
   ) {
     return value;
   }
-  throw new Error('operation must be "create", "update", "list", "delete", "run" or "restore".');
+  throw new Error('operation must be "create", "update", "list", "get", "check", "delete", "run" or "restore".');
 }
 
 function idOf(input: ArtifactToolInput): string {
@@ -224,12 +242,19 @@ function rebasedContent(
     next.visual = keptPage(input, current);
     if (current.initialState) next.initialState = current.initialState;
     else delete next.initialState;
+    if (current.markup !== undefined) next.markup = current.markup;
+    else delete next.markup;
   } else if (input.layout === undefined) {
     // New markup keeps the layout the page has now.
     const { layout: _compiledLayout, ...rest } = content.visual;
     next.visual = { ...rest, ...(current.visual.layout === "wide" ? { layout: "wide" } : {}) };
   }
   return next;
+}
+
+/** The markup to keep with a version: none when it is longer than a version keeps. */
+function keptMarkup(markup: unknown): string | undefined {
+  return typeof markup === "string" && markup.length <= WORKSPACE_ARTIFACT_LIMITS.markupChars ? markup : undefined;
 }
 
 /** Every value the model may have changed, or the stored one where it said nothing. */
@@ -245,19 +270,23 @@ function contentFor(input: ArtifactToolInput, previous: WorkspaceArtifactV1 | un
   let visual: ChatUiVisualV1;
   let initialState: Record<string, unknown> | undefined;
   let diagnostics: AidenUiDiagnostic[] = [];
+  let markup: string | undefined;
   if (input.markup === undefined && previous) {
     initialState = previous.initialState;
     visual = keptPage(input, previous);
+    markup = previous.markup;
   } else {
     ({ visual, diagnostics } = compilePage(input.markup, input.layout ?? previous?.visual.layout, title));
     // A fresh compile's state is what the markup declared.
     initialState = visual.state;
+    markup = keptMarkup(input.markup);
   }
   return {
     content: {
       title,
       ...(description ? { description } : {}),
       visual,
+      ...(markup !== undefined ? { markup } : {}),
       ...(initialState ? { initialState } : {}),
       sources,
       actions,
@@ -265,6 +294,47 @@ function contentFor(input: ArtifactToolInput, previous: WorkspaceArtifactV1 | un
     },
     diagnostics,
   };
+}
+
+/** What a check runs and draws: the page as the call would save it, or bare sources to try. */
+interface CheckTarget {
+  sources: WorkspaceArtifactSourceV1[];
+  page?: Pick<WorkspaceArtifactV1, "visual" | "sources" | "actions">;
+  diagnostics: AidenUiDiagnostic[];
+}
+
+/**
+ * The sources and page a check covers. On a page, values the call left out
+ * are the saved ones, exactly as an update would build them; without an id
+ * the call tries the sources it gives, and draws markup it gives with them.
+ */
+function checkTarget(
+  input: ArtifactToolInput,
+  previous: WorkspaceArtifactV1 | undefined,
+  options: Pick<WorkspaceArtifactToolOptions, "permission" | "hasFolder">,
+): CheckTarget {
+  let target: CheckTarget;
+  if (previous || input.markup !== undefined) {
+    const { content, diagnostics } = contentFor(previous ? input : { ...input, title: input.title ?? "Check" }, previous);
+    target = { sources: content.sources, page: content, diagnostics };
+  } else {
+    if (input.sources === undefined) throw new Error("check needs the id of a page, or the sources to try.");
+    target = { sources: parseWorkspaceArtifactSources(input.sources), diagnostics: [] };
+  }
+  assertSourcesRunnable({ sources: target.sources, actions: [] }, options);
+  return target;
+}
+
+/** Whether the person already allowed these sources: the page's approval covers exactly them. */
+function checkPageApproved(sources: readonly WorkspaceArtifactSourceV1[], previous: WorkspaceArtifactV1 | undefined): boolean {
+  return (
+    previous?.approvedDigest !== undefined && previous.approvedDigest === workspaceArtifactDigest(sources, previous.actions)
+  );
+}
+
+/** What a check card covers: running these sources once. It never approves a save. */
+function checkApprovalDigest(sources: readonly WorkspaceArtifactSourceV1[]): string {
+  return createHash("sha256").update(JSON.stringify({ check: workspaceArtifactDigest(sources, []) })).digest("hex");
 }
 
 export interface WorkspaceArtifactCallApproval {
@@ -327,7 +397,7 @@ export async function workspaceArtifactCallApproval(
   } catch {
     return { required: false };
   }
-  if (operation === "list") return { required: false };
+  if (operation === "list" || operation === "get") return { required: false };
   if (operation === "run") {
     // Under Ask the person confirms each run with the exact command, as they
     // would a button press. Elsewhere, or for a call that cannot run, there is
@@ -356,6 +426,27 @@ export async function workspaceArtifactCallApproval(
     return { required: true, summary: `Delete the artifact "${existing.artifact.visual.title}" from this workspace.` };
   }
   if (options.permission !== "ask") return { required: false };
+  if (operation === "check") {
+    // Under Ask, running shell sources the person has not allowed for this
+    // page asks first, listing them, exactly as saving them would.
+    const previous = isWorkspaceArtifactId(input.id) ? (await options.store.get(options.workspaceId, input.id))?.artifact : undefined;
+    if (input.id !== undefined && !previous) return { required: false };
+    let target: CheckTarget;
+    try {
+      target = checkTarget(input, previous, options);
+    } catch {
+      return { required: false };
+    }
+    if (!target.sources.some((source) => source.kind === "shell") || checkPageApproved(target.sources, previous)) {
+      return { required: false };
+    }
+    const what = previous ? `the artifact ${JSON.stringify(previous.visual.title)}` : "a new artifact's sources";
+    return {
+      required: true,
+      digest: checkApprovalDigest(target.sources),
+      summary: `Check ${what}: run these commands once in this workspace. Nothing is saved.\n${describeWorkspaceArtifactCommands(target.sources, [])}`,
+    };
+  }
   if (operation === "restore") {
     // A restore that brings back commands other than the approved ones asks,
     // exactly as an update with those commands would.
@@ -396,15 +487,91 @@ export async function workspaceArtifactCallApproval(
   return commandsCard(`${verb} the artifact "${title}"`, sources, actions, previous?.approvedDigest);
 }
 
+/** One line per source result; a source that loaded also gives its data's shape. */
 function describeSources(results: Record<string, WorkspaceArtifactSourceResultV1>, heading = "First refresh"): string {
-  const lines = Object.entries(results).map(([name, result]) =>
-    result.status === "ok"
-      ? `- ${name}: ok`
-      : result.status === "blocked"
-        ? `- ${name}: not run (${result.error ?? "needs approval"})`
-        : `- ${name}: failed: ${result.error ?? "unknown error"}`,
-  );
+  const lines = Object.entries(results).map(([name, result]) => {
+    if (result.status === "ok") {
+      const data = describeSourceData(result.dataJson);
+      return `- ${name}: ok${data ? `, ${data.shape}` : ""}`;
+    }
+    return result.status === "blocked"
+      ? `- ${name}: not run (${result.error ?? "needs approval"})`
+      : `- ${name}: failed: ${result.error ?? "unknown error"}`;
+  });
   return lines.length ? `\n${heading}:\n${lines.join("\n")}` : "";
+}
+
+/** A saved result that failed but whose page still shows the data an earlier read left. */
+function isStale(result: WorkspaceArtifactSourceResultV1 | undefined): boolean {
+  return result !== undefined && result.status !== "ok" && result.dataJson !== undefined;
+}
+
+/** Reads `offset` and `length`: a slice of the markup, the whole of it by default. */
+function markupSlice(input: ArtifactToolInput, markup: string): { start: number; end: number } {
+  const integer = (value: unknown, name: string, min: number): number | undefined => {
+    if (value === undefined) return undefined;
+    if (typeof value !== "number" || !Number.isSafeInteger(value) || value < min) {
+      throw new Error(`${name} must be a whole number of at least ${min}.`);
+    }
+    return value;
+  };
+  const start = integer(input.offset, "offset", 0) ?? 0;
+  const length = integer(input.length, "length", 1);
+  if (start > 0 && start >= markup.length) {
+    throw new Error(`offset ${start} is past the end of the markup, which has ${markup.length} characters.`);
+  }
+  return { start, end: length === undefined ? markup.length : Math.min(markup.length, start + length) };
+}
+
+/** `get`: the page as saved, its sources' last reads, and its markup to edit. */
+function describePage(view: WorkspaceArtifactView, input: ArtifactToolInput): string {
+  const { artifact, snapshot } = view;
+  const lines = [`Artifact ${JSON.stringify(artifact.visual.title)} (id ${artifact.id}, revision ${artifact.revision}).`];
+  if (artifact.description) lines.push(`Description: ${artifact.description}`);
+  if (artifact.visual.layout === "wide") lines.push("Layout: wide");
+  const { onOpen, intervalSeconds } = artifact.refresh;
+  lines.push(`Refresh: ${onOpen ? "when shown" : "not when shown"}${intervalSeconds ? `, every ${intervalSeconds} seconds while visible` : ""}.`);
+  if (artifact.sources.length) {
+    lines.push("Sources:");
+    for (const source of artifact.sources) {
+      const what = source.kind === "shell" ? `shell \`${source.command}\`` : `file ${source.file}`;
+      lines.push(`- ${source.name}: ${what}, parse ${source.parse}`);
+      const result = snapshot?.sources[source.name];
+      if (!result) {
+        lines.push("  not read yet");
+        continue;
+      }
+      const when = new Date(result.at).toISOString();
+      lines.push(
+        result.status === "ok"
+          ? `  last read ${when}: ok`
+          : `  last read ${when}: ${result.status === "blocked" ? "not run" : "failed"}: ${result.error ?? "unknown error"}`,
+      );
+      if (isStale(result)) lines.push("  the page still shows the data of an earlier read (stale)");
+      const data = describeSourceData(result.dataJson);
+      if (data) lines.push(`  shape: ${data.shape}`, `  sample: ${data.sample}`);
+    }
+  }
+  if (artifact.actions.length) {
+    lines.push("Actions:");
+    for (const action of artifact.actions) {
+      const problem = workspaceArtifactActionProblem(action);
+      lines.push(`- ${action.name} (${JSON.stringify(action.label)}): ${action.command}${problem ? ` [turned off: ${problem}]` : ""}`);
+    }
+  }
+  if (artifact.markup === undefined) {
+    lines.push(MARKUP_NOT_KEPT);
+  } else {
+    const { start, end } = markupSlice(input, artifact.markup);
+    const whole = start === 0 && end === artifact.markup.length;
+    lines.push(
+      whole
+        ? `Markup (${artifact.markup.length} characters):`
+        : `Markup (characters ${start}–${end} of ${artifact.markup.length}${end < artifact.markup.length ? `; read on with offset ${end}` : ""}):`,
+      artifact.markup.slice(start, end),
+    );
+  }
+  return lines.join("\n");
 }
 
 function listing(views: readonly WorkspaceArtifactView[], earlier: Record<string, number[]>): string {
@@ -422,6 +589,10 @@ function listing(views: readonly WorkspaceArtifactView[], earlier: Record<string
         ...(source.kind === "shell" ? { command: source.command } : { file: source.file }),
         parse: source.parse,
         ...(snapshot?.sources[source.name] ? { lastStatus: snapshot.sources[source.name]!.status } : {}),
+        ...(snapshot?.sources[source.name]?.status !== "ok" && snapshot?.sources[source.name]?.error
+          ? { lastError: snapshot.sources[source.name]!.error }
+          : {}),
+        ...(isStale(snapshot?.sources[source.name]) ? { stale: true } : {}),
       })),
       actions: artifact.actions.map((action) => {
         const problem = workspaceArtifactActionProblem(action);
@@ -486,6 +657,35 @@ export function createWorkspaceArtifactTool(options: WorkspaceArtifactToolOption
     return `${firstRefresh}${pageCheck}`;
   }
 
+  /**
+   * `check`: runs the sources a save would keep, once, and draws the page
+   * against what they return. Nothing is saved, and the page's last data is
+   * left as it was.
+   */
+  async function checkPage(input: ArtifactToolInput, shownDigest: string | undefined, signal: AbortSignal | undefined) {
+    const previous = input.id === undefined ? undefined : (await options.store.get(options.workspaceId, idOf(input)))?.artifact;
+    if (input.id !== undefined && !previous) throw new Error("No artifact with that id exists in this workspace.");
+    if (!options.check) throw new Error("This chat cannot check artifact sources.");
+    const target = checkTarget(input, previous, options);
+    if (signal?.aborted) throw new Error("The check was cancelled.");
+    // The same rule as a save: shell commands run once the person allowed
+    // them, for this page or on this check's card.
+    const approved =
+      checkPageApproved(target.sources, previous) ||
+      (shownDigest !== undefined && shownDigest === checkApprovalDigest(target.sources));
+    const results = target.sources.length ? await options.check(target.sources, approved, signal) : {};
+    let pageCheck = "";
+    if (target.page) {
+      try {
+        pageCheck = describeWorkspaceArtifactPageCheck(checkWorkspaceArtifactPage(target.page, results));
+      } catch {
+        pageCheck = "\nPage check unavailable.";
+      }
+    }
+    const what = previous ? `the artifact ${JSON.stringify(previous.visual.title)}` : "these sources";
+    return `Checked ${what}; nothing was saved.${describeSources(results, "Sources")}${pageCheck}${describeDiagnostics(target.diagnostics)}`;
+  }
+
   async function runPageAction(input: ArtifactToolInput, shownDigest: string | undefined, signal: AbortSignal | undefined) {
     const view = await options.store.get(options.workspaceId, idOf(input));
     if (!view) throw new Error("No artifact with that id exists in this workspace.");
@@ -526,17 +726,25 @@ export function createWorkspaceArtifactTool(options: WorkspaceArtifactToolOption
       name: WORKSPACE_ARTIFACT_TOOL_NAME,
       label: "Artifact",
       description:
-        "Keep an interactive page in this workspace's Artifacts tab (beside the chat), for status the person will come back to: open pull requests, a release checklist, a TODO board. Unlike a visual in the reply, the page persists for every chat in the workspace and re-reads live data from named sources (a shell command or a workspace file, bound in markup as $name) each time it refreshes. Always list first and update an existing artifact instead of creating a near-duplicate. Delete only when the person asks. run performs one of a page's actions exactly as its button would; use it only when the person asks for that action. restore brings back one of the page's earlierRevisions (from list) as a new revision, keeping its current title; use it when the person wants to undo or go back to an earlier version. Read the aiden-artifacts skill before the first call.",
+        "Keep an interactive page in this workspace's Artifacts tab (beside the chat), for status the person will come back to: open pull requests, a release checklist, a TODO board. Unlike a visual in the reply, the page persists for every chat in the workspace and re-reads live data from named sources (a shell command or a workspace file, bound in markup as $name) each time it refreshes. Always list first and update an existing artifact instead of creating a near-duplicate. Delete only when the person asks. run performs one of a page's actions exactly as its button would; use it only when the person asks for that action. restore brings back one of the page's earlierRevisions (from list) as a new revision, keeping its current title; use it when the person wants to undo or go back to an earlier version. get returns a page's saved markup, its sources' last reads (status, error, data shape and a sample) and its revision; read it before changing a page. check runs a page's sources (or, with no id, the sources given) once and checks the markup against their data without saving anything, under the same approval as a save. Read the aiden-artifacts skill before the first call.",
       parameters: Type.Object({
         operation: Type.Union([
           Type.Literal("create"),
           Type.Literal("update"),
           Type.Literal("list"),
+          Type.Literal("get"),
+          Type.Literal("check"),
           Type.Literal("delete"),
           Type.Literal("run"),
           Type.Literal("restore"),
         ]),
-        id: Type.Optional(Type.String({ description: "The artifact id from list; required for update, delete, run and restore." })),
+        id: Type.Optional(Type.String({ description: "The artifact id from list; required for update, get, delete, run and restore." })),
+        offset: Type.Optional(
+          Type.Integer({ description: "get: the first character of the markup to show (default 0).", minimum: 0 }),
+        ),
+        length: Type.Optional(
+          Type.Integer({ description: "get: how many characters of the markup to show (default all).", minimum: 1 }),
+        ),
         revision: Type.Optional(
           Type.Integer({ description: "restore: one of the page's earlierRevisions from list.", minimum: 1 }),
         ),
@@ -609,6 +817,12 @@ export function createWorkspaceArtifactTool(options: WorkspaceArtifactToolOption
           const [views, earlier] = await Promise.all([store.list(workspaceId), store.earlierRevisions(workspaceId)]);
           return text(listing(views, earlier));
         }
+        if (operation === "get") {
+          const view = await store.get(workspaceId, idOf(input));
+          if (!view) throw new Error("No artifact with that id exists in this workspace.");
+          return text(describePage(view, input));
+        }
+        if (operation === "check") return text(await checkPage(input, shownDigest, signal));
         if (operation === "run") return text(await runPageAction(input, shownDigest, signal));
         if (operation === "restore") {
           const id = idOf(input);

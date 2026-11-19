@@ -597,3 +597,17 @@ test("no write stores a file source that names a credential path", async (t) => 
   await assert.rejects(store.replace("ws1", created.id, content({ sources: [secrets] })), /Credential files/u);
   assert.deepEqual((await store.get("ws1", created.id))!.artifact.sources, created.sources);
 });
+
+test("each version keeps the markup it was saved from, up to the markup limit, across a restart", async (t) => {
+  const { store, reopen } = await openStore(t);
+  await store.create("ws1", content({ markup: "<Visual title=\"Open PRs\">first</Visual>" }));
+  await store.replace("ws1", "art1", content({ markup: "<Visual title=\"Open PRs\">second</Visual>", visual: { ...page(), layout: "wide" } }));
+  const reopened = reopen();
+  assert.equal((await reopened.get("ws1", "art1"))!.artifact.markup, "<Visual title=\"Open PRs\">second</Visual>");
+  assert.equal((await reopened.revision("ws1", "art1", 1))!.markup, "<Visual title=\"Open PRs\">first</Visual>");
+  // Markup longer than the limit is not kept; the page itself still saves.
+  const long = "x".repeat(WORKSPACE_ARTIFACT_LIMITS.markupChars + 1);
+  const saved = await reopened.replace("ws1", "art1", content({ markup: long }));
+  assert.equal(saved.revision, 3);
+  assert.equal((await reopen().get("ws1", "art1"))!.artifact.markup, undefined);
+});

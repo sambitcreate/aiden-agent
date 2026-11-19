@@ -314,3 +314,21 @@ test("Cancel in a file dialog is not an error, and unreadable, oversized or fore
   await assert.rejects(invoke(C.importPreview, "ws-gone"), /no longer exists/u);
   assert.equal((await store.list("ws1")).length, 1);
 });
+
+test("the page markup Aiden keeps for the model stays in main: windows and exports never receive it", async (t) => {
+  const { store, invoke, text, dialogs } = await setup(t);
+  const saved = (await store.get("ws1", "art1"))!.artifact;
+  const markup = '<Visual title="PRs"><Text>{len($pulls)} open</Text></Visual>';
+  await store.replace("ws1", "art1", () => ({
+    title: "PRs", markup, visual: { ...saved.visual, layout: "wide" }, sources: saved.sources, actions: [], refresh: saved.refresh,
+  }));
+  assert.equal((await store.get("ws1", "art1"))!.artifact.markup, markup);
+  const [view] = (await invoke(WORKSPACE_ARTIFACT_CHANNELS.list, "ws1")) as WorkspaceArtifactView[];
+  assert.equal("markup" in view!.artifact, false);
+  const renamed = (await invoke(WORKSPACE_ARTIFACT_CHANNELS.rename, "ws1", "art1", "Open PRs")) as Record<string, unknown>;
+  assert.equal("markup" in renamed, false);
+  await invoke(WORKSPACE_ARTIFACT_CHANNELS.exportPage, "ws1", "art1");
+  const exported = text(dialogs.exportPath!);
+  assert.match(exported, /"Open PRs"/u);
+  assert.ok(!exported.includes("{len($pulls)} open"));
+});

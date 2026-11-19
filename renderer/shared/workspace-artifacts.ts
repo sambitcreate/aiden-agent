@@ -51,6 +51,11 @@ export const WORKSPACE_ARTIFACT_LIMITS = {
   maxIntervalSeconds: 24 * 60 * 60,
   /** Earlier versions kept per page; the oldest is dropped first. */
   history: 5,
+  /**
+   * Page markup kept with a version so the model can read and edit it; a
+   * longer page saves without it and is sent whole to change.
+   */
+  markupChars: 128_000,
 } as const;
 
 export type WorkspaceArtifactParse = "json" | "lines" | "text";
@@ -91,6 +96,13 @@ export interface WorkspaceArtifactV1 {
   description?: string;
   /** The page: a compiled render_ui visual whose id is the artifact id. */
   visual: ChatUiVisualV1;
+  /**
+   * The Aiden UI Markup `visual` was compiled from, kept in main only so the
+   * model can read the page and edit it (`get`, `edits`). Absent for pages
+   * saved before it was kept, imported pages and markup longer than
+   * `markupChars`. Never sent to the renderer, and never exported.
+   */
+  markup?: string;
   /**
    * The state the markup declared (`<Visual state={{…}}>`), kept apart from
    * `visual.state`, which the person's own choices overwrite. Export writes
@@ -457,6 +469,11 @@ export function parseWorkspaceArtifactV1(value: unknown): WorkspaceArtifactV1 | 
   if (!sources || !actions || !refresh || (value.description !== undefined && description === undefined)) return undefined;
   const initialState = value.initialState === undefined ? undefined : parseAidenUiState(value.initialState);
   if (value.initialState !== undefined && !initialState) return undefined;
+  // Only a convenience for editing: markup that does not fit is dropped, never the page.
+  const markup =
+    typeof value.markup === "string" && value.markup.length > 0 && value.markup.length <= WORKSPACE_ARTIFACT_LIMITS.markupChars
+      ? value.markup
+      : undefined;
   const revision = value.revision;
   const createdAt = finiteTime(value.createdAt);
   const updatedAt = finiteTime(value.updatedAt);
@@ -472,6 +489,7 @@ export function parseWorkspaceArtifactV1(value: unknown): WorkspaceArtifactV1 | 
     workspaceId: value.workspaceId,
     ...(description ? { description } : {}),
     visual,
+    ...(markup !== undefined ? { markup } : {}),
     ...(initialState ? { initialState } : {}),
     sources,
     actions,

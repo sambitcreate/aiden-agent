@@ -336,3 +336,17 @@ test("denied file refreshes erase cached good data instead of preserving it as a
   assert.equal(result.private!.policyDenied, true);
   assert.equal(JSON.stringify(await store.list("ws1")).includes("PRIVATE_FIXTURE_VALUE"), false);
 });
+
+test("a check runs the sources it is given once, under the same access as a refresh, and saves nothing", async (t) => {
+  const { runner, store, events, commands, context } = await setup(t);
+  const sources: WorkspaceArtifactSourceV1[] = [{ ...SHELL, command: `printf '{"open":2}'` }, FILE];
+  const blocked = await runner.check(sources, false, context("ask"));
+  assert.deepEqual([blocked.pulls!.status, blocked.todo!.status], ["blocked", "ok"]);
+  assert.deepEqual(commands, []);
+  const allowed = await runner.check(sources, true, context("ask"));
+  assert.equal(allowed.pulls!.dataJson, '{"open":2}');
+  assert.equal(commands.length, 1);
+  assert.deepEqual((await runner.check(sources, true, context("none"))).pulls!.status, "blocked");
+  assert.equal((await store.get("ws1", "art1"))!.snapshot, undefined);
+  assert.deepEqual(events, []);
+});

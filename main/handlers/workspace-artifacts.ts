@@ -10,6 +10,7 @@ import {
   workspaceArtifactCommandList,
   type WorkspaceArtifactImportPreview,
   type WorkspaceArtifactsChangedEvent,
+  type WorkspaceArtifactV1,
 } from "../../renderer/shared/workspace-artifacts.js";
 import type { WorkspaceArtifactRunContext, WorkspaceArtifactRunner } from "../services/workspace-artifacts/runner.js";
 import type { WorkspaceArtifactStore } from "../services/workspace-artifacts/store.js";
@@ -82,6 +83,12 @@ function asImportToken(value: unknown): string {
   return value;
 }
 
+/** The page as the renderer sees it: the markup it was compiled from stays in main, for the model. */
+function shown(artifact: WorkspaceArtifactV1): WorkspaceArtifactV1 {
+  const { markup: _markup, ...page } = artifact;
+  return page;
+}
+
 function asText(value: unknown, name: string, max: number): string {
   if (typeof value !== "string" || value.length === 0 || value.length > max) throw new Error(`Invalid ${name}.`);
   return value;
@@ -97,13 +104,15 @@ export function registerWorkspaceArtifactHandlers(dependencies: WorkspaceArtifac
     return id;
   }
 
-  handle(WORKSPACE_ARTIFACT_CHANNELS.list, async (_event, workspaceId) => store.list(await existingWorkspace(workspaceId)));
+  handle(WORKSPACE_ARTIFACT_CHANNELS.list, async (_event, workspaceId) =>
+    (await store.list(await existingWorkspace(workspaceId))).map((view) => ({ ...view, artifact: shown(view.artifact) })),
+  );
 
   handle(WORKSPACE_ARTIFACT_CHANNELS.rename, async (_event, workspaceId, artifactId, title) => {
     const workspace = await existingWorkspace(workspaceId);
     const artifact = await store.rename(workspace, asArtifactId(artifactId), asText(title, "title", 200));
     notify({ workspaceId: workspace, artifactId: artifact.id, reason: "updated" });
-    return artifact;
+    return shown(artifact);
   });
 
   handle(WORKSPACE_ARTIFACT_CHANNELS.delete, async (_event, workspaceId, artifactId) => {
@@ -126,7 +135,7 @@ export function registerWorkspaceArtifactHandlers(dependencies: WorkspaceArtifac
     if (typeof digest !== "string" || !/^[a-f0-9]{64}$/u.test(digest)) throw new Error("Invalid approval.");
     const artifact = await store.approve(workspace, asArtifactId(artifactId), digest);
     notify({ workspaceId: workspace, artifactId: artifact.id, reason: "updated" });
-    return artifact;
+    return shown(artifact);
   });
 
   handle(WORKSPACE_ARTIFACT_CHANNELS.history, async (_event, workspaceId, artifactId) =>
@@ -141,7 +150,7 @@ export function registerWorkspaceArtifactHandlers(dependencies: WorkspaceArtifac
     // differ from the approved ones wait for the person to allow them.
     const artifact = await store.restore(workspace, id, revision);
     notify({ workspaceId: workspace, artifactId: artifact.id, reason: "updated" });
-    return artifact;
+    return shown(artifact);
   });
 
   // Export and import are the person's own actions from the Artifacts tab;
@@ -205,7 +214,7 @@ export function registerWorkspaceArtifactHandlers(dependencies: WorkspaceArtifac
     // commands, so under Ask they wait for the person to allow them.
     const artifact = await store.create(workspace, content, { uniqueTitle: true });
     notify({ workspaceId: workspace, artifactId: artifact.id, reason: "created" });
-    return artifact;
+    return shown(artifact);
   });
 
   handle(WORKSPACE_ARTIFACT_CHANNELS.importDiscard, (event, workspaceId, token) => ({

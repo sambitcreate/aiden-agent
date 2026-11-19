@@ -487,3 +487,115 @@ test("another chat's description that lands while a save is being prepared is ke
   assert.doesNotMatch(JSON.stringify(artifact.visual), /more/u);
   assert.equal(artifact.visual.layout, "wide");
 });
+
+test("get returns the saved markup, the revision and each source's last read, error and data shape", async (t) => {
+  const { store, call } = await harness(t, { permission: "full" });
+  const notes = { name: "notes", kind: "file", file: "NOTES.md", parse: "lines" };
+  await call("c1", { operation: "create", title: "Open PRs", markup: PAGE, sources: [PULLS, notes] });
+  const artifact = (await store.get("ws1", "art1"))!.artifact;
+  const rows = [{ number: 12, title: "Fix login" }, { number: 13, title: "Docs" }, { number: 14, title: "CI" }];
+  await store.saveSnapshot("ws1", artifact, {
+    pulls: { status: "ok", at: 1_000, dataJson: JSON.stringify(rows) },
+    notes: { status: "ok", at: 1_000, dataJson: JSON.stringify(["a"]) },
+  });
+  // A later read fails: the page keeps showing the earlier data.
+  await store.saveSnapshot("ws1", artifact, { notes: { status: "error", at: 2_000, error: "NOTES.md is not in the workspace." } });
+
+  const text = await call("g1", { operation: "get", id: "art1" });
+  assert.match(text, /^Artifact "Open PRs" \(id art1, revision 1\)\./u);
+  assert.match(text, /- pulls: shell `gh pr list --json number,title`, parse json\n {2}last read [^\n]+: ok\n {2}shape: array\(3\) of \{number: number, title: string\}\n {2}sample: \[\{"number":12/u);
+  assert.match(text, /- notes: file NOTES\.md, parse lines\n {2}last read [^\n]+: failed: NOTES\.md is not in the workspace\.\n {2}the page still shows the data of an earlier read \(stale\)/u);
+  assert.ok(text.endsWith(`Markup (${PAGE.length} characters):\n${PAGE}`));
+
+  const listed = JSON.parse(await call("l1", { operation: "list" })) as { sources: Record<string, unknown>[] }[];
+  assert.deepEqual(listed[0]!.sources[1], {
+    name: "notes", kind: "file", file: "NOTES.md", parse: "lines", lastStatus: "error",
+    lastError: "NOTES.md is not in the workspace.", stale: true,
+  });
+});
+
+test("get reads the markup in slices and says where the next one starts", async (t) => {
+  const { call } = await harness(t, { permission: "full" });
+  await call("c1", { operation: "create", title: "Open PRs", markup: PAGE });
+  const first = await call("g1", { operation: "get", id: "art1", length: 20 });
+  assert.ok(first.endsWith(`Markup (characters 0–20 of ${PAGE.length}; read on with offset 20):\n${PAGE.slice(0, 20)}`));
+  const rest = await call("g2", { operation: "get", id: "art1", offset: 20 });
+  assert.ok(rest.endsWith(`Markup (characters 20–${PAGE.length} of ${PAGE.length}):\n${PAGE.slice(20)}`));
+  await assert.rejects(call("g3", { operation: "get", id: "art1", offset: PAGE.length }), /past the end of the markup/u);
+});
+
+test("get says plainly when a version's markup was not kept, and an undo brings back the markup it had", async (t) => {
+  const { store, call, nextTurn } = await harness(t, { permission: "full" });
+  const compiled = await call("c1", { operation: "create", title: "Open PRs", markup: PAGE });
+  assert.match(compiled, /Created/u);
+  const saved = (await store.get("ws1", "art1"))!.artifact;
+  // A page saved before Aiden kept markup (or imported from a file) has none.
+  await store.replace("ws1", "art1", () => ({
+    title: saved.visual.title, visual: saved.visual, sources: [], actions: [], refresh: saved.refresh,
+    ...(saved.initialState ? { initialState: saved.initialState } : {}),
+  }));
+  // The replace above kept the markup of an otherwise identical page, so give it a new look.
+  await store.replace("ws1", "art1", () => ({
+    title: saved.visual.title, visual: { ...saved.visual, layout: "wide" }, sources: [], actions: [], refresh: saved.refresh,
+  }));
+  assert.match(await call("g1", { operation: "get", id: "art1" }), /did not keep this version's markup[^\n]*send the whole markup in an update/u);
+  nextTurn();
+  await call("r1", { operation: "restore", id: "art1", revision: 1 });
+  assert.ok((await call("g2", { operation: "get", id: "art1" })).endsWith(PAGE));
+});
+
+test("check runs a page's sources once and draws the page against them without saving anything", async (t) => {
+  const checked: { names: string[]; approved: boolean }[] = [];
+  const { store, call } = await harness(t, {
+    permission: "full",
+    check: async (sources, approved) => {
+      checked.push({ names: sources.map((source) => source.name), approved });
+      return { pulls: { status: "ok", at: 5, dataJson: JSON.stringify({ items: [] }) } };
+    },
+  });
+  await call("c1", { operation: "create", title: "Open PRs", markup: PAGE, sources: [PULLS] });
+  const before = await store.get("ws1", "art1");
+  const text = await call("k1", { operation: "check", id: "art1" });
+  assert.match(text, /^Checked the artifact "Open PRs"; nothing was saved\.\nSources:\n- pulls: ok, \{items: array\}/u);
+  // The page is drawn too: its Merge button names an action this page lacks.
+  assert.match(text, /Page check[^\n]*\n- run\("merge"\) names no action on this page\./u);
+  assert.deepEqual(checked.map((entry) => entry.names), [["pulls"]]);
+  assert.deepEqual(await store.get("ws1", "art1"), before);
+});
+
+test("check follows a save's approval: unallowed shell sources ask first, and file sources or an allowed page do not", async (t) => {
+  const checked: boolean[] = [];
+  const { options, call, allow } = await harness(t, {
+    check: async (_sources, approved) => {
+      checked.push(approved);
+      return {};
+    },
+  });
+  const notes = { name: "notes", kind: "file", file: "NOTES.md", parse: "text" };
+  const files = { operation: "check", sources: [notes] };
+  assert.deepEqual(await workspaceArtifactCallApproval(files, options), { required: false });
+
+  const shell = { operation: "check", sources: [PULLS] };
+  const card = await workspaceArtifactCallApproval(shell, options);
+  assert.equal(card.required, true);
+  assert.match(card.summary ?? "", /run these commands once[^\n]*Nothing is saved\.\n[\s\S]*gh pr list --json number,title/u);
+  // Without the card the commands do not run; with it they do.
+  await call("k1", shell);
+  await allow("k2", shell);
+  await call("k2", shell);
+  assert.deepEqual(checked, [false, true]);
+
+  // A check's card never approves a save of the same commands.
+  await allow("k3", shell);
+  await call("k3", { operation: "create", title: "Open PRs", markup: PAGE, sources: [PULLS] });
+  const page = await options.store.get("ws1", "art1");
+  assert.notEqual(page!.artifact.approvedDigest, page!.digest);
+
+  // A page whose commands the person allowed checks them without asking again.
+  const create = { operation: "create", title: "Allowed PRs", markup: PAGE.replace("Open PRs", "Allowed PRs"), sources: [PULLS] };
+  await allow("c2", create);
+  await call("c2", create);
+  assert.deepEqual(await workspaceArtifactCallApproval({ operation: "check", id: "art2" }, options), { required: false });
+  await call("k4", { operation: "check", id: "art2" });
+  assert.equal(checked[checked.length - 1], true);
+});

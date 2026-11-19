@@ -61,6 +61,8 @@ export interface WorkspaceArtifactRevisionV1 {
   savedAt: number;
   description?: string;
   visual: ChatUiVisualV1;
+  /** The markup this version was compiled from; absent for versions saved before it was kept. */
+  markup?: string;
   initialState?: Record<string, unknown>;
   sources: WorkspaceArtifactSourceV1[];
   actions: WorkspaceArtifactActionV1[];
@@ -103,6 +105,7 @@ function parseRevision(workspaceId: string, artifactId: string, value: unknown):
     workspaceId,
     ...(value.description !== undefined ? { description: value.description } : {}),
     visual: value.visual,
+    ...(value.markup !== undefined ? { markup: value.markup } : {}),
     ...(value.initialState !== undefined ? { initialState: value.initialState } : {}),
     sources: value.sources,
     actions: value.actions,
@@ -121,6 +124,7 @@ function historyEntryOf(artifact: WorkspaceArtifactV1, savedAt: number): Workspa
     savedAt,
     ...(artifact.description ? { description: artifact.description } : {}),
     visual: artifact.visual,
+    ...(artifact.markup !== undefined ? { markup: artifact.markup } : {}),
     ...(artifact.initialState ? { initialState: artifact.initialState } : {}),
     sources: artifact.sources,
     actions: artifact.actions,
@@ -234,6 +238,11 @@ export interface WorkspaceArtifactContent {
   description?: string;
   /** Compiled page; its id and title are replaced by the store. */
   visual: ChatUiVisualV1;
+  /**
+   * The markup `visual` was compiled from, kept so the page can be read back
+   * and edited. Left out, the page keeps none.
+   */
+  markup?: string;
   /** The state the markup declared; `saveState` never changes it. */
   initialState?: Record<string, unknown>;
   sources: WorkspaceArtifactSourceV1[];
@@ -548,6 +557,7 @@ export class WorkspaceArtifactStore {
         title: previous.visual.title,
         ...(entry.description ? { description: entry.description } : {}),
         visual: entry.visual,
+        ...(entry.markup !== undefined ? { markup: entry.markup } : {}),
         ...(entry.initialState ? { initialState: entry.initialState } : {}),
         sources: entry.sources,
         actions: entry.actions,
@@ -633,6 +643,7 @@ export class WorkspaceArtifactStore {
         workspaceId,
         ...(content.description ? { description: content.description } : {}),
         visual: { ...content.visual, id, title },
+        ...(content.markup !== undefined ? { markup: content.markup } : {}),
         ...(content.initialState ? { initialState: content.initialState } : {}),
         sources: content.sources,
         actions: content.actions,
@@ -712,6 +723,11 @@ export class WorkspaceArtifactStore {
       // approval the person just gave for these exact commands.
       if (sameArtifactContent(previous, content)) {
         if (approvedDigest) previous.approvedDigest = approvedDigest;
+        // Markup that compiles to the same page (spacing, say) is kept as the
+        // source to edit, without a version of its own.
+        if (content.markup !== undefined && content.markup.length <= WORKSPACE_ARTIFACT_LIMITS.markupChars) {
+          previous.markup = content.markup;
+        }
         return { saved: structuredClone(previous), replaced: undefined };
       }
       const next: WorkspaceArtifactV1 = {
@@ -720,6 +736,7 @@ export class WorkspaceArtifactStore {
         workspaceId,
         ...(content.description ? { description: content.description } : {}),
         visual: { ...content.visual, id, title: content.title },
+        ...(content.markup !== undefined ? { markup: content.markup } : {}),
         ...(content.initialState ? { initialState: content.initialState } : {}),
         sources: content.sources,
         actions: content.actions,

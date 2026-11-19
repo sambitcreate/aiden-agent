@@ -196,6 +196,31 @@ export function createWorkspaceArtifactRunner(dependencies: WorkspaceArtifactRun
   }
 
   /**
+   * Runs `sources` once in the workspace folder, as a refresh would, and
+   * saves nothing: the tool's check of a page or of sources it means to save.
+   * `approved` says whether the person allowed these exact shell commands.
+   */
+  async function check(
+    sources: readonly WorkspaceArtifactSourceV1[],
+    approved: boolean,
+    context: WorkspaceArtifactRunContext,
+    signal?: AbortSignal,
+  ): Promise<SourceResults> {
+    if (signal?.aborted) return cancelledResults(sources);
+    let folderPath = context.folderPath;
+    if (folderPath !== undefined) {
+      try {
+        folderPath = await verifiedFolder(folderPath);
+      } catch (error) {
+        const at = Date.now();
+        const message = error instanceof Error ? error.message : FOLDER_UNAVAILABLE;
+        return Object.fromEntries(sources.map((source) => [source.name, { status: "error", at, error: message } as const]));
+      }
+    }
+    return runSources(sources, approved, { ...context, folderPath }, signal);
+  }
+
+  /**
    * Re-reads an artifact's sources, saves the snapshot and tells every
    * window. A run already going for the same commands under the same access
    * is shared; a caller that cancels leaves it, and the run stops only once
@@ -331,7 +356,7 @@ export function createWorkspaceArtifactRunner(dependencies: WorkspaceArtifactRun
     return { ok, output: ok ? output : failure(result) };
   }
 
-  return { refresh, runAction };
+  return { refresh, runAction, check };
 }
 
 export type WorkspaceArtifactRunner = ReturnType<typeof createWorkspaceArtifactRunner>;
