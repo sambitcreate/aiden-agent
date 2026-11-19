@@ -487,6 +487,26 @@ test("a script in another language is not compiled as JavaScript, and one named 
   assert.match(typed, /Script check: 1 problem found/u);
 });
 
+test("a JavaScript type with parameters is reported as a script that will not run, while padding and case still run", async () => {
+  const extension = createGenerativeUiExtension({ workspaceRoot: undefined, artifactNamespace: "gen-type-params", onArtifact: () => {} });
+  const tool = extension.tools?.[0];
+  assert.ok(tool);
+  const run = async (html: string) =>
+    (await tool.execute("call", { title: "Types", html })).content.map((part) => (part.type === "text" ? part.text : "")).join("");
+  // Chromium runs neither of these, so the reader sees nothing they draw.
+  const charset = await run('<p>Chart</p>\n<script type="text/javascript; charset=utf-8">draw();</script>');
+  assert.match(charset, /Script check: 1 problem found/u);
+  assert.match(charset, /The script on line 2 will not run: its type "text\/javascript; charset=utf-8" has parameters/u);
+  const version = await run('<script type="application/javascript;version=1">draw();</script>');
+  assert.match(version, /Script check: 1 problem found/u);
+  // A browser trims and lowercases the type before matching, so these run and are compiled.
+  const padded = await run('<script type=" TEXT/JavaScript ">draw();</script>');
+  assert.match(padded, /Script check: no problems found; its inline script compiles\./u);
+  // A data block whose type has parameters is still a data block.
+  const data = await run('<script type="application/json; charset=utf-8">{"a": 1}</script>');
+  assert.doesNotMatch(data, /Script check/u);
+});
+
 test("a script error after a line or paragraph separator names the line an editor shows", async () => {
   const extension = createGenerativeUiExtension({ workspaceRoot: undefined, artifactNamespace: "gen-separator", onArtifact: () => {} });
   const tool = extension.tools?.[0];

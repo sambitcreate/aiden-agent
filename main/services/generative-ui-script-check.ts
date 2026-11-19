@@ -91,7 +91,9 @@ function clip(text: string): string {
  * instead of leaving a visual that draws nothing. Module scripts, scripts
  * inside a `<template>`, data blocks (`type="application/json"`) and scripts
  * in another language (`language="vbscript"`) are not compiled: modules can't be compiled here without running them, and the
- * others never run as written.
+ * others never run as written. A JavaScript type with parameters
+ * (`text/javascript; charset=utf-8`) is reported, since a browser treats it
+ * as a data block and never runs it.
  */
 export function checkGenerativeUiScripts(html: string): GenerativeUiScriptCheck {
   const findings: string[] = [];
@@ -116,6 +118,15 @@ export function checkGenerativeUiScripts(html: string): GenerativeUiScriptCheck 
   for (const script of scripts) {
     if (attribute(script, "src") !== undefined) continue;
     const type = scriptType(script);
+    const essence = type.includes(";") ? type.slice(0, type.indexOf(";")).trim() : undefined;
+    if (essence && CLASSIC_TYPES.has(essence)) {
+      // A browser matches the whole type, so `text/javascript; charset=utf-8` is a data block it never runs.
+      const line = script.sourceCodeLocation?.startLine ?? 1;
+      findings.push(
+        `The script on line ${line} will not run: its type "${clip(attribute(script, "type") ?? type)}" has parameters, and a browser runs a script only when its type is a JavaScript type with nothing after it. Remove the parameters or the type attribute.`,
+      );
+      continue;
+    }
     if (type === "module") {
       modules += 1;
       continue;
@@ -148,9 +159,9 @@ export function checkGenerativeUiScripts(html: string): GenerativeUiScriptCheck 
   return { findings, unchecked, checked: Math.min(seen, MAX_SCRIPTS_CHECKED) };
 }
 
-/** The script check as text for the end of render_artifact's result; empty when there were no scripts to check. */
+/** The script check as text for the end of render_artifact's result; empty when there were no scripts to check and nothing to report. */
 export function describeGenerativeUiScriptCheck(check: GenerativeUiScriptCheck, rerun: string): string {
-  if (!check.checked && !check.unchecked.length) return "";
+  if (!check.checked && !check.unchecked.length && !check.findings.length) return "";
   return formatCheckReport({
     label: "Script check",
     findings: check.findings,
