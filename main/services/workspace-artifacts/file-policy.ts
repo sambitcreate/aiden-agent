@@ -72,12 +72,15 @@ function withoutSystemText(file: string, error: unknown): unknown {
 }
 
 /**
- * Whether the system refuses to let Aiden read `at` itself (its permissions),
- * as opposed to it having changed. A link or other non-file put there since
- * the check counts as a change: Aiden never follows it, so whether its target
- * could be read is not the page's to learn.
+ * Whether the system refuses to let Aiden read `relative` in `root` itself
+ * (its permissions), as opposed to it having changed. A link or other
+ * non-file put there since the check, or a link put in place of a folder on
+ * the way to it, counts as a change: Aiden never follows it, so whether what
+ * it leads to could be read is not the page's to learn.
  */
-async function readRefused(at: string): Promise<boolean> {
+async function readRefused(root: string, relative: string): Promise<boolean> {
+  if (await linkOnPath(root, relative)) return false;
+  const at = path.join(root, relative);
   try {
     if (!(await fs.lstat(at)).isFile()) return false;
     const { O_RDONLY, O_NOFOLLOW, O_NONBLOCK } = fs.constants;
@@ -147,7 +150,7 @@ export async function readWorkspaceArtifactFile(root: string, file: string, sign
   const bytes = await reading.catch(async (error: unknown) => {
     if (error instanceof LinuxArtifactFileChangedError || (error instanceof ManagedWorktreeFileIoError && error.code === "source_changed")) {
       // A file Aiden may not read fails to open the same way a replaced one does; say which it is.
-      if (await readRefused(path.join(admitted.identity.path, admitted.relative))) throw new WorkspaceArtifactFileUnreadableError(file);
+      if (await readRefused(admitted.identity.path, admitted.relative)) throw new WorkspaceArtifactFileUnreadableError(file);
       throw new WorkspaceArtifactFileChangedError(file);
     }
     if (isUnsafeSource(error)) throw new WorkspaceArtifactFileUnsafeError(file);
