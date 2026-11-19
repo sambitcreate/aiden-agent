@@ -78,6 +78,9 @@ At the end, four Opus high reviewers review the whole PR, and a CI watcher owns 
 - Pi 1.5.2 does not export `detectCacheMiss()`, so `pi-cache-telemetry.ts` ports its rules (`measurePromptCacheMiss`, `nextPromptCachePreviousRequest`), and a CLI parity test checks the port against the bundled server.
 - Attribution fingerprints the normalized transcript Pi hands the stream function, not the `onPayload` payload. Each system message is labelled by its section: `base` for the head, and a refresher's label with its per-request suffix removed.
 - Two labels were added: `system:base` for the head prompt, and `unknown` for a miss no section explains.
+- `ttl` uses the model's documented cache lifetime (`promptCacheTtlMs`), falling back to Pi's 5 minutes when none is documented. Hashes carry a per-process random salt, and each history message is hashed once.
+- The last miss clears when a later request reads from the cache, and on compaction. The panel's "from cache" figure, 0% included, appears only for a chat with cache activity, a documented cache or a measured miss, so a provider with no cache shows none.
+- `aiden serve` feeds the `cache_warm` entries Pi's cache warmer writes to the session into the telemetry before each request, so warming restarts the lifetime there too.
 - The desktop logs each miss at debug level and adds `lastCacheMiss {source, at}` to the context pressure feed. `aiden serve` passes no `cacheRetention` and writes the miss to stderr only when `AIDEN_PROMPT_CACHE_DEBUG=1` is set. The field is not part of the Remote context pressure contract.
 - The harness drives the runtime layer that llm-client builds, not llm-client itself, because llm-client needs Electron, config stores and the durable journal. That layer covers:
   - the `createInitialSystemMessage` head over a modelled journal

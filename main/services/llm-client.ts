@@ -4227,6 +4227,13 @@ export const llmClient = {
           lastContextPressure = { ...pressure, lastCacheMiss: { source: report.source, at: report.at } };
           sendGeneration(streamId, "chat:context-pressure", { streamId, chatId: params.chatId, pressure: lastContextPressure });
         },
+        onMissCleared: () => {
+          const pressure = lastContextPressure;
+          if (!pressure?.lastCacheMiss) return;
+          const { lastCacheMiss: _cleared, ...rest } = pressure;
+          lastContextPressure = rest;
+          sendGeneration(streamId, "chat:context-pressure", { streamId, chatId: params.chatId, pressure: lastContextPressure });
+        },
         onError: (error) => logger.debug("prompt-cache", `Could not attribute a prompt-cache miss for stream ${streamId}.`, error),
       });
       const warmedStream = cacheWarmer ? withPiCacheWarming(measuredStream, cacheWarmer) : measuredStream;

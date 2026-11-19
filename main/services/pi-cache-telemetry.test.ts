@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { test } from "node:test";
 import { normalizeContext, type AssistantMessage, type Message, type SystemMessage, type Tool } from "@earendil-works/pi-ai";
 import type { StreamFn } from "@earendil-works/pi-agent-core";
@@ -6,6 +7,7 @@ import {
   createPromptCacheTelemetry,
   formatPromptCacheMissLog,
   PROMPT_CACHE_TTL_MS,
+  promptCacheWarmsSinceLastResponse,
   withPromptCacheTelemetry,
   type PromptCacheMissReport,
   type PromptCacheModelRef,
@@ -68,14 +70,14 @@ const baseHistory = (): Message[] => [head(), user("first question"), assistant(
  * Warm the chat with one request that wrote its prefix to the cache, then send
  * `second` and bill it as a full miss. Returns the miss report.
  */
-function missAfter(second: { messages: Message[]; model?: PromptCacheModelRef; idleMs?: number }): PromptCacheMissReport | undefined {
+function missAfter(second: { messages: Message[]; model?: PromptCacheModelRef; idleMs?: number; cacheTtlMs?: number }): PromptCacheMissReport | undefined {
   let clock = 1_000;
   const telemetry = createPromptCacheTelemetry({ now: () => clock });
   telemetry.beginRequest("chat-1", { messages: baseHistory(), model: MODEL }).complete(response({ timestamp: clock, input: 200, cacheRead: 0, cacheWrite: 20_000 }));
   clock += second.idleMs ?? 30_000;
   const model = second.model ?? MODEL;
   return telemetry
-    .beginRequest("chat-1", { messages: second.messages, model })
+    .beginRequest("chat-1", { messages: second.messages, model, cacheTtlMs: second.cacheTtlMs })
     .complete(response({ timestamp: clock, input: 20_500, cacheRead: 0, model }));
 }
 
@@ -131,6 +133,14 @@ test("an unchanged prefix after an idle gap past the cache lifetime is a TTL lap
   assert.ok(miss.idleMs > PROMPT_CACHE_TTL_MS);
 });
 
+test("the TTL verdict follows the model's documented cache lifetime", () => {
+  const grown = (): Message[] => [...baseHistory(), assistant("second answer"), user("third")];
+  const tenMinutes = 10 * 60_000;
+  assert.equal(missAfter({ messages: grown(), idleMs: tenMinutes, cacheTtlMs: 30 * 60_000 })?.source, "unknown", "a 30-minute cache was still alive");
+  assert.equal(missAfter({ messages: grown(), idleMs: 31 * 60_000, cacheTtlMs: 30 * 60_000 })?.source, "ttl");
+  assert.equal(missAfter({ messages: grown(), idleMs: tenMinutes, cacheTtlMs: 0 })?.source, "ttl", "no documented lifetime falls back to Pi's");
+});
+
 test("an unchanged prefix that still missed inside the cache lifetime is not blamed on any section", () => {
   const miss = missAfter({ messages: [...baseHistory(), assistant("second answer"), user("third")], idleMs: 10_000 });
   assert.equal(miss?.source, "unknown");
@@ -183,6 +193,68 @@ test("a cache-warming read restarts the cache lifetime", () => {
     .complete(response({ timestamp: clock, input: 20_500, cacheRead: 0 }));
   assert.equal(miss?.source, "unknown");
   assert.ok(miss.idleMs < PROMPT_CACHE_TTL_MS);
+});
+
+test("a later request that reads from the cache clears the last miss", () => {
+  let clock = 1_000;
+  const telemetry = createPromptCacheTelemetry({ now: () => clock });
+  telemetry.beginRequest("c", { messages: baseHistory(), model: MODEL }).complete(response({ timestamp: clock, input: 200, cacheRead: 0, cacheWrite: 20_000 }));
+  clock += 5_000;
+  const [, ...rest] = baseHistory();
+  telemetry.beginRequest("c", { messages: [head({ tools: [readTool] }), ...rest], model: MODEL }).complete(response({ timestamp: clock, input: 200, cacheRead: 0, cacheWrite: 20_300 }));
+  assert.equal(telemetry.lastMiss("c")?.source, "tools");
+  clock += 5_000;
+  telemetry
+    .beginRequest("c", { messages: [head({ tools: [readTool] }), ...rest, assistant("a"), user("b")], model: MODEL })
+    .complete(response({ timestamp: clock, input: 400, cacheRead: 20_500 }));
+  assert.equal(telemetry.lastMiss("c"), undefined);
+});
+
+test("a reset clears the last miss", () => {
+  const telemetry = createPromptCacheTelemetry({ now: () => 0 });
+  telemetry.beginRequest("c", { messages: baseHistory(), model: MODEL }).complete(response({ timestamp: 1_000, input: 200, cacheRead: 0, cacheWrite: 20_000 }));
+  telemetry.beginRequest("c", { messages: baseHistory(), model: OTHER_MODEL }).complete(response({ timestamp: 2_000, input: 20_500, cacheRead: 0, model: OTHER_MODEL }));
+  assert.equal(telemetry.lastMiss("c")?.source, "model");
+  telemetry.reset("c");
+  assert.equal(telemetry.lastMiss("c"), undefined);
+});
+
+test("a warm recorded before the latest request does not roll its lifetime back", () => {
+  let clock = 1_000;
+  const telemetry = createPromptCacheTelemetry({ now: () => clock });
+  const staleWarm = response({ timestamp: clock - 500, input: 1, cacheRead: 20_000 });
+  telemetry.beginRequest("c", { messages: baseHistory(), model: MODEL }).complete(response({ timestamp: clock, input: 200, cacheRead: 0, cacheWrite: 20_000 }));
+  clock += PROMPT_CACHE_TTL_MS - 10_000;
+  telemetry.observeWarm("c", response({ timestamp: clock, input: 1, cacheRead: 20_200 }));
+  telemetry.observeWarm("c", staleWarm);
+  clock += PROMPT_CACHE_TTL_MS - 10_000;
+  const miss = telemetry
+    .beginRequest("c", { messages: [...baseHistory(), assistant("a"), user("b")], model: MODEL })
+    .complete(response({ timestamp: clock, input: 20_500, cacheRead: 0 }));
+  assert.ok(miss && miss.idleMs < PROMPT_CACHE_TTL_MS, "idle time runs from the latest warm");
+});
+
+test("session warms are read back from the latest response or compaction", () => {
+  const usage = { input: 1, cacheRead: 9_000, cacheWrite: 0, cost: { input: 0, cacheRead: 0, cacheWrite: 0 } };
+  const warm = (at: number) => ({ type: "usage", kind: "cache_warm", provider: "acme", model: "large", usage, timestamp: new Date(at).toISOString() });
+  const answer = { type: "message", message: { role: "assistant" } };
+  const toolResult = { type: "message", message: { role: "toolResult" } };
+  assert.deepEqual(
+    promptCacheWarmsSinceLastResponse([warm(1_000), answer, warm(2_000), toolResult, { type: "usage", kind: "compaction_summary", provider: "acme", model: "large", usage }, warm(3_000)]).map((entry) => entry.timestamp),
+    [2_000, 3_000],
+  );
+  assert.deepEqual(promptCacheWarmsSinceLastResponse([warm(1_000), { type: "compaction" }]), []);
+  assert.deepEqual(promptCacheWarmsSinceLastResponse([answer]), []);
+});
+
+test("section hashes are salted, so a guessed text cannot be confirmed from a log line", () => {
+  const edited = baseHistory();
+  edited[1] = user("yes");
+  const miss = missAfter({ messages: edited });
+  assert.equal(miss?.source, "messages");
+  const unsalted = createHash("sha256").update(JSON.stringify({ role: "user", content: "yes" })).digest("hex").slice(0, 12);
+  assert.equal(miss.currentHash?.length, 12);
+  assert.notEqual(miss.currentHash, unsalted);
 });
 
 test("after a reset the next request has nothing to compare and is not a miss", () => {
@@ -244,4 +316,36 @@ test("the stream wrapper reports a miss once the response settles and passes the
     ["tools"],
   );
   assert.equal(telemetry.lastMiss("c")?.source, "tools");
+});
+
+test("the stream wrapper takes the cache lifetime from the model and reports when a miss clears", async () => {
+  let clock = 1_000;
+  const telemetry = createPromptCacheTelemetry({ now: () => clock });
+  const responses = [
+    response({ timestamp: 1_000, input: 200, cacheRead: 0, cacheWrite: 20_000 }),
+    response({ timestamp: 1_000 + 10 * 60_000, input: 20_500, cacheRead: 0 }),
+    response({ timestamp: 1_000 + 11 * 60_000, input: 400, cacheRead: 20_600 }),
+  ];
+  let calls = 0;
+  const inner: StreamFn = async () => {
+    const message = responses[calls++]!;
+    return { result: async () => message } as unknown as Awaited<ReturnType<StreamFn>>;
+  };
+  const misses: string[] = [];
+  let cleared = 0;
+  const wrapped = withPromptCacheTelemetry(inner, { telemetry, chatKey: "c", onMiss: (miss) => misses.push(miss.source), onMissCleared: () => { cleared += 1; } });
+  // A model that declares a 30-minute short cache.
+  const model = { provider: MODEL.provider, id: MODEL.id, api: "openai-responses", promptCache: { short: 1_800 }, cost: { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 } } as unknown as Parameters<StreamFn>[0];
+  const settle = () => new Promise((resolve) => setImmediate(resolve));
+  await (await wrapped(model, normalizeContext({ messages: baseHistory() }), {})).result();
+  await settle();
+  clock += 10 * 60_000;
+  await (await wrapped(model, normalizeContext({ messages: [...baseHistory(), assistant("a"), user("b")] }), {})).result();
+  await settle();
+  assert.deepEqual(misses, ["unknown"], "ten idle minutes do not outlive a 30-minute cache");
+  assert.equal(cleared, 0);
+  await (await wrapped(model, normalizeContext({ messages: [...baseHistory(), assistant("a"), user("b"), assistant("c"), user("d")] }), {})).result();
+  await settle();
+  assert.equal(cleared, 1);
+  assert.equal(telemetry.lastMiss("c"), undefined);
 });

@@ -83,4 +83,4 @@ export { createGenerationWatchdog } from "./generation-watchdog.ts";
 
 export { cliWorkspaceCodingTools } from "./workspace-coding-tools.ts";
 
-export { createPromptCacheTelemetry } from "../../../main/services/pi-cache-telemetry.js";
+export { createPromptCacheTelemetry, promptCacheWarmsSinceLastResponse } from "../../../main/services/pi-cache-telemetry.js";

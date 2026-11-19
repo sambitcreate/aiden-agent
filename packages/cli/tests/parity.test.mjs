@@ -3349,8 +3349,8 @@ test("prompt-cache miss detection agrees with Pi's detectCacheMiss over a mixed 
     const id = next(10) === 0 ? "small" : "large";
     if (roll === 2) {
       const usage = { input: 1, output: 1, cacheRead: size, cacheWrite: 0, cost: { input: 0, output: 0, cacheRead: size * 0.3e-6, cacheWrite: 0, total: 0 } };
+      // Warms reach the telemetry only through the session entries, as `aiden serve` feeds them.
       entries.push({ type: "usage", kind: "cache_warm", usage, provider: "acme", model: id, timestamp: new Date(clock).toISOString() });
-      telemetry.observeWarm("chat", { provider: "acme", model: id, timestamp: clock, usage });
       continue;
     }
     size += next(3_000);
@@ -3365,6 +3365,9 @@ test("prompt-cache miss detection agrees with Pi's detectCacheMiss over a mixed 
     if (roll === 4) { usage.input = 0; usage.cacheRead = 0; usage.cacheWrite = 0; }
     const message = { role: "assistant", content: [], api: "openai-responses", provider: "acme", model: id, usage, stopReason: "stop", timestamp: clock };
     const expected = piCacheStats.detectCacheMiss(entries, message, models);
+    // Fed before every request, so a warm already seen is offered again.
+    for (const warm of api.promptCacheWarmsSinceLastResponse(entries)) telemetry.observeWarm("chat", warm);
+    for (const warm of api.promptCacheWarmsSinceLastResponse(entries)) telemetry.observeWarm("chat", warm);
     const actual = telemetry
       .beginRequest("chat", { messages: [{ role: "user", content: "same", timestamp: 0 }], model: { provider: "acme", id, cost: { cacheRead: catalog[`acme/${id}`] } } })
       .complete(message);

@@ -16,7 +16,8 @@ import { rm } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { dirname, basename, join, resolve } from "node:path";
 import { convertToLlm, createAgentSession, DefaultResourceLoader, SessionManager, type AgentSession } from "@earendil-works/pi-coding-agent";
-import { createPromptCacheTelemetry, formatPromptCacheMissLog, type PromptCacheRequestObservation } from "../../../main/services/pi-cache-telemetry.js";
+import { createPromptCacheTelemetry, formatPromptCacheMissLog, promptCacheWarmsSinceLastResponse, type PromptCacheRequestObservation } from "../../../main/services/pi-cache-telemetry.js";
+import { promptCacheTtlMs } from "../../../main/services/prompt-cache-lifetimes.js";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import type { AgentTurnDecision } from "@earendil-works/pi-agent-core";
 import { createChatStore } from "../../../main/services/chat-store-core.js";
@@ -369,7 +370,11 @@ export function createDaemonChats(agentDir: string) {
             // The last context handler sees each request's final transcript; it only observes, so the messages stay as they are.
             pi.on("context_with_system", (event, ctx) => {
               try {
-                promptCacheRequest = ctx.model ? promptCache.beginRequest(chat.id, { messages: convertToLlm(event.messages), model: ctx.model }) : undefined;
+                // Pi's cache warmer records its reads as session entries; they restart the lifetime, as in Pi's own miss scan.
+                for (const warm of promptCacheWarmsSinceLastResponse(ctx.sessionManager.getEntries())) promptCache.observeWarm(chat.id, warm);
+                promptCacheRequest = ctx.model
+                  ? promptCache.beginRequest(chat.id, { messages: convertToLlm(event.messages), model: ctx.model, cacheTtlMs: promptCacheTtlMs(ctx.model) })
+                  : undefined;
               } catch { promptCacheRequest = undefined; }
               return undefined;
             });

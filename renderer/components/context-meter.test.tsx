@@ -111,7 +111,7 @@ test("cumulative usage past a billion tokens reads in billions", async () => {
   assert.match(html, /92% from cache/u);
 });
 
-test("a chat that read nothing from its cache shows 0% and names the last miss", async () => {
+test("a chat that read nothing from its cache shows 0% and names the last miss, but a provider with no cache shows no figure", async () => {
   const { ChatContextPanel } = await import("./chat-context-panel.js");
   const usage = { input: 9_000, output: 300, cacheRead: 0, cacheWrite: 0, total: 9_300, requests: 2 };
   const turn = { id: "a", role: "assistant" as const, content: "done", createdAt: 20, turnStats: { version: 1 as const, startedAt: 10, finishedAt: 20, usage } };
@@ -123,6 +123,12 @@ test("a chat that read nothing from its cache shows 0% and names the last miss",
   assert.match(missed, /Cache missed: tools changed/u);
   assert.match(render({ lastCacheMiss: { source: "system:agents-instructions", at: 19 } }), /Cache missed: system prompt changed/u);
   assert.doesNotMatch(render({}), /Cache missed/u);
+  // A documented cache that was never read is still a real 0%.
+  assert.match(render({ promptCache: { ttlMs: 300_000, lastRequestAt: 19 } }), /0% from cache/u);
+  // No cache activity, no documented cache and no miss: nothing to report.
+  const local = render({});
+  assert.doesNotMatch(local, /from cache/u);
+  assert.match(local, /9\.3K/u, "the usage itself still renders");
 });
 
 test("a chat whose provider never reported usage says so once instead of a column of Unavailable", async () => {

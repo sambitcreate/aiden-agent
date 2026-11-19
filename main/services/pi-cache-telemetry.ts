@@ -1,6 +1,7 @@
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { toToolDeclaration, type CacheRetention, type Message, type SystemMessage, type Usage } from "@earendil-works/pi-ai";
 import type { StreamFn } from "@earendil-works/pi-agent-core";
+import { promptCacheTtlMs } from "./prompt-cache-lifetimes.js";
 
 /**
  * Prompt-cache miss telemetry, shared by the desktop chat runtime and
@@ -20,7 +21,10 @@ import type { StreamFn } from "@earendil-works/pi-agent-core";
  * names, counts and timings are kept; never text.
  */
 
-/** Pi's prompt-cache TTL: idle gaps longer than this explain a miss on their own. */
+/**
+ * Pi's prompt-cache TTL, used when the model has no documented lifetime: idle
+ * gaps at least this long explain a miss on their own.
+ */
 export const PROMPT_CACHE_TTL_MS = 5 * 60 * 1000;
 /** Pi's noise floor: misses at or below this are cache breakpoint granularity. */
 export const PROMPT_CACHE_MISS_NOISE_FLOOR_TOKENS = 1024;
@@ -124,8 +128,30 @@ export interface PromptPrefixDifference {
   currentHash: string;
 }
 
+// A per-process salt: a 12-hex prefix of an unsalted hash of a short,
+// guessable section would confirm its text to anyone who sees the log line.
+const HASH_SALT = randomBytes(16);
+
 function shortHash(value: unknown): string {
-  return createHash("sha256").update(typeof value === "string" ? value : JSON.stringify(value) ?? "").digest("hex").slice(0, 12);
+  return createHash("sha256")
+    .update(HASH_SALT)
+    .update(typeof value === "string" ? value : JSON.stringify(value) ?? "")
+    .digest("hex")
+    .slice(0, 12);
+}
+
+// The history is the same message objects request after request, so each one
+// is serialized and hashed once. Messages are never edited after they enter
+// the history; an edit replaces the object.
+const messageHashes = new WeakMap<object, string>();
+
+function messageHash(message: Message): string {
+  let hash = messageHashes.get(message);
+  if (hash === undefined) {
+    hash = shortHash(messageWireShape(message));
+    messageHashes.set(message, hash);
+  }
+  return hash;
 }
 
 /** Section names can carry a per-generation nonce; a label keeps only the stable stem. */
@@ -178,7 +204,7 @@ export function fingerprintPromptPrefix(input: {
     retention: input.cacheRetention ?? "default",
     tools: shortHash((leading?.toolsAdded ?? []).map(toToolDeclaration)),
     system,
-    messages: history.map((message) => ({ role: message.role, hash: shortHash(messageWireShape(message)) })),
+    messages: history.map((message) => ({ role: message.role, hash: messageHash(message) })),
   };
 }
 
@@ -237,17 +263,30 @@ export interface PromptCacheRequestObservation {
   complete(message: PromptCacheResponse): PromptCacheMissReport | undefined;
 }
 
+export interface PromptCacheRequest {
+  messages: readonly Message[];
+  model: PromptCacheModelRef;
+  cacheRetention?: CacheRetention | string;
+  /**
+   * The provider's documented cache lifetime for this model (see
+   * `promptCacheTtlMs`); 0 or absent falls back to `PROMPT_CACHE_TTL_MS`.
+   */
+  cacheTtlMs?: number;
+}
+
 export interface PromptCacheTelemetry {
   /** Record a request just before dispatch. */
-  beginRequest(
-    chatKey: string,
-    request: { messages: readonly Message[]; model: PromptCacheModelRef; cacheRetention?: CacheRetention | string },
-  ): PromptCacheRequestObservation;
-  /** A cache-warming read restarts the cache lifetime, like Pi's `cache_warm` usage entry. */
+  beginRequest(chatKey: string, request: PromptCacheRequest): PromptCacheRequestObservation;
+  /**
+   * A cache-warming read restarts the cache lifetime, like Pi's `cache_warm`
+   * usage entry. A warm no later than the latest recorded request is already
+   * accounted for and is ignored, so callers may feed the same warm again.
+   */
   observeWarm(chatKey: string, message: PromptCacheResponse): void;
   /** Compaction legitimately rewrites the prefix; the next request starts fresh. */
   reset(chatKey: string): void;
   forget(chatKey: string): void;
+  /** The latest miss, until a later request reads from the cache or the chat is reset. */
   lastMiss(chatKey: string): PromptCacheMissReport | undefined;
 }
 
@@ -272,6 +311,7 @@ export function createPromptCacheTelemetry(options: { now?: () => number; maxCha
     beginRequest(chatKey, request) {
       const fingerprint = fingerprintPromptPrefix(request);
       const catalogCacheRead = request.model.cost?.cacheRead;
+      const ttlMs = request.cacheTtlMs && request.cacheTtlMs > 0 ? request.cacheTtlMs : PROMPT_CACHE_TTL_MS;
       let completed = false;
       return {
         complete(message) {
@@ -284,12 +324,15 @@ export function createPromptCacheTelemetry(options: { now?: () => number; maxCha
             const difference = state.fingerprint ? diffPromptPrefix(state.fingerprint, fingerprint) : undefined;
             report = {
               ...measured,
-              source: difference?.source ?? (measured.idleMs >= PROMPT_CACHE_TTL_MS ? "ttl" : "unknown"),
+              source: difference?.source ?? (measured.idleMs >= ttlMs ? "ttl" : "unknown"),
               ...(difference?.messageIndex !== undefined ? { messageIndex: difference.messageIndex, messageRole: difference.messageRole } : {}),
               ...(difference ? { previousHash: difference.previousHash, currentHash: difference.currentHash } : {}),
               at: now(),
             };
             state.lastMiss = report;
+          } else if (message.usage.cacheRead > 0) {
+            // The cache is serving this chat again, so the earlier miss is history.
+            state.lastMiss = undefined;
           }
           const next = nextPromptCachePreviousRequest(state.previous, message);
           if (next !== state.previous) {
@@ -304,6 +347,7 @@ export function createPromptCacheTelemetry(options: { now?: () => number; maxCha
       const promptTokens = promptTokensOf(message.usage);
       if (promptTokens <= 0) return;
       const state = stateFor(chatKey);
+      if (state.previous && message.timestamp <= state.previous.timestamp) return;
       state.previous = { promptTokens, modelKey: `${message.provider}/${message.model}`, timestamp: message.timestamp, reportedCache: true };
     },
     reset(chatKey) {
@@ -311,6 +355,7 @@ export function createPromptCacheTelemetry(options: { now?: () => number; maxCha
       if (!state) return;
       state.previous = undefined;
       state.fingerprint = undefined;
+      state.lastMiss = undefined;
     },
     forget(chatKey) {
       chats.delete(chatKey);
@@ -321,6 +366,35 @@ export function createPromptCacheTelemetry(options: { now?: () => number; maxCha
   };
 }
 
+/** The fields of a Pi session entry that the warm scan reads. */
+export interface PromptCacheSessionEntry {
+  type: string;
+  kind?: string;
+  provider?: string;
+  model?: string;
+  usage?: PromptCacheResponse["usage"];
+  timestamp?: string;
+  message?: { role?: string };
+}
+
+/**
+ * Pi's `cache_warm` usage entries written since the session's latest
+ * response or compaction, oldest first, as `observeWarm` takes them. Earlier
+ * warms were superseded by a later request in Pi's own scan.
+ */
+export function promptCacheWarmsSinceLastResponse(entries: readonly PromptCacheSessionEntry[]): PromptCacheResponse[] {
+  const warms: PromptCacheResponse[] = [];
+  for (let index = entries.length - 1; index >= 0; index -= 1) {
+    const entry = entries[index]!;
+    if (entry.type === "compaction" || entry.type === "branch_summary") break;
+    if (entry.type === "message" && entry.message?.role === "assistant") break;
+    if (entry.type !== "usage" || entry.kind !== "cache_warm" || !entry.usage || !entry.provider || !entry.model) continue;
+    const timestamp = Date.parse(entry.timestamp ?? "");
+    if (!Number.isFinite(timestamp)) continue;
+    warms.push({ provider: entry.provider, model: entry.model, timestamp, usage: entry.usage });
+  }
+  return warms.reverse();
+}
 
 /**
  * Observe every request a Pi stream function sends for one chat. Pi calls the
@@ -333,6 +407,8 @@ export function withPromptCacheTelemetry(
     telemetry: PromptCacheTelemetry;
     chatKey: string;
     onMiss?: (report: PromptCacheMissReport) => void;
+    /** A request read from the cache after a miss, so `lastMiss` is now empty. */
+    onMissCleared?: () => void;
     onError?: (error: unknown) => void;
   },
 ): StreamFn {
@@ -343,6 +419,7 @@ export function withPromptCacheTelemetry(
         messages: context.messages,
         model,
         cacheRetention: streamOptions?.cacheRetention,
+        cacheTtlMs: promptCacheTtlMs(model),
       });
     } catch (error) {
       options.onError?.(error);
@@ -353,8 +430,10 @@ export function withPromptCacheTelemetry(
       void stream
         .result()
         .then((message) => {
+          const hadMiss = options.telemetry.lastMiss(options.chatKey) !== undefined;
           const miss = pending.complete(message);
           if (miss) options.onMiss?.(miss);
+          else if (hadMiss && options.telemetry.lastMiss(options.chatKey) === undefined) options.onMissCleared?.();
         })
         .catch((error: unknown) => options.onError?.(error));
     }

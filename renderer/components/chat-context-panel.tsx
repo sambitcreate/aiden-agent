@@ -83,15 +83,21 @@ const USAGE_PARTS = [
 function UsageSection({
   usage,
   lastCacheMiss,
+  cacheKnown,
 }: {
   usage: ReturnType<typeof recordedChatUsage>;
   lastCacheMiss?: PromptCacheMissV1;
+  /** The model has a documented prompt cache. */
+  cacheKnown: boolean;
 }) {
   const reported = usage.turns > 0;
   const token = (value: number) => value.toLocaleString();
   const cacheable = usage.cacheRead + usage.cacheWrite + usage.input;
-  // 0% is shown too: a chat that never reads its cache is worth seeing.
-  const cachePercent = reported && cacheable > 0 ? Math.round((usage.cacheRead / cacheable) * 100) : null;
+  // 0% is worth seeing only where a cache exists: one that reported activity,
+  // a model with a documented cache, or a measured miss. A provider with no
+  // cache shows no figure rather than a misleading 0%.
+  const cacheActive = usage.cacheRead + usage.cacheWrite > 0 || cacheKnown || lastCacheMiss !== undefined;
+  const cachePercent = reported && cacheable > 0 && cacheActive ? Math.round((usage.cacheRead / cacheable) * 100) : null;
   const barTotal = USAGE_PARTS.reduce((sum, part) => sum + usage[part.key], 0);
   return (
     <section className="rounded-card bg-well p-4">
@@ -270,7 +276,7 @@ export function ChatContextPanel({
               ))}
             </dl>
           </section>
-          <UsageSection usage={usage} lastCacheMiss={details.pressure?.lastCacheMiss} />
+          <UsageSection usage={usage} lastCacheMiss={details.pressure?.lastCacheMiss} cacheKnown={details.pressure?.promptCache !== undefined} />
         </div>
       </div>
     </div>
