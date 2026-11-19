@@ -290,6 +290,125 @@ final class AidenSandboxedHTMLTests: XCTestCase {
         )
     }
 
+    // MARK: Theme
+
+    func testPreviewThemeCarriesTheAidenPaletteAsLowPriorityVariables() throws {
+        let css = AidenHTMLPreviewTheme.css(
+            palette: AidenThemeCatalog.palette(preset: .aiden, scheme: .light),
+            colorScheme: .light,
+            uiFont: .system,
+            codeFont: .sfMono,
+            bodySize: 16
+        )
+        // Aiden light, as the catalog defines it.
+        XCTAssertTrue(css.contains("--surface-background:#F6F7F9"), css)
+        XCTAssertTrue(css.contains("--accent:#006AD6"), css)
+        XCTAssertTrue(css.contains("--text-primary:#3D3F41"), css)
+        XCTAssertTrue(css.contains("--border-separator:rgb(61 63 65 / 0.087)"), css)
+        XCTAssertTrue(css.contains("color-scheme:light"), css)
+        XCTAssertTrue(css.contains("font-size:16.0px"), css)
+
+        // Every rule has zero specificity, so any rule of the page's own wins.
+        let selectors = Self.selectors(in: css)
+        XCTAssertGreaterThanOrEqual(selectors.count, 4, css)
+        for selector in selectors {
+            XCTAssertTrue(selector.hasPrefix(":where(") && selector.hasSuffix(")"), "unwrapped selector: \(selector)")
+        }
+    }
+
+    func testDarkSchemeAndFontsChangeTheTheme() {
+        let dark = AidenHTMLPreviewTheme.css(
+            palette: AidenThemeCatalog.palette(preset: .aiden, scheme: .dark),
+            colorScheme: .dark,
+            uiFont: .rounded,
+            codeFont: .menlo,
+            bodySize: 19
+        )
+        XCTAssertTrue(dark.contains("color-scheme:dark"), dark)
+        XCTAssertFalse(dark.contains("color-scheme:light"), dark)
+        XCTAssertTrue(dark.contains("--surface-background:#181B21"), dark)
+        XCTAssertTrue(dark.contains("--font-ui-family:ui-rounded"), dark)
+        XCTAssertTrue(dark.contains("--font-code-family:Menlo"), dark)
+        XCTAssertTrue(dark.contains("--ui-font-size:19.0px"), dark)
+
+        let humanist = AidenHTMLPreviewTheme.css(
+            palette: AidenThemeCatalog.palette(preset: .aiden, scheme: .light),
+            colorScheme: .light,
+            uiFont: .humanist,
+            codeFont: .monaco,
+            bodySize: 16
+        )
+        XCTAssertTrue(humanist.contains("--font-ui-family:\"Avenir Next\""), humanist)
+        XCTAssertTrue(humanist.contains("--font-code-family:Monaco"), humanist)
+    }
+
+    func testThemeStylesAnUnstyledPageAndThePagesOwnRulesWin() async throws {
+        let css = AidenHTMLPreviewTheme.css(
+            palette: AidenThemeCatalog.palette(preset: .aiden, scheme: .light),
+            colorScheme: .light,
+            uiFont: .system,
+            codeFont: .sfMono,
+            bodySize: 16
+        )
+        let probe = """
+        const style = (element) => getComputedStyle(element);
+        const p = document.querySelector('p');
+        return [style(document.documentElement).backgroundColor, style(document.body).backgroundColor,
+                style(document.body).color, style(p).color, style(document.body).fontSize,
+                style(document.body).paddingTop, style(document.querySelector('a')).color]
+        """
+        let page = "<!doctype html><html><body><p>plain</p><a href=\"#x\">link</a></body></html>"
+
+        // Unstyled: the canvas behind the page, the palette's text, Aiden's body size.
+        let finished = expectation(description: "unstyled page finishes")
+        let (plain, _) = try showSandboxed(page, allowsScripts: false, themeCSS: css, onFinish: { finished.fulfill() })
+        await fulfillment(of: [finished], timeout: 10)
+        let plainStyles = try await plain.callAsyncJavaScript(probe, contentWorld: .defaultClient) as? [String]
+        XCTAssertEqual(plainStyles, [
+            "rgb(246, 247, 249)", "rgba(0, 0, 0, 0)", "rgb(61, 63, 65)", "rgb(61, 63, 65)",
+            "16px", "16px", "rgb(0, 106, 214)",
+        ])
+
+        // The page's own rules, even bare element selectors, beat the theme.
+        let styled = """
+        <!doctype html><html><head><style>html{background:rgb(9, 9, 9)}\
+        body{background:rgb(1, 2, 3);padding:0;font-size:10px}p{color:rgb(4, 5, 6)}a{color:rgb(7, 8, 9)}</style>\
+        </head><body><p>plain</p><a href="#x">link</a></body></html>
+        """
+        let styledFinished = expectation(description: "styled page finishes")
+        let (own, _) = try showSandboxed(styled, allowsScripts: false, themeCSS: css, onFinish: { styledFinished.fulfill() })
+        await fulfillment(of: [styledFinished], timeout: 10)
+        let ownStyles = try await own.callAsyncJavaScript(probe, contentWorld: .defaultClient) as? [String]
+        XCTAssertEqual(ownStyles, [
+            "rgb(9, 9, 9)", "rgb(1, 2, 3)", "rgb(61, 63, 65)", "rgb(4, 5, 6)",
+            "10px", "0px", "rgb(7, 8, 9)",
+        ])
+    }
+
+    /// The selector list before each `{`, split at top-level commas.
+    private static func selectors(in css: String) -> [String] {
+        var result: [String] = []
+        for chunk in css.components(separatedBy: "{").dropLast() {
+            let prelude = chunk.components(separatedBy: "}").last ?? chunk
+            var depth = 0
+            var current = ""
+            for character in prelude {
+                switch character {
+                case "(": depth += 1
+                case ")": depth -= 1
+                case "," where depth == 0:
+                    result.append(current.trimmingCharacters(in: .whitespacesAndNewlines))
+                    current = ""
+                    continue
+                default: break
+                }
+                current.append(character)
+            }
+            result.append(current.trimmingCharacters(in: .whitespacesAndNewlines))
+        }
+        return result
+    }
+
     // MARK: Helpers
 
     /// Every way a page can name a remote resource, each pointing at the listener.
@@ -327,13 +446,14 @@ final class AidenSandboxedHTMLTests: XCTestCase {
     private func showSandboxed(
         _ html: String,
         allowsScripts: Bool,
+        themeCSS: String? = nil,
         onFinish: @escaping () -> Void,
         onLinkOffer: @escaping (URL) -> Void = { _ in }
     ) throws -> (WKWebView, AidenSandboxedHTMLCoordinator) {
         let view = AidenSandboxedHTMLView(
             html: html,
             allowsScripts: allowsScripts,
-            themeCSS: nil,
+            themeCSS: themeCSS,
             scrolls: true,
             onLinkOffer: onLinkOffer,
             onFailure: { XCTFail("preview failed") }

@@ -164,6 +164,7 @@ const appSourcePaths = [
   "AidenOnTheGo/Features/Remote/AidenVisualDocument.swift",
   "AidenOnTheGo/Features/Remote/AidenVisualViewer.swift",
   "AidenOnTheGo/Features/Remote/AidenSandboxedHTMLView.swift",
+  "AidenOnTheGo/Features/Remote/AidenHTMLPreviewTheme.swift",
   "AidenOnTheGo/Features/Remote/AidenWorkspaceEnvironmentView.swift",
   "AidenOnTheGo/Features/Shared/ActivityMarks/AidenActivityMarkEvaluator.swift",
   "AidenOnTheGo/Features/Shared/ActivityMarks/AidenActivityMarkMapping.swift",
