@@ -4,6 +4,8 @@ Aiden On The Go for Android. Earlier Android changes are recorded in the pull re
 
 ## Unreleased
 
+- **2026-11-18 — Pairing with a server; Terminal theme control removed.** The pairing steps now say that on a server, `aiden serve` shows the code in its terminal, or `aiden remote pair lan` prints one, as iOS already did. The app no longer accepts the retired `appearance.terminalTheme` chat control, which no host has sent since the interactive CLI was retired on 2026-10-30. No Remote wire or revision change.
+
 - **2026-11-11 — Continue in a new chat (Remote revision 64; written as 63, re-claimed at merge on 2026-11-17).** When a host offering `chat:continue-in-new-chat` refuses a send because the chat's workspace folder is missing and says the chat can continue elsewhere, the error gains **Continue in a new chat**. A sheet lists the host's other workspaces (never the chat's own, archived ones or any folder path); picking one forks the whole chat into that workspace with the host's `continueIn` request and opens the new chat, leaving the original as it was. Failures show the host's message; a destination whose folder is missing too keeps the action so another workspace can be picked. Without the host's offer, or on older hosts, the refusal looks as before. Bot contract-test revision assertions now expect 63.
 
 - **2026-11-11 — "Stopped after the chat went quiet" (Remote revision 63).** A background job the agent asked the Mac to stop once its chat went quiet now reads "Stopped after the chat went quiet" in the chat's job list. The host sends it as `endReason: "chat-settled"`; any reason this version does not know still reads as Stopped. The revision is re-claimed at merge.

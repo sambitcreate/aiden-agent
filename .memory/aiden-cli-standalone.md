@@ -1,6 +1,8 @@
 # Aiden CLI standalone (PR #121, target 0.50.0)
 
-**2026-10-30: serve-only.** The interactive CLI (Pi's TUI, `aiden -p`, `--mode json|rpc`, `--list-models`, slash commands, themes, `aiden theme`/`aiden reset`, the feature tour) was retired. `packages/cli` is now a headless server: `aiden serve` (Remote on by default, `--no-remote`; startup pairing QR in a foreground TTY, `--pair tailscale`, `--no-pair`) plus admin subcommands. Daemon chats still use Pi's SDK (`createAgentSession`), so `@earendil-works/pi-coding-agent` and the system-prompt branding patch stay. See `docs/plans/aiden-serve-only-cli.md`; notes below that mention the TUI, themes or the playground are history.
+**2026-10-30: serve-only.** The interactive CLI (Pi's TUI, `aiden -p`, `--mode json|rpc`, `--list-models`, slash commands, themes, `aiden theme`/`aiden reset`, the feature tour) was retired. `packages/cli` is now a headless server: `aiden serve` (Remote on by default, `--no-remote`; startup pairing QR in a foreground TTY, `--pair tailscale`, `--no-pair`) plus admin subcommands. Daemon chats still use Pi's SDK (`createAgentSession`), so `@earendil-works/pi-coding-agent` and the system-prompt branding patch stay. See `docs/plans/completed/aiden-serve-only-cli.md`; notes below that mention the TUI, themes or the playground are history. All three PRs merged on 2026-10-31: #675 (serve-only), #676 (service install), #677 (Tailscale ease of use).
+
+**2026-11-18 cleanup** (PR #839): the server build stops bundling Pi's unused interactive, print and RPC code; the dead `appearance.terminalTheme` app control is removed from the shared contract, Remote OpenAPI, iOS and Android (no contract revision bump, nothing emitted it after the TUI went); the orphaned schedule consent receipts (`schedule-tool-approval.ts`) are removed, since their only producer was the model-facing schedule tool deleted in #675; dead voice settings, TUI context capture and an unused MCP export are removed; `aiden help` lists `schedule status`, the `hooks digest` arguments and the advanced `remote` subcommands, typos get an unknown-command message with a suggestion, and `serve --help` exits 0; the `render_ui` and advisor tool descriptions no longer describe terminal behavior.
 
 ## Lease ownership (issues #405 and #392, 2026-10-15)
 
@@ -27,8 +29,9 @@ CLI `acquireLease` holds an OS `flock` on a permanent `<resource>.lease.lock` fi
   - The `cli-linux` job is required (desktop area) in `scripts/ci-required.mjs`.
     The `cli-playground` job was removed with `packages/cli-playground` on
     2026-10-30.
-  - Root `npm test` ends with `npm run test:cli`.
-  - The CI test registry accepts only the audited npm commands of
+  - Root `npm test` is `node scripts/run-ci-tests.mjs --parallel`; it runs
+    `test:cli` through the CI test registry (`scripts/ci-test-registry.mjs`).
+    The registry accepts only the audited npm commands of
     `test:cli`/`cli:build`, which run as the preserved `cli-package` entry in
     the renderer-other lane.
 - Aiden remote contract revision: 12. Both the CLI PR and main claimed 11, so
@@ -43,13 +46,13 @@ CLI `acquireLease` holds an OS `flock` on a permanent `<resource>.lease.lock` fi
 - The native shell runner passes `-f` only to zsh (macOS). On Linux `/bin/sh -f` is noglob; a glob regression test in subagent-shell-runner-io.test.ts covers this.
 - Merging #71 (Linux desktop) took main's native C ports and `native-c-build-core.mjs` build scripts. The PR's OpenSSL/renameat2 shims were dropped because `native/shared/aiden-platform.h` carries its own SHA-256. `nativeHelperSourceHash` now also hashes `native/shared/*.h`, so a shared-header edit marks prebuilts stale. The PR's speech core carries main's "desktop" wording.
 - Merging #246 (root pi 0.87.1) bumped the CLI to `@earendil-works/pi-coding-agent` 0.87.1 and added a direct `@earendil-works/chord` 0.87.1 dependency. btw wraps its context in `normalizeContext`, and the child beforeTool context drops `systemPrompt`. The re-vendored advisor uses `normalizeContext`. The build's external check falls back to ESM resolution for chord's import-only subpaths and allowlists the optional `kerberos`. Session import accepts both `v: 4` (storage v1) and `version: 4` (0.84.4) journal headers.
-- Since #471 (Pi 1.2.0), the CLI pins pi-coding-agent, pi-ai, pi-agent-core, pi-codemode and pi-mcp at exactly 1.2.0 and no longer depends on chord directly.
+- Since #471 (Pi 1.2.0), the CLI pins pi-coding-agent, pi-ai, pi-agent-core, pi-codemode and pi-mcp at exactly 1.2.0 and no longer depends on chord directly. Now (since #799, 2026-11-17) it pins pi-coding-agent, pi-ai, pi-agent-core, pi-codemode, pi-mcp, pi-durable and chord at exactly 1.5.2, matching the desktop.
 - Merging #251 (main's Remote contract revision 14) renumbered this PR's `GET /scheduled-tasks/notifications` addition to contract revision 15. The shared fixture and the Android copy are byte-identical at 15. The TS, iOS and Android fixture assertions expect 15, and the iOS fixture CodingKeys keep both main's streamInput/question/chatSkills and this PR's scheduleRunNotification.
 
 - 2026-09-27 review: plan index now describes Phase 6 as implemented; physical iPhone acceptance remains pending.
 
 - 2026-10-19 H3 adds an explicit durable Bot host switch; see `docs/cli-durable-bots.md` for ownership, preserving migration, supported endpoints, and remaining boundaries.
-- MCP (2026-10-21, Phase 3 of `docs/plans/mcp-pi-migration-plan.md`): the CLI's MCP client and OAuth are the desktop's `main/services` modules on `@earendil-works/pi-mcp`; the CLI build rejects any bundled `@modelcontextprotocol/sdk` client. Pi's built-in MCP extension is replaced by Aiden's `/mcp` command and `aiden pi-mcp` is gone; `aiden-mcp.json` is the only MCP config. Details in `.memory/mcp-pi-migration.md`.
+- MCP (2026-10-21, Phase 3 of `docs/plans/mcp-pi-migration-plan.md`): the CLI's MCP client and OAuth are the desktop's `main/services` modules on `@earendil-works/pi-mcp`; the CLI build rejects any bundled `@modelcontextprotocol/sdk` client. Pi's built-in MCP extension is replaced by Aiden's MCP handling and `aiden pi-mcp` is gone (the `/mcp` slash command went with the interactive CLI on 2026-10-30; MCP is now administered with the `aiden mcp` admin commands); `aiden-mcp.json` is the only MCP config. Details in `.memory/mcp-pi-migration.md`.
 - 2026-10-29 CLI/daemon audit fixes (branch `claude/audit-fix-cli-daemon`):
   - `serve stop` SIGKILLs a wedged daemon after 15 s, re-checking that the PID is still the daemon first. It kills the whole process group only when owner.json records `detached: true`, which `startDaemon` sets through `AIDEN_SERVE_DETACHED`, and the pgid equals the pid. A foreground serve's group is the shell job. Stdio MCP servers lead their own groups (Pi spawns them detached), so `serve` publishes them to `serve.lock/mcp-groups.json` via `watchMcpProcessGroups`, and a forced stop also SIGKILLs each recorded group that still has a direct child of the daemon in it (read before the daemon is killed).
   - Serve shutdown refuses new sockets and chat turns before draining. Foreground serve (`serve-command.ts`) drains on SIGHUP and logs unhandled rejections instead of crashing.

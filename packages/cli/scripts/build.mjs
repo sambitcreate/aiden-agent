@@ -109,6 +109,25 @@ const credentialStorePlugin = {
   },
 };
 
+// Pi's extension loader resolves imports of file-based extensions against
+// VIRTUAL_MODULES, a map of namespace imports of Pi's whole public index (main,
+// InteractiveMode, print and RPC modes) and pi-tui. Namespace imports defeat
+// tree-shaking, so they bundled Pi's interactive CLI. Aiden never loads
+// file-based extensions (every DefaultResourceLoader passes noExtensions), so
+// the map is empty. A Pi upgrade that renames the export fails the build here.
+const piVirtualModulesStubPlugin = {
+	name: "aiden-pi-virtual-modules-stub",
+	setup(build) {
+		build.onLoad({ filter: /pi-coding-agent\/dist\/core\/extensions\/virtual-modules\.js$/ }, (args) => {
+			const source = readFileSync(args.path, "utf8");
+			if (!/^export const VIRTUAL_MODULES = \{/mu.test(source)) {
+				throw new Error("Pi's extension virtual modules changed; review the Aiden stub in scripts/build.mjs.");
+			}
+			return { contents: "export const VIRTUAL_MODULES = Object.freeze({});\n", loader: "js" };
+		});
+	},
+};
+
 const aidenRelativeTsRewritePlugin = {
 	name: "aiden-relative-ts-rewrite",
 	setup(build) {
@@ -279,6 +298,7 @@ function commonBuildOptions() {
 		platform: "node",
 		plugins: [
 			credentialStorePlugin,
+			piVirtualModulesStubPlugin,
 			aidenRelativeTsRewritePlugin,
 			lazyJitiPlugin,
 			httpsProxyAgentNamedExportPlugin,
@@ -528,18 +548,10 @@ writeFileSync(
 	)}\n`,
 );
 
-// pi resolves built-in assets relative to the app package dir, expecting them
-// under src/ when a src directory exists. Mirror the published layout. Pi's
-// own dark/light themes stay: its session HTML export reads them.
-const builtinThemeDir = join(appDir, "src", "modes", "interactive", "theme");
-mkdirSync(builtinThemeDir, { recursive: true });
-for (const name of ["dark.json", "light.json"]) {
-	cpSync(join(piAgentPkg, "dist", "modes", "interactive", "theme", name), join(builtinThemeDir, name));
-}
-
-const exportDir = join(appDir, "src", "core", "export-html");
-mkdirSync(exportDir, { recursive: true });
-cpSync(join(piAgentPkg, "dist", "core", "export-html"), exportDir, { recursive: true });
+// Pi's dark/light theme JSON and session HTML export templates are not
+// shipped: the server never initializes a terminal theme or calls
+// exportToHtml (resource loaders pass noThemes, and `aiden export` writes
+// Aiden's own chat JSON).
 
 // pi's auth/model guidance prints absolute paths into these docs. Their
 // screenshots are only <img> illustrations for a browser and never read by

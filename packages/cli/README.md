@@ -2,7 +2,7 @@
 
 A headless Aiden server for macOS and Linux. Run `aiden serve` on a box you reach over SSH (a home server, a spare Mac, a cloud VM) and use it from the Aiden On The Go apps on iPhone, iPad and Android, or from a paired Mac. The server runs chats, Bots, scheduled tasks and Telegram; your devices are the interface.
 
-There is no interactive terminal app. Since 2026-10-30, `aiden` has only `serve` and short admin commands for setting the server up (see [the serve-only plan](../../docs/plans/aiden-serve-only-cli.md)). Pi's terminal UI, `aiden -p` print mode, `--mode json|rpc`, `--list-models`, slash commands, themes and the first-run tour are gone. Bare `aiden` prints the command list; the old flags (`-p`, `--mode`, `--tui-mode`, `--theme`, `--list-models`) exit with an error that points to `aiden serve` and `aiden help`.
+There is no interactive terminal app. Since 2026-10-30, `aiden` has only `serve` and short admin commands for setting the server up (see [the serve-only plan](../../docs/plans/completed/aiden-serve-only-cli.md)). Pi's terminal UI, `aiden -p` print mode, `--mode json|rpc`, `--list-models`, slash commands, themes and the first-run tour are gone. Bare `aiden` prints the command list. The old flags (`-p`, `--mode`, `--tui-mode`, `--theme`, `--list-models`, any word starting with `-`), the removed `chat`, `theme`, `reset` and `selfcheck` commands and a bare prompt (`aiden "fix the test"`) exit with an error that points to `aiden serve` and `aiden help`. Any other unknown word exits with `aiden: unknown command "…"`, suggesting the command it most likely meant (`aiden bot` → `aiden bots`).
 
 Built on [pi](https://github.com/earendil-works/pi) (`@earendil-works/pi-coding-agent`, MIT, pinned `1.5.2`, the same line the Aiden desktop app uses). The server uses Pi's SDK for its chat sessions and bundles the desktop's own `main/services` cores for Bots, scheduling, Remote, MCP, memory and web search.
 
@@ -108,7 +108,7 @@ The login service is shared by this OS user, even when different `AIDEN_CODING_A
 
 ## What paired devices get
 
-Phones and Macs paired with the server see its workspaces, chats, Bots, scheduled tasks and files. Chats run on the server through Pi's SDK with a headless tool set: workspace tools under the workspace's access tier, memory, todo, MCP, web search, advisor, and artifact export (HTML visuals are written to `<agentDir>/artifacts` and the path is returned). Image display in the terminal and `ask_user_question` are not available on the server. Server sessions don't load codemode and declare MCP tools directly.
+Phones and Macs paired with the server see its workspaces, chats, Bots, scheduled tasks and files. Chats run on the server through Pi's SDK with a headless tool set: workspace tools under the workspace's access tier, memory, todo, MCP, web search, advisor, and artifact export (HTML visuals are written to `<agentDir>/artifacts` and the path is returned). `render_ui` visuals are not drawn: paired apps show a "Draw visual" step with the visual's title, and the model gets the plain-text rendering back. The advisor runs only when the request names both the reviewer's provider and model, because the server cannot show the desktop's model chooser. Image display (`display_image`) and `ask_user_question` are not available on the server. Server sessions don't load codemode and declare MCP tools directly.
 
 - **Forks.** Paired phones fork server chats with the Remote `chat-fork-v1` feature; the fork's journal is seeded from the copied visible messages, so tool results before the cut are not carried. The server does not offer Fork with summary (`chat-fork-summary-v1`).
 - **Paired desktops.** A Mac or Linux desktop paired to the server lists its chats in the sidebar and the Inbox. The server serves the host feed (`GET /host/events`), live-run observation and run control (Stop and approvals), shared read markers (`POST /chats/{id}/read`), and the Inbox's Pin, Done and Snooze (`POST /chats/{id}/triage`), with the same `inbox-signals-v1` row times, last assistant message ID and Inbox bucket as the desktop. Mark read acknowledges the reply displayed on the paired device. Read markers and triage are kept in `chat-read-markers.json` and `chat-triage.json` in the server's data directory, and snoozes end on a timer that runs with `aiden serve`. A desktop paired before this server version doesn't need to pair again: it picks up the host grants on its next connection after Aiden starts (relaunch Aiden if it was already connected). Approvals from a paired device apply once; the server keeps no "always allow" approvals and refuses one. A paired device that negotiates `approval:cards` (contract revision 61) gets the same typed approval card the desktop sends and can allow only what that card offers; the approval mode and rules routes, Bot settings changes, suggestions and Templates are desktop-only. The server's runs don't take questions or mid-run input, so a paired desktop shows Stop and approvals on them but no Steer. The server's Bot rows carry no Needs you, Failed or last-reply signals, so its Bots appear in a desktop's Inbox only while they are open.
@@ -180,7 +180,7 @@ Hooks run your own shell commands at points in an agent's work, in the Claude Co
 
 The built-in Composio consumer connection exposes one `composio` tool and one service allowance. Manage its enabled apps/tools in Composio; each call validates the current operation schema while Aiden's action approvals and Bot rules still apply. Old partial Custom grants and individual hidden-operation exclusions require the person's single Composio allowance before broader service access. Credential or endpoint changes still invalidate old calls. See [Composio access](../../docs/composio.md).
 
-The desktop's per-workspace skill and connector switches (Workspace settings) are not read by the server yet; it uses every skill and connector it has.
+The desktop's per-workspace skill and connector switches (Workspace settings) are not read by the server yet. Workspace chats, scheduled runs and subagents load no skills; only server-hosted Bots use skills, from their grants (see Bots). Workspace chats get every enabled connector in `aiden-mcp.json`, and a scheduled task gets the connections it was saved with.
 
 `aiden-mcp.json` and the `aiden mcp` commands are the server's only MCP configuration. Pi's native `mcp.json` (`mcpServers` object) and its plaintext `mcp-auth.json` are never read and native servers are not started; native entries are not migrated, so add them again with `aiden mcp add`. An older Aiden array configuration in `mcp.json` still migrates to `aiden-mcp.json`, with an exact private backup in `mcp.pre-pi-1.json`. The source inode is retained under a private `.mcp-migration-*/mcp.json` recovery directory so concurrent writers cannot lose their data. A native object configuration is never migrated or overwritten, and conflicting legacy/new Aiden inventories stop with a reconciliation error.
 
@@ -197,11 +197,12 @@ The desktop's per-workspace skill and connector switches (Workspace settings) ar
 
 | Command | Purpose |
 | --- | --- |
-| `serve [--no-remote] [--daemon] [--pair lan\|tailscale] [--no-pair]`, `serve stop\|status` | Run, background, inspect or stop the server |
+| `serve [--no-remote] [--daemon] [--pair lan\|tailscale] [--no-pair]`, `serve stop\|status`, `serve --help` | Run, background, inspect or stop the server |
 | `service install [--network local\|tailscale\|both] [--no-pair]\|uninstall\|status` | Run the server at login and boot (systemd or launchd) |
 | `remote status\|devices\|pair lan\|tailscale\|pair-status\|pair-cancel <id>\|revoke <id>\|roots\|approve-root <path>` | Pairing and paired-device administration (server must be running) |
 | `remote network local\|tailscale\|both` | Who can reach the server; Tailscale is set up for you (server must be running) |
 | `remote check` | Check each step a phone needs to reach the server, with fixes |
+| `remote remove-root <id>\|mode lan\|tailscale\|both\|tailscale-connect\|tailscale-disconnect\|tailscale-review\|tailscale-takeover <token>\|tailscale-reconcile` | Advanced: remove an approved folder, set the listeners directly, and manage Aiden's Tailscale Serve route (server must be running) |
 | `apps list\|connect <name> [--access read\|supervised]\|revoke <id>\|on\|off` | Outside apps (Claude Code, Codex) on the local `/mcp` endpoint (server must be running) |
 | `auth list\|login\|logout` | Provider credentials (OAuth or API key) |
 | `workspace list\|add\|remove\|access\|scratch` | Workspace registry and tool access tiers |
@@ -210,7 +211,7 @@ The desktop's per-workspace skill and connector switches (Workspace settings) ar
 | `catalog refresh\|models-dev fetch\|models-dev status` | Inference catalog refresh; models.dev is an explicit display-only fetch |
 | `insights aa\|openrouter show\|fetch\|disconnect` | Benchmark data, fetched only on request |
 | `web-search show\|import <settings.json>` | Web Search provider routing; keys from environment variables |
-| `schedule list\|save\|preview\|status\|runs\|notifications\|run\|pause\|resume\|remove` | Scheduled tasks |
+| `schedule list\|status\|save <file>\|preview <cron> [timezone]\|runs\|notifications [since-ms]\|run\|pause\|resume\|remove <id>` | Scheduled tasks; extra arguments are refused |
 | `bots …`, `bots enable-durable` | Bot administration (server must be running) |
 | `hooks list\|approve <id> <digest>\|disable <id>\|enable <id>\|pause\|resume\|test <id> <digest>` | Hooks: list, approve, switch off or test (macOS and Linux) |
 | `telegram status\|connect\|configure <file>\|disable\|disconnect` | Telegram bridge |
@@ -223,7 +224,7 @@ The desktop's per-workspace skill and connector switches (Workspace settings) ar
 
 Notes:
 
-- `import` copies a desktop journal or `.aiden-chat.json` export into a new journal; never point the desktop and the server at the same writable journal.
+- `import` copies a desktop journal or `.aiden-chat.json` export into a new local session under `sessions/`, which `search` finds and `export` can write out again. Paired apps list the server's own chats, not these sessions. Never point the desktop and the server at the same writable journal.
 - `git`, `files` and `worktree` use the shared workspace and Git services; managed removal uses the bundled native helper.
 - `speech download`, `select`, `delete` and `transcribe` are explicit actions. Optional `sherpa-onnx-node` runs in a worker. Setup and ordinary status reads never download weights.
 - `app set` takes the revision returned by `app get`; retry an uncertain request with the same operation ID. Agent tool calls on the server cannot change app preferences. `appControlPolicy` in `aiden.json` (`disabled`, `ask` or `safe`) limits app controls further.
@@ -285,7 +286,7 @@ packages/cli/
 
 From this directory, after the root install: `npm install && npm run build`. `npm test` builds nothing; run `npm run build` first, because the tests exercise the built bundle. From the repository root, `npm run test:cli` installs, builds and tests in one step.
 
-History: the CLI started as a rebranded Pi terminal app ([`docs/plans/aiden-cli-plan.md`](../../docs/plans/aiden-cli-plan.md), [parity checklist](../../docs/plans/aiden-cli-parity-checklist.md)) and became serve-only on 2026-10-30 ([`docs/plans/aiden-serve-only-cli.md`](../../docs/plans/aiden-serve-only-cli.md)).
+History: the CLI started as a rebranded Pi terminal app ([`docs/plans/aiden-cli-plan.md`](../../docs/plans/aiden-cli-plan.md), [parity checklist](../../docs/plans/aiden-cli-parity-checklist.md)) and became serve-only on 2026-10-30 ([`docs/plans/completed/aiden-serve-only-cli.md`](../../docs/plans/completed/aiden-serve-only-cli.md)).
 
 The optional Open work management API is currently wired by the Electron desktop host, not `aiden serve`. The CLI does not advertise `bot:open-work`; paired clients keep that management surface unavailable for this host. The shared runtime’s request-scoped Stop and evidence helpers remain portable. See [Open work](../../docs/bot-open-work.md).
 
