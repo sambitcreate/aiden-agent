@@ -44,3 +44,14 @@ export function daemonSettingsManager(cwd: string, agentDir: string, warming: Da
   settings.getTransport = () => transport;
   return settings;
 }
+
+/**
+ * The settings a helper agent's worker process reads: a daemon session's,
+ * never warming, with Codex on SSE. The worker is a short-lived child, like
+ * the desktop's isolated dispatch, so it keeps no socket between requests.
+ */
+export function subagentWorkerSettingsManager(cwd: string, agentDir: string): SettingsManager {
+  const settings = daemonSettingsManager(cwd, agentDir, { attended: false });
+  settings.getTransport = () => "sse";
+  return settings;
+}

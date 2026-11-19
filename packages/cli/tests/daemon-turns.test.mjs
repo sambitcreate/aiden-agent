@@ -996,6 +996,11 @@ test("a server session sends Codex requests over a WebSocket unless SSE is asked
   assert.equal(api.daemonSettingsManager(dir, dir, { attended: true }).getTransport(), "sse");
   process.env.NO_PROXY = "chatgpt.com";
   assert.equal(api.daemonSettingsManager(dir, dir, { attended: true }).getTransport(), "websocket");
+  // A helper agent's worker is a short-lived child process: SSE, whatever settings.json asks.
+  api.atomicJson(join(dir, "settings.json"), { transport: "websocket-cached", cacheWarming: "streaming" });
+  const worker = api.subagentWorkerSettingsManager(dir, dir);
+  assert.equal(worker.getTransport(), "sse");
+  assert.equal(worker.getCacheWarmingMode(), "off");
 });
 
 /** A reply whose usage reports `promptTokens`, so the turn ends past the compaction threshold. */
