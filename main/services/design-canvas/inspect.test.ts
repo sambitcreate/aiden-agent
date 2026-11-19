@@ -315,6 +315,21 @@ test("tweak controls the page never reads, and tweak names the frame sets that n
   assert.match(findings[1]!, /sets the tweak "--accnet", which no control declares and nothing on the page reads/u);
 });
 
+test("a pad is checked on each axis and an action button, which sets nothing, never is", () => {
+  const axis = (name: string, label: string) => ({ label, target: { var: name }, min: 0, max: 10, step: 1, unit: "px", default: 0 });
+  const findings = designInspectFindings(quiet({ tweaksRead: ["--shadow-x"] }), {
+    ...context,
+    controls: [
+      { id: "shadow", label: "Shadow", type: "pad", x: axis("--shadow-x", "X"), y: axis("--shadow-y", "Y") },
+      { id: "replay", label: "Replay", type: "action" },
+    ],
+    // A value for a pad's axis is declared by that pad.
+    frameTweaks: { "--shadow-y": "4px" },
+  });
+  assert.equal(findings.length, 1, findings.join("\n"));
+  assert.match(findings[0]!, /"Shadow" sets "--shadow-y", but nothing on the page reads it/u);
+});
+
 test("a dark frame whose page never reads data-theme is told it only changes the browser's colours", () => {
   assert.equal(designInspectFindings(quiet({ readsTheme: true }), { ...context, dark: true }).length, 0);
   const findings = designInspectFindings(quiet({ readsTheme: false }), { ...context, dark: true });
@@ -359,6 +374,12 @@ test("the in-page probe finds the tweak names a page's styles and scripts read, 
   literal.document.write("<!doctype html><html><head><style>.a { color: var(--axb) } [data-q] { gap: 1px }</style></head><body></body></html>");
   const literalSeen = literal.eval(designInspectProbeScript(["--a.b", "data-q", "data-(", "--x[", "--axb"], 1280)) as { tweaksRead: string[] };
   assert.deepEqual([...literalSeen.tweaksRead].sort(), ["--axb", "data-q"]);
+
+  // A text control's words fill the elements marked with its name, so a page that marks one reads it.
+  const words = new Window({ url: "aiden-design://grant-1/design/words.html" });
+  words.document.write('<!doctype html><html><head></head><body><h1 data-aiden-text="headline">Hi</h1></body></html>');
+  const wordsSeen = words.eval(designInspectProbeScript(["data-headline", "data-cta"], 1280)) as { tweaksRead: string[] };
+  assert.deepEqual([...wordsSeen.tweaksRead], ["data-headline"]);
 
   for (const css of ["html { overflow-x: hidden }", "body { overflow-x: clip }"]) {
     const clipped = new Window({ url: "aiden-design://grant-1/design/clipped.html" });

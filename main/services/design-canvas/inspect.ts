@@ -25,6 +25,7 @@ import type { DesignFrame } from "../../../renderer/shared/design-canvas/schema.
 import {
   DESIGN_TWEAK_LIMITS,
   designTweakState,
+  designTweakTargets,
   extractDesignTweakControls,
   tweakTargetName,
   withDesignTweakQuery,
@@ -288,12 +289,13 @@ export function designInspectFindings(probe: DesignInspectProbe, context: Design
   }
   const read = new Set(probe.tweaksRead);
   for (const control of context.controls) {
-    const name = tweakTargetName(control.target);
-    if (!read.has(name)) {
-      findings.push(`The tweak control ${quoted(control.label)} sets ${JSON.stringify(name)}, but nothing on the page reads it, so moving it changes nothing.`);
+    for (const name of controlTargetNames(control)) {
+      if (!read.has(name)) {
+        findings.push(`The tweak control ${quoted(control.label)} sets ${JSON.stringify(name)}, but nothing on the page reads it, so moving it changes nothing.`);
+      }
     }
   }
-  const declared = new Set(context.controls.map((control) => tweakTargetName(control.target)));
+  const declared = new Set(context.controls.flatMap(controlTargetNames));
   for (const name of Object.keys(context.frameTweaks ?? {})) {
     if (declared.has(name) || read.has(name)) continue;
     findings.push(`The frame sets the tweak ${JSON.stringify(name)}, which no control declares and nothing on the page reads, so it does nothing. Check its spelling against the page.`);
@@ -304,6 +306,11 @@ export function designInspectFindings(probe: DesignInspectProbe, context: Design
     );
   }
   return findings;
+}
+
+/** The names a control sets: one, two for a pad, none for an action button. */
+function controlTargetNames(control: DesignTweakControl): string[] {
+  return designTweakTargets(control).map(tweakTargetName);
 }
 
 /** Where the picture starts and how tall it is, in CSS pixels, for a page this wide and tall. */
@@ -339,7 +346,7 @@ export async function designPageTweakNames(workspaceRoot: string, relativePath: 
   const resolved = await resolveDesignFile(workspaceRoot, relativePath.split("/").map(encodeURIComponent).join("/"));
   if (!resolved.ok) return null;
   const controls = await readDesignTweakControls(resolved);
-  return controls ? [...new Set(controls.map((control) => tweakTargetName(control.target)))] : null;
+  return controls ? [...new Set(controls.flatMap(controlTargetNames))] : null;
 }
 
 export type InspectDesignPageInput = {
@@ -368,7 +375,7 @@ export async function inspectDesignPage(input: InspectDesignPageInput): Promise<
   const width = designExportWidth({ kind: "file", designWidth: frame.designWidth, w: frame.w });
   const state = designTweakState(frame);
   const frameTweaks = { ...state.vars, ...state.attrs };
-  const targets = [...new Set([...controls.map((control) => tweakTargetName(control.target)), ...Object.keys(frameTweaks)])];
+  const targets = [...new Set([...controls.flatMap(controlTargetNames), ...Object.keys(frameTweaks)])];
   const probe = await input.render({
     url: withDesignTweakQuery(input.pageUrl(frame.path), state),
     width,
@@ -379,9 +386,11 @@ export async function inspectDesignPage(input: InspectDesignPageInput): Promise<
   const findings = designInspectFindings(probe, { path: frame.path, width, controls, frameTweaks, dark: state.dark });
   const look = [state.dark ? "dark" : "", Object.keys(frameTweaks).length > 0 ? "with the frame's tweaks" : ""].filter(Boolean).join(", ");
   const lines = [`Inspected ${frame.path} at ${width}px wide${look ? ` (${look})` : ""}: the page is ${probe.height}px tall.`];
-  if (controls.length > 0) {
-    const working = controls.filter((control) => probe.tweaksRead.includes(tweakTargetName(control.target))).length;
-    lines.push(`Tweak controls: ${working} of ${controls.length} read by the page.`);
+  // An action button sets nothing, so only controls that set a value are counted.
+  const setting = controls.filter((control) => controlTargetNames(control).length > 0);
+  if (setting.length > 0) {
+    const working = setting.filter((control) => controlTargetNames(control).every((name) => probe.tweaksRead.includes(name))).length;
+    lines.push(`Tweak controls: ${working} of ${setting.length} read by the page.`);
   }
   if (probe.picture) {
     const end = probe.picture.top + probe.picture.height;
@@ -468,6 +477,8 @@ export function designInspectProbeScript(targets: readonly string[], width: numb
     if (type === "application/aiden-tweaks" || type === "application/json" || type === "application/ld+json") continue;
     scripts += (script.textContent || "") + "\\n";
   }
+  // A text control's words fill the elements marked data-aiden-text="<name without data->", so those read it too.
+  const textMarks = new Set(Array.from(document.querySelectorAll("[data-aiden-text]")).slice(0, 5000).map((element) => element.getAttribute("data-aiden-text")));
   const after = "(?![A-Za-z0-9_-])";
   // Names are checked before they get here; escaped all the same, so none can change what a pattern means.
   const literal = (text) => text.replace(/[.*+?^$|()[\\]{}\\\\]/g, "\\\\$&");
@@ -479,6 +490,7 @@ export function designInspectProbeScript(targets: readonly string[], width: numb
       const bare = target.slice(5);
       const camel = bare.replace(/-([a-z0-9])/g, (_match, letter) => letter.toUpperCase());
       if (
+        textMarks.has(name.slice(5)) ||
         new RegExp("\\\\[\\\\s*" + target + after).test(styles) ||
         new RegExp("attr\\\\(\\\\s*" + target + after).test(styles) ||
         new RegExp("['\\"\`\\\\[]\\\\s*" + target + after).test(scripts) ||
