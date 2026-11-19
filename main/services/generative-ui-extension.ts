@@ -15,6 +15,7 @@ import {
   MAX_HTML_ARTIFACT_TITLE_CHARS,
 } from "../../renderer/shared/generative-ui.js";
 import type { PiAgentRuntimeExtension } from "./pi-agent-runtime-harness.js";
+import type { GenerativeUiArtifactRecoveryChat, GenerativeUiArtifactStore } from "./generative-ui-artifact-store.js";
 import { declarePiRuntimeReplay } from "./pi-runtime-tool.js";
 import {
   htmlArtifactByteLength,
@@ -103,6 +104,44 @@ export function generativeUiUnavailableReason(
 ): string | undefined {
   if (!turn.onRequest || turn.visualize || !ON_REQUEST_DRAWING_TOOLS.has(name)) return undefined;
   return `${name} is not available in this turn: inline visuals are set to On request and this message did not use /visualize. Answer in text; the person can send /visualize to ask for a visual.`;
+}
+
+/** The staging store calls a turn makes before it may draw. */
+export type GenerativeUiTurnStore = Pick<GenerativeUiArtifactStore, "availability" | "usageByChat" | "reconcilePersisted">;
+
+/**
+ * Checks the chat's staged visuals before a turn. A turn that may draw fails
+ * when staging is unreadable or a staged visual could not be recovered, so it
+ * never draws over a broken store. With inline visuals On request, a turn
+ * without /visualize refuses the drawing tools anyway, so it reports the
+ * problem instead of failing and the plain reply still runs.
+ */
+export async function prepareGenerativeUiTurnStore(
+  store: GenerativeUiTurnStore,
+  chat: GenerativeUiArtifactRecoveryChat,
+  turn: { onRequest: boolean; visualize: boolean },
+): Promise<{ pending: { bytes: number; count: number }; unavailableReason?: string }> {
+  const mayDraw = !turn.onRequest || turn.visualize;
+  const availability = store.availability();
+  if (!availability.available) {
+    const reason = `${availability.reason} Open Aiden's developer log to locate the staging file that needs repair.`;
+    if (mayDraw) throw new Error(reason);
+    return { pending: { bytes: 0, count: 0 }, unavailableReason: reason };
+  }
+  if ((await store.usageByChat(chat.id)).count > 0) {
+    try {
+      await store.reconcilePersisted(chat);
+    } catch (error) {
+      if (mayDraw) throw error;
+    }
+  }
+  const pending = await store.usageByChat(chat.id);
+  if (pending.count > 0) {
+    const reason = "A previous visual artifact could not be recovered. Delete this chat to discard it before continuing.";
+    if (mayDraw) throw new Error(reason);
+    return { pending, unavailableReason: reason };
+  }
+  return { pending };
 }
 
 export interface GenerativeUiExtensionOptions {

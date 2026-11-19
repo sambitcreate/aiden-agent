@@ -8,8 +8,10 @@ import {
   GENERATIVE_UI_EXTENSION_ID,
   GENERATIVE_UI_TOOL_NAME,
   generativeUiUnavailableReason,
+  prepareGenerativeUiTurnStore,
   shouldEnableGenerativeUiExtension,
 } from "./generative-ui-extension.js";
+import { GenerativeUiArtifactStore } from "./generative-ui-artifact-store.js";
 import { piRuntimeReplayPolicy } from "./pi-runtime-tool.js";
 import { remoteGenerationSurface } from "./conversation-surface-generation.js";
 import type { InlineVisualsMode } from "../../renderer/shared/appearance.js";
@@ -129,6 +131,49 @@ test("On request declares the same drawing tools with or without /visualize and 
   });
   await allowed.tools?.find((tool) => tool.name === GENERATIVE_UI_TOOL_NAME)!.execute("c3", { title: "Shown", html: "<p>x</p>" });
   assert.deepEqual(drawn, ["Shown"]);
+});
+
+test("an On request chat with broken staging still answers a plain turn and refuses to draw", async () => {
+  const root = await workspace();
+  const file = path.join(root, "generative-ui-artifacts.json");
+  await fs.writeFile(file, "{", "utf8");
+  const store = new GenerativeUiArtifactStore({ root: () => root });
+  await store.initialize();
+  const chat = { id: "chat-1", messages: [] };
+
+  const plain = await prepareGenerativeUiTurnStore(store, chat, { onRequest: true, visualize: false });
+  assert.match(plain.unavailableReason ?? "", /unreadable.*needs repair/su);
+  const extension = createGenerativeUiExtension({ onArtifact: () => undefined, onRequest: true, preferArtifactThisTurn: false });
+  await assert.rejects(
+    extension.tools!.find((tool) => tool.name === GENERATIVE_UI_TOOL_NAME)!.execute("c1", { title: "T", html: "<p>x</p>" }),
+    /not available in this turn/u,
+  );
+
+  // A turn that may draw still fails before drawing over a broken store.
+  await assert.rejects(prepareGenerativeUiTurnStore(store, chat, { onRequest: true, visualize: true }), /needs repair/u);
+  await assert.rejects(prepareGenerativeUiTurnStore(store, chat, { onRequest: false, visualize: false }), /needs repair/u);
+  assert.equal(await fs.readFile(file, "utf8"), "{");
+});
+
+test("an On request chat with an unrecovered visual still answers a plain turn", async () => {
+  const root = await workspace();
+  const store = new GenerativeUiArtifactStore({ root: () => root });
+  await store.initialize();
+  const staged: ChatHtmlArtifactV1 = {
+    version: 1, kind: "html", id: "media-1", title: "Chart", mimeType: "text/html", size: 12, mediaId: "media-1",
+  };
+  await store.stage({ chatId: "chat-1", generationId: "gen-1", artifact: staged, html: "<p>hello</p>" });
+  const orphaned = { id: "chat-1", messages: [] };
+
+  const plain = await prepareGenerativeUiTurnStore(store, orphaned, { onRequest: true, visualize: false });
+  assert.equal(plain.pending.count, 1);
+  assert.match(plain.unavailableReason ?? "", /could not be recovered/u);
+  await assert.rejects(prepareGenerativeUiTurnStore(store, orphaned, { onRequest: true, visualize: true }), /could not be recovered/u);
+
+  // Once the chat holds the visual, reconcile commits it and drawing is allowed.
+  const persisted = { id: "chat-1", messages: [{ role: "assistant", htmlArtifacts: [staged] }] };
+  const visualize = await prepareGenerativeUiTurnStore(store, persisted, { onRequest: true, visualize: true });
+  assert.deepEqual(visualize, { pending: { bytes: 0, count: 0 } });
 });
 
 test("the turn refusal names the On request condition only for the drawing tools", () => {

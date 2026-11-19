@@ -486,6 +486,7 @@ import {
   createGenerativeUiExtensionRuntime,
   displayedAssistantHtmlUsage,
   GENERATIVE_UI_TOOL_NAME,
+  prepareGenerativeUiTurnStore,
   shouldEnableGenerativeUiExtension,
 } from "./generative-ui-extension.js";
 import { chatToolOffers, chatTurnToolRefusal, type ChatToolSurface, type ChatTurnAudience } from "./chat-turn-tool-policy.js";
@@ -2366,27 +2367,18 @@ async function prepareGeneration(
       inlineVisuals: params.inlineVisuals,
     })
   ) {
-    const htmlStoreAvailability = generativeUiArtifactStore.availability();
-    if (!htmlStoreAvailability.available) {
-      throw new Error(
-        `${htmlStoreAvailability.reason} Open Aiden's developer log to locate the staging file that needs repair.`,
-      );
-    }
-    const existingHtmlUsage = displayedAssistantHtmlUsage(chat.messages);
-    const pendingHtmlUsage = await generativeUiArtifactStore.usageByChat(params.chatId);
-    if (pendingHtmlUsage.count > 0) {
-      await generativeUiArtifactStore.reconcilePersisted({
-        id: params.chatId,
-        messages: chat.messages,
-      });
-    }
-    const pendingHtmlAfterReconcile = await generativeUiArtifactStore.usageByChat(params.chatId);
-    if (pendingHtmlAfterReconcile.count > 0) {
-      throw new Error(
-        "A previous visual artifact could not be recovered. Delete this chat to discard it before continuing.",
-      );
-    }
+    // A turn that may draw fails on broken staging; an On request turn
+    // without /visualize refuses the drawing tools, so its plain reply runs.
     const visualize = params.visualize === true;
+    const existingHtmlUsage = displayedAssistantHtmlUsage(chat.messages);
+    const { pending: pendingHtmlAfterReconcile, unavailableReason: htmlStoreProblem } = await prepareGenerativeUiTurnStore(
+      generativeUiArtifactStore,
+      { id: params.chatId, messages: chat.messages },
+      { onRequest: params.inlineVisuals === "on_request", visualize },
+    );
+    if (htmlStoreProblem) {
+      logger.warn("pi", `Inline visual staging needs repair; stream ${streamId} answers without drawing. ${htmlStoreProblem}`);
+    }
     const generativeUiRuntime = createGenerativeUiExtensionRuntime({
       // Inline HTML works in every chat; reading a workspace .html file
       // additionally needs a workspace with file access.
