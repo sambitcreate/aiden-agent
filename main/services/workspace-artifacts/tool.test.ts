@@ -212,6 +212,7 @@ test("under Ask, a save that would fail shows no card and fails with its reason,
     [{ operation: "update", id: "art1", sources: wider, edits: [{ old: "not in the page", new: "x" }] }, /was not found/u],
     [{ operation: "update", id: "art1", sources: wider, baseVersion: 9 }, /has no revision 9/u],
     [{ operation: "update", id: "art1", sources: wider, refresh: { intervalSeconds: 5 } }, /intervalSeconds/u],
+    [{ operation: "update", id: "art1", sources: wider, markup: `${PAGE}${" ".repeat(400_001)}` }, /over the 400,000-character limit/u],
   ];
   for (const [args, reason] of doomed) {
     assert.equal((await workspaceArtifactCallApproval(args, options)).required, false, JSON.stringify(args));

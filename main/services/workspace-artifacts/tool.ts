@@ -181,7 +181,7 @@ function describeDiagnostics(diagnostics: readonly AidenUiDiagnostic[]): string 
 
 function compilePage(markup: unknown, layout: unknown, title: string): { visual: ChatUiVisualV1; diagnostics: AidenUiDiagnostic[] } {
   if (typeof markup !== "string" || !markup.trim()) throw new Error("markup is required: Aiden UI Markup starting with <Visual title=\"…\">.");
-  if (markup.length > MAX_MARKUP_CHARS) throw new Error("markup is too long.");
+  if (markup.length > MAX_MARKUP_CHARS) throw new Error(`markup is ${markup.length.toLocaleString("en-US")} characters, over the ${MAX_MARKUP_CHARS.toLocaleString("en-US")}-character limit: split the page or drop repeated content, and send edits rather than the whole page when changing it.`);
   if (layout !== undefined && layout !== "column" && layout !== "wide") throw new Error('layout must be "column" or "wide".');
   const compiled = compileAum(markup, { artifactActions: true });
   if (!compiled.tree) throw new Error(`The markup produced no page.${describeDiagnostics(compiled.diagnostics)}`);
