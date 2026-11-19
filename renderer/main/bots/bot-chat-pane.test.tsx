@@ -2323,6 +2323,43 @@ test("a pile-up waits in one Needs-you slot: take control first, then each ask c
   assert.ok(within(slot()).getByRole("group", { name: "Planner needs you" }));
 });
 
+test("an open issue waits in the Needs-you slot and its action goes to the host; once settled it leaves no trace in the chat", async () => {
+  const issue = {
+    id: "issue-1", botId: "bot-1", kind: "routine_paused", dedupeKey: "routine:r1", title: "Morning brief is paused",
+    body: "It failed three times in a row.", routineId: "r1", actions: [{ kind: "resume_routine", routineId: "r1" }], createdAt: 1,
+  } as const;
+  const old = { ...issue, id: "issue-0", dedupeKey: "stall", kind: "run_stalled" as const, title: "Still working?" };
+  const calls = await mountChat({
+    "bots:live:subscribe": () => snapshot({
+      entries: [
+        userEntry("u1", "Plan my day"),
+        { id: "e0", type: "issue", issue: { ...old, actions: [] }, status: "fixed", at: 1 },
+        assistantEntry("a1", "Here is your plan."),
+        { id: "e1", type: "issue", issue: { ...issue, actions: [...issue.actions] }, status: "open", at: 2 },
+      ],
+    }),
+    "bots:issues:act": () => ({ result: "done" }),
+  });
+  const slot = () => document.querySelector("[data-needs-you-slot]") as HTMLElement;
+  const card = await within(slot()).findByRole("group", { name: "Morning brief is paused" });
+  assert.ok(screen.getByText("Here is your plan."));
+  assert.equal(screen.queryByText("Still working?"), null, "a settled issue leaves no card behind");
+  const composer = document.querySelector("textarea")!;
+  assert.ok(slot().compareDocumentPosition(composer) & Node.DOCUMENT_POSITION_FOLLOWING, "the open issue sits above the composer");
+  fireEvent.click(within(card).getByRole("button", { name: "Resume routine" }));
+  await waitFor(() => assert.equal(calls.filter((call) => call.channel === "bots:issues:act").length, 1));
+  assert.deepEqual(calls.find((call) => call.channel === "bots:issues:act")!.args, [
+    { botId: "bot-1", issueId: "issue-1", action: { kind: "resume_routine", routineId: "r1" } },
+  ]);
+  // The host settles it: the card leaves the slot and the chat keeps no trace.
+  act(() => emitBotTestNotification("bots:live:event", {
+    botId: "bot-1", epoch: "epoch-1", seq: 1, type: "entry",
+    entry: { id: "e1", type: "issue", issue: { ...issue, actions: [...issue.actions] }, status: "fixed", at: 3 },
+  }));
+  await waitFor(() => assert.equal(screen.queryByText("Morning brief is paused"), null));
+  assert.ok(screen.getByText("Here is your plan."));
+});
+
 test("a hand-off that arrives while a question is half answered waits behind it: the question and its draft stay on show", async () => {
   await mountChat({
     "bots:live:subscribe": () => snapshot({

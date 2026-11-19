@@ -5,7 +5,8 @@ import { registerBotAllowedHandlers, registerBotApprovalDecisionHandler } from "
 import { botPlans } from "../services/bot-plans/plans-main.js";
 import { answerBotAccessRequest } from "../services/bot-runtime/bot-access-requests-main.js";
 import { publicBotApprovalPrompt } from "../services/bot-runtime/bot-approvals.js";
-import { ipcMain, logger } from "../platform.js";
+import { BrowserWindow, ipcMain, logger, powerMonitor } from "../platform.js";
+import { setBotChatInFrontProbe } from "../services/bot-delivery/in-front.js";
 import { chatStore } from "../services/chat-store.js";
 import { botApplicationService } from "../services/bot-application-service-main.js";
 import { configStore } from "../services/config-store.js";
@@ -114,6 +115,9 @@ async function removeBotPhoto(botId: string): Promise<void> {
   });
 }
 
+/** Idle this long and the person counts as away, even with a Bot's chat focused. */
+const BOT_CHAT_AWAY_IDLE_SECONDS = 120;
+
 export function registerBotHandlers(): void {
   const desktopAudienceId = BOT_DESKTOP_AUDIENCE_ID;
   registerBotAccessHandlers<Electron.IpcMainInvokeEvent>({
@@ -218,7 +222,7 @@ export function registerBotHandlers(): void {
     await removeBotPhoto(botId);
     ipcMain.broadcast("bots:changed", { botId });
   });
-  registerBotLiveHandlers<Electron.IpcMainInvokeEvent>({
+  const botLive = registerBotLiveHandlers<Electron.IpcMainInvokeEvent>({
     handle: (channel, handler) => ipcMain.handle(channel, handler),
     owner: (event) => {
       const owner = rendererDocumentOwner(event, () => new Error("Bot chats require the active application document."));
@@ -227,11 +231,20 @@ export function registerBotHandlers(): void {
         isDestroyed: owner.isDestroyed,
         onInvalidated: owner.onInvalidated,
         send: (channel, payload) => owner.send(channel, payload),
+        // Focused, on screen, and someone used the Mac in the last two minutes.
+        inFront: () => {
+          const focused = BrowserWindow.getFocusedWindow();
+          if (!focused || focused.isDestroyed() || focused.webContents.id !== owner.id) return false;
+          if (!focused.isVisible() || focused.isMinimized()) return false;
+          return powerMonitor.getSystemIdleState(BOT_CHAT_AWAY_IDLE_SECONDS) === "active";
+        },
       };
     },
     projection: botLiveProjection,
     parseBotId,
   });
+  // A Bot message that arrives while its chat is in front of the person pings nothing.
+  setBotChatInFrontProbe((botId) => botLive.shownInFront(botId));
   // Bot tool approvals: any desktop window may answer; the first answer wins.
   registerBotApprovalDecisionHandler({ handle: (channel, handler) => ipcMain.handle(channel, handler), approvals: botApprovals });
   registerBotAllowedHandlers({

@@ -11,6 +11,8 @@ export interface AppCapabilities {
   botComputers: boolean;
   /** Settings → Hooks (macOS and Linux). */
   hooks: boolean;
+  /** Aiden's own MCP server for outside apps such as Claude Code and Codex. */
+  mcpServer: boolean;
   dockIcon: boolean;
   /** A Needs you count on the app icon (Dock on macOS, launcher on Linux). */
   badgeCount: boolean;
@@ -37,6 +39,7 @@ export const DISABLED_APP_CAPABILITIES: AppCapabilities = Object.freeze({
   computerUse: false,
   botComputers: false,
   hooks: false,
+  mcpServer: false,
   dockIcon: false,
   badgeCount: false,
   accessibilityPaste: false,
@@ -66,6 +69,7 @@ export function parseAppCapabilities(value: unknown): AppCapabilities {
     computerUse: record.computerUse === true,
     botComputers: record.botComputers === true,
     hooks: record.hooks === true,
+    mcpServer: record.mcpServer === true,
     dockIcon: record.dockIcon === true,
     badgeCount: record.badgeCount === true,
     accessibilityPaste: record.accessibilityPaste === true,

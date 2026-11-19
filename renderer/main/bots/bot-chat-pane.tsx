@@ -722,7 +722,6 @@ export function TranscriptEntries({
   onRespondToSkill,
   onRespondToLesson,
   onUndoLearning,
-  onActOnIssue,
   onUndoSettings,
   wakeUpPending,
   onCancelWakeUp,
@@ -757,7 +756,6 @@ export function TranscriptEntries({
   /** A new link for a link routine a card added; the old one stops working. */
   onNewRoutineLink?(routineId: string): Promise<string | null>;
   /** One action on a "Needs you" issue card. */
-  onActOnIssue?(issueId: string, action: BotIssueAction): Promise<void>;
   /** Undo on a "Settings updated" receipt; resolves to its settled status. */
   onUndoSettings?(changeId: string): Promise<BotSettingsChangeStatus>;
   /** Keep or decline a lesson from a routine's runs. */
@@ -985,19 +983,24 @@ export function TranscriptEntries({
                 onUndo={onUndoSettings ? () => onUndoSettings(row.change.changeId) : () => Promise.reject(new Error("Undo isn’t available here."))}
               />
             );
-          case "issue":
-            return onActOnIssue ? (
-              <BotIssueCard
-                key={row.id}
-                issue={row.issue}
-                status={row.status}
-                onAct={(action) => onActOnIssue(row.issue.id, action)}
-              />
-            ) : null;
         }
       })}
     </>
   );
+}
+
+/**
+ * When the live chat last moved: any new event (an entry, a step, a state) or
+ * streamed text. The status line uses it to say a turn is taking longer than
+ * usual, which is all the person hears about a quiet run. The host sends no
+ * progress time, so a chat opened mid-run counts from when it opened.
+ */
+function useLastProgressAt(seq: number, partial: string | null): number {
+  const [at, setAt] = React.useState(() => Date.now());
+  React.useEffect(() => {
+    setAt(Date.now());
+  }, [seq, partial]);
+  return at;
 }
 
 /** Bubble-shaped placeholders while a chat opens. */
@@ -1063,6 +1066,7 @@ export function BotChatPane({ botId }: { botId: string }) {
   const [statusLayout, setStatusLayout] = React.useState("");
   const composerRef = React.useRef<HTMLTextAreaElement | null>(null);
   const snapshot = live.snapshot;
+  const quietSince = useLastProgressAt(snapshot?.seq ?? 0, snapshot?.partial ?? null);
   const latestSnapshot = React.useRef(snapshot);
   React.useLayoutEffect(() => { latestSnapshot.current = snapshot; }, [snapshot]);
   const interruptedControlLifetime = React.useRef<{ botId: string; active: boolean } | null>(null);
@@ -1792,6 +1796,18 @@ export function BotChatPane({ botId }: { botId: string }) {
       ),
     });
   }
+  // "Needs you" issues the host raised (a routine that needs a sign-in, a
+  // paused routine, a blocked run). They wait here, not in the transcript,
+  // and leave once settled.
+  for (const entry of snapshot.entries) {
+    if (entry.type !== "issue" || entry.status !== "open") continue;
+    const issue = entry.issue;
+    slotItems.push({
+      key: `issue:${issue.id}`,
+      kind: "issue",
+      render: () => <BotIssueCard key={issue.id} issue={issue} onAct={(action) => actOnIssue(issue.id, action)} />,
+    });
+  }
   if (question) {
     slotItems.push({ key: `question:${question.waitId}`, kind: "question" });
   }
@@ -1967,7 +1983,6 @@ export function BotChatPane({ botId }: { botId: string }) {
               throw new Error(result.code);
             }
           }}
-          onActOnIssue={actOnIssue}
           onUndoSettings={(changeId) => respondToSettings(changeId, "undo")}
         />
         {shownSends.map((send) => {
@@ -1985,7 +2000,7 @@ export function BotChatPane({ botId }: { botId: string }) {
       </MessageAttachmentPreviewProvider>
       <BotStatusAnnouncer text={statusActivity ? botStatusSpeech(statusActivity, chatActivity.wording) : ""} />
       {statusActivity ? (
-        <BotStatusLine activity={statusActivity} wording={chatActivity.wording} onLayoutChange={setStatusLayout} />
+        <BotStatusLine activity={statusActivity} wording={chatActivity.wording} quietSince={quietSince} onLayoutChange={setStatusLayout} />
       ) : null}
       {/* The one status slot (§4.7): only the most important status card shows. */}
       {status === "usage_limit" && usageLimitWait ? (

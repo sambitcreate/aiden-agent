@@ -1,8 +1,8 @@
 // The Bot's `update_bot` tool (plan §4.6). See `service.ts`.
 
-import { Type } from "@earendil-works/pi-ai";
+import { Type } from "typebox";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
-import type { JsonValue } from "@earendil-works/chord";
+import type { JsonValue } from "@earendil-works/chord/json";
 import {
   BOT_AVATAR_COLORS,
   BOT_AVATAR_SHAPES,

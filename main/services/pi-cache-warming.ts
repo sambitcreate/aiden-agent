@@ -203,6 +203,8 @@ export class PiCacheWarmer {
       const message = await runtime.streams.streamSimple(runtime.model, context, {
         ...run.options, apiKey: runtime.apiKey, headers: runtime.headers,
         maxTokens: 1, maxRetries: 0, timeoutMs: 30_000, signal: run.controller.signal,
+        // A replay must not use or replace the real conversation's server-side continuation state.
+        disableContinuation: true,
       }).result();
       // Account provider usage even when cancellation races a completed response.
       await this.deps.recordUsage(message, runtime);

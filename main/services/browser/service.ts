@@ -8,6 +8,7 @@ import {
   nativeImage,
   type Session,
 } from "electron";
+import { BrowserPrivateSession } from "./private-session.js";
 import { BrowserBackgroundThrottling } from "./background-throttling.js";
 import { PIP_FRAME_INTERVAL_MS, PIP_SCREENCAST, PipFeed } from "./pip-feed.js";
 import { randomUUID } from "node:crypto";
@@ -52,6 +53,7 @@ import {
   browserDisplayUrl,
   browserRedactPreviewUrls,
   browserPageCaptureBounds,
+  browserMeasuredViewport,
   applyBrowserGuestIdentityHeaders,
   browserGuestUserAgent,
   browserLocalServers,
@@ -98,6 +100,7 @@ import {
   type SensitiveFieldReach,
 } from "./credential-fields.js";
 import { configureBrowserPermissionHandlers } from "./permission-policy.js";
+import { loadBrowserUrl } from "./navigation-load.js";
 import { configStore } from "../config-store.js";
 import { browserRecordingBytesMatch, browserRecordingsFolder, findBrowserRecording } from "./recordings.js";
 import { browserRecordingExtension } from "../../../renderer/shared/browser-recording.js";
@@ -297,7 +300,7 @@ export class BrowserService {
   private defaults: BrowserDefaults = clone(DEFAULT_BROWSER_SETTINGS);
   private readonly workspaceAccess = new Map<string, BrowserAgentAccessOverride>();
   private loaded = false;
-  private incognitoGeneration = randomUUID();
+  private readonly privateSession = new BrowserPrivateSession(() => this.browserSession("incognito"));
   private persistence: Promise<unknown> = Promise.resolve();
 
   private storagePath(): string {
@@ -691,7 +694,7 @@ export class BrowserService {
     } else {
       const profile = this.profile(profileId);
       partition = browserPartition(
-        profile.kind === "incognito" ? `${profile.id}:${this.incognitoGeneration}` : profile.id,
+        profile.id,
         profile.kind === "incognito",
       );
     }
@@ -1009,7 +1012,7 @@ export class BrowserService {
         tab.expectedInputs.splice(index, 1);
         return true;
       }
-      tab.queue.interrupt();
+      tab.queue.interruptForHumanInput();
       return false;
     };
     wc.on("before-input-event", (event, input) => {
@@ -1181,87 +1184,99 @@ export class BrowserService {
     if (botId !== undefined) profileId = botBrowserProfileId(botId);
     else if (isBotBrowserProfileId(profileId)) throw new Error("This browser profile belongs to a Bot.");
     const normalized = browserUrl(url);
-    const browserSession = this.browserSession(profileId);
-    const view = new WebContentsView({
-      webPreferences: {
-        session: browserSession,
-        sandbox: true,
-        contextIsolation: true,
-        nodeIntegration: false,
-        nodeIntegrationInSubFrames: false,
-        webSecurity: true,
-        backgroundThrottling: true,
-      },
-    });
-    view.webContents.setUserAgent(browserSession.getUserAgent());
-    const state: BrowserTab = {
-      id: `browser-${randomUUID()}`,
-      workspaceId,
-      profileId,
-      url: browserDisplayUrl(normalized),
-      title: "New tab",
-      loading: false,
-      canGoBack: false,
-      canGoForward: false,
-      crashed: false,
-      audible: false,
-      muted: false,
-      viewport: clone(this.defaults.viewport),
-      appearance: this.defaults.appearance,
-      zoom: this.defaults.zoom,
-      recording: false,
-      agentControlling: false,
-      floating: false,
-    };
-    const tab: LiveTab = {
-      state,
-      view,
-      queue: new BrowserActionQueue(),
-      backgroundThrottling: new BrowserBackgroundThrottling(view.webContents),
-      diagnostics: [],
-      network: [],
-      timeline: [],
-      refs: new Map(),
-      referenceGeneration: 0,
-      visible: false,
-      activeHosts: 0,
-      closing: false,
-      expectedInputs: [],
-      crashTimes: [],
-      navigationSequence: 0,
-      committedNavigation: 0,
-      sensitiveFields: new SensitiveFieldMemory(),
-    };
-    this.tabs.set(state.id, tab);
-    workspace.state.tabs.push(state);
-    if (show) this.activateTab(tab);
-    view.setBounds({ x: 0, y: 0, width: state.viewport.width, height: state.viewport.height });
-    this.hide(tab);
-    this.observe(tab);
-    view.webContents.setZoomFactor(state.zoom);
-    this.emit(workspaceId);
-    if (show && !tab.state.floating) this.emit(workspaceId, { type: "show", workspaceId, tabId: state.id });
-    try { this.beginPreviewNavigation(tab, normalized); } catch (error) { this.close(tab); throw error; }
-    tab.initialLoad = view.webContents
-      .loadURL(normalized)
-      .then(() => {
-        if (!tab.closing && view.webContents.getURL() === normalized)
-          return this.applyEmulation(tab);
-      })
-      .catch((error) => {
-        if (
-          !tab.closing &&
-          !String(error).includes("ERR_ABORTED") &&
-          (view.webContents.getURL() === normalized || view.webContents.getURL() === "")
-        ) {
-          state.error = String(error);
-          this.emit(workspaceId);
-        }
-        throw error;
+    const owner = workspace.owner;
+    const open = (browserSession: Session): LiveTab => {
+      // Cleanup may have awaited while the window closed or other tabs opened.
+      if (this.workspaces.get(workspaceId) !== workspace || workspace.owner !== owner)
+        throw new Error("Open this workspace in Aiden before using its browser.");
+      this.mainWindow(workspaceId);
+      if (workspace.state.tabs.length >= BROWSER_MAX_TABS)
+        throw new Error(`Close a browser tab before opening more than ${BROWSER_MAX_TABS}.`);
+      const view = new WebContentsView({
+        webPreferences: {
+          session: browserSession,
+          sandbox: true,
+          contextIsolation: true,
+          nodeIntegration: false,
+          nodeIntegrationInSubFrames: false,
+          webSecurity: true,
+          backgroundThrottling: true,
+        },
       });
-    void tab.initialLoad.catch(() => {});
-    return tab;
+      view.webContents.setUserAgent(browserSession.getUserAgent());
+      const state: BrowserTab = {
+        id: `browser-${randomUUID()}`,
+        workspaceId,
+        profileId,
+        url: browserDisplayUrl(normalized),
+        title: "New tab",
+        loading: false,
+        canGoBack: false,
+        canGoForward: false,
+        crashed: false,
+        audible: false,
+        muted: false,
+        viewport: clone(this.defaults.viewport),
+        appearance: this.defaults.appearance,
+        zoom: this.defaults.zoom,
+        recording: false,
+        agentControlling: false,
+        floating: false,
+      };
+      const tab: LiveTab = {
+        state,
+        view,
+        queue: new BrowserActionQueue(),
+        backgroundThrottling: new BrowserBackgroundThrottling(view.webContents),
+        diagnostics: [],
+        network: [],
+        timeline: [],
+        refs: new Map(),
+        referenceGeneration: 0,
+        visible: false,
+        activeHosts: 0,
+        closing: false,
+        expectedInputs: [],
+        crashTimes: [],
+        navigationSequence: 0,
+        committedNavigation: 0,
+        sensitiveFields: new SensitiveFieldMemory(),
+      };
+      this.tabs.set(state.id, tab);
+      workspace.state.tabs.push(state);
+      if (show) this.activateTab(tab);
+      view.setBounds({ x: 0, y: 0, width: state.viewport.width, height: state.viewport.height });
+      this.hide(tab);
+      this.observe(tab);
+      view.webContents.setZoomFactor(state.zoom);
+      this.emit(workspaceId);
+      if (show && !tab.state.floating) this.emit(workspaceId, { type: "show", workspaceId, tabId: state.id });
+      try { this.beginPreviewNavigation(tab, normalized); } catch (error) { this.close(tab); throw error; }
+      tab.initialLoad = view.webContents
+        .loadURL(normalized)
+        .then(() => {
+          if (!tab.closing && view.webContents.getURL() === normalized)
+            return this.applyEmulation(tab);
+        })
+        .catch((error) => {
+          if (
+            !tab.closing &&
+            !String(error).includes("ERR_ABORTED") &&
+            (view.webContents.getURL() === normalized || view.webContents.getURL() === "")
+          ) {
+            state.error = String(error);
+            this.emit(workspaceId);
+          }
+          throw error;
+        });
+      void tab.initialLoad.catch(() => {});
+      return tab;
+    };
+    return profileId === "incognito"
+      ? this.privateSession.open(open)
+      : open(this.browserSession(profileId));
   }
+
   private detach(tab: LiveTab): void {
     if (tab.attached && !tab.attached.isDestroyed()) {
       try {
@@ -1326,10 +1341,10 @@ export class BrowserService {
       this.hide(tab);
       return;
     }
-    this.detach(tab);
     const window = this.mainWindow(tab.state.workspaceId);
+    if (tab.attached !== window) this.detach(tab);
     for (const candidate of this.tabs.values())
-      if (candidate !== tab && candidate.attached === window) this.hide(candidate);
+      if (candidate !== tab && candidate.visible && candidate.attached === window) this.hide(candidate);
     const scale = window.webContents.getZoomFactor();
     const area = window.getContentBounds();
     const b = tab.bounds;
@@ -1339,7 +1354,8 @@ export class BrowserService {
     const height = Math.max(1, Math.min(Math.round(b.height * scale), area.height - y));
     tab.view.setBounds({ x, y, width, height });
     tab.view.setVisible(true);
-    window.contentView.addChildView(tab.view);
+    // A bounds update on an already presented guest must preserve focus and its compositor.
+    if (!tab.visible || tab.attached !== window) window.contentView.addChildView(tab.view);
     tab.attached = window;
     tab.visible = true;
     tab.state.visible = true;
@@ -1383,15 +1399,7 @@ export class BrowserService {
       this.profiles.find((profile) => profile.id === tab.state.profileId)?.kind === "incognito" &&
       ![...this.tabs.values()].some((t) => t.state.profileId === tab.state.profileId)
     ) {
-      const partition = browserPartition(
-        `${tab.state.profileId}:${this.incognitoGeneration}`,
-        true,
-      );
-      const privateSession = this.sessions.get(partition);
-      this.sessions.delete(partition);
-      this.incognitoGeneration = randomUUID();
-      void privateSession?.clearStorageData().catch(() => {});
-      void privateSession?.clearCache().catch(() => {});
+      this.privateSession.clear();
     }
   }
   closeForWebContents(id: number): void {
@@ -1490,31 +1498,42 @@ export class BrowserService {
   ): Promise<any> {
     let contextId: number | undefined;
     if (isolated) {
-      if (!tab.contextId) {
+      contextId = tab.contextId;
+      if (!contextId) {
         const tree = await this.send(tab, "Page.getFrameTree", {}, signal);
+        const frame = tree.frameTree.frame;
         const world = await this.send(
           tab,
           "Page.createIsolatedWorld",
           {
-            frameId: tree.frameTree.frame.id,
+            frameId: frame.id,
             worldName: "aiden-browser",
             grantUniveralAccess: false,
           },
           signal,
         );
-        tab.contextId = world.executionContextId;
+        contextId = world.executionContextId;
+        if (typeof contextId !== "number" || !Number.isSafeInteger(contextId) || contextId <= 0)
+          throw new Error("The browser isolated context is unavailable.");
         await this.send(
           tab,
           "Runtime.evaluate",
           {
             expression: `(() => { const module = {exports:{}}; ${playwrightInjectedSource}\n globalThis.__aidenPlaywright = new (module.exports.InjectedScript())(globalThis, ${JSON.stringify(PLAYWRIGHT_OPTIONS)}); })()`,
-            contextId: tab.contextId,
+            contextId,
             returnByValue: true,
           },
           signal,
         );
+        const current = (await this.send(tab, "Page.getFrameTree", {}, signal)).frameTree.frame;
+        // Native commit events may be delivered after getFrameTree already
+        // observed that document. Compare Chromium's document identity itself.
+        if (current.id !== frame.id || current.loaderId !== frame.loaderId)
+          throw new Error("The browser page changed before isolated evaluation. Try again.");
+        // Publish only a fully initialized context for this same document.
+        // Never re-read a cache navigation may have cleared during an await.
+        tab.contextId = contextId;
       }
-      contextId = tab.contextId;
     }
     const result = await this.send(
       tab,
@@ -1560,8 +1579,10 @@ export class BrowserService {
           : [{ name: "prefers-color-scheme", value: tab.state.appearance }],
     });
     if (viewport.mode === "fill") {
-      const measured = await this.evaluate(tab, "({width:innerWidth,height:innerHeight})");
-      if (measured?.width > 0 && measured?.height > 0) {
+      const measured = browserMeasuredViewport(
+        await this.evaluate(tab, "({width:innerWidth,height:innerHeight})", undefined, true),
+      );
+      if (measured) {
         tab.state.viewport.width = measured.width;
         tab.state.viewport.height = measured.height;
       }
@@ -1618,7 +1639,10 @@ export class BrowserService {
     let captureBounds = pageBounds;
     if (bounds) {
       const region = boundedBounds(bounds);
-      const measured = await this.evaluate(tab, "({width:innerWidth,height:innerHeight})", signal);
+      const measured = browserMeasuredViewport(
+        await this.evaluate(tab, "({width:innerWidth,height:innerHeight})", signal, true),
+      );
+      if (!measured) throw new Error("The browser viewport cannot be measured safely. Try resizing the browser.");
       const scaleX = pageBounds.width / measured.width,
         scaleY = pageBounds.height / measured.height;
       captureBounds = {
@@ -1629,7 +1653,11 @@ export class BrowserService {
       };
       captureBounds.width = Math.min(captureBounds.width, pageBounds.width - captureBounds.x);
       captureBounds.height = Math.min(captureBounds.height, pageBounds.height - captureBounds.y);
-      if (captureBounds.width <= 0 || captureBounds.height <= 0)
+      if (!Object.values(captureBounds).every(Number.isSafeInteger) ||
+          captureBounds.x < 0 || captureBounds.y < 0 ||
+          captureBounds.width <= 0 || captureBounds.height <= 0 ||
+          captureBounds.x + captureBounds.width > pageBounds.width ||
+          captureBounds.y + captureBounds.height > pageBounds.height)
         throw new Error("The capture region is outside the browser viewport.");
     }
     for (let attempt = 0; attempt < 3; attempt += 1) {
@@ -1969,9 +1997,11 @@ export class BrowserService {
   private activateTab(tab: LiveTab): void {
     const workspace = this.workspace(tab.state.workspaceId);
     const previous = workspace.state.activeTabId ? this.tabs.get(workspace.state.activeTabId) : undefined;
-    if (previous && previous !== tab && previous.state.floating) {
-      this.floating(previous, false, false);
-      this.floating(tab, true, false);
+    if (previous && previous !== tab) {
+      if (previous.state.floating) {
+        this.floating(previous, false, false);
+        this.floating(tab, true, false);
+      } else if (previous.visible) this.hide(previous);
     }
     workspace.state.activeTabId = tab.state.id;
   }
@@ -2369,7 +2399,16 @@ export class BrowserService {
         signal,
       );
       if (!picked) return undefined;
-      const annotation = this.sanitizeAnnotation(picked);
+      // Page context is evidence, never the person's comment, edits or drawing.
+      // The picker runs alongside page scripts to retain framework source hints.
+      const annotation = this.sanitizeAnnotation({
+        url: browserDisplayUrl(tab.view.webContents.getURL()),
+        elements: picked.elements,
+        selectedText: picked.selectedText,
+        comment: "",
+        regions: [],
+        strokes: [],
+      });
       try {
         annotation.image = await this.capture(tab, false, undefined, signal);
       } catch {
@@ -2717,7 +2756,9 @@ export class BrowserService {
         if (command.action === "annotate" && !command.enabled && !tab.picking) break;
         if (context.source === "user" && command.action !== "present") tab.queue.interrupt();
         if (command.action === "present") {
-          this.present(tab, command.visible, command.bounds);
+          // A delayed layout report from the old tab must never cover the selected page.
+          if (!command.visible || workspace.state.activeTabId === tab.state.id)
+            this.present(tab, command.visible, command.bounds);
           break;
         }
         if (command.action === "select") {
@@ -2771,7 +2812,8 @@ export class BrowserService {
                 const navigation = { url, epoch: tab.queue.epoch, sequence: undefined as number | undefined };
                 tab.navigationCommand = navigation;
                 try {
-                  const loading = wc.loadURL(url);
+                  // Settles on this page's own load, never on a still-loading page it replaced.
+                  const loading = loadBrowserUrl(wc, url);
                   if (input.readiness === "none") void loading.catch(() => {});
                   else if (input.readiness === "domContentLoaded") {
                     void loading.catch(() => {});
@@ -3070,7 +3112,7 @@ export class BrowserService {
             tab.state.agentControlling = false;
             this.emit(workspaceId);
           }
-        }, signal);
+        }, signal, context.source);
       }
     }
     result.state = this.getState(workspaceId);

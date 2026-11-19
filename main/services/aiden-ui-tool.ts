@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
-import { Type } from "@earendil-works/pi-ai";
+import { Type } from "typebox";
 import { compileAum } from "../../renderer/shared/aiden-ui/compile.js";
 import {
   AIDEN_UI_CATALOG_VERSION,

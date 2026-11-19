@@ -1,9 +1,10 @@
 import assert from "node:assert/strict";
+import fsPromises from "node:fs/promises";
 import test from "node:test";
 import { mkdtempSync, mkdirSync, existsSync, readFileSync, writeFileSync, chmodSync, rmSync, statSync, utimesSync, renameSync, readdirSync, openSync, closeSync, ftruncateSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve, dirname } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { spawn, spawnSync } from "node:child_process";
 import { createServer } from "node:http";
 import { createServer as createNetServer, createConnection } from "node:net";
@@ -121,15 +122,15 @@ test("CLI lease reclaims null owner metadata under a free guard", (t) => {
 });
 
 test("daemon approval summaries read like the desktop's without hiding any argument", () => {
-  assert.equal(api.daemonApprovalSummary("bash", { command: "npm test" }), "Run command: npm test");
-  assert.equal(api.daemonApprovalSummary("read", { path: "src/a.ts" }), "Read file: src/a.ts");
-  assert.equal(api.daemonApprovalSummary("ls", { path: "src" }), "List folder: src");
+  assert.equal(api.daemonApprovalSummary("run_command", { command: "npm test" }), "Run command: npm test");
+  assert.equal(api.daemonApprovalSummary("read_file", { path: "src/a.ts" }), "Read file: src/a.ts");
+  assert.equal(api.daemonApprovalSummary("list_dir", { path: "src" }), "List folder: src");
   // Any other argument, tool or shape keeps the exact request.
-  assert.equal(api.daemonApprovalSummary("bash", { command: "sleep 9", timeout: 5 }), 'bash: {"command":"sleep 9","timeout":5}');
-  assert.equal(api.daemonApprovalSummary("read", { path: "a.ts", offset: 40 }), 'read: {"path":"a.ts","offset":40}');
-  assert.equal(api.daemonApprovalSummary("ls", {}), "ls: {}");
-  assert.equal(api.daemonApprovalSummary("bash", { command: "  " }), 'bash: {"command":"  "}');
-  assert.equal(api.daemonApprovalSummary("edit", { path: "a.ts", oldText: "a", newText: "b" }), 'edit: {"path":"a.ts","oldText":"a","newText":"b"}');
+  assert.equal(api.daemonApprovalSummary("run_command", { command: "sleep 9", timeout: 5 }), 'run_command: {"command":"sleep 9","timeout":5}');
+  assert.equal(api.daemonApprovalSummary("read_file", { path: "a.ts", offset: 40 }), 'read_file: {"path":"a.ts","offset":40}');
+  assert.equal(api.daemonApprovalSummary("list_dir", {}), "list_dir: {}");
+  assert.equal(api.daemonApprovalSummary("run_command", { command: "  " }), 'run_command: {"command":"  "}');
+  assert.equal(api.daemonApprovalSummary("edit_file", { path: "a.ts", oldText: "a", newText: "b" }), 'edit_file: {"path":"a.ts","oldText":"a","newText":"b"}');
 });
 
 test("portable export and context projection include only the active branch", async (t) => {
@@ -1063,6 +1064,48 @@ test("isolated subagent inference executes only parent-owned tools with immutabl
   }
 });
 
+test("an Anthropic subagent sends its whole conversation on every model round, never a message thread", async (t) => {
+  const dir = temporary(t), requests = [], headers = [], original = process.env.AIDEN_CLI_ENTRY;
+  process.env.AIDEN_CLI_ENTRY = join(pkg, "dist/app/cli.js");
+  t.after(() => { if (original === undefined) delete process.env.AIDEN_CLI_ENTRY; else process.env.AIDEN_CLI_ENTRY = original; });
+  const event = (type, data) => `event: ${type}\ndata: ${JSON.stringify({ type, ...data })}\n\n`;
+  const server = createServer(async (request, response) => {
+    let body = ""; for await (const chunk of request) body += chunk;
+    requests.push(JSON.parse(body)); headers.push(request.headers);
+    const first = requests.length === 1;
+    response.writeHead(200, { "content-type": "text/event-stream" });
+    response.write(event("message_start", { message: { id: `msg_${requests.length}`, type: "message", role: "assistant", model: "test", content: [], stop_reason: null, usage: { input_tokens: 10, output_tokens: 0 } } }));
+    if (first) {
+      response.write(event("content_block_start", { index: 0, content_block: { type: "tool_use", id: "toolu_read", name: "read_file", input: {} } }));
+      response.write(event("content_block_delta", { index: 0, delta: { type: "input_json_delta", partial_json: JSON.stringify({ path: "note.txt" }) } }));
+    } else {
+      response.write(event("content_block_start", { index: 0, content_block: { type: "text", text: "" } }));
+      response.write(event("content_block_delta", { index: 0, delta: { type: "text_delta", text: "The note says apricot" } }));
+    }
+    response.write(event("content_block_stop", { index: 0 }));
+    response.write(event("message_delta", { delta: { stop_reason: first ? "tool_use" : "end_turn" }, usage: { output_tokens: 4 } }));
+    response.end(event("message_stop", {}));
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => { server.closeAllConnections(); server.close(); });
+  // The `anthropic` provider at a path naming api.anthropic.com gets every default Pi gives Anthropic's own endpoint, message threads included.
+  api.atomicJson(join(dir, "models.json"), { providers: { anthropic: { api: "anthropic-messages", baseUrl: `http://127.0.0.1:${server.address().port}/api.anthropic.com`, apiKey: "test-only", models: [{ id: "test", name: "Test", reasoning: false, input: ["text"], contextWindow: 32000, maxTokens: 4096, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } }] } } });
+  const runtime = await api.createCliModelRuntime(dir), diagnostics = [];
+  const result = await api.runCliSubagent(dir, { runtime: { model: runtime.getModel("anthropic", "test") }, workspaceRoot: dir, permission: "ask", thinkingLevel: "off", context: { mode: "fresh", revisionHash: "threads", messages: [] }, request: { role: "scout", label: "Scout", task: "Read the note" }, policy: { deadlineMs: 15000 } }, [{
+    name: "read_file", description: "Read the note", parameters: { type: "object", properties: { path: { type: "string" } }, required: ["path"] },
+    execute: async () => ({ content: [{ type: "text", text: "Apricot" }], details: {} }),
+  }], async () => {}, (error) => diagnostics.push(error.message));
+  assert.equal(result.status, "completed", JSON.stringify({ result, diagnostics }));
+  assert.equal(requests.length, 2);
+  for (const [index, request] of requests.entries()) {
+    assert.equal("thread" in request, false, `round ${index + 1} has no thread`);
+    assert.doesNotMatch(String(headers[index]["anthropic-beta"] ?? ""), /message-threads/u);
+  }
+  // The second round carries the task, the tool call and its result itself, not a pointer to them.
+  assert.deepEqual(requests[1].messages.map((message) => message.role), ["user", "assistant", "user"]);
+  assert.match(JSON.stringify(requests[1].messages), /toolu_read/u);
+});
+
 test("a subagent that hits its deadline during an unanswered approval settles and dismisses the gate", async (t) => {
   const dir = temporary(t), original = process.env.AIDEN_CLI_ENTRY;
   process.env.AIDEN_CLI_ENTRY = join(pkg, "dist/app/cli.js");
@@ -1162,7 +1205,7 @@ test("scheduled inference enforces saved read-only tools and rejects revoked aut
   const result = await api.runScheduledInference(dir, dir, task, new AbortController().signal, async () => {});
   assert.equal(result, "Scheduled result");
   const names = requests[0].tools.map((tool) => tool.function.name).sort();
-  assert.deepEqual(names, ["find", "grep", "ls", "read"]);
+  assert.deepEqual(names, ["glob", "grep", "list_dir", "read_file"]);
   await assert.rejects(api.runScheduledInference(dir, dir, task, new AbortController().signal, async () => { throw new Error("authority revoked"); }), /authority revoked/);
   assert.equal(requests.length, 1);
 });
@@ -1195,7 +1238,7 @@ test("scheduled inference budgets the streamed reply size, not every cumulative 
   meter.add({ type: "text_delta", contentIndex: 0, delta: "ab", partial });
   meter.add({ type: "text_delta", contentIndex: 0, delta: "cd", partial });
   assert.equal(meter.add({ type: "text_end", contentIndex: 0, content: "abcd", partial }), 4);
-  assert.equal(meter.add({ type: "toolcall_end", contentIndex: 1, toolCall: { type: "toolCall", id: "c", name: "read", arguments: { path: "notes.md" } }, partial }), 4 + '{"path":"notes.md"}'.length);
+  assert.equal(meter.add({ type: "toolcall_end", contentIndex: 1, toolCall: { type: "toolCall", id: "c", name: "read_file", arguments: { path: "notes.md" } }, partial }), 4 + '{"path":"notes.md"}'.length);
   meter.nextMessage();
   assert.equal(meter.add({ type: "thinking_end", contentIndex: 0, content: "x".repeat(10), partial }), 33);
   const redacted = { content: [{ type: "thinking", thinking: "", redacted: true, thinkingSignature: "s".repeat(3 * 1024 * 1024) }] };
@@ -1801,6 +1844,49 @@ test("aiden mcp login registers a fresh client on a random loopback port, and st
   assert.equal(oauth.seen.registrations.length, 1);
   const refresh = oauth.seen.tokenRequests.filter((request) => request.grant === "refresh_token");
   assert.deepEqual(refresh.map(({ status, presentedSecret }) => ({ status, presentedSecret })), [{ status: 200, presentedSecret: true }]);
+});
+
+/** `aiden serve` and an `aiden mcp` command as separate processes: each lists one server's tools over its own pool. */
+function mcpToolsInChildProcess(dir, server) {
+  const script = `import * as api from ${JSON.stringify(pathToFileURL(join(pkg, "dist/parity-test-api.js")).href)};
+const pool = api.createCliMcpPool(process.argv[1]);
+try { process.stdout.write(JSON.stringify((await pool.inspectTools(JSON.parse(process.argv[2]))).map((tool) => tool.name))); }
+finally { await pool.close(); }`;
+  const child = spawn(process.execPath, ["--input-type=module", "-e", script, dir, JSON.stringify(server)], { stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, AIDEN_ANALYTICS: "0" } });
+  let stdout = "", stderr = "";
+  child.stdout.on("data", (chunk) => { stdout += chunk; });
+  child.stderr.on("data", (chunk) => { stderr += chunk; });
+  return new Promise((resolve, reject) => {
+    child.on("error", reject);
+    child.on("close", (code) => code === 0 ? resolve(JSON.parse(stdout)) : reject(new Error(`child exited ${code}: ${stderr}`)));
+  });
+}
+
+test("two aiden processes holding the same expired MCP token renew it once and both connect", async (t) => {
+  const dir = temporary(t), oauth = await api.startFakeOAuthServer();
+  t.after(() => oauth.close());
+  const server = { id: "remote", name: "Remote", transport: "http", url: oauth.serviceUrl, enabled: true, oauth: true };
+  api.atomicJson(join(dir, "aiden-mcp.json"), [server]);
+  const browser = fakeBrowser();
+  assert.deepEqual(await api.mcpLogin(dir, server, { openBrowser: browser.open }), { authorized: true });
+  await browser.pages[0];
+  oauth.expireAccessTokens();
+  const rejectedBefore = oauth.seen.unauthorized.length;
+  // Hold the first renewal (the refresh token is already rotated) until both processes were turned away.
+  oauth.control.beforeRefreshResponse = async () => {
+    oauth.control.beforeRefreshResponse = undefined;
+    const deadline = Date.now() + 20_000;
+    while (oauth.seen.unauthorized.length < rejectedBefore + 2 && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 10));
+  };
+  const results = await Promise.all([mcpToolsInChildProcess(dir, server), mcpToolsInChildProcess(dir, server)]);
+  assert.equal(oauth.seen.unauthorized.length, rejectedBefore + 2, "both processes presented the expired token");
+  assert.deepEqual(results, [["echo"], ["echo"]]);
+  const refresh = oauth.seen.tokenRequests.filter((request) => request.grant === "refresh_token");
+  assert.deepEqual(refresh.map(({ status, error }) => [status, error ?? null]), [[200, null]], "one renewal; the waiting process used its tokens");
+  // The sign-in is intact: a third client connects on the stored tokens without renewing.
+  const pool = api.createCliMcpPool(dir); t.after(() => pool.close());
+  assert.deepEqual((await pool.inspectTools(server)).map((tool) => tool.name), ["echo"]);
+  assert.equal(oauth.seen.tokenRequests.filter((request) => request.grant === "refresh_token").length, 1);
 });
 
 test("a pre-registered OAuth client keeps its secret encrypted and signs in without registering", async (t) => {
@@ -2725,8 +2811,8 @@ test("daemon chats run approved hooks after Aiden's own rules, and file tools ca
   const hooksFile = JSON.stringify({ hooks: { PreToolUse: [{ matcher: "Write", hooks: [{ type: "command", command: `printf '%s' '${deny}'` }] }] } });
   writeFileSync(join(repo, ".aiden", "hooks.json"), hooksFile);
   const calls = [
-    { id: "protected-write", name: "write", arguments: { path: ".aiden/hooks.json", content: "{}" } },
-    { id: "hooked-write", name: "write", arguments: { path: "out.txt", content: "written" } },
+    { id: "protected-write", name: "write_file", arguments: { path: ".aiden/hooks.json", content: "{}" } },
+    { id: "hooked-write", name: "write_file", arguments: { path: "out.txt", content: "written" } },
   ];
   const server = createServer(async (request, response) => {
     let body = ""; for await (const chunk of request) body += chunk;
@@ -2847,9 +2933,9 @@ test("daemon chats keep hook-blocked prompts from the model, carry PreToolUse co
     PostToolUse: [{ matcher: "LS", hooks: [{ type: "command", command: `printf '%s' '${stopAfterList}'` }] }],
   } }));
   const replies = [
-    { tool: { id: "read-notes", name: "read", arguments: { path: "notes.txt" } } },
+    { tool: { id: "read-notes", name: "read_file", arguments: { path: "notes.txt" } } },
     { text: "Read them." },
-    { tool: { id: "list-folder", name: "ls", arguments: { path: "." } } },
+    { tool: { id: "list-folder", name: "list_dir", arguments: { path: "." } } },
     { text: "Forked reply." },
   ];
   const server = createServer(async (request, response) => {
@@ -2982,4 +3068,260 @@ test("daemon chats send a retried prompt once its hook lets it through, and drop
   const after = await daemon.chatStore.get("retried");
   assert.equal(after.messages.filter((message) => message.role === "user").length, 1, "the retry reused the stored message");
   assert.equal(after.messages.find((message) => message.id === stored.id)?.hookBlocked, undefined);
+});
+
+test("workspace daemon and scheduled file tools refuse outside paths and credential files", async (t) => {
+  for (const lane of ["daemon", "scheduled-full", "scheduled-read-only"]) await t.test(lane, async (t) => {
+    const dir = temporary(t), repo = join(dir, "repo"), requests = [];
+    const originalEntry = process.env.AIDEN_CLI_ENTRY;
+    process.env.AIDEN_CLI_ENTRY = join(pkg, "dist/app/cli.js");
+    t.after(() => { if (originalEntry === undefined) delete process.env.AIDEN_CLI_ENTRY; else process.env.AIDEN_CLI_ENTRY = originalEntry; });
+    mkdirSync(repo);
+    writeFileSync(join(dir, "outside.txt"), "OUTSIDE-SECRET-536");
+    writeFileSync(join(repo, ".env"), "ENV-SECRET-536");
+    writeFileSync(join(repo, "note.txt"), "Visible workspace note");
+    writeFileSync(join(repo, "id_rsa"), "CREDENTIAL-SECRET-536");
+    writeFileSync(join(repo, "id_rsa.pub"), "Visible public key");
+    writeFileSync(join(repo, "credentials.ts"), "Visible credential helper source");
+    writeFileSync(join(repo, ".env.example"), "Visible environment template");
+    writeFileSync(join(repo, ".gitignore"), "Visible ignore configuration");
+    mkdirSync(join(repo, ".ssh"));
+    writeFileSync(join(repo, ".ssh", "config"), "DIRECTORY-CREDENTIAL-SECRET-536");
+    mkdirSync(join(repo, ".github"));
+    writeFileSync(join(repo, ".github", "workflow.yml"), "Visible workflow");
+    symlinkSync("id_rsa", join(repo, "alias.txt"));
+    symlinkSync("note.txt", join(repo, "id_ed25519"));
+    symlinkSync("note.txt", join(repo, "note-alias.txt"));
+    symlinkSync(".ssh", join(repo, "alias-dir"));
+    const calls = ["../outside.txt", ".env", "note.txt", "id_rsa", "id_rsa.pub", "credentials.ts", ".env.example"].map((path) => ({ name: "read_file", arguments: { path } }));
+    calls.push(
+      ...["alias.txt", "id_ed25519", ".ssh/config", "alias-dir/config", "note-alias.txt", ".gitignore"].map((path) => ({ name: "read_file", arguments: { path } })),
+      { name: "list_dir", arguments: { path: ".github" } },
+      { name: "list_dir", arguments: { path: "." } },
+      { name: "grep", arguments: { pattern: "Visible|SECRET-536" } },
+      { name: "glob", arguments: { pattern: "id_rsa" } },
+      { name: "glob", arguments: { pattern: "**/*" } }
+    );
+    if (lane !== "scheduled-read-only") calls.push(
+      { name: "write_file", arguments: { path: "generated.txt", content: "Generated note" } },
+      { name: "edit_file", arguments: { path: "generated.txt", old_string: "Generated", new_string: "Updated" } }
+    );
+    const server = createServer(async (request, response) => {
+      let body = ""; for await (const chunk of request) body += chunk;
+      const parsed = JSON.parse(body); requests.push(parsed);
+      const step = parsed.messages.filter((message) => message.role === "tool").length;
+      const delta = step < calls.length
+        ? { role: "assistant", tool_calls: [{ index: 0, id: `read-${step}`, type: "function", function: { name: calls[step].name, arguments: JSON.stringify(calls[step].arguments) } }] }
+        : { role: "assistant", content: "Reviewed" };
+      response.writeHead(200, { "content-type": "text/event-stream" });
+      response.write(`data: ${JSON.stringify({ id: "files", object: "chat.completion.chunk", choices: [{ index: 0, delta, finish_reason: null }] })}\n\n`);
+      response.write(`data: ${JSON.stringify({ id: "files", object: "chat.completion.chunk", choices: [{ index: 0, delta: {}, finish_reason: step < calls.length ? "tool_calls" : "stop" }] })}\n\n`);
+      response.end("data: [DONE]\n\n");
+    });
+    await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+    t.after(() => { server.closeAllConnections(); server.close(); });
+    api.atomicJson(join(dir, "models.json"), { providers: { "cli-test": { api: "openai-completions", baseUrl: `http://127.0.0.1:${server.address().port}/v1`, apiKey: "test-only", models: [{ id: "test", name: "Test", reasoning: false, input: ["text"], contextWindow: 32000, maxTokens: 4096, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } }] } } });
+    if (lane === "daemon") {
+      const workspace = await api.workspaceCommand(dir, ["add", repo]);
+      await api.workspaceCommand(dir, ["access", workspace.id, "full"]);
+      const daemon = api.createDaemonChats(dir); t.after(() => daemon.stop());
+      await daemon.chatStore.create({ id: "files", title: "Files", workspaceId: workspace.id });
+      await daemon.chatStore.appendMessage("files", { role: "user", content: "Read the files" });
+      const events = [];
+      const owner = { id: 0, documentId: "test", isDestroyed: () => false, onInvalidated: () => () => {}, send: (channel, value) => events.push({ channel, value }) };
+      const admission = daemon.llmClient.beginChatTurn("files", "stream", "test"); assert.ok(admission);
+      try {
+        admission.settleAsyncWork();
+        assert.equal(await daemon.llmClient.start("stream", { chatId: "files", workspaceId: workspace.id, providerId: "cli-test", model: "test", messages: [{ role: "user", content: "Read the files" }] }, owner, { usageSource: "telegram" }), true);
+        await daemon.llmClient.waitForChatIdle("files");
+      } finally { admission.release(); }
+      assert.equal(events.at(-1).channel, "chat:done", JSON.stringify(events));
+    } else {
+      assert.equal((await api.runScheduledInference(dir, repo, { providerId: "cli-test", model: "test", permission: lane === "scheduled-full" ? "full" : "read-only", prompt: "Read the files", mcpServerIds: [], mcpServerBindings: [] }, new AbortController().signal, async () => {})).trim(), "Reviewed");
+    }
+    assert.equal(requests.length, calls.length + 1);
+    if (lane === "scheduled-read-only") assert.equal(existsSync(join(repo, "generated.txt")), false);
+    else assert.equal(readFileSync(join(repo, "generated.txt"), "utf8"), "Updated note");
+    const offered = requests[0].tools.map((tool) => tool.function.name);
+    assert.ok(offered.includes("read_file"));
+    assert.ok(!offered.some((name) => ["read", "bash", "write", "edit", "find", "ls"].includes(name)));
+    const toolReplies = requests.at(-1).messages.filter((message) => message.role === "tool");
+    assert.match(JSON.stringify(toolReplies[0]), /outside the workspace/u);
+    assert.match(JSON.stringify(toolReplies[1]), /Reading \.env files is disabled/u);
+    assert.match(JSON.stringify(toolReplies[2]), /Visible workspace note/u);
+    assert.match(JSON.stringify(toolReplies[3]), /Reading credential files is disabled/u);
+    assert.match(JSON.stringify(toolReplies[4]), /Visible public key/u);
+    assert.match(JSON.stringify(toolReplies[5]), /Visible credential helper source/u);
+    assert.match(JSON.stringify(toolReplies[6]), /Visible environment template/u);
+    for (const index of [7, 8, 9, 10]) assert.match(JSON.stringify(toolReplies[index]), /Reading credential files is disabled/u);
+    assert.match(JSON.stringify(toolReplies[11]), /Visible workspace note/u);
+    assert.match(JSON.stringify(toolReplies[12]), /Visible ignore configuration/u);
+    assert.match(JSON.stringify(toolReplies[13]), /workflow\.yml/u);
+    assert.match(JSON.stringify(toolReplies[14]), /note\.txt/u);
+    assert.doesNotMatch(JSON.stringify(toolReplies[14]), /id_rsa(?!\.pub)|\.ssh/u);
+    assert.match(JSON.stringify(toolReplies[15]), /Visible workspace note/u);
+    assert.match(JSON.stringify(toolReplies[16]), /no matches/u);
+    assert.match(JSON.stringify(toolReplies[17]), /note\.txt/u);
+    assert.doesNotMatch(JSON.stringify(toolReplies[17]), /id_rsa(?!\.pub)|\.ssh/u);
+    assert.doesNotMatch(JSON.stringify(requests), /OUTSIDE-SECRET-536|ENV-SECRET-536|CREDENTIAL-SECRET-536/u);
+  });
+});
+
+test("generation watchdog resets only on model and tool activity and releases both deadlines", (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const expired = [];
+  for (const type of ["message_update", "tool_execution_start", "tool_execution_update", "tool_execution_end"]) {
+    const watchdog = api.createGenerationWatchdog((reason) => expired.push(reason));
+    t.mock.timers.tick(290_000);
+    watchdog.activity({ type });
+    t.mock.timers.tick(290_000);
+    assert.equal(expired.length, 0, type);
+    watchdog.dispose();
+  }
+  const idle = api.createGenerationWatchdog((reason) => expired.push(reason));
+  t.mock.timers.tick(290_000);
+  idle.activity({ type: "turn_start" });
+  t.mock.timers.tick(10_000);
+  assert.deepEqual(expired, ["inactive"]);
+  idle.activity({ type: "message_update" });
+  t.mock.timers.tick(300_000);
+  assert.deepEqual(expired, ["inactive"]);
+
+  const bounded = api.createGenerationWatchdog((reason) => expired.push(reason));
+  for (let beat = 0; beat < 89; beat += 1) {
+    t.mock.timers.tick(240_000);
+    bounded.activity({ type: "message_update" });
+  }
+  t.mock.timers.tick(240_000);
+  assert.deepEqual(expired, ["inactive", "deadline"]);
+  bounded.dispose();
+  t.mock.timers.tick(24 * 60 * 60 * 1000);
+  assert.deepEqual(expired, ["inactive", "deadline"]);
+});
+
+test("an active daemon model stream completes beyond the former five-minute wall limit", { timeout: 15_000 }, async (t) => {
+  const dir = temporary(t), requests = [];
+  let openResponse;
+  const responseReady = new Promise((resolve) => { openResponse = resolve; });
+  const server = createServer(async (request, response) => {
+    let body = ""; for await (const chunk of request) body += chunk;
+    requests.push(JSON.parse(body));
+    response.writeHead(200, { "content-type": "text/event-stream" });
+    response.flushHeaders();
+    openResponse(response);
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => { server.closeAllConnections(); server.close(); });
+  api.atomicJson(join(dir, "models.json"), { providers: { "cli-test": { api: "openai-completions", baseUrl: `http://127.0.0.1:${server.address().port}/v1`, apiKey: "test-only", models: [{ id: "test", name: "Test", reasoning: false, input: ["text"], contextWindow: 32000, maxTokens: 4096, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } }] } } });
+  const workspace = await api.workspaceCommand(dir, ["add", dir]);
+  await api.workspaceCommand(dir, ["access", workspace.id, "full"]);
+  const daemon = api.createDaemonChats(dir); t.after(() => daemon.stop());
+  await daemon.chatStore.create({ id: "long-stream", title: "Long stream", workspaceId: workspace.id });
+  await daemon.chatStore.appendMessage("long-stream", { role: "user", content: "Keep working" });
+  const events = [];
+  let nextDelta;
+  const owner = { id: 0, documentId: "test", isDestroyed: () => false, onInvalidated: () => () => {}, send(channel, value) {
+    events.push({ channel, value });
+    if (channel === "chat:delta") nextDelta?.();
+  } };
+  const admission = daemon.llmClient.beginChatTurn("long-stream", "stream", "test"); assert.ok(admission);
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  try {
+    admission.settleAsyncWork();
+    assert.equal(await daemon.llmClient.start("stream", { chatId: "long-stream", workspaceId: workspace.id, providerId: "cli-test", model: "test", messages: [{ role: "user", content: "Keep working" }] }, owner, { usageSource: "telegram" }), true);
+    const completion = daemon.llmClient.waitForChatIdle("long-stream");
+    const response = await responseReady;
+    for (let chunk = 0; chunk < 32; chunk += 1) {
+      t.mock.timers.tick(10_000);
+      const delivered = new Promise((resolve) => { nextDelta = resolve; });
+      response.write(`data: ${JSON.stringify({ id: "long", object: "chat.completion.chunk", choices: [{ index: 0, delta: { role: "assistant", content: "." }, finish_reason: null }] })}\n\n`);
+      await Promise.race([delivered, completion.then(() => { throw new Error(`Generation ended after ${chunk * 10} seconds.`); })]);
+    }
+    response.write(`data: ${JSON.stringify({ id: "long", object: "chat.completion.chunk", choices: [{ index: 0, delta: {}, finish_reason: "stop" }] })}\n\n`);
+    response.end("data: [DONE]\n\n");
+    await completion;
+    assert.equal(requests.length, 1);
+    assert.equal(events.at(-1).channel, "chat:done", JSON.stringify(events));
+    assert.equal(events.at(-1).value.content, ".".repeat(32));
+    assert.equal((await daemon.chatStore.get("long-stream")).messages.at(-1).content, ".".repeat(32));
+  } finally {
+    t.mock.timers.reset();
+    admission.release();
+  }
+});
+
+test("an active scheduled tool loop completes beyond the former five-minute wall limit", { timeout: 15_000 }, async (t) => {
+  const dir = temporary(t), requests = [], responses = [];
+  writeFileSync(join(dir, "note.txt"), "Scheduled note");
+  let nextRequest;
+  const server = createServer(async (request, response) => {
+    let body = ""; for await (const chunk of request) body += chunk;
+    requests.push(JSON.parse(body));
+    response.writeHead(200, { "content-type": "text/event-stream" });
+    response.flushHeaders();
+    if (nextRequest) { const deliver = nextRequest; nextRequest = undefined; deliver(response); }
+    else responses.push(response);
+  });
+  const takeResponse = () => responses.length ? Promise.resolve(responses.shift()) : new Promise((resolve) => { nextRequest = resolve; });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => { server.closeAllConnections(); server.close(); });
+  api.atomicJson(join(dir, "models.json"), { providers: { "cli-test": { api: "openai-completions", baseUrl: `http://127.0.0.1:${server.address().port}/v1`, apiKey: "test-only", models: [{ id: "test", name: "Test", reasoning: false, input: ["text"], contextWindow: 32000, maxTokens: 4096, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } }] } } });
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const controller = new AbortController();
+  const completion = api.runScheduledInference(dir, dir, { providerId: "cli-test", model: "test", permission: "read-only", prompt: "Review the note", mcpServerIds: [], mcpServerBindings: [] }, controller.signal, async () => {});
+  try {
+    for (let step = 0; step <= 16; step += 1) {
+      const response = await Promise.race([takeResponse(), completion.then(() => { throw new Error(`Schedule ended at step ${step}.`); })]);
+      t.mock.timers.tick(20_000);
+      const tool = step < 16;
+      const delta = tool
+        ? { role: "assistant", tool_calls: [{ index: 0, id: `read-${step}`, type: "function", function: { name: "read_file", arguments: '{"path":"note.txt"}' } }] }
+        : { role: "assistant", content: "Scheduled review completed" };
+      response.write(`data: ${JSON.stringify({ id: "long-schedule", object: "chat.completion.chunk", choices: [{ index: 0, delta, finish_reason: null }] })}\n\n`);
+      response.write(`data: ${JSON.stringify({ id: "long-schedule", object: "chat.completion.chunk", choices: [{ index: 0, delta: {}, finish_reason: tool ? "tool_calls" : "stop" }] })}\n\n`);
+      response.end("data: [DONE]\n\n");
+    }
+    assert.equal((await completion).trim(), "Scheduled review completed");
+    assert.equal(requests.length, 17);
+    const results = requests.at(-1).messages.filter((message) => message.role === "tool");
+    assert.equal(results.length, 16);
+    assert.ok(results.every((message) => JSON.stringify(message).includes("Scheduled note")));
+  } finally {
+    controller.abort();
+    t.mock.timers.reset();
+    await completion.catch(() => {});
+  }
+});
+
+
+test("CLI credential prechecks preserve cancellation while a filesystem lookup is pending", async (t) => {
+  const dir = temporary(t);
+  writeFileSync(join(dir, "note.txt"), "Visible note");
+  mkdirSync(join(dir, "src"));
+  for (const [name, params] of [["read_file", { path: "note.txt" }], ["list_dir", { path: "src" }], ["grep", { path: "src", pattern: "note" }]]) {
+    const tool = api.cliWorkspaceCodingTools(dir, true).find((tool) => tool.name === name);
+    const originalStat = fsPromises.stat;
+    const held = Promise.withResolvers(), started = Promise.withResolvers();
+    const target = resolve(dir, params.path);
+    t.mock.method(fsPromises, "stat", async (...args) => {
+      if (resolve(String(args[0])) === target) { started.resolve(); await held.promise; }
+      return originalStat(...args);
+    });
+    syncBuiltinESMExports();
+    const controller = new AbortController();
+    const pending = tool.execute("held", params, controller.signal);
+    let outcome;
+    pending.then(() => { outcome = "completed"; }, (error) => { outcome = error.message; });
+    try {
+      await started.promise;
+      controller.abort(new Error("review cancelled"));
+      await new Promise((resolve) => setImmediate(resolve));
+      assert.equal(outcome, "review cancelled", name);
+    } finally {
+      held.resolve();
+      await pending.catch(() => {});
+      t.mock.restoreAll();
+      syncBuiltinESMExports();
+    }
+  }
 });

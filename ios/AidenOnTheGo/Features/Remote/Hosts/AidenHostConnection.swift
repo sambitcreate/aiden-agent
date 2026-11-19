@@ -148,6 +148,11 @@ final class AidenHostConnection {
     private var cachedProbeClient: CachedClient?
     private var connectInFlight: ConnectInFlight?
     private var settledState: SettledState?
+    /// Waits out a connect's `timeout`. A test replaces it to say when the
+    /// deadline passes, rather than racing a real one.
+    @ObservationIgnored var waitForDeadline: @MainActor (TimeInterval) async -> Void = { timeout in
+        try? await Task.sleep(nanoseconds: UInt64(timeout * 1_000_000_000))
+    }
 
     /// `probeClientFactory` defaults to `clientFactory`, so a test's one fake
     /// transport carries both.
@@ -186,9 +191,10 @@ final class AidenHostConnection {
         }
         let work = Task { await run(attempt: attempt, over: route) }
         connectInFlight = ConnectInFlight(attempt: attempt, route: route, work: work)
+        let waitForDeadline = waitForDeadline
         let deadline = timeout.map { timeout in
             Task {
-                try? await Task.sleep(nanoseconds: UInt64(timeout * 1_000_000_000))
+                await waitForDeadline(timeout)
                 // An attempt that ended can still be running, such as a revocation
                 // finishing its purge.
                 guard !Task.isCancelled, isCurrent(attempt: attempt) else { return }
@@ -600,7 +606,7 @@ final class AidenHostConnection {
     /// `schedule:cards` (revision 39), then `bot:images` (revision 45), then
     /// `bot:issues` (revision 42), then `chat:jobs` (revision 49), then
     /// `attachments:raw` (revision 50), then `chat:new-worktree` (revision 53),
-    /// then continuity watches, Open work, routine models and peers (revision 59),
+    /// then `chat:continue-in-new-chat` (revision 64), then continuity watches, Open work, routine models and peers (revision 59),
     /// followed by messaging, access requests, plans and allowed lists (revisions 54–57),
     /// then the five revision-61 Bot UX opt-ins, one call each.
     static let capabilitiesAskedForAlone: [[AidenRemoteCapability]] = [
@@ -611,6 +617,7 @@ final class AidenHostConnection {
         [.chatJobs],
         [.attachmentsRaw],
         [.chatNewWorktree],
+        [.chatContinueInNewChat],
         [.botWatches],
         [.botOpenWork],
         [.botRoutineModels],

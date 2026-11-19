@@ -11,7 +11,7 @@
 // - The guest user is the computer's administrator, but sudo needs the guest
 //   password, which only Aiden holds and never shows the model.
 
-import { Type } from "@earendil-works/pi-ai";
+import { Type } from "typebox";
 import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
 import { boundedToolOutput } from "../tool-output-context.js";
 import { BOT_COMPUTER_UNATTENDED_WAIT_MS, botComputerUnattendedGaveUp, waitForBotWithin, type BotComputerGiveBackBudget } from "./control.js";

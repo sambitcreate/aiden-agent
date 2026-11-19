@@ -149,8 +149,10 @@ test("the canvas's own write to a page is reported only to other chats, and the 
   settle(true);
   await eventually(() => updates.some((update) => update.chatId === "chat-2"));
   await sleep(DESIGN_WATCH_DEBOUNCE_MS + 200);
+  // Both writes are real changes to chat-2, which reloads once if they fall in
+  // one quiet period and twice if a busy machine spaces them past it.
   assert.deepEqual(
-    updates.map(({ chatId, paths }) => ({ chatId, paths })),
+    [...new Set(updates.map(({ chatId, paths }) => JSON.stringify({ chatId, paths })))].map((update) => JSON.parse(update)),
     [{ chatId: "chat-2", paths: ["design/hero.html"] }],
     "the chat that wrote already shows its words; another chat's frame does not",
   );
@@ -231,6 +233,21 @@ test("after a page stops being watched, a later revert to the canvas's own words
   }
 });
 
+/**
+ * A wall clock that stands still a minute ahead of the one stamping the
+ * fixture's files, as if the canvas saw its write finish the moment it began.
+ * The watcher reads how far the files' clock is behind from the page's new
+ * stamp and the moment it learns the write finished, so any pause before
+ * `settle` runs counts as lag: the cautious reading, which takes in files
+ * touched that much longer before the write. Standing still, the clock lets
+ * the files beside the page be measured against the page's own stamp alone,
+ * however busy the machine.
+ */
+function stillWallClock(): () => number {
+  const at = Date.now() + 60_000;
+  return () => at;
+}
+
 /** A watcher whose file-system events the test sends itself, as `fs.watch` would. */
 function fakeWatcher(
   t: TestContext,
@@ -270,7 +287,7 @@ function fakeWatcher(
 
 test("an event naming no file leaves a page that holds the canvas's own write, and reports the other pages", async (t) => {
   const root = await workspace(t, { "design/hero.html": "<h1>Ship faster</h1>", "design/about.html": "<h1>About</h1>" });
-  const { instance, updates, emit } = fakeWatcher(t);
+  const { instance, updates, emit } = fakeWatcher(t, { wallNow: stillWallClock() });
   await instance.set("chat-1", root, ["design/hero.html", "design/about.html"]);
   const written = "<h1>Ship sooner</h1>";
   const settle = instance.ownWrite("chat-1", "design/hero.html", written);
@@ -422,6 +439,27 @@ test("a write's note of the files beside its page is let go once its window has 
   assert.equal(instance.heldNotes("chat-1"), 0, "nothing can use the note past the window");
 });
 
+test("a note's deadline timer that runs as the window closes still lets go of the note", async (t) => {
+  const root = await workspace(t, { "design/hero.html": "<h1>Ship faster</h1>", "design/hero.css": "h1{}" });
+  let clock = 0;
+  // Readings the clock gives before it settles on `clock`.
+  const readings: number[] = [];
+  const { instance } = fakeWatcher(t, { now: () => readings.shift() ?? clock, ownWriteWindowMs: 30 });
+  await instance.set("chat-1", root, ["design/hero.html"]);
+  const written = "<h1>Ship sooner</h1>";
+  const settle = instance.ownWrite("chat-1", "design/hero.html", written);
+  await fsp.writeFile(path.join(root, "design/hero.html"), written);
+  settle(true);
+  await instance.noted("chat-1", "design/hero.html");
+  // The timer runs on the last moment of the window, and the window has
+  // passed by the time the clock is read again (a busy machine pauses the
+  // process between the two).
+  readings.push(30);
+  clock = 31;
+  await eventually(() => instance.heldNotes("chat-1") === 0);
+  assert.equal(instance.heldNotes("chat-1"), 0, "nothing can use the note past the window");
+});
+
 test("an own-write event that arrived inside the window is still put down to the write when the report waits past it", async (t) => {
   const root = await workspace(t, { "design/hero.html": "<h1>Ship faster</h1>", "design/hero.css": "h1{}" });
   let clock = 0;
@@ -531,7 +569,7 @@ test("a large hidden folder beside a page is not walked, so the canvas's own wri
   const hidden = path.join(root, "design/.next");
   await fsp.chmod(hidden, 0o000);
   try {
-    const { instance, updates, emit } = fakeWatcher(t);
+    const { instance, updates, emit } = fakeWatcher(t, { wallNow: stillWallClock() });
     await instance.set("chat-1", root, ["design/hero.html"]);
     const written = "<h1>Ship sooner</h1>";
     const settle = instance.ownWrite("chat-1", "design/hero.html", written);
@@ -670,8 +708,14 @@ test("a chat that may no longer frame its workspace stops being watched", async 
   const { instance, updates, open } = watcher(t, { allowed: () => allowed });
   await instance.set("chat-1", root, ["design/page.html"]);
   allowed = false;
-  await fsp.writeFile(path.join(root, "design/page.html"), "changed");
-  await sleep(400);
+  // macOS starts its event stream asynchronously and can miss a write in its
+  // first moments, so the page changes again, a quiet period apart, until the
+  // watcher reacts.
+  for (let change = 0; open() > 0 && change < 8; change += 1) {
+    await fsp.writeFile(path.join(root, "design/page.html"), `changed ${change}`);
+    const quiet = Date.now() + DESIGN_WATCH_DEBOUNCE_MS + 150;
+    while (open() > 0 && Date.now() < quiet) await sleep(25);
+  }
   assert.equal(updates.length, 0);
   assert.equal(open(), 0);
 

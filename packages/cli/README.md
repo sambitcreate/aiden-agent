@@ -4,7 +4,7 @@ A headless Aiden server for macOS and Linux. Run `aiden serve` on a box you reac
 
 There is no interactive terminal app. Since 2026-10-30, `aiden` has only `serve` and short admin commands for setting the server up (see [the serve-only plan](../../docs/plans/aiden-serve-only-cli.md)). Pi's terminal UI, `aiden -p` print mode, `--mode json|rpc`, `--list-models`, slash commands, themes and the first-run tour are gone. Bare `aiden` prints the command list; the old flags (`-p`, `--mode`, `--tui-mode`, `--theme`, `--list-models`) exit with an error that points to `aiden serve` and `aiden help`.
 
-Built on [pi](https://github.com/earendil-works/pi) (`@earendil-works/pi-coding-agent`, MIT, pinned `1.4.0`, the same line the Aiden desktop app uses). The server uses Pi's SDK for its chat sessions and bundles the desktop's own `main/services` cores for Bots, scheduling, Remote, MCP, memory and web search.
+Built on [pi](https://github.com/earendil-works/pi) (`@earendil-works/pi-coding-agent`, MIT, pinned `1.5.2`, the same line the Aiden desktop app uses). The server uses Pi's SDK for its chat sessions and bundles the desktop's own `main/services` cores for Bots, scheduling, Remote, MCP, memory and web search.
 
 ## Requirements
 
@@ -114,7 +114,34 @@ Phones and Macs paired with the server see its workspaces, chats, Bots, schedule
 - **Phones and other runs.** A paired phone can watch, stop and answer approvals on a run another device started (`phone-run-control-v1`), shares read markers and unread state with paired desktops, and marks chats Done or snoozes them from its Inbox (`chat-triage-v1`, under the `chat:write` it was paired with). It doesn't read the host feed, and it offers no Steer on a run it didn't start.
 - **Project transfer.** The server does not advertise the desktop's `workspace-clone-v1` project transfer (Add this project to another machine); its Remote API keeps the existing workspace creation modes.
 - **Connector-watch management.** The optional `bot:watches` surface belongs to the Electron desktop on Mac and Linux. This server does not wire or advertise it; ordinary Composio MCP tools keep their existing CLI behavior.
+- **Missing workspace folders.** If a chat's workspace folder (or its managed worktree checkout) was moved, renamed or deleted on the server, a turn from a paired device is refused before the message is kept, with the same `409 workspace_unavailable` refusal the Mac sends and no path in the message. The same send runs once the folder is back. A scheduled run in that workspace records a clear missing-folder error instead of a raw file-system error. A phone that knows Remote revision 64 also offers **Continue in a new chat**: it copies the chat's history into a new chat in another of the server's workspaces (the server has no No workspace), and the original chat stays as it is.
 - **Scheduled-run notifications.** Run completions show up through `aiden schedule runs <id>`, `aiden schedule notifications` and, for tasks with `notify`, local notifications on paired phones via the Remote `scheduled-tasks/notifications` feed.
+
+## Outside apps (MCP server)
+
+`aiden serve` hosts the same loopback MCP server as the desktop, so Claude Code, Codex or any MCP client on the same computer can list the server's workspaces and chats, read them, and, with Supervised access, start and follow turns. Tools, access levels, limits and the threat model are in [`docs/aiden-mcp-server.md`](../../docs/aiden-mcp-server.md).
+
+```bash
+aiden apps connect "Claude Code" --access supervised   # turns the server on, shows the token once
+aiden apps list                                         # server status and connected apps
+aiden apps revoke <app-id>                              # disconnects one app at once
+aiden apps off                                          # closes the listener; `aiden apps on` reopens it
+```
+
+- **Off by default.** The listener opens only after the first `aiden apps connect` or an explicit `aiden apps on`, and the choice is saved in `remote.json`.
+- **Address.** `http://127.0.0.1:<port>/mcp`, on loopback only. The server tries port 49500 and the next seven, 100 above the desktop's 49400, so a desktop and a server on one computer never collide. If all eight are busy the first time it starts, the system picks a free loopback port instead. The first port that binds is saved, so the URL stays the same across restarts; if another program later holds it, `aiden apps list` reports `port_in_use` instead of moving.
+- **Connecting.** `connect <name>` defaults to Read access. On a terminal it prints the token once, with `claude mcp add` and `codex mcp add` commands that read it from the app's own variable, such as `AIDEN_MCP_TOKEN_CLAUDE_CODE_K3J9QX` (the same name the desktop's Settings sheet prints), instead of writing it into their config, so two apps in one shell profile keep separate tokens; piped, it prints JSON and warns on stderr that the output holds the token.
+- **Requires Remote.** Apps share the Remote runtime's chats and device records, so `aiden serve --no-remote` has no MCP server and `aiden apps` says to restart without the flag. The listener never joins Remote's LAN or Tailscale listener.
+- **Admin over the control socket.** `aiden apps` needs a running server and talks to it over the private control socket, like `aiden remote`. Admin commands send no analytics. The server itself counts a connect (`mcp_app_connected`, access level only) and a chat an app starts (`mcp_chat_started`), and those chats send no other usage events.
+- **Containers.** Loopback inside a container is the container's own, so an app on the host can't reach `/mcp` in the Docker image. Run `aiden serve` on the host for outside apps.
+
+## Workspace tools and generation limits
+
+Workspace chats hosted by `aiden serve` use the desktop's file and search tools: `read_file`, `list_dir`, `glob`, `grep`, `write_file` and `edit_file`, plus `run_command`. File-tool paths stay inside the workspace. CLI read and search tools apply the existing credential-path policy to supplied paths and canonical targets, refusing `.env` files and protected credential/private-key file paths. Public keys, credential-named source files and `.env.example` stay readable. Ask, Full and None workspace access still control tool admission, and file tools cannot change hook or agent configuration. Telegram and scheduled workspace chat turns still require Full access. Read-only scheduled inference receives only `read_file`, `list_dir`, `glob` and `grep`; Full scheduled inference also receives the file mutation and shell tools.
+
+`run_command` starts a bounded shell in the workspace with Aiden's filtered environment. It is not a filesystem sandbox: an approved shell command retains the server user's OS access, including paths outside the workspace. Use workspace and Bot permissions with that distinction in mind.
+
+Daemon chat and scheduled inference runs stop after five minutes without a model message update or tool execution event. Streaming text, thinking, tool arguments and tool start, update or completion events refresh this inactivity deadline. An absolute six-hour limit still stops a run that keeps producing events. A tool approval expires after five minutes; activity never extends that approval's own expiry. Existing scheduled turn, tool-call and response-size budgets also remain in force.
 
 ## Bots
 
@@ -157,7 +184,7 @@ The desktop's per-workspace skill and connector switches (Workspace settings) ar
 
 `aiden mcp presets`, `mcp preset <id>`, `mcp add <file>`, `mcp login <id>`, `mcp logout <id>`, `mcp list` and `mcp remove <id>` configure connectors. `mcp presets` lists the desktop's connector catalog (`renderer/shared/connector-catalog.ts`) except connectors served by a Mac app (iMCP), which are set up in the desktop app on a Mac; a connector marked unavailable there (hosted Figma) is refused by `mcp preset`, as is `imcp`. The CLI also refuses raw iMCP preset imports and skips previously saved iMCP presets during discovery. The `figma-desktop` preset connects to the Figma desktop app's local server without a sign-in. The server runs the desktop's MCP client, transports and OAuth provider (`main/services`, on `@earendil-works/pi-mcp`). Tool schemas are paginated, bounded and rechecked before execution. A tool-list change also stops a pending HTTP tool call during credential lookup or before an OAuth retry and invalidates an inventory read still in flight; failed servers do not silently gain tools.
 
-`mcp login` prints the sign-in URL to stderr; sign-ins are stored in the encrypted `credentials/insights.json`. An OAuth server without a stored sign-in is never contacted (no MCP request, discovery or registration) until `mcp login`; background connections refresh stored tokens but never register or open a browser.
+`mcp login` prints the sign-in URL to stderr; sign-ins are stored in the encrypted `credentials/insights.json`. An OAuth server without a stored sign-in is never contacted (no MCP request, discovery or registration) until `mcp login`; background connections refresh stored tokens but never register or open a browser. A token within 30 seconds of its stored expiry (half its life, for lifetimes under a minute) is refreshed before it is sent; a sign-in saved before expiries were recorded is refreshed after the server's 401. One refresh of a server's sign-in runs at a time across `aiden` processes, under a per-server lease in `credentials/`: `aiden serve` and an `aiden mcp` command that need a refresh together make one token request, and the one that waited uses the tokens the other saved. A refresh that fails for a passing reason (network, timeout, 5xx) keeps the sign-in and sends the current token; `invalid_grant`, `invalid_client` and `unauthorized_client` need `mcp login` again. Refreshes contact only the server's own token endpoint.
 
 - **Client identity:** dynamic registration as "Aiden Agent", registered afresh on every `mcp login`; or, for custom servers, a pre-registered client with `oauthClientId` and optional `oauthClientSecret` in the server JSON. `mcp add` moves the secret into the encrypted credential store and keeps only an opaque marker in `aiden-mcp.json`; `mcp list` never prints it, and a plaintext secret written into `aiden-mcp.json` by hand is refused until the server is added again. Client ID Metadata Documents follow the desktop (off until Aiden hosts the document).
 - **Redirect URI:** a dynamically registered client listens on a random free loopback port (`http://127.0.0.1:<port>/callback`), because each sign-in registers its own redirect URI. A pre-registered client (or a metadata document) uses the desktop's fixed `http://127.0.0.1:41390/callback`; register exactly that URI with the provider. On a remote box, open the sign-in URL in a browser that can reach that loopback port (for example through an SSH port forward). MCP sign-ins saved by earlier CLI builds (before the shared provider) are not migrated: run `aiden mcp login <id>` again.
@@ -173,6 +200,7 @@ The desktop's per-workspace skill and connector switches (Workspace settings) ar
 | `remote status\|devices\|pair lan\|tailscale\|pair-status\|pair-cancel <id>\|revoke <id>\|roots\|approve-root <path>` | Pairing and paired-device administration (server must be running) |
 | `remote network local\|tailscale\|both` | Who can reach the server; Tailscale is set up for you (server must be running) |
 | `remote check` | Check each step a phone needs to reach the server, with fixes |
+| `apps list\|connect <name> [--access read\|supervised]\|revoke <id>\|on\|off` | Outside apps (Claude Code, Codex) on the local `/mcp` endpoint (server must be running) |
 | `auth list\|login\|logout` | Provider credentials (OAuth or API key) |
 | `workspace list\|add\|remove\|access\|scratch` | Workspace registry and tool access tiers |
 | `mcp list\|presets\|add\|preset\|login\|logout\|remove` | MCP connectors and their OAuth sign-ins |
@@ -206,7 +234,7 @@ Notes:
 
 | Path | Contents |
 | --- | --- |
-| `~/.aiden/agent/` | Server state: `settings.json`, `auth.json`, `aiden.json` (device-local feature settings), `aiden-mcp.json`, `web-search.json`, `remote.json` (Remote identity and paired devices), `chat-read-markers.json` and `chat-triage.json` (Inbox read state and Pin, Done and Snooze), `schedules.json`, `hooks/` (hooks, approvals and run log), `sessions/`, `bots/`, `bot-service/`, `artifacts/`, `credentials/`, `serve.log` and the private control socket |
+| `~/.aiden/agent/` | Server state: `settings.json`, `auth.json`, `aiden.json` (device-local feature settings), `aiden-mcp.json`, `web-search.json`, `remote.json` (Remote identity, paired devices, connected apps and the MCP server setting), `aiden-mcp-chat-provenance.json` (which app started a chat, local only), `chat-read-markers.json` and `chat-triage.json` (Inbox read state and Pin, Done and Snooze), `schedules.json`, `hooks/` (hooks, approvals and run log), `sessions/`, `bots/`, `bot-service/`, `artifacts/`, `credentials/`, `serve.log` and the private control socket |
 | `~/.aiden/` | Shared Aiden home (the desktop's portable `config.json`, `skills/`, `scripts/`; `memory/` is the shared desktop and server memory store, `ws-<folder-hash>` scopes) |
 | `AIDEN_CODING_AGENT_DIR` | Environment override for the agent directory (mirrors Pi's `PI_CODING_AGENT_DIR`; use it for tests and for running more than one server) |
 
@@ -218,6 +246,7 @@ New Memory databases support bounded incremental space reclamation on open and c
 - **Aiden usage data.** A server built from a clone or the Docker image has no project key and sends nothing. Only the `aiden serve` process of a distribution build (`npm run cli:dist`) can send the anonymous usage and crash data in [`docs/analytics.md`](../../docs/analytics.md); admin commands send nothing, apart from the one final event of `aiden telemetry off`. It sends only after its one-time notice, shown at `aiden service install` or the first `aiden serve` on a terminal; a server that never showed the notice stays silent. `aiden telemetry status|on|off` is the switch (`off` also stops a running server; a server picks up `on` at its next start). `DO_NOT_TRACK=1` and `AIDEN_ANALYTICS=0` turn it off for that process, and a service does not inherit them from your shell, so use `aiden telemetry off` there. With `CI` set nothing is ever sent. State lives in `<agentDir>/aiden-analytics.json`, not Pi's `settings.json`.
 - **Manual-only catalogs.** models.dev, Artificial Analysis and OpenRouter benchmark data are fetched only by the explicit `aiden catalog models-dev fetch` and `aiden insights aa|openrouter fetch` commands, never on startup or in the background, and the fetched data is display-only. Speech models download only with `aiden speech download`.
 - **Remote.** Paired devices authenticate to the server's own TLS identity. Tailscale is used only after you choose it for pairing.
+- **MCP server.** Off until you connect an app. It listens on loopback only and makes no outbound requests of its own.
 
 ## Linux container
 
@@ -238,7 +267,7 @@ The build prefers architecture-verified prebuilt helpers from `prebuilt/native/<
 
 Pi reads its identity (`APP_NAME`, config dir, env var names) from the `package.json` nearest its running code. The build bundles Pi's code into `dist/app/cli.js` and writes a generated `dist/app/package.json` with `piConfig: { name: "aiden", configDir: ".aiden" }`. That is the whole rebrand mechanism, and `tests/bundle.test.mjs` pins it. The bundle script is a port of Pi's own `build-coding-agent-bundle.mjs` (same externals and lazy-loader emission); runtime externals resolve from this package's `node_modules`.
 
-`scripts/patch-branding.mjs` (run inside every build) rewrites Pi's installed dist so server chats use a system prompt that says "operating inside Aiden". The shipped bundle is asserted Pi-free by `tests/bundle.test.mjs`.
+`scripts/patch-branding.mjs` (run inside every build) rewrites Pi's installed dist so server chats use a system prompt that says "running inside Aiden". The shipped bundle is asserted Pi-free by `tests/bundle.test.mjs`.
 
 ## Development
 

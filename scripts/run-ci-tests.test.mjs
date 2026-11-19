@@ -127,6 +127,26 @@ test("a lane that passes lists no failed tests", async () => {
   });
 });
 
+test("related unit selection keeps only reachable files in a lane", () => {
+  const registry = {
+    lanes: [
+      { name: "one", files: ["main/services/x.test.ts", "main/services/other.test.ts"], prerequisites: [], preserved: [] },
+    ],
+    prerequisites: [],
+    preserved: [],
+  };
+  const plan = buildPlan(registry, {
+    ...parseArguments(["--lane", "one"]),
+    selection: { unit: { mode: "related", files: ["main/services/x.test.ts"] } },
+  });
+  assert.deepEqual(plan.unitCommands[0].files, ["main/services/x.test.ts"]);
+  const empty = buildPlan(registry, {
+    ...parseArguments(["--lane", "one"]),
+    selection: { unit: { mode: "related", files: ["renderer/other.test.ts"] } },
+  });
+  assert.deepEqual(empty.unitCommands, []);
+});
+
 test("the default plan runs each unit file once across lanes", () => {
   const registry = {
     lanes: [

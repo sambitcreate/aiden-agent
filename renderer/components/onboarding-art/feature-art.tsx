@@ -2,6 +2,7 @@ import type * as React from "react";
 import type { BotAvatarColor } from "../../shared/bots";
 import type { KeyboardPlatform } from "../../shared/keybindings";
 import type { ArtProps } from "./art-kit";
+import { AppsUsingAidenArt } from "./apps-using-aiden-art";
 import { BotWatchesArt } from "./bot-watches-art";
 import { BotOpenWorkArt } from "./bot-open-work-art";
 import { BotRoutineModelsArt } from "./bot-routine-models-art";
@@ -79,6 +80,7 @@ export const FEATURE_ART = {
   webSearch: { tint: "aqua", Art: WebSearchArt },
   skills: { tint: "plum", Art: ReusableSkillsArt },
   mcp: { tint: "mint", Art: McpConnectorsArt },
+  otherApps: { tint: "coral", Art: AppsUsingAidenArt },
   geminiLive: { tint: "lilac", Art: AidenLiveArt },
   bots: { tint: "peach", Art: BotsArt },
   botWatches: { tint: "rose", Art: BotWatchesArt },

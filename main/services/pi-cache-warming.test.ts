@@ -5,7 +5,8 @@ import { fileURLToPath } from "node:url";
 import { build } from "esbuild";
 import { assistantUsageRecord } from "./usage-accounting.js";
 import { createEmptyUsageDatabase, createUsageStore } from "./usage-store-core.js";
-import { createAssistantMessageEventStream, fauxAssistantMessage, normalizeContext, Type, type Api, type Model, type SimpleStreamOptions } from "@earendil-works/pi-ai";
+import { createAssistantMessageEventStream, fauxAssistantMessage, normalizeContext, type Api, type Model, type SimpleStreamOptions } from "@earendil-works/pi-ai";
+import { Type } from "typebox";
 import { desktopChatExecutionOptions } from "./chat-generation-start.js";
 import { createRemoteChatGenerationOwner } from "./chat-generation-owner.js";
 import { canWarmForegroundChat, PiCacheWarmer, withPiCacheWarming, cacheWarmingEconomics, stopAllPiCacheWarmers, type CacheWarmingClock } from "./pi-cache-warming.js";
@@ -349,6 +350,8 @@ async function cancellationHost() {
     "./generation-delta-coalescer.js": { GenerationDeltaCoalescer: UnusedService },
     "./gemini-context-cache.js": { GeminiContextCache: UnusedService },
     "./chat-run-input-admission.js": { createChatRunInputAdmission: (ports: { active: Map<string, Entry> }) => { active = ports.active; return {}; } },
+    "./chat-owed-turns.js": await import("./chat-owed-turns.js"),
+    "./chat-owed-turn-prompts.js": await import("./chat-owed-turn-prompts.js"),
     "./subagents/child-agent-runtime.js": { subagentRuntimeRegistry: { setHealthMetrics() {}, setLimits() {}, setRuntimeFaultReporter() {}, abortGeneration: (id: string) => children.push(id) } },
     "./tool-approval.js": { ToolApprovalCoordinator: class { cancelStream(id: string) { approvals.push(id); } } },
     "./approval-gate/approval-analytics.js": { ApprovalAnalytics: UnusedService },

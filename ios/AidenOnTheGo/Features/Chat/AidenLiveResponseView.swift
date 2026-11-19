@@ -195,6 +195,7 @@ struct AidenLiveResponseView: View {
                 AidenChronologicalTranscript(
                     rows: chronologicalRows,
                     active: model.isLiveReplyUnsettled,
+                    stoppedStepIDs: model.activityTimeline?.userStoppedStepIDs ?? [],
                     loadRecording: liveRecordingLoader,
                     imageSlotContent: { call in
                         AnyView(ForEach(imageGenerationItems.filter { $0.id == call }) { item in

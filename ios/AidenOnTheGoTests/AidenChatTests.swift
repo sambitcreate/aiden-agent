@@ -480,6 +480,89 @@ final class AidenChatTests: XCTestCase {
     }
 
     @MainActor
+    func testAMissingFolderRefusalThatOffersItContinuesTheWholeChatInAnotherWorkspace() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root); AidenChatProgressLifecycleURLProtocol.reset() }
+        let cache = AidenChatCache(root: root.appending(path: "cache"))
+        let mac = AidenContinueInNewChatMacFixture(refusal: .offers)
+        var coordinator: AidenRemoteCoordinator!
+        let model = try await makeProgressLifecycleModel(
+            mode: .denied,
+            cache: cache,
+            draftStore: AidenChatDraftStore(root: root.appending(path: "drafts")),
+            onCoordinator: { coordinator = $0 },
+            responseOverride: { mac.response($0) },
+            extraCapabilities: [.chatContinueInNewChat]
+        )
+        await coordinator.refreshWorkspaces()
+        await model.load(observeProgress: false)
+        XCTAssertFalse(model.offersContinueInNewChat, "nothing is offered before the Mac refuses")
+
+        model.draft = "Fix the header"
+        await model.send()
+        XCTAssertEqual(model.presentedError, AidenContinueInNewChatMacFixture.refusal)
+        XCTAssertTrue(model.offersContinueInNewChat)
+        // Neither the chat's own workspace nor a hidden No workspace record is a choice.
+        XCTAssertEqual(model.continueInNewChatWorkspaces.map(\.id), ["workspace-2"])
+
+        // The Mac refuses first: its sentence reaches the picker and nothing opens.
+        mac.forkReply = .refuses
+        let refused = await model.continueInNewChat(workspaceId: "workspace-2")
+        XCTAssertNil(refused)
+        XCTAssertEqual(model.continueInNewChatError, AidenContinueInNewChatMacFixture.forkRefusal)
+
+        mac.forkReply = .creates
+        let continued = await model.continueInNewChat(workspaceId: "workspace-2")
+        XCTAssertEqual(continued?.id, "chat-continued")
+        XCTAssertEqual(continued?.workspaceId, "workspace-2")
+        XCTAssertNil(model.continueInNewChatError)
+        XCTAssertFalse(model.offersContinueInNewChat, "the offer ends once the chat continued")
+        XCTAssertEqual(model.chat.id, "chat-progress-lifecycle")
+        XCTAssertEqual(model.chat.workspaceId, "workspace-1", "this chat stays as it is")
+        XCTAssertEqual(model.draft, "Fix the header")
+
+        let forks = mac.forkRequests
+        XCTAssertEqual(forks.count, 2)
+        for fork in forks {
+            XCTAssertEqual(fork.body as NSDictionary, ["continueIn": ["workspaceId": "workspace-2"]])
+            XCTAssertEqual(fork.revision, "revision-1")
+            XCTAssertNotNil(fork.key)
+        }
+        XCTAssertNotEqual(forks.first?.key, forks.last?.key, "a definitive refusal is never replayed")
+        let cached = await cache.admittedChat(instanceId: "instance-progress-lifecycle", chatId: "chat-continued")
+        XCTAssertEqual(cached?.workspaceId, "workspace-2", "the new chat is ready to open")
+        model.stopProgressObservation()
+    }
+
+    @MainActor
+    func testAMissingFolderRefusalWithoutTheOfferShowsOnlyTheMacsSentence() async throws {
+        for kind in [AidenContinueInNewChatMacFixture.Refusal.plain, .declines] {
+            let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+            defer { try? FileManager.default.removeItem(at: root); AidenChatProgressLifecycleURLProtocol.reset() }
+            let mac = AidenContinueInNewChatMacFixture(refusal: kind)
+            var coordinator: AidenRemoteCoordinator!
+            let model = try await makeProgressLifecycleModel(
+                mode: .denied,
+                cache: AidenChatCache(root: root.appending(path: "cache")),
+                draftStore: AidenChatDraftStore(root: root.appending(path: "drafts")),
+                onCoordinator: { coordinator = $0 },
+                responseOverride: { mac.response($0) },
+                extraCapabilities: [.chatContinueInNewChat]
+            )
+            await coordinator.refreshWorkspaces()
+            await model.load(observeProgress: false)
+            model.draft = "Fix the header"
+            await model.send()
+            XCTAssertEqual(model.presentedError, AidenContinueInNewChatMacFixture.refusal, "\(kind)")
+            XCTAssertFalse(model.offersContinueInNewChat, "\(kind)")
+            let continued = await model.continueInNewChat(workspaceId: "workspace-2")
+            XCTAssertNil(continued, "\(kind)")
+            XCTAssertTrue(mac.forkRequests.isEmpty, "\(kind)")
+            model.stopProgressObservation()
+        }
+    }
+
+    @MainActor
     func testTheFirstMessageMovesTheChatIntoItsNewWorktreeThenSendsThere() async throws {
         let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root); AidenChatProgressLifecycleURLProtocol.reset() }
@@ -7403,6 +7486,179 @@ final class AidenChatTests: XCTestCase {
         XCTAssertEqual(decoded.detail, step.detail)
     }
 
+    private func stopTimelineStep(
+        _ id: String,
+        order: Int,
+        toolName: String,
+        label: String,
+        status: AidenAgentStepStatus,
+        stoppedByUser: Bool? = nil
+    ) -> AidenAgentStep {
+        AidenAgentStep(
+            id: id, order: order, kind: .tool,
+            toolCallId: "call-" + id.dropFirst("tool-".count), toolName: toolName,
+            label: label, status: status, startedAt: 1_000,
+            updatedAt: 2_000, finishedAt: 2_000, contentOffset: 0,
+            durationMs: nil, target: nil, detail: nil, lineChanges: nil,
+            stoppedByUser: stoppedByUser
+        )
+    }
+
+    private func stopTimeline(
+        _ steps: [AidenAgentStep],
+        origin: AidenGenerationCancellationOrigin?,
+        claimCheck: AidenGenerationClaimCheck? = nil
+    ) -> AidenGenerationTimeline {
+        AidenGenerationTimeline(
+            version: 3, generationId: "stream-1", status: .cancelled,
+            startedAt: 1_000, finishedAt: 2_000, steps: steps,
+            cancellationOrigin: origin, claimCheck: claimCheck
+        )
+    }
+
+    func testCallThePersonStoppedReadsStoppedAndIsNotAnIssue() throws {
+        let compact = stopTimelineStep(
+            "tool-1", order: 0, toolName: "compact_context", label: "Compact context",
+            status: .cancelled, stoppedByUser: true
+        )
+        let timeline = stopTimeline([compact], origin: .userStop)
+        XCTAssertTrue(timeline.isStoppedByUser(compact))
+        XCTAssertEqual(timeline.issueCount, 0)
+        XCTAssertEqual(timeline.userStoppedStepIDs, ["tool-1"])
+        XCTAssertEqual(
+            AidenAgentActivityPresentation.line(for: compact, stoppedByUser: timeline.isStoppedByUser(compact)),
+            "Compact context stopped"
+        )
+        XCTAssertEqual(
+            AidenAgentActivityPresentation.tone(for: compact, stoppedByUser: timeline.isStoppedByUser(compact)),
+            .normal
+        )
+        // The decoder-level status is unchanged: a cancelled call is still an issue status.
+        XCTAssertTrue(compact.status?.isIssue == true)
+    }
+
+    func testOtherCancellationsAndFailuresStayIssues() throws {
+        let cancelled = stopTimelineStep("tool-1", order: 0, toolName: "run_command", label: "Run command", status: .cancelled)
+        for origin: AidenGenerationCancellationOrigin? in [.applicationShutdown, .chatDeletion, .scheduledTaskCancel, nil] {
+            let timeline = stopTimeline([cancelled], origin: origin)
+            XCTAssertFalse(timeline.isStoppedByUser(cancelled), String(describing: origin))
+            XCTAssertEqual(timeline.issueCount, 1, String(describing: origin))
+            XCTAssertEqual(
+                AidenAgentActivityPresentation.line(for: cancelled, stoppedByUser: timeline.isStoppedByUser(cancelled)),
+                "Run command cancelled"
+            )
+            XCTAssertEqual(AidenAgentActivityPresentation.tone(for: cancelled), .warning)
+        }
+
+        // A run the person stopped does not hide a call cancelled earlier for
+        // another reason: only the calls the Mac marked read as stopped.
+        let detached = stopTimelineStep("tool-1", order: 0, toolName: "edit_file", label: "Edit file", status: .cancelled)
+        let stopped = stopTimelineStep(
+            "tool-2", order: 1, toolName: "run_command", label: "Run command",
+            status: .cancelled, stoppedByUser: true
+        )
+        let mixed = stopTimeline([detached, stopped], origin: .userStop)
+        XCTAssertFalse(mixed.isStoppedByUser(detached))
+        XCTAssertTrue(mixed.isStoppedByUser(stopped))
+        XCTAssertEqual(mixed.userStoppedStepIDs, ["tool-2"])
+        XCTAssertEqual(mixed.issueCount, 1)
+
+        let failed = stopTimelineStep("tool-1", order: 0, toolName: "edit_file", label: "Edit file", status: .failed)
+        let failedStop = stopTimeline([failed], origin: .userStop)
+        XCTAssertFalse(failedStop.isStoppedByUser(failed))
+        XCTAssertEqual(failedStop.issueCount, 1)
+        XCTAssertEqual(AidenAgentActivityPresentation.tone(for: failed), .danger)
+    }
+
+    /// Contract revision 62: the shared fixture's stopped and issue steps read
+    /// the same here as on the Mac.
+    func testStoppedStepsFixtureMatchesTheMac() throws {
+        let fixtureURL = try XCTUnwrap(Bundle(for: Self.self).url(forResource: "contract", withExtension: "json"))
+        let root = try XCTUnwrap(
+            try JSONSerialization.jsonObject(with: Data(contentsOf: fixtureURL)) as? [String: Any]
+        )
+        let section = try XCTUnwrap(root["stoppedSteps"] as? [String: Any])
+        let timelineData = try JSONSerialization.data(withJSONObject: try XCTUnwrap(section["timeline"]))
+        let timeline = try AidenRemoteJSONDecoder.decode(AidenGenerationTimeline.self, from: timelineData)
+        let stoppedIDs = try XCTUnwrap(section["stoppedStepIds"] as? [String])
+        let issueIDs = try XCTUnwrap(section["issueStepIds"] as? [String])
+
+        XCTAssertTrue(timeline.isRendererSafe)
+        XCTAssertEqual(timeline.steps.filter(timeline.isStoppedByUser).map(\.id), stoppedIDs)
+        XCTAssertEqual(
+            timeline.steps.filter { $0.status?.isIssue == true && !timeline.isStoppedByUser($0) }.map(\.id),
+            issueIDs
+        )
+        XCTAssertEqual(timeline.issueCount, issueIDs.count)
+    }
+
+    func testStopMarkIsValidOnlyInAVersionThreeTimeline() {
+        let stopped = stopTimelineStep(
+            "tool-1", order: 0, toolName: "run_command", label: "Run command",
+            status: .cancelled, stoppedByUser: true
+        )
+        let plain = stopTimelineStep(
+            "tool-1", order: 0, toolName: "run_command", label: "Run command", status: .cancelled
+        )
+        XCTAssertTrue(stopTimeline([stopped], origin: .userStop).isRendererSafe)
+        for version in [1, 2] {
+            func older(_ step: AidenAgentStep) -> AidenGenerationTimeline {
+                AidenGenerationTimeline(
+                    version: version, generationId: "stream-1", status: .cancelled,
+                    startedAt: 1_000, finishedAt: 2_000, steps: [step],
+                    cancellationOrigin: .userStop, claimCheck: nil
+                )
+            }
+            XCTAssertFalse(older(stopped).isRendererSafe, "version \(version) with the mark")
+            XCTAssertTrue(older(plain).isRendererSafe, "version \(version) without the mark")
+        }
+    }
+
+    func testStopMarkDecodesOnlyAsTrueOnACancelledToolStep() throws {
+        func decode(status: String, mark: String?) throws -> AidenAgentStep {
+            let markField = mark.map { ",\"stoppedByUser\":\($0)" } ?? ""
+            let json = """
+            {"id":"tool-1","order":0,"kind":"tool","toolCallId":"call-1","toolName":"run_command",\
+            "label":"Run command","status":"\(status)","startedAt":1000,"updatedAt":2000,\
+            "finishedAt":2000,"contentOffset":0\(markField)}
+            """
+            return try AidenRemoteJSONDecoder.decode(AidenAgentStep.self, from: Data(json.utf8))
+        }
+        let marked = try decode(status: "cancelled", mark: "true")
+        XCTAssertEqual(marked.stoppedByUser, true)
+        XCTAssertEqual(
+            try JSONDecoder().decode(AidenAgentStep.self, from: JSONEncoder().encode(marked)).stoppedByUser,
+            true,
+            "the mark survives a local round trip"
+        )
+        let unmarked = try decode(status: "cancelled", mark: nil)
+        XCTAssertNil(unmarked.stoppedByUser)
+        XCTAssertNil(
+            try JSONDecoder().decode(AidenAgentStep.self, from: JSONEncoder().encode(unmarked)).stoppedByUser
+        )
+        // An older or unexpected value never rejects the step; it reads as unmarked.
+        XCTAssertNil(try decode(status: "cancelled", mark: "false").stoppedByUser)
+        XCTAssertNil(try decode(status: "cancelled", mark: "\"yes\"").stoppedByUser)
+        XCTAssertNil(try decode(status: "failed", mark: "true").stoppedByUser)
+        XCTAssertNil(try decode(status: "completed", mark: "true").stoppedByUser)
+    }
+
+    func testStoppedCallNamedByAClaimCheckStaysAnIssueAndStillDecodes() throws {
+        let run = stopTimelineStep(
+            "tool-1", order: 0, toolName: "run_command", label: "Run command",
+            status: .cancelled, stoppedByUser: true
+        )
+        let timeline = stopTimeline(
+            [run],
+            origin: .userStop,
+            claimCheck: AidenGenerationClaimCheck(kind: .unverifiedSuccess, stepIds: ["tool-1"])
+        )
+        XCTAssertFalse(timeline.isStoppedByUser(run))
+        XCTAssertEqual(timeline.issueCount, 1)
+        // Claim-check validation still sees the stopped call as an issue step.
+        XCTAssertTrue(timeline.isRendererSafe)
+    }
+
     func testActivitySummaryMatchesMacCategories() throws {
         let timeline = AidenGenerationTimeline(
             version: 3,
@@ -13993,6 +14249,111 @@ private final class AidenNewWorktreeMacFixture: @unchecked Sendable {
         return """
         {"id":"\(id)","name":"Site","permission":"ask","hasFolder":true,"isManagedWorktree":\(worktree),\(branch)"createdAt":"2026-09-14T12:00:00Z","updatedAt":"2026-09-14T12:00:00Z","revision":"workspace-revision-1"}
         """
+    }
+}
+
+/// A Mac whose chat's workspace folder is gone (revision 64). Sends are
+/// refused with or without the offer to continue, and the fork route either
+/// makes the new chat in another workspace or refuses with the Mac's sentence.
+private final class AidenContinueInNewChatMacFixture: @unchecked Sendable {
+    enum Refusal: Sendable { case offers, declines, plain }
+    enum ForkReply: Sendable { case creates, refuses }
+    struct ForkRequest {
+        let body: [String: Any]
+        let revision: String?
+        let key: String?
+    }
+    static let refusal = "This chat's workspace folder is missing on your Mac. Put it back, then send again."
+    static let forkRefusal = "That workspace's folder is missing too. Choose another workspace."
+    private let lock = NSLock()
+    private let refusalKind: Refusal
+    private var reply: ForkReply = .creates
+    private var forks: [ForkRequest] = []
+
+    init(refusal: Refusal) { refusalKind = refusal }
+
+    var forkReply: ForkReply {
+        get { lock.withLock { reply } }
+        set { lock.withLock { reply = newValue } }
+    }
+    var forkRequests: [ForkRequest] { lock.withLock { forks } }
+
+    func response(_ request: URLRequest) -> (Int, String, Data)? {
+        switch request.url!.path {
+        case "/api/aiden/v1/server":
+            let grants = #"["server:read","workspace:read","chat:read","chat:write","chat:continue-in-new-chat"]"#
+            return (200, "application/json", Data("""
+            {"protocolVersion":1,"instanceId":"instance-progress-lifecycle","name":"Progress Lifecycle Mac","appVersion":"1.0","capabilities":\(grants),"serverCapabilities":\(grants),"features":[],"connectionMode":"lan","serverTime":"2026-11-11T09:00:00Z"}
+            """.utf8))
+        case "/api/aiden/v1/workspaces":
+            let workspaces = [
+                Self.workspace(id: "workspace-1", name: "Site", hidden: false),
+                Self.workspace(id: "workspace-2", name: "Docs", hidden: false),
+                Self.workspace(id: "workspace-home", name: "Chats", hidden: true),
+            ].joined(separator: ",")
+            return (200, "application/json", Data(#"{"workspaces":[\#(workspaces)]}"#.utf8))
+        case "/api/aiden/v1/models":
+            return (200, "application/json", Data(#"{"providers":[{"id":"openai","label":"OpenAI","models":[{"id":"gpt-5.6","label":"GPT"}]}],"defaults":{"providerId":"openai","modelId":"gpt-5.6"}}"#.utf8))
+        case "/api/aiden/v1/chats/chat-progress-lifecycle":
+            return (200, "application/json", Data(Self.chat(id: "chat-progress-lifecycle", workspaceId: "workspace-1", forked: false).utf8))
+        case "/api/aiden/v1/chats/chat-progress-lifecycle/turns" where request.httpMethod == "POST":
+            let details: String
+            switch refusalKind {
+            case .offers: details = #","details":{"reason":"folder_missing","canContinueInNewChat":true}"#
+            case .declines: details = #","details":{"reason":"folder_missing","canContinueInNewChat":false}"#
+            case .plain: details = ""
+            }
+            return (409, "application/json", Data("""
+            {"error":{"code":"workspace_unavailable","message":"\(Self.refusal)","requestId":"continue-refused","retryable":false\(details)}}
+            """.utf8))
+        case "/api/aiden/v1/chats/chat-progress-lifecycle/fork" where request.httpMethod == "POST":
+            let body = request.httpBody ?? request.httpBodyStream.map(Self.readStream) ?? Data()
+            let fields = (try? JSONSerialization.jsonObject(with: body)) as? [String: Any] ?? [:]
+            let reply = lock.withLock { () -> ForkReply in
+                forks.append(ForkRequest(
+                    body: fields,
+                    revision: request.value(forHTTPHeaderField: "If-Match"),
+                    key: request.value(forHTTPHeaderField: "Idempotency-Key")
+                ))
+                return self.reply
+            }
+            if reply == .refuses {
+                return (409, "application/json", Data("""
+                {"error":{"code":"workspace_unavailable","message":"\(Self.forkRefusal)","requestId":"continue-fork-refused","retryable":false}}
+                """.utf8))
+            }
+            return (201, "application/json", Data(#"{"chat":\#(Self.chat(id: "chat-continued", workspaceId: "workspace-2", forked: true))}"#.utf8))
+        default:
+            return nil
+        }
+    }
+
+    private static func chat(id: String, workspaceId: String, forked: Bool) -> String {
+        let lineage = forked
+            ? #","forkedFrom":{"chatId":"chat-progress-lifecycle","messageId":"message-answer","position":"after","at":"2026-11-11T09:00:00Z"}"#
+            : ""
+        return """
+        {"id":"\(id)","workspaceId":"\(workspaceId)","title":"Progress lifecycle","messages":[{"id":"message-question","role":"user","text":"Tidy the parser.","createdAt":"2026-09-14T12:00:00Z"},{"id":"message-answer","role":"assistant","text":"Done.","createdAt":"2026-09-14T12:00:01Z"}],"createdAt":"2026-09-14T12:00:00Z","updatedAt":"2026-09-14T12:00:01Z","revision":"revision-1"\(lineage)}
+        """
+    }
+
+    private static func workspace(id: String, name: String, hidden: Bool) -> String {
+        """
+        {"id":"\(id)","name":"\(name)","permission":"ask","hasFolder":\(!hidden),"isManagedWorktree":false,"noWorkspace":\(hidden),"createdAt":"2026-09-14T12:00:00Z","updatedAt":"2026-09-14T12:00:00Z","revision":"workspace-revision-1"}
+        """
+    }
+
+    private static func readStream(_ stream: InputStream) -> Data {
+        stream.open()
+        defer { stream.close() }
+        var data = Data()
+        var buffer = [UInt8](repeating: 0, count: 4_096)
+        while stream.hasBytesAvailable {
+            let count = stream.read(&buffer, maxLength: buffer.count)
+            if count <= 0 { break }
+            data.append(buffer, count: count)
+        }
+        return data
     }
 }
 

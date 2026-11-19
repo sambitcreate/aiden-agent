@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { mcpResourceToolName } from "./mcp-resources.js";
 import { markMcpAgentTool, mcpAgentToolName, mcpAgentToolNames } from "./mcp-tool-identity.js";
-import { Type } from "@earendil-works/pi-ai";
+import { Type } from "typebox";
 import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
 import type { RegisteredSkill, SkillRegistrySnapshot } from "./skill-registry.js";
 import type { BotRuntimeEffectiveAuthority } from "./bot-runtime-authority.js";

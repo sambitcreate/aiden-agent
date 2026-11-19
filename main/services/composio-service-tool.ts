@@ -2,7 +2,7 @@ import Ajv from "ajv";
 import addFormats from "ajv-formats";
 import { isDeepStrictEqual } from "node:util";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
-import { Type } from "@earendil-works/pi-ai";
+import { Type } from "typebox";
 import type { McpServer } from "./types.js";
 import { assertMcpPresetServer } from "./mcp-presets.js";
 import { mcpToolsOfferedToModel } from "../../renderer/shared/mcp-exposure.js";

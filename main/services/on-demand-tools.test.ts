@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { Agent, type AgentMessage, type AgentTool } from "@earendil-works/pi-agent-core";
-import { Type, getCurrentTools } from "@earendil-works/pi-ai";
+import { getCurrentTools } from "@earendil-works/pi-ai";
+import { Type } from "typebox";
 import { createFauxCore, fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai/providers/faux";
 import {
   LOAD_TOOLS_TOOL_NAME,

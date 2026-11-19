@@ -43,7 +43,8 @@ import {
   isChatForkError,
   type ChatForkError,
 } from "./chat-fork-error.js";
-import type { ChatForkService, ChatForkWorkspaceAdmission } from "./chat-fork-service.js";
+import { continueInNewChatForkPoint, type ChatForkService, type ChatForkWorkspaceAdmission } from "./chat-fork-service.js";
+import type { WorkspaceFolderRemoteRefusal } from "./workspace-folder-presence.js";
 import { isChatCreateReconciliationRequiredError } from "./chat-store-core.js";
 import type { ChatActivitySnapshot } from "../../renderer/shared/chat-activity.js";
 import {
@@ -1097,14 +1098,26 @@ function parseMove(input: unknown): { workspaceId: string; confirmedForeground: 
   return { workspaceId: safeId(record.workspaceId, "workspace"), confirmedForeground: true };
 }
 
-interface ParsedFork {
-  messageId: string;
-  position: ChatForkPosition;
-  summary?: { instructions?: string };
-}
+type ParsedFork =
+  | { messageId: string; position: ChatForkPosition; summary?: { instructions?: string }; continueIn?: undefined }
+  | { continueIn: { workspaceId: string }; messageId?: undefined; position?: undefined; summary?: undefined };
 
 function parseFork(input: unknown): ParsedFork {
   const record = ownRecord(input);
+  if (record && Object.prototype.hasOwnProperty.call(record, "continueIn")) {
+    // Revision 64: the whole conversation, into another workspace.
+    const continueIn = ownRecord(record.continueIn);
+    if (
+      !exactKeys(record, ["continueIn"]) ||
+      !continueIn ||
+      !exactKeys(continueIn, ["workspaceId"]) ||
+      !boundedString(continueIn.workspaceId, 128) ||
+      !SAFE_ID.test(continueIn.workspaceId)
+    ) {
+      throw new AidenRemoteServiceError("invalid_request", "The chat fork request is invalid.", 400);
+    }
+    return { continueIn: { workspaceId: continueIn.workspaceId } };
+  }
   const summary = record?.summary === undefined ? undefined : ownRecord(record.summary);
   const focus = summary?.focus;
   if (
@@ -1155,6 +1168,10 @@ function forkRemoteError(error: ChatForkError): AidenRemoteServiceError {
       return new AidenRemoteServiceError("payload_too_large", error.message, 413);
     case "unavailable":
       return new AidenRemoteServiceError("operation_in_progress", error.message, 409);
+    case "folder_missing":
+      // The same code as a turn in a chat whose folder is gone, without details:
+      // nothing is in progress, and another workspace may still work.
+      return new AidenRemoteServiceError("workspace_unavailable", error.message, 409);
   }
 }
 
@@ -1467,7 +1484,14 @@ export class AidenRemoteChatService {
        * worktree's checkout) was moved or deleted, so a paired device hears
        * why before its message is stored. Undefined, or absent: not refused.
        */
-      workspaceFolderRefusal?: (workspaceId: string) => Promise<string | undefined>;
+      workspaceFolderRefusal?: (workspaceId: string) => Promise<WorkspaceFolderRemoteRefusal | undefined>;
+      /**
+       * Revision 64: whether a device negotiated `chat:continue-in-new-chat`.
+       * Only such a device hears `details` on a missing-folder refusal (older
+       * phones refuse unknown detail keys) and may send a `continueIn` fork.
+       * Omission fails closed.
+       */
+      deviceSupportsContinueInNewChat?: (deviceId: string) => Promise<boolean>;
       /**
        * No workspace chats keep a hidden folder each: `target` gives the
        * workspace a new chat that asked for `noWorkspace` goes to, and
@@ -1482,6 +1506,11 @@ export class AidenRemoteChatService {
       isFolderWorkspace?: (workspaceId: string) => Promise<boolean>;
       /** For usage data: this device is another paired Mac or Linux host, not a phone. */
       deviceIsPeer?: (deviceId: string) => Promise<boolean>;
+      /**
+       * For usage data: false for a device whose chats and turns send no
+       * analytics (an outside MCP app). Absent or true: they are reported.
+       */
+      deviceReportsAnalytics?: (deviceId: string) => Promise<boolean>;
       /** The Mac's Settings → Appearance inline visuals choice for remote turns. */
       inlineVisuals?: () => Promise<InlineVisualsMode | undefined>;
       /**
@@ -1543,7 +1572,7 @@ export class AidenRemoteChatService {
       runTimes?: (chatId: string) => AidenRemoteChatRunTimes | undefined;
       /** Enables `POST /chats/{chatId}/fork` (`chat-fork-v1`). */
       forks?: {
-        service: Pick<ChatForkService, "fork" | "supportsSummaries">;
+        service: Pick<ChatForkService, "fork" | "supportsSummaries"> & Partial<Pick<ChatForkService, "supportsContinue">>;
         /** Hold the destination workspace still while the fork is created. */
         admitWorkspace(workspaceId: string): ChatForkWorkspaceAdmission;
         /** Enables the `fork-summary` routes (`chat-fork-summary-v1`). */
@@ -1763,6 +1792,22 @@ export class AidenRemoteChatService {
     );
   }
 
+  /**
+   * True when this device already made this create or turn request under
+   * `key`, so repeating it replays the recorded answer and starts nothing new.
+   */
+  hasRecordedRequest(
+    deviceId: string,
+    target: { kind: "create" } | { kind: "turn"; chatId: string },
+    key: string,
+  ): boolean {
+    return this.idempotency.holds(
+      target.kind === "create"
+        ? { deviceId, route: "POST /chats", resourceId: "chat-registry", key }
+        : { deviceId, route: "POST /chats/{id}/turns", resourceId: safeId(target.chatId, "chat"), key },
+    );
+  }
+
   private async executeIdempotent<T>(
     scope: { deviceId: string; route: string; resourceId: string; key: string },
     input: unknown,
@@ -1941,6 +1986,17 @@ export class AidenRemoteChatService {
           .map((meta) => meta.id),
       ),
     };
+  }
+
+  /**
+   * True when `listSummaries` would show this chat: an ordinary chat with a
+   * safe id, workspace and timestamps. Never a Bot, assistant or
+   * feature-owned chat. Transcript-free: one read of the metadata index.
+   */
+  async isListedChat(chatId: string): Promise<boolean> {
+    const id = safeId(chatId, "chat");
+    const metadata = (await this.options.application.list()).find((entry) => entry.id === id);
+    return metadata !== undefined && safeSummaryMetadata(metadata) !== null;
   }
 
   /**
@@ -2155,6 +2211,7 @@ export class AidenRemoteChatService {
             const workspaceId = assignment?.workspaceId ?? (typeof target === "string" ? target : parsed.workspaceId);
             let uncertain = false;
             try {
+              const reportAnalytics = (await this.options.deviceReportsAnalytics?.(deviceId)) !== false;
               return await this.options.application.create(
                 {
                   workspaceId,
@@ -2163,6 +2220,7 @@ export class AidenRemoteChatService {
                     : {}),
                 },
                 owner,
+                ...(reportAnalytics ? [] : [{ reportAnalytics: false }] as const),
               );
             } catch (error) {
               uncertain = isChatCreateReconciliationRequiredError(error);
@@ -2473,6 +2531,11 @@ export class AidenRemoteChatService {
     return this.options.forks !== undefined;
   }
 
+  /** Whether this host can continue a chat whose folder is gone in a new chat (revision 64). */
+  get supportsContinueInNewChat(): boolean {
+    return this.options.forks?.service.supportsContinue === true;
+  }
+
   /** Whether this host can fork with a summary (`chat-fork-summary-v1`). */
   get supportsForkSummaries(): boolean {
     return this.options.forks?.service.supportsSummaries === true &&
@@ -2482,7 +2545,10 @@ export class AidenRemoteChatService {
   /**
    * Fork a regular chat at one message. `after` keeps the chosen settled
    * reply; `before` keeps everything before the chosen prompt and returns
-   * that prompt as `prefill` so the device can edit and resend it.
+   * that prompt as `prefill` so the device can edit and resend it. With
+   * `continueIn` (revision 64) the whole conversation, through its newest
+   * reply, goes to a new chat in another workspace because this chat's folder
+   * is gone; the original stays as it is.
    */
   async fork(
     deviceId: string,
@@ -2501,6 +2567,18 @@ export class AidenRemoteChatService {
     if (parsed.summary && !this.supportsForkSummaries) {
       throw new AidenRemoteServiceError("not_found", "Fork with summary is not available on this computer.", 404);
     }
+    if (parsed.continueIn) {
+      if (!this.supportsContinueInNewChat) {
+        throw new AidenRemoteServiceError("not_found", "Continuing in a new chat is unavailable on this host.", 404);
+      }
+      if ((await this.options.deviceSupportsContinueInNewChat?.(deviceId)) !== true) {
+        throw new AidenRemoteServiceError(
+          "capability_denied",
+          "This device does not have access to that Aiden capability.",
+          403,
+        );
+      }
+    }
     try {
       return await this.executeIdempotent(
         { deviceId, route: "POST /chats/{id}/fork", resourceId: safeId(chatId, "chat"), key },
@@ -2509,7 +2587,7 @@ export class AidenRemoteChatService {
           let cut: ChatMessage | undefined;
           // A fork before a prompt hands that prompt back to edit and resend.
           const prefillSource = () =>
-            parsed.position === "before" && cut?.role === "user"
+            !parsed.continueIn && parsed.position === "before" && cut?.role === "user"
               ? {
                   text: boundedUnicodeScalarPrefix(cut.content, 200_000),
                   stored: safeStoredAttachments(cut.attachments) ?? [],
@@ -2518,16 +2596,18 @@ export class AidenRemoteChatService {
           let forked: Chat;
           try {
             forked = await forks.service.fork(
-              {
-                chatId,
-                forkAt: { messageId: parsed.messageId, position: parsed.position },
-                ...(parsed.summary ? { summary: parsed.summary } : {}),
-              },
+              parsed.continueIn
+                ? { chatId, continueIn: parsed.continueIn }
+                : {
+                    chatId,
+                    forkAt: { messageId: parsed.messageId, position: parsed.position },
+                    ...(parsed.summary ? { summary: parsed.summary } : {}),
+                  },
               {
                 admitWorkspace: (workspaceId) => forks.admitWorkspace(workspaceId),
                 assertSource: (source) => {
                   requireRevision(revision, source);
-                  cut = source.messages.find((message) => message.id === parsed.messageId);
+                  if (!parsed.continueIn) cut = source.messages.find((message) => message.id === parsed.messageId);
                 },
                 // A response that cannot be sent or replayed must not leave a new chat behind.
                 assertInstallable: (chat) => {
@@ -2828,8 +2908,17 @@ export class AidenRemoteChatService {
                 : undefined;
             if (folderRefusal) {
               // Nothing ran, so the same send runs once the folder is back.
+              // Older phones refuse unknown detail keys, so only a device that
+              // negotiated Continue in a new chat hears why and whether it can.
+              const details = (await this.options.deviceSupportsContinueInNewChat?.(deviceId)) === true
+                ? {
+                    reason: folderRefusal.reason,
+                    canContinueInNewChat:
+                      this.supportsContinueInNewChat && continueInNewChatForkPoint(authoritative.messages) !== undefined,
+                  }
+                : undefined;
               throw new AidenOperationNotExecutedError(
-                new AidenRemoteServiceError("workspace_unavailable", folderRefusal, 409),
+                new AidenRemoteServiceError("workspace_unavailable", folderRefusal.message, 409, false, details),
               );
             }
             taken = parsed.attachmentIds === undefined
@@ -2938,7 +3027,7 @@ export class AidenRemoteChatService {
               surface,
               owner.owner,
             );
-            if (started) {
+            if (started && (await this.options.deviceReportsAnalytics?.(deviceId)) !== false) {
               reportChatMessageSent({
                 providerId: selection.providerId,
                 model: selection.modelId,

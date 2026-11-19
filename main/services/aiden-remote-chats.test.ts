@@ -37,7 +37,7 @@ import type { RegisteredSkill } from "./skill-registry.js";
 import type { VisualViewerAppearance, VisualViewerSource } from "./visual-viewer-document.js";
 import { HostRunRegistry } from "./host-run-registry.js";
 import { ChatTriageStore } from "./chat-triage.js";
-import { workspaceFolderRemoteRefusal } from "./workspace-folder-presence.js";
+import { workspaceFolderMissing, workspaceFolderRemoteRefusal } from "./workspace-folder-presence.js";
 
 const ONE_PIXEL_PNG =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScL2aQAAAABJRU5ErkJggg==";
@@ -72,10 +72,12 @@ function fixture(
     botTurnAuthorityPreflight?: AidenRemoteBotTurnAuthorityPreflight;
     botPaused?: (botId: string) => Promise<boolean>;
     spendingRefusal?: (chat: { id: string; botId?: string }) => Promise<string | undefined>;
-    workspaceFolderRefusal?: (workspaceId: string) => Promise<string | undefined>;
+    workspaceFolderRefusal?: ConstructorParameters<typeof AidenRemoteChatService>[0]["workspaceFolderRefusal"];
+    deviceSupportsContinueInNewChat?: (deviceId: string) => Promise<boolean>;
     noWorkspace?: ConstructorParameters<typeof AidenRemoteChatService>[0]["noWorkspace"];
     isFolderWorkspace?: ConstructorParameters<typeof AidenRemoteChatService>[0]["isFolderWorkspace"];
     deviceIsPeer?: ConstructorParameters<typeof AidenRemoteChatService>[0]["deviceIsPeer"];
+    deviceReportsAnalytics?: ConstructorParameters<typeof AidenRemoteChatService>[0]["deviceReportsAnalytics"];
     modelSupportsImages?: () => boolean;
     imageArtifactRecoveryPending?: boolean;
     imageArtifactRecoveryUnavailable?: boolean;
@@ -104,6 +106,7 @@ function fixture(
 ) {
   let current: Chat | null = structuredClone(initial);
   let creates = 0;
+  const createOptions: Array<{ reportAnalytics?: boolean } | undefined> = [];
   let appends = 0;
   let notifications = 0;
   let begins = 0;
@@ -142,8 +145,9 @@ function fixture(
           reconciliation: null,
         };
       },
-      create: async (input) => {
+      create: async (input, _owner, options) => {
         creates += 1;
+        createOptions.push(options);
         current = chat({
           id: `chat-${creates + 1}`,
           workspaceId: input.workspaceId,
@@ -301,8 +305,12 @@ function fixture(
     ...(fixtureOptions.noWorkspace ? { noWorkspace: fixtureOptions.noWorkspace } : {}),
     ...(fixtureOptions.isFolderWorkspace ? { isFolderWorkspace: fixtureOptions.isFolderWorkspace } : {}),
     ...(fixtureOptions.deviceIsPeer ? { deviceIsPeer: fixtureOptions.deviceIsPeer } : {}),
+    ...(fixtureOptions.deviceReportsAnalytics ? { deviceReportsAnalytics: fixtureOptions.deviceReportsAnalytics } : {}),
     ...(fixtureOptions.workspaceFolderRefusal
       ? { workspaceFolderRefusal: fixtureOptions.workspaceFolderRefusal }
+      : {}),
+    ...(fixtureOptions.deviceSupportsContinueInNewChat
+      ? { deviceSupportsContinueInNewChat: fixtureOptions.deviceSupportsContinueInNewChat }
       : {}),
     ...(fixtureOptions.attachments ? { attachments: fixtureOptions.attachments } : {}),
     ...(fixtureOptions.isTitlePending ? { isTitlePending: fixtureOptions.isTitlePending } : {}),
@@ -330,6 +338,7 @@ function fixture(
     service,
     streams,
     creates: () => creates,
+    createOptions: () => createOptions,
     appends: () => appends,
     notifications: () => notifications,
     begins: () => begins,
@@ -3239,6 +3248,182 @@ test("a fork too large to send from a paired device is refused without creating 
   assert.equal((await store.list()).length, 1);
 });
 
+/**
+ * A chat in workspace-1 whose folder can be moved away, a second workspace
+ * with its folder in place, the real chat store and the real fork service.
+ */
+async function continueFixture(
+  t: { after: (fn: () => unknown) => void },
+  options: { capable?: (deviceId: string) => boolean; continueWired?: boolean; botId?: string; replied?: boolean } = {},
+) {
+  const root = await mkdtemp(join(tmpdir(), "aiden-remote-continue-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const folders: Record<string, string> = { "workspace-1": join(root, "project"), "workspace-2": join(root, "other") };
+  await mkdir(folders["workspace-1"]!);
+  await mkdir(folders["workspace-2"]!);
+  const workspace = (id: string) => (folders[id] ? { name: id, folderPath: folders[id]!, permission: "ask" as const } : undefined);
+  await mkdir(join(root, "chats"));
+  const store = createChatStore(async () => join(root, "chats"));
+  const created = await store.create({ title: "Parser", workspaceId: "workspace-1", ...(options.botId ? { botId: options.botId } : {}) });
+  let source = await store.appendMessage(created.id, { role: "user", content: "Why does it fail?" });
+  if (options.replied !== false) {
+    await store.appendMessage(created.id, { role: "assistant", content: "A missing token." });
+    await store.appendMessage(created.id, { role: "user", content: "Fix it." });
+    source = await store.appendMessage(created.id, { role: "assistant", content: "Fixed." });
+  }
+  const admitted: string[] = [];
+  const app = fixture(source, {
+    ...(options.botId ? { retainedBotChatAuthorizer: () => true } : {}),
+    workspaceFolderRefusal: async (id) => {
+      const record = workspace(id);
+      return record ? workspaceFolderRemoteRefusal(record) : undefined;
+    },
+    deviceSupportsContinueInNewChat: async (deviceId) => options.capable?.(deviceId) ?? true,
+    forks: {
+      service: createChatForkService({
+        chatStore: store,
+        beginChatCopy: () => () => undefined,
+        workspaceExists: async (id) => workspace(id) !== undefined,
+        ...(options.continueWired === false
+          ? {}
+          : { workspaceFolderMissing: async (id: string) => Boolean(workspace(id) && (await workspaceFolderMissing(workspace(id)!))) }),
+      }),
+      admitWorkspace: (id) => {
+        admitted.push(id);
+        return { isAborted: () => false, release: () => undefined };
+      },
+    },
+  });
+  return { ...app, root, folders, store, source, admitted };
+}
+
+test("a phone that negotiated it hears why the folder is gone and continues the whole chat in another workspace, leaving the original as it is", async (t) => {
+  const app = await continueFixture(t);
+  await rm(app.folders["workspace-1"]!, { recursive: true });
+
+  const refusal = await app.service
+    .startTurn("device-1", app.source.id, "continue-refused-turn-0001", { text: "still there?" })
+    .then(() => undefined, (error: unknown) => error);
+  assert.ok(refusal instanceof AidenRemoteServiceError);
+  assert.equal(refusal.code, "workspace_unavailable");
+  assert.equal(refusal.status, 409);
+  assert.deepEqual(refusal.details, { reason: "folder_missing", canContinueInNewChat: true });
+  // The wire envelope a phone parses, with no path anywhere in it.
+  const wire = JSON.stringify({ error: { code: refusal.code, message: refusal.message, retryable: refusal.retryable, details: refusal.details } });
+  assert.equal(wire.includes(app.root), false, "a Remote error never carries a path");
+
+  const { revision } = await app.service.get(app.source.id);
+  const forked = await app.service.fork("device-1", app.source.id, revision, "continue-key-00000001", {
+    continueIn: { workspaceId: "workspace-2" },
+  });
+  assert.deepEqual(parseAidenRemoteChatForkResult(JSON.parse(JSON.stringify(forked))), forked);
+  assert.equal(JSON.stringify(forked).includes(app.root), false, "the new chat names no path");
+  assert.notEqual(forked.chat.id, app.source.id);
+  assert.equal(forked.chat.workspaceId, "workspace-2");
+  assert.equal(forked.prefill, undefined);
+  assert.deepEqual(forked.chat.messages.map(({ role, text }) => [role, text]), [
+    ["user", "Why does it fail?"],
+    ["assistant", "A missing token."],
+    ["user", "Fix it."],
+    ["assistant", "Fixed."],
+  ]);
+  assert.equal(forked.chat.forkedFrom?.chatId, app.source.id);
+  assert.equal(forked.chat.forkedFrom?.position, "after");
+  assert.equal(forked.chat.forkedFrom?.messageId, app.source.messages[3]!.id);
+
+  const stored = await app.store.get(forked.chat.id);
+  assert.equal(stored?.workspaceId, "workspace-2");
+  const original = await app.store.get(app.source.id);
+  assert.deepEqual(original, app.source, "the original chat is untouched");
+
+  // The same key replays the same chat rather than making another.
+  const replay = await app.service.fork("device-1", app.source.id, revision, "continue-key-00000001", {
+    continueIn: { workspaceId: "workspace-2" },
+  });
+  assert.equal(replay.chat.id, forked.chat.id);
+  assert.equal((await app.store.list()).length, 2);
+});
+
+test("an older phone hears only the missing-folder sentence, and may not continue in a new chat", async (t) => {
+  const app = await continueFixture(t, { capable: () => false });
+  await rm(app.folders["workspace-1"]!, { recursive: true });
+
+  const refusal = await app.service
+    .startTurn("device-1", app.source.id, "continue-plain-turn-00001", { text: "still there?" })
+    .then(() => undefined, (error: unknown) => error);
+  assert.ok(refusal instanceof AidenRemoteServiceError);
+  assert.equal(refusal.code, "workspace_unavailable");
+  assert.equal(refusal.details, undefined, "older iPhones refuse detail keys they do not know");
+  assert.match(refusal.message, /folder is missing on your computer/u);
+
+  const { revision } = await app.service.get(app.source.id);
+  await assert.rejects(
+    app.service.fork("device-1", app.source.id, revision, "continue-key-00000002", { continueIn: { workspaceId: "workspace-2" } }),
+    hasCode("capability_denied", 403),
+  );
+  assert.equal((await app.store.list()).length, 1, "nothing was created");
+});
+
+test("a chat with no reply yet hears it cannot be continued, and a host that cannot continue refuses the route", async (t) => {
+  const fresh = await continueFixture(t, { replied: false });
+  await rm(fresh.folders["workspace-1"]!, { recursive: true });
+  const refusal = await fresh.service
+    .startTurn("device-1", fresh.source.id, "continue-fresh-turn-00001", { text: "Hello again" })
+    .then(() => undefined, (error: unknown) => error);
+  assert.ok(refusal instanceof AidenRemoteServiceError);
+  assert.deepEqual(refusal.details, { reason: "folder_missing", canContinueInNewChat: false });
+
+  const unwired = await continueFixture(t, { continueWired: false });
+  await rm(unwired.folders["workspace-1"]!, { recursive: true });
+  const plain = await unwired.service
+    .startTurn("device-1", unwired.source.id, "continue-unwired-turn-001", { text: "still there?" })
+    .then(() => undefined, (error: unknown) => error);
+  assert.ok(plain instanceof AidenRemoteServiceError);
+  assert.deepEqual(plain.details, { reason: "folder_missing", canContinueInNewChat: false });
+  const { revision } = await unwired.service.get(unwired.source.id);
+  await assert.rejects(
+    unwired.service.fork("device-1", unwired.source.id, revision, "continue-key-00000003", { continueIn: { workspaceId: "workspace-2" } }),
+    hasCode("not_found", 404),
+  );
+});
+
+test("Continue in a new chat refuses malformed bodies, a present folder, the same or a missing workspace, and Bot chats", async (t) => {
+  const app = await continueFixture(t);
+  const { revision } = await app.service.get(app.source.id);
+  let key = 0;
+  const fork = (body: unknown) =>
+    app.service.fork("device-1", app.source.id, revision, `continue-bad-key-${String(key++).padStart(4, "0")}`, body);
+
+  for (const body of [
+    { continueIn: {} },
+    { continueIn: { workspaceId: "workspace-2", folderPath: "/tmp" } },
+    { continueIn: { workspaceId: "../workspace-2" } },
+    { continueIn: "workspace-2" },
+    { continueIn: { workspaceId: "workspace-2" }, messageId: "a1", position: "after" },
+  ]) {
+    await assert.rejects(fork(body), hasCode("invalid_request", 400), JSON.stringify(body));
+  }
+  // The folder is still there, so the chat keeps working where it is.
+  await assert.rejects(fork({ continueIn: { workspaceId: "workspace-2" } }), hasCode("invalid_request"));
+
+  await rm(app.folders["workspace-1"]!, { recursive: true });
+  await assert.rejects(fork({ continueIn: { workspaceId: "workspace-1" } }), hasCode("invalid_request"));
+  await assert.rejects(fork({ continueIn: { workspaceId: "workspace-9" } }), hasCode("not_found", 404));
+  await rm(app.folders["workspace-2"]!, { recursive: true });
+  await assert.rejects(fork({ continueIn: { workspaceId: "workspace-2" } }), (error: unknown) =>
+    hasCode("workspace_unavailable", 409)(error) && /folder is missing too/u.test((error as Error).message));
+  assert.equal((await app.store.list()).length, 1, "no refusal created a chat");
+
+  const bot = await continueFixture(t, { botId: "bot-1" });
+  await rm(bot.folders["workspace-1"]!, { recursive: true });
+  const botRevision = (await bot.service.get(bot.source.id)).revision;
+  await assert.rejects(
+    bot.service.fork("device-1", bot.source.id, botRevision, "continue-bot-key-0001", { continueIn: { workspaceId: "workspace-2" } }),
+    hasCode("not_found", 404),
+  );
+  assert.equal((await bot.store.list()).length, 1);
+});
+
 test("Remote classification refuses feature-owned chats before any payload read", async () => {
   let payloadReads = 0;
   const { service } = fixture(
@@ -3374,6 +3559,24 @@ test("a paired Mac's message is not counted as a phone's", async (t) => {
   await app.service.startTurn("device-1", "chat-1", "counted-turn-00000006", { text: "hello" });
   await analyticsSettled();
   assert.equal(sent[0]?.props?.origin, "peer");
+});
+
+test("an outside MCP app's new chat and turns send no usage data, and a phone's still do", async (t) => {
+  const sent = captureAnalyticsEvents(t);
+  const app = fixture(chat({ workspaceId: "workspace-9" }), {
+    deviceReportsAnalytics: async (deviceId) => deviceId !== "app-1",
+  });
+  await app.service.startTurn("app-1", "chat-1", "counted-turn-00000007", { text: "hello" });
+  await app.service.create("app-1", "chat-create-key-app01", { workspaceId: "workspace-1" });
+  await app.service.create("device-1", "chat-create-key-phone1", { workspaceId: "workspace-1" });
+  await analyticsSettled();
+  assert.deepEqual(sent, [], "the app's turn is not a phone's message");
+  // The chat service is told to keep only the app's create out of chat_created.
+  assert.deepEqual(app.createOptions().map((options) => options?.reportAnalytics !== false), [false, true]);
+
+  await app.service.startTurn("device-1", "chat-3", "counted-turn-00000008", { text: "hello" });
+  await analyticsSettled();
+  assert.deepEqual(sent.map(({ event, props }) => [event, (props as { origin?: unknown } | undefined)?.origin]), [["chat_message_sent", "phone"]]);
 });
 
 test("a phone's message outside a real workspace is not counted as in one", async (t) => {
