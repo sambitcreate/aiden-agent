@@ -4139,6 +4139,16 @@ export const llmClient = {
       // The head declares the chat's fixed tools; loaded tools are declared by
       // the system messages the journal kept, or appended before this prompt.
       const head = createInitialSystemMessage(systemPrompt, (onDemandTools ? assembly.headTools : runtimeTools).map(toToolDeclaration));
+      if (browserDiscovery) {
+        // A discovery the journal holds keeps the browser tools from the first
+        // step, outside the head, so the next response asks for nothing again.
+        const prepared = await browserDiscovery.prepare({ messages: initialMessages, tools: [...runtimeTools] });
+        if (prepared.tools && prepared.tools.length !== runtimeTools.length) {
+          runtimeTools = prepared.tools;
+          generationContextOptions.tools = runtimeTools;
+          initialMessages = prepared.messages;
+        }
+      }
       if (head) initialMessages = [head, ...initialMessages];
       if (agentsInstructions) {
         const prepared = await agentsInstructions.apply({

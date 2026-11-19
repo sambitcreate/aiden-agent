@@ -41,3 +41,33 @@ test("discovery is small and cannot bypass invalid arguments, revocation, cancel
   assert.equal((await discovery.prepare(context)).tools?.length, 2);
   await assert.rejects(discovery.tool.execute("still-revoked", {}), /revoked/);
 });
+test("a discovery the journal holds keeps the browser tools in the next response, after a reload", async () => {
+  const turn1 = createBrowserDiscovery([tool], async () => {});
+  const base: AgentContext = { messages: [{ role: "user", content: "open the site", timestamp: 1 }], tools: [turn1.tool] };
+  const result = await turn1.tool.execute("discover", {});
+  const discovered = await turn1.prepare({
+    ...base,
+    messages: [
+      ...base.messages,
+      { role: "assistant", content: [{ type: "toolCall", id: "discover", name: "browser", arguments: {} }], api: "anthropic-messages", provider: "anthropic", model: "m", usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } }, stopReason: "toolUse", timestamp: 2 },
+      { role: "toolResult", toolCallId: "discover", toolName: "browser", content: result.content, isError: false, timestamp: 3 },
+    ],
+  });
+  // A restart rebuilds the transcript from the journal and a new response
+  // makes a fresh discovery with no memory of the first.
+  const reloaded = JSON.parse(JSON.stringify(discovered.messages)) as AgentContext["messages"];
+  const turn2 = createBrowserDiscovery([tool], async () => {});
+  const next = await turn2.prepare({ messages: reloaded, tools: [turn2.tool] });
+  assert.deepEqual(next.tools?.map(({ name }) => name), ["browser", "browser_status"]);
+  // The guidance the transcript already carries is not appended a second time.
+  assert.equal(next.messages, reloaded);
+  // Without the gateway the remembered discovery grants nothing.
+  const excluded = { messages: reloaded, tools: [] };
+  assert.equal(await turn2.prepare(excluded), excluded);
+  // A failed discovery is not remembered.
+  const failed: AgentContext = {
+    messages: [{ role: "toolResult", toolCallId: "x", toolName: "browser", content: [{ type: "text", text: "Browser agent access is disabled." }], isError: true, timestamp: 4 }],
+    tools: [turn2.tool],
+  };
+  assert.equal(await turn2.prepare(failed), failed);
+});
