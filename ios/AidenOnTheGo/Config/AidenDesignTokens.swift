@@ -18,10 +18,3 @@ enum AidenRadius {
     static let composer: CGFloat = 28
     static let code: CGFloat = 12
 }
-
-/// Animation curves. Callers still honour Reduce Motion themselves.
-enum AidenMotion {
-    static let quick: Animation = .easeOut(duration: 0.15)
-    static let standard: Animation = .easeInOut(duration: 0.25)
-    static let emphasized: Animation = .spring(response: 0.4, dampingFraction: 0.82)
-}

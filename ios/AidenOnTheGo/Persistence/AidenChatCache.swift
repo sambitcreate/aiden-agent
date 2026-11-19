@@ -1035,12 +1035,6 @@ actor AidenChatCache {
         metadataCompletionTokens[instanceId] = chatWriteClock.finish(token)
     }
 
-    func removeActiveStreams(instanceId: String) {
-        purgeFiles(root: root, kind: "streams", instanceId: instanceId, as: StreamEnvelope.self) {
-            $0.instanceId
-        }
-    }
-
     func attachmentImage(
         instanceId: String,
         deviceId: String,

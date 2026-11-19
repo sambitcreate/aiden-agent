@@ -56,17 +56,46 @@ enum AidenMarkdownBlockSplitter {
         // HTML block types 1-5 (comments, CDATA, declarations, processing
         // instructions, and raw pre/script/style/textarea) continue across
         // blank lines. Rare in model output, so any occurrence opts out.
-        let lowered = text.lowercased()
-        for marker in ["<!", "<?", "<pre", "<script", "<style", "<textarea"] where lowered.contains(marker) {
-            return false
-        }
-        // Reference and footnote definitions apply to the whole document.
-        var lineStart = text.utf8.startIndex
         let utf8 = text.utf8
+        if containsBlankLineSpanningHTML(utf8) { return false }
+        // Reference and footnote definitions apply to the whole document.
+        var lineStart = utf8.startIndex
         while lineStart < utf8.endIndex {
             let lineEnd = utf8[lineStart...].firstIndex(of: 0x0A) ?? utf8.endIndex
             if looksLikeDefinition(utf8[lineStart..<lineEnd]) { return false }
             lineStart = lineEnd == utf8.endIndex ? lineEnd : utf8.index(after: lineEnd)
+        }
+        return true
+    }
+
+    private static let blankLineSpanningHTMLTags: [[UInt8]] = ["pre", "script", "style", "textarea"].map { Array($0.utf8) }
+
+    /// True when the text contains `<!`, `<?`, or one of the raw HTML tag
+    /// openers, matching the tag name ASCII case-insensitively as CommonMark
+    /// does. Scans bytes in place instead of lowercasing the whole reply.
+    private static func containsBlankLineSpanningHTML(_ utf8: String.UTF8View) -> Bool {
+        var searchStart = utf8.startIndex
+        while let open = utf8[searchStart...].firstIndex(of: 0x3C /* < */) {
+            let next = utf8.index(after: open)
+            guard next < utf8.endIndex else { return false }
+            let marker = utf8[next]
+            if marker == 0x21 /* ! */ || marker == 0x3F /* ? */ { return true }
+            for tag in blankLineSpanningHTMLTags where hasASCIICaseInsensitivePrefix(utf8[next...], tag) {
+                return true
+            }
+            searchStart = next
+        }
+        return false
+    }
+
+    private static func hasASCIICaseInsensitivePrefix(_ bytes: Substring.UTF8View, _ lowercasePrefix: [UInt8]) -> Bool {
+        var index = bytes.startIndex
+        for expected in lowercasePrefix {
+            guard index < bytes.endIndex else { return false }
+            let byte = bytes[index]
+            let lowered = (0x41...0x5A).contains(byte) ? byte | 0x20 : byte
+            guard lowered == expected else { return false }
+            index = bytes.index(after: index)
         }
         return true
     }
@@ -209,6 +238,10 @@ final class AidenMarkdownContentCache {
     /// With `streaming`, the open tail is drawn through
     /// `AidenStreamingMarkdownTail.displayText`, so a half-received marker
     /// never flashes as raw syntax. Sealed chunks are never altered.
+    ///
+    /// Without `streaming` the reply is finished, so its tail (or its only
+    /// block) is cached like a sealed chunk. A streaming tail changes on every
+    /// token and is parsed fresh, so it never churns the cache.
     func chunks(for markdown: String, streaming: Bool = false) -> [AidenMarkdownChunk] {
         let split = AidenMarkdownBlockSplitter.split(markdown)
         guard !split.settled.isEmpty else {
@@ -216,7 +249,7 @@ final class AidenMarkdownContentCache {
             return [AidenMarkdownChunk(
                 index: 0,
                 text: text,
-                content: parse(text),
+                content: streaming ? parse(text) : cachedContent(for: text),
                 leadingGap: 0,
                 openCode: streaming ? AidenStreamingMarkdownTail.openCodeBlock(in: text) : nil
             )]
@@ -235,7 +268,7 @@ final class AidenMarkdownContentCache {
             chunks.append(AidenMarkdownChunk(
                 index: index,
                 text: piece.text,
-                content: piece.sealed ? cachedContent(for: piece.text) : parse(piece.text),
+                content: piece.sealed || !streaming ? cachedContent(for: piece.text) : parse(piece.text),
                 leadingGap: gap,
                 // Only the open tail is looked at, so sealed chunks cost nothing extra.
                 openCode: streaming && !piece.sealed ? AidenStreamingMarkdownTail.openCodeBlock(in: piece.text) : nil

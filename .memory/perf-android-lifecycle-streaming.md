@@ -21,6 +21,7 @@ Audit findings EXT-17, EXT-22..28 and EXT-34 for `android/`. The Remote protocol
 - **EXT-27**: Release builds use R8 with `isShrinkResources`. `app/proguard-rules.pro` keeps the kotlinx-serialization serializers.
   - `versionCode` is derived from `-PaidenVersionName` as major*1e6 + minor*1e3 + patch. The default "0.1.0" gives 1000.
   - Removed unused navigation3 and play-services-code-scanner dependencies.
+- **Audit P16/P17 (2026-11-18)**: `RichFormattedMessage` remembers its formatted `AnnotatedString` and code-fence split, keyed on `text` and `palette`. The click handler and body style stay outside the `remember`. Bot avatar normalizing (`setCandidate`) decodes, crops and re-encodes on `Dispatchers.Default`.
 - **EXT-28**: Changed 97 `collectAsState()` calls to `collectAsStateWithLifecycle()`. Transcript value models are marked `@Immutable`. `AidenChat` and `AidenLiveTool` stay unmarked because they have `var` fields.
 
 ## Measurements

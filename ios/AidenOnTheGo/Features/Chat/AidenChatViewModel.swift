@@ -587,6 +587,16 @@ final class AidenChatViewModel {
         foreignRunTask?.cancel()
         foreignRunSettleTask?.cancel()
         foreignRunReconcileTask?.cancel()
+        foreignRunProbeTask?.cancel()
+        rateLimitedSendRetryTask?.cancel()
+        worktreeSetupTask?.cancel()
+        skillCatalogTask?.cancel()
+        mentionAgentsTask?.cancel()
+        mentionFilesTask?.cancel()
+        // uploadRevocationTask is left running on purpose: it hands a revoked
+        // credential to the coordinator, which must purge the upload whether
+        // or not this chat is still open. attachmentCleanupTasks hold self
+        // until they finish, so none can still be running here.
     }
 
     private func handleRemoval() {

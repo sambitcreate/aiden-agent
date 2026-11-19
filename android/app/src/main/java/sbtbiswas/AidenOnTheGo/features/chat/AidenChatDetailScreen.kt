@@ -58,6 +58,7 @@ import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
@@ -2478,6 +2479,56 @@ internal fun aidenMessageBodyStyle(palette: sbtbiswas.AidenOnTheGo.config.AidenP
 
 internal val CODE_BLOCK_REGEX = Regex("```([a-zA-Z0-9_-]*)\\n?([\\s\\S]*?)```")
 
+/** One piece of a reply: formatted prose, or a fenced code block. */
+private sealed interface RichMessageSegment {
+    data class Prose(val formatted: AnnotatedString) : RichMessageSegment
+    data class Code(val code: String, val language: String?) : RichMessageSegment
+}
+
+/** Splits [text] at fenced code blocks and formats the prose around them, dropping blank prose. */
+private fun richMessageSegments(
+    text: String,
+    palette: sbtbiswas.AidenOnTheGo.config.AidenPalette
+): List<RichMessageSegment> {
+    val segments = mutableListOf<RichMessageSegment>()
+    fun addProse(raw: String) {
+        val prose = raw.trim()
+        if (prose.isNotEmpty()) {
+            segments += RichMessageSegment.Prose(buildAidenFormattedMessage(text = prose, palette = palette, isUser = false))
+        }
+    }
+    var lastIndex = 0
+    for (match in CODE_BLOCK_REGEX.findAll(text)) {
+        val start = match.range.first
+        if (start > lastIndex) addProse(text.substring(lastIndex, start))
+        segments += RichMessageSegment.Code(
+            code = match.groupValues[2].trim(),
+            language = match.groupValues[1].trim().ifEmpty { null }
+        )
+        lastIndex = match.range.last + 1
+    }
+    if (lastIndex < text.length) addProse(text.substring(lastIndex))
+    return segments
+}
+
+@Composable
+private fun RichProseText(
+    formatted: AnnotatedString,
+    palette: sbtbiswas.AidenOnTheGo.config.AidenPalette,
+    onOpenUrl: (String) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    ClickableText(
+        text = formatted,
+        style = aidenMessageBodyStyle(palette),
+        modifier = modifier,
+        onClick = { offset ->
+            formatted.getStringAnnotations(tag = AidenAnnotationTag.LINK.name, start = offset, end = offset)
+                .firstOrNull()?.let { onOpenUrl(it.item) }
+        }
+    )
+}
+
 @Composable
 internal fun RichFormattedMessage(
     text: String,
@@ -2486,65 +2537,25 @@ internal fun RichFormattedMessage(
     onOpenUrl: (String) -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val matches = remember(text) { CODE_BLOCK_REGEX.findAll(text).toList() }
-
-    if (matches.isEmpty()) {
-        val formatted = buildAidenFormattedMessage(text = text, palette = palette, isUser = false)
-        ClickableText(
-            text = formatted,
-            style = aidenMessageBodyStyle(palette),
-            modifier = modifier,
-            onClick = { offset ->
-                formatted.getStringAnnotations(tag = AidenAnnotationTag.LINK.name, start = offset, end = offset)
-                    .firstOrNull()?.let { onOpenUrl(it.item) }
-            }
-        )
+    // The formatted segments depend only on the text and the palette; the
+    // handlers are read at click time, and the body style is applied at draw.
+    val hasCodeBlock = remember(text) { CODE_BLOCK_REGEX.containsMatchIn(text) }
+    if (!hasCodeBlock) {
+        val formatted = remember(text, palette) {
+            buildAidenFormattedMessage(text = text, palette = palette, isUser = false)
+        }
+        RichProseText(formatted, palette, onOpenUrl, modifier)
     } else {
-        var lastIndex = 0
+        val segments = remember(text, palette) { richMessageSegments(text, palette) }
         Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            for (match in matches) {
-                val start = match.range.first
-                val end = match.range.last + 1
-
-                if (start > lastIndex) {
-                    val leading = text.substring(lastIndex, start).trim()
-                    if (leading.isNotEmpty()) {
-                        val formatted = buildAidenFormattedMessage(text = leading, palette = palette, isUser = false)
-                        ClickableText(
-                            text = formatted,
-                            style = aidenMessageBodyStyle(palette),
-                            onClick = { offset ->
-                                formatted.getStringAnnotations(tag = AidenAnnotationTag.LINK.name, start = offset, end = offset)
-                                    .firstOrNull()?.let { onOpenUrl(it.item) }
-                            }
-                        )
-                    }
-                }
-
-                val language = match.groupValues[1].trim()
-                val codeContent = match.groupValues[2].trim()
-
-                AidenCodeBlock(
-                    code = codeContent,
-                    language = language.ifEmpty { null },
-                    palette = palette,
-                    onCopy = onCopy
-                )
-
-                lastIndex = end
-            }
-
-            if (lastIndex < text.length) {
-                val trailing = text.substring(lastIndex).trim()
-                if (trailing.isNotEmpty()) {
-                    val formatted = buildAidenFormattedMessage(text = trailing, palette = palette, isUser = false)
-                    ClickableText(
-                        text = formatted,
-                        style = aidenMessageBodyStyle(palette),
-                        onClick = { offset ->
-                            formatted.getStringAnnotations(tag = AidenAnnotationTag.LINK.name, start = offset, end = offset)
-                                .firstOrNull()?.let { onOpenUrl(it.item) }
-                        }
+            for (segment in segments) {
+                when (segment) {
+                    is RichMessageSegment.Prose -> RichProseText(segment.formatted, palette, onOpenUrl)
+                    is RichMessageSegment.Code -> AidenCodeBlock(
+                        code = segment.code,
+                        language = segment.language,
+                        palette = palette,
+                        onCopy = onCopy
                     )
                 }
             }
