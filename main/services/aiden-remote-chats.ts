@@ -1415,7 +1415,6 @@ export class AidenRemoteChatService {
           owner: ChatGenerationOwner,
           options: {
             allowSubagents: boolean;
-            allowComputerUse: false;
             usageSource: "chat";
             turnId: string;
             visualAudience?: "remote";

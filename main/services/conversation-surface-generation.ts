@@ -82,7 +82,8 @@ export function remoteGenerationSurface(input: RemoteGenerationSurfaceInput) {
     } satisfies ChatStartParams,
     options: {
       allowSubagents: true as const,
-      allowComputerUse: false as const,
+      // Computer Use stays declared so the chat's tool list matches its
+      // desktop turns; the client refuses the call (chat-turn-tool-policy.ts).
       usageSource: "chat" as const,
       turnId: input.turnId,
       visualAudience: "remote" as const,

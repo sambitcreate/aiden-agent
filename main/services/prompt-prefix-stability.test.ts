@@ -644,6 +644,8 @@ describe("prompt prefix stability: tool list identical across turns", () => {
       const fromPhone = chatTurnToolRefusal(workspaceSurface, { ...attended, remoteAudience: remote.options.visualAudience === "remote" });
       assert.match(fromPhone("workspace_artifact") ?? "", /not available in this turn.*paired device/su);
       assert.match(fromPhone("hooks") ?? "", /paired device/u);
+      assert.ok(current.carries("computer_use"), "Computer Use stays declared");
+      assert.match(fromPhone("computer_use") ?? "", /not available in this turn.*paired device/su);
       assert.equal(chatTurnToolRefusal(workspaceSurface, attended)("workspace_artifact"), undefined);
     });
   }

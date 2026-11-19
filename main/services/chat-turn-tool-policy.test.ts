@@ -16,7 +16,7 @@ test("the chat's declarations depend on the chat alone", () => {
 });
 
 test("an attended turn on this computer refuses nothing", () => {
-  const refuse = chatTurnToolRefusal(workspace, { ...attended, inlineVisuals: "auto" });
+  const refuse = chatTurnToolRefusal(workspace, { ...attended, inlineVisuals: "automatic" });
   for (const name of ["hooks", "computer_use", "form_fill", "workspace_artifact", "render_artifact", "render_ui", "read_file"]) {
     assert.equal(refuse(name), undefined, name);
   }
@@ -38,6 +38,9 @@ test("a turn from a paired device refuses what only this computer can show or ap
   const refuse = chatTurnToolRefusal(workspace, { ...attended, remoteAudience: true });
   assert.match(refuse("workspace_artifact") ?? "", /not available in this turn: the request came from a paired device/u);
   assert.match(refuse("hooks") ?? "", /not available in this turn.*paired device/su);
+  for (const name of ["computer_use", "form_fill"]) {
+    assert.match(refuse(name) ?? "", /not available in this turn: the request came from a paired device, and Computer Use is granted only on this computer/u, name);
+  }
 });
 
 test("inline visuals On request draw only in a /visualize turn", () => {

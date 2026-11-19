@@ -48,6 +48,9 @@ export function chatTurnToolRefusal(
     if (turn.unattended && (name === COMPUTER_USE_TOOL_NAME || name === FORM_FILL_TOOL_NAME)) {
       return `${name} is not available in this turn: nobody is watching this follow-up to grant Computer Use. Describe what you would do on screen instead.`;
     }
+    if (turn.remoteAudience && (name === COMPUTER_USE_TOOL_NAME || name === FORM_FILL_TOOL_NAME)) {
+      return `${name} is not available in this turn: the request came from a paired device, and Computer Use is granted only on this computer. Describe what you would do on screen instead.`;
+    }
     if (turn.remoteAudience && name === WORKSPACE_ARTIFACT_TOOL_NAME) {
       return `${WORKSPACE_ARTIFACT_TOOL_NAME} is not available in this turn: the request came from a paired device, which cannot show workspace artifacts. Open the chat on this computer to create, refresh or run one.`;
     }
