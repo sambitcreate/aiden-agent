@@ -1013,7 +1013,7 @@ test("what Aiden adds to an artboard wraps to a new row inside it, keeping the w
   assert.equal(boxes[1].x, boxes[0].x + 160 + 64);
   assert.deepEqual([boxes[2].x, boxes[2].y], [boxes[0].x, boxes[0].y + 100 + 64]);
   const after = (await store.get("chat-1")).frames.find((entry) => entry.id === board.frame.id)!;
-  assert.equal(after.w, 600, "the artboard keeps its width");
+  assert.equal(after.w, 600, "the artboard keeps the width the person drew");
   for (const box of boxes) {
     assert.ok(box.x >= after.x && box.x + box.w <= after.x + after.w, "each item sits inside the artboard's width");
     assert.ok(box.y + box.h <= after.y + after.h, "the artboard grew down to hold the new row");
