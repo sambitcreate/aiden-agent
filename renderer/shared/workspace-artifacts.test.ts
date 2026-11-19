@@ -362,6 +362,17 @@ test("a placeholder cannot be run as a command or hidden from the check", () => 
     "vim -es {{x}}",
     "less {{x}}",
     "ssh -o ProxyCommand={{x}} host true",
+    // Short options in a cluster, read as git and getopt read them: the last letter takes the next word.
+    "git rebase -qx {{x}} HEAD~2",
+    "git rebase -fx {{x}} HEAD~2",
+    "git merge -qs {{x}} HEAD",
+    "git pull -qs {{x}}",
+    "gh pr merge 1 -sF {{x}}",
+    "gh pr review 1 -cF {{x}}",
+    "gh pr comment 1 -eF {{x}}",
+    "git config user.name foo -zf {{x}}",
+    "git config set user.name foo --fil {{x}}",
+    "rg --pr cat {{x}}",
   ];
   for (const command of refused) assert.throws(() => parseWorkspaceArtifactActions(actions(command)), PLACEMENT_REFUSED, command);
   // Text is fine as a plain argument, between the operators the grammar has.
@@ -382,6 +393,10 @@ test("a placeholder cannot be run as a command or hidden from the check", () => 
     // The same option names elsewhere, or in another subcommand, take plain values.
     "git cherry-pick -x {{x}}",
     "git cherry-pick -s {{x}}",
+    // A letter that takes a value ends the cluster: in -mq the message is "q", so the next word is a plain argument.
+    "git commit -qm {{x}}",
+    "git commit -mq {{x}}",
+    "git rebase -q --onto main {{x}}",
     "git merge --no-ff {{x}}",
     "git push -u origin {{x}}",
     "git config user.name {{x}}",

@@ -304,60 +304,129 @@ export const WORKSPACE_ARTIFACT_ARGUMENT_PROGRAMS =
   `(with only --no-pager or --no-optional-locks before the subcommand); gh ${ARGUMENT_GH_GROUPS.join(", ")} followed by ${ARGUMENT_GH_VERBS.join(", ")}, ` +
   `or gh ${ARGUMENT_GH_COMMANDS.join(" or ")}; ${[...ARGUMENT_TEXT_PROGRAMS, ...ARGUMENT_TEST_PROGRAMS].join(", ")}`;
 
-/**
- * Options whose next word names a program, code or configuration to start.
- * `short` matches short options as written; a long option counts when it is
- * any of `long` or an abbreviation of one, since getopt_long and git accept
- * a unique prefix (`--upload-p`).
- */
-interface ProgramOptions {
-  short?: RegExp;
-  long?: readonly string[];
+// ---------------------------------------------------------------------------
+// Options, read the way the programs read them.
+
+/** One option as a program reads it from a word. */
+interface WrittenOption {
+  /** A short option's letter. */
+  short?: string;
+  /** A long option's name as written, lowercased; getopt_long and git take any unique prefix. */
+  long?: string;
+  /** Where its value would be: later in the same word, the next word, or nowhere (a letter inside a cluster). */
+  value: "attached" | "next" | "none";
 }
-const PROGRAM_OPTIONS: Record<string, ProgramOptions> = {
-  sort: { long: ["compress-program"] },
-};
+
 /**
- * Long options that name a program, code or a configuration file in any
- * command, with their abbreviations, and the words that mark one by name
- * (`--sendmail-cmd`, `--proxy-command`, `--config`).
+ * The options one word holds, read as getopt and git's parse-options read
+ * them: `--name=value`; `--name`, whose value (if it takes one) is the next
+ * word; or a cluster of short letters (`-qx`), where a letter that takes a
+ * value takes the rest of the word, or the next word when it comes last.
+ * `valued` lists the short letters that take a value. A letter left out of
+ * it only makes the checks stricter: the letters after it are then read as
+ * more options rather than as its value.
  */
-const ANY_PROGRAM_LONG: ProgramOptions = {
+function readOptions(word: string, valued: string): WrittenOption[] {
+  if (word === "-" || word === "--" || !word.startsWith("-")) return [];
+  if (word.startsWith("--")) {
+    const equals = word.indexOf("=");
+    return [{ long: word.slice(2, equals < 0 ? undefined : equals).toLowerCase(), value: equals < 0 ? "next" : "attached" }];
+  }
+  const letters = [...word.slice(1)];
+  const options: WrittenOption[] = [];
+  for (let index = 0; index < letters.length; index += 1) {
+    const letter = letters[index]!;
+    if (index === letters.length - 1) options.push({ short: letter, value: "next" });
+    else if (valued.includes(letter)) {
+      options.push({ short: letter, value: "attached" });
+      break;
+    } else options.push({ short: letter, value: "none" });
+  }
+  return options;
+}
+
+/** A set of options: short letters, and long names that count by any prefix (`--upload-p`). */
+interface OptionSet {
+  short?: string;
+  long?: readonly string[];
+  /** Long names count only in full: gh's flag parser takes no abbreviations, so `--body` is not `--body-file`. */
+  exact?: boolean;
+}
+
+function isOneOf(option: WrittenOption, set: OptionSet | undefined): boolean {
+  if (!set) return false;
+  if (option.short !== undefined) return set.short?.includes(option.short) === true;
+  const name = option.long ?? "";
+  return name.length > 0 && set.long?.some((full) => (set.exact ? full === name : full.startsWith(name))) === true;
+}
+
+/** The option whose value the next word is, when `word` ends with one that may take it. */
+function optionBefore(word: string | undefined, valued: string): WrittenOption | undefined {
+  if (word === undefined) return undefined;
+  const options = readOptions(word, valued);
+  const last = options[options.length - 1];
+  return last?.value === "next" ? last : undefined;
+}
+
+/** Whether `word` holds an option from `set` in any form: alone, in a cluster, with `=value` or abbreviated. */
+function writesOption(word: string | undefined, valued: string, set: OptionSet): boolean {
+  return word !== undefined && readOptions(word, valued).some((option) => isOneOf(option, set));
+}
+
+/**
+ * Short letters that take a value, by program, so a cluster is read to its
+ * real end (`git commit -mF x` is a message "F"). git's are by subcommand.
+ */
+const VALUED_LETTERS: Record<string, string> = {
+  sort: "koStT", uniq: "fsw", head: "nc", tail: "nc", cut: "bcdf", grep: "ABCDdefm", rg: "ABCEefgjMmrTt", jq: "L", basename: "s", date: "dfr",
+};
+const GIT_VALUED_LETTERS: Record<string, string> = {
+  commit: "mFCct", merge: "msXF", pull: "sX", rebase: "xsX", tag: "mFu", stash: "m", switch: "cC", checkout: "bB", worktree: "bB",
+  config: "f", log: "n", show: "n", grep: "efABC", "cherry-pick": "mX", revert: "mX",
+};
+
+/**
+ * Options whose value names a program, code or configuration to start, by
+ * program, and long options that do in any program (`--exec`, `--config`).
+ */
+const PROGRAM_OPTIONS: Record<string, OptionSet> = {
+  sort: { long: ["compress-program"] },
+  rg: { long: ["pre", "hostname-bin"] },
+};
+const ANY_PROGRAM_LONG: OptionSet = {
   long: ["exec", "eval", "command", "config", "upload-pack", "receive-pack", "use-compress-program", "compress-program", "rsh", "rsync-path", "proxy-command"],
 };
+/** Words that mark a long option as naming a program by name (`--sendmail-cmd`, `--shell`). */
 const PROGRAM_OPTION_WORD = /^(?:[a-z]*cmd|[a-z]*command|program|prog|exec|execdir|execute|shell|pager|editor|askpass|hooks?|eval|rsh|script|interpreter|wrapper|config|helper)$/u;
-const LONG_OPTION = /^--([A-Za-z0-9][A-Za-z0-9-]*)$/u;
-
-/** Whether `arg`, an option as written, is one of `options` or abbreviates one. */
-function isProgramOption(arg: string, options: ProgramOptions | undefined): boolean {
-  if (!options) return false;
-  if (options.short?.test(arg)) return true;
-  const name = LONG_OPTION.exec(arg)?.[1]?.toLowerCase();
-  return name !== undefined && options.long?.some((option) => option.startsWith(name)) === true;
-}
-
-/** Whether a long option's own name says it takes a program or code (`--sendmail-cmd`, `--shell`). */
-function namesAProgram(arg: string): boolean {
-  const name = LONG_OPTION.exec(arg)?.[1]?.toLowerCase();
-  return name !== undefined && name.split("-").some((part) => PROGRAM_OPTION_WORD.test(part));
-}
-
-/** A long option that names the file a program writes (`--output`, `--out`). */
-function namesAnOutputFile(arg: string): boolean {
-  const name = LONG_OPTION.exec(arg)?.[1]?.toLowerCase();
-  return name !== undefined && (name.startsWith("output") || "output".startsWith(name));
-}
-
-/** git's, by subcommand; `*` applies to every subcommand. */
-const GIT_PROGRAM_OPTIONS: Record<string, ProgramOptions> = {
+/** git's, by subcommand; `*` applies to every subcommand. A merge strategy runs the program git-merge-<strategy>. */
+const GIT_PROGRAM_OPTIONS: Record<string, OptionSet> = {
   "*": { long: ["upload-pack", "receive-pack", "exec", "config", "config-env", "exec-path"] },
-  // A merge strategy runs the program git-merge-<strategy>.
-  merge: { short: /^-s$/u, long: ["strategy"] },
-  pull: { short: /^-s$/u, long: ["strategy"] },
-  rebase: { short: /^-[xs]$/u, long: ["exec", "strategy"] },
+  merge: { short: "s", long: ["strategy"] },
+  pull: { short: "s", long: ["strategy"] },
+  rebase: { short: "xs", long: ["exec", "strategy"] },
   "cherry-pick": { long: ["strategy"] },
   revert: { long: ["strategy"] },
 };
+/** Options whose value names a file the program writes, or reads and posts. */
+const FILE_OPTIONS: Record<string, OptionSet> = {
+  sort: { short: "o", long: ["output"] },
+  gh: { short: "F", long: ["body-file"], exact: true },
+};
+const GIT_FILE_OPTIONS: Record<string, OptionSet> = {
+  config: { short: "f", long: ["file", "blob"] },
+};
+
+/** Whether a long option's own name says it takes a program or code (`--sendmail-cmd`, `--shell`). */
+function namesAProgram(option: WrittenOption): boolean {
+  return option.long !== undefined && option.long.split("-").some((part) => PROGRAM_OPTION_WORD.test(part));
+}
+
+/** A long option that names the file a program writes (`--output`, `--out`). */
+function namesAnOutputFile(option: WrittenOption): boolean {
+  const name = option.long;
+  return name !== undefined && name.length > 0 && (name.startsWith("output") || "output".startsWith(name));
+}
+
 /**
  * `git config` keys a text value may set: none of them names a program,
  * a hook, a pager, an editor, an alias or other configuration to include.
@@ -366,7 +435,9 @@ const SAFE_GIT_CONFIG_KEY = /^(?:user\.(?:name|email)|init\.defaultbranch|pull\.
 /** `git config` subcommand words (git 2.46) that come before the key. */
 const GIT_CONFIG_VERBS = new Set(["get", "set", "unset", "list", "edit", "rename-section", "remove-section"]);
 /** `git config` options that take the next word. */
-const GIT_CONFIG_VALUED = /^(?:-f|--file|--blob|--type|--default|--comment|--value)$/u;
+const GIT_CONFIG_VALUED: OptionSet = { short: "f", long: ["file", "blob", "type", "default", "comment", "value"] };
+/** `uniq` options that take the next word. */
+const UNIQ_VALUED: OptionSet = { short: "fsw", long: ["skip-fields", "skip-chars", "check-chars"] };
 /** Plain text a placeholder may be joined to, as in `HEAD:{{branch}}` or `{{name}}.json`. */
 const JOINED_TEXT = /^[A-Za-z0-9_.,:@%+/=^~-]*$/u;
 
@@ -374,10 +445,19 @@ const JOINED_TEXT = /^[A-Za-z0-9_.,:@%+/=^~-]*$/u;
 function gitConfigKey(after: readonly (string | undefined)[]): { key: string | undefined; index: number } | undefined {
   for (let index = 0; index < after.length; index += 1) {
     const arg = after[index];
-    if (arg !== undefined && GIT_CONFIG_VALUED.test(arg)) index += 1;
-    else if (arg === undefined || (!arg.startsWith("-") && !GIT_CONFIG_VERBS.has(arg))) return { key: arg, index };
+    if (arg !== undefined && arg.startsWith("-")) {
+      const option = optionBefore(arg, GIT_VALUED_LETTERS.config!);
+      if (option && isOneOf(option, GIT_CONFIG_VALUED)) index += 1;
+    } else if (arg === undefined || !GIT_CONFIG_VERBS.has(arg)) return { key: arg, index };
   }
   return undefined;
+}
+
+/** git's subcommand and where it is, past the global options a page may use. */
+function gitSubcommand(args: readonly (string | undefined)[]): { name: string | undefined; index: number } {
+  let index = 0;
+  while (index < args.length && ARGUMENT_GIT_GLOBAL_OPTIONS.has(args[index] ?? "")) index += 1;
+  return { name: args[index], index };
 }
 
 /**
@@ -401,10 +481,8 @@ function commandProblem(command: TemplateCommand): WorkspaceArtifactTemplateProb
   const args = rest.map(literal);
   const program_ = (reason: string): WorkspaceArtifactTemplateProblem => ({ kind: "program", reason });
   if (program === "git") {
-    let index = 0;
-    while (index < args.length && ARGUMENT_GIT_GLOBAL_OPTIONS.has(args[index] ?? "")) index += 1;
+    const { name: sub, index } = gitSubcommand(args);
     if (index >= args.length) return program_("git without a subcommand");
-    const sub = args[index];
     if (sub === undefined) return { kind: "misplaced", reason: "the git subcommand" };
     if (sub.startsWith("-")) return program_(`git ${sub} before the subcommand`);
     if (!ARGUMENT_GIT_SUBCOMMANDS.includes(sub)) return program_(`git ${sub}`);
@@ -415,7 +493,9 @@ function commandProblem(command: TemplateCommand): WorkspaceArtifactTemplateProb
       return after[0] === undefined && after.length ? { kind: "misplaced", reason: "the git worktree verb" } : program_(`git worktree ${after[0] ?? ""}`.trim());
     }
     if (sub === "config") {
-      if (after.some((arg) => arg === "edit" || arg === "-e" || arg === "--edit")) return program_("git config edit, which opens an editor");
+      if (after.some((arg) => arg === "edit" || writesOption(arg, GIT_VALUED_LETTERS.config!, { short: "e", long: ["edit"] }))) {
+        return program_("git config edit, which opens an editor");
+      }
       const key = gitConfigKey(after)?.key;
       if (key !== undefined && !SAFE_GIT_CONFIG_KEY.test(key)) return program_(`git config ${key}`);
     }
@@ -430,8 +510,10 @@ function commandProblem(command: TemplateCommand): WorkspaceArtifactTemplateProb
     if (verb === undefined || !ARGUMENT_GH_VERBS.includes(verb)) return program_(`gh ${group} ${verb ?? ""}`.trim());
     return undefined;
   }
-  if (program === "sort" && args.some((arg) => arg !== undefined && isProgramOption(arg.replace(/=.*$/su, ""), PROGRAM_OPTIONS.sort))) return program_("sort --compress-program");
-  if (program === "rg" && args.some((arg) => arg !== undefined && /^--(?:pre|hostname-bin)(?:=|$)/u.test(arg))) return program_("rg --pre or --hostname-bin, which run a program");
+  // These run a program for every file they read, so a template that uses them takes no page data.
+  const starts = PROGRAM_OPTIONS[program];
+  const written = starts && args.find((arg) => writesOption(arg, VALUED_LETTERS[program] ?? "", starts));
+  if (written) return program_(`${program} ${written}, which runs a program`);
   return undefined;
 }
 
@@ -440,36 +522,37 @@ function commandProblem(command: TemplateCommand): WorkspaceArtifactTemplateProb
  * where its value would name a program, code or a file to write.
  */
 function placeholderProblem(program: string, args: readonly (string | undefined)[], at: number): string | undefined {
-  const before = args.slice(0, at);
-  const last = before[before.length - 1] ?? "";
-  // A value that names a file to write or post could overwrite a hook or send a local secret.
-  if (namesAnOutputFile(last) || (program === "sort" && /^-[A-Za-z]*o$/u.test(last))) return `the file ${program} ${last} writes`;
-  if (program === "gh" && (last === "-F" || last === "--body-file")) return `the file gh ${last} reads and posts`;
-  if (program === "git" && before.includes("config") && /^(?:-f|--file)$/u.test(last)) return "the file git config writes";
+  const git = program === "git" ? gitSubcommand(args) : undefined;
+  const sub = git && at > git.index ? git.name : undefined;
+  const valued = (sub === undefined ? VALUED_LETTERS[program] : GIT_VALUED_LETTERS[sub]) ?? "";
+  const written = args[at - 1];
+  const option = optionBefore(written, valued);
+  if (option) {
+    // A value that names a file to write or post could overwrite a hook or send a local secret.
+    if (namesAnOutputFile(option) || (program !== "gh" && isOneOf(option, FILE_OPTIONS[program]))) return `the file ${program} ${written} writes`;
+    if (program === "gh" && isOneOf(option, FILE_OPTIONS.gh)) return `the file gh ${written} reads and posts`;
+    if (sub !== undefined && isOneOf(option, GIT_FILE_OPTIONS[sub])) return `the file git ${sub} ${written} writes`;
+    if (isOneOf(option, PROGRAM_OPTIONS[program]) || isOneOf(option, ANY_PROGRAM_LONG) || namesAProgram(option)) {
+      return `the program or code ${program} ${written} names`;
+    }
+    if (sub !== undefined && (isOneOf(option, GIT_PROGRAM_OPTIONS[sub]) || isOneOf(option, GIT_PROGRAM_OPTIONS["*"]))) {
+      return `the program git ${sub} ${written} names`;
+    }
+  }
   if (program === "uniq") {
     let operands = 0;
-    for (let index = 0; index < before.length; index += 1) {
-      const arg = before[index];
-      if (arg !== undefined && /^-[fsw]$/u.test(arg)) index += 1;
+    for (let index = 0; index < at; index += 1) {
+      const arg = args[index];
+      const takes = optionBefore(arg, VALUED_LETTERS.uniq!);
+      if (takes && isOneOf(takes, UNIQ_VALUED)) index += 1;
       else if (arg === undefined || !arg.startsWith("-") || arg === "-") operands += 1;
     }
     if (operands >= 1) return "the file uniq writes";
   }
-  if (isProgramOption(last, PROGRAM_OPTIONS[program]) || isProgramOption(last, ANY_PROGRAM_LONG) || namesAProgram(last)) {
-    return `the program or code ${program} ${last} names`;
-  }
-  if (program === "git") {
-    let index = 0;
-    while (index < args.length && ARGUMENT_GIT_GLOBAL_OPTIONS.has(args[index] ?? "")) index += 1;
-    const sub = args[index]!;
-    if (at > index && (isProgramOption(last, GIT_PROGRAM_OPTIONS[sub]) || isProgramOption(last, GIT_PROGRAM_OPTIONS["*"]))) {
-      return `the program git ${sub} ${last} names`;
-    }
-    if (sub === "config") {
-      const found = gitConfigKey(args.slice(index + 1));
-      if (found === undefined || found.index + index + 1 === at) return "a git config key or option";
-      if (!SAFE_GIT_CONFIG_KEY.test(found.key!)) return `a value for git config ${found.key}, which git may run or read as configuration`;
-    }
+  if (sub === "config") {
+    const found = gitConfigKey(args.slice(git!.index + 1));
+    if (found === undefined || found.index + git!.index + 1 === at) return "a git config key or option";
+    if (!SAFE_GIT_CONFIG_KEY.test(found.key!)) return `a value for git config ${found.key}, which git may run or read as configuration`;
   }
   return undefined;
 }
