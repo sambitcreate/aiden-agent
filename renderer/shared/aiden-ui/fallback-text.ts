@@ -31,16 +31,17 @@ export interface FallbackTextOptions {
    */
   chartTables?: boolean;
   /**
-   * Write tables as plain rows with their columns lined up by spaces instead
-   * of Markdown pipes, for readers that show the text as-is (a phone's
-   * visual row draws plain text, so pipes would show raw).
+   * Write each table row as one plain line of `Label: value` pairs joined by
+   * ` · ` instead of Markdown pipes, for readers that show the text as-is in
+   * a proportional font (a phone's visual row), where pipes would show raw
+   * and space-padded columns could never line up.
    */
   plainTables?: boolean;
 }
 
-/** A plain table cell is clipped to this many characters so one long cell cannot push every row wide. */
+/** A plain table cell is clipped to this many characters so one long cell cannot make its row unreadable. */
 const MAX_PLAIN_CELL = 40;
-/** Values listed for a sparkline before the count of the rest. */
+/** The latest values listed for a sparkline; an older first value is kept before them. */
 const MAX_SPARKLINE_VALUES = 30;
 
 class FallbackLines {
@@ -115,14 +116,26 @@ function inline(node: AidenUiNodeV1, scope: AidenUiScope): string {
   return (node.c ?? []).map((child) => inline(child, scope)).join("");
 }
 
-function plainCell(text: string): string {
-  const flat = text.replace(/\s+/gu, " ").trim();
+// Unicode direction marks, embeddings, overrides and isolates: in a cell they could reorder the rest of its line.
+const BIDI_CONTROL = /[\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/gu;
+
+/** A table cell on one line, without control or direction characters, and clipped (nothing past `max` is kept). */
+function cleanCell(text: string, max: number): string {
+  const flat = text.slice(0, AIDEN_UI_LIMITS.fallbackChars + 1).replace(BIDI_CONTROL, "").replace(/[\p{Cc}\s]+/gu, " ").trim();
   const characters = [...flat];
-  return characters.length > MAX_PLAIN_CELL ? `${characters.slice(0, MAX_PLAIN_CELL - 1).join("")}…` : flat;
+  return characters.length > max ? `${characters.slice(0, max - 1).join("")}…` : flat;
 }
 
-function padded(cells: readonly string[], widths: readonly number[]): string {
-  return cells.map((cell, index) => (index === cells.length - 1 ? cell : cell + " ".repeat(widths[index]! - [...cell].length))).join("  ").trimEnd();
+function plainCell(text: string): string {
+  return cleanCell(text, MAX_PLAIN_CELL);
+}
+
+/** One table row as plain `Label: value` pairs, readable in any font with nothing to line up. */
+function plainRow(labels: readonly string[], cells: readonly string[]): string {
+  return cells.map((cell, index) => {
+    const value = cell || "—";
+    return labels[index] ? `${labels[index]}: ${value}` : value;
+  }).join(" · ");
 }
 
 function table(rows: unknown, columns: unknown, scope: AidenUiScope, out: FallbackLines): void {
@@ -131,39 +144,28 @@ function table(rows: unknown, columns: unknown, scope: AidenUiScope, out: Fallba
     ? columns.map((column) => record(column))
     : Object.keys(record(rows[0])).map((key) => ({ key, label: key }));
   const header = columnList.map((column) => str(column.label) || str(column.key));
-  if (out.plainTables) {
-    // Every kept row is read first so the columns can be lined up; a row is
-    // kept whole or not at all.
-    const body: string[][] = [];
-    collect: for (const row of rows.slice(0, MAX_TABLE_ROWS)) {
-      const cells: string[] = [];
-      for (const column of columnList) {
-        if (!out.take()) break collect;
-        cells.push(plainCell(formatted(record(row)[str(column.key)], column.format, scope)));
-      }
-      body.push(cells);
-    }
-    const head = header.map(plainCell);
-    const widths = head.map((cell, index) => Math.max([...cell].length, ...body.map((cells) => [...cells[index]!].length)));
-    out.push(padded(head, widths));
-    for (const cells of body) out.push(padded(cells, widths));
-    if (rows.length > MAX_TABLE_ROWS) out.push(`(${rows.length - MAX_TABLE_ROWS} more rows)`);
-    return;
+  const labels = out.plainTables ? header.map(plainCell) : [];
+  if (!out.plainTables) {
+    out.push(`| ${header.map((cell) => markdownCell(cell)).join(" | ")} |`);
+    out.push(`| ${header.map(() => "---").join(" | ")} |`);
   }
-  out.push(`| ${header.join(" | ")} |`);
-  out.push(`| ${header.map(() => "---").join(" | ")} |`);
   for (const row of rows.slice(0, MAX_TABLE_ROWS)) {
     // A row is kept whole or not at all, so every kept line is complete.
     const cells: string[] = [];
     for (const column of columnList) {
       if (!out.take()) return;
-      const key = str(column.key);
-      // Cells are clipped before escaping: nothing past the cap is ever kept.
-      cells.push(formatted(record(row)[key], column.format, scope).slice(0, AIDEN_UI_LIMITS.fallbackChars + 1).replace(/\|/gu, "\\|"));
+      const value = formatted(record(row)[str(column.key)], column.format, scope);
+      cells.push(out.plainTables ? plainCell(value) : markdownCell(value));
     }
-    out.push(`| ${cells.join(" | ")} |`);
+    out.push(out.plainTables ? plainRow(labels, cells) : `| ${cells.join(" | ")} |`);
   }
   if (rows.length > MAX_TABLE_ROWS) out.push(`(${rows.length - MAX_TABLE_ROWS} more rows)`);
+}
+
+/** A Markdown table cell: one line, no control or direction characters, its own pipes escaped. */
+function markdownCell(text: string): string {
+  // Cells are clipped before escaping: nothing past the cap is ever kept.
+  return cleanCell(text, AIDEN_UI_LIMITS.fallbackChars + 1).replace(/\|/gu, "\\|");
 }
 
 /**
@@ -304,9 +306,14 @@ function lines(node: AidenUiNodeV1, scope: AidenUiScope, out: FallbackLines): vo
       const values = prop(node, "values", scope);
       const numbers = Array.isArray(values) ? values.filter((value): value is number => typeof value === "number" && Number.isFinite(value)) : [];
       if (out.chartTables && numbers.length) {
-        const shown = numbers.slice(0, MAX_SPARKLINE_VALUES).map((value) => formatValue(value, "number", scope.locale));
-        const more = numbers.length > MAX_SPARKLINE_VALUES ? ` (${numbers.length - MAX_SPARKLINE_VALUES} more)` : "";
-        out.push(`${label || "Trend"} (sparkline): ${shown.join(", ")}${more}`);
+        // A trend's latest values matter most: past the cap, the first value
+        // is kept for where it started, then the latest ones, with the count.
+        const number = (value: number) => formatValue(value, "number", scope.locale);
+        const shown = numbers.length > MAX_SPARKLINE_VALUES + 1
+          ? `${number(numbers[0]!)}, …, ${numbers.slice(-MAX_SPARKLINE_VALUES).map(number).join(", ")}`
+          : numbers.map(number).join(", ");
+        const count = numbers.length > MAX_SPARKLINE_VALUES + 1 ? `, ${numbers.length} values` : "";
+        out.push(`${label || "Trend"} (sparkline${count}): ${shown}`);
       } else if (label) {
         out.push(`${label} (sparkline)`);
       }
@@ -317,11 +324,17 @@ function lines(node: AidenUiNodeV1, scope: AidenUiScope, out: FallbackLines): vo
       const rows = prop(node, "rows", scope);
       if (out.chartTables && Array.isArray(rows) && rows.length) {
         out.push(`${label || "Heatmap"} (heatmap, ${rows.length} cells)`);
-        const column = (name: string) => {
-          const key = str(prop(node, name, scope)) || name;
-          return { key, label: key };
-        };
-        table(rows, [column("y"), column("x"), column("value")], scope, out);
+        // Each cell is named by its own row and column, as the drawn heatmap
+        // labels it, rather than by the field names that hold them.
+        const field = (name: string) => str(prop(node, name, scope)) || name;
+        const [x, y, value] = [field("x"), field("y"), field("value")];
+        for (const row of rows.slice(0, MAX_TABLE_ROWS)) {
+          if (!out.take()) return;
+          const cell = record(row);
+          const where = [cell[y], cell[x]].map((part) => plainCell(formatted(part, "text", scope))).filter(Boolean).join(" · ");
+          out.push(`${where || "—"}: ${plainCell(formatted(cell[value], undefined, scope)) || "—"}`);
+        }
+        if (rows.length > MAX_TABLE_ROWS) out.push(`(${rows.length - MAX_TABLE_ROWS} more cells)`);
       } else if (label) {
         out.push(`${label} (heatmap)`);
       }
