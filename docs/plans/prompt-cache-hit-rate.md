@@ -1,6 +1,6 @@
 # Prompt cache hit rate: keep the cached prefix byte-stable
 
-Status: Planned (2026-11-18). Delivered as one PR with one stacked commit series per phase, branch `feat/prompt-cache-stability`, cut from `main` at f2fd27640.
+Status: In progress (2026-11-18): phase 0 implemented. Delivered as one PR with one stacked commit series per phase, branch `feat/prompt-cache-stability`, cut from `main` at f2fd27640.
 
 ## Goal
 
@@ -72,6 +72,41 @@ At the end, four Opus high reviewers review the whole PR, and a CI watcher owns 
 - `main/services/pi-cache-telemetry.test.ts`: fixtures of payload pairs, covering a changed tool description, a changed system section, an edited earlier message, a model switch and a TTL lapse. Each must name the right source.
 - `main/services/prompt-prefix-stability.test.ts`: the two-turn harness for a workspace chat. Cases fixed by later phases are marked `todo` here and switched on by the phase that fixes them, so the gain is visible commit by commit.
 - `renderer/components/chat-context-panel` render test: 0% is rendered and the miss line appears.
+
+**As built (2026-11-18).** The code differed from the plan in these ways:
+
+- Pi 1.5.2 does not export `detectCacheMiss()`, so `pi-cache-telemetry.ts` ports its rules (`measurePromptCacheMiss`, `nextPromptCachePreviousRequest`), and a CLI parity test checks the port against the bundled server.
+- Attribution fingerprints the normalized transcript Pi hands the stream function, not the `onPayload` payload. Each system message is labelled by its section: `base` for the head, and a refresher's label with its per-request suffix removed.
+- Two labels were added: `system:base` for the head prompt, and `unknown` for a miss no section explains.
+- The desktop logs each miss at debug level and adds `lastCacheMiss {source, at}` to the context pressure feed. `aiden serve` passes no `cacheRetention` and writes the miss to stderr only when `AIDEN_PROMPT_CACHE_DEBUG=1` is set. The field is not part of the Remote context pressure contract.
+- The harness drives the runtime layer that llm-client builds, not llm-client itself, because llm-client needs Electron, config stores and the durable journal. That layer covers:
+  - the `createInitialSystemMessage` head over a modelled journal
+  - the real AGENTS.md and `mcp_servers` refreshers, applied first and between tool turns
+  - `createGenerationContextTransform`
+  - `PiAgentRuntimeHarness`
+  - the Pi Anthropic Messages and OpenAI Responses adapters, rendering offline with zero network calls
+- The tool-list case models browser discovery as a changed tool list, and the harness does not yet cover per-request hook context (phase 3).
+
+**Already stable:**
+
+- a plain two-turn chat on both wires
+- a tool loop within one turn
+- a chat with no AGENTS.md
+- an unchanged MCP section on the Anthropic wire. Anthropic merges system messages into one block, so the bytes are unchanged, but the transcript fingerprint still reports `messages`.
+
+**Baseline: the `todo` cases, all failing today.** Each row gives the first changed wire segment and what the telemetry reports.
+
+| Case | First changed segment | Telemetry reports |
+| --- | --- | --- |
+| AGENTS.md nonce, Anthropic | system | `messages` |
+| AGENTS.md nonce, OpenAI mid-conversation system | messages | `messages` |
+| MCP section, OpenAI mid-conversation system | messages | `messages` |
+| Tool list after browser discovery | tools | `tools` |
+| Bot open work in the base prompt | system | `system:base` |
+| Branch switch | system | `system:base` |
+| Permission mode change | system | `system:base` |
+| Memory edit | system | `system:base` |
+| Fourth `computer_use` screenshot trims an earlier image | messages | `messages` |
 
 ## Phase 1: stable nonce and journaled system sections
 

@@ -42,6 +42,19 @@ export interface ChatContextPressureV1 {
    * declares a cache lifetime and a request has used the cache.
    */
   promptCache?: PromptCacheWindowV1;
+  /** The chat's most recent prompt-cache miss and the section that caused it. */
+  lastCacheMiss?: PromptCacheMissV1;
+}
+
+export interface PromptCacheMissV1 {
+  /**
+   * The first request section that differed from the previous request:
+   * `tools`, `system:<section>`, `messages`, `model`, `retention`, `ttl`
+   * (unchanged but expired) or `unknown`.
+   */
+  source: string;
+  /** Epoch ms when the response that paid for the miss arrived. */
+  at: number;
 }
 
 export interface PromptCacheWindowV1 {
@@ -204,6 +217,7 @@ export function parseChatContextPressure(value: unknown): ChatContextPressureV1 
     return undefined;
   }
   const promptCache = parsePromptCacheWindow(candidate.promptCache);
+  const lastCacheMiss = parsePromptCacheMiss(candidate.lastCacheMiss);
   const breakdown =
     candidate.breakdown === undefined
       ? undefined
@@ -229,7 +243,31 @@ export function parseChatContextPressure(value: unknown): ChatContextPressureV1 
       : { addedAfterUsageAnchorTokens: candidate.addedAfterUsageAnchorTokens }),
     ...(breakdown ? { breakdown } : {}),
     ...(promptCache ? { promptCache } : {}),
+    ...(lastCacheMiss ? { lastCacheMiss } : {}),
   };
+}
+
+const PROMPT_CACHE_MISS_SOURCE = /^(?:tools|messages|model|retention|ttl|unknown|system:[a-z0-9._-]{1,64})$/iu;
+
+/** A malformed miss is dropped rather than failing the whole projection. */
+function parsePromptCacheMiss(value: unknown): PromptCacheMissV1 | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const candidate = value as Record<string, unknown>;
+  if (typeof candidate.source !== "string" || !PROMPT_CACHE_MISS_SOURCE.test(candidate.source) || !safeNonNegative(candidate.at)) {
+    return undefined;
+  }
+  return { source: candidate.source, at: candidate.at };
+}
+
+/** Short wording for a miss source in the context panel. */
+export function describePromptCacheMissSource(source: string): string {
+  if (source === "tools") return "tools changed";
+  if (source.startsWith("system:")) return "system prompt changed";
+  if (source === "messages") return "earlier messages changed";
+  if (source === "model") return "model switched";
+  if (source === "ttl") return "cache expired";
+  if (source === "retention") return "cache setting changed";
+  return "cause unknown";
 }
 
 /** A malformed cache window is dropped rather than failing the whole projection. */

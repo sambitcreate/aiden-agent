@@ -82,3 +82,5 @@ export { createCliBotSpending } from "./bot-spending.ts";
 export { createGenerationWatchdog } from "./generation-watchdog.ts";
 
 export { cliWorkspaceCodingTools } from "./workspace-coding-tools.ts";
+
+export { createPromptCacheTelemetry } from "../../../main/services/pi-cache-telemetry.js";

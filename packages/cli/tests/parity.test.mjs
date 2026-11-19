@@ -3325,3 +3325,57 @@ test("CLI credential prechecks preserve cancellation while a filesystem lookup i
     }
   }
 });
+
+test("prompt-cache miss detection agrees with Pi's detectCacheMiss over a mixed session", async () => {
+  const piCacheStats = await import(pathToFileURL(join(pkg, "node_modules", "@earendil-works", "pi-coding-agent", "dist", "core", "cache-stats.js")).href);
+  const catalog = { "acme/large": 0.3, "acme/small": 0.1 };
+  const models = { getModel: (provider, id) => ({ cost: { cacheRead: catalog[`${provider}/${id}`] ?? 0 } }) };
+  // A small deterministic generator so the sequence covers warm writes,
+  // cache reads, full misses, model switches, idle gaps, warming and compaction.
+  let seed = 7;
+  const next = (n) => { seed = (seed * 1103515245 + 12345) % 2147483648; return seed % n; };
+  const telemetry = api.createPromptCacheTelemetry({ now: () => 0 });
+  const entries = [];
+  let clock = 1_000_000, size = 4_000, compared = 0, misses = 0;
+  for (let turn = 0; turn < 200; turn += 1) {
+    const roll = next(20);
+    clock += roll === 0 ? 6 * 60_000 : 1_000 + next(60_000);
+    if (roll === 1) {
+      entries.push({ type: "compaction" });
+      telemetry.reset("chat");
+      size = 3_000;
+      continue;
+    }
+    const id = next(10) === 0 ? "small" : "large";
+    if (roll === 2) {
+      const usage = { input: 1, output: 1, cacheRead: size, cacheWrite: 0, cost: { input: 0, output: 0, cacheRead: size * 0.3e-6, cacheWrite: 0, total: 0 } };
+      entries.push({ type: "usage", kind: "cache_warm", usage, provider: "acme", model: id, timestamp: new Date(clock).toISOString() });
+      telemetry.observeWarm("chat", { provider: "acme", model: id, timestamp: clock, usage });
+      continue;
+    }
+    size += next(3_000);
+    const shape = next(4);
+    const cacheRead = shape === 0 ? 0 : shape === 1 ? size - next(2_000) : Math.max(0, size - 500 - next(500));
+    const cacheWrite = shape === 3 ? 0 : next(2) * next(4_000);
+    const input = Math.max(0, size - cacheRead) + (roll === 3 ? 0 : next(200));
+    const usage = {
+      input, output: 100, cacheRead, cacheWrite, totalTokens: input + cacheRead + cacheWrite + 100,
+      cost: { input: input * 3e-6, output: 0, cacheRead: cacheRead * 0.3e-6, cacheWrite: cacheWrite * 3.75e-6, total: 0 },
+    };
+    if (roll === 4) { usage.input = 0; usage.cacheRead = 0; usage.cacheWrite = 0; }
+    const message = { role: "assistant", content: [], api: "openai-responses", provider: "acme", model: id, usage, stopReason: "stop", timestamp: clock };
+    const expected = piCacheStats.detectCacheMiss(entries, message, models);
+    const actual = telemetry
+      .beginRequest("chat", { messages: [{ role: "user", content: "same", timestamp: 0 }], model: { provider: "acme", id, cost: { cacheRead: catalog[`acme/${id}`] } } })
+      .complete(message);
+    entries.push({ type: "message", message });
+    compared += 1;
+    if (expected) misses += 1;
+    assert.deepEqual(
+      actual && { missedTokens: actual.missedTokens, missedCost: actual.missedCost, idleMs: actual.idleMs, modelChanged: actual.modelChanged },
+      expected,
+      `turn ${turn}`,
+    );
+  }
+  assert.ok(compared > 100 && misses > 10, `the sequence exercised misses (${misses} of ${compared})`);
+});

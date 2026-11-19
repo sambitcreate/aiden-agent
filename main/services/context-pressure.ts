@@ -42,6 +42,7 @@ import { mcpManager } from "./mcp.js";
 import { mcpServerOffersTools } from "../../renderer/shared/mcp-exposure.js";
 import { draftUserPiMessage } from "./generation-messages.js";
 import { RecentChatCache } from "./recent-chat-cache.js";
+import { createPromptCacheTelemetry, type PromptCacheTelemetry } from "./pi-cache-telemetry.js";
 
 /**
  * Profiles are kept for the chats used most recently. An evicted chat's next
@@ -76,9 +77,22 @@ export function rememberPromptCacheRefresh(chatId: string, refresh: PromptCacheR
   promptCacheRefreshes.set(chatId, refresh);
 }
 
+/**
+ * Per-chat prompt-cache miss attribution. It holds section hashes only and
+ * keeps its own recent-chat bound; a dropped chat just starts fresh.
+ */
+export const chatPromptCacheTelemetry: PromptCacheTelemetry = createPromptCacheTelemetry();
+
+/** The chat's last miss in the renderer's shape. */
+export function lastPromptCacheMiss(chatId: string): ChatContextPressureV1["lastCacheMiss"] {
+  const miss = chatPromptCacheTelemetry.lastMiss(chatId);
+  return miss ? { source: miss.source, at: miss.at } : undefined;
+}
+
 export function forgetChatContextProfile(chatId: string): void {
   generationProfiles.delete(chatId);
   promptCacheRefreshes.delete(chatId);
+  chatPromptCacheTelemetry.forget(chatId);
   ambientProfiles.delete(chatId);
   journalSnapshots.delete(chatId);
 }
@@ -332,5 +346,10 @@ export async function chatContextPressure(
     : messages;
   const pressure = projectChatContextPressure(projected, options);
   const promptCache = promptCacheWindow(model, messages, promptCacheRefreshes.get(chatId));
-  return promptCache ? { ...pressure, promptCache } : pressure;
+  const lastCacheMiss = lastPromptCacheMiss(chatId);
+  return {
+    ...pressure,
+    ...(promptCache ? { promptCache } : {}),
+    ...(lastCacheMiss ? { lastCacheMiss } : {}),
+  };
 }

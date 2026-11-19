@@ -1,6 +1,6 @@
 import type * as React from "react";
 import type { Chat } from "../lib/types";
-import { formatContextTokenCount, type ChatContextPressureV1 } from "../shared/context-pressure";
+import { describePromptCacheMissSource, formatContextTokenCount, type ChatContextPressureV1, type PromptCacheMissV1 } from "../shared/context-pressure";
 import { parseAssistantTurnStatsV1 } from "../shared/assistant-turn-stats";
 import { ContextBreakdown } from "./context-breakdown";
 import { ProviderIcon } from "./provider-icon";
@@ -80,11 +80,18 @@ const USAGE_PARTS = [
   { key: "output", label: "Output", fill: "var(--chart-5)" },
 ] as const;
 
-function UsageSection({ usage }: { usage: ReturnType<typeof recordedChatUsage> }) {
+function UsageSection({
+  usage,
+  lastCacheMiss,
+}: {
+  usage: ReturnType<typeof recordedChatUsage>;
+  lastCacheMiss?: PromptCacheMissV1;
+}) {
   const reported = usage.turns > 0;
   const token = (value: number) => value.toLocaleString();
   const cacheable = usage.cacheRead + usage.cacheWrite + usage.input;
-  const cachePercent = reported && usage.cacheRead > 0 && cacheable > 0 ? Math.round((usage.cacheRead / cacheable) * 100) : null;
+  // 0% is shown too: a chat that never reads its cache is worth seeing.
+  const cachePercent = reported && cacheable > 0 ? Math.round((usage.cacheRead / cacheable) * 100) : null;
   const barTotal = USAGE_PARTS.reduce((sum, part) => sum + usage[part.key], 0);
   return (
     <section className="rounded-card bg-well p-4">
@@ -103,11 +110,20 @@ function UsageSection({ usage }: { usage: ReturnType<typeof recordedChatUsage> }
           </span>
           <span className="text-regular text-secondary">tokens</span>
           {cachePercent !== null ? (
-            <span className="ml-auto rounded-control bg-status-green-surface px-2.5 py-0.5 text-small text-status-green">
+            <span
+              className={
+                cachePercent > 0
+                  ? "ml-auto rounded-control bg-status-green-surface px-2.5 py-0.5 text-small text-status-green"
+                  : "ml-auto rounded-control bg-control px-2.5 py-0.5 text-small text-secondary"
+              }
+            >
               {`${cachePercent}% from cache`}
             </span>
           ) : null}
         </div>
+      ) : null}
+      {lastCacheMiss ? (
+        <p className="mt-1 text-mini text-tertiary">{`Cache missed: ${describePromptCacheMissSource(lastCacheMiss.source)}`}</p>
       ) : null}
       {reported && barTotal > 0 ? (
         <div
@@ -254,7 +270,7 @@ export function ChatContextPanel({
               ))}
             </dl>
           </section>
-          <UsageSection usage={usage} />
+          <UsageSection usage={usage} lastCacheMiss={details.pressure?.lastCacheMiss} />
         </div>
       </div>
     </div>

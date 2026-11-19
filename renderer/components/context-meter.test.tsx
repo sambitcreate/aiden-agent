@@ -111,6 +111,20 @@ test("cumulative usage past a billion tokens reads in billions", async () => {
   assert.match(html, /92% from cache/u);
 });
 
+test("a chat that read nothing from its cache shows 0% and names the last miss", async () => {
+  const { ChatContextPanel } = await import("./chat-context-panel.js");
+  const usage = { input: 9_000, output: 300, cacheRead: 0, cacheWrite: 0, total: 9_300, requests: 2 };
+  const turn = { id: "a", role: "assistant" as const, content: "done", createdAt: 20, turnStats: { version: 1 as const, startedAt: 10, finishedAt: 20, usage } };
+  const render = (extra: Partial<ChatContextPressureV1>) =>
+    renderToStaticMarkup(<ChatContextPanel details={{ chat: { id: "chat", title: "Cold", createdAt: 1, updatedAt: 20, messages: [turn] }, pressure: pressure(extra), compacting: false, providerLabel: "Local", modelLabel: "Model" }} />)
+      .replace(/<[^>]+>/gu, " ").replace(/\s+/gu, " ");
+  const missed = render({ lastCacheMiss: { source: "tools", at: 19 } });
+  assert.match(missed, /0% from cache/u);
+  assert.match(missed, /Cache missed: tools changed/u);
+  assert.match(render({ lastCacheMiss: { source: "system:agents-instructions", at: 19 } }), /Cache missed: system prompt changed/u);
+  assert.doesNotMatch(render({}), /Cache missed/u);
+});
+
 test("a chat whose provider never reported usage says so once instead of a column of Unavailable", async () => {
   const { ChatContextPanel } = await import("./chat-context-panel.js");
   const messages = [{ id: "old", role: "assistant" as const, content: "local reply", createdAt: 1 }];

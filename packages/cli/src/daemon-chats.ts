@@ -15,7 +15,8 @@ import { mkdirSync, realpathSync } from "node:fs";
 import { rm } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { dirname, basename, join, resolve } from "node:path";
-import { createAgentSession, DefaultResourceLoader, SessionManager, type AgentSession } from "@earendil-works/pi-coding-agent";
+import { convertToLlm, createAgentSession, DefaultResourceLoader, SessionManager, type AgentSession } from "@earendil-works/pi-coding-agent";
+import { createPromptCacheTelemetry, formatPromptCacheMissLog, type PromptCacheRequestObservation } from "../../../main/services/pi-cache-telemetry.js";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import type { AgentTurnDecision } from "@earendil-works/pi-agent-core";
 import { createChatStore } from "../../../main/services/chat-store-core.js";
@@ -120,6 +121,8 @@ export function createDaemonChats(agentDir: string) {
   const activity = new ChatActivityRegistry((snapshot) => { for (const listener of activityListeners) listener(snapshot); });
   // The same run journal the desktop keeps: paired desktops observe and steer these runs (`runs:*`, `/host/events`).
   const runs = new HostRunRegistry({ now: Date.now });
+  // Prompt-cache miss attribution, shared with the desktop: section hashes per chat, never content.
+  const promptCache = createPromptCacheTelemetry();
   const recorders = createHostRunRecorders((_scope, message) => process.stderr.write(`aiden: ${message}\n`));
   const admission = new ChatTurnAdmission();
   const deletion = new ChatDeletionGate();
@@ -243,6 +246,7 @@ export function createDaemonChats(agentDir: string) {
         const hookReport = { report: reportHookLines };
         const hooks = botAdmission ? botSurfaceHooks(chat.botId!, cwd, undefined, hookReport) : createSurfaceHooks({ scopes: workspaceChatHookScopes(hookTarget), cwd, sessionId: chat.id }, undefined, hookReport);
         let turnHookContext: string | undefined;
+        let promptCacheRequest: PromptCacheRequestObservation | undefined;
         // PreToolUse context waits for its tool's result; a hook's `continue: false` ends the turn after the tool.
         const preToolContext = new Map<string, string>();
         let hookStop: string | undefined;
@@ -361,7 +365,14 @@ export function createDaemonChats(agentDir: string) {
               hooks.observe("PreCompact", { trigger: event.reason === "manual" ? "manual" : "auto", aiden_reason: event.reason },
                 { idempotencyKey: `PreCompact:${chat.id}:${streamId}:${event.reason}`, report: reportHookLines });
             });
-            pi.on("session_compact", () => { if (!botAdmission) markWorkspaceChatCompacted(chat.id); });
+            pi.on("session_compact", () => { promptCache.reset(chat.id); if (!botAdmission) markWorkspaceChatCompacted(chat.id); });
+            // The last context handler sees each request's final transcript; it only observes, so the messages stay as they are.
+            pi.on("context_with_system", (event, ctx) => {
+              try {
+                promptCacheRequest = ctx.model ? promptCache.beginRequest(chat.id, { messages: convertToLlm(event.messages), model: ctx.model }) : undefined;
+              } catch { promptCacheRequest = undefined; }
+              return undefined;
+            });
           } }],
         });
         await loader.reload(); await assertAuthority();
@@ -390,7 +401,11 @@ export function createDaemonChats(agentDir: string) {
           if (event.type === "message_update" && event.assistantMessageEvent.type === "thinking_delta") {
             timeline.thinkingStarted(); send("chat:reasoning-delta", { streamId, delta: event.assistantMessageEvent.delta });
           }
-          if (event.type === "message_end" && event.message.role === "assistant") { produced.push(event.message); separator = true; }
+          if (event.type === "message_end" && event.message.role === "assistant") {
+            produced.push(event.message); separator = true;
+            const miss = promptCacheRequest?.complete(event.message); promptCacheRequest = undefined;
+            if (miss && process.env.AIDEN_PROMPT_CACHE_DEBUG === "1") process.stderr.write(`aiden: ${formatPromptCacheMissLog(miss)}\n`);
+          }
           if (event.type === "tool_execution_start") {
             timeline.toolStarted(event.toolCallId, event.toolName, event.args);
             send("chat:tool", { streamId, toolName: event.toolName, phase: "call" });

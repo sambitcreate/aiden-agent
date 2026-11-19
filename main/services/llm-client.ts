@@ -304,10 +304,13 @@ import {
 } from "./generation-context.js";
 import { promptCacheTtlMs } from "./prompt-cache-lifetimes.js";
 import {
+  chatPromptCacheTelemetry,
   invalidateChatContextJournal,
+  lastPromptCacheMiss,
   rememberChatContextProfile,
   rememberPromptCacheRefresh,
 } from "./context-pressure.js";
+import { formatPromptCacheMissLog, withPromptCacheTelemetry } from "./pi-cache-telemetry.js";
 import { generationEmergencyUserError } from "./generation-emergency-outcome.js";
 import { buildGeminiWorkspaceSnapshot, GeminiContextCache } from "./gemini-context-cache.js";
 import { attachClaimCheck } from "../../renderer/shared/claim-check.js";
@@ -3972,6 +3975,9 @@ export const llmClient = {
         // A completed compaction makes the chat's next turn a SessionStart
         // `compact` turn, like Claude Code's compact source.
         if (chatHooks && event.result && !event.aborted) markWorkspaceChatCompacted(params.chatId);
+        // Compaction rewrites the prefix on purpose, so, as in Pi's cache
+        // stats, the next request is not counted against the old one.
+        if (event.result && !event.aborted) chatPromptCacheTelemetry.reset(params.chatId);
         logger.info("pi", `Finished ${event.reason} compaction for stream ${streamId}.`, {
           aborted: event.aborted,
           tokensBefore: event.result?.tokensBefore,
@@ -4192,6 +4198,7 @@ export const llmClient = {
           },
           resolveRuntime: (signal) => resolveModelRuntime(params.providerId, params.model, signal, params.chatId),
           recordUsage: async (message, freshRuntime) => {
+            chatPromptCacheTelemetry.observeWarm(params.chatId, message);
             spendingMeter.count(message);
             await usageStore.record(assistantUsageRecord({ message, provider: freshRuntime.provider, model: freshRuntime.model, source: "cache-warm" }));
           },
@@ -4208,7 +4215,21 @@ export const llmClient = {
       }
       initialization.stopCacheWarming = () => cacheWarmer?.dispose();
       const realStream = agentRuntimeOptions.streamFn!;
-      const warmedStream = cacheWarmer ? withPiCacheWarming(realStream, cacheWarmer) : realStream;
+      // Prompt-cache miss attribution sees each request as sent; it keeps
+      // section hashes only and logs labels, never content.
+      const measuredStream = withPromptCacheTelemetry(realStream, {
+        telemetry: chatPromptCacheTelemetry,
+        chatKey: params.chatId,
+        onMiss: (report) => {
+          logger.debug("prompt-cache", `${formatPromptCacheMissLog(report)} stream=${streamId}`);
+          const pressure = lastContextPressure;
+          if (!pressure) return;
+          lastContextPressure = { ...pressure, lastCacheMiss: { source: report.source, at: report.at } };
+          sendGeneration(streamId, "chat:context-pressure", { streamId, chatId: params.chatId, pressure: lastContextPressure });
+        },
+        onError: (error) => logger.debug("prompt-cache", `Could not attribute a prompt-cache miss for stream ${streamId}.`, error),
+      });
+      const warmedStream = cacheWarmer ? withPiCacheWarming(measuredStream, cacheWarmer) : measuredStream;
       // Device-local pace: Pi calls the stream function once per model
       // response, right before the provider request, so the wrapper marks
       // each response's request start (see ModelPaceTimer for what TTFT covers).
@@ -4270,8 +4291,10 @@ export const llmClient = {
             permission,
             toolsDisabled: runtime.provider.modelMetadata?.[model.id]?.overrides?.toolCall === false,
           });
+          const lastCacheMiss = lastPromptCacheMiss(params.chatId);
           lastContextPressure = {
             ...chatContextPressureFromProjection(projection, projectionOptions),
+            ...(lastCacheMiss ? { lastCacheMiss } : {}),
             // Projections are emitted as each request is prepared, so the
             // cache window restarts now for models that declare one.
             ...(promptCacheTtl > 0 ? { promptCache: { ttlMs: promptCacheTtl, lastRequestAt: Date.now() } } : {}),
