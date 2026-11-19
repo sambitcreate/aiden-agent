@@ -110,10 +110,16 @@ export interface PiModelToolsHost {
   /**
    * Writes a generated image into the chat's workspace folder, with
    * write_file's protections, and returns the workspace-relative path written.
-   * Only a chat that may write files has it; without it generate_image has no
-   * `savePath`.
+   * With `replace` false it only creates a new file and refuses one already
+   * there. Only a chat that may write files has it; without it generate_image
+   * has no `savePath`.
    */
-  saveImage?(relativePath: string, image: ImageContent, signal?: AbortSignal): Promise<string>;
+  saveImage?(
+    relativePath: string,
+    image: ImageContent,
+    signal?: AbortSignal,
+    options?: { replace: boolean },
+  ): Promise<string>;
   /**
    * Puts saved images on the chat's design canvas and returns the frames
    * showing them, or null when design mode is off. Only a chat that could use
@@ -165,18 +171,55 @@ export function checkImageSavePath(value: unknown): string {
 /**
  * Where each generated image is saved: the first at `savePath`, the rest with
  * -2, -3 and so on before the extension, which always follows the image's real
- * type (a JPEG asked for as hero.png is saved as hero.jpg).
+ * type (a JPEG asked for as hero.png is saved as hero.jpg). Only a path equal
+ * to `savePath` itself may replace a file (see `imageSaveMayReplace`).
  */
 export function imageSavePaths(savePath: string, mimeTypes: readonly string[]): string[] {
   const stem = savePath.replace(SAVE_PATH_EXTENSION, "");
-  const asked = SAVE_PATH_EXTENSION.exec(savePath)?.[0].toLowerCase();
+  const asked = SAVE_PATH_EXTENSION.exec(savePath)?.[0];
+  const askedType = asked ? extensionType(asked) : undefined;
   return mimeTypes.map((mimeType, index) => {
     const extension = IMAGE_FILE_EXTENSIONS[mimeType];
     if (!extension) throw new Error("Generated images must be PNG, JPEG, GIF or WebP.");
-    // Keep the person's spelling of a JPEG's extension.
-    const chosen = extension === ".jpg" && asked === ".jpeg" ? ".jpeg" : extension;
+    // Keep the person's spelling (hero.jpeg, hero.PNG) when the type matches it.
+    const chosen = asked && askedType === mimeType ? asked : extension;
     return `${stem}${index === 0 ? "" : `-${index + 1}`}${chosen}`;
   });
+}
+
+function extensionType(extension: string): string | undefined {
+  const lower = extension.toLowerCase();
+  return lower === ".jpeg" ? "image/jpeg" : Object.keys(IMAGE_FILE_EXTENSIONS).find((type) => IMAGE_FILE_EXTENSIONS[type] === lower);
+}
+
+/**
+ * Whether saving at `path` may replace a file already there: only the exact
+ * file the approval named. A swapped extension, a numbered extra image or the
+ * file an extensionless savePath becomes is only ever a new file.
+ */
+export function imageSaveMayReplace(savePath: string, path: string): boolean {
+  return path === savePath;
+}
+
+/**
+ * The approval's account of a save, written before the image exists: the one
+ * file that may be replaced, and the new files other images may become.
+ * `savePath` is the model's argument, so paths are shown JSON-quoted.
+ */
+export function describeImageSave(rawSavePath: string): string {
+  let savePath: string;
+  try {
+    savePath = checkImageSavePath(rawSavePath);
+  } catch {
+    return `Save the image in the workspace as ${JSON.stringify(rawSavePath)} (this path will be refused before any request).`;
+  }
+  const stem = savePath.replace(SAVE_PATH_EXTENSION, "");
+  const asked = SAVE_PATH_EXTENSION.exec(savePath)?.[0];
+  if (!asked) {
+    return `Save the image in the workspace as a new file ${JSON.stringify(`${stem}.png`)}, with the extension of the image's type (such as ${JSON.stringify(`${stem}.jpg`)}), and a second or later image as ${JSON.stringify(`${stem}-2.png`)} and so on. None of them replaces an existing file.`;
+  }
+  const other = extensionType(asked) === "image/png" ? ".jpg" : ".png";
+  return `Save the image in the workspace as ${JSON.stringify(savePath)}, replacing any file there. An image of another type, or a second or later image, is saved only as a new file beside it (such as ${JSON.stringify(`${stem}${other}`)} or ${JSON.stringify(`${stem}-2${asked}`)}) and never replaces one.`;
 }
 
 function failure(error: unknown): string {
@@ -198,7 +241,8 @@ async function keepGeneratedImages(
   for (const [index, image] of images.entries()) {
     signal?.throwIfAborted();
     try {
-      const written = await host.saveImage!(paths[index]!, image, signal);
+      const target = paths[index]!;
+      const written = await host.saveImage!(target, image, signal, { replace: imageSaveMayReplace(savePath, target) });
       saved.push({ path: written, width: sizes[index]!.width, height: sizes[index]!.height });
     } catch (error) {
       if (signal?.aborted) throw error;
@@ -644,7 +688,7 @@ export function createPiModelTools(host: PiModelToolsHost): AgentTool[] {
     description:
       "Send a prompt to an image-generation model and display its generated images. Uses the image key saved in Settings → Image Generation and may incur charges. Use list_operation_models to choose an image model. To edit or use reference images, list_image_references returns IDs of images attached to this chat; pass up to four as referenceImageIds. No URLs are accepted. When the user asks for a shape or orientation (square, wide, landscape, portrait, a phone wallpaper, a banner), pass aspectRatio as width:height; models that can't produce that shape use their default." +
       (host.saveImage
-        ? " To keep the image as a file (an asset a page uses, a hero or an icon), pass savePath, a path in the workspace folder such as design/assets/hero.png; it replaces a file already there, its extension follows the image's type, and further images get -2, -3."
+        ? " To keep the image as a file (an asset a page uses, a hero or an icon), pass savePath, a path in the workspace folder such as design/assets/hero.png; it replaces a file already at that exact path. An image of another type gets its own extension and further images get -2, -3; those are only ever new files, so to replace hero.jpg pass savePath hero.jpg."
         : "") +
       (host.saveImage && host.placeImages
         ? " With savePath, placeOnCanvas: true also puts the saved image on the design canvas while design mode is on."

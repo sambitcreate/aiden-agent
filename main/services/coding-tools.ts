@@ -9,6 +9,7 @@ import { markHostCommandObservation } from "./pi-host-command-observation.js";
 // Tool inputs use typebox schemas (pi's AgentTool.parameters), matching tools.ts.
 
 import { isImageAspectRatio } from "../../renderer/shared/image-generation/aspect-ratio.js";
+import { describeImageSave } from "./pi-model-tools.js";
 import { processGroupStillRuns } from "../shared/process-group.js";
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -669,7 +670,7 @@ export function summarizeToolCall(toolName: string, args: unknown): string {
     case "generate_image":
       return `Send an image prompt to ${String(a.provider ?? "?")}/${String(a.model ?? "?")}${isImageAspectRatio(a.aspectRatio) ? ` at ${a.aspectRatio}` : ""} (may incur charges).${
         typeof a.savePath === "string"
-          ? ` Save the image in the workspace as ${JSON.stringify(a.savePath)}, replacing any file there${a.placeOnCanvas === true ? ", and put it on the design canvas" : ""}.`
+          ? ` ${describeImageSave(a.savePath)}${a.placeOnCanvas === true ? " Put the saved image on the design canvas." : ""}`
           : ""
       } Complete prompt (JSON-quoted): ${JSON.stringify(String(a.prompt ?? "?"))}`;
     case "classify":
@@ -946,20 +947,25 @@ async function readReplacedFile(
  * write_file's protections: the path stays inside the folder, symlinks out of
  * it and dangling links are refused, Aiden's protected config paths are never
  * written, and an existing file is replaced only if it is an exclusively
- * linked regular file nobody changed meanwhile. Returns the path relative to
+ * linked regular file nobody changed meanwhile, and never with `replace: false`. Returns the path relative to
  * the folder, with forward slashes.
  */
 export async function writeWorkspaceBinaryFile(
   root: string,
   suppliedPath: string,
   bytes: Buffer,
-  options: { signal?: AbortSignal; fileMutatorBinary?: string } = {},
+  options: { signal?: AbortSignal; fileMutatorBinary?: string; replace?: boolean } = {},
 ): Promise<string> {
   const { signal } = options;
   const workspace = pinWorkspaceRoot(root);
   const full = await resolveWritableInRoot(workspace, suppliedPath, signal);
   assertAgentMayWriteConfigPath(suppliedPath, full);
   const existing = await readReplacedFile(full, suppliedPath, signal);
+  // A create-only write never replaces a file; the native writer's "new" mode
+  // also refuses one that appears after this check.
+  if (existing && options.replace === false) {
+    throw new Error(`${suppliedPath} already exists, and only the file the approval named may be replaced.`);
+  }
   throwIfAborted(signal, "File write cancelled.");
   const realRoot = await verifyWorkspaceRoot(workspace, signal);
   const relativePath = path.relative(realRoot, full).split(path.sep).join("/");

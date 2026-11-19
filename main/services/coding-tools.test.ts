@@ -144,7 +144,8 @@ test("approval summaries describe the consequence of mutating tools", () => {
   });
   // Where the file goes is said before the prompt, which may be long.
   assert.ok(saving.indexOf("design/assets/hero.png") < saving.indexOf("A dune"));
-  assert.match(saving, /replacing any file there, and put it on the design canvas/);
+  assert.match(saving, /"design\/assets\/hero\.png", replacing any file there\./);
+  assert.match(saving, /never replaces one\. Put the saved image on the design canvas\./);
   assert.doesNotMatch(
     summarizeToolCall("generate_image", { provider: "studio", model: "canvas", prompt: "A dune", placeOnCanvas: true }),
     /design canvas/,
@@ -343,6 +344,12 @@ test("a generated image is written as bytes inside the workspace and never throu
     const second = Buffer.from([1, 2, 3]);
     await writeWorkspaceBinaryFile(root, "design/assets/hero.png", second);
     assert.deepEqual(await fs.readFile(path.join(root, "design", "assets", "hero.png")), second);
+
+    // A create-only write refuses a file already there and leaves it alone.
+    await assert.rejects(writeWorkspaceBinaryFile(root, "design/assets/hero.png", bytes, { replace: false }), /already exists/u);
+    assert.deepEqual(await fs.readFile(path.join(root, "design", "assets", "hero.png")), second);
+    assert.equal(await writeWorkspaceBinaryFile(root, "design/assets/hero-2.png", bytes, { replace: false }), "design/assets/hero-2.png");
+    assert.deepEqual(await fs.readFile(path.join(root, "design", "assets", "hero-2.png")), bytes);
 
     for (const target of ["../outside/hero.png", path.join(outside, "hero.png"), "design/escape/hero.png"]) {
       await assert.rejects(writeWorkspaceBinaryFile(root, target, bytes), Error, target);

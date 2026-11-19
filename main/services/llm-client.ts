@@ -2360,10 +2360,17 @@ async function prepareGeneration(
       permission !== "read-only" &&
       !options.excludeToolNames?.has("write_file")
         ? {
-            saveImage: async (relativePath: string, image: { data: string }, saveSignal?: AbortSignal) => {
+            saveImage: async (
+              relativePath: string,
+              image: { data: string },
+              saveSignal?: AbortSignal,
+              saveOptions?: { replace: boolean },
+            ) => {
               if (!(await imageWorkspaceUnchanged())) throw new Error("This chat's workspace folder changed or lost file access.");
               return await writeWorkspaceBinaryFile(imageRoot, relativePath, Buffer.from(image.data, "base64"), {
                 ...(saveSignal ? { signal: saveSignal } : {}),
+                // Only the file the approval named may be replaced.
+                replace: saveOptions?.replace === true,
               });
             },
             ...(!options.excludeToolNames?.has("canvas_place_frame") &&

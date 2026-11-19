@@ -1,4 +1,8 @@
 import assert from "node:assert/strict";
+import * as fs from "node:fs/promises";
+import * as os from "node:os";
+import * as path from "node:path";
+import { writeWorkspaceBinaryFile } from "./coding-tools.js";
 import { createPiModelImageReferences } from "./pi-model-image-references.js";
 import type { Attachment } from "./types.js";
 import test from "node:test";
@@ -11,6 +15,7 @@ import type {
 import {
   checkImageSavePath,
   createPiModelTools,
+  describeImageSave,
   classifierApprovalFor,
   imageSavePaths,
   piModelOperationProviderLabel,
@@ -1033,6 +1038,59 @@ test("savePath and placeOnCanvas exist only for a chat whose host can save and p
   assert.equal("placeOnCanvas" in saveOnlyParameters.properties, false);
 });
 
+test("only the file the approval named is replaced; another type or an extra image never overwrites a file", async () => {
+  const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "aiden-image-save-")));
+  try {
+    await fs.mkdir(path.join(root, "design"));
+    for (const name of ["hero.png", "hero-2.png", "logo.jpg"]) await fs.writeFile(path.join(root, "design", name), "old");
+    const { controls, models } = fixture();
+    const generate = createPiModelTools({
+      ...registries(models),
+      onImage: async () => {},
+      // The real workspace writer, so the test sees what lands on disk.
+      saveImage: async (relative, item, signal, options) =>
+        writeWorkspaceBinaryFile(root, relative, Buffer.from(item.data, "base64"), {
+          ...(signal ? { signal } : {}),
+          ...(options ? { replace: options.replace } : {}),
+        }),
+    }).find((tool) => tool.name === "generate_image")!;
+    const read = (name: string) => fs.readFile(path.join(root, "design", name), "utf8").catch(() => "missing");
+    const png = Buffer.from(PNG, "base64").toString("utf8");
+
+    controls.imageResult.output = [image, image, image];
+    const named = resultText(await generate.execute("named", { ...imageRequest, savePath: "design/hero.png" }));
+    assert.equal(await read("hero.png"), png, "the named file is replaced");
+    assert.equal(await read("hero-2.png"), "old", "an extra image never overwrites a file the approval did not name");
+    assert.equal(await read("hero-3.png"), png, "an extra image with a free name is saved");
+    assert.match(named, /Saved in the workspace as design\/hero\.png, design\/hero-3\.png\./);
+    assert.match(named, /Could not save design\/hero-2\.png: .*already exists/);
+
+    // A PNG asked for as logo.jpg becomes logo.png, a new file, and logo.jpg stays.
+    controls.imageResult.output = [image];
+    await generate.execute("swapped", { ...imageRequest, savePath: "design/logo.jpg" });
+    assert.equal(await read("logo.jpg"), "old");
+    assert.equal(await read("logo.png"), png);
+    // An extensionless savePath names no file to replace either.
+    const bare = resultText(await generate.execute("bare", { ...imageRequest, savePath: "design/hero" }));
+    assert.equal(await read("hero.png"), png);
+    assert.match(bare, /Could not save design\/hero\.png: .*already exists/);
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+test("the approval names the file that may be replaced and the new files other images become", () => {
+  const named = describeImageSave("./design/hero.png");
+  assert.match(named, /"design\/hero\.png", replacing any file there/);
+  assert.match(named, /"design\/hero\.jpg"/);
+  assert.match(named, /"design\/hero-2\.png"/);
+  assert.match(named, /never replaces one/);
+  const bare = describeImageSave("icons/star");
+  assert.doesNotMatch(bare, /replacing/);
+  assert.match(bare, /new file "icons\/star\.png"/);
+  assert.match(bare, /None of them replaces an existing file/);
+});
+
 test("saved file names follow each image's real type and number the extra images", () => {
   assert.deepEqual(imageSavePaths("design/hero.png", ["image/png", "image/jpeg", "image/webp"]), [
     "design/hero.png",
@@ -1040,6 +1098,8 @@ test("saved file names follow each image's real type and number the extra images
     "design/hero-3.webp",
   ]);
   assert.deepEqual(imageSavePaths("photo.jpeg", ["image/jpeg"]), ["photo.jpeg"]);
+  // The person's spelling stays when the type matches, so the named file is the one replaced.
+  assert.deepEqual(imageSavePaths("Hero.PNG", ["image/png", "image/png"]), ["Hero.PNG", "Hero-2.PNG"]);
   assert.deepEqual(imageSavePaths("icons/star", ["image/gif"]), ["icons/star.gif"]);
   assert.equal(checkImageSavePath("design\\assets\\hero.webp"), "design/assets/hero.webp");
 });
