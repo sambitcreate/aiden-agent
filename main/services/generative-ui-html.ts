@@ -260,16 +260,32 @@ function themeVariableLines(vars: Readonly<Record<string, string>> | undefined):
 }
 
 export interface GenerativeUiDraftCheck {
-  /** Adds the next streamed chunk; false once the draft so far breaks the final artifact's rules. */
-  append(chunk: string): boolean;
+  /**
+   * Adds the next streamed chunk. Returns the text newly checked, which is
+   * safe to show (empty while short chunks are held), or false once the
+   * draft so far breaks the final artifact's rules.
+   */
+  append(chunk: string): string | false;
+  /** Checks the text still held at the end of the stream: the text, or false. */
+  finish(): string | false;
 }
+
+/**
+ * Chunks are held until there are this many characters, or as many as the
+ * token still being read holds, whichever comes first. parse5 copies an
+ * unfinished token's text for every chunk written, so feeding it a long tag
+ * in tiny chunks would take quadratic time.
+ */
+const DRAFT_CHECK_BATCH_CHARS = 8192;
 
 /**
  * The final artifact's content rules, applied to a streaming draft chunk by
  * chunk without throwing. Each chunk is read once, so a whole draft costs
- * what one final check does. A partial tag is fine as far as it goes;
+ * about what one final check does. A partial tag is fine as far as it goes;
  * anything the final check would refuse stops the draft early (the draft CSP
- * already blocks scripts and network).
+ * already blocks scripts and network). Only text the check has read is
+ * returned, so a caller that shows what `append` returns never shows
+ * unchecked markup.
  */
 export function createGenerativeUiDraftCheck(): GenerativeUiDraftCheck {
   // A draft streams in right after the draft head's `<body>`, so it is read there.
@@ -280,7 +296,30 @@ export function createGenerativeUiDraftCheck(): GenerativeUiDraftCheck {
   const written: string[] = [];
   let tail = "";
   let bytes = 0;
+  let held = "";
   let refused = false;
+  const check = (): string | false => {
+    const chunk = held;
+    held = "";
+    if (chunk.length === 0) return "";
+    scanner.write(chunk);
+    if (withoutScripting !== undefined) {
+      withoutScripting.write(chunk);
+    } else {
+      written.push(chunk);
+      const recent = tail + chunk;
+      tail = recent.slice(-(NOSCRIPT_TAG_TEXT.length - 1));
+      if (NOSCRIPT_TAG.test(recent)) {
+        withoutScripting = new HtmlScanner(0, false);
+        withoutScripting.write(GUEST_BODY_OPEN);
+        withoutScripting.write(written.join(""));
+        written.length = 0;
+      }
+    }
+    const findings = mergeFindings(scanner.findings(), withoutScripting?.findings());
+    refused = findings.embed !== undefined || findings.url !== undefined || findings.limit !== undefined;
+    return refused ? false : chunk;
+  };
   return {
     append(chunk) {
       if (refused) return false;
@@ -289,30 +328,20 @@ export function createGenerativeUiDraftCheck(): GenerativeUiDraftCheck {
         refused = true;
         return false;
       }
-      scanner.write(chunk);
-      if (withoutScripting !== undefined) {
-        withoutScripting.write(chunk);
-      } else {
-        written.push(chunk);
-        const recent = tail + chunk;
-        tail = recent.slice(-(NOSCRIPT_TAG_TEXT.length - 1));
-        if (NOSCRIPT_TAG.test(recent)) {
-          withoutScripting = new HtmlScanner(0, false);
-          withoutScripting.write(GUEST_BODY_OPEN);
-          withoutScripting.write(written.join(""));
-          written.length = 0;
-        }
-      }
-      const findings = mergeFindings(scanner.findings(), withoutScripting?.findings());
-      refused = findings.embed !== undefined || findings.url !== undefined || findings.limit !== undefined;
-      return !refused;
+      held += chunk;
+      const unfinished = Math.max(scanner.unfinishedSize(), withoutScripting?.unfinishedSize() ?? 0);
+      return held.length >= Math.min(DRAFT_CHECK_BATCH_CHARS, unfinished) ? check() : "";
+    },
+    finish() {
+      return refused ? false : check();
     },
   };
 }
 
 /** Whether a streaming prefix still meets the final artifact's content rules. */
 export function isGenerativeUiDraftAcceptable(html: string): boolean {
-  return createGenerativeUiDraftCheck().append(html);
+  const check = createGenerativeUiDraftCheck();
+  return check.append(html) !== false && check.finish() !== false;
 }
 
 /**

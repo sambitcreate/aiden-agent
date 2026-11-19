@@ -474,6 +474,8 @@ export function findJsSink(code: string, depth = 0): HtmlFindings {
 
 interface TokenizerInternals {
   currentToken: Token.Token | null;
+  currentAttr?: { name: string; value: string };
+  currentCharacterToken?: { chars: string } | null;
   _leaveAttrName(): void;
 }
 
@@ -589,6 +591,29 @@ export class HtmlScanner {
       findings.url ??= this.pending.found.url;
     }
     return findings;
+  }
+
+  /**
+   * About how many characters the token still being read holds. parse5 keeps
+   * an unfinished token's text in its input buffer and copies that buffer
+   * for every chunk written, so a caller feeding many small chunks holds
+   * them until they are about this long.
+   */
+  unfinishedSize(): number {
+    if (this.finished) return 0;
+    const tokenizer = this.parser.tokenizer as unknown as TokenizerInternals;
+    const token = tokenizer.currentToken;
+    let size = tokenizer.currentCharacterToken?.chars.length ?? 0;
+    if (token?.type === Token.TokenType.START_TAG || token?.type === Token.TokenType.END_TAG) {
+      // The attribute being read is in `attrs` once its name ends; before that only `currentAttr` has it.
+      const attributes = token.attrs.reduce((total, attribute) => total + attribute.name.length + attribute.value.length, 0);
+      size = Math.max(size, token.tagName.length + attributes + (tokenizer.currentAttr?.name.length ?? 0));
+    } else if (token?.type === Token.TokenType.COMMENT) {
+      size = Math.max(size, token.data.length);
+    } else if (token?.type === Token.TokenType.DOCTYPE) {
+      size = Math.max(size, (token.name?.length ?? 0) + (token.publicId?.length ?? 0) + (token.systemId?.length ?? 0));
+    }
+    return size;
   }
 
   /**

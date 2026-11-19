@@ -175,7 +175,9 @@ test("a draft reads its chunks as one document, so a tag split across chunks or 
   send("<svg><style>.a{fill:red}<emb");
   send('<svg><style>.a{fill:red}<embed src="https://evil.test/x">');
   send('<svg><style>.a{fill:red}<embed src="https://evil.test/x"></style></svg>');
-  assert.deepEqual(streams[0]!.chunks, ["<svg><style>.a{fill:red}", "<emb"]);
+  // "<emb" is shorter than the unfinished style text before it, so it waits
+  // to be checked with what follows, and that is refused.
+  assert.deepEqual(streams[0]!.chunks, ["<svg><style>.a{fill:red}"]);
   assert.equal(streams[0]!.closed, true);
 
   // A restarted draft is read from its own start, not inside the old one's comment.
@@ -187,6 +189,28 @@ test("a draft reads its chunks as one document, so a tag split across chunks or 
   assert.equal(second.streams.length, 2);
   assert.deepEqual(second.streams[1]!.chunks, []);
   assert.equal(second.streams[1]!.closed, true);
+});
+
+test("a draft shows only text its check has read, and the rest when the call ends", () => {
+  const stream = (html: string, step: number) => {
+    const fake = fakeSession();
+    for (let end = step; end < html.length; end += step) {
+      fake.session.delta("raw1", "render_artifact", { html: html.slice(0, end) });
+      fake.flush();
+    }
+    fake.session.delta("raw1", "render_artifact", { html });
+    fake.session.end("raw1");
+    return { shown: fake.streams[0]!.chunks.join(""), retracted: fake.events.some((e) => (e as { operation: string }).operation === "draft_end") };
+  };
+  // A long tag streamed in short deltas is checked in larger pieces; all of it shows by the end.
+  const html = `<p title="${"a".repeat(3000)}">done</p><p>after</p>`;
+  assert.deepEqual(stream(html, 20), { shown: html, retracted: false });
+  // A javascript: URL that arrives while the tag is long is refused when read, and never shown.
+  const refused = `<a title="${"a".repeat(3000)}" href="javascript:alert(1)">x</a>`;
+  const result = stream(refused, 20);
+  assert.equal(result.retracted, true);
+  assert.ok(refused.startsWith(result.shown));
+  assert.equal(result.shown.includes("javascript:"), false);
 });
 
 test("draft admission stops at remote loads and forbidden elements but tolerates partial tags", () => {

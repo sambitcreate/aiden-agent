@@ -157,11 +157,13 @@ export function createGenerativeUiDraftSession(options: GenerativeUiDraftSession
         openStream(call, action.title);
         continue;
       }
-      if (!call.check.append(action.chunk)) {
+      // Only the text the check has read is shown; it may hold a short chunk for a while.
+      const checked = call.check.append(action.chunk);
+      if (checked === false) {
         stop(rawToolCallId, call, true);
         return;
       }
-      call.stream?.append(action.chunk);
+      if (checked) call.stream?.append(checked);
       followLayout(call);
       return;
     }
@@ -187,6 +189,13 @@ export function createGenerativeUiDraftSession(options: GenerativeUiDraftSession
       if (!call || call.stopped) return;
       if (call.timer !== undefined) cancelScheduled(call.timer);
       apply(rawToolCallId);
+      if (call.stopped) return;
+      const rest = call.check.finish();
+      if (rest === false) {
+        stop(rawToolCallId, call, true);
+        return;
+      }
+      if (rest) call.stream?.append(rest);
       stop(rawToolCallId, call, false);
     },
     /** The call will not present an artifact (error or abort): retract its draft. */

@@ -58,13 +58,13 @@ test("the wrapper keeps head styles and scripts without a src, in order, and dro
 
 /**
  * Asserts that `run` takes roughly linear time: four times the input may take
- * at most eight times as long (a quadratic step takes sixteen). Each size is
- * timed after a warm-up, as the fastest of three runs, so a busy machine
- * slows both sizes alike. A small size faster than `floorMs` counts as
- * `floorMs`, so timer noise and garbage collection in a run of a few
- * milliseconds cannot fail it.
+ * at most eight times as long (a quadratic step takes sixteen), and never
+ * more than five seconds. Each size is timed after a warm-up, as the fastest
+ * of three runs, so a busy machine slows both sizes alike. A small size
+ * faster than `floorMs` counts as `floorMs`, so timer noise and garbage
+ * collection in a run of a few milliseconds cannot fail it.
  */
-function assertScalesLinearly(label: string, run: (size: number) => void, size: number, floorMs = 5): void {
+function assertScalesLinearly(label: string, run: (size: number) => void, size: number, floorMs = 50): void {
   const fastest = (n: number) => {
     let best = Number.POSITIVE_INFINITY;
     for (let attempt = 0; attempt < 3; attempt += 1) {
@@ -77,27 +77,59 @@ function assertScalesLinearly(label: string, run: (size: number) => void, size: 
   run(size);
   const small = fastest(size);
   const large = fastest(size * 4);
-  assert.ok(large < Math.max(small, floorMs) * 8, `${label}: ${Math.round(small)} ms at ${size}, ${Math.round(large)} ms at ${size * 4}`);
+  const timing = `${label}: ${Math.round(small)} ms at ${size}, ${Math.round(large)} ms at ${size * 4}`;
+  assert.ok(large < Math.max(small, floorMs) * 8, timing);
+  assert.ok(large < 5_000, timing);
 }
 
-const streamInChunks = (html: string, chunk: number): boolean => {
+/**
+ * Streams `html` through one draft check in `chunk`-sized pieces, as the
+ * draft preview does: whether it was admitted, the text the check handed
+ * back to show, and where it was refused.
+ */
+const streamInChunks = (html: string, chunk: number): { admitted: boolean; shown: string; refusedAt?: number } => {
   const check = createGenerativeUiDraftCheck();
-  let admitted = true;
-  for (let at = 0; at < html.length && admitted; at += chunk) admitted = check.append(html.slice(at, at + chunk));
-  return admitted;
+  let shown = "";
+  for (let at = 0; at < html.length; at += chunk) {
+    const checked = check.append(html.slice(at, at + chunk));
+    if (checked === false) return { admitted: false, shown, refusedAt: at };
+    shown += checked;
+  }
+  const rest = check.finish();
+  if (rest === false) return { admitted: false, shown, refusedAt: html.length };
+  return { admitted: true, shown: shown + rest };
 };
 
-test("streaming a long unfinished tag in small chunks takes linear time", () => {
+test("streaming a visual up to the size cap in small chunks takes linear time and shows only checked text", () => {
   const unfinished: Record<string, (size: number) => string> = {
     smilValues: (size) => `<svg><a><animate attributeName="href" values="${";".repeat(size)}`,
     urlValue: (size) => `<a href="${" ".repeat(size)}`,
     handler: (size) => `<p onclick="${"x;".repeat(size / 2)}`,
+    attributeName: (size) => `<p ${"x".repeat(size)}`,
+    comment: (size) => `<!--${"x".repeat(size)}`,
+    script: (size) => `<script>${"x;".repeat(size / 2)}`,
+    word: (size) => `<p>${"x".repeat(size)}`,
   };
   for (const [shape, build] of Object.entries(unfinished)) {
-    assertScalesLinearly(shape, (size) => assert.equal(streamInChunks(build(size), 64), true), 32_768);
+    assertScalesLinearly(
+      shape,
+      (size) => {
+        const html = build(size);
+        assert.deepEqual(streamInChunks(html, 64), { admitted: true, shown: html });
+      },
+      // Just under a quarter of the cap, so four times it with the opening
+      // tag still fits.
+      131_040,
+    );
   }
-  // A refusal in an unfinished tag still stops the draft before the tag ends.
-  assert.equal(streamInChunks(`<p>Chart</p><a href="javascript:${"x".repeat(100_000)}`, 64), false);
+  // A refusal in an unfinished tag still stops the draft before the tag
+  // ends, and the refused URL is never handed back to show.
+  const refused = `<p>Chart</p><a href="javascript:${"x".repeat(100_000)}`;
+  const streamed = streamInChunks(refused, 64);
+  assert.equal(streamed.admitted, false);
+  assert.ok(streamed.refusedAt! < refused.length / 2, `refused at ${streamed.refusedAt}`);
+  assert.ok(refused.startsWith(streamed.shown));
+  assert.equal(streamed.shown.includes("javascript:"), false);
 });
 
 test("checking, wrapping or streaming a visual up to the size cap takes linear time, whatever its shape", () => {
@@ -137,10 +169,7 @@ test("checking, wrapping or streaming a visual up to the size cap takes linear t
         } catch {
           admitted = false;
         }
-        const check = createGenerativeUiDraftCheck();
-        let draftAdmitted = true;
-        for (let at = 0; at < html.length && draftAdmitted; at += 997) draftAdmitted = check.append(html.slice(at, at + 997));
-        assert.equal(draftAdmitted, admitted, `${shape}: the draft and the finished visual disagree at ${size} characters`);
+        assert.equal(streamInChunks(html, 997).admitted, admitted, `${shape}: the draft and the finished visual disagree at ${size} characters`);
       },
       Math.floor(cap / 4),
       // Under 50 ms at a quarter of the cap leaves 400 ms at the cap; the
@@ -349,7 +378,7 @@ test("html admission refuses exactly what a browser's parse of the markup would 
       assert.equal(isGenerativeUiDraftAcceptable(html), !expected, `draft verdict for ${html}`);
       // Streamed a few characters at a time, a draft refuses at least as much
       // (a tag still being written counts before the parser may drop it).
-      if (expected) assert.equal(streamInChunks(html, 3), false, `streamed draft verdict for ${html}`);
+      if (expected) assert.equal(streamInChunks(html, 3).admitted, false, `streamed draft verdict for ${html}`);
       if (expected) refused += 1;
     }
   }
