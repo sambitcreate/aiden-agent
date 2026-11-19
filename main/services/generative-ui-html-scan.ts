@@ -19,9 +19,9 @@
 //
 // The checks refuse an embedding tag, a <script src>, a refresh <meta>, a
 // javascript: or data:text/html URL in a URL attribute, CSS url() or an SVG
-// <set>/<animate> of href, a remote src, and JavaScript (in <script> or an
-// on* attribute) that sends such a URL to a navigation or URL sink or writes
-// such markup through an HTML sink.
+// <set>/<animate> of href (under any prefix), a remote src, and JavaScript
+// (in <script> or an on* attribute) that sends such a URL to a navigation
+// or URL sink or writes such markup through an HTML sink.
 //
 // A sink's literal is followed however it is written:
 // - the call: plain or optional (`f?.(...)`), named in brackets
@@ -39,9 +39,10 @@
 //   `getAttributeNodeNS`, `getNamedItemNS`), DOMParser's parseFromString
 //   (read as HTML for text/html; for an XML type, XHTML and SVG included,
 //   only if it names a namespace the page runs, as HTML with element
-//   prefixes dropped and prefixed URL attributes read, and refused if it
-//   has a DTD, entity or attribute-list declaration or content HTML would
-//   read as text; both ways for a computed or spread type),
+//   prefixes and well-formed comments dropped and prefixed URL attributes
+//   read, and refused if it has a DTD, entity or attribute-list declaration
+//   or content HTML would read as text; both ways for a computed or spread
+//   type),
 //   `execCommand('insertHTML', …)` and `navigation.navigate`.
 // An on* attribute node made by createAttribute is refused outright, and so
 // is markup or a handler a script writes more than MAX_NESTED_HTML_DEPTH
