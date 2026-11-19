@@ -10,6 +10,7 @@ import {
 } from "./canvas-tools.js";
 import { CANVAS_READ_FRAME_LIMIT, canvasReadPageKey } from "../../../renderer/shared/design-canvas/canvas-summary.js";
 import { addPage, deletePage, showPage } from "../../../renderer/shared/design-canvas/pages.js";
+import { reopenComment } from "../../../renderer/shared/design-canvas/comments.js";
 import { DesignCanvasStore } from "./store.js";
 
 async function setup(t: test.TestContext) {
@@ -376,6 +377,15 @@ test("canvas_comment replies on a comment, resolves it, or both, and tells open 
     assert.equal((await call("canvas_comment", args)).status, "error", JSON.stringify(args));
   }
   assert.equal(broadcasts.length, 2, "a refused call announces nothing");
+
+  // The person reopens the resolved comment: it is their draft again, and the refusal says why.
+  await store.update("chat-1", (latest) => reopenComment(latest, "c1"));
+  const reopened = await call("canvas_comment", { commentId: "c1", resolve: true });
+  assert.equal(reopened.status, "error");
+  assert.match(reopened.message, /reopened/u);
+  doc = await store.get("chat-1");
+  assert.deepEqual([doc.comments[0]!.state, doc.comments[0]!.reply?.text], ["open", "Added a footer with About and Contact."], "the reopened comment keeps its reply and stays open");
+  assert.equal(broadcasts.length, 2);
 });
 
 test("a turn makes at most its canvas call budget, and a chat that left design mode gets none", async (t) => {

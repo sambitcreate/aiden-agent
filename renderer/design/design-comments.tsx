@@ -60,6 +60,8 @@ type CommentsInput = {
   chatId: string;
   doc: DesignCanvas;
   change(mutate: Mutation, options?: { record?: boolean }): void;
+  /** Saves pending edits now rather than after the debounce. */
+  flush(): Promise<boolean>;
   flow: React.RefObject<ReactFlowInstance<DesignNode> | null>;
   wrapper: React.RefObject<HTMLDivElement | null>;
   live: ReadonlySet<string>;
@@ -89,7 +91,7 @@ function nextFrame(): Promise<void> {
   return new Promise((resolve) => requestAnimationFrame(() => resolve()));
 }
 
-export function useDesignComments({ chatId, doc, change, flow, wrapper, live, versionOf }: CommentsInput) {
+export function useDesignComments({ chatId, doc, change, flush, flow, wrapper, live, versionOf }: CommentsInput) {
   const [active, setActiveState] = React.useState(false);
   const [draft, setDraft] = React.useState<CommentDraft | null>(null);
   const [openId, setOpenId] = React.useState<string | null>(null);
@@ -536,12 +538,14 @@ export function useDesignComments({ chatId, doc, change, flow, wrapper, live, ve
                 sentVersions.current.set(id, versionOfRef.current(frame?.path));
               }
               change((latest) => markCommentsSent(latest, ids, new Date().toISOString()));
+              // Aiden's turn has started: saved now, its canvas_comment finds them sent rather than still drafts.
+              void flush().catch(() => undefined);
               forgetCommentCrops(chatId, ids);
             },
             open: (id) => openRef.current(id),
           },
     );
-  }, [chatId, doc, change]);
+  }, [chatId, doc, change, flush]);
   React.useEffect(() => () => publishDesignCommentTray(chatId, null), [chatId]);
 
   const layer = (

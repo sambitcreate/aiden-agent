@@ -189,7 +189,7 @@ export const DESIGN_MODE_PROMPT_SECTION = [
   "- The canvas can have several pages. Work on the page the person is looking at unless they name another; canvas_page adds, renames, duplicates, reorders, shows or deletes pages, and canvas_update_frame with page moves a frame to another.",
   "- After placing or moving frames, call canvas_focus with their ids so the person sees them (canvas_arrange does this by itself). canvas_read with snapshot: true shows you the canvas as the person sees it.",
   "- canvas_inspect draws one page offline at its design width, with its frame's look, and reports script errors, files that did not load, sideways overflow and tweaks that do nothing, with a picture when you can see images. Each page you write is checked the same way without a picture, and the report follows in the conversation before your next step: fix what it lists once, call canvas_inspect for a picture after a big change, and say what you fixed.",
-  "- The person's canvas comments come with their message or in canvas_read. After acting on one they sent you, canvas_comment can reply on it in a sentence (what you changed, or a question when it is unclear) and resolve it once it is done. An open comment in canvas_read is still their draft, so it is left for them to send.",
+  "- The person's canvas comments come with their message or in canvas_read. After acting on one they sent you, canvas_comment can reply on it in a sentence (what you changed, or a question when it is unclear) and resolve it once it is done. An open comment in canvas_read is still their draft, or one they reopened after your reply, so it is left for them to send.",
   "- Coordinates and sizes are canvas units. Say which file you changed.",
 ].join("\n");
 
@@ -1416,7 +1416,7 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
         name: "canvas_comment",
         label: "Answer design comment",
         description:
-          "Reply on one of the person's canvas comments, resolve it, or both. A reply is a sentence or two shown under their note: what you changed, or a question when the comment is unclear; a newer reply replaces your last one. Resolve a comment once what it asks is done; the person can reopen it. Use the commentId from the comment block or canvas_read. Only a comment the person sent you (state sent, or one you already resolved) can be answered: an open one is still their draft.",
+          "Reply on one of the person's canvas comments, resolve it, or both. A reply is a sentence or two shown under their note: what you changed, or a question when the comment is unclear; a newer reply replaces your last one. Resolve a comment once what it asks is done; the person can reopen it. Use the commentId from the comment block or canvas_read. Only a comment the person sent you (state sent, or one you already resolved) can be answered: an open one is still their draft, or one they reopened, until they send it.",
         parameters: Type.Object({
           commentId: Type.String(),
           reply: Type.Optional(Type.String({ maxLength: DESIGN_CANVAS_LIMITS.replyChars })),
@@ -1437,7 +1437,9 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
               if (comment.state === "open") {
                 // A draft may still be in the person's tray; answering it would take it out before they send it.
                 throw new CanvasToolError(
-                  "That comment is still the person's draft: they have not sent it to you. Reply on or resolve only comments sent with their message; leave an open one for them to send, or ask about it in your reply.",
+                  comment.reply
+                    ? "The person reopened that comment after your reply, so it is their draft again until they send it. Leave it for them to send; your earlier reply stays on it."
+                    : "That comment is still the person's draft: they have not sent it to you. Reply on or resolve only comments sent with their message; leave an open one for them to send, or ask about it in your reply.",
                 );
               }
               let next = reply === undefined ? doc : replyToComment(doc, comment.id, reply, at);

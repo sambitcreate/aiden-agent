@@ -341,7 +341,7 @@ function LoadedDesignCanvas({
   }, [doc, missing, frameVersionOf, viewport, viewSize, selection, entered]);
 
   const nodes = React.useMemo(() => nodesFromCanvas(doc, selection), [doc, selection]);
-  const comments = useDesignComments({ chatId, doc, change, flow, wrapper, live, versionOf });
+  const comments = useDesignComments({ chatId, doc, change, flush, flow, wrapper, live, versionOf });
   const pageWindow = React.useCallback((frameId: string) => frameIframe(wrapper.current, frameId)?.contentWindow ?? null, []);
   const reloadPath = React.useCallback(
     (path: string, keep?: string) => {

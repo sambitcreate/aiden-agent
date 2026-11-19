@@ -13,6 +13,7 @@ import { emptyDesignCanvas, type DesignCanvas, type DesignFrame } from "../share
 import { DesignCanvasRegion } from "./design-canvas-region";
 import { designFrameSnapshots } from "./frame-snapshots";
 import { designCommentTray } from "./comment-tray-store";
+import { DESIGN_CANVAS_SAVE_DELAY_MS } from "./use-design-canvas";
 
 // The canvas imports React Flow's CSS, which Node cannot load; tests get an empty module.
 registerHooks({
@@ -538,7 +539,8 @@ test("the comment tool drops a pin on the canvas, and a saved comment waits in t
   assert.match(tray!.block(), /"note": "Add a footer here"/u);
 
   act(() => tray!.markSent([comment.id]));
-  await waitFor(() => assert.equal(saved()?.comments[0]?.state, "sent"), SAVE_WAIT);
+  // Saved at once, not after the edit debounce, so Aiden's turn finds the comment sent.
+  await waitFor(() => assert.equal(saved()?.comments[0]?.state, "sent"), { timeout: DESIGN_CANVAS_SAVE_DELAY_MS / 2 });
   assert.equal(designCommentTray("chat-1"), null, "a sent comment leaves the tray");
   assert.ok(await screen.findByRole("button", { name: "Comment 1 on Canvas, sent to Aiden" }));
 });
