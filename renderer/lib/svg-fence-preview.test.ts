@@ -31,6 +31,43 @@ test("an xml prolog and leading comments are allowed before the svg element", ()
   assert.equal(decode(url), source);
 });
 
+test("an Inkscape or Illustrator doctype is allowed before the svg element", () => {
+  const inkscape = [
+    '<?xml version="1.0" encoding="UTF-8" standalone="no"?>',
+    "<!-- Created with Inkscape (http://www.inkscape.org/) -->",
+    "",
+    '<!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN"',
+    '  "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd">',
+    '<svg xmlns="http://www.w3.org/2000/svg" xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape"',
+    '   width="210mm" height="297mm" viewBox="0 0 210 297" version="1.1" id="svg8">',
+    '  <g inkscape:label="Layer 1" inkscape:groupmode="layer" id="layer1">',
+    '    <circle style="fill:#000000" cx="105" cy="148" r="40" id="path10" />',
+    "  </g>",
+    "</svg>",
+  ].join("\n");
+  assert.equal(decode(svgPreviewSource(inkscape, "svg")!), inkscape);
+
+  // Illustrator adds an internal subset of entities, with "]" and ">" inside it.
+  const illustrator = [
+    '<?xml version="1.0" encoding="utf-8"?>',
+    "<!-- Generator: Adobe Illustrator 27.0.0, SVG Export Plug-In . SVG Version: 6.00 Build 0)  -->",
+    '<!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN" "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd" [',
+    '\t<!ENTITY ns_flows "http://ns.adobe.com/Flows/1.0/">',
+    '\t<!ENTITY note "a]b>c">',
+    "]>",
+    '<svg version="1.1" viewBox="0 0 10 10"><circle cx="5" cy="5" r="4"/></svg>',
+  ].join("\n");
+  const drawn = decode(svgPreviewSource(illustrator, "svg")!);
+  assert.ok(
+    drawn.endsWith('<svg xmlns="http://www.w3.org/2000/svg" version="1.1" viewBox="0 0 10 10"><circle cx="5" cy="5" r="4"/></svg>'),
+    "the namespace goes on the root, not inside the doctype",
+  );
+
+  // Only one doctype, and only before the root.
+  assert.equal(svgPreviewSource(`<!DOCTYPE svg>\n<!DOCTYPE svg>\n${CIRCLE}`, "svg"), null);
+  assert.equal(svgPreviewSource(`<!DOCTYPE svg [ <!ENTITY a "b">`, "svg"), null);
+});
+
 test("a fence that is not one whole svg element has no preview", () => {
   assert.equal(svgPreviewSource('<svg viewBox="0 0 10 10"><circle r="4"/>', "svg"), null);
   assert.equal(svgPreviewSource("<div><svg></svg></div>", "svg"), null);
@@ -51,6 +88,8 @@ test("a source over the UTF-8 cap has no preview, one at the cap does", () => {
   const multibyte = `${open}${fill(SVG_PREVIEW_MAX_BYTES + 3, "é", 2)}${close}`;
   assert.ok(multibyte.length < SVG_PREVIEW_MAX_BYTES);
   assert.equal(svgPreviewSource(multibyte, "svg"), null);
+  // Whitespace around the fence counts toward the cap, as on the iPhone.
+  assert.equal(svgPreviewSource(`${atCap}\n`, "svg"), null);
 });
 
 test("a root without a namespace gets the SVG namespace so the browser can draw it", () => {

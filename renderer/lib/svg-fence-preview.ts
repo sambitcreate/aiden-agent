@@ -9,8 +9,17 @@
 export const SVG_PREVIEW_MAX_BYTES = 1_048_576;
 
 const DATA_URL_PREFIX = "data:image/svg+xml;charset=utf-8,";
-// An optional XML prolog, then any comments, before the root element.
-const LEADING_PROLOG = /^(?:<\?xml[\s\S]*?\?>\s*)?(?:<!--[\s\S]*?-->\s*)*/u;
+// An optional XML declaration, comments, and an optional doctype (with or
+// without an internal subset, as Illustrator and Inkscape export) before the
+// root element.
+const COMMENTS = String.raw`(?:<!--[\s\S]*?-->\s*)*`;
+const LEADING_PROLOG = new RegExp(
+  String.raw`^(?:<\?xml[\s\S]*?\?>\s*)?` +
+    COMMENTS +
+    String.raw`(?:<!DOCTYPE[^>\[]*(?:\[[\s\S]*?\])?\s*>\s*)?` +
+    COMMENTS,
+  "u",
+);
 const SVG_ROOT_START = /^<svg[\s>/]/u;
 // The root start tag, allowing ">" inside quoted attribute values.
 const ROOT_START_TAG = /^<svg(?:"[^"]*"|'[^']*'|[^'">])*>/u;
@@ -21,10 +30,12 @@ export function svgPreviewSource(code: string, lang: string | undefined): string
   // A UTF-16 code unit never encodes to fewer than one UTF-8 byte, so this
   // rejects oversized sources before encoding them.
   if (code.length > SVG_PREVIEW_MAX_BYTES) return null;
+  // The cap counts the fence as written, surrounding whitespace included, as
+  // the iPhone's View does, so both offer a drawing for the same sources.
+  if (new TextEncoder().encode(code).length > SVG_PREVIEW_MAX_BYTES) return null;
   const source = code.trim();
   const body = source.replace(LEADING_PROLOG, "");
   if (!SVG_ROOT_START.test(body) || !body.endsWith("</svg>")) return null;
-  if (new TextEncoder().encode(source).length > SVG_PREVIEW_MAX_BYTES) return null;
   return `${DATA_URL_PREFIX}${encodeURIComponent(withSvgNamespace(source, body))}`;
 }
 
