@@ -500,7 +500,7 @@ import {
   prepareGenerativeUiTurnStore,
   shouldEnableGenerativeUiExtension,
 } from "./generative-ui-extension.js";
-import { chatToolOffers, chatTurnAudienceFor, chatTurnToolRefusal, firstTurnToolRefusal, type ChatToolSurface, type TurnToolRefusal } from "./chat-turn-tool-policy.js";
+import { chatToolOffers, chatTurnAudienceFor, chatTurnToolRefusal, declaresWindowTools, firstTurnToolRefusal, windowlessChatTurn, type ChatToolSurface, type TurnToolRefusal } from "./chat-turn-tool-policy.js";
 import { createGenerativeUiDraftSession } from "./generative-ui-draft.js";
 import { createUiDraftSession } from "./aiden-ui-draft.js";
 import { withoutVisualSnapshots } from "../../renderer/shared/visual-snapshots.js";
@@ -762,8 +762,10 @@ const owedTurns = createChatOwedTurns<OwedTurnContext, GenerationCancellationOri
  * It is an ordinary chat turn started in main, like a phone's: subagents,
  * connectors and every other tool the settled run had, with approvals and
  * questions waiting for whoever answers first, a desktop window showing the
- * chat or a paired phone. Computer Use and the hooks tool stay off, as for
- * every turn no window owns, because their cards need the run's own window.
+ * chat or a paired phone. It declares the chat's tools like a turn in the
+ * chat's window; calls that need that window (Computer Use, the hooks tool,
+ * the browser, the design canvas and the rest `chatTurnToolRefusal` names)
+ * are refused, because no window owns the turn.
  * The chat's latest message is the owed input, so the turn answers it. A
  * Stop that reached the settled run after it recorded its outcome stops
  * this turn at once, so the person sees one stopped turn.
@@ -784,7 +786,7 @@ function startOwedTurn(plan: OwedTurnPlan<OwedTurnContext, GenerationCancellatio
     return;
   }
   lease.settleAsyncWork();
-  const request = owedTurnStartRequest(plan, streamId, [HOOKS_TOOL_NAME]);
+  const request = owedTurnStartRequest(plan, streamId);
   const started = llmClient.start(streamId, request.params, owner, request.options);
   // The start registers the turn before its first await, so this Stop finds it.
   if (plan.stopOrigin) llmClient.cancel(streamId, plan.stopOrigin);
@@ -1322,13 +1324,29 @@ async function prepareGeneration(
     params.mode === "assistant" || params.mode === "assistant-unattended";
   const assistantAutomationMode = params.mode === "assistant-automation";
   const assistantMode = assistantPersonaMode || assistantAutomationMode;
+  // A workspace chat turn main started on its own (the turn a settled run
+  // owes its chat, an unattended follow-up) declares what a turn in the
+  // chat's window declares and refuses the calls that need the window, so
+  // the chat's tool list does not change with who started the turn.
+  const ownerScope = {
+    window: rendererOwner,
+    remote: browserOwner.kind === "remote",
+    usageSource: options.usageSource,
+    interactionSurface: options.interactionSurface,
+    assistantMode,
+    botBound,
+  };
+  const windowless = windowlessChatTurn(ownerScope);
+  const declaresWindow = declaresWindowTools(ownerScope);
+  /** Window-dependent tools this windowless turn declared; their calls are refused. */
+  const windowOnlyToolNames = new Set<string>();
   if (
     shouldEnableAskUserQuestionExtension({
       usageSource: options.usageSource,
       interactionSurface: options.interactionSurface,
       assistantMode,
       botBound,
-      rendererOwner,
+      rendererOwner: declaresWindow,
       remoteOwner: browserOwner.kind === "remote",
       excluded: options.excludeToolNames?.has(ASK_USER_QUESTION_TOOL_NAME) ?? false,
     })
@@ -1469,7 +1487,8 @@ async function prepareGeneration(
   // offline).
   let formFill: FormFillService | undefined;
   const sourceAttachments = currentFormFillAttachments(chat.messages);
-  if (FORM_FILL_MUTATION_AVAILABLE && computerUse && settings.formFillSpecialistEnabled === true && sourceAttachments.length) {
+  // A windowless turn skips the readiness probe: it could not run the specialist anyway.
+  if (FORM_FILL_MUTATION_AVAILABLE && computerUse && !windowless && settings.formFillSpecialistEnabled === true && sourceAttachments.length) {
     const status = await computerUseStatus.status({ signal });
     const artifact = status.ready && computerUseGenerationGate.isCurrent(computerUseGateSnapshot)
       ? await formFillArtifacts.refresh()
@@ -1790,7 +1809,7 @@ async function prepareGeneration(
   // Design mode: the canvas tools and the aiden-design skill go together.
   const designTurn = {
     flagEnabled: designModeEnabled(),
-    localRenderer: rendererOwner && browserOwner?.kind !== "remote",
+    localRenderer: declaresWindow && browserOwner?.kind !== "remote",
     ...(botContext ? { botId: botContext.admission.authority.botId } : {}),
     assistant: assistantMode,
     telegram: options.interactionSurface === "telegram",
@@ -1836,7 +1855,10 @@ async function prepareGeneration(
     harnessProvider: isAcpHarnessProvider(runtime.provider.id),
     excludedToolNames: options.excludeToolNames,
   };
-  const turnAudience = chatTurnAudienceFor(options, params);
+  const turnAudience = {
+    ...chatTurnAudienceFor({ ...options, windowless }, params),
+    ...(windowless ? { windowOnlyToolNames } : {}),
+  };
   // Offered by the chat's surface alone; a turn nobody watches, or one a paired
   // device sent, keeps the declaration and refuses the call.
   const offerHooksTool = hostPlatformCapabilities().hooks && chatToolOffers(chatToolSurface).hooks;
@@ -1885,7 +1907,7 @@ async function prepareGeneration(
   // turns, through `bot-runtime/bot-browser-tools.ts`.
   const browserEligible =
     workspace &&
-    canUseBrowserTools({ permission, rendererOwner, assistantMode, bot: Boolean(botContext) });
+    canUseBrowserTools({ permission, rendererOwner: declaresWindow, assistantMode, bot: Boolean(botContext) });
   const browserState = browserEligible
     ? await (await import("./browser/service.js")).browserService.getState(workspace.id)
     : undefined;
@@ -1959,12 +1981,16 @@ async function prepareGeneration(
       if (!resolveBrowserAgentAccess(state.defaults.agentAccess, state.agentAccessOverride)) throw new Error("Browser agent access is disabled for this workspace.");
     },
   ) : undefined;
+  if (windowless && browserDiscovery) {
+    windowOnlyToolNames.add(browserDiscovery.tool.name);
+    for (const { name } of disclosedBrowserTools) windowOnlyToolNames.add(name);
+  }
   // Simulator tools: the flag, agent access, and an interactive desktop owner must all hold now.
   const deviceStaticGate = canUseDeviceTools({
     enabled: devicesEnabled(),
     agentAccess: true,
     permission,
-    rendererOwner,
+    rendererOwner: declaresWindow,
     assistantMode,
     bot: Boolean(botContext),
   });
@@ -2005,8 +2031,9 @@ async function prepareGeneration(
       : [];
   // PATH gets the pinned agent-device only when the gate held at generation start, and
   // loses it on the next command once agent access is revoked.
+  for (const { name } of windowless ? deviceTools : []) windowOnlyToolNames.add(name);
   const deviceShimDir =
-    deviceTools.length && deviceService ? () => deviceService.agentShimDir() : undefined;
+    !windowless && deviceTools.length && deviceService ? () => deviceService.agentShimDir() : undefined;
   // In the codemode lane a slow MCP server joins the turn late instead of
   // holding its start; elsewhere tools are declared and discovery blocks.
   let lateMcpDiscovery: McpLateDiscovery = NO_LATE_MCP_DISCOVERY;
@@ -2512,20 +2539,25 @@ async function prepareGeneration(
    */
   const turnToolRefusals: TurnToolRefusal[] = [];
   turnToolRefusals.push(chatTurnToolRefusal(chatToolSurface, turnAudience));
-  if (!botContext && (!assistantMode || attendedAssistant) && options.interactionSurface !== "telegram" && schedulingAllowed && (rendererOwner || browserOwner?.kind === "remote")) {
-    const appToolTurn = { liveState: browserOwner?.kind !== "remote", canOpen: browserOwner?.kind !== "remote" };
+  if (!botContext && (!assistantMode || attendedAssistant) && options.interactionSurface !== "telegram" && schedulingAllowed && (declaresWindow || browserOwner?.kind === "remote")) {
+    // A windowless turn declares them with no live state and no navigation,
+    // and refuses every call (`chatTurnToolRefusal`).
+    const onThisComputer = browserOwner?.kind !== "remote" && !windowless;
+    const appToolTurn = { liveState: onThisComputer, canOpen: onThisComputer };
     turnToolRefusals.push((name, args) => aidenAppToolUnavailableReason(name, args, appToolTurn));
-    tools.push(...createAidenAppTools({
-      service: appControlsService, liveState: browserOwner?.kind !== "remote",
+    const appTools = createAidenAppTools({
+      service: appControlsService, liveState: onThisComputer,
       runtime: { interaction: "attended-workspace", workspacePermission: permission, providerId: params.providerId, modelId: params.model, availableTools: tools.map((tool) => tool.name) },
-      open: browserOwner?.kind !== "remote" ? (destination, toolSignal) => aidenAppNavigation.open(destination, browserOwner, toolSignal) : undefined,
+      open: onThisComputer ? (destination, toolSignal) => aidenAppNavigation.open(destination, browserOwner, toolSignal) : undefined,
       context: { actor: `agent:${params.chatId}`, target: browserOwner?.kind === "remote" ? "Paired computer" : thisComputerLabel(process.platform), workspaceId: workspace?.id,
         humanGesture: false, isCurrent: () => !signal.aborted && !browserOwner?.isDestroyed() },
       present: (panel) => {
         if (appPanels.length >= 4) throw new Error("This response already has four settings panels.");
         appPanels.push(panel);
       },
-    }).filter((tool) => !options.excludeToolNames?.has(tool.name)));
+    }).filter((tool) => !options.excludeToolNames?.has(tool.name));
+    for (const { name } of windowless ? appTools : []) windowOnlyToolNames.add(name);
+    tools.push(...appTools);
   }
   /** Set while this turn may use the canvas: puts its committed visuals there. */
   let placeCanvasArtifacts: ((artifacts: readonly CanvasArtifact[]) => Promise<void>) | undefined;
@@ -2560,7 +2592,7 @@ async function prepareGeneration(
         return (await designModeOn()) && current?.folderPath === canvasRoot && current.permission !== "none";
       },
     }).filter((tool) => !options.excludeToolNames?.has(tool.name));
-    if (canvasTools.length > 0) {
+    if (canvasTools.length > 0 && !windowless) {
       placeCanvasArtifacts = async (artifacts) => {
         if (!(await designModeOn())) return;
         await placeArtifactsOnCanvas({
@@ -2594,6 +2626,9 @@ async function prepareGeneration(
           }),
         ]
       : [];
+    if (windowless) {
+      for (const { name } of [...canvasTools, ...designModeTool]) windowOnlyToolNames.add(name);
+    }
     if (designCanvasOffered && canvasTools.length > 0) {
       const canvas = await designCanvasStore.get(params.chatId);
       generationExtensions.push({
@@ -2616,6 +2651,7 @@ async function prepareGeneration(
   let placeWrittenPage: ((relativePath: string) => void) | undefined;
   if (
     folderPath &&
+    !windowless &&
     !options.excludeToolNames?.has("canvas_place_frame") &&
     designCanvasToolsAllowed({ ...designTurn, designMode: true })
   ) {
@@ -3683,6 +3719,16 @@ export const llmClient = {
           logger.warn("memory", `Disabled durable memory for chat ${params.chatId}.`);
         }
       }
+      // A windowless chat turn declares the to-do list and the advisor like
+      // a turn in the chat's window, and refuses their calls.
+      const declaresWindow = declaresWindowTools({
+        window: owner.id !== 0,
+        remote: owner.kind === "remote",
+        usageSource: options.usageSource,
+        interactionSurface: options.interactionSurface,
+        assistantMode: authoritativeMode !== undefined,
+        botBound: preparedBotContext !== undefined,
+      });
       let todoRuntimeExtension: PiAgentRuntimeExtension | undefined;
       if (
         shouldEnableTodoExtension({
@@ -3690,7 +3736,7 @@ export const llmClient = {
           interactionSurface: options.interactionSurface,
           assistantMode: authoritativeMode !== undefined,
           botBound: preparedBotContext !== undefined,
-          rendererOwner: owner.id !== 0,
+          rendererOwner: declaresWindow,
           remoteOwner: owner.kind === "remote",
           botTaskTrackingAllowed:
             preparedBotContext !== undefined &&
@@ -3823,7 +3869,7 @@ export const llmClient = {
           mode: authoritativeMode,
           bot: preparedBotContext !== undefined,
           child: false,
-          rendererOwner: owner.id !== 0,
+          rendererOwner: declaresWindow,
           excluded: options.excludeToolNames?.has(ADVISOR_TOOL_NAME) ?? false,
         },
         executor: {

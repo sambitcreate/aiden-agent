@@ -27,14 +27,15 @@ export interface OwedTurnStartRequest {
 /**
  * The owed turn's start request. It sets no access of its own and no
  * Assistant mode, so a workspace chat's owed turn follows the approval mode
- * (Ask, Auto or Never ask) the same as the turn the person started.
- * `windowOnlyToolNames` are tools whose cards need the run's own window
- * (the hooks tool), which no owed turn has.
+ * (Ask, Auto or Never ask) the same as the turn the person started. It
+ * withholds only what the settled run's surface withheld: tools whose cards
+ * need a window (Computer Use, the hooks tool) stay declared, so the chat's
+ * tool list does not change, and the turn refuses their calls because no
+ * window owns it (`chatTurnToolRefusal`).
  */
 export function owedTurnStartRequest<Origin extends string>(
   plan: OwedTurnPlan<OwedTurnContext, Origin>,
   streamId: string,
-  windowOnlyToolNames: readonly string[],
 ): OwedTurnStartRequest {
   const prompt = plan.inputs[plan.inputs.length - 1]!;
   const hookContext = plan.inputs
@@ -43,7 +44,6 @@ export function owedTurnStartRequest<Origin extends string>(
     .join("\n\n");
   const { context } = plan;
   const excludeToolNames = new Set(context.excludeToolNames);
-  for (const name of windowOnlyToolNames) excludeToolNames.add(name);
   return {
     params: {
       chatId: plan.chatId,
@@ -58,7 +58,6 @@ export function owedTurnStartRequest<Origin extends string>(
       turnId: streamId,
       usageSource: "chat",
       allowSubagents: true,
-      allowComputerUse: false,
       excludeToolNames,
       ...(context.visualAudience !== undefined ? { visualAudience: context.visualAudience } : {}),
       screenedPrompt: { messageId: prompt.messageId, ...(hookContext ? { context: hookContext } : {}) },

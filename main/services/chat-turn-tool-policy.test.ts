@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
-  chatToolOffers, chatTurnAudienceFor, chatTurnToolRefusal, firstTurnToolRefusal,
-  type ChatToolSurface, type ChatTurnAudience, type ChatTurnAudienceOptions, type ChatTurnAudienceParams,
+  chatToolOffers, chatTurnAudienceFor, chatTurnToolRefusal, declaresWindowTools, firstTurnToolRefusal, windowlessChatTurn,
+  type ChatToolSurface, type ChatTurnOwnerScope, type ChatTurnAudience, type ChatTurnAudienceOptions, type ChatTurnAudienceParams,
 } from "./chat-turn-tool-policy.js";
 import { UNATTENDED_FOLLOW_UP_GENERATION } from "./follow-through/notice-delivery.js";
 
@@ -95,4 +95,36 @@ test("several turn refusals give the first reason that applies", () => {
   assert.equal(refuse("a", {}), "first");
   assert.equal(refuse("b", {}), "second", "a refusal added after the combination still applies");
   assert.equal(refuse("c", {}), undefined);
+});
+
+test("a chat turn main starts with no window refuses every call that needs one, including tools named later", () => {
+  const windowOnlyToolNames = new Set<string>();
+  const refuse = chatTurnToolRefusal(workspace, { ...chatTurnAudienceFor({ windowless: true }, {}), windowOnlyToolNames });
+  for (const name of ["computer_use", "form_fill", "hooks", "ask_user_question", "todo", "advisor"]) {
+    assert.match(refuse(name) ?? "", new RegExp(`^${name} is not available in this turn: .*no window owns it`, "u"), name);
+  }
+  assert.equal(refuse("browser_open"), undefined, "a runtime tool is refused once the turn names it");
+  windowOnlyToolNames.add("browser_open");
+  assert.match(refuse("browser_open") ?? "", /no window owns it/u);
+  for (const name of ["read_file", "workspace_artifact", "subagent", "render_artifact"]) {
+    assert.equal(refuse(name), undefined, name);
+  }
+});
+
+test("only a workspace chat turn with no window and no paired device is windowless", () => {
+  const owed: ChatTurnOwnerScope = { window: false, remote: false, usageSource: "chat", assistantMode: false, botBound: false };
+  const cases: Array<[string, ChatTurnOwnerScope, boolean, boolean]> = [
+    // label, scope, windowless, declares the window's tools
+    ["an owed turn or a follow-up", owed, true, true],
+    ["a turn in the chat's window", { ...owed, window: true }, false, true],
+    ["a paired device's turn", { ...owed, remote: true }, false, false],
+    ["a scheduled run", { ...owed, usageSource: "scheduled" }, false, false],
+    ["a Telegram turn", { ...owed, interactionSurface: "telegram" }, false, false],
+    ["an Assistant turn", { ...owed, assistantMode: true }, false, false],
+    ["a Bot turn", { ...owed, botBound: true }, false, false],
+  ];
+  for (const [label, scope, windowless, declares] of cases) {
+    assert.equal(windowlessChatTurn(scope), windowless, label);
+    assert.equal(declaresWindowTools(scope), declares, label);
+  }
 });

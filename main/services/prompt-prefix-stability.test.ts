@@ -44,8 +44,8 @@ import { forgetPromptSectionDeviceKeys } from "./prompt-section-secret.js";
 import { LOAD_TOOLS_TOOL_NAME } from "./on-demand-tools.js";
 import { createAidenAppTools } from "./aiden-app-tools.js";
 import type { AppControlContext, AppControlsService } from "./app-controls-core.js";
-import { chatToolOffers, chatTurnAudienceFor, chatTurnToolRefusal, type ChatToolSurface, type ChatTurnAudience } from "./chat-turn-tool-policy.js";
-import { remoteGenerationSurface } from "./conversation-surface-generation.js";
+import { chatToolOffers, chatTurnAudienceFor, chatTurnToolRefusal, declaresWindowTools, windowlessChatTurn, type ChatToolSurface, type ChatTurnAudience, type ChatTurnOwnerScope } from "./chat-turn-tool-policy.js";
+import { remoteGenerationSurface, scheduledGenerationSurface } from "./conversation-surface-generation.js";
 import { UNATTENDED_FOLLOW_UP_GENERATION } from "./follow-through/notice-delivery.js";
 import { owedTurnStartRequest } from "./chat-owed-turn-start.js";
 import { assembleAgentTools } from "./agent-tool-assembly.js";
@@ -754,31 +754,74 @@ describe("prompt prefix stability: tool list identical across turns", () => {
     assert.ok(!current.carries("not connected for this follow-up"), "no note when no connector is listed");
   });
 
-  test(
-    "the turn a settled run owes its chat declares the chat's tools",
-    { todo: "phase 3 follow-up (deviation in the plan): an owed turn has no window of its own, so its window-dependent offers (Computer Use, hooks, questions, browser, scheduling) must become per-chat declarations refused per call through chatTurnToolRefusal" },
-    async () => {
-      const owed = owedTurnStartRequest(
-        { chatId: "chat", settledStreamId: "run", context: { providerId: "provider", model: "model" }, inputs: [{ messageId: "queued" }] },
-        "owed",
-        ["hooks"],
-      );
-      // What the client declares for these options: Computer Use unless the
-      // turn withholds it, and hooks from the chat's surface.
-      const owedTools = [
-        ...workspaceTools, codemodeTool,
-        ...(owed.options.allowComputerUse === false ? [] : [computerUseTool]),
-        workspaceArtifactTool,
-        ...(chatToolOffers({ ...workspaceSurface, excludedToolNames: owed.options.excludeToolNames }).hooks ? [hooksTool] : []),
-      ];
-      const { previous, current } = await twoTurns(
-        {},
-        { assembly: await workspaceChat({ tools: chatTools(workspaceSurface) }) },
-        { assembly: await workspaceChat({ tools: owedTools }) },
-      );
-      assert.deepEqual(toolsOf(current), toolsOf(previous));
-    },
-  );
+  // A workspace chat turn's declarations, from the same gates llm-client
+  // reads: Computer Use unless the turn withholds it, hooks from the chat's
+  // surface, and questions from who owns the turn.
+  const questionTool = textTool("ask_user_question", "Ask the person a question with choices.");
+  const ownedTurnTools = (scope: ChatTurnOwnerScope, options: { allowComputerUse?: boolean; excludeToolNames?: ReadonlySet<string> }) => [
+    ...workspaceTools, codemodeTool,
+    ...(options.allowComputerUse === false ? [] : [computerUseTool]),
+    workspaceArtifactTool,
+    ...(chatToolOffers({ ...workspaceSurface, usageSource: scope.usageSource as ChatToolSurface["usageSource"], excludedToolNames: options.excludeToolNames }).hooks ? [hooksTool] : []),
+    ...(shouldEnableAskUserQuestionExtension({
+      usageSource: scope.usageSource as "chat",
+      assistantMode: scope.assistantMode,
+      botBound: scope.botBound,
+      rendererOwner: declaresWindowTools(scope),
+      remoteOwner: scope.remote,
+      excluded: options.excludeToolNames?.has("ask_user_question") ?? false,
+    }) ? [questionTool] : []),
+  ];
+  const desktopScope: ChatTurnOwnerScope = { window: true, remote: false, usageSource: "chat", assistantMode: false, botBound: false };
+
+  test("the turn a settled run owes its chat declares the chat's tools and refuses what needs a window", async () => {
+    const owed = owedTurnStartRequest(
+      { chatId: "chat", settledStreamId: "run", context: { providerId: "provider", model: "model" }, inputs: [{ messageId: "queued" }] },
+      "owed",
+    );
+    // The owed turn's owner, as llm-client sees it: main, no window, no paired device.
+    const owedScope: ChatTurnOwnerScope = { window: false, remote: false, usageSource: owed.options.usageSource, assistantMode: false, botBound: false };
+    const { previous, current } = await twoTurns(
+      {},
+      { assembly: await workspaceChat({ tools: ownedTurnTools(desktopScope, {}) }) },
+      { assembly: await workspaceChat({ tools: ownedTurnTools(owedScope, owed.options) }) },
+    );
+    assert.deepEqual(comparePromptRequests(previous, current), {});
+    for (const description of ["List, propose and test this chat's hooks.", "Ask the person a question"]) {
+      assert.ok(current.carries(description), description);
+    }
+    // Declared is not runnable: no window owns the owed turn.
+    const refuse = chatTurnToolRefusal(workspaceSurface, {
+      ...chatTurnAudienceFor({ windowless: windowlessChatTurn(owedScope) }, {}),
+      windowOnlyToolNames: new Set(["browser_open", "canvas_place_frame"]),
+    });
+    for (const name of ["computer_use", "hooks", "ask_user_question", "todo", "advisor", "browser_open", "canvas_place_frame"]) {
+      assert.match(refuse(name) ?? "", /not available in this turn.*no window owns it/su, name);
+    }
+    for (const name of ["read_file", "workspace_artifact", "subagent"]) assert.equal(refuse(name), undefined, name);
+    const refuseAttended = chatTurnToolRefusal(workspaceSurface, chatTurnAudienceFor({ windowless: windowlessChatTurn(desktopScope) }, {}));
+    for (const name of ["computer_use", "hooks", "ask_user_question"]) assert.equal(refuseAttended(name), undefined, name);
+  });
+
+  test("a scheduled run in a chat, then a turn on this computer: the desktop turn keeps the chat's tools", async () => {
+    const scheduled = scheduledGenerationSurface({
+      chatId: "chat", streamId: "scheduled", ownerId: "schedule", workspaceId: "workspace",
+      providerId: "provider", model: "model", mode: undefined, prompt: "Check the build.", permission: "full",
+      excludeToolNames: new Set(["schedule_task"]), allowMcpTools: false,
+    });
+    const scheduledScope: ChatTurnOwnerScope = { window: false, remote: false, usageSource: scheduled.options.usageSource, assistantMode: false, botBound: false };
+    // A scheduled run keeps its own tool policy; it is not a windowless chat turn.
+    assert.equal(windowlessChatTurn(scheduledScope), false);
+    const harness = createPromptPrefixHarness({});
+    const desktopTools = ownedTurnTools(desktopScope, {});
+    const first = await harness.turn({ prompt: "Summarize the project.", responses: reply("It is a small project."), assembly: await workspaceChat({ tools: desktopTools }) });
+    const run = await harness.turn({ prompt: "Check the build.", responses: reply("The build passes."), assembly: await workspaceChat({ tools: ownedTurnTools(scheduledScope, scheduled.options) }) });
+    const desktop = await harness.turn({ prompt: "Now list the files.", responses: reply("Here they are."), assembly: await workspaceChat({ tools: desktopTools }) });
+    assert.equal(harness.networkCalls, 0);
+    assert.notDeepEqual(toolsOf(run[0]!), toolsOf(lastOf(first)), "the scheduled run withholds Computer Use and hooks");
+    // The desktop turn after it reads the cache the chat's earlier desktop turn wrote.
+    assert.deepEqual(comparePromptRequests(lastOf(first), desktop[0]!), {});
+  });
 
   for (const { wire, midConversationSystem, label } of wires) {
     test(`a remote-audience turn and a turn on this computer (${label})`, async () => {
