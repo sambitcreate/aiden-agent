@@ -55,6 +55,8 @@ export { createBotSubagentTool } from "./bot-subagents.ts";
 
 export * from "./app-controls.ts";
 export { readAidenHelp } from "../../../main/services/aiden-app-knowledge.js";
+export { hookContextMessage, hookTurnContextText } from "../../../main/services/workspace-chat-hooks.js";
+export { fenceAsData } from "../../../renderer/shared/agent-notices.js";
 export { migrateAidenMcpConfig } from "./mcp-config-migration.ts";
 
 export { migrateCliAzureConfig } from "./azure-config-migration.ts";

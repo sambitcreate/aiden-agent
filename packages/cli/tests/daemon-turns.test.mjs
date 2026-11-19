@@ -847,7 +847,9 @@ test("a prompt hook's context follows its prompt as a separate message, on that 
   const [[, prompt], [role, context]] = conversation(f.requests[0]);
   assert.equal(prompt, "Check OPS-TRIGGER");
   assert.equal(role, "user");
-  assert.match(context, /^\[Aiden hook\] Context from the person's hooks for this turn:.*ticket: OPS-12/su);
+  // The desktop's own helpers build the expected message (each hook's context
+  // fenced under its name, "grep" from the command), so both hosts send the same text.
+  assert.equal(context, text(api.hookContextMessage(api.hookTurnContextText([api.fenceAsData('Context from hook "grep"', "ticket: OPS-12")]), 0)));
   assert.deepEqual(conversation(f.requests[1]), [["user", "Check OPS-TRIGGER"], ["user", context], ["assistant", "First"], ["user", "Two"]]);
 });
 
