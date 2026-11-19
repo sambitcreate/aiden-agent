@@ -811,7 +811,7 @@ function scanJsTokens(
     }
     const end = tokens[chainEnd]!.end;
     const previous = tokens[index - 1];
-    let sink: "url" | "html" | undefined;
+    let sink: "url" | "html" | "handler" | undefined;
     let sinkStart = token.start;
 
     if (isPunct(previous, "=") || isPunct(previous, "+=")) {
@@ -841,20 +841,24 @@ function scanJsTokens(
       }
     } else if (frame?.call && (isPunct(previous, "(") || isPunct(previous, ","))) {
       const argument = frame.argument;
-      if (chainEnd === index && token.kind === "string") frame.literals[argument] = token.value;
+      if (chainEnd === index && (token.kind === "string" || !token.substituted)) frame.literals[argument] = token.value;
       const callee = frame.callee ?? "";
       sinkStart = frame.start;
-      if ((callee === "open" || callee === "assign") && argument === 0) sink = "url";
+      // `setAttribute(name, value)`, `setAttributeNS(namespace, name, value)`,
+      // or either through `.call(element, ...)`. Only a literal name is known;
+      // a computed one is no more checked than any computed property.
+      const viaCall = callee === "call" && (frame.receiver === "setAttribute" || frame.receiver === "setAttributeNS");
+      const attributeCall = viaCall ? frame.receiver : callee;
+      const nameArgument = (attributeCall === "setAttributeNS" ? 1 : 0) + (viaCall ? 1 : 0);
+      if (attributeCall === "setAttribute" || attributeCall === "setAttributeNS") {
+        const name = argument === nameArgument + 1 ? frame.literals[nameArgument]?.toLowerCase() : undefined;
+        if (name !== undefined && URL_ATTRIBUTES.has(name)) sink = "url";
+        else if (name === "srcdoc") sink = "html";
+        else if (name?.startsWith("on")) sink = "handler";
+      } else if ((callee === "open" || callee === "assign") && argument === 0) sink = "url";
       else if (callee === "replace" && argument === 0) {
         if (frame.receiver === "location") sink = "url";
         else if (isUnsafeUrl(url)) frame.deferred = url;
-      } else if (callee === "setAttribute" && argument === 1) {
-        const name = frame.literals[0]?.toLowerCase();
-        if (name !== undefined && URL_ATTRIBUTES.has(name)) sink = "url";
-        else if (name === "srcdoc") sink = "html";
-      } else if (callee === "setAttributeNS" && argument === 2) {
-        const name = frame.literals[1]?.toLowerCase();
-        if (name !== undefined && URL_ATTRIBUTES.has(name)) sink = "url";
       } else if (callee in HTML_CALLS) {
         const at = HTML_CALLS[callee];
         if (at === "any" || at === argument) sink = "html";
@@ -864,6 +868,10 @@ function scanJsTokens(
     if (sink === "url" && isUnsafeUrl(url)) note({ url: code.slice(sinkStart, end) });
     else if (sink === "html" && depth < MAX_NESTED_HTML_DEPTH && markup.includes("<")) {
       note(scanHtmlString(markup, depth + 1));
+    } else if (sink === "handler" && depth < MAX_NESTED_HTML_DEPTH) {
+      // An on* attribute's value is a handler's body, checked as one.
+      const handler = findJsSink(markup, depth + 1);
+      if (handler.url !== undefined || handler.embed !== undefined || handler.limit !== undefined) note({ url: code.slice(sinkStart, end) });
     }
     index = chainEnd;
   }

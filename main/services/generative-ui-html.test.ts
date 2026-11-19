@@ -268,6 +268,21 @@ const REFUSED_MARKUP: Record<string, string> = {
   "an open() whose name is spelled with a braced escape": ESCAPED_SINKS.bracedName,
   "an href whose name is spelled with a four-digit escape": ESCAPED_SINKS.fourDigitName,
   "an innerHTML whose name is spelled with a braced escape": ESCAPED_SINKS.bracedProperty,
+  // An on* attribute's value is a handler's body, run when the event fires.
+  "a setAttribute onclick whose handler writes an <iframe>":
+    `<p>x</p><button id=b>Go</button><script>b.setAttribute('onclick', "document.body.innerHTML='<iframe src=https://e.test></iframe>'"); b.click();</script>`,
+  "a setAttribute onclick whose handler navigates to javascript:":
+    `<p>x</p><button id=b>Go</button><script>b.setAttribute('onclick', "location='javascript:alert(1)'");</script>`,
+  "a setAttribute ONCLICK named in a template whose handler navigates to javascript:":
+    "<p>x</p><button id=b>Go</button><script>b.setAttribute(`ONCLICK`, \"location='javascript:alert(1)'\");</script>",
+  "a setAttribute onclick named with an octal escape whose handler navigates to javascript:": String.raw`<p>x</p><button id=b>Go</button><script>b.setAttribute('\157nclick', "location='javascript:alert(1)'");</script>`,
+  "a setAttributeNS onclick whose handler navigates to javascript:":
+    `<p>x</p><button id=b>Go</button><script>b.setAttributeNS(null, 'onclick', "location='javascript:alert(1)'");</script>`,
+  "a setAttribute.call onclick whose handler navigates to javascript:":
+    `<p>x</p><button id=b>Go</button><script>Element.prototype.setAttribute.call(b, 'onclick', "location='javascript:alert(1)'");</script>`,
+  "a setAttribute onclick whose handler hides a sink behind a hashbang":
+    "<p>x</p><button id=b>Go</button><script>b.setAttribute('onclick', '#!/x/ `\\nlocation=\"javascript:alert(1)\"\\n//`');</script>",
+  "a setAttribute.call href to a javascript: URL": "<p>x</p><a id=b>x</a><script>Element.prototype.setAttribute.call(b, 'href', 'javascript:alert(1)');</script>",
   "a <base> whose earlier attribute quotes a <": '<base data-x="<" href="https://evil.test/">',
   "a <link> whose title holds a <": '<link title="a<b" rel=stylesheet href=https://evil.test/a.css>',
   "an <object> whose title is a <": '<object title="<" data=https://evil.test/x.svg></object>',
@@ -401,6 +416,8 @@ const ADMITTED_MARKUP: Record<string, string> = {
     "<script>class Meter { #count = 3; #max = 8; #brand = true; static is(o) { return #brand in o; } ratio() { return this.#count / this.#max; } }\nconst m = new Meter(); bar.style.width = m.ratio() * 100 + '%'; label.textContent = Meter.is(m) ? `${m.ratio()} / 1` : '';</script>",
   "escaped strings that decode to digits, a null and a copyright sign":
     String.raw`<script>label.textContent = '\0' + ' v1.0 \251 2026 \8\9'; legend.innerHTML = '<b>\61\62</b>'; note.textContent = ` + "`\\0 rows`;</script>",
+  "setAttribute handlers that toggle, open an https page or label with markup, and a title that names javascript:":
+    `<button id=b>Go</button><script>b.setAttribute('onclick', 'toggle()'); b.setAttributeNS(null, 'onmouseover', "location='https://example.com/'"); b.setAttribute('onfocus', "legend.innerHTML='<b>Hi</b>'"); b.setAttribute('title', "location='javascript:alert(1)'"); fn.call(o, 'onclick', "location='javascript:alert(1)'");</script>`,
   "names spelled with escapes that are not sinks": String.raw`<script>const \u{6C}abel = document.body; \u{6C}abel.textContent = 'ready'; a.\u{74}itle = 'javascript: notes';</script>`,
   // A hashbang line is a comment, so what it names never runs.
   "a script whose hashbang line names a javascript: URL": "<script>#!/usr/bin/env node location='javascript:void 0'\nlabel.textContent = 'ready';</script>",
