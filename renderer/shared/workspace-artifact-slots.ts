@@ -267,6 +267,11 @@ const revs = (forms: string) => ({ operand: () => VO, operandForms: forms });
 const RENAME_LONG = ["find-renames", "find-copies", "find-copies-harder", "break-rewrites"];
 /** Their short forms, alone or with a fixed score joined (`-M50%`, `-B50%/60%`). */
 const RENAME_SCORES = "MCB";
+// git's similarity score: digits with at most one dot, then an optional %
+// that ends it (50%, 5, .5, 5.). -B takes a second one after a slash.
+const SCORE = String.raw`\d*(?:\.\d*)?%?`;
+const SIMILARITY_SCORE = new RegExp(`^${SCORE}$`, "u");
+const BREAK_SCORE = new RegExp(`^${SCORE}(?:/${SCORE})?$`, "u");
 const LOG_LONG = [
   "oneline", "graph", "all", "decorate", "no-decorate", "stat", "shortstat", "numstat", "name-only", "name-status", "patch", "no-patch", "no-merges",
   "merges", "first-parent", "reverse", "follow", "abbrev-commit", "date-order", "topo-order", "author-date-order", "no-color", "raw", "full-history",
@@ -864,8 +869,9 @@ function walk(spec: SlotSpec, args: Args, from: number): { positions: Map<number
         break;
       }
       if (spec.scores?.includes(letters[at]!)) {
-        // The rest of the word, if any, is a fixed score such as 50%.
-        if (!/^[\d.%/]*$/u.test(letters.slice(at + 1).join(""))) return unknown(arg);
+        // The rest of the word, if any, is a fixed score such as 50%, read as git does.
+        const score = letters.slice(at + 1).join("");
+        if (!(letters[at] === "B" ? BREAK_SCORE : SIMILARITY_SCORE).test(score)) return unknown(arg);
         has.add(name);
         break;
       }
