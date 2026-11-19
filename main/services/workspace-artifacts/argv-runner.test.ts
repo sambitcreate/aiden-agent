@@ -617,6 +617,30 @@ test("a branch value for git checkout never discards a file's uncommitted edits"
   }
 });
 
+test("page data names a branch git branch -v lists by, and creates one only where the template is a plain create", async (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "aiden-artifact-branch-"));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const git = (args: string[]) => execFileSync("git", ["-c", "user.email=a@example.com", "-c", "user.name=a", ...args], { cwd: dir, encoding: "utf8" });
+  fs.writeFileSync(path.join(dir, "notes.md"), "one\n");
+  git(["init", "-q", "-b", "main"]);
+  git(["add", "."]);
+  git(["commit", "-q", "-m", "one"]);
+  git(["branch", "feat-a"]);
+  const branches = () => git(["branch", "--format=%(refname:short)"]);
+  const action = (command: string) => parseWorkspaceArtifactActions([{ name: "a", label: "A", command, params: [{ name: "x" }] }])[0]!;
+  // git reads `git branch -v NAME` as a create, not a listing filtered by NAME.
+  for (const command of ["git branch -v {{x}}", "git branch -vv {{x}}", "git branch --verbose {{x}}"]) {
+    assert.throws(() => action(command), /creates that branch \(add --list/u, command);
+  }
+  const listed = await runResolved(resolveWorkspaceArtifactCommand(action("git branch -v --list {{x}}"), ["feat-*"]), dir);
+  assert.equal(listed.exitCode, 0, listed.stderr);
+  assert.match(listed.stdout, /feat-a/u);
+  assert.equal(branches(), "feat-a\nmain\n", "listing created nothing");
+  const created = await runResolved(resolveWorkspaceArtifactCommand(action("git branch {{x}}"), ["feat-b"]), dir);
+  assert.equal(created.exitCode, 0, created.stderr);
+  assert.equal(branches(), "feat-a\nfeat-b\nmain\n");
+});
+
 test("git tag points a tag at the revision a value names, never at a file", async (t) => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "aiden-artifact-tag-"));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));

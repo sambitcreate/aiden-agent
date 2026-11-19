@@ -774,7 +774,7 @@ test("the display and filter options saved buttons use are read, and an unknown 
     ["git branch -a --contains {{x}}", "abc123"],
     ["git branch -r --no-contains {{x}}", "main"],
     ["git branch --sort=-committerdate --list {{x}}", "feat/*"],
-    ["git branch -v {{x}}", "fix-?"],
+    ["git branch -v --list {{x}}", "fix-?"],
     ["git tag --contains {{x}}", "abc123"],
     ["git tag -l {{x}} --sort=-v:refname", "v1.*"],
     ["git tag -n {{x}}", "v*"],

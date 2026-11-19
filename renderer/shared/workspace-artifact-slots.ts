@@ -330,9 +330,15 @@ const GIT_SPECS: Readonly<Record<string, SlotSpec>> = {
     flags: "avrdDmMcClfqt",
     long: ["list", "all", "remotes", "verbose", "delete", "move", "copy", "force", "quiet", "show-current", "track", "no-track", "unset-upstream"],
     values: { "-u --set-upstream-to": R, ...REACH_FILTERS, "--sort": null },
-    operand: (_index, _afterDashes, has) =>
-      has("-l", "--list", "-v", "--verbose", ...REACH_FILTER_NAMES) && !has(...BRANCH_CHANGES) ? LIST_PATTERN : R,
-    operandForms: "branch names, or a pattern (text) with --list, -v, --merged or --contains",
+    operand: (_index, _afterDashes, has) => {
+      if (has("-l", "--list", ...REACH_FILTER_NAMES) && !has(...BRANCH_CHANGES)) return LIST_PATTERN;
+      // `git branch -v NAME` is not a listing: git creates the branch NAME.
+      if (has("-v", "--verbose") && !has(...BRANCH_CHANGES)) {
+        return "as a name after -v without --list, where git branch creates that branch (add --list to filter the listing by a pattern, or drop -v to create a branch)";
+      }
+      return R;
+    },
+    operandForms: "branch names, or a pattern (text) with --list, --merged or --contains",
   },
   switch: {
     name: "git switch",
