@@ -21,7 +21,7 @@
  * Pure and Electron-free, like `workspace-artifacts.ts`, which uses it.
  */
 
-import { ghSlotSpec, gitSlotSpec, joinedOnlyForm, jqSlot, locateSlot, programSlotSpec, revisionsEnd, type Slot, type SlotLookup } from "./workspace-artifact-slots.js";
+import { ghSlotSpec, gitSlotSpec, joinedOnlyForm, jqSlot, locateSlot, optionAfterFile, programSlotSpec, revisionsEnd, type Slot, type SlotLookup } from "./workspace-artifact-slots.js";
 
 export const WORKSPACE_ARTIFACT_PLACEHOLDER = /\{\{\s*([A-Za-z_][A-Za-z0-9_]*)\s*\}\}/gu;
 const PLACEHOLDER_AT = /\{\{\s*([A-Za-z_][A-Za-z0-9_]*)\s*\}\}/uy;
@@ -688,6 +688,16 @@ function endRefs(command: TemplateCommand): string | undefined {
   const at = command.words[end.at]!.end;
   const revisions = command.words.filter((word) => word.parts.some((part) => "param" in part && part.slot?.refOnly));
   const either = revisions.every((word) => word.parts.some((part) => "param" in part && part.slot?.fileToo));
+  if (either) {
+    // A value that names a file goes without the --, and then git log and
+    // show stop reading options at it.
+    const first = command.words.indexOf(revisions[0]!);
+    const option = optionAfterFile(gitSlotSpec(git.name!)!, args, git.index + 1, first - 1);
+    if (option !== undefined) {
+      const value = placeholderIn(revisions[0]!);
+      return `${option} is written after ${value}. git ${git.name!} reads ${value} as a file when it names one in the workspace, and reads no option after a file. Write ${option} before ${value}.`;
+    }
+  }
   command.words.splice(end.at + 1, 0, { parts: [{ text: "--", insertedAt: at }], quoted: false, start: at, end: at, ...(either ? { unlessFiles: revisions } : {}) });
   return undefined;
 }

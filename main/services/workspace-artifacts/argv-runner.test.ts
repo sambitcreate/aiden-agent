@@ -604,6 +604,28 @@ test("git log, show and reset take a value as a revision or a file, adding -- on
   assert.match(back.stdout, /one/u);
   assert.doesNotMatch(back.stdout, /two/u);
 
+  // git log and show read no option after a file, so an option written after a value that may be
+  // one is refused when saved, and the advice runs for a file and for a revision.
+  for (const [command, option, moved] of [
+    ["git log {{x}} --oneline", "--oneline", "git log --oneline {{x}}"],
+    ["git show {{x}} --stat", "--stat", "git show --stat {{x}}"],
+  ] as const) {
+    const [, subcommand] = command.split(" ");
+    assert.notEqual(spawnSync("git", [subcommand!, "notes.md", option], { cwd: dir }).status, 0, `git itself fails on ${command} with a file`);
+    assert.throws(() => resolve(command, ["notes.md"]), new RegExp(`Write ${option} before \\{\\{x\\}\\}`, "u"), command);
+    for (const value of ["notes.md", "HEAD"]) {
+      const ran = await run(moved, [value]);
+      assert.equal(ran.exitCode, 0, `${moved} with ${value}: ${ran.stderr}`);
+      assert.match(ran.stdout, /two/u, `${moved} with ${value}`);
+    }
+  }
+  // git reset reads an option after a file, so that order still saves and runs.
+  fs.writeFileSync(path.join(dir, "notes.md"), "staged\n");
+  git(["add", "notes.md"]);
+  const quiet = await run("git reset {{x}} -q", ["notes.md"]);
+  assert.equal(quiet.exitCode, 0, quiet.stderr);
+  assert.equal(git(["diff", "--cached", "--name-only"]), "");
+
   // A staged file unstages.
   for (const command of ["git reset {{file}}", "git reset -q {{file}}"]) {
     fs.writeFileSync(path.join(dir, "notes.md"), `${command}\n`);

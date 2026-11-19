@@ -114,6 +114,11 @@ export interface SlotSpec {
   verbs?: Readonly<Record<string, SlotSpec>>;
   /** The verb used when the first word is an option or there is none (`git stash -m x` is `push`). */
   implicitVerb?: string;
+  /**
+   * Without a `--`, git reads no option after an operand that names a file
+   * (`git log notes.md --oneline` fails; `git reset notes.md -q` runs).
+   */
+  optionsBeforeFiles?: boolean;
 }
 
 const T: Slot = { rule: "text" };
@@ -288,6 +293,7 @@ const logLike = (name: string): SlotSpec => ({
   digits: true,
   operand: (_index, afterDashes) => (afterDashes ? P : VF),
   operandForms: "revisions or files in the workspace, and files in the workspace after --",
+  optionsBeforeFiles: true,
 });
 
 /** fetch and pull: the first operand is the remote, which can be a URL, a path or a transport that runs a command. */
@@ -916,6 +922,24 @@ export function revisionsEnd(spec: SlotSpec, args: Args, from: number, last: num
     return option === undefined ? { at: index } : { at: index, optionAfter: option };
   }
   return { at: args.length };
+}
+
+/**
+ * The first option written after the word at `first` where the program
+ * reads no option after a file (`optionsBeforeFiles`), so a value there that
+ * names a file would leave the option unread (`git log {{x}} --oneline`).
+ */
+export function optionAfterFile(spec: SlotSpec, args: Args, from: number, first: number): string | undefined {
+  if (spec.verbs) {
+    const verb = args[from];
+    if (verb !== undefined && Object.prototype.hasOwnProperty.call(spec.verbs, verb)) return optionAfterFile(spec.verbs[verb]!, args, from + 1, first);
+    if (spec.implicitVerb && (verb === undefined || verb.startsWith("-"))) return optionAfterFile(spec.verbs[spec.implicitVerb]!, args, from, first);
+    return undefined;
+  }
+  if (!spec.optionsBeforeFiles) return undefined;
+  const read = walk(spec, args, from);
+  if ("problem" in read) return undefined;
+  return args.find((_arg, index) => index > first && read.positions.get(index)?.kind === "option");
 }
 
 const JQ_FLAGS = "nrjascCMSeRh";
