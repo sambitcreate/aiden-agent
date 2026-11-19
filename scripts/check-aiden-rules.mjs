@@ -159,7 +159,7 @@ function textInputFocusRing(file, text) {
 }
 
 // no-dialog-dom-sniff — plan unit 1: open overlays come from the shared layer stack, not DOM queries
-// for `[data-slot="dialog-content"]` or an open menu/popover (docs/plans/ui-sdk-lessons-plan.md).
+// for `[data-slot="dialog-content"]` or an open menu/popover (docs/plans/completed/ui-sdk-lessons-plan.md).
 const DIALOG_SLOT = /\[data-slot=["']?dialog-content["']?\]/u;
 const OPEN_STATE = /\[data-state=["']?open["']?\]/u;
 const OVERLAY_MARKER = /\[(?:role=["']?(?:menu|dialog|alertdialog|listbox)["']?|data-slot=["']?[\w-]*(?:content|overlay)["']?|data-radix-popper-content-wrapper)\]/u;
