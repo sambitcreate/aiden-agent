@@ -577,6 +577,30 @@ test("get reads the markup in slices and says where the next one starts", async 
   await assert.rejects(call("g3", { operation: "get", id: "art1", offset: PAGE.length }), /past the end of the markup/u);
 });
 
+test("markup slices and edit excerpts never split an emoji in two", async (t) => {
+  const { call } = await harness(t, { permission: "full" });
+  const page = PAGE.replace("open</Text>", "open 😀😀</Text>");
+  const at = page.indexOf("😀");
+  await call("c1", { operation: "create", title: "Open PRs", markup: page });
+  const loneHalf = /[\uD800-\uDFFF]/u;
+
+  // A slice that would end between the emoji's two halves takes the whole emoji.
+  const first = await call("g1", { operation: "get", id: "art1", length: at + 1 });
+  assert.ok(first.endsWith(`read on with offset ${at + 2}):\n${page.slice(0, at + 2)}`));
+  // One that would start between them starts on the emoji instead.
+  const middle = await call("g2", { operation: "get", id: "art1", offset: at + 1, length: 2 });
+  assert.ok(middle.endsWith(`Markup (characters ${at}–${at + 2} of ${page.length}; read on with offset ${at + 2}):\n😀`));
+  for (const text of [first, middle]) assert.doesNotMatch(text, loneHalf);
+
+  // An edit's excerpt cut at the emoji drops it whole rather than half of it.
+  const old = `${"x".repeat(58)}😀${"y".repeat(10)}`;
+  await assert.rejects(call("u1", { operation: "update", id: "art1", edits: [{ old, new: "z" }] }), (error: Error) => {
+    assert.ok(error.message.includes(`old "${"x".repeat(58)}…" was not found`), error.message);
+    assert.doesNotMatch(error.message, /\\ud83d/iu);
+    return true;
+  });
+});
+
 test("get says plainly when a version's markup was not kept, and an undo brings back the markup it had", async (t) => {
   const { store, call, nextTurn } = await harness(t, { permission: "full" });
   const compiled = await call("c1", { operation: "create", title: "Open PRs", markup: PAGE });

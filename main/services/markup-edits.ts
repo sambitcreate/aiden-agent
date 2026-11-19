@@ -5,6 +5,8 @@
  * the edits before it left it, and any miss changes nothing.
  */
 
+import { safeCut } from "../../renderer/shared/workspace-artifacts.js";
+
 export const MAX_MARKUP_EDITS = 32;
 const EXCERPT_CHARS = 60;
 
@@ -15,7 +17,7 @@ export interface MarkupEdit {
 
 function excerpt(text: string): string {
   const line = text.replace(/\s+/gu, " ").trim();
-  return JSON.stringify(line.length > EXCERPT_CHARS ? `${line.slice(0, EXCERPT_CHARS - 1)}…` : line);
+  return JSON.stringify(line.length > EXCERPT_CHARS ? `${line.slice(0, safeCut(line, EXCERPT_CHARS - 1))}…` : line);
 }
 
 /** Reads `edits` from a tool call, or throws with what is wrong with it. */

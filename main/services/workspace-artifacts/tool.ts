@@ -15,6 +15,7 @@ import {
   parseWorkspaceArtifactRefresh,
   parseWorkspaceArtifactSources,
   resolveWorkspaceArtifactCommand,
+  safeCut,
   workspaceArtifactActionProblem,
   WORKSPACE_ARTIFACT_LIMITS,
   WORKSPACE_ARTIFACT_TOOL_NAME,
@@ -685,7 +686,11 @@ function markupSlice(input: ArtifactToolInput, markup: string): { start: number;
   if (start > 0 && start >= markup.length) {
     throw new Error(`offset ${start} is past the end of the markup, which has ${markup.length} characters.`);
   }
-  return { start, end: length === undefined ? markup.length : Math.min(markup.length, start + length) };
+  // A slice never splits a character made of two UTF-16 units: its start moves
+  // back onto the character's first unit, and its end past the second.
+  const from = safeCut(markup, start);
+  const to = length === undefined ? markup.length : Math.min(markup.length, from + length);
+  return { start: from, end: safeCut(markup, to) === to ? to : to + 1 };
 }
 
 /** `get`: the page as saved, its sources' last reads, and its markup to edit. */
