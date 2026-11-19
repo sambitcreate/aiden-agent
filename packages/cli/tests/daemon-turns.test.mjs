@@ -979,6 +979,37 @@ test("a fact the chat was told and then forgot does not survive a serve compacti
   assert.match(summary, /asked to forget a hobby/u, "the summarizer's other lines are kept");
 });
 
+test("a fact the chat learned only from the always-on prompt, then removed elsewhere, does not survive its compaction", async (t) => {
+  const f = await fixture(t);
+  api.atomicJson(join(f.dir, "settings.json"), { compaction: { keepRecentTokens: 1 } });
+  const fact = "Keeps bees on the roof";
+  const run = async (chatId, text, steps, create) => {
+    f.steps.push(...steps);
+    await beginTurn(f, chatId, { text, create, streamId: `stream-${f.requests.length}` });
+    await f.daemon.llmClient.waitForChatIdle(chatId);
+  };
+  // Another chat saves the fact, so no copy of it is in this chat's history.
+  await run("saver", "Remember my bees.", [callTool("remember_fact", { fact, alwaysOn: true }), reply("Saved.")], true);
+  const factId = /\[memory:([^\]]+)\]/u.exec(toolResultSeen(f.requests[1]))?.[1];
+  assert.ok(factId, "the fact was saved");
+  await run("told", "Hello.", [reply("Hello.")], true);
+  assert.match(JSON.stringify(f.requests[2].messages[0]), /bees on the roof/u, "the always-on prompt told the chat");
+  // The other chat removes it, and this chat's next turn ends past the threshold; the summarizer states it anyway.
+  await run("saver", "Forget my bees.", [callTool("forget_fact", { factId }), reply("Forgotten.")], false);
+  const before = f.requests.length;
+  await run("told", "What is new?", [
+    replyAtContext("Nothing much.", 30_000),
+    reply("## Goal\nThe user keeps bees on the roof.\nThe user said hello."),
+  ], false);
+  const sent = f.requests.slice(before);
+  assert.ok(sent.length >= 2, "the turn and its summarizer requests");
+  assert.doesNotMatch(JSON.stringify(sent), /bees/iu, "the removed fact reaches neither the turn nor the summarizer");
+  const [summary] = compactionSummaries(f.daemon, "told");
+  assert.ok(summary, "the compaction was stored");
+  assert.doesNotMatch(summary, /bees/iu, "the stored summary does not state the removed fact");
+  assert.match(summary, /said hello/u, "the summarizer's other lines are kept");
+});
+
 test("a serve compaction whose summary still states a fact across lines is not stored", async (t) => {
   const f = await fixture(t);
   api.atomicJson(join(f.dir, "settings.json"), { compaction: { keepRecentTokens: 1 } });

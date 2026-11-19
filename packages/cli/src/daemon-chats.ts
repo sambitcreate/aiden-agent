@@ -371,8 +371,11 @@ export function createDaemonChats(agentDir: string) {
               return addition ? { content: [...event.content, { type: "text" as const, text: addition }] } : undefined;
             });
             pi.on("session_before_compact", async (event, ctx) => {
-              hooks.observe("PreCompact", { trigger: event.reason === "manual" ? "manual" : "auto", aiden_reason: event.reason },
-                { idempotencyKey: `PreCompact:${chat.id}:${streamId}:${event.reason}`, report: reportHookLines });
+              // Observe-only; a throw here must not skip the memory filter, or Pi would store its own summary.
+              try {
+                hooks.observe("PreCompact", { trigger: event.reason === "manual" ? "manual" : "auto", aiden_reason: event.reason },
+                  { idempotencyKey: `PreCompact:${chat.id}:${streamId}:${event.reason}`, report: reportHookLines });
+              } catch { /* the hook is the person's; compaction goes on */ }
               // A workspace chat's summary keeps no memory fact; a Bot's memory is its own.
               if (botAdmission) return undefined;
               if (!entry.session) return { cancel: true };
