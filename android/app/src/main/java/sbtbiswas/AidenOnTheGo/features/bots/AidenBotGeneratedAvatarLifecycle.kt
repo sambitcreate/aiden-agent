@@ -151,7 +151,8 @@ object AidenBotGeneratedAvatarNormalizer {
 class AidenBotGeneratedAvatarModel(
     private val coordinator: AidenRemoteCoordinator,
     private val botId: String? = null,
-    private val botCache: AidenBotCache? = null
+    private val botCache: AidenBotCache? = null,
+    private val normalize: (ByteArray) -> ByteArray = AidenBotGeneratedAvatarNormalizer::normalize
 ) {
     private val _phase = MutableStateFlow(AidenBotGeneratedAvatarPhase.IDLE)
     val phase: StateFlow<AidenBotGeneratedAvatarPhase> = _phase.asStateFlow()
@@ -164,23 +165,37 @@ class AidenBotGeneratedAvatarModel(
     val hasCandidate: Boolean
         get() = currentCandidateData != null
 
-    /** Decodes and re-encodes off the main thread; a large source can take hundreds of milliseconds. */
-    suspend fun setCandidate(data: ByteArray) {
-        try {
-            _phase.value = AidenBotGeneratedAvatarPhase.NORMALIZING
-            val normalized = withContext(Dispatchers.Default) { AidenBotGeneratedAvatarNormalizer.normalize(data) }
-            currentCandidateData = normalized
-            _phase.value = AidenBotGeneratedAvatarPhase.READY
-            _errorMessage.value = null
+    private var selection = 0L
+
+    /**
+     * Decodes and re-encodes off the main thread; a large source can take hundreds of milliseconds.
+     * Call it from one thread (the main thread). A later call supersedes an earlier one that is
+     * still normalizing: the earlier call then changes nothing and returns false, so its caller
+     * must not upload. Returns true when this call's candidate is the current one.
+     */
+    suspend fun setCandidate(data: ByteArray): Boolean {
+        val mine = ++selection
+        _phase.value = AidenBotGeneratedAvatarPhase.NORMALIZING
+        val result = try {
+            Result.success(withContext(Dispatchers.Default) { normalize(data) })
         } catch (e: CancellationException) {
             throw e
-        } catch (e: AidenBotGeneratedAvatarError) {
-            _phase.value = AidenBotGeneratedAvatarPhase.FAILED
-            _errorMessage.value = e.messageText
         } catch (e: Exception) {
-            _phase.value = AidenBotGeneratedAvatarPhase.FAILED
-            _errorMessage.value = "Failed to process image"
+            Result.failure(e)
         }
+        if (mine != selection) return false
+        result.fold(
+            onSuccess = { normalized ->
+                currentCandidateData = normalized
+                _phase.value = AidenBotGeneratedAvatarPhase.READY
+                _errorMessage.value = null
+            },
+            onFailure = { e ->
+                _phase.value = AidenBotGeneratedAvatarPhase.FAILED
+                _errorMessage.value = (e as? AidenBotGeneratedAvatarError)?.messageText ?: "Failed to process image"
+            }
+        )
+        return result.isSuccess
     }
 
     suspend fun ingestCopiedCandidate(bytes: ByteArray) = setCandidate(bytes)

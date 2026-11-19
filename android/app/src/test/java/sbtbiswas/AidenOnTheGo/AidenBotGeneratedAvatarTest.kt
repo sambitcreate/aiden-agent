@@ -9,6 +9,20 @@ import sbtbiswas.AidenOnTheGo.models.*
 import sbtbiswas.AidenOnTheGo.protocol.AidenBotContractException
 import java.io.ByteArrayOutputStream
 import java.util.Base64
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.asCoroutineDispatcher
+import kotlinx.coroutines.async
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withContext
+import sbtbiswas.AidenOnTheGo.auth.InMemoryAidenSecureStore
+import sbtbiswas.AidenOnTheGo.features.remote.AidenRemoteCoordinator
+import sbtbiswas.AidenOnTheGo.persistence.AidenChatCache
+import sbtbiswas.AidenOnTheGo.persistence.AidenInstallationStore
+import sbtbiswas.AidenOnTheGo.features.bots.AidenBotGeneratedAvatarError
+import sbtbiswas.AidenOnTheGo.features.bots.AidenBotGeneratedAvatarModel
+import sbtbiswas.AidenOnTheGo.features.bots.AidenBotGeneratedAvatarPhase
 
 class AidenBotGeneratedAvatarTest {
     @Test
@@ -139,5 +153,45 @@ class AidenBotGeneratedAvatarTest {
         assertFalse(isAmbiguous(400, isNetworkError = false))
         assertFalse(isAmbiguous(409, isNetworkError = false))
         assertFalse(isAmbiguous(422, isNetworkError = false))
+    }
+
+    @Test
+    fun aLaterPhotoSelectionSupersedesAnEarlierOneStillNormalizing() {
+        val directory = kotlin.io.path.createTempDirectory("avatar-selection-").toFile()
+        val main = java.util.concurrent.Executors.newSingleThreadExecutor().asCoroutineDispatcher()
+        val firstStarted = java.util.concurrent.CountDownLatch(1)
+        val releaseFirst = java.util.concurrent.CountDownLatch(1)
+        val first = byteArrayOf(1)
+        val second = byteArrayOf(2)
+        try {
+            val coordinator = AidenRemoteCoordinator(
+                installationStore = AidenInstallationStore(directory, InMemoryAidenSecureStore()),
+                storageDir = directory,
+                chatCache = AidenChatCache(directory),
+                scope = CoroutineScope(Dispatchers.Unconfined + Job().apply { cancel() })
+            )
+            // The first photo is slow and then turns out to be invalid; the second is fine.
+            val model = AidenBotGeneratedAvatarModel(coordinator, normalize = { data ->
+                if (data.contentEquals(first)) {
+                    firstStarted.countDown()
+                    releaseFirst.await(5, java.util.concurrent.TimeUnit.SECONDS)
+                    throw AidenBotGeneratedAvatarError.InvalidImage
+                }
+                byteArrayOf(9)
+            })
+            runBlocking(main) {
+                val earlier = async { model.setCandidate(first) }
+                withContext(Dispatchers.IO) { assertTrue(firstStarted.await(5, java.util.concurrent.TimeUnit.SECONDS)) }
+                assertTrue("the latest selection is current", model.setCandidate(second))
+                releaseFirst.countDown()
+                assertFalse("a superseded selection must not upload", earlier.await())
+            }
+            assertEquals(AidenBotGeneratedAvatarPhase.READY, model.phase.value)
+            assertNull(model.errorMessage.value)
+            assertTrue(model.hasCandidate)
+        } finally {
+            main.close()
+            directory.deleteRecursively()
+        }
     }
 }
