@@ -6,6 +6,7 @@ import * as React from "react";
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { emptyDesignCanvas, type DesignCanvas, type DesignFrame } from "../shared/design-canvas/schema";
 import { DesignSidePanel } from "./design-side-panel";
+import type { DesignTweakOps } from "./design-tweaks-panel";
 import { reorderLayer, stepLayer } from "./layers-core";
 
 const restoreRect = window.HTMLElement.prototype.getBoundingClientRect;
@@ -19,6 +20,9 @@ function note(id: string): DesignFrame {
   return { id, kind: "note", title: id, x: 0, y: 0, w: 200, h: 120, text: id, pageId: page, createdBy: "person" };
 }
 
+/** Layers never reaches the Tweaks tab, so its operations are unused. */
+const noTweaks = new Proxy({}, { get: () => () => false }) as DesignTweakOps;
+
 function Harness({ initial, changes }: { initial: DesignCanvas; changes: string[] }) {
   const select = (ids: string[]) => changes.push(`select ${ids.join(" ")}`);
   const [doc, setDoc] = React.useState(initial);
@@ -27,6 +31,7 @@ function Harness({ initial, changes }: { initial: DesignCanvas; changes: string[
       doc={doc}
       selection={new Set()}
       tab="layers"
+      tweaks={noTweaks}
       onTab={() => {}}
       onClose={() => {}}
       readSource={async () => ({ error: "unavailable" })}
