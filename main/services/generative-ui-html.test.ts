@@ -307,6 +307,29 @@ const INDIRECT_SINKS: Record<string, string> = {
   "a javascript: URL continued in an array after a +": "location = 'java' + ['script:alert(1)']",
   "a javascript: URL in parentheses after an empty string": "location = '' + ('javascript:alert(1)')",
   "a javascript: URL split by an empty template substitution": "location = `java${''}script:alert(1)`",
+  "a parenthesized setAttribute": `(b.setAttribute)('onclick', ${IFRAME_HANDLER}); b.click()`,
+  "a parenthesized document.write": `(document.write)(${IFRAME_MARKUP})`,
+  "a parenthesized document.write tag": "(document.write)`<iframe src=https://e.test></iframe>`",
+  "a parenthesized location.assign": "(location.assign)('javascript:alert(1)')",
+  "open called through a comma expression": "(0, open)('javascript:alert(1)')",
+  "a bound setAttribute": `b.setAttribute.bind(b)('onclick', ${IFRAME_HANDLER}); b.click()`,
+  "insertAdjacentHTML called through .call": `Element.prototype.insertAdjacentHTML.call(document.body, 'beforeend', ${IFRAME_MARKUP})`,
+  "a bracketed setAttribute called through .call": `b['setAttribute'].call(b, 'onclick', ${IFRAME_HANDLER}); b.click()`,
+  "document.write called through .call": `document.write.call(document, ${IFRAME_MARKUP})`,
+  "location.replace called through .call": "location.replace.call(location, 'javascript:alert(1)')",
+  "setAttribute arguments spread from an array": `b.setAttribute(...['onclick', ${IFRAME_HANDLER}]); b.click()`,
+  "insertAdjacentHTML markup spread after a position": `document.body.insertAdjacentHTML(...['beforeend'], ${IFRAME_MARKUP})`,
+  "a bare innerHTML in a with block": `with (document.body) innerHTML = ${IFRAME_MARKUP}`,
+  "markup awaited on the next line": `(async () => { document.body.innerHTML = await\n${IFRAME_MARKUP} })()`,
+  "an onclick attribute node read by getAttributeNodeNS": `b.getAttributeNodeNS(null, 'onclick').value = ${IFRAME_HANDLER}; b.click()`,
+  "an onclick attribute node read by getNamedItemNS": `b.attributes.getNamedItemNS(null, 'onclick').value = ${IFRAME_HANDLER}; b.click()`,
+  "an onclick attribute node read from bracketed attributes": `b['attributes'].onclick.value = ${IFRAME_HANDLER}; b.click()`,
+  "an onclick attribute node's value set by Object.assign": `Object.assign(b.attributes.onclick, {value: ${IFRAME_HANDLER}}); b.click()`,
+  "a location key copied onto window": "Object.assign(window, {location: 'javascript:alert(1)'})",
+  "a computed innerHTML key": `Object.assign(document.body, {['innerHTML']: ${IFRAME_MARKUP}})`,
+  "markup inserted by execCommand": `document.execCommand('insertHTML', false, ${IFRAME_MARKUP})`,
+  "an SVG link's href.baseVal": "a.href.baseVal = 'javascript:alert(1)'",
+  "a navigation.navigate call": "navigation.navigate('javascript:alert(1)')",
 };
 const LITERAL_SINKS: Record<string, string> = {
   ...INDIRECT_SINKS,
@@ -349,6 +372,7 @@ const LITERAL_SINKS: Record<string, string> = {
 };
 
 const REFUSED_MARKUP: Record<string, string> = {
+  "an img whose error handler sets its own outerHTML": `<p>x</p><img src=x onerror="outerHTML='&lt;iframe src=https://e.test&gt;&lt;/iframe&gt;'">`,
   "an <iframe> written through octal escapes for <": ESCAPED_SINKS.octalMarkup,
   "an onclick that writes an <iframe> through octal escapes for <": ESCAPED_SINKS.octalMarkupInOnclick,
   "a javascript: URL spelled with an octal escape": ESCAPED_SINKS.octalLocation,
@@ -532,6 +556,19 @@ const ADMITTED_MARKUP: Record<string, string> = {
       `pic.innerHTML = '<img alt="" src="data:image/png;base64,' + b64 + '">'`,
       "location.href = base + '?q=' + encodeURIComponent(q)",
       "a.href = `/search?q=${q}&page=${''}1`",
+    ].join("\n"),
+  ),
+  "calls that pass no sink a value: .call of a plain function or of replace, a bound function with arguments, a title spread into setAttribute and keys that are not sinks": literalSink(
+    [
+      `fn.call(o, 'onclick', "location='javascript:alert(1)'")`,
+      "label.textContent = String.prototype.replace.call(name, 'javascript:', '')",
+      // Bound with its name, this sets title to "onclick".
+      `b.setAttribute.bind(b, 'title')('onclick', "location='javascript:alert(1)'")`,
+      "b.setAttribute(...['title', 'javascript: notes'])",
+      "(0, console.log)('<iframe src=https://e.test></iframe>')",
+      "Object.assign(settings, {value: 'javascript: notes', location: '#home'})",
+      "if (ready) ('javascript: notes').length",
+      "b.getAttributeNodeNS(null, 'title').value = 'javascript: notes'",
     ].join("\n"),
   ),
   // XML in no HTML, SVG or MathML namespace builds no element the page runs
