@@ -35,7 +35,7 @@ import { createBotRegistry, scanContextToolNames, type BotExtensionDeps, type Bo
 import { handoffSkippedText, ruleHandoffDoneBlock, ruleUnattendedBlock } from "./bot-handoff-text.js";
 import { recordRuleHandoffEntry } from "./bot-handoffs.js";
 import { createBotSessionService } from "./bot-session-service.js";
-import { botIngressAllowsTool } from "./bot-tool-policy.js";
+import { botIngressAllowsTool, botIngressRefusal } from "./bot-tool-policy.js";
 import { createBotHarnessHost, type BotHarnessHost } from "./harness-host.js";
 import { projectBotTranscript } from "./live-projection.js";
 import { inputIdentityDeps, type PlanReplayArgs } from "./test-support/assembly-fixtures.js";
@@ -328,6 +328,52 @@ test("(cm4) scripts follow the turn's ingress and never reach direct-only tools"
   assert.match(turn.text, /^docs__read$/mu, "the question card is not a script tool");
   assert.match(turn.text, /This tool is not available on this turn\./u);
   assert.deepEqual(read.executions, []);
+});
+
+test("(cm6) an unattended turn lists the same tools as a person turn; a withheld call is blocked with its reason and never runs", async () => {
+  const question = countingTool("ask_user_question");
+  const read = countingTool("docs__read");
+  const declared: string[][] = [];
+  const declare = (context: { messages: Message[] }) => {
+    declared.push(getCurrentTools(context.messages).map((tool) => tool.name).sort());
+  };
+  const fauxModels = createFauxModels([
+    (context) => {
+      declare(context);
+      return fauxAssistantMessage([fauxToolCall("ask_user_question", { text: "Which one?" })], { stopReason: "toolUse" });
+    },
+    (context) => {
+      declare(context);
+      return fauxAssistantMessage("Brief sent.");
+    },
+    (context) => {
+      declare(context);
+      return fauxAssistantMessage("Hi.");
+    },
+  ]);
+  const recorded = recordingDeps({ tools: [{ tool: question, replay: "unsafe" }, { tool: read, replay: "unsafe" }] });
+  const deps: BotExtensionDeps = {
+    ...recorded,
+    turnAllows: withBotMemoryIngress(botIngressAllowsTool),
+    turnRefusal: botIngressRefusal,
+  };
+  const { harness, root } = await memoryHarness(deps, fauxModels);
+  try {
+    await (await root.submit({ type: "input", content: "Run the brief.", requestId: "routine:task-1:1000" }, ctx)).wait(ctx);
+    await (await root.submit({ type: "input", content: "Hello", requestId: "desk-1" }, ctx)).wait(ctx);
+    assert.equal(declared.length, 3);
+    assert.ok(declared[0]!.includes("ask_user_question"), "the withheld tool stays declared on the routine turn");
+    assert.deepEqual(declared[1], declared[0], "the blocked call does not change the next step's tool list");
+    assert.deepEqual(declared[2], declared[0], "the person turn sees the same tool list");
+    const results = await toolResults(root);
+    assert.equal(results.length, 1);
+    assert.equal(results[0]!.isError, true);
+    assert.match(results[0]!.content[0]!.text ?? "", /ask_user_question is not available on this turn: nobody is here to answer it/u);
+    assert.deepEqual(question.executions, [], "the blocked call never ran");
+    assert.equal(recorded.approvals.length, 0, "no approval card was raised for it");
+  } finally {
+    await harness.close(ctx);
+  }
 });
 
 test("(cm5) a Bot without scriptable tools gets no codemode", async () => {

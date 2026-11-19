@@ -112,7 +112,7 @@ export function botHistoryToolTaints(toolName: string): boolean {
   return botBringsOutsideContent(toolName) || hasMcpAgentToolNameShape(toolName) || !BOT_NON_TAINTING_TOOL_NAMES.has(toolName);
 }
 import type { ApprovalMode } from "../../../renderer/shared/approval-mode.js";
-import { botIngressAllowsTool, botToolApprovalSummary, botToolVerdict, botTurnOf, SUBAGENT_TOOL, type BotToolFacts } from "./bot-tool-policy.js";
+import { botIngressAllowsTool, botIngressRefusal, botToolApprovalSummary, botToolVerdict, botTurnOf, SUBAGENT_TOOL, type BotToolFacts } from "./bot-tool-policy.js";
 import type { BotToolCall, ToolReplay } from "./tool-adapter.js";
 
 /** One admission of the Bot's current authority. Release it when done. */
@@ -619,7 +619,7 @@ export function createBotToolAssembly(ports: BotToolAssemblyPorts): BotToolAssem
       const facts = await ports.sources.facts(botId, admission);
       if (original) bringsOutside.set(original, botBringsOutsideContent(toolName) || (await facts.mcpTools()).has(toolName));
       // The calling run's own ingress, not whoever refreshed the tools last.
-      if (call?.requestIds && !botIngressAllowsTool(toolName, call.requestIds)) return {allowed: false, reason: "This tool is not available on this turn."};
+      if (call?.requestIds && !botIngressAllowsTool(toolName, call.requestIds)) return {allowed: false, reason: botIngressRefusal(toolName, call.requestIds)};
       const turns = (call?.requestIds ?? []).map(botTurnOf);
       const taskIngress = botTurnOf(undefined);
       if (taskIngress.peer) turns.push(taskIngress);

@@ -123,8 +123,6 @@ export interface BotSystemSectionsInput {
   /** The Bot's rules section, already rendered. */
   rules: string;
   offeredToolNames: ReadonlySet<string>;
-  /** The open-work summary, already rendered; empty without the open_work tool. */
-  openWork: string;
   /** Guidance for the Bot's connected tools. */
   toolGuidance: string;
   /** Active lessons, already rendered. */
@@ -145,7 +143,6 @@ export function composeBotSystemSections(input: BotSystemSectionsInput): string[
     [
       botRoutineGuidance(input.offeredToolNames),
       botSettingsGuidance(input.offeredToolNames, input.bot),
-      input.openWork,
       input.toolGuidance,
       // How-to lessons from the person's corrections: below authority, as data.
       input.lessons,

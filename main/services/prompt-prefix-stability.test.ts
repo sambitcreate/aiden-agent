@@ -24,7 +24,7 @@ import { renderBotMemorySection } from "./bot-memory/prompt.js";
 import { createBotMemoryService } from "./bot-memory/service.js";
 import { createBotMemoryStore } from "./bot-memory/store.js";
 import { botMemoryToolEntry, withBotMemoryIngress } from "./bot-memory/tool.js";
-import { renderBotOpenWork } from "./bot-open-work/prompt.js";
+import { botOpenWorkPromptTail } from "./bot-open-work/prompt.js";
 import { createBotRegistry, type BotExtensionDeps } from "./bot-runtime/bot-extension.js";
 import { botIngressAllowsTool } from "./bot-runtime/bot-tool-policy.js";
 import { createFauxModels, FAUX_MODEL_REF } from "./bot-runtime/test-support/faux.js";
@@ -238,11 +238,12 @@ async function botChat(options: { userMemory: string; openWork?: BotOpenWorkItem
         fileAuthority: { mode: "full_mac", botHome: true },
         rules: "",
         offeredToolNames: toolNames,
-        openWork: toolNames.has("open_work") ? renderBotOpenWork(openWork(state.openWork)) : "",
         toolGuidance: "",
         lessons: "",
       });
     },
+    // Open work as bot-session-main appends it: after the person's input.
+    promptTail: (_botId, offered) => botOpenWorkPromptTail(offered.toolNames, async () => openWork(state.openWork)),
     memorySection: async (botId, offer) => renderBotMemorySection(await memory.snapshot(botId), offer),
   };
   const fauxModels = createFauxModels();
@@ -557,7 +558,7 @@ describe("prompt prefix stability: causes fixed by later phases", () => {
     assert.deepEqual(comparePromptRequests(requests[0]!, requests[1]!), {});
   });
 
-  test("Bot open work changing between turns does not change system", { todo: "phase 2: Bots append open work" }, async () => {
+  test("Bot open work changing between turns does not change system", async () => {
     const chat = await botChat({ userMemory: "Prefers short answers.", openWork: [openWorkItem("w1", "Draft the weekly note")] });
     const { previous, current } = await twoBotTurns(chat, async () => {
       chat.state.openWork = [openWorkItem("w1", "Draft the weekly note"), openWorkItem("w2", "File the receipt")];

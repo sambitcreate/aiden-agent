@@ -3,6 +3,7 @@ import test from "node:test";
 import Ajv from "ajv";
 import Ajv2020 from "ajv/dist/2020.js";
 import addFormats from "ajv-formats";
+import { Type } from "typebox";
 import { normalizeMcpToolInputSchema } from "./mcp-tool-schema.js";
 
 // Shape emitted by schemars 0.8 (draft-07, `definitions`, float minimums) for:
@@ -224,4 +225,40 @@ test("deep schemas normalize every numeric leaf without a recursive depth cutoff
   }
   assert.deepEqual(normalized, { type: "integer", minimum: 0, maximum: 4_294_967_295 });
   assert.deepEqual(leaf, { type: "integer", format: "uint32" });
+});
+
+test("two servers that send one schema in different key orders produce identical tool bytes", () => {
+  const first = {
+    type: "object",
+    properties: {
+      query: { type: "string", description: "What to find." },
+      limit: { type: "integer", format: "uint8", default: 10 },
+      filters: {
+        type: "object",
+        properties: { since: { type: "string", format: "date-time" }, tags: { type: "array", items: { type: "string" } } },
+      },
+    },
+    required: ["query"],
+    additionalProperties: false,
+  };
+  const second = {
+    additionalProperties: false,
+    required: ["query"],
+    properties: {
+      filters: {
+        properties: { tags: { items: { type: "string" }, type: "array" }, since: { format: "date-time", type: "string" } },
+        type: "object",
+      },
+      limit: { default: 10, format: "uint8", type: "integer" },
+      query: { description: "What to find.", type: "string" },
+    },
+    type: "object",
+  };
+  const bytes = (schema: unknown) => JSON.stringify(Type.Unsafe(normalizeMcpToolInputSchema(schema as object)));
+  assert.equal(bytes(first), bytes(second));
+  // The meaning is kept: the numeric format still becomes its range, and arrays keep their order.
+  const normalized = normalizeMcpToolInputSchema(second);
+  assert.deepEqual(normalized.properties.limit, { default: 10, maximum: 255, minimum: 0, type: "integer" });
+  assert.deepEqual(normalized.required, ["query"]);
+  assert.equal(strictDraft07().compile(normalized)({ query: "x", limit: 256 }), false);
 });
