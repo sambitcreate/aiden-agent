@@ -17,20 +17,35 @@
 // javascript: or data:text/html URL in a URL attribute, CSS url() or an SVG
 // <set>/<animate> of href, a remote src, and JavaScript (in <script> or an
 // on* attribute) that sends such a URL to a navigation or URL sink or writes
-// such markup through an HTML sink. A sink is followed however its literal
-// is written: a plain or optional call (`f?.(...)`), a callee named in
-// brackets (`o['f'](...)`), a tagged template (also read raw, as String.raw
-// passes it), a literal wrapped in a trivial expression (`(…)`, `(0, …)`,
-// `a || …`, `a ? … : …`, an array or a template substitution), an object key
-// Object.assign copies, DOMParser's parseFromString, and an attribute node's
-// value (`attributes.onclick.value`, `getAttributeNode('onclick').value`); an
-// on* attribute node made by createAttribute is refused outright. A name or
-// value computed at run time, a variable, `.apply` and `Reflect.apply` are not
-// followed: the sandbox's CSP is the backstop there. Markup or a handler a
-// script writes is read again up to MAX_NESTED_HTML_DEPTH strings deep;
-// deeper than that it is refused unread (fail closed), not admitted. Labels ("JavaScript: 41%"), comparisons
-// in scripts ("i<base && i>0") and plain strings pass; the sandbox's CSP is
-// what actually blocks loads.
+// such markup through an HTML sink.
+//
+// A sink's literal is followed however it is written:
+// - the call: plain or optional (`f?.(...)`), named in brackets
+//   (`o['f'](...)`), parenthesized (`(o.f)(...)`, `(0, f)(...)`), bound
+//   (`f.bind(o)(...)`) or through `.call`, with its arguments shifted;
+// - the argument: a tagged template (also read raw, as String.raw passes it),
+//   a trivial wrapper (`(…)`, `(0, …)`, `a || …`, `a ? … : …`, an array,
+//   a spread array, a template substitution), or strings joined with `+`,
+//   checked alone and joined, even after a value
+//   (`'<img src=x on' + 'error=…>'`);
+// - the target: a bare `innerHTML =`, `href.baseVal`, an object key that
+//   Object.assign copies (named, computed or `location`), an attribute
+//   node's value (`attributes.onclick.value`, `getAttributeNode`,
+//   `getAttributeNodeNS`, `getNamedItemNS`), DOMParser's parseFromString
+//   (read as HTML for an HTML, XHTML, SVG or computed type; for an XML type
+//   only if it names a namespace the page runs, and refused if it declares
+//   entities), `execCommand('insertHTML', …)` and `navigation.navigate`.
+// An on* attribute node made by createAttribute is refused outright, and so
+// is markup or a handler a script writes more than MAX_NESTED_HTML_DEPTH
+// strings deep (fail closed, not admitted unread).
+//
+// Not followed: names and values computed at run time, variables,
+// destructuring targets, an SVG <set> whose `to` is set by setAttribute,
+// `.apply` and `Reflect.apply`. The sandbox's CSP, which is what actually
+// blocks loads, is the backstop there.
+//
+// Labels ("JavaScript: 41%"), comparisons in scripts ("i<base && i>0") and
+// plain strings pass.
 
 import { Parser, Token, defaultTreeAdapter, type DefaultTreeAdapterMap, type DefaultTreeAdapterTypes, type TreeAdapter } from "parse5";
 
