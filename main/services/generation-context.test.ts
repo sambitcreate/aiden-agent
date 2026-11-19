@@ -1379,4 +1379,9 @@ test("the prompt cache window follows the last request that used the cache on th
   assert.deepEqual(promptCacheWindow(model, messages, { ...warmed, requestStartedAt: 500 }), { ttlMs: 300_000, lastRequestAt: 1_000 });
   assert.deepEqual(promptCacheWindow(model, messages, { ...warmed, model: "other-model" }), { ttlMs: 300_000, lastRequestAt: 1_000 });
   assert.equal(promptCacheWindow(model, [user("a"), cached(5_000, 0)], warmed), undefined);
+  // A reply sent with the hour-long retention counts down its hour; one recorded for another model does not.
+  const long = { provider: model.provider, model: model.id, retention: "long" as const };
+  assert.deepEqual(promptCacheWindow(model, messages, undefined, long), { ttlMs: 3_600_000, lastRequestAt: 1_000 });
+  assert.deepEqual(promptCacheWindow(model, messages, warmed, long), { ttlMs: 3_600_000, lastRequestAt: 270_000 });
+  assert.deepEqual(promptCacheWindow(model, messages, undefined, { ...long, model: "other-model" }), { ttlMs: 300_000, lastRequestAt: 1_000 });
 });

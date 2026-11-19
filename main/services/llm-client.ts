@@ -302,7 +302,8 @@ import {
   createGenerationContextTransform,
   modelRetainsSystemUpdates,
 } from "./generation-context.js";
-import { promptCacheTtlMs } from "./prompt-cache-lifetimes.js";
+import { promptCacheTtlMs, withLongPromptCacheRetention } from "./prompt-cache-lifetimes.js";
+import { chatPromptCacheRetention } from "../../renderer/shared/prompt-cache-retention.js";
 import { chatPromptCacheTelemetry, chatPromptGenerationStopped, chatPromptPrefixCompacted } from "./chat-prompt-cache-state.js";
 import { chatCompactionPrecomputes, precomputeWithinSpendingLimit } from "./compaction-precompute.js";
 import {
@@ -310,6 +311,7 @@ import {
   lastPromptCacheMiss,
   rememberChatContextProfile,
   rememberPromptCacheRefresh,
+  rememberPromptCacheRetention,
 } from "./context-pressure.js";
 import { formatPromptCacheMissLog, withPromptCacheTelemetry } from "./pi-cache-telemetry.js";
 import { chatSideCallPrefixes, withSideCallPrefixLedger } from "./side-call-prefix.js";
@@ -2799,6 +2801,7 @@ async function prepareGeneration(
     compactionEngine: compactionEngineFrom(settings.compactionEngine),
     compactionModelOverrides: settings.compactionModelOverrides,
     cacheWarmingEnabled: settings.cacheWarmingEnabled === true,
+    longPromptCacheRetention: settings.longPromptCacheRetention === true,
     sharedImages,
     botContext,
     botApprovedRoots,
@@ -3198,6 +3201,7 @@ export const llmClient = {
       compactionEngine,
       compactionModelOverrides,
       cacheWarmingEnabled,
+      longPromptCacheRetention,
       sharedImages,
       botContext: preparedBotContext,
       botApprovedRoots,
@@ -4479,7 +4483,16 @@ export const llmClient = {
               },
             }),
           );
-      const promptCacheTtl = promptCacheTtlMs(model);
+      // An hour-long cache is the person's choice for their own chats. Bot
+      // runs, automations and agent harnesses keep the default lifetime, and
+      // side calls ask for the default themselves.
+      const keepsLongPromptCache = longPromptCacheRetention && !harnessProvider && !preparedBotContext &&
+        (options.usageSource === undefined || options.usageSource === "chat") &&
+        authoritativeMode !== "assistant-automation";
+      const requestStream = keepsLongPromptCache ? withLongPromptCacheRetention(observedStream) : observedStream;
+      const promptCacheRetention = keepsLongPromptCache ? chatPromptCacheRetention({ longPromptCacheRetention }, model) : "short";
+      rememberPromptCacheRetention(params.chatId, { provider: model.provider, model: model.id, retention: promptCacheRetention });
+      const promptCacheTtl = promptCacheTtlMs(model, promptCacheRetention);
       candidate = new PiAgentRuntimeHarness({
         contributions: { ...runtimeContributions, tools: runtimeTools },
         deferredTools,
@@ -4531,7 +4544,7 @@ export const llmClient = {
           });
         },
         ...agentRuntimeOptions,
-        streamFn: observedStream,
+        streamFn: requestStream,
         convertToLlm,
         ...(params.providerId === GOOGLE_PROVIDER_ID &&
         runtime.apiKey &&

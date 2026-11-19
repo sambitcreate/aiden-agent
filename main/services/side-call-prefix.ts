@@ -23,6 +23,7 @@ import type { StreamFn } from "@earendil-works/pi-agent-core";
 import type {
   Api,
   AssistantMessage,
+  CacheRetention,
   Message,
   Model,
   ModelsSimpleStreamOptions,
@@ -198,7 +199,7 @@ function replayable(model: Model<Api>, options: SimpleStreamOptions | undefined)
 }
 
 export function createSideCallPrefixLedger(
-  settings: { maxChats?: number; now?: () => number; ttlMs?: (model: Model<Api>) => number } = {},
+  settings: { maxChats?: number; now?: () => number; ttlMs?: (model: Model<Api>, retention?: CacheRetention) => number } = {},
 ): SideCallPrefixLedger {
   const maxChats = settings.maxChats ?? 8;
   const now = settings.now ?? Date.now;
@@ -213,7 +214,8 @@ export function createSideCallPrefixLedger(
     begin(chatKey, model, context, options, approvedMemoryFacts) {
       entries.delete(chatKey);
       sweep();
-      const ttl = ttlMs(model);
+      // The parent's entry lives as long as the retention it was written with.
+      const ttl = ttlMs(model, options?.cacheRetention);
       // Without a documented lifetime there is no way to tell a warm prefix
       // from a cold one, and a cold continuation costs more than the
       // isolated call it replaces.
@@ -313,9 +315,9 @@ export interface SideCallContinuationOptions {
   maxRetries?: number;
   maxRetryDelayMs?: number;
   /**
-   * Replaces the parent's retention. A request that is never continued, such
-   * as a compaction summary, keeps the short one instead of paying to write
-   * the parent's longer one.
+   * Side calls always ask for the default retention, even after a parent that
+   * kept its cache for an hour: the call reads the parent's entry, and only
+   * the few tokens it adds are written, at the cheaper short-lived price.
    */
   cacheRetention?: "short";
 }
@@ -342,7 +344,7 @@ export function sideCallContinuation(
       ...(replay.temperature === undefined ? {} : { temperature: replay.temperature }),
       ...(replay.transport === undefined ? {} : { transport: replay.transport }),
       ...(replay.toolChoice === undefined ? {} : { toolChoice: structuredClone(replay.toolChoice) }),
-      cacheRetention: call.cacheRetention ?? replay.cacheRetention ?? "short",
+      cacheRetention: call.cacheRetention ?? "short",
       disableContinuation: true,
       ...(replay.reasoning ? { reasoning: replay.reasoning } : {}),
       ...(call.signal ? { signal: call.signal } : {}),

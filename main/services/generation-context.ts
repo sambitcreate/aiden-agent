@@ -710,6 +710,13 @@ export interface PromptCacheRefresh {
   requestStartedAt: number;
 }
 
+/** The retention the chat's latest request from this provider and model asked for. */
+export interface PromptCacheRetentionRecord {
+  provider: string;
+  model: string;
+  retention: "short" | "long";
+}
+
 /**
  * The cache window left by the latest request from this provider and model
  * that read or wrote the prompt cache. A model switch starts a new cache, so
@@ -720,8 +727,11 @@ export function promptCacheWindow(
   model: Parameters<typeof promptCacheTtlMs>[0],
   messages: readonly AgentMessage[],
   refresh?: PromptCacheRefresh,
+  retention?: PromptCacheRetentionRecord,
 ): PromptCacheWindowV1 | undefined {
-  const ttlMs = promptCacheTtlMs(model);
+  // Another model's retention says nothing about this model's cache.
+  const kept = retention?.provider === model.provider && retention.model === model.id ? retention.retention : "short";
+  const ttlMs = promptCacheTtlMs(model, kept);
   if (ttlMs === 0) return undefined;
   for (let index = messages.length - 1; index >= 0; index--) {
     const message = messages[index];

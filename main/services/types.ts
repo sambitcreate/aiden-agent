@@ -832,6 +832,11 @@ export interface AppSettings extends AidenLiveSettingsFields {
   compactionModelOverrides?: CompactionModelOverrides;
   /** Explicit opt-in to paid cache refreshes during active foreground runs. */
   cacheWarmingEnabled?: boolean;
+  /**
+   * Explicit opt-in to hour-long prompt caches for chat requests on the
+   * providers in `prompt-cache-retention.ts`; side calls keep the default.
+   */
+  longPromptCacheRetention?: boolean;
   /** Longest wait, in hours, for a usage limit to clear before a reply fails; 0 turns waiting off. Absent means 6. */
   usageLimitWaitHours?: import("../../renderer/shared/usage-limits.js").UsageLimitWaitHours;
   /**

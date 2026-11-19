@@ -141,6 +141,28 @@ describe("side-call prefix ledger", () => {
     assert.equal(await ledger.latest(CHAT_ID), undefined);
   });
 
+  test("an hour-long parent stays continuable for its hour, and its side call asks for the default lifetime", async () => {
+    let now = 1_000;
+    const ledger = createSideCallPrefixLedger({ now: () => now });
+    const claude = model({ provider: "anthropic", id: "claude-opus-5", name: "Claude Opus 5" });
+    ledger.begin(CHAT_ID, claude, context, { cacheRetention: "long" })(reply("Hi."));
+    now += 30 * 60_000;
+    const prefix = await ledger.latest(CHAT_ID);
+    assert.ok(prefix, "half an hour on, the hour-long entry is still warm");
+    const request = sideCallContinuation(prefix, [{ role: "user", content: "Side question", timestamp: 9 }], {});
+    assert.equal(request.options.cacheRetention, "short");
+    now += 30 * 60_000;
+    assert.equal(await ledger.latest(CHAT_ID), undefined, "the entry lapses with the hour");
+
+    // The same parent at the default lifetime lapses after five minutes.
+    ledger.begin(CHAT_ID, claude, context)(reply("Hi."));
+    now += 5 * 60_000;
+    assert.equal(await ledger.latest(CHAT_ID), undefined);
+    // A model with no documented lifetime is never continued; its side calls stay isolated.
+    ledger.begin(CHAT_ID, model({ provider: "provider-a", api: "openai-completions" }), context)(reply("Hi."));
+    assert.equal(await ledger.latest(CHAT_ID), undefined);
+  });
+
   test("no prefix is kept without a documented cache lifetime", async () => {
     const ledger = createSideCallPrefixLedger({ ttlMs: () => 0 });
     ledger.begin(CHAT_ID, model(), context)(reply("Hi."));

@@ -419,7 +419,7 @@ export function withPromptCacheTelemetry(
         messages: context.messages,
         model,
         cacheRetention: streamOptions?.cacheRetention,
-        cacheTtlMs: promptCacheTtlMs(model),
+        cacheTtlMs: promptCacheTtlMs(model, streamOptions?.cacheRetention),
       });
     } catch (error) {
       options.onError?.(error);

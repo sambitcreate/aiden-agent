@@ -428,6 +428,10 @@ export function registerProviderHandlers(): void {
       next.compactionEngine = p.compactionEngine;
     }
     if (p.compactionModelOverrides !== undefined) next.compactionModelOverrides = parseCompactionModelOverrides(p.compactionModelOverrides);
+    if (p.longPromptCacheRetention !== undefined) {
+      if (typeof p.longPromptCacheRetention !== "boolean") throw new Error("Invalid prompt cache lifetime setting.");
+      next.longPromptCacheRetention = p.longPromptCacheRetention;
+    }
     if (p.cacheWarmingEnabled !== undefined) {
       if (typeof p.cacheWarmingEnabled !== "boolean") throw new Error("Invalid cache warming setting.");
       next.cacheWarmingEnabled = p.cacheWarmingEnabled;

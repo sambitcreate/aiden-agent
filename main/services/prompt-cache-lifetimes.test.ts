@@ -3,8 +3,9 @@ import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 import test from "node:test";
-import type { Api, Model } from "@earendil-works/pi-ai";
-import { promptCacheTtlMs } from "./prompt-cache-lifetimes.js";
+import { normalizeContext, type Api, type Model } from "@earendil-works/pi-ai";
+import type { StreamFn } from "@earendil-works/pi-agent-core";
+import { promptCacheTtlMs, withLongPromptCacheRetention } from "./prompt-cache-lifetimes.js";
 
 const require = createRequire(import.meta.url);
 const catalogDir = join(dirname(require.resolve("@earendil-works/pi-ai/package.json")), "dist/providers/data");
@@ -93,4 +94,21 @@ test("an hour-long retention is timed only where the provider keeps an hour, and
   assert.equal(promptCacheTtlMs(catalogModel("openai", "gpt-5.6-sol"), "long"), 0);
   const custom = { provider: "custom-proxy", id: "claude-opus-5", api: "anthropic-messages" as Api };
   assert.equal(promptCacheTtlMs({ ...custom, promptCache: { short: 300, long: 1800 } }, "long"), 30 * MINUTE);
+});
+
+test("a chat request asks for the hour only on a model that keeps one, and an explicit retention wins", async () => {
+  const seen: Array<string | undefined> = [];
+  const stream = withLongPromptCacheRetention(((_model, _context, options) => {
+    seen.push(options?.cacheRetention);
+    return undefined as never;
+  }) as StreamFn);
+  const context = normalizeContext({ messages: [] });
+  await stream(catalogModel("anthropic", "claude-opus-5") as never, context, {});
+  await stream(catalogModel("amazon-bedrock", "us.anthropic.claude-sonnet-4-5-20250929-v1:0") as never, context, undefined);
+  await stream(catalogModel("amazon-bedrock", "us.anthropic.claude-sonnet-4-20250514-v1:0") as never, context, {});
+  await stream(catalogModel("openai", "gpt-5.6-sol") as never, context, {});
+  await stream({ ...catalogModel("anthropic", "claude-opus-5"), compat: { supportsLongCacheRetention: false } } as never, context, {});
+  await stream(catalogModel("anthropic", "claude-opus-5") as never, context, { cacheRetention: "none" });
+  await stream(catalogModel("anthropic", "claude-opus-5") as never, context, { cacheRetention: "short" });
+  assert.deepEqual(seen, ["long", "long", undefined, undefined, undefined, "none", "short"]);
 });

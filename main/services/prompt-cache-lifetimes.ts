@@ -1,3 +1,4 @@
+import type { StreamFn } from "@earendil-works/pi-agent-core";
 import type { Api, CacheRetention, Model } from "@earendil-works/pi-ai";
 import { LONG_PROMPT_CACHE_TTL_MS, supportsLongPromptCacheRetention } from "../../renderer/shared/prompt-cache-retention.js";
 
@@ -106,4 +107,17 @@ function isThirtyMinuteOpenAiModel(model: PromptCacheModel): boolean {
   const major = Number(match[1]);
   const minor = Number(match[2] ?? 0);
   return major > 5 || (major === 5 && minor >= 6);
+}
+
+/**
+ * Ask for an hour-long prompt cache on each request whose model Pi sends one
+ * for (see `supportsLongPromptCacheRetention`). A request that already names a
+ * retention keeps it. Wrap it outermost, so telemetry, the side-call ledger
+ * and cache warming all see the retention the provider is asked for.
+ */
+export function withLongPromptCacheRetention(streamFn: StreamFn): StreamFn {
+  return (model, context, options) =>
+    options?.cacheRetention === undefined && supportsLongPromptCacheRetention(model)
+      ? streamFn(model, context, { ...options, cacheRetention: "long" })
+      : streamFn(model, context, options);
 }
