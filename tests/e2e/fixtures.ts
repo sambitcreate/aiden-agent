@@ -788,10 +788,10 @@ export async function finishLmStudioOnboarding(page: Page): Promise<void> {
  * where Aiden Live can start (macOS) and the draft is empty, the Live button
  * that takes Send's place.
  */
+export const COMPOSER_PRIMARY_NAME = /^(Send message|Queue message|Set up Aiden Live|Start Aiden Live)$/u;
+
 export function composerPrimaryButton(page: Page): Locator {
-  return page.getByRole("button", {
-    name: /^(Send message|Queue message|Set up Aiden Live|Start Aiden Live)$/u,
-  });
+  return page.getByRole("button", { name: COMPOSER_PRIMARY_NAME });
 }
 
 /**

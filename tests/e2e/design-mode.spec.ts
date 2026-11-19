@@ -12,6 +12,7 @@ import {
   WORKSPACE_NAME,
 } from "./design-mode-helpers";
 import {
+  COMPOSER_PRIMARY_NAME,
   expect,
   finishLmStudioOnboarding,
   test,
@@ -195,7 +196,8 @@ async function expectComposerFooterClear(
     }
     return { found, names: pieces.map((piece) => piece.name) };
   });
-  const required = [/^Attach files or images$/u, /^(Send|Queue) message$/u];
+  // An empty draft on macOS shows Aiden Live in Send's place.
+  const required = [/^Attach files or images$/u, COMPOSER_PRIMARY_NAME];
   for (const name of required)
     expect(problems.names.some((piece) => name.test(piece))).toBe(true);
   expect(problems.names.some((piece) => /^Context usage/u.test(piece))).toBe(
