@@ -52,10 +52,14 @@ import { createGenerativeUiExtension, shouldEnableGenerativeUiExtension } from "
 import { createAskUserQuestionExtension, shouldEnableAskUserQuestionExtension } from "./ask-user-question-extension.js";
 import { ROUTINE_NOTES_TOOL } from "./bot-runtime/bot-tool-policy.js";
 import type { PiAgentRuntimeExtension } from "./pi-agent-runtime-harness.js";
+import { workspaceApprovalPolicy, type ApprovalWorkspaceFields } from "../../renderer/shared/approval-mode.js";
+import { legacyAccessOf } from "./approval-gate/run-approval.js";
+import { workspaceToolApproval } from "./approval-gate/workspace-tool-approval.js";
 import {
   comparePromptRequests,
   createPromptPrefixHarness,
   createPromptRequestRecorder,
+  type PromptPrefixChatState,
   type PromptPrefixHarnessOptions,
   type PromptProviderContext,
   type PromptPrefixTurnInput,
@@ -126,7 +130,26 @@ async function workspaceChat(options: {
   });
 }
 
-type TurnHead = { assembly: ChatPromptAssembly } | { systemPrompt: string; tools: AgentTool[] };
+type TurnHead = { assembly: ChatPromptAssembly } | { systemPrompt: string; tools: AgentTool[] } | { chatState: PromptPrefixChatState };
+
+/**
+ * A workspace chat whose branch, permission, memory and canvas the harness
+ * freezes at its head and updates in the turn tail, as llm-client does.
+ */
+function statefulChat(state: {
+  branch?: string;
+  permission?: ChatSystemPromptPermission;
+  extensions?: PiAgentRuntimeExtension[];
+} = {}): { chatState: PromptPrefixChatState } {
+  return {
+    chatState: {
+      branch: state.branch ?? "main",
+      permission: state.permission ?? "ask",
+      extensions: state.extensions ?? [],
+      assembly: (head) => workspaceChat({ ...(head.branch ? { branch: head.branch } : {}), permission: head.permission, extensions: head.extensions }),
+    },
+  };
+}
 
 const lastOf = (requests: readonly RecordedPromptRequest[]) => requests[requests.length - 1]!;
 
@@ -872,37 +895,88 @@ describe("prompt prefix stability: causes fixed by later phases", () => {
     assert.deepEqual(comparePromptRequests(previous, current), {});
   });
 
-  test("branch switch does not change system", { todo: "phase 3: frozen per-chat state" }, async () => {
+  /** The newest user message's text: the prompt, then what llm-client journals after it. */
+  const tailOf = (request: RecordedPromptRequest) => {
+    const texts = userTexts(request);
+    return texts[texts.length - 1] ?? "";
+  };
+
+  test("branch switch does not change system", async () => {
     const { previous, current } = await twoTurns(
       {},
-      { assembly: await workspaceChat({ branch: "main" }) },
-      { assembly: await workspaceChat({ branch: "feature/login" }) },
+      statefulChat({ branch: "main" }),
+      statefulChat({ branch: "feature/login" }),
     );
-    assert.ok(current.carries("feature/login"), "the new branch still reaches turn 2");
+    assert.match(tailOf(current), /<state_update>[\s\S]*Git branch: `feature\/login`/u, "the new branch reaches turn 2 after its prompt");
     assert.deepEqual(comparePromptRequests(previous, current), {});
   });
 
-  test("permission mode change does not change system", { todo: "phase 3: frozen per-chat state" }, async () => {
+  test("permission mode change does not change system", async () => {
     const { previous, current } = await twoTurns(
       {},
-      { assembly: await workspaceChat({ permission: "ask" }) },
-      { assembly: await workspaceChat({ permission: "full" }) },
+      statefulChat({ permission: "ask" }),
+      statefulChat({ permission: "full" }),
     );
     assert.ok(current.carries("run commands directly"), "the new permission still reaches turn 2");
     assert.deepEqual(comparePromptRequests(previous, current), {});
   });
 
-  test("memory edit does not change system", { todo: "phase 3: frozen per-chat state" }, async () => {
-    const memory = async (facts: MemoryFact[]) => workspaceChat({
+  test("memory edit does not change system", async () => {
+    const memory = async (facts: MemoryFact[]) => statefulChat({
       extensions: [await createMemoryExtension({ store: memoryStore(facts), scope: memoryScope })],
     });
     const { previous, current } = await twoTurns(
       {},
-      { assembly: await memory([memoryFact("m1", "Prefers short answers.")]) },
-      { assembly: await memory([memoryFact("m1", "Prefers short answers."), memoryFact("m2", "Uses pnpm.")]) },
+      await memory([memoryFact("m1", "Prefers short answers."), memoryFact("m3", "Deploys on Fridays.")]),
+      await memory([memoryFact("m1", "Prefers short answers."), memoryFact("m2", "Uses pnpm.")]),
     );
-    assert.ok(current.carries("Uses pnpm."), "the new fact still reaches turn 2");
+    // Only the difference goes out: the added fact and the removed one.
+    const tail = tailOf(current);
+    assert.match(tail, /Added facts:\n- \[memory:m2\] Uses pnpm\./u);
+    assert.match(tail, /Removed facts:\n- \[memory:m3\] Deploys on Fridays\./u);
+    assert.doesNotMatch(tail, /memory:m1/u, "an unchanged fact is not repeated");
     assert.deepEqual(comparePromptRequests(previous, current), {});
+  });
+
+  test("after a permission mode change the next request states the mode the approval gate enforces", async () => {
+    // llm-client states `legacyAccessOf` of the workspace's policy and gates
+    // each call on that same policy, read when the turn starts.
+    const turnUnder = (workspace: ApprovalWorkspaceFields) => {
+      const policy = workspaceApprovalPolicy(workspace, "ask");
+      const permission = legacyAccessOf(policy);
+      const gate = workspaceToolApproval({
+        toolName: "background_job",
+        args: { action: "start", command: "npm test" },
+        permission,
+        workspaceId: "w1",
+        approval: { mode: policy.mode, macGrants: policy.macGrants },
+        judgeAvailable: true,
+      }).decision.outcome;
+      return { permission, gate };
+    };
+    const asking = turnUnder({ permission: "ask" });
+    const direct = turnUnder({ permission: "ask", approvalMode: "never", macGrants: { shell: true, files: true } });
+    assert.equal(asking.gate, "ask");
+    assert.equal(direct.gate, "allow");
+
+    const harness = createPromptPrefixHarness();
+    const turn = (permission: ChatSystemPromptPermission, prompt: string) => harness.turn({
+      prompt, responses: reply("Done."), ...statefulChat({ permission }),
+    });
+    const [one] = await turn(asking.permission, "Run the tests.");
+    const [two] = await turn(direct.permission, "Run them again.");
+    const [three] = await turn(asking.permission, "Once more.");
+    // The last statement of the mode each request makes is the mode its gate enforces.
+    const lastMode = (request: RecordedPromptRequest) => {
+      const statements = [...userTexts(request).join("\n").matchAll(/Permission: (.+)/gu)].map((match) => match[1]);
+      return statements[statements.length - 1];
+    };
+    assert.equal(lastMode(one!), undefined, "turn 1 states its mode in system");
+    assert.ok(one!.carries("The user must approve each file write and shell command before it runs."));
+    assert.equal(lastMode(two!), "You may make changes and run commands directly.");
+    assert.equal(lastMode(three!), "The user must approve each file write and shell command before it runs.");
+    assert.deepEqual(comparePromptRequests(one!, two!), {});
+    assert.deepEqual(comparePromptRequests(lastOf([two!]), three!), {});
   });
 
   test("a fourth screenshot leaves earlier messages unchanged", { todo: "phase 7: screenshot trimming in batches" }, async () => {

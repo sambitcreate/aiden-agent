@@ -389,6 +389,14 @@ async function repairTornFinalLine(filePath: string): Promise<boolean> {
  * Custom marker entries are ignored by Session.buildContext(), while making
  * crash recovery and repeated generation setup idempotent.
  */
+/** Whether the branch already holds this visible message (the sync skips it, and anything meant to follow it). */
+export function piBranchHoldsChatMessage(branch: readonly PiSessionEntry[], chatMessageId: string): boolean {
+  return branch.some((entry) =>
+    entry.type === "custom" &&
+    entry.customType === AIDEN_CHAT_MESSAGE_MARKER &&
+    markerId(entry.data) === chatMessageId);
+}
+
 export async function syncChatMessagesToPiSession(
   session: PiSessionPort,
   messages: readonly ChatMessage[],

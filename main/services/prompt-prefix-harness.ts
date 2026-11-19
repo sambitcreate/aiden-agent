@@ -10,7 +10,9 @@
 // tool loading (applied to the initial context and again between tool turns
 // through `createPiTurnContextPreparation`), the
 // `createGenerationContextTransform` projection, and
-// `PiAgentRuntimeHarness.runManaged` journaling into that session. llm-client
+// `PiAgentRuntimeHarness.runManaged` journaling into that session, with the
+// chat's frozen state planned against that journal (`planChatTurnState`) the
+// way llm-client plans it. llm-client
 // itself needs Electron and config stores, so it is not driven here; each
 // turn reads its history back from the in-memory journal the previous runs
 // wrote, so the harness keeps exactly what llm-client would keep.
@@ -25,7 +27,16 @@ import { anthropicMessagesApi } from "@earendil-works/pi-ai/api/anthropic-messag
 import { openAIResponsesApi } from "@earendil-works/pi-ai/api/openai-responses.lazy";
 import { createFauxCore, type FauxResponseStep } from "@earendil-works/pi-ai/providers/faux";
 import type { AgentsInstructionOptions } from "./agents-instructions.js";
+import {
+  extensionChatState,
+  journaledChatState,
+  planChatTurnState,
+  recordChatHead,
+  withHeadChatState,
+  type ChatTurnState,
+} from "./chat-frozen-state.js";
 import type { ChatPromptAssembly } from "./chat-prompt-assembly.js";
+import type { PiAgentRuntimeExtension } from "./pi-agent-runtime-harness.js";
 import { createChatAgentsInstructions, createChatMcpServersSection } from "./chat-prompt-sections.js";
 import { createGenerationContextTransform, updateGenerationContextOptions, type GenerationContextOptions } from "./generation-context.js";
 import { createMcpServersSectionRefresher } from "./mcp-server-instructions.js";
@@ -72,7 +83,7 @@ export type PromptPrefixTurnInput = {
   prompt: string;
   /**
    * Host messages llm-client journals right after the prompt, built with the
-   * production helper (`hookContextMessage`).
+   * production helpers (`hookContextMessage`); a frozen-state update follows them.
    */
   following?: (promptTimestamp: number) => AgentMessage[];
   /** Scripted assistant steps for this turn, in order. */
@@ -83,7 +94,23 @@ export type PromptPrefixTurnInput = {
       assembly: ChatPromptAssembly;
     }
   | { systemPrompt: string; tools: AgentTool[] }
+  | {
+      /**
+       * The chat state this turn reads. The harness plans it against the
+       * journal as llm-client does and builds the head from the planned state.
+       */
+      chatState: PromptPrefixChatState;
+    }
 );
+
+export interface PromptPrefixChatState {
+  branch: string | null;
+  permission: ChatTurnState["permission"];
+  /** The turn's runtime extensions; the memory and canvas ones carry their current sections. */
+  extensions: PiAgentRuntimeExtension[];
+  /** Builds the head from the state system states, with the extensions frozen to it. */
+  assembly(head: { branch: string | null; permission: ChatTurnState["permission"]; extensions: PiAgentRuntimeExtension[] }): Promise<ChatPromptAssembly>;
+}
 
 export interface RecordedPromptRequest {
   /** 1-based user turn. */
@@ -269,22 +296,45 @@ export function createPromptPrefixHarness(options: PromptPrefixHarnessOptions = 
     core.setResponses(input.responses);
     journal ??= new InMemorySessionRepo().create({ id: "prompt-prefix-harness" }).then((native) => createPiSessionPort(native));
     const session = await journal;
+    let following = input.following;
+    let resolved: { assembly: ChatPromptAssembly } | { systemPrompt: string; tools: AgentTool[] };
+    if ("chatState" in input) {
+      const { chatState } = input;
+      const plan = planChatTurnState({
+        journaled: journaledChatState(await session.getBranch()),
+        current: { branch: chatState.branch, permission: chatState.permission, ...extensionChatState(chatState.extensions) },
+        prompt: true,
+      });
+      if (plan.reheaded) await recordChatHead(session, plan.head);
+      resolved = {
+        assembly: await chatState.assembly({
+          branch: plan.head.branch,
+          permission: plan.head.permission,
+          extensions: withHeadChatState(chatState.extensions, plan.head),
+        }),
+      };
+      const given = input.following;
+      const update = plan.update;
+      if (update) following = (timestamp) => [...(given?.(timestamp) ?? []), update(timestamp)];
+    } else {
+      resolved = input;
+    }
     // llm-client reads the chat so far back from its Pi journal each turn.
     const history = (await session.buildContext()).messages;
-    const systemPrompt = "assembly" in input ? input.assembly.systemPrompt : input.systemPrompt;
-    const tools = "assembly" in input ? input.assembly.toolsFor(history) : input.tools;
-    const onDemandTools = "assembly" in input ? input.assembly.onDemandTools : undefined;
+    const systemPrompt = "assembly" in resolved ? resolved.assembly.systemPrompt : resolved.systemPrompt;
+    const tools = "assembly" in resolved ? resolved.assembly.toolsFor(history) : resolved.tools;
+    const onDemandTools = "assembly" in resolved ? resolved.assembly.onDemandTools : undefined;
     const agentsInstructions = options.agentsInstructions
       ? await createChatAgentsInstructions({ ...options.agentsInstructions, chatId: HARNESS_CHAT_ID, revalidate: async () => {} })
       : undefined;
-    const deferredTools = "assembly" in input ? input.assembly.deferredTools : [];
+    const deferredTools = "assembly" in resolved ? resolved.assembly.deferredTools : [];
     const codemode = tools.some((tool) => tool.name === "codemode");
     runtime = undefined;
     const lateMcp = options.lateMcp;
     const mcpServersSection = lateMcp
       // llm-client: the turn's admitted tools until the runtime exists, then its callable inventory.
       ? createChatMcpServersSection({
-          inventory: () => runtime?.getCallableTools() ?? ("assembly" in input ? input.assembly.contributions.tools : tools),
+          inventory: () => runtime?.getCallableTools() ?? ("assembly" in resolved ? resolved.assembly.contributions.tools : tools),
           declared: new Set(tools.map((tool) => tool.name)),
           latePending: () => lateMcp.pending(),
         })
@@ -300,7 +350,7 @@ export function createPromptPrefixHarness(options: PromptPrefixHarnessOptions = 
     };
     let initialMessages: AgentMessage[] = [...history];
     // llm-client: the head declares the chat's fixed tools, the journal the loaded ones.
-    const head = createInitialSystemMessage(systemPrompt, (onDemandTools && "assembly" in input ? input.assembly.headTools : tools).map(toToolDeclaration));
+    const head = createInitialSystemMessage(systemPrompt, (onDemandTools && "assembly" in resolved ? resolved.assembly.headTools : tools).map(toToolDeclaration));
     if (head) initialMessages = [head, ...initialMessages];
     const prepare = async <C extends { messages: AgentMessage[]; tools?: AgentTool[] }>(context: C): Promise<C> => {
       let prepared = context;
@@ -346,7 +396,7 @@ export function createPromptPrefixHarness(options: PromptPrefixHarnessOptions = 
     const outcome = await runtime.runManaged({
       kind: "append-and-run",
       message: { role: "user", content: input.prompt, timestamp },
-      ...(input.following ? { following: input.following(timestamp) } : {}),
+      ...(following ? { following: following(timestamp) } : {}),
     });
     if (outcome.kind !== "completed") throw new Error(`Prompt prefix harness turn ${thisTurn} ended ${outcome.kind}.`);
     return recorded;

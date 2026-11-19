@@ -273,6 +273,7 @@ import {
   piCompactionSessionStore,
   recordPiEffectRecoveryBoundary,
   syncChatMessagesToPiSession,
+  piBranchHoldsChatMessage,
   projectVisibleHistoryWithoutSkills,
   ensurePiForkSummary,
   type PiVisibleTurnLease,
@@ -426,6 +427,13 @@ import { createPiCodemodeTool } from "./pi-codemode.js";
 import { createPiToolDiscovery } from "./pi-tool-discovery.js";
 import { NO_LATE_MCP_DISCOVERY, type McpLateDiscovery } from "./mcp-tool-discovery-core.js";
 import { isPiCodemodeCallable } from "./pi-runtime-tool.js";
+import {
+  extensionChatState,
+  journaledChatState,
+  planChatTurnState,
+  recordChatHead,
+  withHeadChatState,
+} from "./chat-frozen-state.js";
 import { assembleChatPrompt, buildWorkspaceChatBasePrompt } from "./chat-prompt-assembly.js";
 import {
   PiAgentRuntimeHarness,
@@ -3873,6 +3881,24 @@ export const llmClient = {
               truncated: false,
             };
       const telegramInteractive = options.interactionSurface === "telegram";
+      const skillsEnabledForTurn = (await configStore.getSettings()).skillsEnabled !== false;
+      // The branch, permission mode, memory and canvas system states are the
+      // chat head's, journaled with it; a change since goes to the model as a
+      // `<state_update>` after this turn's prompt, so system stays the cached
+      // prefix. A skills-free turn reads a projection, not the journal, so it
+      // states the current values and records no head. The approval gate
+      // keeps enforcing the current mode, which the update names.
+      const chatStatePlan = planChatTurnState({
+        journaled: skillsEnabledForTurn ? journaledChatState(await piSession.getBranch()) : undefined,
+        current: {
+          branch: git.branch ?? null,
+          permission,
+          ...extensionChatState(runtimeExtensions),
+        },
+        prompt: generationChat.messages.some((message) => message.role === "user"),
+      });
+      const headBranch = chatStatePlan.head.branch ?? undefined;
+      const headPermission = chatStatePlan.head.permission;
       let hostPromptSkills: string | undefined;
       const baseSystemPrompt =
         authoritativeMode === "assistant" || authoritativeMode === "assistant-unattended"
@@ -3896,16 +3922,16 @@ export const llmClient = {
           : authoritativeMode === "assistant-automation"
             ? telegramInteractive
               ? withTelegramAgentContract(
-                  await buildSystemPrompt(folderPath, git.branch, permission, false, false),
+                  await buildSystemPrompt(folderPath, headBranch, headPermission, false, false),
                   { workspaceBound: Boolean(folderPath) },
                 )
               : withUnattendedAssistantContract(
-                  await buildSystemPrompt(folderPath, git.branch, permission, false, false),
+                  await buildSystemPrompt(folderPath, headBranch, headPermission, false, false),
                 )
             : await buildWorkspaceChatBasePrompt({
                 folderPath,
-                branch: git.branch,
-                permission,
+                branch: headBranch,
+                permission: headPermission,
                 skillSnapshot,
                 tools: toolsWithRuntimeContributions,
                 noWorkspace,
@@ -3928,7 +3954,7 @@ export const llmClient = {
           : {}),
         tools,
         resources: piResourcesForSkillSnapshot(skillSnapshot),
-        extensions: runtimeExtensions,
+        extensions: withHeadChatState(runtimeExtensions, chatStatePlan.head),
         extensionRevision: runtimeExtensionSnapshot.revision,
         modelOptions: runtime.provider.modelMetadata?.[model.id]?.overrides,
         allowOnDemandTools: !preparedBotContext,
@@ -4064,7 +4090,6 @@ export const llmClient = {
         signal: initialization.controller.signal,
         onStoreError: (message, error) => logger.error("hooks", message, error),
       });
-      const skillsEnabledForTurn = (await configStore.getSettings()).skillsEnabled !== false;
       // A forked chat's summary of where its source went after the fork
       // point sits right after the last copied message.
       const forkSummary = generationChat.forkedFrom?.summary;
@@ -4143,15 +4168,28 @@ export const llmClient = {
             contentOverrides.get(currentUser.id),
           )
         : undefined;
-      turnFollowingMessages =
-        currentPromptMessage && hookTurnContext
-          ? [hookContextMessage(hookTurnContext, currentPromptMessage.timestamp)]
-          : [];
+      turnFollowingMessages = currentPromptMessage
+        ? [
+            ...(hookTurnContext ? [hookContextMessage(hookTurnContext, currentPromptMessage.timestamp)] : []),
+            ...(chatStatePlan.update ? [chatStatePlan.update(currentPromptMessage.timestamp)] : []),
+          ]
+        : [];
       // One read of the journal's whole branch gives both the model context
       // and the run's starting taint. Outside content already in the
       // transcript taints the run from the start, including what a compaction
       // folded away.
       const journalBranch = await promptJournal.getBranch();
+      // A rebuilt head is journaled before this turn's prompt, and only with
+      // its update: a retried prompt the journal already holds keeps this
+      // turn's update in memory, so its head is left unrecorded and rebuilt
+      // again next turn rather than contradicting what the journal says.
+      if (
+        chatStatePlan.reheaded &&
+        skillsEnabledForTurn &&
+        !(chatStatePlan.update && currentUser && piBranchHoldsChatMessage(journalBranch, currentUser.id))
+      ) {
+        await recordChatHead(promptJournal, chatStatePlan.head);
+      }
       let initialMessages = (await promptJournal.buildContext(journalBranch)).messages;
       if (onDemandTools) {
         // Tools this chat already loaded or called stay declared from the start.
