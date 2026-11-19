@@ -12,6 +12,7 @@ import {
   TURN_NOTE_CUSTOM_TYPE,
   turnNoteMessage,
   withoutForgottenFactsSession,
+  withoutStatedMemoryFacts,
 } from "./chat-frozen-state.js";
 import { createPiSessionPort } from "./pi-session-port.js";
 import { InMemorySessionRepo } from "./pi-session-repository-port.js";
@@ -263,4 +264,26 @@ test("a turn note is a hidden message only when some note applies", async () => 
   await runTurn(port, base);
   await port.appendMessage(note);
   assert.deepEqual(journaledChatState(await port.getBranch()).announced, chatStateRecord(base));
+});
+
+test("a summary keeps lines that only share words with a fact, and loses every statement of it", () => {
+  const goFact = "- [memory:m1] Uses Go";
+  const kept = withoutStatedMemoryFacts("## Done\n- Migrated the Go service; uses gofmt\n- Reviewed the gopher logo", [goFact]);
+  assert.deepEqual(kept, { text: "## Done\n- Migrated the Go service; uses gofmt\n- Reviewed the gopher logo", restated: false });
+
+  const restatements = [
+    ["- [memory:m1] Uses Go", "- The user uses go."],
+    ["- [memory:m2] Lives in Paris.", "- The user lives in Paris"],
+    ["- [memory:m3] Works at Smith & Sons", "- Works at Smith &amp; Sons as a designer"],
+    ["- [memory:m4] Prefers   tabs", "- PREFERS TABS over spaces"],
+  ] as const;
+  for (const [fact, line] of restatements) {
+    const result = withoutStatedMemoryFacts(`## Goal\n${line}\n- Ship the release`, [fact]);
+    assert.deepEqual(result, { text: "## Goal\n- Ship the release", restated: false }, line);
+  }
+});
+
+test("a fact split across kept lines is reported as restated", () => {
+  const result = withoutStatedMemoryFacts("- The user lives in\nParis, near the office", ["- [memory:m2] Lives in Paris."]);
+  assert.equal(result.restated, true);
 });

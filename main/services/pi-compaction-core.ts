@@ -4,7 +4,7 @@ import { compileVccInWorker } from "./pi-vcc/worker-client.js";
 import { VccError } from "./pi-vcc/errors.js";
 import { writeDiagnosticEvent } from "./diagnostic-journal.js";
 import { type AgentMessage, type ThinkingLevel } from "@earendil-works/pi-agent-core";
-import { DEFAULT_COMPACTION_SETTINGS, CompactionError, calculateContextTokens, compact, estimateContextTokens, estimateTokens, prepareCompaction, shouldCompact, uuidv7, TODO_CONTEXT, withAbortSignal, type CompactionSettings, type CompactionPreparation, type CompactResult } from "./pi-legacy-harness.js";
+import { DEFAULT_COMPACTION_SETTINGS, CompactionError, calculateContextTokens, compact, createBranchSummaryMessage, estimateContextTokens, estimateTokens, prepareCompaction, shouldCompact, uuidv7, TODO_CONTEXT, withAbortSignal, type CompactionSettings, type CompactionPreparation, type CompactResult } from "./pi-legacy-harness.js";
 import {
   isContextOverflow,
   isRetryableAssistantError,
@@ -108,6 +108,12 @@ export interface PiCompactionCoordinatorOptions {
    * wait; a throw or no text adds none, and the local engine only observes.
    */
   summaryInstructions?: (reason: PiCompactionReason, signal: AbortSignal) => Promise<string | undefined>;
+  /**
+   * Whether `summaryInstructions` can add anything now (the chat has a
+   * PreCompact hook). Without it, a set `summaryInstructions` counts as
+   * configured. A background summary is never written while it is.
+   */
+  hasSummaryInstructions?: () => boolean;
   /** Retries and backoff for transient provider/transport failures. */
   providerRetry?: RetryPolicy;
   /** Current-Pi-compatible retry policy for each standalone hidden summary request. */
@@ -122,20 +128,24 @@ export interface PiCompactionCoordinatorOptions {
    */
   cachedPrefix?: () => Promise<SideCallPrefix | undefined>;
   /**
-   * The memory fact lines the chat may be told now. A summary written on the
-   * cached prefix is filtered against them and the facts the prefix states.
+   * The memory fact lines the chat may be told now. A summary is written on
+   * the cached prefix only when there are none and the prefix states none,
+   * since a paraphrase of a fact cannot be filtered out of the reply.
    */
   approvedMemoryFacts?: ApprovedMemoryFacts;
   /**
    * Background summaries for an attended chat whose turn ends close to its
-   * trigger. The next turn boundary applies one only if the chat has not
-   * moved since; see compaction-precompute.
+   * trigger. One is stored only when compaction is due and the chat has only
+   * been appended to since; see compaction-precompute.
    */
   precompute?: {
     registry: CompactionPrecomputes;
     chatKey: string;
-    /** Whether a summary may start now: the chat is attended and generating. */
-    allowed: () => boolean;
+    /**
+     * Whether a summary may start now: the chat is attended and generating,
+     * and under its spending limit.
+     */
+    allowed: () => boolean | Promise<boolean>;
     /** Share of the trigger at which one starts. Defaults to 0.8. */
     fraction?: number;
   };
@@ -368,6 +378,15 @@ function latestCompaction(entries: Awaited<ReturnType<PiSessionPort["getBranch"]
   return undefined;
 }
 
+/** The messages an entry adds to a compaction's kept tail, as Pi's own cut maps them. */
+function compactionMessageOf(entry: PiSessionEntry): AgentMessage[] {
+  if (entry.type === "message") return [entry.message];
+  if (entry.type === "branch_summary" && entry.summary) {
+    return [createBranchSummaryMessage(entry.summary, entry.fromId, entry.timestamp)];
+  }
+  return [];
+}
+
 function estimatedMessageTokens(messages: readonly AgentMessage[]): number {
   return messages.reduce((total, message) => total + estimateTokens(message), 0);
 }
@@ -478,11 +497,22 @@ export class PiCompactionCoordinator {
     }
   }
 
+  /** Whether summary instructions can add anything now; a failing check counts as yes. */
+  private summaryInstructionsConfigured(): boolean {
+    if (!this.options.summaryInstructions) return false;
+    try {
+      return this.options.hasSummaryInstructions?.() ?? true;
+    } catch {
+      return true;
+    }
+  }
+
   /**
    * One summary request sent as the prefix's continuation. Undefined, so the
-   * caller sends Pi's isolated and scrubbed request instead, when it would
-   * not fit, fails, is cut off, calls a tool, or still states a memory fact
-   * after every line that could restate one is removed.
+   * caller sends Pi's isolated and scrubbed request instead, when the prefix
+   * states a memory fact or the chat may be told one (a paraphrase could not
+   * be filtered out of the reply), when the approved facts cannot be read,
+   * and when it would not fit, fails, is cut off or calls a tool.
    */
   private async cachedSummary(
     prefix: SideCallPrefix,
@@ -491,6 +521,13 @@ export class PiCompactionCoordinator {
     customInstructions?: string,
   ): Promise<CompactResult | undefined> {
     const model = this.options.model;
+    if (memoryFactLinesIn(prefix.context).length > 0) return undefined;
+    const approvedMemoryFacts = this.options.approvedMemoryFacts ?? prefix.approvedMemoryFacts;
+    try {
+      if (((await approvedMemoryFacts?.()) ?? []).length > 0) return undefined;
+    } catch {
+      return undefined;
+    }
     const maxTokens = Math.min(Math.floor(0.8 * this.settings.reserveTokens), model.maxTokens);
     const instruction: UserMessage = {
       role: "user",
@@ -499,17 +536,9 @@ export class PiCompactionCoordinator {
     };
     const inputTokens = calculateContextTokens(prefix.response.usage) + estimateTokens(instruction);
     if (maxTokens <= 0 || inputTokens + maxTokens > model.contextWindow) return undefined;
-    // The filter covers the facts the request states and every fact the
-    // chat may be told now, which a recall result in the prefix can quote.
-    const approvedMemoryFacts = this.options.approvedMemoryFacts ?? prefix.approvedMemoryFacts;
-    let facts: readonly string[];
-    try {
-      facts = [...memoryFactLinesIn(prefix.context), ...((await approvedMemoryFacts?.()) ?? [])];
-    } catch {
-      // Without the approved facts the filter cannot be complete.
-      return undefined;
-    }
-    const request = sideCallContinuation(prefix, [instruction], { signal, maxTokens });
+    // The summary is never continued, so it writes the short cache even
+    // when the parent paid for a longer one.
+    const request = sideCallContinuation(prefix, [instruction], { signal, maxTokens, cacheRetention: "short" });
     let reply: AssistantMessage;
     try {
       reply = await this.options.models.completeSimple(model, request.context, request.options);
@@ -519,13 +548,11 @@ export class PiCompactionCoordinator {
     }
     if (signal.aborted) throw new CompactionAbortedError();
     if (reply.stopReason !== "stop") return undefined;
-    const text = reply.content
+    const summary = reply.content
       .flatMap((part) => (part.type === "text" ? [part.text] : []))
       .join("\n")
       .trim();
-    const filtered = withoutStatedMemoryFacts(text, facts);
-    const summary = filtered.text.trim();
-    if (!summary || filtered.restated) return undefined;
+    if (!summary) return undefined;
     const files = checkpointFileLists(preparation.fileOps);
     return {
       summary: summary + files.text,
@@ -537,22 +564,51 @@ export class PiCompactionCoordinator {
   }
 
   /**
+   * Whether the chat has only been appended to since `snapshot`: the same
+   * model and approved facts, a branch that starts with the snapshot's
+   * entries and holds no compaction after them, and a context that still
+   * starts with the snapshot's messages.
+   */
+  private async appendedSince(
+    snapshot: CompactionPrecomputeSnapshot,
+    branch: readonly PiSessionEntry[],
+    messages: readonly AgentMessage[],
+  ): Promise<boolean> {
+    if (snapshot.modelKey !== sideCallModelKey(this.options.model)) return false;
+    if (branch.length < snapshot.branchIds.length) return false;
+    if (snapshot.branchIds.some((id, index) => branch[index]?.id !== id)) return false;
+    if (branch.slice(snapshot.branchIds.length).some((entry) => entry.type === "compaction")) return false;
+    if (messages.length < snapshot.contextLength) return false;
+    if (contextKeyOf(messages.slice(0, snapshot.contextLength)) !== snapshot.contextKey) return false;
+    return (await this.memoryKey()) === snapshot.memoryKey;
+  }
+
+  /** Whether a background summary may be written or used for this chat at all. */
+  private precomputes(): boolean {
+    return Boolean(
+      this.options.precompute &&
+      this.settings.enabled &&
+      !this.summaryInstructionsConfigured() &&
+      compactionEngineFrom(this.options.engine) !== "vcc",
+    );
+  }
+
+  /** The trigger, and the share of it past which a background summary starts. */
+  private precomputeThresholds(): { trigger: number; start: number } {
+    const trigger = this.options.model.contextWindow - this.settings.reserveTokens;
+    return { trigger, start: trigger * (this.options.precompute?.fraction ?? 0.8) };
+  }
+
+  /**
    * After a turn ends close to the trigger, starts its summary in the
    * background on the cached prefix. Only the model call runs after this
-   * returns; it never writes the journal.
+   * returns; it never writes the journal. A chat whose summary is still
+   * usable keeps it.
    */
   private async startPrecompute(contextTokens: number): Promise<void> {
     const precompute = this.options.precompute;
-    if (
-      !precompute ||
-      !this.settings.enabled ||
-      this.options.summaryInstructions ||
-      compactionEngineFrom(this.options.engine) === "vcc"
-    ) {
-      return;
-    }
-    const trigger = this.options.model.contextWindow - this.settings.reserveTokens;
-    if (contextTokens < trigger * (precompute.fraction ?? 0.8) || !precompute.allowed()) return;
+    if (!precompute || !this.precomputes()) return;
+    if (contextTokens < this.precomputeThresholds().start || !(await precompute.allowed())) return;
     let branch;
     try {
       branch = await this.options.session.getBranch();
@@ -570,49 +626,72 @@ export class PiCompactionCoordinator {
     } catch {
       return;
     }
+    const existing = precompute.registry.current(precompute.chatKey);
+    if (existing && (await this.appendedSince(existing, branch, messages))) return;
     const prefix = await this.usablePrefix(messages);
     const memoryKey = await this.memoryKey();
-    if (!prefix || memoryKey === undefined || !precompute.allowed()) return;
+    if (!prefix || memoryKey === undefined || !(await precompute.allowed())) return;
     const snapshot: CompactionPrecomputeSnapshot = {
+      branchIds: branch.map((entry) => entry.id),
       contextKey: contextKeyOf(messages),
+      contextLength: messages.length,
       modelKey: prefix.modelKey,
       memoryKey,
     };
-    const engine = compactionEngineFrom(this.options.engine);
-    precompute.registry.start(precompute.chatKey, snapshot, async (signal) => {
-      const result = await this.cachedSummary(prefix, preparation, signal);
-      return result && { ...result, details: { ...(result.details as Record<string, unknown>), engine, version: 1 } };
-    });
+    precompute.registry.start(precompute.chatKey, snapshot, (signal) => this.cachedSummary(prefix, preparation, signal));
   }
 
   /**
-   * The chat's background summary when it was written for the journal as it
-   * is now. Every other entry for the chat is aborted and dropped.
+   * At a turn boundary, drops a background summary the chat moved away
+   * from: an edit, a regenerate, a branch switch, a compaction, or another
+   * model or memory. A follow-up only appends, so it keeps the summary.
    */
-  private async takePrecomputed(): Promise<CompactResult | undefined> {
+  private async discardStalePrecompute(): Promise<void> {
+    const precompute = this.options.precompute;
+    const snapshot = precompute?.registry.current(precompute.chatKey);
+    if (!precompute || !snapshot) return;
+    let usable = false;
+    try {
+      if (this.precomputes()) {
+        const branch = await this.options.session.getBranch();
+        usable = await this.appendedSince(snapshot, branch, (await this.options.session.buildContext(branch)).messages);
+      }
+    } catch {
+      usable = false;
+    }
+    if (!usable && precompute.registry.current(precompute.chatKey) === snapshot) precompute.registry.discard(precompute.chatKey);
+  }
+
+  /**
+   * When compaction is due, takes the chat's finished background summary if
+   * the chat has only been appended to since it started. Its summary replaces
+   * the messages it covered, and everything after them joins its kept tail,
+   * which must still fit the keep budget. Anything else, including one still
+   * being written, is dropped without a word: the caller compacts as usual.
+   */
+  private async takePrecomputed(
+    branch: readonly PiSessionEntry[],
+    preparation: CompactionPreparation,
+  ): Promise<CompactResult | undefined> {
     const precompute = this.options.precompute;
     if (!precompute) return undefined;
-    if (!this.settings.enabled || this.options.summaryInstructions || !precompute.registry.has(precompute.chatKey)) {
-      precompute.registry.discard(precompute.chatKey);
-      return undefined;
-    }
-    let contextKey: string;
+    const taken = precompute.registry.take(precompute.chatKey);
+    if (!taken || !this.precomputes()) return undefined;
     try {
-      contextKey = contextKeyOf((await this.options.session.buildContext()).messages);
+      const messages = (await this.options.session.buildContext(branch)).messages;
+      if (!(await this.appendedSince(taken.snapshot, branch, messages))) return undefined;
     } catch {
-      precompute.registry.discard(precompute.chatKey);
       return undefined;
     }
-    const memoryKey = await this.memoryKey();
-    if (memoryKey === undefined) {
-      precompute.registry.discard(precompute.chatKey);
-      return undefined;
-    }
-    return precompute.registry.take(precompute.chatKey, {
-      contextKey,
-      modelKey: sideCallModelKey(this.options.model),
-      memoryKey,
-    });
+    const retainedTail = [
+      ...taken.result.retainedTail,
+      ...branch.slice(taken.snapshot.branchIds.length).flatMap(compactionMessageOf),
+    ];
+    // The kept tail may grow by what the chat added between the summary's
+    // start and the trigger, and no more.
+    const { trigger, start } = this.precomputeThresholds();
+    if (estimatedMessageTokens(retainedTail) > this.settings.keepRecentTokens + (trigger - start)) return undefined;
+    return { ...taken.result, retainedTail, tokensBefore: preparation.tokensBefore };
   }
 
   private isCurrentModel(message: AssistantMessage): boolean {
@@ -676,11 +755,7 @@ export class PiCompactionCoordinator {
 
   /** Compact the prior durable tail before a new user entry is appended. */
   async prepareForPrompt(): Promise<PiCompactionCheckResult> {
-    const precomputed = await this.takePrecomputed();
-    if (precomputed) {
-      const applied = await this.run("threshold", false, false, precomputed);
-      if (applied.compacted) return applied;
-    }
+    await this.discardStalePrecompute();
     const context = await this.options.session.buildContext();
     const previousAssistant = [...context.messages]
       .reverse()
@@ -987,7 +1062,6 @@ export class PiCompactionCoordinator {
     willRetry: boolean,
     requireEffectiveInput = false,
     /** A background summary written for this exact branch; publishes it without a model call. */
-    precomputed?: CompactResult,
   ): Promise<PiCompactionCheckResult> {
     const startedAt = performance.now();
     const engine = compactionEngineFrom(this.options.engine);
@@ -1022,6 +1096,16 @@ export class PiCompactionCoordinator {
       }
       started = true;
       this.options.onEvent?.({ type: "start", reason });
+      // Every memory fact the branch ever held (removed ones too) and every
+      // one the chat may be told now; no stored summary may state one.
+      const facts = [...memoryFactLinesInBranch(branch), ...(await this.approvedFactLines())];
+      // A background summary that no longer fits, or states a fact, is
+      // dropped without a word, and this compaction runs as usual.
+      let precomputed = reason === "threshold" ? await this.takePrecomputed(branch, preparation) : undefined;
+      if (precomputed) {
+        const kept = withoutStatedMemoryFacts(precomputed.summary, facts);
+        precomputed = kept.restated || !kept.text.trim() ? undefined : { ...precomputed, summary: kept.text };
+      }
       let customInstructions: string | undefined;
       if (!precomputed) {
         try {
@@ -1077,9 +1161,7 @@ export class PiCompactionCoordinator {
         ? await this.cachedSummary(prefix, preparation, abortController.signal, customInstructions)
         : undefined;
       if (precomputed) {
-        // The summary was written for these same messages; the tail and
-        // token count come from this branch, which the commit marker moved.
-        result = { ...precomputed, retainedTail: preparation.retainedTail, tokensBefore: preparation.tokensBefore };
+        result = precomputed;
       } else if (engine === "vcc") {
         result = await compileLocal();
       } else if (cached) {
@@ -1146,9 +1228,7 @@ export class PiCompactionCoordinator {
         }
       }
       // Whichever path wrote it, the stored summary keeps no line that states
-      // a memory fact the branch ever held (removed ones too) or one the chat
-      // may be told now. A fact split across kept lines fails the compaction.
-      const facts = [...memoryFactLinesInBranch(branch), ...(await this.approvedFactLines())];
+      // a memory fact. A fact split across kept lines fails the compaction.
       const kept = withoutStatedMemoryFacts(result.summary, facts);
       if (kept.restated) throw new MemoryFactInSummaryError();
       result = { ...result, summary: kept.text };
@@ -1192,6 +1272,8 @@ export class PiCompactionCoordinator {
           }),
         );
         context = await sessionOperation(() => this.options.session.buildContext());
+        // A background summary covers messages this checkpoint replaced.
+        this.options.precompute?.registry.discard(this.options.precompute.chatKey);
       } catch (error) {
         // Publication is not successful until its context can be installed.
         // Keep failed checkpoints as history, but restore the active branch.

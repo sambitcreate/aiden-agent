@@ -212,7 +212,7 @@ import {
   createWorkspaceChatHooks,
   endWorkspaceChatSession,
   markWorkspaceChatCompacted,
-  preCompactSummaryInstructions,
+  preCompactCompactionOptions,
   runPromptIntakeHooks,
   screenRunInputWithHooks,
   hookContextMessage,
@@ -303,8 +303,8 @@ import {
   modelRetainsSystemUpdates,
 } from "./generation-context.js";
 import { promptCacheTtlMs } from "./prompt-cache-lifetimes.js";
-import { chatPromptCacheTelemetry, chatPromptPrefixCompacted } from "./chat-prompt-cache-state.js";
-import { chatCompactionPrecomputes } from "./compaction-precompute.js";
+import { chatPromptCacheTelemetry, chatPromptGenerationStopped, chatPromptPrefixCompacted } from "./chat-prompt-cache-state.js";
+import { chatCompactionPrecomputes, precomputeWithinSpendingLimit } from "./compaction-precompute.js";
 import {
   invalidateChatContextJournal,
   lastPromptCacheMiss,
@@ -4161,7 +4161,8 @@ export const llmClient = {
         onEvent: onCompactionEvent,
         // A summary is the chat's cached prefix with the summary instruction
         // appended, so it reads the cache. Close to the trigger, an attended
-        // turn writes it in the background and the next turn applies it.
+        // turn within its spending limit writes it in the background, and
+        // the compaction that comes due later stores it.
         ...(keepsSideCallPrefix
           ? {
               cachedPrefix: () => chatSideCallPrefixes.latest(params.chatId),
@@ -4169,7 +4170,7 @@ export const llmClient = {
               precompute: {
                 registry: chatCompactionPrecomputes,
                 chatKey: params.chatId,
-                allowed: () =>
+                allowed: async () =>
                   generationAttended() &&
                   canWarmForegroundChat({
                     enabled: true,
@@ -4179,19 +4180,16 @@ export const llmClient = {
                     usageSource: options.usageSource,
                     interactionSurface: options.interactionSurface,
                     mode: authoritativeMode,
-                  }),
+                  }) &&
+                  (await precomputeWithinSpendingLimit(spending, spendingOwner, () => spendingMeter.settled())),
               },
             }
           : {}),
         // PreCompact: every compaction inside a turn (threshold, overflow and
         // the emergency checkpoint) is "auto"; hook context becomes summary
         // instructions, bounded by each hook's timeout, and errors add none.
-        ...(chatHooks
-          ? {
-              summaryInstructions: (reason: string, compactionSignal: AbortSignal) =>
-                preCompactSummaryInstructions(chatHooks, { trigger: "auto", reason, signal: compactionSignal }),
-            }
-          : {}),
+        // A chat with a PreCompact hook writes no background summary.
+        ...(chatHooks ? preCompactCompactionOptions(chatHooks, "auto") : {}),
       };
 
       const currentUser = [...generationChat.messages]
@@ -6401,7 +6399,7 @@ export const llmClient = {
     }
     // A summary written in the background for this chat is not applied after Stop.
     const stoppedChatId = initialization?.chatId ?? generation?.chatId;
-    if (stoppedChatId) chatCompactionPrecomputes.discard(stoppedChatId);
+    if (stoppedChatId) chatPromptGenerationStopped(stoppedChatId);
     if (initialization) {
       initialization.cancelRequested = true;
       initialization.cancellationOrigin = origin;

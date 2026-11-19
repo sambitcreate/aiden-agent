@@ -3,10 +3,12 @@
  *
  * When an attended chat's turn ends close to its compaction trigger, the
  * coordinator writes the summary in the background on the chat's cached
- * prefix (see side-call-prefix). The next turn boundary applies it only when
- * the chat has not moved: the same context messages, model and approved
- * memory facts as when the summary was started. Anything else, and a summary still
- * being written, is aborted and discarded, so a turn never waits for one.
+ * prefix (see side-call-prefix). The summary stays usable while the chat is
+ * only appended to: the same branch, model and approved memory facts, with
+ * the messages it covers still the start of the chat's context. When
+ * compaction is due, the coordinator stores it with everything after those
+ * messages as the kept tail. Anything else discards it, and one still being
+ * written when compaction is due is aborted, so a turn never waits for one.
  *
  * Entries live in memory only. They hold the summary and the retained tail
  * the coordinator would publish, never credentials, and nothing is logged or
@@ -17,12 +19,12 @@ import type { CompactResult } from "./pi-legacy-harness.js";
 
 /** What the chat looked like when its summary was started. */
 export interface CompactionPrecomputeSnapshot {
-  /**
-   * Hash of the context messages the summary covers. Bookkeeping entries the
-   * turn's commit appends after the reply leave it unchanged; a new message,
-   * an edit, a branch or a compaction changes it.
-   */
+  /** The journal branch's entry ids, oldest first; a later branch must start with them. */
+  readonly branchIds: readonly string[];
+  /** Hash of the context messages the summary covers. */
   readonly contextKey: string;
+  /** How many context messages it covers; the chat's context must still start with them. */
+  readonly contextLength: number;
   /** The model the summary is written by; see `sideCallModelKey`. */
   readonly modelKey: string;
   /** Hash of the memory fact lines the chat could be told. */
@@ -30,22 +32,20 @@ export interface CompactionPrecomputeSnapshot {
 }
 
 export interface CompactionPrecomputes {
-  /**
-   * Starts `run` for the chat. A chat already writing or holding a summary
-   * for the same snapshot keeps it, and this returns false; one for another
-   * snapshot is aborted and replaced.
-   */
+  /** Starts `run` for the chat, aborting and replacing the chat's earlier entry. */
   start(
     chatKey: string,
     snapshot: CompactionPrecomputeSnapshot,
     run: (signal: AbortSignal) => Promise<CompactResult | undefined>,
-  ): boolean;
+  ): void;
+  /** The snapshot of the chat's entry, written or still being written. */
+  current(chatKey: string): CompactionPrecomputeSnapshot | undefined;
   /**
-   * Removes the chat's entry and returns its summary when it is finished and
-   * was started for `snapshot`. Anything else is aborted and discarded.
+   * Removes the chat's entry and returns it when its summary is finished. One
+   * still being written is aborted.
    */
-  take(chatKey: string, snapshot: CompactionPrecomputeSnapshot): CompactResult | undefined;
-  /** Aborts and drops the chat's entry: the chat stopped, was deleted or compacted. */
+  take(chatKey: string): { snapshot: CompactionPrecomputeSnapshot; result: CompactResult } | undefined;
+  /** Aborts and drops the chat's entry: the chat stopped, moved, was deleted or compacted. */
   discard(chatKey: string): void;
   /** Whether the chat has an entry, written or still being written. */
   has(chatKey: string): boolean;
@@ -74,10 +74,6 @@ interface Entry {
   result?: CompactResult;
 }
 
-function sameSnapshot(left: CompactionPrecomputeSnapshot, right: CompactionPrecomputeSnapshot): boolean {
-  return left.contextKey === right.contextKey && left.modelKey === right.modelKey && left.memoryKey === right.memoryKey;
-}
-
 export function createCompactionPrecomputes(
   settings: { maxChats?: number; timeoutMs?: number; clock?: CompactionPrecomputeClock } = {},
 ): CompactionPrecomputes {
@@ -96,7 +92,6 @@ export function createCompactionPrecomputes(
   return {
     start(chatKey, snapshot, run) {
       const existing = entries.get(chatKey);
-      if (existing && sameSnapshot(existing.snapshot, snapshot)) return false;
       if (existing) drop(chatKey, existing);
       const entry: Entry = { snapshot, controller: new AbortController() };
       entries.set(chatKey, entry);
@@ -120,14 +115,16 @@ export function createCompactionPrecomputes(
           },
           () => drop(chatKey, entry),
         );
-      return true;
     },
-    take(chatKey, snapshot) {
+    current(chatKey) {
+      return entries.get(chatKey)?.snapshot;
+    },
+    take(chatKey) {
       const entry = entries.get(chatKey);
       if (!entry) return undefined;
       const result = entry.result;
       drop(chatKey, entry);
-      return result && sameSnapshot(entry.snapshot, snapshot) ? result : undefined;
+      return result ? { snapshot: entry.snapshot, result } : undefined;
     },
     discard(chatKey) {
       const entry = entries.get(chatKey);
@@ -145,3 +142,20 @@ export function createCompactionPrecomputes(
 
 /** One registry per process, for the desktop's attended chats. */
 export const chatCompactionPrecomputes: CompactionPrecomputes = createCompactionPrecomputes();
+
+/**
+ * Whether the chat's spending limit leaves room for a background summary.
+ * Counted usage settles first; a failing check counts as no room.
+ */
+export async function precomputeWithinSpendingLimit<Owner>(
+  spending: { refusal(owner: Owner): Promise<string | undefined> },
+  owner: Owner,
+  settled?: () => Promise<unknown>,
+): Promise<boolean> {
+  try {
+    await settled?.();
+    return (await spending.refusal(owner)) === undefined;
+  } catch {
+    return false;
+  }
+}

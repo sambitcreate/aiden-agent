@@ -2,9 +2,10 @@
 // phase 5). Real chat turns run through the prompt prefix harness with the
 // side-call ledger on their stream, and the real coordinator writes the
 // summary through a scripted summarizer: the summary request must extend the
-// parent's last request byte for byte, no memory fact may reach the stored
-// summary even when the summarizer echoes one, and a summary written in the
-// background is applied only when the chat has not moved.
+// parent's last request byte for byte, a chat with memory facts sends the
+// isolated request instead, no memory fact may reach the stored summary even
+// when the summarizer echoes one, and a summary written in the background is
+// stored only when compaction comes due on a chat that was only appended to.
 
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
@@ -13,17 +14,18 @@ import type { AssistantMessage, Models, SimpleStreamOptions } from "@earendil-wo
 import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai/providers/faux";
 import { Type } from "typebox";
 import { assembleChatPrompt, buildWorkspaceChatBasePrompt } from "./chat-prompt-assembly.js";
-import { forgetChatPromptCacheState } from "./chat-prompt-cache-state.js";
+import { chatPromptGenerationStopped, forgetChatPromptCacheState } from "./chat-prompt-cache-state.js";
 import {
   chatCompactionPrecomputes,
   createCompactionPrecomputes,
+  precomputeWithinSpendingLimit,
   type CompactionPrecomputeClock,
   type CompactionPrecomputes,
   type CompactionPrecomputeSnapshot,
 } from "./compaction-precompute.js";
 import { approvedMemoryFactLines, createMemoryExtension } from "./memory-context.js";
 import type { MemoryFact, MemoryScope, MemoryStore } from "./memory-store.js";
-import type { PiCompactionCoordinatorOptions } from "./pi-compaction-core.js";
+import type { PiCompactionCoordinatorOptions, PiCompactionEvent } from "./pi-compaction-core.js";
 import type { CompactResult } from "./pi-legacy-harness.js";
 import type { PiSessionEntry } from "./pi-session-port.js";
 import {
@@ -34,6 +36,8 @@ import {
   type RecordedPromptRequest,
 } from "./prompt-prefix-harness.js";
 import { createSideCallPrefixLedger, withSideCallPrefixLedger, type ApprovedMemoryFacts } from "./side-call-prefix.js";
+import { SpendingService } from "./spending-service.js";
+import { preCompactCompactionOptions, type WorkspaceChatHooks } from "./workspace-chat-hooks.js";
 
 const CHAT_ID = "chat-compaction";
 const LIVE_TTL = () => 300_000;
@@ -77,7 +81,7 @@ function summarizer(replies: (index: number, call: SummaryCall) => string | Prom
   return { models, calls };
 }
 
-type CompactionOptions = Partial<Omit<PiCompactionCoordinatorOptions, "session" | "model">>;
+type CompactionOptions = Partial<Omit<PiCompactionCoordinatorOptions, "session">>;
 
 /** A chat whose stream feeds the side-call ledger and whose compaction options a test changes between turns. */
 function compactingChat(approved: { lines: readonly string[] } = { lines: [] }) {
@@ -145,6 +149,22 @@ describe("a summary written on the cached prefix", () => {
     assert.equal(chat.harness.networkCalls, 0);
   });
 
+  test("writes the short cache even when the parent paid for a longer one", async () => {
+    const chat = compactingChat();
+    await twoTurns(chat);
+    const summary = summarizer(() => SUMMARY);
+    const longRetention = async () => {
+      const prefix = await chat.cachedPrefix();
+      return prefix && { ...prefix, options: { ...prefix.options, cacheRetention: "long" as const } };
+    };
+    chat.compaction.current = { models: summary.models, settings: TRIGGER_NOW, cachedPrefix: longRetention, approvedMemoryFacts: chat.approvedMemoryFacts };
+    await chat.harness.turn({ prompt: "Thanks.", systemPrompt: "You are Aiden.", tools: [listFiles], responses: [fauxAssistantMessage("Sure.")] });
+
+    assert.equal(summary.calls.length, 1);
+    assert.ok(textOf(summary.calls[0]!.context).includes("write a checkpoint summary"), "the cached request was sent");
+    assert.equal(summary.calls[0]!.options?.cacheRetention, "short");
+  });
+
   test("falls back to the isolated request when the chat no longer ends at the cached reply", async () => {
     const chat = compactingChat();
     await twoTurns(chat);
@@ -167,14 +187,25 @@ describe("no memory fact reaches a stored summary", () => {
   const FACT_TEXT = "tabs over spaces";
   const withFact = `You are Aiden.\n\n${FACT}`;
 
-  test("a summarizer that echoes the fact it was told has it removed before the summary is stored", async () => {
+  /** Every summary request was Pi's isolated one: no cached continuation, no cache written. */
+  function assertIsolated(calls: readonly SummaryCall[]): void {
+    assert.ok(calls.length >= 1, "the chat compacted");
+    for (const call of calls) {
+      assert.notEqual(call.options?.cacheRetention, "short", "the isolated request writes no cache");
+      assert.equal(textOf(call.context).includes("write a checkpoint summary"), false, "no cached continuation was sent");
+      assert.equal(textOf(call.context).toLowerCase().includes(FACT_TEXT), false, "the isolated request is not told the fact");
+    }
+  }
+
+  test("a chat whose prefix states a fact sends the isolated request even though the ledger matches", async () => {
     const chat = compactingChat({ lines: [FACT] });
     await twoTurns(chat, withFact);
+    assert.ok(await chat.cachedPrefix(), "the ledger holds a prefix the summary could continue");
     const summary = summarizer(() => `${SUMMARY}\n\n## Constraints & Preferences\n${FACT}\n- The user prefers tabs over spaces.`);
     chat.compaction.current = { models: summary.models, settings: TRIGGER_NOW, cachedPrefix: chat.cachedPrefix, approvedMemoryFacts: chat.approvedMemoryFacts };
     await chat.harness.turn({ prompt: "Thanks.", systemPrompt: withFact, tools: [listFiles], responses: [fauxAssistantMessage("Sure.")] });
 
-    assert.equal(summary.calls[0]!.options?.cacheRetention, "short", "the cached request was the one answered");
+    assertIsolated(summary.calls);
     const [entry] = await compactions(chat.harness);
     assert.ok(entry);
     assert.match(entry.summary, /List the workspace files\./u, "the rest of the summary is kept");
@@ -182,22 +213,19 @@ describe("no memory fact reaches a stored summary", () => {
     assert.equal(entry.summary.includes("[memory:"), false);
   });
 
-  test("a fact the cached reply restates across lines sends the isolated request instead, without the fact", async () => {
+  test("a chat that may be told a fact sends the isolated request even when its prefix states none", async () => {
     const chat = compactingChat({ lines: [FACT] });
-    await twoTurns(chat, withFact);
-    const summary = summarizer((index) => index === 0 ? `${SUMMARY}\n- Prefers tabs\nover spaces.` : SUMMARY);
+    await twoTurns(chat);
+    assert.ok(await chat.cachedPrefix(), "the ledger holds a prefix the summary could continue");
+    const summary = summarizer(() => SUMMARY);
     chat.compaction.current = { models: summary.models, settings: TRIGGER_NOW, cachedPrefix: chat.cachedPrefix, approvedMemoryFacts: chat.approvedMemoryFacts };
-    await chat.harness.turn({ prompt: "Thanks.", systemPrompt: withFact, tools: [listFiles], responses: [fauxAssistantMessage("Sure.")] });
+    await chat.harness.turn({ prompt: "Thanks.", systemPrompt: "You are Aiden.", tools: [listFiles], responses: [fauxAssistantMessage("Sure.")] });
 
-    assert.equal(summary.calls.length, 2);
-    assert.notEqual(summary.calls[1]!.options?.cacheRetention, "short");
-    assert.equal(textOf(summary.calls[1]!.context).toLowerCase().includes(FACT_TEXT), false, "the isolated request is not told the fact");
-    const [entry] = await compactions(chat.harness);
-    assert.ok(entry);
-    assert.equal(entry.summary.toLowerCase().includes(FACT_TEXT), false);
+    assertIsolated(summary.calls);
+    assert.equal((await compactions(chat.harness)).length, 1);
   });
 
-  test("a summary that still restates a fact on every path is not stored", async () => {
+  test("a summary that still restates a fact is not stored", async () => {
     const chat = compactingChat({ lines: [FACT] });
     await twoTurns(chat, withFact);
     const summary = summarizer(() => `${SUMMARY}\n- Prefers tabs\nover spaces.`);
@@ -206,7 +234,7 @@ describe("no memory fact reaches a stored summary", () => {
       chat.harness.turn({ prompt: "Thanks.", systemPrompt: withFact, tools: [listFiles], responses: [fauxAssistantMessage("Sure.")] }),
       /provider_failed/u,
     );
-    assert.equal(summary.calls.length, 2);
+    assertIsolated(summary.calls);
     assert.deepEqual(await compactions(chat.harness), []);
   });
 
@@ -313,21 +341,48 @@ async function settled(registry: CompactionPrecomputes, chatKey = CHAT_ID): Prom
   }
 }
 
+/** The text of each message in a stored kept tail, in order. */
+function tailTexts(messages: readonly unknown[]): string[] {
+  return messages.map((message) => {
+    const content = (message as { content?: unknown }).content;
+    if (typeof content === "string") return content;
+    return (Array.isArray(content) ? content : [])
+      .flatMap((part: { type?: string; text?: string }) => (part.type === "text" && part.text ? [part.text] : []))
+      .join("");
+  });
+}
+
 describe("a summary written in the background", () => {
-  async function precomputingChat(options: { attended?: () => boolean; approved?: { lines: readonly string[] } } = {}) {
+  // The faux chat's context after each turn here is about 63, 77 and 87
+  // tokens. These triggers put the first turn past the share that starts a
+  // summary and say which later turn makes compaction due.
+  interface PrecomputeOptions {
+    attended?: () => boolean | Promise<boolean>;
+    approved?: { lines: readonly string[] };
+    /** Context tokens at which compaction is due. */
+    trigger?: number;
+    fraction?: number;
+    replies?: (index: number, call: SummaryCall) => string | Promise<string>;
+    extra?: CompactionOptions;
+    /** Whether to wait for the summary the first turn starts. */
+    wait?: boolean;
+  }
+
+  async function precomputingChat(options: PrecomputeOptions = {}) {
     const approved = options.approved ?? { lines: [] };
     const chat = compactingChat(approved);
     const registry = createCompactionPrecomputes({ clock: manualClock() });
-    const summary = summarizer(() => SUMMARY);
+    const summary = summarizer(options.replies ?? (() => SUMMARY));
     const attended = { now: true };
+    const events: PiCompactionEvent[] = [];
     chat.compaction.current = {
       models: summary.models,
       cachedPrefix: chat.cachedPrefix,
       approvedMemoryFacts: async () => approved.lines,
-      // No turn here reaches the default trigger, every turn passes this share
-      // of it, and nearly all of the chat is old enough to summarize.
-      settings: { enabled: true, reserveTokens: 16_384, keepRecentTokens: 5 },
-      precompute: { registry, chatKey: CHAT_ID, allowed: options.attended ?? (() => attended.now), fraction: 0.0001 },
+      settings: { enabled: true, reserveTokens: 128_000 - (options.trigger ?? 80), keepRecentTokens: 5 },
+      precompute: { registry, chatKey: CHAT_ID, allowed: options.attended ?? (() => attended.now), fraction: options.fraction ?? 0.5 },
+      onEvent: (event) => events.push(event),
+      ...options.extra,
     };
     await chat.harness.turn({
       prompt: "Which files are there?",
@@ -335,49 +390,110 @@ describe("a summary written in the background", () => {
       tools: [listFiles],
       responses: [fauxAssistantMessage(fauxToolCall("list_files", {})), fauxAssistantMessage("Two: a.ts and b.ts.")],
     });
-    await settled(registry);
-    return { chat, registry, summary, attended };
+    if (options.wait !== false) await settled(registry);
+    return { chat, registry, summary, attended, events };
   }
 
-  const nextTurn = (chat: ReturnType<typeof compactingChat>) =>
-    chat.harness.turn({ prompt: "And which is bigger?", systemPrompt: "You are Aiden.", tools: [listFiles], responses: [fauxAssistantMessage("b.ts is bigger.")] });
+  const nextTurn = (chat: ReturnType<typeof compactingChat>, prompt = "And which is bigger?") =>
+    chat.harness.turn({ prompt, systemPrompt: "You are Aiden.", tools: [listFiles], responses: [fauxAssistantMessage("b.ts is bigger.")] });
+  const thirdTurn = (chat: ReturnType<typeof compactingChat>) =>
+    chat.harness.turn({ prompt: "Thanks.", systemPrompt: "You are Aiden.", tools: [listFiles], responses: [fauxAssistantMessage("You're welcome.")] });
 
-  test("is applied at the next turn when the chat has not moved", async () => {
-    const { chat, registry, summary, attended } = await precomputingChat();
+  test("is kept below the trigger and stored, with everything after it, once compaction comes due", async () => {
+    const { chat, registry, summary, events } = await precomputingChat();
     assert.equal(summary.calls.length, 1, "the summary started when the turn ended");
     assert.equal(summary.calls[0]!.options?.cacheRetention, "short");
     assert.ok(registry.has(CHAT_ID) && !registry.running(CHAT_ID), "the summary is ready before the next turn");
-    // No later turn starts another one.
-    attended.now = false;
 
-    const [next] = await nextTurn(chat);
-    assert.equal(summary.calls.length, 1, "the next turn applied it without another request");
+    await nextTurn(chat);
+    assert.deepEqual(await compactions(chat.harness), [], "below the trigger nothing is stored");
+    assert.equal(summary.calls.length, 1, "a usable summary is not written again");
+    assert.ok(registry.has(CHAT_ID));
+
+    await thirdTurn(chat);
+    assert.equal(summary.calls.length, 1, "the due compaction stored it without another request");
     const [entry] = await compactions(chat.harness);
-    assert.ok(entry, "the background summary is stored at the turn boundary");
+    assert.ok(entry, "the background summary is stored");
     assert.match(entry.summary, /List the workspace files\./u);
-    assert.ok(next!.carries("List the workspace files."));
+    assert.deepEqual(
+      tailTexts(entry.retainedTail),
+      ["Two: a.ts and b.ts.", "And which is bigger?", "b.ts is bigger.", "Thanks.", "You're welcome."],
+      "the kept tail is the summary's own tail and every message after it",
+    );
+    assert.deepEqual(events.map((event) => event.type), ["start", "end"]);
     assert.equal(registry.has(CHAT_ID), false);
+
+    const [after] = await chat.harness.turn({ prompt: "Go on.", systemPrompt: "You are Aiden.", tools: [listFiles], responses: [fauxAssistantMessage("Done.")] });
+    assert.ok(after!.carries("List the workspace files."), "the next request reads the summary");
+    assert.ok(after!.carries("You're welcome."), "and the kept tail");
   });
 
-  test("is discarded when a message arrived after it started", async () => {
-    const { chat, registry, summary, attended } = await precomputingChat();
-    attended.now = false;
-    await (await chat.harness.journal()).appendMessage({ role: "user", content: "Sent from another device.", timestamp: Date.now() });
-    const [next] = await nextTurn(chat);
+  test("a follow-up while it is being written does not abort it", async () => {
+    let finish: (text: string) => void = () => {};
+    const { chat, registry, summary } = await precomputingChat({
+      wait: false,
+      replies: () => new Promise<string>((resolve) => { finish = resolve; }),
+    });
     assert.equal(summary.calls.length, 1);
-    assert.deepEqual(await compactions(chat.harness), [], "a summary for an older chat is not stored");
-    assert.equal(next!.carries("List the workspace files."), false);
+    await nextTurn(chat);
+    assert.equal(summary.calls[0]!.options?.signal?.aborted, false, "the follow-up left the summary running");
+    assert.ok(registry.running(CHAT_ID));
+    assert.equal(summary.calls.length, 1, "no second summary was started");
+
+    finish(SUMMARY);
+    await settled(registry);
+    await thirdTurn(chat);
+    assert.equal(summary.calls.length, 1);
+    const [entry] = await compactions(chat.harness);
+    assert.ok(entry);
+    assert.match(entry.summary, /List the workspace files\./u);
+  });
+
+  test("is discarded when the chat changed other than by an append", async () => {
+    const { chat, registry, attended } = await precomputingChat();
+    assert.ok(registry.has(CHAT_ID));
+    attended.now = false;
+    // Regenerating the reply moves the journal back before it.
+    const journal = await chat.harness.journal();
+    const branch = await journal.getBranch();
+    await journal.moveTo(branch[branch.length - 2]!.id);
+    await nextTurn(chat);
+    assert.equal(registry.has(CHAT_ID), false);
+    assert.deepEqual(await compactions(chat.harness), []);
+  });
+
+  test("is discarded when the chat's model changed", async () => {
+    const { chat, registry, attended } = await precomputingChat();
+    assert.ok(registry.has(CHAT_ID));
+    attended.now = false;
+    chat.compaction.current = { ...chat.compaction.current, model: { ...chat.harness.model, id: "another-model" } };
+    await nextTurn(chat);
     assert.equal(registry.has(CHAT_ID), false);
   });
 
   test("is discarded when the approved memory facts changed", async () => {
-    const approved = { lines: ["- [memory:m1] Prefers short answers."] as readonly string[] };
+    const approved = { lines: [] as readonly string[] };
     const { chat, registry, summary, attended } = await precomputingChat({ approved });
     assert.equal(summary.calls.length, 1);
     attended.now = false;
-    approved.lines = [];
+    approved.lines = ["- [memory:m1] Prefers short answers."];
     await nextTurn(chat);
     assert.deepEqual(await compactions(chat.harness), []);
+    assert.equal(registry.has(CHAT_ID), false);
+  });
+
+  test("that no longer fits the kept tail is dropped without a word, and the chat compacts as usual", async () => {
+    // A summary starts at 80% of the trigger, so its tail may grow by 20%.
+    const { chat, registry, summary, events } = await precomputingChat({ trigger: 70, fraction: 0.8 });
+    assert.equal(summary.calls.length, 1);
+    await nextTurn(chat, "And which is bigger? Compare a.ts and b.ts by size in bytes, line count and the number of exported functions.");
+
+    assert.equal(summary.calls.length, 2, "the due compaction wrote a fresh summary");
+    assert.equal((await compactions(chat.harness)).length, 1);
+    assert.deepEqual(events.map((event) => event.type), ["start", "end"], "one compaction, no failure in between");
+    const end = events[1] as Extract<PiCompactionEvent, { type: "end" }>;
+    assert.equal(end.errorMessage, undefined);
+    assert.ok(end.result);
     assert.equal(registry.has(CHAT_ID), false);
   });
 
@@ -389,10 +505,48 @@ describe("a summary written in the background", () => {
     assert.equal(summary.calls.length, 0);
     assert.deepEqual(await compactions(chat.harness), []);
   });
+
+  test("is never started for a chat over its spending limit", async () => {
+    const spending = new SpendingService({
+      persistence: { load: async () => undefined, save: async () => {} },
+      settings: async () => ({ chatUsd: 1 }),
+      broadcast: () => {},
+    });
+    const over = { kind: "chat", id: "over" } as const;
+    const under = { kind: "chat", id: "under" } as const;
+    await spending.record(over, 1.5);
+
+    const capped = await precomputingChat({ attended: () => precomputeWithinSpendingLimit(spending, over) });
+    assert.equal(capped.summary.calls.length, 0, "no summary request past the limit");
+    assert.equal(capped.registry.has(CHAT_ID), false);
+
+    const allowed = await precomputingChat({ attended: () => precomputeWithinSpendingLimit(spending, under) });
+    assert.equal(allowed.summary.calls.length, 1, "a chat under its limit still writes one");
+  });
+
+  describe("with chat hooks", () => {
+    const hooks = (events: readonly string[]) =>
+      ({ has: (event: string) => events.includes(event), dispatch: async () => ({}) }) as unknown as Pick<WorkspaceChatHooks, "has" | "dispatch">;
+
+    test("is started when no PreCompact hook is configured", async () => {
+      const { summary } = await precomputingChat({ extra: preCompactCompactionOptions(hooks(["Stop"]), "auto") });
+      assert.equal(summary.calls.length, 1);
+    });
+
+    test("is never started while a PreCompact hook is configured", async () => {
+      const { chat, summary, registry } = await precomputingChat({ extra: preCompactCompactionOptions(hooks(["PreCompact"]), "auto") });
+      assert.equal(summary.calls.length, 0, "the hook speaks at compaction time, so nothing is written early");
+      assert.equal(registry.has(CHAT_ID), false);
+      await nextTurn(chat);
+      assert.equal(summary.calls.length, 0);
+    });
+  });
 });
 
 describe("the background summary registry", () => {
-  const snapshot = (contextKey = "context-1"): CompactionPrecomputeSnapshot => ({ contextKey, modelKey: "model-1", memoryKey: "memory-1" });
+  const snapshot = (contextKey = "context-1"): CompactionPrecomputeSnapshot => ({
+    branchIds: ["entry-1"], contextKey, contextLength: 1, modelKey: "model-1", memoryKey: "memory-1",
+  });
   const result = (summary: string): CompactResult => ({ summary, tokensBefore: 10, retainedTail: [] } as unknown as CompactResult);
 
   function pending() {
@@ -405,17 +559,16 @@ describe("the background summary registry", () => {
     return { run, signal: () => signal, finish: (value: CompactResult | undefined) => finish(value) };
   }
 
-  test("hands out a finished summary once, only for the snapshot it was written for", async () => {
+  test("hands out a finished summary once, with the snapshot it was written for", async () => {
     const registry = createCompactionPrecomputes({ clock: manualClock() });
     registry.start(CHAT_ID, snapshot(), async () => result("one"));
+    assert.equal(registry.current(CHAT_ID)?.contextKey, "context-1", "a running summary has its snapshot");
     await settled(registry);
-    assert.equal(registry.take(CHAT_ID, snapshot("context-2")), undefined, "a moved chat gets nothing");
-    assert.equal(registry.has(CHAT_ID), false, "and the stale summary is gone");
-
-    registry.start(CHAT_ID, snapshot(), async () => result("two"));
-    await settled(registry);
-    assert.equal(registry.take(CHAT_ID, snapshot())?.summary, "two");
-    assert.equal(registry.take(CHAT_ID, snapshot()), undefined, "a summary is applied once");
+    const taken = registry.take(CHAT_ID);
+    assert.equal(taken?.result.summary, "one");
+    assert.equal(taken?.snapshot.contextKey, "context-1");
+    assert.equal(registry.take(CHAT_ID), undefined, "a summary is applied once");
+    assert.equal(registry.current(CHAT_ID), undefined);
   });
 
   test("a summary still being written is aborted, not awaited", async () => {
@@ -423,24 +576,27 @@ describe("the background summary registry", () => {
     const run = pending();
     registry.start(CHAT_ID, snapshot(), run.run);
     await new Promise((resolve) => setImmediate(resolve));
-    assert.equal(registry.take(CHAT_ID, snapshot()), undefined);
+    assert.equal(registry.take(CHAT_ID), undefined);
     assert.equal(run.signal()?.aborted, true);
     run.finish(result("late"));
     await new Promise((resolve) => setImmediate(resolve));
     assert.equal(registry.has(CHAT_ID), false, "a run that finishes after being dropped leaves nothing");
   });
 
-  test("keeps one summary per chat: the same snapshot is not started twice, another replaces it", async () => {
+  test("keeps one summary per chat: a new one replaces and aborts the old", async () => {
     const registry = createCompactionPrecomputes({ clock: manualClock() });
     const first = pending();
-    assert.equal(registry.start(CHAT_ID, snapshot(), first.run), true);
-    let second = 0;
-    assert.equal(registry.start(CHAT_ID, snapshot(), async () => { second += 1; return result("again"); }), false);
+    registry.start(CHAT_ID, snapshot(), first.run);
     await new Promise((resolve) => setImmediate(resolve));
-    assert.equal(second, 0, "no second request for the same chat state");
     const replacement = pending();
-    assert.equal(registry.start(CHAT_ID, snapshot("context-2"), replacement.run), true);
+    registry.start(CHAT_ID, snapshot("context-2"), replacement.run);
+    await new Promise((resolve) => setImmediate(resolve));
     assert.equal(first.signal()?.aborted, true, "the summary for the older state is aborted");
+    assert.equal(registry.current(CHAT_ID)?.contextKey, "context-2");
+    first.finish(result("late"));
+    replacement.finish(result("current"));
+    await settled(registry);
+    assert.equal(registry.take(CHAT_ID)?.result.summary, "current", "the aborted run's late result is dropped");
   });
 
   test("drops a summary that outlives its time limit, and the oldest chat past the chat limit", async () => {
@@ -462,6 +618,15 @@ describe("the background summary registry", () => {
     assert.equal(registry.has("chat-1"), false, "the oldest chat is dropped");
     assert.equal(runs[0]!.signal()?.aborted, true);
     assert.ok(registry.has("chat-2") && registry.has("chat-3"));
+  });
+
+  test("stopping the chat's turn aborts its summary", async () => {
+    const run = pending();
+    chatCompactionPrecomputes.start(CHAT_ID, snapshot(), run.run);
+    await new Promise((resolve) => setImmediate(resolve));
+    chatPromptGenerationStopped(CHAT_ID);
+    assert.equal(run.signal()?.aborted, true);
+    assert.equal(chatCompactionPrecomputes.has(CHAT_ID), false);
   });
 
   test("deleting the chat aborts its summary", async () => {

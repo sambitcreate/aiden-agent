@@ -157,28 +157,58 @@ export function memoryLines(block: string): string[] {
 
 const MEMORY_MARKER = /\[memory:/iu;
 
+const XML_ENTITIES: Record<string, string> = { amp: "&", lt: "<", gt: ">", quot: "\"", apos: "'" };
+
+function unescapedXml(text: string): string {
+  return text.replace(/&(#x[0-9a-f]+|#[0-9]+|[a-z]+);/giu, (entity, name: string) => {
+    const lower = name.toLowerCase();
+    if (lower.startsWith("#x")) return safeCodePoint(Number.parseInt(lower.slice(2), 16)) ?? entity;
+    if (lower.startsWith("#")) return safeCodePoint(Number.parseInt(lower.slice(1), 10)) ?? entity;
+    return XML_ENTITIES[lower] ?? entity;
+  });
+}
+
+function safeCodePoint(value: number): string | undefined {
+  return Number.isInteger(value) && value >= 0 && value <= 0x10ffff ? String.fromCodePoint(value) : undefined;
+}
+
 function comparable(text: string): string {
-  return text.normalize("NFKC").toLowerCase().replace(/\s+/gu, " ").trim();
+  return unescapedXml(unescapedXml(text)).normalize("NFKC").toLowerCase().replace(/\s+/gu, " ").trim();
+}
+
+/** A fact's text as a phrase: comparable, without trailing punctuation. */
+function factPhrase(line: string): string {
+  return comparable(line.replace(MEMORY_LINE, "")).replace(/[\p{P}\s]+$/u, "").trim();
+}
+
+function escapedPattern(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+}
+
+/** Matches `phrase` as a whole: not inside a longer word on either side. */
+function phrasePattern(phrase: string): RegExp {
+  return new RegExp(`(?<![\\p{L}\\p{N}])${escapedPattern(phrase)}(?![\\p{L}\\p{N}])`, "u");
 }
 
 /**
  * `text` without a line that could restate a memory fact: every line with a
- * `[memory:` marker, and every line containing the text of one of `facts`
- * (memory fact lines), compared without case or spacing differences.
- * `restated` is true when a fact's text still appears across the kept lines,
- * so a caller can refuse the text altogether.
+ * `[memory:` marker, and every line stating one of `facts` (memory fact
+ * lines) as a whole phrase. Both sides are compared with XML entities
+ * unescaped and without case, spacing or the fact's trailing punctuation, so
+ * "Uses Go" drops "- The user uses Go." but keeps "uses gofmt". `restated` is
+ * true when a fact still appears across the kept lines, so a caller can refuse
+ * the text altogether.
  */
 export function withoutStatedMemoryFacts(
   text: string,
   facts: readonly string[],
 ): { text: string; restated: boolean } {
-  const factTexts = [...new Set(facts.map((line) => comparable(line.replace(MEMORY_LINE, ""))))]
-    .filter((fact) => fact.length > 0);
+  const patterns = [...new Set(facts.map(factPhrase))].filter((fact) => fact.length > 0).map(phrasePattern);
   const kept = text
     .split("\n")
-    .filter((line) => !MEMORY_MARKER.test(line) && !factTexts.some((fact) => comparable(line).includes(fact)));
+    .filter((line) => !MEMORY_MARKER.test(unescapedXml(line)) && !patterns.some((pattern) => pattern.test(comparable(line))));
   const joined = comparable(kept.join(" "));
-  return { text: kept.join("\n"), restated: factTexts.some((fact) => joined.includes(fact)) };
+  return { text: kept.join("\n"), restated: patterns.some((pattern) => pattern.test(joined)) };
 }
 
 function factHash(line: string): string {

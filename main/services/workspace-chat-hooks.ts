@@ -536,6 +536,25 @@ export async function preCompactSummaryInstructions(
   return context ? `Keep what the person's PreCompact hooks point out:\n\n${context}` : undefined;
 }
 
+/**
+ * The compaction options for a chat that runs hooks: PreCompact context as
+ * summary instructions, and whether a PreCompact hook is configured now. A
+ * chat with one never writes a background summary, since the hook speaks at
+ * compaction time.
+ */
+export function preCompactCompactionOptions(
+  hooks: Pick<WorkspaceChatHooks, "has" | "dispatch">,
+  trigger: "manual" | "auto",
+): {
+  summaryInstructions: (reason: string, signal: AbortSignal) => Promise<string | undefined>;
+  hasSummaryInstructions: () => boolean;
+} {
+  return {
+    summaryInstructions: (reason, signal) => preCompactSummaryInstructions(hooks, { trigger, reason, signal }),
+    hasSummaryInstructions: () => hooks.has("PreCompact"),
+  };
+}
+
 /** The person's prompt; `id` is its stored message, when the chat store holds one. */
 export interface PromptIntakeMessage {
   id?: string;

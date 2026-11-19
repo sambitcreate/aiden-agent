@@ -312,6 +312,12 @@ export interface SideCallContinuationOptions {
   timeoutMs?: number;
   maxRetries?: number;
   maxRetryDelayMs?: number;
+  /**
+   * Replaces the parent's retention. A request that is never continued, such
+   * as a compaction summary, keeps the short one instead of paying to write
+   * the parent's longer one.
+   */
+  cacheRetention?: "short";
 }
 
 /**
@@ -336,7 +342,7 @@ export function sideCallContinuation(
       ...(replay.temperature === undefined ? {} : { temperature: replay.temperature }),
       ...(replay.transport === undefined ? {} : { transport: replay.transport }),
       ...(replay.toolChoice === undefined ? {} : { toolChoice: structuredClone(replay.toolChoice) }),
-      cacheRetention: replay.cacheRetention ?? "short",
+      cacheRetention: call.cacheRetention ?? replay.cacheRetention ?? "short",
       disableContinuation: true,
       ...(replay.reasoning ? { reasoning: replay.reasoning } : {}),
       ...(call.signal ? { signal: call.signal } : {}),

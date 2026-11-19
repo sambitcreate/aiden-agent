@@ -26,6 +26,11 @@ export function chatPromptPrefixCompacted(chatId: string): void {
   chatCompactionPrecomputes.discard(chatId);
 }
 
+/** The person stopped the chat's turn: no background summary outlives it. */
+export function chatPromptGenerationStopped(chatId: string): void {
+  chatCompactionPrecomputes.discard(chatId);
+}
+
 /** The chat was deleted or its context profile dropped. */
 export function forgetChatPromptCacheState(chatId: string): void {
   chatPromptCacheTelemetry.forget(chatId);

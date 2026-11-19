@@ -101,8 +101,9 @@ export interface PromptPrefixHarnessOptions {
   /**
    * Compaction options each turn's coordinator gets on top of the harness's
    * own, read when the turn starts (llm-client builds them per generation).
+   * A `model` here stands for the chat's model changing between turns.
    */
-  compaction?: () => Partial<Omit<PiCompactionCoordinatorOptions, "session" | "model">>;
+  compaction?: () => Partial<Omit<PiCompactionCoordinatorOptions, "session">>;
 }
 
 export type PromptPrefixTurnInput = {
