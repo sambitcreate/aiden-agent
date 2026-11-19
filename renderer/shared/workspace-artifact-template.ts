@@ -79,6 +79,13 @@ interface TemplateWord {
   parts: TemplatePart[];
   /** Whether any of it was quoted. */
   quoted: boolean;
+  /**
+   * On a `--` the plan adds after `fileToo` revisions: the words holding
+   * them. The `--` is left out when every one of their values is a file
+   * inside the workspace (`git log -p {{file}}` with `notes.md`), and those
+   * words become paths the runner checks.
+   */
+  unlessFiles?: TemplateWord[];
   /** Where it starts and ends in the template, for the preview. */
   start: number;
   end: number;
@@ -648,7 +655,9 @@ export function checkWorkspaceArtifactTemplate(template: string): { ok: true; st
  * no branch as files, and `git checkout notes.md` discards that file's edits;
  * with it git reads the value only as a branch and says it is not one. The
  * `--` goes before the first file operand after the value, or at the end of
- * the command, so options written after the value stay options.
+ * the command, so options written after the value stay options. After
+ * revisions that may be files too (`git log -p {{file}}`), the `--` is
+ * decided per run: see `TemplateWord.unlessFiles`.
  */
 function endRefs(command: TemplateCommand): string | undefined {
   let last = -1;
@@ -664,7 +673,9 @@ function endRefs(command: TemplateCommand): string | undefined {
     return `${end.optionAfter} is written after the files of git ${git.name!}. Aiden adds -- before the files so git reads ${name} only as a revision, and git would then read ${end.optionAfter} as a file. Write ${end.optionAfter} before ${name}.`;
   }
   const at = command.words[end.at]!.end;
-  command.words.splice(end.at + 1, 0, { parts: [{ text: "--", insertedAt: at }], quoted: false, start: at, end: at });
+  const revisions = command.words.filter((word) => word.parts.some((part) => "param" in part && part.slot?.refOnly));
+  const either = revisions.every((word) => word.parts.some((part) => "param" in part && part.slot?.fileToo));
+  command.words.splice(end.at + 1, 0, { parts: [{ text: "--", insertedAt: at }], quoted: false, start: at, end: at, ...(either ? { unlessFiles: revisions } : {}) });
   return undefined;
 }
 
@@ -727,6 +738,20 @@ function staysInside(path: string): boolean {
     if (depth < 0) return false;
   }
   return true;
+}
+
+/** Whether a filled git word names a file inside the workspace by its text: the `path` rule of a git file value. */
+function gitFileFits(filled: string): boolean {
+  return filled !== "" && !filled.startsWith("-") && !filled.includes(":") && staysInside(filled);
+}
+
+/** Whether a `--` the plan adds is left out for these values (see `TemplateWord.unlessFiles`). */
+function leftOut(word: TemplateWord, value: (name: string) => string): boolean {
+  return word.unlessFiles !== undefined && word.unlessFiles.every((file) => gitFileFits(filledWord(file, value)));
+}
+
+function filledWord(word: TemplateWord, value: (name: string) => string): string {
+  return word.parts.map((part) => ("text" in part ? part.text : value(part.param))).join("");
 }
 
 /** A stash git stash show, apply, pop or drop reads by its place in the list. */
@@ -792,7 +817,7 @@ export function workspaceArtifactValueProblem(steps: readonly TemplateStep[], va
         const params = word.parts.filter((part): part is TemplateParam => "param" in part);
         if (!params.length) continue;
         const name = params[0]!.param;
-        const filled = word.parts.map((part) => ("text" in part ? part.text : value(part.param))).join("");
+        const filled = filledWord(word, value);
         const slot = params[0]!.slot ?? { rule: "text" };
         if (filled.startsWith("-") && !(word.parts.length === 1 && slot.dash)) {
           return `${name} cannot start with "-" there: the program would read it as an option. Pass such a value as an option's value (git commit -m {{msg}}, grep -e {{pattern}}, gh pr create --body {{body}}), or leave the "-" out.`;
@@ -808,7 +833,10 @@ export function workspaceArtifactValueProblem(steps: readonly TemplateStep[], va
           }
           if (rule === "rev") {
             const problem = revProblem(text);
-            if (problem) return `${part.param} must be a git revision there: ${problem}.`;
+            if (problem && part.slot?.fileToo && !gitFileFits(filled)) {
+              return `${part.param} must be a git revision or a file inside the workspace there: as a revision, ${problem}; as a file, ${OUTSIDE_PATHS}, and no :.`;
+            }
+            if (problem && !part.slot?.fileToo) return `${part.param} must be a git revision there: ${problem}.`;
           }
           // git runs with GIT_LITERAL_PATHSPECS=1, so `*`, `?` and `[` name themselves (`app/[id]/page.tsx`);
           // a `:` anywhere is refused: leading, it is pathspec magic (`:/`, `:(top)`); inside, git
@@ -843,11 +871,14 @@ export function fillWorkspaceArtifactTemplate(steps: readonly TemplateStep[], va
   return steps.map((step) => ({
     connector: step.connector,
     pipeline: step.pipeline.map((command) => {
-      const paths = command.words.flatMap((word, index) =>
-        word.parts.some((part) => "param" in part && part.slot?.rule === "path" && !part.slot.blob) ? [index] : [],
+      // Revisions that are files this run, with the `--` after them left out.
+      const files = new Set(command.words.flatMap((word) => (leftOut(word, value) ? word.unlessFiles! : [])));
+      const words = command.words.filter((word) => !leftOut(word, value));
+      const paths = words.flatMap((word, index) =>
+        files.has(word) || word.parts.some((part) => "param" in part && part.slot?.rule === "path" && !part.slot.blob) ? [index] : [],
       );
       return {
-        argv: command.words.map((word) => word.parts.map((part) => ("text" in part ? part.text : value(part.param))).join("")),
+        argv: words.map((word) => filledWord(word, value)),
         redirects: [...command.redirects],
         ...(paths.length > 0 ? { paths } : {}),
         ...(literal(command.words[0]) === "git" ? { env: { ...GIT_ENV } } : {}),
@@ -877,6 +908,7 @@ export function previewWorkspaceArtifactTemplate(
       const first = command.words[0]!;
       if (literal(first) === "git") edits.push({ at: first.start, end: first.start, text: Object.entries(GIT_ENV).map(([name, setting]) => `${name}=${setting} `).join("") });
       for (const word of command.words) {
+        if (leftOut(word, value)) continue;
         // A word the plan adds (`--`) is written after a space; text it adds inside a word (`./`) is not.
         const added = word.parts.every((part) => "text" in part && part.insertedAt !== undefined);
         for (const part of word.parts) {

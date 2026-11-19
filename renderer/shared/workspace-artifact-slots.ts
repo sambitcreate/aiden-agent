@@ -53,6 +53,14 @@ export interface Slot {
    */
   refOnly?: boolean;
   /**
+   * A `refOnly` revision that may name a file in the workspace as well
+   * (`git log -p {{file}}`, `git show {{sha}} {{file}}`, `git reset {{file}}`).
+   * The value may be either. When every such value of a command is a file
+   * inside the workspace, the plan adds no `--` and the runner checks each
+   * one's real path; when any is not, the plan adds `--`.
+   */
+  fileToo?: boolean;
+  /**
    * A GitHub search (`gh pr list --search {{q}}`): no `repo:`, `org:` or
    * `user:` qualifier, which would widen the search past this repository.
    */
@@ -117,6 +125,7 @@ const RR: Slot = { rule: "ref", remote: true };
 const STASH: Slot = { rule: "ref", stash: true };
 const V: Slot = { rule: "rev" };
 const VO: Slot = { rule: "rev", refOnly: true };
+const VF: Slot = { rule: "rev", refOnly: true, fileToo: true };
 const P: Slot = { rule: "path" };
 const G: Slot = { rule: "target" };
 
@@ -274,8 +283,8 @@ const logLike = (name: string): SlotSpec => ({
   values: LOG_VALUES,
   joined: LOG_JOINED,
   digits: true,
-  operand: (_index, afterDashes) => (afterDashes ? P : VO),
-  operandForms: "revisions, and files in the workspace after --",
+  operand: (_index, afterDashes) => (afterDashes ? P : VF),
+  operandForms: "revisions or files in the workspace, and files in the workspace after --",
 });
 
 /** fetch and pull: the first operand is the remote, which can be a URL, a path or a transport that runs a command. */
@@ -426,7 +435,7 @@ const GIT_SPECS: Readonly<Record<string, SlotSpec>> = {
     name: "git reset",
     flags: "q",
     long: ["soft", "mixed", "hard", "keep", "merge", "quiet"],
-    operand: (index, afterDashes) => (index === 0 && !afterDashes ? VO : P),
+    operand: (index, afterDashes) => (index === 0 && !afterDashes ? VF : P),
     operandForms: "a commit first, then files in the workspace",
   },
   tag: {

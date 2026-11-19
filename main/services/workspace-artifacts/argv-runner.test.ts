@@ -486,9 +486,9 @@ test("in a workspace that is a folder of a larger repository, git reaches no fil
     ["git grep TOPSECRET -- {{file}}", ":/", /file must name a file inside the workspace/u],
     ["git ls-files {{file}}", ":/", /file must name a file inside the workspace/u],
     ["git log -p -- {{file}}", ":(top)secret", /file must name a file inside the workspace/u],
-    ["git show {{rev}}", "HEAD:secret/s", /rev must be a git revision there/u],
-    ["git show {{rev}}", "HEAD:../secret/s", /rev must be a git revision there/u],
-    ["git log -p {{rev}}", ":/one", /rev must be a git revision there/u],
+    ["git show {{rev}}", "HEAD:secret/s", /rev must be a git revision or a file inside the workspace there/u],
+    ["git show {{rev}}", "HEAD:../secret/s", /rev must be a git revision or a file inside the workspace there/u],
+    ["git log -p {{rev}}", ":/one", /rev must be a git revision or a file inside the workspace there/u],
     ["git show HEAD:{{file}}", "../secret/s", /file must name a file inside the workspace/u],
     ["git show HEAD:{{file}}", ":secret/s", /file must name a file inside the workspace/u],
     ["git show :0:{{file}}", "../secret/s", /file must name a file inside the workspace/u],
@@ -556,6 +556,67 @@ test("in a workspace that is a folder of a larger repository, git reaches no fil
   const reset = await runResolved(resolve("git reset {{rev}} f", ["HEAD"]), ws);
   assert.equal(reset.exitCode, 0, reset.stderr);
   assert.equal(git(["diff", "--cached", "--name-only"]), "secret/s\n");
+});
+
+test("git log, show and reset take a value as a revision or a file, adding -- only when it is not a file in the workspace", async (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "aiden-artifact-rev-or-file-"));
+  const elsewhere = fs.mkdtempSync(path.join(os.tmpdir(), "aiden-artifact-elsewhere-"));
+  t.after(() => {
+    fs.rmSync(dir, { recursive: true, force: true });
+    fs.rmSync(elsewhere, { recursive: true, force: true });
+  });
+  const git = (args: string[]) => execFileSync("git", ["-c", "user.email=a@example.com", "-c", "user.name=a", ...args], { cwd: dir, encoding: "utf8" });
+  git(["init", "-q", "-b", "main"]);
+  fs.writeFileSync(path.join(dir, "notes.md"), "first\n");
+  fs.writeFileSync(path.join(dir, "other.md"), "x\n");
+  git(["add", "."]);
+  git(["commit", "-q", "-m", "one"]);
+  fs.writeFileSync(path.join(dir, "notes.md"), "second\n");
+  git(["commit", "-q", "-am", "two"]);
+  const resolve = (command: string, values: string[]) => {
+    const names = [...command.matchAll(/\{\{(\w+)\}\}/gu)].map((match) => match[1]!);
+    const action = parseWorkspaceArtifactActions([{ name: "a", label: "A", command, params: [...new Set(names)].map((name) => ({ name })) }])[0]!;
+    return resolveWorkspaceArtifactCommand(action, values);
+  };
+  const run = (command: string, values: string[]) => runResolved(resolve(command, values), dir);
+
+  // A file's history, and the file at a commit.
+  const history = resolve("git log -p {{file}}", ["notes.md"]);
+  assert.equal(history.preview, "GIT_LITERAL_PATHSPECS=1 git log -p 'notes.md'");
+  const logged = await runResolved(history, dir);
+  assert.equal(logged.exitCode, 0, logged.stderr);
+  assert.match(logged.stdout, /\+second/u);
+  assert.match(logged.stdout, /\+first/u);
+  assert.equal(spawnSync("/bin/sh", ["-c", history.preview], { cwd: dir, encoding: "utf8" }).stdout, logged.stdout, "the preview runs what the plan runs");
+  for (const command of ["git log --oneline {{file}}", "git log --follow -p {{file}}"]) {
+    const ran = await run(command, ["notes.md"]);
+    assert.equal(ran.exitCode, 0, `${command}: ${ran.stderr}`);
+    assert.match(ran.stdout, /two/u, command);
+  }
+  const shown = await run("git show {{sha}} {{file}}", [git(["rev-parse", "HEAD~1"]).trim(), "notes.md"]);
+  assert.equal(shown.exitCode, 0, shown.stderr);
+  assert.match(shown.stdout, /\+first/u);
+  // A revision still reads as one.
+  const back = await run("git log --oneline {{rev}}", ["HEAD~1"]);
+  assert.equal(back.exitCode, 0, back.stderr);
+  assert.match(back.stdout, /one/u);
+  assert.doesNotMatch(back.stdout, /two/u);
+
+  // A staged file unstages.
+  for (const command of ["git reset {{file}}", "git reset -q {{file}}"]) {
+    fs.writeFileSync(path.join(dir, "notes.md"), `${command}\n`);
+    git(["add", "notes.md"]);
+    const reset = await run(command, ["notes.md"]);
+    assert.equal(reset.exitCode, 0, `${command}: ${reset.stderr}`);
+    assert.equal(git(["diff", "--cached", "--name-only"]), "", command);
+  }
+
+  // Read as a file, a value is checked through symbolic links like any file value.
+  fs.writeFileSync(path.join(elsewhere, "secret"), "TOPSECRET\n");
+  fs.symlinkSync(elsewhere, path.join(dir, "link"));
+  const linked = await run("git log -p {{file}}", ["link/secret"]);
+  assert.equal(linked.exitCode, 126);
+  assert.match(linked.stderr, /leads outside the workspace/u);
 });
 
 test("git reads * ? [ in a file value as part of the file's name, in every command of a chain", async (t) => {

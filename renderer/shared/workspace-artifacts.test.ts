@@ -306,7 +306,8 @@ test("a template with page data runs without a shell, so shell syntax the checke
     {
       connector: "&&",
       pipeline: [
-        { argv: ["git", "log", "-1", "main", "--"], redirects: ["2>&1"], env: GIT },
+        // `main` may be a revision or a file inside the workspace, so the runner checks its real path.
+        { argv: ["git", "log", "-1", "main"], redirects: ["2>&1"], env: GIT, paths: [3] },
         { argv: ["head", "-n", "1"], redirects: [] },
       ],
     },
