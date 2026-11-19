@@ -76,6 +76,7 @@ import type { CommandId } from "../shared/keybindings";
 import { ariaKeyShortcut, prettyAccelerator } from "../shared/keybindings";
 import { removeDeletedChatFromCache } from "../lib/chat-deletion-cache";
 import { useAppUpdateSnapshot } from "../lib/use-app-update-snapshot";
+import { usePresence } from "../lib/use-presence";
 import type { AppUpdateRestartResult, AppUpdateSnapshot } from "../shared/app-update";
 import { useChatActivityState, useChatReadMarkers } from "../lib/use-chat-activity";
 import { chatRowStateFor } from "../lib/chat-activity";
@@ -180,8 +181,6 @@ const AIDEN_MARK_URL = new URL("../../resources/app-icon.png", import.meta.url).
 const COLLAPSED_WORKSPACE_CHAT_LIMIT = 4;
 const NO_REMOTE_CAPABILITIES: ReadonlySet<HostChatCapability> = new Set();
 const MARK_READ_FAILED = "Aiden could not mark that chat read.";
-/** Must match aiden-app-update-banner-out in styles.css. */
-const APP_UPDATE_BANNER_EXIT_MS = 120;
 
 interface ChatSidebarProps {
   activeChatId: string | undefined;
@@ -262,7 +261,7 @@ function UpdateReadyBanner({ blockedReason }: { blockedReason?: string }) {
   const [dismissedKey, setDismissedKey] = React.useState<string | null>(null);
   const [restarting, setRestarting] = React.useState(false);
   const [retrying, setRetrying] = React.useState(false);
-  const [present, setPresent] = React.useState(false);
+  const bannerRef = React.useRef<HTMLElement>(null);
   const [displayedSnapshot, setDisplayedSnapshot] = React.useState<AppUpdateSnapshot>(snapshot);
   const titleId = React.useId();
   const bannerKey = updateBannerKey(snapshot);
@@ -274,22 +273,11 @@ function UpdateReadyBanner({ blockedReason }: { blockedReason?: string }) {
     if (bannerKey === null) setDismissedKey(null);
   }, [bannerKey, snapshot.status]);
 
-  // Keep the banner mounted through its exit animation, matching Aiden's
-  // Quick View and assistant dock presence primitives.
+  // Keep the banner mounted, showing what it last said, through its exit animation.
+  const { rendered: present } = usePresence(open, bannerRef);
   React.useLayoutEffect(() => {
-    if (open) {
-      setDisplayedSnapshot(snapshot);
-      setPresent(true);
-      return;
-    }
-    if (!present) return;
-    if (document.documentElement.dataset.reduceMotion === "true") {
-      setPresent(false);
-      return;
-    }
-    const timeout = window.setTimeout(() => setPresent(false), APP_UPDATE_BANNER_EXIT_MS);
-    return () => window.clearTimeout(timeout);
-  }, [open, present, snapshot]);
+    if (open) setDisplayedSnapshot(snapshot);
+  }, [open, snapshot]);
 
   const restart = async () => {
     if (!open) return;
@@ -355,6 +343,7 @@ function UpdateReadyBanner({ blockedReason }: { blockedReason?: string }) {
 
   return (
     <section
+      ref={bannerRef}
       aria-labelledby={titleId}
       aria-hidden={!open ? true : undefined}
       className="app-update-banner mb-2 origin-bottom rounded-card bg-control/70 px-3 py-3 text-primary"

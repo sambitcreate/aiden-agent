@@ -203,26 +203,24 @@
 /* ---------- Motion vocabulary ----------
  * Apply these classes (with an inline animationDelay to stagger) instead of
  * writing new keyframes. Each loop holds the still pose for most of its cycle. */
-@media (prefers-reduced-motion: no-preference) {
-  :root:not([data-reduce-motion="true"]) .oa-art .oa-caret,
-  :root:not([data-reduce-motion="true"]) .oa-art .oa-anim-blink { animation: oa-blink 1.1s steps(1) infinite; }
-  :root:not([data-reduce-motion="true"]) .oa-art .oa-anim-type {
-    transform-origin: left center;
-    animation: oa-type 7s var(--motion-easing) infinite both;
-  }
-  :root:not([data-reduce-motion="true"]) .oa-art .oa-anim-pop { animation: oa-pop 7s var(--motion-easing) infinite both; }
-  :root:not([data-reduce-motion="true"]) .oa-art .oa-anim-float { animation: oa-float 5s ease-in-out infinite alternate; }
-  :root:not([data-reduce-motion="true"]) .oa-art .oa-anim-pulse {
-    transform-box: fill-box;
-    transform-origin: center;
-    animation: oa-pulse 2.4s ease-in-out infinite;
-  }
-  :root:not([data-reduce-motion="true"]) .oa-art .oa-anim-bars {
-    transform-origin: center bottom;
-    animation: oa-bars 1.2s ease-in-out infinite alternate;
-  }
-  :root:not([data-reduce-motion="true"]) .oa-art .oa-anim-press { animation: oa-press 7s var(--motion-easing) infinite; }
+:root:not([data-reduce-motion="true"]) .oa-art .oa-caret,
+:root:not([data-reduce-motion="true"]) .oa-art .oa-anim-blink { animation: oa-blink 1.1s steps(1) infinite; }
+:root:not([data-reduce-motion="true"]) .oa-art .oa-anim-type {
+  transform-origin: left center;
+  animation: oa-type 7s var(--motion-easing) infinite both;
 }
+:root:not([data-reduce-motion="true"]) .oa-art .oa-anim-pop { animation: oa-pop 7s var(--motion-easing) infinite both; }
+:root:not([data-reduce-motion="true"]) .oa-art .oa-anim-float { animation: oa-float 5s ease-in-out infinite alternate; }
+:root:not([data-reduce-motion="true"]) .oa-art .oa-anim-pulse {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: oa-pulse 2.4s ease-in-out infinite;
+}
+:root:not([data-reduce-motion="true"]) .oa-art .oa-anim-bars {
+  transform-origin: center bottom;
+  animation: oa-bars 1.2s ease-in-out infinite alternate;
+}
+:root:not([data-reduce-motion="true"]) .oa-art .oa-anim-press { animation: oa-press 7s var(--motion-easing) infinite; }
 /* A tile scrolled out of the gallery, or a hidden window, holds its frame
  * instead of repainting loops nobody can see (renderer/lib/offscreen-pause.ts). */
 .oa-tile[data-offscreen] .oa-art *,

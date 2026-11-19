@@ -116,6 +116,7 @@ import {
 } from "../lib/device-tabs";
 import { deviceWorkspace, useFloatingDevice } from "../lib/device-workspace-store";
 import { prefersReducedMotion } from "../lib/appearance-runtime";
+import { usePresence } from "../lib/use-presence";
 import { useLayer } from "../lib/layer-stack";
 import { arrangeByDraft, ReorderAnnouncer, reorderMessage, useReorderDraft } from "../lib/reorder-draft";
 import {
@@ -262,7 +263,6 @@ const SURFACE_STORAGE_VERSION_KEY = "aiden-agent.environment.surface-state-versi
 const TAB_STORAGE_KEY = "aiden-agent.environment.tab";
 const LAST_TOOLS_TAB_STORAGE_KEY = "aiden-agent.environment.last-tools-tab";
 const WIDTH_STORAGE_KEY = "aiden-agent.environment.width";
-const SUMMARY_CARD_EXIT_MS = 120;
 const EMPTY_EDITOR_STATE: FilesEditorState = {
   workspaceId: undefined,
   path: null,
@@ -1665,8 +1665,6 @@ const QUICK_VIEW_SECTION_TITLES: Record<QuickViewSectionId, string> = {
 
 /** Gap between Quick View cards (`gap-2`), added to the dragged card's height when siblings shift. */
 const QUICK_VIEW_CARD_GAP_PX = 8;
-/** Keeps a collapsing body's content until its row transition (`--motion-duration`) has run. */
-const QUICK_VIEW_BODY_UNMOUNT_MS = 300;
 
 function readQuickViewLayout(): QuickViewLayout {
   try {
@@ -1682,24 +1680,6 @@ function writeQuickViewLayout(layout: QuickViewLayout): void {
   } catch {
     // Storage can be unavailable; the layout still applies for this session.
   }
-}
-
-/** True while `open`, and for a moment after it closes so a collapsing body keeps its content. */
-function useMountedWhileOpen(open: boolean): boolean {
-  const [mounted, setMounted] = React.useState(open);
-  React.useEffect(() => {
-    if (open) {
-      setMounted(true);
-      return;
-    }
-    if (prefersReducedMotion()) {
-      setMounted(false);
-      return;
-    }
-    const timeout = window.setTimeout(() => setMounted(false), QUICK_VIEW_BODY_UNMOUNT_MS);
-    return () => window.clearTimeout(timeout);
-  }, [open]);
-  return open || mounted;
 }
 
 function ContextSummaryMeter({
@@ -1753,7 +1733,6 @@ export function QuickViewCards({ workspace, live }: { workspace: Workspace; live
   const pressure = panel.contextDetails?.pressure ?? null;
   const compacting = Boolean(panel.contextDetails?.compacting);
   const subagentSummary = subagentOverviewSummary(panel.subagentViews);
-  const subagentsBodyMounted = useMountedWhileOpen(Boolean(layout.expanded.subagents));
 
   const visible = quickViewVisibleSections(layout.order, {
     changesVisible,
@@ -1845,7 +1824,7 @@ export function QuickViewCards({ workspace, live }: { workspace: Workspace; live
   const toolsBlocked = panel.gitOperationBusy;
   const sections: Record<
     QuickViewSectionId,
-    Pick<QuickViewSectionProps, "summary" | "summaryLabel" | "headerAction" | "children">
+    Pick<QuickViewSectionProps, "summary" | "summaryLabel" | "headerAction" | "bodyWhileOpen" | "children">
   > = {
     environment: {
       summary: environmentSummary?.node,
@@ -1906,7 +1885,8 @@ export function QuickViewCards({ workspace, live }: { workspace: Workspace; live
         disabled: toolsBlocked,
       },
       // The run list ticks elapsed time, so it only exists while the card is open.
-      children: subagentsBodyMounted ? (
+      bodyWhileOpen: true,
+      children: (
         <SubagentStatusGroups
           runs={panel.subagentViews}
           stopPendingRunIds={panel.subagentStopPendingRunIds}
@@ -1914,7 +1894,7 @@ export function QuickViewCards({ workspace, live }: { workspace: Workspace; live
           onOpen={panel.openSubagent}
           onStop={panel.stopSubagent}
         />
-      ) : null,
+      ),
     },
   };
 
@@ -1980,23 +1960,9 @@ function QuickViewCard({
   const panel = useEnvironmentPanel();
   const { active } = useActiveWorkspace();
   const open = panel.quickViewOpen;
-  const [present, setPresent] = React.useState(open);
   const stackRef = React.useRef<HTMLElement | null>(null);
+  const { rendered: present } = usePresence(open, stackRef);
   const available = Boolean(active?.folderPath) && active?.permission !== "none";
-
-  React.useLayoutEffect(() => {
-    if (open) {
-      setPresent(true);
-      return;
-    }
-    if (!present) return;
-    if (prefersReducedMotion()) {
-      setPresent(false);
-      return;
-    }
-    const timeout = window.setTimeout(() => setPresent(false), SUMMARY_CARD_EXIT_MS);
-    return () => window.clearTimeout(timeout);
-  }, [open, present]);
 
   React.useLayoutEffect(() => {
     if (open && present && presented && panel.frontSurface === "quick-view") {

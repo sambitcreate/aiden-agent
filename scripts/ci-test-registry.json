@@ -1435,6 +1435,7 @@
         "renderer/shared/model-pad-preferences.test.ts",
         "renderer/lib/model-pad-preferences.test.tsx",
         "renderer/lib/reduced-motion.test.ts",
+        "renderer/lib/use-presence.test.tsx",
         "renderer/lib/model-pace-queries.test.ts",
         "renderer/components/reasoning-block.test.tsx",
         "renderer/components/reasoning-visibility-control.test.tsx",

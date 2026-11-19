@@ -119,12 +119,59 @@ keeps the summary card.
 
 Aiden adopts the structural layer of the Untitled theme (`GUI.md`, `gui/`) while keeping its own radii and preset palettes:
 
-- **Motion.** Controls, menus, and popovers use `--motion-duration` (200ms) with `--motion-easing`; popovers enter from `--motion-popup-scale` (0.96). Shared buttons settle by `--motion-press-distance` (1px) while held. Tailwind exposes the curves as `ease-standard` and `ease-emphasized`. Shared dialogs keep their deliberate near-instant entrance and the sidebar keeps its 300ms width timing with the emphasized curve. Every motion is removed under Reduce Motion.
+- **Motion.** Controls, menus, and popovers use `--motion-duration` (200ms) with `--motion-easing`; popovers enter from `--motion-popup-scale` (0.96). Shared buttons settle by `--motion-press-distance` (1px) while held. Tailwind exposes the curves as `ease-standard` and `ease-emphasized`. Shared dialogs keep their deliberate near-instant entrance and the sidebar keeps its 300ms width timing with the emphasized curve. Every motion is removed under Reduce Motion. See [Motion](#motion) for the tokens, Reduce Motion and exit presence.
 - **Dialog sizes.** The shared `Dialog` is 440px by default, `large` (680px) for searchable lists, `wide` (860px) for a dialog with its own vertical tab list such as Workspace settings, and `full` for an image's full view. All cap at 85% of the window height and scroll their body.
 - **Surfaces.** Cards, sheets, popovers, and floating panels have no outline: fill and the existing elevation tokens define their edge. Inset row separators and header separators remain.
 - **Fields.** Inputs, textareas, and select triggers rest on the `--surface-input` fill with their neutral resting border; focus deepens the fill to `--surface-control`. No accent border or ring.
 - **Buttons.** Labeled buttons use roomier horizontal padding (12/16/20px for small/medium/large) at the existing heights.
 - **Type.** Text tokens follow Untitled's step ratios anchored to the UI font-size preference (at 14px: mini 10/14, small 12/16, regular 14/20, large-strong 16/24, heading1 24/32; heading2 stays 18/24).
+
+## Motion
+
+**Tokens.** Curves and durations come from the tokens in `renderer/styles.css`:
+`--motion-duration` (200ms) with `--motion-easing` for controls, menus and
+popovers, `--motion-large-duration` (360ms) with `--motion-large-easing` for
+panels, drawers and disclosure, and `--motion-decelerate-easing`
+(`cubic-bezier(0, 0, 0.2, 1)`) for hover lifts, tooltips and quick popover
+entrances. Tailwind reads them as `duration-(--motion-duration)`,
+`ease-standard` and `ease-emphasized`. A deliberately snappier step (150ms) may
+keep its own duration with a token curve. A one-off curve (activity marks shared
+with iOS and Android, the image scan, a Web Animations keyframe, which cannot
+read a CSS variable) needs a `literal-motion` allowance with its reason.
+
+**Reduce Motion follows Aiden's setting.** The appearance runtime writes
+`:root[data-reduce-motion]`, folding in the system preference only when the
+setting is System, so an explicit On or Off wins over the OS.
+
+- CSS keys reduced motion on `:root[data-reduce-motion="true"]` (or gates motion
+  on `="false"`), never on `@media (prefers-reduced-motion)` alone. The
+  `motion-reduce:` and `motion-safe:` Tailwind variants are redefined at the top
+  of `styles.css` to read the attribute.
+- Under Reduce Motion the duration tokens are 0ms, so anything timed from them,
+  including generated UI that receives `--motion-duration`, lands at once. A
+  global rule also collapses other animations and transitions to 0.001ms so their
+  end events still fire.
+- Generated UI is outside that rule: with a 0ms token its transitions never run,
+  so its `transitionend` does not fire. Guest code must not wait on it.
+- Script-driven motion (Web Animations, smooth scrolls, canvas and 3D loops, the
+  terminal cursor blink) asks `prefersReducedMotion()` from
+  `renderer/lib/appearance-runtime.ts`, or `useReduceMotion()` to re-render on
+  change, and listens for `APPEARANCE_CHANGE_EVENT` rather than a media query.
+  Only the sandboxed visual viewer, which has no settings, reads the OS query.
+
+**Presence.** An element that animates out stays mounted until its exit
+finishes, not for a fixed timer. `usePresence(present, ref)`
+(`renderer/lib/use-presence.ts`) returns `{ rendered, exiting }`: style the exit
+from `exiting` (usually `data-presence="exiting"` or `data-state="closed"`) on
+the element itself, and the hook waits for its finite animations
+(`Promise.allSettled` over `element.getAnimations()`; animations inside it do not
+hold the exit). With none, or under Reduce Motion, it unmounts before the next
+paint; infinite loops are ignored, and a timeout from the longest computed end
+covers a paused or cancelled animation. `whenAnimationsSettle(element, done)` is
+the same wait for non-React callers. `useCollapsibleBody` uses it to hide a
+collapsed disclosure body, so a cancelled transition with no `transitionend`
+still hides it, and `QuickViewSection`'s `bodyWhileOpen` then drops its
+children.
 
 ## Color, state, and accessibility
 

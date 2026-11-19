@@ -26,6 +26,8 @@ export interface QuickViewSectionProps {
   headerAction?: { kind: "sidebar" | "external"; label: string; onSelect: () => void; disabled?: boolean };
   /** Live drop target while dragging (null when the drag ends) so the parent can shift siblings. */
   onDragPreview?: (id: QuickViewSectionId, to: number | null) => void;
+  /** Mount `children` only while the body is laid out: open, or still collapsing. */
+  bodyWhileOpen?: boolean;
   children?: React.ReactNode;
 }
 
@@ -55,6 +57,7 @@ export function QuickViewSection({
   measureSiblings,
   headerAction,
   onDragPreview,
+  bodyWhileOpen = false,
   children,
 }: QuickViewSectionProps): React.JSX.Element {
   const headingId = React.useId();
@@ -64,7 +67,7 @@ export function QuickViewSection({
   const bodyRef = React.useRef<HTMLDivElement>(null);
   const dragRef = React.useRef<DragState | null>(null);
   const [dragging, setDragging] = React.useState(false);
-  const { hidden, open, onTransitionEnd } = useCollapsibleBody(collapsed, bodyRef);
+  const { hidden, open } = useCollapsibleBody(collapsed, bodyRef);
 
   const setTranslate = (dy: number | null) => {
     const card = cardRef.current;
@@ -237,7 +240,6 @@ export function QuickViewSection({
         inert={collapsed ? true : undefined}
         aria-hidden={collapsed ? true : undefined}
         hidden={hidden}
-        onTransitionEnd={onTransitionEnd}
         className={cn(
           "grid transition-[grid-template-rows,opacity] duration-(--motion-duration) ease-standard motion-reduce:transition-none",
           open ? "grid-rows-[1fr]" : "grid-rows-[0fr] opacity-0",
@@ -245,7 +247,7 @@ export function QuickViewSection({
       >
         <div className="min-h-0 overflow-hidden">
           {/* pt-0.5 leaves room for the first row's focus ring inside the clipping wrapper. */}
-          <div className="px-1 pt-0.5 pb-1">{children}</div>
+          <div className="px-1 pt-0.5 pb-1">{bodyWhileOpen && hidden ? null : children}</div>
         </div>
       </div>
     </section>

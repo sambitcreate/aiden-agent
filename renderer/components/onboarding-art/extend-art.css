@@ -51,10 +51,8 @@
 }
 .oa-pad-info { display: grid; gap: 4px; padding: 7px; }
 .oa-pad-info .oa-bar { height: 4px; }
-@media (prefers-reduced-motion: no-preference) {
-  :root:not([data-reduce-motion="true"]) .oa-art :is(.oa-pad-knob, .oa-pad-glow) {
-    animation: oa-pad-knob 9s cubic-bezier(0.65, 0, 0.35, 1) infinite;
-  }
+:root:not([data-reduce-motion="true"]) .oa-art :is(.oa-pad-knob, .oa-pad-glow) {
+  animation: oa-pad-knob 9s cubic-bezier(0.65, 0, 0.35, 1) infinite;
 }
 /* The knob settles on three model dots in turn (grid cells 5·1, 3·3, 4·6). */
 @keyframes oa-pad-knob {

@@ -236,3 +236,14 @@ test("pressing a held card's grip puts the card back before a pointer drag start
   fireEvent.keyDown(grip(), { key: "ArrowUp" });
   assert.deepEqual(cardTitles(), ["Environment", "Context", "Subagents"]);
 });
+
+test("collapsing Subagents removes its ticking run list even without a transitionend", () => {
+  renderCards({ runs: [RUN] });
+  const header = () => screen.getByRole("button", { name: /^Subagents/u });
+  const runList = () => screen.queryByRole("group", { name: /^Completed, 1$/u });
+  assert.equal(runList(), null, "a collapsed card mounts no run list");
+  fireEvent.click(header());
+  assert.ok(runList());
+  fireEvent.click(header());
+  assert.equal(runList(), null);
+});

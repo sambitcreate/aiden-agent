@@ -30,7 +30,6 @@ import {
 import { AidenIcon } from "./aiden-icon";
 import { cn } from "../lib/ui-utils";
 import {
-  slashPalettePresenceState,
   type SlashResult,
   type SlashSession,
 } from "../lib/slash-command-core";
@@ -40,10 +39,10 @@ import { titleRanges } from "../lib/text-match";
 import { revealInList } from "../lib/reveal-in-list";
 import { useDebouncedAnnouncement } from "../lib/use-debounced-announcement";
 import { MatchText } from "./match-text";
+import { usePresence } from "../lib/use-presence";
 
 export const COMPOSER_SLASH_PALETTE_ID = "composer-slash-palette";
 export const COMPOSER_SLASH_RETRY_ID = "slash-option-skills-retry";
-const SLASH_PALETTE_EXIT_MS = 110;
 
 const ICONS: Record<SlashCommandIcon, React.ComponentType<{ className?: string }>> = {
   access: LockKeyhole,
@@ -92,6 +91,8 @@ interface ComposerSlashPaletteProps {
   onRetrySkills: () => void;
   skillSelectionEnabled?: boolean;
   presenceState?: "visible" | "exiting";
+  /** The palette root, so its presence can wait for the exit animation. */
+  presenceRef?: React.Ref<HTMLDivElement>;
 }
 
 export function ComposerSlashPalettePresence({
@@ -104,38 +105,18 @@ export function ComposerSlashPalettePresence({
   children: React.ReactElement<ComposerSlashPaletteProps> | null;
 }) {
   const lastContentRef = React.useRef(children);
-  const [retained, setRetained] = React.useState(present);
+  const ref = React.useRef<HTMLDivElement>(null);
+  const { rendered, exiting } = usePresence(present, ref);
   React.useLayoutEffect(() => {
     if (present && children) lastContentRef.current = children;
   }, [children, present]);
-  const reduceMotion =
-    typeof document !== "undefined" && document.documentElement.dataset.reduceMotion === "true";
-  const presenceState = slashPalettePresenceState({
-    present,
-    retained,
-    immediate,
-    reduceMotion,
-  });
 
-  React.useEffect(() => {
-    if (present) {
-      setRetained(true);
-      return;
-    }
-    if (!retained) return;
-    if (immediate || reduceMotion) {
-      setRetained(false);
-      return;
-    }
-    const timer = window.setTimeout(() => {
-      setRetained(false);
-    }, SLASH_PALETTE_EXIT_MS);
-    return () => window.clearTimeout(timer);
-  }, [immediate, present, reduceMotion, retained]);
-
-  if (presenceState === "hidden") return null;
+  // An immediate close (a command ran, the draft was sent) skips the exit.
+  if (!rendered || (!present && immediate)) return null;
   const content = present ? children : lastContentRef.current;
-  return content ? React.cloneElement(content, { presenceState }) : null;
+  return content
+    ? React.cloneElement(content, { presenceState: exiting ? "exiting" : "visible", presenceRef: ref })
+    : null;
 }
 
 function sourceLabel(source: Extract<SlashResult, { kind: "skill" }>["skill"]["source"]): string {
@@ -156,6 +137,7 @@ export function ComposerSlashPalette({
   onRetrySkills,
   skillSelectionEnabled = false,
   presenceState = "visible",
+  presenceRef,
 }: ComposerSlashPaletteProps) {
   const commands = results.filter(
     (result): result is Extract<SlashResult, { kind: "command" }> => result.kind === "command",
@@ -248,6 +230,7 @@ export function ComposerSlashPalette({
 
   return (
     <div
+      ref={presenceRef}
       className="composer-slash-palette absolute inset-x-3 bottom-full z-40 mb-2 origin-bottom overflow-hidden rounded-dialog bg-popover/98 shadow-popover backdrop-blur-xl"
       data-composer-slash-palette
       data-browser-occluder

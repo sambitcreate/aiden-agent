@@ -205,10 +205,8 @@
   border-radius: var(--radius-control);
 }
 
-@media (prefers-reduced-motion: reduce) {
-  .image-workflow-card {
-    transition: none;
-  }
+:root[data-reduce-motion="true"] .image-workflow-card {
+  transition: none;
 }
 
 /* Viewer: the stage and filmstrip on the left, the details panel on the right. */
@@ -346,10 +344,8 @@
   color: var(--color-primary);
 }
 
-@media (prefers-reduced-motion: reduce) {
-  .image-viewer-filmstrip button {
-    transition: none;
-  }
+:root[data-reduce-motion="true"] .image-viewer-filmstrip button {
+  transition: none;
 }
 
 @media (max-width: 720px) {

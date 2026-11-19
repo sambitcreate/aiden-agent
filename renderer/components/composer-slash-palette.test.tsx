@@ -6,6 +6,7 @@ import * as React from "react";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Composer } from "./composer";
+import { ComposerSlashPalettePresence } from "./composer-slash-palette";
 import { TooltipProvider } from "./ui";
 import { CommandSystemProvider } from "../lib/command-system";
 import { DesignModeControlsContext, type DesignModeControls } from "../lib/design-mode";
@@ -315,5 +316,33 @@ test("the context meter shows in a chat and hides while that chat is in design m
     const present = screen.queryByRole("meter", { name: "Context used" }) !== null;
     assert.ok(present === shown, `design mode ${controls?.on ? "on" : "off"}: meter ${present ? "shown" : "hidden"}`);
     view.unmount();
+  }
+});
+
+test("an immediate close unmounts the palette in the same commit, while a normal close plays its exit", () => {
+  // Stands in for the palette's CSS: an exiting root runs an exit that has not finished yet.
+  const exit = { finished: new Promise(() => {}), effect: { getComputedTiming: () => ({ endTime: 10_000, localTime: 0 }) } };
+  const original = Element.prototype.getAnimations;
+  Element.prototype.getAnimations = function (this: Element) {
+    return (this.getAttribute("data-presence") === "exiting" ? [exit] : []) as unknown as Animation[];
+  };
+  document.documentElement.dataset.reduceMotion = "false";
+  try {
+    const Palette = ({ presenceState, presenceRef }: { presenceState?: string; presenceRef?: React.Ref<HTMLDivElement> }) => (
+      <div ref={presenceRef} role="listbox" aria-label="Commands" data-presence={presenceState} />
+    );
+    const palette = <Palette /> as unknown as React.ComponentProps<typeof ComposerSlashPalettePresence>["children"];
+    const view = render(<ComposerSlashPalettePresence present>{palette}</ComposerSlashPalettePresence>);
+
+    view.rerender(<ComposerSlashPalettePresence present={false}>{palette}</ComposerSlashPalettePresence>);
+    assert.ok(screen.queryByRole("listbox", { name: "Commands" })?.getAttribute("data-presence") === "exiting");
+
+    view.rerender(<ComposerSlashPalettePresence present>{palette}</ComposerSlashPalettePresence>);
+    view.rerender(<ComposerSlashPalettePresence present={false} immediate>{palette}</ComposerSlashPalettePresence>);
+    assert.ok(screen.queryByRole("listbox", { name: "Commands" }) === null);
+  } finally {
+    if (original) Element.prototype.getAnimations = original;
+    else delete (Element.prototype as Partial<Element>).getAnimations;
+    delete document.documentElement.dataset.reduceMotion;
   }
 });
