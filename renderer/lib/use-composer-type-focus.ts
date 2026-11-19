@@ -9,6 +9,7 @@ import {
   isReservedTypingSurface,
   typingRedirectBlockedByOverlay,
 } from "./composer-type-focus";
+import { isTypeaheadTarget } from "./roving-rows";
 
 export function useComposerTypeFocus(
   inputRef: React.RefObject<HTMLTextAreaElement | null>,
@@ -51,7 +52,8 @@ export function useComposerTypeFocus(
           );
         },
         get reservedSurface() {
-          return isReservedTypingSurface(event.target);
+          // A list searching by typeahead keeps its letters; only type-to-focus yields to it.
+          return isReservedTypingSurface(event.target) || isTypeaheadTarget(event.target);
         },
         get activationControl() {
           return isActivationControl(event.target) || isActivationControl(document.activeElement);

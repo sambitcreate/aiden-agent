@@ -445,6 +445,47 @@ once a mention starts.
   whose prompt is sent without the chips. While the files load, Enter waits
   instead of sending the half-typed `@query`. A folder also matches as `dir/`.
 
+## Collections
+
+A list of rows people move through (the sidebar's chats, the Bot list) is one
+keyboard collection built from `renderer/lib/roving-rows.ts`. Rows stay
+buttons with their `•••` button beside them, so their menus and names keep
+working; mark them up instead of changing roles: `data-roving-item` on the
+row's button, `data-roving-row` on the wrapper that holds its other buttons,
+`data-roving-group` on a folder.
+
+- `useRovingRows(ref)` makes the list one `Tab` stop with ↑ ↓ Home End, → ←
+  for folders (swapped under `dir="rtl"`), and a 500 ms typeahead on the
+  visible text (parts marked `aria-hidden`, like shortcut hints, are skipped).
+  Typeahead starts only once the person moves through the list by keyboard
+  (the arrows, or Tab and F6 by the app's input modality); focus that script
+  moves to a row keeps the last way the person arrived. It sets
+  `data-typeahead="on"`, which only type-to-focus reads (`isTypeaheadTarget`),
+  so letters stay in the list while approval keys and focus still work. After
+  a click, typing still goes to the message box.
+- Focus recovery is built in (`renderer/lib/focus-recovery.ts`): when the
+  focused row leaves the page, focus goes to the next row, else the previous,
+  else the list's Tab stop, else the list itself (focusable only until it
+  loses focus), never the page. A dialog that deletes a row returns
+  focus to that row (its `returnFocus`) so recovery can move on from it.
+- Multi-select is `useRowSelection(ref, { enabled, platform })` from
+  `renderer/lib/use-row-selection.ts`, on rows that carry `data-select-id`:
+  ⌘-click (Ctrl-click off macOS) toggles, Shift-click and ⇧↑ ⇧↓ select a range
+  with the anchor-plus-base rule in `renderer/lib/range-selection.ts`, Escape
+  (`isDismissKey`) clears. A plain click and ↩ keep opening the row. Selected
+  rows use the list-selection fill and the description "Selected".
+- With two or more selected, show a compact bar under the list
+  (`SelectionBar` in `renderer/components/sidebar/selection-bar.tsx`) with the
+  count and only actions that already exist per row and are safe to repeat,
+  each looping over the existing per-row call with `runInOrder` from
+  `renderer/lib/bulk-delete.ts`, skipping a row its single action would refuse.
+  A failure stops the run, says how many went ("Deleted 2 of 5; …") and leaves
+  the rest selected. A destructive action asks once in an `AlertDialog` that
+  names the count and lists the rows.
+- Every listener sits on the list element itself, none on a row, the
+  document or the window, and plain
+  arrow keys move DOM focus without re-rendering rows.
+
 ## Enforced rules
 
 `npm run check:aiden-rules` (`scripts/check-aiden-rules.mjs`) checks the rules a

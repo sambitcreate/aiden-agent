@@ -1074,6 +1074,78 @@ test("F6 moves between areas, arrows move through the chat list, and Command+F f
   await expect(message).toBeFocused();
 });
 
+test("the chat list searches by typing, selects a run with Shift+arrows and deletes it from the bulk bar", async ({ aiden }) => {
+  const { app, page } = aiden;
+  await finishLmStudioOnboarding(page);
+  const workspaceId = await page.evaluate(() => localStorage.getItem("aiden-agent.workspaceId"));
+  expect(workspaceId).toBeTruthy();
+  await app.evaluate(({ ipcMain }, workspaceId) => {
+    const chats = ["Kilo plan", "Lima notes", "Mike draft", "Nova review"].map((title, index) => ({
+      id: `collection-chat-${index}`,
+      workspaceId,
+      title,
+      createdAt: 1_800_000_000_000 - index * 60_000,
+      updatedAt: 1_800_000_000_000 - index * 60_000,
+      messages: [{ id: `collection-message-${index}`, role: "user", content: `Opened ${title}`, createdAt: 1_800_000_000_000 }],
+    }));
+    ipcMain.removeHandler("chats:list");
+    ipcMain.handle("chats:list", () => chats);
+    ipcMain.removeHandler("chats:get");
+    ipcMain.handle("chats:get", (_event, id) => ({
+      chat: chats.find((chat) => chat.id === id) ?? null,
+      imageArtifactRecoveryPending: false,
+      imageArtifactRecoveryUnavailable: false,
+      reconciliation: null,
+    }));
+    ipcMain.removeHandler("chats:remove");
+    ipcMain.handle("chats:remove", (_event, id) => {
+      const index = chats.findIndex((chat) => chat.id === id);
+      if (index >= 0) chats.splice(index, 1);
+    });
+  }, workspaceId);
+  await page.reload();
+  const message = page.locator("textarea");
+  await expect(message).toBeVisible();
+  await message.focus();
+  await page.keyboard.press(`${PRIMARY_MODIFIER}+1`);
+  await expect(page.getByText("Opened Kilo plan", { exact: true })).toBeVisible();
+
+  // From the message box to the conversation, then the sidebar's open chat.
+  await message.focus();
+  await page.keyboard.press("Shift+F6");
+  await page.keyboard.press("Shift+F6");
+  const focusedRow = page.locator("aside button[data-roving-item]:focus");
+  await expect(focusedRow).toHaveText(/Kilo plan/u);
+
+  // Typing a title's first letter moves to it instead of the message box.
+  await page.keyboard.press("m");
+  await expect(focusedRow).toHaveText(/Mike draft/u);
+  await expect(message).toHaveValue("");
+
+  // ⇧↓ selects from the focused chat; two or more show the bar, Esc clears it.
+  const bar = page.getByRole("group", { name: "Selected chats" });
+  await page.keyboard.press("Shift+ArrowDown");
+  await expect(focusedRow).toHaveText(/Nova review/u);
+  await expect(bar.getByRole("status")).toHaveText("2 selected");
+  await page.keyboard.press("Escape");
+  await expect(bar).toBeHidden();
+  await page.keyboard.press("Shift+ArrowUp");
+  await expect(bar.getByRole("status")).toHaveText("2 selected");
+  await expect(page.locator("aside [data-in-selection='true']")).toHaveText([/Mike draft/u, /Nova review/u]);
+
+  await bar.getByRole("button", { name: "Delete" }).click();
+  const confirm = page.getByRole("alertdialog", { name: "Delete 2 chats?" });
+  await expect(confirm).toContainText("Mike draft");
+  await expect(confirm).toContainText("Nova review");
+  await confirm.getByRole("button", { name: "Delete" }).click();
+  await expect(confirm).toBeHidden();
+  await expect(page.locator("aside button[data-roving-item]", { hasText: "Mike draft" })).toHaveCount(0);
+  await expect(page.locator("aside button[data-roving-item]", { hasText: "Nova review" })).toHaveCount(0);
+  await expect(bar).toBeHidden();
+  // The deleted run was last, so focus lands on the chat before it.
+  await expect(focusedRow).toHaveText(/Lima notes/u);
+});
+
 test("saved focus-navigation shortcuts take priority and disabling restores the built-in key", async ({ aiden }) => {
   const { page } = aiden;
   await finishLmStudioOnboarding(page);

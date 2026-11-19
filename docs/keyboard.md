@@ -39,17 +39,29 @@ one starts unassigned.
 | `F6` / `⇧F6` | Move to the next / previous area: sidebar, conversation, message box, side panel |
 | `↑` `↓` | Move between chats or Bots in the sidebar |
 | `Home` / `End` | First / last row in the sidebar |
+| `←` / `→` | In the sidebar, close / open a project folder; `←` on a chat goes to its folder (swapped in a right-to-left layout) |
+| Letters | In the sidebar, go to the next row whose title starts with what you type |
+| `⇧↑` / `⇧↓` | Select a run of chats in the sidebar from the focused one; `Esc` clears the selection |
 | `←` `→` / `↑` `↓` | On a focused divider (the sidebar's, the Environment or Bot panel's, the design chat's, the terminal drawer's), move it 16 px; with `⇧`, 40 px (left and right swap in a right-to-left layout) |
 | `Home` / `End` | On a focused divider, make the panel as small / as large as it goes |
 | `↩` | On a focused divider, hide the sidebar or close the Environment panel, Bot panel or terminal |
-| `←` / `→` | In the sidebar, close / open a project folder; `←` on a chat goes to its folder |
 
 `F6` lands on the sidebar's open chat, on the conversation itself (scroll it
 with the arrow keys, Page Up and Page Down), in the message box, or on the
 side panel's selected tab. Areas that are hidden or closed are skipped, and
 `F6` does nothing while a menu or dialog is open. The sidebar list is a
 single `Tab` stop: `Tab` reaches the open chat (and its `•••`), then leaves the
-list. ⌘K also has **Focus sidebar**, **Focus conversation** and **Focus side
+list. Typed letters search the list only once you are moving through it with
+the keyboard (`Tab`, the arrow keys); after a click on a chat, typing goes to
+the message box as before. When the focused row is deleted, focus moves to the
+row that took its place, or the one before it when it was last.
+
+To work on several chats at once, `⌘`-click them (Ctrl-click on Linux),
+Shift-click to select a run, or use `⇧↑` / `⇧↓`. With two or more selected, a
+bar under the list shows the count and **Delete**, which asks once for all of
+them. A plain click or `↩` still opens a chat (and clears the selection).
+Selection is for this computer's chats in the Workspaces and Recent views; the Inbox
+keeps its own triage actions. ⌘K also has **Focus sidebar**, **Focus conversation** and **Focus side
 panel**, which can be given their own keys in Settings.
 
 Saved shortcuts take priority over the built-in focus keys (`⇧F6` and
@@ -135,6 +147,10 @@ voice: say allow or deny (Settings → Voice & Speech → Aiden Live → Answer 
 Voice allow is allow once, the same as `⌘↩`.
 
 In the Browser panel, `⌘.` starts page markup instead of stopping the reply,
+In Quick View, a card's grip (**Move** at its right edge) reorders it:
+`Space` or `↩` picks the card up, `↑` / `↓`, `Home` and `End` move it, `Space`
+or `↩` drops it where it is, and `Esc` (or moving focus away) puts it back.
+
 but only while focus is inside the browser.
 
 ## Keyboard list and menu bar
@@ -148,10 +164,6 @@ the ones you can change. `⌘/` also works from the message box.
 
 The menu bar has **View** (sidebar, terminal, Environment, the Focus commands),
 **Go** (back, forward, previous and next chat, Search chats, Bots, Scheduled,
-In Quick View, a card's grip (**Move** at its right edge) reorders it:
-`Space` or `↩` picks the card up, `↑` / `↓`, `Home` and `End` move it, `Space`
-or `↩` drops it where it is, and `Esc` (or moving focus away) puts it back.
-
 Profile), **Chat** (model, attach, find, stop and the open chat's actions) and
 **Help → Keyboard Shortcuts**, next to File, Edit and Window. Each item shows
 its current key, and items that can't run right now (no chat open, nothing to

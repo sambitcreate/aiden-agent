@@ -113,7 +113,11 @@ import { RemoteConnectionPopover } from "./remote-connection-popover";
 import { useAppCapabilities } from "../lib/app-capabilities";
 import { botChatPath, botListLocation, botRouteBotId, hostBotChatRouteKey, sidebarShowsBotList } from "../lib/bot-routes";
 import { useRemoteBots } from "../main/remote-bots";
-import { useRovingRows } from "../lib/roving-rows";
+import { rovingItems, useRovingRows } from "../lib/roving-rows";
+import { useRowSelection } from "../lib/use-row-selection";
+import { focusAfterRemoval } from "../lib/focus-recovery";
+import { bulkFailureMessage, runInOrder } from "../lib/bulk-delete";
+import { SelectionBar } from "./sidebar/selection-bar";
 import { BotSidebar } from "../main/bots/bot-sidebar";
 import { useBotRows } from "../main/bots/bot-sidebar-rows";
 import { botSidebarPreferenceActions, useBotSidebarPreferencesWhen } from "../main/bots/use-bot-sidebar-preferences";
@@ -564,6 +568,12 @@ function WorkspaceChatSidebar({
   const [remoteRenaming, setRemoteRenaming] = React.useState<RemoteRenameTarget | null>(null);
   const [remoteRenameBusy, setRemoteRenameBusy] = React.useState(false);
   const [deleting, setDeleting] = React.useState<ChatMeta | null>(null);
+  // The row a Delete from its menu returns focus to; it leaves once the chat
+  // is gone and focus recovery moves on to the next row.
+  const deleteReturnRef = React.useRef<HTMLElement | null>(null);
+  const [bulkDeleting, setBulkDeleting] = React.useState<ChatMeta[] | null>(null);
+  const [bulkDeleteBusy, setBulkDeleteBusy] = React.useState(false);
+  const bulkDeleteReturnRef = React.useRef<HTMLElement | null>(null);
   const [removingWorkspace, setRemovingWorkspace] = React.useState<Workspace | null>(null);
   const [removingWorkspaceBusy, setRemovingWorkspaceBusy] = React.useState(false);
   const [deletingWorktree, setDeletingWorktree] = React.useState<Workspace | null>(null);
@@ -819,6 +829,8 @@ function WorkspaceChatSidebar({
   // region spans the Inbox's Working shelf, which sits below the scrolling list.
   const rovingRef = React.useRef<HTMLDivElement>(null);
   useRovingRows(rovingRef);
+  // This Mac's chat rows can be selected together outside the Inbox, which has its own triage.
+  const rowSelection = useRowSelection(rovingRef, { enabled: !inboxActive, platform: capabilities.platform });
   const [inboxShelfHost, setInboxShelfHost] = React.useState<HTMLDivElement | null>(null);
   // Jump shortcuts and previous/next cover this Mac's chats only.
   const shortcutGroups = React.useMemo(
@@ -1351,7 +1363,9 @@ function WorkspaceChatSidebar({
   useCommandHandler(
     "chat.delete",
     () => {
-      if (activeListedChat) setDeleting(activeListedChat);
+      if (!activeListedChat) return;
+      deleteReturnRef.current = null;
+      setDeleting(activeListedChat);
     },
     activeListedChat !== undefined && renamingWithAppleId !== activeListedChat.id,
   );
@@ -1366,6 +1380,53 @@ function WorkspaceChatSidebar({
     await qc.invalidateQueries({ queryKey: queryKeys.chats });
     if (deleting.id === activeChatId) void navigate({ to: "/" });
     setDeleting(null);
+  };
+
+  const openBulkDelete = () => {
+    const listed = new Map((chats.data ?? []).map((chat) => [chat.id, chat] as const));
+    // A chat Apple is renaming can't be deleted yet, as with a single Delete.
+    const targets = rowSelection.ids.flatMap((id) => (id === renamingWithAppleId ? [] : (listed.get(id) ?? [])));
+    if (targets.length > 0) setBulkDeleting(targets);
+  };
+
+  // Deletes one by one with the same calls as a single Delete; a failure stops
+  // there and leaves the rest selected. Focus goes to the row after the
+  // selection once the dialog closes.
+  const commitBulkDelete = async () => {
+    const targets = bulkDeleting;
+    if (!targets || bulkDeleteBusy) return;
+    const ordered = targets.filter((chat) => chat.id !== renamingWithAppleId);
+    const ids = new Set(ordered.map((chat) => chat.id));
+    const container = rovingRef.current;
+    if (container) {
+      const rows = rovingItems(container);
+      const removed = new Set(rows.filter((row) => ids.has(row.dataset.selectId ?? "")));
+      bulkDeleteReturnRef.current = focusAfterRemoval(rows, removed, () => true);
+    }
+    setBulkDeleteBusy(true);
+    const result = await runInOrder(
+      ordered.map((chat) => chat.id),
+      async (id) => {
+        if (id === activeChatId && environmentPanel.agentBusy) environmentPanel.cancelAgent?.();
+        await chatsApi.remove(id);
+        await removeDeletedChatFromCache(qc, id);
+      },
+    );
+    if (result.error === null) rowSelection.clear();
+    else {
+      toast.error(
+        bulkFailureMessage(
+          "Deleted",
+          result,
+          ordered.length,
+          userFacingErrorMessage(result.error, "Aiden couldn't delete the rest."),
+        ),
+      );
+    }
+    await qc.invalidateQueries({ queryKey: queryKeys.chats });
+    if (activeChatId && result.done.includes(activeChatId)) void navigate({ to: "/" });
+    setBulkDeleteBusy(false);
+    setBulkDeleting(null);
   };
 
   // Warm the transcript before the click lands so opening a chat does not blank
@@ -1668,7 +1729,11 @@ function WorkspaceChatSidebar({
         icon="trash"
         color="red"
         disabled={renamingWithAppleId === chat.id}
-        onSelect={() => setDeleting(chat)}
+        onSelect={() => {
+          deleteReturnRef.current =
+            rovingRef.current?.querySelector<HTMLElement>(`[data-select-id="${CSS.escape(chat.id)}"]`) ?? null;
+          setDeleting(chat);
+        }}
       >
         Delete
       </Item>
@@ -1704,6 +1769,7 @@ function WorkspaceChatSidebar({
         shortcutsRevealed={chatShortcutsVisible}
         ariaKeyShortcuts={ariaKeyShortcut(shortcutBinding)}
         menu={menuItems}
+        {...(inbox ? {} : { selectId: chat.id, inSelection: rowSelection.has(chat.id) })}
         onPointerEnter={() => prefetchChat(chat.id)}
         onFocus={() => prefetchChat(chat.id)}
         onOpen={() => void openChat(chat)}
@@ -2080,6 +2146,8 @@ function WorkspaceChatSidebar({
               data-inbox-shelf-host=""
               className="dimmable relative z-1 flex min-h-0 shrink-0 flex-col empty:hidden"
             />
+          ) : rowSelection.ids.length >= 2 ? (
+            <SelectionBar count={rowSelection.ids.length} onDelete={openBulkDelete} onClear={rowSelection.clear} />
           ) : undefined
         }
         searchable
@@ -2588,8 +2656,34 @@ function WorkspaceChatSidebar({
         }
         confirmLabel="Delete"
         confirmVariant="destructive"
+        returnFocus={() => deleteReturnRef.current}
         onConfirm={commitDelete}
       />
+
+      <AlertDialog
+        open={bulkDeleting !== null}
+        onOpenChange={(open) => !open && !bulkDeleteBusy && setBulkDeleting(null)}
+        title={`Delete ${bulkDeleting?.length ?? 0} chats?`}
+        description={
+          <Text variant="small" color="secondary">
+            These chats and their messages will be permanently removed.
+          </Text>
+        }
+        confirmLabel={bulkDeleteBusy ? "Deleting…" : "Delete"}
+        confirmVariant="destructive"
+        busy={bulkDeleteBusy}
+        keepOpenOnConfirm
+        returnFocus={() => bulkDeleteReturnRef.current}
+        onConfirm={commitBulkDelete}
+      >
+        <ul className="flex flex-col gap-1">
+          {bulkDeleting?.map((chat) => (
+            <li key={chat.id} className="truncate">
+              {chat.title}
+            </li>
+          ))}
+        </ul>
+      </AlertDialog>
 
       <AlertDialog
         open={deletingWorktree !== null}

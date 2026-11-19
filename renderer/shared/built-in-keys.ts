@@ -31,8 +31,15 @@ export const BUILT_IN_KEYS: readonly BuiltInKey[] = [
   {
     id: "rows",
     title: "Move through the sidebar",
-    description: "Chats or Bots; Home and End jump to the first and last.",
+    description: "Chats or Bots; Home and End jump to the first and last. Type a title's first letters to go to it.",
     keys: ["Up", "Down"],
+    section: "Moving around",
+  },
+  {
+    id: "select-rows",
+    title: "Select several chats",
+    description: "In the sidebar, from the focused chat. ⌘-click (Ctrl-click on Linux) adds or removes one, Shift-click selects a run, Esc clears.",
+    keys: ["Shift+Up", "Shift+Down"],
     section: "Moving around",
   },
   {
@@ -71,17 +78,17 @@ export const BUILT_IN_KEYS: readonly BuiltInKey[] = [
     section: "In a chat",
   },
   {
-    id: "edit-last",
-    title: "Fix and resend your last message",
-    description: "In an empty message box after a finished reply; pauses during dictation.",
-    keys: ["Up"],
-    section: "In a chat",
-  },
-  {
     id: "mention",
     title: "Mention a workspace file",
     description: "Type @ in the message box; Return or Tab adds it as a chip, Backspace at the start removes the last one.",
     keys: ["@"],
+    section: "In a chat",
+  },
+  {
+    id: "edit-last",
+    title: "Fix and resend your last message",
+    description: "In an empty message box after a finished reply; pauses during dictation.",
+    keys: ["Up"],
     section: "In a chat",
   },
   {

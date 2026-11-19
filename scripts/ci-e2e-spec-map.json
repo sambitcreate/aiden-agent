@@ -180,6 +180,12 @@
       "renderer/components/composer",
       "renderer/components/message",
       "renderer/components/chat",
+      "renderer/components/sidebar/chat-row",
+      "renderer/components/sidebar/selection-bar",
+      "renderer/lib/roving-rows",
+      "renderer/lib/use-row-selection",
+      "renderer/lib/range-selection",
+      "renderer/lib/focus-recovery",
       "main/services/chat-"
     ],
     "chat-top-bar.spec.ts": [

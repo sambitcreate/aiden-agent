@@ -145,6 +145,10 @@ export interface ChatRowProps {
   menu?: ChatRowMenu;
   /** The Inbox row's parts, with `layout="inbox"`. */
   inbox?: ChatRowInbox;
+  /** Makes a standard row selectable in its list (`use-row-selection.ts`) under this id. */
+  selectId?: string;
+  /** The row is part of the list's multi-selection. */
+  inSelection?: boolean;
   onOpen: () => void;
   onPointerEnter?: () => void;
   onFocus?: () => void;
@@ -174,6 +178,8 @@ export function ChatRow({
   ariaKeyShortcuts,
   menu,
   inbox,
+  selectId,
+  inSelection = false,
   onOpen,
   onPointerEnter,
   onFocus,
@@ -206,17 +212,20 @@ export function ChatRow({
   const item = (
     <SidebarListItem
       data-roving-item
+      data-select-id={selectId}
+      data-in-selection={inSelection ? "true" : undefined}
       data-chat-row-layout={layout}
       data-remote-chat={remote ? (remote.stale ? "stale" : "live") : undefined}
       className={cn(
         indented && "pl-8",
+        inSelection && "bg-list-selection hover:bg-list-selection focus-visible:bg-list-selection",
         // Room for the ••• button while it shows, including while its menu is open.
         overflowShown &&
           "group-hover/chat-row:pr-10 group-focus-within/chat-row:pr-10 group-has-[[aria-haspopup=menu][data-state=open]]/chat-row:pr-10",
       )}
       icon={icon}
       aria-busy={busy || status.state === "working"}
-      aria-description={forkedFrom}
+      aria-description={[forkedFrom, inSelection ? "Selected" : undefined].filter(Boolean).join(". ") || undefined}
       data-forked={forkedFrom ? "true" : undefined}
       title={
         forkedFrom ? (
