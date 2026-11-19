@@ -486,18 +486,44 @@ function tokenIndexAt(tokens: readonly JsToken[], at: number): number {
   return low;
 }
 
-/** The other reading stops this far past its fork if the two have not met. */
-const OTHER_READING_SPAN = 2048;
+/** Names that may follow a regex literal on the same line: binary operators spelled as words. */
+const OPERATOR_WORDS: ReadonlySet<string> = new Set(["in", "instanceof", "of"]);
+
+interface OtherReading {
+  tokens: JsToken[];
+  /** The first reading's token index to continue from. */
+  resume: number;
+  /** Characters read plus tokens made. */
+  cost: number;
+  /** This reading is a syntax error, so a browser that took it would run nothing. */
+  dead?: boolean;
+}
 
 /**
- * Lexes `fork` the other way until it meets the first reading: the same
- * place, open brackets and last tokens. Returns its tokens, the first
- * reading's token index to continue from, and how far it read.
+ * Lexes `fork` the other way until it meets the first reading (the same
+ * place, open brackets and last tokens) or the code ends. It stops early,
+ * with a cost above `budget`, once it has spent more than `budget`: the caller
+ * then refuses the script as too complex, since the rest of this reading was
+ * never checked.
+ *
+ * A reading that takes the fork's `/` as a regex followed on the same line by
+ * a name, number or string is a syntax error (no semicolon is inserted
+ * there), and a script with a syntax error runs nothing, so that reading
+ * stops there, marked dead. Only the fork's own regex is judged this way: past
+ * it this reading takes the likelier side of later forks, which the browser
+ * might not.
  */
-function readOtherWay(code: string, first: JsLexer, fork: LexFork): { tokens: JsToken[]; resume: number; cost: number } {
+function readOtherWay(code: string, first: JsLexer, fork: LexFork, budget: number): OtherReading {
   const from = fork.state.at;
   const other = new JsLexer(code, fork.state, from);
   while (other.skipTrivia()) {
+    if (other.tokens.length === 1 && other.tokens[0]!.start === from && other.tokens[0]!.text === "regex" && !other.lineBreak) {
+      const char = code[other.at]!;
+      const word = IDENTIFIER_START.test(char) ? /^[\p{ID_Continue}$\u200c\u200d]*/u.exec(code.slice(other.at, other.at + 16))![0] : undefined;
+      if ((word !== undefined && !OPERATOR_WORDS.has(word)) || /[0-9"']/u.test(char)) {
+        return { tokens: [], resume: fork.tokenIndex, cost: other.at - from + 1, dead: true };
+      }
+    }
     if (other.at > from) {
       const index = tokenIndexAt(first.tokens, other.at);
       const token = first.tokens[index];
@@ -509,13 +535,13 @@ function readOtherWay(code: string, first: JsLexer, fork: LexFork): { tokens: Js
         first.lineBreakAt[index] === other.lineBreak &&
         sameTail(first.tokens, index, other.tail)
       ) {
-        return { tokens: other.tokens, resume: index, cost: other.at - from };
+        return { tokens: other.tokens, resume: index, cost: other.at - from + other.tokens.length };
       }
-      if (other.at - from > OTHER_READING_SPAN) return { tokens: other.tokens, resume: index, cost: other.at - from };
+      if (other.at - from + other.tokens.length > budget) return { tokens: other.tokens, resume: index, cost: other.at - from + other.tokens.length };
     }
     other.step();
   }
-  return { tokens: other.tokens, resume: first.tokens.length, cost: other.at - from };
+  return { tokens: other.tokens, resume: first.tokens.length, cost: other.at - from + other.tokens.length };
 }
 
 function sameTail(tokens: readonly JsToken[], index: number, tail: readonly JsToken[]): boolean {
@@ -616,10 +642,10 @@ export function findJsSink(code: string, depth = 0): HtmlFindings {
 
   // Read every fork the other way first, so the first reading's scan can keep
   // its call frames both where each fork starts and where the readings meet.
-  const others: { tokens: JsToken[]; resume: number; meet: number }[] = [];
+  const others: (OtherReading & { meet: number })[] = [];
   for (const fork of lexer.forks) {
-    const other = readOtherWay(code, lexer, fork);
-    spend(other.cost + other.tokens.length);
+    const other = readOtherWay(code, lexer, fork, budget);
+    spend(other.cost);
     if (found.limit !== undefined) return found;
     // Past the meeting point, keep a chain of literals joined with `+` whole.
     let meet = Math.min(other.resume + FORK_TRAIL_TOKENS, tokens.length);
@@ -649,8 +675,8 @@ export function findJsSink(code: string, depth = 0): HtmlFindings {
   copyUpTo(Number.POSITIVE_INFINITY);
 
   lexer.forks.forEach((fork, index) => {
-    if (done()) return;
     const other = others[index]!;
+    if (done() || other.dead === true) return;
     const frames = atFork[index]!;
     const lead = Math.max(0, fork.tokenIndex - FORK_LEAD_TOKENS);
     const joined = [...tokens.slice(lead, fork.tokenIndex), ...other.tokens, ...tokens.slice(other.resume, other.meet)];

@@ -211,6 +211,18 @@ test("html admission lets labels and script comparisons through that only look l
   assert.ok(validateGenerativeUiHtml(chart).byteLength > 0);
 });
 
+/** Line comments about `size` characters long, to push a sink far past a fork. */
+const commentLines = (size: number) => Array.from({ length: Math.ceil(size / 60) }, () => `// ${"x".repeat(56)}`).join("\n");
+/**
+ * After `{}` a `/` divides and the backquote opens a template whose `${…}`
+ * runs, while the likelier reading takes `/`+"`"+`/` as a regex and the rest
+ * as comments: the other reading has to be followed however far it goes.
+ */
+const farTemplateSink = (size: number, sink: string, after = "") => `var o={}; var x = {} /\`/${after};\n${commentLines(size)}\n// \${${sink}}\n// \`;`;
+
+/** `line` 40 times, 1.5 KB of comments apart. */
+const repeatedLine = (line: string) => Array.from({ length: 40 }, () => `${line}\n${commentLines(1500)}`).join("\n");
+
 const REFUSED_MARKUP: Record<string, string> = {
   "a <base> whose earlier attribute quotes a <": '<base data-x="<" href="https://evil.test/">',
   "a <link> whose title holds a <": '<link title="a<b" rel=stylesheet href=https://evil.test/a.css>',
@@ -293,6 +305,11 @@ const REFUSED_MARKUP: Record<string, string> = {
     '<script>var z=1;\n--> /*\ndocument.body.innerHTML="<iframe src=https://e.test></iframe>";\n// */</script>',
   "an onclick that navigates after an HTML-like comment opener":
     "<button onclick=\"<!-- /*\nlocation='javascript:alert(1)'\n// */\">Go</button>",
+  "an <iframe> in a template 2 KB past a division after an object literal": `<script>${farTemplateSink(2100, 'document.body.innerHTML="<iframe src=https://e.test></iframe>"')}</script>`,
+  "an <iframe> in a template 4 KB past a division after an object literal": `<script>${farTemplateSink(4000, 'document.body.innerHTML="<iframe src=https://e.test></iframe>"')}</script>`,
+  "an <iframe> in a template 2 KB past a regex-like division followed by in": `<script>${farTemplateSink(2100, 'document.body.innerHTML="<iframe src=https://e.test></iframe>"', " in o")}</script>`,
+  "an onclick that navigates from a template 2 KB past a division after an object literal": `<button onclick="${farTemplateSink(2100, "location='javascript:alert(1)'")}">Go</button>`,
+  "an onclick that navigates from a template 4 KB past a division after an object literal": `<button onclick="${farTemplateSink(4000, "location='javascript:alert(1)'")}">Go</button>`,
 };
 
 const ADMITTED_MARKUP: Record<string, string> = {
@@ -318,6 +335,10 @@ const ADMITTED_MARKUP: Record<string, string> = {
   "a division inside an if body": '<script>if (x) { y = (a + b) / "2"; }</script>',
   "a regex after a block": '<script>if (ok) { draw(); } /^#/.test(location.hash) && open(); var w = n++ / 2;</script>',
   "a division after a template literal": "<script>var h = `${rows}` / 2; label.textContent = h + ' rows';</script>",
+  // Read as a regex, `/ 2; … rows /` would be followed by a name (`$`): a syntax
+  // error, so only the division reading can run. Followed to the end, each
+  // such line would cost the rest of a 60 KB script.
+  "a division after an increment with a template later on the line, repeated through a long script": `<script>${repeatedLine("i++ / 2; const t = `${rows} rows / ${cols} cols`;")}</script>`,
 };
 
 for (const [name, html] of Object.entries(REFUSED_MARKUP)) {
