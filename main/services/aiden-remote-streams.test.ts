@@ -14,6 +14,10 @@ import {
 } from "./aiden-remote-streams.js";
 import { AidenRemoteStreamJournal } from "./aiden-remote-stream-journal.js";
 import { AidenRemoteServiceError } from "./aiden-remote-errors.js";
+import {
+  assertOrderedAidenRemoteEvents,
+  parseAidenRemoteStreamEvent,
+} from "./aiden-remote-protocol.js";
 
 function assertExactSnapshotBytes(service: AidenRemoteStreamService): void {
   // Independent oracle includes UTF-8 encoding, all JSON punctuation, metadata,
@@ -2568,4 +2572,286 @@ test("an older client's stream cancel stops a running Bot chat turn without the 
   assert.equal(service.status("device-1", "stream-bot-1").state, "cancelled");
   const after = service.snapshot().streams[0]?.events ?? [];
   assert.equal(after.length, events.length);
+});
+
+function parseSseEventFrames(rawFrames: readonly string[]) {
+  return rawFrames
+    .filter((frame) => frame.startsWith("id: "))
+    .map((frame) => {
+      const sseId = Number(/^id: (\d+)$/mu.exec(frame)?.[1]);
+      const sseEvent = /^event: ([a-z_]+)$/mu.exec(frame)?.[1];
+      const dataLine = /^data: (.*)$/mu.exec(frame)?.[1];
+      assert.ok(Number.isSafeInteger(sseId) && sseId >= 1);
+      assert.ok(sseEvent);
+      assert.ok(dataLine);
+      const parsed = parseAidenRemoteStreamEvent(JSON.parse(dataLine));
+      assert.ok(parsed);
+      assert.equal(sseId, parsed.sequence);
+      assert.equal(sseEvent, parsed.type);
+      return parsed;
+    });
+}
+
+test("lagging-cursor replay on count- and byte-trimmed finished streams synthesizes snapshot(earliest - 1) before the retained tail", async () => {
+  for (const terminalKind of ["done", "error", "cancelled"] as const) {
+    const app = fixture();
+    const run = app.service.create("device-1", `stream-${terminalKind}`, "chat-1", `turn-${terminalKind}`);
+    // Alternating text and reasoning prevents offline delta folding so retention trims by event count (> 4,096).
+    for (let index = 0; index < 2_055; index++) {
+      run.owner.send("chat:delta", { delta: `t${index}` });
+      run.owner.send("chat:reasoning-delta", { delta: `r${index}` });
+    }
+    if (terminalKind === "done") {
+      run.owner.send("chat:done", { chat: { messages: [{ id: "assistant-final", role: "assistant" }] } });
+    } else if (terminalKind === "error") {
+      run.owner.send("chat:error", { message: "The model provider could not complete this response." });
+    } else {
+      await app.service.cancel("device-1", `stream-${terminalKind}`, `cancel-${terminalKind}-key-01`);
+      run.owner.send("chat:done", { streamId: `stream-${terminalKind}`, chat: { messages: [] } });
+    }
+
+    const journal = app.service.snapshot().streams[0]!.events;
+    const earliest = journal[0]!.sequence;
+    const head = journal[journal.length - 1]!.sequence;
+    assert.ok(earliest > 10, `expected trimmed earliest sequence > 10, got ${earliest}`);
+    assert.equal(journal.length, 4_096);
+
+    for (const [snapshotReasons, afterCursor] of [[true, 0], [false, 3]] as const) {
+      const replay = blockedResponse();
+      replay.response.blocked = false;
+      app.service.openEvents("device-1", `stream-${terminalKind}`, afterCursor, replay.http, { snapshotReasons });
+      assert.equal(replay.response.ended, true);
+      const frames = parseSseEventFrames(replay.output);
+      assertOrderedAidenRemoteEvents(frames);
+      assert.equal(frames.length, journal.length + 1);
+      assert.equal(frames[0]!.type, "snapshot");
+      assert.equal(frames[0]!.sequence, earliest - 1);
+      assert.equal(frames[0]!.terminal, false);
+      assert.deepEqual(
+        frames[0]!.payload,
+        snapshotReasons
+          ? { chatId: "chat-1", turnId: `turn-${terminalKind}`, reason: "gap", nextSequence: earliest }
+          : { chatId: "chat-1", turnId: `turn-${terminalKind}`, nextSequence: earliest },
+      );
+      assert.equal(frames[1]!.sequence, earliest);
+      assert.equal(frames[frames.length - 1]!.sequence, head);
+      assert.equal(frames[frames.length - 1]!.type, terminalKind);
+      assert.equal(frames[frames.length - 1]!.terminal, true);
+      // Journal did not mutate when the lagging cursor replayed.
+      assert.equal(app.service.snapshot().streams[0]!.events.length, journal.length);
+      assert.equal(app.service.snapshot().streams[0]!.events[0]!.sequence, earliest);
+      assert.equal(app.service.snapshot().streams[0]!.events[journal.length - 1]!.sequence, head);
+    }
+
+    // Exact retention boundary (`after = earliest - 1`) replays directly from `earliest` with no synthetic snapshot.
+    const exactBoundary = blockedResponse();
+    exactBoundary.response.blocked = false;
+    app.service.openEvents("device-1", `stream-${terminalKind}`, earliest - 1, exactBoundary.http, { snapshotReasons: true });
+    const boundaryFrames = parseSseEventFrames(exactBoundary.output);
+    assert.equal(boundaryFrames.length, journal.length);
+    assert.equal(boundaryFrames[0]!.sequence, earliest);
+    assert.notEqual(boundaryFrames[0]!.type, "snapshot");
+    boundaryFrames.forEach((frame, index) => assert.equal(frame.sequence, earliest + index));
+    assert.equal(boundaryFrames[boundaryFrames.length - 1]!.terminal, true);
+
+    // Caught-up cursor on a finished stream ends cleanly with zero frames; ahead-of-head rejects with 400 invalid_request.
+    const caughtUp = blockedResponse();
+    caughtUp.response.blocked = false;
+    app.service.openEvents("device-1", `stream-${terminalKind}`, head, caughtUp.http, { snapshotReasons: true });
+    assert.equal(caughtUp.response.ended, true);
+    assert.equal(parseSseEventFrames(caughtUp.output).length, 0);
+
+    const ahead = blockedResponse();
+    assert.throws(
+      () => app.service.openEvents("device-1", `stream-${terminalKind}`, head + 1, ahead.http, { snapshotReasons: true }),
+      (error: unknown) => error instanceof AidenRemoteServiceError && error.code === "invalid_request" && error.status === 400,
+    );
+  }
+
+  // Byte-trimmed (> 8 MiB) finished stream also yields snapshot(earliest - 1) -> contiguous tail -> done.
+  const byteApp = fixture();
+  const byteRun = byteApp.service.create("device-1", "stream-bytes", "chat-bytes", "turn-bytes");
+  for (let index = 0; index < 75; index++) {
+    byteRun.owner.send("chat:delta", { delta: "x".repeat(65_536) });
+    byteRun.owner.send("chat:reasoning-delta", { delta: "r".repeat(65_536) });
+  }
+  byteRun.owner.send("chat:done", { chat: { messages: [{ id: "assistant-bytes", role: "assistant" }] } });
+  const byteJournal = byteApp.service.snapshot().streams[0]!.events;
+  const byteEarliest = byteJournal[0]!.sequence;
+  assert.ok(byteEarliest > 2, `expected byte-trimmed earliest > 2, got ${byteEarliest}`);
+
+  const byteReplay = blockedResponse();
+  byteReplay.response.blocked = false;
+  byteApp.service.openEvents("device-1", "stream-bytes", 1, byteReplay.http, { snapshotReasons: true });
+  assert.equal(byteReplay.response.ended, true);
+  const byteFrames = parseSseEventFrames(byteReplay.output);
+  assertOrderedAidenRemoteEvents(byteFrames);
+  assert.equal(byteFrames[0]!.type, "snapshot");
+  assert.equal(byteFrames[0]!.sequence, byteEarliest - 1);
+  assert.equal(byteFrames[0]!.payload.reason, "gap");
+  assert.equal(byteFrames[0]!.payload.nextSequence, byteEarliest);
+  assert.equal(byteFrames[byteFrames.length - 1]!.type, "done");
+  assertExactSnapshotBytes(byteApp.service);
+});
+
+test("lagging-cursor reconnect on a live stream stays connection-local without disturbing healthy subscribers or persistence", async () => {
+  let now = 5_000;
+  const writes: AidenRemoteStreamSnapshot[] = [];
+  const service = new AidenRemoteStreamService({
+    now: () => now,
+    cancel: () => true,
+    approve: () => true,
+    persistCoalesceMs: 0,
+    persist: async (write) => {
+      writes.push(structuredClone(write.live));
+    },
+  });
+
+  const run = service.create("device-1", "stream-live", "chat-live", "turn-live");
+  const healthy = blockedResponse();
+  healthy.response.blocked = false;
+  service.openEvents("device-1", "stream-live", 0, healthy.http, { snapshotReasons: true });
+
+  for (let index = 0; index < 4_105; index++) {
+    run.owner.send("chat:delta", { delta: `chunk-${index}` });
+  }
+  await service.settlePersistence();
+
+  const snapshotBefore = service.snapshot();
+  const streamBefore = snapshotBefore.streams[0]!;
+  const earliest = streamBefore.events[0]!.sequence;
+  const headBefore = streamBefore.events[streamBefore.events.length - 1]!.sequence;
+  const healthyFramesBefore = healthy.output.length;
+  const writesBefore = writes.length;
+  assert.ok(earliest > 5);
+
+  // Advance clock and attach a lagging reader: neither journal, timestamps, persistence, nor `healthy` may change.
+  now = 99_000;
+  const lagging = blockedResponse();
+  lagging.response.blocked = false;
+  service.openEvents("device-1", "stream-live", 2, lagging.http, { snapshotReasons: true });
+  await service.settlePersistence();
+
+  assert.equal(healthy.output.length, healthyFramesBefore, "up-to-date subscriber received no fan-out snapshot");
+  assert.equal(writes.length, writesBefore, "lagging reconnect caused zero journal persistence writes");
+  assert.deepEqual(service.snapshot(), snapshotBefore, "shared stream journal and timestamps stayed untouched");
+
+  const laggingInitial = parseSseEventFrames(lagging.output);
+  assertOrderedAidenRemoteEvents(laggingInitial);
+  assert.equal(laggingInitial[0]!.type, "snapshot");
+  assert.equal(laggingInitial[0]!.sequence, earliest - 1);
+  assert.equal(laggingInitial[0]!.payload.reason, "gap");
+  assert.equal(laggingInitial[0]!.payload.nextSequence, earliest);
+  assert.equal(laggingInitial[laggingInitial.length - 1]!.sequence, headBefore);
+  assert.equal(lagging.response.ended, false);
+
+  // Subsequent live events reach both subscribers contiguously with no snapshot on the healthy connection.
+  run.owner.send("chat:delta", { delta: "live-tail" });
+  run.owner.send("chat:done", { chat: { messages: [{ id: "assistant-live", role: "assistant" }] } });
+
+  const healthyAll = parseSseEventFrames(healthy.output);
+  assertOrderedAidenRemoteEvents(healthyAll);
+  assert.equal(healthyAll.some((event) => event.type === "snapshot"), false);
+  assert.equal(healthyAll[healthyAll.length - 1]!.type, "done");
+  assert.equal(healthy.response.ended, true);
+
+  const laggingAll = parseSseEventFrames(lagging.output);
+  assertOrderedAidenRemoteEvents(laggingAll);
+  assert.equal(laggingAll.filter((event) => event.type === "snapshot").length, 1);
+  assert.equal(laggingAll[laggingAll.length - 1]!.type, "done");
+  assert.equal(lagging.response.ended, true);
+});
+
+test("snapshot reason field is projected only for devices that negotiated stream:snapshot-reasons across reset and aggregate pressure", () => {
+  const app = fixture();
+  const run = app.service.create("device-1", "stream-reset", "chat-1", "turn-1");
+  run.owner.send("chat:delta", { delta: "draft" });
+  run.owner.send("chat:delta", { reset: true, delta: "replacement" });
+  run.owner.send("chat:done", { chat: { messages: [{ id: "assistant-reset", role: "assistant" }] } });
+
+  const legacyOut = blockedResponse();
+  legacyOut.response.blocked = false;
+  app.service.openEvents("device-1", "stream-reset", 0, legacyOut.http);
+  const legacySnapshot = parseSseEventFrames(legacyOut.output).find((event) => event.type === "snapshot")!;
+  assert.deepEqual(legacySnapshot.payload, { chatId: "chat-1", turnId: "turn-1", nextSequence: 4 });
+  assert.equal("reason" in legacySnapshot.payload, false);
+
+  const modernOut = blockedResponse();
+  modernOut.response.blocked = false;
+  app.service.openEvents("device-1", "stream-reset", 0, modernOut.http, { snapshotReasons: true });
+  const modernSnapshot = parseSseEventFrames(modernOut.output).find((event) => event.type === "snapshot")!;
+  assert.deepEqual(modernSnapshot.payload, { chatId: "chat-1", turnId: "turn-1", reason: "reset", nextSequence: 4 });
+
+  // Aggregate budget replacement (`events.length === 1` snapshot) also strips `reason` for legacy readers.
+  const pressure = fixture();
+  for (let index = 0; index < 90; index++) {
+    const heavy = pressure.service.create("device-1", `heavy-${index}`, `chat-h-${index}`, `turn-h-${index}`);
+    heavy.owner.send("chat:delta", { delta: "y".repeat(200_000) });
+  }
+  const replacedStream = pressure.service.snapshot().streams.find(
+    (entry) => entry.events.length === 1 && entry.events[0]?.type === "snapshot",
+  )!;
+  assert.ok(replacedStream);
+  const replacedSeq = replacedStream.events[0]!.sequence;
+
+  const oldLegacy = blockedResponse();
+  oldLegacy.response.blocked = false;
+  pressure.service.openEvents("device-1", replacedStream.streamId, replacedSeq - 1, oldLegacy.http, { snapshotReasons: false });
+  const oldLegacyFrames = parseSseEventFrames(oldLegacy.output);
+  assert.equal(oldLegacyFrames.length, 1);
+  assert.equal(oldLegacyFrames[0]!.type, "snapshot");
+  assert.equal("reason" in oldLegacyFrames[0]!.payload, false);
+  oldLegacy.response.destroy();
+
+  const oldModern = blockedResponse();
+  oldModern.response.blocked = false;
+  pressure.service.openEvents("device-1", replacedStream.streamId, replacedSeq - 1, oldModern.http, { snapshotReasons: true });
+  const oldModernFrames = parseSseEventFrames(oldModern.output);
+  assert.equal(oldModernFrames.length, 1);
+  assert.equal(oldModernFrames[0]!.type, "snapshot");
+  assert.equal(oldModernFrames[0]!.payload.reason, "gap");
+  oldModern.response.destroy();
+});
+
+test("blocked synthetic gap snapshot drains retained tail in order or disconnects cleanly if retention overtakes it again", () => {
+  // 1. Drains cleanly on a trimmed finished stream.
+  const finished = fixture();
+  const doneRun = finished.service.create("device-1", "stream-drain", "chat-1", "turn-1");
+  for (let index = 0; index < 2_052; index++) {
+    doneRun.owner.send("chat:delta", { delta: `a${index}` });
+    doneRun.owner.send("chat:reasoning-delta", { delta: `b${index}` });
+  }
+  doneRun.owner.send("chat:done", { chat: { messages: [{ id: "assistant-1", role: "assistant" }] } });
+  const earliestDone = finished.service.snapshot().streams[0]!.events[0]!.sequence;
+
+  const draining = blockedResponse();
+  finished.service.openEvents("device-1", "stream-drain", 1, draining.http, { snapshotReasons: true });
+  assert.equal(draining.output.length, 1, "wrote only synthetic snapshot while socket was backpressured");
+  assert.equal(draining.response.ended, false);
+  draining.response.blocked = false;
+  draining.response.emit("drain");
+  assert.equal(draining.response.ended, true);
+  const drainedFrames = parseSseEventFrames(draining.output);
+  assertOrderedAidenRemoteEvents(drainedFrames);
+  assert.equal(drainedFrames[0]!.sequence, earliestDone - 1);
+  assert.equal(drainedFrames[1]!.sequence, earliestDone);
+  assert.equal(drainedFrames[drainedFrames.length - 1]!.type, "done");
+
+  // 2. Destroys cleanly for reconnect if retention overtakes `earliest` while blocked on the synthetic snapshot.
+  const live = fixture();
+  const liveRun = live.service.create("device-1", "stream-overtake", "chat-2", "turn-2");
+  for (let index = 0; index < 2_052; index++) {
+    liveRun.owner.send("chat:delta", { delta: `c${index}` });
+    liveRun.owner.send("chat:reasoning-delta", { delta: `d${index}` });
+  }
+  const stalled = blockedResponse();
+  live.service.openEvents("device-1", "stream-overtake", 1, stalled.http, { snapshotReasons: true });
+  assert.equal(stalled.output.length, 1);
+  // Advance retention past the `nextSequence` promised in `stalled.output[0]`.
+  liveRun.owner.send("chat:delta", { delta: "next-1" });
+  liveRun.owner.send("chat:reasoning-delta", { delta: "next-2" });
+  stalled.response.blocked = false;
+  stalled.response.emit("drain");
+  assert.equal(stalled.response.destroyed, true);
+  assert.equal(stalled.response.listenerCount("drain"), 0);
 });

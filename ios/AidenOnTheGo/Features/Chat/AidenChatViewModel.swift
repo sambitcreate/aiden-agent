@@ -80,8 +80,12 @@ final class AidenChatViewModel {
     @ObservationIgnored var visualSnapshotRefreshSleep: @MainActor (Duration) async throws -> Void = {
         try await Task.sleep(for: $0)
     }
+    @ObservationIgnored private var gapRecoveryStreamID: String?
     var activeStreamID: String? {
         didSet {
+            if activeStreamID != gapRecoveryStreamID {
+                gapRecoveryStreamID = nil
+            }
             guard let activeStreamID else { return }
             // This device's own run is accounted for, so the roster announcing
             // its turn later never re-reads the transcript for it.
@@ -3027,10 +3031,16 @@ final class AidenChatViewModel {
                     guard event.streamId == stream.streamId else { continue }
                     clearRecoveryWarning()
                     if event.sequence <= stream.lastSequence { continue }
-                    if event.sequence != stream.lastSequence + 1 {
+                    let hasSequenceGap = event.sequence != stream.lastSequence + 1
+                    if event.type != .snapshot, hasSequenceGap {
                         await reconcileChat(context: context)
                     }
-                    await apply(event, context: context, feedbackPolicy: feedbackPolicy)
+                    await apply(
+                        event,
+                        hasSequenceGap: hasSequenceGap,
+                        context: context,
+                        feedbackPolicy: feedbackPolicy
+                    )
                     guard activeStreamID == stream.streamId else { return }
                     stream.lastSequence = event.sequence
                     if event.terminal { return }
@@ -3193,6 +3203,7 @@ final class AidenChatViewModel {
 
     private func apply(
         _ event: AidenRemoteStreamEvent,
+        hasSequenceGap: Bool = false,
         context: AidenRemoteRequestContext,
         feedbackPolicy: AidenStreamFeedbackPolicy
     ) async {
@@ -3203,10 +3214,13 @@ final class AidenChatViewModel {
         // tools, approvals and terminal states never overtake the reply.
         // `done` drains faster instead: the settled reply replaces the live
         // one with the whole text, so dumping the backlog would only make the
-        // end of the reply jump.
+        // end of the reply jump. A snapshot replaces or suppresses live text,
+        // so buffered fragments must be dropped rather than flushed first.
         if event.type == .done {
-            finishStreamingReveal()
-        } else if event.type != .textDelta, event.type != .heartbeat {
+            if gapRecoveryStreamID != event.streamId {
+                finishStreamingReveal()
+            }
+        } else if event.type != .textDelta, event.type != .heartbeat, event.type != .snapshot {
             flushPendingStreamingContent()
         }
         if event.type == .questionRequired {
@@ -3233,15 +3247,27 @@ final class AidenChatViewModel {
         guard let payload = event.payload else { return }
         switch event.type {
         case .snapshot:
-            streamState = .reconciling
-            if chat.isBotChat {
-                // A projection reset is followed by a cumulative replacement.
-                // Bot progress is disclosure-only, so discard the old ephemeral
-                // copy before accepting that replacement instead of appending it.
-                replaceLiveText("")
-                reasoning = ""
+            let alreadyInGapRecovery = gapRecoveryStreamID == event.streamId
+            let isReset = payload.reason == .reset && !hasSequenceGap && !alreadyInGapRecovery
+            replaceLiveText("")
+            reasoning = ""
+            if isReset {
+                streamState = .reconciling
+                await reconcileChat(context: context)
+                break
             }
-            await reconcileChat(context: context)
+            gapRecoveryStreamID = event.streamId
+            if !alreadyInGapRecovery {
+                tools = []
+                activityTimeline = nil
+                streamState = .reconciling
+                await reconcileChat(context: context)
+                await recoverGapStreamAuthority(
+                    streamID: event.streamId,
+                    context: context,
+                    feedbackPolicy: feedbackPolicy
+                )
+            }
         case .status:
             if let value = payload.state, let state = AidenStreamState(rawValue: value) {
                 if state == .waitingForApproval {
@@ -3252,6 +3278,19 @@ final class AidenChatViewModel {
                     )
                     break
                 }
+                if gapRecoveryStreamID == event.streamId,
+                   pendingApproval != nil || pendingQuestion != nil {
+                    await restorePendingApproval(
+                        streamID: event.streamId,
+                        context: context,
+                        announce: false
+                    )
+                    if pendingApproval == nil, pendingQuestion == nil, streamState?.isTerminal != true {
+                        streamState = state
+                        await publishLiveActivityStatus(streamID: event.streamId, state: state)
+                    }
+                    break
+                }
                 streamState = state
                 if state != .waitingForApproval {
                     pendingApproval = nil
@@ -3260,12 +3299,19 @@ final class AidenChatViewModel {
                 await publishLiveActivityStatus(streamID: event.streamId, state: state)
             }
         case .textDelta:
+            if gapRecoveryStreamID == event.streamId {
+                if pendingApproval == nil, pendingQuestion == nil {
+                    streamState = .running
+                }
+                break
+            }
             receiveLiveText(payload.text ?? "")
             streamState = .running
             if AidenQuietOpenChat.publishesAmbientProgress(isChatForegrounded: isAmbientSurfaceQuiet) {
                 await liveActivities.appendResponse(payload.text ?? "", instanceID: instanceId, streamID: event.streamId)
             }
         case .reasoningDelta:
+            guard gapRecoveryStreamID != event.streamId else { break }
             reasoning += payload.text ?? ""
             if AidenQuietOpenChat.publishesAmbientProgress(isChatForegrounded: isAmbientSurfaceQuiet) {
                 await liveActivities.reasoning(instanceID: instanceId, streamID: event.streamId)
@@ -3336,6 +3382,11 @@ final class AidenChatViewModel {
         case .done:
             pendingApproval = nil
             pendingQuestion = nil
+            if gapRecoveryStreamID == event.streamId,
+               let messageId = payload.messageId,
+               chat.messages.contains(where: { $0.id == messageId }) {
+                clearLiveOutput()
+            }
             streamState = .done
             alertRun(.completed, id: event.streamId)
             await liveActivities.finish(
@@ -3349,6 +3400,39 @@ final class AidenChatViewModel {
             break
         default:
             break
+        }
+    }
+
+    private func recoverGapStreamAuthority(
+        streamID: String,
+        context: AidenRemoteRequestContext,
+        feedbackPolicy: AidenStreamFeedbackPolicy
+    ) async {
+        guard !isRemoved, coordinator.isLive(context),
+              activeStreamID == streamID,
+              streamState?.isTerminal != true else { return }
+        do {
+            let status = try await coordinator.remoteClient(for: context).streamStatus(id: streamID)
+            guard !isRemoved, coordinator.isLive(context),
+                  activeStreamID == streamID,
+                  status.streamId == streamID,
+                  status.chatId == chat.id,
+                  streamState?.isTerminal != true else { return }
+            if status.state.isTerminal {
+                pendingApproval = nil
+                pendingQuestion = nil
+                return
+            }
+            await apply(
+                status,
+                streamID: streamID,
+                context: context,
+                feedbackPolicy: feedbackPolicy
+            )
+        } catch let error where aidenIsCancellation(error) {
+            return
+        } catch {
+            _ = await coordinator.handleCredentialRevocation(error, context: context)
         }
     }
 

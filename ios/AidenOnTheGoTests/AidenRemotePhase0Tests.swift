@@ -171,7 +171,11 @@ final class AidenRemotePhase0Tests: XCTestCase {
             from: data
         )
 
-        XCTAssertEqual(fixture.contractRevision, 64)
+        XCTAssertEqual(fixture.contractRevision, 65)
+        XCTAssertEqual(fixture.streamRecovery?.capability, .streamSnapshotReasons)
+        XCTAssertEqual(fixture.streamRecovery?.gapEvents.first?.payload?.reason, .gap)
+        XCTAssertNil(fixture.streamRecovery?.legacyGapSnapshot.payload?.reason)
+        XCTAssertEqual(fixture.streamRecovery?.resetEvents[1].payload?.reason, .reset)
         XCTAssertEqual(fixture.scheduleCards?.capability, .scheduleCards)
         XCTAssertEqual(fixture.botIssues?.capability, .botIssues)
         // Revision 19 run-control losers learn the winning decision; phones keep
@@ -2007,6 +2011,43 @@ final class AidenRemotePhase0Tests: XCTestCase {
         } catch {
             XCTAssertEqual(wrongPinDelegate.lastTrustError, .publicKeyPinMismatch)
         }
+    }
+
+    func testStreamSnapshotReasonsDecodeSharedFixtureAndRejectInvalidReasons() throws {
+        let url = try XCTUnwrap(sharedContractFixtureURL)
+        let data = try Data(contentsOf: url)
+        let fixture = try AidenRemoteJSONDecoder.decode(AidenRemoteContractFixture.self, from: data)
+        XCTAssertEqual(fixture.contractRevision, 65)
+        let recovery = try XCTUnwrap(fixture.streamRecovery)
+        XCTAssertEqual(recovery.capability, .streamSnapshotReasons)
+        XCTAssertEqual(recovery.gapEvents.map(\.sequence), [4097, 4098, 4099])
+        XCTAssertEqual(recovery.gapEvents.first?.type, .snapshot)
+        XCTAssertEqual(recovery.gapEvents.first?.payload?.reason, .gap)
+        XCTAssertEqual(recovery.gapEvents.first?.payload?.nextSequence, 4098)
+        XCTAssertEqual(recovery.legacyGapSnapshot.type, .snapshot)
+        XCTAssertNil(recovery.legacyGapSnapshot.payload?.reason)
+        XCTAssertEqual(recovery.legacyGapSnapshot.payload?.nextSequence, 4098)
+        XCTAssertEqual(recovery.resetEvents[1].payload?.reason, .reset)
+        XCTAssertEqual(recovery.resetEvents[1].payload?.nextSequence, 3)
+
+        let raw = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        let rawSection = try XCTUnwrap(raw["streamRecovery"] as? [String: Any])
+        let rawGap = try XCTUnwrap((rawSection["gapEvents"] as? [[String: Any]])?.first)
+        let rawPayload = try XCTUnwrap(rawGap["payload"] as? [String: Any])
+        for invalidReason: Any in ["", "other", 1, true, NSNull()] {
+            var mutatedPayload = rawPayload
+            mutatedPayload["reason"] = invalidReason
+            var mutatedEvent = rawGap
+            mutatedEvent["payload"] = mutatedPayload
+            let encoded = try JSONSerialization.data(withJSONObject: mutatedEvent)
+            XCTAssertThrowsError(try AidenRemoteJSONDecoder.decode(AidenRemoteStreamEvent.self, from: encoded))
+        }
+        var extraPayload = rawPayload
+        extraPayload["extra"] = true
+        var extraEvent = rawGap
+        extraEvent["payload"] = extraPayload
+        let extraData = try JSONSerialization.data(withJSONObject: extraEvent)
+        XCTAssertThrowsError(try AidenRemoteJSONDecoder.decode(AidenRemoteStreamEvent.self, from: extraData))
     }
 }
 

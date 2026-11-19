@@ -161,6 +161,15 @@ data class AidenAgentInterruptFixture(
     val response: AidenChatAgentRoster
 )
 
+/** Revision 65: stream recovery (`reason: "gap" | "reset"`) and legacy reason-less gap snapshot. */
+@Serializable
+data class AidenStreamRecoveryFixture(
+    val capability: AidenRemoteCapability,
+    val gapEvents: List<JsonObject>,
+    val legacyGapSnapshot: JsonObject,
+    val resetEvents: List<JsonObject>
+)
+
 @Serializable
 data class AidenRemoteContractFixture(
     val contractRevision: Int,
@@ -210,6 +219,7 @@ data class AidenRemoteContractFixture(
     val chatProgressEvents: List<AidenRemoteStreamEvent> = emptyList(),
     val streamInput: AidenStreamInputFixture? = null,
     val streamStatus: AidenStreamStatus? = null,
+    val streamRecovery: AidenStreamRecoveryFixture? = null,
     val question: AidenQuestionFixture? = null,
     /** Raw catalog wire object; tests decode it through the strict codec so
      * the shared fixture exercises the same bounds as the live route. */
