@@ -31,9 +31,23 @@ export type CanvasView = { x: number; y: number; w: number; h: number };
  * come first, so a later answer keeps that view: if it sorted by the view the
  * person had moved to, a frame could come before the cut in one answer and
  * after it in the next, and be listed twice or not at all. The page travels
- * with it so a cursor from one page can't skip frames on another.
+ * with it so a cursor from one page can't skip frames on another, and so does
+ * a short key of the page's frames in the order the answer listed them
+ * (`canvasReadFramesKey`): once a frame is added, removed, reordered or moved
+ * into or out of that view, the offset no longer points at the next ones, and
+ * the cursor is refused rather than repeating or skipping frames.
  */
-export type CanvasReadCursor = { page: string; offset: number; view: CanvasView };
+export type CanvasReadCursor = { page: string; offset: number; frames: string; view: CanvasView };
+
+/** 32-bit FNV-1a of the text, as 8 hex digits. */
+function shortKey(text: string): string {
+  let hash = 0x811c9dc5;
+  for (let index = 0; index < text.length; index += 1) {
+    hash ^= text.charCodeAt(index);
+    hash = Math.imul(hash, 0x01000193) >>> 0;
+  }
+  return hash.toString(16).padStart(8, "0");
+}
 
 /**
  * A page id as the short key a cursor carries (32-bit FNV-1a, in hex): page
@@ -41,44 +55,73 @@ export type CanvasReadCursor = { page: string; offset: number; view: CanvasView 
  * opaque.
  */
 export function canvasReadPageKey(pageId: string): string {
-  let hash = 0x811c9dc5;
-  for (let index = 0; index < pageId.length; index += 1) {
-    hash ^= pageId.charCodeAt(index);
-    hash = Math.imul(hash, 0x01000193) >>> 0;
-  }
-  return hash.toString(16).padStart(8, "0");
+  return shortKey(pageId);
 }
 
-/** The cursor as the text Aiden passes back, such as `1a2b3c4d:200@-120,40,1200,800`. */
+/**
+ * The order a paged `canvas_read` lists a page's frames in for a view: those
+ * in view first, then the rest, each in canvas order.
+ */
+function pagingOrder(frames: DesignFrame[], view: CanvasView): { visible: DesignFrame[]; elsewhere: DesignFrame[] } {
+  return { visible: frames.filter((frame) => overlaps(frame, view)), elsewhere: frames.filter((frame) => !overlaps(frame, view)) };
+}
+
+/**
+ * The key of a page's frames in the order an answer with this view lists
+ * them: it changes when a frame is added, removed, reordered or moves into or
+ * out of the view, and stays the same when nothing does.
+ */
+export function canvasReadFramesKey(doc: DesignCanvas, pageId: string, view: CanvasView): string {
+  const { visible, elsewhere } = pagingOrder(
+    doc.frames.filter((frame) => frame.pageId === pageId),
+    view,
+  );
+  // How many are in view, then each id with its length, so no two lists give the same text.
+  return shortKey(`${visible.length};${[...visible, ...elsewhere].map((frame) => `${frame.id.length}:${frame.id}`).join("")}`);
+}
+
+/** The cursor as the text Aiden passes back, such as `1a2b3c4d:200:9f8e7d6c@-120,40,1200,800`. */
 export function formatCanvasReadCursor(cursor: CanvasReadCursor): string {
   const { x, y, w, h } = cursor.view;
-  return `${cursor.page}:${cursor.offset}@${x},${y},${w},${h}`;
+  return `${cursor.page}:${cursor.offset}:${cursor.frames}@${x},${y},${w},${h}`;
 }
 
 // Exactly what formatCanvasReadCursor writes: no spaces, no leading zeros, no "-0".
 const INTEGER = "(0|-?[1-9]\\d{0,8})";
 const POSITIVE = "([1-9]\\d{0,8})";
-const CURSOR = new RegExp(`^([0-9a-f]{8}):(0|[1-9]\\d{0,3})@${INTEGER},${INTEGER},${POSITIVE},${POSITIVE}$`, "u");
+const CURSOR = new RegExp(`^([0-9a-f]{8}):(0|[1-9]\\d{0,3}):([0-9a-f]{8})@${INTEGER},${INTEGER},${POSITIVE},${POSITIVE}$`, "u");
 
 /** The cursor an earlier answer gave, or null when the text is not one exactly as it was given. */
 export function parseCanvasReadCursor(text: string): CanvasReadCursor | null {
   const match = CURSOR.exec(text);
   if (!match) return null;
-  const [offset, x, y, w, h] = match.slice(2).map(Number) as [number, number, number, number, number];
-  return { page: match[1]!, offset, view: { x, y, w, h } };
+  const [x, y, w, h] = match.slice(4).map(Number) as [number, number, number, number];
+  return { page: match[1]!, offset: Number(match[2]), frames: match[3]!, view: { x, y, w, h } };
 }
 
 /**
  * The page a `canvas_read` with this cursor reads: the cursor's own page when
  * no page is named, or an error to give back when the named page is another
- * one or the cursor's page is gone. `pageId` is the page named, already
- * looked up.
+ * one, the cursor's page is gone, or the page's frames changed since the
+ * answer that gave the cursor. `pageId` is the page named, already looked up.
  */
 export function canvasReadCursorPage(
   doc: DesignCanvas,
   cursor: CanvasReadCursor,
   pageId?: string,
 ): { pageId: string } | { error: string } {
+  const resolved = cursorPage(doc, cursor, pageId);
+  if ("error" in resolved) return resolved;
+  if (canvasReadFramesKey(doc, resolved.pageId, cursor.view) !== cursor.frames) {
+    return {
+      error:
+        "The frames on that page changed since the answer that gave this cursor (one was added, removed, reordered, or moved into or out of its view), so the cursor no longer points at the next ones. Call canvas_read without a cursor to read the page again.",
+    };
+  }
+  return resolved;
+}
+
+function cursorPage(doc: DesignCanvas, cursor: CanvasReadCursor, pageId?: string): { pageId: string } | { error: string } {
   const matches = doc.pages.filter((entry) => canvasReadPageKey(entry.id) === cursor.page);
   if (pageId !== undefined) {
     if (matches.some((entry) => entry.id === pageId)) return { pageId };
@@ -241,8 +284,7 @@ export function describeCanvas(
   const view = options.cursor?.view ?? current;
   const frames = doc.frames.filter((frame) => frame.pageId === page.id);
   const comments = openCommentCounts(doc);
-  const visible = frames.filter((frame) => overlaps(frame, view));
-  const elsewhere = frames.filter((frame) => !overlaps(frame, view));
+  const { visible, elsewhere } = pagingOrder(frames, view);
   // The frames in view come first, then the rest; the cursor's offset skips that many.
   const start = Math.min(Math.max(0, Math.floor(options.cursor?.offset ?? 0)), frames.length);
   const end = Math.min(frames.length, start + CANVAS_READ_FRAME_LIMIT);
@@ -253,7 +295,14 @@ export function describeCanvas(
       ? {}
       : {
           ...(end < frames.length
-            ? { nextCursor: formatCanvasReadCursor({ page: canvasReadPageKey(page.id), offset: end, view }) }
+            ? {
+                nextCursor: formatCanvasReadCursor({
+                  page: canvasReadPageKey(page.id),
+                  offset: end,
+                  frames: canvasReadFramesKey(doc, page.id, view),
+                  view,
+                }),
+              }
             : {}),
           more: `Listed frames ${end > start ? `${start + 1}–${end}` : "none"} of ${frames.length} on this page (those in view first).${
             end < frames.length ? " Pass nextCursor as cursor to read the next ones." : ""

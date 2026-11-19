@@ -8,7 +8,12 @@ import {
   DESIGN_CANVAS_CALLS_PER_TURN,
   designCanvasToolsAllowed,
 } from "./canvas-tools.js";
-import { CANVAS_READ_FRAME_LIMIT, canvasReadPageKey } from "../../../renderer/shared/design-canvas/canvas-summary.js";
+import {
+  CANVAS_READ_FRAME_LIMIT,
+  canvasReadFramesKey,
+  canvasReadPageKey,
+  formatCanvasReadCursor,
+} from "../../../renderer/shared/design-canvas/canvas-summary.js";
 import { addPage, deletePage, showPage } from "../../../renderer/shared/design-canvas/pages.js";
 import { reopenComment } from "../../../renderer/shared/design-canvas/comments.js";
 import { DesignCanvasStore } from "./store.js";
@@ -322,8 +327,9 @@ test("canvas_read lists what is in view, the page's waiting comments, and counts
   assert.equal(answer.outsideOmitted, 0);
   assert.equal(answer.more, undefined, "a page read whole says nothing about paging");
 
-  const { x, y, w, h } = answer.view;
-  const later = await call("canvas_read", { cursor: `${canvasReadPageKey("page-1")}:1@${x},${y},${w},${h}` });
+  const view = answer.view;
+  const cursor = formatCanvasReadCursor({ page: canvasReadPageKey("page-1"), offset: 1, frames: canvasReadFramesKey(await store.get("chat-1"), "page-1", view), view });
+  const later = await call("canvas_read", { cursor });
   assert.deepEqual(later.inView, [], "the cursor skips the frame in view");
   assert.deepEqual(later.outsideFrames.map((frame: { id: string }) => frame.id), ["far-group", "far-note"]);
   assert.equal(later.nextCursor, undefined);
@@ -522,6 +528,19 @@ test("a canvas_read cursor reads on its own page, whichever page is on screen", 
   const other = await call({ page: "Empty", cursor: first.nextCursor });
   assert.equal(other.status, "error");
   assert.match(other.message, /not from page "Empty".*reads page "Pricing"/u, "a cursor from another page is refused, naming both");
+
+  // A frame added to the page between reads would shift what the offset points at.
+  await store.update("chat-1", (doc) => ({
+    ...doc,
+    frames: [{ id: "late", kind: "note" as const, title: "late", text: "", x: 0, y: 0, w: 240, h: 160, pageId: "p2", createdBy: "person" as const }, ...doc.frames],
+  }));
+  const stale = await call({ cursor: first.nextCursor });
+  assert.equal(stale.status, "error");
+  assert.match(stale.message, /frames on that page changed.*canvas_read without a cursor/u, "a cursor from before the page changed is refused, saying to read again");
+  const again = await call({ page: "Pricing" });
+  const rest = await call({ cursor: again.nextCursor });
+  assert.equal(rest.status, undefined, "a fresh read's cursor pages on");
+  assert.equal(new Set([...ids(again), ...ids(rest)]).size, count + 1, "the fresh read lists every frame once, the new one too");
 
   const legacy = await call({ page: "Pricing", offset: CANVAS_READ_FRAME_LIMIT });
   assert.equal(legacy.status, "error");
