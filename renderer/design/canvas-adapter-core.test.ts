@@ -253,6 +253,22 @@ test("duplicating a group copies its frames into the new group", () => {
   assert.equal(next.frames.filter((entry) => entry.groupId === "g").length, 2, "the originals stay put");
 });
 
+test("a copy never joins a locked group it was not copied with, and a copied locked group stays locked", () => {
+  const locked = { ...grouped, frames: grouped.frames.map((entry) => (entry.id === "g" ? { ...entry, locked: true as const } : entry)) };
+  counter = 0;
+  const member = duplicateFrames(locked, ["a"], newId);
+  assert.equal(byId(member, "new-1")!.groupId, undefined, "a member's copy leaves the locked group");
+  assert.equal(member.frames.filter((entry) => entry.groupId === "g").length, 2, "the locked group keeps exactly its members");
+  assert.deepEqual(box(byId(member, "g")), box(byId(locked, "g")));
+
+  counter = 0;
+  const whole = duplicateFrames(locked, ["g"], newId);
+  const copy = whole.frames.find((entry) => entry.kind === "group" && entry.id !== "g")!;
+  assert.equal(copy.locked, true);
+  assert.equal(whole.frames.filter((entry) => entry.groupId === copy.id).length, 2, "its members are in the copy");
+  assert.equal(whole.frames.filter((entry) => entry.groupId === "g").length, 2);
+});
+
 test("a duplicate that would pass 400 frames on a page changes nothing", () => {
   const full = canvas(...Array.from({ length: 399 }, (_, index) => frame(`f${index}`)));
   assert.equal(duplicateFrames(full, ["f0", "f1"], newId), full);

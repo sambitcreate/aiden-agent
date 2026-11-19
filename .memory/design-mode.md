@@ -187,7 +187,7 @@ Deviations from the P1 plan:
 
 - `renderer/design/design-side-panel.tsx` (Properties / Layers / Code), toggled by `I` (keymap `{type:"panel"}`; ⌥⌘I is the menu's DevTools) or the PanelRight button; open state in localStorage `aiden.design.sidePanel`. Hidden while presenting.
 - `layers-core.ts`: `designLayers`, `reorderLayer`, `stepLayer`. The canvas draws containers first, then the rest, each in document order, so reordering only swaps siblings (same parent, same container-ness).
-- Frame fields `radius`, `guide` (`columns-4/8/12`, `grid-8`; `canDesignGuide`), `hidden`, `locked` (`true` only). Hidden: not drawn (members of a hidden container too), not presented, not live. Locked: `draggable/deletable: false`, `applyNodeChanges` skips it, duplicates drop it.
+- Frame fields `radius`, `guide` (`columns-4/8/12`, `grid-8`; `canDesignGuide`), `hidden`, `locked` (`true` only). Hidden: not drawn (members of a hidden container too), not presented, not live. Locked: `draggable/deletable: false`, `applyNodeChanges` skips it, duplicates drop it, except a copied group keeps its lock (review round 3 item 11, 2026-11-18: `duplicateFrames` gives a copied member of a locked group no group unless that group is copied too, so ⌘D cannot add a member to a locked group; a copied locked group stays locked with its members in the copy).
 - `designCanvas:source(chatId, frameId)` returns a page file or artifact HTML, cut at 512 KiB (`DESIGN_SOURCE_MAX_BYTES`).
 - `update(id, patch: DesignFramePatch, {record})` in the node context; the toolbar wraps (`flex-wrap`) instead of scrolling.
 

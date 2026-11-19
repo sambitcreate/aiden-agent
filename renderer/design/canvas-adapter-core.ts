@@ -211,18 +211,22 @@ export function duplicateFrames(
   ];
   const copies = new Map<string, string>();
   for (const frame of ordered) copies.set(frame.id, newId());
+  const lockedGroups = new Set(doc.frames.filter((frame) => frame.locked && isDesignContainer(frame.kind)).map((frame) => frame.id));
   const added: DesignFrame[] = [];
   for (const frame of ordered) {
-    const groupId = frame.groupId ? (copies.get(frame.groupId) ?? frame.groupId) : undefined;
+    // A copy joins its group's copy, or the group itself, but never a locked group it was not copied with.
+    const groupId = frame.groupId && (copies.get(frame.groupId) ?? (lockedGroups.has(frame.groupId) ? undefined : frame.groupId));
     // A copied arrow joins the copies of its frames; an end on a frame left behind becomes a free end.
     const ends = frame.ends?.map((end): DesignConnectorEnd => {
       const target = end.frameId !== undefined ? copies.get(end.frameId) : undefined;
       if (target) return { ...end, frameId: target };
       return { x: clampCoord(end.x + DESIGN_DUPLICATE_OFFSET), y: clampCoord(end.y + DESIGN_DUPLICATE_OFFSET) };
     }) as DesignFrame["ends"];
-    const { locked: _locked, ...unlocked } = frame;
+    // A copied frame is editable, except a copied group, which keeps its lock along with its members.
+    const { locked, groupId: _groupId, ...unlocked } = frame;
     added.push({
       ...unlocked,
+      ...(locked && isDesignContainer(frame.kind) ? { locked } : {}),
       id: copies.get(frame.id)!,
       x: clampCoord(frame.x + DESIGN_DUPLICATE_OFFSET),
       y: clampCoord(frame.y + DESIGN_DUPLICATE_OFFSET),
