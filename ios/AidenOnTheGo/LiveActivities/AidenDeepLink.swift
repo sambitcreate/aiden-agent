@@ -21,7 +21,6 @@ enum AidenDeepLink {
     }
 
     static var newChatURL: URL? { newChatURL(instanceId: nil, workspaceId: nil, startsVoice: false) }
-    static var newChatVoiceURL: URL? { newChatURL(instanceId: nil, workspaceId: nil, startsVoice: true) }
 
     static func newChatURL(instanceId: String?, workspaceId: String?, startsVoice: Bool) -> URL? {
         guard instanceId.map(safeID) ?? true, workspaceId.map(safeID) ?? true else { return nil }

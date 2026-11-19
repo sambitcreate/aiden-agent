@@ -26,10 +26,6 @@ export const MAX_WEB_SEARCH_KEY_POOL_LABEL_CHARS = 48;
 export const WEB_SEARCH_KEY_POOL_PRIMARY_ENTRY_ID = "primary";
 
 export type WebSearchKeyPoolStrategy = "ordered" | "round-robin";
-export const WEB_SEARCH_KEY_POOL_STRATEGIES: readonly WebSearchKeyPoolStrategy[] = Object.freeze([
-  "ordered",
-  "round-robin",
-]);
 
 /** Why a key is temporarily skipped. */
 export type WebSearchKeyPoolCooldownReason = "auth" | "quota";

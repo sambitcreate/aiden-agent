@@ -26,8 +26,6 @@ export interface StoredSshHosts {
   toolConsent: Record<string, SshHostToolConsent>;
 }
 
-export const EMPTY_SSH_HOSTS: StoredSshHosts = { hosts: [], toolConsent: {} };
-
 export function sshHostsPath(baseDir: string): string {
   return path.join(baseDir, "ssh-hosts.json");
 }

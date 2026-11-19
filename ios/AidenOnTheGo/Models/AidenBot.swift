@@ -142,21 +142,6 @@ enum AidenBotWire {
         }
     }
 
-    static func uniqueStrings(
-        _ values: [String],
-        field: String,
-        maxItems: Int,
-        maxLength: Int
-    ) throws -> [String] {
-        guard values.count <= maxItems, Set(values).count == values.count else {
-            throw AidenBotContractError.invalidField(field)
-        }
-        for value in values {
-            try validateString(value, field: field, maxLength: maxLength, allowEmpty: false)
-        }
-        return values
-    }
-
     static func validateString(
         _ value: String,
         field: String,
@@ -477,13 +462,6 @@ struct AidenBotList: Codable, Equatable, Sendable {
     /// The same list without one Bot, used after a permanent delete.
     func removing(botID: String) throws -> Self {
         try Self(bots: bots.filter { $0.id != botID }, maxBots: maxBots, messaging: messaging)
-    }
-
-    /// The same list with one Bot inserted or replaced, used after a create.
-    func upserting(_ bot: AidenBotSummary) throws -> Self {
-        var next = bots.filter { $0.id != bot.id }
-        next.append(bot)
-        return try Self(bots: next, maxBots: maxBots, messaging: messaging)
     }
 
     private static func isValid(bots: [AidenBotSummary], maxBots: Int) -> Bool {
@@ -1479,6 +1457,3 @@ struct AidenBotAvatarUpload: Codable, Equatable, Sendable {
         case mimeType, data
     }
 }
-
-typealias AidenBotAvatarUploadResult = AidenBotAvatarAsset
-typealias AidenBotProviderModelOption = AidenBotModelOption

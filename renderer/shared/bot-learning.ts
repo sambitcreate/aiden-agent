@@ -23,10 +23,3 @@ export interface BotLearningChange {
 
 export const BOT_LEARNING_HISTORY_LIMITS = { changes: 100, bytes: 1_048_576, summaryChars: 160 } as const;
 export const BOT_LEARNING_DAILY_LIMITS = { requests: 12, outputTokens: 24_000 } as const;
-
-export const BOT_LEARNING_CHANNELS = {
-  get: "bots:learning:get",
-  undo: "bots:learning:undo",
-  respondLesson: "bots:lessons:respond",
-  removeLesson: "bots:lessons:remove",
-} as const;

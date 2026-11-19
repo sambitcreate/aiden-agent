@@ -75,16 +75,6 @@ import {
 import { resolveDesignFile } from "./resolve-core.js";
 import type { DesignCanvasStore } from "./store.js";
 
-export const DESIGN_CANVAS_TOOL_NAMES = [
-  "canvas_read",
-  "canvas_place_frame",
-  "canvas_update_frame",
-  "canvas_remove_frame",
-  "canvas_focus",
-  "canvas_arrange",
-  "canvas_page",
-] as const;
-
 /** Canvas tool calls one turn may make; past it each call returns `limit_reached`. */
 export const DESIGN_CANVAS_CALLS_PER_TURN = 60;
 

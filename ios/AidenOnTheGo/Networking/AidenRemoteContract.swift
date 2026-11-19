@@ -3450,6 +3450,14 @@ struct AidenRemoteTimestamp: Decodable, Equatable, Sendable {
         self.date = date
     }
 
+    /// Validates a wire string that was already decoded elsewhere, with the
+    /// same strict RFC 3339 rules as `init(from:)`.
+    init?(rawValue: String) {
+        guard let date = AidenStrictRFC3339Date.date(from: rawValue) else { return nil }
+        self.rawValue = rawValue
+        self.date = date
+    }
+
     static func isOrdered(createdAt: Self, updatedAt: Self) -> Bool {
         guard let comparison = AidenStrictRFC3339Date.compare(
             updatedAt.rawValue,

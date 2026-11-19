@@ -767,40 +767,6 @@ export function registerPhase2Handlers(): void {
     update: (mutation, isCurrent) => configStore.updateWebFetchSettings(mutation, isCurrent),
   });
 
-  // Legacy Exa aliases remain for one rollback window. They use the same
-  // fenced v2 credential path and never expose the plaintext key.
-  ipcMain.handle("exa:get", async (event) => {
-    const owner = webSearchMutationOwner(event);
-    if (owner.isDestroyed()) throw new Error("The renderer document is no longer active.");
-    const settings = await configStore.getWebSearchSettings();
-    const reference = webSearchCredentials.reference("exa", settings.providerConfig.exa);
-    return { enabled: settings.enabled, hasKey: await webSearchCredentials.has(reference) };
-  });
-  ipcMain.handle("exa:setKey", async (event, key: unknown) => {
-    const owner = webSearchMutationOwner(event);
-    assertWebSearchRolloutMutationAllowed("set-credential", "exa", webSearchRollout);
-    const settings = await configStore.getWebSearchSettings();
-    const reference = webSearchCredentials.reference("exa", settings.providerConfig.exa);
-    const value = typeof key === "string" ? key.trim() : "";
-    if (value) await webSearchCredentials.set(reference, value, () => !owner.isDestroyed());
-    else {
-      await webSearchCredentials.remove(reference, () => !owner.isDestroyed());
-      await configStore.updateWebSearchSettings(
-        (current) => ({ ...current, enabled: false }),
-        () => !owner.isDestroyed(),
-      );
-      publishAppControlsChanged();
-    }
-    if (owner.isDestroyed()) throw new Error("The renderer document is no longer active.");
-    return { hasKey: await webSearchCredentials.has(reference) };
-  });
-  ipcMain.handle("exa:setEnabled", async (event, enabled: unknown) => {
-    if (typeof enabled !== "boolean") throw new Error("Web Search enabled must be a boolean.");
-    assertWebSearchRolloutMutationAllowed("set-enabled", undefined, webSearchRollout);
-    await updateWebSearchSnapshot(event, (current) => ({ ...current, enabled }));
-    return configStore.getSettings();
-  });
-
   // ── Voice transcription ──────────────────────────────────────────────
   ipcMain.handle(
     "voice:transcribe",

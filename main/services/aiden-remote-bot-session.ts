@@ -202,8 +202,6 @@ import {
   type BotRoutineService,
 } from "./scheduled-bot-routines.js";
 
-/** Kind of the typed connect card entry `suggest_connection` appends. */
-export { BOT_CONNECT_CARD_ENTRY_KIND } from "./bot-runtime/live-projection.js";
 const ctx = BACKGROUND_CONTEXT;
 /** The transcript window's own cap, applied on top of what the snapshot budget leaves it. */
 const MAX_SESSION_JSON_BYTES = 768 * 1_024;

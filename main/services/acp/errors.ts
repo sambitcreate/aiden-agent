@@ -62,10 +62,3 @@ export function errorMessage(error: unknown): string {
   }
   return redactSecrets(String(error));
 }
-
-/** JSON-RPC error code, when the failure came from the agent. */
-export function rpcErrorCode(error: unknown): number | undefined {
-  if (!error || typeof error !== "object") return undefined;
-  const code = (error as { code?: unknown }).code;
-  return typeof code === "number" ? code : undefined;
-}

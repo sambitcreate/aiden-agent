@@ -11,7 +11,7 @@
   {"rule":"literal-motion","file":"renderer/components/onboarding-art/extend-art.css","reason":"legacy literal curve; move to a motion token (unit 5)","max":1},
   {"rule":"literal-motion","file":"renderer/components/sidebar/inbox-view.tsx","reason":"legacy literal curve; move to a motion token (unit 5)","max":1},
   {"rule":"literal-motion","file":"renderer/main/bots/bot-chat-pane.tsx","reason":"legacy literal curve; move to a motion token (unit 5)","max":2},
-  {"rule":"literal-motion","file":"renderer/styles.css","reason":"legacy literal curve; move to a motion token (unit 5)","max":38},
+  {"rule":"literal-motion","file":"renderer/styles.css","reason":"legacy literal curve; move to a motion token (unit 5)","max":37},
   {"rule":"no-source-grep-test","file":"main/handlers/aiden-remote.test.ts","reason":"legacy; replace with behavioral test"},
   {"rule":"no-source-grep-test","file":"main/handlers/attachments.contract.test.ts","reason":"legacy; replace with behavioral test"},
   {"rule":"no-source-grep-test","file":"main/handlers/bots-platform-contract.test.ts","reason":"legacy; replace with behavioral test"},

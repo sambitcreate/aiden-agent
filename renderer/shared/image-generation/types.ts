@@ -169,9 +169,6 @@ export interface ImageGenerationSetModelsEnabledRequest {
   changes: ImageGenerationSetModelEnabledRequest[];
 }
 
-/** `null` clears the default. */
-export type ImageGenerationSetDefaultModelRequest = ImageModelRef | null;
-
 export interface ImageGenerationAddCustomModelRequest {
   provider: ImageGenerationProviderId;
   /** OpenRouter model id, Replicate `owner/name`, or fal text endpoint id. */
@@ -184,8 +181,6 @@ export interface ImageGenerationAddCustomModelRequest {
   /** fal only: endpoint used when reference images are present. */
   editEndpoint?: string;
 }
-
-export type ImageGenerationRemoveCustomModelRequest = ImageModelRef;
 
 // ---- IPC results (main → renderer) ----
 

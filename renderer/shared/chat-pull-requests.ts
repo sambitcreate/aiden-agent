@@ -79,13 +79,6 @@ export type ChatPullRequestCurrentReason =
   | "discovered"
   | "none";
 
-export interface ChatPullRequestCurrent {
-  pullRequest: ChatPullRequestView | null;
-  reason: ChatPullRequestCurrentReason;
-  /** Set when repository/discovery reads were unavailable. */
-  message?: string;
-}
-
 /**
  * Persisted intent for `gh pr create` while its remote outcome is unknown.
  * No `number` — the PR's number does not exist until GitHub creates it.

@@ -471,17 +471,6 @@ struct AidenServer: Codable, Equatable, Sendable {
         offersBotHandoffs && capabilities.contains(.botHandoffs)
     }
 
-    /// The Mac offers `bot:issues` (revision 42): show issue cards and their
-    /// actions. There is no feature token: the support inventory is the signal.
-    var offersBotIssues: Bool {
-        serverCapabilities?.contains(.botIssues) == true
-    }
-
-    /// This device holds `bot:issues`: render the Bot's "Needs you" cards.
-    var supportsBotIssues: Bool {
-        offersBotIssues && capabilities.contains(.botIssues)
-    }
-
     var supportsBotWatches: Bool {
         serverCapabilities?.contains(.botWatches) == true
             && capabilities.contains(.botWatches) && capabilities.contains(.botRead)
@@ -1215,11 +1204,6 @@ final class AidenRemoteClient: @unchecked Sendable {
 
     private struct ChatUpdateRequest: Encodable {
         let title: String
-    }
-
-    private struct ChatMoveRequest: Encodable {
-        let workspaceId: String
-        let confirmedForeground = true
     }
 
     private struct ChatNewWorktreeRequest: Encodable {
@@ -2273,23 +2257,6 @@ final class AidenRemoteClient: @unchecked Sendable {
             try rejectContractResponse()
         }
         return AidenBrowserRecordingContent(data: data, mimeType: mimeType)
-    }
-
-    func moveChat(
-        id: String,
-        revision: String,
-        workspaceId: String,
-        idempotencyKey: UUID = UUID()
-    ) async throws -> AidenChat {
-        try await send(
-            method: "POST",
-            path: ["chats", id, "move"],
-            body: ChatMoveRequest(workspaceId: workspaceId),
-            headers: [
-                "If-Match": revision,
-                "Idempotency-Key": idempotencyKey.uuidString.lowercased(),
-            ]
-        )
     }
 
     /// Revision 53 (`chat:new-worktree`, with `git:write`): the Mac makes a
@@ -3485,10 +3452,6 @@ final class AidenRemoteClient: @unchecked Sendable {
 
     func cancelSpeechModelDownload(_ modelId: String) async throws -> AidenSpeechStatus {
         try await send(method: "DELETE", path: ["speech", "models", modelId, "download"])
-    }
-
-    func deleteSpeechModel(_ modelId: String) async throws -> AidenSpeechStatus {
-        try await send(method: "DELETE", path: ["speech", "models", modelId])
     }
 
     func transcribeSpeech(pcm16: Data, modelId: String) async throws -> AidenSpeechTranscription {

@@ -488,6 +488,7 @@ import { displayImageArtifactStore } from "./display-image-artifact-store.js";
 import {
   createGenerativeUiExtensionRuntime,
   displayedAssistantHtmlUsage,
+  GENERATIVE_UI_EXTENSION_ID,
   GENERATIVE_UI_TOOL_NAME,
   shouldEnableGenerativeUiExtension,
 } from "./generative-ui-extension.js";
@@ -500,7 +501,6 @@ import { enqueueVisualSnapshots } from "./visual-snapshot-service.js";
 import type { ChatUiVisualV1 } from "../../renderer/shared/aiden-ui/types.js";
 import { wrapGenerativeUiHtml } from "./generative-ui-html.js";
 import { registerGenerativeUiPreviewDocument } from "./generative-ui-preview-store.js";
-import { GENERATIVE_UI_EXTENSION_ID } from "./generative-ui-extension.js";
 import { createArtifactPlacementLedger, imageAttachmentPlacements, presentPlacedImage } from "./generative-ui-placements.js";
 import { generativeUiArtifactStore } from "./generative-ui-artifact-store.js";
 import { generationHasVisibleOutput } from "./generation-visible-output.js";

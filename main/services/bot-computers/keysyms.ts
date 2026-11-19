@@ -127,19 +127,6 @@ export function keysymForHidUsage(usage: number): number | undefined {
   return punctuation === undefined ? undefined : punctuation.charCodeAt(0);
 }
 
-/** Every modifier keysym, so callers can tell a modifier from a key. */
-export const MODIFIER_KEYSYMS: ReadonlySet<number> = new Set([
-  XK.Shift_L,
-  XK.Shift_R,
-  XK.Control_L,
-  XK.Control_R,
-  XK.Alt_L,
-  XK.Alt_R,
-  XK.Super_L,
-  XK.Super_R,
-  XK.Caps_Lock,
-]);
-
 const CHORD_MODIFIERS: Readonly<Record<string, number>> = {
   ctrl: XK.Control_L,
   option: XK.Alt_L,

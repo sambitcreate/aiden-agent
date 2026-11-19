@@ -199,10 +199,7 @@ export function ShortcutSettings() {
       }
       const snapshot = await shortcutApi.set(mutation);
       queryClient.setQueryData(queryKeys.shortcuts, snapshot);
-      await Promise.all([
-        queryClient.invalidateQueries({ queryKey: queryKeys.settings }),
-        queryClient.invalidateQueries({ queryKey: queryKeys.assistantConfig }),
-      ]);
+      await queryClient.invalidateQueries({ queryKey: queryKeys.settings });
       setRecordingId(null);
       toast.success(
         "binding" in mutation
