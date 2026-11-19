@@ -966,6 +966,24 @@ test("a group fits itself to its members as Aiden adds, moves, resizes and remov
   assert.deepEqual(await boxOf(group.frame.id), { x: 0, y: 0, w: 32 + 240 + 32, h: 48 + 160 + 32 });
 });
 
+test("a group the person drew grows to hold what Aiden puts in it but keeps the room they left", async (t) => {
+  const { store, call } = await setup(t);
+  await store.update("chat-1", (doc) => ({
+    ...doc,
+    frames: [{ id: "room", kind: "group", title: "Room", x: 0, y: 0, w: 2000, h: 1200, pageId: doc.activePageId, createdBy: "person" }],
+  }));
+  const boxOf = async () => {
+    const frame = (await store.get("chat-1")).frames.find((entry) => entry.id === "room")!;
+    return { x: frame.x, y: frame.y, w: frame.w, h: frame.h };
+  };
+  const note = await call("canvas_place_frame", { kind: "note", title: "One", groupId: "room" });
+  assert.deepEqual(await boxOf(), { x: 0, y: 0, w: 2000, h: 1200 }, "a small member leaves the person's box as they drew it");
+  await call("canvas_update_frame", { id: note.frame.id, x: 2100 });
+  assert.deepEqual(await boxOf(), { x: 0, y: 0, w: 2100 + 240 + 32, h: 1200 }, "a member past its edge widens it");
+  await call("canvas_remove_frame", { id: note.frame.id });
+  assert.equal((await boxOf()).w, 2100 + 240 + 32, "removing a member never shrinks it");
+});
+
 test("what Aiden adds to an artboard wraps to a new row inside it, keeping the width the person drew", async (t) => {
   const { store, call } = await setup(t);
   const board = await call("canvas_place_frame", { kind: "frame", title: "Board", x: 0, y: 0, w: 600, h: 300 });

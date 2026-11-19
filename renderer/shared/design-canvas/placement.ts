@@ -129,14 +129,32 @@ export function growGroupToHold(group: DesignFrame, member: DesignFrame): Design
 /**
  * Fits each unlocked group named in `ids` (not an artboard, which keeps the
  * size the person drew) to its members again, after one was added, moved,
- * resized or removed. Missing ids, artboards and empty groups are left alone.
+ * resized or removed. A group the person drew keeps at least the box they
+ * gave it: it grows to hold its members but never shrinks, so room they left
+ * on purpose stays. Missing ids, artboards and empty groups are left alone.
  */
 export function refitGroups(doc: DesignCanvas, ids: Iterable<string | undefined>): DesignCanvas {
   let next = doc;
   for (const id of new Set(ids)) {
     if (id === undefined) continue;
     const group = next.frames.find((entry) => entry.id === id);
-    if (group?.kind === "group" && !group.locked) next = fitGroupToMembers(next, id);
+    if (group?.kind !== "group" || group.locked) continue;
+    const fitted = fitGroupToMembers(next, id);
+    if (group.createdBy === "aiden" || fitted === next) {
+      next = fitted;
+      continue;
+    }
+    const fit = fitted.frames.find((entry) => entry.id === id)!;
+    const x = Math.min(group.x, fit.x);
+    const y = Math.min(group.y, fit.y);
+    const held = {
+      x,
+      y,
+      w: clampSize(Math.max(group.x + group.w, fit.x + fit.w) - x, group.kind),
+      h: clampSize(Math.max(group.y + group.h, fit.y + fit.h) - y, group.kind),
+    };
+    if (held.x === group.x && held.y === group.y && held.w === group.w && held.h === group.h) continue;
+    next = syncConnectors({ ...next, frames: next.frames.map((entry) => (entry.id === id ? { ...entry, ...held } : entry)) });
   }
   return next;
 }
