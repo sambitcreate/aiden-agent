@@ -148,6 +148,8 @@ struct AidenActivityStepLine: View {
     @Environment(\.aidenOpensWorkspaceFileLinks) private var opensWorkspaceFileLinks
     @Environment(\.openURL) private var openURL
     let step: AidenAgentStep
+    /// The person ended this call with Stop: it reads "stopped" in the neutral tone.
+    var stoppedByUser = false
     let shimmer: Bool
 
     private var fileLink: URL? {
@@ -159,7 +161,7 @@ struct AidenActivityStepLine: View {
             Button {
                 openURL(fileLink)
             } label: {
-                AidenActivityStepLineContent(step: step, shimmer: shimmer)
+                AidenActivityStepLineContent(step: step, stoppedByUser: stoppedByUser, shimmer: shimmer)
                     .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
                     .contentShape(Rectangle())
             }
@@ -167,7 +169,7 @@ struct AidenActivityStepLine: View {
             .accessibilityHint("Opens the file")
             .accessibilityAction(named: "Open file") { openURL(fileLink) }
         } else {
-            AidenActivityStepLineContent(step: step, shimmer: shimmer)
+            AidenActivityStepLineContent(step: step, stoppedByUser: stoppedByUser, shimmer: shimmer)
         }
     }
 }
@@ -187,7 +189,6 @@ private struct AidenActivityStepLineContent: View {
     @Environment(\.aidenPalette) private var palette
     @Environment(\.aidenActivityFileLinkPressed) private var pressed
     let step: AidenAgentStep
-    /// The person ended this call with Stop: it reads "stopped" in the neutral tone.
     var stoppedByUser = false
     let shimmer: Bool
 
