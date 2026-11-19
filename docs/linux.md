@@ -155,7 +155,11 @@ approvals and moving through Aiden's own window behave as on macOS. Linux has
 no app microphone permission, so Live's setup shows the microphone as ready and
 Live uses the input chosen in Settings → Voice & Speech → Aiden Live (or the
 system default). Live can't act in other apps on Linux, because that needs
-Computer Use, and it doesn't offer screen share yet.
+Computer Use. Screen share works: on Wayland, **Choose…** opens the desktop's
+own screen-sharing picker (the xdg-desktop-portal dialog, which needs PipeWire
+and your desktop's portal backend); on X11, Aiden shows its own picker of
+screens and windows. Either way Live sees one frame a second, only while it
+runs.
 
 Computer Use and Apple Foundation Models are not included in the Linux
 build. Their settings, navigation, onboarding promises, helper bundles, and

@@ -38,7 +38,7 @@ test("Linux exposes Bots while keeping Apple-owned host integrations disabled", 
     backgroundJobs: true,
     hooks: true,
     mcpServer: true,
-    liveScreenShare: false,
+    liveScreenShare: true,
   });
 });
 

@@ -37,6 +37,8 @@ export const idleLiveController: AssistantLiveController = {
   screenActive: false,
   screenBusy: false,
   screenError: null,
+  screenSourceChoices: null,
+  pickScreenSource: () => undefined,
   setupComplete: true,
   setSetupOpen: () => undefined,
   setMicrophone: () => undefined,
