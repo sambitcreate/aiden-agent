@@ -139,6 +139,11 @@ export interface WorkspaceArtifactSourceResultV1 {
   /** The parsed value as JSON, present when `status` is ok. */
   dataJson?: string;
   error?: string;
+  /**
+   * A short hash of the real workspace folder a good read came from, so a
+   * read is kept across a save only for that same folder. Never the path.
+   */
+  folder?: string;
 }
 
 /** The last read of each source; failing reads keep the last good data. */
@@ -529,7 +534,8 @@ export function parseWorkspaceArtifactSnapshotV1(value: unknown): WorkspaceArtif
         ? entry.dataJson
         : undefined;
     const error = typeof entry.error === "string" ? entry.error.slice(0, WORKSPACE_ARTIFACT_LIMITS.errorChars) : undefined;
-    sources[name] = { status: entry.status, at, ...(entry.policyDenied === true ? { policyDenied: true as const } : {}), ...(dataJson !== undefined ? { dataJson } : {}), ...(error ? { error } : {}) };
+    const folder = typeof entry.folder === "string" && /^[0-9a-f]{16}$/u.test(entry.folder) ? entry.folder : undefined;
+    sources[name] = { status: entry.status, at, ...(entry.policyDenied === true ? { policyDenied: true as const } : {}), ...(dataJson !== undefined ? { dataJson } : {}), ...(error ? { error } : {}), ...(folder ? { folder } : {}) };
   }
   return { revision, refreshedAt, sources, ...(value.filePolicyVersion === 1 ? { filePolicyVersion: 1 as const } : {}) };
 }

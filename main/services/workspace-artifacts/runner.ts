@@ -1,4 +1,5 @@
 import { assertArtifactFilePath, WorkspaceArtifactFileDeniedError } from "./file-policy.js";
+import { createHash } from "node:crypto";
 import * as fs from "node:fs/promises";
 import {
   parseWorkspaceArtifactOutput,
@@ -122,8 +123,8 @@ function freshForMs(artifact: Pick<WorkspaceArtifactV1, "refresh">): number {
 /**
  * The saved reads a refresh after a save may keep: a source whose definition
  * the save left unchanged (or the saved read already belongs to this
- * revision), whose last read succeeded within the freshness window, and
- * which this access would run now.
+ * revision), whose last read succeeded within the freshness window in the
+ * folder the page is refreshed in now, and which this access would run now.
  */
 function reusableReads(
   view: WorkspaceArtifactView,
@@ -140,6 +141,8 @@ function reusableReads(
     const result = snapshot.sources[source.name];
     if (!result || result.status !== "ok" || result.dataJson === undefined) continue;
     if (!(now - result.at >= 0 && now - result.at < window)) continue;
+    // A read from another folder, or from before Aiden noted the folder, describes other files.
+    if (!context.folderPath || result.folder !== workspaceArtifactFolderKey(context.folderPath)) continue;
     const before =
       snapshot.revision === view.artifact.revision
         ? source
@@ -151,6 +154,15 @@ function reusableReads(
     reused[source.name] = result;
   }
   return reused;
+}
+
+/**
+ * Names the real workspace folder a read came from without saving its path:
+ * a read is kept across a save only when the page is refreshed in that
+ * same folder.
+ */
+export function workspaceArtifactFolderKey(realFolderPath: string): string {
+  return createHash("sha256").update(realFolderPath).digest("hex").slice(0, 16);
 }
 
 /** Resolves the folder as it is now: a folder that was removed or is no longer a directory runs nothing. */
@@ -261,7 +273,9 @@ export function createWorkspaceArtifactRunner(dependencies: WorkspaceArtifactRun
       return { status: "error", at, error: clip(error instanceof Error ? error.message : String(error), WORKSPACE_ARTIFACT_LIMITS.errorChars) };
     }
     const parsed = parseWorkspaceArtifactOutput(source.parse, text);
-    return parsed.ok ? { status: "ok", at, dataJson: parsed.dataJson } : { status: "error", at, error: parsed.error };
+    return parsed.ok
+      ? { status: "ok", at, dataJson: parsed.dataJson, folder: workspaceArtifactFolderKey(root) }
+      : { status: "error", at, error: parsed.error };
   }
 
   /** Runs every source of one artifact once; results are not saved. */

@@ -98,7 +98,8 @@ export interface WorkspaceArtifactToolOptions {
   /**
    * Runs the artifact's sources once and returns each one's result. After a
    * save, `reuseFrom` is the page as it was before: a source the save left
-   * unchanged keeps a read that is still fresh instead of running again.
+   * unchanged keeps a read that is still fresh, and was taken in the folder
+   * the page is refreshed in now, instead of running again.
    */
   refresh?: (
     artifact: WorkspaceArtifactV1,

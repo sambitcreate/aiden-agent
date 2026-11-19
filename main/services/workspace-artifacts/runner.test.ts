@@ -14,7 +14,7 @@ import type {
 import { runBoundedShellCommand, type BoundedShellCommandOptions } from "../bounded-shell-command.js";
 import { runArgvPlan, type ArgvPlanOptions } from "./argv-runner.js";
 import { readWorkspaceArtifactFile, artifactFileAllowed, WorkspaceArtifactFileUnsafeError } from "./file-policy.js";
-import { createWorkspaceArtifactRunner } from "./runner.js";
+import { createWorkspaceArtifactRunner, workspaceArtifactFolderKey } from "./runner.js";
 import { WorkspaceArtifactStore, workspaceArtifactDigest } from "./store.js";
 
 const SHELL: WorkspaceArtifactSourceV1 = { name: "pulls", kind: "shell", command: `printf '[{"number":12}]'`, parse: "json" };
@@ -143,20 +143,46 @@ test("a refresh after a save keeps a fresh read of a source the save left unchan
 });
 
 test("a refresh after a save runs a source again once its last read is older than the page's refresh interval", async (t) => {
-  const { runner, store, commands, context } = await setup(t, { sources: [SHELL] });
+  const { runner, store, commands, context, folder } = await setup(t, { sources: [SHELL] });
   const before = (await store.get("ws1", "art1"))!.artifact;
   const content = { title: "PRs", visual: before.visual, sources: [SHELL], actions: [ECHO] };
   // Read 90 seconds ago: fresh for a page that refreshes every two minutes, stale for one without an interval.
   const readAt = Date.now() - 90_000;
-  await store.saveSnapshot("ws1", before, { pulls: { status: "ok", at: readAt, dataJson: "[]" } });
+  const read = { status: "ok", at: readAt, dataJson: "[]", folder: workspaceArtifactFolderKey(await fs.realpath(folder)) } as const;
+  await store.saveSnapshot("ws1", before, { pulls: read });
   const slow = await store.replace("ws1", "art1", { ...content, refresh: { onOpen: true, intervalSeconds: 120 } });
   assert.equal((await runner.refresh("ws1", "art1", context("full"), undefined, { reuseFrom: before })).pulls!.at, readAt);
   assert.equal(commands.length, 0);
-  await store.saveSnapshot("ws1", slow, { pulls: { status: "ok", at: readAt, dataJson: "[]" } });
+  await store.saveSnapshot("ws1", slow, { pulls: read });
   await store.replace("ws1", "art1", { ...content, title: "PRs now", refresh: { onOpen: true } });
   const reread = await runner.refresh("ws1", "art1", context("full"), undefined, { reuseFrom: slow });
   assert.equal(commands.length, 1);
   assert.equal(reread.pulls!.dataJson, '[{"number":12}]');
+});
+
+test("a refresh after a save runs a source again when the page is refreshed in another folder than the one it was read in", async (t) => {
+  const { runner, store, commands, context, folder } = await setup(t, { sources: [SHELL] });
+  await runner.refresh("ws1", "art1", context("full"));
+  const before = (await store.get("ws1", "art1"))!.artifact;
+  const save = (title: string) =>
+    store.replace("ws1", "art1", { title, visual: { ...before.visual, title }, sources: [SHELL], actions: [ECHO], refresh: before.refresh });
+  const renamed = await save("Open PRs");
+  // The workspace now points at another checkout: its read describes the other folder's files.
+  const other = `${folder}-other`;
+  await fs.mkdir(other);
+  const moved = await runner.refresh("ws1", "art1", { folderPath: other, permission: "full" }, undefined, { reuseFrom: before });
+  assert.equal(commands.length, 2);
+  assert.equal(moved.pulls!.status, "ok");
+  // Back in that folder, the read just taken there is kept across the next save.
+  await save("Open PRs again");
+  await runner.refresh("ws1", "art1", { folderPath: other, permission: "full" }, undefined, { reuseFrom: renamed });
+  assert.equal(commands.length, 2);
+  // A read saved before Aiden noted its folder is not handed back as fresh either.
+  const current = (await store.get("ws1", "art1"))!.artifact;
+  await store.saveSnapshot("ws1", current, { pulls: { status: "ok", at: Date.now(), dataJson: "[]" } });
+  await save("Open PRs once more");
+  await runner.refresh("ws1", "art1", context("full"), undefined, { reuseFrom: current });
+  assert.equal(commands.length, 3);
 });
 
 test("a read kept across a save still follows the access the page has now", async (t) => {

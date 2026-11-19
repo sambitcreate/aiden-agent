@@ -1145,3 +1145,16 @@ test("page data binds each source by name, null until it first loads", () => {
   });
   assert.deepEqual(JSON.parse(workspaceArtifactDataJson(artifact, snapshot)!), { title: "PRs", pulls: [1, 2], todo: null });
 });
+
+test("a saved read keeps the short folder key it was taken in and drops anything that could be a path", () => {
+  const snapshot = parseWorkspaceArtifactSnapshotV1({
+    revision: 1,
+    refreshedAt: 1,
+    sources: {
+      pulls: { status: "ok", at: 1, dataJson: "[]", folder: "0123456789abcdef" },
+      todo: { status: "ok", at: 1, dataJson: "[]", folder: "/Users/me/project" },
+    },
+  });
+  assert.equal(snapshot!.sources.pulls!.folder, "0123456789abcdef");
+  assert.equal(snapshot!.sources.todo!.folder, undefined);
+});
