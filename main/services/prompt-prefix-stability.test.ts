@@ -1133,10 +1133,37 @@ describe("prompt prefix stability: causes fixed by later phases", () => {
     assert.match(seventh, /No longer always-on, still approved and found with recall_memory: \[memory:m1\]/u);
     assert.match(seventh, /Added facts:\n- \[memory:m7\] Fact number 7\./u);
     assert.doesNotMatch(seventh, /Removed facts|no longer approved/u, "a fact that is still approved is not called removed");
+    // An eighth turn with nothing changed is told nothing and keeps the prefix.
+    const [eighth] = await harness.turn({ prompt: "Turn 8.", responses: reply("Done."), ...(await memoryChat([...stored])) });
+    assert.deepEqual(comparePromptRequests(lastOf(requests), eighth!), {}, "the eighth request keeps the prefix");
+    assert.equal(tailOf(eighth!).includes("<state_update>"), false, "an unchanged turn sends no update");
     // Forgetting the pushed-out fact is a removal: system is rebuilt without it.
     const [forgot] = await harness.turn({ prompt: "Forget the first.", responses: reply("Done."), ...(await memoryChat(stored.slice(0, -1))) });
     assert.equal(forgot!.carries("Fact number 1."), false);
     assert.match(tailOf(forgot!), /Removed facts, no longer approved, so do not rely on them: \[memory:m1\]/u);
+  });
+
+  test("a store that cannot be read confirms no pushed-out fact, so it is treated as removed", async () => {
+    const harness = createPromptPrefixHarness();
+    const stored: MemoryFact[] = [];
+    for (let n = 1; n <= 6; n += 1) {
+      stored.unshift(memoryFact(`m${n}`, `Fact number ${n}.`));
+      await harness.turn({ prompt: `Turn ${n}.`, responses: reply("Done."), ...(await memoryChat([...stored])) });
+    }
+    stored.unshift(memoryFact("m7", "Fact number 7."));
+    const unreadable = {
+      alwaysOn: async () => stored.slice(0, 6),
+      list: async () => { throw new Error("The memory database is unreadable."); },
+      recall: async () => [],
+    } as unknown as MemoryStore;
+    const [seventh] = await harness.turn({
+      prompt: "Turn 7.",
+      responses: reply("Done."),
+      ...statefulChat({ extensions: [await createMemoryExtension({ store: unreadable, scope: memoryScope })] }),
+    });
+    assert.equal(seventh!.carries("Fact number 1."), false, "an unconfirmed fact is not sent");
+    assert.match(tailOf(seventh!), /Removed facts, no longer approved, so do not rely on them: \[memory:m1\]/u);
+    assert.doesNotMatch(tailOf(seventh!), /No longer always-on/u);
   });
 
   test("a retried prompt the journal holds records no head without its state update", async () => {

@@ -505,12 +505,16 @@ export function chatStateRequestMessages(
 /**
  * The state with `approved` read from the memory extension's store, when the
  * journal states a fact the always-on block does not have: only then can a
- * fact the cap pushed out be told from one the person removed.
+ * fact the cap pushed out be told from one the person removed. A store that
+ * cannot be read confirms nothing outside the block, so those facts are
+ * treated as removed: named so, rebuilt out of the head and scrubbed from
+ * history. `onUnreadable` is told the error, to log without any fact text.
  */
 export async function withApprovedMemoryFacts(
   state: ChatTurnState,
   branch: readonly PiSessionEntry[],
   extensions: readonly PiAgentRuntimeExtension[],
+  onUnreadable?: (error: unknown) => void,
 ): Promise<ChatTurnState> {
   const inBlock = hashes(chatStateRecord(state).memory);
   const records = branch.flatMap((entry) => {
@@ -520,7 +524,13 @@ export async function withApprovedMemoryFacts(
     return message.role === "custom" && message.customType === STATE_UPDATE_CUSTOM_TYPE ? [recordOfEntry(message.details)] : [];
   });
   const outside = records.some((record) => record?.memory.some((fact) => !inBlock.has(fact.hash)));
-  return outside ? { ...state, approved: await approvedMemoryFactLines(extensions) } : state;
+  if (!outside) return state;
+  try {
+    return { ...state, approved: await approvedMemoryFactLines(extensions) };
+  } catch (error) {
+    onUnreadable?.(error);
+    return { ...state, approved: [] };
+  }
 }
 
 /** The memory and canvas parts of the state, as this turn's extensions render them now. */

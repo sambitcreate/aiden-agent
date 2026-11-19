@@ -127,6 +127,26 @@ test("a fact added by an update and then removed is named by id, and earlier upd
   assert.match(JSON.stringify(await port.getBranch()), /Uses pnpm/u, "reading never rewrites the journal");
 });
 
+test("a fact told as no longer always-on stays known across a new head, so its later removal is named", async () => {
+  const port = await journal();
+  const approved = ["- [memory:m1] Prefers tabs.", "- [memory:m2] Uses pnpm."];
+  await runTurn(port, { ...base, memory: `Memory:\n${approved.join("\n")}` });
+  // The cap pushes m2 out of the block; it is still approved.
+  const pushed = await runTurn(port, { ...base, approved });
+  assert.equal(pushed.plan.reheaded, false);
+  assert.match(textOf(pushed.update!), /No longer always-on, still approved[^\n]*\[memory:m2\]/u);
+  // A change with no prompt to follow rebuilds the head, which states only the block.
+  const reheaded = await runTurn(port, { ...base, permission: "read-only", approved }, false);
+  assert.equal(reheaded.plan.reheaded, true);
+  assert.equal(reheaded.update, undefined);
+  const journaled = journaledChatState(await port.getBranch());
+  assert.deepEqual(journaled.head?.memory.map((fact) => fact.id), ["m1"]);
+  assert.deepEqual(journaled.announced?.memory.map((fact) => [fact.id, fact.recallOnly ?? false]), [["m1", false], ["m2", true]]);
+  const forgot = await runTurn(port, { ...base, permission: "read-only" });
+  assert.match(textOf(forgot.update!), /Removed facts, no longer approved, so do not rely on them: \[memory:m2\]/u);
+  assert.doesNotMatch(textOf(forgot.update!), /Uses pnpm/u);
+});
+
 test("a turn's requests restate the current state after a compaction inside the turn", () => {
   const moved = { ...base, branch: "feature/x" };
   const requestMessages = chatStateRequestMessages(base, moved);

@@ -3953,12 +3953,16 @@ export const llmClient = {
       const stateBranch = await piSession.getBranch();
       // A fact the always-on cap pushed out is still approved, so it is not
       // a removal: the store is read for it only when the journal states a
-      // fact the block lacks.
+      // fact the block lacks. A store that cannot be read confirms none of
+      // them, so they are treated as removed.
       const currentChatState: ChatTurnState = await withApprovedMemoryFacts({
         branch: git.branch ?? null,
         permission,
         ...extensionChatState(runtimeExtensions),
-      }, stateBranch, runtimeExtensions);
+      }, stateBranch, runtimeExtensions, (error) => logger.warn(
+        "memory",
+        `Could not confirm approved memory facts for chat ${params.chatId} (${error instanceof Error ? error.name : "unknown error"}); facts outside the always-on block are treated as removed.`,
+      ));
       const chatStatePlan = planChatTurnState({
         journaled: skillsEnabledForTurn ? journaledChatState(stateBranch) : undefined,
         current: currentChatState,
