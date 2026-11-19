@@ -59,6 +59,12 @@ export interface RemoteGenerationSurfaceInput {
   thinkingLevel?: ChatStartParams["thinkingLevel"];
   botAudienceId?: string;
   excludeToolNames?: ReadonlySet<string>;
+  /**
+   * The device cannot answer a question prompt. The question tool stays
+   * declared, so the chat's tool list matches its other turns, and the client
+   * refuses its call (chat-turn-tool-policy.ts).
+   */
+  questionPromptsUnavailable?: boolean;
   /** The Mac's Settings → Appearance choice; automatic when absent. */
   inlineVisuals?: InlineVisualsMode;
   onTurnAccepted(): void;
@@ -89,6 +95,7 @@ export function remoteGenerationSurface(input: RemoteGenerationSurfaceInput) {
       visualAudience: "remote" as const,
       ...(input.botAudienceId ? { botAudienceId: input.botAudienceId } : {}),
       ...(input.excludeToolNames ? { excludeToolNames: input.excludeToolNames } : {}),
+      ...(input.questionPromptsUnavailable === true ? { questionPromptsUnavailable: true as const } : {}),
       onTurnAccepted: input.onTurnAccepted,
     },
   };

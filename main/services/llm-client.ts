@@ -638,6 +638,11 @@ export interface GenerationExecutionOptions {
    */
   unattended?: boolean;
   /**
+   * The paired device that sent this turn cannot answer a question prompt.
+   * The question tool stays declared and its call is refused.
+   */
+  questionPromptsUnavailable?: boolean;
+  /**
    * Main-owned: this turn answers input UserPromptSubmit already accepted
    * while the chat's previous run was going, so the hooks do not screen it
    * again and what they said then is this turn's prompt context.
@@ -1823,6 +1828,7 @@ async function prepareGeneration(
   const turnAudience: ChatTurnAudience = {
     unattended: options.unattended === true,
     remoteAudience: options.visualAudience === "remote",
+    questionPromptsUnavailable: options.questionPromptsUnavailable === true,
     ...(params.inlineVisuals ? { inlineVisuals: params.inlineVisuals } : {}),
     visualize: params.visualize === true,
   };
@@ -3786,7 +3792,11 @@ export const llmClient = {
           botBound: preparedBotContext !== undefined,
           rendererOwner: owner.id !== 0,
           remoteOwner: owner.kind === "remote",
-          excluded: options.excludeToolNames?.has(ASK_USER_QUESTION_TOOL_NAME) ?? false,
+          // The advisor's model chooser asks through the same prompt, so a
+          // device that cannot show one gets no chooser.
+          excluded:
+            (options.excludeToolNames?.has(ASK_USER_QUESTION_TOOL_NAME) ?? false) ||
+            options.questionPromptsUnavailable === true,
         })
           ? {
               requestQuestionnaire: (

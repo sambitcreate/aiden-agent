@@ -47,6 +47,7 @@ import { UNATTENDED_FOLLOW_UP_GENERATION } from "./follow-through/notice-deliver
 import { assembleAgentTools } from "./agent-tool-assembly.js";
 import { subagentsAllowedForGeneration } from "./subagents/eligibility.js";
 import { createGenerativeUiExtension, shouldEnableGenerativeUiExtension } from "./generative-ui-extension.js";
+import { createAskUserQuestionExtension, shouldEnableAskUserQuestionExtension } from "./ask-user-question-extension.js";
 import { ROUTINE_NOTES_TOOL } from "./bot-runtime/bot-tool-policy.js";
 import type { PiAgentRuntimeExtension } from "./pi-agent-runtime-harness.js";
 import {
@@ -706,6 +707,34 @@ describe("prompt prefix stability: tool list identical across turns", () => {
       assert.equal(chatTurnToolRefusal(workspaceSurface, attended)("workspace_artifact"), undefined);
     });
   }
+
+  test("a paired device without question prompts and a turn on this computer", async () => {
+    const outdatedPhone = remoteGenerationSurface({
+      chatId: "chat", turnId: "turn", streamId: "stream", ownerId: "owner",
+      workspaceId: "workspace", providerId: "provider", model: "model",
+      questionPromptsUnavailable: true, onTurnAccepted: () => undefined,
+    });
+    // The client's own gate, given what each turn's options say.
+    const questions = (options: { excludeToolNames?: ReadonlySet<string> }, owner: { rendererOwner: boolean; remoteOwner: boolean }) => {
+      const declared = shouldEnableAskUserQuestionExtension({
+        usageSource: "chat", assistantMode: false, botBound: false, ...owner,
+        excluded: options.excludeToolNames?.has("ask_user_question") ?? false,
+      });
+      return declared ? [createAskUserQuestionExtension({ request: async () => { throw new Error("never asked"); } })] : [];
+    };
+    const { previous, current } = await twoTurns(
+      {},
+      { assembly: await workspaceChat({ tools: chatTools(workspaceSurface), extensions: questions({}, { rendererOwner: true, remoteOwner: false }) }) },
+      { assembly: await workspaceChat({ tools: chatTools(workspaceSurface), extensions: questions(outdatedPhone.options, { rendererOwner: false, remoteOwner: true }) }) },
+    );
+    assert.ok(current.carries("ask_user_question"), "the question tool stays declared");
+    assert.deepEqual(toolsOf(current), toolsOf(previous));
+    const fromPhone = chatTurnToolRefusal(workspaceSurface, {
+      ...attended, remoteAudience: true, questionPromptsUnavailable: outdatedPhone.options.questionPromptsUnavailable === true,
+    });
+    assert.match(fromPhone("ask_user_question") ?? "", /not available in this turn.*question prompts/su);
+    assert.equal(chatTurnToolRefusal(workspaceSurface, attended)("ask_user_question"), undefined);
+  });
 });
 
 describe("prompt prefix stability: causes fixed by later phases", () => {

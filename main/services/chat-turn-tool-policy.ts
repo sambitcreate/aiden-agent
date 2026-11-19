@@ -9,6 +9,7 @@
 // execution, with a reason that names the condition.
 
 import type { InlineVisualsMode } from "../../renderer/shared/appearance.js";
+import { ASK_USER_QUESTION_TOOL_NAME } from "../../renderer/shared/ask-user-question.js";
 import { WORKSPACE_ARTIFACT_TOOL_NAME } from "../../renderer/shared/workspace-artifacts.js";
 import { COMPUTER_USE_TOOL_NAME } from "./computer-use/tool.js";
 import { generativeUiUnavailableReason } from "./generative-ui-extension.js";
@@ -26,6 +27,8 @@ export interface ChatTurnAudience {
   unattended: boolean;
   /** A phone or paired Mac sent the turn and sees its results. */
   remoteAudience: boolean;
+  /** The paired device that sent the turn cannot answer a question prompt. */
+  questionPromptsUnavailable?: boolean;
   inlineVisuals?: InlineVisualsMode;
   /** The person used /visualize in this turn. */
   visualize: boolean;
@@ -54,6 +57,9 @@ export function chatTurnToolRefusal(
     }
     if (turn.remoteAudience && (name === COMPUTER_USE_TOOL_NAME || name === FORM_FILL_TOOL_NAME)) {
       return `${name} is not available in this turn: the request came from a paired device, and Computer Use is granted only on this computer. Describe what you would do on screen instead.`;
+    }
+    if (turn.questionPromptsUnavailable === true && name === ASK_USER_QUESTION_TOOL_NAME) {
+      return `${ASK_USER_QUESTION_TOOL_NAME} is not available in this turn: the paired device that sent it cannot show question prompts. Ask your question in your reply instead.`;
     }
     if (turn.remoteAudience && name === WORKSPACE_ARTIFACT_TOOL_NAME) {
       return `${WORKSPACE_ARTIFACT_TOOL_NAME} is not available in this turn: the request came from a paired device, which cannot show workspace artifacts. Open the chat on this computer to create, refresh or run one.`;

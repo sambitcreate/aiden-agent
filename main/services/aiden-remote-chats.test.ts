@@ -36,6 +36,7 @@ import { createChatStore } from "./chat-store-core.js";
 import type { RegisteredSkill } from "./skill-registry.js";
 import type { VisualViewerAppearance, VisualViewerSource } from "./visual-viewer-document.js";
 import { HostRunRegistry } from "./host-run-registry.js";
+import { chatTurnToolRefusal } from "./chat-turn-tool-policy.js";
 import { ChatTriageStore } from "./chat-triage.js";
 import { workspaceFolderMissing, workspaceFolderRemoteRefusal } from "./workspace-folder-presence.js";
 
@@ -2453,7 +2454,19 @@ test("a remote turn draws visuals by the Mac's Appearance setting and knows they
   assert.equal(unreadable.lastParams()?.inlineVisuals, undefined);
 });
 
-test("question tool is exposed only to devices granted the question capability", async () => {
+test("a device without question prompts keeps the question tool declared and has its call refused", async () => {
+  // What the client refuses for a turn started with these options.
+  const questionRefusal = (options: Record<string, unknown> | null) =>
+    chatTurnToolRefusal(
+      { usageSource: "chat", bot: false, assistant: false, harnessProvider: false },
+      {
+        unattended: false,
+        remoteAudience: options?.visualAudience === "remote",
+        questionPromptsUnavailable: options?.questionPromptsUnavailable === true,
+        visualize: false,
+      },
+    )("ask_user_question");
+
   const supported = fixture(chat(), {
     deviceSupportsQuestionPrompts: async (deviceId) => deviceId === "device-1",
   });
@@ -2461,11 +2474,8 @@ test("question tool is exposed only to devices granted the question capability",
     text: "help me choose",
   });
   const supportedOptions = supported.lastGenerationOptions();
-  assert.equal(
-    supportedOptions?.excludeToolNames,
-    undefined,
-    "capable devices must keep ask_user_question available",
-  );
+  assert.equal(supportedOptions?.excludeToolNames, undefined);
+  assert.equal(questionRefusal(supportedOptions), undefined, "capable devices can answer ask_user_question");
 
   const unsupported = fixture(chat(), {
     deviceSupportsQuestionPrompts: async () => false,
@@ -2473,19 +2483,18 @@ test("question tool is exposed only to devices granted the question capability",
   await unsupported.service.startTurn("device-1", "chat-1", "question-turn-002", {
     text: "help me choose",
   });
-  const excluded = unsupported.lastGenerationOptions()?.excludeToolNames;
-  assert.ok(excluded instanceof Set);
-  assert.ok((excluded as Set<string>).has("ask_user_question"));
+  const unsupportedOptions = unsupported.lastGenerationOptions();
+  assert.equal(unsupportedOptions?.excludeToolNames, undefined, "the chat's tool list stays the same");
+  assert.match(questionRefusal(unsupportedOptions) ?? "", /^ask_user_question is not available in this turn: .*question prompts/u);
 
   const missingGate = fixture(chat());
   await missingGate.service.startTurn("device-1", "chat-1", "question-turn-003", {
     text: "help me choose",
   });
-  const missingExcluded = missingGate.lastGenerationOptions()?.excludeToolNames;
-  assert.ok(missingExcluded instanceof Set);
-  assert.ok(
-    (missingExcluded as Set<string>).has("ask_user_question"),
-    "without a host capability lookup the question tool must stay excluded",
+  assert.match(
+    questionRefusal(missingGate.lastGenerationOptions()) ?? "",
+    /not available in this turn/u,
+    "without a host capability lookup the question call must be refused",
   );
 });
 

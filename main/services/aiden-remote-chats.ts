@@ -118,7 +118,6 @@ import {
   startSurfaceGeneration,
 } from "./conversation-surface-generation.js";
 import { chatSummaryRevision } from "./chat-summary-revision.js";
-import { ASK_USER_QUESTION_TOOL_NAME } from "../../renderer/shared/ask-user-question.js";
 import {
   parseSkillInvocationV1,
   SkillInvocationError,
@@ -135,9 +134,6 @@ import type { RegisteredSkill } from "./skill-registry.js";
 import { workspaceMutationGate } from "./workspace-mutation-gate.js";
 
 const SAFE_ID = /^[A-Za-z0-9._:-]{1,128}$/u;
-const QUESTION_PROMPT_EXCLUDED_TOOLS: ReadonlySet<string> = new Set([
-  ASK_USER_QUESTION_TOOL_NAME,
-]);
 const IDEMPOTENCY_KEY = /^[\x21-\x7e]{16,128}$/u;
 const SUMMARY_CURSOR = /^cur_([A-Za-z0-9_-]{1,384})\.([A-Za-z0-9_-]{43})$/u;
 const SUMMARY_CURSOR_TTL_MS = 5 * 60_000;
@@ -1420,6 +1416,7 @@ export class AidenRemoteChatService {
             visualAudience?: "remote";
             botAudienceId?: string;
             excludeToolNames?: ReadonlySet<string>;
+            questionPromptsUnavailable?: true;
             onTurnAccepted(): void;
           },
         ): Promise<boolean>;
@@ -2872,7 +2869,7 @@ export class AidenRemoteChatService {
             ...(inlineVisuals ? { inlineVisuals } : {}),
             ...((await this.options.deviceSupportsQuestionPrompts?.(deviceId)) === true
               ? {}
-              : { excludeToolNames: QUESTION_PROMPT_EXCLUDED_TOOLS }),
+              : { questionPromptsUnavailable: true }),
             onTurnAccepted: () => {
               accepted = true;
               this.options.streams.markRunning(deviceId, streamId);
