@@ -326,10 +326,7 @@ struct AidenPalette: Equatable, Sendable {
 
     var fillAccent: Color { Color(aidenHex: accentSolidFill.fillHex) }
     var onFillAccent: Color { Color(aidenHex: accentSolidFill.contentHex) }
-    var fillAccentPressed: Color { Color(aidenHex: accentSolidFill.pressedHex) }
     var fillDanger: Color { Color(aidenHex: dangerSolidFill.fillHex) }
-    var onFillDanger: Color { Color(aidenHex: dangerSolidFill.contentHex) }
-    var fillDangerPressed: Color { Color(aidenHex: dangerSolidFill.pressedHex) }
 
     func applyingContrast(_ contrast: Int, baseline: Int) -> AidenPalette {
         guard contrast != baseline else { return self }
@@ -397,7 +394,6 @@ struct AidenSolidFill: Equatable, Sendable {
 extension AidenPalette {
     static let minimumTextContrast = 4.5
 
-    var successText: Color { Color(aidenHex: successTextHex) }
     var warningText: Color { Color(aidenHex: warningTextHex) }
     var dangerText: Color { Color(aidenHex: dangerTextHex) }
 

@@ -55,11 +55,6 @@ final class AidenHomeModel {
         self.chatCache = chatCache
     }
 
-    var chatLoadErrorMessage: String? {
-        guard case .failed(let message) = chatListLoadState else { return nil }
-        return message
-    }
-
     /// Accepts a chat the user is viewing, so its row is read by definition.
     func accept(_ chat: AidenChat) {
         guard !chat.isBotChat else { return }
@@ -102,10 +97,6 @@ final class AidenHomeModel {
     /// The Inbox banner after a swipe action: a rollback explanation, or
     /// a confirmation that can undo the change.
     var inboxNotice: AidenInboxNotice?
-
-    /// The banner VoiceOver last heard, so one shown again (the overlay
-    /// rebuilt after navigating back) is not announced twice.
-    var announcedInboxNoticeID: UUID?
 
     /// Mark read from a swipe. The dot clears at once and comes back with a
     /// banner if the Mac refuses. A Mac without read markers gets no write.

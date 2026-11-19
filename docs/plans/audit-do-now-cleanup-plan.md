@@ -104,3 +104,9 @@ The work runs in two lanes so the phone work can proceed alongside the desktop w
 ## Outcome
 
 To be filled in as phases land.
+
+- P3: done. A Bot plan's `expiry` validates `expiresAt` through `AidenRemoteTimestamp(rawValue:)`, the same strict RFC 3339 parser the decoder uses, with no JSON round trip.
+- P4: done. A finished reply caches its tail and single-block parse; a streaming tail is still parsed fresh and never enters the cache. The full-text `lowercased()` in `allowsSplitting` is a byte scan for the same HTML openers.
+- P5: done. `revealedPartial` is read only by two small child views (the partial bubble and the scroll-follow observer), so a revealed token no longer re-evaluates the whole Bot session body.
+- P9: done. `AidenChatViewModel.deinit` also cancels the foreign-run probe, rate-limit retry, worktree setup, skill catalog and mention tasks. `uploadRevocationTask` is left running on purpose, with a comment.
+- P11: done, changed scope. A fresh scan found 28 dead app symbols plus 2 that became dead with them (`offersBotIssues`, `ChatMoveRequest`); all were deleted, and the one script pin (`chatLoadErrorMessage` in `check-ios-shipping-target.test.mjs`) was dropped. Kept: Codable wire fields and enum cases (they must still decode), delegate and `AppShortcutsProvider`/`@main` members the frameworks call, and two `AidenDiagnosticEvent` cases that belong to the shared diagnostics vocabulary.
