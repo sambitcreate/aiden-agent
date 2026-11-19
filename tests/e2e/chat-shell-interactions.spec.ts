@@ -1,4 +1,6 @@
 import { execFileSync } from "node:child_process";
+import { writeFile } from "node:fs/promises";
+import path from "node:path";
 import { colorContrastRatio, getPresetVariant, resolveThemeTokens } from "../../renderer/shared/appearance";
 import { chooseFolderlessWorkspace, expect, expectSquircleButtons, finishLmStudioOnboarding, test, type AidenE2e } from "./fixtures";
 
@@ -1780,4 +1782,38 @@ test("a long prompt wraps inside its column, folds behind a chevron, and copies 
   expect(copyBox.y - bubbleBox.y).toBeLessThanOrEqual(12);
   await copy.click();
   await expect.poll(() => app.evaluate(({ clipboard }) => clipboard.readText())).toBe(prompt);
+});
+
+// A fresh install starts in No workspace; mentions need a workspace folder.
+test.describe("mentions in a workspace", () => {
+  test.use({ workspaceSeed: true });
+
+  test("@ in the composer picks a workspace file into one chip that Backspace removes whole", async ({ aiden }) => {
+    const { page } = aiden;
+    await writeFile(path.join(aiden.workspaceDir, "mention-target.md"), "# Notes\n");
+    await finishLmStudioOnboarding(page);
+    const composer = page.locator("textarea");
+    const files = page.getByRole("listbox", { name: "Workspace files" });
+
+    await composer.fill("see @mention-ta");
+    await expect(files.getByRole("option", { name: /^mention-target\.md/u })).toBeVisible();
+    await composer.press("Escape");
+    await expect(files).toBeHidden();
+    await expect(composer).toHaveValue("see @mention-ta");
+
+    await composer.fill("");
+    await composer.fill("see @mention-ta");
+    await expect(files.getByRole("option", { name: /^mention-target\.md/u })).toHaveAttribute("aria-selected", "true");
+    await composer.press("Enter");
+    await expect(files).toBeHidden();
+    await expect(composer).toHaveValue("see ");
+    await expect(composer).toBeFocused();
+    const chips = page.getByRole("list", { name: "Mentioned files" });
+    await expect(chips.getByRole("listitem")).toHaveText(["@mention-target.md"]);
+
+    await composer.evaluate((element: HTMLTextAreaElement) => element.setSelectionRange(0, 0));
+    await composer.press("Backspace");
+    await expect(chips).toHaveCount(0);
+    await expect(composer).toHaveValue("see ");
+  });
 });

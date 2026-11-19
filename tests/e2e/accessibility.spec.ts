@@ -62,7 +62,7 @@ test("core surfaces pass the WCAG A/AA axe gate and keep their accessible struct
       - main:
         - region "Conversation"
         - group "Composer workspace bar":
-          - button "Choose a workspace"
+          - 'button /^.+\\. Choose a workspace\\.$/'
         - textbox
         - button "Attach files or images"
         - 'button /^Selected model: .+\\. Choose a model\\.$/'

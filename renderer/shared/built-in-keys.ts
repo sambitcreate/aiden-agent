@@ -78,6 +78,13 @@ export const BUILT_IN_KEYS: readonly BuiltInKey[] = [
     section: "In a chat",
   },
   {
+    id: "mention",
+    title: "Mention a workspace file",
+    description: "Type @ in the message box; Return or Tab adds it as a chip, Backspace at the start removes the last one.",
+    keys: ["@"],
+    section: "In a chat",
+  },
+  {
     id: "replies",
     title: "Previous / next reply",
     description: "From the conversation or an empty message box.",

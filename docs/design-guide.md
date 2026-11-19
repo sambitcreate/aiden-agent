@@ -413,6 +413,38 @@ bounds and saving: `onResize` gets the size while a pointer drags and
   browser viewport's) and the device mini player's edges are not dividers and
   keep their own code.
 
+## Mentions
+
+The composer's `@` picker (`renderer/lib/composer-mentions.ts`,
+`renderer/components/composer-mention-picker.tsx`) names files and folders of
+the chat's workspace. It is offered only in a local workspace chat with folder
+access, and reads the Files panel's bounded index (`workspaces:files`) only
+once a mention starts.
+
+- `@` opens it at the start of the text, after whitespace, or after an opening
+  bracket or quote, never mid-word (an email address stays text). The query is
+  path characters up to the caret; a space or a new line ends it. The
+  full-width `＠` counts.
+- The textarea keeps focus and owns the listbox through `aria-controls` and
+  `aria-activedescendant`. ↑/↓ move, Enter or Tab picks, and composing keys
+  (`isComposingKey`) never move or pick. Escape closes it through the layer
+  stack (`useLayer("popover")`) and the text stays; typing on in that token
+  keeps it closed until the `@` is deleted or the box is focused again.
+- Rows rank with `rankMatches` (the name is the title and is marked with
+  `MatchText`, the path is a keyword) and scroll with `revealInList`.
+- A pick takes the typed `@query` out of the text and becomes a chip above it,
+  like attachments, so the chip is one unit: the caret can't enter it, its X
+  button removes it, and Backspace at the very start of the text removes the
+  last chip whole. Chips use the soft accent fill, with no border.
+- Send writes the chips first, in order, as `@path` (`@path/` for a folder,
+  `@"path"` when it has whitespace or a quote), then the typed text. A failed
+  send gives the chips back as chips (as `@path` text the `@` would reopen the
+  picker), while the reload-recovery copy keeps them as `@path`. Pasted
+  `@path` text is sent as is.
+- No picker while the text is an argument slash command (`/btw`, `/visualize`),
+  whose prompt is sent without the chips. While the files load, Enter waits
+  instead of sending the half-typed `@query`. A folder also matches as `dir/`.
+
 ## Enforced rules
 
 `npm run check:aiden-rules` (`scripts/check-aiden-rules.mjs`) checks the rules a

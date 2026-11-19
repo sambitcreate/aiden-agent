@@ -26,14 +26,6 @@ export type AxeExclusion = {
 
 export const AXE_EXCLUSIONS: readonly AxeExclusion[] = Object.freeze([
   {
-    surface: "chat window",
-    rule: "label-content-name-mismatch",
-    target: ".composer-workspace-trigger",
-    reason:
-      'The composer\'s workspace chip shows the workspace name but is named "Choose a workspace" (WCAG 2.5.3). ' +
-      "Fix in renderer/components/composer.tsx, which another unit is editing, by putting the visible name first in the aria-label.",
-  },
-  {
     surface: "model picker",
     rule: "nested-interactive",
     target: /^#radix-_r_[0-9a-z]+_$/u,

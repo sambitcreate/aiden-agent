@@ -141,6 +141,8 @@ export const queryKeys = {
     ["skillCatalog", workspaceId ?? "none"] as const,
   workspaceSkillChoices: (workspaceId: string | undefined) =>
     ["workspaceSkillChoices", workspaceId ?? "none"] as const,
+  workspaceFileIndex: (workspaceId: string | undefined) =>
+    ["workspaceFileIndex", workspaceId ?? "none"] as const,
   modelInfo: (providerId: string | undefined) => ["modelInfo", providerId ?? "none"] as const,
 };
 
@@ -653,6 +655,16 @@ export function useDiscoveredSkills(workspaceId: string | undefined) {
     enabled: Boolean(workspaceId),
     staleTime: 30_000,
     refetchOnWindowFocus: true,
+  });
+}
+
+/** The workspace's bounded file index, read only while `enabled` (the composer's `@` picker is open). */
+export function useWorkspaceFileIndex(workspaceId: string | undefined, enabled: boolean) {
+  return useQuery({
+    queryKey: queryKeys.workspaceFileIndex(workspaceId),
+    queryFn: () => workspacesApi.files(workspaceId as string),
+    enabled: enabled && Boolean(workspaceId),
+    staleTime: 30_000,
   });
 }
 
