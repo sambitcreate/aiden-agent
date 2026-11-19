@@ -7,6 +7,8 @@
  * Built-in Aiden tools never contain `__`.
  */
 
+import { checkImageSavePath } from "../image-save-path.js";
+
 const SHARED_NAMES: Readonly<Record<string, string>> = {
   run_command: "Bash",
   write_file: "Write",
@@ -92,16 +94,30 @@ export function toolNameSpellings(name: string): string[] {
 /**
  * Tool input as a hook sees it: Aiden's keys plus Claude aliases (`path`, or
  * generate_image's `savePath`, also as `file_path`). The original object is
- * not changed.
+ * not changed. `file_path` for a savePath is the workspace path the image is
+ * written to (`./design//hero.png` becomes `design/hero.png`), so a hook that
+ * guards paths sees the same file the approval names; a savePath the tool
+ * would refuse gets no `file_path`.
  */
 export function claudeToolInput(input: Record<string, unknown> | undefined): Record<string, unknown> | undefined {
   if (!input) return input;
   const result: Record<string, unknown> = { ...input };
   if (!("file_path" in input)) {
     if (typeof input.path === "string") result.file_path = input.path;
-    else if (typeof input.savePath === "string") result.file_path = input.savePath;
+    else if (typeof input.savePath === "string") {
+      const savePath = parsedSavePath(input.savePath);
+      if (savePath !== undefined) result.file_path = savePath;
+    }
   }
   return result;
+}
+
+function parsedSavePath(value: string): string | undefined {
+  try {
+    return checkImageSavePath(value);
+  } catch {
+    return undefined;
+  }
 }
 
 /**

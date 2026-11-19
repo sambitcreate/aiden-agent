@@ -1017,7 +1017,11 @@ test("a save path that could never be written, or a canvas request without one, 
   const { controls, generate } = savingTools();
   for (const savePath of ["../outside.png", "/Users/person/hero.png", "C:\\art\\hero.png", "design/../../hero.png", "notes.txt", ".png", "", "a\u0000.png",
     ".ssh/id.png", ".git/hooks/pre-commit.png", "design/.hidden/hero.png", "~/hero.png", "~\\hero.png",
-    "design/hero\u202egnp.png", "design/he\u2066ro.png", "design/\nhero.png", "design/hero\u0085.png"]) {
+    "design/hero\u202egnp.png", "design/he\u2066ro.png", "design/\nhero.png", "design/hero\u0085.png",
+    // Invisible on the card: a zero-width space and joiner, a soft hyphen, the BOM,
+    // the line and paragraph separators, and the Hangul fillers.
+    "design/he\u200bro.png", "design/he\u200dro.png", "design/he\u00adro.png", "design/\ufeffhero.png",
+    "design/hero\u2028.png", "design/hero\u2029.png", "design/\u3164/hero.png", "design/he\u115fro.png", "design/he\u1160ro.png"]) {
     await assert.rejects(generate.execute("bad", { ...imageRequest, savePath }), Error, JSON.stringify(savePath));
   }
   await assert.rejects(generate.execute("canvas", { ...imageRequest, placeOnCanvas: true }), /placeOnCanvas needs savePath/);

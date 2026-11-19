@@ -198,6 +198,13 @@ test("tool names and inputs translate between Aiden and Claude spellings", () =>
   const image = { prompt: "a hero", savePath: "design/hero.png" };
   assert.deepEqual(claudeToolInput(image), { ...image, file_path: "design/hero.png" });
   assert.deepEqual(claudeToolInput({ prompt: "a hero" }), { prompt: "a hero" });
+  // A hook guarding paths sees the file that is written, not the spelling the model used.
+  const spelled = { prompt: "a hero", savePath: "./design//assets\\hero.png" };
+  assert.equal(claudeToolInput(spelled)?.file_path, "design/assets/hero.png");
+  // A savePath the tool refuses names no file at all.
+  for (const savePath of ["../outside.png", ".git/hooks/pre-commit.png", "design/hero\u202egnp.png", "notes.txt"]) {
+    assert.equal(claudeToolInput({ prompt: "a hero", savePath })?.file_path, undefined, JSON.stringify(savePath));
+  }
   assert.deepEqual(aidenToolInput("generate_image", { ...image, file_path: "design/hero-2.png" }, image), {
     prompt: "a hero",
     savePath: "design/hero-2.png",
