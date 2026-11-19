@@ -920,6 +920,44 @@ test("html admission reads the elements a <select> holds as Chromium builds them
   }
 });
 
+// Chromium ignores an end tag that names an SVG <title> or <desc>, or MathML
+// text, around an open HTML element, so it stays in that element and reads
+// the CDATA opener as a bogus comment ending at its first >. parse5 pops to
+// the SVG or MathML element and reads the CDATA as text.
+test("html admission refuses an end tag that closes SVG or MathML around open HTML, finished or streaming", () => {
+  const errorImage = `<img src=x onerror="location='javascript:alert(1)'">`;
+  const refused: Record<string, [string, string]> = {
+    "an SVG <title>": [`<div><svg><title><b>x</title><![CDATA[x>${errorImage}]]></svg></div>`, "title"],
+    "an SVG <desc>": [`<div><svg><desc><b>x</desc><![CDATA[x>${errorImage}]]></svg></div>`, "desc"],
+    "a MathML <mi>": [`<div><math><mi><b>x</mi><![CDATA[x>${errorImage}]]></math></div>`, "mi"],
+    "a MathML <mtext>": [`<div><math><mtext><span>x</mtext><![CDATA[x>${errorImage}]]></math></div>`, "mtext"],
+    "a MathML <annotation-xml>": [
+      `<div><math><annotation-xml encoding="text/html"><b>x</annotation-xml><![CDATA[x>${errorImage}]]></math></div>`,
+      "annotation-xml",
+    ],
+    "an SVG <title> around a nested <svg>": [`<svg><title><span><svg><g></title><![CDATA[x>${errorImage}]]></svg>`, "title"],
+  };
+  for (const [name, [html, tag]] of Object.entries(refused)) {
+    const message = new RegExp(`</${tag}> ends an SVG or MathML element around an open HTML element, which the browser leaves open\\. Close the HTML elements`, "u");
+    assert.throws(() => validateGenerativeUiHtml(html), message, name);
+    assert.equal(isGenerativeUiDraftAcceptable(html), false, `draft verdict for ${name}`);
+    for (const chunk of [1, 7, 64]) assert.equal(streamInChunks(html, chunk).admitted, false, `draft verdict for ${name} streamed by ${chunk}`);
+  }
+  const admitted = [
+    '<svg><title>Chart</title><rect width="4" height="4"/></svg>',
+    "<math><mtext>x</mtext></math>",
+    "<div><svg><title><b>x</b></title><rect/></svg></div>",
+    '<svg width="100" height="40"><foreignObject width="100" height="40"><div xmlns="http://www.w3.org/1999/xhtml">Hi <b>there</b></div></foreignObject></svg>',
+    "<svg><foreignObject><div><p>Hi</foreignObject></svg>",
+    "<svg><text><tspan>a</tspan></text></svg><b><i>x</b></i>",
+  ];
+  for (const html of admitted) {
+    assert.ok(validateGenerativeUiHtml(html).byteLength > 0, html);
+    assert.equal(isGenerativeUiDraftAcceptable(html), true, html);
+    for (const chunk of [1, 7, 64]) assert.deepEqual(streamInChunks(html, chunk), { admitted: true, shown: html }, `${html} streamed by ${chunk}`);
+  }
+});
+
 test("html admission refuses markup nested or attributed past what a visual needs, finished or streaming", () => {
   const attributes = (count: number) => Array.from({ length: count }, (_, index) => ` a${index}`).join("");
   const refused = {

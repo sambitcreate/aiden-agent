@@ -94,6 +94,12 @@ class StructureLimit extends Error {}
  */
 export const SELECT_FOREIGN_LIMIT = "inside an <svg> or <math> in a <select> is read differently by the browser and the check";
 
+/**
+ * Refused (at the end tag): an end tag that parse5 matches to an SVG or
+ * MathML element around an open HTML element, which Chromium ignores.
+ */
+export const FOREIGN_END_LIMIT = "ends an SVG or MathML element around an open HTML element, which the browser leaves open";
+
 /** Refused (at the start tag): a raw-text or RCDATA element in a <select>, which Chromium reads as text where parse5 reads markup. */
 export const SELECT_RAW_TEXT_LIMIT = "in a <select> has content the browser reads as text and the check reads as markup";
 
@@ -1797,6 +1803,12 @@ export class HtmlScanner {
     // when an SVG <foreignObject>, <desc> or <title> or MathML text holds what
     // is open, Chromium ignores it and stays in the subtree. The host's own
     // closing markup after a visual (`close`) is not refused.
+    //
+    // An end tag that reaches HTML content is matched by parse5's generic
+    // in-body rule by tag name alone, so `</title>` in a <span> in an SVG
+    // <title> closes the SVG <title>, and what follows is read as SVG. A
+    // browser matches only HTML elements and ignores it (the <title> is
+    // special), reading what follows as HTML in the <span>, so it is refused.
     const onEndTag = this.parser.onEndTag;
     if (typeof onEndTag !== "function") throw new Error("parse5 no longer exposes the end-tag hook the HTML check needs.");
     this.parser.onEndTag = (token) => {
@@ -1808,6 +1820,9 @@ export class HtmlScanner {
             (tag === "select" && openElements.hasInScope(htmlSpec.TAG_ID.SELECT) && openElements.hasInSelectScope(htmlSpec.TAG_ID.SELECT))
           : tag !== "select" || openElements.hasInScope(htmlSpec.TAG_ID.SELECT);
         if (!kept) throw new StructureLimit(`</${tag}> ${SELECT_FOREIGN_LIMIT}`);
+      }
+      if (!this.closing && token.tagName !== "p" && token.tagName !== "br" && !this.endsForeignElement(token.tagName) && this.endsForeignAroundHtml(token)) {
+        throw new StructureLimit(`</${token.tagName}> ${FOREIGN_END_LIMIT}`);
       }
       onEndTag.call(this.parser, token);
     };
@@ -1944,6 +1959,26 @@ export class HtmlScanner {
       const element = openElements.items[index] as Element;
       if (treeAdapter.getNamespaceURI(element) === htmlSpec.NS.HTML) return false;
       if (treeAdapter.getTagName(element).toLowerCase() === tagName) return true;
+    }
+    return false;
+  }
+
+  /**
+   * Whether parse5's generic in-body end tag rule, reached by `token`, would
+   * close an SVG or MathML element: it walks the open elements from the
+   * current node and stops at the first one with the token's tag (in any
+   * namespace) or at a special element. The other in-body end tag rules
+   * look for HTML elements only, and no SVG or MathML element shares their
+   * tags, so the walk finds nothing foreign for them either.
+   */
+  private endsForeignAroundHtml(token: Token.TagToken): boolean {
+    const { openElements, treeAdapter } = this.parser;
+    for (let index = openElements.stackTop; index > 0; index -= 1) {
+      const element = openElements.items[index] as Element;
+      const id = openElements.tagIDs[index];
+      const namespace = treeAdapter.getNamespaceURI(element);
+      if (token.tagID === id && (id !== htmlSpec.TAG_ID.UNKNOWN || treeAdapter.getTagName(element) === token.tagName)) return namespace !== htmlSpec.NS.HTML;
+      if (htmlSpec.SPECIAL_ELEMENTS[namespace].has(id)) return false;
     }
     return false;
   }
