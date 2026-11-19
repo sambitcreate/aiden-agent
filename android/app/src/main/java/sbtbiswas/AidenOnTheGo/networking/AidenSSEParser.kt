@@ -38,6 +38,7 @@ import java.time.Instant
 data class AidenRemoteEventPayload(
     val chatId: String? = null,
     val turnId: String? = null,
+    val reason: String? = null,
     val nextSequence: Long? = null,
     val state: String? = null,
     val text: String? = null,
@@ -67,6 +68,7 @@ data class AidenRemoteEventPayload(
         return when (key) {
             "chatId" -> chatId?.let { JsonPrimitive(it) }
             "turnId" -> turnId?.let { JsonPrimitive(it) }
+            "reason" -> reason?.let { JsonPrimitive(it) }
             "nextSequence" -> nextSequence?.let { JsonPrimitive(it) }
             "state" -> state?.let { JsonPrimitive(it) }
             "text" -> text?.let { JsonPrimitive(it) }
@@ -362,7 +364,7 @@ class AidenSSEParser {
                     payload = decodedPayload
                 )
             }
-            val allowedKeys: Set<String> = when (type) {
+            val requiredKeys: Set<String> = when (type) {
                 AidenRemoteEventType.SNAPSHOT -> setOf("chatId", "turnId", "nextSequence")
                 AidenRemoteEventType.STATUS -> setOf("state")
                 AidenRemoteEventType.TEXT_DELTA, AidenRemoteEventType.REASONING_DELTA -> setOf("text")
@@ -376,12 +378,17 @@ class AidenSSEParser {
                 AidenRemoteEventType.HEARTBEAT -> emptySet()
                 else -> emptySet()
             }
+            val allowedKeys: Set<String> = if (type == AidenRemoteEventType.SNAPSHOT) {
+                requiredKeys + "reason"
+            } else {
+                requiredKeys
+            }
 
             val unsupported = presentKeys - allowedKeys
             if (unsupported.isNotEmpty()) {
                 throw AidenRemoteContractException.UnsafePayloadField(unsupported.first())
             }
-            if (presentKeys != allowedKeys) {
+            if (!presentKeys.containsAll(requiredKeys)) {
                 throw AidenRemoteContractException.UnsafePayloadField("missing-required-field")
             }
 
@@ -393,9 +400,23 @@ class AidenSSEParser {
                 }
             }
             if (type == AidenRemoteEventType.SNAPSHOT) {
-                val nextSeq = payloadObj["nextSequence"]?.jsonPrimitive?.longOrNull
+                val chatId = (payloadObj["chatId"] as? JsonPrimitive)?.takeIf { it.isString }?.content
+                if (chatId.isNullOrEmpty() || chatId.codePointCount(0, chatId.length) > AidenRemoteProtocol.MAX_IDENTIFIER_LENGTH) {
+                    throw AidenRemoteContractException.UnsafePayloadField("chatId")
+                }
+                val turnId = (payloadObj["turnId"] as? JsonPrimitive)?.takeIf { it.isString }?.content
+                if (turnId.isNullOrEmpty() || turnId.codePointCount(0, turnId.length) > AidenRemoteProtocol.MAX_IDENTIFIER_LENGTH) {
+                    throw AidenRemoteContractException.UnsafePayloadField("turnId")
+                }
+                val nextSeq = (payloadObj["nextSequence"] as? JsonPrimitive)?.takeUnless { it.isString }?.longOrNull
                 if (nextSeq == null || nextSeq !in 1..AidenRemoteProtocol.MAX_SAFE_INTEGER) {
                     throw AidenRemoteContractException.UnsafePayloadField("nextSequence")
+                }
+                if ("reason" in presentKeys) {
+                    val reason = (payloadObj["reason"] as? JsonPrimitive)?.takeIf { it.isString }?.content
+                    if (reason !in listOf("gap", "reset")) {
+                        throw AidenRemoteContractException.UnsafePayloadField("reason")
+                    }
                 }
             }
             if (type == AidenRemoteEventType.TOOL_FINISHED) {

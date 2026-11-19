@@ -690,6 +690,12 @@ data class AidenRemoteCapability(val rawValue: String) {
          */
         val CHAT_CONTINUE_IN_NEW_CHAT = AidenRemoteCapability("chat:continue-in-new-chat")
 
+        /**
+         * Revision 65: `/streams/{streamId}/events` `snapshot` payloads carry `reason`
+         * (`gap` | `reset`), distinguishing retention gaps from provider resets. Asked for alone.
+         */
+        val STREAM_SNAPSHOT_REASONS = AidenRemoteCapability("stream:snapshot-reasons")
+
         val V1_KNOWN = listOf(
             SERVER_READ, CHAT_READ, CHAT_WRITE, APPROVAL_RESPOND,
             WORKSPACE_READ, WORKSPACE_BROWSE, WORKSPACE_MANAGE,
@@ -738,17 +744,22 @@ data class AidenRemoteCapability(val rawValue: String) {
         /** Revision 64: negotiable when the Mac lists it in `serverCapabilities`, in its own call. */
         val PHONE_CHAT_CONTINUE_IN_NEW_CHAT = listOf(CHAT_CONTINUE_IN_NEW_CHAT)
 
+        /** Revision 65: negotiable when the Mac lists it in `serverCapabilities`, in its own call. */
+        val PHONE_STREAM_SNAPSHOT_REASONS = listOf(STREAM_SNAPSHOT_REASONS)
+
         /** Every grant `POST /device/capabilities` may add. */
         val NEGOTIABLE = PROGRESS + PHONE_RUNS + PHONE_SIMULATORS + PHONE_BOT_CARDS + PHONE_BOT_ACTIVITY +
             PHONE_BOT_HANDOFFS + PHONE_SCHEDULE_CARDS + PHONE_BOT_IMAGES + PHONE_BOT_ISSUES + PHONE_CHAT_JOBS +
-            PHONE_ATTACHMENTS_RAW + PHONE_CHAT_NEW_WORKTREE + PHONE_CHAT_CONTINUE_IN_NEW_CHAT + PHONE_BOT_MESSAGING +
+            PHONE_ATTACHMENTS_RAW + PHONE_CHAT_NEW_WORKTREE + PHONE_CHAT_CONTINUE_IN_NEW_CHAT +
+            PHONE_STREAM_SNAPSHOT_REASONS + PHONE_BOT_MESSAGING +
             listOf(BOT_WATCHES, BOT_OPEN_WORK, BOT_ROUTINE_MODELS, BOT_PEERS, BOT_ACCESS_REQUESTS, BOT_PLANS, BOT_ALLOWED) +
             BOT_UX
 
         /** The pairing vocabulary plus the negotiable phone-scoped subsets. */
         val PHONE_KNOWN = V1_KNOWN + PHONE_RUNS + PHONE_SIMULATORS + PHONE_BOT_CARDS + PHONE_BOT_ACTIVITY +
             PHONE_BOT_HANDOFFS + PHONE_SCHEDULE_CARDS + PHONE_BOT_IMAGES + PHONE_BOT_ISSUES + PHONE_CHAT_JOBS +
-            PHONE_ATTACHMENTS_RAW + PHONE_CHAT_NEW_WORKTREE + PHONE_CHAT_CONTINUE_IN_NEW_CHAT + PHONE_BOT_MESSAGING +
+            PHONE_ATTACHMENTS_RAW + PHONE_CHAT_NEW_WORKTREE + PHONE_CHAT_CONTINUE_IN_NEW_CHAT +
+            PHONE_STREAM_SNAPSHOT_REASONS + PHONE_BOT_MESSAGING +
             listOf(BOT_WATCHES, BOT_OPEN_WORK, BOT_ROUTINE_MODELS, BOT_PEERS, BOT_ACCESS_REQUESTS, BOT_PLANS, BOT_ALLOWED) +
             BOT_UX
     }

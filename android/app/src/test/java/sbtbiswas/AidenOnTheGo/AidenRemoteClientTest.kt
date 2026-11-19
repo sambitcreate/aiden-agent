@@ -13,6 +13,9 @@ import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.decodeFromJsonElement
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.int
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -33,9 +36,13 @@ import org.junit.Test
 import sbtbiswas.AidenOnTheGo.models.*
 import sbtbiswas.AidenOnTheGo.diagnostics.*
 import sbtbiswas.AidenOnTheGo.features.chat.AidenChatForkErrors
+import sbtbiswas.AidenOnTheGo.features.remote.aidenProgressCapabilitiesToRequest
+import sbtbiswas.AidenOnTheGo.features.remote.aidenRequestStreamSnapshotReasons
+import sbtbiswas.AidenOnTheGo.features.remote.aidenShouldRequestStreamSnapshotReasons
 import sbtbiswas.AidenOnTheGo.networking.AidenHostQuery
 import sbtbiswas.AidenOnTheGo.networking.AidenRemoteClient
 import sbtbiswas.AidenOnTheGo.networking.AidenRemoteRunEvent
+import sbtbiswas.AidenOnTheGo.networking.AidenSSEParser
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteCapability
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteClientException
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteContractException
@@ -1606,6 +1613,91 @@ class AidenRemoteClientTest {
         server.takeRequest()
         server.takeRequest()
         assertNull(server.takeRequest(100, TimeUnit.MILLISECONDS))
+    }
+
+    @Test
+    fun streamSnapshotReasonsDecodeSharedFixtureRejectInvalidReasonsAndNegotiateSolo() = runBlocking {
+        val fixture = contractFixture()
+        assertEquals(65, fixture.getValue("contractRevision").jsonPrimitive.int)
+        val section = fixture.getValue("streamRecovery").jsonObject
+        assertEquals("stream:snapshot-reasons", section.getValue("capability").jsonPrimitive.content)
+
+        val gapEvents = section.getValue("gapEvents").jsonArray.map {
+            AidenSSEParser.decodeStreamEvent(it.toString().toByteArray())
+        }
+        assertEquals(listOf(4097, 4098, 4099), gapEvents.map { it.sequence })
+        assertEquals(AidenRemoteEventType.SNAPSHOT, gapEvents[0].type)
+        assertEquals("gap", gapEvents[0].payload?.reason)
+        assertEquals(4098L, gapEvents[0].payload?.nextSequence)
+        assertEquals(AidenRemoteEventType.DONE, gapEvents[2].type)
+
+        val legacy = section.getValue("legacyGapSnapshot").jsonObject
+        val decodedLegacy = AidenSSEParser.decodeStreamEvent(legacy.toString().toByteArray())
+        assertEquals(AidenRemoteEventType.SNAPSHOT, decodedLegacy.type)
+        assertNull(decodedLegacy.payload?.reason)
+        assertEquals(4098L, decodedLegacy.payload?.nextSequence)
+
+        val resetEvents = section.getValue("resetEvents").jsonArray.map {
+            AidenSSEParser.decodeStreamEvent(it.toString().toByteArray())
+        }
+        assertEquals("reset", resetEvents[1].payload?.reason)
+        assertEquals(3L, resetEvents[1].payload?.nextSequence)
+
+        for (badReason in listOf(JsonPrimitive(""), JsonPrimitive("other"), JsonPrimitive(1), JsonPrimitive(true))) {
+            val badPayload = kotlinx.serialization.json.JsonObject(
+                section.getValue("gapEvents").jsonArray[0].jsonObject.getValue("payload").jsonObject + ("reason" to badReason)
+            )
+            val badEvent = kotlinx.serialization.json.JsonObject(
+                section.getValue("gapEvents").jsonArray[0].jsonObject + ("payload" to badPayload)
+            )
+            assertThrows(AidenRemoteContractException::class.java) {
+                AidenSSEParser.decodeStreamEvent(badEvent.toString().toByteArray())
+            }
+        }
+        val extraKeyPayload = kotlinx.serialization.json.JsonObject(
+            section.getValue("gapEvents").jsonArray[0].jsonObject.getValue("payload").jsonObject + ("extra" to JsonPrimitive(true))
+        )
+        val extraKeyEvent = kotlinx.serialization.json.JsonObject(
+            section.getValue("gapEvents").jsonArray[0].jsonObject + ("payload" to extraKeyPayload)
+        )
+        assertThrows(AidenRemoteContractException::class.java) {
+            AidenSSEParser.decodeStreamEvent(extraKeyEvent.toString().toByteArray())
+        }
+
+        // Solo capability negotiation for stream:snapshot-reasons
+        val base = listOf(AidenRemoteCapability.SERVER_READ, AidenRemoteCapability.CHAT_READ)
+        val withReason = base + AidenRemoteCapability.STREAM_SNAPSHOT_REASONS
+        fun mac(caps: List<AidenRemoteCapability>, offers: List<AidenRemoteCapability>) =
+            AidenServer(instanceId = "inst_65", name = "Mac", capabilities = caps, serverCapabilities = (caps + offers).distinct())
+        fun installation(held: List<AidenRemoteCapability>) = AidenInstallation(
+            instanceId = "inst_65", deviceId = "dev_65", name = "Mac",
+            endpoint = "https://aiden.test/api/aiden/v1", serverSpkiSha256 = "sha256/test",
+            deviceCapabilities = held, serverCapabilities = held, createdAt = Instant.parse("2026-11-18T12:00:00Z")
+        )
+        val offering = mac(base, listOf(AidenRemoteCapability.STREAM_SNAPSHOT_REASONS))
+        assertTrue(aidenShouldRequestStreamSnapshotReasons(offering, installation(base)))
+        assertFalse(aidenProgressCapabilitiesToRequest(offering, installation(base)).contains(AidenRemoteCapability.STREAM_SNAPSHOT_REASONS))
+        assertFalse(aidenShouldRequestStreamSnapshotReasons(mac(base, emptyList()), installation(base)))
+        assertFalse(aidenShouldRequestStreamSnapshotReasons(mac(withReason, listOf(AidenRemoteCapability.STREAM_SNAPSHOT_REASONS)), installation(withReason)))
+
+        val listed = JsonArray(withReason.map { JsonPrimitive(it.rawValue) })
+        server.enqueue(MockResponse().setResponseCode(200).setBody("""{"capabilities":$listed}"""))
+        server.enqueue(MockResponse().setResponseCode(200).setBody(
+            """{"protocolVersion":1,"instanceId":"inst_65","name":"Mac","appVersion":"1.0.0","connectionMode":"lan","serverTime":"2026-11-18T12:00:00.000Z","capabilities":$listed,"serverCapabilities":$listed}"""
+        ))
+        val granted = requireNotNull(aidenRequestStreamSnapshotReasons(client, offering, installation(base)))
+        val ask = server.takeRequest(5, TimeUnit.SECONDS)!!
+        assertEquals("/api/aiden/v1/device/capabilities", ask.path)
+        assertEquals(
+            listOf("stream:snapshot-reasons"),
+            Json.parseToJsonElement(ask.body.readUtf8()).jsonObject.getValue("accepts").jsonArray.map { it.jsonPrimitive.content }
+        )
+        assertEquals(withReason, granted.granted)
+
+        server.enqueue(MockResponse().setResponseCode(400).setBody(
+            """{"error":{"code":"invalid_request","message":"Unknown capability.","requestId":"req_65","retryable":false}}"""
+        ))
+        assertNull(aidenRequestStreamSnapshotReasons(client, offering, installation(base)))
     }
 
 }
