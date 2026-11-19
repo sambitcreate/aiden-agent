@@ -14,7 +14,7 @@
 
 import { BrowserWindow } from "../../platform.js";
 import { markAuxiliaryWindow } from "../../windows/auxiliary-windows.js";
-import { designOfflineSession } from "./offline-session.js";
+import { designOfflineSession, watchDesignOfflineMissingFiles } from "./offline-session.js";
 import { createDesignZoomGate } from "./zoom-gate.js";
 import {
   DESIGN_EXPORT_MAX_HEIGHT,
@@ -158,43 +158,52 @@ async function inspectInWindow(request: DesignInspectRequest): Promise<DesignIns
         : {}),
     });
   });
-  return withHiddenWindow(
-    window,
-    async () => {
-      const contents = window.webContents;
-      await window.loadURL(request.url);
-      markLoaded();
-      await contents.executeJavaScript(SETTLE_SCRIPT);
-      const height = await measureHeight(window);
-      const frame = request.picture ? designInspectPictureWindow(request.width, height, request.picture.top) : undefined;
-      if (frame) {
-        // Tall enough to hold the part of the page that is captured.
-        window.setContentSize(request.width, Math.min(DESIGN_EXPORT_MAX_HEIGHT, frame.top + frame.height));
+  const missingFiles = new Set<string>();
+  const stopWatching = watchDesignOfflineMissingFiles(window.webContents.id, (url) => {
+    if (missingFiles.size < 50) missingFiles.add(boundedUnicodePrefix(url, DESIGN_INSPECT_PROBE_STRING_CHARS));
+  });
+  try {
+    return await withHiddenWindow(
+      window,
+      async () => {
+        const contents = window.webContents;
+        await window.loadURL(request.url);
+        markLoaded();
         await contents.executeJavaScript(SETTLE_SCRIPT);
-      }
-      const seen = (await contents.executeJavaScript(designInspectProbeScript(request.tweakTargets, request.width))) as Omit<
-        DesignInspectProbe,
-        "height" | "console" | "picture"
-      >;
-      const probe: DesignInspectProbe = {
-        height,
-        scrollWidth: Number(seen?.scrollWidth) || 0,
-        hidesSideways: seen?.hidesSideways === true,
-        overflowing: strings(seen?.overflowing),
-        brokenImages: strings(seen?.brokenImages),
-        failedFonts: strings(seen?.failedFonts),
-        tweaksRead: strings(seen?.tweaksRead).filter((name) => request.tweakTargets.includes(name)),
-        readsTheme: seen?.readsTheme === true,
-        console: messages.slice(),
-      };
-      if (frame) {
-        const picture = await capture(window, { x: 0, y: frame.top, width: request.width, height: frame.height }, frame.scale);
-        if (picture) probe.picture = { ...picture, top: frame.top, height: frame.height };
-      }
-      return probe;
-    },
-    request.signal,
-  );
+        const height = await measureHeight(window);
+        const frame = request.picture ? designInspectPictureWindow(request.width, height, request.picture.top) : undefined;
+        if (frame) {
+          // Tall enough to hold the part of the page that is captured.
+          window.setContentSize(request.width, Math.min(DESIGN_EXPORT_MAX_HEIGHT, frame.top + frame.height));
+          await contents.executeJavaScript(SETTLE_SCRIPT);
+        }
+        const seen = (await contents.executeJavaScript(designInspectProbeScript(request.tweakTargets, request.width))) as Omit<
+          DesignInspectProbe,
+          "height" | "console" | "picture" | "missingFiles"
+        >;
+        const probe: DesignInspectProbe = {
+          height,
+          scrollWidth: Number(seen?.scrollWidth) || 0,
+          hidesSideways: seen?.hidesSideways === true,
+          overflowing: strings(seen?.overflowing),
+          brokenImages: strings(seen?.brokenImages),
+          missingFiles: [...missingFiles],
+          failedFonts: strings(seen?.failedFonts),
+          tweaksRead: strings(seen?.tweaksRead).filter((name) => request.tweakTargets.includes(name)),
+          readsTheme: seen?.readsTheme === true,
+          console: messages.slice(),
+        };
+        if (frame) {
+          const picture = await capture(window, { x: 0, y: frame.top, width: request.width, height: frame.height }, frame.scale);
+          if (picture) probe.picture = { ...picture, top: frame.top, height: frame.height };
+        }
+        return probe;
+      },
+      request.signal,
+    );
+  } finally {
+    stopWatching();
+  }
 }
 
 /** Up to 50 of the strings the page handed back, each cut short: the page chose them. */

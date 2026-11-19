@@ -10,6 +10,7 @@ import { DESIGN_BRIDGE_SOURCE } from "./bridge-source.js";
 import { DesignGrantRegistry } from "./grants.js";
 import {
   DESIGN_OFFLINE_SANDBOX_POLICY,
+  designOfflineMissingFile,
   designOfflineRequestAllowed,
   withDesignOfflineSandbox,
 } from "./offline-policy.js";
@@ -51,6 +52,21 @@ test("the hidden window may reach only Aiden's local schemes, inline data and bl
   ]) {
     assert.equal(designOfflineRequestAllowed(url), false, url);
   }
+});
+
+test("a workspace script, import, stylesheet or image the scheme answered as missing is named, and nothing else is", () => {
+  const script = "aiden-design://grant-1/design/js/app.js";
+  assert.equal(designOfflineMissingFile({ url: script, statusCode: 404, resourceType: "script" }), script);
+  assert.equal(designOfflineMissingFile({ url: script, statusCode: 403, resourceType: "script" }), script, "a path outside the grant");
+  for (const resourceType of ["stylesheet", "image", "font", "media", "xhr", "other"]) {
+    assert.equal(designOfflineMissingFile({ url: script, statusCode: 404, resourceType }), script, resourceType);
+  }
+  // A file that loaded, the page itself, and what is not a workspace file.
+  assert.equal(designOfflineMissingFile({ url: script, statusCode: 200, resourceType: "script" }), null);
+  assert.equal(designOfflineMissingFile({ url: script, statusCode: 304, resourceType: "script" }), null);
+  assert.equal(designOfflineMissingFile({ url: "aiden-design://grant-1/design/home.html", statusCode: 404, resourceType: "mainFrame" }), null);
+  assert.equal(designOfflineMissingFile({ url: "aiden-genui://preview/token-1", statusCode: 404, resourceType: "subFrame" }), null);
+  assert.equal(designOfflineMissingFile({ url: "data:text/javascript,", statusCode: 404, resourceType: "script" }), null);
 });
 
 test("each response in the hidden window keeps its own policy, body and status and adds a sandbox that opens no dialog", async (t) => {

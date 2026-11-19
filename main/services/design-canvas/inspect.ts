@@ -76,6 +76,11 @@ export type DesignInspectProbe = {
   console: DesignConsoleEntry[];
   /** Image addresses that finished loading with nothing to show. */
   brokenImages: string[];
+  /**
+   * Workspace files the page asked for that its scheme answered as missing.
+   * Chromium logs nothing for a missing script or a module's missing import.
+   */
+  missingFiles: string[];
   /** Font families the page asked for that failed. */
   failedFonts: string[];
   /** The tweak names the page's styles or scripts read. */
@@ -206,6 +211,7 @@ export function designInspectFindings(probe: DesignInspectProbe, context: Design
     findings.push(sentence);
   }
   for (const image of probe.brokenImages) failed.add(image);
+  for (const file of probe.missingFiles) failed.add(file);
   let inlineFailed = false;
   for (const address of failed) {
     if (address.startsWith("data:") || address.startsWith("blob:")) {

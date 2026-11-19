@@ -33,6 +33,7 @@ const quiet = (overrides: Partial<DesignInspectProbe> = {}): DesignInspectProbe 
   overflowing: [],
   console: [],
   brokenImages: [],
+  missingFiles: [],
   failedFonts: [],
   tweaksRead: [],
   readsTheme: true,
@@ -111,6 +112,28 @@ test("a page with a script error, a network font, a missing image and sideways o
   assert.match(findings[2]!, /^"design\/img\/hero shot\.png" did not load: there is no such file in the workspace/u);
   assert.match(findings[3]!, /font "Inter" did not load/u);
   assert.match(findings[4]!, /1460px wide at its 1280px design width, so it scrolls sideways.*"div\.pricing-table" reaches past the right edge/u);
+});
+
+test("a missing workspace script or module import, which Chromium never logs, is one missing-file finding beside the console's", () => {
+  const findings = designInspectFindings(
+    quiet({
+      console: [
+        { level: "error", message: "Failed to load resource: the server responded with a status of 404 ()", sourceId: "aiden-design://grant-1/design/img/logo.png" },
+      ],
+      brokenImages: ["aiden-design://grant-1/design/img/logo.png"],
+      missingFiles: [
+        "aiden-design://grant-1/design/img/logo.png",
+        "aiden-design://grant-1/design/js/chart.js",
+        "aiden-design://grant-1/design/js/lib/format.js",
+      ],
+    }),
+    context,
+  );
+  assert.deepEqual(
+    findings.map((finding) => /^"([^"]+)" did not load: there is no such file in the workspace/u.exec(finding)?.[1]),
+    ["design/img/logo.png", "design/js/chart.js", "design/js/lib/format.js"],
+    findings.join("\n"),
+  );
 });
 
 test("every load the page's policy blocks is one load finding with the network advice, never a script error", () => {

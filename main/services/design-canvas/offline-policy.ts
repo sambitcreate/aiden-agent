@@ -70,3 +70,14 @@ export function isDesignOfflineNotice(message: string): boolean {
     message.startsWith("Unrecognized Content-Security-Policy directive 'webrtc'")
   );
 }
+
+/**
+ * A workspace file the page asked for that its scheme answered as missing,
+ * or null. Chromium logs nothing for a missing script or a module's missing
+ * import, so inspect reads the session's answers instead. The page's own
+ * address is left out: a page that is not there fails the inspect itself.
+ */
+export function designOfflineMissingFile(details: { url: string; statusCode: number; resourceType: string }): string | null {
+  if (details.statusCode < 400 || details.resourceType === "mainFrame") return null;
+  return details.url.startsWith(`${DESIGN_SCHEME}://`) ? details.url : null;
+}
