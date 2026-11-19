@@ -20,7 +20,7 @@
 
 import { createHash } from "node:crypto";
 import type { AgentContext, AgentMessage, AgentTool } from "@earendil-works/pi-agent-core";
-import { createInitialSystemMessage, createModels, toToolDeclaration, type Api, type Message, type Model, type ProviderStreams } from "@earendil-works/pi-ai";
+import { createInitialSystemMessage, createModels, toToolDeclaration, type Api, type Model, type ProviderStreams } from "@earendil-works/pi-ai";
 import { anthropicMessagesApi } from "@earendil-works/pi-ai/api/anthropic-messages.lazy";
 import { openAIResponsesApi } from "@earendil-works/pi-ai/api/openai-responses.lazy";
 import { createFauxCore, type FauxResponseStep } from "@earendil-works/pi-ai/providers/faux";
@@ -77,6 +77,11 @@ export interface RecordedPromptRequest {
   wire: PromptWireSegment[];
   /** Whether `text` reaches this request anywhere: system, tools, messages or tool results. */
   carries(text: string): boolean;
+  /**
+   * The request's message objects themselves, not copies, so a test can
+   * check later that none of them was edited in place.
+   */
+  messages: PromptProviderContext["messages"];
 }
 
 export interface PromptRequestComparison {
@@ -154,26 +159,38 @@ export function comparePromptRequests(previous: RecordedPromptRequest, current: 
   return { ...(wire ? { wire } : {}), ...(transcript ? { transcript } : {}) };
 }
 
-export function createPromptPrefixHarness(options: PromptPrefixHarnessOptions = {}): PromptPrefixHarness {
+/** The context a provider adapter renders. */
+export type PromptProviderContext = Parameters<ProviderStreams["streamSimple"]>[1];
+
+export interface PromptRequestRecorder {
+  /** Render `context` through the wire's real adapter, offline, and cut it into segments. */
+  record(context: PromptProviderContext, at: { turn: number; step: number }): Promise<RecordedPromptRequest>;
+  /** Requests that reached `fetch`; always 0 unless the capture broke. */
+  readonly networkCalls: number;
+}
+
+/**
+ * Renders any runtime's provider context the way the chosen wire would send
+ * it. The workspace harness below and the Bot runtime's Pi Durable cases both
+ * record through it.
+ */
+export function createPromptRequestRecorder(
+  options: Pick<PromptPrefixHarnessOptions, "wire" | "midConversationSystem"> & { model: Model<Api> },
+): PromptRequestRecorder {
   const wireApi = options.wire ?? "anthropic-messages";
   const midConversationSystem = options.midConversationSystem ?? false;
-  const core = createFauxCore({ provider: "prompt-prefix-harness" });
-  const model = core.getModel();
   const streams: ProviderStreams = wireApi === "openai-responses" ? openAIResponsesApi() : anthropicMessagesApi();
   const renderModel = {
-    ...model,
+    ...options.model,
     api: wireApi,
     baseUrl: wireApi === "openai-responses" ? "https://offline.invalid/v1" : "https://offline.invalid",
     compat: wireApi === "openai-responses"
       ? { supportsMidConvoSystemMessages: midConversationSystem, supportsAdditionalTools: midConversationSystem }
       : { supportsMidConvoSystemMessages: midConversationSystem, supportsMidConvoToolChanges: midConversationSystem },
   } as Model<Api>;
-  let journal: Promise<PiSessionPort> | undefined;
-  const requests: RecordedPromptRequest[] = [];
   let networkCalls = 0;
-  let turnNumber = 0;
 
-  async function render(context: Parameters<ProviderStreams["streamSimple"]>[1]): Promise<Record<string, unknown>> {
+  async function render(context: PromptProviderContext): Promise<Record<string, unknown>> {
     let payload: Record<string, unknown> | undefined;
     await streams.streamSimple(renderModel, context, {
       apiKey: "offline-noncredential",
@@ -192,6 +209,31 @@ export function createPromptPrefixHarness(options: PromptPrefixHarnessOptions = 
     if (!payload) throw new Error(`The ${wireApi} adapter did not render a payload.`);
     return payload;
   }
+
+  return {
+    async record(context, at) {
+      const payload = await render(context);
+      const rendered = JSON.stringify(payload);
+      return {
+        ...at,
+        fingerprint: fingerprintPromptPrefix({ messages: context.messages, model: options.model, cacheRetention: "short" }),
+        wire: promptWireSegments(payload),
+        carries: (text) => rendered.includes(JSON.stringify(text).slice(1, -1)),
+        messages: context.messages,
+      };
+    },
+    get networkCalls() { return networkCalls; },
+  };
+}
+
+export function createPromptPrefixHarness(options: PromptPrefixHarnessOptions = {}): PromptPrefixHarness {
+  const midConversationSystem = options.midConversationSystem ?? false;
+  const core = createFauxCore({ provider: "prompt-prefix-harness" });
+  const model = core.getModel();
+  const recorder = createPromptRequestRecorder({ ...options, model });
+  let journal: Promise<PiSessionPort> | undefined;
+  const requests: RecordedPromptRequest[] = [];
+  let turnNumber = 0;
 
   async function turn(input: PromptPrefixTurnInput): Promise<RecordedPromptRequest[]> {
     turnNumber += 1;
@@ -255,16 +297,7 @@ export function createPromptPrefixHarness(options: PromptPrefixHarnessOptions = 
       },
       streamFn: async (requestModel, context, streamOptions) => {
         step += 1;
-        const messages = context.messages as Message[];
-        const payload = await render(context);
-        const rendered = JSON.stringify(payload);
-        const request: RecordedPromptRequest = {
-          turn: thisTurn,
-          step,
-          fingerprint: fingerprintPromptPrefix({ messages, model: requestModel, cacheRetention: "short" }),
-          wire: promptWireSegments(payload),
-          carries: (text) => rendered.includes(JSON.stringify(text).slice(1, -1)),
-        };
+        const request = await recorder.record(context, { turn: thisTurn, step });
         recorded.push(request);
         requests.push(request);
         return core.streamSimple(requestModel, context, streamOptions);
@@ -281,6 +314,6 @@ export function createPromptPrefixHarness(options: PromptPrefixHarnessOptions = 
   return {
     turn,
     get requests() { return requests; },
-    get networkCalls() { return networkCalls; },
+    get networkCalls() { return recorder.networkCalls; },
   };
 }

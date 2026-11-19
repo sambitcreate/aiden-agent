@@ -9,7 +9,10 @@
 // prompt, which reads the skill listing it is given.
 
 import type { AgentMessage, AgentTool } from "@earendil-works/pi-agent-core";
+import type { BotDefinition } from "../../renderer/shared/bots.js";
 import { applyCustomModelToolPolicy, type CustomModelOptions } from "../../renderer/shared/custom-model-options.js";
+import type { BotManagedWorkspaceResolution } from "./bot-managed-workspace-core.js";
+import { withBotRuntimeInstructions, type BotWorkspacePromptAuthority } from "./bot-system-prompt.js";
 import { buildSystemPromptWithSections, type ChatSystemPromptPermission } from "./chat-system-prompt.js";
 import { MEMORY_EXTENSION_ID } from "./memory-context.js";
 import { createOnDemandTools, type OnDemandTools } from "./on-demand-tools.js";
@@ -51,20 +54,30 @@ export async function buildWorkspaceChatBasePrompt(
   return { systemPrompt, ...(sections.skills ? { skills: sections.skills } : {}) };
 }
 
+/** What a Bot chat's runtime contract is built from. */
+export interface ChatPromptBot {
+  definition: BotDefinition;
+  workspace: BotManagedWorkspaceResolution;
+  fileAuthority: BotWorkspacePromptAuthority;
+}
+
 export interface ChatPromptAssemblyInput {
   /** The mode's base prompt: workspace, Assistant, or automation. */
   basePrompt: string;
   /** The skills listing inside `basePrompt`, for the context meter. */
   baseSkills?: string;
-  /** Adds the Bot runtime contract after the base prompt; only Bot chats pass it. */
-  withBotInstructions?: (basePrompt: string) => string;
+  /**
+   * Set for a Bot chat: its runtime contract follows the base prompt, and its
+   * tools are all declared up front, whatever `allowOnDemandTools` says.
+   */
+  bot?: ChatPromptBot;
   /** The chat's admitted tools, before extension contributions. */
   tools: readonly AgentTool[];
   resources: AgentHarnessResources;
   extensions: readonly PiAgentRuntimeExtension[];
   extensionRevision?: number;
   modelOptions?: CustomModelOptions;
-  /** Workspace chats with codemode declare rarely used tools only once the model loads them. */
+  /** Workspace chats with codemode declare rarely used tools only once the model loads them. Ignored for a Bot chat. */
   allowOnDemandTools: boolean;
 }
 
@@ -90,7 +103,10 @@ export interface ChatPromptAssembly {
 }
 
 export function assembleChatPrompt(input: ChatPromptAssemblyInput): ChatPromptAssembly {
-  const botPrompt = input.withBotInstructions ? input.withBotInstructions(input.basePrompt) : input.basePrompt;
+  const { bot } = input;
+  const botPrompt = bot
+    ? withBotRuntimeInstructions(input.basePrompt, bot.definition, bot.workspace, bot.fileAuthority)
+    : input.basePrompt;
   const resolved = resolvePiAgentRuntimeContributionSnapshot(
     botPrompt,
     input.tools,
@@ -109,7 +125,7 @@ export function assembleChatPrompt(input: ChatPromptAssemblyInput): ChatPromptAs
   // Freeze only the already-admitted MCP inventory. The provider sees the
   // discovery/script tools; nested calls still use the ordinary host gates.
   const { declared, deferred: deferredTools } = partitionPiCodemodeTools(contributions.tools);
-  const onDemandTools = input.allowOnDemandTools && declared.some((tool) => tool.name === "codemode")
+  const onDemandTools = !bot && input.allowOnDemandTools && declared.some((tool) => tool.name === "codemode")
     ? createOnDemandTools(declared)
     : undefined;
   // Held-back tools a script can call join the callable inventory the way

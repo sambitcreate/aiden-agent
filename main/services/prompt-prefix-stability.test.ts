@@ -14,22 +14,35 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { after, describe, test } from "node:test";
+import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
+import { Harness, MemoryStorage } from "@earendil-works/pi-durable";
 import { Type } from "typebox";
-import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai/providers/faux";
+import { fauxAssistantMessage, fauxToolCall, type FauxResponseFactory } from "@earendil-works/pi-ai/providers/faux";
 import type { BotOpenWorkItem, BotOpenWorkSnapshot } from "../../renderer/shared/bot-open-work.js";
+import { renderBotMemorySection } from "./bot-memory/prompt.js";
+import { createBotMemoryService } from "./bot-memory/service.js";
+import { createBotMemoryStore } from "./bot-memory/store.js";
+import { botMemoryToolEntry, withBotMemoryIngress } from "./bot-memory/tool.js";
 import { renderBotOpenWork } from "./bot-open-work/prompt.js";
+import { createBotRegistry, type BotExtensionDeps } from "./bot-runtime/bot-extension.js";
+import { botIngressAllowsTool } from "./bot-runtime/bot-tool-policy.js";
+import { createFauxModels, FAUX_MODEL_REF } from "./bot-runtime/test-support/faux.js";
+import { recordingDeps } from "./bot-runtime/test-support/fixtures.js";
 import { composeBotSystemSections } from "./bot-system-prompt.js";
 import { assembleChatPrompt, buildWorkspaceChatBasePrompt, type ChatPromptAssembly } from "./chat-prompt-assembly.js";
 import { buildSystemPrompt, type ChatSystemPromptPermission } from "./chat-system-prompt.js";
 import { createMemoryExtension } from "./memory-context.js";
+import { fingerprintPromptPrefix } from "./pi-cache-telemetry.js";
 import type { MemoryFact, MemoryScope, MemoryStore } from "./memory-store.js";
 import { LOAD_TOOLS_TOOL_NAME } from "./on-demand-tools.js";
 import type { PiAgentRuntimeExtension } from "./pi-agent-runtime-harness.js";
 import {
   comparePromptRequests,
   createPromptPrefixHarness,
+  createPromptRequestRecorder,
   type PromptPrefixHarnessOptions,
+  type PromptProviderContext,
   type PromptPrefixTurnInput,
   type PromptPrefixWire,
   type RecordedPromptRequest,
@@ -176,22 +189,96 @@ const openWorkItem = (id: string, title: string): BotOpenWorkItem => ({
 });
 const openWork = (items: BotOpenWorkItem[]): BotOpenWorkSnapshot => ({ botId: bot.id, revision: String(items.length), items, undo: [] });
 
-/** A Bot turn's fixed sections as the Bot runtime composes them, joined in key order. */
-async function botTurn(items: BotOpenWorkItem[]): Promise<TurnHead> {
-  const offeredToolNames = new Set(["read_file", "list_files", "open_work"]);
-  const base = await buildSystemPrompt(botWorkspace.homePath, undefined, "full", false, true, undefined, offeredToolNames);
-  const sections = composeBotSystemSections({
-    base,
-    bot,
-    workspace: botWorkspace,
-    fileAuthority: { mode: "full_mac", botHome: true },
-    rules: "",
-    offeredToolNames,
-    openWork: renderBotOpenWork(openWork(items)),
-    toolGuidance: "",
-    lessons: "",
-  });
-  return { systemPrompt: sections.filter(Boolean).join("\n\n"), tools: workspaceTools };
+/**
+ * A Bot chat on Pi Durable, the runtime Bots use: the Bot extension's own
+ * sections (base, persona, authority and guidance fixed per refresh, the
+ * memory section rendered before every request) over a real memory service.
+ * The faux model clones each provider context it is given; a turn renders
+ * them through the wire adapter afterwards.
+ */
+async function botChat(options: { userMemory: string; openWork?: BotOpenWorkItem[] }) {
+  const profileDir = await mkdtemp(path.join(tmpdir(), "aiden-prefix-bot-"));
+  tempRoots.push(profileDir);
+  const memoryDir = path.join(profileDir, "bots", bot.id, "memory");
+  await mkdir(memoryDir, { recursive: true });
+  await writeFile(path.join(memoryDir, "USER.md"), options.userMemory);
+  const memory = createBotMemoryService({ store: createBotMemoryStore({ profileDir }) });
+  const state = { openWork: options.openWork ?? [] };
+  const deps: BotExtensionDeps = {
+    ...recordingDeps(),
+    loadBot: async () => bot,
+    currentTools: async () => [
+      botMemoryToolEntry(bot.id, memory),
+      { tool: readFileTool, replay: "safe" },
+      { tool: textTool("open_work", "Read and update the Bot's open work."), replay: "safe" },
+    ],
+    turnAllows: withBotMemoryIngress(botIngressAllowsTool),
+    // The sections as bot-session-main composes them.
+    systemSections: async (_bot, offered) => {
+      const toolNames = new Set(offered.toolNames);
+      const base = await buildSystemPrompt(botWorkspace.homePath, undefined, "full", false, true, undefined, toolNames);
+      return composeBotSystemSections({
+        base,
+        bot,
+        workspace: botWorkspace,
+        fileAuthority: { mode: "full_mac", botHome: true },
+        rules: "",
+        offeredToolNames: toolNames,
+        openWork: toolNames.has("open_work") ? renderBotOpenWork(openWork(state.openWork)) : "",
+        toolGuidance: "",
+        lessons: "",
+      });
+    },
+    memorySection: async (botId, offer) => renderBotMemorySection(await memory.snapshot(botId), offer),
+  };
+  const fauxModels = createFauxModels();
+  const recorder = createPromptRequestRecorder({ model: fauxModels.faux.getModel() });
+  const registry = createBotRegistry(bot.id, deps);
+  await registry.refresh();
+  const ctx = BACKGROUND_CONTEXT;
+  const harness = await Harness.open(new MemoryStorage(), { models: fauxModels.models, registry }, ctx);
+  registry.attachHarness(harness);
+  const root = await harness.root(ctx, { agent: { model: FAUX_MODEL_REF } });
+  let turnNumber = 0;
+  return {
+    memory,
+    state,
+    async turn(prompt: string, responses: ReturnType<typeof fauxAssistantMessage>[]): Promise<RecordedPromptRequest[]> {
+      turnNumber += 1;
+      const thisTurn = turnNumber;
+      const captured: PromptProviderContext[] = [];
+      const capture = (response: ReturnType<typeof fauxAssistantMessage>): FauxResponseFactory => (context) => {
+        captured.push(structuredClone(context) as PromptProviderContext);
+        return response;
+      };
+      fauxModels.faux.setResponses(responses.map(capture));
+      // The Bot session service refreshes the registry before every turn.
+      await registry.refresh();
+      await (await root.submit({ type: "input", content: prompt }, ctx)).wait(ctx);
+      assert.equal(captured.length, responses.length, "every scripted response was requested");
+      const requests: RecordedPromptRequest[] = [];
+      for (const [index, context] of captured.entries()) requests.push(await recorder.record(context, { turn: thisTurn, step: index + 1 }));
+      assert.equal(recorder.networkCalls, 0);
+      return requests;
+    },
+    close: () => harness.close(ctx),
+  };
+}
+
+/** Two Bot turns; returns turn 1's last request and turn 2's first. */
+async function twoBotTurns(
+  chat: Awaited<ReturnType<typeof botChat>>,
+  between: () => Promise<void> = async () => {},
+  firstResponses = reply("Noted."),
+) {
+  try {
+    const one = await chat.turn("What is open?", firstResponses);
+    await between();
+    const two = await chat.turn("And now?", reply("Here it is."));
+    return { previous: lastOf(one), current: two[0]! };
+  } finally {
+    await chat.close();
+  }
 }
 
 describe("prompt prefix stability: already stable", () => {
@@ -203,8 +290,9 @@ describe("prompt prefix stability: already stable", () => {
     });
 
     test(`an unchanged MCP section keeps the prefix (${label})`, async () => {
-      // The refresher's section patch is folded into the head before each run,
-      // like every system message the journal does not keep.
+      // A section patch applied at turn start reaches the head before the run
+      // sends anything, through the managed run's shared prepare step, so
+      // this holds with compaction on or off.
       const { previous, current } = await twoTurns(
         { wire, midConversationSystem, mcpServersSection: mcpSection },
         { assembly: await workspaceChat() },
@@ -254,6 +342,60 @@ describe("prompt prefix stability: already stable", () => {
     assert.deepEqual(comparePromptRequests(previous, current), {});
   });
 
+  test("a Bot's second turn extends the first, memory section included", async () => {
+    const chat = await botChat({ userMemory: "Prefers short answers.", openWork: [openWorkItem("w1", "Draft the weekly note")] });
+    const { previous, current } = await twoBotTurns(chat);
+    assert.ok(current.carries("Prefers short answers."), "the memory section reaches turn 2");
+    assert.ok(current.carries("Draft the weekly note"), "open work reaches turn 2");
+    assert.deepEqual(comparePromptRequests(previous, current), {});
+  });
+
+  test("a Bot's own memory save keeps the next turn's prefix", async () => {
+    // The memory section stays as the session first read it until a person edit or a new session.
+    const chat = await botChat({ userMemory: "Prefers short answers." });
+    const { previous, current } = await twoBotTurns(chat, async () => {}, [
+      fauxAssistantMessage(
+        fauxToolCall("bot_memory", { target: "user", operations: [{ action: "add", content: "Has a dog." }] }),
+        { stopReason: "toolUse" },
+      ),
+      fauxAssistantMessage("Saved."),
+    ]);
+    assert.ok((await chat.memory.view(bot.id)).user.entries.some(({ text }) => text === "Has a dog."), "the save landed");
+    assert.deepEqual(comparePromptRequests(previous, current), {});
+  });
+
+  test("no message is edited in place once a request has carried it", async () => {
+    // The miss telemetry hashes each message object once (a WeakMap memo), so
+    // an in-place edit would go unreported. Compare each request's fingerprint
+    // taken when it was sent with one of fresh copies of the same objects now.
+    screenshotCount = 0;
+    const roots = await agentsRoots("Use tabs for indentation.\n");
+    const harness = createPromptPrefixHarness({ agentsInstructions: roots, mcpServersSection: mcpSection });
+    const assembly = await workspaceChat({ tools: [...workspaceTools, codemodeTool, classifyTool, computerUseTool] });
+    const look = (index: number) => fauxAssistantMessage(fauxToolCall("computer_use", { action: `look-${index}` }), { stopReason: "toolUse" });
+    const requests = [
+      ...await harness.turn({
+        prompt: "Classify the attachment, then check the screen.",
+        assembly,
+        responses: [
+          fauxAssistantMessage(fauxToolCall(LOAD_TOOLS_TOOL_NAME, { names: ["classify"] }), { stopReason: "toolUse" }),
+          fauxAssistantMessage(fauxToolCall("classify", {}), { stopReason: "toolUse" }),
+          look(1), look(2), look(3),
+          fauxAssistantMessage("Done."),
+        ],
+      }),
+      ...await harness.turn({ prompt: "Check it again.", assembly, responses: [look(4), look(5), fauxAssistantMessage("Still fine.")] }),
+      ...await harness.turn({ prompt: "Thanks.", assembly, responses: reply("Any time.") }),
+    ];
+    // The first call to the held-back computer tool loads it rather than running it.
+    assert.equal(screenshotCount, 4, "more screenshots than the history keeps whole");
+    const model = { provider: "fresh-copy", id: "fresh-copy" };
+    for (const request of requests) {
+      const now = fingerprintPromptPrefix({ messages: JSON.parse(JSON.stringify(request.messages)), model });
+      assert.deepEqual(now.messages, request.fingerprint.messages, `turn ${request.turn}, step ${request.step}`);
+    }
+  });
+
   test("the harness names a changed base prompt as the first difference", async () => {
     // The oracle the todo cases rely on: a real change is reported, at the system segment.
     const { previous, current } = await twoTurns(
@@ -297,12 +439,22 @@ describe("prompt prefix stability: causes fixed by later phases", () => {
   });
 
   test("Bot open work changing between turns does not change system", { todo: "phase 2: Bots append open work" }, async () => {
-    const { previous, current } = await twoTurns(
-      {},
-      await botTurn([openWorkItem("w1", "Draft the weekly note")]),
-      await botTurn([openWorkItem("w1", "Draft the weekly note"), openWorkItem("w2", "File the receipt")]),
-    );
+    const chat = await botChat({ userMemory: "Prefers short answers.", openWork: [openWorkItem("w1", "Draft the weekly note")] });
+    const { previous, current } = await twoBotTurns(chat, async () => {
+      chat.state.openWork = [openWorkItem("w1", "Draft the weekly note"), openWorkItem("w2", "File the receipt")];
+    });
     assert.ok(current.carries("File the receipt"), "the new item still reaches turn 2");
+    assert.deepEqual(comparePromptRequests(previous, current), {});
+  });
+
+  test("a person's Bot memory edit does not change system", { todo: "phase 3: Bot memory as a turn update" }, async () => {
+    const chat = await botChat({ userMemory: "Prefers short answers." });
+    const { previous, current } = await twoBotTurns(chat, async () => {
+      const entry = (await chat.memory.view(bot.id)).user.entries.find(({ text }) => text === "Prefers short answers.")!;
+      const edited = await chat.memory.edit({ botId: bot.id, edit: { kind: "replace", target: "user", entryId: entry.id, text: "Prefers detailed answers." } });
+      assert.equal(edited.ok, true);
+    });
+    assert.ok(current.carries("Prefers detailed answers."), "the edit still reaches turn 2");
     assert.deepEqual(comparePromptRequests(previous, current), {});
   });
 
@@ -350,6 +502,9 @@ describe("prompt prefix stability: causes fixed by later phases", () => {
       responses: [...steps, fauxAssistantMessage("Done.")],
     });
     assert.equal(requests.length, 5);
+    const newest = Buffer.from(`png-${screenshotCount}`).toString("base64");
+    assert.equal(screenshotCount, 4);
+    assert.ok(requests[4]!.carries(newest), "the last request still carries the newest screenshot");
     for (let index = 1; index < requests.length; index += 1) {
       assert.deepEqual(comparePromptRequests(requests[index - 1]!, requests[index]!), {}, `step ${index + 1}`);
     }

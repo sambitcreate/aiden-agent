@@ -87,9 +87,10 @@ At the end, four Opus high reviewers review the whole PR, and a CI watcher owns 
   - the real AGENTS.md and `mcp_servers` refreshers, applied first and between tool turns
   - `createGenerationContextTransform`
   - the Pi Anthropic Messages and OpenAI Responses adapters, rendering offline with zero network calls
-- Before each run, `prepareForPrompt` rebuilds the context from the journal and `installCompactedMessages` folds the head and the system patches of the turn's first prepare into one system message. So a section patch added at turn start ends up in the head on every wire, including those with mid-conversation system messages. The phase 0 harness did not model this fold, which made the unchanged MCP section look like a miss on OpenAI Responses.
-- Each changing case is driven through the real builders: branch and permission through the base prompt, memory through `createMemoryExtension`, on-demand tools through `load_tools`, and Bot open work through `composeBotSystemSections` and `renderBotOpenWork`. Each `todo` case also asserts, outside the stability check, that the changed value still reaches the request, so deleting the value cannot pass as a fix.
-- The Bot case joins the composed sections into one prompt. Production sends them as keyed Pi Durable sections, so the real telemetry label for that miss may name the section, not `system:base`.
+- Before each run, the managed run's shared prepare step rebuilds the context from the journal and folds the head and the system patches of the turn's first prepare into one system message, with compaction on or off. So a section patch added at turn start ends up in the head on every wire, including those with mid-conversation system messages. The phase 0 harness did not model this fold, which made the unchanged MCP section look like a miss on OpenAI Responses.
+- Each changing case is driven through the real builders: branch and permission through the base prompt, memory through `createMemoryExtension`, on-demand tools through `load_tools`, and Bot open work through `composeBotSystemSections` and `renderBotOpenWork`. Bot cases run on Pi Durable through `createBotRegistry`, the Bot extension's real section builder, with the per-request `aiden-memory` section, and record through the same `createPromptRequestRecorder` as the workspace cases. The Bot instructions and file authority for a desktop Bot chat are chosen in `chat-prompt-assembly.ts` (`bot`), not in llm-client. Each `todo` case also asserts, outside the stability check, that the changed value still reaches the request, so deleting the value cannot pass as a fix.
+- On a Bot, a section that changes between turns does not change the head: Pi Durable appends a section patch as a trailing system message, and the Anthropic adapter hoists it into the system block. The wire's system segment changes, but the normalized transcript only grows, so the miss telemetry attributes nothing. Bots have no miss telemetry wired today; when they get it, it must compare the hoisted system block, not only the transcript head.
+- "No message is edited in place" runs three turns with AGENTS.md, MCP, an on-demand tool and screenshots, then re-fingerprints a deep copy of each request's messages. A match proves the telemetry's per-object hash memo (`pi-cache-telemetry.ts`) never serves a stale hash.
 - Browser discovery is not modelled: it lives in llm-client's generation setup, outside the assembly. Per-request hook context is not modelled either (phase 3).
 
 **Already stable:**
@@ -98,6 +99,8 @@ At the end, four Opus high reviewers review the whole PR, and a CI watcher owns 
 - an unchanged MCP section on all three wires, because it is folded into the head at turn start
 - a tool loop within one turn
 - a chat with no AGENTS.md
+- a Bot's second turn, memory section included, and a turn after the Bot's own `bot_memory` save (the save does not re-render the section within the session)
+- no message edited in place after a request carried it
 - an on-demand tool loaded in one turn, which stays declared from the start of the next (`initialTools`)
 
 **Baseline: the `todo` cases, all failing today.** Each row gives the first changed wire segment and what the telemetry reports.
@@ -106,7 +109,8 @@ At the end, four Opus high reviewers review the whole PR, and a CI watcher owns 
 | --- | --- | --- |
 | AGENTS.md nonce, all three wires | system | `system:agents-instructions` |
 | On-demand tool loaded mid-turn (step 2 against step 1) | tools | `tools` |
-| Bot open work in the base prompt | system | `system:base` |
+| Bot open work between turns | system | none: trailing section patch, hoisted by the wire |
+| A person's Bot memory edit (`aiden-memory`) | system | none: trailing section patch, hoisted by the wire |
 | Branch switch | system | `system:base` |
 | Permission mode change | system | `system:base` |
 | Memory edit | system | `system:base` |
@@ -189,6 +193,7 @@ At the end, four Opus high reviewers review the whole PR, and a CI watcher owns 
   - git branch, permission mode, memory (`memory-context.ts` around 394)
   - canvas (`llm-client.ts` around 2565, `volatileSystemPrompt`, concatenated in `pi-agent-runtime-harness.ts`)
   - visualize mode and the remote audience (`chat-system-prompt.ts:60-84`)
+- Bots re-render the `aiden-memory` section on every request (`memorySection` in the Bot extension). The Bot's own `bot_memory` saves keep it fixed within a session, but a person's edit in the Memory panel (`memory.edit`) changes it on the next request, and the change reaches the wire's system block as a hoisted section patch.
 
 **Changes**
 
@@ -204,6 +209,7 @@ At the end, four Opus high reviewers review the whole PR, and a CI watcher owns 
   - "branch switch does not change system"
   - "permission mode change does not change system"
   - "memory edit does not change system"
+  - "a person's Bot memory edit does not change system" (the Bot's memory change goes out as a turn update, like the workspace memory)
 - Behavioral test: after a permission-mode change, the next request carries the new mode in the tail, and the approval gate uses the new mode. The model-visible text and the enforced mode cannot disagree.
 - Hook context test: the desktop and the CLI produce the same message shape for the same hook output.
 

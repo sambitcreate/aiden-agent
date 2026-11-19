@@ -98,7 +98,6 @@ import { chatStore } from "./chat-store.js";
 import { botStore } from "./bot-store.js";
 import {
   resolveBotForGeneration,
-  withBotRuntimeInstructions,
   type BotWorkspacePromptAuthority,
 } from "./bot-system-prompt.js";
 import {
@@ -3883,12 +3882,11 @@ export const llmClient = {
         ...(hostPromptSkills ? { baseSkills: hostPromptSkills } : {}),
         ...(authoritativeBot && preparedBotContext
           ? {
-              withBotInstructions: (base: string) => withBotRuntimeInstructions(
-                base,
-                authoritativeBot,
-                preparedBotContext.prepared.managedWorkspace,
-                botWorkspacePromptAuthority(preparedBotContext, botApprovedRoots),
-              ),
+              bot: {
+                definition: authoritativeBot,
+                workspace: preparedBotContext.prepared.managedWorkspace,
+                fileAuthority: botWorkspacePromptAuthority(preparedBotContext, botApprovedRoots),
+              },
             }
           : {}),
         tools,

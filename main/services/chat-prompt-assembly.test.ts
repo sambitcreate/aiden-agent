@@ -2,7 +2,6 @@ import assert from "node:assert/strict";
 import { describe, test } from "node:test";
 import type { AgentMessage, AgentTool } from "@earendil-works/pi-agent-core";
 import { Type } from "typebox";
-import { withBotRuntimeInstructions } from "./bot-system-prompt.js";
 import { assembleChatPrompt, type ChatPromptAssemblyInput } from "./chat-prompt-assembly.js";
 import { createMemoryExtension } from "./memory-context.js";
 import type { MemoryFact, MemoryScope, MemoryStore } from "./memory-store.js";
@@ -53,6 +52,8 @@ const botWorkspace = {
   incarnation: { device: "1", inode: "2" },
 };
 
+const botChat = { definition: bot, workspace: botWorkspace, fileAuthority: { mode: "full_mac" as const, botHome: true } };
+
 describe("chat prompt assembly", () => {
   test("an ordinary chat sends its base prompt unchanged and reports no Bot instructions", () => {
     const assembly = assemble();
@@ -61,9 +62,7 @@ describe("chat prompt assembly", () => {
   });
 
   test("a Bot chat adds the runtime contract after the base prompt and reports it as Bot instructions", () => {
-    const assembly = assemble({
-      withBotInstructions: (base) => withBotRuntimeInstructions(base, bot, botWorkspace, { mode: "full_mac", botHome: true }),
-    });
+    const assembly = assemble({ bot: botChat });
     assert.ok(assembly.systemPrompt.startsWith(basePrompt), "the host policy stays first");
     assert.ok(assembly.systemPrompt.includes("Answer in one line."), "the persona reaches the prompt");
     assert.ok(assembly.systemPrompt.includes(botWorkspace.homePath), "the managed home reaches the prompt");
@@ -112,6 +111,20 @@ describe("chat prompt assembly", () => {
     assert.ok(declared.includes("classify"));
     assert.ok(!declared.includes(LOAD_TOOLS_TOOL_NAME));
     assert.equal(assembly.onDemandTools, undefined);
+  });
+
+  test("a Bot chat declares every tool up front even when on-demand tools are allowed", () => {
+    const declared = names(assemble({ tools: withCodemode, bot: botChat, allowOnDemandTools: true }).toolsFor([]));
+    assert.ok(declared.includes("classify"));
+    assert.ok(!declared.includes(LOAD_TOOLS_TOOL_NAME));
+  });
+
+  test("a Bot's scoped file authority names its approved folders in the prompt", () => {
+    const scoped = assemble({
+      bot: { ...botChat, fileAuthority: { mode: "scoped", botHome: false, approvedRoots: ["/Users/me/Receipts"] } },
+    });
+    assert.ok(scoped.systemPrompt.includes("/Users/me/Receipts"));
+    assert.ok(!assemble({ bot: botChat }).systemPrompt.includes("/Users/me/Receipts"));
   });
 
   test("without codemode nothing is held back", () => {
