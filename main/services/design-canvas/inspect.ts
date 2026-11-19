@@ -29,7 +29,7 @@ import {
   type DesignTweakControl,
 } from "../../../renderer/shared/design-canvas/tweaks.js";
 import { DESIGN_SCHEME } from "../../../renderer/shared/design-canvas/url.js";
-import { clippedUnicode } from "../../../renderer/shared/unicode-prefix.js";
+import { boundedUnicodePrefix, clippedUnicode } from "../../../renderer/shared/unicode-prefix.js";
 import { isDesignOfflineNotice } from "./offline-policy.js";
 import { resolveDesignFile } from "./resolve-core.js";
 
@@ -110,6 +110,29 @@ function clip(text: string, max = MAX_MESSAGE_CHARS): string {
 /** Something the page wrote, cut short and quoted, so it reads as a value in a sentence of Aiden's. */
 function quoted(text: string, max = DESIGN_INSPECT_NAME_CHARS): string {
   return JSON.stringify(clip(text, max));
+}
+
+/**
+ * Keeps one console message Electron reported, cut to the probe's length,
+ * when inspect would read it: an error that is not the window's own notice.
+ * A page's logs, its warnings and Chromium's notes take no place, so the
+ * first errors are kept however much the page writes before them.
+ */
+export function collectDesignConsoleEntry(
+  messages: DesignConsoleEntry[],
+  details: { message?: unknown; level?: unknown; lineNumber?: unknown; sourceId?: unknown },
+): void {
+  if (messages.length >= DESIGN_INSPECT_MAX_MESSAGES || String(details.level ?? "") !== "error") return;
+  const message = boundedUnicodePrefix(String(details.message ?? ""), DESIGN_INSPECT_PROBE_STRING_CHARS);
+  if (isDesignOfflineNotice(message.trim())) return;
+  messages.push({
+    message,
+    level: "error",
+    ...(typeof details.lineNumber === "number" ? { lineNumber: details.lineNumber } : {}),
+    ...(typeof details.sourceId === "string" && details.sourceId
+      ? { sourceId: boundedUnicodePrefix(details.sourceId, DESIGN_INSPECT_PROBE_STRING_CHARS) }
+      : {}),
+  });
 }
 
 /** Reads one console message: only errors count, split into script errors and loads that failed. */

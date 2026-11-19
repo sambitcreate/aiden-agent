@@ -70,13 +70,16 @@ export function withDesignOfflineSandbox(response: Response, policy: string = DE
 
 /**
  * Chromium's own notes about the window rather than about the page: a dialog
- * the sandbox kept from opening, and the `webrtc` directive Electron 43 does
- * not know. The page's author can't act on them, so inspect drops them.
+ * the sandbox kept from opening, the `webrtc` directive Electron 43 does not
+ * know, and the warning that a sandbox allowing both scripts and the same
+ * origin can be escaped, which the offline policy's own sandbox raises on
+ * every page. The page's author can't act on them, so inspect drops them.
  */
 export function isDesignOfflineNotice(message: string): boolean {
   return (
     /^Ignored call to '[^']*'\. The document is sandboxed/u.test(message) ||
-    message.startsWith("Unrecognized Content-Security-Policy directive 'webrtc'")
+    message.startsWith("Unrecognized Content-Security-Policy directive 'webrtc'") ||
+    message.startsWith("An iframe which has both allow-scripts and allow-same-origin for its sandbox attribute can escape its sandboxing")
   );
 }
 

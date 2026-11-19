@@ -9,11 +9,14 @@ import path from "node:path";
 import test from "node:test";
 import { Window } from "happy-dom";
 import {
+  collectDesignConsoleEntry,
+  DESIGN_INSPECT_MAX_MESSAGES,
   designInspectFindings,
   designInspectPictureWindow,
   designInspectProbeScript,
   inspectDesignPage,
   readDesignConsoleMessage,
+  type DesignConsoleEntry,
   type DesignInspectProbe,
   type DesignInspectRequest,
 } from "./inspect.js";
@@ -74,6 +77,7 @@ test("the hidden window's own notes about its sandbox and an unknown policy dire
     "Ignored call to 'alert()'. The document is sandboxed, and the 'allow-modals' keyword is not set.",
     "Ignored call to 'print()'. The document is sandboxed, and the 'allow-modals' keyword is not set.",
     "Unrecognized Content-Security-Policy directive 'webrtc'.",
+    "An iframe which has both allow-scripts and allow-same-origin for its sandbox attribute can escape its sandboxing.",
   ]) {
     assert.equal(readDesignConsoleMessage({ level: "error", message }), null, message);
   }
@@ -82,6 +86,28 @@ test("the hidden window's own notes about its sandbox and an unknown policy dire
     kind: "script",
     message: "TypeError: alert is not a function",
   });
+});
+
+test("the window's notices and a page's logs and warnings take no place among the console messages inspect keeps", () => {
+  const messages: DesignConsoleEntry[] = [];
+  for (let index = 0; index < DESIGN_INSPECT_MAX_MESSAGES; index += 1) {
+    collectDesignConsoleEntry(messages, {
+      level: "warning",
+      message: "An iframe which has both allow-scripts and allow-same-origin for its sandbox attribute can escape its sandboxing.",
+    });
+    collectDesignConsoleEntry(messages, { level: "error", message: "Unrecognized Content-Security-Policy directive 'webrtc'." });
+    collectDesignConsoleEntry(messages, { level: "info", message: `drawing row ${index}` });
+  }
+  collectDesignConsoleEntry(messages, { level: "error", message: "Uncaught ReferenceError: draw is not defined", lineNumber: 9, sourceId: PAGE });
+  assert.deepEqual(
+    designInspectFindings(quiet({ console: messages }), context).filter((finding) => /draw is not defined/u.test(finding)).length,
+    1,
+  );
+  // Once the page's errors fill every place, later ones are dropped.
+  for (let index = 0; index < DESIGN_INSPECT_MAX_MESSAGES + 5; index += 1) {
+    collectDesignConsoleEntry(messages, { level: "error", message: `Uncaught Error: failure ${index}` });
+  }
+  assert.equal(messages.length, DESIGN_INSPECT_MAX_MESSAGES);
 });
 
 test("a page with a script error, a network font, a missing image and sideways overflow gets one finding for each", () => {

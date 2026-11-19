@@ -24,7 +24,7 @@ import {
 import type { DesignFrameRenderRequest } from "../../handlers/design-canvas.js";
 import { boundedUnicodePrefix } from "../../../renderer/shared/unicode-prefix.js";
 import {
-  DESIGN_INSPECT_MAX_MESSAGES,
+  collectDesignConsoleEntry,
   DESIGN_INSPECT_PROBE_STRING_CHARS,
   designInspectPictureWindow,
   designInspectProbeScript,
@@ -147,17 +147,7 @@ export async function inspectDesignFrame(request: DesignInspectRequest): Promise
 async function inspectInWindow(request: DesignInspectRequest): Promise<DesignInspectProbe> {
   const { window, markLoaded } = await openHiddenWindow(request.width, 1);
   const messages: DesignConsoleEntry[] = [];
-  window.webContents.on("console-message", (details) => {
-    if (messages.length >= DESIGN_INSPECT_MAX_MESSAGES) return;
-    messages.push({
-      message: boundedUnicodePrefix(String(details.message ?? ""), DESIGN_INSPECT_PROBE_STRING_CHARS),
-      level: String(details.level ?? ""),
-      ...(typeof details.lineNumber === "number" ? { lineNumber: details.lineNumber } : {}),
-      ...(typeof details.sourceId === "string" && details.sourceId
-        ? { sourceId: boundedUnicodePrefix(details.sourceId, DESIGN_INSPECT_PROBE_STRING_CHARS) }
-        : {}),
-    });
-  });
+  window.webContents.on("console-message", (details) => collectDesignConsoleEntry(messages, details));
   const missingFiles = new Set<string>();
   const stopWatching = watchDesignOfflineMissingFiles(window.webContents.id, (url) => {
     if (missingFiles.size < 50) missingFiles.add(boundedUnicodePrefix(url, DESIGN_INSPECT_PROBE_STRING_CHARS));
