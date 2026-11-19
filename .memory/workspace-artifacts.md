@@ -162,3 +162,14 @@ Plan `docs/plans/smarter-artifacts-design-mode-plan.md`, branch `feat/smarter-ar
 - Item 9 (03bf1a34e): `afterSave` appends `awaitingApproval`: under Ask, a saved/restored page whose commands need approval says they wait for the person in the page's Artifacts tab and that saving again does not allow them.
 - Item 10 (f7a2f6642): `admittedFile` gives one Denied message, "X is missing or leads outside the workspace folder.", for a canonical path outside the root and for a realpath failure with a symlink on the existing part of the path (`linkOnPath`); "There is no file at X." only for a missing path with no link on the way. Both outside cases erase cached data alike.
 - Docs, skill (step 4 quoted-data line, Ask "not allowed yet" guidance) and tool description (quoted data, line-break matching in edits) updated with these.
+
+## Smarter artifacts Phase C, review round 2 fixes (2026-11-19)
+
+- Item 1 (054faf6f3): a reply remembers every revision its own saves and restores moved a page through, so `get`, restore, then update with the `get` revision as `baseVersion` saves instead of being refused as another chat's change.
+- Items 2+3 (43751da40, ea5fa7705): a save or restore reply says when that page's own markup was dropped for the storage limit (next change must send whole markup); `MARKUP_DROPPED` no longer claims which markup goes first. `saveState` near the cap may drop only the saving page's markup, else the state write fails as before.
+- Item 4 (8a42af6f7, markup-edits.ts): an edit is refused when old matches one place exactly but several once line breaks are normalised, or when it starts or ends inside a CRLF or a surrogate pair; page and render_ui edits alike.
+- Item 5 (87cfb151b): the restore pre-check runs `assertSourcesRunnable`, so under Ask no approval card shows for a version the workspace could never run.
+- Item 7 (fbdad2b14): `escapeLineSeparators` / `quoteForModel` in renderer/shared/workspace-artifacts.ts write U+2028/U+2029 as ` `/` ` in quoted errors, run output, list, data shape and sample; `safeCut` now also in data-shape `bounded`, runner `clip`/`headAndTail` and the stored error parse.
+- Item 8 (06a8630dc): `WorkspaceArtifactFileUnreadableError` in file-policy.ts; a realpath errno other than ENOENT (ENOTDIR, ELOOP…) and any coded error in runner `fileError` give "<file> cannot be read." with no system message (it named the workspace's full path). Known imprecision left: a chmod-000 file still reads as "changed while Aiden was reading it".
+- Item 9 (8e78bd04d): runner refresh re-asks `fileAllowed` (default `artifactFileAllowed`, injectable) for each reused file read and drops the reuse when it fails, so a file that became a link out of the folder is read again and refused.
+- Item 10b (fb5a389dc): `parseWorkspaceArtifactOutput("lines")` splits on `\r\n|\r|\n`.
