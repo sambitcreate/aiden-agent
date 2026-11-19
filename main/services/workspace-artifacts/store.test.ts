@@ -206,6 +206,32 @@ test("a page saved before a placeholder rule tightened stays listed, with that a
   assert.deepEqual(earlier.actions.map((action) => action.name), ["fetch", "probe"]);
 });
 
+test("an approval given while a button was turned off asks again once a later release's rules turn it on", async (t) => {
+  const { store, reopen, dir } = await openStore(t);
+  const comment: WorkspaceArtifactActionV1 = {
+    name: "comment",
+    label: "Comment",
+    command: "gh issue comment {{issue}} --body {{text}}",
+    params: [{ name: "issue", type: "string" }, { name: "text", type: "string" }],
+  };
+  const created = await store.create("ws1", content({ actions: [comment] }));
+  assert.equal(workspaceArtifactActionProblem(comment), undefined);
+  // The person allowed the card an earlier release showed, whose rules turned Comment off.
+  const shownWhileOff = workspaceArtifactDigest([pulls], [comment], () => true);
+  const file = path.join(dir, "ws1.json");
+  const document = JSON.parse(await fs.readFile(file, "utf8")) as { artifacts: { approvedDigest?: string }[] };
+  document.artifacts[0]!.approvedDigest = shownWhileOff;
+  await fs.writeFile(file, JSON.stringify(document));
+
+  const view = (await reopen().get("ws1", created.id))!;
+  assert.equal(view.artifact.approvedDigest, shownWhileOff);
+  assert.notEqual(view.digest, shownWhileOff, "Comment runs now, which the approval never allowed");
+  // Allowed while every button ran, the same page keeps its approval across a rule change.
+  assert.equal(view.digest, workspaceArtifactDigest([pulls], [comment], () => false));
+  const approved = await store.approve("ws1", created.id, view.digest);
+  assert.equal(approved.approvedDigest, view.digest);
+});
+
 test("a page set aside earlier comes back once it reads again, and a copy of a live page stays aside", async (t) => {
   const { store, reopen, dir } = await openStore(t);
   const first = await store.create("ws1", content());

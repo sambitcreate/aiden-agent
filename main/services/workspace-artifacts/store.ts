@@ -12,6 +12,7 @@ import {
   parseWorkspaceArtifactSnapshotV1,
   parseWorkspaceArtifactV1,
   WORKSPACE_ARTIFACT_LIMITS,
+  workspaceArtifactActionProblem,
   workspaceArtifactCommandsNeedApproval,
   type WorkspaceArtifactActionV1,
   type WorkspaceArtifactRefreshV1,
@@ -209,12 +210,21 @@ export function normalizeWorkspaceArtifactSnapshotsDocument(value: unknown): Wor
   return { version: 1, snapshots };
 }
 
-/** What an approval covers: every command the artifact can run, exactly as written. */
+/**
+ * What an approval covers: every command the artifact can run, exactly as
+ * written, and which buttons are turned off (the card shows them as never
+ * running). A button a later release's rules turn back on then asks again,
+ * since the person never allowed it to run. `isTurnedOff` is the current
+ * rules unless given; a page with no turned-off button digests as its
+ * commands alone, so a rule change leaves its approval in place.
+ */
 export function workspaceArtifactDigest(
   sources: readonly WorkspaceArtifactSourceV1[],
   actions: readonly WorkspaceArtifactActionV1[],
+  isTurnedOff: (action: WorkspaceArtifactActionV1) => boolean = (action) => workspaceArtifactActionProblem(action) !== undefined,
 ): string {
-  return createHash("sha256").update(JSON.stringify({ sources, actions })).digest("hex");
+  const covered = actions.map((action) => (isTurnedOff(action) ? { ...action, turnedOff: true } : action));
+  return createHash("sha256").update(JSON.stringify({ sources, actions: covered })).digest("hex");
 }
 
 export interface WorkspaceArtifactContent {
