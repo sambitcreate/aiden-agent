@@ -49,6 +49,41 @@ enum AidenPreviewNavigation {
     }
 }
 
+/// Decides whether a link offer may reach the person. A page with scripts on
+/// can fake a link tap (`a.click()`) as often as it likes, so an offer is
+/// admitted only right after a real touch, and only once per touch.
+/// VoiceOver and Switch Control activate links without a touch the view can
+/// see, so while they run an offer is admitted at most once per interval.
+struct AidenLinkOfferGate: Equatable, Sendable {
+    static let interactionWindow: TimeInterval = 1.0
+    static let assistiveInterval: TimeInterval = 2.0
+
+    private var lastInteraction: Date?
+    private var lastAdmitted: Date?
+
+    /// A touch on the web view ended.
+    mutating func userInteracted(at date: Date) {
+        lastInteraction = date
+    }
+
+    mutating func admit(at date: Date, assistiveTechnologyRunning: Bool = false) -> Bool {
+        if let interaction = lastInteraction {
+            let elapsed = date.timeIntervalSince(interaction)
+            if elapsed >= 0, elapsed <= Self.interactionWindow {
+                lastInteraction = nil
+                lastAdmitted = date
+                return true
+            }
+        }
+        guard assistiveTechnologyRunning else { return false }
+        if let lastAdmitted, date.timeIntervalSince(lastAdmitted) < Self.assistiveInterval {
+            return false
+        }
+        lastAdmitted = date
+        return true
+    }
+}
+
 /// The content rule list that keeps preview pages off the network. WebKit's
 /// `url-filter` has no alternation, so http(s) and ws(s) are separate rules.
 /// WebRTC is outside what rule lists filter; the view removes it by script.
@@ -162,6 +197,7 @@ struct AidenSandboxedHTMLView: UIViewRepresentable {
         webView.scrollView.isScrollEnabled = scrolls
         webView.scrollView.bounces = scrolls
         webView.alpha = 0
+        webView.addGestureRecognizer(AidenTouchRecorder(coordinator: coordinator))
         return webView
     }
 
@@ -190,10 +226,11 @@ struct AidenSandboxedHTMLView: UIViewRepresentable {
         """
     }
 
-    /// Content rule lists do not cover WebRTC, so the page world loses it in
-    /// every frame before the page's own scripts run.
+    /// Content rule lists do not cover WebRTC (or WebTransport, where a
+    /// release exposes it), so the page world loses them in every frame
+    /// before the page's own scripts run.
     static let removeWebRTCScript = """
-    for (const name of ['RTCPeerConnection', 'webkitRTCPeerConnection', 'RTCDataChannel']) {
+    for (const name of ['RTCPeerConnection', 'webkitRTCPeerConnection', 'RTCDataChannel', 'WebTransport']) {
       try { delete window[name]; } catch (_) {}
     }
     """
@@ -210,6 +247,7 @@ final class AidenSandboxedHTMLCoordinator: NSObject, WKNavigationDelegate, WKUID
     private var navigation: WKNavigation?
     private var hasLoadedDocument = false
     private var recovery = AidenWebContentRecovery()
+    private var offerGate = AidenLinkOfferGate()
     private var startTask: Task<Void, Never>?
 
     init(onLinkOffer: @escaping (URL) -> Void, onFailure: @escaping () -> Void) {
@@ -231,11 +269,25 @@ final class AidenSandboxedHTMLCoordinator: NSObject, WKNavigationDelegate, WKUID
                 return
             }
             guard !Task.isCancelled, let self, let webView else { return }
+            // The rules must be installed before `loadHTMLString`, or the
+            // first load could reach the network.
             webView.configuration.userContentController.add(rules)
             self.html = html
             self.recovery.documentDidLoad()
             self.load(in: webView)
         }
+    }
+
+    /// A real touch on the web view ended; the next link offer may go through.
+    func userInteracted(at date: Date = Date()) {
+        offerGate.userInteracted(at: date)
+    }
+
+    /// Passes a link offer on only if `AidenLinkOfferGate` admits it.
+    private func offer(_ url: URL) {
+        let assistive = UIAccessibility.isVoiceOverRunning || UIAccessibility.isSwitchControlRunning
+        guard offerGate.admit(at: Date(), assistiveTechnologyRunning: assistive) else { return }
+        onLinkOffer(url)
     }
 
     func cancel() {
@@ -269,7 +321,7 @@ final class AidenSandboxedHTMLCoordinator: NSObject, WKNavigationDelegate, WKUID
         case .cancel:
             return .cancel
         case let .offerLink(url):
-            onLinkOffer(url)
+            offer(url)
             return .cancel
         case let .anchor(name):
             scroll(to: name, in: webView)
@@ -333,7 +385,7 @@ final class AidenSandboxedHTMLCoordinator: NSObject, WKNavigationDelegate, WKUID
             isLinkTap: navigationAction.navigationType == .linkActivated,
             hasLoaded: hasLoadedDocument
         ) {
-            onLinkOffer(url)
+            offer(url)
         }
         return nil
     }
@@ -355,5 +407,38 @@ final class AidenSandboxedHTMLCoordinator: NSObject, WKNavigationDelegate, WKUID
         decisionHandler: @escaping (WKPermissionDecision) -> Void
     ) {
         decisionHandler(.deny)
+    }
+}
+
+/// Notes when a touch on the web view ends so a link offer can follow it.
+/// It never recognizes, so it cannot take a tap from WebKit, and it runs
+/// alongside every other recognizer. WebKit's link activation reaches the
+/// navigation delegate over IPC, after this has run for the same touch.
+private final class AidenTouchRecorder: UIGestureRecognizer, UIGestureRecognizerDelegate {
+    private weak var coordinator: AidenSandboxedHTMLCoordinator?
+
+    init(coordinator: AidenSandboxedHTMLCoordinator) {
+        self.coordinator = coordinator
+        super.init(target: nil, action: nil)
+        cancelsTouchesInView = false
+        delaysTouchesBegan = false
+        delaysTouchesEnded = false
+        delegate = self
+    }
+
+    override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent) {
+        coordinator?.userInteracted()
+        state = .failed
+    }
+
+    override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent) {
+        state = .failed
+    }
+
+    func gestureRecognizer(
+        _ gestureRecognizer: UIGestureRecognizer,
+        shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer
+    ) -> Bool {
+        true
     }
 }

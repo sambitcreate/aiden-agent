@@ -90,10 +90,17 @@ final class AidenSandboxedHTMLTests: XCTestCase {
     // MARK: Live web view
 
     func testAPreviewPageMakesNoNetworkConnections() async throws {
-        // Control: the same page in a plain web view does reach the listener,
-        // so a zero below means the sandbox blocked it, not that nothing tried.
+        // One page per way of naming a remote resource, so a leak names its vector.
+        for vector in Self.networkVectors {
+            try await assertNoConnections(vector.name, body: vector.body)
+        }
+    }
+
+    /// Control first: the page in a plain web view does reach the listener,
+    /// so a zero from the sandbox means it blocked the load, not that nothing tried.
+    private func assertNoConnections(_ name: String, body: (UInt16) -> String) async throws {
         let controlListener = try await LoopbackListener.start()
-        let controlConnected = expectation(description: "control page connects to localhost")
+        let controlConnected = expectation(description: "\(name): control page connects to localhost")
         controlConnected.assertForOverFulfill = false
         controlListener.onAccept = { controlConnected.fulfill() }
 
@@ -103,7 +110,7 @@ final class AidenSandboxedHTMLTests: XCTestCase {
         try host(control)
         let clock = ContinuousClock()
         let controlStart = clock.now
-        control.loadHTMLString(Self.remotePage(port: controlListener.port), baseURL: nil)
+        control.loadHTMLString(Self.page(body(controlListener.port)), baseURL: nil)
         await fulfillment(of: [controlConnected], timeout: 10)
         let controlTook = clock.now - controlStart
         control.stopLoading()
@@ -111,26 +118,26 @@ final class AidenSandboxedHTMLTests: XCTestCase {
 
         // Sandboxed: nothing connects, for as long as the control needed and more.
         let listener = try await LoopbackListener.start()
-        let connected = expectation(description: "sandboxed page connects")
+        let connected = expectation(description: "\(name): sandboxed page connects")
         connected.isInverted = true
         connected.assertForOverFulfill = false
         listener.onAccept = { connected.fulfill() }
 
-        let finished = expectation(description: "sandboxed page finishes loading")
-        let page = Self.remotePage(port: listener.port)
-        let webView = try showSandboxed(page, allowsScripts: true, onFinish: { finished.fulfill() })
+        let finished = expectation(description: "\(name): sandboxed page finishes loading")
+        let (webView, _) = try showSandboxed(Self.page(body(listener.port)), allowsScripts: true, onFinish: { finished.fulfill() })
         await fulfillment(of: [finished], timeout: 10)
         // The page's scripts did run; they were stopped at the network, not before it.
         let ran = try await webView.callAsyncJavaScript(
             "return document.documentElement.dataset.ran ?? null",
             contentWorld: .page
         ) as? String
-        XCTAssertEqual(ran, "1")
+        XCTAssertEqual(ran, "1", name)
 
         let wait = Double(controlTook.components.seconds) + Double(controlTook.components.attoseconds) / 1e18 + 2
         await fulfillment(of: [connected], timeout: wait)
-        XCTAssertEqual(listener.accepted, 0)
+        XCTAssertEqual(listener.accepted, 0, "\(name) reached the network")
         listener.stop()
+        webView.stopLoading()
     }
 
     func testPreviewPagesCannotOpenWebRTCConnections() async throws {
@@ -145,7 +152,8 @@ final class AidenSandboxedHTMLTests: XCTestCase {
         document.body.appendChild(made);
         return [typeof RTCPeerConnection, typeof webkitRTCPeerConnection, typeof RTCDataChannel,
                 typeof frames[0].RTCPeerConnection, typeof frames[0].webkitRTCPeerConnection,
-                typeof frames[0].RTCDataChannel, typeof made.contentWindow.RTCPeerConnection]
+                typeof frames[0].RTCDataChannel, typeof made.contentWindow.RTCPeerConnection,
+                typeof WebTransport, typeof made.contentWindow.WebTransport]
         """
 
         // Control: WebRTC exists in a plain web view, so "undefined" below is the sandbox's doing.
@@ -159,29 +167,113 @@ final class AidenSandboxedHTMLTests: XCTestCase {
         await fulfillment(of: [controlWaiter.finished], timeout: 10)
         let controlTypes = try await control.callAsyncJavaScript(probe, contentWorld: .page) as? [String]
         XCTAssertEqual(controlTypes?.first, "function")
-        XCTAssertEqual(controlTypes?.last, "function")
+        XCTAssertEqual(controlTypes?[6], "function")
 
         let finished = expectation(description: "sandboxed page finishes loading")
-        let webView = try showSandboxed(page, allowsScripts: true, onFinish: { finished.fulfill() })
+        let (webView, _) = try showSandboxed(page, allowsScripts: true, onFinish: { finished.fulfill() })
         await fulfillment(of: [finished], timeout: 10)
         let types = try await webView.callAsyncJavaScript(probe, contentWorld: .page) as? [String]
-        XCTAssertEqual(types, Array(repeating: "undefined", count: 7))
+        XCTAssertEqual(types, Array(repeating: "undefined", count: 9))
     }
 
 
+    // MARK: Link offers
+
+    func testLinkOffersNeedARecentTouchAndAdmitOneOfferPerTouch() {
+        let start = Date(timeIntervalSinceReferenceDate: 1_000)
+        var gate = AidenLinkOfferGate()
+        XCTAssertFalse(gate.admit(at: start), "no touch yet")
+
+        gate.userInteracted(at: start)
+        XCTAssertTrue(gate.admit(at: start.addingTimeInterval(0.4)))
+        XCTAssertFalse(gate.admit(at: start.addingTimeInterval(0.5)), "the same touch offers once")
+
+        gate.userInteracted(at: start.addingTimeInterval(10))
+        XCTAssertFalse(gate.admit(at: start.addingTimeInterval(11.5)), "the touch is too old")
+        XCTAssertFalse(gate.admit(at: start.addingTimeInterval(11.6)))
+    }
+
+    func testLinkOffersWithAssistiveTechnologyAreSpacedOut() {
+        let start = Date(timeIntervalSinceReferenceDate: 1_000)
+        var gate = AidenLinkOfferGate()
+        XCTAssertTrue(gate.admit(at: start, assistiveTechnologyRunning: true))
+        XCTAssertFalse(gate.admit(at: start.addingTimeInterval(1.9), assistiveTechnologyRunning: true))
+        XCTAssertTrue(gate.admit(at: start.addingTimeInterval(2.1), assistiveTechnologyRunning: true))
+        XCTAssertFalse(gate.admit(at: start.addingTimeInterval(2.2), assistiveTechnologyRunning: true))
+    }
+
+    func testScriptedLinkClicksOfferNothingWithoutATouch() async throws {
+        let page = """
+        <!doctype html><html><body>\
+        <a id="same" href="https://example.com/same">same</a>\
+        <a id="blank" target="_blank" href="https://example.com/blank">blank</a>\
+        </body></html>
+        """
+        let clicks = "for (let i = 0; i < 5; i++) { same.click(); blank.click(); }"
+        var offers: [URL] = []
+        let finished = expectation(description: "page finishes loading")
+        let offered = expectation(description: "a link is offered")
+        offered.isInverted = true
+        offered.assertForOverFulfill = false
+        var onOffer: (URL) -> Void = { _ in offered.fulfill() }
+        let (webView, coordinator) = try showSandboxed(
+            page,
+            allowsScripts: true,
+            onFinish: { finished.fulfill() },
+            onLinkOffer: { url in
+                offers.append(url)
+                onOffer(url)
+            }
+        )
+        await fulfillment(of: [finished], timeout: 10)
+
+        // No touch: ten scripted clicks reach nobody.
+        _ = try await webView.callAsyncJavaScript(clicks, contentWorld: .page)
+        await fulfillment(of: [offered], timeout: 1.5)
+        XCTAssertEqual(offers, [])
+
+        // After a touch, the same burst produces exactly one offer.
+        let offeredOnce = expectation(description: "one link is offered")
+        offeredOnce.assertForOverFulfill = false
+        onOffer = { _ in offeredOnce.fulfill() }
+        coordinator.userInteracted()
+        _ = try await webView.callAsyncJavaScript(clicks, contentWorld: .page)
+        await fulfillment(of: [offeredOnce], timeout: 5)
+        let settle = expectation(description: "settle")
+        settle.isInverted = true
+        await fulfillment(of: [settle], timeout: 1)
+        XCTAssertEqual(offers, [URL(string: "https://example.com/same")!])
+    }
+
     // MARK: Helpers
 
-    /// Every way a page can name a remote resource, all pointing at the listener.
-    private static func remotePage(port: UInt16) -> String {
-        let origin = "http://localhost:\(port)"
-        return """
-        <!doctype html><html><head>
-        <meta http-equiv="refresh" content="0;url=\(origin)/r">
-        <link rel="stylesheet" href="\(origin)/s.css">
-        </head><body>
+    /// Every way a page can name a remote resource, each pointing at the listener.
+    private static let networkVectors: [(name: String, body: (UInt16) -> String)] = [
+        ("img and stylesheet", { port in
+            "<link rel=\"stylesheet\" href=\"http://localhost:\(port)/s.css\"><img src=\"http://localhost:\(port)/i.png\">"
+        }),
+        // dns-prefetch cannot be seen by a TCP listener and WebTransport is
+        // not exposed on this iOS; they ride along with fetch and WebSocket.
+        ("fetch, WebSocket, WebTransport, dns-prefetch", { port in
+            """
+            <link rel="dns-prefetch" href="//localhost">
+            <script>fetch('http://localhost:\(port)/f');new WebSocket('ws://localhost:\(port)/w');
+            try { new WebTransport('https://localhost:\(port)/wt') } catch (_) {}</script>
+            """
+        }),
+        ("meta refresh", { port in "<meta http-equiv=\"refresh\" content=\"0;url=http://localhost:\(port)/r\">" }),
+        ("preconnect http", { port in "<link rel=\"preconnect\" href=\"http://localhost:\(port)\">" }),
+        ("preconnect https", { port in "<link rel=\"preconnect\" href=\"https://localhost:\(port)\">" }),
+        ("video", { port in "<video preload=\"auto\" src=\"http://localhost:\(port)/v.mp4\" muted playsinline></video>" }),
+        ("audio", { port in "<audio preload=\"auto\" src=\"http://localhost:\(port)/a.mp3\"></audio>" }),
+    ]
+
+    private static func page(_ body: String) -> String {
+        """
+        <!doctype html><html><head></head><body>
         <script>document.documentElement.dataset.ran = '1'</script>
-        <img src="\(origin)/i.png">
-        <script>fetch('\(origin)/f');new WebSocket('ws://localhost:\(port)/w')</script>
+        \(body)
+        <p>preview</p>
         </body></html>
         """
     }
@@ -190,14 +282,15 @@ final class AidenSandboxedHTMLTests: XCTestCase {
     private func showSandboxed(
         _ html: String,
         allowsScripts: Bool,
-        onFinish: @escaping () -> Void
-    ) throws -> WKWebView {
+        onFinish: @escaping () -> Void,
+        onLinkOffer: @escaping (URL) -> Void = { _ in }
+    ) throws -> (WKWebView, AidenSandboxedHTMLCoordinator) {
         let view = AidenSandboxedHTMLView(
             html: html,
             allowsScripts: allowsScripts,
             themeCSS: nil,
             scrolls: true,
-            onLinkOffer: { _ in },
+            onLinkOffer: onLinkOffer,
             onFailure: { XCTFail("preview failed") }
         )
         let coordinator = view.makeCoordinator()
@@ -206,7 +299,7 @@ final class AidenSandboxedHTMLTests: XCTestCase {
         try host(webView)
         coordinator.start(html, in: webView)
         addTeardownBlock { @MainActor in _ = coordinator }
-        return webView
+        return (webView, coordinator)
     }
 
     private func host(_ webView: WKWebView) throws {
