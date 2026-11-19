@@ -985,6 +985,37 @@ test("canvas_arrange lays frames out in a group that fits itself around them, an
   assert.deepEqual([out.frames[0].box.x, out.frames[0].box.y], [5000, 0]);
 });
 
+test("canvas_arrange with no frame list keeps the order frames read in on the canvas, not the order they were added", async (t) => {
+  const { call } = await setup(t);
+  // Added out of order: the second row first, then the first row right to left, then a heading above it all.
+  const place = async (title: string, x: number, y: number, h = 200) =>
+    (await call("canvas_place_frame", { kind: "note", title, x, y, w: 300, h })).frame.id as string;
+  await place("Row 2 right", 400, 700);
+  await place("Row 2 left", 0, 690);
+  await place("Row 1 right", 400, 10);
+  await place("Row 1 left", 0, 0);
+  await place("Heading", 0, -160, 80);
+  const row = await call("canvas_arrange", { page: "Page 1", layout: "row", focus: false });
+  assert.deepEqual(
+    row.frames.map((frame: { title: string }) => frame.title),
+    ["Heading", "Row 1 left", "Row 1 right", "Row 2 left", "Row 2 right"],
+  );
+
+  // Two stacked columns, read column by column for a column layout.
+  const { call: call2 } = await setup(t);
+  const stack = async (title: string, x: number, y: number) =>
+    (await call2("canvas_place_frame", { kind: "note", title, x, y, w: 300, h: 200 })).frame.id as string;
+  await stack("Right top", 500, 0);
+  await stack("Left bottom", 0, 400);
+  await stack("Right bottom", 510, 400);
+  await stack("Left top", 0, 0);
+  const column = await call2("canvas_arrange", { page: "Page 1", layout: "column", focus: false });
+  assert.deepEqual(
+    column.frames.map((frame: { title: string }) => frame.title),
+    ["Left top", "Left bottom", "Right top", "Right bottom"],
+  );
+});
+
 test("canvas_page adds, renames, duplicates, reorders, shows and deletes pages, never the last one", async (t) => {
   const { store, call } = await setup(t);
   await call("canvas_place_frame", { kind: "note", title: "Mine", x: 0, y: 0 });

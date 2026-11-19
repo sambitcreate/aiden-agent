@@ -541,6 +541,30 @@ export function layoutBoxes(
   });
 }
 
+/**
+ * The order a person reads frames in where they sit now, for an arrange that names no frames. A row or
+ * grid reads bands top to bottom, each left to right: a frame joins a band while its top lies above
+ * the middle of the band's shortest frame, so a heading above a row stays its own band, ahead of what
+ * it heads. A column reads columns left to right, each top to bottom, so frames stacked in a column stay together.
+ */
+export function readingOrder<T extends { x: number; y: number; w: number; h: number }>(frames: readonly T[], layout: Layout): T[] {
+  const across = layout === "column";
+  const start = (frame: T) => (across ? frame.x : frame.y);
+  const size = (frame: T) => (across ? frame.w : frame.h);
+  const along = (frame: T) => (across ? frame.y : frame.x);
+  const bands: { reach: number; members: T[] }[] = [];
+  for (const frame of [...frames].sort((a, b) => start(a) - start(b) || along(a) - along(b))) {
+    const band = bands[bands.length - 1];
+    if (band && start(frame) < band.reach) {
+      band.members.push(frame);
+      band.reach = Math.min(band.reach, start(frame) + size(frame) / 2);
+    } else {
+      bands.push({ reach: start(frame) + size(frame) / 2, members: [frame] });
+    }
+  }
+  return bands.flatMap((band) => band.members.sort((a, b) => along(a) - along(b)));
+}
+
 export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[] {
   const newId = deps.newId ?? randomUUID;
   let calls = 0;
@@ -1135,7 +1159,7 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
         name: "canvas_arrange",
         label: "Arrange design canvas",
         description:
-          "Lay out unlocked frames of one page in a tidy row, column or grid in one call, and optionally put them in a group or artboard (groupId) or take them out of one (groupId null). Name the frames with frameIds; leave frameIds out to arrange a group's members (with groupId) or every top-level frame on the page. Groups fit themselves around their members afterwards; pass fitGroupIds to tighten or expand other groups or artboards around what they hold. A group or artboard moves with its frames. x and y set the top-left corner (by default the group's inside corner, or where the frames already start). The page comes on screen and the arranged frames are shown unless focus is false.",
+          "Lay out unlocked frames of one page in a tidy row, column or grid in one call, and optionally put them in a group or artboard (groupId) or take them out of one (groupId null). Name the frames with frameIds, in order; leave frameIds out to arrange a group's members (with groupId) or every top-level frame on the page, in the order they read now (rows top to bottom, each left to right; for a column, columns left to right). Groups fit themselves around their members afterwards; pass fitGroupIds to tighten or expand other groups or artboards around what they hold. A group or artboard moves with its frames. x and y set the top-left corner (by default the group's inside corner, or where the frames already start). The page comes on screen and the arranged frames are shown unless focus is false.",
         parameters: Type.Object({
           page: Type.Optional(Type.String({ maxLength: 128, description: "A page's name or id, when frameIds are not given." })),
           frameIds: Type.Optional(Type.Array(Type.String(), { maxItems: DESIGN_CANVAS_LIMITS.framesPerPage })),
@@ -1232,6 +1256,8 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
                 );
               }
               const layout: Layout = (layoutValue as Layout | undefined) ?? (chosen.length > 4 ? "grid" : "row");
+              // Frames named in frameIds keep the order given; otherwise they keep the order they are read in on the canvas.
+              if (!(requested && requested.length > 0)) chosen = readingOrder(chosen, layout);
               if (chosen.length > 0) {
                 const container = target ? doc.frames.find((frame) => frame.id === target)! : undefined;
                 const anchor = {
