@@ -77,6 +77,7 @@ import {
   rotatedMediaStyle,
 } from "../lib/device-display-rotation";
 import { LOCAL_DEVICE_HOST_ID, type DeviceSession, type DeviceStreamGrant, type DeviceSummary } from "../shared/devices";
+import { isDismissKey } from "../lib/dismiss-key";
 
 /** A burst of rejected grants means the proxy is refusing us, not that one grant expired. */
 const MAX_GRANT_RENEWALS_PER_MINUTE = 3;
@@ -805,7 +806,7 @@ export function DeviceViewer({ chatId, session, device, active, compact, onClose
           className="device-viewer-tools"
           onKeyDown={(event) => {
             // Menus inside the drawer portal out of it; their Escape belongs to them.
-            if (event.key !== "Escape" || event.defaultPrevented) return;
+            if (!isDismissKey(event)) return;
             if (!event.currentTarget.contains(event.target as Node)) return;
             event.preventDefault();
             event.stopPropagation();

@@ -33,6 +33,8 @@ import { cn } from "../../../lib/ui-utils";
 
 import { useAppCapabilities } from "../../../lib/app-capabilities";
 import { localComputerNoun } from "../../../shared/computer-noun";
+import { isEscapeKey } from "../../../lib/dismiss-key";
+
 type ModelInsightsOperation = "connect" | "refresh" | "disconnect";
 /** Which key row is showing under the benchmark row, if any. */
 type KeyRowMode = "connect" | "replace";
@@ -468,7 +470,7 @@ function ModelPadBenchmarkRow({
             className="flex min-w-0 flex-wrap items-center gap-2"
             onSubmit={(event) => void connect(event)}
             onKeyDown={(event) => {
-              if (event.key !== "Escape" || busy) return;
+              if (!isEscapeKey(event) || busy) return;
               event.preventDefault();
               closeKeyRow();
             }}

@@ -3408,7 +3408,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
     const takeFocus = approvalShouldTakeFocus({
       typing:
         isEditableTypingTarget(previousFocus) || isReservedTypingSurface(previousFocus),
-      overlayOpen: typingRedirectBlockedByOverlay(document, previousFocus),
+      overlayOpen: typingRedirectBlockedByOverlay(previousFocus),
     });
     if (!takeFocus) return;
     const frame = requestAnimationFrame(() => approvalDenyRef.current?.focus());

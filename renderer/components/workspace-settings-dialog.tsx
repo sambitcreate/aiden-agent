@@ -71,6 +71,7 @@ import {
   workspaceApprovalPolicy,
   type ApprovalMode,
 } from "../shared/approval-mode";
+import { isEscapeKey } from "../lib/dismiss-key";
 
 const IS_MAC = typeof navigator !== "undefined" && /Mac/u.test(navigator.userAgent);
 
@@ -406,7 +407,7 @@ function GeneralTab({ workspace, onClose }: { workspace: Workspace; onClose: () 
             if (event.key === "Enter") {
               event.preventDefault();
               commitName();
-            } else if (event.key === "Escape" && name !== workspace.name) {
+            } else if (isEscapeKey(event) && name !== workspace.name) {
               // The dialog stays open for this Escape (see onEscapeKeyDown); the next one closes it.
               setName(workspace.name);
             }

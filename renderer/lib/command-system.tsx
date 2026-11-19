@@ -15,6 +15,7 @@ import {
 import { toast } from "../components/ui";
 import { useAppCapabilities } from "./app-capabilities";
 import { handleAreaFocusKey } from "./focus-regions";
+import { hasOpenLayer, type Layer } from "./layer-stack";
 
 export type CommandPaletteMode =
   | "root"
@@ -49,17 +50,15 @@ function isEditable(target: EventTarget | null): boolean {
   );
 }
 
+/** The command palette's name on the layer stack. */
+export const COMMAND_PALETTE_LAYER = "command-palette";
+
+const isModalLayer = (layer: Layer) => layer.kind === "modal";
+
 function openDialogState(): { any: boolean; foreign: boolean } {
-  const dialogs = Array.from(
-    document.querySelectorAll<HTMLElement>(
-      '[data-slot="dialog-content"][data-state="open"]',
-    ),
-  );
   return {
-    any: dialogs.length > 0,
-    foreign: dialogs.some(
-      (dialog) => !dialog.hasAttribute("data-command-palette-content"),
-    ),
+    any: hasOpenLayer(isModalLayer),
+    foreign: hasOpenLayer((layer) => isModalLayer(layer) && layer.name !== COMMAND_PALETTE_LAYER),
   };
 }
 
@@ -209,10 +208,7 @@ export function CommandSystemProvider({
           return Boolean(target?.closest("[data-command-scope='terminal'], .ghostty-screen"));
         },
         get modal() {
-          return (
-            applicationModal ||
-            Boolean(document.querySelector('[data-slot="dialog-content"][data-state="open"]'))
-          );
+          return applicationModal || hasOpenLayer(isModalLayer);
         },
         paletteOpen,
         composing: event.isComposing || event.key === "Dead",

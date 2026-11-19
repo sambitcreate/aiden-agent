@@ -112,6 +112,7 @@ import { BotSpendingSection } from "./bot-spending-section";
 import { botMemoryCount, botMemoryCountLabel, useBotMemory } from "./use-bot-memory";
 import { useAppCapabilities } from "../../lib/app-capabilities";
 import { localComputerNoun } from "../../shared/computer-noun";
+import { isEscapeKey } from "../../lib/dismiss-key";
 
 /**
  * How much the Bot's model thinks. The choices are the levels the model picked
@@ -716,7 +717,7 @@ function IdentityHeader({
                 event.preventDefault();
                 finishEditing();
               }
-              if (event.key === "Escape") {
+              if (isEscapeKey(event)) {
                 event.preventDefault();
                 // Escape closes the edit only, never the panel.
                 event.stopPropagation();

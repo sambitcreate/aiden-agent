@@ -160,7 +160,7 @@ function isEmptyMessageBox(element: Element | null): boolean {
 export function handleAreaFocusKey(event: KeyboardEvent): void {
   if (event.key !== "F6" || !keyIsPlain(event) || event.defaultPrevented || event.isComposing) return;
   const active = document.activeElement;
-  if (typingRedirectBlockedByOverlay(document, active)) return;
+  if (typingRedirectBlockedByOverlay(active)) return;
   if (cycleFocusRegion(event.shiftKey ? -1 : 1, active)) {
     event.preventDefault();
     event.stopPropagation();
@@ -173,7 +173,7 @@ export function useReplyFocusKeys(): void {
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.defaultPrevented || event.isComposing) return;
       const active = document.activeElement;
-      if (typingRedirectBlockedByOverlay(document, active)) return;
+      if (typingRedirectBlockedByOverlay(active)) return;
       if (
         (event.key === "ArrowUp" || event.key === "ArrowDown") &&
         event.altKey &&

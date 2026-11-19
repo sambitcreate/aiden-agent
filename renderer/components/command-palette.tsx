@@ -23,7 +23,7 @@ import {
   Sun,
   Wrench,
 } from "lucide-react";
-import { Command, CommandEmpty, CommandInput, CommandItem, CommandList, toast } from "./ui";
+import { Command, CommandEmpty, CommandInput, CommandItem, CommandList, keepOpenWhileComposing, toast } from "./ui";
 import { ProviderIcon } from "./provider-icon";
 import { cn } from "../lib/ui-utils";
 import { paletteCommands } from "../lib/command-system-core";
@@ -34,6 +34,7 @@ import {
   type CommandId,
 } from "../shared/keybindings";
 import {
+  COMMAND_PALETTE_LAYER,
   useCommandHandler,
   useCommandSystem,
   type CommandPaletteMode,
@@ -77,6 +78,7 @@ import {
   settingsTabLabel,
 } from "../lib/settings-section";
 import { useAppCapabilities } from "../lib/app-capabilities";
+import { useLayer } from "../lib/layer-stack";
 import {
   createDefaultAppearanceConfig,
   normalizeAppearanceConfig,
@@ -166,6 +168,7 @@ export function AppCommandPalette({
   const queryClient = useQueryClient();
   const { activeId, workspaces } = useActiveWorkspace();
   const { binding, canExecute, execute, palette } = useCommandSystem();
+  useLayer(palette.open, "modal", { name: COMMAND_PALETTE_LAYER });
   const chats = useChats(activeId);
   const newChat = useNewChatActions();
   const pathPreferences = useWorkspacePathPreferences();
@@ -646,11 +649,11 @@ export function AppCommandPalette({
               document.querySelector<HTMLInputElement>("[data-command-palette-input]")?.focus(),
             );
           }}
-          onEscapeKeyDown={(event) => {
+          onEscapeKeyDown={keepOpenWhileComposing((event) => {
             if (palette.mode === "root") return;
             event.preventDefault();
             enterMode("root");
-          }}
+          })}
         >
           <DialogPrimitive.Title className="sr-only">
             {MODE_LABELS[palette.mode]}

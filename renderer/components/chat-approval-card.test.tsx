@@ -4,6 +4,7 @@ import { afterEach, test } from "node:test";
 import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { ApprovalStatusLine, ChatApprovalCard, type ApprovalStatus, type ChatApprovalDecisionOptions } from "./chat-approval-card";
 import { TooltipProvider } from "./ui";
+import { openLayer } from "../lib/layer-stack";
 import type { ApprovalPrompt } from "../lib/ipc";
 import type { AssistantAutomationApprovalDetails, ScheduledTaskApprovalDetails } from "../shared/assistant";
 import type { HookProposalApprovalDetails } from "../shared/hook-proposal-approval";
@@ -543,12 +544,9 @@ test("approval keys stay off while a menu is open, without the modifier, or whil
   const typing = mountWithComposer({ toolName: "bash", summary: "npm test" });
   fireEvent.keyDown(typing.composer, { key: "Enter" });
   fireEvent.keyDown(typing.composer, { ...primaryKey("Enter"), shiftKey: true });
-  const menu = document.createElement("div");
-  menu.setAttribute("role", "menu");
-  menu.setAttribute("data-state", "open");
-  document.body.append(menu);
+  const menu = openLayer("menu");
   fireEvent.keyDown(typing.composer, primaryKey("Enter"));
-  menu.remove();
+  menu.close();
   assert.deepEqual(typing.decisions, []);
   cleanup();
 

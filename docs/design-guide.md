@@ -260,6 +260,38 @@ the shared small filled squircle button, not Sonner's inverted pill. A failed
 write puts the row back with one error toast in the host's own words, and an Undo that finds the chat
 changed elsewhere leaves it alone and says so in the toast.
 
+## Layers and Escape
+
+Everything open over the page sits on one stack in `renderer/lib/layer-stack.ts`.
+The Radix overlays in `renderer/components/ui.tsx` (Dialog, AlertDialog,
+DropdownMenu, ContextMenu, Select, Popover), the command palette and onboarding
+join it while open and keep handling their own Escape.
+
+- A custom surface that Escape closes calls `useLayer(open, kind, { onEscape })`
+  instead of adding its own document or window keydown listener. `onEscape` runs
+  only for an unhandled, non-composing Escape while nothing covers the layer,
+  and calls `preventDefault()` when it acted. Kinds: `sheet` for an overlay
+  over the page (the compact sidebar), `panel` for a docked surface (Quick View
+  and tools, the Bot panel). Layers stack in tiers whatever order they opened
+  in: panels, then sheets, then dialogs, menus and popovers. Within a tier the
+  newer layer is on top, except that panels never cover each other, so focus
+  decides which panel closes. A layer nested in another that opens in the same
+  render joins first (React runs layout effects child first) and sits below its
+  parent; open nested layers one after the other.
+- To ask whether a dialog, menu or popover is open, use `hasOpenLayer(...)` or a
+  handle's `isTop()`. Never search the DOM for `[data-state="open"]` overlays.
+- Escape handlers use `renderer/lib/dismiss-key.ts`. `isDismissKey(event)` is an
+  Escape that nothing nearer the focus handled and that does not end an input
+  method's composition; use it for listeners that compete for Escape.
+  `isEscapeKey(event)` drops only the composition check, for a field's own
+  `onKeyDown` that must act even though the Radix layer around it already
+  handled the key (Radix listens on the document in the capture phase).
+- An Escape that ends a composition keeps a Dialog, AlertDialog, Popover or the
+  command palette open; wrap new Radix `onEscapeKeyDown` handlers in
+  `keepOpenWhileComposing` from `ui.tsx`. A DropdownMenu, ContextMenu or Select
+  that holds a text field must pass its `onEscapeKeyDown` through
+  `keepOpenWhileComposing` too; their shared content components do not.
+
 ## Verification
 
 Check shared and custom actions in onboarding, the chat toolbar and composer,

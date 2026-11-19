@@ -71,6 +71,7 @@ import {
 } from "./model-pad-canvas";
 import { ModelPadDataRows } from "./model-pad-data-rows";
 import { ModelPadTray, type ModelPadTrayRow } from "./model-pad-tray";
+import { isEscapeKey } from "../../../lib/dismiss-key";
 
 function gridLocation(point: ModelPadPoint, gridSize: number): string {
   const column = Math.round(point.x * (gridSize - 1)) + 1;
@@ -1101,7 +1102,7 @@ export function ModelPadSettings() {
             setAnnouncement(`${entry.label} movement cancelled.`);
           },
           onKeyDown: (event) => {
-            if (event.key === "Escape") {
+            if (isEscapeKey(event)) {
               event.preventDefault();
               setActiveValue(undefined);
               event.currentTarget.blur();

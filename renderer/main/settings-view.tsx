@@ -50,6 +50,7 @@ import { AppControlSettings } from "../components/settings/app-control-settings"
 import { SimulatorSettingsPage } from "../components/settings/device-workspace-settings";
 import { ApprovalRulesSettings } from "../components/settings/approval-rules-settings";
 import { ApprovalModeSettings } from "../components/settings/approval-mode-settings";
+import { isEscapeKey } from "../lib/dismiss-key";
 
 /** Settings → Approvals: the mode first, then the rules page, then Advanced (which holds Bot messaging). */
 function ApprovalsSettings() {
@@ -304,7 +305,7 @@ export function SettingsView({ initialSection }: { initialSection?: SettingsSect
                 value={search}
                 onChange={(event) => setSearch(event.target.value)}
                 onKeyDown={(event) => {
-                  if (event.key === "Escape") {
+                  if (isEscapeKey(event)) {
                     event.preventDefault();
                     event.stopPropagation();
                     setSearch("");

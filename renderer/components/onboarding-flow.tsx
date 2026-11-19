@@ -40,6 +40,7 @@ import {
 import { localComputerNoun } from "../shared/computer-noun";
 import { useAppCapabilities } from "../lib/app-capabilities";
 import { focusRegionWhenShown } from "../lib/focus-regions";
+import { useLayer } from "../lib/layer-stack";
 import { acceptFirstBotAccess, OnboardingBotsStep, type FirstBotAccess } from "./onboarding-bots-step";
 import { OnboardingFeatureGallery, onboardingFeatures } from "./onboarding-feature-gallery";
 
@@ -48,6 +49,7 @@ const stepLabels = { profile: "Your name", provider: "Connect AI", tour: "Finish
 const APP_ICON_URL = new URL("../../resources/app-icon.png", import.meta.url).href;
 
 function OnboardingDialogShell({ children }: React.PropsWithChildren) {
+  useLayer(true, "modal");
   return (
     <DialogPrimitive.Root open>
       <DialogPrimitive.Portal>

@@ -17,6 +17,7 @@ import {
 } from "../../shared/keybindings";
 import { BUILT_IN_KEYS, type BuiltInKey } from "../../shared/built-in-keys";
 import { KeyCombo } from "../keyboard-shortcuts-dialog";
+import { isEscapeKey } from "../../lib/dismiss-key";
 
 function RuntimeBadge({
   command,
@@ -69,7 +70,7 @@ function ShortcutRow({
 
   const onKeyDown = (event: React.KeyboardEvent<HTMLButtonElement>) => {
     if (!recording) return;
-    if (event.key === "Escape") {
+    if (isEscapeKey(event)) {
       event.preventDefault();
       onCancelRecord();
       return;

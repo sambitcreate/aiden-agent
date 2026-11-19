@@ -1,6 +1,7 @@
 import { Search } from "lucide-react";
 import { Input, Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../components/ui";
 import type { FacetOption, LibraryFilters, LibrarySort } from "./library-core";
+import { isEscapeKey } from "../lib/dismiss-key";
 
 /** Select values can't be empty; facet keys are workflow UUIDs, ":deleted" or "provider::model", so "*" never collides. */
 const ALL = "*";
@@ -56,7 +57,7 @@ export function LibraryToolbar({
           value={filters.query}
           onChange={(event) => onFiltersChange({ ...filters, query: event.target.value })}
           onKeyDown={(event) => {
-            if (event.key !== "Escape" || !filters.query) return;
+            if (!isEscapeKey(event) || !filters.query) return;
             event.preventDefault();
             onFiltersChange({ ...filters, query: "" });
           }}

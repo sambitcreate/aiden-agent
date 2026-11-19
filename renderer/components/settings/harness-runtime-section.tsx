@@ -11,6 +11,7 @@ import {
   harnessRuntimeSummary,
   type AcpHarnessStatus,
 } from "../../shared/acp-harness";
+import { isDismissKey } from "../../lib/dismiss-key";
 
 export interface HarnessStatusState {
   status: AcpHarnessStatus | null;
@@ -159,7 +160,7 @@ export function HarnessRuntimeSection({ providerId, label, status, loadError, on
     // Escape backs out of the inline confirmation before it can close the dialog.
     // The dialog listens on the document in the capture phase, so this listens on the window first.
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key !== "Escape" || !(event.target instanceof Node) || !section?.contains(event.target)) return;
+      if (!isDismissKey(event) || !(event.target instanceof Node) || !section?.contains(event.target)) return;
       event.preventDefault();
       event.stopPropagation();
       setConfirmRemove(false);

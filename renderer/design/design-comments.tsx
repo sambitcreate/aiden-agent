@@ -40,6 +40,7 @@ import type { DesignNode } from "./canvas-adapter-core";
 import { commentNumbers, marksFromCanvas, marksOnCanvas, pinPlace, type FrameScroll } from "./comment-geometry";
 import { forgetCommentCrops, publishDesignCommentTray, rememberCommentCrop } from "./comment-tray-store";
 import { DESIGN_DEFAULT_WIDTH } from "./nodes/design-node-context";
+import { isEscapeKey } from "../lib/dismiss-key";
 
 /** How long a page has to answer a pick. */
 const PICK_TIMEOUT_MS = 1500;
@@ -859,7 +860,7 @@ function CommentBox({
       onClick={(event) => event.stopPropagation()}
       onDoubleClick={(event) => event.stopPropagation()}
       onKeyDown={(event) => {
-        if (event.key === "Escape") {
+        if (isEscapeKey(event)) {
           event.preventDefault();
           event.stopPropagation();
           onClose();

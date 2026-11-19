@@ -156,6 +156,8 @@ import { isNoWorkspace, NO_WORKSPACE_LABEL } from "../lib/no-workspace";
 
 import { useAppCapabilities } from "../lib/app-capabilities";
 import { localComputerNoun } from "../shared/computer-noun";
+import { isEscapeKey } from "../lib/dismiss-key";
+
 const CLIPBOARD_IMAGE_MIME_TYPES = new Set([
   "image/png",
   "image/jpeg",
@@ -2706,7 +2708,7 @@ export function Composer({
                     }
                   }}
                   onKeyDown={(event) => {
-                    if (event.key !== "Escape") return;
+                    if (!isEscapeKey(event)) return;
                     event.preventDefault();
                     setPermissionMenuOpen(false);
                     inputRef?.current?.focus();

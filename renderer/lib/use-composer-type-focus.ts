@@ -47,7 +47,6 @@ export function useComposerTypeFocus(
         },
         get overlayOpen() {
           return typingRedirectBlockedByOverlay(
-            document,
             document.activeElement instanceof Element ? document.activeElement : null,
           );
         },

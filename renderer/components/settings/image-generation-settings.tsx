@@ -51,6 +51,8 @@ import {
 
 import { useAppCapabilities } from "../../lib/app-capabilities";
 import { localComputerNoun } from "../../shared/computer-noun";
+import { isEscapeKey } from "../../lib/dismiss-key";
+
 /** Rows rendered before "Show more"; fetched catalogs can hold hundreds. */
 const MODEL_ROW_PAGE = 200;
 const AUTOMATIC = "__automatic__";
@@ -745,7 +747,7 @@ function ModelsGroup({
             value={query}
             onChange={(event) => setQuery(event.target.value)}
             onKeyDown={(event) => {
-              if (event.key !== "Escape" || !query) return;
+              if (!isEscapeKey(event) || !query) return;
               event.preventDefault();
               setQuery("");
             }}

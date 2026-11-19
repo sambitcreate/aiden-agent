@@ -116,6 +116,7 @@ import {
 } from "../lib/device-tabs";
 import { deviceWorkspace, useFloatingDevice } from "../lib/device-workspace-store";
 import { prefersReducedMotion } from "../lib/appearance-runtime";
+import { useLayer } from "../lib/layer-stack";
 import {
   DeviceTabContextMenu,
   DeviceTabRenameInput,
@@ -2220,12 +2221,9 @@ export function EnvironmentWorkbench({
     return () => observer.disconnect();
   }, []);
 
-  React.useEffect(() => {
-    if (!toolsOpen && !quickViewOpen) return;
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.defaultPrevented || event.key !== "Escape") return;
-      if (document.querySelector('[data-slot="dialog-content"][data-state="open"]')) return;
-      if (document.querySelector('[data-compact-sidebar-open="true"]')) return;
+  // A dialog, menu or the compact sidebar above the panel takes Escape first.
+  useLayer(toolsOpen || quickViewOpen, "panel", {
+    onEscape: (event) => {
       if (panel.gitOperationBusy) return;
       const activeElement = document.activeElement;
       const focusedSurface =
@@ -2239,17 +2237,8 @@ export function EnvironmentWorkbench({
       event.preventDefault();
       if (focusedSurface === "quick-view") panel.closeQuickView();
       else panel.closeTools();
-    };
-    document.addEventListener("keydown", onKeyDown);
-    return () => document.removeEventListener("keydown", onKeyDown);
-  }, [
-    panel.closeQuickView,
-    panel.closeTools,
-    panel.frontSurface,
-    panel.gitOperationBusy,
-    quickViewOpen,
-    toolsOpen,
-  ]);
+    },
+  });
 
   const reportSurfaceLayout = panel.reportSurfaceLayout;
   React.useLayoutEffect(() => {

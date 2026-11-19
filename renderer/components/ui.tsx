@@ -36,6 +36,8 @@ import {
 import { cn } from "../lib/ui-utils";
 import { dialogEnterTarget, shouldSubmitDialogOnEnter } from "../lib/dialog-enter";
 import { useCommandHandler, useShortcutBinding, useShortcutLabel } from "../lib/command-system";
+import { isComposingKey, isEscapeKey } from "../lib/dismiss-key";
+import { hasOpenLayer, isOverlayLayer, useLayer, type LayerKind } from "../lib/layer-stack";
 import {
   compactSidebarAutoFocusIntent,
   type CompactSidebarAutoFocusIntent,
@@ -667,6 +669,14 @@ function SplitViewRoot({
       : width;
   const reservedSidebarWidth = !compact && !collapsed ? width : 0;
 
+  const compactLayer = useLayer(compactOpen, "sheet", {
+    onEscape: (event) => {
+      event.preventDefault();
+      localStorage.setItem(collapseKey, "1");
+      setCollapsed(true);
+    },
+  });
+
   React.useEffect(() => {
     if (!compactOpen) return;
     const previousFocus =
@@ -681,19 +691,12 @@ function SplitViewRoot({
     const frame =
       compactSidebarFocusIntentRef.current === "first-control"
         ? requestAnimationFrame(() => {
-            if (!leadingAnchor?.contains(previousFocus)) getFocusable()[0]?.focus();
+            // A dialog that was already open keeps focus when the window narrows.
+            if (compactLayer.isTop() && !leadingAnchor?.contains(previousFocus)) getFocusable()[0]?.focus();
           })
         : null;
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.defaultPrevented) return;
-      if (document.querySelector('[data-slot="dialog-content"][data-state="open"]')) return;
-      if (event.key === "Escape") {
-        event.preventDefault();
-        localStorage.setItem(collapseKey, "1");
-        setCollapsed(true);
-        return;
-      }
-      if (event.key !== "Tab") return;
+      if (event.defaultPrevented || event.key !== "Tab" || !compactLayer.isTop()) return;
       const focusable = getFocusable();
       if (focusable.length === 0) return;
       const first = focusable[0];
@@ -714,10 +717,14 @@ function SplitViewRoot({
     return () => {
       if (frame !== null) cancelAnimationFrame(frame);
       document.removeEventListener("keydown", onKeyDown);
-      if (!contentModalOpenRef.current && previousFocus?.isConnected)
+      if (
+        !contentModalOpenRef.current &&
+        !hasOpenLayer(isOverlayLayer) &&
+        previousFocus?.isConnected
+      )
         requestAnimationFrame(() => previousFocus.focus());
     };
-  }, [collapseKey, compactOpen, leadingAnchor]);
+  }, [compactLayer, compactOpen, leadingAnchor]);
 
   const chrome = useWindowChrome();
   const splitContext = React.useMemo(
@@ -947,7 +954,7 @@ export function Sidebar({
               value={searchValue}
               onChange={(event) => onSearchChange?.(event.target.value)}
               onKeyDown={(event) => {
-                if (event.key === "Escape" && searchValue) {
+                if (isEscapeKey(event) && searchValue) {
                   event.preventDefault();
                   event.stopPropagation();
                   onSearchChange?.("");
@@ -1644,6 +1651,40 @@ export function ScrollAreaFooterStack({ className, ...props }: React.HTMLAttribu
 
 export type DialogLayer = "default" | "onboarding";
 
+/**
+ * Escape that cancels an input method's composition keeps the Radix layer
+ * open; any other Escape goes to `handler`.
+ */
+export function keepOpenWhileComposing(
+  handler?: (event: KeyboardEvent) => void,
+): (event: KeyboardEvent) => void {
+  return (event) => {
+    if (isComposingKey(event)) event.preventDefault();
+    else handler?.(event);
+  };
+}
+
+type OpenChangeProps = {
+  open?: boolean;
+  defaultOpen?: boolean;
+  onOpenChange?: (open: boolean) => void;
+};
+
+/** Tracks a Radix root's open state, controlled or not, and keeps it on the layer stack while open. */
+function useRootLayer({ open: openProp, defaultOpen, onOpenChange }: OpenChangeProps, kind: LayerKind) {
+  const [uncontrolledOpen, setUncontrolledOpen] = React.useState(defaultOpen ?? false);
+  const open = openProp ?? uncontrolledOpen;
+  useLayer(open, kind);
+  const handleOpenChange = React.useCallback(
+    (next: boolean) => {
+      if (openProp === undefined) setUncontrolledOpen(next);
+      onOpenChange?.(next);
+    },
+    [onOpenChange, openProp],
+  );
+  return { open, onOpenChange: handleOpenChange };
+}
+
 type DialogProps = React.PropsWithChildren<{
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -1711,6 +1752,7 @@ export function Dialog({
   const dismissBlocked = Boolean(
     dismissDisabled || cancelDisabled || (busy && !allowCancelWhileBusy),
   );
+  useLayer(open, "modal");
 
   return (
     <DialogPrimitive.Root
@@ -1735,10 +1777,10 @@ export function Dialog({
               target.focus();
             }
           }}
-          onEscapeKeyDown={(event) => {
+          onEscapeKeyDown={keepOpenWhileComposing((event) => {
             onEscapeKeyDown?.(event);
             if (dismissBlocked) event.preventDefault();
-          }}
+          })}
           onPointerDownOutside={(event) => dismissBlocked && event.preventDefault()}
           onKeyDown={
             submitOnEnter
@@ -1851,6 +1893,7 @@ export function AlertDialog({
   keepOpenOnConfirm?: boolean;
 }) {
   const liveGuard = useLiveGuardAttributes();
+  useLayer(open, "modal");
   // Remember what had focus when the dialog opened so closing can return there.
   const openerRef = React.useRef<HTMLElement | null>(null);
   React.useLayoutEffect(() => {
@@ -1895,7 +1938,7 @@ export function AlertDialog({
               target.focus();
             }
           }}
-          onEscapeKeyDown={(event) => busy && event.preventDefault()}
+          onEscapeKeyDown={keepOpenWhileComposing((event) => busy && event.preventDefault())}
           className={cn(
             "fixed left-1/2 top-1/2 w-[min(92vw,420px)] -translate-x-1/2 -translate-y-1/2 rounded-dialog bg-popover px-6 py-5 outline-none",
             layer === "onboarding" ? "z-[70] shadow-onboarding" : "z-50 shadow-modal",
@@ -1939,7 +1982,9 @@ const destructiveHighlightClass =
 const menuItemClass =
   "relative flex min-h-7 cursor-default select-none items-center gap-2 rounded-lg px-2 py-1 text-regular outline-none transition-colors duration-(--motion-duration) ease-standard data-[highlighted]:bg-fill-accent data-[highlighted]:text-fill-accent-foreground data-[highlighted]:**:text-current data-[disabled]:pointer-events-none data-[disabled]:opacity-45";
 
-export const DropdownMenu = DropdownMenuPrimitive.Root;
+export function DropdownMenu(props: React.ComponentProps<typeof DropdownMenuPrimitive.Root>) {
+  return <DropdownMenuPrimitive.Root {...props} {...useRootLayer(props, "menu")} />;
+}
 export const DropdownMenuTrigger = DropdownMenuPrimitive.Trigger;
 export const DropdownMenuContent = React.forwardRef<
   React.ElementRef<typeof DropdownMenuPrimitive.Content>,
@@ -2095,16 +2140,18 @@ export const DropdownMenuRadioItem = React.forwardRef<
   );
 });
 
-export const CustomDropdownMenu = DropdownMenuPrimitive.Root;
+export const CustomDropdownMenu = DropdownMenu;
 export const CustomDropdownMenuTrigger = DropdownMenuPrimitive.Trigger;
 export const CustomDropdownMenuContent = DropdownMenuContent;
 
-export const Popover = PopoverPrimitive.Root;
+export function Popover(props: React.ComponentProps<typeof PopoverPrimitive.Root>) {
+  return <PopoverPrimitive.Root {...props} {...useRootLayer(props, "popover")} />;
+}
 export const PopoverTrigger = PopoverPrimitive.Trigger;
 export const PopoverContent = React.forwardRef<
   React.ElementRef<typeof PopoverPrimitive.Content>,
   React.ComponentPropsWithoutRef<typeof PopoverPrimitive.Content>
->(function PopoverContent({ className, sideOffset = 6, ...props }, ref) {
+>(function PopoverContent({ className, sideOffset = 6, onEscapeKeyDown, ...props }, ref) {
   const liveGuard = useLiveGuardAttributes(props);
   return (
     <PopoverPrimitive.Portal>
@@ -2119,6 +2166,7 @@ export const PopoverContent = React.forwardRef<
         )}
         {...props}
         {...liveGuard}
+        onEscapeKeyDown={keepOpenWhileComposing(onEscapeKeyDown)}
       />
     </PopoverPrimitive.Portal>
   );
@@ -2149,7 +2197,11 @@ export const HoverCardContent = React.forwardRef<
   );
 });
 
-export const ContextMenu = ContextMenuPrimitive.Root;
+export function ContextMenu(props: React.ComponentProps<typeof ContextMenuPrimitive.Root>) {
+  // A context menu opens only from its trigger, so it has no `open` prop to control.
+  const { onOpenChange } = useRootLayer(props, "menu");
+  return <ContextMenuPrimitive.Root {...props} onOpenChange={onOpenChange} />;
+}
 export const ContextMenuTrigger = ContextMenuPrimitive.Trigger;
 export const ContextMenuContent = React.forwardRef<
   React.ElementRef<typeof ContextMenuPrimitive.Content>,
@@ -2232,7 +2284,9 @@ export const ContextMenuSubContent = React.forwardRef<
   );
 });
 
-export const Select = SelectPrimitive.Root;
+export function Select(props: React.ComponentProps<typeof SelectPrimitive.Root>) {
+  return <SelectPrimitive.Root {...props} {...useRootLayer(props, "menu")} />;
+}
 export const SelectValue = React.forwardRef<
   React.ElementRef<typeof SelectPrimitive.Value>,
   React.ComponentPropsWithoutRef<typeof SelectPrimitive.Value>

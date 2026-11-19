@@ -68,6 +68,7 @@ import { McpSecretFields, mcpSecretFieldDrafts, mcpSecretFieldRecord } from "./m
 import { McpProviderAuthFields, mcpShareableProviders } from "./mcp-provider-auth-fields";
 import { McpOAuthMetadataField, mcpOAuthMetadataFieldError } from "./mcp-oauth-metadata-field";
 import { McpOAuthClientFields, mcpOAuthClientSecretDraft, mcpOAuthClientSecretValue } from "./mcp-oauth-client-fields";
+import { isEscapeKey } from "../../lib/dismiss-key";
 
 /** Secret values typed into a custom connector never stay in config.json. */
 const STORED_SECRET_DESCRIPTION = "Stored encrypted on this device, never in config.json, and never shown again.";
@@ -483,7 +484,7 @@ export function McpSettings() {
             value={search}
             onChange={(event) => setSearch(event.target.value)}
             onKeyDown={(event) => {
-              if (event.key !== "Escape") return;
+              if (!isEscapeKey(event)) return;
               event.preventDefault();
               setSearch("");
             }}

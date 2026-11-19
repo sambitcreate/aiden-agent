@@ -42,6 +42,7 @@ import {
 } from "../../lib/sidebar-chat-shortcuts";
 import { useHeldModifierReveal } from "../../lib/use-held-modifier-reveal";
 import { ariaKeyShortcut, prettyAccelerator, type CommandId } from "../../shared/keybindings";
+import { isEscapeKey } from "../../lib/dismiss-key";
 
 const ROW_FOCUS =
   "outline-none focus-visible:bg-list-selection focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-focus-ring";
@@ -538,7 +539,7 @@ export function BotSidebar() {
               value={query}
               onChange={(event) => setQuery(event.target.value)}
               onKeyDown={(event) => {
-                if (event.key !== "Escape") return;
+                if (!isEscapeKey(event)) return;
                 event.preventDefault();
                 event.stopPropagation();
                 if (query) setQuery("");

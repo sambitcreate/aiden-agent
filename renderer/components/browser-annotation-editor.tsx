@@ -6,6 +6,7 @@ import { browserAnnotationElementBounds, browserAnnotationStylePreview, eraseBro
 import { scheduleBrowserAnnotationPreview } from "../lib/browser-annotation-preview-queue";
 import { BrowserAnnotationStyles } from "./browser-annotation-styles";
 import { Button, Textarea } from "./ui";
+import { isEscapeKey } from "../lib/dismiss-key";
 
 export function BrowserAnnotationEditor({ snapshot, initial, pending, onCancel, onSubmit, onPreview }: {
   snapshot: BrowserSnapshot;
@@ -83,7 +84,7 @@ export function BrowserAnnotationEditor({ snapshot, initial, pending, onCancel, 
   const canSubmit = !pending && previewReady && Boolean(elements.length || regions.length || strokes.length || comment.trim());
   const submit = () => { if (canSubmit) onSubmit({ ...initial, url: snapshot.tab.url, elements: selectedElements, regions, strokes, comment, elementStyleChanges, image }); };
   return <section ref={sectionRef} className="browser-annotation" aria-label="Annotate browser" onKeyDown={(event) => {
-    if (event.key === "Escape") { event.stopPropagation(); onCancel(); }
+    if (isEscapeKey(event)) { event.stopPropagation(); onCancel(); }
     if ((event.metaKey || event.ctrlKey) && event.key === "Enter") { event.preventDefault(); event.stopPropagation(); submit(); }
   }}>
     <div className="browser-annotation-toolbar">

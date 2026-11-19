@@ -4,6 +4,7 @@ import type * as React from "react";
 import { afterEach, test } from "node:test";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { focusRegionWhenShown, useReplyFocusKeys } from "./focus-regions";
+import { openLayer, useLayer } from "./layer-stack";
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { CommandSystemProvider, useCommandHandler, useShortcutBinding } from "./command-system";
@@ -99,14 +100,19 @@ function Window({
           Changes
         </button>
       </aside>
-      {menuOpen ? (
-        <div role="menu" data-state="open">
-          <button type="button" role="menuitem">
-            Rename
-          </button>
-        </div>
-      ) : null}
+      {menuOpen ? <OpenMenu /> : null}
     </>
+  );
+}
+
+function OpenMenu() {
+  useLayer(true, "menu");
+  return (
+    <div role="menu">
+      <button type="button" role="menuitem">
+        Rename
+      </button>
+    </div>
   );
 }
 
@@ -336,17 +342,13 @@ for (const guard of ["application modal", "dialog", "menu", "picker", "shortcut 
     renderCommands(<Window />, undefined, guard === "application modal");
     const message = screen.getByRole("textbox", { name: "Message" });
     if (guard === "shortcut recorder") message.setAttribute("data-shortcut-recorder", "true");
-    const overlay = document.createElement("div");
-    if (guard === "dialog") { overlay.setAttribute("data-slot", "dialog-content"); overlay.setAttribute("data-state", "open"); }
-    if (guard === "menu") { overlay.setAttribute("role", "menu"); overlay.setAttribute("data-state", "open"); }
-    if (guard === "picker") { overlay.setAttribute("data-slot", "popover-content"); overlay.setAttribute("data-state", "open"); overlay.setAttribute("role", "listbox"); }
-    document.body.append(overlay);
+    const overlay = guard === "dialog" ? openLayer("modal") : guard === "menu" ? openLayer("menu") : guard === "picker" ? openLayer("popover") : null;
     try {
       message.focus();
       const untouched = press("F6", { code: "F6", shiftKey: true, isComposing: guard === "IME" });
       assert.equal(document.activeElement, message);
       assert.equal(untouched, true, "the guard leaves the key untouched");
-    } finally { overlay.remove(); }
+    } finally { overlay?.close(); }
   });
 }
 

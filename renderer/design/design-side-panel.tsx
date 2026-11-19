@@ -58,6 +58,7 @@ import {
 import { designLayers, type DesignLayer, type DesignLayerPlace } from "./layers-core";
 import { designColorVar, designFillVar, DESIGN_COLOR_NAMES } from "./nodes/draw-style";
 import { DESIGN_DEFAULT_WIDTH, type DesignFramePatch } from "./nodes/design-node-context";
+import { isEscapeKey } from "../lib/dismiss-key";
 
 export type DesignPanelTab = "properties" | "layers" | "code" | "tweaks";
 
@@ -430,7 +431,7 @@ function NumberField({
           if (event.key === "Enter") {
             event.preventDefault();
             commit();
-          } else if (event.key === "Escape") {
+          } else if (isEscapeKey(event)) {
             event.preventDefault();
             setDraft(shown);
           }
@@ -681,7 +682,7 @@ function LayerNameInput({ name, onDone }: { name: string; onDone(title: string |
         if (event.key === "Enter") {
           event.preventDefault();
           finish(draft);
-        } else if (event.key === "Escape") {
+        } else if (isEscapeKey(event)) {
           event.preventDefault();
           finish(null);
         }

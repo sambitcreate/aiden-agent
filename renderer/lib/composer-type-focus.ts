@@ -1,5 +1,6 @@
 // Redirect ordinary typing into the chat composer when the user is not already
 // in another text field, overlay, or reserved surface.
+import { hasOpenLayer, isOverlayLayer } from "./layer-stack";
 
 export interface ComposerTypeFocusEvent {
   key: string;
@@ -122,27 +123,12 @@ export function isReservedTypingSurface(target: EventTarget | null): boolean {
   );
 }
 
-export function typingRedirectBlockedByOverlay(
-  root: ParentNode,
-  active: Element | null = null,
-): boolean {
-  if (root.querySelector('[data-slot="dialog-content"][data-state="open"]')) return true;
-  if (root.querySelector('[role="menu"][data-state="open"]')) return true;
-  const popovers = root.querySelectorAll('[data-slot="popover-content"][data-state="open"]');
-  for (const popover of popovers) {
-    if (!(popover instanceof Element)) continue;
-    const role = popover.getAttribute("role");
-    if (
-      role === "menu" ||
-      role === "listbox" ||
-      role === "dialog" ||
-      popover.querySelector("[role='menu'], [role='listbox']") ||
-      (active instanceof Node && popover.contains(active))
-    ) {
-      return true;
-    }
-  }
-  return false;
+/**
+ * A dialog, menu or popover is open, or focus sits in another floating surface
+ * such as a hover card or an info hint.
+ */
+export function typingRedirectBlockedByOverlay(active: Element | null = null): boolean {
+  return hasOpenLayer(isOverlayLayer) || Boolean(active?.closest('[data-slot="popover-content"]'));
 }
 
 export function composerCanAcceptTyping(composer: HTMLTextAreaElement | null): boolean {

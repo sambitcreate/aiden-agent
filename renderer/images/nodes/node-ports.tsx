@@ -2,6 +2,7 @@ import { Handle, Position, useStoreApi } from "@xyflow/react";
 import type * as React from "react";
 import { IMAGE_NODE_DEFINITIONS } from "../../shared/images/ports";
 import type { ImageNodeType } from "../../shared/images/schema";
+import { isEscapeKey } from "../../lib/dismiss-key";
 
 const FIRST_PORT_TOP = 44;
 const PORT_GAP = 28;
@@ -19,7 +20,7 @@ function usePortKeys() {
       event.preventDefault();
       event.stopPropagation();
       if (!event.repeat) event.currentTarget.click();
-    } else if (event.key === "Escape" && store.getState().connectionClickStartHandle) {
+    } else if (isEscapeKey(event) && store.getState().connectionClickStartHandle) {
       event.preventDefault();
       event.stopPropagation();
       store.setState({ connectionClickStartHandle: null });
