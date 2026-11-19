@@ -38,6 +38,7 @@ import { dialogEnterTarget, shouldSubmitDialogOnEnter } from "../lib/dialog-ente
 import { useCommandHandler, useShortcutBinding, useShortcutLabel } from "../lib/command-system";
 import { isComposingKey, isEscapeKey } from "../lib/dismiss-key";
 import { hasOpenLayer, isOverlayLayer, useLayer, type LayerKind } from "../lib/layer-stack";
+import { returnFocus as restoreFocus } from "../lib/focus-return";
 import {
   compactSidebarAutoFocusIntent,
   type CompactSidebarAutoFocusIntent,
@@ -57,7 +58,13 @@ export { toast };
 export function Toaster(props: React.ComponentProps<typeof SonnerToaster>) {
   return <SonnerToaster position="top-center" offset={52} richColors {...props} />;
 }
-export const TooltipProvider = TooltipPrimitive.Provider;
+/**
+ * Tooltips open after 300 ms of hover. For 400 ms after one closes the next
+ * opens at once, so moving along a row of icon buttons reads each label.
+ */
+export function TooltipProvider(props: React.ComponentProps<typeof TooltipPrimitive.Provider>) {
+  return <TooltipPrimitive.Provider delayDuration={300} skipDelayDuration={400} {...props} />;
+}
 
 type ButtonProps = React.ButtonHTMLAttributes<HTMLButtonElement> & {
   variant?:
@@ -711,12 +718,8 @@ function SplitViewRoot({
     return () => {
       if (frame !== null) cancelAnimationFrame(frame);
       document.removeEventListener("keydown", onKeyDown);
-      if (
-        !contentModalOpenRef.current &&
-        !hasOpenLayer(isOverlayLayer) &&
-        previousFocus?.isConnected
-      )
-        requestAnimationFrame(() => previousFocus.focus());
+      if (!contentModalOpenRef.current && !hasOpenLayer(isOverlayLayer) && previousFocus)
+        requestAnimationFrame(() => restoreFocus([previousFocus], { closing: sidebarRef.current }));
     };
   }, [compactLayer, compactOpen, leadingAnchor]);
 
@@ -1716,6 +1719,17 @@ type DialogProps = React.PropsWithChildren<{
   onEscapeKeyDown?: (event: KeyboardEvent) => void;
 }>;
 
+/** What had focus when a dialog opened, so closing can return there. */
+function useOpener(open: boolean): React.MutableRefObject<HTMLElement | null> {
+  const openerRef = React.useRef<HTMLElement | null>(null);
+  React.useLayoutEffect(() => {
+    if (!open) return;
+    const active = document.activeElement;
+    openerRef.current = active instanceof HTMLElement && active !== document.body ? active : null;
+  }, [open]);
+  return openerRef;
+}
+
 export function Dialog({
   open,
   onOpenChange,
@@ -1747,6 +1761,7 @@ export function Dialog({
     dismissDisabled || cancelDisabled || (busy && !allowCancelWhileBusy),
   );
   useLayer(open, "modal");
+  const openerRef = useOpener(open);
 
   return (
     <DialogPrimitive.Root
@@ -1765,11 +1780,9 @@ export function Dialog({
           data-slot="dialog-content"
           aria-busy={busy || undefined}
           onCloseAutoFocus={(event) => {
-            const target = returnFocus?.();
-            if (target?.isConnected) {
-              event.preventDefault();
-              target.focus();
-            }
+            const opener = openerRef.current;
+            openerRef.current = null;
+            if (restoreFocus([returnFocus, opener])) event.preventDefault();
           }}
           onEscapeKeyDown={keepOpenWhileComposing((event) => {
             onEscapeKeyDown?.(event);
@@ -1888,13 +1901,7 @@ export function AlertDialog({
 }) {
   const liveGuard = useLiveGuardAttributes();
   useLayer(open, "modal");
-  // Remember what had focus when the dialog opened so closing can return there.
-  const openerRef = React.useRef<HTMLElement | null>(null);
-  React.useLayoutEffect(() => {
-    if (!open) return;
-    const active = document.activeElement;
-    openerRef.current = active instanceof HTMLElement && active !== document.body ? active : null;
-  }, [open]);
+  const openerRef = useOpener(open);
   const confirm = (
     <Button
       variant={confirmVariant === "destructive" ? "destructive" : "accent"}
@@ -1921,16 +1928,9 @@ export function AlertDialog({
           data-slot="dialog-content"
           aria-busy={busy}
           onCloseAutoFocus={(event) => {
-            const opener = openerRef.current?.isConnected ? openerRef.current : null;
+            const opener = openerRef.current;
             openerRef.current = null;
-            const target =
-              returnFocus?.() ??
-              opener ??
-              document.querySelector<HTMLElement>("[data-app-focus-root]");
-            if (target?.isConnected) {
-              event.preventDefault();
-              target.focus();
-            }
+            if (restoreFocus([returnFocus, opener])) event.preventDefault();
           }}
           onEscapeKeyDown={keepOpenWhileComposing((event) => busy && event.preventDefault())}
           className={cn(

@@ -9,7 +9,7 @@ All work lands in one PR, one commit per unit. An Opus review agent checks each 
 | # | Unit | Lessons | Status |
 | - | ---- | ------- | ------ |
 | 1 | Shared layer stack and IME-safe Escape | One stack for Escape and outside-press, replacing the DOM sniffs for open dialogs; one dismiss-key helper that ignores composing and already-handled events | Built, in review: `layer-stack.ts` and `dismiss-key.ts` replace every open-dialog DOM sniff and the ad hoc Escape listeners; outside-press planning is left for a concrete bug |
-| 2 | Focus return and tooltip warm window | Focus return tries candidates and skips hidden or inert targets; one root tooltip provider with a skip-delay window | Planned |
+| 2 | Focus return and tooltip warm window | Focus return tries candidates and skips hidden or inert targets; one root tooltip provider with a skip-delay window | Built, in review: `focus-return.ts` backs Dialog, AlertDialog, the compact sidebar, the terminal, the approval card and the subagent pill, with the message box as fallback; the root tooltip provider sets 300 ms plus a 400 ms warm window, and restored focus no longer opens a tooltip |
 | 3 | Picker matching | Accent-folded, word-start-ranked matching with highlighted segments in the command palette, model picker and slash palette; chat dates leave the search keywords | Planned |
 | 4 | Long pickers | Filtering outside cmdk with a capped or windowed result list for the model picker and the palette's chats | Planned |
 | 5 | Motion tokens and presence | Literal curves and durations become motion tokens; reduced motion follows the in-app setting everywhere; exit animations finish before unmount instead of fixed timers | Planned |

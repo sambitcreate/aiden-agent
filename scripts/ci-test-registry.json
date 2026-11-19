@@ -1122,6 +1122,7 @@
         "renderer/lib/composer-type-focus.test.ts",
         "renderer/lib/dismiss-key.test.ts",
         "renderer/lib/layer-stack.test.tsx",
+        "renderer/lib/focus-return.test.tsx",
         "renderer/lib/composer-submission.test.ts",
         "renderer/lib/context-pressure-feed.test.ts",
         "renderer/lib/expired-cache-return.test.ts",

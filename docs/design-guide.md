@@ -292,6 +292,26 @@ join it while open and keep handling their own Escape.
   that holds a text field must pass its `onEscapeKeyDown` through
   `keepOpenWhileComposing` too; their shared content components do not.
 
+## Focus return
+
+Put focus back after a close with `returnFocus(candidates, options)` from
+`renderer/lib/focus-return.ts`, never a bare `element.focus()`. The element to
+return to can be gone by then (a deleted row, a menu item, a toggle the layout
+hid). Each candidate (an element or a function that finds one) gets a turn in
+order; one that is disconnected, `[hidden]`, under `display: none` or `inert`,
+or disabled is skipped, and one counts only if focus really landed on it. After
+the candidates come the message box's focus-region entry (`region`, or `null`
+for none) and `[data-app-focus-root]`, but only while focus is lost: on the
+page, or still inside the `closing` surface. Focus the app already moved
+elsewhere stays there. Candidates under `aria-hidden="true"` are skipped too.
+
+- Dialog and AlertDialog already do this on close: their `returnFocus` prop
+  first, then whatever had focus when they opened, then the fallbacks.
+- Tooltips share one provider at the root: 300 ms before the first opens, then
+  a 400 ms window in which the next opens at once. Set no per-tooltip delay.
+- A tooltip does not open when `returnFocus` puts focus back on its trigger;
+  Radix Tooltip would otherwise open on any focus, programmatic or not.
+
 ## Enforced rules
 
 `npm run check:aiden-rules` (`scripts/check-aiden-rules.mjs`) checks the rules a

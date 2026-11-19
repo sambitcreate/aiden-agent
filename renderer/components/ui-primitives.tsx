@@ -9,6 +9,7 @@ import {
   Tabs as TabsPrimitive,
   Tooltip as TooltipPrimitive,
 } from "radix-ui";
+import { isRestoringFocus } from "../lib/focus-return";
 import { cn } from "../lib/ui-utils";
 import { Button } from "./ui";
 
@@ -227,8 +228,17 @@ export function Progress({
 /** A hover and focus hint. Needs the app's TooltipProvider (mounted at the root). */
 export function Tooltip({ content, children }: { content: React.ReactNode; children: React.ReactElement }) {
   return (
-    <TooltipPrimitive.Root delayDuration={300}>
-      <TooltipPrimitive.Trigger asChild>{children}</TooltipPrimitive.Trigger>
+    <TooltipPrimitive.Root>
+      <TooltipPrimitive.Trigger
+        asChild
+        onFocus={(event) => {
+          // Focus put back after a dialog or menu closed is not a request for the hint.
+          // preventDefault also skips the child's later composed focus handlers (a roving or toolbar item's), so never wrap one directly.
+          if (isRestoringFocus()) event.preventDefault();
+        }}
+      >
+        {children}
+      </TooltipPrimitive.Trigger>
       <TooltipPrimitive.Portal>
         <TooltipPrimitive.Content
           sideOffset={6}

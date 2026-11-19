@@ -35,6 +35,7 @@ import { useActiveWorkspace } from "../lib/workspace-context";
 import { APPEARANCE_CHANGE_EVENT } from "../lib/appearance-runtime";
 import { useShortcutBinding, useShortcutLabel } from "../lib/command-system";
 import { ariaKeyShortcut } from "../shared/keybindings";
+import { returnFocus } from "../lib/focus-return";
 import { TERMINAL_CONTEXT_UNAVAILABLE, terminalContextDelivery } from "../lib/terminal-context";
 
 export const TERMINAL_PANEL_EVENT = "aiden:terminal-panel";
@@ -306,7 +307,7 @@ export function WorkspaceTerminalProvider({ children }: { children: React.ReactN
       if (placement === "side") window.dispatchEvent(new CustomEvent(TERMINAL_PANEL_EVENT, { detail: "hide" }));
       if (hadTerminalFocus)
         requestAnimationFrame(() =>
-          document.querySelector<HTMLElement>("[data-terminal-toggle]")?.focus(),
+          returnFocus([...document.querySelectorAll<HTMLElement>("[data-terminal-toggle]")], { closing: hadTerminalFocus }),
         );
     } else if (sessions.length > 0) {
       setOpen(true);
