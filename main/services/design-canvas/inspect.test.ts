@@ -204,6 +204,33 @@ test("every load the page's policy blocks is one load finding with the network a
   }
 });
 
+test("a refused fetch of a data: address gets the connect-to-nothing advice, while a broken inline image keeps its own", () => {
+  // What Electron 43's console says for fetch("data:text/plain,hi") under connect-src 'none'.
+  const findings = designInspectFindings(
+    quiet({
+      console: [
+        {
+          level: "error",
+          message: "Connecting to 'data:text/plain,hi' violates the following Content Security Policy directive: \"connect-src 'none'\". The action has been blocked.",
+          lineNumber: 4,
+          sourceId: PAGE,
+        },
+        {
+          level: "error",
+          message: "Fetch API cannot load data:text/plain,hi. Refused to connect because it violates the document's Content Security Policy.",
+          lineNumber: 4,
+          sourceId: PAGE,
+        },
+      ],
+      brokenImages: ["data:image/png;base64,iVBORw0KGgo"],
+    }),
+    context,
+  );
+  assert.equal(findings.length, 2, findings.join("\n"));
+  assert.match(findings[0]!, /^"data:text\/plain,hi" could not be reached: design pages connect to nothing/u);
+  assert.equal(findings[1], "An inline (data: or blob:) image or font could not be read; check that it is complete.");
+});
+
 test("content past the right edge of a page that hides sideways overflow is reported as cut off, not as scrolling", () => {
   const [finding] = designInspectFindings(quiet({ scrollWidth: 1600, hidesSideways: true, overflowing: ["div.wide"] }), context);
   assert.match(finding!, /1600px wide at its 1280px design width, and the page hides sideways overflow, so what reaches past the right edge is cut off/u);
