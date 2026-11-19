@@ -43,6 +43,9 @@ import { createPiCodemodeTool } from "./pi-codemode.js";
 import { forgetPromptSectionDeviceKeys } from "./prompt-section-secret.js";
 import { LOAD_TOOLS_TOOL_NAME } from "./on-demand-tools.js";
 import { createAidenAppTools } from "./aiden-app-tools.js";
+import { canUseBrowserTools } from "./browser-tools.js";
+import { canUseDeviceTools } from "./devices/device-tools.js";
+import { designCanvasToolsAllowed } from "./design-canvas/canvas-tools.js";
 import type { AppControlContext, AppControlsService } from "./app-controls-core.js";
 import { chatToolOffers, chatTurnAudienceFor, chatTurnToolRefusal, declaresWindowTools, windowlessChatTurn, type ChatToolSurface, type ChatTurnAudience, type ChatTurnOwnerScope } from "./chat-turn-tool-policy.js";
 import { remoteGenerationSurface, scheduledGenerationSurface } from "./conversation-surface-generation.js";
@@ -762,8 +765,37 @@ describe("prompt prefix stability: tool list identical across turns", () => {
 
   // A workspace chat turn's declarations, from the same gates llm-client
   // reads: Computer Use unless the turn withholds it, hooks from the chat's
-  // surface, and questions from who owns the turn.
+  // surface, questions from who owns the turn, and the browser, Simulator,
+  // design canvas and app-and-scheduling tools from whether the turn declares
+  // a window's tools (`declaresWindowTools`), in a design-mode chat with
+  // Simulator access on.
   const questionTool = textTool("ask_user_question", "Ask the person a question with choices.");
+  const browserTool = textTool("browser_open", "Open a page in the in-app browser.");
+  const deviceTool = textTool("device_list", "List the Simulator devices.");
+  const canvasTool = textTool("canvas_place_frame", "Place a frame on the design canvas.");
+  const ownerAppTools = createAidenAppTools({
+    // Declaring the tools reads neither; only a call does.
+    service: {} as AppControlsService,
+    context: {} as AppControlContext,
+    liveState: false,
+    present: () => undefined,
+  });
+  /** The tools a turn declares only when it declares a window's tools; a windowless turn refuses each. */
+  const windowGatedTools = (scope: ChatTurnOwnerScope, options: { excludeToolNames?: ReadonlySet<string> }) => {
+    const declares = declaresWindowTools(scope);
+    const owner = { permission: "ask", rendererOwner: declares, assistantMode: scope.assistantMode, bot: scope.botBound };
+    const telegram = scope.interactionSurface === "telegram";
+    return [
+      ...(canUseBrowserTools(owner) ? [browserTool] : []),
+      ...(canUseDeviceTools({ ...owner, enabled: true, agentAccess: true }) ? [deviceTool] : []),
+      ...(!scope.botBound && !scope.assistantMode && !telegram && !options.excludeToolNames?.has("schedule_task") &&
+        (declares || scope.remote) ? ownerAppTools : []),
+      ...(designCanvasToolsAllowed({
+        flagEnabled: true, localRenderer: declares && !scope.remote, assistant: scope.assistantMode,
+        telegram, hasWorkspaceFolder: true, designMode: true,
+      }) ? [canvasTool] : []),
+    ].filter((tool) => !options.excludeToolNames?.has(tool.name));
+  };
   const ownedTurnTools = (scope: ChatTurnOwnerScope, options: { allowComputerUse?: boolean; excludeToolNames?: ReadonlySet<string> }) => [
     ...workspaceTools, codemodeTool,
     ...(options.allowComputerUse === false ? [] : [computerUseTool]),
@@ -777,6 +809,7 @@ describe("prompt prefix stability: tool list identical across turns", () => {
       remoteOwner: scope.remote,
       excluded: options.excludeToolNames?.has("ask_user_question") ?? false,
     }) ? [questionTool] : []),
+    ...windowGatedTools(scope, options),
   ];
   const desktopScope: ChatTurnOwnerScope = { window: true, remote: false, usageSource: "chat", assistantMode: false, botBound: false };
 
@@ -796,12 +829,17 @@ describe("prompt prefix stability: tool list identical across turns", () => {
     for (const description of ["List, propose and test this chat's hooks.", "Ask the person a question"]) {
       assert.ok(current.carries(description), description);
     }
-    // Declared is not runnable: no window owns the owed turn.
+    // Declared is not runnable: no window owns the owed turn, so every tool a
+    // window's gate declared is refused, as llm-client lists them.
+    const windowOnly = windowGatedTools(owedScope, owed.options).map((tool) => tool.name);
+    for (const name of ["browser_open", "device_list", "aiden_open", "canvas_place_frame"]) {
+      assert.ok(windowOnly.includes(name), `the owed turn declares ${name}`);
+    }
     const refuse = chatTurnToolRefusal(workspaceSurface, {
       ...chatTurnAudienceFor({ windowless: windowlessChatTurn(owedScope) }, {}),
-      windowOnlyToolNames: new Set(["browser_open", "canvas_place_frame"]),
+      windowOnlyToolNames: new Set(windowOnly),
     });
-    for (const name of ["computer_use", "hooks", "ask_user_question", "todo", "advisor", "browser_open", "canvas_place_frame"]) {
+    for (const name of ["computer_use", "hooks", "ask_user_question", "todo", "advisor", ...windowOnly]) {
       assert.match(refuse(name) ?? "", /not available in this turn.*no window owns it/su, name);
     }
     for (const name of ["read_file", "workspace_artifact", "subagent"]) assert.equal(refuse(name), undefined, name);
