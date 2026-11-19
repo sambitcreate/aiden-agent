@@ -14,6 +14,7 @@ import { requireGenerativeUiTitle } from "./generative-ui-html.js";
 import { declarePiRuntimeReplay } from "./pi-runtime-tool.js";
 import { declareOnDemandSummary } from "./on-demand-tools.js";
 import { checkWorkspaceArtifactPage } from "./workspace-artifacts/check.js";
+import { formatCheckReport } from "./check-report.js";
 
 export { RENDER_UI_TOOL_NAME };
 
@@ -36,10 +37,11 @@ export interface RenderUiToolOptions {
 function describeVisualCheck(visual: ChatUiVisualV1): string {
   const check = checkWorkspaceArtifactPage({ visual, sources: [], actions: [] }, undefined);
   if (!check.findings.length) return "";
-  return [
-    "\nVisual check (these draw empty; fix them and call render_ui again with the same title to replace the visual):",
-    ...check.findings.map((finding) => `- ${finding}`),
-  ].join("\n");
+  return formatCheckReport({
+    label: "Visual check",
+    findings: check.findings,
+    fix: "These draw empty; fix them and call render_ui again with the same title to replace the visual.",
+  });
 }
 
 function describeDiagnostics(diagnostics: readonly AidenUiDiagnostic[]): string {

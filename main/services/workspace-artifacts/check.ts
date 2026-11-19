@@ -9,15 +9,14 @@ import {
   type AidenUiExprV1,
   type AidenUiNodeV1,
 } from "../../../renderer/shared/aiden-ui/types.js";
+import { formatCheckReport } from "../check-report.js";
 import {
   workspaceArtifactDataJson,
   type WorkspaceArtifactSourceResultV1,
   type WorkspaceArtifactV1,
 } from "../../../renderer/shared/workspace-artifacts.js";
 
-const MAX_FINDINGS = 10;
 const MAX_NAMES_SHOWN = 12;
-const MAX_OUTPUT_CHARS = 3_000;
 /** The check runs in the main process, so a hostile page or huge data must not stall the app. */
 const DEADLINE_MS = 250;
 /** Names from the data are shown only when they look like plain identifiers. */
@@ -423,25 +422,16 @@ export function checkWorkspaceArtifactPage(
     }
   }
 
-  if (findings.length > MAX_FINDINGS) {
-    const extra = findings.length - MAX_FINDINGS;
-    findings.splice(MAX_FINDINGS, extra, `…and ${extra} more`);
-  }
   return { findings, unchecked };
 }
 
 /** The check as text for the end of the tool result. */
 export function describeWorkspaceArtifactPageCheck(check: WorkspaceArtifactPageCheck): string {
-  const lines: string[] = [];
-  if (check.findings.length) {
-    lines.push("\nPage check (fix these, then update the page):");
-    for (const finding of check.findings) lines.push(`- ${finding}`);
-  } else if (!check.unchecked.length) {
-    lines.push("\nPage check: every value the page reads was found.");
-  } else {
-    lines.push("\nPage check: no problems in what was drawn.");
-  }
-  if (check.unchecked.length) lines.push(`Not checked: ${check.unchecked.join("; ")}.`);
-  const text = lines.join("\n");
-  return text.length > MAX_OUTPUT_CHARS ? `${text.slice(0, MAX_OUTPUT_CHARS)}…` : text;
+  return formatCheckReport({
+    label: "Page check",
+    findings: check.findings,
+    fix: "Fix them, then update the page.",
+    unchecked: check.unchecked,
+    ...(check.unchecked.length ? {} : { clean: "every value the page reads was found" }),
+  });
 }

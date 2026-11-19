@@ -225,3 +225,13 @@ test("a check that runs out of time stops and says the rest was not checked", ()
   );
   assert.ok(result.unchecked.includes("the rest of the page (the check ran out of time)"));
 });
+
+test("a page with more problems than the report lists counts them all and lists the first ten", () => {
+  const reads = Array.from({ length: 14 }, (_, index) => `<Text>{$pr.missing${index}}</Text>`).join("");
+  const result = check(`<Visual title="PRs"><Each in={$pulls} as="pr">${reads}</Each></Visual>`, { pulls: ok(ROWS) });
+  assert.equal(result.findings.length, 14);
+  const text = describeWorkspaceArtifactPageCheck(result);
+  assert.match(text, /^\nPage check: 14 problems found\. Fix them, then update the page\./u);
+  assert.equal(text.match(/^- \$pr\.missing/gmu)?.length, 10);
+  assert.match(text, /^- …and 4 more$/mu);
+});
