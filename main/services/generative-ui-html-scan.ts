@@ -704,9 +704,14 @@ const XML_MARKUP_NAMESPACE = /www\.w3\.org\/(?:1999\/xhtml|2000\/svg|1998\/Math\
 /**
  * A DOCTYPE with an internal subset, an attribute-list or an entity
  * declaration: XML that can give an element a namespace by default, or
- * spell markup through an entity, without writing it where it is used.
+ * spell markup through an entity, without writing it where it is used. A
+ * quoted literal in the DOCTYPE is skipped whole, so a `<` or `>` in a
+ * system or public ID does not hide the `[` after it. The quoted and
+ * unquoted alternatives begin with different characters, and a quote
+ * character moves each DOCTYPE read between the same three states, so no
+ * more than three reads cross any one character and the test is linear.
  */
-const XML_DECLARATIONS = /<!DOCTYPE[^<>[]*\[|<!ATTLIST|<!ENTITY/iu;
+const XML_DECLARATIONS = /<!DOCTYPE(?:[^<>["']|"[^"]*"|'[^']*')*\[|<!ATTLIST|<!ENTITY/iu;
 /**
  * A start tag (any prefix) of an element whose content HTML reads as text,
  * where XML reads markup in it.
@@ -733,20 +738,21 @@ export const XML_MARKUP_IN_DECLARATION_LIMIT =
 const XML_MARKUP_OPENER = /<(?:!--|!\[CDATA\[|\?|!DOCTYPE)/gu;
 
 /**
- * Where a DOCTYPE without an internal subset ends: the first `>` outside a
- * quoted literal, after `from`. -1 when it does not end or opens a subset.
+ * Where a DOCTYPE ends: the index of the first `>` outside a quoted literal,
+ * after `from`, "subset" when a `[` outside a quoted literal opens an
+ * internal subset first, or "unterminated" when it does not end.
  */
-function xmlDoctypeEnd(markup: string, from: number): number {
+function xmlDoctypeEnd(markup: string, from: number): number | "subset" | "unterminated" {
   let quote = "";
   for (let at = from; at < markup.length; at += 1) {
     const char = markup[at]!;
     if (quote) {
       if (char === quote) quote = "";
     } else if (char === '"' || char === "'") quote = char;
-    else if (char === "[") return -1;
+    else if (char === "[") return "subset";
     else if (char === ">") return at;
   }
-  return -1;
+  return "unterminated";
 }
 
 /**
@@ -761,11 +767,12 @@ function xmlDoctypeEnd(markup: string, from: number): number {
  * processing instruction or DOCTYPE is kept whole, so a `<!--` in one does not
  * start a comment, and one that holds a `<` or `>` before its XML end is
  * refused, since HTML ends it at that `>` and reads what follows as markup
- * XML reads as part of it. One that does not end stops the scan: the rest is
- * kept as text. XML has no `<` in an attribute value, so the next `<` after a
- * start tag begins its content's first markup. Each step searches forward
- * from where the last one ended and the scan stops at the first opener with
- * no end, so this is linear.
+ * XML reads as part of it, as is a DOCTYPE with an internal subset (a `[`
+ * outside its quoted literals). One that does not end stops the scan: the
+ * rest is kept as text. XML has no `<` in an attribute value, so the next
+ * `<` after a start tag begins its content's first markup. Each step
+ * searches forward from where the last one ended and the scan stops at the
+ * first opener with no end, so this is linear.
  */
 function xmlAsHtml(markup: string): { text: string } | { limit: string } {
   let text = "";
@@ -795,7 +802,11 @@ function xmlAsHtml(markup: string): { text: string } | { limit: string } {
       opener.lastIndex = at;
     } else {
       const from = start + match[0].length;
-      const end = match[0] === "<?" ? markup.indexOf("?>", from) : xmlDoctypeEnd(markup, from);
+      const doctypeEnd = match[0] === "<?" ? undefined : xmlDoctypeEnd(markup, from);
+      // An internal subset can declare what the check does not read, so it
+      // is refused as checkXml refuses one.
+      if (doctypeEnd === "subset") return { limit: XML_DECLARATIONS_LIMIT };
+      const end = doctypeEnd === undefined ? markup.indexOf("?>", from) : doctypeEnd === "unterminated" ? -1 : doctypeEnd;
       // Unterminated: XML rejects the document, and nothing after it is
       // dropped, so the rest is kept as text to be checked.
       if (end === -1) break;

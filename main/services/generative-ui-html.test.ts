@@ -806,6 +806,33 @@ test("html admission names the XML a script parses that it cannot read as the br
     assert.throws(() => validateGenerativeUiHtml(html), /processing instruction or DOCTYPE holding < or >.*Remove the < and > from the processing instruction or DOCTYPE/u);
   }
   for (const html of [declared, cdata, instruction, doctype]) assert.equal(isGenerativeUiDraftAcceptable(html), false);
+  // A < or > in a DOCTYPE's quoted ID does not hide the internal subset after
+  // it, which XML reads and HTML ends at the first >.
+  const subsets = [
+    literalSink(parsedXml(`<!DOCTYPE r SYSTEM "a>b<!--" []><r xmlns="${XHTML_NS}">${XML_ERROR_IMG}<!-- --></r>`, "text/xml")),
+    literalSink(parsedXml(`<!DOCTYPE r PUBLIC 'p' 'a>b<!--' [ ]><r xmlns="${XHTML_NS}">${XML_ERROR_IMG}<!-- --></r>`, "text/xml")),
+    literalSink(parsedXml(`<!DOCTYPE r SYSTEM "a<b" [<!ELEMENT r ANY>]><r xmlns="${XHTML_NS}">${XML_ERROR_IMG}</r>`, "image/svg+xml")),
+    literalSink(
+      parsedXml(`<!DOCTYPE html SYSTEM "a><!--" []><html xmlns="${XHTML_NS}"><body>${XML_ERROR_IMG}</body></html>`, "application/xhtml+xml"),
+    ),
+  ];
+  for (const html of subsets) {
+    assert.throws(() => validateGenerativeUiHtml(html), /DOCTYPE internal subset, an <!ENTITY> or an <!ATTLIST> declaration\. Remove the DOCTYPE internal subset/u, html);
+    assert.equal(isGenerativeUiDraftAcceptable(html), false, html);
+    for (const chunk of [1, 7, 64]) assert.equal(streamInChunks(html, chunk).admitted, false, `${html} streamed by ${chunk}`);
+  }
+  for (const html of [
+    literalSink(parsedXml(`<!DOCTYPE rss SYSTEM "feed[1].dtd"><rss><channel><title>t</title></channel></rss>`, "text/xml")),
+    literalSink(
+      parsedXml(
+        `<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="${XHTML_NS}"><body><p>Hi</p></body></html>`,
+        "application/xhtml+xml",
+      ),
+    ),
+  ]) {
+    assert.ok(validateGenerativeUiHtml(html).byteLength > 0, html);
+    assert.equal(isGenerativeUiDraftAcceptable(html), true, html);
+  }
   const declarations = literalSink(
     parsedXml(
       `<?xml version="1.0"?><?xml-stylesheet href="a.xsl" type="text/xsl"?><!DOCTYPE note SYSTEM "note.dtd"><r xmlns="${XHTML_NS}"><!-- note --><p>Hi</p></r>`,
