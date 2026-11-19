@@ -706,16 +706,20 @@ function blobStart(text: string, wordStart: boolean): number {
 }
 
 /** What `staysInside` refuses, as a refusal says it. */
-const OUTSIDE_PATHS = "no absolute path, drive letter (C:), ~, or .. that leads out of it";
+const OUTSIDE_PATHS = "no absolute path, drive letter (C:), home folder (~ or ~/…), or .. that leads out of it";
 
 /** Whether a template holds a placeholder, and so runs without a shell. */
 export function workspaceArtifactTemplateHasParams(template: string): boolean {
   return PLACEHOLDER_TEST.test(template);
 }
 
-/** Whether a path stays inside the folder it is read from: relative, with no drive letter, not under ~, and no `..` that climbs out. */
+/**
+ * Whether a path stays inside the folder it is read from: relative, with no
+ * drive letter, not the home folder (`~` or `~/…`), and no `..` that climbs
+ * out. `~notes.md` is a file name: nothing expands it without a shell.
+ */
 function staysInside(path: string): boolean {
-  if (/^[/\\~]/u.test(path) || /^[A-Za-z]:/u.test(path)) return false;
+  if (/^[/\\]/u.test(path) || /^~(?:[/\\]|$)/u.test(path) || /^[A-Za-z]:/u.test(path)) return false;
   let depth = 0;
   for (const segment of path.split(/[/\\]/u)) {
     if (segment === "..") depth -= 1;

@@ -726,6 +726,15 @@ test("where a value lands decides what it may be: no option, no refspec, no file
   for (const value of ["C:\\Windows\\win.ini", "a:b.txt"]) {
     assert.throws(() => run("cat {{x}}", value), /x must name a file inside the workspace: .*drive letter/u, value);
   }
+  // ~ alone or before a slash is the home folder; anywhere else it is part of a file name, which nothing expands without a shell.
+  for (const value of ["~", "~/notes.md", "~\\notes.md"]) {
+    assert.throws(() => run("cat {{x}}", value), /x must name a file inside the workspace: .*home folder/u, value);
+  }
+  assert.throws(() => run("git show HEAD:{{x}}", "~/.netrc"), /x must name a file inside the workspace/u);
+  for (const value of ["~notes.md", "~$report.docx", "drafts/~old.md"]) {
+    assert.deepEqual(run("cat {{x}}", value).steps[0]!.pipeline[0]!.argv, ["cat", value], value);
+  }
+  assert.deepEqual(run("git show HEAD:{{x}}", "~notes.md").steps[0]!.pipeline[0]!.argv, ["git", "show", "HEAD:./~notes.md"]);
   assert.deepEqual(run("cat notes/{{x}}.md", "a/../b").steps[0]!.pipeline[0]!.argv, ["cat", "notes/a/../b.md"]);
   // test compares text as text.
   assert.deepEqual(run("test {{x}} = main", "/etc/passwd").steps[0]!.pipeline[0]!.argv, ["test", "/etc/passwd", "=", "main"]);
