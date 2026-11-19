@@ -90,6 +90,12 @@ const URL_ATTRIBUTES: ReadonlySet<string> = new Set(["href", "src", "action", "f
 const SCRIPT_SOURCE_ATTRIBUTES: ReadonlySet<string> = new Set(["src", "href", "xlink:href"]);
 const SMIL_ELEMENTS: ReadonlySet<string> = new Set(["set", "animate"]);
 const SMIL_VALUE_ATTRIBUTES: ReadonlySet<string> = new Set(["to", "from", "by", "values"]);
+/**
+ * A SMIL `attributeName` that animates a link: `href`, or `href` under any
+ * prefix, since XML a script parses can bind any prefix to XLink
+ * (`xmlns:q="http://www.w3.org/1999/xlink"` makes `q:href` the link).
+ */
+const SMIL_HREF_TARGET = /^(?:[^:]+:)?href$/iu;
 const UNSAFE_SCHEME = /^(?:javascript:|data:\s*text\/html)/u;
 /** An unfinished start tag up to this many characters is read again on every chunk. */
 const PENDING_TAG_REREAD_SIZE = 1024;
@@ -1816,10 +1822,7 @@ export class HtmlScanner {
     if (into.url !== undefined) return;
     const smilTarget =
       SMIL_ELEMENTS.has(tag) &&
-      attributes.some((attribute, index) => {
-        const target = attribute.value.trim().toLowerCase();
-        return names[index] === "attributename" && (target === "href" || target === "xlink:href");
-      });
+      attributes.some((attribute, index) => names[index] === "attributename" && SMIL_HREF_TARGET.test(attribute.value.trim()));
     for (const [index, attribute] of attributes.entries()) {
       const name = names[index]!;
       if (URL_ATTRIBUTES.has(name)) {

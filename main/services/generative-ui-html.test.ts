@@ -340,6 +340,18 @@ const XML_DOCUMENTS: Record<string, [xml: string, type: string]> = {
     `<svg xmlns="http://www.w3.org/2000/svg" xmlns:q="http://www.w3.org/1999/xlink"><a href="#top" q:href="javascript:alert(1)"><text y="9">go</text></a></svg>`,
     "image/svg+xml",
   ],
+  "an SVG <set> of an href under another XLink prefix": [
+    `<svg xmlns="http://www.w3.org/2000/svg" xmlns:q="http://www.w3.org/1999/xlink"><a><set attributeName="q:href" to="javascript:alert(1)"/><text y="9">go</text></a></svg>`,
+    "image/svg+xml",
+  ],
+  "an SVG <set> of an href under another XLink prefix, parsed as text/xml": [
+    `<svg xmlns="http://www.w3.org/2000/svg" xmlns:q="http://www.w3.org/1999/xlink"><a><set attributeName=" q:href " to="javascript:alert(1)"/><text y="9">go</text></a></svg>`,
+    "text/xml",
+  ],
+  "an SVG <animate> of an href under another XLink prefix": [
+    `<svg xmlns="http://www.w3.org/2000/svg" xmlns:q="http://www.w3.org/1999/xlink"><a><animate attributeName="Q:HREF" values="#a;javascript:alert(1)"/><text y="9">go</text></a></svg>`,
+    "image/svg+xml",
+  ],
 };
 const parsedXml = (xml: string, type: string) => `document.body.append(new DOMParser().parseFromString(${JSON.stringify(xml)}, '${type}').documentElement)`;
 const literalSink = (js: string) => `<p>x</p><button id=b onclick="void 0">Go</button><a id=a>x</a><script>${js}</script>`;
@@ -489,6 +501,7 @@ const REFUSED_MARKUP: Record<string, string> = {
   "an svg <script> that loads by href": '<svg><script href="https://evil.test/a.js"></script></svg>',
   "an svg <set> of href to javascript:": '<svg><a><set attributeName="href" to="javascript:alert(1)"/><text>x</text></a></svg>',
   "an svg <animate> through javascript: values": '<svg><a><animate attributeName="xlink:href" values="#a; javascript:alert(1)"/><text>x</text></a></svg>',
+  "an svg <set> of a prefixed href to javascript:": '<svg><a><set attributeName="q:href" to="javascript:alert(1)"/><text>x</text></a></svg>',
   "a location built from joined strings": '<script>location.href = "java" + "script:alert(1)"</script>',
   "a bracketed href set to a javascript: URL": '<script>a["href"] = "javascript:alert(1)"</script>',
   "a javascript: URL in escaped string characters": '<script>link.href = "\\x6aavascript:alert(1)"</script>',
@@ -586,6 +599,7 @@ const ADMITTED_MARKUP: Record<string, string> = {
   "an svg <use> of a local id": '<svg><use href="#a"/></svg>',
   "a data: PNG image": '<img src="data:image/png;base64,AAAA">',
   "an svg <set> of a fill named javascript:": '<svg><rect><set attributeName="fill" to="javascript:"/></rect></svg>',
+  "an svg <set> of an attribute whose name ends in href": '<svg><rect><set attributeName="data-href" to="javascript:"/></rect></svg>',
   "innerHTML that writes a label naming JavaScript": '<script>legend.innerHTML = "<b>JavaScript: 41%</b>";</script>',
   "a division after a parenthesized value": "<script>var r = (a) / 2; var s = \"/\"; location='https://x';</script>",
   "a division inside an if body": '<script>if (x) { y = (a + b) / "2"; }</script>',
