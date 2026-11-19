@@ -1492,7 +1492,7 @@ async function prepareGeneration(
   let formFill: FormFillService | undefined;
   const sourceAttachments = currentFormFillAttachments(chat.messages);
   // A windowless turn skips the readiness probe: it could not run the specialist anyway.
-  if (FORM_FILL_MUTATION_AVAILABLE && computerUse && !windowless && settings.formFillSpecialistEnabled === true && sourceAttachments.length) {
+  if (FORM_FILL_MUTATION_AVAILABLE && computerUse && settings.formFillSpecialistEnabled === true && !windowless && sourceAttachments.length) {
     const status = await computerUseStatus.status({ signal });
     const artifact = status.ready && computerUseGenerationGate.isCurrent(computerUseGateSnapshot)
       ? await formFillArtifacts.refresh()
