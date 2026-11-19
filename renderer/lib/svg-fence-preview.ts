@@ -1,5 +1,6 @@
 // Decides whether a fenced ```svg block in a chat reply can be shown as a
-// drawing, and builds the `data:` URL an <img> draws it from. An <img> runs no
+// drawing, and builds the `data:` URL an <img> draws it from (adding the SVG
+// namespace when the root leaves it out). An <img> runs no
 // script and loads nothing else, so the drawing stays inert. This is only a
 // cheap shape check: whether the browser can actually decode the SVG is found
 // out by the <img> itself (its error event shows a note instead).
@@ -11,6 +12,9 @@ const DATA_URL_PREFIX = "data:image/svg+xml;charset=utf-8,";
 // An optional XML prolog, then any comments, before the root element.
 const LEADING_PROLOG = /^(?:<\?xml[\s\S]*?\?>\s*)?(?:<!--[\s\S]*?-->\s*)*/u;
 const SVG_ROOT_START = /^<svg[\s>/]/u;
+// The root start tag, allowing ">" inside quoted attribute values.
+const ROOT_START_TAG = /^<svg(?:"[^"]*"|'[^']*'|[^'">])*>/u;
+const SVG_NAMESPACE = "http://www.w3.org/2000/svg";
 
 export function svgPreviewSource(code: string, lang: string | undefined): string | null {
   if (lang?.toLowerCase() !== "svg") return null;
@@ -21,5 +25,16 @@ export function svgPreviewSource(code: string, lang: string | undefined): string
   const body = source.replace(LEADING_PROLOG, "");
   if (!SVG_ROOT_START.test(body) || !body.endsWith("</svg>")) return null;
   if (new TextEncoder().encode(source).length > SVG_PREVIEW_MAX_BYTES) return null;
-  return `${DATA_URL_PREFIX}${encodeURIComponent(source)}`;
+  return `${DATA_URL_PREFIX}${encodeURIComponent(withSvgNamespace(source, body))}`;
+}
+
+// Browsers decode an SVG image only in the SVG namespace, and agent-written SVG
+// often leaves it out. Add it when the root start tag names no default
+// namespace at all; an explicit one (even xmlns="") is left for the browser.
+function withSvgNamespace(source: string, body: string): string {
+  const startTag = ROOT_START_TAG.exec(body)?.[0] ?? "";
+  const unquoted = startTag.replace(/"[^"]*"|'[^']*'/gu, "");
+  if (/\sxmlns\s*=/u.test(unquoted)) return source;
+  const rootAt = source.length - body.length + "<svg".length;
+  return `${source.slice(0, rootAt)} xmlns="${SVG_NAMESPACE}"${source.slice(rootAt)}`;
 }

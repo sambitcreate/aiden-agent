@@ -4,6 +4,7 @@ import { afterEach, test } from "node:test";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { CodeBlock } from "./code-block.js";
+import { Markdown } from "./markdown.js";
 
 const SVG =
   '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"><circle cx="5" cy="5" r="4"/></svg>';
@@ -69,4 +70,14 @@ test("an svg the browser cannot draw shows a note instead of a blank card", () =
   fireEvent.error(screen.getByRole("img", { name: "SVG preview" }));
   assert.equal(screen.queryByRole("img", { name: "SVG preview" }), null);
   assert.ok(screen.getByText("Couldn't draw this SVG."));
+});
+
+test("chat Markdown offers Preview on svg fences, render_ui's restricted Markdown does not", () => {
+  const content = `Here:\n\n\`\`\`svg\n${SVG}\n\`\`\`\n`;
+  const restricted = { inert: true, openLink: () => {} };
+  assert.deepEqual(previewButtons(renderToStaticMarkup(<Markdown content={content} />)), ["false"]);
+  assert.deepEqual(
+    previewButtons(renderToStaticMarkup(<Markdown content={content} restricted={restricted} />)),
+    [],
+  );
 });

@@ -113,10 +113,7 @@ export const CodeBlock = React.memo(function CodeBlock({
       ) : (
         <pre className="code-font-sized overflow-x-auto p-3 leading-relaxed">
           {html ? (
-            <code
-              className="hljs font-mono text-small"
-              dangerouslySetInnerHTML={{ __html: html }}
-            />
+            <code className="hljs font-mono text-small" dangerouslySetInnerHTML={{ __html: html }} />
           ) : (
             <code className="hljs font-mono text-small">{display}</code>
           )}

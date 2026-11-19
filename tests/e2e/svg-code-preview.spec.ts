@@ -15,7 +15,7 @@ const DRAWING = [
   "</svg>",
   "```",
 ].join("\n");
-// No xmlns: Chromium refuses to decode it as an image, so the note must show.
+// No xmlns, as agents often write it: the preview adds the namespace so it still draws.
 const NO_XMLNS = ["```svg", '<svg viewBox="0 0 10 10"><circle cx="5" cy="5" r="4"/></svg>', "```"].join("\n");
 
 // Real chat Markdown and the built stylesheet in Chromium, light and dark.
@@ -65,14 +65,15 @@ test("svg code blocks toggle between code and drawing without a blank card or ne
     const drawing = page.getByRole("img", { name: "SVG preview" });
     await expect.poll(() => drawing.evaluate((image: HTMLImageElement) => image.complete && image.naturalWidth > 0)).toBe(true);
 
-    // The namespace-less fence must end up drawn or explained, never a blank card.
+    // The namespace-less fence is drawn, never a blank card, and never the failure note.
     await bareToggle.click();
     await expect.poll(async () => {
       if (await page.getByText("Couldn't draw this SVG.").isVisible()) return "note";
       const images = page.getByRole("img", { name: "SVG preview" });
       if ((await images.count()) === 2 && await images.nth(1).evaluate((image: HTMLImageElement) => image.complete && image.naturalWidth > 0)) return "drawing";
       return "pending";
-    }).not.toBe("pending");
+    }).toBe("drawing");
+    await expect(page.getByText("Couldn't draw this SVG.")).toHaveCount(0);
 
     await drawingToggle.focus();
     await page.keyboard.press("Tab");

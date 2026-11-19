@@ -52,3 +52,32 @@ test("a source over the UTF-8 cap has no preview, one at the cap does", () => {
   assert.ok(multibyte.length < SVG_PREVIEW_MAX_BYTES);
   assert.equal(svgPreviewSource(multibyte, "svg"), null);
 });
+
+test("a root without a namespace gets the SVG namespace so the browser can draw it", () => {
+  const bare = '<svg viewBox="0 0 10 10" data-note="xmlns=nope"><circle r="4"/></svg>';
+  assert.equal(
+    decode(svgPreviewSource(bare, "svg")!),
+    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10" data-note="xmlns=nope"><circle r="4"/></svg>',
+  );
+  const prolog = '<?xml version="1.0"?>\n<!-- <svg> -->\n<svg\n  width="4"><path d="M0 0"/></svg>';
+  assert.equal(
+    decode(svgPreviewSource(prolog, "svg")!),
+    '<?xml version="1.0"?>\n<!-- <svg> -->\n<svg xmlns="http://www.w3.org/2000/svg"\n  width="4"><path d="M0 0"/></svg>',
+  );
+  const xlinkOnly = '<svg xmlns:xlink="http://www.w3.org/1999/xlink"><use xlink:href="#a"/></svg>';
+  assert.ok(
+    decode(svgPreviewSource(xlinkOnly, "svg")!).startsWith(
+      '<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink=',
+    ),
+  );
+});
+
+test("a root that already names a default namespace is left as written", () => {
+  for (const source of [
+    CIRCLE,
+    "<svg xmlns='http://www.w3.org/2000/svg'><g/></svg>",
+    '<svg xmlns=""><g/></svg>',
+  ]) {
+    assert.equal(decode(svgPreviewSource(source, "svg")!), source);
+  }
+});
