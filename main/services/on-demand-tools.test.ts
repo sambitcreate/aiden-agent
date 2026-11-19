@@ -290,3 +290,39 @@ test("loading a visual tool answers with its guide in the same step, and a guide
   const guide = await answer(["visualize_guide"]);
   assert.equal(guide, "Loaded visualize_guide. Call it from your next step.");
 });
+
+test("a load answer leaves out the guide parts the chat has already read, and its lead-in goes with what is sent", async () => {
+  const { extension } = createGenerativeUiExtensionRuntime({ onArtifact: () => true, onUiVisual: () => true });
+  const loading = createOnDemandTools([fixtureTool("read_file", "Read."), ...extension.tools!])!;
+  const guideTool = extension.tools!.find((tool) => tool.name === "visualize_guide")!;
+  const read = await guideTool.execute("guide", { modules: ["design", "html"] });
+  const messages: AgentMessage[] = [
+    { role: "user", content: "chart it", timestamp: 1 },
+    fauxAssistantMessage([fauxToolCall("visualize_guide", { modules: ["design", "html"] })], { stopReason: "toolUse" }),
+    { role: "toolResult", toolCallId: "guide", toolName: "visualize_guide", content: read.content, isError: false, timestamp: 2 },
+  ];
+  const answer = async (names: string[]) => {
+    const result = await loading.loader.execute("load", { names });
+    return result.content.map((part) => (part.type === "text" ? part.text : "")).join("");
+  };
+  const before = loading.initialTools(messages).map((tool) => tool.name);
+  await loading.prepare({ messages, tools: loading.initialTools(messages) });
+  assert.ok(before.includes("visualize_guide"));
+
+  const html = await answer(["render_artifact"]);
+  assert.doesNotMatch(html, /## Design/u, "the design part was read through visualize_guide");
+  assert.doesNotMatch(html, /## HTML structure/u);
+  assert.match(html, /## Charts[\s\S]*## Interactivity/u, "the parts not read yet still come");
+  assert.equal(html.split("do not call visualize_guide").length, 2, "one lead-in before the parts sent");
+
+  // Once the load answer itself is in the chat, loading render_artifact again repeats nothing.
+  const later: AgentMessage[] = [
+    ...messages,
+    fauxAssistantMessage([fauxToolCall(LOAD_TOOLS_TOOL_NAME, { names: ["render_artifact"] })], { stopReason: "toolUse" }),
+    { role: "toolResult", toolCallId: "load", toolName: LOAD_TOOLS_TOOL_NAME, content: [{ type: "text", text: html }], isError: false, timestamp: 3 },
+  ];
+  await loading.prepare({ messages: later, tools: loading.initialTools(later) });
+  assert.equal(await answer(["render_artifact"]), "Loaded render_artifact. Call it from your next step.");
+  // render_ui's catalog was never read, so it still comes with its lead-in.
+  assert.match(await answer(["render_ui"]), /do not call visualize_guide[\s\S]*Aiden UI catalog \(render_ui\)/u);
+});

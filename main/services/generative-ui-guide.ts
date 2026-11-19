@@ -131,21 +131,18 @@ export function generativeUiGuide(
  * The guide modules a visual tool needs, as `load_tools` answer notes, so the
  * answer that loads render_ui, render_artifact or workspace_artifact already
  * carries its guide and the first visual takes no separate visualize_guide step.
+ * A part the chat already read (through visualize_guide or an earlier load) is
+ * left out of the answer, and the lead-in goes only with a part that is sent.
  */
 export function visualizeGuideLoadNotes(
   modules: readonly GenerativeUiGuideModule[],
   options: GenerativeUiGuideOptions = {},
-): { key: string; text: () => string }[] {
+): { key: string; heading: string; text: () => string }[] {
   const inlineVisuals = options.inlineVisuals !== false;
   const unique = GENERATIVE_UI_GUIDE_MODULES.filter((module) => modules.includes(module));
-  return [
-    {
-      key: "visualize_guide:header",
-      text: () => "Their guide follows. You have read it now, so do not call visualize_guide for these parts.",
-    },
-    ...unique.map((module) => ({
-      key: `visualize_guide:${module}:${module === "catalog" && !inlineVisuals ? "pages" : "visuals"}`,
-      text: () => generativeUiGuide([module], { inlineVisuals }),
-    })),
-  ];
+  return unique.map((module) => ({
+    key: `visualize_guide:${module}:${module === "catalog" && !inlineVisuals ? "pages" : "visuals"}`,
+    heading: "Their guide follows. You have read it now, so do not call visualize_guide for these parts.",
+    text: () => generativeUiGuide([module], { inlineVisuals }),
+  }));
 }

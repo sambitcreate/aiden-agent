@@ -67,10 +67,16 @@ const MAX_SUMMARY_CHARACTERS = 90;
 export const MAX_ON_DEMAND_ROUTING_CHARACTERS = 160;
 const MAX_NAMES_PER_CALL = 20;
 
-/** Text a tool adds to the `load_tools` answer that loads it; one per `key` per answer. */
+/**
+ * Text a tool adds to the `load_tools` answer that loads it; one per `key`
+ * per answer. A note whose text a tool result in the chat already holds (the
+ * model read that guide part earlier) is left out. `heading` leads the notes
+ * that carry it, once per answer, and only when one of them is sent.
+ */
 export interface OnDemandLoadNote {
   readonly key: string;
   readonly text: () => string;
+  readonly heading?: string;
 }
 
 type RoutedTool = AgentTool & {
@@ -101,19 +107,42 @@ export function declareOnDemandLoadNotes<T extends AgentTool>(tool: T, notes: re
   return Object.assign(tool, { onDemandLoadNotes: [...existing, ...notes] });
 }
 
-/** The notes of `loaded` tools, in load order, each key once. */
-function onDemandLoadAnswerNotes(loaded: readonly AgentTool[]): string[] {
+/**
+ * The notes of `loaded` tools, in load order, each key once, leaving out any
+ * whose text `alreadyRead` says the chat's tool results already hold.
+ */
+function onDemandLoadAnswerNotes(loaded: readonly AgentTool[], alreadyRead: (text: string) => boolean): string[] {
   const seen = new Set<string>();
+  const headed = new Set<string>();
   const texts: string[] = [];
   for (const tool of loaded) {
     for (const note of (tool as RoutedTool).onDemandLoadNotes ?? []) {
       if (seen.has(note.key)) continue;
       seen.add(note.key);
       const text = note.text().trim();
-      if (text) texts.push(text);
+      if (!text || alreadyRead(text)) continue;
+      const heading = note.heading?.trim();
+      if (heading && !headed.has(heading)) {
+        headed.add(heading);
+        texts.push(heading);
+      }
+      texts.push(text);
     }
   }
   return texts;
+}
+
+/** The text of every tool result in `messages`, read once the first time it is asked for. */
+function toolResultTexts(messages: readonly AgentMessage[]): (text: string) => boolean {
+  let texts: string[] | undefined;
+  return (text) => {
+    texts ??= messages.flatMap((message) =>
+      message.role === "toolResult" && !message.isError
+        ? [message.content.map((part) => (part.type === "text" ? part.text : "")).join("\n")]
+        : [],
+    );
+    return texts.some((result) => result.includes(text));
+  };
 }
 
 /** A tool's `load_tools` catalog line: its own routing line, or its description's first sentence. */
@@ -189,6 +218,8 @@ export function createOnDemandTools(
   const byName = new Map(onDemand.map((tool) => [tool.name, tool]));
   const available = new Set(byName.keys());
   const catalog = onDemand.map((tool) => `- ${tool.name}: ${onDemandCatalogLine(tool)}`).join("\n");
+  // The chat as of this run's latest step, so a load answer leaves out guide parts already read.
+  let transcript: readonly AgentMessage[] = [];
 
   const loader: AgentTool = declarePiRuntimeReplay(
     {
@@ -212,7 +243,7 @@ export function createOnDemandTools(
           );
         }
         const loaded = [...new Set(list)];
-        const notes = onDemandLoadAnswerNotes(loaded.map((name) => byName.get(name)!));
+        const notes = onDemandLoadAnswerNotes(loaded.map((name) => byName.get(name)!), toolResultTexts(transcript));
         return {
           content: [{
             type: "text",
@@ -229,6 +260,7 @@ export function createOnDemandTools(
     loader,
     onDemand,
     initialTools(messages, preload = [], declaredBefore = []) {
+      transcript = messages;
       // What an earlier run declared keeps its place; tools used since follow
       // in first-use order (the order `prepare` appended them in), and this
       // run's preloads go last, so nothing already declared moves.
@@ -246,6 +278,7 @@ export function createOnDemandTools(
       return [...everyday, loader, ...order.map((name) => byName.get(name)!)];
     },
     async prepare(context) {
+      transcript = context.messages;
       const present = new Set(context.tools?.map((tool) => tool.name) ?? []);
       // A host exclusion that removed the loader must never re-grant hidden tools.
       if (!present.has(LOAD_TOOLS_TOOL_NAME)) return context;
