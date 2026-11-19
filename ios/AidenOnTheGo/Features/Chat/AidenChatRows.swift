@@ -362,7 +362,7 @@ struct AidenMessageView: View, Equatable {
             text: message.text,
             reasoning: message.reasoning ?? "",
             timeline: message.timeline,
-            visuals: AidenChatVisualPresentation.rowVisuals(in: message),
+            visuals: AidenChatVisualPresentation.rowVisuals(in: message, viewerAvailable: loadVisualDocument != nil),
             images: AidenImageGenerationPlaceholderState.stripImageAttachments(for: message)
         )
     }
@@ -425,7 +425,7 @@ struct AidenMessageView: View, Equatable {
             }
             // Without a chronological timeline, visuals follow the reply text.
             if message.role == .assistant {
-                ForEach(AidenChatVisualPresentation.rowVisuals(in: message)) { visual in
+                ForEach(AidenChatVisualPresentation.rowVisuals(in: message, viewerAvailable: loadVisualDocument != nil)) { visual in
                     visualRow(visual)
                 }
             }
@@ -481,8 +481,15 @@ struct AidenMessageView: View, Equatable {
                 }
             }
             if message.role == .assistant {
-                // A visual's snapshot replaces the card for the artifact it shows.
-                ForEach(AidenChatVisualPresentation.unviewableHtmlArtifacts(in: message), id: \.id) { artifact in
+                // A visual's snapshot, or the viewer that opens it, replaces the
+                // card for the artifact it shows.
+                ForEach(
+                    AidenChatVisualPresentation.unviewableHtmlArtifacts(
+                        in: message,
+                        viewerAvailable: loadVisualDocument != nil
+                    ),
+                    id: \.id
+                ) { artifact in
                     VStack(alignment: .leading, spacing: 4) {
                         Text(artifact.title)
                             .font(.subheadline.weight(.semibold))

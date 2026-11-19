@@ -985,6 +985,7 @@
 
     <!-- Chat: interactive visual viewer (contract revision 35) -->
     <string name="chat_visual_open_interactive">Open interactive</string>
+    <string name="chat_visual_open_interactive_described">Open %1$s interactively</string>
     <string name="chat_visual_viewer_close">Close visual</string>
     <string name="chat_visual_viewer_show_image">Show snapshot image</string>
     <string name="chat_visual_viewer_loading">Loading visual</string>

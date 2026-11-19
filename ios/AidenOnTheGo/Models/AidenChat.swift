@@ -296,23 +296,34 @@ enum AidenChatVisualPresentation {
         return attachment
     }
 
-    /// The visuals that get an inline row, in reply order. An html visual
-    /// without a usable snapshot gets none: its "Can't view on this device"
+    /// The visuals that get an inline row, in reply order. An html visual gets
+    /// one when the message carries its usable snapshot, or when the Mac offers
+    /// the visual viewer (`viewerAvailable`), whose title card opens it
+    /// interactively. Otherwise it gets none: its "Can't view on this device"
     /// card already represents it. Other kinds always get a row, falling back
     /// from snapshot to description to title.
-    static func rowVisuals(in message: AidenChatMessage) -> [AidenChatVisual] {
+    static func rowVisuals(in message: AidenChatMessage, viewerAvailable: Bool) -> [AidenChatVisual] {
         (message.visuals ?? []).filter { visual in
-            visual.kind != .html || snapshotAttachment(for: visual, in: message) != nil
+            visual.kind != .html || replacesHtmlArtifactCard(visual, in: message, viewerAvailable: viewerAvailable)
         }
     }
 
     /// HTML artifacts that still need the "Can't view on this device" card:
-    /// those without a visual whose snapshot this message can show.
-    static func unviewableHtmlArtifacts(in message: AidenChatMessage) -> [AidenHtmlArtifact] {
+    /// those without a visual this message can show, either by its snapshot or,
+    /// when the Mac offers the viewer, interactively.
+    static func unviewableHtmlArtifacts(in message: AidenChatMessage, viewerAvailable: Bool) -> [AidenHtmlArtifact] {
         let replaced = Set((message.visuals ?? []).compactMap { visual in
-            snapshotAttachment(for: visual, in: message) == nil ? nil : visual.id
+            replacesHtmlArtifactCard(visual, in: message, viewerAvailable: viewerAvailable) ? visual.id : nil
         })
         return (message.htmlArtifacts ?? []).filter { !replaced.contains($0.id) }
+    }
+
+    private static func replacesHtmlArtifactCard(
+        _ visual: AidenChatVisual,
+        in message: AidenChatMessage,
+        viewerAvailable: Bool
+    ) -> Bool {
+        snapshotAttachment(for: visual, in: message) != nil || (viewerAvailable && visual.kind == .html)
     }
 }
 

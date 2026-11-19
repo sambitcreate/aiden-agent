@@ -678,7 +678,7 @@ Aiden draws inline visuals in desktop replies: native visuals from its component
 
 After a reply commits, the Mac renders each visual offscreen and stores the image as an ordinary PNG or JPEG attachment on the same message. Its `snapshotAttachmentId` appears once that attachment exists, which changes the chat `revision`, so clients that refetch on a revision change pick it up. Snapshot bytes are read through the existing attachment content route; nothing new is fetched.
 
-Clients place each visual after the timeline tool step whose `toolCallId` matches, or at the end of the reply when no step matches. They show the snapshot image when one is named, otherwise `fallbackText`, otherwise the title alone, and never show snapshot attachments a second time in the attachment list. Older clients that ignore `visuals` see the snapshots as ordinary image attachments. Phase 3 projects no markup; interactive native rendering on phones is a later, opt-in revision.
+Clients place each visual after the timeline tool step whose `toolCallId` matches, or at the end of the reply when no step matches. They show the snapshot image when one is named, otherwise `fallbackText`, otherwise the title alone, and never show snapshot attachments a second time in the attachment list. A phone without the snapshot shows the title with **Open interactive** when the Mac offers the viewer (revision 35, below), and the “Can't view on this device. View in Aiden Agent.” card only when it doesn't. Older clients that ignore `visuals` see the snapshots as ordinary image attachments. Phase 3 projects no markup; interactive native rendering on phones is a later, opt-in revision.
 
 ## Bot chat activity, revision 30 (`bot-activity-v1`, provisional)
 
@@ -805,7 +805,7 @@ References are scoped to the uploading device and Bot: another device's send is 
 
 ## Phone visual viewer, revision 35 (`chat-visual-viewer-v1`, provisional)
 
-A host announces `chat-visual-viewer-v1` when it ships the viewer bundle (`npm run build:visual-viewer`, part of `npm run build`). Phones keep the inline snapshot and open a visual full screen on tap:
+A host announces `chat-visual-viewer-v1` when it ships the viewer bundle (`npm run build:visual-viewer`, part of `npm run build`). Phones keep the inline snapshot and open a visual full screen on tap. An HTML visual whose snapshot is missing (its render failed or is still pending) still gets its row: the title with **Open interactive**, instead of the “Can't view on this device. View in Aiden Agent.” card, which phones show only when the Mac doesn't offer the viewer:
 
 - `GET /chats/{chatId}/visuals/{visualId}/document?scheme=light|dark&theme=<preset>` needs `chat:read` and read access to the chat. `visualId` is any id the chat projection lists in a message's `visuals`; anything else is `not_found`. Both query keys are optional (`light`, `aiden`); a preset id the host does not know falls back to `aiden`, and a malformed value or any other key is `invalid_request`.
 - The body is one self-contained `text/html` document of at most 12 MiB: the viewer page, its payload, and for an HTML visual the sandboxed guest with only the host libraries its source names (Chart.js, Plotly, KaTeX) inlined. It loads nothing from the network. Responses are `no-store`, carry a strong ETag (`If-None-Match` gets 304) and are gzip-compressed when the client accepts it.

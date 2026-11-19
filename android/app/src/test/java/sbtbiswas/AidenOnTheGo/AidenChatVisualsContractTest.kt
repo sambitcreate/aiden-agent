@@ -65,7 +65,7 @@ class AidenChatVisualsContractTest {
 
             // The html visual is the message's html artifact; its snapshot replaces the "can't view" notice.
             assertEquals(source, message.htmlArtifacts.orEmpty().map { it.id }, listOf(visuals[0].id))
-            assertEquals(source, emptyList<Any>(), aidenUnsupportedHtmlArtifacts(message))
+            assertEquals(source, emptyList<Any>(), aidenUnsupportedHtmlArtifacts(message, viewerAvailable = false))
             assertTrue(source, message.isWireSafe)
         }
     }

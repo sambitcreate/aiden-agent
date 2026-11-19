@@ -4,6 +4,8 @@ Aiden On The Go is the native SwiftUI companion for Aiden Agent on macOS and Lin
 
 Opening a chat already running on another device restores available reply text, reasoning and tool activity from a revision 58 host. The phone resumes live updates from the same point. Earlier hosts use their retained run events.
 
+An HTML visual whose snapshot is missing shows its title with **Open interactive** when the Mac offers the visual viewer (revision 35's `chat-visual-viewer-v1`), and the “Can't view on this device” card only when it doesn't.
+
 If the selected computer is unavailable, choose **Switch connection** in the recovery panel to select another paired computer or pair another Aiden Agent. This remains available when a secure-identity failure prevents retrying.
 
 Public new-chat links wait through connection readiness, then require confirmation of their installation and workspace and never start dictation. iOS App Intents use a one-shot foreground action inside the app process, so the intentional voice shortcut remains available. Existing-chat widget and notification links only navigate. Unsent composer drafts and unresolved-send records remain protected device-only storage and are excluded from backups, including stores from older versions during app startup without opening a chat; backup restore does not migrate them.
