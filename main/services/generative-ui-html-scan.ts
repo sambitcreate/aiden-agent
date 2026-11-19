@@ -3,8 +3,11 @@
 // builds the tree, so comments, RCDATA (<textarea>, <title>), raw text
 // (<style>, <xmp>, <noscript> with scripting on...), script data, and foreign
 // <svg>/<math> content (where <style> and <script> hold markup) are exactly
-// what the browser sees. Elements are checked as the parser creates them, so
-// a tag inside a <template>, or one the tree builder moves, still counts.
+// what the browser sees. Each start tag is checked as the tokenizer reads it
+// and each element as the parser creates it, so a tag inside a <template>,
+// one the tree builder moves, or one parse5 drops inside a <select> (which
+// Chromium builds) still counts. An <svg>, <math> or <style> in a <select>,
+// which Chromium reads differently from parse5, is refused.
 //
 // One scanner reads a whole visual, or a streaming draft chunk by chunk:
 // each chunk is parsed once, so a draft costs no more than the finished
@@ -27,14 +30,18 @@
 //   a trivial wrapper (`(…)`, `(0, …)`, `a || …`, `a ? … : …`, an array,
 //   a spread array, a template substitution), or strings joined with `+`,
 //   checked alone and joined, even after a value
-//   (`'<img src=x on' + 'error=…>'`);
+//   (`'<img src=x on' + 'error=…>'`), and URL pieces joined across
+//   brackets (`'java' + ('script:…')`);
 // - the target: a bare `innerHTML =`, `href.baseVal`, an object key that
 //   Object.assign copies (named, computed or `location`), an attribute
 //   node's value (`attributes.onclick.value`, `getAttributeNode`,
 //   `getAttributeNodeNS`, `getNamedItemNS`), DOMParser's parseFromString
-//   (read as HTML for an HTML, XHTML, SVG or computed type; for an XML type
-//   only if it names a namespace the page runs, and refused if it declares
-//   entities), `execCommand('insertHTML', …)` and `navigation.navigate`.
+//   (read as HTML for text/html; for an XML type, XHTML and SVG included,
+//   only if it names a namespace the page runs, as HTML with element
+//   prefixes dropped and prefixed URL attributes read, and refused if it
+//   has a DTD, entity or attribute-list declaration or content HTML would
+//   read as text; both ways for a computed or spread type),
+//   `execCommand('insertHTML', …)` and `navigation.navigate`.
 // An on* attribute node made by createAttribute is refused outright, and so
 // is markup or a handler a script writes more than MAX_NESTED_HTML_DEPTH
 // strings deep (fail closed, not admitted unread).
@@ -677,7 +684,6 @@ const XML_ELEMENT_PREFIX = /<(\/?)[^\s/>:<]+:/gu;
  * to the XLink namespace is an SVG link, as `xlink:href` is).
  */
 const XML_PREFIXED_URL_ATTRIBUTE = /\s[^\s=/>:"'<]+:(?:href|src|action|formaction|data)\s*=\s*("[^"]*"|'[^']*')/giu;
-/** Refused: XML a script parses that declares a DOCTYPE internal subset, entities or attribute lists. */
 /**
  * Refused: a <select> that holds an <svg>, <math> or <style>. parse5 drops
  * them, so it reads what follows as HTML markup, where Chromium keeps them
@@ -685,6 +691,7 @@ const XML_PREFIXED_URL_ATTRIBUTE = /\s[^\s=/>:"'<]+:(?:href|src|action|formactio
  * <script>, or as CSS.
  */
 export const SELECT_CONTENT_LIMIT = "a <select> holds an <svg>, <math> or <style> element, which the browser reads differently from this check";
+/** Refused: XML a script parses that declares a DOCTYPE internal subset, entities or attribute lists. */
 export const XML_DECLARATIONS_LIMIT = "a script parses XML with a DOCTYPE internal subset, an <!ENTITY> or an <!ATTLIST> declaration";
 /** Refused: namespaced XML a script parses that HTML would read part of as text. */
 export const XML_HTML_TEXT_LIMIT =
