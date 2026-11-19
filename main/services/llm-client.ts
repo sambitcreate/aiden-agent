@@ -425,7 +425,13 @@ import { createPiCodemodeTool } from "./pi-codemode.js";
 import { createPiToolDiscovery } from "./pi-tool-discovery.js";
 import { NO_LATE_MCP_DISCOVERY, type McpLateDiscovery } from "./mcp-tool-discovery-core.js";
 import { isPiCodemodeCallable, partitionPiCodemodeTools } from "./pi-runtime-tool.js";
-import { createOnDemandTools, declareOnDemandLoadNotes } from "./on-demand-tools.js";
+import {
+  ON_DEMAND_DECLARED_ENTRY,
+  createOnDemandTools,
+  declareOnDemandLoadNotes,
+  onDemandDeclaredNames,
+  onDemandDeclaredOfBranch,
+} from "./on-demand-tools.js";
 import { visualizeGuideLoadNotes } from "./generative-ui-guide.js";
 import {
   PiAgentRuntimeHarness,
@@ -4351,9 +4357,18 @@ export const llmClient = {
       const journalBranch = await promptJournal.getBranch();
       let initialMessages = (await promptJournal.buildContext(journalBranch)).messages;
       if (onDemandTools) {
-        // Tools this chat already loaded or called stay declared from the start.
-        runtimeTools = onDemandTools.initialTools(initialMessages, preloadedOnDemandTools);
+        // Tools this chat already loaded, called or was given stay declared
+        // from the start, in the place an earlier run declared them.
+        const declaredBefore = onDemandDeclaredOfBranch(journalBranch);
+        runtimeTools = onDemandTools.initialTools(initialMessages, preloadedOnDemandTools, declaredBefore);
         generationContextOptions.tools = runtimeTools;
+        // Record the list when it grew, so a preloaded tool the turn never
+        // called (a /visualize turn's render_artifact) keeps its place on the
+        // next turn instead of dropping out of the cached tool prefix.
+        const declaredNow = onDemandDeclaredNames(runtimeTools, onDemandTools.onDemand);
+        if (declaredNow.join("\n") !== declaredBefore.join("\n")) {
+          await promptJournal.appendCustomEntry(ON_DEMAND_DECLARED_ENTRY, { names: declaredNow });
+        }
       }
       const journalHistory = runTaintHistoryOfBranch(journalBranch);
       runTaint = new RunTaint({

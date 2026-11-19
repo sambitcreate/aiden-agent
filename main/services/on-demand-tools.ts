@@ -3,9 +3,10 @@
 // A chat starts with its everyday tools (files, commands, web, questions,
 // to-dos, memory, codemode) plus `load_tools`, whose description lists the
 // rest in one line each. The model loads what it needs by name; loaded tools
-// are declared from its next step. Once a chat has loaded or called an
-// on-demand tool, later runs declare it from the start, so a tool in use
-// stays put and its declaration stays cached.
+// are declared from its next step. Once a chat has loaded, called or been
+// given (preloaded) an on-demand tool, later runs declare it from the start
+// in the same place, so a tool in use stays put and its declaration stays
+// cached.
 //
 // Every tool stays built, approved and executed exactly as before. Only the
 // moment its declaration is sent changes.
@@ -157,12 +158,19 @@ export interface OnDemandTools {
   readonly onDemand: readonly AgentTool[];
   /**
    * Tools to declare at the start of a run over `messages` (the chat so far).
-   * `preload` names on-demand tools this run declares from the start without
-   * a load (for example the visual tools on a /visualize turn or in design
-   * mode); they come right after the loader in a fixed order, so a chat mode
-   * that preloads every turn keeps one tool list.
+   * `declaredBefore` is the on-demand list an earlier run of this chat
+   * declared (see `onDemandDeclaredOfBranch`); it keeps its place first. The
+   * tools the chat loaded or called since follow in first-use order, then
+   * `preload`: on-demand tools this run declares from the start without a
+   * load (for example the visual tools on a /visualize turn or in design
+   * mode), in catalog order. Each run's list only grows at its end, so the
+   * provider's cached tool prefix holds.
    */
-  initialTools(messages: readonly AgentMessage[], preload?: readonly string[]): AgentTool[];
+  initialTools(
+    messages: readonly AgentMessage[],
+    preload?: readonly string[],
+    declaredBefore?: readonly string[],
+  ): AgentTool[];
   /** Declares the on-demand tools the transcript has loaded or called since. */
   prepare(context: AgentContext): Promise<AgentContext>;
 }
@@ -220,15 +228,22 @@ export function createOnDemandTools(
   return {
     loader,
     onDemand,
-    initialTools(messages, preload = []) {
-      // Preloaded tools in their catalog order, then the rest in first-use
-      // order, the order `prepare` appended them in during earlier runs, so
-      // the declared list (and the provider's cached prefix) stays the same.
+    initialTools(messages, preload = [], declaredBefore = []) {
+      // What an earlier run declared keeps its place; tools used since follow
+      // in first-use order (the order `prepare` appended them in), and this
+      // run's preloads go last, so nothing already declared moves.
+      const order: string[] = [];
+      const listed = new Set<string>();
+      const add = (name: string) => {
+        if (!available.has(name) || listed.has(name)) return;
+        listed.add(name);
+        order.push(name);
+      };
+      for (const name of declaredBefore) add(name);
+      for (const name of onDemandToolsUsed(messages, available)) add(name);
       const wanted = new Set(preload);
-      const preloaded = onDemand.filter((tool) => wanted.has(tool.name));
-      const preloadedNames = new Set(preloaded.map((tool) => tool.name));
-      const used = onDemandToolsUsed(messages, available).filter((name) => !preloadedNames.has(name));
-      return [...everyday, loader, ...preloaded, ...used.map((name) => byName.get(name)!)];
+      for (const tool of onDemand) if (wanted.has(tool.name)) add(tool.name);
+      return [...everyday, loader, ...order.map((name) => byName.get(name)!)];
     },
     async prepare(context) {
       const present = new Set(context.tools?.map((tool) => tool.name) ?? []);
@@ -241,6 +256,32 @@ export function createOnDemandTools(
       return { ...context, tools: [...(context.tools ?? []), ...additions] };
     },
   };
+}
+
+/** Journal entry recording the on-demand tools a run declared from its start, in order. */
+export const ON_DEMAND_DECLARED_ENTRY = "aiden.on-demand-declared.v1";
+
+/** The on-demand tool names in `tools`, in declared order: what a run records under `ON_DEMAND_DECLARED_ENTRY`. */
+export function onDemandDeclaredNames(tools: readonly AgentTool[], onDemand: readonly AgentTool[]): string[] {
+  const names = new Set(onDemand.map((tool) => tool.name));
+  return tools.filter((tool) => names.has(tool.name)).map((tool) => tool.name);
+}
+
+/**
+ * The on-demand list the latest run on this journal branch recorded, or none.
+ * A preloaded tool the chat never called stays here, so the next run keeps
+ * declaring it in the same place instead of dropping it.
+ */
+export function onDemandDeclaredOfBranch(
+  branch: readonly { readonly type: string; readonly customType?: string; readonly data?: unknown }[],
+): string[] {
+  for (let index = branch.length - 1; index >= 0; index--) {
+    const entry = branch[index]!;
+    if (entry.type !== "custom" || entry.customType !== ON_DEMAND_DECLARED_ENTRY) continue;
+    const names = (entry.data as { names?: unknown } | undefined)?.names;
+    return Array.isArray(names) ? names.filter((name): name is string => typeof name === "string").slice(0, 200) : [];
+  }
+  return [];
 }
 
 /**

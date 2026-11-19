@@ -7,8 +7,11 @@ import { createFauxCore, fauxAssistantMessage, fauxToolCall } from "@earendil-wo
 import {
   LOAD_TOOLS_TOOL_NAME,
   MAX_ON_DEMAND_ROUTING_CHARACTERS,
+  ON_DEMAND_DECLARED_ENTRY,
   createOnDemandTools,
   declareOnDemandSummary,
+  onDemandDeclaredNames,
+  onDemandDeclaredOfBranch,
   onDemandToolSummary,
 } from "./on-demand-tools.js";
 import { createRenderUiTool } from "./aiden-ui-tool.js";
@@ -206,22 +209,59 @@ test("a design chat starts with the everyday canvas tools and loads the page and
 test("a preloaded tool is declared from the start without a load, and a chat mode that preloads every turn keeps one tool list", () => {
   const tools = [fixtureTool("read_file", "Read."), fixtureTool("render_chart", "Chart."), fixtureTool("make_schedule", "Schedule.")];
   const loading = createOnDemandTools(tools, ON_DEMAND)!;
-  const names = (messages: AgentMessage[], preload?: string[]) => loading.initialTools(messages, preload).map(({ name }) => name);
+  const names = (messages: AgentMessage[], preload?: string[], before?: string[]) =>
+    loading.initialTools(messages, preload, before).map(({ name }) => name);
   assert.deepEqual(names([], ["render_chart"]), ["read_file", LOAD_TOOLS_TOOL_NAME, "render_chart"]);
-  // A name the chat was not given is never declared by preloading it.
-  assert.deepEqual(names([], ["run_anything"]), ["read_file", LOAD_TOOLS_TOOL_NAME]);
+  // A name the chat was not given is never declared by preloading it, nor by an old record.
+  assert.deepEqual(names([], ["run_anything"], ["run_anything"]), ["read_file", LOAD_TOOLS_TOOL_NAME]);
 
-  // The chat then loads make_schedule and calls the preloaded tool, in that
-  // order. The next preloading run still lists the preloaded tool first, so
-  // the declared list only grew at its end.
+  // A design chat preloads render_chart every turn; it then loads make_schedule.
   const history: AgentMessage[] = [
     { role: "user", content: "plan", timestamp: 1 },
     fauxAssistantMessage([fauxToolCall(LOAD_TOOLS_TOOL_NAME, { names: ["make_schedule"] })], { stopReason: "toolUse" }),
-    fauxAssistantMessage([fauxToolCall("render_chart", {})], { stopReason: "toolUse" }),
   ];
-  assert.deepEqual(names(history, ["render_chart"]), ["read_file", LOAD_TOOLS_TOOL_NAME, "render_chart", "make_schedule"]);
-  // Without the preload, the tools the chat used stay, in first-use order.
-  assert.deepEqual(names(history), ["read_file", LOAD_TOOLS_TOOL_NAME, "make_schedule", "render_chart"]);
+  const first = names([], ["render_chart"]);
+  const second = names(history, ["render_chart"], first.slice(2));
+  assert.deepEqual(second, ["read_file", LOAD_TOOLS_TOOL_NAME, "render_chart", "make_schedule"]);
+});
+
+test("a chat whose next turn preloads tools, and the turn after that, never reorder or drop what was declared before", () => {
+  const tools = [
+    fixtureTool("read_file", "Read."),
+    fixtureTool("render_ui", "UI."),
+    fixtureTool("render_artifact", "HTML."),
+    fixtureTool("visualize_guide", "Guide."),
+    fixtureTool("make_schedule", "Schedule."),
+  ];
+  const visual = ["render_ui", "render_artifact", "visualize_guide"];
+  const loading = createOnDemandTools(tools, new Set([...visual, "make_schedule"]))!;
+  // Each turn reads the list the previous turn recorded on the journal branch, as a chat run does.
+  const branch: { type: string; customType?: string; data?: unknown }[] = [];
+  const turn = (messages: AgentMessage[], preload: string[] = []) => {
+    const declared = loading.initialTools(messages, preload, onDemandDeclaredOfBranch(branch));
+    branch.push({ type: "message" }, { type: "custom", customType: ON_DEMAND_DECLARED_ENTRY, data: { names: onDemandDeclaredNames(declared, loading.onDemand) } });
+    return declared.map(({ name }) => name);
+  };
+  const isPrefix = (earlier: string[], later: string[]) => earlier.every((name, index) => later[index] === name);
+
+  // Turn 1 loads make_schedule; turn 2 is a /visualize turn that calls only render_ui; turn 3 is an ordinary turn.
+  const loaded: AgentMessage[] = [
+    { role: "user", content: "plan", timestamp: 1 },
+    fauxAssistantMessage([fauxToolCall(LOAD_TOOLS_TOOL_NAME, { names: ["make_schedule"] })], { stopReason: "toolUse" }),
+  ];
+  const before = turn(loaded);
+  const visualizing = turn(loaded, visual);
+  const called = [...loaded, fauxAssistantMessage([fauxToolCall("render_ui", {})], { stopReason: "toolUse" })];
+  const after = turn(called);
+
+  assert.deepEqual(before, ["read_file", LOAD_TOOLS_TOOL_NAME, "make_schedule"]);
+  assert.ok(isPrefix(before, visualizing), `the /visualize turn only adds at the end: ${visualizing.join(", ")}`);
+  for (const name of visual) assert.ok(visualizing.includes(name), `${name} is declared without a load`);
+  assert.deepEqual(after, visualizing, "the turn after keeps every preloaded tool where it was, called or not");
+
+  // A chat with no record yet (its first journaled turn) still never puts a preload before a used tool.
+  const fresh = loading.initialTools(called, visual).map(({ name }) => name);
+  assert.ok(fresh.indexOf("make_schedule") < fresh.indexOf("render_ui"));
 });
 
 test("loading a visual tool answers with its guide in the same step, and a guide part two loaded tools share comes once", async () => {
