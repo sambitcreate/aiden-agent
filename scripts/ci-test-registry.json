@@ -745,6 +745,7 @@
         "main/services/pi-cache-telemetry.test.ts",
         "main/services/prompt-prefix-stability.test.ts",
         "main/services/chat-frozen-state.test.ts",
+        "main/services/chat-prompt-sections.test.ts",
         "main/services/chat-turn-tool-policy.test.ts",
         "main/services/prompt-section-secret.test.ts",
         "main/services/chat-prompt-assembly.test.ts",

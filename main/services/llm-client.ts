@@ -31,7 +31,7 @@ import { approvalJudgeComplete } from "./approval-judge/model-complete.js";
 import type { SpendingOwner } from "./spending-core.js";
 import { createLocalClassifierModels } from "./pi-local-classifier.js";
 import { piResourcesForSkillSnapshot } from "./skill-tools.js";
-import { createChatAgentsInstructions, createChatMcpServersSection } from "./chat-prompt-sections.js";
+import { createChatAgentsInstructions, createChatMcpServersSection, journaledMcpServersSection } from "./chat-prompt-sections.js";
 import { aidenConfigDir } from "./aiden-config-dir.js";
 import { assertCustomModelImageLimit, customModelThinkingLevels, prepareCustomModelToolContext } from "../../renderer/shared/custom-model-options.js";
 import { compactionEngineFrom, configuredCompactionReserveTokens, resolveCompactionModelBudget } from "../../renderer/shared/compaction.js";
@@ -3985,11 +3985,17 @@ export const llmClient = {
       // transcript (never the base prompt), rendered once from the servers
       // admitted when the turn starts. A server that finishes discovery later is
       // callable through codemode and tool_search at once and joins the section
-      // at the next generation, so the cached system prefix holds.
+      // at the next generation, so the cached system prefix holds. An
+      // unattended follow-up connects none of the chat's servers: it shows the
+      // section the chat's last connected generation journaled, and a note
+      // after its prompt says the servers cannot be reached.
+      const mcpSectionJournal = piSession;
       const mcpServersSection = createChatMcpServersSection({
         inventory: () => candidate?.getCallableTools() ?? modelContributions.tools,
         declared: new Set(runtimeTools.map(({ name }) => name)),
         latePending: () => lateMcpDiscovery.pending(),
+        journaled: journaledMcpServersSection(await mcpSectionJournal.getBranch()),
+        connectorsWithheld: !preparedBotContext && options.unattended === true && options.allowMcpTools === false,
       });
       // Activity shows MCP tools by their `server/tool` label, not the generated name.
       timeline.setToolLabels((toolName) => mcpToolActivityLabel(candidate?.getCallableTools() ?? modelContributions.tools, toolName));
@@ -4185,7 +4191,7 @@ export const llmClient = {
         ? [
             ...(hookTurnContext ? [hookContextMessage(hookTurnContext, currentPromptMessage.timestamp)] : []),
             ...(chatStatePlan.update ? [chatStatePlan.update(currentPromptMessage.timestamp)] : []),
-            ...[turnNoteMessage([generativeUiTurnNote, advisorTurnNote, formFillNote], currentPromptMessage.timestamp)].filter(
+            ...[turnNoteMessage([generativeUiTurnNote, advisorTurnNote, formFillNote, mcpServersSection.turnNote], currentPromptMessage.timestamp)].filter(
               (note): note is AgentMessage => note !== undefined,
             ),
           ]
@@ -4253,6 +4259,7 @@ export const llmClient = {
           initialMessages = prepared.messages;
           updateGenerationContextOptions(generationContextOptions, prepared);
         }
+        await mcpServersSection.record(mcpSectionJournal);
       }
       // Register once the transcript carries AGENTS.md, so the profile's
       // instruction baseline matches the prompt it captured.

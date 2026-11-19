@@ -135,6 +135,8 @@ async function workspaceChat(options: {
 type TurnHead = ({ assembly: ChatPromptAssembly } | { systemPrompt: string; tools: AgentTool[] } | { chatState: PromptPrefixChatState }) & {
   /** Host messages journaled right after the prompt (hook context, a turn note). */
   following?: (promptTimestamp: number) => AgentMessage[];
+  /** An unattended follow-up that connects none of the chat's servers. */
+  connectorsWithheld?: boolean;
 };
 
 /**
@@ -721,24 +723,36 @@ describe("prompt prefix stability: tool list identical across turns", () => {
     for (const name of ["hooks", "computer_use", "subagent"]) assert.equal(refuseAttended(name), undefined, name);
   });
 
-  test(
-    "an unattended follow-up in a chat with connectors keeps the chat's connector section",
-    { todo: "phase 3: declare the chat's connectors from its frozen inventory without connecting, and refuse the calls" },
-    async () => {
-      const attendedTools = await assembledChatTools(attendedGeneration);
-      assert.ok(attendedTools.includes(linearServer), "the attended turn declares the connector");
-      // The section is built from the turn's connector tools, as llm-client builds it.
-      const { previous, current } = await twoTurns(
-        { lateMcp: { tools: () => [], pending: () => 0 } },
-        { assembly: await workspaceChat({ tools: attendedTools }) },
-        { assembly: await workspaceChat({ tools: await assembledChatTools(followUpGeneration) }) },
-      );
-      // A connector's tools are reached through codemode; the chat's
-      // `<mcp_servers>` section of system is what the follow-up drops.
-      assert.ok(previous.carries("Issue tracker tools."), "the attended turn lists the connector");
-      assert.deepEqual(comparePromptRequests(previous, current), {});
-    },
-  );
+  test("an unattended follow-up in a chat with connectors keeps the chat's connector section", async () => {
+    const attendedTools = await assembledChatTools(attendedGeneration);
+    assert.ok(attendedTools.includes(linearServer), "the attended turn declares the connector");
+    const followUpTools = await assembledChatTools(followUpGeneration);
+    assert.ok(!followUpTools.includes(linearServer), "the follow-up connects no server, so it has no connector tool to call");
+    // The section is built from the turn's connector tools, as llm-client
+    // builds it; the follow-up shows the one the attended turn journaled.
+    const { previous, current, harness } = await twoTurns(
+      { lateMcp: { tools: () => [], pending: () => 0 } },
+      { assembly: await workspaceChat({ tools: attendedTools }) },
+      { assembly: await workspaceChat({ tools: followUpTools }), connectorsWithheld: true },
+    );
+    assert.ok(previous.carries("Issue tracker tools."), "the attended turn lists the connector");
+    assert.deepEqual(comparePromptRequests(previous, current), {});
+    const texts = userTexts(current);
+    assert.equal(texts[texts.length - 2], "Now list the files.");
+    assert.match(texts[texts.length - 1] ?? "", /<turn_note>[\s\S]*not connected for this follow-up[\s\S]*<\/turn_note>/u);
+    assert.ok(!harness.callableTools().some((tool) => tool.name === linearServer.name), "the listed connector cannot be called");
+  });
+
+  test("a chat that never connected a server shows no connector section on its follow-up", async () => {
+    const withoutConnectors = async (options: GenerationToolOptions) => (await assembledChatTools(options)).filter((tool) => tool !== linearServer);
+    const { previous, current } = await twoTurns(
+      { lateMcp: { tools: () => [], pending: () => 0 } },
+      { assembly: await workspaceChat({ tools: await withoutConnectors(attendedGeneration) }) },
+      { assembly: await workspaceChat({ tools: await withoutConnectors(followUpGeneration) }), connectorsWithheld: true },
+    );
+    assert.deepEqual(comparePromptRequests(previous, current), {});
+    assert.ok(!current.carries("not connected for this follow-up"), "no note when no connector is listed");
+  });
 
   test(
     "the turn a settled run owes its chat declares the chat's tools",

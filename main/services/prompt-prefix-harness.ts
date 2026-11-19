@@ -32,12 +32,13 @@ import {
   journaledChatState,
   planChatTurnState,
   recordChatHead,
+  turnNoteMessage,
   withHeadChatState,
   type ChatTurnState,
 } from "./chat-frozen-state.js";
 import type { ChatPromptAssembly } from "./chat-prompt-assembly.js";
 import type { PiAgentRuntimeExtension } from "./pi-agent-runtime-harness.js";
-import { createChatAgentsInstructions, createChatMcpServersSection } from "./chat-prompt-sections.js";
+import { createChatAgentsInstructions, createChatMcpServersSection, journaledMcpServersSection } from "./chat-prompt-sections.js";
 import { createGenerationContextTransform, updateGenerationContextOptions, type GenerationContextOptions } from "./generation-context.js";
 import { createMcpServersSectionRefresher } from "./mcp-server-instructions.js";
 import { diffPromptPrefix, fingerprintPromptPrefix, type PromptPrefixDifference, type PromptPrefixFingerprint } from "./pi-cache-telemetry.js";
@@ -88,6 +89,12 @@ export type PromptPrefixTurnInput = {
   following?: (promptTimestamp: number) => AgentMessage[];
   /** Scripted assistant steps for this turn, in order. */
   responses: FauxResponseStep[];
+  /**
+   * An unattended follow-up that connects none of the chat's servers
+   * (`lateMcp` only): the section is the one the journal recorded, and the
+   * turn note saying so follows the prompt, as llm-client does.
+   */
+  connectorsWithheld?: boolean;
 } & (
   | {
       /** The generation head as llm-client assembles it; tools follow the journaled history. */
@@ -331,14 +338,18 @@ export function createPromptPrefixHarness(options: PromptPrefixHarnessOptions = 
     const codemode = tools.some((tool) => tool.name === "codemode");
     runtime = undefined;
     const lateMcp = options.lateMcp;
-    const mcpServersSection = lateMcp
-      // llm-client: the turn's admitted tools until the runtime exists, then its callable inventory.
+    // llm-client: the turn's admitted tools until the runtime exists, then its callable inventory.
+    const chatMcpSection = lateMcp
       ? createChatMcpServersSection({
           inventory: () => runtime?.getCallableTools() ?? ("assembly" in resolved ? resolved.assembly.contributions.tools : tools),
           declared: new Set(tools.map((tool) => tool.name)),
           latePending: () => lateMcp.pending(),
+          journaled: journaledMcpServersSection(await session.getBranch()),
+          connectorsWithheld: input.connectorsWithheld === true,
         })
-      : options.mcpServersSection ? createMcpServersSectionRefresher(options.mcpServersSection) : undefined;
+      : undefined;
+    const mcpServersSection = chatMcpSection
+      ?? (options.mcpServersSection ? createMcpServersSectionRefresher(options.mcpServersSection) : undefined);
     const generationOptions: GenerationContextOptions = {
       contextWindow: model.contextWindow,
       systemPrompt,
@@ -364,6 +375,15 @@ export function createPromptPrefixHarness(options: PromptPrefixHarnessOptions = 
         initialMessages = prepared.messages;
         updateGenerationContextOptions(generationOptions, prepared);
       }
+      await chatMcpSection?.record(session);
+    }
+    const connectorNote = chatMcpSection?.turnNote ?? "";
+    if (connectorNote) {
+      const given = following;
+      following = (timestamp) => [
+        ...(given?.(timestamp) ?? []),
+        ...[turnNoteMessage([connectorNote], timestamp)].filter((note): note is AgentMessage => note !== undefined),
+      ];
     }
     runtime = new PiAgentRuntimeHarness({
       convertToLlm,
