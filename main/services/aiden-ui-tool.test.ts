@@ -115,6 +115,44 @@ test("edits redraw a visual drawn earlier in this reply from the markup it was l
   assert.match(presented[3]!.visual.fallbackText, /eins[^]*deux/u);
 });
 
+test("an edits redraw keeps the visual's wide layout unless it sets one, and says when the edits made the markup too long", async () => {
+  const { instance, presented } = tool();
+  await instance.execute("first", { title: "Board", layout: "wide", markup: "<Visual><Text>one</Text></Visual>" });
+  await instance.execute("second", { title: "Board", edits: [{ old: "one", new: "uno" }] });
+  assert.equal(presented[1]!.visual.layout, "wide");
+  await instance.execute("third", { title: "Board", layout: "column", edits: [{ old: "uno", new: "eins" }] });
+  assert.equal(presented[2]!.visual.layout, undefined, "an explicit column layout takes over");
+  await instance.execute("fourth", { title: "Board", edits: [{ old: "eins", new: "un" }] });
+  assert.equal(presented[3]!.visual.layout, undefined, "and is kept by the next edits");
+
+  await assert.rejects(
+    instance.execute("long", { title: "Board", edits: [{ old: "un", new: "x".repeat(400_000) }] }),
+    /render_ui edits made the markup too long: 400,0\d\d characters, over the 400,000 a visual can be\. Nothing was drawn; send edits that remove more than they add/u,
+  );
+  assert.equal(presented.length, 4);
+});
+
+test("a same-title redraw the host does not show is not reported as drawn, and later edits read the shown markup", async () => {
+  let show = true;
+  const presented: ChatUiVisualV1[] = [];
+  const instance = createRenderUiTool({
+    namespace: "gen-1",
+    existingChatUiCount: 0,
+    onUiVisual: (visual) => {
+      if (show) presented.push(visual);
+      return show;
+    },
+  });
+  await instance.execute("first", { title: "Board", markup: "<Visual><Text>one</Text></Visual>" });
+  show = false;
+  const hidden = text(await instance.execute("second", { title: "Board", edits: [{ old: "one", new: "two" }] }));
+  assert.doesNotMatch(hidden, /Rendered|Replaced/u);
+  assert.match(hidden, /could not show this redraw of the visual "Board"[^]*still sees the version drawn earlier/u);
+  show = true;
+  await instance.execute("third", { title: "Board", edits: [{ old: "one", new: "three" }] });
+  assert.match(presented[1]!.fallbackText, /three/u);
+});
+
 test("render_ui edits refuse an old that matches twice once line breaks read alike, or that cuts a line break or emoji in two", async () => {
   const { instance, presented } = tool();
   await instance.execute("first", {

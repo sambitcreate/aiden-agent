@@ -368,6 +368,26 @@ test("same-generation title replaces the previous staged artifact", async () => 
   assert.notEqual(artifacts[0]?.id, artifacts[1]?.id);
 });
 
+test("a same-title replace the host does not show is not reported as rendered, and the shown version still counts", async () => {
+  const root = await workspace();
+  let show = true;
+  const extension = createGenerativeUiExtension({
+    workspaceRoot: root,
+    artifactNamespace: "gen-1",
+    onArtifact: () => show,
+  });
+  const tool = extension.tools?.[0];
+  assert.ok(tool);
+  const resultText = (result: { content: { type: string; text?: string }[] }) => result.content.map((part) => part.text ?? "").join("");
+  await tool.execute("call-a", { title: "Chart", html: "<p>aaa</p>" });
+  show = false;
+  const hidden = resultText(await tool.execute("call-b", { title: "Chart", html: "<p>bbb</p>" }));
+  assert.doesNotMatch(hidden, /Rendered|Replaced/u);
+  assert.match(hidden, /could not show this version of the artifact "Chart"[^]*still sees the version rendered earlier/u);
+  show = true;
+  assert.match(resultText(await tool.execute("call-c", { title: "Chart", html: "<p>ccc</p>" })), /Replaced the artifact "Chart" in place/u);
+});
+
 test("onArtifact receives the producing toolCallId and replaces keep the first call", async () => {
   const root = await workspace();
   const seen: string[] = [];

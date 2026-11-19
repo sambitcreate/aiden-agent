@@ -59,8 +59,8 @@ function describeDiagnostics(diagnostics: readonly AidenUiDiagnostic[]): string 
  * repaired so it can do better on its next call.
  */
 export function createRenderUiTool(options: RenderUiToolOptions): AgentTool {
-  /** Each visual drawn in this response, by title, with the markup it was last drawn from. */
-  const titles = new Map<string, { id: string; toolCallId: string; markup: string }>();
+  /** Each visual drawn in this response, by title, with the markup and layout it was last drawn with. */
+  const titles = new Map<string, { id: string; toolCallId: string; markup: string; layout: "column" | "wide" }>();
   let presentedCount = 0;
   let serial = Promise.resolve();
 
@@ -95,7 +95,7 @@ export function createRenderUiTool(options: RenderUiToolOptions): AgentTool {
             }),
             {
               description:
-                "Instead of markup, to redraw a visual drawn earlier in this reply with the same title: replacements applied in order to the markup it was last drawn from. All or nothing: if any old text is missing or matches more than one place, nothing is drawn and the error names that edit.",
+                "Instead of markup, to redraw a visual drawn earlier in this reply with the same title: replacements applied in order to the markup it was last drawn from, keeping its layout unless layout is set. All or nothing: if any old text is missing or matches more than one place, nothing is drawn and the error names that edit.",
               minItems: 1,
               maxItems: MAX_MARKUP_EDITS,
             },
@@ -117,13 +117,23 @@ export function createRenderUiTool(options: RenderUiToolOptions): AgentTool {
             throw new Error('render_ui layout must be "column" or "wide".');
           }
           let markup = input.markup;
+          const requestedLayout = input.layout as "column" | "wide" | undefined;
+          let layout = requestedLayout ?? "column";
           if (input.edits !== undefined) {
             if (markup !== undefined) throw new Error("render_ui takes either markup or edits, not both.");
             const earlier = titles.get(title);
             if (!earlier) {
               throw new Error(`render_ui edits redraw a visual drawn earlier in this reply, and none is titled ${JSON.stringify(title)}; send the whole markup.`);
             }
-            markup = applyMarkupEdits(earlier.markup, parseMarkupEdits(input.edits), "Send the edits again against the markup you last drew, or the whole markup.");
+            const edited = applyMarkupEdits(earlier.markup, parseMarkupEdits(input.edits), "Send the edits again against the markup you last drew, or the whole markup.");
+            // A redraw from edits keeps the layout the visual was drawn with.
+            layout = requestedLayout ?? earlier.layout;
+            if (edited.length > MAX_MARKUP_CHARS) {
+              throw new Error(
+                `render_ui edits made the markup too long: ${edited.length.toLocaleString("en-US")} characters, over the ${MAX_MARKUP_CHARS.toLocaleString("en-US")} a visual can be. Nothing was drawn; send edits that remove more than they add, or shorter whole markup.`,
+              );
+            }
+            markup = edited;
           }
           if (typeof markup !== "string") throw new Error("render_ui needs markup.");
           if (markup.length > MAX_MARKUP_CHARS) {
@@ -155,7 +165,7 @@ export function createRenderUiTool(options: RenderUiToolOptions): AgentTool {
             ...(compiled.dataJson ? { dataJson: compiled.dataJson } : {}),
             ...(compiled.state ? { state: compiled.state } : {}),
             fallbackText: compiled.fallbackText,
-            ...(input.layout === "wide" ? { layout: "wide" } : {}),
+            ...(layout === "wide" ? { layout: "wide" } : {}),
           });
           if (!visual) throw new Error("render_ui produced a visual Aiden cannot store; simplify it.");
           if (signal?.aborted) throw new Error("Rendering the visual was cancelled.");
@@ -163,16 +173,19 @@ export function createRenderUiTool(options: RenderUiToolOptions): AgentTool {
           const presented = (await options.onUiVisual(visual, { toolCallId: placementCallId })) !== false;
           if (presented && !replacing) {
             presentedCount += 1;
-            titles.set(title, { id, toolCallId, markup });
+            titles.set(title, { id, toolCallId, markup, layout });
           } else if (presented && replacing) {
             replacing.markup = markup;
+            replacing.layout = layout;
           }
           const nodes = JSON.stringify(visual.tree).match(/"t":/gu)?.length ?? 0;
           return {
             content: [
               {
                 type: "text",
-                text: `${replacing && presented ? `Replaced the visual "${title}" in place; the person now sees this version` : `Rendered visual "${title}"`} (${nodes} components).${describeDiagnostics(compiled.diagnostics)}${describeVisualCheck(visual)}`,
+                text: replacing && !presented
+                  ? `Aiden could not show this redraw of the visual "${title}" (${nodes} components); the person still sees the version drawn earlier in this reply, and later edits apply to that version's markup.`
+                  : `${replacing ? `Replaced the visual "${title}" in place; the person now sees this version` : `Rendered visual "${title}"`} (${nodes} components).${describeDiagnostics(compiled.diagnostics)}${describeVisualCheck(visual)}`,
               },
             ],
             details: null,
