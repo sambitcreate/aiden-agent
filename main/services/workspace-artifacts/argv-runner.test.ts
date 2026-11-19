@@ -18,15 +18,24 @@ const step = (connector: WorkspaceArtifactArgvStep["connector"], ...pipeline: (s
   pipeline: pipeline.map((command) => (Array.isArray(command[0]) ? { argv: command[0] as string[], redirects: command[1] as WorkspaceArtifactArgvStep["pipeline"][number]["redirects"] } : { argv: command as string[], redirects: [] })),
 });
 
+/**
+ * The environment every git this suite starts runs in, directly or through a plan or a preview:
+ * git reads no config but the repository's, so a user's log.decorate, diff.renames or
+ * init.defaultBranch cannot change what it prints, and its messages are in English, so the
+ * assertions on git's own errors read the same in any locale. This is the tests' environment
+ * only; the runner itself passes the person's environment through.
+ */
+const GIT_ENV: NodeJS.ProcessEnv = { ...process.env, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1", LC_ALL: "C", LANG: "C" };
+
 function plan(steps: WorkspaceArtifactArgvStep[], overrides: Partial<ArgvPlanOptions> = {}) {
-  return runArgvPlan({ steps, cwd: os.tmpdir(), env: process.env, timeoutMs: 10_000, maxOutputBytes: 1_000_000, ...overrides });
+  return runArgvPlan({ steps, cwd: os.tmpdir(), env: GIT_ENV, timeoutMs: 10_000, maxOutputBytes: 1_000_000, ...overrides });
 }
 
 /** Runs what an action resolved to as the runner would: argument lists without a shell. */
 async function runResolved(resolved: ResolvedWorkspaceArtifactCommand, cwd: string, env: NodeJS.ProcessEnv = {}) {
   assert.equal(resolved.kind, "argv", "a template with page data runs without a shell");
   if (resolved.kind !== "argv") throw new Error("unreachable");
-  return runArgvPlan({ steps: resolved.steps, cwd, env: { ...process.env, ...env }, timeoutMs: 10_000, maxOutputBytes: 1_000_000 });
+  return runArgvPlan({ steps: resolved.steps, cwd, env: { ...GIT_ENV, ...env }, timeoutMs: 10_000, maxOutputBytes: 1_000_000 });
 }
 
 test("a pipeline connects each command's output to the next one's input", async () => {
@@ -178,7 +187,7 @@ test("everyday templates do what their preview would do in a shell", async () =>
       for (const value of values) {
         const resolved = resolveWorkspaceArtifactCommand(action, [value]);
         const ran = await runResolved(resolved, dir);
-        const shell = spawnSync("/bin/sh", ["-c", resolved.preview], { cwd: dir, encoding: "utf8" });
+        const shell = spawnSync("/bin/sh", ["-c", resolved.preview], { cwd: dir, encoding: "utf8", env: GIT_ENV });
         assert.deepEqual({ stdout: ran.stdout, exitCode: ran.exitCode }, { stdout: shell.stdout, exitCode: shell.status }, `${command} with ${value}`);
       }
     }
@@ -214,8 +223,8 @@ test("no template the parser accepts lets a text value run code", async () => {
     `core.pager=${script}`,
     `!${script}`,
   ];
-  spawnSync("git", ["init", "-q"], { cwd: dir, stdio: "ignore" });
-  spawnSync("git", ["-c", "user.email=a@example.com", "-c", "user.name=a", "commit", "-q", "--allow-empty", "-m", "x"], { cwd: dir, stdio: "ignore" });
+  spawnSync("git", ["init", "-q"], { cwd: dir, stdio: "ignore", env: GIT_ENV });
+  spawnSync("git", ["-c", "user.email=a@example.com", "-c", "user.name=a", "commit", "-q", "--allow-empty", "-m", "x"], { cwd: dir, stdio: "ignore", env: GIT_ENV });
   fs.writeFileSync(path.join(dir, "notes.txt"), "notes\n");
   fs.writeFileSync(path.join(dir, "Makefile"), "all:\n\t@true\n");
   const candidates = [
@@ -369,7 +378,7 @@ test("everyday git and gh actions with page data still save and run with the con
   const repo = path.join(dir, "repo");
   const origin = path.join(dir, "origin.git");
   const bin = path.join(dir, "bin");
-  const git = (args: string[], cwd = repo) => execFileSync("git", args, { cwd, encoding: "utf8" });
+  const git = (args: string[], cwd = repo) => execFileSync("git", args, { cwd, encoding: "utf8", env: GIT_ENV });
   try {
     fs.mkdirSync(repo);
     fs.mkdirSync(bin);
@@ -430,7 +439,7 @@ test("a branch value pushes only the branch it names, never a glob or a full ref
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const repo = path.join(dir, "repo");
   const origin = path.join(dir, "origin.git");
-  const git = (args: string[], cwd = repo) => execFileSync("git", ["-c", "user.email=a@example.com", "-c", "user.name=a", ...args], { cwd, encoding: "utf8" });
+  const git = (args: string[], cwd = repo) => execFileSync("git", ["-c", "user.email=a@example.com", "-c", "user.name=a", ...args], { cwd, encoding: "utf8", env: GIT_ENV });
   fs.mkdirSync(repo);
   git(["init", "-q", "--bare", "-b", "main", origin], dir);
   git(["init", "-q", "-b", "main"]);
@@ -463,7 +472,7 @@ test("a branch value pushes only the branch it names, never a glob or a full ref
 test("in a workspace that is a folder of a larger repository, git reaches no file outside it through a value", async (t) => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "aiden-artifact-subfolder-"));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
-  const git = (args: string[], cwd = dir) => execFileSync("git", ["-c", "user.email=a@example.com", "-c", "user.name=a", ...args], { cwd, encoding: "utf8" });
+  const git = (args: string[], cwd = dir) => execFileSync("git", ["-c", "user.email=a@example.com", "-c", "user.name=a", ...args], { cwd, encoding: "utf8", env: GIT_ENV });
   const ws = path.join(dir, "ws");
   fs.mkdirSync(ws);
   fs.mkdirSync(path.join(dir, "secret"));
@@ -515,7 +524,7 @@ test("in a workspace that is a folder of a larger repository, git reaches no fil
   assert.equal(show.preview, "GIT_LITERAL_PATHSPECS=1 git show HEAD:./'f'");
   const shown = await runResolved(show, ws);
   assert.deepEqual({ stdout: shown.stdout, exitCode: shown.exitCode }, { stdout: "hello\n", exitCode: 0 });
-  const shell = spawnSync("/bin/sh", ["-c", show.preview], { cwd: ws, encoding: "utf8" });
+  const shell = spawnSync("/bin/sh", ["-c", show.preview], { cwd: ws, encoding: "utf8", env: GIT_ENV });
   assert.equal(shell.stdout, shown.stdout, "the preview runs what the plan runs");
   // An index path reads the file from the workspace too: git takes `:./0:f` as a path named `0:f`, so the `./` goes after the stage.
   for (const [command, preview] of [["git show :0:{{file}}", "GIT_LITERAL_PATHSPECS=1 git show :0:./'f'"], ["git show :{{file}}", "GIT_LITERAL_PATHSPECS=1 git show :./'f'"]]) {
@@ -567,7 +576,7 @@ test("git log, show and reset take a value as a revision or a file, adding -- on
     fs.rmSync(dir, { recursive: true, force: true });
     fs.rmSync(elsewhere, { recursive: true, force: true });
   });
-  const git = (args: string[]) => execFileSync("git", ["-c", "user.email=a@example.com", "-c", "user.name=a", ...args], { cwd: dir, encoding: "utf8" });
+  const git = (args: string[]) => execFileSync("git", ["-c", "user.email=a@example.com", "-c", "user.name=a", ...args], { cwd: dir, encoding: "utf8", env: GIT_ENV });
   git(["init", "-q", "-b", "main"]);
   fs.writeFileSync(path.join(dir, "notes.md"), "first\n");
   fs.writeFileSync(path.join(dir, "other.md"), "x\n");
@@ -589,7 +598,7 @@ test("git log, show and reset take a value as a revision or a file, adding -- on
   assert.equal(logged.exitCode, 0, logged.stderr);
   assert.match(logged.stdout, /\+second/u);
   assert.match(logged.stdout, /\+first/u);
-  assert.equal(spawnSync("/bin/sh", ["-c", history.preview], { cwd: dir, encoding: "utf8" }).stdout, logged.stdout, "the preview runs what the plan runs");
+  assert.equal(spawnSync("/bin/sh", ["-c", history.preview], { cwd: dir, encoding: "utf8", env: GIT_ENV }).stdout, logged.stdout, "the preview runs what the plan runs");
   for (const command of ["git log --oneline {{file}}", "git log --follow -p {{file}}"]) {
     const ran = await run(command, ["notes.md"]);
     assert.equal(ran.exitCode, 0, `${command}: ${ran.stderr}`);
@@ -611,7 +620,7 @@ test("git log, show and reset take a value as a revision or a file, adding -- on
     ["git show {{x}} --stat", "--stat", "git show --stat {{x}}"],
   ] as const) {
     const [, subcommand] = command.split(" ");
-    const itself = spawnSync("git", [subcommand!, "notes.md", option], { cwd: dir, encoding: "utf8" });
+    const itself = spawnSync("git", [subcommand!, "notes.md", option], { cwd: dir, encoding: "utf8", env: GIT_ENV });
     assert.notEqual(itself.status, 0, `git itself fails on ${command} with a file`);
     assert.match(itself.stderr, new RegExp(`option '${option}' must come before non-option arguments`, "u"), command);
     assert.throws(() => resolve(command, ["notes.md"]), new RegExp(`Write ${option} before \\{\\{x\\}\\}`, "u"), command);
@@ -666,7 +675,7 @@ test("git log, show and reset take a value as a revision or a file, adding -- on
 test("git reads * ? [ in a file value as part of the file's name, in every command of a chain", async (t) => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "aiden-artifact-literal-"));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
-  const git = (args: string[]) => execFileSync("git", args, { cwd: dir, encoding: "utf8" });
+  const git = (args: string[]) => execFileSync("git", args, { cwd: dir, encoding: "utf8", env: GIT_ENV });
   fs.mkdirSync(path.join(dir, "app", "[id]"), { recursive: true });
   for (const file of ["app/[id]/page.tsx", "app/a.tsx", "app/b.tsx", "app/i"]) fs.writeFileSync(path.join(dir, file), "x\n");
   git(["init", "-q", "-b", "main"]);
@@ -692,7 +701,7 @@ test("git reads * ? [ in a file value as part of the file's name, in every comma
 test("a branch value for git checkout never discards a file's uncommitted edits", async (t) => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "aiden-artifact-checkout-"));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
-  const git = (args: string[]) => execFileSync("git", ["-c", "user.email=a@example.com", "-c", "user.name=a", ...args], { cwd: dir, encoding: "utf8" });
+  const git = (args: string[]) => execFileSync("git", ["-c", "user.email=a@example.com", "-c", "user.name=a", ...args], { cwd: dir, encoding: "utf8", env: GIT_ENV });
   fs.writeFileSync(path.join(dir, "notes.md"), "committed\n");
   fs.writeFileSync(path.join(dir, "a.ts"), "committed\n");
   git(["init", "-q", "-b", "main"]);
@@ -712,7 +721,7 @@ test("a branch value for git checkout never discards a file's uncommitted edits"
   assert.equal(fs.readFileSync(path.join(dir, "a.ts"), "utf8"), "UNSAVED WORK\n");
   // A shell given the preview reads the value the same way.
   assert.equal(file.preview, "GIT_LITERAL_PATHSPECS=1 git checkout 'notes.md' --");
-  const shell = spawnSync("/bin/sh", ["-c", file.preview], { cwd: dir, encoding: "utf8" });
+  const shell = spawnSync("/bin/sh", ["-c", file.preview], { cwd: dir, encoding: "utf8", env: GIT_ENV });
   assert.notEqual(shell.status, 0);
   assert.match(shell.stderr, /invalid reference/u);
   assert.equal(fs.readFileSync(path.join(dir, "notes.md"), "utf8"), "UNSAVED WORK\n");
@@ -746,7 +755,7 @@ test("a branch value for git checkout never discards a file's uncommitted edits"
 test("page data names a branch git branch -v lists by, and creates one only where the template is a plain create", async (t) => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "aiden-artifact-branch-"));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
-  const git = (args: string[]) => execFileSync("git", ["-c", "user.email=a@example.com", "-c", "user.name=a", ...args], { cwd: dir, encoding: "utf8" });
+  const git = (args: string[]) => execFileSync("git", ["-c", "user.email=a@example.com", "-c", "user.name=a", ...args], { cwd: dir, encoding: "utf8", env: GIT_ENV });
   fs.writeFileSync(path.join(dir, "notes.md"), "one\n");
   git(["init", "-q", "-b", "main"]);
   git(["add", "."]);
@@ -770,7 +779,7 @@ test("page data names a branch git branch -v lists by, and creates one only wher
 test("an option that takes its value only joined is refused apart from it, and runs with the value joined", async (t) => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "aiden-artifact-joined-"));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
-  const git = (args: string[]) => execFileSync("git", ["-c", "user.email=a@example.com", "-c", "user.name=a", ...args], { cwd: dir, encoding: "utf8" });
+  const git = (args: string[]) => execFileSync("git", ["-c", "user.email=a@example.com", "-c", "user.name=a", ...args], { cwd: dir, encoding: "utf8", env: GIT_ENV });
   fs.writeFileSync(path.join(dir, "notes.md"), "one\ntwo\nthree\nfour\nfive\n");
   git(["init", "-q", "-b", "main"]);
   git(["add", "."]);
@@ -809,7 +818,7 @@ test("an option that takes its value only joined is refused apart from it, and r
 test("git tag points a tag at the revision a value names, never at a file", async (t) => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "aiden-artifact-tag-"));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
-  const git = (args: string[]) => execFileSync("git", ["-c", "user.email=a@example.com", "-c", "user.name=a", ...args], { cwd: dir, encoding: "utf8" });
+  const git = (args: string[]) => execFileSync("git", ["-c", "user.email=a@example.com", "-c", "user.name=a", ...args], { cwd: dir, encoding: "utf8", env: GIT_ENV });
   fs.writeFileSync(path.join(dir, "notes.md"), "one\n");
   git(["init", "-q", "-b", "main"]);
   git(["add", "."]);
