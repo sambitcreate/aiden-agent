@@ -201,6 +201,9 @@ const REFUSED_MARKUP: Record<string, string> = {
   "innerHTML that writes an <iframe>": '<script>document.body.innerHTML = "<iframe src=https://evil.test/></iframe>"</script>',
   "insertAdjacentHTML that writes a javascript: link": "<script>el.insertAdjacentHTML('beforeend', `<a href=\"javascript:alert(1)\">x</a>`)</script>",
   "document.write of a <base>": '<script>document.write("<base href=https://evil.test/>")</script>',
+  "a javascript: URL after a regex that follows an if head": "<script>if (x) /\"/.test(y); location='javascript:alert(1)'</script>",
+  "a javascript: URL after a regex that follows a while head": "<script>while (x) /'/.exec(y); location='javascript:alert(1)'</script>",
+  "a javascript: URL after a regex that follows a for await head": "<script>for await (const x of y) /`/.test(x); location='javascript:alert(1)'</script>",
 };
 
 const ADMITTED_MARKUP: Record<string, string> = {
@@ -222,6 +225,8 @@ const ADMITTED_MARKUP: Record<string, string> = {
   "a data: PNG image": '<img src="data:image/png;base64,AAAA">',
   "an svg <set> of a fill named javascript:": '<svg><rect><set attributeName="fill" to="javascript:"/></rect></svg>',
   "innerHTML that writes a label naming JavaScript": '<script>legend.innerHTML = "<b>JavaScript: 41%</b>";</script>',
+  "a division after a parenthesized value": "<script>var r = (a) / 2; var s = \"/\"; location='https://x';</script>",
+  "a division inside an if body": '<script>if (x) { y = (a + b) / "2"; }</script>',
 };
 
 for (const [name, html] of Object.entries(REFUSED_MARKUP)) {

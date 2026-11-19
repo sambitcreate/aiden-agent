@@ -122,6 +122,8 @@ interface JsToken {
   parts?: string;
   /** A template with a `${...}` substitution. */
   substituted?: boolean;
+  /** A `)` that ends an `if`, `while`, `for` or `with` head, after which a statement starts. */
+  closesHead?: boolean;
 }
 
 const PUNCTUATORS = [
@@ -131,6 +133,8 @@ const PUNCTUATORS = [
 const REGEX_AFTER_KEYWORDS: ReadonlySet<string> = new Set([
   "return", "typeof", "case", "do", "else", "in", "instanceof", "new", "delete", "void", "throw", "yield", "await", "of",
 ]);
+/** Keywords whose parenthesized head is followed by a statement, where `/` starts a regex. */
+const HEAD_KEYWORDS: ReadonlySet<string> = new Set(["if", "while", "for", "with"]);
 const SIMPLE_ESCAPES: Readonly<Record<string, string>> = { n: "\n", t: "\t", r: "\r", b: "\b", f: "\f", v: "\v", 0: "\0" };
 const IDENTIFIER_START = /[\p{ID_Start}$_]/u;
 const IDENTIFIER_PART = /[\p{ID_Continue}$_‌‍]/u;
@@ -165,6 +169,8 @@ function lexJs(code: string): JsToken[] {
   const tokens: JsToken[] = [];
   /** For each open `{` or `${`: the template token a `}` resumes, or null. */
   const braces: (JsToken | null)[] = [];
+  /** For each open `(`: whether it starts an `if`/`while`/`for`/`with` head. */
+  const parens: boolean[] = [];
   let lastSignificant: JsToken | undefined;
   const push = (token: JsToken) => {
     tokens.push(token);
@@ -226,6 +232,7 @@ function lexJs(code: string): JsToken[] {
       const regexAllowed =
         previous === undefined ||
         (previous.kind === "punct" && previous.text !== ")" && previous.text !== "]") ||
+        previous.closesHead === true ||
         (previous.kind === "name" && REGEX_AFTER_KEYWORDS.has(previous.text));
       if (regexAllowed) {
         at += 1;
@@ -297,7 +304,17 @@ function lexJs(code: string): JsToken[] {
     at += punctuator.length;
     if (punctuator === "{") braces.push(null);
     else if (punctuator === "}") braces.pop();
-    push({ kind: "punct", text: punctuator, start, end: at });
+    const token: JsToken = { kind: "punct", text: punctuator, start, end: at };
+    if (punctuator === "(") {
+      const before = tokens[tokens.length - 2];
+      parens.push(
+        lastSignificant?.kind === "name" &&
+          (HEAD_KEYWORDS.has(lastSignificant.text) || (lastSignificant.text === "await" && before?.kind === "name" && before.text === "for")),
+      );
+    } else if (punctuator === ")" && parens.pop() === true) {
+      token.closesHead = true;
+    }
+    push(token);
   }
   return tokens;
 }
