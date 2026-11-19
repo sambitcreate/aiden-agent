@@ -87,6 +87,17 @@ class StructureLimit extends Error {}
 /** Refused (after the end tag that does it): an end tag in a <select> that closes an <svg> or <math> it is not part of. */
 export const SELECT_FOREIGN_END_LIMIT = "ends an <svg> or <math> in a <select> that is still open";
 
+/** Refused (at the start tag): a raw-text or RCDATA element in a <select>, which Chromium reads as text where parse5 reads markup. */
+export const SELECT_RAW_TEXT_LIMIT = "in a <select> has content the browser reads as text and the check reads as markup";
+
+/**
+ * Start tags whose content Chromium reads as text in a <select> (by its in-body
+ * rules), where parse5 drops the tag and reads that content as markup, so a
+ * comment opened there could hide an element Chromium builds. An <iframe> is
+ * missing because it is refused as an embed wherever it is.
+ */
+const SELECT_RAW_TEXT: ReadonlySet<string> = new Set(["xmp", "title", "noembed", "noframes", "noscript", "plaintext", "textarea"]);
+
 /** Start tags parse5 drops inside a <select> that change how Chromium reads what follows. */
 const SELECT_BODY_CONTENT: ReadonlySet<string> = new Set(["svg", "math", "style"]);
 const EMBEDDING_TAGS: ReadonlySet<string> = new Set(["iframe", "object", "embed", "applet", "frame", "frameset", "base", "link"]);
@@ -1737,6 +1748,9 @@ export class HtmlScanner {
       // in the body, so what follows is read as SVG, MathML or CSS. parse5
       // drops them there, so they are built by its in-body rules instead.
       const select = parser.insertionMode;
+      if (SELECT_RAW_TEXT.has(token.tagName) && modes.select.has(select) && !parser.shouldProcessStartTagTokenInForeignContent(token)) {
+        throw new StructureLimit(`<${token.tagName}> ${SELECT_RAW_TEXT_LIMIT}`);
+      }
       if (SELECT_BODY_CONTENT.has(token.tagName) && modes.select.has(select) && !parser.shouldProcessStartTagTokenInForeignContent(token)) {
         parser.insertionMode = modes.body;
         onStartTag.call(this.parser, token);

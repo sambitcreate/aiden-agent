@@ -843,6 +843,18 @@ test("html admission reads the elements a <select> holds as Chromium builds them
       `<select><svg><foreignObject></select></foreignObject><script>x='&#39;';document.body.innerHTML='<iframe></iframe>'</script></svg>`,
       /<\/select> ends an <svg> or <math>/u,
     ],
+    // Chromium reads an <xmp>'s content as text up to </xmp>, so the comment
+    // opener is text and the frame is built; parse5 drops the <xmp> and reads
+    // a comment that hides the frame.
+    "a frame after an <xmp> in an option": [
+      '<select><option><xmp><!--</xmp><iframe src="https://evil.test/"></iframe>--></option></select>',
+      /<xmp> in a <select> has content the browser reads as text and the check reads as markup\. Move the <xmp> out of the <select>\./u,
+    ],
+    "an image after a <textarea> in an SVG <foreignObject>": [
+      `<select><svg><foreignObject><textarea><!--</textarea>${errorImage}--></foreignObject></svg></select>`,
+      /Move the <textarea> out of the <select>/u,
+    ],
+    "an image after a <noframes> in MathML text": [`<select><math><mtext><noframes><!--</noframes>${errorImage}--></mtext></math></select>`, /Move the <noframes> out/u],
   };
   for (const [name, [html, message]] of Object.entries(refused)) {
     assert.throws(() => validateGenerativeUiHtml(html), message, name);
@@ -863,6 +875,8 @@ test("html admission reads the elements a <select> holds as Chromium builds them
     "<table><tr><td><select><svg><text>t</text></svg><option>a</option></select></td></tr></table>",
     '<select><option><svg><title>Red</title><rect width="4" height="4"/></svg>Red</option></select>',
     "<select><option><svg><circle r=1></select><p>after</p>",
+    "<select><option>Notes</option></select><textarea>x</textarea>",
+    "<select><template><xmp>x</xmp></template></select>",
     setBySelect(`<select><option>${icon}Red</option></select>`),
   ];
   for (const html of admitted) {
