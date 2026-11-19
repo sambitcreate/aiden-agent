@@ -320,13 +320,14 @@ test("canvas_read lists what is in view, the page's waiting comments, and counts
   assert.equal(answer.outsideOmitted, 0);
   assert.equal(answer.more, undefined, "a page read whole says nothing about paging");
 
-  const later = await call("canvas_read", { offset: 1 });
-  assert.deepEqual(later.inView, [], "offset skips the frame in view");
+  const { x, y, w, h } = answer.view;
+  const later = await call("canvas_read", { cursor: `1@${x},${y},${w},${h}` });
+  assert.deepEqual(later.inView, [], "the cursor skips the frame in view");
   assert.deepEqual(later.outsideFrames.map((frame: { id: string }) => frame.id), ["far-group", "far-note"]);
   assert.equal(later.offset, 1);
-  assert.equal(later.nextOffset, undefined);
+  assert.equal(later.nextCursor, undefined);
   assert.equal(later.comments, undefined, "comments come with the first answer only");
-  assert.equal((await call("canvas_read", { offset: -1 })).status, "error");
+  assert.equal((await call("canvas_read", { cursor: "1" })).status, "error");
 });
 
 test("canvas_comment replies on a comment, resolves it, or both, and tells open canvases", async (t) => {

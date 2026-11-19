@@ -14,8 +14,8 @@ export const DESIGN_REFERENCE_VIEW = { w: 1200, h: 800 } as const;
 
 /**
  * At most this many frames are listed one by one per answer, those in view
- * first and then those outside it; the rest are counted, and `offset` reads
- * the next ones. A page holds at most 400.
+ * first and then those outside it; the rest are counted, and the answer's
+ * `nextCursor` reads the next ones. A page holds at most 400.
  */
 export const CANVAS_READ_FRAME_LIMIT = 200;
 /** A note's or text item's words are cut to this many characters when it is outside the view. */
@@ -24,6 +24,36 @@ const OUTSIDE_TEXT_CHARS = 120;
 export const CANVAS_READ_COMMENT_LIMIT = 40;
 
 export type CanvasView = { x: number; y: number; w: number; h: number };
+
+/**
+ * Where the next answer of a paged `canvas_read` starts, and the view the
+ * first answer sorted by. The frames in view come first, so a later answer
+ * keeps that view: if it sorted by the view the person had moved to, a frame
+ * could come before the cut in one answer and after it in the next, and be
+ * listed twice or not at all.
+ */
+export type CanvasReadCursor = { offset: number; view: CanvasView };
+
+/** The cursor as the text Aiden passes back, such as `200@-120,40,1200,800`. */
+export function formatCanvasReadCursor(cursor: CanvasReadCursor): string {
+  const { x, y, w, h } = cursor.view;
+  return `${cursor.offset}@${x},${y},${w},${h}`;
+}
+
+const CURSOR = /^(\d{1,4})@(-?\d{1,9}),(-?\d{1,9}),(\d{1,9}),(\d{1,9})$/u;
+
+/** The cursor an earlier answer gave, or null when the text is not one. */
+export function parseCanvasReadCursor(text: string): CanvasReadCursor | null {
+  const match = CURSOR.exec(text.trim());
+  if (!match) return null;
+  const [offset, x, y, w, h] = match.slice(1).map(Number) as [number, number, number, number, number];
+  if (w < 1 || h < 1) return null;
+  return { offset, view: { x, y, w, h } };
+}
+
+function sameView(a: CanvasView, b: CanvasView): boolean {
+  return a.x === b.x && a.y === b.y && a.w === b.w && a.h === b.h;
+}
 
 export type CanvasFrameSummary = {
   id: string;
@@ -66,7 +96,10 @@ export type CanvasReadAnswer = {
   page: { id: string; name: string };
   /** Every page, in order; the person sees the one marked `onScreen`. */
   pages: CanvasPageSummary[];
+  /** The view this answer sorts by: the stored one, or for a later answer the one its cursor carries. */
   view: CanvasView;
+  /** Present when the person moved the view since the answer whose cursor this one followed. */
+  viewMoved?: string;
   frameCount: number;
   openComments: number;
   inView: CanvasFrameSummary[];
@@ -74,14 +107,14 @@ export type CanvasReadAnswer = {
   outsideView: { groupId: string; title: string; frames: number }[];
   /** The frames outside the view one by one, within what is left of `CANVAS_READ_FRAME_LIMIT`. */
   outsideFrames: CanvasFrameSummary[];
-  /** Frames in view left out of this answer: past `CANVAS_READ_FRAME_LIMIT`, or before `offset`. */
+  /** Frames in view left out of this answer: past `CANVAS_READ_FRAME_LIMIT`, or listed by an earlier answer. */
   omitted: number;
   /** Frames outside the view left out of `outsideFrames`. */
   outsideOmitted: number;
   /** Where this answer's list starts in the page's frames (those in view first); present when not 0. */
   offset?: number;
-  /** The `offset` that reads the frames after this answer's; present only when there are more. */
-  nextOffset?: number;
+  /** Pass as `cursor` to read the frames after this answer's; present only when there are more. */
+  nextCursor?: string;
   /** Says how many frames this answer lists and how to read the rest; present when it lists fewer than all. */
   more?: string;
   /** The page's open and sent comments, newest first; present when there are any, on the answer from offset 0. */
@@ -158,16 +191,18 @@ function endSummary(end: NonNullable<DesignFrame["ends"]>[number]): { x: number;
  */
 export function describeCanvas(
   doc: DesignCanvas,
-  options: { pageId?: string; view?: CanvasView; offset?: number } = {},
+  options: { pageId?: string; view?: CanvasView; cursor?: CanvasReadCursor } = {},
 ): CanvasReadAnswer {
   const page = doc.pages.find((entry) => entry.id === options.pageId) ?? activeDesignPage(doc);
-  const view = options.view ?? canvasView(doc, DESIGN_REFERENCE_VIEW, page.id);
+  const current = options.view ?? canvasView(doc, DESIGN_REFERENCE_VIEW, page.id);
+  // A later answer keeps the first answer's view, so the order it cuts is the same.
+  const view = options.cursor?.view ?? current;
   const frames = doc.frames.filter((frame) => frame.pageId === page.id);
   const comments = openCommentCounts(doc);
   const visible = frames.filter((frame) => overlaps(frame, view));
   const elsewhere = frames.filter((frame) => !overlaps(frame, view));
-  // The frames in view come first, then the rest; offset skips that many.
-  const start = Math.min(Math.max(0, Math.floor(options.offset ?? 0)), frames.length);
+  // The frames in view come first, then the rest; the cursor's offset skips that many.
+  const start = Math.min(Math.max(0, Math.floor(options.cursor?.offset ?? 0)), frames.length);
   const end = Math.min(frames.length, start + CANVAS_READ_FRAME_LIMIT);
   const listedInView = visible.slice(Math.min(start, visible.length), Math.min(end, visible.length));
   const listedOutside = elsewhere.slice(Math.max(0, start - visible.length), Math.max(0, end - visible.length));
@@ -176,11 +211,17 @@ export function describeCanvas(
       ? {}
       : {
           ...(start > 0 ? { offset: start } : {}),
-          ...(end < frames.length ? { nextOffset: end } : {}),
+          ...(end < frames.length ? { nextCursor: formatCanvasReadCursor({ offset: end, view }) } : {}),
           more: `Listed frames ${end > start ? `${start + 1}–${end}` : "none"} of ${frames.length} on this page (those in view first).${
-            end < frames.length ? ` Pass offset: ${end} to read the next ones.` : ""
+            end < frames.length ? " Pass nextCursor as cursor, with the same page, to read the next ones." : ""
           }`,
         };
+  const moved = sameView(view, current)
+    ? {}
+    : {
+        viewMoved:
+          "The person has moved the view since the earlier answer. This one keeps that answer's view, so no frame is listed twice or left out; call canvas_read without a cursor to see what is in view now.",
+      };
   const outside = new Map<string, { groupId: string; title: string; frames: number }>();
   const titles = new Map(frames.filter((frame) => isDesignContainer(frame.kind)).map((frame) => [frame.id, frame.title]));
   for (const frame of frames) {
@@ -204,6 +245,7 @@ export function describeCanvas(
       onScreen: entry.id === doc.activePageId,
     })),
     view,
+    ...moved,
     frameCount: frames.length,
     openComments: doc.comments.filter((comment) => comment.state === "open" && comment.pageId === page.id).length,
     inView: listedInView.map((frame) => summarizeFrame(frame, comments.get(frame.id))),
