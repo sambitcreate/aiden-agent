@@ -21,7 +21,7 @@
  * Pure and Electron-free, like `workspace-artifacts.ts`, which uses it.
  */
 
-import { ghSlotSpec, gitSlotSpec, joinedOnlyForm, jqSlot, locateSlot, optionAfterFile, programSlotSpec, revisionsEnd, type Slot, type SlotLookup } from "./workspace-artifact-slots.js";
+import { ghSlotSpec, gitSlotSpec, joinedOnlyForm, jqSlot, locateSlot, optionAfterFile, programSlotSpec, revisionsEnd, type OptionWords, type Slot, type SlotLookup } from "./workspace-artifact-slots.js";
 
 export const WORKSPACE_ARTIFACT_PLACEHOLDER = /\{\{\s*([A-Za-z_][A-Za-z0-9_]*)\s*\}\}/gu;
 const PLACEHOLDER_AT = /\{\{\s*([A-Za-z_][A-Za-z0-9_]*)\s*\}\}/uy;
@@ -655,7 +655,7 @@ export function checkWorkspaceArtifactTemplate(template: string): { ok: true; st
         const blob = program === "git" ? readBlobPath(word, gitSubcommand(args).name!) : undefined;
         if (blob) return { ok: false, problem: { kind: "slot", reason: blob } };
       }
-      const ended = args.includes("--") ? undefined : endRefs(command);
+      const ended = args.includes("--") ? undefined : endRefs(command, template);
       if (ended) return { ok: false, problem: { kind: "misplaced", reason: ended } };
     }
   }
@@ -670,9 +670,12 @@ export function checkWorkspaceArtifactTemplate(template: string): { ok: true; st
  * `--` goes before the first file operand after the value, or at the end of
  * the command, so options written after the value stay options. After
  * revisions that may be files too (`git log -p {{file}}`), the `--` is
- * decided per run: see `TemplateWord.unlessFiles`.
+ * decided per run: see `TemplateWord.unlessFiles`. An option written where
+ * git would read it as a file is refused, and the advice quotes the option
+ * with its value and the value word as `template` writes them, so following
+ * it moves both words and keeps each value with its option.
  */
-function endRefs(command: TemplateCommand): string | undefined {
+function endRefs(command: TemplateCommand, template: string): string | undefined {
   let last = -1;
   command.words.forEach((word, index) => {
     if (word.parts.some((part) => "param" in part && part.slot?.refOnly)) last = index;
@@ -681,9 +684,13 @@ function endRefs(command: TemplateCommand): string | undefined {
   const args = command.words.slice(1).map(literal);
   const git = gitSubcommand(args);
   const end = revisionsEnd(gitSlotSpec(git.name!)!, args, git.index + 1, last - 1);
-  const name = placeholderIn(command.words[last]!);
+  const written = (word: TemplateWord) => template.slice(word.start, word.end);
+  // `args` index `i` is `command.words[i + 1]`.
+  const option = (at: OptionWords) => command.words.slice(at.index + 1, at.index + 1 + at.words).map(written).join(" ");
   if (end.optionAfter !== undefined) {
-    return `${end.optionAfter} is written after the files of git ${git.name!}. Aiden adds -- before the files so git reads ${name} only as a revision, and git would then read ${end.optionAfter} as a file. Write ${end.optionAfter} before ${name}.`;
+    const name = written(command.words[last]!);
+    const moved = option(end.optionAfter);
+    return `${moved} is written after the files of git ${git.name!}. Aiden adds -- before the files so git reads ${name} only as a revision, and git would then read ${moved} as ${end.optionAfter.words > 1 ? "file names" : "a file name"}. Write ${moved} before ${name}.`;
   }
   const at = command.words[end.at]!.end;
   const revisions = command.words.filter((word) => word.parts.some((part) => "param" in part && part.slot?.refOnly));
@@ -692,10 +699,11 @@ function endRefs(command: TemplateCommand): string | undefined {
     // A value that names a file goes without the --, and then git log and
     // show stop reading options at it.
     const first = command.words.indexOf(revisions[0]!);
-    const option = optionAfterFile(gitSlotSpec(git.name!)!, args, git.index + 1, first - 1);
-    if (option !== undefined) {
-      const value = placeholderIn(revisions[0]!);
-      return `${option} is written after ${value}. git ${git.name!} reads ${value} as a file when it names one in the workspace, and reads no option after a file. Write ${option} before ${value}.`;
+    const after = optionAfterFile(gitSlotSpec(git.name!)!, args, git.index + 1, first - 1);
+    if (after !== undefined) {
+      const value = written(revisions[0]!);
+      const moved = option(after);
+      return `${moved} is written after ${value}. git ${git.name!} reads ${value} as a file when it names one in the workspace, and reads no option after a file. Write ${moved} before ${value}.`;
     }
   }
   command.words.splice(end.at + 1, 0, { parts: [{ text: "--", insertedAt: at }], quoted: false, start: at, end: at, ...(either ? { unlessFiles: revisions } : {}) });

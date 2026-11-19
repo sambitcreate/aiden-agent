@@ -619,6 +619,24 @@ test("git log, show and reset take a value as a revision or a file, adding -- on
       assert.match(ran.stdout, /two/u, `${moved} with ${value}`);
     }
   }
+  // The advice names an option with its value and the whole word that may name a file, so
+  // followed word for word it keeps each value where it was meant.
+  const runNamed = (command: string, values: Record<string, string>) =>
+    run(command, [...new Set([...command.matchAll(/\{\{(\w+)\}\}/gu)].map((match) => match[1]!))].map((name) => values[name]!));
+  for (const [command, values, expected] of [
+    ["git log --oneline {{x}} -n {{n}}", { x: "notes.md", n: "1" }, /^\w+ two\n$/u],
+    ["git log --oneline {{x}} -n {{n}}", { x: "HEAD", n: "1" }, /^\w+ two\n$/u],
+    ["git show HEAD~{{n}} --stat", { n: "1" }, /one[\s\S]*notes\.md \|/u],
+  ] as const) {
+    let advice = "";
+    assert.throws(() => resolve(command, Object.values(values)), (error: Error) => ((advice = error.message), true));
+    const [, moved, before] = /Write (.+) before (\S+)\.$/u.exec(advice) ?? [];
+    assert.ok(moved && before, advice);
+    const followed = command.replace(` ${moved}`, "").replace(before, `${moved} ${before}`);
+    const ran = await runNamed(followed, values);
+    assert.equal(ran.exitCode, 0, `${followed}: ${ran.stderr}`);
+    assert.match(ran.stdout, expected, followed);
+  }
   // git reset reads an option after a file, so that order still saves and runs.
   fs.writeFileSync(path.join(dir, "notes.md"), "staged\n");
   git(["add", "notes.md"]);

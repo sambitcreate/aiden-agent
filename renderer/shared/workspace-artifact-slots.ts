@@ -903,7 +903,7 @@ function locateIn(spec: SlotSpec, args: Args, from: number, at: number): SlotLoo
  * `checkout b -q --`, not `checkout b -- -q`). `optionAfter` is an option
  * written after that file, which the `--` would turn into a file name.
  */
-export function revisionsEnd(spec: SlotSpec, args: Args, from: number, last: number): { at: number; optionAfter?: string } {
+export function revisionsEnd(spec: SlotSpec, args: Args, from: number, last: number): { at: number; optionAfter?: OptionWords } {
   if (spec.verbs) {
     const verb = args[from];
     if (verb !== undefined && Object.prototype.hasOwnProperty.call(spec.verbs, verb)) return revisionsEnd(spec.verbs[verb]!, args, from + 1, last);
@@ -918,10 +918,23 @@ export function revisionsEnd(spec: SlotSpec, args: Args, from: number, last: num
     if (position?.kind !== "operand") continue;
     const rule = spec.operand(position.index, position.afterDashes, has, (offset) => args[index + offset]);
     if (typeof rule !== "string" && rule.refOnly) continue;
-    const option = args.find((_arg, later) => later > index && read.positions.get(later)?.kind === "option");
+    const option = optionWordsAfter(read.positions, args, index);
     return option === undefined ? { at: index } : { at: index, optionAfter: option };
   }
   return { at: args.length };
+}
+
+/** An option as written in `args`: its word's index and how many words it takes with its value (1 or 2). */
+export interface OptionWords {
+  index: number;
+  words: number;
+}
+
+/** The first option after the word at `after`, with the value word it takes. */
+function optionWordsAfter(positions: ReadonlyMap<number, Position>, args: Args, after: number): OptionWords | undefined {
+  const index = args.findIndex((_arg, later) => later > after && positions.get(later)?.kind === "option");
+  if (index < 0) return undefined;
+  return { index, words: positions.get(index + 1)?.kind === "value" ? 2 : 1 };
 }
 
 /**
@@ -929,7 +942,7 @@ export function revisionsEnd(spec: SlotSpec, args: Args, from: number, last: num
  * reads no option after a file (`optionsBeforeFiles`), so a value there that
  * names a file would leave the option unread (`git log {{x}} --oneline`).
  */
-export function optionAfterFile(spec: SlotSpec, args: Args, from: number, first: number): string | undefined {
+export function optionAfterFile(spec: SlotSpec, args: Args, from: number, first: number): OptionWords | undefined {
   if (spec.verbs) {
     const verb = args[from];
     if (verb !== undefined && Object.prototype.hasOwnProperty.call(spec.verbs, verb)) return optionAfterFile(spec.verbs[verb]!, args, from + 1, first);
@@ -939,7 +952,7 @@ export function optionAfterFile(spec: SlotSpec, args: Args, from: number, first:
   if (!spec.optionsBeforeFiles) return undefined;
   const read = walk(spec, args, from);
   if ("problem" in read) return undefined;
-  return args.find((_arg, index) => index > first && read.positions.get(index)?.kind === "option");
+  return optionWordsAfter(read.positions, args, first);
 }
 
 const JQ_FLAGS = "nrjascCMSeRh";
