@@ -60,9 +60,11 @@ test("the wrapper keeps head styles and scripts without a src, in order, and dro
  * Asserts that `run` takes roughly linear time: four times the input may take
  * at most eight times as long (a quadratic step takes sixteen). Each size is
  * timed after a warm-up, as the fastest of three runs, so a busy machine
- * slows both sizes alike.
+ * slows both sizes alike. A small size faster than `floorMs` counts as
+ * `floorMs`, so timer noise and garbage collection in a run of a few
+ * milliseconds cannot fail it.
  */
-function assertScalesLinearly(label: string, run: (size: number) => void, size: number): void {
+function assertScalesLinearly(label: string, run: (size: number) => void, size: number, floorMs = 5): void {
   const fastest = (n: number) => {
     let best = Number.POSITIVE_INFINITY;
     for (let attempt = 0; attempt < 3; attempt += 1) {
@@ -75,7 +77,7 @@ function assertScalesLinearly(label: string, run: (size: number) => void, size: 
   run(size);
   const small = fastest(size);
   const large = fastest(size * 4);
-  assert.ok(large < Math.max(small, 5) * 8, `${label}: ${Math.round(small)} ms at ${size}, ${Math.round(large)} ms at ${size * 4}`);
+  assert.ok(large < Math.max(small, floorMs) * 8, `${label}: ${Math.round(small)} ms at ${size}, ${Math.round(large)} ms at ${size * 4}`);
 }
 
 const streamInChunks = (html: string, chunk: number): boolean => {
@@ -98,44 +100,53 @@ test("streaming a long unfinished tag in small chunks takes linear time", () => 
   assert.equal(streamInChunks(`<p>Chart</p><a href="javascript:${"x".repeat(100_000)}`, 64), false);
 });
 
-test("checking, wrapping or streaming a visual at the size cap stays well under a second, whatever its shape", () => {
+test("checking, wrapping or streaming a visual up to the size cap takes linear time, whatever its shape", () => {
   const cap = 512 * 1024 - 64;
-  const fill = (unit: string, before = "", after = "") =>
-    before + unit.repeat(Math.floor((cap - before.length - after.length) / unit.length)) + after;
+  const fill = (size: number, unit: string, before = "", after = "") =>
+    before + unit.repeat(Math.floor((size - before.length - after.length) / unit.length)) + after;
   const attributes = (count: number) => Array.from({ length: count }, (_, index) => ` a${index.toString(36)}`).join("");
-  const shapes: Record<string, string> = {
-    unclosedHeadScripts: fill("<script>", "<head>", "</head>"),
-    unclosedHeadStyles: fill("<style>", "<head>", "</head>"),
-    headScriptTagWithoutEnd: fill("<script ", "<head>", "</head>"),
-    headScriptsWithAttributes: fill("<script x>", "<head>", "</head>"),
-    openHeads: fill("<head>"),
-    openBodies: fill("<body>"),
-    htmlTagsWithoutEnd: fill("<html ", "<!doctype html>"),
-    bodyTagsWithoutEnd: fill("<body ", "<!doctype html>"),
-    htmlEndTagsWithoutEnd: fill("</html ", "<html>"),
-    deepNesting: fill("<div>".repeat(510) + "</div>".repeat(510)),
-    manyAttributes: fill(`<p${attributes(510)}>`),
-    formattingReconstruction: fill("<p>t</p>", `<p>${Array.from({ length: 500 }, (_, index) => `<b x${index}>`).join("")}</p>`),
-    scriptStrings: fill("x.innerHTML='<p>';", "<script>", "</script>"),
-    cssUrls: fill("url(a)", "<style>", "</style>"),
-    noscriptBlocks: fill("<noscript><p>x</p></noscript>"),
-    contentMovedOutOfTables: fill("a<i></i>", "<table>"),
-    contentMovedPastManySiblings: fill("<p></p>", "", `<table>${"a<i></i>".repeat(8000)}`),
+  const shapes: Record<string, (size: number) => string> = {
+    unclosedHeadScripts: (size) => fill(size, "<script>", "<head>", "</head>"),
+    unclosedHeadStyles: (size) => fill(size, "<style>", "<head>", "</head>"),
+    headScriptTagWithoutEnd: (size) => fill(size, "<script ", "<head>", "</head>"),
+    headScriptsWithAttributes: (size) => fill(size, "<script x>", "<head>", "</head>"),
+    openHeads: (size) => fill(size, "<head>"),
+    openBodies: (size) => fill(size, "<body>"),
+    htmlTagsWithoutEnd: (size) => fill(size, "<html ", "<!doctype html>"),
+    bodyTagsWithoutEnd: (size) => fill(size, "<body ", "<!doctype html>"),
+    htmlEndTagsWithoutEnd: (size) => fill(size, "</html ", "<html>"),
+    deepNesting: (size) => fill(size, "<div>".repeat(510) + "</div>".repeat(510)),
+    manyAttributes: (size) => fill(size, `<p${attributes(510)}>`),
+    formattingReconstruction: (size) =>
+      fill(size, "<p>t</p>", `<p>${Array.from({ length: 500 }, (_, index) => `<b x${index}>`).join("")}</p>`),
+    scriptStrings: (size) => fill(size, "x.innerHTML='<p>';", "<script>", "</script>"),
+    cssUrls: (size) => fill(size, "url(a)", "<style>", "</style>"),
+    noscriptBlocks: (size) => fill(size, "<noscript><p>x</p></noscript>"),
+    contentMovedOutOfTables: (size) => fill(size, "a<i></i>", "<table>"),
+    // The siblings and the moved content both grow with the size.
+    contentMovedPastManySiblings: (size) => fill(size, "<p></p>", "", `<table>${"a<i></i>".repeat(Math.floor(size / 64))}`),
   };
-  for (const [shape, html] of Object.entries(shapes)) {
-    const started = performance.now();
-    let admitted = true;
-    try {
-      wrapGenerativeUiHtml(html, TITLE);
-    } catch {
-      admitted = false;
-    }
-    const check = createGenerativeUiDraftCheck();
-    let draftAdmitted = true;
-    for (let at = 0; at < html.length && draftAdmitted; at += 997) draftAdmitted = check.append(html.slice(at, at + 997));
-    const elapsed = performance.now() - started;
-    assert.ok(elapsed < 1000, `${shape} took ${Math.round(elapsed)} ms`);
-    assert.equal(draftAdmitted, admitted, `${shape}: the draft and the finished visual disagree`);
+  for (const [shape, build] of Object.entries(shapes)) {
+    assertScalesLinearly(
+      shape,
+      (size) => {
+        const html = build(size);
+        let admitted = true;
+        try {
+          wrapGenerativeUiHtml(html, TITLE);
+        } catch {
+          admitted = false;
+        }
+        const check = createGenerativeUiDraftCheck();
+        let draftAdmitted = true;
+        for (let at = 0; at < html.length && draftAdmitted; at += 997) draftAdmitted = check.append(html.slice(at, at + 997));
+        assert.equal(draftAdmitted, admitted, `${shape}: the draft and the finished visual disagree at ${size} characters`);
+      },
+      Math.floor(cap / 4),
+      // Under 50 ms at a quarter of the cap leaves 400 ms at the cap; the
+      // quadratic shapes this guards against took seconds to minutes there.
+      50,
+    );
   }
 });
 
