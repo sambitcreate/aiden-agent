@@ -34,6 +34,7 @@ import {
 } from "./generative-ui-guide.js";
 import type { InlineVisualsMode } from "../../renderer/shared/appearance.js";
 import { createRenderUiTool, type RenderUiToolOptions } from "./aiden-ui-tool.js";
+import { checkGenerativeUiScripts, describeGenerativeUiScriptCheck } from "./generative-ui-script-check.js";
 
 export const GENERATIVE_UI_EXTENSION_ID = "aiden.gui.generative-ui";
 export const VISUALIZE_GUIDE_TOOL_NAME = "visualize_guide" as const;
@@ -326,6 +327,10 @@ export function createGenerativeUiExtensionRuntime(
             html = input.html as string;
           }
           validateGenerativeUiHtml(html);
+          const scriptCheck = describeGenerativeUiScriptCheck(
+            checkGenerativeUiScripts(html),
+            "call render_artifact again with the same title to replace it",
+          );
           const size = htmlArtifactByteLength(html);
           const replacing = titlesInGeneration.get(title);
           const nextBytes = displayedBytes - (replacing?.size ?? 0) + size;
@@ -383,8 +388,8 @@ export function createGenerativeUiExtensionRuntime(
               {
                 type: "text",
                 text: replacing && presented
-                  ? `Replaced the artifact "${title}" in place from ${sourceLabel} (${size} bytes); the person now sees this version.`
-                  : `Rendered artifact "${title}" inline from ${sourceLabel} (${size} bytes).`,
+                  ? `Replaced the artifact "${title}" in place from ${sourceLabel} (${size} bytes); the person now sees this version.${scriptCheck}`
+                  : `Rendered artifact "${title}" inline from ${sourceLabel} (${size} bytes).${scriptCheck}`,
               },
             ],
             details: null,

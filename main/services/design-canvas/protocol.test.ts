@@ -8,7 +8,104 @@ import * as path from "node:path";
 import test, { type TestContext } from "node:test";
 import { DESIGN_BRIDGE_SOURCE } from "./bridge-source.js";
 import { DesignGrantRegistry } from "./grants.js";
-import { designResponse, registerDesignProtocol } from "./protocol.js";
+import {
+  DESIGN_OFFLINE_SANDBOX_POLICY,
+  GENERATIVE_UI_OFFLINE_SANDBOX_POLICY,
+  designOfflineMissingFile,
+  designOfflineRequestAllowed,
+  withDesignOfflineSandbox,
+} from "./offline-policy.js";
+import { designProtocolHandler, designResponse, registerDesignProtocol } from "./protocol.js";
+
+test("a handler whose file read throws answers not found instead of failing the request", async (t) => {
+  const { grant, grants } = await fixture(t);
+  const handler = designProtocolHandler({
+    grants,
+    readFile: () => {
+      throw new Error("disk gone");
+    },
+  });
+  assert.equal((await handler(new Request(`aiden-design://${grant}/design/a.css`))).status, 404);
+});
+
+test("the hidden window may reach only Aiden's local schemes, inline data and blobs made from them", () => {
+  for (const url of [
+    "aiden-design://grant-1/design/home.html",
+    "aiden-genui://preview/token-1",
+    "data:image/png;base64,AAAA",
+    "blob:aiden-design://grant-1/0b6f3c8e-1d2a-4f5b-9c7d-2e8a1b3c4d5e",
+    "about:blank",
+    "about:srcdoc",
+  ]) {
+    assert.equal(designOfflineRequestAllowed(url), true, url);
+  }
+  for (const url of [
+    "https://example.com/font.woff2",
+    "http://127.0.0.1:8080/",
+    "ws://localhost:3478/",
+    "file:///etc/hosts",
+    "blob:https://example.com/0b6f3c8e-1d2a-4f5b-9c7d-2e8a1b3c4d5e",
+    "blob:blob:https://example.com/x",
+    "about:config",
+    "stun:stun.example.com:3478",
+    "not a url",
+    "",
+  ]) {
+    assert.equal(designOfflineRequestAllowed(url), false, url);
+  }
+});
+
+test("a workspace script, import, stylesheet or image the scheme answered as missing is named, and nothing else is", () => {
+  const script = "aiden-design://grant-1/design/js/app.js";
+  assert.equal(designOfflineMissingFile({ url: script, statusCode: 404, resourceType: "script" }), script);
+  assert.equal(designOfflineMissingFile({ url: script, statusCode: 403, resourceType: "script" }), script, "a path outside the grant");
+  for (const resourceType of ["stylesheet", "image", "font", "media", "xhr", "other"]) {
+    assert.equal(designOfflineMissingFile({ url: script, statusCode: 404, resourceType }), script, resourceType);
+  }
+  // A file that loaded, the page itself, and what is not a workspace file.
+  assert.equal(designOfflineMissingFile({ url: script, statusCode: 200, resourceType: "script" }), null);
+  assert.equal(designOfflineMissingFile({ url: script, statusCode: 304, resourceType: "script" }), null);
+  assert.equal(designOfflineMissingFile({ url: "aiden-design://grant-1/design/home.html", statusCode: 404, resourceType: "mainFrame" }), null);
+  assert.equal(designOfflineMissingFile({ url: "aiden-genui://preview/token-1", statusCode: 404, resourceType: "subFrame" }), null);
+  assert.equal(designOfflineMissingFile({ url: "data:text/javascript,", statusCode: 404, resourceType: "script" }), null);
+});
+
+test("each response in the hidden window keeps its own policy, body and status and adds a sandbox that opens no dialog", async (t) => {
+  const { get } = await fixture(t);
+  const original = await get("design/missing.html");
+  const status = original.status;
+  const sandboxed = withDesignOfflineSandbox(
+    new Response("<p>hi</p>", { status: 203, statusText: "Partial", headers: { "content-security-policy": CSP, "x-content-type-options": "nosniff" } }),
+  );
+  assert.equal(sandboxed.status, 203);
+  assert.equal(sandboxed.statusText, "Partial");
+  assert.equal(await sandboxed.text(), "<p>hi</p>");
+  assert.equal(sandboxed.headers.get("x-content-type-options"), "nosniff");
+  const policies = sandboxed.headers.get("content-security-policy")!.split(/,\s*/u);
+  assert.deepEqual(policies, [CSP, DESIGN_OFFLINE_SANDBOX_POLICY]);
+  const tokens = DESIGN_OFFLINE_SANDBOX_POLICY.split(/\s+/u);
+  assert.equal(tokens[0], "sandbox");
+  for (const opener of ["allow-modals", "allow-popups", "allow-forms", "allow-top-navigation", "allow-downloads"]) {
+    assert.equal(tokens.includes(opener), false, opener);
+  }
+  // A refusal stays a refusal.
+  assert.equal(withDesignOfflineSandbox(original).status, status);
+});
+
+test("a generative UI preview in the hidden window runs its scripts without an origin, so previews share no storage", () => {
+  const sandboxed = withDesignOfflineSandbox(
+    new Response("<p>hi</p>", { headers: { "content-security-policy": "default-src 'none'" } }),
+    GENERATIVE_UI_OFFLINE_SANDBOX_POLICY,
+  );
+  const policies = sandboxed.headers.get("content-security-policy")!.split(/,\s*/u);
+  assert.equal(policies.length, 2);
+  const tokens = policies[1]!.split(/\s+/u);
+  assert.equal(tokens[0], "sandbox");
+  assert.ok(tokens.includes("allow-scripts"));
+  for (const token of ["allow-same-origin", "allow-modals", "allow-popups", "allow-forms", "allow-top-navigation", "allow-downloads"]) {
+    assert.equal(tokens.includes(token), false, token);
+  }
+});
 
 const CSP =
   "default-src 'none'; script-src aiden-design: 'unsafe-inline'; style-src aiden-design: 'unsafe-inline'; img-src aiden-design: data: blob:; font-src aiden-design: data:; media-src aiden-design: blob:; connect-src 'none'; frame-src 'none'; form-action 'none'; base-uri 'none'";

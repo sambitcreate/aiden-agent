@@ -32,6 +32,7 @@ import type { DurablePiRuntimeEffect } from "./pi-runtime-effect-core.js";
 import type { ChatMessage } from "./types.js";
 import type { ChatForkSummaryV1 } from "../../renderer/shared/chat-copy-contract.js";
 import { CANVAS_STATUS_SECTION } from "../../renderer/shared/design-canvas/canvas-summary.js";
+import { DESIGN_PAGE_INSPECT_SECTION } from "./design-canvas/inspect-note.js";
 
 export const AIDEN_CHAT_MESSAGE_MARKER = "aiden.chat-message.v1";
 export const AIDEN_PI_TRANSACTION = "aiden.pi-transaction.v1";
@@ -477,7 +478,7 @@ export async function projectVisibleHistoryWithoutSkills<M extends PiSessionMeta
       // A fork's ready summary follows its last copied message here too; the
       // durable journal's copy is hidden with the rest of the skill-era entries.
       ...forkSummaryEntry(marker),
-      // Design canvas status notes earlier turns sent stay where they were, so
+      // Design canvas notes earlier turns sent stay where they were, so
       // a turn whose counts are unchanged adds no note and the prefix holds.
       ...(notesAfter.get(message.id) ?? []).map((note): PiSessionEntry => ({
         type: "message", id: `visible-skill-free-note-${note.id}`, parentId: null,
@@ -534,8 +535,9 @@ export async function projectVisibleHistoryWithoutSkills<M extends PiSessionMeta
 }
 
 /**
- * The design canvas status notes on a branch, by the chat message whose
- * marker precedes them. They hold only canvas counts, never skill data.
+ * The design canvas notes on a branch (status notes and the reports on pages
+ * Aiden wrote), by the chat message whose marker precedes them. They hold
+ * only canvas counts and page findings, never skill data.
  */
 function canvasStatusNotesByMessage(branch: readonly PiSessionEntry[]): Map<string, Extract<PiSessionEntry, { type: "message" }>[]> {
   const notes = new Map<string, Extract<PiSessionEntry, { type: "message" }>[]>();
@@ -544,7 +546,9 @@ function canvasStatusNotesByMessage(branch: readonly PiSessionEntry[]): Map<stri
     if (entry.type === "custom" && entry.customType === AIDEN_CHAT_MESSAGE_MARKER) after = markerId(entry.data) ?? after;
     if (entry.type !== "message" || after === undefined) continue;
     const sections = (entry.message as { role?: unknown; sections?: Record<string, unknown> }).sections;
-    if (entry.message.role !== "system" || !sections || !(CANVAS_STATUS_SECTION in sections)) continue;
+    if (entry.message.role !== "system" || !sections || !(CANVAS_STATUS_SECTION in sections || DESIGN_PAGE_INSPECT_SECTION in sections)) {
+      continue;
+    }
     notes.set(after, [...(notes.get(after) ?? []), entry]);
   }
   return notes;

@@ -1014,19 +1014,22 @@ test("queued design comments go with the next send as a text block and their pic
       },
     },
   });
-  const sentIds: string[][] = [];
+  const events: string[] = [];
   const tray = {
     chatId: "design-chat",
     comments: [
       { id: "c1", label: "Hero › h1", note: "Bigger" },
       { id: "c2", label: "Canvas", note: "Add a footer" },
     ],
-    block: "<attached-design-comments>\n[]\n</attached-design-comments>",
+    // The block lists the pictures it was told are attached, so the test sees which ones the send named.
+    block: (pictures: Record<string, string> = {}) =>
+      `<attached-design-comments>\n${JSON.stringify(pictures)}\n</attached-design-comments>`,
     crops: { c1: { mimeType: "image/png", data: "iVBORw0KGgoAAAA=" } },
     remove() {},
     open() {},
-    markSent(ids: string[]) {
-      sentIds.push([...ids]);
+    async markSent(ids: string[]) {
+      events.push(`marked ${ids.join(",")}`);
+      return { done: () => events.push("done"), undo: () => events.push("undo") };
     },
   };
   Object.assign(globalThis, { __composerCommentTray: tray });
@@ -1048,6 +1051,7 @@ test("queued design comments go with the next send as a text block and their pic
             isGenerating={false}
             onStop={() => {}}
             onSend={async (value, attachments) => {
+              events.push("send");
               sends.push({ text: value, attachments });
             }}
           />,
@@ -1063,13 +1067,22 @@ test("queued design comments go with the next send as a text block and their pic
       sends[0]!.attachments.map((attachment) => [attachment.name, attachment.kind]),
       [["Design comments.txt", "text"], ["Design comment 1.png", "image"]],
     );
-    assert.equal(sends[0]!.attachments[0]!.text, tray.block);
+    assert.equal(
+      sends[0]!.attachments[0]!.text,
+      tray.block({ c1: "Design comment 1.png" }),
+      "the block names the picture of the one comment that has one",
+    );
     assert.deepEqual(
       sends[1]!.attachments.map((attachment) => attachment.name),
       ["Design comments.txt"],
       "a model without images gets the words only",
     );
-    assert.deepEqual(sentIds, [["c1", "c2"], ["c1", "c2"]], "each send marks its comments sent");
+    assert.equal(sends[1]!.attachments[0]!.text, tray.block({}), "and a block that names no picture");
+    assert.deepEqual(
+      events,
+      ["marked c1,c2", "send", "done", "marked c1,c2", "send", "done"],
+      "each send marks its comments sent before the message goes, so Aiden's turn finds them sent",
+    );
   } finally {
     await React.act(async () => root.unmount());
     await loaded.cleanup();
@@ -1090,16 +1103,17 @@ test("a failed send leaves design comments in the tray", async () => {
       },
     },
   });
-  const sentIds: string[][] = [];
+  const events: string[] = [];
   Object.assign(globalThis, {
     __composerCommentTray: {
       chatId: "design-chat",
       comments: [{ id: "c1", label: "Canvas", note: "Bigger" }],
-      block: "<attached-design-comments>\n[]\n</attached-design-comments>",
+      block: () => "<attached-design-comments>\n[]\n</attached-design-comments>",
       remove() {},
       open() {},
-      markSent(ids: string[]) {
-        sentIds.push([...ids]);
+      async markSent(ids: string[]) {
+        events.push(`marked ${ids.join(",")}`);
+        return { done: () => events.push("done"), undo: () => events.push("undo") };
       },
     },
   });
@@ -1118,6 +1132,7 @@ test("a failed send leaves design comments in the tray", async () => {
           isGenerating={false}
           onStop={() => {}}
           onSend={async () => {
+            events.push("send");
             throw new Error("offline");
           }}
         />,
@@ -1126,7 +1141,7 @@ test("a failed send leaves design comments in the tray", async () => {
     await React.act(async () => {
       await handlers(button(mounted.container, "Send message")).onClick();
     });
-    assert.deepEqual(sentIds, []);
+    assert.deepEqual(events, ["marked c1", "send", "undo"], "the comments marked sent go back to the tray");
   } finally {
     await React.act(async () => root.unmount());
     await loaded.cleanup();

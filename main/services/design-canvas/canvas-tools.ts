@@ -14,8 +14,12 @@ import { randomUUID } from "node:crypto";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { Type } from "typebox";
 import { declarePiRuntimeReplay } from "../pi-runtime-tool.js";
-import { canvasView, describeCanvas, summarizeFrame } from "../../../renderer/shared/design-canvas/canvas-summary.js";
-import { commentsWithoutFrames } from "../../../renderer/shared/design-canvas/comments.js";
+import { CANVAS_READ_FRAME_LIMIT, canvasReadCursorPage, canvasView, describeCanvas, parseCanvasReadCursor, summarizeFrame } from "../../../renderer/shared/design-canvas/canvas-summary.js";
+import {
+  commentsWithoutFrames,
+  replyToComment,
+  resolveComment,
+} from "../../../renderer/shared/design-canvas/comments.js";
 import { canAttachTo, syncConnectors, translateConnector } from "../../../renderer/shared/design-canvas/connectors.js";
 import {
   bringLayerToFront,
@@ -83,6 +87,8 @@ export const DESIGN_CANVAS_TOOL_NAMES = [
   "canvas_focus",
   "canvas_arrange",
   "canvas_page",
+  "canvas_inspect",
+  "canvas_comment",
 ] as const;
 
 /** Canvas tool calls one turn may make; past it each call returns `limit_reached`. */
@@ -182,6 +188,8 @@ export const DESIGN_MODE_PROMPT_SECTION = [
   "- For a flow or diagram, place shapes (with their labels in text), text and frames (artboards), then connectors between them by frameId; a connector follows its frames when they move.",
   "- The canvas can have several pages. Work on the page the person is looking at unless they name another; canvas_page adds, renames, duplicates, reorders, shows or deletes pages, and canvas_update_frame with page moves a frame to another.",
   "- After placing or moving frames, call canvas_focus with their ids so the person sees them (canvas_arrange does this by itself). canvas_read with snapshot: true shows you the canvas as the person sees it.",
+  "- canvas_inspect draws one page offline at its design width, with its frame's look, and reports script errors, files that did not load, sideways overflow and tweaks that do nothing, with a picture when you can see images. Each page you write is checked the same way without a picture, and the report follows in the conversation before your next step: fix what it lists once, call canvas_inspect for a picture after a big change, and say what you fixed.",
+  "- The person's canvas comments come with their message or in canvas_read. After acting on one they sent you, canvas_comment can reply on it in a sentence (what you changed, or a question when it is unclear) and resolve it once it is done. An open comment in canvas_read is still their draft, or one they reopened after your reply, so it is left for them to send.",
   "- Coordinates and sizes are canvas units. Say which file you changed.",
 ].join("\n");
 
@@ -198,6 +206,19 @@ export type DesignCanvasToolDeps = {
   focus?(frameIds: string[]): void;
   /** A downscaled PNG of the canvas as the person sees it, or null when it is not on screen. */
   snapshot?(signal?: AbortSignal): Promise<{ data: string; mimeType: string } | null>;
+  /** False when the turn's model can't see pictures: canvas_read then takes no snapshot and says why. Defaults to true. */
+  seesImages?: boolean;
+  /**
+   * Draws one page frame offline at its design width and reports what went
+   * wrong (inspect.ts), with a picture starting `top` px down when `picture`.
+   */
+  inspect?(
+    frame: DesignFrame,
+    options: { top: number; picture: boolean },
+    signal?: AbortSignal,
+  ): Promise<{ text: string; image?: { data: string; mimeType: string } }>;
+  /** The time a reply or a resolve is stamped with. */
+  now?(): Date;
 };
 
 type ToolContent = { type: "text"; text: string } | { type: "image"; data: string; mimeType: string };
@@ -209,8 +230,9 @@ class WithImage {
     readonly image: { data: string; mimeType: string },
   ) {}
 }
+/** A tool answer as text: a string as it is (a report), anything else as JSON. */
 const result = (value: unknown): ToolResult => ({
-  content: [{ type: "text", text: JSON.stringify(value) }],
+  content: [{ type: "text", text: typeof value === "string" ? value : JSON.stringify(value) }],
   details: null,
 });
 
@@ -519,7 +541,7 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
       const value = await body();
       if (value instanceof WithImage) {
         return {
-          content: [{ type: "text", text: JSON.stringify(value.value) }, { type: "image", ...value.image }],
+          content: [...result(value.value).content, { type: "image", ...value.image }],
           details: null,
         };
       }
@@ -562,22 +584,47 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
         name: "canvas_read",
         label: "Read design canvas",
         description:
-          "Read the design canvas beside this chat: its pages, and on one page (the one the person is looking at unless you name another) the visible area, the frames in it (id, kind, title, path, box, group, look, open comments), every frame outside it (outsideFrames, with ids and boxes so you can move, group or focus them), counts by group, and the page's open and sent comments (each with its commentId, note, frame, file and the element it points at). Boxes are in canvas units. Pass snapshot: true to also see a picture of the canvas as the person sees it.",
+          `Read the design canvas beside this chat: its pages, and on one page (the one the person is looking at unless you name another) the visible area, the frames in it (id, kind, title, path, box, group, look, open comments), every frame outside it (outsideFrames, with ids and boxes so you can move, group or focus them), counts by group, and the page's open and sent comments (each with its commentId, note, frame, file and the element it points at). Up to ${CANVAS_READ_FRAME_LIMIT} frames are listed per call; when a page has more, the answer says so and gives nextCursor, which you pass as cursor to read the next ones (the cursor carries its page, so page can be left out; if the page's frames change between calls, the cursor is refused and you read again without one). A later answer keeps the first answer's view, so every frame is listed once even if the view moves meanwhile; viewMoved says when it has. Boxes are in canvas units. Pass snapshot: true to also see a picture of the canvas as the person sees it.`,
         parameters: Type.Object({
           page: Type.Optional(Type.String({ maxLength: 128, description: "A page's name or id." })),
+          cursor: Type.Optional(Type.String({ maxLength: 80, description: "The nextCursor an earlier answer gave, to read the frames after it on that answer's page." })),
           snapshot: Type.Optional(Type.Boolean()),
         }),
         execute: async (_id, raw, signal) =>
           run(async () => {
-            const p = (raw ?? {}) as { page?: unknown; snapshot?: unknown };
+            const p = (raw ?? {}) as { page?: unknown; cursor?: unknown; offset?: unknown; snapshot?: unknown };
+            if (p.offset !== undefined) {
+              throw new CanvasToolError("canvas_read no longer takes offset. To read the frames after an answer, pass its nextCursor as cursor.");
+            }
             const doc = await deps.store.get(deps.chatId);
-            const answer = describeCanvas(doc, { pageId: pageOf(doc, p.page) });
-            // The snapshot shows the screen, so it only describes the page on screen.
-            if (p.snapshot !== true || answer.page.id !== doc.activePageId) return answer;
+            const cursor = p.cursor === undefined ? undefined : typeof p.cursor === "string" ? parseCanvasReadCursor(p.cursor) : null;
+            if (cursor === null) {
+              throw new CanvasToolError("cursor must be the nextCursor an earlier canvas_read answer gave, copied as it is.");
+            }
+            const named = p.page === undefined || p.page === null || p.page === "" ? undefined : pageOf(doc, p.page);
+            let pageId = named ?? doc.activePageId;
+            if (cursor) {
+              const read = canvasReadCursorPage(doc, cursor, named);
+              if ("error" in read) throw new CanvasToolError(read.error);
+              pageId = read.pageId;
+            }
+            const answer = describeCanvas(doc, { pageId, ...(cursor ? { cursor } : {}) });
+            if (p.snapshot !== true) return answer;
+            const unavailable = (snapshotReason: string) => ({ ...answer, snapshot: "unavailable", snapshotReason });
+            if (deps.seesImages === false) {
+              return unavailable(
+                "This model can't see pictures, so no snapshot was taken. The frames listed here describe the page; canvas_inspect reports in words what a page frame draws.",
+              );
+            }
+            // The snapshot shows the screen, so it only pictures the page on screen.
+            if (answer.page.id !== doc.activePageId) {
+              const onScreen = doc.pages.find((entry) => entry.id === doc.activePageId)?.name ?? "another page";
+              return unavailable(
+                `A snapshot shows only the page on screen, which is "${onScreen}", not "${answer.page.name}". Call canvas_focus with page "${answer.page.name}" to bring it on screen first, or canvas_inspect for a picture of one of its page frames.`,
+              );
+            }
             const image = deps.snapshot ? await deps.snapshot(signal) : null;
-            return image
-              ? new WithImage({ ...answer, snapshot: "attached" }, image)
-              : { ...answer, snapshot: "unavailable", snapshotReason: "The canvas is not on screen right now." };
+            return image ? new WithImage({ ...answer, snapshot: "attached" }, image) : unavailable("The canvas is not on screen right now.");
           }),
       },
       "safe",
@@ -1314,6 +1361,93 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
                   ...(action !== "delete" ? { page: { id: pageId, name: next.pages.find((entry) => entry.id === pageId)?.name } } : { page: { id: pageId } }),
                   pages: pagesAnswer(next),
                 },
+              };
+            });
+          }),
+      },
+      "never",
+    ),
+    declarePiRuntimeReplay(
+      {
+        name: "canvas_inspect",
+        label: "Inspect design page",
+        description:
+          "Draw one design page offline at its design width, with its frame's dark look and tweaks, and report what went wrong: script errors with their file and line (and errors the page logged itself), files that did not load (anything from the network, missing workspace files), sideways overflow and what causes it, the page's height, which tweak controls the page reads, and tweak names the frame sets that nothing reads. Comes with a picture of the page when you can see images (pass top to see further down a tall page, picture: false for the report only). Name the page by frameId, or by path (its frame on the page the person is looking at, else its first frame on any page). Call it after a big change, fix what it finds once, and say what you fixed.",
+        parameters: Type.Object({
+          frameId: Type.Optional(Type.String({ maxLength: 128 })),
+          path: Type.Optional(Type.String({ maxLength: 1024, description: "A workspace-relative page path, such as design/home.html." })),
+          top: Type.Optional(Type.Number({ minimum: 0, description: "Where the picture starts, in CSS pixels from the top of the page." })),
+          picture: Type.Optional(Type.Boolean({ description: "false for the text report only." })),
+        }),
+        execute: async (_id, raw, signal) =>
+          run(async () => {
+            const p = (raw ?? {}) as { frameId?: unknown; path?: unknown; top?: unknown; picture?: unknown };
+            if (!deps.inspect) throw new CanvasToolError("Pages can't be inspected here.");
+            const doc = await deps.store.get(deps.chatId);
+            let frame: DesignFrame | undefined;
+            if (p.frameId !== undefined) {
+              frame = frameIn(doc, p.frameId);
+            } else if (typeof p.path === "string" && p.path.trim()) {
+              const wanted = p.path.trim().replace(/^\.\//u, "");
+              const showing = doc.frames.filter((entry) => entry.kind === "file" && entry.path === wanted);
+              frame = showing.find((entry) => entry.pageId === doc.activePageId) ?? showing[0];
+              if (!frame) throw new CanvasToolError(`${wanted} is not on the canvas. Place it with canvas_place_frame first, or name a frameId.`);
+            } else {
+              throw new CanvasToolError("Name the page to inspect by frameId or path.");
+            }
+            if (frame.kind !== "file" || !frame.path) throw new CanvasToolError("Only a page (a file frame) can be inspected.");
+            const top = optionalNumber(p.top, "top") ?? 0;
+            const picture = optionalBoolean(p.picture, "picture") !== false;
+            let answer: { text: string; image?: { data: string; mimeType: string } };
+            try {
+              answer = await deps.inspect(frame, { top: Math.max(0, top), picture }, signal);
+            } catch (error) {
+              if (signal?.aborted) throw error;
+              throw new CanvasToolError(`The page could not be drawn: ${error instanceof Error ? error.message : "it failed"}`);
+            }
+            const text = `Frame ${frame.id}. ${answer.text}`;
+            return answer.image ? new WithImage(text, answer.image) : text;
+          }),
+      },
+      "safe",
+    ),
+    declarePiRuntimeReplay(
+      {
+        name: "canvas_comment",
+        label: "Answer design comment",
+        description:
+          "Reply on one of the person's canvas comments, resolve it, or both. A reply is a sentence or two shown under their note: what you changed, or a question when the comment is unclear; a newer reply replaces your last one. Resolve a comment once what it asks is done; the person can reopen it. Use the commentId from the comment block or canvas_read. Only a comment the person sent you (state sent, or one you already resolved) can be answered: an open one is still their draft, or one they reopened, until they send it.",
+        parameters: Type.Object({
+          commentId: Type.String(),
+          reply: Type.Optional(Type.String({ maxLength: DESIGN_CANVAS_LIMITS.replyChars })),
+          resolve: Type.Optional(Type.Boolean({ description: "true marks the comment resolved." })),
+        }),
+        execute: async (_id, raw) =>
+          run(async () => {
+            const p = raw as Record<string, unknown>;
+            const reply = p.reply === undefined || p.reply === null ? undefined : text(p.reply, "reply", DESIGN_CANVAS_LIMITS.replyChars);
+            const resolve = optionalBoolean(p.resolve, "resolve") === true;
+            if (reply === undefined && !resolve) throw new CanvasToolError("Pass a reply, resolve: true, or both.");
+            const at = (deps.now?.() ?? new Date()).toISOString();
+            return edit((doc) => {
+              const comment = typeof p.commentId === "string" ? doc.comments.find((entry) => entry.id === p.commentId) : undefined;
+              if (!comment) {
+                throw new CanvasToolError("No comment on this canvas has that id. Call canvas_read for the page's open comments.");
+              }
+              if (comment.state === "open") {
+                // A draft may still be in the person's tray; answering it would take it out before they send it.
+                throw new CanvasToolError(
+                  comment.reply
+                    ? "The person reopened that comment after your reply, so it is their draft again until they send it. Leave it for them to send; your earlier reply stays on it."
+                    : "That comment is still the person's draft: they have not sent it to you. Reply on or resolve only comments sent with their message; leave an open one for them to send, or ask about it in your reply.",
+                );
+              }
+              let next = reply === undefined ? doc : replyToComment(doc, comment.id, reply, at);
+              if (resolve) next = resolveComment(next, comment.id, at);
+              const state = next.comments.find((entry) => entry.id === comment.id)!.state;
+              return {
+                doc: next,
+                value: { status: "ok", commentId: comment.id, state, ...(reply !== undefined ? { replied: true } : {}) },
               };
             });
           }),

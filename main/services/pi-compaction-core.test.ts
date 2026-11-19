@@ -47,6 +47,7 @@ import { migratePiSessionJournal } from "./pi-session-migration.js";
 import { upgradeOldPiV4File } from "./pi-session-v4-upgrade.js";
 import { withJournaledCanvasStatusNote } from "./design-canvas/status-note.js";
 import { CANVAS_STATUS_SECTION } from "../../renderer/shared/design-canvas/canvas-summary.js";
+import { DESIGN_PAGE_INSPECT_SECTION, withDesignInspectNote } from "./design-canvas/inspect-note.js";
 
 const ZERO_COST = {
   input: 0,
@@ -2430,7 +2431,7 @@ test("disabled skills project visible history without old expanded inputs, resul
 });
 
 
-test("with skills off, the design canvas note a turn journaled is in the next turn's context, so unchanged counts add nothing", async () => {
+test("with skills off, the design canvas notes a turn journaled are in the next turn's context, so unchanged counts add nothing", async () => {
   const { model } = compactionFixture();
   const session = await memorySession();
   const notes = (messages: readonly AgentMessage[]) => messages.flatMap((message) => {
@@ -2448,6 +2449,9 @@ test("with skills off, the design canvas note a turn journaled is in the next tu
   await session.appendMessage({ ...assistant(model), content: [{ type: "toolCall", id: "skill-call", name: "skill_review", arguments: {} }] });
   await session.appendMessage({ role: "toolResult", toolCallId: "skill-call", toolName: "skill_review",
     content: [{ type: "text", text: "HIDDEN_SKILL_RESULT" }], isError: false, timestamp: 12 });
+  // Mid-reply, the report on a page the turn wrote is journaled as it is sent.
+  const [inspectNote] = withDesignInspectNote({ messages: [] }, [{ path: "design/pricing.html", findings: ["line 4 of design/pricing.html: ReferenceError: x is not defined"] }], 13).messages;
+  await session.appendMessage(inspectNote as AgentMessage);
   const second: ChatMessage[] = [...first,
     { id: "a1", role: "assistant", content: "Here is the layout", createdAt: 20 },
     { id: "u2", role: "user", content: "Tighten it", createdAt: 30 }];
@@ -2458,6 +2462,11 @@ test("with skills off, the design canvas note a turn journaled is in the next tu
   assert.doesNotMatch(JSON.stringify(context), /HIDDEN_SKILL/u);
   // The note sits where the first turn sent it, so that request's prefix holds.
   assert.deepEqual(context.slice(0, sentFirst.length), sentFirst);
+  const inspectNotes = context.filter((message) => {
+    const sections = (message as { sections?: Record<string, string> }).sections;
+    return message.role === "system" && sections && DESIGN_PAGE_INSPECT_SECTION in sections;
+  });
+  assert.deepEqual(inspectNotes, [inspectNote], "the page report stays in the history the next turn sends");
   const sentSecond = await withJournaledCanvasStatusNote(turnTwo, context, line, 31, (error) => warnings.push(error));
   assert.equal(sentSecond.length, context.length, "unchanged counts add no note");
   const changed = await withJournaledCanvasStatusNote(turnTwo, context, "The canvas has 3 frames, 0 open comments.", 32, (error) => warnings.push(error));

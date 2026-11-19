@@ -25,8 +25,8 @@ import type { Attachment } from "./types.js";
  *   iframe of their main-built preview URL, under the guest CSP.
  * - Native visuals render `AidenUiBlock` in the `visual-snapshot` entry with
  *   the default light tokens and no preload.
- * The window never shows, opens nothing, navigates nowhere, and closes after
- * the queue goes idle. A capture that is abandoned (timeout or chat deletion)
+ * The window never shows, opens nothing, navigates nowhere, sends no WebRTC
+ * UDP, and closes after the queue goes idle. A capture that is abandoned (timeout or chat deletion)
  * destroys its own window, because a guest that never yields keeps running
  * script that `webContents.stop()` cannot interrupt.
  */
@@ -123,6 +123,9 @@ export function createElectronVisualSnapshotCapture(deps: {
       },
     });
     markAuxiliaryWindow(window);
+    // A visual's own script may open an RTCPeerConnection, which the guest CSP
+    // cannot stop in Electron; this keeps it off UDP (TURN over TCP still goes direct).
+    window.webContents.setWebRTCIPHandlingPolicy("disable_non_proxied_udp");
     window.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
     window.webContents.on("will-navigate", (event) => event.preventDefault());
     // The guest is inline, so no frame may navigate anywhere: a guest can always try to navigate its own frame.

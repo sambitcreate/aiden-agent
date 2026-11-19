@@ -230,6 +230,15 @@ if (process.platform === "linux") {
   app.commandLine.appendSwitch("enable-features", "GlobalShortcutsPortal");
 }
 
+// A page's <link rel="dns-prefetch"> asks the network service to resolve its
+// host directly, ignoring the session's proxy, so a design page drawn in the
+// offline export session could still leak a host name to the system resolver.
+// This Blink setting is process-wide: it stops only those speculative hints,
+// not the resolution a real request makes, and Aiden's own pages use none.
+// Being process-wide, it also turns off DNS prefetch and preconnect hints for
+// sites in the in-app browser, an accepted small cost in page-load speed.
+app.commandLine.appendSwitch("blink-settings", "dnsPrefetchingEnabled=false");
+
 registerCustomSchemes({ studioAssets: studioAssetsEnabled(), designMode: designModeEnabled() });
 
 // Commands behind a flag that is off claim no shortcut, so they never block a
@@ -1615,6 +1624,11 @@ async function createMainWindow(
   resetRendererReadiness();
 
   const createdWindow = mainWindow;
+  // Aiden never uses WebRTC, but a live design canvas frame or a chat's
+  // generated UI runs its own script here, and Electron ignores the guest CSP's
+  // `webrtc 'block'`, so such a page could send STUN or TURN over UDP to a host
+  // it names. This stops UDP; TURN over TCP still goes direct (design-mode spec §5.4).
+  createdWindow.webContents.setWebRTCIPHandlingPolicy("disable_non_proxied_udp");
   registerBroadcastReceiver(createdWindow);
   imageQuitCoverage.clear();
   mainWindowState.track(createdWindow);

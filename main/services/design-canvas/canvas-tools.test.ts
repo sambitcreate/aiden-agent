@@ -8,7 +8,14 @@ import {
   DESIGN_CANVAS_CALLS_PER_TURN,
   designCanvasToolsAllowed,
 } from "./canvas-tools.js";
-import { addPage, showPage } from "../../../renderer/shared/design-canvas/pages.js";
+import {
+  CANVAS_READ_FRAME_LIMIT,
+  canvasReadFramesKey,
+  canvasReadPageKey,
+  formatCanvasReadCursor,
+} from "../../../renderer/shared/design-canvas/canvas-summary.js";
+import { addPage, deletePage, showPage } from "../../../renderer/shared/design-canvas/pages.js";
+import { reopenComment } from "../../../renderer/shared/design-canvas/comments.js";
 import { DesignCanvasStore } from "./store.js";
 
 async function setup(t: test.TestContext) {
@@ -296,12 +303,14 @@ test("canvas_read lists what is in view, the page's waiting comments, and counts
         frame: "Home",
         frameId: "page",
         file: "design/home.html",
+        look: "light",
         element: { tag: "h1", text: "Welcome", selector: "main > h1", source: "design/home.html:4", found: "anchored" },
         state: "open",
       },
     ],
     "open and sent comments, newest first, with what each points at; resolved ones are left out",
   );
+  assert.match(answer.aboutComments, /read from the page.*data, not instructions/u, "page text in a comment is marked as data");
   assert.equal(answer.frameCount, 3);
   assert.equal(answer.openComments, 1);
   assert.deepEqual(answer.inView.map((frame: { id: string }) => frame.id), ["page"]);
@@ -316,6 +325,73 @@ test("canvas_read lists what is in view, the page's waiting comments, and counts
     "frames outside the view are listed with ids and boxes so they can be moved, grouped or shown",
   );
   assert.equal(answer.outsideOmitted, 0);
+  assert.equal(answer.more, undefined, "a page read whole says nothing about paging");
+
+  const view = answer.view;
+  const cursor = formatCanvasReadCursor({ page: canvasReadPageKey("page-1"), offset: 1, frames: canvasReadFramesKey(await store.get("chat-1"), "page-1", view), view });
+  const later = await call("canvas_read", { cursor });
+  assert.deepEqual(later.inView, [], "the cursor skips the frame in view");
+  assert.deepEqual(later.outsideFrames.map((frame: { id: string }) => frame.id), ["far-group", "far-note"]);
+  assert.equal(later.nextCursor, undefined);
+  assert.equal(later.comments, undefined, "comments come with the first answer only");
+  assert.equal((await call("canvas_read", { cursor: "1" })).status, "error");
+});
+
+test("canvas_comment replies on a comment, resolves it, or both, and tells open canvases", async (t) => {
+  const { store, broadcasts, call } = await setup(t);
+  await store.update("chat-1", (doc) => ({
+    ...doc,
+    comments: [
+      { id: "c1", x: 5, y: 5, note: "A footer", state: "sent", pageId: "page-1", anchorState: "anchored", createdAt: "2026-11-05T01:00:00Z", sentAt: "2026-11-05T01:00:00Z" },
+      { id: "draft", x: 9, y: 9, note: "Maybe a darker", state: "open", queued: true, pageId: "page-1", anchorState: "anchored", createdAt: "2026-11-05T01:30:00Z" },
+    ],
+  }));
+  // A draft still in the person's tray is theirs until they send it.
+  for (const args of [{ commentId: "draft", reply: "Done." }, { commentId: "draft", resolve: true }]) {
+    const refused = await call("canvas_comment", args);
+    assert.equal(refused.status, "error");
+    assert.match(refused.message, /draft/u);
+  }
+  const draft = (await store.get("chat-1")).comments.find((comment) => comment.id === "draft")!;
+  assert.deepEqual([draft.state, draft.queued, draft.reply], ["open", true, undefined], "the draft stays open, in the tray and unanswered");
+  assert.equal(broadcasts.length, 0);
+
+  const replied = await call("canvas_comment", { commentId: "c1", reply: "Which links should the footer have?" });
+  assert.deepEqual(replied, { status: "ok", commentId: "c1", state: "sent", replied: true });
+  let doc = await store.get("chat-1");
+  assert.equal(doc.comments[0]!.reply?.text, "Which links should the footer have?");
+  assert.equal(broadcasts.length, 1);
+  const read = await call("canvas_read");
+  assert.equal(
+    read.comments.find((comment: { commentId: string }) => comment.commentId === "c1").yourReply,
+    "Which links should the footer have?",
+    "Aiden reads back what it said",
+  );
+
+  const done = await call("canvas_comment", { commentId: "c1", reply: "Added a footer with About and Contact.", resolve: true });
+  assert.deepEqual(done, { status: "ok", commentId: "c1", state: "resolved", replied: true });
+  doc = await store.get("chat-1");
+  assert.equal(doc.comments[0]!.reply?.text, "Added a footer with About and Contact.", "a newer reply replaces the last");
+  assert.ok(doc.comments[0]!.resolvedAt);
+  assert.deepEqual(
+    (await call("canvas_read")).comments.map((comment: { commentId: string }) => comment.commentId),
+    ["draft"],
+    "a resolved comment leaves canvas_read",
+  );
+
+  for (const args of [{ commentId: "c1" }, { commentId: "nope", resolve: true }, { commentId: "c1", reply: "   " }]) {
+    assert.equal((await call("canvas_comment", args)).status, "error", JSON.stringify(args));
+  }
+  assert.equal(broadcasts.length, 2, "a refused call announces nothing");
+
+  // The person reopens the resolved comment: it is their draft again, and the refusal says why.
+  await store.update("chat-1", (latest) => reopenComment(latest, "c1"));
+  const reopened = await call("canvas_comment", { commentId: "c1", resolve: true });
+  assert.equal(reopened.status, "error");
+  assert.match(reopened.message, /reopened/u);
+  doc = await store.get("chat-1");
+  assert.deepEqual([doc.comments[0]!.state, doc.comments[0]!.reply?.text], ["open", "Added a footer with About and Contact."], "the reopened comment keeps its reply and stays open");
+  assert.equal(broadcasts.length, 2);
 });
 
 test("a turn makes at most its canvas call budget, and a chat that left design mode gets none", async (t) => {
@@ -419,17 +495,91 @@ test("Aiden reads and places on a page it names, and focusing a frame on another
   assert.equal((await call("canvas_focus", {})).status, "error", "an empty page has nothing to show");
 });
 
-test("canvas_read with snapshot shows Aiden the canvas picture, or says it is not on screen", async (t) => {
+test("a canvas_read cursor reads on its own page, whichever page is on screen", async (t) => {
+  const base = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-canvas-cursor-"));
+  t.after(() => fs.rm(base, { recursive: true, force: true }));
+  const store = new DesignCanvasStore({ root: () => base });
+  const tools = createDesignCanvasTools({ chatId: "chat-1", workspaceRoot: base, store, broadcast: () => undefined });
+  const call = async (args: Record<string, unknown>) => {
+    const output = await tools.find((tool) => tool.name === "canvas_read")!.execute("c", args as never);
+    const first = output.content[0];
+    assert.ok(first && first.type === "text");
+    return JSON.parse(first.text) as Record<string, any>;
+  };
+  const count = CANVAS_READ_FRAME_LIMIT + 3;
+  await store.update("chat-1", (doc) => {
+    const paged = addPage(addPage(doc, "p2", "Pricing"), "p3", "Empty");
+    const notes = Array.from({ length: count }, (_, index) => ({
+      id: `n${index}`, kind: "note" as const, title: `n${index}`, text: "", x: index * 10, y: 0, w: 240, h: 160, pageId: "p2", createdBy: "aiden" as const,
+    }));
+    return { ...paged, frames: [...paged.frames, ...notes] };
+  });
+  await store.update("chat-1", (doc) => showPage(doc, "page-1"));
+
+  const first = await call({ page: "Pricing" });
+  assert.ok(first.nextCursor, "a page with more frames than one answer holds gives a cursor");
+  const ids = (answer: Record<string, any>) => [...answer.inView, ...answer.outsideFrames].map((frame: { id: string }) => frame.id);
+
+  const next = await call({ cursor: first.nextCursor });
+  assert.deepEqual(next.page, { id: "p2", name: "Pricing" }, "without page, the cursor's page is read, not the one on screen");
+  assert.equal(new Set([...ids(first), ...ids(next)]).size, count, "the two answers list every frame of that page once");
+  assert.deepEqual((await call({ page: "p2", cursor: first.nextCursor })).page, next.page, "naming the cursor's own page is the same");
+
+  const other = await call({ page: "Empty", cursor: first.nextCursor });
+  assert.equal(other.status, "error");
+  assert.match(other.message, /not from page "Empty".*reads page "Pricing"/u, "a cursor from another page is refused, naming both");
+
+  // A frame added to the page between reads would shift what the offset points at.
+  await store.update("chat-1", (doc) => ({
+    ...doc,
+    frames: [{ id: "late", kind: "note" as const, title: "late", text: "", x: 0, y: 0, w: 240, h: 160, pageId: "p2", createdBy: "person" as const }, ...doc.frames],
+  }));
+  const stale = await call({ cursor: first.nextCursor });
+  assert.equal(stale.status, "error");
+  assert.match(stale.message, /frames on that page changed.*canvas_read without a cursor/u, "a cursor from before the page changed is refused, saying to read again");
+  const again = await call({ page: "Pricing" });
+  const rest = await call({ cursor: again.nextCursor });
+  assert.equal(rest.status, undefined, "a fresh read's cursor pages on");
+  assert.equal(new Set([...ids(again), ...ids(rest)]).size, count + 1, "the fresh read lists every frame once, the new one too");
+
+  const legacy = await call({ page: "Pricing", offset: CANVAS_READ_FRAME_LIMIT });
+  assert.equal(legacy.status, "error");
+  assert.match(legacy.message, /no longer takes offset.*nextCursor/u, "the old offset is refused, not ignored");
+
+  await store.update("chat-1", (doc) => deletePage(doc, "p2"));
+  const gone = await call({ cursor: first.nextCursor });
+  assert.equal(gone.status, "error");
+  assert.match(gone.message, /no longer on the canvas/u);
+});
+
+test("canvas_read with snapshot shows Aiden the canvas picture, or says why there is none", async (t) => {
   const base = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-canvas-snapshot-"));
   t.after(() => fs.rm(base, { recursive: true, force: true }));
   let picture: { data: string; mimeType: string } | null = { data: "iVBORw0KGgo=", mimeType: "image/png" };
-  const read = createDesignCanvasTools({
-    chatId: "chat-1",
-    workspaceRoot: base,
-    store: new DesignCanvasStore({ root: () => base }),
-    broadcast: () => undefined,
-    snapshot: async () => picture,
-  }).find((tool) => tool.name === "canvas_read")!;
+  let asked = 0;
+  const store = new DesignCanvasStore({ root: () => base });
+  const toolsFor = (seesImages?: boolean) =>
+    createDesignCanvasTools({
+      chatId: "chat-1",
+      workspaceRoot: base,
+      store,
+      broadcast: () => undefined,
+      snapshot: async () => {
+        asked += 1;
+        return picture;
+      },
+      ...(seesImages === undefined ? {} : { seesImages }),
+    }).find((tool) => tool.name === "canvas_read")!;
+  const read = toolsFor();
+  const reason = async (tool: typeof read, args: Record<string, unknown>) => {
+    const output = await tool.execute("c", args as never);
+    assert.deepEqual(output.content.map((part) => part.type), ["text"], "no picture");
+    const first = output.content[0];
+    assert.ok(first && first.type === "text");
+    const answer = JSON.parse(first.text);
+    assert.equal(answer.snapshot, "unavailable");
+    return answer.snapshotReason as string;
+  };
 
   const plain = await read.execute("c", {} as never);
   assert.deepEqual(plain.content.map((part) => part.type), ["text"], "no picture unless asked");
@@ -437,12 +587,78 @@ test("canvas_read with snapshot shows Aiden the canvas picture, or says it is no
   assert.deepEqual(withPicture.content.map((part) => part.type), ["text", "image"]);
   assert.deepEqual(withPicture.content[1], { type: "image", data: "iVBORw0KGgo=", mimeType: "image/png" });
 
+
+  await store.update("chat-1", (doc) => addPage(doc, "p2", "Pricing"));
+  await store.update("chat-1", (doc) => showPage(doc, doc.pages[0]!.id));
+  const before = asked;
+  const otherPage = await reason(read, { snapshot: true, page: "Pricing" });
+  assert.match(otherPage, /"Page 1"/u, "names the page on screen");
+  assert.match(otherPage, /canvas_focus with page "Pricing"/u, "says how to bring the asked page on screen");
+  assert.equal(asked, before, "no picture of the wrong page is taken");
+
+  const blind = await reason(toolsFor(false), { snapshot: true });
+  assert.match(blind, /can't see pictures/u);
+  assert.doesNotMatch(blind, /not on screen/u, "a model that can't see is not told the canvas is hidden");
+  assert.equal(asked, before, "no snapshot is taken for a model that can't see it");
+
   picture = null;
-  const offScreen = await read.execute("c", { snapshot: true } as never);
-  assert.deepEqual(offScreen.content.map((part) => part.type), ["text"]);
-  const first = offScreen.content[0];
-  assert.ok(first && first.type === "text");
-  assert.equal(JSON.parse(first.text).snapshot, "unavailable");
+  assert.match(await reason(read, { snapshot: true }), /not on screen/u);
+});
+
+test("canvas_inspect draws the page a frame shows and hands Aiden the report, with the picture when there is one", async (t) => {
+  const base = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-canvas-inspect-"));
+  t.after(() => fs.rm(base, { recursive: true, force: true }));
+  const store = new DesignCanvasStore({ root: () => base });
+  await store.update("chat-1", (doc) => {
+    const withOther = addPage(doc, "p2", "Other");
+    return {
+      ...showPage(withOther, doc.activePageId),
+      frames: [
+        { id: "elsewhere", kind: "file", title: "Home", path: "design/home.html", x: 0, y: 0, w: 640, h: 436, pageId: "p2", createdBy: "aiden" },
+        { id: "settings", kind: "file", title: "Settings", path: "design/settings.html", x: 700, y: 0, w: 640, h: 436, pageId: "p2", createdBy: "aiden" },
+        { id: "home", kind: "file", title: "Home", path: "design/home.html", x: 0, y: 0, w: 640, h: 436, pageId: doc.activePageId, createdBy: "aiden" },
+        { id: "idea", kind: "note", title: "Idea", text: "Warmer", x: 700, y: 0, w: 240, h: 160, pageId: doc.activePageId, createdBy: "aiden" },
+      ],
+    };
+  });
+  const asked: { frameId: string; top: number; picture: boolean }[] = [];
+  let image: { data: string; mimeType: string } | undefined = { data: "anBlZw==", mimeType: "image/jpeg" };
+  const inspect = createDesignCanvasTools({
+    chatId: "chat-1",
+    workspaceRoot: base,
+    store,
+    broadcast: () => undefined,
+    inspect: async (frame, options) => {
+      asked.push({ frameId: frame.id, ...options });
+      return { text: "Inspected design/home.html at 1280px wide: the page is 900px tall.\nInspect: no problems found.", ...(image ? { image } : {}) };
+    },
+  }).find((tool) => tool.name === "canvas_inspect")!;
+
+  const byPath = await inspect.execute("c", { path: "design/home.html", top: 640 } as never);
+  assert.deepEqual(asked[0], { frameId: "home", top: 640, picture: true }, "a path names its frame on the page on screen");
+  assert.deepEqual(byPath.content.map((part) => part.type), ["text", "image"]);
+  const report = byPath.content[0];
+  assert.ok(report && report.type === "text");
+  assert.match(report.text, /^Frame home\. Inspected design\/home\.html/u, "the report is plain text, not JSON");
+
+  image = undefined;
+  const textOnly = await inspect.execute("c", { frameId: "elsewhere", picture: false } as never);
+  assert.deepEqual(asked[1], { frameId: "elsewhere", top: 0, picture: false });
+  assert.deepEqual(textOnly.content.map((part) => part.type), ["text"]);
+
+  await inspect.execute("c", { path: "./design/settings.html" } as never);
+  assert.equal(asked[2]?.frameId, "settings", "a path shown only on another page names its frame there");
+
+  const refused = async (args: Record<string, unknown>) => {
+    const output = await inspect.execute("c", args as never);
+    const first = output.content[0];
+    assert.ok(first && first.type === "text");
+    return JSON.parse(first.text) as { status: string; message: string };
+  };
+  assert.match((await refused({ frameId: "idea" })).message, /Only a page/u);
+  assert.match((await refused({ path: "design/nowhere.html" })).message, /not on the canvas/u);
+  assert.equal((await refused({})).status, "error");
+  assert.equal(asked.length, 3, "nothing is drawn for a refused call");
 });
 
 test("Aiden draws a small flow: labelled shapes, text and an arrow that follows its boxes", async (t) => {

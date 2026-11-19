@@ -429,3 +429,119 @@ test("render_artifact reads nested HTML through a canonicalized root alias", asy
   });
   assert.deepEqual(htmlBodies, ["<p>workspace chart</p>"]);
 });
+
+test("render_artifact shows a visual whose script will not compile and says which line stops it", async () => {
+  const shown: string[] = [];
+  const extension = createGenerativeUiExtension({
+    workspaceRoot: undefined,
+    artifactNamespace: "gen-scripts",
+    onArtifact: (_artifact, html) => {
+      shown.push(html);
+    },
+  });
+  const tool = extension.tools?.[0];
+  assert.ok(tool);
+  const text = (result: Awaited<ReturnType<typeof tool.execute>>) =>
+    result.content.map((part) => (part.type === "text" ? part.text : "")).join("");
+
+  const broken = [
+    "<h1>Growth</h1>",
+    "<canvas id=\"c\"></canvas>",
+    "<script>",
+    "const data = [1, 2, 3];",
+    "draw(data;",
+    "</script>",
+    "<script type=\"application/json\">{not js</script>",
+    "<template><script>also not run (</script></template>",
+    "<script>window.ok = true;</script>",
+  ].join("\n");
+  const result = text(await tool.execute("call-1", { title: "Growth", html: broken }));
+  // The visual is still shown; the model learns what stops and where.
+  assert.deepEqual(shown, [broken]);
+  assert.match(result, /Script check: 1 problem found\. The visual is shown as written\./u);
+  assert.match(result, /The script starting on line 3 will not run: .+ \(line 5\)\. The reader sees the visual without anything that script draws/u);
+  assert.match(result, /call render_artifact again with the same title/u);
+
+  const clean = text(await tool.execute("call-2", { title: "Fixed", html: broken.replace("draw(data;", "draw(data);") }));
+  assert.match(clean, /Script check: no problems found; all 2 inline scripts compile\./u);
+
+  const plain = text(await tool.execute("call-3", { title: "Plain", html: "<p>No scripts here</p>" }));
+  assert.doesNotMatch(plain, /Script check/u);
+
+  const module = text(await tool.execute("call-4", { title: "Module", html: "<script type=\"module\">import x from './x.js'</script>" }));
+  assert.match(module, /Not checked: 1 module script \(type="module"\)\./u);
+  // Nothing was compiled, so the report does not claim that every script compiles.
+  assert.match(module, /Script check: no problems found; no inline script could be compiled here\./u);
+  assert.doesNotMatch(module, /compiles/u);
+});
+
+test("a script in another language is not compiled as JavaScript, and one named JavaScript is", async () => {
+  const extension = createGenerativeUiExtension({ workspaceRoot: undefined, artifactNamespace: "gen-language", onArtifact: () => {} });
+  const tool = extension.tools?.[0];
+  assert.ok(tool);
+  const run = async (html: string) =>
+    (await tool.execute("call", { title: "Lang", html })).content.map((part) => (part.type === "text" ? part.text : "")).join("");
+  const vbscript = await run('<script language="vbscript">MsgBox "hi"</script>');
+  assert.doesNotMatch(vbscript, /Script check/u);
+  const javascript = await run('<script language="JavaScript">draw(;</script>');
+  assert.match(javascript, /Script check: 1 problem found/u);
+  // A type, even an empty one, wins over the language.
+  const typed = await run('<script type="" language="vbscript">draw(;</script>');
+  assert.match(typed, /Script check: 1 problem found/u);
+});
+
+test("a JavaScript type with parameters is reported as a script that will not run, while padding and case still run", async () => {
+  const extension = createGenerativeUiExtension({ workspaceRoot: undefined, artifactNamespace: "gen-type-params", onArtifact: () => {} });
+  const tool = extension.tools?.[0];
+  assert.ok(tool);
+  const run = async (html: string) =>
+    (await tool.execute("call", { title: "Types", html })).content.map((part) => (part.type === "text" ? part.text : "")).join("");
+  // Chromium runs neither of these, so the reader sees nothing they draw.
+  const charset = await run('<p>Chart</p>\n<script type="text/javascript; charset=utf-8">draw();</script>');
+  assert.match(charset, /Script check: 1 problem found/u);
+  assert.match(charset, /The script on line 2 will not run: its type "text\/javascript; charset=utf-8" has parameters/u);
+  const version = await run('<script type="application/javascript;version=1">draw();</script>');
+  assert.match(version, /Script check: 1 problem found/u);
+  // A browser trims and lowercases the type before matching, so these run and are compiled.
+  const padded = await run('<script type=" TEXT/JavaScript ">draw();</script>');
+  assert.match(padded, /Script check: no problems found; its inline script compiles\./u);
+  // A data block whose type has parameters is still a data block.
+  const data = await run('<script type="application/json; charset=utf-8">{"a": 1}</script>');
+  assert.doesNotMatch(data, /Script check/u);
+});
+
+test("a script error after a line or paragraph separator names the line an editor shows", async () => {
+  const extension = createGenerativeUiExtension({ workspaceRoot: undefined, artifactNamespace: "gen-separator", onArtifact: () => {} });
+  const tool = extension.tools?.[0];
+  assert.ok(tool);
+  // HTML counts only the newlines, so the error is on the visual's line 3; JavaScript also breaks at U+2028 and U+2029.
+  const html = ["<p>Chart</p>", "<script>const label = 'a\u2028b\u2029c';", "draw(;</script>"].join("\n");
+  const result = await tool.execute("call-1", { title: "Sep", html });
+  const text = result.content.map((part) => (part.type === "text" ? part.text : "")).join("");
+  assert.match(text, /The script starting on line 2 will not run: .+ \(line 3\)\./u);
+});
+
+test("a script error inside an SVG is reported, and nothing the script says runs while it is checked", async () => {
+  const extension = createGenerativeUiExtension({ workspaceRoot: undefined, artifactNamespace: "gen-svg", onArtifact: () => {} });
+  const tool = extension.tools?.[0];
+  assert.ok(tool);
+  const marker = `__aiden_script_check_${Date.now()}`;
+  const html = `<svg viewBox="0 0 10 10"><script>globalThis.${marker} = 1;</script><script>let = = 2</script></svg>`;
+  const result = await tool.execute("call-1", { title: "Dial", html });
+  const text = result.content.map((part) => (part.type === "text" ? part.text : "")).join("");
+  assert.match(text, /Script check: 1 problem found/u);
+  assert.equal((globalThis as Record<string, unknown>)[marker], undefined);
+});
+
+test("a long script error is cut short without splitting a character", async () => {
+  const extension = createGenerativeUiExtension({ workspaceRoot: undefined, artifactNamespace: "gen-long-error", onArtifact: () => {} });
+  const tool = extension.tools?.[0];
+  assert.ok(tool);
+  // V8 quotes the identifier, so the message is long and made of characters two code units wide.
+  const result = await tool.execute("call-1", { title: "Long", html: `<script>let a = 1 a${"𝑥".repeat(150)}</script>` });
+  const text = result.content.map((part) => (part.type === "text" ? part.text : "")).join("");
+  const message = /will not run: (.*) \(line 1\)/u.exec(text)?.[1] ?? "";
+  assert.match(message, /^Unexpected identifier 'a𝑥+…$/u);
+  assert.ok(message.length <= 200);
+  assert.doesNotMatch(message, /[\uD800-\uDBFF](?![\uDC00-\uDFFF])/u);
+});
