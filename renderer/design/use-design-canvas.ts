@@ -29,7 +29,7 @@
 import * as React from "react";
 import { designCanvasApi } from "../lib/ipc";
 import { registerLifecycleFlush, setRendererLifecycleGuard } from "../lib/lifecycle-guard";
-import { shownPagePaths, type DesignCanvas } from "../shared/design-canvas/schema";
+import { shownPagePaths, type DesignCanvas, type DesignViewport } from "../shared/design-canvas/schema";
 import {
   carryUnrecorded,
   changesBetween,
@@ -65,6 +65,29 @@ interface CanvasSync {
 }
 
 const EMPTY_HISTORY: CanvasHistory = { past: [], future: [] };
+
+/**
+ * The view each page moved to, when `after` differs from `before` only in
+ * where its pages are looked at (a pan or zoom); otherwise null.
+ */
+function viewsMoved(before: DesignCanvas, after: DesignCanvas): Map<string, DesignViewport> | null {
+  const keys = new Set([...Object.keys(before), ...Object.keys(after)] as (keyof DesignCanvas)[]);
+  for (const key of keys) {
+    if (key !== "pages" && before[key] !== after[key]) return null;
+  }
+  if (before.pages.length !== after.pages.length) return null;
+  const views = new Map<string, DesignViewport>();
+  for (const [index, page] of before.pages.entries()) {
+    const other = after.pages[index]!;
+    if (page.id !== other.id || page.name !== other.name) return null;
+    if (page.viewport !== other.viewport) views.set(page.id, other.viewport);
+  }
+  return views;
+}
+
+function withViews(doc: DesignCanvas, views: ReadonlyMap<string, DesignViewport>): DesignCanvas {
+  return { ...doc, pages: doc.pages.map((page) => (views.has(page.id) ? { ...page, viewport: views.get(page.id)! } : page)) };
+}
 
 /** Each canvas session's unsaved work; the app's close guard sees them as one "design" source. */
 const guardStates = new Map<symbol, { dirty: boolean; saving: boolean }>();
@@ -138,8 +161,12 @@ function createCanvasSync(chatId: string, publish: (state: SyncState) => void): 
     return unknown;
   };
   type TakenIn = { before: DesignCanvas; from: DesignCanvas; to: DesignCanvas };
-  /** What changed the history without a step of the person's: a stored canvas taken in, or an unrecorded edit. */
-  type HistoryChange = { takenIn: TakenIn } | { unrecorded: Mutation };
+  /**
+   * What changed the history without a step of the person's: a stored canvas
+   * taken in, an unrecorded edit, or the views pans moved to (one entry for a
+   * run of pans, since only each page's last view counts).
+   */
+  type HistoryChange = { takenIn: TakenIn } | { unrecorded: Mutation } | { views: Map<string, DesignViewport> };
   /**
    * The history before a take-in that may still turn out to be an Aiden reply's,
    * and every change to it since, so the history can be built again once the
@@ -149,6 +176,7 @@ function createCanvasSync(chatId: string, publish: (state: SyncState) => void): 
   const historyAfter = (base: CanvasHistory, changes: readonly HistoryChange[]) =>
     changes.reduce((built, change) => {
       if ("unrecorded" in change) return carryUnrecorded(built, change.unrecorded);
+      if ("views" in change) return carryUnrecorded(built, (doc) => withViews(doc, change.views));
       const { from, to } = change.takenIn;
       return takeIn(built, { ...change.takenIn, aidenTurn: aidenTurnBetween(from.revision, to.revision) });
     }, base);
@@ -275,7 +303,13 @@ function createCanvasSync(chatId: string, publish: (state: SyncState) => void): 
       unsettled = null;
     } else {
       history = carryUnrecorded(history, mutate);
-      if (unsettled) noteChange({ unrecorded: mutate });
+      if (unsettled) {
+        const views = viewsMoved(local, next);
+        const last = unsettled.changes[unsettled.changes.length - 1];
+        // A run of pans is one change, so a long pan cannot use up the changes a late announcement rebuilds from.
+        if (views && last && "views" in last) for (const [page, view] of views) last.views.set(page, view);
+        else noteChange(views ? { views } : { unrecorded: mutate });
+      }
     }
     local = next;
     unsent.push(mutate);

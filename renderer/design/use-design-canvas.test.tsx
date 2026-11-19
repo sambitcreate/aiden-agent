@@ -4,7 +4,9 @@ import assert from "node:assert/strict";
 import { afterEach, beforeEach, mock, test } from "node:test";
 import { act, cleanup, render } from "@testing-library/react";
 import {
+  activeDesignPage,
   emptyDesignCanvas,
+  withActiveViewport,
   type DesignCanvas,
   type DesignFrame,
 } from "../shared/design-canvas/schema";
@@ -409,6 +411,27 @@ test("a reply's change the canvas fetched before hearing whose it was still undo
   await settle();
   await act(async () => controller.undo());
   assert.deepEqual(ids(controller.doc).sort(), ["a", "b", "c"], "the second reply's frame undoes on its own");
+});
+
+test("a long pan while a reply's change waits for its announcement does not stop that change undoing with the reply", async () => {
+  await mount();
+  // Aiden has saved revisions 5 to 7 by the time the fetch for revision 5 reads the store.
+  stored = canvas(7, note("a"), note("b", 400), note("c", 800));
+  await act(async () => emitBotTestNotification("designCanvas:updated", { chatId: "chat-1", revision: 5, aidenTurn: "reply-1" }));
+  await settle();
+  assert.deepEqual(ids(controller.doc), ["a", "b", "c"]);
+  // Each pan ends in an unrecorded edit of the page's view; far more of them than edits otherwise kept to rebuild from.
+  for (let step = 1; step <= 120; step += 1) {
+    await act(async () => controller.change((doc) => withActiveViewport(doc, { x: -step * 10, y: 0, zoom: 1 }), { record: false }));
+  }
+  for (const revision of [6, 7]) {
+    await act(async () => emitBotTestNotification("designCanvas:updated", { chatId: "chat-1", revision, aidenTurn: "reply-1" }));
+  }
+  await settle();
+
+  await act(async () => controller.undo());
+  assert.deepEqual(ids(controller.doc), ["a"], "the reply's frames still undo as one step");
+  assert.deepEqual(activeDesignPage(controller.doc!).viewport, { x: -1200, y: 0, zoom: 1 }, "and the view stays where the person left it");
 });
 
 test("undoing a reply leaves an edit the person made without a step of its own during it, such as a text frame growing", async () => {
