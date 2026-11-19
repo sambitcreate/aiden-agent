@@ -321,6 +321,12 @@ const LITERAL_SINKS: Record<string, string> = {
   "location set to an || expression of a javascript: URL": "location = 0 || 'javascript:alert(1)'",
   "an innerHTML key copied by Object.assign": `Object.assign(document.body, {innerHTML: ${IFRAME_MARKUP}})`,
   "a DOMParser document whose nodes the page takes": `document.body.append(...new DOMParser().parseFromString(${IFRAME_MARKUP}, 'text/html').body.childNodes)`,
+  "a DOMParser document parsed as XHTML": `document.body.append(new DOMParser().parseFromString(${JSON.stringify('<div xmlns="http://www.w3.org/1999/xhtml"><iframe src="https://e.test"></iframe></div>')}, 'application/xhtml+xml').documentElement)`,
+  "a DOMParser document whose type is computed": `document.body.append(...new DOMParser().parseFromString(${IFRAME_MARKUP}, kind).body.childNodes)`,
+  "a DOMParser SVG document with a handler": `document.body.append(new DOMParser().parseFromString('<svg xmlns="http://www.w3.org/2000/svg" onload="location=\\'javascript:alert(1)\\'"/>', 'image/svg+xml').documentElement)`,
+  // XML elements in the XHTML namespace are HTML ones once the page takes them.
+  "XML whose prefixed elements are in the XHTML namespace": `document.body.append(new DOMParser().parseFromString('<r xmlns:h="http://www.w3.org/1999/xhtml"><h:iframe src="https://e.test"/></r>', 'text/xml').documentElement)`,
+  "XML that declares entities": `document.body.append(new DOMParser().parseFromString('<!DOCTYPE r [<!ENTITY e "x">]><r>&e;</r>', 'application/xml').documentElement)`,
   "an onclick attribute node's value": `b.attributes.onclick.value = ${IFRAME_HANDLER}; b.click()`,
   "an onclick attribute node's textContent": `b.attributes.onclick.textContent = ${IFRAME_HANDLER}; b.click()`,
   "an onclick attribute node's nodeValue": `b.attributes['onclick'].nodeValue = ${IFRAME_HANDLER}; b.click()`,
@@ -505,6 +511,18 @@ const ADMITTED_MARKUP: Record<string, string> = {
         "a.attributes.title.value = 'javascript: notes'",
         "const t = document.createAttribute('title')",
         "note.textContent = String.raw`<iframe>`",
+      ].join("\n"),
+    ),
+  // XML in no HTML, SVG or MathML namespace builds no element the page runs
+  // or loads, and DOMParser throws for a type it does not know.
+  "a script that reads an RSS feed, an Atom feed and a config file with DOMParser":
+    literalSink(
+      [
+        `const rss = new DOMParser().parseFromString('<rss version="2.0"><channel><title>News</title><link>https://example.com/</link><item><title>A &amp; B</title><link>https://example.com/a</link></item></channel></rss>', 'text/xml')`,
+        `const atom = new DOMParser().parseFromString(\`<feed xmlns="http://www.w3.org/2005/Atom"><link href="https://example.com/"/><entry><title>\${title}</title></entry></feed>\`, 'application/xml')`,
+        `const config = new DOMParser().parseFromString('<config><script src="https://e.test/x.js"/><iframe src="https://e.test"/></config>', "text/xml")`,
+        `const none = new DOMParser().parseFromString('<iframe src="https://e.test"></iframe>', 'text/plain')`,
+        "label.textContent = rss.querySelector('item title').textContent + atom.title + config.documentElement.childElementCount",
       ].join("\n"),
     ),
   // A handler past the depth cap with no string in it has nothing to write.

@@ -625,18 +625,34 @@ const HTML_CALLS: Readonly<Record<string, number | "any">> = {
   setHTMLUnsafe: 0,
   createContextualFragment: 0,
   parseHTMLUnsafe: 0,
-  // DOMParser's document is not in the page, but its nodes are moved into it.
-  parseFromString: 0,
 };
+/**
+ * The types DOMParser's `parseFromString` parses as HTML; the XML types and
+ * any other value (which makes it throw) are read by `parseFromStringSink`.
+ */
+const DOM_PARSER_HTML_TYPES: ReadonlySet<string> = new Set(["text/html", "application/xhtml+xml", "image/svg+xml"]);
+const DOM_PARSER_XML_TYPES: ReadonlySet<string> = new Set(["text/xml", "application/xml"]);
+/** How far ahead a `parseFromString(` call's type argument is looked for; past it the type counts as computed. */
+const PARSE_TYPE_LOOKAHEAD = 4_096;
+/**
+ * XML that names the XHTML, SVG or MathML namespace, or spells a namespace
+ * with a character reference.
+ */
+const XML_MARKUP_NAMESPACE = /www\.w3\.org\/(?:1999\/xhtml|2000\/svg|1998\/Math\/MathML)|xmlns(?::[\w.-]+)?\s*=\s*(?:"[^"&]*&|'[^'&]*&)/iu;
 /** An attribute node's properties that set its value. */
 const ATTRIBUTE_NODE_VALUES: ReadonlySet<string> = new Set(["value", "nodeValue", "textContent"]);
 /** Assignment operators whose right side is the value written. */
 const ASSIGNMENTS: ReadonlySet<string> = new Set(["=", "+=", "||=", "&&=", "??="]);
 
-type SinkKind = "url" | "html" | "handler";
+/**
+ * `xml` is markup DOMParser parses as XML: its elements are HTML, SVG or
+ * MathML ones only in those namespaces, so it is read as HTML only when it
+ * names one of them.
+ */
+type SinkKind = "url" | "html" | "handler" | "xml";
 /** The sinks a value reaches, each with where its target starts (for the excerpt). */
 type SinkSet = Readonly<Partial<Record<SinkKind, number>>>;
-const SINK_KINDS: readonly SinkKind[] = ["url", "html", "handler"];
+const SINK_KINDS: readonly SinkKind[] = ["url", "html", "handler", "xml"];
 
 function joinSinks(...sets: (SinkSet | undefined)[]): SinkSet | undefined {
   let joined: Partial<Record<SinkKind, number>> | undefined;
@@ -649,7 +665,7 @@ function joinSinks(...sets: (SinkSet | undefined)[]): SinkSet | undefined {
   return joined;
 }
 
-const sameSinks = (a: SinkSet | undefined, b: SinkSet | undefined) => a?.url === b?.url && a?.html === b?.html && a?.handler === b?.handler;
+const sameSinks = (a: SinkSet | undefined, b: SinkSet | undefined) => SINK_KINDS.every((kind) => a?.[kind] === b?.[kind]);
 
 /** What an attribute of this name does with its value. */
 function attributeSink(name: string | undefined): SinkKind | undefined {
@@ -668,6 +684,8 @@ interface CallFrame {
   argument: number;
   /** The plain string value of each argument that is a single literal. */
   literals: (string | undefined)[];
+  /** For a `parseFromString(` call: how DOMParser reads its first argument (see `parseFromStringType`). */
+  parseAs?: ParseAs;
   /** A `replace(...)` call's unsafe first argument, flagged only if it is the only argument. */
   deferred?: string;
   /**
@@ -698,6 +716,7 @@ function sameFrame(a: CallFrame, b: CallFrame): boolean {
     a.start === b.start &&
     a.argument === b.argument &&
     a.deferred === b.deferred &&
+    a.parseAs === b.parseAs &&
     a.root === b.root &&
     sameSinks(a.sinks, b.sinks) &&
     sameSinks(a.outer, b.outer) &&
@@ -728,8 +747,39 @@ function calleeBefore(tokens: readonly JsToken[], at: number): { callee: string;
   return undefined;
 }
 
+/** How DOMParser reads a `parseFromString` call's markup: as HTML, as XML, or not at all (it throws). */
+type ParseAs = "html" | "xml" | "none";
+
+/**
+ * How the `parseFromString(` call whose `(` is at `open` reads its first
+ * argument, from its second: a literal type picks HTML, XML or neither (no
+ * type, or one DOMParser does not know, throws); a computed one, or one not
+ * found within `PARSE_TYPE_LOOKAHEAD` tokens, may be text/html.
+ */
+function parseFromStringType(tokens: readonly JsToken[], open: number): ParseAs {
+  let depth = 0;
+  const last = Math.min(tokens.length, open + PARSE_TYPE_LOOKAHEAD);
+  for (let index = open + 1; index < last; index += 1) {
+    const token = tokens[index]!;
+    if (token.kind !== "punct") continue;
+    if (token.text === "(" || token.text === "[" || token.text === "{" || token.text === "${") depth += 1;
+    else if (token.text === ")" || token.text === "]" || token.text === "}") {
+      if (depth === 0) return "none";
+      depth -= 1;
+    } else if (token.text === "," && depth === 0) {
+      const type = tokens[index + 1];
+      if (isPunct(type, ")")) return "none";
+      const after = tokens[index + 2];
+      if (!isLiteral(type) || type.substituted === true || !(isPunct(after, ")") || isPunct(after, ","))) return "html";
+      const value = type.value ?? "";
+      return DOM_PARSER_HTML_TYPES.has(value) ? "html" : DOM_PARSER_XML_TYPES.has(value) ? "xml" : "none";
+    }
+  }
+  return "html";
+}
+
 /** The sinks a call's current argument reaches. */
-function argumentSinks(frame: Pick<CallFrame, "callee" | "receiver" | "start" | "argument" | "literals">): SinkSet | undefined {
+function argumentSinks(frame: Pick<CallFrame, "callee" | "receiver" | "start" | "argument" | "literals" | "parseAs">): SinkSet | undefined {
   const { callee, argument, start } = frame;
   if (callee === undefined) return undefined;
   // `setAttribute(name, value)`, `setAttributeNS(namespace, name, value)`,
@@ -744,6 +794,11 @@ function argumentSinks(frame: Pick<CallFrame, "callee" | "receiver" | "start" | 
   }
   if ((callee === "open" || callee === "assign") && argument === 0) return { url: start };
   if (callee === "replace" && argument === 0 && frame.receiver === "location") return { url: start };
+  // DOMParser's document is not in the page, but its nodes are moved into it.
+  if (callee === "parseFromString" && argument === 0) {
+    const as = frame.parseAs ?? "html";
+    return as === "none" ? undefined : { [as]: start };
+  }
   if (Object.prototype.hasOwnProperty.call(HTML_CALLS, callee)) {
     const at = HTML_CALLS[callee];
     if (at === "any" || at === argument) return { html: start };
@@ -945,6 +1000,16 @@ function scanJsTokens(
     if (handler.url !== undefined || handler.embed !== undefined || handler.limit !== undefined) note({ url: excerpt });
   };
 
+  // XML a page takes nodes from: only an element in the XHTML, SVG or
+  // MathML namespace is one the page runs or loads, so XML that declares
+  // none (an RSS feed, a config file) is safe. XML that declares one is read
+  // as HTML with its element prefixes dropped (`<x:iframe>` is an iframe);
+  // XML that declares entities, which can spell any of that, is refused.
+  const checkXml = (markup: string) => {
+    if (/<!ENTITY/iu.test(markup)) note({ limit: "a script parses XML that declares entities" });
+    else if (XML_MARKUP_NAMESPACE.test(markup)) checkMarkup(markup.replace(/<(\/?)[A-Za-z_][\w.-]*:/gu, "<$1"));
+  };
+
   for (let index = from; index < tokens.length && !done(); index += 1) {
     visit?.(index);
     const token = tokens[index]!;
@@ -967,6 +1032,7 @@ function scanJsTokens(
           start: named?.start ?? token.start,
           argument: 0,
           literals: [],
+          parseAs: named?.callee === "parseFromString" ? parseFromStringType(tokens, index) : undefined,
           outer: call ? undefined : wrappedSinks(frame, previous),
         });
       } else if (text === "[" || text === "${") {
@@ -1032,7 +1098,9 @@ function scanJsTokens(
     if (token.kind === "template" && (previous?.kind === "name" || isPunct(previous, "]") || isPunct(previous, ")"))) {
       const named = calleeBefore(tokens, index - 1);
       if (named !== undefined || previous.kind !== "name") {
-        if (named !== undefined) tag = argumentSinks({ ...named, argument: 0, literals: [] });
+        // A tag gets the template's strings first and its substitutions after,
+        // so a tagged `parseFromString` is given a type only by a substitution.
+        if (named !== undefined) tag = argumentSinks({ ...named, argument: 0, literals: [], parseAs: token.substituted === true ? "html" : "none" });
         if (!token.substituted && chainEnd === index) raw = code.slice(token.start + 1, token.end - 1);
       }
     }
@@ -1049,6 +1117,10 @@ function scanJsTokens(
     if (sinks.handler !== undefined) {
       checkHandler(markup, code.slice(sinks.handler, end));
       if (raw !== undefined && raw !== markup) checkHandler(raw, code.slice(sinks.handler, end));
+    }
+    if (sinks.xml !== undefined) {
+      checkXml(markup);
+      if (raw !== undefined && raw !== markup) checkXml(raw);
     }
     index = chainEnd;
   }
