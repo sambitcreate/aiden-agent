@@ -157,7 +157,7 @@ function tagText(tagName: string, attributes: readonly Token.Attribute[]): strin
   return `<${tagName}${attributes.map((attribute) => ` ${attributeText(attribute)}`).join("")}>`;
 }
 
-/** The first `url(` in CSS whose target is javascript: or data:text/html. */
+/** The first `url(` in CSS whose target is javascript: or data:text/html, quoted up to the end of its declaration. */
 export function findCssUnsafeUrl(css: string): string | undefined {
   const call = /(?<![\w-])url\(/giu;
   for (let match = call.exec(css); match; match = call.exec(css)) {
@@ -165,7 +165,7 @@ export function findCssUnsafeUrl(css: string): string | undefined {
     while (at < css.length && /\s/u.test(css[at]!)) at += 1;
     if (css[at] === '"' || css[at] === "'") at += 1;
     const target = css.slice(at, at + 48).replace(/\s+/gu, "").toLowerCase();
-    if (/^(?:javascript:|data:text\/html)/u.test(target)) return css.slice(match.index, Math.min(css.length, at + 24));
+    if (/^(?:javascript:|data:text\/html)/u.test(target)) return css.slice(match.index, Math.min(css.length, at + 24)).replace(/[;}].*$/su, "");
   }
   return undefined;
 }

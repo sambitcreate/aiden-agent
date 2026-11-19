@@ -839,7 +839,7 @@ test("html admission reads the elements a <select> holds as Chromium builds them
     "an SVG <set> of href": ['<select><option><svg><a><set attributeName="href" to="javascript:alert(1)"/></a></svg></option></select>', /found "to=/u],
     "an image in an SVG <foreignObject>": [`<select><option><svg><foreignObject>${errorImage}</foreignObject></svg></option></select>`, /found "onerror=/u],
     "an image in MathML text": [`<select><option><math><mi>${errorImage}</mi></math></option></select>`, /found "onerror=/u],
-    "a style sheet": ['<select><style>p{background:url("javascript:alert(1)")}</style></select>', /found "url\(/u],
+    "a style sheet": ['<select><style>p{background:url("javascript:alert(1)")}</style></select>', /found "url\(\\"javascript:alert\(1\)\\"\)"/u],
     "a style sheet in an SVG <foreignObject>": [
       '<select><option><svg><foreignObject><style>p{background:url(javascript:alert(1))}</style></foreignObject></svg></option></select>',
       /found "url\(/u,
