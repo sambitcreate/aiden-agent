@@ -501,6 +501,33 @@ test("a request waits only so long for a page still being drawn, and its report 
   assert.deepEqual(errors, ["design/broken.html"]);
 });
 
+test("a page the person took off the canvas is noted as left off, not drawn, and replaces a report still queued for it", async () => {
+  const started: string[] = [];
+  const gate = deferred<readonly string[] | null>();
+  const inspector = createWrittenPageInspector({
+    inspect: (path) => {
+      started.push(path);
+      return path === "design/home.html" ? gate.promise : Promise.resolve(["stale"]);
+    },
+    onError: () => undefined,
+  });
+  inspector.written("design/home.html");
+  inspector.written("design/about.html");
+  inspector.removed("design/about.html");
+  gate.resolve([]);
+  const reports = await inspector.take(1_000);
+  assert.deepEqual(started, ["design/home.html"], "the removed page is never drawn");
+  assert.deepEqual(reports, [
+    { path: "design/about.html", findings: [], removed: true },
+    { path: "design/home.html", findings: [] },
+  ]);
+  const text = (withDesignInspectNote({ messages: [] }, reports, 1).messages[0] as { sections: Record<string, string> }).sections[DESIGN_PAGE_INSPECT_SECTION]!;
+  assert.match(text, /^design\/about\.html was not put back on the canvas: the person removed its frame\./u);
+  assert.match(text, /\nChecked the page you just wrote/u, "only the page that was drawn counts as checked");
+  const alone = (withDesignInspectNote({ messages: [] }, [reports[0]!], 1).messages[0] as { sections: Record<string, string> }).sections[DESIGN_PAGE_INSPECT_SECTION]!;
+  assert.doesNotMatch(alone, /Checked/u);
+});
+
 test("the report joins the conversation as a note after it, and leaves the system prompt alone", () => {
   const context: { systemPrompt: string; messages: readonly unknown[] } = { systemPrompt: "You are Aiden.", messages: [{ role: "user", content: "Make a landing page", timestamp: 1 }] };
   assert.equal(withDesignInspectNote(context, [], 2), context, "no writes, no note");

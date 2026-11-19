@@ -193,6 +193,13 @@ export type DesignCanvas = {
   activePageId: string;
   frames: DesignFrame[];
   comments: DesignComment[];
+  /**
+   * Pages (workspace paths) whose last frame the person took off the canvas,
+   * oldest first, so a page Aiden writes again does not come back by itself.
+   * Kept by the main process's store, never by the canvas: a path leaves the
+   * list once any frame shows it again. See `withRemovedPagePaths`.
+   */
+  removedPagePaths?: string[];
 };
 
 export const DESIGN_CANVAS_LIMITS = {
@@ -214,6 +221,7 @@ export const DESIGN_CANVAS_LIMITS = {
   minStrokeWidth: 1,
   maxStrokeWidth: 24,
   maxRadius: 200,
+  removedPagePaths: 200,
 } as const;
 
 export const DESIGN_WIDTHS = [390, 768, 1280, 1440] as const;
@@ -390,6 +398,10 @@ export function parseDesignCanvas(value: unknown): DesignCanvasParseResult {
     comments.push(comment);
   }
 
+  const removedPagePaths = Array.isArray(value.removedPagePaths)
+    ? [...new Set((value.removedPagePaths as unknown[]).filter(isDesignRelativePath))].slice(-DESIGN_CANVAS_LIMITS.removedPagePaths)
+    : [];
+
   return {
     ok: true,
     // Arrows and lines follow the frames they are on, so a document read back is already up to date.
@@ -400,9 +412,29 @@ export function parseDesignCanvas(value: unknown): DesignCanvasParseResult {
       activePageId,
       frames,
       comments,
+      ...(removedPagePaths.length > 0 ? { removedPagePaths } : {}),
     }),
     dropped,
   };
+}
+
+function shownPagePaths(doc: Pick<DesignCanvas, "frames">): Set<string> {
+  return new Set(doc.frames.flatMap((frame) => (frame.kind === "file" && frame.path ? [frame.path] : [])));
+}
+
+/**
+ * The removed pages `after` should carry when it replaces `before`. The list
+ * is the store's alone, so whatever `after` says is ignored: it starts from
+ * `before`'s. With `byPerson`, a page every frame of which is gone joins it;
+ * any page a frame of `after` shows leaves it, whoever added that frame.
+ */
+export function withRemovedPagePaths<T extends DesignCanvas>(before: DesignCanvas, after: T, byPerson: boolean): T {
+  const shown = shownPagePaths(after);
+  const gone = byPerson ? [...shownPagePaths(before)].filter((entry) => !shown.has(entry)) : [];
+  const kept = (before.removedPagePaths ?? []).filter((entry) => !shown.has(entry) && !gone.includes(entry));
+  const removedPagePaths = [...kept, ...gone].slice(-DESIGN_CANVAS_LIMITS.removedPagePaths);
+  const { removedPagePaths: _ignored, ...rest } = after;
+  return (removedPagePaths.length > 0 ? { ...rest, removedPagePaths } : rest) as T;
 }
 
 /** The pages of a version 2 document; never empty, and ids are unique. */

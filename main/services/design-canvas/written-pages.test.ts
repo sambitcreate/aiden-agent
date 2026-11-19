@@ -146,6 +146,57 @@ test("only pages that exist are placed, the canvas is saved once per change, and
   assert.deepEqual(broadcasts, [1, 2]);
 });
 
+test("a page the person takes off the canvas is not put back when Aiden writes it again, until Aiden places it or the person adds it", async (t) => {
+  const base = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-written-pages-"));
+  t.after(() => fs.rm(base, { recursive: true, force: true }));
+  const workspaceRoot = path.join(base, "workspace");
+  await fs.mkdir(path.join(workspaceRoot, "design"), { recursive: true });
+  for (const name of ["home", "about"]) await fs.writeFile(path.join(workspaceRoot, "design", `${name}.html`), "<!doctype html><title>x</title>");
+  const store = new DesignCanvasStore({ root: () => path.join(base, "canvases") });
+  const removedSeen: string[][] = [];
+  const newId = ids();
+  const place = (paths: string[]) =>
+    placeWrittenPagesOnCanvas({
+      chatId: "chat-1",
+      workspaceRoot,
+      paths,
+      store,
+      broadcast: () => undefined,
+      newId,
+      onRemoved: (removed) => removedSeen.push([...removed]),
+    });
+  const [homeId] = await place(["design/home.html"]);
+  const [aboutId] = await place(["design/about.html"]);
+
+  // Aiden's own removal is not the person's: the page comes back on the next write.
+  await store.update("chat-1", (doc) => ({ ...doc, frames: doc.frames.filter((frame) => frame.id !== aboutId) }));
+  assert.equal((await place(["design/about.html"])).length, 1);
+
+  // The person deletes home.html's frame on their canvas (a save), then Aiden edits the page twice.
+  const before = await store.get("chat-1");
+  const saved = await store.save("chat-1", { ...before, frames: before.frames.filter((frame) => frame.id !== homeId) }, before.revision);
+  assert.equal(saved.ok, true);
+  assert.deepEqual(await place(["design/home.html"]), []);
+  assert.deepEqual(await place(["design/home.html"]), []);
+  assert.deepEqual(removedSeen, [["design/home.html"], ["design/home.html"]]);
+  assert.equal((await store.get("chat-1")).frames.some((frame) => frame.path === "design/home.html"), false);
+
+  // Placing it on purpose (any frame showing it again) clears the memory, and later writes land as before.
+  await store.update("chat-1", (doc) => ({
+    ...doc,
+    frames: [...doc.frames, { id: "again", kind: "file", title: "home.html", path: "design/home.html", x: 0, y: 3000, w: 640, h: 436, designWidth: 1280, pageId: doc.activePageId, createdBy: "aiden" }],
+  }));
+  assert.equal((await store.get("chat-1")).removedPagePaths, undefined);
+  const again = await store.get("chat-1");
+  await store.save("chat-1", { ...again, frames: again.frames.filter((frame) => frame.id !== "again") }, again.revision);
+  assert.deepEqual((await store.get("chat-1")).removedPagePaths, ["design/home.html"]);
+  // The person adding it back, even through a canvas that never knew the list, clears it too.
+  const cleared = await store.get("chat-1");
+  const { removedPagePaths: _list, ...withoutList } = cleared;
+  await store.save("chat-1", { ...withoutList, frames: [...cleared.frames, { ...again.frames.find((frame) => frame.id === "again")!, id: "mine", createdBy: "person" }] }, cleared.revision);
+  assert.equal((await store.get("chat-1")).removedPagePaths, undefined);
+});
+
 test("after each command, the design/ pages it made or changed are found, and nothing else", async (t) => {
   const base = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-command-pages-"));
   t.after(() => fs.rm(base, { recursive: true, force: true }));

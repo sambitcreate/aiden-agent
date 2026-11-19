@@ -7,6 +7,7 @@ import path from "node:path";
 import {
   emptyDesignCanvas,
   parseDesignCanvas,
+  withRemovedPagePaths,
   type DesignCanvas,
 } from "../../../renderer/shared/design-canvas/schema.js";
 import { writeJsonAtomic } from "../durable-fs.js";
@@ -73,7 +74,8 @@ export class DesignCanvasStore {
       const current = await this.read(chatId);
       if (current.revision !== baseRevision) return { ok: false, reason: "conflict", doc: current };
       const revision = baseRevision + 1;
-      await this.write(chatId, { ...parsed.doc, revision });
+      // A save comes from the person's canvas: a page they took off is remembered.
+      await this.write(chatId, withRemovedPagePaths(current, { ...parsed.doc, revision }, true));
       return { ok: true, revision };
     });
   }
@@ -96,10 +98,12 @@ export class DesignCanvasStore {
       const revision = current.revision + 1;
       const parsed = parseDesignCanvas(isRecord(next) ? { ...next, revision } : next);
       if (!parsed.ok) throw new Error(`The canvas update is invalid: ${parsed.issues.join(" ")}`);
-      if (this.tooLarge(parsed.doc)) throw new Error("The canvas is too large to save.");
+      // An update comes from Aiden or the app itself: a page shown again is forgotten, but no removal is noted.
+      const doc = withRemovedPagePaths(current, parsed.doc, false);
+      if (this.tooLarge(doc)) throw new Error("The canvas is too large to save.");
       await options.beforeWrite?.();
-      await this.write(chatId, parsed.doc);
-      return parsed.doc;
+      await this.write(chatId, doc);
+      return doc;
     });
   }
 

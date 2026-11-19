@@ -32,14 +32,25 @@ export type WrittenPageReport = {
   path: string;
   /** One sentence per problem; empty when nothing is wrong. */
   findings: readonly string[];
+  /** The person took the page off the canvas, so it was not put back or checked. */
+  removed?: true;
 };
 
 /** The note's text: one line per clean page, one short report per page with problems. */
-export function designInspectNoteText(reports: readonly WrittenPageReport[]): string {
+export function designInspectNoteText(input: readonly WrittenPageReport[]): string {
+  const removed = input.filter((report) => report.removed);
+  const reports = input.filter((report) => !report.removed);
   const shown = reports.slice(0, DESIGN_PAGE_INSPECT_NOTE_MAX_PAGES);
-  const lines = [
+  const lines: string[] = [];
+  for (const report of removed) {
+    lines.push(
+      `${report.path} was not put back on the canvas: the person removed its frame. Leave it off unless they ask for it; canvas_place_frame puts it back.`,
+    );
+  }
+  if (reports.length === 0) return lines.join("\n");
+  lines.push(
     `Checked ${reports.length === 1 ? "the page" : "the pages"} you just wrote, drawn offline at the design width with the frame's look (text only; canvas_inspect gives a picture):`,
-  ];
+  );
   for (const report of shown) {
     lines.push(
       formatCheckReport({
@@ -79,6 +90,8 @@ export function withDesignInspectNote<C extends { messages: readonly unknown[] }
 export type WrittenPageInspector = {
   /** A page was written and placed: inspect it, after any inspect already running. */
   written(path: string): void;
+  /** A page was written but left off the canvas because the person removed it: say so instead of a report. */
+  removed(path: string): void;
   /**
    * The reports finished since the last call, in the order they finished,
    * waiting up to `waitMs` for ones still running. A request already stopped,
@@ -116,6 +129,11 @@ export function createWrittenPageInspector(options: {
           options.onError(path, error);
         }
       });
+    },
+    removed(path) {
+      // Any inspect still queued for an earlier write of the page is dropped.
+      writes.set(path, (writes.get(path) ?? 0) + 1);
+      ready.set(path, { path, findings: [], removed: true });
     },
     async take(waitMs = DESIGN_PAGE_INSPECT_WAIT_MS, signal) {
       if (signal?.aborted) return [];

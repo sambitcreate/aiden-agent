@@ -2668,6 +2668,7 @@ async function prepareGeneration(
         // The write already happened, so Stop does not drop it; design mode
         // and the chat's workspace folder are checked as they are now.
         if (!(await canSaveWrittenPage())) return;
+        let leftOff = false;
         const placedIds = await placeWrittenPagesOnCanvas({
           chatId: params.chatId,
           workspaceRoot: pageRoot,
@@ -2676,11 +2677,15 @@ async function prepareGeneration(
           store: designCanvasStore,
           broadcast: (update) => ipcMain.broadcast(DESIGN_CANVAS_UPDATED_CHANNEL, update),
           newId: randomUUID,
+          onRemoved: () => {
+            leftOff = true;
+          },
         });
         if (placedIds.length > 0 && !browserOwner.isDestroyed()) {
           browserOwner.send("designCanvas:focus", { chatId: params.chatId, frameIds: placedIds });
         }
-        inspector.written(relativePath);
+        if (leftOff) inspector.removed(relativePath);
+        else inspector.written(relativePath);
       }).catch((error) => {
         logger.warn("pi", "Could not put a written page on the design canvas.", error);
       });
