@@ -564,7 +564,7 @@ test("a file Aiden may not read says it cannot be read, not that it changed whil
 test("a file check or read in a workspace folder that is gone never repeats the system's message, which names its full path", async (t) => {
   const { folder } = await setup(t, { sources: [FILE] });
   const gone = path.join(folder, "removed");
-  for (const attempt of [artifactFileAllowed(gone, "TODO.md"), readWorkspaceArtifactFile(gone, "TODO.md")]) {
+  for (const attempt of [() => artifactFileAllowed(gone, "TODO.md"), () => readWorkspaceArtifactFile(gone, "TODO.md")]) {
     await assert.rejects(attempt, (error: Error) => {
       assert.equal(error.message, "There is no file at TODO.md.");
       assert.ok(!error.message.includes(folder));
