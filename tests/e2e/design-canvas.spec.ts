@@ -313,7 +313,7 @@ test("the design canvas keeps notes and workspace pages across a reload, follows
     "pricing.html",
     "swatch.png",
   ]);
-  await page.reload();
+  await reloadWhenSaved(page);
   page = aiden.page;
   await expect(frame(page, "hero.html")).toBeVisible();
   await expect.poll(() => framePositions(page)).toEqual(before);
@@ -545,6 +545,19 @@ test("a comment on a page's element goes to Aiden with the next send and resolve
   await expect(page.getByRole("region", { name: "Design comments for Aiden" })).toHaveCount(0);
   await capture(page, "1440-comment-pins");
 });
+
+/**
+ * Reloads once the app holds no unsaved canvas work. The file on disk can
+ * catch up a moment before the canvas clears its saving state, and a reload
+ * in that gap is stopped by the unsaved-changes prompt, as it would be for a
+ * person.
+ */
+async function reloadWhenSaved(page: Page): Promise<void> {
+  const root = page.locator("html");
+  await expect(root).toHaveAttribute("data-aiden-dirty", "0");
+  await expect(root).toHaveAttribute("data-aiden-saving", "0");
+  await page.reload();
+}
 
 type SavedFrame = {
   id: string;
@@ -826,7 +839,7 @@ test("notes and text take formatting from the bar above them: marks, a link, a l
   await clickEmptyCanvas(page);
 
   // After a reload the note reads back formatted, link and all.
-  await page.reload();
+  await reloadWhenSaved(page);
   const reloaded = frame(aiden.page, "Note").getByRole("textbox", { name: "Note text" });
   await expect(reloaded.locator("b")).toHaveText("Launch plan");
   await expect(reloaded.locator('a[href="https://example.com/brief"]')).toHaveText("brief");
