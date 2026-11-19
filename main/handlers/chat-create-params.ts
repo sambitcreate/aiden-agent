@@ -13,7 +13,6 @@ const CHAT_CREATE_KEYS = new Set([
   "title",
   "workspaceId",
 ]);
-const ASSISTANT_CHAT_CREATE_KEYS = new Set(["model", "providerId"]);
 const MAX_CREATE_TITLE_CHARS = 120;
 const MAX_CREATE_TITLE_BYTES = 480;
 
@@ -101,17 +100,4 @@ export function parseChatCreate(value: unknown): ParsedPublicChatCreate {
   );
   if (!projected.workspaceId) throw new Error("Invalid workspace id.");
   return { ...projected, workspaceId: projected.workspaceId };
-}
-
-export function parseAssistantChatCreate(
-  value: unknown,
-): Pick<ParsedChatCreate, "providerId" | "model"> {
-  const projected = projectedCreate(
-    exactRecord(
-      value,
-      ASSISTANT_CHAT_CREATE_KEYS,
-      "Assistant chat creation fields",
-    ),
-  );
-  return { providerId: projected.providerId, model: projected.model };
 }

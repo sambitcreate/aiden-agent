@@ -425,7 +425,6 @@ function RootContent() {
     return onNotification("schedule:updated", () => {
       void Promise.all([
         queryClient.invalidateQueries({ queryKey: queryKeys.scheduledTasks }),
-        queryClient.invalidateQueries({ queryKey: ["scheduledRuns"] }),
         queryClient.invalidateQueries({ queryKey: queryKeys.chats }),
       ]);
     });

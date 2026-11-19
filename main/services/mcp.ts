@@ -1006,12 +1006,6 @@ export function withBotConnectorMcpClient<T>(server: McpServer, signal: AbortSig
     ? { ...raw, list: () => raw.list(COMPOSIO_WATCH_INVENTORY_LIMITS) } : raw));
 }
 
-/** Background reads never refresh inventory or create/repair an MCP connection. */
-export function withCachedBotConnectorMcpClient<T>(server:McpServer,signal:AbortSignal,operation:(port:BotConnectorMcpClientPort)=>Promise<T>):Promise<T>{
-  if(!isComposioServiceServer(server))throw new Error("Unsupported cached connector transport.");
-  return mcpManager.withExistingConnectorClient(server,signal,raw=>operation({...raw,list:async()=>{if(!raw.cached)throw new Error("Cached connector metadata is unavailable.");return raw.cached();}}));
-}
-
 /** Explicit foreground Settings checks only; no agent-cache warming or background repair. */
 export function withForegroundComposioSettingsMcpClient<T>(server: McpServer, signal: AbortSignal, operation: (port: ForegroundComposioSettingsClientPort) => Promise<T>): Promise<T> {
   return mcpManager.withForegroundComposioSettingsClient(server, signal, operation);

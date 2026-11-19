@@ -85,12 +85,6 @@ export function isDictationShortcutActive(): boolean {
   return registered.has("dictation.toggle") || activeLinuxDictationHoldShortcut();
 }
 
-/** Whether the exact requested Aiden accelerator is currently registered. */
-export function isAssistantShortcutActive(accelerator?: string): boolean {
-  const active = registered.get("assistant.open")?.accelerator;
-  return accelerator ? active === accelerator : Boolean(active);
-}
-
 function canonicalKeybindings(settings: AppSettings) {
   return migrateLegacyKeybindings(settings.keybindings, settings);
 }
@@ -200,14 +194,6 @@ async function applyNow(settings: AppSettings): Promise<KeybindingSnapshot> {
   onBindingsChanged?.(canonicalSettings, !recordingSuspended);
   lastAppliedSettings = canonicalSettings;
   return shortcutSnapshot(canonicalSettings);
-}
-
-/**
- * Apply a proposed settings document without persisting it. Calls are
- * serialized so rapid recordings cannot interleave unregister/register work.
- */
-export function applyShortcutSettings(settings: AppSettings): Promise<KeybindingSnapshot> {
-  return transactions.run(() => applyNow(settings));
 }
 
 /** Temporarily release global accelerators while the recorder captures a chord. */

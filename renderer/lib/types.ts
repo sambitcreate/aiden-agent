@@ -922,7 +922,7 @@ export interface FoundationModelsConnectionStatus {
 export type AssistantSettingsPermission = "full" | "ask" | "none";
 
 /** Aiden assistant window, hotkey, and proactive-watching settings. */
-export interface AssistantConfig {
+interface AssistantConfig {
   /** Proactivity master switch. Off by default — nudging is opt-in. */
   enabled: boolean;
   hotkeyEnabled: boolean;
@@ -942,11 +942,6 @@ export interface AssistantConfig {
   maxNudgesPerDay: number;
   urgencyThreshold: number;
   settingsPermission: AssistantSettingsPermission;
-}
-
-export interface AssistantConfigSnapshot {
-  config: AssistantConfig;
-  hotkeyActive: boolean;
 }
 
 export interface AppSettings extends AidenLiveSettingsFields {

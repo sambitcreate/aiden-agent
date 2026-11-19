@@ -79,9 +79,6 @@ import type {
 type TtsSettings = TtsSettingsV1;// Thin, typed wrappers over Aiden Agent's Electron IPC bridge plus the chat streaming helper.
 
 import type {
-  AppSettings,
-  AssistantConfig,
-  AssistantConfigSnapshot,
   ApprovalDecision,
   Attachment,
   Chat,
@@ -502,8 +499,6 @@ export const providersApi = {
   normalizeArtwork: (input: { name: string; dataBase64: string }) =>
     invoke<NonNullable<Provider["artwork"]>>("providers:normalizeArtwork", input),
   remove: (id: string) => invoke<void>("providers:remove", id),
-  setKey: (id: string, key: string) =>
-    invoke<{ hasKey: boolean; provider: Provider | null }>("providers:setKey", id, key),
   refresh: (providerId?: string) =>
     invoke<ProviderCatalogRefreshResult>("providers:refresh", providerId),
   refreshIfStale: () => invoke<ProviderCatalogRefreshResult>("providers:refreshIfStale"),
@@ -578,12 +573,6 @@ export const harnessApi = {
     }),
 };
 
-
-export const assistantApi = {
-  config: () => invoke<AssistantConfigSnapshot>("assistant:get-config"),
-  setConfig: (patch: Partial<AssistantConfig>) =>
-    invoke<AssistantConfigSnapshot>("assistant:set-config", patch),
-};
 
 export const assistantLiveApi = {
   status: () => invoke<AssistantLiveSnapshot>("assistant-live:status"),
@@ -788,7 +777,6 @@ export const scheduleApi = {
     invoke<ScheduledTask>("schedule:resume", id, expectedUpdatedAt),
   runNow: (id: string, expectedUpdatedAt: number) =>
     invoke<ScheduledRun>("schedule:runNow", id, expectedUpdatedAt),
-  runs: (id: string) => invoke<ScheduledRun[]>("schedule:runs", id),
   preview: (cron: string, timezone: string, count = 3) =>
     invoke<number[]>("schedule:preview", cron, timezone, count),
   scripts: (workspaceId?: string) => invoke<string[]>("schedule:scripts", workspaceId),
@@ -897,13 +885,6 @@ export const storageApi = {
     onNotification<{ kind: "scan-started" | "scan-finished" }>("storage:changed", handler),
 };
 
-// ── Exa web search ────────────────────────────────────────────────────
-export const exaApi = {
-  get: () => invoke<{ enabled: boolean; hasKey: boolean }>("exa:get"),
-  setKey: (key: string) => invoke<{ hasKey: boolean }>("exa:setKey", key),
-  setEnabled: (enabled: boolean) => invoke<AppSettings>("exa:setEnabled", enabled),
-};
-
 // ── Web Search provider registry ─────────────────────────────────────
 export const webSearchApi = {
   get: () => invoke<WebSearchRendererSnapshot>("webSearch:get"),
@@ -992,8 +973,6 @@ export const telegramApi = {
   get: () => invoke<TelegramStatus>("telegram:get"),
   setKey: (key: string) => invoke<{ hasKey: boolean }>("telegram:setKey", key),
   setEnabled: (enabled: boolean) => invoke<boolean>("telegram:setEnabled", enabled),
-  connect: () => invoke<{ connected: boolean }>("telegram:connect"),
-  disconnect: () => invoke<{ connected: boolean }>("telegram:disconnect"),
   resetPairing: () => invoke<{ reset: boolean }>("telegram:resetPairing"),
   setProvider: (providerId: string, model: string) =>
     invoke<{ providerId: string; model: string }>("telegram:setProvider", providerId, model),
@@ -1135,15 +1114,6 @@ export const shortcutApi = {
     onNotification("shortcut:changed", handler),
 };
 
-
-/** Native folder picker (uses the default-exposed dialog bridge). Returns null if cancelled. */
-export async function pickFolder(): Promise<string | null> {
-  const res = await window.aidenAPI.dialog.showOpenDialog({
-    properties: ["openDirectory", "createDirectory"],
-  });
-  if (res.canceled || !res.filePaths?.length) return null;
-  return res.filePaths[0];
-}
 
 // ── Attachments & model catalog ───────────────────────────────────────
 export const attachmentsApi = {
@@ -1790,8 +1760,6 @@ export const chatsApi = {
   /** Progress of the caller's own first-send worktree (fetching → creating → ready). */
   onFirstMessageWorktreeProgress: (handler: (progress: FirstMessageWorktreeProgress) => void) =>
     onNotification<FirstMessageWorktreeProgress>("chats:first-message-worktree-progress", handler),
-  createAssistant: (input: { providerId?: string; model?: string }) =>
-    invokeChatMutation<Chat>("chats:createAssistant", input),
   rename: (id: string, title: string) => invoke<void>("chats:rename", id, title),
   renameWithFoundationModels: (id: string) =>
     invoke<ChatTitleRenameResult>("chats:renameWithFoundationModels", id),

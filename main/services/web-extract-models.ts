@@ -6,10 +6,7 @@
  * and a factory here; the tool and the page checks do not change.
  */
 
-import {
-  WEB_EXTRACT_MODELS,
-  type WebExtractModelId,
-} from "../../renderer/shared/web-fetch-settings.js";
+import type { WebExtractModelId } from "../../renderer/shared/web-fetch-settings.js";
 import { WebSearchError, webSearchError } from "./web-search-core.js";
 import {
   runWithWebSearchKeyPool,
@@ -118,7 +115,3 @@ export const WEB_EXTRACT_MODEL_FACTORIES: Readonly<Record<WebExtractModelId, Web
   Object.freeze({
     "cloudflare-clairic": createClairicExtractModel,
   });
-
-export function webExtractCredentialId(modelId: WebExtractModelId) {
-  return WEB_EXTRACT_MODELS[modelId].credentialId;
-}
