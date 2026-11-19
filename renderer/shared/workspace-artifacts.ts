@@ -246,6 +246,21 @@ export function isWorkspaceArtifactName(value: unknown): value is string {
   );
 }
 
+/**
+ * Refuses a source, action or param name. A well-formed name that is reserved
+ * (a built-in object property, or a key Aiden's phone apps treat as private)
+ * says so and offers one that is free, rather than calling it malformed.
+ */
+function invalidName(where: string, value: unknown, example: string): never {
+  if (typeof value === "string" && value.length <= WORKSPACE_ARTIFACT_LIMITS.nameChars && NAME.test(value)) {
+    const why = RESERVED_NAMES.has(value) ? "it is a built-in object property" : "Aiden's phone apps treat a key with that name as private";
+    const suggestion = `my${value.charAt(0).toUpperCase()}${value.slice(1)}`;
+    const free = isWorkspaceArtifactName(suggestion) ? `, so try "${suggestion}"` : ", so pick another";
+    return invalid(`${where}: the name "${value}" is reserved (${why})${free}.`);
+  }
+  return invalid(`${where}: name must be an identifier like "${example}" (letters, digits, _; at most ${WORKSPACE_ARTIFACT_LIMITS.nameChars}).`);
+}
+
 export function isWorkspaceArtifactTitle(value: unknown): value is string {
   return isHtmlArtifactTitle(value) && value.length <= WORKSPACE_ARTIFACT_LIMITS.titleChars && !hasControlCharacter(value, false);
 }
@@ -297,9 +312,7 @@ export function parseWorkspaceArtifactSources(value: unknown): WorkspaceArtifact
   return value.map((entry, index) => {
     const where = `sources[${index}]`;
     if (!isRecord(entry)) return invalid(`${where} must be an object.`);
-    if (!isWorkspaceArtifactName(entry.name)) {
-      return invalid(`${where}: name must be an identifier like "pulls" (letters, digits, _; at most ${WORKSPACE_ARTIFACT_LIMITS.nameChars}).`);
-    }
+    if (!isWorkspaceArtifactName(entry.name)) return invalidName(where, entry.name, "pulls");
     if (seen.has(entry.name)) return invalid(`${where}: the name "${entry.name}" is used twice.`);
     seen.add(entry.name);
     const parse = parseMode(entry.parse, where);
@@ -348,7 +361,7 @@ export function parseWorkspaceArtifactActions(value: unknown, options: { stored?
   return value.map((entry, index) => {
     const where = `actions[${index}]`;
     if (!isRecord(entry)) return invalid(`${where} must be an object.`);
-    if (!isWorkspaceArtifactName(entry.name)) return invalid(`${where}: name must be an identifier like "merge".`);
+    if (!isWorkspaceArtifactName(entry.name)) return invalidName(where, entry.name, "merge");
     if (seen.has(entry.name)) return invalid(`${where}: the name "${entry.name}" is used twice.`);
     seen.add(entry.name);
     const label = typeof entry.label === "string" ? entry.label.trim() : "";
@@ -362,7 +375,8 @@ export function parseWorkspaceArtifactActions(value: unknown, options: { stored?
     const paramNames = new Set<string>();
     const params = rawParams.map((param, paramIndex): WorkspaceArtifactParamV1 => {
       const at = `${where}.params[${paramIndex}]`;
-      if (!isRecord(param) || !isWorkspaceArtifactName(param.name)) return invalid(`${at}: name must be an identifier.`);
+      if (!isRecord(param)) return invalid(`${at} must be an object.`);
+      if (!isWorkspaceArtifactName(param.name)) return invalidName(at, param.name, "number");
       if (paramNames.has(param.name)) return invalid(`${at}: the name "${param.name}" is used twice.`);
       paramNames.add(param.name);
       const type = param.type ?? "string";

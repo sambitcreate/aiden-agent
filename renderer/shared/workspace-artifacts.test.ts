@@ -48,8 +48,16 @@ test("sources accept shell commands and workspace files and reject paths outside
     assert.throws(() => parseWorkspaceArtifactSources([{ name: "x", kind: "file", file }]), /workspace/u, file);
   }
   assert.throws(() => parseWorkspaceArtifactSources([{ name: "a", kind: "shell", command: "x" }, { name: "a", kind: "shell", command: "y" }]), /twice/u);
-  assert.throws(() => parseWorkspaceArtifactSources([{ name: "constructor", kind: "shell", command: "x" }]), /identifier/u);
-  assert.throws(() => parseWorkspaceArtifactSources([{ name: "path", kind: "shell", command: "x" }]), /identifier/u);
+  assert.throws(() => parseWorkspaceArtifactSources([{ name: "pull-list", kind: "shell", command: "x" }]), /must be an identifier/u);
+  // A well-formed name that is reserved says so and offers a free one.
+  assert.throws(() => parseWorkspaceArtifactSources([{ name: "constructor", kind: "shell", command: "x" }]), /"constructor" is reserved .*try "myConstructor"/u);
+  assert.throws(() => parseWorkspaceArtifactSources([{ name: "path", kind: "shell", command: "x" }]), /"path" is reserved \(Aiden's phone apps .*try "myPath"/u);
+  assert.throws(() => parseWorkspaceArtifactSources([{ name: "childCount", kind: "shell", command: "x" }]), /reserved.*try "myChildCount"/u);
+  assert.deepEqual(parseWorkspaceArtifactSources([{ name: "myPath", kind: "shell", command: "x" }]).map((source) => source.name), ["myPath"]);
+  const withParam = (name: string) => [{ name: "go", label: "Go", command: "git show {{" + name + "}}", params: [{ name }] }];
+  assert.throws(() => parseWorkspaceArtifactActions(withParam("path")), /params\[0\]: the name "path" is reserved.*try "myPath"/u);
+  assert.equal(parseWorkspaceArtifactActions(withParam("myPath"))[0]!.params[0]!.name, "myPath");
+  assert.throws(() => parseWorkspaceArtifactActions([{ name: "token", label: "Token", command: "x" }]), /actions\[0\]: the name "token" is reserved.*try "myToken"/u);
   assert.throws(() => parseWorkspaceArtifactSources([{ name: "x", kind: "http", command: "x" }]), /kind/u);
 });
 
