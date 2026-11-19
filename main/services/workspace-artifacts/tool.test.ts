@@ -875,12 +875,17 @@ test("edits written with LF line breaks apply to a page saved with CRLF ones, wh
   await call("e4", { operation: "update", id: "art1", edits: [{ old: "\n  <Text>Merge when checks pass</Text>", new: "" }] });
   assert.equal((await store.get("ws1", "art1"))!.artifact.markup, changed.replace("\r\n  <Text>Merge when checks pass</Text>", ""));
   // An old ending in a lone \r before a CRLF's \n could mean the \r alone or the whole line break, so it is refused.
-  const before = (await store.get("ws1", "art1"))!.artifact.markup;
+  const before = (await store.get("ws1", "art1"))!.artifact.markup!;
   await assert.rejects(
     call("e5", { operation: "update", id: "art1", edits: [{ old: "waiting</Text>\r", new: "done</Text>" }] }),
     /edits\[0\] old "waiting<\/Text>\\r" ends between the \\r and \\n of a line break in the markup; include the whole line break in old[^]*Nothing was changed/u,
   );
   assert.equal((await store.get("ws1", "art1"))!.artifact.markup, before);
+  // An exact match's new text takes the page's CRLF too, so the page never ends up mixing line breaks.
+  await call("e6", { operation: "update", id: "art1", edits: [{ old: "waiting</Text>", new: "waiting</Text>\n  <Text>Second line</Text>" }] });
+  const mixedFree = (await store.get("ws1", "art1"))!.artifact.markup!;
+  assert.equal(mixedFree, before.replace("waiting</Text>", "waiting</Text>\r\n  <Text>Second line</Text>"));
+  assert.doesNotMatch(mixedFree, /(?<!\r)\n|\r(?!\n)/u);
 });
 
 test("edits apply to the markup another chat saved while this one prepared its save, and a miss there saves nothing", async (t) => {

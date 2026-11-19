@@ -77,6 +77,11 @@ function exactMatches(markup: string, text: string): number[] {
   return starts;
 }
 
+/** Whether `text` has line breaks and every one is CRLF. */
+function onlyCrlf(text: string): boolean {
+  return text.includes("\r\n") && !/\r(?!\n)|(?<!\r)\n/u.test(text);
+}
+
 interface Located {
   count: number;
   alike: boolean;
@@ -94,9 +99,11 @@ interface Located {
  * with line breaks read alike instead. Failing an exact match, `old` matches
  * with its line breaks and the markup's read alike (CRLF, CR and LF), and
  * `replacement`'s line breaks take the markup's own there, so a page saved
- * with Windows line endings keeps them. An `old` that ends in a lone `\r`
- * just before a CRLF's `\n`, and matches nowhere else, could mean the `\r`
- * alone or the whole line break, so it is reported rather than guessed.
+ * with Windows line endings keeps them. On a page whose every line break is
+ * CRLF, an exact match's `replacement` takes CRLF as well; on any other page
+ * an exact match's `replacement` is kept as written. An `old` that ends in a
+ * lone `\r` just before a CRLF's `\n`, and matches nowhere else, could mean
+ * the `\r` alone or the whole line break, so it is reported, not guessed.
  */
 function locate(markup: string, old: string, replacement: string): Located {
   const breaks = LINE_BREAK.test(markup) && /[\r\n]/u.test(old);
@@ -107,10 +114,13 @@ function locate(markup: string, old: string, replacement: string): Located {
   const whole = exact.filter((at) => !insideLineBreak(markup, at) && !insideLineBreak(markup, at + old.length));
   if (whole.length > 0 || !page) {
     const start = whole[0] ?? -1;
+    // On a page whose every line break is CRLF, new's line breaks become
+    // CRLF too, so an exact match never leaves the page mixing styles.
+    const text = onlyCrlf(markup) ? replacement.replace(/\r\n|\r|\n/gu, "\r\n") : replacement;
     // An exact match is only one place if no other place matches once line
     // breaks are read alike, on a page that mixes CRLF and LF.
-    if (whole.length === 1 && count > 1) return { count, alike: true, start, end: start + old.length, text: replacement };
-    return { count: whole.length, alike: false, start, end: start + old.length, text: replacement };
+    if (whole.length === 1 && count > 1) return { count, alike: true, start, end: start + old.length, text };
+    return { count: whole.length, alike: false, start, end: start + old.length, text };
   }
   const half = exact.find((at) => insideLineBreak(markup, at + old.length));
   if (half !== undefined) return { count: 1, alike: false, start: half, end: half + old.length, text: replacement, halfLineBreak: true };
