@@ -555,7 +555,7 @@ test("a branch value for git checkout never discards a file's uncommitted edits"
   const ran = await runResolved(file, dir);
   assert.notEqual(ran.exitCode, 0);
   assert.match(ran.stderr, /invalid reference/u);
-  for (const value of [".", "*.ts", "a.?s"]) assert.throws(() => resolveWorkspaceArtifactCommand(action, [value]), /branch must be a branch or tag name there/u, value);
+  for (const value of [".", "*.ts", "a.?s"]) assert.throws(() => resolveWorkspaceArtifactCommand(action, [value]), /branch must be a git revision there/u, value);
   assert.equal(fs.readFileSync(path.join(dir, "notes.md"), "utf8"), "UNSAVED WORK\n");
   assert.equal(fs.readFileSync(path.join(dir, "a.ts"), "utf8"), "UNSAVED WORK\n");
   // A shell given the preview reads the value the same way.
@@ -567,6 +567,16 @@ test("a branch value for git checkout never discards a file's uncommitted edits"
   assert.equal(switched.exitCode, 0, switched.stderr);
   assert.equal(git(["branch", "--show-current"]).trim(), "feature");
   assert.equal(fs.readFileSync(path.join(dir, "notes.md"), "utf8"), "UNSAVED WORK\n");
+  // A revision checks out detached, and a value that reaches a file through a folder is still read only as a revision.
+  fs.mkdirSync(path.join(dir, "sub"));
+  const throughFolder = await runResolved(resolveWorkspaceArtifactCommand(action, ["sub/../notes.md"]), dir);
+  assert.notEqual(throughFolder.exitCode, 0);
+  assert.equal(fs.readFileSync(path.join(dir, "notes.md"), "utf8"), "UNSAVED WORK\n");
+  const detached = await runResolved(resolveWorkspaceArtifactCommand(action, ["feature~0"]), dir);
+  assert.equal(detached.exitCode, 0, detached.stderr);
+  assert.equal(git(["branch", "--show-current"]).trim(), "");
+  assert.equal(git(["rev-parse", "HEAD"]), git(["rev-parse", "feature"]));
+  assert.equal(fs.readFileSync(path.join(dir, "notes.md"), "utf8"), "UNSAVED WORK\n");
   // Options written after the branch stay options: the -- goes after them, not before.
   for (const option of ["-q", "--quiet", "-f"]) {
     const quiet = parseWorkspaceArtifactActions([{ name: "a", label: "A", command: `git checkout {{branch}} ${option}`, params: [{ name: "branch" }] }])[0]!;
@@ -577,4 +587,30 @@ test("a branch value for git checkout never discards a file's uncommitted edits"
     assert.equal(result.exitCode, 0, `${option}: ${result.stderr}`);
     assert.equal(git(["branch", "--show-current"]).trim(), target);
   }
+});
+
+test("git tag points a tag at the revision a value names, never at a file", async (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "aiden-artifact-tag-"));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const git = (args: string[]) => execFileSync("git", ["-c", "user.email=a@example.com", "-c", "user.name=a", ...args], { cwd: dir, encoding: "utf8" });
+  fs.writeFileSync(path.join(dir, "notes.md"), "one\n");
+  git(["init", "-q", "-b", "main"]);
+  git(["add", "."]);
+  git(["commit", "-q", "-m", "one"]);
+  fs.writeFileSync(path.join(dir, "notes.md"), "two\n");
+  git(["commit", "-q", "-am", "two"]);
+  const action = parseWorkspaceArtifactActions([
+    { name: "a", label: "A", command: "git tag -a {{name}} {{rev}} -m {{message}}", params: [{ name: "name" }, { name: "rev" }, { name: "message" }] },
+  ])[0]!;
+  const tagged = resolveWorkspaceArtifactCommand(action, ["v1", "HEAD~1", "first"]);
+  assert.match(tagged.preview, / -m 'first' --$/u);
+  const identity = { GIT_COMMITTER_NAME: "a", GIT_COMMITTER_EMAIL: "a@example.com" };
+  const ran = await runResolved(tagged, dir, identity);
+  assert.equal(ran.exitCode, 0, ran.stderr);
+  assert.equal(git(["rev-parse", "v1^{commit}"]), git(["rev-parse", "HEAD~1"]));
+  // A file name is not a revision, and the tag name stays a plain name.
+  const file = await runResolved(resolveWorkspaceArtifactCommand(action, ["v2", "notes.md", "x"]), dir, identity);
+  assert.notEqual(file.exitCode, 0);
+  assert.throws(() => resolveWorkspaceArtifactCommand(action, ["v~1", "HEAD", "x"]), /name must be a branch or tag name there/u);
+  assert.equal(git(["tag"]), "v1\n");
 });

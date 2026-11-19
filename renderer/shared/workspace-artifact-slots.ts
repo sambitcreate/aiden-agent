@@ -105,7 +105,6 @@ const TD: Slot = { rule: "text", dash: true };
 const SEARCH: Slot = { rule: "text", dash: true, search: true };
 const N: Slot = { rule: "number" };
 const R: Slot = { rule: "ref" };
-const RO: Slot = { rule: "ref", refOnly: true };
 const RR: Slot = { rule: "ref", remote: true };
 const STASH: Slot = { rule: "ref", stash: true };
 const V: Slot = { rule: "rev" };
@@ -347,8 +346,8 @@ const GIT_SPECS: Readonly<Record<string, SlotSpec>> = {
     flags: "qfmt",
     long: ["quiet", "force", "merge", "detach", "track", "no-track", "ours", "theirs"],
     values: { "-b": R, "-B": R, "--orphan": R },
-    operand: (index, afterDashes) => (index === 0 && !afterDashes ? RO : P),
-    operandForms: "a branch first, then files in the workspace",
+    operand: (index, afterDashes) => (index === 0 && !afterDashes ? VO : P),
+    operandForms: "a branch or revision first, then files in the workspace",
   },
   fetch: { name: "git fetch", flags: "qvpPtfanu46", long: FETCH_LONG, values: FETCH_VALUES, ...remoteOperands("fetch") },
   pull: {
@@ -414,8 +413,12 @@ const GIT_SPECS: Readonly<Record<string, SlotSpec>> = {
     flags: "adlfn",
     long: ["annotate", "delete", "list", "force"],
     values: { "-m --message": TD, "-F --file": READS_ANY_FILE, "-u --local-user": null, ...REACH_FILTERS, "--sort": null },
-    operand: (_index, _afterDashes, has) => (has("-l", "--list", "-n", ...REACH_FILTER_NAMES) && !has(...TAG_CHANGES) ? LIST_PATTERN : R),
-    operandForms: "tag names, or a pattern (text) with -l/--list, -n, --merged or --contains",
+    operand: (index, _afterDashes, has) => {
+      if (has("-l", "--list", "-n", ...REACH_FILTER_NAMES) && !has(...TAG_CHANGES)) return LIST_PATTERN;
+      // `git tag NAME COMMIT`: the second operand is the commit the tag points at.
+      return index === 1 && !has("-d", "--delete") ? VO : R;
+    },
+    operandForms: "a tag name, then the revision it points at; tag names with -d; or a pattern (text) with -l/--list, -n, --merged or --contains",
   },
   stash: {
     name: "git stash",
