@@ -256,6 +256,40 @@ const ESCAPED_SINKS = {
   bracedProperty: String.raw`<p>x</p><script>document.body.inner\u{48}TML = '<iframe src=https://e.test></iframe>';</script>`,
 };
 
+// Sinks nested `layers` strings deep, each layer writing the next: an
+// onclick set by setAttribute and clicked, markup written by
+// insertAdjacentHTML or innerHTML whose <img onerror> writes the next, and an
+// <img onerror> in the page that starts an innerHTML chain. Past the depth the
+// check reads again, the innermost layers are refused unread.
+const attributeValue = (text: string) => text.replace(/&/gu, "&amp;").replace(/"/gu, "&quot;");
+const NESTED_LAYERS = {
+  setAttribute: (layers: number, final = IFRAME_SINK) => {
+    let js = final;
+    for (let layer = layers; layer >= 1; layer -= 1) js = `b${layer}.setAttribute('onclick', ${JSON.stringify(js)}); b${layer}.click()`;
+    return `<p>x</p>${[1, 2, 3, 4, 5].map((n) => `<button id=b${n}>${n}</button>`).join("")}<script>${js}</script>`;
+  },
+  insertAdjacentHTML: (layers: number, final = IFRAME_SINK) => {
+    let js = final;
+    for (let layer = layers; layer >= 1; layer -= 1) {
+      js = `document.body.insertAdjacentHTML('beforeend', ${JSON.stringify(`<img src=x${layer} onerror="${attributeValue(js)}">`)})`;
+    }
+    return `<p>x</p><script>${js}</script>`;
+  },
+  innerHTML: (layers: number, final = IFRAME_SINK) => {
+    let js = final;
+    for (let layer = layers; layer >= 1; layer -= 1) js = `document.body.innerHTML=${JSON.stringify(`<img src=x${layer} onerror="${attributeValue(js)}">`)}`;
+    return `<p>x</p><script>${js}</script>`;
+  },
+  pageHandler: (layers: number, final = IFRAME_SINK) => {
+    let js = final;
+    for (let layer = layers; layer >= 1; layer -= 1) js = `document.body.innerHTML=${JSON.stringify(`<img src=x${layer} onerror="${attributeValue(js)}">`)}`;
+    return `<p>x</p><img src=x0 onerror="${attributeValue(js)}">`;
+  },
+};
+const DEEP_NESTED_SINKS = Object.fromEntries(
+  Object.entries(NESTED_LAYERS).flatMap(([name, build]) => [3, 4].map((layers) => [`${layers} ${name} layers`, build(layers)])),
+);
+
 const REFUSED_MARKUP: Record<string, string> = {
   "an <iframe> written through octal escapes for <": ESCAPED_SINKS.octalMarkup,
   "an onclick that writes an <iframe> through octal escapes for <": ESCAPED_SINKS.octalMarkupInOnclick,
@@ -268,6 +302,7 @@ const REFUSED_MARKUP: Record<string, string> = {
   "an open() whose name is spelled with a braced escape": ESCAPED_SINKS.bracedName,
   "an href whose name is spelled with a four-digit escape": ESCAPED_SINKS.fourDigitName,
   "an innerHTML whose name is spelled with a braced escape": ESCAPED_SINKS.bracedProperty,
+  ...Object.fromEntries(Object.entries(DEEP_NESTED_SINKS).map(([name, html]) => [`an <iframe> written ${name} deep`, html])),
   // An on* attribute's value is a handler's body, run when the event fires.
   "a setAttribute onclick whose handler writes an <iframe>":
     `<p>x</p><button id=b>Go</button><script>b.setAttribute('onclick', "document.body.innerHTML='<iframe src=https://e.test></iframe>'"); b.click();</script>`,
@@ -418,6 +453,8 @@ const ADMITTED_MARKUP: Record<string, string> = {
     String.raw`<script>label.textContent = '\0' + ' v1.0 \251 2026 \8\9'; legend.innerHTML = '<b>\61\62</b>'; note.textContent = ` + "`\\0 rows`;</script>",
   "setAttribute handlers that toggle, open an https page or label with markup, and a title that names javascript:":
     `<button id=b>Go</button><script>b.setAttribute('onclick', 'toggle()'); b.setAttributeNS(null, 'onmouseover', "location='https://example.com/'"); b.setAttribute('onfocus', "legend.innerHTML='<b>Hi</b>'"); b.setAttribute('title', "location='javascript:alert(1)'"); fn.call(o, 'onclick', "location='javascript:alert(1)'");</script>`,
+  // A handler past the depth cap with no string in it has nothing to write.
+  "setAttribute handlers nested four deep whose innermost one only removes its button": NESTED_LAYERS.setAttribute(4, "this.remove()"),
   "names spelled with escapes that are not sinks": String.raw`<script>const \u{6C}abel = document.body; \u{6C}abel.textContent = 'ready'; a.\u{74}itle = 'javascript: notes';</script>`,
   // A hashbang line is a comment, so what it names never runs.
   "a script whose hashbang line names a javascript: URL": "<script>#!/usr/bin/env node location='javascript:void 0'\nlabel.textContent = 'ready';</script>",
@@ -606,6 +643,15 @@ test("an escaped sink streamed in pieces, even split inside its escape, is refus
       assert.equal(streamInChunks(html, chunk).admitted, false, `${chunk}-character pieces of ${html}`);
     }
   }
+});
+
+test("a sink nested past the depth the check reads again is refused, streamed in pieces too", () => {
+  for (const html of Object.values(DEEP_NESTED_SINKS)) {
+    for (const chunk of [1, 7, 64]) {
+      assert.equal(streamInChunks(html, chunk).admitted, false, `${chunk}-character pieces of ${html}`);
+    }
+  }
+  assert.throws(() => validateGenerativeUiHtml(NESTED_LAYERS.innerHTML(4)), /too complex to check/u);
 });
 
 test("a refused visual's error quotes the markup that was refused", () => {

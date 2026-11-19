@@ -17,7 +17,9 @@
 // javascript: or data:text/html URL in a URL attribute, CSS url() or an SVG
 // <set>/<animate> of href, a remote src, and JavaScript (in <script> or an
 // on* attribute) that sends such a URL to a navigation or URL sink or writes
-// such markup through an HTML sink. Labels ("JavaScript: 41%"), comparisons
+// such markup through an HTML sink. Markup or a handler a script writes is
+// read again up to MAX_NESTED_HTML_DEPTH strings deep; deeper than that it is
+// refused unread (fail closed), not admitted. Labels ("JavaScript: 41%"), comparisons
 // in scripts ("i<base && i>0") and plain strings pass; the sandbox's CSP is
 // what actually blocks loads.
 
@@ -57,8 +59,12 @@ const SMIL_VALUE_ATTRIBUTES: ReadonlySet<string> = new Set(["to", "from", "by", 
 const UNSAFE_SCHEME = /^(?:javascript:|data:\s*text\/html)/u;
 /** An unfinished start tag up to this many characters is read again on every chunk. */
 const PENDING_TAG_REREAD_SIZE = 1024;
-/** HTML handed to a sink is parsed again, at most this many strings deep. */
+/**
+ * HTML or a handler body handed to a sink is read again, at most this many
+ * strings deep. One nested deeper is refused unread rather than admitted.
+ */
 const MAX_NESTED_HTML_DEPTH = 3;
+const NESTED_HTML_LIMIT = `a script writes markup or a handler more than ${MAX_NESTED_HTML_DEPTH} strings deep`;
 
 function attributeName(attribute: Token.Attribute): string {
   return (attribute.prefix ? `${attribute.prefix}:${attribute.name}` : attribute.name).toLowerCase();
@@ -675,7 +681,7 @@ export function findJsSink(code: string, depth = 0): HtmlFindings {
   const tokens = lexer.tokens;
   let found: HtmlFindings = {};
   const note = (findings: HtmlFindings) => {
-    found = { ...found, embed: found.embed ?? findings.embed, url: found.url ?? findings.url ?? findings.limit };
+    found = { embed: found.embed ?? findings.embed, url: found.url ?? findings.url, limit: found.limit ?? findings.limit };
   };
   const done = () => found.limit !== undefined || (found.embed !== undefined && found.url !== undefined);
   let budget = FORK_BUDGET_PER_CHARACTER * code.length + FORK_BUDGET_FLOOR;
@@ -866,12 +872,20 @@ function scanJsTokens(
     }
 
     if (sink === "url" && isUnsafeUrl(url)) note({ url: code.slice(sinkStart, end) });
-    else if (sink === "html" && depth < MAX_NESTED_HTML_DEPTH && markup.includes("<")) {
-      note(scanHtmlString(markup, depth + 1));
-    } else if (sink === "handler" && depth < MAX_NESTED_HTML_DEPTH) {
-      // An on* attribute's value is a handler's body, checked as one.
-      const handler = findJsSink(markup, depth + 1);
-      if (handler.url !== undefined || handler.embed !== undefined || handler.limit !== undefined) note({ url: code.slice(sinkStart, end) });
+    else if (sink === "html" && markup.includes("<")) {
+      if (depth >= MAX_NESTED_HTML_DEPTH) note({ limit: NESTED_HTML_LIMIT });
+      else note(scanHtmlString(markup, depth + 1));
+    } else if (sink === "handler") {
+      // An on* attribute's value is a handler's body, checked as one. Past
+      // the depth cap a handler that holds a string could write anything, so
+      // it is refused unread; one without a string or template has no
+      // literal to hand a sink.
+      if (depth >= MAX_NESTED_HTML_DEPTH) {
+        if (/["'`]/u.test(markup)) note({ limit: NESTED_HTML_LIMIT });
+      } else {
+        const handler = findJsSink(markup, depth + 1);
+        if (handler.url !== undefined || handler.embed !== undefined || handler.limit !== undefined) note({ url: code.slice(sinkStart, end) });
+      }
     }
     index = chainEnd;
   }
