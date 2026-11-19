@@ -311,17 +311,19 @@ function openingTagEnd(html: string, from: number): number {
 }
 
 /**
- * Each real opening tag in a page, in order: never one inside a comment or
- * in the body of a script, style, textarea or title. The visitor returns
+ * Each real opening tag in a page, in order: never one inside a comment, a
+ * CDATA section (inline SVG or MathML), or the body of a script, style,
+ * textarea or title. The visitor returns
  * true to stop. Linear, so a page full of unclosed tags stays quick.
  */
 function eachOpeningTag(html: string, visit: (tag: OpeningTag) => boolean | void): void {
-  const opening = /<!--|<([a-z][a-z0-9-]*)(?=[\s/>])/giu;
+  const opening = /<!--|<!\[CDATA\[|<([a-z][a-z0-9-]*)(?=[\s/>])/giu;
   for (let match = opening.exec(html); match; match = opening.exec(html)) {
     if (match[1] === undefined) {
-      const close = html.indexOf("-->", match.index + 4);
+      const ending = match[0] === "<!--" ? "-->" : "]]>";
+      const close = html.indexOf(ending, match.index + match[0].length);
       if (close === -1) return;
-      opening.lastIndex = close + 3;
+      opening.lastIndex = close + ending.length;
       continue;
     }
     const tagEnd = openingTagEnd(html, match.index + match[0].length);

@@ -389,6 +389,17 @@ test("make default leaves examples in comments and scripts alone, and reads quot
   assert.match(baked.source, /<html lang="en" data-x="old > value" data-density="compact" data-headline="Plan less">/u);
 });
 
+test("a declaration shown inside an SVG's CDATA isn't the page's own", () => {
+  const fake = `<svg><style><![CDATA[ ]]></style><text><![CDATA[<script type="application/aiden-tweaks">[{ "id": "fake", "label": "Fake", "type": "switch", "default": true, "attr": "data-fake" }]</script>]]></text></svg>`;
+  const page = RICH.replace("<head>", `<head>${fake}`);
+  const controls = extractDesignTweakControls(page);
+  assert.deepEqual(controls.map((control) => control.id), ["accent", "radius", "density", "headline", "shadow", "replay"]);
+  const baked = bakeDesignTweakDefaults(page, withDesignTweak(undefined, byId(controls, "radius"), 12));
+  assert.ok(baked.ok);
+  assert.ok(baked.source.includes(fake), "the SVG is left as it was");
+  assert.equal(readDesignTweak(byId(extractDesignTweakControls(baked.source), "radius"), undefined), 12);
+});
+
 test("a page full of unclosed tags is read quickly", () => {
   const flood = `${RICH}${"<script ".repeat(16_000)}${"<style ".repeat(16_000)}${"<html ".repeat(16_000)}`;
   const started = performance.now();
