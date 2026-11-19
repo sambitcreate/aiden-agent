@@ -36,6 +36,8 @@ import { createMemoryExtension } from "./memory-context.js";
 import { fingerprintPromptPrefix } from "./pi-cache-telemetry.js";
 import type { MemoryFact, MemoryScope, MemoryStore } from "./memory-store.js";
 import { markMcpAgentTool } from "./mcp-tool-identity.js";
+import { createPiCodemodeTool } from "./pi-codemode.js";
+import { forgetPromptSectionDeviceKeys } from "./prompt-section-secret.js";
 import { LOAD_TOOLS_TOOL_NAME } from "./on-demand-tools.js";
 import type { PiAgentRuntimeExtension } from "./pi-agent-runtime-harness.js";
 import {
@@ -135,11 +137,14 @@ async function agentsRoots(contents: string) {
   tempRoots.push(root);
   const globalRoot = path.join(root, "global");
   const workspaceRoot = path.join(root, "workspace");
-  await Promise.all([mkdir(globalRoot), mkdir(workspaceRoot)]);
+  // Stands in for the app data folder that holds the device's prompt section key.
+  const userDataDir = path.join(root, "user-data");
+  await Promise.all([mkdir(globalRoot), mkdir(workspaceRoot), mkdir(userDataDir)]);
   await writeFile(path.join(workspaceRoot, "AGENTS.md"), contents);
   return {
     globalRoot,
     workspaceRoot,
+    userDataDir,
     // The production reader is a native helper; this reads the same anchored file directly.
     read: async (anchored: { canonicalPath: string }) => readFile(path.join(anchored.canonicalPath, "AGENTS.md"), "utf8"),
   };
@@ -148,8 +153,8 @@ async function agentsRoots(contents: string) {
 const mcpSection = () => "<mcp_servers>\nlinear: issue tracker tools.\n</mcp_servers>";
 
 /** One MCP server's tool, shaped the way the MCP manager builds it for codemode. */
-function mcpServerTool(serverId: string, label: string, description: string): AgentTool {
-  return markMcpAgentTool(Object.assign(textTool(`${serverId}_search`, `Search ${label}.`), {
+function mcpServerTool(serverId: string, label: string, description: string, output = "ok"): AgentTool {
+  return markMcpAgentTool(Object.assign(textTool(`${serverId}_search`, `Search ${label}.`, output), {
     codemode: true,
     discovery: Object.freeze({ namespace: `mcp:${serverId.padEnd(24, "0")}`, label, alias: serverId, description }),
   }), { serverId, toolName: "search" });
@@ -405,6 +410,22 @@ describe("prompt prefix stability: already stable", () => {
     }
   });
 
+  test("a restarted app frames a chat's AGENTS.md section with the same bytes", async () => {
+    // The nonce comes from the device key in the app data folder, so the first
+    // request after a restart matches the last session's for the same chat.
+    const roots = await agentsRoots("Use tabs for indentation.\n");
+    const assembly = await workspaceChat();
+    const first = async () => {
+      const harness = createPromptPrefixHarness({ agentsInstructions: roots });
+      return (await harness.turn({ prompt: "Summarize the project.", responses: reply("It is a small project."), assembly }))[0]!;
+    };
+    const beforeRestart = await first();
+    forgetPromptSectionDeviceKeys();
+    const afterRestart = await first();
+    assert.ok(afterRestart.carries("Use tabs for indentation."));
+    assert.deepEqual(comparePromptRequests(beforeRestart, afterRestart), {});
+  });
+
   for (const { wire, midConversationSystem, label } of wires) {
     test(`AGENTS.md section is identical across turns (${label})`, async () => {
       const roots = await agentsRoots("Use tabs for indentation.\n");
@@ -432,36 +453,76 @@ describe("prompt prefix stability: already stable", () => {
     });
   }
 
+  const connectingNote = "More services may still be connecting";
+
   for (const { wire, midConversationSystem, label } of wires) {
-    test(`an MCP server admitted mid-turn joins the section at the next turn (${label})`, async () => {
+    test(`an MCP server admitted mid-turn is callable at once and joins the section at the next turn (${label})`, async () => {
       // Discovery that finishes past the admission window lands between two
       // steps of a turn. The server is callable at once through codemode; the
-      // section keeps the turn-start render until the next user turn.
+      // section keeps the turn-start render (with its note that more services
+      // may connect) until the next user turn.
       const linear = mcpServerTool("linear", "Linear", "Issue tracker tools.");
-      const notion = mcpServerTool("notion", "Notion", "Workspace notes and pages.");
+      const notion = mcpServerTool("notion", "Notion", "Workspace notes and pages.", "Found the release page.");
       let admitted = false;
       const waitTool = textTool("wait_for_build", "Wait for the build to finish.");
       const waitForBuild: AgentTool = { ...waitTool, execute: async (...args) => { admitted = true; return waitTool.execute(...args); } };
-      const harness = createPromptPrefixHarness({ wire, midConversationSystem, lateMcpTools: () => (admitted ? [notion] : []) });
+      const harness = createPromptPrefixHarness({
+        wire,
+        midConversationSystem,
+        lateMcp: { tools: () => (admitted ? [notion] : []), pending: () => (admitted ? 0 : 1) },
+      });
+      const codemode = createPiCodemodeTool({
+        tools: () => harness.callableTools(),
+        executeTool: (...args) => harness.executeNestedToolCall(...args),
+        settled: async () => {},
+      });
       const one = await harness.turn({
-        prompt: "Wait for the build, then file an issue.",
-        assembly: await workspaceChat({ tools: [...workspaceTools, codemodeTool, waitForBuild, linear] }),
+        prompt: "Wait for the build, then find the release page.",
+        assembly: await workspaceChat({ tools: [...workspaceTools, codemode, waitForBuild, linear] }),
         responses: [
           fauxAssistantMessage(fauxToolCall("wait_for_build", {}), { stopReason: "toolUse" }),
-          fauxAssistantMessage("Filed."),
+          fauxAssistantMessage(fauxToolCall("codemode", { code: "text(await tools.notion_search({}));" }), { stopReason: "toolUse" }),
+          fauxAssistantMessage("Found it."),
         ],
       });
-      assert.equal(one.length, 2);
+      assert.equal(one.length, 3);
       assert.ok(one[0]!.carries("Issue tracker tools."), "the admitted server is in the section");
-      assert.ok(!one[1]!.carries("Workspace notes and pages."), "the late server waits for the next turn");
+      assert.ok(one[0]!.carries(connectingNote), "the section says more services may still connect");
+      assert.ok(one[2]!.carries("Found the release page."), "the late server answered a codemode call mid-turn");
+      assert.ok(!one[2]!.carries("Workspace notes and pages."), "the late server waits for the next turn's section");
       assert.deepEqual(comparePromptRequests(one[0]!, one[1]!), {});
+      assert.deepEqual(comparePromptRequests(one[1]!, one[2]!), {});
       const [two] = await harness.turn({
         prompt: "Now add a page about it.",
-        assembly: await workspaceChat({ tools: [...workspaceTools, codemodeTool, waitForBuild, linear, notion] }),
+        assembly: await workspaceChat({ tools: [...workspaceTools, codemode, waitForBuild, linear, notion] }),
         responses: reply("Added."),
       });
       assert.ok(two!.carries("Workspace notes and pages."), "the next turn's section lists the late server");
+      assert.ok(!two!.carries(connectingNote), "nothing is still connecting");
       assert.equal(comparePromptRequests(lastOf(one), two!).transcript?.source, "system:mcp-servers");
+      assert.equal(harness.networkCalls, 0);
+    });
+
+    test(`an MCP server removed mid-chat leaves the section at the next turn (${label})`, async () => {
+      const linear = mcpServerTool("linear", "Linear", "Issue tracker tools.");
+      const notion = mcpServerTool("notion", "Notion", "Workspace notes and pages.");
+      const codemode = textTool("codemode", "Run a short script over the available tools.");
+      const harness = createPromptPrefixHarness({ wire, midConversationSystem, lateMcp: { tools: () => [], pending: () => 0 } });
+      const turn = async (prompt: string, servers: AgentTool[]) => harness.turn({
+        prompt,
+        assembly: await workspaceChat({ tools: [...workspaceTools, codemode, ...servers] }),
+        responses: reply("Done."),
+      });
+      const [both] = await turn("Check the tracker and the notes.", [linear, notion]);
+      assert.ok(both!.carries("Issue tracker tools.") && both!.carries("Workspace notes and pages."));
+      const [linearOnly] = await turn("Check the tracker.", [linear]);
+      assert.ok(linearOnly!.carries("Issue tracker tools."));
+      assert.ok(!linearOnly!.carries("Workspace notes and pages."), "the removed server is gone");
+      assert.equal(comparePromptRequests(both!, linearOnly!).transcript?.source, "system:mcp-servers");
+      const [none] = await turn("Anything else?", []);
+      assert.ok(!none!.carries("Issue tracker tools.") && !none!.carries("Workspace notes and pages."));
+      assert.ok(!none!.carries("<mcp_servers>"), "no empty section is left behind");
+      assert.equal(comparePromptRequests(linearOnly!, none!).transcript?.source, "system:mcp-servers");
       assert.equal(harness.networkCalls, 0);
     });
   }

@@ -36,7 +36,7 @@ At the end, four Opus high reviewers review the whole PR, and a CI watcher owns 
 | Phase | Fix order step | Theme |
 | --- | --- | --- |
 | 0 | 2 | Measurement and the prefix harness |
-| 1 | 1 | Stable nonce and journaled system sections |
+| 1 | 1 | Stable AGENTS.md nonce and turn-fixed system sections |
 | 2 | 3 | Fixed tool list |
 | 3 | 4, 10b | Hook context on its message, frozen per-chat state |
 | 4 | 7 | Side calls share the parent prefix; one-off calls write no cache |
@@ -116,7 +116,7 @@ At the end, four Opus high reviewers review the whole PR, and a CI watcher owns 
 | Memory edit | system | `system:base` |
 | Fourth `computer_use` screenshot trims an earlier image | messages | `messages` |
 
-## Phase 1: stable nonce and journaled system sections
+## Phase 1: stable AGENTS.md nonce and turn-fixed system sections
 
 **Causes**
 
@@ -146,12 +146,15 @@ At the end, four Opus high reviewers review the whole PR, and a CI watcher owns 
 
 **As built (2026-11-18).** The code differed from the plan in these ways:
 
-- The per-chat secret is derived, not stored: `HMAC-SHA256(deviceKey, chatId)` (`main/services/prompt-section-secret.ts`). The device key is 32 random bytes in `prompt-section-key` in the app's data folder, created once with mode 0600. Chat records reach the renderer, paired phones, exports and forks, so a secret in the chat's metadata would travel with them. A derived secret also covers runs with no journal. If the folder cannot be written, the key is random for the process, so the nonce is stable within a run and changes after a restart.
+- The per-chat secret is derived, not stored: `HMAC-SHA256(deviceKey, chatId)` (`main/services/prompt-section-secret.ts`). Chat records reach the renderer, paired phones, exports and forks, so a secret in the chat's metadata would travel with them. A derived secret also covers runs with no journal.
+  - The device key is 32 random bytes in `prompt-section-key` in the app's data folder, mode 0600. It is written to a private temp file and hard-linked into place, so it appears whole and a concurrent creator's key wins and is read back. A damaged file or a symlink at that path is replaced by a rename, never written through. A stored key others can read is tightened to 0600 and is not trusted if that fails.
+  - If the folder cannot be written, the key is random for the process, and Aiden logs that once (no path, no key). The nonce is then stable within a run but changes after every restart, so an ACP chat with AGENTS.md replaces its native session on its first turn of each launch.
 - The nonce is `HMAC-SHA256(chatSecret, "agents-instructions")`, cut to 128 bits and written in UUID form, so the block keeps its width. The context estimate draws a random secret of the same shape and never sends it.
-- AGENTS.md records are written with every `</` escaped as `<\/`. They decode to the same strings, and a file cannot spell the closing tag even after its author has seen the nonce in an earlier turn of the same chat.
-- No journaling was needed. Each section is a pure function of its inputs (the files' content, the admitted servers), and the managed run folds a turn-start patch into the head (phase 0). A deterministic nonce is enough to make the AGENTS.md section byte-identical across turns on all three wires.
+- AGENTS.md records are written with every `</` escaped as `<\/`. They decode to the same strings, and a file cannot spell the closing tag even after its author has seen the nonce in an earlier turn of the same chat. The model therefore sees `<\/` wherever an AGENTS.md file says `</`, for example in HTML or XML samples.
+- No journaling was needed yet. Each section is a pure function of its inputs (the files' content, the admitted servers), and the managed run folds a turn-start patch into the head (phase 0). A deterministic nonce is enough to make the AGENTS.md section byte-identical across turns on all three wires. This leans on the head collapse; phase 8 must journal the two sections, or otherwise keep them stable, before it removes the collapse.
+- Both sections are built by one Electron-free factory, `main/services/chat-prompt-sections.ts` (`createChatAgentsInstructions` from the app data folder and chat ID, `createChatMcpServersSection` from the runtime's inventory and the late-discovery count). llm-client and the prefix harness both call it, the harness with a temp data folder, so the stability suite fails if the secret stops being per chat.
 - ACP takes the nonce from the same refresher. `STABLE_AGENTS_NONCE` and the nonce normalization are gone; the host-instruction fingerprint now hashes the delivered text as is. An existing ACP chat with AGENTS.md replaces its native session once, on its first turn after the upgrade, because its stored fingerprint was taken over the normalized text.
-- The MCP check found a change in the middle of a turn. llm-client re-rendered `<mcp_servers>` between steps from the runtime's callable inventory, which includes servers whose discovery finished after the admission window. The section is now rendered once per generation, from the servers admitted at turn start (`createTurnMcpServersSection` in `mcp-server-instructions.ts`, shared by llm-client and the harness). A late server is callable at once through codemode and `tool_search`, and joins the section at the next user turn. `mcp-tool-discovery-core.ts` is unchanged.
+- The MCP check found a change in the middle of a turn. llm-client re-rendered `<mcp_servers>` between steps from the runtime's callable inventory, which includes servers whose discovery finished after the admission window. The section is now rendered once per generation, from the servers admitted at turn start (`createChatMcpServersSection`). A server whose discovery finishes later stays out of the section for the rest of that generation, steering turns included, and is listed from the next generation on. It is callable at once through codemode and `tool_search`. When servers are still connecting at turn start and either tool is declared, the section ends with one fixed line: "More services may still be connecting; once connected, find them with codemode or tool_search." (naming whichever of the two the turn has). `mcp-tool-discovery-core.ts` is unchanged.
 - `aiden serve` does not use the AGENTS.md refresher or this MCP section, so it needed no change.
 
 ## Phase 2: a fixed tool list
@@ -341,6 +344,7 @@ At the end, four Opus high reviewers review the whole PR, and a CI watcher owns 
   - If they lower cost and keep replay quality, turn them on.
   - If not, record the numbers in the PR and leave them off.
 - **Head collapse.** Stop collapsing the head into one block, so a change in a late head section does not invalidate earlier sections. Each journaled section keeps its own block.
+  - Depends on phase 1: the AGENTS.md and MCP sections are turn-start patches that stay stable only because the collapse folds them into the head. Journal them (or otherwise keep them stable as their own blocks) before the collapse goes away, and keep the AGENTS.md and MCP cases of `prompt-prefix-stability.test.ts` passing on all three wires.
 - **Breakpoints.**
   - Use the 4th Anthropic cache breakpoint: today it is spent on the last tool, the system prompt and the last user message.
   - Add one at the end of the stable head, before the frozen-state tail, applied through the payload hook.

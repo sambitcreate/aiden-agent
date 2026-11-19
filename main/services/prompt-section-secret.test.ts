@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { chmod, lstat, mkdir, mkdtemp, readFile, readdir, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { after, beforeEach, test } from "node:test";
@@ -45,19 +45,61 @@ test("chats and devices get unrelated secrets", async () => {
   assert.notDeepEqual(chatPromptSecret(key, "chat-a"), chatPromptSecret(other, "chat-a"));
 });
 
-test("a damaged key file is replaced with a new key that later launches keep", async () => {
+const POSIX = process.platform !== "win32";
+
+test("a damaged key file is replaced with a private new key that later launches keep", async () => {
   const dir = await dataDir();
   const file = path.join(dir, PROMPT_SECTION_KEY_FILE);
-  await writeFile(file, "not a key\n");
+  await writeFile(file, "not a key\n", { mode: 0o644 });
   const replaced = promptSectionDeviceKey(dir);
   assert.match(await readFile(file, "utf8"), /^[0-9a-f]{64}\n$/u);
+  if (POSIX) assert.equal((await stat(file)).mode & 0o777, 0o600);
+  assert.deepEqual(await readdir(dir), [PROMPT_SECTION_KEY_FILE], "no temp file is left behind");
   forgetPromptSectionDeviceKeys();
   assert.deepEqual(promptSectionDeviceKey(dir), replaced);
 });
 
-test("an unwritable data folder still gives one stable key for the whole run", async () => {
+test("a stored key others can read is made private and kept", { skip: !POSIX }, async () => {
+  const dir = await dataDir();
+  const file = path.join(dir, PROMPT_SECTION_KEY_FILE);
+  const stored = "ab".repeat(32);
+  await writeFile(file, `${stored}\n`, { mode: 0o644 });
+  await chmod(file, 0o644);
+  assert.equal(promptSectionDeviceKey(dir).toString("hex"), stored);
+  assert.equal((await stat(file)).mode & 0o777, 0o600);
+});
+
+test("a symlink at the key path is replaced, never written through", { skip: !POSIX }, async () => {
+  const dir = await dataDir();
+  const elsewhere = path.join(await dataDir(), "victim");
+  await writeFile(elsewhere, "untouched\n");
+  await symlink(elsewhere, path.join(dir, PROMPT_SECTION_KEY_FILE));
+  const key = promptSectionDeviceKey(dir);
+  assert.equal(await readFile(elsewhere, "utf8"), "untouched\n");
+  const file = path.join(dir, PROMPT_SECTION_KEY_FILE);
+  assert.ok((await lstat(file)).isFile());
+  assert.equal((await readFile(file, "utf8")).trim(), key.toString("hex"));
+});
+
+test("a missing data folder still gives one stable key for the whole run", async () => {
   const missing = path.join(await dataDir(), "missing", "nested");
   const key = promptSectionDeviceKey(missing);
   assert.equal(key.length, 32);
   assert.deepEqual(promptSectionDeviceKey(missing), key);
+});
+
+const runningAsRoot = process.platform === "win32" || process.getuid?.() === 0;
+
+test("a read-only data folder gives one stable key for the run and creates nothing", { skip: runningAsRoot }, async () => {
+  const readOnly = path.join(await dataDir(), "read-only");
+  await mkdir(readOnly);
+  await chmod(readOnly, 0o500);
+  try {
+    const key = promptSectionDeviceKey(readOnly);
+    assert.equal(key.length, 32);
+    assert.deepEqual(promptSectionDeviceKey(readOnly), key);
+    assert.deepEqual(await readdir(readOnly), []);
+  } finally {
+    await chmod(readOnly, 0o700);
+  }
 });
