@@ -163,6 +163,7 @@ export type DesignBridgeCommand =
   | { type: "highlight"; commentId: string; selector?: string }
   | { type: "highlight"; clear: true }
   | ({ type: "set-tweaks" } & DesignTweakState)
+  | { type: "tweak-action"; id: string }
   | { type: "edit-enable"; on: boolean }
   | { type: "edit-command"; command: DesignTextCommand; value?: string }
   | { type: "edit-finish"; cancel: boolean };

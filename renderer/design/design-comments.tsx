@@ -356,6 +356,25 @@ export function useDesignComments({ chatId, doc, change, flow, wrapper, live, ve
     [change],
   );
 
+  /** Queues a note on a whole frame, pinned at its top right, for the next message (Tweaks' Send to Aiden). */
+  const queueOnFrame = React.useCallback(
+    (frameId: string, note: string): boolean => {
+      const frame = docRef.current.frames.find((entry) => entry.id === frameId);
+      if (!frame) return false;
+      const id = crypto.randomUUID();
+      const place: DesignCommentPlace = { frameId: frame.id, x: Math.max(0, frame.w - 8), y: 8 };
+      let added = false;
+      change((latest) => {
+        const next = addComment(latest, { id, place, note, createdAt: new Date().toISOString(), queued: true });
+        added = next !== null;
+        return next ?? latest;
+      });
+      if (added) void captureSpotRef.current(id, place);
+      return added;
+    },
+    [change],
+  );
+
   const hoverFrame = React.useRef<number | null>(null);
   const onNodeMouseMove = (event: React.MouseEvent, node: Node) => {
     if (!active || draft) return;
@@ -590,6 +609,7 @@ export function useDesignComments({ chatId, doc, change, flow, wrapper, live, ve
     commentOn,
     commentOnElement,
     queueOnElement,
+    queueOnFrame,
     layer,
   };
 }

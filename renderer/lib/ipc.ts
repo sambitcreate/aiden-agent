@@ -2490,6 +2490,18 @@ export const designCanvasApi = {
       | { ok: true }
       | { ok: false; reason: "unavailable" | "missing" | "not-found" | "ambiguous" | "unchanged" | "too-long" | "changed" }
     >("designCanvas:editText", chatId, frameId, changes, stamp),
+  /** Tweaks' Make default: writes the frame's values into the page's file. `kept` lists targets the frame keeps. */
+  bakeDesignTweaks: (chatId: string, frameId: string, values: Record<string, string> | undefined) =>
+    invoke<
+      | { ok: true; written: Record<string, string>; previous: Record<string, string>; kept: string[]; undoId: string }
+      | { ok: false; reason: "unavailable" | "missing" | "not-found" | "ambiguous" | "unchanged" | "too-long" | "changed" }
+    >("designCanvas:bakeTweaks", chatId, frameId, values ?? null),
+  /** Puts back the file as it was before the frame's last Make default, while nothing else changed it. */
+  undoBakeDesignTweaks: (chatId: string, frameId: string, undoId: string) =>
+    invoke<
+      | { ok: true }
+      | { ok: false; reason: "unavailable" | "missing" | "not-found" | "ambiguous" | "unchanged" | "too-long" | "changed" }
+    >("designCanvas:undoBakeTweaks", chatId, frameId, undoId),
   /** Saves one frame as a PNG, a PDF or its original file, through the save dialog. `theme` draws a dark artifact. */
   exportDesignFrame: (chatId: string, frameId: string, format: "png" | "pdf" | "source", theme?: unknown) =>
     invoke<{ saved: true } | { canceled: true } | { error: "unavailable" | "missing" | "failed" }>(
