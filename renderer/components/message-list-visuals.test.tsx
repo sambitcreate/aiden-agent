@@ -7,7 +7,7 @@ import { installBotTestIpc } from "../main/bots/test-dom";
 import { MessageList } from "./message-list";
 import { Toaster } from "./ui";
 import { KeepVisualChatContext } from "../lib/visual-menu-actions";
-import { DesignModeControlsContext, type DesignModeControls, type DesignModeSource } from "../lib/design-mode";
+import { DesignModeControlsContext, noteDesignCanvasView, type DesignModeControls, type DesignModeSource } from "../lib/design-mode";
 import type { AgentToolStep, GenerationTimeline } from "../shared/generation-timeline";
 
 afterEach(() => cleanup());
@@ -405,12 +405,19 @@ test("an HTML visual offers Send to canvas only where design mode is available, 
   assert.deepEqual(changes, [[true, "toggle"]]);
 });
 
-test("Send to canvas leaves design mode alone when it is on, and a canvas with no room says so", async () => {
+test("Send to canvas leaves design mode alone when it is on, and a canvas with no room says so", async (t) => {
   let answer: unknown = { status: "already", frameId: "frame-1" };
+  const placed: unknown[][] = [];
   installBotTestIpc({
     "chats:htmlArtifactSrcdoc": () => new Promise(() => undefined),
-    "designCanvas:placeArtifact": () => answer,
+    "designCanvas:placeArtifact": (...args) => {
+      placed.push(args);
+      return answer;
+    },
   });
+  // The open canvas's size on screen goes with the request, so the frame lands in view.
+  noteDesignCanvasView("chat-saved", { selection: [], viewSize: { w: 1440, h: 900 } });
+  t.after(() => noteDesignCanvasView("chat-saved", null));
   const changes: Array<[boolean, DesignModeSource]> = [];
   render(
     savedList({ htmlArtifacts: [visual] }, (list) => (
@@ -420,6 +427,14 @@ test("Send to canvas leaves design mode alone when it is on, and a canvas with n
   await openVisualMenu("Chart");
   fireEvent.click(screen.getByRole("menuitem", { name: "Send to canvas" }));
   await screen.findByText("That visual is already on the canvas.");
+  assert.deepEqual(placed, [["chat-saved", "media-live", { viewSize: { w: 1440, h: 900 } }]]);
+
+  // Already there on another page: the canvas shows that page, and the toast names it.
+  answer = { status: "already", frameId: "frame-1", page: "Ideas" };
+  await waitFor(() => assert.equal(screen.queryByRole("menu"), null));
+  await openVisualMenu("Chart");
+  fireEvent.click(screen.getByRole("menuitem", { name: "Send to canvas" }));
+  await screen.findByText("That visual is already on the canvas, on the page “Ideas”.");
 
   answer = { error: "full" };
   await waitFor(() => assert.equal(screen.queryByRole("menu"), null));

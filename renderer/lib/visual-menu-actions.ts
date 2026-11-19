@@ -4,7 +4,7 @@ import { toast } from "../components/ui";
 import type { VisualMenuAction } from "../components/visual-actions-menu";
 import { designCanvasApi, workspaceArtifactsApi } from "./ipc";
 import { userFacingErrorMessage } from "./ipc-error";
-import { useDesignModeControls, type DesignModeControls } from "./design-mode";
+import { designCanvasViewFor, useDesignModeControls, type DesignModeControls } from "./design-mode";
 
 /**
  * The chat whose settled native visuals may be kept in Artifacts, or null.
@@ -21,7 +21,11 @@ type PlaceResult = Awaited<ReturnType<typeof designCanvasApi.placeDesignArtifact
 /** What the person is told once a Send to canvas request comes back. */
 export function sendToCanvasOutcome(result: PlaceResult): { ok: boolean; message: string } {
   if ("status" in result) {
-    return { ok: true, message: result.status === "already" ? "That visual is already on the canvas." : "Sent to the canvas." };
+    if (result.status === "placed") return { ok: true, message: "Sent to the canvas." };
+    return {
+      ok: true,
+      message: result.page ? `That visual is already on the canvas, on the page “${result.page}”.` : "That visual is already on the canvas.",
+    };
   }
   switch (result.error) {
     case "missing":
@@ -47,7 +51,8 @@ export async function keepVisualInArtifacts(chatId: string, messageId: string, v
 export async function sendVisualToCanvas(controls: DesignModeControls, mediaId: string): Promise<void> {
   let result: PlaceResult;
   try {
-    result = await designCanvasApi.placeDesignArtifact(controls.chatId, mediaId);
+    // The open canvas's size on screen, so the frame lands where the person is looking.
+    result = await designCanvasApi.placeDesignArtifact(controls.chatId, mediaId, designCanvasViewFor(controls.chatId)?.viewSize);
   } catch (error) {
     toast.error(userFacingErrorMessage(error, SEND_TO_CANVAS_FAILED));
     return;

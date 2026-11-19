@@ -789,6 +789,40 @@ test("Send to canvas puts a chat visual on the page on screen as the person's fr
   assert.equal(((await invoke("designCanvas:get", "chat-1")) as DesignCanvas).revision, 1);
 });
 
+test("Send to canvas centres a visual in the canvas the person sees, and shows the page a sent visual is already on", async (t) => {
+  const { invoke, store, broadcasts } = await fixture(t, {
+    chats: { "chat-1": { id: "chat-1", workspaceId: "workspace-1" } },
+    artifactTitles: { "media-1": "Wide", "media-2": "Default" },
+    artifactHtml: { "media-1": "<p>wide</p>", "media-2": "<p>default</p>" },
+  });
+  // A 3000 x 2000 canvas on screen at zoom 1: the frame lands in its middle.
+  await invoke("designCanvas:placeArtifact", "chat-1", "media-1", { viewSize: { w: 3000, h: 2000 } });
+  // A size that does not parse is ignored, not refused.
+  await invoke("designCanvas:placeArtifact", "chat-1", "media-2", { viewSize: { w: -5, h: "tall" } });
+  let doc = (await invoke("designCanvas:get", "chat-1")) as DesignCanvas;
+  const wide = doc.frames.find((frame) => frame.kind === "artifact" && frame.mediaId === "media-1");
+  assert.ok(wide);
+  assert.deepEqual([wide.x + wide.w / 2, wide.y + wide.h / 2], [1500, 1000]);
+  assert.ok(doc.frames.some((frame) => frame.kind === "artifact" && frame.mediaId === "media-2"));
+
+  // The person moves to another page; sending the visual again takes them back to it.
+  await store.update("chat-1", (current) => ({
+    ...current,
+    pages: [...current.pages, { id: "page-2", name: "Ideas", viewport: { x: 0, y: 0, zoom: 1 } }],
+    activePageId: "page-2",
+  }));
+  const before = broadcasts.length;
+  assert.deepEqual(await invoke("designCanvas:placeArtifact", "chat-1", "media-1"), {
+    status: "already",
+    frameId: wide.id,
+    page: "Page 1",
+  });
+  doc = (await invoke("designCanvas:get", "chat-1")) as DesignCanvas;
+  assert.equal(doc.activePageId, wide.pageId);
+  assert.equal(doc.frames.length, 2, "nothing new is placed");
+  assert.equal(broadcasts.length, before + 1);
+});
+
 test("Send to canvas refuses a visual the chat no longer has, or HTML that fails the visual checks", async (t) => {
   const { invoke, broadcasts } = await fixture(t, {
     artifactTitles: { "media-1": "Gone", "media-2": "Remote image" },

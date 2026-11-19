@@ -26,7 +26,8 @@ import {
   planDesignTextEdit,
   type DesignTextChange,
 } from "../../renderer/shared/design-canvas/text-edit.js";
-import { canvasView } from "../../renderer/shared/design-canvas/canvas-summary.js";
+import { canvasView, parseDesignViewState } from "../../renderer/shared/design-canvas/canvas-summary.js";
+import { showPage } from "../../renderer/shared/design-canvas/pages.js";
 import { placeFrame } from "../../renderer/shared/design-canvas/placement.js";
 import { isHtmlArtifactMediaId } from "../../renderer/shared/generative-ui.js";
 import { ARTIFACT_FRAME_BOX } from "../services/design-canvas/artifact-frames.js";
@@ -57,11 +58,14 @@ export type DesignCanvasChat = Pick<
 
 /**
  * `designCanvas:placeArtifact` reply. `already` names the frame that shows the
- * visual; `missing` means the chat no longer has it, `unsafe` that its HTML no
- * longer passes the visual checks, and `full` that the canvas holds no more frames.
+ * visual and, when it was on another page, that page's name (the canvas now
+ * shows that page); `missing` means the chat no longer has it, `unsafe` that
+ * its HTML no longer passes the visual checks, and `full` that the canvas
+ * holds no more frames.
  */
 export type DesignCanvasPlaceArtifactResult =
-  | { status: "placed" | "already"; frameId: string }
+  | { status: "placed"; frameId: string }
+  | { status: "already"; frameId: string; page?: string }
   | { error: "missing" | "unsafe" | "full" };
 
 /** `designCanvas:grant` reply: an `aiden-design://<grant>/` host, or no access. */
@@ -257,11 +261,16 @@ export function registerDesignCanvasHandlers<Event>(deps: {
   // the page on screen as a frame of their own, beside the frames in view, the
   // way Add would. It needs no design mode (the renderer turns it on after),
   // only an attended chat that still holds the visual and HTML that still
-  // passes the visual checks.
+  // passes the visual checks. `options.viewSize` is the canvas's size on
+  // screen, when the renderer knows it; a size that does not parse is ignored.
   const UNCHANGED = Symbol("unchanged");
-  deps.handle("designCanvas:placeArtifact", async (_event, chatId, mediaId): Promise<DesignCanvasPlaceArtifactResult> => {
+  deps.handle("designCanvas:placeArtifact", async (_event, chatId, mediaId, options): Promise<DesignCanvasPlaceArtifactResult> => {
     const chat = await requireChat(chatId);
     if (!isHtmlArtifactMediaId(mediaId)) throw new Error("Invalid visual.");
+    const viewSize =
+      typeof options === "object" && options !== null && "viewSize" in options
+        ? parseDesignViewState({ selection: [], viewSize: (options as { viewSize: unknown }).viewSize })?.viewSize
+        : undefined;
     const [title, html] = await Promise.all([
       deps.artifactTitle(chat.id, mediaId),
       deps.artifactHtml(chat.id, mediaId),
@@ -278,13 +287,19 @@ export function registerDesignCanvasHandlers<Event>(deps: {
       const saved = await deps.store.update(chat.id, (doc) => {
         const existing = doc.frames.find((frame) => frame.kind === "artifact" && frame.mediaId === mediaId);
         if (existing) {
-          outcome = { status: "already", frameId: existing.id };
-          throw UNCHANGED;
+          if (existing.pageId === doc.activePageId) {
+            outcome = { status: "already", frameId: existing.id };
+            throw UNCHANGED;
+          }
+          // It is on another page: show that page, so the person sees it.
+          const page = doc.pages.find((entry) => entry.id === existing.pageId)?.name;
+          outcome = { status: "already", frameId: existing.id, ...(page ? { page } : {}) };
+          return showPage(doc, existing.pageId);
         }
         const placed = placeFrame(
           doc,
           { kind: "artifact", title: frameTitle, mediaId, createdBy: "person", ...ARTIFACT_FRAME_BOX },
-          canvasView(doc),
+          canvasView(doc, viewSize),
           deps.newId ?? randomUUID,
         );
         if ("error" in placed) {
