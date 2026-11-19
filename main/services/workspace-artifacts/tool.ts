@@ -7,7 +7,7 @@ import { AIDEN_UI_CATALOG_VERSION, type AidenUiDiagnostic, type ChatUiVisualV1 }
 import { parseChatUiVisualV1 } from "../../../renderer/shared/aiden-ui/visual.js";
 import {
   describeWorkspaceArtifactCommands,
-  escapeLineSeparators,
+  escapeForModel,
   isWorkspaceArtifactId,
   isWorkspaceArtifactRevision,
   isWorkspaceArtifactTitle,
@@ -799,7 +799,7 @@ function describePage(view: WorkspaceArtifactView, input: ArtifactToolInput): st
 function listing(views: readonly WorkspaceArtifactView[], earlier: Record<string, number[]>): string {
   if (views.length === 0) return "This workspace has no artifacts yet.";
   // A source's last error quotes what a command printed, which may hold U+2028 or U+2029.
-  return escapeLineSeparators(JSON.stringify(
+  return escapeForModel(JSON.stringify(
     views.map(({ artifact, snapshot }) => ({
       id: artifact.id,
       title: artifact.visual.title,

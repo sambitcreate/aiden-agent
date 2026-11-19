@@ -4,7 +4,7 @@
  * reads the right fields without being sent the data itself.
  */
 
-import { escapeLineSeparators, safeCut } from "../../../renderer/shared/workspace-artifacts.js";
+import { escapeForModel } from "../../../renderer/shared/workspace-artifacts.js";
 
 const MAX_SHAPE_CHARS = 240;
 const MAX_SAMPLE_CHARS = 240;
@@ -16,13 +16,21 @@ const MAX_DEPTH = 3;
 const MAX_ALTERNATIVES = 3;
 
 /**
- * `text` within `max` characters, with U+2028 and U+2029 escaped so a key or
- * value holding one never reads as a line break, and cut where no emoji is
- * split in two.
+ * `text` within `max` characters, with line separators and bidi controls
+ * escaped (`escapeForModel`) so a key or value holding one never reads as a
+ * line break or reorders the line. A long text is cut before the character
+ * that would pass the limit, so the cut never splits an escape or an emoji.
  */
 function bounded(text: string, max: number): string {
-  const escaped = escapeLineSeparators(text);
-  return escaped.length > max ? `${escaped.slice(0, safeCut(escaped, max - 1))}…` : escaped;
+  const escaped = escapeForModel(text);
+  if (escaped.length <= max) return escaped;
+  let kept = "";
+  for (const char of text) {
+    const written = escapeForModel(char);
+    if (kept.length + written.length > max - 1) break;
+    kept += written;
+  }
+  return `${kept}…`;
 }
 
 function isObject(value: unknown): value is Record<string, unknown> {

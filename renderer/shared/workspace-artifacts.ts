@@ -764,18 +764,23 @@ export function safeCut(text: string, at: number): number {
 }
 
 /**
- * `text` with U+2028 and U+2029 written as the escapes `\u2028` and
- * `\u2029`. JSON.stringify leaves both as they are, and a model or a log
- * reads either as a line break, so quoted file or command text could
- * otherwise seem to start a line of its own.
+ * `text` with the characters a model or a log can read as a line break or as
+ * a change of reading direction written as `\uXXXX` escapes: U+0085 (next
+ * line), U+2028 and U+2029 (line and paragraph separators), and the bidi
+ * embeddings, overrides and isolates U+202A–U+202E and U+2066–U+2069.
+ * JSON.stringify leaves all of them as they are, so quoted file or command
+ * text could otherwise seem to start a line of its own, or show text in an
+ * order other than the one it is sent in.
  */
-export function escapeLineSeparators(text: string): string {
-  return text.replace(/[\u2028\u2029]/gu, (char) => (char === "\u2028" ? "\\u2028" : "\\u2029"));
+export function escapeForModel(text: string): string {
+  return text.replace(MODEL_UNSAFE, (char) => `\\u${char.charCodeAt(0).toString(16).padStart(4, "0")}`);
 }
 
-/** `value` as JSON for text sent to the model, with U+2028 and U+2029 escaped. */
+const MODEL_UNSAFE = /[\u0085\u2028\u2029\u202a-\u202e\u2066-\u2069]/gu;
+
+/** `value` as JSON for text sent to the model, with the characters `escapeForModel` names escaped. */
 export function quoteForModel(value: unknown): string {
-  return escapeLineSeparators(JSON.stringify(value) ?? "null");
+  return escapeForModel(JSON.stringify(value) ?? "null");
 }
 
 /** Turns command output or file text into the value a page reads. */
