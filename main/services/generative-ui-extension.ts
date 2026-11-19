@@ -36,6 +36,7 @@ import {
 import type { InlineVisualsMode } from "../../renderer/shared/appearance.js";
 import { createRenderUiTool, type RenderUiToolOptions } from "./aiden-ui-tool.js";
 import { checkGenerativeUiScripts, describeGenerativeUiScriptCheck } from "./generative-ui-script-check.js";
+import { visualRoutingRule } from "./visual-routing.js";
 
 export const GENERATIVE_UI_EXTENSION_ID = "aiden.gui.generative-ui";
 export const VISUALIZE_GUIDE_TOOL_NAME = "visualize_guide" as const;
@@ -109,7 +110,7 @@ export interface GenerativeUiExtensionOptions {
   /** The turn came from a paired device, which shows each visual as a snapshot. */
   audience?: "remote";
   /**
-   * The design canvas is offered this turn: pages, screens and UI mockups go
+   * The design canvas is offered this turn: screens and pages to iterate on go
    * in `design/*.html` files there, so inline visuals stay small in-reply
    * charts and widgets.
    */
@@ -120,13 +121,11 @@ export interface GenerativeUiExtensionOptions {
    * there instead of drawing them.
    */
   designModeOffered?: boolean;
+  /** workspace_artifact is offered this turn: a page to keep goes there (see `visualRoutingRule`). */
+  workspaceArtifacts?: boolean;
+  /** The image tools are offered this turn: pictures come from them (see `visualRoutingRule`). */
+  images?: boolean;
 }
-
-const DESIGN_MODE_OFFERED_VISUALS_NOTE =
-  " When the person wants whole pages, app screens or several design directions to compare, call design_mode to ask to open the design canvas instead of drawing them in an inline visual.";
-
-const DESIGN_CANVAS_VISUALS_NOTE =
-  " Design mode is on: pages, screens, dashboards laid out as pages, and UI mockups belong on the design canvas as design/*.html files, never in an inline visual. Use inline visuals only for small charts or widgets that support your reply.";
 
 function resolveWorkspaceHtml(
   root: string,
@@ -240,6 +239,12 @@ export function createGenerativeUiExtensionRuntime(
   const titlesInGeneration = new Map<string, { mediaId: string; size: number; toolCallId: string }>();
   const designCanvas = options.designCanvas === true;
   const designModeOffered = !designCanvas && options.designModeOffered === true;
+  const routing = visualRoutingRule({
+    inline: true,
+    workspaceArtifact: options.workspaceArtifacts === true && options.audience !== "remote",
+    designCanvas: designCanvas ? "on" : designModeOffered ? "offered" : "off",
+    images: options.images === true,
+  });
 
   const tool: AgentTool = declareOnDemandSummary(
     declarePiRuntimeReplay(
@@ -266,7 +271,9 @@ export function createGenerativeUiExtensionRuntime(
               "Set before html. column (default): the reading column, about 690px wide, for charts, cards, diagrams, and small tools. wide: spans the whole chat pane (up to about 1280px) and follows the window size, " +
               (designCanvas
                 ? "for multi-panel charts and wide tables."
-                : "for dashboards, UI mockups, multi-panel layouts, and wide tables."),
+                : designModeOffered
+                  ? "for dashboards, multi-panel layouts, and wide tables."
+                  : "for dashboards, UI mockups, multi-panel layouts, and wide tables."),
           }),
         ),
         html: Type.Optional(
@@ -422,11 +429,16 @@ export function createGenerativeUiExtensionRuntime(
           ? "Aiden can draw inline visuals in this chat. Prefer render_ui, which composes Aiden's own native components (charts, stats, tables, comparisons, checklists, steps, simple filters and tabs); use render_artifact (sandboxed HTML) only for custom drawing or scripting. "
           : "Aiden can draw inline visuals in this chat with render_artifact. ") +
         "Use one when a comparison, trend, structure, process, or interactive what-if is clearer as a visual than as prose — not for plain answers or raster images (use display_image), and usually at most one per reply. Each visual appears inside your reply in the Aiden Agent chat, at the point you call the tool, on the chat's own background (no frame or border), with its height following its content. It defaults to the reading column (about 690px wide); pass layout \"wide\" (before the markup or html) when it needs room, such as " +
-        (designCanvas ? "a multi-panel chart or wide table" : "a dashboard, UI mockup, multi-panel layout, or wide table") +
+        (designCanvas
+          ? "a multi-panel chart or wide table"
+          : designModeOffered
+            ? "a dashboard, multi-panel layout, or wide table"
+            : "a dashboard, UI mockup, multi-panel layout, or wide table") +
         ", and it will span the chat pane and follow the window size. Either way its width changes with the window, so build it fluid. Before your first visual in a conversation, call visualize_guide with the modules you need (catalog for render_ui; design, html, charts, interactive for render_artifact). Keep the reply complete without the visual: state the key takeaway in a sentence. Never load remote scripts or call network APIs from a visual, and do not claim inline visuals are unavailable while these tools are present." +
-        (designCanvas ? DESIGN_CANVAS_VISUALS_NOTE : designModeOffered ? DESIGN_MODE_OFFERED_VISUALS_NOTE : "") +
+        (routing ? ` ${routing}` : "") +
+        (designCanvas ? " Keep inline visuals to small charts, diagrams or widgets that support your reply." : "") +
         (options.preferArtifactThisTurn
-          ? designCanvas
+          ? designCanvas || designModeOffered
             ? " The user invoked /visualize for this turn; prefer render_artifact when a chart or diagram would help."
             : " The user invoked /visualize for this turn; prefer render_artifact when a chart, diagram, dashboard, or interactive mockup would help."
           : "") +

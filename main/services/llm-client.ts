@@ -2413,6 +2413,9 @@ async function prepareGeneration(
       ...(options.visualAudience ? { audience: options.visualAudience } : {}),
       ...(designCanvasOffered ? { designCanvas: true } : {}),
       ...(designModeToolOffered && !designCanvasOffered ? { designModeOffered: true } : {}),
+      // Where a visual goes names only the destinations this turn has tools for.
+      ...(offerWorkspaceArtifacts ? { workspaceArtifacts: true } : {}),
+      ...(modelOperationsPlan.imageTools ? { images: true } : {}),
       existingChatUiCount: displayedAssistantUiCount(chat.messages),
       onUiVisual: (visual, context) => {
         uiVisualPlacements.record(visual.id, context.toolCallId, visual.layout ?? "column");

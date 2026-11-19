@@ -1,4 +1,5 @@
 import { GENERATIVE_UI_HOST_LIBS } from "../../../renderer/shared/generative-ui.js";
+import { VISUAL_ROUTING_SKILL_LINE } from "../visual-routing.js";
 
 /**
  * Built-in skill that teaches Aiden how to design on the canvas beside a
@@ -11,6 +12,7 @@ export const AIDEN_DESIGN_SKILL = Object.freeze({
     "Design pages and screens on the design canvas beside a design-mode chat: build on the person's own tokens, write each design as a workspace HTML file, check it once and fix what is wrong, and edit it from the person's comments.",
   instructions: [
     "Use this when design mode is on in the chat and the person wants a page, screen or visual direction they can see and compare on the canvas. If canvas_place_frame is not among your tools yet, call design_mode with action enter to ask the person to open the canvas; if design_mode is not among your tools either, load it with load_tools first. If load_tools does not offer design_mode, ask the person to turn on design mode with the Design button, ⇧⌘L or /design.",
+    VISUAL_ROUTING_SKILL_LINE,
     "The canvas tools come with their own instructions for placing, arranging, pages and widths. This guide is about making the design good.",
     "",
     "Start from what is there:",
