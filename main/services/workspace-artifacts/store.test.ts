@@ -579,6 +579,33 @@ test("pages that would outgrow their file drop the least recently changed pages'
   assert.equal(resaved.markupDropped, undefined);
 });
 
+test("saving one page's state near the size cap drops only that page's markup, and fails rather than drop another's", async (t) => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-artifacts-"));
+  t.after(() => fs.rm(dir, { recursive: true, force: true }));
+  let ids = 0;
+  const make = (artifactsMaxBytes?: number) =>
+    new WorkspaceArtifactStore({ root: () => dir, newId: () => `art${++ids}`, ...(artifactsMaxBytes ? { artifactsMaxBytes } : {}) });
+  const markup = (word: string) => `<Visual title="x">${`${word} `.repeat(1_000)}</Visual>`;
+  const loose = make();
+  const other = await loose.create("ws1", content({ title: "Other", markup: markup("aaa") }));
+  const saving = await loose.create("ws1", content({ title: "Saving", markup: markup("bbb") }));
+  const size = async () => (await fs.stat(path.join(dir, "ws1.json"))).size;
+  // Room for 1 KB more: a 2 KB state fits only once this page's own markup goes.
+  const tight = make((await size()) + 1_000);
+  await tight.saveState("ws1", saving.id, saving.revision, { note: "x".repeat(2_000) });
+  let pages = new Map((await make().list("ws1")).map((view) => [view.artifact.id, view.artifact]));
+  assert.equal(pages.get(other.id)!.markup, markup("aaa"));
+  assert.equal(pages.get(saving.id)!.markup, undefined);
+  assert.equal(pages.get(saving.id)!.markupDropped, true);
+  assert.deepEqual(pages.get(saving.id)!.visual.state, { note: "x".repeat(2_000) });
+  // With no markup of its own left to drop, a state that does not fit is refused and nothing changes.
+  const full = make((await size()) + 100);
+  await assert.rejects(full.saveState("ws1", saving.id, saving.revision, { note: "y".repeat(4_000) }));
+  pages = new Map((await make().list("ws1")).map((view) => [view.artifact.id, view.artifact]));
+  assert.equal(pages.get(other.id)!.markup, markup("aaa"));
+  assert.deepEqual(pages.get(saving.id)!.visual.state, { note: "x".repeat(2_000) });
+});
+
 test("a history write that fails is reported, and the update still succeeds", async (t) => {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-artifacts-"));
   t.after(() => fs.rm(dir, { recursive: true, force: true }));

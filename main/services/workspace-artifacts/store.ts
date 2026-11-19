@@ -175,6 +175,18 @@ function fitPagesToBudget(draft: WorkspaceArtifactsDocument, keepId: string, max
   dropMarkupToFit(order, size, maxBytes);
 }
 
+/**
+ * Keeps a workspace's pages within `maxBytes` for a change to `id` alone,
+ * such as its saved state, by dropping only that page's markup: a small
+ * change to one page never costs another page its markup. A file that is
+ * still too large fails its write.
+ */
+function fitPageToBudget(draft: WorkspaceArtifactsDocument, id: string, maxBytes: number): void {
+  const size = jsonBytes(draft) + 1;
+  if (size <= maxBytes) return;
+  dropMarkupToFit(draft.artifacts.filter((artifact) => artifact.id === id), size, maxBytes);
+}
+
 export function normalizeWorkspaceArtifactHistoryDocument(workspaceId: string) {
   return (value: unknown): WorkspaceArtifactHistoryDocument => {
     if (!isRecord(value) || !isRecord(value.revisions)) return emptyHistory();
@@ -879,7 +891,7 @@ export class WorkspaceArtifactStore {
       const next = parseWorkspaceArtifactV1({ ...artifact, visual: { ...artifact.visual, state } });
       if (!next) throw new Error("The artifact's state is too large or uses a reserved key name.");
       artifact.visual = next.visual;
-      fitPagesToBudget(draft, id, this.artifactsMaxBytes);
+      fitPageToBudget(draft, id, this.artifactsMaxBytes);
     });
   }
 
