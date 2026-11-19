@@ -142,7 +142,7 @@ const REGEX_AFTER_KEYWORDS: ReadonlySet<string> = new Set([
 const CONTEXTUAL_KEYWORDS: ReadonlySet<string> = new Set(["yield", "await", "of"]);
 /** Keywords whose parenthesized head is followed by a statement, where `/` starts a regex. */
 const HEAD_KEYWORDS: ReadonlySet<string> = new Set(["if", "while", "for", "with"]);
-const SIMPLE_ESCAPES: Readonly<Record<string, string>> = { n: "\n", t: "\t", r: "\r", b: "\b", f: "\f", v: "\v", 0: "\0" };
+const SIMPLE_ESCAPES: Readonly<Record<string, string>> = { n: "\n", t: "\t", r: "\r", b: "\b", f: "\f", v: "\v" };
 const IDENTIFIER_START = /[\p{ID_Start}$_]/u;
 const IDENTIFIER_PART = /[\p{ID_Continue}$_‌‍]/u;
 const LINE_BREAK = /[\n\r\u2028\u2029]/u;
@@ -158,15 +158,41 @@ function readEscape(code: string, at: number): [string, number] {
     if (hex) return [String.fromCharCode(Number.parseInt(hex[0], 16)), at + 3];
   }
   if (char === "u") {
-    const braced = /^\{([0-9a-f]{1,6})\}/iu.exec(code.slice(at + 1, at + 9));
-    if (braced) {
-      const point = Number.parseInt(braced[1]!, 16);
-      return [point <= 0x10ffff ? String.fromCodePoint(point) : "", at + 1 + braced[0].length];
-    }
-    const hex = /^[0-9a-f]{4}/iu.exec(code.slice(at + 1, at + 5));
-    if (hex) return [String.fromCharCode(Number.parseInt(hex[0], 16)), at + 5];
+    const unicode = readUnicodeEscape(code, at + 1);
+    if (unicode) return unicode;
+  }
+  // A legacy octal escape (`\74` is "<", `\152` is "j"): sloppy-mode strings
+  // read up to three octal digits, at most two after a 4 to 7. Strict code and
+  // templates refuse them, so that code never runs and reading them the same
+  // way only errs toward a refusal. `\8` and `\9` are the digits themselves.
+  if (char >= "0" && char <= "7") {
+    const octal = char <= "3" ? /[0-7]{1,3}/uy : /[0-7]{1,2}/uy;
+    octal.lastIndex = at;
+    const digits = octal.exec(code)![0];
+    return [String.fromCharCode(Number.parseInt(digits, 8)), at + digits.length];
   }
   return [SIMPLE_ESCAPES[char] ?? char, at + 1];
+}
+
+/**
+ * Reads a `\u` escape's digits at `at` (just past the `u`): four hex digits,
+ * or a braced code point with any number of leading zeros. Returns the cooked
+ * text and the index after it, or undefined when the digits are malformed (a
+ * syntax error).
+ */
+function readUnicodeEscape(code: string, at: number): [string, number] | undefined {
+  if (code[at] === "{") {
+    const braced = /\{0*([0-9a-f]{1,6})\}/iuy;
+    braced.lastIndex = at;
+    const match = braced.exec(code);
+    if (!match) return undefined;
+    const point = Number.parseInt(match[1]!, 16);
+    return [point <= 0x10ffff ? String.fromCodePoint(point) : "", at + match[0].length];
+  }
+  const hex = /[0-9a-f]{4}/iuy;
+  hex.lastIndex = at;
+  const match = hex.exec(code);
+  return match ? [String.fromCharCode(Number.parseInt(match[0], 16)), at + 4] : undefined;
 }
 
 /** An immutable stack, so a second reading can start from the first one's state and be compared with it cheaply. */
@@ -433,10 +459,24 @@ class JsLexer {
     // as the keyword it spells: `this.#default/1` divides.
     const privateName = char === "#" && (IDENTIFIER_START.test(code[this.at + 1] ?? "") || code[this.at + 1] === "\\");
     if (IDENTIFIER_START.test(char) || char === "\\" || privateName) {
-      let at = this.at + 1;
-      while (at < code.length && (IDENTIFIER_PART.test(code[at]!) || code[at] === "\\")) at += 1;
+      // A name may spell its characters as \u escapes (`\u{6F}pen` is open),
+      // so its text is the name they spell.
+      let at = this.at;
+      let text = "";
+      while (at < code.length && (at === this.at || IDENTIFIER_PART.test(code[at]!) || code[at] === "\\")) {
+        if (code[at] === "\\") {
+          const unicode = code[at + 1] === "u" ? readUnicodeEscape(code, at + 2) : undefined;
+          if (unicode) {
+            text += unicode[0];
+            at = unicode[1];
+            continue;
+          }
+        }
+        text += code[at];
+        at += 1;
+      }
       this.at = at;
-      this.push({ kind: "name", text: code.slice(start, at), start, end: at });
+      this.push({ kind: "name", text, start, end: at });
       return;
     }
     if (/[0-9]/u.test(char) || (char === "." && /[0-9]/u.test(code[this.at + 1] ?? ""))) {

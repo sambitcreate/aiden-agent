@@ -238,7 +238,36 @@ const HASHBANG_SINKS = {
   handlerInInnerHtml: `<p>x</p><script>document.body.innerHTML = "<img src=data:,x onerror='#!/x/ \`\\n${IFRAME_SINK.replace(/"/gu, '\\"')}\\n//\`'>";</script>`,
 };
 
+// Sinks spelled with escapes a browser's JavaScript engine decodes: legacy
+// octal escapes in sloppy-mode strings (`\74` is "<", `\152` is "j", `\43` is
+// "#"), braced code points with leading zeros, and \u escapes in names.
+const NESTED_ESCAPED_SINK = String.raw`document.body.innerHTML=\'\\x3ciframe src=https:\\x2f\\x2fe.test>\\x3c\\x2fiframe>\'`;
+const ESCAPED_SINKS = {
+  octalMarkup: String.raw`<p>x</p><script>document.body.innerHTML = '\74iframe src=https://e.test>\74/iframe>';</script>`,
+  octalMarkupInOnclick: String.raw`<p>x</p><button onclick="document.body.innerHTML = '\74iframe src=https://e.test>\74/iframe>'">Go</button>`,
+  octalLocation: String.raw`<p>x</p><script>location = '\152avascript:alert(1)';</script>`,
+  octalHref: String.raw`<p>x</p><script>a.href = '\144ata:text/html,<b>x</b>';</script>`,
+  octalHandlerHashbang: `<p>x</p><script>document.body.innerHTML = '<img src=data:,x onerror="\\43!/x/ \`\\n${NESTED_ESCAPED_SINK};\\n//\`">';</script>`,
+  octalScriptHashbang: `<p>x</p><script>document.write('<script>\\43!/x/ \`\\n${NESTED_ESCAPED_SINK};\\n//\`<\\/script>');</script>`,
+  longBracedMarkup: String.raw`<p>x</p><script>document.body.innerHTML = '\u{0000003c}iframe src=https://e.test>\u{0000003c}/iframe>';</script>`,
+  longBracedLocation: String.raw`<p>x</p><script>location = '\u{0000006a}avascript:alert(1)';</script>`,
+  bracedName: String.raw`<p>x</p><script>\u{6F}pen('javascript:alert(1)');</script>`,
+  fourDigitName: `<p>x</p><script>a.${"\\"}u0068ref = 'javascript:alert(1)';</script>`,
+  bracedProperty: String.raw`<p>x</p><script>document.body.inner\u{48}TML = '<iframe src=https://e.test></iframe>';</script>`,
+};
+
 const REFUSED_MARKUP: Record<string, string> = {
+  "an <iframe> written through octal escapes for <": ESCAPED_SINKS.octalMarkup,
+  "an onclick that writes an <iframe> through octal escapes for <": ESCAPED_SINKS.octalMarkupInOnclick,
+  "a javascript: URL spelled with an octal escape": ESCAPED_SINKS.octalLocation,
+  "a data:text/html href spelled with an octal escape": ESCAPED_SINKS.octalHref,
+  "an <iframe> after a handler hashbang written as an octal escape": ESCAPED_SINKS.octalHandlerHashbang,
+  "an <iframe> after a written script's hashbang spelled as an octal escape": ESCAPED_SINKS.octalScriptHashbang,
+  "an <iframe> written through braced escapes with leading zeros": ESCAPED_SINKS.longBracedMarkup,
+  "a javascript: URL spelled with a braced escape with leading zeros": ESCAPED_SINKS.longBracedLocation,
+  "an open() whose name is spelled with a braced escape": ESCAPED_SINKS.bracedName,
+  "an href whose name is spelled with a four-digit escape": ESCAPED_SINKS.fourDigitName,
+  "an innerHTML whose name is spelled with a braced escape": ESCAPED_SINKS.bracedProperty,
   "a <base> whose earlier attribute quotes a <": '<base data-x="<" href="https://evil.test/">',
   "a <link> whose title holds a <": '<link title="a<b" rel=stylesheet href=https://evil.test/a.css>',
   "an <object> whose title is a <": '<object title="<" data=https://evil.test/x.svg></object>',
@@ -370,6 +399,9 @@ const ADMITTED_MARKUP: Record<string, string> = {
   "a division after a template literal": "<script>var h = `${rows}` / 2; label.textContent = h + ' rows';</script>",
   "a class with private fields that divides them and checks a brand with in":
     "<script>class Meter { #count = 3; #max = 8; #brand = true; static is(o) { return #brand in o; } ratio() { return this.#count / this.#max; } }\nconst m = new Meter(); bar.style.width = m.ratio() * 100 + '%'; label.textContent = Meter.is(m) ? `${m.ratio()} / 1` : '';</script>",
+  "escaped strings that decode to digits, a null and a copyright sign":
+    String.raw`<script>label.textContent = '\0' + ' v1.0 \251 2026 \8\9'; legend.innerHTML = '<b>\61\62</b>'; note.textContent = ` + "`\\0 rows`;</script>",
+  "names spelled with escapes that are not sinks": String.raw`<script>const \u{6C}abel = document.body; \u{6C}abel.textContent = 'ready'; a.\u{74}itle = 'javascript: notes';</script>`,
   // A hashbang line is a comment, so what it names never runs.
   "a script whose hashbang line names a javascript: URL": "<script>#!/usr/bin/env node location='javascript:void 0'\nlabel.textContent = 'ready';</script>",
   // Read as a regex, `/ 2; … rows /` would be followed by a name (`$`): a syntax
@@ -545,6 +577,15 @@ test("a hashbang streamed in pieces, even split between # and !, is still read a
   for (const html of Object.values(HASHBANG_SINKS)) {
     const scriptStart = html.search(/#!|&#35;!/u);
     for (const chunk of [1, 3, scriptStart + 1]) {
+      assert.equal(streamInChunks(html, chunk).admitted, false, `${chunk}-character pieces of ${html}`);
+    }
+  }
+});
+
+test("an escaped sink streamed in pieces, even split inside its escape, is refused", () => {
+  for (const html of Object.values(ESCAPED_SINKS)) {
+    const escapeAt = html.indexOf("\\");
+    for (const chunk of [1, 2, 5, escapeAt + 2]) {
       assert.equal(streamInChunks(html, chunk).admitted, false, `${chunk}-character pieces of ${html}`);
     }
   }
