@@ -30,6 +30,8 @@ export const DESIGN_PAGE_INSPECT_WAIT_MS = 6_000;
 export type WrittenPageReport = {
   /** The page's workspace path, such as design/home.html. */
   path: string;
+  /** The frame that was drawn, so Aiden can move or change it without a canvas_read. */
+  frameId?: string;
   /** One sentence per problem; empty when nothing is wrong. */
   findings: readonly string[];
   /** The person took the page off the canvas, so it was not put back or checked. */
@@ -54,7 +56,7 @@ export function designInspectNoteText(input: readonly WrittenPageReport[]): stri
   for (const report of shown) {
     lines.push(
       formatCheckReport({
-        label: report.path,
+        label: report.frameId ? `${report.path} (frame ${report.frameId})` : report.path,
         findings: report.findings,
         fix: "Fix them in the file once; another report follows the next write.",
       }).trimStart(),
@@ -109,7 +111,7 @@ export type WrittenPageInspector = {
  * mode was left) reports nothing; a failed inspect goes to `onError`.
  */
 export function createWrittenPageInspector(options: {
-  inspect: (path: string) => Promise<readonly string[] | null>;
+  inspect: (path: string) => Promise<{ frameId: string; findings: readonly string[] } | null>;
   onError: (path: string, error: unknown) => void;
 }): WrittenPageInspector {
   const writes = new Map<string, number>();
@@ -123,8 +125,10 @@ export function createWrittenPageInspector(options: {
       chain = chain.then(async () => {
         if (writes.get(path) !== generation) return;
         try {
-          const findings = await options.inspect(path);
-          if (findings && writes.get(path) === generation) ready.set(path, { path, findings: [...findings] });
+          const inspected = await options.inspect(path);
+          if (inspected && writes.get(path) === generation) {
+            ready.set(path, { path, frameId: inspected.frameId, findings: [...inspected.findings] });
+          }
         } catch (error) {
           options.onError(path, error);
         }

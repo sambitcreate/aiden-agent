@@ -45,6 +45,9 @@ import {
   DESIGN_GUIDES,
   DESIGN_WIDTHS,
   defaultFileBox,
+  designFrameByIdOrPath,
+  designPagePath,
+  frameShowingDesignPage,
   framesOnPage,
   isDesignContainer,
   isDesignPrintable,
@@ -110,10 +113,12 @@ const DEFAULT_BOX: Record<Exclude<PlacedKind, "connector" | "file">, { w: number
 /** Canvas text sizes and the line height a placed text box gets per line, matching the canvas. */
 const TEXT_LINE: Record<DesignTextSize, number> = { small: 19, medium: 24, large: 42 };
 const SIDES: readonly DesignSide[] = ["top", "right", "bottom", "left"];
+/** Where a tool takes a frame id, a page's workspace path names the frame showing it. */
+const FRAME_REF = "A frame id, or a page's workspace path (its frame on the page on screen, else the first).";
 const TextSizeSchema = Type.Union([Type.Literal("small"), Type.Literal("medium"), Type.Literal("large")]);
 const ColorSchema = Type.Union(DESIGN_COLORS.map((color) => Type.Literal(color)));
 const EndSchema = Type.Object({
-  frameId: Type.Optional(Type.String({ description: "Join this end to a frame; it follows the frame when it moves." })),
+  frameId: Type.Optional(Type.String({ description: `Join this end to a frame; it follows the frame when it moves. ${FRAME_REF}` })),
   side: Type.Optional(Type.Union(SIDES.map((side) => Type.Literal(side)))),
   x: Type.Optional(Type.Number()),
   y: Type.Optional(Type.Number()),
@@ -438,9 +443,11 @@ function endOf(doc: DesignCanvas, value: unknown, field: string, pageId: string,
   }
   const raw = value as Record<string, unknown>;
   if (raw.frameId !== undefined && raw.frameId !== null && raw.frameId !== "") {
-    const frame = typeof raw.frameId === "string" ? doc.frames.find((entry) => entry.id === raw.frameId) : undefined;
+    const frame = designFrameByIdOrPath(doc, raw.frameId);
     if (!frame || frame.pageId !== pageId || frame.id === self || !canAttachTo(frame)) {
-      throw new CanvasToolError(`${field}.frameId must be the id of a frame on the same page that is not an arrow, line or drawing.`);
+      throw new CanvasToolError(
+        `${field}.frameId must be the id of a frame on the same page that is not an arrow, line or drawing, or the path of a page that frame shows.`,
+      );
     }
     const side = raw.side;
     if (side !== undefined && !(SIDES as readonly unknown[]).includes(side)) {
@@ -606,8 +613,12 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
   };
 
   const frameIn = (doc: DesignCanvas, id: unknown): DesignFrame => {
-    const frame = typeof id === "string" ? doc.frames.find((entry) => entry.id === id) : undefined;
-    if (!frame) throw new CanvasToolError("No frame on this canvas has that id. Call canvas_read for the current frames.");
+    const frame = designFrameByIdOrPath(doc, id);
+    if (!frame) {
+      throw new CanvasToolError(
+        "No frame on this canvas has that id or shows that page. Call canvas_read for the current frames, or canvas_place_frame to put the page on the canvas.",
+      );
+    }
     return frame;
   };
 
@@ -886,7 +897,7 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
         description:
           "Change any unlocked frame on the design canvas, the person's too: move, resize, retitle or regroup it (groupId \"\" takes it out of its group), move it to another page (page), hide or lock it, change its layer order (layer front, back, forward or backward, or aboveFrameId / belowFrameId of a sibling), change the words of a note, text item or shape (notes and text keep the same Markdown subset as canvas_place_frame), colours (fill \"none\" clears a fill), size, a connector's ends, a page's designWidth (its frame resizes to match unless you pass w and h), dark look, tweaks, guide, corner radius, paper or print mode. A locked frame accepts only locked: false, and only unlock it when the person asked. Moving a group or artboard moves its frames; moving a connector moves its free ends. Boxes are in canvas units.",
         parameters: Type.Object({
-          id: Type.String(),
+          id: Type.String({ description: FRAME_REF }),
           title: Type.Optional(Type.String({ maxLength: DESIGN_CANVAS_LIMITS.titleChars })),
           text: Type.Optional(Type.String({ maxLength: DESIGN_CANVAS_LIMITS.noteChars })),
           fill: Type.Optional(Type.Union([ColorSchema, Type.Literal("none")])),
@@ -935,7 +946,7 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
             // A page's own tweak names, read before the edit (a frame's file never changes).
             let declared: { path: string; names: readonly string[] | null } | undefined;
             if (hasTweakValues(p.tweaks)) {
-              const before = (await deps.store.get(deps.chatId)).frames.find((entry) => entry.id === p.id);
+              const before = designFrameByIdOrPath(await deps.store.get(deps.chatId), p.id);
               if (before?.kind === "file" && before.path) declared = { path: before.path, names: await designPageTweakNames(deps.workspaceRoot, before.path) };
             }
             return edit((doc) => {
@@ -1078,7 +1089,7 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
         description:
           "Remove a frame from the design canvas. The file it shows is not deleted. A locked frame cannot be removed. A frame the person added needs force: true, and only after they asked you to delete it; say in your reply that you removed it. Removing a group or an artboard keeps what is in it; a connector on a removed frame keeps its place there.",
         parameters: Type.Object({
-          id: Type.String(),
+          id: Type.String({ description: FRAME_REF }),
           force: Type.Optional(Type.Boolean({ description: "Only when the person asked you to delete their own items." })),
           confirm: Type.Optional(Type.Boolean({ description: "The same as force." })),
         }),
@@ -1121,7 +1132,7 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
         description:
           "Pan and zoom the design canvas so the person sees these frames (every frame on the page when ids is empty). Frames on another page bring that page on screen; pass page alone to show a page. The canvas leaves the view alone while the person is moving around it.",
         parameters: Type.Object({
-          ids: Type.Optional(Type.Array(Type.String(), { maxItems: 50 })),
+          ids: Type.Optional(Type.Array(Type.String({ description: FRAME_REF }), { maxItems: 50 })),
           page: Type.Optional(Type.String({ maxLength: 128, description: "A page's name or id to show." })),
         }),
         execute: async (_id, raw) =>
@@ -1130,7 +1141,8 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
             const p = (raw ?? {}) as { ids?: unknown; page?: unknown };
             const ids = Array.isArray(p.ids) ? [...new Set(p.ids)] : [];
             const doc = await deps.store.get(deps.chatId);
-            const pages = new Set(ids.map((id) => frameIn(doc, id).pageId));
+            const shown = [...new Set(ids.map((id) => frameIn(doc, id).id))];
+            const pages = new Set(shown.map((id) => doc.frames.find((entry) => entry.id === id)!.pageId));
             if (pages.size > 1) throw new CanvasToolError("Those frames are on different pages; show one page's frames at a time.");
             const named = p.page !== undefined && p.page !== null && p.page !== "" ? pageOf(doc, p.page) : undefined;
             if (named && pages.size === 1 && !pages.has(named)) {
@@ -1144,8 +1156,8 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
               if (named) return { status: "shown", page: pageId, frames: 0 };
               throw new CanvasToolError("This page of the canvas is empty.");
             }
-            deps.focus(ids as string[]);
-            return { status: "requested", frames: ids.length || onPage };
+            deps.focus(shown);
+            return { status: "requested", frames: shown.length || onPage };
           }),
       },
       "never",
@@ -1158,7 +1170,7 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
           "Lay out unlocked frames of one page in a tidy row, column or grid in one call, and optionally put them in a group or artboard (groupId) or take them out of one (groupId null). Name the frames with frameIds, in order; leave frameIds out to arrange a group's members (with groupId) or every top-level frame on the page, in the order they read now (rows top to bottom, each left to right; for a column, columns left to right). Groups fit themselves around their members afterwards; pass fitGroupIds to tighten or expand other groups or artboards around what they hold. A group or artboard moves with its frames. x and y set the top-left corner (by default the group's inside corner, or where the frames already start). The page comes on screen and the arranged frames are shown unless focus is false.",
         parameters: Type.Object({
           page: Type.Optional(Type.String({ maxLength: 128, description: "A page's name or id, when frameIds are not given." })),
-          frameIds: Type.Optional(Type.Array(Type.String(), { maxItems: DESIGN_CANVAS_LIMITS.framesPerPage })),
+          frameIds: Type.Optional(Type.Array(Type.String({ description: FRAME_REF }), { maxItems: DESIGN_CANVAS_LIMITS.framesPerPage })),
           layout: Type.Optional(Type.Union([Type.Literal("row"), Type.Literal("column"), Type.Literal("grid")])),
           columns: Type.Optional(Type.Integer({ minimum: 1, maximum: 50 })),
           gap: Type.Optional(Type.Number({ minimum: 0, maximum: 2000, description: "Space between columns (default 64)." })),
@@ -1200,7 +1212,7 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
                 isDesignContainer(container.kind) &&
                 doc.frames.some((entry) => entry.groupId === container.id && entry.pageId === container.pageId && entry.locked);
               if (requested && requested.length > 0) {
-                chosen = requested.map((id) => frameIn(doc, id));
+                chosen = [...new Map(requested.map((id) => frameIn(doc, id)).map((frame) => [frame.id, frame] as const)).values()];
                 const pages = new Set(chosen.map((frame) => frame.pageId));
                 if (pages.size > 1) throw new CanvasToolError("Arrange frames of one page at a time.");
                 pageId = chosen[0]!.pageId;
@@ -1434,9 +1446,8 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
             if (p.frameId !== undefined) {
               frame = frameIn(doc, p.frameId);
             } else if (typeof p.path === "string" && p.path.trim()) {
-              const wanted = p.path.trim().replace(/^\.\//u, "");
-              const showing = doc.frames.filter((entry) => entry.kind === "file" && entry.path === wanted);
-              frame = showing.find((entry) => entry.pageId === doc.activePageId) ?? showing[0];
+              const wanted = designPagePath(p.path);
+              frame = frameShowingDesignPage(doc, wanted);
               if (!frame) throw new CanvasToolError(`${wanted} is not on the canvas. Place it with canvas_place_frame first, or name a frameId.`);
             } else {
               throw new CanvasToolError("Name the page to inspect by frameId or path.");

@@ -444,11 +444,12 @@ test("pages Aiden writes are inspected one at a time, and each report describes 
   const gates = new Map<string, ReturnType<typeof deferred<readonly string[] | null>>>();
   const errors: string[] = [];
   const inspector = createWrittenPageInspector({
-    inspect: (path) => {
+    inspect: async (path) => {
       started.push(path);
       const gate = deferred<readonly string[] | null>();
       gates.set(`${path}#${started.filter((entry) => entry === path).length}`, gate);
-      return gate.promise;
+      const findings = await gate.promise;
+      return findings && { frameId: `frame-${path}`, findings };
     },
     onError: (path) => errors.push(path),
   });
@@ -466,8 +467,8 @@ test("pages Aiden writes are inspected one at a time, and each report describes 
   await new Promise((resolve) => setImmediate(resolve));
   gates.get("design/home.html#2")!.resolve([]);
   assert.deepEqual(await inspector.take(1_000), [
-    { path: "design/about.html", findings: ["line 3 of design/about.html: SyntaxError"] },
-    { path: "design/home.html", findings: [] },
+    { path: "design/about.html", frameId: "frame-design/about.html", findings: ["line 3 of design/about.html: SyntaxError"] },
+    { path: "design/home.html", frameId: "frame-design/home.html", findings: [] },
   ]);
   assert.deepEqual(await inspector.take(1_000), [], "a report goes to one request only");
   assert.deepEqual(errors, []);
@@ -477,7 +478,11 @@ test("a request waits only so long for a page still being drawn, and its report 
   const gate = deferred<readonly string[] | null>();
   const errors: string[] = [];
   const inspector = createWrittenPageInspector({
-    inspect: (path) => (path === "design/broken.html" ? Promise.reject(new Error("window gone")) : path === "design/slow.html" ? gate.promise : Promise.resolve(null)),
+    inspect: async (path) => {
+      if (path === "design/broken.html") throw new Error("window gone");
+      const findings = path === "design/slow.html" ? await gate.promise : null;
+      return findings && { frameId: "slow", findings };
+    },
     onError: (path) => errors.push(path),
   });
   inspector.written("design/slow.html");
@@ -490,7 +495,7 @@ test("a request waits only so long for a page still being drawn, and its report 
   assert.deepEqual(await inspector.take(60_000, stop.signal), [], "a request already stopped does not wait either");
   assert.ok(Date.now() - started < 1_000);
   gate.resolve(["design/slow.html is 1600px wide at its 1280px design width."]);
-  const report = [{ path: "design/slow.html", findings: ["design/slow.html is 1600px wide at its 1280px design width."] }];
+  const report = [{ path: "design/slow.html", frameId: "slow", findings: ["design/slow.html is 1600px wide at its 1280px design width."] }];
   // Once drawn, a stopped request still gets nothing, and the report waits for the next one.
   await new Promise((resolve) => setImmediate(resolve));
   assert.deepEqual(await inspector.take(1_000, stop.signal), []);
@@ -505,9 +510,9 @@ test("a page the person took off the canvas is noted as left off, not drawn, and
   const started: string[] = [];
   const gate = deferred<readonly string[] | null>();
   const inspector = createWrittenPageInspector({
-    inspect: (path) => {
+    inspect: async (path) => {
       started.push(path);
-      return path === "design/home.html" ? gate.promise : Promise.resolve(["stale"]);
+      return { frameId: "home", findings: path === "design/home.html" ? ((await gate.promise) ?? []) : ["stale"] };
     },
     onError: () => undefined,
   });
@@ -519,7 +524,7 @@ test("a page the person took off the canvas is noted as left off, not drawn, and
   assert.deepEqual(started, ["design/home.html"], "the removed page is never drawn");
   assert.deepEqual(reports, [
     { path: "design/about.html", findings: [], removed: true },
-    { path: "design/home.html", findings: [] },
+    { path: "design/home.html", frameId: "home", findings: [] },
   ]);
   const text = (withDesignInspectNote({ messages: [] }, reports, 1).messages[0] as { sections: Record<string, string> }).sections[DESIGN_PAGE_INSPECT_SECTION]!;
   assert.match(text, /^design\/about\.html was not put back on the canvas: the person removed its frame\./u);
@@ -534,8 +539,8 @@ test("the report joins the conversation as a note after it, and leaves the syste
   const noted = withDesignInspectNote(
     context,
     [
-      { path: "design/home.html", findings: [] },
-      { path: "design/pricing.html", findings: ["line 9 of design/pricing.html: TypeError: x is null", "font \"Inter\" did not load."] },
+      { path: "design/home.html", frameId: "f-home", findings: [] },
+      { path: "design/pricing.html", frameId: "f-pricing", findings: ["line 9 of design/pricing.html: TypeError: x is null", "font \"Inter\" did not load."] },
     ],
     2,
   );
@@ -545,8 +550,9 @@ test("the report joins the conversation as a note after it, and leaves the syste
   assert.equal(note.role, "system");
   const text = note.sections[DESIGN_PAGE_INSPECT_SECTION]!;
   assert.match(text, /^Checked the pages you just wrote/u);
-  assert.match(text, /\ndesign\/home\.html: no problems found\.\n/u);
-  assert.match(text, /design\/pricing\.html: 2 problems found\. Fix them in the file once.*\n- line 9 of design\/pricing\.html: TypeError: x is null\n- font "Inter" did not load\./su);
+  // Each report names the frame it drew, so Aiden can change it without a canvas_read.
+  assert.match(text, /\ndesign\/home\.html \(frame f-home\): no problems found\.\n/u);
+  assert.match(text, /design\/pricing\.html \(frame f-pricing\): 2 problems found\. Fix them in the file once.*\n- line 9 of design\/pricing\.html: TypeError: x is null\n- font "Inter" did not load\./su);
   // The same report again answers a new write, so it is added again.
   assert.equal(withDesignInspectNote(noted, [{ path: "design/home.html", findings: [] }], 3).messages.length, 3);
 

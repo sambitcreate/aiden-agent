@@ -557,6 +557,7 @@ import {
   type WrittenPageInspector,
 } from "./design-canvas/inspect-note.js";
 import { designUrl } from "../../renderer/shared/design-canvas/url.js";
+import { frameShowingDesignPage } from "../../renderer/shared/design-canvas/schema.js";
 import { DESIGN_CANVAS_UPDATED_CHANNEL } from "../handlers/design-canvas.js";
 
 subagentRuntimeRegistry.setHealthMetrics(subagentHealthMetrics);
@@ -2643,8 +2644,7 @@ async function prepareGeneration(
       inspect: async (relativePath) => {
         if (signal.aborted || !(await canSaveWrittenPage())) return null;
         const doc = await designCanvasStore.get(params.chatId);
-        const showing = doc.frames.filter((frame) => frame.kind === "file" && frame.path === relativePath);
-        const frame = showing.find((entry) => entry.pageId === doc.activePageId) ?? showing[0];
+        const frame = frameShowingDesignPage(doc, relativePath);
         if (!frame) return null;
         const inspected = await inspectDesignPage({
           workspaceRoot: pageRoot,
@@ -2655,7 +2655,7 @@ async function prepareGeneration(
           seesImages: false,
           signal,
         });
-        return inspected.findings;
+        return { frameId: frame.id, findings: inspected.findings };
       },
       onError: (relativePath, error) => {
         if (!signal.aborted) logger.warn("pi", `Could not inspect the design page ${relativePath} after it was written.`, error);

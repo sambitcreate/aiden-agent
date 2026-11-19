@@ -27,7 +27,7 @@ export const AIDEN_DESIGN_SKILL = Object.freeze({
     "- When the person wants options, make at most 3 directions that differ in a way that matters (layout, type, colour or tone), not three tints of one idea.",
     "",
     "Write, inspect, fix once:",
-    "1. Write the page. It lands on the canvas by itself, and a text report on it follows in the conversation before your next step: script errors, files that did not load, sideways overflow and tweaks that do nothing.",
+    "1. Write the page. It lands on the canvas by itself, and a text report on it follows in the conversation before your next step: script errors, files that did not load, sideways overflow and tweaks that do nothing. The report names the page's frame id, and any canvas tool that takes a frame id also takes the page's path, such as design/home.html.",
     "2. Fix everything the report lists in one edit. After the first version of a screen or a big change, call canvas_inspect for a picture and hold it against the checklist below; inspect a frame shown with dark: true to see the dark look.",
     "3. Fix what is off once, then stop and show the person. When a later report still lists something you cannot fix, say so instead of trying again.",
     "",

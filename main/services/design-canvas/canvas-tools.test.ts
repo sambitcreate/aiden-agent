@@ -1048,6 +1048,40 @@ test("canvas_arrange with no frame list keeps the order frames read in on the ca
   );
 });
 
+test("a page's workspace path names its frame wherever a frame id goes, preferring the frame on the page on screen", async (t) => {
+  const { store, focused, call } = await setup(t);
+  await store.update("chat-1", (doc) => addPage(doc, "p2", "Mobile"));
+  await store.update("chat-1", (doc) => ({
+    ...doc,
+    activePageId: "page-1",
+    frames: [
+      { id: "home-mobile", kind: "file", title: "Home", path: "design/home.html", x: 0, y: 0, w: 390, h: 844, designWidth: 390, pageId: "p2", createdBy: "aiden" },
+      { id: "home-desktop", kind: "file", title: "Home", path: "design/home.html", x: 0, y: 0, w: 640, h: 436, designWidth: 1280, pageId: "page-1", createdBy: "aiden" },
+      { id: "label", kind: "text", title: "Label", text: "Hero", x: 0, y: 600, w: 240, h: 24, pageId: "page-1", createdBy: "aiden" },
+    ],
+  }));
+
+  // On screen is page-1, so its frame is the one named, though another page's comes first.
+  const moved = await call("canvas_update_frame", { id: "./design/home.html", x: 800 });
+  assert.equal(moved.frame.id, "home-desktop");
+  const arrow = await call("canvas_place_frame", { kind: "connector", title: "To home", from: { frameId: "label" }, to: { frameId: "design/home.html" } });
+  assert.equal(arrow.frame.to.frameId, "home-desktop");
+  assert.deepEqual(await call("canvas_focus", { ids: ["design/home.html", "home-desktop"] }), { status: "requested", frames: 1 });
+  assert.deepEqual(focused[focused.length - 1], ["home-desktop"], "a path and the id of the frame it names show that frame once");
+
+  // With no frame for it on the page on screen, the first page that shows it answers.
+  await store.update("chat-1", (doc) => showPage(doc, "p2"));
+  await store.update("chat-1", (doc) => showPage(addPage(doc, "p3", "Empty"), "p3"));
+  assert.equal((await call("canvas_update_frame", { id: "design/home.html", title: "Home (phone)" })).frame.id, "home-mobile");
+
+  const missing = await call("canvas_update_frame", { id: "design/pricing.html", x: 0 });
+  assert.equal(missing.status, "error");
+  assert.match(missing.message, /canvas_place_frame to put the page on the canvas/u, "the refusal says how to get the page there");
+  const removed = await call("canvas_remove_frame", { id: "design/home.html" });
+  assert.equal(removed.status, "removed");
+  assert.deepEqual((await store.get("chat-1")).frames.map((frame) => frame.id).sort(), ["home-desktop", "label", arrow.frame.id].sort());
+});
+
 test("canvas_page adds, renames, duplicates, reorders, shows and deletes pages, never the last one", async (t) => {
   const { store, call } = await setup(t);
   await call("canvas_place_frame", { kind: "note", title: "Mine", x: 0, y: 0 });
