@@ -164,6 +164,12 @@ It serves workspace files into frames. URL: `aiden-design://<grant>/<relative-pa
   - Its `frame-src` adds `aiden-design:`.
   - The navigation guards refuse `aiden-design:` as a top-level destination.
 - **Network:** none. Designs that need a font or image must ship it in the workspace. The `aiden-design` skill tells Aiden this.
+- **Hidden export and inspect window (Phase B review fixes, 2026-11-19):** exports and `canvas_inspect` draw in an in-memory session of their own (`aiden-design-offline`; wiring in `main/services/design-canvas/offline-session.ts`, decisions in `offline-policy.ts`), never the app's session.
+  - It serves only `aiden-design:` and `aiden-genui:`. Every other request is refused except `data:`, a `blob:` made by those schemes, and `about:blank` / `about:srcdoc`.
+  - Everything else goes to a proxy at port 0, loopback included, and the window's WebRTC policy is `disable_non_proxied_udp`, so an `RTCPeerConnection` has no UDP and no TCP route out. The CSP alone cannot do this, because Electron 43 does not know the `webrtc` directive.
+  - Permissions, device access, screen capture and downloads are refused, and spellcheck is off.
+  - Each response also carries `sandbox allow-scripts allow-same-origin`, and the window has `disableDialogs`, so alert, confirm, prompt and print return at once and show nothing. `canvas_inspect` drops Chromium's own notes about that sandbox and about the unknown `webrtc` directive.
+- **Known limit: WebRTC in the visible canvas.** A live frame in the design window and a generated-UI guest in a chat use the app's session, where the CSP is the only fence. A page's own script can still open an `RTCPeerConnection` to a STUN or TURN host it names. The main session is unchanged by design. Closing this needs a WebRTC policy on those windows' contents, or a session of their own for canvas frames.
 
 ### 5.5 The bridge
 

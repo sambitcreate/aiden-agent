@@ -5,13 +5,16 @@
 // and did while it drew (`inspectDesignFrame`); what that means is decided,
 // and tested, in inspect.ts.
 //
-// The window is hidden, sandboxed, has no preload, opens nothing and
-// navigates nowhere. The page loads from its own `aiden-design:` or
-// `aiden-genui:` address, so the scheme's no-network policy still applies.
-// Each export gets a fresh window that is destroyed when it is done.
+// The window is hidden, sandboxed, has no preload, opens nothing, navigates
+// nowhere and shows no dialog. The page loads from its own `aiden-design:` or
+// `aiden-genui:` address, so the scheme's no-network policy still applies,
+// and in a session of its own (offline-session.ts) that has no route out for
+// what that policy does not cover, such as WebRTC. Each export gets a fresh
+// window that is destroyed when it is done.
 
 import { BrowserWindow } from "../../platform.js";
 import { markAuxiliaryWindow } from "../../windows/auxiliary-windows.js";
+import { designOfflineSession } from "./offline-session.js";
 import {
   DESIGN_EXPORT_MAX_HEIGHT,
   DESIGN_EXPORT_PNG_SCALE,
@@ -41,8 +44,10 @@ const HEIGHT_SCRIPT =
 
 type HiddenWindow = InstanceType<typeof BrowserWindow>;
 
-/** A fresh hidden, sandboxed window that may load one page and go nowhere else. */
-function openHiddenWindow(width: number, zoom: number): { window: HiddenWindow; markLoaded(): void } {
+/** A fresh hidden, sandboxed window, in the offline session, that may load one page and go nowhere else. */
+async function openHiddenWindow(width: number, zoom: number): Promise<{ window: HiddenWindow; markLoaded(): void }> {
+  const offline = designOfflineSession();
+  await offline.ready;
   const window = new BrowserWindow({
     show: false,
     width: width * zoom,
@@ -53,16 +58,20 @@ function openHiddenWindow(width: number, zoom: number): { window: HiddenWindow; 
     skipTaskbar: true,
     focusable: false,
     webPreferences: {
+      session: offline.session,
       sandbox: true,
       contextIsolation: true,
       nodeIntegration: false,
       backgroundThrottling: false,
       spellcheck: false,
+      disableDialogs: true,
       zoomFactor: zoom,
     },
   });
   markAuxiliaryWindow(window);
   const contents = window.webContents;
+  // WebRTC may use only TCP through the session's proxy, which goes nowhere.
+  contents.setWebRTCIPHandlingPolicy("disable_non_proxied_udp");
   contents.setWindowOpenHandler(() => ({ action: "deny" }));
   // Only the page itself loads; it may not navigate away or frame anything else in.
   let loaded = false;
@@ -96,7 +105,7 @@ async function withHiddenWindow<T>(window: HiddenWindow, work: () => Promise<T>,
 
 export async function renderDesignFrame(request: DesignFrameRenderRequest): Promise<Uint8Array> {
   const zoom = request.format === "png" ? DESIGN_EXPORT_PNG_SCALE : 1;
-  const { window, markLoaded } = openHiddenWindow(request.width, zoom);
+  const { window, markLoaded } = await openHiddenWindow(request.width, zoom);
   return withHiddenWindow(window, () => draw(window, request, markLoaded));
 }
 
@@ -111,7 +120,7 @@ const measureHeight = async (window: HiddenWindow): Promise<number> => {
  * `picture`, a JPEG of part of it sized for a model to read.
  */
 export async function inspectDesignFrame(request: DesignInspectRequest): Promise<DesignInspectProbe> {
-  const { window, markLoaded } = openHiddenWindow(request.width, 1);
+  const { window, markLoaded } = await openHiddenWindow(request.width, 1);
   const messages: DesignConsoleEntry[] = [];
   window.webContents.on("console-message", (details) => {
     if (messages.length >= DESIGN_INSPECT_MAX_MESSAGES) return;

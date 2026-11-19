@@ -8,7 +8,72 @@ import * as path from "node:path";
 import test, { type TestContext } from "node:test";
 import { DESIGN_BRIDGE_SOURCE } from "./bridge-source.js";
 import { DesignGrantRegistry } from "./grants.js";
-import { designResponse, registerDesignProtocol } from "./protocol.js";
+import {
+  DESIGN_OFFLINE_SANDBOX_POLICY,
+  designOfflineRequestAllowed,
+  withDesignOfflineSandbox,
+} from "./offline-policy.js";
+import { designProtocolHandler, designResponse, registerDesignProtocol } from "./protocol.js";
+
+test("a handler whose file read throws answers not found instead of failing the request", async (t) => {
+  const { grant, grants } = await fixture(t);
+  const handler = designProtocolHandler({
+    grants,
+    readFile: () => {
+      throw new Error("disk gone");
+    },
+  });
+  assert.equal((await handler(new Request(`aiden-design://${grant}/design/a.css`))).status, 404);
+});
+
+test("the hidden window may reach only Aiden's local schemes, inline data and blobs made from them", () => {
+  for (const url of [
+    "aiden-design://grant-1/design/home.html",
+    "aiden-genui://preview/token-1",
+    "data:image/png;base64,AAAA",
+    "blob:aiden-design://grant-1/0b6f3c8e-1d2a-4f5b-9c7d-2e8a1b3c4d5e",
+    "about:blank",
+    "about:srcdoc",
+  ]) {
+    assert.equal(designOfflineRequestAllowed(url), true, url);
+  }
+  for (const url of [
+    "https://example.com/font.woff2",
+    "http://127.0.0.1:8080/",
+    "ws://localhost:3478/",
+    "file:///etc/hosts",
+    "blob:https://example.com/0b6f3c8e-1d2a-4f5b-9c7d-2e8a1b3c4d5e",
+    "blob:blob:https://example.com/x",
+    "about:config",
+    "stun:stun.example.com:3478",
+    "not a url",
+    "",
+  ]) {
+    assert.equal(designOfflineRequestAllowed(url), false, url);
+  }
+});
+
+test("each response in the hidden window keeps its own policy, body and status and adds a sandbox that opens no dialog", async (t) => {
+  const { get } = await fixture(t);
+  const original = await get("design/missing.html");
+  const status = original.status;
+  const sandboxed = withDesignOfflineSandbox(
+    new Response("<p>hi</p>", { status: 203, statusText: "Partial", headers: { "content-security-policy": CSP, "x-content-type-options": "nosniff" } }),
+  );
+  assert.equal(sandboxed.status, 203);
+  assert.equal(sandboxed.statusText, "Partial");
+  assert.equal(await sandboxed.text(), "<p>hi</p>");
+  assert.equal(sandboxed.headers.get("x-content-type-options"), "nosniff");
+  const policies = sandboxed.headers.get("content-security-policy")!.split(/,\s*/u);
+  assert.deepEqual(policies, [CSP, DESIGN_OFFLINE_SANDBOX_POLICY]);
+  const tokens = DESIGN_OFFLINE_SANDBOX_POLICY.split(/\s+/u);
+  assert.equal(tokens[0], "sandbox");
+  for (const opener of ["allow-modals", "allow-popups", "allow-forms", "allow-top-navigation", "allow-downloads"]) {
+    assert.equal(tokens.includes(opener), false, opener);
+  }
+  // A refusal stays a refusal.
+  assert.equal(withDesignOfflineSandbox(original).status, status);
+});
 
 const CSP =
   "default-src 'none'; script-src aiden-design: 'unsafe-inline'; style-src aiden-design: 'unsafe-inline'; img-src aiden-design: data: blob:; font-src aiden-design: data:; media-src aiden-design: blob:; connect-src 'none'; frame-src 'none'; form-action 'none'; base-uri 'none'";

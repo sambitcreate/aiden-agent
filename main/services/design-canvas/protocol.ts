@@ -164,25 +164,32 @@ async function readDesignLibrary(name: string): Promise<DesignLibrary | null> {
   return library ? { bytes: new Uint8Array(library.bytes), mimeType: library.mimeType } : null;
 }
 
-const registeredTargets = new WeakSet<object>();
-
-/** Wires the handler to Electron's `protocol`. Call once, after app ready, with design mode on. */
-export function registerDesignProtocol(deps: {
-  protocol: { handle(scheme: string, handler: (request: Request) => Promise<Response>): void };
+export type DesignProtocolDeps = {
   grants: Pick<DesignGrantRegistry, "resolve">;
   readFile?: (absolute: string) => Promise<Buffer>;
   readLibrary?: (name: string) => Promise<DesignLibrary | null>;
-}): void {
-  if (registeredTargets.has(deps.protocol)) return;
+};
+
+/** The handler `protocol.handle` runs for the scheme; any failure answers 404. */
+export function designProtocolHandler(deps: DesignProtocolDeps): (request: Request) => Promise<Response> {
   const handlerDeps: DesignResponseDeps = {
     grants: deps.grants,
     readFile: deps.readFile ?? readDesignFile,
     readLibrary: deps.readLibrary ?? readDesignLibrary,
   };
-  deps.protocol.handle(DESIGN_SCHEME, (request) =>
-    designResponse({ url: request.url, method: request.method }, handlerDeps).catch(() =>
-      failure(404),
-    ),
-  );
+  return (request) =>
+    designResponse({ url: request.url, method: request.method }, handlerDeps).catch(() => failure(404));
+}
+
+const registeredTargets = new WeakSet<object>();
+
+/** Wires the handler to Electron's `protocol`. Call once, after app ready, with design mode on. */
+export function registerDesignProtocol(
+  deps: DesignProtocolDeps & {
+    protocol: { handle(scheme: string, handler: (request: Request) => Promise<Response>): void };
+  },
+): void {
+  if (registeredTargets.has(deps.protocol)) return;
+  deps.protocol.handle(DESIGN_SCHEME, designProtocolHandler(deps));
   registeredTargets.add(deps.protocol);
 }

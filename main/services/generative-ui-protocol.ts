@@ -35,20 +35,23 @@ function notFound(): Response {
   return new Response("Not found", { status: 404, headers: { "content-type": "text/plain" } });
 }
 
+/** Answers one `aiden-genui:` request: a host library or a one-time preview document. */
+export async function generativeUiProtocolResponse(request: Request): Promise<Response> {
+  const library = generativeUiHostLibraryNameFromUrl(request.url);
+  if (library) {
+    const file = await readGenerativeUiHostLibrary(library);
+    if (!file) return notFound();
+    return utf8Response(new Uint8Array(file.bytes), file.mimeType, {
+      "cache-control": "public, max-age=31536000, immutable",
+    });
+  }
+  const token = generativeUiPreviewTokenFromUrl(request.url);
+  if (!token) return notFound();
+  return generativeUiPreviewResponse(token) ?? notFound();
+}
+
 export function registerGenerativeUiProtocol(_session?: Session): void {
   if (handlerRegistered) return;
-  protocol.handle(GENERATIVE_UI_PROTOCOL_SCHEME, async (request) => {
-    const library = generativeUiHostLibraryNameFromUrl(request.url);
-    if (library) {
-      const file = await readGenerativeUiHostLibrary(library);
-      if (!file) return notFound();
-      return utf8Response(new Uint8Array(file.bytes), file.mimeType, {
-        "cache-control": "public, max-age=31536000, immutable",
-      });
-    }
-    const token = generativeUiPreviewTokenFromUrl(request.url);
-    if (!token) return notFound();
-    return generativeUiPreviewResponse(token) ?? notFound();
-  });
+  protocol.handle(GENERATIVE_UI_PROTOCOL_SCHEME, generativeUiProtocolResponse);
   handlerRegistered = true;
 }

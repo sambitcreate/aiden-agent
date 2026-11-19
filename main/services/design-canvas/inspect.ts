@@ -29,6 +29,7 @@ import {
   type DesignTweakControl,
 } from "../../../renderer/shared/design-canvas/tweaks.js";
 import { DESIGN_SCHEME } from "../../../renderer/shared/design-canvas/url.js";
+import { isDesignOfflineNotice } from "./offline-policy.js";
 import { resolveDesignFile } from "./resolve-core.js";
 
 /** The picture's largest size in pixels; a wider page is scaled down to fit. */
@@ -96,6 +97,7 @@ function clip(text: string): string {
 export function readDesignConsoleMessage(entry: DesignConsoleEntry): DesignConsoleProblem | null {
   if (entry.level !== "error" || typeof entry.message !== "string") return null;
   const message = entry.message.trim();
+  if (isDesignOfflineNotice(message)) return null;
   if (/^Failed to load resource\b/u.test(message)) {
     return entry.sourceId ? { kind: "load", url: entry.sourceId } : null;
   }

@@ -60,6 +60,21 @@ test("console errors become script errors with their file and line, and blocked 
   assert.equal(readDesignConsoleMessage({ level: "info", message: "hello from the page" }), null);
 });
 
+test("the hidden window's own notes about its sandbox and an unknown policy directive are not the page's errors", () => {
+  for (const message of [
+    "Ignored call to 'alert()'. The document is sandboxed, and the 'allow-modals' keyword is not set.",
+    "Ignored call to 'print()'. The document is sandboxed, and the 'allow-modals' keyword is not set.",
+    "Unrecognized Content-Security-Policy directive 'webrtc'.",
+  ]) {
+    assert.equal(readDesignConsoleMessage({ level: "error", message }), null, message);
+  }
+  // A page's own error that merely mentions alert is still reported.
+  assert.deepEqual(readDesignConsoleMessage({ level: "error", message: "Uncaught TypeError: alert is not a function" }), {
+    kind: "script",
+    message: "TypeError: alert is not a function",
+  });
+});
+
 test("a page with a script error, a network font, a missing image and sideways overflow gets one finding for each", () => {
   const findings = designInspectFindings(
     quiet({
