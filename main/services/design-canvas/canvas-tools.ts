@@ -183,7 +183,7 @@ export const DESIGN_MODE_PROMPT_SECTION = [
   "- For a flow or diagram, place shapes (with their labels in text), text and frames (artboards), then connectors between them by frameId; a connector follows its frames when they move.",
   "- The canvas can have several pages. Work on the page the person is looking at unless they name another; canvas_page adds, renames, duplicates, reorders, shows or deletes pages, and canvas_update_frame with page moves a frame to another.",
   "- After placing or moving frames, call canvas_focus with their ids so the person sees them (canvas_arrange does this by itself). canvas_read with snapshot: true shows you the canvas as the person sees it.",
-  "- canvas_inspect draws one page offline at its design width, with its frame's look, and reports script errors, files that did not load, sideways overflow and tweaks that do nothing, with a picture when you can see images. Check a page with it after a big change, fix what it finds once, and say what you fixed.",
+  "- canvas_inspect draws one page offline at its design width, with its frame's look, and reports script errors, files that did not load, sideways overflow and tweaks that do nothing, with a picture when you can see images. Each page you write is checked the same way without a picture, and the report follows in the conversation before your next step: fix what it lists once, call canvas_inspect for a picture after a big change, and say what you fixed.",
   "- Coordinates and sizes are canvas units. Say which file you changed.",
 ].join("\n");
 

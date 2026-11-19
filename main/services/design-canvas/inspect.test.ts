@@ -17,6 +17,12 @@ import {
   type DesignInspectProbe,
   type DesignInspectRequest,
 } from "./inspect.js";
+import {
+  createWrittenPageInspector,
+  DESIGN_PAGE_INSPECT_NOTE_MAX_PAGES,
+  DESIGN_PAGE_INSPECT_SECTION,
+  withDesignInspectNote,
+} from "./inspect-note.js";
 
 const PAGE = "aiden-design://grant-1/design/home.html";
 
@@ -195,4 +201,93 @@ test("inspectDesignPage draws the frame's own look at its design width and repor
   });
   assert.equal(requests.length, 2, "a missing page is not drawn");
   assert.match(missing.text, /design\/gone\.html is not in the workspace/u);
+});
+
+const deferred = <T>() => {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((done) => (resolve = done));
+  return { promise, resolve };
+};
+
+test("pages Aiden writes are inspected one at a time, and each report describes the page as it now is", async () => {
+  const started: string[] = [];
+  const gates = new Map<string, ReturnType<typeof deferred<readonly string[] | null>>>();
+  const errors: string[] = [];
+  const inspector = createWrittenPageInspector({
+    inspect: (path) => {
+      started.push(path);
+      const gate = deferred<readonly string[] | null>();
+      gates.set(`${path}#${started.filter((entry) => entry === path).length}`, gate);
+      return gate.promise;
+    },
+    onError: (path) => errors.push(path),
+  });
+  inspector.written("design/home.html");
+  inspector.written("design/about.html");
+  inspector.written("design/about.html");
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(started, ["design/home.html"], "one inspect runs at a time");
+  // home.html is written again while its first inspect is still drawing.
+  inspector.written("design/home.html");
+  gates.get("design/home.html#1")!.resolve(["stale finding"]);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(started, ["design/home.html", "design/about.html"], "about.html, written twice before its turn, is drawn once");
+  gates.get("design/about.html#1")!.resolve(["line 3 of design/about.html: SyntaxError"]);
+  await new Promise((resolve) => setImmediate(resolve));
+  gates.get("design/home.html#2")!.resolve([]);
+  assert.deepEqual(await inspector.take(1_000), [
+    { path: "design/about.html", findings: ["line 3 of design/about.html: SyntaxError"] },
+    { path: "design/home.html", findings: [] },
+  ]);
+  assert.deepEqual(await inspector.take(1_000), [], "a report goes to one request only");
+  assert.deepEqual(errors, []);
+});
+
+test("a request waits only so long for a page still being drawn, and its report goes with a later request", async () => {
+  const gate = deferred<readonly string[] | null>();
+  const errors: string[] = [];
+  const inspector = createWrittenPageInspector({
+    inspect: (path) => (path === "design/broken.html" ? Promise.reject(new Error("window gone")) : path === "design/slow.html" ? gate.promise : Promise.resolve(null)),
+    onError: (path) => errors.push(path),
+  });
+  inspector.written("design/slow.html");
+  assert.deepEqual(await inspector.take(10), []);
+  const stop = new AbortController();
+  const waiting = inspector.take(60_000, stop.signal);
+  stop.abort();
+  assert.deepEqual(await waiting, [], "Stop does not wait for the drawing");
+  gate.resolve(["design/slow.html is 1600px wide at its 1280px design width."]);
+  assert.deepEqual(await inspector.take(1_000), [{ path: "design/slow.html", findings: ["design/slow.html is 1600px wide at its 1280px design width."] }]);
+  inspector.written("design/broken.html");
+  inspector.written("design/not-on-canvas.html");
+  assert.deepEqual(await inspector.take(1_000), [], "a failed inspect and a page no frame shows report nothing");
+  assert.deepEqual(errors, ["design/broken.html"]);
+});
+
+test("the report joins the conversation as a note after it, and leaves the system prompt alone", () => {
+  const context: { systemPrompt: string; messages: readonly unknown[] } = { systemPrompt: "You are Aiden.", messages: [{ role: "user", content: "Make a landing page", timestamp: 1 }] };
+  assert.equal(withDesignInspectNote(context, [], 2), context, "no writes, no note");
+  const noted = withDesignInspectNote(
+    context,
+    [
+      { path: "design/home.html", findings: [] },
+      { path: "design/pricing.html", findings: ["line 9 of design/pricing.html: TypeError: x is null", "font \"Inter\" did not load."] },
+    ],
+    2,
+  );
+  assert.equal(noted.systemPrompt, context.systemPrompt);
+  assert.deepEqual(noted.messages.slice(0, 1), context.messages);
+  const note = noted.messages[1] as { role: string; sections: Record<string, string> };
+  assert.equal(note.role, "system");
+  const text = note.sections[DESIGN_PAGE_INSPECT_SECTION]!;
+  assert.match(text, /^Checked the pages you just wrote/u);
+  assert.match(text, /\ndesign\/home\.html: no problems found\.\n/u);
+  assert.match(text, /design\/pricing\.html: 2 problems found\. Fix them in the file once.*\n- line 9 of design\/pricing\.html: TypeError: x is null\n- font "Inter" did not load\./su);
+  // The same report again answers a new write, so it is added again.
+  assert.equal(withDesignInspectNote(noted, [{ path: "design/home.html", findings: [] }], 3).messages.length, 3);
+
+  const many = Array.from({ length: DESIGN_PAGE_INSPECT_NOTE_MAX_PAGES + 2 }, (_, index) => ({ path: `design/p${index}.html`, findings: [] }));
+  const manyText = (withDesignInspectNote(context, many, 4).messages[1] as { sections: Record<string, string> }).sections[DESIGN_PAGE_INSPECT_SECTION]!;
+  assert.equal(manyText.match(/no problems found/gu)?.length, DESIGN_PAGE_INSPECT_NOTE_MAX_PAGES);
+  assert.match(manyText, /2 more pages were written; call canvas_inspect to check them\./u);
 });

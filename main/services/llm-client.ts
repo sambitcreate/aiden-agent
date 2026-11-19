@@ -550,6 +550,12 @@ import { placeArtifactsOnCanvas, type CanvasArtifact } from "./design-canvas/art
 import { createDesignPageScanner, placeWrittenPagesOnCanvas, writtenPagePath } from "./design-canvas/written-pages.js";
 import { inspectDesignFrame } from "./design-canvas/frame-render.js";
 import { inspectDesignPage } from "./design-canvas/inspect.js";
+import {
+  createWrittenPageInspector,
+  DESIGN_PAGE_INSPECT_SECTION,
+  withDesignInspectNote,
+  type WrittenPageInspector,
+} from "./design-canvas/inspect-note.js";
 import { designUrl } from "../../renderer/shared/design-canvas/url.js";
 import { DESIGN_CANVAS_UPDATED_CHANNEL } from "../handlers/design-canvas.js";
 
@@ -574,9 +580,10 @@ const DESIGN_MODE_SECTION = "design-mode";
 interface EnteredCanvasTools {
   /**
    * Adds the held canvas tools and the design-mode prompt section once design
-   * mode is on, and the canvas status note on the turn's first design step.
+   * mode is on, the canvas status note on the turn's first design step, and
+   * the report on pages written in the last step (`withDesignInspectNote`).
    */
-  prepare(context: AgentContext): Promise<AgentContext>;
+  prepare(context: AgentContext, signal?: AbortSignal): Promise<AgentContext>;
   /**
    * The canvas status line for the turn's first request, when design mode is
    * on as the turn starts. Taking it counts as this turn's note.
@@ -2611,6 +2618,8 @@ async function prepareGeneration(
    * mid-reply works too. Writes are placed one after another.
    */
   let placeWrittenPage: ((relativePath: string) => void) | undefined;
+  /** Inspects each page `placeWrittenPage` placed; its reports join the next request (see `withDesignInspectNote`). */
+  let writtenPageInspector: WrittenPageInspector | undefined;
   /** Puts the design/ pages a terminal command made or changed on the canvas, as `placeWrittenPage` does for file tools. */
   let commandPages: { started(): void; finished(): void } | undefined;
   if (
@@ -2625,6 +2634,31 @@ async function prepareGeneration(
       const current = workspace ? await configStore.getWorkspace(workspace.id) : undefined;
       return current?.folderPath === pageRoot && current.permission !== "none";
     };
+    const inspector = createWrittenPageInspector({
+      // The frame showing the page on the page the person is looking at, drawn
+      // as text only: the report is short and costs no picture.
+      inspect: async (relativePath) => {
+        if (signal.aborted || !(await canSaveWrittenPage())) return null;
+        const doc = await designCanvasStore.get(params.chatId);
+        const showing = doc.frames.filter((frame) => frame.kind === "file" && frame.path === relativePath);
+        const frame = showing.find((entry) => entry.pageId === doc.activePageId) ?? showing[0];
+        if (!frame) return null;
+        const inspected = await inspectDesignPage({
+          workspaceRoot: pageRoot,
+          frame,
+          pageUrl: (pagePath) => designUrl(designGrants.issue(params.chatId, pageRoot), pagePath),
+          render: inspectDesignFrame,
+          picture: null,
+          seesImages: false,
+          signal,
+        });
+        return inspected.findings;
+      },
+      onError: (relativePath, error) => {
+        if (!signal.aborted) logger.warn("pi", `Could not inspect the design page ${relativePath} after it was written.`, error);
+      },
+    });
+    writtenPageInspector = inspector;
     placeWrittenPage = (relativePath) => {
       recentWrittenPages.note(params.chatId, relativePath);
       pagesPlaced = pagesPlaced.then(async () => {
@@ -2643,6 +2677,7 @@ async function prepareGeneration(
         if (placedIds.length > 0 && !browserOwner.isDestroyed()) {
           browserOwner.send("designCanvas:focus", { chatId: params.chatId, frameIds: placedIds });
         }
+        inspector.written(relativePath);
       }).catch((error) => {
         logger.warn("pi", "Could not put a written page on the design canvas.", error);
       });
@@ -2696,35 +2731,41 @@ async function prepareGeneration(
       return context;
     }
   };
+  // Pages written in the last step come back inspected before the next request.
+  const withWrittenPageReports = async (context: AgentContext, requestSignal?: AbortSignal): Promise<AgentContext> =>
+    writtenPageInspector
+      ? withDesignInspectNote(context, await writtenPageInspector.take(undefined, requestSignal), Date.now())
+      : context;
+  const prepareCanvasTools = async (context: AgentContext): Promise<AgentContext> => {
+    if (!(await canvasToolsEnteredNow())) return withCanvasStatus(context);
+    const present = new Set(context.tools?.map((tool) => tool.name) ?? []);
+    const additions = heldCanvasTools.filter((tool) => !present.has(tool.name));
+    // The prompt is read-only here: the section is patched into the
+    // transcript once, as browser discovery and MCP servers do.
+    const sectionPresent = context.messages.some(
+      (message) =>
+        message.role === "system" &&
+        typeof (message as { sections?: Record<string, unknown> }).sections?.[DESIGN_MODE_SECTION] === "string",
+    );
+    if (additions.length === 0 && sectionPresent) return withCanvasStatus(context);
+    return withCanvasStatus({
+      ...context,
+      messages: sectionPresent
+        ? context.messages
+        : [
+            ...context.messages,
+            {
+              role: "system",
+              content: "",
+              sections: { [DESIGN_MODE_SECTION]: DESIGN_MODE_PROMPT_SECTION },
+              timestamp: Date.now(),
+            },
+          ],
+      tools: [...(context.tools ?? []), ...additions],
+    });
+  };
   const enteredCanvasTools: EnteredCanvasTools = {
-    prepare: async (context) => {
-      if (!(await canvasToolsEnteredNow())) return withCanvasStatus(context);
-      const present = new Set(context.tools?.map((tool) => tool.name) ?? []);
-      const additions = heldCanvasTools.filter((tool) => !present.has(tool.name));
-      // The prompt is read-only here: the section is patched into the
-      // transcript once, as browser discovery and MCP servers do.
-      const sectionPresent = context.messages.some(
-        (message) =>
-          message.role === "system" &&
-          typeof (message as { sections?: Record<string, unknown> }).sections?.[DESIGN_MODE_SECTION] === "string",
-      );
-      if (additions.length === 0 && sectionPresent) return withCanvasStatus(context);
-      return withCanvasStatus({
-        ...context,
-        messages: sectionPresent
-          ? context.messages
-          : [
-              ...context.messages,
-              {
-                role: "system",
-                content: "",
-                sections: { [DESIGN_MODE_SECTION]: DESIGN_MODE_PROMPT_SECTION },
-                timestamp: Date.now(),
-              },
-            ],
-        tools: [...(context.tools ?? []), ...additions],
-      });
-    },
+    prepare: async (context, requestSignal) => withWrittenPageReports(await prepareCanvasTools(context), requestSignal),
     initialStatusLine: async () => {
       if (canvasStatusNoted || !canvasStatusOffered) return undefined;
       canvasStatusNoted = true;
@@ -4411,7 +4452,7 @@ export const llmClient = {
             }),
         durability: {
           session: promptJournal,
-          durableSections: [CANVAS_STATUS_SECTION],
+          durableSections: [CANVAS_STATUS_SECTION, DESIGN_PAGE_INSPECT_SECTION],
           compaction: compactionOptions,
           compactionReserveTokens: compactionInputReserveTokens,
           signal: initialization.controller.signal,
@@ -4499,7 +4540,7 @@ export const llmClient = {
                 : undefined,
               runtime.provider.modelMetadata?.[model.id]?.overrides,
             );
-            prepared = await enteredCanvasTools.prepare(prepared);
+            prepared = await enteredCanvasTools.prepare(prepared, requestSignal);
             if (agentsInstructions) prepared = await agentsInstructions.apply(prepared, requestSignal);
             return mcpServersSection.apply(prepared);
           },
