@@ -518,3 +518,35 @@ test("in a workspace that is a folder of a larger repository, git reaches no fil
   const logged = await runResolved(resolve("git log --format=%s {{rev}} -- {{file}}", ["HEAD", "f"]), ws);
   assert.deepEqual({ stdout: logged.stdout, exitCode: logged.exitCode }, { stdout: "one\n", exitCode: 0 });
 });
+
+test("a branch value for git checkout never discards a file's uncommitted edits", async (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "aiden-artifact-checkout-"));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const git = (args: string[]) => execFileSync("git", ["-c", "user.email=a@example.com", "-c", "user.name=a", ...args], { cwd: dir, encoding: "utf8" });
+  fs.writeFileSync(path.join(dir, "notes.md"), "committed\n");
+  fs.writeFileSync(path.join(dir, "a.ts"), "committed\n");
+  git(["init", "-q", "-b", "main"]);
+  git(["add", "."]);
+  git(["commit", "-q", "-m", "one"]);
+  git(["branch", "feature"]);
+  fs.writeFileSync(path.join(dir, "notes.md"), "UNSAVED WORK\n");
+  fs.writeFileSync(path.join(dir, "a.ts"), "UNSAVED WORK\n");
+  const action = parseWorkspaceArtifactActions([{ name: "a", label: "A", command: "git checkout {{branch}}", params: [{ name: "branch" }] }])[0]!;
+  // git reads a value that names no branch as files, unless something says it is a branch.
+  const file = resolveWorkspaceArtifactCommand(action, ["notes.md"]);
+  const ran = await runResolved(file, dir);
+  assert.notEqual(ran.exitCode, 0);
+  assert.match(ran.stderr, /invalid reference/u);
+  for (const value of [".", "*.ts", "a.?s"]) assert.throws(() => resolveWorkspaceArtifactCommand(action, [value]), /branch must be a branch or tag name there/u, value);
+  assert.equal(fs.readFileSync(path.join(dir, "notes.md"), "utf8"), "UNSAVED WORK\n");
+  assert.equal(fs.readFileSync(path.join(dir, "a.ts"), "utf8"), "UNSAVED WORK\n");
+  // A shell given the preview reads the value the same way.
+  assert.equal(file.preview, "GIT_LITERAL_PATHSPECS=1 git checkout 'notes.md' --");
+  assert.notEqual(spawnSync("/bin/sh", ["-c", file.preview], { cwd: dir }).status, 0);
+  assert.equal(fs.readFileSync(path.join(dir, "notes.md"), "utf8"), "UNSAVED WORK\n");
+  // A branch still switches, carrying the edits along.
+  const switched = await runResolved(resolveWorkspaceArtifactCommand(action, ["feature"]), dir);
+  assert.equal(switched.exitCode, 0, switched.stderr);
+  assert.equal(git(["branch", "--show-current"]).trim(), "feature");
+  assert.equal(fs.readFileSync(path.join(dir, "notes.md"), "utf8"), "UNSAVED WORK\n");
+});

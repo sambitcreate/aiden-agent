@@ -624,9 +624,23 @@ export function checkWorkspaceArtifactTemplate(template: string): { ok: true; st
         const blob = program === "git" ? readBlobPath(word, gitSubcommand(args).name!) : undefined;
         if (blob) return { ok: false, problem: { kind: "slot", reason: blob } };
       }
+      if (!args.includes("--")) endRefs(command);
     }
   }
   return parsed;
+}
+
+/**
+ * Adds `--` after a `refOnly` operand (`git checkout {{branch}}`) when the
+ * template has none. Without it git falls back to reading a value that names
+ * no branch as files, and `git checkout notes.md` discards that file's edits;
+ * with it git reads the value only as a branch and says it is not one.
+ */
+function endRefs(command: TemplateCommand): void {
+  const index = command.words.findIndex((word) => word.parts.some((part) => "param" in part && part.slot?.refOnly));
+  if (index < 0) return;
+  const at = command.words[index]!.end;
+  command.words.splice(index + 1, 0, { parts: [{ text: "--", insertedAt: at }], quoted: false, start: at, end: at });
 }
 
 /**
@@ -812,8 +826,10 @@ export function previewWorkspaceArtifactTemplate(
       const first = command.words[0]!;
       if (literal(first) === "git") edits.push({ at: first.start, end: first.start, text: Object.entries(GIT_ENV).map(([name, setting]) => `${name}=${setting} `).join("") });
       for (const word of command.words) {
+        // A word the plan adds (`--`) is written after a space; text it adds inside a word (`./`) is not.
+        const added = word.parts.every((part) => "text" in part && part.insertedAt !== undefined);
         for (const part of word.parts) {
-          if ("text" in part && part.insertedAt !== undefined) edits.push({ at: part.insertedAt, end: part.insertedAt, text: part.text });
+          if ("text" in part && part.insertedAt !== undefined) edits.push({ at: part.insertedAt, end: part.insertedAt, text: added ? ` ${part.text}` : part.text });
         }
       }
     }

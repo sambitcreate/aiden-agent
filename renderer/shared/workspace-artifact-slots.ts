@@ -40,6 +40,13 @@ export interface Slot {
    * so git takes the path from the workspace rather than the repository root.
    */
   blob?: boolean;
+  /**
+   * A branch git reads as files when no branch has that name (`git checkout
+   * {{branch}}` with a file name would discard its edits). The checked plan
+   * adds `--` after it when the template has none, so git reads it as a
+   * branch only.
+   */
+  refOnly?: boolean;
 }
 
 /** An option's value: a slot, a refusal clause ("which reads a file from anywhere"), or null when it takes no page data. */
@@ -76,6 +83,7 @@ const T: Slot = { rule: "text" };
 const TD: Slot = { rule: "text", dash: true };
 const N: Slot = { rule: "number" };
 const R: Slot = { rule: "ref" };
+const RO: Slot = { rule: "ref", refOnly: true };
 const RR: Slot = { rule: "ref", remote: true };
 const V: Slot = { rule: "rev" };
 const P: Slot = { rule: "path" };
@@ -283,7 +291,7 @@ const GIT_SPECS: Readonly<Record<string, SlotSpec>> = {
     flags: "qfmt",
     long: ["quiet", "force", "merge", "detach", "track", "no-track", "ours", "theirs"],
     values: { "-b": R, "-B": R, "--orphan": R },
-    operand: (index, afterDashes) => (index === 0 && !afterDashes ? R : P),
+    operand: (index, afterDashes) => (index === 0 && !afterDashes ? RO : P),
     operandForms: "a branch first, then files in the workspace",
   },
   fetch: { name: "git fetch", flags: "qvpPtfanu46", long: FETCH_LONG, values: FETCH_VALUES, ...remoteOperands("fetch") },
