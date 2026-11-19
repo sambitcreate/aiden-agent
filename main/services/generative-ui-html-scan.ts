@@ -429,7 +429,10 @@ class JsLexer {
       else close.closesTemplate = true;
       return;
     }
-    if (IDENTIFIER_START.test(char) || char === "\\") {
+    // A private name (`#default`, `#if`) is one name token, so it never reads
+    // as the keyword it spells: `this.#default/1` divides.
+    const privateName = char === "#" && (IDENTIFIER_START.test(code[this.at + 1] ?? "") || code[this.at + 1] === "\\");
+    if (IDENTIFIER_START.test(char) || char === "\\" || privateName) {
       let at = this.at + 1;
       while (at < code.length && (IDENTIFIER_PART.test(code[at]!) || code[at] === "\\")) at += 1;
       this.at = at;

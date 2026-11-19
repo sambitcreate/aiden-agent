@@ -310,6 +310,11 @@ const REFUSED_MARKUP: Record<string, string> = {
   "an <iframe> in a template 2 KB past a regex-like division followed by in": `<script>${farTemplateSink(2100, 'document.body.innerHTML="<iframe src=https://e.test></iframe>"', " in o")}</script>`,
   "an <iframe> after a regex that a class extends": `<script>class A extends /\`/.constructor {}\ndocument.body.innerHTML="<iframe src=https://e.test></iframe>";\n// \`</script>`,
   "an <iframe> after a regex that a module exports by default": `<script type="module">export default /\`/;\ndocument.body.innerHTML="<iframe src=https://e.test></iframe>";\n// \`</script>`,
+  // A private name spells a keyword but is a name: the / after it divides.
+  "an <iframe> after a division by a private field named default": `<script>class A{#default=1;m(){var q=this.#default/1; document.body.innerHTML="<iframe src=https://e.test></iframe>"; return 0//\n}}new A().m();</script>`,
+  "an <iframe> after a division by a private field named return": `<script>class A{#return=1;m(){var q=this.#return/1; document.body.innerHTML="<iframe src=https://e.test></iframe>"; return 0//\n}}new A().m();</script>`,
+  "an <iframe> after a division by a private field read through ?.": `<script>class A{#typeof=1;m(){var q=this?.#typeof/1; document.body.innerHTML="<iframe src=https://e.test></iframe>"; return 0//\n}}new A().m();</script>`,
+  "an <iframe> after a division by a private method named if": `<script>class A{#if(){return 4} m(){var q=this.#if()/1; document.body.innerHTML="<iframe src=https://e.test></iframe>"; return 0//\n}} new A().m();</script>`,
   "an onclick that navigates from a template 2 KB past a division after an object literal": `<button onclick="${farTemplateSink(2100, "location='javascript:alert(1)'")}">Go</button>`,
   "an onclick that navigates from a template 4 KB past a division after an object literal": `<button onclick="${farTemplateSink(4000, "location='javascript:alert(1)'")}">Go</button>`,
 };
