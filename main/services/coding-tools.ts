@@ -947,7 +947,8 @@ async function readReplacedFile(
  * write_file's protections: the path stays inside the folder, symlinks out of
  * it and dangling links are refused, Aiden's protected config paths are never
  * written, and an existing file is replaced only if it is an exclusively
- * linked regular file nobody changed meanwhile, and never with `replace: false`.
+ * linked regular file nobody changed meanwhile, and never with `replace: false`
+ * (that refusal carries the code "EEXIST").
  * Stricter than write_file, since the approval names a picture's path: the
  * named file must not itself be a link (one to src/app.ts would turn source
  * into image bytes), and the folder it really lands in, after following any
@@ -973,7 +974,10 @@ export async function writeWorkspaceBinaryFile(
   // A create-only write never replaces a file; the native writer's "new" mode
   // also refuses one that appears after this check.
   if (existing && options.replace === false) {
-    throw new Error(`${suppliedPath} already exists, and only the file the approval named may be replaced.`);
+    throw Object.assign(
+      new Error(`${suppliedPath} already exists, and only the file the approval named may be replaced.`),
+      { code: "EEXIST" },
+    );
   }
   throwIfAborted(signal, "File write cancelled.");
   const realRoot = await verifyWorkspaceRoot(workspace, signal);

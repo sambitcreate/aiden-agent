@@ -1069,7 +1069,7 @@ test("only the file the approval named is replaced; another type or an extra ima
     assert.equal(await read("hero-2.png"), "old", "an extra image never overwrites a file the approval did not name");
     assert.equal(await read("hero-3.png"), png, "an extra image with a free name is saved");
     assert.match(named, /Saved in the workspace as design\/hero\.png, design\/hero-3\.png\./);
-    assert.match(named, /Could not save design\/hero-2\.png: .*already exists/);
+    assert.match(named, /Did not save design\/hero-2\.png: a file is already there.*Pass that path as savePath to replace it/);
 
     // A PNG asked for as logo.jpg becomes logo.png, a new file, and logo.jpg stays.
     controls.imageResult.output = [image];
@@ -1079,7 +1079,7 @@ test("only the file the approval named is replaced; another type or an extra ima
     // An extensionless savePath names no file to replace either.
     const bare = resultText(await generate.execute("bare", { ...imageRequest, savePath: "design/hero" }));
     assert.equal(await read("hero.png"), png);
-    assert.match(bare, /Could not save design\/hero\.png: .*already exists/);
+    assert.match(bare, /Did not save design\/hero\.png: a file is already there/);
   } finally {
     await fs.rm(root, { recursive: true, force: true });
   }

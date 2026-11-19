@@ -225,7 +225,11 @@ async function keepGeneratedImages(
       saved.push({ path: written, width: sizes[index]!.width, height: sizes[index]!.height });
     } catch (error) {
       if (signal?.aborted) throw error;
-      problems.push(`Could not save ${paths[index]}: ${failure(error)}`);
+      problems.push(
+        (error as NodeJS.ErrnoException | undefined)?.code === "EEXIST"
+          ? `Did not save ${paths[index]}: a file is already there, and only the exact savePath may replace a file (numbered extras and a name whose extension follows the image's real type are only ever new files). Pass that path as savePath to replace it, or another name to keep both.`
+          : `Could not save ${paths[index]}: ${failure(error)}`,
+      );
     }
   }
   const notes = saved.length ? [`Saved in the workspace as ${saved.map((entry) => entry.path).join(", ")}.`] : [];
@@ -667,7 +671,7 @@ export function createPiModelTools(host: PiModelToolsHost): AgentTool[] {
     description:
       "Send a prompt to an image-generation model and display its generated images. Uses the image key saved in Settings → Image Generation and may incur charges. Use list_operation_models to choose an image model. To edit or use reference images, list_image_references returns IDs of images attached to this chat; pass up to four as referenceImageIds. No URLs are accepted. When the user asks for a shape or orientation (square, wide, landscape, portrait, a phone wallpaper, a banner), pass aspectRatio as width:height; models that can't produce that shape use their default." +
       (host.saveImage
-        ? " To keep the image as a file (an asset a page uses, a hero or an icon), pass savePath, a path in the workspace folder such as design/assets/hero.png; it replaces a file already at that exact path. An image of another type gets its own extension and further images get -2, -3; those are only ever new files, so to replace hero.jpg pass savePath hero.jpg."
+        ? " To keep the image as a file (an asset a page uses, a hero or an icon), pass savePath, a path in the workspace folder such as design/assets/hero.png. Only a file at that exact path is replaced. An image of another type gets its own extension and further images get -2, -3; those are always new files, and one that would land on an existing file is not saved, so to replace hero.jpg or hero-2.png pass that path as savePath."
         : "") +
       (host.saveImage && host.placeImages
         ? " With savePath, placeOnCanvas: true also puts the saved image on the design canvas while design mode is on."
