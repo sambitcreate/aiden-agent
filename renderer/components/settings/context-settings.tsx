@@ -150,7 +150,7 @@ export function PromptCacheGroup() {
         <Field
           label="Keep chat caches for an hour"
           description={hourAvailable
-            ? "Anthropic and Amazon Bedrock (Claude 4.5 and later) can keep a chat’s cache for an hour instead of five minutes. Writing it costs twice the input price on Anthropic, instead of 1.25 times for the five-minute cache, so it pays off when you come back to chats within the hour. Off by default; side questions keep the default."
+            ? "Anthropic and Amazon Bedrock (newer Claude models) can keep a chat’s cache for an hour instead of five minutes. Writing it costs twice the input price on Anthropic, instead of 1.25 times for the five-minute cache, so it pays off when you come back to chats within the hour. Off by default; side questions keep the default."
             : keepsHour
               ? "On, but paused: add Anthropic or Amazon Bedrock in Providers to use it. Other providers keep their own cache lifetime."
               : "Available with Anthropic or Amazon Bedrock. Add one in Providers to choose an hour-long cache."}

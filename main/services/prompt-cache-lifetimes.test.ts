@@ -84,9 +84,10 @@ test("an hour-long retention is timed only where the provider keeps an hour, and
   assert.equal(promptCacheTtlMs(anthropic, "long"), 60 * MINUTE);
   assert.equal(promptCacheTtlMs(anthropic, "none"), 0);
   assert.equal(promptCacheTtlMs({ ...anthropic, compat: { supportsLongCacheRetention: false } }, "long"), 5 * MINUTE, "an endpoint that refuses the hour keeps the default");
-  assert.equal(promptCacheTtlMs(catalogModel("amazon-bedrock", "us.anthropic.claude-sonnet-4-5-20250929-v1:0"), "long"), 60 * MINUTE);
+  assert.equal(promptCacheTtlMs(catalogModel("amazon-bedrock", "us.anthropic.claude-sonnet-4-6"), "long"), 60 * MINUTE);
   assert.equal(promptCacheTtlMs(catalogModel("amazon-bedrock", "global.anthropic.claude-fable-5-1"), "long"), 60 * MINUTE);
-  // Bedrock keeps an hour only for the 4.5 and later Claude models.
+  // Bedrock keeps an hour only for the Claude models its table lists.
+  assert.equal(promptCacheTtlMs(catalogModel("amazon-bedrock", "us.anthropic.claude-sonnet-4-5-20250929-v1:0"), "long"), 0);
   assert.equal(promptCacheTtlMs(catalogModel("amazon-bedrock", "us.anthropic.claude-sonnet-4-20250514-v1:0"), "long"), 0);
   assert.equal(promptCacheTtlMs(catalogModel("amazon-bedrock", "us.anthropic.claude-opus-4-1-20250805-v1:0"), "long"), 0);
   // Gateways and other providers are not on the allowlist, even for Claude.
@@ -94,6 +95,31 @@ test("an hour-long retention is timed only where the provider keeps an hour, and
   assert.equal(promptCacheTtlMs(catalogModel("openai", "gpt-5.6-sol"), "long"), 0);
   const custom = { provider: "custom-proxy", id: "claude-opus-5", api: "anthropic-messages" as Api };
   assert.equal(promptCacheTtlMs({ ...custom, promptCache: { short: 300, long: 1800 } }, "long"), 30 * MINUTE);
+});
+
+// The Claude models Bedrock's prompt-caching table lists with a 1-hour TTL
+// (https://docs.aws.amazon.com/bedrock/latest/userguide/prompt-caching.html,
+// checked 2026-11-19), by model ID without the cross-Region prefix.
+const BEDROCK_TABLE_HOUR = new Set([
+  "anthropic.claude-fable-5-2", "anthropic.claude-mythos-5-2", "anthropic.claude-haiku-5-5", "anthropic.claude-sonnet-5-5",
+  "anthropic.claude-opus-5-5", "anthropic.claude-fable-5-1", "anthropic.claude-mythos-5-1", "anthropic.claude-fable-5",
+  "anthropic.claude-mythos-5", "anthropic.claude-opus-5", "anthropic.claude-opus-4-8", "anthropic.claude-opus-4-7",
+  "anthropic.claude-opus-4-6-v1", "anthropic.claude-opus-4-5-20251101-v1:0", "anthropic.claude-sonnet-5",
+  "anthropic.claude-sonnet-4-6", "anthropic.claude-haiku-4-5-20251001-v1:0",
+]);
+
+test("every Bedrock Claude model in the catalog keeps an hour exactly when Bedrock's table lists one", () => {
+  const catalog = JSON.parse(readFileSync(join(catalogDir, "amazon-bedrock.json"), "utf8"));
+  const claude = [...catalogModels(catalog)].filter((model) => model.id.includes("anthropic.claude-"));
+  assert.ok(claude.length > 0);
+  const mismatched = claude.filter((model) => {
+    const listed = BEDROCK_TABLE_HOUR.has(model.id.slice(model.id.indexOf("anthropic.")));
+    return (promptCacheTtlMs(model, "long") === 60 * MINUTE) !== listed;
+  }).map((model) => model.id);
+  assert.deepEqual(mismatched, []);
+  // The catalog carries models on both sides of the table.
+  assert.ok(claude.some((model) => model.id === "us.anthropic.claude-sonnet-4-5-20250929-v1:0"));
+  assert.ok(claude.some((model) => model.id === "us.anthropic.claude-haiku-4-5-20251001-v1:0"));
 });
 
 test("a chat request asks for the hour only on a model that keeps one, and an explicit retention wins", async () => {
@@ -104,8 +130,8 @@ test("a chat request asks for the hour only on a model that keeps one, and an ex
   }) as StreamFn);
   const context = normalizeContext({ messages: [] });
   await stream(catalogModel("anthropic", "claude-opus-5") as never, context, {});
-  await stream(catalogModel("amazon-bedrock", "us.anthropic.claude-sonnet-4-5-20250929-v1:0") as never, context, undefined);
-  await stream(catalogModel("amazon-bedrock", "us.anthropic.claude-sonnet-4-20250514-v1:0") as never, context, {});
+  await stream(catalogModel("amazon-bedrock", "us.anthropic.claude-sonnet-4-6") as never, context, undefined);
+  await stream(catalogModel("amazon-bedrock", "us.anthropic.claude-sonnet-4-5-20250929-v1:0") as never, context, {});
   await stream(catalogModel("openai", "gpt-5.6-sol") as never, context, {});
   await stream({ ...catalogModel("anthropic", "claude-opus-5"), compat: { supportsLongCacheRetention: false } } as never, context, {});
   await stream(catalogModel("anthropic", "claude-opus-5") as never, context, { cacheRetention: "none" });
@@ -133,7 +159,9 @@ test("an attended workspace chat on Anthropic or Bedrock keeps the hour, and its
   const hour = { reply: "long", sideCall: "short", oneOff: "none", recorded: "long" };
   assert.deepEqual(await turnRetentions({}, catalogModel("anthropic", "claude-opus-5")), hour);
   assert.deepEqual(await turnRetentions({ usageSource: "chat", mode: "workspace" }, catalogModel("anthropic", "claude-opus-5")), hour);
-  assert.deepEqual(await turnRetentions({}, catalogModel("amazon-bedrock", "us.anthropic.claude-sonnet-4-5-20250929-v1:0")), hour);
+  assert.deepEqual(await turnRetentions({}, catalogModel("amazon-bedrock", "us.anthropic.claude-sonnet-4-6")), hour);
+  assert.deepEqual(await turnRetentions({}, catalogModel("amazon-bedrock", "global.anthropic.claude-haiku-4-5-20251001-v1:0")), hour);
+  assert.deepEqual(await turnRetentions({}, catalogModel("amazon-bedrock", "eu.anthropic.claude-opus-4-5-20251101-v1:0")), hour);
 });
 
 test("every other turn keeps the default cache lifetime", async () => {
@@ -151,7 +179,8 @@ test("every other turn keeps the default cache lifetime", async () => {
     ["a paired device's turn", { ownerKind: "remote", usageSource: "chat" }, anthropic],
     ["OpenRouter routing to Anthropic", {}, catalogModel("openrouter", "anthropic/claude-opus-4.5")],
     ["a custom endpoint", {}, { provider: "custom-proxy", id: "claude-opus-5", api: "anthropic-messages" } as Model<Api>],
-    ["Bedrock before Claude 4.5", {}, catalogModel("amazon-bedrock", "us.anthropic.claude-sonnet-4-20250514-v1:0")],
+    ["Bedrock Sonnet 4", {}, catalogModel("amazon-bedrock", "us.anthropic.claude-sonnet-4-20250514-v1:0")],
+    ["Bedrock Sonnet 4.5, which its table gives no hour", {}, catalogModel("amazon-bedrock", "us.anthropic.claude-sonnet-4-5-20250929-v1:0")],
   ];
   for (const [label, turn, model] of turns) {
     assert.deepEqual(await turnRetentions(turn, model), short, label);

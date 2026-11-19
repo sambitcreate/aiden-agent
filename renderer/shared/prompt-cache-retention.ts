@@ -11,7 +11,11 @@
  * - Anthropic: https://platform.claude.com/docs/en/build-with-claude/prompt-caching
  *   (1-hour cache duration for every current Claude model).
  * - Bedrock: https://docs.aws.amazon.com/bedrock/latest/userguide/prompt-caching.html
- *   (1-hour TTL for the 4.5 and later Claude models only).
+ *   (checked 2026-11-19). Its table lists a 1-hour TTL for Claude Haiku 4.5,
+ *   Opus 4.5 and later, Sonnet 4.6 and later, and every Claude 5 model; not
+ *   for Sonnet 4.5, Sonnet 4 or Opus 4.1. A `ttl` on a model without it can be
+ *   rejected with a ValidationException, so a model outside the table keeps the
+ *   default lifetime.
  */
 export const LONG_PROMPT_CACHE_PROVIDER_IDS: readonly string[] = Object.freeze(["anthropic", "amazon-bedrock"]);
 
@@ -29,7 +33,8 @@ interface RetentionModel {
   compat?: unknown;
 }
 
-const BEDROCK_HOUR_CLAUDE = /claude-(?:fable|opus|sonnet|haiku)-(?:5|4-[5-9])(?:[-.:@]|$)/u;
+// Pi 1.5.2 sends the hour for any caching Claude on Bedrock, so this is the only gate.
+const BEDROCK_HOUR_CLAUDE = /claude-(?:(?:opus|haiku)-(?:4-[5-9]|5)|sonnet-(?:4-[6-9]|5)|(?:fable|mythos)-5)(?:[-.:@]|$)/u;
 
 /** Whether Pi sends an hour-long cache for this resolved model when asked for "long". */
 export function supportsLongPromptCacheRetention(model: RetentionModel): boolean {
