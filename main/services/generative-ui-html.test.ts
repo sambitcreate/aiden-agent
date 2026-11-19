@@ -223,6 +223,14 @@ const farTemplateSink = (size: number, sink: string, after = "") => `var o={}; v
 /** `line` 40 times, 1.5 KB of comments apart. */
 const repeatedLine = (line: string) => Array.from({ length: 40 }, () => `${line}\n${commentLines(1500)}`).join("\n");
 
+const IFRAME_SINK = 'document.body.innerHTML="<iframe src=https://e.test></iframe>";';
+const HASHBANG_SINKS = {
+  template: `<script>#!/x/ \`\n${IFRAME_SINK}\n//\`</script>`,
+  blockComment: `<script>#!/x/ /*\n${IFRAME_SINK}\n//*/</script>`,
+  module: `<script type="module">#!/x/ \`\n${IFRAME_SINK}\n//\`</script>`,
+  byteOrderMark: `<script>\uFEFF#!/x/ \`\n${IFRAME_SINK}\n//\`</script>`,
+};
+
 const REFUSED_MARKUP: Record<string, string> = {
   "a <base> whose earlier attribute quotes a <": '<base data-x="<" href="https://evil.test/">',
   "a <link> whose title holds a <": '<link title="a<b" rel=stylesheet href=https://evil.test/a.css>',
@@ -315,6 +323,12 @@ const REFUSED_MARKUP: Record<string, string> = {
   "an <iframe> after a division by a private field named return": `<script>class A{#return=1;m(){var q=this.#return/1; document.body.innerHTML="<iframe src=https://e.test></iframe>"; return 0//\n}}new A().m();</script>`,
   "an <iframe> after a division by a private field read through ?.": `<script>class A{#typeof=1;m(){var q=this?.#typeof/1; document.body.innerHTML="<iframe src=https://e.test></iframe>"; return 0//\n}}new A().m();</script>`,
   "an <iframe> after a division by a private method named if": `<script>class A{#if(){return 4} m(){var q=this.#if()/1; document.body.innerHTML="<iframe src=https://e.test></iframe>"; return 0//\n}} new A().m();</script>`,
+  // A #! at the very start of a script is a line comment, so the rest of
+  // that line opens no template, string or comment.
+  "an <iframe> after a hashbang that names a template": HASHBANG_SINKS.template,
+  "an <iframe> after a hashbang that names a block comment": HASHBANG_SINKS.blockComment,
+  "an <iframe> after a hashbang in a module": HASHBANG_SINKS.module,
+  "an <iframe> after a hashbang that follows a byte order mark": HASHBANG_SINKS.byteOrderMark,
   "an onclick that navigates from a template 2 KB past a division after an object literal": `<button onclick="${farTemplateSink(2100, "location='javascript:alert(1)'")}">Go</button>`,
   "an onclick that navigates from a template 4 KB past a division after an object literal": `<button onclick="${farTemplateSink(4000, "location='javascript:alert(1)'")}">Go</button>`,
 };
@@ -342,6 +356,8 @@ const ADMITTED_MARKUP: Record<string, string> = {
   "a division inside an if body": '<script>if (x) { y = (a + b) / "2"; }</script>',
   "a regex after a block": '<script>if (ok) { draw(); } /^#/.test(location.hash) && open(); var w = n++ / 2;</script>',
   "a division after a template literal": "<script>var h = `${rows}` / 2; label.textContent = h + ' rows';</script>",
+  // A hashbang line is a comment, so what it names never runs.
+  "a script whose hashbang line names a javascript: URL": "<script>#!/usr/bin/env node location='javascript:void 0'\nlabel.textContent = 'ready';</script>",
   // Read as a regex, `/ 2; … rows /` would be followed by a name (`$`): a syntax
   // error, so only the division reading can run. Followed to the end, each
   // such line would cost the rest of a 60 KB script.
@@ -509,6 +525,15 @@ test("a streaming draft cut inside a script or a quoted attribute is read as scr
   assert.equal(isGenerativeUiDraftAcceptable('<p title="a <link> tag'), true);
   assert.equal(isGenerativeUiDraftAcceptable("<p>Chart</p><iframe"), false);
   assert.equal(isGenerativeUiDraftAcceptable('<a href="javascript:'), false);
+});
+
+test("a hashbang streamed in pieces, even split between # and !, is still read as a comment", () => {
+  for (const html of Object.values(HASHBANG_SINKS)) {
+    const scriptStart = html.indexOf("#!");
+    for (const chunk of [1, 3, scriptStart + 1]) {
+      assert.equal(streamInChunks(html, chunk).admitted, false, `${chunk}-character pieces of ${html}`);
+    }
+  }
 });
 
 test("a refused visual's error quotes the markup that was refused", () => {

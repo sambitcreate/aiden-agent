@@ -626,10 +626,12 @@ const FORK_BUDGET_FLOOR = 65_536;
  * The first place `code` sends a javascript: or data:text/html URL to a
  * navigation or URL sink, or unsafe markup to an HTML sink. Literals joined
  * with `+` are read as one value; a template's URL ends at its first `${`.
- * A place that reads two ways (see `JsLexer`) is checked both ways.
+ * A place that reads two ways (see `JsLexer`) is checked both ways. `source`
+ * says whether `code` is a whole script, which may start with a hashbang, or
+ * an event handler's body.
  */
-export function findJsSink(code: string, depth = 0): HtmlFindings {
-  const lexer = new JsLexer(code, { at: 0, braces: undefined, parens: undefined, tail: [], lineBreak: false });
+export function findJsSink(code: string, depth = 0, source: "script" | "handler" = "handler"): HtmlFindings {
+  const lexer = new JsLexer(code, { at: source === "script" ? hashbangEnd(code) : 0, braces: undefined, parens: undefined, tail: [], lineBreak: false });
   lexer.run();
   const tokens = lexer.tokens;
   let found: HtmlFindings = {};
@@ -694,6 +696,21 @@ export function findJsSink(code: string, depth = 0): HtmlFindings {
     scanJsTokens(code, tokens, other.meet, frames, depth, note, () => done() || frames.length <= level, () => spend(1));
   });
   return found;
+}
+
+/**
+ * Where a script's hashbang comment ends, or 0 without one. A `#!` at the very
+ * start of a classic or module script reads as a line comment. Anywhere else,
+ * and in an event handler (a function body), it is a syntax error, so that
+ * code never runs and needs no such reading. A byte order mark before it is
+ * skipped too: an engine that kept the mark would refuse the script instead.
+ */
+function hashbangEnd(code: string): number {
+  const start = code.startsWith("\uFEFF") ? 1 : 0;
+  if (!code.startsWith("#!", start)) return 0;
+  let at = start + 2;
+  while (at < code.length && !LINE_BREAK.test(code[at]!)) at += 1;
+  return at;
 }
 
 /** Runs the sink rules over `tokens` from `from`, with the call frames open there. */
@@ -1067,7 +1084,7 @@ export class HtmlScanner {
     }
     if (text.length === 0) return;
     if (element.tagName.toLowerCase() === "script") {
-      const sink = findJsSink(text, this.depth);
+      const sink = findJsSink(text, this.depth, "script");
       this.committed.limit ??= sink.limit;
       this.committed.embed ??= sink.embed;
       this.committed.url ??= sink.url;
