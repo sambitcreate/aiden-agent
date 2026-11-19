@@ -491,6 +491,7 @@ test("in a workspace that is a folder of a larger repository, git reaches no fil
     ["git log -p {{rev}}", ":/one", /rev must be a git revision there/u],
     ["git show HEAD:{{file}}", "../secret/s", /file must name a file inside the workspace/u],
     ["git show HEAD:{{file}}", ":secret/s", /file must name a file inside the workspace/u],
+    ["git show :0:{{file}}", "../secret/s", /file must name a file inside the workspace/u],
   ];
   for (const [command, value, problem] of refused) {
     assert.throws(() => resolve(command, [value]), problem, `${command} with ${value}`);
@@ -505,6 +506,13 @@ test("in a workspace that is a folder of a larger repository, git reaches no fil
   assert.deepEqual({ stdout: shown.stdout, exitCode: shown.exitCode }, { stdout: "hello\n", exitCode: 0 });
   const shell = spawnSync("/bin/sh", ["-c", show.preview], { cwd: ws, encoding: "utf8" });
   assert.equal(shell.stdout, shown.stdout, "the preview runs what the plan runs");
+  // An index path reads the file from the workspace too: git takes `:./0:f` as a path named `0:f`, so the `./` goes after the stage.
+  for (const [command, preview] of [["git show :0:{{file}}", "GIT_LITERAL_PATHSPECS=1 git show :0:./'f'"], ["git show :{{file}}", "GIT_LITERAL_PATHSPECS=1 git show :./'f'"]]) {
+    const staged = resolve(command!, ["f"]);
+    assert.equal(staged.preview, preview);
+    const read = await runResolved(staged, ws);
+    assert.deepEqual({ stdout: read.stdout, exitCode: read.exitCode }, { stdout: "hello\n", exitCode: 0 }, command);
+  }
   // A value that names the outside file from the repository root reads nothing there.
   const fromRoot = await runResolved(resolve("git show HEAD:{{file}}", ["secret/s"]), ws);
   assert.doesNotMatch(fromRoot.stdout, /TOPSECRET/u);

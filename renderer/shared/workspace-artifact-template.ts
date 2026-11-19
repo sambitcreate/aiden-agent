@@ -675,6 +675,8 @@ function endRefs(command: TemplateCommand): string | undefined {
  * repository. A placeholder after the first `:` of a revision or file
  * operand becomes a `blob` path, and the plan adds `./` after the `:`, so
  * git reads the path from the workspace; the value then must stay inside it.
+ * An index path `:N:{{file}}` (stage 0 to 3) gets the `./` after its stage:
+ * git reads `:./0:f` as a path named `0:f`.
  */
 function readBlobPath(word: TemplateWord, sub: string): string | undefined {
   if (sub === "push" || sub === "fetch" || sub === "pull") return undefined;
@@ -688,13 +690,19 @@ function readBlobPath(word: TemplateWord, sub: string): string | undefined {
   word.parts.forEach((later, index) => {
     if ("param" in later) later.slot = index > colon ? { rule: "path", blob: true } : { rule: "rev" };
   });
-  const split = part.text.indexOf(":") + 1;
+  const split = blobStart(part.text, colon === 0);
   const rest = part.text.slice(split);
   if (rest.startsWith("./")) return undefined;
   const inserted: TemplateText[] = [{ text: part.text.slice(0, split), at: part.at }, { text: "./", insertedAt: part.at! + split }];
   if (rest) inserted.push({ text: rest, at: part.at! + split });
   word.parts.splice(colon, 1, ...inserted);
   return undefined;
+}
+
+/** Where the path starts in a `REV:path` or `:N:path` word: after the first `:`, or after a leading index stage. */
+function blobStart(text: string, wordStart: boolean): number {
+  const stage = wordStart ? /^:[0-3]:/u.exec(text) : null;
+  return stage ? stage[0].length : text.indexOf(":") + 1;
 }
 
 /** Whether a template holds a placeholder, and so runs without a shell. */
@@ -757,10 +765,10 @@ function revProblem(text: string): string | undefined {
   return undefined;
 }
 
-/** The path after the first `:` of a `REV:{{file}}` word, as the template and value write it (without the plan's `./`). */
+/** The path of a `REV:{{file}}` or `:N:{{file}}` word, as the template and value write it (without the plan's `./`). */
 function blobPath(word: TemplateWord, value: (name: string) => string): string {
   const written = word.parts.map((part) => ("text" in part ? (part.insertedAt === undefined ? part.text : "") : value(part.param))).join("");
-  return written.slice(written.indexOf(":") + 1);
+  return written.slice(blobStart(written, "text" in word.parts[0]!));
 }
 
 /**
