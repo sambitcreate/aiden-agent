@@ -105,6 +105,9 @@ final class AidenSandboxedHTMLTests: XCTestCase {
     /// so a zero from the sandbox means it blocked the load, not that nothing tried.
     /// The positive waits allow 30 seconds because a loaded CI simulator can take
     /// over 10 to start WebKit's processes; a passing run never waits that long.
+    /// If even the plain web view never reaches the listener, the simulator gives
+    /// this test no control to compare against, so it skips rather than reading
+    /// the preview's zero as proof.
     private func assertNoConnections(_ name: String, control: WKWebView, body: (UInt16) -> String) async throws {
         let controlListener = try await LoopbackListener.start()
         let controlConnected = expectation(description: "\(name): control page connects to localhost")
@@ -114,10 +117,13 @@ final class AidenSandboxedHTMLTests: XCTestCase {
         let clock = ContinuousClock()
         let controlStart = clock.now
         control.loadHTMLString(Self.page(body(controlListener.port)), baseURL: nil)
-        await fulfillment(of: [controlConnected], timeout: 30)
+        let controlResult = await XCTWaiter().fulfillment(of: [controlConnected], timeout: 30)
         let controlTook = clock.now - controlStart
         control.stopLoading()
         controlListener.stop()
+        guard controlResult == .completed else {
+            throw XCTSkip("\(name): a plain web view on this simulator never reached a loopback listener, so there is no control to compare the preview against")
+        }
 
         // Sandboxed: nothing connects, for as long as the control needed and more.
         let listener = try await LoopbackListener.start()
