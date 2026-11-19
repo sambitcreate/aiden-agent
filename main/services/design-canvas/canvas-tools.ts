@@ -675,9 +675,12 @@ const boxKey = (frame: DesignFrame) => `${frame.x},${frame.y},${frame.w},${frame
  * Keeps the person's own moves when Aiden's change is about to undo them. A
  * frame this change alters whose box is no longer the one Aiden last saw
  * (`seen`) was moved or resized by the person since; it is reported with its
- * box now, and when the change would move or resize it too, it keeps the
- * person's box (groups and connectors excepted: they follow their frames).
- * Groups holding a frame that kept its box are fitted to it again.
+ * box now. When the change would move it and the person moved it, it keeps
+ * the person's place; when the change would resize it and the person resized
+ * it, it keeps the person's size; the rest of the change lands, so Aiden's
+ * resize of a frame the person only moved still happens (groups and
+ * connectors excepted: they follow their frames). Groups holding a frame that
+ * kept the person's place or size are fitted to it again.
  */
 function keepPersonsMoves(
   before: DesignCanvas,
@@ -695,9 +698,13 @@ function keepPersonsMoves(
     if (JSON.stringify(was) === JSON.stringify(frame)) return frame;
     changed.push({ id: frame.id, title: was.title, box: boxOf(was) });
     if (boxKey(frame) === boxKey(was) || frame.kind === "group" || frame.kind === "connector") return frame;
+    const [sawX, sawY, sawW, sawH] = saw.split(",").map(Number);
+    const keepPlace = (was.x !== sawX || was.y !== sawY) && (frame.x !== was.x || frame.y !== was.y);
+    const keepSize = (was.w !== sawW || was.h !== sawH) && (frame.w !== was.w || frame.h !== was.h);
+    if (!keepPlace && !keepSize) return frame;
     kept.add(frame.id);
     refit.push(frame.groupId, was.groupId);
-    return { ...frame, ...boxOf(was) };
+    return { ...frame, ...(keepPlace ? { x: was.x, y: was.y } : {}), ...(keepSize ? { w: was.w, h: was.h } : {}) };
   });
   if (kept.size === 0) return { doc: after, changed, kept };
   return { doc: refitGroups(syncConnectors({ ...after, frames }), refit), changed, kept };
@@ -705,25 +712,31 @@ function keepPersonsMoves(
 
 /**
  * The answer of a change, with the frames it touched that the person changed
- * since Aiden last looked: their boxes now, and which kept the person's box.
+ * since Aiden last looked: their boxes now, and which kept the person's place
+ * or size.
  */
 function withCoEditReport<T>(value: T, report: ReturnType<typeof keepPersonsMoves> | undefined, saved: DesignCanvas): T {
   if (!report || report.changed.length === 0 || !value || typeof value !== "object" || Array.isArray(value)) return value;
   const now = new Map(saved.frames.map((frame) => [frame.id, frame]));
   const answer = value as Record<string, unknown>;
-  // A listed box of a frame that kept the person's box is the stored one.
-  const frames = Array.isArray(answer.frames)
-    ? answer.frames.map((entry: unknown) => {
-        if (!entry || typeof entry !== "object") return entry;
-        const listed = entry as { id?: unknown; box?: unknown };
-        const frame = typeof listed.id === "string" && report.kept.has(listed.id) ? now.get(listed.id) : undefined;
-        return frame && listed.box ? { ...listed, box: boxOf(frame) } : entry;
-      })
-    : undefined;
+  // Once a frame kept the person's box, it and the groups fitted around it
+  // moved after the answer was written: every box the answer lists (one
+  // frame or group, or a list of them) is the stored one.
+  const restored: Record<string, unknown> = {};
+  if (report.kept.size > 0) {
+    const stored = (entry: unknown): unknown => {
+      if (!entry || typeof entry !== "object") return entry;
+      const listed = entry as { id?: unknown; box?: unknown };
+      const frame = typeof listed.id === "string" && listed.box ? now.get(listed.id) : undefined;
+      return frame ? { ...listed, box: boxOf(frame) } : entry;
+    };
+    for (const key of ["frame", "group"]) if (key in answer) restored[key] = stored(answer[key]);
+    for (const key of ["frames", "groups"]) if (Array.isArray(answer[key])) restored[key] = (answer[key] as unknown[]).map(stored);
+  }
   const kept = [...report.kept];
   return {
     ...answer,
-    ...(frames ? { frames } : {}),
+    ...restored,
     changedSinceRead: report.changed.map((entry) => {
       const frame = now.get(entry.id);
       return frame ? { ...entry, box: boxOf(frame) } : entry;
@@ -731,7 +744,7 @@ function withCoEditReport<T>(value: T, report: ReturnType<typeof keepPersonsMove
     ...(kept.length > 0 ? { keptPersonsBox: kept } : {}),
     coEdit:
       kept.length > 0
-        ? "The person moved or resized these frames since you last read them, so they keep the person's place and size; the rest of the change landed. Work from the boxes here, and ask before moving them again."
+        ? "The person moved or resized these frames since you last read them, so they keep the place or size the person gave them; the rest of the change landed. Work from the boxes here, and ask before moving them again."
         : "The person moved or resized these frames since you last read them; the boxes here are where they are now.",
   } as T;
 }

@@ -1045,6 +1045,7 @@ test("a frame the person moved since Aiden last looked keeps the person's place,
   ]);
   const stored = (await store.get("chat-1")).frames.find((frame) => frame.id === a.frame.id)!;
   assert.deepEqual([stored.x, stored.y], [300, 900]);
+  assert.deepEqual(moved.frame.box, { x: 300, y: 900, w: a.frame.box.w, h: a.frame.box.h }, "the answer's own frame is where it is, not where Aiden asked");
 
   // A change that does not move B lands, and says B's size is now the person's.
   const renamed = await call("canvas_update_frame", { id: b.frame.id, title: "B, wider" });
@@ -1071,6 +1072,42 @@ test("a frame the person moved since Aiden last looked keeps the person's place,
   const laid = await store.get("chat-1");
   assert.deepEqual([laid.frames.find((frame) => frame.id === a.frame.id)!.x, laid.frames.find((frame) => frame.id === a.frame.id)!.y], [0, 2000]);
   assert.deepEqual([laid.frames.find((frame) => frame.id === b.frame.id)!.x, laid.frames.find((frame) => frame.id === b.frame.id)!.y], [4000, 4000]);
+});
+
+test("a frame the person only moved still takes Aiden's resize, and one the person only resized still takes Aiden's move", async (t) => {
+  const { store, call } = await setup(t);
+  const a = await call("canvas_place_frame", { kind: "note", title: "A", x: 0, y: 0, w: 300, h: 200 });
+  const b = await call("canvas_place_frame", { kind: "note", title: "B", x: 600, y: 0, w: 300, h: 200 });
+  const c = await call("canvas_place_frame", { kind: "note", title: "C", x: 1200, y: 0, w: 300, h: 200 });
+  await call("canvas_read");
+  await store.update("chat-1", (doc) => ({
+    ...doc,
+    frames: doc.frames.map((frame) =>
+      frame.id === a.frame.id || frame.id === c.frame.id
+        ? { ...frame, y: 900 }
+        : frame.id === b.frame.id
+          ? { ...frame, w: 500 }
+          : frame,
+    ),
+  }));
+  const box = async (id: string) => {
+    const frame = (await store.get("chat-1")).frames.find((entry) => entry.id === id)!;
+    return { x: frame.x, y: frame.y, w: frame.w, h: frame.h };
+  };
+
+  const resized = await call("canvas_update_frame", { id: a.frame.id, w: 700, h: 400 });
+  assert.deepEqual(await box(a.frame.id), { x: 0, y: 900, w: 700, h: 400 });
+  assert.equal(resized.keptPersonsBox, undefined, "nothing of Aiden's was set aside");
+  assert.deepEqual(resized.changedSinceRead.map((entry: { id: string }) => entry.id), [a.frame.id]);
+
+  await call("canvas_update_frame", { id: b.frame.id, x: 2000, y: 0 });
+  assert.deepEqual(await box(b.frame.id), { x: 2000, y: 0, w: 500, h: 200 });
+
+  // Aiden moves and resizes a frame the person moved: the person's place, Aiden's size.
+  const both = await call("canvas_update_frame", { id: c.frame.id, x: 0, y: 0, w: 640, h: 480 });
+  assert.deepEqual(await box(c.frame.id), { x: 1200, y: 900, w: 640, h: 480 });
+  assert.deepEqual(both.keptPersonsBox, [c.frame.id]);
+  assert.deepEqual(both.frame.box, { x: 1200, y: 900, w: 640, h: 480 });
 });
 
 test("canvas_arrange with no frame list keeps the order frames read in on the canvas, not the order they were added", async (t) => {
