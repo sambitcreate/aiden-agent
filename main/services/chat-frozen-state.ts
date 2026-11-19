@@ -176,16 +176,22 @@ function comparable(text: string): string {
   return unescapedXml(unescapedXml(text)).normalize("NFKC").toLowerCase().replace(/\s+/gu, " ").trim();
 }
 
-/** A fact's text as a phrase: comparable, without trailing punctuation. */
+/**
+ * A fact's text as a phrase: comparable, without the punctuation that ends a
+ * sentence. Symbols stay, so "Uses C#." is "uses c#" and never "uses c".
+ */
 function factPhrase(line: string): string {
-  return comparable(line.replace(MEMORY_LINE, "")).replace(/[\p{P}\s]+$/u, "").trim();
+  return comparable(line.replace(MEMORY_LINE, "")).replace(/[.!?,;:\u3002\s]+$/u, "").trim();
 }
 
 function escapedPattern(text: string): string {
   return text.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
 }
 
-/** Matches `phrase` as a whole: not inside a longer word on either side. */
+/**
+ * Matches `phrase` as a whole: not inside a longer word on either side, also
+ * when it ends in a symbol, so "plays in f#" does not match "plays in f#m".
+ */
 function phrasePattern(phrase: string): RegExp {
   return new RegExp(`(?<![\\p{L}\\p{N}])${escapedPattern(phrase)}(?![\\p{L}\\p{N}])`, "u");
 }
@@ -194,8 +200,9 @@ function phrasePattern(phrase: string): RegExp {
  * `text` without a line that could restate a memory fact: every line with a
  * `[memory:` marker, and every line stating one of `facts` (memory fact
  * lines) as a whole phrase. Both sides are compared with XML entities
- * unescaped and without case, spacing or the fact's trailing punctuation, so
- * "Uses Go" drops "- The user uses Go." but keeps "uses gofmt". `restated` is
+ * unescaped and without case, spacing or the fact's sentence-final
+ * punctuation, so "Uses Go" drops "- The user uses Go." but keeps "uses
+ * gofmt", and "Uses C#" keeps "uses C for firmware". `restated` is
  * true when a fact still appears across the kept lines, so a caller can refuse
  * the text altogether.
  */

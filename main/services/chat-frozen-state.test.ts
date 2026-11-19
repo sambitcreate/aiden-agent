@@ -271,11 +271,17 @@ test("a summary keeps lines that only share words with a fact, and loses every s
   const kept = withoutStatedMemoryFacts("## Done\n- Migrated the Go service; uses gofmt\n- Reviewed the gopher logo", [goFact]);
   assert.deepEqual(kept, { text: "## Done\n- Migrated the Go service; uses gofmt\n- Reviewed the gopher logo", restated: false });
 
+  const symbolFacts = ["- [memory:m5] Uses C#.", "- [memory:m6] Plays in F#!"];
+  const symbolKept = "## Done\n- The team uses C for firmware\n- Plays in F#m on the second song";
+  assert.deepEqual(withoutStatedMemoryFacts(symbolKept, symbolFacts), { text: symbolKept, restated: false });
+
   const restatements = [
     ["- [memory:m1] Uses Go", "- The user uses go."],
     ["- [memory:m2] Lives in Paris.", "- The user lives in Paris"],
     ["- [memory:m3] Works at Smith & Sons", "- Works at Smith &amp; Sons as a designer"],
     ["- [memory:m4] Prefers   tabs", "- PREFERS TABS over spaces"],
+    ["- [memory:m5] Uses C#.", "- The team uses C# daily"],
+    ["- [memory:m6] Plays in F#!", "- The band plays in F# tonight"],
   ] as const;
   for (const [fact, line] of restatements) {
     const result = withoutStatedMemoryFacts(`## Goal\n${line}\n- Ship the release`, [fact]);
