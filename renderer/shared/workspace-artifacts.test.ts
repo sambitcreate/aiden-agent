@@ -240,6 +240,14 @@ test("a misplaced placeholder is refused with the fix for where it sits", () => 
   assert.match(refusal("gh {{x}} view 1"), /cannot be the gh command\. Write the command and its verb literally/u);
   assert.match(refusal("gh pr {{x}} 1"), /cannot be the gh pr verb\. Write the verb literally, as in gh pr view \{\{x\}\}/u);
   assert.match(refusal("echo +{{x}}"), /cannot follow \+, which programs read as a command/u);
+  // A count written as -{{n}} needs its option, and tail's +N (from line N) has no checked form.
+  assert.match(refusal("head -{{count}} notes.txt", "count"), /\{\{count\}\} cannot follow a bare -.*The number needs its option as a separate word, for example -n \{\{count\}\}\./u);
+  assert.doesNotMatch(refusal("git log -{{count}}", "count"), /- \{\{count\}\}/u);
+  assert.match(
+    refusal("tail -n +{{count}} notes.txt", "count"),
+    /\{\{count\}\} cannot follow \+ there: use -n \{\{count\}\} \(last N lines\); starting from line N with page data is not supported\./u,
+  );
+  assert.match(refusal("tail --bytes +{{count}} notes.txt", "count"), /use --bytes \{\{count\}\} \(last N bytes\); starting from byte N/u);
   assert.match(refusal("cat a{{x}}'b'"), /cannot be joined to quoted text/u);
   for (const command of ["head -n{{count}} notes.txt", `echo "{{count}}"`, "{{count}} status"]) {
     assert.doesNotMatch(refusal(command, "count"), /own unquoted word/u, command);

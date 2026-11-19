@@ -578,8 +578,12 @@ function placeholderSlot(program: string, args: readonly (string | undefined)[],
   return locateSlot(programSlotSpec(program)!, args, 0, at);
 }
 
-/** Whether a word with a placeholder is one the value may be part of: alone, or joined only to plain text. */
-function joinedProblem(word: TemplateWord): string | undefined {
+/**
+ * Whether a word with a placeholder is one the value may be part of: alone,
+ * or joined only to plain text. `program` and `before` (the word before it,
+ * undefined when it holds a placeholder) only shape the advice.
+ */
+function joinedProblem(word: TemplateWord, program: string, before: string | undefined): string | undefined {
   if (word.parts.length === 1) return undefined;
   const name = placeholderIn(word);
   if (word.quoted) return `${name} cannot be joined to quoted text. Join it only to plain unquoted text, as in git show HEAD:${name}, or make it a word of its own.`;
@@ -587,9 +591,16 @@ function joinedProblem(word: TemplateWord): string | undefined {
     return `${name} cannot be part of a word with characters other than letters, digits and _ . , : @ % + / = ^ ~ -. Join it only to such plain text, as in git show HEAD:${name}.`;
   }
   const head = word.parts[0]!;
+  if ("text" in head && head.text === "-") {
+    return `${name} cannot follow a bare -, where the program would read the value as options. The number needs its option as a separate word, for example -n ${name}.`;
+  }
   if ("text" in head && head.text.startsWith("-")) {
     const option = head.text.split("=")[0]!;
     return `${name} cannot be joined to the option ${option}. Pass it as a separate word: ${option} ${name}.`;
+  }
+  if (program === "tail" && "text" in head && head.text === "+" && before !== undefined && /^(?:-n|--lines|-c|--bytes)$/u.test(before)) {
+    const unit = before === "-n" || before === "--lines" ? "line" : "byte";
+    return `${name} cannot follow + there: use ${before} ${name} (last N ${unit}s); starting from ${unit} N with page data is not supported.`;
   }
   // `+cmd` is a command to some programs, and `@file` a file to read for curl and gh.
   if ("text" in head && /^[+@]/u.test(head.text)) {
@@ -614,7 +625,7 @@ export function checkWorkspaceArtifactTemplate(template: string): { ok: true; st
       for (let at = 0; at < args.length; at += 1) {
         if (args[at] !== undefined) continue;
         const word = command.words[at + 1]!;
-        const joined = joinedProblem(word);
+        const joined = joinedProblem(word, program, at > 0 ? args[at - 1] : undefined);
         if (joined) return { ok: false, problem: { kind: "misplaced", reason: joined } };
         const found = placeholderSlot(program, args, at, word);
         if ("problem" in found) return { ok: false, problem: { kind: "slot", reason: found.problem } };
