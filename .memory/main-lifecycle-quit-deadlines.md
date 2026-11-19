@@ -8,7 +8,7 @@ Branch `claude/audit-fix-main-lifecycle`, from the main-lifecycle audit
   as fulfilled, rejected or timed-out. It does not cancel the work.
 - `shutdownAndQuit` runs every service step through `settleShutdownStep` with
   its budget from `SHUTDOWN_BUDGET_MS` in `main/index.ts`: serial steps first
-  (Gemini Live 3 s, parent generations 8 s, background jobs 6 s, model pace
+  (Gemini Live 3 s, parent generations 7 s, background jobs 6 s, model pace
   1 s, subagents 7 s, spending 1 s, usage data 2 s, soak receipt 5 s, Remote
   5 s), then the
   independent stores in parallel (including the Foundation Models helper stop,
