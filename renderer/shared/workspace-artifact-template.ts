@@ -81,6 +81,19 @@ type Parsed = { ok: true; steps: TemplateStep[] } | { ok: false; problem: Worksp
 
 const syntax = (reason: string): Parsed => ({ ok: false, problem: { kind: "syntax", reason } });
 const misplaced = (reason: string): Parsed => ({ ok: false, problem: { kind: "misplaced", reason } });
+const PLACEHOLDER_NAME = /\{\{\s*([A-Za-z_][A-Za-z0-9_]*)\s*\}\}/u;
+
+/** A placeholder inside quotes: the quotes are not needed, since the value is one argument already. */
+function quotedPlaceholder(text: string, quotes: string): Parsed {
+  const name = PLACEHOLDER_NAME.exec(text)![1]!;
+  return misplaced(`{{${name}}} cannot sit inside ${quotes} quotes. Leave the quotes off: each value is passed as exactly one argument, spaces and all (echo {{${name}}}).`);
+}
+
+/** The first placeholder a word holds, written back as `{{name}}` for messages. */
+function placeholderIn(word: TemplateWord): string {
+  const part = word.parts.find((entry) => "param" in entry);
+  return part && "param" in part ? `{{${part.param}}}` : "{{param}}";
+}
 
 /** Unquoted characters a word may hold; `~` only inside a word (`HEAD~1`). */
 const PLAIN_CHAR = /^[\p{L}\p{N}\p{M}_.,:@%+/=^~-]$/u;
@@ -172,7 +185,7 @@ function parseTemplate(template: string): Parsed {
       const close = template.indexOf("'", index + 1);
       if (close < 0) return syntax("an unclosed ' quote");
       const text = template.slice(index + 1, close);
-      if (PLACEHOLDER_TEST.test(text)) return misplaced("inside single quotes");
+      if (PLACEHOLDER_TEST.test(text)) return quotedPlaceholder(text, "single");
       pushText(text);
       word!.quoted = true;
       index = close;
@@ -193,7 +206,7 @@ function parseTemplate(template: string): Parsed {
         } else text += inner;
       }
       if (at >= template.length) return syntax('an unclosed " quote');
-      if (PLACEHOLDER_TEST.test(text)) return misplaced("inside double quotes");
+      if (PLACEHOLDER_TEST.test(text)) return quotedPlaceholder(text, "double");
       pushText(text);
       word!.quoted = true;
       index = at;
@@ -447,7 +460,11 @@ function gitSubcommand(args: readonly (string | undefined)[]): { name: string | 
 function commandProblem(command: TemplateCommand): WorkspaceArtifactTemplateProblem | undefined {
   const [first, ...rest] = command.words;
   const program = literal(first!);
-  if (program === undefined) return { kind: "misplaced", reason: "the command itself" };
+  const misplacedAs = (word: TemplateWord, what: string, fix: string): WorkspaceArtifactTemplateProblem => {
+    const name = placeholderIn(word);
+    return { kind: "misplaced", reason: `${name} cannot be ${what}. ${fix.replace(/\{\{x\}\}/gu, name)}` };
+  };
+  if (program === undefined) return misplacedAs(first!, "the command itself", "Write the program literally; page data may only be its arguments, as in gh pr view {{x}}.");
   if (first!.quoted || !PLAIN_PROGRAM.test(program)) {
     if (!first!.quoted && ASSIGNMENT_WORD.test(program)) {
       return { kind: "syntax", reason: "a NAME=value prefix, which a shell reads as a variable for the command (this runner has no shell)" };
@@ -461,14 +478,16 @@ function commandProblem(command: TemplateCommand): WorkspaceArtifactTemplateProb
   if (program === "git") {
     const { name: sub, index } = gitSubcommand(args);
     if (index >= args.length) return program_("git without a subcommand");
-    if (sub === undefined) return { kind: "misplaced", reason: "the git subcommand" };
+    if (sub === undefined) return misplacedAs(rest[index]!, "the git subcommand", "Write the subcommand literally, as in git show {{x}}.");
     if (sub.startsWith("-")) return program_(`git ${sub} before the subcommand`);
     if (!ARGUMENT_GIT_SUBCOMMANDS.includes(sub)) return program_(`git ${sub}`);
     const after = args.slice(index + 1);
     const verbs = GIT_SUBCOMMAND_VERBS[sub];
     if (sub === "remote" && !after.every((arg) => arg !== undefined && verbs!.includes(arg))) return program_("git remote other than git remote -v");
     if (sub === "worktree" && !(after[0] !== undefined && verbs!.includes(after[0]))) {
-      return after[0] === undefined && after.length ? { kind: "misplaced", reason: "the git worktree verb" } : program_(`git worktree ${after[0] ?? ""}`.trim());
+      return after[0] === undefined && after.length
+        ? misplacedAs(rest[index + 1]!, "the git worktree verb", "Write list, add or remove literally, as in git worktree add -b {{x}} ../review.")
+        : program_(`git worktree ${after[0] ?? ""}`.trim());
     }
     if (after.some((arg) => writesOption(arg, "", { long: ["no-index"] }))) return program_(`git ${sub} --no-index, which reads files outside the repository`);
     if (sub === "config") {
@@ -482,11 +501,11 @@ function commandProblem(command: TemplateCommand): WorkspaceArtifactTemplateProb
   }
   if (program === "gh") {
     const [group, verb] = args;
-    if (group === undefined && rest.length) return { kind: "misplaced", reason: "the gh command" };
+    if (group === undefined && rest.length) return misplacedAs(rest[0]!, "the gh command", "Write the command and its verb literally, as in gh pr view {{x}}.");
     if (group !== undefined && ARGUMENT_GH_COMMANDS.includes(group)) return undefined;
     const verbs = group !== undefined && Object.prototype.hasOwnProperty.call(ARGUMENT_GH_VERBS, group) ? ARGUMENT_GH_VERBS[group] : undefined;
     if (group === undefined || verbs === undefined) return program_(group === "api" ? "gh api, which can send any request" : `gh ${group ?? ""}`.trim());
-    if (verb === undefined && rest.length > 1) return { kind: "misplaced", reason: `the gh ${group} verb` };
+    if (verb === undefined && rest.length > 1) return misplacedAs(rest[1]!, `the gh ${group} verb`, `Write the verb literally, as in gh ${group} ${verbs[0]} {{x}}.`);
     if (verb === undefined || !verbs.includes(verb)) return program_(`gh ${group} ${verb ?? ""}`.trim());
     return undefined;
   }
@@ -533,12 +552,20 @@ function placeholderSlot(program: string, args: readonly (string | undefined)[],
 /** Whether a word with a placeholder is one the value may be part of: alone, or joined only to plain text. */
 function joinedProblem(word: TemplateWord): string | undefined {
   if (word.parts.length === 1) return undefined;
-  if (word.quoted) return "joined to quoted text";
-  if (!word.parts.every((part) => !("text" in part) || JOINED_TEXT.test(part.text))) return "part of a longer word with other characters";
+  const name = placeholderIn(word);
+  if (word.quoted) return `${name} cannot be joined to quoted text. Join it only to plain unquoted text, as in git show HEAD:${name}, or make it a word of its own.`;
+  if (!word.parts.every((part) => !("text" in part) || JOINED_TEXT.test(part.text))) {
+    return `${name} cannot be part of a word with characters other than letters, digits and _ . , : @ % + / = ^ ~ -. Join it only to such plain text, as in git show HEAD:${name}.`;
+  }
   const head = word.parts[0]!;
-  if ("text" in head && head.text.startsWith("-")) return "joined to an option (write --body {{body}}, not --body={{body}})";
+  if ("text" in head && head.text.startsWith("-")) {
+    const option = head.text.split("=")[0]!;
+    return `${name} cannot be joined to the option ${option}. Pass it as a separate word: ${option} ${name}.`;
+  }
   // `+cmd` is a command to some programs, and `@file` a file to read for curl and gh.
-  if ("text" in head && /^[+@]/u.test(head.text)) return "joined after + or @, which programs read as a command or a file to load";
+  if ("text" in head && /^[+@]/u.test(head.text)) {
+    return `${name} cannot follow ${head.text[0]}, which programs read as a command or a file to load. Make it a word of its own.`;
+  }
   return undefined;
 }
 

@@ -20,7 +20,7 @@ import {
 } from "./workspace-artifacts.js";
 
 // How the parser refuses a template that puts page data where it could do more than be one argument.
-const PLACEMENT_REFUSED = /own unquoted word|runs without a shell, so it may not use|may not be passed/u;
+const PLACEMENT_REFUSED = /\{\{\w+\}\} cannot (?:sit|be|follow)|runs without a shell, so it may not use|may not be passed/u;
 
 /** The argument lists an action with page data runs, one per command; it never goes through a shell. */
 function argvOf(resolved: ResolvedWorkspaceArtifactCommand): string[][] {
@@ -215,6 +215,34 @@ test("a placeholder must be its own unquoted word, or joined only to plain text"
     "uniq -f 1 {{x}}",
   ]) {
     assert.equal(parseWorkspaceArtifactActions(action(command)).length, 1, command);
+  }
+});
+
+test("a misplaced placeholder is refused with the fix for where it sits", () => {
+  const refusal = (command: string, param = "x") => {
+    try {
+      parseWorkspaceArtifactActions([{ name: "a", label: "A", command, params: [{ name: param }] }]);
+    } catch (error) {
+      return (error as Error).message;
+    }
+    return assert.fail(`${command} was accepted`);
+  };
+  // A joined option is answered with that same option as a separate word.
+  assert.match(refusal("head -n{{count}} notes.txt", "count"), /\{\{count\}\} cannot be joined to the option -n\. Pass it as a separate word: -n \{\{count\}\}\./u);
+  assert.match(refusal("cut -f{{col}} notes.txt", "col"), /joined to the option -f\. Pass it as a separate word: -f \{\{col\}\}\./u);
+  assert.match(refusal("gh pr comment 1 --body={{body}}", "body"), /joined to the option --body\. Pass it as a separate word: --body \{\{body\}\}\./u);
+  // Each other kind names its own position and fix, not a generic "own unquoted word" line.
+  assert.match(refusal(`echo "{{x}}"`), /^actions\[0\]: \{\{x\}\} cannot sit inside double quotes\. Leave the quotes off/u);
+  assert.match(refusal(`echo '{{x}}'`), /cannot sit inside single quotes/u);
+  assert.match(refusal("{{x}} status"), /\{\{x\}\} cannot be the command itself\. Write the program literally/u);
+  assert.match(refusal("git {{x}}"), /cannot be the git subcommand\. Write the subcommand literally/u);
+  assert.match(refusal("git worktree {{x}}"), /cannot be the git worktree verb\. Write list, add or remove literally/u);
+  assert.match(refusal("gh {{x}} view 1"), /cannot be the gh command\. Write the command and its verb literally/u);
+  assert.match(refusal("gh pr {{x}} 1"), /cannot be the gh pr verb\. Write the verb literally, as in gh pr view \{\{x\}\}/u);
+  assert.match(refusal("echo +{{x}}"), /cannot follow \+, which programs read as a command/u);
+  assert.match(refusal("cat a{{x}}'b'"), /cannot be joined to quoted text/u);
+  for (const command of ["head -n{{count}} notes.txt", `echo "{{count}}"`, "{{count}} status"]) {
+    assert.doesNotMatch(refusal(command, "count"), /own unquoted word/u, command);
   }
 });
 
