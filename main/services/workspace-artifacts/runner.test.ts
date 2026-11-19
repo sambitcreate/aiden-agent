@@ -13,7 +13,7 @@ import type {
 } from "../../../renderer/shared/workspace-artifacts.js";
 import { runBoundedShellCommand, type BoundedShellCommandOptions } from "../bounded-shell-command.js";
 import { runArgvPlan, type ArgvPlanOptions } from "./argv-runner.js";
-import { readWorkspaceArtifactFile, artifactFileAllowed, WorkspaceArtifactFileUnsafeError } from "./file-policy.js";
+import { readWorkspaceArtifactFile, artifactFileAllowed, WorkspaceArtifactFileChangedError, WorkspaceArtifactFileUnsafeError } from "./file-policy.js";
 import { createWorkspaceArtifactRunner, workspaceArtifactFolderKey } from "./runner.js";
 import { WorkspaceArtifactStore, workspaceArtifactDigest } from "./store.js";
 
@@ -561,12 +561,31 @@ test("a file Aiden may not read says it cannot be read, not that it changed whil
   assert.equal(results.todo!.error, "TODO.md cannot be read.");
 });
 
-test("a file check or read in a workspace folder that is gone never repeats the system's message, which names its full path", async (t) => {
+test("a file replaced mid-read by a link to a file Aiden may not read counts as a change, and never says whether the link's target can be read", { skip: process.platform === "win32" || process.getuid?.() === 0 }, async (t) => {
+  const { folder } = await setup(t, { sources: [FILE] });
+  const outside = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-artifact-outside-"));
+  t.after(() => fs.rm(outside, { recursive: true, force: true }));
+  const locked = path.join(outside, "locked.txt");
+  await fs.writeFile(locked, "PRIVATE_FIXTURE_VALUE");
+  await fs.chmod(locked, 0o000);
+  t.after(() => fs.chmod(locked, 0o644).catch(() => undefined));
+  await assert.rejects(readWorkspaceArtifactFile(folder, "TODO.md", undefined, {
+    beforeRead: async () => {
+      await fs.rm(path.join(folder, "TODO.md"));
+      await fs.symlink(locked, path.join(folder, "TODO.md"));
+    },
+  }), (error: Error) => {
+    assert.ok(error instanceof WorkspaceArtifactFileChangedError, `${error.constructor.name}: ${error.message}`);
+    return true;
+  });
+});
+
+test("a file check or read in a workspace folder that is gone says the folder is gone, never the system's message, which names its full path", async (t) => {
   const { folder } = await setup(t, { sources: [FILE] });
   const gone = path.join(folder, "removed");
   for (const attempt of [() => artifactFileAllowed(gone, "TODO.md"), () => readWorkspaceArtifactFile(gone, "TODO.md")]) {
     await assert.rejects(attempt, (error: Error) => {
-      assert.equal(error.message, "There is no file at TODO.md.");
+      assert.equal(error.message, "The workspace folder is gone, so Aiden could not read TODO.md.");
       assert.ok(!error.message.includes(folder));
       return true;
     });

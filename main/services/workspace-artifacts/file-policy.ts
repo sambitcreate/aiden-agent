@@ -30,6 +30,13 @@ export class WorkspaceArtifactFileUnsafeError extends Error {
     super(`Aiden could not safely read ${file}: the workspace folder, or a folder on the way to the file, is a link or not a folder, or Aiden may not open it. Nothing was read.`);
   }
 }
+/**
+ * The workspace folder itself is gone. Said apart from a missing file, since
+ * the file's name alone would send the page looking for the wrong thing.
+ */
+export class WorkspaceArtifactFolderGoneError extends Error {
+  constructor(file: string) { super(`The workspace folder is gone, so Aiden could not read ${file}.`); }
+}
 const isUnsafeSource = (error: unknown) => error instanceof ManagedWorktreeFileIoError && error.code === "unsafe_source";
 
 export function assertArtifactFilePath(file: string): void {
@@ -64,10 +71,18 @@ function withoutSystemText(file: string, error: unknown): unknown {
   return new WorkspaceArtifactFileUnreadableError(file);
 }
 
-/** Whether the system refuses to let Aiden read `at` itself (its permissions), as opposed to it having changed. */
+/**
+ * Whether the system refuses to let Aiden read `at` itself (its permissions),
+ * as opposed to it having changed. A link or other non-file put there since
+ * the check counts as a change: Aiden never follows it, so whether its target
+ * could be read is not the page's to learn.
+ */
 async function readRefused(at: string): Promise<boolean> {
   try {
-    await fs.access(at, fs.constants.R_OK);
+    if (!(await fs.lstat(at)).isFile()) return false;
+    const { O_RDONLY, O_NOFOLLOW, O_NONBLOCK } = fs.constants;
+    const handle = await fs.open(at, O_RDONLY | (O_NOFOLLOW ?? 0) | (O_NONBLOCK ?? 0));
+    await handle.close();
     return false;
   } catch (error) {
     const code = (error as NodeJS.ErrnoException | undefined)?.code;
@@ -93,6 +108,7 @@ async function admittedFile(root: string, file: string) {
   assertArtifactFilePath(file);
   if (!file || path.isAbsolute(file) || file.split(/[\\/]/u).includes("..")) throw new WorkspaceArtifactFileDeniedError(`${file || "The file"} is not a path inside the workspace folder.`);
   const identity = await captureManagedWorktreeRootIdentity(root).catch((error: unknown) => {
+    if ((error as NodeJS.ErrnoException | undefined)?.code === "ENOENT") throw new WorkspaceArtifactFolderGoneError(file);
     throw isUnsafeSource(error) ? new WorkspaceArtifactFileUnsafeError(file) : error;
   });
   let canonical: string;
