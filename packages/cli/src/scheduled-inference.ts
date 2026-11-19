@@ -92,7 +92,7 @@ export async function runScheduledInference(agentDir: string, cwd: string, task:
       } }],
     });
     await loader.reload();
-    const created = await createAgentSession({ cwd, agentDir, settingsManager: daemonSettingsManager(cwd, agentDir), modelRuntime: runtime, model, sessionManager: SessionManager.inMemory(cwd), resourceLoader: loader,
+    const created = await createAgentSession({ cwd, agentDir, settingsManager: daemonSettingsManager(cwd, agentDir, { attended: false }), modelRuntime: runtime, model, sessionManager: SessionManager.inMemory(cwd), resourceLoader: loader,
       tools: tools.map(({ name }) => name),
     });
     session = created.session;

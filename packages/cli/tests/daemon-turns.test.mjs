@@ -60,7 +60,7 @@ async function startHooks(dir, hooks) {
   return api.startCliHooks(dir);
 }
 
-async function fixture(t, { access = "full", hooks, anthropic = false } = {}) {
+async function fixture(t, { access = "full", hooks, anthropic = false, model = {} } = {}) {
   const dir = mkdtempSync(join(tmpdir(), "aiden-daemon-turns-"));
   const steps = [], requests = [], headers = [];
   const server = createServer(async (request, response) => {
@@ -72,7 +72,7 @@ async function fixture(t, { access = "full", hooks, anthropic = false } = {}) {
   });
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
   const base = `http://127.0.0.1:${server.address().port}`;
-  const testModel = { id: "test", name: "Test", reasoning: false, input: ["text"], contextWindow: 32000, maxTokens: 4096, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } };
+  const testModel = { id: "test", name: "Test", reasoning: false, input: ["text"], contextWindow: 32000, maxTokens: 4096, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, ...model };
   // The `anthropic` provider at a path naming api.anthropic.com gets every
   // default Pi gives Anthropic's own endpoint, message threads included.
   const providerId = anthropic ? "anthropic" : "cli-test";
@@ -870,17 +870,72 @@ test("an Anthropic chat sends its whole conversation on every turn, never a mess
   assert.deepEqual(f.requests[1].messages.map((message) => message.role), ["user", "assistant", "user"]);
 });
 
-test("a server session keeps 1.4.0's cache warming unless the profile chooses a mode", () => {
+/** A finished reply whose prompt was large enough that keeping its cache warm pays. */
+const largePromptReply = (text) => (response) => {
+  response.write(chunk({ role: "assistant", content: text }));
+  response.write(chunk({}, "stop"));
+  response.write(`data: ${JSON.stringify({ id: "test", object: "chat.completion.chunk", choices: [], usage: { prompt_tokens: 200_000, completion_tokens: 4, total_tokens: 200_004 } })}\n\n`);
+  response.end("data: [DONE]\n\n");
+};
+
+/** Polls without timers, so it still runs while setTimeout is mocked. */
+async function settle(condition, label) {
+  for (let turn = 0; turn < 2_000 && !condition(); turn++) await new Promise((resolve) => setImmediate(resolve));
+  assert.ok(condition(), label);
+}
+
+/**
+ * Runs a second turn that streams for longer than the 5-minute cache would
+ * last, on a model whose cache Pi keeps warm, and reports how many requests
+ * the provider saw: two turns, plus one when Pi refreshed the cache mid-reply.
+ */
+async function requestsAcrossLongReply(t, { profile, usageSource = "chat" }) {
+  const f = await fixture(t, { model: { promptCache: { short: 300 }, cost: { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 } } });
+  if (profile !== undefined) api.atomicJson(join(f.dir, "aiden.json"), profile);
+  f.steps.push(largePromptReply("First"));
+  await beginTurn(f, "warming", { usageSource });
+  await f.daemon.llmClient.waitForChatIdle("warming");
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  f.steps.push(hangAfter("Still"));
+  const { owner } = await beginTurn(f, "warming", { streamId: "warming-2", create: false, usageSource });
+  await settle(() => owner.of("chat:delta").length > 0, "the second reply is streaming");
+  // Pi refreshes a 5-minute cache after 4.5 minutes.
+  t.mock.timers.tick(270_000);
+  for (let turn = 0; turn < 200; turn++) await new Promise((resolve) => setImmediate(resolve));
+  const seen = f.requests.length;
+  t.mock.timers.reset();
+  await f.daemon.llmClient.cancelChat("warming", "user_stop");
+  await f.daemon.llmClient.waitForChatIdle("warming");
+  return { seen, refresh: f.requests[2] };
+}
+
+test("aiden serve keeps a chat's cache warm mid-reply only when the profile turns warming on", async (t) => {
+  await t.test("on", async (t) => {
+    const { seen, refresh } = await requestsAcrossLongReply(t, { profile: { cacheWarmingEnabled: true } });
+    assert.equal(seen, 3, "one refresh request");
+    assert.equal(refresh.max_completion_tokens ?? refresh.max_tokens, 1, "the refresh asks for a single token");
+  });
+  // Pi's own default warms after every turn; the server sends nothing extra unless asked.
+  for (const [name, profile] of [["no setting", undefined], ["off", { cacheWarmingEnabled: false }], ["not a boolean", { cacheWarmingEnabled: "true" }]]) {
+    await t.test(name, async (t) => assert.equal((await requestsAcrossLongReply(t, { profile })).seen, 2));
+  }
+  await t.test("a scheduled run, with warming on", async (t) => {
+    assert.equal((await requestsAcrossLongReply(t, { profile: { cacheWarmingEnabled: true }, usageSource: "scheduled" })).seen, 2);
+  });
+});
+
+test("a server session warms only for an attended turn on a profile that opts in", () => {
   const dir = mkdtempSync(join(tmpdir(), "aiden-daemon-warming-"));
   try {
-    // Pi 1.5's own default would keep warming between turns.
-    assert.equal(api.SettingsManager.create(dir, dir).getCacheWarmingMode(), "idle");
-    assert.equal(api.daemonSettingsManager(dir, dir).getCacheWarmingMode(), "streaming");
-    for (const mode of ["off", "streaming", "idle"]) {
-      api.atomicJson(join(dir, "settings.json"), { cacheWarming: mode });
-      assert.equal(api.daemonSettingsManager(dir, dir).getCacheWarmingMode(), mode);
-    }
-    api.atomicJson(join(dir, "settings.json"), { cacheWarming: "always" });
-    assert.equal(api.daemonSettingsManager(dir, dir).getCacheWarmingMode(), "streaming");
+    assert.equal(api.SettingsManager.create(dir, dir).getCacheWarmingMode(), "idle", "Pi's own default keeps warming between turns");
+    assert.equal(api.daemonSettingsManager(dir, dir, { attended: true }).getCacheWarmingMode(), "off");
+    // Pi's own warming setting does not override the profile's switch.
+    api.atomicJson(join(dir, "settings.json"), { cacheWarming: "idle" });
+    assert.equal(api.daemonSettingsManager(dir, dir, { attended: true }).getCacheWarmingMode(), "off");
+    api.atomicJson(join(dir, "aiden.json"), { cacheWarmingEnabled: true });
+    assert.equal(api.daemonSettingsManager(dir, dir, { attended: true }).getCacheWarmingMode(), "streaming");
+    assert.equal(api.daemonSettingsManager(dir, dir, { attended: false }).getCacheWarmingMode(), "off");
+    writeFileSync(join(dir, "aiden.json"), "{ not json");
+    assert.equal(api.daemonSettingsManager(dir, dir, { attended: true }).getCacheWarmingMode(), "off");
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });

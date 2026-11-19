@@ -383,7 +383,7 @@ export function createDaemonChats(agentDir: string) {
         });
         await loader.reload(); await assertAuthority();
         const manager = SessionManager.open(sessionPath(params.chatId), join(root, "journals"), cwd);
-        const { session } = await createAgentSession({ cwd, agentDir, settingsManager: daemonSettingsManager(cwd, agentDir), modelRuntime: runtime, model,
+        const { session } = await createAgentSession({ cwd, agentDir, settingsManager: daemonSettingsManager(cwd, agentDir, { attended: !botAdmission && !unattended }), modelRuntime: runtime, model,
           thinkingLevel: params.thinkingLevel, resourceLoader: loader, sessionManager: manager,
           tools: botAdmission ? botTools.map((tool) => tool.name) : workspace.folderPath ? [...codingTools.map((tool) => tool.name), ...additionalNames] : [],
         });
