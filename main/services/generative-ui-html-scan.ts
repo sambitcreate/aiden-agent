@@ -1199,10 +1199,15 @@ function scanJsTokens(
   done: () => boolean,
   visit?: (index: number) => void,
 ): void {
+  // Where the three checks below report: `note`, or while markup joined
+  // from more than one literal is checked, `noteJoined`, which marks each
+  // excerpt as joined from strings, since the source never spells it whole.
+  const noteJoined = (findings: HtmlFindings) => note({ limit: findings.limit, embed: joinedExcerpt(findings.embed), url: joinedExcerpt(findings.url) });
+  let report = note;
   const checkMarkup = (markup: string) => {
     if (!markup.includes("<")) return;
-    if (depth >= MAX_NESTED_HTML_DEPTH) note({ limit: NESTED_HTML_LIMIT });
-    else note(scanHtmlString(markup, depth + 1));
+    if (depth >= MAX_NESTED_HTML_DEPTH) report({ limit: NESTED_HTML_LIMIT });
+    else report(scanHtmlString(markup, depth + 1));
   };
   // An on* attribute's value is a handler's body, checked as one. Past the
   // depth cap a handler that holds a string could write anything, so it is
@@ -1210,13 +1215,13 @@ function scanJsTokens(
   // a sink.
   const checkHandler = (body: string, excerpt: string) => {
     if (depth >= MAX_NESTED_HTML_DEPTH) {
-      if (/["'`]/u.test(body)) note({ limit: NESTED_HTML_LIMIT });
+      if (/["'`]/u.test(body)) report({ limit: NESTED_HTML_LIMIT });
       return;
     }
     const handler = findJsSink(body, depth + 1);
     // A handler too complex to read is refused as that, not as a URL it may not send.
-    if (handler.limit !== undefined) note({ limit: handler.limit });
-    else if (handler.url !== undefined || handler.embed !== undefined) note({ url: excerpt });
+    if (handler.limit !== undefined) report({ limit: handler.limit });
+    else if (handler.url !== undefined || handler.embed !== undefined) report({ url: excerpt });
   };
 
   // XML a page takes nodes from (DOMParser's XML, XHTML and SVG types):
@@ -1230,13 +1235,13 @@ function scanJsTokens(
   // (`xmlAsHtml`).
   const checkXml = (markup: string) => {
     if (XML_DECLARATIONS.test(markup)) {
-      note({ limit: XML_DECLARATIONS_LIMIT });
+      report({ limit: XML_DECLARATIONS_LIMIT });
       return;
     }
     if (!XML_MARKUP_NAMESPACE.test(markup)) return;
     const html = xmlAsHtml(markup);
     if (html === undefined) {
-      note({ limit: XML_HTML_TEXT_LIMIT });
+      report({ limit: XML_HTML_TEXT_LIMIT });
       return;
     }
     checkMarkup(html.replace(XML_ELEMENT_PREFIX, "<$1"));
@@ -1421,6 +1426,7 @@ function scanJsTokens(
     if (sinks.url !== undefined) {
       if (isUnsafeUrl(url) || (raw !== undefined && isUnsafeUrl(raw))) note({ url: code.slice(sinks.url, end) });
     }
+    report = chainEnd > index ? noteJoined : note;
     if (sinks.html !== undefined) {
       checkMarkup(markup);
       if (raw !== undefined && raw !== markup) checkMarkup(raw);
@@ -1436,12 +1442,16 @@ function scanJsTokens(
       if (raw !== undefined && raw !== markup) checkXml(raw);
       collect("xml", sinks.xml, markup, end);
     }
+    report = note;
     index = chainEnd;
   }
 
   // The literals one markup or handler sink is given, joined, as a value
   // that puts them together spells (`'<ifr' + ('ame …')`, `'<p>' + name +
   // '</p><iframe …>'`); what lies between them is not known.
+  // The excerpt a refusal quotes is then not in the source as written, so it
+  // is marked as joined.
+  report = noteJoined;
   for (const value of values.values()) {
     if (value.parts.length < 2) continue;
     const joined = value.parts.join("");
@@ -1449,6 +1459,22 @@ function scanJsTokens(
     else if (value.kind === "handler") checkHandler(joined, code.slice(value.start, value.end));
     else checkXml(joined);
   }
+}
+
+/**
+ * Starts the excerpt of markup a script joins from strings. The HTML a visual
+ * is checked in never holds a NUL (admission refuses one), so no excerpt
+ * read from it starts with one.
+ */
+const JOINED_EXCERPT_MARK = "\0";
+
+function joinedExcerpt(excerpt: string | undefined): string | undefined {
+  return excerpt === undefined || excerpt.startsWith(JOINED_EXCERPT_MARK) ? excerpt : JOINED_EXCERPT_MARK + excerpt;
+}
+
+/** A finding's excerpt as written, and whether a script joined it from strings. */
+export function readExcerpt(excerpt: string): { text: string; joined: boolean } {
+  return excerpt.startsWith(JOINED_EXCERPT_MARK) ? { text: excerpt.slice(JOINED_EXCERPT_MARK.length), joined: true } : { text: excerpt, joined: false };
 }
 
 /** How much of a URL is read to tell whether it is unsafe. */

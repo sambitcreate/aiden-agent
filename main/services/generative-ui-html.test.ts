@@ -914,6 +914,18 @@ test("a refused visual's error quotes the markup that was refused", () => {
     () => validateGenerativeUiHtml('<p>JavaScript: 41%</p><a href="javascript:alert(1)">x</a>'),
     (error: Error) => error.message.includes('found "href=\\"javascript:alert(1)\\""') && !/remote URLs/u.test(error.message),
   );
+  // Markup a script joins from strings is quoted as joined, since the
+  // source never spells it in one piece; one written whole is not.
+  for (const joined of [`'<ifr' + 'ame src="https://evil.test/">'`, `'<ifr' + ('ame src="https://evil.test/">')`]) {
+    assert.throws(
+      () => validateGenerativeUiHtml(`<div id="d"></div><script>d.innerHTML = ${joined};</script>`),
+      (error: Error) => error.message.includes('found "<iframe src=\\"https://evil.test/\\">", which a script joins from strings)'),
+    );
+  }
+  assert.throws(
+    () => validateGenerativeUiHtml(`<div id="d"></div><script>d.innerHTML = '<iframe src="https://evil.test/">';</script>`),
+    (error: Error) => error.message.includes('found "<iframe src=\\"https://evil.test/\\">")'),
+  );
 });
 
 test("parent CSP lists only self frames so arbitrary https frames stay denied", async () => {

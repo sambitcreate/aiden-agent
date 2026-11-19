@@ -25,16 +25,18 @@ import {
   MAX_GUEST_PROMPT_CHARS,
 } from "../../renderer/shared/generative-ui-bridge.js";
 import { generativeUiKitCss } from "./generative-ui-kit.js";
-import { HtmlScanner, SELECT_CONTENT_LIMIT, XML_DECLARATIONS_LIMIT, XML_HTML_TEXT_LIMIT, type HtmlFindings } from "./generative-ui-html-scan.js";
+import { HtmlScanner, SELECT_CONTENT_LIMIT, readExcerpt, XML_DECLARATIONS_LIMIT, XML_HTML_TEXT_LIMIT, type HtmlFindings } from "./generative-ui-html-scan.js";
 
 // The admission check (generative-ui-html-scan.ts) reads the HTML the way a
 // browser does and refuses only what would load or run something; the
 // sandbox's CSP is what actually blocks loads.
 const MAX_QUOTED_MATCH_CHARS = 60;
 
-function quoteMatch(text: string): string {
+function quoteMatch(excerpt: string): string {
+  const { text, joined } = readExcerpt(excerpt);
   const flat = text.replace(/\s+/gu, " ").trim();
-  return JSON.stringify(flat.length > MAX_QUOTED_MATCH_CHARS ? `${flat.slice(0, MAX_QUOTED_MATCH_CHARS - 1)}…` : flat);
+  const quoted = JSON.stringify(flat.length > MAX_QUOTED_MATCH_CHARS ? `${flat.slice(0, MAX_QUOTED_MATCH_CHARS - 1)}…` : flat);
+  return joined ? `${quoted}, which a script joins from strings` : quoted;
 }
 
 /** What to change for a visual refused as too complex to check. */
