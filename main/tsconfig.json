@@ -1,4 +1,4 @@
-// esbuild and tsx read the nearest tsconfig. This one keeps the root `paths`
+// esbuild reads the nearest tsconfig for each file. This one keeps the root `paths`
 // entry ("*" -> node_modules) from turning main's bare imports into bundled
 // path imports; scripts/main-runtime-dependencies.test.mjs fails without it.
 {
