@@ -89,8 +89,6 @@ export interface ContextBreakdownV1 {
   deferred: DeferredContextCategory[];
 }
 
-export type ChatContextPressureSource = ChatContextPressureV1["source"];
-
 function safeNonNegative(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value) && value >= 0;
 }

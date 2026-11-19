@@ -56,5 +56,3 @@ export function useGallery(workflowId?: string) {
   const refresh = React.useCallback(() => void load(), [load]);
   return { ...state, refresh };
 }
-
-export type GalleryController = ReturnType<typeof useGallery>;

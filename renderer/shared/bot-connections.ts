@@ -1,6 +1,6 @@
 // Connection suggestions for Bots: which connector to offer, how to name it,
-// and where its setup starts. Shared by the create-flow chips, transcript connect
-// cards, the Bot-only `suggest_connection` tool, and Remote clients.
+// and where its setup starts. Shared by transcript connect cards, the Bot-only
+// `suggest_connection` tool, and Remote clients.
 
 import { COMPOSIO_APPS, CONNECTOR_CATALOG, isConnectorAvailable } from "./connector-catalog.js";
 
