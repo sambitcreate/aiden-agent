@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   CANVAS_STATUS_SECTION,
   canvasPromptLine,
+  canvasReadPageKey,
   canvasView,
   CANVAS_READ_FRAME_LIMIT,
   describeCanvas,
@@ -45,7 +46,11 @@ test("a crowded view lists the first frames and says how many it left out", () =
   assert.equal(answer.inView.length, CANVAS_READ_FRAME_LIMIT);
   assert.equal(answer.omitted, 5);
   assert.equal(answer.frameCount, CANVAS_READ_FRAME_LIMIT + 5);
-  assert.equal(parseCanvasReadCursor(answer.nextCursor!)?.offset, CANVAS_READ_FRAME_LIMIT);
+  assert.deepEqual(
+    parseCanvasReadCursor(answer.nextCursor!),
+    { page: canvasReadPageKey("page-1"), offset: CANVAS_READ_FRAME_LIMIT, view: { x: 0, y: 0, w: 2000, h: 2000 } },
+    "the cursor names the page, where the next answer starts, and the view",
+  );
   assert.match(answer.more!, new RegExp(`frames 1–${CANVAS_READ_FRAME_LIMIT} of ${CANVAS_READ_FRAME_LIMIT + 5}.*Pass nextCursor as cursor`, "u"));
 });
 
@@ -68,7 +73,7 @@ function listed(answers: CanvasReadAnswer[]): string[] {
   return answers.flatMap((answer) => [...answer.inView, ...answer.outsideFrames].map((frame) => frame.id));
 }
 
-test("offset reads the frames after an earlier answer's, those in view first, until every frame was listed once", () => {
+test("a cursor reads the frames after an earlier answer's, those in view first, until every frame was listed once", () => {
   const view = { x: 0, y: 0, w: 2000, h: 2000 };
   const inView = Array.from({ length: CANVAS_READ_FRAME_LIMIT + 10 }, (_, index) => note(`v${index}`, index, index));
   const outside = Array.from({ length: 30 }, (_, index) => note(`o${index}`, 9000 + index * 300, 9000));
@@ -81,13 +86,13 @@ test("offset reads the frames after an earlier answer's, those in view first, un
   assert.deepEqual(answers.map((answer) => answer.comments !== undefined), [true, false], "comments come with the first answer only");
   assert.deepEqual(listed(answers), [...inView, ...outside].map((frame) => frame.id), "each frame once, in view first");
   const last = answers[1]!;
-  assert.equal(last.offset, CANVAS_READ_FRAME_LIMIT);
+  assert.equal("offset" in last, false, "the answer carries no offset; the cursor is the only way on");
   assert.equal(last.nextCursor, undefined);
   assert.equal(last.inView.length, 10, "the frames in view past the first answer");
   assert.equal(last.viewMoved, undefined, "the view did not move");
   assert.match(last.more!, new RegExp(`frames ${CANVAS_READ_FRAME_LIMIT + 1}–${CANVAS_READ_FRAME_LIMIT + 40} of ${CANVAS_READ_FRAME_LIMIT + 40}`, "u"));
   assert.doesNotMatch(last.more!, /Pass nextCursor/u);
-  assert.equal(describeCanvas(doc, { view, cursor: { offset: 9_999, view } }).inView.length, 0, "a cursor past the end lists nothing");
+  assert.equal(describeCanvas(doc, { view, cursor: { page: canvasReadPageKey("page-1"), offset: 9_999, view } }).inView.length, 0, "a cursor past the end lists nothing");
   const small = describeCanvas(canvas([note("a", 0, 0)]), { view });
   assert.equal(small.more, undefined, "a page listed in full says nothing about paging");
   assert.equal(small.nextCursor, undefined);
@@ -107,13 +112,30 @@ test("a person panning between paged reads neither repeats nor drops a frame", (
     assert.equal(new Set(ids).size, doc.frames.length, "each frame exactly once");
     assert.deepEqual(answers[0]!.inView.map((frame) => frame.id), grid(views[0] === left ? "a" : "b", views[0]!.x).map((frame) => frame.id), "the first answer starts with what is in view");
     assert.deepEqual(answers[1]!.view, views[0], "the later answer keeps the first answer's view");
-    assert.match(answers[1]!.viewMoved!, /moved the view.*without a cursor/u);
+    assert.match(answers[1]!.viewMoved!, /view has moved since the earlier answer.*without a cursor/u);
   }
 });
 
 test("a cursor is only what an answer gave", () => {
-  assert.deepEqual(parseCanvasReadCursor("200@-120,40,1200,800"), { offset: 200, view: { x: -120, y: 40, w: 1200, h: 800 } });
-  for (const text of ["200", "", "x@0,0,1,1", "200@0,0,0,800", "-1@0,0,1,1", "200@0,0,1.5,1", "200@0,0,1,1,1"]) {
+  assert.deepEqual(parseCanvasReadCursor("0a1b2c3d:200@-120,40,1200,800"), { page: "0a1b2c3d", offset: 200, view: { x: -120, y: 40, w: 1200, h: 800 } });
+  assert.deepEqual(parseCanvasReadCursor("0a1b2c3d:0@0,0,1,1")?.offset, 0);
+  for (const text of [
+    "200",
+    "",
+    "200@-120,40,1200,800", // the old cursor, without a page
+    "0a1b2c3d:x@0,0,1,1",
+    "0a1b2c3d:200@0,0,0,800",
+    "0a1b2c3d:-1@0,0,1,1",
+    "0a1b2c3d:200@0,0,1.5,1",
+    "0a1b2c3d:200@0,0,1,1,1",
+    "0a1b2c3d:0200@0,0,1,1", // leading zeros
+    "0a1b2c3d:200@01,0,1,1",
+    "0a1b2c3d:200@-0,0,1,1",
+    " 0a1b2c3d:200@0,0,1,1", // surrounding whitespace
+    "0a1b2c3d:200@0,0,1,1\n",
+    "0A1B2C3D:200@0,0,1,1",
+    "a1b2c3d:200@0,0,1,1",
+  ]) {
     assert.equal(parseCanvasReadCursor(text), null, text);
   }
 });

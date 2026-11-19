@@ -8,7 +8,8 @@ import {
   DESIGN_CANVAS_CALLS_PER_TURN,
   designCanvasToolsAllowed,
 } from "./canvas-tools.js";
-import { addPage, showPage } from "../../../renderer/shared/design-canvas/pages.js";
+import { CANVAS_READ_FRAME_LIMIT, canvasReadPageKey } from "../../../renderer/shared/design-canvas/canvas-summary.js";
+import { addPage, deletePage, showPage } from "../../../renderer/shared/design-canvas/pages.js";
 import { DesignCanvasStore } from "./store.js";
 
 async function setup(t: test.TestContext) {
@@ -321,10 +322,9 @@ test("canvas_read lists what is in view, the page's waiting comments, and counts
   assert.equal(answer.more, undefined, "a page read whole says nothing about paging");
 
   const { x, y, w, h } = answer.view;
-  const later = await call("canvas_read", { cursor: `1@${x},${y},${w},${h}` });
+  const later = await call("canvas_read", { cursor: `${canvasReadPageKey("page-1")}:1@${x},${y},${w},${h}` });
   assert.deepEqual(later.inView, [], "the cursor skips the frame in view");
   assert.deepEqual(later.outsideFrames.map((frame: { id: string }) => frame.id), ["far-group", "far-note"]);
-  assert.equal(later.offset, 1);
   assert.equal(later.nextCursor, undefined);
   assert.equal(later.comments, undefined, "comments come with the first answer only");
   assert.equal((await call("canvas_read", { cursor: "1" })).status, "error");
@@ -477,6 +477,50 @@ test("Aiden reads and places on a page it names, and focusing a frame on another
   assert.deepEqual(focused, [[placed.frame.id]]);
   await store.update("chat-1", (doc) => showPage(doc, "p3"));
   assert.equal((await call("canvas_focus", {})).status, "error", "an empty page has nothing to show");
+});
+
+test("a canvas_read cursor reads on its own page, whichever page is on screen", async (t) => {
+  const base = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-canvas-cursor-"));
+  t.after(() => fs.rm(base, { recursive: true, force: true }));
+  const store = new DesignCanvasStore({ root: () => base });
+  const tools = createDesignCanvasTools({ chatId: "chat-1", workspaceRoot: base, store, broadcast: () => undefined });
+  const call = async (args: Record<string, unknown>) => {
+    const output = await tools.find((tool) => tool.name === "canvas_read")!.execute("c", args as never);
+    const first = output.content[0];
+    assert.ok(first && first.type === "text");
+    return JSON.parse(first.text) as Record<string, any>;
+  };
+  const count = CANVAS_READ_FRAME_LIMIT + 3;
+  await store.update("chat-1", (doc) => {
+    const paged = addPage(addPage(doc, "p2", "Pricing"), "p3", "Empty");
+    const notes = Array.from({ length: count }, (_, index) => ({
+      id: `n${index}`, kind: "note" as const, title: `n${index}`, text: "", x: index * 10, y: 0, w: 240, h: 160, pageId: "p2", createdBy: "aiden" as const,
+    }));
+    return { ...paged, frames: [...paged.frames, ...notes] };
+  });
+  await store.update("chat-1", (doc) => showPage(doc, "page-1"));
+
+  const first = await call({ page: "Pricing" });
+  assert.ok(first.nextCursor, "a page with more frames than one answer holds gives a cursor");
+  const ids = (answer: Record<string, any>) => [...answer.inView, ...answer.outsideFrames].map((frame: { id: string }) => frame.id);
+
+  const next = await call({ cursor: first.nextCursor });
+  assert.deepEqual(next.page, { id: "p2", name: "Pricing" }, "without page, the cursor's page is read, not the one on screen");
+  assert.equal(new Set([...ids(first), ...ids(next)]).size, count, "the two answers list every frame of that page once");
+  assert.deepEqual((await call({ page: "p2", cursor: first.nextCursor })).page, next.page, "naming the cursor's own page is the same");
+
+  const other = await call({ page: "Empty", cursor: first.nextCursor });
+  assert.equal(other.status, "error");
+  assert.match(other.message, /not from page "Empty".*reads page "Pricing"/u, "a cursor from another page is refused, naming both");
+
+  const legacy = await call({ page: "Pricing", offset: CANVAS_READ_FRAME_LIMIT });
+  assert.equal(legacy.status, "error");
+  assert.match(legacy.message, /no longer takes offset.*nextCursor/u, "the old offset is refused, not ignored");
+
+  await store.update("chat-1", (doc) => deletePage(doc, "p2"));
+  const gone = await call({ cursor: first.nextCursor });
+  assert.equal(gone.status, "error");
+  assert.match(gone.message, /no longer on the canvas/u);
 });
 
 test("canvas_read with snapshot shows Aiden the canvas picture, or says why there is none", async (t) => {

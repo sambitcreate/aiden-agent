@@ -14,7 +14,7 @@ import { randomUUID } from "node:crypto";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { Type } from "typebox";
 import { declarePiRuntimeReplay } from "../pi-runtime-tool.js";
-import { CANVAS_READ_FRAME_LIMIT, canvasView, describeCanvas, parseCanvasReadCursor, summarizeFrame } from "../../../renderer/shared/design-canvas/canvas-summary.js";
+import { CANVAS_READ_FRAME_LIMIT, canvasReadCursorPage, canvasView, describeCanvas, parseCanvasReadCursor, summarizeFrame } from "../../../renderer/shared/design-canvas/canvas-summary.js";
 import {
   commentsWithoutFrames,
   replyToComment,
@@ -584,21 +584,31 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
         name: "canvas_read",
         label: "Read design canvas",
         description:
-          `Read the design canvas beside this chat: its pages, and on one page (the one the person is looking at unless you name another) the visible area, the frames in it (id, kind, title, path, box, group, look, open comments), every frame outside it (outsideFrames, with ids and boxes so you can move, group or focus them), counts by group, and the page's open and sent comments (each with its commentId, note, frame, file and the element it points at). Up to ${CANVAS_READ_FRAME_LIMIT} frames are listed per call; when a page has more, the answer says so and gives nextCursor, which you pass as cursor (with the same page) to read the next ones. A later answer keeps the first answer's view, so every frame is listed once even if the person pans meanwhile; viewMoved says when they did. Boxes are in canvas units. Pass snapshot: true to also see a picture of the canvas as the person sees it.`,
+          `Read the design canvas beside this chat: its pages, and on one page (the one the person is looking at unless you name another) the visible area, the frames in it (id, kind, title, path, box, group, look, open comments), every frame outside it (outsideFrames, with ids and boxes so you can move, group or focus them), counts by group, and the page's open and sent comments (each with its commentId, note, frame, file and the element it points at). Up to ${CANVAS_READ_FRAME_LIMIT} frames are listed per call; when a page has more, the answer says so and gives nextCursor, which you pass as cursor to read the next ones (the cursor carries its page, so page can be left out). A later answer keeps the first answer's view, so every frame is listed once even if the view moves meanwhile; viewMoved says when it has. Boxes are in canvas units. Pass snapshot: true to also see a picture of the canvas as the person sees it.`,
         parameters: Type.Object({
           page: Type.Optional(Type.String({ maxLength: 128, description: "A page's name or id." })),
-          cursor: Type.Optional(Type.String({ maxLength: 64, description: "The nextCursor an earlier answer gave, to read the frames after it." })),
+          cursor: Type.Optional(Type.String({ maxLength: 64, description: "The nextCursor an earlier answer gave, to read the frames after it on that answer's page." })),
           snapshot: Type.Optional(Type.Boolean()),
         }),
         execute: async (_id, raw, signal) =>
           run(async () => {
-            const p = (raw ?? {}) as { page?: unknown; cursor?: unknown; snapshot?: unknown };
+            const p = (raw ?? {}) as { page?: unknown; cursor?: unknown; offset?: unknown; snapshot?: unknown };
+            if (p.offset !== undefined) {
+              throw new CanvasToolError("canvas_read no longer takes offset. To read the frames after an answer, pass its nextCursor as cursor.");
+            }
             const doc = await deps.store.get(deps.chatId);
             const cursor = p.cursor === undefined ? undefined : typeof p.cursor === "string" ? parseCanvasReadCursor(p.cursor) : null;
             if (cursor === null) {
               throw new CanvasToolError("cursor must be the nextCursor an earlier canvas_read answer gave, copied as it is.");
             }
-            const answer = describeCanvas(doc, { pageId: pageOf(doc, p.page), ...(cursor ? { cursor } : {}) });
+            const named = p.page === undefined || p.page === null || p.page === "" ? undefined : pageOf(doc, p.page);
+            let pageId = named ?? doc.activePageId;
+            if (cursor) {
+              const read = canvasReadCursorPage(doc, cursor, named);
+              if ("error" in read) throw new CanvasToolError(read.error);
+              pageId = read.pageId;
+            }
+            const answer = describeCanvas(doc, { pageId, ...(cursor ? { cursor } : {}) });
             if (p.snapshot !== true) return answer;
             const unavailable = (snapshotReason: string) => ({ ...answer, snapshot: "unavailable", snapshotReason });
             if (deps.seesImages === false) {

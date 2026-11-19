@@ -26,29 +26,73 @@ export const CANVAS_READ_COMMENT_LIMIT = 40;
 export type CanvasView = { x: number; y: number; w: number; h: number };
 
 /**
- * Where the next answer of a paged `canvas_read` starts, and the view the
- * first answer sorted by. The frames in view come first, so a later answer
- * keeps that view: if it sorted by the view the person had moved to, a frame
- * could come before the cut in one answer and after it in the next, and be
- * listed twice or not at all.
+ * Where the next answer of a paged `canvas_read` starts: the page it reads,
+ * the offset, and the view the first answer sorted by. The frames in view
+ * come first, so a later answer keeps that view: if it sorted by the view the
+ * person had moved to, a frame could come before the cut in one answer and
+ * after it in the next, and be listed twice or not at all. The page travels
+ * with it so a cursor from one page can't skip frames on another.
  */
-export type CanvasReadCursor = { offset: number; view: CanvasView };
+export type CanvasReadCursor = { page: string; offset: number; view: CanvasView };
 
-/** The cursor as the text Aiden passes back, such as `200@-120,40,1200,800`. */
-export function formatCanvasReadCursor(cursor: CanvasReadCursor): string {
-  const { x, y, w, h } = cursor.view;
-  return `${cursor.offset}@${x},${y},${w},${h}`;
+/**
+ * A page id as the short key a cursor carries (32-bit FNV-1a, in hex): page
+ * ids may be 128 characters of anything, and the cursor stays short and
+ * opaque.
+ */
+export function canvasReadPageKey(pageId: string): string {
+  let hash = 0x811c9dc5;
+  for (let index = 0; index < pageId.length; index += 1) {
+    hash ^= pageId.charCodeAt(index);
+    hash = Math.imul(hash, 0x01000193) >>> 0;
+  }
+  return hash.toString(16).padStart(8, "0");
 }
 
-const CURSOR = /^(\d{1,4})@(-?\d{1,9}),(-?\d{1,9}),(\d{1,9}),(\d{1,9})$/u;
+/** The cursor as the text Aiden passes back, such as `1a2b3c4d:200@-120,40,1200,800`. */
+export function formatCanvasReadCursor(cursor: CanvasReadCursor): string {
+  const { x, y, w, h } = cursor.view;
+  return `${cursor.page}:${cursor.offset}@${x},${y},${w},${h}`;
+}
 
-/** The cursor an earlier answer gave, or null when the text is not one. */
+// Exactly what formatCanvasReadCursor writes: no spaces, no leading zeros, no "-0".
+const INTEGER = "(0|-?[1-9]\\d{0,8})";
+const POSITIVE = "([1-9]\\d{0,8})";
+const CURSOR = new RegExp(`^([0-9a-f]{8}):(0|[1-9]\\d{0,3})@${INTEGER},${INTEGER},${POSITIVE},${POSITIVE}$`, "u");
+
+/** The cursor an earlier answer gave, or null when the text is not one exactly as it was given. */
 export function parseCanvasReadCursor(text: string): CanvasReadCursor | null {
-  const match = CURSOR.exec(text.trim());
+  const match = CURSOR.exec(text);
   if (!match) return null;
-  const [offset, x, y, w, h] = match.slice(1).map(Number) as [number, number, number, number, number];
-  if (w < 1 || h < 1) return null;
-  return { offset, view: { x, y, w, h } };
+  const [offset, x, y, w, h] = match.slice(2).map(Number) as [number, number, number, number, number];
+  return { page: match[1]!, offset, view: { x, y, w, h } };
+}
+
+/**
+ * The page a `canvas_read` with this cursor reads: the cursor's own page when
+ * no page is named, or an error to give back when the named page is another
+ * one or the cursor's page is gone. `pageId` is the page named, already
+ * looked up.
+ */
+export function canvasReadCursorPage(
+  doc: DesignCanvas,
+  cursor: CanvasReadCursor,
+  pageId?: string,
+): { pageId: string } | { error: string } {
+  const matches = doc.pages.filter((entry) => canvasReadPageKey(entry.id) === cursor.page);
+  if (pageId !== undefined) {
+    if (matches.some((entry) => entry.id === pageId)) return { pageId };
+    const named = doc.pages.find((entry) => entry.id === pageId)?.name ?? pageId;
+    const own = matches.length === 1 ? ` It reads page ${JSON.stringify(matches[0]!.name)}; pass that page, or leave page out.` : "";
+    return {
+      error: `That cursor is from another page's answer, not from page ${JSON.stringify(named)}.${own} To read ${JSON.stringify(named)}, call canvas_read with that page and no cursor.`,
+    };
+  }
+  if (matches.length === 1) return { pageId: matches[0]!.id };
+  if (matches.length === 0) {
+    return { error: "The page that cursor reads is no longer on the canvas. Call canvas_read without a cursor to read the pages there are." };
+  }
+  return { error: "Pass page with that cursor: the page the earlier answer read." };
 }
 
 function sameView(a: CanvasView, b: CanvasView): boolean {
@@ -111,13 +155,11 @@ export type CanvasReadAnswer = {
   omitted: number;
   /** Frames outside the view left out of `outsideFrames`. */
   outsideOmitted: number;
-  /** Where this answer's list starts in the page's frames (those in view first); present when not 0. */
-  offset?: number;
   /** Pass as `cursor` to read the frames after this answer's; present only when there are more. */
   nextCursor?: string;
   /** Says how many frames this answer lists and how to read the rest; present when it lists fewer than all. */
   more?: string;
-  /** The page's open and sent comments, newest first; present when there are any, on the answer from offset 0. */
+  /** The page's open and sent comments, newest first; present when there are any, on the first answer only. */
   comments?: Record<string, unknown>[];
 };
 
@@ -210,17 +252,18 @@ export function describeCanvas(
     start === 0 && end === frames.length
       ? {}
       : {
-          ...(start > 0 ? { offset: start } : {}),
-          ...(end < frames.length ? { nextCursor: formatCanvasReadCursor({ offset: end, view }) } : {}),
+          ...(end < frames.length
+            ? { nextCursor: formatCanvasReadCursor({ page: canvasReadPageKey(page.id), offset: end, view }) }
+            : {}),
           more: `Listed frames ${end > start ? `${start + 1}–${end}` : "none"} of ${frames.length} on this page (those in view first).${
-            end < frames.length ? " Pass nextCursor as cursor, with the same page, to read the next ones." : ""
+            end < frames.length ? " Pass nextCursor as cursor to read the next ones." : ""
           }`,
         };
   const moved = sameView(view, current)
     ? {}
     : {
         viewMoved:
-          "The person has moved the view since the earlier answer. This one keeps that answer's view, so no frame is listed twice or left out; call canvas_read without a cursor to see what is in view now.",
+          "The page's view has moved since the earlier answer (the person panned or zoomed, or canvas_focus moved it). This answer keeps that answer's view, so no frame is listed twice or left out; call canvas_read without a cursor to see what is in view now.",
       };
   const outside = new Map<string, { groupId: string; title: string; frames: number }>();
   const titles = new Map(frames.filter((frame) => isDesignContainer(frame.kind)).map((frame) => [frame.id, frame.title]));
