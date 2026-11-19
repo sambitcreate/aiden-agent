@@ -459,4 +459,31 @@ test("another chat's description that lands while a save is being prepared is ke
   landing = () => otherCall("o3", { operation: "update", id: "art1", description: "Other again" });
   await call("u3", { operation: "update", id: "art1", description: "Mine" });
   assert.equal((await store.get("ws1", "art1"))!.artifact.description, "Mine");
+  // The other chat's data, actions, refresh and page that land in that window
+  // are kept by a save that leaves them out.
+  landing = () =>
+    otherCall("o4", {
+      operation: "update",
+      id: "art1",
+      markup: changedPage,
+      sources: [PULLS],
+      actions: [MERGE],
+      refresh: { onOpen: false, intervalSeconds: 120 },
+    });
+  await call("u4", { operation: "update", id: "art1", description: "Mine again" });
+  artifact = (await store.get("ws1", "art1"))!.artifact;
+  assert.equal(artifact.description, "Mine again");
+  assert.deepEqual(artifact.sources.map((source) => source.name), ["pulls"]);
+  assert.deepEqual(artifact.actions.map((action) => action.name), ["merge"]);
+  assert.deepEqual(artifact.refresh, { onOpen: false, intervalSeconds: 120 });
+  assert.match(JSON.stringify(artifact.visual), /more/u);
+  // The page and actions this save sets still win, and the other chat's
+  // sources and layout stay.
+  landing = () => otherCall("o5", { operation: "update", id: "art1", sources: [], actions: [], layout: "wide" });
+  await call("u5", { operation: "update", id: "art1", markup: PAGE, actions: [MERGE] });
+  artifact = (await store.get("ws1", "art1"))!.artifact;
+  assert.deepEqual(artifact.sources, []);
+  assert.deepEqual(artifact.actions.map((action) => action.name), ["merge"]);
+  assert.doesNotMatch(JSON.stringify(artifact.visual), /more/u);
+  assert.equal(artifact.visual.layout, "wide");
 });

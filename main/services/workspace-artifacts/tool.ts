@@ -195,6 +195,43 @@ function commandsFor(
   };
 }
 
+/** The stored page, with the layout the call set. */
+function keptPage(input: ArtifactToolInput, previous: WorkspaceArtifactV1): ChatUiVisualV1 {
+  if (input.layout !== undefined && input.layout !== "column" && input.layout !== "wide") {
+    throw new Error('layout must be "column" or "wide".');
+  }
+  const layout = input.layout === undefined ? previous.visual.layout : input.layout;
+  const { layout: _previousLayout, ...rest } = previous.visual;
+  return { ...rest, ...(layout === "wide" ? { layout } : {}) };
+}
+
+/**
+ * `content` with every value the call left out taken again from `current`,
+ * the page as the store holds it under its lock, so another chat's save that
+ * landed after `content` was built is not written over. The title and
+ * description are settled by the store's `base` check instead.
+ */
+function rebasedContent(
+  input: ArtifactToolInput,
+  content: WorkspaceArtifactContent,
+  current: WorkspaceArtifactV1,
+): WorkspaceArtifactContent {
+  const next: WorkspaceArtifactContent = { ...content };
+  if (input.sources === undefined) next.sources = current.sources;
+  if (input.actions === undefined) next.actions = current.actions;
+  if (input.refresh === undefined) next.refresh = current.refresh;
+  if (input.markup === undefined) {
+    next.visual = keptPage(input, current);
+    if (current.initialState) next.initialState = current.initialState;
+    else delete next.initialState;
+  } else if (input.layout === undefined) {
+    // New markup keeps the layout the page has now.
+    const { layout: _compiledLayout, ...rest } = content.visual;
+    next.visual = { ...rest, ...(current.visual.layout === "wide" ? { layout: "wide" } : {}) };
+  }
+  return next;
+}
+
 /** Every value the model may have changed, or the stored one where it said nothing. */
 function contentFor(input: ArtifactToolInput, previous: WorkspaceArtifactV1 | undefined): {
   content: WorkspaceArtifactContent;
@@ -210,12 +247,7 @@ function contentFor(input: ArtifactToolInput, previous: WorkspaceArtifactV1 | un
   let diagnostics: AidenUiDiagnostic[] = [];
   if (input.markup === undefined && previous) {
     initialState = previous.initialState;
-    if (input.layout !== undefined && input.layout !== "column" && input.layout !== "wide") {
-      throw new Error('layout must be "column" or "wide".');
-    }
-    const layout = input.layout === undefined ? previous.visual.layout : input.layout === "wide" ? "wide" : undefined;
-    const { layout: _previousLayout, ...rest } = previous.visual;
-    visual = { ...rest, ...(layout === "wide" ? { layout } : {}) };
+    visual = keptPage(input, previous);
   } else {
     ({ visual, diagnostics } = compilePage(input.markup, input.layout ?? previous?.visual.layout, title));
     // A fresh compile's state is what the markup declared.
@@ -612,19 +644,18 @@ export function createWorkspaceArtifactTool(options: WorkspaceArtifactToolOption
         const earlier = previous ? savedThisTurn.get(previous.id) : undefined;
         const renamedSince = earlier !== undefined && previous !== undefined && previous.visual.title !== earlier.title;
         // Repeating the name this turn's save gave keeps a rename made since.
-        const { content, diagnostics } = contentFor(
-          renamedSince && input.title === earlier.title ? { ...input, title: undefined } : input,
-          previous,
-        );
-        // A rename or another chat's description landing from here until the
-        // write is caught by the store, which keeps it (a rename also ends
-        // this turn's fold).
+        const effective = renamedSince && input.title === earlier.title ? { ...input, title: undefined } : input;
+        const { content, diagnostics } = contentFor(effective, previous);
+        // Another chat's save or a rename landing from here until the write is
+        // kept: the store settles the title and description against `base`
+        // (a rename also ends this turn's fold), and every other value this
+        // call left out is taken again from the page under the store's lock.
         assertSourcesRunnable(content, options);
         if (signal?.aborted) throw new Error("The artifact change was cancelled.");
         // The store approves only when the allowed card listed exactly the saved
         // commands; otherwise an unchanged set keeps the approval it already had.
         const artifact = previous
-          ? await store.replace(workspaceId, previous.id, content, {
+          ? await store.replace(workspaceId, previous.id, (current) => rebasedContent(effective, content, current), {
               approvedDigest: shownDigest,
               base: {
                 title: previous.visual.title,

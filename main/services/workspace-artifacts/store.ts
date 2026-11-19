@@ -653,14 +653,19 @@ export class WorkspaceArtifactStore {
     });
   }
 
-  /** Replaces the page and everything it runs; a changed command needs a fresh approval. */
+  /**
+   * Replaces the page and everything it runs; a changed command needs a fresh
+   * approval. Given a function, the content is built under the store's lock
+   * from the page as it is then, so a save that landed since the caller read
+   * it is not written over.
+   */
   async replace(
     workspaceId: string,
     artifactId: string,
-    content: WorkspaceArtifactContent,
+    content: WorkspaceArtifactContent | ((current: WorkspaceArtifactV1) => WorkspaceArtifactContent),
     options: WorkspaceArtifactWriteOptions = {},
   ): Promise<WorkspaceArtifactV1> {
-    return this.replaceWith(workspaceId, artifactId, () => content, options);
+    return this.replaceWith(workspaceId, artifactId, typeof content === "function" ? content : () => content, options);
   }
 
   /**
