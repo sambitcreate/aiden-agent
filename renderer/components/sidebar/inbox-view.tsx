@@ -588,6 +588,7 @@ function useFlip(
       const from = Math.max(-FLIP_MAX_OFFSET_PX, Math.min(FLIP_MAX_OFFSET_PX, offset));
       row.animate(
         [{ transform: `translateY(${from}px)` }, { transform: "translateY(0)" }],
+        // check-aiden-rules: allow literal-motion Web Animations cannot read a CSS token; the reorder glide keeps its own emphasized curve
         { duration: FLIP_DURATION_MS, easing: "cubic-bezier(0.2, 0, 0, 1)" },
       );
     }

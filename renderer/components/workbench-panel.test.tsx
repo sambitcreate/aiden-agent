@@ -445,6 +445,13 @@ test("keyboard resizing clamps to the bounds the container allows and keeps the 
   assert.equal(separator().getAttribute("aria-valuenow"), "520");
 });
 
+test("Enter on the divider closes the panel", () => {
+  renderWithCommands(<NotesWorkbench initiallyOpen />);
+  const separator = screen.getByRole("separator", { name: "Resize notes panel" });
+  assert.equal(fireEvent.keyDown(separator, { key: "Enter" }), false);
+  assert.equal(notesSurface().getAttribute("data-state"), "closed");
+});
+
 test("the shell pins beside the content when it fits and floats when it does not", () => {
   renderWithCommands(<NotesWorkbench initiallyOpen containerWidth={1100} />);
   assert.equal(notesSurface().getAttribute("data-surface-mode"), "tools-pinned");

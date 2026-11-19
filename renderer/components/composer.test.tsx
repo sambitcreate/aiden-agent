@@ -252,7 +252,7 @@ test("composer slash palette is an overlaid textarea-owned accessible listbox", 
   assert.match(composer, /type: "send-started"/u);
   assert.match(composer, /failedSendDraft\(payload\.draftText, currentDraft\)/u);
   assert.match(composer, /failedSendAttachments\([\s\S]{0,160}payload\.attachments/u);
-  assert.match(composer, /markComposerSubmission\(chatId, payload\.draftText\)/u);
+  assert.match(composer, /markComposerSubmission\(chatId, messageWithMentions\(payload\.mentions \?\? \[\], payload\.draftText\)\)/u);
   assert.match(composer, /settleComposerSubmission\(chatId, true, draftRef\.current\.text\)/u);
   assert.match(
     composer,

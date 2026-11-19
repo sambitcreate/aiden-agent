@@ -272,7 +272,7 @@ export function SubagentChips({
   const collapsed = choice.groupKey === groupKey ? choice.collapsed : collapsedGroups.has(groupKey);
   const bodyRef = React.useRef<HTMLDivElement>(null);
   const bodyId = React.useId();
-  const { hidden, open, onTransitionEnd } = useCollapsibleBody(collapsed, bodyRef);
+  const { hidden, open } = useCollapsibleBody(collapsed, bodyRef);
 
   const groupRuns: GroupRun[] = runIds.map((runId, index) => {
     const run = snapshotsById.get(runId);
@@ -378,7 +378,6 @@ export function SubagentChips({
         inert={collapsed ? true : undefined}
         aria-hidden={collapsed ? true : undefined}
         hidden={hidden}
-        onTransitionEnd={onTransitionEnd}
         className={cn(
           "grid transition-[grid-template-rows,opacity] duration-(--motion-duration) ease-standard motion-reduce:transition-none",
           open ? "grid-rows-[1fr]" : "grid-rows-[0fr] opacity-0",

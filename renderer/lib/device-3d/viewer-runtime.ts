@@ -14,6 +14,7 @@ import {
   type Texture,
 } from "three";
 import { RoomEnvironment } from "three/addons/environments/RoomEnvironment.js";
+import { prefersReducedMotion } from "../appearance-runtime";
 
 export interface ViewerRenderer {
   setDrawingBufferSize(width: number, height: number, pixelRatio: number): void;
@@ -76,7 +77,7 @@ export function browserViewerRuntime(): ViewerRuntime {
     cancelFrame: (id) => cancelAnimationFrame(id),
     setTimeout: (callback, ms) => setTimeout(callback, ms),
     clearTimeout: (timer) => clearTimeout(timer),
-    reducedMotion: () => globalThis.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false,
+    reducedMotion: prefersReducedMotion,
   };
 }
 

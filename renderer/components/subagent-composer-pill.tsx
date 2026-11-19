@@ -15,6 +15,7 @@ import {
   subagentStoppableSnapshot,
   type SubagentRunView,
 } from "../lib/subagent-view-state";
+import { returnFocus as restoreFocus } from "../lib/focus-return";
 import { cn } from "../lib/ui-utils";
 import { useNow } from "../lib/use-now";
 import { ariaKeyShortcut, prettyAccelerator } from "../shared/keybindings";
@@ -458,7 +459,7 @@ export function SubagentComposerPill({
       if (!focused || !(pill?.contains(focused) || tray.current?.contains(focused))) return;
       queueMicrotask(() => {
         if (document.activeElement && document.activeElement !== document.body) return;
-        returnFocusLatest.current?.()?.focus({ preventScroll: true });
+        restoreFocus([returnFocusLatest.current], { preventScroll: true });
       });
     };
   }, []);
@@ -586,9 +587,8 @@ export function SubagentComposerPill({
           const current = document.activeElement;
           const unclaimed =
             !current || current === document.body || current.closest("[data-subagent-tray]") !== null;
-          if (!target?.isConnected || !unclaimed) return;
-          event.preventDefault();
-          target.focus({ preventScroll: true });
+          // Without a field to go back to, the default returns focus to the pill.
+          if (unclaimed && restoreFocus([target], { region: null, preventScroll: true })) event.preventDefault();
         }}
         className="flex max-h-[min(30rem,60vh)] w-[min(34rem,calc(100vw-2rem))] flex-col p-1.5"
       >
