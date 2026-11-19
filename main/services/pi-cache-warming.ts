@@ -65,7 +65,7 @@ export function adoptChatCacheWarmer(chatId: string, warmer: PiCacheWarmer | und
   chatWarmers.delete(chatId);
   if (warmer && !warmer.isDisposed) {
     chatWarmers.set(chatId, warmer);
-    warmer.onDisposed = () => { if (chatWarmers.get(chatId) === warmer) chatWarmers.delete(chatId); };
+    warmer.onDispose(() => { if (chatWarmers.get(chatId) === warmer) chatWarmers.delete(chatId); });
   }
 }
 
@@ -79,6 +79,45 @@ export function releaseChatCacheWarmer(chatId: string, documentId?: string): boo
   if (!warmer || (documentId !== undefined && warmer.documentId !== undefined && warmer.documentId !== documentId)) return false;
   warmer.dispose();
   return true;
+}
+
+/** What a settled chat must still match for its prefix to be the one warmed. */
+export interface SettledChatState {
+  summaryRevision?: string;
+  providerId?: string;
+  model?: string;
+}
+
+/**
+ * A reply that was saved and shown while its window still has the chat may
+ * keep that chat's prompt cache warm for a while; any other ending stops the
+ * warmer. The idle warmer stops once the chat changes: every chat write (a new
+ * message, a model switch, a rename, a compaction) moves its summary revision.
+ */
+export async function settleReplyCacheWarmer(
+  warmer: PiCacheWarmer | undefined,
+  reply: {
+    owner: { isDestroyed(): boolean };
+    delivered: boolean;
+    chat: () => Promise<SettledChatState | null>;
+  },
+): Promise<void> {
+  if (!warmer) return;
+  if (!reply.delivered || reply.owner.isDestroyed()) { warmer.dispose(); return; }
+  try {
+    const settled = await reply.chat();
+    if (!settled || warmer.isDisposed) { warmer.dispose(); return; }
+    warmer.settle({
+      isCurrent: () => !reply.owner.isDestroyed(),
+      stillCurrent: async () => {
+        const now = await reply.chat();
+        return !!now && now.summaryRevision === settled.summaryRevision &&
+          now.providerId === settled.providerId && now.model === settled.model;
+      },
+    });
+  } catch {
+    warmer.dispose();
+  }
 }
 
 export interface CacheWarmingClock {
@@ -171,8 +210,7 @@ export class PiCacheWarmer {
   private disposed = false;
   private readonly clock: CacheWarmingClock;
   private readonly abort = () => this.dispose();
-  /** Called once, when the warmer is disposed. */
-  onDisposed?: () => void;
+  private readonly disposeListeners = new Set<() => void>();
   readonly documentId?: string;
 
   constructor(private readonly deps: PiCacheWarmerDependencies) {
@@ -241,6 +279,13 @@ export class PiCacheWarmer {
     run.controller.abort();
   }
 
+  /** Runs once when the warmer ends (at once if it already has); returns a remover. */
+  onDispose(listener: () => void): () => void {
+    if (this.disposed) { listener(); return () => {}; }
+    this.disposeListeners.add(listener);
+    return () => { this.disposeListeners.delete(listener); };
+  }
+
   get isDisposed(): boolean {
     return this.disposed;
   }
@@ -273,9 +318,11 @@ export class PiCacheWarmer {
     this.stop();
     activeWarmers.delete(this);
     this.deps.signal.removeEventListener("abort", this.abort);
-    const onDisposed = this.onDisposed;
-    this.onDisposed = undefined;
-    onDisposed?.();
+    const listeners = [...this.disposeListeners];
+    this.disposeListeners.clear();
+    for (const listener of listeners) {
+      try { listener(); } catch { /* A cleanup cannot stop the others. */ }
+    }
   }
 
   private nextRefreshAt(run: WarmRun): number {

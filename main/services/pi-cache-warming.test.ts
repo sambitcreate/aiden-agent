@@ -9,7 +9,7 @@ import { createAssistantMessageEventStream, fauxAssistantMessage, normalizeConte
 import { Type } from "typebox";
 import { desktopChatExecutionOptions } from "./chat-generation-start.js";
 import { createRemoteChatGenerationOwner } from "./chat-generation-owner.js";
-import { adoptChatCacheWarmer, canWarmForegroundChat, IDLE_WARM_LIMIT, PiCacheWarmer, releaseChatCacheWarmer, withPiCacheWarming, cacheWarmingEconomics, stopAllPiCacheWarmers, type CacheWarmingClock } from "./pi-cache-warming.js";
+import { adoptChatCacheWarmer, canWarmForegroundChat, IDLE_WARM_LIMIT, PiCacheWarmer, releaseChatCacheWarmer, settleReplyCacheWarmer, withPiCacheWarming, cacheWarmingEconomics, stopAllPiCacheWarmers, type CacheWarmingClock } from "./pi-cache-warming.js";
 import type { ResolvedModelRuntime } from "./model-runtime-core.js";
 
 class Clock implements CacheWarmingClock {
@@ -560,4 +560,38 @@ test("each chat keeps one warmer, which a new reply replaces and only the window
   adoptChatCacheWarmer("chat-2", replyWithoutWarming.warmer);
   adoptChatCacheWarmer("chat-2", undefined);
   assert.equal(replyWithoutWarming.warmer.isDisposed, true);
+});
+
+test("a saved reply in an open window keeps warming until the chat is written again; other endings stop at once", async (t) => {
+  let chat: { summaryRevision: string; providerId: string; model: string } | null = { summaryRevision: "r1", providerId: "fixture", model: "priced" };
+  let closed = false;
+  const owner = { isDestroyed: () => closed };
+  const kept = fixture(t);
+  kept.start();
+  await settleReplyCacheWarmer(kept.warmer, { owner, delivered: true, chat: async () => chat });
+  await kept.clock.advance(270_000);
+  assert.equal(kept.requests.length, 1);
+  chat = { ...chat, summaryRevision: "r2" };
+  await kept.clock.advance(270_000);
+  assert.equal(kept.requests.length, 1, "a new message, model switch or compaction rewrites the chat");
+  assert.equal(kept.warmer.isDisposed, true);
+
+  for (const [label, delivered, destroyed, stored] of [
+    ["stopped or failed reply", false, false, chat],
+    ["closed window", true, true, chat],
+    ["removed chat", true, false, null],
+  ] as const) {
+    closed = destroyed;
+    const h = fixture(t);
+    h.start();
+    await settleReplyCacheWarmer(h.warmer, { owner, delivered, chat: async () => stored });
+    assert.equal(h.warmer.isDisposed, true, label);
+    await h.clock.advance(270_000);
+    assert.equal(h.requests.length, 0, label);
+  }
+  closed = false;
+  const unreadable = fixture(t);
+  unreadable.start();
+  await settleReplyCacheWarmer(unreadable.warmer, { owner, delivered: true, chat: async () => { throw new Error("index locked"); } });
+  assert.equal(unreadable.warmer.isDisposed, true);
 });

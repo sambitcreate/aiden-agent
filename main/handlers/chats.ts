@@ -7,6 +7,7 @@ import { chatApplicationService } from "../services/chat-application-service-mai
 import { chatTitleService } from "../services/chat-title.js";
 import { configStore } from "../services/config-store.js";
 import { llmClient } from "../services/llm-client.js";
+import { releaseChatCacheWarmer } from "../services/pi-cache-warming.js";
 import { rendererDocumentOwner } from "../services/renderer-document-owner.js";
 import { persistedChatWorkspaceId } from "../../renderer/shared/chat-workspace.js";
 import { isSafeSubagentIdentifier } from "../../renderer/shared/subagent-runs.js";
@@ -307,6 +308,15 @@ export function registerChatHistoryHandlers(): void {
       asString(id, "id"),
       owner.documentId,
     );
+  });
+
+  // The window moved away from a chat or closed it; a reply it left warming stops.
+  ipcMain.handle("chats:releaseCacheWarming", (event, id: unknown) => {
+    const owner = rendererDocumentOwner(
+      event,
+      () => new Error("Cache warming requires the active application document."),
+    );
+    return releaseChatCacheWarmer(asString(id, "id"), owner.documentId);
   });
 
   ipcMain.handle("chats:create", async (event, input: unknown) => {

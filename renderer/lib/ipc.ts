@@ -1677,6 +1677,8 @@ export const chatsApi = {
         }
     >("chats:compact", id, engine),
   cancelCompact: (id: string) => invoke<boolean>("chats:cancelCompact", id),
+  // This window no longer shows the chat, so a settled reply stops keeping its cache warm.
+  releaseCacheWarming: (id: string) => invoke<boolean>("chats:releaseCacheWarming", id),
   // Next-request context projection for the composer meter. Pass the visible
   // draft, pending attachments, and the current model selection so the
   // projection matches what would actually be sent.

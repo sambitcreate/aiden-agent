@@ -15,7 +15,7 @@ import {
 import type { AppControlPanel } from "../../renderer/shared/app-controls.js";
 import { canUseProviderAuthenticatedMcp } from "./mcp-provider-auth-core.js";
 import { providerRegistry } from "./provider-registry.js";
-import { canWarmForegroundChat, PiCacheWarmer, withPiCacheWarming } from "./pi-cache-warming.js";
+import { adoptChatCacheWarmer, canWarmForegroundChat, PiCacheWarmer, settleReplyCacheWarmer, withPiCacheWarming } from "./pi-cache-warming.js";
 import { createModelPaceMeasurement } from "./model-pace-core.js";
 import { modelPaceRecorder } from "./model-pace-runtime.js";
 import { usageLimits } from "./usage-limit-main.js";
@@ -4388,6 +4388,7 @@ export const llmClient = {
       })) {
         cacheWarmer = new PiCacheWarmer({
           signal: initialization.controller.signal,
+          documentId: owner.documentId,
           enabled: async () => (await configStore.getSettings()).cacheWarmingEnabled === true,
           isCurrent: generationAttended,
           resolveRuntime: (signal) => resolveModelRuntime(params.providerId, params.model, signal, params.chatId),
@@ -4403,10 +4404,21 @@ export const llmClient = {
             const pressure = lastContextPressure;
             if (!pressure?.promptCache) return;
             lastContextPressure = { ...pressure, promptCache: { ...pressure.promptCache, lastRequestAt: requestStartedAt } };
-            sendGeneration(streamId, "chat:context-pressure", { streamId, chatId: params.chatId, pressure: lastContextPressure });
+            // Once the reply has settled the stream is gone; the window that
+            // still shows the chat gets the countdown directly.
+            if (active.has(streamId) || initializing.has(streamId)) {
+              sendGeneration(streamId, "chat:context-pressure", { streamId, chatId: params.chatId, pressure: lastContextPressure });
+            } else if (!owner.isDestroyed()) {
+              owner.send("chat:context-pressure", { streamId, chatId: params.chatId, pressure: lastContextPressure });
+            }
           },
         });
+        // A closed window ends the warmer at once rather than at its next refresh.
+        const warmer = cacheWarmer;
+        warmer.onDispose(owner.onInvalidated(() => warmer.dispose()));
       }
+      // This reply replaces whatever an earlier reply left warming.
+      adoptChatCacheWarmer(params.chatId, cacheWarmer);
       initialization.stopCacheWarming = () => cacheWarmer?.dispose();
       const realStream = agentRuntimeOptions.streamFn!;
       // Prompt-cache miss attribution sees each request as sent; it keeps
@@ -5360,7 +5372,7 @@ export const llmClient = {
         pace.observe(event);
         switch (event.type) {
           case "agent_end":
-            cacheWarmer?.dispose();
+            // The warmer settles or ends once the reply is saved (the run's finally).
             visualDrafts.dispose();
             break;
           case "message_start":
@@ -6021,6 +6033,8 @@ export const llmClient = {
         : undefined;
     // The completion task below ends the run on every path from here.
     escape.settle = async () => {};
+    // Set once the reply was saved and shown; only then may its chat stay warm.
+    let replyDelivered = false;
     const completion = (async () => {
       try {
         const fullLengthBeforeAttempt = full.length;
@@ -6206,6 +6220,7 @@ export const llmClient = {
               timeline: finalTimeline,
               chat: chatForRenderer(persisted.chat ?? null) ?? undefined,
             }));
+            replyDelivered = !wasCancelled;
           }
         }
       } catch (error) {
@@ -6230,7 +6245,11 @@ export const llmClient = {
       } finally {
         try {
           endLoadMonitor(activeGeneration, streamId, false);
-          cacheWarmer?.dispose();
+          await settleReplyCacheWarmer(cacheWarmer, {
+            owner,
+            chat: () => chatStore.getMeta(params.chatId),
+            delivered: replyDelivered && !activeGeneration.cancelRequested && !activeGeneration.rendererDetached,
+          });
           visualDrafts.dispose();
           resetGenerationAgent(agent, streamId);
           formFill?.revoke();
