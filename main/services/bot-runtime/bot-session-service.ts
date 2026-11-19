@@ -231,9 +231,10 @@ export interface BotSessionService {
   /**
    * Stop the reply that is running now (the composer's Stop). What was already
    * written stays in the transcript and queued follow-ups are withdrawn. A
-   * paused (interrupted) turn is left for Resume or Dismiss.
+   * paused (interrupted) turn is left for Resume or Dismiss. When
+   * `expectedSubmissionId` is set, a different running submission is spared.
    */
-  stop(botId: string): Promise<BotSessionState>;
+  stop(botId: string, options?: { expectedSubmissionId?: string }): Promise<BotSessionState>;
   inspectLinkedWork(botId: string, submissionId: string): Promise<BotLinkedWorkInspection>;
   readLinkedWorkEvidence(botId: string, submissionId: string, kind: "source" | "result", publication?: BotPeerPublication): Promise<BotLinkedWorkEvidence | undefined>;
   stopLinkedWork(botId: string, submissionId: string, intentId?: string, publication?: BotPeerPublication): Promise<BotLinkedWorkStopOutcome>;
@@ -1065,10 +1066,13 @@ export async function createBotSessionService(deps: BotSessionServiceDeps): Prom
       });
     },
 
-    stop(botId) {
+    stop(botId, options) {
       return serialize(botId, async () => {
         const before = await currentState(botId);
         if (before.kind !== "running") return before;
+        if (options?.expectedSubmissionId !== undefined && before.submissionId !== options.expectedSubmissionId) {
+          return before;
+        }
         const { conversation } = await openBot(botId), host = await requireHost().open(botId), live = await host.harness.snapshot(LiveDoc, conversation.id, ctx), sources = await Promise.all((live?.run?.inputs ?? []).map(async (id) => (await (await host.harness.submission(id, ctx))?.status(ctx))?.requestId));
         const requestIds = sources.filter((id):id is string=>id!==undefined);
         if (live?.run && live.run.inputs.length !== 1 && await deps.hasPeerSource?.(botId,requestIds)) throw new BotSessionError("access_changed","This peer task shares inputs. Use its linked exchange Stop to preserve the other work.");
