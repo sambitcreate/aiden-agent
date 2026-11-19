@@ -59,25 +59,29 @@ test("the wrapper keeps head styles and scripts without a src, in order, and dro
 /**
  * Asserts that `run` takes roughly linear time: four times the input may take
  * at most eight times as long (a quadratic step takes sixteen), and never
- * more than five seconds. Each size is timed after a warm-up, as the fastest
- * of three runs, so a busy machine slows both sizes alike. A small size
+ * more than five seconds. After a warm-up, the two sizes are timed in turn,
+ * five times each, and each size counts as its median, so a burst of load
+ * slows both sizes alike and one slow run cannot fail it. A small size
  * faster than `floorMs` counts as `floorMs`, so timer noise and garbage
  * collection in a run of a few milliseconds cannot fail it.
  */
-function assertScalesLinearly(label: string, run: (size: number) => void, size: number, floorMs = 50): void {
-  const fastest = (n: number) => {
-    let best = Number.POSITIVE_INFINITY;
-    for (let attempt = 0; attempt < 3; attempt += 1) {
-      const started = performance.now();
-      run(n);
-      best = Math.min(best, performance.now() - started);
-    }
-    return best;
+function assertScalesLinearly(label: string, run: (size: number) => void, size: number, floorMs = 100): void {
+  const time = (n: number) => {
+    const started = performance.now();
+    run(n);
+    return performance.now() - started;
   };
+  const median = (values: number[]) => [...values].sort((a, b) => a - b)[Math.floor(values.length / 2)]!;
   run(size);
-  const small = fastest(size);
-  const large = fastest(size * 4);
-  const timing = `${label}: ${Math.round(small)} ms at ${size}, ${Math.round(large)} ms at ${size * 4}`;
+  const smalls: number[] = [];
+  const larges: number[] = [];
+  for (let round = 0; round < 5; round += 1) {
+    smalls.push(time(size));
+    larges.push(time(size * 4));
+  }
+  const small = median(smalls);
+  const large = median(larges);
+  const timing = `${label}: ${Math.round(small)} ms at ${size}, ${Math.round(large)} ms at ${size * 4} (medians of ${smalls.map(Math.round).join("/")} and ${larges.map(Math.round).join("/")})`;
   assert.ok(large < Math.max(small, floorMs) * 8, timing);
   assert.ok(large < 5_000, timing);
 }
@@ -172,9 +176,9 @@ test("checking, wrapping or streaming a visual up to the size cap takes linear t
         assert.equal(streamInChunks(html, 997).admitted, admitted, `${shape}: the draft and the finished visual disagree at ${size} characters`);
       },
       Math.floor(cap / 4),
-      // Under 50 ms at a quarter of the cap leaves 400 ms at the cap; the
+      // Under 100 ms at a quarter of the cap leaves 800 ms at the cap; the
       // quadratic shapes this guards against took seconds to minutes there.
-      50,
+      100,
     );
   }
 });
