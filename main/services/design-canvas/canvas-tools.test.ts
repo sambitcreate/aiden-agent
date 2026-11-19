@@ -1331,6 +1331,25 @@ test("canvas_build changes nothing when any part is refused, and places a drawin
   const c = doc.frames.find((frame) => frame.id === inside.ids.c)!;
   assert.equal(c.groupId, board.frame.id);
   assert.ok(c.x >= 0 && c.y >= 5000 && c.x + c.w <= 900, "it lands inside the artboard");
+
+  // An artboard keeps the person's width: a drawing that would stick out of it is refused, whole.
+  const framesBefore = doc.frames.length;
+  const wide = await call("canvas_build", {
+    groupId: board.frame.id,
+    items: [
+      { ref: "d", kind: "shape", text: "D", x: 0, y: 0 },
+      { ref: "e", kind: "shape", text: "E", x: 1200, y: 0 },
+    ],
+  });
+  assert.equal(wide.status, "error");
+  assert.match(wide.message, /at most \d+ wide/u);
+  const outside = await call("canvas_build", { groupId: board.frame.id, x: 800, y: 5000, items: [{ kind: "shape", text: "F" }] });
+  assert.equal(outside.status, "error", "a position that puts the drawing past the artboard's edge is refused");
+  doc = await store.get("chat-1");
+  assert.equal(doc.frames.length, framesBefore);
+  assert.equal(doc.frames.find((frame) => frame.id === board.frame.id)!.w, 900);
+  const within = await call("canvas_build", { groupId: board.frame.id, x: 40, y: 5060, items: [{ ref: "g", kind: "shape", text: "G" }] });
+  assert.equal(within.status, "built", "a position inside the artboard is kept");
 });
 
 test("canvas_duplicate copies a frame beside it, and a group with its members and the arrows between them", async (t) => {

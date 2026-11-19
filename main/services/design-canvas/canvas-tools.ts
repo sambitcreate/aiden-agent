@@ -1971,7 +1971,7 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
       {
         name: "canvas_build",
         label: "Build on design canvas",
-        description: `Draw a flow or diagram in one call: up to ${DESIGN_BUILD_ITEMS} boxes (text, shape or note) and connectors, all or nothing. A connector's from and to name a box by its ref, a frame ({frameId}) or a point ({x, y}). Positions are relative to the drawing; a box without x and y goes right of the one before. The drawing goes at x, y, beside nextTo, in groupId, or right of the frames in view; groupTitle makes a new group. The result maps each ref to its frame id. One canvas call.`,
+        description: `Draw a flow or diagram in one call: up to ${DESIGN_BUILD_ITEMS} boxes (text, shape or note) and connectors, all or nothing. A connector's from and to name a box by its ref, a frame ({frameId}) or a point ({x, y}). Positions are relative to the drawing; a box without x and y goes right of the one before. The drawing goes at x, y, beside nextTo, in groupId, or right of the frames in view; groupTitle makes a new group. A drawing that would stick out of an artboard is refused. The result maps each ref to its frame id. One canvas call.`,
         parameters: Type.Object({
           page: Type.Optional(Type.String({ maxLength: 128, description: "A page's name or id." })),
           x: Type.Optional(Type.Number()),
@@ -2117,6 +2117,22 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
                   corner = { x: spot.x, y: spot.y };
                 }
                 origin = { x: corner.x + pad.left - left, y: corner.y + pad.top - top };
+              }
+              // An artboard keeps the width the person drew and grows only down,
+              // so a drawing that would stick out of its sides or top is refused.
+              const board = groupId ? doc.frames.find((frame) => frame.id === groupId) : undefined;
+              if (board?.kind === "frame" && boxes.length > 0) {
+                const drawnX = origin.x + left;
+                const drawnY = origin.y + top;
+                if (drawnX < board.x || drawnY < board.y || drawnX + bounds.w > board.x + board.w) {
+                  const room = board.w - GROUP_PADDING.left - GROUP_PADDING.right;
+                  throw new CanvasToolError(
+                    `The drawing (${Math.round(bounds.w)} x ${Math.round(bounds.h)}) would stick out of artboard ${JSON.stringify(board.title || board.id)}, which keeps the width the person drew (${board.w}). ` +
+                      (bounds.w > room
+                        ? `Draw it at most ${room} wide, or leave groupId out to draw it beside the artboard.`
+                        : `Leave x and y out so it goes inside, or pass a position inside the artboard.`),
+                  );
+                }
               }
 
               let next = doc;
