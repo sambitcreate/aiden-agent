@@ -573,7 +573,9 @@ function variantsOf(value: unknown): Variant[] | undefined {
     }
     const raw = entry as Record<string, unknown>;
     const label = text(raw.label, `variants[${index}].label`, VARIANT_LABEL_CHARS);
-    if (raw.dark === undefined && raw.designWidth === undefined && raw.tweaks === undefined) {
+    // An empty tweaks object sets nothing either.
+    const noTweaks = raw.tweaks === undefined || (typeof raw.tweaks === "object" && raw.tweaks !== null && Object.keys(raw.tweaks).length === 0);
+    if (raw.dark === undefined && raw.designWidth === undefined && noTweaks) {
       throw new CanvasToolError(`The variant ${JSON.stringify(label)} changes nothing: give it dark, designWidth or tweaks.`);
     }
     return { ...raw, label };
@@ -1758,7 +1760,7 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
         name: "canvas_duplicate",
         label: "Duplicate on design canvas",
         description:
-          `Copy any frame beside it (right unless side says). A group or artboard comes with its members and the arrows between them. With variants, copy a page once per variant (up to ${DESIGN_VARIANTS_PER_CALL}) into one new group named title, beside the original: each variant has a label and sets dark, designWidth and/or tweaks.`,
+          `Copy any frame beside it (right unless side says). A group or artboard comes with its members and the arrows between them. With variants, copy a page once per variant (up to ${DESIGN_VARIANTS_PER_CALL}) into one new group named title, beside the original (a page in an unlocked group: into that group): each variant has a label and sets dark, designWidth and/or tweaks.`,
         parameters: Type.Object({
           id: Type.String({ description: FRAME_REF }),
           side: Type.Optional(BesideSchema),
@@ -1798,6 +1800,9 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
                 new CanvasToolError(
                   `The canvas is full (${DESIGN_CANVAS_LIMITS.frames} frames, ${DESIGN_CANVAS_LIMITS.framesPerPage} on a page). Remove a frame first.`,
                 );
+              if (!variants && groupTitle !== undefined) {
+                throw new CanvasToolError("title names the group variants go in; pass variants, or leave title out.");
+              }
               if (!variants) {
                 // A group or artboard brings its members, and the arrows that join two of them.
                 const members = isDesignContainer(source.kind) ? doc.frames.filter((frame) => frame.groupId === source.id) : [];
@@ -1848,9 +1853,15 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
                 throw new CanvasToolError("Variants are of a page (kind file), or of an artifact for a dark look. Duplicate other frames without variants.");
               }
               const keepSource = !source.locked && source.groupId === undefined;
+              // Groups do not nest, so the variants of a page in a group (or
+              // artboard) that is not locked join it beside the page instead of
+              // getting a group of their own.
+              const container =
+                source.groupId !== undefined ? doc.frames.find((frame) => frame.id === source.groupId && !frame.locked) : undefined;
+              const added = variants.length + (container ? 0 : 1);
               if (
-                doc.frames.length + variants.length + 1 > DESIGN_CANVAS_LIMITS.frames ||
-                doc.frames.filter((frame) => frame.pageId === source.pageId).length + variants.length + 1 > DESIGN_CANVAS_LIMITS.framesPerPage
+                doc.frames.length + added > DESIGN_CANVAS_LIMITS.frames ||
+                doc.frames.filter((frame) => frame.pageId === source.pageId).length + added > DESIGN_CANVAS_LIMITS.framesPerPage
               ) {
                 throw full();
               }
@@ -1877,13 +1888,43 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
               // the group, the row leaves room for the group's own padding.
               const rowW = copies.reduce((sum, copy) => sum + copy.w, 0) + DESIGN_FRAME_GAP * (copies.length - 1);
               const rowH = Math.max(...copies.map((copy) => copy.h));
-              const pad = keepSource ? { left: 0, top: 0, right: 0, bottom: 0 } : GROUP_PADDING;
-              const block = besideBox(
+              const pad = keepSource || container ? { left: 0, top: 0, right: 0, bottom: 0 } : GROUP_PADDING;
+              let block = besideBox(
                 source,
                 { w: rowW + pad.left + pad.right, h: rowH + pad.top + pad.bottom },
                 side,
-                blockersOn(doc, source.pageId, new Set([source.id])),
+                blockersOn(doc, source.pageId, new Set([source.id, container?.id])),
               );
+              if (container) {
+                // An artboard keeps the width the person drew: a row that would run past it starts below.
+                if (container.kind === "frame" && block.x + rowW > container.x + container.w - GROUP_PADDING.right) {
+                  const held = doc.frames.filter((frame) => frame.groupId === container.id);
+                  block = { x: container.x + GROUP_PADDING.left, y: Math.max(...held.map((frame) => frame.y + frame.h)) + DESIGN_FRAME_GAP };
+                }
+                let cursor = block.x;
+                for (const copy of copies) {
+                  copy.x = clampCoord(cursor);
+                  copy.y = clampCoord(block.y);
+                  copy.groupId = container.id;
+                  cursor += copy.w + DESIGN_FRAME_GAP;
+                }
+                let next: DesignCanvas = refitGroups({ ...doc, frames: [...doc.frames, ...copies] }, [container.id]);
+                if (container.kind === "frame") {
+                  const grown = copies.reduce((board, copy) => growGroupToHold(board, copy), container);
+                  next = { ...next, frames: next.frames.map((frame) => (frame.id === container.id ? grown : frame)) };
+                }
+                const joined = next.frames.find((frame) => frame.id === container.id)!;
+                return {
+                  doc: next,
+                  value: {
+                    status: "duplicated",
+                    units: "canvas",
+                    group: summarizeFrame(joined),
+                    note: `The variants joined ${JSON.stringify(container.title || container.id)}, the ${container.kind === "frame" ? "artboard" : "group"} the page is in${groupTitle !== undefined ? ", so title was not used" : ""}.`,
+                    frames: copies.map((copy) => ({ id: copy.id, title: copy.title, box: { x: copy.x, y: copy.y, w: copy.w, h: copy.h } })),
+                  },
+                };
+              }
               let cursor = block.x + pad.left;
               for (const copy of copies) {
                 copy.x = clampCoord(cursor);

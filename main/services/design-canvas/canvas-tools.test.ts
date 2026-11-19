@@ -1369,6 +1369,11 @@ test("canvas_duplicate makes a page's variants in one call, side by side in one 
   assert.match(refused.message, /data-density/u, "it names the tweaks the page has");
   assert.equal((await store.get("chat-1")).revision, before.revision, "all or nothing: no variant was added");
   assert.equal((await call("canvas_duplicate", { id: page.frame.id, variants: [{ label: "Same" }] })).status, "error");
+  assert.equal((await call("canvas_duplicate", { id: page.frame.id, variants: [{ label: "Same", tweaks: {} }] })).status, "error", "empty tweaks set nothing");
+  const titled = await call("canvas_duplicate", { id: page.frame.id, title: "Home looks" });
+  assert.equal(titled.status, "error", "a title with no variants names nothing");
+  assert.match(titled.message, /pass variants/u);
+  assert.equal((await store.get("chat-1")).revision, before.revision, "no copy was made");
 
   const made = await call("canvas_duplicate", {
     id: page.frame.id,
@@ -1404,6 +1409,24 @@ test("canvas_duplicate makes a page's variants in one call, side by side in one 
   assert.equal(after.frames.find((frame) => frame.id === page.frame.id)!.groupId, undefined);
   assert.ok(apart.group.box.y >= page.frame.box.y + page.frame.box.h, "below the original");
   assert.equal((await call("canvas_duplicate", { id: made.group.id, variants: [{ label: "Dark", dark: true }] })).status, "error", "only a page has variants");
+
+  // Groups do not nest: the variants of a page in an unlocked group join that group beside it.
+  await fs.writeFile(path.join(workspace, "design", "pricing.html"), "<!doctype html><title>Pricing</title>");
+  const flow = await call("canvas_place_frame", { kind: "group", title: "Flow", x: 0, y: 6000 });
+  const pricing = await call("canvas_place_frame", { kind: "file", title: "Pricing", path: "design/pricing.html", groupId: flow.frame.id });
+  const groupsBefore = (await store.get("chat-1")).frames.filter((frame) => frame.kind === "group").length;
+  const joined = await call("canvas_duplicate", { id: pricing.frame.id, title: "Ignored", variants: [{ label: "Dark", dark: true }, { label: "Phone", designWidth: 390 }] });
+  assert.equal(joined.group.id, flow.frame.id, "the answer names the group they joined");
+  assert.match(joined.note, /title was not used/u);
+  const grouped = await store.get("chat-1");
+  assert.equal(grouped.frames.filter((frame) => frame.kind === "group").length, groupsBefore, "no new group");
+  const flowBox = grouped.frames.find((frame) => frame.id === flow.frame.id)!;
+  for (const entry of joined.frames as { id: string }[]) {
+    const copy = grouped.frames.find((frame) => frame.id === entry.id)!;
+    assert.equal(copy.groupId, flow.frame.id);
+    assert.ok(copy.x >= pricing.frame.box.x + pricing.frame.box.w, "beside the page");
+    assert.ok(flowBox.x <= copy.x && copy.x + copy.w <= flowBox.x + flowBox.w && copy.y + copy.h <= flowBox.y + flowBox.h, "inside the group, which fits them");
+  }
 });
 
 test("canvas_page adds, renames, duplicates, reorders, shows and deletes pages, never the last one", async (t) => {
