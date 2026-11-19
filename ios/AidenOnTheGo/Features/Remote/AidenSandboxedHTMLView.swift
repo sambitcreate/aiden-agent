@@ -1,3 +1,4 @@
+import GameController
 import SwiftUI
 import WebKit
 
@@ -51,22 +52,68 @@ enum AidenPreviewNavigation {
 
 /// Decides whether a link offer may reach the person. A page with scripts on
 /// can fake a link tap (`a.click()`) as often as it likes, so an offer is
-/// admitted only right after a real touch, and only once per touch.
-/// VoiceOver and Switch Control activate links without a touch the view can
-/// see, so while they run an offer is admitted at most once per interval.
+/// admitted only right after a real tap on the preview, once per tap. A touch
+/// that travels more than `tapSlop` (a scroll or drag) is not a tap.
+///
+/// A hardware keyboard (including Full Keyboard Access), VoiceOver and Switch
+/// Control activate links without a touch the view can see. While one of them
+/// may be in use, an offer is also admitted without a tap, at most once per
+/// `touchlessInterval` and `touchlessLimit` times per loaded document.
 struct AidenLinkOfferGate: Equatable, Sendable {
     static let interactionWindow: TimeInterval = 1.0
-    static let assistiveInterval: TimeInterval = 2.0
+    static let tapSlop: Double = 10
+    static let touchlessInterval: TimeInterval = 2.0
+    static let touchlessLimit = 3
 
     private var lastInteraction: Date?
     private var lastAdmitted: Date?
+    private var touchlessAdmitted = 0
+    private var touchStart: CGPoint?
+    private var touchTravelledTooFar = false
 
-    /// A touch on the web view ended.
+    // MARK: Touches
+
+    mutating func touchBegan(at point: CGPoint) {
+        touchStart = point
+        touchTravelledTooFar = false
+    }
+
+    mutating func touchMoved(to point: CGPoint) {
+        guard let touchStart else { return }
+        if hypot(point.x - touchStart.x, point.y - touchStart.y) > Self.tapSlop {
+            touchTravelledTooFar = true
+        }
+    }
+
+    /// Returns whether the touch counted as a tap.
+    @discardableResult
+    mutating func touchEnded(at point: CGPoint, time: Date) -> Bool {
+        touchMoved(to: point)
+        defer { touchCancelled() }
+        guard touchStart != nil, !touchTravelledTooFar else { return false }
+        userInteracted(at: time)
+        return true
+    }
+
+    mutating func touchCancelled() {
+        touchStart = nil
+        touchTravelledTooFar = false
+    }
+
+    /// A tap on the preview ended.
     mutating func userInteracted(at date: Date) {
         lastInteraction = date
     }
 
-    mutating func admit(at date: Date, assistiveTechnologyRunning: Bool = false) -> Bool {
+    // MARK: Offers
+
+    /// A new document loaded; its touchless allowance starts over.
+    mutating func documentDidLoad() {
+        touchlessAdmitted = 0
+        lastInteraction = nil
+    }
+
+    mutating func admit(at date: Date, touchlessActivationPossible: Bool = false) -> Bool {
         if let interaction = lastInteraction {
             let elapsed = date.timeIntervalSince(interaction)
             if elapsed >= 0, elapsed <= Self.interactionWindow {
@@ -75,10 +122,11 @@ struct AidenLinkOfferGate: Equatable, Sendable {
                 return true
             }
         }
-        guard assistiveTechnologyRunning else { return false }
-        if let lastAdmitted, date.timeIntervalSince(lastAdmitted) < Self.assistiveInterval {
+        guard touchlessActivationPossible, touchlessAdmitted < Self.touchlessLimit else { return false }
+        if let lastAdmitted, date.timeIntervalSince(lastAdmitted) < Self.touchlessInterval {
             return false
         }
+        touchlessAdmitted += 1
         lastAdmitted = date
         return true
     }
@@ -274,19 +322,44 @@ final class AidenSandboxedHTMLCoordinator: NSObject, WKNavigationDelegate, WKUID
             webView.configuration.userContentController.add(rules)
             self.html = html
             self.recovery.documentDidLoad()
+            self.offerGate.documentDidLoad()
             self.load(in: webView)
         }
     }
 
-    /// A real touch on the web view ended; the next link offer may go through.
+    /// A real tap on the web view ended; the next link offer may go through.
     func userInteracted(at date: Date = Date()) {
         offerGate.userInteracted(at: date)
     }
 
+    func touchBegan(at point: CGPoint) { offerGate.touchBegan(at: point) }
+    func touchMoved(to point: CGPoint) { offerGate.touchMoved(to: point) }
+    func touchEnded(at point: CGPoint) { offerGate.touchEnded(at: point, time: Date()) }
+    func touchCancelled() { offerGate.touchCancelled() }
+
+#if DEBUG
+    /// Set by the Debug preview fixture: the simulator passes the Mac's
+    /// keyboard through as a `GCKeyboard`, which would let scripted clicks in
+    /// through the touchless path and hide what a UI test means to check.
+    static var touchlessActivationOverride: Bool?
+#endif
+
+    /// A hardware keyboard, VoiceOver or Switch Control can activate a link
+    /// without a touch. Voice Control has no public signal, so a Voice
+    /// Control activation is only admitted when one of these is also present.
+    /// Replaceable so tests do not depend on the simulator's keyboard.
+    var touchlessActivationPossible: @MainActor () -> Bool = {
+#if DEBUG
+        if let override = AidenSandboxedHTMLCoordinator.touchlessActivationOverride { return override }
+#endif
+        return UIAccessibility.isVoiceOverRunning
+            || UIAccessibility.isSwitchControlRunning
+            || GCKeyboard.coalesced != nil
+    }
+
     /// Passes a link offer on only if `AidenLinkOfferGate` admits it.
     private func offer(_ url: URL) {
-        let assistive = UIAccessibility.isVoiceOverRunning || UIAccessibility.isSwitchControlRunning
-        guard offerGate.admit(at: Date(), assistiveTechnologyRunning: assistive) else { return }
+        guard offerGate.admit(at: Date(), touchlessActivationPossible: touchlessActivationPossible()) else { return }
         onLinkOffer(url)
     }
 
@@ -410,12 +483,16 @@ final class AidenSandboxedHTMLCoordinator: NSObject, WKNavigationDelegate, WKUID
     }
 }
 
-/// Notes when a touch on the web view ends so a link offer can follow it.
-/// It never recognizes, so it cannot take a tap from WebKit, and it runs
-/// alongside every other recognizer. WebKit's link activation reaches the
-/// navigation delegate over IPC, after this has run for the same touch.
+/// Follows each single-finger touch on the web view so the gate can tell a
+/// tap from a scroll. It never recognizes, so it cannot take a tap or a pan
+/// from WebKit: it runs alongside every other recognizer and is never
+/// required to fail or made to wait for one. A recognizer on the web view
+/// sees touches that hit WebKit's content subview, and sees a touch end
+/// before WebKit's link activation comes back over IPC to the navigation
+/// delegate (proven by `AidenSandboxedHTMLUITests`).
 private final class AidenTouchRecorder: UIGestureRecognizer, UIGestureRecognizerDelegate {
     private weak var coordinator: AidenSandboxedHTMLCoordinator?
+    private var tracked: UITouch?
 
     init(coordinator: AidenSandboxedHTMLCoordinator) {
         self.coordinator = coordinator
@@ -426,12 +503,43 @@ private final class AidenTouchRecorder: UIGestureRecognizer, UIGestureRecognizer
         delegate = self
     }
 
+    override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent) {
+        super.touchesBegan(touches, with: event)
+        guard tracked == nil, (event.allTouches?.count ?? touches.count) == 1, let touch = touches.first else {
+            // A second finger means this is not a tap.
+            giveUp()
+            return
+        }
+        tracked = touch
+        coordinator?.touchBegan(at: touch.location(in: nil))
+    }
+
+    override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent) {
+        super.touchesMoved(touches, with: event)
+        guard let tracked, touches.contains(tracked) else { return }
+        coordinator?.touchMoved(to: tracked.location(in: nil))
+    }
+
     override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent) {
-        coordinator?.userInteracted()
+        super.touchesEnded(touches, with: event)
+        if let tracked, touches.contains(tracked) {
+            coordinator?.touchEnded(at: tracked.location(in: nil))
+        }
         state = .failed
     }
 
     override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent) {
+        super.touchesCancelled(touches, with: event)
+        giveUp()
+    }
+
+    override func reset() {
+        super.reset()
+        tracked = nil
+    }
+
+    private func giveUp() {
+        coordinator?.touchCancelled()
         state = .failed
     }
 
@@ -440,5 +548,19 @@ private final class AidenTouchRecorder: UIGestureRecognizer, UIGestureRecognizer
         shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer
     ) -> Bool {
         true
+    }
+
+    func gestureRecognizer(
+        _ gestureRecognizer: UIGestureRecognizer,
+        shouldRequireFailureOf otherGestureRecognizer: UIGestureRecognizer
+    ) -> Bool {
+        false
+    }
+
+    func gestureRecognizer(
+        _ gestureRecognizer: UIGestureRecognizer,
+        shouldBeRequiredToFailBy otherGestureRecognizer: UIGestureRecognizer
+    ) -> Bool {
+        false
     }
 }

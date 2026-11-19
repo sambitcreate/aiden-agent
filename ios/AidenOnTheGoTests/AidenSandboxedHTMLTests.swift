@@ -193,13 +193,51 @@ final class AidenSandboxedHTMLTests: XCTestCase {
         XCTAssertFalse(gate.admit(at: start.addingTimeInterval(11.6)))
     }
 
-    func testLinkOffersWithAssistiveTechnologyAreSpacedOut() {
+    func testOnlyATapOpensTheGateNotAScrollOrDrag() {
         let start = Date(timeIntervalSinceReferenceDate: 1_000)
         var gate = AidenLinkOfferGate()
-        XCTAssertTrue(gate.admit(at: start, assistiveTechnologyRunning: true))
-        XCTAssertFalse(gate.admit(at: start.addingTimeInterval(1.9), assistiveTechnologyRunning: true))
-        XCTAssertTrue(gate.admit(at: start.addingTimeInterval(2.1), assistiveTechnologyRunning: true))
-        XCTAssertFalse(gate.admit(at: start.addingTimeInterval(2.2), assistiveTechnologyRunning: true))
+
+        // A drag that comes back to where it started is still not a tap.
+        gate.touchBegan(at: CGPoint(x: 100, y: 300))
+        gate.touchMoved(to: CGPoint(x: 100, y: 200))
+        XCTAssertFalse(gate.touchEnded(at: CGPoint(x: 100, y: 300), time: start))
+        XCTAssertFalse(gate.admit(at: start.addingTimeInterval(0.2)), "a scroll must not open the gate")
+
+        // A cancelled touch (WebKit or the system took it) is not a tap.
+        gate.touchBegan(at: CGPoint(x: 100, y: 300))
+        gate.touchCancelled()
+        XCTAssertFalse(gate.touchEnded(at: CGPoint(x: 100, y: 300), time: start))
+        XCTAssertFalse(gate.admit(at: start.addingTimeInterval(0.3)))
+
+        // A tap that wobbles a few points is a tap.
+        gate.touchBegan(at: CGPoint(x: 100, y: 300))
+        gate.touchMoved(to: CGPoint(x: 104, y: 303))
+        XCTAssertTrue(gate.touchEnded(at: CGPoint(x: 103, y: 304), time: start))
+        XCTAssertTrue(gate.admit(at: start.addingTimeInterval(0.2)))
+    }
+
+    func testTouchlessLinkOffersAreSpacedOutAndCappedPerDocument() {
+        let start = Date(timeIntervalSinceReferenceDate: 1_000)
+        var gate = AidenLinkOfferGate()
+        func admit(after seconds: TimeInterval) -> Bool {
+            gate.admit(at: start.addingTimeInterval(seconds), touchlessActivationPossible: true)
+        }
+        XCTAssertTrue(admit(after: 0))
+        XCTAssertFalse(admit(after: 1.9), "too soon after the last offer")
+        XCTAssertTrue(admit(after: 2.1))
+        XCTAssertFalse(admit(after: 2.2))
+        XCTAssertTrue(admit(after: 4.5))
+        // Three unprompted offers per document, however patient the page is.
+        XCTAssertFalse(admit(after: 10))
+        XCTAssertFalse(admit(after: 100))
+
+        // A real tap still gets through after the cap.
+        gate.userInteracted(at: start.addingTimeInterval(200))
+        XCTAssertTrue(admit(after: 200.5))
+
+        // A new document starts a fresh allowance.
+        gate.documentDidLoad()
+        XCTAssertTrue(admit(after: 300))
     }
 
     func testScriptedLinkClicksOfferNothingWithoutATouch() async throws {
@@ -225,6 +263,8 @@ final class AidenSandboxedHTMLTests: XCTestCase {
                 onOffer(url)
             }
         )
+        // No keyboard or assistive technology: only a tap can open the gate.
+        coordinator.touchlessActivationPossible = { false }
         await fulfillment(of: [finished], timeout: 10)
 
         // No touch: ten scripted clicks reach nobody.
@@ -242,7 +282,12 @@ final class AidenSandboxedHTMLTests: XCTestCase {
         let settle = expectation(description: "settle")
         settle.isInverted = true
         await fulfillment(of: [settle], timeout: 1)
-        XCTAssertEqual(offers, [URL(string: "https://example.com/same")!])
+        // Which of the two scripted paths wins the one offer is not ordered.
+        XCTAssertEqual(offers.count, 1)
+        XCTAssertTrue(
+            Set(["https://example.com/same", "https://example.com/blank"]).contains(offers.first?.absoluteString ?? ""),
+            "\(offers)"
+        )
     }
 
     // MARK: Helpers
