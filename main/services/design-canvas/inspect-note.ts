@@ -79,7 +79,12 @@ export function withDesignInspectNote<C extends { messages: readonly unknown[] }
 export type WrittenPageInspector = {
   /** A page was written and placed: inspect it, after any inspect already running. */
   written(path: string): void;
-  /** The reports finished since the last call, in the order they finished, waiting up to `waitMs` for ones still running. */
+  /**
+   * The reports finished since the last call, in the order they finished,
+   * waiting up to `waitMs` for ones still running. A request already stopped,
+   * or stopped while waiting, gets none at once, and they are kept for the
+   * next request.
+   */
   take(waitMs?: number, signal?: AbortSignal): Promise<WrittenPageReport[]>;
 };
 
@@ -113,6 +118,7 @@ export function createWrittenPageInspector(options: {
       });
     },
     async take(waitMs = DESIGN_PAGE_INSPECT_WAIT_MS, signal) {
+      if (signal?.aborted) return [];
       let timer: ReturnType<typeof setTimeout> | undefined;
       let stop: (() => void) | undefined;
       await Promise.race([
@@ -125,6 +131,7 @@ export function createWrittenPageInspector(options: {
       ]);
       if (timer) clearTimeout(timer);
       if (stop) signal?.removeEventListener("abort", stop);
+      if (signal?.aborted) return [];
       const reports = [...ready.values()];
       ready.clear();
       return reports;

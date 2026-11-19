@@ -300,8 +300,15 @@ test("a request waits only so long for a page still being drawn, and its report 
   const waiting = inspector.take(60_000, stop.signal);
   stop.abort();
   assert.deepEqual(await waiting, [], "Stop does not wait for the drawing");
+  const started = Date.now();
+  assert.deepEqual(await inspector.take(60_000, stop.signal), [], "a request already stopped does not wait either");
+  assert.ok(Date.now() - started < 1_000);
   gate.resolve(["design/slow.html is 1600px wide at its 1280px design width."]);
-  assert.deepEqual(await inspector.take(1_000), [{ path: "design/slow.html", findings: ["design/slow.html is 1600px wide at its 1280px design width."] }]);
+  const report = [{ path: "design/slow.html", findings: ["design/slow.html is 1600px wide at its 1280px design width."] }];
+  // Once drawn, a stopped request still gets nothing, and the report waits for the next one.
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(await inspector.take(1_000, stop.signal), []);
+  assert.deepEqual(await inspector.take(1_000), report);
   inspector.written("design/broken.html");
   inspector.written("design/not-on-canvas.html");
   assert.deepEqual(await inspector.take(1_000), [], "a failed inspect and a page no frame shows report nothing");
