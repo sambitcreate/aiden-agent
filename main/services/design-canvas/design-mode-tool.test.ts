@@ -73,6 +73,34 @@ test("Not now declines without touching design mode; another window cannot answe
   assert.deepEqual(events, [{ event: "design_mode_declined", props: {} }], "refused answers count for nothing");
 });
 
+test("Not now holds for the rest of the chat, in that chat only, until the person opens design mode themselves", async () => {
+  const consent = new DesignModeConsent();
+  const window = windowOwner();
+  const first = consent.request({ chatId: "chat-1", reason: "Compare.", owner: window.owner });
+  await consent.answer(requestIdOf(window.sent), "decline", window.owner, async () => undefined);
+  assert.equal(await first, "declined");
+
+  const cardsBefore = window.sent.filter((entry) => entry.channel === "designCanvas:consent").length;
+  assert.equal(await consent.request({ chatId: "chat-1", reason: "Next reply.", owner: window.owner }), "declined");
+  assert.equal(
+    window.sent.filter((entry) => entry.channel === "designCanvas:consent").length,
+    cardsBefore,
+    "no second card in a chat that said Not now",
+  );
+
+  const other = windowOwner(9);
+  const elsewhere = consent.request({ chatId: "chat-2", reason: "Another chat.", owner: other.owner });
+  assert.ok(other.sent.some((entry) => entry.channel === "designCanvas:consent"), "another chat still gets its card");
+  other.close();
+  assert.equal(await elsewhere, "unavailable");
+
+  consent.forgetDecline("chat-1");
+  const again = consent.request({ chatId: "chat-1", reason: "After they opened it.", owner: window.owner });
+  assert.equal(window.sent.filter((entry) => entry.channel === "designCanvas:consent").length, cardsBefore + 1);
+  window.close();
+  assert.equal(await again, "unavailable");
+});
+
 test("a card stops waiting when the reply stops, the window closes, or a newer card replaces it", async () => {
   const consent = new DesignModeConsent();
   const stopped = new AbortController();

@@ -14,8 +14,14 @@ import { declareOnDemandSummary } from "../on-demand-tools.js";
 export const DESIGN_MODE_TOOL_NAME = "design_mode";
 /** The reason shown on the consent card. */
 export const DESIGN_MODE_REASON_CHARS = 200;
-/** A card nobody answers stops waiting after this long. */
-export const DESIGN_MODE_CONSENT_TIMEOUT_MS = 10 * 60_000;
+/**
+ * A card nobody answers stops waiting after this long, so a reply is never
+ * held for long by a card the person walked away from; Aiden then carries on
+ * in the chat.
+ */
+export const DESIGN_MODE_CONSENT_TIMEOUT_MS = 2 * 60_000;
+/** Chats whose "Not now" is remembered; the oldest is forgotten past this. */
+const DECLINED_CHATS_KEPT = 500;
 
 /** `designCanvas:consent`, to the turn's window. */
 export type DesignModeConsentRequest = { requestId: string; chatId: string; reason: string };
@@ -28,6 +34,12 @@ type Pending = { chatId: string; owner: ChatGenerationOwner; finish(result: Cons
 /** Pending consent cards. Only the window that received a card may answer it. */
 export class DesignModeConsent {
   private pending = new Map<string, Pending>();
+  /**
+   * Chats where the person chose Not now. Aiden is not asked again in them
+   * until the person opens design mode themselves (`forgetDecline`). Kept in
+   * memory only, so a restart of Aiden forgets them.
+   */
+  private declined = new Set<string>();
 
   constructor(private readonly timeoutMs = DESIGN_MODE_CONSENT_TIMEOUT_MS) {}
 
@@ -36,6 +48,8 @@ export class DesignModeConsent {
     if (!owner || owner.kind === "remote" || owner.id === 0 || owner.isDestroyed() || signal?.aborted) {
       return Promise.resolve("unavailable");
     }
+    // Not now holds for the rest of the chat: no second card.
+    if (this.declined.has(input.chatId)) return Promise.resolve("declined");
     // One card per chat: a newer request replaces an older one still showing.
     for (const entry of [...this.pending.values()]) if (entry.chatId === input.chatId) entry.finish("unavailable");
     if (this.pending.size >= 16) return Promise.resolve("unavailable");
@@ -97,6 +111,9 @@ export class DesignModeConsent {
       return false;
     }
     if (answer === "decline") {
+      this.declined.delete(request.chatId);
+      this.declined.add(request.chatId);
+      if (this.declined.size > DECLINED_CHATS_KEPT) this.declined.delete(this.declined.values().next().value!);
       request.finish("declined");
       reportAnalyticsEvent("design_mode_declined", {});
       return true;
@@ -107,9 +124,15 @@ export class DesignModeConsent {
       request.finish("unavailable");
       throw error;
     }
+    this.declined.delete(request.chatId);
     request.finish("entered");
     reportAnalyticsEvent("design_mode_entered", { source: "aiden" });
     return true;
+  }
+
+  /** The person opened design mode themselves, so Aiden may ask again in this chat later. */
+  forgetDecline(chatId: string): void {
+    this.declined.delete(chatId);
   }
 }
 
@@ -165,7 +188,9 @@ export function createDesignModeTool(deps: DesignModeToolDeps): AgentTool {
         }
         return result({
           status: answer,
-          ...(answer === "declined" ? { next: "The person chose Not now. Carry on in the chat and do not ask again this reply." } : {}),
+          ...(answer === "declined" ? {
+                next: "The person chose Not now for this chat. Carry on in the chat without the canvas and do not ask again; they can open design mode themselves with the Design button.",
+              } : {}),
         });
       },
     },
