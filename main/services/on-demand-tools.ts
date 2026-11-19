@@ -96,6 +96,13 @@ export interface OnDemandTools {
   readonly loader: AgentTool;
   /** Every tool held back from the start of a run. */
   readonly onDemand: readonly AgentTool[];
+  /**
+   * The tools the transcript head declares, the same for every run of the
+   * chat. A tool loaded later is declared by the system message the agent
+   * loop appends (`toolsAdded`), which the journal keeps, so loading one never
+   * rewrites the head and the cached prefix stays put across turns.
+   */
+  readonly headTools: readonly AgentTool[];
   /** Tools to declare at the start of a run over `messages` (the chat so far). */
   initialTools(messages: readonly AgentMessage[]): AgentTool[];
   /** Declares the on-demand tools the transcript has loaded or called since. */
@@ -151,9 +158,10 @@ export function createOnDemandTools(
   return {
     loader,
     onDemand,
+    headTools: [...everyday, loader],
     initialTools(messages) {
-      // First-use order, the order `prepare` appended them in during earlier
-      // runs, so the declared list (and the provider's cached prefix) stays the same.
+      // What the run can execute. The head declares only `headTools`; the
+      // journal's appended system messages declare the rest, in first-use order.
       return [...everyday, loader, ...onDemandToolsUsed(messages, available).map((name) => byName.get(name)!)];
     },
     async prepare(context) {

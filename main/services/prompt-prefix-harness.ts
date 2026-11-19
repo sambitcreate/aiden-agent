@@ -294,7 +294,8 @@ export function createPromptPrefixHarness(options: PromptPrefixHarnessOptions = 
       retainsSystemUpdates: midConversationSystem,
     };
     let initialMessages: AgentMessage[] = [...history];
-    const head = createInitialSystemMessage(systemPrompt, tools.map(toToolDeclaration));
+    // llm-client: the head declares the chat's fixed tools, the journal the loaded ones.
+    const head = createInitialSystemMessage(systemPrompt, (onDemandTools && "assembly" in input ? input.assembly.headTools : tools).map(toToolDeclaration));
     if (head) initialMessages = [head, ...initialMessages];
     const prepare = async <C extends { messages: AgentMessage[]; tools?: AgentTool[] }>(context: C): Promise<C> => {
       let prepared = context;

@@ -542,20 +542,55 @@ describe("prompt prefix stability: already stable", () => {
 });
 
 describe("prompt prefix stability: causes fixed by later phases", () => {
-  test("loading a tool mid-turn leaves the next step's prefix unchanged", { todo: "phase 2: fixed tool list per chat" }, async () => {
-    const harness = createPromptPrefixHarness();
-    const requests = await harness.turn({
-      prompt: "Classify the attachment.",
-      assembly: await workspaceChat({ tools: [...workspaceTools, codemodeTool, classifyTool] }),
-      responses: [
-        fauxAssistantMessage(fauxToolCall(LOAD_TOOLS_TOOL_NAME, { names: ["classify"] }), { stopReason: "toolUse" }),
-        fauxAssistantMessage("Loaded."),
-      ],
+  // On a wire that can append a tool (a `tool_addition` block, or Responses'
+  // additional tools), the agent loop declares a loaded tool in an appended
+  // system message and the request's tool list stays as it was. A wire
+  // without in-place system messages collapses every declaration into the one
+  // tool list, so loading a tool there costs one miss (phase 2 deviation).
+  const appendingWires = wires.filter((entry) => entry.midConversationSystem);
+  const loadClassify = async (harness: ReturnType<typeof createPromptPrefixHarness>) => harness.turn({
+    prompt: "Classify the attachment.",
+    assembly: await workspaceChat({ tools: [...workspaceTools, codemodeTool, classifyTool] }),
+    responses: [
+      fauxAssistantMessage(fauxToolCall(LOAD_TOOLS_TOOL_NAME, { names: ["classify"] }), { stopReason: "toolUse" }),
+      fauxAssistantMessage("Loaded."),
+    ],
+  });
+  for (const { wire, midConversationSystem, label } of appendingWires) {
+    test(`loading a tool mid-turn leaves the next step's prefix unchanged (${label})`, async () => {
+      const harness = createPromptPrefixHarness({ wire, midConversationSystem });
+      const requests = await loadClassify(harness);
+      assert.equal(requests.length, 2);
+      assert.ok(!requests[0]!.carries("Returns one label from the configured set."), "held back before loading");
+      assert.ok(requests[1]!.carries("Returns one label from the configured set."), "declared once loaded");
+      assert.deepEqual(comparePromptRequests(requests[0]!, requests[1]!), {});
+      assert.equal(harness.networkCalls, 0);
     });
-    assert.equal(requests.length, 2);
-    assert.ok(!requests[0]!.carries("Returns one label from the configured set."), "held back before loading");
-    assert.ok(requests[1]!.carries("Returns one label from the configured set."), "declared once loaded");
-    assert.deepEqual(comparePromptRequests(requests[0]!, requests[1]!), {});
+
+    test(`a tool loaded on one turn leaves the next turn's tool list unchanged (${label})`, { todo: "phase 8: the turn-start head collapse folds the loaded tool into the head" }, async () => {
+      const harness = createPromptPrefixHarness({ wire, midConversationSystem });
+      const one = await loadClassify(harness);
+      const [next] = await harness.turn({
+        prompt: "And the next one?",
+        assembly: await workspaceChat({ tools: [...workspaceTools, codemodeTool, classifyTool] }),
+        responses: reply("Invoice again."),
+      });
+      assert.ok(next!.carries("Returns one label from the configured set."), "still declared");
+      assert.deepEqual(comparePromptRequests(lastOf(one), next!), {});
+    });
+  }
+
+  test("a tool loaded on one turn leaves the next turn's tools on the wire unchanged (Anthropic Messages)", async () => {
+    // The collapsed tool list already carried the loaded tool on turn 1's last step.
+    const harness = createPromptPrefixHarness();
+    const one = await loadClassify(harness);
+    const [next] = await harness.turn({
+      prompt: "And the next one?",
+      assembly: await workspaceChat({ tools: [...workspaceTools, codemodeTool, classifyTool] }),
+      responses: reply("Invoice again."),
+    });
+    assert.ok(next!.carries("Returns one label from the configured set."), "still declared");
+    assert.equal(comparePromptRequests(lastOf(one), next!).wire, undefined);
   });
 
   test("Bot open work changing between turns does not change system", async () => {

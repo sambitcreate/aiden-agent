@@ -4130,7 +4130,9 @@ export const llmClient = {
         isConnectorTool: (name) => claimCheckOptions.isConnectorTool(name),
       });
       approvalRequestText = currentUser?.content ?? "";
-      const head = createInitialSystemMessage(systemPrompt, runtimeTools.map(toToolDeclaration));
+      // The head declares the chat's fixed tools; loaded tools are declared by
+      // the system messages the journal kept, or appended before this prompt.
+      const head = createInitialSystemMessage(systemPrompt, (onDemandTools ? assembly.headTools : runtimeTools).map(toToolDeclaration));
       if (head) initialMessages = [head, ...initialMessages];
       if (agentsInstructions) {
         const prepared = await agentsInstructions.apply({
