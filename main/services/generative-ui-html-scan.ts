@@ -8,7 +8,10 @@
 // one the tree builder moves, or one parse5 drops inside a <select> (which
 // Chromium builds) still counts. An <svg>, <math> or <style> in a <select>
 // is built by parse5's in-body rules, as Chromium builds it, so what it holds
-// is read as SVG, MathML or CSS.
+// is read as SVG, MathML or CSS. Where the two still differ in a <select>,
+// the markup is refused: an end tag that leaves an <svg> or <math> open in
+// parse5 where Chromium closes it, and a raw-text or RCDATA tag (<xmp>,
+// <textarea>, <noscript>...) whose content Chromium reads as text.
 //
 // One scanner reads a whole visual, or a streaming draft chunk by chunk:
 // each chunk is parsed once, so a draft costs no more than the finished
@@ -40,9 +43,9 @@
 //   (read as HTML for text/html; for an XML type, XHTML and SVG included,
 //   only if it names a namespace the page runs, as HTML with element
 //   prefixes and well-formed comments dropped and prefixed URL attributes
-//   read, and refused if it has a DTD, entity or attribute-list declaration
-//   or content HTML would read as text; both ways for a computed or spread
-//   type),
+//   read, and refused if it has a DTD, entity or attribute-list declaration,
+//   a processing instruction or DOCTYPE holding < or >, or content HTML
+//   would read as text; both ways for a computed or spread type),
 //   `execCommand('insertHTML', …)` and `navigation.navigate`.
 // An on* attribute node made by createAttribute is refused outright, and so
 // is markup or a handler a script writes more than MAX_NESTED_HTML_DEPTH
