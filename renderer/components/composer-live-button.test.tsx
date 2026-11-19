@@ -330,3 +330,27 @@ test("once set up, a press starts Live only after dictation has let go of the mi
   unregister();
   assert.equal(started, 1);
 });
+
+test("setup's Start Live also waits for dictation to let go of the microphone", async () => {
+  let started = 0;
+  const live: AssistantLiveController = {
+    ...idleLiveController,
+    setupOpen: true,
+    setupComplete: true,
+    start: async () => { started += 1; },
+  };
+  render(<DockHarness live={live} />);
+  let release: () => void = () => {};
+  const unregister = liveLauncher.onBeforeStart(() => new Promise<void>((resolve) => { release = resolve; }));
+  await act(async () => {
+    fireEvent.click(await screen.findByRole("button", { name: "Start Live" }));
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  });
+  assert.equal(started, 0, "Live waits while the microphone is still held");
+  await act(async () => {
+    release();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
+  unregister();
+  assert.equal(started, 1);
+});

@@ -205,6 +205,12 @@ export function AssistantDockPresentation({
     }
   }, [live.active, live.microphoneActive, setupCompleted]);
 
+  // Every start, from the shortcut, the composer or setup's Start Live, waits
+  // for composer dictation to let go of the microphone first.
+  const startAfterHandoff = React.useCallback(() => {
+    void liveLauncher.prepareStart().then(() => live.start());
+  }, [live]);
+
   const openPanel = React.useCallback(() => {
     let action = liveDockClickAction(live, setupCompleted, stopRevealed);
     if (action === "none") return;
@@ -240,17 +246,18 @@ export function AssistantDockPresentation({
     }
     if (action === "setup") {
       // Composer dictation lets go of the microphone before Live asks for it.
-      // Setup captures nothing until its own Start Live.
+      // Setup captures nothing until its own Start Live, which waits for the
+      // same handoff.
       void liveLauncher.prepareStart();
       live.setSetupOpen(true);
       return;
     }
     if (action === "start") {
-      void liveLauncher.prepareStart().then(() => live.start());
+      startAfterHandoff();
       return;
     }
     onOpenSettings(live.available ? "computerUse" : "providers");
-  }, [live, onOpenSettings, setupCompleted, stopRevealed]);
+  }, [live, onOpenSettings, setupCompleted, startAfterHandoff, stopRevealed]);
   useCommand("assistant.open", openPanel, live.visible && enabled);
 
   const closing = live.state === "closing";
@@ -344,7 +351,7 @@ export function AssistantDockPresentation({
           </span>
         )}
         {!setupCompleted ? (
-          <AssistantLiveSetupDialog live={live} onOpenSettings={onOpenSettings} />
+          <AssistantLiveSetupDialog live={live} onOpenSettings={onOpenSettings} onStart={startAfterHandoff} />
         ) : null}
       </div>
     </>
