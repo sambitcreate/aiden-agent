@@ -12,6 +12,7 @@ import { daemonSettingsManager, profileKeepsLongPromptCache, profileWarmsCaches 
 import { PiCacheWarmer, settleReplyCacheWarmer } from "../../../main/services/pi-cache-warming.js";
 import { withPromptCacheBreakpointsPayload } from "../../../main/services/prompt-cache-breakpoints.js";
 import type { ResolvedModelRuntime } from "../../../main/services/model-runtime-core.js";
+import { createSideCallPrefixLedger } from "../../../main/services/side-call-prefix.js";
 import { compactWithoutMemoryFacts } from "./daemon-compaction-memory.ts";
 import type { CliBotGenerationRuntime } from "./bots.ts";
 import type { BotRuntimeAuthorityAdmission } from "../../../main/services/bot-runtime-authority.js";
@@ -138,6 +139,9 @@ export function createDaemonChats(agentDir: string) {
   // deletion, that device's revocation or the daemon stopping ends warming.
   const idleWarmers = new Map<string, PiCacheWarmer>();
   const idleWarmersStopped = new AbortController();
+  // Each workspace chat's last completed session request, so its compaction
+  // can continue the cached prefix (daemon-compaction-memory.ts).
+  const sessionPrefixes = createSideCallPrefixLedger();
   const adoptIdleWarmer = (chatId: string, warmer: PiCacheWarmer | undefined) => {
     const previous = idleWarmers.get(chatId);
     if (previous && previous !== warmer) previous.dispose();
@@ -305,15 +309,21 @@ export function createDaemonChats(agentDir: string) {
         const observed: StreamFn = (requestModel, context, requestOptions) => {
           const warmer = idleWarmer;
           let finished: ((message: AssistantMessage) => void) | undefined;
+          let recorded: ((message: AssistantMessage) => void) | undefined;
+          // A replay applies the breakpoints itself, and is never tied to this turn's abort signal.
+          const { onPayload: _payload, transformHeaders: _headers, signal, ...replayable } = (requestOptions ?? {}) as Parameters<typeof inner>[2] & object;
+          if (!botAdmission) {
+            try { recorded = signal?.aborted ? undefined : sessionPrefixes.begin(chat.id, requestModel, context, replayable); }
+            catch { sessionPrefixes.forget(chat.id); }
+          }
           if (warmer && !warmer.isDisposed) {
             try {
-              // The replay applies the breakpoints itself, and is never tied to this turn's abort signal.
-              const { onPayload: _payload, transformHeaders: _headers, signal: _signal, ...replayable } = (requestOptions ?? {}) as Parameters<typeof inner>[2] & object;
               headAtRequest = stableHead();
               finished = warmer.requestStarted(requestModel, context, replayable);
             } catch { warmer.stop(); }
           }
           const stream = inner(requestModel, context, requestOptions as Parameters<typeof inner>[2]);
+          if (recorded) void stream.result().then(recorded, () => sessionPrefixes.forget(chat.id));
           if (warmer && finished) void stream.result().then(finished, () => warmer.stop());
           return stream;
         };
@@ -445,9 +455,10 @@ export function createDaemonChats(agentDir: string) {
               if (botAdmission) return undefined;
               if (!entry.session) return { cancel: true };
               return compactWithoutMemoryFacts(event, { session: entry.session, settings: sessionSettings, model: ctx.model, toldFacts,
-                approvedFactLines: memory && "approvedFactLines" in memory ? memory.approvedFactLines : undefined });
+                approvedFactLines: memory && "approvedFactLines" in memory ? memory.approvedFactLines : undefined,
+                cachedPrefix: () => sessionPrefixes.latest(chat.id) });
             });
-            pi.on("session_compact", () => { promptCache.reset(chat.id); if (!botAdmission) markWorkspaceChatCompacted(chat.id); });
+            pi.on("session_compact", () => { promptCache.reset(chat.id); sessionPrefixes.forget(chat.id); if (!botAdmission) markWorkspaceChatCompacted(chat.id); });
             // The last context handler sees each request's final transcript; it only observes, so the messages stay as they are.
             pi.on("context_with_system", (event, ctx) => {
               try {
@@ -579,7 +590,7 @@ export function createDaemonChats(agentDir: string) {
   }
   return { chatStore, llmClient, activity, runs, admission, deletion, sessionPath,
     /** A deleted chat's journal is gone, and so is what its memory prompt told it, and its cache is no longer kept warm. */
-    forgetMemoryFactsTold(chatId: string) { memoryFactsTold.delete(chatId); idleWarmers.get(chatId)?.dispose(); },
+    forgetMemoryFactsTold(chatId: string) { memoryFactsTold.delete(chatId); idleWarmers.get(chatId)?.dispose(); sessionPrefixes.forget(chatId); },
     /** A revoked device no longer attends the chats its turns left warming. */
     releaseDeviceAttendance(deviceId: string) {
       let prefix: string;
@@ -598,7 +609,7 @@ export function createDaemonChats(agentDir: string) {
         await rm(sessionPath(id), { force: true });
         if (await chatStore.get(id)) await chatStore.remove(id);
         await tombstones.update((values) => { for (let index = values.indexOf(id); index >= 0; index = values.indexOf(id)) values.splice(index, 1); });
-        interrupted.delete(id); memoryFactsTold.delete(id); idleWarmers.get(id)?.dispose(); reopen();
+        interrupted.delete(id); memoryFactsTold.delete(id); idleWarmers.get(id)?.dispose(); sessionPrefixes.forget(id); reopen();
       }
     },
     /** Every activity change (a run began or ended, an approval was raised or settled). */

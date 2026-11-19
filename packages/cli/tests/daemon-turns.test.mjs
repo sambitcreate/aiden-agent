@@ -1242,3 +1242,74 @@ test("a serve compaction whose summary still states a fact across lines is not s
   assert.deepEqual(compactionSummaries(f.daemon, "split"), [], "no summary stating the fact was written");
   assert.deepEqual((await assistantMessages(f.daemon, "split")).map((message) => message.content).at(-1), "You own a red canoe.", "the turn's answer stands");
 });
+
+/** An Anthropic Messages reply whose usage reports `inputTokens`, so the turn ends past the compaction threshold. */
+const anthropicReplyAtContext = (text, inputTokens) => (response) => {
+  response.write(anthropicEvent("message_start", { message: { id: `msg_${text}`, type: "message", role: "assistant", model: "test", content: [], stop_reason: null, usage: { input_tokens: inputTokens, output_tokens: 0 } } }));
+  response.write(anthropicEvent("content_block_start", { index: 0, content_block: { type: "text", text: "" } }));
+  response.write(anthropicEvent("content_block_delta", { index: 0, delta: { type: "text_delta", text } }));
+  response.write(anthropicEvent("content_block_stop", { index: 0 }));
+  response.write(anthropicEvent("message_delta", { delta: { stop_reason: "end_turn" }, usage: { output_tokens: 4 } }));
+  response.end(anthropicEvent("message_stop", {}));
+};
+
+/** A request body without its cache markers, which move to the newest user message. */
+const withoutCacheMarkers = (value) => JSON.parse(JSON.stringify(value ?? null, (key, child) => key === "cache_control" ? undefined : child));
+
+test("a serve compaction after a turn continues the turn's request, at the default cache lifetime", async (t) => {
+  const f = await fixture(t, { anthropic: true, model: { name: "claude-test" } });
+  api.atomicJson(join(f.dir, "settings.json"), { compaction: { keepRecentTokens: 1 } });
+  // The turn keeps its cache for an hour; the summary is never continued, so it asks for the default.
+  api.atomicJson(join(f.dir, "aiden.json"), { longPromptCacheRetention: true });
+  f.steps.push(anthropicReply("Hello."));
+  await beginTurn(f, "cached", { text: "Hello." });
+  await f.daemon.llmClient.waitForChatIdle("cached");
+  f.steps.push(anthropicReplyAtContext("Plenty.", 20_000), anthropicReply("## Goal\nThe user said hello twice."));
+  const before = f.requests.length;
+  await beginTurn(f, "cached", { text: "And again.", create: false, streamId: "stream-cached-2" });
+  await f.daemon.llmClient.waitForChatIdle("cached");
+  assert.equal(f.requests.length, before + 2, "the turn and one summary request");
+  const [turn, summary] = f.requests.slice(before);
+  assert.deepEqual(withoutCacheMarkers(summary.system), withoutCacheMarkers(turn.system), "the turn's system prompt");
+  assert.deepEqual(withoutCacheMarkers(summary.tools), withoutCacheMarkers(turn.tools), "the turn's tools");
+  assert.deepEqual(withoutCacheMarkers(summary.messages.slice(0, turn.messages.length)), withoutCacheMarkers(turn.messages), "the turn's messages, unchanged");
+  const added = summary.messages.slice(turn.messages.length);
+  assert.deepEqual(added.map((message) => message.role), ["assistant", "user"], "the turn's reply, then the instruction");
+  assert.match(JSON.stringify(added[0]), /Plenty\./u);
+  assert.deepEqual([...new Set(cacheTtls(turn))], ["1h"]);
+  assert.deepEqual([...new Set(cacheTtls(summary))], ["default"]);
+  const [stored] = compactionSummaries(f.daemon, "cached");
+  assert.match(stored ?? "", /said hello twice/u, "the continuation's summary was stored");
+});
+
+test("a serve compaction after a removed fact sends the isolated request", async (t) => {
+  const f = await fixture(t, { anthropic: true, model: { name: "claude-test" } });
+  api.atomicJson(join(f.dir, "settings.json"), { compaction: { keepRecentTokens: 1 } });
+  const run = async (chatId, text, steps, create) => {
+    f.steps.push(...steps);
+    await beginTurn(f, chatId, { text, create, streamId: `stream-${f.requests.length}` });
+    await f.daemon.llmClient.waitForChatIdle(chatId);
+  };
+  // Another chat saves the fact, so this chat learns it only from the always-on prompt.
+  await run("saver", "Remember my bees.", [anthropicCallTool("remember_fact", { fact: "Keeps bees on the roof", alwaysOn: true }), anthropicReply("Saved.")], true);
+  const factId = /\[memory:([^\]]+)\]/u.exec(JSON.stringify(f.requests[1].messages))?.[1];
+  assert.ok(factId, "the fact was saved");
+  await run("removed", "Hello.", [anthropicReply("Hello.")], true);
+  assert.match(JSON.stringify(f.requests[2].system), /bees on the roof/u, "the always-on prompt told the chat");
+  await run("saver", "Forget my bees.", [anthropicCallTool("forget_fact", { factId }), anthropicReply("Forgotten.")], false);
+  const before = f.requests.length;
+  await run("removed", "What is new?", [
+    anthropicReplyAtContext("Nothing much.", 20_000),
+    anthropicReply("## Goal\nThe user said hello."),
+    anthropicReply("The turn asked what is new."),
+  ], false);
+  const [turn, ...summaries] = f.requests.slice(before);
+  assert.ok(summaries.length >= 1, "the summarizer was asked");
+  for (const summary of summaries) {
+    assert.notDeepEqual(withoutCacheMarkers(summary.system), withoutCacheMarkers(turn.system), "Pi's own summarizer prompt, not the turn's");
+    assert.equal(summary.messages.length, 1, "the history goes as one summarizer input, not as the turn's messages");
+    assert.doesNotMatch(JSON.stringify(summary), /bees/iu, "the removed fact does not reach the summarizer");
+  }
+  const [stored] = compactionSummaries(f.daemon, "removed");
+  assert.match(stored ?? "", /said hello/u, "the isolated summary was stored");
+});

@@ -6,10 +6,15 @@
 // code in main/services/chat-frozen-state.ts.
 //
 // Pi only lets an extension replace a summary before it is written, so the
-// server writes it here with Pi's own `compact()`: the session's stream
-// function carries the model runtime's credentials, as Pi's default
-// compaction does. Any failure cancels the compaction rather than letting
-// Pi store an unfiltered summary.
+// server writes it here. A threshold or manual compaction of a chat that was
+// never told a fact first continues the turn's cached request, as the
+// desktop's coordinator does (`summaryOnCachedPrefix`); otherwise, and when
+// that continuation cannot be used, it sends Pi's own isolated `compact()`.
+// Pi still decides when to compact, retries an overflow and splits a turn.
+// Both go through the session's stream function, which carries the model
+// runtime's credentials and the payload hooks, as Pi's default compaction
+// does. Any failure cancels the compaction rather than letting Pi store an
+// unfiltered summary.
 
 import {
   compact,
@@ -19,8 +24,10 @@ import {
   type SessionBeforeCompactResult,
   type SettingsManager,
 } from "@earendil-works/pi-coding-agent";
-import type { Api, Model } from "@earendil-works/pi-ai";
+import type { Api, Model, TranscriptContext } from "@earendil-works/pi-ai";
 import { memoryFactLinesInBranch, withoutMemoryFacts, withoutStatedMemoryFacts } from "../../../main/services/chat-frozen-state.js";
+import { prefixContinuesContext, summaryOnCachedPrefix } from "../../../main/services/pi-compaction-core.js";
+import type { SideCallPrefix } from "../../../main/services/side-call-prefix.js";
 
 export interface DaemonCompactionMemory {
   session: AgentSession;
@@ -30,6 +37,8 @@ export interface DaemonCompactionMemory {
   toldFacts: ReadonlySet<string>;
   /** The fact lines the chat may be told now; none when memory is off. */
   approvedFactLines?: () => Promise<string[]>;
+  /** The chat's last completed session request, while its cache is live. */
+  cachedPrefix?: () => Promise<SideCallPrefix | undefined>;
 }
 
 /** Pi's virtual models route each request; a summary goes to the physical model the route picks. */
@@ -50,8 +59,10 @@ export async function compactWithoutMemoryFacts(event: SessionBeforeCompactEvent
     const { model, thinkingLevel } = selected.api === VIRTUAL_MODEL_API
       ? await memory.session.modelRuntime.resolveModel(selected, convertToLlm(memory.session.messages), { reason: "direct", thinkingLevel: memory.session.thinkingLevel, signal })
       : { model: selected, thinkingLevel: memory.session.thinkingLevel };
-    const result = await compact(summaryPreparation, model, undefined, undefined, event.customInstructions, signal, thinkingLevel,
-      memory.session.agent.streamFunction, undefined, memory.settings.getRetrySettings());
+    const { agent } = memory.session;
+    const result = (facts.length === 0 && event.reason !== "overflow" ? await cachedCompaction(event, memory, model) : undefined)
+      ?? await compact(summaryPreparation, model, undefined, undefined, event.customInstructions, signal, thinkingLevel,
+        agent.streamFunction, undefined, memory.settings.getRetrySettings());
     // Whichever lines the summarizer wrote, none that states a fact is kept;
     // a fact split across kept lines fails the compaction.
     const kept = withoutStatedMemoryFacts(result.summary, facts);
@@ -60,4 +71,28 @@ export async function compactWithoutMemoryFacts(event: SessionBeforeCompactEvent
   } catch {
     return { cancel: true };
   }
+}
+
+/**
+ * The summary as a continuation of the turn's request, or undefined for Pi's
+ * isolated request. It is the turn's request bytes, through the session's
+ * stream function and payload hook, with the instruction after the reply.
+ * Only called once no fact was ever told the chat.
+ */
+async function cachedCompaction(event: SessionBeforeCompactEvent, memory: DaemonCompactionMemory, model: Model<Api>) {
+  let prefix: SideCallPrefix | undefined;
+  try { prefix = await memory.cachedPrefix?.(); } catch { return undefined; }
+  if (!prefix || !prefixContinuesContext(prefix, model, memory.session.messages)) return undefined;
+  const { agent } = memory.session;
+  const { preparation } = event;
+  const summary = await summaryOnCachedPrefix({
+    prefix, model, fileOps: preparation.fileOps, reserveTokens: preparation.settings.reserveTokens,
+    signal: event.signal, customInstructions: event.customInstructions,
+    approvedMemoryFacts: async () => (await memory.approvedFactLines?.()) ?? [],
+    complete: async (requestModel, context, options) =>
+      // The continuation is the turn's own transcript context, replayed with the instruction appended.
+      (await agent.streamFunction(requestModel, context as TranscriptContext, { ...options, onPayload: agent.onPayload })).result(),
+  });
+  return summary && { summary: summary.summary, firstKeptEntryId: preparation.firstKeptEntryId, tokensBefore: preparation.tokensBefore,
+    ...(summary.usage ? { usage: summary.usage } : {}), details: { readFiles: summary.readFiles, modifiedFiles: summary.modifiedFiles } };
 }

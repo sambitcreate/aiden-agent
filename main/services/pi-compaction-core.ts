@@ -10,6 +10,8 @@ import {
   isRetryableAssistantError,
   type AssistantMessage,
   type AssistantMessageEventStream,
+  type Api,
+  type Model,
   type Models,
   type RetryCallbacks,
   type RetryPolicy,
@@ -198,7 +200,7 @@ export function cachedPrefixSummaryInstruction(customInstructions?: string): str
 }
 
 /** Pi's file lists for a checkpoint: read-only files, then modified ones. */
-function checkpointFileLists(fileOps: CompactionPreparation["fileOps"]) {
+function checkpointFileLists(fileOps: CachedPrefixSummaryRequest["fileOps"]) {
   const modified = new Set([...fileOps.edited, ...fileOps.written]);
   const readFiles = [...fileOps.read].filter((file) => !modified.has(file)).sort();
   const modifiedFiles = [...modified].sort();
@@ -229,6 +231,100 @@ class CompactionAbortedError extends Error {
     super("Compaction was cancelled.");
     this.name = "CompactionAbortedError";
   }
+}
+
+/**
+ * Whether a summary sent as `prefix`'s continuation covers everything the
+ * next request would send: the prefix went to `model` with usage recorded,
+ * and `messages` (the context the next request is built from) still ends at
+ * the prefix's reply.
+ */
+export function prefixContinuesContext(
+  prefix: SideCallPrefix | undefined,
+  model: Model<Api>,
+  messages: readonly AgentMessage[],
+): prefix is SideCallPrefix {
+  if (!prefix?.response.usage || prefix.modelKey !== sideCallModelKey(model)) return false;
+  const tail = messages[messages.length - 1];
+  const reply = prefix.response;
+  return (
+    tail?.role === "assistant" &&
+    tail.timestamp === reply.timestamp &&
+    tail.provider === reply.provider &&
+    tail.model === reply.model &&
+    tail.stopReason === reply.stopReason
+  );
+}
+
+export interface CachedPrefixSummaryRequest {
+  prefix: SideCallPrefix;
+  model: Model<Api>;
+  /** The files the summarized messages touched, listed after the summary as Pi lists them. */
+  fileOps: { read: Iterable<string>; edited: Iterable<string>; written: Iterable<string> };
+  reserveTokens: number;
+  signal: AbortSignal;
+  customInstructions?: string;
+  /** The facts the chat may be told now; any approved fact sends the isolated request instead. */
+  approvedMemoryFacts?: ApprovedMemoryFacts;
+  complete(...args: Parameters<Models["completeSimple"]>): Promise<AssistantMessage>;
+}
+
+export interface CachedPrefixSummary {
+  /** The summary with Pi's file lists appended. */
+  summary: string;
+  usage?: Usage;
+  readFiles: string[];
+  modifiedFiles: string[];
+}
+
+/**
+ * One summary request sent as the prefix's continuation, at "short"
+ * retention. Undefined, so the caller sends Pi's isolated and scrubbed
+ * request instead, when the prefix states a memory fact or the chat may be
+ * told one (a paraphrase could not be filtered out of the reply), when the
+ * approved facts cannot be read, and when it would not fit, fails, is cut
+ * off or calls a tool. Throws when `signal` aborts.
+ */
+export async function summaryOnCachedPrefix(request: CachedPrefixSummaryRequest): Promise<CachedPrefixSummary | undefined> {
+  const { prefix, model, signal } = request;
+  if (memoryFactLinesIn(prefix.context).length > 0) return undefined;
+  try {
+    if (((await request.approvedMemoryFacts?.()) ?? []).length > 0) return undefined;
+  } catch {
+    return undefined;
+  }
+  const maxTokens = Math.min(Math.floor(0.8 * request.reserveTokens), model.maxTokens);
+  const instruction: UserMessage = {
+    role: "user",
+    content: [{ type: "text", text: cachedPrefixSummaryInstruction(request.customInstructions) }],
+    timestamp: Date.now(),
+  };
+  const inputTokens = calculateContextTokens(prefix.response.usage) + estimateTokens(instruction);
+  if (maxTokens <= 0 || inputTokens + maxTokens > model.contextWindow) return undefined;
+  // The summary is never continued, so it writes the short cache even
+  // when the parent paid for a longer one.
+  const continuation = sideCallContinuation(prefix, [instruction], { signal, maxTokens, cacheRetention: "short" });
+  let reply: AssistantMessage;
+  try {
+    reply = await request.complete(model, continuation.context, continuation.options);
+  } catch {
+    if (signal.aborted) throw new CompactionAbortedError();
+    return undefined;
+  }
+  if (signal.aborted) throw new CompactionAbortedError();
+  if (reply.stopReason !== "stop") return undefined;
+  const summary = reply.content
+    .flatMap((part) => (part.type === "text" ? [part.text] : []))
+    .join("\n")
+    .trim();
+  if (!summary) return undefined;
+  const files = checkpointFileLists(request.fileOps);
+  return {
+    summary: summary + files.text,
+    ...(reply.usage ? { usage: reply.usage } : {}),
+    readFiles: files.readFiles,
+    modifiedFiles: files.modifiedFiles,
+  };
 }
 
 class PiCompactionSessionError extends Error {
@@ -450,15 +546,7 @@ export class PiCompactionCoordinator {
     } catch {
       return undefined;
     }
-    const tail = messages[messages.length - 1];
-    const reply = prefix.response;
-    return tail?.role === "assistant" &&
-      tail.timestamp === reply.timestamp &&
-      tail.provider === reply.provider &&
-      tail.model === reply.model &&
-      tail.stopReason === reply.stopReason
-      ? prefix
-      : undefined;
+    return prefixContinuesContext(prefix, this.options.model, messages) ? prefix : undefined;
   }
 
   /** The memory fact lines the chat may be told now; none when the store cannot be read. */
@@ -502,46 +590,23 @@ export class PiCompactionCoordinator {
     signal: AbortSignal,
     customInstructions?: string,
   ): Promise<CompactResult | undefined> {
-    const model = this.options.model;
-    if (memoryFactLinesIn(prefix.context).length > 0) return undefined;
-    const approvedMemoryFacts = this.options.approvedMemoryFacts ?? prefix.approvedMemoryFacts;
-    try {
-      if (((await approvedMemoryFacts?.()) ?? []).length > 0) return undefined;
-    } catch {
-      return undefined;
-    }
-    const maxTokens = Math.min(Math.floor(0.8 * this.settings.reserveTokens), model.maxTokens);
-    const instruction: UserMessage = {
-      role: "user",
-      content: [{ type: "text", text: cachedPrefixSummaryInstruction(customInstructions) }],
-      timestamp: Date.now(),
-    };
-    const inputTokens = calculateContextTokens(prefix.response.usage) + estimateTokens(instruction);
-    if (maxTokens <= 0 || inputTokens + maxTokens > model.contextWindow) return undefined;
-    // The summary is never continued, so it writes the short cache even
-    // when the parent paid for a longer one.
-    const request = sideCallContinuation(prefix, [instruction], { signal, maxTokens, cacheRetention: "short" });
-    let reply: AssistantMessage;
-    try {
-      reply = await this.options.models.completeSimple(model, request.context, request.options);
-    } catch {
-      if (signal.aborted) throw new CompactionAbortedError();
-      return undefined;
-    }
-    if (signal.aborted) throw new CompactionAbortedError();
-    if (reply.stopReason !== "stop") return undefined;
-    const summary = reply.content
-      .flatMap((part) => (part.type === "text" ? [part.text] : []))
-      .join("\n")
-      .trim();
-    if (!summary) return undefined;
-    const files = checkpointFileLists(preparation.fileOps);
+    const result = await summaryOnCachedPrefix({
+      prefix,
+      model: this.options.model,
+      fileOps: preparation.fileOps,
+      reserveTokens: this.settings.reserveTokens,
+      signal,
+      customInstructions,
+      approvedMemoryFacts: this.options.approvedMemoryFacts ?? prefix.approvedMemoryFacts,
+      complete: (model, context, options) => this.options.models.completeSimple(model, context, options),
+    });
+    if (!result) return undefined;
     return {
-      summary: summary + files.text,
+      summary: result.summary,
       tokensBefore: preparation.tokensBefore,
       retainedTail: preparation.retainedTail,
-      ...(reply.usage ? { usage: reply.usage } : {}),
-      details: { readFiles: files.readFiles, modifiedFiles: files.modifiedFiles },
+      ...(result.usage ? { usage: result.usage } : {}),
+      details: { readFiles: result.readFiles, modifiedFiles: result.modifiedFiles },
     };
   }
 
