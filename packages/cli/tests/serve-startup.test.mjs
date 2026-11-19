@@ -78,7 +78,7 @@ test("aiden serve starts Remote by default, reports it, and opens no pairing win
   assert.equal(await unauthenticatedRemoteRequest(agentDir, status.remote.lanPort), 401);
 
   // Piped output is a log, not a person: no code is shown and no single-use secret is minted.
-  assert.doesNotMatch(output.stdout + output.stderr, /Manual code|Scan with Aiden/);
+  assert.doesNotMatch(output.stdout + output.stderr, /Setup code|Scan the code/);
   assert.deepEqual(json(runCli(["remote", "pair-status"], env)), { state: "none" });
 });
 
@@ -128,9 +128,9 @@ const hasScript = process.platform === "linux" && spawnSync("script", ["--versio
 test("aiden serve in a terminal shows a LAN pairing code that the server is waiting on", { skip: !hasScript && "needs util-linux script for a pseudo-terminal" }, async (t) => {
   const { env } = sandbox(t);
   const quote = (value) => `'${value.replaceAll("'", "'\\''")}'`;
-  const { output } = await startServing(t, "script", ["-qfec", `${quote(process.execPath)} ${quote(cli)} serve`, "/dev/null"], env, /Manual code: \S+/);
+  const { output } = await startServing(t, "script", ["-qfec", `${quote(process.execPath)} ${quote(cli)} serve`, "/dev/null"], env, /Setup code:\s+\S+/);
   const text = output.stdout + output.stderr;
-  assert.match(text, /Endpoint: https:\/\/[^/\s]+:\d+\/api\/aiden\/v1/);
+  assert.match(text, /Nearby address:\r?\nhttps:\/\/[^/\s]+:\d+\/api\/aiden\/v1\r?\n/);
   assert.match(text, /expires in [45]m/);
   const pairing = json(runCli(["remote", "pair-status"], env));
   assert.equal(pairing.state, "awaiting_scan");
@@ -147,7 +147,7 @@ test("aiden serve --no-pair in a terminal serves Remote without minting a pairin
     assert.deepEqual(json(runCli(["remote", "pair-status"], env)), { state: "none" });
     await new Promise((resolveWait) => setTimeout(resolveWait, 250));
   }
-  assert.doesNotMatch(output.stdout + output.stderr, /Manual code|aiden-pair:/);
+  assert.doesNotMatch(output.stdout + output.stderr, /Setup code|aiden-pair:/);
   assert.equal(json(runCli(["serve", "status"], env)).remote.on, true);
 });
 
@@ -235,7 +235,7 @@ test("aiden serve --pair tailscale without Tailscale says how to set it up and k
   const { output } = await startServing(t, "script", ["-qfec", `${quote(process.execPath)} ${quote(cli)} serve --pair tailscale`, "/dev/null"], env, /Could not open a Tailscale pairing window[^\n]*\n/);
   const text = output.stdout + output.stderr;
   assert.match(text, /Tailscale is not installed on this server\. Install it .*sudo tailscale up.*aiden remote pair tailscale/);
-  assert.doesNotMatch(text, /Manual code/);
+  assert.doesNotMatch(text, /Setup code/);
   const again = runCli(["remote", "pair", "tailscale"], env);
   assert.notEqual(again.status, 0);
   assert.match(again.stderr, /Tailscale is not installed on this server/);
@@ -305,13 +305,96 @@ test("startup pairing on a Tailscale-only server pairs over Tailscale and report
     const started = Date.now();
     await api.showStartupPairing(daemon.dir, undefined, new AbortController().signal, out, err);
     assert.deepEqual(daemon.asked, ["serve status", "remote tailscale-prepare", "remote status", "remote pair tailscale", "remote pair-status"]);
-    assert.match(out.text, /Manual code: ABCD-1234/);
+    assert.match(out.text, /^Setup code:\nABCD-1234$/m);
     assert.match(err.text, /Pairing failed\. Run `aiden remote pair tailscale` to try again/);
     assert.doesNotMatch(out.text, /expired/);
     assert.ok(Date.now() - started < 10_000, "a failed window ends the wait instead of running out the clock");
   } finally {
     daemon.close();
   }
+});
+
+// Built from a string so the escape byte is not a control character inside a regex literal.
+const ESC = String.fromCharCode(27);
+const SGR_OR_CELL = new RegExp(`(${ESC}\\[[0-9;]*m)|([^${ESC}])`, "gu");
+const SGR = new RegExp(`${ESC}\\[[0-9;]*m`, "gu");
+
+/** Turns rendered half-block rows back into dark/light modules, two per row. */
+function modulesFromRows(rows) {
+  const grid = [];
+  for (const row of rows) {
+    const top = [], bottom = [];
+    let foreground = 39, background = 49;
+    for (const [, sgr, cell] of row.matchAll(SGR_OR_CELL)) {
+      if (sgr) {
+        const fg = /38;5;(\d+)/u.exec(sgr), bg = /48;5;(\d+)/u.exec(sgr);
+        if (fg) foreground = Number(fg[1]);
+        if (bg) background = Number(bg[1]);
+        if (sgr === "\x1b[0m") { foreground = 39; background = 49; }
+        continue;
+      }
+      // Only palette black (16) and white (231) may paint the code; anything else would follow the terminal theme.
+      assert.ok(background === 16 || background === 231, `cell background ${background}`);
+      const upper = cell === "▀" ? foreground : background;
+      assert.ok(upper === 16 || upper === 231, `cell foreground ${upper}`);
+      assert.ok(cell === " " || cell === "▀", `cell ${cell}`);
+      top.push(upper === 16);
+      bottom.push(background === 16);
+    }
+    grid.push(top, bottom);
+  }
+  return grid;
+}
+
+/** A QR finder pattern: a dark 7x7 ring, a light ring inside, a dark 3x3 centre. */
+function isFinder(grid, top, left) {
+  for (let r = 0; r < 7; r += 1) for (let c = 0; c < 7; c += 1) {
+    const ring = Math.max(Math.abs(r - 3), Math.abs(c - 3));
+    if (grid[top + r]?.[left + c] !== (ring !== 2)) return false;
+  }
+  return true;
+}
+
+function pairingFor(endpoint, trust) {
+  const bootstrap = { protocolVersion: 1, instanceId: "8b0c1f4e-6a35-4bb1-9d0e-0f5f4d6c2a11", endpoint, serverSpkiSha256: "sha256/q5y0GfHk4X3kQm8p0bY2sV1yA5mJ8dW3nR7tC9eL2uY=", secret: "s".repeat(43), expiresAt: new Date(Date.now() + 300_000).toISOString() };
+  return { sessionId: "pairing_test", manualCode: "FF18-6D5S-23KW-ZHPS-CAF3", bootstrap, qrPayload: JSON.stringify({ kind: "aiden-pairing-v1", bootstrap, trust }) };
+}
+
+test("a Tailscale pairing code fits an 80-column terminal as a black-on-white QR code with its address alone on a line", async () => {
+  const api = await import("../dist/parity-test-api.js");
+  const endpoint = "https://bitcreate1.taile1def.ts.net/api/aiden/v1";
+  const pairing = pairingFor(endpoint, { mode: "system" });
+  const rows = api.renderQrRows(pairing.qrPayload);
+  const width = [...rows[0].replace(SGR, "")].length;
+  assert.ok(width <= 80, `${width} columns would wrap in an 80-column terminal`);
+  for (const row of rows) assert.ok(row.endsWith("\x1b[0m"), "each row resets its colors, so nothing bleeds past the code");
+  const grid = modulesFromRows(rows);
+  // Where the symbol's dark modules start and end; the QR standard wants four light modules around it on every side.
+  const darkRows = grid.map((line, index) => line.some(Boolean) ? index : -1).filter((index) => index >= 0);
+  const darkColumns = [...Array(width).keys()].filter((column) => grid.some((line) => line[column]));
+  const [top, bottom] = [darkRows[0], darkRows.at(-1)], [left, right] = [darkColumns[0], darkColumns.at(-1)];
+  assert.ok(top >= 4 && left >= 4 && width - 1 - right >= 4 && grid.length - 1 - bottom >= 4, `quiet zone ${top}/${left}/${width - 1 - right}/${grid.length - 1 - bottom}`);
+  assert.equal(bottom - top, right - left, "a square symbol");
+  for (const [row, column] of [[top, left], [top, right - 6], [bottom - 6, left]]) {
+    assert.ok(isFinder(grid, row, column), `finder pattern at ${row},${column}`);
+  }
+  assert.ok(!isFinder(grid, bottom - 6, right - 6), "no finder in the bottom-right corner, so the code is not mirrored");
+
+  const text = await api.renderPairingTerminal(pairing, { columns: 100 });
+  assert.match(text, /^Pair over Tailscale$/m);
+  assert.match(text, new RegExp(`^Private address:\\n${endpoint.replace(/[.]/gu, "\\.")}$`, "m"));
+  assert.match(text, /^Setup code:\nFF18-6D5S-23KW-ZHPS-CAF3$/m);
+});
+
+test("a pairing code too wide for the terminal is left out instead of wrapping into an unscannable code", async () => {
+  const api = await import("../dist/parity-test-api.js");
+  const pairing = pairingFor("https://bitcreate1.local:49320/api/aiden/v1", { mode: "private-ca", caCertificateDerBase64: Buffer.alloc(420, 7).toString("base64") });
+  const text = await api.renderPairingTerminal(pairing, { columns: 80 });
+  assert.match(text, /^Pair on this local network$/m);
+  assert.match(text, /needs a window at least \d+ characters wide, and this one is 80\. Widen the window and run `aiden remote pair lan`/);
+  assert.ok(!text.includes("▀") && !text.includes(`${ESC}[48;5;`), "no QR cells in the output");
+  assert.match(text, /^Nearby address:\nhttps:\/\/bitcreate1\.local:49320\/api\/aiden\/v1$/m);
+  assert.match(await api.renderPairingTerminal(pairing, { columns: 200 }), /▀/u, "a wide window shows the code");
 });
 
 test("startup pairing names both pair commands when the server's network is unknown and LAN fails", async () => {
