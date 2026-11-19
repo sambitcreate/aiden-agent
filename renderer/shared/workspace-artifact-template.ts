@@ -689,6 +689,9 @@ function staysInside(path: string): boolean {
   return true;
 }
 
+/** A stash git stash show, apply, pop or drop reads by its place in the list. */
+const STASH_NAME = /^(?:stash@\{\d+\}|\d+)$/u;
+
 /**
  * Why `text` is not a plain branch or tag name, following `git
  * check-ref-format`: git reads `+` as a forced push, `:` as a mapping or a
@@ -758,9 +761,10 @@ export function workspaceArtifactValueProblem(steps: readonly TemplateStep[], va
           const text = value(part.param);
           const rule = part.slot?.rule ?? "text";
           if (rule === "number" && !/^\d+$/u.test(text)) return `${part.param} must be a whole number there.`;
-          if (rule === "ref") {
+          if (rule === "ref" && !(part.slot?.stash && STASH_NAME.test(filled))) {
             const problem = refProblem(text, part.slot?.remote === true);
-            if (problem) return `${part.param} must be a branch or tag name there: ${problem}.`;
+            const expected = part.slot?.stash ? "a stash name (stash@{n} or n) or a branch or tag name" : "a branch or tag name";
+            if (problem) return `${part.param} must be ${expected} there: ${problem}.`;
           }
           if (rule === "rev") {
             const problem = revProblem(text);

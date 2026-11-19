@@ -744,6 +744,75 @@ test("where a value lands decides what it may be: no option, no refspec, no file
   assert.deepEqual(run("git commit -m {{x}}", "fix: a/../b:c").steps[0]!.pipeline[0]!.argv, ["git", "commit", "-m", "fix: a/../b:c"]);
 });
 
+test("the display and filter options saved buttons use are read, and an unknown one says how to fix it", () => {
+  const argv = (command: string, value: string) => {
+    const resolved = resolveWorkspaceArtifactCommand({ name: "a", label: "A", command, params: [{ name: "x", type: "string" }] }, [value]);
+    assert.equal(resolved.kind, "argv", command);
+    return argvOf(resolved)[0]!;
+  };
+  for (const [command, value] of [
+    ["git log --color=never -1 {{x}}", "main"],
+    ["git show --color=always {{x}}", "HEAD~1"],
+    ["git diff --word-diff {{x}}", "main"],
+    ["git diff --word-diff=color --color=never {{x}}", "main"],
+    ["git diff -M --stat {{x}}", "main"],
+    ["git diff -C --find-renames=50% --find-copies {{x}}", "main"],
+    ["git diff --diff-filter=M --name-only {{x}}", "main"],
+    ["git diff --merge-base {{x}}", "main"],
+    ["git branch --merged {{x}}", "main"],
+    ["git branch --no-merged {{x}}", "main"],
+    ["git branch -a --contains {{x}}", "abc123"],
+    ["git branch -r --no-contains {{x}}", "main"],
+    ["git branch --sort=-committerdate --list {{x}}", "feat/*"],
+    ["git branch -v {{x}}", "fix-?"],
+    ["git tag --contains {{x}}", "abc123"],
+    ["git tag -l {{x}} --sort=-v:refname", "v1.*"],
+    ["git tag -n {{x}}", "v*"],
+    ["git blame --date=short {{x}}", "notes.txt"],
+    ["git stash show -p {{x}}", "stash@{1}"],
+    ["git stash drop {{x}}", "2"],
+    ["git stash apply {{x}}", "stash@{0}"],
+    ["rg --color never --max-columns 200 --sort path {{x}}", "todo"],
+    ["rg -M {{x}} todo", "120"],
+  ]) {
+    // The value reaches the program unchanged, as one argument where the placeholder was.
+    const words = command.split(" ");
+    assert.equal(argv(command, value)[words.indexOf("{{x}}")], value, command);
+  }
+  // A pattern is only a pattern while listing: a value that would create,
+  // delete or rename a ref is still a plain name, and never an option.
+  for (const [command, value] of [
+    ["git branch {{x}}", "feat/*"],
+    ["git branch -d {{x}}", "feat/*"],
+    ["git branch --list -D {{x}}", "feat/*"],
+    ["git branch --merged main -d {{x}}", "old-*"],
+    ["git tag {{x}}", "v*"],
+    ["git tag -d {{x}}", "v*"],
+    ["git tag -l -d {{x}}", "v*"],
+    ["git branch --list {{x}}", "--delete"],
+    ["git tag -l {{x}}", "-d"],
+    ["git branch --contains {{x}}", "main~1"],
+    ["git stash show {{x}}", "stash@{1}:notes.txt"],
+    ["git stash drop {{x}}", "stash@{-1}"],
+    ["rg --max-columns {{x}} todo", "200 or so"],
+  ]) {
+    assert.throws(() => argv(command, value), /x (must be|cannot start)/u, `${command} ${value}`);
+  }
+  // An option Aiden does not read says what to do and which it does read.
+  const refusal = (command: string) => {
+    try {
+      parseWorkspaceArtifactActions([{ name: "a", label: "A", command, params: [{ name: "x" }] }]);
+    } catch (error) {
+      return (error as Error).message;
+    }
+    return assert.fail(`${command} was accepted`);
+  };
+  const rebase = refusal("git rebase -i {{x}}");
+  assert.match(rebase, /git rebase with -i, an option Aiden does not check there \(remove it; the rest of the command still works\)/u);
+  assert.match(rebase, /Options it checks: -q, -v, --abort, --continue\b/u);
+  assert.match(refusal("git log --frobnicate {{x}}"), /Options it checks: .* and \d+ more/u);
+});
+
 test("commands and labels reject characters that hide what runs", () => {
   assert.throws(() => parseWorkspaceArtifactSources([{ name: "a", kind: "shell", command: "ls \u202e-la" }]), /control/u);
   assert.throws(() => parseWorkspaceArtifactActions([{ name: "a", label: "Me\u200brge", command: "x" }]), /label/u);

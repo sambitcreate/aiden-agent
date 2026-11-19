@@ -56,6 +56,8 @@ export interface Slot {
    * `user:` qualifier, which would widen the search past this repository.
    */
   search?: boolean;
+  /** A stash git stash show, apply, pop or drop reads: `stash@{n}` or `n` is allowed as well as a ref name. */
+  stash?: boolean;
 }
 
 /** An option's value: a slot, a refusal clause ("which reads a file from anywhere"), or null when it takes no page data. */
@@ -104,6 +106,7 @@ const N: Slot = { rule: "number" };
 const R: Slot = { rule: "ref" };
 const RO: Slot = { rule: "ref", refOnly: true };
 const RR: Slot = { rule: "ref", remote: true };
+const STASH: Slot = { rule: "ref", stash: true };
 const V: Slot = { rule: "rev" };
 const P: Slot = { rule: "path" };
 const G: Slot = { rule: "target" };
@@ -178,6 +181,10 @@ const PROGRAM_SPECS: Readonly<Record<string, SlotSpec>> = {
       "-B --before-context": N,
       "-C --context": N,
       "-d --max-depth": N,
+      "-M --max-columns": N,
+      "--color --colour": null,
+      "--sort": null,
+      "--sortr": null,
     },
     ...searchOperands,
   },
@@ -227,7 +234,7 @@ const LOG_LONG = [
   "oneline", "graph", "all", "decorate", "no-decorate", "stat", "shortstat", "numstat", "name-only", "name-status", "patch", "no-patch", "no-merges",
   "merges", "first-parent", "reverse", "follow", "abbrev-commit", "date-order", "topo-order", "author-date-order", "no-color", "raw", "full-history",
   "left-right", "cherry-pick", "cherry-mark", "regexp-ignore-case", "all-match", "invert-grep", "fixed-strings", "extended-regexp", "basic-regexp",
-  "perl-regexp", "source", "tags", "branches", "remotes", "summary",
+  "perl-regexp", "source", "tags", "branches", "remotes", "summary", "color",
 ];
 const LOG_VALUES: Record<string, ValueEntry> = {
   "-n --max-count": N,
@@ -281,6 +288,20 @@ const FETCH_VALUES: Record<string, ValueEntry> = {
   "--filter": null,
   "--upload-pack": RUNS_PROGRAM,
 };
+/** git branch and tag filters that take a commit (`--merged main`); each also turns on list mode. */
+const REACH_FILTERS: Record<string, ValueEntry> = { "--merged": R, "--no-merged": R, "--contains": R, "--no-contains": R };
+const REACH_FILTER_NAMES = Object.keys(REACH_FILTERS);
+/**
+ * A pattern git branch or tag lists by (`--list 'feat/*'`): text, with no
+ * leading "-". Only in list mode with none of the options that create,
+ * delete, rename or retarget a ref, where an operand is a name instead.
+ */
+const LIST_PATTERN = T;
+const BRANCH_CHANGES = [
+  "-d", "-D", "-m", "-M", "-c", "-C", "-f", "-t", "-u", "--delete", "--move", "--copy", "--force", "--track", "--no-track", "--set-upstream-to",
+  "--unset-upstream",
+];
+const TAG_CHANGES = ["-a", "-d", "-f", "-m", "-F", "-u", "--annotate", "--delete", "--force", "--message", "--file", "--local-user"];
 const PICK_VALUES: Record<string, ValueEntry> = { "-m --mainline": N, "-X --strategy-option": RUNS_PROGRAM, "--strategy": RUNS_PROGRAM };
 
 const GIT_SPECS: Readonly<Record<string, SlotSpec>> = {
@@ -294,20 +315,23 @@ const GIT_SPECS: Readonly<Record<string, SlotSpec>> = {
   show: logLike("git show"),
   diff: {
     name: "git diff",
-    flags: "pusbwRaz",
+    flags: "pusbwRazMC",
     long: [
       "stat", "shortstat", "numstat", "name-only", "name-status", "cached", "staged", "patch", "no-patch", "no-color", "quiet", "exit-code",
-      "ignore-all-space", "ignore-space-change", "text", "minimal", "histogram", "patience",
+      "ignore-all-space", "ignore-space-change", "text", "minimal", "histogram", "patience", "color", "word-diff", "merge-base", "find-renames",
+      "find-copies",
     ],
-    values: { "-O": READS_ANY_FILE, "--output": WRITES_FILE, "-U --unified": N },
+    values: { "-O": READS_ANY_FILE, "--output": WRITES_FILE, "-U --unified": N, "--diff-filter": null },
     ...files("revisions or files in the workspace"),
   },
   branch: {
     name: "git branch",
     flags: "avrdDmMcClfqt",
     long: ["list", "all", "remotes", "verbose", "delete", "move", "copy", "force", "quiet", "show-current", "track", "no-track", "unset-upstream"],
-    values: { "-u --set-upstream-to": R },
-    ...refs(),
+    values: { "-u --set-upstream-to": R, ...REACH_FILTERS, "--sort": null },
+    operand: (_index, _afterDashes, has) =>
+      has("-l", "--list", "-v", "--verbose", ...REACH_FILTER_NAMES) && !has(...BRANCH_CHANGES) ? LIST_PATTERN : R,
+    operandForms: "branch names, or a pattern (text) with --list, -v, --merged or --contains",
   },
   switch: {
     name: "git switch",
@@ -387,8 +411,9 @@ const GIT_SPECS: Readonly<Record<string, SlotSpec>> = {
     name: "git tag",
     flags: "adlfn",
     long: ["annotate", "delete", "list", "force"],
-    values: { "-m --message": TD, "-F --file": READS_ANY_FILE, "-u --local-user": null },
-    ...refs(),
+    values: { "-m --message": TD, "-F --file": READS_ANY_FILE, "-u --local-user": null, ...REACH_FILTERS, "--sort": null },
+    operand: (_index, _afterDashes, has) => (has("-l", "--list", "-n", ...REACH_FILTER_NAMES) && !has(...TAG_CHANGES) ? LIST_PATTERN : R),
+    operandForms: "tag names, or a pattern (text) with -l/--list, -n, --merged or --contains",
   },
   stash: {
     name: "git stash",
@@ -406,10 +431,10 @@ const GIT_SPECS: Readonly<Record<string, SlotSpec>> = {
           verb,
           {
             name: `git stash ${verb}`,
-            flags: "q",
+            flags: verb === "show" ? "qp" : "q",
             long: ["index", "quiet", "stat", "patch", "name-only", "include-untracked"],
-            operand: (index: number) => (index === 0 ? R : `as a second argument to git stash ${verb}`),
-            operandForms: "one stash name",
+            operand: (index: number) => (index === 0 ? STASH : `as a second argument to git stash ${verb}`),
+            operandForms: "one stash name (stash@{n}, n, or a branch or tag name)",
           } satisfies SlotSpec,
         ]),
       ),
@@ -497,7 +522,7 @@ const GIT_SPECS: Readonly<Record<string, SlotSpec>> = {
     name: "git blame",
     flags: "selwptfncbCM",
     long: ["porcelain", "line-porcelain", "incremental", "root", "show-stats", "show-name", "show-number", "show-email", "minimal"],
-    values: { "-L": T, "--contents": READS_ANY_FILE, "-S": READS_ANY_FILE, "--ignore-revs-file": READS_ANY_FILE },
+    values: { "-L": T, "--contents": READS_ANY_FILE, "-S": READS_ANY_FILE, "--ignore-revs-file": READS_ANY_FILE, "--date": null },
     ...files("a revision or files in the workspace"),
   },
   "ls-files": {
@@ -709,7 +734,9 @@ function walk(spec: SlotSpec, args: Args, from: number): { positions: Map<number
   const values = valuesOf(spec);
   const positions = new Map<number, Position>();
   const has = new Set<string>();
-  const unknown = (option: string) => ({ problem: `to ${spec.name} with ${option}, an option Aiden does not check there` });
+  const unknown = (option: string) => ({
+    problem: `to ${spec.name} with ${option}, an option Aiden does not check there (remove it; the rest of the command still works). ${checkedOptions(spec)}`,
+  });
   let ended = false;
   let operand = 0;
   for (let index = from; index < args.length; index += 1) {
@@ -858,7 +885,22 @@ const RULE_TEXT: Record<SlotRule, string> = {
 };
 
 function describe(slot: Slot): string {
+  if (slot.stash) return "a stash name (stash@{n} or n) or a branch or tag name";
   return slot.dash ? `${RULE_TEXT[slot.rule]}, which may start with -` : RULE_TEXT[slot.rule];
+}
+
+const LISTED_OPTIONS = 24;
+
+/** The options Aiden reads for a command, for a refusal of one it does not: "Options it checks: -p, --stat, … and 12 more". */
+function checkedOptions(spec: SlotSpec): string {
+  const names = [
+    ...[...(spec.flags ?? "")].map((letter) => `-${letter}`),
+    ...(spec.long ?? []).map((name) => `--${name}`),
+    ...Object.keys(spec.values ?? {}).flatMap((key) => key.split(" ")),
+  ];
+  if (names.length === 0) return `${spec.name} takes no options here`;
+  const shown = names.slice(0, LISTED_OPTIONS).join(", ");
+  return `Options it checks: ${shown}${names.length > LISTED_OPTIONS ? ` and ${names.length - LISTED_OPTIONS} more` : ""}`;
 }
 
 /** The forms a command takes page data in, for a refusal: "git commit takes page data only as: -m/--message {{x}} (text, …); operands: …". */
