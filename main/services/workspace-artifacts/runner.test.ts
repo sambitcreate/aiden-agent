@@ -31,6 +31,8 @@ async function setup(
     beforeRead?: () => Promise<void>;
     /** Edits the saved page file before the runner opens it, as an older Aiden might have left it. */
     persisted?: (document: string) => string;
+    /** Stands in for starting a command, in place of the real shell. */
+    runShell?: (shell: BoundedShellCommandOptions) => ReturnType<typeof runBoundedShellCommand>;
   } = {},
 ) {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-artifact-runner-"));
@@ -64,7 +66,7 @@ async function setup(
   const runner = createWorkspaceArtifactRunner({
     runShell: (shell: BoundedShellCommandOptions) => {
       commands.push(shell.command);
-      return runBoundedShellCommand(shell);
+      return (options.runShell ?? runBoundedShellCommand)(shell);
     },
     runArgv: (plan: ArgvPlanOptions) => {
       buttonRuns.push(plan.steps);
@@ -397,6 +399,32 @@ test("file sources explain problems in terms of the page, within the source size
   assert.equal(results.through!.error, "a.txt/x cannot be read.");
 });
 
+test("a command that cannot be started says so without the system's message, which names full paths", async (t) => {
+  const { runner, folder, context } = await setup(t, {
+    sources: [SHELL],
+    runShell: async (shell) => {
+      throw Object.assign(new Error(`spawn /bin/sh ENOENT in ${shell.cwd}`), { code: "ENOENT", path: "/bin/sh" });
+    },
+  });
+  const results = await runner.refresh("ws1", "art1", context("full"));
+  assert.equal(results.pulls!.status, "error");
+  assert.equal(results.pulls!.error, "The command cannot be run.");
+  assert.ok(!results.pulls!.error!.includes(folder));
+});
+
+test("a source named like a property every object has still runs when a refresh keeps other reads", async (t) => {
+  const named: WorkspaceArtifactSourceV1 = { name: "toString", kind: "shell", command: "printf '[7]'", parse: "json" };
+  const { runner, store, context } = await setup(t, { sources: [SHELL, named] });
+  await runner.refresh("ws1", "art1", context("full"));
+  const first = (await store.get("ws1", "art1"))!;
+  const changed = { ...named, command: "printf '[8]'" };
+  await store.replace("ws1", "art1", { title: "PRs", visual: first.artifact.visual, sources: [SHELL, changed], actions: [ECHO], refresh: first.artifact.refresh });
+  const results = await runner.refresh("ws1", "art1", context("full"), undefined, { reuseFrom: first.artifact });
+  assert.equal(results["toString"]!.status, "ok");
+  assert.equal(results["toString"]!.dataJson, "[8]");
+  assert.equal(results.pulls!.at, first.snapshot!.sources.pulls!.at);
+});
+
 test("a failing command reports the start and the end of what it printed, and bad JSON says where", async (t) => {
   const { runner, folder, context } = await setup(t, {
     sources: [
@@ -522,6 +550,27 @@ test("a file read whose workspace folder is not a folder fails with that lasting
   });
   // Not a policy refusal, so a listing keeps the page's cached data and asks again next time.
   await assert.rejects(artifactFileAllowed(notAFolder, "TODO.md"), WorkspaceArtifactFileUnsafeError);
+});
+
+test("a file Aiden may not read says it cannot be read, not that it changed while it was read", { skip: process.platform === "win32" || process.getuid?.() === 0 }, async (t) => {
+  const { runner, folder, context } = await setup(t, { sources: [FILE] });
+  await fs.chmod(path.join(folder, "TODO.md"), 0o000);
+  t.after(() => fs.chmod(path.join(folder, "TODO.md"), 0o644).catch(() => undefined));
+  const results = await runner.refresh("ws1", "art1", context("full"));
+  assert.equal(results.todo!.status, "error");
+  assert.equal(results.todo!.error, "TODO.md cannot be read.");
+});
+
+test("a file check or read in a workspace folder that is gone never repeats the system's message, which names its full path", async (t) => {
+  const { folder } = await setup(t, { sources: [FILE] });
+  const gone = path.join(folder, "removed");
+  for (const attempt of [artifactFileAllowed(gone, "TODO.md"), readWorkspaceArtifactFile(gone, "TODO.md")]) {
+    await assert.rejects(attempt, (error: Error) => {
+      assert.equal(error.message, "There is no file at TODO.md.");
+      assert.ok(!error.message.includes(folder));
+      return true;
+    });
+  }
 });
 
 test("denied file refreshes erase cached good data instead of preserving it as a transient failure", async (t) => {

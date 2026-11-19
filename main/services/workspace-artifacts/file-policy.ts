@@ -52,6 +52,29 @@ export class WorkspaceArtifactFileUnreadableError extends Error {
   constructor(file: string) { super(`${file} cannot be read.`); }
 }
 
+/**
+ * A system error's message names full paths on this computer, so one that
+ * reaches a page or Aiden says only what it means for `file`: there is no
+ * file there, or it cannot be read. Aiden's own errors pass as they are.
+ */
+function withoutSystemText(file: string, error: unknown): unknown {
+  const code = (error as NodeJS.ErrnoException | undefined)?.code;
+  if (error instanceof ManagedWorktreeFileIoError || typeof code !== "string" || !/^E[A-Z0-9]+$/u.test(code)) return error;
+  if (code === "ENOENT") return Object.assign(new Error(`There is no file at ${file}.`), { code });
+  return new WorkspaceArtifactFileUnreadableError(file);
+}
+
+/** Whether the system refuses to let Aiden read `at` itself (its permissions), as opposed to it having changed. */
+async function readRefused(at: string): Promise<boolean> {
+  try {
+    await fs.access(at, fs.constants.R_OK);
+    return false;
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException | undefined)?.code;
+    return code === "EACCES" || code === "EPERM";
+  }
+}
+
 /** Whether a part of `file` that exists inside `root` is a link. */
 async function linkOnPath(root: string, file: string): Promise<boolean> {
   let at = root;
@@ -94,23 +117,25 @@ async function admittedFile(root: string, file: string) {
 /** Metadata-only check for cached data. Missing/unavailable files inside the folder keep ordinary transient cache semantics; one missing past a link is refused. */
 export async function artifactFileAllowed(root: string, file: string): Promise<boolean> {
   try { await admittedFile(root, file); return true; }
-  catch (error) { if (error instanceof WorkspaceArtifactFileDeniedError) return false; throw error; }
+  catch (error) { if (error instanceof WorkspaceArtifactFileDeniedError) return false; throw withoutSystemText(file, error); }
 }
 
 export async function readWorkspaceArtifactFile(root: string, file: string, signal?: AbortSignal, hooks: { beforeRead?: () => Promise<void> } = {}): Promise<string> {
-  const admitted = await admittedFile(root, file);
+  const admitted = await admittedFile(root, file).catch((error: unknown) => { throw withoutSystemText(file, error); });
   signal?.throwIfAborted();
   await hooks.beforeRead?.();
   const identity = { root: admitted.identity, file: admitted.file };
   const reading = process.platform === "linux"
     ? readLinuxArtifactFile(identity, admitted.relative, signal)
     : readConfinedWorkspaceFile(identity, admitted.relative, signal);
-  const bytes = await reading.catch((error: unknown) => {
+  const bytes = await reading.catch(async (error: unknown) => {
     if (error instanceof LinuxArtifactFileChangedError || (error instanceof ManagedWorktreeFileIoError && error.code === "source_changed")) {
+      // A file Aiden may not read fails to open the same way a replaced one does; say which it is.
+      if (await readRefused(path.join(admitted.identity.path, admitted.relative))) throw new WorkspaceArtifactFileUnreadableError(file);
       throw new WorkspaceArtifactFileChangedError(file);
     }
     if (isUnsafeSource(error)) throw new WorkspaceArtifactFileUnsafeError(file);
-    throw error;
+    throw withoutSystemText(file, error);
   });
   signal?.throwIfAborted();
   return decodeWorkspaceFileText(bytes, file);

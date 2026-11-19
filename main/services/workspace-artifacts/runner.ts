@@ -220,6 +220,19 @@ function fileError(file: string, error: unknown): string {
   return message;
 }
 
+/**
+ * A command that could not be started at all. A system error's message
+ * names programs and folders by their full paths on this computer, so it is
+ * told only that the command cannot be run; an exit code or a time limit is
+ * reported by `failure` from the command's result instead.
+ */
+function commandError(error: unknown): string {
+  if (error instanceof Error && error.name === "AbortError") return "Cancelled.";
+  const code = (error as NodeJS.ErrnoException | undefined)?.code;
+  if (typeof code === "string" || !(error instanceof Error)) return "The command cannot be run.";
+  return error.message;
+}
+
 function cancelledResults(sources: readonly WorkspaceArtifactSourceV1[]): SourceResults {
   const at = Date.now();
   return Object.fromEntries(sources.map((source) => [source.name, { status: "error", at, error: "Cancelled." } as const]));
@@ -290,7 +303,7 @@ export function createWorkspaceArtifactRunner(dependencies: WorkspaceArtifactRun
         text = result.stdout;
       }
     } catch (error) {
-      return { status: "error", at, error: clip(error instanceof Error ? error.message : String(error), WORKSPACE_ARTIFACT_LIMITS.errorChars) };
+      return { status: "error", at, error: clip(commandError(error), WORKSPACE_ARTIFACT_LIMITS.errorChars) };
     }
     const parsed = parseWorkspaceArtifactOutput(source.parse, text);
     return parsed.ok
@@ -370,7 +383,7 @@ export function createWorkspaceArtifactRunner(dependencies: WorkspaceArtifactRun
       folderError === undefined ? reusableReads(view, options.reuseFrom, approved, { ...context, folderPath }, Date.now()) : {};
     // A kept file read still has to pass the file policy now; one that does not is read again, and that read is refused as usual.
     for (const source of view.artifact.sources) {
-      if (source.kind !== "file" || !(source.name in reused)) continue;
+      if (source.kind !== "file" || !Object.prototype.hasOwnProperty.call(reused, source.name)) continue;
       const allowed = await fileAllowed(folderPath!, source.file).catch(() => false);
       if (!allowed) delete reused[source.name];
     }
@@ -391,9 +404,9 @@ export function createWorkspaceArtifactRunner(dependencies: WorkspaceArtifactRun
           const at = Date.now();
           results = Object.fromEntries(view.artifact.sources.map((source) => [source.name, { status: "error", at, error: folderError } as const]));
         } else {
-          const toRun = view.artifact.sources.filter((source) => !(source.name in reused));
+          const toRun = view.artifact.sources.filter((source) => !Object.prototype.hasOwnProperty.call(reused, source.name));
           const ran = await runSources(toRun, approved, { ...context, folderPath }, controller.signal);
-          results = Object.fromEntries(view.artifact.sources.map((source) => [source.name, reused[source.name] ?? ran[source.name]!]));
+          results = Object.fromEntries(view.artifact.sources.map((source) => [source.name, Object.prototype.hasOwnProperty.call(reused, source.name) ? reused[source.name]! : ran[source.name]!]));
         }
         if (!shouldSave(id, entry)) return results;
         // A page whose commands changed meanwhile is re-read by its own refresh; these results describe the old ones.
