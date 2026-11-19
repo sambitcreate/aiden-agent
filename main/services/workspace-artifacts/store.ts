@@ -213,10 +213,12 @@ export function normalizeWorkspaceArtifactSnapshotsDocument(value: unknown): Wor
 /**
  * What an approval covers: every command the artifact can run, exactly as
  * written, and which buttons are turned off (the card shows them as never
- * running). A button a later release's rules turn back on then asks again,
- * since the person never allowed it to run. `isTurnedOff` is the current
- * rules unless given; a page with no turned-off button digests as its
- * commands alone, so a rule change leaves its approval in place.
+ * running). A rule change that turns a button off or back on changes the
+ * digest, so the page asks once more: failing safe, since the person never
+ * allowed a button that was off to run. `isTurnedOff` is the current rules
+ * unless given; a page with no turned-off button digests as its commands
+ * alone, so a rule change that leaves every button as it was keeps the
+ * approval.
  */
 export function workspaceArtifactDigest(
   sources: readonly WorkspaceArtifactSourceV1[],

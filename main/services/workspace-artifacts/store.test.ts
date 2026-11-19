@@ -226,7 +226,7 @@ test("an approval given while a button was turned off asks again once a later re
   const view = (await reopen().get("ws1", created.id))!;
   assert.equal(view.artifact.approvedDigest, shownWhileOff);
   assert.notEqual(view.digest, shownWhileOff, "Comment runs now, which the approval never allowed");
-  // Allowed while every button ran, the same page keeps its approval across a rule change.
+  // Allowed while every button ran, the page keeps its approval across a rule change that leaves them all on.
   assert.equal(view.digest, workspaceArtifactDigest([pulls], [comment], () => false));
   const approved = await store.approve("ws1", created.id, view.digest);
   assert.equal(approved.approvedDigest, view.digest);
