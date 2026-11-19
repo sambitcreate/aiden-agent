@@ -146,21 +146,32 @@ const IMAGE_FILE_EXTENSIONS: Readonly<Record<string, string>> = {
 };
 const SAVE_PATH_EXTENSION = /\.(png|jpe?g|gif|webp)$/iu;
 
+// C0 and C1 controls, and the Unicode direction marks, embeddings, overrides and isolates.
+// eslint-disable-next-line no-control-regex
+const SAVE_PATH_HIDDEN_CHARACTER = /[\u0000-\u001f\u007f-\u009f\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/u;
+
 /**
  * Checks a generate_image `savePath` before anything is sent to a provider: a
- * relative path inside the workspace folder (no `..`, no leading slash or
- * drive) naming a file with an image extension, or with none. Returns it with
+ * relative path inside the workspace folder (no `..`, no leading slash, `~`
+ * or drive, no hidden folder, no control or direction characters) naming a
+ * file with an image extension, or with none. Returns it with
  * forward slashes and without `.` segments. The folder itself is enforced
  * again when the file is written.
  */
 export function checkImageSavePath(value: unknown): string {
-  if (typeof value !== "string" || !value.trim() || Buffer.byteLength(value, "utf8") > 512 || value.includes("\0"))
+  // Control characters and Unicode direction marks could make the approval
+  // card show one path while another is written.
+  if (typeof value !== "string" || !value.trim() || Buffer.byteLength(value, "utf8") > 512 || SAVE_PATH_HIDDEN_CHARACTER.test(value))
     throw new Error("Invalid savePath.");
-  if (/^(?:[\\/]|[A-Za-z]:)/u.test(value))
+  // A leading ~ is a home folder to a person reading the card, but a folder named ~ to the workspace.
+  if (/^(?:[\\/~]|[A-Za-z]:)/u.test(value))
     throw new Error("savePath must be a path inside the workspace folder, such as design/assets/hero.png.");
   const segments = value.split(/[\\/]/u).filter((segment) => segment !== "" && segment !== ".");
   if (segments.length === 0 || segments.includes(".."))
     throw new Error("savePath must be a path inside the workspace folder, such as design/assets/hero.png.");
+  // Hidden folders (.git, .ssh, .aiden, .vscode) hold settings and hooks, never pictures.
+  if (segments.slice(0, -1).some((segment) => segment.startsWith(".")))
+    throw new Error("savePath must not be inside a hidden folder (one whose name starts with a dot).");
   const name = segments[segments.length - 1]!;
   const dot = name.lastIndexOf(".");
   if (dot === 0 || (dot > 0 && !SAVE_PATH_EXTENSION.test(name)))

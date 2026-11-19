@@ -1015,7 +1015,9 @@ test("with design mode off the image is saved and the canvas left alone, and a f
 
 test("a save path that could never be written, or a canvas request without one, is refused before the paid request", async () => {
   const { controls, generate } = savingTools();
-  for (const savePath of ["../outside.png", "/Users/person/hero.png", "C:\\art\\hero.png", "design/../../hero.png", "notes.txt", ".png", "", "a\u0000.png"]) {
+  for (const savePath of ["../outside.png", "/Users/person/hero.png", "C:\\art\\hero.png", "design/../../hero.png", "notes.txt", ".png", "", "a\u0000.png",
+    ".ssh/id.png", ".git/hooks/pre-commit.png", "design/.hidden/hero.png", "~/hero.png", "~\\hero.png",
+    "design/hero\u202egnp.png", "design/he\u2066ro.png", "design/\nhero.png", "design/hero\u0085.png"]) {
     await assert.rejects(generate.execute("bad", { ...imageRequest, savePath }), Error, JSON.stringify(savePath));
   }
   await assert.rejects(generate.execute("canvas", { ...imageRequest, placeOnCanvas: true }), /placeOnCanvas needs savePath/);
