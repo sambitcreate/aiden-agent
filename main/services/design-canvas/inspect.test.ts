@@ -130,6 +130,8 @@ test("every load the page's policy blocks is one load finding with the network a
           sourceId: PAGE,
         },
         { level: "error", message: csp("Connecting to", "wss://live.example/", "connect-src 'none'"), lineNumber: 9, sourceId: PAGE },
+        // connect-src is 'none', so a fetch of a workspace file is refused too.
+        { level: "error", message: csp("Connecting to", "aiden-design://grant-1/design/prices.json", "connect-src 'none'"), lineNumber: 10, sourceId: PAGE },
       ],
       brokenImages: ["https://img.example/hero.png"],
     }),
@@ -137,13 +139,16 @@ test("every load the page's policy blocks is one load finding with the network a
   );
   assert.deepEqual(
     findings.map((finding) => /^"([^"]+)"/u.exec(finding)?.[1]),
-    ["https://cdn.example/chart.js", "https://img.example/hero.png", "https://api.example/prices", "wss://live.example/"],
+    ["https://cdn.example/chart.js", "https://img.example/hero.png", "https://api.example/prices", "wss://live.example/", "design/prices.json"],
     findings.join("\n"),
   );
   for (const finding of findings) assert.doesNotMatch(finding, /script failed/u, finding);
   assert.match(findings[0]!, /did not load: design pages load nothing from the network\. Save the file in the workspace/u);
-  assert.match(findings[2]!, /could not be reached: design pages connect to nothing on the network\. Save the data the page needs in the workspace/u);
-  assert.match(findings[3]!, /could not be reached/u);
+  for (const connection of findings.slice(2)) {
+    assert.match(connection, /could not be reached: design pages connect to nothing, the workspace included/u, connection);
+    assert.match(connection, /Put the data the page needs in the page, or in a workspace script/u, connection);
+    assert.doesNotMatch(connection, /no such file|fetch it by a relative path/u, connection);
+  }
 });
 
 test("content past the right edge of a page that hides sideways overflow is reported as cut off, not as scrolling", () => {

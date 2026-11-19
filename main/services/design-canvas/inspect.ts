@@ -211,12 +211,13 @@ export function designInspectFindings(probe: DesignInspectProbe, context: Design
     if (address.startsWith("data:") || address.startsWith("blob:")) {
       if (!inlineFailed) findings.push("An inline (data: or blob:) image or font could not be read; check that it is complete.");
       inlineFailed = true;
+    } else if (connections.has(address)) {
+      // connect-src is 'none': a fetch of a workspace file is refused as well.
+      findings.push(
+        `${JSON.stringify(designAddressName(address))} could not be reached: design pages connect to nothing, the workspace included, so fetch, WebSocket and EventSource always fail. Put the data the page needs in the page, or in a workspace script it loads with <script src>.`,
+      );
     } else if (isWorkspaceAddress(address)) {
       findings.push(`${JSON.stringify(designAddressName(address))} did not load: there is no such file in the workspace. Check the relative path from ${context.path}.`);
-    } else if (connections.has(address)) {
-      findings.push(
-        `${JSON.stringify(designAddressName(address))} could not be reached: design pages connect to nothing on the network. Save the data the page needs in the workspace and fetch it by a relative path, or put it in the page.`,
-      );
     } else {
       findings.push(
         `${JSON.stringify(designAddressName(address))} did not load: design pages load nothing from the network. Save the file in the workspace (or inline it as a data: URL) and link it by a relative path.`,
