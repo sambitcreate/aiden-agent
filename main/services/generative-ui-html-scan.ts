@@ -1710,6 +1710,15 @@ export class HtmlScanner {
   private readonly committed: HtmlFindings = {};
   /** <script> and <style> elements whose text has not been checked yet. */
   private readonly rawText = new Set<Element>();
+  /**
+   * How many SVG and MathML elements of each tag name are on the open
+   * element stack, so the end tag rules below skip their walks of the stack
+   * when none they could close is open. parse5 reports each element it
+   * pushes and pops, except that the adoption agency, inserting an HTML
+   * element below the current node, reports the current node instead, so a
+   * count can only be too high and a walk run that was not needed.
+   */
+  private readonly openForeign = new Map<string, number>();
   private finished = false;
   /** Whether the host's closing markup is being read (see `close`). */
   private closing = false;
@@ -1752,7 +1761,13 @@ export class HtmlScanner {
         defaultTreeAdapter.adoptAttributes(recipient, attrs);
         this.checkTag(recipient.tagName, recipient.attrs, this.committed, true);
       },
+      onItemPush: (item) => {
+        if (item.namespaceURI !== htmlSpec.NS.HTML) this.openForeign.set(item.tagName, (this.openForeign.get(item.tagName) ?? 0) + 1);
+      },
       onItemPop: (item) => {
+        const count = item.namespaceURI === htmlSpec.NS.HTML ? undefined : this.openForeign.get(item.tagName);
+        if (count === 1) this.openForeign.delete(item.tagName);
+        else if (count !== undefined) this.openForeign.set(item.tagName, count - 1);
         if (this.rawText.delete(item)) this.checkRawText(item);
       },
       // The parser inserts before a node only to move content out of a table
@@ -1837,7 +1852,7 @@ export class HtmlScanner {
           : tag !== "select" || openElements.hasInScope(htmlSpec.TAG_ID.SELECT);
         if (!kept) throw new StructureLimit(`</${tag}> ${SELECT_FOREIGN_LIMIT}`);
       }
-      if (!this.closing && token.tagName !== "p" && token.tagName !== "br" && !this.endsForeignElement(token.tagName) && this.endsForeignAroundHtml(token)) {
+      if (!this.closing && token.tagName !== "p" && token.tagName !== "br" && this.endsForeignAroundHtml(token)) {
         throw new StructureLimit(`</${token.tagName}> ${FOREIGN_END_LIMIT}`);
       }
       onEndTag.call(this.parser, token);
@@ -1970,6 +1985,7 @@ export class HtmlScanner {
    * for it in foreign content.
    */
   private endsForeignElement(tagName: string): boolean {
+    if (this.openForeign.size === 0) return false;
     const { openElements, treeAdapter } = this.parser;
     for (let index = openElements.stackTop; index > 0; index -= 1) {
       const element = openElements.items[index] as Element;
@@ -1980,19 +1996,33 @@ export class HtmlScanner {
   }
 
   /**
-   * Whether parse5's generic in-body end tag rule, reached by `token`, would
-   * close an SVG or MathML element: it walks the open elements from the
-   * current node and stops at the first one with the token's tag (in any
-   * namespace) or at a special element. The other in-body end tag rules
-   * look for HTML elements only, and no SVG or MathML element shares their
-   * tags, so the walk finds nothing foreign for them either.
+   * Whether `token` passes the SVG and MathML elements around the current
+   * node without closing one (as `endsForeignElement` would find) and then
+   * reaches parse5's generic in-body end tag rule, which would close an SVG
+   * or MathML element: that rule walks the open elements from the current
+   * node and stops at the first one with the token's tag (in any namespace)
+   * or at a special element. The other in-body end tag rules look for HTML
+   * elements only, and no SVG or MathML element shares their tags, so the
+   * walk finds nothing foreign for them either. One walk answers both, as a
+   * tag the generic rule matches among the foreign elements above the
+   * innermost HTML one also matches them by name, and a special element
+   * there stops the generic rule first.
    */
   private endsForeignAroundHtml(token: Token.TagToken): boolean {
     const { openElements, treeAdapter } = this.parser;
+    // The walk can only close an SVG or MathML element named as the token
+    // is: one with the same tag ID has the same name, as parse5 gives an
+    // element the ID of its name, so a tag with none open skips the walk.
+    if (!this.openForeign.has(token.tagName)) return false;
+    let foreignRun = true;
     for (let index = openElements.stackTop; index > 0; index -= 1) {
       const element = openElements.items[index] as Element;
       const id = openElements.tagIDs[index];
       const namespace = treeAdapter.getNamespaceURI(element);
+      if (foreignRun) {
+        if (namespace === htmlSpec.NS.HTML) foreignRun = false;
+        else if (treeAdapter.getTagName(element).toLowerCase() === token.tagName) return false;
+      }
       if (token.tagID === id && (id !== htmlSpec.TAG_ID.UNKNOWN || treeAdapter.getTagName(element) === token.tagName)) return namespace !== htmlSpec.NS.HTML;
       if (htmlSpec.SPECIAL_ELEMENTS[namespace].has(id)) return false;
     }
@@ -2004,6 +2034,7 @@ export class HtmlScanner {
    * <select>, so the tags read now are in its foreign content.
    */
   private foreignAboveSelect(): boolean {
+    if (this.openForeign.size === 0) return false;
     const { openElements, treeAdapter } = this.parser;
     for (let index = openElements.stackTop; index > 0; index -= 1) {
       if (treeAdapter.getNamespaceURI(openElements.items[index] as Element) !== htmlSpec.NS.HTML) return true;
