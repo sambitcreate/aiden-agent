@@ -722,6 +722,10 @@ test("where a value lands decides what it may be: no option, no refspec, no file
   ]) {
     assert.throws(() => run(command!, value!), /x must name a file inside the workspace/u, `${command} ${value}`);
   }
+  // A value that starts with a drive letter is refused, and the refusal says why.
+  for (const value of ["C:\\Windows\\win.ini", "a:b.txt"]) {
+    assert.throws(() => run("cat {{x}}", value), /x must name a file inside the workspace: .*drive letter/u, value);
+  }
   assert.deepEqual(run("cat notes/{{x}}.md", "a/../b").steps[0]!.pipeline[0]!.argv, ["cat", "notes/a/../b.md"]);
   // test compares text as text.
   assert.deepEqual(run("test {{x}} = main", "/etc/passwd").steps[0]!.pipeline[0]!.argv, ["test", "/etc/passwd", "=", "main"]);

@@ -705,12 +705,15 @@ function blobStart(text: string, wordStart: boolean): number {
   return stage ? stage[0].length : text.indexOf(":") + 1;
 }
 
+/** What `staysInside` refuses, as a refusal says it. */
+const OUTSIDE_PATHS = "no absolute path, drive letter (C:), ~, or .. that leads out of it";
+
 /** Whether a template holds a placeholder, and so runs without a shell. */
 export function workspaceArtifactTemplateHasParams(template: string): boolean {
   return PLACEHOLDER_TEST.test(template);
 }
 
-/** Whether a path stays inside the folder it is read from: relative, not under ~, and no `..` that climbs out. */
+/** Whether a path stays inside the folder it is read from: relative, with no drive letter, not under ~, and no `..` that climbs out. */
 function staysInside(path: string): boolean {
   if (/^[/\\~]/u.test(path) || /^[A-Za-z]:/u.test(path)) return false;
   let depth = 0;
@@ -816,10 +819,10 @@ export function workspaceArtifactValueProblem(steps: readonly TemplateStep[], va
         if (slot.search && /(?<![\p{L}\p{N}_])(?:repo|org|user|owner):/iu.test(filled)) {
           return `${name} cannot hold a repo:, org:, user: or owner: qualifier there: it would search past this repository.`;
         }
-        if (slot.rule === "path" && !staysInside(filled)) return `${name} must name a file inside the workspace: no absolute path, ~, or .. that leads out of it.`;
+        if (slot.rule === "path" && !staysInside(filled)) return `${name} must name a file inside the workspace: ${OUTSIDE_PATHS}.`;
         const blob = params.find((part) => part.slot?.blob);
         if (blob && !staysInside(blobPath(word, value))) {
-          return `${blob.param} must name a file inside the workspace: no absolute path, ~, or .. that leads out of it.`;
+          return `${blob.param} must name a file inside the workspace: ${OUTSIDE_PATHS}.`;
         }
       }
     }
