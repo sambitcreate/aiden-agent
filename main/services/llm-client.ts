@@ -610,6 +610,12 @@ interface EnteredCanvasTools {
   initialStatusLine(): Promise<string | undefined>;
   /** The held canvas tools once entered, for codemode's late deferred tools. */
   deferred(): readonly AgentTool[];
+  /**
+   * Settles a design-system offer this turn's status note carried: logged as
+   * made once the turn ended normally, or offered again on a later turn when
+   * it failed or was stopped.
+   */
+  settleDesignSystemOffer(delivered: boolean): void;
 }
 
 /**
@@ -2823,11 +2829,13 @@ async function prepareGeneration(
   // says yes in chat.
   const designSystemOfferable =
     !botContext && !assistantMode && permission !== "none" && permission !== "read-only" && !options.excludeToolNames?.has("write_file");
+  let offeredDesignSystemFolder: string | undefined;
   const canvasStatusLine = async (): Promise<string> => {
     const line = canvasPromptLine(await designCanvasStore.get(params.chatId), params.designView?.selection);
     if (!folderPath || !designSystemOfferable) return line;
     try {
       const offer = await designSystemOffers.offerFor(folderPath, signal);
+      if (offer) offeredDesignSystemFolder = folderPath;
       return offer ? `${line} ${offer}` : line;
     } catch (error) {
       if (!signal.aborted) logger.warn("pi", "Could not read the workspace's colours and fonts for a design-system offer.", error);
@@ -2890,6 +2898,12 @@ async function prepareGeneration(
       }
     },
     deferred: () => (canvasToolsEntered ? heldCanvasTools : []),
+    settleDesignSystemOffer: (delivered) => {
+      if (offeredDesignSystemFolder === undefined) return;
+      const folder = offeredDesignSystemFolder;
+      offeredDesignSystemFolder = undefined;
+      void designSystemOffers.settle(folder, delivered);
+    },
   };
   let googleWorkspaceSnapshot: string | undefined;
   if (
@@ -5879,6 +5893,8 @@ export const llmClient = {
       generationChat.owner === undefined;
     // The outcome the run records (a Stop, or not), once it has one.
     let owedRunRecordedStop: boolean | undefined;
+    // Only a turn that ended normally counts a design-system offer as made.
+    let designSystemOfferDelivered = false;
     // Ends the run's ownership, then settles its owed turn even when a
     // settlement step throws, so saved input never stays unanswered.
     const settleRun = (committedIds: readonly string[], recordedStop: boolean) => {
@@ -6227,6 +6243,7 @@ export const llmClient = {
               timeline: finalTimeline,
             }));
           } else {
+            designSystemOfferDelivered = !wasCancelled;
             sendGeneration(streamId, "chat:done", withUndeliveredGuidance({
               streamId,
               content: full,
@@ -6257,6 +6274,7 @@ export const llmClient = {
         }));
       } finally {
         try {
+          enteredCanvasTools.settleDesignSystemOffer(designSystemOfferDelivered);
           endLoadMonitor(activeGeneration, streamId, false);
           cacheWarmer?.dispose();
           visualDrafts.dispose();

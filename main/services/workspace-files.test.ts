@@ -225,6 +225,36 @@ test("workspace editor rejects a file that grows after the pathname size check",
   assert.equal(grew, true);
 });
 
+test("a caller's tighter byte limit holds even when the file grows after the pathname stat", async (t) => {
+  const root = await workspace(t);
+  await fs.writeFile(path.join(root, "fits.txt"), "x".repeat(1024));
+  await fs.writeFile(path.join(root, "big.txt"), "x".repeat(1025));
+  assert.equal((await readWorkspaceFile(root, "fits.txt", undefined, { maxBytes: 1024 })).size, 1024);
+  await assert.rejects(readWorkspaceFile(root, "big.txt", undefined, { maxBytes: 1024 }), /too large/);
+
+  const file = path.join(root, "growing.txt");
+  await fs.writeFile(file, "small");
+  const canonicalFile = await fs.realpath(file);
+  const originalStat = fsPromises.stat;
+  let grew = false;
+  t.mock.method(fsPromises, "stat", async (...args: Parameters<typeof originalStat>) => {
+    const info = await originalStat(...args);
+    if (args[0] === canonicalFile && !grew) {
+      grew = true;
+      await fs.writeFile(file, "x".repeat(4096));
+    }
+    return info;
+  });
+  syncBuiltinESMExports();
+  t.after(() => {
+    t.mock.restoreAll();
+    syncBuiltinESMExports();
+  });
+
+  await assert.rejects(readWorkspaceFile(root, "growing.txt", undefined, { maxBytes: 1024 }), /too large/);
+  assert.equal(grew, true);
+});
+
 test("workspace editor bounds bytes even when a file grows after descriptor stat", async (t) => {
   const root = await workspace(t);
   const file = path.join(root, "growing.txt");

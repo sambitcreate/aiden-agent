@@ -374,19 +374,24 @@ export async function readWorkspaceFile(
   root: string,
   suppliedPath: string,
   signal?: AbortSignal,
-  options: { exclusiveIdentity?: RegularFileIdentity } = {},
+  options: {
+    exclusiveIdentity?: RegularFileIdentity;
+    /** A tighter byte limit than the editor's, enforced on the opened file too. */
+    maxBytes?: number;
+  } = {},
 ): Promise<WorkspaceFileDocument> {
   throwIfAborted(signal);
+  const limit = Math.min(options.maxBytes ?? MAX_EDITOR_BYTES, MAX_EDITOR_BYTES);
   const { fullPath, relativePath } = await resolveExistingPath(root, suppliedPath);
   const stats = await fs.stat(fullPath);
   if (!stats.isFile()) throw new Error(`${relativePath} is not a file.`);
-  if (stats.size > MAX_EDITOR_BYTES) {
+  if (stats.size > limit) {
     throw new Error(`${relativePath} is too large to edit in Aiden (${Math.ceil(stats.size / 1_000_000)} MB).`);
   }
   // A pathname stat is only a snapshot: another app can grow or replace the
   // file before it is read. Enforce the byte limit on the opened descriptor.
   // Remote handles also bind the descriptor to the issued single-link inode.
-  const buffer = await readRegularFile(fullPath, MAX_EDITOR_BYTES, options).catch((error: unknown) => {
+  const buffer = await readRegularFile(fullPath, limit, { exclusiveIdentity: options.exclusiveIdentity }).catch((error: unknown) => {
     if ((error as NodeJS.ErrnoException).code === "EFBIG") {
       throw new Error(`${relativePath} is too large to edit in Aiden.`);
     }

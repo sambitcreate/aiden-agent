@@ -78,11 +78,15 @@ export function parseDesignColor(raw: string): string | null {
   return null;
 }
 
-const TOKEN_NAME = /^(?:--|\$|@)?[A-Za-z0-9_][A-Za-z0-9_-]{0,47}$/u;
+const TOKEN_NAME = /^(?:--|\$|@)?[A-Za-z0-9_][A-Za-z0-9_-]{0,39}$/u;
+/** Words in a token name (`--color-sidebar-primary-foreground` has five); a longer one reads like a sentence. */
+const MAX_TOKEN_NAME_WORDS = 5;
 
 function tokenName(raw: string): string | null {
   const name = raw.trim().replace(/[.\s/]+/gu, "-").replace(/-{3,}/gu, "--");
-  return TOKEN_NAME.test(name) ? name : null;
+  if (!TOKEN_NAME.test(name)) return null;
+  const words = name.replace(/^(?:--|\$|@)/u, "").split(/[-_]+/u).filter(Boolean);
+  return words.length <= MAX_TOKEN_NAME_WORDS ? name : null;
 }
 
 const GENERIC_FAMILIES = new Set([
@@ -107,13 +111,27 @@ const GENERIC_FAMILIES = new Set([
   "revert",
   "none",
 ]);
-const FAMILY = /^[A-Za-z0-9][A-Za-z0-9 ._-]{0,47}$/u;
+const FAMILY = /^[A-Za-z0-9][A-Za-z0-9 ._-]{0,31}$/u;
+/**
+ * A family of more than one word (`IBM Plex Sans`, `Source Sans 3`) has at
+ * most four, each starting with a capital or a digit, so a stack cannot pass
+ * a sentence off as a font name.
+ */
+const FAMILY_WORD = /^[A-Z0-9]/u;
+const MAX_FAMILY_WORDS = 4;
+
+function plainFamily(family: string): boolean {
+  if (!FAMILY.test(family)) return false;
+  const words = family.split(/\s+/u);
+  return words.length === 1 || (words.length <= MAX_FAMILY_WORDS && words.every((word) => FAMILY_WORD.test(word)));
+}
 
 /** The first family a font stack names, when it is a real font rather than a generic or system one. */
 function leadingFamily(entries: readonly string[]): string | null {
   const first = entries[0]?.trim().replace(/^["']|["']$/gu, "").trim();
   if (!first || first.includes("var(") || GENERIC_FAMILIES.has(first.toLowerCase())) return null;
-  return FAMILY.test(first) ? first.replace(/\s+/gu, " ") : null;
+  const family = first.replace(/\s+/gu, " ");
+  return plainFamily(family) ? family : null;
 }
 
 function fontStack(value: string): string[] {
@@ -461,7 +479,15 @@ export function detectDesignSystem(files: readonly DesignSystemFile[]): Detected
   return { colors, fonts, sources };
 }
 
-const SAFE_PATH = /^[A-Za-z0-9 ._@()+/-]{1,160}$/u;
+const SAFE_PATH = /^[A-Za-z0-9._@()+/-]{1,64}$/u;
+const MAX_SHOWN_SOURCES = 3;
+
+/** A source path as the offer shows it: the path when short and plain, else its file name when that is, else nothing. */
+function shownSource(source: string): string | null {
+  if (SAFE_PATH.test(source)) return source;
+  const name = source.slice(source.lastIndexOf("/") + 1);
+  return name !== source && SAFE_PATH.test(name) && name.length <= 40 ? name : null;
+}
 
 /**
  * The conversation note that offers the person a tokens file and a specimen
@@ -479,7 +505,9 @@ export function designSystemOfferLine(detected: DetectedDesignSystem): string {
     colors.length > 0 ? `colours ${colors.join(", ")}` : null,
     fonts.length > 0 ? `fonts ${fonts.join(", ")}` : null,
   ].filter((part): part is string => part !== null);
-  const sources = detected.sources.filter((source) => SAFE_PATH.test(source)).map((source) => JSON.stringify(source));
+  const sources = [...new Set(detected.sources.map(shownSource).filter((source): source is string => source !== null))]
+    .slice(0, MAX_SHOWN_SOURCES)
+    .map((source) => JSON.stringify(source));
   const where = sources.length > 0 ? ` (${sources.join(", ")})` : "";
   return (
     `This workspace has no design/tokens.css yet. Its style files${where} use ${found.join("; and ")}. ` +
