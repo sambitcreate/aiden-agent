@@ -314,13 +314,18 @@ test("startup pairing on a Tailscale-only server pairs over Tailscale and report
   }
 });
 
+// Built from a string so the escape byte is not a control character inside a regex literal.
+const ESC = String.fromCharCode(27);
+const SGR_OR_CELL = new RegExp(`(${ESC}\\[[0-9;]*m)|([^${ESC}])`, "gu");
+const SGR = new RegExp(`${ESC}\\[[0-9;]*m`, "gu");
+
 /** Turns rendered half-block rows back into dark/light modules, two per row. */
 function modulesFromRows(rows) {
   const grid = [];
   for (const row of rows) {
     const top = [], bottom = [];
     let foreground = 39, background = 49;
-    for (const [, sgr, cell] of row.matchAll(/(\x1b\[[0-9;]*m)|([^\x1b])/gu)) {
+    for (const [, sgr, cell] of row.matchAll(SGR_OR_CELL)) {
       if (sgr) {
         const fg = /38;5;(\d+)/u.exec(sgr), bg = /48;5;(\d+)/u.exec(sgr);
         if (fg) foreground = Number(fg[1]);
@@ -360,7 +365,7 @@ test("a Tailscale pairing code fits an 80-column terminal as a black-on-white QR
   const endpoint = "https://bitcreate1.taile1def.ts.net/api/aiden/v1";
   const pairing = pairingFor(endpoint, { mode: "system" });
   const rows = api.renderQrRows(pairing.qrPayload);
-  const width = [...rows[0].replace(/\x1b\[[0-9;]*m/gu, "")].length;
+  const width = [...rows[0].replace(SGR, "")].length;
   assert.ok(width <= 80, `${width} columns would wrap in an 80-column terminal`);
   for (const row of rows) assert.ok(row.endsWith("\x1b[0m"), "each row resets its colors, so nothing bleeds past the code");
   const grid = modulesFromRows(rows);
@@ -384,7 +389,7 @@ test("a pairing code too wide for the terminal is left out instead of wrapping i
   const text = await api.renderPairingTerminal(pairing, { columns: 80 });
   assert.match(text, /^Pair on this local network$/m);
   assert.match(text, /needs a window at least \d+ characters wide, and this one is 80\. Widen the window and run `aiden remote pair lan`/);
-  assert.doesNotMatch(text, /[▀]|\x1b\[48;5;/u);
+  assert.ok(!text.includes("▀") && !text.includes(`${ESC}[48;5;`), "no QR cells in the output");
   assert.match(text, /^Nearby address:\nhttps:\/\/bitcreate1\.local:49320\/api\/aiden\/v1$/m);
   assert.match(await api.renderPairingTerminal(pairing, { columns: 200 }), /▀/u, "a wide window shows the code");
 });
