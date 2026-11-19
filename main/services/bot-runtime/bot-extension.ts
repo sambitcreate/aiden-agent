@@ -435,7 +435,8 @@ export interface BotExtensionDeps {
   systemSections(bot: BotDefinition, offered: BotOfferedTools): Promise<string[]>;
   /**
    * The `aiden-memory` section, rendered before every request. `memoryOffered`
-   * says whether this request offers `bot_memory`. Absent or "": no section.
+   * says whether the Bot declares `bot_memory`, whatever the turn's ingress
+   * (a call the ingress refuses is blocked when made). Absent or "": no section.
    */
   memorySection?(botId: string, offer: { memoryOffered: boolean }): Promise<string>;
   /**
@@ -1629,13 +1630,12 @@ export function createBotRegistry(botId: string, deps: BotExtensionDeps): BotReg
         key === "aiden-memory"
           ? section(
               key,
-              async (input, context) => {
+              async () => {
                 if (deps.memorySection === undefined) return undefined;
-                const offered = await memoryOffered(
-                  { snapshot: input.read.snapshot.bind(input.read), conversationId: input.conversationId },
-                  context,
-                );
-                const text = await deps.memorySection(botId, { memoryOffered: offered });
+                // The guidance follows the declaration, not the turn's ingress:
+                // a routine or Bot-message turn keeps the same system text and
+                // its bot_memory call is refused in `authorizeTool`.
+                const text = await deps.memorySection(botId, { memoryOffered: installedToolNames.has(MEMORY_TOOL_NAME) });
                 return text.length === 0 ? undefined : text;
               },
               { tag: false },

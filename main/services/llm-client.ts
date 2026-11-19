@@ -149,7 +149,7 @@ import { buildSystemPrompt } from "./chat-system-prompt.js";
 import { skillRegistry } from "./skill-registry-main.js";
 import { DESKTOP_ARTIFACT_SKILLS } from "./workspace-artifacts/skill.js";
 import { DESKTOP_HOOK_SKILLS } from "./hooks-skill.js";
-import { HOOKS_TOOL_NAME, createHooksTool, hooksToolUnavailableReason, offersHooksTool, runsWorkspaceChatHooks } from "./hooks-tool.js";
+import { HOOKS_TOOL_NAME, createHooksTool, runsWorkspaceChatHooks } from "./hooks-tool.js";
 import { getHookService } from "./hooks/hook-service-main.js";
 import { DESIGN_CANVAS_SKILLS } from "./design-canvas/skill.js";
 import {
@@ -487,8 +487,8 @@ import {
   displayedAssistantHtmlUsage,
   GENERATIVE_UI_TOOL_NAME,
   shouldEnableGenerativeUiExtension,
-  generativeUiUnavailableReason,
 } from "./generative-ui-extension.js";
+import { chatToolOffers, chatTurnToolRefusal, type ChatToolSurface, type ChatTurnAudience } from "./chat-turn-tool-policy.js";
 import { createGenerativeUiDraftSession } from "./generative-ui-draft.js";
 import { createUiDraftSession } from "./aiden-ui-draft.js";
 import { withoutVisualSnapshots } from "../../renderer/shared/visual-snapshots.js";
@@ -1800,34 +1800,32 @@ async function prepareGeneration(
     !options.excludeToolNames?.has(WORKSPACE_ARTIFACT_TOOL_NAME);
   // A paired device cannot show workspace artifacts. The tool stays declared,
   // so the chat's tool list is the same from either device, and its calls are
-  // refused in that turn.
-  const workspaceArtifactsRefused = options.visualAudience === "remote";
+  // refused in that turn (`chatTurnToolRefusal`).
   let skillSnapshot =
     !assistantMode && workspace ? await skillRegistry.snapshotResolved(workspace) : undefined;
   if (skillSnapshot && !offerWorkspaceArtifacts) {
     skillSnapshot = withoutSkills(skillSnapshot, DESKTOP_ARTIFACT_SKILLS);
   }
-  // The agent's hooks tool and its skill: where workspace chat hooks run, and
-  // only while the owner can answer its card on this computer (not on an
-  // unattended or a phone- or paired-Mac-driven turn).
-  // The tool is declared wherever the chat can ever use it, so the tool list
-  // is the same on every turn; an unattended or remote turn refuses its calls
-  // before anything runs (`hooksToolUnavailableReason`).
-  const hooksSurface = {
+  // The agent's hooks tool and its skill: where workspace chat hooks run. Its
+  // card is answered only on this computer, so an unattended or a phone- or
+  // paired-Mac-driven turn refuses its calls before anything runs.
+  const chatToolSurface: ChatToolSurface = {
     usageSource: options.usageSource,
     interactionSurface: options.interactionSurface,
     bot: Boolean(botContext),
     assistant: assistantMode,
     harnessProvider: isAcpHarnessProvider(runtime.provider.id),
-    unattended: options.unattended === true,
-    remoteAudience: options.visualAudience === "remote",
     excludedToolNames: options.excludeToolNames,
   };
-  const offerHooksTool = hostPlatformCapabilities().hooks && offersHooksTool({
-    ...hooksSurface,
-    unattended: false,
-    remoteAudience: false,
-  });
+  const turnAudience: ChatTurnAudience = {
+    unattended: options.unattended === true,
+    remoteAudience: options.visualAudience === "remote",
+    ...(params.inlineVisuals ? { inlineVisuals: params.inlineVisuals } : {}),
+    visualize: params.visualize === true,
+  };
+  // Offered by the chat's surface alone; a turn nobody watches, or one a paired
+  // device sent, keeps the declaration and refuses the call.
+  const offerHooksTool = hostPlatformCapabilities().hooks && chatToolOffers(chatToolSurface).hooks;
   if (skillSnapshot && !offerHooksTool) {
     skillSnapshot = withoutSkills(skillSnapshot, DESKTOP_HOOK_SKILLS);
   }
@@ -2500,27 +2498,7 @@ async function prepareGeneration(
    * the reason names the condition, and the call is refused before it runs.
    */
   const turnToolRefusals: Array<(name: string, args: unknown) => string | undefined> = [];
-  turnToolRefusals.push((name) => hooksToolUnavailableReason(name, hooksSurface));
-  if (options.unattended === true) {
-    // An unattended follow-up keeps the chat's Computer Use declaration, but
-    // nobody is there to grant access or watch the screen, so the call never runs.
-    turnToolRefusals.push((name) =>
-      name === COMPUTER_USE_TOOL_NAME || name === FORM_FILL_TOOL_NAME
-        ? `${name} is not available in this turn: nobody is watching this follow-up to grant Computer Use. Describe what you would do on screen instead.`
-        : undefined);
-  }
-  if (workspaceArtifactsRefused) {
-    turnToolRefusals.push((name) =>
-      name === WORKSPACE_ARTIFACT_TOOL_NAME
-        ? `${WORKSPACE_ARTIFACT_TOOL_NAME} is not available in this turn: the request came from a paired device, which cannot show workspace artifacts. Open the chat on this computer to create, refresh or run one.`
-        : undefined);
-  }
-  {
-    // With inline visuals On request the drawing tools stay declared on every
-    // turn and are refused in a turn that did not use /visualize.
-    const visualsTurn = { onRequest: params.inlineVisuals === "on_request", visualize: params.visualize === true };
-    turnToolRefusals.push((name) => generativeUiUnavailableReason(name, visualsTurn));
-  }
+  turnToolRefusals.push(chatTurnToolRefusal(chatToolSurface, turnAudience));
   if (!botContext && (!assistantMode || attendedAssistant) && options.interactionSurface !== "telegram" && schedulingAllowed && (rendererOwner || browserOwner?.kind === "remote")) {
     const appToolTurn = { liveState: browserOwner?.kind !== "remote", canOpen: browserOwner?.kind !== "remote" };
     turnToolRefusals.push((name, args) => aidenAppToolUnavailableReason(name, args, appToolTurn));

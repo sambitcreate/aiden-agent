@@ -39,6 +39,13 @@ import { markMcpAgentTool } from "./mcp-tool-identity.js";
 import { createPiCodemodeTool } from "./pi-codemode.js";
 import { forgetPromptSectionDeviceKeys } from "./prompt-section-secret.js";
 import { LOAD_TOOLS_TOOL_NAME } from "./on-demand-tools.js";
+import { createAidenAppTools } from "./aiden-app-tools.js";
+import type { AppControlContext, AppControlsService } from "./app-controls-core.js";
+import { chatToolOffers, chatTurnToolRefusal, type ChatToolSurface, type ChatTurnAudience } from "./chat-turn-tool-policy.js";
+import { remoteGenerationSurface } from "./conversation-surface-generation.js";
+import { UNATTENDED_FOLLOW_UP_GENERATION } from "./follow-through/notice-delivery.js";
+import { createGenerativeUiExtension, shouldEnableGenerativeUiExtension } from "./generative-ui-extension.js";
+import { ROUTINE_NOTES_TOOL } from "./bot-runtime/bot-tool-policy.js";
 import type { PiAgentRuntimeExtension } from "./pi-agent-runtime-harness.js";
 import {
   comparePromptRequests,
@@ -210,7 +217,7 @@ const openWork = (items: BotOpenWorkItem[]): BotOpenWorkSnapshot => ({ botId: bo
  * The faux model clones each provider context it is given; a turn renders
  * them through the wire adapter afterwards.
  */
-async function botChat(options: { userMemory: string; openWork?: BotOpenWorkItem[] }) {
+async function botChat(options: { userMemory: string; openWork?: BotOpenWorkItem[]; extraTools?: AgentTool[] }) {
   const profileDir = await mkdtemp(path.join(tmpdir(), "aiden-prefix-bot-"));
   tempRoots.push(profileDir);
   const memoryDir = path.join(profileDir, "bots", bot.id, "memory");
@@ -225,6 +232,7 @@ async function botChat(options: { userMemory: string; openWork?: BotOpenWorkItem
       botMemoryToolEntry(bot.id, memory),
       { tool: readFileTool, replay: "safe" },
       { tool: textTool("open_work", "Read and update the Bot's open work."), replay: "safe" },
+      ...(options.extraTools ?? []).map((tool) => ({ tool, replay: "safe" as const })),
     ],
     turnAllows: withBotMemoryIngress(botIngressAllowsTool),
     // The sections as bot-session-main composes them.
@@ -258,7 +266,8 @@ async function botChat(options: { userMemory: string; openWork?: BotOpenWorkItem
   return {
     memory,
     state,
-    async turn(prompt: string, responses: ReturnType<typeof fauxAssistantMessage>[]): Promise<RecordedPromptRequest[]> {
+    /** `requestId` names the ingress the way the Bot session service does (`routine:`, `tg:`, none for a person). */
+    async turn(prompt: string, responses: ReturnType<typeof fauxAssistantMessage>[], requestId?: string): Promise<RecordedPromptRequest[]> {
       turnNumber += 1;
       const thisTurn = turnNumber;
       const captured: PromptProviderContext[] = [];
@@ -269,7 +278,7 @@ async function botChat(options: { userMemory: string; openWork?: BotOpenWorkItem
       fauxModels.faux.setResponses(responses.map(capture));
       // The Bot session service refreshes the registry before every turn.
       await registry.refresh();
-      await (await root.submit({ type: "input", content: prompt }, ctx)).wait(ctx);
+      await (await root.submit({ type: "input", content: prompt, ...(requestId === undefined ? {} : { requestId }) }, ctx)).wait(ctx);
       assert.equal(captured.length, responses.length, "every scripted response was requested");
       const requests: RecordedPromptRequest[] = [];
       for (const [index, context] of captured.entries()) requests.push(await recorder.record(context, { turn: thisTurn, step: index + 1 }));
@@ -539,6 +548,105 @@ describe("prompt prefix stability: already stable", () => {
     assert.equal(comparison.wire?.kind, "system");
     assert.equal(comparison.transcript?.source, "system:base");
   });
+});
+
+describe("prompt prefix stability: tool list identical across turns", () => {
+  // The rendered tool declarations, the first thing a request caches.
+  const toolsOf = (request: RecordedPromptRequest) => request.wire.filter((segment) => segment.kind === "tools").map((segment) => segment.hash);
+  const attended: ChatTurnAudience = { unattended: false, remoteAudience: false, visualize: false };
+  const workspaceSurface: ChatToolSurface = { usageSource: "chat", bot: false, assistant: false, harnessProvider: false };
+  // A chat's own tools that only an attended turn on this computer may run.
+  const hooksTool = textTool("hooks", "List, propose and test this chat's hooks.");
+  const workspaceArtifactTool = textTool("workspace_artifact", "Create, refresh or run a workspace artifact.");
+  const chatTools = (surface: ChatToolSurface) => [
+    ...workspaceTools, codemodeTool, computerUseTool, workspaceArtifactTool,
+    ...(chatToolOffers(surface).hooks ? [hooksTool] : []),
+  ];
+
+  test("a workspace chat with inline visuals On request: a /visualize turn and a plain turn", async () => {
+    const visuals = (visualize: boolean) => {
+      const turn = { usageSource: "chat" as const, assistantMode: false, permission: "ask" as const, excluded: false, inlineVisuals: "on_request" as const };
+      assert.equal(shouldEnableGenerativeUiExtension(turn), true, "On request declares the drawing tools on every turn");
+      return createGenerativeUiExtension({
+        workspaceRoot: undefined, onArtifact: () => undefined, onUiVisual: () => undefined, onRequest: true, preferArtifactThisTurn: visualize,
+      });
+    };
+    const { previous, current } = await twoTurns(
+      {},
+      { assembly: await workspaceChat({ tools: chatTools(workspaceSurface), extensions: [visuals(false)] }) },
+      { assembly: await workspaceChat({ tools: chatTools(workspaceSurface), extensions: [visuals(true)] }) },
+    );
+    assert.deepEqual(toolsOf(current), toolsOf(previous));
+    assert.ok(current.carries("render_artifact"), "the drawing tools stay declared");
+    const plain = chatTurnToolRefusal(workspaceSurface, { ...attended, inlineVisuals: "on_request" });
+    assert.match(plain("render_artifact") ?? "", /not available in this turn.*\/visualize/su);
+    assert.equal(chatTurnToolRefusal(workspaceSurface, { ...attended, inlineVisuals: "on_request", visualize: true })("render_artifact"), undefined);
+  });
+
+  test("a Bot chat: a routine turn, a person's turn and a Telegram turn", async () => {
+    // The routine notepad is for routine runs alone; the other turns refuse its call.
+    const routineNotes = textTool(ROUTINE_NOTES_TOOL, "Read and update this routine's notes.");
+    const chat = await botChat({ userMemory: "Prefers short answers.", extraTools: [routineNotes] });
+    try {
+      const routine = await chat.turn("Run the brief.", reply("Brief done."), "routine:task-1:1000");
+      const [person] = await chat.turn("What is open?", reply("Nothing."));
+      const [telegram] = await chat.turn("Anything new?", reply("No."), "tg:chat-1:1");
+      assert.ok(person!.carries("Read and update this routine's notes."), "the notepad stays declared");
+      assert.deepEqual(comparePromptRequests(lastOf(routine), person!), {});
+      assert.deepEqual(toolsOf(telegram!), toolsOf(person!));
+    } finally {
+      await chat.close();
+    }
+  });
+
+  test("an unattended follow-up declares the chat's tools and refuses what nobody can approve", async () => {
+    assert.notEqual((UNATTENDED_FOLLOW_UP_GENERATION as { allowComputerUse?: boolean }).allowComputerUse, false, "Computer Use is not withheld");
+    const followUp: ChatTurnAudience = { ...attended, unattended: UNATTENDED_FOLLOW_UP_GENERATION.unattended };
+    const surface: ChatToolSurface = { ...workspaceSurface, usageSource: UNATTENDED_FOLLOW_UP_GENERATION.usageSource };
+    const { previous, current } = await twoTurns(
+      {},
+      { assembly: await workspaceChat({ tools: chatTools(workspaceSurface) }) },
+      { assembly: await workspaceChat({ tools: chatTools(surface) }) },
+    );
+    assert.deepEqual(comparePromptRequests(previous, current), {});
+    assert.ok(current.carries("List, propose and test this chat's hooks."), "hooks stays declared");
+    const refuse = chatTurnToolRefusal(surface, followUp);
+    assert.match(refuse("hooks") ?? "", /not available in this turn.*follow-up/su);
+    assert.match(refuse("computer_use") ?? "", /not available in this turn.*follow-up/su);
+    assert.equal(refuse("read_file"), undefined);
+    const refuseAttended = chatTurnToolRefusal(workspaceSurface, attended);
+    assert.equal(refuseAttended("hooks"), undefined);
+    assert.equal(refuseAttended("computer_use"), undefined);
+  });
+
+  for (const { wire, midConversationSystem, label } of wires) {
+    test(`a remote-audience turn and a turn on this computer (${label})`, async () => {
+      const remote = remoteGenerationSurface({
+        chatId: "chat", turnId: "turn", streamId: "stream", ownerId: "owner",
+        workspaceId: "workspace", providerId: "provider", model: "model", onTurnAccepted: () => undefined,
+      });
+      const appTools = (fromPhone: boolean) => createAidenAppTools({
+        // Declaring the tools reads neither; only a call does.
+        service: {} as AppControlsService,
+        context: {} as AppControlContext,
+        liveState: !fromPhone,
+        ...(fromPhone ? {} : { open: async () => ({ opened: true }) }),
+        present: () => undefined,
+      });
+      const head = async (fromPhone: boolean) => workspaceChat({
+        tools: [...chatTools(workspaceSurface), ...appTools(fromPhone)],
+        extensions: [createGenerativeUiExtension({
+          workspaceRoot: undefined, onArtifact: () => undefined, ...(fromPhone ? { audience: remote.options.visualAudience } : {}),
+        })],
+      });
+      const { previous, current } = await twoTurns({ wire, midConversationSystem }, { assembly: await head(false) }, { assembly: await head(true) });
+      assert.deepEqual(toolsOf(current), toolsOf(previous));
+      const fromPhone = chatTurnToolRefusal(workspaceSurface, { ...attended, remoteAudience: remote.options.visualAudience === "remote" });
+      assert.match(fromPhone("workspace_artifact") ?? "", /not available in this turn.*paired device/su);
+      assert.match(fromPhone("hooks") ?? "", /paired device/u);
+      assert.equal(chatTurnToolRefusal(workspaceSurface, attended)("workspace_artifact"), undefined);
+    });
+  }
 });
 
 describe("prompt prefix stability: causes fixed by later phases", () => {

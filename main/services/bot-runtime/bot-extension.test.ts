@@ -620,20 +620,30 @@ test("(g) memory renders last, after authority, with saved entries escaped as da
   }
 });
 
-test("(g2) with nothing saved, a routine turn gets no memory section and an attended one only the guidance", async () => {
+test("(g2) with nothing saved, a routine turn and an attended one get the same guidance; the routine's save is refused", async () => {
   const { memory } = memoryProfile();
   const sections: string[] = [];
-  const record = (context: { messages: Message[] }) => {
+  const results: string[] = [];
+  const record = (reply: ReturnType<typeof fauxAssistantMessage>) => (context: { messages: Message[] }) => {
     sections.push(memorySectionOf(context.messages));
-    return fauxAssistantMessage("ok");
+    const last = context.messages[context.messages.length - 1];
+    if (last?.role === "toolResult") results.push(last.content.map((part: { type: string; text?: string }) => part.text ?? "").join(""));
+    return reply;
   };
-  const fauxModels = createFauxModels([record, record]);
+  const fauxModels = createFauxModels([
+    record(fauxAssistantMessage([fauxToolCall("bot_memory", { target: "user", operations: [{ action: "add", content: "Has a dog." }] })], { stopReason: "toolUse" })),
+    record(fauxAssistantMessage("brief done")),
+    record(fauxAssistantMessage("ok")),
+  ]);
   const { harness, root } = await memoryHarness(memoryDeps(memory), fauxModels);
   try {
     await (await root.submit({ type: "input", content: "brief", requestId: "routine:t:1" }, ctx)).wait(ctx);
     await (await root.submit({ type: "input", content: "hi", requestId: "desk-1" }, ctx)).wait(ctx);
-    assert.equal(sections[0], "");
-    assert.match(sections[1]!, /^Use bot_memory to save/u);
+    assert.match(sections[0]!, /^Use bot_memory to save/u);
+    assert.equal(sections[2], sections[0], "the person's turn reuses the routine turn's memory section");
+    assert.match(results[0] ?? "", /not available/u);
+    const saved = await memory.snapshot("bot-1");
+    assert.equal(saved.stores.user.texts.length, 0, "the refused save never ran");
   } finally {
     await harness.close(ctx);
   }
