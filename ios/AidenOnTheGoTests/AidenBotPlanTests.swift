@@ -136,6 +136,8 @@ extension AidenBotPlanTests {
             XCTAssertEqual(plan.expiresAt, date)
             XCTAssertNotNil(plan.expiry)
         }
+        var offset = base; offset["expiresAt"] = "2026-11-04T13:00:00-23:59"
+        XCTAssertEqual(try decode(AidenRemoteBotPlan.self, offset).expiry, ISO8601DateFormatter().date(from: "2026-11-05T12:59:00Z"))
         for date in ["2026-02-30T12:00:00Z", "2026-11-04T24:00:00Z", "2026-11-04T13:00:60Z", "2026-11-04T13:00:00+24:00", "2026-11-04T13:00:00+00:60", "2026-11-04 13:00:00Z"] {
             var value = base; value["expiresAt"] = date
             XCTAssertThrowsError(try decode(AidenRemoteBotPlan.self, value))

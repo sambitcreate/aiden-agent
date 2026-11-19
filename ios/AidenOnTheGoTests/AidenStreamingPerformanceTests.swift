@@ -159,6 +159,7 @@ final class AidenStreamingPerformanceTests: XCTestCase {
         "Line one\r\n\r\nLine two\r\n\r\n- a\r\n\r\n  b\r\n\r\nEnd\r\n",
         "See [the docs][docs].\n\nMore text.\n\n[docs]: https://example.invalid\n",
         "Intro\n\n<!-- note\n\nstill comment -->\n\nAfter.\n",
+        "Intro\n\n<PRE>\nline\n\nstill pre\n</PRE>\n\nAfter <Script>\n\nmore\n",
         "Unclosed fence\n\n```\ncode\n\nmore code\n\nstill code\n",
         "````\n```\n\nnot closed by a shorter fence\n````\n\nAfter.\n",
     ]
@@ -256,6 +257,27 @@ final class AidenStreamingPerformanceTests: XCTestCase {
                 "Each update parses only the open tail, never the sealed chunks"
             )
         }
+    }
+
+    @MainActor
+    func testAFinishedReplyRendersAgainWithoutParsingWhileAStreamingTailIsAlwaysParsed() {
+        let cache = AidenMarkdownContentCache()
+        for reply in ["One block only, finished.", "# Plan\n\nFirst paragraph.\n\nThe last block."] {
+            let first = cache.chunks(for: reply)
+            let parsedBefore = cache.parsedCharacterCount
+            let again = cache.chunks(for: reply)
+            XCTAssertEqual(cache.parsedCharacterCount, parsedBefore, "A finished reply is served from the cache")
+            XCTAssertEqual(again.map(\.text), first.map(\.text))
+            XCTAssertEqual(MarkdownContent { for chunk in again { chunk.content } }, MarkdownContent(reply))
+        }
+
+        let streamed = "Settled paragraph.\n\nOpen tail"
+        _ = cache.chunks(for: streamed, streaming: true)
+        let entriesBefore = cache.entryCount
+        let parsedBefore = cache.parsedCharacterCount
+        let tail = cache.chunks(for: streamed, streaming: true).last?.text ?? ""
+        XCTAssertEqual(cache.parsedCharacterCount - parsedBefore, tail.utf8.count, "A streaming tail is parsed on every render")
+        XCTAssertEqual(cache.entryCount, entriesBefore, "A streaming tail is never kept")
     }
 
     @MainActor
