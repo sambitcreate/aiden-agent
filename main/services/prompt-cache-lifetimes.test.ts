@@ -77,3 +77,20 @@ test("a lifetime the catalog declares wins, and a broken one shows nothing", () 
   assert.equal(promptCacheTtlMs({ ...custom, promptCache: { short: Number.NaN } }), 0);
   assert.equal(promptCacheTtlMs(custom), 5 * MINUTE);
 });
+
+test("an hour-long retention is timed only where the provider keeps an hour, and no caching has no lifetime", () => {
+  const anthropic = catalogModel("anthropic", "claude-opus-5");
+  assert.equal(promptCacheTtlMs(anthropic, "long"), 60 * MINUTE);
+  assert.equal(promptCacheTtlMs(anthropic, "none"), 0);
+  assert.equal(promptCacheTtlMs({ ...anthropic, compat: { supportsLongCacheRetention: false } }, "long"), 5 * MINUTE, "an endpoint that refuses the hour keeps the default");
+  assert.equal(promptCacheTtlMs(catalogModel("amazon-bedrock", "us.anthropic.claude-sonnet-4-5-20250929-v1:0"), "long"), 60 * MINUTE);
+  assert.equal(promptCacheTtlMs(catalogModel("amazon-bedrock", "global.anthropic.claude-fable-5-1"), "long"), 60 * MINUTE);
+  // Bedrock keeps an hour only for the 4.5 and later Claude models.
+  assert.equal(promptCacheTtlMs(catalogModel("amazon-bedrock", "us.anthropic.claude-sonnet-4-20250514-v1:0"), "long"), 0);
+  assert.equal(promptCacheTtlMs(catalogModel("amazon-bedrock", "us.anthropic.claude-opus-4-1-20250805-v1:0"), "long"), 0);
+  // Gateways and other providers are not on the allowlist, even for Claude.
+  assert.equal(promptCacheTtlMs(catalogModel("cloudflare-ai-gateway", "claude-haiku-4-5"), "long"), 0);
+  assert.equal(promptCacheTtlMs(catalogModel("openai", "gpt-5.6-sol"), "long"), 0);
+  const custom = { provider: "custom-proxy", id: "claude-opus-5", api: "anthropic-messages" as Api };
+  assert.equal(promptCacheTtlMs({ ...custom, promptCache: { short: 300, long: 1800 } }, "long"), 30 * MINUTE);
+});

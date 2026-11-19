@@ -1,4 +1,5 @@
-import type { Api, Model } from "@earendil-works/pi-ai";
+import type { Api, CacheRetention, Model } from "@earendil-works/pi-ai";
+import { LONG_PROMPT_CACHE_TTL_MS, supportsLongPromptCacheRetention } from "../../renderer/shared/prompt-cache-retention.js";
 
 type PromptCacheModel = Pick<Model<Api>, "provider" | "id" | "api" | "promptCache"> & {
   name?: string;
@@ -12,8 +13,10 @@ const HOUR = 60 * MINUTE;
  * How long the provider keeps an unused prompt cache for Aiden's chat
  * requests, in milliseconds, or 0 when no concrete lifetime is documented.
  *
- * Aiden sends Pi's default "short" retention, so the lifetimes below are the
- * defaults for that request shape. Only providers that publish a fixed idle
+ * The lifetimes below are the defaults for Pi's "short" retention, which
+ * Aiden sends unless the person keeps caches for an hour; "long" is the
+ * declared long lifetime or the hour of the allowlisted providers in
+ * `prompt-cache-retention.ts`, and "none" never caches. Only providers that publish a fixed idle
  * lifetime that each cache read restarts are listed; best-effort ranges
  * ("5 to 10 minutes", "a few hours") and undocumented caches return 0 so no
  * guessed countdown is shown. Documented lifetimes are guarantees, so a
@@ -34,7 +37,15 @@ const HOUR = 60 * MINUTE;
  * - GitHub Copilot: https://docs.github.com/en/enterprise-cloud@latest/copilot/tutorials/optimize-ai-usage
  *   (24 h idle for OpenAI models, 1 h for Claude).
  */
-export function promptCacheTtlMs(model: PromptCacheModel): number {
+export function promptCacheTtlMs(model: PromptCacheModel, retention: CacheRetention = "short"): number {
+  if (retention === "none") return 0;
+  if (retention === "long") {
+    // Pi sends Anthropic's default lifetime when the endpoint refuses the long one.
+    if (refusesLongRetention(model)) return promptCacheTtlMs(model, "short");
+    const declaredLong = model.promptCache?.long;
+    if (declaredLong !== undefined) return Number.isFinite(declaredLong) && declaredLong > 0 ? declaredLong * 1000 : 0;
+    return supportsLongPromptCacheRetention(model) ? LONG_PROMPT_CACHE_TTL_MS : 0;
+  }
   const declared = model.promptCache?.short;
   if (declared !== undefined) return Number.isFinite(declared) && declared > 0 ? declared * 1000 : 0;
   const id = model.id.toLowerCase();
@@ -59,6 +70,11 @@ export function promptCacheTtlMs(model: PromptCacheModel): number {
     return 30 * MINUTE;
   }
   return 0;
+}
+
+function refusesLongRetention(model: PromptCacheModel): boolean {
+  return model.api === "anthropic-messages" && !!model.compat && typeof model.compat === "object" &&
+    (model.compat as { supportsLongCacheRetention?: unknown }).supportsLongCacheRetention === false;
 }
 
 function isClaude(model: PromptCacheModel): boolean {
