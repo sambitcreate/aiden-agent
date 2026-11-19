@@ -112,8 +112,9 @@ export function parseParams(value: unknown): ChatStartParams {
   if (p.inlineVisuals !== undefined && !isInlineVisualsMode(p.inlineVisuals)) {
     throw new Error("Invalid generation fields.");
   }
+  // The canvas view is only a hint for Aiden; one that does not parse is
+  // dropped, so a stale or odd view never stops the person's message.
   const designView = p.designView === undefined ? undefined : parseDesignViewState(p.designView);
-  if (designView === null) throw new Error("Invalid generation fields.");
 
   return {
     chatId,
