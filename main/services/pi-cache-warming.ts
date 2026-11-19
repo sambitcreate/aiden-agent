@@ -208,6 +208,12 @@ export interface PiCacheWarmerDependencies {
   clock?: CacheWarmingClock;
   /** The renderer document that owns the chat, so only that window can release it. */
   documentId?: string;
+  /**
+   * Refresh only once the reply settled, never while it streams: a host whose
+   * own runtime already warms during the reply (Pi's warmer in `aiden serve`)
+   * hands only the idle part to this one.
+   */
+  idleOnly?: boolean;
 }
 
 /** Owns no Agent, transcript writer, tool executor or persisted request. */
@@ -271,6 +277,7 @@ export class PiCacheWarmer {
       run.context = structuredClone(run.context);
       run.cost = structuredClone(run.cost);
       run.identity = modelIdentity(model);
+      if (this.deps.idleOnly) { this.setDeadline(run, run.startedAt); return; }
       this.schedule(run, run.startedAt);
     };
   }
@@ -315,7 +322,9 @@ export class PiCacheWarmer {
       this.dispose();
       return false;
     }
-    return true;
+    // An idle-only warmer arms its first refresh now, from the last request.
+    if (this.deps.idleOnly && run.timer === undefined) this.schedule(run, run.startedAt);
+    return !this.disposed;
   }
 
   dispose(): void {
@@ -345,9 +354,15 @@ export class PiCacheWarmer {
     return refreshAt <= run.startedAt + MAX_AGE_MS;
   }
 
-  private schedule(run: WarmRun, cacheWrittenAt: number): void {
+  /** The refresh due after a cache write at `cacheWrittenAt`, and the latest moment it may still go. */
+  private setDeadline(run: WarmRun, cacheWrittenAt: number): number {
     const nextAt = cacheWrittenAt + run.delayMs;
     run.deadlineAt = nextAt + Math.floor((run.ttlMs - run.delayMs) / 2);
+    return nextAt;
+  }
+
+  private schedule(run: WarmRun, cacheWrittenAt: number): void {
+    const nextAt = this.setDeadline(run, cacheWrittenAt);
     if (this.run !== run) return;
     if (!this.attended(run)) { this.stopIdle(run); return; }
     if (!this.pays(run) || !this.withinHorizon(run, nextAt) || this.clock.now() > run.deadlineAt) { this.stopIdle(run); return; }

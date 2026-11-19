@@ -34,7 +34,7 @@ function usageMessage() {
   return { ...fauxAssistantMessage("ordinary response"), usage: { input: 100_000, output: 10, cacheRead: 0, cacheWrite: 0, totalTokens: 100_010, cost: { input: 1, output: 0.0003, cacheRead: 0, cacheWrite: 0, total: 1.0003 } } };
 }
 type WarmOutcome = "stop" | "length" | "error" | "aborted";
-function fixture(t: test.TestContext, settings: { documentId?: string; withinSpendingLimit?: () => Promise<boolean> } = {}) {
+function fixture(t: test.TestContext, settings: { documentId?: string; withinSpendingLimit?: () => Promise<boolean>; idleOnly?: boolean } = {}) {
   const clock = new Clock();
   const signal = new AbortController();
   const requests: Array<SimpleStreamOptions | undefined> = [];
@@ -71,7 +71,7 @@ function fixture(t: test.TestContext, settings: { documentId?: string; withinSpe
       return stream;
     } },
   });
-  const warmer = new PiCacheWarmer({ clock, signal: signal.signal, enabled: async () => enabled, isCurrent: () => current, resolveRuntime: async () => { resolutions++; await resolutionBarrier; return runtime(); }, recordUsage: async (message, freshRuntime) => { recorded.push(message); await usageStore.record(assistantUsageRecord({ message, provider: freshRuntime.provider, model: freshRuntime.model, source: "cache-warm" })); }, onCacheRefreshed: (at) => refreshedAt.push(at), ...(settings.documentId ? { documentId: settings.documentId } : {}), ...(settings.withinSpendingLimit ? { withinSpendingLimit: settings.withinSpendingLimit } : {}) });
+  const warmer = new PiCacheWarmer({ clock, signal: signal.signal, enabled: async () => enabled, isCurrent: () => current, resolveRuntime: async () => { resolutions++; await resolutionBarrier; return runtime(); }, recordUsage: async (message, freshRuntime) => { recorded.push(message); await usageStore.record(assistantUsageRecord({ message, provider: freshRuntime.provider, model: freshRuntime.model, source: "cache-warm" })); }, onCacheRefreshed: (at) => refreshedAt.push(at), ...(settings.documentId ? { documentId: settings.documentId } : {}), ...(settings.withinSpendingLimit ? { withinSpendingLimit: settings.withinSpendingLimit } : {}), ...(settings.idleOnly ? { idleOnly: true } : {}) });
   t.after(() => warmer.dispose());
   const start = (options: SimpleStreamOptions = {}, selected = model) => {
     const context = normalizeContext({ messages: [{ role: "user", content: "in-memory prompt", timestamp: 1 }] });
@@ -492,6 +492,30 @@ test("a settled chat its window still shows is warmed at Pi's idle odds a bounde
   assert.equal(cheap.warmer.isDisposed, true);
   await cheap.clock.advance(270_000);
   assert.equal(cheap.requests.length, 0);
+});
+
+test("an idle-only warmer sends nothing while the reply streams, then keeps the settled chat warm within the idle limits", async (t) => {
+  const h = fixture(t, { idleOnly: true });
+  h.start();
+  // The reply is still running: a host whose runtime warms during it owns that part.
+  await h.clock.advance(120_000);
+  assert.equal(h.clock.timers.size, 0);
+  assert.equal(h.requests.length, 0);
+  assert.equal(h.warmer.settle({ isCurrent: () => true }), true);
+  // The first refresh is due from the last request, not from settling.
+  await h.clock.advance(150_000);
+  assert.equal(h.requests.length, 1);
+  assert.equal(h.requests[0]?.maxTokens, 1);
+  for (let i = 0; i < IDLE_WARM_LIMIT + 3; i++) await h.clock.advance(270_000);
+  assert.equal(h.requests.length, IDLE_WARM_LIMIT);
+  assert.equal(h.warmer.isDisposed, true);
+  // A reply that outlived its cache's refresh window has nothing left to keep.
+  const late = fixture(t, { idleOnly: true });
+  late.start();
+  await late.clock.advance(600_000);
+  assert.equal(late.warmer.settle({ isCurrent: () => true }), false);
+  assert.equal(late.warmer.isDisposed, true);
+  assert.equal(late.requests.length, 0);
 });
 
 test("idle warming stops when the window leaves the chat or the chat changed, before credentials are read", async (t) => {

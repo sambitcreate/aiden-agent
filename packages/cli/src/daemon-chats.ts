@@ -8,7 +8,10 @@ import { createMcpExtension } from "./mcp.ts";
 import type { InlineExtension } from "@earendil-works/pi-coding-agent";
 import { visionAttachmentAlias } from "../../../main/services/vision-attachment-reference.js";
 import { withoutMessageThreads } from "../../../main/services/pi-message-threads.js";
-import { daemonSettingsManager } from "./daemon-session-settings.ts";
+import { daemonSettingsManager, profileKeepsLongPromptCache, profileWarmsCaches } from "./daemon-session-settings.ts";
+import { PiCacheWarmer, settleReplyCacheWarmer } from "../../../main/services/pi-cache-warming.js";
+import { withPromptCacheBreakpointsPayload } from "../../../main/services/prompt-cache-breakpoints.js";
+import type { ResolvedModelRuntime } from "../../../main/services/model-runtime-core.js";
 import { compactWithoutMemoryFacts } from "./daemon-compaction-memory.ts";
 import type { CliBotGenerationRuntime } from "./bots.ts";
 import type { BotRuntimeAuthorityAdmission } from "../../../main/services/bot-runtime-authority.js";
@@ -19,16 +22,16 @@ import { createHash } from "node:crypto";
 import { dirname, basename, join, resolve } from "node:path";
 import { convertToLlm, createAgentSession, DefaultResourceLoader, SessionManager, type AgentSession } from "@earendil-works/pi-coding-agent";
 import { createPromptCacheTelemetry, formatPromptCacheMissLog, promptCacheWarmsSinceLastResponse, type PromptCacheRequestObservation } from "../../../main/services/pi-cache-telemetry.js";
-import { promptCacheTtlMs } from "../../../main/services/prompt-cache-lifetimes.js";
-import type { AssistantMessage } from "@earendil-works/pi-ai";
-import type { AgentTurnDecision } from "@earendil-works/pi-agent-core";
+import { chatTurnPromptCache, promptCacheTtlMs } from "../../../main/services/prompt-cache-lifetimes.js";
+import type { AssistantMessage, TranscriptContext } from "@earendil-works/pi-ai";
+import type { AgentTurnDecision, StreamFn } from "@earendil-works/pi-agent-core";
 import { createChatStore } from "../../../main/services/chat-store-core.js";
 import { ChatActivityRegistry } from "../../../main/services/chat-activity-core.js";
 import type { ChatActivitySnapshot } from "../../../renderer/shared/chat-activity.js";
 import { HostRunRegistry } from "../../../main/services/host-run-registry.js";
 import { createHostRunRecorders } from "../../../main/services/host-runs.js";
 import type { ChatStartParams } from "../../../main/services/types.js";
-import type { ChatGenerationOwner } from "../../../main/services/chat-generation-owner.js";
+import { remoteDeviceDocumentPrefix, type ChatGenerationOwner } from "../../../main/services/chat-generation-owner.js";
 import type { UsageRequestSource } from "../../../main/services/usage-store-core.js";
 import { ChatTurnAdmission } from "../../../main/services/chat-turn-admission.js";
 import { ChatDeletionGate } from "../../../main/services/chat-deletion-gate.js";
@@ -129,6 +132,20 @@ export function createDaemonChats(agentDir: string) {
   // The memory fact lines each workspace chat's always-on prompt has told it, kept in
   // memory only: the prompt is not in the session, and a compaction summary may state none.
   const memoryFactsTold = new Map<string, Set<string>>();
+  // Each chat's idle cache warmer, one per chat as on the desktop. A chat is
+  // attended on the server while the paired device whose turn produced its
+  // last reply is still paired: a new turn on the chat, a write to it, its
+  // deletion, that device's revocation or the daemon stopping ends warming.
+  const idleWarmers = new Map<string, PiCacheWarmer>();
+  const idleWarmersStopped = new AbortController();
+  const adoptIdleWarmer = (chatId: string, warmer: PiCacheWarmer | undefined) => {
+    const previous = idleWarmers.get(chatId);
+    if (previous && previous !== warmer) previous.dispose();
+    idleWarmers.delete(chatId);
+    if (!warmer || warmer.isDisposed) return;
+    idleWarmers.set(chatId, warmer);
+    warmer.onDispose(() => { if (idleWarmers.get(chatId) === warmer) idleWarmers.delete(chatId); });
+  };
   const recorders = createHostRunRecorders((_scope, message) => process.stderr.write(`aiden: ${message}\n`));
   const admission = new ChatTurnAdmission();
   const deletion = new ChatDeletionGate();
@@ -222,6 +239,8 @@ export function createDaemonChats(agentDir: string) {
       // fails before then still runs their shutdown handlers and closers.
       const shutdownHandlers: ((event: { type: "session_shutdown"; reason: "quit" }) => unknown)[] = [];
       const closers: (() => Promise<void>)[] = [];
+      let idleWarmer: PiCacheWarmer | undefined;
+      let idleWarmerSettled = false;
       try {
         const chat = await chatStore.get(params.chatId);
         if (!chat) throw new Error("The chat is unavailable.");
@@ -277,6 +296,51 @@ export function createDaemonChats(agentDir: string) {
         const found = runtime.getModel(params.providerId, params.model);
         if (!found) throw new Error("The saved provider/model is unavailable.");
         const model = withoutMessageThreads(found);
+        const attended = !botAdmission && !unattended;
+        const stableHead = () => memory && "stableHead" in memory ? memory.stableHead?.() : undefined;
+        // After an attended reply settles, a profile that warms caches keeps this chat's
+        // prefix warm with the desktop's idle limits, unless it asked for the hour.
+        let headAtRequest: string | undefined;
+        const inner = runtime.streamSimple.bind(runtime);
+        const observed: StreamFn = (requestModel, context, requestOptions) => {
+          const warmer = idleWarmer;
+          let finished: ((message: AssistantMessage) => void) | undefined;
+          if (warmer && !warmer.isDisposed) {
+            try {
+              // The replay applies the breakpoints itself, and is never tied to this turn's abort signal.
+              const { onPayload: _payload, transformHeaders: _headers, signal: _signal, ...replayable } = (requestOptions ?? {}) as Parameters<typeof inner>[2] & object;
+              headAtRequest = stableHead();
+              finished = warmer.requestStarted(requestModel, context, replayable);
+            } catch { warmer.stop(); }
+          }
+          const stream = inner(requestModel, context, requestOptions as Parameters<typeof inner>[2]);
+          if (warmer && finished) void stream.result().then(finished, () => warmer.stop());
+          return stream;
+        };
+        const turnCache = chatTurnPromptCache({ longPromptCacheRetention: attended && profileKeepsLongPromptCache(agentDir), agentHarness: false, bot: !!botAdmission, usageSource: options.usageSource }, observed, model);
+        if (attended && owner.kind === "remote" && turnCache.retention !== "long" && profileWarmsCaches(agentDir)) {
+          const warmer: PiCacheWarmer = new PiCacheWarmer({
+            signal: idleWarmersStopped.signal, documentId: owner.documentId, idleOnly: true,
+            enabled: async () => profileWarmsCaches(agentDir),
+            isCurrent: () => idleWarmers.get(chat.id) === warmer,
+            async resolveRuntime() {
+              const fresh = await createCliModelRuntime(agentDir);
+              const current = fresh.getModel(params.providerId, params.model);
+              if (!current) throw new Error("The saved provider/model is unavailable.");
+              const head = headAtRequest;
+              const streams: ResolvedModelRuntime["streams"] = {
+                streamSimple: (replayModel, context, replayOptions) => fresh.streamSimple(replayModel, context, { ...replayOptions,
+                  onPayload: (payload, payloadModel) => withPromptCacheBreakpointsPayload(payload, payloadModel.api, head, payloadModel) }),
+              };
+              // The warmer reads only the model, credentials and stream; the server's runtime resolves its own credentials.
+              return { model: withoutMessageThreads(current), apiKey: undefined, headers: undefined, streams } as unknown as ResolvedModelRuntime;
+            },
+            async recordUsage(message) { promptCache.observeWarm(chat.id, message); await recordUsage(agentDir, "cache-warm", message); },
+          });
+          idleWarmer = warmer;
+        }
+        // A new turn on the chat ends the warmer its last reply left, even one that does not warm.
+        adoptIdleWarmer(chat.id, idleWarmer);
         const botTools = botAdmission ? await bots!.tools(botAdmission) : [];
         const codingTools = !botAdmission && workspace.folderPath ? cliWorkspaceCodingTools(cwd) : [];
         const additionalNames: string[] = [];
@@ -318,9 +382,9 @@ export function createDaemonChats(agentDir: string) {
             return Reflect.get(target, key, receiver);
           } })),
         }));
-        const sessionSettings = daemonSettingsManager(cwd, agentDir, { attended: !botAdmission && !unattended });
+        const sessionSettings = daemonSettingsManager(cwd, agentDir, { attended, longRetention: turnCache.retention === "long" });
         const loader = new DefaultResourceLoader({ cwd, agentDir, noExtensions: true, noSkills: true, noPromptTemplates: true, noThemes: true,
-          extensionFactories: [...additionalExtensions, createPromptCacheBreakpointsInlineExtension(() => memory && "stableHead" in memory ? memory.stableHead?.() : undefined), { name: "aiden-daemon-authority", factory(pi) {
+          extensionFactories: [...additionalExtensions, createPromptCacheBreakpointsInlineExtension(stableHead), { name: "aiden-daemon-authority", factory(pi) {
             pi.on("before_agent_start", async (event) => {
               // SessionStart and UserPromptSubmit context, once per turn, as host data the chat store never
               // saves. Pi journals it after the prompt, in the same shape the desktop journals.
@@ -390,7 +454,7 @@ export function createDaemonChats(agentDir: string) {
                 // Pi's cache warmer records its reads as session entries; they restart the lifetime, as in Pi's own miss scan.
                 for (const warm of promptCacheWarmsSinceLastResponse(ctx.sessionManager.getEntries())) promptCache.observeWarm(chat.id, warm);
                 promptCacheRequest = ctx.model
-                  ? promptCache.beginRequest(chat.id, { messages: convertToLlm(event.messages), model: ctx.model, cacheTtlMs: promptCacheTtlMs(ctx.model) })
+                  ? promptCache.beginRequest(chat.id, { messages: convertToLlm(event.messages), model: ctx.model, cacheTtlMs: promptCacheTtlMs(ctx.model, turnCache.retention) })
                   : undefined;
               } catch { promptCacheRequest = undefined; }
               return undefined;
@@ -399,6 +463,11 @@ export function createDaemonChats(agentDir: string) {
         });
         await loader.reload(); await assertAuthority();
         const manager = SessionManager.open(sessionPath(params.chatId), join(root, "journals"), cwd);
+        // Only this session's own requests ask for the turn's retention and reach the idle warmer:
+        // compaction and summaries name their own, and Pi's refreshes replay what they warmed.
+        runtime.streamSimple = (requestModel, context, requestOptions) => requestOptions?.sessionId === manager.getSessionId() && !requestOptions.disableContinuation
+          ? turnCache.streamFn(requestModel, context as TranscriptContext, requestOptions) as ReturnType<typeof inner>
+          : inner(requestModel, context, requestOptions);
         const { session } = await createAgentSession({ cwd, agentDir, settingsManager: sessionSettings, modelRuntime: runtime, model,
           thinkingLevel: params.thinkingLevel, resourceLoader: loader, sessionManager: manager,
           tools: botAdmission ? botTools.map((tool) => tool.name) : workspace.folderPath ? [...codingTools.map((tool) => tool.name), ...additionalNames] : [],
@@ -478,7 +547,10 @@ export function createDaemonChats(agentDir: string) {
         const finalTimeline = timeline.finish("completed");
         const updated = await chatStore.appendMessage(params.chatId, { role: "assistant", content, timeline: finalTimeline }, { providerId: model.provider, model: model.id });
         entry.persistence = "final_saved";
-        send("chat:done", { streamId, content, chat: updated, timeline: finalTimeline }); return true;
+        send("chat:done", { streamId, content, chat: updated, timeline: finalTimeline });
+        idleWarmerSettled = true;
+        await settleReplyCacheWarmer(idleWarmer, { owner: { isDestroyed: () => !idleWarmer || idleWarmers.get(chat.id) !== idleWarmer }, delivered: true, chat: () => chatStore.getMeta(chat.id) });
+        return true;
       } catch (error) {
         const cancelled = entry.stopRequested;
         const finished = cancelled ? timeline.finish("cancelled", entry.cancellationOrigin) : timeline.finish("failed");
@@ -494,6 +566,7 @@ export function createDaemonChats(agentDir: string) {
         send("chat:error", { streamId, message: error instanceof Error ? error.message : String(error), cancelled, timeline: finalTimeline }); return true;
       } finally {
         watchdog.dispose(); unsubscribe(); disposeOwner(); removeBotAbort(); botAdmission?.release();
+        if (!idleWarmerSettled) idleWarmer?.dispose();
         if (entry.session) {
           try { await entry.session.extensionRunner.emit({ type: "session_shutdown", reason: "quit" }); }
           finally { entry.session.dispose(); }
@@ -505,8 +578,16 @@ export function createDaemonChats(agentDir: string) {
       }
   }
   return { chatStore, llmClient, activity, runs, admission, deletion, sessionPath,
-    /** A deleted chat's journal is gone, and so is what its memory prompt told it. */
-    forgetMemoryFactsTold(chatId: string) { memoryFactsTold.delete(chatId); },
+    /** A deleted chat's journal is gone, and so is what its memory prompt told it, and its cache is no longer kept warm. */
+    forgetMemoryFactsTold(chatId: string) { memoryFactsTold.delete(chatId); idleWarmers.get(chatId)?.dispose(); },
+    /** A revoked device no longer attends the chats its turns left warming. */
+    releaseDeviceAttendance(deviceId: string) {
+      let prefix: string;
+      try { prefix = remoteDeviceDocumentPrefix(deviceId); } catch { return; } // No paired device has that id.
+      for (const warmer of [...idleWarmers.values()]) if (warmer.documentId?.startsWith(prefix)) warmer.dispose();
+    },
+    /** Whether a settled chat's prompt cache is being kept warm. */
+    isKeepingChatWarm: (chatId: string) => idleWarmers.has(chatId),
     /** Unlike a deletion that fails to finish, a lost record cannot be scoped to its chats. */
     assertChatDeletionsReadable() { if (deletionRecordFailure) throw deletionRecordFailure; },
     /** Finishes deletions a crash interrupted. Repeatable: a failure leaves its tombstone and its chat closed. */
@@ -517,13 +598,13 @@ export function createDaemonChats(agentDir: string) {
         await rm(sessionPath(id), { force: true });
         if (await chatStore.get(id)) await chatStore.remove(id);
         await tombstones.update((values) => { for (let index = values.indexOf(id); index >= 0; index = values.indexOf(id)) values.splice(index, 1); });
-        interrupted.delete(id); memoryFactsTold.delete(id); reopen();
+        interrupted.delete(id); memoryFactsTold.delete(id); idleWarmers.get(id)?.dispose(); reopen();
       }
     },
     /** Every activity change (a run began or ended, an approval was raised or settled). */
     onActivityChange(listener: (snapshot: ChatActivitySnapshot) => void) { activityListeners.add(listener); return () => { activityListeners.delete(listener); }; },
     setBots(runtime: CliBotGenerationRuntime) { bots = runtime; },
     /** Closes intake before its first await, so no ingress stopping alongside it can begin a turn. */
-    async stop() { const ids = turns.closeIntake(); admission.releaseAll(); await Promise.allSettled(ids.map((id) => llmClient.cancelChat(id, "application_shutdown"))); await Promise.all(ids.map((id) => llmClient.waitForChatIdle(id))); },
+    async stop() { idleWarmersStopped.abort(); const ids = turns.closeIntake(); admission.releaseAll(); await Promise.allSettled(ids.map((id) => llmClient.cancelChat(id, "application_shutdown"))); await Promise.all(ids.map((id) => llmClient.waitForChatIdle(id))); },
   };
 }

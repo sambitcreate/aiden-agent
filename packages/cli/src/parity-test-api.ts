@@ -17,6 +17,7 @@ export * from "./serve-ownership.ts";
 export * from "./telegram.ts";
 export * from "./daemon-chats.ts";
 export { daemonSettingsManager, subagentWorkerSettingsManager } from "./daemon-session-settings.ts";
+export { remoteDeviceDocumentPrefix } from "../../../main/services/chat-generation-owner.js";
 export * from "./daemon-turn-lifecycle.ts";
 export * from "./daemon-approvals.ts";
 export * from "./speech.ts";

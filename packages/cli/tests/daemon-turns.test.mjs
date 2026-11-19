@@ -992,9 +992,141 @@ test("a server session warms only for an attended turn on a profile that opts in
     api.atomicJson(join(dir, "aiden.json"), { cacheWarmingEnabled: true });
     assert.equal(api.daemonSettingsManager(dir, dir, { attended: true }).getCacheWarmingMode(), "streaming");
     assert.equal(api.daemonSettingsManager(dir, dir, { attended: false }).getCacheWarmingMode(), "off");
+    // Pi would replay an hour-long request at the default lifetime, so a turn that asked for the hour is not warmed by Pi.
+    assert.equal(api.daemonSettingsManager(dir, dir, { attended: true, longRetention: true }).getCacheWarmingMode(), "off");
     writeFileSync(join(dir, "aiden.json"), "{ not json");
     assert.equal(api.daemonSettingsManager(dir, dir, { attended: true }).getCacheWarmingMode(), "off");
   } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+/** Every `cache_control.ttl` an Anthropic request body asks for. */
+const cacheTtls = (value) => Array.isArray(value) ? value.flatMap(cacheTtls)
+  : value && typeof value === "object" ? Object.entries(value).flatMap(([key, child]) => key === "cache_control" ? [child.ttl ?? "default"] : cacheTtls(child)) : [];
+
+test("aiden serve asks for the hour-long cache only on an attended chat whose profile opts in", async (t) => {
+  // The `anthropic` provider keeps an hour only for a model named as its own family.
+  const f = await fixture(t, { anthropic: true, model: { name: "claude-test" } });
+  const ttlsOf = async (chatId, usageSource) => {
+    const before = f.requests.length;
+    await beginTurn(f, chatId, { usageSource, providerId: f.providerId });
+    await f.daemon.llmClient.waitForChatIdle(chatId);
+    assert.equal(f.requests.length, before + 1, "one request");
+    return [...new Set(cacheTtls(f.requests[before]))];
+  };
+  assert.deepEqual(await ttlsOf("no-setting", "chat"), ["default"]);
+  api.atomicJson(join(f.dir, "aiden.json"), { cacheWarmingEnabled: true, longPromptCacheRetention: true });
+  assert.deepEqual(await ttlsOf("attended", "chat"), ["1h"]);
+  assert.equal(f.daemon.isKeepingChatWarm("attended"), false, "an hour-long cache is not kept warm as well");
+  assert.deepEqual(await ttlsOf("scheduled", "scheduled"), ["default"]);
+  assert.deepEqual(await ttlsOf("telegram", "telegram"), ["default"]);
+});
+
+/**
+ * Drives a settled chat's idle refreshes: each time a refresh timer of the
+ * model's warming delay is pending, the mocked clock passes it, and the next
+ * refresh's request (if any) must arrive before the clock moves again.
+ */
+function idleRefreshDriver(t, f, chatId) {
+  const refreshDelay = getCacheWarmingDelayMs(300_000);
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const pending = new Set(), mockedSetTimeout = globalThis.setTimeout, mockedClearTimeout = globalThis.clearTimeout;
+  globalThis.setTimeout = function (callback, delay, ...rest) {
+    const watched = delay > refreshDelay - 1_000 && delay <= refreshDelay;
+    const timer = mockedSetTimeout.call(this, (...args) => { pending.delete(timer); callback(...args); }, delay, ...rest);
+    if (watched) pending.add(timer);
+    return timer;
+  };
+  globalThis.clearTimeout = function (timer) { pending.delete(timer); return mockedClearTimeout.call(this, timer); };
+  const settled = async (condition) => {
+    const deadline = Date.now() + 10_000;
+    while (!condition()) {
+      if (Date.now() > deadline) throw new Error("Timed out waiting for the idle warmer.");
+      await new Promise((resolve) => setImmediate(resolve));
+    }
+  };
+  return {
+    /** Passes every pending refresh until the chat is no longer kept warm, and returns the requests it sent. */
+    async drain() {
+      const start = f.requests.length;
+      for (let rounds = 0; rounds < 10; rounds += 1) {
+        await settled(() => pending.size > 0 || !f.daemon.isKeepingChatWarm(chatId));
+        if (!f.daemon.isKeepingChatWarm(chatId)) break;
+        const before = f.requests.length;
+        t.mock.timers.tick(refreshDelay);
+        await settled(() => f.requests.length > before || !f.daemon.isKeepingChatWarm(chatId));
+      }
+      return f.requests.slice(start);
+    },
+    reset() { t.mock.timers.reset(); },
+  };
+}
+
+test("aiden serve keeps a settled attended chat warm within the desktop's idle limits", async (t) => {
+  // Pricier than the mid-reply case: a settled chat must still save $0.05 on a 15% chance of a reply.
+  const warmingFixture = async (t, profile = { cacheWarmingEnabled: true }) => {
+    const f = await fixture(t, { model: { promptCache: { short: 300 }, cost: { input: 15, output: 75, cacheRead: 1.5, cacheWrite: 18.75 } } });
+    api.atomicJson(join(f.dir, "aiden.json"), profile);
+    return f;
+  };
+  await t.test("at most three one-token refreshes, then none", async (t) => {
+    const f = await warmingFixture(t);
+    const driver = idleRefreshDriver(t, f, "idle");
+    f.steps.push(largePromptReply("First"));
+    await beginTurn(f, "idle");
+    await f.daemon.llmClient.waitForChatIdle("idle");
+    assert.equal(f.daemon.isKeepingChatWarm("idle"), true);
+    const refreshes = await driver.drain();
+    driver.reset();
+    assert.equal(refreshes.length, 3);
+    for (const refresh of refreshes) {
+      assert.equal(refresh.max_completion_tokens ?? refresh.max_tokens, 1, "a refresh asks for a single token");
+      assert.deepEqual(refresh.messages, f.requests[0].messages, "a refresh replays the reply's own request");
+    }
+    assert.equal(f.daemon.isKeepingChatWarm("idle"), false);
+  });
+  await t.test("a new message on the chat ends warming with no refresh", async (t) => {
+    const f = await warmingFixture(t);
+    const driver = idleRefreshDriver(t, f, "written");
+    f.steps.push(largePromptReply("First"));
+    await beginTurn(f, "written");
+    await f.daemon.llmClient.waitForChatIdle("written");
+    assert.equal(f.daemon.isKeepingChatWarm("written"), true);
+    await f.daemon.chatStore.appendMessage("written", { role: "user", content: "One more thing" });
+    assert.deepEqual(await driver.drain(), []);
+    driver.reset();
+    assert.equal(f.daemon.isKeepingChatWarm("written"), false);
+  });
+  await t.test("a new turn ends the last reply's warming", async (t) => {
+    const f = await warmingFixture(t);
+    f.steps.push(largePromptReply("First"), reply("Second"));
+    await beginTurn(f, "again", { streamId: "again-1" });
+    await f.daemon.llmClient.waitForChatIdle("again");
+    assert.equal(f.daemon.isKeepingChatWarm("again"), true);
+    await beginTurn(f, "again", { streamId: "again-2", create: false });
+    await f.daemon.llmClient.waitForChatIdle("again");
+    // The second reply's prompt is too small to be worth keeping warm.
+    assert.equal(f.daemon.isKeepingChatWarm("again"), false);
+    assert.equal(f.requests.length, 2);
+  });
+  await t.test("revoking the device whose turn it was ends warming", async (t) => {
+    const f = await warmingFixture(t);
+    f.steps.push(largePromptReply("First"));
+    await beginTurn(f, "revoked", { owner: ownerFor(`${api.remoteDeviceDocumentPrefix("phone")}stream`) });
+    await f.daemon.llmClient.waitForChatIdle("revoked");
+    f.daemon.releaseDeviceAttendance("another-phone");
+    assert.equal(f.daemon.isKeepingChatWarm("revoked"), true, "another device's revocation leaves it");
+    f.daemon.releaseDeviceAttendance("phone");
+    assert.equal(f.daemon.isKeepingChatWarm("revoked"), false);
+  });
+  for (const [name, profile, usageSource] of [["warming off", { cacheWarmingEnabled: false }, "chat"], ["a scheduled run", { cacheWarmingEnabled: true }, "scheduled"]]) {
+    await t.test(name, async (t) => {
+      const f = await warmingFixture(t, profile);
+      f.steps.push(largePromptReply("First"));
+      await beginTurn(f, "quiet", { usageSource });
+      await f.daemon.llmClient.waitForChatIdle("quiet");
+      assert.equal(f.daemon.isKeepingChatWarm("quiet"), false);
+    });
+  }
 });
 
 test("a server session sends Codex requests over a WebSocket unless SSE is asked for or a proxy is set", (t) => {

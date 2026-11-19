@@ -8,7 +8,13 @@
 // chat turn keeps its cache warm while the reply streams ("streaming"); off,
 // or for a turn no one is watching (a Bot, a Telegram message, a scheduled
 // task), Pi never warms. A `cacheWarming` in Pi's settings.json is ignored, so
-// the profile has one switch.
+// the profile has one switch. Once the reply settles, the server's own idle
+// warmer (daemon-chats.ts) takes over with the desktop's limits; Pi's "idle"
+// mode is never used.
+//
+// `longPromptCacheRetention` in aiden.json is the desktop's "Keep chat caches
+// for an hour" switch. An attended turn that asks for the hour needs no
+// mid-reply refresh, so Pi does not warm it.
 //
 // Codex requests go over a persistent WebSocket, as on the desktop, so a chat
 // stays on one backend connection and its prompt cache. Pi's own "auto" default
@@ -24,21 +30,33 @@ import { readJson } from "./state.ts";
 export interface DaemonSessionWarming {
   /** A person is waiting on this turn. Bot, Telegram and scheduled runs are not attended. */
   attended: boolean;
+  /** The turn's requests ask for the hour-long cache, which no refresh needs to hold. */
+  longRetention?: boolean;
 }
 
-/** Whether the profile's aiden.json opts in to cache warming; anything but `true` is off. */
-function profileWarmsCaches(agentDir: string): boolean {
+/** A boolean switch in the profile's aiden.json; anything but `true`, or an unreadable file, is off. */
+function profileSwitch(agentDir: string, key: "cacheWarmingEnabled" | "longPromptCacheRetention"): boolean {
   try {
     const settings = readJson<unknown>(join(agentDir, "aiden.json"), {});
-    return !!settings && typeof settings === "object" && (settings as { cacheWarmingEnabled?: unknown }).cacheWarmingEnabled === true;
+    return !!settings && typeof settings === "object" && (settings as Record<string, unknown>)[key] === true;
   } catch { return false; }
+}
+
+/** Whether the profile's aiden.json opts in to cache warming. */
+export function profileWarmsCaches(agentDir: string): boolean {
+  return profileSwitch(agentDir, "cacheWarmingEnabled");
+}
+
+/** Whether the profile's aiden.json keeps attended chat caches for an hour. */
+export function profileKeepsLongPromptCache(agentDir: string): boolean {
+  return profileSwitch(agentDir, "longPromptCacheRetention");
 }
 
 /** The settings a daemon AgentSession reads: Pi's own, with warming set by the profile and the run, and Codex's transport. */
 export function daemonSettingsManager(cwd: string, agentDir: string, warming: DaemonSessionWarming): SettingsManager {
   const settings = SettingsManager.create(cwd, agentDir);
   // Read once per session, so a changed setting reaches the next turn.
-  const mode = warming.attended && profileWarmsCaches(agentDir) ? "streaming" : "off";
+  const mode = warming.attended && !warming.longRetention && profileWarmsCaches(agentDir) ? "streaming" : "off";
   settings.getCacheWarmingMode = () => mode;
   const transport = inProcessCodexTransport(settings.getTransport());
   settings.getTransport = () => transport;
