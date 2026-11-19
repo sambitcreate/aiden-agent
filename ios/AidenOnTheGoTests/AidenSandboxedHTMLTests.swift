@@ -385,6 +385,40 @@ final class AidenSandboxedHTMLTests: XCTestCase {
         ])
     }
 
+    // MARK: Workspace files
+
+    func testHtmlWorkspaceFilesOpenOnPreviewUnlessTruncated() {
+        func document(_ path: String, truncated: Bool = false) -> AidenWorkspaceFileDocument {
+            AidenWorkspaceFileDocument(
+                id: path, displayPath: path, content: "<p>hi</p>", version: "1",
+                truncated: truncated, warning: nil
+            )
+        }
+
+        let report = document("site/report.html")
+        XCTAssertTrue(AidenWorkspaceHTMLPreview.canPreview(report))
+        XCTAssertEqual(AidenWorkspaceHTMLPreview.initialMode(for: report), .preview)
+
+        let upper = document("Report.HTM")
+        XCTAssertTrue(AidenWorkspaceHTMLPreview.isHTML(upper.displayPath))
+        XCTAssertEqual(AidenWorkspaceHTMLPreview.initialMode(for: upper), .preview)
+
+        let notes = document("notes.md")
+        XCTAssertFalse(AidenWorkspaceHTMLPreview.isHTML(notes.displayPath))
+        XCTAssertFalse(AidenWorkspaceHTMLPreview.canPreview(notes))
+        XCTAssertEqual(AidenWorkspaceHTMLPreview.initialMode(for: notes), .source)
+
+        // Over the size cap: half a page must not pass for the whole one.
+        let big = document("big.html", truncated: true)
+        XCTAssertTrue(AidenWorkspaceHTMLPreview.isHTML(big.displayPath))
+        XCTAssertFalse(AidenWorkspaceHTMLPreview.canPreview(big))
+        XCTAssertEqual(AidenWorkspaceHTMLPreview.initialMode(for: big), .source)
+
+        let bare = document("html")
+        XCTAssertFalse(AidenWorkspaceHTMLPreview.isHTML(bare.displayPath))
+        XCTAssertEqual(AidenWorkspaceHTMLPreview.initialMode(for: bare), .source)
+    }
+
     /// The selector list before each `{`, split at top-level commas.
     private static func selectors(in css: String) -> [String] {
         var result: [String] = []

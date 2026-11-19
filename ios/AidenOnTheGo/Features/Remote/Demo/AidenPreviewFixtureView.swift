@@ -105,4 +105,67 @@ struct AidenSVGFixtureView: View {
         return head + String(repeating: line, count: count) + tail
     }()
 }
+
+/// `-AidenWorkspaceHTMLFixture`: the workspace file editor holding a cached
+/// `.html` document with no paired computer, the way an offline document
+/// opens. `-AidenWorkspaceHTMLFixtureRemoteImage` holds a page that names a
+/// remote image instead, which must not load.
+struct AidenWorkspaceHTMLFixtureView: View {
+    let coordinator: AidenRemoteCoordinator
+    @State private var model: AidenWorkspaceFilesModel
+    @State private var isShowing = true
+
+    static var isRequested: Bool {
+        ProcessInfo.processInfo.arguments.contains("-AidenWorkspaceHTMLFixture")
+            || ProcessInfo.processInfo.arguments.contains("-AidenWorkspaceHTMLFixtureRemoteImage")
+    }
+
+    init(coordinator: AidenRemoteCoordinator) {
+        self.coordinator = coordinator
+        AidenSandboxedHTMLCoordinator.touchlessActivationOverride = false
+        let remoteImage = ProcessInfo.processInfo.arguments.contains("-AidenWorkspaceHTMLFixtureRemoteImage")
+        let model = AidenWorkspaceFilesModel(
+            workspace: AidenWorkspace(
+                id: "fixture", name: "Fixture", permission: .ask, hasFolder: true,
+                isManagedWorktree: false, branchName: nil, repositoryName: nil, git: nil,
+                createdAt: .now, updatedAt: .now, revision: "r1"
+            ),
+            owner: AidenRemoteRequestContext(instanceId: "fixture", deviceId: "phone", generation: 1, scope: .owner)
+        )
+        let path = remoteImage ? "site/remote.html" : "site/report.html"
+        let page = remoteImage ? Self.remoteImagePage : Self.inlinePage
+        model.document = AidenWorkspaceFileDocument(
+            id: path, displayPath: path, content: page, version: "1", truncated: false, warning: nil
+        )
+        model.draft = page
+        model.isOfflineDocument = true
+        _model = State(initialValue: model)
+    }
+
+    var body: some View {
+        Color.clear.sheet(isPresented: $isShowing) {
+            AidenWorkspaceFileEditorView(coordinator: coordinator, model: model)
+        }
+    }
+
+    private static let inlinePage = """
+    <!doctype html><html><head><meta name="viewport" content="width=device-width, initial-scale=1">
+    <style>.card { border-radius: 12px; padding: 12px; background: rgb(42, 109, 244); color: white; }</style>
+    </head><body>
+    <h1>Report</h1>
+    <p class="card" id="status">Scripts off</p>
+    <p>Plain text in the theme's colors. <a href="https://example.com/details">Details</a></p>
+    <script>document.getElementById('status').textContent = 'Scripts ran';</script>
+    </body></html>
+    """
+
+    private static let remoteImagePage = """
+    <!doctype html><html><head><meta name="viewport" content="width=device-width, initial-scale=1"></head><body>
+    <h1>Remote image</h1>
+    <p>The picture below names https://example.com/photo.png and must not load.</p>
+    <img src="https://example.com/photo.png" alt="Remote photo" width="200" height="120">
+    <p>Text after the image.</p>
+    </body></html>
+    """
+}
 #endif

@@ -485,14 +485,27 @@ struct AidenWorkspaceFilesView: View {
     }
 }
 
-private struct AidenWorkspaceFileEditorView: View {
+/// One workspace file. An `.html`/`.htm` file opens on Preview (a sandboxed,
+/// themed page of the draft, so unsaved edits show) with a Source toggle.
+struct AidenWorkspaceFileEditorView: View {
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.aidenPalette) private var palette
     @Bindable var coordinator: AidenRemoteCoordinator
     @Bindable var model: AidenWorkspaceFilesModel
     @State private var isConfirmingDiscard = false
     @State private var isEditing = false
+    @State private var mode: AidenWorkspaceHTMLPreview.Mode
+
+    init(coordinator: AidenRemoteCoordinator, model: AidenWorkspaceFilesModel) {
+        self.coordinator = coordinator
+        self.model = model
+        _mode = State(initialValue: model.document.map(AidenWorkspaceHTMLPreview.initialMode(for:)) ?? .source)
+    }
 
     private var isDirty: Bool { model.document.map { $0.content != model.draft } ?? false }
+    private var isHTML: Bool { model.document.map { AidenWorkspaceHTMLPreview.isHTML($0.displayPath) } ?? false }
+    private var canPreview: Bool { model.document.map(AidenWorkspaceHTMLPreview.canPreview) ?? false }
+    private var showsPreview: Bool { !isEditing && canPreview && mode == .preview }
 
     var body: some View {
         NavigationStack {
@@ -500,6 +513,10 @@ private struct AidenWorkspaceFileEditorView: View {
                 if isEditing {
                     TextEditor(text: $model.draft)
                         .disabled(!model.canEditDocument || !model.isConnected(coordinator))
+                        .font(.system(.body, design: .monospaced))
+                        .padding(.horizontal, 8)
+                } else if showsPreview {
+                    AidenWorkspaceHTMLPreviewPane(html: model.draft)
                 } else {
                     ScrollView([.vertical, .horizontal]) {
                         LazyVStack(alignment: .leading, spacing: 4) {
@@ -511,12 +528,22 @@ private struct AidenWorkspaceFileEditorView: View {
                             }
                         }.padding()
                     }
+                    .font(.system(.body, design: .monospaced))
+                    .padding(.horizontal, 8)
                 }
             }
-                .font(.system(.body, design: .monospaced))
-                .padding(.horizontal, 8)
                 .navigationTitle(model.document?.displayPath ?? "File")
                 .navigationBarTitleDisplayMode(.inline)
+                .safeAreaInset(edge: .top, spacing: 0) {
+                    if isHTML && !canPreview {
+                        Text("This file is too large to preview.")
+                            .font(.footnote)
+                            .foregroundStyle(palette.secondary)
+                            .frame(maxWidth: .infinity)
+                            .padding(.horizontal, 16)
+                            .padding(.vertical, 8)
+                    }
+                }
                 .safeAreaInset(edge: .bottom) {
                     if let message = model.errorMessage {
                         VStack(spacing: 8) {
@@ -542,9 +569,24 @@ private struct AidenWorkspaceFileEditorView: View {
                             }
                         }
                     }
+                    if isHTML {
+                        ToolbarItem(placement: .principal) {
+                            Picker("View", selection: modeSelection) {
+                                Text("Preview").tag(AidenWorkspaceHTMLPreview.Mode.preview)
+                                Text("Source").tag(AidenWorkspaceHTMLPreview.Mode.source)
+                            }
+                            .pickerStyle(.segmented)
+                            .fixedSize()
+                            .disabled(!canPreview)
+                            .accessibilityHint(model.document?.displayPath ?? "")
+                        }
+                    }
                     ToolbarItem(placement: .confirmationAction) {
                         if !isEditing {
-                            Button("Edit") { isEditing = true }
+                            Button("Edit") {
+                                mode = .source
+                                isEditing = true
+                            }
                                 .disabled(!model.canEditDocument || !model.isConnected(coordinator))
                         } else {
                         Button("Save") { Task { _ = await model.save(coordinator: coordinator) } }
@@ -560,6 +602,112 @@ private struct AidenWorkspaceFileEditorView: View {
         .confirmationDialog("Discard unsaved changes?", isPresented: $isConfirmingDiscard) {
             Button("Discard Changes", role: .destructive) { dismiss() }
             Button("Keep Editing", role: .cancel) {}
+        }
+        .onChange(of: model.document?.id) {
+            isEditing = false
+            mode = model.document.map(AidenWorkspaceHTMLPreview.initialMode(for:)) ?? .source
+        }
+    }
+
+    /// Edit shows Source. Choosing Preview while editing leaves Edit and shows
+    /// the draft as a page; the draft and its unsaved changes stay.
+    private var modeSelection: Binding<AidenWorkspaceHTMLPreview.Mode> {
+        Binding(
+            get: { isEditing || !canPreview ? .source : mode },
+            set: { newMode in
+                if newMode == .preview { isEditing = false }
+                mode = newMode
+            }
+        )
+    }
+}
+
+/// A workspace page in the sandboxed preview: scripts on, no network, Aiden's
+/// theme underneath the page's own styles. It has no base URL, so relative
+/// resources (`style.css`, `img/a.png`) don't load.
+private struct AidenWorkspaceHTMLPreviewPane: View {
+    let html: String
+
+    @Environment(AidenAppearanceStore.self) private var appearance
+    @Environment(\.aidenPalette) private var palette
+    @Environment(\.aidenCodeTypography) private var codeTypography
+    @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    @Environment(\.openURL) private var openURL
+    @State private var pendingLink: URL?
+    @State private var failed = false
+    @State private var reloadKey = 0
+
+    /// The sandboxed view loads once, so a new theme, draft or Retry gets a
+    /// new view.
+    private struct LoadKey: Hashable {
+        let themeCSS: String
+        let html: String
+        let reload: Int
+    }
+
+    private var themeCSS: String {
+        AidenHTMLPreviewTheme.css(
+            palette: palette,
+            colorScheme: colorScheme,
+            uiFont: appearance.uiFont(for: colorScheme),
+            codeFont: codeTypography.font,
+            bodySize: AidenMarkdownMetrics.bodySize(for: dynamicTypeSize)
+        )
+    }
+
+    var body: some View {
+        content
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(palette.canvas.ignoresSafeArea())
+            .alert(
+                "Open link?",
+                isPresented: Binding(
+                    get: { pendingLink != nil },
+                    set: { if !$0 { pendingLink = nil } }
+                ),
+                presenting: pendingLink
+            ) { link in
+                Button("Open") {
+                    pendingLink = nil
+                    openURL(link)
+                }
+                Button("Cancel", role: .cancel) { pendingLink = nil }
+            } message: { link in
+                Text(link.host() ?? link.absoluteString)
+            }
+    }
+
+    @ViewBuilder
+    private var content: some View {
+        if failed {
+            VStack(spacing: 14) {
+                Image(systemName: "exclamationmark.triangle")
+                    .font(.title2)
+                    .foregroundStyle(palette.warning)
+                    .accessibilityHidden(true)
+                Text("Couldn't display this page.")
+                    .font(.callout)
+                    .foregroundStyle(palette.foreground)
+                    .multilineTextAlignment(.center)
+                Button("Retry") {
+                    failed = false
+                    reloadKey += 1
+                }
+                .frame(minHeight: 44)
+            }
+            .padding(24)
+        } else {
+            let css = themeCSS
+            AidenSandboxedHTMLView(
+                html: html,
+                allowsScripts: true,
+                themeCSS: css,
+                scrolls: true,
+                onLinkOffer: { pendingLink = $0 },
+                onFailure: { failed = true }
+            )
+            .id(LoadKey(themeCSS: css, html: html, reload: reloadKey))
         }
     }
 }

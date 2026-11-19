@@ -114,3 +114,11 @@ An HTML preview starts from a style sheet built from your Appearance settings, s
 To have an agent make pages that follow your theme, you can tell it:
 
 > When you make an HTML page for me, send it as one `.html` file. Style it with `--surface-background`, `--text-primary`, `--text-secondary`, `--border-separator`, `--accent`, `--font-ui-family` and `--font-code-family` instead of fixed colors and fonts. Inline images, styles and scripts; nothing loads from the network.
+
+#### Workspace files
+
+An `.html` or `.htm` file opened from a workspace's **Files** opens on **Preview**, with a **Preview** / **Source** switch at the top. The preview runs the page's scripts, uses the theme style sheet above, and never reaches the network: a remote image, style sheet, `fetch` or WebSocket simply doesn't load. It shows the text you're editing, so unsaved changes appear. **Edit** switches to Source; choosing Preview while editing shows your draft as a page without discarding it. A tapped `https` link asks "Open link?" with the site's name before it opens. A file cached for offline use previews too, since nothing needs the computer.
+
+- A file over the workspace size limit arrives cut short, so it opens on Source with "This file is too large to preview." and the switch is off.
+- The page has no address of its own, so relative resources such as `style.css` or `img/a.png` don't load. Inline styles, scripts and images instead.
+- If the page can't be shown, the sheet says "Couldn't display this page." with a **Retry** button.
