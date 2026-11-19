@@ -173,7 +173,7 @@ test.describe("folder workspaces", () => {
       .toHaveAttribute("aria-checked", "true");
     // No remote, so there is no origin to start from.
     await expect(page.getByRole("menu").getByRole("switch")).toHaveCount(0);
-    await page.keyboard.press("Escape");
+    await closeMenu(page);
     await expect(
       contextBar(page).getByRole("button", { name: "Branch: new worktree from main" }),
     ).toHaveText("New worktree · from main");
@@ -195,6 +195,7 @@ test.describe("folder workspaces", () => {
       }).observe(document.body, { subtree: true, childList: true, characterData: true });
     });
     await page.locator("textarea").fill("Fix the login bug");
+    await expect(page.getByRole("button", { name: "Send message" })).toBeEnabled();
     await page.locator("textarea").press("Enter");
     await expect(page.locator("[data-chat-title-menu]")).toBeVisible({ timeout: 20_000 });
 
@@ -265,7 +266,7 @@ test.describe("folder workspaces", () => {
     await page.getByRole("textbox", { name: /Branch name/u }).fill("main");
     await page.keyboard.press("Enter");
     await expect(page.locator("[data-branch-name-row]")).toContainText("main");
-    await page.keyboard.press("Escape");
+    await closeMenu(page);
 
     // Record each state the send view passes through.
     await page.evaluate(() => {
@@ -279,6 +280,7 @@ test.describe("folder workspaces", () => {
     const states = () => page.evaluate(() => (window as unknown as { __worktreeStates: string[] }).__worktreeStates);
 
     await composer.fill("Fix the login bug");
+    await expect(page.getByRole("button", { name: "Send message" })).toBeEnabled();
     await composer.press("Enter");
     const failure = page.locator("[data-worktree-send-failure]");
     await expect(failure).toBeVisible({ timeout: 20_000 });
@@ -307,6 +309,7 @@ test.describe("folder workspaces", () => {
 
     // Run in this checkout instead, chosen after leaving and coming back,
     // sends it in the repository itself and the reply still starts.
+    await expect(page.getByRole("button", { name: "Send message" })).toBeEnabled();
     await composer.press("Enter");
     await expect(failure).toBeVisible({ timeout: 20_000 });
     await page.getByRole("button", { name: "Settings", exact: true }).click();
@@ -355,10 +358,12 @@ test.describe("folder workspaces", () => {
     await page.getByRole("textbox", { name: /Branch name/u }).fill("aiden/taken");
     await page.keyboard.press("Enter");
     await expect(page.locator("[data-branch-name-row]")).toContainText("aiden/taken");
-    await page.keyboard.press("Escape");
+    await closeMenu(page);
 
-    await page.locator("textarea").fill("Retry after leaving");
-    await page.locator("textarea").press("Enter");
+    const composer = page.locator("textarea");
+    await composer.fill("Retry after leaving");
+    await expect(page.getByRole("button", { name: "Send message" })).toBeEnabled();
+    await composer.press("Enter");
     const failure = page.locator("[data-worktree-send-failure]");
     await expect(failure).toBeVisible({ timeout: 20_000 });
     await page.getByRole("button", { name: "Settings", exact: true }).click();
