@@ -328,6 +328,9 @@ const XML_DOCUMENTS: Record<string, [xml: string, type: string]> = {
   "XHTML whose <script> holds an element": [`<r xmlns="${XHTML_NS}"><script>${XML_ERROR_IMG}</script></r>`, "text/xml"],
   "XHTML whose prefixed <title> holds an element": [`<h:r xmlns:h="${XHTML_NS}"><h:title><h:img src="x" onerror="location='javascript:alert(1)'"/></h:title></h:r>`, "text/xml"],
   "XHTML whose CDATA section HTML would read as the start of a comment": [`<r xmlns="${XHTML_NS}"><![CDATA[ > <!-- ]]>${XML_ERROR_IMG}</r>`, "application/xhtml+xml"],
+  // A <!-- in a processing instruction or a DOCTYPE literal starts no comment.
+  "XHTML whose processing instruction holds what would start a comment": [`<r xmlns="${XHTML_NS}"><?x <!-- ?>${XML_ERROR_IMG}<?y -->?></r>`, "text/xml"],
+  "XHTML whose DOCTYPE literal holds what would start a comment": [`<!DOCTYPE r SYSTEM "<!--"><r xmlns="${XHTML_NS}">${XML_ERROR_IMG}<?y -->?></r>`, "application/xhtml+xml"],
   "an SVG document whose foreignObject holds an empty XHTML <xmp/>": [
     `<svg xmlns="http://www.w3.org/2000/svg"><foreignObject><xmp xmlns="${XHTML_NS}"/><img xmlns="${XHTML_NS}" src="x" onerror="location='javascript:alert(1)'"/></foreignObject></svg>`,
     "image/svg+xml",
@@ -663,9 +666,11 @@ const ADMITTED_MARKUP: Record<string, string> = {
         `const page = new DOMParser().parseFromString('<page><title>Notes</title><iframe src="https://e.test"/></page>', 'application/xhtml+xml')`,
         // An SVG icon's <title> and <style> hold only text, which HTML reads as XML does.
         `const icon = new DOMParser().parseFromString('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><title>Close &amp; exit</title><style><![CDATA[ .a > path { fill: currentColor } ]]></style><path class="a" d="M4 12h16"/><a href="#top"><circle r="2"/></a></svg>', 'image/svg+xml')`,
+        // XML builds nothing from a comment, so what one names is not read.
+        `const notes = new DOMParser().parseFromString('<svg xmlns="http://www.w3.org/2000/svg"><!-- note: icons never use <script> --><!--Note:style is inline--><style><!--TODO:link to docs--> path { fill: red }</style><path d="M0 0"/></svg>', 'image/svg+xml')`,
         `const doc = new DOMParser().parseFromString('<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml"><body><p>Hi</p></body></html>', 'application/xhtml+xml')`,
         "label.textContent = rss.querySelector('item title').textContent + atom.title + config.documentElement.childElementCount + page.title",
-        "document.body.append(icon.documentElement, doc.body.firstChild)",
+        "document.body.append(icon.documentElement, doc.body.firstChild, notes.documentElement)",
       ].join("\n"),
     ),
   // A handler past the depth cap with no string in it has nothing to write.

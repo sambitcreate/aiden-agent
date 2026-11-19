@@ -697,25 +697,71 @@ export const XML_DECLARATIONS_LIMIT = "a script parses XML with a DOCTYPE intern
 export const XML_HTML_TEXT_LIMIT =
   "a script parses XML that names the XHTML, SVG or MathML namespace, so it is checked as HTML, and HTML would read part of it as text where XML reads markup: a <style>, <script>, <textarea>, <title>, <xmp>, <iframe>, <noembed>, <noframes> or <noscript> that is self-closed or holds markup (or, in <style> and <script>, a character reference), a <plaintext>, or a CDATA section that holds < or &";
 
+/** What opens an XML comment, CDATA section, processing instruction or DOCTYPE. */
+const XML_MARKUP_OPENER = /<(?:!--|!\[CDATA\[|\?|!DOCTYPE)/gu;
+
+/**
+ * Where a DOCTYPE without an internal subset ends: the first `>` outside a
+ * quoted literal, after `from`. -1 when it does not end or opens a subset.
+ */
+function xmlDoctypeEnd(markup: string, from: number): number {
+  let quote = "";
+  for (let at = from; at < markup.length; at += 1) {
+    const char = markup[at]!;
+    if (quote) {
+      if (char === quote) quote = "";
+    } else if (char === '"' || char === "'") quote = char;
+    else if (char === "[") return -1;
+    else if (char === ">") return at;
+  }
+  return -1;
+}
+
 /**
  * Namespaced XML as text HTML reads the same way, or undefined where HTML
- * would read part of it as text: a CDATA section is replaced by its text
- * when that text holds no `<` or `&`, and each element whose content HTML
- * reads as text must hold only text up to its end tag (no `&` in a style or
- * script, where HTML would not decode it). XML has no `<` in an attribute
- * value, so the next `<` after a start tag begins its content's first
- * markup. Each step searches forward from the last, so this is linear.
+ * would read part of it as text: a comment is dropped, a CDATA section is
+ * replaced by its text when that text holds no `<` or `&`, and each element
+ * whose content HTML reads as text must hold only text up to its end tag (no
+ * `&` in a style or script, where HTML would not decode it). Only a
+ * well-formed comment is dropped: one that ends at the first `-->` and holds
+ * no `--`, so a body XML would reject, and `<!-->` or `<!--->`, which HTML
+ * ends at once, stay as text to be checked, as does every later comment. A
+ * processing instruction or DOCTYPE is kept whole, so a `<!--` in one does not
+ * start a comment. XML has no `<` in an attribute value, so the next `<`
+ * after a start tag begins its content's first markup. Each step searches
+ * forward from the last, so this is linear.
  */
 function xmlAsHtml(markup: string): string | undefined {
   let text = "";
   let at = 0;
-  for (let start = markup.indexOf("<![CDATA[", at); start !== -1; start = markup.indexOf("<![CDATA[", at)) {
-    const end = markup.indexOf("]]>", start + 9);
-    if (end === -1) return undefined;
-    const content = markup.slice(start + 9, end);
-    if (/[<&]/u.test(content)) return undefined;
-    text += markup.slice(at, start) + content;
-    at = end + 3;
+  let comments = true;
+  const opener = new RegExp(XML_MARKUP_OPENER);
+  for (let match = opener.exec(markup); match; match = opener.exec(markup)) {
+    const start = match.index;
+    if (match[0] === "<![CDATA[") {
+      const end = markup.indexOf("]]>", start + 9);
+      if (end === -1) return undefined;
+      const content = markup.slice(start + 9, end);
+      if (/[<&]/u.test(content)) return undefined;
+      text += markup.slice(at, start) + content;
+      at = end + 3;
+      opener.lastIndex = at;
+    } else if (match[0] === "<!--") {
+      const end = comments ? markup.indexOf("-->", start + 4) : -1;
+      const body = end === -1 ? "" : markup.slice(start + 4, end);
+      if (end === -1 || body.includes("--") || body.endsWith("-") || body.startsWith(">") || body.startsWith("->")) {
+        comments = false;
+        opener.lastIndex = start + 4;
+        continue;
+      }
+      text += markup.slice(at, start);
+      at = end + 3;
+      opener.lastIndex = at;
+    } else {
+      const end = match[0] === "<?" ? markup.indexOf("?>", start + 2) : xmlDoctypeEnd(markup, start + 9);
+      if (end === -1) comments = false;
+      opener.lastIndex = end === -1 ? start + match[0].length : end + 1;
+    }
   }
   text += markup.slice(at);
   for (const match of text.matchAll(XML_HTML_TEXT_ELEMENTS)) {
