@@ -3,6 +3,7 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 import Ajv from "ajv";
 import { createSubagentTool } from "./subagent-tool.js";
+import { parseSubagentToolRequest } from "./contracts.js";
 import type { SubagentSupervisor } from "./subagent-supervisor.js";
 import { subagentWorkspaceWriteAllowedForGeneration } from "./eligibility.js";
 
@@ -38,13 +39,55 @@ function request(serverId: string, toolName: string) {
   };
 }
 
-test("model schema preserves exact server/tool pairings instead of cross-product enums", () => {
-  const schema = tool().parameters as object;
-  const validate = new Ajv().compile(schema);
+test("the declaration is the same for every inventory; action list returns the live one", async () => {
+  // The servers, tools and models change as the person connects things; the
+  // declaration must not, so the cached tool list survives. Unknown pairs are
+  // refused by the host before launch (request-capabilities-v2 tests).
+  const other = createSubagentTool(
+    { execute: async () => "done" } as unknown as SubagentSupervisor,
+    [{ serverId: "tickets", tools: ["find"] }],
+    false,
+    [],
+    false,
+    false,
+  );
+  const empty = createSubagentTool({ execute: async () => "done" } as unknown as SubagentSupervisor);
+  for (const declared of [other, empty]) {
+    assert.equal(declared.description, tool().description);
+    assert.deepEqual(declared.parameters, tool().parameters);
+  }
+  const validate = new Ajv().compile(tool().parameters as object);
   assert.equal(validate(request("docs", "lookup")), true);
-  assert.equal(validate(request("calendar", "list_events")), true);
-  assert.equal(validate(request("docs", "list_events")), false);
-  assert.equal(validate(request("calendar", "lookup")), false);
+  assert.equal(validate({ action: "list" }), true);
+
+  const listed = await tool(false, true).execute("call-1", { action: "list" });
+  const text = listed.content[0]?.type === "text" ? listed.content[0].text : "";
+  const inventory = JSON.parse(text);
+  assert.deepEqual(inventory.mcp, [
+    { serverId: "docs", tools: ["lookup", "search"] },
+    { serverId: "calendar", tools: ["list_events"] },
+  ]);
+  assert.deepEqual(inventory.mcpMutations, [{ serverId: "docs", tools: ["publish"] }]);
+  assert.deepEqual(inventory.models, []);
+});
+
+test("action list launches nothing; any other call reaches the supervisor", async () => {
+  const calls: unknown[] = [];
+  const delegated = createSubagentTool(
+    { execute: async (params: unknown) => { calls.push(params); return "ran"; } } as unknown as SubagentSupervisor,
+    [{ serverId: "docs", tools: ["lookup"] }],
+  );
+  await delegated.execute("call-1", { action: "list" });
+  assert.deepEqual(calls, []);
+  const ran = await delegated.execute("call-2", { action: "run", ...request("docs", "lookup") });
+  assert.equal(ran.content[0]?.type === "text" ? ran.content[0].text : "", "ran");
+  assert.equal(calls.length, 1);
+  // The host parser accepts the declared default and nothing else.
+  const tasks = request("docs", "lookup").tasks;
+  assert.equal(parseSubagentToolRequest({ action: "run", tasks }).tasks.length, 1);
+  for (const action of ["list", "delegate", 1]) {
+    assert.throws(() => parseSubagentToolRequest({ action, tasks }), /Invalid subagent request/u);
+  }
 });
 
 test("two no-capability scouts need no model-supplied resource budget", () => {
@@ -262,18 +305,10 @@ test("Phase 5C exposes only exact rollback-gated mutation requests", async () =>
   assert.equal(disabled(mutationRequest), false);
   assert.doesNotMatch(JSON.stringify(tool(true).parameters), /mcpMutations/u);
 
+  // The lane of each named tool is checked by the host against its live
+  // inventory, not by the declaration (request-capabilities-v2 tests).
   const validate = new Ajv().compile(tool(true, true).parameters as object);
   assert.equal(validate(mutationRequest), true);
-  assert.equal(
-    validate({
-      ...mutationRequest,
-      capabilities: {
-        ...mutationRequest.capabilities,
-        mcpMutations: [{ serverId: "docs", tools: ["lookup"] }],
-      },
-    }),
-    false,
-  );
   assert.match(JSON.stringify(tool(true, true).parameters), /mcpMutations/u);
   assert.match(tool(true, true).description, /never retries automatically/u);
   assert.match(tool(true, true).description, /rollback is unavailable/u);
@@ -344,15 +379,23 @@ const scoutTask = (extra: Record<string, unknown> = {}) => ({
   tasks: [{ role: "scout", label: "Inspect", task: "Inspect one source", ...extra }],
 });
 
-test("per-task model and effort accept only offered values and stay optional", () => {
+test("per-task model and effort stay optional and the models come from action list", async () => {
   const validate = new Ajv().compile(modelTool(true).parameters as object);
   assert.equal(validate(scoutTask()), true);
   assert.equal(validate(scoutTask({ model: "openrouter/qwen/qwen3", effort: "low" })), true);
-  assert.equal(validate(scoutTask({ model: "openai/gpt-unlisted" })), false);
-  assert.equal(validate(scoutTask({ effort: "high" })), false);
+  assert.equal(validate(scoutTask({ effort: "extreme" })), false);
   const description = modelTool(true).description;
   assert.match(description, /Omit model and effort unless the user asks/u);
-  assert.match(description, /openrouter\/qwen\/qwen3 \(Qwen 3, OpenRouter\)/u);
+  // The model list is not in the declaration, so a new provider leaves it unchanged.
+  assert.doesNotMatch(description, /qwen/u);
+  const listed = await modelTool(true).execute("call-1", { action: "list" });
+  const inventory = JSON.parse(listed.content[0]?.type === "text" ? listed.content[0].text : "");
+  assert.equal(inventory.currentModel, "anthropic/claude-sonnet");
+  assert.deepEqual(
+    inventory.models.map((entry: { model: string }) => entry.model),
+    ["anthropic/claude-sonnet", "openrouter/qwen/qwen3"],
+  );
+  assert.deepEqual(inventory.efforts, ["off", "low", "medium"]);
 });
 
 test("model and effort are hidden when only the parent model is allowed", () => {

@@ -1,4 +1,3 @@
-import { botMessageChainOf } from "../../../renderer/shared/bot-messages.js";
 import { createBotMessageLedger } from "../../../main/services/bot-messages/ledger.js";
 import { createBotMessageCourier } from "../../../main/services/bot-messages/courier.js";
 import { createBotMessageLifecycle } from "../../../main/services/bot-messages/lifecycle.js";
@@ -175,8 +174,10 @@ export async function createCliDurableBots(profileDir: string, ports: CliDurable
       systemSections: (bot) => admitted(bot.id, async (lease) => [await ports.instructions(lease), `Working directory: ${lease.authority.workingDirectory}. Use only the offered tools within their granted locations.`]),
       imageInput: async (botId) => imageInputs.get(botId) ?? false,
       memorySection: async (botId, offer) => renderBotMemorySection(await memory.snapshot(botId), offer),
-      currentTools: async (bot, turn) => {
-        const available = botMessageChainOf([turn.requestId]).canSend && (await (ports.messagingEnabled?.() ?? Promise.resolve(true)))
+      currentTools: async (bot) => {
+        // Declared from settings and the roster only, so every ingress sees
+        // one list; the Bot-message chain limit is refused per call.
+        const available = (await (ports.messagingEnabled?.() ?? Promise.resolve(true)))
           ? (await ports.botStore.list()).map((peer) => ({
             id: peer.id, name: peer.name, purpose: peer.description ?? "",
             acceptsMessages: peer.acceptsBotMessages !== false,
@@ -190,7 +191,7 @@ export async function createCliDurableBots(profileDir: string, ports: CliDurable
             replay: "unsafe" as const, ...(mcpAgentToolDescriptor(tool) ? { mcp: true } : {}),
           })),
           botMemoryToolEntry(bot.id, memory), botRecallToolEntry(),
-          ...(offer ? [{ ...await messageBotCandidate(bot.id, { roster, descriptionRoster: available, post: (input) => messages.post(input) }), replay: "safe" as const }] : []),
+          ...(offer ? [{ ...await messageBotCandidate(bot.id, { roster, post: (input) => messages.post(input) }), replay: "safe" as const }] : []),
         ];
       },
       checkPolicy: async (botId, name, call) => admitted(botId, async (lease) => {

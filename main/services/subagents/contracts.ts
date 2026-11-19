@@ -351,9 +351,11 @@ function inferRootCapabilities(
 
 /** Revalidate model arguments independently of TypeBox/provider schema enforcement. */
 export function parseSubagentToolRequest(input: unknown): SubagentToolRequest {
-  const request = exactPlainDataRecord(input, ["tasks"], ["context", "capabilities"]);
+  // `action: "run"` is the declared default; "list" never reaches here.
+  const request = exactPlainDataRecord(input, ["tasks"], ["action", "context", "capabilities"]);
   if (
     !request ||
+    (request.action !== undefined && request.action !== "run") ||
     !Array.isArray(request.tasks) ||
     (request.context !== undefined && request.context !== "fresh" && request.context !== "fork")
   ) {
@@ -373,7 +375,7 @@ export function parseSubagentToolRequest(input: unknown): SubagentToolRequest {
       throw new Error("Unknown subagent role.");
     }
     if (task.model !== undefined && !isSubagentModelKey(task.model)) {
-      throw new Error("Invalid subagent model. Use a providerId/modelId value from the tool description.");
+      throw new Error('Invalid subagent model. Use a model value from action "list".');
     }
     if (task.effort !== undefined && !isGenerationThinkingLevel(task.effort)) {
       throw new Error(`Invalid subagent effort. Use one of: ${GENERATION_THINKING_LEVELS.join(", ")}.`);

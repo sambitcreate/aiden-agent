@@ -937,6 +937,40 @@ test("a refused child model launches, prepares, and projects nothing", async () 
   assert.deepEqual(projector.snapshot(), []);
 });
 
+test("a model or effort request with no model policy launches nothing", async () => {
+  // Bot and server subagents have no model policy. The declaration no longer
+  // lists models, so a requested model must fail the batch, never be dropped.
+  let launched = 0;
+  const supervisor = new SubagentSupervisor({
+    generationId: "no-model-policy",
+    ...TEST_SUPERVISOR_SCOPE,
+    runtime: runtime(),
+    thinkingLevel: "high",
+    workspaceRoot: "/workspace",
+    permission: "full",
+    inheritedCeiling: SUBAGENT_READ_TOOL_NAMES,
+    runChild: async ({ request: task }) => {
+      launched += 1;
+      return completed(task.label);
+    },
+  });
+  for (const extra of [{ model: "second-provider/second-model" }, { effort: "low" }]) {
+    await assert.rejects(
+      supervisor.execute(parseSubagentToolRequest({ tasks: [
+        { role: "scout", label: "Fine", task: "Check." },
+        { role: "scout", label: "Chosen", task: "Check.", ...extra },
+      ] })),
+      /overrides are not available for this response/u,
+    );
+  }
+  assert.equal(launched, 0);
+  assert.match(
+    await supervisor.execute(parseSubagentToolRequest({ tasks: [{ role: "scout", label: "Plain", task: "Check." }] })),
+    /Status: completed/u,
+  );
+  assert.equal(launched, 1);
+});
+
 test("supervisor records only canonical non-interrupted terminal outcomes", async () => {
   const health = healthProbe();
   const supervisor = new SubagentSupervisor({

@@ -2070,6 +2070,12 @@ async function prepareGeneration(
               subagentShellEnabled,
               subagentDelegationEnabled,
               subagentModelOptions,
+              // Settings, not inventories, decide what the declaration
+              // carries; the live lists come from the `list` action.
+              {
+                mcpMutationsDeclared: childMcpMutationsRollout,
+                modelChoiceDeclared: subagentModelPolicy?.overridesAllowed === true,
+              },
             )
         : undefined,
       shareImage: folderPath ? shareImage : undefined,
