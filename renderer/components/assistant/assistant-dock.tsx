@@ -206,9 +206,18 @@ export function AssistantDockPresentation({
   }, [live.active, live.microphoneActive, setupCompleted]);
 
   // Every start, from the shortcut, the composer or setup's Start Live, waits
-  // for composer dictation to let go of the microphone first.
+  // for composer dictation to let go of the microphone first. It is one
+  // attempt: presses while the microphone is being handed over do nothing.
+  const startPendingRef = React.useRef(false);
   const startAfterHandoff = React.useCallback(() => {
-    void liveLauncher.prepareStart().then(() => live.start());
+    if (startPendingRef.current) return;
+    startPendingRef.current = true;
+    void liveLauncher
+      .prepareStart()
+      .then(() => live.start())
+      .finally(() => {
+        startPendingRef.current = false;
+      });
   }, [live]);
 
   const openPanel = React.useCallback(() => {
