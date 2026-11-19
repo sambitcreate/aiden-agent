@@ -622,6 +622,29 @@ function staysInside(path: string): boolean {
 }
 
 /**
+ * Why `text` is not a plain branch or tag name, following `git
+ * check-ref-format`: git reads `+` as a forced push, `:` as a mapping or a
+ * delete, `*` as a glob over every branch, `^ ~ @{ ..` as revision syntax,
+ * and falls back to a path for a name it does not know. `remote` (a ref
+ * git push, fetch or pull sends) also refuses a full `refs/…` name, which
+ * could name any ref on the other side.
+ */
+function refProblem(text: string, remote: boolean): string | undefined {
+  if (text === "") return "it is empty";
+  if (/^[-+]/u.test(text)) return "no leading - or + (git reads them as an option or a forced push)";
+  if (text.includes(":")) return "no : (git reads it as a mapping that renames or deletes a ref)";
+  // eslint-disable-next-line no-control-regex
+  if (/[\u0000-\u0020\u007f*?[\\^~]/u.test(text)) return "no spaces, control characters or * ? [ \\ ^ ~ (globs and revision syntax)";
+  if (text.includes("..") || text.includes("@{") || text === "@") return "no .., @{ or a lone @ (revision syntax)";
+  if (text.startsWith("/") || text.endsWith("/") || text.includes("//")) return "no leading, trailing or doubled /";
+  if (text.split("/").some((component) => component.startsWith(".") || component.endsWith(".lock")) || text.endsWith(".")) {
+    return "no part that starts with . or ends with .lock, and no trailing . (git reads . as a path)";
+  }
+  if (remote && text.startsWith("refs/")) return "no full refs/… name, which could name any ref on the other side; write the branch name alone";
+  return undefined;
+}
+
+/**
  * Why a value may not fill its placeholder where the template puts it, or
  * undefined when every value fits its slot's rule. A word that would start
  * with "-" is read as an option, so only a slot the program always takes as
@@ -643,8 +666,9 @@ export function workspaceArtifactValueProblem(steps: readonly TemplateStep[], va
           const text = value(part.param);
           const rule = part.slot?.rule ?? "text";
           if (rule === "number" && !/^\d+$/u.test(text)) return `${part.param} must be a whole number there.`;
-          if (rule === "ref" && (/^[-+:]/u.test(text) || text.includes(":"))) {
-            return `${part.param} cannot start with -, + or : or contain :, since git reads it as a branch or refspec there (+ forces a push, : deletes or renames a branch).`;
+          if (rule === "ref") {
+            const problem = refProblem(text, part.slot?.remote === true);
+            if (problem) return `${part.param} must be a branch or tag name there: ${problem}.`;
           }
           if (rule === "target" && (/^[-+]/u.test(text) || /[:@]/u.test(text))) {
             return `${part.param} must be a number or a branch-like name there: no leading - or +, and no :, @ or ://, which gh reads as another repository or a URL.`;

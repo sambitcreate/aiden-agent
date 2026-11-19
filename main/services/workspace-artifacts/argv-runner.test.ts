@@ -424,3 +424,38 @@ test("everyday git and gh actions with page data still save and run with the con
   }
 });
 
+
+test("a branch value pushes only the branch it names, never a glob or a full ref of the page's choosing", async (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "aiden-artifact-push-"));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const repo = path.join(dir, "repo");
+  const origin = path.join(dir, "origin.git");
+  const git = (args: string[], cwd = repo) => execFileSync("git", ["-c", "user.email=a@example.com", "-c", "user.name=a", ...args], { cwd, encoding: "utf8" });
+  fs.mkdirSync(repo);
+  git(["init", "-q", "--bare", "-b", "main", origin], dir);
+  git(["init", "-q", "-b", "main"]);
+  git(["commit", "-q", "--allow-empty", "-m", "one"]);
+  git(["commit", "-q", "--allow-empty", "-m", "two"]);
+  git(["remote", "add", "origin", origin]);
+  git(["push", "-q", "origin", "main"]);
+  // The page's own main is behind the remote's, and two branches and a tag were never pushed.
+  git(["reset", "-q", "--hard", "HEAD~1"]);
+  git(["branch", "feature"]);
+  git(["branch", "private-wip"]);
+  git(["tag", "v-internal"]);
+  const remoteRefs = () => git(["for-each-ref", "--format=%(refname) %(objectname)"], origin).trim().split("\n").sort();
+  const before = remoteRefs();
+  const push = (command: string, value: string) => {
+    const action = parseWorkspaceArtifactActions([{ name: "a", label: "A", command, params: [{ name: "branch" }] }])[0]!;
+    return runResolved(resolveWorkspaceArtifactCommand(action, [value]), repo, { GIT_TERMINAL_PROMPT: "0" });
+  };
+  for (const command of ["git push origin {{branch}}", "git push --force origin {{branch}}", "git push -q origin HEAD:{{branch}}"]) {
+    for (const value of ["refs/heads/*", "refs/tags/*", "*", "refs/heads/main", "refs/tags/v-internal", "@", ".", "main^", "feature..main", "fe ature"]) {
+      assert.throws(() => push(command, value), /branch must be a branch or tag name there/u, `${command} with ${value}`);
+    }
+  }
+  assert.deepEqual(remoteRefs(), before, "nothing reached the remote");
+  const pushed = await push("git push --force origin {{branch}}", "feature");
+  assert.equal(pushed.exitCode, 0, pushed.stderr);
+  assert.deepEqual(remoteRefs(), [...before, `refs/heads/feature ${git(["rev-parse", "feature"]).trim()}`].sort(), "only the named branch moved; main was not rewound");
+});

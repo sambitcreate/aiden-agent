@@ -680,10 +680,10 @@ test("where a value lands decides what it may be: no option, no refspec, no file
   assert.deepEqual(run("gh pr list --search {{x}}", "-label:bug").steps[0]!.pipeline[0]!.argv, ["gh", "pr", "list", "--search", "-label:bug"]);
   // A branch git pushes, fetches or pulls: + forces it, a leading : deletes it, a : maps it elsewhere.
   for (const value of ["+main", ":main", "main:other", "-main"]) {
-    assert.throws(() => run("git push origin {{x}}", value), /x cannot start with|x cannot start with -, \+ or :/u, value);
+    assert.throws(() => run("git push origin {{x}}", value), /x cannot start with|x must be a branch or tag name there: no (leading - or \+|:)/u, value);
   }
-  assert.throws(() => run("git push origin HEAD:{{x}}", "a:b"), /contain :/u);
-  assert.throws(() => run("git pull origin {{x}}", "+main"), /\+ forces a push/u);
+  assert.throws(() => run("git push origin HEAD:{{x}}", "a:b"), /x must be a branch or tag name there: no :/u);
+  assert.throws(() => run("git pull origin {{x}}", "+main"), /a forced push/u);
   assert.deepEqual(run("git push origin {{x}}", "feature/x").steps[0]!.pipeline[0]!.argv, ["git", "push", "origin", "feature/x"]);
   // A file a program reads stays inside the workspace, including when joined to text.
   for (const [command, value] of [

@@ -12,7 +12,8 @@
  *   separate-word option value the program always takes as the value
  *   (`dash`), where git, grep, rg, jq and gh read even `--amend` as text;
  * - `number`: a whole number;
- * - `ref`: a branch or tag name git cannot read as a force, delete or mapping;
+ * - `ref`: a branch or tag name as `git check-ref-format` allows one, which
+ *   git cannot read as a force, delete, mapping, glob or path;
  * - `target`: a gh number or name that does not point at another repository
  *   or a URL;
  * - `path`: a file inside the workspace.
@@ -26,6 +27,8 @@ export interface Slot {
   rule: SlotRule;
   /** A value may start with "-": the program takes this word as the option's value whatever it holds. */
   dash?: boolean;
+  /** A ref git push, fetch or pull sends or asks for: a value under `refs/` is refused too, since it could name any ref. */
+  remote?: boolean;
 }
 
 /** An option's value: a slot, a refusal clause ("which reads a file from anywhere"), or null when it takes no page data. */
@@ -62,6 +65,7 @@ const T: Slot = { rule: "text" };
 const TD: Slot = { rule: "text", dash: true };
 const N: Slot = { rule: "number" };
 const R: Slot = { rule: "ref" };
+const RR: Slot = { rule: "ref", remote: true };
 const P: Slot = { rule: "path" };
 const G: Slot = { rule: "target" };
 
@@ -206,7 +210,7 @@ const logLike = (name: string): SlotSpec => ({
 const remoteOperands = (sub: string): Pick<SlotSpec, "operand" | "operandForms"> => ({
   operand: (index, _afterDashes, has) => {
     if (has("--multiple", "--all")) return `as an operand of git ${sub} with --multiple or --all, where every operand is a remote to connect to`;
-    return index === 0 ? `as the remote git ${sub} connects to (write it literally, such as origin)` : R;
+    return index === 0 ? `as the remote git ${sub} connects to (write it literally, such as origin)` : RR;
   },
   operandForms: "branch names after a literal remote (git " + sub + " origin {{branch}})",
 });
@@ -288,7 +292,7 @@ const GIT_SPECS: Readonly<Record<string, SlotSpec>> = {
       "progress", "no-progress", "force-if-includes",
     ],
     values: { "--repo": "which names the remote to connect to", "--receive-pack": RUNS_PROGRAM, "--exec": RUNS_PROGRAM, "-o --push-option": null },
-    operand: (index) => (index === 0 ? "as the remote git push connects to (write it literally, such as origin)" : R),
+    operand: (index) => (index === 0 ? "as the remote git push connects to (write it literally, such as origin)" : RR),
     operandForms: "branch names after a literal remote (git push origin {{branch}})",
   },
   add: { name: "git add", flags: "AnvfuN", long: ["all", "update", "dry-run", "force", "verbose", "intent-to-add", "ignore-errors", "renormalize"], ...files() },
