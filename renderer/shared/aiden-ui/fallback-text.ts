@@ -30,11 +30,23 @@ export interface FallbackTextOptions {
    * the chart itself is never drawn.
    */
   chartTables?: boolean;
+  /**
+   * Write tables as plain rows with their columns lined up by spaces instead
+   * of Markdown pipes, for readers that show the text as-is (a phone's
+   * visual row draws plain text, so pipes would show raw).
+   */
+  plainTables?: boolean;
 }
+
+/** A plain table cell is clipped to this many characters so one long cell cannot push every row wide. */
+const MAX_PLAIN_CELL = 40;
+/** Values listed for a sparkline before the count of the rest. */
+const MAX_SPARKLINE_VALUES = 30;
 
 class FallbackLines {
   readonly lines: string[] = [];
   chartTables = false;
+  plainTables = false;
   /** Length of `lines.join("\n")`, kept as lines are added. */
   private size = 0;
   private work = WORK_BUDGET;
@@ -103,12 +115,41 @@ function inline(node: AidenUiNodeV1, scope: AidenUiScope): string {
   return (node.c ?? []).map((child) => inline(child, scope)).join("");
 }
 
+function plainCell(text: string): string {
+  const flat = text.replace(/\s+/gu, " ").trim();
+  const characters = [...flat];
+  return characters.length > MAX_PLAIN_CELL ? `${characters.slice(0, MAX_PLAIN_CELL - 1).join("")}…` : flat;
+}
+
+function padded(cells: readonly string[], widths: readonly number[]): string {
+  return cells.map((cell, index) => (index === cells.length - 1 ? cell : cell + " ".repeat(widths[index]! - [...cell].length))).join("  ").trimEnd();
+}
+
 function table(rows: unknown, columns: unknown, scope: AidenUiScope, out: FallbackLines): void {
   if (!Array.isArray(rows) || rows.length === 0) return;
   const columnList: Record<string, unknown>[] = Array.isArray(columns) && columns.length
     ? columns.map((column) => record(column))
     : Object.keys(record(rows[0])).map((key) => ({ key, label: key }));
   const header = columnList.map((column) => str(column.label) || str(column.key));
+  if (out.plainTables) {
+    // Every kept row is read first so the columns can be lined up; a row is
+    // kept whole or not at all.
+    const body: string[][] = [];
+    collect: for (const row of rows.slice(0, MAX_TABLE_ROWS)) {
+      const cells: string[] = [];
+      for (const column of columnList) {
+        if (!out.take()) break collect;
+        cells.push(plainCell(formatted(record(row)[str(column.key)], column.format, scope)));
+      }
+      body.push(cells);
+    }
+    const head = header.map(plainCell);
+    const widths = head.map((cell, index) => Math.max([...cell].length, ...body.map((cells) => [...cells[index]!].length)));
+    out.push(padded(head, widths));
+    for (const cells of body) out.push(padded(cells, widths));
+    if (rows.length > MAX_TABLE_ROWS) out.push(`(${rows.length - MAX_TABLE_ROWS} more rows)`);
+    return;
+  }
   out.push(`| ${header.join(" | ")} |`);
   out.push(`| ${header.map(() => "---").join(" | ")} |`);
   for (const row of rows.slice(0, MAX_TABLE_ROWS)) {
@@ -127,12 +168,17 @@ function table(rows: unknown, columns: unknown, scope: AidenUiScope, out: Fallba
 
 /**
  * A chart's columns as the chart reads them: its x field, then its series
- * (`series`, else `y`, else the first other numeric field), in the chart's format.
+ * (`series`, else `y`, else the first other numeric field), in the chart's
+ * format. A scatter chart with no `x` keeps every numeric field, since its
+ * points need at least two.
  */
-function chartColumns(rows: unknown[], x: unknown, y: unknown, series: unknown, format: unknown): Record<string, unknown>[] {
+function chartColumns(rows: unknown[], kind: string, x: unknown, y: unknown, series: unknown, format: unknown): Record<string, unknown>[] {
   const first = record(rows[0]);
   const xKey = str(x) || Object.keys(first).find((key) => typeof first[key] === "string") || "";
-  const keys: { key: string; label: string }[] = Array.isArray(series) && series.length
+  const allNumeric = kind === "scatter" && !str(x);
+  const keys: { key: string; label: string }[] = allNumeric
+    ? Object.keys(first).filter((key) => key !== xKey && typeof first[key] === "number").map((key) => ({ key, label: key }))
+    : Array.isArray(series) && series.length
     ? series.map((entry) => (typeof entry === "string" ? { key: entry, label: entry } : { key: str(record(entry).key), label: str(record(entry).label) || str(record(entry).key) }))
     : Array.isArray(y)
       ? y.filter((key): key is string => typeof key === "string").map((key) => ({ key, label: key }))
@@ -237,7 +283,7 @@ function lines(node: AidenUiNodeV1, scope: AidenUiScope, out: FallbackLines): vo
       const kind = str(prop(node, "kind", scope));
       out.push(`${label || "Chart"} (${kind ? `${kind} chart` : "chart"}, ${Array.isArray(data) ? data.length : 0} points)`);
       if (out.chartTables && Array.isArray(data) && data.length) {
-        table(data, chartColumns(data, prop(node, "x", scope), prop(node, "y", scope), prop(node, "series", scope), prop(node, "format", scope)), scope, out);
+        table(data, chartColumns(data, kind, prop(node, "x", scope), prop(node, "y", scope), prop(node, "series", scope), prop(node, "format", scope)), scope, out);
       }
       return;
     }
@@ -253,10 +299,32 @@ function lines(node: AidenUiNodeV1, scope: AidenUiScope, out: FallbackLines): vo
       }
       return;
     }
-    case "Sparkline":
+    case "Sparkline": {
+      const label = str(prop(node, "label", scope));
+      const values = prop(node, "values", scope);
+      const numbers = Array.isArray(values) ? values.filter((value): value is number => typeof value === "number" && Number.isFinite(value)) : [];
+      if (out.chartTables && numbers.length) {
+        const shown = numbers.slice(0, MAX_SPARKLINE_VALUES).map((value) => formatValue(value, "number", scope.locale));
+        const more = numbers.length > MAX_SPARKLINE_VALUES ? ` (${numbers.length - MAX_SPARKLINE_VALUES} more)` : "";
+        out.push(`${label || "Trend"} (sparkline): ${shown.join(", ")}${more}`);
+      } else if (label) {
+        out.push(`${label} (sparkline)`);
+      }
+      return;
+    }
     case "Heatmap": {
       const label = str(prop(node, "label", scope));
-      if (label) out.push(`${label} (${node.t.toLowerCase()})`);
+      const rows = prop(node, "rows", scope);
+      if (out.chartTables && Array.isArray(rows) && rows.length) {
+        out.push(`${label || "Heatmap"} (heatmap, ${rows.length} cells)`);
+        const column = (name: string) => {
+          const key = str(prop(node, name, scope)) || name;
+          return { key, label: key };
+        };
+        table(rows, [column("y"), column("x"), column("value")], scope, out);
+      } else if (label) {
+        out.push(`${label} (heatmap)`);
+      }
       return;
     }
     case "Button": {
@@ -303,6 +371,7 @@ function lines(node: AidenUiNodeV1, scope: AidenUiScope, out: FallbackLines): vo
 export function fallbackTextFor(tree: AidenUiNodeV1, scope: AidenUiScope, options: FallbackTextOptions = {}): string {
   const out = new FallbackLines();
   out.chartTables = options.chartTables === true;
+  out.plainTables = options.plainTables === true;
   lines(tree, scope, out);
   const text = out.lines.join("\n");
   return text.length > AIDEN_UI_LIMITS.fallbackChars ? `${text.slice(0, AIDEN_UI_LIMITS.fallbackChars - 1)}…` : text;

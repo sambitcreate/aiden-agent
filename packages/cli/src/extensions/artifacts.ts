@@ -115,7 +115,7 @@ export function createArtifactsExtension(agentDir: string, options: ArtifactsExt
       parameters: Type.Object({ title: Type.String({ minLength: 1, maxLength: 120 }), layout: Type.Optional(Type.Union([Type.Literal("column"), Type.Literal("wide")])), markup: Type.String({ minLength: 1, maxLength: 400_000 }) }),
       async execute(toolCallId, input, _signal, _onUpdate, ctx) {
         const title = requireGenerativeUiTitle(input.title, "render_ui");
-        const compiled = compileAum(input.markup, { fallback: { chartTables: true } });
+        const compiled = compileAum(input.markup, { fallback: { chartTables: true, plainTables: true } });
         if (!compiled.tree) throw new Error("render_ui produced no visual.");
         const repairs = compiled.diagnostics.slice(0, 12).map((diagnostic) => `- ${diagnostic.code}: ${diagnostic.message}`);
         const collector = options.visuals;

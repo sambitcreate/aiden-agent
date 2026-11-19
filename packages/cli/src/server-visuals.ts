@@ -371,7 +371,12 @@ async function renderNow(options: RenderServerVisualOptions): Promise<CapturedIm
       await waitForExit(child, 2_000);
       cdp?.close(new Error("Rendering finished."));
     }
-    rmSync(profileDir, { recursive: true, force: true, maxRetries: 3 });
+    try {
+      rmSync(profileDir, { recursive: true, force: true, maxRetries: 3 });
+    } catch {
+      // A profile the system will not let go of (a file still held open) is
+      // left in the temp folder; it never fails a picture already drawn.
+    }
   }
 }
 
@@ -398,11 +403,11 @@ export function htmlVisualResultText(title: string, outcome: HtmlVisualOutcome, 
 
 export type UiVisualOutcome = "text" | "full" | "failed";
 
-/** The tool result for render_ui: the text the person's app shows in its place, or that it shows nothing. */
+/** The tool result for render_ui: the text a phone shows in its place (a paired Mac draws it), or that it shows nothing. */
 export function uiVisualResultText(title: string, fallbackText: string, outcome: UiVisualOutcome, repairs: readonly string[]): string {
   const name = JSON.stringify(title);
   const head = outcome === "text"
-    ? `Shown as text: the person's app shows ${name} as the text below, not as a drawn visual (charts appear as tables).`
+    ? `Shown as text: a phone shows ${name} as the text below, not as a drawn visual (charts appear as plain tables); a Mac paired to this server draws the visual itself.`
     : `Not shown: the person cannot see ${name}, because ${outcome === "full" ? "this reply or chat already has as many visuals as it can hold" : "Aiden could not store it"}. Give the key facts in your reply as text or a Markdown table. Its text would have been:`;
   return [head, "", fallbackText, ...(repairs.length ? ["", "Repairs:", ...repairs] : [])].join("\n");
 }

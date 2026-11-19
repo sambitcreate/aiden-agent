@@ -481,7 +481,7 @@ test("a native visual on a served chat is saved on the reply and reaches the pho
   f.steps.push(callTool("render_ui", { title: "Revenue", markup }), reply("Here is revenue."));
   await beginTurn(f, "visual");
   await f.daemon.llmClient.waitForChatIdle("visual");
-  assert.match(toolResultSeen(f.requests[1]), /Shown as text: the person's app shows \\"Revenue\\" as the text below/u);
+  assert.match(toolResultSeen(f.requests[1]), /Shown as text: a phone shows \\"Revenue\\" as the text below/u);
   const [message] = await assistantMessages(f.daemon, "visual");
   assert.equal(message.content, "Here is revenue.");
   const [visual] = message.uiVisuals;
@@ -489,7 +489,7 @@ test("a native visual on a served chat is saved on the reply and reaches the pho
   assert.ok(toolStep, "the visual is placed at its tool call in the reply's timeline");
   const [projected] = api.projectAidenRemoteChat(await f.daemon.chatStore.get("visual")).messages.filter((entry) => entry.role === "assistant");
   assert.equal(projected.visuals.length, 1);
-  assert.match(projected.visuals[0].fallbackText, /\| Jan \| 1,200 \|/u);
+  assert.match(projected.visuals[0].fallbackText, /^month {2}revenue\nJan {4}1,200$/mu);
 });
 
 // Shutdown waits for whoever really holds the chat, not only for a live lease.

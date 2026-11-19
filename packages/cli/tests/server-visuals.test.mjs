@@ -65,19 +65,22 @@ const publicIds = (raw) => ({ raw_ui: "call-1", raw_html: "call-2" })[raw];
 
 const chartMarkup = `<Visual title="Revenue"><Data name="months">[{"month":"Jan","revenue":1200},{"month":"Feb","revenue":1500}]</Data><Chart kind="bar" data={$months} x="month" y="revenue" format="currency" label="By month" /><Checklist items={[{"label":"Ship","done":true},{"label":"Review"}]} /></Visual>`;
 
-test("a native visual reaches the person's app as text with its chart as a table, and Aiden is told so", async (t) => {
+test("a native visual reaches a phone as plain text with its chart as lined-up rows, and Aiden is told a paired Mac draws it", async (t) => {
   const dir = mkdtempSync(join(tmpdir(), "aiden-server-visuals-")); t.after(() => rmSync(dir, { recursive: true, force: true }));
   const visuals = api.createServerVisualCollector();
   const text = await run(tools(dir, { visuals }).render_ui, "raw_ui", { title: "Revenue", markup: chartMarkup, layout: "wide" });
-  assert.match(text, /^Shown as text: the person's app shows "Revenue" as the text below, not as a drawn visual/u);
-  assert.match(text, /\| month \| revenue \|\n\| --- \| --- \|\n\| Jan \| \$1,200\.00 \|/u);
+  assert.match(text, /^Shown as text: a phone shows "Revenue" as the text below, not as a drawn visual/u);
+  assert.match(text, /a Mac paired to this server draws the visual itself/u);
+  // Phones draw the text as-is, so the table has no Markdown pipes and its columns line up.
+  assert.match(text, /^month {2}revenue\nJan {4}\$1,200\.00\nFeb {4}\$1,500\.00$/mu);
+  assert.doesNotMatch(text, /\|/u);
   assert.match(text, /- \[x\] Ship\n- \[ \] Review/u);
   const fields = visuals.messageFields("chat-1", "message-1", publicIds);
   assert.equal(fields.uiVisuals.length, 1);
   const [visual] = fields.uiVisuals;
   assert.equal(visual.toolCallId, "call-1");
   assert.equal(visual.layout, "wide");
-  assert.match(visual.fallbackText, /\| Feb \| \$1,500\.00 \|/u);
+  assert.match(visual.fallbackText, /^Feb {4}\$1,500\.00$/mu);
   assert.equal(fields.attachments, undefined, "no picture is claimed for a native visual");
 
   // A chat at its visual limit stores nothing, and Aiden is told the person sees nothing.

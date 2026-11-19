@@ -264,3 +264,23 @@ test("a text-only reader gets each chart's data as a table, in the chart's own c
   assert.ok(implicit.tree);
   assert.match(fallbackTextFor(implicit.tree, { vars: {} }, { chartTables: true }), /\| region \| sales \|\n\| --- \| --- \|\n\| EMEA \| 3 \|/u);
 });
+
+test("a text-only reader also gets sparkline values, heatmap cells and every numeric column of an unlabelled scatter", () => {
+  const markup = `<Visual title="T"><Data name="hm">[{"r":"Mon","c":"9am","n":4},{"r":"Tue","c":"10am","n":7}]</Data><Sparkline values={[3, 5, 1200]} label="Signups" /><Heatmap rows={$hm} x="c" y="r" value="n" label="Load" /><Chart kind="scatter" data={[{"height":170,"weight":65,"age":30},{"height":182,"weight":80,"age":41}]} label="People" /></Visual>`;
+  const text = compileAum(markup, { fallback: { chartTables: true } }).fallbackText;
+  assert.match(text, /Signups \(sparkline\): 3, 5, 1,200/u);
+  assert.match(text, /Load \(heatmap, 2 cells\)\n\| r \| c \| n \|\n\| --- \| --- \| --- \|\n\| Mon \| 9am \| 4 \|\n\| Tue \| 10am \| 7 \|/u);
+  assert.match(text, /\| height \| weight \| age \|\n\| --- \| --- \| --- \|\n\| 170 \| 65 \| 30 \|/u);
+  // Without the option they stay one summary line each.
+  const plain = compileAum(markup).fallbackText;
+  assert.doesNotMatch(plain, /1,200|Mon|170/u);
+});
+
+test("a reader that shows text as-is gets tables as rows lined up with spaces, not Markdown pipes", () => {
+  const markup = `<Visual title="T"><Chart kind="pie" data={[{"name":"Alpha","share":0.4},{"name":"B","share":0.6}]} format="percent" label="Split" /><Table rows={[{"plan":"Team | annual","seats":12},{"plan":"Solo","seats":1}]} /></Visual>`;
+  const text = compileAum(markup, { fallback: { chartTables: true, plainTables: true } }).fallbackText;
+  assert.doesNotMatch(text, /---/u);
+  assert.ok(text.includes(["name   share", "Alpha  40%", "B      60%"].join("\n")), text);
+  // A cell's own pipe is kept as written; only the table's Markdown is gone.
+  assert.ok(text.includes(["plan           seats", "Team | annual  12", "Solo           1"].join("\n")), text);
+});
