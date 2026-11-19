@@ -30,14 +30,15 @@ Branch `claude/audit-fix-main-lifecycle`, from the main-lifecycle audit
   its `lstart` matches the recorded `processStartTime` (agent-device 0.21.12's
   own identity check). No SIGKILL escalation. This only helps if the shutdown
   chain reaches `stopAgent` before the process exits. Raising the budget
-  instead would push the hard ceiling past ~56.5 s.
-- Parent generations share 8 s between the 6 s generation grace and Gemini
-  context-cache deletes (8 s request timeout each). A slow delete reports the
-  step unsettled, which skips the soak receipt; cache entries expire on their
-  server-side TTL.
+  instead would push the hard ceiling past ~55.5 s.
+- Parent generations get 7 s: `llmClient.shutdown()` bounds both its waits
+  (active generations, then parent state clearing) by one 6 s generation
+  grace, plus a second of margin. Until prompt-cache phase 7 (2026-11-19) the
+  step was 8 s and also covered Gemini context-cache DELETEs; the explicit
+  Gemini cache is retired, so quit makes no Gemini request.
 - A hard ceiling (`SHUTDOWN_HARD_CEILING_MS`, unref'd) is derived from the
   budgets: serial sum + the longest parallel branch (bot ingress then bot
-  runtime, 10.5 s) + diagnostics + 5 s slack, about 56.5 s. It calls
+  runtime, 10.5 s) + diagnostics + 5 s slack, about 55.5 s. It calls
   `app.exit(1)` and logs which steps were still pending. It is disarmed only
   when the update installer takes over. Exit code 1 keeps the soak receipt
   fail-closed.
