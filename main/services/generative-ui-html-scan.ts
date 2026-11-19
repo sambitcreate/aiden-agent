@@ -9,8 +9,9 @@
 // One scanner reads a whole visual, or a streaming draft chunk by chunk:
 // each chunk is parsed once, so a draft costs no more than the finished
 // visual. A tag still being written at the end of a chunk is checked as far
-// as it goes, which is also how the finished check treats a tag left open at
-// the end (the wrapper's closing tags would otherwise finish it).
+// as it goes (reread while short, then each time it doubles), which is also
+// how the finished check treats a tag left open at the end (the wrapper's
+// closing tags would otherwise finish it).
 //
 // The checks refuse an embedding tag, a <script src>, a refresh <meta>, a
 // javascript: or data:text/html URL in a URL attribute, CSS url() or an SVG
@@ -54,6 +55,8 @@ const SCRIPT_SOURCE_ATTRIBUTES: ReadonlySet<string> = new Set(["src", "href", "x
 const SMIL_ELEMENTS: ReadonlySet<string> = new Set(["set", "animate"]);
 const SMIL_VALUE_ATTRIBUTES: ReadonlySet<string> = new Set(["to", "from", "by", "values"]);
 const UNSAFE_SCHEME = /^(?:javascript:|data:\s*text\/html)/u;
+/** An unfinished start tag up to this many characters is read again on every chunk. */
+const PENDING_TAG_REREAD_SIZE = 1024;
 /** HTML handed to a sink is parsed again, at most this many strings deep. */
 const MAX_NESTED_HTML_DEPTH = 3;
 
@@ -463,6 +466,8 @@ export class HtmlScanner {
   private finished = false;
   private elements = 0;
   private fosterParented = 0;
+  /** The unfinished start tag last read by `findings`, its size then and what it would load. */
+  private pending: { tag: unknown; size: number; found: HtmlFindings } | undefined;
 
   constructor(private readonly depth = 0) {
     const adapter: TreeAdapter<DefaultTreeAdapterMap> = {
@@ -529,13 +534,26 @@ export class HtmlScanner {
     this.run(() => this.parser.tokenizer.write(chunk, false));
   }
 
-  /** What the document written so far would load or run. */
+  /**
+   * What the document written so far would load or run. A start tag still
+   * being written is read again only while it is short or once it has doubled
+   * since it was last read, so a long unfinished tag streamed in small chunks
+   * costs linear time. It is read in full when it ends (or at `finish`), and
+   * a browser shows no element for it before then.
+   */
   findings(): HtmlFindings {
     if (this.complete() || this.committed.limit !== undefined) return { ...this.committed };
     const findings = { ...this.committed };
     const pending = (this.parser.tokenizer as unknown as TokenizerInternals).currentToken;
     if (pending?.type === Token.TokenType.START_TAG) {
-      this.checkTag(pending.tagName, pending.attrs, findings, false);
+      const size = pending.attrs.reduce((total, attribute) => total + attribute.name.length + attribute.value.length, pending.tagName.length);
+      if (pending !== this.pending?.tag || size <= PENDING_TAG_REREAD_SIZE || size >= 2 * this.pending.size) {
+        const found: HtmlFindings = {};
+        this.checkTag(pending.tagName, pending.attrs, found, false);
+        this.pending = { tag: pending, size, found };
+      }
+      findings.embed ??= this.pending.found.embed;
+      findings.url ??= this.pending.found.url;
     }
     return findings;
   }
@@ -547,7 +565,11 @@ export class HtmlScanner {
    */
   finish(): HtmlFindings {
     if (!this.finished) {
-      const pending = this.findings();
+      const pending = { ...this.committed };
+      const tag = (this.parser.tokenizer as unknown as TokenizerInternals).currentToken;
+      if (!this.complete() && this.committed.limit === undefined && tag?.type === Token.TokenType.START_TAG) {
+        this.checkTag(tag.tagName, tag.attrs, pending, false);
+      }
       this.run(() => this.parser.tokenizer.write("", true));
       this.finished = true;
       if (this.committed.limit === undefined) {

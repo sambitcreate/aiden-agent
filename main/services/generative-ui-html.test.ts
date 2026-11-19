@@ -56,6 +56,48 @@ test("the wrapper keeps head styles and scripts without a src, in order, and dro
   assert.ok(body.indexOf("<STYLE>i{}</STYLE>") < body.indexOf("<p>x</p>"));
 });
 
+/**
+ * Asserts that `run` takes roughly linear time: four times the input may take
+ * at most eight times as long (a quadratic step takes sixteen). Each size is
+ * timed after a warm-up, as the fastest of three runs, so a busy machine
+ * slows both sizes alike.
+ */
+function assertScalesLinearly(label: string, run: (size: number) => void, size: number): void {
+  const fastest = (n: number) => {
+    let best = Number.POSITIVE_INFINITY;
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const started = performance.now();
+      run(n);
+      best = Math.min(best, performance.now() - started);
+    }
+    return best;
+  };
+  run(size);
+  const small = fastest(size);
+  const large = fastest(size * 4);
+  assert.ok(large < Math.max(small, 5) * 8, `${label}: ${Math.round(small)} ms at ${size}, ${Math.round(large)} ms at ${size * 4}`);
+}
+
+const streamInChunks = (html: string, chunk: number): boolean => {
+  const check = createGenerativeUiDraftCheck();
+  let admitted = true;
+  for (let at = 0; at < html.length && admitted; at += chunk) admitted = check.append(html.slice(at, at + chunk));
+  return admitted;
+};
+
+test("streaming a long unfinished tag in small chunks takes linear time", () => {
+  const unfinished: Record<string, (size: number) => string> = {
+    smilValues: (size) => `<svg><a><animate attributeName="href" values="${";".repeat(size)}`,
+    urlValue: (size) => `<a href="${" ".repeat(size)}`,
+    handler: (size) => `<p onclick="${"x;".repeat(size / 2)}`,
+  };
+  for (const [shape, build] of Object.entries(unfinished)) {
+    assertScalesLinearly(shape, (size) => assert.equal(streamInChunks(build(size), 64), true), 32_768);
+  }
+  // A refusal in an unfinished tag still stops the draft before the tag ends.
+  assert.equal(streamInChunks(`<p>Chart</p><a href="javascript:${"x".repeat(100_000)}`, 64), false);
+});
+
 test("checking, wrapping or streaming a visual at the size cap stays well under a second, whatever its shape", () => {
   const cap = 512 * 1024 - 64;
   const fill = (unit: string, before = "", after = "") =>
