@@ -4389,7 +4389,7 @@ export const llmClient = {
         const declaredBefore = onDemandDeclaredOfBranch(journalBranch);
         runtimeTools = onDemandTools.initialTools(initialMessages, preloadedOnDemandTools, declaredBefore);
         generationContextOptions.tools = runtimeTools;
-        // Record the list when it grew, so a preloaded tool the turn never
+        // Record the list when it changed, so a preloaded tool the turn never
         // called (a /visualize turn's render_artifact) keeps its place on the
         // next turn instead of dropping out of the cached tool prefix.
         const declaredNow = onDemandDeclaredNames(runtimeTools, onDemandTools.onDemand);

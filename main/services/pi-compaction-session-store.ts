@@ -33,6 +33,7 @@ import type { ChatMessage } from "./types.js";
 import type { ChatForkSummaryV1 } from "../../renderer/shared/chat-copy-contract.js";
 import { CANVAS_STATUS_SECTION } from "../../renderer/shared/design-canvas/canvas-summary.js";
 import { DESIGN_PAGE_INSPECT_SECTION } from "./design-canvas/inspect-note.js";
+import { ON_DEMAND_DECLARED_ENTRY, onDemandDeclaredOfBranch } from "./on-demand-tools.js";
 
 export const AIDEN_CHAT_MESSAGE_MARKER = "aiden.chat-message.v1";
 export const AIDEN_PI_TRANSACTION = "aiden.pi-transaction.v1";
@@ -463,7 +464,8 @@ export async function projectVisibleHistoryWithoutSkills<M extends PiSessionMeta
           message: { role: "branchSummary", summary: forkSummaryModelText(forkSummary), fromId: null, timestamp: marker.timestamp },
         }]
       : [];
-  const notesAfter = canvasStatusNotesByMessage(await session.getBranch());
+  const durableBranch = await session.getBranch();
+  const notesAfter = canvasStatusNotesByMessage(durableBranch);
   const visible: PiSessionEntry[] = [];
   for (const [index, message] of messages.entries()) {
     const marker: PiSessionEntry = {
@@ -485,6 +487,16 @@ export async function projectVisibleHistoryWithoutSkills<M extends PiSessionMeta
         seq: marker.seq, timestamp: note.timestamp, message: note.message,
       })),
     );
+  }
+  // The on-demand tools the last run declared hold only tool names. Carried
+  // forward, the next run declares them in the same place, so its cached tool
+  // prefix holds; a run that declares a different list journals a new record
+  // after the cutoff, which then wins.
+  if (durableBranch.some((entry) => entry.type === "custom" && entry.customType === ON_DEMAND_DECLARED_ENTRY)) {
+    visible.push({
+      type: "custom", id: "visible-skill-free-on-demand-declared", parentId: null, seq: -1, timestamp: 0,
+      customType: ON_DEMAND_DECLARED_ENTRY, data: { names: onDemandDeclaredOfBranch(durableBranch) },
+    });
   }
   for (const [index, entry] of visible.entries()) entry.parentId = index === 0 ? null : visible[index - 1]!.id;
   // Compaction fences writes against the real durable leaf. Keep that identity
