@@ -968,6 +968,11 @@ test("a refused visual's error quotes the markup that was refused", () => {
     () => validateGenerativeUiHtml(`<div id="d"></div><script>d.innerHTML = '<iframe src="https://evil.test/">';</script>`),
     (error: Error) => error.message.includes('found "<iframe src=\\"https://evil.test/\\">")'),
   );
+  // A handler joined from strings is quoted as the call the source writes, so it is not marked as joined.
+  assert.throws(
+    () => validateGenerativeUiHtml(`<button id="b"></button><script>b.setAttribute('onclick', 'loca' + "tion='javascript:alert(1)'"); b.click()</script>`),
+    (error: Error) => error.message.includes(`found "setAttribute('onclick', 'loca' + \\"tion=`) && !error.message.includes("joins from strings"),
+  );
 });
 
 test("parent CSP lists only self frames so arbitrary https frames stay denied", async () => {

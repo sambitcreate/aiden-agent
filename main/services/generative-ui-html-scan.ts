@@ -1272,9 +1272,11 @@ function scanJsTokens(
       return;
     }
     const handler = findJsSink(body, depth + 1);
-    // A handler too complex to read is refused as that, not as a URL it may not send.
+    // A handler too complex to read is refused as that, not as a URL it may
+    // not send. The excerpt is the call as the source writes it, so it is
+    // never marked as joined, even when the handler is.
     if (handler.limit !== undefined) report({ limit: handler.limit });
-    else if (handler.url !== undefined || handler.embed !== undefined) report({ url: excerpt });
+    else if (handler.url !== undefined || handler.embed !== undefined) note({ url: excerpt });
   };
 
   // XML a page takes nodes from (DOMParser's XML, XHTML and SVG types):
