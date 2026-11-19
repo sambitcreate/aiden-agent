@@ -357,8 +357,11 @@ test("same-generation title replaces the previous staged artifact", async () => 
   });
   const tool = extension.tools?.[0];
   assert.ok(tool);
-  await tool.execute("call-a", { title: "Chart", html: "<p>aaa</p>" });
-  await tool.execute("call-b", { title: "Chart", html: "<p>bbb</p>" });
+  const resultText = (result: { content: { type: string; text?: string }[] }) => result.content.map((part) => part.text ?? "").join("");
+  const first = await tool.execute("call-a", { title: "Chart", html: "<p>aaa</p>" });
+  const second = await tool.execute("call-b", { title: "Chart", html: "<p>bbb</p>" });
+  assert.match(resultText(first), /^Rendered artifact "Chart"/u);
+  assert.match(resultText(second), /Replaced the artifact "Chart" in place/u, "Aiden hears that the redraw replaced the first");
   assert.equal(artifacts.length, 2);
   assert.equal(artifacts[0]?.mediaId, artifacts[1]?.mediaId);
   assert.equal(artifacts[0]?.size, artifacts[1]?.size);

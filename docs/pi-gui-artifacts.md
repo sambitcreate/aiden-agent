@@ -31,7 +31,7 @@ Design and roadmap: [Inline Generative UI](superpowers/specs/2026-10-08-inline-g
    - `visualize_guide({ modules })` returns design, HTML, chart, and interactivity guidance on demand (`main/services/generative-ui-guide.ts`), which keeps the system prompt short.
 
    Replay is `"never"` for both tools.
-3. **Placement.** Each visual renders right after the activity row of the `render_artifact` call that produced it.
+3. **Placement.** Each visual renders right after the activity row of the `render_artifact` call that produced it. A second `render_artifact` call in the same reply with the same title replaces that artifact where it first appeared, and its result says it was replaced in place.
    - The message stores `htmlArtifactPlacements: [{ mediaId, toolCallId, layout? }]` beside `htmlArtifacts`, never inside it, because older builds drop the whole artifact list on an unknown key. The placement parser ignores unknown keys, so later fields never drop a placement.
    - Placement ids are the timeline's public `call-N` ids. `generative-ui-placements.ts` translates Pi's raw ids.
    - Artifacts with no placement or no matching step trail the response.

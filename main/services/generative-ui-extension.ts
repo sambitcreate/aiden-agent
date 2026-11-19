@@ -382,7 +382,9 @@ export function createGenerativeUiExtensionRuntime(
             content: [
               {
                 type: "text",
-                text: `Rendered artifact "${title}" inline from ${sourceLabel} (${size} bytes).`,
+                text: replacing && presented
+                  ? `Replaced the artifact "${title}" in place from ${sourceLabel} (${size} bytes); the person now sees this version.`
+                  : `Rendered artifact "${title}" inline from ${sourceLabel} (${size} bytes).`,
               },
             ],
             details: null,
