@@ -727,7 +727,7 @@ test("where a value lands decides what it may be: no option, no refspec, no file
   assert.deepEqual(run("test {{x}} = main", "/etc/passwd").steps[0]!.pipeline[0]!.argv, ["test", "/etc/passwd", "=", "main"]);
   assert.deepEqual(run("test -n {{x}}", "/etc/passwd").steps[0]!.pipeline[0]!.argv, ["test", "-n", "/etc/passwd"]);
   assert.deepEqual(run("test -e {{x}}", "notes/today.md").steps[0]!.pipeline[0]!.argv, ["test", "-e", "notes/today.md"]);
-  // A GitHub search stays in this repository: no repo:, org: or user: qualifier, in any case or place.
+  // A GitHub search stays in this repository: no repo:, org:, user: or owner: qualifier, in any case or place.
   for (const [command, value] of [
     ["gh pr list --search {{x}}", "repo:acme/secret is:open"],
     ["gh pr list --search {{x}}", "is:open ORG:acme"],
@@ -735,12 +735,15 @@ test("where a value lands decides what it may be: no option, no refspec, no file
     ["gh issue list --search {{x}}", "-label:bug (repo:acme/other)"],
     ["gh label list --search {{x}}", "org:acme"],
     ["gh pr list --search is:open+{{x}}", "repo:acme/other"],
+    ["gh pr list --search {{x}}", "is:open owner:acme"],
+    ["gh issue list --search {{x}}", "fix -Owner:acme"],
   ]) {
-    assert.throws(() => run(command!, value!), /x cannot hold a repo:, org: or user: qualifier there/u, `${command} ${value}`);
+    assert.throws(() => run(command!, value!), /x cannot hold a repo:, org:, user: or owner: qualifier there/u, `${command} ${value}`);
   }
-  assert.deepEqual(run("gh pr list --search {{x}}", "is:open label:bug author:@me").steps[0]!.pipeline[0]!.argv, [
-    "gh", "pr", "list", "--search", "is:open label:bug author:@me",
-  ]);
+  // A word that only ends in one of those names is search text, as are other qualifiers.
+  for (const value of ["is:open label:bug author:@me", "Georg: fix the build", "superuser:x", "in:title reporg", "is:issue userland: crash"]) {
+    assert.deepEqual(run("gh pr list --search {{x}}", value).steps[0]!.pipeline[0]!.argv, ["gh", "pr", "list", "--search", value], value);
+  }
   // A grep pattern is not a file.
   assert.deepEqual(run("grep -F {{x}} notes.txt", "/etc/hosts").steps[0]!.pipeline[0]!.argv, ["grep", "-F", "/etc/hosts", "notes.txt"]);
   // A gh number or branch cannot point at another repository or a URL; a count is a whole number.
