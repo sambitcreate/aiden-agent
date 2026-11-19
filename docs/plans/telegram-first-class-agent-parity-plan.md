@@ -173,4 +173,5 @@ Acceptance: focused tests, `npm run type-check`, scoped lint, full test, build, 
 ## Upstream limitations
 
 - Same-thread `/new` remains unavailable unless Aiden adds an explicit remote session-replacement transaction. It must not be approximated by deleting history or launching a hidden process.
+- On Bot-bound Telegram routes backed by a durable Bot session (`botIngress`), `/queue`, `/continue`, expanded prompt templates, and `tgbtn:` buttons enter the Bot's durable session (`whenBusy: "followUp"`), and `/stop` / `/abort` / `/cancel` invoke durable Bot Stop (which withdraws queued follow-ups). `/interrupt`, `/next`, `/steer`, per-item queue editing, and explicit `/skill` invocations are explicitly unavailable on durable Bot routes rather than falling back to a legacy backing chat; debounced Bot albums retry transient admission failures in-process with bounded backoff while remaining non-crash-durable before session acceptance.
 - Telegram client rendering for Rich blocks, native drafts, reactions, private-chat threads, and voice must be confirmed in a real paired bot; Bot API type support alone is insufficient evidence.
