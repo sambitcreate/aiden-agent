@@ -284,9 +284,9 @@ export function createDaemonChats(agentDir: string) {
         if (memory && "close" in memory && memory.close) closers.push(memory.close);
         const extensions: InlineExtension[] = !memory ? [] : [
           memory,
-          createTodoInlineExtension({ latestContext: () => undefined }),
+          createTodoInlineExtension(),
           createMcpExtension(agentDir),
-          createAdvisorInlineExtension({ agentDir, latestContext: () => undefined }),
+          createAdvisorInlineExtension({ agentDir }),
           createArtifactsExtension(agentDir),
         ];
         if (!botAdmission && workspace.folderPath) {

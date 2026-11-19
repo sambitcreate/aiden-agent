@@ -22,7 +22,8 @@ export interface McpStdioTransportOptions {
   closeGraceMs?: number;
   /**
    * `inherit` (default) forwards the server's stderr to Aiden's; `pipe` keeps
-   * a bounded tail in the transport instead (the CLI's TUI owns the terminal).
+   * a bounded tail in the transport instead, so the headless server's own log
+   * and terminal output are not interleaved with every MCP server's.
    */
   stderr?: "inherit" | "pipe";
 }

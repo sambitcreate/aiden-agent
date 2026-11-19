@@ -275,13 +275,18 @@ export class PeerBootstrapTransport implements PeerBootstrapClient {
         request.destroy();
       };
       input.signal?.addEventListener("abort", abort, { once: true });
-      request.on("error", (error) =>
+      request.on("error", (error) => {
+        const identity = isPeerIdentityTlsError(error);
         finish(
           new PeerTransportError(
-            isPeerIdentityTlsError(error) ? "identity_changed" : "unavailable",
+            identity ? "identity_changed" : "unavailable",
+            undefined,
+            undefined,
+            undefined,
+            identity ? { identitySource: "tls" } : undefined,
           ),
-        ),
-      );
+        );
+      });
       deadline = setTimeout(abort, timeoutMs);
       request.end(body);
     });

@@ -708,6 +708,47 @@ test("a merged Settings page switches tabs in place and Back to app leaves in on
   await expect(navigation).toHaveCount(0);
 });
 
+test("a Settings page or tab opens at the top, not at the last page's offset", async ({ aiden }) => {
+  const { page } = aiden;
+  await finishLmStudioOnboarding(page);
+  // Short enough that every page below scrolls.
+  await aiden.app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(1100, 560));
+  await page.getByRole("button", { name: "Settings", exact: true }).click();
+  const navigation = page.getByRole("navigation", { name: "Settings" });
+  const content = page.locator('[data-scroll-restoration-id^="settings-"]');
+  const scrollDown = async () => {
+    await expect.poll(() => content.evaluate((element) => element.scrollHeight - element.clientHeight)).toBeGreaterThan(200);
+    await content.evaluate((element) => element.scrollTo({ top: element.scrollHeight }));
+    await expect.poll(() => content.evaluate((element) => element.scrollTop)).toBeGreaterThan(200);
+  };
+
+  await navigation.getByRole("button", { name: "Appearance", exact: true }).click();
+  await expect(page.getByRole("heading", { level: 1, name: "Appearance", exact: true })).toBeVisible();
+  await scrollDown();
+  await navigation.getByRole("button", { name: "Voice & Speech", exact: true }).click();
+  await expect(page.getByRole("heading", { level: 1, name: "Voice & Speech", exact: true })).toBeVisible();
+  await expect.poll(() => content.evaluate((element) => element.scrollTop)).toBe(0);
+
+  // A tab on a merged page starts at the top too, and the chosen tab keeps focus.
+  await scrollDown();
+  const tts = page.getByRole("tab", { name: "Text to Speech", exact: true });
+  await tts.click();
+  await expect(tts).toHaveAttribute("aria-selected", "true");
+  await expect.poll(() => content.evaluate((element) => element.scrollTop)).toBe(0);
+  await expect(tts).toBeFocused();
+
+  // Going from a spot on a page (the Links row on Appearance) to the page itself starts at the top as well.
+  const search = page.getByRole("searchbox", { name: "Search settings" });
+  await search.fill("open links");
+  await navigation.getByRole("button", { name: "Appearance", exact: true }).click();
+  await expect(page.getByRole("combobox", { name: "Open chat links in", exact: true })).toBeInViewport();
+  await expect.poll(() => content.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
+  await search.fill("");
+  await navigation.getByRole("button", { name: "Appearance", exact: true }).click();
+  await expect.poll(() => content.evaluate((element) => element.scrollTop)).toBe(0);
+  await expect(page.getByRole("heading", { level: 1, name: "Appearance", exact: true })).toBeInViewport();
+});
+
 test("settings search opens the tab that matched, the Links row on Appearance and Bot messaging on Approvals", async ({ aiden }) => {
   const { page } = aiden;
   await finishLmStudioOnboarding(page);

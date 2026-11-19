@@ -370,39 +370,44 @@ export class AidenRemoteBotFileService {
       identity: { device: string; inode: string };
     }) => Promise<T>,
   ): Promise<T> {
-    let stored: AidenOpaqueHandleClaims;
+    const release = this.handles.pin(fileId);
     try {
-      stored = this.handles.claimsFor(fileId, "file");
-    } catch (error) {
-      mapHandleError(error);
-    }
-    const botId = await this.botIdForChat(chatId);
-    return this.withAuthority(botId, chatId, async (authority) => {
+      let stored: AidenOpaqueHandleClaims;
       try {
-        if (!stored.displayPath) throw new AidenOpaqueHandleError("handle_invalid");
-        const displayPath = safeDisplayPath(stored.displayPath);
-        await authority.revalidateBeforeEffect();
-        const current = await this.claims(
-          deviceId,
-          authority,
-          displayPath,
-          stored.snapshotId ?? "",
-          stored.expiresAt,
-        );
-        this.handles.resolve(fileId, "file", current);
-        await authority.revalidateBeforeEffect();
-        return await operation({
-          folderPath: authority.workingDirectory,
-          displayPath,
-          signal: authority.signal,
-          identity: { device: current.filesystemDevice, inode: current.filesystemInode },
-        });
+        stored = this.handles.claimsFor(fileId, "file");
       } catch (error) {
-        if (error instanceof AidenOpaqueHandleError) mapHandleError(error);
-        if (error instanceof BotRuntimeAuthorityError) mapAuthorityError(error);
-        throw error;
+        mapHandleError(error);
       }
-    });
+      const botId = await this.botIdForChat(chatId);
+      return await this.withAuthority(botId, chatId, async (authority) => {
+        try {
+          if (!stored.displayPath) throw new AidenOpaqueHandleError("handle_invalid");
+          const displayPath = safeDisplayPath(stored.displayPath);
+          await authority.revalidateBeforeEffect();
+          const current = await this.claims(
+            deviceId,
+            authority,
+            displayPath,
+            stored.snapshotId ?? "",
+            stored.expiresAt,
+          );
+          this.handles.resolve(fileId, "file", current);
+          await authority.revalidateBeforeEffect();
+          return await operation({
+            folderPath: authority.workingDirectory,
+            displayPath,
+            signal: authority.signal,
+            identity: { device: current.filesystemDevice, inode: current.filesystemInode },
+          });
+        } catch (error) {
+          if (error instanceof AidenOpaqueHandleError) mapHandleError(error);
+          if (error instanceof BotRuntimeAuthorityError) mapAuthorityError(error);
+          throw error;
+        }
+      });
+    } finally {
+      release();
+    }
   }
 
   read(

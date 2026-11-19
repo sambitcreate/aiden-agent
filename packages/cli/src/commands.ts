@@ -3,6 +3,17 @@ import { join, resolve } from "node:path";
 import type { AidenRemoteDesktopPairing } from "../../../main/services/aiden-remote-pairing.js";
 import { CLI_COMMAND_HELP } from "./command-help.ts";
 
+/**
+ * Every first word `dispatchCommand` handles. A word missing here is refused
+ * before dispatch, so add a new command to this list, its `case` below and
+ * `aiden help` together (tests/runtime.test.mjs checks the list against help).
+ */
+export const CLI_COMMANDS: readonly string[] = [
+  "serve", "service", "remote", "apps", "auth", "provider", "workspace", "mcp", "hooks", "schedule", "bots",
+  "telegram", "speech", "app", "catalog", "insights", "web-search", "search", "import", "export", "files", "git",
+  "worktree", "telemetry", "help",
+];
+
 // Each command loads its own module on demand, so an administration command
 // does not evaluate the daemon, Telegram, speech, or pairing code it is not
 // going to run.

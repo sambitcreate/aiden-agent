@@ -53,10 +53,3 @@ export function aidenExtensionToInlineFactory(
 		},
 	};
 }
-
-/** Latest ExtensionContext captured from session lifecycle events. */
-export interface CapturedContext {
-	hasUI: boolean;
-	mode: "tui" | "rpc" | "json" | "print";
-	ui: unknown;
-}

@@ -77,7 +77,7 @@ Settings → **Approvals**, one control:
 | --- | --- |
 | **Auto** (default when a usable model exists) | "A model approves routine actions and asks you about the rest." |
 | **Ask** | "Asks before sending, spending or changing anything." |
-| **Never ask** | "Asks only before purchases, sharing your data and the first use of your Mac. Only Block rules apply." |
+| **Never ask** | "Asks only before purchases, sharing your data and the first use of your Mac. Only Block rules apply." ("computer" on Linux and on phones) |
 
 - With no usable model, Auto is hidden and the mode is Ask.
 - There is no per-Bot mode. Every Bot follows the global mode.
@@ -483,7 +483,7 @@ Phase 6c notes (2026-11-13, the Android half):
 ## 9. Owner decisions (2026-11-12)
 
 1. **Schedule and automation changes keep their foreground confirmation** (deviation b). Yes.
-2. **Disclosure tools still ask in Never ask** (deviation e). Yes. The Never ask helper reads "Asks only before purchases, sharing your data and the first use of your Mac. Only Block rules apply."
+2. **Disclosure tools still ask in Never ask** (deviation e). Yes. The Never ask helper reads "Asks only before purchases, sharing your data and the first use of your Mac. Only Block rules apply." ("computer" on Linux and on phones).
 3. **Auto is the default even when the only model is local or metered.** Yes. A slow judge times out to a card, and judge spend shows in usage.
 4. **"Hand off to me" stays** as the row-menu option "Do it myself" on Always-ask rows. Yes.
 5. **Computer Use grants per app?** No. One grant covers all apps (deviation f).

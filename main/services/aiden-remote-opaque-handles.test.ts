@@ -178,3 +178,156 @@ test("one device cannot take the whole handle store from other paired devices", 
   const fresh = store.issue("file", phone("3"), { listing: "phone:workspace" });
   assert.deepEqual(store.resolve(fresh, "file", phone("3"), { now }).filesystemInode, "3");
 });
+
+test("pressure reclamation prunes expired first, then superseded, then device-local lazy LRU while preserving protected and other-device handles", () => {
+  let now = 1_000;
+  const store = new AidenOpaqueHandleStore({ maxEntries: 6, maxEntriesPerDevice: 5, now: () => now });
+  const dev1 = (inode: string, extra: Partial<AidenOpaqueHandleClaims> = {}) =>
+    claims({ deviceId: "device-1", filesystemInode: inode, expiresAt: 10_000, ...extra });
+  const dev2 = (inode: string, extra: Partial<AidenOpaqueHandleClaims> = {}) =>
+    claims({ deviceId: "device-2", filesystemInode: inode, expiresAt: 10_000, ...extra });
+
+  // Issue 1 handle on device-2 (live lazy page) and 5 handles on device-1 (fills both global 6 and device-1's 5).
+  const otherDeviceHandle = store.issue("file", dev2("other-1"), {
+    listing: "lazy\u0000device-2\u0000ws\u0000r\u0000d",
+    generation: "other-gen-1",
+    lazyPage: true,
+  });
+  const expiringSoon = store.issue("file", dev1("expiring", { expiresAt: 1_500 }), {
+    listing: "lazy\u0000device-1\u0000ws\u0000r\u0000d0",
+    generation: "gen-0",
+    lazyPage: true,
+  });
+  const supersededUnopened = store.issue("file", dev1("sup-unopened"), {
+    listing: "lazy\u0000device-1\u0000ws\u0000r\u0000d1",
+    generation: "gen-1",
+    lazyPage: true,
+  });
+  const supersededOpened = store.issue("file", dev1("sup-opened"), {
+    listing: "lazy\u0000device-1\u0000ws\u0000r\u0000d1",
+    generation: "gen-1",
+    lazyPage: true,
+  });
+  // Opening as a document protects supersededOpened even after its directory generation is superseded.
+  store.resolve(supersededOpened, "file", dev1("sup-opened"), { now });
+  store.supersedeListing("lazy\u0000device-1\u0000ws\u0000r\u0000d1");
+
+  const dirOlder = store.issue("file", dev1("dir-older", { kind: "directory" }), {
+    listing: "lazy\u0000device-1\u0000ws\u0000r\u0000root",
+    generation: "gen-root",
+    lazyPage: true,
+  });
+  const dirUntouched = store.issue("file", dev1("dir-untouched", { kind: "directory" }), {
+    listing: "lazy\u0000device-1\u0000ws\u0000r\u0000root",
+    generation: "gen-root",
+    lazyPage: true,
+  });
+  // Navigating dirOlder moves it ahead of dirUntouched in LRU without making it immortal.
+  store.resolve(dirOlder, "file", dev1("dir-older", { kind: "directory" }), { now, navigation: true });
+
+  // 1. Advance past expiringSoon (1,500): expired entry is pruned BEFORE supersededUnopened!
+  now = 1_600;
+  const issuedAfterExpiry = store.issue("file", dev1("after-expiry"), {
+    listing: "lazy\u0000device-1\u0000ws\u0000r\u0000d2",
+    generation: "gen-2",
+    lazyPage: true,
+  });
+  rejectsCode(() => store.claimsFor(expiringSoon, "file"), "handle_invalid");
+  assert.equal(store.claimsFor(supersededUnopened, "file").filesystemInode, "sup-unopened");
+  assert.equal(store.claimsFor(issuedAfterExpiry, "file").filesystemInode, "after-expiry");
+
+  // 2. With no expired entries left, supersededUnopened is reclaimed BEFORE live lazy-page handles.
+  const issuedAfterSuperseded = store.issue("file", dev1("after-superseded"), {
+    listing: "lazy\u0000device-1\u0000ws\u0000r\u0000d2",
+    generation: "gen-2",
+    lazyPage: true,
+  });
+  rejectsCode(() => store.claimsFor(supersededUnopened, "file"), "handle_invalid");
+  assert.equal(store.claimsFor(supersededOpened, "file").filesystemInode, "sup-opened");
+  assert.equal(store.claimsFor(dirUntouched, "file").filesystemInode, "dir-untouched");
+  assert.equal(store.claimsFor(dirOlder, "file").filesystemInode, "dir-older");
+  assert.equal(store.claimsFor(issuedAfterSuperseded, "file").filesystemInode, "after-superseded");
+
+  // 3. With no superseded entries left, LRU lazy-page handle (dirUntouched) is reclaimed BEFORE recently navigated dirOlder.
+  const saveReserved = store.issue("file", dev1("save-reserved"), { protectedDocument: true });
+  rejectsCode(() => store.claimsFor(dirUntouched, "file"), "handle_invalid");
+  assert.equal(store.claimsFor(dirOlder, "file").filesystemInode, "dir-older");
+  assert.equal(store.claimsFor(supersededOpened, "file").filesystemInode, "sup-opened");
+  assert.equal(store.claimsFor(saveReserved, "file").filesystemInode, "save-reserved");
+
+  // 4. Continued pressure CAN still reclaim dirOlder (navigation did not make it immortal), while preserving device-2.
+  store.issue("file", dev1("next-1"), { listing: "lazy\u0000device-1\u0000ws\u0000r\u0000d3", generation: "gen-3", lazyPage: true });
+  rejectsCode(() => store.claimsFor(dirOlder, "file"), "handle_invalid");
+  assert.equal(store.claimsFor(otherDeviceHandle, "file").filesystemInode, "other-1");
+  assert.equal(store.storedTokenMaterialForTesting().length <= 6, true);
+});
+
+test("retireGeneration retires only the targeted generation and batch assembly protects in-flight handles and rolls back failures", () => {
+  const now = 1_000;
+  const store = new AidenOpaqueHandleStore({ maxEntries: 4, maxEntriesPerDevice: 4, now: () => now });
+  const c = (inode: string, extra: Partial<AidenOpaqueHandleClaims> = {}) =>
+    claims({ deviceId: "device-1", filesystemInode: inode, expiresAt: 10_000, ...extra });
+
+  const scope = "lazy\u0000device-1\u0000ws\u0000r\u0000dir";
+  const gen1Open = store.issue("file", c("g1-open"), { listing: scope, generation: "gen-1", lazyPage: true });
+  const gen1Idle = store.issue("file", c("g1-idle"), { listing: scope, generation: "gen-1", lazyPage: true });
+  store.resolve(gen1Open, "file", c("g1-open"), { now });
+
+  // Start gen-2 on the same scope, then retire gen-1 explicitly: gen-2 stays active, gen1Open stays protected.
+  store.supersedeListing(scope);
+  const gen2Live = store.issue("file", c("g2-live"), { listing: scope, generation: "gen-2", lazyPage: true });
+  store.retireGeneration("gen-1");
+  const sibling = store.issue("file", c("sib-1"), {
+    listing: "lazy\u0000device-1\u0000ws\u0000r\u0000sib",
+    generation: "gen-sib",
+    lazyPage: true,
+  });
+
+  // Store has 4 handles: gen1Open (protected), gen1Idle (superseded), gen2Live (live), sibling (live).
+  // Pinning gen2Live and assembling a 3-handle batch (2 files + 1 cursor) can reclaim gen1Idle and sibling,
+  // cannot reclaim gen1Open or pinned gen2Live or earlier handles of the batch itself, so the 3rd batch handle hits capacity and rolls back!
+  const unpinGen2 = store.pin(gen2Live);
+  const failedBatch = store.beginBatch([gen2Live]);
+  let b1 = "";
+  let b2 = "";
+  try {
+    b1 = failedBatch.issue("file", c("batch-1"), { listing: "lazy\u0000device-1\u0000ws\u0000r\u0000b", generation: "gen-b", lazyPage: true });
+    b2 = failedBatch.issue("file", c("batch-2"), { listing: "lazy\u0000device-1\u0000ws\u0000r\u0000b", generation: "gen-b", lazyPage: true });
+    rejectsCode(
+      () => failedBatch.issue("cur", c("batch-cur", { kind: undefined, cursorOffset: 200 }), {
+        listing: "lazy\u0000device-1\u0000ws\u0000r\u0000b",
+        generation: "gen-b",
+        lazyPage: true,
+      }),
+      "handle_capacity",
+    );
+  } finally {
+    failedBatch.dispose();
+    unpinGen2();
+  }
+  // Rollback discarded b1 and b2 (after reclaiming gen1Idle and sibling), while gen1Open and gen2Live survived intact.
+  rejectsCode(() => store.claimsFor(gen1Idle, "file"), "handle_invalid");
+  rejectsCode(() => store.claimsFor(sibling, "file"), "handle_invalid");
+  rejectsCode(() => store.claimsFor(b1, "file"), "handle_invalid");
+  rejectsCode(() => store.claimsFor(b2, "file"), "handle_invalid");
+  assert.equal(store.claimsFor(gen1Open, "file").filesystemInode, "g1-open");
+  assert.equal(store.claimsFor(gen2Live, "file").filesystemInode, "g2-live");
+
+  // A 2-handle batch (1 file + 1 outgoing cursor) fits in the 2 free slots, keeps both alive through commit.
+  const okBatch = store.beginBatch([gen2Live]);
+  let okFile = "";
+  let okCursor = "";
+  try {
+    okFile = okBatch.issue("file", c("ok-file"), { listing: "lazy\u0000device-1\u0000ws\u0000r\u0000ok", generation: "gen-ok", lazyPage: true });
+    okCursor = okBatch.issue("cur", c("ok-cur", { kind: undefined, cursorOffset: 200 }), {
+      listing: "lazy\u0000device-1\u0000ws\u0000r\u0000ok",
+      generation: "gen-ok",
+      lazyPage: true,
+    });
+    okBatch.commit();
+  } finally {
+    okBatch.dispose();
+  }
+  assert.equal(store.claimsFor(okFile, "file").filesystemInode, "ok-file");
+  assert.equal(store.claimsFor(okCursor, "cur").cursorOffset, 200);
+});
