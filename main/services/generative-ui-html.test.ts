@@ -297,7 +297,19 @@ const DEEP_NESTED_SINKS = Object.fromEntries(
 const IFRAME_MARKUP = JSON.stringify("<iframe src=https://e.test></iframe>");
 const IFRAME_HANDLER = JSON.stringify(IFRAME_SINK);
 const literalSink = (js: string) => `<p>x</p><button id=b onclick="void 0">Go</button><a id=a>x</a><script>${js}</script>`;
+// Sinks reached through a split string, a wrapped callee or a shifted argument.
+const INDIRECT_SINKS: Record<string, string> = {
+  "markup written after a value and a +": `document.body.innerHTML = x + ${IFRAME_MARKUP}`,
+  "markup written after a number and a +": `document.body.innerHTML = 0 + ${IFRAME_MARKUP}`,
+  "markup split between a string and a parenthesized one": `document.body.innerHTML = '<ifr' + ('ame src=https://e.test></iframe>')`,
+  "markup split around a value": `document.body.innerHTML = '<p>' + name + '</p><ifr' + x + 'ame src=https://e.test></iframe>'`,
+  "a handler split around a value": `b.setAttribute('onclick', "document.body.inner" + x + "HTML='<iframe src=https://e.test></iframe>'"); b.click()`,
+  "a javascript: URL continued in an array after a +": "location = 'java' + ['script:alert(1)']",
+  "a javascript: URL in parentheses after an empty string": "location = '' + ('javascript:alert(1)')",
+  "a javascript: URL split by an empty template substitution": "location = `java${''}script:alert(1)`",
+};
 const LITERAL_SINKS: Record<string, string> = {
+  ...INDIRECT_SINKS,
   "an optional setAttribute call": `b.setAttribute?.('onclick', ${IFRAME_HANDLER}); b.click()`,
   "an optional document.write call": `document.write?.(${IFRAME_MARKUP})`,
   "an optional insertAdjacentHTML call": `document.body.insertAdjacentHTML?.('beforeend', ${IFRAME_MARKUP})`,
@@ -513,6 +525,15 @@ const ADMITTED_MARKUP: Record<string, string> = {
         "note.textContent = String.raw`<iframe>`",
       ].join("\n"),
     ),
+  "markup and URLs built by joining strings with values": literalSink(
+    [
+      `list.innerHTML = '<a href="' + url + '">' + label + '</a>'`,
+      "row.innerHTML = '<td>' + v + '</td>'",
+      `pic.innerHTML = '<img alt="" src="data:image/png;base64,' + b64 + '">'`,
+      "location.href = base + '?q=' + encodeURIComponent(q)",
+      "a.href = `/search?q=${q}&page=${''}1`",
+    ].join("\n"),
+  ),
   // XML in no HTML, SVG or MathML namespace builds no element the page runs
   // or loads, and DOMParser throws for a type it does not know.
   "a script that reads an RSS feed, an Atom feed and a config file with DOMParser":
@@ -725,6 +746,14 @@ test("a sink nested past the depth the check reads again is refused, streamed in
   }
   assert.throws(() => validateGenerativeUiHtml(NESTED_LAYERS.innerHTML(4)), /too complex to check/u);
   assert.throws(() => validateGenerativeUiHtml(NESTED_LAYERS.setAttribute(4)), /too complex to check/u);
+});
+
+test("a sink reached through a split string, a wrapped callee or a shifted argument is refused, streamed in pieces too", () => {
+  for (const js of Object.values(INDIRECT_SINKS)) {
+    for (const chunk of [1, 7, 64]) {
+      assert.equal(streamInChunks(literalSink(js), chunk).admitted, false, `${chunk}-character pieces of ${js}`);
+    }
+  }
 });
 
 test("a refused visual's error quotes the markup that was refused", () => {
