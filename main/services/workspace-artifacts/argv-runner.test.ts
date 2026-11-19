@@ -611,7 +611,9 @@ test("git log, show and reset take a value as a revision or a file, adding -- on
     ["git show {{x}} --stat", "--stat", "git show --stat {{x}}"],
   ] as const) {
     const [, subcommand] = command.split(" ");
-    assert.notEqual(spawnSync("git", [subcommand!, "notes.md", option], { cwd: dir }).status, 0, `git itself fails on ${command} with a file`);
+    const itself = spawnSync("git", [subcommand!, "notes.md", option], { cwd: dir, encoding: "utf8" });
+    assert.notEqual(itself.status, 0, `git itself fails on ${command} with a file`);
+    assert.match(itself.stderr, new RegExp(`option '${option}' must come before non-option arguments`, "u"), command);
     assert.throws(() => resolve(command, ["notes.md"]), new RegExp(`Write ${option} before \\{\\{x\\}\\}`, "u"), command);
     for (const value of ["notes.md", "HEAD"]) {
       const ran = await run(moved, [value]);
@@ -710,7 +712,9 @@ test("a branch value for git checkout never discards a file's uncommitted edits"
   assert.equal(fs.readFileSync(path.join(dir, "a.ts"), "utf8"), "UNSAVED WORK\n");
   // A shell given the preview reads the value the same way.
   assert.equal(file.preview, "GIT_LITERAL_PATHSPECS=1 git checkout 'notes.md' --");
-  assert.notEqual(spawnSync("/bin/sh", ["-c", file.preview], { cwd: dir }).status, 0);
+  const shell = spawnSync("/bin/sh", ["-c", file.preview], { cwd: dir, encoding: "utf8" });
+  assert.notEqual(shell.status, 0);
+  assert.match(shell.stderr, /invalid reference/u);
   assert.equal(fs.readFileSync(path.join(dir, "notes.md"), "utf8"), "UNSAVED WORK\n");
   // A branch still switches, carrying the edits along.
   const switched = await runResolved(resolveWorkspaceArtifactCommand(action, ["feature"]), dir);

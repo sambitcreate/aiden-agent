@@ -18,6 +18,7 @@ import {
   type WorkspaceArtifactActionV1,
   type WorkspaceArtifactSourceV1,
 } from "./workspace-artifacts.js";
+import { runArgvPlan } from "../../main/services/workspace-artifacts/argv-runner.js";
 
 // How the parser refuses a template that puts page data where it could do more than be one argument.
 const PLACEMENT_REFUSED = /\{\{\w+\}\} cannot (?:sit|be|follow)|runs without a shell, so it may not use|may not be passed/u;
@@ -218,7 +219,7 @@ test("a placeholder must be its own unquoted word, or joined only to plain text"
   }
 });
 
-test("an option that takes its value only joined is refused with advice that saves when followed", () => {
+test("an option that takes its value only joined is refused with advice that saves when followed", async (t) => {
   const save = (command: string) => {
     const names = [...new Set([...command.matchAll(/\{\{(\w+)\}\}/gu)].map((match) => match[1]!))];
     return parseWorkspaceArtifactActions([{ name: "a", label: "A", command, params: names.map((name) => ({ name })) }]);
@@ -256,18 +257,24 @@ test("an option that takes its value only joined is refused with advice that sav
   // Any other joined option is told to take the value as a separate word only
   // where that word is the option's value; where it would not be, the refusal
   // says why instead. Each followed form runs, so the value is seen to reach
-  // the option rather than only to save.
+  // the option rather than only to save. git reads no config but the
+  // repository's, so a user's log.decorate or diff.renames cannot change it.
+  const env = { ...process.env, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1" };
   const repo = fs.mkdtempSync(path.join(os.tmpdir(), "aiden-joined-option-"));
-  const git = (...args: string[]) => execFileSync("git", ["-C", repo, "-c", "user.name=Test", "-c", "user.email=test@example.com", "-c", "commit.gpgsign=false", ...args], { encoding: "utf8" });
+  const git = (...args: string[]) =>
+    execFileSync("git", ["-C", repo, "-c", "user.name=Test", "-c", "user.email=test@example.com", "-c", "commit.gpgsign=false", ...args], { encoding: "utf8", env });
   git("init", "-q");
   fs.writeFileSync(path.join(repo, "notes.md"), "one\n");
   git("add", "notes.md");
   git("commit", "-qm", "one");
   fs.writeFileSync(path.join(repo, "notes.md"), "one\ntwo\nthree\n");
   git("commit", "-qam", "two");
+  // Runs the saved action as the runner does: its argument lists, without a shell.
   const run = (command: string, values: readonly string[]) => {
     const resolved = resolveWorkspaceArtifactCommand(save(command)[0]!, values);
-    return spawnSync("/bin/sh", ["-c", resolved.preview], { cwd: repo, encoding: "utf8" });
+    assert.equal(resolved.kind, "argv", command);
+    if (resolved.kind !== "argv") throw new Error("unreachable");
+    return runArgvPlan({ steps: resolved.steps, cwd: repo, env, timeoutMs: 10_000, maxOutputBytes: 1_000_000 });
   };
   const hasRg = spawnSync("rg", ["--version"]).status === 0;
   try {
@@ -302,18 +309,24 @@ test("an option that takes its value only joined is refused with advice that sav
         } catch {
           saved = false;
         }
-        // Where the apart form saves anyway, the value is not the option's.
-        if (saved && values.length > 0) assert.notEqual(run(written, values).status, 0, `${written} took the value as the option's`);
+        // Where the apart form saves anyway, git reads the value as a revision, not as the option's.
+        if (saved && values.length > 0) {
+          const value = values[0]!.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+          const result = await run(written, values);
+          assert.notEqual(result.exitCode, 0, `${written} took the value as the option's`);
+          assert.match(result.stderr, new RegExp(`fatal: (?:bad revision|ambiguous argument) '${value}'`, "u"), written);
+        }
         continue;
       }
       assert.ok(expected, `${command} was advised to pass the value apart`);
       const followed = command.replace(separate.replace(" ", ""), separate);
       assert.equal(followed, written, command);
       assert.equal(save(followed).length, 1, `${command} -> ${followed}`);
-      if (command.startsWith("rg ") && !hasRg) continue;
-      const result = run(followed, values);
-      assert.equal(result.status, 0, `${followed}: ${result.stderr}`);
-      assert.ok(expected(result.stdout), `${followed} printed ${JSON.stringify(result.stdout)}`);
+      await t.test(followed, { skip: command.startsWith("rg ") && !hasRg ? "rg is not installed" : false }, async () => {
+        const result = await run(followed, values);
+        assert.equal(result.exitCode, 0, `${followed}: ${result.stderr}`);
+        assert.ok(expected(result.stdout), `${followed} printed ${JSON.stringify(result.stdout)}`);
+      });
     }
     // That advice, followed with a fixed similarity score, saves, and git
     // takes the score: a rename that kept two of its three lines is one at
@@ -323,11 +336,14 @@ test("an option that takes its value only joined is refused with advice that sav
     git("commit", "-qam", "move");
     const renamed = /^R\d+\tnotes\.md\tmoved\.md$/mu;
     for (const option of ["-M50%", "-M5", "-M.5", "-C50%", "-B50%/60% -M50%", "--find-renames=50%", "--find-copies=50%", "-pM50%"]) {
-      const result = run(`git diff --name-status ${option} {{rev}}`, ["HEAD~1"]);
-      assert.equal(result.status, 0, `${option}: ${result.stderr}`);
+      const result = await run(`git diff --name-status ${option} {{rev}}`, ["HEAD~1"]);
+      assert.equal(result.exitCode, 0, `${option}: ${result.stderr}`);
       assert.match(result.stdout, renamed, option);
     }
-    assert.doesNotMatch(run("git diff --name-status -M90% {{rev}}", ["HEAD~1"]).stdout, renamed);
+    const strict = await run("git diff --name-status -M90% {{rev}}", ["HEAD~1"]);
+    assert.equal(strict.exitCode, 0, strict.stderr);
+    assert.match(strict.stdout, /^D\tnotes\.md$/mu);
+    assert.doesNotMatch(strict.stdout, renamed);
     assert.throws(() => save("git diff -Mx {{rev}}"), /git diff with -Mx, an option Aiden does not check/u);
   } finally {
     fs.rmSync(repo, { recursive: true, force: true });
