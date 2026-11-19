@@ -919,6 +919,18 @@ final class AidenChatTests: XCTestCase {
         XCTAssertEqual(try JSONDecoder().decode(AidenProducedFile.self, from: data), file)
     }
 
+    func testProducedFileLinksRoundTripThroughWorkspaceLinkRouting() throws {
+        for path in ["reports/q3 summary.html", "naïve/ä.html", "a/b/c.txt", "100% done.html"] {
+            let file = AidenProducedFile(relativePath: path, operation: "written", bytes: 12)
+            let link = try XCTUnwrap(file.workspaceLink, path)
+            XCTAssertEqual(AidenWorkspaceFileLink.path(link.relativeString), path)
+        }
+        let deep = (1...22).map { "d\($0)" }.joined(separator: "/")
+        for path in ["notes:v2.html", "a?b.html", "a#b.html", deep] {
+            XCTAssertNil(AidenProducedFile(relativePath: path, operation: "edited", bytes: 12).workspaceLink, path)
+        }
+    }
+
     func testHistoryReasoningRejectsBotChatAndAcceptsRegularChat() throws {
         let regular = """
         {"id":"chat-1","workspaceId":"workspace-1","title":"Chat","messages":[{"id":"message-1","role":"assistant","text":"Done","reasoning":"Visible","createdAt":"2026-08-20T12:00:00Z"}],"createdAt":"2026-08-20T12:00:00Z","updatedAt":"2026-08-20T12:00:00Z","revision":"rev-1"}

@@ -122,3 +122,4 @@ An `.html` or `.htm` file opened from a workspace's **Files** opens on **Preview
 - A file over the workspace size limit arrives cut short, so it opens on Source with "This file is too large to preview." and the switch is off.
 - The page has no address of its own, so relative resources such as `style.css` or `img/a.png` don't load. Inline styles, scripts and images instead.
 - If the page can't be shown, the sheet says "Couldn't display this page." with a **Retry** button.
+- In a workspace chat with a folder, tapping an activity line's "File written" or "File edited" opens that file here, so a page the agent wrote opens on Preview. In a Bot chat, or for a name the file link can't carry (such as one with a colon), the line stays plain text.

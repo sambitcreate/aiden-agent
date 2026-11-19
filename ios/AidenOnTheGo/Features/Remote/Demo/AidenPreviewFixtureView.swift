@@ -114,10 +114,18 @@ struct AidenSVGFixtureView: View {
 struct AidenWorkspaceHTMLFixtureView: View {
     let coordinator: AidenRemoteCoordinator
     @State private var model: AidenWorkspaceFilesModel
-    @State private var isShowing = true
+    @State private var isShowing = !Self.startsFromActivity
+
+    /// `-AidenWorkspaceHTMLFixtureFromActivity`: starts on two "File written"
+    /// lines, one in a workspace chat and one in a Bot chat. Tapping the
+    /// workspace one goes through the chat's `./relative` link routing.
+    private static var startsFromActivity: Bool {
+        ProcessInfo.processInfo.arguments.contains("-AidenWorkspaceHTMLFixtureFromActivity")
+    }
 
     static var isRequested: Bool {
-        ProcessInfo.processInfo.arguments.contains("-AidenWorkspaceHTMLFixture")
+        startsFromActivity
+            || ProcessInfo.processInfo.arguments.contains("-AidenWorkspaceHTMLFixture")
             || ProcessInfo.processInfo.arguments.contains("-AidenWorkspaceHTMLFixtureRemoteImage")
             || ProcessInfo.processInfo.arguments.contains("-AidenWorkspaceHTMLFixtureTruncated")
     }
@@ -147,9 +155,40 @@ struct AidenWorkspaceHTMLFixtureView: View {
     }
 
     var body: some View {
-        Color.clear.sheet(isPresented: $isShowing) {
+        Group {
+            if Self.startsFromActivity {
+                activityLines
+            } else {
+                Color.clear
+            }
+        }
+        .sheet(isPresented: $isShowing) {
             AidenWorkspaceFileEditorFixtureHost(coordinator: coordinator, model: model)
         }
+    }
+
+    private var activityLines: some View {
+        let step = AidenAgentStep(
+            id: "write", order: 0, kind: .tool, toolName: "write_file", label: "write_file",
+            status: .completed, startedAt: 1, updatedAt: 2, finishedAt: 2, contentOffset: 0,
+            durationMs: nil, target: nil, detail: "site/report.html", lineChanges: nil,
+            producedFile: AidenProducedFile(relativePath: "site/report.html", operation: "written", bytes: 420)
+        )
+        return VStack(alignment: .leading, spacing: 16) {
+            Text("Workspace chat").font(.headline)
+            AidenActivityStepLine(step: step, shimmer: false)
+                .environment(\.aidenOpensWorkspaceFileLinks, true)
+            Text("Bot chat").font(.headline)
+            AidenActivityStepLine(step: step, shimmer: false)
+                .environment(\.aidenOpensWorkspaceFileLinks, false)
+            Spacer()
+        }
+        .padding()
+        .environment(\.openURL, OpenURLAction { url in
+            guard AidenWorkspaceFileLink.path(url.relativeString) == model.document?.displayPath else { return .discarded }
+            isShowing = true
+            return .handled
+        })
     }
 
     private static let inlinePage = """

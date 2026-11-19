@@ -49,6 +49,23 @@ final class AidenWorkspaceHTMLUITests: XCTestCase {
         XCTAssertEqual(app.state, .runningForeground)
     }
 
+    func testFileWrittenOpensTheFileInAWorkspaceChatOnly() {
+        let app = launch("-AidenWorkspaceHTMLFixtureFromActivity")
+
+        // A Bot chat's line is plain text; the workspace chat's is a button
+        // that keeps its words and is at least 44 points tall.
+        let label = "File written: site/report.html"
+        let buttons = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", label))
+        XCTAssertTrue(buttons.firstMatch.waitForExistence(timeout: 20), app.debugDescription)
+        XCTAssertEqual(buttons.count, 1, app.debugDescription)
+        XCTAssertGreaterThanOrEqual(buttons.firstMatch.frame.height, 43.5)
+        XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", label)).firstMatch.exists, app.debugDescription)
+
+        buttons.firstMatch.tap()
+        XCTAssertTrue(app.staticTexts["Scripts ran"].waitForExistence(timeout: 20), app.debugDescription)
+        XCTAssertTrue(app.segmentedControls.buttons["Preview"].isSelected)
+    }
+
     func testATruncatedHtmlFileStaysOnSourceWithANote() {
         let app = launch("-AidenWorkspaceHTMLFixtureTruncated")
 

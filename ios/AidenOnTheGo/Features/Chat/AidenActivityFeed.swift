@@ -99,6 +99,8 @@ struct AidenActivityFeed: View {
                     }
                     .frame(height: CGFloat(rows.count) * 24, alignment: .bottom)
                     .clipped()
+                    // The ticker sits inside the disclosure button; it opens nothing.
+                    .environment(\.aidenOpensWorkspaceFileLinks, false)
                 } else {
                     Text(headline)
                         .font(.caption.weight(.semibold))
@@ -125,8 +127,54 @@ struct AidenActivityFeed: View {
     }
 }
 
+extension EnvironmentValues {
+    /// True where a `./relative` link opens the chat's workspace file (a
+    /// workspace chat with a folder), so "File written" lines can open it.
+    @Entry var aidenOpensWorkspaceFileLinks = false
+}
+
 struct AidenActivityStepLine: View {
+    @Environment(\.aidenOpensWorkspaceFileLinks) private var opensWorkspaceFileLinks
+    @Environment(\.openURL) private var openURL
+    let step: AidenAgentStep
+    let shimmer: Bool
+
+    private var fileLink: URL? {
+        opensWorkspaceFileLinks ? step.producedFile?.workspaceLink : nil
+    }
+
+    var body: some View {
+        if let fileLink {
+            Button {
+                openURL(fileLink)
+            } label: {
+                AidenActivityStepLineContent(step: step, shimmer: shimmer)
+                    .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(AidenActivityFileLinkButtonStyle())
+            .accessibilityHint("Opens the file")
+            .accessibilityAction(named: "Open file") { openURL(fileLink) }
+        } else {
+            AidenActivityStepLineContent(step: step, shimmer: shimmer)
+        }
+    }
+}
+
+/// Keeps the line's own look and underlines the file name while pressed.
+private struct AidenActivityFileLinkButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label.environment(\.aidenActivityFileLinkPressed, configuration.isPressed)
+    }
+}
+
+private extension EnvironmentValues {
+    @Entry var aidenActivityFileLinkPressed = false
+}
+
+private struct AidenActivityStepLineContent: View {
     @Environment(\.aidenPalette) private var palette
+    @Environment(\.aidenActivityFileLinkPressed) private var pressed
     let step: AidenAgentStep
     let shimmer: Bool
 
@@ -146,6 +194,7 @@ struct AidenActivityStepLine: View {
             if let file = step.producedFile {
                 Text("File \(file.operation) · \(file.relativePath.components(separatedBy: "/").last ?? file.relativePath)")
                     .font(.caption2)
+                    .underline(pressed)
                     .lineLimit(1)
                     .accessibilityLabel("File \(file.operation): \(file.relativePath)")
             }

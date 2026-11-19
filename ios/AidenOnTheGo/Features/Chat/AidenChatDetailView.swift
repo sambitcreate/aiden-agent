@@ -141,6 +141,13 @@ struct AidenChatDetailView: View {
         model.ownerWorkspace
     }
 
+    /// `./relative` links open the chat's workspace file only in a workspace
+    /// chat with a folder. The agent's `relativePath` is relative to that same
+    /// folder (also for a managed worktree, which is its own workspace).
+    private var opensWorkspaceFileLinks: Bool {
+        model.chat.botId == nil && workspace?.hasFolder == true
+    }
+
     private var botToolsSessionIdentity: AidenBotChatToolsSessionIdentity? {
         guard let coordinator, let pinnedOwner else { return nil }
         return AidenBotChatToolsSessionIdentity(coordinator: coordinator, owner: pinnedOwner)
@@ -237,9 +244,10 @@ struct AidenChatDetailView: View {
             botToolsModel.resetForSessionChange()
             await botToolsModel.load(coordinator: coordinator)
         }
+        .environment(\.aidenOpensWorkspaceFileLinks, opensWorkspaceFileLinks)
         .environment(\.openURL, OpenURLAction { url in
             let raw = url.relativeString
-            if AidenWorkspaceFileLink.path(raw) != nil, model.chat.botId == nil, workspace?.hasFolder == true {
+            if AidenWorkspaceFileLink.path(raw) != nil, opensWorkspaceFileLinks {
                 workspaceFileReference = raw
                 showsWorkspaceFile = true
                 return .handled

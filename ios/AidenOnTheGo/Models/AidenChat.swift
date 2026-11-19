@@ -409,6 +409,20 @@ struct AidenProducedFile: Codable, Equatable, Sendable {
     }
 }
 
+extension AidenProducedFile {
+    private static let linkPathCharacters = CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-._~/")
+
+    /// A `./relative` link the chat's workspace link routing opens, or nil
+    /// when that routing would refuse this path (a colon, `?`, `#`, too deep
+    /// or too long), so the activity line stays plain text.
+    var workspaceLink: URL? {
+        guard let encoded = relativePath.addingPercentEncoding(withAllowedCharacters: Self.linkPathCharacters) else { return nil }
+        let raw = "./" + encoded
+        guard AidenWorkspaceFileLink.path(raw) == relativePath else { return nil }
+        return URL(string: raw)
+    }
+}
+
 struct AidenAgentLineChanges: Codable, Equatable, Sendable {
     let additions: Int
     let deletions: Int
