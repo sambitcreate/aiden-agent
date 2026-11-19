@@ -56,6 +56,9 @@ export const ON_DEMAND_TOOL_NAMES: ReadonlySet<string> = new Set([
   "routines",
   "hooks",
   "design_mode",
+  // The rarely used canvas tools; the everyday ones are declared while design mode is on.
+  "canvas_page",
+  "canvas_duplicate",
 ]);
 
 const MAX_SUMMARY_CHARACTERS = 90;

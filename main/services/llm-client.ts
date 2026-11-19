@@ -557,7 +557,8 @@ import {
   type WrittenPageInspector,
 } from "./design-canvas/inspect-note.js";
 import { designUrl } from "../../renderer/shared/design-canvas/url.js";
-import { DESIGN_CANVAS_UPDATED_CHANNEL } from "../handlers/design-canvas.js";
+import { frameShowingDesignPage } from "../../renderer/shared/design-canvas/schema.js";
+import { DESIGN_CANVAS_UPDATED_CHANNEL, type DesignCanvasUpdated } from "../handlers/design-canvas.js";
 
 subagentRuntimeRegistry.setHealthMetrics(subagentHealthMetrics);
 subagentRuntimeRegistry.setLimits({
@@ -2521,6 +2522,13 @@ async function prepareGeneration(
       },
     }).filter((tool) => !options.excludeToolNames?.has(tool.name)));
   }
+  /**
+   * Announces a canvas change this reply made, named by the reply, so an open
+   * canvas undoes all of one reply's canvas changes as one step.
+   */
+  const aidenCanvasTurn = randomUUID();
+  const announceCanvasChange = (update: { chatId: string; revision: number }) =>
+    ipcMain.broadcast(DESIGN_CANVAS_UPDATED_CHANNEL, { ...update, aidenTurn: aidenCanvasTurn } satisfies DesignCanvasUpdated);
   /** Set while this turn may use the canvas: puts its committed visuals there. */
   let placeCanvasArtifacts: ((artifacts: readonly CanvasArtifact[]) => Promise<void>) | undefined;
   /**
@@ -2541,7 +2549,7 @@ async function prepareGeneration(
       chatId: params.chatId,
       workspaceRoot: canvasRoot,
       store: designCanvasStore,
-      broadcast: (update) => ipcMain.broadcast(DESIGN_CANVAS_UPDATED_CHANNEL, update),
+      broadcast: announceCanvasChange,
       focus: (frameIds) => {
         if (!browserOwner.isDestroyed()) browserOwner.send("designCanvas:focus", { chatId: params.chatId, frameIds });
       },
@@ -2575,7 +2583,7 @@ async function prepareGeneration(
           chatId: params.chatId,
           artifacts,
           store: designCanvasStore,
-          broadcast: (update) => ipcMain.broadcast(DESIGN_CANVAS_UPDATED_CHANNEL, update),
+          broadcast: announceCanvasChange,
           newId: randomUUID,
         });
       };
@@ -2584,6 +2592,7 @@ async function prepareGeneration(
       ? [
           createDesignModeTool({
             isOn: designModeOn,
+            canvasToolNames: canvasTools.map((tool) => tool.name),
             requestEnter: async (reason, toolSignal) => {
               const answer = await designModeConsent.request({
                 chatId: params.chatId,
@@ -2643,8 +2652,7 @@ async function prepareGeneration(
       inspect: async (relativePath) => {
         if (signal.aborted || !(await canSaveWrittenPage())) return null;
         const doc = await designCanvasStore.get(params.chatId);
-        const showing = doc.frames.filter((frame) => frame.kind === "file" && frame.path === relativePath);
-        const frame = showing.find((entry) => entry.pageId === doc.activePageId) ?? showing[0];
+        const frame = frameShowingDesignPage(doc, relativePath);
         if (!frame) return null;
         const inspected = await inspectDesignPage({
           workspaceRoot: pageRoot,
@@ -2655,7 +2663,7 @@ async function prepareGeneration(
           seesImages: false,
           signal,
         });
-        return inspected.findings;
+        return { frameId: frame.id, findings: inspected.findings };
       },
       onError: (relativePath, error) => {
         if (!signal.aborted) logger.warn("pi", `Could not inspect the design page ${relativePath} after it was written.`, error);
@@ -2668,19 +2676,24 @@ async function prepareGeneration(
         // The write already happened, so Stop does not drop it; design mode
         // and the chat's workspace folder are checked as they are now.
         if (!(await canSaveWrittenPage())) return;
+        let leftOff = false;
         const placedIds = await placeWrittenPagesOnCanvas({
           chatId: params.chatId,
           workspaceRoot: pageRoot,
           paths: [relativePath],
           shouldSave: canSaveWrittenPage,
           store: designCanvasStore,
-          broadcast: (update) => ipcMain.broadcast(DESIGN_CANVAS_UPDATED_CHANNEL, update),
+          broadcast: announceCanvasChange,
           newId: randomUUID,
+          onRemoved: () => {
+            leftOff = true;
+          },
         });
         if (placedIds.length > 0 && !browserOwner.isDestroyed()) {
           browserOwner.send("designCanvas:focus", { chatId: params.chatId, frameIds: placedIds });
         }
-        inspector.written(relativePath);
+        if (leftOff) inspector.removed(relativePath);
+        else inspector.written(relativePath);
       }).catch((error) => {
         logger.warn("pi", "Could not put a written page on the design canvas.", error);
       });

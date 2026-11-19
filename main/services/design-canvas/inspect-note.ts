@@ -30,20 +30,33 @@ export const DESIGN_PAGE_INSPECT_WAIT_MS = 6_000;
 export type WrittenPageReport = {
   /** The page's workspace path, such as design/home.html. */
   path: string;
+  /** The frame that was drawn, so Aiden can move or change it without a canvas_read. */
+  frameId?: string;
   /** One sentence per problem; empty when nothing is wrong. */
   findings: readonly string[];
+  /** The person took the page off the canvas, so it was not put back or checked. */
+  removed?: true;
 };
 
 /** The note's text: one line per clean page, one short report per page with problems. */
-export function designInspectNoteText(reports: readonly WrittenPageReport[]): string {
+export function designInspectNoteText(input: readonly WrittenPageReport[]): string {
+  const removed = input.filter((report) => report.removed);
+  const reports = input.filter((report) => !report.removed);
   const shown = reports.slice(0, DESIGN_PAGE_INSPECT_NOTE_MAX_PAGES);
-  const lines = [
+  const lines: string[] = [];
+  for (const report of removed) {
+    lines.push(
+      `${report.path} was not put back on the canvas: the person removed its frame. Leave it off unless they ask for it; canvas_place_frame puts it back.`,
+    );
+  }
+  if (reports.length === 0) return lines.join("\n");
+  lines.push(
     `Checked ${reports.length === 1 ? "the page" : "the pages"} you just wrote, drawn offline at the design width with the frame's look (text only; canvas_inspect gives a picture):`,
-  ];
+  );
   for (const report of shown) {
     lines.push(
       formatCheckReport({
-        label: report.path,
+        label: report.frameId ? `${report.path} (frame ${report.frameId})` : report.path,
         findings: report.findings,
         fix: "Fix them in the file once; another report follows the next write.",
       }).trimStart(),
@@ -79,6 +92,8 @@ export function withDesignInspectNote<C extends { messages: readonly unknown[] }
 export type WrittenPageInspector = {
   /** A page was written and placed: inspect it, after any inspect already running. */
   written(path: string): void;
+  /** A page was written but left off the canvas because the person removed it: say so instead of a report. */
+  removed(path: string): void;
   /**
    * The reports finished since the last call, in the order they finished,
    * waiting up to `waitMs` for ones still running. A request already stopped,
@@ -96,7 +111,7 @@ export type WrittenPageInspector = {
  * mode was left) reports nothing; a failed inspect goes to `onError`.
  */
 export function createWrittenPageInspector(options: {
-  inspect: (path: string) => Promise<readonly string[] | null>;
+  inspect: (path: string) => Promise<{ frameId: string; findings: readonly string[] } | null>;
   onError: (path: string, error: unknown) => void;
 }): WrittenPageInspector {
   const writes = new Map<string, number>();
@@ -110,12 +125,19 @@ export function createWrittenPageInspector(options: {
       chain = chain.then(async () => {
         if (writes.get(path) !== generation) return;
         try {
-          const findings = await options.inspect(path);
-          if (findings && writes.get(path) === generation) ready.set(path, { path, findings: [...findings] });
+          const inspected = await options.inspect(path);
+          if (inspected && writes.get(path) === generation) {
+            ready.set(path, { path, frameId: inspected.frameId, findings: [...inspected.findings] });
+          }
         } catch (error) {
           options.onError(path, error);
         }
       });
+    },
+    removed(path) {
+      // Any inspect still queued for an earlier write of the page is dropped.
+      writes.set(path, (writes.get(path) ?? 0) + 1);
+      ready.set(path, { path, findings: [], removed: true });
     },
     async take(waitMs = DESIGN_PAGE_INSPECT_WAIT_MS, signal) {
       if (signal?.aborted) return [];

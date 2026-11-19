@@ -246,20 +246,28 @@ function basename(relativePath: string): string {
 /**
  * Puts each page that is not on the canvas yet (on any page of it) beside the
  * frames in view on the page the person is looking at, at the design width
- * its source asked for (`widths`, 1280 otherwise) and that width's box.
- * Returns the new frames' ids; `changed` is false when every page was
- * already there.
+ * its source asked for (`widths`, 1280 otherwise) and that width's box. A page
+ * the person took off the canvas (`removedPagePaths`) is not put back: it is
+ * listed in `removed`, and comes back only when Aiden places it with
+ * canvas_place_frame or the person adds it. Returns the new frames' ids;
+ * `changed` is false when every page was already there or removed.
  */
 export function placeWrittenPageFrames(
   doc: DesignCanvas,
   paths: readonly string[],
   newId: () => string,
   widths: ReadonlyMap<string, DesignWidth> = new Map(),
-): { doc: DesignCanvas; changed: boolean; placedIds: string[] } {
+): { doc: DesignCanvas; changed: boolean; placedIds: string[]; removed: string[] } {
   let next = doc;
   const placedIds: string[] = [];
+  const removed: string[] = [];
+  const takenOff = new Set(doc.removedPagePaths ?? []);
   for (const relativePath of paths) {
     if (next.frames.some((frame) => frame.kind === "file" && frame.path === relativePath)) continue;
+    if (takenOff.has(relativePath)) {
+      removed.push(relativePath);
+      continue;
+    }
     const designWidth = widths.get(relativePath) ?? DESIGN_DEFAULT_FILE_WIDTH;
     const placed = placeFrame(
       next,
@@ -279,7 +287,7 @@ export function placeWrittenPageFrames(
     next = placed.doc;
     placedIds.push(placed.id);
   }
-  return { doc: next, changed: placedIds.length > 0, placedIds };
+  return { doc: next, changed: placedIds.length > 0, placedIds, removed };
 }
 
 /**
@@ -355,6 +363,8 @@ export async function placeWrittenPagesOnCanvas(input: {
   limit?: number;
   /** Checked on the canvas's own chain just before the save, so a deleted chat or exited mode is not saved. */
   shouldSave?: () => Promise<boolean> | boolean;
+  /** Told the pages left off because the person took them off the canvas. */
+  onRemoved?: (paths: readonly string[]) => void;
 }): Promise<string[]> {
   if (input.limit !== undefined && input.limit <= 0) return [];
   const newestFirst: string[] = [];
@@ -379,12 +389,18 @@ export async function placeWrittenPagesOnCanvas(input: {
   if (showable.length === 0) return [];
   const shouldSave = input.shouldSave;
   let placedIds: string[] = [];
+  let removed: string[] = [];
+  // Reported whether or not anything was saved, once the canvas has been read.
+  const reportRemoved = () => {
+    if (removed.length > 0) input.onRemoved?.(removed);
+  };
   try {
     const saved = await input.store.update(
       input.chatId,
       (doc) => {
         if (input.onlyIfEmpty && doc.frames.length > 0) throw UNCHANGED;
         const placed = placeWrittenPageFrames(doc, showable, input.newId, widths);
+        removed = placed.removed;
         if (!placed.changed) throw UNCHANGED;
         placedIds = placed.placedIds;
         return placed.doc;
@@ -393,7 +409,10 @@ export async function placeWrittenPagesOnCanvas(input: {
       shouldSave
         ? {
             beforeWrite: async () => {
-              if (!(await shouldSave())) throw UNCHANGED;
+              if (!(await shouldSave())) {
+                removed = [];
+                throw UNCHANGED;
+              }
             },
           }
         : {},
@@ -406,9 +425,13 @@ export async function placeWrittenPagesOnCanvas(input: {
       return [];
     }
     input.broadcast({ chatId: input.chatId, revision: saved.revision });
+    reportRemoved();
     return placedIds;
   } catch (error) {
-    if (error === UNCHANGED) return [];
+    if (error === UNCHANGED) {
+      reportRemoved();
+      return [];
+    }
     throw error;
   }
 }

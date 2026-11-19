@@ -5,6 +5,7 @@
 import path from "node:path";
 import * as fs from "node:fs/promises";
 import {
+  DESIGN_CANVAS_LIMITS,
   isDesignRelativePath,
   type DesignCanvas,
   type DesignPaper,
@@ -22,7 +23,6 @@ import { designTweakState, withDesignTweakQuery } from "../../renderer/shared/de
 import {
   DESIGN_TEXT_EDIT_LIMITS,
   planDesignTextEdit,
-  stampLine,
   type DesignTextChange,
 } from "../../renderer/shared/design-canvas/text-edit.js";
 import type { DesignGrantRegistry } from "../services/design-canvas/grants.js";
@@ -36,8 +36,12 @@ import {
 } from "../services/design-canvas/store.js";
 import type { ChatMeta } from "../services/types.js";
 
-/** Broadcast on `designCanvas:updated` after a save or an Aiden edit lands. */
-export type DesignCanvasUpdated = { chatId: string; revision: number };
+/**
+ * Broadcast on `designCanvas:updated` after a save or an Aiden edit lands.
+ * `aidenTurn` names the reply whose change it was, so an open canvas can
+ * undo all of one reply's canvas changes as one step.
+ */
+export type DesignCanvasUpdated = { chatId: string; revision: number; aidenTurn?: string };
 
 /** The chat fields the canvas handlers decide on. */
 export type DesignCanvasChat = Pick<
@@ -152,6 +156,21 @@ export const DESIGN_CAPTURE_MAX_SIDE = 1024;
 export const DESIGN_CANVAS_UPDATED_CHANNEL = "designCanvas:updated";
 const UNAVAILABLE = "Design mode is not available.";
 
+/** The pages a save says the person's undo took off; anything malformed is refused. */
+function saveUndone(options: unknown): string[] {
+  if (options === undefined || options === null) return [];
+  const undone = typeof options === "object" && !Array.isArray(options) ? (options as { undone?: unknown }).undone : null;
+  if (undone === undefined) return [];
+  if (
+    !Array.isArray(undone) ||
+    undone.length > DESIGN_CANVAS_LIMITS.frames ||
+    !undone.every((entry) => typeof entry === "string" && isDesignRelativePath(entry))
+  ) {
+    throw new Error("Invalid canvas save options.");
+  }
+  return undone as string[];
+}
+
 export function registerDesignCanvasHandlers<Event>(deps: {
   enabled: () => boolean;
   handle(channel: string, handler: (event: Event, ...args: unknown[]) => unknown): void;
@@ -200,7 +219,7 @@ export function registerDesignCanvasHandlers<Event>(deps: {
     return deps.store.get(chat.id);
   });
 
-  deps.handle("designCanvas:save", async (_event, chatId, doc, baseRevision) => {
+  deps.handle("designCanvas:save", async (_event, chatId, doc, baseRevision, options) => {
     if (
       typeof baseRevision !== "number" ||
       !Number.isSafeInteger(baseRevision) ||
@@ -208,8 +227,9 @@ export function registerDesignCanvasHandlers<Event>(deps: {
     ) {
       throw new Error("Invalid canvas revision.");
     }
+    const undone = saveUndone(options);
     const chat = await requireChat(chatId);
-    const result = await deps.store.save(chat.id, doc as DesignCanvas, baseRevision);
+    const result = await deps.store.save(chat.id, doc as DesignCanvas, baseRevision, { undone });
     if (result.ok) deps.broadcast({ chatId: chat.id, revision: result.revision });
     return result;
   });
@@ -426,7 +446,7 @@ export function registerDesignCanvasHandlers<Event>(deps: {
         } catch {
           return { ok: false, reason: "missing" };
         }
-        const plan = planDesignTextEdit(source, parsed, stampLine(stamp as string | undefined, framePath));
+        const plan = planDesignTextEdit(source, parsed, { stamp: stamp as string | undefined, path: framePath });
         if (!plan.ok) return plan;
         // Another writer (an editor, Aiden) may have changed the file since it was read.
         const current = await fs.readFile(resolved.absolute, "utf8").catch(() => null);

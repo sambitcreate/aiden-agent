@@ -4,9 +4,13 @@
 // The page reports each text node it changed, as the browser read it (with
 // entities decoded). A change lands only when its old text is found exactly
 // once in the file's markup, outside tags, scripts, styles, comments and the
-// title; when the edited element carries a `data-aiden-src` stamp, only that
-// line and the few after it count. Anything else is the person's to hand to
-// Aiden instead. Pure, so it is tested without a file.
+// title. When the edited element's `data-aiden-src` stamp names a line, that
+// line and the few after it are searched first; a line gone stale (the file
+// changed under it) falls back to the elements whose own attribute is that
+// stamp, never to the rest of the file, so the words of another element are
+// not changed. A stamp with no line means the whole file, which has to hold
+// the text exactly once. Anything else is the person's to hand to Aiden
+// instead. Pure, so it is tested without a file.
 
 export type DesignTextChange = { before: string; after: string };
 
@@ -84,11 +88,50 @@ export function stampLine(stamp: string | undefined, path: string): number | und
   return Number.isInteger(line) && line > 0 ? line : undefined;
 }
 
-function findOnce(source: string, before: string, line: number | undefined): { start: number; end: number } | "not-found" | "ambiguous" {
+const VOID_TAGS = new Set(["area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "source", "track", "wbr"]);
+
+/**
+ * The inside of each element whose own `data-aiden-src` is exactly `stamp`,
+ * from the end of its start tag to its end tag (or the end of the file when
+ * it is never closed). Tags in comments, scripts and styles do not count.
+ */
+function stampedRanges(source: string, stamp: string, excluded: ReadonlyArray<[number, number]>): Array<[number, number]> {
+  // A tag of its own starts its range; one inside a comment or script starts after it.
+  const inExcluded = (index: number) => excluded.some(([from, to]) => index > from && index < to);
+  const value = escapeRegExp(stamp);
+  const opening = new RegExp(`<([a-z][a-z0-9-]*)\\b[^>]*?\\sdata-aiden-src\\s*=\\s*(?:"${value}"|'${value}')[^>]*>`, "giu");
+  const ranges: Array<[number, number]> = [];
+  for (let match = opening.exec(source); match; match = opening.exec(source)) {
+    if (inExcluded(match.index)) continue;
+    const name = match[1]!.toLowerCase();
+    const from = match.index + match[0].length;
+    if (VOID_TAGS.has(name) || match[0].endsWith("/>")) continue;
+    const tags = new RegExp(`<(/?)${escapeRegExp(name)}(?=[\\s>/])[^>]*>`, "giu");
+    tags.lastIndex = from;
+    let depth = 1;
+    let to = source.length;
+    for (let tag = tags.exec(source); tag; tag = tags.exec(source)) {
+      if (inExcluded(tag.index)) continue;
+      depth += tag[1] === "/" ? -1 : 1;
+      if (depth === 0) {
+        to = tag.index;
+        break;
+      }
+    }
+    ranges.push([from, to]);
+  }
+  return ranges;
+}
+
+type Where = { line: number } | { stamp: string } | undefined;
+
+function findOnce(source: string, before: string, where: Where): { start: number; end: number } | "not-found" | "ambiguous" {
   const pattern = markupPattern(before);
   if (pattern.length === 0) return "not-found";
   const excluded = excludedRanges(source);
   const inside = (start: number, end: number) => excluded.some(([from, to]) => start < to && end > from);
+  const stamped = where && "stamp" in where ? stampedRanges(source, where.stamp, excluded) : undefined;
+  if (stamped?.length === 0) return "not-found";
   const found: Array<{ start: number; end: number }> = [];
   const search = new RegExp(pattern, "gu");
   for (let match = search.exec(source); match; match = search.exec(source)) {
@@ -99,10 +142,11 @@ function findOnce(source: string, before: string, line: number | undefined): { s
     // A text node is whole: it runs from the end of one tag to the start of the next.
     if (start > 0 && source[start - 1] !== ">") continue;
     if (end < source.length && source[end] !== "<") continue;
-    if (line !== undefined) {
+    if (where && "line" in where) {
       const at = lineAt(source, start);
-      if (at < line || at > line + DESIGN_TEXT_EDIT_LIMITS.stampLines) continue;
+      if (at < where.line || at > where.line + DESIGN_TEXT_EDIT_LIMITS.stampLines) continue;
     }
+    if (stamped && !stamped.some(([from, to]) => start >= from && end <= to)) continue;
     found.push({ start, end });
     if (found.length > 1) return "ambiguous";
   }
@@ -111,13 +155,16 @@ function findOnce(source: string, before: string, line: number | undefined): { s
 
 /**
  * Writes each change into the file's source, in order. Every change must be
- * found exactly once, or nothing is changed.
+ * found exactly once, or nothing is changed. `stamp` is the edited element's
+ * nearest `data-aiden-src` and `path` the page's file; a stamp naming another
+ * file counts for nothing.
  */
 export function planDesignTextEdit(
   source: string,
   changes: readonly DesignTextChange[],
-  line?: number,
+  stamp?: { stamp: string | undefined; path: string },
 ): DesignTextEditPlan {
+  const line = stamp ? stampLine(stamp.stamp, stamp.path) : undefined;
   const real = changes.filter((change) => change.before !== change.after);
   if (real.length === 0) return { ok: false, reason: "unchanged" };
   if (
@@ -129,7 +176,10 @@ export function planDesignTextEdit(
   let next = source;
   for (const change of real) {
     if (change.before.trim().length === 0) return { ok: false, reason: "not-found" };
-    const at = findOnce(next, change.before, line);
+    // A stale line misses: look inside the elements stamped the same way,
+    // where the text must still be unique, and nowhere else.
+    let at = findOnce(next, change.before, line === undefined ? undefined : { line });
+    if (at === "not-found" && line !== undefined) at = findOnce(next, change.before, { stamp: stamp!.stamp! });
     if (typeof at === "string") return { ok: false, reason: at };
     next = next.slice(0, at.start) + escapeDesignText(change.after) + next.slice(at.end);
   }

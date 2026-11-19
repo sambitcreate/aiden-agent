@@ -99,7 +99,7 @@ test("placing a page that already landed on the canvas by itself moves that fram
   assert.deepEqual({ w: grouped.frame.box.w, h: grouped.frame.box.h }, { w: 820, h: 560 }, "grouping without w/h preserves its size");
 
   // Grouped, it is still the page's frame: another placement at a new width
-  // reuses it in its group, and the group grows to hold the taller box.
+  // reuses it in its group, and the group fits itself to the taller box.
   const phone = await call("canvas_place_frame", { kind: "file", title: "Home phone", path: "design/home.html", designWidth: 390, h: 1400 });
   assert.equal(phone.frame.id, "auto");
   assert.equal(phone.placed, "reused");
@@ -395,11 +395,17 @@ test("canvas_comment replies on a comment, resolves it, or both, and tells open 
 });
 
 test("a turn makes at most its canvas call budget, and a chat that left design mode gets none", async (t) => {
-  const { call, setAvailable } = await setup(t);
-  for (let index = 0; index < DESIGN_CANVAS_CALLS_PER_TURN; index += 1) {
+  const { call, store, setAvailable } = await setup(t);
+  // One canvas_build is one call, however much it draws.
+  const items = Array.from({ length: 5 }, (_, index) => ({ kind: "shape", text: `Step ${index}` }));
+  assert.equal((await call("canvas_build", { items })).status, "built");
+  for (let index = 1; index < DESIGN_CANVAS_CALLS_PER_TURN; index += 1) {
     assert.notEqual((await call("canvas_read")).status, "limit_reached");
   }
-  assert.equal((await call("canvas_read")).status, "limit_reached");
+  const over = await call("canvas_place_frame", { kind: "note", title: "One more" });
+  assert.equal(over.status, "limit_reached");
+  assert.match(over.message, /do not retry/iu, "Aiden is told to stop and explain rather than try again");
+  assert.equal((await store.get("chat-1")).frames.length, 5);
 
   const fresh = await setup(t);
   fresh.setAvailable(false);
@@ -845,7 +851,17 @@ test("Aiden organises the person's unlocked frames, but a locked frame refuses e
 });
 
 test("canvas_update_frame and canvas_place_frame set every look the side panel can", async (t) => {
-  const { store, call } = await setup(t);
+  const { store, workspace, call } = await setup(t);
+  await fs.writeFile(
+    path.join(workspace, "design", "home.html"),
+    `<!doctype html><title>Home</title><script type="application/aiden-tweaks">${JSON.stringify({
+      controls: [
+        { id: "accent", label: "Accent", type: "color", default: "#2f6fed", var: "--accent" },
+        { id: "density", label: "Density", type: "choice", options: ["compact", "cozy"], default: "cozy", attr: "data-density" },
+        { id: "radius", label: "Corners", type: "number", min: 0, max: 24, step: 2, unit: "px", default: 8, var: "--radius" },
+      ],
+    })}</script>`,
+  );
   const board = await call("canvas_place_frame", { kind: "frame", title: "Board", x: 0, y: 0, fill: "yellow", radius: 24, guide: "columns-12" });
   assert.deepEqual([board.frame.fill, board.frame.radius, board.frame.guide], ["yellow", 24, "columns-12"]);
   const cleared = await call("canvas_update_frame", { id: board.frame.id, fill: "none", guide: "none", radius: 999 });
@@ -881,6 +897,19 @@ test("canvas_update_frame and canvas_place_frame set every look the side panel c
   }
   const saved = (await store.get("chat-1")).frames.find((frame) => frame.id === page.frame.id)!;
   assert.deepEqual(saved.tweaks, { "data-density": "compact", "--radius": "12px" }, "a refused call changes nothing");
+
+  // A name the page declares no control for is refused, with the page's real ones listed.
+  const typo = await call("canvas_update_frame", { id: page.frame.id, tweaks: { "--accnet": "#00ff00" } });
+  assert.equal(typo.status, "error");
+  for (const name of ["--accent", "data-density", "--radius"]) assert.ok(typo.message.includes(name), typo.message);
+  assert.deepEqual((await store.get("chat-1")).frames.find((frame) => frame.id === page.frame.id)!.tweaks, saved.tweaks);
+  // A page with no tweak controls takes none, but resetting one it already has still works.
+  await fs.writeFile(path.join(workspace, "design", "plain.html"), "<!doctype html><title>Plain</title>");
+  const plain = await call("canvas_place_frame", { kind: "file", title: "Plain", path: "design/plain.html", x: 4000, y: 0, tweaks: { "--accent": "red" } });
+  assert.equal(plain.status, "error");
+  assert.match(plain.message, /declares no tweak controls/u);
+  const reset = await call("canvas_update_frame", { id: page.frame.id, tweaks: { "--radius": null } });
+  assert.deepEqual(reset.frame.tweaks, { "data-density": "compact" });
 });
 
 test("canvas_update_frame hides, moves to another page and reorders layers", async (t) => {
@@ -911,16 +940,66 @@ test("canvas_update_frame hides, moves to another page and reorders layers", asy
   assert.equal(doc.activePageId, "page-1", "moving a frame does not change the page on screen");
 });
 
-test("a frame placed into a group past its edge grows the group to hold it", async (t) => {
-  const { call } = await setup(t);
+test("a group fits itself to its members as Aiden adds, moves, resizes and removes them", async (t) => {
+  const { store, call } = await setup(t);
+  const boxOf = async (id: string) => {
+    const frame = (await store.get("chat-1")).frames.find((entry) => entry.id === id)!;
+    return { x: frame.x, y: frame.y, w: frame.w, h: frame.h };
+  };
   const group = await call("canvas_place_frame", { kind: "group", title: "Direction A", x: 0, y: 0, w: 400, h: 300 });
   const first = await call("canvas_place_frame", { kind: "note", title: "One", groupId: group.frame.id });
   const second = await call("canvas_place_frame", { kind: "note", title: "Two", groupId: group.frame.id });
-  const answer = await call("canvas_read");
-  const grown = answer.inView.find((frame: { id: string }) => frame.id === group.frame.id);
   assert.ok(second.frame.box.x > first.frame.box.x);
-  assert.equal(grown.box.x + grown.box.w, second.frame.box.x + second.frame.box.w + 32);
-  assert.ok(grown.box.y + grown.box.h >= second.frame.box.y + second.frame.box.h + 32);
+  // Two 240 x 160 notes in a row from the group's inset corner, 64 apart.
+  assert.deepEqual(await boxOf(group.frame.id), { x: 0, y: 0, w: 32 + 240 + 64 + 240 + 32, h: 48 + 160 + 32 });
+
+  // A member moved down and made taller: the group follows it.
+  await call("canvas_update_frame", { id: second.frame.id, y: 400, h: 300 });
+  assert.deepEqual(await boxOf(group.frame.id), { x: 0, y: 0, w: 32 + 240 + 64 + 240 + 32, h: 400 + 300 + 32 });
+
+  // A member taken out of the group, then one removed: the group shrinks to what is left.
+  await call("canvas_update_frame", { id: second.frame.id, groupId: "" });
+  assert.deepEqual(await boxOf(group.frame.id), { x: 0, y: 0, w: 32 + 240 + 32, h: 48 + 160 + 32 });
+  const third = await call("canvas_place_frame", { kind: "note", title: "Three", groupId: group.frame.id, x: 600, y: 48 });
+  assert.equal((await boxOf(group.frame.id)).w, 600 + 240 + 32);
+  assert.equal((await call("canvas_remove_frame", { id: third.frame.id })).status, "removed");
+  assert.deepEqual(await boxOf(group.frame.id), { x: 0, y: 0, w: 32 + 240 + 32, h: 48 + 160 + 32 });
+});
+
+test("a group the person drew grows to hold what Aiden puts in it but keeps the room they left", async (t) => {
+  const { store, call } = await setup(t);
+  await store.update("chat-1", (doc) => ({
+    ...doc,
+    frames: [{ id: "room", kind: "group", title: "Room", x: 0, y: 0, w: 2000, h: 1200, pageId: doc.activePageId, createdBy: "person" }],
+  }));
+  const boxOf = async () => {
+    const frame = (await store.get("chat-1")).frames.find((entry) => entry.id === "room")!;
+    return { x: frame.x, y: frame.y, w: frame.w, h: frame.h };
+  };
+  const note = await call("canvas_place_frame", { kind: "note", title: "One", groupId: "room" });
+  assert.deepEqual(await boxOf(), { x: 0, y: 0, w: 2000, h: 1200 }, "a small member leaves the person's box as they drew it");
+  await call("canvas_update_frame", { id: note.frame.id, x: 2100 });
+  assert.deepEqual(await boxOf(), { x: 0, y: 0, w: 2100 + 240 + 32, h: 1200 }, "a member past its edge widens it");
+  await call("canvas_remove_frame", { id: note.frame.id });
+  assert.equal((await boxOf()).w, 2100 + 240 + 32, "removing a member never shrinks it");
+});
+
+test("what Aiden adds to an artboard wraps to a new row inside it, keeping the width the person drew", async (t) => {
+  const { store, call } = await setup(t);
+  const board = await call("canvas_place_frame", { kind: "frame", title: "Board", x: 0, y: 0, w: 600, h: 300 });
+  const placed = [];
+  for (const title of ["A", "B", "C"]) placed.push(await call("canvas_place_frame", { kind: "shape", title, groupId: board.frame.id }));
+  const boxes = placed.map((entry) => entry.frame.box);
+  // 160-wide shapes: A and B fit in a row of a 600 artboard, C starts the next row at the left inset.
+  assert.equal(boxes[1].y, boxes[0].y);
+  assert.equal(boxes[1].x, boxes[0].x + 160 + 64);
+  assert.deepEqual([boxes[2].x, boxes[2].y], [boxes[0].x, boxes[0].y + 100 + 64]);
+  const after = (await store.get("chat-1")).frames.find((entry) => entry.id === board.frame.id)!;
+  assert.equal(after.w, 600, "the artboard keeps its width");
+  for (const box of boxes) {
+    assert.ok(box.x >= after.x && box.x + box.w <= after.x + after.w, "each item sits inside the artboard's width");
+    assert.ok(box.y + box.h <= after.y + after.h, "the artboard grew down to hold the new row");
+  }
 });
 
 test("canvas_arrange lays frames out in a group that fits itself around them, and shows them", async (t) => {
@@ -960,6 +1039,431 @@ test("canvas_arrange lays frames out in a group that fits itself around them, an
   const out = await call("canvas_arrange", { frameIds: [ids[2]], groupId: null, x: 5000, y: 0, focus: false });
   assert.equal(out.frames[0].groupId, undefined);
   assert.deepEqual([out.frames[0].box.x, out.frames[0].box.y], [5000, 0]);
+});
+
+test("a frame the person moved since Aiden last looked keeps the person's place, and the answer says where it is", async (t) => {
+  const { store, call } = await setup(t);
+  const a = await call("canvas_place_frame", { kind: "note", title: "A", x: 0, y: 0 });
+  const b = await call("canvas_place_frame", { kind: "note", title: "B", x: 600, y: 0 });
+  await call("canvas_read");
+  // The person drags A and resizes B in the canvas while Aiden works.
+  await store.update("chat-1", (doc) => ({
+    ...doc,
+    frames: doc.frames.map((frame) =>
+      frame.id === a.frame.id ? { ...frame, x: 300, y: 900 } : frame.id === b.frame.id ? { ...frame, w: 500 } : frame,
+    ),
+  }));
+
+  // Aiden's move of A from its stale read does not undo the drag.
+  const moved = await call("canvas_update_frame", { id: a.frame.id, x: 50, y: 50 });
+  assert.equal(moved.status, "updated");
+  assert.deepEqual(moved.keptPersonsBox, [a.frame.id]);
+  assert.deepEqual(moved.changedSinceRead.map((entry: { id: string; box: unknown }) => [entry.id, entry.box]), [
+    [a.frame.id, { x: 300, y: 900, w: a.frame.box.w, h: a.frame.box.h }],
+  ]);
+  const stored = (await store.get("chat-1")).frames.find((frame) => frame.id === a.frame.id)!;
+  assert.deepEqual([stored.x, stored.y], [300, 900]);
+  assert.deepEqual(moved.frame.box, { x: 300, y: 900, w: a.frame.box.w, h: a.frame.box.h }, "the answer's own frame is where it is, not where Aiden asked");
+
+  // A change that does not move B lands, and says B's size is now the person's.
+  const renamed = await call("canvas_update_frame", { id: b.frame.id, title: "B, wider" });
+  assert.equal(renamed.keptPersonsBox, undefined);
+  assert.equal(renamed.changedSinceRead[0].box.w, 500);
+  assert.equal((await store.get("chat-1")).frames.find((frame) => frame.id === b.frame.id)!.title, "B, wider");
+
+  // Having been told where A is now, Aiden may move it.
+  const again = await call("canvas_update_frame", { id: a.frame.id, x: 50, y: 50 });
+  assert.equal(again.changedSinceRead, undefined);
+  const after = (await store.get("chat-1")).frames.find((frame) => frame.id === a.frame.id)!;
+  assert.deepEqual([after.x, after.y], [50, 50]);
+
+  // An arrange keeps a frame the person dragged after the read and lays out the rest.
+  await call("canvas_read");
+  await store.update("chat-1", (doc) => ({
+    ...doc,
+    frames: doc.frames.map((frame) => (frame.id === b.frame.id ? { ...frame, x: 4000, y: 4000 } : frame)),
+  }));
+  const arranged = await call("canvas_arrange", { frameIds: [a.frame.id, b.frame.id], layout: "row", x: 0, y: 2000, focus: false });
+  assert.deepEqual(arranged.keptPersonsBox, [b.frame.id]);
+  const listed = arranged.frames.find((entry: { id: string }) => entry.id === b.frame.id);
+  assert.deepEqual([listed.box.x, listed.box.y], [4000, 4000]);
+  const laid = await store.get("chat-1");
+  assert.deepEqual([laid.frames.find((frame) => frame.id === a.frame.id)!.x, laid.frames.find((frame) => frame.id === a.frame.id)!.y], [0, 2000]);
+  assert.deepEqual([laid.frames.find((frame) => frame.id === b.frame.id)!.x, laid.frames.find((frame) => frame.id === b.frame.id)!.y], [4000, 4000]);
+});
+
+test("a frame the person only moved still takes Aiden's resize, and one the person only resized still takes Aiden's move", async (t) => {
+  const { store, call } = await setup(t);
+  const a = await call("canvas_place_frame", { kind: "note", title: "A", x: 0, y: 0, w: 300, h: 200 });
+  const b = await call("canvas_place_frame", { kind: "note", title: "B", x: 600, y: 0, w: 300, h: 200 });
+  const c = await call("canvas_place_frame", { kind: "note", title: "C", x: 1200, y: 0, w: 300, h: 200 });
+  await call("canvas_read");
+  await store.update("chat-1", (doc) => ({
+    ...doc,
+    frames: doc.frames.map((frame) =>
+      frame.id === a.frame.id || frame.id === c.frame.id
+        ? { ...frame, y: 900 }
+        : frame.id === b.frame.id
+          ? { ...frame, w: 500 }
+          : frame,
+    ),
+  }));
+  const box = async (id: string) => {
+    const frame = (await store.get("chat-1")).frames.find((entry) => entry.id === id)!;
+    return { x: frame.x, y: frame.y, w: frame.w, h: frame.h };
+  };
+
+  const resized = await call("canvas_update_frame", { id: a.frame.id, w: 700, h: 400 });
+  assert.deepEqual(await box(a.frame.id), { x: 0, y: 900, w: 700, h: 400 });
+  assert.equal(resized.keptPersonsBox, undefined, "nothing of Aiden's was set aside");
+  assert.deepEqual(resized.changedSinceRead.map((entry: { id: string }) => entry.id), [a.frame.id]);
+
+  await call("canvas_update_frame", { id: b.frame.id, x: 2000, y: 0 });
+  assert.deepEqual(await box(b.frame.id), { x: 2000, y: 0, w: 500, h: 200 });
+
+  // Aiden moves and resizes a frame the person moved: the person's place, Aiden's size.
+  const both = await call("canvas_update_frame", { id: c.frame.id, x: 0, y: 0, w: 640, h: 480 });
+  assert.deepEqual(await box(c.frame.id), { x: 1200, y: 900, w: 640, h: 480 });
+  assert.deepEqual(both.keptPersonsBox, [c.frame.id]);
+  assert.deepEqual(both.frame.box, { x: 1200, y: 900, w: 640, h: 480 });
+});
+
+test("canvas_arrange with no frame list keeps the order frames read in on the canvas, not the order they were added", async (t) => {
+  const { call } = await setup(t);
+  // Added out of order: the second row first, then the first row right to left, then a heading above it all.
+  const place = async (title: string, x: number, y: number, h = 200) =>
+    (await call("canvas_place_frame", { kind: "note", title, x, y, w: 300, h })).frame.id as string;
+  await place("Row 2 right", 400, 700);
+  await place("Row 2 left", 0, 690);
+  await place("Row 1 right", 400, 10);
+  await place("Row 1 left", 0, 0);
+  await place("Heading", 0, -160, 80);
+  const row = await call("canvas_arrange", { page: "Page 1", layout: "row", focus: false });
+  assert.deepEqual(
+    row.frames.map((frame: { title: string }) => frame.title),
+    ["Heading", "Row 1 left", "Row 1 right", "Row 2 left", "Row 2 right"],
+  );
+
+  // Two stacked columns, read column by column for a column layout.
+  const { call: call2 } = await setup(t);
+  const stack = async (title: string, x: number, y: number) =>
+    (await call2("canvas_place_frame", { kind: "note", title, x, y, w: 300, h: 200 })).frame.id as string;
+  await stack("Right top", 500, 0);
+  await stack("Left bottom", 0, 400);
+  await stack("Right bottom", 510, 400);
+  await stack("Left top", 0, 0);
+  const column = await call2("canvas_arrange", { page: "Page 1", layout: "column", focus: false });
+  assert.deepEqual(
+    column.frames.map((frame: { title: string }) => frame.title),
+    ["Left top", "Left bottom", "Right top", "Right bottom"],
+  );
+});
+
+test("a page's workspace path names its frame wherever a frame id goes, preferring the frame on the page on screen", async (t) => {
+  const { store, focused, call } = await setup(t);
+  await store.update("chat-1", (doc) => addPage(doc, "p2", "Mobile"));
+  await store.update("chat-1", (doc) => ({
+    ...doc,
+    activePageId: "page-1",
+    frames: [
+      { id: "home-mobile", kind: "file", title: "Home", path: "design/home.html", x: 0, y: 0, w: 390, h: 844, designWidth: 390, pageId: "p2", createdBy: "aiden" },
+      { id: "home-desktop", kind: "file", title: "Home", path: "design/home.html", x: 0, y: 0, w: 640, h: 436, designWidth: 1280, pageId: "page-1", createdBy: "aiden" },
+      { id: "label", kind: "text", title: "Label", text: "Hero", x: 0, y: 600, w: 240, h: 24, pageId: "page-1", createdBy: "aiden" },
+    ],
+  }));
+
+  // On screen is page-1, so its frame is the one named, though another page's comes first.
+  const moved = await call("canvas_update_frame", { id: "./design/home.html", x: 800 });
+  assert.equal(moved.frame.id, "home-desktop");
+  const arrow = await call("canvas_place_frame", { kind: "connector", title: "To home", from: { frameId: "label" }, to: { frameId: "design/home.html" } });
+  assert.equal(arrow.frame.to.frameId, "home-desktop");
+  assert.deepEqual(await call("canvas_focus", { ids: ["design/home.html", "home-desktop"] }), { status: "requested", frames: 1 });
+  assert.deepEqual(focused[focused.length - 1], ["home-desktop"], "a path and the id of the frame it names show that frame once");
+
+  // With no frame for it on the page on screen, the first page that shows it answers.
+  await store.update("chat-1", (doc) => showPage(doc, "p2"));
+  await store.update("chat-1", (doc) => showPage(addPage(doc, "p3", "Empty"), "p3"));
+  assert.equal((await call("canvas_update_frame", { id: "design/home.html", title: "Home (phone)" })).frame.id, "home-mobile");
+
+  const missing = await call("canvas_update_frame", { id: "design/pricing.html", x: 0 });
+  assert.equal(missing.status, "error");
+  assert.match(missing.message, /canvas_place_frame to put the page on the canvas/u, "the refusal says how to get the page there");
+  const removed = await call("canvas_remove_frame", { id: "design/home.html" });
+  assert.equal(removed.status, "removed");
+  assert.deepEqual((await store.get("chat-1")).frames.map((frame) => frame.id).sort(), ["home-desktop", "label", arrow.frame.id].sort());
+
+  // Two frames on the page on screen show it: the path could mean either, so it names neither.
+  await store.update("chat-1", (doc) => showPage(doc, "page-1"));
+  const copy = await call("canvas_place_frame", { kind: "file", title: "Home dark", path: "design/home.html", duplicate: true });
+  const unclear = await call("canvas_update_frame", { id: "design/home.html", x: 5000 });
+  assert.equal(unclear.status, "error");
+  assert.ok(unclear.message.includes('"home-desktop"') && unclear.message.includes(`"${copy.frame.id}"`), "the refusal lists the frames it could mean");
+  const after = await store.get("chat-1");
+  assert.ok(after.frames.every((frame) => frame.x !== 5000), "no frame moved");
+  const unclearEnd = await call("canvas_place_frame", { kind: "connector", title: "To home", from: { frameId: "label" }, to: { frameId: "design/home.html" } });
+  assert.equal(unclearEnd.status, "error", "an arrow's end is refused the same way");
+  assert.equal((await call("canvas_update_frame", { id: copy.frame.id, x: 5000 })).frame.id, copy.frame.id, "its id still names it");
+});
+
+const overlaps = (a: { x: number; y: number; w: number; h: number }, b: { x: number; y: number; w: number; h: number }) =>
+  a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
+
+test("nextTo puts a frame beside another, past any frame in the way, and in that frame's group", async (t) => {
+  const { store, call } = await setup(t);
+  const page = await call("canvas_place_frame", { kind: "file", title: "Home", path: "design/home.html", x: 0, y: 0 });
+  const box = page.frame.box;
+  const right = await call("canvas_place_frame", { kind: "note", title: "Why", text: "Calmer", nextTo: { frameId: "design/home.html" } });
+  assert.deepEqual([right.frame.box.x, right.frame.box.y], [box.x + box.w + 64, box.y], "right of it by default, top-aligned");
+  const again = await call("canvas_place_frame", { kind: "note", title: "Also", text: "Bigger", nextTo: { frameId: page.frame.id } });
+  assert.equal(again.frame.box.x, right.frame.box.x + right.frame.box.w + 64, "the first note is in the way, so it goes past it");
+  const below = await call("canvas_place_frame", { kind: "shape", title: "Box", nextTo: { frameId: page.frame.id, side: "below" } });
+  assert.deepEqual([below.frame.box.x, below.frame.box.y], [box.x, box.y + box.h + 64]);
+  const left = await call("canvas_place_frame", { kind: "text", title: "Label", text: "Home", nextTo: { frameId: page.frame.id, side: "left" } });
+  assert.equal(left.frame.box.x + left.frame.box.w + 64, box.x);
+
+  const group = await call("canvas_place_frame", { kind: "group", title: "Flow", x: 0, y: 3000 });
+  const first = await call("canvas_place_frame", { kind: "note", title: "Step 1", text: "Sign up", groupId: group.frame.id });
+  const second = await call("canvas_place_frame", { kind: "note", title: "Step 2", text: "Verify", nextTo: { frameId: first.frame.id } });
+  assert.equal(second.frame.groupId, group.frame.id, "it joins the group of the frame it sits beside");
+  const doc = await store.get("chat-1");
+  const fitted = doc.frames.find((frame) => frame.id === group.frame.id)!;
+  assert.ok(fitted.x + fitted.w >= second.frame.box.x + second.frame.box.w, "the group fits itself around it");
+
+  assert.equal((await call("canvas_place_frame", { kind: "note", title: "X", nextTo: { frameId: page.frame.id }, x: 1, y: 1 })).status, "error");
+  assert.equal((await call("canvas_place_frame", { kind: "note", title: "X", nextTo: { frameId: "missing" } })).status, "error");
+
+  // An arrow has no side to stand beside, and a page's own frame cannot go beside itself.
+  const arrow = await call("canvas_place_frame", { kind: "connector", title: "Flow", from: { frameId: first.frame.id }, to: { frameId: second.frame.id } });
+  const besideArrow = await call("canvas_place_frame", { kind: "note", title: "X", nextTo: { frameId: arrow.frame.id } });
+  assert.equal(besideArrow.status, "error");
+  assert.match(besideArrow.message, /not a connector/u);
+  const before = (await store.get("chat-1")).frames;
+  const besideItself = await call("canvas_place_frame", { kind: "file", title: "Home", path: "design/home.html", nextTo: { frameId: page.frame.id } });
+  assert.equal(besideItself.status, "error");
+  assert.match(besideItself.message, /duplicate: true/u, "the refusal says how to show it twice");
+  assert.deepEqual((await store.get("chat-1")).frames, before, "nothing changed");
+  const beside = await call("canvas_place_frame", { kind: "file", title: "Home copy", path: "design/home.html", duplicate: true, nextTo: { frameId: page.frame.id } });
+  assert.equal(beside.placed, "copy");
+});
+
+test("canvas_build draws boxes and the arrows between them in one call, and refs name its boxes", async (t) => {
+  const { store, broadcasts, call } = await setup(t);
+  const page = await call("canvas_place_frame", { kind: "file", title: "Home", path: "design/home.html", x: 0, y: 0 });
+  const built = await call("canvas_build", {
+    nextTo: { frameId: page.frame.id, side: "below" },
+    groupTitle: "Sign-up flow",
+    items: [
+      { ref: "start", kind: "shape", shape: "oval", text: "Start" },
+      { ref: "form", kind: "shape", text: "Fill in the form", fill: "yellow" },
+      { ref: "done", kind: "shape", text: "Done", fill: "green" },
+      { kind: "connector", from: { ref: "start" }, to: { ref: "form" } },
+      { ref: "last", kind: "connector", from: { ref: "form " }, to: { ref: " done" }, arrow: "both" },
+      { kind: "connector", from: { ref: "done" }, to: { frameId: "design/home.html" }, color: "red" },
+    ],
+  });
+  assert.equal(built.status, "built");
+  assert.equal(built.placed, 6);
+  assert.deepEqual(Object.keys(built.ids).sort(), ["done", "form", "last", "start"]);
+  assert.equal(built.unnamed.length, 2);
+  assert.equal(broadcasts.length, 2, "the whole drawing is one change");
+
+  const doc = await store.get("chat-1");
+  const byId = new Map(doc.frames.map((frame) => [frame.id, frame]));
+  const [start, form, done] = ["start", "form", "done"].map((ref) => byId.get(built.ids[ref])!);
+  assert.deepEqual([start!.shape, start!.text, form!.fill, done!.fill], ["oval", "Start", "yellow", "green"]);
+  // Boxes without x and y go in a row, 64 apart and top-aligned, below the page.
+  assert.equal(form!.x, start!.x + start!.w + 64);
+  assert.equal(done!.x, form!.x + form!.w + 64);
+  assert.ok(start!.y === form!.y && form!.y === done!.y);
+  assert.ok(start!.y >= page.frame.box.y + page.frame.box.h + 64);
+  const last = byId.get(built.ids.last)!;
+  assert.deepEqual(last.ends!.map((end) => end.frameId), [form!.id, done!.id], "an end's ref is read without the spaces around it, as a box's is");
+  assert.equal(last.arrow, "both");
+  const toPage = built.unnamed.map((id: string) => byId.get(id)!).find((frame: { color?: string }) => frame.color === "red")!;
+  assert.deepEqual(toPage.ends!.map((end: { frameId?: string }) => end.frameId), [done!.id, page.frame.id], "an arrow can join a frame already on the canvas");
+  // The new group holds the drawing and fits around it.
+  const group = byId.get(built.group.id)!;
+  assert.equal(group.title, "Sign-up flow");
+  for (const frame of [start, form, done, last]) assert.equal(frame!.groupId, group.id);
+  assert.ok(group.x < start!.x && group.x + group.w > done!.x + done!.w);
+});
+
+test("canvas_build changes nothing when any part is refused, and places a drawing at x and y or in a group", async (t) => {
+  const { store, call } = await setup(t);
+  const before = (await store.get("chat-1")).revision;
+  const unknown = await call("canvas_build", {
+    items: [
+      { ref: "a", kind: "shape", text: "A" },
+      { kind: "connector", from: { ref: "a" }, to: { ref: "b" } },
+    ],
+  });
+  assert.equal(unknown.status, "error");
+  assert.match(unknown.message, /"b"/u);
+  const missing = await call("canvas_build", {
+    items: [
+      { ref: "a", kind: "shape", text: "A" },
+      { kind: "connector", from: { ref: "a" }, to: { frameId: "nowhere" } },
+    ],
+  });
+  assert.equal(missing.status, "error", "an end on a frame that is not there refuses the whole drawing");
+  assert.equal((await call("canvas_build", { items: [{ ref: "a", kind: "text", text: "A" }, { ref: "a", kind: "text", text: "B" }] })).status, "error");
+  assert.equal((await call("canvas_build", { items: [{ kind: "text" }] })).status, "error", "a text item needs text");
+  const after = await store.get("chat-1");
+  assert.equal(after.revision, before);
+  assert.equal(after.frames.length, 0);
+
+  const placed = await call("canvas_build", {
+    x: 1000,
+    y: 2000,
+    items: [
+      { ref: "a", kind: "shape", text: "A", x: 0, y: 0 },
+      { ref: "b", kind: "note", text: "B", x: 300, y: 200 },
+    ],
+  });
+  let doc = await store.get("chat-1");
+  const a = doc.frames.find((frame) => frame.id === placed.ids.a)!;
+  const b = doc.frames.find((frame) => frame.id === placed.ids.b)!;
+  assert.deepEqual([a.x, a.y, b.x, b.y], [1000, 2000, 1300, 2200], "item positions are relative to the drawing's x and y");
+
+  const board = await call("canvas_place_frame", { kind: "frame", title: "Board", x: 0, y: 5000, w: 900, h: 300 });
+  const inside = await call("canvas_build", { groupId: board.frame.id, items: [{ ref: "c", kind: "shape", text: "C" }] });
+  doc = await store.get("chat-1");
+  const c = doc.frames.find((frame) => frame.id === inside.ids.c)!;
+  assert.equal(c.groupId, board.frame.id);
+  assert.ok(c.x >= 0 && c.y >= 5000 && c.x + c.w <= 900, "it lands inside the artboard");
+
+  // An artboard keeps the person's width: a drawing that would stick out of it is refused, whole.
+  const framesBefore = doc.frames.length;
+  const wide = await call("canvas_build", {
+    groupId: board.frame.id,
+    items: [
+      { ref: "d", kind: "shape", text: "D", x: 0, y: 0 },
+      { ref: "e", kind: "shape", text: "E", x: 1200, y: 0 },
+    ],
+  });
+  assert.equal(wide.status, "error");
+  assert.match(wide.message, /at most \d+ wide/u);
+  const outside = await call("canvas_build", { groupId: board.frame.id, x: 800, y: 5000, items: [{ kind: "shape", text: "F" }] });
+  assert.equal(outside.status, "error", "a position that puts the drawing past the artboard's edge is refused");
+  doc = await store.get("chat-1");
+  assert.equal(doc.frames.length, framesBefore);
+  assert.equal(doc.frames.find((frame) => frame.id === board.frame.id)!.w, 900);
+  const within = await call("canvas_build", { groupId: board.frame.id, x: 40, y: 5060, items: [{ ref: "g", kind: "shape", text: "G" }] });
+  assert.equal(within.status, "built", "a position inside the artboard is kept");
+});
+
+test("canvas_duplicate copies a frame beside it, and a group with its members and the arrows between them", async (t) => {
+  const { store, call } = await setup(t);
+  await store.update("chat-1", (doc) => ({
+    ...doc,
+    frames: [
+      { id: "page", kind: "file", title: "Home", path: "design/home.html", x: 0, y: 0, w: 640, h: 436, designWidth: 1280, pageId: doc.activePageId, createdBy: "person", locked: true },
+      { id: "g", kind: "group", title: "Flow", x: 0, y: 1000, w: 600, h: 300, pageId: doc.activePageId, createdBy: "person" },
+      { id: "a", kind: "shape", shape: "rect", title: "A", x: 32, y: 1048, w: 160, h: 100, groupId: "g", pageId: doc.activePageId, createdBy: "person" },
+      { id: "b", kind: "shape", shape: "rect", title: "B", x: 400, y: 1048, w: 160, h: 100, groupId: "g", pageId: doc.activePageId, createdBy: "person" },
+      { id: "ab", kind: "connector", title: "A to B", x: 192, y: 1098, w: 1, h: 1, ends: [{ x: 192, y: 1098, frameId: "a" }, { x: 400, y: 1098, frameId: "b" }], pageId: doc.activePageId, createdBy: "person" },
+    ],
+  }));
+  const copy = await call("canvas_duplicate", { id: "design/home.html" });
+  assert.equal(copy.status, "duplicated");
+  assert.notEqual(copy.frame.id, "page");
+  assert.deepEqual(copy.frame.box, { x: 640 + 64, y: 0, w: 640, h: 436 });
+  assert.equal(copy.frame.locked, undefined, "a copy of a locked frame is Aiden's to change");
+  assert.equal(copy.frame.createdBy, "aiden");
+
+  const flow = await call("canvas_duplicate", { id: "g", side: "below" });
+  assert.equal(flow.withIt, 3);
+  const doc = await store.get("chat-1");
+  const known = new Set(["page", copy.frame.id, "g", "a", "b", "ab", flow.frame.id]);
+  const copied = doc.frames.filter((frame) => !known.has(frame.id));
+  assert.deepEqual(copied.filter((frame) => frame.kind !== "connector").map((frame) => frame.groupId), [flow.frame.id, flow.frame.id]);
+  assert.deepEqual(copied.map((frame) => frame.title).sort(), ["A", "A to B", "B"]);
+  const arrow = copied.find((frame) => frame.kind === "connector")!;
+  const ids = new Set(copied.map((frame) => frame.id));
+  assert.ok(arrow.ends!.every((end) => end.frameId !== undefined && ids.has(end.frameId)), "the arrow joins the copies, not the originals");
+  assert.deepEqual([flow.frame.box.x, flow.frame.box.y], [0, 1000 + 300 + 64]);
+  const original = doc.frames.find((frame) => frame.id === "g")!;
+  assert.ok(!overlaps(original, flow.frame.box));
+  assert.equal((await call("canvas_duplicate", { id: "ab" })).status, "error", "an arrow is copied with the frames it joins");
+});
+
+test("canvas_duplicate makes a page's variants in one call, side by side in one labelled group", async (t) => {
+  const { store, workspace, call } = await setup(t);
+  await fs.writeFile(
+    path.join(workspace, "design", "home.html"),
+    `<!doctype html><title>Home</title><script type="application/aiden-tweaks">${JSON.stringify({
+      controls: [{ id: "density", label: "Density", type: "choice", options: ["compact", "cozy"], default: "cozy", attr: "data-density" }],
+    })}</script>`,
+  );
+  const page = await call("canvas_place_frame", { kind: "file", title: "Home", path: "design/home.html", x: 0, y: 0 });
+  const before = await store.get("chat-1");
+
+  const refused = await call("canvas_duplicate", {
+    id: page.frame.id,
+    variants: [{ label: "Dark", dark: true }, { label: "Big", tweaks: { "--size": "20px" } }],
+  });
+  assert.equal(refused.status, "error");
+  assert.match(refused.message, /data-density/u, "it names the tweaks the page has");
+  assert.equal((await store.get("chat-1")).revision, before.revision, "all or nothing: no variant was added");
+  assert.equal((await call("canvas_duplicate", { id: page.frame.id, variants: [{ label: "Same" }] })).status, "error");
+  assert.equal((await call("canvas_duplicate", { id: page.frame.id, variants: [{ label: "Same", tweaks: {} }] })).status, "error", "empty tweaks set nothing");
+  const titled = await call("canvas_duplicate", { id: page.frame.id, title: "Home looks" });
+  assert.equal(titled.status, "error", "a title with no variants names nothing");
+  assert.match(titled.message, /pass variants/u);
+  assert.equal((await store.get("chat-1")).revision, before.revision, "no copy was made");
+
+  const made = await call("canvas_duplicate", {
+    id: page.frame.id,
+    title: "Home looks",
+    variants: [
+      { label: "Dark", dark: true },
+      { label: "Phone", designWidth: 390 },
+      { label: "Compact", tweaks: { "data-density": "compact" } },
+    ],
+  });
+  assert.equal(made.status, "duplicated");
+  assert.equal(made.group.title, "Home looks");
+  assert.deepEqual(made.frames.map((frame: { title: string }) => frame.title), ["Home", "Home · Dark", "Home · Phone", "Home · Compact"]);
+  const doc = await store.get("chat-1");
+  const members = doc.frames.filter((frame) => frame.groupId === made.group.id);
+  assert.equal(members.length, 4, "the original joins its variants");
+  const [dark, phone, compact] = made.frames.slice(1).map((entry: { id: string }) => doc.frames.find((frame) => frame.id === entry.id)!);
+  assert.equal(dark!.dark, true);
+  assert.equal(phone!.designWidth, 390);
+  assert.ok(phone!.w < page.frame.box.w, "the phone variant is sized for its width");
+  assert.deepEqual(compact!.tweaks, { "data-density": "compact" });
+  const row = [page.frame.box, ...[dark, phone, compact].map((frame) => frame!)];
+  for (let index = 1; index < row.length; index += 1) {
+    assert.equal(row[index]!.y, 0, "top-aligned with the original");
+    assert.ok(row[index]!.x >= row[index - 1]!.x + row[index - 1]!.w, "side by side, left to right");
+  }
+
+  // A locked or grouped original stays where it is, and its variants get a group of their own beside it.
+  await call("canvas_update_frame", { id: page.frame.id, groupId: "", locked: true });
+  const apart = await call("canvas_duplicate", { id: page.frame.id, side: "below", variants: [{ label: "Dark", dark: true }] });
+  assert.equal(apart.frames.length, 1);
+  const after = await store.get("chat-1");
+  assert.equal(after.frames.find((frame) => frame.id === page.frame.id)!.groupId, undefined);
+  assert.ok(apart.group.box.y >= page.frame.box.y + page.frame.box.h, "below the original");
+  assert.equal((await call("canvas_duplicate", { id: made.group.id, variants: [{ label: "Dark", dark: true }] })).status, "error", "only a page has variants");
+
+  // Groups do not nest: the variants of a page in an unlocked group join that group beside it.
+  await fs.writeFile(path.join(workspace, "design", "pricing.html"), "<!doctype html><title>Pricing</title>");
+  const flow = await call("canvas_place_frame", { kind: "group", title: "Flow", x: 0, y: 6000 });
+  const pricing = await call("canvas_place_frame", { kind: "file", title: "Pricing", path: "design/pricing.html", groupId: flow.frame.id });
+  const groupsBefore = (await store.get("chat-1")).frames.filter((frame) => frame.kind === "group").length;
+  const joined = await call("canvas_duplicate", { id: pricing.frame.id, title: "Ignored", variants: [{ label: "Dark", dark: true }, { label: "Phone", designWidth: 390 }] });
+  assert.equal(joined.group.id, flow.frame.id, "the answer names the group they joined");
+  assert.match(joined.note, /title was not used/u);
+  const grouped = await store.get("chat-1");
+  assert.equal(grouped.frames.filter((frame) => frame.kind === "group").length, groupsBefore, "no new group");
+  const flowBox = grouped.frames.find((frame) => frame.id === flow.frame.id)!;
+  for (const entry of joined.frames as { id: string }[]) {
+    const copy = grouped.frames.find((frame) => frame.id === entry.id)!;
+    assert.equal(copy.groupId, flow.frame.id);
+    assert.ok(copy.x >= pricing.frame.box.x + pricing.frame.box.w, "beside the page");
+    assert.ok(flowBox.x <= copy.x && copy.x + copy.w <= flowBox.x + flowBox.w && copy.y + copy.h <= flowBox.y + flowBox.h, "inside the group, which fits them");
+  }
 });
 
 test("canvas_page adds, renames, duplicates, reorders, shows and deletes pages, never the last one", async (t) => {
@@ -1017,7 +1521,7 @@ test("adversarial edge cases: partial size with designWidth, cross-page regroupi
   const tallPhone = await call("canvas_update_frame", { id: screen.frame.id, designWidth: 390, h: 960 });
   assert.deepEqual([tallPhone.frame.box.w, tallPhone.frame.box.h, tallPhone.frame.designWidth], [390, 960, 390]);
 
-  // 2. Moving a frame to another page and into a group on that page in one call works and grows that group.
+  // 2. Moving a frame to another page and into a group on that page in one call works and fits that group around it.
   const archive = await call("canvas_page", { action: "add", name: "Archive", show: false });
   const archiveGroup = await call("canvas_place_frame", {
     kind: "group",
@@ -1040,7 +1544,11 @@ test("adversarial edge cases: partial size with designWidth, cross-page regroupi
   const afterMove = await store.get("chat-1");
   assert.equal(afterMove.frames.find((frame) => frame.id === screen.frame.id)!.pageId, archive.page.id);
   const grownArchiveGroup = afterMove.frames.find((frame) => frame.id === archiveGroup.frame.id)!;
-  assert.ok(grownArchiveGroup.h >= 160 + 960 - 100 + 32, "target page group grows around moved frame");
+  assert.deepEqual(
+    { x: grownArchiveGroup.x, y: grownArchiveGroup.y, w: grownArchiveGroup.w, h: grownArchiveGroup.h },
+    { x: 140 - 32, y: 160 - 48, w: 32 + 390 + 32, h: 48 + 960 + 32 },
+    "target page group fits around moved frame",
+  );
 
   // 3. canvas_arrange with fitGroupIds on another page switches to and fits that page's group, and empty string ungroups.
   const fittedOtherPage = await call("canvas_arrange", { fitGroupIds: [archiveGroup.frame.id] });

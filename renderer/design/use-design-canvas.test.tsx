@@ -295,6 +295,31 @@ test("undo and redo step through recorded edits, and unrecorded edits fold into 
   assert.equal(xOf(saves()[0]!.args[1] as DesignCanvas, "a"), 30);
 });
 
+test("a save says which pages an undo took off, so the store does not remember them as the person's removals", async () => {
+  await mount();
+  const page: DesignFrame = { id: "p", kind: "file", title: "q.html", path: "design/q.html", x: 0, y: 400, w: 640, h: 436, designWidth: 1280, pageId: "page-1", createdBy: "aiden" };
+  const dropPage = (doc: DesignCanvas): DesignCanvas => ({ ...doc, frames: doc.frames.filter((frame) => frame.id !== "p") });
+  const undoneOf = (index: number) => (saves()[index]!.args[3] as { undone?: string[] } | undefined)?.undone;
+  await act(async () => controller.change((doc) => ({ ...doc, frames: [...doc.frames, page] })));
+  await tick(800);
+  assert.equal(undoneOf(0), undefined);
+
+  await act(async () => controller.undo());
+  await tick(800);
+  assert.deepEqual(undoneOf(1), ["design/q.html"], "the undo took the page off");
+
+  await act(async () => controller.redo());
+  await tick(800);
+  // Within one save: an undo takes the page off, a redo puts it back, then the person deletes it.
+  await act(async () => controller.undo());
+  await act(async () => controller.redo());
+  await act(async () => controller.change(dropPage));
+  await tick(800);
+  assert.equal(saves().length, 4);
+  assert.deepEqual(ids(saves()[3]!.args[1] as DesignCanvas), ["a"]);
+  assert.equal(undoneOf(3), undefined, "deleting the page is the person's removal");
+});
+
 test("an undo waiting to save does not take back a frame another window added", async () => {
   await mount();
   await act(async () => controller.change(addNote("b")));
@@ -309,17 +334,134 @@ test("an undo waiting to save does not take back a frame another window added", 
   assert.deepEqual(ids(controller.doc), ["a", "c"]);
 });
 
-test("after taking in another window's canvas, undo cannot remove what that window added", async () => {
+test("after taking in another window's canvas, undo still takes back this window's edit but not what that window added", async () => {
   await mount();
   await act(async () => controller.change(moveTo("a", 10)));
   saveReplies.push(() => ({ ok: false, reason: "conflict", doc: canvas(5, note("a"), note("c", 900)) }));
   await tick(800);
   assert.deepEqual(ids(controller.doc), ["a", "c"]);
+  assert.equal(controller.canUndo, true, "taking in their canvas keeps this window's history");
 
   await act(async () => controller.undo());
   assert.deepEqual(ids(controller.doc), ["a", "c"]);
+  assert.equal(xOf(controller.doc, "a"), 0);
   await tick(800);
   assert.deepEqual(ids(stored), ["a", "c"]);
+  assert.equal(xOf(stored, "a"), 0);
+});
+
+/** Aiden saves `doc` in reply `turn` and an idle canvas hears about it. */
+async function aidenSaves(doc: DesignCanvas, turn: string) {
+  stored = doc;
+  await act(async () => emitBotTestNotification("designCanvas:updated", { chatId: "chat-1", revision: doc.revision, aidenTurn: turn }));
+  await settle();
+}
+
+test("all of one Aiden reply's canvas changes undo as one step, after which the person's own edits still undo", async () => {
+  await mount();
+  await act(async () => controller.change(moveTo("a", 10)));
+  await tick(800);
+  assert.equal(stored.revision, 5);
+
+  await aidenSaves(canvas(6, note("a", 10), note("b", 400)), "reply-1");
+  await aidenSaves(canvas(7, note("a", 10), note("b", 400), note("c", 800)), "reply-1");
+  assert.deepEqual(ids(controller.doc), ["a", "b", "c"]);
+
+  await act(async () => controller.undo());
+  assert.deepEqual(ids(controller.doc), ["a"], "both of the reply's frames go in one undo");
+  assert.equal(xOf(controller.doc, "a"), 10);
+  await act(async () => controller.undo());
+  assert.equal(xOf(controller.doc, "a"), 0, "the person's move before the reply is still undoable");
+
+  await act(async () => controller.redo());
+  await act(async () => controller.redo());
+  assert.deepEqual(ids(controller.doc), ["a", "b", "c"]);
+  await tick(800);
+  assert.deepEqual(ids(stored), ["a", "b", "c"]);
+});
+
+test("a reply's change the canvas fetched before hearing whose it was still undoes with the rest of that reply", async () => {
+  await mount();
+  await act(async () => controller.change(moveTo("a", 10)));
+  await tick(800);
+  // Aiden has already saved revision 7 by the time the fetch for revision 6 reads the store.
+  stored = canvas(7, note("a", 10), note("b", 400), note("c", 800));
+  await act(async () => emitBotTestNotification("designCanvas:updated", { chatId: "chat-1", revision: 6, aidenTurn: "reply-1" }));
+  await settle();
+  assert.deepEqual(ids(controller.doc), ["a", "b", "c"]);
+  await act(async () => emitBotTestNotification("designCanvas:updated", { chatId: "chat-1", revision: 7, aidenTurn: "reply-1" }));
+  await settle();
+
+  await act(async () => controller.undo());
+  assert.deepEqual(ids(controller.doc), ["a"], "both of the reply's frames go in one undo");
+  assert.equal(xOf(controller.doc, "a"), 10);
+  await act(async () => controller.undo());
+  assert.equal(xOf(controller.doc, "a"), 0, "the person's move before the reply is still undoable");
+  assert.equal(controller.canUndo, false);
+
+  // A save's conflict can bring a reply's revision before its announcement too.
+  await act(async () => controller.redo());
+  await act(async () => controller.redo());
+  saveReplies.push(() => ({ ok: false, reason: "conflict", doc: canvas(8, note("a", 10), note("b", 400), note("c", 800), note("d", 1200)) }));
+  await tick(800);
+  assert.deepEqual(ids(controller.doc).sort(), ["a", "b", "c", "d"]);
+  await act(async () => emitBotTestNotification("designCanvas:updated", { chatId: "chat-1", revision: 8, aidenTurn: "reply-2" }));
+  await settle();
+  await act(async () => controller.undo());
+  assert.deepEqual(ids(controller.doc).sort(), ["a", "b", "c"], "the second reply's frame undoes on its own");
+});
+
+test("undoing a reply leaves an edit the person made without a step of its own during it, such as a text frame growing", async () => {
+  await mount();
+  await aidenSaves(canvas(5, note("a"), note("b", 400)), "reply-1");
+  await act(async () => controller.change(moveTo("a", 30), { record: false }));
+  await tick(800);
+  assert.equal(stored.revision, 6);
+  await aidenSaves(canvas(7, note("a", 30), note("b", 400), note("c", 800)), "reply-1");
+
+  await act(async () => controller.undo());
+  assert.deepEqual(ids(controller.doc), ["a"], "the reply's frames go in one undo");
+  assert.equal(xOf(controller.doc, "a"), 30, "and the person's edit stays");
+  assert.equal(controller.canUndo, false);
+  await act(async () => controller.redo());
+  assert.deepEqual(ids(controller.doc), ["a", "b", "c"]);
+  assert.equal(xOf(controller.doc, "a"), 30);
+});
+
+test("the person's edit between two of a reply's changes, or another reply, starts a new undo step", async () => {
+  await mount();
+  await aidenSaves(canvas(5, note("a"), note("b", 400)), "reply-1");
+  await act(async () => controller.change(moveTo("b", 500)));
+  await tick(800);
+  await aidenSaves(canvas(7, note("a"), note("b", 500), note("c", 800)), "reply-1");
+  await aidenSaves(canvas(8, note("a"), note("b", 500), note("c", 800), note("d", 1200)), "reply-2");
+
+  await act(async () => controller.undo());
+  assert.deepEqual(ids(controller.doc), ["a", "b", "c"], "the second reply's change undoes alone");
+  await act(async () => controller.undo());
+  assert.deepEqual(ids(controller.doc), ["a", "b"], "then the first reply's change after the person's edit");
+  await act(async () => controller.undo());
+  assert.equal(xOf(controller.doc, "b"), 400, "then the person's move");
+  await act(async () => controller.undo());
+  assert.deepEqual(ids(controller.doc), ["a"], "then the reply's first change");
+  assert.equal(controller.canUndo, false);
+});
+
+test("a change no reply announced is carried into the history instead of becoming undoable", async () => {
+  await mount();
+  await act(async () => controller.change(moveTo("a", 10)));
+  await tick(800);
+  // Revision 6 came from another window, 7 from Aiden: together they are not one reply's.
+  stored = canvas(7, note("a", 10), note("other", 400), note("aiden", 800));
+  await act(async () => emitBotTestNotification("designCanvas:updated", { chatId: "chat-1", revision: 6 }));
+  await act(async () => emitBotTestNotification("designCanvas:updated", { chatId: "chat-1", revision: 7, aidenTurn: "reply-1" }));
+  await settle();
+  assert.deepEqual(ids(controller.doc), ["a", "other", "aiden"]);
+
+  await act(async () => controller.undo());
+  assert.deepEqual(ids(controller.doc), ["a", "other", "aiden"]);
+  assert.equal(xOf(controller.doc, "a"), 0, "the person's own move undoes, and nothing of theirs or Aiden's goes");
+  assert.equal(controller.canUndo, false);
 });
 
 test("a save the app cannot deliver reports an error and waits for the next edit instead of retrying forever", async () => {

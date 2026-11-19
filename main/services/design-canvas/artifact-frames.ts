@@ -13,9 +13,11 @@ export const ARTIFACT_FRAME_BOX = { w: 640, h: 480 } as const;
 export type CanvasArtifact = { mediaId: string; title: string };
 
 /**
- * Puts each artifact on the canvas. One already there (same `mediaId`) is
- * left alone. An artifact titled like a frame Aiden placed before replaces
- * that frame's media and keeps where the person put it; the rest are placed
+ * Puts one turn's artifacts on the canvas. One already there (same `mediaId`)
+ * is left alone. An artifact titled like an unlocked frame Aiden placed before
+ * on the page on screen replaces that frame's media and keeps where the person
+ * put it; a locked frame, or one on another page, is never swapped. Two visuals
+ * of one turn never share a frame, even under one title. The rest are placed
  * beside the frames in view. Returns `changed: false` when nothing moved, so
  * the caller saves and broadcasts only real changes.
  */
@@ -26,16 +28,28 @@ export function placeArtifactFrames(
 ): { doc: DesignCanvas; changed: boolean } {
   let next = doc;
   let changed = false;
+  // Frames this turn already filled, so a second visual never lands in the first one's frame.
+  const filled = new Set<string>();
   for (const artifact of artifacts) {
     if (next.frames.some((frame) => frame.kind === "artifact" && frame.mediaId === artifact.mediaId)) continue;
     const title = artifact.title.trim().slice(0, DESIGN_CANVAS_LIMITS.titleChars) || "Visual";
     let sameTitle = -1;
     next.frames.forEach((frame, index) => {
-      if (frame.kind === "artifact" && frame.createdBy === "aiden" && frame.title === title) sameTitle = index;
+      if (
+        frame.kind === "artifact" &&
+        frame.createdBy === "aiden" &&
+        frame.title === title &&
+        !frame.locked &&
+        frame.pageId === next.activePageId &&
+        !filled.has(frame.id)
+      ) {
+        sameTitle = index;
+      }
     });
     if (sameTitle >= 0) {
       const frames = next.frames.slice();
       frames[sameTitle] = { ...frames[sameTitle]!, mediaId: artifact.mediaId };
+      filled.add(frames[sameTitle]!.id);
       next = { ...next, frames };
       changed = true;
       continue;
@@ -49,6 +63,7 @@ export function placeArtifactFrames(
     // A full canvas takes no more frames; the visual is still in the chat.
     if ("error" in placed) break;
     next = placed.doc;
+    filled.add(placed.id);
     changed = true;
   }
   return { doc: next, changed };

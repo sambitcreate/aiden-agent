@@ -73,6 +73,34 @@ test("Not now declines without touching design mode; another window cannot answe
   assert.deepEqual(events, [{ event: "design_mode_declined", props: {} }], "refused answers count for nothing");
 });
 
+test("Not now holds for the rest of the chat, in that chat only, until the person opens design mode themselves", async () => {
+  const consent = new DesignModeConsent();
+  const window = windowOwner();
+  const first = consent.request({ chatId: "chat-1", reason: "Compare.", owner: window.owner });
+  await consent.answer(requestIdOf(window.sent), "decline", window.owner, async () => undefined);
+  assert.equal(await first, "declined");
+
+  const cardsBefore = window.sent.filter((entry) => entry.channel === "designCanvas:consent").length;
+  assert.equal(await consent.request({ chatId: "chat-1", reason: "Next reply.", owner: window.owner }), "declined");
+  assert.equal(
+    window.sent.filter((entry) => entry.channel === "designCanvas:consent").length,
+    cardsBefore,
+    "no second card in a chat that said Not now",
+  );
+
+  const other = windowOwner(9);
+  const elsewhere = consent.request({ chatId: "chat-2", reason: "Another chat.", owner: other.owner });
+  assert.ok(other.sent.some((entry) => entry.channel === "designCanvas:consent"), "another chat still gets its card");
+  other.close();
+  assert.equal(await elsewhere, "unavailable");
+
+  consent.forgetDecline("chat-1");
+  const again = consent.request({ chatId: "chat-1", reason: "After they opened it.", owner: window.owner });
+  assert.equal(window.sent.filter((entry) => entry.channel === "designCanvas:consent").length, cardsBefore + 1);
+  window.close();
+  assert.equal(await again, "unavailable");
+});
+
 test("a card stops waiting when the reply stops, the window closes, or a newer card replaces it", async () => {
   const consent = new DesignModeConsent();
   const stopped = new AbortController();
@@ -143,6 +171,7 @@ test("design_mode asks only when design mode is off, and leaves without asking",
     exit: async () => {
       on = false;
     },
+    canvasToolNames: ["canvas_read", "canvas_place_frame", "canvas_arrange", "canvas_page", "canvas_focus"],
   });
   assert.equal((await run(tool, { action: "exit", reason: "done" })).status, "already");
   assert.equal((await run(tool, { action: "enter", reason: "  " })).status, "error");
@@ -151,10 +180,46 @@ test("design_mode asks only when design mode is off, and leaves without asking",
   for (const name of ["canvas_read", "canvas_place_frame", "canvas_arrange", "canvas_page", "canvas_focus"]) {
     assert.match(String(entered.next), new RegExp(name, "u"));
   }
+  assert.doesNotMatch(String(entered.next), /canvas_build|canvas_duplicate/u, "a tool this turn does not have is not named");
   assert.equal((await run(tool, { action: "enter", reason: "again" })).status, "already");
   assert.deepEqual(asked, ["Compare the three directions side by side."]);
   assert.equal((await run(tool, { action: "exit", reason: "done" })).status, "exited");
   assert.equal(on, false);
+});
+
+test("design_mode says when the canvas opened without its tools, rather than naming tools Aiden will not have", async () => {
+  let on = false;
+  const tool = createDesignModeTool({
+    isOn: async () => on,
+    requestEnter: async () => {
+      on = true;
+      return "entered";
+    },
+    exit: async () => undefined,
+    canvasToolNames: [],
+  });
+  const entered = await run(tool, { action: "enter", reason: "Compare the directions." });
+  assert.equal(entered.status, "entered");
+  assert.doesNotMatch(String(entered.next), /canvas_/u);
+  assert.match(String(entered.next), /not available/u);
+});
+
+test("design_mode tells Aiden what to do next when the card closes unanswered, as it does after Not now", async () => {
+  let answer: "declined" | "unavailable" = "unavailable";
+  const tool = createDesignModeTool({
+    isOn: async () => false,
+    requestEnter: async () => answer,
+    exit: async () => undefined,
+    canvasToolNames: ["canvas_read"],
+  });
+  const closed = await run(tool, { action: "enter", reason: "Compare the directions." });
+  assert.equal(closed.status, "unavailable");
+  assert.match(String(closed.next), /Carry on in the chat/u);
+  assert.doesNotMatch(String(closed.next), /Not now/u, "nobody said no");
+  answer = "declined";
+  const declined = await run(tool, { action: "enter", reason: "Compare the directions." });
+  assert.equal(declined.status, "declined");
+  assert.match(String(declined.next), /do not ask again/u);
 });
 
 test("design_mode is offered only in a desktop project chat while inline visuals are automatic", () => {

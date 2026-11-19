@@ -148,7 +148,7 @@ export type DesignCommentAnchor = {
   selector: string;
   text: string;
   tag: string;
-  /** The nearest `data-aiden-src` stamp, `file:line`. */
+  /** The nearest `data-aiden-src` stamp: the file, or `file:line` on older pages. */
   sourcePath?: string;
   /** Where the element was when last found. */
   rect?: DesignRect;
@@ -193,6 +193,13 @@ export type DesignCanvas = {
   activePageId: string;
   frames: DesignFrame[];
   comments: DesignComment[];
+  /**
+   * Pages (workspace paths) whose last frame the person took off the canvas,
+   * oldest first, so a page Aiden writes again does not come back by itself.
+   * Kept by the main process's store, never by the canvas: a path leaves the
+   * list once any frame shows it again. See `withRemovedPagePaths`.
+   */
+  removedPagePaths?: string[];
 };
 
 export const DESIGN_CANVAS_LIMITS = {
@@ -214,6 +221,7 @@ export const DESIGN_CANVAS_LIMITS = {
   minStrokeWidth: 1,
   maxStrokeWidth: 24,
   maxRadius: 200,
+  removedPagePaths: 200,
 } as const;
 
 export const DESIGN_WIDTHS = [390, 768, 1280, 1440] as const;
@@ -284,6 +292,32 @@ export function emptyDesignCanvas(): DesignCanvas {
 /** The page on screen. */
 export function activeDesignPage(doc: DesignCanvas): DesignPage {
   return doc.pages.find((page) => page.id === doc.activePageId) ?? doc.pages[0]!;
+}
+
+/** A workspace-relative page path as a frame stores it: trimmed, with no leading "./". */
+export function designPagePath(path: string): string {
+  return path.trim().replace(/^(?:\.\/)+/u, "");
+}
+
+/**
+ * The frame showing a workspace page, such as design/home.html: the one on
+ * the page on screen when that page shows it, else the first frame showing it
+ * on any page, in document order. Undefined when no frame shows it.
+ */
+export function frameShowingDesignPage(doc: DesignCanvas, path: string): DesignFrame | undefined {
+  const wanted = designPagePath(path);
+  if (!wanted) return undefined;
+  const showing = doc.frames.filter((frame) => frame.kind === "file" && frame.path === wanted);
+  return showing.find((frame) => frame.pageId === doc.activePageId) ?? showing[0];
+}
+
+/**
+ * A frame named by its id or, when no frame has that id, by the workspace
+ * page it shows (see `frameShowingDesignPage`). Undefined when neither matches.
+ */
+export function designFrameByIdOrPath(doc: DesignCanvas, value: unknown): DesignFrame | undefined {
+  if (typeof value !== "string" || !value) return undefined;
+  return doc.frames.find((frame) => frame.id === value) ?? frameShowingDesignPage(doc, value);
 }
 
 /** The frames on one page (the page on screen by default), in document order. */
@@ -390,6 +424,10 @@ export function parseDesignCanvas(value: unknown): DesignCanvasParseResult {
     comments.push(comment);
   }
 
+  const removedPagePaths = Array.isArray(value.removedPagePaths)
+    ? [...new Set((value.removedPagePaths as unknown[]).filter(isDesignRelativePath))].slice(-DESIGN_CANVAS_LIMITS.removedPagePaths)
+    : [];
+
   return {
     ok: true,
     // Arrows and lines follow the frames they are on, so a document read back is already up to date.
@@ -400,9 +438,36 @@ export function parseDesignCanvas(value: unknown): DesignCanvasParseResult {
       activePageId,
       frames,
       comments,
+      ...(removedPagePaths.length > 0 ? { removedPagePaths } : {}),
     }),
     dropped,
   };
+}
+
+/** The workspace pages the frames of `doc` show. */
+export function shownPagePaths(doc: Pick<DesignCanvas, "frames">): Set<string> {
+  return new Set(doc.frames.flatMap((frame) => (frame.kind === "file" && frame.path ? [frame.path] : [])));
+}
+
+/**
+ * The removed pages `after` should carry when it replaces `before`. The list
+ * is the store's alone, so whatever `after` says is ignored: it starts from
+ * `before`'s. With `byPerson`, a page every frame of which is gone joins it;
+ * any page a frame of `after` shows leaves it, whoever added that frame.
+ * A page in `undone` (one the person's undo took off) is not noted as removed.
+ */
+export function withRemovedPagePaths<T extends DesignCanvas>(
+  before: DesignCanvas,
+  after: T,
+  byPerson: boolean,
+  undone: ReadonlySet<string> = new Set(),
+): T {
+  const shown = shownPagePaths(after);
+  const gone = byPerson ? [...shownPagePaths(before)].filter((entry) => !shown.has(entry) && !undone.has(entry)) : [];
+  const kept = (before.removedPagePaths ?? []).filter((entry) => !shown.has(entry) && !gone.includes(entry));
+  const removedPagePaths = [...kept, ...gone].slice(-DESIGN_CANVAS_LIMITS.removedPagePaths);
+  const { removedPagePaths: _ignored, ...rest } = after;
+  return (removedPagePaths.length > 0 ? { ...rest, removedPagePaths } : rest) as T;
 }
 
 /** The pages of a version 2 document; never empty, and ids are unique. */

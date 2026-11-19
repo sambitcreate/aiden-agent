@@ -13,6 +13,7 @@ import {
 } from "./on-demand-tools.js";
 import { createRenderUiTool } from "./aiden-ui-tool.js";
 import { createDesignModeTool } from "./design-canvas/design-mode-tool.js";
+import { createDesignCanvasTools } from "./design-canvas/canvas-tools.js";
 import { estimateStaticContextTokens } from "./generation-context.js";
 
 function fixtureTool(name: string, description: string, calls: string[] = []): AgentTool {
@@ -167,7 +168,7 @@ test("visual and design tools tell the model when to load them, without a cut-of
   const tools = [
     fixtureTool("read_file", "Read."),
     createRenderUiTool({ namespace: "ui", existingChatUiCount: 0, onUiVisual: () => undefined }),
-    createDesignModeTool({ isOn: async () => false, requestEnter: async () => "declined", exit: async () => undefined }),
+    createDesignModeTool({ isOn: async () => false, requestEnter: async () => "declined", exit: async () => undefined, canvasToolNames: [] }),
   ];
   const loading = createOnDemandTools(tools, new Set(["render_ui", "design_mode"]))!;
   const lines = loading.loader.description.split("\n").filter((line) => /^- (render_ui|design_mode):/u.test(line));
@@ -177,4 +178,26 @@ test("visual and design tools tell the model when to load them, without a cut-of
     assert.doesNotMatch(line, /…$/u);
   }
   assert.match(lines.find((line) => line.startsWith("- design_mode"))!, /app screens|several directions/u);
+});
+
+test("a design chat starts with the everyday canvas tools and loads the page and duplicate tools when it needs them", () => {
+  const canvas = createDesignCanvasTools({ chatId: "chat-1", workspaceRoot: "/workspace", store: {} as never, broadcast: () => undefined });
+  const loading = createOnDemandTools([fixtureTool("read_file", "Read."), ...canvas])!;
+  const first = loading.initialTools([]).map((tool) => tool.name);
+  for (const everyday of ["canvas_read", "canvas_place_frame", "canvas_update_frame", "canvas_build", "canvas_inspect"]) {
+    assert.ok(first.includes(everyday), `${everyday} is declared from the start`);
+  }
+  assert.ok(!first.includes("canvas_page") && !first.includes("canvas_duplicate"));
+  const lines = loading.loader.description.split("\n").filter((line) => /^- canvas_(page|duplicate):/u.test(line));
+  assert.equal(lines.length, 2);
+  for (const line of lines) assert.doesNotMatch(line, /…$/u, "each has a whole catalog line");
+
+  const loaded: AgentMessage[] = [
+    {
+      role: "assistant",
+      content: [{ type: "toolCall", id: "1", name: LOAD_TOOLS_TOOL_NAME, arguments: { names: ["canvas_duplicate"] } }],
+    } as never,
+  ];
+  const later = loading.initialTools(loaded).map((tool) => tool.name);
+  assert.ok(later.includes("canvas_duplicate") && !later.includes("canvas_page"));
 });

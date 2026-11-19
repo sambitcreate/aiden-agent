@@ -15,15 +15,31 @@
 // quitting, closing or reloading tries them once more and then asks the person
 // before discarding them, as it does for the Files editor and Create Images.
 //
-// Undo and redo are saved as the frames they change, not as whole canvases,
-// and taking in another writer's canvas clears the history, so neither can
-// take back what was changed elsewhere.
+// Undo and redo are saved as the frames they change, not as whole canvases.
+// Taking in another writer's canvas keeps the history: Aiden's canvas changes
+// from one reply become one undo step (the person's own edit in between
+// starts a new one), and any other writer's change is carried into every
+// kept step, so undo never takes back what was changed elsewhere. A fetch or
+// a save's reply can bring a reply's revision before its announcement does;
+// the history is then built again when the announcement arrives, unless the
+// person has made a step of their own since. An edit the person makes
+// without a step of its own (a text frame growing to fit, say) is kept out of
+// an Aiden reply's step, so undoing the reply leaves it.
 
 import * as React from "react";
 import { designCanvasApi } from "../lib/ipc";
 import { registerLifecycleFlush, setRendererLifecycleGuard } from "../lib/lifecycle-guard";
-import type { DesignCanvas } from "../shared/design-canvas/schema";
-import { changesBetween, record, redo, undo, type CanvasHistory } from "./canvas-history-core";
+import { shownPagePaths, type DesignCanvas } from "../shared/design-canvas/schema";
+import {
+  carryUnrecorded,
+  changesBetween,
+  keepUnchanged,
+  record,
+  redo,
+  takeIn,
+  undo,
+  type CanvasHistory,
+} from "./canvas-history-core";
 
 export const DESIGN_CANVAS_SAVE_DELAY_MS = 800;
 /** How long a closed canvas waits before each further try at edits it could not save. */
@@ -69,6 +85,22 @@ function createCanvasSync(chatId: string, publish: (state: SyncState) => void): 
   let inFlight: Promise<void> | null = null;
   let timer: ReturnType<typeof setTimeout> | null = null;
   let history = EMPTY_HISTORY;
+  /**
+   * Pages an undo took off the canvas. The save says so, and the store does not
+   * remember them as removed by the person, so Aiden writing one again shows it.
+   * A later edit or redo that takes a page off makes it the person's removal again.
+   */
+  const undonePages = new Set<string>();
+  /** Tracks the pages `edit` takes off: `undone` notes them, any other edit forgets them. */
+  const notePagesTakenOff = (before: DesignCanvas | null, undone: boolean) => {
+    if (!before || !local || local === before) return;
+    const shown = shownPagePaths(local);
+    for (const page of shownPagePaths(before)) {
+      if (shown.has(page)) continue;
+      if (undone) undonePages.add(page);
+      else undonePages.delete(page);
+    }
+  };
   let failed = false;
   /** The canvas closed; the session lives on only while it holds edits it could not save. */
   let closed = false;
@@ -76,6 +108,81 @@ function createCanvasSync(chatId: string, publish: (state: SyncState) => void): 
   const guardKey = Symbol(chatId);
   /** The newest revision another writer announced. */
   let announced = 0;
+  /** The Aiden reply each announced revision came from, or null when it came from no reply. */
+  const aidenRevisions = new Map<number, string | null>();
+  /** The one Aiden reply that made every revision after `from` up to `to`, if one did. */
+  const aidenTurnBetween = (from: number, to: number): string | undefined => {
+    if (to <= from || to - from > 1_000) return undefined;
+    const turn = aidenRevisions.get(to);
+    if (typeof turn !== "string") return undefined;
+    for (let revision = from + 1; revision < to; revision += 1) {
+      if (aidenRevisions.get(revision) !== turn) return undefined;
+    }
+    return turn;
+  };
+  /**
+   * Whether the revisions after `from` up to `to` may still turn out to be one
+   * reply's: some are not announced yet, and every announced one is that reply's.
+   * A fetch or a save's reply can bring a revision before its announcement does.
+   */
+  const mayBeOneReply = (from: number, to: number): boolean => {
+    if (to <= from || to - from > 1_000) return false;
+    let turn: string | undefined;
+    let unknown = false;
+    for (let revision = from + 1; revision <= to; revision += 1) {
+      const seen = aidenRevisions.get(revision);
+      if (seen === undefined) unknown = true;
+      else if (seen === null || (turn !== undefined && seen !== turn)) return false;
+      else turn = seen;
+    }
+    return unknown;
+  };
+  type TakenIn = { before: DesignCanvas; from: DesignCanvas; to: DesignCanvas };
+  /** What changed the history without a step of the person's: a stored canvas taken in, or an unrecorded edit. */
+  type HistoryChange = { takenIn: TakenIn } | { unrecorded: Mutation };
+  /**
+   * The history before a take-in that may still turn out to be an Aiden reply's,
+   * and every change to it since, so the history can be built again once the
+   * late announcements say whose they were. The person's own step ends it.
+   */
+  let unsettled: { base: CanvasHistory; changes: HistoryChange[] } | null = null;
+  const historyAfter = (base: CanvasHistory, changes: readonly HistoryChange[]) =>
+    changes.reduce((built, change) => {
+      if ("unrecorded" in change) return carryUnrecorded(built, change.unrecorded);
+      const { from, to } = change.takenIn;
+      return takeIn(built, { ...change.takenIn, aidenTurn: aidenTurnBetween(from.revision, to.revision) });
+    }, base);
+  const noteChange = (change: HistoryChange) => {
+    if (unsettled && unsettled.changes.length < 50) unsettled.changes.push(change);
+    else unsettled = null;
+  };
+  /** Forgets announcements nothing can ask about any more. */
+  const forgetOldRevisions = () => {
+    const first = unsettled?.changes.find((change) => "takenIn" in change);
+    const floor = first && "takenIn" in first ? first.takenIn.from.revision : (server?.revision ?? -1);
+    for (const revision of aidenRevisions.keys()) {
+      if (revision <= floor) aidenRevisions.delete(revision);
+    }
+  };
+  const settleIfKnown = () => {
+    const open = unsettled?.changes.some(
+      (change) => "takenIn" in change && mayBeOneReply(change.takenIn.from.revision, change.takenIn.to.revision),
+    );
+    if (!open) unsettled = null;
+  };
+  /** Moves the stored canvas on to `stored`, keeping the history. Returns the canvas to build on. */
+  const takeInStored = (stored: DesignCanvas, before: DesignCanvas): DesignCanvas => {
+    const from = server!;
+    const to = keepUnchanged(from, stored);
+    const change: TakenIn = { before, from, to };
+    if (!unsettled && mayBeOneReply(from.revision, to.revision)) unsettled = { base: history, changes: [] };
+    if (unsettled) noteChange({ takenIn: change });
+    history = takeIn(history, { ...change, aidenTurn: aidenTurnBetween(from.revision, to.revision) });
+    server = to;
+    settleIfKnown();
+    forgetOldRevisions();
+    return to;
+  };
 
   const reportGuard = () => {
     const before = guardStates.get(guardKey);
@@ -115,18 +222,20 @@ function createCanvasSync(chatId: string, publish: (state: SyncState) => void): 
     const batch = unsent;
     const doc = local;
     const base = server.revision;
+    const shown = shownPagePaths(doc);
+    const undone = [...undonePages].filter((page) => !shown.has(page));
     unsent = [];
     let retryNow = false;
     const attempt = (async () => {
       try {
-        const result = await designCanvasApi.saveDesignCanvas(chatId, doc, base);
+        const result = await designCanvasApi.saveDesignCanvas(chatId, doc, base, ...(undone.length > 0 ? [{ undone }] : []));
         if (result.ok) {
+          for (const page of undone) undonePages.delete(page);
           server = { ...doc, revision: result.revision };
           if (local === doc) local = server;
           failed = false;
         } else if (result.reason === "conflict") {
-          server = result.doc;
-          history = EMPTY_HISTORY;
+          takeInStored(result.doc, local ?? doc);
           unsent = [...batch, ...unsent];
           local = replay(server, unsent);
           // Conflicted again straight after a replay: keep the edits on the newest canvas,
@@ -155,12 +264,19 @@ function createCanvasSync(chatId: string, publish: (state: SyncState) => void): 
     if (unsent.length === 0 && timer === null && server && announced > server.revision) refetch();
   };
 
-  const apply = (mutate: Mutation, before: DesignCanvas | null, nextHistory: CanvasHistory) => {
+  /** Shows and saves `mutate`; `step` is the history after it, or null when it makes no step of its own. */
+  const apply = (mutate: Mutation, step: (() => CanvasHistory) | null) => {
     if (!local) return;
     const next = mutate(local);
     if (next === local) return;
-    if (before) history = record(nextHistory, before);
-    else history = nextHistory;
+    if (step) {
+      history = step();
+      // The person's own step is built on what they saw; a late announcement no longer changes it.
+      unsettled = null;
+    } else {
+      history = carryUnrecorded(history, mutate);
+      if (unsettled) noteChange({ unrecorded: mutate });
+    }
     local = next;
     unsent.push(mutate);
     emit();
@@ -172,10 +288,7 @@ function createCanvasSync(chatId: string, publish: (state: SyncState) => void): 
       (fetched) => {
         if (disposed || !server || fetched.revision <= server.revision) return;
         if (unsent.length > 0 || inFlight) return;
-        server = fetched;
-        local = fetched;
-        // Undo must not take back what was changed elsewhere.
-        history = EMPTY_HISTORY;
+        local = takeInStored(fetched, local ?? server);
         emit();
         if (announced > fetched.revision) refetch();
       },
@@ -207,7 +320,18 @@ function createCanvasSync(chatId: string, publish: (state: SyncState) => void): 
   const unsubscribe = designCanvasApi.onDesignCanvasUpdated((update) => {
     if (update.chatId !== chatId) return;
     announced = Math.max(announced, update.revision);
-    if (!server || update.revision <= server.revision) return;
+    aidenRevisions.set(update.revision, typeof update.aidenTurn === "string" ? update.aidenTurn : null);
+    if (server && update.revision <= server.revision) {
+      // A canvas already taken in, announced late: now it may be known to be one reply's.
+      if (unsettled) {
+        history = historyAfter(unsettled.base, unsettled.changes);
+        settleIfKnown();
+        emit();
+      }
+      forgetOldRevisions();
+      return;
+    }
+    if (!server) return;
     // A pending edit saves first: its conflict brings the newer canvas with it,
     // and a save already on its way fetches it when it lands.
     if (unsent.length > 0 || inFlight || timer !== null) return;
@@ -230,19 +354,25 @@ function createCanvasSync(chatId: string, publish: (state: SyncState) => void): 
 
   return {
     change(mutate, recordHistory) {
-      apply(mutate, recordHistory ? local : null, history);
+      const before = local;
+      apply(mutate, recordHistory && before ? () => record(history, before) : null);
+      notePagesTakenOff(before, false);
     },
     undo() {
       if (!local) return;
+      const before = local;
       const step = undo(history, local);
       if (!step) return;
-      apply(changesBetween(local, step.doc), null, step.history);
+      apply(changesBetween(local, step.doc), () => step.history);
+      notePagesTakenOff(before, true);
     },
     redo() {
       if (!local) return;
+      const before = local;
       const step = redo(history, local);
       if (!step) return;
-      apply(changesBetween(local, step.doc), null, step.history);
+      apply(changesBetween(local, step.doc), () => step.history);
+      notePagesTakenOff(before, false);
     },
     flush,
     dispose() {
