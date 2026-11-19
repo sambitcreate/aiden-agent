@@ -221,6 +221,12 @@ function createCanvasSync(chatId: string, publish: (state: SyncState) => void): 
     publishDesignGuard();
   };
   const emit = () => {
+    // A page an undo took off that is shown again (a redo, Aiden, another window)
+    // is no longer undone: if it is taken off later, that removal is someone's own.
+    if (undonePages.size > 0 && local) {
+      const shown = shownPagePaths(local);
+      for (const page of undonePages) if (shown.has(page)) undonePages.delete(page);
+    }
     reportGuard();
     if (disposed) return;
     publish({

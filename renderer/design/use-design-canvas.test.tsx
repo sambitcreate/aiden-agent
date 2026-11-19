@@ -320,6 +320,21 @@ test("a save says which pages an undo took off, so the store does not remember t
   assert.equal(saves().length, 4);
   assert.deepEqual(ids(saves()[3]!.args[1] as DesignCanvas), ["a"]);
   assert.equal(undoneOf(3), undefined, "deleting the page is the person's removal");
+
+  // An undo and redo within one save leave the page shown; another window then takes it off.
+  await act(async () => controller.change((doc) => ({ ...doc, frames: [...doc.frames, page] })));
+  await act(async () => controller.undo());
+  await act(async () => controller.redo());
+  await tick(800);
+  assert.equal(undoneOf(4), undefined);
+  stored = { ...stored, revision: stored.revision + 1, frames: stored.frames.filter((frame) => frame.id !== "p") };
+  await act(async () => emitBotTestNotification("designCanvas:updated", { chatId: "chat-1", revision: stored.revision }));
+  await settle();
+  assert.deepEqual(ids(controller.doc), ["a"]);
+  await act(async () => controller.change(moveTo("a", 50)));
+  await tick(800);
+  assert.equal(saves().length, 6);
+  assert.equal(undoneOf(5), undefined, "the other window's removal is not called an undo of this one");
 });
 
 test("an undo waiting to save does not take back a frame another window added", async () => {
