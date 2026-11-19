@@ -49,10 +49,35 @@ function attribute(element: Element, name: string): string | undefined {
   return element.attrs.find((attr) => attr.name === name && !attr.namespace)?.value;
 }
 
-/** The line V8 names first in a SyntaxError's stack ("visual.html:12"), which the offsets make the HTML's own line. */
-function errorLine(error: Error, fallback: number): number {
+/**
+ * The script's type as a browser works it out (WHATWG HTML, "prepare the
+ * script element"): its `type`, or when it has none, "text/" and its
+ * `language`, so `<script language="vbscript">` is not JavaScript.
+ */
+function scriptType(script: Element): string {
+  const type = attribute(script, "type");
+  if (type !== undefined) return type.trim().toLowerCase();
+  const language = attribute(script, "language");
+  return language ? `text/${language}`.trim().toLowerCase() : "";
+}
+
+/**
+ * The HTML line of the script line V8 names first in a SyntaxError's stack
+ * ("visual.html:12"). V8 also ends a line at U+2028 and U+2029, which an
+ * HTML editor shows inside one line, so those breaks before the error are
+ * taken back out.
+ */
+function errorLine(error: Error, text: string, start: number): number {
   const match = /^visual\.html:(\d+)/u.exec(error.stack ?? "");
-  return match ? Number(match[1]) : fallback;
+  if (!match) return start;
+  let breaks = Number(match[1]) - start;
+  let separators = 0;
+  for (const found of text.matchAll(/\r\n|[\n\r\u2028\u2029]/gu)) {
+    if (breaks <= 0) break;
+    breaks -= 1;
+    if (found[0] === "\u2028" || found[0] === "\u2029") separators += 1;
+  }
+  return Number(match[1]) - separators;
 }
 
 function clip(text: string): string {
@@ -64,8 +89,8 @@ function clip(text: string): string {
  * Compiles every inline script a raw HTML visual would run, without running
  * any of them, so a typo that stops a script is reported with its line
  * instead of leaving a visual that draws nothing. Module scripts, scripts
- * inside a `<template>` and data blocks (`type="application/json"`) are not
- * compiled: modules can't be compiled here without running them, and the
+ * inside a `<template>`, data blocks (`type="application/json"`) and scripts
+ * in another language (`language="vbscript"`) are not compiled: modules can't be compiled here without running them, and the
  * others never run as written.
  */
 export function checkGenerativeUiScripts(html: string): GenerativeUiScriptCheck {
@@ -90,7 +115,7 @@ export function checkGenerativeUiScripts(html: string): GenerativeUiScriptCheck 
   }
   for (const script of scripts) {
     if (attribute(script, "src") !== undefined) continue;
-    const type = (attribute(script, "type") ?? "").trim().toLowerCase();
+    const type = scriptType(script);
     if (type === "module") {
       modules += 1;
       continue;
@@ -111,7 +136,7 @@ export function checkGenerativeUiScripts(html: string): GenerativeUiScriptCheck 
     } catch (error) {
       if (error instanceof SyntaxError) {
         findings.push(
-          `The script starting on line ${line} will not run: ${clip(error.message)} (line ${errorLine(error, line)}). The reader sees the visual without anything that script draws or wires up.`,
+          `The script starting on line ${line} will not run: ${clip(error.message)} (line ${errorLine(error, text, line)}). The reader sees the visual without anything that script draws or wires up.`,
         );
       } else {
         unchecked.push(`the script starting on line ${line}, which is too deeply nested to read`);
@@ -131,6 +156,11 @@ export function describeGenerativeUiScriptCheck(check: GenerativeUiScriptCheck, 
     findings: check.findings,
     fix: `The visual is shown as written. Fix them and ${rerun}.`,
     unchecked: check.unchecked,
-    clean: `${check.checked === 1 ? "its inline script compiles" : `all ${check.checked} inline scripts compile`}`,
+    clean:
+      check.checked === 0
+        ? "no inline script could be compiled here"
+        : check.checked === 1
+          ? "its inline script compiles"
+          : `all ${check.checked} inline scripts compile`,
   });
 }

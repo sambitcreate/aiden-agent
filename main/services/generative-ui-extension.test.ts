@@ -467,6 +467,35 @@ test("render_artifact shows a visual whose script will not compile and says whic
 
   const module = text(await tool.execute("call-4", { title: "Module", html: "<script type=\"module\">import x from './x.js'</script>" }));
   assert.match(module, /Not checked: 1 module script \(type="module"\)\./u);
+  // Nothing was compiled, so the report does not claim that every script compiles.
+  assert.match(module, /Script check: no problems found; no inline script could be compiled here\./u);
+  assert.doesNotMatch(module, /compiles/u);
+});
+
+test("a script in another language is not compiled as JavaScript, and one named JavaScript is", async () => {
+  const extension = createGenerativeUiExtension({ workspaceRoot: undefined, artifactNamespace: "gen-language", onArtifact: () => {} });
+  const tool = extension.tools?.[0];
+  assert.ok(tool);
+  const run = async (html: string) =>
+    (await tool.execute("call", { title: "Lang", html })).content.map((part) => (part.type === "text" ? part.text : "")).join("");
+  const vbscript = await run('<script language="vbscript">MsgBox "hi"</script>');
+  assert.doesNotMatch(vbscript, /Script check/u);
+  const javascript = await run('<script language="JavaScript">draw(;</script>');
+  assert.match(javascript, /Script check: 1 problem found/u);
+  // A type, even an empty one, wins over the language.
+  const typed = await run('<script type="" language="vbscript">draw(;</script>');
+  assert.match(typed, /Script check: 1 problem found/u);
+});
+
+test("a script error after a line or paragraph separator names the line an editor shows", async () => {
+  const extension = createGenerativeUiExtension({ workspaceRoot: undefined, artifactNamespace: "gen-separator", onArtifact: () => {} });
+  const tool = extension.tools?.[0];
+  assert.ok(tool);
+  // HTML counts only the newlines, so the error is on the visual's line 3; JavaScript also breaks at U+2028 and U+2029.
+  const html = ["<p>Chart</p>", "<script>const label = 'a\u2028b\u2029c';", "draw(;</script>"].join("\n");
+  const result = await tool.execute("call-1", { title: "Sep", html });
+  const text = result.content.map((part) => (part.type === "text" ? part.text : "")).join("");
+  assert.match(text, /The script starting on line 2 will not run: .+ \(line 3\)\./u);
 });
 
 test("a script error inside an SVG is reported, and nothing the script says runs while it is checked", async () => {
