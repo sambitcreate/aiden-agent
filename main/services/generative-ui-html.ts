@@ -47,7 +47,7 @@ function limitAdvice(limit: string): string {
   }
   if (limit === XML_MARKUP_IN_DECLARATION_LIMIT) return "Remove the < and > from the processing instruction or DOCTYPE in the XML the script parses.";
   if (limit.endsWith(FOREIGN_END_LIMIT)) {
-    return "Close the HTML elements in an SVG <foreignObject>, <desc> or <title> or in MathML text before ending the element around them.";
+    return "Close the HTML elements in an SVG <desc> or <title> or in MathML text before ending the element around them.";
   }
   if (limit.endsWith(SELECT_RAW_TEXT_LIMIT)) return `Move the ${limit.slice(0, limit.indexOf(">") + 1)} out of the <select>.`;
   if (limit.endsWith(SELECT_FOREIGN_LIMIT)) {
