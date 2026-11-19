@@ -333,6 +333,10 @@ Pickers and palettes match with `renderer/lib/text-match.ts`, not cmdk's filter
   `renderer/lib/reveal-in-list.ts`, never `scrollIntoView`, which can scroll
   the page or the dialog around the list.
 
+## Accessibility gate
+
+`tests/e2e/accessibility.spec.ts` opens Aiden's core surfaces (the chat window and composer, the model picker, the command palette, a confirm dialog, Settings) and runs axe with the WCAG 2.x A and AA tags through `auditAccessibility` in `tests/e2e/axe-gate.ts`. Each surface also gets one small `toMatchAriaSnapshot`. To add a surface, open it in a new `test.step`, call `auditAccessibility(page, { surface, include })` with its root selector, and snapshot only its stable structure: roles, names and states, with no model lists, dates or platform shortcut text. Fix violations in the component. When a fix is out of scope, add an `AXE_EXCLUSIONS` entry keyed by surface, rule id and target selector, with a reason. An entry that stops matching fails the gate until it is deleted, so the list only shrinks.
+
 ## Enforced rules
 
 `npm run check:aiden-rules` (`scripts/check-aiden-rules.mjs`) checks the rules a

@@ -1,0 +1,12 @@
+# Accessibility gate (UI SDK lessons unit 9)
+
+Built 2026-11-19. `tests/e2e/accessibility.spec.ts` is one Electron test. It finishes LM Studio onboarding, then for each surface runs axe and one small `toMatchAriaSnapshot`. The surfaces are: the chat window with the composer (whole page), the model picker popover (List tab, `[data-radix-popper-content-wrapper]`), the ⌘K/Ctrl+K command palette, the "Delete this chat?" alertdialog (one chat seeded through the `chats:list`/`chats:get` IPC override, then palette → Delete chat), and Settings → Providers and → Appearance. It collects every audit's problems and asserts them once at the end, so one bad surface does not hide the others.
+
+- Helper `tests/e2e/axe-gate.ts`. `auditAccessibility(page, { surface, include? })` runs `@axe-core/playwright` (pinned at 4.14.0) with the wcag2a/2aa/21a/21aa/22a/22aa tags. It uses `setLegacyMode(true)`, because the default mode opens a blank page through `context.newPage()`, which Electron cannot do. Best-practice rules (region, landmark-one-main, page-has-heading-one) are not tagged WCAG, so nothing is disabled.
+- Exclusions: `AXE_EXCLUSIONS` entries are `{ surface, rule, target: string | RegExp, reason }`. The target is axe's selector, with frames joined by " >> ". An entry is checked only on its own surface, and one that matches no node there fails as "stale exclusion … delete it", the same ratchet as `scripts/check-aiden-rules.mjs`. The pure logic is `axeProblems`, tested in `tests/e2e/axe-gate.test.ts` (tsx --test).
+- Seed exclusions, both left because another unit was editing the owning file:
+  - `chat window` `label-content-name-mismatch` `.composer-workspace-trigger`: the chip shows the workspace name but is labelled "Choose a workspace" (composer.tsx).
+  - `model picker` `nested-interactive` Radix option id regex: the Pin and Add to Pad buttons are inside the cmdk option (model-picker.tsx).
+- Snapshots stay behavioral. They leave out model rows, platform shortcut text and the full palette list, and use regexes for "Selected model: …". Playwright's template matching is partial, so extra children are fine.
+- Settings has no General page. Its first page is Providers. It also renders two h1s ("Settings" and the page title), which no WCAG rule flags.
+- CI: in `scripts/ci-e2e-spec-map.json` (and `axe-gate.ts` in `full`), with a `FILE_SECONDS` weight in `scripts/ci-e2e-shards.mjs`. Run it with `npm run test:e2e:space -- tests/e2e/accessibility.spec.ts`.

@@ -22,9 +22,19 @@
     "tests/e2e/bot-browser-native.ts",
     "tests/e2e/browser-initial-crash-native.ts",
     "tests/e2e/browser-throttling-native.ts",
-    "tests/e2e/design-mode-helpers.ts"
+    "tests/e2e/design-mode-helpers.ts",
+    "tests/e2e/axe-gate.ts"
   ],
   "specs": {
+    "accessibility.spec.ts": [
+      "renderer/components/chat-sidebar",
+      "renderer/components/composer",
+      "renderer/components/command-palette",
+      "renderer/components/model-picker",
+      "renderer/components/ui.tsx",
+      "renderer/components/settings/",
+      "renderer/main/settings-view.tsx"
+    ],
     "aiden-mcp-settings.spec.ts": [
       "renderer/components/settings/aiden-mcp-settings",
       "main/services/aiden-mcp",

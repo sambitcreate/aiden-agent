@@ -357,6 +357,7 @@
         "scripts/run-ci-tests.test.mjs",
         "scripts/ci-timings.test.mjs",
         "scripts/check-aiden-rules.test.mjs",
+        "tests/e2e/axe-gate.test.ts",
         "main/services/generation-delta-coalescer.test.ts",
         "main/services/bot-connection-dismissals.test.ts",
         "main/services/bot-connection-setup-core.test.ts",
