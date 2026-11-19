@@ -7,6 +7,7 @@ import test from "node:test";
 import {
   isWorkspaceArtifactTitle,
   parseWorkspaceArtifactActions,
+  firstJsonErrorOffset,
   parseWorkspaceArtifactOutput,
   parseWorkspaceArtifactRefresh,
   parseWorkspaceArtifactSnapshotV1,
@@ -1067,6 +1068,55 @@ test("output parses as JSON, non-empty lines or text, within the data cap", () =
   assert.equal(parseWorkspaceArtifactOutput("json", "not json").ok, false);
   const big = parseWorkspaceArtifactOutput("text", "x".repeat(70 * 1024));
   assert.equal(big.ok, false);
+});
+
+test("output that is not JSON names the line and column of the first fault, whatever the engine's message says", () => {
+  const error = (text: string) => {
+    const result = parseWorkspaceArtifactOutput("json", text);
+    assert.equal(result.ok, false, text);
+    return result.ok ? "" : result.error;
+  };
+  for (const eol of ["\n", "\r\n"]) {
+    // The fault is the x: third line, eighth character, whichever line endings the output uses.
+    assert.match(error(["{", '  "a": 1,', '  "b": x', "}"].join(eol)), /at line 3, column 8, near ".*b\\": ⟨here⟩x \}"/u);
+    assert.match(error(`[${eol}1,${eol}2,${eol}]`), /at line 4, column 1, near ".*⟨here⟩\]"/u);
+    assert.match(error(`{${eol}"a":tru}`), /at line 2, column 8, near ".*tru⟨here⟩\}"/u);
+  }
+  assert.match(error("[1,2,]"), /at line 1, column 6, near "\[1,2,⟨here⟩\]"/u);
+  assert.match(error('{"a":tru}'), /at line 1, column 9,/u);
+  assert.match(error('Fetching...\n[{"n":1}]'), /at line 1, column 1, near "⟨here⟩Fetching/u);
+  assert.match(error('[{"n":1}]\ndone'), /at line 2, column 1, near ".*⟨here⟩done"/u);
+  // Output cut off part way: no place in the text is wrong, so it says it ends early.
+  for (const cut of ['{"a": [1, 2', '"abc', '{"a"', "[1, -", '{"a": "\\u00']) {
+    assert.match(error(cut), /it ends early, near ".*⟨here⟩"\.$/u, cut);
+  }
+  // Columns count characters, so an emoji before the fault counts once and the excerpt never halves it.
+  assert.match(error(`{"${"😀".repeat(20)}":1 x}`), /at line 1, column 27, near "….*😀\\":1 ⟨here⟩x\}"/u);
+  // Thirty code units either side of the fault would land inside an emoji here.
+  for (const text of [`["${"😀".repeat(40)}"  x]`, `[x"${"😀".repeat(40)}"]`]) {
+    assert.doesNotMatch(error(text), /[\uD800-\uDFFF]/u, "no lone surrogate");
+  }
+  assert.equal(error("  \n "), "The output is empty, not JSON.");
+});
+
+test("the JSON fault scan agrees with the parser on which texts are valid", () => {
+  // An independent oracle: every mutation the scan calls valid must parse, and every one it faults must not.
+  const pieces = ["{", "}", "[", "]", ",", ":", '"', "a", "1", "0", "-", ".", "e", "+", " ", "\n", "t", "r", "u", "n", "l", "\\", "x"];
+  const bases = ['{"a":[1,2,{"b":null}],"c":"x\\u00e9"}', "[true,false,null,-0.5e+3]", '"\\n"', "0", "[[],{}]"];
+  let seed = 7;
+  const random = () => (seed = (seed * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff;
+  for (let n = 0; n < 4_000; n += 1) {
+    const base = bases[n % bases.length]!;
+    const at = Math.floor(random() * base.length);
+    const text = base.slice(0, at) + pieces[Math.floor(random() * pieces.length)] + base.slice(at + (random() < 0.5 ? 1 : 0));
+    let parses = true;
+    try {
+      JSON.parse(text);
+    } catch {
+      parses = false;
+    }
+    assert.equal(firstJsonErrorOffset(text) === undefined, parses, JSON.stringify(text));
+  }
 });
 
 test("sources follow the workspace's access like a chat would", () => {

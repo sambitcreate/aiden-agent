@@ -564,29 +564,187 @@ export function workspaceArtifactDataJson(
 
 const JSON_SNIPPET_CHARS = 30;
 
+const isJsonSpace = (code: number) => code === 0x20 || code === 0x09 || code === 0x0a || code === 0x0d;
+const isDigit = (code: number) => code >= 0x30 && code <= 0x39;
+const isHex = (code: number) => isDigit(code) || (code >= 0x41 && code <= 0x46) || (code >= 0x61 && code <= 0x66);
+
 /**
- * Why `text` is not JSON, with where: the line and column the parser stopped
- * at and the text around it, so a stray log line or a trailing comma can be
- * found without the whole output.
+ * The offset of the first character that breaks the JSON grammar (RFC 8259,
+ * as `JSON.parse` reads it), `text.length` when the text ends too early, or
+ * undefined when the scan finds nothing wrong. One pass with an explicit
+ * stack, so it is linear and never recurses however deep the text nests; it
+ * never reads the parser's message, whose wording differs between engines.
  */
-function invalidJsonMessage(text: string, error: unknown): string {
+export function firstJsonErrorOffset(text: string): number | undefined {
+  const length = text.length;
+  const stack: Array<"{" | "["> = [];
+  let i = 0;
+  const skipSpace = () => {
+    while (i < length && isJsonSpace(text.charCodeAt(i))) i += 1;
+  };
+  /** Advances past a string starting at `i`; returns an error offset or -1. */
+  const scanString = (): number => {
+    i += 1;
+    while (i < length) {
+      const code = text.charCodeAt(i);
+      if (code === 0x22) {
+        i += 1;
+        return -1;
+      }
+      if (code < 0x20) return i;
+      if (code === 0x5c) {
+        const escape = text.charCodeAt(i + 1);
+        if (i + 1 >= length) return length;
+        if (escape === 0x75) {
+          for (let k = 2; k < 6; k += 1) {
+            if (i + k >= length) return length;
+            if (!isHex(text.charCodeAt(i + k))) return i + k;
+          }
+          i += 6;
+          continue;
+        }
+        if (!'"\\/bfnrt'.includes(text[i + 1]!)) return i + 1;
+        i += 2;
+        continue;
+      }
+      i += 1;
+    }
+    return length;
+  };
+  const digits = (): number => {
+    const from = i;
+    while (i < length && isDigit(text.charCodeAt(i))) i += 1;
+    return i - from;
+  };
+  /** Advances past a number starting at `i`; returns an error offset or -1. */
+  const scanNumber = (): number => {
+    if (text.charCodeAt(i) === 0x2d) i += 1;
+    if (i >= length) return length;
+    if (text.charCodeAt(i) === 0x30) i += 1;
+    else if (digits() === 0) return i;
+    if (text.charCodeAt(i) === 0x2e) {
+      i += 1;
+      if (i >= length) return length;
+      if (digits() === 0) return i;
+    }
+    const exponent = text.charCodeAt(i);
+    if (exponent === 0x65 || exponent === 0x45) {
+      i += 1;
+      const sign = text.charCodeAt(i);
+      if (sign === 0x2b || sign === 0x2d) i += 1;
+      if (i >= length) return length;
+      if (digits() === 0) return i;
+    }
+    return -1;
+  };
+  // Each turn reads one value, then the punctuation after it up to the next value.
+  for (;;) {
+    skipSpace();
+    if (i >= length) return length;
+    const code = text.charCodeAt(i);
+    let failed = -1;
+    if (code === 0x7b || code === 0x5b) {
+      stack.push(code === 0x7b ? "{" : "[");
+      i += 1;
+      skipSpace();
+      if (i >= length) return length;
+      const close = text.charCodeAt(i);
+      if (code === 0x5b && close === 0x5d) {
+        stack.pop();
+        i += 1;
+      } else if (code === 0x7b && close === 0x7d) {
+        stack.pop();
+        i += 1;
+      } else if (code === 0x7b) {
+        if (close !== 0x22) return i;
+        failed = scanString();
+        if (failed >= 0) return failed;
+        skipSpace();
+        if (i >= length) return length;
+        if (text.charCodeAt(i) !== 0x3a) return i;
+        i += 1;
+        continue;
+      } else {
+        continue;
+      }
+    } else if (code === 0x22) {
+      failed = scanString();
+    } else if (code === 0x2d || isDigit(code)) {
+      failed = scanNumber();
+    } else if (code === 0x74 || code === 0x66 || code === 0x6e) {
+      const word = code === 0x74 ? "true" : code === 0x66 ? "false" : "null";
+      for (let k = 0; k < word.length; k += 1) {
+        if (i + k >= length) return length;
+        if (text[i + k] !== word[k]) return i + k;
+      }
+      i += word.length;
+    } else {
+      return i;
+    }
+    if (failed >= 0) return failed;
+    // After a value: close containers, or a comma that leads to the next value.
+    for (;;) {
+      skipSpace();
+      const top = stack[stack.length - 1];
+      if (top === undefined) return i < length ? i : undefined;
+      if (i >= length) return length;
+      const next = text.charCodeAt(i);
+      if ((top === "[" && next === 0x5d) || (top === "{" && next === 0x7d)) {
+        stack.pop();
+        i += 1;
+        continue;
+      }
+      if (next !== 0x2c) return i;
+      i += 1;
+      if (top === "{") {
+        skipSpace();
+        if (i >= length) return length;
+        if (text.charCodeAt(i) !== 0x22) return i;
+        failed = scanString();
+        if (failed >= 0) return failed;
+        skipSpace();
+        if (i >= length) return length;
+        if (text.charCodeAt(i) !== 0x3a) return i;
+        i += 1;
+      }
+      break;
+    }
+  }
+}
+
+/**
+ * Why `text` is not JSON, with where: the line and column of the first
+ * character that breaks the grammar and the text around it, so a stray log
+ * line or a trailing comma can be found without the whole output. Lines end
+ * at LF, CRLF or a lone CR; columns count characters from 1. When the scan
+ * finds no fault the parser did, the message names no place rather than a
+ * wrong one.
+ */
+function invalidJsonMessage(text: string): string {
   if (!text.trim()) return "The output is empty, not JSON.";
-  const reason = error instanceof Error ? error.message : "";
-  const stated = /\bposition (\d+)/u.exec(reason);
-  const at = stated
-    ? Math.min(Number(stated[1]), text.length)
-    : /end of (?:JSON|data)|unterminated|unexpected end/iu.test(reason)
-      ? text.length
-      : text.length - text.trimStart().length;
+  const at = firstJsonErrorOffset(text);
+  if (at === undefined) return "The output is not valid JSON.";
   const before = text.slice(0, at);
-  const line = before.split("\n").length;
-  const column = at - before.lastIndexOf("\n");
+  const line = (before.match(/\r\n|\r|\n/gu)?.length ?? 0) + 1;
+  const lineStart = Math.max(before.lastIndexOf("\n"), before.lastIndexOf("\r")) + 1;
+  const column = Array.from(text.slice(lineStart, at)).length + 1;
   const oneLine = (part: string) => part.replace(/\s+/gu, " ");
-  const start = Math.max(0, at - JSON_SNIPPET_CHARS);
-  const end = Math.min(text.length, at + JSON_SNIPPET_CHARS);
+  const start = safeCut(text, Math.max(0, at - JSON_SNIPPET_CHARS));
+  const end = safeCut(text, Math.min(text.length, at + JSON_SNIPPET_CHARS));
   const near = `${start > 0 ? "…" : ""}${oneLine(text.slice(start, at))}⟨here⟩${oneLine(text.slice(at, end))}${end < text.length ? "…" : ""}`;
   const where = at >= text.length ? "it ends early" : `at line ${line}, column ${column}`;
   return `The output is not valid JSON: ${where}, near ${JSON.stringify(near)}.`;
+}
+
+/**
+ * `at` moved back off the low half of a surrogate pair, so a slice that
+ * starts or ends there never splits one character into two broken halves.
+ */
+export function safeCut(text: string, at: number): number {
+  if (at <= 0 || at >= text.length) return at;
+  const low = text.charCodeAt(at);
+  const high = text.charCodeAt(at - 1);
+  return low >= 0xdc00 && low <= 0xdfff && high >= 0xd800 && high <= 0xdbff ? at - 1 : at;
 }
 
 /** Turns command output or file text into the value a page reads. */
@@ -598,8 +756,8 @@ export function parseWorkspaceArtifactOutput(
   if (mode === "json") {
     try {
       value = JSON.parse(text);
-    } catch (error) {
-      return { ok: false, error: invalidJsonMessage(text, error) };
+    } catch {
+      return { ok: false, error: invalidJsonMessage(text) };
     }
   } else if (mode === "lines") {
     value = text
