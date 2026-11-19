@@ -524,6 +524,8 @@ test("in a workspace that is a folder of a larger repository, git reaches no fil
     const read = await runResolved(staged, ws);
     assert.deepEqual({ stdout: read.stdout, exitCode: read.exitCode }, { stdout: "hello\n", exitCode: 0 }, command);
   }
+  // Page data cannot be the stage: git would read `:./0:f` as a file named `0:f`, so the template names the stage.
+  assert.throws(() => resolve("git show :{{n}}:{{file}}", ["0", "f"]), /\{\{n\}\} as the index stage of :N:path.*git show :0:\{\{file\}\}/u);
   // A value that names the outside file from the repository root reads nothing there.
   const fromRoot = await runResolved(resolve("git show HEAD:{{file}}", ["secret/s"]), ws);
   assert.doesNotMatch(fromRoot.stdout, /TOPSECRET/u);

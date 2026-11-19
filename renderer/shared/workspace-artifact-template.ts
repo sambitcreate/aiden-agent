@@ -695,7 +695,8 @@ function endRefs(command: TemplateCommand): string | undefined {
  * operand becomes a `blob` path, and the plan adds `./` after the `:`, so
  * git reads the path from the workspace; the value then must stay inside it.
  * An index path `:N:{{file}}` (stage 0 to 3) gets the `./` after its stage:
- * git reads `:./0:f` as a path named `0:f`.
+ * git reads `:./0:f` as a path named `0:f`. So page data cannot be the
+ * stage itself (`:{{n}}:{{file}}`); the template writes it.
  */
 function readBlobPath(word: TemplateWord, sub: string): string | undefined {
   if (sub === "push" || sub === "fetch" || sub === "pull") return undefined;
@@ -705,6 +706,10 @@ function readBlobPath(word: TemplateWord, sub: string): string | undefined {
   if (head.slot?.rule !== "rev" && head.slot?.rule !== "path") return undefined;
   const part = word.parts[colon] as TemplateText;
   if (part.at === undefined) return "write the REV: before a file placeholder without quotes or backslashes, as in git show HEAD:{{file}}";
+  if (colon === 0 && part.text === ":" && word.parts.slice(1).some((later) => "text" in later && later.text.includes(":"))) {
+    const file = word.parts.filter((later): later is TemplateParam => "param" in later).pop()!;
+    return `{{${head.param}}} as the index stage of :N:path, which git would read as part of the file name. Write the stage (0 to 3) literally, as in git show :0:{{${file.param}}}.`;
+  }
   // Before the `:` is the revision, after it the file.
   word.parts.forEach((later, index) => {
     if ("param" in later) later.slot = index > colon ? { rule: "path", blob: true } : { rule: "rev" };
