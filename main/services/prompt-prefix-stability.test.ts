@@ -44,6 +44,7 @@ import type { AppControlContext, AppControlsService } from "./app-controls-core.
 import { chatToolOffers, chatTurnToolRefusal, type ChatToolSurface, type ChatTurnAudience } from "./chat-turn-tool-policy.js";
 import { remoteGenerationSurface } from "./conversation-surface-generation.js";
 import { UNATTENDED_FOLLOW_UP_GENERATION } from "./follow-through/notice-delivery.js";
+import { owedTurnStartRequest } from "./chat-owed-turn-start.js";
 import { assembleAgentTools } from "./agent-tool-assembly.js";
 import { subagentsAllowedForGeneration } from "./subagents/eligibility.js";
 import { createGenerativeUiExtension, shouldEnableGenerativeUiExtension } from "./generative-ui-extension.js";
@@ -674,6 +675,32 @@ describe("prompt prefix stability: tool list identical across turns", () => {
       // `<mcp_servers>` section of system is what the follow-up drops.
       assert.ok(previous.carries("Issue tracker tools."), "the attended turn lists the connector");
       assert.deepEqual(comparePromptRequests(previous, current), {});
+    },
+  );
+
+  test(
+    "the turn a settled run owes its chat declares the chat's tools",
+    { todo: "phase 3: an owed turn has no window of its own, so its window-dependent offers (Computer Use, hooks, questions, browser, scheduling) must become per-chat declarations refused per call" },
+    async () => {
+      const owed = owedTurnStartRequest(
+        { chatId: "chat", settledStreamId: "run", context: { providerId: "provider", model: "model" }, inputs: [{ messageId: "queued" }] },
+        "owed",
+        ["hooks"],
+      );
+      // What the client declares for these options: Computer Use unless the
+      // turn withholds it, and hooks from the chat's surface.
+      const owedTools = [
+        ...workspaceTools, codemodeTool,
+        ...(owed.options.allowComputerUse === false ? [] : [computerUseTool]),
+        workspaceArtifactTool,
+        ...(chatToolOffers({ ...workspaceSurface, excludedToolNames: owed.options.excludeToolNames }).hooks ? [hooksTool] : []),
+      ];
+      const { previous, current } = await twoTurns(
+        {},
+        { assembly: await workspaceChat({ tools: chatTools(workspaceSurface) }) },
+        { assembly: await workspaceChat({ tools: owedTools }) },
+      );
+      assert.deepEqual(toolsOf(current), toolsOf(previous));
     },
   );
 

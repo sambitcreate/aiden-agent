@@ -214,23 +214,31 @@ At the end, four Opus high reviewers review the whole PR, and a CI watcher owns 
   - In the CLI, the `message_bot` offer no longer depends on the ingress chain; the chain limit is refused per call. Its declaration still depends on config.
 - **On-demand and browser tools.**
   - The transcript head declares only the chat's fixed tools: the everyday set plus `load_tools`. A tool loaded mid-turn is declared by the system message the agent loop appends, which the journal keeps.
-  - On wires that append tools, the next step's prefix is unchanged. Other wires take one miss when a tool loads. The cross-turn case stays a phase 8 todo, because the turn-start head collapse folds the addition into the head.
+  - On wires that append tools, the next step's prefix is unchanged. Other wires take one miss when a tool loads. Both deferrals have an owner and a todo case in `prompt-prefix-stability.test.ts`:
+    - Plain Anthropic Messages, mid-turn: owned by phase 8 (deferred tool declarations). Collapsing the load into codemode instead would change which tools the model can call directly, so it is not a cheap fix.
+    - Cross-turn: owned by phase 8, because the turn-start head collapse folds the addition into the head.
   - Browser discovery reads "already requested" from the transcript (`browserDiscoveredIn`), so a journal reload keeps the tools from the first step of the next response. The guidance is appended once.
   - Access is checked when the browser tools are offered and again on every call, so a remembered discovery grants nothing new. A compaction that folds the discovery result away after a restart can cost one rediscovery.
 - **Gated tools.**
   - Every chat declares all five app tools with the full topic list. A paired-device turn refuses settings reads, changes, `aiden_open` and panels the phone does not show. Each tool refuses again in `execute`.
-  - Inline visuals On request keeps `render_artifact` and `render_ui` declared and refuses them without /visualize. Drafts are off in those turns. On request users now run the HTML-store check on every turn.
+  - Inline visuals On request keeps `render_artifact` and `render_ui` declared and refuses them without /visualize. Drafts are off in those turns. On request users now run the HTML-store check on every turn, but it no longer blocks a plain turn: a store that is unavailable or holds an unrecovered artifact is logged, the turn answers without drawing, and only a turn that may draw stops on it (`prepareGenerativeUiTurnStore`).
   - The /visualize and paired-device notes still vary the generative UI section of system. The tools cache holds. Moving the notes is phase 3, because `contentOverrides` drops text attachments and section patches fold into the head.
   - `hooks` (paired device and unattended) and `workspace_artifact` (paired device) stay declared and are refused, and their skills are no longer filtered.
-  - `form_fill` is unchanged. It is compiled off (`FORM_FILL_MUTATION_AVAILABLE` is false), and its description embeds the turn's attachment IDs. Moving those IDs out of the description is a precondition for turning it on.
-- **Unattended follow-ups** (`UNATTENDED_FOLLOW_UP_GENERATION`) now declare the chat's Computer Use tool and refuse `computer_use` and `form_fill` per call. The controller is created lazily and never reached.
-  - Subagents and MCP stay withheld, because declaring them would start MCP connections that nobody is watching.
-- **Paired-device turns** (`remoteGenerationSurface`) also keep the chat's Computer Use declaration and refuse `computer_use` and `form_fill`, since Computer Use is granted only on the Mac. One per-device difference remains: a device that cannot answer question prompts still has those tools excluded (`QUESTION_PROMPT_EXCLUDED_TOOLS`), so an outdated phone's turns miss the tools cache. Fixing that needs the prompt itself to be refused per call, which is left for later.
-- Scheduled, Telegram and owed-turn generations still pass `allowComputerUse: false`. A scheduled run and a Telegram chat each have their own chat, so the tool list is still fixed within that chat. An owed turn (the one turn a settled background run owes its chat) still withholds Computer Use and the hooks tool (`windowOnlyToolNames` in `chat-owed-turn-start.ts`), so that turn costs one tools miss. Declaring it there needs an audience the turn can name; that is left for later.
+  - `form_fill` is unchanged. It is compiled off (`FORM_FILL_MUTATION_AVAILABLE` is false), and its description embeds the turn's attachment IDs. Owner: phase 3, which moves the IDs into the turn tail as frozen per-turn state. That is also a precondition for turning it on. There is no todo case, because no build can reach the tool.
+- **Unattended follow-ups** (`UNATTENDED_FOLLOW_UP_GENERATION`) now declare the chat's Computer Use, hooks and subagent tools, and refuse `computer_use`, `form_fill`, `hooks` and `subagent` per call. The Computer Use controller is created lazily and never reached.
+  - The subagent tool's description no longer depends on its inventory, so declaring it costs nothing. In an unattended turn, llm-client never resolves the child connector inventory, so no MCP server is connected for a subagent nobody can watch.
+  - The stability case builds the follow-up's tools through the real `subagentsAllowedForGeneration` and `assembleAgentTools` path.
+  - The chat's connectors (`allowMcpTools: false`) stay withheld, because declaring them would connect servers nobody is watching. Owner: phase 3, which declares them from the chat's frozen inventory without connecting and refuses the calls. Todo case: "an unattended follow-up in a chat with connectors keeps the chat's connector section".
+- **Paired-device turns** (`remoteGenerationSurface`) also keep the chat's Computer Use declaration and refuse `computer_use` and `form_fill`, since Computer Use is granted only on the Mac. A device that cannot answer question prompts no longer excludes `ask_user_question`. The surface sets `questionPromptsUnavailable`, the tool stays declared, and `chatTurnToolRefusal` refuses the call. The advisor's model chooser still gets no questionnaire on such a device, so its system note varies with the device. Owner of that note: phase 3, with the other audience notes.
+- **Scheduled and Telegram generations** still pass `allowComputerUse: false`. This is not a miss within those chats: every turn on that surface withholds it alike. A person who continues such a chat on the desktop changes the usage source, so the whole tool list changes on that turn. Owner: phase 3, with the owed turn's per-chat declarations.
+- **Owed turns** (the one turn a settled run owes its chat) still withhold Computer Use and the hooks tool (`windowOnlyToolNames` in `chat-owed-turn-start.ts`), so that turn costs one tools miss.
+  - Folding only those two was not enough. An owed turn's owner has no window (`owner.id` is 0), so `rendererOwner` also drops the question, browser, scheduling, provider-auth connector and design canvas offers.
+  - Owner: phase 3, which turns those window-dependent offers into per-chat declarations refused per call. Todo case: "the turn a settled run owes its chat declares the chat's tools".
 - **Sorted schemas.** MCP input schemas are serialized with sorted object keys.
 - **Tests.**
   - `prompt-prefix-stability.test.ts` now covers "tool list identical across turns" for: a workspace /visualize turn against a plain turn; Bot routine, person and Telegram turns; an unattended follow-up; and a paired-device turn on all three wires.
-  - It also covers a tool loading mid-turn on every wire, with the in-place-system wires left as phase 8 todos.
+  - It also covers a paired device that cannot show question prompts against a turn on this computer.
+  - It also covers a tool loading mid-turn on every wire. The plain-wire mid-turn case and the cross-turn cases are phase 8 todos. The follow-up connector and owed-turn cases are phase 3 todos.
   - `chat-turn-tool-policy.test.ts` covers the refusals and their reasons, and `bot-extension.test.ts` covers a refused routine memory save. The subagent, `message_bot`, browser-discovery and MCP schema suites carry the rest.
 
 ## Phase 3: hook context and frozen per-chat state
@@ -251,6 +259,12 @@ At the end, four Opus high reviewers review the whole PR, and a CI watcher owns 
   - A later change is sent as a short appended `<state_update>` block at the end of the next user turn.
   - The model always sees the current value, and the head stays fixed.
 - **Bounded growth.** Memory edits that happen during a chat are appended as a diff, not the whole memory. After compaction (phase 5) the head is rebuilt with the current state.
+- **Deferred from phase 2.**
+  - **Follow-up connectors.** Declare an unattended follow-up's connectors from the chat's frozen inventory without connecting, and refuse their calls.
+  - **Window-dependent offers.** Make the offers that follow `rendererOwner` per-chat declarations refused per call, so an owed turn, a desktop continuation of a scheduled or Telegram chat, and a turn on this computer declare the same tools. These offers are Computer Use, hooks, questions, browser, scheduling, provider-auth connectors and the design canvas.
+  - **Audience notes.** Move the paired-device, /visualize and advisor-chooser notes out of system.
+  - **`form_fill`.** Move its attachment IDs out of the description and into the turn tail.
+  - The phase 2 todo cases in `prompt-prefix-stability.test.ts` switch on with this work.
 
 **Tests**
 
@@ -379,6 +393,7 @@ At the end, four Opus high reviewers review the whole PR, and a CI watcher owns 
 - **Anthropic message threads** (`pi-message-threads.ts:13-18`, `withoutMessageThreads`): evaluate turning threads on against the replay gate.
   - If they lower cost and keep replay quality, turn them on.
   - If not, record the numbers in the PR and leave them off.
+- **Deferred tool declarations** (from phase 2). On plain Anthropic Messages, a tool loaded mid-turn is folded into the one tool list, so the next step misses. Declare loaded tools without changing the cached tool list, for example through the wire's deferred tool loading, and switch on the todo case "loading a tool mid-turn leaves the next step's prefix unchanged (Anthropic Messages)".
 - **Head collapse.** Stop collapsing the head into one block, so a change in a late head section does not invalidate earlier sections. Each journaled section keeps its own block.
   - Depends on phase 1: the AGENTS.md and MCP sections are turn-start patches that stay stable only because the collapse folds them into the head. Journal them (or otherwise keep them stable as their own blocks) before the collapse goes away, and keep the AGENTS.md and MCP cases of `prompt-prefix-stability.test.ts` passing on all three wires.
 - **Breakpoints.**
