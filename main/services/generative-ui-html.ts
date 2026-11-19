@@ -25,7 +25,7 @@ import {
   MAX_GUEST_PROMPT_CHARS,
 } from "../../renderer/shared/generative-ui-bridge.js";
 import { generativeUiKitCss } from "./generative-ui-kit.js";
-import { HtmlScanner, scanHtmlString } from "./generative-ui-html-scan.js";
+import { HtmlScanner, type HtmlFindings } from "./generative-ui-html-scan.js";
 
 // The admission check (generative-ui-html-scan.ts) reads the HTML the way a
 // browser does and refuses only what would load or run something; the
@@ -272,7 +272,9 @@ export interface GenerativeUiDraftCheck {
  * already blocks scripts and network).
  */
 export function createGenerativeUiDraftCheck(): GenerativeUiDraftCheck {
+  // A draft streams in right after the draft head's `<body>`, so it is read there.
   const scanner = new HtmlScanner();
+  scanner.write(GUEST_BODY_OPEN);
   let bytes = 0;
   let refused = false;
   return {
@@ -296,10 +298,50 @@ export function isGenerativeUiDraftAcceptable(html: string): boolean {
   return createGenerativeUiDraftCheck().append(html);
 }
 
-export function validateGenerativeUiHtml(html: string): Buffer {
-  if (typeof html !== "string" || html.length === 0) {
-    throw new Error("render_artifact requires non-empty HTML.");
+/**
+ * Where a guest's markup lands: the guest document head ends with `<body>`
+ * and the wrapper closes the body after it. Reading markup between these
+ * puts the parser in the state a browser is in at that point of the real
+ * document, so the check reads exactly the bytes that render.
+ */
+const GUEST_BODY_OPEN = "<!DOCTYPE html>\n<html><head></head>\n<body>\n";
+const GUEST_BODY_CLOSE = "\n</body>\n</html>\n";
+
+/** What the HTML check finds in `markup` rendered where a guest's body goes. */
+function scanGuestBody(markup: string): HtmlFindings {
+  const scanner = new HtmlScanner();
+  scanner.write(GUEST_BODY_OPEN);
+  scanner.write(markup);
+  scanner.write(GUEST_BODY_CLOSE);
+  return scanner.finish();
+}
+
+type Admission = { fragment: string } | { error: string };
+
+/**
+ * The last few verdicts, so the stage, the store and the wrapper reading the
+ * same visual check it once. Keyed by the HTML itself; an entry holds the
+ * fragment the wrapper renders, or why the visual was refused.
+ */
+const admissions = new Map<string, Admission>();
+const MAX_CACHED_ADMISSIONS = 4;
+
+function admit(html: string): { fragment: string } {
+  let admission = admissions.get(html);
+  if (admission === undefined) {
+    try {
+      admission = check(html);
+    } catch (error) {
+      admission = { error: (error as Error).message };
+    }
+    if (admissions.size >= MAX_CACHED_ADMISSIONS) admissions.delete(admissions.keys().next().value!);
+    admissions.set(html, admission);
   }
+  if ("error" in admission) throw new Error(admission.error);
+  return admission;
+}
+
+function check(html: string): { fragment: string } {
   if (html.includes("\0")) {
     throw new Error("Artifact HTML cannot contain NUL bytes.");
   }
@@ -312,7 +354,17 @@ export function validateGenerativeUiHtml(html: string): Buffer {
   if (bytes.toString("utf8") !== html) {
     throw new Error("Artifact HTML is not valid UTF-8.");
   }
-  const { embed, url, limit } = scanHtmlString(html);
+  // The wrapper renders the fragment it cuts out of a full document; a
+  // streaming draft rendered the visual as written. Both are read where
+  // they render, so a <body> inside a comment, a <textarea> or a script
+  // string can't hide what the cut-out fragment does.
+  const fragment = extractFragment(html);
+  let findings = scanGuestBody(fragment);
+  if (fragment !== html && findings.limit === undefined && (findings.embed === undefined || findings.url === undefined)) {
+    const written = scanGuestBody(html);
+    findings = { limit: written.limit, embed: findings.embed ?? written.embed, url: findings.url ?? written.url };
+  }
+  const { embed, url, limit } = findings;
   if (limit !== undefined) {
     throw new Error(`Artifact HTML is too complex to check: ${limit}. Simplify the markup.`);
   }
@@ -326,7 +378,15 @@ export function validateGenerativeUiHtml(html: string): Buffer {
       `Artifact HTML cannot load remote images or scripts, or use javascript: or data:text/html URLs (found ${quoteMatch(url)}). Draw with inline SVG, CSS or a canvas instead.`,
     );
   }
-  return bytes;
+  return { fragment };
+}
+
+export function validateGenerativeUiHtml(html: string): Buffer {
+  if (typeof html !== "string" || html.length === 0) {
+    throw new Error("render_artifact requires non-empty HTML.");
+  }
+  admit(html);
+  return Buffer.from(html, "utf8");
 }
 
 export function requireGenerativeUiTitle(value: unknown): string {
@@ -477,8 +537,10 @@ export function wrapGenerativeUiHtml(
   theme: GenerativeUiThemeTokens = DEFAULT_THEME,
   options: GenerativeUiWrapOptions = {},
 ): string {
-  const bytes = validateGenerativeUiHtml(html);
-  const fragment = extractFragment(bytes.toString("utf8"));
+  if (typeof html !== "string" || html.length === 0) {
+    throw new Error("render_artifact requires non-empty HTML.");
+  }
+  const { fragment } = admit(html);
   return `${guestDocumentHead(title, theme, options, GENERATIVE_UI_GUEST_CSP)}${fragment}
 </body>
 </html>

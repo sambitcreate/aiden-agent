@@ -333,6 +333,9 @@ test("render_artifact rejects path escapes, oversize HTML, and cancelled work", 
   );
   const huge = `<p>${"n".repeat(512 * 1024)}</p>`;
   await assert.rejects(tool.execute("huge", { title: "X", html: huge }), /exceeds/iu);
+  // The body the preview would cut out of this document links to javascript:, though a <textarea> hides it as written.
+  const hidden = '<textarea><body><a href="javascript:alert(1)">x</a></body></textarea>';
+  await assert.rejects(tool.execute("hidden", { title: "X", html: hidden }), /javascript:/iu);
   const abort = new AbortController();
   abort.abort();
   await assert.rejects(

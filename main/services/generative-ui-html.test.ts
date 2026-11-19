@@ -295,6 +295,37 @@ test("html admission refuses markup nested or attributed past what a visual need
   }
 });
 
+// Full documents whose wrapped fragment carries a load that the document as
+// written hides: the wrapper cuts out the first <body>...</body> (or the
+// head's inline scripts) by text, wherever the parser would have put it.
+const HIDDEN_BY_THE_DOCUMENT: Record<string, string> = {
+  "a <body> inside a <textarea>": '<textarea><body><a href="javascript:alert(1)">x</a></body></textarea>',
+  "a <body> inside a comment": '<!-- <body> <a href="javascript:alert(1)">x</a> </body> -->',
+  "a <body> inside a <title>": '<title><body><iframe src="https://evil.test/"></iframe></body></title>',
+  "a <body> inside a script string": "<script>var s = \"<body><a href='javascript:alert(1)'>x</a></body>\";</script>",
+  "a <body> inside a style comment": '<style>/* <body><a href="javascript:alert(1)">x</a></body> */</style>',
+  "a <body> inside an attribute value": "<p title=\"<body><a href='javascript:alert(1)'>x</a></body>\">x</p>",
+  "a head script inside a comment": "<!doctype html><head><!-- <script>location='javascript:alert(1)'</script> --></head><body>x</body>",
+  "a head style inside a <title>": "<!doctype html><head><title><style>a{background:url(javascript:alert(1))}</style></title></head><body>x</body>",
+};
+
+for (const [name, html] of Object.entries(HIDDEN_BY_THE_DOCUMENT)) {
+  test(`every render path refuses what it would render from ${name}`, () => {
+    assert.throws(() => validateGenerativeUiHtml(html), /cannot/u);
+    assert.throws(() => wrapGenerativeUiHtml(html, TITLE), /cannot/u);
+    assert.throws(() => wrapGenerativeUiHtml(html, TITLE, undefined, { inline: true }), /cannot/u);
+    assert.throws(() => wrapGenerativeUiHtml(html, TITLE, undefined, { stillImage: true }), /cannot/u);
+    assert.throws(() => generativeUiExportDocument(html, TITLE, {}), /cannot/u);
+  });
+}
+
+test("a full document's body and head are still rendered when nothing hides in them", () => {
+  const html = "<!doctype html><html><head><title>t</title><style>p{color:red}</style></head><body><p title=\"<b>\">x</p><textarea><a></textarea></body></html>";
+  assert.ok(validateGenerativeUiHtml(html).byteLength > 0);
+  const document = wrapGenerativeUiHtml(html, TITLE);
+  assert.ok(document.includes("<style>p{color:red}</style>\n<p title=\"<b>\">x</p><textarea><a></textarea>\n</body>"));
+});
+
 test("a streaming draft cut inside a script or a quoted attribute is read as script or value, not as tags", () => {
   assert.equal(isGenerativeUiDraftAcceptable("<script>for (let i = 0; i<base && i>0"), true);
   assert.equal(isGenerativeUiDraftAcceptable('<p title="a <link> tag'), true);

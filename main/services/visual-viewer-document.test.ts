@@ -69,6 +69,11 @@ test("an HTML visual travels as a sandboxed guest that cannot break out of the p
   assert.ok(guest.includes(".aiden-card"), "the component kit always ships");
 });
 
+test("the phone viewer refuses an HTML visual whose rendered body loads something the document hides", () => {
+  const hidden = '<!-- <body><iframe src="https://evil.test/"></iframe></body> -->';
+  assert.throws(() => buildVisualViewerDocument({ kind: "html", title: "T", html: hidden }, LIGHT, BUNDLE, LIBRARIES), /iframes/u);
+});
+
 test("an HTML visual that draws with Plotly or KaTeX gets those libraries", () => {
   const document = buildVisualViewerDocument(
     { kind: "html", title: "Fit", html: `<div id="p"></div><script>Plotly.newPlot("p", []); katex.render("x", p);</script>` },
