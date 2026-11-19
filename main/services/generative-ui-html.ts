@@ -478,9 +478,10 @@ export function validateGenerativeUiHtml(html: string): Buffer {
   return Buffer.from(html, "utf8");
 }
 
-export function requireGenerativeUiTitle(value: unknown): string {
+/** The visual's title, or an error naming the tool that was called. */
+export function requireGenerativeUiTitle(value: unknown, toolName: "render_artifact" | "render_ui" = "render_artifact"): string {
   if (!isHtmlArtifactTitle(value)) {
-    throw new Error("render_artifact requires a 1–120 character title without control characters.");
+    throw new Error(`${toolName} requires a 1–120 character title without control characters.`);
   }
   return value;
 }

@@ -67,7 +67,8 @@ test("markup that yields nothing, bad layouts, and bad titles are rejected", asy
   const { instance, presented } = tool();
   await assert.rejects(instance.execute("a", { title: "Empty", markup: "  " }), /no visual/u);
   await assert.rejects(instance.execute("b", { title: "X", layout: "huge", markup: "<Visual><Text>a</Text></Visual>" }), /layout/u);
-  await assert.rejects(instance.execute("c", { title: " padded", markup: "<Visual><Text>a</Text></Visual>" }));
+  // The refusal names the tool that was called, so the model fixes the right call.
+  await assert.rejects(instance.execute("c", { title: " padded", markup: "<Visual><Text>a</Text></Visual>" }), /^Error: render_ui requires a 1–120 character title/u);
   await assert.rejects(instance.execute("d", { title: "X" }), /markup/u);
   assert.equal(presented.length, 0);
 });

@@ -43,7 +43,7 @@ export function createArtifactsExtension(agentDir: string): InlineExtension {
     pi.registerTool({ name: "render_ui", label: "Visual", description: "Draw a visual with Aiden's native component catalog (Aiden UI Markup). In the terminal it is shown as its plain-text rendering.",
       parameters: Type.Object({ title: Type.String({ minLength: 1, maxLength: 120 }), layout: Type.Optional(Type.Union([Type.Literal("column"), Type.Literal("wide")])), markup: Type.String({ minLength: 1, maxLength: 400_000 }) }),
       async execute(_id, input) {
-        const title = requireGenerativeUiTitle(input.title);
+        const title = requireGenerativeUiTitle(input.title, "render_ui");
         const compiled = compileAum(input.markup);
         if (!compiled.tree) throw new Error("render_ui produced no visual.");
         const repairs = compiled.diagnostics.slice(0, 12).map((diagnostic) => `- ${diagnostic.code}: ${diagnostic.message}`);
