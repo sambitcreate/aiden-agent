@@ -308,6 +308,8 @@ const REFUSED_MARKUP: Record<string, string> = {
   "an <iframe> in a template 2 KB past a division after an object literal": `<script>${farTemplateSink(2100, 'document.body.innerHTML="<iframe src=https://e.test></iframe>"')}</script>`,
   "an <iframe> in a template 4 KB past a division after an object literal": `<script>${farTemplateSink(4000, 'document.body.innerHTML="<iframe src=https://e.test></iframe>"')}</script>`,
   "an <iframe> in a template 2 KB past a regex-like division followed by in": `<script>${farTemplateSink(2100, 'document.body.innerHTML="<iframe src=https://e.test></iframe>"', " in o")}</script>`,
+  "an <iframe> after a regex that a class extends": `<script>class A extends /\`/.constructor {}\ndocument.body.innerHTML="<iframe src=https://e.test></iframe>";\n// \`</script>`,
+  "an <iframe> after a regex that a module exports by default": `<script type="module">export default /\`/;\ndocument.body.innerHTML="<iframe src=https://e.test></iframe>";\n// \`</script>`,
   "an onclick that navigates from a template 2 KB past a division after an object literal": `<button onclick="${farTemplateSink(2100, "location='javascript:alert(1)'")}">Go</button>`,
   "an onclick that navigates from a template 4 KB past a division after an object literal": `<button onclick="${farTemplateSink(4000, "location='javascript:alert(1)'")}">Go</button>`,
 };

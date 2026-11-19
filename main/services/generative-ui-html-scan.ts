@@ -136,7 +136,7 @@ const PUNCTUATORS = [
 ];
 /** Reserved words after which an expression, so a regex, starts. */
 const REGEX_AFTER_KEYWORDS: ReadonlySet<string> = new Set([
-  "return", "typeof", "case", "do", "else", "in", "instanceof", "new", "delete", "void", "throw",
+  "return", "typeof", "case", "do", "else", "in", "instanceof", "new", "delete", "void", "throw", "extends", "default",
 ]);
 /** Words that are keywords in some code (generators, async functions, for-of heads) and plain names in other code. */
 const CONTEXTUAL_KEYWORDS: ReadonlySet<string> = new Set(["yield", "await", "of"]);
