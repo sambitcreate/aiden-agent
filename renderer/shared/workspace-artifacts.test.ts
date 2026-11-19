@@ -258,8 +258,9 @@ test("an option that takes its value only joined is refused with advice that sav
   // where that word is the option's value; where it would not be, the refusal
   // says why instead. Each followed form runs, so the value is seen to reach
   // the option rather than only to save. git reads no config but the
-  // repository's, so a user's log.decorate or diff.renames cannot change it.
-  const env = { ...process.env, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1" };
+  // repository's, so a user's log.decorate or diff.renames cannot change it,
+  // and its errors are in English, as the assertions on them read.
+  const env = { ...process.env, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1", LC_ALL: "C", LANG: "C" };
   const repo = fs.mkdtempSync(path.join(os.tmpdir(), "aiden-joined-option-"));
   const git = (...args: string[]) =>
     execFileSync("git", ["-C", repo, "-c", "user.name=Test", "-c", "user.email=test@example.com", "-c", "commit.gpgsign=false", ...args], { encoding: "utf8", env });
@@ -345,6 +346,36 @@ test("an option that takes its value only joined is refused with advice that sav
     assert.match(strict.stdout, /^D\tnotes\.md$/mu);
     assert.doesNotMatch(strict.stdout, renamed);
     assert.throws(() => save("git diff -Mx {{rev}}"), /git diff with -Mx, an option Aiden does not check/u);
+    // git log and show take the same detection options and scores, on the commit they print.
+    for (const command of ["git log -1 --format= --name-status", "git show --format= --name-status"]) {
+      for (const option of ["-M50%", "-C50%", "-B50%/60% -M50%", "--find-renames=50%", "--find-copies-harder"]) {
+        const result = await run(`${command} ${option} {{rev}}`, ["HEAD"]);
+        assert.equal(result.exitCode, 0, `${command} ${option}: ${result.stderr}`);
+        assert.match(result.stdout, renamed, `${command} ${option}`);
+      }
+      const strictLog = await run(`${command} -M90% {{rev}}`, ["HEAD"]);
+      assert.equal(strictLog.exitCode, 0, strictLog.stderr);
+      assert.doesNotMatch(strictLog.stdout, renamed, `${command} -M90%`);
+      assert.throws(() => save(`${command} -MC {{rev}}`), /with -MC, an option Aiden does not check/u);
+    }
+    // --find-copies-harder goes with -C wherever -C does: a copy of a file the
+    // commit left unchanged is found only with it.
+    fs.copyFileSync(path.join(repo, "moved.md"), path.join(repo, "copied.md"));
+    git("add", "copied.md");
+    git("commit", "-qm", "copy");
+    const copied = /^C\d+\tmoved\.md\tcopied\.md$/mu;
+    for (const [command, rev] of [
+      ["git diff --name-status", "HEAD~1"],
+      ["git log -1 --format= --name-status", "HEAD"],
+      ["git show --format= --name-status", "HEAD"],
+    ] as const) {
+      const plain = await run(`${command} -C {{rev}}`, [rev]);
+      assert.equal(plain.exitCode, 0, plain.stderr);
+      assert.match(plain.stdout, /^A\tcopied\.md$/mu, `${command} -C`);
+      const harder = await run(`${command} -C --find-copies-harder {{rev}}`, [rev]);
+      assert.equal(harder.exitCode, 0, harder.stderr);
+      assert.match(harder.stdout, copied, `${command} -C --find-copies-harder`);
+    }
   } finally {
     fs.rmSync(repo, { recursive: true, force: true });
   }

@@ -103,7 +103,7 @@ export interface SlotSpec {
   joined?: Readonly<Record<string, string>>;
   /**
    * Short options whose value is optional and only ever in their own word, as
-   * letters: git diff's `-M`, `-C` and `-B` alone, or with a fixed similarity
+   * letters: git diff's, log's and show's `-M`, `-C` and `-B` alone, or with a fixed similarity
    * score (`-M50%`, `-M5`, `-B50%/60%`). The rest of the word is the score;
    * the next word is never it.
    */
@@ -263,11 +263,15 @@ const PROGRAM_SPECS: Readonly<Record<string, SlotSpec>> = {
 
 const refs = (forms = "branch or tag names") => ({ operand: () => R, operandForms: forms });
 const revs = (forms: string) => ({ operand: () => VO, operandForms: forms });
+/** Rename, copy and rewrite detection, which git diff, log and show all take (`--find-renames=50%` included). */
+const RENAME_LONG = ["find-renames", "find-copies", "find-copies-harder", "break-rewrites"];
+/** Their short forms, alone or with a fixed score joined (`-M50%`, `-B50%/60%`). */
+const RENAME_SCORES = "MCB";
 const LOG_LONG = [
   "oneline", "graph", "all", "decorate", "no-decorate", "stat", "shortstat", "numstat", "name-only", "name-status", "patch", "no-patch", "no-merges",
   "merges", "first-parent", "reverse", "follow", "abbrev-commit", "date-order", "topo-order", "author-date-order", "no-color", "raw", "full-history",
   "left-right", "cherry-pick", "cherry-mark", "regexp-ignore-case", "all-match", "invert-grep", "fixed-strings", "extended-regexp", "basic-regexp",
-  "perl-regexp", "source", "tags", "branches", "remotes", "summary", "color",
+  "perl-regexp", "source", "tags", "branches", "remotes", "summary", "color", ...RENAME_LONG,
 ];
 const LOG_VALUES: Record<string, ValueEntry> = {
   "-n --max-count": N,
@@ -294,6 +298,7 @@ const LOG_JOINED = { "--format": "a fixed --format=%h", "--pretty": "a fixed --p
 const logLike = (name: string): SlotSpec => ({
   name,
   flags: "pcmsuziEFP",
+  scores: RENAME_SCORES,
   long: LOG_LONG,
   values: LOG_VALUES,
   joined: LOG_JOINED,
@@ -355,11 +360,11 @@ const GIT_SPECS: Readonly<Record<string, SlotSpec>> = {
   diff: {
     name: "git diff",
     flags: "pusbwRaz",
-    scores: "MCB",
+    scores: RENAME_SCORES,
     long: [
       "stat", "shortstat", "numstat", "name-only", "name-status", "cached", "staged", "patch", "no-patch", "no-color", "quiet", "exit-code",
-      "ignore-all-space", "ignore-space-change", "text", "minimal", "histogram", "patience", "color", "word-diff", "merge-base", "find-renames",
-      "find-copies", "break-rewrites",
+      "ignore-all-space", "ignore-space-change", "text", "minimal", "histogram", "patience", "color", "word-diff", "merge-base",
+      ...RENAME_LONG,
     ],
     values: { "-O": READS_ANY_FILE, "--output": WRITES_FILE, "-U --unified": null, "--diff-filter": null },
     joined: UNIFIED_JOINED,
