@@ -21,6 +21,15 @@ function isObject(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
+/**
+ * A field name as markup would write it: bare when it is a plain identifier,
+ * JSON-quoted otherwise, so a key holding spaces, line breaks or punctuation
+ * stays one visible string rather than reading as text of its own.
+ */
+function fieldName(key: string): string {
+  return /^[A-Za-z_$][\w$]*$/u.test(key) ? key : JSON.stringify(key);
+}
+
 function objectShape(objects: readonly Record<string, unknown>[], depth: number): string {
   const keys: string[] = [];
   const seen = new Set<string>();
@@ -36,7 +45,7 @@ function objectShape(objects: readonly Record<string, unknown>[], depth: number)
   const fields = keys.slice(0, MAX_FIELDS).map((key) => {
     const present = objects.filter((object) => Object.prototype.hasOwnProperty.call(object, key));
     const optional = present.length < objects.length ? "?" : "";
-    return `${key}${optional}: ${shapeOf(present.map((object) => object[key]), depth + 1)}`;
+    return `${fieldName(key)}${optional}: ${shapeOf(present.map((object) => object[key]), depth + 1)}`;
   });
   if (keys.length > MAX_FIELDS) fields.push(`…${keys.length - MAX_FIELDS} more`);
   return `{${fields.join(", ")}}`;
