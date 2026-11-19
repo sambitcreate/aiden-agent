@@ -85,6 +85,36 @@ test("a revision with the same title keeps the first visual's id and position", 
   assert.match(presented[1]!.visual.fallbackText, /two/u);
 });
 
+test("edits redraw a visual drawn earlier in this reply from the markup it was last drawn from, all or nothing", async () => {
+  const { instance, presented } = tool();
+  await instance.execute("first", { title: "Board", markup: "<Visual><Text>one</Text><Text>two</Text></Visual>" });
+  const edited = await instance.execute("second", { title: "Board", edits: [{ old: "one", new: "uno" }] });
+  assert.match(text(edited), /Replaced the visual "Board" in place/u);
+  assert.match(presented[1]!.visual.fallbackText, /uno/u);
+  assert.equal(presented[1]!.visual.id, presented[0]!.visual.id);
+  // Later edits read the markup as the last redraw left it.
+  await instance.execute("third", { title: "Board", edits: [{ old: "uno", new: "eins" }, { old: "two", new: "zwei" }] });
+  assert.match(presented[2]!.visual.fallbackText, /eins[^]*zwei/u);
+
+  await assert.rejects(
+    instance.execute("miss", { title: "Board", edits: [{ old: "eins", new: "1" }, { old: "three", new: "3" }] }),
+    /edits\[1\] old "three" was not found[^]*Nothing was changed/u,
+  );
+  await assert.rejects(
+    instance.execute("twice", { title: "Board", edits: [{ old: "<Text>", new: "<Text tone=\"muted\">" }] }),
+    /edits\[0\] old "<Text>" was found 2 times/u,
+  );
+  await assert.rejects(instance.execute("none", { title: "Other", edits: [{ old: "a", new: "b" }] }), /none is titled "Other"/u);
+  await assert.rejects(
+    instance.execute("both", { title: "Board", markup: "<Visual><Text>x</Text></Visual>", edits: [{ old: "a", new: "b" }] }),
+    /either markup or edits/u,
+  );
+  // Nothing that failed was drawn, and a later edit still reads the last good markup.
+  assert.equal(presented.length, 3);
+  await instance.execute("fourth", { title: "Board", edits: [{ old: "zwei", new: "deux" }] });
+  assert.match(presented[3]!.visual.fallbackText, /eins[^]*deux/u);
+});
+
 test("per-response and per-chat caps hold", async () => {
   const { instance } = tool();
   for (let index = 0; index < 8; index += 1) {

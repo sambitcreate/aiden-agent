@@ -30,6 +30,7 @@ import {
 import type { ToolApprovalPreview } from "../../../renderer/shared/tool-approval-preview.js";
 import { declarePiRuntimeReplay } from "../pi-runtime-tool.js";
 import { declareOnDemandSummary } from "../on-demand-tools.js";
+import { applyMarkupEdits, MAX_MARKUP_EDITS, parseMarkupEdits } from "../markup-edits.js";
 import { checkWorkspaceArtifactPage, describeWorkspaceArtifactPageCheck } from "./check.js";
 import { describeSourceData } from "./data-shape.js";
 import type { WorkspaceArtifactActionResult } from "./runner.js";
@@ -52,6 +53,7 @@ interface ArtifactToolInput {
   title?: unknown;
   description?: unknown;
   markup?: unknown;
+  edits?: unknown;
   layout?: unknown;
   sources?: unknown;
   actions?: unknown;
@@ -252,6 +254,21 @@ function rebasedContent(
   return next;
 }
 
+/**
+ * The call with its `edits` applied to `markup`, the saved page's markup, so
+ * the rest of a save reads it as a call that sent the whole edited markup.
+ * Any edit that misses throws, and nothing is saved.
+ */
+function withEdits(input: ArtifactToolInput, markup: string | undefined, hasPage: boolean): ArtifactToolInput {
+  if (input.edits === undefined) return input;
+  if (input.markup !== undefined) throw new Error("Send either markup or edits, not both.");
+  if (!hasPage) throw new Error("edits change a saved page: give its id, or send the whole markup to create one.");
+  const edits = parseMarkupEdits(input.edits);
+  if (markup === undefined) throw new Error(MARKUP_NOT_KEPT);
+  const { edits: _edits, ...rest } = input;
+  return { ...rest, markup: applyMarkupEdits(markup, edits, "Read the page's markup again with get, then retry.") };
+}
+
 /** The markup to keep with a version: none when it is longer than a version keeps. */
 function keptMarkup(markup: unknown): string | undefined {
   return typeof markup === "string" && markup.length <= WORKSPACE_ARTIFACT_LIMITS.markupChars ? markup : undefined;
@@ -314,6 +331,7 @@ function checkTarget(
   options: Pick<WorkspaceArtifactToolOptions, "permission" | "hasFolder">,
 ): CheckTarget {
   let target: CheckTarget;
+  input = withEdits(input, previous?.markup, previous !== undefined);
   if (previous || input.markup !== undefined) {
     const { content, diagnostics } = contentFor(previous ? input : { ...input, title: input.title ?? "Check" }, previous);
     target = { sources: content.sources, page: content, diagnostics };
@@ -726,7 +744,7 @@ export function createWorkspaceArtifactTool(options: WorkspaceArtifactToolOption
       name: WORKSPACE_ARTIFACT_TOOL_NAME,
       label: "Artifact",
       description:
-        "Keep an interactive page in this workspace's Artifacts tab (beside the chat), for status the person will come back to: open pull requests, a release checklist, a TODO board. Unlike a visual in the reply, the page persists for every chat in the workspace and re-reads live data from named sources (a shell command or a workspace file, bound in markup as $name) each time it refreshes. Always list first and update an existing artifact instead of creating a near-duplicate. Delete only when the person asks. run performs one of a page's actions exactly as its button would; use it only when the person asks for that action. restore brings back one of the page's earlierRevisions (from list) as a new revision, keeping its current title; use it when the person wants to undo or go back to an earlier version. get returns a page's saved markup, its sources' last reads (status, error, data shape and a sample) and its revision; read it before changing a page. check runs a page's sources (or, with no id, the sources given) once and checks the markup against their data without saving anything, under the same approval as a save. Read the aiden-artifacts skill before the first call.",
+        "Keep an interactive page in this workspace's Artifacts tab (beside the chat), for status the person will come back to: open pull requests, a release checklist, a TODO board. Unlike a visual in the reply, the page persists for every chat in the workspace and re-reads live data from named sources (a shell command or a workspace file, bound in markup as $name) each time it refreshes. Always list first and update an existing artifact instead of creating a near-duplicate. Delete only when the person asks. run performs one of a page's actions exactly as its button would; use it only when the person asks for that action. restore brings back one of the page's earlierRevisions (from list) as a new revision, keeping its current title; use it when the person wants to undo or go back to an earlier version. get returns a page's saved markup, its sources' last reads (status, error, data shape and a sample) and its revision; read it before changing a page, then prefer edits (exact old→new replacements) to resending the whole markup. check runs a page's sources (or, with no id, the sources given) once and checks the markup against their data without saving anything, under the same approval as a save. Read the aiden-artifacts skill before the first call.",
       parameters: Type.Object({
         operation: Type.Union([
           Type.Literal("create"),
@@ -760,8 +778,22 @@ export function createWorkspaceArtifactTool(options: WorkspaceArtifactToolOption
         markup: Type.Optional(
           Type.String({
             description:
-              "Aiden UI Markup for the page (the catalog visualize_guide lists), starting with <Visual title=\"…\">. Source data binds as $name; a source that has not loaded yet is null. Buttons may call run(\"actionName\", value…) and compose(\"text\") as well as sendPrompt, openUrl, copy and setState. Required for create; omit on update to keep the page.",
+              "Aiden UI Markup for the page (the catalog visualize_guide lists), starting with <Visual title=\"…\">. Source data binds as $name; a source that has not loaded yet is null. Buttons may call run(\"actionName\", value…) and compose(\"text\") as well as sendPrompt, openUrl, copy and setState. Required for create; omit on update to keep the page, or send edits instead to change part of it.",
           }),
+        ),
+        edits: Type.Optional(
+          Type.Array(
+            Type.Object({
+              old: Type.String({ description: "Exact text from the saved markup (from get), matching one place only.", minLength: 1 }),
+              new: Type.String({ description: "The text to put in its place; \"\" removes it." }),
+            }),
+            {
+              description:
+                "update or check, instead of markup: replacements applied in order to the page's saved markup. All or nothing: if any old text is missing or matches more than one place, nothing is saved and the error names that edit. The edited page is checked like a full save.",
+              minItems: 1,
+              maxItems: MAX_MARKUP_EDITS,
+            },
+          ),
         ),
         layout: Type.Optional(Type.Union([Type.Literal("column"), Type.Literal("wide")])),
         sources: Type.Optional(
@@ -858,8 +890,11 @@ export function createWorkspaceArtifactTool(options: WorkspaceArtifactToolOption
         const earlier = previous ? savedThisTurn.get(previous.id) : undefined;
         const renamedSince = earlier !== undefined && previous !== undefined && previous.visual.title !== earlier.title;
         // Repeating the name this turn's save gave keeps a rename made since.
-        const effective = renamedSince && input.title === earlier.title ? { ...input, title: undefined } : input;
-        const { content, diagnostics } = contentFor(effective, previous);
+        const requested = renamedSince && input.title === earlier.title ? { ...input, title: undefined } : input;
+        const effective = withEdits(requested, previous?.markup, previous !== undefined);
+        const built = contentFor(effective, previous);
+        const { content } = built;
+        let { diagnostics } = built;
         // Another chat's save or a rename landing from here until the write is
         // kept: the store settles the title and description against `base`
         // (a rename also ends this turn's fold), and every other value this
@@ -869,14 +904,29 @@ export function createWorkspaceArtifactTool(options: WorkspaceArtifactToolOption
         // The store approves only when the allowed card listed exactly the saved
         // commands; otherwise an unchanged set keeps the approval it already had.
         const artifact = previous
-          ? await store.replace(workspaceId, previous.id, (current) => rebasedContent(effective, content, current), {
-              approvedDigest: shownDigest,
-              base: {
-                title: previous.visual.title,
-                ...(previous.description ? { description: previous.description } : {}),
+          ? await store.replace(
+              workspaceId,
+              previous.id,
+              (current) => {
+                if (requested.edits === undefined || current.markup === previous.markup) {
+                  return rebasedContent(effective, content, current);
+                }
+                // Another chat changed the markup since it was read: the edits
+                // apply to the markup saved now, or the save fails with the miss.
+                const redone = withEdits(requested, current.markup, true);
+                const rebuilt = contentFor(redone, current);
+                diagnostics = rebuilt.diagnostics;
+                return rebasedContent(redone, rebuilt.content, current);
               },
-              ...(earlier ? { fold: earlier } : {}),
-            })
+              {
+                approvedDigest: shownDigest,
+                base: {
+                  title: previous.visual.title,
+                  ...(previous.description ? { description: previous.description } : {}),
+                },
+                ...(earlier ? { fold: earlier } : {}),
+              },
+            )
           : await store.create(workspaceId, content, { approvedDigest: shownDigest, chatId });
         if (previous && artifact.revision === previous.revision) {
           if (artifact.approvedDigest !== previous.approvedDigest) {

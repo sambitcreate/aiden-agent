@@ -599,3 +599,110 @@ test("check follows a save's approval: unallowed shell sources ask first, and fi
   await call("k4", { operation: "check", id: "art2" });
   assert.equal(checked[checked.length - 1], true);
 });
+
+test("edits change part of a saved page in order, and the edited page is compiled and checked like a full save", async (t) => {
+  const { store, call, nextTurn } = await harness(t, { permission: "full" });
+  await call("c1", { operation: "create", title: "Open PRs", markup: PAGE, sources: [PULLS], actions: [MERGE] });
+  nextTurn();
+  const text = await call("e1", {
+    operation: "update",
+    id: "art1",
+    edits: [
+      { old: "{len($pulls)} open", new: "{len($pulls)} waiting" },
+      // Applies to the markup as the edit before it left it.
+      { old: "waiting", new: "waiting on review" },
+      { old: 'filter: "all"', new: 'filter: "mine"' },
+    ],
+  });
+  assert.match(text, /Updated the artifact "Open PRs" \(id art1, revision 2\)/u);
+  const artifact = (await store.get("ws1", "art1"))!.artifact;
+  const edited = PAGE.replace("{len($pulls)} open", "{len($pulls)} waiting on review").replace('filter: "all"', 'filter: "mine"');
+  assert.equal(artifact.markup, edited);
+  // The page was compiled from the edited markup, not only stored as text.
+  assert.match(JSON.stringify(artifact.visual.tree), /waiting on review/u);
+  assert.deepEqual(artifact.initialState, { filter: "mine" });
+  assert.deepEqual(artifact.sources.map((source) => source.name), ["pulls"]);
+  // An edit that breaks the page is refused the way the same full markup would be.
+  await assert.rejects(
+    call("e2", { operation: "update", id: "art1", edits: [{ old: edited, new: "<Nope/>" }] }),
+    /The markup produced no page\.[^]*unknown_element/u,
+  );
+  assert.equal((await store.get("ws1", "art1"))!.artifact.revision, 2);
+});
+
+test("edits are all or nothing: a missing or repeated old text saves nothing and names the edit", async (t) => {
+  const { store, call, nextTurn } = await harness(t, { permission: "full" });
+  await call("c1", { operation: "create", title: "Open PRs", markup: PAGE });
+  nextTurn();
+  const before = await store.get("ws1", "art1");
+
+  await assert.rejects(
+    call("e1", {
+      operation: "update",
+      id: "art1",
+      edits: [
+        { old: "open</Text>", new: "waiting</Text>" },
+        { old: "Close", new: "Shut" },
+      ],
+    }),
+    /edits\[1\] old "Close" was not found in the markup \(as the edits before it left it\)\. Nothing was changed\./u,
+  );
+  // The first edit matched, yet nothing of it was saved.
+  assert.deepEqual(await store.get("ws1", "art1"), before);
+
+  await assert.rejects(
+    call("e2", { operation: "update", id: "art1", edits: [{ old: "<Button action=", new: "<Button disabled action=" }] }),
+    /edits\[0\] old "<Button action=" was found 2 times; add surrounding text/u,
+  );
+  assert.deepEqual(await store.get("ws1", "art1"), before);
+
+  await assert.rejects(call("e3", { operation: "update", id: "art1", markup: PAGE, edits: [{ old: "a", new: "b" }] }), /either markup or edits/u);
+  await assert.rejects(call("e4", { operation: "create", title: "Other", edits: [{ old: "a", new: "b" }] }), /edits change a saved page/u);
+  await assert.rejects(call("e5", { operation: "update", id: "art1", edits: [{ old: "", new: "b" }] }), /edits\[0\] needs old/u);
+  assert.equal((await store.list("ws1")).length, 1);
+});
+
+test("edits apply to the markup another chat saved while this one prepared its save, and a miss there saves nothing", async (t) => {
+  const { store, call, nextTurn } = await harness(t, { permission: "full" });
+  await call("c1", { operation: "create", title: "Open PRs", markup: PAGE });
+  nextTurn();
+  const read = store.get.bind(store);
+  let landing: (() => Promise<unknown>) | undefined;
+  store.get = async (...args: Parameters<typeof store.get>) => {
+    const answer = await read(...args);
+    const work = landing;
+    landing = undefined;
+    await work?.();
+    return answer;
+  };
+  const otherChat = (markup: string) => async () => {
+    const current = (await read("ws1", "art1"))!.artifact;
+    await store.replace("ws1", "art1", () => ({
+      title: current.visual.title, visual: { ...current.visual, layout: "wide" }, markup, sources: [], actions: [], refresh: current.refresh,
+    }));
+  };
+  // The other chat's change is kept, and this chat's edit lands on top of it.
+  landing = otherChat(PAGE.replace("<Button action={compose", "<Button variant=\"secondary\" action={compose"));
+  await call("e1", { operation: "update", id: "art1", edits: [{ old: "{len($pulls)} open", new: "{len($pulls)} waiting" }] });
+  const merged = (await store.get("ws1", "art1"))!.artifact.markup!;
+  assert.match(merged, /variant="secondary"/u);
+  assert.match(merged, /\{len\(\$pulls\)\} waiting/u);
+
+  // The other chat removed the text this edit replaces: the save fails and keeps the other chat's page.
+  nextTurn();
+  landing = otherChat(merged.replace("{len($pulls)} waiting", "{len($pulls)} queued"));
+  await assert.rejects(
+    call("e2", { operation: "update", id: "art1", edits: [{ old: "{len($pulls)} waiting", new: "{len($pulls)} left" }] }),
+    /edits\[0\] old "\{len\(\$pulls\)\} waiting" was not found/u,
+  );
+  assert.match((await store.get("ws1", "art1"))!.artifact.markup!, /queued/u);
+});
+
+test("check takes edits too, drawing the edited page without saving it", async (t) => {
+  const { store, call } = await harness(t, { permission: "full", check: async () => ({}) });
+  await call("c1", { operation: "create", title: "Open PRs", markup: PAGE, actions: [MERGE] });
+  const before = await store.get("ws1", "art1");
+  const text = await call("k1", { operation: "check", id: "art1", edits: [{ old: 'run("merge", 12)', new: 'run("close", 12)' }] });
+  assert.match(text, /run\("close"\) names no action on this page/u);
+  assert.deepEqual(await store.get("ws1", "art1"), before);
+});

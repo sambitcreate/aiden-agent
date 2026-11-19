@@ -13,6 +13,7 @@ import { RENDER_UI_TOOL_NAME } from "../../renderer/shared/generative-ui.js";
 import { requireGenerativeUiTitle } from "./generative-ui-html.js";
 import { declarePiRuntimeReplay } from "./pi-runtime-tool.js";
 import { declareOnDemandSummary } from "./on-demand-tools.js";
+import { applyMarkupEdits, MAX_MARKUP_EDITS, parseMarkupEdits } from "./markup-edits.js";
 import { checkWorkspaceArtifactPage } from "./workspace-artifacts/check.js";
 
 export { RENDER_UI_TOOL_NAME };
@@ -56,7 +57,8 @@ function describeDiagnostics(diagnostics: readonly AidenUiDiagnostic[]): string 
  * repaired so it can do better on its next call.
  */
 export function createRenderUiTool(options: RenderUiToolOptions): AgentTool {
-  const titles = new Map<string, { id: string; toolCallId: string }>();
+  /** Each visual drawn in this response, by title, with the markup it was last drawn from. */
+  const titles = new Map<string, { id: string; toolCallId: string; markup: string }>();
   let presentedCount = 0;
   let serial = Promise.resolve();
 
@@ -75,11 +77,28 @@ export function createRenderUiTool(options: RenderUiToolOptions): AgentTool {
               "Set before markup. column (default): the reading column, about 690px. wide: spans the chat pane (up to about 1280px) for dashboards and wide tables.",
           }),
         ),
-        markup: Type.String({
-          description: "Aiden UI Markup, starting with <Visual title=\"…\">. Put data in <Data name=\"data\">{json}</Data> and read it as $data.",
-          minLength: 1,
-          maxLength: MAX_MARKUP_CHARS,
-        }),
+        markup: Type.Optional(
+          Type.String({
+            description:
+              "Aiden UI Markup, starting with <Visual title=\"…\">. Put data in <Data name=\"data\">{json}</Data> and read it as $data. Required unless edits redraws a visual drawn earlier in this reply.",
+            minLength: 1,
+            maxLength: MAX_MARKUP_CHARS,
+          }),
+        ),
+        edits: Type.Optional(
+          Type.Array(
+            Type.Object({
+              old: Type.String({ description: "Exact text from the markup the visual was last drawn from, matching one place only.", minLength: 1 }),
+              new: Type.String({ description: "The text to put in its place; \"\" removes it." }),
+            }),
+            {
+              description:
+                "Instead of markup, to redraw a visual drawn earlier in this reply with the same title: replacements applied in order to the markup it was last drawn from. All or nothing: if any old text is missing or matches more than one place, nothing is drawn and the error names that edit.",
+              minItems: 1,
+              maxItems: MAX_MARKUP_EDITS,
+            },
+          ),
+        ),
       }),
       execute: async (toolCallId, params, signal): Promise<AgentToolResult<null>> => {
         const previous = serial;
@@ -90,14 +109,25 @@ export function createRenderUiTool(options: RenderUiToolOptions): AgentTool {
         await previous;
         try {
           if (signal?.aborted) throw new Error("Rendering the visual was cancelled.");
-          const input = params as { title?: unknown; layout?: unknown; markup?: unknown };
+          const input = params as { title?: unknown; layout?: unknown; markup?: unknown; edits?: unknown };
           const title = requireGenerativeUiTitle(input.title);
           if (input.layout !== undefined && input.layout !== "column" && input.layout !== "wide") {
             throw new Error('render_ui layout must be "column" or "wide".');
           }
-          if (typeof input.markup !== "string") throw new Error("render_ui needs markup.");
-          if (input.markup.length > MAX_MARKUP_CHARS) throw new Error("render_ui markup is too long.");
-          const compiled = compileAum(input.markup);
+          let markup = input.markup;
+          if (input.edits !== undefined) {
+            if (markup !== undefined) throw new Error("render_ui takes either markup or edits, not both.");
+            const earlier = titles.get(title);
+            if (!earlier) {
+              throw new Error(`render_ui edits redraw a visual drawn earlier in this reply, and none is titled ${JSON.stringify(title)}; send the whole markup.`);
+            }
+            markup = applyMarkupEdits(earlier.markup, parseMarkupEdits(input.edits), "Send the edits again against the markup you last drew, or the whole markup.");
+          }
+          if (typeof markup !== "string") throw new Error("render_ui needs markup.");
+          if (markup.length > MAX_MARKUP_CHARS) {
+            throw new Error(`render_ui markup is too long: ${markup.length.toLocaleString("en-US")} characters, over the ${MAX_MARKUP_CHARS.toLocaleString("en-US")} a visual can be.`);
+          }
+          const compiled = compileAum(markup);
           if (!compiled.tree) {
             throw new Error(`render_ui produced no visual.${describeDiagnostics(compiled.diagnostics)}`);
           }
@@ -131,7 +161,9 @@ export function createRenderUiTool(options: RenderUiToolOptions): AgentTool {
           const presented = (await options.onUiVisual(visual, { toolCallId: placementCallId })) !== false;
           if (presented && !replacing) {
             presentedCount += 1;
-            titles.set(title, { id, toolCallId });
+            titles.set(title, { id, toolCallId, markup });
+          } else if (presented && replacing) {
+            replacing.markup = markup;
           }
           const nodes = JSON.stringify(visual.tree).match(/"t":/gu)?.length ?? 0;
           return {

@@ -70,7 +70,7 @@ function catalogGuide(inlineVisuals: boolean): string {
           "- Width: a page is a reading column by default; pass `layout: \"wide\"` to workspace_artifact for dashboards and wide tables. Everything reflows with the window.",
         ]),
     inlineVisuals
-      ? "- Keep it compact, sentence case, and keep the takeaway in your prose too. Repairs Aiden made come back in the tool result: if one changed what you meant, redraw with the same title, which replaces the visual in place."
+      ? "- Keep it compact, sentence case, and keep the takeaway in your prose too. Repairs Aiden made come back in the tool result: if one changed what you meant, redraw with the same title, which replaces the visual in place. For a small fix, redraw with edits (exact { old, new } replacements of the markup you last drew) instead of the whole markup."
       : "- Keep it compact and sentence case. Repairs Aiden made come back in the tool result: if one changed what you meant, save the page again with workspace_artifact operation update and the page's id.",
     "",
     "Components:",
