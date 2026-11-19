@@ -111,7 +111,16 @@ test("a Bot declares message_bot from the messaging switch and its own send sett
     const candidate = await messageBotOffer(botId, {
       messagingEnabled: async () => messaging,
       bot: async (id) => bots.get(id),
-      roster: async () => { rosterReads++; return []; },
+      roster: async () => {
+        rosterReads++;
+        return [...bots].map(([id, bot]) => ({
+          id,
+          name: id,
+          purpose: "",
+          acceptsMessages: bot.acceptsBotMessages !== false,
+          sendsMessages: bot.messagesOtherBots !== false,
+        }));
+      },
       post: async () => { throw new Error("Declaring must not send"); },
     });
     return candidate ? JSON.stringify({ name: candidate.tool.name, description: candidate.tool.description, parameters: candidate.tool.parameters }) : undefined;
