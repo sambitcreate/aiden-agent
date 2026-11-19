@@ -22,7 +22,6 @@ import { designTweakState, withDesignTweakQuery } from "../../renderer/shared/de
 import {
   DESIGN_TEXT_EDIT_LIMITS,
   planDesignTextEdit,
-  stampLine,
   type DesignTextChange,
 } from "../../renderer/shared/design-canvas/text-edit.js";
 import type { DesignGrantRegistry } from "../services/design-canvas/grants.js";
@@ -430,7 +429,7 @@ export function registerDesignCanvasHandlers<Event>(deps: {
         } catch {
           return { ok: false, reason: "missing" };
         }
-        const plan = planDesignTextEdit(source, parsed, stampLine(stamp as string | undefined, framePath));
+        const plan = planDesignTextEdit(source, parsed, { stamp: stamp as string | undefined, path: framePath });
         if (!plan.ok) return plan;
         // Another writer (an editor, Aiden) may have changed the file since it was read.
         const current = await fs.readFile(resolved.absolute, "utf8").catch(() => null);
