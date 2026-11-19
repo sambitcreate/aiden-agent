@@ -1,6 +1,6 @@
 # Prompt cache hit rate: keep the cached prefix byte-stable
 
-Status: In progress (2026-11-19): phases 0, 1, 2, 3 and 4 implemented. Delivered as one PR with one stacked commit series per phase, branch `feat/prompt-cache-stability`, cut from `main` at f2fd27640.
+Status: In progress (2026-11-19): phases 0, 1, 2, 3, 4 and 5 implemented. Delivered as one PR with one stacked commit series per phase, branch `feat/prompt-cache-stability`, cut from `main` at f2fd27640.
 
 ## Goal
 
@@ -397,6 +397,35 @@ Tests: `side-call-prefix.test.ts` (in `test:compaction` and the CI registry) run
   - It is thrown away when a message arrived after the snapshot.
   - No call starts for an idle chat.
 - The existing compaction behavioral suites stay green, and the replay gate records the compaction turns.
+
+**As built (2026-11-19).** The coordinator (`pi-compaction-core.ts`) gained a `cachedPrefix` reader, an `approvedMemoryFacts` reader and a `precompute` option. `compaction-precompute.ts` holds the background registry.
+
+- **The summary request.** For a threshold or manual compaction with the LLM engine, the coordinator reads the chat's side-call prefix (phase 4's ledger) and uses it only when its model hash matches and the journal's context still ends at the prefix's reply (same Pi timestamp, provider, model and stop reason). The request is then `sideCallContinuation`: the parent's tools, system, messages and reply, then `cachedPrefixSummaryInstruction` as the final user message, at "short" retention, with the output capped at 80% of the reserve. The instruction asks for Pi's checkpoint format, says the latest messages stay word for word, carries any PreCompact hook context as "Additional focus", and says not to restate memory. Pi's read and modified file lists are appended as Pi does. When the request would not fit the window, throws, is cut off, calls a tool, answers nothing, or still states a fact after filtering, Pi's isolated, scrubbed request (`withoutMemoryFacts`) is sent instead. A cancelled compaction stays cancelled.
+- **Wiring.** llm-client passes all three options for workspace chats whose stream the ledger wraps (not agent harnesses, not Bot chats). Manual compaction (`context-lifecycle-service.ts`) passes `cachedPrefix` only when a runtime resolved and the history is not the skills-off projection, which is not the request the cache holds.
+- **The memory constraint.** No memory fact text reaches a stored summary, on any path:
+  1. The instruction forbids restating memory.
+  2. The cached reply goes through `withoutStatedMemoryFacts` (`chat-frozen-state.ts`) against the fact lines the prefix states plus the facts approved now. Every line with a `[memory:` marker, and every line containing a fact's text (compared without case or spacing), is removed. A fact still found across the kept lines sends the isolated request instead. A store it cannot read also does.
+  3. The isolated request's input is scrubbed, as before.
+  4. A final filter in `run()` covers every path (cached, isolated, local and precomputed). It removes lines stating any fact line found anywhere in the branch (messages, state updates, tool results, earlier summaries), removed facts included, or any approved fact. A fact still restated throws, so the compaction fails and nothing is stored.
+  5. Removed facts are never sent again: the ledger refuses a prefix stating a fact that is no longer approved (phase 4), so the summary request never carries one, and a background summary is keyed on the approved facts.
+- **Background summaries.** When an attended turn ends with "stop" between 80% of the trigger (`fraction`) and the trigger itself, the coordinator starts the summary on the cached prefix through `chatCompactionPrecomputes`. It needs a usable prefix, a readable memory store and something to summarize. The snapshot is a hash of the context messages, the model hash and a hash of the approved fact lines. It keys on the context hash rather than the leaf id, because the turn's commit marker moves the leaf without changing what is sent. `allowed` requires the generation to be current (not stopped, window open) and `canWarmForegroundChat` (attended desktop surface, not local, not a Bot, not an owed or scheduled turn). The next turn boundary (`prepareForPrompt`, before the input is appended) takes the summary only when the snapshot still matches, and publishes it with this branch's retained tail and token count; anything else, or a summary still being written, is aborted and dropped, so a turn never waits. The registry keeps one entry per chat, at most 8 chats, each bounded by a 5-minute timeout, in memory only, and logs nothing. Stop, a completed compaction (`chatPromptPrefixCompacted`) and forgetting the chat (`forgetChatPromptCacheState`) discard it.
+- **Fresh head.** A compaction ends the journaled head (phase 3), so the next request rebuilds it once from the current frozen state and journals it. Manual compaction now also calls `chatPromptPrefixCompacted`, so the ledger, the miss attribution and any background summary are cleared after either kind.
+- **Harness.** `createPromptPrefixHarness` gained a `compaction` option (settings, models, prefix reader, approved facts, precompute), `journal()` and the recorded request options, so a test can run real compactions through the turn.
+
+The code differed from the plan in these ways:
+
+- **The local engine (pi-vcc)** makes no model call, so it has no request to move. It still goes through the final memory filter.
+- **Overflow recovery** keeps Pi's isolated request: the prefix it would continue is the one that no longer fits.
+- **One request per summary.** A split turn is one cached request, where Pi's isolated path can send two. The cached summary sees the whole conversation, the retained tail included, and is told those messages stay.
+- **The final filter can fail a compaction.** A fact split across lines, or a summary line quoting an approved fact's text, removes that line or fails the compaction. A threshold compaction refused this way ends the turn `provider_failed`, as other compaction failures do.
+- **Forgotten lines in chatState mode.** The session wrapper hides a removed fact's lines from `getBranch()`, so the final filter cannot see them; they never reach the summarizer input either.
+- **No background summary** with PreCompact hooks (their context belongs to the compaction that applies it), for remote, phone or Telegram surfaces, for local models, for owed, routine or automation turns, for Bots or for agent harnesses. An unfinished one is discarded, not awaited.
+- **Manual compaction with skills off** stays isolated, and manual compaction runs no background summary.
+- **Fork summaries** (`fork-summary-service.ts`) and **child agents** (`subagents/child-agent-runtime.ts`) stay isolated. Owner: phase 6.
+- **`aiden serve`** keeps no ledger and no background registry, and does not run this coordinator, so its compactions keep their isolated request and get neither the cached prefix nor the final memory filter. Owner: phase 6 (`aiden serve` parity).
+- **The replay gate** (`pi-upgrade-replay-runner.ts`) builds the coordinator without a prefix or background summaries, so its compaction cases record the isolated path. A cached-prefix replay case is owner phase 6.
+
+Tests: `compaction-cached-prefix.test.ts` (in `test:compaction` and the CI registry) drives real turns through the prefix harness with the ledger wrapped in. A threshold summary is one request at "short" retention whose wire is a byte prefix extension of the parent's last request and ends with the instruction; it is stored and read by the next request, with no network call. A foreign message after the reply sends the isolated request. An echoed fact is removed; a fact split across lines in the cached reply sends the isolated request and stores a clean summary; split in both replies, the turn fails and nothing is stored. After a fact is forgotten, no summary request, stored summary or later request carries its text. A background summary is applied with no extra call when the chat has not moved, discarded after an appended message or a change in approved facts, and never started when not allowed. Registry cases cover snapshot mismatch, take-once, abort of an unfinished summary, same-snapshot restarts, timeout, the chat limit and `forgetChatPromptCacheState`.
 
 ## Phase 6: idle warming on real TTLs, `aiden serve` parity, long retention
 
