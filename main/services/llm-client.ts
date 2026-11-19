@@ -149,7 +149,7 @@ import { buildSystemPrompt } from "./chat-system-prompt.js";
 import { skillRegistry } from "./skill-registry-main.js";
 import { DESKTOP_ARTIFACT_SKILLS } from "./workspace-artifacts/skill.js";
 import { DESKTOP_HOOK_SKILLS } from "./hooks-skill.js";
-import { HOOKS_TOOL_NAME, createHooksTool, offersHooksTool, runsWorkspaceChatHooks } from "./hooks-tool.js";
+import { HOOKS_TOOL_NAME, createHooksTool, hooksToolUnavailableReason, offersHooksTool, runsWorkspaceChatHooks } from "./hooks-tool.js";
 import { getHookService } from "./hooks/hook-service-main.js";
 import { DESIGN_CANVAS_SKILLS } from "./design-canvas/skill.js";
 import {
@@ -487,6 +487,7 @@ import {
   displayedAssistantHtmlUsage,
   GENERATIVE_UI_TOOL_NAME,
   shouldEnableGenerativeUiExtension,
+  generativeUiUnavailableReason,
 } from "./generative-ui-extension.js";
 import { createGenerativeUiDraftSession } from "./generative-ui-draft.js";
 import { createUiDraftSession } from "./aiden-ui-draft.js";
@@ -1795,9 +1796,12 @@ async function prepareGeneration(
     Boolean(workspace) &&
     options.usageSource === "chat" &&
     options.interactionSurface !== "telegram" &&
-    options.visualAudience !== "remote" &&
     permission !== "read-only" &&
     !options.excludeToolNames?.has(WORKSPACE_ARTIFACT_TOOL_NAME);
+  // A paired device cannot show workspace artifacts. The tool stays declared,
+  // so the chat's tool list is the same from either device, and its calls are
+  // refused in that turn.
+  const workspaceArtifactsRefused = options.visualAudience === "remote";
   let skillSnapshot =
     !assistantMode && workspace ? await skillRegistry.snapshotResolved(workspace) : undefined;
   if (skillSnapshot && !offerWorkspaceArtifacts) {
@@ -1806,7 +1810,10 @@ async function prepareGeneration(
   // The agent's hooks tool and its skill: where workspace chat hooks run, and
   // only while the owner can answer its card on this computer (not on an
   // unattended or a phone- or paired-Mac-driven turn).
-  const offerHooksTool = hostPlatformCapabilities().hooks && offersHooksTool({
+  // The tool is declared wherever the chat can ever use it, so the tool list
+  // is the same on every turn; an unattended or remote turn refuses its calls
+  // before anything runs (`hooksToolUnavailableReason`).
+  const hooksSurface = {
     usageSource: options.usageSource,
     interactionSurface: options.interactionSurface,
     bot: Boolean(botContext),
@@ -1815,6 +1822,11 @@ async function prepareGeneration(
     unattended: options.unattended === true,
     remoteAudience: options.visualAudience === "remote",
     excludedToolNames: options.excludeToolNames,
+  };
+  const offerHooksTool = hostPlatformCapabilities().hooks && offersHooksTool({
+    ...hooksSurface,
+    unattended: false,
+    remoteAudience: false,
   });
   if (skillSnapshot && !offerHooksTool) {
     skillSnapshot = withoutSkills(skillSnapshot, DESKTOP_HOOK_SKILLS);
@@ -2354,7 +2366,6 @@ async function prepareGeneration(
       permission,
       excluded: options.excludeToolNames?.has(GENERATIVE_UI_TOOL_NAME) ?? false,
       inlineVisuals: params.inlineVisuals,
-      visualize: params.visualize === true,
     })
   ) {
     const htmlStoreAvailability = generativeUiArtifactStore.availability();
@@ -2386,6 +2397,7 @@ async function prepareGeneration(
       existingChatHtmlBytes: existingHtmlUsage.bytes + pendingHtmlAfterReconcile.bytes,
       existingChatHtmlCount: existingHtmlUsage.count + pendingHtmlAfterReconcile.count,
       preferArtifactThisTurn: visualize,
+      ...(params.inlineVisuals === "on_request" ? { onRequest: true } : {}),
       ...(options.visualAudience ? { audience: options.visualAudience } : {}),
       ...(designCanvasOffered ? { designCanvas: true } : {}),
       existingChatUiCount: displayedAssistantUiCount(chat.messages),
@@ -2488,6 +2500,27 @@ async function prepareGeneration(
    * the reason names the condition, and the call is refused before it runs.
    */
   const turnToolRefusals: Array<(name: string, args: unknown) => string | undefined> = [];
+  turnToolRefusals.push((name) => hooksToolUnavailableReason(name, hooksSurface));
+  if (options.unattended === true) {
+    // An unattended follow-up keeps the chat's Computer Use declaration, but
+    // nobody is there to grant access or watch the screen, so the call never runs.
+    turnToolRefusals.push((name) =>
+      name === COMPUTER_USE_TOOL_NAME || name === FORM_FILL_TOOL_NAME
+        ? `${name} is not available in this turn: nobody is watching this follow-up to grant Computer Use. Describe what you would do on screen instead.`
+        : undefined);
+  }
+  if (workspaceArtifactsRefused) {
+    turnToolRefusals.push((name) =>
+      name === WORKSPACE_ARTIFACT_TOOL_NAME
+        ? `${WORKSPACE_ARTIFACT_TOOL_NAME} is not available in this turn: the request came from a paired device, which cannot show workspace artifacts. Open the chat on this computer to create, refresh or run one.`
+        : undefined);
+  }
+  {
+    // With inline visuals On request the drawing tools stay declared on every
+    // turn and are refused in a turn that did not use /visualize.
+    const visualsTurn = { onRequest: params.inlineVisuals === "on_request", visualize: params.visualize === true };
+    turnToolRefusals.push((name) => generativeUiUnavailableReason(name, visualsTurn));
+  }
   if (!botContext && (!assistantMode || attendedAssistant) && options.interactionSurface !== "telegram" && schedulingAllowed && (rendererOwner || browserOwner?.kind === "remote")) {
     const appToolTurn = { liveState: browserOwner?.kind !== "remote", canOpen: browserOwner?.kind !== "remote" };
     turnToolRefusals.push((name, args) => aidenAppToolUnavailableReason(name, args, appToolTurn));
@@ -3378,11 +3411,12 @@ export const llmClient = {
     htmlArtifactPlacements.setResolver((rawToolCallId) => timeline.publicToolCallId(rawToolCallId));
     uiVisualPlacements.setResolver((rawToolCallId) => timeline.publicToolCallId(rawToolCallId));
     imagePlacements.setResolver((rawToolCallId) => timeline.publicToolCallId(rawToolCallId));
-    // Drafts only stream when render_artifact is really registered this turn
-    // (not when visuals are Off, or for surfaces that never get the tool).
+    // Drafts only stream when render_artifact can run this turn (not when
+    // visuals are Off, for surfaces that never get the tool, or in an On
+    // request turn without /visualize, which refuses the call).
     const visualsRegistered = generationExtensions.some(
       (extension) => extension.id === GENERATIVE_UI_EXTENSION_ID,
-    );
+    ) && !(params.inlineVisuals === "on_request" && params.visualize !== true);
     const htmlVisualDrafts = createGenerativeUiDraftSession({
       enabled: visualsRegistered,
       publicToolCallId: (rawToolCallId) => timeline.publicToolCallId(rawToolCallId),

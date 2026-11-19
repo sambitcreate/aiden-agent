@@ -422,7 +422,7 @@ test("from a paired device, settings reads, changes and other panels are refused
   await assert.rejects(remote.tool("aiden_show_controls").execute("c4", { topic: "models" }, undefined, undefined), /panels phones show|only these panels/u);
   assert.equal(f.commits(), 0);
   assert.equal(f.state.settings.memoryEnabled, true);
-  assert.deepEqual(remote.panels, []);
+  assert.equal(remote.panels.length, 0);
   // A panel phones show still works.
   await remote.tool("aiden_show_controls").execute("c5", { topic: "memory" }, undefined, undefined);
   assert.deepEqual(remote.panels.map((panel) => panel.topic), ["memory"]);

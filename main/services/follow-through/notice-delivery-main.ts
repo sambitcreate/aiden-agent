@@ -106,8 +106,9 @@ async function startTurn(chatId: string, post?: AgentNoticePost): Promise<StartT
         turnId: streamId,
         usageSource: "chat",
         unattended: true,
+        // Computer Use stays declared so the follow-up's tool list matches the
+        // chat's; the client refuses the call in an unattended turn.
         allowSubagents: false,
-        allowComputerUse: false,
         allowMcpTools: false,
       },
     );
