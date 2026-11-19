@@ -459,3 +459,62 @@ test("a branch value pushes only the branch it names, never a glob or a full ref
   assert.equal(pushed.exitCode, 0, pushed.stderr);
   assert.deepEqual(remoteRefs(), [...before, `refs/heads/feature ${git(["rev-parse", "feature"]).trim()}`].sort(), "only the named branch moved; main was not rewound");
 });
+
+test("in a workspace that is a folder of a larger repository, git reaches no file outside it through a value", async (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "aiden-artifact-subfolder-"));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const git = (args: string[], cwd = dir) => execFileSync("git", ["-c", "user.email=a@example.com", "-c", "user.name=a", ...args], { cwd, encoding: "utf8" });
+  const ws = path.join(dir, "ws");
+  fs.mkdirSync(ws);
+  fs.mkdirSync(path.join(dir, "secret"));
+  fs.writeFileSync(path.join(ws, "f"), "hello\n");
+  fs.writeFileSync(path.join(dir, "secret", "s"), "TOPSECRET\n");
+  git(["init", "-q", "-b", "main"]);
+  git(["add", "."]);
+  git(["commit", "-q", "-m", "one"]);
+  // Uncommitted work outside the workspace, and a file there nobody staged.
+  fs.writeFileSync(path.join(dir, "secret", "s"), "EDITED OUTSIDE\n");
+  fs.writeFileSync(path.join(dir, "secret", "new"), "x\n");
+  const resolve = (command: string, values: string[]) => {
+    const names = [...command.matchAll(/\{\{(\w+)\}\}/gu)].map((match) => match[1]!);
+    const action = parseWorkspaceArtifactActions([{ name: "a", label: "A", command, params: [...new Set(names)].map((name) => ({ name })) }])[0]!;
+    return resolveWorkspaceArtifactCommand(action, values);
+  };
+  const refused: [string, string, RegExp][] = [
+    ["git checkout -- {{file}}", ":/", /file must name a file inside the workspace/u],
+    ["git add {{file}}", ":(top)secret", /file must name a file inside the workspace/u],
+    ["git grep TOPSECRET -- {{file}}", ":/", /file must name a file inside the workspace/u],
+    ["git ls-files {{file}}", ":/", /file must name a file inside the workspace/u],
+    ["git log -p -- {{file}}", ":(top)secret", /file must name a file inside the workspace/u],
+    ["git diff {{file}}", "*", /file must name a file inside the workspace/u],
+    ["git show {{rev}}", "HEAD:secret/s", /rev must be a git revision there/u],
+    ["git show {{rev}}", "HEAD:../secret/s", /rev must be a git revision there/u],
+    ["git log -p {{rev}}", ":/one", /rev must be a git revision there/u],
+    ["git show HEAD:{{file}}", "../secret/s", /file must name a file inside the workspace/u],
+    ["git show HEAD:{{file}}", ":secret/s", /file must name a file inside the workspace/u],
+  ];
+  for (const [command, value, problem] of refused) {
+    assert.throws(() => resolve(command, [value]), problem, `${command} with ${value}`);
+  }
+  assert.equal(fs.readFileSync(path.join(dir, "secret", "s"), "utf8"), "EDITED OUTSIDE\n", "the edit outside was not reverted");
+  assert.equal(git(["diff", "--cached", "--name-only"]), "", "nothing outside was staged");
+
+  // git reads a file after REV: from the repository root; the checked plan reads it from the workspace, and the preview shows that.
+  const show = resolve("git show HEAD:{{file}}", ["f"]);
+  assert.equal(show.preview, "GIT_LITERAL_PATHSPECS=1 git show HEAD:./'f'");
+  const shown = await runResolved(show, ws);
+  assert.deepEqual({ stdout: shown.stdout, exitCode: shown.exitCode }, { stdout: "hello\n", exitCode: 0 });
+  const shell = spawnSync("/bin/sh", ["-c", show.preview], { cwd: ws, encoding: "utf8" });
+  assert.equal(shell.stdout, shown.stdout, "the preview runs what the plan runs");
+  // A value that names the outside file from the repository root reads nothing there.
+  const fromRoot = await runResolved(resolve("git show HEAD:{{file}}", ["secret/s"]), ws);
+  assert.doesNotMatch(fromRoot.stdout, /TOPSECRET/u);
+  assert.notEqual(fromRoot.exitCode, 0);
+
+  // Pathspec magic a template writes itself is read literally too, so it matches nothing outside.
+  const listed = await runResolved(resolve("git ls-files :/ {{file}}", ["f"]), ws);
+  assert.equal(listed.stdout, "f\n");
+  // Everyday file and revision values still work.
+  const logged = await runResolved(resolve("git log --format=%s {{rev}} -- {{file}}", ["HEAD", "f"]), ws);
+  assert.deepEqual({ stdout: logged.stdout, exitCode: logged.exitCode }, { stdout: "one\n", exitCode: 0 });
+});

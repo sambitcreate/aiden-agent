@@ -197,7 +197,7 @@ export async function runArgvPlan(options: ArgvPlanOptions): Promise<BoundedShel
         child = spawn(programs[index]!, command.argv.slice(1), {
           argv0: command.argv[0],
           cwd: options.cwd,
-          env: options.env,
+          env: command.env ? { ...options.env, ...command.env } : options.env,
           detached: process.platform !== "win32",
           windowsHide: true,
           shell: false,

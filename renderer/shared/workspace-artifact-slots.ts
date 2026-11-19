@@ -14,14 +14,19 @@
  * - `number`: a whole number;
  * - `ref`: a branch or tag name as `git check-ref-format` allows one, which
  *   git cannot read as a force, delete, mapping, glob or path;
+ * - `rev`: a git revision (`HEAD~2`, `main..feature`, `v1.0^`): like `ref`,
+ *   but with revision syntax, and still no `:`, which would read a file from
+ *   the repository root, no glob and no leading `.` or `/`;
  * - `target`: a gh number or name that does not point at another repository
  *   or a URL;
- * - `path`: a file inside the workspace.
+ * - `path`: a file inside the workspace. In git it also has no `:` and no
+ *   `* ? [`, which git reads as pathspec magic (`:/`, `:(top)`) or a glob
+ *   that reaches past the workspace when it is a folder inside a repository.
  *
  * Pure and Electron-free; `workspace-artifact-template.ts` uses it.
  */
 
-export type SlotRule = "text" | "number" | "ref" | "path" | "target";
+export type SlotRule = "text" | "number" | "ref" | "rev" | "path" | "target";
 
 export interface Slot {
   rule: SlotRule;
@@ -29,6 +34,12 @@ export interface Slot {
   dash?: boolean;
   /** A ref git push, fetch or pull sends or asks for: a value under `refs/` is refused too, since it could name any ref. */
   remote?: boolean;
+  /**
+   * A file joined after `REV:` in git (`git show HEAD:{{file}}`), which git
+   * reads from the commit, not the disk. The checked plan writes `REV:./…`,
+   * so git takes the path from the workspace rather than the repository root.
+   */
+  blob?: boolean;
 }
 
 /** An option's value: a slot, a refusal clause ("which reads a file from anywhere"), or null when it takes no page data. */
@@ -66,6 +77,7 @@ const TD: Slot = { rule: "text", dash: true };
 const N: Slot = { rule: "number" };
 const R: Slot = { rule: "ref" };
 const RR: Slot = { rule: "ref", remote: true };
+const V: Slot = { rule: "rev" };
 const P: Slot = { rule: "path" };
 const G: Slot = { rule: "target" };
 
@@ -172,6 +184,7 @@ const PROGRAM_SPECS: Readonly<Record<string, SlotSpec>> = {
 // git, by subcommand.
 
 const refs = (forms = "branch or tag names") => ({ operand: () => R, operandForms: forms });
+const revs = (forms: string) => ({ operand: () => V, operandForms: forms });
 const LOG_LONG = [
   "oneline", "graph", "all", "decorate", "no-decorate", "stat", "shortstat", "numstat", "name-only", "name-status", "patch", "no-patch", "no-merges",
   "merges", "first-parent", "reverse", "follow", "abbrev-commit", "date-order", "topo-order", "author-date-order", "no-color", "raw", "full-history",
@@ -202,8 +215,8 @@ const logLike = (name: string): SlotSpec => ({
   long: LOG_LONG,
   values: LOG_VALUES,
   digits: true,
-  operand: (_index, afterDashes) => (afterDashes ? P : T),
-  operandForms: "revisions as text, and files in the workspace after --",
+  operand: (_index, afterDashes) => (afterDashes ? P : V),
+  operandForms: "revisions, and files in the workspace after --",
 });
 
 /** fetch and pull: the first operand is the remote, which can be a URL, a path or a transport that runs a command. */
@@ -300,7 +313,7 @@ const GIT_SPECS: Readonly<Record<string, SlotSpec>> = {
     name: "git restore",
     flags: "SWq",
     long: ["staged", "worktree", "quiet", "ours", "theirs", "merge", "ignore-unmerged"],
-    values: { "-s --source": T },
+    values: { "-s --source": V },
     ...files(),
   },
   commit: {
@@ -329,7 +342,7 @@ const GIT_SPECS: Readonly<Record<string, SlotSpec>> = {
     name: "git reset",
     flags: "q",
     long: ["soft", "mixed", "hard", "keep", "merge", "quiet"],
-    operand: (index, afterDashes) => (index === 0 && !afterDashes ? R : P),
+    operand: (index, afterDashes) => (index === 0 && !afterDashes ? V : P),
     operandForms: "a commit first, then files in the workspace",
   },
   tag: {
@@ -412,14 +425,14 @@ const GIT_SPECS: Readonly<Record<string, SlotSpec>> = {
     flags: "nsx",
     long: ["no-commit", "signoff", "abort", "continue", "skip", "quit", "ff", "allow-empty", "keep-redundant-commits"],
     values: PICK_VALUES,
-    ...refs("commits"),
+    ...revs("commits"),
   },
   revert: {
     name: "git revert",
     flags: "ns",
     long: ["no-commit", "signoff", "abort", "continue", "skip", "quit", "no-edit"],
     values: PICK_VALUES,
-    ...refs("commits"),
+    ...revs("commits"),
   },
   grep: {
     name: "git grep",
@@ -795,6 +808,7 @@ const RULE_TEXT: Record<SlotRule, string> = {
   text: "text",
   number: "a whole number",
   ref: "a branch or tag name",
+  rev: "a revision",
   path: "a file in the workspace",
   target: "a number, branch or name",
 };

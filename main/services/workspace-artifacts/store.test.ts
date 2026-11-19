@@ -194,7 +194,7 @@ test("a page saved before a placeholder rule tightened stays listed, with that a
   assert.match(workspaceArtifactActionProblem(probe) ?? "", /names/u);
   assert.throws(() => resolveWorkspaceArtifactCommand(probe, ["./x.sh"]), /Probe is turned off/u);
   assert.equal(workspaceArtifactActionProblem(kept.actions[0]!), undefined);
-  assert.equal(resolveWorkspaceArtifactCommand(kept.actions[0]!, ["main"]).preview, "git fetch origin 'main'");
+  assert.equal(resolveWorkspaceArtifactCommand(kept.actions[0]!, ["main"]).preview, "GIT_LITERAL_PATHSPECS=1 git fetch origin 'main'");
 
   // Later writes keep the page, and replacing it keeps the old version in its history.
   await reopened.create("ws1", content({ title: "Second" }));

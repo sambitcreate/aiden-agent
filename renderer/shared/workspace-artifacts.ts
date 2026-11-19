@@ -5,6 +5,7 @@ import {
   checkWorkspaceArtifactTemplate,
   workspaceArtifactValueProblem,
   fillWorkspaceArtifactTemplate,
+  previewWorkspaceArtifactTemplate,
   WORKSPACE_ARTIFACT_ARGUMENT_PROGRAMS,
   WORKSPACE_ARTIFACT_PLACEHOLDER,
   workspaceArtifactTemplateHasParams,
@@ -595,7 +596,12 @@ export type ResolvedWorkspaceArtifactCommand =
   | {
       kind: "argv";
       steps: WorkspaceArtifactArgvStep[];
-      /** The template with each value shell-quoted in place, for the confirmation dialog; a shell would run it the same way. */
+      /**
+       * The template with each value shell-quoted in place, and what the
+       * checked plan adds written in (`GIT_LITERAL_PATHSPECS=1` before git,
+       * `./` after `HEAD:`), for the confirmation dialog; a shell would run
+       * it the same way.
+       */
       preview: string;
     };
 
@@ -645,7 +651,7 @@ export function resolveWorkspaceArtifactCommand(
   return {
     kind: "argv",
     steps: fillWorkspaceArtifactTemplate(checked.steps, value),
-    preview: action.command.replace(WORKSPACE_ARTIFACT_PLACEHOLDER, (_match, name: string) => shellQuote(value(name))),
+    preview: previewWorkspaceArtifactTemplate(action.command, checked.steps, value, shellQuote),
   };
 }
 

@@ -223,7 +223,7 @@ test("a stored page with a turned-off action exports, and imports back with that
   const saved = await into.create("ws2", imported, { uniqueTitle: true });
   const [kept, probe] = saved.actions;
   assert.deepEqual(saved.actions.map((action) => action.name), ["fetch", "probe"]);
-  assert.equal(resolveWorkspaceArtifactCommand(kept!, ["main"]).preview, "git fetch origin 'main'");
+  assert.equal(resolveWorkspaceArtifactCommand(kept!, ["main"]).preview, "GIT_LITERAL_PATHSPECS=1 git fetch origin 'main'");
   assert.throws(() => resolveWorkspaceArtifactCommand(probe!, ["./x.sh"]), /Probe is turned off/u);
   assert.equal(saved.approvedDigest, undefined);
 });

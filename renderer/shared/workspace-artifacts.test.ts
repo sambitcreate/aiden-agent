@@ -288,17 +288,19 @@ test("a template with page data runs without a shell, so shell syntax the checke
   ]);
   const resolved = resolveWorkspaceArtifactCommand(parsed!, ["main"]);
   assert.ok(resolved.kind === "argv");
+  // git reads no pathspec magic or glob from a value or the template.
+  const GIT = { GIT_LITERAL_PATHSPECS: "1" };
   assert.deepEqual(resolved.steps, [
-    { connector: ";", pipeline: [{ argv: ["git", "fetch", "-q"], redirects: ["2>/dev/null"] }] },
-    { connector: "||", pipeline: [{ argv: ["git", "status"], redirects: [] }] },
+    { connector: ";", pipeline: [{ argv: ["git", "fetch", "-q"], redirects: ["2>/dev/null"], env: GIT }] },
+    { connector: "||", pipeline: [{ argv: ["git", "status"], redirects: [], env: GIT }] },
     {
       connector: "&&",
       pipeline: [
-        { argv: ["git", "log", "-1", "main"], redirects: ["2>&1"] },
+        { argv: ["git", "log", "-1", "main"], redirects: ["2>&1"], env: GIT },
         { argv: ["head", "-n", "1"], redirects: [] },
       ],
     },
-    { connector: ";", pipeline: [{ argv: ["git", "status"], redirects: [">/dev/null"] }] },
+    { connector: ";", pipeline: [{ argv: ["git", "status"], redirects: [">/dev/null"], env: GIT }] },
   ]);
   // A template without page data is not parsed this way: it runs in a shell, as written.
   assert.equal(parseWorkspaceArtifactActions([{ name: "a", label: "A", command: "echo hi | ((sh) )" }]).length, 1);

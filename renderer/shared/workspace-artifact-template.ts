@@ -41,6 +41,12 @@ export interface WorkspaceArtifactArgvCommand {
    * each one's real path, through symbolic links, just before the command runs.
    */
   paths?: number[];
+  /**
+   * Variables set for this command on top of the host's environment. Every
+   * git command gets `GIT_LITERAL_PATHSPECS=1`, so git reads no pathspec
+   * magic (`:/`, `:(top)`) or glob, from a value or the template.
+   */
+  env?: Record<string, string>;
 }
 
 /** A pipeline and how it follows the one before (the first is always `;`). */
@@ -53,7 +59,15 @@ export interface WorkspaceArtifactArgvStep {
  * A part of a word: literal text, or a placeholder with what its value must
  * be where it sits (decided when the template is checked, tested on each run).
  */
-type TemplatePart = { text: string } | TemplateParam;
+type TemplatePart = TemplateText | TemplateParam;
+
+interface TemplateText {
+  text: string;
+  /** Where unquoted text starts in the template, for the preview. */
+  at?: number;
+  /** Text the checked plan adds that the template does not hold (`./` after `HEAD:`), and where the preview shows it. */
+  insertedAt?: number;
+}
 
 interface TemplateParam {
   param: string;
@@ -65,6 +79,9 @@ interface TemplateWord {
   parts: TemplatePart[];
   /** Whether any of it was quoted. */
   quoted: boolean;
+  /** Where it starts and ends in the template, for the preview. */
+  start: number;
+  end: number;
 }
 
 interface TemplateCommand {
@@ -129,21 +146,27 @@ function parseTemplate(template: string): Parsed {
   type Token = { kind: "word"; word: TemplateWord } | { kind: "op"; op: "|" | WorkspaceArtifactConnector | "\n" } | { kind: "redirect"; redirect: WorkspaceArtifactRedirect };
   const tokens: Token[] = [];
   let word: TemplateWord | undefined;
-  const begin = () => (word ??= { parts: [], quoted: false });
-  const pushText = (text: string) => {
-    const parts = begin().parts;
+  const begin = (at: number) => (word ??= { parts: [], quoted: false, start: at, end: at });
+  const pushText = (text: string, at: number, quoted: boolean) => {
+    const parts = begin(at).parts;
     const last = parts[parts.length - 1];
-    if (last && "text" in last) last.text += text;
-    else parts.push({ text });
+    if (last && "text" in last) {
+      last.text += text;
+      // Quoted text moves the offsets, so the part no longer maps onto the template.
+      if (quoted) delete last.at;
+    } else parts.push(quoted ? { text } : { text, at });
   };
-  const endWord = () => {
-    if (word) tokens.push({ kind: "word", word });
+  const endWord = (at: number) => {
+    if (word) {
+      word.end = at;
+      tokens.push({ kind: "word", word });
+    }
     word = undefined;
   };
   for (let index = 0; index < template.length; index += 1) {
     const char = template[index]!;
     if (char === " " || char === "\t") {
-      endWord();
+      endWord(index);
       continue;
     }
     // A line continuation after a space only wraps a long line; one inside a word would join two words a reader sees apart.
@@ -152,19 +175,19 @@ function parseTemplate(template: string): Parsed {
       continue;
     }
     if (char === "\n" || char === ";") {
-      endWord();
+      endWord(index);
       tokens.push({ kind: "op", op: char === "\n" ? "\n" : ";" });
       continue;
     }
     if (char === "|") {
-      endWord();
+      endWord(index);
       const double = template[index + 1] === "|";
       tokens.push({ kind: "op", op: double ? "||" : "|" });
       if (double) index += 1;
       continue;
     }
     if (char === "&") {
-      endWord();
+      endWord(index);
       if (template[index + 1] !== "&") return syntax("a lone & (a background job, or |&)");
       tokens.push({ kind: "op", op: "&&" });
       index += 1;
@@ -182,7 +205,7 @@ function parseTemplate(template: string): Parsed {
       PLACEHOLDER_AT.lastIndex = index;
       const match = PLACEHOLDER_AT.exec(template);
       if (match) {
-        begin().parts.push({ param: match[1]! });
+        begin(index).parts.push({ param: match[1]! });
         index += match[0].length - 1;
         continue;
       }
@@ -192,7 +215,7 @@ function parseTemplate(template: string): Parsed {
       if (close < 0) return syntax("an unclosed ' quote");
       const text = template.slice(index + 1, close);
       if (PLACEHOLDER_TEST.test(text)) return quotedPlaceholder(text, "single");
-      pushText(text);
+      pushText(text, index, true);
       word!.quoted = true;
       index = close;
       continue;
@@ -213,18 +236,18 @@ function parseTemplate(template: string): Parsed {
       }
       if (at >= template.length) return syntax('an unclosed " quote');
       if (PLACEHOLDER_TEST.test(text)) return quotedPlaceholder(text, "double");
-      pushText(text);
+      pushText(text, index, true);
       word!.quoted = true;
       index = at;
       continue;
     }
     if (PLAIN_CHAR.test(char) && !(char === "~" && (!word || /[=:]$/u.test(lastText(word))))) {
-      pushText(char);
+      pushText(char, index, false);
       continue;
     }
     return syntax(refusedCharacter(char));
   }
-  endWord();
+  endWord(template.length);
 
   const steps: TemplateStep[] = [];
   let connector: WorkspaceArtifactConnector = ";";
@@ -598,10 +621,41 @@ export function checkWorkspaceArtifactTemplate(template: string): { ok: true; st
         for (const part of word.parts) {
           if ("param" in part) part.slot = found.slot;
         }
+        const blob = program === "git" ? readBlobPath(word, gitSubcommand(args).name!) : undefined;
+        if (blob) return { ok: false, problem: { kind: "slot", reason: blob } };
       }
     }
   }
   return parsed;
+}
+
+/**
+ * `REV:{{file}}` in git names a file in a commit, and git reads that path
+ * from the repository root, not the folder it runs in. In a workspace that
+ * is a folder inside a repository, the value would reach the rest of the
+ * repository. A placeholder after the first `:` of a revision or file
+ * operand becomes a `blob` path, and the plan adds `./` after the `:`, so
+ * git reads the path from the workspace; the value then must stay inside it.
+ */
+function readBlobPath(word: TemplateWord, sub: string): string | undefined {
+  if (sub === "push" || sub === "fetch" || sub === "pull") return undefined;
+  const colon = word.parts.findIndex((part) => "text" in part && part.text.includes(":"));
+  if (colon < 0 || !word.parts.slice(colon + 1).some((part) => "param" in part)) return undefined;
+  const head = word.parts.find((part): part is TemplateParam => "param" in part)!;
+  if (head.slot?.rule !== "rev" && head.slot?.rule !== "path") return undefined;
+  const part = word.parts[colon] as TemplateText;
+  if (part.at === undefined) return "write the REV: before a file placeholder without quotes or backslashes, as in git show HEAD:{{file}}";
+  // Before the `:` is the revision, after it the file.
+  word.parts.forEach((later, index) => {
+    if ("param" in later) later.slot = index > colon ? { rule: "path", blob: true } : { rule: "rev" };
+  });
+  const split = part.text.indexOf(":") + 1;
+  const rest = part.text.slice(split);
+  if (rest.startsWith("./")) return undefined;
+  const inserted: TemplateText[] = [{ text: part.text.slice(0, split), at: part.at }, { text: "./", insertedAt: part.at! + split }];
+  if (rest) inserted.push({ text: rest, at: part.at! + split });
+  word.parts.splice(colon, 1, ...inserted);
+  return undefined;
 }
 
 /** Whether a template holds a placeholder, and so runs without a shell. */
@@ -645,6 +699,29 @@ function refProblem(text: string, remote: boolean): string | undefined {
 }
 
 /**
+ * Why `text` is not a git revision a value may be: the `ref` rules, but
+ * with revision syntax (`~ ^ .. @{`). Still no `:`, which reads a file
+ * from the repository root (`HEAD:secret`) or searches commit messages
+ * (`:/text`), no glob, and no leading `.` or `/`, which git would read as a
+ * path when no revision has that name.
+ */
+function revProblem(text: string): string | undefined {
+  if (text === "") return "it is empty";
+  if (/^[-+]/u.test(text)) return "no leading - or + (git reads them as an option)";
+  if (text.includes(":")) return "no : (git reads REV:path as a file from the repository root; write the file as its own value, as in git show HEAD:{{file}})";
+  // eslint-disable-next-line no-control-regex
+  if (/[\u0000-\u0020\u007f*?[\\]/u.test(text)) return "no spaces, control characters or * ? [ \\ (globs)";
+  if (/^[./]/u.test(text)) return "no leading . or / (git reads it as a path)";
+  return undefined;
+}
+
+/** The path after the first `:` of a `REV:{{file}}` word, as the template and value write it (without the plan's `./`). */
+function blobPath(word: TemplateWord, value: (name: string) => string): string {
+  const written = word.parts.map((part) => ("text" in part ? (part.insertedAt === undefined ? part.text : "") : value(part.param))).join("");
+  return written.slice(written.indexOf(":") + 1);
+}
+
+/**
  * Why a value may not fill its placeholder where the template puts it, or
  * undefined when every value fits its slot's rule. A word that would start
  * with "-" is read as an option, so only a slot the program always takes as
@@ -653,6 +730,7 @@ function refProblem(text: string, remote: boolean): string | undefined {
 export function workspaceArtifactValueProblem(steps: readonly TemplateStep[], value: (name: string) => string): string | undefined {
   for (const step of steps) {
     for (const command of step.pipeline) {
+      const git = literal(command.words[0]) === "git";
       for (const word of command.words) {
         const params = word.parts.filter((part): part is TemplateParam => "param" in part);
         if (!params.length) continue;
@@ -670,28 +748,83 @@ export function workspaceArtifactValueProblem(steps: readonly TemplateStep[], va
             const problem = refProblem(text, part.slot?.remote === true);
             if (problem) return `${part.param} must be a branch or tag name there: ${problem}.`;
           }
+          if (rule === "rev") {
+            const problem = revProblem(text);
+            if (problem) return `${part.param} must be a git revision there: ${problem}.`;
+          }
+          if (rule === "path" && git && /[:*?[]/u.test(text)) {
+            return `${part.param} must name a file inside the workspace: no : or * ? [, which git reads as pathspec magic, a file from the repository root or a glob.`;
+          }
           if (rule === "target" && (/^[-+]/u.test(text) || /[:@]/u.test(text))) {
             return `${part.param} must be a number or a branch-like name there: no leading - or +, and no :, @ or ://, which gh reads as another repository or a URL.`;
           }
         }
         if (slot.rule === "path" && !staysInside(filled)) return `${name} must name a file inside the workspace: no absolute path, ~, or .. that leads out of it.`;
+        const blob = params.find((part) => part.slot?.blob);
+        if (blob && !staysInside(blobPath(word, value))) {
+          return `${blob.param} must name a file inside the workspace: no absolute path, ~, or .. that leads out of it.`;
+        }
       }
     }
   }
   return undefined;
 }
 
+/** Set for every git command a template with page data runs (see `WorkspaceArtifactArgvCommand.env`). */
+const GIT_ENV = { GIT_LITERAL_PATHSPECS: "1" } as const;
+
 /** The template's commands with each placeholder replaced by its value, one argument per word. */
 export function fillWorkspaceArtifactTemplate(steps: readonly TemplateStep[], value: (name: string) => string): WorkspaceArtifactArgvStep[] {
   return steps.map((step) => ({
     connector: step.connector,
     pipeline: step.pipeline.map((command) => {
-      const paths = command.words.flatMap((word, index) => (word.parts.some((part) => "param" in part && part.slot?.rule === "path") ? [index] : []));
+      const paths = command.words.flatMap((word, index) =>
+        word.parts.some((part) => "param" in part && part.slot?.rule === "path" && !part.slot.blob) ? [index] : [],
+      );
       return {
         argv: command.words.map((word) => word.parts.map((part) => ("text" in part ? part.text : value(part.param))).join("")),
         redirects: [...command.redirects],
         ...(paths.length > 0 ? { paths } : {}),
+        ...(literal(command.words[0]) === "git" ? { env: { ...GIT_ENV } } : {}),
       };
     }),
   }));
+}
+
+/**
+ * The template as the confirmation shows it: each value quoted by `quote`
+ * in place, with what the checked plan adds (`GIT_LITERAL_PATHSPECS=1`
+ * before git, `./` after `HEAD:`) written in, so a shell reading the preview
+ * runs exactly what the plan runs.
+ */
+export function previewWorkspaceArtifactTemplate(
+  template: string,
+  steps: readonly TemplateStep[],
+  value: (name: string) => string,
+  quote: (value: string) => string,
+): string {
+  const edits: { at: number; end: number; text: string }[] = [];
+  for (const match of template.matchAll(WORKSPACE_ARTIFACT_PLACEHOLDER)) {
+    edits.push({ at: match.index, end: match.index + match[0].length, text: quote(value(match[1]!)) });
+  }
+  for (const step of steps) {
+    for (const command of step.pipeline) {
+      const first = command.words[0]!;
+      if (literal(first) === "git") edits.push({ at: first.start, end: first.start, text: Object.entries(GIT_ENV).map(([name, setting]) => `${name}=${setting} `).join("") });
+      for (const word of command.words) {
+        for (const part of word.parts) {
+          if ("text" in part && part.insertedAt !== undefined) edits.push({ at: part.insertedAt, end: part.insertedAt, text: part.text });
+        }
+      }
+    }
+  }
+  // Insertions before a replacement at the same place: `HEAD:` + `./` + the value.
+  edits.sort((a, b) => a.at - b.at || (a.end - a.at) - (b.end - b.at));
+  let out = "";
+  let from = 0;
+  for (const edit of edits) {
+    out += template.slice(from, edit.at) + edit.text;
+    from = edit.end;
+  }
+  return out + template.slice(from);
 }
