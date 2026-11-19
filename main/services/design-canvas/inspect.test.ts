@@ -204,6 +204,39 @@ test("every load the page's policy blocks is one load finding with the network a
   }
 });
 
+test("an error the page logs itself is reported softly after the errors nothing caught and the promise rejections nothing handled", () => {
+  // What Electron 43's console says for console.error("…"), console.error(new
+  // Error("…")), throw, and Promise.reject with nothing to handle it.
+  const findings = designInspectFindings(
+    quiet({
+      console: [
+        { level: "error", message: "intentional author log", lineNumber: 2, sourceId: PAGE },
+        { level: "error", message: "Error: logged error object", lineNumber: 3, sourceId: PAGE },
+        { level: "error", message: "Uncaught Error: uncaught boom", lineNumber: 7, sourceId: PAGE },
+        { level: "error", message: "Uncaught thrown string", lineNumber: 8, sourceId: PAGE },
+        { level: "error", message: "Uncaught (in promise) Error: unhandled rej", lineNumber: 5, sourceId: PAGE },
+        { level: "error", message: "Uncaught (in promise) plain string rej", lineNumber: 6, sourceId: PAGE },
+      ],
+    }),
+    context,
+  );
+  // Each finding as what it calls the problem, the line and what the page said.
+  const read = findings.map((finding) => {
+    const match = /^(A script failed|The page logged an error) on line (\d+) of "design\/home\.html": ("(?:[^"\\]|\\.)*")\.(.*)$/u.exec(finding);
+    assert.ok(match, finding);
+    return [match[1], Number(match[2]), JSON.parse(match[3]!), match[4]!.trim() !== ""];
+  });
+  assert.deepEqual(read, [
+    ["A script failed", 7, "Error: uncaught boom", true],
+    ["A script failed", 8, "thrown string", true],
+    ["A script failed", 5, "Error: unhandled rej", true],
+    ["A script failed", 6, "plain string rej", true],
+    // A logged error makes no claim that what follows it is missing.
+    ["The page logged an error", 2, "intentional author log", false],
+    ["The page logged an error", 3, "Error: logged error object", false],
+  ]);
+});
+
 test("a refused fetch of a data: address gets the connect-to-nothing advice, while a broken inline image keeps its own", () => {
   // What Electron 43's console says for fetch("data:text/plain,hi") under connect-src 'none'.
   const findings = designInspectFindings(

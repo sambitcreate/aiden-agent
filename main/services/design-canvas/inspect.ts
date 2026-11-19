@@ -3,7 +3,9 @@
 // collects raw facts (`DesignInspectProbe`, see frame-render.ts); everything
 // here is pure, so what Aiden is told is tested without Electron:
 //
-// - script errors, with the file and line they came from;
+// - script errors (an error nothing caught, a promise rejection nothing
+//   handled) and, after them, errors the page logged with console.error,
+//   with the file and line they came from;
 // - files that did not load: anything from the network (a design page loads
 //   nothing from it) and workspace files that are missing;
 // - sideways overflow at the page's design width, naming what sticks out;
@@ -98,9 +100,14 @@ export type DesignInspectResult = {
   image?: { data: string; mimeType: string };
 };
 
-/** What one console message says went wrong, or null when it is not a problem. */
+/**
+ * What one console message says went wrong, or null when it is not a problem:
+ * an error nothing caught or a promise rejection nothing handled ("script"),
+ * an error the page logged itself with console.error ("logged"), or a load
+ * that failed.
+ */
 export type DesignConsoleProblem =
-  | { kind: "script"; message: string; line?: number; source?: string }
+  | { kind: "script" | "logged"; message: string; line?: number; source?: string }
   | { kind: "load"; url: string; connect?: true };
 
 function clip(text: string, max = MAX_MESSAGE_CHARS): string {
@@ -157,9 +164,13 @@ export function readDesignConsoleMessage(entry: DesignConsoleEntry): DesignConso
     const quoted = /'([^']+)'/u.exec(message)?.[1];
     return quoted ? blockedLoad(quoted, /^Refused to connect\b/u.test(message)) : null;
   }
+  // Electron 43 prefixes an uncaught error with "Uncaught " and an unhandled
+  // rejection with "Uncaught (in promise) "; console.error writes what it was
+  // given, with no prefix.
+  const uncaught = /^Uncaught\s+(\(in promise\)\s+)?/u.exec(message);
   return {
-    kind: "script",
-    message: clip(message.replace(/^Uncaught\s+(\(in promise\)\s+)?/u, "")),
+    kind: uncaught ? "script" : "logged",
+    message: clip(uncaught ? message.slice(uncaught[0].length) : message),
     ...(typeof entry.lineNumber === "number" && entry.lineNumber > 0 ? { line: entry.lineNumber } : {}),
     ...(entry.sourceId ? { source: entry.sourceId } : {}),
   };
@@ -218,6 +229,9 @@ export function designInspectFindings(probe: DesignInspectProbe, context: Design
   const failed = new Set<string>();
   const connections = new Set<string>();
   const scripts = new Set<string>();
+  // What the page logged with console.error comes after what it failed to
+  // run: such an error may be one the page caught and handled.
+  const logged: string[] = [];
   for (const entry of probe.console.slice(0, DESIGN_INSPECT_MAX_MESSAGES)) {
     const problem = readDesignConsoleMessage(entry);
     if (!problem) continue;
@@ -229,11 +243,15 @@ export function designInspectFindings(probe: DesignInspectProbe, context: Design
     const where = problem.source ? JSON.stringify(designAddressName(problem.source)) : "";
     const place =
       problem.line !== undefined ? ` on line ${problem.line}${where ? ` of ${where}` : ""}` : where ? ` in ${where}` : "";
-    const sentence = `A script failed${place}: ${JSON.stringify(problem.message)}. Whatever it draws or wires up after that point is missing.`;
+    const sentence =
+      problem.kind === "script"
+        ? `A script failed${place}: ${JSON.stringify(problem.message)}. Whatever it draws or wires up after that point is missing.`
+        : `The page logged an error${place}: ${JSON.stringify(problem.message)}.`;
     if (scripts.has(sentence)) continue;
     scripts.add(sentence);
-    findings.push(sentence);
+    (problem.kind === "script" ? findings : logged).push(sentence);
   }
+  findings.push(...logged);
   for (const image of probe.brokenImages) failed.add(image);
   for (const file of probe.missingFiles) failed.add(file);
   let inlineFailed = false;
