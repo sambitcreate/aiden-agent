@@ -237,6 +237,7 @@ import {
   FormFillService,
   type FormFillApprovalDescriptor,
 } from "./form-fill/service.js";
+import { formFillTurnNote } from "./form-fill/tool.js";
 import { FORM_FILL_MUTATION_AVAILABLE } from "../../renderer/shared/form-fill-availability.js";
 import { toolApprovalPreview, type ToolApprovalPreview } from "../../renderer/shared/tool-approval-preview.js";
 import { formFillArtifacts, formFillRuntime } from "./form-fill/artifacts.js";
@@ -3839,6 +3840,7 @@ export const llmClient = {
         ...advisorChooser,
       });
       const advisorTurnNote = advisorExtension && !advisorChooser.requestQuestionnaire ? ADVISOR_NO_CHOOSER_TURN_NOTE : "";
+      const formFillNote = formFill ? formFillTurnNote(formFill) : "";
       const codemodeExtension: PiAgentRuntimeExtension | undefined =
         workspaceCodemodeEnabled({
             workspaceId,
@@ -4183,7 +4185,7 @@ export const llmClient = {
         ? [
             ...(hookTurnContext ? [hookContextMessage(hookTurnContext, currentPromptMessage.timestamp)] : []),
             ...(chatStatePlan.update ? [chatStatePlan.update(currentPromptMessage.timestamp)] : []),
-            ...[turnNoteMessage([generativeUiTurnNote, advisorTurnNote], currentPromptMessage.timestamp)].filter(
+            ...[turnNoteMessage([generativeUiTurnNote, advisorTurnNote, formFillNote], currentPromptMessage.timestamp)].filter(
               (note): note is AgentMessage => note !== undefined,
             ),
           ]
