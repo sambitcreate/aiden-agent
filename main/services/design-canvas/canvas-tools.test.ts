@@ -1082,6 +1082,125 @@ test("a page's workspace path names its frame wherever a frame id goes, preferri
   assert.deepEqual((await store.get("chat-1")).frames.map((frame) => frame.id).sort(), ["home-desktop", "label", arrow.frame.id].sort());
 });
 
+const overlaps = (a: { x: number; y: number; w: number; h: number }, b: { x: number; y: number; w: number; h: number }) =>
+  a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
+
+test("nextTo puts a frame beside another, past any frame in the way, and in that frame's group", async (t) => {
+  const { store, call } = await setup(t);
+  const page = await call("canvas_place_frame", { kind: "file", title: "Home", path: "design/home.html", x: 0, y: 0 });
+  const box = page.frame.box;
+  const right = await call("canvas_place_frame", { kind: "note", title: "Why", text: "Calmer", nextTo: { frameId: "design/home.html" } });
+  assert.deepEqual([right.frame.box.x, right.frame.box.y], [box.x + box.w + 64, box.y], "right of it by default, top-aligned");
+  const again = await call("canvas_place_frame", { kind: "note", title: "Also", text: "Bigger", nextTo: { frameId: page.frame.id } });
+  assert.equal(again.frame.box.x, right.frame.box.x + right.frame.box.w + 64, "the first note is in the way, so it goes past it");
+  const below = await call("canvas_place_frame", { kind: "shape", title: "Box", nextTo: { frameId: page.frame.id, side: "below" } });
+  assert.deepEqual([below.frame.box.x, below.frame.box.y], [box.x, box.y + box.h + 64]);
+  const left = await call("canvas_place_frame", { kind: "text", title: "Label", text: "Home", nextTo: { frameId: page.frame.id, side: "left" } });
+  assert.equal(left.frame.box.x + left.frame.box.w + 64, box.x);
+
+  const group = await call("canvas_place_frame", { kind: "group", title: "Flow", x: 0, y: 3000 });
+  const first = await call("canvas_place_frame", { kind: "note", title: "Step 1", text: "Sign up", groupId: group.frame.id });
+  const second = await call("canvas_place_frame", { kind: "note", title: "Step 2", text: "Verify", nextTo: { frameId: first.frame.id } });
+  assert.equal(second.frame.groupId, group.frame.id, "it joins the group of the frame it sits beside");
+  const doc = await store.get("chat-1");
+  const fitted = doc.frames.find((frame) => frame.id === group.frame.id)!;
+  assert.ok(fitted.x + fitted.w >= second.frame.box.x + second.frame.box.w, "the group fits itself around it");
+
+  assert.equal((await call("canvas_place_frame", { kind: "note", title: "X", nextTo: { frameId: page.frame.id }, x: 1, y: 1 })).status, "error");
+  assert.equal((await call("canvas_place_frame", { kind: "note", title: "X", nextTo: { frameId: "missing" } })).status, "error");
+});
+
+test("canvas_duplicate copies a frame beside it, and a group with its members and the arrows between them", async (t) => {
+  const { store, call } = await setup(t);
+  await store.update("chat-1", (doc) => ({
+    ...doc,
+    frames: [
+      { id: "page", kind: "file", title: "Home", path: "design/home.html", x: 0, y: 0, w: 640, h: 436, designWidth: 1280, pageId: doc.activePageId, createdBy: "person", locked: true },
+      { id: "g", kind: "group", title: "Flow", x: 0, y: 1000, w: 600, h: 300, pageId: doc.activePageId, createdBy: "person" },
+      { id: "a", kind: "shape", shape: "rect", title: "A", x: 32, y: 1048, w: 160, h: 100, groupId: "g", pageId: doc.activePageId, createdBy: "person" },
+      { id: "b", kind: "shape", shape: "rect", title: "B", x: 400, y: 1048, w: 160, h: 100, groupId: "g", pageId: doc.activePageId, createdBy: "person" },
+      { id: "ab", kind: "connector", title: "A to B", x: 192, y: 1098, w: 1, h: 1, ends: [{ x: 192, y: 1098, frameId: "a" }, { x: 400, y: 1098, frameId: "b" }], pageId: doc.activePageId, createdBy: "person" },
+    ],
+  }));
+  const copy = await call("canvas_duplicate", { id: "design/home.html" });
+  assert.equal(copy.status, "duplicated");
+  assert.notEqual(copy.frame.id, "page");
+  assert.deepEqual(copy.frame.box, { x: 640 + 64, y: 0, w: 640, h: 436 });
+  assert.equal(copy.frame.locked, undefined, "a copy of a locked frame is Aiden's to change");
+  assert.equal(copy.frame.createdBy, "aiden");
+
+  const flow = await call("canvas_duplicate", { id: "g", side: "below" });
+  assert.equal(flow.withIt, 3);
+  const doc = await store.get("chat-1");
+  const known = new Set(["page", copy.frame.id, "g", "a", "b", "ab", flow.frame.id]);
+  const copied = doc.frames.filter((frame) => !known.has(frame.id));
+  assert.deepEqual(copied.filter((frame) => frame.kind !== "connector").map((frame) => frame.groupId), [flow.frame.id, flow.frame.id]);
+  assert.deepEqual(copied.map((frame) => frame.title).sort(), ["A", "A to B", "B"]);
+  const arrow = copied.find((frame) => frame.kind === "connector")!;
+  const ids = new Set(copied.map((frame) => frame.id));
+  assert.ok(arrow.ends!.every((end) => end.frameId !== undefined && ids.has(end.frameId)), "the arrow joins the copies, not the originals");
+  assert.deepEqual([flow.frame.box.x, flow.frame.box.y], [0, 1000 + 300 + 64]);
+  const original = doc.frames.find((frame) => frame.id === "g")!;
+  assert.ok(!overlaps(original, flow.frame.box));
+  assert.equal((await call("canvas_duplicate", { id: "ab" })).status, "error", "an arrow is copied with the frames it joins");
+});
+
+test("canvas_duplicate makes a page's variants in one call, side by side in one labelled group", async (t) => {
+  const { store, workspace, call } = await setup(t);
+  await fs.writeFile(
+    path.join(workspace, "design", "home.html"),
+    `<!doctype html><title>Home</title><script type="application/aiden-tweaks">${JSON.stringify({
+      controls: [{ id: "density", label: "Density", type: "choice", options: ["compact", "cozy"], default: "cozy", attr: "data-density" }],
+    })}</script>`,
+  );
+  const page = await call("canvas_place_frame", { kind: "file", title: "Home", path: "design/home.html", x: 0, y: 0 });
+  const before = await store.get("chat-1");
+
+  const refused = await call("canvas_duplicate", {
+    id: page.frame.id,
+    variants: [{ label: "Dark", dark: true }, { label: "Big", tweaks: { "--size": "20px" } }],
+  });
+  assert.equal(refused.status, "error");
+  assert.match(refused.message, /data-density/u, "it names the tweaks the page has");
+  assert.equal((await store.get("chat-1")).revision, before.revision, "all or nothing: no variant was added");
+  assert.equal((await call("canvas_duplicate", { id: page.frame.id, variants: [{ label: "Same" }] })).status, "error");
+
+  const made = await call("canvas_duplicate", {
+    id: page.frame.id,
+    title: "Home looks",
+    variants: [
+      { label: "Dark", dark: true },
+      { label: "Phone", designWidth: 390 },
+      { label: "Compact", tweaks: { "data-density": "compact" } },
+    ],
+  });
+  assert.equal(made.status, "duplicated");
+  assert.equal(made.group.title, "Home looks");
+  assert.deepEqual(made.frames.map((frame: { title: string }) => frame.title), ["Home", "Home · Dark", "Home · Phone", "Home · Compact"]);
+  const doc = await store.get("chat-1");
+  const members = doc.frames.filter((frame) => frame.groupId === made.group.id);
+  assert.equal(members.length, 4, "the original joins its variants");
+  const [dark, phone, compact] = made.frames.slice(1).map((entry: { id: string }) => doc.frames.find((frame) => frame.id === entry.id)!);
+  assert.equal(dark!.dark, true);
+  assert.equal(phone!.designWidth, 390);
+  assert.ok(phone!.w < page.frame.box.w, "the phone variant is sized for its width");
+  assert.deepEqual(compact!.tweaks, { "data-density": "compact" });
+  const row = [page.frame.box, ...[dark, phone, compact].map((frame) => frame!)];
+  for (let index = 1; index < row.length; index += 1) {
+    assert.equal(row[index]!.y, 0, "top-aligned with the original");
+    assert.ok(row[index]!.x >= row[index - 1]!.x + row[index - 1]!.w, "side by side, left to right");
+  }
+
+  // A locked or grouped original stays where it is, and its variants get a group of their own beside it.
+  await call("canvas_update_frame", { id: page.frame.id, groupId: "", locked: true });
+  const apart = await call("canvas_duplicate", { id: page.frame.id, side: "below", variants: [{ label: "Dark", dark: true }] });
+  assert.equal(apart.frames.length, 1);
+  const after = await store.get("chat-1");
+  assert.equal(after.frames.find((frame) => frame.id === page.frame.id)!.groupId, undefined);
+  assert.ok(apart.group.box.y >= page.frame.box.y + page.frame.box.h, "below the original");
+  assert.equal((await call("canvas_duplicate", { id: made.group.id, variants: [{ label: "Dark", dark: true }] })).status, "error", "only a page has variants");
+});
+
 test("canvas_page adds, renames, duplicates, reorders, shows and deletes pages, never the last one", async (t) => {
   const { store, call } = await setup(t);
   await call("canvas_place_frame", { kind: "note", title: "Mine", x: 0, y: 0 });

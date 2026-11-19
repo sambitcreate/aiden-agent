@@ -28,13 +28,17 @@ import {
   stepLayer,
 } from "../../../renderer/shared/design-canvas/layers.js";
 import {
+  besideBox,
   clampCoord,
   clampSize,
+  copyFrames,
   DESIGN_FRAME_GAP,
   fitGroupToMembers,
   GROUP_PADDING,
+  growGroupToHold,
   placeFrame,
   refitGroups,
+  type DesignBeside,
   type PlaceFrameInput,
 } from "../../../renderer/shared/design-canvas/placement.js";
 import {
@@ -46,6 +50,7 @@ import {
   DESIGN_WIDTHS,
   defaultFileBox,
   designFrameByIdOrPath,
+  isDesignLine,
   designPagePath,
   frameShowingDesignPage,
   framesOnPage,
@@ -93,6 +98,7 @@ export const DESIGN_CANVAS_TOOL_NAMES = [
   "canvas_page",
   "canvas_inspect",
   "canvas_comment",
+  "canvas_duplicate",
 ] as const;
 
 /** Canvas tool calls one turn may make; past it each call returns `limit_reached`. */
@@ -115,6 +121,10 @@ const TEXT_LINE: Record<DesignTextSize, number> = { small: 19, medium: 24, large
 const SIDES: readonly DesignSide[] = ["top", "right", "bottom", "left"];
 /** Where a tool takes a frame id, a page's workspace path names the frame showing it. */
 const FRAME_REF = "A frame id, or a page's workspace path (its frame on the page on screen, else the first).";
+const BESIDE: readonly DesignBeside[] = ["right", "left", "below", "above"];
+const BesideSchema = Type.Union(BESIDE.map((side) => Type.Literal(side)));
+/** Variants one canvas_duplicate call may make. */
+export const DESIGN_VARIANTS_PER_CALL = 6;
 const TextSizeSchema = Type.Union([Type.Literal("small"), Type.Literal("medium"), Type.Literal("large")]);
 const ColorSchema = Type.Union(DESIGN_COLORS.map((color) => Type.Literal(color)));
 const EndSchema = Type.Object({
@@ -188,7 +198,7 @@ export const DESIGN_MODE_PROMPT_SECTION = [
   "- Call canvas_read before changing the canvas, and again if the person says they moved things. It lists every frame on the page, in view and outside it, with ids and boxes.",
   "- Pages, screens and UI mockups are workspace HTML files under design/ (a shared design/tokens.css plus one HTML file per screen), not render_artifact visuals. Each design/ page you write, edit or make with a command lands on the canvas by itself and reloads as you save it; HTML elsewhere in the workspace does not.",
   "- Pick the design width that matches the screen: 390 phone, 768 tablet, 1280 or 1440 desktop. A page can declare it with <meta name=\"aiden-design-width\" content=\"390\">; canvas_place_frame or canvas_update_frame with designWidth resizes its frame to fit.",
-  "- canvas_place_frame on a page already on this canvas page reuses its frame, whoever placed it and whatever group it is in, and the result says placed: \"reused\"; a page shown only in locked frames is refused. Pass duplicate: true to show the same file twice (placed: \"copy\"), for example a light and a dark (dark: true) variant or phone and desktop widths side by side.",
+  "- canvas_place_frame on a page already on this canvas page reuses its frame, whoever placed it and whatever group it is in, and the result says placed: \"reused\"; a page shown only in locked frames is refused. Pass duplicate: true to show the same file twice (placed: \"copy\"), and nextTo: {frameId, side} to put a frame beside another. For light/dark, phone/desktop or density variants of a page, use canvas_duplicate with variants: one call lays them out side by side in one labelled group.",
   "- You can move, resize, retitle, restyle, regroup, hide, lock or reorder any unlocked frame, the person's too, with canvas_update_frame. A locked frame stays as it is unless the person asks you to unlock it. Remove a frame the person added only when they ask, with force: true.",
   "- Use canvas_arrange to lay frames out in a tidy row, column or grid, put them in a group (it fits itself around them) or take them out, in one call. Put each direction in its own group.",
   "- For a flow or diagram, place shapes (with their labels in text), text and frames (artboards), then connectors between them by frameId; a connector follows its frames when they move.",
@@ -467,6 +477,50 @@ function endOf(doc: DesignCanvas, value: unknown, field: string, pageId: string,
   return { x: clampCoord(x), y: clampCoord(y) };
 }
 
+function besideOf(value: unknown, field: string): DesignBeside {
+  if (value === undefined || value === null) return "right";
+  if (!(BESIDE as readonly unknown[]).includes(value)) throw new CanvasToolError(`${field} must be right, left, below or above.`);
+  return value as DesignBeside;
+}
+
+/**
+ * The boxes a frame placed beside another must not land on: the page's
+ * frames other than lines and drawings, and other than those in `skip` (the
+ * frame itself, its anchor, and the group it joins, which surrounds both).
+ */
+function blockersOn(doc: DesignCanvas, pageId: string, skip: ReadonlySet<string | undefined>): DesignFrame[] {
+  return doc.frames.filter((frame) => frame.pageId === pageId && !isDesignLine(frame.kind) && !skip.has(frame.id));
+}
+
+/** The plain group a frame placed beside `anchor` joins: its unlocked group, if it has one. */
+function groupBeside(doc: DesignCanvas, anchor: DesignFrame): string | undefined {
+  if (anchor.groupId === undefined) return undefined;
+  const group = doc.frames.find((frame) => frame.id === anchor.groupId);
+  return group?.kind === "group" && !group.locked ? group.id : undefined;
+}
+
+type Variant = { label: string; dark?: unknown; designWidth?: unknown; tweaks?: unknown };
+const VARIANT_LABEL_CHARS = 40;
+
+function variantsOf(value: unknown): Variant[] | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (!Array.isArray(value) || value.length === 0) throw new CanvasToolError("variants must list one or more variants.");
+  if (value.length > DESIGN_VARIANTS_PER_CALL) {
+    throw new CanvasToolError(`One call makes at most ${DESIGN_VARIANTS_PER_CALL} variants; make the rest with another call.`);
+  }
+  return value.map((entry, index) => {
+    if (typeof entry !== "object" || entry === null || Array.isArray(entry)) {
+      throw new CanvasToolError(`variants[${index}] must be { label, dark, designWidth, tweaks }.`);
+    }
+    const raw = entry as Record<string, unknown>;
+    const label = text(raw.label, `variants[${index}].label`, VARIANT_LABEL_CHARS);
+    if (raw.dark === undefined && raw.designWidth === undefined && raw.tweaks === undefined) {
+      throw new CanvasToolError(`The variant ${JSON.stringify(label)} changes nothing: give it dark, designWidth or tweaks.`);
+    }
+    return { ...raw, label };
+  });
+}
+
 /** A page named by its id or its name (case-insensitive); the page on screen when left out. */
 function pageOf(doc: DesignCanvas, value: unknown): string {
   if (value === undefined || value === null || value === "") return doc.activePageId;
@@ -686,7 +740,7 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
         name: "canvas_place_frame",
         label: "Place on design canvas",
         description:
-          "Put a frame on the design canvas: a workspace HTML page (kind file), an image, a note, a group, or a drawn item for flows and diagrams: text, a shape (rect or oval, with an optional label in text), a frame (an empty artboard that holds shapes and text like a group) or a connector (an arrow or line from one frame or point to another; an end on a frame follows it). Notes and text items take a small Markdown subset: **bold**, *italic*, <u>underline</u>, [links](https://…), and lines starting \"- \" or \"1. \" for lists; size and color apply to the whole note or text, and fill gives a note, shape or artboard its colour. Write the file first with your file tools; path is workspace-relative. A page's frame is sized for its designWidth (390 phone, 768 tablet, 1280 or 1440 desktop) unless you pass w and h. Placing a page already on this canvas page reuses that frame (moved, resized and restyled as asked, kept in its group unless you name another; the result says placed: reused), and a page shown there only in locked frames is refused; pass duplicate: true to add another frame of the same file (placed: copy; for example a dark: true variant or another width). It goes on the page the person is looking at unless you name another. Leave x and y out to place it right of the last frame in its group or in view; in an artboard, one that would run past its right edge starts a new row. A group fits itself to its frames whenever you add, move, resize or remove one. Boxes are in canvas units.",
+          "Put a frame on the design canvas: a workspace HTML page (kind file), an image, a note, a group, or a drawn item for flows and diagrams: text, a shape (rect or oval, with an optional label in text), a frame (an empty artboard that holds shapes and text like a group) or a connector (an arrow or line from one frame or point to another; an end on a frame follows it). Notes and text items take a small Markdown subset: **bold**, *italic*, <u>underline</u>, [links](https://…), and lines starting \"- \" or \"1. \" for lists; size and color apply to the whole note or text, and fill gives a note, shape or artboard its colour. Write the file first with your file tools; path is workspace-relative. A page's frame is sized for its designWidth (390 phone, 768 tablet, 1280 or 1440 desktop) unless you pass w and h. Placing a page already on this canvas page reuses that frame (moved, resized and restyled as asked, kept in its group unless you name another; the result says placed: reused), and a page shown there only in locked frames is refused; pass duplicate: true to add another frame of the same file (placed: copy; for example a dark: true variant or another width). It goes on the page the person is looking at unless you name another. nextTo puts it beside a frame (right unless side says), past any frame in the way, in that frame's group unless you name one; leave x, y and nextTo out to place it right of the last frame in its group or in view; in an artboard, one that would run past its right edge starts a new row. A group fits itself to its frames whenever you add, move, resize or remove one. Boxes are in canvas units.",
         parameters: Type.Object({
           page: Type.Optional(Type.String({ maxLength: 128, description: "A page's name or id." })),
           kind: Type.Union(PLACED_KINDS.map((kind) => Type.Literal(kind))),
@@ -707,6 +761,7 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
           groupId: Type.Optional(Type.String()),
           designWidth: Type.Optional(Type.Union(DESIGN_WIDTHS.map((width) => Type.Literal(width)))),
           duplicate: Type.Optional(Type.Boolean({ description: "file: always add a new frame, even when this page is already on the canvas." })),
+          nextTo: Type.Optional(Type.Object({ frameId: Type.String({ description: FRAME_REF }), side: Type.Optional(BesideSchema) })),
           ...STYLE_PARAMETERS,
         }),
         execute: async (_id, raw) =>
@@ -740,10 +795,20 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
                 : undefined;
             const shape: DesignShapeKind | undefined = kind === "shape" ? (p.shape === "oval" ? "oval" : "rect") : undefined;
             const duplicate = optionalBoolean(p.duplicate, "duplicate") === true;
+            const nextTo = p.nextTo === undefined || p.nextTo === null ? undefined : (p.nextTo as Record<string, unknown>);
+            if (nextTo && (typeof nextTo !== "object" || Array.isArray(nextTo))) throw new CanvasToolError("nextTo must be { frameId, side }.");
+            if (nextTo && kind === "connector") throw new CanvasToolError("A connector goes between its ends; leave nextTo out.");
+            if (nextTo && (x !== undefined || y !== undefined)) throw new CanvasToolError("Pass nextTo or x and y, not both.");
+            const side = nextTo ? besideOf(nextTo.side, "nextTo.side") : undefined;
             const declared = kind === "file" && path && hasTweakValues(p.tweaks) ? { path, names: await designPageTweakNames(deps.workspaceRoot, path) } : undefined;
             const id = newId();
             return edit<Record<string, unknown>>((doc) => {
-              const pageId = pageOf(doc, p.page);
+              // Beside a frame, on its page unless another is named.
+              const anchor = nextTo ? frameIn(doc, nextTo.frameId) : undefined;
+              const pageId = anchor && (p.page === undefined || p.page === null || p.page === "") ? anchor.pageId : pageOf(doc, p.page);
+              if (anchor && anchor.pageId !== pageId) {
+                throw new CanvasToolError("nextTo must name a frame on the page it goes on.");
+              }
               const ends: [DesignConnectorEnd, DesignConnectorEnd] | undefined =
                 kind === "connector" ? [endOf(doc, p.from, "from", pageId), endOf(doc, p.to, "to", pageId)] : undefined;
               if (ends && ends[0].frameId !== undefined && ends[0].frameId === ends[1].frameId) {
@@ -768,8 +833,19 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
                 candidates.find((entry) => (entry.designWidth ?? DESIGN_DEFAULT_FILE_WIDTH) === width) ??
                 candidates.find((entry) => entry.createdBy === "aiden") ??
                 candidates[0];
-              // A reused frame may name the locked group it is already in.
-              const groupId = isDesignContainer(kind) ? undefined : groupOf(doc, p.groupId, pageId, adopted?.groupId);
+              // A reused frame may name the locked group it is already in. Beside
+              // a frame, it joins that frame's plain group unless one is named.
+              const namedGroup = p.groupId === undefined && anchor ? groupBeside(doc, anchor) : p.groupId;
+              const groupId = isDesignContainer(kind) ? undefined : groupOf(doc, namedGroup, pageId, adopted?.groupId);
+              // The box the frame ends with: a reused one's, resized as asked, or the new one's.
+              const resized = adopted ? boxForWidth(adopted, adopted.designWidth ?? DESIGN_DEFAULT_FILE_WIDTH, width!) : undefined;
+              const nextW = adopted ? (givenW !== undefined ? clampSize(givenW, "file") : resized!.w) : clampSize(w, kind);
+              const nextH = adopted ? (givenH !== undefined ? clampSize(givenH, "file") : resized!.h) : clampSize(h, kind);
+              const at = anchor
+                ? besideBox(anchor, { w: nextW, h: nextH }, side!, blockersOn(doc, pageId, new Set([anchor.id, adopted?.id, groupId])))
+                : x !== undefined && y !== undefined
+                  ? { x, y }
+                  : undefined;
               // Other frames that show the same file, for the result.
               const others = sameFile.filter((entry) => entry.id !== adopted?.id);
               const copies =
@@ -789,7 +865,7 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
                 w,
                 h,
                 createdBy: "aiden",
-                ...(ends ? { x: ends[0].x, y: ends[0].y, ends } : x !== undefined && y !== undefined ? { x, y } : {}),
+                ...(ends ? { x: ends[0].x, y: ends[0].y, ends } : at ? at : {}),
                 ...(groupId ? { groupId } : {}),
                 ...(path ? { path } : {}),
                 ...(width ? { designWidth: width } : {}),
@@ -804,11 +880,6 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
                 ...style.set,
               };
               if (adopted) {
-                // The adopted frame's box: as asked, the new width's box when
-                // its width changed, or the box it already had.
-                const resized = boxForWidth(adopted, adopted.designWidth ?? DESIGN_DEFAULT_FILE_WIDTH, width!);
-                const nextW = givenW !== undefined ? clampSize(givenW, "file") : resized.w;
-                const nextH = givenH !== undefined ? clampSize(givenH, "file") : resized.h;
                 // Keep what the person set on the adopted frame (tweaks, dark, guide); take the new look on top.
                 const merge = (box: Pick<DesignFrame, "x" | "y" | "w" | "h">, group?: string): DesignFrame => {
                   const { groupId: _oldGroup, ...kept } = adopted;
@@ -821,9 +892,9 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
                   units: "canvas",
                   ...copies,
                 };
-                // Unless a group is named, the frame stays in the group it is in.
-                const keptGroup = groupId ?? adopted.groupId;
-                if (!groupId && (x === undefined || y === undefined)) {
+                // Unless a group is named or it goes beside a frame, the frame stays in the group it is in.
+                const keptGroup = groupId ?? (anchor ? undefined : adopted.groupId);
+                if (!groupId && !at) {
                   const frames = doc.frames.map((entry) =>
                     entry.id === adopted.id ? merge({ x: entry.x, y: entry.y, w: nextW, h: nextH }, adopted.groupId) : entry,
                   );
@@ -1505,6 +1576,179 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
               return {
                 doc: next,
                 value: { status: "ok", commentId: comment.id, state, ...(reply !== undefined ? { replied: true } : {}) },
+              };
+            });
+          }),
+      },
+      "never",
+    ),
+    declarePiRuntimeReplay(
+      {
+        name: "canvas_duplicate",
+        label: "Duplicate on design canvas",
+        description:
+          `Copy any frame and put the copy beside it (right unless side says), past any frame in the way. A group or artboard comes with its members and the arrows between them; a member copied alone joins its group. With variants, copy a page (or an artifact, for dark) once per variant in one call: the copies sit side by side in one new group named title, with the original first when it is unlocked and in no group. Each variant has a label, added to its title, and sets one or more of dark (true for the dark look), designWidth (390 phone, 768 tablet, 1280 or 1440 desktop) and tweaks (values for tweaks the page declares, such as data-density for densities or --accent); up to ${DESIGN_VARIANTS_PER_CALL} per call. Copies are unlocked. Boxes are in canvas units.`,
+        parameters: Type.Object({
+          id: Type.String({ description: FRAME_REF }),
+          side: Type.Optional(BesideSchema),
+          title: Type.Optional(Type.String({ maxLength: DESIGN_CANVAS_LIMITS.titleChars })),
+          variants: Type.Optional(
+            Type.Array(
+              Type.Object({
+                label: Type.String({ maxLength: VARIANT_LABEL_CHARS }),
+                dark: Type.Optional(Type.Boolean()),
+                designWidth: Type.Optional(Type.Union(DESIGN_WIDTHS.map((width) => Type.Literal(width)))),
+                tweaks: Type.Optional(TweaksSchema),
+              }),
+              { minItems: 1, maxItems: DESIGN_VARIANTS_PER_CALL },
+            ),
+          ),
+        }),
+        execute: async (_id, raw) =>
+          run(async () => {
+            const p = raw as Record<string, unknown>;
+            const side = besideOf(p.side, "side");
+            const variants = variantsOf(p.variants);
+            const groupTitle = p.title === undefined || p.title === null ? undefined : text(p.title, "title", DESIGN_CANVAS_LIMITS.titleChars);
+            // A tweak a variant sets must be one the page declares.
+            let declared: { path: string; names: readonly string[] | null } | undefined;
+            if (variants?.some((variant) => hasTweakValues(variant.tweaks))) {
+              const current = designFrameByIdOrPath(await deps.store.get(deps.chatId), p.id);
+              if (current?.kind === "file" && current.path) {
+                declared = { path: current.path, names: await designPageTweakNames(deps.workspaceRoot, current.path) };
+              }
+            }
+            return edit<Record<string, unknown>>((doc) => {
+              const source = frameIn(doc, p.id);
+              if (isDesignLine(source.kind)) {
+                throw new CanvasToolError("An arrow, line or drawing is copied with the frames it joins: duplicate the group they are in.");
+              }
+              const full = () =>
+                new CanvasToolError(
+                  `The canvas is full (${DESIGN_CANVAS_LIMITS.frames} frames, ${DESIGN_CANVAS_LIMITS.framesPerPage} on a page). Remove a frame first.`,
+                );
+              if (!variants) {
+                // A group or artboard brings its members, and the arrows that join two of them.
+                const members = isDesignContainer(source.kind) ? doc.frames.filter((frame) => frame.groupId === source.id) : [];
+                const inside = new Set(members.map((frame) => frame.id));
+                const joining = doc.frames.filter(
+                  (frame) =>
+                    frame.kind === "connector" &&
+                    !inside.has(frame.id) &&
+                    frame.ends?.every((end) => end.frameId !== undefined && inside.has(end.frameId)),
+                );
+                // A frame copied alone joins its group (not a locked one), which then holds it.
+                const container =
+                  !isDesignContainer(source.kind) && source.groupId !== undefined
+                    ? doc.frames.find((frame) => frame.id === source.groupId && !frame.locked)
+                    : undefined;
+                let at = besideBox(source, source, side, blockersOn(doc, source.pageId, new Set([source.id, container?.id, ...inside])));
+                // An artboard keeps the width the person drew: a copy that would run past it starts a row below.
+                if (container?.kind === "frame" && at.x + source.w > container.x + container.w - GROUP_PADDING.right) {
+                  const held = doc.frames.filter((frame) => frame.groupId === container.id);
+                  at = { x: container.x + GROUP_PADDING.left, y: Math.max(...held.map((frame) => frame.y + frame.h)) + DESIGN_FRAME_GAP };
+                }
+                const copied = copyFrames(doc, [source.id, ...joining.map((frame) => frame.id)], newId, {
+                  dx: at.x - source.x,
+                  dy: at.y - source.y,
+                  createdBy: "aiden",
+                  keepGroupLock: false,
+                });
+                if (!copied) throw full();
+                const copyId = copied.copies.get(source.id)!;
+                let next = refitGroups(copied.doc, [container?.id]);
+                if (container?.kind === "frame") {
+                  const copy = next.frames.find((frame) => frame.id === copyId)!;
+                  next = { ...next, frames: next.frames.map((frame) => (frame.id === container.id ? { ...frame, h: growGroupToHold(frame, copy).h } : frame)) };
+                }
+                const frame = next.frames.find((entry) => entry.id === copyId)!;
+                return {
+                  doc: next,
+                  value: {
+                    status: "duplicated",
+                    units: "canvas",
+                    frame: summarizeFrame(frame),
+                    // The members and arrows copied with a group or artboard.
+                    ...(copied.copies.size > 1 ? { withIt: copied.copies.size - 1 } : {}),
+                  },
+                };
+              }
+              if (!isDesignPrintable(source.kind)) {
+                throw new CanvasToolError("Variants are of a page (kind file), or of an artifact for a dark look. Duplicate other frames without variants.");
+              }
+              const keepSource = !source.locked && source.groupId === undefined;
+              if (
+                doc.frames.length + variants.length + 1 > DESIGN_CANVAS_LIMITS.frames ||
+                doc.frames.filter((frame) => frame.pageId === source.pageId).length + variants.length + 1 > DESIGN_CANVAS_LIMITS.framesPerPage
+              ) {
+                throw full();
+              }
+              const sourceWidth = source.designWidth ?? DESIGN_DEFAULT_FILE_WIDTH;
+              const { groupId: _groupId, locked: _locked, ...base } = source;
+              const copies = variants.map((variant): DesignFrame => {
+                const width = designWidth(variant.designWidth);
+                if (width !== undefined && source.kind !== "file") throw new CanvasToolError("Only a page (kind file) has a design width.");
+                const style = stylePatch(source.kind, undefined, variant, source.tweaks, declared?.path === source.path ? declared : undefined);
+                const box = width !== undefined ? boxForWidth(source, sourceWidth, width) : { w: source.w, h: source.h };
+                return applyStyle(
+                  {
+                    ...base,
+                    id: newId(),
+                    title: `${source.title} · ${variant.label}`.slice(0, DESIGN_CANVAS_LIMITS.titleChars),
+                    ...(width !== undefined ? { designWidth: width } : {}),
+                    ...box,
+                    createdBy: "aiden",
+                  },
+                  style,
+                );
+              });
+              // The copies in a row, top-aligned. Beside an original that stays out of
+              // the group, the row leaves room for the group's own padding.
+              const rowW = copies.reduce((sum, copy) => sum + copy.w, 0) + DESIGN_FRAME_GAP * (copies.length - 1);
+              const rowH = Math.max(...copies.map((copy) => copy.h));
+              const pad = keepSource ? { left: 0, top: 0, right: 0, bottom: 0 } : GROUP_PADDING;
+              const block = besideBox(
+                source,
+                { w: rowW + pad.left + pad.right, h: rowH + pad.top + pad.bottom },
+                side,
+                blockersOn(doc, source.pageId, new Set([source.id])),
+              );
+              let cursor = block.x + pad.left;
+              for (const copy of copies) {
+                copy.x = clampCoord(cursor);
+                copy.y = clampCoord(block.y + pad.top);
+                cursor += copy.w + DESIGN_FRAME_GAP;
+              }
+              const groupId = newId();
+              const group: DesignFrame = {
+                id: groupId,
+                kind: "group",
+                title: groupTitle ?? `${source.title} variants`.slice(0, DESIGN_CANVAS_LIMITS.titleChars),
+                pageId: source.pageId,
+                x: block.x,
+                y: block.y,
+                w: DEFAULT_BOX.group.w,
+                h: DEFAULT_BOX.group.h,
+                createdBy: "aiden",
+              };
+              const frames = [
+                ...doc.frames.map((frame) => (keepSource && frame.id === source.id ? { ...frame, groupId } : frame)),
+                group,
+                ...copies.map((copy) => ({ ...copy, groupId })),
+              ];
+              const next = fitGroupToMembers({ ...doc, frames }, groupId);
+              const placedGroup = next.frames.find((frame) => frame.id === groupId)!;
+              return {
+                doc: next,
+                value: {
+                  status: "duplicated",
+                  units: "canvas",
+                  group: summarizeFrame(placedGroup),
+                  frames: [
+                    ...(keepSource ? [{ id: source.id, title: source.title, original: true }] : []),
+                    ...copies.map((copy) => ({ id: copy.id, title: copy.title, box: { x: copy.x, y: copy.y, w: copy.w, h: copy.h } })),
+                  ],
+                },
               };
             });
           }),

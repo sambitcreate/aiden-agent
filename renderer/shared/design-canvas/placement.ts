@@ -8,6 +8,7 @@ import {
   designMinSize,
   isDesignContainer,
   type DesignCanvas,
+  type DesignConnectorEnd,
   type DesignFrame,
   type DesignFrameKind,
 } from "./schema.js";
@@ -165,4 +166,99 @@ export function fitGroupToMembers(doc: DesignCanvas, groupId: string): DesignCan
     ...doc,
     frames: doc.frames.map((entry) => (entry.id === groupId ? { ...entry, ...next } : entry)),
   });
+}
+
+/** Which side of a frame another goes on. */
+export type DesignBeside = "right" | "left" | "below" | "above";
+
+type Box = { x: number; y: number; w: number; h: number };
+const overlapsBox = (a: Box, b: Box) => a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
+
+/**
+ * Where a box of `size` goes beside `anchor`: 64 px off the chosen side,
+ * top-aligned (left-aligned above or below). A frame of `others` already
+ * there pushes it further the same way, so it never lands on one.
+ */
+export function besideBox(
+  anchor: Box,
+  size: { w: number; h: number },
+  side: DesignBeside,
+  others: readonly Box[],
+): { x: number; y: number } {
+  const step = (from: Box) =>
+    side === "right"
+      ? { x: from.x + from.w + DESIGN_FRAME_GAP, y: anchor.y }
+      : side === "left"
+        ? { x: from.x - DESIGN_FRAME_GAP - size.w, y: anchor.y }
+        : side === "below"
+          ? { x: anchor.x, y: from.y + from.h + DESIGN_FRAME_GAP }
+          : { x: anchor.x, y: from.y - DESIGN_FRAME_GAP - size.h };
+  let at = step(anchor);
+  // Each step passes a blocker, so this ends within one step per frame.
+  for (let tries = 0; tries <= others.length; tries += 1) {
+    const blocker = others.find((entry) => overlapsBox(entry, { ...at, ...size }));
+    if (!blocker) break;
+    at = step(blocker);
+  }
+  return { x: clampCoord(at.x), y: clampCoord(at.y) };
+}
+
+/**
+ * Copies frames moved by (dx, dy). A copied group or artboard brings copies
+ * of its members; a member copied alone joins its group, unless that group is
+ * locked, when the copy stands outside any group. A copied arrow joins the
+ * copies of its frames, and an end on a frame left behind becomes a free end.
+ * Copies are unlocked, except a copied group when `keepGroupLock`, which keeps
+ * its lock along with its members. Returns null when the copies would pass the
+ * frame limits. `copies` maps each source id to its copy's.
+ */
+export function copyFrames(
+  doc: DesignCanvas,
+  ids: readonly string[],
+  newId: () => string,
+  options: { dx: number; dy: number; createdBy: DesignFrame["createdBy"]; keepGroupLock: boolean },
+): { doc: DesignCanvas; copies: Map<string, string> } | null {
+  const chosen = new Set(ids);
+  const groupIds = new Set(
+    doc.frames.filter((frame) => chosen.has(frame.id) && isDesignContainer(frame.kind)).map((frame) => frame.id),
+  );
+  const sources = doc.frames.filter(
+    (frame) => chosen.has(frame.id) || (frame.groupId !== undefined && groupIds.has(frame.groupId)),
+  );
+  if (sources.length === 0) return { doc, copies: new Map() };
+  if (doc.frames.length + sources.length > DESIGN_CANVAS_LIMITS.frames) return null;
+  const pageId = sources[0]!.pageId;
+  const onPage = doc.frames.filter((frame) => frame.pageId === pageId).length;
+  if (onPage + sources.length > DESIGN_CANVAS_LIMITS.framesPerPage) return null;
+  const { dx, dy } = options;
+  // Groups first, so members can point at their group's copy.
+  const ordered = [
+    ...sources.filter((frame) => isDesignContainer(frame.kind)),
+    ...sources.filter((frame) => !isDesignContainer(frame.kind)),
+  ];
+  const copies = new Map<string, string>();
+  for (const frame of ordered) copies.set(frame.id, newId());
+  const lockedGroups = new Set(doc.frames.filter((frame) => frame.locked && isDesignContainer(frame.kind)).map((frame) => frame.id));
+  const added: DesignFrame[] = [];
+  for (const frame of ordered) {
+    // A copy joins its group's copy, or the group itself, but never a locked group it was not copied with.
+    const groupId = frame.groupId && (copies.get(frame.groupId) ?? (lockedGroups.has(frame.groupId) ? undefined : frame.groupId));
+    const ends = frame.ends?.map((end): DesignConnectorEnd => {
+      const target = end.frameId !== undefined ? copies.get(end.frameId) : undefined;
+      if (target) return { ...end, frameId: target };
+      return { x: clampCoord(end.x + dx), y: clampCoord(end.y + dy) };
+    }) as DesignFrame["ends"];
+    const { locked, groupId: _groupId, ...unlocked } = frame;
+    added.push({
+      ...unlocked,
+      ...(locked && options.keepGroupLock && isDesignContainer(frame.kind) ? { locked } : {}),
+      id: copies.get(frame.id)!,
+      x: clampCoord(frame.x + dx),
+      y: clampCoord(frame.y + dy),
+      ...(groupId ? { groupId } : {}),
+      ...(ends ? { ends } : {}),
+      createdBy: options.createdBy,
+    });
+  }
+  return { doc: syncConnectors({ ...doc, frames: [...doc.frames, ...added] }), copies };
 }
