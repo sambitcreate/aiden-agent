@@ -17,9 +17,18 @@
 // javascript: or data:text/html URL in a URL attribute, CSS url() or an SVG
 // <set>/<animate> of href, a remote src, and JavaScript (in <script> or an
 // on* attribute) that sends such a URL to a navigation or URL sink or writes
-// such markup through an HTML sink. Markup or a handler a script writes is
-// read again up to MAX_NESTED_HTML_DEPTH strings deep; deeper than that it is
-// refused unread (fail closed), not admitted. Labels ("JavaScript: 41%"), comparisons
+// such markup through an HTML sink. A sink is followed however its literal
+// is written: a plain or optional call (`f?.(...)`), a callee named in
+// brackets (`o['f'](...)`), a tagged template (also read raw, as String.raw
+// passes it), a literal wrapped in a trivial expression (`(…)`, `(0, …)`,
+// `a || …`, `a ? … : …`, an array or a template substitution), an object key
+// Object.assign copies, DOMParser's parseFromString, and an attribute node's
+// value (`attributes.onclick.value`, `getAttributeNode('onclick').value`); an
+// on* attribute node made by createAttribute is refused outright. A name or
+// value computed at run time, a variable, `.apply` and `Reflect.apply` are not
+// followed: the sandbox's CSP is the backstop there. Markup or a handler a
+// script writes is read again up to MAX_NESTED_HTML_DEPTH strings deep;
+// deeper than that it is refused unread (fail closed), not admitted. Labels ("JavaScript: 41%"), comparisons
 // in scripts ("i<base && i>0") and plain strings pass; the sandbox's CSP is
 // what actually blocks loads.
 
@@ -134,6 +143,8 @@ interface JsToken {
   closesTemplate?: boolean;
   /** A `++` or `--` that follows its operand on the same line. */
   postfix?: boolean;
+  /** A line break comes before this token. */
+  lineBefore?: boolean;
 }
 
 const PUNCTUATORS = [
@@ -287,6 +298,7 @@ class JsLexer {
   }
 
   private push(token: JsToken): void {
+    if (this.lineBreak) token.lineBefore = true;
     this.tokens.push(token);
     this.tail.push(token);
     if (this.tail.length > 3) this.tail.shift();
@@ -613,7 +625,40 @@ const HTML_CALLS: Readonly<Record<string, number | "any">> = {
   setHTMLUnsafe: 0,
   createContextualFragment: 0,
   parseHTMLUnsafe: 0,
+  // DOMParser's document is not in the page, but its nodes are moved into it.
+  parseFromString: 0,
 };
+/** An attribute node's properties that set its value. */
+const ATTRIBUTE_NODE_VALUES: ReadonlySet<string> = new Set(["value", "nodeValue", "textContent"]);
+/** Assignment operators whose right side is the value written. */
+const ASSIGNMENTS: ReadonlySet<string> = new Set(["=", "+=", "||=", "&&=", "??="]);
+
+type SinkKind = "url" | "html" | "handler";
+/** The sinks a value reaches, each with where its target starts (for the excerpt). */
+type SinkSet = Readonly<Partial<Record<SinkKind, number>>>;
+const SINK_KINDS: readonly SinkKind[] = ["url", "html", "handler"];
+
+function joinSinks(...sets: (SinkSet | undefined)[]): SinkSet | undefined {
+  let joined: Partial<Record<SinkKind, number>> | undefined;
+  for (const set of sets) {
+    if (set === undefined) continue;
+    for (const kind of SINK_KINDS) {
+      if (set[kind] !== undefined && joined?.[kind] === undefined) (joined ??= {})[kind] = set[kind];
+    }
+  }
+  return joined;
+}
+
+const sameSinks = (a: SinkSet | undefined, b: SinkSet | undefined) => a?.url === b?.url && a?.html === b?.html && a?.handler === b?.handler;
+
+/** What an attribute of this name does with its value. */
+function attributeSink(name: string | undefined): SinkKind | undefined {
+  if (name === undefined) return undefined;
+  const lower = name.toLowerCase();
+  if (URL_ATTRIBUTES.has(lower)) return "url";
+  if (lower === "srcdoc") return "html";
+  return lower.startsWith("on") ? "handler" : undefined;
+}
 
 interface CallFrame {
   call: boolean;
@@ -621,17 +666,28 @@ interface CallFrame {
   receiver?: string;
   start: number;
   argument: number;
-  hasArgument: boolean;
   /** The plain string value of each argument that is a single literal. */
   literals: (string | undefined)[];
   /** A `replace(...)` call's unsafe first argument, flagged only if it is the only argument. */
   deferred?: string;
+  /**
+   * The sinks the value being written at this level reaches, from an
+   * assignment's target or an object key; cleared where that value ends (a
+   * `,`, a `;` or a line break that ends the statement).
+   */
+  sinks?: SinkSet;
+  /** The sinks the enclosing value reaches, for a value wrapped in parentheses, an array or a template substitution. */
+  outer?: SinkSet;
+  /** The bottom frame, for code outside every bracket. It is never popped. */
+  root?: boolean;
 }
 
 const isLiteral = (token: JsToken | undefined): token is JsToken => token?.kind === "string" || token?.kind === "template";
 const isDot = (token: JsToken | undefined) => token?.kind === "punct" && (token.text === "." || token.text === "?.");
 const isPunct = (token: JsToken | undefined, text: string) => token?.kind === "punct" && token.text === text;
+const isName = (token: JsToken | undefined, text: string) => token?.kind === "name" && token.text === text;
 
+const rootFrame = (): CallFrame => ({ call: false, start: 0, argument: 0, literals: [], root: true });
 const copyFrames = (stack: readonly CallFrame[]): CallFrame[] => stack.map((frame) => ({ ...frame, literals: [...frame.literals] }));
 
 function sameFrame(a: CallFrame, b: CallFrame): boolean {
@@ -642,10 +698,107 @@ function sameFrame(a: CallFrame, b: CallFrame): boolean {
     a.start === b.start &&
     a.argument === b.argument &&
     a.deferred === b.deferred &&
+    a.root === b.root &&
+    sameSinks(a.sinks, b.sinks) &&
+    sameSinks(a.outer, b.outer) &&
     a.literals.length === b.literals.length &&
     a.literals.every((literal, index) => literal === b.literals[index])
   );
 }
+
+/**
+ * The function a call or tagged template names, where `at` is the token just
+ * before its `(` or template: `f`, `o.f`, `o?.f`, `o['f']` or `o?.['f']`, any
+ * of them followed by `?.`. A keyword (`return (`, `typeof (`) names none.
+ */
+function calleeBefore(tokens: readonly JsToken[], at: number): { callee: string; receiver?: string; start: number } | undefined {
+  const index = isPunct(tokens[at], "?.") ? at - 1 : at;
+  const last = tokens[index];
+  if (last?.kind === "name") {
+    const member = isDot(tokens[index - 1]);
+    if (!member && (REGEX_AFTER_KEYWORDS.has(last.text) || CONTEXTUAL_KEYWORDS.has(last.text))) return undefined;
+    const receiver = member && tokens[index - 2]?.kind === "name" ? tokens[index - 2]!.text : undefined;
+    return { callee: last.text, receiver, start: last.start };
+  }
+  if (isPunct(last, "]") && isLiteral(tokens[index - 1]) && isPunct(tokens[index - 2], "[")) {
+    const before = tokens[index - (isPunct(tokens[index - 3], "?.") ? 4 : 3)];
+    const receiver = before?.kind === "name" ? before.text : undefined;
+    return { callee: tokens[index - 1]!.value ?? "", receiver, start: (receiver === undefined ? tokens[index - 2]! : before!).start };
+  }
+  return undefined;
+}
+
+/** The sinks a call's current argument reaches. */
+function argumentSinks(frame: Pick<CallFrame, "callee" | "receiver" | "start" | "argument" | "literals">): SinkSet | undefined {
+  const { callee, argument, start } = frame;
+  if (callee === undefined) return undefined;
+  // `setAttribute(name, value)`, `setAttributeNS(namespace, name, value)`,
+  // or either through `.call(element, ...)`. Only a literal name is known;
+  // a computed one is no more checked than any computed property.
+  const viaCall = callee === "call" && (frame.receiver === "setAttribute" || frame.receiver === "setAttributeNS");
+  const attributeCall = viaCall ? frame.receiver : callee;
+  if (attributeCall === "setAttribute" || attributeCall === "setAttributeNS") {
+    const nameArgument = (attributeCall === "setAttributeNS" ? 1 : 0) + (viaCall ? 1 : 0);
+    const kind = argument === nameArgument + 1 ? attributeSink(frame.literals[nameArgument]) : undefined;
+    return kind === undefined ? undefined : { [kind]: start };
+  }
+  if ((callee === "open" || callee === "assign") && argument === 0) return { url: start };
+  if (callee === "replace" && argument === 0 && frame.receiver === "location") return { url: start };
+  if (Object.prototype.hasOwnProperty.call(HTML_CALLS, callee)) {
+    const at = HTML_CALLS[callee];
+    if (at === "any" || at === argument) return { html: start };
+  }
+  return undefined;
+}
+
+/**
+ * The name of the attribute node that the tokens ending at `at` read:
+ * `attributes.onclick`, `attributes['onclick']`, `getAttributeNode('onclick')`
+ * or `getNamedItem('onclick')`.
+ */
+function attributeNodeName(tokens: readonly JsToken[], at: number): string | undefined {
+  const last = tokens[at];
+  if (last?.kind === "name") return isDot(tokens[at - 1]) && isName(tokens[at - 2], "attributes") ? last.text : undefined;
+  const literal = tokens[at - 1];
+  if (!isLiteral(literal)) return undefined;
+  const before = tokens[at - (isPunct(tokens[at - 3], "?.") ? 4 : 3)];
+  if (isPunct(last, "]") && isPunct(tokens[at - 2], "[") && isName(before, "attributes")) return literal.value;
+  if (isPunct(last, ")") && isPunct(tokens[at - 2], "(") && (isName(before, "getAttributeNode") || isName(before, "getNamedItem"))) return literal.value;
+  return undefined;
+}
+
+/** The sinks the target of the assignment operator at `at` reaches. */
+function assignmentSinks(tokens: readonly JsToken[], at: number): SinkSet | undefined {
+  const target = tokens[at - 1];
+  let property: string | undefined;
+  let viaDot = false;
+  let start: number;
+  /** The last token of what the property is read from. */
+  let object: number;
+  if (target?.kind === "name") {
+    property = target.text;
+    viaDot = isDot(tokens[at - 2]);
+    start = (viaDot ? tokens[at - 3] : target)?.start ?? target.start;
+    object = at - 3;
+  } else if (isPunct(target, "]") && isLiteral(tokens[at - 2]) && isPunct(tokens[at - 3], "[")) {
+    property = tokens[at - 2]!.value;
+    viaDot = true;
+    start = tokens[at - 4]?.start ?? tokens[at - 3]!.start;
+    object = isPunct(tokens[at - 4], "?.") ? at - 5 : at - 4;
+  } else return undefined;
+  if (property === undefined) return undefined;
+  if (property === "location" || (viaDot && URL_PROPERTIES.has(property))) return { url: start };
+  if (!viaDot) return undefined;
+  if (HTML_PROPERTIES.has(property)) return { html: start };
+  if (ATTRIBUTE_NODE_VALUES.has(property)) {
+    const kind = attributeSink(attributeNodeName(tokens, object));
+    if (kind !== undefined) return { [kind]: start };
+  }
+  return undefined;
+}
+
+/** The sinks a literal in `frame` reaches: its own target's, its call argument's and the enclosing value's. */
+const frameSinks = (frame: CallFrame) => joinSinks(frame.sinks, frame.call ? argumentSinks(frame) : undefined, frame.outer);
 
 /** How many frames from the bottom two stacks share, or -1 when they are the same. */
 function sharedFrames(a: readonly CallFrame[], b: readonly CallFrame[]): number {
@@ -711,7 +864,7 @@ export function findJsSink(code: string, depth = 0): HtmlFindings {
   snapshots.sort((a, b) => a.index - b.index);
   const atFork: CallFrame[][] = [];
   const atMeet: CallFrame[][] = [];
-  const stack: CallFrame[] = [];
+  const stack: CallFrame[] = [rootFrame()];
   let next = 0;
   const copyUpTo = (index: number) => {
     while (next < snapshots.length && snapshots[next]!.index <= index && found.limit === undefined) {
@@ -738,7 +891,10 @@ export function findJsSink(code: string, depth = 0): HtmlFindings {
     const shared = sharedFrames(frames, atMeet[index]!);
     if (shared === -1 || done()) return;
     const level = frames.length === atMeet[index]!.length ? shared : -1;
-    scanJsTokens(code, tokens, other.meet, frames, depth, note, () => done() || frames.length <= level, () => spend(1));
+    // The root frame is never popped: when only it differs, this reading
+    // has nothing left to add once its value has ended.
+    const caughtUp = () => frames.length <= level || (level === 0 && frames.length === 1 && frames[0]!.sinks === undefined);
+    scanJsTokens(code, tokens, other.meet, frames, depth, note, () => done() || caughtUp(), () => spend(1));
   });
   return found;
 }
@@ -771,37 +927,84 @@ function scanJsTokens(
   done: () => boolean,
   visit?: (index: number) => void,
 ): void {
+  const checkMarkup = (markup: string) => {
+    if (!markup.includes("<")) return;
+    if (depth >= MAX_NESTED_HTML_DEPTH) note({ limit: NESTED_HTML_LIMIT });
+    else note(scanHtmlString(markup, depth + 1));
+  };
+  // An on* attribute's value is a handler's body, checked as one. Past the
+  // depth cap a handler that holds a string could write anything, so it is
+  // refused unread; one without a string or template has no literal to hand
+  // a sink.
+  const checkHandler = (body: string, excerpt: string) => {
+    if (depth >= MAX_NESTED_HTML_DEPTH) {
+      if (/["'`]/u.test(body)) note({ limit: NESTED_HTML_LIMIT });
+      return;
+    }
+    const handler = findJsSink(body, depth + 1);
+    if (handler.url !== undefined || handler.embed !== undefined || handler.limit !== undefined) note({ url: excerpt });
+  };
+
   for (let index = from; index < tokens.length && !done(); index += 1) {
     visit?.(index);
     const token = tokens[index]!;
+    const previous = tokens[index - 1];
+    let frame = stack[stack.length - 1]!;
+    // A line break between a finished operand and a name or string ends the
+    // statement (no `+`, `.` or `(` carries it on), and with it the value.
+    if (token.lineBefore === true && isOperandEnd(previous) && ((token.kind === "name" && !OPERATOR_WORDS.has(token.text)) || token.kind === "string")) {
+      frame.sinks = undefined;
+    }
     if (token.kind === "punct") {
-      if (token.text === "(") {
-        const callee = tokens[index - 1];
+      const text = token.text;
+      if (text === "(") {
+        const named = calleeBefore(tokens, index - 1);
+        const call = named !== undefined || isPunct(previous, ")") || isPunct(previous, "]") || isPunct(previous, "?.");
         stack.push({
-          call: callee?.kind === "name",
-          callee: callee?.kind === "name" ? callee.text : undefined,
-          receiver: isDot(tokens[index - 2]) && tokens[index - 3]?.kind === "name" ? tokens[index - 3]!.text : undefined,
-          start: callee?.start ?? token.start,
+          call,
+          callee: named?.callee,
+          receiver: named?.receiver,
+          start: named?.start ?? token.start,
           argument: 0,
-          hasArgument: false,
           literals: [],
+          outer: call ? undefined : wrappedSinks(frame, previous),
         });
-      } else if (token.text === "[" || token.text === "{" || token.text === "${") {
-        stack.push({ call: false, start: token.start, argument: 0, hasArgument: false, literals: [] });
-      } else if (token.text === ",") {
-        const frame = stack[stack.length - 1];
-        if (frame) frame.argument += 1;
-      } else if (token.text === ")" || token.text === "]" || token.text === "}") {
-        const frame = stack.pop();
-        if (frame?.deferred !== undefined && frame.argument === 0) note({ url: code.slice(frame.start, token.end) });
+      } else if (text === "[" || text === "${") {
+        // `[` after an operand reads a property; only an array literal is the value.
+        const value = text === "${" || !isOperandEnd(previous);
+        stack.push({ call: false, start: token.start, argument: 0, literals: [], outer: value ? wrappedSinks(frame, previous) : undefined });
+      } else if (text === "{") {
+        stack.push({ call: false, start: token.start, argument: 0, literals: [] });
+      } else if (text === ",") {
+        if (frame.root !== true) frame.argument += 1;
+        frame.sinks = undefined;
+      } else if (text === ";") {
+        frame.sinks = undefined;
+      } else if (ASSIGNMENTS.has(text)) {
+        frame.sinks = joinSinks(frame.sinks, assignmentSinks(tokens, index));
+      } else if (text === ":") {
+        // An object key whose value the object then writes, as in `Object.assign(element, {innerHTML: ...})`.
+        const key = tokens[index - 1];
+        const keyName = key?.kind === "name" ? key.text : isLiteral(key) ? key.value : undefined;
+        const before = tokens[index - 2];
+        if (keyName !== undefined && (isPunct(before, "{") || isPunct(before, ","))) {
+          if (URL_PROPERTIES.has(keyName)) frame.sinks = { url: key!.start };
+          else if (HTML_PROPERTIES.has(keyName)) frame.sinks = { html: key!.start };
+        }
+      } else if (text === ")" || text === "]" || text === "}") {
+        if (frame.root === true) frame.sinks = undefined;
+        else {
+          stack.pop();
+          if (frame.deferred !== undefined && frame.argument === 0) note({ url: code.slice(frame.start, token.end) });
+          // An on* attribute node made to be set on an element later: its
+          // value is not followed, so the attribute is refused.
+          const name = frame.callee === "createAttribute" ? frame.literals[0] : frame.callee === "createAttributeNS" ? frame.literals[1] : undefined;
+          if (attributeSink(name) === "handler") note({ url: code.slice(frame.start, token.end) });
+        }
       }
-      const frame = stack[stack.length - 1];
-      if (frame && token.text !== "(" && token.text !== ",") frame.hasArgument = true;
       continue;
     }
-    const frame = stack[stack.length - 1];
-    if (frame && !isPunct(token, ",")) frame.hasArgument = true;
-    if (!isLiteral(token) || isPunct(tokens[index - 1], "+")) continue;
+    if (!isLiteral(token) || isPunct(previous, "+")) continue;
 
     // A chain of literals joined by `+`, read as one value.
     let chainEnd = index;
@@ -816,79 +1019,49 @@ function scanJsTokens(
       chainEnd += 2;
     }
     const end = tokens[chainEnd]!.end;
-    const previous = tokens[index - 1];
-    let sink: "url" | "html" | "handler" | undefined;
-    let sinkStart = token.start;
+    frame = stack[stack.length - 1]!;
 
-    if (isPunct(previous, "=") || isPunct(previous, "+=")) {
-      const target = tokens[index - 2];
-      let property: string | undefined;
-      let viaDot = false;
-      if (target?.kind === "name") {
-        property = target.text;
-        viaDot = isDot(tokens[index - 3]);
-        sinkStart = (viaDot ? tokens[index - 4] : target)?.start ?? target.start;
-      } else if (isPunct(target, "]") && isLiteral(tokens[index - 3]) && isPunct(tokens[index - 4], "[")) {
-        property = tokens[index - 3]!.value;
-        viaDot = true;
-        sinkStart = tokens[index - 5]?.start ?? tokens[index - 4]!.start;
-      }
-      if (property !== undefined) {
-        if (property === "location" || (viaDot && URL_PROPERTIES.has(property))) sink = "url";
-        else if (viaDot && HTML_PROPERTIES.has(property)) sink = "html";
-      }
-    } else if (isPunct(previous, ":")) {
-      const key = tokens[index - 2];
-      const keyName = key?.kind === "name" ? key.text : isLiteral(key) ? key.value : undefined;
-      const before = tokens[index - 3];
-      if (keyName !== undefined && URL_PROPERTIES.has(keyName) && (isPunct(before, "{") || isPunct(before, ","))) {
-        sink = "url";
-        sinkStart = key!.start;
-      }
-    } else if (frame?.call && (isPunct(previous, "(") || isPunct(previous, ","))) {
-      const argument = frame.argument;
-      if (chainEnd === index && (token.kind === "string" || !token.substituted)) frame.literals[argument] = token.value;
-      const callee = frame.callee ?? "";
-      sinkStart = frame.start;
-      // `setAttribute(name, value)`, `setAttributeNS(namespace, name, value)`,
-      // or either through `.call(element, ...)`. Only a literal name is known;
-      // a computed one is no more checked than any computed property.
-      const viaCall = callee === "call" && (frame.receiver === "setAttribute" || frame.receiver === "setAttributeNS");
-      const attributeCall = viaCall ? frame.receiver : callee;
-      const nameArgument = (attributeCall === "setAttributeNS" ? 1 : 0) + (viaCall ? 1 : 0);
-      if (attributeCall === "setAttribute" || attributeCall === "setAttributeNS") {
-        const name = argument === nameArgument + 1 ? frame.literals[nameArgument]?.toLowerCase() : undefined;
-        if (name !== undefined && URL_ATTRIBUTES.has(name)) sink = "url";
-        else if (name === "srcdoc") sink = "html";
-        else if (name?.startsWith("on")) sink = "handler";
-      } else if ((callee === "open" || callee === "assign") && argument === 0) sink = "url";
-      else if (callee === "replace" && argument === 0) {
-        if (frame.receiver === "location") sink = "url";
-        else if (isUnsafeUrl(url)) frame.deferred = url;
-      } else if (callee in HTML_CALLS) {
-        const at = HTML_CALLS[callee];
-        if (at === "any" || at === argument) sink = "html";
+    if (frame.call && (isPunct(previous, "(") || isPunct(previous, ","))) {
+      if (chainEnd === index && (token.kind === "string" || !token.substituted)) frame.literals[frame.argument] = token.value;
+      if (frame.callee === "replace" && frame.argument === 0 && frame.receiver !== "location" && isUnsafeUrl(url)) frame.deferred = url;
+    }
+    // A tagged template is a call of its tag with the template's text, which
+    // String.raw (and any other tag) may pass on raw.
+    let tag: SinkSet | undefined;
+    let raw: string | undefined;
+    if (token.kind === "template" && (previous?.kind === "name" || isPunct(previous, "]") || isPunct(previous, ")"))) {
+      const named = calleeBefore(tokens, index - 1);
+      if (named !== undefined || previous.kind !== "name") {
+        if (named !== undefined) tag = argumentSinks({ ...named, argument: 0, literals: [] });
+        if (!token.substituted && chainEnd === index) raw = code.slice(token.start + 1, token.end - 1);
       }
     }
-
-    if (sink === "url" && isUnsafeUrl(url)) note({ url: code.slice(sinkStart, end) });
-    else if (sink === "html" && markup.includes("<")) {
-      if (depth >= MAX_NESTED_HTML_DEPTH) note({ limit: NESTED_HTML_LIMIT });
-      else note(scanHtmlString(markup, depth + 1));
-    } else if (sink === "handler") {
-      // An on* attribute's value is a handler's body, checked as one. Past
-      // the depth cap a handler that holds a string could write anything, so
-      // it is refused unread; one without a string or template has no
-      // literal to hand a sink.
-      if (depth >= MAX_NESTED_HTML_DEPTH) {
-        if (/["'`]/u.test(markup)) note({ limit: NESTED_HTML_LIMIT });
-      } else {
-        const handler = findJsSink(markup, depth + 1);
-        if (handler.url !== undefined || handler.embed !== undefined || handler.limit !== undefined) note({ url: code.slice(sinkStart, end) });
-      }
+    const sinks = joinSinks(frameSinks(frame), tag);
+    if (sinks === undefined) {
+      index = chainEnd;
+      continue;
+    }
+    if (sinks.url !== undefined && (isUnsafeUrl(url) || (raw !== undefined && isUnsafeUrl(raw)))) note({ url: code.slice(sinks.url, end) });
+    if (sinks.html !== undefined) {
+      checkMarkup(markup);
+      if (raw !== undefined && raw !== markup) checkMarkup(raw);
+    }
+    if (sinks.handler !== undefined) {
+      checkHandler(markup, code.slice(sinks.handler, end));
+      if (raw !== undefined && raw !== markup) checkHandler(raw, code.slice(sinks.handler, end));
     }
     index = chainEnd;
   }
+}
+
+/**
+ * The sinks a value wrapped in a bracket opened in `frame` after `previous`
+ * reaches. After a `+` the wrapped value is not where a URL starts.
+ */
+function wrappedSinks(frame: CallFrame, previous: JsToken | undefined): SinkSet | undefined {
+  const sinks = frameSinks(frame);
+  if (sinks?.url === undefined || !isPunct(previous, "+")) return sinks;
+  return joinSinks({ html: sinks.html, handler: sinks.handler });
 }
 
 // --- HTML ---------------------------------------------------------------

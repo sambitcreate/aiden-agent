@@ -290,6 +290,46 @@ const DEEP_NESTED_SINKS = Object.fromEntries(
   Object.entries(NESTED_LAYERS).flatMap(([name, build]) => [3, 4].map((layers) => [`${layers} ${name} layers`, build(layers)])),
 );
 
+// Literal sinks written other than as a plain call or assignment: an
+// optional call, a tagged template, a callee named in brackets, a literal
+// wrapped in a trivial expression, an object key Object.assign copies, a
+// DOMParser document whose nodes the page takes, and an attribute node.
+const IFRAME_MARKUP = JSON.stringify("<iframe src=https://e.test></iframe>");
+const IFRAME_HANDLER = JSON.stringify(IFRAME_SINK);
+const literalSink = (js: string) => `<p>x</p><button id=b onclick="void 0">Go</button><a id=a>x</a><script>${js}</script>`;
+const LITERAL_SINKS: Record<string, string> = {
+  "an optional setAttribute call": `b.setAttribute?.('onclick', ${IFRAME_HANDLER}); b.click()`,
+  "an optional document.write call": `document.write?.(${IFRAME_MARKUP})`,
+  "an optional insertAdjacentHTML call": `document.body.insertAdjacentHTML?.('beforeend', ${IFRAME_MARKUP})`,
+  "an optional setHTMLUnsafe call": `document.body.setHTMLUnsafe?.(${IFRAME_MARKUP})`,
+  "an optional location.assign call": "location.assign?.('javascript:alert(1)')",
+  "an optional open call": "open?.('javascript:alert(1)')",
+  "an optional location.replace call": "location.replace?.('javascript:alert(1)')",
+  "a document.write tagged template": "document.write`<iframe src=https://e.test></iframe>`",
+  "a location.assign tagged template": "location.assign`javascript:alert(1)`",
+  "a setAttribute named in brackets": `b['setAttribute']('onclick', ${IFRAME_HANDLER}); b.click()`,
+  "innerHTML set to a parenthesized string": `document.body.innerHTML = (${IFRAME_MARKUP})`,
+  "innerHTML set to a comma expression": `document.body.innerHTML = (0, ${IFRAME_MARKUP})`,
+  "innerHTML set to an || expression": `document.body.innerHTML = 0 || ${IFRAME_MARKUP}`,
+  "innerHTML set to a conditional": `document.body.innerHTML = 1 ? ${IFRAME_MARKUP} : ''`,
+  "innerHTML set to an && expression": `document.body.innerHTML = ready && ${IFRAME_MARKUP}`,
+  "innerHTML set to a String.raw template": "document.body.innerHTML = String.raw`<iframe src=https://e.test></iframe>`",
+  "innerHTML set to an array holding the markup": `document.body.innerHTML = [${IFRAME_MARKUP}]`,
+  "a template substitution that writes the markup": `document.body.innerHTML = \`<p>\${${IFRAME_MARKUP}}</p>\``,
+  "a parenthesized document.write argument": `document.write((${IFRAME_MARKUP}))`,
+  "an href set to a parenthesized javascript: URL": "a.href = ('javascript:alert(1)')",
+  "location set to an || expression of a javascript: URL": "location = 0 || 'javascript:alert(1)'",
+  "an innerHTML key copied by Object.assign": `Object.assign(document.body, {innerHTML: ${IFRAME_MARKUP}})`,
+  "a DOMParser document whose nodes the page takes": `document.body.append(...new DOMParser().parseFromString(${IFRAME_MARKUP}, 'text/html').body.childNodes)`,
+  "an onclick attribute node's value": `b.attributes.onclick.value = ${IFRAME_HANDLER}; b.click()`,
+  "an onclick attribute node's textContent": `b.attributes.onclick.textContent = ${IFRAME_HANDLER}; b.click()`,
+  "an onclick attribute node's nodeValue": `b.attributes['onclick'].nodeValue = ${IFRAME_HANDLER}; b.click()`,
+  "an onclick attribute node read by getAttributeNode": `b.getAttributeNode('onclick').value = ${IFRAME_HANDLER}; b.click()`,
+  "an href attribute node set to a javascript: URL": "a.attributes.href.value = 'javascript:alert(1)'",
+  "an onclick attribute made by createAttribute": `const n = document.createAttribute('onclick'); n.value = ${IFRAME_HANDLER}; b.setAttributeNode(n); b.click()`,
+  "an onclick attribute made by createAttributeNS": `const n = document.createAttributeNS(null, 'ONCLICK'); n.value = ${IFRAME_HANDLER}; b.setAttributeNode(n); b.click()`,
+};
+
 const REFUSED_MARKUP: Record<string, string> = {
   "an <iframe> written through octal escapes for <": ESCAPED_SINKS.octalMarkup,
   "an onclick that writes an <iframe> through octal escapes for <": ESCAPED_SINKS.octalMarkupInOnclick,
@@ -302,6 +342,7 @@ const REFUSED_MARKUP: Record<string, string> = {
   "an open() whose name is spelled with a braced escape": ESCAPED_SINKS.bracedName,
   "an href whose name is spelled with a four-digit escape": ESCAPED_SINKS.fourDigitName,
   "an innerHTML whose name is spelled with a braced escape": ESCAPED_SINKS.bracedProperty,
+  ...Object.fromEntries(Object.entries(LITERAL_SINKS).map(([name, js]) => [name, literalSink(js)])),
   ...Object.fromEntries(Object.entries(DEEP_NESTED_SINKS).map(([name, html]) => [`an <iframe> written ${name} deep`, html])),
   // An on* attribute's value is a handler's body, run when the event fires.
   "a setAttribute onclick whose handler writes an <iframe>":
@@ -453,6 +494,19 @@ const ADMITTED_MARKUP: Record<string, string> = {
     String.raw`<script>label.textContent = '\0' + ' v1.0 \251 2026 \8\9'; legend.innerHTML = '<b>\61\62</b>'; note.textContent = ` + "`\\0 rows`;</script>",
   "setAttribute handlers that toggle, open an https page or label with markup, and a title that names javascript:":
     `<button id=b>Go</button><script>b.setAttribute('onclick', 'toggle()'); b.setAttributeNS(null, 'onmouseover', "location='https://example.com/'"); b.setAttribute('onfocus', "legend.innerHTML='<b>Hi</b>'"); b.setAttribute('title', "location='javascript:alert(1)'"); fn.call(o, 'onclick', "location='javascript:alert(1)'");</script>`,
+  "values that reach no sink: a statement after an href on the next line, a key after an href key, wrapped labels and an attribute node that is not a handler":
+    literalSink(
+      [
+        "a.href = next",
+        "label.textContent = 'javascript: is a URL scheme'",
+        "const link = {href: '#top', label: 'javascript: links'}",
+        "legend.innerHTML = ready ? '<b>Ready</b>' : ('<i>Waiting</i>')",
+        "a.href = '#' + (hash || 'javascript: notes')",
+        "a.attributes.title.value = 'javascript: notes'",
+        "const t = document.createAttribute('title')",
+        "note.textContent = String.raw`<iframe>`",
+      ].join("\n"),
+    ),
   // A handler past the depth cap with no string in it has nothing to write.
   "setAttribute handlers nested four deep whose innermost one only removes its button": NESTED_LAYERS.setAttribute(4, "this.remove()"),
   "names spelled with escapes that are not sinks": String.raw`<script>const \u{6C}abel = document.body; \u{6C}abel.textContent = 'ready'; a.\u{74}itle = 'javascript: notes';</script>`,
