@@ -73,6 +73,7 @@ Plan `docs/plans/smarter-artifacts-design-mode-plan.md`, branch `feat/smarter-ar
 - render_ui redraws in one reply take `edits: [{old,new}]` against the markup the visual was last drawn from, all or nothing (451c5138b).
 - render_artifact now says "Replaced the artifact ... in place" for a same-title call in the same reply, matching render_ui (fb4b9983d).
 - Review round 2 (3893a9cb8, 8a42af6f7): a render_ui redraw from edits keeps the earlier visual's layout; edits that push the markup over the limit say "render_ui edits made the markup too long" and draw nothing; a same-title redraw or replace the host did not show is no longer reported as rendered (render_ui and render_artifact). Edits refuse an old text that matches more than one place once line breaks are read alike, or that starts or ends inside a CRLF or a two-unit character.
+- Review round 3 (4ca7b62be): a first render_ui draw the host does not show (onUiVisual returns false) replies "Aiden could not show the visual ... the person does not see it" and keeps no markup, so later edits in the reply are refused; a replacing call keeps its redraw text. CRLF edit fixes (504bb8e9b, ba4f051da) apply to render_ui edits too.
 ## Tests
 
 - `npm run test:generative-ui`: units, the vendor-script test, and Chromium containment (bridge, draft, shrink, rem).
