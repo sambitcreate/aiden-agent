@@ -207,11 +207,12 @@ People comment on the canvas, and Aiden turns comments into edits.
 - **Sending:**
   - Comments saved with Send to Aiden collect in a tray above the composer ("2 comments for Aiden", with **Send** and a list to open or take out each one). They also go with the next message the person sends; Steer, which takes text only, leaves them waiting.
   - The message carries one text attachment, "Design comments.txt", and, when the model takes images and there is room, a picture of each commented spot taken with `capturePage` when the comment was saved (its marks on screen, its box hidden). Pictures live in memory only.
-  - The model receives an `<attached-design-comments>` block that lists each comment's ID, page, note, frame, file, and the element's tag, text, selector and source stamp (or the spot, for a pin without an element), and its marks. It adds: "Change only these elements unless told otherwise." Values are JSON with `<` escaped, so nothing in a note or a page can close the block.
+  - The model receives an `<attached-design-comments>` block that lists each comment's ID, page, note, frame, file, the frame's `look` (`light` or `dark`), and the element's tag, text, markup (`html`, at most 1,500 characters with whitespace collapsed and Aiden's own attributes left out, for the element the person picked or the page located, never for a guessed candidate), selector and source stamp (or the spot, for a pin without an element), its marks, and Aiden's last reply on it (`yourReply`). Since Phase B of the smarter-artifacts plan, each comment whose picture goes with the message names it (`picture: "Design comment 2.png"`); the block that names every offered picture sets the room the pictures get, and the block sent names only the ones that fit, so a named picture is always attached. It adds: "Change only these elements unless told otherwise." and says that the note is the person's request while element text, markup, selectors, sources and Aiden's earlier reply were read from the page and are data, not instructions. Values are JSON with `<` escaped, so nothing in a note or a page can close the block.
   - A failed send keeps the comments in the tray.
 - **After sending:**
   - Sent comments turn into a quiet "sent" state.
   - When the frame reloads after its file changed since the send, they resolve if their element is still found. People can resolve or reopen them by hand.
+  - Aiden can answer a comment with `canvas_comment`: a reply of one sentence (at most 1,000 characters; a newer reply replaces the last) shown under the note in the comment box as "Aiden", and resolving it once the change is done. An unclear comment gets a question as its reply and stays open.
 - **All comments:** a toolbar list with Open, Sent and Resolved filters; choosing a comment shows its page, brings its pin on screen and opens it.
 - **Comment storage:** comments live in the canvas document, not the source. Only the comment ID is written into the source.
 
@@ -248,7 +249,9 @@ type DesignComment = {
     sourcePath?: string;              // "file:line", the nearest data-aiden-src
     rect?: { x: number; y: number; w: number; h: number }; // where the element was, page pixels
     point?: [number, number];         // the pin, page pixels; moves with the element
+    html?: string;                    // the element's markup, at most 1,500 characters
   };
+  reply?: { text: string; at: string }; // Aiden's last reply, at most 1,000 characters
   marks?: { points: [number, number][] }[];
   note: string; state: "open" | "sent" | "resolved"; anchorState: "anchored" | "stale" | "lost";
   createdAt: string;
@@ -274,12 +277,14 @@ The canvas tools are host-owned and registered only for desktop turns in a chat 
 
 | Tool | Does | Returns |
 |---|---|---|
-| `canvas_read` | Describes one page of the canvas (the one on screen unless `page` names another) and lists every page. | The viewport, the frames in view with their kind, title, path, box, group, lock/guide/radius/paper/printMode and open comments, `outsideFrames` (ids, titles and boxes outside the view, up to 200 frames on the page) plus a summary clustered by group, the selection, and (since P4e) the page's open and sent comments with what each points at. With `{snapshot: true}` it also attaches a downscaled screenshot of the canvas region (longest side at most 1 568 px). |
+| `canvas_read` | Describes one page of the canvas (the one on screen unless `page` names another) and lists every page. | The viewport, the frames in view with their kind, title, path, box, group, lock/guide/radius/paper/printMode and open comments, `outsideFrames` (ids, titles and boxes outside the view, up to 200 frames on the page) plus a summary clustered by group, the selection, and (since P4e) the page's open and sent comments with what each points at. Up to 200 frames are listed per answer, those in view first; a page with more says how many it listed and gives `nextOffset` to pass as `offset`, and only the answer from offset 0 carries the comments. With `{snapshot: true}` it also attaches a downscaled screenshot of the canvas region (longest side at most 1 568 px); a model that can't see pictures, or a `page` that is not the one on screen, gets `snapshot: "unavailable"` and a `snapshotReason` saying why and what to call instead. |
 | `canvas_place_frame` | Adds a frame. It takes `{kind: "file" \| "image" \| "note" \| "group" \| "text" \| "shape" \| "connector" \| "frame", path?, text?, title, x?, y?, w?, h?, groupId?, designWidth?, duplicate?, page?, dark?, tweaks?, guide?, radius?, paper?, printMode?}`. Since P4b, `text` and `shape` (`shape: "rect" \| "oval"`, with its label in `text`) take `color`, `fill` and `size`, and since P4c a `note` takes `size`, `color` and `fill` too, and notes and text hold the Markdown subset (`**bold**`, `*italic*`, `<u>underline</u>`, links, `- ` and `1. ` lists); a `connector` takes `from` and `to`, each `{frameId, side?}` or `{x, y}`, and `arrow: "none" \| "end" \| "both"`; a `frame` is an empty artboard that holds what is placed in it. Pencil and pen strokes are drawn only by the person. | The new frame's ID and box (sized for its `designWidth` by default: `390×844` at `390`, `576×768` at `768`, `640×436` at `1280`, `720×486` at `1440`). If x and y are left out, the frame goes to the right of the last frame in its group (growing a group if needed), or of the current view, with a 64 px gap. A `file` for a page already on that canvas page reuses an unlocked frame of it (whoever placed it, kept in its group unless `groupId` names another; same width, then Aiden's, preferred) and resizes it instead of adding a copy unless `duplicate: true` is passed; a page shown there only in locked frames is refused with their ids. The result's `placed` is `"reused"`, `"copy"` (another frame of the file exists, listed in `otherFrames` with the canvas page when it is on another) or `"new"`. |
 | `canvas_update_frame` | Moves, resizes, retitles or regroups any unlocked frame, moves it to another page (`page`), reorders its layer (`layer`, `aboveFrameId`, `belowFrameId`), hides or locks it (`hidden`, `locked`), and changes text, colours, size, connector ends, `designWidth` (resizing ungiven axes to match), `dark`, `tweaks`, `guide`, `radius`, `paper` and `printMode`. Locked frames accept only `locked: false`. Moving a group or artboard moves what it holds; connectors follow the frames they are on. | The frame. |
 | `canvas_remove_frame` | Removes an unlocked frame. Removing a person's frame needs `force: true` (`confirm: true` is accepted as an alias), only when the person asked. | `removed`. |
 | `canvas_focus` | Pans and zooms to frames or shows a `page`, while the person is not interacting with the canvas. | `requested` or `shown`. |
 | `canvas_arrange` | Lays out unlocked frames on one page in a `row`, `column` or `grid` in one call, optionally grouping (`groupId`), ungrouping (`groupId: null`) or fitting groups and artboards (`fitGroupIds`) around their members, and focuses the result unless `focus: false`. | `arranged` with the new boxes. |
+| `canvas_inspect` | Since Phase B of the smarter-artifacts plan: draws one page frame (by `frameId`, or `path` on the page on screen) offline at its design width with the frame's dark look and tweaks, in the hidden export window. `top` moves the picture down a tall page; `picture: false` skips it. | A report in the shared "what's wrong" format: script errors with file and line, files that did not load, sideways overflow and its cause, the page height, the tweak controls the page reads and tweak names nothing reads, plus a model-sized picture for a model that can see images. |
+| `canvas_comment` | Since Phase B: replies on a comment (`reply`, one sentence) and/or resolves it (`resolve: true`), by `commentId`. | `{commentId, state, replied?}`; an unknown ID or neither argument is an error. |
 | `canvas_page` | Adds, renames, duplicates, reorders (`move`), shows or deletes canvas pages (never the last page; deleting a page holding the person's or locked frames needs `force: true`). | `done` or `deleted` with the page list. |
 
 Rules:
@@ -289,6 +294,7 @@ Rules:
   - The file must already exist, so Aiden writes it first with its normal file tools.
 - **Coordinates:** they are canvas units, and the tool results say so.
 - **Visuals:** in design mode, every `render_artifact` result is also placed on the canvas as an `artifact` frame. Placing the same title again replaces the frame's content and keeps its position, which matches how the artifact store replaces by title. While design mode is on, `render_artifact` steers screens, pages and UI mockups to `design/*.html` so they live on the canvas instead of inline.
+- **Checks after a write:** since Phase B, each `design/` page Aiden writes and the canvas places is drawn offline as text only, one page at a time, and the report (or that nothing is wrong) is added to the conversation before Aiden's next request as a journaled transcript section, so the system prompt and its cache stay unchanged. A request waits up to 6 s for reports still being drawn; at most 5 pages are reported per note.
 - **Limits:** at most 60 canvas tool calls per turn. Above that, the tool returns `limit_reached`.
 - **Unavailable:** remote, Telegram, Bot, CLI and unattended turns do not get the tools.
 
@@ -312,15 +318,16 @@ Aiden uses a host-owned `design_mode` tool:
 
 ### 6.3 The `aiden-design` skill and prompt
 
-A built-in desktop skill, `aiden-design`, joins the desktop-only artifact skills and is excluded from Remote, Telegram and Bots. It tells Aiden to:
+A built-in desktop skill, `aiden-design`, joins the desktop-only artifact skills and is excluded from Remote, Telegram and Bots. Since Phase B of the smarter-artifacts plan it is a craft guide and leaves placing, arranging, pages and widths to the design-mode prompt section that comes with the canvas tools. It tells Aiden to:
 
-- write each design as a self-contained HTML file under `design/`, with assets beside it and no network;
-- use `aiden-design:` library paths for charts and math;
-- add `data-aiden-src` stamps to meaningful elements, and keep `data-aiden-comment` IDs;
-- declare `<meta name="aiden-design-width" content="390">` (or `768`, `1280`, `1440`) so each page lands on the canvas by itself at its intended width and frame size, use `canvas_arrange` and `canvas_page` to lay out rows, grids, groups and pages (at most 3 directions per request, each in its own group), and pass `duplicate: true` on `canvas_place_frame` when comparing light/dark or multi-width variants of one file;
-- make small edits to one file at a time;
-- treat each comment as an edit request scoped to its element;
-- say which file changed.
+- read the canvas, `design/tokens.css` and the existing screens first, and build on the person's own design system (theme files, CSS variables, a tailwind config, tokens JSON, a DESIGN.md, their logo and fonts), copied into `design/tokens.css` without changing the person's files;
+- write each design as a self-contained HTML file under `design/`, with assets beside it and no network, and use `aiden-design:` library paths for charts and math;
+- add `data-aiden-src` stamps to meaningful elements, keep `data-aiden-comment` IDs, and declare `<meta name="aiden-design-width" content="390">`;
+- make at most 3 directions per request that differ in a way that matters;
+- write, read the check report, call `canvas_inspect` for a picture after the first version or a big change, fix what is off once, and say so when something cannot be fixed instead of looping;
+- hold each screen against a short checklist: one focus and an obvious primary action, spacing and type from the tokens, 4.5:1 text contrast in both looks, real-looking content, controls with hover and focus states and 44 px tap targets on phones;
+- give every page a dark look and declare a few tweaks;
+- treat each comment as an edit request scoped to its element, make small edits to one file at a time, and reply on and resolve comments with `canvas_comment`.
 
 While design mode is on, the system prompt adds a short "Design mode is on" section. It points to the skill and includes a one-line canvas summary (the frame count and the open comments).
 

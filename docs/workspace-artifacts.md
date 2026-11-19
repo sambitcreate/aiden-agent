@@ -22,6 +22,8 @@ Aiden builds a small working page first and checks it before adding more. Each s
 - `run()` calls that name no action or pass the wrong number of values;
 - sources the page never reads.
 
+The report uses the same format as the inline-visual and design-canvas checks (`main/services/check-report.ts`): one line naming the check, the problem count and what to do, then at most 10 problems, the rest counted.
+
 Aiden fixes those with another update. It doesn't press a button that changes something just to test it. The check only sees what the page draws with this data, so it also says what it couldn't cover: a source that didn't load, a list that was empty, an `<If>` branch hidden with this data, or a page too large to draw in full. Reads behind a guard, such as `<If test={$pulls.error}>` or `$x.note || "none"`, are not flagged. The check is a hint for Aiden, not a guarantee that the page is right.
 
 The tab is in the tools launcher next to the terminal, files and browser once the workspace's pages have loaded, including before there are any: a workspace without pages shows the empty state with **New page…** and **Import page…**. The tab closes when the last page is deleted, and when you switch to a workspace without pages.
