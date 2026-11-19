@@ -548,6 +548,9 @@ import { CANVAS_STATUS_SECTION, canvasPromptLine, withCanvasStatusNote } from ".
 import { withJournaledCanvasStatusNote } from "./design-canvas/status-note.js";
 import { placeArtifactsOnCanvas, type CanvasArtifact } from "./design-canvas/artifact-frames.js";
 import { createDesignPageScanner, placeWrittenPagesOnCanvas, writtenPagePath } from "./design-canvas/written-pages.js";
+import { inspectDesignFrame } from "./design-canvas/frame-render.js";
+import { inspectDesignPage } from "./design-canvas/inspect.js";
+import { designUrl } from "../../renderer/shared/design-canvas/url.js";
 import { DESIGN_CANVAS_UPDATED_CHANNEL } from "../handlers/design-canvas.js";
 
 subagentRuntimeRegistry.setHealthMetrics(subagentHealthMetrics);
@@ -2537,6 +2540,17 @@ async function prepareGeneration(
         supportsImages
           ? designCanvasSnapshots.request({ chatId: params.chatId, owner: browserOwner, signal: toolSignal ?? signal })
           : null,
+      // Drawn offline in a hidden window, through the same scheme and grant the canvas uses.
+      inspect: (frame, inspectOptions, toolSignal) =>
+        inspectDesignPage({
+          workspaceRoot: canvasRoot,
+          frame,
+          pageUrl: (relativePath) => designUrl(designGrants.issue(params.chatId, canvasRoot), relativePath),
+          render: inspectDesignFrame,
+          picture: inspectOptions.picture ? { top: inspectOptions.top } : null,
+          seesImages: supportsImages,
+          signal: toolSignal ?? signal,
+        }),
       // Turning design mode off, deleting the chat or moving its workspace mid-turn ends the canvas tools.
       stillAvailable: async () => {
         if (signal.aborted) return false;

@@ -220,6 +220,21 @@ test("the page's address carries the same state, applied before the page draws",
   assert.equal(root.style.getPropertyValue("--accent"), "#111111");
 });
 
+test("a page drawn on its own, as an export or an inspect draws it, still takes its look from its address", () => {
+  const state = encodeURIComponent(JSON.stringify({ vars: { "--accent": "#00aa00" }, attrs: {} }));
+  const window = new Window({ url: `aiden-design://grant/design/page.html?aiden-dark=1&aiden-tweaks=${state}` });
+  window.document.write(THEMED);
+  // A top-level page is its own parent.
+  Object.defineProperty(window, "parent", { value: window, configurable: true });
+  const posted: unknown[] = [];
+  window.postMessage = ((data: unknown) => posted.push(data)) as never;
+  new Function("window", DESIGN_BRIDGE_SOURCE)(window);
+  const root = window.document.documentElement;
+  assert.equal(root.getAttribute("data-theme"), "dark");
+  assert.equal(root.style.getPropertyValue("--accent"), "#00aa00");
+  assert.deepEqual(posted, [], "it sends nothing when no canvas holds it");
+});
+
 const EDITABLE_PAGE = `<!doctype html><html><head></head><body>
   <main data-aiden-src="design/page.html:1">
     <h1>Ship   faster</h1>

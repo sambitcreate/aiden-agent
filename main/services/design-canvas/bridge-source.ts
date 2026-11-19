@@ -37,7 +37,6 @@
 export const DESIGN_BRIDGE_SOURCE = `(() => {
   "use strict";
   const host = window.parent;
-  if (!host || host === window) return;
   const doc = window.document;
   const PREFIX = "aiden-design:";
   const TEXT_CHARS = 200;
@@ -117,6 +116,9 @@ export const DESIGN_BRIDGE_SOURCE = `(() => {
     }
     applyTweaks(boot);
   } catch {}
+  // A page drawn on its own (an export, an inspect) takes its look from the
+  // address above and talks to no one.
+  if (!host || host === window) return;
   if (doc.readyState === "complete") post("ready");
   else window.addEventListener("load", () => post("ready"), { once: true });
   let scheduled = false;

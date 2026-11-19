@@ -83,6 +83,7 @@ export const DESIGN_CANVAS_TOOL_NAMES = [
   "canvas_focus",
   "canvas_arrange",
   "canvas_page",
+  "canvas_inspect",
 ] as const;
 
 /** Canvas tool calls one turn may make; past it each call returns `limit_reached`. */
@@ -182,6 +183,7 @@ export const DESIGN_MODE_PROMPT_SECTION = [
   "- For a flow or diagram, place shapes (with their labels in text), text and frames (artboards), then connectors between them by frameId; a connector follows its frames when they move.",
   "- The canvas can have several pages. Work on the page the person is looking at unless they name another; canvas_page adds, renames, duplicates, reorders, shows or deletes pages, and canvas_update_frame with page moves a frame to another.",
   "- After placing or moving frames, call canvas_focus with their ids so the person sees them (canvas_arrange does this by itself). canvas_read with snapshot: true shows you the canvas as the person sees it.",
+  "- canvas_inspect draws one page offline at its design width, with its frame's look, and reports script errors, files that did not load, sideways overflow and tweaks that do nothing, with a picture when you can see images. Check a page with it after a big change, fix what it finds once, and say what you fixed.",
   "- Coordinates and sizes are canvas units. Say which file you changed.",
 ].join("\n");
 
@@ -198,6 +200,15 @@ export type DesignCanvasToolDeps = {
   focus?(frameIds: string[]): void;
   /** A downscaled PNG of the canvas as the person sees it, or null when it is not on screen. */
   snapshot?(signal?: AbortSignal): Promise<{ data: string; mimeType: string } | null>;
+  /**
+   * Draws one page frame offline at its design width and reports what went
+   * wrong (inspect.ts), with a picture starting `top` px down when `picture`.
+   */
+  inspect?(
+    frame: DesignFrame,
+    options: { top: number; picture: boolean },
+    signal?: AbortSignal,
+  ): Promise<{ text: string; image?: { data: string; mimeType: string } }>;
 };
 
 type ToolContent = { type: "text"; text: string } | { type: "image"; data: string; mimeType: string };
@@ -209,8 +220,9 @@ class WithImage {
     readonly image: { data: string; mimeType: string },
   ) {}
 }
+/** A tool answer as text: a string as it is (a report), anything else as JSON. */
 const result = (value: unknown): ToolResult => ({
-  content: [{ type: "text", text: JSON.stringify(value) }],
+  content: [{ type: "text", text: typeof value === "string" ? value : JSON.stringify(value) }],
   details: null,
 });
 
@@ -519,7 +531,7 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
       const value = await body();
       if (value instanceof WithImage) {
         return {
-          content: [{ type: "text", text: JSON.stringify(value.value) }, { type: "image", ...value.image }],
+          content: [...result(value.value).content, { type: "image", ...value.image }],
           details: null,
         };
       }
@@ -1319,6 +1331,50 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
           }),
       },
       "never",
+    ),
+    declarePiRuntimeReplay(
+      {
+        name: "canvas_inspect",
+        label: "Inspect design page",
+        description:
+          "Draw one design page offline at its design width, with its frame's dark look and tweaks, and report what went wrong: script errors with their file and line, files that did not load (anything from the network, missing workspace files), sideways overflow and what causes it, the page's height, which tweak controls the page reads, and tweak names the frame sets that nothing reads. Comes with a picture of the page when you can see images (pass top to see further down a tall page, picture: false for the report only). Name the page by frameId, or by path for its frame on the page the person is looking at. Call it after a big change, fix what it finds once, and say what you fixed.",
+        parameters: Type.Object({
+          frameId: Type.Optional(Type.String({ maxLength: 128 })),
+          path: Type.Optional(Type.String({ maxLength: 1024, description: "A workspace-relative page path, such as design/home.html." })),
+          top: Type.Optional(Type.Number({ minimum: 0, description: "Where the picture starts, in CSS pixels from the top of the page." })),
+          picture: Type.Optional(Type.Boolean({ description: "false for the text report only." })),
+        }),
+        execute: async (_id, raw, signal) =>
+          run(async () => {
+            const p = (raw ?? {}) as { frameId?: unknown; path?: unknown; top?: unknown; picture?: unknown };
+            if (!deps.inspect) throw new CanvasToolError("Pages can't be inspected here.");
+            const doc = await deps.store.get(deps.chatId);
+            let frame: DesignFrame | undefined;
+            if (p.frameId !== undefined) {
+              frame = frameIn(doc, p.frameId);
+            } else if (typeof p.path === "string" && p.path.trim()) {
+              const wanted = p.path.trim().replace(/^\.\//u, "");
+              const showing = doc.frames.filter((entry) => entry.kind === "file" && entry.path === wanted);
+              frame = showing.find((entry) => entry.pageId === doc.activePageId) ?? showing[0];
+              if (!frame) throw new CanvasToolError(`${wanted} is not on the canvas. Place it with canvas_place_frame first, or name a frameId.`);
+            } else {
+              throw new CanvasToolError("Name the page to inspect by frameId or path.");
+            }
+            if (frame.kind !== "file" || !frame.path) throw new CanvasToolError("Only a page (a file frame) can be inspected.");
+            const top = optionalNumber(p.top, "top") ?? 0;
+            const picture = optionalBoolean(p.picture, "picture") !== false;
+            let answer: { text: string; image?: { data: string; mimeType: string } };
+            try {
+              answer = await deps.inspect(frame, { top: Math.max(0, top), picture }, signal);
+            } catch (error) {
+              if (signal?.aborted) throw error;
+              throw new CanvasToolError(`The page could not be drawn: ${error instanceof Error ? error.message : "it failed"}`);
+            }
+            const text = `Frame ${frame.id}. ${answer.text}`;
+            return answer.image ? new WithImage(text, answer.image) : text;
+          }),
+      },
+      "safe",
     ),
   ];
 }

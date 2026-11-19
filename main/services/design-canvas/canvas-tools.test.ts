@@ -445,6 +445,58 @@ test("canvas_read with snapshot shows Aiden the canvas picture, or says it is no
   assert.equal(JSON.parse(first.text).snapshot, "unavailable");
 });
 
+test("canvas_inspect draws the page a frame shows and hands Aiden the report, with the picture when there is one", async (t) => {
+  const base = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-canvas-inspect-"));
+  t.after(() => fs.rm(base, { recursive: true, force: true }));
+  const store = new DesignCanvasStore({ root: () => base });
+  await store.update("chat-1", (doc) => {
+    const withOther = addPage(doc, "p2", "Other");
+    return {
+      ...showPage(withOther, doc.activePageId),
+      frames: [
+        { id: "elsewhere", kind: "file", title: "Home", path: "design/home.html", x: 0, y: 0, w: 640, h: 436, pageId: "p2", createdBy: "aiden" },
+        { id: "home", kind: "file", title: "Home", path: "design/home.html", x: 0, y: 0, w: 640, h: 436, pageId: doc.activePageId, createdBy: "aiden" },
+        { id: "idea", kind: "note", title: "Idea", text: "Warmer", x: 700, y: 0, w: 240, h: 160, pageId: doc.activePageId, createdBy: "aiden" },
+      ],
+    };
+  });
+  const asked: { frameId: string; top: number; picture: boolean }[] = [];
+  let image: { data: string; mimeType: string } | undefined = { data: "anBlZw==", mimeType: "image/jpeg" };
+  const inspect = createDesignCanvasTools({
+    chatId: "chat-1",
+    workspaceRoot: base,
+    store,
+    broadcast: () => undefined,
+    inspect: async (frame, options) => {
+      asked.push({ frameId: frame.id, ...options });
+      return { text: "Inspected design/home.html at 1280px wide: the page is 900px tall.\nInspect: no problems found.", ...(image ? { image } : {}) };
+    },
+  }).find((tool) => tool.name === "canvas_inspect")!;
+
+  const byPath = await inspect.execute("c", { path: "design/home.html", top: 640 } as never);
+  assert.deepEqual(asked[0], { frameId: "home", top: 640, picture: true }, "a path names its frame on the page on screen");
+  assert.deepEqual(byPath.content.map((part) => part.type), ["text", "image"]);
+  const report = byPath.content[0];
+  assert.ok(report && report.type === "text");
+  assert.match(report.text, /^Frame home\. Inspected design\/home\.html/u, "the report is plain text, not JSON");
+
+  image = undefined;
+  const textOnly = await inspect.execute("c", { frameId: "elsewhere", picture: false } as never);
+  assert.deepEqual(asked[1], { frameId: "elsewhere", top: 0, picture: false });
+  assert.deepEqual(textOnly.content.map((part) => part.type), ["text"]);
+
+  const refused = async (args: Record<string, unknown>) => {
+    const output = await inspect.execute("c", args as never);
+    const first = output.content[0];
+    assert.ok(first && first.type === "text");
+    return JSON.parse(first.text) as { status: string; message: string };
+  };
+  assert.match((await refused({ frameId: "idea" })).message, /Only a page/u);
+  assert.match((await refused({ path: "design/nowhere.html" })).message, /not on the canvas/u);
+  assert.equal((await refused({})).status, "error");
+  assert.equal(asked.length, 2, "nothing is drawn for a refused call");
+});
+
 test("Aiden draws a small flow: labelled shapes, text and an arrow that follows its boxes", async (t) => {
   const { store, call } = await setup(t);
   const start = await call("canvas_place_frame", { kind: "shape", title: "Start", text: "Sign in", x: 0, y: 0 });
