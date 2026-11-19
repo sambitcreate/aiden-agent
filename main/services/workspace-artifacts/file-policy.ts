@@ -36,15 +36,43 @@ export function assertArtifactFilePath(file: string): void {
   if (isProtectedCredentialPath(file, "file")) throw new WorkspaceArtifactFileDeniedError();
 }
 
+/**
+ * One answer for a path that leaves the folder and for one that cannot be
+ * resolved past a link, so a page cannot tell from its errors which files
+ * exist outside the workspace folder.
+ */
+const missingOrOutside = (file: string) => `${file} is missing or leads outside the workspace folder.`;
+
+/** Whether a part of `file` that exists inside `root` is a link. */
+async function linkOnPath(root: string, file: string): Promise<boolean> {
+  let at = root;
+  for (const part of file.split(/[\\/]/u).filter((piece) => piece && piece !== ".")) {
+    at = path.join(at, part);
+    try {
+      if ((await fs.lstat(at)).isSymbolicLink()) return true;
+    } catch {
+      return false;
+    }
+  }
+  return false;
+}
+
 async function admittedFile(root: string, file: string) {
   assertArtifactFilePath(file);
   if (!file || path.isAbsolute(file) || file.split(/[\\/]/u).includes("..")) throw new WorkspaceArtifactFileDeniedError(`${file || "The file"} is not a path inside the workspace folder.`);
   const identity = await captureManagedWorktreeRootIdentity(root).catch((error: unknown) => {
     throw isUnsafeSource(error) ? new WorkspaceArtifactFileUnsafeError(file) : error;
   });
-  const canonical = await fs.realpath(path.resolve(identity.path, file));
+  let canonical: string;
+  try {
+    canonical = await fs.realpath(path.resolve(identity.path, file));
+  } catch (error) {
+    // Past a link the path may lead anywhere: whether something is missing out there is not the page's to learn.
+    if (await linkOnPath(identity.path, file)) throw new WorkspaceArtifactFileDeniedError(missingOrOutside(file));
+    throw error;
+  }
   const relative = path.relative(identity.path, canonical);
-  if (!relative || relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) throw new WorkspaceArtifactFileDeniedError(`${file} leads outside the workspace folder.`);
+  if (!relative || relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) throw new WorkspaceArtifactFileDeniedError(missingOrOutside(file));
   assertArtifactFilePath(relative);
   const info = await fs.lstat(canonical, { bigint: true });
   if (!info.isFile() || info.isSymbolicLink()) throw new WorkspaceArtifactFileDeniedError(`${file} is not a file.`);
@@ -52,7 +80,7 @@ async function admittedFile(root: string, file: string) {
   return { identity, relative, file: { device: String(info.dev), inode: String(info.ino) } };
 }
 
-/** Metadata-only check for cached data. Missing/unavailable files keep ordinary transient cache semantics. */
+/** Metadata-only check for cached data. Missing/unavailable files inside the folder keep ordinary transient cache semantics; one missing past a link is refused. */
 export async function artifactFileAllowed(root: string, file: string): Promise<boolean> {
   try { await admittedFile(root, file); return true; }
   catch (error) { if (error instanceof WorkspaceArtifactFileDeniedError) return false; throw error; }

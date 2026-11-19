@@ -224,6 +224,35 @@ test("a file source cannot follow a link out of the workspace", async (t) => {
   assert.equal(results.todo!.dataJson, undefined);
 });
 
+test("a file source's error does not tell a file that exists outside the workspace from one that does not", async (t) => {
+  const sources: WorkspaceArtifactSourceV1[] = [
+    { name: "there", kind: "file", file: "there.md", parse: "text" },
+    { name: "gone", kind: "file", file: "gone.md", parse: "text" },
+    { name: "beyond", kind: "file", file: "out/secret.md", parse: "text" },
+    { name: "beyondGone", kind: "file", file: "out/nothing.md", parse: "text" },
+    { name: "inside", kind: "file", file: "nope.md", parse: "text" },
+  ];
+  const { runner, folder, context } = await setup(t, { sources });
+  const outside = path.join(path.dirname(folder), "outside");
+  await fs.mkdir(outside);
+  await fs.writeFile(path.join(outside, "secret.md"), "secret\n");
+  await fs.symlink(path.join(outside, "secret.md"), path.join(folder, "there.md"));
+  await fs.symlink(path.join(outside, "nothing.md"), path.join(folder, "gone.md"));
+  await fs.symlink(outside, path.join(folder, "out"));
+  const results = await runner.refresh("ws1", "art1", context("full"));
+  // Each read's outcome with its own file name taken out: what a page could compare.
+  const seen = (name: string) => {
+    const result = results[name]!;
+    const file = sources.find((source) => source.name === name)!;
+    return [result.status, result.policyDenied ?? false, result.error!.replace(file.kind === "file" ? file.file : "", "FILE")];
+  };
+  assert.deepEqual(seen("there"), seen("gone"), "a link to a file outside reads like a link to nothing");
+  assert.deepEqual(seen("beyond"), seen("beyondGone"), "a file past a linked folder reads like a missing one");
+  assert.equal(results.there!.error, "there.md is missing or leads outside the workspace folder.");
+  // Inside the folder, with no link on the way, a missing file still says so plainly.
+  assert.equal(results.inside!.error, "There is no file at nope.md.");
+});
+
 test("refreshes of the same page at once share one run", async (t) => {
   const { runner, commands, context } = await setup(t, { sources: [SHELL] });
   await Promise.all([runner.refresh("ws1", "art1", context("full")), runner.refresh("ws1", "art1", context("full"))]);
