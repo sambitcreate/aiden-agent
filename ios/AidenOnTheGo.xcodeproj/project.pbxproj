@@ -219,6 +219,7 @@
 		A7C200000000000000000002 /* AidenReadAloud.swift in Sources */ = {isa = PBXBuildFile; fileRef = A7C100000000000000000002 /* AidenReadAloud.swift */; };
 		A7C200000000000000000003 /* AidenChatImages.swift in Sources */ = {isa = PBXBuildFile; fileRef = A7C100000000000000000003 /* AidenChatImages.swift */; };
 		A7C200000000000000000004 /* AidenChatMarkdown.swift in Sources */ = {isa = PBXBuildFile; fileRef = A7C100000000000000000004 /* AidenChatMarkdown.swift */; };
+		B5C400000000000000000001 /* AidenSVGPreview.swift in Sources */ = {isa = PBXBuildFile; fileRef = B5C400000000000000000011 /* AidenSVGPreview.swift */; };
 		A7C200000000000000000005 /* AidenLiveResponseView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A7C100000000000000000005 /* AidenLiveResponseView.swift */; };
 		A7C200000000000000000006 /* AidenChatViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = A7C100000000000000000006 /* AidenChatViewModel.swift */; };
 		A7C200000000000000000007 /* AidenChatViewModel+Fork.swift in Sources */ = {isa = PBXBuildFile; fileRef = A7C100000000000000000007 /* AidenChatViewModel+Fork.swift */; };
@@ -501,6 +502,7 @@
 		A7C100000000000000000002 /* AidenReadAloud.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenReadAloud.swift; sourceTree = "<group>"; };
 		A7C100000000000000000003 /* AidenChatImages.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenChatImages.swift; sourceTree = "<group>"; };
 		A7C100000000000000000004 /* AidenChatMarkdown.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenChatMarkdown.swift; sourceTree = "<group>"; };
+		B5C400000000000000000011 /* AidenSVGPreview.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenSVGPreview.swift; sourceTree = "<group>"; };
 		A7C100000000000000000005 /* AidenLiveResponseView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenLiveResponseView.swift; sourceTree = "<group>"; };
 		A7C100000000000000000006 /* AidenChatViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenChatViewModel.swift; sourceTree = "<group>"; };
 		A7C100000000000000000007 /* AidenChatViewModel+Fork.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "AidenChatViewModel+Fork.swift"; sourceTree = "<group>"; };
@@ -976,6 +978,7 @@
 				A7C100000000000000000002 /* AidenReadAloud.swift */,
 				A7C100000000000000000003 /* AidenChatImages.swift */,
 				A7C100000000000000000004 /* AidenChatMarkdown.swift */,
+				B5C400000000000000000011 /* AidenSVGPreview.swift */,
 				A7C100000000000000000005 /* AidenLiveResponseView.swift */,
 				A7C100000000000000000006 /* AidenChatViewModel.swift */,
 				A7C100000000000000000007 /* AidenChatViewModel+Fork.swift */,
@@ -1359,6 +1362,7 @@
 				A7C200000000000000000002 /* AidenReadAloud.swift in Sources */,
 				A7C200000000000000000003 /* AidenChatImages.swift in Sources */,
 				A7C200000000000000000004 /* AidenChatMarkdown.swift in Sources */,
+				B5C400000000000000000001 /* AidenSVGPreview.swift in Sources */,
 				A7C200000000000000000005 /* AidenLiveResponseView.swift in Sources */,
 				A7C200000000000000000006 /* AidenChatViewModel.swift in Sources */,
 				A7C200000000000000000007 /* AidenChatViewModel+Fork.swift in Sources */,

@@ -59,4 +59,46 @@ struct AidenPreviewFixtureView: View {
     </body></html>
     """
 }
+
+/// `-AidenSVGFixture`: a reply with an `svg` code block, then an SVG block just
+/// under the 1 MiB View cap, so the drawing sheet can be checked by hand. The
+/// big block is drawn directly: a reply that long is shown as plain text.
+struct AidenSVGFixtureView: View {
+    static var isRequested: Bool {
+        ProcessInfo.processInfo.arguments.contains("-AidenSVGFixture")
+    }
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                AidenMarkdownView(content: Self.reply)
+                Text(verbatim: "Just under 1 MiB:")
+                    .font(.headline)
+                AidenCodeBlockView(source: Self.bigSource, language: "svg")
+                ForEach(0..<20, id: \.self) { index in
+                    Text(verbatim: "Filler line \(index + 1)")
+                }
+            }
+            .padding(16)
+        }
+    }
+
+    private static let reply = """
+    Here is the logo:
+
+    ```svg
+    <svg viewBox="0 0 120 80"><rect x="4" y="4" width="112" height="72" rx="12" fill="none" stroke="black" stroke-width="4"/><circle cx="40" cy="40" r="20" fill="#2a6df4"/><path d="M70 60 L90 20 L110 60 Z" fill="#f4a72a"/></svg>
+    ```
+
+    It has no namespace, so the preview adds one.
+    """
+
+    private static let bigSource: String = {
+        let line = "<path d=\"M0 0 L120 80 L0 80 Z\" fill=\"none\" stroke=\"#2a6df4\" stroke-opacity=\"0.02\"/>\n"
+        let head = "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 120 80\">\n"
+        let tail = "</svg>"
+        let count = (AidenSVGPreview.maximumSourceBytes - head.utf8.count - tail.utf8.count) / line.utf8.count
+        return head + String(repeating: line, count: count) + tail
+    }()
+}
 #endif

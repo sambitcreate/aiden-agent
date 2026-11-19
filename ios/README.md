@@ -88,3 +88,7 @@ DEVELOPER_DIR=/Applications/Xcode-beta.app/Contents/Developer xcodebuild test \
 Use an installed Xcode and simulator destination appropriate to your machine. Simulator XCTest with signing disabled verifies compilation and behavior, not physical-device, Keychain, entitlement, or release acceptance.
 
 Bot notification polls retain the fetch's original negotiated visibility through system permission and notification posting. Losing Bot/chat read, messaging, issue, access-request or peer visibility keeps the cursor and delivered IDs unchanged until a fresh authorized poll; issue rows do not expose their private subtype. Host support alone never grants visibility. Older hosts without a separate support inventory retain the existing Bot/chat read baseline for routine notifications only. A system banner already accepted before access changed cannot be withdrawn by this notifier.
+
+## Previews
+
+A finished `svg` code block in a reply has **View** beside **Copy**. It opens the drawing in a sheet, on a white card in light and dark mode, with pinch-zoom. The SVG is drawn as an image, with no scripts and no network access. View appears only once the block's closing fence has arrived and its source is at most 1 MiB. Source that isn't a well-formed SVG shows "Couldn't draw this SVG." and the code block stays as it was.
