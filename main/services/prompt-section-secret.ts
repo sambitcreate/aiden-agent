@@ -106,7 +106,9 @@ export function promptSectionDeviceKey(dir: string): Buffer {
     if (!key) {
       if (!fallbackLogged) {
         fallbackLogged = true;
-        console.warn("[prompt-sections] The app data folder could not store the prompt section key; using a key for this run only.");
+        // This module stays Electron-free (the CLI and the harness use it), so it
+        // reports through Node's warning channel rather than the app logger.
+        process.emitWarning("The app data folder could not store the prompt section key; using a key for this run only.", "PromptSectionKeyWarning");
       }
       key = fresh;
     }
