@@ -12,7 +12,9 @@
  *    intentionally unchanged — they point at the vendored engine docs that
  *    ship with the bundle.
  *  - telemetry: pi's install ping call sites and endpoint are stripped and
- *    its settings default turned off, wherever that code still ships.
+ *    its settings default turned off. The ping lives in interactive-mode.js,
+ *    which the bundle no longer includes (see the virtual-modules stub in
+ *    build.mjs); the patch stays as a cheap guard in case it ever returns.
  *
  * Aiden has no interactive terminal UI, so pi's startup header, logo and
  * theme defaults are not patched.

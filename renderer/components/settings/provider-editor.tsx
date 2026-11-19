@@ -330,7 +330,7 @@ export function ProviderEditor({
     >
       <FieldSet title="Connection">
         <Field label="Name">
-          <Input value={label} onChange={(e) => setLabel(e.target.value)} />
+          <Input aria-label="Name" value={label} onChange={(e) => setLabel(e.target.value)} />
         </Field>
 
         <Field
@@ -342,6 +342,7 @@ export function ProviderEditor({
           }
         >
           <Input
+            aria-label="Base URL"
             value={baseUrl}
             disabled={testing}
             onChange={(e) => {
@@ -370,7 +371,7 @@ export function ProviderEditor({
               markDiscoveryStale();
             }}
           >
-            <SelectTrigger size="small">
+            <SelectTrigger size="small" aria-label="Authentication">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -390,6 +391,7 @@ export function ProviderEditor({
             }
           >
             <Input
+              aria-label="API key"
               type="password"
               value={keyDraft}
               disabled={testing}
@@ -438,7 +440,7 @@ export function ProviderEditor({
                 onValueChange={setDefaultModel}
                 disabled={settings.data === undefined}
               >
-                <SelectTrigger size="small">
+                <SelectTrigger size="small" aria-label="Default model">
                   <SelectValue placeholder="Select a model" />
                 </SelectTrigger>
                 <SelectContent>
@@ -499,7 +501,7 @@ export function ProviderEditor({
                 markDiscoveryStale();
               }}
             >
-              <SelectTrigger size="small">
+              <SelectTrigger size="small" aria-label="API format">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -525,7 +527,7 @@ export function ProviderEditor({
                 if (value !== "local") setLlamaCppClassifierEnabled(false);
               }}
             >
-              <SelectTrigger size="small">
+              <SelectTrigger size="small" aria-label="Deployment">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>

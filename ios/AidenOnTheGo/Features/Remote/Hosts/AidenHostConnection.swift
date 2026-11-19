@@ -618,6 +618,7 @@ final class AidenHostConnection {
         [.attachmentsRaw],
         [.chatNewWorktree],
         [.chatContinueInNewChat],
+        [.streamSnapshotReasons],
         [.botWatches],
         [.botOpenWork],
         [.botRoutineModels],

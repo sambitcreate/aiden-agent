@@ -79,6 +79,7 @@ import {
   isDeviceToolName,
 } from "./devices/device-tools.js";
 import { devicesEnabled } from "./devices/feature-flag.js";
+import { geminiLiveEnabled } from "./gemini-live/feature-flag.js";
 import { webSearchService } from "./web-search-main.js";
 import { WEB_FETCH_TOOL_NAME } from "../../renderer/shared/web-extract.js";
 import { webFetchService } from "./web-fetch-main.js";
@@ -3847,6 +3848,7 @@ export const llmClient = {
                 botComputers: hostPlatformCapabilities().botComputers,
                 hooks: hostPlatformCapabilities().hooks,
                 mcpServer: hostPlatformCapabilities().mcpServer,
+                geminiLive: geminiLiveEnabled(),
               }),
               availableTools: toolsWithRuntimeContributions.map((tool) => tool.name),
               mcpToolNames: tools.filter((tool) => mcpAgentToolIdentity(tool) !== undefined).map((tool) => tool.name),

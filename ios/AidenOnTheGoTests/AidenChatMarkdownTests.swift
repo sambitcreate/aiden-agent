@@ -199,6 +199,114 @@ final class AidenChatMarkdownTests: XCTestCase {
         }
     }
 
+    func testViewAndCopyBothFitBesideTheLanguageAtEveryTextSize() throws {
+        let svg = "```svg\n<svg xmlns=\"http://www.w3.org/2000/svg\"><circle r=\"4\"/></svg>\n```"
+        for size in [DynamicTypeSize.xSmall, .large, .accessibility3, .accessibility5] {
+            let window = try show(AidenMarkdownView(content: svg).dynamicTypeSize(size))
+            defer { close(window) }
+
+            let view = try copyButton(in: window, label: "View drawing").element.accessibilityFrame
+            let copy = try copyButton(in: window, label: "Copy svg code").element.accessibilityFrame
+            for (name, frame) in [("View", view), ("Copy", copy)] {
+                XCTAssertGreaterThanOrEqual(frame.width, 44 - 0.001, "\(name) is under 44 pt wide at \(size)")
+                XCTAssertGreaterThanOrEqual(frame.height, 44 - 0.001, "\(name) is under 44 pt tall at \(size)")
+                XCTAssertGreaterThanOrEqual(frame.minX, 16 - 0.5, "\(name) ran off the left at \(size)")
+                XCTAssertLessThanOrEqual(frame.maxX, 390 - 16 + 0.5, "\(name) ran off the right at \(size)")
+            }
+            XCTAssertLessThanOrEqual(view.maxX, copy.minX + 0.5, "View and Copy overlap at \(size)")
+        }
+    }
+
+    // MARK: - SVG drawings
+
+    func testOnlyAClosedSmallSvgFenceOffersView() {
+        XCTAssertTrue(AidenSVGPreview.offersView(language: "svg", source: "<svg/>", isOpen: false))
+        XCTAssertTrue(AidenSVGPreview.offersView(language: "SVG", source: "<svg/>", isOpen: false))
+        XCTAssertFalse(AidenSVGPreview.offersView(language: "svg", source: "<svg/>", isOpen: true), "Still being written")
+        XCTAssertFalse(AidenSVGPreview.offersView(language: "xml", source: "<svg/>", isOpen: false))
+        XCTAssertFalse(AidenSVGPreview.offersView(language: nil, source: "<svg/>", isOpen: false))
+        XCTAssertFalse(AidenSVGPreview.offersView(language: "svg", source: " \n\t ", isOpen: false))
+
+        let cap = AidenSVGPreview.maximumSourceBytes
+        let atCap = "<svg>" + String(repeating: "a", count: cap - 11) + "</svg>"
+        XCTAssertEqual(atCap.utf8.count, cap)
+        XCTAssertTrue(AidenSVGPreview.offersView(language: "svg", source: atCap, isOpen: false), "Exactly 1 MiB")
+        XCTAssertFalse(AidenSVGPreview.offersView(language: "svg", source: atCap + "a", isOpen: false), "1 MiB and a byte")
+        // The cap counts bytes, not characters.
+        let wide = "<svg>" + String(repeating: "é", count: cap / 2) + "</svg>"
+        XCTAssertLessThan(wide.count, cap)
+        XCTAssertFalse(AidenSVGPreview.offersView(language: "svg", source: wide, isOpen: false))
+    }
+
+    func testAnSvgDocumentDrawsAsAnImageAndMalformedSourceDoesNot() throws {
+        let source = "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 10 10\"><rect width=\"10\" height=\"10\"/></svg>"
+        let page = try XCTUnwrap(AidenSVGPreview.document(for: "\n  \(source)\n"))
+        XCTAssertTrue(page.contains("data:image/svg+xml;base64,"))
+        XCTAssertTrue(page.contains(Data(source.utf8).base64EncodedString()), "The trimmed source is what draws")
+        XCTAssertFalse(page.contains("<rect"), "The drawing is an image, not markup in the page")
+
+        XCTAssertNil(AidenSVGPreview.document(for: "<svg><rect></svg>"))
+        XCTAssertNil(AidenSVGPreview.document(for: "<html></html>"))
+        XCTAssertNil(AidenSVGPreview.document(for: ""))
+    }
+
+    func testClosingTheSheetStopsTheParse() async {
+        let source = "<svg xmlns=\"http://www.w3.org/2000/svg\">" + String(repeating: "<rect/>", count: 1000) + "</svg>"
+        XCTAssertNotNil(AidenSVGPreview.document(for: source))
+        let parse = Task.detached { () -> String? in
+            while !Task.isCancelled { await Task.yield() }
+            return AidenSVGPreview.document(for: source)
+        }
+        parse.cancel()
+        let page = await parse.value
+        XCTAssertNil(page, "A cancelled parse stops instead of finishing the drawing")
+    }
+
+    func testAnSvgWithoutItsNamespaceGetsOne() throws {
+        let page = try XCTUnwrap(
+            AidenSVGPreview.document(for: "<svg viewBox=\"0 0 10 10\"><rect width=\"10\" height=\"10\"/></svg>")
+        )
+        let drawn = try XCTUnwrap(Self.drawnSVG(in: page))
+        XCTAssertTrue(drawn.hasPrefix("<svg xmlns=\"http://www.w3.org/2000/svg\""), drawn)
+        XCTAssertTrue(drawn.hasSuffix("<rect width=\"10\" height=\"10\"/></svg>"), drawn)
+
+        XCTAssertNil(AidenSVGPreview.document(for: "<x:svg xmlns:x=\"urn:other\"/>"))
+        // An explicit empty default namespace is not SVG's; a second xmlns would be malformed.
+        XCTAssertNil(AidenSVGPreview.document(for: "<svg xmlns=\"\" viewBox=\"0 0 10 10\"/>"))
+        XCTAssertNil(AidenSVGPreview.document(for: "<svg viewBox=\"0 0 10 10\" xmlns = ''><rect/></svg>"))
+    }
+
+    func testOnlyAFinishedSvgBlockHasAViewButton() throws {
+        let svg = "```svg\n<svg xmlns=\"http://www.w3.org/2000/svg\"><circle r=\"4\"/></svg>\n```"
+        let window = try show(AidenMarkdownView(content: "Here.\n\n\(svg)\n\n```swift\nlet x = 1\n```"))
+        defer { close(window) }
+
+        let views = accessibleElements(in: window).filter { $0.accessibilityLabel == "View drawing" }
+        XCTAssertEqual(views.count, 1, "Only the svg block offers View")
+        let view = try XCTUnwrap(views.first)
+        XCTAssertTrue(view.accessibilityTraits.contains(.button))
+        // Frames convert through the window, so allow a rounding hair under 44.
+        XCTAssertGreaterThanOrEqual(view.accessibilityFrame.width, 44 - 0.001)
+        XCTAssertGreaterThanOrEqual(view.accessibilityFrame.height, 44 - 0.001)
+        let copy = try copyButton(in: window, label: "Copy svg code").element
+        XCTAssertLessThan(view.accessibilityFrame.minX, copy.accessibilityFrame.minX, "View comes before Copy")
+
+        let streaming = try show(AidenMarkdownView(content: "```svg\n<svg><circle r=\"4\"/>", isStreaming: true))
+        defer { close(streaming) }
+        XCTAssertNotNil(try? copyButton(in: streaming, label: "Copy svg code"), "The open block is drawn")
+        XCTAssertFalse(
+            accessibleElements(in: streaming).contains { $0.accessibilityLabel == "View drawing" },
+            "A block still being written has no View"
+        )
+    }
+
+    private static func drawnSVG(in page: String) -> String? {
+        guard let start = page.range(of: "base64,")?.upperBound,
+              let end = page[start...].firstIndex(of: "\""),
+              let data = Data(base64Encoded: String(page[start..<end])) else { return nil }
+        return String(data: data, encoding: .utf8)
+    }
+
     func testLongCodeScrollsSidewaysInsteadOfWideningTheRow() throws {
         let longLine = String(repeating: "let value = compute(argument)  // ", count: 20)
         let window = try show(AidenMarkdownView(content: "```swift\n\(longLine)\n```"))

@@ -288,7 +288,10 @@ export function AppearanceSettings() {
   const showToolActivity = showsBotToolActivity(config.showToolActivity, bots.data ?? []);
   const [hydrated, setHydrated] = React.useState(false);
   const [saveError, setSaveError] = React.useState<string | null>(null);
-  const [modePending, setModePending] = React.useState(false);
+  // The mode just chosen, shown at once while the native change runs. The radios never disable for it: that would
+  // drop keyboard focus mid-arrow. A newer choice supersedes an older one still in flight (latest wins).
+  const [requestedMode, setRequestedMode] = React.useState<AppearanceMode | null>(null);
+  const requestedModeRef = React.useRef<{ mode: AppearanceMode; revision: number } | null>(null);
   const configRef = React.useRef(config);
   const nativeInfoRef = React.useRef<NativeThemeInfo | null>(null);
   const saveTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -464,9 +467,11 @@ export function AppearanceSettings() {
   }, [queueSave, scheduleSave]);
 
   const changeMode = (mode: AppearanceMode) => {
-    if (modePending || mode === configRef.current.mode || appearanceSafetyIssues(configRef.current).length > 0) return;
+    const shown = requestedModeRef.current?.mode ?? configRef.current.mode;
+    if (mode === shown || appearanceSafetyIssues(configRef.current).length > 0) return;
     const revision = beginAppearanceIntent();
-    setModePending(true);
+    requestedModeRef.current = { mode, revision };
+    setRequestedMode(mode);
     void runAppearanceIntent(revision, async (isCurrent) => {
       try {
         await window.aidenAPI.nativeTheme.setThemeSource(mode);
@@ -492,7 +497,10 @@ export function AppearanceSettings() {
         }
       }
     }).finally(() => {
-      if (mountedRef.current) setModePending(false);
+      // Only the newest choice settles the radios: on success they now read the saved mode, on failure the previous one.
+      if (requestedModeRef.current?.revision !== revision) return;
+      requestedModeRef.current = null;
+      if (mountedRef.current) setRequestedMode(null);
     });
   };
 
@@ -544,7 +552,7 @@ export function AppearanceSettings() {
 
       <section className="appearance-theme-section" aria-labelledby="appearance-theme-title">
         <h2 id="appearance-theme-title">Theme</h2>
-        <ThemeModePicker config={config} value={config.mode} disabled={hasSafetyIssues || modePending} onChange={changeMode} />
+        <ThemeModePicker config={config} value={requestedMode ?? config.mode} disabled={hasSafetyIssues} onChange={changeMode} />
         <ThemeTileGrid value={selectedPreset} onChange={changeTheme} />
         <p className="appearance-current-theme">Current theme: {currentThemeLabel}</p>
       </section>

@@ -176,7 +176,7 @@ test("an install that starts its server applies the chosen network and pairs ove
   process.env.AIDEN_CLI_ENTRY = entry;
   t.after(() => { if (saved === undefined) delete process.env.AIDEN_CLI_ENTRY; else process.env.AIDEN_CLI_ENTRY = saved; });
   /** Installs on a fake Linux host whose server is ready at once, and records what reaches the server. */
-  const install = async (flags, { failNetwork, status, tty = true, interrupt, saved } = {}) => {
+  const install = async (flags, { failNetwork, status, tty = true, interrupt, saved, operator } = {}) => {
     const { host, local } = fakeHost(t, "linux", { "loginctl show-user": { stdout: "yes\n" } });
     if (saved) {
       mkdirSync(local.agentDir, { recursive: true, mode: 0o700 });
@@ -186,7 +186,8 @@ test("an install that starts its server applies the chosen network and pairs ove
     const paired = [];
     const remote = async (args) => {
       sent.push(args.join(" "));
-      if (args[0] === "network" && failNetwork) throw new Error("Tailscale is not signed in.");
+      const refusal = args[0] === "network" && failNetwork ? (typeof failNetwork === "function" ? failNetwork(sent) : "Tailscale is not signed in.") : undefined;
+      if (refusal) throw new Error(refusal);
       return args[0] === "status" ? status : {};
     };
     const pair = async (transport) => {
@@ -197,17 +198,18 @@ test("an install that starts its server applies the chosen network and pairs ove
       return "session-1";
     };
     let output = "";
+    let operatorAsked = 0;
     const write = process.stdout.write;
     const writeErr = process.stderr.write;
     process.stdout.write = (chunk) => { output += chunk; return true; };
     process.stderr.write = (chunk) => { output += chunk; return true; };
     try {
-      await api.serviceCommand(local.agentDir, ["install", ...flags], host, { ready: async () => true, remote, pair, tty });
+      await api.serviceCommand(local.agentDir, ["install", ...flags], host, { ready: async () => true, remote, pair, tty, allowTailscaleOperator: async () => { operatorAsked += 1; return !!operator; } });
     } finally {
       process.stdout.write = write;
       process.stderr.write = writeErr;
     }
-    return { sent, paired, output };
+    return { sent, paired, output, operatorAsked };
   };
 
   for (const [network, transport, label] of [["local", "lan", "the local network only"], ["tailscale", "tailscale", "Tailscale only"], ["both", "tailscale", "the local network and Tailscale"]]) {
@@ -217,12 +219,32 @@ test("an install that starts its server applies the chosen network and pairs ove
     assert.match(output, new RegExp(`running as a service and reachable over ${label}\\.`), network);
   }
 
-  // Tailscale could not be set up, but the server still serves the local network: say so and pair there.
-  const fellBack = await install(["--network", "tailscale"], { failNetwork: true, status: { connectionMode: "lan" } });
-  assert.deepEqual(fellBack.sent, ["network tailscale", "status"]);
-  assert.deepEqual(fellBack.paired, ["lan"]);
-  assert.match(fellBack.output, /Could not set up Tailscale only\. Tailscale is not signed in\./);
-  assert.match(fellBack.output, /For now the server is reachable over the local network only\./);
+  // Tailscale could not be set up, but the server still serves the local network: say so, and show no
+  // local-network code to a phone that was meant to reach it over Tailscale.
+  for (const network of ["tailscale", "both"]) {
+    const fellBack = await install(["--network", network], { failNetwork: true, status: { connectionMode: "lan" } });
+    assert.deepEqual(fellBack.sent, [`network ${network}`, "status"], network);
+    assert.deepEqual(fellBack.paired, [], network);
+    assert.equal(fellBack.operatorAsked, 0, "only a permission refusal offers the sudo step");
+    assert.match(fellBack.output, /Tailscale is not signed in\./);
+    assert.match(fellBack.output, /For now the server is reachable over the local network only\./);
+    assert.match(fellBack.output, new RegExp(`run \`aiden remote network ${network}\`, then \`aiden remote pair tailscale\``));
+  }
+
+  // A fresh Linux box refuses Serve changes to non-root users: the install offers the one sudo step and tries again.
+  const denied = "Tailscale refused to change Serve settings for this user. Run `sudo tailscale set --operator=$USER` once, then run `aiden remote pair tailscale`.";
+  const allowed = await install(["--network", "tailscale"], { failNetwork: (sent) => sent.length > 1 ? undefined : denied, operator: true });
+  assert.equal(allowed.operatorAsked, 1);
+  assert.deepEqual(allowed.sent, ["network tailscale", "network tailscale"]);
+  assert.deepEqual(allowed.paired, ["tailscale"]);
+  assert.match(allowed.output, /reachable over Tailscale only\./);
+  // Declined, or no terminal to ask in: the refusal and its fix are shown, and no local-network code.
+  for (const options of [{ operator: false }, { operator: true, tty: false }]) {
+    const declined = await install(["--network", "tailscale"], { failNetwork: () => denied, status: { connectionMode: "lan" }, ...options });
+    assert.equal(declined.operatorAsked, options.tty === false ? 0 : 1);
+    assert.deepEqual(declined.paired, []);
+    assert.match(declined.output, /sudo tailscale set --operator=\$USER/);
+  }
 
   // Nothing reaches the server: no pairing code and no reachable claim.
   const unreachable = await install(["--network", "tailscale"], { failNetwork: true, status: { connectionMode: "tailscale", tailscaleConnected: false } });

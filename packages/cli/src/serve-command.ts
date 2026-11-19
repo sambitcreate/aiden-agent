@@ -129,6 +129,10 @@ export async function showStartupPairing(agentDir: string, requested: PairTransp
 
 /** `aiden serve ...`. Prints its own output and returns when serving stops. */
 export async function serveCommand(agentDir: string, args: string[]): Promise<void> {
+  if (args.length === 1 && (args[0] === "--help" || args[0] === "-h")) {
+    process.stdout.write(`${SERVE_USAGE}\n`);
+    return;
+  }
   const { DETACHED_SERVE_ENV, daemonStatus, startDaemon, stopDaemon } = await import("./serve-lifecycle.ts");
   if (args[0] === "stop" || args[0] === "status") {
     if (args.length !== 1) throw new Error(`Usage: aiden serve ${args[0]}`);

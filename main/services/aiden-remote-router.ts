@@ -85,6 +85,7 @@ import {
   AIDEN_REMOTE_MAX_ENCODED_ATTACHMENT_NAME,
   AIDEN_REMOTE_CHAT_NEW_WORKTREE_CAPABILITIES,
   AIDEN_REMOTE_CHAT_CONTINUE_CAPABILITIES,
+  AIDEN_REMOTE_STREAM_SNAPSHOT_REASON_CAPABILITIES,
   AIDEN_REMOTE_CHAT_SUMMARY_MAX_CURSOR_LENGTH,
   AIDEN_REMOTE_CHAT_SUMMARY_MAX_LIMIT,
   AIDEN_REMOTE_CHAT_TASKS_FEATURE,
@@ -1736,6 +1737,10 @@ function continueInNewChatWired(dependencies: AidenRemoteRouterDependencies): bo
   return dependencies.chats?.supportsContinueInNewChat === true && dependencies.chats.fork !== undefined;
 }
 
+function streamSnapshotReasonsWired(dependencies: AidenRemoteRouterDependencies): boolean {
+  return Boolean(dependencies.streams && dependencies.chats);
+}
+
 function requireDeviceCapabilities(
   device: AidenRemoteRouterAuthenticatedDevice,
   capabilities: readonly AidenRemoteCapability[],
@@ -2348,6 +2353,8 @@ function advertisedServerCapabilities(
     ...(newWorktreesWired(dependencies) ? AIDEN_REMOTE_CHAT_NEW_WORKTREE_CAPABILITIES : []),
     // Revision 64: offered only while the host can continue a chat elsewhere.
     ...(continueInNewChatWired(dependencies) ? AIDEN_REMOTE_CHAT_CONTINUE_CAPABILITIES : []),
+    // Revision 65: offered while stream event replay is served.
+    ...(streamSnapshotReasonsWired(dependencies) ? AIDEN_REMOTE_STREAM_SNAPSHOT_REASON_CAPABILITIES : []),
     ...(device.acceptsProgressCapabilities === true
       ? AIDEN_REMOTE_PROGRESS_CAPABILITIES.filter((capability) =>
           progressCapabilitySupported(dependencies, capability),
@@ -2819,6 +2826,11 @@ export function createAidenRemoteRequestHandler(
             // Revision 64: offered only while the host can continue a chat elsewhere.
             if (!continueInNewChatWired(dependencies)) {
               throw new AidenRemoteServiceError("not_found", "Continuing in a new chat is unavailable on this Aiden installation.", 404);
+            }
+          } else if ((AIDEN_REMOTE_STREAM_SNAPSHOT_REASON_CAPABILITIES as readonly string[]).includes(capability)) {
+            // Revision 65: offered while stream event replay is served.
+            if (!streamSnapshotReasonsWired(dependencies)) {
+              throw new AidenRemoteServiceError("not_found", "Stream snapshot reasons are unavailable on this Aiden installation.", 404);
             }
           } else if (capability === "simulators:control") {
             // Refuse non-desktops first so they never learn whether this Mac has simulators.
@@ -5142,7 +5154,13 @@ export function createAidenRemoteRequestHandler(
         if (!dependencies.streams || !dependencies.chats) throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
         const chatId = dependencies.streams.streamChatId(device.id, eventsMatch[1]!);
         await requireChatAccess(dependencies.chats, device, chatId, "read", "stream");
-        dependencies.streams.openEvents(device.id, eventsMatch[1]!, streamAfter(request, query), response);
+        dependencies.streams.openEvents(
+          device.id,
+          eventsMatch[1]!,
+          streamAfter(request, query),
+          response,
+          { snapshotReasons: device.capabilities.has("stream:snapshot-reasons") },
+        );
         return;
       }
       const streamApprovalMatch = /^\/streams\/([A-Za-z0-9._:-]{1,128})\/approval$/u.exec(path);

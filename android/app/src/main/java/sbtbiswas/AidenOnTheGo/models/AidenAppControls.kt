@@ -7,7 +7,7 @@ import kotlinx.serialization.descriptors.*
 import kotlinx.serialization.encoding.*
 import kotlinx.serialization.json.*
 
-private val controlIds = setOf("appearance.mode", "appearance.chatWidth", "appearance.reduceMotion", "appearance.terminalTheme", "memory.enabled", "memory.workspace", "webSearch.enabled", "skills.enabled")
+private val controlIds = setOf("appearance.mode", "appearance.chatWidth", "appearance.reduceMotion", "memory.enabled", "memory.workspace", "webSearch.enabled", "skills.enabled")
 private fun token(value: String) = value.matches(Regex("^[A-Za-z0-9_-]{1,128}$"))
 private fun safeValue(value: JsonPrimitive) = value.booleanOrNull != null || (value.isString && value.content.length <= 80)
 

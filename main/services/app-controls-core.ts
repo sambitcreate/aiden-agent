@@ -30,8 +30,6 @@ export interface AppControlContext {
   authorize?(): Promise<void>;
 }
 export interface AppControlState {
-  terminalTheme?: string;
-  terminalThemes?: string[];
   settings: AppSettings;
   workspace?: { id: string; name: string; memoryEnabled?: boolean };
   /**
@@ -107,8 +105,6 @@ export function appControlValue(state: AppControlState, control: AppControlId): 
   switch (control) {
     case "appearance.mode":
       return appearance.mode;
-    case "appearance.terminalTheme":
-      return state.terminalTheme ?? "dark";
     case "appearance.chatWidth":
       return appearance.chatWidth;
     case "appearance.reduceMotion":
@@ -154,11 +150,6 @@ const GROUPS: Record<
   appearance: {
     title: "Appearance",
     controls: [
-      [
-        "appearance.terminalTheme",
-        "Terminal theme",
-        "Theme for this CLI session and its saved terminal defaults.",
-      ],
       ["appearance.mode", "Color mode", "Light, dark, or match the system."],
       [
         "appearance.theme",
@@ -245,7 +236,6 @@ export class AppControlsService {
         .filter(
           ([id]) =>
             (id !== "memory.workspace" || state.workspace) &&
-            (id !== "appearance.terminalTheme" || state.terminalTheme !== undefined) &&
             (id !== "models.newChat" || state.newChatModels !== undefined) &&
             (!context.remote || REMOTE_APP_CONTROL_IDS.has(id)),
         )
@@ -267,9 +257,6 @@ export class AppControlsService {
                 })),
               }
             : {}),
-          ...(id === "appearance.terminalTheme"
-            ? { options: state.terminalThemes?.map((value) => ({ value, label: value })) }
-            : {}),
           ...(id === "appearance.theme" ? { options: themeOptions(state) } : {}),
           ...(id === "models.newChat" ? { options: newChatModelOptions(state) } : {}),
           ...(policy === "disabled" || (context.allowedControls && !context.allowedControls.has(id))
@@ -290,11 +277,6 @@ export class AppControlsService {
       if (!context.isCurrent()) throw new Error("Control target is no longer available.");
       const state = await this.deps.read(context.workspaceId);
       const policy = appControlPolicy(state.settings);
-      if (
-        operation.control === "appearance.terminalTheme" &&
-        !state.terminalThemes?.includes(String(operation.value))
-      )
-        throw new Error("This terminal theme is unavailable.");
       if (context.remote && state.settings.remoteAppControlsEnabled !== true)
         throw new Error("Chat controls from paired devices are disabled in Settings.");
       if (

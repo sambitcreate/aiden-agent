@@ -12,6 +12,7 @@ import { homedir, userInfo } from "node:os";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { serverAnalyticsContext, showServerNotice, type ServerAnalyticsContext } from "./server-analytics.ts";
 import { acquireLease } from "./state.ts";
+import { tailscaleSetupMessage } from "./tailscale-setup-message.ts";
 import type { RemoteNetwork } from "./remote.ts";
 import type { TailscaleFacts } from "./reachability.ts";
 import type { AidenTailscaleCommandRunner } from "../../../main/services/aiden-remote-tailscale.js";
@@ -515,6 +516,38 @@ export interface ServiceCommandOptions {
   analytics?: ServerAnalyticsContext;
   /** Releases the stopped service profile's owned route. */
   releaseRoute?: (agentDir: string) => Promise<string | undefined>;
+  /** Asks, then runs `sudo tailscale set --operator=<user>`; resolves true once Tailscale accepted it. */
+  allowTailscaleOperator?: (host: ServiceHost) => Promise<boolean>;
+}
+
+/** Whether a failed network change was Tailscale refusing this user Serve settings. */
+export function isTailscalePermissionDenied(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return message === "tailscale_permission_denied" || message === tailscaleSetupMessage("tailscale_permission_denied");
+}
+
+/**
+ * On a fresh Linux install only root may change Tailscale Serve. In a
+ * terminal, offer the one-time `sudo tailscale set --operator=<user>` that
+ * `aiden remote check` names, with sudo asking for the password itself.
+ */
+export async function allowTailscaleOperator(host: ServiceHost): Promise<boolean> {
+  const { resolveTailscaleBinary } = await import("../../../main/services/aiden-remote-tailscale.js");
+  const binary = await resolveTailscaleBinary(host.platform);
+  if (!binary) return false;
+  const command = `sudo ${binary === "/usr/bin/tailscale" ? "tailscale" : binary} set --operator=${host.user}`;
+  const { createInterface } = await import("node:readline/promises");
+  const prompt = createInterface({ input: process.stdin, output: process.stdout });
+  let answer: string;
+  try {
+    process.stdout.write(`Tailscale lets only root change Serve settings on this computer, so Aiden could not add its private route.\n`);
+    answer = (await prompt.question(`Run \`${command}\` now so ${host.user} may? It asks for your password. [Y/n]: `)).trim().toLowerCase();
+  } finally {
+    prompt.close();
+  }
+  if (answer !== "" && answer !== "y" && answer !== "yes") return false;
+  const result = spawnSync("sudo", [binary, "set", `--operator=${host.user}`], { stdio: "inherit" });
+  return !result.error && result.status === 0;
 }
 
 /** `aiden service ...`. Prints its own output. */
@@ -602,9 +635,19 @@ async function serviceCommandUnlocked(agentDir: string, args: string[], host: Se
 
   const remote = options.remote ?? (async (remoteArgs: string[]) => (await import("./daemon-control.ts")).remoteDaemonCommand(agentDir, "remote", remoteArgs));
   let reachable: RemoteNetwork | undefined = network;
+  const interactive = options.tty ?? !!(process.stdin.isTTY && process.stdout.isTTY);
+  let tailscaleFailed = false;
   try {
-    await remote(["network", network]);
+    try {
+      await remote(["network", network]);
+    } catch (error) {
+      // The common first-run gap on Linux: offer the one sudo step, then try once more.
+      if (network === "local" || !interactive || host.platform !== "linux" || !isTailscalePermissionDenied(error)) throw error;
+      if (!await (options.allowTailscaleOperator ?? allowTailscaleOperator)(host)) throw error;
+      await remote(["network", network]);
+    }
   } catch (error) {
+    tailscaleFailed = network !== "local";
     const status = await remote(["status"]).catch(() => undefined) as Parameters<typeof reachableNetwork>[0];
     reachable = reachableNetwork(status);
     process.stderr.write(`aiden: Could not set up ${NETWORK_LABEL[network]}. ${error instanceof Error ? error.message : String(error)}\n`);
@@ -623,6 +666,11 @@ async function serviceCommandUnlocked(agentDir: string, args: string[], host: Se
   releaseLease?.();
 
   if (!reachable) return;
+  // A local-network code is no use to a phone that was meant to reach the server over Tailscale.
+  if (tailscaleFailed) {
+    out(`Once the step above is fixed, run \`aiden remote network ${network}\`, then \`aiden remote pair tailscale\` for a Tailscale code. A phone on this computer's network can pair now with \`aiden remote pair lan\`.`);
+    return;
+  }
   if (!flags.pair || !(options.tty ?? process.stdout.isTTY)) {
     out(`Pair a phone with \`aiden remote pair ${reachable === "local" ? "lan" : "tailscale"}\`.`);
     return;

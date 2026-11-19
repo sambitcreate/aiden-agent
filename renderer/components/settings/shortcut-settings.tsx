@@ -36,7 +36,6 @@ function ShortcutRow({
   command,
   snapshot,
   recording,
-  saving,
   onRecord,
   onCancelRecord,
   onApply,
@@ -44,7 +43,6 @@ function ShortcutRow({
   command: CommandDefinition;
   snapshot: KeybindingSnapshot;
   recording: boolean;
-  saving: boolean;
   onRecord: () => void;
   onCancelRecord: () => void;
   onApply: (mutation: KeybindingMutation) => Promise<void>;
@@ -103,7 +101,6 @@ function ShortcutRow({
             <Button
               size="small"
               variant="transparent"
-              disabled={saving}
               onClick={() => void onApply({ commandId: command.id, reset: true })}
             >
               <RotateCcw className="size-3.5" />
@@ -119,7 +116,6 @@ function ShortcutRow({
                 : `Change shortcut for ${command.title}`
             }
             variant={recording ? "accent" : "filled"}
-            disabled={saving}
             onClick={() => (recording ? onCancelRecord() : onRecord())}
             onBlur={() => {
               if (recording) onCancelRecord();
@@ -132,7 +128,7 @@ function ShortcutRow({
           </Button>
           <Switch
             checked={binding !== null}
-            disabled={saving || !canEnable}
+            disabled={!canEnable}
             onCheckedChange={(enabled) =>
               void onApply({ commandId: command.id, disabled: !enabled })
             }
@@ -184,8 +180,13 @@ export function ShortcutSettings() {
     binding: string;
   } | null>(null);
 
+  // One shortcut change saves at a time. A change made while one is saving is ignored, not queued: the rows only
+  // move to what main confirms, so an ignored press leaves them as they were. The controls never disable for a
+  // save, because disabling the focused recorder or switch would drop keyboard focus.
+  const savingRef = React.useRef(false);
   const apply = async (mutation: KeybindingMutation) => {
-    if (savingId) return;
+    if (savingRef.current) return;
+    savingRef.current = true;
     setSavingId(mutation.commandId);
     setError(null);
     setPendingReplacement(null);
@@ -215,12 +216,13 @@ export function ShortcutSettings() {
       }
       toast.error(message);
     } finally {
+      savingRef.current = false;
       setSavingId(null);
     }
   };
 
   const beginRecording = async (commandId: CommandId) => {
-    if (savingId || recordingId) return;
+    if (savingRef.current || recordingId) return;
     setError(null);
     try {
       await shortcutApi.setRecording(true);
@@ -390,7 +392,6 @@ export function ShortcutSettings() {
                 command={command}
                 snapshot={shortcuts.data}
                 recording={recordingId === command.id}
-                saving={savingId !== null}
                 onRecord={() => void beginRecording(command.id)}
                 onCancelRecord={() => void cancelRecording()}
                 onApply={apply}

@@ -5,7 +5,6 @@ export const APP_CONTROL_IDS = [
   "appearance.mode",
   "appearance.chatWidth",
   "appearance.reduceMotion",
-  "appearance.terminalTheme",
   "memory.enabled",
   "memory.workspace",
   "webSearch.enabled",
@@ -21,7 +20,15 @@ export type AppControlTopic = (typeof APP_CONTROL_TOPICS)[number];
  * reject a whole card that carries an unknown row or topic, so newer desktop
  * controls stay off the Remote surface until a protocol revision adds them.
  */
-export const REMOTE_APP_CONTROL_IDS: ReadonlySet<AppControlId> = new Set(APP_CONTROL_IDS.slice(0, 8));
+export const REMOTE_APP_CONTROL_IDS: ReadonlySet<AppControlId> = new Set<AppControlId>([
+  "appearance.mode",
+  "appearance.chatWidth",
+  "appearance.reduceMotion",
+  "memory.enabled",
+  "memory.workspace",
+  "webSearch.enabled",
+  "skills.enabled",
+]);
 export const REMOTE_APP_CONTROL_TOPICS: ReadonlySet<AppControlTopic> = new Set(["appearance", "memory", "web-search", "skills"]);
 /** A new-chat model value: `provider::model`. */
 export function newChatModelValue(providerId: string, model: string): string {
@@ -111,16 +118,6 @@ export function parseAppControlOperation(value: unknown): AppControlOperation {
     if (typeof p.value !== "string" || !THEME_PRESETS.some((preset) => preset.id === p.value))
       throw new Error("Unsupported color theme.");
   } else if (p.control.startsWith("appearance.")) {
-    if (p.control === "appearance.terminalTheme") {
-      if (typeof p.value !== "string" || !/^[a-zA-Z0-9_-]{1,80}$/u.test(p.value))
-        throw new Error("Unsupported terminal theme.");
-      return {
-        control: p.control,
-        value: p.value,
-        expectedRevision: p.expectedRevision,
-        operationId: p.operationId,
-      };
-    }
     const options =
       p.control === "appearance.mode"
         ? ["light", "dark", "system"]

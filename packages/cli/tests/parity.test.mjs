@@ -15,10 +15,10 @@ import * as api from "../dist/parity-test-api.js";
 
 const pkg = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 function temporary(t) { const dir = mkdtempSync(join(tmpdir(), "aiden-parity-")); t.after(() => rmSync(dir, { recursive: true, force: true })); return dir; }
-function extension(extension, extra = {}) {
-  const events = new Map(), commands = new Map(), tools = new Map(); let name;
-  extension.factory({ on: (event, handler) => events.set(event, handler), registerCommand: (name, command) => commands.set(name, command), registerTool: (tool) => tools.set(tool.name, tool), getSessionName: () => name, setSessionName: (value) => { name = value; }, ...extra });
-  return { events, commands, tools, name: () => name };
+function extension(extension) {
+  const events = new Map(), tools = new Map();
+  extension.factory({ on: (event, handler) => events.set(event, handler), registerTool: (tool) => tools.set(tool.name, tool) });
+  return { events, tools };
 }
 
 test("atomic stores serialize mutations, protect credentials, and reject cross-process contention/corruption", async (t) => {
@@ -200,6 +200,11 @@ test("schedule CRUD uses shared validation, preview and persisted state", async 
   assert.deepEqual(status.overdueTaskIds, []);
   assert.equal(status.pendingRoutineFires, 0);
   assert.equal((await api.scheduleCommand(dir, ["preview", "0 9 * * *", "UTC"])).length, 5);
+  // A stray extra word is refused, not ignored: nothing changes.
+  for (const args of [["remove", task.id, "now"], ["pause", task.id, "{}"], ["save", input, "again"], ["list", "all"]]) {
+    await assert.rejects(api.scheduleCommand(dir, args), /^Error: Usage: schedule /, args.join(" "));
+  }
+  assert.deepEqual((await api.scheduleCommand(dir, ["list"])).map(({ id, enabled }) => ({ id, enabled })), [{ id: task.id, enabled: false }]);
   await api.scheduleCommand(dir, ["remove", task.id]);
   assert.deepEqual(await api.scheduleCommand(dir, ["list"]), []);
 });
@@ -1475,7 +1480,7 @@ test("MCP startup connects servers concurrently within one budget and reports ea
   const events = new Map(), tools = new Map();
   const started = Date.now();
   const { stderr } = await captureStderr(() => api.createMcpExtension(dir, { startupBudgetMs: 1_500 }).factory({
-    on: (event, handler) => events.set(event, handler), registerCommand() {}, registerTool: (tool) => tools.set(tool.label, tool) }));
+    on: (event, handler) => events.set(event, handler), registerTool: (tool) => tools.set(tool.label, tool) }));
   assert.ok(Date.now() - started < 8_000, "a hung server cannot hold startup for its 10 s connect timeout");
   assert.deepEqual([...tools.keys()].sort(), ["good: first", "good: second"]);
   assert.match(stderr, /MCP hung unavailable \(timed out\)/);
@@ -2054,8 +2059,8 @@ test("Azure endpoint migration cannot pair a legacy deployment with a different 
 });
 
 function todoHarness(manager) {
-  const harness = extension(api.createTodoInlineExtension({ latestContext: () => undefined }));
-  const context = { sessionManager: manager, hasUI: false, mode: "rpc" };
+  const harness = extension(api.createTodoInlineExtension());
+  const context = { sessionManager: manager };
   return { ...harness, context,
     start: async (reason = "startup", ctx = context) => harness.events.get("session_start")?.({ type: "session_start", reason }, ctx),
     call: async (args) => harness.tools.get("todo").execute("test-call", args),
@@ -2126,7 +2131,7 @@ test("real SDK binding initializes todo before tool use and restores it on a res
   const dir = temporary(t), manager = api.SessionManager.inMemory(dir);
   const model = { id: "offline", name: "Offline", provider: "offline-fixture", api: "openai-completions", baseUrl: "http://127.0.0.1:1", reasoning: false, input: ["text"], contextWindow: 32000, maxTokens: 4096, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } };
   async function boot(reason) {
-    const loader = new api.DefaultResourceLoader({ cwd: dir, agentDir: dir, noExtensions: true, noSkills: true, noPromptTemplates: true, noThemes: true, extensionFactories: [api.createTodoInlineExtension({ latestContext: () => undefined })] });
+    const loader = new api.DefaultResourceLoader({ cwd: dir, agentDir: dir, noExtensions: true, noSkills: true, noPromptTemplates: true, noThemes: true, extensionFactories: [api.createTodoInlineExtension()] });
     await loader.reload();
     const { session } = await api.createAgentSession({ cwd: dir, agentDir: dir, model, resourceLoader: loader, sessionManager: manager, settingsManager: api.SettingsManager.inMemory({}), tools: ["todo"], sessionStartEvent: { type: "session_start", reason } });
     t.after(() => session.dispose());
@@ -2781,12 +2786,12 @@ test("CLI advisor failures and cancellation persist unknown attempts before mark
     const provider = fauxProvider({ api: "advisor-fixture", provider: "advisor-fixture", models: [{ id: "reviewer", contextWindow: 32000, maxTokens: 4096 }] });
     const model = provider.getModel();
     provider.provider.streamSimple = () => { if (mode === "cancelled") controller.abort(); throw new Error("Provider failed before response"); };
-    const ctx = { model: { ...model, id: "executor" }, scopedModels: [{ model }], hasUI: false,
+    const ctx = { model: { ...model, id: "executor" }, scopedModels: [{ model }],
       sessionManager: { getBranch: () => [{ type: "message", message: { role: "user", content: "Review this fixture", timestamp: 1 } }] },
       modelRegistry: { find: () => model, getApiKeyAndHeaders: async () => ({ ok: true }), getProvider: () => provider.provider },
     };
     const hooks = new Map(); let tool;
-    api.createAdvisorInlineExtension({ agentDir: dir, latestContext: () => ctx }).factory({ on: (name, handler) => hooks.set(name, handler), registerTool: (value) => { tool = value; } });
+    api.createAdvisorInlineExtension({ agentDir: dir }).factory({ on: (name, handler) => hooks.set(name, handler), registerTool: (value) => { tool = value; } });
     await hooks.get("before_agent_start")({ systemPrompt: "Fixture" }, ctx);
     if (mode === "persistence-failed") mkdirSync(join(dir, "usage.json"));
     await tool.execute("advisor-call", { providerId: model.provider, modelId: model.id }, controller.signal);

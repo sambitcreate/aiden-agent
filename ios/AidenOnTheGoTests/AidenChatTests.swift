@@ -1002,6 +1002,18 @@ final class AidenChatTests: XCTestCase {
         XCTAssertEqual(try JSONDecoder().decode(AidenProducedFile.self, from: data), file)
     }
 
+    func testProducedFileLinksRoundTripThroughWorkspaceLinkRouting() throws {
+        for path in ["reports/q3 summary.html", "naïve/ä.html", "a/b/c.txt", "100% done.html"] {
+            let file = AidenProducedFile(relativePath: path, operation: "written", bytes: 12)
+            let link = try XCTUnwrap(file.workspaceLink, path)
+            XCTAssertEqual(AidenWorkspaceFileLink.path(link.relativeString), path)
+        }
+        let deep = (1...22).map { "d\($0)" }.joined(separator: "/")
+        for path in ["notes:v2.html", "a?b.html", "a#b.html", deep] {
+            XCTAssertNil(AidenProducedFile(relativePath: path, operation: "edited", bytes: 12).workspaceLink, path)
+        }
+    }
+
     func testHistoryReasoningRejectsBotChatAndAcceptsRegularChat() throws {
         let regular = """
         {"id":"chat-1","workspaceId":"workspace-1","title":"Chat","messages":[{"id":"message-1","role":"assistant","text":"Done","reasoning":"Visible","createdAt":"2026-08-20T12:00:00Z"}],"createdAt":"2026-08-20T12:00:00Z","updatedAt":"2026-08-20T12:00:00Z","revision":"rev-1"}
@@ -5699,7 +5711,7 @@ final class AidenChatTests: XCTestCase {
         let held = expectation(description: "snapshot transcript read held")
         AidenChatProgressLifecycleURLProtocol.holdNextRequest(endingIn: "/chats/" + model.chat.id) { held.fulfill() }
         AidenChatProgressLifecycleURLProtocol.pushEvent(AidenRevealStreamFixture.frame(
-            4, "snapshot", #"{"chatId":"chat-progress-lifecycle","turnId":"turn-reveal","nextSequence":5}"#
+            4, "snapshot", #"{"chatId":"chat-progress-lifecycle","turnId":"turn-reveal","reason":"reset","nextSequence":5}"#
         ))
         await fulfillment(of: [held], timeout: 5)
         XCTAssertEqual(model.liveText, "")
@@ -5714,6 +5726,86 @@ final class AidenChatTests: XCTestCase {
         AidenChatProgressLifecycleURLProtocol.pushEvent(AidenRevealStreamFixture.frame(5, "text_delta", #"{"text":"Fresh copy "}"#))
         try await releaseRevealTicks(ticks) { model.liveText.count >= "Fresh copy ".count }
         XCTAssertEqual(model.liveText, "Fresh copy ")
+    }
+
+    @MainActor
+    func testWorkspaceSnapshotResetDropsBufferedTextAndGapSnapshotSuppressesDuplicateReplay() async throws {
+        // 1. Workspace chat: live provider reset (`reason: "reset"`) clears revealed, buffered, and reasoning text,
+        // reconciles once, and streams the replacement reply normally.
+        do {
+            defer { AidenChatProgressLifecycleURLProtocol.reset() }
+            let ticks = AidenManualRevealTicks()
+            defer { ticks.releaseAll() }
+            let (model, fixture) = try await makeRevealModel(ticks: ticks)
+            XCTAssertFalse(model.chat.isBotChat)
+
+            AidenChatProgressLifecycleURLProtocol.pushEvent(AidenRevealStreamFixture.frame(1, "text_delta", #"{"text":"Draft shown "}"#))
+            try await releaseRevealTicks(ticks) { model.liveText == "Draft shown " }
+            AidenChatProgressLifecycleURLProtocol.pushEvent(AidenRevealStreamFixture.frame(2, "reasoning_delta", #"{"text":"Draft thought"}"#))
+            AidenChatProgressLifecycleURLProtocol.pushEvent(AidenRevealStreamFixture.frame(3, "text_delta", #"{"text":"draft buffered "}"#))
+            try await waitUntil { ticks.pending == 1 && model.reasoning == "Draft thought" }
+
+            let readsBeforeReset = fixture.chatReads
+            AidenChatProgressLifecycleURLProtocol.pushEvent(AidenRevealStreamFixture.frame(
+                4, "snapshot", #"{"chatId":"chat-progress-lifecycle","turnId":"turn-reveal","reason":"reset","nextSequence":5}"#
+            ))
+            try await waitUntil { fixture.chatReads == readsBeforeReset + 1 }
+            ticks.releaseAll()
+            try await Task.sleep(for: .milliseconds(30))
+            XCTAssertEqual(model.liveText, "")
+            XCTAssertEqual(model.reasoning, "")
+
+            AidenChatProgressLifecycleURLProtocol.pushEvent(AidenRevealStreamFixture.frame(5, "text_delta", #"{"text":"Replacement reply"}"#))
+            try await releaseRevealTicks(ticks) { model.liveText == "Replacement reply" }
+            XCTAssertEqual(model.liveText, "Replacement reply")
+        }
+
+        // 2. Gap recovery (`reason: "gap"` and legacy reason-less `snapshot` across a sequence jump):
+        // triggers only 1 authoritative chat GET on the snapshot boundary, suppresses replayed deltas and
+        // historical reset snapshots so the settled answer is never shown twice, and settles cleanly on `done`.
+        for snapshotPayload in [
+            #"{"chatId":"chat-progress-lifecycle","turnId":"turn-reveal","reason":"gap","nextSequence":4098}"#,
+            #"{"chatId":"chat-progress-lifecycle","turnId":"turn-reveal","nextSequence":4098}"#,
+        ] {
+            defer { AidenChatProgressLifecycleURLProtocol.reset() }
+            let ticks = AidenManualRevealTicks()
+            defer { ticks.releaseAll() }
+            let (model, fixture) = try await makeRevealModel(ticks: ticks)
+
+            AidenChatProgressLifecycleURLProtocol.pushEvent(AidenRevealStreamFixture.frame(1, "text_delta", #"{"text":"Stale partial "}"#))
+            try await releaseRevealTicks(ticks) { model.liveText == "Stale partial " }
+            AidenChatProgressLifecycleURLProtocol.pushEvent(AidenRevealStreamFixture.frame(2, "reasoning_delta", #"{"text":"Stale reasoning"}"#))
+            try await waitUntil { model.reasoning == "Stale reasoning" }
+
+            fixture.commit(AidenChatMessage(id: "reply-gap", role: .assistant, text: "Authoritative final answer", createdAt: Date()))
+            let readsBeforeGap = fixture.chatReads
+
+            // Jump from sequence 2 -> 4097 snapshot: must trigger 1 chat read, not 2!
+            AidenChatProgressLifecycleURLProtocol.pushEvent(AidenRevealStreamFixture.frame(4097, "snapshot", snapshotPayload))
+            try await waitUntil { model.chat.messages.contains(where: { $0.id == "reply-gap" }) }
+            XCTAssertEqual(fixture.chatReads, readsBeforeGap + 1, "sequence jump onto snapshot reconciles once, not twice")
+            XCTAssertEqual(model.liveText, "")
+            XCTAssertEqual(model.reasoning, "")
+
+            // Retained tail replays historical reasoning, deltas, and even an earlier provider reset.
+            AidenChatProgressLifecycleURLProtocol.pushEvent(AidenRevealStreamFixture.frame(4098, "reasoning_delta", #"{"text":"Replayed reasoning"}"#))
+            AidenChatProgressLifecycleURLProtocol.pushEvent(AidenRevealStreamFixture.frame(4099, "text_delta", #"{"text":"Authoritative "}"#))
+            AidenChatProgressLifecycleURLProtocol.pushEvent(AidenRevealStreamFixture.frame(
+                4100, "snapshot", #"{"chatId":"chat-progress-lifecycle","turnId":"turn-reveal","reason":"reset","nextSequence":4101}"#
+            ))
+            AidenChatProgressLifecycleURLProtocol.pushEvent(AidenRevealStreamFixture.frame(4101, "text_delta", #"{"text":"Authoritative final answer"}"#))
+            ticks.releaseAll()
+            try await Task.sleep(for: .milliseconds(40))
+            XCTAssertEqual(model.liveText, "", "replayed deltas during gap recovery never duplicate the settled message")
+            XCTAssertEqual(model.reasoning, "")
+
+            AidenChatProgressLifecycleURLProtocol.pushEvent(
+                AidenRevealStreamFixture.frame(4102, "done", #"{"messageId":"reply-gap"}"#, terminal: true)
+            )
+            try await waitUntil { !model.isStreaming && !model.showsLiveResponse }
+            XCTAssertEqual(model.liveText, "")
+            XCTAssertEqual(model.chat.messages.map(\.id), ["reply-gap"])
+        }
     }
 
     @MainActor
@@ -7075,7 +7167,7 @@ final class AidenChatTests: XCTestCase {
 
     func testHtmlArtifactCardIsReplacedOnlyByAVisualWithASnapshot() throws {
         let withSnapshot = try visualFixtureMessage()
-        XCTAssertEqual(AidenChatVisualPresentation.unviewableHtmlArtifacts(in: withSnapshot), [])
+        XCTAssertEqual(AidenChatVisualPresentation.unviewableHtmlArtifacts(in: withSnapshot, viewerAvailable: false), [])
 
         let withoutSnapshot = try visualFixtureMessage { message in
             var visuals = message["visuals"] as? [[String: Any]] ?? []
@@ -7084,7 +7176,7 @@ final class AidenChatTests: XCTestCase {
         }
         XCTAssertNil(withoutSnapshot.visuals?.first?.snapshotAttachmentId)
         XCTAssertEqual(
-            AidenChatVisualPresentation.unviewableHtmlArtifacts(in: withoutSnapshot).map(\.id),
+            AidenChatVisualPresentation.unviewableHtmlArtifacts(in: withoutSnapshot, viewerAvailable: false).map(\.id),
             ["artifact_fixture_01"]
         )
 
@@ -7095,14 +7187,51 @@ final class AidenChatTests: XCTestCase {
         }
         XCTAssertNil(AidenChatVisualPresentation.snapshotAttachment(for: danglingSnapshot.visuals![0], in: danglingSnapshot))
         XCTAssertEqual(
-            AidenChatVisualPresentation.unviewableHtmlArtifacts(in: danglingSnapshot).map(\.id),
+            AidenChatVisualPresentation.unviewableHtmlArtifacts(in: danglingSnapshot, viewerAvailable: false).map(\.id),
             ["artifact_fixture_01"]
         )
 
         // An older Mac without visuals keeps every card.
         let legacy = try visualFixtureMessage { $0.removeValue(forKey: "visuals") }
-        XCTAssertEqual(AidenChatVisualPresentation.unviewableHtmlArtifacts(in: legacy).map(\.id), ["artifact_fixture_01"])
-        XCTAssertEqual(AidenChatVisualPresentation.rowVisuals(in: legacy), [])
+        XCTAssertEqual(AidenChatVisualPresentation.unviewableHtmlArtifacts(in: legacy, viewerAvailable: false).map(\.id), ["artifact_fixture_01"])
+        XCTAssertEqual(AidenChatVisualPresentation.rowVisuals(in: legacy, viewerAvailable: false), [])
+    }
+
+    func testWithTheViewerAnHtmlVisualWithoutASnapshotGetsARowInsteadOfTheCard() throws {
+        let withoutSnapshot = try visualFixtureMessage { message in
+            var visuals = message["visuals"] as? [[String: Any]] ?? []
+            visuals[0].removeValue(forKey: "snapshotAttachmentId")
+            message["visuals"] = visuals
+        }
+        XCTAssertNil(withoutSnapshot.visuals?.first?.snapshotAttachmentId)
+
+        // The Mac offers the viewer: the visual can still be opened, so it gets
+        // its row and the "Can't view on this device" card goes away.
+        XCTAssertTrue(
+            AidenChatVisualPresentation.rowVisuals(in: withoutSnapshot, viewerAvailable: true)
+                .map(\.id).contains("artifact_fixture_01")
+        )
+        XCTAssertEqual(AidenChatVisualPresentation.unviewableHtmlArtifacts(in: withoutSnapshot, viewerAvailable: true), [])
+
+        // Without the viewer nothing can open it: card kept, no row.
+        XCTAssertFalse(
+            AidenChatVisualPresentation.rowVisuals(in: withoutSnapshot, viewerAvailable: false)
+                .map(\.id).contains("artifact_fixture_01")
+        )
+        XCTAssertEqual(
+            AidenChatVisualPresentation.unviewableHtmlArtifacts(in: withoutSnapshot, viewerAvailable: false).map(\.id),
+            ["artifact_fixture_01"]
+        )
+
+        // An older Mac without visuals has no visual id to open: the card stays either way.
+        let legacy = try visualFixtureMessage { $0.removeValue(forKey: "visuals") }
+        for viewerAvailable in [true, false] {
+            XCTAssertEqual(
+                AidenChatVisualPresentation.unviewableHtmlArtifacts(in: legacy, viewerAvailable: viewerAvailable).map(\.id),
+                ["artifact_fixture_01"]
+            )
+            XCTAssertEqual(AidenChatVisualPresentation.rowVisuals(in: legacy, viewerAvailable: viewerAvailable), [])
+        }
     }
 
     func testLateSnapshotRefetchIsBoundedToARecentReplyStillAwaitingSnapshots() throws {
@@ -7160,7 +7289,7 @@ final class AidenChatTests: XCTestCase {
                 text: message.text,
                 reasoning: message.reasoning ?? "",
                 timeline: message.timeline,
-                visuals: AidenChatVisualPresentation.rowVisuals(in: message)
+                visuals: AidenChatVisualPresentation.rowVisuals(in: message, viewerAvailable: false)
             )).compactMap { row in
                 if case .visual(let visual) = row.kind { return visual.id }
                 return nil
@@ -7169,7 +7298,7 @@ final class AidenChatTests: XCTestCase {
 
         // With its snapshot, the html visual gets a row and replaces the card.
         let withSnapshot = try visualFixtureMessage()
-        XCTAssertEqual(AidenChatVisualPresentation.rowVisuals(in: withSnapshot).map(\.id), ["artifact_fixture_01", "ui_fixture_01"])
+        XCTAssertEqual(AidenChatVisualPresentation.rowVisuals(in: withSnapshot, viewerAvailable: false).map(\.id), ["artifact_fixture_01", "ui_fixture_01"])
         XCTAssertEqual(try transcriptRowIDs(withSnapshot), ["artifact_fixture_01", "ui_fixture_01"])
 
         // Without one, the card alone represents it: no row, card kept. The ui
@@ -7179,20 +7308,20 @@ final class AidenChatTests: XCTestCase {
             visuals[0].removeValue(forKey: "snapshotAttachmentId")
             message["visuals"] = visuals
         }
-        XCTAssertEqual(AidenChatVisualPresentation.rowVisuals(in: withoutSnapshot).map(\.id), ["ui_fixture_01"])
+        XCTAssertEqual(AidenChatVisualPresentation.rowVisuals(in: withoutSnapshot, viewerAvailable: false).map(\.id), ["ui_fixture_01"])
         XCTAssertEqual(try transcriptRowIDs(withoutSnapshot), ["ui_fixture_01"])
-        XCTAssertEqual(AidenChatVisualPresentation.unviewableHtmlArtifacts(in: withoutSnapshot).map(\.id), ["artifact_fixture_01"])
+        XCTAssertEqual(AidenChatVisualPresentation.unviewableHtmlArtifacts(in: withoutSnapshot, viewerAvailable: false).map(\.id), ["artifact_fixture_01"])
 
         // A named snapshot the message does not carry is not usable either; the
         // ui visual still falls back to its description, and to its title.
         let danglingSnapshots = try visualFixtureMessage { $0["attachments"] = [Any]() }
-        XCTAssertEqual(AidenChatVisualPresentation.rowVisuals(in: danglingSnapshots).map(\.id), ["ui_fixture_01"])
+        XCTAssertEqual(AidenChatVisualPresentation.rowVisuals(in: danglingSnapshots, viewerAvailable: false).map(\.id), ["ui_fixture_01"])
         let bareUi = AidenChatMessage(
             id: "m", role: .assistant, text: "Here.",
             visuals: [AidenChatVisual(id: "ui-1", kind: .ui, title: "Chart")],
             createdAt: Date()
         )
-        XCTAssertEqual(AidenChatVisualPresentation.rowVisuals(in: bareUi).map(\.id), ["ui-1"])
+        XCTAssertEqual(AidenChatVisualPresentation.rowVisuals(in: bareUi, viewerAvailable: false).map(\.id), ["ui-1"])
     }
 
     func testFormFillActivityDecodesCountOnlyOutcome() throws {

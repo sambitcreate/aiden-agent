@@ -184,6 +184,7 @@
     <string name="pairing_step_open">Open Aiden Agent.</string>
     <string name="pairing_step_settings">Go to Settings → Connections → Connect a device.</string>
     <string name="pairing_step_scan">Scan the code it shows, or enter its setup code.</string>
+    <string name="pairing_server_hint">On a server, aiden serve shows the code in its terminal, or run aiden remote pair lan.</string>
     <string name="pairing_tab_scan">Scan QR</string>
     <string name="pairing_tab_code">Setup code</string>
     <string name="pairing_setup_code">20-character setup code</string>
@@ -477,6 +478,8 @@
     <!-- Workspaces: Files -->
     <string name="files_tree_limit">The loaded tree reached 4,000 entries. Refresh Files to browse another folder.</string>
     <string name="files_open_failed">This workspace file could not be opened. Browse Files to locate it.</string>
+    <string name="files_stale_folder_recovery">Files refreshed because that folder link is no longer current. Reopen the folder to continue.</string>
+    <string name="files_stale_file_recovery">Files refreshed because that file link is no longer current. Reopen the file to continue.</string>
     <string name="files_title">Workspace Files</string>
     <string name="files_offline_banner">Showing offline snapshot. Editing is disabled.</string>
     <plurals name="files_truncated_banner">
@@ -983,6 +986,7 @@
 
     <!-- Chat: interactive visual viewer (contract revision 35) -->
     <string name="chat_visual_open_interactive">Open interactive</string>
+    <string name="chat_visual_open_interactive_described">Open interactive: %1$s</string>
     <string name="chat_visual_viewer_close">Close visual</string>
     <string name="chat_visual_viewer_show_image">Show snapshot image</string>
     <string name="chat_visual_viewer_loading">Loading visual</string>
