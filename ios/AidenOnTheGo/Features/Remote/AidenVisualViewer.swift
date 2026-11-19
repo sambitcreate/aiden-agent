@@ -329,8 +329,9 @@ private final class AidenVisualWebViewCoordinator: NSObject, WKNavigationDelegat
     }
 
     func load(_ html: String, documentID: Int, in webView: WKWebView) {
-        // A crash reload keeps the same document and so keeps its budget.
-        if documentID != loadedDocumentID { recovery.documentDidLoad() }
+        // A crash reload keeps the same document, so it still counts
+        // toward spotting a crash loop.
+        if documentID != loadedDocumentID { recovery.newDocument() }
         loadedDocumentID = documentID
         loadedHTML = html
         navigationPolicy = AidenVisualNavigationPolicy()
@@ -364,8 +365,9 @@ private final class AidenVisualWebViewCoordinator: NSObject, WKNavigationDelegat
     }
 
     func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
-        // Redraw the same document once after the content process is
-        // reclaimed; a page that keeps killing it shows Retry instead.
+        // Redraw the same document whenever the content process is
+        // reclaimed; a page that kills it again right after the reload is
+        // a crash loop and shows Retry instead.
         guard let loadedHTML, let loadedDocumentID else { return }
         switch recovery.processDidTerminate() {
         case .reload:
