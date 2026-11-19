@@ -2,13 +2,13 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Use what Hermex learned shipping HTML reports in chat (Hermex PRs #1645, #1651, #1654, #1703, #1714) to remove Aiden iOS's dead ends around agent-made visuals and HTML. Fewer "Can't view" cards, SVG code blocks you can look at, and HTML files the agent wrote opening rendered.
+**Goal:** Remove Aiden iOS's dead ends around agent-made visuals and HTML. Fewer "Can't view" cards, SVG code blocks you can look at, and HTML files the agent wrote opening rendered.
 
-**Architecture:** Aiden keeps the inline PNG snapshots the Mac renders, and keeps its rule that no page loads anything from the network. Hermex instead keeps web views live in the chat and lets pages load remote resources; we are not copying either. On iOS we add one shared, locked-down preview web view: no network (a native content rule list), wiped storage, no message handlers, no navigation, and links opened only after the person confirms. SVG code blocks, the theme variables and `.html` workspace files build on it. Desktop gets the same SVG code-block preview, rendered as an `<img>`.
+**Architecture:** Aiden keeps the inline PNG snapshots the Mac renders, and keeps its rule that no page loads anything from the network. Live web views in the chat and pages that load remote resources are out of scope. On iOS we add one shared, locked-down preview web view: no network (a native content rule list), wiped storage, no message handlers, no navigation, and links opened only after the person confirms. SVG code blocks, the theme variables and `.html` workspace files build on it. Desktop gets the same SVG code-block preview, rendered as an `<img>`.
 
 **Tech Stack:** SwiftUI + WebKit (`WKWebView`, `WKContentRuleListStore`), XCTest; Kotlin/Compose for Android parity; React + `tsx --test` on desktop.
 
-**Spec:** this plan, which comes from the Hermex comparison of 2026-11-16. Hermex reference code lives in `/Users/sambitbiswas/projects/opp/hermex` (`HermesMobile/Features/Chat/HTMLReport.swift`, `HTMLReportWebView.swift`, `TranscriptHTMLReportView.swift`).
+**Spec:** this plan, written 2026-11-16 from a review of how other chat clients show HTML reports.
 
 ## Global Constraints
 
@@ -45,6 +45,8 @@
 - **PR C, desktop:** Task 5.
 
 PR C is independent. PR B builds on PR A, because Task 3 uses `AidenWebContentRecovery` from Task 1: merge A first, or stack B on A. PR B's tasks run in order.
+
+In the end all eight tasks shipped together in one PR.
 
 ---
 
@@ -223,7 +225,7 @@ Unstyled agent HTML should look like Aiden, and any style of the page's own shou
   | `--font-code-family` | `sfMono` → `ui-monospace,"SF Mono",Menlo,monospace`; `menlo` → `Menlo,ui-monospace,monospace`; `monaco` → `Monaco,ui-monospace,monospace` |
   | `--ui-font-size` | `<bodySize>px` |
 
-- A theme change reloads the preview, with the view keyed on the CSS string. Hermex restyles a live page in place. That isn't worth it for a sheet.
+- A theme change reloads the preview, with the view keyed on the CSS string. Restyling a live page in place isn't worth it for a sheet.
 
 - [ ] **Step 1: Write the failing tests:**
   - `testPreviewThemeCarriesTheAidenPaletteAsLowPriorityVariables`: for a known preset (`AidenThemeCatalog` default light), the CSS contains `--surface-background:#<canvas>` and `--accent:#<accent>`, `color-scheme:light`, and `font-size:16.0px` for `bodySize` 16. Every selector is wrapped in `:where(`; check this by parsing the selectors before each `{`.
@@ -300,7 +302,7 @@ Today the activity line's "File written · name" ([AidenActivityFeed.swift:146](
 
 ## Deferred: Mermaid diagrams
 
-This is not in scope until the owner approves a dependency. Hermex bundles Pele 1.13.0 (MIT, 733,670 bytes, `pele.global.js`), which draws Mermaid as SVG in a fresh `JSContext` with no DOM or network, off the main actor, only on tap. Its output then goes through the SVG preview (Task 4). To do this in Aiden:
+This is not in scope until the owner approves a dependency. One candidate is a bundled MIT engine of about 730 KB that draws Mermaid as SVG in a fresh `JSContext` with no DOM or network, off the main actor, only on tap. Its output then goes through the SVG preview (Task 4). To do this in Aiden:
 
 - owner approval for a new bundled library on iOS (`ios/AGENTS.md`) and for desktop parity;
 - a license and provenance check;
@@ -309,7 +311,7 @@ This is not in scope until the owner approves a dependency. Hermex bundles Pele 
 
 It would reuse `AidenSVGPreview.document(for:)` and `svgPreviewSource` unchanged, with `mermaid` added as a second language that goes through a `renderMermaid(source) -> svg?` step.
 
-## Not adopted from Hermex
+## Not adopted
 
 - **Live web views inline in the transcript** (measure-once height lock, a 3-screen cap, snapshot when off screen). Aiden's Mac-rendered PNG snapshots are cheaper and safer inline. Revisit only if we want interactive pages in the scroll itself.
 - **Pages that load from the network.** This conflicts with Aiden's no-network rule for agent content.

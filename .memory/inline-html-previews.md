@@ -1,9 +1,6 @@
 # Inline HTML, SVG and visual previews — 2026-11-18
 
-Plan: `docs/plans/inline-html-previews-plan.md`, written from a comparison with Hermex's inline HTML reports. It ships in three PRs:
-- A: Tasks 1–2, the viewer crash reload and "Open interactive".
-- B: Tasks 3, 4, 6, 7 and 8, the iOS preview stack.
-- C: Task 5, the desktop SVG Preview.
+Plan: `docs/plans/inline-html-previews-plan.md`, written 2026-11-16. It ships in one PR covering all eight tasks: the viewer crash reload and "Open interactive" (Tasks 1–2), the iOS preview stack (Tasks 3, 4, 6, 7, 8) and the desktop SVG Preview (Task 5).
 
 ## iOS no-network preview stack
 - `ios/AidenOnTheGo/Features/Remote/AidenSandboxedHTMLView.swift` is the one web view for agent HTML on the phone. It takes `html`, `allowsScripts`, `themeCSS`, `scrolls`, `onLinkOffer` and `onFailure`.
@@ -30,6 +27,6 @@ Plan: `docs/plans/inline-html-previews-plan.md`, written from a comparison with 
 
 ## Deferred
 - Android for Tasks 3–8, including the "File written" tap; Android's line is still plain text at `AidenChatDetailScreen.kt:~2425`.
-- Mermaid, which waits for owner approval of a bundled engine (Hermex uses Pele).
+- Mermaid, which waits for owner approval of a bundled engine.
 - A loading indicator once the page starts loading.
 - Serving relative resources through a `WKURLSchemeHandler`.
