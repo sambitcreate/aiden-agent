@@ -79,7 +79,7 @@ async function chooseOption(trigger: string, option: string) {
 test("the page leads with context settings, then usage and spending limits", async () => {
   await mount();
   await screen.findByRole("radiogroup", { name: "Automatic compaction engine" });
-  const titles = ["Automatic compaction", "Prompt cache", "Model compaction budgets", "Usage limits", "Spending limits"];
+  const titles = ["Automatic compaction", "Prompt cache", "Cache lifetime", "Model compaction budgets", "Usage limits", "Spending limits"];
   const text = document.body.textContent ?? "";
   const positions = titles.map((title) => text.indexOf(title));
   assert.ok(positions.every((position) => position >= 0), `missing a group: ${positions.join(", ")}`);
@@ -286,4 +286,14 @@ test("warming and the hour save independently while either is still saving", asy
   });
   await waitFor(() => assert.equal(stored().longPromptCacheRetention, true));
   assert.equal(stored().cacheWarmingEnabled, true);
+});
+
+test("the warming note sits with warming, and the hour-long cache is its own group", async () => {
+  await mount();
+  const group = (element: Element) => element.closest("section");
+  const warmingGroup = group(await screen.findByRole("switch", { name: "Warm prompt caches during active chats" }));
+  const hourGroup = group(await hourSwitch());
+  assert.ok(warmingGroup && hourGroup && warmingGroup !== hourGroup, "the two switches are in separate groups");
+  assert.match(warmingGroup.textContent ?? "", /refreshes at most three times/u);
+  assert.doesNotMatch(hourGroup.textContent ?? "", /refreshes at most three times/u, "the warming limits are not read as the hour's");
 });

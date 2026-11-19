@@ -126,41 +126,45 @@ export function PromptCacheGroup() {
   const hourAvailable = (providers.data ?? []).some((provider) => providerSupportsLongPromptCache(provider.id));
 
   return (
-    <FieldSet title="Prompt cache">
-      <Field
-        label="Warm caches during active chats"
-        description="Optional paid one-token requests keep an eligible provider cache warm during long agent runs in Aiden Agent, and for a little while after a reply while the chat stays open. Off by default."
-      >
-        <Switch
-          aria-label="Warm prompt caches during active chats"
-          checked={settings.data?.cacheWarmingEnabled === true}
-          disabled={settings.isLoading || warming.saving}
-          onCheckedChange={(enabled) => void warming.save(enabled)}
-        />
-      </Field>
-      <Field
-        label="Keep chat caches for an hour"
-        description={hourAvailable
-          ? "Anthropic and Amazon Bedrock can keep a chat’s cache for an hour instead of five minutes. Writing it costs more (twice the input price on Anthropic, against 1.25 times), so it pays off when you come back to chats within the hour. Off by default; side questions keep the default."
-          : keepsHour
-            ? "On, but paused: add Anthropic or Amazon Bedrock in Providers to use it. Other providers keep their own cache lifetime."
-            : "Available with Anthropic or Amazon Bedrock. Add one in Providers to choose an hour-long cache."}
-      >
-        <Switch
-          aria-label="Keep chat caches for an hour"
-          checked={keepsHour}
-          // Off with no provider to use it, it can't be turned on; once on, it can always be turned off.
-          disabled={settings.isLoading || providers.isLoading || hour.saving || (!hourAvailable && !keepsHour)}
-          onCheckedChange={(enabled) => void hour.save(enabled)}
-        />
-      </Field>
-      <Text as="p" variant="small" color="secondary" className="px-4 pb-4 text-pretty">
-        Only refreshes when provider-reported usage and known pricing estimate at least $0.05 in savings. Charges appear
-        in Usage. A run stops warming after one hour, on cancellation, or when switched off. After a reply it refreshes at
-        most three times, within 30 minutes, and stops once you leave the chat or close its window. Does not warm Bots,
-        scheduled tasks, or subagents.
-      </Text>
-    </FieldSet>
+    <>
+      <FieldSet title="Prompt cache">
+        <Field
+          label="Warm caches during active chats"
+          description="Optional paid one-token requests keep an eligible provider cache warm during long agent runs in Aiden Agent, and for a little while after a reply while the chat stays open. Off by default."
+        >
+          <Switch
+            aria-label="Warm prompt caches during active chats"
+            checked={settings.data?.cacheWarmingEnabled === true}
+            disabled={settings.isLoading || warming.saving}
+            onCheckedChange={(enabled) => void warming.save(enabled)}
+          />
+        </Field>
+        <Text as="p" variant="small" color="secondary" className="px-4 pb-4 text-pretty">
+          Only refreshes when provider-reported usage and known pricing estimate at least $0.05 in savings. Charges appear
+          in Usage. A run stops warming after one hour, on cancellation, or when switched off. After a reply it refreshes at
+          most three times, within 30 minutes, and stops once you leave the chat or close its window; a chat whose cache is
+          kept for an hour needs no refresh then. Does not warm Bots, scheduled tasks, or subagents.
+        </Text>
+      </FieldSet>
+      <FieldSet title="Cache lifetime">
+        <Field
+          label="Keep chat caches for an hour"
+          description={hourAvailable
+            ? "Anthropic and Amazon Bedrock (Claude 4.5 and later) can keep a chat’s cache for an hour instead of five minutes. Writing it costs twice the input price on Anthropic, instead of 1.25 times for the five-minute cache, so it pays off when you come back to chats within the hour. Off by default; side questions keep the default."
+            : keepsHour
+              ? "On, but paused: add Anthropic or Amazon Bedrock in Providers to use it. Other providers keep their own cache lifetime."
+              : "Available with Anthropic or Amazon Bedrock. Add one in Providers to choose an hour-long cache."}
+        >
+          <Switch
+            aria-label="Keep chat caches for an hour"
+            checked={keepsHour}
+            // Off with no provider to use it, it can't be turned on; once on, it can always be turned off.
+            disabled={settings.isLoading || providers.isLoading || hour.saving || (!hourAvailable && !keepsHour)}
+            onCheckedChange={(enabled) => void hour.save(enabled)}
+          />
+        </Field>
+      </FieldSet>
+    </>
   );
 }
 
