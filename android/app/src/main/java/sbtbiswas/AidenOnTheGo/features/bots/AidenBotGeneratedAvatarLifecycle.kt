@@ -21,6 +21,7 @@ import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -163,13 +164,16 @@ class AidenBotGeneratedAvatarModel(
     val hasCandidate: Boolean
         get() = currentCandidateData != null
 
-    fun setCandidate(data: ByteArray) {
+    /** Decodes and re-encodes off the main thread; a large source can take hundreds of milliseconds. */
+    suspend fun setCandidate(data: ByteArray) {
         try {
             _phase.value = AidenBotGeneratedAvatarPhase.NORMALIZING
-            val normalized = AidenBotGeneratedAvatarNormalizer.normalize(data)
+            val normalized = withContext(Dispatchers.Default) { AidenBotGeneratedAvatarNormalizer.normalize(data) }
             currentCandidateData = normalized
             _phase.value = AidenBotGeneratedAvatarPhase.READY
             _errorMessage.value = null
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: AidenBotGeneratedAvatarError) {
             _phase.value = AidenBotGeneratedAvatarPhase.FAILED
             _errorMessage.value = e.messageText
@@ -179,7 +183,7 @@ class AidenBotGeneratedAvatarModel(
         }
     }
 
-    fun ingestCopiedCandidate(bytes: ByteArray) = setCandidate(bytes)
+    suspend fun ingestCopiedCandidate(bytes: ByteArray) = setCandidate(bytes)
 
     suspend fun uploadAvatar(
         botId: String,
