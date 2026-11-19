@@ -81,3 +81,10 @@ Plan: `docs/plans/prompt-cache-hit-rate.md` (one PR, phases 0-8).
 - A3: `precomputeWithinSpendingLimit(spending, owner, settled?)` in compaction-precompute; llm-client `allowed` is async and includes it. Stop -> `chatPromptGenerationStopped` (chat-prompt-cache-state).
 - Harness `compaction` option may now override `model` (simulates a model change).
 - Test numbers: faux chat context after turns ~63/77/87; trigger T via reserve 128000-T; T=80 fraction 0.5 applies at t3; T=70 fraction 0.8 with a long t2 prompt overflows the keep budget. Context-lifecycle cached test: faux model with `promptCache: {short: 300}` so the global ledger records; usage input must fit the 8000 window.
+
+## Phase 5 round 2 fixes (2026-11-19)
+
+- Keep budget (`takePrecomputed`): tail tokens (estimate + `retainedTailSystemTokens`) <= keep + min(keep, trigger - start), AND snapshot.overheadTokens + estimateTokens(summary message) + tail < start; else silently undefined. `overheadTokens` = provider `calculateContextTokens(prefix.response.usage)` minus Pi's message estimate of prefix messages+reply, stored in the snapshot at start.
+- Test chat rescaled: BRIEF x36 in first prompt, KEEP_RECENT 24, default trigger 550 fraction 0.5 (contexts ~532/546/556). Faux usage counts the system prompt, so a long `systemPrompt` raises overhead.
+- `factPhrase` strips only sentence-final `. ! ? , ; :` (and the ideographic full stop), keeping symbols: "Uses C#" no longer removes "uses C for firmware"; "Plays in F#" keeps "F#m".
+- Known limit: memory on by default + any approved fact -> isolated summary, so cached/background summaries reach only fact-free chats. Open question deferred to phase 6 in the plan.
