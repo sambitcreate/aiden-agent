@@ -90,28 +90,31 @@ final class AidenSandboxedHTMLTests: XCTestCase {
     // MARK: Live web view
 
     func testAPreviewPageMakesNoNetworkConnections() async throws {
+        // One plain web view serves every control, so WebKit's process start is paid once.
+        let controlConfiguration = WKWebViewConfiguration()
+        controlConfiguration.websiteDataStore = .nonPersistent()
+        let control = WKWebView(frame: .zero, configuration: controlConfiguration)
+        try host(control)
         // One page per way of naming a remote resource, so a leak names its vector.
         for vector in Self.networkVectors {
-            try await assertNoConnections(vector.name, body: vector.body)
+            try await assertNoConnections(vector.name, control: control, body: vector.body)
         }
     }
 
     /// Control first: the page in a plain web view does reach the listener,
     /// so a zero from the sandbox means it blocked the load, not that nothing tried.
-    private func assertNoConnections(_ name: String, body: (UInt16) -> String) async throws {
+    /// The positive waits allow 30 seconds because a loaded CI simulator can take
+    /// over 10 to start WebKit's processes; a passing run never waits that long.
+    private func assertNoConnections(_ name: String, control: WKWebView, body: (UInt16) -> String) async throws {
         let controlListener = try await LoopbackListener.start()
         let controlConnected = expectation(description: "\(name): control page connects to localhost")
         controlConnected.assertForOverFulfill = false
         controlListener.onAccept = { controlConnected.fulfill() }
 
-        let controlConfiguration = WKWebViewConfiguration()
-        controlConfiguration.websiteDataStore = .nonPersistent()
-        let control = WKWebView(frame: .zero, configuration: controlConfiguration)
-        try host(control)
         let clock = ContinuousClock()
         let controlStart = clock.now
         control.loadHTMLString(Self.page(body(controlListener.port)), baseURL: nil)
-        await fulfillment(of: [controlConnected], timeout: 10)
+        await fulfillment(of: [controlConnected], timeout: 30)
         let controlTook = clock.now - controlStart
         control.stopLoading()
         controlListener.stop()
@@ -125,7 +128,7 @@ final class AidenSandboxedHTMLTests: XCTestCase {
 
         let finished = expectation(description: "\(name): sandboxed page finishes loading")
         let (webView, _) = try showSandboxed(Self.page(body(listener.port)), allowsScripts: true, onFinish: { finished.fulfill() })
-        await fulfillment(of: [finished], timeout: 10)
+        await fulfillment(of: [finished], timeout: 30)
         // The page's scripts did run; they were stopped at the network, not before it.
         let ran = try await webView.callAsyncJavaScript(
             "return document.documentElement.dataset.ran ?? null",
