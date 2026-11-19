@@ -275,6 +275,10 @@ export function createGenerativeUiDraftCheck(): GenerativeUiDraftCheck {
   // A draft streams in right after the draft head's `<body>`, so it is read there.
   const scanner = new HtmlScanner();
   scanner.write(GUEST_BODY_OPEN);
+  // Once a <noscript> tag appears, the draft is also read with scripting off.
+  let withoutScripting: HtmlScanner | undefined;
+  const written: string[] = [];
+  let tail = "";
   let bytes = 0;
   let refused = false;
   return {
@@ -286,7 +290,20 @@ export function createGenerativeUiDraftCheck(): GenerativeUiDraftCheck {
         return false;
       }
       scanner.write(chunk);
-      const findings = scanner.findings();
+      if (withoutScripting !== undefined) {
+        withoutScripting.write(chunk);
+      } else {
+        written.push(chunk);
+        const recent = tail + chunk;
+        tail = recent.slice(-(NOSCRIPT_TAG_TEXT.length - 1));
+        if (NOSCRIPT_TAG.test(recent)) {
+          withoutScripting = new HtmlScanner(0, false);
+          withoutScripting.write(GUEST_BODY_OPEN);
+          withoutScripting.write(written.join(""));
+          written.length = 0;
+        }
+      }
+      const findings = mergeFindings(scanner.findings(), withoutScripting?.findings());
       refused = findings.embed !== undefined || findings.url !== undefined || findings.limit !== undefined;
       return !refused;
     },
@@ -307,13 +324,37 @@ export function isGenerativeUiDraftAcceptable(html: string): boolean {
 const GUEST_BODY_OPEN = "<!DOCTYPE html>\n<html><head></head>\n<body>\n";
 const GUEST_BODY_CLOSE = "\n</body>\n</html>\n";
 
-/** What the HTML check finds in `markup` rendered where a guest's body goes. */
+/**
+ * A `<noscript>` start tag. Markup without one reads the same with scripting
+ * on or off; a tag name is never decoded, so this text must be present for
+ * the parser to create the element.
+ */
+const NOSCRIPT_TAG_TEXT = "<noscript";
+const NOSCRIPT_TAG = /<noscript/iu;
+
+function mergeFindings(first: HtmlFindings, second: HtmlFindings | undefined): HtmlFindings {
+  if (second === undefined) return first;
+  return { limit: first.limit ?? second.limit, embed: first.embed ?? second.embed, url: first.url ?? second.url };
+}
+
+/**
+ * What the HTML check finds in `markup` rendered where a guest's body goes,
+ * in a frame that runs scripts and, when it has a `<noscript>`, in a viewer
+ * or exported page with scripts off.
+ */
 function scanGuestBody(markup: string): HtmlFindings {
-  const scanner = new HtmlScanner();
-  scanner.write(GUEST_BODY_OPEN);
-  scanner.write(markup);
-  scanner.write(GUEST_BODY_CLOSE);
-  return scanner.finish();
+  const scan = (scripting: boolean) => {
+    const scanner = new HtmlScanner(0, scripting);
+    scanner.write(GUEST_BODY_OPEN);
+    scanner.write(markup);
+    scanner.write(GUEST_BODY_CLOSE);
+    return scanner.finish();
+  };
+  const findings = scan(true);
+  if (findings.limit !== undefined || (findings.embed !== undefined && findings.url !== undefined) || !NOSCRIPT_TAG.test(markup)) {
+    return findings;
+  }
+  return mergeFindings(findings, scan(false));
 }
 
 type Admission = { fragment: string } | { error: string };

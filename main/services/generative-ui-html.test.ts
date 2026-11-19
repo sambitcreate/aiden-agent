@@ -118,6 +118,7 @@ test("checking, wrapping or streaming a visual at the size cap stays well under 
     formattingReconstruction: fill("<p>t</p>", `<p>${Array.from({ length: 500 }, (_, index) => `<b x${index}>`).join("")}</p>`),
     scriptStrings: fill("x.innerHTML='<p>';", "<script>", "</script>"),
     cssUrls: fill("url(a)", "<style>", "</style>"),
+    noscriptBlocks: fill("<noscript><p>x</p></noscript>"),
     contentMovedOutOfTables: fill("a<i></i>", "<table>"),
     contentMovedPastManySiblings: fill("<p></p>", "", `<table>${"a<i></i>".repeat(8000)}`),
   };
@@ -240,7 +241,9 @@ for (const [name, html] of Object.entries(ADMITTED_MARKUP)) {
 // An independent reading of what a browser would load: parse5 builds the
 // document tree (as Chromium's parser does) and this walks every element,
 // including <template> contents, for an embedding tag, an external script, a
-// refresh <meta>, or an unsafe or remote URL attribute.
+// refresh <meta>, or an unsafe or remote URL attribute. A visual renders in a
+// frame that runs scripts, but a viewer or an exported page may have them
+// off, which turns <noscript> text into markup, so both parses count.
 const ORACLE_EMBEDDING_TAGS = new Set(["iframe", "object", "embed", "applet", "frame", "frameset", "base", "link"]);
 const ORACLE_URL_ATTRIBUTES = new Set(["href", "src", "action", "formaction", "xlink:href", "data"]);
 function browserLoadsSomething(html: string): boolean {
@@ -262,6 +265,7 @@ function browserLoadsSomething(html: string): boolean {
     }
   };
   walk(parse(html));
+  walk(parse(html, { scriptingEnabled: false }));
   return found;
 }
 
@@ -275,6 +279,8 @@ const ORACLE_CONTAINERS: readonly (readonly [string, string])[] = [
   ["<style>", "</style>"],
   ["<xmp>", "</xmp>"],
   ["<noscript>", "</noscript>"],
+  ["<noscript><p title=\"</noscript>", "\"></noscript>"],
+  ["<head><noscript>", "</noscript></head>"],
   ["<noembed>", "</noembed>"],
   ["<noframes>", "</noframes>"],
   ["<template>", "</template>"],
@@ -314,6 +320,9 @@ test("html admission refuses exactly what a browser's parse of the markup would 
       }
       assert.equal(admitted, !expected, `${expected ? "should refuse" : "should admit"} ${html}`);
       assert.equal(isGenerativeUiDraftAcceptable(html), !expected, `draft verdict for ${html}`);
+      // Streamed a few characters at a time, a draft refuses at least as much
+      // (a tag still being written counts before the parser may drop it).
+      if (expected) assert.equal(streamInChunks(html, 3), false, `streamed draft verdict for ${html}`);
       if (expected) refused += 1;
     }
   }

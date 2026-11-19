@@ -1,10 +1,10 @@
 // Reads artifact HTML the way a browser does, to find markup that would load
 // or run something. parse5 (already a production dependency) tokenizes and
 // builds the tree, so comments, RCDATA (<textarea>, <title>), raw text
-// (<style>, <xmp>, <noscript>...), script data, and foreign <svg>/<math>
-// content (where <style> and <script> hold markup) are exactly what the
-// browser sees. Elements are checked as the parser creates them, so a tag
-// inside a <template>, or one the tree builder moves, still counts.
+// (<style>, <xmp>, <noscript> with scripting on...), script data, and foreign
+// <svg>/<math> content (where <style> and <script> hold markup) are exactly
+// what the browser sees. Elements are checked as the parser creates them, so
+// a tag inside a <template>, or one the tree builder moves, still counts.
 //
 // One scanner reads a whole visual, or a streaming draft chunk by chunk:
 // each chunk is parsed once, so a draft costs no more than the finished
@@ -469,7 +469,16 @@ export class HtmlScanner {
   /** The unfinished start tag last read by `findings`, its size then and what it would load. */
   private pending: { tag: unknown; size: number; found: HtmlFindings } | undefined;
 
-  constructor(private readonly depth = 0) {
+  /**
+   * `scripting` is the parser's scripting flag: on, `<noscript>` holds raw
+   * text (a frame that runs scripts); off, it holds markup (a viewer or an
+   * exported page with scripts turned off). Only `<noscript>` reads
+   * differently between the two.
+   */
+  constructor(
+    private readonly depth = 0,
+    scripting = true,
+  ) {
     const adapter: TreeAdapter<DefaultTreeAdapterMap> = {
       ...defaultTreeAdapter,
       createElement: (tagName, namespaceURI, attrs) => {
@@ -515,7 +524,7 @@ export class HtmlScanner {
         node.parentNode = parent;
       },
     };
-    this.parser = new Parser({ treeAdapter: adapter, scriptingEnabled: true });
+    this.parser = new Parser({ treeAdapter: adapter, scriptingEnabled: scripting });
     // The tokenizer checks each new attribute against the tag's earlier ones,
     // so a tag's attribute count is capped as it is read.
     const tokenizer = this.parser.tokenizer as unknown as TokenizerInternals;
