@@ -28,7 +28,9 @@ type Target = "out" | "err" | "null";
  * Finds `program` on the environment's PATH, as a shell would: the first
  * absolute entry holding an executable file of that name (or, on Windows,
  * that name plus one of PATHEXT). Relative PATH entries are skipped, so a
- * workspace can't put its own `git` in front.
+ * workspace can't put its own `git` in front. Windows is not supported: the
+ * name without an extension is tried before PATHEXT, and a `.cmd` or `.bat`
+ * found here cannot be spawned without a shell.
  */
 export async function findProgramOnPath(program: string, env: NodeJS.ProcessEnv): Promise<string | undefined> {
   const pathValue = env.PATH ?? env.Path ?? "";
