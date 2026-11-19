@@ -417,10 +417,12 @@ describe("prompt prefix stability: already stable", () => {
     }
   });
 
-  test("a Gemini chat sends its system instruction and tools inline, and every request extends the one before it", async () => {
-    // Aiden creates no explicit Gemini cache: each request carries the whole
-    // prefix and Gemini's implicit cache reads it. That only pays if the
-    // prefix holds still, across a tool loop and into the next turn.
+  test("the Google wire renders a chat's system instruction and tools inline, and every request extends the one before it", async () => {
+    // Gemini's implicit cache reads the prefix each request carries, which
+    // only pays if that prefix holds still across a tool loop and into the
+    // next turn. This renders the assembled chat through Pi's own Google
+    // adapter: it shows the adapter adds no cached content of its own, not
+    // that llm-client's full generation path leaves the payload alone.
     const harness = createPromptPrefixHarness({ wire: "google-generative-ai" });
     const assembly = await workspaceChat();
     const one = await harness.turn({
@@ -440,11 +442,11 @@ describe("prompt prefix stability: already stable", () => {
     }
     for (const request of requests) {
       const config = request.settings.config as Record<string, unknown>;
-      assert.equal(config.cachedContent, undefined, "no request names a cached content");
+      assert.equal(config.cachedContent, undefined, "the adapter names no cached content");
       assert.deepEqual(request.wire.slice(0, 2).map((segment) => segment.kind), ["tools", "system"], "the prefix is sent inline");
       assert.ok(request.carries("list_files"), "the tool declarations reach the request");
     }
-    assert.equal(harness.networkCalls, 0, "rendering made no request, so no cache was created");
+    assert.equal(harness.networkCalls, 0, "rendering made no request");
   });
 
   test("a tool loaded in one turn is declared from the start of the next", async () => {
