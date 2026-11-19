@@ -43,7 +43,7 @@ Design and roadmap: [Inline Generative UI](superpowers/specs/2026-10-08-inline-g
    - The iframe uses `src` (not `srcDoc`) and `sandbox="allow-scripts"` only. Parent `script-src` is not widened, and parent `frame-src` is `'self' aiden-genui:`.
    - Guest CSP sets `connect-src 'none'` and allowlists only the exact host-library URLs.
    - **Known limit: WebRTC.** The guest CSP's `webrtc 'block'` is ignored by Electron 43, which logs it as an unrecognized directive, so the chat window and the snapshot capture window below set the WebRTC policy `disable_non_proxied_udp`: a visual's `RTCPeerConnection` sends no STUN and no TURN over UDP. TURN over TCP can still reach a host the visual's own code names, through the system proxy when one is set and otherwise directly. Only the design canvas's hidden export and inspect window closes that too, with a session of its own (design-mode spec §5.4).
-   - The frame is borderless and as tall as its content (64–1600px). The title, Expand and Export sit in a caption row below it. A neutral focus ring shows when focus arrives in the guest by Tab; a click into a visual draws none (the host cannot see focus moves inside a cross-origin guest).
+   - The frame is borderless and as tall as its content (64–1600px). The title, Expand and Export sit in a caption row below it. In a chat where design mode is available, Export moves into an **Actions** menu (**⋯**) in that row, next to **Send to canvas**, which places the visual on the chat's design canvas as a frame the person made (`designCanvas:placeArtifact`, which re-runs the HTML check and refuses a visual whose stored HTML no longer passes), turns design mode on if it was off, and says when the visual is already there or the canvas has no room. The expanded view keeps a plain Export button, since a menu cannot open over its top-layer dialog. A neutral focus ring shows when focus arrives in the guest by Tab; a click into a visual draws none (the host cannot see focus moves inside a cross-origin guest).
 5. **Guest bridge.** A host script injected before any model code:
    - reports content height;
    - relays Escape;
@@ -80,6 +80,7 @@ The model composes a visual from Aiden's own component catalog instead of writin
    - `copy` uses the clipboard.
    - Local state is saved 800 ms after the last change (`chats:updateUiVisualState`).
    - Charts use a lazily loaded Chart.js with the live `--chart-1…8` tokens, and every chart has a screen-reader table of its numbers.
+   - The caption's trailing button is **Copy as text**. Once the reply is saved, in a local chat that lives in a workspace (not a Bot, routine, the Assistant or a paired Mac's chat), it becomes an **Actions** menu (**⋯**) holding Copy as text and **Keep in Artifacts**, which saves a copy of the visual as a workspace artifact page (`workspaces:artifacts:keepVisual`; see [workspace-artifacts.md](workspace-artifacts.md#starting-one)).
 7. **CLI.** `render_ui` compiles with the same compiler and prints the fallback text.
 8. **Safety.**
    - **The compiler never throws.** Flattened unknown elements count toward the depth cap, and the parser stops nesting past 64 open elements.

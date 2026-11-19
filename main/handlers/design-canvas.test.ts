@@ -17,6 +17,7 @@ import {
   type DesignCanvasCaptureWindow,
   type DesignCanvasChat,
   type DesignCanvasPickOptions,
+  type DesignCanvasPlaceArtifactResult,
   type DesignCanvasSaveOptions,
   type DesignCanvasUpdated,
   type DesignFrameRenderRequest,
@@ -55,6 +56,7 @@ async function fixture(
     renderFrame?: (request: DesignFrameRenderRequest) => Promise<Uint8Array>;
     artifacts?: Record<string, string>;
     artifactHtml?: Record<string, string>;
+    artifactTitles?: Record<string, string>;
   } = {},
 ) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-design-canvas-handlers-"));
@@ -123,6 +125,11 @@ async function fixture(
       return src ? { src } : undefined;
     },
     artifactHtml: async (_chatId, mediaId) => options.artifactHtml?.[mediaId],
+    artifactTitle: async (_chatId, mediaId) => options.artifactTitles?.[mediaId],
+    newId: (() => {
+      let next = 0;
+      return () => `placed-${++next}`;
+    })(),
     exportArtifactSource: async (_event, chatId, mediaId) => {
       artifactExports.push(`${chatId}/${mediaId}`);
       return { saved: true, canceled: false };
@@ -752,4 +759,78 @@ test("the Code tab reads a page's file or an artifact's HTML, cut at 512 KiB, an
   const big = (await invoke("designCanvas:source", "chat-1", "page")) as { text: string; truncated: boolean };
   assert.equal(big.truncated, true);
   assert.equal(big.text.length, DESIGN_SOURCE_MAX_BYTES);
+});
+
+test("Send to canvas puts a chat visual on the page on screen as the person's frame, once", async (t) => {
+  const { invoke, broadcasts } = await fixture(t, {
+    // Not in design mode yet: the person's action turns it on after the frame lands.
+    chats: { "chat-1": { id: "chat-1", workspaceId: "workspace-1" } },
+    artifactTitles: { "media-1": "  Revenue mockup  " },
+    artifactHtml: { "media-1": "<main><h1>Revenue</h1></main>" },
+  });
+  const placed = (await invoke("designCanvas:placeArtifact", "chat-1", "media-1")) as DesignCanvasPlaceArtifactResult;
+  assert.deepEqual(placed, { status: "placed", frameId: "placed-1" });
+  assert.deepEqual(broadcasts, [{ chatId: "chat-1", revision: 1 }]);
+  const doc = (await invoke("designCanvas:get", "chat-1")) as DesignCanvas;
+  const frame = doc.frames.find((entry) => entry.id === "placed-1");
+  assert.ok(frame);
+  assert.equal(frame.kind, "artifact");
+  assert.equal(frame.title, "Revenue mockup");
+  assert.equal(frame.createdBy, "person");
+  assert.equal(frame.pageId, doc.activePageId);
+  assert.ok(frame.kind === "artifact" && frame.mediaId === "media-1");
+
+  // Sending it again shows the frame already there and changes nothing.
+  assert.deepEqual(await invoke("designCanvas:placeArtifact", "chat-1", "media-1"), {
+    status: "already",
+    frameId: "placed-1",
+  });
+  assert.equal(broadcasts.length, 1);
+  assert.equal(((await invoke("designCanvas:get", "chat-1")) as DesignCanvas).revision, 1);
+});
+
+test("Send to canvas refuses a visual the chat no longer has, or HTML that fails the visual checks", async (t) => {
+  const { invoke, broadcasts } = await fixture(t, {
+    artifactTitles: { "media-1": "Gone", "media-2": "Remote image" },
+    artifactHtml: { "media-2": '<img src="https://evil.test/x.png">' },
+  });
+  assert.deepEqual(await invoke("designCanvas:placeArtifact", "chat-1", "media-1"), { error: "missing" });
+  assert.deepEqual(await invoke("designCanvas:placeArtifact", "chat-1", "media-9"), { error: "missing" });
+  assert.deepEqual(await invoke("designCanvas:placeArtifact", "chat-1", "media-2"), { error: "unsafe" });
+  await assert.rejects(invoke("designCanvas:placeArtifact", "chat-1", "../media"), /Invalid visual/u);
+  await assert.rejects(invoke("designCanvas:placeArtifact", "chat-1", 7), /Invalid visual/u);
+  assert.deepEqual(broadcasts, []);
+  assert.deepEqual(((await invoke("designCanvas:get", "chat-1")) as DesignCanvas).frames, []);
+});
+
+test("Send to canvas is refused in a Bot or routine chat and reports a full canvas", async (t) => {
+  const { invoke, store } = await fixture(t, {
+    chats: {
+      "chat-1": { id: "chat-1", workspaceId: "workspace-1", designMode: true },
+      bot: { id: "bot", workspaceId: "workspace-1", designMode: true, botId: "bot-1" },
+      routine: { id: "routine", workspaceId: "workspace-1", designMode: true, owner: { kind: "routine" } as unknown as DesignCanvasChat["owner"] },
+    },
+    artifactTitles: { "media-1": "Chart" },
+    artifactHtml: { "media-1": "<p>chart</p>" },
+  });
+  await assert.rejects(invoke("designCanvas:placeArtifact", "bot", "media-1"), /not available/u);
+  await assert.rejects(invoke("designCanvas:placeArtifact", "routine", "media-1"), /not available/u);
+  await assert.rejects(invoke("designCanvas:placeArtifact", "missing-chat", "media-1"), /no longer available/u);
+
+  await store.update("chat-1", (doc) => ({
+    ...doc,
+    frames: Array.from({ length: 400 }, (_, index) => ({
+      id: `n${index}`,
+      kind: "note" as const,
+      title: "Note",
+      x: index * 10,
+      y: 0,
+      w: 200,
+      h: 120,
+      text: "",
+      pageId: doc.activePageId,
+      createdBy: "person" as const,
+    })),
+  }));
+  assert.deepEqual(await invoke("designCanvas:placeArtifact", "chat-1", "media-1"), { error: "full" });
 });

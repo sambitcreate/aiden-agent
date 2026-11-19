@@ -12,6 +12,10 @@ import {
   type WorkspaceArtifactsChangedEvent,
   type WorkspaceArtifactV1,
 } from "../../renderer/shared/workspace-artifacts.js";
+import { ASSISTANT_WORKSPACE_ID } from "../../renderer/shared/assistant.js";
+import type { ChatUiVisualV1 } from "../../renderer/shared/aiden-ui/types.js";
+import { persistedChatWorkspaceId } from "../../renderer/shared/chat-workspace.js";
+import type { ChatMeta } from "../services/types.js";
 import type { WorkspaceArtifactRunContext, WorkspaceArtifactRunner } from "../services/workspace-artifacts/runner.js";
 import type { WorkspaceArtifactStore } from "../services/workspace-artifacts/store.js";
 import {
@@ -38,7 +42,14 @@ export const WORKSPACE_ARTIFACT_CHANNELS = {
   importPreview: "workspaces:artifacts:importPreview",
   importConfirm: "workspaces:artifacts:importConfirm",
   importDiscard: "workspaces:artifacts:importDiscard",
+  keepVisual: "workspaces:artifacts:keepVisual",
 } as const;
+
+/** A chat and, when that assistant message holds it, one of its native visuals. */
+export interface WorkspaceArtifactChatVisual {
+  chat: Pick<ChatMeta, "workspaceId" | "botId" | "owner">;
+  visual: ChatUiVisualV1 | undefined;
+}
 
 export interface WorkspaceArtifactHandlerDependencies {
   handle: (channel: string, handler: (event: unknown, ...args: unknown[]) => unknown) => void;
@@ -56,6 +67,8 @@ export interface WorkspaceArtifactHandlerDependencies {
   now?: () => number;
   workspaceExists: (workspaceId: string) => Promise<boolean>;
   notify: (event: WorkspaceArtifactsChangedEvent) => void;
+  /** Reads the chat and the visual on its assistant message; null when the chat is gone. */
+  chatVisual: (chatId: string, messageId: string, visualId: string) => Promise<WorkspaceArtifactChatVisual | null>;
   runner: Pick<WorkspaceArtifactRunner, "refresh" | "runAction">;
   /**
    * Resolves the workspace's folder for the calling window (realpath, access
@@ -87,6 +100,11 @@ function asImportToken(value: unknown): string {
 function shown(artifact: WorkspaceArtifactV1): WorkspaceArtifactV1 {
   const { markup: _markup, markupDropped: _markupDropped, ...page } = artifact;
   return page;
+}
+
+function asChatRef(value: unknown, name: string): string {
+  if (typeof value !== "string" || value.length === 0 || value.length > 256) throw new Error(`Invalid ${name}.`);
+  return value;
 }
 
 function asText(value: unknown, name: string, max: number): string {
@@ -214,6 +232,41 @@ export function registerWorkspaceArtifactHandlers(dependencies: WorkspaceArtifac
     // commands, so under Ask they wait for the person to allow them.
     const artifact = await store.create(workspace, content, { uniqueTitle: true });
     notify({ workspaceId: workspace, artifactId: artifact.id, reason: "created" });
+    return shown(artifact);
+  });
+
+  // The person's Keep in Artifacts on a native visual in a chat: saves a copy
+  // as a page of the chat's workspace, as the visual looks now. Only where
+  // Aiden itself could save pages: an attended chat in a workspace that is not
+  // the Assistant. The copy has no markup, sources or buttons, so it runs
+  // nothing and needs no approval.
+  handle(WORKSPACE_ARTIFACT_CHANNELS.keepVisual, async (_event, chatId, messageId, visualId) => {
+    const found = await dependencies.chatVisual(
+      asChatRef(chatId, "chat"),
+      asChatRef(messageId, "message"),
+      asChatRef(visualId, "visual"),
+    );
+    if (!found) throw new Error("This chat is no longer available.");
+    const workspaceId = persistedChatWorkspaceId(found.chat.workspaceId);
+    if (found.chat.botId || found.chat.owner || workspaceId === ASSISTANT_WORKSPACE_ID) {
+      throw new Error("Visuals from this chat cannot be kept in Artifacts.");
+    }
+    const workspace = await existingWorkspace(workspaceId);
+    if (!found.visual) throw new Error("That visual is no longer in this chat.");
+    const { toolCallId: _toolCallId, ...visual } = found.visual;
+    const artifact = await store.create(
+      workspace,
+      {
+        title: visual.title,
+        visual,
+        ...(visual.state ? { initialState: visual.state } : {}),
+        sources: [],
+        actions: [],
+        refresh: { onOpen: false },
+      },
+      { uniqueTitle: true, chatId: chatId as string },
+    );
+    notify({ workspaceId: workspace, artifactId: artifact.id, reason: "created", chatId: chatId as string });
     return shown(artifact);
   });
 

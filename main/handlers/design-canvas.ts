@@ -2,6 +2,7 @@
 // on (it is, unless AIDEN_DESIGN_MODE=0), and every handler re-checks it the
 // way `chats:setDesignMode` does.
 
+import { randomUUID } from "node:crypto";
 import path from "node:path";
 import * as fs from "node:fs/promises";
 import {
@@ -25,7 +26,12 @@ import {
   planDesignTextEdit,
   type DesignTextChange,
 } from "../../renderer/shared/design-canvas/text-edit.js";
+import { canvasView } from "../../renderer/shared/design-canvas/canvas-summary.js";
+import { placeFrame } from "../../renderer/shared/design-canvas/placement.js";
+import { isHtmlArtifactMediaId } from "../../renderer/shared/generative-ui.js";
+import { ARTIFACT_FRAME_BOX } from "../services/design-canvas/artifact-frames.js";
 import type { DesignGrantRegistry } from "../services/design-canvas/grants.js";
+import { validateGenerativeUiHtml } from "../services/generative-ui-html.js";
 import { replaceWorkspaceText } from "../services/design-canvas/text-write.js";
 import { resolveDesignFile } from "../services/design-canvas/resolve-core.js";
 import type { DesignFileWatcher } from "../services/design-canvas/watch.js";
@@ -48,6 +54,15 @@ export type DesignCanvasChat = Pick<
   ChatMeta,
   "id" | "workspaceId" | "designMode" | "botId" | "owner"
 >;
+
+/**
+ * `designCanvas:placeArtifact` reply. `already` names the frame that shows the
+ * visual; `missing` means the chat no longer has it, `unsafe` that its HTML no
+ * longer passes the visual checks, and `full` that the canvas holds no more frames.
+ */
+export type DesignCanvasPlaceArtifactResult =
+  | { status: "placed" | "already"; frameId: string }
+  | { error: "missing" | "unsafe" | "full" };
 
 /** `designCanvas:grant` reply: an `aiden-design://<grant>/` host, or no access. */
 export type DesignCanvasGrantResult = { grant: string } | { error: "unavailable" };
@@ -174,7 +189,7 @@ function saveUndone(options: unknown): string[] {
 export function registerDesignCanvasHandlers<Event>(deps: {
   enabled: () => boolean;
   handle(channel: string, handler: (event: Event, ...args: unknown[]) => unknown): void;
-  store: Pick<DesignCanvasStore, "get" | "save">;
+  store: Pick<DesignCanvasStore, "get" | "save" | "update">;
   broadcast(update: DesignCanvasUpdated): void;
   getChat(chatId: string): Promise<DesignCanvasChat | null>;
   grants: Pick<DesignGrantRegistry, "issue" | "revokeChat">;
@@ -195,6 +210,10 @@ export function registerDesignCanvasHandlers<Event>(deps: {
   exportArtifactSource(event: Event, chatId: string, mediaId: string): Promise<{ saved: boolean; canceled: boolean }>;
   /** An artifact's own HTML, or undefined when it is gone. */
   artifactHtml(chatId: string, mediaId: string): Promise<string | undefined>;
+  /** An artifact's title, or undefined when this chat has no such artifact. */
+  artifactTitle(chatId: string, mediaId: string): Promise<string | undefined>;
+  /** New frame ids; tests pin them. */
+  newId?: () => string;
 }): void {
   if (!deps.enabled()) return;
 
@@ -232,6 +251,54 @@ export function registerDesignCanvasHandlers<Event>(deps: {
     const result = await deps.store.save(chat.id, doc as DesignCanvas, baseRevision, { undone });
     if (result.ok) deps.broadcast({ chatId: chat.id, revision: result.revision });
     return result;
+  });
+
+  // The person's Send to canvas on a visual in the chat: puts that visual on
+  // the page on screen as a frame of their own, beside the frames in view, the
+  // way Add would. It needs no design mode (the renderer turns it on after),
+  // only an attended chat that still holds the visual and HTML that still
+  // passes the visual checks.
+  const UNCHANGED = Symbol("unchanged");
+  deps.handle("designCanvas:placeArtifact", async (_event, chatId, mediaId): Promise<DesignCanvasPlaceArtifactResult> => {
+    const chat = await requireChat(chatId);
+    if (!isHtmlArtifactMediaId(mediaId)) throw new Error("Invalid visual.");
+    const [title, html] = await Promise.all([
+      deps.artifactTitle(chat.id, mediaId),
+      deps.artifactHtml(chat.id, mediaId),
+    ]);
+    if (title === undefined || html === undefined) return { error: "missing" };
+    try {
+      validateGenerativeUiHtml(html);
+    } catch {
+      return { error: "unsafe" };
+    }
+    const frameTitle = title.trim().slice(0, DESIGN_CANVAS_LIMITS.titleChars) || "Visual";
+    let outcome: DesignCanvasPlaceArtifactResult = { error: "full" };
+    try {
+      const saved = await deps.store.update(chat.id, (doc) => {
+        const existing = doc.frames.find((frame) => frame.kind === "artifact" && frame.mediaId === mediaId);
+        if (existing) {
+          outcome = { status: "already", frameId: existing.id };
+          throw UNCHANGED;
+        }
+        const placed = placeFrame(
+          doc,
+          { kind: "artifact", title: frameTitle, mediaId, createdBy: "person", ...ARTIFACT_FRAME_BOX },
+          canvasView(doc),
+          deps.newId ?? randomUUID,
+        );
+        if ("error" in placed) {
+          outcome = { error: "full" };
+          throw UNCHANGED;
+        }
+        outcome = { status: "placed", frameId: placed.id };
+        return placed.doc;
+      });
+      deps.broadcast({ chatId: chat.id, revision: saved.revision });
+    } catch (error) {
+      if (error !== UNCHANGED) throw error;
+    }
+    return outcome;
   });
 
   // Only an attended desktop chat in design mode may frame its own workspace

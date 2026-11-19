@@ -1219,7 +1219,6 @@ test("artifact chrome promotes one interactive iframe into the modal top layer",
   assert.match(frame, /trigger\.focus\(\{ preventScroll: true \}\)/u);
   assert.match(frame, /aria-modal=\{expanded \|\| undefined\}/u);
   assert.match(frame, /aria-label=\{`Expand \$\{artifact\.title\}`\}/u);
-  assert.match(frame, /aria-label=\{`Export \$\{artifact\.title\}`\}/u);
   assert.match(frame, /aria-label=\{`Close \$\{artifact\.title\}`\}/u);
   assert.match(frame, /error && src/u);
   assert.match(frame, /data-html-artifact-error=\{error\.kind\}/u);
