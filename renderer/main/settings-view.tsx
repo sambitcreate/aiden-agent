@@ -237,7 +237,15 @@ export function SettingsView({ initialSection }: { initialSection?: SettingsSect
   const descriptions = React.useMemo(() => settingsDescriptions(localComputerNoun(capabilities.platform)), [capabilities.platform]);
   const [search, setSearch] = React.useState("");
 
-  const anchorRequest = useLocation({ select: (location) => location.state.aidenSettingsAnchor });
+  // The location changes a moment before the page's search does, so for one render the page
+  // still shows the last section under the next location. A request counts only for the
+  // section it was made for; otherwise leaving the Links spot for Appearance asks for the
+  // Links row again on the way out, and that smooth scroll outlives the reset to the top.
+  const anchorRequest = useLocation({
+    select: (location) => location.search.section === initialSection
+      ? location.state.aidenSettingsAnchor ?? 0
+      : null,
+  });
   const query = search.trim().toLocaleLowerCase();
   const section = resolveSettingsSection(initialSection, capabilities);
   const pages = availableSettingsPages(capabilities);
@@ -360,7 +368,7 @@ export function SettingsView({ initialSection }: { initialSection?: SettingsSect
             description={descriptions[section]}
           >
             <SettingsPageTabs page={activePage} section={section} onSelect={open}>
-              <SettingsAnchorContext.Provider value={isSettingsAnchor(section) ? { section, request: anchorRequest ?? 0 } : null}>
+              <SettingsAnchorContext.Provider value={isSettingsAnchor(section) && anchorRequest !== null ? { section, request: anchorRequest } : null}>
                 <SettingsLiveGuard section={section}>
                   <ActiveSection />
                 </SettingsLiveGuard>

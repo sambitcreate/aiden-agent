@@ -18,7 +18,7 @@ Settings adapts the Appearance page and the desktop UI references in `chatgpt-de
 - The heading is the page title and the description comes from the selected section. Only the selected panel mounts, and the tablist's `aria-label` is the page title.
 - A page with one available tab hides the strip and uses that tab's own title for its sidebar row and heading. Unavailable sections resolve to the page's first available tab, then to `providers`. Aiden Live (`geminiLive`) is unavailable when `AIDEN_EXPERIMENTAL_GEMINI_LIVE` turns the feature off, so Voice & Speech then shows Voice and Text to Speech only.
 - Sidebar search matches a page when any tab or anchor matches, and the row opens the first matching tab, preferring a tab whose title matches. The palette keeps one row per section with the page title as detail.
-- An anchor (`links`) is a section with no tab or sidebar row. It opens its page and scrolls the row into view, instantly under Reduce Motion.
+- An anchor (`links`) is a section with no tab or sidebar row. It opens its page and scrolls the row into view, instantly under Reduce Motion. A scroll request counts only for the section it was made for, so leaving an anchor for its page doesn't scroll the row again on the way out.
 
 Write user-facing paths with page titles: `Settings → Voice & Speech → Text to Speech`, naming a tab only when it helps.
 

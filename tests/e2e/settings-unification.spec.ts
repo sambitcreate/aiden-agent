@@ -743,42 +743,8 @@ test("a Settings page or tab opens at the top, not at the last page's offset", a
   await navigation.getByRole("button", { name: "Appearance", exact: true }).click();
   await expect(page.getByRole("combobox", { name: "Open chat links in", exact: true })).toBeInViewport();
   await expect.poll(() => content.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
-  // TEMPORARY DIAGNOSTIC (remove before merge): record every write to the Settings scrollport.
-  await page.evaluate(() => {
-    const log: string[] = [];
-    (window as unknown as { __scrollLog: string[] }).__scrollLog = log;
-    const where = () => (new Error().stack ?? "").split("\n").slice(2, 9).map((line) => line.trim()).join(" <- ");
-    const isPort = (element: unknown) => element instanceof Element && (element.getAttribute("data-scroll-restoration-id") ?? "").startsWith("settings-");
-    const top = Object.getOwnPropertyDescriptor(Element.prototype, "scrollTop")!;
-    Object.defineProperty(Element.prototype, "scrollTop", {
-      configurable: true,
-      get() { return top.get!.call(this); },
-      set(value: number) {
-        if (isPort(this)) log.push(`set scrollTop=${value} id=${(this as Element).getAttribute("data-scroll-restoration-id")} at ${where()}`);
-        top.set!.call(this, value);
-      },
-    });
-    for (const name of ["scrollTo", "scroll", "scrollBy", "scrollIntoView"] as const) {
-      const original = Element.prototype[name] as (...args: unknown[]) => void;
-      (Element.prototype as unknown as Record<string, unknown>)[name] = function (this: Element, ...args: unknown[]) {
-        const port = document.querySelector('[data-scroll-restoration-id^="settings-"]');
-        if (isPort(this) || name === "scrollIntoView" && port?.contains(this)) log.push(`${name}(${JSON.stringify(args)}) on ${this.tagName}${isPort(this) ? "[port]" : ""} at ${where()}`);
-        return original.apply(this, args);
-      };
-    }
-    const focus = HTMLElement.prototype.focus;
-    HTMLElement.prototype.focus = function (this: HTMLElement, options?: FocusOptions) {
-      log.push(`focus(${JSON.stringify(options ?? null)}) on ${this.tagName} "${(this.getAttribute("aria-label") ?? this.textContent ?? "").slice(0, 40)}" at ${where()}`);
-      return focus.call(this, options);
-    };
-    const port = document.querySelector('[data-scroll-restoration-id^="settings-"]')!;
-    port.addEventListener("scroll", () => log.push(`scroll event scrollTop=${top.get!.call(port)} id=${port.getAttribute("data-scroll-restoration-id")}`));
-  });
   await search.fill("");
   await navigation.getByRole("button", { name: "Appearance", exact: true }).click();
-  await page.waitForTimeout(1500);
-  const scrollLog = await page.evaluate(() => (window as unknown as { __scrollLog: string[] }).__scrollLog);
-  process.stderr.write(`\n[scroll-diagnostic]\n${scrollLog.join("\n")}\n[/scroll-diagnostic]\n`);
   await expect.poll(() => content.evaluate((element) => element.scrollTop)).toBe(0);
   await expect(page.getByRole("heading", { level: 1, name: "Appearance", exact: true })).toBeInViewport();
 });
