@@ -18,8 +18,12 @@
  *   but with revision syntax, and still no `:`, which would read a file from
  *   the repository root, no glob and no leading `.` or `/`;
  * - `target`: a gh number or name that does not point at another repository
- *   or a URL;
- * - `path`: a file inside the workspace. In git it also has no `:` and no
+ *   or a URL (gh repo view and list take no operand from page data, since it
+ *   names the repository or owner);
+ * - a GitHub search (`--search`) is text without a `repo:`, `org:` or
+ *   `user:` qualifier, which would search past this repository;
+ * - `path`: a file inside the workspace (also `test -e {{file}}` and test's
+ *   other file operators, which would tell whether an outside path exists). In git it also has no `:` and no
  *   `* ? [`, which git reads as pathspec magic (`:/`, `:(top)`) or a glob
  *   that reaches past the workspace when it is a folder inside a repository.
  *
@@ -47,13 +51,27 @@ export interface Slot {
    * branch only.
    */
   refOnly?: boolean;
+  /**
+   * A GitHub search (`gh pr list --search {{q}}`): no `repo:`, `org:` or
+   * `user:` qualifier, which would widen the search past this repository.
+   */
+  search?: boolean;
 }
 
 /** An option's value: a slot, a refusal clause ("which reads a file from anywhere"), or null when it takes no page data. */
 type ValueEntry = Slot | string | null;
 
-/** What an operand may be: a slot, or a refusal (`as the remote git fetch connects to`). */
-type OperandRule = (index: number, afterDashes: boolean, has: (...names: string[]) => boolean) => Slot | string;
+/**
+ * What an operand may be: a slot, or a refusal (`as the remote git fetch
+ * connects to`). `near(-1)` is the word before it and `near(1)` the word
+ * after, undefined at either end or where a word holds a placeholder.
+ */
+type OperandRule = (
+  index: number,
+  afterDashes: boolean,
+  has: (...names: string[]) => boolean,
+  near: (offset: number) => string | undefined,
+) => Slot | string;
 
 export interface SlotSpec {
   /** How refusals name the command: "git commit", "gh pr list", "grep". */
@@ -81,6 +99,7 @@ export interface SlotSpec {
 
 const T: Slot = { rule: "text" };
 const TD: Slot = { rule: "text", dash: true };
+const SEARCH: Slot = { rule: "text", dash: true, search: true };
 const N: Slot = { rule: "number" };
 const R: Slot = { rule: "ref" };
 const RO: Slot = { rule: "ref", refOnly: true };
@@ -105,6 +124,11 @@ const searchOperands: Pick<SlotSpec, "operand" | "operandForms"> = {
   operand: (index, _afterDashes, has) => (index > 0 || has("-e", "-f") ? P : T),
   operandForms: "the pattern as text (when no -e or -f gives it), then files in the workspace",
 };
+
+/** test's operators whose operand is a file (`test -e {{file}}`); a value there could ask whether an outside path exists. */
+const TEST_FILE_OPERATORS = new Set(["-e", "-f", "-d", "-r", "-w", "-x", "-s", "-L", "-h", "-b", "-c", "-p", "-S", "-g", "-u", "-k", "-O", "-G", "-N"]);
+/** test's operators that compare two files (`test {{a}} -nt notes.md`). */
+const TEST_FILE_PAIRS = new Set(["-nt", "-ot", "-ef"]);
 
 const PROGRAM_SPECS: Readonly<Record<string, SlotSpec>> = {
   ls: { name: "ls", flags: "1aAlhrtSRdFGipcu", long: ["all", "almost-all", "human-readable", "recursive", "reverse"], ...files() },
@@ -180,7 +204,13 @@ const PROGRAM_SPECS: Readonly<Record<string, SlotSpec>> = {
   tr: { name: "tr", flags: "cdsC", ...text },
   echo: plain("echo"),
   printf: plain("printf"),
-  test: plain("test"),
+  test: {
+    name: "test",
+    plain: true,
+    operand: (_index, _afterDashes, _has, near) =>
+      TEST_FILE_OPERATORS.has(near(-1) ?? "") || TEST_FILE_PAIRS.has(near(-1) ?? "") || TEST_FILE_PAIRS.has(near(1) ?? "") ? P : T,
+    operandForms: "text, or a file in the workspace after -e, -f, -d and the other file tests",
+  },
   true: plain("true"),
   false: plain("false"),
   date: { name: "date", flags: "uRj", values: { "-d --date": T, "-r --reference": READS_ANY_FILE, "-f --file": READS_ANY_FILE }, ...text },
@@ -498,14 +528,18 @@ const one = (name: string): Pick<SlotSpec, "operand" | "operandForms"> => ({
   operandForms: "a number, branch or name",
 });
 const none = (name: string): Pick<SlotSpec, "operand"> => ({ operand: () => `as an argument to ${name}, which takes none` });
-const gh = (name: string, spec: Omit<SlotSpec, "name" | "gh">, operands: "one" | "none" = "one"): SlotSpec => ({
+/** gh repo view and list: the operand names a repository or owner, so a value could read any repository or organisation. */
+const repository = (name: string): Pick<SlotSpec, "operand"> => ({
+  operand: () => `as the repository or owner ${name} reads, which could name any repository or organisation (write it literally, or leave it out for this repository)`,
+});
+const gh = (name: string, spec: Omit<SlotSpec, "name" | "gh">, operands: "one" | "none" | "repository" = "one"): SlotSpec => ({
   name,
   gh: true,
   ...spec,
   long: [...(spec.long ?? []), "help"],
-  ...(operands === "one" ? one(name) : none(name)),
+  ...(operands === "one" ? one(name) : operands === "none" ? none(name) : repository(name)),
 });
-const SEARCHES: Record<string, ValueEntry> = { "-S --search": TD, "-l --label": TD, "-a --assignee": TD, "-A --author": TD, "-s --state": T, "--app": T, "-L --limit": N };
+const SEARCHES: Record<string, ValueEntry> = { "-S --search": SEARCH, "-l --label": TD, "-a --assignee": TD, "-A --author": TD, "-s --state": T, "--app": T, "-L --limit": N };
 const COMMENT: Record<string, ValueEntry> = { ...GH_REPO, "-b --body": TD, ...GH_BODY_FILE };
 const COMMENT_LONG = ["web", "edit-last", "create-if-none", "delete-last", "yes"];
 const editValues = (extra: Record<string, ValueEntry>): Record<string, ValueEntry> => ({
@@ -596,11 +630,12 @@ const GH_SPECS: Readonly<Record<string, SlotSpec>> = {
   "run watch": gh("gh run watch", { long: ["exit-status", "compact"], values: { ...GH_REPO, "-i --interval": N } }),
   "run rerun": gh("gh run rerun", { flags: "d", long: ["failed", "debug"], values: { ...GH_REPO, "-j --job": N } }),
   "run cancel": gh("gh run cancel", { values: GH_REPO }),
-  "repo view": gh("gh repo view", { flags: "w", long: ["web"], values: { ...GH_EXPORT, "-b --branch": R } }),
-  "repo list": gh("gh repo list", {
-    long: ["fork", "source", "archived", "no-archived"],
-    values: { ...GH_EXPORT, "-L --limit": N, "-l --language": T, "--topic": T, "--visibility": T },
-  }),
+  "repo view": gh("gh repo view", { flags: "w", long: ["web"], values: { ...GH_EXPORT, "-b --branch": R } }, "repository"),
+  "repo list": gh(
+    "gh repo list",
+    { long: ["fork", "source", "archived", "no-archived"], values: { ...GH_EXPORT, "-L --limit": N, "-l --language": T, "--topic": T, "--visibility": T } },
+    "repository",
+  ),
   "release view": gh("gh release view", { flags: "w", long: ["web"], values: { ...GH_REPO, ...GH_EXPORT } }),
   "release list": gh(
     "gh release list",
@@ -609,7 +644,7 @@ const GH_SPECS: Readonly<Record<string, SlotSpec>> = {
   ),
   "label list": gh(
     "gh label list",
-    { flags: "w", long: ["web"], values: { ...GH_REPO, ...GH_EXPORT, "-S --search": TD, "-L --limit": N, "--sort": T, "--order": T } },
+    { flags: "w", long: ["web"], values: { ...GH_REPO, ...GH_EXPORT, "-S --search": SEARCH, "-L --limit": N, "--sort": T, "--order": T } },
     "none",
   ),
   "workflow view": gh("gh workflow view", { flags: "wy", long: ["web", "yaml"], values: { ...GH_REPO, "-r --ref": R } }),
@@ -762,7 +797,8 @@ function locateIn(spec: SlotSpec, args: Args, from: number, at: number): SlotLoo
     return { slot: entry };
   }
   const has = (...names: string[]) => names.some((name) => read.has.has(name));
-  const rule = spec.operand ? spec.operand(position.index, position.afterDashes, has) : `as an argument to ${spec.name}`;
+  const near = (offset: number) => args[at + offset];
+  const rule = spec.operand ? spec.operand(position.index, position.afterDashes, has, near) : `as an argument to ${spec.name}`;
   return typeof rule === "string" ? { problem: rule } : { slot: rule };
 }
 

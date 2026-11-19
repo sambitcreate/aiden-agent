@@ -773,6 +773,9 @@ export function workspaceArtifactValueProblem(steps: readonly TemplateStep[], va
             return `${part.param} must be a number or a branch-like name there: no leading - or +, and no :, @ or ://, which gh reads as another repository or a URL.`;
           }
         }
+        if (slot.search && /(?:repo|org|user)\s*:/iu.test(filled)) {
+          return `${name} cannot hold a repo:, org: or user: qualifier there: it would search past this repository.`;
+        }
         if (slot.rule === "path" && !staysInside(filled)) return `${name} must name a file inside the workspace: no absolute path, ~, or .. that leads out of it.`;
         const blob = params.find((part) => part.slot?.blob);
         if (blob && !staysInside(blobPath(word, value))) {

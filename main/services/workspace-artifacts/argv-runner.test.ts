@@ -145,7 +145,7 @@ test("a workspace file reached through a symbolic link that leaves the folder is
   const read = (command: string, value: string) => runResolved(resolveWorkspaceArtifactCommand(action(command), [value]), workspace);
   // Each value is relative and stays inside as text, so only its real path gives it away.
   for (const value of ["away/secret.txt", "secret-link.txt", "away/missing.txt", "away/../away/secret.txt", "notes-link/../away/secret.txt"]) {
-    for (const command of ["cat {{file}}", "grep -c secret {{file}}", "head -n 1 {{file}} || echo fallback"]) {
+    for (const command of ["cat {{file}}", "grep -c secret {{file}}", "head -n 1 {{file}} || echo fallback", "test -e {{file}} && echo 1"]) {
       const result = await read(command, value);
       assert.doesNotMatch(result.stdout, /top secret|^1$/mu, `${command} with ${value}`);
       assert.match(result.stderr, /leads outside the workspace through a symbolic link, so it was not run/u, `${command} with ${value}`);
