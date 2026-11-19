@@ -763,6 +763,25 @@ test("edits are all or nothing: a missing or repeated old text saves nothing and
   assert.equal((await store.list("ws1")).length, 1);
 });
 
+test("edits written with LF line breaks apply to a page saved with CRLF ones, which keeps its own", async (t) => {
+  const { store, call } = await harness(t, { permission: "full" });
+  const crlf = PAGE.replace(/\n/gu, "\r\n");
+  await call("c1", { operation: "create", title: "Open PRs", markup: crlf });
+  await call("e1", {
+    operation: "update", id: "art1",
+    edits: [{ old: "open</Text>\n  <Button action={run", new: "waiting</Text>\n  <Text>Merge when green</Text>\n  <Button action={run" }],
+  });
+  assert.equal(
+    (await store.get("ws1", "art1"))!.artifact.markup,
+    crlf.replace("open</Text>\r\n", "waiting</Text>\r\n  <Text>Merge when green</Text>\r\n"),
+  );
+  // Read alike, line breaks still have to match one place only.
+  await assert.rejects(
+    call("e2", { operation: "update", id: "art1", edits: [{ old: "</Button>\n", new: "</Button>\n\n" }] }),
+    /edits\[0\] old "<\/Button>" was found 2 times/u,
+  );
+});
+
 test("edits apply to the markup another chat saved while this one prepared its save, and a miss there saves nothing", async (t) => {
   const { store, call, nextTurn } = await harness(t, { permission: "full" });
   await call("c1", { operation: "create", title: "Open PRs", markup: PAGE });
