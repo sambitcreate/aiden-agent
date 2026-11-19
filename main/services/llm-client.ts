@@ -34,7 +34,7 @@ import { piResourcesForSkillSnapshot } from "./skill-tools.js";
 import { createMcpServersSectionRefresher, renderMcpServersSection } from "./mcp-server-instructions.js";
 import { createAgentsInstructionRefresher } from "./agents-instructions.js";
 import { aidenConfigDir } from "./aiden-config-dir.js";
-import { assertCustomModelImageLimit, applyCustomModelToolPolicy, customModelThinkingLevels, prepareCustomModelToolContext } from "../../renderer/shared/custom-model-options.js";
+import { assertCustomModelImageLimit, customModelThinkingLevels, prepareCustomModelToolContext } from "../../renderer/shared/custom-model-options.js";
 import { compactionEngineFrom, configuredCompactionReserveTokens, resolveCompactionModelBudget } from "../../renderer/shared/compaction.js";
 import { createVccRecallTool } from "./pi-vcc/recall.js";
 import { attachWorkspaceToolOutputs } from "./tool-output-runtime.js";
@@ -147,7 +147,7 @@ import {
 import { mcpAgentToolIdentity, mcpToolActivityLabel } from "./mcp-tool-identity.js";
 import { createShareImageTool, SHARE_IMAGE_TOOL_NAME } from "./share-image-tool.js";
 import { type SkillRegistrySnapshot, withoutSkills } from "./skill-registry.js";
-import { buildSystemPrompt, buildSystemPromptWithSections } from "./chat-system-prompt.js";
+import { buildSystemPrompt } from "./chat-system-prompt.js";
 import { skillRegistry } from "./skill-registry-main.js";
 import { DESKTOP_ARTIFACT_SKILLS } from "./workspace-artifacts/skill.js";
 import { DESKTOP_HOOK_SKILLS } from "./hooks-skill.js";
@@ -426,20 +426,17 @@ import { btwOperationRegistry, btwService } from "./rpiv-btw/service.js";
 import { createPiCodemodeTool } from "./pi-codemode.js";
 import { createPiToolDiscovery } from "./pi-tool-discovery.js";
 import { NO_LATE_MCP_DISCOVERY, type McpLateDiscovery } from "./mcp-tool-discovery-core.js";
-import { isPiCodemodeCallable, partitionPiCodemodeTools } from "./pi-runtime-tool.js";
-import { createOnDemandTools } from "./on-demand-tools.js";
+import { isPiCodemodeCallable } from "./pi-runtime-tool.js";
+import { assembleChatPrompt, buildWorkspaceChatBasePrompt } from "./chat-prompt-assembly.js";
 import {
   PiAgentRuntimeHarness,
   isPiManagedCancellationError,
   piAgentRuntimeExtensions,
-  extensionSkillsPrompt,
-  resolvePiAgentRuntimeContributionSnapshot,
   resolvePiAgentRuntimeStaticContributions,
   type PiAgentRuntimeExtension,
   type PiRuntimeStopEvent,
 } from "./pi-agent-runtime-harness.js";
 import {
-  MEMORY_EXTENSION_ID,
   createMemoryExtension,
   authorizeMemoryProposal,
   authorizeMemoryRemoval,
@@ -3869,66 +3866,47 @@ export const llmClient = {
               : withUnattendedAssistantContract(
                   await buildSystemPrompt(folderPath, git.branch, permission, false, false),
                 )
-            : await buildSystemPromptWithSections(
+            : await buildWorkspaceChatBasePrompt({
                 folderPath,
-                git.branch,
+                branch: git.branch,
                 permission,
-                toolsWithRuntimeContributions.some((tool) => tool.name === "subagent"),
-                true,
                 skillSnapshot,
-                new Set(toolsWithRuntimeContributions.map((tool) => tool.name)),
+                tools: toolsWithRuntimeContributions,
                 noWorkspace,
-              ).then(({ systemPrompt, sections }) => {
-                hostPromptSkills = sections.skills;
+              }).then(({ systemPrompt, skills }) => {
+                hostPromptSkills = skills;
                 return systemPrompt;
               });
-      const botSystemPrompt = authoritativeBot
-        ? preparedBotContext
-          ? withBotRuntimeInstructions(
-              baseSystemPrompt,
-              authoritativeBot,
-              preparedBotContext.prepared.managedWorkspace,
-              botWorkspacePromptAuthority(preparedBotContext, botApprovedRoots),
-            )
-          : (() => {
-              throw new Error("Bot runtime authority was not prepared.");
-            })()
-        : baseSystemPrompt;
-      const resolvedContributions = resolvePiAgentRuntimeContributionSnapshot(
-        botSystemPrompt,
+      if (authoritativeBot && !preparedBotContext) throw new Error("Bot runtime authority was not prepared.");
+      const assembly = assembleChatPrompt({
+        basePrompt: baseSystemPrompt,
+        ...(hostPromptSkills ? { baseSkills: hostPromptSkills } : {}),
+        ...(authoritativeBot && preparedBotContext
+          ? {
+              withBotInstructions: (base: string) => withBotRuntimeInstructions(
+                base,
+                authoritativeBot,
+                preparedBotContext.prepared.managedWorkspace,
+                botWorkspacePromptAuthority(preparedBotContext, botApprovedRoots),
+              ),
+            }
+          : {}),
         tools,
-        piResourcesForSkillSnapshot(skillSnapshot),
-        runtimeExtensions,
-        runtimeExtensionSnapshot.revision,
-      );
-      const modelContributions = applyCustomModelToolPolicy(
-        resolvedContributions, runtime.provider.modelMetadata?.[model.id]?.overrides,
-      );
-      // What each prompt part adds, for the context meter's per-category breakdown.
-      const contextPromptSections = {
-        skills: (hostPromptSkills ?? "") + extensionSkillsPrompt(resolvedContributions.extensions),
-        memory: resolvedContributions.extensions
-          .find((extension) => extension.id === MEMORY_EXTENSION_ID)
-          ?.volatileSystemPrompt?.trim() ?? "",
-        "bot-instructions": botSystemPrompt.slice(baseSystemPrompt.length),
-      };
-      // Freeze only the already-admitted MCP inventory. The provider sees the
-      // discovery/script tools; nested calls still use the ordinary host gates.
-      const { declared, deferred: deferredTools } = partitionPiCodemodeTools(modelContributions.tools);
-      // Workspace chats with codemode declare rarely used built-in tools only
-      // once the model loads them; scripts can still call the ones they could.
-      const onDemandTools = !preparedBotContext && declared.some((tool) => tool.name === "codemode")
-        ? createOnDemandTools(declared)
-        : undefined;
-      // Held-back tools a script can call join the callable inventory the way
-      // late MCP tools do, so loading one later never collides with the frozen deferred set.
-      const onDemandCallable = onDemandTools?.onDemand.filter((tool) => isPiCodemodeCallable(tool)) ?? [];
-      let runtimeTools: AgentTool[] = onDemandTools ? onDemandTools.initialTools([]) : declared;
+        resources: piResourcesForSkillSnapshot(skillSnapshot),
+        extensions: runtimeExtensions,
+        extensionRevision: runtimeExtensionSnapshot.revision,
+        modelOptions: runtime.provider.modelMetadata?.[model.id]?.overrides,
+        allowOnDemandTools: !preparedBotContext,
+      });
+      const modelContributions = assembly.contributions;
+      const contextPromptSections = assembly.promptSections;
+      const { deferredTools, onDemandTools, onDemandCallable } = assembly;
+      let runtimeTools: AgentTool[] = assembly.toolsFor([]);
       const runtimeContributions = {
         ...modelContributions,
         tools: runtimeTools,
       };
-      const { systemPrompt } = runtimeContributions;
+      const { systemPrompt } = assembly;
       // The MCP servers this turn may use, as a bounded section patched into the
       // transcript (never the base prompt), from the final admitted inventory,
       // including servers that finish discovery after the turn started.
@@ -4135,7 +4113,7 @@ export const llmClient = {
       let initialMessages = (await promptJournal.buildContext(journalBranch)).messages;
       if (onDemandTools) {
         // Tools this chat already loaded or called stay declared from the start.
-        runtimeTools = onDemandTools.initialTools(initialMessages);
+        runtimeTools = assembly.toolsFor(initialMessages);
         generationContextOptions.tools = runtimeTools;
       }
       const journalHistory = runTaintHistoryOfBranch(journalBranch);

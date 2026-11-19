@@ -744,6 +744,7 @@
         "main/services/pi-cache-warming.test.ts",
         "main/services/pi-cache-telemetry.test.ts",
         "main/services/prompt-prefix-stability.test.ts",
+        "main/services/chat-prompt-assembly.test.ts",
         "main/services/pi-model-tools.test.ts",
         "main/services/pi-local-classifier.test.ts",
         "main/services/repository-identity.test.ts",

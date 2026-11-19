@@ -3,30 +3,36 @@
 // Pi provider adapter offline, and returns section hashes so a test can name
 // the first place one request stopped extending the one before it.
 //
-// The layer is the one llm-client builds a generation from: the
-// `createInitialSystemMessage` head over a journaled history, the AGENTS.md
-// and `mcp_servers` refreshers (applied to the initial context and again
-// between tool turns through `createPiTurnContextPreparation`), the
-// `createGenerationContextTransform` projection, and `PiAgentRuntimeHarness`.
-// llm-client itself needs Electron, config stores and a durable journal, so it
-// is not driven here; the journal is modelled as the non-system messages each
-// run appended, which is what llm-client journals on `message_end`.
+// The layer is the one llm-client builds a generation from: the system
+// prompt and tools from `assembleChatPrompt` (or given directly), the
+// `createInitialSystemMessage` head over the history a durable Pi session
+// journal rebuilds, the AGENTS.md and `mcp_servers` refreshers and on-demand
+// tool loading (applied to the initial context and again between tool turns
+// through `createPiTurnContextPreparation`), the
+// `createGenerationContextTransform` projection, and
+// `PiAgentRuntimeHarness.runManaged` journaling into that session. llm-client
+// itself needs Electron and config stores, so it is not driven here; each
+// turn reads its history back from the in-memory journal the previous runs
+// wrote, so the harness keeps exactly what llm-client would keep.
 //
 // Nothing here dispatches a request: the adapter's `onPayload` captures the
 // payload and aborts before `fetch`, and `fetch` itself refuses.
 
 import { createHash } from "node:crypto";
-import type { AgentMessage, AgentTool } from "@earendil-works/pi-agent-core";
-import { createInitialSystemMessage, toToolDeclaration, type Api, type Message, type Model, type ProviderStreams } from "@earendil-works/pi-ai";
+import type { AgentContext, AgentMessage, AgentTool } from "@earendil-works/pi-agent-core";
+import { createInitialSystemMessage, createModels, toToolDeclaration, type Api, type Message, type Model, type ProviderStreams } from "@earendil-works/pi-ai";
 import { anthropicMessagesApi } from "@earendil-works/pi-ai/api/anthropic-messages.lazy";
 import { openAIResponsesApi } from "@earendil-works/pi-ai/api/openai-responses.lazy";
 import { createFauxCore, type FauxResponseStep } from "@earendil-works/pi-ai/providers/faux";
 import { createAgentsInstructionRefresher, type AgentsInstructionOptions } from "./agents-instructions.js";
+import type { ChatPromptAssembly } from "./chat-prompt-assembly.js";
 import { createGenerationContextTransform, updateGenerationContextOptions, type GenerationContextOptions } from "./generation-context.js";
 import { createMcpServersSectionRefresher } from "./mcp-server-instructions.js";
 import { diffPromptPrefix, fingerprintPromptPrefix, type PromptPrefixDifference, type PromptPrefixFingerprint } from "./pi-cache-telemetry.js";
 import { PiAgentRuntimeHarness } from "./pi-agent-runtime-harness.js";
 import { convertToLlm } from "./pi-legacy-harness.js";
+import { createPiSessionPort, type PiSessionPort } from "./pi-session-port.js";
+import { InMemorySessionRepo } from "./pi-session-repository-port.js";
 import { createPiTurnContextPreparation } from "./pi-turn-context.js";
 
 export type PromptPrefixWire = "anthropic-messages" | "openai-responses";
@@ -48,13 +54,17 @@ export interface PromptPrefixHarnessOptions {
   mcpServersSection?: () => string;
 }
 
-export interface PromptPrefixTurnInput {
+export type PromptPrefixTurnInput = {
   prompt: string;
-  systemPrompt: string;
-  tools: AgentTool[];
   /** Scripted assistant steps for this turn, in order. */
   responses: FauxResponseStep[];
-}
+} & (
+  | {
+      /** The generation head as llm-client assembles it; tools follow the journaled history. */
+      assembly: ChatPromptAssembly;
+    }
+  | { systemPrompt: string; tools: AgentTool[] }
+);
 
 export interface RecordedPromptRequest {
   /** 1-based user turn. */
@@ -65,6 +75,8 @@ export interface RecordedPromptRequest {
   fingerprint: PromptPrefixFingerprint;
   /** The rendered provider payload, cut into cache-ordered segments. */
   wire: PromptWireSegment[];
+  /** Whether `text` reaches this request anywhere: system, tools, messages or tool results. */
+  carries(text: string): boolean;
 }
 
 export interface PromptRequestComparison {
@@ -94,8 +106,21 @@ function withoutCacheMarkers(value: unknown): unknown {
   );
 }
 
+/**
+ * Anthropic Messages takes a string `content` as shorthand for one text block,
+ * and the adapter spells the newest user message as a block so it can carry
+ * the breakpoint. Both spellings are the same prompt, so they hash the same.
+ */
+function withTextBlockContent(value: unknown): unknown {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return value;
+  const item = value as Record<string, unknown>;
+  return typeof item.content === "string" && (item.role === "user" || item.role === "assistant")
+    ? { ...item, content: [{ type: "text", text: item.content }] }
+    : value;
+}
+
 function segment(kind: PromptWireSegmentKind, value: unknown): PromptWireSegment {
-  return { kind, hash: hash(withoutCacheMarkers(value)) };
+  return { kind, hash: hash(withoutCacheMarkers(withTextBlockContent(value))) };
 }
 
 /** Cut a rendered payload into the segments a provider caches in order: tools, system, messages. */
@@ -143,7 +168,7 @@ export function createPromptPrefixHarness(options: PromptPrefixHarnessOptions = 
       ? { supportsMidConvoSystemMessages: midConversationSystem, supportsAdditionalTools: midConversationSystem }
       : { supportsMidConvoSystemMessages: midConversationSystem, supportsMidConvoToolChanges: midConversationSystem },
   } as Model<Api>;
-  const journal: AgentMessage[] = [];
+  let journal: Promise<PiSessionPort> | undefined;
   const requests: RecordedPromptRequest[] = [];
   let networkCalls = 0;
   let turnNumber = 0;
@@ -174,21 +199,28 @@ export function createPromptPrefixHarness(options: PromptPrefixHarnessOptions = 
     let step = 0;
     const recorded: RecordedPromptRequest[] = [];
     core.setResponses(input.responses);
+    journal ??= new InMemorySessionRepo().create({ id: "prompt-prefix-harness" }).then((native) => createPiSessionPort(native));
+    const session = await journal;
+    // llm-client reads the chat so far back from its Pi journal each turn.
+    const history = (await session.buildContext()).messages;
+    const systemPrompt = "assembly" in input ? input.assembly.systemPrompt : input.systemPrompt;
+    const tools = "assembly" in input ? input.assembly.toolsFor(history) : input.tools;
+    const onDemandTools = "assembly" in input ? input.assembly.onDemandTools : undefined;
     const agentsInstructions = options.agentsInstructions
       ? await createAgentsInstructionRefresher({ ...options.agentsInstructions, revalidate: async () => {} })
       : undefined;
     const mcpServersSection = options.mcpServersSection ? createMcpServersSectionRefresher(options.mcpServersSection) : undefined;
     const generationOptions: GenerationContextOptions = {
       contextWindow: model.contextWindow,
-      systemPrompt: input.systemPrompt,
-      tools: input.tools,
+      systemPrompt,
+      tools,
       supportsImages: true,
       providerId: model.provider,
       modelId: model.id,
       retainsSystemUpdates: midConversationSystem,
     };
-    let initialMessages: AgentMessage[] = [...journal];
-    const head = createInitialSystemMessage(input.systemPrompt, input.tools.map(toToolDeclaration));
+    let initialMessages: AgentMessage[] = [...history];
+    const head = createInitialSystemMessage(systemPrompt, tools.map(toToolDeclaration));
     if (head) initialMessages = [head, ...initialMessages];
     const prepare = async <C extends { messages: AgentMessage[]; tools?: AgentTool[] }>(context: C): Promise<C> => {
       let prepared = context;
@@ -197,7 +229,7 @@ export function createPromptPrefixHarness(options: PromptPrefixHarnessOptions = 
       return prepared;
     };
     {
-      const prepared = await prepare({ messages: initialMessages, tools: [...input.tools] });
+      const prepared = await prepare({ messages: initialMessages, tools: [...tools] });
       if (prepared.messages !== initialMessages) {
         initialMessages = prepared.messages;
         updateGenerationContextOptions(generationOptions, prepared);
@@ -205,32 +237,44 @@ export function createPromptPrefixHarness(options: PromptPrefixHarnessOptions = 
     }
     const runtime = new PiAgentRuntimeHarness({
       convertToLlm,
-      initialState: { systemPrompt: input.systemPrompt, thinkingLevel: "off", tools: [...input.tools], messages: initialMessages, model },
+      initialState: { systemPrompt, thinkingLevel: "off", tools: [...tools], messages: initialMessages, model },
       transformContext: createGenerationContextTransform(generationOptions),
       prepareNextTurnWithContext: createPiTurnContextPreparation({
         generationOptions,
         attended: false,
-        prepareContext: (context) => prepare(context),
+        // The order llm-client prepares a step in: instruction sections, then tools a step loaded.
+        prepareContext: async (context) => {
+          const prepared = await prepare(context);
+          return onDemandTools ? (await onDemandTools.prepare(prepared as AgentContext)) as typeof prepared : prepared;
+        },
         onRecovery: () => {},
       }),
+      durability: {
+        session,
+        compaction: { models: createModels(), model, thinkingLevel: "off" },
+      },
       streamFn: async (requestModel, context, streamOptions) => {
         step += 1;
         const messages = context.messages as Message[];
+        const payload = await render(context);
+        const rendered = JSON.stringify(payload);
         const request: RecordedPromptRequest = {
           turn: thisTurn,
           step,
           fingerprint: fingerprintPromptPrefix({ messages, model: requestModel, cacheRetention: "short" }),
-          wire: promptWireSegments(await render(context)),
+          wire: promptWireSegments(payload),
+          carries: (text) => rendered.includes(JSON.stringify(text).slice(1, -1)),
         };
         recorded.push(request);
         requests.push(request);
         return core.streamSimple(requestModel, context, streamOptions);
       },
     });
-    await runtime.prompt(input.prompt);
-    const error = runtime.state.errorMessage;
-    if (error) throw new Error(`Prompt prefix harness turn ${thisTurn} failed: ${error}`);
-    journal.push(...runtime.state.messages.slice(initialMessages.length).filter((message) => message.role !== "system"));
+    const outcome = await runtime.runManaged({
+      kind: "append-and-run",
+      message: { role: "user", content: input.prompt, timestamp: Date.now() },
+    });
+    if (outcome.kind !== "completed") throw new Error(`Prompt prefix harness turn ${thisTurn} ended ${outcome.kind}.`);
     return recorded;
   }
 

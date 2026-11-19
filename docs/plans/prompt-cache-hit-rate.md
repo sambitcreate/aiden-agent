@@ -82,29 +82,30 @@ At the end, four Opus high reviewers review the whole PR, and a CI watcher owns 
 - The last miss clears when a later request reads from the cache, and on compaction. The panel's "from cache" figure, 0% included, appears only for a chat with cache activity, a documented cache or a measured miss, so a provider with no cache shows none.
 - `aiden serve` feeds the `cache_warm` entries Pi's cache warmer writes to the session into the telemetry before each request, so warming restarts the lifetime there too.
 - The desktop logs each miss at debug level and adds `lastCacheMiss {source, at}` to the context pressure feed. `aiden serve` passes no `cacheRetention` and writes the miss to stderr only when `AIDEN_PROMPT_CACHE_DEBUG=1` is set. The field is not part of the Remote context pressure contract.
-- The harness drives the runtime layer that llm-client builds, not llm-client itself, because llm-client needs Electron, config stores and the durable journal. That layer covers:
-  - the `createInitialSystemMessage` head over a modelled journal
+- llm-client's per-request system prompt and tool list now come from `main/services/chat-prompt-assembly.ts`: `buildWorkspaceChatBasePrompt` for the base prompt, and `assembleChatPrompt` for the extension contributions, the codemode partition and on-demand tools (`toolsFor(history)`). llm-client and the harness both call it, so a harness case runs the same builders as a chat. The Bot runtime's fixed sections come from `composeBotSystemSections` in `bot-system-prompt.ts`, which `bot-session-main.ts` and the harness share.
+- The harness runs each turn through `PiAgentRuntimeHarness.runManaged` over a real durable session (`InMemorySessionRepo`), the path a desktop chat takes. With it come:
   - the real AGENTS.md and `mcp_servers` refreshers, applied first and between tool turns
   - `createGenerationContextTransform`
-  - `PiAgentRuntimeHarness`
   - the Pi Anthropic Messages and OpenAI Responses adapters, rendering offline with zero network calls
-- The tool-list case models browser discovery as a changed tool list, and the harness does not yet cover per-request hook context (phase 3).
+- Before each run, `prepareForPrompt` rebuilds the context from the journal and `installCompactedMessages` folds the head and the system patches of the turn's first prepare into one system message. So a section patch added at turn start ends up in the head on every wire, including those with mid-conversation system messages. The phase 0 harness did not model this fold, which made the unchanged MCP section look like a miss on OpenAI Responses.
+- Each changing case is driven through the real builders: branch and permission through the base prompt, memory through `createMemoryExtension`, on-demand tools through `load_tools`, and Bot open work through `composeBotSystemSections` and `renderBotOpenWork`. Each `todo` case also asserts, outside the stability check, that the changed value still reaches the request, so deleting the value cannot pass as a fix.
+- The Bot case joins the composed sections into one prompt. Production sends them as keyed Pi Durable sections, so the real telemetry label for that miss may name the section, not `system:base`.
+- Browser discovery is not modelled: it lives in llm-client's generation setup, outside the assembly. Per-request hook context is not modelled either (phase 3).
 
 **Already stable:**
 
-- a plain two-turn chat on both wires
+- a plain two-turn chat on Anthropic Messages, Anthropic Messages with in-place system messages, and OpenAI Responses with in-place system messages
+- an unchanged MCP section on all three wires, because it is folded into the head at turn start
 - a tool loop within one turn
 - a chat with no AGENTS.md
-- an unchanged MCP section on the Anthropic wire. Anthropic merges system messages into one block, so the bytes are unchanged, but the transcript fingerprint still reports `messages`.
+- an on-demand tool loaded in one turn, which stays declared from the start of the next (`initialTools`)
 
 **Baseline: the `todo` cases, all failing today.** Each row gives the first changed wire segment and what the telemetry reports.
 
 | Case | First changed segment | Telemetry reports |
 | --- | --- | --- |
-| AGENTS.md nonce, Anthropic | system | `messages` |
-| AGENTS.md nonce, OpenAI mid-conversation system | messages | `messages` |
-| MCP section, OpenAI mid-conversation system | messages | `messages` |
-| Tool list after browser discovery | tools | `tools` |
+| AGENTS.md nonce, all three wires | system | `system:agents-instructions` |
+| On-demand tool loaded mid-turn (step 2 against step 1) | tools | `tools` |
 | Bot open work in the base prompt | system | `system:base` |
 | Branch switch | system | `system:base` |
 | Permission mode change | system | `system:base` |
@@ -117,6 +118,7 @@ At the end, four Opus high reviewers review the whole PR, and a CI watcher owns 
 
 - `agents-instructions.ts` draws a `randomUUID` nonce for every request, so the AGENTS.md section differs every turn. `acp/prompt.ts:31-47` already uses a fixed nonce, but only for ACP.
 - `llm-client.ts` around 4148-4164 appends `sys_agents` and `sys_mcp` after the journaled head without journaling them, so they are rebuilt and can reorder or change.
+  - Phase 0 found that a patch added at turn start is folded into the head before the run, so an unchanged MCP section is already stable across turns on every wire. What remains for MCP is a section that changes in the middle of a turn, which the late-admission check below covers.
 
 **Changes**
 
@@ -135,7 +137,7 @@ At the end, four Opus high reviewers review the whole PR, and a CI watcher owns 
 - `agents-instructions` unit test:
   - The same chat gets the same nonce on every call; different chats get different nonces.
   - A file containing a guessed nonce still cannot close the section, which is the existing injection oracle extended.
-- In `prompt-prefix-stability.test.ts`, switch on: "AGENTS.md section is identical across turns" and "MCP section is identical across turns".
+- In `prompt-prefix-stability.test.ts`, switch on "AGENTS.md section is identical across turns" for all three wires. The MCP case already passes (phase 0).
 - The MCP late-admission test, whatever it finds.
 
 ## Phase 2: a fixed tool list
@@ -172,6 +174,7 @@ At the end, four Opus high reviewers review the whole PR, and a CI watcher owns 
 **Tests**
 
 - Prefix test, switched on: "tool list identical across turns" for a workspace chat, a Bot chat, an unattended follow-up and a remote-audience chat.
+- Prefix test, switched on: "loading a tool mid-turn leaves the next step's prefix unchanged" and "Bot open work changing between turns does not change system".
 - `bot-extension` behavioral test: a disallowed tool is listed, its call is blocked before execution with the stated reason, and no side effect happens.
 - Browser discovery test: discovery on turn 1 still holds on turn 2 after a restart that reloads the journal.
 - MCP schema test: two servers that send the same schema with different key orders produce identical tool bytes.
