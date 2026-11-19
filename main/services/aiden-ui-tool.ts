@@ -183,8 +183,10 @@ export function createRenderUiTool(options: RenderUiToolOptions): AgentTool {
             content: [
               {
                 type: "text",
-                text: replacing && !presented
-                  ? `Aiden could not show this redraw of the visual "${title}" (${nodes} components); the person still sees the version drawn earlier in this reply, and later edits apply to that version's markup.`
+                text: !presented
+                  ? replacing
+                    ? `Aiden could not show this redraw of the visual "${title}" (${nodes} components); the person still sees the version drawn earlier in this reply, and later edits apply to that version's markup.`
+                    : `Aiden could not show the visual "${title}" (${nodes} components); the person does not see it, and edits later in this reply have no markup of it to change.`
                   : `${replacing ? `Replaced the visual "${title}" in place; the person now sees this version` : `Rendered visual "${title}"`} (${nodes} components).${describeDiagnostics(compiled.diagnostics)}${describeVisualCheck(visual)}`,
               },
             ],

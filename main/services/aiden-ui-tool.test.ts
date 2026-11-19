@@ -153,6 +153,14 @@ test("a same-title redraw the host does not show is not reported as drawn, and l
   assert.match(presented[1]!.fallbackText, /three/u);
 });
 
+test("a first draw the host does not show is not reported as drawn, and is not kept for edits", async () => {
+  const instance = createRenderUiTool({ namespace: "gen-1", existingChatUiCount: 0, onUiVisual: () => false });
+  const hidden = text(await instance.execute("first", { title: "Board", markup: "<Visual><Text>one</Text></Visual>" }));
+  assert.doesNotMatch(hidden, /Rendered|Replaced/u);
+  assert.match(hidden, /could not show the visual "Board"[^]*does not see it/u);
+  await assert.rejects(instance.execute("second", { title: "Board", edits: [{ old: "one", new: "two" }] }));
+});
+
 test("render_ui edits refuse an old that matches twice once line breaks read alike, that ends inside a CRLF, or that cuts an emoji in two", async () => {
   const { instance, presented } = tool();
   await instance.execute("first", {
