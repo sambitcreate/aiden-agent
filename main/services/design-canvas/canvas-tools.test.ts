@@ -395,11 +395,17 @@ test("canvas_comment replies on a comment, resolves it, or both, and tells open 
 });
 
 test("a turn makes at most its canvas call budget, and a chat that left design mode gets none", async (t) => {
-  const { call, setAvailable } = await setup(t);
-  for (let index = 0; index < DESIGN_CANVAS_CALLS_PER_TURN; index += 1) {
+  const { call, store, setAvailable } = await setup(t);
+  // One canvas_build is one call, however much it draws.
+  const items = Array.from({ length: 5 }, (_, index) => ({ kind: "shape", text: `Step ${index}` }));
+  assert.equal((await call("canvas_build", { items })).status, "built");
+  for (let index = 1; index < DESIGN_CANVAS_CALLS_PER_TURN; index += 1) {
     assert.notEqual((await call("canvas_read")).status, "limit_reached");
   }
-  assert.equal((await call("canvas_read")).status, "limit_reached");
+  const over = await call("canvas_place_frame", { kind: "note", title: "One more" });
+  assert.equal(over.status, "limit_reached");
+  assert.match(over.message, /do not retry/iu, "Aiden is told to stop and explain rather than try again");
+  assert.equal((await store.get("chat-1")).frames.length, 5);
 
   const fresh = await setup(t);
   fresh.setAvailable(false);
@@ -1108,6 +1114,93 @@ test("nextTo puts a frame beside another, past any frame in the way, and in that
 
   assert.equal((await call("canvas_place_frame", { kind: "note", title: "X", nextTo: { frameId: page.frame.id }, x: 1, y: 1 })).status, "error");
   assert.equal((await call("canvas_place_frame", { kind: "note", title: "X", nextTo: { frameId: "missing" } })).status, "error");
+});
+
+test("canvas_build draws boxes and the arrows between them in one call, and refs name its boxes", async (t) => {
+  const { store, broadcasts, call } = await setup(t);
+  const page = await call("canvas_place_frame", { kind: "file", title: "Home", path: "design/home.html", x: 0, y: 0 });
+  const built = await call("canvas_build", {
+    nextTo: { frameId: page.frame.id, side: "below" },
+    groupTitle: "Sign-up flow",
+    items: [
+      { ref: "start", kind: "shape", shape: "oval", text: "Start" },
+      { ref: "form", kind: "shape", text: "Fill in the form", fill: "yellow" },
+      { ref: "done", kind: "shape", text: "Done", fill: "green" },
+      { kind: "connector", from: { ref: "start" }, to: { ref: "form" } },
+      { ref: "last", kind: "connector", from: { ref: "form" }, to: { ref: "done" }, arrow: "both" },
+      { kind: "connector", from: { ref: "done" }, to: { frameId: "design/home.html" }, color: "red" },
+    ],
+  });
+  assert.equal(built.status, "built");
+  assert.equal(built.placed, 6);
+  assert.deepEqual(Object.keys(built.ids).sort(), ["done", "form", "last", "start"]);
+  assert.equal(built.unnamed.length, 2);
+  assert.equal(broadcasts.length, 2, "the whole drawing is one change");
+
+  const doc = await store.get("chat-1");
+  const byId = new Map(doc.frames.map((frame) => [frame.id, frame]));
+  const [start, form, done] = ["start", "form", "done"].map((ref) => byId.get(built.ids[ref])!);
+  assert.deepEqual([start!.shape, start!.text, form!.fill, done!.fill], ["oval", "Start", "yellow", "green"]);
+  // Boxes without x and y go in a row, 64 apart and top-aligned, below the page.
+  assert.equal(form!.x, start!.x + start!.w + 64);
+  assert.equal(done!.x, form!.x + form!.w + 64);
+  assert.ok(start!.y === form!.y && form!.y === done!.y);
+  assert.ok(start!.y >= page.frame.box.y + page.frame.box.h + 64);
+  const last = byId.get(built.ids.last)!;
+  assert.deepEqual(last.ends!.map((end) => end.frameId), [form!.id, done!.id]);
+  assert.equal(last.arrow, "both");
+  const toPage = built.unnamed.map((id: string) => byId.get(id)!).find((frame: { color?: string }) => frame.color === "red")!;
+  assert.deepEqual(toPage.ends!.map((end: { frameId?: string }) => end.frameId), [done!.id, page.frame.id], "an arrow can join a frame already on the canvas");
+  // The new group holds the drawing and fits around it.
+  const group = byId.get(built.group.id)!;
+  assert.equal(group.title, "Sign-up flow");
+  for (const frame of [start, form, done, last]) assert.equal(frame!.groupId, group.id);
+  assert.ok(group.x < start!.x && group.x + group.w > done!.x + done!.w);
+});
+
+test("canvas_build changes nothing when any part is refused, and places a drawing at x and y or in a group", async (t) => {
+  const { store, call } = await setup(t);
+  const before = (await store.get("chat-1")).revision;
+  const unknown = await call("canvas_build", {
+    items: [
+      { ref: "a", kind: "shape", text: "A" },
+      { kind: "connector", from: { ref: "a" }, to: { ref: "b" } },
+    ],
+  });
+  assert.equal(unknown.status, "error");
+  assert.match(unknown.message, /"b"/u);
+  const missing = await call("canvas_build", {
+    items: [
+      { ref: "a", kind: "shape", text: "A" },
+      { kind: "connector", from: { ref: "a" }, to: { frameId: "nowhere" } },
+    ],
+  });
+  assert.equal(missing.status, "error", "an end on a frame that is not there refuses the whole drawing");
+  assert.equal((await call("canvas_build", { items: [{ ref: "a", kind: "text", text: "A" }, { ref: "a", kind: "text", text: "B" }] })).status, "error");
+  assert.equal((await call("canvas_build", { items: [{ kind: "text" }] })).status, "error", "a text item needs text");
+  const after = await store.get("chat-1");
+  assert.equal(after.revision, before);
+  assert.equal(after.frames.length, 0);
+
+  const placed = await call("canvas_build", {
+    x: 1000,
+    y: 2000,
+    items: [
+      { ref: "a", kind: "shape", text: "A", x: 0, y: 0 },
+      { ref: "b", kind: "note", text: "B", x: 300, y: 200 },
+    ],
+  });
+  let doc = await store.get("chat-1");
+  const a = doc.frames.find((frame) => frame.id === placed.ids.a)!;
+  const b = doc.frames.find((frame) => frame.id === placed.ids.b)!;
+  assert.deepEqual([a.x, a.y, b.x, b.y], [1000, 2000, 1300, 2200], "item positions are relative to the drawing's x and y");
+
+  const board = await call("canvas_place_frame", { kind: "frame", title: "Board", x: 0, y: 5000, w: 900, h: 300 });
+  const inside = await call("canvas_build", { groupId: board.frame.id, items: [{ ref: "c", kind: "shape", text: "C" }] });
+  doc = await store.get("chat-1");
+  const c = doc.frames.find((frame) => frame.id === inside.ids.c)!;
+  assert.equal(c.groupId, board.frame.id);
+  assert.ok(c.x >= 0 && c.y >= 5000 && c.x + c.w <= 900, "it lands inside the artboard");
 });
 
 test("canvas_duplicate copies a frame beside it, and a group with its members and the arrows between them", async (t) => {
