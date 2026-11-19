@@ -23,6 +23,7 @@ import {
   modelCallRetryDelayMs,
 } from "./model-call-retry.js";
 import { modelRetainsSystemUpdates, retainedTailSystemTokens } from "./generation-context.js";
+import { withoutMemoryFacts, withoutMemoryFactsBranch } from "./chat-frozen-state.js";
 import { isUsageLimitFailure } from "./usage-limit-core.js";
 import type { PiSessionEntry, PiSessionPort } from "./pi-session-port.js";
 
@@ -695,10 +696,27 @@ export class PiCompactionCoordinator {
       } catch {
         customInstructions = undefined;
       }
-      const compileLocal = () => (this.options.compileVcc ?? compileVccInWorker)(
-        { branch, preparation, contextWindow: this.options.model.contextWindow },
-        abortController.signal,
-      );
+      // The summary is permanent and outlives the memory facts it could
+      // quote, so no fact line in a `<state_update>` reaches the summarizer;
+      // the head rebuilt after the compaction states the facts still
+      // approved. The retained tail is kept as it is.
+      const summaryPreparation: CompactionPreparation = {
+        ...preparation,
+        messagesToSummarize: withoutMemoryFacts(preparation.messagesToSummarize),
+        turnPrefixMessages: withoutMemoryFacts(preparation.turnPrefixMessages),
+      };
+      const compileLocal = async (): Promise<CompactResult> => {
+        const local = await (this.options.compileVcc ?? compileVccInWorker)(
+          {
+            branch: withoutMemoryFactsBranch(branch),
+            // The compiler matches the tail against the branch, so both lose the same lines.
+            preparation: { ...summaryPreparation, retainedTail: withoutMemoryFacts(preparation.retainedTail) },
+            contextWindow: this.options.model.contextWindow,
+          },
+          abortController.signal,
+        );
+        return { ...local, retainedTail: preparation.retainedTail };
+      };
       const summarize = async (input: CompactionPreparation): Promise<CompactResult> => {
         const compactResult = await compact(
           input,
@@ -722,7 +740,7 @@ export class PiCompactionCoordinator {
         result = await compileLocal();
       } else {
         try {
-          result = await summarize(preparation);
+          result = await summarize(summaryPreparation);
         } catch (error) {
           if (!(error instanceof CompactionSummaryBudgetError)) throw error;
           budgetFailure = error;
@@ -772,12 +790,12 @@ export class PiCompactionCoordinator {
             }
             throw new VccError("insufficient_reduction");
           };
-          const messagesToSummarize = await reduceChannel("history", preparation.messagesToSummarize);
+          const messagesToSummarize = await reduceChannel("history", summaryPreparation.messagesToSummarize);
           const turnPrefixMessages = preparation.isSplitTurn
-            ? await reduceChannel("turn-prefix", preparation.turnPrefixMessages)
-            : preparation.turnPrefixMessages;
+            ? await reduceChannel("turn-prefix", summaryPreparation.turnPrefixMessages)
+            : summaryPreparation.turnPrefixMessages;
           recoveryStage = "semantic-summary";
-          result = await summarize({ ...preparation, messagesToSummarize, turnPrefixMessages });
+          result = await summarize({ ...summaryPreparation, messagesToSummarize, turnPrefixMessages });
           recoveryStage = "checkpoint";
         }
       }

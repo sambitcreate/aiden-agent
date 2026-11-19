@@ -45,6 +45,8 @@ import { createPiSessionPort, type PiSessionPort } from "./pi-session-port.js";
 import { migratePiSessionJournal } from "./pi-session-migration.js";
 import { upgradeOldPiV4File } from "./pi-session-v4-upgrade.js";
 import { hookContextMessage } from "./workspace-chat-hooks.js";
+import { chatStateRecord, chatStateUpdateMessage, type ChatTurnState } from "./chat-frozen-state.js";
+import { compileVcc } from "./pi-vcc/compiler.js";
 
 const ZERO_COST = {
   input: 0,
@@ -162,6 +164,89 @@ test("Pi coordinator appends a native checkpoint and rebuilds from it", async ()
     events.map((event) => event.type),
     ["start", "end"],
   );
+});
+
+/**
+ * A chat whose older history holds a `<state_update>` that added a memory
+ * fact the person has since removed, and whose recent tail holds one that
+ * added a fact still approved.
+ */
+async function historyWithMemoryUpdates(session: PiSessionPort, model: Model<Api>): Promise<AssistantMessage> {
+  const state: ChatTurnState = { branch: "main", permission: "ask", memory: "", canvas: "" };
+  const withFact = (line: string): ChatTurnState => ({ ...state, memory: `Memory:\n${line}` });
+  await session.appendMessage(user(`old: ${"x".repeat(1_200)}`, 1));
+  await session.appendMessage(
+    chatStateUpdateMessage(chatStateRecord(state), withFact("- [memory:m2] REMOVED_FACT_CANARY deploys on Fridays."), 2),
+  );
+  await session.appendMessage(assistant(model, { input: 400, text: "middle", timestamp: 3 }));
+  await session.appendMessage(user(`latest: ${"y".repeat(500)}`, 4));
+  await session.appendMessage(
+    chatStateUpdateMessage(chatStateRecord(state), withFact("- [memory:m3] KEPT_FACT_CANARY uses pnpm."), 5),
+  );
+  const last = assistant(model, { input: 950, text: "answer", timestamp: 6 });
+  await session.appendMessage(last);
+  return last;
+}
+
+for (const trigger of ["automatic", "manual"] as const) {
+  test(`${trigger === "automatic" ? "an" : "a"} ${trigger} compaction never sends a memory fact in a state update to the summarizer`, async () => {
+    const { faux, models, model } = compactionFixture();
+    const requests: string[] = [];
+    faux.setResponses([
+      (context) => {
+        requests.push(JSON.stringify(context));
+        return fauxAssistantMessage(structuredSummary("Continue."));
+      },
+    ]);
+    const session = await memorySession(`memory-facts-${trigger}`);
+    const last = await historyWithMemoryUpdates(session, model);
+    const coordinator = new PiCompactionCoordinator({
+      session,
+      models,
+      model,
+      thinkingLevel: "off",
+      settings: { enabled: true, reserveTokens: 100, keepRecentTokens: 100 },
+    });
+
+    const result = trigger === "automatic" ? await coordinator.check(last) : await coordinator.compact();
+
+    assert.equal(result.compacted, true, result.errorMessage);
+    assert.equal(requests.length, 1);
+    assert.match(requests[0]!, /old: x/u, "the older history is summarized");
+    assert.doesNotMatch(requests[0]!, /REMOVED_FACT_CANARY|KEPT_FACT_CANARY|\[memory:/u);
+    const checkpoint = [...(await session.getEntries())].reverse().find((entry) => entry.type === "compaction");
+    assert.ok(checkpoint?.type === "compaction");
+    assert.doesNotMatch(checkpoint.summary, /REMOVED_FACT_CANARY/u);
+    assert.match(
+      JSON.stringify(checkpoint.retainedTail),
+      /KEPT_FACT_CANARY/u,
+      "the retained tail is kept as written; each turn's reading removes what is no longer approved",
+    );
+  });
+}
+
+test("a local compaction keeps a retained tail whose state update carries a memory fact", async () => {
+  const { faux, models, model } = compactionFixture();
+  const session = await memorySession("memory-facts-local");
+  const last = await historyWithMemoryUpdates(session, model);
+  const result = await new PiCompactionCoordinator({
+    session,
+    models,
+    model,
+    thinkingLevel: "off",
+    engine: "vcc",
+    settings: { enabled: true, reserveTokens: 100, keepRecentTokens: 100 },
+    compileVcc: async (input) => compileVcc(input) as unknown as Awaited<
+      ReturnType<NonNullable<ConstructorParameters<typeof PiCompactionCoordinator>[0]["compileVcc"]>>
+    >,
+  }).check(last);
+
+  assert.equal(result.compacted, true, result.errorMessage);
+  assert.equal(faux.state.callCount, 0);
+  const checkpoint = [...(await session.getEntries())].reverse().find((entry) => entry.type === "compaction");
+  assert.ok(checkpoint?.type === "compaction");
+  assert.doesNotMatch(checkpoint.summary, /REMOVED_FACT_CANARY|KEPT_FACT_CANARY/u);
+  assert.match(JSON.stringify(checkpoint.retainedTail), /KEPT_FACT_CANARY/u);
 });
 
 test("summary instructions reach the summary request once the compaction starts", async () => {
