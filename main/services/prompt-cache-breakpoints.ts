@@ -9,16 +9,19 @@
  *   tools and the stable system prompt cached.
  * - Bedrock Converse: Pi puts cachePoints after the system prompt and on the
  *   last user message only. A cachePoint after the tools caches the tool list
- *   on its own.
+ *   on its own. Only for a model whose ID or name says Claude: other Bedrock
+ *   models (Nova) take no tools cachePoint, and an application inference
+ *   profile with AWS_BEDROCK_FORCE_CACHE=1 gets one only when its name says so.
  *
  * Both are pure payload rewrites: nothing is added when the request carries no
  * cache marker (caching off, or a provider without caching), when the wire
  * already holds four markers, or when the system text does not start with the
  * stable head the chat registered. The stable head is registered per chat
  * (the request's `sessionId`), so foreground requests, cache warming and side
- * calls that replay the chat's request place the same breakpoints.
+ * calls that replay the chat's request place the same breakpoints. Pi's
+ * session-resource cleanup (chat delete) forgets a chat's head.
  */
-import type { ProviderStreams } from "@earendil-works/pi-ai";
+import { registerSessionResourceCleanup, type Api, type Model, type ProviderStreams } from "@earendil-works/pi-ai";
 
 type StreamSimple = ProviderStreams["streamSimple"];
 
@@ -29,6 +32,11 @@ export const MAX_BEDROCK_CACHE_POINTS = 4;
 const MAX_REGISTERED_CHATS = 256;
 
 const stableHeads = new Map<string, string>();
+
+registerSessionResourceCleanup((sessionId) => {
+  if (sessionId === undefined) stableHeads.clear();
+  else stableHeads.delete(sessionId);
+});
 
 /**
  * Remember the chat's stable head: the system prompt before its frozen-state
@@ -86,7 +94,9 @@ export function bedrockCachePoints(payload: unknown): number {
 
 /**
  * The payload with the stable head in its own cached system block, or
- * undefined when nothing changes.
+ * undefined when nothing changes. The head block keeps the blank line that
+ * separated it from the tail, so the two blocks concatenate to the original
+ * system text byte for byte.
  */
 export function withStableHeadBreakpoint(payload: unknown, stableHead: string | undefined): Record<string, unknown> | undefined {
   if (!stableHead || !isRecord(payload) || !Array.isArray(payload.system) || payload.system.length !== 1) return undefined;
@@ -98,17 +108,29 @@ export function withStableHeadBreakpoint(payload: unknown, stableHead: string | 
   return {
     ...payload,
     system: [
-      { type: "text", text: stableHead, cache_control: { ...block.cache_control } },
+      { type: "text", text: boundary, cache_control: { ...block.cache_control } },
       { ...block, text: block.text.slice(boundary.length) },
     ],
   };
+}
+
+/** Whether a Bedrock model's ID or name says Claude, matched the way Pi matches it. */
+export function isBedrockClaudeModel(model: Pick<Model<Api>, "id" | "name">): boolean {
+  return [model.id, model.name].some((value) => {
+    const lower = value?.toLowerCase() ?? "";
+    return lower.includes("claude") || lower.replace(/[\s_.:]+/g, "-").includes("claude");
+  });
 }
 
 /**
  * The payload with a cachePoint after the declared tools, or undefined when
  * nothing changes. Shaped like the system cachePoint, so both share a TTL.
  */
-export function withBedrockToolsCachePoint(payload: unknown): Record<string, unknown> | undefined {
+export function withBedrockToolsCachePoint(
+  payload: unknown,
+  model: Pick<Model<Api>, "id" | "name">,
+): Record<string, unknown> | undefined {
+  if (!isBedrockClaudeModel(model)) return undefined;
   if (!isRecord(payload) || !isRecord(payload.toolConfig) || !Array.isArray(payload.toolConfig.tools)) return undefined;
   const tools = payload.toolConfig.tools as unknown[];
   if (!tools.some((tool) => isRecord(tool) && "toolSpec" in tool)) return undefined;
@@ -127,9 +149,10 @@ export function withPromptCacheBreakpointsPayload(
   payload: unknown,
   api: string,
   stableHead: string | undefined,
+  model: Pick<Model<Api>, "id" | "name">,
 ): Record<string, unknown> | undefined {
   if (api === "anthropic-messages") return withStableHeadBreakpoint(payload, stableHead);
-  if (api === "bedrock-converse-stream") return withBedrockToolsCachePoint(payload);
+  if (api === "bedrock-converse-stream") return withBedrockToolsCachePoint(payload, model);
   return undefined;
 }
 
@@ -147,7 +170,7 @@ export function withPromptCacheBreakpoints(streamFn: StreamSimple): StreamSimple
     return streamFn(model, context, {
       ...options,
       onPayload: async (payload, payloadModel) => {
-        const rewritten = withPromptCacheBreakpointsPayload(payload, payloadModel.api, stableHead);
+        const rewritten = withPromptCacheBreakpointsPayload(payload, payloadModel.api, stableHead, payloadModel);
         const current = rewritten ?? payload;
         const hostReplacement = await hostOnPayload?.(current, payloadModel);
         return hostReplacement ?? rewritten;

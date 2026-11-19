@@ -58,7 +58,7 @@ import { createAskUserQuestionExtension, shouldEnableAskUserQuestionExtension } 
 import { ROUTINE_NOTES_TOOL } from "./bot-runtime/bot-tool-policy.js";
 import type { PiAgentRuntimeExtension } from "./pi-agent-runtime-harness.js";
 import type { ApprovalWorkspaceFields } from "../../renderer/shared/approval-mode.js";
-import type { Workspace } from "./types.js";
+import type { StoredProvider, Workspace } from "./types.js";
 import { currentWorkspaceApproval, generationApprovalPolicy, legacyAccessOf } from "./approval-gate/run-approval.js";
 import { workspaceToolApproval } from "./approval-gate/workspace-tool-approval.js";
 import {
@@ -73,6 +73,10 @@ import {
   type RecordedPromptRequest,
 } from "./prompt-prefix-harness.js";
 import { OLDER_COMPUTER_SCREENSHOT_NOTE } from "./screenshot-trimming.js";
+import { createModels, normalizeContext, type Api, type Model } from "@earendil-works/pi-ai";
+import { resolveModelRuntimeWith } from "./model-runtime-core.js";
+import { CONSERVATIVE_RUNTIME_LIMITS } from "./models-catalog-core.js";
+import { MAX_ANTHROPIC_CACHE_BREAKPOINTS, anthropicCacheBreakpoints, rememberStableHead } from "./prompt-cache-breakpoints.js";
 
 function textTool(name: string, description: string, output = "ok"): AgentTool {
   return {
@@ -1301,4 +1305,58 @@ describe("prompt prefix stability: causes fixed by later phases", () => {
     assert.deepEqual(carried(requests[10]!), [7, 8, 9, 10]);
     assert.ok(requests[10]!.carries(OLDER_COMPUTER_SCREENSHOT_NOTE), "a cut screenshot leaves its note");
   });
+});
+
+test("a composed workspace turn sends its stable head as the fourth Anthropic breakpoint", async () => {
+  const assembly = await workspaceChat({
+    extensions: [await createMemoryExtension({ store: memoryStore([memoryFact("m1", "Prefers short answers.")]), scope: memoryScope })],
+  });
+  assert.ok(assembly.stableHead, "the memory block is the prompt's frozen-state tail");
+  const chatId = "stable-head-wiring";
+  // The registration llm-client makes when the turn starts.
+  rememberStableHead(chatId, assembly.stableHead);
+
+  const { anthropicMessagesApi } = await import("@earendil-works/pi-ai/api/anthropic-messages.lazy");
+  const { getBuiltinModels } = await import("@earendil-works/pi-ai/providers/all");
+  const native = getBuiltinModels("anthropic")[0] as Model<Api>;
+  assert.ok(native, "the fixture uses one of Pi's own Anthropic model records");
+  const provider: StoredProvider = {
+    id: "anthropic", kind: "anthropic", label: "Anthropic", baseUrl: native.baseUrl,
+    models: [native.id], needsKey: true, isPreset: true,
+  };
+  const unused = (): never => { throw new Error("not called"); };
+  const runtime = await resolveModelRuntimeWith({
+    getProvider: async () => undefined,
+    getApiKey: async () => null,
+    resolveRuntimeLimits: async () => CONSERVATIVE_RUNTIME_LIMITS,
+    codex: { models: createModels(), prepareRuntimeModel: async () => unused(), streamSimple: unused },
+    native: {
+      models: createModels(),
+      getProvider: (providerId) => (providerId === provider.id ? provider : undefined),
+      getModel: (providerId, modelId) => (providerId === provider.id && modelId === native.id ? native : undefined),
+      streamSimple: anthropicMessagesApi().streamSimple,
+    },
+  }, provider.id, native.id, undefined, chatId);
+
+  let body: Record<string, unknown> | undefined;
+  await runtime.streams.streamSimple(runtime.model, normalizeContext({
+    systemPrompt: assembly.systemPrompt,
+    tools: assembly.toolsFor([]),
+    messages: [{ role: "user", content: "Synthetic wiring check", timestamp: 1 }],
+  }), {
+    apiKey: "offline-fixture",
+    sessionId: chatId,
+    fetch: async (_url: unknown, init?: RequestInit) => {
+      body ??= JSON.parse(String(init?.body)) as Record<string, unknown>;
+      throw new Error("captured before network");
+    },
+  }).result();
+  assert.ok(body, "Pi built a request");
+  assert.equal(anthropicCacheBreakpoints(body), MAX_ANTHROPIC_CACHE_BREAKPOINTS);
+  const system = body.system as Array<{ text: string; cache_control?: unknown }>;
+  assert.equal(system.length, 2);
+  assert.equal(system[0]!.text, `${assembly.stableHead}\n\n`);
+  assert.ok(system[0]!.cache_control, "the stable head is cached on its own");
+  assert.match(system[1]!.text, /Prefers short answers\./u, "the memory tail follows the head");
+  assert.equal(system.map((block) => block.text).join(""), assembly.systemPrompt, "the model reads the same system text");
 });

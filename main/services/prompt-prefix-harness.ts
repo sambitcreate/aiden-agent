@@ -64,6 +64,7 @@ import { AIDEN_CHAT_MESSAGE_MARKER, syncChatMessagesToPiSession } from "./pi-com
 import { createPiSessionPort, type PiSessionPort } from "./pi-session-port.js";
 import { InMemorySessionRepo } from "./pi-session-repository-port.js";
 import { createPiTurnContextPreparation } from "./pi-turn-context.js";
+import { rememberStableHead, withPromptCacheBreakpoints } from "./prompt-cache-breakpoints.js";
 
 export type PromptPrefixWire = "anthropic-messages" | "openai-responses" | "google-generative-ai";
 export type PromptWireSegmentKind = "tools" | "system" | "messages";
@@ -341,7 +342,11 @@ function pickRenderOptions(request: PromptRenderOptions): PromptRenderOptions {
 }
 
 export function createPromptRequestRecorder(
-  options: Pick<PromptPrefixHarnessOptions, "wire" | "midConversationSystem"> & { model: Model<Api> },
+  options: Pick<PromptPrefixHarnessOptions, "wire" | "midConversationSystem"> & {
+    model: Model<Api>;
+    /** The chat whose registered stable head the cache breakpoints use. */
+    chatId?: string;
+  },
 ): PromptRequestRecorder {
   const wireApi = options.wire ?? "anthropic-messages";
   const midConversationSystem = options.midConversationSystem ?? false;
@@ -369,8 +374,17 @@ export function createPromptRequestRecorder(
     const globalFetch = wireApi === "google-generative-ai" ? globalThis.fetch : undefined;
     if (globalFetch) globalThis.fetch = refuse;
     try {
-      await streams.streamSimple(model, context, {
+      // As the model runtime streams: the breakpoint wrapper looks up the
+      // chat's stable head, and the adapter sees only the request's own session ID.
+      const chatId = options.chatId ?? request?.sessionId;
+      const breakpointed = withPromptCacheBreakpoints((renderedModel, renderedContext, streamOptions) => {
+        const { sessionId: _chat, ...rest } = streamOptions ?? {};
+        return streams.streamSimple(renderedModel, renderedContext,
+          request?.sessionId !== undefined ? { ...rest, sessionId: request.sessionId } : rest);
+      });
+      await breakpointed(model, context, {
         ...(request ? pickRenderOptions(request) : {}),
+        ...(chatId !== undefined ? { sessionId: chatId } : {}),
         apiKey: "offline-noncredential",
         cacheRetention: request?.cacheRetention ?? "short",
         maxRetries: 0,
@@ -412,7 +426,7 @@ export function createPromptPrefixHarness(options: PromptPrefixHarnessOptions = 
   const midConversationSystem = options.midConversationSystem ?? false;
   const core = createFauxCore({ provider: "prompt-prefix-harness" });
   const model = core.getModel();
-  const recorder = createPromptRequestRecorder({ ...options, model });
+  const recorder = createPromptRequestRecorder({ ...options, model, chatId: HARNESS_CHAT_ID });
   let journal: Promise<PiSessionPort> | undefined;
   const requests: RecordedPromptRequest[] = [];
   let turnNumber = 0;
@@ -481,6 +495,8 @@ export function createPromptPrefixHarness(options: PromptPrefixHarnessOptions = 
     // llm-client reads the chat so far back from its Pi journal each turn.
     const history = (await session.buildContext()).messages;
     const systemPrompt = "assembly" in resolved ? resolved.assembly.systemPrompt : resolved.systemPrompt;
+    // As llm-client: the turn registers its stable head for the breakpoints.
+    rememberStableHead(HARNESS_CHAT_ID, "assembly" in resolved ? resolved.assembly.stableHead : undefined);
     const tools = "assembly" in resolved ? resolved.assembly.toolsFor(history) : resolved.tools;
     const onDemandTools = "assembly" in resolved ? resolved.assembly.onDemandTools : undefined;
     const agentsInstructions = options.agentsInstructions

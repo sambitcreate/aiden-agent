@@ -47,6 +47,12 @@ export async function createMemoryInlineExtension(options: {
 	close?: () => Promise<void>;
 	/** The fact lines the chat may be told now. */
 	approvedFactLines?: () => Promise<string[]>;
+	/**
+	 * This turn's system prompt before the always-on memory was appended, or
+	 * undefined when the turn told no memory: the stable head the cache
+	 * breakpoint extension splits at.
+	 */
+	stableHead?: () => string | undefined;
 }> {
 	// Memory disabled → never open the store (no migration writes either).
 	if (!memoryEnabledFor(options.agentDir, options.workspaceRoot)) {
@@ -80,18 +86,21 @@ export async function createMemoryInlineExtension(options: {
 		id: extension.id,
 		tools: extension.tools,
 	} as AidenExtensionShape);
+	let stableHead: string | undefined;
 	const wrapped: ExtensionFactory = (pi) => {
 		factory(pi);
 		// Daemon chats build a fresh store per generation — release the handle
 		// when the session ends instead of leaking it until GC.
 		pi.on("session_shutdown", () => { void store.close(); });
 		pi.on("before_agent_start", async (event) => {
+			stableHead = undefined;
 			if (!(await enabled())) return;
 			try {
 				const facts = await store.alwaysOn(scope);
 				for (const fact of facts) options.toldFacts?.add(formatMemoryFactLine(fact));
 				const prompt = formatAlwaysOnMemory(scope, facts);
 				if (prompt.trim()) {
+					stableHead = event.systemPrompt;
 					return { systemPrompt: `${event.systemPrompt}\n\n${prompt}` };
 				}
 			} catch {
@@ -107,5 +116,6 @@ export async function createMemoryInlineExtension(options: {
 		factory: wrapped,
 		close: () => store.close(),
 		approvedFactLines: () => approvedMemoryFactLines([extension]),
+		stableHead: () => stableHead,
 	};
 }

@@ -1088,7 +1088,22 @@ test("applies resolved Codex auth and caller transforms once to the native provi
   assert.deepEqual(captured?.env, { REGION: "two" });
 });
 
+const PROXY_ENV_NAMES = ["HTTPS_PROXY", "https_proxy", "ALL_PROXY", "all_proxy", "NO_PROXY", "no_proxy"];
+
+/** Clears the proxy variables for one test and restores them afterwards. */
+function withoutProxyEnv(t: { after(fn: () => void): void }): void {
+  const saved = PROXY_ENV_NAMES.map((name) => [name, process.env[name]] as const);
+  for (const name of PROXY_ENV_NAMES) Reflect.deleteProperty(process.env, name);
+  t.after(() => {
+    for (const [name, value] of saved) {
+      if (value === undefined) Reflect.deleteProperty(process.env, name);
+      else process.env[name] = value;
+    }
+  });
+}
+
 test("in-process Codex requests use a WebSocket where the runtime has one, and HTTP otherwise", async (t) => {
+  withoutProxyEnv(t);
   const credentials = new InMemoryCredentialStore();
   await credentials.modify("openai-codex", async () => oauthCredential("resolved-access"));
   const builtin = builtinModels({ credentials });
@@ -1128,6 +1143,47 @@ test("in-process Codex requests use a WebSocket where the runtime has one, and H
 
   assert.deepEqual(transports, ["websocket", "websocket", "websocket", "sse", "sse"]);
   assert.equal(isolated.options.transport, "sse");
+});
+
+test("in-process Codex requests stay on HTTP while a proxy is configured for the Codex host", async (t) => {
+  withoutProxyEnv(t);
+  const credentials = new InMemoryCredentialStore();
+  await credentials.modify("openai-codex", async () => oauthCredential("resolved-access"));
+  const builtin = builtinModels({ credentials });
+  const transports: Array<string | undefined> = [];
+  const models = {
+    getProvider: codexProviderWith(builtin, {
+      streamSimple: (model, _context, options) => {
+        transports.push(options?.transport);
+        return terminalStream(model, "stop");
+      },
+      toAuth: async () => ({ apiKey: "resolved-access" }),
+    }),
+    getModels: builtin.getModels.bind(builtin),
+    getModel: builtin.getModel.bind(builtin),
+    checkAuth: async () => ({ type: "oauth" as const, source: "OAuth" }),
+  } as unknown as Models;
+  const service = new CodexProviderService(models, credentials);
+  const model = await service.prepareRuntimeModel("gpt-5.6-sol");
+  const originalWebSocket = Object.getOwnPropertyDescriptor(globalThis, "WebSocket");
+  t.after(() => {
+    if (originalWebSocket) Object.defineProperty(globalThis, "WebSocket", originalWebSocket);
+    else Reflect.deleteProperty(globalThis, "WebSocket");
+  });
+  Object.defineProperty(globalThis, "WebSocket", { configurable: true, writable: true, value: class {} });
+
+  // The runtime's WebSocket would bypass the proxy that HTTP requests honor.
+  process.env.HTTPS_PROXY = "http://proxy.invalid:3128";
+  await service.streamSimple(model, { messages: [] }, { transport: "auto" }).result();
+  // A proxy in a form the HTTP path rejects still means the network is proxied.
+  process.env.HTTPS_PROXY = "socks5://proxy.invalid:1080";
+  await service.streamSimple(model, { messages: [] }, { transport: "auto" }).result();
+  // NO_PROXY exempting the Codex host lets the socket connect directly.
+  process.env.HTTPS_PROXY = "http://proxy.invalid:3128";
+  process.env.NO_PROXY = "chatgpt.com";
+  await service.streamSimple(model, { messages: [] }, { transport: "auto" }).result();
+
+  assert.deepEqual(transports, ["sse", "sse", "websocket"]);
 });
 
 test("ignores a stale request rejection after Pi automatically rotates OAuth", async (t) => {

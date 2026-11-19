@@ -18,12 +18,14 @@ import { MEMORY_EXTENSION_ID } from "./memory-context.js";
 import { createOnDemandTools, type OnDemandTools } from "./on-demand-tools.js";
 import {
   extensionSkillsPrompt,
+  extensionVolatileSystemPrompt,
   resolvePiAgentRuntimeContributionSnapshot,
   type PiAgentRuntimeExtension,
   type PiRuntimeContributionSnapshot,
 } from "./pi-agent-runtime-harness.js";
 import type { AgentHarnessResources } from "./pi-legacy-harness.js";
 import { isPiCodemodeCallable, partitionPiCodemodeTools } from "./pi-runtime-tool.js";
+import { stableHeadOf } from "./prompt-cache-breakpoints.js";
 import type { SkillRegistrySnapshot } from "./skill-registry.js";
 
 export interface WorkspaceChatBasePromptInput {
@@ -89,6 +91,11 @@ export interface ChatPromptAssembly {
   contributions: PiRuntimeContributionSnapshot;
   /** The prompt the transcript head carries. */
   systemPrompt: string;
+  /**
+   * `systemPrompt` before its frozen-state tail (memory and canvas), which
+   * gets its own cache breakpoint; undefined when the prompt has no tail.
+   */
+  stableHead: string | undefined;
   /** What each prompt part adds, for the context meter's per-category breakdown. */
   promptSections: { skills: string; memory: string; "bot-instructions": string };
   /** Tools the provider sees declared, before on-demand tools are held back. */
@@ -141,6 +148,7 @@ export function assembleChatPrompt(input: ChatPromptAssemblyInput): ChatPromptAs
     botPrompt,
     contributions,
     systemPrompt: contributions.systemPrompt,
+    stableHead: stableHeadOf(contributions.systemPrompt, extensionVolatileSystemPrompt(contributions.extensions)),
     promptSections,
     declared,
     deferredTools,

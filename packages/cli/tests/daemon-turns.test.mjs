@@ -870,6 +870,40 @@ test("an Anthropic chat sends its whole conversation on every turn, never a mess
   assert.deepEqual(f.requests[1].messages.map((message) => message.role), ["user", "assistant", "user"]);
 });
 
+/** An Anthropic Messages reply that calls one tool. */
+const anthropicCallTool = (name, args) => (response) => {
+  response.write(anthropicEvent("message_start", { message: { id: `msg_${name}`, type: "message", role: "assistant", model: "test", content: [], stop_reason: null, usage: { input_tokens: 10, output_tokens: 0 } } }));
+  response.write(anthropicEvent("content_block_start", { index: 0, content_block: { type: "tool_use", id: "toolu_1", name, input: {} } }));
+  response.write(anthropicEvent("content_block_delta", { index: 0, delta: { type: "input_json_delta", partial_json: JSON.stringify(args) } }));
+  response.write(anthropicEvent("content_block_stop", { index: 0 }));
+  response.write(anthropicEvent("message_delta", { delta: { stop_reason: "tool_use" }, usage: { output_tokens: 4 } }));
+  response.end(anthropicEvent("message_stop", {}));
+};
+
+/** Every `cache_control` marker in a request body. */
+const cacheMarkers = (value) => Array.isArray(value) ? value.reduce((total, item) => total + cacheMarkers(item), 0)
+  : value && typeof value === "object" ? Object.entries(value).reduce((total, [key, child]) => total + (key === "cache_control" ? 1 : cacheMarkers(child)), 0) : 0;
+
+test("an Anthropic chat with always-on memory caches the system prompt before the memory on its own", async (t) => {
+  const f = await fixture(t, { anthropic: true });
+  const fact = "Prefers metric units";
+  f.steps.push(anthropicCallTool("remember_fact", { fact, alwaysOn: true }), anthropicReply("Saved."), anthropicReply("Noted."));
+  await beginTurn(f, "head", { streamId: "head-1", text: "Remember that I prefer metric units." });
+  await f.daemon.llmClient.waitForChatIdle("head");
+  // The first turn told no memory, so its system prompt stays one block.
+  assert.equal(f.requests[0].system.length, 1);
+  await beginTurn(f, "head", { streamId: "head-2", text: "How far is a marathon?", create: false });
+  await f.daemon.llmClient.waitForChatIdle("head");
+  const { system } = f.requests[2];
+  assert.equal(system.length, 2, "the stable head is its own block");
+  assert.match(system[1].text, new RegExp(fact, "u"), "the memory is in the tail");
+  assert.doesNotMatch(system[0].text, new RegExp(fact, "u"));
+  assert.ok(system[0].cache_control && system[1].cache_control, "both blocks are cached");
+  // The blocks join to the same system text the turn would have sent as one.
+  assert.ok(system[0].text.endsWith("\n\n"));
+  assert.equal(cacheMarkers(f.requests[2]), 4, "tools, head, system and last user message");
+});
+
 /** A finished reply whose prompt was large enough that keeping its cache warm pays. */
 const largePromptReply = (text) => (response) => {
   response.write(chunk({ role: "assistant", content: text }));
@@ -938,6 +972,30 @@ test("a server session warms only for an attended turn on a profile that opts in
     writeFileSync(join(dir, "aiden.json"), "{ not json");
     assert.equal(api.daemonSettingsManager(dir, dir, { attended: true }).getCacheWarmingMode(), "off");
   } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("a server session sends Codex requests over a WebSocket unless SSE is asked for or a proxy is set", (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "aiden-daemon-transport-"));
+  const proxyNames = ["HTTPS_PROXY", "https_proxy", "ALL_PROXY", "all_proxy", "NO_PROXY", "no_proxy"];
+  const saved = proxyNames.map((name) => [name, process.env[name]]);
+  for (const name of proxyNames) delete process.env[name];
+  t.after(() => {
+    for (const [name, value] of saved) { if (value === undefined) delete process.env[name]; else process.env[name] = value; }
+    rmSync(dir, { recursive: true, force: true });
+  });
+  // Pi's default sends previous-response deltas over the socket.
+  assert.equal(api.SettingsManager.create(dir, dir).getTransport(), "auto");
+  assert.equal(api.daemonSettingsManager(dir, dir, { attended: true }).getTransport(), "websocket");
+  api.atomicJson(join(dir, "settings.json"), { transport: "websocket-cached" });
+  assert.equal(api.daemonSettingsManager(dir, dir, { attended: false }).getTransport(), "websocket");
+  api.atomicJson(join(dir, "settings.json"), { transport: "sse" });
+  assert.equal(api.daemonSettingsManager(dir, dir, { attended: true }).getTransport(), "sse");
+  api.atomicJson(join(dir, "settings.json"), {});
+  // Node's WebSocket does not go through the proxy HTTP requests use.
+  process.env.HTTPS_PROXY = "http://proxy.invalid:3128";
+  assert.equal(api.daemonSettingsManager(dir, dir, { attended: true }).getTransport(), "sse");
+  process.env.NO_PROXY = "chatgpt.com";
+  assert.equal(api.daemonSettingsManager(dir, dir, { attended: true }).getTransport(), "websocket");
 });
 
 /** A reply whose usage reports `promptTokens`, so the turn ends past the compaction threshold. */

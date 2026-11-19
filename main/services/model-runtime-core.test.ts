@@ -16,6 +16,7 @@ import {
   withPinnedBotProviderAuth,
   type ModelRuntimeDependencies,
 } from "./model-runtime-core.js";
+import { MAX_ANTHROPIC_CACHE_BREAKPOINTS, anthropicCacheBreakpoints, rememberStableHead } from "./prompt-cache-breakpoints.js";
 import { resolveProviderRuntimeLimits, CONSERVATIVE_RUNTIME_LIMITS, type RuntimeModelLimits } from "./models-catalog-core.js";
 import type { StoredProvider } from "./types.js";
 
@@ -50,6 +51,16 @@ const googleModel: Model<Api> = {
 const googleStream = (() => {
   throw new Error("not called");
 }) as ProviderStreams["streamSimple"];
+
+/** A provider stream that records which models it was handed and ends at once. */
+function recordingStream(routed: Array<Model<Api>>): ProviderStreams["streamSimple"] {
+  return (model) => {
+    routed.push(model);
+    const stream = createAssistantMessageEventStream();
+    stream.end({} as Awaited<ReturnType<typeof stream.result>>);
+    return stream;
+  };
+}
 
 function dependencies(options?: {
   provider?: StoredProvider;
@@ -196,6 +207,8 @@ test("routes every Pi built-in through its native model and transport", async ()
     limitReads += 1;
     return CONSERVATIVE_RUNTIME_LIMITS;
   };
+  const routed: Array<Model<Api>> = [];
+  deps.native.streamSimple = recordingStream(routed);
 
   const runtime = await resolveModelRuntimeWith(deps, provider.id, "gemini-2.5-pro");
 
@@ -204,7 +217,8 @@ test("routes every Pi built-in through its native model and transport", async ()
   assert.strictEqual(runtime.model, googleModel);
   assert.strictEqual(runtime.models, deps.native.models);
   // The runtime stream hands the request to Pi's native transport.
-  assert.throws(() => runtime.streams.streamSimple(runtime.model, normalizeContext({ messages: [] })), /not called/u);
+  await runtime.streams.streamSimple(runtime.model, normalizeContext({ messages: [] })).result();
+  assert.deepEqual(routed, [runtime.model]);
   assert.equal(runtime.apiKey, undefined);
   assert.equal(runtime.model.api, "google-generative-ai");
   assert.equal(runtime.model.provider, "google");
@@ -237,6 +251,8 @@ test("routes non-special Pi providers without reading legacy endpoint configurat
     maxTokens: 8_192,
   };
   const deps = dependencies({ nativeProvider: provider, nativeModel: model });
+  const routed: Array<Model<Api>> = [];
+  deps.native.streamSimple = recordingStream(routed);
   let legacyReads = 0;
   deps.getProvider = async () => {
     legacyReads += 1;
@@ -253,7 +269,8 @@ test("routes non-special Pi providers without reading legacy endpoint configurat
   assert.strictEqual(runtime.provider, provider);
   assert.strictEqual(runtime.model, model);
   // The runtime stream hands the request to Pi's native transport.
-  assert.throws(() => runtime.streams.streamSimple(runtime.model, normalizeContext({ messages: [] })), /not called/u);
+  await runtime.streams.streamSimple(runtime.model, normalizeContext({ messages: [] })).result();
+  assert.deepEqual(routed, [runtime.model]);
   assert.equal(runtime.apiKey, undefined);
   assert.equal(runtime.headers, undefined);
 });
@@ -323,6 +340,44 @@ test("pins resolved Bot auth without asking Models to resolve ambient authority 
     assert.equal(capturedModel?.baseUrl, "https://pinned.example.test/v1"); assert.equal(capturedOptions?.apiKey, "pinned-key"); assert.equal(capturedOptions?.headers?.Authorization, "Pinned"); assert.equal(capturedOptions?.env?.GOOGLE_APPLICATION_CREDENTIALS, "/pinned/adc.json");
     await assert.rejects(operation({ ...googleModel, id: "different-model" }, handle), /another model/u);
   }
+});
+
+test("a pinned Bot runtime places the stable-head breakpoint on the wire", async () => {
+  const { anthropicMessagesApi } = await import("@earendil-works/pi-ai/api/anthropic-messages.lazy");
+  const { getBuiltinModels } = await import("@earendil-works/pi-ai/providers/all");
+  const native = getBuiltinModels("anthropic")[0] as Model<Api>;
+  assert.ok(native, "the fixture uses one of Pi's own Anthropic model records");
+  const provider: StoredProvider = {
+    id: "anthropic", kind: "anthropic", label: "Anthropic", baseUrl: native.baseUrl,
+    models: [native.id], needsKey: true, isPreset: true,
+  };
+  const runtime = await resolveModelRuntimeWith(
+    dependencies({ provider, nativeProvider: provider, nativeModel: native }),
+    provider.id,
+    native.id,
+  );
+  const pinned = withPinnedBotProviderAuth(
+    runtime,
+    { auth: { apiKey: "offline-pinned-fixture" }, source: "ambient" },
+    anthropicMessagesApi().streamSimple,
+  );
+  const head = "You are the fixture Bot.";
+  rememberStableHead("pinned-bot-chat", head);
+  let body: Record<string, unknown> | undefined;
+  await pinned.streams.streamSimple(runtime.model, normalizeContext({
+    systemPrompt: `${head}\n\n<volatile_memory>fixture</volatile_memory>`,
+    tools: [{ name: "read_fixture", description: "Read a fixture.", parameters: { type: "object", properties: {} } as never }],
+    messages: [{ role: "user", content: "Synthetic pinned check", timestamp: 1 }],
+  }), {
+    sessionId: "pinned-bot-chat",
+    fetch: async (_url: unknown, init?: RequestInit) => {
+      body ??= JSON.parse(String(init?.body)) as Record<string, unknown>;
+      throw new Error("captured before network");
+    },
+  }).result();
+  assert.ok(body, "Pi built a request");
+  assert.equal(anthropicCacheBreakpoints(body), MAX_ANTHROPIC_CACHE_BREAKPOINTS);
+  assert.equal((body.system as Array<{ text: string }>)[0]?.text, `${head}\n\n`);
 });
 
 test("rejects models absent from Pi's native catalog", async () => {

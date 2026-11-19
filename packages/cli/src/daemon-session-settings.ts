@@ -9,9 +9,16 @@
 // or for a turn no one is watching (a Bot, a Telegram message, a scheduled
 // task), Pi never warms. A `cacheWarming` in Pi's settings.json is ignored, so
 // the profile has one switch.
+//
+// Codex requests go over a persistent WebSocket, as on the desktop, so a chat
+// stays on one backend connection and its prompt cache. Pi's own "auto" default
+// would also replace each request with a previous-response delta; the server
+// sends the full request instead, and stays on HTTP when Pi's settings ask
+// for SSE or a proxy is configured for the Codex host.
 
 import { join } from "node:path";
 import { SettingsManager } from "@earendil-works/pi-coding-agent";
+import { inProcessCodexTransport } from "../../../main/services/codex-transport.js";
 import { readJson } from "./state.ts";
 
 export interface DaemonSessionWarming {
@@ -27,11 +34,13 @@ function profileWarmsCaches(agentDir: string): boolean {
   } catch { return false; }
 }
 
-/** The settings a daemon AgentSession reads: Pi's own, with warming set by the profile and the run. */
+/** The settings a daemon AgentSession reads: Pi's own, with warming set by the profile and the run, and Codex's transport. */
 export function daemonSettingsManager(cwd: string, agentDir: string, warming: DaemonSessionWarming): SettingsManager {
   const settings = SettingsManager.create(cwd, agentDir);
   // Read once per session, so a changed setting reaches the next turn.
   const mode = warming.attended && profileWarmsCaches(agentDir) ? "streaming" : "off";
   settings.getCacheWarmingMode = () => mode;
+  const transport = inProcessCodexTransport(settings.getTransport());
+  settings.getTransport = () => transport;
   return settings;
 }

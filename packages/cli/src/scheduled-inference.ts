@@ -6,6 +6,7 @@ import type { ScheduledTask } from "../../../main/services/types.js";
 import { assertScheduledMcpServerBindings } from "../../../main/services/schedule-mcp-binding.js";
 import { withoutMessageThreads } from "../../../main/services/pi-message-threads.js";
 import { daemonSettingsManager } from "./daemon-session-settings.ts";
+import { createPromptCacheBreakpointsInlineExtension } from "./extensions/prompt-cache-breakpoints.ts";
 import { createCliModelRuntime } from "./providers.ts";
 import { createCliMcpPool } from "./mcp.ts";
 import { createCliWebSearch } from "./extensions/web-search.ts";
@@ -86,7 +87,7 @@ export async function runScheduledInference(agentDir: string, cwd: string, task:
     tools.push(...cliWorkspaceCodingTools(cwd, task.permission !== "full"));
     if (task.webSearchEnabled) { const tool = await createCliWebSearch(agentDir).toolForGeneration(); if (!tool) throw new Error("Scheduled Web Search is unavailable."); tools.push(tool); }
     const loader = new DefaultResourceLoader({ cwd, agentDir, noExtensions: true, noSkills: true, noPromptTemplates: true, noThemes: true,
-      extensionFactories: [{ name: "aiden-schedule-authority", factory(pi) {
+      extensionFactories: [createPromptCacheBreakpointsInlineExtension(() => undefined), { name: "aiden-schedule-authority", factory(pi) {
         for (const tool of tools) pi.registerTool({ ...tool, label: tool.label ?? tool.name });
         pi.on("tool_call", async () => { try { if (++calls > 64) throw new Error("Scheduled tool budget exhausted."); await check(); } catch (error) { return { block: true, reason: String(error) }; } });
       } }],

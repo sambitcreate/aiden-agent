@@ -1,4 +1,5 @@
 import { createMemoryInlineExtension } from "./extensions/memory.ts";
+import { createPromptCacheBreakpointsInlineExtension } from "./extensions/prompt-cache-breakpoints.ts";
 import { createWebSearchInlineExtension } from "./extensions/web-search.ts";
 import { createTodoInlineExtension } from "./extensions/todo.ts";
 import { createAdvisorInlineExtension } from "./extensions/advisor.ts";
@@ -319,7 +320,7 @@ export function createDaemonChats(agentDir: string) {
         }));
         const sessionSettings = daemonSettingsManager(cwd, agentDir, { attended: !botAdmission && !unattended });
         const loader = new DefaultResourceLoader({ cwd, agentDir, noExtensions: true, noSkills: true, noPromptTemplates: true, noThemes: true,
-          extensionFactories: [...additionalExtensions, { name: "aiden-daemon-authority", factory(pi) {
+          extensionFactories: [...additionalExtensions, createPromptCacheBreakpointsInlineExtension(() => memory && "stableHead" in memory ? memory.stableHead?.() : undefined), { name: "aiden-daemon-authority", factory(pi) {
             pi.on("before_agent_start", async (event) => {
               // SessionStart and UserPromptSubmit context, once per turn, as host data the chat store never
               // saves. Pi journals it after the prompt, in the same shape the desktop journals.

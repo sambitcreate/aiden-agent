@@ -11,10 +11,10 @@ import type {
   ModelsSimpleStreamOptions,
   OAuthCredential,
   ProviderHeaders,
-  Transport,
 } from "@earendil-works/pi-ai";
 import { cleanupSessionResources, lazyStream, normalizeContext } from "@earendil-works/pi-ai";
 import { isCodexAuthenticationFailure } from "./codex-auth-failure.js";
+import { inProcessCodexTransport } from "./codex-transport.js";
 import {
   codexThinkingLevelsForModel,
   isCodexThinkingLevel,
@@ -246,26 +246,6 @@ function modelInfo(model: Model<Api>): ModelInfo {
     metadataSource: "provider",
     matched: true,
   };
-}
-
-/**
- * The transport for a Codex request sent from this process. A persistent
- * WebSocket, keyed by the chat's session ID, keeps the conversation on one
- * backend connection and so on its prompt cache; Pi falls back to HTTP (SSE)
- * for the session when the socket fails. Only the plain "websocket" mode is
- * used: Pi's "auto" and "websocket-cached" modes also replace the request's
- * input with a `previous_response_id` delta, server-side continuation that
- * has not been measured against the replay gate. Without a WebSocket in the
- * runtime, or when the caller asks for SSE, the request goes over HTTP.
- * Isolated dispatch (`prepareIsolatedStream`) stays on SSE: its worker
- * process cannot keep a socket between requests.
- */
-export function inProcessCodexTransport(
-  requested: Transport | undefined,
-  // `in` checks the runtime without reading (and constructing) the global.
-  webSocketAvailable: boolean = "WebSocket" in globalThis,
-): Transport {
-  return requested === "sse" || !webSocketAvailable ? "sse" : "websocket";
 }
 
 export class CodexProviderService {
@@ -825,7 +805,7 @@ export class CodexProviderService {
       const prepared = await this.prepareIsolatedStream(model, options);
       const source = provider.streamSimple(prepared.model, normalizeContext(context), {
         ...prepared.options,
-        transport: inProcessCodexTransport(options?.transport),
+        transport: inProcessCodexTransport(options?.transport, { baseUrl: prepared.model.baseUrl, env: prepared.options.env }),
       });
       void source
         .result()

@@ -157,7 +157,9 @@ export function withPinnedBotProviderAuth(
     ...runtime,
     models,
     streams: {
-      streamSimple: (model, context, options) =>
+      // The bare provider stream skips the runtime's wrapper, so the pinned
+      // stream adds the same breakpoints itself.
+      streamSimple: withPromptCacheBreakpoints((model, context, options) =>
         lazyStream(model, async () => {
           if (model.provider !== runtime.model.provider || model.id !== runtime.model.id) {
             throw new Error("Pinned Bot provider auth cannot be reused for another model.");
@@ -175,7 +177,7 @@ export function withPinnedBotProviderAuth(
             headers,
             env,
           });
-        }),
+        })),
     },
   };
 }

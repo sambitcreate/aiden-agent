@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { normalizeContext, type Api, type Model, type SimpleStreamOptions, type Tool } from "@earendil-works/pi-ai";
+import { cleanupSessionResources, normalizeContext, type Api, type Model, type SimpleStreamOptions, type Tool } from "@earendil-works/pi-ai";
 
 import {
   MAX_ANTHROPIC_CACHE_BREAKPOINTS,
@@ -9,7 +9,9 @@ import {
   bedrockCachePoints,
   rememberStableHead,
   stableHeadOf,
+  withBedrockToolsCachePoint,
   withPromptCacheBreakpoints,
+  withStableHeadBreakpoint,
 } from "./prompt-cache-breakpoints.js";
 
 const ZERO_COST = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
@@ -26,8 +28,9 @@ const anthropicModel: Model<Api> = {
   baseUrl: "https://api.anthropic.com", reasoning: false, input: ["text"], cost: ZERO_COST,
   contextWindow: 200_000, maxTokens: 8_192,
 };
+// A Claude Bedrock ID Pi caches without AWS_BEDROCK_FORCE_CACHE.
 const bedrockModel: Model<Api> = {
-  id: "fixture-model", name: "Fixture", api: "bedrock-converse-stream", provider: "amazon-bedrock",
+  id: "anthropic.claude-fixture-4-0-v1:0", name: "Fixture", api: "bedrock-converse-stream", provider: "amazon-bedrock",
   baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com", reasoning: false, input: ["text"], cost: ZERO_COST,
   contextWindow: 200_000, maxTokens: 8_192,
 };
@@ -59,11 +62,11 @@ async function sentAnthropic(chatId: string, options: Partial<SimpleStreamOption
 }
 
 /** The Bedrock payload the real Pi adapter builds, as the last payload hook sees it. */
-async function sentBedrock(chatId: string, options: Partial<SimpleStreamOptions> = {}, forceCache = true) {
+async function sentBedrock(chatId: string, options: Partial<SimpleStreamOptions> = {}, forceCache = false, model = bedrockModel) {
   const { bedrockConverseStreamApi } = await import("@earendil-works/pi-ai/api/bedrock-converse-stream.lazy");
   const stream = withPromptCacheBreakpoints(bedrockConverseStreamApi().streamSimple);
   let payload: Record<string, unknown> | undefined;
-  await stream(bedrockModel, context(), {
+  await stream(model, context(), {
     sessionId: chatId,
     env: {
       AWS_REGION: "us-east-1", AWS_ACCESS_KEY_ID: "offline", AWS_SECRET_ACCESS_KEY: "offline",
@@ -95,12 +98,13 @@ test("Anthropic: the stable head gets the fourth breakpoint and a tail change ke
   const body = await sentAnthropic("chat-head");
   assert.equal(anthropicCacheBreakpoints(body), MAX_ANTHROPIC_CACHE_BREAKPOINTS);
   const [head, tail] = systemBlocks(body);
-  assert.equal(head.text, STABLE_HEAD);
+  assert.equal(head.text, `${STABLE_HEAD}\n\n`, "the head keeps the blank line before the tail");
   assert.ok(head.cache_control, "the stable head is a cache breakpoint");
   assert.ok(tail.text.startsWith(FROZEN_TAIL), "the frozen-state tail follows in its own block");
   assert.ok(tail.cache_control, "the system prompt as a whole stays a breakpoint");
-  assert.equal(systemBlocks(body).map((block) => block.text).join("\n\n").startsWith(SYSTEM_PROMPT), true,
-    "the model reads the same system text");
+  const unsplit = await sentAnthropic("chat-head-unregistered");
+  assert.equal(systemBlocks(body).map((block) => block.text).join(""), systemBlocks(unsplit)[0].text,
+    "the model reads the same system text, byte for byte");
 
   const tools = body.tools as Array<{ cache_control?: unknown }>;
   assert.ok(tools[tools.length - 1]?.cache_control, "Pi's tool breakpoint is kept");
@@ -130,7 +134,32 @@ test("Anthropic: nothing is added without a matching head, with caching off, or 
   rememberStableHead("chat-oauth", STABLE_HEAD);
   const oauth = await sentAnthropic("chat-oauth", { apiKey: "sk-ant-oat01-offline-fixture" });
   assert.ok(anthropicCacheBreakpoints(oauth) <= MAX_ANTHROPIC_CACHE_BREAKPOINTS);
-  assert.equal(systemBlocks(oauth).some((block) => block.text === STABLE_HEAD), false);
+  assert.equal(systemBlocks(oauth).some((block) => block.text === `${STABLE_HEAD}\n\n`), false);
+});
+
+test("Anthropic: a payload that already holds four markers is left alone", () => {
+  const marker = { type: "ephemeral" };
+  const full = {
+    system: [{ type: "text", text: SYSTEM_PROMPT, cache_control: marker }],
+    tools: [{ name: "read_fixture", cache_control: marker }],
+    messages: [
+      { role: "user", content: [{ type: "text", text: "one", cache_control: marker }] },
+      { role: "user", content: [{ type: "text", text: "two", cache_control: marker }] },
+    ],
+  };
+  assert.equal(anthropicCacheBreakpoints(full), MAX_ANTHROPIC_CACHE_BREAKPOINTS);
+  assert.equal(withStableHeadBreakpoint(full, STABLE_HEAD), undefined);
+  const three = { ...full, messages: full.messages.slice(1) };
+  assert.equal(anthropicCacheBreakpoints(withStableHeadBreakpoint(three, STABLE_HEAD)), MAX_ANTHROPIC_CACHE_BREAKPOINTS);
+});
+
+test("a deleted chat's stable head is forgotten", async () => {
+  rememberStableHead("chat-deleted", STABLE_HEAD);
+  assert.equal(anthropicCacheBreakpoints(await sentAnthropic("chat-deleted")), MAX_ANTHROPIC_CACHE_BREAKPOINTS);
+  cleanupSessionResources("chat-deleted");
+  const after = await sentAnthropic("chat-deleted");
+  assert.equal(systemBlocks(after).length, 1);
+  assert.equal(anthropicCacheBreakpoints(after), 3);
 });
 
 test("Anthropic: a caller's payload hook sees the final payload and its replacement wins", async () => {
@@ -144,7 +173,7 @@ test("Anthropic: a caller's payload hook sees the final payload and its replacem
   });
   assert.equal(anthropicCacheBreakpoints(seen), MAX_ANTHROPIC_CACHE_BREAKPOINTS);
   assert.deepEqual(body.metadata, { user_id: "fixture-hook" });
-  assert.equal(systemBlocks(body)[0].text, STABLE_HEAD);
+  assert.equal(systemBlocks(body)[0].text, `${STABLE_HEAD}\n\n`);
 });
 
 test("Bedrock: a cachePoint follows the tools, with the system cachePoint's shape, and tools stay declared", async () => {
@@ -160,12 +189,30 @@ test("Bedrock: a cachePoint follows the tools, with the system cachePoint's shap
   }
 });
 
-test("Bedrock: no tools cachePoint when caching is off or the model does not cache", async () => {
+test("Bedrock: no tools cachePoint when caching is off, the model does not cache, or it is not Claude", async () => {
   const off = await sentBedrock("chat-bedrock-off", { cacheRetention: "none" });
   assert.equal(bedrockCachePoints(off), 0);
-  const uncached = await sentBedrock("chat-bedrock-uncached", {}, false);
+  const nova: Model<Api> = { ...bedrockModel, id: "amazon.nova-fixture-v1:0", name: "Fixture" };
+  const uncached = await sentBedrock("chat-bedrock-uncached", {}, false, nova);
   assert.equal(bedrockCachePoints(uncached), 0);
   assert.equal((uncached.toolConfig as { tools: unknown[] }).tools.length, TOOLS.length);
+
+  const forced = await sentBedrock("chat-bedrock-forced", {}, true, nova);
+  assert.equal(bedrockCachePoints(forced), 2, "Pi's system and message cachePoints only");
+  assert.equal((forced.toolConfig as { tools: unknown[] }).tools.length, TOOLS.length);
+});
+
+test("Bedrock: a payload that already holds four cachePoints is left alone", () => {
+  const point = { type: "default" };
+  const full = {
+    system: [{ text: SYSTEM_PROMPT }, { cachePoint: point }],
+    toolConfig: { tools: [{ toolSpec: { name: "read_fixture" } }] },
+    messages: [1, 2, 3].map((turn) => ({ role: "user", content: [{ text: `turn ${turn}` }, { cachePoint: point }] })),
+  };
+  assert.equal(bedrockCachePoints(full), MAX_BEDROCK_CACHE_POINTS);
+  assert.equal(withBedrockToolsCachePoint(full, bedrockModel), undefined);
+  const three = { ...full, messages: full.messages.slice(1) };
+  assert.equal(bedrockCachePoints(withBedrockToolsCachePoint(three, bedrockModel)), MAX_BEDROCK_CACHE_POINTS);
 });
 
 test("other APIs pass through without a payload hook", () => {
