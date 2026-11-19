@@ -314,12 +314,28 @@ interface TurnSaves {
 }
 
 /**
- * Whether a page at `current` is still the page `baseVersion` named: the same
- * revision, or one only this turn's own saves moved it to since.
+ * The revisions this turn's own saves and restores made a page go through:
+ * every revision from `from` (the one the first of them replaced, since
+ * another save landed) up to `revision`, the one they left it at.
  */
-function baseVersionHolds(baseVersion: number, current: WorkspaceArtifactV1, turn: TurnSaves | undefined): boolean {
+interface TurnRevisions {
+  from: number;
+  revision: number;
+}
+
+/**
+ * Whether a page at `current` is still the page `baseVersion` named: the same
+ * revision, or one only this turn's own saves and restores moved it to since.
+ */
+function baseVersionHolds(baseVersion: number, current: WorkspaceArtifactV1, turn: TurnRevisions | undefined): boolean {
   if (current.revision === baseVersion) return true;
   return turn !== undefined && turn.revision === current.revision && baseVersion >= turn.from && baseVersion < turn.revision;
+}
+
+/** `turn` after one of this turn's saves or restores replaced `replaced` with `revision`. */
+function turnRevisionsAfter(turn: TurnRevisions | undefined, replaced: number, revision: number): TurnRevisions {
+  // They run on from where they began, unless another save came between.
+  return { from: turn && turn.revision === replaced ? turn.from : replaced, revision };
 }
 
 type PageVersion = Pick<WorkspaceArtifactRevisionV1, "description" | "visual" | "markup" | "sources" | "actions" | "refresh">;
@@ -627,7 +643,7 @@ export async function workspaceArtifactCallApproval(
  * as saved now: a bad baseVersion, edits that miss, markup that does not
  * compile or is too long, and values or sources that are not valid here. A
  * baseVersion behind the page is left to execute, which alone knows whether
- * only the reply's own earlier saves moved it.
+ * only the reply's own earlier saves and restores moved it.
  */
 function assertSaveValid(
   input: ArtifactToolInput,
@@ -820,6 +836,13 @@ export function createWorkspaceArtifactTool(options: WorkspaceArtifactToolOption
    * ends the fold, so the renamed version is kept as its own undo step.
    */
   const savedThisTurn = new Map<string, TurnSaves>();
+  /**
+   * The revisions each page went through by this tool's own saves and
+   * restores, for `baseVersion`: a revision the reply read stays good while
+   * only the reply itself has moved the page on. A restore ends the undo fold
+   * above but not this.
+   */
+  const ownRevisions = new Map<string, TurnRevisions>();
   /**
    * After a save: the first refresh, then the page checked against its data.
    * The page is already saved, so neither may make the save look failed.
@@ -1066,6 +1089,8 @@ export function createWorkspaceArtifactTool(options: WorkspaceArtifactToolOption
           // A restore is the person going back on purpose: what it replaced is kept,
           // and the next save starts a new undo step.
           savedThisTurn.delete(id);
+          // Revisions only go up by one, so the restore replaced the one before its own.
+          ownRevisions.set(id, turnRevisionsAfter(ownRevisions.get(id), artifact.revision - 1, artifact.revision));
           options.onChanged({ workspaceId, artifactId: artifact.id, reason: "updated", chatId });
           return text(
             `Restored revision ${revision} of the artifact "${artifact.visual.title}" as revision ${artifact.revision}.${await afterSave(artifact, signal, current.artifact)}`,
@@ -1083,8 +1108,9 @@ export function createWorkspaceArtifactTool(options: WorkspaceArtifactToolOption
         const previous = operation === "update" ? (await store.get(workspaceId, idOf(input)))?.artifact : undefined;
         if (operation === "update" && !previous) throw new Error("No artifact with that id exists in this workspace.");
         const earlier = previous ? savedThisTurn.get(previous.id) : undefined;
+        const own = previous ? ownRevisions.get(previous.id) : undefined;
         const earlierVersion = (revision: number) => store.revision(workspaceId, idOf(input), revision);
-        if (previous && baseVersion !== undefined && !baseVersionHolds(baseVersion, previous, earlier)) {
+        if (previous && baseVersion !== undefined && !baseVersionHolds(baseVersion, previous, own)) {
           throw new Error(await baseVersionRefusal(baseVersion, previous, earlierVersion));
         }
         const renamedSince = earlier !== undefined && previous !== undefined && previous.visual.title !== earlier.title;
@@ -1111,7 +1137,7 @@ export function createWorkspaceArtifactTool(options: WorkspaceArtifactToolOption
                 previous.id,
                 (current) => {
                   // Checked again under the lock: a save that landed since the read refuses this one.
-                  if (baseVersion !== undefined && !baseVersionHolds(baseVersion, current, earlier)) {
+                  if (baseVersion !== undefined && !baseVersionHolds(baseVersion, current, own)) {
                     throw new BaseVersionMoved(current);
                   }
                   replaced = current;
@@ -1155,6 +1181,10 @@ export function createWorkspaceArtifactTool(options: WorkspaceArtifactToolOption
           const from =
             earlier && replaced?.revision === earlier.revision ? earlier.from : (replaced?.revision ?? previous.revision);
           savedThisTurn.set(artifact.id, { from, revision: artifact.revision, title: artifact.visual.title });
+          ownRevisions.set(
+            artifact.id,
+            turnRevisionsAfter(ownRevisions.get(artifact.id), replaced?.revision ?? previous.revision, artifact.revision),
+          );
         }
         options.onChanged({ workspaceId, artifactId: artifact.id, reason: previous ? "updated" : "created", chatId });
         const verb = previous ? "Updated" : "Created";

@@ -886,6 +886,33 @@ test("an update given the revision it read is refused once the page moved on, sa
   await assert.rejects(call("u4", { operation: "update", id: "art1", baseVersion: 9 }), /has no revision 9; it is at revision 4/u);
 });
 
+test("a reply's own restore does not count against the revision it read, while another chat's save still does", async (t) => {
+  const { store, call, nextTurn } = await harness(t, { permission: "full" });
+  await call("c1", { operation: "create", title: "Open PRs", markup: PAGE });
+  await call("u1", { operation: "update", id: "art1", markup: PAGE.replace("open", "waiting") });
+  nextTurn();
+  // A new reply reads revision 2, goes back to revision 1 (now revision 3), then changes the page.
+  assert.match(await call("g1", { operation: "get", id: "art1" }), /revision 2\)/u);
+  assert.match(await call("r1", { operation: "restore", id: "art1", revision: 1 }), /as revision 3\./u);
+  await call("u2", { operation: "update", id: "art1", baseVersion: 2, description: "after the restore" });
+  assert.equal((await store.get("ws1", "art1"))!.artifact.revision, 4);
+  // In one reply: a save, a restore, and a save prepared from the revision read before them.
+  nextTurn();
+  await call("u3", { operation: "update", id: "art1", description: "mine" });
+  await call("r2", { operation: "restore", id: "art1", revision: 2 });
+  await call("u4", { operation: "update", id: "art1", baseVersion: 4, description: "mine, again" });
+  const page = (await store.get("ws1", "art1"))!.artifact;
+  assert.equal(page.revision, 7);
+  assert.equal(page.description, "mine, again");
+  // Another chat's save after the reply's restore refuses a save prepared before it.
+  await call("r3", { operation: "restore", id: "art1", revision: 3 });
+  await store.replace("ws1", "art1", { ...(await store.get("ws1", "art1"))!.artifact, title: "Open PRs", description: "theirs" } as never);
+  await assert.rejects(
+    call("u5", { operation: "update", id: "art1", baseVersion: 7, description: "late" }),
+    /changed since revision 7, in another chat or by the person: it is now revision 9/u,
+  );
+});
+
 test("baseVersion is checked again under the store's lock, so a save landing while this one is prepared refuses it", async (t) => {
   const { store, call, nextTurn } = await harness(t, { permission: "full" });
   await call("c1", { operation: "create", title: "Open PRs", markup: PAGE });
