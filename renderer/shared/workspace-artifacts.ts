@@ -3,6 +3,7 @@ import { AIDEN_UI_LIMITS, type ChatUiVisualV1 } from "./aiden-ui/types.js";
 import { isWireSafeKey, parseAidenUiState, parseChatUiVisualV1 } from "./aiden-ui/visual.js";
 import {
   checkWorkspaceArtifactTemplate,
+  workspaceArtifactValueProblem,
   fillWorkspaceArtifactTemplate,
   WORKSPACE_ARTIFACT_ARGUMENT_PROGRAMS,
   WORKSPACE_ARTIFACT_PLACEHOLDER,
@@ -608,8 +609,6 @@ export function resolveWorkspaceArtifactCommand(
     if (text.length > WORKSPACE_ARTIFACT_LIMITS.argumentChars || hasControlCharacter(text, false)) {
       invalid(`${action.label}: ${param.name} is too long or contains control characters.`);
     }
-    // A leading dash would reach the command as an option (--upload-pack=…).
-    if (text.startsWith("-")) invalid(`${action.label}: ${param.name} cannot start with "-".`);
     return text;
   });
   if (!workspaceArtifactTemplateHasParams(action.command)) return { kind: "shell", command: action.command, preview: action.command };
@@ -620,6 +619,9 @@ export function resolveWorkspaceArtifactCommand(
   };
   const checked = checkWorkspaceArtifactTemplate(action.command);
   if (!checked.ok) return invalid(`${action.label} is turned off.`);
+  // Where the value lands decides what it may be: never an option, a refspec git would force or delete with, or a file outside the workspace.
+  const problem_ = workspaceArtifactValueProblem(checked.steps, value);
+  if (problem_) invalid(`${action.label}: ${problem_}`);
   return {
     kind: "argv",
     steps: fillWorkspaceArtifactTemplate(checked.steps, value),

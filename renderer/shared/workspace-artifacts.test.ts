@@ -164,6 +164,27 @@ test("a placeholder must be its own unquoted word, or joined only to plain text"
     "gh issue comment 1 -F {{x}}",
     "git config -f {{x}} user.name me",
     "uniq notes.txt {{x}}",
+    "uniq -f 1 notes.txt {{x}}",
+    // Where git connects to a remote, which can be a URL or a command.
+    "git fetch {{x}}",
+    "git push {{x}} main",
+    "git pull --rebase {{x}} main",
+    "git fetch --multiple origin {{x}}",
+    "git push --repo {{x}} main",
+    "git push origin :{{x}}",
+    // The folder git worktree add creates.
+    "git worktree add {{x}}",
+    "git worktree add ../review {{x}}",
+    // A file read from anywhere, or a temporary directory written to.
+    "sort -T {{x}} notes.txt",
+    "git commit -qF {{x}} --allow-empty",
+    "git tag -F {{x}} v1",
+    "git diff --no-index /etc/hosts {{x}}",
+    "git diff HEAD~1 --no-index /etc/hosts {{x}}",
+    // jq reads files from its filter and operands; page data goes in as --arg.
+    "jq -n {{x}}",
+    "jq -r .name {{x}}",
+    "jq --arg {{x}} '$x' notes.json",
     // A subshell, and a redirection to a file: the grammar has neither.
     "(git fetch && git switch {{x}})",
     "printf '%s' {{x}} >notes/out.txt",
@@ -403,11 +424,13 @@ test("a placeholder cannot be run as a command or hidden from the check", () => 
     "git config --global user.email {{x}}",
     "sort -k 2 {{x}}",
     "git --no-pager log -c {{x}}",
-    "git worktree add ../review {{x}}",
+    "git worktree add -b {{x}} ../review",
     "git remote -v | grep -F -- {{x}}",
     "gh browse {{x}}",
     "gh run view {{x}} --log | tail -n 20",
-    "jq -r .name {{x}} | sort | uniq -c",
+    "jq -r --arg name {{x}} '.[] | select(.name == $name)' notes.json | sort | uniq -c",
+    "git push origin {{x}}",
+    "git diff HEAD -- {{x}}",
   ]) {
     assert.equal(parseWorkspaceArtifactActions(actions(command)).length, 1, command);
   }
@@ -524,6 +547,44 @@ test("filled-in values are checked against their declared types", () => {
   assert.equal(resolveWorkspaceArtifactCommand(merge, ["x", "42"]).preview, "printf '%s|%s' 'x' '42'");
   assert.throws(() => resolveWorkspaceArtifactCommand(merge, ["x", -1]), /cannot be negative/u);
   assert.throws(() => resolveWorkspaceArtifactCommand(merge, ["x", "-1"]), /cannot be negative/u);
+});
+
+test("where a value lands decides what it may be: no option, no refspec, no file outside the workspace", () => {
+  const run = (command: string, value: string | number, type: "string" | "number" = "string") => {
+    const resolved = resolveWorkspaceArtifactCommand({ name: "a", label: "A", command, params: [{ name: "x", type }] }, [value]);
+    assert.equal(resolved.kind, "argv");
+    return resolved as Extract<typeof resolved, { kind: "argv" }>;
+  };
+  // A leading dash is read as an option, except after a literal --.
+  assert.throws(() => run("git log -1 {{x}}", "--output=/tmp/x"), /x cannot start with "-": the program would read it as an option\. Only a value placed after a literal --/u);
+  assert.deepEqual(run("grep -F -- {{x}} notes.txt", "-v").steps[0]!.pipeline[0]!.argv, ["grep", "-F", "--", "-v", "notes.txt"]);
+  // A branch git pushes, fetches or pulls: + forces it, a leading : deletes it, a : maps it elsewhere.
+  for (const value of ["+main", ":main", "main:other", "-main"]) {
+    assert.throws(() => run("git push origin {{x}}", value), /x cannot start with|x cannot start with -, \+ or :/u, value);
+  }
+  assert.throws(() => run("git push origin HEAD:{{x}}", "a:b"), /contain :/u);
+  assert.throws(() => run("git pull origin {{x}}", "+main"), /\+ forces a push/u);
+  assert.deepEqual(run("git push origin {{x}}", "feature/x").steps[0]!.pipeline[0]!.argv, ["git", "push", "origin", "feature/x"]);
+  // A file a program reads stays inside the workspace, including when joined to text.
+  for (const [command, value] of [
+    ["cat {{x}}", "/etc/passwd"],
+    ["cat {{x}}", "../../.ssh/id_ed25519"],
+    ["cat {{x}}", "~/.netrc"],
+    ["cat {{x}}", "C:\\Windows\\win.ini"],
+    ["cat notes/{{x}}.md", "../../../etc/hosts"],
+    ["head -n 5 {{x}}", "/etc/hosts"],
+    ["grep -F todo {{x}}", "/etc/hosts"],
+    ["grep -e todo {{x}}", "/etc/hosts"],
+    ["grep -f {{x}} notes.txt", "/etc/passwd"],
+    ["git diff HEAD -- {{x}}", "/etc/hosts"],
+  ]) {
+    assert.throws(() => run(command!, value!), /x must name a file inside the workspace/u, `${command} ${value}`);
+  }
+  assert.deepEqual(run("cat notes/{{x}}.md", "a/../b").steps[0]!.pipeline[0]!.argv, ["cat", "notes/a/../b.md"]);
+  // A grep pattern is not a file.
+  assert.deepEqual(run("grep -F {{x}} notes.txt", "/etc/hosts").steps[0]!.pipeline[0]!.argv, ["grep", "-F", "/etc/hosts", "notes.txt"]);
+  // Where nothing is read as a path or ref, text is just text.
+  assert.deepEqual(run("git commit -m {{x}}", "fix: a/../b:c").steps[0]!.pipeline[0]!.argv, ["git", "commit", "-m", "fix: a/../b:c"]);
 });
 
 test("commands and labels reject characters that hide what runs", () => {
