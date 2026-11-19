@@ -726,13 +726,12 @@ interface CallFrame {
   /** The bottom frame, for code outside every bracket. It is never popped. */
   root?: boolean;
   /**
-   * For a value wrapped after `+` at a URL sink (`'java' + ['script:…']`) and
-   * the brackets inside it: the URL the literals before the `+` spell, which
-   * the wrapped value's literals continue.
+   * For a value wrapped in parentheses or an array where the enclosing value
+   * is written to a URL sink, even after a `+`: where that sink's target
+   * starts, so the wrapped value's literals can continue the URL the
+   * literals before them spell (`'java' + ['script:…']`).
    */
-  urlLead?: string;
-  /** The `(` or `[` (by token index) that a literal chain in this frame ends with `+` before, and the URL the chain spells. */
-  nextLead?: { at: number; url: string };
+  urlTarget?: number;
 }
 
 const isLiteral = (token: JsToken | undefined): token is JsToken => token?.kind === "string" || token?.kind === "template";
@@ -759,9 +758,7 @@ function sameFrame(a: CallFrame, b: CallFrame): boolean {
     a.deferred === b.deferred &&
     a.parseAs === b.parseAs &&
     a.root === b.root &&
-    a.urlLead === b.urlLead &&
-    a.nextLead?.at === b.nextLead?.at &&
-    a.nextLead?.url === b.nextLead?.url &&
+    a.urlTarget === b.urlTarget &&
     sameSinks(a.sinks, b.sinks) &&
     sameSinks(a.outer, b.outer) &&
     a.literals.length === b.literals.length &&
@@ -1160,6 +1157,15 @@ function scanJsTokens(
     else if (XML_MARKUP_NAMESPACE.test(markup)) checkMarkup(markup.replace(/<(\/?)[A-Za-z_][\w.-]*:/gu, "<$1"));
   };
 
+  /**
+   * The URL the literals written to one URL sink spell, by where its target
+   * starts, while each literal follows the one before with only a `+` and
+   * brackets between them (`'java' + ('script') + ':…'`). It is open only
+   * from a literal where the URL starts: one after a value and a `+` (`base
+   * + 'javascript:…'`) is not.
+   */
+  const urlPieces = new Map<number, { url: string; open: boolean; last: number }>();
+
   /** The literals each markup, handler or XML sink is given, by kind and where its target starts. */
   const values = new Map<string, { kind: "html" | "handler" | "xml"; start: number; end: number; parts: string[] }>();
   const collect = (kind: "html" | "handler" | "xml", start: number, part: string, end: number) => {
@@ -1196,8 +1202,8 @@ function scanJsTokens(
           shift: named?.shift,
           literals: [],
           parseAs: named?.callee === "parseFromString" ? parseFromStringType(tokens, index, named.shift) : undefined,
-          outer: call ? undefined : wrappedSinks(frame, previous, index),
-          urlLead: call ? undefined : wrappedLead(frame, previous, index),
+          outer: call ? undefined : wrappedSinks(frame, previous),
+          urlTarget: call ? undefined : wrappedUrlTarget(frame),
         });
       } else if (text === "[" && isPunct(previous, "...") && frame.call && frame.callee !== undefined) {
         // An array spread into a call: its elements are the call's arguments.
@@ -1211,8 +1217,8 @@ function scanJsTokens(
           start: token.start,
           argument: 0,
           literals: [],
-          outer: value ? wrappedSinks(frame, previous, array ? index : undefined) : undefined,
-          urlLead: array ? wrappedLead(frame, previous, index) : undefined,
+          outer: value ? wrappedSinks(frame, previous) : undefined,
+          urlTarget: array ? wrappedUrlTarget(frame) : undefined,
         });
       } else if (text === "{") {
         stack.push({ call: false, start: token.start, argument: 0, literals: [] });
@@ -1301,19 +1307,29 @@ function scanJsTokens(
       }
     }
     let sinks = joinSinks(frameSinks(frame), tag);
+    const urlTarget = sinks?.url ?? frame.urlTarget;
+    if (urlTarget !== undefined) {
+      const piece = urlPieces.get(urlTarget);
+      if (piece === undefined) urlPieces.set(urlTarget, { url, open: sinks?.url !== undefined && !afterPlus && urlOpen, last: chainEnd });
+      else {
+        if (piece.open && piece.url.length < URL_PREFIX_LENGTH) {
+          const joins = joinsUrlPieces(tokens, piece.last, index);
+          piece.open = joins && urlOpen;
+          if (joins) {
+            piece.url += url;
+            if (isUnsafeUrl(piece.url)) note({ url: code.slice(urlTarget, end) });
+          }
+        }
+        piece.last = chainEnd;
+      }
+    }
     if (afterPlus && sinks?.url !== undefined) sinks = joinSinks({ html: sinks.html, handler: sinks.handler, xml: sinks.xml });
     if (sinks === undefined) {
       index = chainEnd;
       continue;
     }
     if (sinks.url !== undefined) {
-      // A value wrapped after `+` continues the URL the literals before it spell.
-      if (!afterPlus && frame.urlLead !== undefined && sinks.url === frame.outer?.url) url = frame.urlLead + url;
       if (isUnsafeUrl(url) || (raw !== undefined && isUnsafeUrl(raw))) note({ url: code.slice(sinks.url, end) });
-      const wrapper = tokens[chainEnd + 2];
-      if (urlOpen && url.length < URL_PREFIX_LENGTH && isPunct(tokens[chainEnd + 1], "+") && (isPunct(wrapper, "(") || isPunct(wrapper, "["))) {
-        frame.nextLead = { at: chainEnd + 2, url };
-      }
     }
     if (sinks.html !== undefined) {
       checkMarkup(markup);
@@ -1391,20 +1407,36 @@ function cookTemplateText(code: string, from: number, to: number): string {
 }
 
 /**
- * The sinks a value wrapped in a bracket opened at `at` in `frame` after
- * `previous` reaches. After a `+` the wrapped value is not where a URL
- * starts, unless literals before the `+` spell its start.
+ * The sinks a value wrapped in a bracket opened in `frame` after `previous`
+ * reaches. After a `+` the wrapped value is not where a URL starts (though
+ * it may continue one, see `urlPieces`).
  */
-function wrappedSinks(frame: CallFrame, previous: JsToken | undefined, at?: number): SinkSet | undefined {
+function wrappedSinks(frame: CallFrame, previous: JsToken | undefined): SinkSet | undefined {
   const sinks = frameSinks(frame);
-  if (sinks?.url === undefined || !isPunct(previous, "+") || (at !== undefined && frame.nextLead?.at === at)) return sinks;
+  if (sinks?.url === undefined || !isPunct(previous, "+")) return sinks;
   return joinSinks({ html: sinks.html, handler: sinks.handler, xml: sinks.xml });
 }
 
-/** The URL start a value wrapped in a bracket opened at `at` in `frame` after `previous` continues. */
-function wrappedLead(frame: CallFrame, previous: JsToken | undefined, at: number): string | undefined {
-  if (frame.nextLead?.at === at) return frame.nextLead.url;
-  return isPunct(previous, "+") ? undefined : frame.urlLead;
+/** Where the URL sink's target that a value wrapped in a bracket opened in `frame` is part of starts. */
+const wrappedUrlTarget = (frame: CallFrame) => frameSinks(frame)?.url ?? frame.urlTarget;
+
+/** How many tokens may come between two literals that spell one URL. */
+const URL_PIECE_GAP = 16;
+
+/**
+ * Whether the tokens between the literals ending at `last` and starting at
+ * `next` only join them: a single `+` and the brackets around them, as in
+ * `('java') + 'script:…'` or `'java' + ['script:…']`.
+ */
+function joinsUrlPieces(tokens: readonly JsToken[], last: number, next: number): boolean {
+  if (next - last - 1 > URL_PIECE_GAP) return false;
+  let pluses = 0;
+  for (let index = last + 1; index < next; index += 1) {
+    const token = tokens[index]!;
+    if (token.kind !== "punct" || !["+", "(", ")", "[", "]"].includes(token.text)) return false;
+    if (token.text === "+") pluses += 1;
+  }
+  return pluses === 1;
 }
 
 // --- HTML ---------------------------------------------------------------
