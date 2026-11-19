@@ -4,6 +4,8 @@
  * reads the right fields without being sent the data itself.
  */
 
+import { escapeLineSeparators, safeCut } from "../../../renderer/shared/workspace-artifacts.js";
+
 const MAX_SHAPE_CHARS = 240;
 const MAX_SAMPLE_CHARS = 240;
 /** Items of a list read to learn its element shape. */
@@ -13,8 +15,14 @@ const MAX_FIELDS = 12;
 const MAX_DEPTH = 3;
 const MAX_ALTERNATIVES = 3;
 
+/**
+ * `text` within `max` characters, with U+2028 and U+2029 escaped so a key or
+ * value holding one never reads as a line break, and cut where no emoji is
+ * split in two.
+ */
 function bounded(text: string, max: number): string {
-  return text.length > max ? `${text.slice(0, max - 1)}…` : text;
+  const escaped = escapeLineSeparators(text);
+  return escaped.length > max ? `${escaped.slice(0, safeCut(escaped, max - 1))}…` : escaped;
 }
 
 function isObject(value: unknown): value is Record<string, unknown> {

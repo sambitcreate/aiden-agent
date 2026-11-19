@@ -533,7 +533,7 @@ export function parseWorkspaceArtifactSnapshotV1(value: unknown): WorkspaceArtif
       typeof entry.dataJson === "string" && byteLength(entry.dataJson) <= WORKSPACE_ARTIFACT_LIMITS.sourceDataBytes
         ? entry.dataJson
         : undefined;
-    const error = typeof entry.error === "string" ? entry.error.slice(0, WORKSPACE_ARTIFACT_LIMITS.errorChars) : undefined;
+    const error = typeof entry.error === "string" ? entry.error.slice(0, safeCut(entry.error, WORKSPACE_ARTIFACT_LIMITS.errorChars)) : undefined;
     const folder = typeof entry.folder === "string" && /^[0-9a-f]{16}$/u.test(entry.folder) ? entry.folder : undefined;
     sources[name] = { status: entry.status, at, ...(entry.policyDenied === true ? { policyDenied: true as const } : {}), ...(dataJson !== undefined ? { dataJson } : {}), ...(error ? { error } : {}), ...(folder ? { folder } : {}) };
   }
@@ -761,6 +761,21 @@ export function safeCut(text: string, at: number): number {
   const low = text.charCodeAt(at);
   const high = text.charCodeAt(at - 1);
   return low >= 0xdc00 && low <= 0xdfff && high >= 0xd800 && high <= 0xdbff ? at - 1 : at;
+}
+
+/**
+ * `text` with U+2028 and U+2029 written as the escapes `\u2028` and
+ * `\u2029`. JSON.stringify leaves both as they are, and a model or a log
+ * reads either as a line break, so quoted file or command text could
+ * otherwise seem to start a line of its own.
+ */
+export function escapeLineSeparators(text: string): string {
+  return text.replace(/[\u2028\u2029]/gu, (char) => (char === "\u2028" ? "\\u2028" : "\\u2029"));
+}
+
+/** `value` as JSON for text sent to the model, with U+2028 and U+2029 escaped. */
+export function quoteForModel(value: unknown): string {
+  return escapeLineSeparators(JSON.stringify(value) ?? "null");
 }
 
 /** Turns command output or file text into the value a page reads. */

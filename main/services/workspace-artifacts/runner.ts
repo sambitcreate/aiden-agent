@@ -4,6 +4,7 @@ import * as fs from "node:fs/promises";
 import {
   parseWorkspaceArtifactOutput,
   resolveWorkspaceArtifactCommand,
+  safeCut,
   WORKSPACE_ARTIFACT_LIMITS,
   workspaceArtifactCommandAccess,
   workspaceArtifactSourceAccess,
@@ -51,9 +52,10 @@ export interface WorkspaceArtifactActionResult {
   output: string;
 }
 
+/** `text` trimmed and within `max` characters, cut where no emoji is split in two. */
 function clip(text: string, max: number): string {
   const trimmed = text.trim();
-  return trimmed.length > max ? `${trimmed.slice(0, max - 1)}…` : trimmed;
+  return trimmed.length > max ? `${trimmed.slice(0, safeCut(trimmed, max - 1))}…` : trimmed;
 }
 
 /**
@@ -66,8 +68,11 @@ function headAndTail(text: string, max: number): string {
   const gap = " … ";
   if (trimmed.length <= max || max < 2 * gap.length) return clip(trimmed, max);
   const room = max - gap.length;
-  const head = Math.floor(room * 0.4);
-  return `${trimmed.slice(0, head).trimEnd()}${gap}${trimmed.slice(trimmed.length - (room - head)).trimStart()}`;
+  const head = safeCut(trimmed, Math.floor(room * 0.4));
+  // The tail starts after an emoji the cut would split, rather than inside it.
+  const from = trimmed.length - (room - head);
+  const tail = safeCut(trimmed, from) === from ? from : from + 1;
+  return `${trimmed.slice(0, head).trimEnd()}${gap}${trimmed.slice(tail).trimStart()}`;
 }
 
 function failure(result: BoundedShellCommandResult): string {

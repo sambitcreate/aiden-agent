@@ -376,6 +376,8 @@ test("a failing command reports the start and the end of what it printed, and ba
       { name: "noisy", kind: "shell", command: "for i in $(seq 1 200); do echo \"line $i of the log\" >&2; done; exit 3", parse: "text" },
       { name: "comma", kind: "shell", command: `printf '{"open": 2,\n "closed": 5,\n}'`, parse: "json" },
       { name: "chatty", kind: "file", file: "report.json", parse: "json" },
+      // Long enough to be cut, with the cuts landing between an emoji's two halves.
+      { name: "emoji", kind: "shell", command: "printf a >&2; for i in $(seq 1 400); do printf '\\360\\237\\230\\200' >&2; done; exit 3", parse: "text" },
     ],
   });
   await fs.writeFile(path.join(folder, "report.json"), 'Fetching...\n[{"n":1}]');
@@ -386,6 +388,9 @@ test("a failing command reports the start and the end of what it printed, and ba
   assert.ok(noisy.length <= 500, "within the stored error's limit");
   assert.match(results.comma!.error!, /not valid JSON: at line 3, column 1, near ".*⟨here⟩\}"/u);
   assert.match(results.chatty!.error!, /not valid JSON: at line 1, column 1, near "⟨here⟩Fetching\.\.\./u);
+  // Both the start and the end of the output keep whole emoji.
+  assert.match(results.emoji!.error!, /^Exited with code 3\. a😀+ … 😀+$/u);
+  assert.doesNotMatch(results.emoji!.error!, /[\uD800-\uDFFF]/u, "no lone surrogate");
 });
 
 test("a file replaced while it is read keeps the page's last data, marked as an error, and is not called a credential file", async (t) => {
