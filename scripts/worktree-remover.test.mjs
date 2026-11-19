@@ -255,7 +255,10 @@ test("main test lifecycle builds the native worktree remover before GitService t
   const registry = JSON.parse(
     await readFile(path.join(repositoryRoot, "scripts", "ci-test-registry.json"), "utf8"),
   );
-  const plan = buildPlan(registry, parseArguments(["--parallel"]));
+  const plan = buildPlan(registry, {
+    ...parseArguments(["--parallel"]),
+    selection: { unit: { mode: "all" } },
+  });
   const gitLane = plan.unitCommands.find((command) => command.files.includes("main/services/git.test.ts"));
   assert.ok(gitLane, "GitService tests must run in the default npm test plan");
   const builder = plan.prerequisites.find((step) => step.command.join(" ") === "npm run build:worktree-remover");
