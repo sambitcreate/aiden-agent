@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
+import { spawnSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -23,6 +24,10 @@ function installFixture(kind: "deb" | "rpm") {
   writeFileSync(executablePath, "executable", { mode: 0o755 });
   writeFileSync(path.join(resourcesPath, "app-update.yml"), "provider: github\n");
   writeFileSync(path.join(resourcesPath, "package-type"), kind);
+  mkdirSync(path.join(installDir, "Helpers"), { mode: 0o755 });
+  chmodSync(path.join(installDir, "Helpers"), 0o755);
+  const helper = path.join(installDir, "Helpers", "aiden-package-install");
+  writeFileSync(helper, "#!/bin/sh\n", { mode: 0o755 });
   const bin = path.join(root, "bin");
   mkdirSync(bin);
   const tools: LinuxPackageTools = {
@@ -45,7 +50,7 @@ function installFixture(kind: "deb" | "rpm") {
     dpkgInfoDir,
     systemUid: process.getuid?.() ?? 0,
   };
-  return { root, installDir, runtime, tools, cleanup: () => rmSync(root, { recursive: true, force: true }) };
+  return { root, installDir, helper, runtime, tools, cleanup: () => rmSync(root, { recursive: true, force: true }) };
 }
 
 test("Linux updates turn on for an eligible DEB or RPM install as well as an AppImage", () => {
@@ -101,107 +106,154 @@ test("AppImages, unknown formats, unowned or writable installs and missing tools
     writeFileSync(path.join(f.runtime.resourcesPath, "package-type"), "deb");
     rmSync(path.join(f.runtime.resourcesPath, "app-update.yml"));
     assert.equal(canUpdateLinuxPackage(f.runtime), null);
+    writeFileSync(path.join(f.runtime.resourcesPath, "app-update.yml"), "provider: github\n");
+    assert.equal(canUpdateLinuxPackage(f.runtime), "deb");
+
+    // Root runs the helper, so the person must not be able to change it.
+    chmodSync(f.helper, 0o775);
+    assert.equal(canUpdateLinuxPackage(f.runtime), null);
+    rmSync(f.helper);
+    assert.equal(canUpdateLinuxPackage(f.runtime), null);
   } finally {
     f.cleanup();
   }
 });
 
 interface FakeSystem {
-  packageName?: string;
-  packageVersion?: string;
-  installExit?: number;
+  helperExit?: number;
   installedVersion?: string;
 }
 
-function fakePackageManager(tools: LinuxPackageTools, system: FakeSystem = {}) {
-  const calls: { file: string; args: string[]; staged?: string; stagedExists?: boolean }[] = [];
+function fakeHelperRun(tools: LinuxPackageTools, system: FakeSystem = {}) {
+  const calls: { file: string; args: string[] }[] = [];
   const run = async (file: string, args: readonly string[]): Promise<CommandResult> => {
-    const staged = args.find((arg) => arg.endsWith(".deb") || arg.endsWith(".rpm"));
-    calls.push({ file, args: [...args], staged, stagedExists: staged ? existsSync(staged) : undefined });
-    if (file === tools.dpkgDeb || (file === tools.rpm && args[0] === "-qp")) {
-      return { code: 0, stdout: `${system.packageName ?? "aiden-agent"}\n${system.packageVersion ?? "0.67.0"}\n`, stderr: "" };
-    }
-    if (file === tools.dpkgQuery || (file === tools.rpm && args[0] === "-q")) {
+    calls.push({ file, args: [...args] });
+    if (file === tools.dpkgQuery || file === tools.rpm) {
       return { code: 0, stdout: system.installedVersion ?? "0.67.0", stderr: "" };
     }
-    const exit = system.installExit ?? 0;
+    const exit = system.helperExit ?? 0;
     return { code: exit, stdout: "", stderr: exit ? "E: install failed" : "" };
   };
   return { calls, run };
 }
 
-function downloadedPackage(root: string, bytes = "package-bytes") {
-  const installer = path.join(root, "download.deb");
-  writeFileSync(installer, bytes);
-  return { installer, sha512: createHash("sha512").update(bytes).digest("base64") };
-}
+const BYTES = "package-bytes";
+const SHA512 = createHash("sha512").update(BYTES).digest("base64");
+const SHA512_HEX = createHash("sha512").update(BYTES).digest("hex");
 
-test("a DEB update installs the verified bytes through pkexec and apt-get, then checks the installed version", async () => {
+test("an update hands root's helper the download, the feed digest and the version through pkexec", async () => {
   const f = installFixture("deb");
   try {
-    const { installer, sha512 } = downloadedPackage(f.root);
-    const pm = fakePackageManager(f.tools);
-    const outcome = await installLinuxPackageUpdate({ kind: "deb", installer, sha512, version: "0.67.0", uid: 1000, run: pm.run, tools: f.tools, tmpdir: f.root });
+    const installer = path.join(f.root, "download.deb");
+    const pm = fakeHelperRun(f.tools);
+    const outcome = await installLinuxPackageUpdate({ kind: "deb", helper: f.helper, installer, sha512: SHA512, version: "0.67.0", uid: 1000, run: pm.run, tools: f.tools });
     assert.equal(outcome, "installed");
-    const install = pm.calls.find((call) => call.file === f.tools.pkexec);
-    assert.ok(install);
-    assert.deepEqual(install.args.slice(0, 3), [f.tools.aptGet, "install", "--yes"]);
-    // The staged copy, not the user-cache download, is what root installs.
-    assert.notEqual(install.staged, installer);
-    assert.equal(install.stagedExists, true);
-    assert.equal(pm.calls[pm.calls.length - 1]?.file, f.tools.dpkgQuery);
-    // The private staging folder is gone afterwards.
-    assert.equal(existsSync(path.dirname(install.staged!)), false);
+    assert.deepEqual(pm.calls[0], { file: f.tools.pkexec, args: [f.helper, "deb", installer, SHA512_HEX, "0.67.0"] });
+    assert.deepEqual(pm.calls[1], { file: f.tools.dpkgQuery, args: ["--showformat=${Version}", "--show", "aiden-agent"] });
   } finally {
     f.cleanup();
   }
 });
 
-test("an RPM update installs with dnf, and root skips the password prompt", async () => {
+test("root runs the helper directly, and RPM reads its version back with rpm", async () => {
   const f = installFixture("rpm");
   try {
-    const { installer, sha512 } = downloadedPackage(f.root);
-    const pm = fakePackageManager(f.tools);
-    assert.equal(await installLinuxPackageUpdate({ kind: "rpm", installer, sha512, version: "0.67.0", uid: 0, run: pm.run, tools: f.tools, tmpdir: f.root }), "installed");
-    assert.equal(pm.calls.some((call) => call.file === f.tools.pkexec), false);
-    const install = pm.calls.find((call) => call.file === f.tools.dnf);
-    assert.deepEqual(install?.args.slice(0, 2), ["install", "--assumeyes"]);
+    const pm = fakeHelperRun(f.tools);
+    const installer = path.join(f.root, "download.rpm");
+    assert.equal(await installLinuxPackageUpdate({ kind: "rpm", helper: f.helper, installer, sha512: SHA512, version: "0.67.0", uid: 0, run: pm.run, tools: f.tools }), "installed");
+    assert.deepEqual(pm.calls[0], { file: f.helper, args: ["rpm", installer, SHA512_HEX, "0.67.0"] });
+    assert.equal(pm.calls[1]?.file, f.tools.rpm);
   } finally {
     f.cleanup();
   }
 });
 
-test("a closed password prompt is a cancel, not a failure", async () => {
+test("a closed password prompt is a cancel; a refused package, a failed install or a wrong version is a failure", async () => {
   const f = installFixture("deb");
   try {
-    const { installer, sha512 } = downloadedPackage(f.root);
-    const pm = fakePackageManager(f.tools, { installExit: 126 });
-    assert.equal(await installLinuxPackageUpdate({ kind: "deb", installer, sha512, version: "0.67.0", uid: 1000, run: pm.run, tools: f.tools, tmpdir: f.root }), "cancelled");
-    assert.equal(pm.calls.some((call) => call.file === f.tools.dpkgQuery), false);
-  } finally {
-    f.cleanup();
-  }
-});
-
-test("changed bytes, another package, another version or a failed install never report success", async () => {
-  const f = installFixture("deb");
-  try {
-    const { installer, sha512 } = downloadedPackage(f.root);
-    const attempt = async (system: FakeSystem, overrides: { sha512?: string; version?: string } = {}) => {
-      const pm = fakePackageManager(f.tools, system);
-      const outcome = await installLinuxPackageUpdate({ kind: "deb", installer, sha512: overrides.sha512 ?? sha512, version: overrides.version ?? "0.67.0", uid: 1000, run: pm.run, tools: f.tools, tmpdir: f.root });
-      return { outcome, installed: pm.calls.some((call) => call.file === f.tools.pkexec) };
+    const installer = path.join(f.root, "download.deb");
+    const attempt = async (system: FakeSystem, overrides: { sha512?: string; version?: string; installer?: string } = {}) => {
+      const pm = fakeHelperRun(f.tools, system);
+      const outcome = await installLinuxPackageUpdate({ kind: "deb", helper: f.helper, installer: overrides.installer ?? installer, sha512: overrides.sha512 ?? SHA512, version: overrides.version ?? "0.67.0", uid: 1000, run: pm.run, tools: f.tools });
+      return { outcome, ran: pm.calls.length };
     };
-    const otherDigest = createHash("sha512").update("other").digest("base64");
-    assert.deepEqual(await attempt({}, { sha512: otherDigest }), { outcome: "failed", installed: false });
-    assert.deepEqual(await attempt({ packageName: "evil" }), { outcome: "failed", installed: false });
-    assert.deepEqual(await attempt({ packageVersion: "0.66.0" }), { outcome: "failed", installed: false });
-    assert.deepEqual(await attempt({}, { version: "0.67.0\nx" }), { outcome: "failed", installed: false });
-    assert.deepEqual(await attempt({ installExit: 100 }), { outcome: "failed", installed: true });
-    assert.deepEqual(await attempt({ installedVersion: "0.66.0" }), { outcome: "failed", installed: true });
-    // The download itself is left for electron-updater to manage.
-    assert.equal(readFileSync(installer, "utf8"), "package-bytes");
+    assert.deepEqual(await attempt({ helperExit: 126 }), { outcome: "cancelled", ran: 1 });
+    assert.deepEqual(await attempt({ helperExit: 3 }), { outcome: "failed", ran: 1 });
+    assert.deepEqual(await attempt({ helperExit: 100 }), { outcome: "failed", ran: 1 });
+    assert.deepEqual(await attempt({ installedVersion: "0.66.0" }), { outcome: "failed", ran: 2 });
+    // Malformed inputs never reach pkexec.
+    assert.deepEqual(await attempt({}, { version: "0.67.0\nx" }), { outcome: "failed", ran: 0 });
+    assert.deepEqual(await attempt({}, { sha512: "not-a-digest" }), { outcome: "failed", ran: 0 });
+    assert.deepEqual(await attempt({}, { installer: "relative.deb" }), { outcome: "failed", ran: 0 });
   } finally {
     f.cleanup();
+  }
+});
+
+const HELPER_SOURCE = new URL("../../scripts/aiden-package-install.sh", import.meta.url);
+
+/**
+ * The real helper, with its fixed PATH pointed at fake package tools first.
+ * The fake dpkg-deb tampers with the person's download after root copied it,
+ * the way a same-user process could; the fake apt-get records what it got.
+ */
+function helperHarness() {
+  const root = realpathSync(mkdtempSync(path.join(os.tmpdir(), "aiden-package-helper-")));
+  const bin = path.join(root, "bin");
+  mkdirSync(bin);
+  const log = path.join(root, "install.log");
+  const helper = path.join(root, "aiden-package-install");
+  writeFileSync(helper, readFileSync(HELPER_SOURCE, "utf8").replace(/^PATH=/mu, `PATH=${bin}:`), { mode: 0o755 });
+  writeFileSync(path.join(bin, "dpkg-deb"), `#!/bin/sh
+printf 'tampered' > "$FAKE_SOURCE"
+printf '%s' "\${FAKE_IDENTITY:-aiden-agent 0.67.0}"
+`, { mode: 0o755 });
+  writeFileSync(path.join(bin, "apt-get"), `#!/bin/sh
+printf '%s\\n%s\\n%s\\n' "$3" "$(sha512sum -- "$3" | cut -d ' ' -f 1)" "$(stat -c %a -- "$(dirname -- "$3")")" > "${log}"
+`, { mode: 0o755 });
+  const download = path.join(root, "download.deb");
+  writeFileSync(download, BYTES);
+  const runHelper = (args: string[], env: Record<string, string> = {}) =>
+    spawnSync(helper, args, { encoding: "utf8", env: { ...process.env, FAKE_SOURCE: download, ...env } });
+  return { root, log, download, runHelper, cleanup: () => rmSync(root, { recursive: true, force: true }) };
+}
+
+test("root's helper installs only the copy it verified, even if the download changes afterwards", { skip: process.platform !== "linux" }, () => {
+  const h = helperHarness();
+  try {
+    const result = h.runHelper(["deb", h.download, SHA512_HEX, "0.67.0"]);
+    assert.equal(result.status, 0, result.stderr);
+    const [installedPath, installedDigest, folderMode] = readFileSync(h.log, "utf8").trim().split("\n");
+    // The download was tampered with after the copy; apt-get still got the verified bytes.
+    assert.equal(readFileSync(h.download, "utf8"), "tampered");
+    assert.notEqual(installedPath, h.download);
+    assert.equal(installedDigest, SHA512_HEX);
+    assert.equal(folderMode, "700");
+    // The private copy is removed once the install finishes.
+    assert.equal(existsSync(path.dirname(installedPath!)), false);
+  } finally {
+    h.cleanup();
+  }
+});
+
+test("root's helper refuses changed bytes, another package or version, and malformed arguments", { skip: process.platform !== "linux" }, () => {
+  const h = helperHarness();
+  try {
+    writeFileSync(h.download, "changed before root copied it");
+    assert.equal(h.runHelper(["deb", h.download, SHA512_HEX, "0.67.0"]).status, 3);
+    writeFileSync(h.download, BYTES);
+    assert.equal(h.runHelper(["deb", h.download, SHA512_HEX, "0.67.0"], { FAKE_IDENTITY: "evil 0.67.0" }).status, 3);
+    writeFileSync(h.download, BYTES);
+    assert.equal(h.runHelper(["deb", h.download, SHA512_HEX, "0.67.0"], { FAKE_IDENTITY: "aiden-agent 0.66.0" }).status, 3);
+    assert.equal(existsSync(h.log), false, "apt-get never ran");
+    writeFileSync(h.download, BYTES);
+    assert.equal(h.runHelper(["pacman", h.download, SHA512_HEX, "0.67.0"]).status, 2);
+    assert.equal(h.runHelper(["deb", "download.deb", SHA512_HEX, "0.67.0"]).status, 2);
+    assert.equal(h.runHelper(["deb", h.download, SHA512, "0.67.0"]).status, 2);
+    assert.equal(h.runHelper(["deb", h.download, SHA512_HEX, "0.67.0; rm -rf /"]).status, 2);
+    assert.equal(h.runHelper(["deb", h.download, SHA512_HEX]).status, 2);
+    assert.equal(existsSync(h.log), false, "apt-get never ran");
+  } finally {
+    h.cleanup();
   }
 });

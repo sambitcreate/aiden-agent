@@ -621,6 +621,10 @@
         {
           "from": "build/native/aiden-global-shortcuts-portal",
           "to": "Helpers/aiden-global-shortcuts-portal"
+        },
+        {
+          "from": "scripts/aiden-package-install.sh",
+          "to": "Helpers/aiden-package-install"
         }
       ]
     },

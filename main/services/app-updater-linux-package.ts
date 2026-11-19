@@ -1,13 +1,13 @@
 import { execFile } from "node:child_process";
-import { createHash } from "node:crypto";
-import { constants, lstatSync, readFileSync, realpathSync, statSync } from "node:fs";
-import { chmod, mkdtemp, open, rm } from "node:fs/promises";
-import os from "node:os";
+import { lstatSync, readFileSync, realpathSync, statSync } from "node:fs";
 import path from "node:path";
 import { isPathInside } from "../shared/path-containment.js";
 
 /** The distro package formats Aiden publishes and can update in place. */
 export type LinuxPackageKind = "deb" | "rpm";
+
+/** The root-run installer, relative to the install folder (see scripts/aiden-package-install.sh). */
+export const LINUX_PACKAGE_HELPER = path.join("Helpers", "aiden-package-install");
 
 /** The package name in both the DEB and RPM metadata. */
 export const LINUX_PACKAGE_NAME = "aiden-agent";
@@ -83,11 +83,14 @@ export function canUpdateLinuxPackage(runtime: LinuxPackageUpdateRuntime): Linux
     const installDir = path.dirname(executable);
     const resources = realpathSync(runtime.resourcesPath);
     if (!isPathInside(installDir, resources, { allowRoot: false })) return null;
-    // Installed by the package manager: system-owned and not writable by the person.
-    for (const file of [executable, installDir, resources]) {
+    // Installed by the package manager: system-owned and not writable by the
+    // person, including the helper that root runs to install the update.
+    const helper = path.join(installDir, LINUX_PACKAGE_HELPER);
+    for (const file of [executable, installDir, resources, path.dirname(helper), helper]) {
       const info = lstatSync(file);
       if (info.uid !== systemUid || (info.mode & 0o022) !== 0) return null;
     }
+    if (!isExecutableFile(helper)) return null;
     const config = lstatSync(path.join(resources, "app-update.yml"));
     if (!config.isFile() || config.size === 0 || config.size > 65_536) return null;
     const needed = kind === "deb"
@@ -128,6 +131,8 @@ export type LinuxPackageInstallOutcome = "installed" | "cancelled" | "failed";
 
 export interface LinuxPackageInstallOptions {
   kind: LinuxPackageKind;
+  /** The root-owned installer helper shipped in the package. */
+  helper: string;
   /** The package electron-updater downloaded and checked against the feed. */
   installer: string;
   /** Base64 SHA-512 from the release feed. */
@@ -137,44 +142,7 @@ export interface LinuxPackageInstallOptions {
   uid?: number;
   run?: CommandRunner;
   tools?: LinuxPackageTools;
-  tmpdir?: string;
   log?: (message: string) => void;
-}
-
-/** Copy into a private folder while hashing, so the bytes installed are the bytes checked. */
-async function stageVerifiedPackage(installer: string, sha512: string, directory: string, kind: LinuxPackageKind): Promise<string> {
-  const staged = path.join(directory, `${LINUX_PACKAGE_NAME}.${kind}`);
-  const source = await open(installer, constants.O_RDONLY | constants.O_NOFOLLOW);
-  try {
-    const info = await source.stat();
-    if (!info.isFile() || info.size === 0) throw new Error("The downloaded package is unavailable.");
-    const target = await open(staged, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600);
-    try {
-      const hash = createHash("sha512");
-      const buffer = Buffer.alloc(1024 * 1024);
-      let copied = 0;
-      while (copied < info.size) {
-        const { bytesRead } = await source.read(buffer, 0, Math.min(buffer.length, info.size - copied), copied);
-        if (bytesRead === 0) throw new Error("The downloaded package was truncated.");
-        hash.update(buffer.subarray(0, bytesRead));
-        await target.write(buffer, 0, bytesRead);
-        copied += bytesRead;
-      }
-      if (hash.digest("base64") !== sha512) throw new Error("The downloaded package does not match the update feed.");
-      await target.sync();
-    } finally {
-      await target.close();
-    }
-  } finally {
-    await source.close();
-  }
-  return staged;
-}
-
-function packageMetadata(kind: LinuxPackageKind, file: string, tools: LinuxPackageTools): [string, string[]] {
-  return kind === "deb"
-    ? [tools.dpkgDeb, ["--showformat=${Package}\\n${Version}\\n", "--show", file]]
-    : [tools.rpm, ["-qp", "--nosignature", "--nodigest", "--queryformat", "%{NAME}\\n%{VERSION}\\n", file]];
 }
 
 function installedVersion(kind: LinuxPackageKind, tools: LinuxPackageTools): [string, string[]] {
@@ -183,62 +151,46 @@ function installedVersion(kind: LinuxPackageKind, tools: LinuxPackageTools): [st
     : [tools.rpm, ["-q", "--queryformat", "%{VERSION}", LINUX_PACKAGE_NAME]];
 }
 
-function installCommand(kind: LinuxPackageKind, file: string, tools: LinuxPackageTools): string[] {
-  return kind === "deb"
-    ? [tools.aptGet, "install", "--yes", file]
-    : [tools.dnf, "install", "--assumeyes", file];
-}
-
 function tail(text: string): string {
   return text.trim().split("\n").slice(-6).join(" | ").slice(0, 800);
 }
 
 /**
  * Install a downloaded Aiden DEB or RPM with the system package manager, after
- * the person approves it in the desktop's password prompt (pkexec). The
- * package must be Aiden's own package at the announced version, and the
- * installed version is read back before this reports success.
+ * the person approves it in the desktop's password prompt (pkexec).
+ *
+ * The download sits in the person's own cache, so every check that matters
+ * happens as root inside the shipped helper (scripts/aiden-package-install.sh):
+ * it copies the file into a root-only folder and verifies that copy's digest,
+ * package name and version before apt-get or dnf sees it. The installed
+ * version is read back before this reports success.
  */
 export async function installLinuxPackageUpdate(options: LinuxPackageInstallOptions): Promise<LinuxPackageInstallOutcome> {
   const tools = options.tools ?? LINUX_PACKAGE_TOOLS;
   const run = options.run ?? runCommand;
   const log = options.log ?? (() => {});
-  if (!/^[A-Za-z0-9+/]{86}==$/u.test(options.sha512) || !/^\d+\.\d+\.\d+$/u.test(options.version)) return "failed";
-  let directory: string | undefined;
-  try {
-    directory = await mkdtemp(path.join(options.tmpdir ?? os.tmpdir(), "aiden-update-"));
-    await chmod(directory, 0o700);
-    const staged = await stageVerifiedPackage(options.installer, options.sha512, directory, options.kind);
-
-    const [metaFile, metaArgs] = packageMetadata(options.kind, staged, tools);
-    const metadata = await run(metaFile, metaArgs);
-    const [name, version] = metadata.stdout.split("\n").map((line) => line.trim());
-    if (metadata.code !== 0 || name !== LINUX_PACKAGE_NAME || version !== options.version) {
-      log(`The downloaded package is not ${LINUX_PACKAGE_NAME} ${options.version}.`);
-      return "failed";
-    }
-
-    const command = installCommand(options.kind, staged, tools);
-    const elevated = options.uid === 0;
-    const result = elevated ? await run(command[0]!, command.slice(1)) : await run(tools.pkexec, command);
-    // pkexec exits 126 when the person closes the password prompt.
-    if (!elevated && result.code === 126) return "cancelled";
-    if (result.code !== 0) {
-      log(`The package manager could not install the update (exit ${result.code ?? "signal"}): ${tail(result.stderr || result.stdout)}`);
-      return "failed";
-    }
-
-    const [checkFile, checkArgs] = installedVersion(options.kind, tools);
-    const installed = await run(checkFile, checkArgs);
-    if (installed.code !== 0 || installed.stdout.trim() !== options.version) {
-      log(`After installing, the system reports ${LINUX_PACKAGE_NAME} ${installed.stdout.trim() || "missing"}.`);
-      return "failed";
-    }
-    return "installed";
-  } catch (error) {
-    log(`The update package could not be prepared: ${error instanceof Error ? error.message : String(error)}`);
+  if (!/^[A-Za-z0-9+/]{86}==$/u.test(options.sha512) || !/^\d+\.\d+\.\d+$/u.test(options.version) || !path.isAbsolute(options.installer)) {
     return "failed";
-  } finally {
-    if (directory) await rm(directory, { recursive: true, force: true }).catch(() => {});
   }
+  const sha512Hex = Buffer.from(options.sha512, "base64").toString("hex");
+  const command = [options.helper, options.kind, options.installer, sha512Hex, options.version];
+  const elevated = options.uid === 0;
+  const result = elevated ? await run(command[0]!, command.slice(1)) : await run(tools.pkexec, command);
+  // pkexec exits 126 when the person closes the password prompt.
+  if (!elevated && result.code === 126) return "cancelled";
+  if (result.code === 3) {
+    log(`The downloaded package is not the verified ${LINUX_PACKAGE_NAME} ${options.version}.`);
+    return "failed";
+  }
+  if (result.code !== 0) {
+    log(`The package manager could not install the update (exit ${result.code ?? "signal"}): ${tail(result.stderr || result.stdout)}`);
+    return "failed";
+  }
+  const [checkFile, checkArgs] = installedVersion(options.kind, tools);
+  const installed = await run(checkFile, checkArgs);
+  if (installed.code !== 0 || installed.stdout.trim() !== options.version) {
+    log(`After installing, the system reports ${LINUX_PACKAGE_NAME} ${installed.stdout.trim() || "missing"}.`);
+    return "failed";
+  }
+  return "installed";
 }

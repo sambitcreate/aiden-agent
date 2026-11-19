@@ -46,6 +46,15 @@ test("Linux package requires its lease and Bot inbox helpers and shared Generati
     /aiden-lease-flock/u,
   );
 
+  const missingUpdateHelper = JSON.parse(JSON.stringify(packageJson));
+  missingUpdateHelper.build.linux.extraFiles = missingUpdateHelper.build.linux.extraFiles.filter(
+    (entry) => !String(entry.to).includes("aiden-package-install"),
+  );
+  assert.throws(
+    () => assertLinuxBuildConfiguration(missingUpdateHelper),
+    /aiden-package-install/u,
+  );
+
   const missingLibraries = JSON.parse(JSON.stringify(packageJson));
   missingLibraries.build.extraResources = missingLibraries.build.extraResources.filter(
     (entry) => entry.from !== "resources/generative-ui",

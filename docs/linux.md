@@ -184,10 +184,11 @@ Linux installations:
   restart** then shows the desktop's password prompt (pkexec) and installs it with
   `apt-get` or `dnf`, which the package manager records as an ordinary upgrade.
   Closing the prompt leaves the running version open and the update ready for
-  later; Aiden never installs a package on an ordinary quit. Aiden first copies the
-  download to a private folder, checks its SHA-512 digest and that it is the
-  `aiden-agent` package at the announced version, and reads the installed version
-  back before restarting. This needs `pkexec` (Ubuntu, Debian, Fedora and most
+  later; Aiden never installs a package on an ordinary quit. The prompt runs the
+  package's own `/opt/Aiden Agent/Helpers/aiden-package-install` as root, which
+  copies the download into a root-only folder, checks that copy's SHA-512 digest
+  and that it is the `aiden-agent` package at the announced version, and installs
+  only that copy. Aiden reads the installed version back before restarting. This needs `pkexec` (Ubuntu, Debian, Fedora and most
   desktops have it) and a `/opt/Aiden Agent` owned by the package. Version 0.66.0
   and earlier cannot update a `.deb` or `.rpm` in-app, so install the first release
   after 0.66.0 once by hand.

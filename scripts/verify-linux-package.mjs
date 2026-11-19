@@ -32,6 +32,8 @@ const REQUIRED_HELPERS = Object.freeze([
   "aiden-subagent-file-mutator",
   "aiden-subagent-shell-runner",
 ]);
+/** A root-run shell script, so it is outside the ELF/glibc checks of REQUIRED_HELPERS. */
+const LINUX_PACKAGE_INSTALL_HELPER = "aiden-package-install";
 const REQUIRED_GENERATIVE_UI_LIBRARY_FILES = Object.freeze([
   "chart.umd.min.js",
   "plotly.min.js",
@@ -221,7 +223,7 @@ export function assertLinuxBuildConfiguration(packageJson) {
   const helperDestinations = new Set(
     (linux.extraFiles ?? []).map((entry) => entry.to),
   );
-  for (const helper of REQUIRED_HELPERS) {
+  for (const helper of [...REQUIRED_HELPERS, LINUX_PACKAGE_INSTALL_HELPER]) {
     if (!helperDestinations.has(`Helpers/${helper}`)) {
       throw new Error(`Linux package config is missing ${helper}.`);
     }
@@ -316,6 +318,8 @@ export async function verifyLinuxPackage(appDirectory) {
       executable: true,
     });
   }
+  // Root runs this to install DEB/RPM updates; it must ship executable.
+  await assertRegularFile(path.join(root, "Helpers", LINUX_PACKAGE_INSTALL_HELPER), { executable: true });
   for (const forbidden of [
     path.join(root, "Helpers", "CuaDriver.app"),
     path.join(root, "Helpers", "Aiden Foundation Models Helper.app"),
