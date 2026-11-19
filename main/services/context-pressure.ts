@@ -42,8 +42,9 @@ import { mcpManager } from "./mcp.js";
 import { mcpServerOffersTools } from "../../renderer/shared/mcp-exposure.js";
 import { draftUserPiMessage } from "./generation-messages.js";
 import { RecentChatCache } from "./recent-chat-cache.js";
-import { createPromptCacheTelemetry, type PromptCacheTelemetry } from "./pi-cache-telemetry.js";
-import { chatSideCallPrefixes } from "./side-call-prefix.js";
+import { chatPromptCacheTelemetry, forgetChatPromptCacheState } from "./chat-prompt-cache-state.js";
+
+export { chatPromptCacheTelemetry };
 
 /**
  * Profiles are kept for the chats used most recently. An evicted chat's next
@@ -78,12 +79,6 @@ export function rememberPromptCacheRefresh(chatId: string, refresh: PromptCacheR
   promptCacheRefreshes.set(chatId, refresh);
 }
 
-/**
- * Per-chat prompt-cache miss attribution. It holds section hashes only and
- * keeps its own recent-chat bound; a dropped chat just starts fresh.
- */
-export const chatPromptCacheTelemetry: PromptCacheTelemetry = createPromptCacheTelemetry();
-
 /** The chat's last miss in the renderer's shape. */
 export function lastPromptCacheMiss(chatId: string): ChatContextPressureV1["lastCacheMiss"] {
   const miss = chatPromptCacheTelemetry.lastMiss(chatId);
@@ -93,8 +88,7 @@ export function lastPromptCacheMiss(chatId: string): ChatContextPressureV1["last
 export function forgetChatContextProfile(chatId: string): void {
   generationProfiles.delete(chatId);
   promptCacheRefreshes.delete(chatId);
-  chatPromptCacheTelemetry.forget(chatId);
-  chatSideCallPrefixes.forget(chatId);
+  forgetChatPromptCacheState(chatId);
   ambientProfiles.delete(chatId);
   journalSnapshots.delete(chatId);
 }

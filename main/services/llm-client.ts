@@ -303,8 +303,8 @@ import {
   modelRetainsSystemUpdates,
 } from "./generation-context.js";
 import { promptCacheTtlMs } from "./prompt-cache-lifetimes.js";
+import { chatPromptCacheTelemetry, chatPromptPrefixCompacted } from "./chat-prompt-cache-state.js";
 import {
-  chatPromptCacheTelemetry,
   invalidateChatContextJournal,
   lastPromptCacheMiss,
   rememberChatContextProfile,
@@ -450,6 +450,7 @@ import {
   type PiRuntimeStopEvent,
 } from "./pi-agent-runtime-harness.js";
 import {
+  approvedMemoryFactLines,
   createMemoryExtension,
   authorizeMemoryProposal,
   authorizeMemoryRemoval,
@@ -4104,13 +4105,9 @@ export const llmClient = {
         // A completed compaction makes the chat's next turn a SessionStart
         // `compact` turn, like Claude Code's compact source.
         if (chatHooks && event.result && !event.aborted) markWorkspaceChatCompacted(params.chatId);
-        // Compaction rewrites the prefix on purpose, so, as in Pi's cache
-        // stats, the next request is not counted against the old one.
-        if (event.result && !event.aborted) {
-          chatPromptCacheTelemetry.reset(params.chatId);
-          // A side call must not continue the pre-compaction request.
-          chatSideCallPrefixes.forget(params.chatId);
-        }
+        // Compaction rewrites the prefix on purpose: the next request is not
+        // counted against the old one, and no side call continues it.
+        if (event.result && !event.aborted) chatPromptPrefixCompacted(params.chatId);
         logger.info("pi", `Finished ${event.reason} compaction for stream ${streamId}.`, {
           aborted: event.aborted,
           tokensBefore: event.result?.tokensBefore,
@@ -4401,11 +4398,20 @@ export const llmClient = {
         onError: (error) => logger.debug("prompt-cache", `Could not attribute a prompt-cache miss for stream ${streamId}.`, error),
       });
       // btw and the same-model advisor continue the chat's last request, so
-      // they read the cache this request writes. Agent harnesses have no
-      // side calls.
-      const prefixedStream = harnessProvider
+      // they read the cache this request writes. Agent harnesses and Bot
+      // chats have no side calls, so their requests are not kept. A side
+      // call reads the store again: a request stating a memory fact the
+      // person has since removed or turned off is not continued.
+      const prefixedStream = harnessProvider || preparedBotContext !== undefined
         ? measuredStream
-        : withSideCallPrefixLedger(measuredStream, { ledger: chatSideCallPrefixes, chatKey: params.chatId });
+        : withSideCallPrefixLedger(measuredStream, {
+            ledger: chatSideCallPrefixes,
+            chatKey: params.chatId,
+            approvedMemoryFacts: async () =>
+              memoryExtension && (await memoryEnabledForChat(configStore, generationChat))
+                ? approvedMemoryFactLines([memoryExtension])
+                : [],
+          });
       const warmedStream = cacheWarmer ? withPiCacheWarming(prefixedStream, cacheWarmer) : prefixedStream;
       // Device-local pace: Pi calls the stream function once per model
       // response, right before the provider request, so the wrapper marks

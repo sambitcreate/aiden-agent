@@ -21,8 +21,16 @@
 // payload and aborts before `fetch`, and `fetch` itself refuses.
 
 import { createHash } from "node:crypto";
-import type { AgentContext, AgentMessage, AgentTool, StreamFn } from "@earendil-works/pi-agent-core";
-import { createInitialSystemMessage, createModels, toToolDeclaration, type Api, type Model, type ProviderStreams } from "@earendil-works/pi-ai";
+import type { AgentContext, AgentMessage, AgentState, AgentTool, StreamFn } from "@earendil-works/pi-agent-core";
+import {
+  createInitialSystemMessage,
+  createModels,
+  toToolDeclaration,
+  type Api,
+  type Model,
+  type ProviderStreams,
+  type SimpleStreamOptions,
+} from "@earendil-works/pi-ai";
 import { anthropicMessagesApi } from "@earendil-works/pi-ai/api/anthropic-messages.lazy";
 import { openAIResponsesApi } from "@earendil-works/pi-ai/api/openai-responses.lazy";
 import { createFauxCore, type FauxResponseStep } from "@earendil-works/pi-ai/providers/faux";
@@ -152,6 +160,13 @@ export interface RecordedPromptRequest {
    * check later that none of them was edited in place.
    */
   messages: PromptProviderContext["messages"];
+  /**
+   * The payload's fields other than tools, system and messages (output cap,
+   * thinking, `tool_choice` and the like), as the adapter rendered them.
+   */
+  settings: Record<string, unknown>;
+  /** Every cache breakpoint marker in the payload, in order. */
+  cacheMarkers: unknown[];
 }
 
 export interface PromptRequestComparison {
@@ -172,6 +187,8 @@ export interface PromptPrefixHarness {
   readonly networkCalls: number;
   /** The running turn's callable inventory, for a codemode tool a test builds. */
   callableTools(): readonly AgentTool[];
+  /** The running turn's agent state, for a tool that reads the live transcript. */
+  agentState(): AgentState | undefined;
   /** Runs a nested call in the running turn, for a codemode tool a test builds. */
   executeNestedToolCall: PiAgentRuntimeHarness["executeNestedToolCall"];
   /** The chat state the journal records (`journaledChatState` of its branch). */
@@ -242,9 +259,33 @@ export function comparePromptRequests(previous: RecordedPromptRequest, current: 
 /** The context a provider adapter renders. */
 export type PromptProviderContext = Parameters<ProviderStreams["streamSimple"]>[1];
 
+/** The request options that shape a rendered payload, without credentials or callbacks. */
+export type PromptRenderOptions = Pick<
+  SimpleStreamOptions,
+  "reasoning" | "thinkingBudgets" | "maxTokens" | "toolChoice" | "cacheRetention" | "temperature" | "sessionId"
+>;
+
+const PROMPT_FIELDS = new Set(["tools", "system", "instructions", "messages", "input"]);
+
+function cacheMarkersIn(value: unknown, into: unknown[] = []): unknown[] {
+  if (Array.isArray(value)) for (const entry of value) cacheMarkersIn(entry, into);
+  else if (value && typeof value === "object") {
+    for (const [key, entry] of Object.entries(value)) {
+      if (key === "cache_control") into.push(entry);
+      else cacheMarkersIn(entry, into);
+    }
+  }
+  return into;
+}
+
 export interface PromptRequestRecorder {
-  /** Render `context` through the wire's real adapter, offline, and cut it into segments. */
-  record(context: PromptProviderContext, at: { turn: number; step: number }): Promise<RecordedPromptRequest>;
+  /**
+   * Render `context` through the wire's real adapter, offline, and cut it into
+   * segments. With `options`, the request's own output cap, reasoning,
+   * `tool_choice` and retention are rendered (on a reasoning model); without
+   * them, short retention and no reasoning.
+   */
+  record(context: PromptProviderContext, at: { turn: number; step: number }, options?: PromptRenderOptions): Promise<RecordedPromptRequest>;
   /** Requests that reached `fetch`; always 0 unless the capture broke. */
   readonly networkCalls: number;
 }
@@ -254,6 +295,17 @@ export interface PromptRequestRecorder {
  * it. The workspace harness below and the Bot runtime's Pi Durable cases both
  * record through it.
  */
+function pickRenderOptions(request: PromptRenderOptions): PromptRenderOptions {
+  const picked: PromptRenderOptions = {};
+  if (request.reasoning) picked.reasoning = request.reasoning;
+  if (request.thinkingBudgets) picked.thinkingBudgets = request.thinkingBudgets;
+  if (request.maxTokens !== undefined) picked.maxTokens = request.maxTokens;
+  if (request.toolChoice !== undefined) picked.toolChoice = request.toolChoice;
+  if (request.temperature !== undefined) picked.temperature = request.temperature;
+  if (request.sessionId !== undefined) picked.sessionId = request.sessionId;
+  return picked;
+}
+
 export function createPromptRequestRecorder(
   options: Pick<PromptPrefixHarnessOptions, "wire" | "midConversationSystem"> & { model: Model<Api> },
 ): PromptRequestRecorder {
@@ -270,11 +322,13 @@ export function createPromptRequestRecorder(
   } as Model<Api>;
   let networkCalls = 0;
 
-  async function render(context: PromptProviderContext): Promise<Record<string, unknown>> {
+  async function render(context: PromptProviderContext, request?: PromptRenderOptions): Promise<Record<string, unknown>> {
     let payload: Record<string, unknown> | undefined;
-    await streams.streamSimple(renderModel, context, {
+    const model = request?.reasoning ? ({ ...renderModel, reasoning: true } as Model<Api>) : renderModel;
+    await streams.streamSimple(model, context, {
+      ...(request ? pickRenderOptions(request) : {}),
       apiKey: "offline-noncredential",
-      cacheRetention: "short",
+      cacheRetention: request?.cacheRetention ?? "short",
       maxRetries: 0,
       env: {},
       onPayload: (value: unknown) => {
@@ -291,10 +345,12 @@ export function createPromptRequestRecorder(
   }
 
   return {
-    async record(context, at) {
-      const payload = await render(context);
+    async record(context, at, request) {
+      const payload = await render(context, request);
       const rendered = JSON.stringify(payload);
       return {
+        settings: Object.fromEntries(Object.entries(payload).filter(([key]) => !PROMPT_FIELDS.has(key))),
+        cacheMarkers: cacheMarkersIn(payload),
         ...at,
         fingerprint: fingerprintPromptPrefix({ messages: context.messages, model: options.model, cacheRetention: "short" }),
         wire: promptWireSegments(payload),
@@ -491,10 +547,11 @@ export function createPromptPrefixHarness(options: PromptPrefixHarnessOptions = 
   return {
     turn,
     model,
-    record: (context, at) => recorder.record(context, at),
+    record: (context, at, request) => recorder.record(context, at, request),
     get requests() { return requests; },
     get networkCalls() { return recorder.networkCalls; },
     callableTools: () => runtime?.getCallableTools() ?? [],
+    agentState: () => runtime?.state,
     journaledChatState: async () => journaledChatState(journal ? await (await journal).getBranch() : []),
     executeNestedToolCall: (...args) => {
       if (!runtime) throw new Error("No prompt prefix harness turn is running.");

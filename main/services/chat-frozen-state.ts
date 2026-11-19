@@ -150,7 +150,8 @@ function permissionFreezable(head: ChatSystemPromptPermission, current: ChatSyst
 
 const MEMORY_LINE = /^- \[memory:([^\]]*)\]/u;
 
-function memoryLines(block: string): string[] {
+/** The memory fact lines in `block`, as the always-on block renders them. */
+export function memoryLines(block: string): string[] {
   return block.split("\n").filter((line) => MEMORY_LINE.test(line));
 }
 

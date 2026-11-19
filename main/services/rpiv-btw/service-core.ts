@@ -46,9 +46,11 @@ export interface BtwServiceDependencies {
   registry: BtwOperationRegistry;
   /**
    * The chat's last foreground request while its prompt cache is live. A side
-   * question continues it when it still matches the chat and the model.
+   * question continues it when it still matches the chat and the model. The
+   * ledger hands it out only while every memory fact it states is still
+   * approved.
    */
-  parentPrefix?(chatId: string): SideCallPrefix | undefined;
+  parentPrefix?(chatId: string): Promise<SideCallPrefix | undefined>;
 }
 
 type BtwAttempt = { kind: "continuation"; prefix: SideCallPrefix } | { kind: "isolated"; retry: boolean };
@@ -239,7 +241,7 @@ export class BtwService {
 
       // A side question on a live parent prefix reads the parent's cache. Any
       // failure there falls back to the isolated, tool-free request.
-      const prefix = continuablePrefix(this.deps.parentPrefix?.(input.chat.id), latest, runtime);
+      const prefix = continuablePrefix(await this.deps.parentPrefix?.(input.chat.id), latest, runtime);
       const attempts: BtwAttempt[] = [
         ...(prefix ? [{ kind: "continuation" as const, prefix }] : []),
         { kind: "isolated", retry: false },
