@@ -14,7 +14,7 @@ import { readRegularFile, type RegularFileIdentity } from "./regular-file-read.j
 const MAX_INDEX_ENTRIES = 4_000;
 const MAX_INDEX_DEPTH = 20;
 const MAX_EDITOR_BYTES = 1_500_000;
-const MAX_EDITOR_LINES = 50_000;
+export const MAX_EDITOR_LINES = 50_000;
 const SKIP_DIRECTORIES = new Set([
   ".git",
   ".cache",

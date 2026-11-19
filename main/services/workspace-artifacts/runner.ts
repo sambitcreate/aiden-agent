@@ -12,6 +12,8 @@ import {
   type WorkspaceArtifactsChangedEvent,
 } from "../../../renderer/shared/workspace-artifacts.js";
 import type { BoundedShellCommandOptions, BoundedShellCommandResult } from "../bounded-shell-command.js";
+import { ManagedWorktreeFileIoError } from "../managed-worktree-file-io.js";
+import { MAX_EDITOR_LINES } from "../workspace-files.js";
 import type { ArgvPlanOptions } from "./argv-runner.js";
 import type { WorkspaceArtifactStore } from "./store.js";
 
@@ -51,13 +53,27 @@ function clip(text: string, max: number): string {
   return trimmed.length > max ? `${trimmed.slice(0, max - 1)}…` : trimmed;
 }
 
+/**
+ * The start and the end of `text` within `max` characters: a command's usage
+ * line or first complaint is at the start, and the error that stopped it is
+ * usually at the end.
+ */
+function headAndTail(text: string, max: number): string {
+  const trimmed = text.trim();
+  const gap = " … ";
+  if (trimmed.length <= max || max < 2 * gap.length) return clip(trimmed, max);
+  const room = max - gap.length;
+  const head = Math.floor(room * 0.4);
+  return `${trimmed.slice(0, head).trimEnd()}${gap}${trimmed.slice(trimmed.length - (room - head)).trimStart()}`;
+}
+
 function failure(result: BoundedShellCommandResult): string {
   const reason = result.timedOut
     ? "Timed out."
     : result.outputLimitExceeded
       ? "Printed more than an artifact can hold."
       : `Exited with code ${result.exitCode ?? "?"}.`;
-  const detail = clip(result.stderr || result.stdout, WORKSPACE_ARTIFACT_LIMITS.errorChars - reason.length - 1);
+  const detail = headAndTail(result.stderr || result.stdout, WORKSPACE_ARTIFACT_LIMITS.errorChars - reason.length - 1);
   return detail ? `${reason} ${detail}` : reason;
 }
 
@@ -97,12 +113,18 @@ function withDeadline<T>(work: Promise<T>, ms: number, message: string): Promise
   return Promise.race([work, deadline]).finally(() => clearTimeout(timer));
 }
 
+function tooLarge(file: string): string {
+  return `${file} is larger than the ${WORKSPACE_ARTIFACT_LIMITS.sourceOutputBytes / 1024} KiB an artifact can read.`;
+}
+
 /** The workspace file reader speaks about editing; say what it means for a page. */
 function fileError(file: string, error: unknown): string {
   const code = (error as NodeJS.ErrnoException | undefined)?.code;
   if (code === "ENOENT") return `There is no file at ${file}.`;
+  if (error instanceof ManagedWorktreeFileIoError && error.code === "too_many_bytes") return tooLarge(file);
   const message = error instanceof Error ? error.message : String(error);
-  if (/too large|too many lines/iu.test(message)) return `${file} is larger than an artifact can read.`;
+  if (/too large/iu.test(message)) return tooLarge(file);
+  if (/too many lines/iu.test(message)) return `${file} has more than ${MAX_EDITOR_LINES.toLocaleString("en-US")} lines, more than an artifact can read.`;
   if (/binary|not valid UTF-8/iu.test(message)) return `${file} is not a text file.`;
   return message;
 }
@@ -158,7 +180,7 @@ export function createWorkspaceArtifactRunner(dependencies: WorkspaceArtifactRun
           return { status: "error", at, ...(error instanceof WorkspaceArtifactFileDeniedError ? { policyDenied: true as const } : {}), error: clip(fileError(source.file, error), WORKSPACE_ARTIFACT_LIMITS.errorChars) };
         }
         if (Buffer.byteLength(text, "utf8") > WORKSPACE_ARTIFACT_LIMITS.sourceOutputBytes) {
-          return { status: "error", at, error: `${source.file} is larger than an artifact can read.` };
+          return { status: "error", at, error: tooLarge(source.file) };
         }
       } else {
         const result = await dependencies.runShell({

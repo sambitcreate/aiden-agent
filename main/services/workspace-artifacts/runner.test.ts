@@ -13,7 +13,7 @@ import type {
 } from "../../../renderer/shared/workspace-artifacts.js";
 import { runBoundedShellCommand, type BoundedShellCommandOptions } from "../bounded-shell-command.js";
 import { runArgvPlan, type ArgvPlanOptions } from "./argv-runner.js";
-import { readWorkspaceArtifactFile, artifactFileAllowed } from "./file-policy.js";
+import { readWorkspaceArtifactFile, artifactFileAllowed, WorkspaceArtifactFileChangedError } from "./file-policy.js";
 import { createWorkspaceArtifactRunner } from "./runner.js";
 import { WorkspaceArtifactStore, workspaceArtifactDigest } from "./store.js";
 
@@ -27,6 +27,8 @@ async function setup(
     sources?: WorkspaceArtifactSourceV1[];
     approved?: boolean;
     readDelayMs?: number;
+    /** Runs between the file check and the read, as another program might. */
+    beforeRead?: () => Promise<void>;
     /** Edits the saved page file before the runner opens it, as an older Aiden might have left it. */
     persisted?: (document: string) => string;
   } = {},
@@ -70,7 +72,7 @@ async function setup(
     },
     readFile: async (root, file, signal) => {
       if (options.readDelayMs) await new Promise((resolve) => setTimeout(resolve, options.readDelayMs));
-      return readWorkspaceArtifactFile(root, file, signal);
+      return readWorkspaceArtifactFile(root, file, signal, { beforeRead: options.beforeRead });
     },
     env: () => process.env,
     store,
@@ -253,7 +255,49 @@ test("file sources explain problems in terms of the page, within the source size
   await fs.writeFile(path.join(folder, "big.txt"), "x".repeat(300 * 1024));
   const results = await runner.refresh("ws1", "art1", context("full"));
   assert.equal(results.missing!.error, "There is no file at nope.md.");
-  assert.equal(results.big!.error, "big.txt is larger than an artifact can read.");
+  assert.equal(results.big!.error, "big.txt is larger than the 256 KiB an artifact can read.");
+});
+
+test("a failing command reports the start and the end of what it printed, and bad JSON says where", async (t) => {
+  const { runner, folder, context } = await setup(t, {
+    sources: [
+      { name: "noisy", kind: "shell", command: "for i in $(seq 1 200); do echo \"line $i of the log\" >&2; done; exit 3", parse: "text" },
+      { name: "comma", kind: "shell", command: `printf '{"open": 2,\n "closed": 5,\n}'`, parse: "json" },
+      { name: "chatty", kind: "file", file: "report.json", parse: "json" },
+    ],
+  });
+  await fs.writeFile(path.join(folder, "report.json"), 'Fetching...\n[{"n":1}]');
+  const results = await runner.refresh("ws1", "art1", context("full"));
+  const noisy = results.noisy!.error!;
+  assert.match(noisy, /^Exited with code 3\. line 1 of the log/u);
+  assert.match(noisy, /line 200 of the log$/u);
+  assert.ok(noisy.length <= 500, "within the stored error's limit");
+  assert.match(results.comma!.error!, /not valid JSON: at line 3, column 1, near ".*⟨here⟩\}"/u);
+  assert.match(results.chatty!.error!, /not valid JSON: at line 1, column 1, near "⟨here⟩Fetching\.\.\./u);
+});
+
+test("a file replaced while it is read keeps the page's last data, marked as an error, and is not called a credential file", async (t) => {
+  let swap = false;
+  const { runner, store, folder, context } = await setup(t, {
+    sources: [FILE],
+    beforeRead: async () => {
+      if (!swap) return;
+      // Another program writes the file by replacing it, between Aiden's check and its read.
+      await fs.rename(path.join(folder, "TODO.md"), path.join(folder, "TODO.old"));
+      await fs.writeFile(path.join(folder, "TODO.md"), "rewritten\n");
+    },
+  });
+  assert.equal((await runner.refresh("ws1", "art1", context("full"))).todo!.status, "ok");
+  swap = true;
+  const result = (await runner.refresh("ws1", "art1", context("full"))).todo!;
+  assert.equal(result.status, "error");
+  assert.equal(result.policyDenied, undefined);
+  assert.match(result.error!, /^TODO\.md changed while Aiden was reading it/u);
+  assert.doesNotMatch(result.error!, /credential/iu);
+  const saved = (await store.get("ws1", "art1"))!.snapshot!.sources.todo!;
+  assert.deepEqual([saved.status, saved.dataJson], ["error", '["ship it","review #12"]']);
+  swap = false;
+  assert.equal((await runner.refresh("ws1", "art1", context("full"))).todo!.dataJson, '["rewritten"]');
 });
 
 test("allowing a page while a refresh is running starts a fresh read rather than joining the blocked one", async (t) => {
@@ -319,7 +363,7 @@ test("artifact reads deny canonical credential aliases and inode/path replacemen
       await fs.rename(path.join(folder, "safe"), path.join(folder, "held"));
       await fs.symlink(".private", path.join(folder, "safe"));
     },
-  }), /Credential files|unsafe_source/u);
+  }), WorkspaceArtifactFileChangedError);
 });
 
 test("denied file refreshes erase cached good data instead of preserving it as a transient failure", async (t) => {

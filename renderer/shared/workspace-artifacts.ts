@@ -562,6 +562,33 @@ export function workspaceArtifactDataJson(
   return artifact.visual.dataJson;
 }
 
+const JSON_SNIPPET_CHARS = 30;
+
+/**
+ * Why `text` is not JSON, with where: the line and column the parser stopped
+ * at and the text around it, so a stray log line or a trailing comma can be
+ * found without the whole output.
+ */
+function invalidJsonMessage(text: string, error: unknown): string {
+  if (!text.trim()) return "The output is empty, not JSON.";
+  const reason = error instanceof Error ? error.message : "";
+  const stated = /\bposition (\d+)/u.exec(reason);
+  const at = stated
+    ? Math.min(Number(stated[1]), text.length)
+    : /end of (?:JSON|data)|unterminated|unexpected end/iu.test(reason)
+      ? text.length
+      : text.length - text.trimStart().length;
+  const before = text.slice(0, at);
+  const line = before.split("\n").length;
+  const column = at - before.lastIndexOf("\n");
+  const oneLine = (part: string) => part.replace(/\s+/gu, " ");
+  const start = Math.max(0, at - JSON_SNIPPET_CHARS);
+  const end = Math.min(text.length, at + JSON_SNIPPET_CHARS);
+  const near = `${start > 0 ? "…" : ""}${oneLine(text.slice(start, at))}⟨here⟩${oneLine(text.slice(at, end))}${end < text.length ? "…" : ""}`;
+  const where = at >= text.length ? "it ends early" : `at line ${line}, column ${column}`;
+  return `The output is not valid JSON: ${where}, near ${JSON.stringify(near)}.`;
+}
+
 /** Turns command output or file text into the value a page reads. */
 export function parseWorkspaceArtifactOutput(
   mode: WorkspaceArtifactParse,
@@ -571,8 +598,8 @@ export function parseWorkspaceArtifactOutput(
   if (mode === "json") {
     try {
       value = JSON.parse(text);
-    } catch {
-      return { ok: false, error: "The output is not valid JSON." };
+    } catch (error) {
+      return { ok: false, error: invalidJsonMessage(text, error) };
     }
   } else if (mode === "lines") {
     value = text
