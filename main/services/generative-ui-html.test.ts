@@ -76,6 +76,8 @@ test("checking, wrapping or streaming a visual at the size cap stays well under 
     formattingReconstruction: fill("<p>t</p>", `<p>${Array.from({ length: 500 }, (_, index) => `<b x${index}>`).join("")}</p>`),
     scriptStrings: fill("x.innerHTML='<p>';", "<script>", "</script>"),
     cssUrls: fill("url(a)", "<style>", "</style>"),
+    contentMovedOutOfTables: fill("a<i></i>", "<table>"),
+    contentMovedPastManySiblings: fill("<p></p>", "", `<table>${"a<i></i>".repeat(8000)}`),
   };
   for (const [shape, html] of Object.entries(shapes)) {
     const started = performance.now();
@@ -283,12 +285,13 @@ test("html admission refuses markup nested or attributed past what a visual need
     deep: "<div>".repeat(600),
     attributes: `<p${attributes(600)}>x</p>`,
     adopted: Array.from({ length: 600 }, (_, index) => `<html b${index}>`).join(""),
+    movedOutOfTable: `<table>${"a<i></i>".repeat(9000)}</table>`,
   };
   for (const html of Object.values(refused)) {
     assert.throws(() => validateGenerativeUiHtml(html), /too complex to check/u);
     assert.equal(isGenerativeUiDraftAcceptable(html), false);
   }
-  const admitted = [`${"<div>".repeat(400)}x`, `<p${attributes(400)}>x</p>`];
+  const admitted = [`${"<div>".repeat(400)}x`, `<p${attributes(400)}>x</p>`, `<table>${"a<i></i>".repeat(7000)}</table>`];
   for (const html of admitted) {
     assert.ok(validateGenerativeUiHtml(html).byteLength > 0);
     assert.equal(isGenerativeUiDraftAcceptable(html), true);

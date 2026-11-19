@@ -37,11 +37,14 @@ export interface HtmlFindings {
  * Structure limits that keep a check linear in the visual's size. The parser
  * walks the open elements and an element's attributes per tag, so nesting and
  * attribute counts are capped; implied and reconstructed elements are capped
- * in total. No real visual comes near them.
+ * in total, and so is content the parser moves out of a table (it is placed
+ * before the table, among that table's siblings). No real visual comes near
+ * them.
  */
 export const MAX_HTML_NESTING_DEPTH = 512;
 export const MAX_HTML_ELEMENT_ATTRIBUTES = 512;
 export const MAX_HTML_ELEMENTS = 262_144;
+export const MAX_HTML_FOSTER_PARENTED = 16_384;
 
 class StructureLimit extends Error {}
 
@@ -459,6 +462,7 @@ export class HtmlScanner {
   private readonly rawText = new Set<Element>();
   private finished = false;
   private elements = 0;
+  private fosterParented = 0;
 
   constructor(private readonly depth = 0) {
     const adapter: TreeAdapter<DefaultTreeAdapterMap> = {
@@ -484,6 +488,26 @@ export class HtmlScanner {
       },
       onItemPop: (item) => {
         if (this.rawText.delete(item)) this.checkRawText(item);
+      },
+      // The parser inserts before a node only to move content out of a table
+      // (foster parenting). The table is normally its parent's last child, so
+      // it is found from the end rather than the start.
+      insertBefore: (parent, node, reference) => {
+        this.fosterParent();
+        parent.childNodes.splice(parent.childNodes.lastIndexOf(reference), 0, node);
+        node.parentNode = parent;
+      },
+      insertTextBefore: (parent, text, reference) => {
+        const index = parent.childNodes.lastIndexOf(reference);
+        const previous = parent.childNodes[index - 1];
+        if (previous !== undefined && defaultTreeAdapter.isTextNode(previous)) {
+          previous.value += text;
+          return;
+        }
+        this.fosterParent();
+        const node = defaultTreeAdapter.createTextNode(text);
+        parent.childNodes.splice(index, 0, node);
+        node.parentNode = parent;
       },
     };
     this.parser = new Parser({ treeAdapter: adapter, scriptingEnabled: true });
@@ -544,6 +568,13 @@ export class HtmlScanner {
       if (!(error instanceof StructureLimit)) throw error;
       this.committed.limit ??= error.message;
       this.finished = true;
+    }
+  }
+
+  private fosterParent(): void {
+    this.fosterParented += 1;
+    if (this.fosterParented > MAX_HTML_FOSTER_PARENTED) {
+      throw new StructureLimit(`it moves more than ${MAX_HTML_FOSTER_PARENTED.toLocaleString("en-US")} pieces of content out of tables`);
     }
   }
 
