@@ -302,10 +302,6 @@ const DEEP_NESTED_SINKS = Object.fromEntries(
   Object.entries(NESTED_LAYERS).flatMap(([name, build]) => [3, 4].map((layers) => [`${layers} ${name} layers`, build(layers)])),
 );
 
-// Literal sinks written other than as a plain call or assignment: an
-// optional call, a tagged template, a callee named in brackets, a literal
-// wrapped in a trivial expression, an object key Object.assign copies, a
-// DOMParser document whose nodes the page takes, and an attribute node.
 const IFRAME_MARKUP = JSON.stringify("<iframe src=https://e.test></iframe>");
 const IFRAME_HANDLER = JSON.stringify(IFRAME_SINK);
 // XML documents DOMParser builds whose nodes the page takes, by type: each
@@ -389,6 +385,10 @@ const INDIRECT_SINKS: Record<string, string> = {
   "an SVG link's href.baseVal": "a.href.baseVal = 'javascript:alert(1)'",
   "a navigation.navigate call": "navigation.navigate('javascript:alert(1)')",
 };
+// Literal sinks written other than as a plain call or assignment: an
+// optional call, a tagged template, a callee named in brackets, a literal
+// wrapped in a trivial expression, an object key Object.assign copies, a
+// DOMParser document whose nodes the page takes, and an attribute node.
 const LITERAL_SINKS: Record<string, string> = {
   ...INDIRECT_SINKS,
   "an optional setAttribute call": `b.setAttribute?.('onclick', ${IFRAME_HANDLER}); b.click()`,
