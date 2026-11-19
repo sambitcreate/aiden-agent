@@ -19,7 +19,10 @@
 // Taking in another writer's canvas keeps the history: Aiden's canvas changes
 // from one reply become one undo step (the person's own edit in between
 // starts a new one), and any other writer's change is carried into every
-// kept step, so undo never takes back what was changed elsewhere.
+// kept step, so undo never takes back what was changed elsewhere. A fetch or
+// a save's reply can bring a reply's revision before its announcement does;
+// the history is then built again when the announcement arrives, unless the
+// person has made a step of their own since.
 
 import * as React from "react";
 import { designCanvasApi } from "../lib/ipc";
@@ -78,26 +81,71 @@ function createCanvasSync(chatId: string, publish: (state: SyncState) => void): 
   const guardKey = Symbol(chatId);
   /** The newest revision another writer announced. */
   let announced = 0;
-  /** The Aiden reply each announced revision came from. */
-  const aidenRevisions = new Map<number, string>();
+  /** The Aiden reply each announced revision came from, or null when it came from no reply. */
+  const aidenRevisions = new Map<number, string | null>();
   /** The one Aiden reply that made every revision after `from` up to `to`, if one did. */
   const aidenTurnBetween = (from: number, to: number): string | undefined => {
     if (to <= from || to - from > 1_000) return undefined;
     const turn = aidenRevisions.get(to);
+    if (typeof turn !== "string") return undefined;
     for (let revision = from + 1; revision < to; revision += 1) {
       if (aidenRevisions.get(revision) !== turn) return undefined;
     }
     return turn;
   };
+  /**
+   * Whether the revisions after `from` up to `to` may still turn out to be one
+   * reply's: some are not announced yet, and every announced one is that reply's.
+   * A fetch or a save's reply can bring a revision before its announcement does.
+   */
+  const mayBeOneReply = (from: number, to: number): boolean => {
+    if (to <= from || to - from > 1_000) return false;
+    let turn: string | undefined;
+    let unknown = false;
+    for (let revision = from + 1; revision <= to; revision += 1) {
+      const seen = aidenRevisions.get(revision);
+      if (seen === undefined) unknown = true;
+      else if (seen === null || (turn !== undefined && seen !== turn)) return false;
+      else turn = seen;
+    }
+    return unknown;
+  };
+  type TakenIn = { before: DesignCanvas; from: DesignCanvas; to: DesignCanvas };
+  /**
+   * The history before a take-in that may still turn out to be an Aiden reply's,
+   * and every take-in since, so the history can be built again once the late
+   * announcements say whose they were. The person's own step ends it.
+   */
+  let unsettled: { base: CanvasHistory; takenIn: TakenIn[] } | null = null;
+  const takeInAll = (base: CanvasHistory, takenIn: readonly TakenIn[]) =>
+    takenIn.reduce(
+      (built, change) =>
+        takeIn(built, { ...change, aidenTurn: aidenTurnBetween(change.from.revision, change.to.revision) }),
+      base,
+    );
+  /** Forgets announcements nothing can ask about any more. */
+  const forgetOldRevisions = () => {
+    const floor = unsettled ? unsettled.takenIn[0]!.from.revision : (server?.revision ?? -1);
+    for (const revision of aidenRevisions.keys()) {
+      if (revision <= floor) aidenRevisions.delete(revision);
+    }
+  };
+  const settleIfKnown = () => {
+    if (unsettled?.takenIn.some((change) => mayBeOneReply(change.from.revision, change.to.revision))) return;
+    unsettled = null;
+  };
   /** Moves the stored canvas on to `stored`, keeping the history. Returns the canvas to build on. */
   const takeInStored = (stored: DesignCanvas, before: DesignCanvas): DesignCanvas => {
     const from = server!;
     const to = keepUnchanged(from, stored);
-    history = takeIn(history, { before, from, to, aidenTurn: aidenTurnBetween(from.revision, to.revision) });
-    for (const revision of aidenRevisions.keys()) {
-      if (revision <= to.revision) aidenRevisions.delete(revision);
-    }
+    const change: TakenIn = { before, from, to };
+    if (!unsettled && mayBeOneReply(from.revision, to.revision)) unsettled = { base: history, takenIn: [] };
+    if (unsettled && unsettled.takenIn.length < 50) unsettled.takenIn.push(change);
+    else unsettled = null;
+    history = takeIn(history, { ...change, aidenTurn: aidenTurnBetween(from.revision, to.revision) });
     server = to;
+    settleIfKnown();
+    forgetOldRevisions();
     return to;
   };
 
@@ -178,12 +226,16 @@ function createCanvasSync(chatId: string, publish: (state: SyncState) => void): 
     if (unsent.length === 0 && timer === null && server && announced > server.revision) refetch();
   };
 
-  const apply = (mutate: Mutation, before: DesignCanvas | null, nextHistory: CanvasHistory) => {
+  /** Shows and saves `mutate`; `step` is the history after it, or null when it makes no step of its own. */
+  const apply = (mutate: Mutation, step: (() => CanvasHistory) | null) => {
     if (!local) return;
     const next = mutate(local);
     if (next === local) return;
-    if (before) history = record(nextHistory, before);
-    else history = nextHistory;
+    if (step) {
+      history = step();
+      // The person's own step is built on what they saw; a late announcement no longer changes it.
+      unsettled = null;
+    }
     local = next;
     unsent.push(mutate);
     emit();
@@ -227,10 +279,18 @@ function createCanvasSync(chatId: string, publish: (state: SyncState) => void): 
   const unsubscribe = designCanvasApi.onDesignCanvasUpdated((update) => {
     if (update.chatId !== chatId) return;
     announced = Math.max(announced, update.revision);
-    if (typeof update.aidenTurn === "string" && (!server || update.revision > server.revision)) {
-      aidenRevisions.set(update.revision, update.aidenTurn);
+    aidenRevisions.set(update.revision, typeof update.aidenTurn === "string" ? update.aidenTurn : null);
+    if (server && update.revision <= server.revision) {
+      // A canvas already taken in, announced late: now it may be known to be one reply's.
+      if (unsettled) {
+        history = takeInAll(unsettled.base, unsettled.takenIn);
+        settleIfKnown();
+        emit();
+      }
+      forgetOldRevisions();
+      return;
     }
-    if (!server || update.revision <= server.revision) return;
+    if (!server) return;
     // A pending edit saves first: its conflict brings the newer canvas with it,
     // and a save already on its way fetches it when it lands.
     if (unsent.length > 0 || inFlight || timer !== null) return;
@@ -253,19 +313,20 @@ function createCanvasSync(chatId: string, publish: (state: SyncState) => void): 
 
   return {
     change(mutate, recordHistory) {
-      apply(mutate, recordHistory ? local : null, history);
+      const before = local;
+      apply(mutate, recordHistory && before ? () => record(history, before) : null);
     },
     undo() {
       if (!local) return;
       const step = undo(history, local);
       if (!step) return;
-      apply(changesBetween(local, step.doc), null, step.history);
+      apply(changesBetween(local, step.doc), () => step.history);
     },
     redo() {
       if (!local) return;
       const step = redo(history, local);
       if (!step) return;
-      apply(changesBetween(local, step.doc), null, step.history);
+      apply(changesBetween(local, step.doc), () => step.history);
     },
     flush,
     dispose() {

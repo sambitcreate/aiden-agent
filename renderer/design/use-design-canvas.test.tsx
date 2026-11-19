@@ -355,6 +355,37 @@ test("all of one Aiden reply's canvas changes undo as one step, after which the 
   assert.deepEqual(ids(stored), ["a", "b", "c"]);
 });
 
+test("a reply's change the canvas fetched before hearing whose it was still undoes with the rest of that reply", async () => {
+  await mount();
+  await act(async () => controller.change(moveTo("a", 10)));
+  await tick(800);
+  // Aiden has already saved revision 7 by the time the fetch for revision 6 reads the store.
+  stored = canvas(7, note("a", 10), note("b", 400), note("c", 800));
+  await act(async () => emitBotTestNotification("designCanvas:updated", { chatId: "chat-1", revision: 6, aidenTurn: "reply-1" }));
+  await settle();
+  assert.deepEqual(ids(controller.doc), ["a", "b", "c"]);
+  await act(async () => emitBotTestNotification("designCanvas:updated", { chatId: "chat-1", revision: 7, aidenTurn: "reply-1" }));
+  await settle();
+
+  await act(async () => controller.undo());
+  assert.deepEqual(ids(controller.doc), ["a"], "both of the reply's frames go in one undo");
+  assert.equal(xOf(controller.doc, "a"), 10);
+  await act(async () => controller.undo());
+  assert.equal(xOf(controller.doc, "a"), 0, "the person's move before the reply is still undoable");
+  assert.equal(controller.canUndo, false);
+
+  // A save's conflict can bring a reply's revision before its announcement too.
+  await act(async () => controller.redo());
+  await act(async () => controller.redo());
+  saveReplies.push(() => ({ ok: false, reason: "conflict", doc: canvas(8, note("a", 10), note("b", 400), note("c", 800), note("d", 1200)) }));
+  await tick(800);
+  assert.deepEqual(ids(controller.doc).sort(), ["a", "b", "c", "d"]);
+  await act(async () => emitBotTestNotification("designCanvas:updated", { chatId: "chat-1", revision: 8, aidenTurn: "reply-2" }));
+  await settle();
+  await act(async () => controller.undo());
+  assert.deepEqual(ids(controller.doc).sort(), ["a", "b", "c"], "the second reply's frame undoes on its own");
+});
+
 test("the person's edit between two of a reply's changes, or another reply, starts a new undo step", async () => {
   await mount();
   await aidenSaves(canvas(5, note("a"), note("b", 400)), "reply-1");
