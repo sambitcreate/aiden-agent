@@ -218,7 +218,7 @@ People comment on the canvas, and Aiden turns comments into edits.
 - **After sending:**
   - Sent comments turn into a quiet "sent" state.
   - When the frame reloads after its file changed since the send, they resolve if their element is still found. People can resolve or reopen them by hand.
-  - Aiden can answer a comment with `canvas_comment`: a reply of one sentence (at most 1,000 characters; a newer reply replaces the last) shown under the note in the comment box as "Aiden", and resolving it once the change is done. An unclear comment gets a question as its reply and stays open.
+  - Aiden can answer a comment with `canvas_comment`: a reply of one sentence (at most 1,000 characters; a newer reply replaces the last) shown under the note in the comment box as "Aiden", and resolving it once the change is done. An unclear comment gets a question as its reply and stays open. Only a comment the person sent (or one already resolved) can be answered: an open one is still their draft, possibly waiting in the tray, so `canvas_comment` refuses it and leaves its state alone.
 - **All comments:** a toolbar list with Open, Sent and Resolved filters; choosing a comment shows its page, brings its pin on screen and opens it.
 - **Comment storage:** comments live in the canvas document, not the source. Only the comment ID is written into the source.
 
@@ -290,7 +290,7 @@ The canvas tools are host-owned and registered only for desktop turns in a chat 
 | `canvas_focus` | Pans and zooms to frames or shows a `page`, while the person is not interacting with the canvas. | `requested` or `shown`. |
 | `canvas_arrange` | Lays out unlocked frames on one page in a `row`, `column` or `grid` in one call, optionally grouping (`groupId`), ungrouping (`groupId: null`) or fitting groups and artboards (`fitGroupIds`) around their members, and focuses the result unless `focus: false`. | `arranged` with the new boxes. |
 | `canvas_inspect` | Since Phase B of the smarter-artifacts plan: draws one page frame (by `frameId`, or `path` on the page on screen) offline at its design width with the frame's dark look and tweaks, in the hidden export window. `top` moves the picture down a tall page; `picture: false` skips it. | A report in the shared "what's wrong" format: script errors with file and line, files that did not load, sideways overflow and its cause (said as content cut off, not scrolling, when the root or body sets `overflow-x: hidden` or `clip`), the page height, the tweak controls the page reads and tweak names nothing reads, plus a model-sized picture for a model that can see images. |
-| `canvas_comment` | Since Phase B: replies on a comment (`reply`, one sentence) and/or resolves it (`resolve: true`), by `commentId`. | `{commentId, state, replied?}`; an unknown ID or neither argument is an error. |
+| `canvas_comment` | Since Phase B: replies on a comment (`reply`, one sentence) and/or resolves it (`resolve: true`), by `commentId`. | `{commentId, state, replied?}`; an unknown ID, neither argument, or an open (unsent) comment is an error. |
 | `canvas_page` | Adds, renames, duplicates, reorders (`move`), shows or deletes canvas pages (never the last page; deleting a page holding the person's or locked frames needs `force: true`). | `done` or `deleted` with the page list. |
 
 Rules:

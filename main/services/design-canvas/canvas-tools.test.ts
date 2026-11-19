@@ -336,22 +336,41 @@ test("canvas_comment replies on a comment, resolves it, or both, and tells open 
     ...doc,
     comments: [
       { id: "c1", x: 5, y: 5, note: "A footer", state: "sent", pageId: "page-1", anchorState: "anchored", createdAt: "2026-11-05T01:00:00Z", sentAt: "2026-11-05T01:00:00Z" },
+      { id: "draft", x: 9, y: 9, note: "Maybe a darker", state: "open", queued: true, pageId: "page-1", anchorState: "anchored", createdAt: "2026-11-05T01:30:00Z" },
     ],
   }));
+  // A draft still in the person's tray is theirs until they send it.
+  for (const args of [{ commentId: "draft", reply: "Done." }, { commentId: "draft", resolve: true }]) {
+    const refused = await call("canvas_comment", args);
+    assert.equal(refused.status, "error");
+    assert.match(refused.message, /draft/u);
+  }
+  const draft = (await store.get("chat-1")).comments.find((comment) => comment.id === "draft")!;
+  assert.deepEqual([draft.state, draft.queued, draft.reply], ["open", true, undefined], "the draft stays open, in the tray and unanswered");
+  assert.equal(broadcasts.length, 0);
+
   const replied = await call("canvas_comment", { commentId: "c1", reply: "Which links should the footer have?" });
   assert.deepEqual(replied, { status: "ok", commentId: "c1", state: "sent", replied: true });
   let doc = await store.get("chat-1");
   assert.equal(doc.comments[0]!.reply?.text, "Which links should the footer have?");
   assert.equal(broadcasts.length, 1);
   const read = await call("canvas_read");
-  assert.equal(read.comments[0].yourReply, "Which links should the footer have?", "Aiden reads back what it said");
+  assert.equal(
+    read.comments.find((comment: { commentId: string }) => comment.commentId === "c1").yourReply,
+    "Which links should the footer have?",
+    "Aiden reads back what it said",
+  );
 
   const done = await call("canvas_comment", { commentId: "c1", reply: "Added a footer with About and Contact.", resolve: true });
   assert.deepEqual(done, { status: "ok", commentId: "c1", state: "resolved", replied: true });
   doc = await store.get("chat-1");
   assert.equal(doc.comments[0]!.reply?.text, "Added a footer with About and Contact.", "a newer reply replaces the last");
   assert.ok(doc.comments[0]!.resolvedAt);
-  assert.equal((await call("canvas_read")).comments, undefined, "a resolved comment leaves canvas_read");
+  assert.deepEqual(
+    (await call("canvas_read")).comments.map((comment: { commentId: string }) => comment.commentId),
+    ["draft"],
+    "a resolved comment leaves canvas_read",
+  );
 
   for (const args of [{ commentId: "c1" }, { commentId: "nope", resolve: true }, { commentId: "c1", reply: "   " }]) {
     assert.equal((await call("canvas_comment", args)).status, "error", JSON.stringify(args));
