@@ -1622,6 +1622,11 @@ async function createMainWindow(
   resetRendererReadiness();
 
   const createdWindow = mainWindow;
+  // Aiden never uses WebRTC, but a live design canvas frame or a chat's
+  // generated UI runs its own script here, and Electron ignores the guest CSP's
+  // `webrtc 'block'`, so such a page could send STUN or TURN over UDP to a host
+  // it names. This stops UDP; TURN over TCP still goes direct (design-mode spec §5.4).
+  createdWindow.webContents.setWebRTCIPHandlingPolicy("disable_non_proxied_udp");
   registerBroadcastReceiver(createdWindow);
   imageQuitCoverage.clear();
   mainWindowState.track(createdWindow);
