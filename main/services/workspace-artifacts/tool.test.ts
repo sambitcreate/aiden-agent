@@ -706,3 +706,63 @@ test("check takes edits too, drawing the edited page without saving it", async (
   assert.match(text, /run\("close"\) names no action on this page/u);
   assert.deepEqual(await store.get("ws1", "art1"), before);
 });
+
+test("an update given the revision it read is refused once the page moved on, saying what changed and the revision now", async (t) => {
+  const { store, call, nextTurn } = await harness(t, { permission: "full" });
+  await call("c1", { operation: "create", title: "Open PRs", markup: PAGE, sources: [PULLS] });
+  nextTurn();
+  // Another chat changes the page's data and description after this chat read revision 1.
+  const current = (await store.get("ws1", "art1"))!.artifact;
+  await store.replace("ws1", "art1", {
+    title: current.visual.title, description: "theirs", visual: current.visual, ...(current.markup ? { markup: current.markup } : {}),
+    sources: [{ ...PULLS, command: "gh pr list --json number" }] as never, actions: [], refresh: current.refresh,
+  });
+  const saved = await store.get("ws1", "art1");
+  await assert.rejects(
+    call("u1", { operation: "update", id: "art1", baseVersion: 1, description: "mine" }),
+    (error: Error) => {
+      assert.match(error.message, /changed since revision 1/u);
+      assert.match(error.message, /now revision 2/u);
+      assert.match(error.message, /Its description and data sources changed\./u);
+      assert.match(error.message, /Nothing was saved/u);
+      return true;
+    },
+  );
+  assert.deepEqual(await store.get("ws1", "art1"), saved);
+  // Against the revision it now reads, the same update saves.
+  await call("u2", { operation: "update", id: "art1", baseVersion: 2, description: "mine" });
+  assert.equal((await store.get("ws1", "art1"))!.artifact.description, "mine");
+  // This reply's own saves since the revision it read do not refuse its next one.
+  await call("u3", { operation: "update", id: "art1", baseVersion: 2, description: "mine, again" });
+  assert.equal((await store.get("ws1", "art1"))!.artifact.description, "mine, again");
+  await assert.rejects(call("u4", { operation: "update", id: "art1", baseVersion: 9 }), /has no revision 9; it is at revision 4/u);
+});
+
+test("baseVersion is checked again under the store's lock, so a save landing while this one is prepared refuses it", async (t) => {
+  const { store, call, nextTurn } = await harness(t, { permission: "full" });
+  await call("c1", { operation: "create", title: "Open PRs", markup: PAGE });
+  nextTurn();
+  const read = store.get.bind(store);
+  let landing: (() => Promise<unknown>) | undefined;
+  store.get = async (...args: Parameters<typeof store.get>) => {
+    const answer = await read(...args);
+    const work = landing;
+    landing = undefined;
+    await work?.();
+    return answer;
+  };
+  landing = async () => {
+    const current = (await read("ws1", "art1"))!.artifact;
+    await store.replace("ws1", "art1", {
+      title: current.visual.title, visual: current.visual, markup: PAGE.replace("open", "waiting"),
+      sources: [], actions: [], refresh: { ...current.refresh, onOpen: false },
+    });
+  };
+  await assert.rejects(
+    call("e1", { operation: "update", id: "art1", baseVersion: 1, edits: [{ old: "Merge", new: "Land" }] }),
+    /changed since revision 1[^]*now revision 2\.[^]*Its page and refresh settings changed\./u,
+  );
+  const page = (await read("ws1", "art1"))!.artifact;
+  assert.equal(page.revision, 2);
+  assert.doesNotMatch(page.markup!, /Land/u);
+});

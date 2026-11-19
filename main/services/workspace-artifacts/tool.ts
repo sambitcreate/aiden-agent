@@ -34,7 +34,12 @@ import { applyMarkupEdits, MAX_MARKUP_EDITS, parseMarkupEdits } from "../markup-
 import { checkWorkspaceArtifactPage, describeWorkspaceArtifactPageCheck } from "./check.js";
 import { describeSourceData } from "./data-shape.js";
 import type { WorkspaceArtifactActionResult } from "./runner.js";
-import { workspaceArtifactDigest, type WorkspaceArtifactContent, type WorkspaceArtifactStore } from "./store.js";
+import {
+  workspaceArtifactDigest,
+  type WorkspaceArtifactContent,
+  type WorkspaceArtifactRevisionV1,
+  type WorkspaceArtifactStore,
+} from "./store.js";
 
 export { WORKSPACE_ARTIFACT_TOOL_NAME };
 
@@ -50,6 +55,7 @@ interface ArtifactToolInput {
   operation?: unknown;
   id?: unknown;
   revision?: unknown;
+  baseVersion?: unknown;
   title?: unknown;
   description?: unknown;
   markup?: unknown;
@@ -267,6 +273,90 @@ function withEdits(input: ArtifactToolInput, markup: string | undefined, hasPage
   if (markup === undefined) throw new Error(MARKUP_NOT_KEPT);
   const { edits: _edits, ...rest } = input;
   return { ...rest, markup: applyMarkupEdits(markup, edits, "Read the page's markup again with get, then retry.") };
+}
+
+/** Reads `baseVersion`: the revision the call's change was prepared from, if it names one. */
+function baseVersionOf(input: ArtifactToolInput, operation: Operation): number | undefined {
+  if (input.baseVersion === undefined) return undefined;
+  if (operation !== "update") throw new Error("baseVersion goes with update: the revision of the page you read.");
+  if (!isWorkspaceArtifactRevision(input.baseVersion)) {
+    throw new Error("baseVersion must be the page's revision number, from get or list.");
+  }
+  return input.baseVersion;
+}
+
+/** What this tool's saves did to a page in this turn: from `from` up to `revision`. */
+interface TurnSaves {
+  /** The revision the turn's first save (since another save landed) replaced. */
+  from: number;
+  revision: number;
+  title: string;
+}
+
+/**
+ * Whether a page at `current` is still the page `baseVersion` named: the same
+ * revision, or one only this turn's own saves moved it to since.
+ */
+function baseVersionHolds(baseVersion: number, current: WorkspaceArtifactV1, turn: TurnSaves | undefined): boolean {
+  if (current.revision === baseVersion) return true;
+  return turn !== undefined && turn.revision === current.revision && baseVersion >= turn.from && baseVersion < turn.revision;
+}
+
+type PageVersion = Pick<WorkspaceArtifactRevisionV1, "description" | "visual" | "markup" | "sources" | "actions" | "refresh">;
+
+/** The parts that differ between two versions of a page, in words. */
+function changedParts(from: PageVersion, to: PageVersion): string[] {
+  const page = (version: PageVersion) => {
+    const { id: _id, title: _title, state: _state, ...rest } = version.visual;
+    return JSON.stringify(rest);
+  };
+  const parts: string[] = [];
+  if (from.visual.title !== to.visual.title) parts.push("name");
+  if ((from.description ?? "") !== (to.description ?? "")) parts.push("description");
+  if (page(from) !== page(to) || (from.markup !== undefined && to.markup !== undefined && from.markup !== to.markup)) {
+    parts.push("page");
+  }
+  if (JSON.stringify(from.sources) !== JSON.stringify(to.sources)) parts.push("data sources");
+  if (JSON.stringify(from.actions) !== JSON.stringify(to.actions)) parts.push("actions");
+  if (JSON.stringify(from.refresh) !== JSON.stringify(to.refresh)) parts.push("refresh settings");
+  return parts;
+}
+
+function joinedWords(words: readonly string[]): string {
+  return words.length <= 1 ? (words[0] ?? "") : `${words.slice(0, -1).join(", ")} and ${words[words.length - 1]}`;
+}
+
+/** Thrown under the store's lock when the page moved past the call's baseVersion. */
+class BaseVersionMoved extends Error {
+  constructor(readonly current: WorkspaceArtifactV1) {
+    super("The artifact changed since baseVersion.");
+  }
+}
+
+/**
+ * The refusal for a save prepared from `baseVersion` when the page is now at
+ * `current`: what changed in between, where the store still keeps that
+ * version, and the revision to read again.
+ */
+async function baseVersionRefusal(
+  baseVersion: number,
+  current: WorkspaceArtifactV1,
+  earlierVersion: (revision: number) => Promise<PageVersion | undefined>,
+): Promise<string> {
+  const name = JSON.stringify(current.visual.title);
+  const again = `Nothing was saved. Read it again with get and make the change against revision ${current.revision}.`;
+  if (baseVersion > current.revision) {
+    return `The artifact ${name} has no revision ${baseVersion}; it is at revision ${current.revision}. ${again}`;
+  }
+  let what = "";
+  try {
+    const before = await earlierVersion(baseVersion);
+    const parts = before ? changedParts(before, current) : [];
+    if (parts.length) what = ` Its ${joinedWords(parts)} changed.`;
+  } catch {
+    // The refusal stands without the detail.
+  }
+  return `The artifact ${name} changed since revision ${baseVersion}, in another chat or by the person: it is now revision ${current.revision}.${what} ${again}`;
 }
 
 /** The markup to keep with a version: none when it is longer than a version keeps. */
@@ -650,7 +740,7 @@ export function createWorkspaceArtifactTool(options: WorkspaceArtifactToolOption
    * that save left: a page renamed since (by the person, or in another chat)
    * ends the fold, so the renamed version is kept as its own undo step.
    */
-  const savedThisTurn = new Map<string, { revision: number; title: string }>();
+  const savedThisTurn = new Map<string, TurnSaves>();
   /**
    * After a save: the first refresh, then the page checked against its data.
    * The page is already saved, so neither may make the save look failed.
@@ -744,7 +834,7 @@ export function createWorkspaceArtifactTool(options: WorkspaceArtifactToolOption
       name: WORKSPACE_ARTIFACT_TOOL_NAME,
       label: "Artifact",
       description:
-        "Keep an interactive page in this workspace's Artifacts tab (beside the chat), for status the person will come back to: open pull requests, a release checklist, a TODO board. Unlike a visual in the reply, the page persists for every chat in the workspace and re-reads live data from named sources (a shell command or a workspace file, bound in markup as $name) each time it refreshes. Always list first and update an existing artifact instead of creating a near-duplicate. Delete only when the person asks. run performs one of a page's actions exactly as its button would; use it only when the person asks for that action. restore brings back one of the page's earlierRevisions (from list) as a new revision, keeping its current title; use it when the person wants to undo or go back to an earlier version. get returns a page's saved markup, its sources' last reads (status, error, data shape and a sample) and its revision; read it before changing a page, then prefer edits (exact old→new replacements) to resending the whole markup. check runs a page's sources (or, with no id, the sources given) once and checks the markup against their data without saving anything, under the same approval as a save. Read the aiden-artifacts skill before the first call.",
+        "Keep an interactive page in this workspace's Artifacts tab (beside the chat), for status the person will come back to: open pull requests, a release checklist, a TODO board. Unlike a visual in the reply, the page persists for every chat in the workspace and re-reads live data from named sources (a shell command or a workspace file, bound in markup as $name) each time it refreshes. Always list first and update an existing artifact instead of creating a near-duplicate. Delete only when the person asks. run performs one of a page's actions exactly as its button would; use it only when the person asks for that action. restore brings back one of the page's earlierRevisions (from list) as a new revision, keeping its current title; use it when the person wants to undo or go back to an earlier version. get returns a page's saved markup, its sources' last reads (status, error, data shape and a sample) and its revision; read it before changing a page, then prefer edits (exact old→new replacements) to resending the whole markup, and pass its revision as baseVersion. check runs a page's sources (or, with no id, the sources given) once and checks the markup against their data without saving anything, under the same approval as a save. Read the aiden-artifacts skill before the first call.",
       parameters: Type.Object({
         operation: Type.Union([
           Type.Literal("create"),
@@ -765,6 +855,13 @@ export function createWorkspaceArtifactTool(options: WorkspaceArtifactToolOption
         ),
         revision: Type.Optional(
           Type.Integer({ description: "restore: one of the page's earlierRevisions from list.", minimum: 1 }),
+        ),
+        baseVersion: Type.Optional(
+          Type.Integer({
+            description:
+              "update: the revision you read the page at (from get or list). If the page has changed since, in another chat or by the person, nothing is saved and the error says what changed and the current revision.",
+            minimum: 1,
+          }),
         ),
         action: Type.Optional(Type.String({ description: "run: the name of the page's action, from list." })),
         args: Type.Optional(
@@ -885,9 +982,14 @@ export function createWorkspaceArtifactTool(options: WorkspaceArtifactToolOption
           options.onChanged({ workspaceId, artifactId: id, reason: "deleted", chatId });
           return text(`Deleted the artifact "${existing.artifact.visual.title}".`);
         }
+        const baseVersion = baseVersionOf(input, operation);
         const previous = operation === "update" ? (await store.get(workspaceId, idOf(input)))?.artifact : undefined;
         if (operation === "update" && !previous) throw new Error("No artifact with that id exists in this workspace.");
         const earlier = previous ? savedThisTurn.get(previous.id) : undefined;
+        const earlierVersion = (revision: number) => store.revision(workspaceId, idOf(input), revision);
+        if (previous && baseVersion !== undefined && !baseVersionHolds(baseVersion, previous, earlier)) {
+          throw new Error(await baseVersionRefusal(baseVersion, previous, earlierVersion));
+        }
         const renamedSince = earlier !== undefined && previous !== undefined && previous.visual.title !== earlier.title;
         // Repeating the name this turn's save gave keeps a rename made since.
         const requested = renamedSince && input.title === earlier.title ? { ...input, title: undefined } : input;
@@ -903,31 +1005,45 @@ export function createWorkspaceArtifactTool(options: WorkspaceArtifactToolOption
         if (signal?.aborted) throw new Error("The artifact change was cancelled.");
         // The store approves only when the allowed card listed exactly the saved
         // commands; otherwise an unchanged set keeps the approval it already had.
-        const artifact = previous
-          ? await store.replace(
-              workspaceId,
-              previous.id,
-              (current) => {
-                if (requested.edits === undefined || current.markup === previous.markup) {
-                  return rebasedContent(effective, content, current);
-                }
-                // Another chat changed the markup since it was read: the edits
-                // apply to the markup saved now, or the save fails with the miss.
-                const redone = withEdits(requested, current.markup, true);
-                const rebuilt = contentFor(redone, current);
-                diagnostics = rebuilt.diagnostics;
-                return rebasedContent(redone, rebuilt.content, current);
-              },
-              {
-                approvedDigest: shownDigest,
-                base: {
-                  title: previous.visual.title,
-                  ...(previous.description ? { description: previous.description } : {}),
+        let replacedRevision: number | undefined;
+        let artifact: WorkspaceArtifactV1;
+        try {
+          artifact = previous
+            ? await store.replace(
+                workspaceId,
+                previous.id,
+                (current) => {
+                  // Checked again under the lock: a save that landed since the read refuses this one.
+                  if (baseVersion !== undefined && !baseVersionHolds(baseVersion, current, earlier)) {
+                    throw new BaseVersionMoved(current);
+                  }
+                  replacedRevision = current.revision;
+                  if (requested.edits === undefined || current.markup === previous.markup) {
+                    return rebasedContent(effective, content, current);
+                  }
+                  // Another chat changed the markup since it was read: the edits
+                  // apply to the markup saved now, or the save fails with the miss.
+                  const redone = withEdits(requested, current.markup, true);
+                  const rebuilt = contentFor(redone, current);
+                  diagnostics = rebuilt.diagnostics;
+                  return rebasedContent(redone, rebuilt.content, current);
                 },
-                ...(earlier ? { fold: earlier } : {}),
-              },
-            )
-          : await store.create(workspaceId, content, { approvedDigest: shownDigest, chatId });
+                {
+                  approvedDigest: shownDigest,
+                  base: {
+                    title: previous.visual.title,
+                    ...(previous.description ? { description: previous.description } : {}),
+                  },
+                  ...(earlier ? { fold: { revision: earlier.revision, title: earlier.title } } : {}),
+                },
+              )
+            : await store.create(workspaceId, content, { approvedDigest: shownDigest, chatId });
+        } catch (error) {
+          if (error instanceof BaseVersionMoved && baseVersion !== undefined) {
+            throw new Error(await baseVersionRefusal(baseVersion, error.current, earlierVersion));
+          }
+          throw error;
+        }
         if (previous && artifact.revision === previous.revision) {
           if (artifact.approvedDigest !== previous.approvedDigest) {
             options.onChanged({ workspaceId, artifactId: artifact.id, reason: "updated", chatId });
@@ -937,7 +1053,12 @@ export function createWorkspaceArtifactTool(options: WorkspaceArtifactToolOption
           );
         }
         // A page made in this turn keeps its first draft as the one undo step.
-        if (previous) savedThisTurn.set(artifact.id, { revision: artifact.revision, title: artifact.visual.title });
+        if (previous) {
+          // The turn's saves run on from where they began, unless another save came between.
+          const from =
+            earlier && replacedRevision === earlier.revision ? earlier.from : (replacedRevision ?? previous.revision);
+          savedThisTurn.set(artifact.id, { from, revision: artifact.revision, title: artifact.visual.title });
+        }
         options.onChanged({ workspaceId, artifactId: artifact.id, reason: previous ? "updated" : "created", chatId });
         const verb = previous ? "Updated" : "Created";
         return text(
