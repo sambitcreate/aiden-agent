@@ -235,7 +235,7 @@ const HASHBANG_SINKS = {
   imgOnerrorEntity: `<p>x</p><img alt="" src="data:,x" onerror='&#35;!/x/ \`&#10;${IFRAME_SINK}&#10;//\`'>`,
   handlerLineSeparator: `<p>x</p><svg onload='#!/x/ \`\u2028${IFRAME_SINK}\u2028//\`'></svg>`,
   handlerBlockComment: `<p>x</p><svg onload='#!/x/ /*\n${IFRAME_SINK}\n//*/'></svg>`,
-  handlerInInnerHtml: `<p>x</p><script>document.body.innerHTML = "<img src=data:,x onerror='#!/x/ \`\\n${IFRAME_SINK.replaceAll('"', '\\"')}\\n//\`'>";</script>`,
+  handlerInInnerHtml: `<p>x</p><script>document.body.innerHTML = "<img src=data:,x onerror='#!/x/ \`\\n${IFRAME_SINK.replace(/"/gu, '\\"')}\\n//\`'>";</script>`,
 };
 
 const REFUSED_MARKUP: Record<string, string> = {
