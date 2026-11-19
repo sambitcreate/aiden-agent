@@ -23,8 +23,18 @@ const ITERATION_BUDGET = AIDEN_UI_LIMITS.eachIterations * 4;
 
 type ValueFormat = "number" | "currency" | "percent" | "date" | "text";
 
+export interface FallbackTextOptions {
+  /**
+   * Also print each chart's data as a table under its summary line. For
+   * readers that see only the text (a phone paired to `aiden serve`), where
+   * the chart itself is never drawn.
+   */
+  chartTables?: boolean;
+}
+
 class FallbackLines {
   readonly lines: string[] = [];
+  chartTables = false;
   /** Length of `lines.join("\n")`, kept as lines are added. */
   private size = 0;
   private work = WORK_BUDGET;
@@ -113,6 +123,24 @@ function table(rows: unknown, columns: unknown, scope: AidenUiScope, out: Fallba
     out.push(`| ${cells.join(" | ")} |`);
   }
   if (rows.length > MAX_TABLE_ROWS) out.push(`(${rows.length - MAX_TABLE_ROWS} more rows)`);
+}
+
+/**
+ * A chart's columns as the chart reads them: its x field, then its series
+ * (`series`, else `y`, else the first other numeric field), in the chart's format.
+ */
+function chartColumns(rows: unknown[], x: unknown, y: unknown, series: unknown, format: unknown): Record<string, unknown>[] {
+  const first = record(rows[0]);
+  const xKey = str(x) || Object.keys(first).find((key) => typeof first[key] === "string") || "";
+  const keys: { key: string; label: string }[] = Array.isArray(series) && series.length
+    ? series.map((entry) => (typeof entry === "string" ? { key: entry, label: entry } : { key: str(record(entry).key), label: str(record(entry).label) || str(record(entry).key) }))
+    : Array.isArray(y)
+      ? y.filter((key): key is string => typeof key === "string").map((key) => ({ key, label: key }))
+      : typeof y === "string" && y
+        ? [{ key: y, label: y }]
+        : Object.keys(first).filter((key) => key !== xKey && typeof first[key] === "number").slice(0, 1).map((key) => ({ key, label: key }));
+  const values = keys.filter((entry) => entry.key && entry.key !== xKey).slice(0, 8).map((entry) => ({ ...entry, ...(format !== undefined ? { format } : {}) }));
+  return [...(xKey ? [{ key: xKey, label: xKey, format: "text" }] : []), ...values];
 }
 
 function lines(node: AidenUiNodeV1, scope: AidenUiScope, out: FallbackLines): void {
@@ -208,6 +236,9 @@ function lines(node: AidenUiNodeV1, scope: AidenUiScope, out: FallbackLines): vo
       const label = str(prop(node, "label", scope));
       const kind = str(prop(node, "kind", scope));
       out.push(`${label || "Chart"} (${kind ? `${kind} chart` : "chart"}, ${Array.isArray(data) ? data.length : 0} points)`);
+      if (out.chartTables && Array.isArray(data) && data.length) {
+        table(data, chartColumns(data, prop(node, "x", scope), prop(node, "y", scope), prop(node, "series", scope), prop(node, "format", scope)), scope, out);
+      }
       return;
     }
     case "BarList": {
@@ -269,8 +300,9 @@ function lines(node: AidenUiNodeV1, scope: AidenUiScope, out: FallbackLines): vo
   }
 }
 
-export function fallbackTextFor(tree: AidenUiNodeV1, scope: AidenUiScope): string {
+export function fallbackTextFor(tree: AidenUiNodeV1, scope: AidenUiScope, options: FallbackTextOptions = {}): string {
   const out = new FallbackLines();
+  out.chartTables = options.chartTables === true;
   lines(tree, scope, out);
   const text = out.lines.join("\n");
   return text.length > AIDEN_UI_LIMITS.fallbackChars ? `${text.slice(0, AIDEN_UI_LIMITS.fallbackChars - 1)}…` : text;

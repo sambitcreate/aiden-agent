@@ -248,3 +248,19 @@ test("run() and compose() compile only for workspace artifacts", () => {
   const unnamed = compileAum(`<Visual title="X"><Button action={run($name)}>Go</Button></Visual>`, { artifactActions: true });
   assert.ok(unnamed.diagnostics.some((diagnostic) => /action name first/u.test(diagnostic.message)));
 });
+
+test("a text-only reader gets each chart's data as a table, in the chart's own columns and format", () => {
+  const markup = `<Visual title="Revenue"><Data name="months">[{"month":"Jan","revenue":1200,"cost":800},{"month":"Feb","revenue":1500,"cost":900}]</Data><Chart kind="line" data={$months} x="month" series={[{"key":"revenue","label":"Revenue"},"cost"]} format="currency" label="By month" /><Checklist items={[{"label":"Ship","done":true},{"label":"Review"}]} /></Visual>`;
+  const text = compileAum(markup, { fallback: { chartTables: true } }).fallbackText;
+  assert.match(text, /By month \(line chart, 2 points\)/u);
+  assert.match(text, /\| month \| Revenue \| cost \|/u);
+  assert.match(text, /\| Jan \| \$1,200\.00 \| \$800\.00 \|/u);
+  assert.match(text, /\| Feb \| \$1,500\.00 \| \$900\.00 \|/u);
+  assert.match(text, /- \[x\] Ship\n- \[ \] Review/u);
+  // Without the option, the chart stays one summary line (memory and desktop text).
+  assert.doesNotMatch(compileAum(markup).fallbackText, /\| Jan \|/u);
+
+  const implicit = compileAum(`<Visual><Chart kind="bar" data={[{"region":"EMEA","sales":3,"note":7}]} /></Visual>`);
+  assert.ok(implicit.tree);
+  assert.match(fallbackTextFor(implicit.tree, { vars: {} }, { chartTables: true }), /\| region \| sales \|\n\| --- \| --- \|\n\| EMEA \| 3 \|/u);
+});
