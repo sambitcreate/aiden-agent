@@ -616,8 +616,9 @@ export function createWorkspaceArtifactTool(options: WorkspaceArtifactToolOption
           renamedSince && input.title === earlier.title ? { ...input, title: undefined } : input,
           previous,
         );
-        // A rename landing from here until the write is caught by the store,
-        // which keeps it and ends this turn's fold.
+        // A rename or another chat's description landing from here until the
+        // write is caught by the store, which keeps it (a rename also ends
+        // this turn's fold).
         assertSourcesRunnable(content, options);
         if (signal?.aborted) throw new Error("The artifact change was cancelled.");
         // The store approves only when the allowed card listed exactly the saved
@@ -625,7 +626,10 @@ export function createWorkspaceArtifactTool(options: WorkspaceArtifactToolOption
         const artifact = previous
           ? await store.replace(workspaceId, previous.id, content, {
               approvedDigest: shownDigest,
-              baseTitle: previous.visual.title,
+              base: {
+                title: previous.visual.title,
+                ...(previous.description ? { description: previous.description } : {}),
+              },
               ...(earlier ? { fold: earlier } : {}),
             })
           : await store.create(workspaceId, content, { approvedDigest: shownDigest, chatId });

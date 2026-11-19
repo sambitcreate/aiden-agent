@@ -427,3 +427,36 @@ test("a rename that lands while a save is being prepared is kept, and stays its 
   await call("u3", { operation: "update", id: "art1", title: "Review queue" });
   assert.equal((await store.get("ws1", "art1"))!.artifact.visual.title, "Review queue");
 });
+
+test("another chat's description that lands while a save is being prepared is kept unless the save sets its own", async (t) => {
+  const { store, call, options } = await harness(t, { permission: "full" });
+  await call("c1", { operation: "create", title: "Open PRs", markup: PAGE });
+  const other = createWorkspaceArtifactTool({ ...options, chatId: "chat-2" });
+  const otherCall = (id: string, args: Record<string, unknown>) => other.execute(id, args as never, undefined);
+  // The other chat saves after this chat has read the page it updates,
+  // before that update is written.
+  const read = store.get.bind(store);
+  let landing: (() => Promise<unknown>) | undefined;
+  store.get = async (...args: Parameters<typeof store.get>) => {
+    const answer = await read(...args);
+    const work = landing;
+    landing = undefined;
+    await work?.();
+    return answer;
+  };
+  const changedPage = PAGE.replace("</Visual>", "<Text>more</Text></Visual>");
+  landing = () => otherCall("o1", { operation: "update", id: "art1", description: "From the other chat" });
+  await call("u1", { operation: "update", id: "art1", markup: changedPage });
+  let artifact = (await store.get("ws1", "art1"))!.artifact;
+  assert.equal(artifact.description, "From the other chat");
+  assert.match(JSON.stringify(artifact.visual), /more/u);
+  // Clearing it in that window is kept too.
+  landing = () => otherCall("o2", { operation: "update", id: "art1", description: "" });
+  await call("u2", { operation: "update", id: "art1", markup: PAGE });
+  artifact = (await store.get("ws1", "art1"))!.artifact;
+  assert.equal(artifact.description, undefined);
+  // A description this chat sets in that window still wins.
+  landing = () => otherCall("o3", { operation: "update", id: "art1", description: "Other again" });
+  await call("u3", { operation: "update", id: "art1", description: "Mine" });
+  assert.equal((await store.get("ws1", "art1"))!.artifact.description, "Mine");
+});

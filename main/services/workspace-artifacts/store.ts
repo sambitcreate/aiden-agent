@@ -260,11 +260,12 @@ export interface WorkspaceArtifactWriteOptions {
    */
   fold?: { revision: number; title: string };
   /**
-   * Update only: the title of the page the caller built this content from.
-   * If the page was renamed after that read and the content keeps the old
-   * title, the page keeps its new name; a content title of its own still wins.
+   * Update only: the title and description of the page the caller built this
+   * content from. If another save or a rename changed either after that read
+   * and the content keeps the old value, the page keeps the newer one; a value
+   * of the content's own still wins.
    */
-  baseTitle?: string;
+  base?: { title: string; description?: string };
 }
 
 /** `title`, or the first "Title (n)" no page in `taken` has, within the title limit. */
@@ -677,11 +678,18 @@ export class WorkspaceArtifactStore {
       if (index < 0) notFound();
       const previous = draft.artifacts[index]!;
       const built = contentFor(previous);
-      // Decided here, under the store's lock, so a rename that landed while
-      // the caller prepared this save is never written over.
-      const renamedSinceRead = options.baseTitle !== undefined && previous.visual.title !== options.baseTitle;
-      const content =
-        renamedSinceRead && built.title === options.baseTitle ? { ...built, title: previous.visual.title } : built;
+      // Decided here, under the store's lock, so a rename or another chat's
+      // description that landed while the caller prepared this save is never
+      // written over by the value the caller read.
+      const { base } = options;
+      const content = { ...built };
+      if (base && previous.visual.title !== base.title && built.title === base.title) {
+        content.title = previous.visual.title;
+      }
+      if (base && previous.description !== base.description && built.description === base.description) {
+        if (previous.description) content.description = previous.description;
+        else delete content.description;
+      }
       if (!isWorkspaceArtifactTitle(content.title)) throw new Error(TITLE_RULE);
       assertNoCredentialFiles(content);
       const named = draft.artifacts.find((artifact) => artifact.id !== id && artifact.visual.title === content.title);
