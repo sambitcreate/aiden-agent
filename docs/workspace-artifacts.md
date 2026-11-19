@@ -15,7 +15,7 @@ In a workspace without a folder, or with workspace access set to **No access**, 
 
 The Artifacts tab never builds a page itself. Aiden uses the built-in **aiden-artifacts** skill and the `workspace_artifact` tool. It lists the workspace's pages first, so it updates an existing page rather than making a near-duplicate. The Artifacts tab opens on the new page beside the chat that made it.
 
-Aiden builds a small working page first and checks it before adding more. Each save refreshes the page's sources once and draws the page with that data, the way the tab would. The result tells Aiden about:
+Aiden builds a small working page first and checks it before adding more. Each save refreshes the page's sources once and draws the page with that data, the way the tab would. A source the save left exactly as it was (same name, command or file, and parse) whose last read worked and is still fresh is not run again: the save keeps that read and says so. A read is fresh for the page's refresh interval, or for 60 seconds on a page without one. A source that is new or changed, a read that failed or is older, and a command the workspace's access would not run now all run (or stay blocked) as usual, and a refresh after a button runs every source again. The result tells Aiden about:
 
 - reads that come back empty, such as a misspelled field, `.length` on a list (pages use `len()`), or `<Each>` over an object;
 - list props whose rows would draw empty, such as a `<Checklist>` given plain text instead of `{label, done}` items, or a `<Timeline>` whose items have no `title`;

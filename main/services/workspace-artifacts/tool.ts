@@ -87,10 +87,15 @@ export interface WorkspaceArtifactToolOptions {
   takeApprovedDigest?: (toolCallId: string) => string | undefined;
   /** False once the workspace was removed; a late call then writes nothing. */
   workspaceExists?: () => boolean | Promise<boolean>;
-  /** Runs the artifact's sources once and returns each one's result. */
+  /**
+   * Runs the artifact's sources once and returns each one's result. After a
+   * save, `reuseFrom` is the page as it was before: a source the save left
+   * unchanged keeps a read that is still fresh instead of running again.
+   */
   refresh?: (
     artifact: WorkspaceArtifactV1,
     signal: AbortSignal | undefined,
+    reuseFrom?: WorkspaceArtifactV1,
   ) => Promise<Record<string, WorkspaceArtifactSourceResultV1>>;
   /**
    * Runs these sources once and saves nothing, for `check`. `approved` says
@@ -595,12 +600,23 @@ export async function workspaceArtifactCallApproval(
   return commandsCard(`${verb} the artifact "${title}"`, sources, actions, previous?.approvedDigest);
 }
 
-/** One line per source result; a source that loaded also gives its data's shape. */
-function describeSources(results: Record<string, WorkspaceArtifactSourceResultV1>, heading = "First refresh"): string {
+/**
+ * One line per source result; a source that loaded also gives its data's
+ * shape. A read from before `since` was kept from an earlier refresh.
+ */
+function describeSources(
+  results: Record<string, WorkspaceArtifactSourceResultV1>,
+  heading = "First refresh",
+  since?: number,
+): string {
   const lines = Object.entries(results).map(([name, result]) => {
     if (result.status === "ok") {
       const data = describeSourceData(result.dataJson);
-      return `- ${name}: ok${data ? `, ${data.shape}` : ""}`;
+      const kept =
+        since !== undefined && result.at < since
+          ? ` (unchanged, so its read from ${Math.max(1, Math.round((since - result.at) / 1000))}s ago was kept)`
+          : "";
+      return `- ${name}: ok${kept}${data ? `, ${data.shape}` : ""}`;
     }
     return result.status === "blocked"
       ? `- ${name}: not run (${result.error ?? "needs approval"})`
@@ -745,13 +761,18 @@ export function createWorkspaceArtifactTool(options: WorkspaceArtifactToolOption
    * After a save: the first refresh, then the page checked against its data.
    * The page is already saved, so neither may make the save look failed.
    */
-  async function afterSave(artifact: WorkspaceArtifactV1, signal: AbortSignal | undefined): Promise<string> {
+  async function afterSave(
+    artifact: WorkspaceArtifactV1,
+    signal: AbortSignal | undefined,
+    replaced?: WorkspaceArtifactV1,
+  ): Promise<string> {
     let firstRefresh = "";
     let results: Record<string, WorkspaceArtifactSourceResultV1> | undefined;
     if (options.refresh && artifact.sources.length > 0) {
       try {
-        results = await options.refresh(artifact, signal);
-        firstRefresh = describeSources(results);
+        const started = Date.now();
+        results = await options.refresh(artifact, signal, replaced);
+        firstRefresh = describeSources(results, "First refresh", started);
       } catch (error) {
         firstRefresh = `\nFirst refresh failed: ${error instanceof Error ? error.message : String(error)}`;
       }
@@ -971,7 +992,7 @@ export function createWorkspaceArtifactTool(options: WorkspaceArtifactToolOption
           savedThisTurn.delete(id);
           options.onChanged({ workspaceId, artifactId: artifact.id, reason: "updated", chatId });
           return text(
-            `Restored revision ${revision} of the artifact "${artifact.visual.title}" as revision ${artifact.revision}.${await afterSave(artifact, signal)}`,
+            `Restored revision ${revision} of the artifact "${artifact.visual.title}" as revision ${artifact.revision}.${await afterSave(artifact, signal, current.artifact)}`,
           );
         }
         if (operation === "delete") {
@@ -1005,7 +1026,7 @@ export function createWorkspaceArtifactTool(options: WorkspaceArtifactToolOption
         if (signal?.aborted) throw new Error("The artifact change was cancelled.");
         // The store approves only when the allowed card listed exactly the saved
         // commands; otherwise an unchanged set keeps the approval it already had.
-        let replacedRevision: number | undefined;
+        let replaced: WorkspaceArtifactV1 | undefined;
         let artifact: WorkspaceArtifactV1;
         try {
           artifact = previous
@@ -1017,7 +1038,7 @@ export function createWorkspaceArtifactTool(options: WorkspaceArtifactToolOption
                   if (baseVersion !== undefined && !baseVersionHolds(baseVersion, current, earlier)) {
                     throw new BaseVersionMoved(current);
                   }
-                  replacedRevision = current.revision;
+                  replaced = current;
                   if (requested.edits === undefined || current.markup === previous.markup) {
                     return rebasedContent(effective, content, current);
                   }
@@ -1056,13 +1077,13 @@ export function createWorkspaceArtifactTool(options: WorkspaceArtifactToolOption
         if (previous) {
           // The turn's saves run on from where they began, unless another save came between.
           const from =
-            earlier && replacedRevision === earlier.revision ? earlier.from : (replacedRevision ?? previous.revision);
+            earlier && replaced?.revision === earlier.revision ? earlier.from : (replaced?.revision ?? previous.revision);
           savedThisTurn.set(artifact.id, { from, revision: artifact.revision, title: artifact.visual.title });
         }
         options.onChanged({ workspaceId, artifactId: artifact.id, reason: previous ? "updated" : "created", chatId });
         const verb = previous ? "Updated" : "Created";
         return text(
-          `${verb} the artifact "${artifact.visual.title}" (id ${artifact.id}, revision ${artifact.revision}). It is shown in this workspace's Artifacts tab.${await afterSave(artifact, signal)}${describeDiagnostics(diagnostics)}`,
+          `${verb} the artifact "${artifact.visual.title}" (id ${artifact.id}, revision ${artifact.revision}). It is shown in this workspace's Artifacts tab.${await afterSave(artifact, signal, replaced)}${describeDiagnostics(diagnostics)}`,
         );
       },
     },

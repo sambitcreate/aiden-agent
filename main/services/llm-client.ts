@@ -2463,8 +2463,8 @@ async function prepareGeneration(
           hasFolder: Boolean(folderPath),
           store: workspaceArtifactStore,
           takeApprovedDigest: (toolCallId) => takeApprovedWorkspaceArtifactCall(streamId, toolCallId),
-          refresh: (artifact, refreshSignal) =>
-            workspaceArtifactRunner.refresh(workspace.id, artifact.id, { folderPath, permission }, refreshSignal),
+          refresh: (artifact, refreshSignal, reuseFrom) =>
+            workspaceArtifactRunner.refresh(workspace.id, artifact.id, { folderPath, permission }, refreshSignal, { reuseFrom }),
           check: (sources, approved, checkSignal) =>
             workspaceArtifactRunner.check(sources, approved, { folderPath, permission }, checkSignal),
           runAction: (artifactId, actionName, args, expectedDigest, runSignal) =>

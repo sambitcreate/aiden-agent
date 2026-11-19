@@ -246,6 +246,23 @@ test("the first refresh's results go back to the model", async (t) => {
   assert.match(text, /First refresh:\n- pulls: failed: gh: not logged in/u);
 });
 
+test("a save hands its refresh the page it replaced, and says which reads were kept", async (t) => {
+  const handed: (number | undefined)[] = [];
+  const readAt = Date.now() - 30_000;
+  const { call } = await harness(t, {
+    permission: "full",
+    refresh: async (_artifact, _signal, reuseFrom) => {
+      handed.push(reuseFrom?.revision);
+      return { pulls: { status: "ok", at: reuseFrom ? readAt : Date.now(), dataJson: "[]" } };
+    },
+  });
+  const created = await call("c1", { operation: "create", title: "Open PRs", markup: PAGE, sources: [PULLS] });
+  assert.match(created, /- pulls: ok, array\(0\)/u);
+  const updated = await call("c2", { operation: "update", id: "art1", title: "Pull requests" });
+  assert.deepEqual(handed, [undefined, 1]);
+  assert.match(updated, /- pulls: ok \(unchanged, so its read from 30s ago was kept\)/u);
+});
+
 test("the save checks the page against the first refresh's data", async (t) => {
   const rows = [{ number: 12, title: "Fix login" }];
   const { call } = await harness(t, {

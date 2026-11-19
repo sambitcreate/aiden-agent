@@ -113,6 +113,63 @@ test("an approved page runs under Ask; no access runs nothing", async (t) => {
   assert.equal(commands.length, 1);
 });
 
+test("a refresh after a save keeps a fresh read of a source the save left unchanged and runs the ones it changed", async (t) => {
+  const counted: WorkspaceArtifactSourceV1 = { name: "count", kind: "shell", command: "printf '[1,2]'", parse: "json" };
+  const { runner, store, commands, context } = await setup(t, { sources: [SHELL, counted] });
+  await runner.refresh("ws1", "art1", context("full"));
+  assert.equal(commands.length, 2);
+  const first = (await store.get("ws1", "art1"))!;
+  const save = (sources: WorkspaceArtifactSourceV1[], title: string) =>
+    store.replace("ws1", "art1", { title, visual: { ...first.artifact.visual, title }, sources, actions: [ECHO], refresh: first.artifact.refresh });
+
+  // Only the page's text changed: neither command runs again, and the reads keep their time.
+  const renamed = await save([SHELL, counted], "Open PRs");
+  const kept = await runner.refresh("ws1", "art1", context("full"), undefined, { reuseFrom: first.artifact });
+  assert.equal(commands.length, 2);
+  assert.equal(kept.pulls!.at, first.snapshot!.sources.pulls!.at);
+  assert.equal(kept.count!.dataJson, "[1,2]");
+  assert.equal((await store.get("ws1", "art1"))!.snapshot!.revision, renamed.revision);
+
+  // One command changed: only that one runs.
+  const changed = { ...counted, command: "printf '[3]'" };
+  await save([SHELL, changed], "Open PRs again");
+  const mixed = await runner.refresh("ws1", "art1", context("full"), undefined, { reuseFrom: renamed });
+  assert.deepEqual(commands.slice(2), [changed.command]);
+  assert.equal(mixed.count!.dataJson, "[3]");
+
+  // A refresh the tab asks for reads everything again.
+  await runner.refresh("ws1", "art1", context("full"));
+  assert.equal(commands.length, 5);
+});
+
+test("a refresh after a save runs a source again once its last read is older than the page's refresh interval", async (t) => {
+  const { runner, store, commands, context } = await setup(t, { sources: [SHELL] });
+  const before = (await store.get("ws1", "art1"))!.artifact;
+  const content = { title: "PRs", visual: before.visual, sources: [SHELL], actions: [ECHO] };
+  // Read 90 seconds ago: fresh for a page that refreshes every two minutes, stale for one without an interval.
+  const readAt = Date.now() - 90_000;
+  await store.saveSnapshot("ws1", before, { pulls: { status: "ok", at: readAt, dataJson: "[]" } });
+  const slow = await store.replace("ws1", "art1", { ...content, refresh: { onOpen: true, intervalSeconds: 120 } });
+  assert.equal((await runner.refresh("ws1", "art1", context("full"), undefined, { reuseFrom: before })).pulls!.at, readAt);
+  assert.equal(commands.length, 0);
+  await store.saveSnapshot("ws1", slow, { pulls: { status: "ok", at: readAt, dataJson: "[]" } });
+  await store.replace("ws1", "art1", { ...content, title: "PRs now", refresh: { onOpen: true } });
+  const reread = await runner.refresh("ws1", "art1", context("full"), undefined, { reuseFrom: slow });
+  assert.equal(commands.length, 1);
+  assert.equal(reread.pulls!.dataJson, '[{"number":12}]');
+});
+
+test("a read kept across a save still follows the access the page has now", async (t) => {
+  const { runner, store, commands, context } = await setup(t, { sources: [SHELL] });
+  await runner.refresh("ws1", "art1", context("full"));
+  const before = (await store.get("ws1", "art1"))!.artifact;
+  await store.replace("ws1", "art1", { title: "Open PRs", visual: before.visual, sources: [SHELL], actions: [ECHO], refresh: before.refresh });
+  // Under Ask the page's commands were never allowed, so its saved read is not handed back as fresh.
+  const results = await runner.refresh("ws1", "art1", context("ask"), undefined, { reuseFrom: before });
+  assert.equal(results.pulls!.status, "blocked");
+  assert.equal(commands.length, 1);
+});
+
 test("a failing source reports why and keeps the data it had", async (t) => {
   const { runner, store, context } = await setup(t, { sources: [SHELL] });
   await runner.refresh("ws1", "art1", context("full"));

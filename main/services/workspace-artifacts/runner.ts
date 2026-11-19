@@ -10,6 +10,8 @@ import {
   type WorkspaceArtifactSourceResultV1,
   type WorkspaceArtifactSourceV1,
   type WorkspaceArtifactsChangedEvent,
+  type WorkspaceArtifactV1,
+  type WorkspaceArtifactView,
 } from "../../../renderer/shared/workspace-artifacts.js";
 import type { BoundedShellCommandOptions, BoundedShellCommandResult } from "../bounded-shell-command.js";
 import { ManagedWorktreeFileIoError } from "../managed-worktree-file-io.js";
@@ -92,6 +94,64 @@ interface SharedRefresh {
 }
 
 const FOLDER_UNAVAILABLE = "The workspace folder is unavailable.";
+
+/** Options for the refresh that follows a save. */
+export interface WorkspaceArtifactRefreshOptions {
+  /**
+   * The page as it was before this save. A source it had with the same
+   * definition, whose last read succeeded and is still fresh, keeps that read
+   * instead of running again.
+   */
+  reuseFrom?: Pick<WorkspaceArtifactV1, "revision" | "sources">;
+}
+
+function sameSource(a: WorkspaceArtifactSourceV1, b: WorkspaceArtifactSourceV1): boolean {
+  if (a.name !== b.name || a.parse !== b.parse) return false;
+  if (a.kind === "shell") return b.kind === "shell" && a.command === b.command;
+  return b.kind === "file" && a.file === b.file;
+}
+
+/**
+ * How long a read counts as fresh: the page's own interval, or for a page
+ * without one the shortest interval a page may ask for.
+ */
+function freshForMs(artifact: Pick<WorkspaceArtifactV1, "refresh">): number {
+  return (artifact.refresh.intervalSeconds ?? WORKSPACE_ARTIFACT_LIMITS.minIntervalSeconds) * 1000;
+}
+
+/**
+ * The saved reads a refresh after a save may keep: a source whose definition
+ * the save left unchanged (or the saved read already belongs to this
+ * revision), whose last read succeeded within the freshness window, and
+ * which this access would run now.
+ */
+function reusableReads(
+  view: WorkspaceArtifactView,
+  reuseFrom: WorkspaceArtifactRefreshOptions["reuseFrom"],
+  approved: boolean,
+  context: WorkspaceArtifactRunContext,
+  now: number,
+): SourceResults {
+  const snapshot = view.snapshot;
+  if (!reuseFrom || !snapshot) return {};
+  const window = freshForMs(view.artifact);
+  const reused: SourceResults = {};
+  for (const source of view.artifact.sources) {
+    const result = snapshot.sources[source.name];
+    if (!result || result.status !== "ok" || result.dataJson === undefined) continue;
+    if (!(now - result.at >= 0 && now - result.at < window)) continue;
+    const before =
+      snapshot.revision === view.artifact.revision
+        ? source
+        : snapshot.revision === reuseFrom.revision
+          ? reuseFrom.sources.find((candidate) => candidate.name === source.name)
+          : undefined;
+    if (!before || !sameSource(before, source)) continue;
+    if (workspaceArtifactSourceAccess(context.permission, Boolean(context.folderPath), source, approved) !== "run") continue;
+    reused[source.name] = result;
+  }
+  return reused;
+}
 
 /** Resolves the folder as it is now: a folder that was removed or is no longer a directory runs nothing. */
 async function verifiedFolder(folderPath: string): Promise<string> {
@@ -253,6 +313,7 @@ export function createWorkspaceArtifactRunner(dependencies: WorkspaceArtifactRun
     artifactId: string,
     context: WorkspaceArtifactRunContext,
     signal?: AbortSignal,
+    options: WorkspaceArtifactRefreshOptions = {},
   ): Promise<SourceResults> {
     const view = await dependencies.store.get(workspaceId, artifactId);
     if (!view) throw new Error("No artifact with that id exists in this workspace.");
@@ -270,9 +331,15 @@ export function createWorkspaceArtifactRunner(dependencies: WorkspaceArtifactRun
       }
     }
     if (signal?.aborted) return cancelledResults(view.artifact.sources);
-    const key = `${view.digest}\0${approved}\0${context.permission}\0${folderPath ?? ""}`;
+    const fullKey = `${view.digest}\0${approved}\0${context.permission}\0${folderPath ?? ""}`;
+    const reused =
+      folderError === undefined ? reusableReads(view, options.reuseFrom, approved, { ...context, folderPath }, Date.now()) : {};
+    const reusedNames = Object.keys(reused).sort();
+    const key = reusedNames.length ? `${fullKey}\0reuse\0${reusedNames.join("\0")}` : fullKey;
     let shared = inFlight.get(id);
-    if (!shared || shared.key !== key || shared.controller.signal.aborted) {
+    // A run already reading every source is joined, whatever this one could keep.
+    const joinable = shared && !shared.controller.signal.aborted && (shared.key === key || shared.key === fullKey);
+    if (!shared || !joinable) {
       const controller = new AbortController();
       const generation = (generations.get(id) ?? 0) + 1;
       generations.set(id, generation);
@@ -283,7 +350,9 @@ export function createWorkspaceArtifactRunner(dependencies: WorkspaceArtifactRun
           const at = Date.now();
           results = Object.fromEntries(view.artifact.sources.map((source) => [source.name, { status: "error", at, error: folderError } as const]));
         } else {
-          results = await runSources(view.artifact.sources, approved, { ...context, folderPath }, controller.signal);
+          const toRun = view.artifact.sources.filter((source) => !(source.name in reused));
+          const ran = await runSources(toRun, approved, { ...context, folderPath }, controller.signal);
+          results = Object.fromEntries(view.artifact.sources.map((source) => [source.name, reused[source.name] ?? ran[source.name]!]));
         }
         if (!shouldSave(id, entry)) return results;
         // A page whose commands changed meanwhile is re-read by its own refresh; these results describe the old ones.
