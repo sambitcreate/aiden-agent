@@ -503,7 +503,7 @@ import {
   prepareGenerativeUiTurnStore,
   shouldEnableGenerativeUiExtension,
 } from "./generative-ui-extension.js";
-import { chatToolOffers, chatTurnAudienceFor, chatTurnToolRefusal, declaresWindowTools, firstTurnToolRefusal, windowlessChatTurn, type ChatToolSurface, type TurnToolRefusal } from "./chat-turn-tool-policy.js";
+import { chatToolOffers, chatTurnAudienceFor, chatTurnToolRefusal, declaresAppTools, declaresWindowTools, firstTurnToolRefusal, windowlessChatTurn, type ChatToolSurface, type TurnToolRefusal } from "./chat-turn-tool-policy.js";
 import { createGenerativeUiDraftSession } from "./generative-ui-draft.js";
 import { createUiDraftSession } from "./aiden-ui-draft.js";
 import { withoutVisualSnapshots } from "../../renderer/shared/visual-snapshots.js";
@@ -2542,7 +2542,7 @@ async function prepareGeneration(
    */
   const turnToolRefusals: TurnToolRefusal[] = [];
   turnToolRefusals.push(chatTurnToolRefusal(chatToolSurface, turnAudience));
-  if (!botContext && (!assistantMode || attendedAssistant) && options.interactionSurface !== "telegram" && schedulingAllowed && (declaresWindow || browserOwner?.kind === "remote")) {
+  if (declaresAppTools(ownerScope, { attendedAssistant, schedulingAllowed })) {
     // A windowless turn declares them with no live state and no navigation,
     // and refuses every call (`chatTurnToolRefusal`).
     const onThisComputer = browserOwner?.kind !== "remote" && !windowless;

@@ -118,6 +118,23 @@ export function declaresWindowTools(scope: ChatTurnOwnerScope): boolean {
   return scope.window || windowlessChatTurn(scope);
 }
 
+/**
+ * Whether the turn declares Aiden's settings and scheduling tools: a turn a
+ * person can attend (no Bot, an Assistant only when attended, never
+ * Telegram) that may schedule, and that a window on this computer or a
+ * paired device owns, or that declares a window's tools without one.
+ */
+export function declaresAppTools(
+  scope: ChatTurnOwnerScope,
+  turn: { attendedAssistant: boolean; schedulingAllowed: boolean },
+): boolean {
+  return !scope.botBound &&
+    (!scope.assistantMode || turn.attendedAssistant) &&
+    scope.interactionSurface !== "telegram" &&
+    turn.schedulingAllowed &&
+    (declaresWindowTools(scope) || scope.remote);
+}
+
 /** The tools a windowless chat turn refuses by name, whatever its sources declared. */
 const WINDOW_TOOL_NAMES: ReadonlySet<string> = new Set([
   COMPUTER_USE_TOOL_NAME,

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
-  chatToolOffers, chatTurnAudienceFor, chatTurnToolRefusal, declaresWindowTools, firstTurnToolRefusal, windowlessChatTurn,
+  chatToolOffers, chatTurnAudienceFor, chatTurnToolRefusal, declaresAppTools, declaresWindowTools, firstTurnToolRefusal, windowlessChatTurn,
   type ChatToolSurface, type ChatTurnOwnerScope, type ChatTurnAudience, type ChatTurnAudienceOptions, type ChatTurnAudienceParams,
 } from "./chat-turn-tool-policy.js";
 import { UNATTENDED_FOLLOW_UP_GENERATION } from "./follow-through/notice-delivery.js";
@@ -127,4 +127,22 @@ test("only a workspace chat turn with no window and no paired device is windowle
     assert.equal(windowlessChatTurn(scope), windowless, label);
     assert.equal(declaresWindowTools(scope), declares, label);
   }
+});
+
+test("Aiden's settings and scheduling tools are declared only for a turn a person can attend and that may schedule", () => {
+  const owed: ChatTurnOwnerScope = { window: false, remote: false, usageSource: "chat", assistantMode: false, botBound: false };
+  const may = { attendedAssistant: false, schedulingAllowed: true };
+  const cases: Array<[string, ChatTurnOwnerScope, { attendedAssistant: boolean; schedulingAllowed: boolean }, boolean]> = [
+    ["a turn in the chat's window", { ...owed, window: true }, may, true],
+    ["a paired device's turn", { ...owed, remote: true }, may, true],
+    // Declared like the window's turn, and every call refused.
+    ["an owed turn or a follow-up", owed, may, true],
+    ["a scheduled run with no window", { ...owed, usageSource: "scheduled" }, may, false],
+    ["a turn that may not schedule", { ...owed, window: true }, { ...may, schedulingAllowed: false }, false],
+    ["a Bot turn", { ...owed, window: true, botBound: true }, may, false],
+    ["a Telegram turn", { ...owed, remote: true, interactionSurface: "telegram" }, may, false],
+    ["an unattended Assistant turn", { ...owed, window: true, assistantMode: true }, may, false],
+    ["an attended Assistant turn", { ...owed, window: true, assistantMode: true }, { ...may, attendedAssistant: true }, true],
+  ];
+  for (const [label, scope, turn, declares] of cases) assert.equal(declaresAppTools(scope, turn), declares, label);
 });

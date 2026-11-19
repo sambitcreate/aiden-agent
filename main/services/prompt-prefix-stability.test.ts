@@ -47,7 +47,7 @@ import { canUseBrowserTools } from "./browser-tools.js";
 import { canUseDeviceTools } from "./devices/device-tools.js";
 import { designCanvasToolsAllowed } from "./design-canvas/canvas-tools.js";
 import type { AppControlContext, AppControlsService } from "./app-controls-core.js";
-import { chatToolOffers, chatTurnAudienceFor, chatTurnToolRefusal, declaresWindowTools, windowlessChatTurn, type ChatToolSurface, type ChatTurnAudience, type ChatTurnOwnerScope } from "./chat-turn-tool-policy.js";
+import { chatToolOffers, chatTurnAudienceFor, chatTurnToolRefusal, declaresAppTools, declaresWindowTools, windowlessChatTurn, type ChatToolSurface, type ChatTurnAudience, type ChatTurnOwnerScope } from "./chat-turn-tool-policy.js";
 import { remoteGenerationSurface, scheduledGenerationSurface } from "./conversation-surface-generation.js";
 import { UNATTENDED_FOLLOW_UP_GENERATION } from "./follow-through/notice-delivery.js";
 import { owedTurnStartRequest } from "./chat-owed-turn-start.js";
@@ -788,8 +788,9 @@ describe("prompt prefix stability: tool list identical across turns", () => {
     return [
       ...(canUseBrowserTools(owner) ? [browserTool] : []),
       ...(canUseDeviceTools({ ...owner, enabled: true, agentAccess: true }) ? [deviceTool] : []),
-      ...(!scope.botBound && !scope.assistantMode && !telegram && !options.excludeToolNames?.has("schedule_task") &&
-        (declares || scope.remote) ? ownerAppTools : []),
+      // A workspace chat is no Assistant, so scheduling turns on the exclusion alone.
+      ...(declaresAppTools(scope, { attendedAssistant: false, schedulingAllowed: !options.excludeToolNames?.has("schedule_task") })
+        ? ownerAppTools : []),
       ...(designCanvasToolsAllowed({
         flagEnabled: true, localRenderer: declares && !scope.remote, assistant: scope.assistantMode,
         telegram, hasWorkspaceFolder: true, designMode: true,
