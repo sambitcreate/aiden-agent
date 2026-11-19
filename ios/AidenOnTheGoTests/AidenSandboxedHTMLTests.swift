@@ -9,6 +9,11 @@ import XCTest
 /// remote resources reaches nothing.
 @MainActor
 final class AidenSandboxedHTMLTests: XCTestCase {
+    /// How long a page may take to load. Most of that is WebKit starting a
+    /// content process for it, which on a loaded CI simulator has taken 13 and
+    /// 18 seconds; locally it takes about one. A passing run never waits this long.
+    private static let pageLoadTimeout: TimeInterval = 30
+
     // MARK: Navigation
 
     func testPreviewNavigationAllowsOnlyItsOwnDocumentAndOffersTappedHttpsLinks() throws {
@@ -103,8 +108,7 @@ final class AidenSandboxedHTMLTests: XCTestCase {
 
     /// Control first: the page in a plain web view does reach the listener,
     /// so a zero from the sandbox means it blocked the load, not that nothing tried.
-    /// The positive waits allow 30 seconds because a loaded CI simulator can take
-    /// over 10 to start WebKit's processes; a passing run never waits that long.
+    /// The positive waits are `pageLoadTimeout`, since each needs a page to load.
     /// If even the plain web view never reaches the listener, the simulator gives
     /// this test no control to compare against, so it skips rather than reading
     /// the preview's zero as proof.
@@ -117,7 +121,7 @@ final class AidenSandboxedHTMLTests: XCTestCase {
         let clock = ContinuousClock()
         let controlStart = clock.now
         control.loadHTMLString(Self.page(body(controlListener.port)), baseURL: nil)
-        let controlResult = await XCTWaiter().fulfillment(of: [controlConnected], timeout: 30)
+        let controlResult = await XCTWaiter().fulfillment(of: [controlConnected], timeout: Self.pageLoadTimeout)
         let controlTook = clock.now - controlStart
         control.stopLoading()
         controlListener.stop()
@@ -134,7 +138,7 @@ final class AidenSandboxedHTMLTests: XCTestCase {
 
         let finished = expectation(description: "\(name): sandboxed page finishes loading")
         let (webView, _) = try showSandboxed(Self.page(body(listener.port)), allowsScripts: true, onFinish: { finished.fulfill() })
-        await fulfillment(of: [finished], timeout: 30)
+        await fulfillment(of: [finished], timeout: Self.pageLoadTimeout)
         // The page's scripts did run; they were stopped at the network, not before it.
         let ran = try await webView.callAsyncJavaScript(
             "return document.documentElement.dataset.ran ?? null",
@@ -146,7 +150,8 @@ final class AidenSandboxedHTMLTests: XCTestCase {
         await fulfillment(of: [connected], timeout: wait)
         XCTAssertEqual(listener.accepted, 0, "\(name) reached the network")
         listener.stop()
-        webView.stopLoading()
+        // One preview per vector: keeping all twelve alive starved the next tests' web views on CI.
+        release(webView)
     }
 
     func testPreviewPagesCannotOpenWebRTCConnections() async throws {
@@ -173,14 +178,14 @@ final class AidenSandboxedHTMLTests: XCTestCase {
         control.navigationDelegate = controlWaiter
         try host(control)
         control.loadHTMLString(page, baseURL: nil)
-        await fulfillment(of: [controlWaiter.finished], timeout: 10)
+        await fulfillment(of: [controlWaiter.finished], timeout: Self.pageLoadTimeout)
         let controlTypes = try await control.callAsyncJavaScript(probe, contentWorld: .page) as? [String]
         XCTAssertEqual(controlTypes?.first, "function")
         XCTAssertEqual(controlTypes?[6], "function")
 
         let finished = expectation(description: "sandboxed page finishes loading")
         let (webView, _) = try showSandboxed(page, allowsScripts: true, onFinish: { finished.fulfill() })
-        await fulfillment(of: [finished], timeout: 10)
+        await fulfillment(of: [finished], timeout: Self.pageLoadTimeout)
         let types = try await webView.callAsyncJavaScript(probe, contentWorld: .page) as? [String]
         XCTAssertEqual(types, Array(repeating: "undefined", count: 9))
     }
@@ -274,7 +279,7 @@ final class AidenSandboxedHTMLTests: XCTestCase {
         )
         // No keyboard or assistive technology: only a tap can open the gate.
         coordinator.touchlessActivationPossible = { false }
-        await fulfillment(of: [finished], timeout: 10)
+        await fulfillment(of: [finished], timeout: Self.pageLoadTimeout)
 
         // No touch: ten scripted clicks reach nobody.
         _ = try await webView.callAsyncJavaScript(clicks, contentWorld: .page)
@@ -371,7 +376,7 @@ final class AidenSandboxedHTMLTests: XCTestCase {
         // Unstyled: the canvas behind the page, the palette's text, Aiden's body size.
         let finished = expectation(description: "unstyled page finishes")
         let (plain, _) = try showSandboxed(page, allowsScripts: false, themeCSS: css, onFinish: { finished.fulfill() })
-        await fulfillment(of: [finished], timeout: 10)
+        await fulfillment(of: [finished], timeout: Self.pageLoadTimeout)
         let plainStyles = try await plain.callAsyncJavaScript(probe, contentWorld: .defaultClient) as? [String]
         XCTAssertEqual(plainStyles, [
             "rgb(246, 247, 249)", "rgba(0, 0, 0, 0)", "rgb(61, 63, 65)", "rgb(61, 63, 65)",
@@ -386,7 +391,7 @@ final class AidenSandboxedHTMLTests: XCTestCase {
         """
         let styledFinished = expectation(description: "styled page finishes")
         let (own, _) = try showSandboxed(styled, allowsScripts: false, themeCSS: css, onFinish: { styledFinished.fulfill() })
-        await fulfillment(of: [styledFinished], timeout: 10)
+        await fulfillment(of: [styledFinished], timeout: Self.pageLoadTimeout)
         let ownStyles = try await own.callAsyncJavaScript(probe, contentWorld: .defaultClient) as? [String]
         XCTAssertEqual(ownStyles, [
             "rgb(9, 9, 9)", "rgb(1, 2, 3)", "rgb(61, 63, 65)", "rgb(4, 5, 6)",
@@ -513,13 +518,23 @@ final class AidenSandboxedHTMLTests: XCTestCase {
         let coordinator = view.makeCoordinator()
         coordinator.onDidFinish = onFinish
         let webView = view.makeWebView(coordinator: coordinator)
-        try host(webView)
+        try host(webView, owner: coordinator)
         coordinator.start(html, in: webView)
-        addTeardownBlock { @MainActor in _ = coordinator }
         return (webView, coordinator)
     }
 
-    private func host(_ webView: WKWebView) throws {
+    /// What keeps a hosted web view on screen: its window, and for a preview its
+    /// coordinator, which the web view holds only weakly.
+    private struct Hosted {
+        let window: UIWindow
+        let webView: WKWebView
+        let owner: AnyObject?
+    }
+
+    private var hosted: [ObjectIdentifier: Hosted] = [:]
+
+    /// Shows a web view in its own window until `release` or the end of the test.
+    private func host(_ webView: WKWebView, owner: AnyObject? = nil) throws {
         let scene = try XCTUnwrap(
             UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first
         )
@@ -530,11 +545,22 @@ final class AidenSandboxedHTMLTests: XCTestCase {
         webView.frame = controller.view.bounds
         controller.view.addSubview(webView)
         window.isHidden = false
-        addTeardownBlock { @MainActor in
-            webView.stopLoading()
-            webView.removeFromSuperview()
-            window.isHidden = true
-        }
+        let id = ObjectIdentifier(webView)
+        hosted[id] = Hosted(window: window, webView: webView, owner: owner)
+        addTeardownBlock { @MainActor [weak self] in self?.release(id) }
+    }
+
+    /// Takes a web view down now, so its page and WebKit process end before
+    /// the next one starts instead of piling up until the test finishes.
+    private func release(_ webView: WKWebView) {
+        release(ObjectIdentifier(webView))
+    }
+
+    private func release(_ id: ObjectIdentifier) {
+        guard let entry = hosted.removeValue(forKey: id) else { return }
+        entry.webView.stopLoading()
+        entry.webView.removeFromSuperview()
+        entry.window.isHidden = true
     }
 }
 
