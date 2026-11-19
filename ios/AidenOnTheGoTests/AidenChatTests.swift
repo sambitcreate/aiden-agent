@@ -1002,6 +1002,18 @@ final class AidenChatTests: XCTestCase {
         XCTAssertEqual(try JSONDecoder().decode(AidenProducedFile.self, from: data), file)
     }
 
+    func testProducedFileLinksRoundTripThroughWorkspaceLinkRouting() throws {
+        for path in ["reports/q3 summary.html", "naïve/ä.html", "a/b/c.txt", "100% done.html"] {
+            let file = AidenProducedFile(relativePath: path, operation: "written", bytes: 12)
+            let link = try XCTUnwrap(file.workspaceLink, path)
+            XCTAssertEqual(AidenWorkspaceFileLink.path(link.relativeString), path)
+        }
+        let deep = (1...22).map { "d\($0)" }.joined(separator: "/")
+        for path in ["notes:v2.html", "a?b.html", "a#b.html", deep] {
+            XCTAssertNil(AidenProducedFile(relativePath: path, operation: "edited", bytes: 12).workspaceLink, path)
+        }
+    }
+
     func testHistoryReasoningRejectsBotChatAndAcceptsRegularChat() throws {
         let regular = """
         {"id":"chat-1","workspaceId":"workspace-1","title":"Chat","messages":[{"id":"message-1","role":"assistant","text":"Done","reasoning":"Visible","createdAt":"2026-08-20T12:00:00Z"}],"createdAt":"2026-08-20T12:00:00Z","updatedAt":"2026-08-20T12:00:00Z","revision":"rev-1"}
@@ -7155,7 +7167,7 @@ final class AidenChatTests: XCTestCase {
 
     func testHtmlArtifactCardIsReplacedOnlyByAVisualWithASnapshot() throws {
         let withSnapshot = try visualFixtureMessage()
-        XCTAssertEqual(AidenChatVisualPresentation.unviewableHtmlArtifacts(in: withSnapshot), [])
+        XCTAssertEqual(AidenChatVisualPresentation.unviewableHtmlArtifacts(in: withSnapshot, viewerAvailable: false), [])
 
         let withoutSnapshot = try visualFixtureMessage { message in
             var visuals = message["visuals"] as? [[String: Any]] ?? []
@@ -7164,7 +7176,7 @@ final class AidenChatTests: XCTestCase {
         }
         XCTAssertNil(withoutSnapshot.visuals?.first?.snapshotAttachmentId)
         XCTAssertEqual(
-            AidenChatVisualPresentation.unviewableHtmlArtifacts(in: withoutSnapshot).map(\.id),
+            AidenChatVisualPresentation.unviewableHtmlArtifacts(in: withoutSnapshot, viewerAvailable: false).map(\.id),
             ["artifact_fixture_01"]
         )
 
@@ -7175,14 +7187,51 @@ final class AidenChatTests: XCTestCase {
         }
         XCTAssertNil(AidenChatVisualPresentation.snapshotAttachment(for: danglingSnapshot.visuals![0], in: danglingSnapshot))
         XCTAssertEqual(
-            AidenChatVisualPresentation.unviewableHtmlArtifacts(in: danglingSnapshot).map(\.id),
+            AidenChatVisualPresentation.unviewableHtmlArtifacts(in: danglingSnapshot, viewerAvailable: false).map(\.id),
             ["artifact_fixture_01"]
         )
 
         // An older Mac without visuals keeps every card.
         let legacy = try visualFixtureMessage { $0.removeValue(forKey: "visuals") }
-        XCTAssertEqual(AidenChatVisualPresentation.unviewableHtmlArtifacts(in: legacy).map(\.id), ["artifact_fixture_01"])
-        XCTAssertEqual(AidenChatVisualPresentation.rowVisuals(in: legacy), [])
+        XCTAssertEqual(AidenChatVisualPresentation.unviewableHtmlArtifacts(in: legacy, viewerAvailable: false).map(\.id), ["artifact_fixture_01"])
+        XCTAssertEqual(AidenChatVisualPresentation.rowVisuals(in: legacy, viewerAvailable: false), [])
+    }
+
+    func testWithTheViewerAnHtmlVisualWithoutASnapshotGetsARowInsteadOfTheCard() throws {
+        let withoutSnapshot = try visualFixtureMessage { message in
+            var visuals = message["visuals"] as? [[String: Any]] ?? []
+            visuals[0].removeValue(forKey: "snapshotAttachmentId")
+            message["visuals"] = visuals
+        }
+        XCTAssertNil(withoutSnapshot.visuals?.first?.snapshotAttachmentId)
+
+        // The Mac offers the viewer: the visual can still be opened, so it gets
+        // its row and the "Can't view on this device" card goes away.
+        XCTAssertTrue(
+            AidenChatVisualPresentation.rowVisuals(in: withoutSnapshot, viewerAvailable: true)
+                .map(\.id).contains("artifact_fixture_01")
+        )
+        XCTAssertEqual(AidenChatVisualPresentation.unviewableHtmlArtifacts(in: withoutSnapshot, viewerAvailable: true), [])
+
+        // Without the viewer nothing can open it: card kept, no row.
+        XCTAssertFalse(
+            AidenChatVisualPresentation.rowVisuals(in: withoutSnapshot, viewerAvailable: false)
+                .map(\.id).contains("artifact_fixture_01")
+        )
+        XCTAssertEqual(
+            AidenChatVisualPresentation.unviewableHtmlArtifacts(in: withoutSnapshot, viewerAvailable: false).map(\.id),
+            ["artifact_fixture_01"]
+        )
+
+        // An older Mac without visuals has no visual id to open: the card stays either way.
+        let legacy = try visualFixtureMessage { $0.removeValue(forKey: "visuals") }
+        for viewerAvailable in [true, false] {
+            XCTAssertEqual(
+                AidenChatVisualPresentation.unviewableHtmlArtifacts(in: legacy, viewerAvailable: viewerAvailable).map(\.id),
+                ["artifact_fixture_01"]
+            )
+            XCTAssertEqual(AidenChatVisualPresentation.rowVisuals(in: legacy, viewerAvailable: viewerAvailable), [])
+        }
     }
 
     func testLateSnapshotRefetchIsBoundedToARecentReplyStillAwaitingSnapshots() throws {
@@ -7240,7 +7289,7 @@ final class AidenChatTests: XCTestCase {
                 text: message.text,
                 reasoning: message.reasoning ?? "",
                 timeline: message.timeline,
-                visuals: AidenChatVisualPresentation.rowVisuals(in: message)
+                visuals: AidenChatVisualPresentation.rowVisuals(in: message, viewerAvailable: false)
             )).compactMap { row in
                 if case .visual(let visual) = row.kind { return visual.id }
                 return nil
@@ -7249,7 +7298,7 @@ final class AidenChatTests: XCTestCase {
 
         // With its snapshot, the html visual gets a row and replaces the card.
         let withSnapshot = try visualFixtureMessage()
-        XCTAssertEqual(AidenChatVisualPresentation.rowVisuals(in: withSnapshot).map(\.id), ["artifact_fixture_01", "ui_fixture_01"])
+        XCTAssertEqual(AidenChatVisualPresentation.rowVisuals(in: withSnapshot, viewerAvailable: false).map(\.id), ["artifact_fixture_01", "ui_fixture_01"])
         XCTAssertEqual(try transcriptRowIDs(withSnapshot), ["artifact_fixture_01", "ui_fixture_01"])
 
         // Without one, the card alone represents it: no row, card kept. The ui
@@ -7259,20 +7308,20 @@ final class AidenChatTests: XCTestCase {
             visuals[0].removeValue(forKey: "snapshotAttachmentId")
             message["visuals"] = visuals
         }
-        XCTAssertEqual(AidenChatVisualPresentation.rowVisuals(in: withoutSnapshot).map(\.id), ["ui_fixture_01"])
+        XCTAssertEqual(AidenChatVisualPresentation.rowVisuals(in: withoutSnapshot, viewerAvailable: false).map(\.id), ["ui_fixture_01"])
         XCTAssertEqual(try transcriptRowIDs(withoutSnapshot), ["ui_fixture_01"])
-        XCTAssertEqual(AidenChatVisualPresentation.unviewableHtmlArtifacts(in: withoutSnapshot).map(\.id), ["artifact_fixture_01"])
+        XCTAssertEqual(AidenChatVisualPresentation.unviewableHtmlArtifacts(in: withoutSnapshot, viewerAvailable: false).map(\.id), ["artifact_fixture_01"])
 
         // A named snapshot the message does not carry is not usable either; the
         // ui visual still falls back to its description, and to its title.
         let danglingSnapshots = try visualFixtureMessage { $0["attachments"] = [Any]() }
-        XCTAssertEqual(AidenChatVisualPresentation.rowVisuals(in: danglingSnapshots).map(\.id), ["ui_fixture_01"])
+        XCTAssertEqual(AidenChatVisualPresentation.rowVisuals(in: danglingSnapshots, viewerAvailable: false).map(\.id), ["ui_fixture_01"])
         let bareUi = AidenChatMessage(
             id: "m", role: .assistant, text: "Here.",
             visuals: [AidenChatVisual(id: "ui-1", kind: .ui, title: "Chart")],
             createdAt: Date()
         )
-        XCTAssertEqual(AidenChatVisualPresentation.rowVisuals(in: bareUi).map(\.id), ["ui-1"])
+        XCTAssertEqual(AidenChatVisualPresentation.rowVisuals(in: bareUi, viewerAvailable: false).map(\.id), ["ui-1"])
     }
 
     func testFormFillActivityDecodesCountOnlyOutcome() throws {

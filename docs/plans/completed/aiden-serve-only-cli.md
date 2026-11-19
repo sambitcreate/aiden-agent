@@ -1,8 +1,8 @@
 # Aiden CLI becomes a serve-only headless server
 
-Status: **In review** (2026-10-30).
+Status: **Complete.** Serve-only in [PR #675](https://github.com/sambitcreate/aiden-agent/pull/675) (merged 2026-10-31), service install in [PR #676](https://github.com/sambitcreate/aiden-agent/pull/676) (merged 2026-10-31) and Tailscale ease of use in [PR #677](https://github.com/sambitcreate/aiden-agent/pull/677) (merged 2026-10-31). Written 2026-10-30.
 
-Supersedes the interactive parts of [the Aiden CLI plan](aiden-cli-plan.md) and its [parity checklist](aiden-cli-parity-checklist.md), which stay as history. User guide: [`packages/cli/README.md`](../../packages/cli/README.md).
+Supersedes the interactive parts of [the Aiden CLI plan](../aiden-cli-plan.md) and its [parity checklist](../aiden-cli-parity-checklist.md), which stay as history. User guide: [`packages/cli/README.md`](../../../packages/cli/README.md).
 
 ## Why
 
@@ -26,7 +26,8 @@ Bare `aiden` prints the command list (with `serve` first). The old flags (`-p`, 
 ## What stays
 
 - `aiden serve` and everything it runs: server chats through Pi's SDK (`createAgentSession`), Bots and durable Bots, the scheduler, Remote HTTPS/SSE and pairing, Telegram (unchanged), MCP, memory, web search, advisor, artifact export and subagents.
-- Admin commands: `auth`, `workspace`, `mcp`, `provider`, `schedule`, `bots`, `remote`, `telegram`, `speech`, `catalog`, `web-search`, `insights`, `search`, `import`, `export`, `files`, `git`, `worktree`, `app` (help; status and get for Memory, Web Search and Skills; set for Memory and Web Search, since Skills are read-only on the server), `serve stop|status`, `telemetry status|on|off` (added 2026-11-04 with [Aiden usage data](posthog-product-analytics-plan.md#server-phase-2)), `help` and `--version`.
+- Admin commands: `auth`, `workspace`, `mcp`, `provider`, `schedule`, `bots`, `remote`, `telegram`, `speech`, `catalog`, `web-search`, `insights`, `search`, `import`, `export`, `files`, `git`, `worktree`, `app` (help; status and get for Memory, Web Search and Skills; set for Memory and Web Search, since Skills are read-only on the server), `serve stop|status`, `telemetry status|on|off` (added 2026-11-04 with [Aiden usage data](../posthog-product-analytics-plan.md#server-phase-2)), `help` and `--version`.
+- 2026-11-18: the list above missed two shipped commands. `apps` (connects outside apps such as Claude Code and Codex to the server's local MCP endpoint) and `hooks` (lists, approves and tests workspace hooks) also ship, along with `service install|status|uninstall` and `remote check|network` from the follow-ups below.
 - `extensions/aiden-settings.ts`, which is a settings reader used by app controls, web search and memory scope, not a UI.
 - `@earendil-works/pi-coding-agent` as a dependency at the exact desktop pin (1.4.0 when written, 1.5.2 since 2026-11-17); the server uses its SDK.
 - The bundle layout and rebrand contract (`dist/app/cli.js` plus the generated `dist/app/package.json`), the no-telemetry enforcement, and the manual-only network posture for models.dev, Artificial Analysis and OpenRouter benchmark data.
@@ -55,6 +56,17 @@ The owner asked how t3code and opencode handle Tailscale and what would make Aid
 - **C. Test before the QR.** Tailscale pairing connects the route, then waits (up to 45 s) for the Tailscale address to answer before it opens the pairing window, which warms the new HTTPS certificate before pairing reads it (daemon command `remote tailscale-prepare`). Stopping the server cancels the wait.
 - **D. Tidy uninstall.** `aiden service uninstall` stops and removes the service first, then takes down Aiden's Serve route; when the service can't be stopped, the route stays with the running server.
 - **Not done (E).** Reaching the server over the tailnet IP without HTTPS certificates needs phone app and protocol changes.
+
+## 2026-11-18 cleanup ([PR #839](https://github.com/sambitcreate/aiden-agent/pull/839))
+
+An audit of `packages/cli` after the serve-only change removed what it left behind:
+
+- The server build no longer bundles Pi's unused interactive, print and RPC code.
+- The dead `appearance.terminalTheme` app control is gone from the shared contract, the Remote OpenAPI, iOS and Android. There is no contract revision bump: nothing has emitted it since the terminal UI was retired.
+- The orphaned schedule consent receipts (`schedule-tool-approval.ts`) are removed; their only producer was the model-facing schedule tool deleted in #675.
+- Other dead CLI code is removed: voice settings, TUI context capture and an unused MCP export.
+- `aiden help` now lists `schedule status`, the `hooks digest` arguments and the advanced `remote` subcommands. A mistyped command gets a plain unknown-command message with a suggestion, and `serve --help` exits 0.
+- The model-facing `render_ui` and advisor tool descriptions no longer describe terminal behavior.
 
 ## Deferred
 

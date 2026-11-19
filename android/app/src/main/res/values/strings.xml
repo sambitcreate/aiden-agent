@@ -184,6 +184,7 @@
     <string name="pairing_step_open">Open Aiden Agent.</string>
     <string name="pairing_step_settings">Go to Settings → Connections → Connect a device.</string>
     <string name="pairing_step_scan">Scan the code it shows, or enter its setup code.</string>
+    <string name="pairing_server_hint">On a server, aiden serve shows the code in its terminal, or run aiden remote pair lan.</string>
     <string name="pairing_tab_scan">Scan QR</string>
     <string name="pairing_tab_code">Setup code</string>
     <string name="pairing_setup_code">20-character setup code</string>
@@ -987,6 +988,7 @@
 
     <!-- Chat: interactive visual viewer (contract revision 35) -->
     <string name="chat_visual_open_interactive">Open interactive</string>
+    <string name="chat_visual_open_interactive_described">Open interactive: %1$s</string>
     <string name="chat_visual_viewer_close">Close visual</string>
     <string name="chat_visual_viewer_show_image">Show snapshot image</string>
     <string name="chat_visual_viewer_loading">Loading visual</string>

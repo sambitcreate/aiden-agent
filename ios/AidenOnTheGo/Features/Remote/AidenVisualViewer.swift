@@ -101,7 +101,12 @@ struct AidenVisualViewer: View {
         case .failed(let message):
             failure(message)
         case .document(let html, let outdated):
-            AidenVisualWebView(html: html, documentID: documentID, onMessage: handle)
+            AidenVisualWebView(
+                html: html,
+                documentID: documentID,
+                onMessage: handle,
+                onProcessFailure: { phase = .failed(String(localized: "This visual stopped responding.")) }
+            )
                 .opacity(isPageReady ? 1 : 0)
                 .overlay {
                     if !isPageReady {
@@ -253,9 +258,11 @@ private struct AidenVisualWebView: UIViewRepresentable {
     /// Changes whenever a new document should replace the loaded one.
     let documentID: Int
     let onMessage: (AidenVisualViewerMessage) -> Void
+    /// Called when the content process keeps dying and the page is given up.
+    let onProcessFailure: () -> Void
 
     func makeCoordinator() -> AidenVisualWebViewCoordinator {
-        AidenVisualWebViewCoordinator(onMessage: onMessage)
+        AidenVisualWebViewCoordinator(onMessage: onMessage, onProcessFailure: onProcessFailure)
     }
 
     func makeUIView(context: Context) -> WKWebView {
@@ -288,6 +295,7 @@ private struct AidenVisualWebView: UIViewRepresentable {
 
     func updateUIView(_ webView: WKWebView, context: Context) {
         context.coordinator.onMessage = onMessage
+        context.coordinator.onProcessFailure = onProcessFailure
         if context.coordinator.loadedDocumentID != documentID {
             context.coordinator.load(html, documentID: documentID, in: webView)
         }
@@ -306,15 +314,24 @@ private struct AidenVisualWebView: UIViewRepresentable {
 @MainActor
 private final class AidenVisualWebViewCoordinator: NSObject, WKNavigationDelegate, WKUIDelegate {
     var onMessage: (AidenVisualViewerMessage) -> Void
+    var onProcessFailure: () -> Void
     private(set) var loadedDocumentID: Int?
     private var loadedHTML: String?
     private var navigationPolicy = AidenVisualNavigationPolicy()
+    private var recovery = AidenWebContentRecovery()
 
-    init(onMessage: @escaping (AidenVisualViewerMessage) -> Void) {
+    init(
+        onMessage: @escaping (AidenVisualViewerMessage) -> Void,
+        onProcessFailure: @escaping () -> Void
+    ) {
         self.onMessage = onMessage
+        self.onProcessFailure = onProcessFailure
     }
 
     func load(_ html: String, documentID: Int, in webView: WKWebView) {
+        // A crash reload keeps the same document, so it still counts
+        // toward spotting a crash loop.
+        if documentID != loadedDocumentID { recovery.newDocument() }
         loadedDocumentID = documentID
         loadedHTML = html
         navigationPolicy = AidenVisualNavigationPolicy()
@@ -348,9 +365,16 @@ private final class AidenVisualWebViewCoordinator: NSObject, WKNavigationDelegat
     }
 
     func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
-        // Redraw the same document after the content process is reclaimed.
+        // Redraw the same document whenever the content process is
+        // reclaimed; a page that kills it again right after the reload is
+        // a crash loop and shows Retry instead.
         guard let loadedHTML, let loadedDocumentID else { return }
-        load(loadedHTML, documentID: loadedDocumentID, in: webView)
+        switch recovery.processDidTerminate() {
+        case .reload:
+            load(loadedHTML, documentID: loadedDocumentID, in: webView)
+        case .fail:
+            onProcessFailure()
+        }
     }
 }
 

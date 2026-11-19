@@ -1,5 +1,5 @@
 /**
- * Shared bridge between Aiden's ResolvedModelRuntime consumers (advisor, btw)
+ * Shared bridge between Aiden's ResolvedModelRuntime consumers (advisor, Bots)
  * and pi's extension context: model + credential resolution through the
  * extension ModelRegistry, and read-only live-message projection from the
  * session journal.
@@ -10,9 +10,9 @@ import { createModels, type Api, type Model, type Provider } from "@earendil-wor
 import type { ResolvedModelRuntime } from "../../../../main/services/model-runtime-core.js";
 import type { StoredProvider } from "../../../../main/services/types.js";
 import { withoutMessageThreads } from "../../../../main/services/pi-message-threads.js";
-import type { CapturedContext } from "./adapt-aiden-extension.ts";
 
-export interface ModelRuntimeContext extends CapturedContext {
+/** The parts of Pi's ExtensionContext the model bridge reads. */
+export interface ModelRuntimeContext {
 	scopedModels?: ReadonlyArray<{ model: Model<Api> }>;
 	model?: Model<Api>;
 	modelRegistry?: {
@@ -28,7 +28,7 @@ export interface ModelRuntimeContext extends CapturedContext {
 	sessionManager?: { getBranch?(): Array<Record<string, unknown>> };
 }
 
-export function asModelRuntimeContext(ctx: CapturedContext): ModelRuntimeContext {
+export function asModelRuntimeContext(ctx: object): ModelRuntimeContext {
 	return ctx as unknown as ModelRuntimeContext;
 }
 

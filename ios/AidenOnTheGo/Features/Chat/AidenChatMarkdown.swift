@@ -179,7 +179,8 @@ private struct AidenMarkdownChunkView: View, Equatable {
                 // the copy button its state) as its text grows token by token.
                 AidenCodeBlockView(
                     source: open.code,
-                    language: AidenCodeBlockView.languageName(fromFenceInfo: open.info)
+                    language: AidenCodeBlockView.languageName(fromFenceInfo: open.info),
+                    isOpen: true
                 )
             } else {
                 MarkdownUI.Markdown(chunk.content)
@@ -330,20 +331,30 @@ final class AidenCodeCopyController {
     }
 }
 
-/// A fenced or indented code block with a copy button. Long lines scroll
-/// sideways, under a header that stays put. There is no syntax highlighting.
+/// A fenced or indented code block with a copy button, and a View button
+/// when it is a finished SVG. Long lines scroll sideways, under a header that
+/// stays put. There is no syntax highlighting.
 struct AidenCodeBlockView: View {
     let source: String
     let language: String?
+    /// The fence is still being written, so its source is not final.
+    let isOpen: Bool
 
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @Environment(\.aidenReduceMotion) private var reduceMotion
     @State private var copy: AidenCodeCopyController
+    @State private var isShowingDrawing = false
 
-    init(source: String, language: String?, copyController: AidenCodeCopyController = AidenCodeCopyController()) {
+    init(
+        source: String,
+        language: String?,
+        isOpen: Bool = false,
+        copyController: AidenCodeCopyController = AidenCodeCopyController()
+    ) {
         self.source = source
         self.language = language
+        self.isOpen = isOpen
         _copy = State(initialValue: copyController)
     }
 
@@ -395,6 +406,26 @@ struct AidenCodeBlockView: View {
                     .padding(.leading, 12)
             }
             Spacer(minLength: 8)
+            if AidenSVGPreview.offersView(language: language, source: source, isOpen: isOpen) {
+                Button {
+                    isShowingDrawing = true
+                } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: "eye")
+                        Text("View")
+                    }
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.primary)
+                    .padding(.horizontal, 12)
+                    .frame(minWidth: 44, minHeight: 44)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("View drawing")
+                .sheet(isPresented: $isShowingDrawing) {
+                    AidenSVGDrawingSheet(source: source)
+                }
+            }
             Button {
                 copy.copy(source)
             } label: {

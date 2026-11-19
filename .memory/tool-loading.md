@@ -6,7 +6,7 @@ Branch `claude/project-thread-89sg0j`. Owner chose options A and B after the tok
 - `SKILL_TOOL_NAME = "skill"` lives in `skill-registry-core.ts` (avoids an import cycle). Args `{ name }`; `findSkillByName` matches the canonical name first (NFKC, case-insensitive), then the toolKey, so a key can't shadow a listed name.
 - `formatAvailableSkills(snapshot, allowedToolNames, allowWorkspaceSkills)` needs `skill` in the allowed names; `chat-system-prompt.ts` passes `permission !== "none"` so No access hides workspace skills in both the prompt and the tool.
 - Bots: `botToolVerdict(name, facts, turn, args)` allows `skill` at offer time when any skill is granted, and at call time only if `facts.skillToolKeyFor(args.name)` maps to a granted key. `bot-tool-assembly.ts` `checkPolicy` passes `call.args`.
-- CLI is unchanged (Pi's own skills + `skill_aiden_app`; CLI Bots build their own `skill_<hmac>` tools in `packages/cli/src/bots.ts`).
+- Server (`aiden serve`): no `skill` tool. Daemon chats, scheduled runs and subagent workers pass `noSkills: true` to Pi's `DefaultResourceLoader`, so they load no skills; only server Bots build their own `skill_<hmac>` tools from grants in `packages/cli/src/bots.ts`. (2026-11-18: an older note here said the CLI kept Pi's skills and `skill_aiden_app`; `skill_aiden_app` went with the interactive CLI in dfbb44c44.)
 
 ## B: `load_tools` (`main/services/on-demand-tools.ts`)
 - `ON_DEMAND_TOOL_NAMES` is the held-back list; `createOnDemandTools(tools)` returns `{ loader, onDemand, initialTools(messages), prepare(context) }`. Stickiness comes from the transcript: any `load_tools` names or direct call to a held-back name.

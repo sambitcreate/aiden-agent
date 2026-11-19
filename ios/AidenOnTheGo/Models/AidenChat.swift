@@ -296,23 +296,34 @@ enum AidenChatVisualPresentation {
         return attachment
     }
 
-    /// The visuals that get an inline row, in reply order. An html visual
-    /// without a usable snapshot gets none: its "Can't view on this device"
+    /// The visuals that get an inline row, in reply order. An html visual gets
+    /// one when the message carries its usable snapshot, or when the Mac offers
+    /// the visual viewer (`viewerAvailable`), whose title card opens it
+    /// interactively. Otherwise it gets none: its "Can't view on this device"
     /// card already represents it. Other kinds always get a row, falling back
     /// from snapshot to description to title.
-    static func rowVisuals(in message: AidenChatMessage) -> [AidenChatVisual] {
+    static func rowVisuals(in message: AidenChatMessage, viewerAvailable: Bool) -> [AidenChatVisual] {
         (message.visuals ?? []).filter { visual in
-            visual.kind != .html || snapshotAttachment(for: visual, in: message) != nil
+            visual.kind != .html || replacesHtmlArtifactCard(visual, in: message, viewerAvailable: viewerAvailable)
         }
     }
 
     /// HTML artifacts that still need the "Can't view on this device" card:
-    /// those without a visual whose snapshot this message can show.
-    static func unviewableHtmlArtifacts(in message: AidenChatMessage) -> [AidenHtmlArtifact] {
+    /// those without a visual this message can show, either by its snapshot or,
+    /// when the Mac offers the viewer, interactively.
+    static func unviewableHtmlArtifacts(in message: AidenChatMessage, viewerAvailable: Bool) -> [AidenHtmlArtifact] {
         let replaced = Set((message.visuals ?? []).compactMap { visual in
-            snapshotAttachment(for: visual, in: message) == nil ? nil : visual.id
+            replacesHtmlArtifactCard(visual, in: message, viewerAvailable: viewerAvailable) ? visual.id : nil
         })
         return (message.htmlArtifacts ?? []).filter { !replaced.contains($0.id) }
+    }
+
+    private static func replacesHtmlArtifactCard(
+        _ visual: AidenChatVisual,
+        in message: AidenChatMessage,
+        viewerAvailable: Bool
+    ) -> Bool {
+        snapshotAttachment(for: visual, in: message) != nil || (viewerAvailable && visual.kind == .html)
     }
 }
 
@@ -395,6 +406,20 @@ struct AidenProducedFile: Codable, Equatable, Sendable {
             && !relativePath.unicodeScalars.contains { $0.value < 32 || $0.value == 127 || $0 == "\\" }
             && !relativePath.components(separatedBy: "/").contains { $0.isEmpty || $0 == "." || $0 == ".." }
             && (0...1_000_000_000).contains(bytes)
+    }
+}
+
+extension AidenProducedFile {
+    private static let linkPathCharacters = CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-._~/")
+
+    /// A `./relative` link the chat's workspace link routing opens, or nil
+    /// when that routing would refuse this path (a colon, `?`, `#`, too deep
+    /// or too long), so the activity line stays plain text.
+    var workspaceLink: URL? {
+        guard let encoded = relativePath.addingPercentEncoding(withAllowedCharacters: Self.linkPathCharacters) else { return nil }
+        let raw = "./" + encoded
+        guard AidenWorkspaceFileLink.path(raw) == relativePath else { return nil }
+        return URL(string: raw)
     }
 }
 
@@ -4277,7 +4302,7 @@ enum AidenTranscriptWindowing {
 }
 // Inert descriptors share the desktop vocabulary. No model-authored view tree,
 // URLs, credentials or action callbacks are interpreted by native clients.
-private let aidenControlIDs: Set<String> = ["appearance.mode", "appearance.chatWidth", "appearance.reduceMotion", "appearance.terminalTheme", "memory.enabled", "memory.workspace", "webSearch.enabled", "skills.enabled"]
+private let aidenControlIDs: Set<String> = ["appearance.mode", "appearance.chatWidth", "appearance.reduceMotion", "memory.enabled", "memory.workspace", "webSearch.enabled", "skills.enabled"]
 private func aidenControlToken(_ value: String) -> Bool {
     !value.isEmpty && value.utf8.count <= 128 && value.utf8.allSatisfy { (48...57).contains($0) || (65...90).contains($0) || (97...122).contains($0) || $0 == 45 || $0 == 95 }
 }
