@@ -6,6 +6,7 @@ import * as React from "react";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Composer } from "./composer";
+import { ComposerSlashPalettePresence } from "./composer-slash-palette";
 import { TooltipProvider } from "./ui";
 import { CommandSystemProvider } from "../lib/command-system";
 import { DesignModeControlsContext, type DesignModeControls } from "../lib/design-mode";
@@ -191,6 +192,35 @@ test("Enter on a command that takes text inserts it and closes the palette witho
   assert.deepEqual(sends, []);
 });
 
+test("each title marks the part the query matched", async () => {
+  const { textbox } = await mountComposer();
+  await type(textbox, "/renam");
+  const marked = screen
+    .getAllByRole("option")
+    .flatMap((option) => [...option.querySelectorAll("mark")].map((mark) => mark.textContent));
+  assert.ok(marked.includes("Renam"), `marked ${JSON.stringify(marked)}`);
+
+  // The bare trigger matches everything and marks nothing.
+  await type(textbox, "/");
+  assert.ok(document.querySelectorAll("[role=option] mark").length === 0);
+});
+
+test("keys an input method is composing with leave the palette alone", async () => {
+  const { textbox } = await mountComposer();
+  await type(textbox, "/");
+  const selectable = selectableOptionIds();
+
+  // Chromium marks a composing key with keyCode 229 even when isComposing is unset.
+  await act(async () => {
+    fireEvent.keyDown(textbox, { key: "ArrowDown", keyCode: 229 });
+  });
+  assertActiveOption(textbox, selectable[0]!);
+  await act(async () => {
+    fireEvent.keyDown(textbox, { key: "Escape", keyCode: 229 });
+  });
+  assert.ok(palette() !== null, "the composition's Escape keeps the palette open");
+});
+
 test("Escape closes the palette and keeps the typed draft", async () => {
   const { textbox } = await mountComposer();
   await type(textbox, "/");
@@ -286,5 +316,33 @@ test("the context meter shows in a chat and hides while that chat is in design m
     const present = screen.queryByRole("meter", { name: "Context used" }) !== null;
     assert.ok(present === shown, `design mode ${controls?.on ? "on" : "off"}: meter ${present ? "shown" : "hidden"}`);
     view.unmount();
+  }
+});
+
+test("an immediate close unmounts the palette in the same commit, while a normal close plays its exit", () => {
+  // Stands in for the palette's CSS: an exiting root runs an exit that has not finished yet.
+  const exit = { finished: new Promise(() => {}), effect: { getComputedTiming: () => ({ endTime: 10_000, localTime: 0 }) } };
+  const original = Element.prototype.getAnimations;
+  Element.prototype.getAnimations = function (this: Element) {
+    return (this.getAttribute("data-presence") === "exiting" ? [exit] : []) as unknown as Animation[];
+  };
+  document.documentElement.dataset.reduceMotion = "false";
+  try {
+    const Palette = ({ presenceState, presenceRef }: { presenceState?: string; presenceRef?: React.Ref<HTMLDivElement> }) => (
+      <div ref={presenceRef} role="listbox" aria-label="Commands" data-presence={presenceState} />
+    );
+    const palette = <Palette /> as unknown as React.ComponentProps<typeof ComposerSlashPalettePresence>["children"];
+    const view = render(<ComposerSlashPalettePresence present>{palette}</ComposerSlashPalettePresence>);
+
+    view.rerender(<ComposerSlashPalettePresence present={false}>{palette}</ComposerSlashPalettePresence>);
+    assert.ok(screen.queryByRole("listbox", { name: "Commands" })?.getAttribute("data-presence") === "exiting");
+
+    view.rerender(<ComposerSlashPalettePresence present>{palette}</ComposerSlashPalettePresence>);
+    view.rerender(<ComposerSlashPalettePresence present={false} immediate>{palette}</ComposerSlashPalettePresence>);
+    assert.ok(screen.queryByRole("listbox", { name: "Commands" }) === null);
+  } finally {
+    if (original) Element.prototype.getAnimations = original;
+    else delete (Element.prototype as Partial<Element>).getAnimations;
+    delete document.documentElement.dataset.reduceMotion;
   }
 });

@@ -216,6 +216,8 @@ jobs:
         run: npm run type-check && npm run type-check:e2e
       - name: Verify lint
         run: npm run lint
+      - name: Verify Aiden design rules
+        run: npm run check:aiden-rules
 
   verify:
     name: Desktop build and diagnostics

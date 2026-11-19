@@ -14,7 +14,7 @@ The interactive gallery that the set was chosen from is `docs/aiden-thinking-ani
 
 - **Cheap by construction.** At most 11 shapes per mark. Animate only translation, rotation, scale and opacity. No blur, filters, masks, gradients or per-frame allocation.
 - **Ink.** Draw in a single ink colour. Chat and transcript marks use the foreground/text colour. Desktop Live uses the accent colour.
-- **Still pose.** When a mark is inactive (terminal subagent, idle Live), when Reduced Motion is on (the system setting *or* the in-app preference), or when it is off-screen, freeze it on its pose at `t = 0`. Never hide a mark in place of animating it.
+- **Still pose.** When a mark is inactive (terminal subagent, idle Live), when Reduced Motion is on (on desktop, Aiden's applied setting, which follows the system only when set to System), or when it is off-screen, freeze it on its pose at `t = 0`. Never hide a mark in place of animating it.
 - **Same names everywhere.** `tri-step`, `quad-shuffle`, `compose`, `scan-grid`, `glance`, `bounce`, `helix-calm`, `helix-twist`, `helix-swell`, `helix-duplex`, `helix-flat`.
 
 ## Coordinate system and timing model

@@ -263,17 +263,6 @@ export function slashTabAcceptsSelection(selectableCount: number, actionPending:
   return selectableCount === 1 && !actionPending;
 }
 
-export function slashPalettePresenceState(input: {
-  present: boolean;
-  retained: boolean;
-  immediate: boolean;
-  reduceMotion: boolean;
-}): "visible" | "exiting" | "hidden" {
-  if (input.present) return "visible";
-  if (input.immediate || input.reduceMotion || !input.retained) return "hidden";
-  return "exiting";
-}
-
 export function dismissSlashSession(tracker: SlashSessionTracker): SlashSessionTracker {
   return { ...tracker, dismissedEpoch: tracker.epoch };
 }

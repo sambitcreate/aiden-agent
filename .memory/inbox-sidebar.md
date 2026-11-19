@@ -282,3 +282,5 @@ Related: [[chat-row-states]], [[sidebar-chat-row-context]], [[multi-host-control
 ### Equal-time reply admission follow-up (2026-11-02)
 - Whole-admission precedence now calls `AidenChatInboxSignals.coversReply`, so an incoming distinct reply ID at the same millisecond retains its identity and unread state instead of inheriting the viewed row. The stale-page protection and strictly newer-page behavior remain intact.
 - The real iOS Home/cache fixture covers all three admission cases for Done and Snooze in both completion orders. The tied-ID case failed before the correction with stale identity/read state in both visible rows and saved cache; all 35 focused Inbox/model/triage-request tests pass after it. Android's existing `hasNewerOutput` already checks tied IDs; its refresh/read test now covers distinct IDs at equal timestamps and asserts the saved row too (all 10 Home triage tests pass). All 6 host read-marker tests pass.
+
+- 2026-11-19: the sidebar chat list became one keyboard collection with typeahead, multi-select, a bulk Delete bar and focus recovery; see [[sidebar-chat-collection]].

@@ -83,14 +83,9 @@ test("update-ready banner uses the Aiden mark and shared compact-surface motion"
   assert.match(banner, /<img src=\{AIDEN_MARK_URL\} alt="" className="size-8 shrink-0" \/>/u);
   assert.doesNotMatch(sidebar, /CircleArrowUp/u);
   assert.match(banner, /data-state=\{open \? "open" : "closed"\}/u);
-  assert.match(banner, /setTimeout\(\(\) => setPresent\(false\), APP_UPDATE_BANNER_EXIT_MS\)/u);
   assert.match(
     styles,
     /@keyframes aiden-app-update-banner-in[\s\S]*translateY\(4px\) scale\(var\(--motion-popup-scale\)\)/u,
-  );
-  assert.match(
-    styles,
-    /:root\[data-reduce-motion="false"\] \.app-update-banner\[data-state="open"\][\s\S]*150ms cubic-bezier\(0\.19, 1, 0\.22, 1\)/u,
   );
   assert.match(
     styles,

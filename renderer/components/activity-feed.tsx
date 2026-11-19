@@ -20,8 +20,8 @@ import type { WorkDetailsMode } from "../shared/appearance";
 import { workDetailsOpen } from "../lib/work-details";
 import { DisclosureCollapseBoundary } from "./disclosure-collapse-boundary";
 import { pauseWhenUnseen } from "../lib/offscreen-pause";
+import { usePresence } from "../lib/use-presence";
 
-const EXIT_MS = 180;
 /** Rows kept in the collapsed ticker. The topmost sits under the fade mask. */
 const TICKER_ROWS = 3;
 
@@ -123,8 +123,15 @@ export function ActivityFeed({
   mode?: WorkDetailsMode;
   retainDetails?: boolean;
 }) {
-  const [visible, setVisible] = React.useState(timeline);
-  const [exiting, setExiting] = React.useState(false);
+  // The last timeline stays on screen while the feed animates out.
+  const lastTimelineRef = React.useRef(timeline);
+  if (timeline) lastTimelineRef.current = timeline;
+  const rootRef = React.useRef<HTMLElement | null>(null);
+  const { rendered, exiting } = usePresence(timeline !== null, rootRef);
+  const setRoot = React.useCallback((node: HTMLElement | null) => {
+    rootRef.current = node;
+  }, []);
+  const visible = rendered ? timeline ?? lastTimelineRef.current : null;
   const [choice, setChoice] = React.useState<boolean | null>(null);
   const attention = Boolean(visible?.claimCheck) || (visible ? activityIssueCount(visible) > 0 : false);
   const eligible = visible?.status === "running" || retainDetails;
@@ -132,34 +139,25 @@ export function ActivityFeed({
   const autoOpenKeyRef = React.useRef<string | null>(null);
   const { sectionRef, headerRef, noteCollapse, noteAutomaticCollapse, restoreAfterCollapse, onFocusCapture } =
     useStickySectionCollapse<HTMLDetailsElement, HTMLElement>();
+  const setSection = React.useCallback(
+    (node: HTMLDetailsElement | null) => {
+      sectionRef.current = node;
+      rootRef.current = node;
+    },
+    [sectionRef],
+  );
 
   React.useEffect(() => {
-    if (timeline) {
-      setVisible(timeline);
-      setExiting(false);
-      // The ticker already narrates a healthy run, so only an outcome the user
-      // has to act on forces the full trail open.
-      const attention = Boolean(timeline.claimCheck) || activityIssueCount(timeline) > 0;
-      const autoOpenKey = `${timeline.generationId}:${timeline.claimCheck ? "claim" : "issue"}`;
-      if (attention && autoOpenKeyRef.current !== autoOpenKey) {
-        autoOpenKeyRef.current = autoOpenKey;
-        setChoice(null);
-      }
-      return;
+    if (!timeline) return;
+    // The ticker already narrates a healthy run, so only an outcome the user
+    // has to act on forces the full trail open.
+    const attention = Boolean(timeline.claimCheck) || activityIssueCount(timeline) > 0;
+    const autoOpenKey = `${timeline.generationId}:${timeline.claimCheck ? "claim" : "issue"}`;
+    if (attention && autoOpenKeyRef.current !== autoOpenKey) {
+      autoOpenKeyRef.current = autoOpenKey;
+      setChoice(null);
     }
-    if (!visible) return;
-    if (document.documentElement.dataset.reduceMotion === "true") {
-      setVisible(null);
-      setExiting(false);
-      return;
-    }
-    setExiting(true);
-    const timer = window.setTimeout(() => {
-      setVisible(null);
-      setExiting(false);
-    }, EXIT_MS);
-    return () => window.clearTimeout(timer);
-  }, [timeline, visible]);
+  }, [timeline]);
 
   if (!visible?.steps.length) return null;
   const running = visible.status === "running";
@@ -216,6 +214,7 @@ export function ActivityFeed({
   if (!disclosure) {
     return (
       <div
+        ref={setRoot}
         className="activity-feed min-w-0"
         data-presence={presence}
         data-animate={animate ? "true" : "false"}
@@ -235,7 +234,7 @@ export function ActivityFeed({
   return (
     <DisclosureCollapseBoundary expanded={open} beforeCollapse={noteAutomaticCollapse} afterCollapse={restoreAfterCollapse}>
     <details
-      ref={sectionRef}
+      ref={setSection}
       onFocusCapture={onFocusCapture}
       className="transcript-sticky-section activity-feed group/activity min-w-0"
       data-presence={presence}
