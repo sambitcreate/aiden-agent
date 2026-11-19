@@ -857,7 +857,8 @@ function walk(spec: SlotSpec, args: Args, from: number): { positions: Map<number
   return { positions, has };
 }
 
-export type SlotLookup = { slot: Slot } | { problem: string };
+/** `valueFor` names the option whose value the word is, when it is one rather than an operand. */
+export type SlotLookup = { slot: Slot; valueFor?: string } | { problem: string };
 
 /**
  * The slot of the placeholder word at `at`, reading `args` from `from` with
@@ -886,7 +887,7 @@ function locateIn(spec: SlotSpec, args: Args, from: number, at: number): SlotLoo
     const { entry, option } = position;
     if (entry === null) return { problem: `after ${option}` };
     if (typeof entry === "string") return { problem: `after ${option}, ${entry}` };
-    return { slot: entry };
+    return { slot: entry, valueFor: option };
   }
   const has = (...names: string[]) => names.some((name) => read.has.has(name));
   const near = (offset: number) => args[at + offset];

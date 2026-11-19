@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -254,23 +254,67 @@ test("an option that takes its value only joined is refused with advice that sav
     assert.equal(save(followed).length, 1, `${command} -> ${followed}`);
   }
   // Any other joined option is told to take the value as a separate word only
-  // where that form saves; where it would not, the refusal says why instead.
-  for (const command of ["git log -n{{n}} -- {{file}}", "head -n{{n}} notes.md", "rg -C{{n}} {{p}} notes.md", "git log -L{{n}},+3:notes.md", "git log -W{{n}} -- {{file}}"]) {
-    let message = "";
-    try {
-      save(command);
-    } catch (error) {
-      message = (error as Error).message;
+  // where that word is the option's value; where it would not be, the refusal
+  // says why instead. Each followed form runs, so the value is seen to reach
+  // the option rather than only to save.
+  const repo = fs.mkdtempSync(path.join(os.tmpdir(), "aiden-joined-option-"));
+  const git = (...args: string[]) => execFileSync("git", ["-C", repo, "-c", "user.name=Test", "-c", "user.email=test@example.com", "-c", "commit.gpgsign=false", ...args], { encoding: "utf8" });
+  git("init", "-q");
+  fs.writeFileSync(path.join(repo, "notes.md"), "one\n");
+  git("add", "notes.md");
+  git("commit", "-qm", "one");
+  fs.writeFileSync(path.join(repo, "notes.md"), "one\ntwo\nthree\n");
+  git("commit", "-qam", "two");
+  const run = (command: string, values: readonly string[]) => {
+    const resolved = resolveWorkspaceArtifactCommand(save(command)[0]!, values);
+    return spawnSync("/bin/sh", ["-c", resolved.preview], { cwd: repo, encoding: "utf8" });
+  };
+  const hasRg = spawnSync("rg", ["--version"]).status === 0;
+  try {
+    for (const [command, values, expected] of [
+      ["git log -n{{n}} -- {{file}}", ["1", "notes.md"], (out: string) => out.match(/^commit /gmu)?.length === 1],
+      ["head -n{{n}} notes.md", ["1"], (out: string) => out === "one\n"],
+      ["rg -C{{n}} {{p}} notes.md", ["0", "two"], (out: string) => out === "two\n"],
+      ["git log -L{{n}},+3:notes.md", [], undefined],
+      ["git log -W{{n}} -- {{file}}", [], undefined],
+      // Optional values: written apart, git reads the word as a revision.
+      ["git log --decorate={{d}} -- {{file}}", ["short", "notes.md"], undefined],
+      ["git diff --color={{c}} -- {{file}}", ["never", "notes.md"], undefined],
+      ["git log --stat={{n}} -- {{file}}", ["1", "notes.md"], undefined],
+      ["tail -n+{{n}} notes.md", ["2"], undefined],
+    ] as const) {
+      let message = "";
+      try {
+        save(command);
+      } catch (error) {
+        message = (error as Error).message;
+      }
+      assert.ok(message, `${command} was accepted`);
+      const separate = /Pass it as a separate word: (\S+ \{\{\w+\}\})\./u.exec(message)?.[1];
+      const written = command.replace(/(-[\w-]+)=?(\{\{\w+\}\})/u, "$1 $2");
+      if (separate === undefined) {
+        assert.match(message, /and page data may not be passed|page data cannot fill its value|starting from line N with page data is not supported/u, command);
+        let saved = true;
+        try {
+          save(written);
+        } catch {
+          saved = false;
+        }
+        // Where the apart form saves anyway, the value is not the option's.
+        if (saved && values.length > 0) assert.notEqual(run(written, values).status, 0, `${written} took the value as the option's`);
+        continue;
+      }
+      assert.ok(expected, `${command} was advised to pass the value apart`);
+      const followed = command.replace(separate.replace(" ", ""), separate);
+      assert.equal(followed, written, command);
+      assert.equal(save(followed).length, 1, `${command} -> ${followed}`);
+      if (command.startsWith("rg ") && !hasRg) continue;
+      const result = run(followed, values);
+      assert.equal(result.status, 0, `${followed}: ${result.stderr}`);
+      assert.ok(expected(result.stdout), `${followed} printed ${JSON.stringify(result.stdout)}`);
     }
-    assert.ok(message, `${command} was accepted`);
-    const apart = /Pass it as a separate word: (\S+ \{\{\w+\}\})\./u.exec(message)?.[1];
-    if (apart === undefined) {
-      assert.match(message, /and page data may not be passed/u, command);
-      assert.throws(() => save(command.replace(/(-\w)(\{\{\w+\}\})/u, "$1 $2")), /actions\[0\]: /u, `${command} written apart`);
-      continue;
-    }
-    const followed = command.replace(apart.replace(" ", ""), apart);
-    assert.equal(save(followed).length, 1, `${command} -> ${followed}`);
+  } finally {
+    fs.rmSync(repo, { recursive: true, force: true });
   }
 });
 

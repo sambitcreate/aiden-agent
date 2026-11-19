@@ -602,6 +602,13 @@ function joinedProblem(word: TemplateWord, program: string, args: readonly (stri
   if ("text" in head && head.text === "-") {
     return `${name} cannot follow a bare -, where the program would read the value as options. The number needs its option as a separate word, for example -n ${name}.`;
   }
+  // tail's +N (from line N), joined (`-n+{{n}}`) or apart (`-n +{{n}}`), has no checked form.
+  const plus = program === "tail" && "text" in head ? /^(-n|--lines|-c|--bytes)=?\+$/u.exec(head.text)?.[1] : undefined;
+  const tailOption = plus ?? (program === "tail" && "text" in head && head.text === "+" && before !== undefined && /^(?:-n|--lines|-c|--bytes)$/u.test(before) ? before : undefined);
+  if (tailOption !== undefined) {
+    const unit = tailOption === "-n" || tailOption === "--lines" ? "line" : "byte";
+    return `${name} cannot follow + there: use ${tailOption} ${name} (last N ${unit}s); starting from ${unit} N with page data is not supported.`;
+  }
   if ("text" in head && head.text.startsWith("-")) {
     const option = head.text.split("=")[0]!;
     // Some options take their value only joined (`-U5`), so written apart the advice would be refused too.
@@ -611,16 +618,17 @@ function joinedProblem(word: TemplateWord, program: string, args: readonly (stri
     if (fixed !== undefined) {
       return `${name} cannot be joined to the option ${lone}: page data cannot fill ${lone}, which takes its value only joined to it. Write ${fixed.replace(/\{\{n\}\}/gu, name)}.`;
     }
-    // Advise the separate word only where the table takes page data there.
+    // Advise the separate word only where the table takes page data there,
+    // as that option's value. An option whose value is optional (`--decorate`,
+    // `--stat`) or already in its word (`-n+`) leaves the next word an operand.
     const apart = [...args.slice(0, at), option, undefined, ...args.slice(at + 1)];
     const alone: TemplateWord = { parts: word.parts.filter((part) => "param" in part), quoted: false, start: word.start, end: word.end };
     const found = placeholderSlot(program, apart, at + 1, alone);
     if ("problem" in found) return `${name} cannot be joined to the option ${option}, and page data may not be passed ${found.problem}`;
+    if (found.valueFor === undefined) {
+      return `${name} cannot be joined to the option ${option}: page data cannot fill its value, and as a separate word ${program} would read ${name} as an argument of its own, not as ${option}'s value. Write the option with a fixed value, or leave it out.`;
+    }
     return `${name} cannot be joined to the option ${option}. Pass it as a separate word: ${option} ${name}.`;
-  }
-  if (program === "tail" && "text" in head && head.text === "+" && before !== undefined && /^(?:-n|--lines|-c|--bytes)$/u.test(before)) {
-    const unit = before === "-n" || before === "--lines" ? "line" : "byte";
-    return `${name} cannot follow + there: use ${before} ${name} (last N ${unit}s); starting from ${unit} N with page data is not supported.`;
   }
   // `+cmd` is a command to some programs, and `@file` a file to read for curl and gh.
   if ("text" in head && /^[+@]/u.test(head.text)) {
