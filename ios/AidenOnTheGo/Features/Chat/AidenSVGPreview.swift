@@ -29,8 +29,10 @@ enum AidenSVGPreview {
         case svgNamespace:
             svg = trimmed
         case nil:
-            // A standalone `image/svg+xml` image draws blank without it.
-            guard let insertion = rootTagNameEnd(in: trimmed) else { return nil }
+            // A standalone `image/svg+xml` image draws blank without it. An
+            // explicit `xmlns=""` is not SVG's, and a second one is malformed.
+            guard let insertion = rootTagNameEnd(in: trimmed),
+                  !declaresDefaultNamespace(trimmed[insertion...]) else { return nil }
             svg = String(trimmed[..<insertion]) + " xmlns=\"\(svgNamespace)\"" + String(trimmed[insertion...])
         default:
             return nil
@@ -47,7 +49,7 @@ enum AidenSVGPreview {
         .paper{background:#fff;border-radius:12px;padding:12px}\
         img{display:block;max-width:100%;height:auto;margin:0 auto}\
         </style></head><body>\
-        <div class="paper"><img src="data:image/svg+xml;base64,\(encoded)" alt=""></div>\
+        <div class="paper"><img src="data:image/svg+xml;base64,\(encoded)" alt="Drawing"></div>\
         </body></html>
         """
     }
@@ -99,9 +101,38 @@ enum AidenSVGPreview {
         return nil
     }
 
+    /// Whether the root start tag that begins at `attributes` (just past
+    /// `<svg`) has an `xmlns` attribute of its own.
+    private static func declaresDefaultNamespace(_ attributes: Substring) -> Bool {
+        var quote: Character?
+        var tag = ""
+        for character in attributes {
+            if let open = quote {
+                if character == open { quote = nil }
+                tag.append(" ")
+                continue
+            }
+            if character == ">" { break }
+            if character == "\"" || character == "'" { quote = character }
+            tag.append(character)
+        }
+        return tag.range(of: #"(^|\s)xmlns\s*="#, options: .regularExpression) != nil
+    }
+
+    /// Reads the root element and, while the rest parses, stops as soon as
+    /// the task that called it is cancelled.
     private final class RootReader: NSObject, XMLParserDelegate {
         var name: String?
         var namespace: String?
+
+        func parser(
+            _ parser: XMLParser,
+            didEndElement elementName: String,
+            namespaceURI: String?,
+            qualifiedName: String?
+        ) {
+            if Task.isCancelled { parser.abortParsing() }
+        }
 
         func parser(
             _ parser: XMLParser,
@@ -110,6 +141,7 @@ enum AidenSVGPreview {
             qualifiedName: String?,
             attributes: [String: String] = [:]
         ) {
+            if Task.isCancelled { parser.abortParsing() }
             guard name == nil else { return }
             name = elementName
             namespace = namespaceURI.flatMap { $0.isEmpty ? nil : $0 }
@@ -143,15 +175,21 @@ struct AidenSVGDrawingSheet: View {
                 .toolbar {
                     ToolbarItem(placement: .topBarLeading) {
                         Button("Done") { dismiss() }
-                            .accessibilityLabel("Close drawing")
                     }
                 }
         }
         .task {
             let source = source
-            let page = await Task.detached(priority: .userInitiated) {
+            // A detached task doesn't inherit cancellation, so closing the
+            // sheet cancels the parse by hand.
+            let parse = Task.detached(priority: .userInitiated) {
                 AidenSVGPreview.document(for: source)
-            }.value
+            }
+            let page = await withTaskCancellationHandler {
+                await parse.value
+            } onCancel: {
+                parse.cancel()
+            }
             guard !Task.isCancelled else { return }
             phase = page.map(Phase.drawing) ?? .failed
         }

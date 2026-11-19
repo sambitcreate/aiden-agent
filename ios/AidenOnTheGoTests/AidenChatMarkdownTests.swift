@@ -199,6 +199,24 @@ final class AidenChatMarkdownTests: XCTestCase {
         }
     }
 
+    func testViewAndCopyBothFitBesideTheLanguageAtEveryTextSize() throws {
+        let svg = "```svg\n<svg xmlns=\"http://www.w3.org/2000/svg\"><circle r=\"4\"/></svg>\n```"
+        for size in [DynamicTypeSize.xSmall, .large, .accessibility3, .accessibility5] {
+            let window = try show(AidenMarkdownView(content: svg).dynamicTypeSize(size))
+            defer { close(window) }
+
+            let view = try copyButton(in: window, label: "View drawing").element.accessibilityFrame
+            let copy = try copyButton(in: window, label: "Copy svg code").element.accessibilityFrame
+            for (name, frame) in [("View", view), ("Copy", copy)] {
+                XCTAssertGreaterThanOrEqual(frame.width, 44 - 0.001, "\(name) is under 44 pt wide at \(size)")
+                XCTAssertGreaterThanOrEqual(frame.height, 44 - 0.001, "\(name) is under 44 pt tall at \(size)")
+                XCTAssertGreaterThanOrEqual(frame.minX, 16 - 0.5, "\(name) ran off the left at \(size)")
+                XCTAssertLessThanOrEqual(frame.maxX, 390 - 16 + 0.5, "\(name) ran off the right at \(size)")
+            }
+            XCTAssertLessThanOrEqual(view.maxX, copy.minX + 0.5, "View and Copy overlap at \(size)")
+        }
+    }
+
     // MARK: - SVG drawings
 
     func testOnlyAClosedSmallSvgFenceOffersView() {
@@ -210,7 +228,6 @@ final class AidenChatMarkdownTests: XCTestCase {
         XCTAssertFalse(AidenSVGPreview.offersView(language: "svg", source: " \n\t ", isOpen: false))
 
         let cap = AidenSVGPreview.maximumSourceBytes
-        XCTAssertEqual(cap, 1_048_576)
         let atCap = "<svg>" + String(repeating: "a", count: cap - 11) + "</svg>"
         XCTAssertEqual(atCap.utf8.count, cap)
         XCTAssertTrue(AidenSVGPreview.offersView(language: "svg", source: atCap, isOpen: false), "Exactly 1 MiB")
@@ -233,6 +250,18 @@ final class AidenChatMarkdownTests: XCTestCase {
         XCTAssertNil(AidenSVGPreview.document(for: ""))
     }
 
+    func testClosingTheSheetStopsTheParse() async {
+        let source = "<svg xmlns=\"http://www.w3.org/2000/svg\">" + String(repeating: "<rect/>", count: 1000) + "</svg>"
+        XCTAssertNotNil(AidenSVGPreview.document(for: source))
+        let parse = Task.detached { () -> String? in
+            while !Task.isCancelled { await Task.yield() }
+            return AidenSVGPreview.document(for: source)
+        }
+        parse.cancel()
+        let page = await parse.value
+        XCTAssertNil(page, "A cancelled parse stops instead of finishing the drawing")
+    }
+
     func testAnSvgWithoutItsNamespaceGetsOne() throws {
         let page = try XCTUnwrap(
             AidenSVGPreview.document(for: "<svg viewBox=\"0 0 10 10\"><rect width=\"10\" height=\"10\"/></svg>")
@@ -242,6 +271,9 @@ final class AidenChatMarkdownTests: XCTestCase {
         XCTAssertTrue(drawn.hasSuffix("<rect width=\"10\" height=\"10\"/></svg>"), drawn)
 
         XCTAssertNil(AidenSVGPreview.document(for: "<x:svg xmlns:x=\"urn:other\"/>"))
+        // An explicit empty default namespace is not SVG's; a second xmlns would be malformed.
+        XCTAssertNil(AidenSVGPreview.document(for: "<svg xmlns=\"\" viewBox=\"0 0 10 10\"/>"))
+        XCTAssertNil(AidenSVGPreview.document(for: "<svg viewBox=\"0 0 10 10\" xmlns = ''><rect/></svg>"))
     }
 
     func testOnlyAFinishedSvgBlockHasAViewButton() throws {

@@ -91,4 +91,4 @@ Bot notification polls retain the fetch's original negotiated visibility through
 
 ## Previews
 
-A finished `svg` code block in a reply has **View** beside **Copy**. It opens the drawing in a sheet, on a white card in light and dark mode, with pinch-zoom. The SVG is drawn as an image, with no scripts and no network access. View appears only once the block's closing fence has arrived and its source is at most 1 MiB. Source that isn't a well-formed SVG shows "Couldn't draw this SVG." and the code block stays as it was.
+A finished `svg` code block in a reply has **View** beside **Copy**. It opens the drawing in a sheet, on a white card in light and dark mode, with pinch-zoom. The SVG is drawn as an image, with no scripts and no network access. View appears only once the block's closing fence has arrived. A very long reply (over 80,000 characters or 2,000 lines) is shown as plain text, so its code blocks have no View button. Source that isn't a well-formed SVG shows "Couldn't draw this SVG." and the code block stays as it was.

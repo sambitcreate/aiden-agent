@@ -62,7 +62,8 @@ struct AidenPreviewFixtureView: View {
 
 /// `-AidenSVGFixture`: a reply with an `svg` code block, then an SVG block just
 /// under the 1 MiB View cap, so the drawing sheet can be checked by hand. The
-/// big block is drawn directly: a reply that long is shown as plain text.
+/// big block is drawn directly, because a reply that long is shown as plain
+/// text; its code is too long for the block to draw, so only View matters.
 struct AidenSVGFixtureView: View {
     static var isRequested: Bool {
         ProcessInfo.processInfo.arguments.contains("-AidenSVGFixture")
@@ -74,6 +75,9 @@ struct AidenSVGFixtureView: View {
                 AidenMarkdownView(content: Self.reply)
                 Text(verbatim: "Just under 1 MiB:")
                     .font(.headline)
+                Text(verbatim: "Drawn outside a reply; its code is too long to show here, so the block below looks empty. Use View.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
                 AidenCodeBlockView(source: Self.bigSource, language: "svg")
                 ForEach(0..<20, id: \.self) { index in
                     Text(verbatim: "Filler line \(index + 1)")
