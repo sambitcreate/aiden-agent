@@ -67,6 +67,8 @@ export interface AssistantLiveController {
   startBlockedReason: string | null;
   computerUseEnabled: boolean;
   computerUseActing: boolean;
+  /** False where Computer Use doesn't exist (Linux), so setup leaves its row out. */
+  computerUseOffered: boolean;
   computerUseReady: boolean;
   computerUseBusy: boolean;
   computerUseDetail: string;
@@ -122,7 +124,17 @@ export function assistantLiveAvailabilityDetail(snapshot: AssistantLiveSnapshot)
   }
 }
 
-function normalizeMicrophonePermission(status: string): AssistantLiveMicrophonePermission {
+/**
+ * Linux has no system-wide microphone permission for an app to read, so main
+ * reports "unknown" there. That is not a failed check: Live counts the
+ * microphone as ready, and a missing or busy input still fails at Start with
+ * its own error.
+ */
+export function normalizeMicrophonePermission(
+  status: string,
+  platform?: string | null,
+): AssistantLiveMicrophonePermission {
+  if (platform === "linux" && status === "unknown") return "granted";
   return ["granted", "not-determined", "denied", "restricted"].includes(status)
     ? (status as AssistantLiveMicrophonePermission)
     : "unavailable";
@@ -137,7 +149,9 @@ export function assistantLiveMicrophonePermissionDetail(
       case "checking":
         return "Checking microphone permission…";
       case "granted":
-        return "Microphone permission is allowed.";
+        return platform === "linux"
+          ? "Linux doesn’t ask apps for microphone permission. Aiden listens only while Live runs."
+          : "Microphone permission is allowed.";
       case "not-determined":
         return "Microphone permission has not been requested. You may be asked after you choose Start.";
       case "denied":
@@ -1035,7 +1049,7 @@ export function useAssistantLiveWithDependencies(
     void dependencies.getMicrophoneStatus().then(
       (status) => {
         if (!cancelled && mounted.current) {
-          setMicrophonePermission(normalizeMicrophonePermission(status));
+          setMicrophonePermission(normalizeMicrophonePermission(status, dependencies.platform));
         }
       },
       () => {
@@ -1045,7 +1059,7 @@ export function useAssistantLiveWithDependencies(
     return () => {
       cancelled = true;
     };
-  }, [dependencies.geminiLive, dependencies.getMicrophoneStatus]);
+  }, [dependencies.geminiLive, dependencies.getMicrophoneStatus, dependencies.platform]);
 
   React.useEffect(() => {
     const generation = ++computerUseGeneration.current;
@@ -1628,11 +1642,10 @@ export function useAssistantLiveWithDependencies(
   const availabilityDetail = assistantLiveAvailabilityDetail(snapshot);
   const microphonePermissionReady = ["granted", "not-determined"].includes(microphonePermission);
   const microphonePermissionDetail = assistantLiveMicrophonePermissionDetail(microphonePermission, dependencies.platform);
-  const setupComplete =
-    snapshot.available &&
-    microphonePermission === "granted" &&
-    computerUseStatus?.ready === true &&
-    computerUseEnabled;
+  // Computer Use is an optional extra: without it Live still talks, uses the
+  // open chat and moves through Aiden's own window. Linux never has it.
+  const setupComplete = snapshot.available && microphonePermission === "granted";
+  const computerUseOffered = computerUseStatus?.state !== "unsupported";
   return {
     visible: dependencies.geminiLive,
     available: snapshot.available,
@@ -1664,6 +1677,7 @@ export function useAssistantLiveWithDependencies(
           : null),
     computerUseEnabled,
     computerUseActing,
+    computerUseOffered,
     computerUseReady: computerUseStatus?.ready === true,
     computerUseBusy,
     computerUseDetail: computerUseStatus?.detail ?? "Checking global Computer Use readiness…",

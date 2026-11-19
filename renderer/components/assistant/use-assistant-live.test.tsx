@@ -644,6 +644,81 @@ test("Computer Use cannot be enabled when the global helper is unavailable", asy
   await fixture.unmount();
 });
 
+test("Linux Live is ready with a Google key alone and starts voice-only", async () => {
+  // Linux has no system microphone permission (main reports "unknown") and no
+  // Computer Use; neither may keep Live from starting there.
+  const unsupported: ComputerUseStatus = {
+    enabled: false,
+    beta: true,
+    state: "unsupported",
+    detail: "Computer Use is not included on this platform.",
+    ready: false,
+    available: false,
+    retryable: false,
+    canRequestPermissions: false,
+    permissions: { accessibility: null, screenRecording: null },
+  };
+  const fixture = await mountHook({
+    platform: "linux",
+    getMicrophoneStatus: async () => "unknown",
+    computerUse: { status: async () => unsupported },
+  });
+  try {
+    const live = fixture.controller();
+    assert.equal(live.microphonePermission, "granted");
+    assert.match(live.microphonePermissionDetail, /Linux doesn’t ask apps for microphone permission/u);
+    assert.equal(live.computerUseOffered, false);
+    assert.equal(live.setupComplete, true);
+    assert.equal(live.startBlockedReason, null);
+    await live.start();
+    await settle();
+    assert.deepEqual(fixture.startIntents(), [
+      { microphone: true, computerUseAuthorization: null, screen: false },
+    ]);
+    assert.equal(fixture.controller().microphoneActive, true);
+  } finally {
+    await fixture.unmount();
+  }
+});
+
+test("an unreadable microphone status still blocks Live on a Mac", async () => {
+  const fixture = await mountHook({ platform: "darwin", getMicrophoneStatus: async () => "unknown" });
+  try {
+    assert.equal(fixture.controller().microphonePermission, "unavailable");
+    assert.equal(fixture.controller().setupComplete, false);
+    await fixture.controller().start();
+    assert.equal(fixture.startCalls(), 0);
+  } finally {
+    await fixture.unmount();
+  }
+});
+
+test("a Mac without Computer Use set up can still start Live without screen actions", async () => {
+  const notReady: ComputerUseStatus = {
+    enabled: false,
+    beta: true,
+    state: "disabled",
+    detail: "Turn on the Computer Use beta to make it available in individual chats.",
+    ready: false,
+    available: false,
+    retryable: false,
+    canRequestPermissions: false,
+    permissions: { accessibility: null, screenRecording: null },
+  };
+  const fixture = await mountHook({ platform: "darwin", computerUse: { status: async () => notReady } });
+  try {
+    assert.equal(fixture.controller().computerUseOffered, true);
+    assert.equal(fixture.controller().computerUseEnabled, false);
+    assert.equal(fixture.controller().setupComplete, true);
+    await fixture.controller().start();
+    assert.deepEqual(fixture.startIntents(), [
+      { microphone: true, computerUseAuthorization: null, screen: false },
+    ]);
+  } finally {
+    await fixture.unmount();
+  }
+});
+
 test("mounted Live hook allows readiness review but blocks start during an ordinary collision", async () => {
   for (const reason of [
     "Finish or stop the current Aiden response before starting Live.",
