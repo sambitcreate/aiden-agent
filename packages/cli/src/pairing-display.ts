@@ -1,8 +1,8 @@
 import QRCode from "qrcode";
 import type { AidenRemoteDesktopPairing } from "../../../main/services/aiden-remote-pairing.js";
 
-/** Light modules around the code. Scanners want a margin; two keeps the code narrow enough for an 80-column window over Tailscale. */
-const QUIET_ZONE = 2;
+/** Light modules around the code: the four the QR standard asks for. A Tailscale code still fits an 80-column window. */
+const QUIET_ZONE = 4;
 // Fixed palette entries 16 (black) and 231 (white): unlike the 16 theme colors, light and dark terminal themes leave them alone.
 const BLACK = 16;
 const WHITE = 231;

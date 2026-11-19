@@ -369,13 +369,16 @@ test("a Tailscale pairing code fits an 80-column terminal as a black-on-white QR
   assert.ok(width <= 80, `${width} columns would wrap in an 80-column terminal`);
   for (const row of rows) assert.ok(row.endsWith("\x1b[0m"), "each row resets its colors, so nothing bleeds past the code");
   const grid = modulesFromRows(rows);
-  const quiet = 2, size = width - quiet * 2;
-  assert.ok(grid.slice(0, quiet).flat().every((dark) => !dark), "a light margin above the code");
-  assert.ok(grid.every((line) => !line[0] && !line[1] && !line[width - 1] && !line[width - 2]), "a light margin at both sides");
-  for (const [top, left] of [[quiet, quiet], [quiet, quiet + size - 7], [quiet + size - 7, quiet]]) {
-    assert.ok(isFinder(grid, top, left), `finder pattern at ${top},${left}`);
+  // Where the symbol's dark modules start and end; the QR standard wants four light modules around it on every side.
+  const darkRows = grid.map((line, index) => line.some(Boolean) ? index : -1).filter((index) => index >= 0);
+  const darkColumns = [...Array(width).keys()].filter((column) => grid.some((line) => line[column]));
+  const [top, bottom] = [darkRows[0], darkRows.at(-1)], [left, right] = [darkColumns[0], darkColumns.at(-1)];
+  assert.ok(top >= 4 && left >= 4 && width - 1 - right >= 4 && grid.length - 1 - bottom >= 4, `quiet zone ${top}/${left}/${width - 1 - right}/${grid.length - 1 - bottom}`);
+  assert.equal(bottom - top, right - left, "a square symbol");
+  for (const [row, column] of [[top, left], [top, right - 6], [bottom - 6, left]]) {
+    assert.ok(isFinder(grid, row, column), `finder pattern at ${row},${column}`);
   }
-  assert.ok(!isFinder(grid, quiet + size - 7, quiet + size - 7), "no finder in the bottom-right corner, so the code is not mirrored");
+  assert.ok(!isFinder(grid, bottom - 6, right - 6), "no finder in the bottom-right corner, so the code is not mirrored");
 
   const text = await api.renderPairingTerminal(pairing, { columns: 100 });
   assert.match(text, /^Pair over Tailscale$/m);
