@@ -215,6 +215,17 @@ const REFUSED_MARKUP: Record<string, string> = {
   "a javascript: URL after a regex that follows an if head": "<script>if (x) /\"/.test(y); location='javascript:alert(1)'</script>",
   "a javascript: URL after a regex that follows a while head": "<script>while (x) /'/.exec(y); location='javascript:alert(1)'</script>",
   "a javascript: URL after a regex that follows a for await head": "<script>for await (const x of y) /`/.test(x); location='javascript:alert(1)'</script>",
+  "an <iframe> written after a division that follows a with method call":
+    '<script>[1,2].with(0,3) /1; document.body.innerHTML = "<iframe src=https://evil.test/></iframe>"; 2/ 1</script>',
+  "a javascript: URL after a division that follows an if method call": "<script>o.if() /1; location='javascript:alert(1)'; 2/ 1</script>",
+  "a javascript: URL after a division that follows a for method call": "<script>o?.for() /1; location='javascript:alert(1)'; 2/ 1</script>",
+  "a javascript: URL after a division that follows a while method call": "<script>o.while(x) /1; location='javascript:alert(1)'; 2/ 1</script>",
+  "an onclick that navigates after a division that follows an if method call":
+    "<button onclick=\"o.if() /1; location='javascript:alert(1)'; 2/ 1\">Go</button>",
+  "an onclick that navigates after a division that follows a with method call":
+    "<button onclick=\"[1,2].with(0,3) /1; location='javascript:alert(1)'; 2/ 1\">Go</button>",
+  "an onclick that navigates after a division that follows a for method call":
+    "<button onclick=\"o.for() /1; location='javascript:alert(1)'; 2/ 1\">Go</button>",
 };
 
 const ADMITTED_MARKUP: Record<string, string> = {

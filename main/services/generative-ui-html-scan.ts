@@ -306,10 +306,17 @@ function lexJs(code: string): JsToken[] {
     else if (punctuator === "}") braces.pop();
     const token: JsToken = { kind: "punct", text: punctuator, start, end: at };
     if (punctuator === "(") {
+      // A keyword read as a property (`o.if(`, `[].with(`) is a method call,
+      // not a statement head, so the `/` after its `)` divides.
+      const followsDot = (offset: number) => {
+        const previous = tokens[tokens.length - offset];
+        return previous?.kind === "punct" && (previous.text === "." || previous.text === "?.");
+      };
       const before = tokens[tokens.length - 2];
       parens.push(
         lastSignificant?.kind === "name" &&
-          (HEAD_KEYWORDS.has(lastSignificant.text) || (lastSignificant.text === "await" && before?.kind === "name" && before.text === "for")),
+          ((HEAD_KEYWORDS.has(lastSignificant.text) && !followsDot(2)) ||
+            (lastSignificant.text === "await" && before?.kind === "name" && before.text === "for" && !followsDot(3))),
       );
     } else if (punctuator === ")" && parens.pop() === true) {
       token.closesHead = true;
