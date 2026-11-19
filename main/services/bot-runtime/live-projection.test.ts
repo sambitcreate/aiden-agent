@@ -856,6 +856,48 @@ test("connect cards carry their current status, and refresh re-sends a changed o
   }
 });
 
+test("a pending connect card picks up its new status from a frame that only streams reply text", async () => {
+  const dismissed = new Set<string>();
+  const fauxModels = createFauxModels([slowAnswer()], { tokensPerSecond: 40 });
+  const live = await start(fauxModels, {
+    projection: {
+      connectCardStatus: async (_botId, card) => (dismissed.has(card.pluginId) ? "dismissed" : card.status),
+    },
+  });
+  try {
+    const conversation = await live.service.conversation("bot:a");
+    await conversation.submit(
+      {
+        type: "write",
+        entry: { kind: BOT_CONNECT_CARD_ENTRY_KIND, data: { type: "connect_card", pluginId: "notion", reason: "Notes", status: "pending" } },
+      },
+      ctx,
+    );
+    const tape = recorder();
+    const { snapshot, unsubscribe } = await live.projection.subscribe("bot:a", tape.sink);
+    tape.start(snapshot);
+    const status = () => {
+      const card = tape.view?.entries.find((entry) => entry.type === "connect_card");
+      return card?.type === "connect_card" ? card.card.status : null;
+    };
+    await live.service.send("bot:a", { text: "go", requestId: "desk-1" });
+    await waitFor(() => (tape.view?.partial ?? "").length > 0, { what: "a partial reply" });
+    assert.equal(status(), "pending");
+    const entriesMidReply = tape.view!.entries.length;
+    // The card's status changes outside the transcript, and nothing calls refresh:
+    // only the reply's streaming frames, which add no entry, can carry it.
+    dismissed.add("notion");
+    await waitFor(() => status() === "dismissed", { what: "the dismissed status" });
+    assert.equal(tape.view!.entries.length, entriesMidReply);
+    assert.notEqual(tape.view!.partial, null);
+    live.projection.notifyStopping("bot:a");
+    await live.service.stop("bot:a");
+    unsubscribe();
+  } finally {
+    await live.close();
+  }
+});
+
 test("a waiting question reaches subscribers and late joiners, and its answer replaces it with a reply", async () => {
   const questions = createBotQuestions();
   const fauxModels = createFauxModels([

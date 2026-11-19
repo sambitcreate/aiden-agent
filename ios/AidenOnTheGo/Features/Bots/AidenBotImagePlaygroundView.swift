@@ -98,10 +98,6 @@ struct AidenBotImagePlaygroundPresentationState: Equatable, Sendable {
     mutating func failCandidateCopy() {
         phase = .fallback(.candidateCopyFailed)
     }
-
-    mutating func showFallback(_ reason: AidenBotImagePlaygroundFallbackReason) {
-        phase = .fallback(reason)
-    }
 }
 
 enum AidenBotImagePlaygroundCandidateCopyError: Error, Equatable {

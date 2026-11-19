@@ -708,7 +708,6 @@ test("the Aiden home, onboarding, composer, schedules, and activity retain the r
 
   assert.match(shell, /enum ChatListLoadState: Equatable/u);
   assert.match(shell, /var chatListLoadState: ChatListLoadState = \.unresolved/u);
-  assert.match(shell, /var chatLoadErrorMessage: String\?/u);
   assert.match(
     shell,
     /case \.failure\(let error\):[\s\S]{0,180}chatListLoadState = \.failed\(error\.localizedDescription\)/u,

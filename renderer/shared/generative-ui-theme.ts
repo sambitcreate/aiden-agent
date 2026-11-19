@@ -16,8 +16,6 @@ export const GENERATIVE_UI_THEME_VARIABLES = [
   "--motion-duration", "--motion-easing",
 ] as const;
 
-export type GenerativeUiThemeVariable = (typeof GENERATIVE_UI_THEME_VARIABLES)[number];
-
 /**
  * Aiden's light defaults (renderer/styles.css :root), used when no renderer
  * theme is available — standalone export and older callers — so the kit's

@@ -784,8 +784,6 @@
     <string name="bot_issue_resume_routine">Resume routine</string>
     <string name="bot_issue_stop">Stop</string>
     <string name="bot_issue_keep_waiting">Keep waiting</string>
-    <string name="bot_issue_stale">This card changed. Pull to refresh and try again.</string>
-    <string name="bot_issue_not_sent">That didn’t reach your Mac. Please try again.</string>
     <string name="bot_files_connect">Connect to your Mac to see files.</string>
     <string name="bot_files_unavailable">Files aren’t available for this Bot right now.</string>
     <string name="bot_files_loading">Loading files</string>

@@ -816,12 +816,6 @@ export interface AssistantConfig {
   settingsPermission: AssistantSettingsPermission;
 }
 
-/** Authoritative Assistant settings plus the current global-hotkey runtime state. */
-export interface AssistantConfigSnapshot {
-  config: AssistantConfig;
-  hotkeyActive: boolean;
-}
-
 /** Persisted lightweight app settings. */
 export interface AppSettings extends AidenLiveSettingsFields {
   /** App effects are separately authorized from workspace file access. */

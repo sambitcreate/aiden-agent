@@ -31,7 +31,3 @@ export function disposeVisualSnapshots(): void {
   installed?.dispose();
   installed = null;
 }
-
-export function visualSnapshotsIdle(): Promise<void> {
-  return installed?.idle() ?? Promise.resolve();
-}

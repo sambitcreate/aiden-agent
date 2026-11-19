@@ -4,7 +4,6 @@ import { configStore } from "./config-store.js";
 import {
   credentialAfterProviderRotation,
   MAX_PROVIDER_CREDENTIAL_ROTATION_JOURNAL_LENGTH,
-  normalizeProviderCredentialInput,
   parsePendingProviderCredentialRotation,
   providerCredentialState,
   providerConnectionSnapshot,
@@ -212,33 +211,6 @@ export function removeProviderWithCredentialCleanup(
       await reconcilePendingProviderCredentialRotationNow();
     }),
   );
-}
-
-export function setProviderKeyWithCredentialRotation(
-  providerId: string,
-  key: string | null,
-  isCurrent: () => boolean = () => true,
-): Promise<{ hasKey: boolean; provider: StoredProvider }> {
-  return serialized(async () => {
-    if (!isCurrent()) throw new Error("The renderer document is no longer active.");
-    await reconcilePendingProviderCredentialRotationNow();
-    const provider = await configStore.getProvider(providerId);
-    if (!provider) {
-      throw new Error("This custom provider no longer exists.");
-    }
-    const boundedKey = normalizeProviderCredentialInput(key);
-    if (!provider.needsKey || !boundedKey) {
-      await secrets.deleteKey(providerId, isCurrent);
-      return { hasKey: false, provider };
-    }
-    await secrets.setProviderKey(
-      providerId,
-      boundedKey,
-      JSON.stringify(providerConnectionSnapshot(provider)),
-      isCurrent,
-    );
-    return { hasKey: true, provider };
-  });
 }
 
 export function reconcileExternalProviderCredentialChanges(

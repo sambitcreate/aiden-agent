@@ -2,12 +2,6 @@
 // Audio. Pause suspends the audio context (sample-exact), never regenerates,
 // and never drops buffered audio. Stop tears everything down.
 
-export interface TtsPlayerProgress {
-  /** Segments whose audio has finished playing locally. */
-  playedSegments: number;
-  playing: boolean;
-}
-
 const WARM_BUFFER_SECONDS = 0.08;
 
 export class TtsPlayer {

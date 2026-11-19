@@ -358,37 +358,12 @@ enum AgentRunStalePresentation {
     }
 }
 
-enum AgentRunElapsedTimeFormatter {
-    static func label(startedAt: Date, updatedAt: Date) -> String {
-        let elapsedSeconds = max(0, Int(updatedAt.timeIntervalSince(startedAt).rounded(.down)))
-        let hours = elapsedSeconds / 3_600
-        let minutes = (elapsedSeconds % 3_600) / 60
-        let seconds = elapsedSeconds % 60
-
-        if hours > 0 {
-            return String(format: "%d:%02d:%02d", hours, minutes, seconds)
-        }
-
-        return String(format: "%02d:%02d", minutes, seconds)
-    }
-}
-
 enum AgentLiveActivityReusePolicy {
     static func normalizedStreamID(_ streamID: String?) -> String? {
         guard let streamID else { return nil }
 
         let normalized = streamID.trimmingCharacters(in: .whitespacesAndNewlines)
         return normalized.isEmpty ? nil : normalized
-    }
-
-    static func canReuseActivity(
-        existingSessionID: String,
-        existingStreamID: String?,
-        requestedSessionID: String,
-        requestedStreamID: String?
-    ) -> Bool {
-        existingSessionID == requestedSessionID
-            && normalizedStreamID(existingStreamID) == normalizedStreamID(requestedStreamID)
     }
 }
 

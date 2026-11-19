@@ -413,12 +413,6 @@ export function parseSubagentRunSnapshotV1(value: unknown): SubagentRunSnapshotV
   };
 }
 
-export function parseSubagentRunSnapshotsV1(value: unknown): SubagentRunSnapshotV1[] {
-  if (!Array.isArray(value) || value.length > MAX_SUBAGENT_RUNS_PER_GENERATION) return [];
-  const parsed = value.map(parseSubagentRunSnapshotV1);
-  return parsed.every((entry): entry is SubagentRunSnapshotV1 => entry !== undefined) ? parsed : [];
-}
-
 export function subagentMessageReference(
   generationId: string,
   snapshots: readonly SubagentRunSnapshotV1[],

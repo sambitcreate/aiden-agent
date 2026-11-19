@@ -50,7 +50,6 @@ final class ComposerVoiceInputController {
     }
 
     var isListening: Bool { state == .listening }
-    var isRequestingPermission: Bool { state == .requestingPermission }
     var isBusy: Bool { state != .idle }
 
     func toggle(

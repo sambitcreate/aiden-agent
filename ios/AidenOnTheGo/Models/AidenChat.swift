@@ -4129,13 +4129,6 @@ struct AidenForeignRunProjection: Equatable, Sendable {
         locallyAnswered.remove(promptId)
     }
 
-    /// Drops a prompt another surface resolved first (a 409 loser).
-    mutating func dropPrompt(_ promptId: String) {
-        approvals.removeAll { $0.approvalId == promptId }
-        questions.removeAll { $0.promptId == promptId }
-        refreshWaitingState()
-    }
-
     mutating func apply(_ event: AidenRemoteRunEvent) -> [Effect] {
         guard event.runId == runId, !isEnded else { return [] }
         if case .snapshot = event.kind {

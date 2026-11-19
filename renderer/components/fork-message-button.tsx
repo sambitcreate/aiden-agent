@@ -19,9 +19,15 @@ export interface MessageForkAction {
   onFork: () => void;
   /** Fork and summarize what followed; absent when nothing follows this message. */
   onForkWithSummary?: () => void;
-  /** When set, forking is unavailable right now and this explains why. */
-  disabledReason?: string | null;
 }
+
+/**
+ * When set, forking is unavailable right now and this explains why. A context
+ * rather than a field on each row's action, so a turn starting or ending
+ * updates the fork controls alone instead of re-rendering every memoized
+ * transcript row.
+ */
+export const ForkDisabledReasonContext = React.createContext<string | null>(null);
 
 interface ForkMessageButtonProps {
   action: MessageForkAction;
@@ -35,7 +41,7 @@ function forkLabel(kind: "fork" | "edit"): string {
 
 export function ForkMessageButton({ action, kind, className }: ForkMessageButtonProps) {
   const label = forkLabel(kind);
-  const disabledReason = action.disabledReason ?? null;
+  const disabledReason = React.useContext(ForkDisabledReasonContext);
   const Icon = kind === "fork" ? GitFork : SquarePen;
   return (
     <button
@@ -75,6 +81,7 @@ interface MessageForkContextMenuProps {
 /** Wraps one settled message so a right-click offers its fork actions. */
 export function MessageForkContextMenu({ action, kind, children }: MessageForkContextMenuProps) {
   const [selectedText, setSelectedText] = React.useState("");
+  const disabled = Boolean(React.useContext(ForkDisabledReasonContext));
   if (!action) {
     return (
       <ContextMenu>
@@ -85,7 +92,6 @@ export function MessageForkContextMenu({ action, kind, children }: MessageForkCo
       </ContextMenu>
     );
   }
-  const disabled = Boolean(action.disabledReason);
   return (
     <ContextMenu>
       <ContextMenuTrigger
