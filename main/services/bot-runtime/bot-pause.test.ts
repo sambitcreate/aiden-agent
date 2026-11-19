@@ -32,6 +32,7 @@ import {
 import { suggestConnectionCandidate } from "./bot-tool-candidates.js";
 import { botDirectoryName } from "./harness-host.js";
 import { createBotLiveProjection, projectBotTranscript } from "./live-projection.js";
+import { createPromptCacheTelemetry } from "../pi-cache-telemetry.js";
 import { countingTool, fakeMemoryAuthority, recordingDeps } from "./test-support/fixtures.js";
 import {
   createFauxModels,
@@ -644,6 +645,13 @@ async function legacyChatHost() {
     },
     "./chat-owed-turns.js": await import("../chat-owed-turns.js"),
     "./chat-owed-turn-prompts.js": await import("../chat-owed-turn-prompts.js"),
+    // Stop discards the chat's background summary; this host keeps none.
+    "./chat-prompt-cache-state.js": {
+      chatPromptCacheTelemetry: createPromptCacheTelemetry(),
+      chatPromptGenerationStopped() {},
+      chatPromptPrefixCompacted() {},
+      forgetChatPromptCacheState() {},
+    },
     "./subagents/child-agent-runtime.js": {
       subagentRuntimeRegistry: {
         setHealthMetrics() {},
