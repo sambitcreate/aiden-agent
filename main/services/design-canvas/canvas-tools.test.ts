@@ -542,6 +542,7 @@ test("canvas_inspect draws the page a frame shows and hands Aiden the report, wi
       ...showPage(withOther, doc.activePageId),
       frames: [
         { id: "elsewhere", kind: "file", title: "Home", path: "design/home.html", x: 0, y: 0, w: 640, h: 436, pageId: "p2", createdBy: "aiden" },
+        { id: "settings", kind: "file", title: "Settings", path: "design/settings.html", x: 700, y: 0, w: 640, h: 436, pageId: "p2", createdBy: "aiden" },
         { id: "home", kind: "file", title: "Home", path: "design/home.html", x: 0, y: 0, w: 640, h: 436, pageId: doc.activePageId, createdBy: "aiden" },
         { id: "idea", kind: "note", title: "Idea", text: "Warmer", x: 700, y: 0, w: 240, h: 160, pageId: doc.activePageId, createdBy: "aiden" },
       ],
@@ -572,6 +573,9 @@ test("canvas_inspect draws the page a frame shows and hands Aiden the report, wi
   assert.deepEqual(asked[1], { frameId: "elsewhere", top: 0, picture: false });
   assert.deepEqual(textOnly.content.map((part) => part.type), ["text"]);
 
+  await inspect.execute("c", { path: "./design/settings.html" } as never);
+  assert.equal(asked[2]?.frameId, "settings", "a path shown only on another page names its frame there");
+
   const refused = async (args: Record<string, unknown>) => {
     const output = await inspect.execute("c", args as never);
     const first = output.content[0];
@@ -581,7 +585,7 @@ test("canvas_inspect draws the page a frame shows and hands Aiden the report, wi
   assert.match((await refused({ frameId: "idea" })).message, /Only a page/u);
   assert.match((await refused({ path: "design/nowhere.html" })).message, /not on the canvas/u);
   assert.equal((await refused({})).status, "error");
-  assert.equal(asked.length, 2, "nothing is drawn for a refused call");
+  assert.equal(asked.length, 3, "nothing is drawn for a refused call");
 });
 
 test("Aiden draws a small flow: labelled shapes, text and an arrow that follows its boxes", async (t) => {
