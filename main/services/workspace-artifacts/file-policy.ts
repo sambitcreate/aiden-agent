@@ -1,5 +1,6 @@
 import { readLinuxArtifactFile, LinuxArtifactFileChangedError } from "./linux-file-read.js";
 /** Model-authored artifact files use the model reader's credential-path policy. */
+import type { BigIntStats } from "node:fs";
 import * as fs from "node:fs/promises";
 import path from "node:path";
 import { isProtectedCredentialPath } from "../model-file-policy.js";
@@ -83,7 +84,7 @@ function withoutSystemText(file: string, error: unknown): unknown {
  * refusal, so a swap made and undone around the open would have to land
  * between two checks a moment apart.
  */
-async function readRefused(root: ManagedWorktreeRootIdentity, relative: string, file: { device: string; inode: string }): Promise<boolean> {
+async function readRefused(root: ManagedWorktreeRootIdentity, relative: string, file: AdmittedFileStamp): Promise<boolean> {
   const at = path.join(root.path, relative);
   const refusal = (error: unknown) => ["EACCES", "EPERM"].includes((error as NodeJS.ErrnoException | undefined)?.code ?? "");
   // "same": the admitted file is still there; "refused": a folder inside the workspace may not be entered; else it changed.
@@ -91,7 +92,7 @@ async function readRefused(root: ManagedWorktreeRootIdentity, relative: string, 
     if (!(await rootUnchanged(root)) || (await linkOnPath(root.path, relative))) return "changed";
     try {
       const info = await fs.lstat(at, { bigint: true });
-      return info.isFile() && String(info.dev) === file.device && String(info.ino) === file.inode ? "same" : "changed";
+      return info.isFile() && sameStamp(stampOf(info), file) ? "same" : "changed";
     } catch (error) {
       return refusal(error) ? "refused" : "changed";
     }
@@ -107,6 +108,19 @@ async function readRefused(root: ManagedWorktreeRootIdentity, relative: string, 
     return refusal(error) && (await check()) !== "changed";
   }
 }
+
+/**
+ * The admitted file's identity plus its size and change times. A system that
+ * hands a removed file's inode to the next file made (Linux does) would
+ * otherwise let a different file put in its place pass as the admitted one.
+ */
+type AdmittedFileStamp = { device: string; inode: string; size: string; ctime: string; mtime: string; birthtime: string };
+const stampOf = (info: BigIntStats): AdmittedFileStamp => ({
+  device: String(info.dev), inode: String(info.ino), size: String(info.size),
+  ctime: String(info.ctimeNs), mtime: String(info.mtimeNs), birthtime: String(info.birthtimeNs),
+});
+const sameStamp = (a: AdmittedFileStamp, b: AdmittedFileStamp) =>
+  a.device === b.device && a.inode === b.inode && a.size === b.size && a.ctime === b.ctime && a.mtime === b.mtime && a.birthtime === b.birthtime;
 
 /** Whether `root.path` is still the folder Aiden admitted: a real folder, not a link, with no link above it, and the same device and inode. */
 async function rootUnchanged(root: ManagedWorktreeRootIdentity): Promise<boolean> {
@@ -156,7 +170,7 @@ async function admittedFile(root: string, file: string) {
   const info = await fs.lstat(canonical, { bigint: true });
   if (!info.isFile() || info.isSymbolicLink()) throw new WorkspaceArtifactFileDeniedError(`${file} is not a file.`);
   if (info.nlink !== 1n) throw new WorkspaceArtifactFileDeniedError(`${file} has more than one hard link, so an artifact cannot read it.`);
-  return { identity, relative, file: { device: String(info.dev), inode: String(info.ino) } };
+  return { identity, relative, file: { device: String(info.dev), inode: String(info.ino) }, stamp: stampOf(info) };
 }
 
 /** Metadata-only check for cached data. Missing/unavailable files inside the folder keep ordinary transient cache semantics; one missing past a link is refused. */
@@ -174,9 +188,11 @@ export async function readWorkspaceArtifactFile(root: string, file: string, sign
     ? readLinuxArtifactFile(identity, admitted.relative, signal)
     : readConfinedWorkspaceFile(identity, admitted.relative, signal);
   const bytes = await reading.catch(async (error: unknown) => {
-    if (error instanceof LinuxArtifactFileChangedError || (error instanceof ManagedWorktreeFileIoError && error.code === "source_changed")) {
+    // Linux's reader passes a refused open through as it is; the macOS helper reports it as a change.
+    const linuxRefusal = process.platform === "linux" && ["EACCES", "EPERM"].includes((error as NodeJS.ErrnoException | undefined)?.code ?? "");
+    if (linuxRefusal || error instanceof LinuxArtifactFileChangedError || (error instanceof ManagedWorktreeFileIoError && error.code === "source_changed")) {
       // A file Aiden may not read fails to open the same way a replaced one does; say which it is.
-      if (await readRefused(admitted.identity, admitted.relative, admitted.file)) throw new WorkspaceArtifactFileUnreadableError(file);
+      if (await readRefused(admitted.identity, admitted.relative, admitted.stamp)) throw new WorkspaceArtifactFileUnreadableError(file);
       throw new WorkspaceArtifactFileChangedError(file);
     }
     if (isUnsafeSource(error)) throw new WorkspaceArtifactFileUnsafeError(file);

@@ -535,7 +535,8 @@ test("artifact reads deny canonical credential aliases and inode/path replacemen
       await fs.rename(path.join(folder, "safe"), path.join(folder, "held"));
       await fs.symlink(".private", path.join(folder, "safe"));
     },
-  }), WorkspaceArtifactFileUnsafeError);
+    // Linux's reader finds the link and calls it a change; the macOS helper refuses the folder as unsafe.
+  }), process.platform === "linux" ? WorkspaceArtifactFileChangedError : WorkspaceArtifactFileUnsafeError);
 });
 
 test("a file read whose workspace folder is not a folder fails with that lasting reason, not as a change the next refresh fixes", async (t) => {

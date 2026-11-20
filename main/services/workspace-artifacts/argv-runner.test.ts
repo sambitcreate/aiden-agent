@@ -703,22 +703,22 @@ test("a branch value for git checkout never discards a file's uncommitted edits"
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const git = (args: string[]) => execFileSync("git", ["-c", "user.email=a@example.com", "-c", "user.name=a", ...args], { cwd: dir, encoding: "utf8", env: GIT_ENV });
   fs.writeFileSync(path.join(dir, "notes.md"), "committed\n");
-  fs.writeFileSync(path.join(dir, "a.ts"), "committed\n");
+  fs.writeFileSync(path.join(dir, "a.js"), "committed\n");
   git(["init", "-q", "-b", "main"]);
   git(["add", "."]);
   git(["commit", "-q", "-m", "one"]);
   git(["branch", "feature"]);
   fs.writeFileSync(path.join(dir, "notes.md"), "UNSAVED WORK\n");
-  fs.writeFileSync(path.join(dir, "a.ts"), "UNSAVED WORK\n");
+  fs.writeFileSync(path.join(dir, "a.js"), "UNSAVED WORK\n");
   const action = parseWorkspaceArtifactActions([{ name: "a", label: "A", command: "git checkout {{branch}}", params: [{ name: "branch" }] }])[0]!;
   // git reads a value that names no branch as files, unless something says it is a branch.
   const file = resolveWorkspaceArtifactCommand(action, ["notes.md"]);
   const ran = await runResolved(file, dir);
   assert.notEqual(ran.exitCode, 0);
   assert.match(ran.stderr, /invalid reference/u);
-  for (const value of [".", "*.ts", "a.?s"]) assert.throws(() => resolveWorkspaceArtifactCommand(action, [value]), /branch must be a git revision there/u, value);
+  for (const value of [".", "*.js", "a.?s"]) assert.throws(() => resolveWorkspaceArtifactCommand(action, [value]), /branch must be a git revision there/u, value);
   assert.equal(fs.readFileSync(path.join(dir, "notes.md"), "utf8"), "UNSAVED WORK\n");
-  assert.equal(fs.readFileSync(path.join(dir, "a.ts"), "utf8"), "UNSAVED WORK\n");
+  assert.equal(fs.readFileSync(path.join(dir, "a.js"), "utf8"), "UNSAVED WORK\n");
   // A shell given the preview reads the value the same way.
   assert.equal(file.preview, "GIT_LITERAL_PATHSPECS=1 git checkout 'notes.md' --");
   const shell = spawnSync("/bin/sh", ["-c", file.preview], { cwd: dir, encoding: "utf8", env: GIT_ENV });
