@@ -365,26 +365,62 @@ function stringEnd(text: string, start: number): number {
   return scanString(text, start).end;
 }
 
+/**
+ * The end of the regex literal at `start`: past its closing slash, or at the
+ * line break that leaves it unclosed (a regex cannot span a line). A slash
+ * after a backslash or inside a class (`/[/]/`) does not close it.
+ */
+function regexEnd(text: string, start: number): number {
+  let inClass = false;
+  for (let index = start + 1; index < text.length; index += 1) {
+    const char = text[index];
+    if (char === "\n" || char === "\r") return index;
+    if (char === "\\") {
+      if (text[index + 1] === "\n" || text[index + 1] === "\r") return index + 1;
+      index += 1;
+    } else if (inClass) {
+      if (char === "]") inClass = false;
+    } else if (char === "[") inClass = true;
+    else if (char === "/") return index + 1;
+  }
+  return text.length;
+}
+
+/** After one of these (or at the start of a value), a slash starts a regex literal rather than dividing. */
+const BEFORE_REGEX = "(,=:[!&|?{};+-*%<>~^";
+
 /** The end of the expression at `start`: the next `,` or closing bracket at its own depth. */
 function skipExpression(text: string, start: number): number {
   let depth = 0;
   let index = start;
+  // The last character read as code, so a slash can tell a regex literal from a division.
+  let previous = "";
   while (index < text.length) {
     const char = text[index] as string;
     if (char === '"' || char === "'" || char === "`") {
       index = stringEnd(text, index);
+      previous = char;
       continue;
     }
-    // A comment is skipped whole, so a quote or bracket in it (`// we're on blue`) is not read as code.
-    if (char === "/" && (text[index + 1] === "/" || text[index + 1] === "*")) {
-      index = skipSpace(text, index);
-      continue;
+    if (char === "/") {
+      // A comment is skipped whole, so a quote or bracket in it (`// we're on blue`, `// old: {`) is not read as code.
+      if (text[index + 1] === "/" || text[index + 1] === "*") {
+        index = skipSpace(text, index);
+        continue;
+      }
+      // So is a regex literal, so a slash, quote or bracket in it (`/a\//`, `/it's/`) is not either.
+      if (previous === "" || BEFORE_REGEX.includes(previous)) {
+        index = regexEnd(text, index);
+        previous = "/";
+        continue;
+      }
     }
     if ("{[(".includes(char)) depth += 1;
     else if ("}])".includes(char)) {
       if (depth === 0) return index;
       depth -= 1;
     } else if (char === "," && depth === 0) return index;
+    if (!/\s/u.test(char)) previous = char;
     index += 1;
   }
   return index;

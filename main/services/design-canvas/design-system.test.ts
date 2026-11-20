@@ -136,41 +136,47 @@ test("a tailwind config is read only up to its value limit, and a file at the si
   assert.deepEqual(nested, { colors: [], fonts: [], sources: [] });
 });
 
-test("a quote in a comment or a regex literal inside a colors block does not hide the fonts after it", () => {
-  const detected = detectDesignSystem([
-    {
-      path: "tailwind.config.js",
-      text: [
-        "module.exports = { theme: {",
-        "  colors: { brand: '#123456', primary: colors.blue // we're on blue",
-        "  },",
-        "  fontFamily: { sans: ['Inter', 'sans-serif'] },",
-        "} };",
-      ].join("\n"),
-    },
-    {
-      path: "web/tailwind.config.js",
-      text: [
-        "module.exports = { theme: {",
-        "  colors: { ink: '#222222', match: /it's/.source /* don't */ },",
-        "  fontFamily: { display: ['Fraunces'] },",
-        "} };",
-      ].join("\n"),
-    },
-  ]);
+test("a quote, slash or bracket in a comment, regex literal or unclosed string inside a colors block does not hide what follows", () => {
+  const read = (lines: readonly string[]) => {
+    const detected = detectDesignSystem([{ path: "tailwind.config.js", text: lines.join("\n") }]);
+    return {
+      colors: detected.colors.map((color) => [color.name, color.value]),
+      fonts: detected.fonts.map((font) => [font.name, font.family]),
+    };
+  };
   assert.deepEqual(
-    detected.colors.map((color) => [color.name, color.value]),
-    [
-      ["brand", "#123456"],
-      ["ink", "#222222"],
-    ],
+    read([
+      "module.exports = { theme: {",
+      "  colors: { brand: '#123456', primary: colors.blue // we're on blue",
+      "  },",
+      "  fontFamily: { sans: ['Inter', 'sans-serif'] },",
+      "} };",
+    ]),
+    { colors: [["brand", "#123456"]], fonts: [["sans", "Inter"]] },
   );
   assert.deepEqual(
-    detected.fonts.map((font) => [font.name, font.family, font.source]),
-    [
-      ["sans", "Inter", "tailwind.config.js"],
-      ["display", "Fraunces", "web/tailwind.config.js"],
-    ],
+    read([
+      "module.exports = { theme: {",
+      "  colors: { ink: '#222222', match: /it's/.source /* don't */ },",
+      "  fontFamily: { display: ['Fraunces'] },",
+      "} };",
+    ]),
+    { colors: [["ink", "#222222"]], fonts: [["display", "Fraunces"]] },
+  );
+  // A slash after a backslash or inside a class, and a quote with no partner, stay inside their regex.
+  assert.deepEqual(
+    read(["colors:{ ink:'#222222', re: /a\\//, cls: /[/'(]/, x:{y:1}, two:'#444444' }, fontFamily:{display:['Fraunces']}"]),
+    { colors: [["ink", "#222222"], ["two", "#444444"]], fonts: [["display", "Fraunces"]] },
+  );
+  // A bracket in a comment is not counted.
+  assert.deepEqual(
+    read(["colors: { ink: '#222222', accent: mix(colors.blue, // old: {", "  colors.red), two: '#444444' },", "fontFamily: { mono: ['Berkeley Mono'] },"]),
+    { colors: [["ink", "#222222"], ["two", "#444444"]], fonts: [["mono", "Berkeley Mono"]] },
+  );
+  // A slash after `return` reads as a division, so the quote in `/it's/` opens a string; it ends at the line break.
+  assert.deepEqual(
+    read(["colors: { ink: '#222222', match: (() => { return /it's/", "  })(), two: '#444444' },", "fontFamily: { body: ['Literata'] },"]),
+    { colors: [["ink", "#222222"], ["two", "#444444"]], fonts: [["body", "Literata"]] },
   );
 });
 
