@@ -3824,6 +3824,9 @@ export const llmClient = {
     let piJournalStopNoted = false;
     let piJournalless = false;
     let piUpgradeCompactionEnabled = false;
+    // The on-demand list this run recorded (or found recorded) at its start,
+    // and the live list, so the run's end records what it loaded mid-run.
+    let onDemandDeclaredRecord: { recorded: readonly string[]; current: () => string[] } | undefined;
     let memoryApprovalContext: { scope: MemoryScope; provenance: MemoryProvenance } | undefined;
     try {
       const piUpgradePolicy = await piUpgradeRolloutStore.load();
@@ -4398,6 +4401,7 @@ export const llmClient = {
         if (declaredNow.join("\n") !== declaredBefore.join("\n")) {
           await promptJournal.appendCustomEntry(ON_DEMAND_DECLARED_ENTRY, { names: declaredNow });
         }
+        onDemandDeclaredRecord = { recorded: declaredNow, current: () => onDemandTools.declaredNames() };
       }
       const journalHistory = runTaintHistoryOfBranch(journalBranch);
       runTaint = new RunTaint({
@@ -5782,6 +5786,20 @@ export const llmClient = {
           );
         }
         return;
+      }
+      if (onDemandDeclaredRecord) {
+        // Tools loaded or called mid-run are recorded inside the turn's
+        // envelope, so a compaction that folds away the load keeps them
+        // declared, and a rolled-back turn takes the record with it.
+        const declaredAtEnd = onDemandDeclaredRecord.current();
+        if (declaredAtEnd.join("\n") !== onDemandDeclaredRecord.recorded.join("\n")) {
+          try {
+            await piJournal.appendCustomEntry(ON_DEMAND_DECLARED_ENTRY, { names: declaredAtEnd });
+          } catch (error) {
+            // The next run still finds the load in the transcript unless a compaction folds it away.
+            logger.warn("pi", `Could not record the on-demand tools of stream ${streamId}.`, error);
+          }
+        }
       }
       try {
         if (reconcileAbandonedVisibleAssistant) {

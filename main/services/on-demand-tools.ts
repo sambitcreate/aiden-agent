@@ -202,6 +202,12 @@ export interface OnDemandTools {
   ): AgentTool[];
   /** Declares the on-demand tools the transcript has loaded or called since. */
   prepare(context: AgentContext): Promise<AgentContext>;
+  /**
+   * The on-demand tools this run has declared so far, in order: the
+   * `initialTools` list, then what `prepare` added mid-run. It only grows
+   * within a run, so a run records it again at its end when it grew.
+   */
+  declaredNames(): string[];
 }
 
 /**
@@ -220,6 +226,8 @@ export function createOnDemandTools(
   const catalog = onDemand.map((tool) => `- ${tool.name}: ${onDemandCatalogLine(tool)}`).join("\n");
   // The chat as of this run's latest step, so a load answer leaves out guide parts already read.
   let transcript: readonly AgentMessage[] = [];
+  // The on-demand names declared so far this run, in declared order.
+  let declared: string[] = [];
 
   const loader: AgentTool = declarePiRuntimeReplay(
     {
@@ -275,6 +283,7 @@ export function createOnDemandTools(
       for (const name of onDemandToolsUsed(messages, available)) add(name);
       const wanted = new Set(preload);
       for (const tool of onDemand) if (wanted.has(tool.name)) add(tool.name);
+      declared = order;
       return [...everyday, loader, ...order.map((name) => byName.get(name)!)];
     },
     async prepare(context) {
@@ -286,12 +295,19 @@ export function createOnDemandTools(
         .filter((name) => !present.has(name))
         .map((name) => byName.get(name)!);
       if (additions.length === 0) return context;
+      for (const tool of additions) if (!declared.includes(tool.name)) declared = [...declared, tool.name];
       return { ...context, tools: [...(context.tools ?? []), ...additions] };
+    },
+    declaredNames() {
+      return [...declared];
     },
   };
 }
 
-/** Journal entry recording the on-demand tools a run declared from its start, in order. */
+/**
+ * Journal entry recording the on-demand tools a run declared, in order: at
+ * its start when the list changed, and again at its end when it grew mid-run.
+ */
 export const ON_DEMAND_DECLARED_ENTRY = "aiden.on-demand-declared.v1";
 
 /** The on-demand tool names in `tools`, in declared order: what a run records under `ON_DEMAND_DECLARED_ENTRY`. */
