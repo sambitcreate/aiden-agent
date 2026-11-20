@@ -282,6 +282,30 @@ final class AidenCatchUpQueueTests: XCTestCase {
         XCTAssertEqual(navigation.catchUp?.current, middle)
     }
 
+    /// A fork opened from the run's chat goes over it without ending the run,
+    /// so Back from the fork returns to the chat with Next still there, and
+    /// Next takes the fork away with the chat, on a stack and beside the list.
+    func testAForkOverTheRunsChatKeepsTheRun() {
+        let fork = F.id("fork", on: "studio")
+        for besideList in [false, true] {
+            let navigation = AidenAppNavigation()
+            navigation.besideList = besideList
+            XCTAssertEqual(navigation.startCatchUp(in: queue()), oldest)
+
+            navigation.push(.fork(fork, source: oldest), over: .chat(oldest))
+            XCTAssertEqual(navigation.catchUp?.current, oldest, "besideList: \(besideList)")
+            XCTAssertEqual(navigation.openChat, fork)
+
+            navigation.inboxPath.removeLast()
+            XCTAssertEqual(navigation.catchUp?.current, oldest, "Back from the fork, besideList: \(besideList)")
+
+            navigation.push(.fork(fork, source: oldest), over: .chat(oldest))
+            XCTAssertEqual(navigation.advanceCatchUp(in: queue()), middle)
+            XCTAssertEqual(navigation.inboxPath, [.chat(middle)], "besideList: \(besideList)")
+            XCTAssertEqual(navigation.catchUp?.current, middle)
+        }
+    }
+
     func testAnEmptiedQueueEndsOnTheFinishedScreen() {
         let navigation = openedRun()
 
@@ -380,11 +404,16 @@ final class AidenCatchUpQueueTests: XCTestCase {
         XCTAssertNil(navigation.catchUp)
     }
 
-    func testOpeningAnotherChatEndsTheRun() {
+    /// On a stack a chat from a link goes over the run's chat, which Back
+    /// returns to, so the run lasts. It ends once its chat leaves the path.
+    func testAChatOpenedOverTheRunsChatEndsTheRunOnlyWhenItsChatGoes() {
         let navigation = openedRun()
 
         navigation.open(.chat(F.id("from-a-link", on: "laptop")))
+        XCTAssertEqual(navigation.catchUp?.current, oldest)
+        XCTAssertEqual(navigation.openChat, F.id("from-a-link", on: "laptop"))
 
+        navigation.inboxPath = [.chat(F.id("from-a-link", on: "laptop"))]
         XCTAssertNil(navigation.catchUp)
     }
 

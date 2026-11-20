@@ -596,13 +596,17 @@ final class AidenAppShellTests: XCTestCase {
     func testAForkGoesOverItsChatAndBackReturnsToIt() {
         let navigation = besideList()
         navigation.openInboxRow(.chat(id("c1")))
-        navigation.push(.chat(id("f1")), over: .chat(id("c1")))
-        navigation.push(.chat(id("f2")), over: .chat(id("f1")))
-        XCTAssertEqual(navigation.inboxPath, [.chat(id("c1")), .chat(id("f1")), .chat(id("f2"))])
+        navigation.push(.fork(id("f1"), source: id("c1")), over: .chat(id("c1")))
+        navigation.push(.fork(id("f2"), source: id("f1")), over: .fork(id("f1"), source: id("c1")))
+        XCTAssertEqual(
+            navigation.inboxPath,
+            [.chat(id("c1")), .fork(id("f1"), source: id("c1")), .fork(id("f2"), source: id("f1"))]
+        )
         XCTAssertEqual(AidenSplitNavigationPath(navigation.inboxPath).selection, .chat(id("c1")), "The source stays highlighted")
+        XCTAssertEqual(navigation.openChat, id("f2"))
 
-        navigation.push(.chat(id("f3")), over: .chat(id("c1")))
-        XCTAssertEqual(navigation.inboxPath, [.chat(id("c1")), .chat(id("f3"))], "A fork of the source replaces what was over it")
+        navigation.push(.fork(id("f3"), source: id("c1")), over: .chat(id("c1")))
+        XCTAssertEqual(navigation.inboxPath, [.chat(id("c1")), .fork(id("f3"), source: id("c1"))], "A fork of the source replaces what was over it")
 
         navigation.openInboxRow(.chat(id("c2")))
         XCTAssertEqual(navigation.inboxPath, [.chat(id("c2"))])
@@ -611,12 +615,99 @@ final class AidenAppShellTests: XCTestCase {
         stack.open(.workspace(id("w1")))
         stack.push(.chat(id("c1")), over: .workspace(id("w1")))
         stack.tab = .bots
-        stack.push(.chat(id("f1")), over: .chat(id("c1")))
+        stack.push(.fork(id("f1"), source: id("c1")), over: .chat(id("c1")))
         XCTAssertEqual(stack.tab, .workspaces, "The fork opens where its source is")
-        XCTAssertEqual(stack.workspacesPath, [.workspace(id("w1")), .chat(id("c1")), .chat(id("f1"))])
+        XCTAssertEqual(stack.workspacesPath, [.workspace(id("w1")), .chat(id("c1")), .fork(id("f1"), source: id("c1"))])
 
-        stack.push(.chat(id("f9")), over: .chat(id("gone")))
-        XCTAssertEqual(stack.inboxPath, [.chat(id("f9"))], "With its source gone it opens as a link would")
+        stack.push(.fork(id("f9"), source: id("gone")), over: .chat(id("gone")))
+        XCTAssertEqual(stack.inboxPath, [.fork(id("f9"), source: id("gone"))], "With its source gone it opens as a link would")
+    }
+
+    /// A fork stays over its source whatever the layout does: opening the
+    /// display keeps the source highlighted with the fork in the detail,
+    /// closing it and opening it again change nothing, and so does a
+    /// relaunch. Back from the fork returns to the source.
+    func testAForkStaysOverItsSourceThroughTheDisplayAndARelaunch() {
+        let fork = AidenAppRoute.fork(id("f1"), source: id("c1"))
+        let stack = AidenAppNavigation()
+        stack.openInboxRow(.chat(id("c0")))
+        stack.openInboxRow(.chat(id("c1")))
+        stack.push(fork, over: .chat(id("c1")))
+
+        stack.besideList = true
+        XCTAssertEqual(stack.inboxPath, [.chat(id("c1")), fork], "The chat under the source goes, the source stays")
+        XCTAssertEqual(AidenSplitNavigationPath(stack.inboxPath).selection, .chat(id("c1")))
+        XCTAssertEqual(AidenSplitNavigationPath(stack.inboxPath).detailPath, [fork])
+
+        stack.besideList = false
+        stack.besideList = true
+        XCTAssertEqual(stack.inboxPath, [.chat(id("c1")), fork])
+
+        let store = AidenAppNavigationStore(defaults: AidenDemoHosts.isolatedDefaults())
+        store.save(stack.snapshot)
+        let restored = AidenAppNavigation(restoring: store.load(), installations: [studio])
+        restored.besideList = true
+        XCTAssertEqual(restored.inboxPath, [.chat(id("c1")), fork])
+
+        var split = AidenSplitNavigationPath(restored.inboxPath)
+        split.setDetailPath([])
+        restored.setPath(split.path, of: .inbox)
+        XCTAssertEqual(restored.inboxPath, [.chat(id("c1"))], "Back returns to the source")
+
+        // A chat that was opened over another isn't a fork of it.
+        let unrelated = AidenAppNavigation()
+        unrelated.openInboxRow(.chat(id("c1")))
+        unrelated.push(.fork(id("f1"), source: id("c9")), over: .chat(id("c1")))
+        unrelated.besideList = true
+        XCTAssertEqual(unrelated.inboxPath, [.fork(id("f1"), source: id("c9"))])
+    }
+
+    /// A fork and its chat are one screen: a link or Search result for the
+    /// fork goes back to it where it is, and opening it elsewhere takes it
+    /// off the tab that held it.
+    func testAForkAndItsChatAreOneScreen() {
+        let fork = AidenAppRoute.fork(id("f1"), source: id("c1"))
+        let navigation = besideList()
+        navigation.openInboxRow(.chat(id("c1")))
+        navigation.push(fork, over: .chat(id("c1")))
+        navigation.tab = .workspaces
+
+        navigation.open(.chat(id("f1")))
+        XCTAssertEqual(navigation.tab, .inbox)
+        XCTAssertEqual(navigation.inboxPath, [.chat(id("c1")), fork])
+
+        navigation.pick(.workspace(id("w1")), fromListOf: .workspaces)
+        navigation.setPath([.workspace(id("w1")), .chat(id("f1"))], of: .workspaces)
+        XCTAssertEqual(navigation.inboxPath, [.chat(id("c1"))])
+    }
+
+    /// A saved state with one conversation on two tabs opens with one screen
+    /// for it: the tab that was showing keeps it, or else the first tab.
+    func testARestoredConversationOnTwoTabsKeepsOneScreen() {
+        let snapshot = AidenAppNavigationSnapshot(
+            tab: .workspaces,
+            inboxPath: [.chat(id("c0")), .chat(id("c1")), .settings],
+            botsPath: [.bot(id("b1"))],
+            workspacesPath: [.workspace(id("w1")), .chat(id("c1"))],
+            savedPaths: [:]
+        )
+        let restored = AidenAppNavigation(restoring: snapshot, installations: [studio])
+        XCTAssertEqual(restored.workspacesPath, [.workspace(id("w1")), .chat(id("c1"))])
+        XCTAssertEqual(restored.inboxPath, [.chat(id("c0"))])
+        XCTAssertEqual(restored.botsPath, [.bot(id("b1"))])
+
+        let fromSearch = AidenAppNavigation(
+            restoring: AidenAppNavigationSnapshot(
+                tab: .search,
+                inboxPath: [.chat(id("c1")), .fork(id("f1"), source: id("c1"))],
+                botsPath: [],
+                workspacesPath: [.workspace(id("w1")), .chat(id("f1"))],
+                savedPaths: [:]
+            ),
+            installations: [studio]
+        )
+        XCTAssertEqual(fromSearch.inboxPath, [.chat(id("c1")), .fork(id("f1"), source: id("c1"))], "The first tab keeps it")
+        XCTAssertEqual(fromSearch.workspacesPath, [.workspace(id("w1"))])
     }
 
     /// Opening the display hands every list tab's path to its own list: the

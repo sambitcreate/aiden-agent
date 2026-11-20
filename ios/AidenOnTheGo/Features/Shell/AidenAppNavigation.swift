@@ -1,6 +1,7 @@
 import Foundation
 import Observation
 
+
 enum AidenAppTab: String, Codable, CaseIterable, Hashable {
     case inbox, bots, workspaces, search
 
@@ -21,6 +22,11 @@ enum AidenAppTab: String, Codable, CaseIterable, Hashable {
 
 enum AidenAppRoute: Hashable, Codable {
     case chat(AidenHostObjectID), bot(AidenHostObjectID), workspace(AidenHostObjectID)
+    /// A chat forked from `source`, opened over it, so it stays over its source
+    /// in every layout: beside the list the source keeps the highlight and Back
+    /// returns there (`AidenSplitNavigationPath.takingOver`). The same screen
+    /// as `.chat` of its ID (`screen`).
+    case fork(AidenHostObjectID, source: AidenHostObjectID)
     case machines, machine(instanceId: String), settings, scheduled, usage
     /// Where a Catch Up run ends. It means nothing after a relaunch, so it's never saved.
     case catchUpFinished(AidenCatchUpEnding)
@@ -28,7 +34,7 @@ enum AidenAppRoute: Hashable, Codable {
     /// The tab whose stack holds this route.
     var tab: AidenAppTab {
         switch self {
-        case .chat, .machines, .machine, .settings, .scheduled, .usage, .catchUpFinished: .inbox
+        case .chat, .fork, .machines, .machine, .settings, .scheduled, .usage, .catchUpFinished: .inbox
         case .bot: .bots
         case .workspace: .workspaces
         }
@@ -37,9 +43,23 @@ enum AidenAppRoute: Hashable, Codable {
     /// A chat or a Bot: a row the Inbox list can select.
     var isConversation: Bool {
         switch self {
-        case .chat, .bot: true
+        case .chat, .fork, .bot: true
         default: false
         }
+    }
+
+    /// The chat a route shows, a fork's included.
+    var chatID: AidenHostObjectID? {
+        switch self {
+        case .chat(let id), .fork(let id, _): id
+        default: nil
+        }
+    }
+
+    /// The screen the route draws. A fork is its chat's screen, so one
+    /// conversation never has two screens, forked or not.
+    var screen: AidenAppRoute {
+        if case .fork(let id, _) = self { .chat(id) } else { self }
     }
 
     /// What a link asks for, on the machine it names or else the selected one.
@@ -65,7 +85,7 @@ enum AidenAppRoute: Hashable, Codable {
     /// The machine the route belongs to. Nil for a place that has none.
     var instanceId: String? {
         switch self {
-        case .chat(let id), .bot(let id), .workspace(let id): id.instanceId
+        case .chat(let id), .fork(let id, _), .bot(let id), .workspace(let id): id.instanceId
         case .machine(let instanceId): instanceId
         case .machines, .settings, .scheduled, .usage, .catchUpFinished: nil
         }
@@ -74,7 +94,7 @@ enum AidenAppRoute: Hashable, Codable {
     /// False for a route to a machine that's gone, or to an older pairing of it.
     func isReachable(on installations: [AidenInstallation]) -> Bool {
         switch self {
-        case .chat(let id), .bot(let id), .workspace(let id):
+        case .chat(let id), .fork(let id, _), .bot(let id), .workspace(let id):
             installations.contains { $0.id == id.instanceId && $0.deviceId == id.deviceId }
         case .machine(let instanceId):
             installations.contains { $0.id == instanceId }
@@ -86,7 +106,7 @@ enum AidenAppRoute: Hashable, Codable {
     /// True for a route to something on this machine.
     fileprivate func belongs(to instanceId: String) -> Bool {
         switch self {
-        case .chat(let id), .bot(let id), .workspace(let id): id.instanceId == instanceId
+        case .chat(let id), .fork(let id, _), .bot(let id), .workspace(let id): id.instanceId == instanceId
         case .machine(let id): id == instanceId
         case .machines, .settings, .scheduled, .usage, .catchUpFinished: false
         }
@@ -306,10 +326,14 @@ struct AidenSplitNavigationPath: Equatable {
     /// A stack's path taken over by the tab's list: the route nearest the top
     /// that the list has a row for becomes the selection and only the screens
     /// above it stay, so the highlighted row is what's on screen. Pages under
-    /// it, and rows it was opened over, go. A path with no such route is kept
-    /// as it is.
+    /// it, and rows it was opened over, go. A fork stays over the chat it came
+    /// from, so that chat keeps the highlight and Back from the fork returns
+    /// to it. A path with no such route is kept as it is.
     static func takingOver(_ path: [AidenAppRoute], on tab: AidenAppTab) -> [AidenAppRoute] {
-        guard let index = path.lastIndex(where: tab.listsRow) else { return path }
+        guard var index = path.lastIndex(where: tab.listsRow) else { return path }
+        while index > 0, case .fork(_, let source) = path[index], path[index - 1].chatID == source {
+            index -= 1
+        }
         return Array(path[index...])
     }
 
@@ -323,7 +347,12 @@ struct AidenSplitNavigationPath: Equatable {
     /// showing the list is Back, which takes one screen off: from the detail's
     /// root that empties the path, and from a screen pushed over it, such as a
     /// workspace's chat, it returns to the one underneath. A closed iPhone Duo
-    /// reports either Back this way, without writing the detail stack's path.
+    /// reports either Back this way. Logged on the iOS 27.1 simulator, the
+    /// side rail's Back and the edge swipe from [workspace, chat] write the
+    /// column `.sidebar` first, then sometimes the detail stack's path [],
+    /// which the path already is by then. From a chat at the detail's root
+    /// only the column write comes. Choosing the showing tab again writes the
+    /// tab before the same column write (`AidenAppNavigation.chooseTab`).
     /// Beside the list the split's writes are its own and change nothing, and
     /// so does showing the detail, which only a chosen route does.
     static func path(
@@ -418,9 +447,24 @@ final class AidenAppNavigation {
 
     init(restoring snapshot: AidenAppNavigationSnapshot, installations: [AidenInstallation]) {
         tab = snapshot.tab
-        inboxPath = snapshot.inboxPath
-        botsPath = snapshot.botsPath
-        workspacesPath = snapshot.workspacesPath
+        // One conversation, one screen, as `setPath` keeps it: the tab that
+        // was showing keeps a conversation two tabs held, then the first.
+        var paths: [AidenAppTab: [AidenAppRoute]] = [
+            .inbox: snapshot.inboxPath, .bots: snapshot.botsPath, .workspaces: snapshot.workspacesPath,
+        ]
+        var shown = Set<AidenAppRoute>()
+        let showingFirst = AidenAppTab.listTabs.filter { $0 == snapshot.tab } + AidenAppTab.listTabs.filter { $0 != snapshot.tab }
+        for tab in showingFirst {
+            var path = paths[tab] ?? []
+            if let repeated = path.firstIndex(where: { $0.isConversation && shown.contains($0.screen) }) {
+                path.removeSubrange(repeated...)
+            }
+            shown.formUnion(path.filter(\.isConversation).map(\.screen))
+            paths[tab] = path
+        }
+        inboxPath = paths[.inbox] ?? []
+        botsPath = paths[.bots] ?? []
+        workspacesPath = paths[.workspaces] ?? []
         savedPaths = snapshot.savedPaths
         for tab in AidenAppTab.listTabs { rememberSelection(of: tab) }
         dropRoutes(outside: installations)
@@ -464,8 +508,7 @@ final class AidenAppNavigation {
 
     /// The chat on screen: the top of the tab that's showing.
     var openChat: AidenHostObjectID? {
-        guard case .chat(let id)? = path(of: tab).last else { return nil }
-        return id
+        path(of: tab).last?.chatID
     }
 
     /// The chat the Inbox counts as open, which it keeps listed and never calls
@@ -473,16 +516,13 @@ final class AidenAppNavigation {
     /// over it, since its row is still highlighted and it's still the detail.
     var inboxOpenChat: AidenHostObjectID? {
         if let openChat { return openChat }
-        guard besideList, tab == .inbox, case .chat(let id)? = inboxPath.first else { return nil }
-        return id
+        guard besideList, tab == .inbox else { return nil }
+        return inboxPath.first?.chatID
     }
 
     /// A chat or a Bot on top of the tab that's showing: either has a composer.
     var showsConversation: Bool {
-        switch path(of: tab).last {
-        case .chat?, .bot?: true
-        default: false
-        }
+        path(of: tab).last?.isConversation == true
     }
 
     /// The tab's path. Search has none.
@@ -500,7 +540,7 @@ final class AidenAppNavigation {
     /// a push, or a link the stack followed.
     func setPath(_ path: [AidenAppRoute], of tab: AidenAppTab) {
         let current = self.path(of: tab)
-        for route in path where route.isConversation && !current.contains(route) {
+        for route in path where route.isConversation && !current.contains(where: { $0.screen == route.screen }) {
             for other in AidenAppTab.listTabs where other != tab {
                 var otherPath = self.path(of: other)
                 Self.remove(route, from: &otherPath)
@@ -546,7 +586,7 @@ final class AidenAppNavigation {
     /// two screens.
     func open(_ route: AidenAppRoute, on tab: AidenAppTab) {
         chatStartingVoice = nil
-        let holders = AidenAppTab.allCases.filter { path(of: $0).contains(route) }
+        let holders = AidenAppTab.allCases.filter { path(of: $0).contains { $0.screen == route.screen } }
         let tab = holders.contains(tab) ? tab : holders.first ?? tab
         self.tab = tab
         show(route, onTab: tab)
@@ -621,16 +661,19 @@ final class AidenAppNavigation {
         return first
     }
 
-    /// Next. The chat on screen makes way for the next one, so Back always leads
+    /// Next. The chat on screen, with anything opened over it, makes way for
+    /// the next one, so Back always leads
     /// to the Inbox and a long run holds one live chat, not all of them. Returns
     /// the chat opened, or nil when that was the last and the run is over.
     @discardableResult
     func advanceCatchUp(in queue: AidenCatchUpQueue) -> AidenHostObjectID? {
         guard var run = catchUp else { return nil }
+        // The chat goes with whatever was opened over it, such as a fork.
+        let leaving = inboxPath.firstIndex { run.holds($0) }
         let next = run.advance(in: queue)
         // Off for the swap, which would otherwise read as leaving the run.
         catchUp = nil
-        inboxPath.removeLast()
+        if let leaving { inboxPath.removeSubrange(leaving...) }
         guard let next else {
             open(.catchUpFinished(run.ending(in: queue)))
             return nil
@@ -640,9 +683,11 @@ final class AidenAppNavigation {
         return next
     }
 
+    /// The run lasts while its chat is on the Inbox path, under a fork or a
+    /// page opened over it too, so Back from those returns to it with Next.
     private func endCatchUpIfLeft() {
         guard let catchUp else { return }
-        if inboxPath.last != .chat(catchUp.current), inboxPath.last != .bot(catchUp.current) { self.catchUp = nil }
+        if !inboxPath.contains(where: { catchUp.holds($0) }) { self.catchUp = nil }
     }
 
     /// An Inbox, accessory or running-sheet row, chat or Bot, opens on the Inbox
@@ -661,10 +706,11 @@ final class AidenAppNavigation {
 
     /// On a stack the route goes on top, or is gone back to. Beside the list a
     /// route the tab's list has a row for becomes the selection and the detail
-    /// starts over on it.
+    /// starts over on it, unless it's already on the path: a fork over its
+    /// source is gone back to there, so its source keeps the highlight.
     private func show(_ route: AidenAppRoute, onTab tab: AidenAppTab) {
         var path = path(of: tab)
-        if besideList, tab.listsRow(for: route) {
+        if besideList, tab.listsRow(for: route), !path.contains(where: { $0.screen == route.screen }) {
             var split = AidenSplitNavigationPath(path)
             split.select(route)
             path = split.path
@@ -690,13 +736,15 @@ final class AidenAppNavigation {
         lastSelections = lastSelections.filter { $0.value.isReachable(on: installations) }
     }
 
+    /// Takes `route`'s screen off the path, with everything above it. A fork
+    /// and its chat are the same screen.
     private static func remove(_ route: AidenAppRoute, from path: inout [AidenAppRoute]) {
-        guard let index = path.firstIndex(of: route) else { return }
+        guard let index = path.firstIndex(where: { $0.screen == route.screen }) else { return }
         path.removeSubrange(index...)
     }
 
     private static func show(_ route: AidenAppRoute, on path: inout [AidenAppRoute]) {
-        if let index = path.firstIndex(of: route) {
+        if let index = path.firstIndex(where: { $0.screen == route.screen }) {
             path.removeSubrange(path.index(after: index)...)
         } else {
             path.append(route)
@@ -847,5 +895,12 @@ final class AidenProductNavigationStore {
                       || "._:-".unicodeScalars.contains(scalar)
               }) else { return nil }
         return value
+    }
+}
+
+private extension AidenCatchUpRun {
+    /// The route of the run's chat, as a chat or as a Bot.
+    func holds(_ route: AidenAppRoute) -> Bool {
+        route == .chat(current) || route == .bot(current)
     }
 }

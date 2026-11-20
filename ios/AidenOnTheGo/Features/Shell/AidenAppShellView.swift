@@ -442,7 +442,7 @@ struct AidenAppShellView: View {
     @ViewBuilder
     private func routeScreen(for route: AidenAppRoute) -> some View {
         switch route {
-        case .chat(let id):
+        case .chat(let id), .fork(let id, _):
             AidenChatRouteView(
                 coordinator: coordinator,
                 id: id,
@@ -461,7 +461,7 @@ struct AidenAppShellView: View {
                     home?.markViewed(chatID: fork.id)
                     // Over the chat it came from, so Back returns there.
                     let forkID = AidenHostObjectID(instanceId: id.instanceId, deviceId: id.deviceId, objectId: fork.id)
-                    navigation.push(.chat(forkID), over: route)
+                    navigation.push(.fork(forkID, source: id), over: route)
                 },
                 onBotChat: { bot in navigation.replace(route, with: .bot(bot)) }
             )
@@ -553,12 +553,24 @@ final class AidenChatRouteModel {
     private(set) var state = State.loading
     @ObservationIgnored private let cache: AidenChatCache
     @ObservationIgnored private let receipt: AidenChat?
+    @ObservationIgnored private var loading: Task<Void, Never>?
 
     /// `receipt` is the chat as the machine just created it, when there is one.
     init(id: AidenHostObjectID, cache: AidenChatCache = .shared, receipt: AidenChat? = nil) {
         self.id = id
         self.cache = cache
         self.receipt = receipt
+    }
+
+    /// Loads again, in place of any load under way: the screen appeared, or
+    /// its machine's connection changed. The load is the model's, not the
+    /// view's, so it isn't cancelled when SwiftUI reports the screen gone. A
+    /// chat a link chose on a tab that wasn't showing appeared and disappeared
+    /// in one update as the tab came forward, and never appeared again, so a
+    /// view task's load was cancelled and the chat spun for good.
+    func startLoading(coordinator: AidenRemoteCoordinator) {
+        loading?.cancel()
+        loading = Task { [weak self] in await self?.load(coordinator: coordinator) }
     }
 
     func load(coordinator: AidenRemoteCoordinator) async {
@@ -609,7 +621,7 @@ final class AidenChatRouteModel {
             state = .unavailable(refusal)
             return
         }
-        // Cancelled: the view is loading again, and that load decides.
+        // Cancelled: a newer load is under way, and that load decides.
         guard !Task.isCancelled else { return }
         state = coordinator.isLive(owner)
             ? .ready(chat, owner: owner)
@@ -723,8 +735,8 @@ private struct AidenChatRouteView: View {
         .onPreferenceChange(AidenChatHoldsAttachmentsKey.self) { holds in
             holdsAttachments = holds
         }
-        .task(id: coordinator.hosts.connection(for: model.id.instanceId)?.connectionState) {
-            await model.load(coordinator: coordinator)
+        .onChange(of: coordinator.hosts.connection(for: model.id.instanceId)?.connectionState, initial: true) {
+            model.startLoading(coordinator: coordinator)
         }
     }
 }
@@ -835,7 +847,8 @@ private struct AidenSplitTab<Sidebar: View>: View {
                 // for a machine's status line, a row's title and the bar's
                 // title with its buttons on an iPhone Duo's inner display.
                 // The system's own choice varied between launches.
-                .navigationSplitViewColumnWidth(min: 320, ideal: 400, max: 420)        } detail: {
+                .navigationSplitViewColumnWidth(min: 320, ideal: 400, max: 420)
+        } detail: {
             detail
                 .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { columns.detailFrame = $0 }
         }
@@ -903,23 +916,17 @@ private struct AidenSplitTab<Sidebar: View>: View {
             // Beside the list a conversation keeps the tabs up, as the list
             // is; collapsed it's any stack's screen.
             .navigationDestination(for: AidenAppRoute.self) { screen($0, besideList) }
-            .background { AidenDetailRootAnchor() }
         }
+        // A new stack whenever the split collapses or expands. Collapsing
+        // builds a new navigation controller for the single stack, and the
+        // side rail's Back (a closed iPhone Duo's floating bar) kept the old
+        // stack's state: a conversation chosen beside the list showed no Back
+        // at all, and one pushed in a workspace showed a Back that wrote
+        // nothing, while the edge swipe still went back (iOS 27.1 simulator:
+        // open, choose a chat or a workspace chat or a Bot, close). The path
+        // is the model's, so the new stack shows the same screens.
+        .id(besideList)
     }
-}
-
-/// An empty UIKit view behind the detail column's root. Without one, a Bot
-/// chosen beside the list loses Back from the side rail once closing an
-/// iPhone Duo collapses the split, though the edge swipe still goes back
-/// (iOS 27.1 simulator). A chat is unaffected. Nothing reads this view.
-private struct AidenDetailRootAnchor: UIViewRepresentable {
-    func makeUIView(context: Context) -> UIView {
-        let view = UIView()
-        view.isUserInteractionEnabled = false
-        return view
-    }
-
-    func updateUIView(_ view: UIView, context: Context) {}
 }
 
 /// Reads the shell's own window: its scene, for the orientation, and whether
