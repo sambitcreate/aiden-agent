@@ -32,6 +32,8 @@ const REQUIRED_HELPERS = Object.freeze([
   "aiden-subagent-file-mutator",
   "aiden-subagent-shell-runner",
 ]);
+/** A root-run shell script, so it is outside the ELF/glibc checks of REQUIRED_HELPERS. */
+const LINUX_PACKAGE_INSTALL_HELPER = "aiden-package-install";
 const REQUIRED_GENERATIVE_UI_LIBRARY_FILES = Object.freeze([
   "chart.umd.min.js",
   "plotly.min.js",
@@ -221,7 +223,7 @@ export function assertLinuxBuildConfiguration(packageJson) {
   const helperDestinations = new Set(
     (linux.extraFiles ?? []).map((entry) => entry.to),
   );
-  for (const helper of REQUIRED_HELPERS) {
+  for (const helper of [...REQUIRED_HELPERS, LINUX_PACKAGE_INSTALL_HELPER]) {
     if (!helperDestinations.has(`Helpers/${helper}`)) {
       throw new Error(`Linux package config is missing ${helper}.`);
     }
@@ -280,6 +282,22 @@ export async function discoverLinuxPackage(
   return candidates[0];
 }
 
+/** Files a DEB or RPM would install writable by other users (symlinks excluded). */
+export async function findSharedWritableEntries(root) {
+  const found = [];
+  const pending = [root];
+  while (pending.length > 0) {
+    const current = pending.pop();
+    const info = await lstat(current);
+    if (info.isSymbolicLink()) continue;
+    if ((info.mode & 0o022) !== 0) found.push(path.relative(root, current) || ".");
+    if (info.isDirectory()) {
+      for (const entry of await readdir(current)) pending.push(path.join(current, entry));
+    }
+  }
+  return found.sort();
+}
+
 export async function verifyLinuxPackage(appDirectory) {
   const root = path.resolve(appDirectory);
   const executable = path.join(root, "aiden-agent");
@@ -288,12 +306,20 @@ export async function verifyLinuxPackage(appDirectory) {
   await assertRegularFile(executable, { executable: true });
   await assertRegularFile(asar);
   await verifyAidenFuses(executable);
+  const sharedWritable = await findSharedWritableEntries(root);
+  if (sharedWritable.length > 0) {
+    throw new Error(
+      `Linux package files are writable by other users: ${sharedWritable.slice(0, 10).join(", ")}${sharedWritable.length > 10 ? ", …" : ""}`,
+    );
+  }
 
   for (const helper of REQUIRED_HELPERS) {
     await assertRegularFile(path.join(root, "Helpers", helper), {
       executable: true,
     });
   }
+  // Root runs this to install DEB/RPM updates; it must ship executable.
+  await assertRegularFile(path.join(root, "Helpers", LINUX_PACKAGE_INSTALL_HELPER), { executable: true });
   for (const forbidden of [
     path.join(root, "Helpers", "CuaDriver.app"),
     path.join(root, "Helpers", "Aiden Foundation Models Helper.app"),

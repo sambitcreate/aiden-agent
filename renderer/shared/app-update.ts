@@ -40,7 +40,8 @@ export type AppUpdateRestartResult =
     }
   | {
       accepted: false;
-      reason: "busy" | "not-ready" | "unavailable";
+      /** install-*: a Linux DEB/RPM update whose password prompt was closed, or whose install failed. */
+      reason: "busy" | "not-ready" | "unavailable" | "install-cancelled" | "install-failed";
     };
 
 export const IDLE_APP_UPDATE_SNAPSHOT: AppUpdateSnapshot = {

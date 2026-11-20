@@ -184,8 +184,8 @@ The checked-in models.dev snapshot is refreshed only through `npm run models:ref
 Aiden Agent is a beta desktop release for macOS and Linux. Each release publishes
 signed macOS DMG/ZIP builds and verified Linux AppImage/DEB/RPM builds for x64 and
 arm64, with checksums. A separate manual workflow builds non-release Linux
-installers for testing. macOS and writable Linux AppImages update in-app; `.deb`
-and `.rpm` installs update through their package manager. See
+installers for testing. macOS, writable Linux AppImages and `.deb`/`.rpm` installs
+update in-app; a `.deb` or `.rpm` update asks for your password before installing. See
 [the macOS release guide](docs/releasing.md) and [Linux guide](docs/linux.md).
 
 The canonical website download is the stable
