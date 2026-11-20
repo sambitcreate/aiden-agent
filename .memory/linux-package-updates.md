@@ -48,4 +48,5 @@ installed through real pkexec + the helper, dpkg-query read 0.67.0, staging
 folder removed; a wrong expected version was refused before pkexec ran. Not tested:
 the GNOME password dialog itself, RPM on a real Fedora, the full electron-updater
 download from a published release (needs the first release with this change).
-Existing 0.66.0 .deb users must install the next release once by hand.
+v0.67.0 shipped 2026-11-20 without this PR, so .deb/.rpm users on 0.67.0 or
+earlier must install the first release after 0.67.0 once by hand.
