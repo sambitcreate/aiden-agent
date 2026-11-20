@@ -14,6 +14,45 @@ import {
   type AppControlTopic,
 } from "../../renderer/shared/app-controls.js";
 
+/** The app-control tools a chat always declares, in this order. */
+export const AIDEN_APP_TOOL_NAMES = [
+  "aiden_help",
+  "aiden_get_state",
+  "aiden_show_controls",
+  "aiden_open",
+  "aiden_set_preference",
+] as const;
+
+/**
+ * Why `name` cannot run in this turn, or undefined when it can. Every app tool
+ * is declared in every turn so the tool list stays the same whether the chat
+ * is answered on this computer or from a paired device; what a paired device
+ * cannot reach is refused here, before the call runs.
+ */
+export function aidenAppToolUnavailableReason(
+  name: string,
+  args: unknown,
+  turn: { liveState: boolean; canOpen: boolean },
+): string | undefined {
+  if (!(AIDEN_APP_TOOL_NAMES as readonly string[]).includes(name)) return undefined;
+  const remoteTopics = [...REMOTE_APP_CONTROL_TOPICS].join(", ");
+  if (!turn.liveState) {
+    if (name === "aiden_get_state" || name === "aiden_set_preference" || name === "aiden_open") {
+      return `${name} is not available in this turn: the request came from a paired device. Open the chat on this computer to read or change settings, or show one of these panels: ${remoteTopics}.`;
+    }
+    if (name === "aiden_show_controls") {
+      const topic = (args as Record<string, unknown> | undefined)?.topic;
+      if (typeof topic !== "string" || !REMOTE_APP_CONTROL_TOPICS.has(topic as AppControlTopic)) {
+        return `This settings panel is not available in this turn: the request came from a paired device, which shows only these panels: ${remoteTopics}.`;
+      }
+    }
+  }
+  if (name === "aiden_open" && !turn.canOpen) {
+    return "aiden_open is not available in this turn: no Aiden window asked, so there is no Settings page to open.";
+  }
+  return undefined;
+}
+
 export function createAidenAppTools(options: {
   service: AppControlsService;
   context: AppControlContext;
@@ -26,6 +65,12 @@ export function createAidenAppTools(options: {
     content: [{ type: "text" as const, text: JSON.stringify(value) }],
     details: null,
   });
+  const turn = { liveState: options.liveState !== false, canOpen: options.open !== undefined };
+  /** The host refuses these calls before they run; this keeps the tool closed on its own. */
+  const refuseUnavailable = (name: string, args: unknown) => {
+    const reason = aidenAppToolUnavailableReason(name, args, turn);
+    if (reason) throw new Error(reason);
+  };
   return [
     declarePiRuntimeReplay(
       {
@@ -48,6 +93,7 @@ export function createAidenAppTools(options: {
           topic: Type.Union(APP_CONTROL_TOPICS.map((topic) => Type.Literal(topic))),
         }),
         execute: async (_id, p) => {
+          refuseUnavailable("aiden_get_state", p);
           if (!isAppControlTopic((p as Record<string, unknown>).topic))
             throw new Error("Unknown settings topic.");
           return result({
@@ -69,15 +115,12 @@ export function createAidenAppTools(options: {
         description:
           "Show real interactive settings in chat. Use when users ask to see settings or how to configure a feature. Displaying a panel changes nothing.",
         parameters: Type.Object({
-          // A phone chat can show only the cards phones understand.
-          topic: Type.Union(
-            (options.liveState === false
-              ? APP_CONTROL_TOPICS.filter((topic) => REMOTE_APP_CONTROL_TOPICS.has(topic))
-              : APP_CONTROL_TOPICS
-            ).map((topic) => Type.Literal(topic)),
-          ),
+          // Every topic in every turn; a phone chat's call for a card phones
+          // do not understand is refused before it runs.
+          topic: Type.Union(APP_CONTROL_TOPICS.map((topic) => Type.Literal(topic))),
         }),
         execute: async (_id, p, signal) => {
+          refuseUnavailable("aiden_show_controls", p);
           if (
             !isAppControlTopic((p as Record<string, unknown>).topic) ||
             (options.liveState === false &&
@@ -108,24 +151,22 @@ export function createAidenAppTools(options: {
       },
       "never",
     ),
-    ...(options.open
-      ? [
-          declarePiRuntimeReplay(
-            {
-              name: "aiden_open",
-              label: "Open Aiden settings",
-              description:
-                "Open a supported Settings section in the Aiden Agent window that asked. Report opened only after the renderer confirms navigation. This grants no feature or OS permission.",
-              parameters: Type.Object({
-                destination: Type.Union(AIDEN_APP_DESTINATIONS.map((value) => Type.Literal(value))),
-              }),
-              execute: async (_id, p, signal) =>
-                result(await options.open!((p as Record<string, unknown>).destination, signal)),
-            },
-            "never",
-          ),
-        ]
-      : []),
+    declarePiRuntimeReplay(
+      {
+        name: "aiden_open",
+        label: "Open Aiden settings",
+        description:
+          "Open a supported Settings section in the Aiden Agent window that asked. Report opened only after the renderer confirms navigation. This grants no feature or OS permission.",
+        parameters: Type.Object({
+          destination: Type.Union(AIDEN_APP_DESTINATIONS.map((value) => Type.Literal(value))),
+        }),
+        execute: async (_id, p, signal) => {
+          refuseUnavailable("aiden_open", p);
+          return result(await options.open!((p as Record<string, unknown>).destination, signal));
+        },
+      },
+      "never",
+    ),
     declarePiRuntimeReplay(
       {
         name: "aiden_set_preference",
@@ -139,6 +180,7 @@ export function createAidenAppTools(options: {
           operationId: Type.String(),
         }),
         execute: async (_id, p, signal) => {
+          refuseUnavailable("aiden_set_preference", p);
           if (signal?.aborted) throw new Error("Change cancelled.");
           const operation = parseAppControlOperation(p);
           // Workspace mutations settle every generation. The generation awaiting
@@ -163,10 +205,5 @@ export function createAidenAppTools(options: {
       },
       "never",
     ),
-  ].filter(
-    (tool) =>
-      options.liveState !== false ||
-      tool.name === "aiden_help" ||
-      tool.name === "aiden_show_controls",
-  );
+  ];
 }

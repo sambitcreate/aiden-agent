@@ -13,20 +13,17 @@ test("desktop canonical Bot photos cross IPC only through the renderer projectio
   assert.match(handlers, /projectBotAvatarForRenderer/u);
 });
 
-test("generation resolves persisted bot identity and leaves ordinary prompts unchanged", () => {
+// How the Bot contract joins the prompt is covered behaviorally in chat-prompt-assembly.test.ts.
+test("generation resolves persisted bot identity", () => {
   const client = readFileSync(new URL("../services/llm-client.ts", import.meta.url), "utf8");
   assert.match(
     client,
     /resolveBotForGeneration\([\s\S]{0,140}\(botId\) =>\s*botStore\.get\(botId\)/u,
   );
-  assert.match(client, /const botSystemPrompt = authoritativeBot/u);
-  assert.match(client, /\? withBotRuntimeInstructions\(/u);
-  assert.match(client, /: baseSystemPrompt;/u);
   assert.match(client, /botRuntimeAuthority\.admit\(\{/u);
   assert.match(client, /prepareBotGeneration\(\{/u);
   assert.match(client, /selectCanonicalBotChat\([\s\S]{0,100}chatStore\.listByBot/u);
   assert.match(client, /revalidateBeforeEffect\(\)/u);
-  assert.match(client, /resolvePiAgentRuntimeContributionSnapshot\(\s*botSystemPrompt,/u);
 });
 
 test("copy, fork, and delete route Bot chats through the transaction-owned service", () => {

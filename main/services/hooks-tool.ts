@@ -68,7 +68,7 @@ export interface HooksToolSurface {
   unattended: boolean;
   /**
    * A turn a phone or paired Mac drives. Its approvals reach that device,
-   * which may only deny a hook proposal, so the tool is withheld.
+   * which may only deny a hook proposal, so the tool's calls are refused.
    */
   remoteAudience?: boolean;
   excludedToolNames?: ReadonlySet<string>;
@@ -94,6 +94,23 @@ export function offersHooksTool(surface: HooksToolSurface): boolean {
     surface.remoteAudience !== true &&
     surface.excludedToolNames?.has(HOOKS_TOOL_NAME) !== true
   );
+}
+
+/**
+ * Why a hooks call cannot run in this turn, or undefined when it can. The
+ * tool is declared on every turn of a chat that runs hooks; an unattended or
+ * remote turn refuses its calls, because only the owner's card on this
+ * computer may approve a hook proposal.
+ */
+export function hooksToolUnavailableReason(name: string, surface: HooksToolSurface): string | undefined {
+  if (name !== HOOKS_TOOL_NAME) return undefined;
+  if (surface.unattended) {
+    return `${HOOKS_TOOL_NAME} is not available in this turn: nobody is watching this follow-up to approve a hook. Mention the hook in your reply instead.`;
+  }
+  if (surface.remoteAudience === true) {
+    return `${HOOKS_TOOL_NAME} is not available in this turn: the request came from a paired device, and hooks are approved only on this computer. Ask the person to open the chat here.`;
+  }
+  return undefined;
 }
 
 export interface HooksToolApprovalCard {

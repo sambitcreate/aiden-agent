@@ -23,7 +23,7 @@ import { botComputerCandidates } from "./bot-computer-candidates.js";
 import { createBotRegistry, type BotExtensionDeps } from "./bot-extension.js";
 import { createBotHandoffs, ruleHandoffRequest } from "./bot-handoffs.js";
 import { ruleAskUnattendedBlock } from "./bot-handoff-text.js";
-import { BOT_OLDER_COMPUTER_CAPTURE_NOTE } from "./bot-images.js";
+import { OLDER_COMPUTER_SCREENSHOT_NOTE } from "../screenshot-trimming.js";
 import type { BotToolCandidate } from "./bot-tool-assembly.js";
 import { botIngressAllowsTool, botToolApprovalSummary, botToolVerdict, type BotToolFacts } from "./bot-tool-policy.js";
 import { assemblyDeps, assemblyState, FULL_GRANTS, testAuthority, type AssemblyDepsOptions } from "./test-support/assembly-fixtures.js";
@@ -86,16 +86,20 @@ test("the computer needs the Bot computer capability and the Bot's own computer,
   assert.equal((await botToolVerdict("computer_use", facts(["computer"], true))).allowed, false);
 });
 
-test("the computer's guidance sends secrets to hand_off only on turns that have hand_off", async () => {
+test("the computer's guidance is one text for every turn, and hand_off is refused where nobody can take it", async () => {
   const control = createBotComputerControl();
   const state = createBotComputerToolState(control);
   const unused = async (): Promise<never> => {
     throw new Error("not called");
   };
-  for (const turn of [{}, { routine: true }, { telegram: true }] as const) {
+  const descriptions = new Set<string>();
+  for (const [turn, requestId] of [
+    [{}, "req-1"],
+    [{ routine: true }, "routine:daily:1"],
+    [{ telegram: true }, "tg:42:1"],
+  ] as const) {
     const routine = "routine" in turn;
     const unattended = routine || "telegram" in turn;
-    // As production's sources build it for that turn.
     const tool = createBotComputerTool(
       BOT,
       {
@@ -107,11 +111,15 @@ test("the computer's guidance sends secrets to hand_off only on turns that have 
       },
       { routine, unattended },
     );
-    const handOffOffered = (await botToolVerdict("hand_off", facts(["computer"], true), turn)).allowed;
-    assert.equal(tool.description.includes("hand_off"), handOffOffered, `${JSON.stringify(turn)}: never a tool the turn lacks`);
+    descriptions.add(tool.description);
+    // The guidance names hand_off, so the call itself must be refused on an unattended turn.
+    const allowed =
+      (await botToolVerdict("hand_off", facts(["computer"], true), turn)).allowed && botIngressAllowsTool("hand_off", [requestId]);
+    assert.equal(allowed, !unattended, `${JSON.stringify(turn)}: hand_off runs only where a person can take it`);
     // Either way the Bot is kept away from passwords, codes and payments.
     assert.match(tool.description, /passwords, codes/u);
   }
+  assert.equal(descriptions.size, 1, "every turn declares the same guidance");
 });
 
 test("the rules read a computer step's stated intent; looking and invalid calls classify nothing", () => {
@@ -544,7 +552,7 @@ test("an everyday step in its own computer runs without a card", async () => {
   }
 });
 
-test("a Bot's request carries only its newest three captures, and its transcript keeps every one", async () => {
+test("a Bot's request carries its captures until a ninth cuts them to the newest three, and its transcript keeps every one", async () => {
   const computer = fakeComputer();
   const seen: Array<{ images: number; notes: number }> = [];
   const step = (reply: () => ReturnType<typeof fauxAssistantMessage>) => (context: { messages: readonly Message[] }) => {
@@ -554,23 +562,23 @@ test("a Bot's request carries only its newest three captures, and its transcript
       if (message.role !== "toolResult" || message.toolName !== "computer") continue;
       for (const part of message.content) {
         if (part.type === "image") images += 1;
-        else if (part.text === BOT_OLDER_COMPUTER_CAPTURE_NOTE) notes += 1;
+        else if (part.text === OLDER_COMPUTER_SCREENSHOT_NOTE) notes += 1;
       }
     }
     seen.push({ images, notes });
     return reply();
   };
   const fauxModels = createFauxModels([
-    ...["one", "two", "three", "four", "five"].map((id) => step(() => capture(id))),
+    ...["one", "two", "three", "four", "five", "six", "seven", "eight", "nine"].map((id) => step(() => capture(id))),
     step(() => fauxAssistantMessage("looked")),
   ]);
   const { harness, root } = await botTurn(computerDeps(computer), fauxModels);
   try {
     await (await root.submit({ type: "input", content: "watch the screen", requestId: "desk-1" }, ctx)).wait(ctx);
-    assert.deepEqual(seen.map(({ images }) => images), [0, 1, 2, 3, 3, 3]);
-    assert.deepEqual(seen[seen.length - 1], { images: 3, notes: 2 }, "the two oldest captures became notes");
+    assert.deepEqual(seen.map(({ images }) => images), [0, 1, 2, 3, 4, 5, 6, 7, 8, 3]);
+    assert.deepEqual(seen[seen.length - 1], { images: 3, notes: 6 }, "the six oldest captures became notes");
     const kept = (await toolResults(root)).filter((result) => result.toolName === "computer");
-    assert.equal(kept.length, 5);
+    assert.equal(kept.length, 9);
     for (const result of kept) assert.ok(result.content.some((part) => part.type === "image"), "the transcript keeps every capture");
   } finally {
     await harness.close(ctx);

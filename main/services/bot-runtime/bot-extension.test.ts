@@ -21,7 +21,7 @@ import {
   type ToolHooks,
 } from "@earendil-works/pi-durable";
 import { createBotApprovals, publicBotApprovalPrompt } from "./bot-approvals.js";
-import { renderBotMemorySection } from "../bot-memory/prompt.js";
+import { renderBotMemorySection, withBotMemoryEdits } from "../bot-memory/prompt.js";
 import { createBotMemoryService, type BotMemoryRuntime } from "../bot-memory/service.js";
 import { createBotMemoryStore } from "../bot-memory/store.js";
 import { botSessionDirectory } from "../bot-routine-notes.js";
@@ -35,7 +35,7 @@ import { createBotRegistry, scanContextToolNames, type BotExtensionDeps, type Bo
 import { handoffSkippedText, ruleHandoffDoneBlock, ruleUnattendedBlock } from "./bot-handoff-text.js";
 import { recordRuleHandoffEntry } from "./bot-handoffs.js";
 import { createBotSessionService } from "./bot-session-service.js";
-import { botIngressAllowsTool } from "./bot-tool-policy.js";
+import { botIngressAllowsTool, botIngressRefusal } from "./bot-tool-policy.js";
 import { createBotHarnessHost, type BotHarnessHost } from "./harness-host.js";
 import { projectBotTranscript } from "./live-projection.js";
 import { inputIdentityDeps, type PlanReplayArgs } from "./test-support/assembly-fixtures.js";
@@ -330,6 +330,52 @@ test("(cm4) scripts follow the turn's ingress and never reach direct-only tools"
   assert.deepEqual(read.executions, []);
 });
 
+test("(cm6) an unattended turn lists the same tools as a person turn; a withheld call is blocked with its reason and never runs", async () => {
+  const question = countingTool("ask_user_question");
+  const read = countingTool("docs__read");
+  const declared: string[][] = [];
+  const declare = (context: { messages: Message[] }) => {
+    declared.push(getCurrentTools(context.messages).map((tool) => tool.name).sort());
+  };
+  const fauxModels = createFauxModels([
+    (context) => {
+      declare(context);
+      return fauxAssistantMessage([fauxToolCall("ask_user_question", { text: "Which one?" })], { stopReason: "toolUse" });
+    },
+    (context) => {
+      declare(context);
+      return fauxAssistantMessage("Brief sent.");
+    },
+    (context) => {
+      declare(context);
+      return fauxAssistantMessage("Hi.");
+    },
+  ]);
+  const recorded = recordingDeps({ tools: [{ tool: question, replay: "unsafe" }, { tool: read, replay: "unsafe" }] });
+  const deps: BotExtensionDeps = {
+    ...recorded,
+    turnAllows: withBotMemoryIngress(botIngressAllowsTool),
+    turnRefusal: botIngressRefusal,
+  };
+  const { harness, root } = await memoryHarness(deps, fauxModels);
+  try {
+    await (await root.submit({ type: "input", content: "Run the brief.", requestId: "routine:task-1:1000" }, ctx)).wait(ctx);
+    await (await root.submit({ type: "input", content: "Hello", requestId: "desk-1" }, ctx)).wait(ctx);
+    assert.equal(declared.length, 3);
+    assert.ok(declared[0]!.includes("ask_user_question"), "the withheld tool stays declared on the routine turn");
+    assert.deepEqual(declared[1], declared[0], "the blocked call does not change the next step's tool list");
+    assert.deepEqual(declared[2], declared[0], "the person turn sees the same tool list");
+    const results = await toolResults(root);
+    assert.equal(results.length, 1);
+    assert.equal(results[0]!.isError, true);
+    assert.match(results[0]!.content[0]!.text ?? "", /ask_user_question is not available on this turn: nobody is here to answer it/u);
+    assert.deepEqual(question.executions, [], "the blocked call never ran");
+    assert.equal(recorded.approvals.length, 0, "no approval card was raised for it");
+  } finally {
+    await harness.close(ctx);
+  }
+});
+
 test("(cm5) a Bot without scriptable tools gets no codemode", async () => {
   const declared: string[][] = [];
   const fauxModels = createFauxModels([
@@ -538,6 +584,7 @@ function memoryDeps(memory: BotMemoryRuntime): BotExtensionDeps {
     currentTools: async () => [botMemoryToolEntry("bot-1", memory)],
     turnAllows: withBotMemoryIngress(botIngressAllowsTool),
     memorySection: async (botId, offer) => renderBotMemorySection(await memory.snapshot(botId), offer),
+    promptTail: async (botId) => withBotMemoryEdits("", memory.takeEdits(botId)),
   };
 }
 
@@ -574,31 +621,44 @@ test("(g) memory renders last, after authority, with saved entries escaped as da
   }
 });
 
-test("(g2) with nothing saved, a routine turn gets no memory section and an attended one only the guidance", async () => {
+test("(g2) with nothing saved, a routine turn and an attended one get the same guidance; the routine's save is refused", async () => {
   const { memory } = memoryProfile();
   const sections: string[] = [];
-  const record = (context: { messages: Message[] }) => {
+  const results: string[] = [];
+  const record = (reply: ReturnType<typeof fauxAssistantMessage>) => (context: { messages: Message[] }) => {
     sections.push(memorySectionOf(context.messages));
-    return fauxAssistantMessage("ok");
+    const last = context.messages[context.messages.length - 1];
+    if (last?.role === "toolResult") results.push(last.content.map((part: { type: string; text?: string }) => part.text ?? "").join(""));
+    return reply;
   };
-  const fauxModels = createFauxModels([record, record]);
+  const fauxModels = createFauxModels([
+    record(fauxAssistantMessage([fauxToolCall("bot_memory", { target: "user", operations: [{ action: "add", content: "Has a dog." }] })], { stopReason: "toolUse" })),
+    record(fauxAssistantMessage("brief done")),
+    record(fauxAssistantMessage("ok")),
+  ]);
   const { harness, root } = await memoryHarness(memoryDeps(memory), fauxModels);
   try {
     await (await root.submit({ type: "input", content: "brief", requestId: "routine:t:1" }, ctx)).wait(ctx);
     await (await root.submit({ type: "input", content: "hi", requestId: "desk-1" }, ctx)).wait(ctx);
-    assert.equal(sections[0], "");
-    assert.match(sections[1]!, /^Use bot_memory to save/u);
+    assert.match(sections[0]!, /^Use bot_memory to save/u);
+    assert.equal(sections[2], sections[0], "the person's turn reuses the routine turn's memory section");
+    assert.match(results[0] ?? "", /not available/u);
+    const saved = await memory.snapshot("bot-1");
+    assert.equal(saved.stores.user.texts.length, 0, "the refused save never ran");
   } finally {
     await harness.close(ctx);
   }
 });
 
-test("(h) the Bot's own saves keep the memory section byte-identical; a person edit or a new session changes it", async () => {
+test("(h) the memory section stays byte-identical through the Bot's saves; a person's removal leaves it and every later input, named by count after their next input", async () => {
   const { memory, userFile } = memoryProfile();
   writeFileSync(userFile, "Prefers short answers.");
   const sections: string[] = [];
+  /** Each request's text after the system prompt, in order. */
+  const conversations: string[] = [];
   const record = (reply: ReturnType<typeof fauxAssistantMessage>) => (context: { messages: Message[] }) => {
     sections.push(memorySectionOf(context.messages));
+    conversations.push(JSON.stringify(context.messages.filter((message) => message.role === "user")));
     return reply;
   };
   const fauxModels = createFauxModels([
@@ -624,19 +684,28 @@ test("(h) the Bot's own saves keep the memory section byte-identical; a person e
     assert.equal(sections[2], sections[0], "so is the next turn");
     assert.ok(!sections[0]!.includes("Has a dog."));
 
+    assert.ok(sections[2]!.includes("Prefers short answers."));
     const entry = (await memory.view("bot-1")).user.entries.find(({ text }) => text === "Prefers short answers.")!;
     assert.equal((await memory.edit({ botId: "bot-1", edit: { kind: "remove", target: "user", entryId: entry.id } })).ok, true);
     await turn("Forget that.");
-    assert.notEqual(sections[3], sections[2], "a person edit takes effect on the next request");
-    assert.ok(!sections[3]!.includes("Prefers short answers.") && sections[3]!.includes("Has a dog."));
+    assert.ok(!sections[3]!.includes("Prefers short answers."), "the next request's memory section no longer shows it");
+    assert.ok(sections[3]!.includes("Has a dog."), "it is re-read, with the Bot's own save");
+    const told = conversations[3]!;
+    assert.ok(told.indexOf("<bot_memory_update") > told.indexOf("Forget that."), "the edit follows the person's next input");
+    assert.match(told, /Removed 1 entry\./u);
+    assert.ok(!told.includes("Prefers short answers."), "the removal is named by count, never quoted");
 
     await memory.apply("bot-1", "user", [{ action: "add", content: "Lives in Pune." }]);
     await turn("More.");
-    assert.equal(sections[4], sections[3]);
+    assert.equal(sections[4], sections[3], "the Bot's own save after it keeps the section");
+    assert.equal(conversations[4]!.split("<bot_memory_update").length, 2, "the edit is told once, kept with its input");
 
     memory.beginSession("bot-1");
     await turn("New session.");
     assert.ok(sections[5]!.includes("Lives in Pune."), "a new session re-reads memory");
+    for (const index of [3, 4, 5]) {
+      assert.ok(!sections[index]!.includes("Prefers short answers.") && !conversations[index]!.includes("Prefers short answers."), `request ${index} never carries the removed entry`);
+    }
   } finally {
     await harness.close(ctx);
   }

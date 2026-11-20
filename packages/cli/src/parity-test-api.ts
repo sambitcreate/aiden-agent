@@ -15,7 +15,8 @@ export * from "./serve-lifetime.ts";
 export * from "./serve-ownership.ts";
 export * from "./telegram.ts";
 export * from "./daemon-chats.ts";
-export { daemonSettingsManager } from "./daemon-session-settings.ts";
+export { daemonSettingsManager, subagentWorkerSettingsManager } from "./daemon-session-settings.ts";
+export { remoteDeviceDocumentPrefix } from "../../../main/services/chat-generation-owner.js";
 export * from "./daemon-turn-lifecycle.ts";
 export * from "./daemon-approvals.ts";
 export * from "./speech.ts";
@@ -54,6 +55,8 @@ export { createBotSubagentTool } from "./bot-subagents.ts";
 
 export * from "./app-controls.ts";
 export { readAidenHelp } from "../../../main/services/aiden-app-knowledge.js";
+export { hookContextMessage, hookTurnContextText } from "../../../main/services/workspace-chat-hooks.js";
+export { fenceAsData } from "../../../renderer/shared/agent-notices.js";
 export { migrateAidenMcpConfig } from "./mcp-config-migration.ts";
 
 export { migrateCliAzureConfig } from "./azure-config-migration.ts";
@@ -81,3 +84,5 @@ export { createCliBotSpending } from "./bot-spending.ts";
 export { createGenerationWatchdog } from "./generation-watchdog.ts";
 
 export { cliWorkspaceCodingTools } from "./workspace-coding-tools.ts";
+
+export { createPromptCacheTelemetry, promptCacheWarmsSinceLastResponse } from "../../../main/services/pi-cache-telemetry.js";

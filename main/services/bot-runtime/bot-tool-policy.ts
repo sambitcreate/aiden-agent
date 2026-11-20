@@ -82,12 +82,18 @@ export interface BotToolTurn {
   routine?: boolean;
   /** Host-owned peer request/return provenance, also restrictive in mixed contexts. */
   peer?: boolean;
+  /**
+   * Deciding what the chat declares, not whether a call runs: the ambient
+   * peer run is ignored so a peer turn declares the chat's fixed tool list.
+   * Every call is still checked with its run's ingress, peer included.
+   */
+  offer?: boolean;
 }
 
 export type BotToolVerdict = { allowed: true } | { allowed: false; reason: string };
 
 /** The ingress rules of one input, from its request id. */
-export function botTurnOf(requestId: string | undefined): Required<BotToolTurn> & { intro: boolean } {
+export function botTurnOf(requestId: string | undefined): Required<Omit<BotToolTurn, "offer">> & { intro: boolean } {
   return {
     botMessage: isBotMessageRequestId(requestId),
     telegram: requestId?.startsWith("tg:") ?? false,
@@ -163,6 +169,36 @@ export function botIngressAllowsTool(name: string, requestIds: readonly (string 
   });
 }
 
+/**
+ * Why a turn's ingress refuses `name` for these inputs, as one sentence for
+ * the model, so a blocked call names its condition and is not retried. Every
+ * tool stays declared on every turn (a fixed tool list keeps the provider
+ * prompt cache warm); `botIngressAllowsTool` and the memory ingress decide,
+ * and the call is refused before it runs. Call it only for a refused tool.
+ */
+export function botIngressRefusal(name: string, requestIds: readonly (string | undefined)[]): string {
+  if (requestIds.length === 0 && botPeerIngress()) requestIds = [undefined];
+  const turns = requestIds.map(botTurnOf);
+  const unavailable = `${name} is not available on this turn`;
+  const unattended = turns.some((turn) => turn.routine || turn.telegram || turn.botMessage || turn.peer);
+  if (turns.some((turn) => turn.intro)) return `${unavailable}: the self-introduction uses no tools.`;
+  if (name === "bot_memory") return `${unavailable}: memory is saved only on turns that answer the person.`;
+  if (name === "bot_recall") return `${unavailable}: recall is not used on Bot-message turns.`;
+  if (name === BOT_PROPOSE_PLAN_TOOL_NAME || name === BOT_PLAN_STEP_TOOL_NAME) {
+    return `${unavailable}: plans are only for turns that answer the person or a Bot message.`;
+  }
+  if (name === BOT_MESSAGE_TOOL_NAME) {
+    return `${unavailable}: this turn cannot message another Bot (a peer turn, or the Bot-message chain is at its limit).`;
+  }
+  if (name === BOT_PEER_TOOL) return `${unavailable}: a Bot-message turn cannot ask a peer.`;
+  if (name === ROUTINE_NOTES_TOOL) return `${unavailable}: only a routine run has a notepad.`;
+  if (name === WAKE_UP_TOOL) return `${unavailable}: only a turn that answers the person can set a wake-up.`;
+  if (unattended) {
+    return `${unavailable}: nobody is here to answer it on a routine, Telegram, Bot-message or peer turn. Continue without it.`;
+  }
+  return `${unavailable}.`;
+}
+
 const FILE_TOOLS = new Set<string>(BOT_FILE_TOOL_NAMES);
 
 function hasCapability(facts: BotToolFacts, kind: BotOrdinaryCapabilityKind): boolean {
@@ -182,7 +218,7 @@ export async function botToolVerdict(
 ): Promise<BotToolVerdict> {
   const { authority } = facts;
   if (name === BOT_PEER_TOOL) return verdict(!turn.botMessage, "Approved-peer messaging is off for a Bot-message turn."); // The dedicated host service rechecks the exact named pair/source at every call.
-  if ((turn.peer || botPeerIngress()) && (UNATTENDED_WITHHELD.has(name) || [BOT_MESSAGE_TOOL_NAME, BOT_REQUEST_ACCESS_TOOL_NAME, BOT_PROPOSE_PLAN_TOOL_NAME, BOT_PLAN_STEP_TOOL_NAME, WAKE_UP_TOOL, ROUTINE_NOTES_TOOL, "bot_memory", SUGGEST_CONNECTION_TOOL_NAME].includes(name))) return { allowed: false, reason: "Peer work cannot request person approval, change routines or person memory, sign in, create wake-ups or spawn subagents." };
+  if ((turn.peer || (!turn.offer && botPeerIngress())) && (UNATTENDED_WITHHELD.has(name) || [BOT_MESSAGE_TOOL_NAME, BOT_REQUEST_ACCESS_TOOL_NAME, BOT_PROPOSE_PLAN_TOOL_NAME, BOT_PLAN_STEP_TOOL_NAME, WAKE_UP_TOOL, ROUTINE_NOTES_TOOL, "bot_memory", SUGGEST_CONNECTION_TOOL_NAME].includes(name))) return { allowed: false, reason: "Peer work cannot request person approval, change routines or person memory, sign in, create wake-ups or spawn subagents." };
   if (name === BOT_PROPOSE_PLAN_TOOL_NAME || name === BOT_PLAN_STEP_TOOL_NAME) return verdict(turn.telegram !== true && turn.routine !== true, "Plans are off for this Bot turn.");
   if (name === BOT_REQUEST_ACCESS_TOOL_NAME) {
     if (authority.accessMode !== "custom" || authority.files.mode === "full_mac") return { allowed: false, reason: `This Bot can already use ${botWholeComputerLabel(process.platform)}.` };

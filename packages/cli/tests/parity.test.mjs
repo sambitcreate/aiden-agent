@@ -2267,6 +2267,9 @@ test("durable CLI Bots can message each other", async (t) => {
     let body = ""; for await (const chunk of request) body += chunk;
     const parsed = JSON.parse(body); requests.push(parsed);
     const last = parsed.messages.at(-1), content = JSON.stringify(last.content);
+    // A reply turn is past the Bot-message chain limit: it still declares
+    // message_bot (one tool list for every turn). Its call is refused per
+    // turn; bot-tool-policy and bot-extension tests cover that refusal.
     const call = last.role === "user" && content.includes("Ask Beta for Ping")
       ? { id: "message-beta", name: "message_bot", arguments: { bot: "Beta", message: "Ping" } } : undefined;
     const text = content.includes("<bot_message") ? "Pong" : content.includes("<bot_reply") ? "Beta says Pong" : "Sent";
@@ -2312,7 +2315,9 @@ test("durable CLI Bots can message each other", async (t) => {
   const reply = (await entries(bots[0].id)).find((entry) => entry.type === "bot_message" && entry.kind === "reply");
   assert.equal(reply.text, "Pong");
   assert.ok(requests[0].tools.some((tool) => tool.function.name === "message_bot"));
-  assert.ok(requests.find((request) => JSON.stringify(request.messages.at(-1).content).includes("<bot_reply")).tools.every((tool) => tool.function.name !== "message_bot"));
+  const toolNames = (request) => request.tools.map((tool) => tool.function.name);
+  const replyRequest = requests.find((request) => JSON.stringify(request.messages.at(-1).content).includes("<bot_reply"));
+  assert.deepEqual(toolNames(replyRequest), toolNames(requests[0]), "the reply turn declares the same tools as the person's turn");
   const offeredNames = new Set(requests.flatMap((request) => request.tools.map((tool) => tool.function.name)));
   assert.equal(offeredNames.has("request_access"), false, "CLI has no temporary-access cards");
   assert.equal(offeredNames.has("propose_plan"), false, "CLI does not host plan approvals");
@@ -2410,7 +2415,11 @@ test("durable CLI Bots can message each other", async (t) => {
   assert.equal((await post("10000000-0000-4000-8000-000000000006")).code, "unavailable");
   assert.equal(readFileSync(join(dir, "spending.json"), "utf8"), "broken");
   rmSync(join(dir, "spending.json"));
-  assert.equal(requests.length, beforeChecks, "switches, availability and spending checks never invoke a provider");
+  // A reply turn is past the chain limit: posting from it is refused outright.
+  const replyHop = await host.durable.messages.post({ fromBotId: bots[0].id, target: bots[1].id, message: "Ping",
+    deliveryId: "10000000-0000-4000-8000-000000000007", runRequestIds: [`botreply:${absentId}`] });
+  assert.equal(replyHop.code, "chain_too_deep", "a reply turn cannot start another Bot message");
+  assert.equal(requests.length, beforeChecks, "switches, availability, spending and chain checks never invoke a provider");
 
   // Public CLI approval output must omit the host's private run and input provenance.
   const pending = host.durable.approvals.requestOutcome({ botId: bots[0].id, waitId: "private-approval", toolCallId: "private-tool", toolName: "test", summary: "Allow test?", signal: undefined,
@@ -3329,4 +3338,61 @@ test("CLI credential prechecks preserve cancellation while a filesystem lookup i
       syncBuiltinESMExports();
     }
   }
+});
+
+test("prompt-cache miss detection agrees with Pi's detectCacheMiss over a mixed session", async () => {
+  const piCacheStats = await import(pathToFileURL(join(pkg, "node_modules", "@earendil-works", "pi-coding-agent", "dist", "core", "cache-stats.js")).href);
+  const catalog = { "acme/large": 0.3, "acme/small": 0.1 };
+  const models = { getModel: (provider, id) => ({ cost: { cacheRead: catalog[`${provider}/${id}`] ?? 0 } }) };
+  // A small deterministic generator so the sequence covers warm writes,
+  // cache reads, full misses, model switches, idle gaps, warming and compaction.
+  let seed = 7;
+  const next = (n) => { seed = (seed * 1103515245 + 12345) % 2147483648; return seed % n; };
+  const telemetry = api.createPromptCacheTelemetry({ now: () => 0 });
+  const entries = [];
+  let clock = 1_000_000, size = 4_000, compared = 0, misses = 0;
+  for (let turn = 0; turn < 200; turn += 1) {
+    const roll = next(20);
+    clock += roll === 0 ? 6 * 60_000 : 1_000 + next(60_000);
+    if (roll === 1) {
+      entries.push({ type: "compaction" });
+      telemetry.reset("chat");
+      size = 3_000;
+      continue;
+    }
+    const id = next(10) === 0 ? "small" : "large";
+    if (roll === 2) {
+      const usage = { input: 1, output: 1, cacheRead: size, cacheWrite: 0, cost: { input: 0, output: 0, cacheRead: size * 0.3e-6, cacheWrite: 0, total: 0 } };
+      // Warms reach the telemetry only through the session entries, as `aiden serve` feeds them.
+      entries.push({ type: "usage", kind: "cache_warm", usage, provider: "acme", model: id, timestamp: new Date(clock).toISOString() });
+      continue;
+    }
+    size += next(3_000);
+    const shape = next(4);
+    const cacheRead = shape === 0 ? 0 : shape === 1 ? size - next(2_000) : Math.max(0, size - 500 - next(500));
+    const cacheWrite = shape === 3 ? 0 : next(2) * next(4_000);
+    const input = Math.max(0, size - cacheRead) + (roll === 3 ? 0 : next(200));
+    const usage = {
+      input, output: 100, cacheRead, cacheWrite, totalTokens: input + cacheRead + cacheWrite + 100,
+      cost: { input: input * 3e-6, output: 0, cacheRead: cacheRead * 0.3e-6, cacheWrite: cacheWrite * 3.75e-6, total: 0 },
+    };
+    if (roll === 4) { usage.input = 0; usage.cacheRead = 0; usage.cacheWrite = 0; }
+    const message = { role: "assistant", content: [], api: "openai-responses", provider: "acme", model: id, usage, stopReason: "stop", timestamp: clock };
+    const expected = piCacheStats.detectCacheMiss(entries, message, models);
+    // Fed before every request, so a warm already seen is offered again.
+    for (const warm of api.promptCacheWarmsSinceLastResponse(entries)) telemetry.observeWarm("chat", warm);
+    for (const warm of api.promptCacheWarmsSinceLastResponse(entries)) telemetry.observeWarm("chat", warm);
+    const actual = telemetry
+      .beginRequest("chat", { messages: [{ role: "user", content: "same", timestamp: 0 }], model: { provider: "acme", id, cost: { cacheRead: catalog[`acme/${id}`] } } })
+      .complete(message);
+    entries.push({ type: "message", message });
+    compared += 1;
+    if (expected) misses += 1;
+    assert.deepEqual(
+      actual && { missedTokens: actual.missedTokens, missedCost: actual.missedCost, idleMs: actual.idleMs, modelChanged: actual.modelChanged },
+      expected,
+      `turn ${turn}`,
+    );
+  }
+  assert.ok(compared > 100 && misses > 10, `the sequence exercised misses (${misses} of ${compared})`);
 });

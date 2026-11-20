@@ -417,11 +417,9 @@ const SHUTDOWN_BUDGET_MS = {
   // A Storage sweep stops before its next item; this waits for the one in hand.
   storageCleanup: 6_000,
   geminiLive: 3_000,
-  // Generation grace (6 s) plus the Gemini context-cache deletes that
-  // llmClient.shutdown() runs after it. A delete still in flight at the
-  // deadline reports the step as unsettled; the cache entries expire on
-  // their own TTL server-side.
-  parentGenerations: 8_000,
+  // llmClient.shutdown() bounds both of its waits by the one 6 s generation
+  // grace; the extra second covers aborting and settling around them.
+  parentGenerations: 7_000,
   backgroundJobs: 6_000,
   modelPace: 1_000,
   subagentRuntime: 7_000,
