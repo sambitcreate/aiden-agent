@@ -89,6 +89,7 @@ const MAX_REMOTE_VISUAL_LINES = 400;
 // Direction marks, embeddings, overrides and isolates could reorder the rest of a
 // line, and C0 and C1 controls draw as nothing or as boxes. A tab stays (as a
 // space in the title); a line break only separates lines.
+// eslint-disable-next-line no-control-regex
 const REMOTE_VISUAL_HIDDEN = /[\u0000-\u0008\u000b-\u001f\u007f-\u009f\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/gu;
 
 /** The first `max` UTF-16 units of `text`, never ending halfway through a character. */
