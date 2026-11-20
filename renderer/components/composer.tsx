@@ -2195,6 +2195,10 @@ export function Composer({
       } finally {
         commentSendPendingRef.current = false;
       }
+      if (!commentSend) {
+        blockSend("Couldn't save your design comments, so nothing was sent. Try again.");
+        return;
+      }
     }
     try {
       const sent = await sendComposerPayload({

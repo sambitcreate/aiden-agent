@@ -1150,3 +1150,65 @@ test("a failed send leaves design comments in the tray", async () => {
     Reflect.deleteProperty(globalThis, "__composerCommentTray");
   }
 });
+
+test("design comments that could not be saved hold the message back and keep the draft", async () => {
+  const mounted = installDom();
+  Object.assign(globalThis, {
+    __composerAttachmentFixture: {
+      api: {
+        pickAndRead: async () => ({ attachments: [], skipped: 0 }),
+        readDroppedFiles: async () => [],
+        readClipboardImages: async () => [],
+      },
+    },
+  });
+  const events: string[] = [];
+  Object.assign(globalThis, {
+    __composerCommentTray: {
+      chatId: "design-chat",
+      comments: [{ id: "c1", label: "Canvas", note: "Bigger" }],
+      block: () => "<attached-design-comments>\n[]\n</attached-design-comments>",
+      remove() {},
+      open() {},
+      // The canvas save failed, so the tray has already put the comment back.
+      async markSent(ids: string[]) {
+        events.push(`marked ${ids.join(",")}`);
+        return null;
+      },
+    },
+  });
+  const loaded = await loadComposer();
+  const { createRoot } = await import("react-dom/client");
+  const root = createRoot(mounted.container);
+  const inputRef = React.createRef<HTMLTextAreaElement>();
+  try {
+    await React.act(async () =>
+      root.render(
+        <loaded.Composer
+          chatId="design-chat"
+          ready
+          hasMessages
+          initialText="Also tighten the spacing"
+          inputRef={inputRef}
+          isGenerating={false}
+          onStop={() => {}}
+          onSend={async () => {
+            events.push("send");
+          }}
+        />,
+      ),
+    );
+    await React.act(async () => {
+      await handlers(button(mounted.container, "Send message")).onClick();
+    });
+    assert.deepEqual(events, ["marked c1"], "nothing is sent while Aiden would still read the comments as drafts");
+    assert.equal(inputRef.current?.value, "Also tighten the spacing", "the typed message stays");
+    assert.match(mounted.container.textContent ?? "", /Couldn't save your design comments, so nothing was sent/);
+  } finally {
+    await React.act(async () => root.unmount());
+    await loaded.cleanup();
+    mounted.restore();
+    Reflect.deleteProperty(globalThis, "__composerAttachmentFixture");
+    Reflect.deleteProperty(globalThis, "__composerCommentTray");
+  }
+});

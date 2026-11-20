@@ -25,11 +25,13 @@ export type DesignCommentTray = {
   /**
    * Marks these comments sent and saves the canvas, before the message that
    * carries them goes, so Aiden's turn finds them sent rather than still
-   * drafts. Never rejects. `done` is for a send that went (it drops the
-   * comments' pictures); `undo` for one that failed or was cancelled (it puts
-   * them back in the tray, keeping edits made meanwhile).
+   * drafts. Never rejects. Resolves null when that save failed: the comments
+   * are back in the tray with their pictures, and the message must not go.
+   * Otherwise `done` is for a send that went (it drops the comments'
+   * pictures); `undo` for one that failed or was cancelled (it puts them back
+   * in the tray, keeping edits made meanwhile).
    */
-  markSent(ids: readonly string[]): Promise<DesignCommentSend>;
+  markSent(ids: readonly string[]): Promise<DesignCommentSend | null>;
   /** Brings a comment on screen and opens it. */
   open(id: string): void;
 };

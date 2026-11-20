@@ -538,7 +538,7 @@ test("the comment tool drops a pin on the canvas, and a saved comment waits in t
   assert.deepEqual(tray?.comments.map((entry) => [entry.label, entry.note]), [["Canvas", "Add a footer here"]]);
   assert.match(tray!.block(), /"note": "Add a footer here"/u);
 
-  let send: DesignCommentSend | undefined;
+  let send: DesignCommentSend | null | undefined;
   await act(async () => {
     send = await tray!.markSent([comment.id]);
   });
@@ -554,6 +554,38 @@ test("the comment tool drops a pin on the canvas, and a saved comment waits in t
     timeout: DESIGN_CANVAS_SAVE_DELAY_MS / 2,
   });
   assert.ok(await screen.findByRole("button", { name: "Comment 1 on Canvas" }));
+});
+
+test("when the canvas can't save a comment as sent, the comment stays in the tray and no send goes ahead", async () => {
+  measureCanvasAt1000x800();
+  let revision = 1;
+  let refuse = false;
+  const { saved } = setup(canvasWith(), {
+    "designCanvas:save": () => (refuse ? { ok: false, reason: "invalid", issues: ["too big"] } : { ok: true, revision: (revision += 1) }),
+  });
+  const region = await mount();
+  region.focus();
+  fireEvent.keyDown(region, { key: "c", code: "KeyC" });
+  fireEvent.click(document.querySelector(".react-flow__pane")!, { clientX: 300, clientY: 200 });
+  await screen.findByRole("dialog", { name: "New comment" });
+  const field = screen.getByRole("textbox", { name: "Comment" });
+  fireEvent.change(field, { target: { value: "Add a footer here" } });
+  fireEvent.keyDown(field, { key: "Enter", code: "Enter" });
+  await waitFor(() => assert.equal(saved()?.comments.length, 1), SAVE_WAIT);
+  const comment = saved()!.comments[0]!;
+
+  refuse = true;
+  let send: DesignCommentSend | null | undefined;
+  await act(async () => {
+    send = await designCommentTray("chat-1")!.markSent([comment.id]);
+  });
+  assert.equal(send, null, "the composer is told not to send");
+  assert.deepEqual(
+    designCommentTray("chat-1")?.comments.map((entry) => entry.note),
+    ["Add a footer here"],
+    "the comment waits in the tray for the next try",
+  );
+  assert.ok(await screen.findByRole("button", { name: "Comment 1 on Canvas" }), "and is not shown as sent");
 });
 
 test("a comment on a frame keeps its spot on the frame; with Send to Aiden off it stays a comment", async () => {

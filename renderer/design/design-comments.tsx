@@ -560,16 +560,18 @@ export function useDesignComments({ chatId, doc, change, flush, flow, wrapper, l
               }
               const sentAt = new Date().toISOString();
               change((latest) => markCommentsSent(latest, ids, sentAt));
-              // Saved before the message goes, so Aiden's canvas_comment finds them sent rather than still drafts.
-              await flush().catch(() => false);
-              return {
-                done: () => forgetCommentCrops(chatId, ids),
-                undo: () => {
-                  for (const id of ids) sentVersions.current.delete(id);
-                  change((latest) => unmarkCommentsSent(latest, ids, sentAt));
-                  void flush().catch(() => undefined);
-                },
+              const undo = () => {
+                for (const id of ids) sentVersions.current.delete(id);
+                change((latest) => unmarkCommentsSent(latest, ids, sentAt));
+                void flush().catch(() => undefined);
               };
+              // Saved before the message goes, so Aiden's canvas_comment finds them sent rather than still drafts.
+              // A save that failed would leave Aiden reading drafts, so the comments go back and nothing is sent.
+              if (!(await flush().catch(() => false))) {
+                undo();
+                return null;
+              }
+              return { done: () => forgetCommentCrops(chatId, ids), undo };
             },
             open: (id) => openRef.current(id),
           },
