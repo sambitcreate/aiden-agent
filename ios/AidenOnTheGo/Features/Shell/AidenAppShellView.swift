@@ -113,8 +113,6 @@ struct AidenAppShellView: View {
     @State private var showsVerticalBar = false
     /// The shell's own window, for its orientation.
     @State private var window = AidenWindowReader.Window()
-    /// Conversations on screen that no route names: a workspace's chats.
-    @State private var conversationsOnScreen = AidenConversationsOnScreen()
 
     init(
         coordinator: AidenRemoteCoordinator,
@@ -194,7 +192,7 @@ struct AidenAppShellView: View {
     }
 
     var body: some View {
-        TabView(selection: Bindable(navigation).tab) {
+        TabView(selection: Binding(get: { navigation.tab }, set: { navigation.chooseTab($0) })) {
             Tab("Inbox", systemImage: "tray", value: AidenAppTab.inbox) {
                 splitTab(.inbox, columns: inboxColumns, empty: .inbox) { selection in
                     inboxList(selection: selection)
@@ -255,14 +253,12 @@ struct AidenAppShellView: View {
         }
         // Above every tab's stack, so pushed screens read them too.
         .environment(\.aidenTabsInSideRail, showsVerticalBar)
-        .environment(\.aidenConversationsOnScreen, conversationsOnScreen)
         .tabBarMinimizeBehavior(horizontalSizeClass == .compact ? .onScrollDown : .automatic)
         .tabViewSearchActivation(.searchTabSelection)
         .aidenNewWorkPresentation(newWork, coordinator: coordinator)
         // Hiding the tab bar leaves the accessory up, under the composer.
         .aidenRunningAccessory(
-            isEnabled: runningHome == .accessory && inboxStore.hasRunningChats
-                && !navigation.showsConversation && conversationsOnScreen.isEmpty(on: navigation.tab)
+            isEnabled: runningHome == .accessory && inboxStore.hasRunningChats && !navigation.showsConversation
         ) {
             AidenRunningAccessoryHost(store: inboxStore, onOpen: openRow) { showsRunningChats = true }
         }
@@ -364,7 +360,6 @@ struct AidenAppShellView: View {
             list: list,
             screen: { route, keepsTabs in AnyView(screen(for: route, keepsTabs: keepsTabs)) }
         )
-        .environment(\.aidenShellTab, tab)
     }
 
     /// Puts the tab's list away when it's laid over the detail
@@ -464,6 +459,9 @@ struct AidenAppShellView: View {
                     let home = inboxStore.homeModel(for: id.instanceId)
                     home?.accept(fork)
                     home?.markViewed(chatID: fork.id)
+                    // Over the chat it came from, so Back returns there.
+                    let forkID = AidenHostObjectID(instanceId: id.instanceId, deviceId: id.deviceId, objectId: fork.id)
+                    navigation.push(.chat(forkID), over: route)
                 },
                 onBotChat: { bot in navigation.replace(route, with: .bot(bot)) }
             )
@@ -492,9 +490,7 @@ struct AidenAppShellView: View {
                 onRemoved: { navigation.leave(route) },
                 onChatUpdated: { inboxStore.homeModel(for: id.instanceId)?.accept($0) },
                 onChatRemoved: { inboxStore.homeModel(for: id.instanceId)?.removeChat(id: $0) },
-                onChatActivityChanged: { chatID, activity in
-                    inboxStore.homeModel(for: id.instanceId)?.setActivity(activity, forChatID: chatID)
-                }
+                onOpenChat: { chatID in navigation.push(.chat(chatID), over: route) }
             )
         case .machines:
             AidenMachinesRouteView(coordinator: coordinator)
@@ -683,14 +679,14 @@ private struct AidenChatRouteView: View {
             case .loading:
                 ProgressView()
             case .ready(let chat, let owner):
-                AidenForkableChatDetailView(
+                AidenChatDetailView(
                     coordinator: coordinator,
                     chat: chat,
                     owner: owner,
                     autoStartVoice: autoStartVoice,
                     onChatUpdated: onChatUpdated,
                     onChatActivityChanged: onChatActivityChanged,
-                    onForkOpened: onForkOpened
+                    onOpenChat: onForkOpened
                 )
             case .botChat(let bot):
                 ProgressView()
@@ -821,7 +817,6 @@ private struct AidenSplitTab<Sidebar: View>: View {
     let screen: (AidenAppRoute, Bool) -> AnyView
 
     @Environment(\.aidenPalette) private var palette
-    @State private var detailStack = AidenDetailStack()
 
     private var path: [AidenAppRoute] { navigation.path(of: tab) }
 
@@ -836,7 +831,11 @@ private struct AidenSplitTab<Sidebar: View>: View {
         @Bindable var columns = columns
         NavigationSplitView(columnVisibility: $columns.visibility, preferredCompactColumn: compactColumn) {
             list(besideList ? AidenSplitNavigationPath(displayedPath).selection : nil)
-        } detail: {
+                // One width for every list tab and every launch, wide enough
+                // for a machine's status line, a row's title and the bar's
+                // title with its buttons on an iPhone Duo's inner display.
+                // The system's own choice varied between launches.
+                .navigationSplitViewColumnWidth(min: 320, ideal: 400, max: 420)        } detail: {
             detail
                 .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { columns.detailFrame = $0 }
         }
@@ -852,20 +851,13 @@ private struct AidenSplitTab<Sidebar: View>: View {
             columns.hideOverlaidList(besideList: besideList, hasSelection: selection != nil)
             columns.showListIfNothingChosen(besideList: besideList, hasSelection: selection != nil)
         }
-        // Another row beside the list takes with it what was pushed over the
-        // last one by view. A path deeper than the row is the path's own, and
-        // SwiftUI rebuilds the stack for it.
-        .onChange(of: AidenSplitNavigationPath(displayedPath).selection) { old, new in
-            guard besideList, old != nil, old != new,
-                  AidenSplitNavigationPath(displayedPath).detailPath.isEmpty else { return }
-            detailStack.popToRoot()
-        }
     }
 
     /// Collapsed, the split shows the list until the path holds something,
-    /// then the detail. Back from the detail's root returns to the list, which
-    /// clears the path. Writes while not compact are the split's own and
-    /// change nothing.
+    /// then the detail. Back takes one screen off the path, so from the
+    /// detail's root it returns to the list
+    /// (`AidenSplitNavigationPath.path(_:afterShowingList:besideList:)`).
+    /// Writes while not compact are the split's own and change nothing.
     private var compactColumn: Binding<NavigationSplitViewColumn> {
         Binding(
             get: { AidenSplitNavigationPath.compactShowsList(path) ? .sidebar : .detail },
@@ -911,45 +903,23 @@ private struct AidenSplitTab<Sidebar: View>: View {
             // Beside the list a conversation keeps the tabs up, as the list
             // is; collapsed it's any stack's screen.
             .navigationDestination(for: AidenAppRoute.self) { screen($0, besideList) }
-            .background { AidenDetailStackReader(stack: detailStack) }
+            .background { AidenDetailRootAnchor() }
         }
     }
 }
 
-/// The detail column's navigation controller, for the one thing SwiftUI
-/// leaves behind: a screen pushed by view, such as a workspace's chat or a
-/// fork, isn't on the path, and the split keeps it on top when another row
-/// is chosen beside the list. Neither the root's nor the stack's identity
-/// takes it away.
-@MainActor
-private final class AidenDetailStack {
-    fileprivate weak var anchor: UIView?
-
-    /// Back to the root, the row now chosen, as Back would go.
-    func popToRoot() {
-        var responder: UIResponder? = anchor
-        while let next = responder?.next, !(next is UIViewController) { responder = next }
-        guard let controller = responder?.next as? UIViewController,
-              let stack = controller.navigationController,
-              stack.viewControllers.count > 1
-        else { return }
-        stack.popToRootViewController(animated: false)
-    }
-}
-
-private struct AidenDetailStackReader: UIViewRepresentable {
-    let stack: AidenDetailStack
-
+/// An empty UIKit view behind the detail column's root. Without one, a Bot
+/// chosen beside the list loses Back from the side rail once closing an
+/// iPhone Duo collapses the split, though the edge swipe still goes back
+/// (iOS 27.1 simulator). A chat is unaffected. Nothing reads this view.
+private struct AidenDetailRootAnchor: UIViewRepresentable {
     func makeUIView(context: Context) -> UIView {
         let view = UIView()
         view.isUserInteractionEnabled = false
-        stack.anchor = view
         return view
     }
 
-    func updateUIView(_ view: UIView, context: Context) {
-        stack.anchor = view
-    }
+    func updateUIView(_ view: UIView, context: Context) {}
 }
 
 /// Reads the shell's own window: its scene, for the orientation, and whether

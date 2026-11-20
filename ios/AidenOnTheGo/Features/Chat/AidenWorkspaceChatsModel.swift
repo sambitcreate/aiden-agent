@@ -110,9 +110,12 @@ final class AidenWorkspaceChatsModel {
             }
             guard coordinator.holds(context) else { return }
             chats = Self.sorted(presented)
-        } catch let error where aidenIsCancellation(error) {
-            // The request was called off, not refused. Nothing was kept, so
-            // the next appearance or refresh reads it again.
+        } catch where Task.isCancelled || error is CancellationError {
+            // The read was called off, not refused. Nothing was kept, so the
+            // next appearance or refresh reads it again. No caller cancels the
+            // shared read, so a `URLError.cancelled` here is the session
+            // refusing the request, as a rejected certificate pin does, and is
+            // reported below like any other failure.
             return
         } catch {
             if await coordinator.handleCredentialRevocation(error, context: context) { return }

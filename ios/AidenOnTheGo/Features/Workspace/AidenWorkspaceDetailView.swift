@@ -8,7 +8,8 @@ struct AidenWorkspaceDetailView: View {
     let onRemoved: () -> Void
     let onChatUpdated: @MainActor (AidenChat) -> Void
     let onChatRemoved: @MainActor (String) -> Void
-    let onChatActivityChanged: @MainActor (String, AidenChatSummaryActivity) -> Void
+    /// Opens a chat the workspace just made, over the workspace.
+    let onOpenChat: @MainActor (AidenHostObjectID) -> Void
 
     init(
         coordinator: AidenRemoteCoordinator,
@@ -17,7 +18,7 @@ struct AidenWorkspaceDetailView: View {
         onRemoved: @escaping () -> Void,
         onChatUpdated: @escaping @MainActor (AidenChat) -> Void = { _ in },
         onChatRemoved: @escaping @MainActor (String) -> Void = { _ in },
-        onChatActivityChanged: @escaping @MainActor (String, AidenChatSummaryActivity) -> Void = { _, _ in }
+        onOpenChat: @escaping @MainActor (AidenHostObjectID) -> Void
     ) {
         self.coordinator = coordinator
         self.workspace = workspace
@@ -25,7 +26,7 @@ struct AidenWorkspaceDetailView: View {
         self.onRemoved = onRemoved
         self.onChatUpdated = onChatUpdated
         self.onChatRemoved = onChatRemoved
-        self.onChatActivityChanged = onChatActivityChanged
+        self.onOpenChat = onOpenChat
     }
 
     @State private var isShowingSettings = false
@@ -39,7 +40,7 @@ struct AidenWorkspaceDetailView: View {
             owner: owner,
             onChatUpdated: onChatUpdated,
             onChatRemoved: onChatRemoved,
-            onChatActivityChanged: onChatActivityChanged
+            onOpenChat: onOpenChat
         )
         .navigationTitle(workspace.name)
         .navigationBarTitleDisplayMode(.inline)

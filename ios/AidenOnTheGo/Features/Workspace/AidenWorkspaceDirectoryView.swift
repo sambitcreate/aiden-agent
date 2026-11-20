@@ -173,18 +173,6 @@ struct AidenWorkspacesDirectoryView: View {
         .onAppear { coordinator.haptics.activate(scope: hapticScope) }
         .onDisappear { coordinator.haptics.deactivate(scope: hapticScope) }
         .toolbar {
-            if tabChrome.besideList {
-                // Beside the detail the column's bar drops an inline
-                // "Workspaces" to fit its buttons, where the shorter "Bots"
-                // still fits. A leading item keeps its place.
-                ToolbarItem(placement: .topBarLeading) {
-                    Text("Workspaces")
-                        .font(.headline)
-                        .fixedSize()
-                        .accessibilityAddTraits(.isHeader)
-                }
-                .sharedBackgroundVisibility(.hidden)
-            }
             DefaultToolbarItem(kind: .search, placement: .primaryAction)
             ToolbarSpacer(.fixed, placement: .primaryAction)
             ToolbarItem(placement: .primaryAction) { addWorkspaceMenu }

@@ -281,11 +281,10 @@ struct AidenAppNavigationStore {
 /// the same path as one stack, so closing or opening the display keeps the same
 /// route on screen.
 ///
-/// The route survives a size-class change but its view doesn't: the shell swaps
-/// a stack for a split view, so the screen is built again. A chat reloads from
-/// its saved transcript; per-view state such as an open fork trail or unsent
-/// attachments isn't carried across. Draft text is kept by the composer's own
-/// store.
+/// Everything on screen is on the path, a workspace's chats and the forks
+/// pushed over a chat included, so a size-class change, Back and a relaunch
+/// all see it. Per-view state such as unsent attachments isn't carried across
+/// a rebuilt screen; draft text is kept by the composer's own store.
 struct AidenSplitNavigationPath: Equatable {
     private(set) var path: [AidenAppRoute]
 
@@ -321,15 +320,18 @@ struct AidenSplitNavigationPath: Equatable {
     }
 
     /// The path after the split shows the list or the detail. Collapsed,
-    /// showing the list is Back from the detail's root, which empties the
-    /// path. Beside the list the split's writes are its own and change nothing,
-    /// and so does showing the detail, which only a chosen route does.
+    /// showing the list is Back, which takes one screen off: from the detail's
+    /// root that empties the path, and from a screen pushed over it, such as a
+    /// workspace's chat, it returns to the one underneath. A closed iPhone Duo
+    /// reports either Back this way, without writing the detail stack's path.
+    /// Beside the list the split's writes are its own and change nothing, and
+    /// so does showing the detail, which only a chosen route does.
     static func path(
         _ path: [AidenAppRoute],
         afterShowingList showsList: Bool,
         besideList: Bool
     ) -> [AidenAppRoute] {
-        besideList || !showsList ? path : []
+        besideList || !showsList ? path : Array(path.dropLast())
     }
 
     /// The route the detail column draws at its root. Collapsed, Back empties
@@ -493,13 +495,36 @@ final class AidenAppNavigation {
         }
     }
 
+    /// A chat or Bot new to the tab's path leaves every other tab first, so
+    /// one conversation never has two screens, however it got there: a pick,
+    /// a push, or a link the stack followed.
     func setPath(_ path: [AidenAppRoute], of tab: AidenAppTab) {
+        let current = self.path(of: tab)
+        for route in path where route.isConversation && !current.contains(route) {
+            for other in AidenAppTab.listTabs where other != tab {
+                var otherPath = self.path(of: other)
+                Self.remove(route, from: &otherPath)
+                if otherPath != self.path(of: other) { setPath(otherPath, of: other) }
+            }
+        }
         switch tab {
         case .inbox: inboxPath = path
         case .bots: botsPath = path
         case .workspaces: workspacesPath = path
         case .search: break
         }
+    }
+
+    /// The tab bar or side rail chose a tab. Choosing the tab already showing
+    /// takes a collapsed split back to its list, which SwiftUI reports only as
+    /// a write showing the list, the same as Back, which takes one screen off.
+    /// So the path empties here, before that write. Beside the list the list
+    /// is already in view, and the path is left as it is.
+    func chooseTab(_ chosen: AidenAppTab) {
+        if chosen == tab, !besideList, AidenAppTab.listTabs.contains(chosen) {
+            setPath([], of: chosen)
+        }
+        tab = chosen
     }
 
     /// Selects the route's tab and shows the route there, or goes back to it
@@ -541,6 +566,21 @@ final class AidenAppNavigation {
         }
         self.tab = tab
         show(route, onTab: tab)
+    }
+
+    /// Pushes `route` over `parent` on the tab showing `parent`: a workspace's
+    /// chat over its workspace, a fork over the chat it came from. Whatever
+    /// was above `parent` goes, so Back from `route` returns to `parent`, and
+    /// choosing another row beside the list takes both away. With `parent`
+    /// on no path, `route` opens as `open(_:)` opens it.
+    func push(_ route: AidenAppRoute, over parent: AidenAppRoute) {
+        let holders = AidenAppTab.listTabs.filter { path(of: $0).contains(parent) }
+        guard let holder = holders.contains(tab) ? tab : holders.first,
+              let index = path(of: holder).firstIndex(of: parent) else { return open(route) }
+        chatStartingVoice = nil
+        tab = holder
+        let path = Array(path(of: holder)[...index]) + [route]
+        if path != self.path(of: holder) { setPath(path, of: holder) }
     }
 
     /// Goes back to just below the route, wherever it is. Nothing happens when

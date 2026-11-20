@@ -290,17 +290,54 @@ final class AidenAppShellTests: XCTestCase {
         XCTAssertEqual(split.path, [.chat(id("c1")), .machines])
     }
 
-    /// Collapsed, Back from a chat shows the list and empties the path; a
-    /// deeper Back is the detail stack's own and leaves the list hidden.
-    func testCollapsedBackToTheListEmptiesThePath() {
-        let path: [AidenAppRoute] = [.chat(id("c1")), .settings]
+    /// Collapsed, Back from a chat pushed over its workspace returns to the
+    /// workspace, which a closed iPhone Duo reports as showing the list, and
+    /// Back again empties the path and shows the list. Unfolding after the
+    /// first Back still has the workspace selected.
+    func testCollapsedBackTakesOneScreenOffAndThenShowsTheList() {
+        let workspace = AidenAppRoute.workspace(id("w1"))
+        let path: [AidenAppRoute] = [workspace, .chat(id("c1"))]
 
         XCTAssertFalse(AidenSplitNavigationPath.compactShowsList(path))
         let back = AidenSplitNavigationPath.path(path, afterShowingList: true, besideList: false)
-        XCTAssertEqual(back, [])
-        XCTAssertTrue(AidenSplitNavigationPath.compactShowsList(back))
+        XCTAssertEqual(back, [workspace])
+        XCTAssertFalse(AidenSplitNavigationPath.compactShowsList(back))
+        XCTAssertEqual(AidenSplitNavigationPath(back).selection, workspace)
+
+        let toList = AidenSplitNavigationPath.path(back, afterShowingList: true, besideList: false)
+        XCTAssertEqual(toList, [])
+        XCTAssertTrue(AidenSplitNavigationPath.compactShowsList(toList))
 
         XCTAssertEqual(AidenSplitNavigationPath.path(path, afterShowingList: false, besideList: false), path)
+    }
+
+    /// Choosing the tab already showing takes a collapsed tab all the way to
+    /// its list, so the workspace's row opens it again; beside the list it
+    /// keeps what's chosen, and choosing another tab keeps every path.
+    func testChoosingTheShowingTabAgainReturnsACollapsedTabToItsList() {
+        let navigation = AidenAppNavigation()
+        let workspace = AidenAppRoute.workspace(id("w1"))
+        navigation.open(workspace)
+        navigation.push(.chat(id("c1")), over: workspace)
+        navigation.open(.chat(id("inbox_chat")))
+        let inboxPath = navigation.inboxPath
+
+        navigation.chooseTab(.workspaces)
+        XCTAssertEqual(navigation.tab, .workspaces)
+        XCTAssertEqual(navigation.workspacesPath, [workspace, .chat(id("c1"))])
+        XCTAssertEqual(navigation.inboxPath, inboxPath)
+
+        navigation.chooseTab(.workspaces)
+        XCTAssertEqual(navigation.workspacesPath, [])
+        XCTAssertTrue(AidenSplitNavigationPath.compactShowsList(navigation.workspacesPath))
+        XCTAssertEqual(navigation.inboxPath, inboxPath)
+
+        navigation.open(workspace)
+        XCTAssertEqual(navigation.workspacesPath, [workspace])
+
+        navigation.besideList = true
+        navigation.chooseTab(.workspaces)
+        XCTAssertEqual(navigation.workspacesPath, [workspace])
     }
 
     /// Beside the list the split reports its columns as it lays them out,
@@ -502,6 +539,86 @@ final class AidenAppShellTests: XCTestCase {
         XCTAssertEqual(stack.workspacesPath, [.workspace(id("w1")), .workspace(id("w2", on: "laptop"))])
     }
 
+    /// A workspace's chat is a route over its workspace, so everything that
+    /// reads the path sees it: another pick beside the list takes it away,
+    /// closing and opening the display keep it, Back returns to the workspace
+    /// and a relaunch brings it back.
+    func testAWorkspacesChatIsOnThePathOverItsWorkspace() {
+        let navigation = besideList()
+        navigation.pick(.workspace(id("w1")), fromListOf: .workspaces)
+        // A row's link appends to the detail's stack, as the stack writes it.
+        var split = AidenSplitNavigationPath(navigation.workspacesPath)
+        split.setDetailPath([.chat(id("c1"))])
+        navigation.setPath(split.path, of: .workspaces)
+        XCTAssertEqual(navigation.workspacesPath, [.workspace(id("w1")), .chat(id("c1"))])
+        XCTAssertTrue(navigation.showsConversation)
+
+        navigation.pick(.workspace(id("w2")), fromListOf: .workspaces)
+        XCTAssertEqual(navigation.workspacesPath, [.workspace(id("w2"))], "Another workspace drops the chat")
+
+        // A chat the workspace just made goes over it the same way.
+        navigation.push(.chat(id("c2")), over: .workspace(id("w2")))
+        navigation.besideList = false
+        XCTAssertEqual(navigation.workspacesPath, [.workspace(id("w2")), .chat(id("c2"))], "Closing keeps it")
+        navigation.besideList = true
+        XCTAssertEqual(navigation.workspacesPath, [.workspace(id("w2")), .chat(id("c2"))], "Opening keeps it")
+
+        let store = AidenAppNavigationStore(defaults: AidenDemoHosts.isolatedDefaults())
+        store.save(navigation.snapshot)
+        let restored = AidenAppNavigation(restoring: store.load(), installations: [studio])
+        XCTAssertEqual(restored.workspacesPath, [.workspace(id("w2")), .chat(id("c2"))])
+
+        split = AidenSplitNavigationPath(navigation.workspacesPath)
+        split.setDetailPath([])
+        navigation.setPath(split.path, of: .workspaces)
+        XCTAssertEqual(navigation.workspacesPath, [.workspace(id("w2"))], "Back returns to the workspace")
+    }
+
+    /// One chat never has two screens, however it got onto a path: a chat
+    /// opened from a workspace leaves the Inbox, where it was the selection.
+    func testAChatPushedOntoOneTabLeavesTheOthers() {
+        let navigation = besideList()
+        navigation.openInboxRow(.chat(id("c1")))
+        navigation.pick(.workspace(id("w1")), fromListOf: .workspaces)
+
+        navigation.setPath([.workspace(id("w1")), .chat(id("c1"))], of: .workspaces)
+
+        XCTAssertEqual(navigation.inboxPath, [])
+        XCTAssertEqual(navigation.workspacesPath, [.workspace(id("w1")), .chat(id("c1"))])
+        // A link to it now goes to where it is.
+        navigation.open(.chat(id("c1")))
+        XCTAssertEqual(navigation.tab, .workspaces)
+        XCTAssertEqual(navigation.inboxPath, [])
+    }
+
+    /// A fork goes over the chat it came from, on that chat's tab, so Back
+    /// returns to its source and another row beside the list takes both away.
+    func testAForkGoesOverItsChatAndBackReturnsToIt() {
+        let navigation = besideList()
+        navigation.openInboxRow(.chat(id("c1")))
+        navigation.push(.chat(id("f1")), over: .chat(id("c1")))
+        navigation.push(.chat(id("f2")), over: .chat(id("f1")))
+        XCTAssertEqual(navigation.inboxPath, [.chat(id("c1")), .chat(id("f1")), .chat(id("f2"))])
+        XCTAssertEqual(AidenSplitNavigationPath(navigation.inboxPath).selection, .chat(id("c1")), "The source stays highlighted")
+
+        navigation.push(.chat(id("f3")), over: .chat(id("c1")))
+        XCTAssertEqual(navigation.inboxPath, [.chat(id("c1")), .chat(id("f3"))], "A fork of the source replaces what was over it")
+
+        navigation.openInboxRow(.chat(id("c2")))
+        XCTAssertEqual(navigation.inboxPath, [.chat(id("c2"))])
+
+        let stack = AidenAppNavigation()
+        stack.open(.workspace(id("w1")))
+        stack.push(.chat(id("c1")), over: .workspace(id("w1")))
+        stack.tab = .bots
+        stack.push(.chat(id("f1")), over: .chat(id("c1")))
+        XCTAssertEqual(stack.tab, .workspaces, "The fork opens where its source is")
+        XCTAssertEqual(stack.workspacesPath, [.workspace(id("w1")), .chat(id("c1")), .chat(id("f1"))])
+
+        stack.push(.chat(id("f9")), over: .chat(id("gone")))
+        XCTAssertEqual(stack.inboxPath, [.chat(id("f9"))], "With its source gone it opens as a link would")
+    }
+
     /// Opening the display hands every list tab's path to its own list: the
     /// row nearest the top of each becomes its selection.
     func testOpeningTheDisplaySelectsEachTabsRowOnScreen() {
@@ -541,24 +658,6 @@ final class AidenAppShellTests: XCTestCase {
         navigation.botsPath = []
         navigation.dropRoutes(outside: [studio])
         XCTAssertNil(navigation.lastSelection(of: .bots), "A forgotten machine's Bot")
-    }
-
-    /// A workspace's chats count as on screen on their own tab only, and one
-    /// whose screen has gone without saying so stops counting.
-    func testAConversationOnScreenCountsOnItsOwnTabUntilItsScreenGoes() {
-        let registry = AidenConversationsOnScreen()
-        var entry: AidenConversationOnScreenEntry? = AidenConversationOnScreenEntry()
-        entry?.show(in: registry, on: .workspaces)
-
-        XCTAssertFalse(registry.isEmpty(on: .workspaces))
-        XCTAssertTrue(registry.isEmpty(on: .inbox))
-
-        entry?.hide()
-        XCTAssertTrue(registry.isEmpty(on: .workspaces))
-
-        entry?.show(in: registry, on: .workspaces)
-        entry = nil
-        XCTAssertTrue(registry.isEmpty(on: .workspaces), "Its screen's state went without a disappearance")
     }
 
     /// Frames measured on an iPhone Duo's inner display.

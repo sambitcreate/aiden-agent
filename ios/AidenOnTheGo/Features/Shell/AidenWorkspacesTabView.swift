@@ -158,7 +158,8 @@ struct AidenWorkspaceRouteView: View {
     let onRemoved: () -> Void
     let onChatUpdated: @MainActor (AidenChat) -> Void
     let onChatRemoved: @MainActor (String) -> Void
-    let onChatActivityChanged: @MainActor (String, AidenChatSummaryActivity) -> Void
+    /// Opens a chat the workspace just made, over the workspace.
+    let onOpenChat: @MainActor (AidenHostObjectID) -> Void
 
     @Environment(\.aidenPalette) private var palette
 
@@ -188,7 +189,7 @@ struct AidenWorkspaceRouteView: View {
                 onRemoved: onRemoved,
                 onChatUpdated: onChatUpdated,
                 onChatRemoved: onChatRemoved,
-                onChatActivityChanged: onChatActivityChanged
+                onOpenChat: onOpenChat
             )
             .id(workspace.revision)
         } else if isLoadingWorkspaces {
