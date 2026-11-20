@@ -26,6 +26,7 @@ import { LiveRibbon } from "./live-ribbon";
 import { useLiveVoiceEnding } from "./live-ribbon-session";
 import { useAidenLivePreferences, type AidenLivePreferencesPatch } from "./use-aiden-live-preferences";
 import { useLiveChatVoiceApprovals } from "./use-live-chat-voice-approvals";
+import { isEscapeKey } from "../../lib/dismiss-key";
 
 const SESSION_ACTIONS: AssistantLiveApprovals = {
   approvals: [],
@@ -247,7 +248,7 @@ export function AssistantDockPresentation({
         end.removeEventListener("keydown", onKeyDown);
       };
       const onKeyDown = (event: KeyboardEvent) => {
-        if (event.key === "Escape") disarm();
+        if (isEscapeKey(event)) disarm();
       };
       end.addEventListener("blur", disarm);
       end.addEventListener("keydown", onKeyDown);
@@ -340,7 +341,7 @@ export function AssistantDockPresentation({
             disabled={closing}
             aria-label={accessibleName}
             aria-expanded={live.setupOpen}
-            onKeyDown={(event) => { if (event.key === "Escape") setStopRevealed(false); }}
+            onKeyDown={(event) => { if (isEscapeKey(event)) setStopRevealed(false); }}
             onClick={openPanel}
           >
             <span className="aiden-live-trigger-glyph" aria-hidden="true">

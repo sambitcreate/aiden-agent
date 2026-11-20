@@ -9,6 +9,7 @@ import {
 } from "./ui";
 import { BrowserMenuButton } from "./browser-menu-button";
 import { cn } from "../lib/ui-utils";
+import { useResizeHandle } from "../lib/use-resize-handle";
 import { useShortcutBinding, useShortcutLabel } from "../lib/command-system";
 import { ariaKeyShortcut } from "../shared/keybindings";
 import {
@@ -293,61 +294,20 @@ export function WorkbenchPanel<T extends WorkbenchTab>({
   const ownSurfaceRef = React.useRef<HTMLElement | null>(null);
   const activeTabRef = providedActiveTabRef ?? ownActiveTabRef;
   const surfaceRef = providedSurfaceRef ?? ownSurfaceRef;
-  const widthRef = React.useRef(width);
-  widthRef.current = width;
-
   const resizeBounds = resolveEnvironmentPanelResizeBounds(containerWidth, inline, widthBounds);
-  const clampToResizeBounds = React.useCallback(
-    (nextWidth: number) => Math.min(resizeBounds.max, Math.max(resizeBounds.min, nextWidth)),
-    [resizeBounds.max, resizeBounds.min],
-  );
-
-  const commitWidth = React.useCallback(
-    (nextWidth: number) => onWidthCommit(clampToResizeBounds(nextWidth)),
-    [clampToResizeBounds, onWidthCommit],
-  );
-
-  const beginResize = React.useCallback(
-    (event: React.PointerEvent<HTMLDivElement>) => {
-      if (event.button !== 0 || !open) return;
-      event.preventDefault();
-      event.currentTarget.setPointerCapture(event.pointerId);
-      const startX = event.clientX;
-      const startWidth = widthRef.current;
-      onResizingChange(true);
-      const move = (moveEvent: PointerEvent) => {
-        onWidthChange(clampToResizeBounds(startWidth + startX - moveEvent.clientX));
-      };
-      const finish = (endEvent: PointerEvent) => {
-        commitWidth(
-          endEvent.type === "pointerup" ? startWidth + startX - endEvent.clientX : widthRef.current,
-        );
-        onResizingChange(false);
-        window.removeEventListener("pointermove", move);
-        window.removeEventListener("pointerup", finish);
-        window.removeEventListener("pointercancel", finish);
-      };
-      window.addEventListener("pointermove", move);
-      window.addEventListener("pointerup", finish);
-      window.addEventListener("pointercancel", finish);
-    },
-    [clampToResizeBounds, commitWidth, open, onResizingChange, onWidthChange],
-  );
-
-  const resizeWithKeyboard = React.useCallback(
-    (event: React.KeyboardEvent<HTMLDivElement>) => {
-      const increment = event.shiftKey ? 40 : 16;
-      let next = width;
-      if (event.key === "ArrowLeft") next += increment;
-      else if (event.key === "ArrowRight") next -= increment;
-      else if (event.key === "Home") next = resizeBounds.min;
-      else if (event.key === "End") next = resizeBounds.max;
-      else return;
-      event.preventDefault();
-      commitWidth(next);
-    },
-    [commitWidth, resizeBounds.max, resizeBounds.min, width],
-  );
+  // The panel is after the divider, so moving the divider toward the start widens it.
+  const resizeHandle = useResizeHandle({
+    orientation: "vertical",
+    panel: "end",
+    value: width,
+    min: resizeBounds.min,
+    max: resizeBounds.max,
+    disabled: !open,
+    onResize: onWidthChange,
+    onCommit: onWidthCommit,
+    onResizingChange,
+    onToggleCollapse: onClose,
+  });
 
   return (
     <aside
@@ -381,16 +341,9 @@ export function WorkbenchPanel<T extends WorkbenchTab>({
       }}
     >
       <div
-        role="separator"
+        {...resizeHandle}
         aria-label={resizeLabel}
-        aria-orientation="vertical"
-        aria-valuemin={resizeBounds.min}
-        aria-valuemax={resizeBounds.max}
-        aria-valuenow={Math.round(width)}
-        tabIndex={open ? 0 : -1}
-        onPointerDown={beginResize}
-        onKeyDown={resizeWithKeyboard}
-        className="absolute inset-y-0 left-0 z-40 -ml-1 w-2 cursor-col-resize outline-none before:absolute before:inset-y-0 before:left-1 before:w-px before:bg-separator hover:before:bg-primary/20 focus-visible:before:w-0.5 focus-visible:before:bg-accent"
+        className="absolute inset-y-0 left-0 z-40 -ml-1 w-2 cursor-col-resize outline-none before:absolute before:inset-y-0 before:left-1 before:w-px before:bg-separator hover:before:bg-primary/20 focus-visible:before:w-0.5 focus-visible:before:bg-focus-ring"
       />
 
       <WorkbenchTabStrip
