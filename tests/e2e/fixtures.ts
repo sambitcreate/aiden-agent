@@ -659,10 +659,47 @@ async function seedWorkspace(userDataDir: string, workspaceDir: string): Promise
 
 /** Wait for the one main window without assuming its initial route or title. */
 export async function firstAidenWindow(app: ElectronApplication): Promise<Page> {
-  const page = app.windows()[0] ?? await app.firstWindow();
+  let page = app.windows()[0];
+  if (!page) {
+    try {
+      page = await app.firstWindow();
+    } catch (error) {
+      throw await withStartupMilestones(app, error);
+    }
+  }
   await page.waitForLoadState("domcontentloaded");
   await expect(page.locator("body")).toBeVisible();
   return page;
+}
+
+type StartupMilestones = Record<"willFinishLaunching" | "nativeReady" | "playwrightRun", number | null>;
+
+/**
+ * Name the startup step a launch that opened no window stopped at, from the
+ * milestones electron-test-bootstrap.cjs records: whether Electron's native
+ * will-finish-launching and ready events arrived, and when Playwright released
+ * the held "ready" to Aiden.
+ */
+async function withStartupMilestones(app: ElectronApplication, error: unknown): Promise<unknown> {
+  if (!(error instanceof Error)) return error;
+  let detail: string;
+  try {
+    const milestones = await withTimeout(
+      app.evaluate(() => ({
+        ...(globalThis as unknown as { __aidenE2eStartupMilestones: StartupMilestones }).__aidenE2eStartupMilestones,
+        now: Math.round(process.uptime() * 1000),
+      })),
+      "Reading Electron startup milestones",
+      2_000,
+    );
+    const at = (value: number | null) => (value === null ? "never" : `${value} ms`);
+    detail = `Electron startup milestones after ${milestones.now} ms: will-finish-launching ${at(milestones.willFinishLaunching)}, `
+      + `native ready ${at(milestones.nativeReady)}, Playwright run ${at(milestones.playwrightRun)}.`;
+  } catch (readError) {
+    detail = `Electron startup milestones could not be read: ${formatFailure(readError)}`;
+  }
+  error.message = `${error.message}\n${detail}`;
+  return error;
 }
 
 async function assertRuntimeIsolation(
