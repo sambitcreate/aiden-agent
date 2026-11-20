@@ -14,6 +14,7 @@ const fileUrls = {
     import.meta.url,
   ),
   ascRunbook: new URL("../ios/ASC_CLI.md", import.meta.url),
+  testflight: new URL("../ios/TESTFLIGHT.md", import.meta.url),
   appInfoMetadata: new URL(
     "../ios/app-store/metadata/app-info/en-US.json",
     import.meta.url,
@@ -58,11 +59,22 @@ test("public App Store identity stays aligned with shipping app links", async ()
   assert.match(appConfig, /supportURL = URL\(staticString: "https:\/\/chatwithaiden\.com\/"\)/u);
 });
 
-test("release metadata names the current processed TestFlight candidate", async () => {
-  const { metadata } = await loadFiles();
+test("release docs agree on the current processed TestFlight candidate, and it is the newest recorded build", async () => {
+  const { metadata, ascRunbook, testflight } = await loadFiles();
 
-  assert.match(metadata, /build `43` is the current processed internal candidate/u);
-  assert.doesNotMatch(metadata, /build `39` is the current processed internal candidate/u);
+  const named = [metadata, ascRunbook, testflight].flatMap((text) =>
+    [...text.matchAll(/build `(\d+)` is the current processed internal candidate/giu)].map((match) => Number(match[1])),
+  );
+  const [resourceBuild] = [...ascRunbook.matchAll(/Current exact build resource ID: `[0-9a-f-]+` \(build `(\d+)`/gu)].map(
+    (match) => Number(match[1]),
+  );
+  named.push(resourceBuild);
+  assert.ok(named.length >= 4, "metadata, the ASC runbook and TESTFLIGHT.md each name the current candidate");
+  assert.deepEqual(new Set(named), new Set([named[0]]), `every current-candidate statement names one build, saw ${named}`);
+
+  const recorded = [...ascRunbook.matchAll(/^## Internal build (\d+) /gmu)].map((match) => Number(match[1]));
+  assert.ok(recorded.length > 0, "the ASC runbook records each internal build");
+  assert.equal(named[0], Math.max(...recorded), "the current candidate is the newest build the runbook records");
 });
 
 test("ASC owner operations are telemetry-off, strict, and credential-safe", async () => {
