@@ -173,6 +173,18 @@ struct AidenWorkspacesDirectoryView: View {
         .onAppear { coordinator.haptics.activate(scope: hapticScope) }
         .onDisappear { coordinator.haptics.deactivate(scope: hapticScope) }
         .toolbar {
+            if tabChrome.besideList {
+                // Beside the detail the column's bar drops an inline
+                // "Workspaces" to fit its buttons, where the shorter "Bots"
+                // still fits. A leading item keeps its place.
+                ToolbarItem(placement: .topBarLeading) {
+                    Text("Workspaces")
+                        .font(.headline)
+                        .fixedSize()
+                        .accessibilityAddTraits(.isHeader)
+                }
+                .sharedBackgroundVisibility(.hidden)
+            }
             DefaultToolbarItem(kind: .search, placement: .primaryAction)
             ToolbarSpacer(.fixed, placement: .primaryAction)
             ToolbarItem(placement: .primaryAction) { addWorkspaceMenu }
@@ -339,7 +351,9 @@ struct AidenWorkspacesDirectoryView: View {
                 Label("Add Folder", systemImage: "folder.badge.plus")
             }
         } label: {
-            Image(systemName: "plus")
+            // The bar shows only the icon; the title is what the menu reads
+            // when the bar folds this into its overflow beside the detail.
+            Label("Add Workspace", systemImage: "plus")
         }
         .accessibilityLabel("Add workspace")
     }
@@ -393,6 +407,7 @@ private struct AidenArchivedWorkspacesView<Row: View>: View {
     @Bindable var coordinator: AidenRemoteCoordinator
     let workspaces: [AidenWorkspace]
     @ViewBuilder let row: (AidenWorkspace, Bool) -> Row
+    @Environment(\.aidenPalette) private var palette
     @State private var searchText = ""
 
     private var filteredWorkspaces: [AidenWorkspace] {
@@ -415,6 +430,7 @@ private struct AidenArchivedWorkspacesView<Row: View>: View {
                         : "Try a different search term.")
                 )
                 .listRowBackground(Color.clear)
+                .listRowSeparator(.hidden)
             } else {
                 ForEach(filteredWorkspaces) { workspace in
                     row(workspace, true)
@@ -422,6 +438,9 @@ private struct AidenArchivedWorkspacesView<Row: View>: View {
             }
         }
         .listStyle(.plain)
+        // The canvas, as on the Workspaces list it opens from.
+        .scrollContentBackground(.hidden)
+        .background { palette.canvas.ignoresSafeArea() }
         .navigationTitle("Archived Workspaces")
         .navigationBarTitleDisplayMode(.inline)
         .searchable(text: $searchText, prompt: "Search archived workspaces")

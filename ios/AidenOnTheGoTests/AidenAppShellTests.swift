@@ -394,6 +394,29 @@ final class AidenAppShellTests: XCTestCase {
         XCTAssertEqual(stack.inboxPath, [.chat(id("c1")), .settings, .chat(id("c2")), .chat(id("c3"))])
     }
 
+    /// A Bot picked from the Bots list beside the detail opens there, where it
+    /// was picked, even when the Inbox has it open; the Inbox gives it up so it
+    /// has one screen. On a stack the pick goes back to the Inbox's screen.
+    func testABotPickedFromItsListBesideTheDetailOpensOnThatTab() {
+        let navigation = besideList()
+        navigation.openInboxRow(.bot(id("b1")))
+        navigation.tab = .bots
+
+        navigation.pick(.bot(id("b1")), fromListOf: .bots)
+
+        XCTAssertEqual(navigation.tab, .bots)
+        XCTAssertEqual(navigation.botsPath, [.bot(id("b1"))])
+        XCTAssertEqual(navigation.inboxPath, [])
+
+        let stack = AidenAppNavigation()
+        stack.openInboxRow(.bot(id("b1")))
+        stack.tab = .bots
+        stack.pick(.bot(id("b1")), fromListOf: .bots)
+        XCTAssertEqual(stack.tab, .inbox)
+        XCTAssertEqual(stack.inboxPath, [.bot(id("b1"))])
+        XCTAssertEqual(stack.botsPath, [])
+    }
+
     /// Back, replace and Delete keep their stack rules, and the split reads the
     /// result: going back to the chosen chat pops what's over it, and deleting
     /// the chosen chat empties the detail.

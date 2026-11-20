@@ -651,8 +651,7 @@ struct AidenBotsHomeView: View {
                 } label: {
                     botRow(
                         row,
-                        isSelected: selectedBot?.instanceId == coordinator.defaultInstanceId
-                            && selectedBot?.objectId == row.bot.id
+                        isSelected: selectedBot != nil && selectedBot == defaultMachineBotID(row.bot.id)
                     )
                 }
                 .buttonStyle(.plain)
@@ -662,12 +661,24 @@ struct AidenBotsHomeView: View {
         }
     }
 
+    /// A Bot on the selected machine as its route names it, device included,
+    /// so the highlight matches the route open beside the list exactly.
+    private func defaultMachineBotID(_ botID: String) -> AidenHostObjectID? {
+        guard let installation = coordinator.installationStore.activeInstallation else { return nil }
+        return AidenHostObjectID(instanceId: installation.id, deviceId: installation.deviceId, objectId: botID)
+    }
+
     /// Every shown machine's Bots: the strip, then each machine's under its name
     /// when the strip says All. A row opens the Bot on its own machine.
     @ViewBuilder
     private func machinesContent(_ machines: AidenBotsHomeMachines) -> some View {
         AidenMachineStrip(labels: machines.roster.tabMachines, filter: machines.filter)
             .padding(.vertical, AidenSpacing.xs)
+            // A horizontal scroll view runs on into the safe area, under the
+            // side rail of a closed iPhone Duo and out past it. A list row
+            // stops it at the content's edge on Inbox and Workspaces; here
+            // the strip stops itself.
+            .clipped()
         if let shown = shownPendingCreate {
             AidenBotPendingCreateRow(pending: shown.pending, machine: shown.machine)
         }

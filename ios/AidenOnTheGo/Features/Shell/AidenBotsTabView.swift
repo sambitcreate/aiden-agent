@@ -96,7 +96,7 @@ struct AidenBotsTabView: View {
     }
 
     private func open(_ id: AidenHostObjectID) {
-        navigation.open(.bot(id))
+        navigation.pick(.bot(id), fromListOf: .bots)
         onOpened()
     }
 

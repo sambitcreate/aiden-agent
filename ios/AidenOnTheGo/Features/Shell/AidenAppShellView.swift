@@ -230,7 +230,7 @@ struct AidenAppShellView: View {
                         besideList: showsListBesideDetail,
                         selection: selection
                     ) { route in
-                        navigation.open(route)
+                        navigation.pick(route, fromListOf: .workspaces)
                         hideOverlaidList(on: .workspaces)
                     }
                 }
@@ -821,6 +821,7 @@ private struct AidenSplitTab<Sidebar: View>: View {
     let screen: (AidenAppRoute, Bool) -> AnyView
 
     @Environment(\.aidenPalette) private var palette
+    @State private var detailStack = AidenDetailStack()
 
     private var path: [AidenAppRoute] { navigation.path(of: tab) }
 
@@ -850,6 +851,14 @@ private struct AidenSplitTab<Sidebar: View>: View {
         .onChange(of: AidenSplitNavigationPath(path).selection, initial: true) { _, selection in
             columns.hideOverlaidList(besideList: besideList, hasSelection: selection != nil)
             columns.showListIfNothingChosen(besideList: besideList, hasSelection: selection != nil)
+        }
+        // Another row beside the list takes with it what was pushed over the
+        // last one by view. A path deeper than the row is the path's own, and
+        // SwiftUI rebuilds the stack for it.
+        .onChange(of: AidenSplitNavigationPath(displayedPath).selection) { old, new in
+            guard besideList, old != nil, old != new,
+                  AidenSplitNavigationPath(displayedPath).detailPath.isEmpty else { return }
+            detailStack.popToRoot()
         }
     }
 
@@ -902,7 +911,44 @@ private struct AidenSplitTab<Sidebar: View>: View {
             // Beside the list a conversation keeps the tabs up, as the list
             // is; collapsed it's any stack's screen.
             .navigationDestination(for: AidenAppRoute.self) { screen($0, besideList) }
+            .background { AidenDetailStackReader(stack: detailStack) }
         }
+    }
+}
+
+/// The detail column's navigation controller, for the one thing SwiftUI
+/// leaves behind: a screen pushed by view, such as a workspace's chat or a
+/// fork, isn't on the path, and the split keeps it on top when another row
+/// is chosen beside the list. Neither the root's nor the stack's identity
+/// takes it away.
+@MainActor
+private final class AidenDetailStack {
+    fileprivate weak var anchor: UIView?
+
+    /// Back to the root, the row now chosen, as Back would go.
+    func popToRoot() {
+        var responder: UIResponder? = anchor
+        while let next = responder?.next, !(next is UIViewController) { responder = next }
+        guard let controller = responder?.next as? UIViewController,
+              let stack = controller.navigationController,
+              stack.viewControllers.count > 1
+        else { return }
+        stack.popToRootViewController(animated: false)
+    }
+}
+
+private struct AidenDetailStackReader: UIViewRepresentable {
+    let stack: AidenDetailStack
+
+    func makeUIView(context: Context) -> UIView {
+        let view = UIView()
+        view.isUserInteractionEnabled = false
+        stack.anchor = view
+        return view
+    }
+
+    func updateUIView(_ view: UIView, context: Context) {
+        stack.anchor = view
     }
 }
 

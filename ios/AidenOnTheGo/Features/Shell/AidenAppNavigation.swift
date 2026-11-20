@@ -527,6 +527,22 @@ final class AidenAppNavigation {
         show(route, onTab: tab)
     }
 
+    /// A row chosen from `tab`'s own list. Beside the list it becomes that
+    /// tab's selection, where the person chose it, and another tab holding the
+    /// same route leaves it first, so one route still never has two screens.
+    /// Otherwise it opens as `open(_:)` does.
+    func pick(_ route: AidenAppRoute, fromListOf tab: AidenAppTab) {
+        guard besideList, tab.listsRow(for: route) else { return open(route) }
+        chatStartingVoice = nil
+        for other in AidenAppTab.listTabs where other != tab {
+            var path = path(of: other)
+            Self.remove(route, from: &path)
+            if path != self.path(of: other) { setPath(path, of: other) }
+        }
+        self.tab = tab
+        show(route, onTab: tab)
+    }
+
     /// Goes back to just below the route, wherever it is. Nothing happens when
     /// it isn't on a path.
     func leave(_ route: AidenAppRoute) {

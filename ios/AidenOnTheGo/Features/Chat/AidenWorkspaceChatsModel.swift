@@ -19,6 +19,7 @@ final class AidenWorkspaceChatsModel {
     private(set) var isLoading = false
     private(set) var isMutating = false
     var presentedError: String?
+    @ObservationIgnored private var inFlightRead: Task<Void, Never>?
 
     init(
         coordinator: AidenRemoteCoordinator,
@@ -61,7 +62,22 @@ final class AidenWorkspaceChatsModel {
         upsert(chat)
     }
 
+    /// Reads the list. A read already under way is joined rather than
+    /// started again, and it isn't a caller's to cancel: a screen whose task
+    /// restarts while the list is on its way (as a push can) would otherwise
+    /// cancel the read it began and see the next one turned away, leaving the
+    /// list empty.
     func load() async {
+        if let inFlightRead { return await inFlightRead.value }
+        let read = Task {
+            await self.read()
+            self.inFlightRead = nil
+        }
+        inFlightRead = read
+        await read.value
+    }
+
+    private func read() async {
         guard let context = try? requestContext() else { return }
         let instanceId = context.instanceId
         let metadataWriteToken = cache.reserveChatWrite()
@@ -74,7 +90,6 @@ final class AidenWorkspaceChatsModel {
             guard coordinator.holds(context) else { return }
             chats = Self.sorted(presented)
         }
-        guard !isLoading else { return }
         isLoading = true
         defer { isLoading = false }
         do {
@@ -95,6 +110,10 @@ final class AidenWorkspaceChatsModel {
             }
             guard coordinator.holds(context) else { return }
             chats = Self.sorted(presented)
+        } catch let error where aidenIsCancellation(error) {
+            // The request was called off, not refused. Nothing was kept, so
+            // the next appearance or refresh reads it again.
+            return
         } catch {
             if await coordinator.handleCredentialRevocation(error, context: context) { return }
             guard coordinator.holds(context) else { return }
