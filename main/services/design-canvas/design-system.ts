@@ -93,15 +93,32 @@ const TOKEN_NAME = /^(?:--|\$|@)?[A-Za-z0-9_][A-Za-z0-9_-]{0,39}$/u;
 /** Words in a token name (`--color-sidebar-primary-foreground` has five); a longer one reads like a sentence. */
 const MAX_TOKEN_NAME_WORDS = 5;
 /**
- * A name longer than this as the file wrote it is not read as a token name
- * (one `tokenName` accepts is at most 42 characters). Nested keys are joined
- * only while they fit, so a long key is never copied into each child's name.
+ * A joined name longer than this once its separators are collapsed is not
+ * carried down to its children (one `tokenName` accepts is at most 42
+ * characters). Nested keys are joined only while they fit, so a long key is
+ * never copied into each child's name.
  */
-const MAX_TOKEN_NAME_SOURCE = 64;
+const MAX_JOINED_TOKEN_NAME = 64;
+
+/** `raw` trimmed, with each run of dots, slashes and whitespace made one dash and each run of three or more dashes two. */
+function collapsedName(raw: string): string {
+  return raw.trim().replace(/[.\s/]+/gu, "-").replace(/-{3,}/gu, "--");
+}
+
+/**
+ * `raw` with each run of dots, slashes and whitespace made one character (a
+ * space when the run was all whitespace, so a trim still drops it at either
+ * end, else a slash) and each run of three or more dashes made three.
+ * `collapsedName` reads it exactly as it reads `raw`, and it is at most a
+ * little longer than that collapsed name, however `raw` was padded.
+ */
+function shortenedName(raw: string): string {
+  return raw.replace(/[.\s/]+/gu, (run) => (/^\s+$/u.test(run) ? " " : "/")).replace(/-{3,}/gu, "---");
+}
 
 function tokenName(raw: string | null): string | null {
-  if (raw === null || raw.length > MAX_TOKEN_NAME_SOURCE) return null;
-  const name = raw.trim().replace(/[.\s/]+/gu, "-").replace(/-{3,}/gu, "--");
+  if (raw === null) return null;
+  const name = collapsedName(raw);
   if (!TOKEN_NAME.test(name)) return null;
   const words = name.replace(/^(?:--|\$|@)/u, "").split(/[-_]+/u).filter(Boolean);
   return words.length <= MAX_TOKEN_NAME_WORDS ? name : null;
@@ -436,12 +453,15 @@ function readKey(text: string, start: number): { name: string; end: number } | n
   return match ? { name: match[0], end: start + match[0].length } : null;
 }
 
-/** `prefix` and `key` joined by a dash (just `key` with no prefix), or null once that is too long to be a token name. */
+/**
+ * `prefix` and `key` joined by a dash (just `key` with no prefix) and
+ * shortened, or null once that collapses to more than `MAX_JOINED_TOKEN_NAME`
+ * characters, so padding around the separators never uses up the cap.
+ */
 function joinedName(prefix: string | null, key: string): string | null {
   if (prefix === null) return null;
-  const length = prefix ? prefix.length + 1 + key.length : key.length;
-  if (length > MAX_TOKEN_NAME_SOURCE) return null;
-  return prefix ? `${prefix}-${key}` : key;
+  const joined = shortenedName(prefix ? `${prefix}-${key}` : key);
+  return collapsedName(joined).length > MAX_JOINED_TOKEN_NAME ? null : joined;
 }
 
 /** `prefix` is "" at the top of the block and null once the name is too long to keep. */
@@ -492,7 +512,7 @@ function readTokenJson(found: Found, file: DesignSystemFile): void {
     visited += 1;
     if (visited > DESIGN_SYSTEM_MAX_CONFIG_VALUES || depth > 8 || node === null || typeof node !== "object") return;
     if (Array.isArray(node)) {
-      for (const entry of node) walk(entry, depth, name, font);
+      for (const entry of node) walk(entry, depth + 1, name, font);
       return;
     }
     const record = node as Record<string, unknown>;
@@ -513,7 +533,7 @@ function readTokenJson(found: Found, file: DesignSystemFile): void {
     for (const [key, entry] of Object.entries(record)) {
       if (key.startsWith("$")) continue;
       // The keys are joined with dots for the font check, so "font" can never span two of them.
-      const childName = depth === 0 ? (key.length > MAX_TOKEN_NAME_SOURCE ? null : key) : name === null || name.length + 1 + key.length > MAX_TOKEN_NAME_SOURCE ? null : `${name}-${key}`;
+      const childName = joinedName(name, key);
       const childFont = font || /font/iu.test(key);
       if (typeof entry === "string") {
         visited += 1;

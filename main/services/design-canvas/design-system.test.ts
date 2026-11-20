@@ -235,6 +235,37 @@ test("a key too long to be a token name leaves its values unnamed, and every str
   assert.deepEqual(withinLimit.colors.map((color) => [color.name, color.value]), [["ink", "#888888"]]);
 });
 
+test("padding around a name's separators does not count toward its length, and deeply nested arrays are read without overflowing", () => {
+  const pad = " ".repeat(100_000);
+  const detected = detectDesignSystem([
+    {
+      // Tokens Studio writes groups as "Theme / Light"; the spaces around a slash are not part of the name.
+      path: "tokens.json",
+      text: JSON.stringify({
+        "Theme / Light": { "Surface       /       Background       /       Default": { value: "#fafafa", type: "color" } },
+        brand: { [`Ink${pad}/${pad}Strong${pad}`]: "#101010" },
+      }),
+    },
+    { path: "deep/tokens.json", text: `${"[".repeat(100_000)}${"]".repeat(100_000)}` },
+    {
+      // Each array counts as a level, so a palette nested past the depth limit is not read while a shallow one is.
+      path: "nested/theme.json",
+      text: JSON.stringify({
+        palette: [[{ slug: "paper", color: "#303030" }]],
+        deep: [[[[[[[[[[{ slug: "buried", color: "#404040" }]]]]]]]]]],
+      }),
+    },
+  ]);
+  assert.deepEqual(
+    detected.colors.map((color) => [color.name, color.value]),
+    [
+      ["Theme-Light-Surface-Background-Default", "#fafafa"],
+      ["brand-Ink-Strong", "#101010"],
+      ["paper", "#303030"],
+    ],
+  );
+});
+
 test("design-token JSON and a WordPress theme.json are read", () => {
   const tokens = detectDesignSystem([
     {
