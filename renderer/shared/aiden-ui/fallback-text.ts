@@ -43,6 +43,10 @@ export interface FallbackTextOptions {
 const MAX_PLAIN_CELL = 40;
 /** The latest values listed for a sparkline; an older first value is kept before them. */
 const MAX_SPARKLINE_VALUES = 30;
+/** A chart, sparkline or heatmap label is one line of at most this many characters. */
+const MAX_CHART_LABEL = 120;
+/** A plain table row is clipped to this many characters, so a table of many columns stays readable on a phone. */
+const MAX_PLAIN_ROW = 400;
 
 class FallbackLines {
   readonly lines: string[] = [];
@@ -130,12 +134,19 @@ function plainCell(text: string): string {
   return cleanCell(text, MAX_PLAIN_CELL);
 }
 
+/** A chart's own label on one line, without control or direction characters. */
+function chartLabel(node: AidenUiNodeV1, scope: AidenUiScope): string {
+  return cleanCell(str(prop(node, "label", scope)), MAX_CHART_LABEL);
+}
+
 /** One table row as plain `Label: value` pairs, readable in any font with nothing to line up. */
 function plainRow(labels: readonly string[], cells: readonly string[]): string {
-  return cells.map((cell, index) => {
+  const row = cells.map((cell, index) => {
     const value = cell || "—";
     return labels[index] ? `${labels[index]}: ${value}` : value;
   }).join(" · ");
+  const characters = [...row];
+  return characters.length > MAX_PLAIN_ROW ? `${characters.slice(0, MAX_PLAIN_ROW - 1).join("")}…` : row;
 }
 
 function table(rows: unknown, columns: unknown, scope: AidenUiScope, out: FallbackLines): void {
@@ -281,7 +292,7 @@ function lines(node: AidenUiNodeV1, scope: AidenUiScope, out: FallbackLines): vo
     }
     case "Chart": {
       const data = prop(node, "data", scope);
-      const label = str(prop(node, "label", scope));
+      const label = chartLabel(node, scope);
       const kind = str(prop(node, "kind", scope));
       out.push(`${label || "Chart"} (${kind ? `${kind} chart` : "chart"}, ${Array.isArray(data) ? data.length : 0} points)`);
       if (out.chartTables && Array.isArray(data) && data.length) {
@@ -302,17 +313,19 @@ function lines(node: AidenUiNodeV1, scope: AidenUiScope, out: FallbackLines): vo
       return;
     }
     case "Sparkline": {
-      const label = str(prop(node, "label", scope));
+      const label = chartLabel(node, scope);
       const values = prop(node, "values", scope);
       const numbers = Array.isArray(values) ? values.filter((value): value is number => typeof value === "number" && Number.isFinite(value)) : [];
       if (out.chartTables && numbers.length) {
         // A trend's latest values matter most: past the cap, the first value
         // is kept for where it started, then the latest ones, with the count.
+        // The "…" stands for at least two values; one would fit in its place.
         const number = (value: number) => formatValue(value, "number", scope.locale);
-        const shown = numbers.length > MAX_SPARKLINE_VALUES + 1
+        const clipped = numbers.length > MAX_SPARKLINE_VALUES + 2;
+        const shown = clipped
           ? `${number(numbers[0]!)}, …, ${numbers.slice(-MAX_SPARKLINE_VALUES).map(number).join(", ")}`
           : numbers.map(number).join(", ");
-        const count = numbers.length > MAX_SPARKLINE_VALUES + 1 ? `, ${numbers.length} values` : "";
+        const count = clipped ? `, ${numbers.length} values` : "";
         out.push(`${label || "Trend"} (sparkline${count}): ${shown}`);
       } else if (label) {
         out.push(`${label} (sparkline)`);
@@ -320,7 +333,7 @@ function lines(node: AidenUiNodeV1, scope: AidenUiScope, out: FallbackLines): vo
       return;
     }
     case "Heatmap": {
-      const label = str(prop(node, "label", scope));
+      const label = chartLabel(node, scope);
       const rows = prop(node, "rows", scope);
       if (out.chartTables && Array.isArray(rows) && rows.length) {
         out.push(`${label || "Heatmap"} (heatmap, ${rows.length} cells)`);

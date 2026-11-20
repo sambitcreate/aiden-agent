@@ -290,6 +290,48 @@ test("a long sparkline keeps where it started and its latest values, with the co
   assert.match(line, /100 values/u);
 });
 
+test("a sparkline's \"…\" always stands for two or more values left out", () => {
+  const line = (count: number) => {
+    const values = Array.from({ length: count }, (_, index) => index + 1);
+    const text = compileAum(`<Visual title="T"><Sparkline values={${JSON.stringify(values)}} label="Load" /></Visual>`, { fallback: { chartTables: true } }).fallbackText;
+    return text.split("\n").find((entry) => entry.startsWith("Load"))!;
+  };
+  // Leaving out one value would save nothing, so 31 and 32 values are all listed.
+  for (const count of [31, 32]) {
+    const listed = line(count).slice(line(count).indexOf(": ") + 2).split(", ").map(Number);
+    assert.deepEqual(listed, Array.from({ length: count }, (_, index) => index + 1));
+  }
+  const listed = line(33).slice(line(33).indexOf(": ") + 2).split(", ");
+  assert.equal(listed[1], "…");
+  assert.equal(33 - (listed.length - 1), 2, "the … stands for the two values not listed");
+  assert.match(line(33), /33 values/u);
+});
+
+test("chart, sparkline and heatmap labels reach a text reader on one line, without control or direction characters", () => {
+  const compiled = compileAum(`<Visual title="T"><Chart kind="bar" data={$rows} label={$label} /><Sparkline values={[1, 2]} label={$label} /><Heatmap rows={[{"x":"a","y":"b","value":1}]} label={$label} /></Visual>`);
+  assert.ok(compiled.tree);
+  const label = "Sales\u202egnp.exe\nnext\u0007line\u2066";
+  const text = fallbackTextFor(compiled.tree, { vars: { rows: [{ name: "A", n: 1 }], label } }, { chartTables: true, plainTables: true });
+  // eslint-disable-next-line no-control-regex -- matching control characters is the point
+  assert.doesNotMatch(text, /[\u0000-\u0008\u000b-\u001f\u007f-\u009f\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/u, JSON.stringify(text));
+  const lines = text.split("\n");
+  assert.ok(lines.includes("Salesgnp.exe next line (bar chart, 1 points)"), text);
+  assert.ok(lines.includes("Salesgnp.exe next line (sparkline): 1, 2"), text);
+  assert.ok(lines.includes("Salesgnp.exe next line (heatmap, 1 cells)"), text);
+});
+
+test("a plain table row of many columns is clipped so it stays readable", () => {
+  const compiled = compileAum(`<Visual title="T"><Data name="rows">[]</Data><Table rows={$rows} /></Visual>`);
+  assert.ok(compiled.tree);
+  const row = Object.fromEntries(Array.from({ length: 30 }, (_, index) => [`column${index}`, "v".repeat(40)]));
+  const text = fallbackTextFor(compiled.tree, { vars: { rows: [row, { column0: "short" }] } }, { plainTables: true });
+  const [wide, narrow] = text.split("\n");
+  assert.equal([...wide!].length, 400);
+  assert.ok(wide!.startsWith(`column0: ${"v".repeat(40)} · column1:`), wide);
+  assert.ok(wide!.endsWith("…"));
+  assert.ok(narrow!.startsWith("column0: short · column1: —"));
+});
+
 test("a reader that shows text as-is in a proportional font gets each table row as labelled pairs, not pipes or padded columns", () => {
   const markup = `<Visual title="T"><Chart kind="pie" data={[{"name":"Alpha","share":0.4},{"name":"B","share":0.6}]} format="percent" label="Split" /><Table columns={[{"key":"plan","label":"Plan"},{"key":"seats","label":"Seats"},{"key":"note","label":"Note"}]} rows={[{"plan":"Team | annual","seats":12},{"plan":"Solo","seats":1,"note":"Ends\\nsoon"}]} /></Visual>`;
   const text = compileAum(markup, { fallback: { chartTables: true, plainTables: true } }).fallbackText;
