@@ -382,6 +382,12 @@ test("table cells drop characters drawn as nothing before they are clipped, keep
   }
   // A lone half of a pair in the data is dropped from a cell.
   assert.doesNotMatch(fallbackTextFor(compiled.tree, { vars: { rows: [{ name: "a\ud800b", n: 1 }] } }), loneSurrogate);
+  // Including one that falls where the text is read in slices, without taking the emoji after it along.
+  for (const plainTables of [true, false]) {
+    const text = fallbackTextFor(compiled.tree, { vars: { rows: [{ name: `${"\u200b".repeat(1_023)}\ud800\u{1f600} Revenue`, n: 1 }] } }, { plainTables });
+    assert.match(text, /\u{1f600} Revenue/u);
+    assert.doesNotMatch(text, loneSurrogate);
+  }
 });
 
 test("a cell reads the same however long its invisible runs are and however many columns show it", () => {

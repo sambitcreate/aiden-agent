@@ -156,7 +156,9 @@ export function cleanPrefix(text: string, hidden: RegExp, keep: number, spaces?:
   for (let start = 0; start < text.length && kept.length <= keep;) {
     let end = Math.min(start + CLEAN_SLICE, text.length);
     const last = text.charCodeAt(end - 1);
-    if (end < text.length && last >= 0xd800 && last <= 0xdbff) end += 1;
+    const next = text.charCodeAt(end);
+    // Keep a surrogate pair in one slice; a lone high surrogate stays alone.
+    if (last >= 0xd800 && last <= 0xdbff && next >= 0xdc00 && next <= 0xdfff) end += 1;
     let piece = text.slice(start, end).replace(hidden, "");
     start = end;
     if (spaces) {
