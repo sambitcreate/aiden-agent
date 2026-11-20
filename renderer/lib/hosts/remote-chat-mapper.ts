@@ -3,6 +3,7 @@ import { parseChatInputSource } from "../../shared/chat-input-source";
 import type { ChatImagePlacementV1 } from "../../shared/chat-artifacts";
 import { AIDEN_UI_CATALOG_VERSION, AIDEN_UI_LIMITS, type AidenUiNodeV1, type ChatUiVisualV1 } from "../../shared/aiden-ui/types";
 import { parseChatUiVisualV1 } from "../../shared/aiden-ui/visual";
+import { MAX_HTML_ARTIFACT_TITLE_CHARS } from "../../shared/generative-ui";
 import { isToolStep, parseGenerationTimeline, type GenerationTimeline } from "../../shared/generation-timeline";
 import {
   parseProviderFailureV1,
@@ -85,6 +86,25 @@ function mapOutcome(value: unknown): ProviderFailureV1 | undefined {
 /** Lines drawn for one remote visual; anything past them joins the last line, so the tree stays inside the node cap. */
 const MAX_REMOTE_VISUAL_LINES = 400;
 
+// Direction marks, embeddings, overrides and isolates could reorder the rest of a
+// line, and C0 and C1 controls draw as nothing or as boxes. A tab stays (as a
+// space in the title); a line break only separates lines.
+const REMOTE_VISUAL_HIDDEN = /[\u0000-\u0008\u000b-\u001f\u007f-\u009f\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/gu;
+
+/** The first `max` UTF-16 units of `text`, never ending halfway through a character. */
+function clipUnits(text: string, max: number): string {
+  if (text.length <= max) return text;
+  const last = text.charCodeAt(max - 1);
+  return text.slice(0, last >= 0xd800 && last <= 0xdbff ? max - 1 : max);
+}
+
+/** The host's title as one clean line within the title cap, or "Visual" when nothing is left. */
+function remoteVisualTitle(value: unknown): string {
+  const title = (text(value) ?? "").slice(0, AIDEN_UI_LIMITS.fallbackChars).replace(REMOTE_VISUAL_HIDDEN, "").replace(/\s+/gu, " ").trim();
+  if (!title) return "Visual";
+  return title.length > MAX_HTML_ARTIFACT_TITLE_CHARS ? `${clipUnits(title, MAX_HTML_ARTIFACT_TITLE_CHARS - 1).trimEnd()}…` : title;
+}
+
 /**
  * A native visual from the host as the text it projects. The host sends no
  * markup, so this Mac draws the fallback text phones show: one plain
@@ -95,13 +115,14 @@ function mapRemoteTextVisual(value: unknown): ChatUiVisualV1 | null {
   const input = record(value);
   // A visual the host pictured already shows as that picture among the message's images.
   if (input?.kind !== "ui" || input.snapshotAttachmentId !== undefined) return null;
-  const fallbackText = text(input.fallbackText)?.slice(0, AIDEN_UI_LIMITS.fallbackChars).trim();
+  const raw = text(input.fallbackText);
+  const fallbackText = raw === undefined ? "" : clipUnits(raw, AIDEN_UI_LIMITS.fallbackChars).replace(REMOTE_VISUAL_HIDDEN, "").trim();
   if (!fallbackText) return null;
   const lines = fallbackText.split("\n").map((line) => line.trim()).filter(Boolean);
   const shown = lines.length > MAX_REMOTE_VISUAL_LINES
     ? [...lines.slice(0, MAX_REMOTE_VISUAL_LINES - 1), lines.slice(MAX_REMOTE_VISUAL_LINES - 1).join(" ")]
     : lines;
-  const title = text(input.title) ?? "Visual";
+  const title = remoteVisualTitle(input.title);
   const tree: AidenUiNodeV1 = {
     t: "Visual",
     k: "0",

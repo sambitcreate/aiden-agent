@@ -173,6 +173,32 @@ test("remote visual text is drawn as words, never as markup, and an HTML, empty 
   assert.equal(drawnLines(long.tree).join(" ").split(" ").length, 1_500);
 });
 
+test("a remote visual's long or odd title and its hidden characters never cost the visual or split a character", () => {
+  const map = (title: unknown, fallbackText: string) =>
+    mapRemoteMessage({ id: "a1", role: "assistant", text: "", createdAt: new Date(1).toISOString(), visuals: [{ id: "ui-1", kind: "ui", title, fallbackText }] })?.uiVisuals?.[0];
+  const loneSurrogate = /\p{Cs}/u;
+
+  // 119 letters then emoji: the 120-unit cap falls inside the first emoji's pair.
+  const long = map(`${"a".repeat(119)}${"\u{1f600}".repeat(10)}`, "Body");
+  assert.ok(long, "a title over the cap still shows the visual");
+  assert.ok(long.title.length <= 120);
+  assert.ok(long.title.endsWith("…"));
+  assert.doesNotMatch(long.title, loneSurrogate);
+  assert.equal(map("\u202e\u0007\t", "Body")?.title, "Visual", "a title of nothing visible falls back");
+  assert.equal(map(42, "Body")?.title, "Visual");
+  assert.equal(map("Q3\trevenue\u202e \u0085report", "Body")?.title, "Q3 revenue report");
+
+  // Each line loses direction and control characters; a tab stays.
+  const odd = map("Odd", "safe\u202eexe.txt\nbell\u0007 here\u009b\r\nname\tvalue\u2066x\u2069");
+  assert.deepEqual(drawnLines(odd!.tree), ["safeexe.txt", "bell here", "name\tvalue" + "x"]);
+
+  // The 4,000-unit cap falls inside a pair: the half character is left off, not kept.
+  const capped = map("Capped", `${"b".repeat(3_999)}\u{1f600}tail`);
+  assert.ok(capped);
+  assert.equal(capped.fallbackText, "b".repeat(3_999));
+  assert.doesNotMatch(drawnLines(capped.tree).join("\n"), loneSurrogate);
+});
+
 test("rows the transcript cannot render are skipped and malformed pages are rejected", () => {
   assert.equal(mapRemoteMessage({ id: "x", role: "system", text: "hi", createdAt: "2026-10-01T00:00:00Z" }), null);
   assert.equal(mapRemoteMessage({ id: "x", role: "user", text: "hi", createdAt: "not a date" }), null);
