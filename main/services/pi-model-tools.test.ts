@@ -1021,11 +1021,30 @@ test("a save path that could never be written, or a canvas request without one, 
     // Invisible on the card: a zero-width space and joiner, a soft hyphen, the BOM,
     // the line and paragraph separators, and the Hangul fillers.
     "design/he\u200bro.png", "design/he\u200dro.png", "design/he\u00adro.png", "design/\ufeffhero.png",
-    "design/hero\u2028.png", "design/hero\u2029.png", "design/\u3164/hero.png", "design/he\u115fro.png", "design/he\u1160ro.png"]) {
+    "design/hero\u2028.png", "design/hero\u2029.png", "design/\u3164/hero.png", "design/he\u115fro.png", "design/he\u1160ro.png",
+    // Drawn as nothing or as a blank: the half-width Hangul filler, a variation selector
+    // and the combining grapheme joiner away from any emoji, a tag character, the
+    // braille blank and the ideographic space.
+    "design/he\uffa0ro.png", "design/hero\ufe0f.png", "design/he\u034fro.png", "design/hero\u{e0041}.png",
+    "design/\u2800/hero.png", "design/hero\u3000.png",
+    // A zero-width joiner counts as part of an emoji only between two emoji.
+    "design/\u{1f44d}\u200d.png", "design/\u200d\u{1f44d}.png", "design/a\u200d\u{1f44d}.png", "design/\u{1f44d}\u200d\u200d\u{1f44d}.png"]) {
     await assert.rejects(generate.execute("bad", { ...imageRequest, savePath }), Error, JSON.stringify(savePath));
   }
   await assert.rejects(generate.execute("canvas", { ...imageRequest, placeOnCanvas: true }), /placeOnCanvas needs savePath/);
   assert.equal(controls.imageCalls, 0);
+});
+
+test("a save path in any script, or named with emoji sequences, is saved as written", async () => {
+  const names = ["デザイン/ヒーロー.png", "디자인/표지.png", "تصميم/غلاف.png", "дизайн/обложка.png", "设计/封面", "design/naïve café.png",
+    // A family, a rainbow flag, a heart on fire and a toned hand: emoji joined or styled by joiners and selectors.
+    "design/\u{1f468}\u200d\u{1f469}\u200d\u{1f467}.png", "design/\u{1f3f3}\ufe0f\u200d\u{1f308}.png", "design/\u2764\ufe0f\u200d\u{1f525}.png", "design/\u{1f44b}\u{1f3fd}.png"];
+  const { saves, generate } = savingTools();
+  for (const savePath of names) {
+    const result = await generate.execute("ok", { ...imageRequest, savePath });
+    assert.equal(result.isError, undefined, JSON.stringify(savePath));
+  }
+  assert.deepEqual(saves.map((save) => save.path), names.map((name) => (name.endsWith(".png") ? name : `${name}.png`)));
 });
 
 test("savePath and placeOnCanvas exist only for a chat whose host can save and place", async () => {
