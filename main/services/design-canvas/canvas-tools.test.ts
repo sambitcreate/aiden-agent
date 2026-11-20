@@ -1414,6 +1414,12 @@ test("canvas_duplicate makes a page's variants in one call, side by side in one 
     })}</script>`,
   );
   const page = await call("canvas_place_frame", { kind: "file", title: "Home", path: "design/home.html", x: 0, y: 0 });
+  // The person saved a version of the page's tweaks.
+  const saved = [{ id: "v2", name: "V2", tweaks: { "data-density": "compact" } }];
+  await store.update("chat-1", (doc) => ({
+    ...doc,
+    frames: doc.frames.map((frame) => (frame.id === page.frame.id ? { ...frame, tweakVersions: saved } : frame)),
+  }));
   const before = await store.get("chat-1");
 
   const refused = await call("canvas_duplicate", {
@@ -1450,6 +1456,8 @@ test("canvas_duplicate makes a page's variants in one call, side by side in one 
   assert.equal(phone!.designWidth, 390);
   assert.ok(phone!.w < page.frame.box.w, "the phone variant is sized for its width");
   assert.deepEqual(compact!.tweaks, { "data-density": "compact" });
+  for (const variant of [dark, phone, compact]) assert.equal(variant!.tweakVersions, undefined, "a variant does not carry the original's saved versions");
+  assert.deepEqual(doc.frames.find((frame) => frame.id === page.frame.id)!.tweakVersions, saved, "the original keeps them");
   const row = [page.frame.box, ...[dark, phone, compact].map((frame) => frame!)];
   for (let index = 1; index < row.length; index += 1) {
     assert.equal(row[index]!.y, 0, "top-aligned with the original");

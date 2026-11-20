@@ -1874,7 +1874,8 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
                 throw full();
               }
               const sourceWidth = source.designWidth ?? DESIGN_DEFAULT_FILE_WIDTH;
-              const { groupId: _groupId, locked: _locked, ...base } = source;
+              // A variant has its own look, so the versions the person saved of the original's stay with it.
+              const { groupId: _groupId, locked: _locked, tweakVersions: _versions, ...base } = source;
               const copies = variants.map((variant): DesignFrame => {
                 const width = designWidth(variant.designWidth);
                 if (width !== undefined && source.kind !== "file") throw new CanvasToolError("Only a page (kind file) has a design width.");
