@@ -481,12 +481,17 @@ function useDesignWindowPolicy(
   }, [recheckSidebar, refreshCanWiden, state]);
 
   const collapsed = sidebar?.collapsed === true;
-  // Opening the sidebar by hand while design mode stays on undoes Expand for next time too.
+  // Opening the sidebar by hand while design mode stays on undoes Expand for next time too,
+  // and makes the sidebar the person's again: a later collapse is theirs, so exit leaves it.
+  // Design mode's own reopenings clear the marker before they open the sidebar.
   const previousRef = React.useRef({ active, collapsed });
   React.useEffect(() => {
     const previous = previousRef.current;
     previousRef.current = { active, collapsed };
-    if (active && previous.active && previous.collapsed && !collapsed) writeDesignExpanded(false);
+    if (active && previous.active && previous.collapsed && !collapsed) {
+      writeDesignExpanded(false);
+      writeSidebarCollapsedByDesign(null);
+    }
   }, [active, collapsed]);
 
   const setExpanded = React.useCallback(

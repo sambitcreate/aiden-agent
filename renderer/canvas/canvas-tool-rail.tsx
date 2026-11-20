@@ -25,7 +25,8 @@ export function CanvasToolRail({
         return (
           <Button
             key={item}
-            variant={tool === item ? "muted" : "transparent"}
+            variant="bar"
+            size="small"
             iconOnly
             aria-label={label}
             aria-pressed={tool === item}

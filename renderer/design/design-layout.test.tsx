@@ -12,7 +12,7 @@ import {
   type EnvironmentPanelContextValue,
 } from "../components/environment-panel";
 import { WorkspaceTerminalProvider } from "../components/terminal-drawer";
-import { SplitView } from "../components/ui";
+import { SplitView, useSplitViewSidebar } from "../components/ui";
 import { AppCapabilitiesProvider, DISABLED_APP_CAPABILITIES } from "../lib/app-capabilities";
 import { CommandSystemProvider } from "../lib/command-system";
 import { applyDesignModeToCache, useDesignModeControls } from "../lib/design-mode";
@@ -122,6 +122,13 @@ function PanelProbe() {
   return null;
 }
 
+/** The sidebar's own show and hide, the way the person's Show sidebar and Hide sidebar buttons use it. */
+let sidebar: ReturnType<typeof useSplitViewSidebar>;
+function SidebarProbe() {
+  sidebar = useSplitViewSidebar();
+  return null;
+}
+
 /** The design toggle as the top bar wires it: a person's click. */
 function ToggleProbe({ chatId }: { chatId: string }) {
   const controls = useDesignModeControls(chatId);
@@ -158,6 +165,7 @@ function Shell({ chatId, designMode = true }: { chatId: string; designMode?: boo
             <EnvironmentPanelProvider>
               <PanelProbe />
               <SplitView storageKey="aiden-agent" sidebar={<nav aria-label="Chats" />}>
+                <SidebarProbe />
                 <DesignChat chatId={chatId} />
               </SplitView>
             </EnvironmentPanelProvider>
@@ -674,6 +682,27 @@ test("design mode left expanded starts expanded on the person's next entry and g
   }
   await act(async () => undefined);
   assert.equal(localStorage.getItem(SIDEBAR_COLLAPSED_KEY), "0");
+});
+
+test("a sidebar the person hid by hand after undoing Expand stays hidden when design mode turns off", async () => {
+  await act(async () => {
+    render(<Shell chatId="design-chat" />);
+  });
+  await act(async () => {
+    fireEvent.click(await screen.findByRole("button", { name: "Expand canvas" }));
+  });
+  await waitFor(() => assert.equal(localStorage.getItem(SIDEBAR_COLLAPSED_KEY), "1"));
+  await act(async () => sidebar!.setCollapsed(false));
+  await waitFor(() => assert.equal(localStorage.getItem(SIDEBAR_COLLAPSED_KEY), "0"));
+  await act(async () => sidebar!.setCollapsed(true));
+  await waitFor(() => assert.equal(localStorage.getItem(SIDEBAR_COLLAPSED_KEY), "1"));
+
+  await act(async () => {
+    fireEvent.click(screen.getByRole("button", { name: "Design mode" }));
+  });
+  await waitFor(() => assert.equal(layoutState(), "off"));
+  await act(async () => undefined);
+  assert.equal(localStorage.getItem(SIDEBAR_COLLAPSED_KEY), "1", "the person's own collapse is theirs to undo");
 });
 
 test("a narrow window, where the sidebar slides over the canvas, offers no Expand", async () => {
