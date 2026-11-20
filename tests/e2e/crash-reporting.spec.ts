@@ -105,9 +105,13 @@ test.describe("crash reports", () => {
     await expect.poll(() => reportsMatching(/app_crashed.*"kind":"renderer"/u)).toBe(1);
 
     // A fatal main-process exception whose process does not survive: the
-    // crash happens in the same tick, right after Aiden's own monitor ran.
+    // process dies in the same tick, right after Aiden's own monitor ran.
+    // SIGKILL rather than process.crash(): on macOS a crashed app makes
+    // ReportCrash raise a "quit unexpectedly" dialog about 30 seconds later,
+    // and an Electron launch that overlaps it never finishes launching, so
+    // whichever spec launches next on this machine never gets a window.
     await aiden.app.evaluate((_electron, secret) => {
-      process.on("uncaughtExceptionMonitor", () => process.crash());
+      process.on("uncaughtExceptionMonitor", () => process.kill(process.pid, "SIGKILL"));
       setTimeout(() => {
         throw new TypeError(secret);
       });
