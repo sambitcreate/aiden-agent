@@ -5,6 +5,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import {
   createGenerativeUiExtension,
+  createVisualizeGuideTool,
   GENERATIVE_UI_EXTENSION_ID,
   GENERATIVE_UI_TOOL_NAME,
   shouldEnableGenerativeUiExtension,
@@ -55,6 +56,12 @@ test("the catalog guide documents every component and its example compiles clean
   const result = await guide!.execute("g", { modules: ["catalog"] });
   const text = result.content[0]?.type === "text" ? result.content[0].text : "";
   for (const name of Object.keys(AIDEN_UI_CATALOG)) assert.match(text, new RegExp(`\`${name}\``, "u"), name);
+  // List props say what one item looks like, not "any".
+  const line = (name: string) => text.split("\n").find((entry) => entry.startsWith(`- \`${name}\``)) ?? "";
+  assert.match(line("Checklist"), /items: list of \{label, done\}/u);
+  assert.match(line("Timeline"), /items: list of \{title, time\?, description\?\}/u);
+  assert.match(line("Sparkline"), /values: list of number/u);
+  assert.doesNotMatch(line("Table"), /rows: any|columns: any/u);
   const compiled = compileAum(AIDEN_UI_GUIDE_EXAMPLE);
   assert.deepEqual(compiled.diagnostics, []);
   assert.ok(text.includes(AIDEN_UI_GUIDE_EXAMPLE));
@@ -146,6 +153,21 @@ test("visualize_guide returns only the requested design modules", async () => {
   await assert.rejects(guide.execute("g2", { modules: ["nope"] }), /module/iu);
 });
 
+test("with inline visuals off, the guide still teaches artifact markup and never mentions chat visual tools", async () => {
+  const guide = createVisualizeGuideTool({ inlineVisuals: false });
+  assert.equal(guide.name, "visualize_guide");
+  assert.equal(piRuntimeReplayPolicy(guide), "never");
+  assert.match(guide.description, /workspace_artifact/u);
+  const result = await guide.execute("g", { modules: ["catalog"] });
+  const text = result.content[0]?.type === "text" ? result.content[0].text : "";
+  for (const name of Object.keys(AIDEN_UI_CATALOG)) assert.match(text, new RegExp(`\`${name}\``, "u"), name);
+  assert.match(text, /setState/u);
+  assert.match(text, /64 KiB/u);
+  assert.doesNotMatch(`${guide.description}\n${text}`, /render_ui|render_artifact|inline visual/iu);
+  // The HTML-only modules teach render_artifact, which is not offered then.
+  await assert.rejects(guide.execute("g2", { modules: ["html"] }), /must be one or more of: catalog\./u);
+});
+
 test("the system prompt points the model at the guide and keeps replies complete without visuals", () => {
   const extension = createGenerativeUiExtension({ workspaceRoot: undefined, onArtifact: () => undefined });
   assert.match(extension.systemPrompt ?? "", /visualize_guide/u);
@@ -187,6 +209,57 @@ test("with the design canvas offered, mockups and pages go to design files rathe
     assert.doesNotMatch(inlineUses, /mockup|dashboard|screen/iu);
     assert.doesNotMatch(canvas.description.replace(/[^;.]*design canvas[^;.]*/giu, ""), /mockup|dashboard|screen/iu);
   }
+  assert.doesNotMatch(chat.prompt + chat.description, /design_mode/u);
+});
+
+test("while design mode can be asked for, whole pages and several directions go to design_mode", () => {
+  const steering = (options: { designCanvas?: boolean }) => {
+    const extension = createGenerativeUiExtension({
+      workspaceRoot: undefined,
+      designModeOffered: true,
+      ...options,
+      onArtifact: () => undefined,
+    });
+    const renderArtifact = extension.tools?.find((tool) => tool.name === "render_artifact");
+    assert.ok(renderArtifact);
+    return { prompt: extension.systemPrompt ?? "", description: renderArtifact.description };
+  };
+  const offered = steering({});
+  for (const text of [offered.prompt, offered.description]) assert.match(text, /design_mode/u);
+  assert.match(offered.description, /app screens/u);
+  assert.match(offered.description, /several design directions/u);
+  assert.match(offered.prompt, /screens, pages and directions[^.;]*design_mode/u);
+  assert.doesNotMatch(offered.description, /UI mockups/u);
+  // Once the canvas is open, the visuals point to design/ files, not to asking again.
+  const open = steering({ designCanvas: true });
+  assert.doesNotMatch(open.prompt + open.description, /design_mode/u);
+  assert.match(open.prompt, /design\/\*\.html/u);
+});
+
+test("one rule says where a visual goes, naming only the destinations this turn has tools for", () => {
+  const prompt = (options: Partial<Parameters<typeof createGenerativeUiExtension>[0]>) =>
+    createGenerativeUiExtension({ workspaceRoot: undefined, onArtifact: () => undefined, ...options }).systemPrompt ?? "";
+  const rule = (text: string) => /Where a visual goes:[^\n]*/u.exec(text)?.[0] ?? "";
+
+  // Inline visuals alone leave nothing to choose between.
+  assert.equal(rule(prompt({})), "");
+
+  // In design mode, a dashboard the person will check daily still goes to Artifacts, screens go on the canvas and
+  // pictures come from the image tools.
+  const designMode = rule(prompt({ designCanvas: true, workspaceArtifacts: true, images: true }));
+  assert.match(designMode, /dashboard they check daily[^;]*workspace_artifact[^;]*even in design mode/u);
+  assert.match(designMode, /screens[^;]*design canvas as design\/\*\.html/u);
+  assert.match(designMode, /generate_image/u);
+  assert.doesNotMatch(designMode, /design_mode/u);
+
+  // A destination without its tool is never named.
+  const chatWithArtifacts = rule(prompt({ workspaceArtifacts: true }));
+  assert.match(chatWithArtifacts, /workspace_artifact/u);
+  assert.doesNotMatch(chatWithArtifacts, /design canvas|design_mode|generate_image/u);
+  // A turn that cannot use design mode is not told about it at all.
+  assert.doesNotMatch(chatWithArtifacts, /design mode/u);
+  assert.match(rule(prompt({ workspaceArtifacts: true, designModeOffered: true })), /workspace_artifact\), even in design mode/u);
+  assert.equal(rule(prompt({ workspaceArtifacts: true, audience: "remote" })), "");
 });
 
 test("render_artifact takes a column or wide layout and hands it to the host", async () => {
@@ -285,6 +358,9 @@ test("render_artifact rejects path escapes, oversize HTML, and cancelled work", 
   );
   const huge = `<p>${"n".repeat(512 * 1024)}</p>`;
   await assert.rejects(tool.execute("huge", { title: "X", html: huge }), /exceeds/iu);
+  // The body the preview would cut out of this document links to javascript:, though a <textarea> hides it as written.
+  const hidden = '<textarea><body><a href="javascript:alert(1)">x</a></body></textarea>';
+  await assert.rejects(tool.execute("hidden", { title: "X", html: hidden }), /javascript:/iu);
   const abort = new AbortController();
   abort.abort();
   await assert.rejects(
@@ -306,12 +382,35 @@ test("same-generation title replaces the previous staged artifact", async () => 
   });
   const tool = extension.tools?.[0];
   assert.ok(tool);
-  await tool.execute("call-a", { title: "Chart", html: "<p>aaa</p>" });
-  await tool.execute("call-b", { title: "Chart", html: "<p>bbb</p>" });
+  const resultText = (result: { content: { type: string; text?: string }[] }) => result.content.map((part) => part.text ?? "").join("");
+  const first = await tool.execute("call-a", { title: "Chart", html: "<p>aaa</p>" });
+  const second = await tool.execute("call-b", { title: "Chart", html: "<p>bbb</p>" });
+  assert.match(resultText(first), /^Rendered artifact "Chart"/u);
+  assert.match(resultText(second), /Replaced the artifact "Chart" in place/u, "Aiden hears that the redraw replaced the first");
   assert.equal(artifacts.length, 2);
   assert.equal(artifacts[0]?.mediaId, artifacts[1]?.mediaId);
   assert.equal(artifacts[0]?.size, artifacts[1]?.size);
   assert.notEqual(artifacts[0]?.id, artifacts[1]?.id);
+});
+
+test("a same-title replace the host does not show is not reported as rendered, and the shown version still counts", async () => {
+  const root = await workspace();
+  let show = true;
+  const extension = createGenerativeUiExtension({
+    workspaceRoot: root,
+    artifactNamespace: "gen-1",
+    onArtifact: () => show,
+  });
+  const tool = extension.tools?.[0];
+  assert.ok(tool);
+  const resultText = (result: { content: { type: string; text?: string }[] }) => result.content.map((part) => part.text ?? "").join("");
+  await tool.execute("call-a", { title: "Chart", html: "<p>aaa</p>" });
+  show = false;
+  const hidden = resultText(await tool.execute("call-b", { title: "Chart", html: "<p>bbb</p>" }));
+  assert.doesNotMatch(hidden, /Rendered|Replaced/u);
+  assert.match(hidden, /could not show this version of the artifact "Chart"[^]*still sees the version rendered earlier/u);
+  show = true;
+  assert.match(resultText(await tool.execute("call-c", { title: "Chart", html: "<p>ccc</p>" })), /Replaced the artifact "Chart" in place/u);
 });
 
 test("onArtifact receives the producing toolCallId and replaces keep the first call", async () => {
@@ -374,4 +473,120 @@ test("render_artifact reads nested HTML through a canonicalized root alias", asy
     path: path.join("plots", "chart.html"),
   });
   assert.deepEqual(htmlBodies, ["<p>workspace chart</p>"]);
+});
+
+test("render_artifact shows a visual whose script will not compile and says which line stops it", async () => {
+  const shown: string[] = [];
+  const extension = createGenerativeUiExtension({
+    workspaceRoot: undefined,
+    artifactNamespace: "gen-scripts",
+    onArtifact: (_artifact, html) => {
+      shown.push(html);
+    },
+  });
+  const tool = extension.tools?.[0];
+  assert.ok(tool);
+  const text = (result: Awaited<ReturnType<typeof tool.execute>>) =>
+    result.content.map((part) => (part.type === "text" ? part.text : "")).join("");
+
+  const broken = [
+    "<h1>Growth</h1>",
+    "<canvas id=\"c\"></canvas>",
+    "<script>",
+    "const data = [1, 2, 3];",
+    "draw(data;",
+    "</script>",
+    "<script type=\"application/json\">{not js</script>",
+    "<template><script>also not run (</script></template>",
+    "<script>window.ok = true;</script>",
+  ].join("\n");
+  const result = text(await tool.execute("call-1", { title: "Growth", html: broken }));
+  // The visual is still shown; the model learns what stops and where.
+  assert.deepEqual(shown, [broken]);
+  assert.match(result, /Script check: 1 problem found\. The visual is shown as written\./u);
+  assert.match(result, /The script starting on line 3 will not run: .+ \(line 5\)\. The reader sees the visual without anything that script draws/u);
+  assert.match(result, /call render_artifact again with the same title/u);
+
+  const clean = text(await tool.execute("call-2", { title: "Fixed", html: broken.replace("draw(data;", "draw(data);") }));
+  assert.match(clean, /Script check: no problems found; all 2 inline scripts compile\./u);
+
+  const plain = text(await tool.execute("call-3", { title: "Plain", html: "<p>No scripts here</p>" }));
+  assert.doesNotMatch(plain, /Script check/u);
+
+  const module = text(await tool.execute("call-4", { title: "Module", html: "<script type=\"module\">import x from './x.js'</script>" }));
+  assert.match(module, /Not checked: 1 module script \(type="module"\)\./u);
+  // Nothing was compiled, so the report does not claim that every script compiles.
+  assert.match(module, /Script check: no problems found; no inline script could be compiled here\./u);
+  assert.doesNotMatch(module, /compiles/u);
+});
+
+test("a script in another language is not compiled as JavaScript, and one named JavaScript is", async () => {
+  const extension = createGenerativeUiExtension({ workspaceRoot: undefined, artifactNamespace: "gen-language", onArtifact: () => {} });
+  const tool = extension.tools?.[0];
+  assert.ok(tool);
+  const run = async (html: string) =>
+    (await tool.execute("call", { title: "Lang", html })).content.map((part) => (part.type === "text" ? part.text : "")).join("");
+  const vbscript = await run('<script language="vbscript">MsgBox "hi"</script>');
+  assert.doesNotMatch(vbscript, /Script check/u);
+  const javascript = await run('<script language="JavaScript">draw(;</script>');
+  assert.match(javascript, /Script check: 1 problem found/u);
+  // A type, even an empty one, wins over the language.
+  const typed = await run('<script type="" language="vbscript">draw(;</script>');
+  assert.match(typed, /Script check: 1 problem found/u);
+});
+
+test("a JavaScript type with parameters is reported as a script that will not run, while padding and case still run", async () => {
+  const extension = createGenerativeUiExtension({ workspaceRoot: undefined, artifactNamespace: "gen-type-params", onArtifact: () => {} });
+  const tool = extension.tools?.[0];
+  assert.ok(tool);
+  const run = async (html: string) =>
+    (await tool.execute("call", { title: "Types", html })).content.map((part) => (part.type === "text" ? part.text : "")).join("");
+  // Chromium runs neither of these, so the reader sees nothing they draw.
+  const charset = await run('<p>Chart</p>\n<script type="text/javascript; charset=utf-8">draw();</script>');
+  assert.match(charset, /Script check: 1 problem found/u);
+  assert.match(charset, /The script on line 2 will not run: its type "text\/javascript; charset=utf-8" has parameters/u);
+  const version = await run('<script type="application/javascript;version=1">draw();</script>');
+  assert.match(version, /Script check: 1 problem found/u);
+  // A browser trims and lowercases the type before matching, so these run and are compiled.
+  const padded = await run('<script type=" TEXT/JavaScript ">draw();</script>');
+  assert.match(padded, /Script check: no problems found; its inline script compiles\./u);
+  // A data block whose type has parameters is still a data block.
+  const data = await run('<script type="application/json; charset=utf-8">{"a": 1}</script>');
+  assert.doesNotMatch(data, /Script check/u);
+});
+
+test("a script error after a line or paragraph separator names the line an editor shows", async () => {
+  const extension = createGenerativeUiExtension({ workspaceRoot: undefined, artifactNamespace: "gen-separator", onArtifact: () => {} });
+  const tool = extension.tools?.[0];
+  assert.ok(tool);
+  // HTML counts only the newlines, so the error is on the visual's line 3; JavaScript also breaks at U+2028 and U+2029.
+  const html = ["<p>Chart</p>", "<script>const label = 'a\u2028b\u2029c';", "draw(;</script>"].join("\n");
+  const result = await tool.execute("call-1", { title: "Sep", html });
+  const text = result.content.map((part) => (part.type === "text" ? part.text : "")).join("");
+  assert.match(text, /The script starting on line 2 will not run: .+ \(line 3\)\./u);
+});
+
+test("a script error inside an SVG is reported, and nothing the script says runs while it is checked", async () => {
+  const extension = createGenerativeUiExtension({ workspaceRoot: undefined, artifactNamespace: "gen-svg", onArtifact: () => {} });
+  const tool = extension.tools?.[0];
+  assert.ok(tool);
+  const marker = `__aiden_script_check_${Date.now()}`;
+  const html = `<svg viewBox="0 0 10 10"><script>globalThis.${marker} = 1;</script><script>let = = 2</script></svg>`;
+  const result = await tool.execute("call-1", { title: "Dial", html });
+  const text = result.content.map((part) => (part.type === "text" ? part.text : "")).join("");
+  assert.match(text, /Script check: 1 problem found/u);
+  assert.equal((globalThis as Record<string, unknown>)[marker], undefined);
+});
+
+test("a long script error is cut short without splitting a character", async () => {
+  const extension = createGenerativeUiExtension({ workspaceRoot: undefined, artifactNamespace: "gen-long-error", onArtifact: () => {} });
+  const tool = extension.tools?.[0];
+  assert.ok(tool);
+  // V8 quotes the identifier, so the message is long and made of characters two code units wide.
+  const result = await tool.execute("call-1", { title: "Long", html: `<script>let a = 1 a${"𝑥".repeat(150)}</script>` });
+  const text = result.content.map((part) => (part.type === "text" ? part.text : "")).join("");
+  const message = /will not run: (.*) \(line 1\)/u.exec(text)?.[1] ?? "";
+  assert.match(message, /^Unexpected identifier 'a𝑥+…$/u);
+  assert.ok(message.length <= 200);
+  assert.doesNotMatch(message, /[\uD800-\uDBFF](?![\uDC00-\uDFFF])/u);
 });

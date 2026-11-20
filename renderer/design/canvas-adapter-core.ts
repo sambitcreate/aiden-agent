@@ -15,13 +15,11 @@ import {
   type DesignPoint,
 } from "../shared/design-canvas/connectors";
 import { commentsWithoutFrames } from "../shared/design-canvas/comments";
-import { clampCoord, clampSize } from "../shared/design-canvas/placement";
+import { clampCoord, clampSize, copyFrames } from "../shared/design-canvas/placement";
 import {
-  DESIGN_CANVAS_LIMITS,
   isDesignContainer,
   isDesignLine,
   type DesignCanvas,
-  type DesignConnectorEnd,
   type DesignFrame,
 } from "../shared/design-canvas/schema";
 
@@ -184,54 +182,23 @@ export function applyNodeChanges(
 
 /**
  * Copies frames 32 px down and right. A copied group brings copies of its
- * members; a member copied alone stays in its group. All or nothing: a copy
- * that would pass the frame limit returns `doc` unchanged.
+ * members and keeps its lock; a member copied alone joins its group, unless
+ * that group is locked, when the copy stands outside any group. Other copies
+ * are unlocked. All or nothing: a copy that would pass the frame limit
+ * returns `doc` unchanged.
  */
 export function duplicateFrames(
   doc: DesignCanvas,
   ids: string[],
   newId: () => string,
 ): DesignCanvas {
-  const chosen = new Set(ids);
-  const groupIds = new Set(
-    doc.frames.filter((frame) => chosen.has(frame.id) && isDesignContainer(frame.kind)).map((frame) => frame.id),
-  );
-  const sources = doc.frames.filter(
-    (frame) => chosen.has(frame.id) || (frame.groupId !== undefined && groupIds.has(frame.groupId)),
-  );
-  if (sources.length === 0) return doc;
-  if (doc.frames.length + sources.length > DESIGN_CANVAS_LIMITS.frames) return doc;
-  const pageId = sources[0]!.pageId;
-  const onPage = doc.frames.filter((frame) => frame.pageId === pageId).length;
-  if (onPage + sources.length > DESIGN_CANVAS_LIMITS.framesPerPage) return doc;
-  // Groups first, so members can point at their group's copy.
-  const ordered = [
-    ...sources.filter((frame) => isDesignContainer(frame.kind)),
-    ...sources.filter((frame) => !isDesignContainer(frame.kind)),
-  ];
-  const copies = new Map<string, string>();
-  for (const frame of ordered) copies.set(frame.id, newId());
-  const added: DesignFrame[] = [];
-  for (const frame of ordered) {
-    const groupId = frame.groupId ? (copies.get(frame.groupId) ?? frame.groupId) : undefined;
-    // A copied arrow joins the copies of its frames; an end on a frame left behind becomes a free end.
-    const ends = frame.ends?.map((end): DesignConnectorEnd => {
-      const target = end.frameId !== undefined ? copies.get(end.frameId) : undefined;
-      if (target) return { ...end, frameId: target };
-      return { x: clampCoord(end.x + DESIGN_DUPLICATE_OFFSET), y: clampCoord(end.y + DESIGN_DUPLICATE_OFFSET) };
-    }) as DesignFrame["ends"];
-    const { locked: _locked, ...unlocked } = frame;
-    added.push({
-      ...unlocked,
-      id: copies.get(frame.id)!,
-      x: clampCoord(frame.x + DESIGN_DUPLICATE_OFFSET),
-      y: clampCoord(frame.y + DESIGN_DUPLICATE_OFFSET),
-      ...(groupId ? { groupId } : {}),
-      ...(ends ? { ends } : {}),
-      createdBy: "person",
-    });
-  }
-  return syncConnectors({ ...doc, frames: [...doc.frames, ...added] });
+  const copied = copyFrames(doc, ids, newId, {
+    dx: DESIGN_DUPLICATE_OFFSET,
+    dy: DESIGN_DUPLICATE_OFFSET,
+    createdBy: "person",
+    keepGroupLock: true,
+  });
+  return copied ? copied.doc : doc;
 }
 
 export type CanvasFocusResolution =

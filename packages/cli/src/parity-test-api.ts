@@ -81,3 +81,5 @@ export { createCliBotSpending } from "./bot-spending.ts";
 export { createGenerationWatchdog } from "./generation-watchdog.ts";
 
 export { cliWorkspaceCodingTools } from "./workspace-coding-tools.ts";
+export * from "./server-visuals.ts";
+export { projectAidenRemoteChat } from "../../../main/services/aiden-remote-chats.js";

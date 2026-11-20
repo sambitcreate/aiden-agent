@@ -3,9 +3,10 @@
 // A chat starts with its everyday tools (files, commands, web, questions,
 // to-dos, memory, codemode) plus `load_tools`, whose description lists the
 // rest in one line each. The model loads what it needs by name; loaded tools
-// are declared from its next step. Once a chat has loaded or called an
-// on-demand tool, later runs declare it from the start, so a tool in use
-// stays put and its declaration stays cached.
+// are declared from its next step. Once a chat has loaded, called or been
+// given (preloaded) an on-demand tool, later runs declare it from the start
+// in the same place, so a tool in use stays put and its declaration stays
+// cached.
 //
 // Every tool stays built, approved and executed exactly as before. Only the
 // moment its declaration is sent changes.
@@ -56,10 +57,98 @@ export const ON_DEMAND_TOOL_NAMES: ReadonlySet<string> = new Set([
   "routines",
   "hooks",
   "design_mode",
+  // The rarely used canvas tools; the everyday ones are declared while design mode is on.
+  "canvas_page",
+  "canvas_duplicate",
 ]);
 
 const MAX_SUMMARY_CHARACTERS = 90;
+/** A tool's own routing line may be longer than a cut first sentence, since it says when to use the tool. */
+export const MAX_ON_DEMAND_ROUTING_CHARACTERS = 160;
 const MAX_NAMES_PER_CALL = 20;
+
+/**
+ * Text a tool adds to the `load_tools` answer that loads it; one per `key`
+ * per answer. A note whose text a tool result in the chat already holds (the
+ * model read that guide part earlier) is left out. `heading` leads the notes
+ * that carry it, once per answer, and only when one of them is sent.
+ */
+export interface OnDemandLoadNote {
+  readonly key: string;
+  readonly text: () => string;
+  readonly heading?: string;
+}
+
+type RoutedTool = AgentTool & {
+  readonly onDemandSummary?: string;
+  readonly onDemandLoadNotes?: readonly OnDemandLoadNote[];
+};
+
+/**
+ * Give an on-demand tool its own `load_tools` catalog line: what it does and
+ * when to use it, in place of its description's first sentence cut short.
+ */
+export function declareOnDemandSummary<T extends AgentTool>(tool: T, summary: string): T {
+  const line = summary.replace(/\s+/gu, " ").trim();
+  if (!line || line.length > MAX_ON_DEMAND_ROUTING_CHARACTERS) {
+    throw new Error(`${tool.name}'s catalog line must be 1 to ${MAX_ON_DEMAND_ROUTING_CHARACTERS} characters.`);
+  }
+  return Object.assign(tool, { onDemandSummary: line });
+}
+
+/**
+ * Give an on-demand tool notes that come back in the same `load_tools` answer
+ * that loads it, such as the guide it needs before its first call, so loading
+ * and reading take one step. Notes with the same key (another tool loaded in
+ * the same call needs the same guide) are sent once.
+ */
+export function declareOnDemandLoadNotes<T extends AgentTool>(tool: T, notes: readonly OnDemandLoadNote[]): T {
+  const existing = (tool as RoutedTool).onDemandLoadNotes ?? [];
+  return Object.assign(tool, { onDemandLoadNotes: [...existing, ...notes] });
+}
+
+/**
+ * The notes of `loaded` tools, in load order, each key once, leaving out any
+ * whose text `alreadyRead` says the chat's tool results already hold.
+ */
+function onDemandLoadAnswerNotes(loaded: readonly AgentTool[], alreadyRead: (text: string) => boolean): string[] {
+  const seen = new Set<string>();
+  const headed = new Set<string>();
+  const texts: string[] = [];
+  for (const tool of loaded) {
+    for (const note of (tool as RoutedTool).onDemandLoadNotes ?? []) {
+      if (seen.has(note.key)) continue;
+      seen.add(note.key);
+      const text = note.text().trim();
+      if (!text || alreadyRead(text)) continue;
+      const heading = note.heading?.trim();
+      if (heading && !headed.has(heading)) {
+        headed.add(heading);
+        texts.push(heading);
+      }
+      texts.push(text);
+    }
+  }
+  return texts;
+}
+
+/** The text of every tool result in `messages`, read once the first time it is asked for. */
+function toolResultTexts(messages: readonly AgentMessage[]): (text: string) => boolean {
+  let texts: string[] | undefined;
+  return (text) => {
+    texts ??= messages.flatMap((message) =>
+      message.role === "toolResult" && !message.isError
+        ? [message.content.map((part) => (part.type === "text" ? part.text : "")).join("\n")]
+        : [],
+    );
+    return texts.some((result) => result.includes(text));
+  };
+}
+
+/** A tool's `load_tools` catalog line: its own routing line, or its description's first sentence. */
+export function onDemandCatalogLine(tool: AgentTool): string {
+  return (tool as RoutedTool).onDemandSummary ?? onDemandToolSummary(tool.description);
+}
 
 /** The first sentence of a tool description, cut to one short catalog line. */
 export function onDemandToolSummary(description: string): string {
@@ -96,10 +185,29 @@ export interface OnDemandTools {
   readonly loader: AgentTool;
   /** Every tool held back from the start of a run. */
   readonly onDemand: readonly AgentTool[];
-  /** Tools to declare at the start of a run over `messages` (the chat so far). */
-  initialTools(messages: readonly AgentMessage[]): AgentTool[];
+  /**
+   * Tools to declare at the start of a run over `messages` (the chat so far).
+   * `declaredBefore` is the on-demand list an earlier run of this chat
+   * declared (see `onDemandDeclaredOfBranch`); it keeps its place first. The
+   * tools the chat loaded or called since follow in first-use order, then
+   * `preload`: on-demand tools this run declares from the start without a
+   * load (for example the visual tools on a /visualize turn or in design
+   * mode), in catalog order. Each run's list only grows at its end, so the
+   * provider's cached tool prefix holds.
+   */
+  initialTools(
+    messages: readonly AgentMessage[],
+    preload?: readonly string[],
+    declaredBefore?: readonly string[],
+  ): AgentTool[];
   /** Declares the on-demand tools the transcript has loaded or called since. */
   prepare(context: AgentContext): Promise<AgentContext>;
+  /**
+   * The on-demand tools this run has declared so far, in order: the
+   * `initialTools` list, then what `prepare` added mid-run. It only grows
+   * within a run, so a run records it again at its end when it grew.
+   */
+  declaredNames(): string[];
 }
 
 /**
@@ -115,7 +223,11 @@ export function createOnDemandTools(
   const everyday = tools.filter((tool) => !names.has(tool.name));
   const byName = new Map(onDemand.map((tool) => [tool.name, tool]));
   const available = new Set(byName.keys());
-  const catalog = onDemand.map((tool) => `- ${tool.name}: ${onDemandToolSummary(tool.description)}`).join("\n");
+  const catalog = onDemand.map((tool) => `- ${tool.name}: ${onDemandCatalogLine(tool)}`).join("\n");
+  // The chat as of this run's latest step, so a load answer leaves out guide parts already read.
+  let transcript: readonly AgentMessage[] = [];
+  // The on-demand names declared so far this run, in declared order.
+  let declared: string[] = [];
 
   const loader: AgentTool = declarePiRuntimeReplay(
     {
@@ -139,8 +251,12 @@ export function createOnDemandTools(
           );
         }
         const loaded = [...new Set(list)];
+        const notes = onDemandLoadAnswerNotes(loaded.map((name) => byName.get(name)!), toolResultTexts(transcript));
         return {
-          content: [{ type: "text", text: `Loaded ${loaded.join(", ")}. Call ${loaded.length === 1 ? "it" : "them"} from your next step.` }],
+          content: [{
+            type: "text",
+            text: [`Loaded ${loaded.join(", ")}. Call ${loaded.length === 1 ? "it" : "them"} from your next step.`, ...notes].join("\n\n"),
+          }],
           details: null,
         };
       },
@@ -151,12 +267,27 @@ export function createOnDemandTools(
   return {
     loader,
     onDemand,
-    initialTools(messages) {
-      // First-use order, the order `prepare` appended them in during earlier
-      // runs, so the declared list (and the provider's cached prefix) stays the same.
-      return [...everyday, loader, ...onDemandToolsUsed(messages, available).map((name) => byName.get(name)!)];
+    initialTools(messages, preload = [], declaredBefore = []) {
+      transcript = messages;
+      // What an earlier run declared keeps its place; tools used since follow
+      // in first-use order (the order `prepare` appended them in), and this
+      // run's preloads go last, so nothing already declared moves.
+      const order: string[] = [];
+      const listed = new Set<string>();
+      const add = (name: string) => {
+        if (!available.has(name) || listed.has(name)) return;
+        listed.add(name);
+        order.push(name);
+      };
+      for (const name of declaredBefore) add(name);
+      for (const name of onDemandToolsUsed(messages, available)) add(name);
+      const wanted = new Set(preload);
+      for (const tool of onDemand) if (wanted.has(tool.name)) add(tool.name);
+      declared = order;
+      return [...everyday, loader, ...order.map((name) => byName.get(name)!)];
     },
     async prepare(context) {
+      transcript = context.messages;
       const present = new Set(context.tools?.map((tool) => tool.name) ?? []);
       // A host exclusion that removed the loader must never re-grant hidden tools.
       if (!present.has(LOAD_TOOLS_TOOL_NAME)) return context;
@@ -164,9 +295,42 @@ export function createOnDemandTools(
         .filter((name) => !present.has(name))
         .map((name) => byName.get(name)!);
       if (additions.length === 0) return context;
+      for (const tool of additions) if (!declared.includes(tool.name)) declared = [...declared, tool.name];
       return { ...context, tools: [...(context.tools ?? []), ...additions] };
     },
+    declaredNames() {
+      return [...declared];
+    },
   };
+}
+
+/**
+ * Journal entry recording the on-demand tools a run declared, in order: at
+ * its start when the list changed, and again at its end when it grew mid-run.
+ */
+export const ON_DEMAND_DECLARED_ENTRY = "aiden.on-demand-declared.v1";
+
+/** The on-demand tool names in `tools`, in declared order: what a run records under `ON_DEMAND_DECLARED_ENTRY`. */
+export function onDemandDeclaredNames(tools: readonly AgentTool[], onDemand: readonly AgentTool[]): string[] {
+  const names = new Set(onDemand.map((tool) => tool.name));
+  return tools.filter((tool) => names.has(tool.name)).map((tool) => tool.name);
+}
+
+/**
+ * The on-demand list the latest run on this journal branch recorded, or none.
+ * A preloaded tool the chat never called stays here, so the next run keeps
+ * declaring it in the same place instead of dropping it.
+ */
+export function onDemandDeclaredOfBranch(
+  branch: readonly { readonly type: string; readonly customType?: string; readonly data?: unknown }[],
+): string[] {
+  for (let index = branch.length - 1; index >= 0; index--) {
+    const entry = branch[index]!;
+    if (entry.type !== "custom" || entry.customType !== ON_DEMAND_DECLARED_ENTRY) continue;
+    const names = (entry.data as { names?: unknown } | undefined)?.names;
+    return Array.isArray(names) ? names.filter((name): name is string => typeof name === "string").slice(0, 200) : [];
+  }
+  return [];
 }
 
 /**

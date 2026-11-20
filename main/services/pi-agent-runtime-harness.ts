@@ -290,6 +290,13 @@ export interface PiRuntimeSessionBinding {
   /** Foreground continue() does not emit its already-journaled user tail. */
   journalUserMessages?: boolean;
   onJournalError?: (error: unknown) => void;
+  /**
+   * Section keys of system patches the host adds between model steps that
+   * belong in the journal. A system message the host's prepareNextTurn adds
+   * with one of these sections is journaled; every other host patch stays
+   * per-run memory. The journal is model context only, never visible chat.
+   */
+  durableSections?: readonly string[];
   /** Separate, non-rollbackable evidence for tool effects that may escape the chat journal. */
   effects?: {
     store: PiRuntimeEffectStore;
@@ -403,6 +410,38 @@ class PiManagedCancellationError extends Error {
  */
 export function isPiManagedCancellationError(error: unknown): boolean {
   return error instanceof PiManagedCancellationError;
+}
+
+/**
+ * System messages in `next` that carry one of `keys` as a section and were not
+ * already in `previous`. Messages are compared by role, timestamp and sections,
+ * not identity, since a host step may copy the transcript it returns.
+ */
+function newDurableSectionMessages(
+  previous: readonly AgentMessage[],
+  next: readonly AgentMessage[],
+  keys: readonly string[],
+): AgentMessage[] {
+  const sectionsOf = (message: AgentMessage): Record<string, unknown> | undefined => {
+    if (message.role !== "system") return undefined;
+    const sections = (message as { sections?: unknown }).sections;
+    return sections && typeof sections === "object" ? (sections as Record<string, unknown>) : undefined;
+  };
+  const durable = (message: AgentMessage) => {
+    const sections = sectionsOf(message);
+    return Boolean(sections && keys.some((key) => key in sections));
+  };
+  const fingerprint = (message: AgentMessage) => JSON.stringify([message.timestamp, sectionsOf(message)]);
+  const seen = new Set(previous.filter(durable).map(fingerprint));
+  const added: AgentMessage[] = [];
+  for (const message of next) {
+    if (!durable(message)) continue;
+    const key = fingerprint(message);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    added.push(message);
+  }
+  return added;
 }
 
 function toError(error: unknown): Error {
@@ -1629,6 +1668,14 @@ export class PiAgentRuntimeHarness {
             this.contextProjectionOptions.tools = context.tools ?? [];
             this.contextProjectionOptions.systemPrompt = getCurrentSystemPrompt(context.messages);
           }
+        }
+        if (hostPrepared?.context && durability.durableSections?.length) {
+          // A host section patch is per-run memory unless the host declares it
+          // durable; a declared one joins the journal where it now sits, so the
+          // next turn rebuilds the same transcript instead of patching it again.
+          this.pendingDurableMessages.push(
+            ...newDurableSectionMessages(input.context.messages, context.messages, durability.durableSections),
+          );
         }
         try {
           await this.flushDurableMessages();

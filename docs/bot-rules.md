@@ -209,7 +209,9 @@ or words ("When a Bot wants to …", Ask or Block only, never Allow).
   moment.
 - A Block applies everywhere the gate runs, including a workspace chat bound
   to a Bot. Sharing an image offers only Ask and Block: it always asks unless
-  blocked.
+  blocked. A `generate_image` call that saves its image as a workspace file
+  (`savePath`) also answers to a `write_file` Block or Ask; a `write_file`
+  Allow never skips its card, since a paid image always asks.
 - **A rules file Aiden can't read.** If `approval-rules.json` doesn't parse,
   was written by a newer release, or holds a rule this release can't read,
   Aiden never reads around it or writes over it, since its Block rules may be

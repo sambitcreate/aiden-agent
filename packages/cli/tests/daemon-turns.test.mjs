@@ -475,6 +475,23 @@ test("a tool in a full-access workspace needs no prompt and one in a disabled wo
   assert.doesNotMatch(toolResultSeen(last), /visible\.txt/u);
 });
 
+test("a native visual on a served chat is saved on the reply and reaches the phone as its text, as Aiden was told", async (t) => {
+  const f = await fixture(t);
+  const markup = `<Visual title="Revenue"><Data name="months">[{"month":"Jan","revenue":1200}]</Data><Chart kind="bar" data={$months} x="month" y="revenue" label="By month" /></Visual>`;
+  f.steps.push(callTool("render_ui", { title: "Revenue", markup }), reply("Here is revenue."));
+  await beginTurn(f, "visual");
+  await f.daemon.llmClient.waitForChatIdle("visual");
+  assert.match(toolResultSeen(f.requests[1]), /Shown as text: phones and Macs paired to this server show \\"Revenue\\" as the text below/u);
+  const [message] = await assistantMessages(f.daemon, "visual");
+  assert.equal(message.content, "Here is revenue.");
+  const [visual] = message.uiVisuals;
+  const toolStep = message.timeline.steps.find((step) => step.toolCallId === visual.toolCallId);
+  assert.ok(toolStep, "the visual is placed at its tool call in the reply's timeline");
+  const [projected] = api.projectAidenRemoteChat(await f.daemon.chatStore.get("visual")).messages.filter((entry) => entry.role === "assistant");
+  assert.equal(projected.visuals.length, 1);
+  assert.match(projected.visuals[0].fallbackText, /^By month \(bar chart, 1 points\)\nmonth: Jan · revenue: 1,200$/u);
+});
+
 // Shutdown waits for whoever really holds the chat, not only for a live lease.
 
 test("shutdown waits for a cancelled reservation whose append is still in flight", async (t) => {

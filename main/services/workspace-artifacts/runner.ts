@@ -1,8 +1,10 @@
-import { assertArtifactFilePath, WorkspaceArtifactFileDeniedError } from "./file-policy.js";
+import { artifactFileAllowed, assertArtifactFilePath, WorkspaceArtifactFileDeniedError } from "./file-policy.js";
+import { createHash } from "node:crypto";
 import * as fs from "node:fs/promises";
 import {
   parseWorkspaceArtifactOutput,
   resolveWorkspaceArtifactCommand,
+  safeCut,
   WORKSPACE_ARTIFACT_LIMITS,
   workspaceArtifactCommandAccess,
   workspaceArtifactSourceAccess,
@@ -10,8 +12,13 @@ import {
   type WorkspaceArtifactSourceResultV1,
   type WorkspaceArtifactSourceV1,
   type WorkspaceArtifactsChangedEvent,
+  type WorkspaceArtifactV1,
+  type WorkspaceArtifactView,
 } from "../../../renderer/shared/workspace-artifacts.js";
 import type { BoundedShellCommandOptions, BoundedShellCommandResult } from "../bounded-shell-command.js";
+import { ManagedWorktreeFileIoError } from "../managed-worktree-file-io.js";
+import { MAX_EDITOR_LINES } from "../workspace-files.js";
+import type { ArgvPlanOptions } from "./argv-runner.js";
 import type { WorkspaceArtifactStore } from "./store.js";
 
 /**
@@ -29,8 +36,17 @@ export interface WorkspaceArtifactRunContext {
 
 export interface WorkspaceArtifactRunnerDependencies {
   runShell: (options: BoundedShellCommandOptions) => Promise<BoundedShellCommandResult>;
+  /** Runs a button whose command takes page data, as argument lists without a shell (`runArgvPlan`). */
+  runArgv: (options: ArgvPlanOptions) => Promise<BoundedShellCommandResult>;
   /** Reads a workspace-relative file inside the folder; rejects paths that leave it. */
   readFile: (root: string, file: string, signal: AbortSignal | undefined) => Promise<string>;
+  /**
+   * Whether the file policy admits a file now, without reading it
+   * (`artifactFileAllowed`, the default). A read kept across a save is
+   * checked with it, since the file may have become a link or a credential
+   * alias since it was read.
+   */
+  fileAllowed?: (root: string, file: string) => Promise<boolean>;
   /** Environment for shell commands (the agent's shell PATH and variables). */
   env: () => NodeJS.ProcessEnv;
   store: Pick<WorkspaceArtifactStore, "get" | "saveSnapshot">;
@@ -43,9 +59,27 @@ export interface WorkspaceArtifactActionResult {
   output: string;
 }
 
+/** `text` trimmed and within `max` characters, cut where no emoji is split in two. */
 function clip(text: string, max: number): string {
   const trimmed = text.trim();
-  return trimmed.length > max ? `${trimmed.slice(0, max - 1)}…` : trimmed;
+  return trimmed.length > max ? `${trimmed.slice(0, safeCut(trimmed, max - 1))}…` : trimmed;
+}
+
+/**
+ * The start and the end of `text` within `max` characters: a command's usage
+ * line or first complaint is at the start, and the error that stopped it is
+ * usually at the end.
+ */
+function headAndTail(text: string, max: number): string {
+  const trimmed = text.trim();
+  const gap = " … ";
+  if (trimmed.length <= max || max < 2 * gap.length) return clip(trimmed, max);
+  const room = max - gap.length;
+  const head = safeCut(trimmed, Math.floor(room * 0.4));
+  // The tail starts after an emoji the cut would split, rather than inside it.
+  const from = trimmed.length - (room - head);
+  const tail = safeCut(trimmed, from) === from ? from : from + 1;
+  return `${trimmed.slice(0, head).trimEnd()}${gap}${trimmed.slice(tail).trimStart()}`;
 }
 
 function failure(result: BoundedShellCommandResult): string {
@@ -54,7 +88,7 @@ function failure(result: BoundedShellCommandResult): string {
     : result.outputLimitExceeded
       ? "Printed more than an artifact can hold."
       : `Exited with code ${result.exitCode ?? "?"}.`;
-  const detail = clip(result.stderr || result.stdout, WORKSPACE_ARTIFACT_LIMITS.errorChars - reason.length - 1);
+  const detail = headAndTail(result.stderr || result.stdout, WORKSPACE_ARTIFACT_LIMITS.errorChars - reason.length - 1);
   return detail ? `${reason} ${detail}` : reason;
 }
 
@@ -73,6 +107,75 @@ interface SharedRefresh {
 }
 
 const FOLDER_UNAVAILABLE = "The workspace folder is unavailable.";
+
+/** Options for the refresh that follows a save. */
+export interface WorkspaceArtifactRefreshOptions {
+  /**
+   * The page as it was before this save. A source it had with the same
+   * definition, whose last read succeeded and is still fresh, keeps that read
+   * instead of running again.
+   */
+  reuseFrom?: Pick<WorkspaceArtifactV1, "revision" | "sources">;
+}
+
+function sameSource(a: WorkspaceArtifactSourceV1, b: WorkspaceArtifactSourceV1): boolean {
+  if (a.name !== b.name || a.parse !== b.parse) return false;
+  if (a.kind === "shell") return b.kind === "shell" && a.command === b.command;
+  return b.kind === "file" && a.file === b.file;
+}
+
+/**
+ * How long a read counts as fresh: the page's own interval, or for a page
+ * without one the shortest interval a page may ask for.
+ */
+function freshForMs(artifact: Pick<WorkspaceArtifactV1, "refresh">): number {
+  return (artifact.refresh.intervalSeconds ?? WORKSPACE_ARTIFACT_LIMITS.minIntervalSeconds) * 1000;
+}
+
+/**
+ * The saved reads a refresh after a save may keep: a source whose definition
+ * the save left unchanged (or the saved read already belongs to this
+ * revision), whose last read succeeded within the freshness window in the
+ * folder the page is refreshed in now, and which this access would run now.
+ */
+function reusableReads(
+  view: WorkspaceArtifactView,
+  reuseFrom: WorkspaceArtifactRefreshOptions["reuseFrom"],
+  approved: boolean,
+  context: WorkspaceArtifactRunContext,
+  now: number,
+): SourceResults {
+  const snapshot = view.snapshot;
+  if (!reuseFrom || !snapshot) return {};
+  const window = freshForMs(view.artifact);
+  const reused: SourceResults = {};
+  for (const source of view.artifact.sources) {
+    const result = snapshot.sources[source.name];
+    if (!result || result.status !== "ok" || result.dataJson === undefined) continue;
+    if (!(now - result.at >= 0 && now - result.at < window)) continue;
+    // A read from another folder, or from before Aiden noted the folder, describes other files.
+    if (!context.folderPath || result.folder !== workspaceArtifactFolderKey(context.folderPath)) continue;
+    const before =
+      snapshot.revision === view.artifact.revision
+        ? source
+        : snapshot.revision === reuseFrom.revision
+          ? reuseFrom.sources.find((candidate) => candidate.name === source.name)
+          : undefined;
+    if (!before || !sameSource(before, source)) continue;
+    if (workspaceArtifactSourceAccess(context.permission, Boolean(context.folderPath), source, approved) !== "run") continue;
+    reused[source.name] = result;
+  }
+  return reused;
+}
+
+/**
+ * Names the real workspace folder a read came from without saving its path:
+ * a read is kept across a save only when the page is refreshed in that
+ * same folder.
+ */
+export function workspaceArtifactFolderKey(realFolderPath: string): string {
+  return createHash("sha256").update(realFolderPath).digest("hex").slice(0, 16);
+}
 
 /** Resolves the folder as it is now: a folder that was removed or is no longer a directory runs nothing. */
 async function verifiedFolder(folderPath: string): Promise<string> {
@@ -94,14 +197,40 @@ function withDeadline<T>(work: Promise<T>, ms: number, message: string): Promise
   return Promise.race([work, deadline]).finally(() => clearTimeout(timer));
 }
 
-/** The workspace file reader speaks about editing; say what it means for a page. */
+function tooLarge(file: string): string {
+  return `${file} is larger than the ${WORKSPACE_ARTIFACT_LIMITS.sourceOutputBytes / 1024} KiB an artifact can read.`;
+}
+
+/**
+ * The workspace file reader speaks about editing; say what it means for a
+ * page. A system error's message names full paths on this computer, so it
+ * never reaches the page or Aiden: any error with a code but a missing file
+ * says only that the file cannot be read.
+ */
 function fileError(file: string, error: unknown): string {
   const code = (error as NodeJS.ErrnoException | undefined)?.code;
   if (code === "ENOENT") return `There is no file at ${file}.`;
-  const message = error instanceof Error ? error.message : String(error);
-  if (/too large|too many lines/iu.test(message)) return `${file} is larger than an artifact can read.`;
+  if (error instanceof ManagedWorktreeFileIoError && error.code === "too_many_bytes") return tooLarge(file);
+  if (error instanceof Error && error.name === "AbortError") return "Cancelled.";
+  if (code !== undefined || !(error instanceof Error)) return `${file} cannot be read.`;
+  const message = error.message;
+  if (/too large/iu.test(message)) return tooLarge(file);
+  if (/too many lines/iu.test(message)) return `${file} has more than ${MAX_EDITOR_LINES.toLocaleString("en-US")} lines, more than an artifact can read.`;
   if (/binary|not valid UTF-8/iu.test(message)) return `${file} is not a text file.`;
   return message;
+}
+
+/**
+ * A command that could not be started at all. A system error's message
+ * names programs and folders by their full paths on this computer, so it is
+ * told only that the command cannot be run; an exit code or a time limit is
+ * reported by `failure` from the command's result instead.
+ */
+function commandError(error: unknown): string {
+  if (error instanceof Error && error.name === "AbortError") return "Cancelled.";
+  const code = (error as NodeJS.ErrnoException | undefined)?.code;
+  if (typeof code === "string" || !(error instanceof Error)) return "The command cannot be run.";
+  return error.message;
 }
 
 function cancelledResults(sources: readonly WorkspaceArtifactSourceV1[]): SourceResults {
@@ -110,6 +239,7 @@ function cancelledResults(sources: readonly WorkspaceArtifactSourceV1[]): Source
 }
 
 export function createWorkspaceArtifactRunner(dependencies: WorkspaceArtifactRunnerDependencies) {
+  const fileAllowed = dependencies.fileAllowed ?? artifactFileAllowed;
   const inFlight = new Map<string, SharedRefresh>();
   const generations = new Map<string, number>();
   /** Runs still going, per page. */
@@ -155,7 +285,7 @@ export function createWorkspaceArtifactRunner(dependencies: WorkspaceArtifactRun
           return { status: "error", at, ...(error instanceof WorkspaceArtifactFileDeniedError ? { policyDenied: true as const } : {}), error: clip(fileError(source.file, error), WORKSPACE_ARTIFACT_LIMITS.errorChars) };
         }
         if (Buffer.byteLength(text, "utf8") > WORKSPACE_ARTIFACT_LIMITS.sourceOutputBytes) {
-          return { status: "error", at, error: `${source.file} is larger than an artifact can read.` };
+          return { status: "error", at, error: tooLarge(source.file) };
         }
       } else {
         const result = await dependencies.runShell({
@@ -173,10 +303,12 @@ export function createWorkspaceArtifactRunner(dependencies: WorkspaceArtifactRun
         text = result.stdout;
       }
     } catch (error) {
-      return { status: "error", at, error: clip(error instanceof Error ? error.message : String(error), WORKSPACE_ARTIFACT_LIMITS.errorChars) };
+      return { status: "error", at, error: clip(commandError(error), WORKSPACE_ARTIFACT_LIMITS.errorChars) };
     }
     const parsed = parseWorkspaceArtifactOutput(source.parse, text);
-    return parsed.ok ? { status: "ok", at, dataJson: parsed.dataJson } : { status: "error", at, error: parsed.error };
+    return parsed.ok
+      ? { status: "ok", at, dataJson: parsed.dataJson, folder: workspaceArtifactFolderKey(root) }
+      : { status: "error", at, error: parsed.error };
   }
 
   /** Runs every source of one artifact once; results are not saved. */
@@ -193,6 +325,31 @@ export function createWorkspaceArtifactRunner(dependencies: WorkspaceArtifactRun
   }
 
   /**
+   * Runs `sources` once in the workspace folder, as a refresh would, and
+   * saves nothing: the tool's check of a page or of sources it means to save.
+   * `approved` says whether the person allowed these exact shell commands.
+   */
+  async function check(
+    sources: readonly WorkspaceArtifactSourceV1[],
+    approved: boolean,
+    context: WorkspaceArtifactRunContext,
+    signal?: AbortSignal,
+  ): Promise<SourceResults> {
+    if (signal?.aborted) return cancelledResults(sources);
+    let folderPath = context.folderPath;
+    if (folderPath !== undefined) {
+      try {
+        folderPath = await verifiedFolder(folderPath);
+      } catch (error) {
+        const at = Date.now();
+        const message = error instanceof Error ? error.message : FOLDER_UNAVAILABLE;
+        return Object.fromEntries(sources.map((source) => [source.name, { status: "error", at, error: message } as const]));
+      }
+    }
+    return runSources(sources, approved, { ...context, folderPath }, signal);
+  }
+
+  /**
    * Re-reads an artifact's sources, saves the snapshot and tells every
    * window. A run already going for the same commands under the same access
    * is shared; a caller that cancels leaves it, and the run stops only once
@@ -203,6 +360,7 @@ export function createWorkspaceArtifactRunner(dependencies: WorkspaceArtifactRun
     artifactId: string,
     context: WorkspaceArtifactRunContext,
     signal?: AbortSignal,
+    options: WorkspaceArtifactRefreshOptions = {},
   ): Promise<SourceResults> {
     const view = await dependencies.store.get(workspaceId, artifactId);
     if (!view) throw new Error("No artifact with that id exists in this workspace.");
@@ -220,9 +378,22 @@ export function createWorkspaceArtifactRunner(dependencies: WorkspaceArtifactRun
       }
     }
     if (signal?.aborted) return cancelledResults(view.artifact.sources);
-    const key = `${view.digest}\0${approved}\0${context.permission}\0${folderPath ?? ""}`;
+    const fullKey = `${view.digest}\0${approved}\0${context.permission}\0${folderPath ?? ""}`;
+    const reused =
+      folderError === undefined ? reusableReads(view, options.reuseFrom, approved, { ...context, folderPath }, Date.now()) : {};
+    // A kept file read still has to pass the file policy now; one that does not is read again, and that read is refused as usual.
+    for (const source of view.artifact.sources) {
+      if (source.kind !== "file" || !Object.prototype.hasOwnProperty.call(reused, source.name)) continue;
+      const allowed = await fileAllowed(folderPath!, source.file).catch(() => false);
+      if (!allowed) delete reused[source.name];
+    }
+    if (signal?.aborted) return cancelledResults(view.artifact.sources);
+    const reusedNames = Object.keys(reused).sort();
+    const key = reusedNames.length ? `${fullKey}\0reuse\0${reusedNames.join("\0")}` : fullKey;
     let shared = inFlight.get(id);
-    if (!shared || shared.key !== key || shared.controller.signal.aborted) {
+    // A run already reading every source is joined, whatever this one could keep.
+    const joinable = shared && !shared.controller.signal.aborted && (shared.key === key || shared.key === fullKey);
+    if (!shared || !joinable) {
       const controller = new AbortController();
       const generation = (generations.get(id) ?? 0) + 1;
       generations.set(id, generation);
@@ -233,7 +404,9 @@ export function createWorkspaceArtifactRunner(dependencies: WorkspaceArtifactRun
           const at = Date.now();
           results = Object.fromEntries(view.artifact.sources.map((source) => [source.name, { status: "error", at, error: folderError } as const]));
         } else {
-          results = await runSources(view.artifact.sources, approved, { ...context, folderPath }, controller.signal);
+          const toRun = view.artifact.sources.filter((source) => !Object.prototype.hasOwnProperty.call(reused, source.name));
+          const ran = await runSources(toRun, approved, { ...context, folderPath }, controller.signal);
+          results = Object.fromEntries(view.artifact.sources.map((source) => [source.name, Object.prototype.hasOwnProperty.call(reused, source.name) ? reused[source.name]! : ran[source.name]!]));
         }
         if (!shouldSave(id, entry)) return results;
         // A page whose commands changed meanwhile is re-read by its own refresh; these results describe the old ones.
@@ -309,23 +482,26 @@ export function createWorkspaceArtifactRunner(dependencies: WorkspaceArtifactRun
     const access = workspaceArtifactCommandAccess(context.permission, Boolean(context.folderPath), approved);
     if (access === "blocked") throw new Error("Workspace access is off, so this page’s buttons can’t run.");
     if (access === "needs-approval") throw new Error("Allow this page’s commands first.");
-    const { command } = resolveWorkspaceArtifactCommand(action, args);
+    const resolved = resolveWorkspaceArtifactCommand(action, args);
     const cwd = await verifiedFolder(context.folderPath!);
-    const result = await dependencies.runShell({
-      command,
+    const run = {
       cwd,
       env: dependencies.env(),
       timeoutMs: WORKSPACE_ARTIFACT_LIMITS.actionTimeoutMs,
       maxOutputBytes: WORKSPACE_ARTIFACT_LIMITS.sourceOutputBytes,
       signal,
-    });
+    };
+    // A command with page data never goes through a shell.
+    const result = resolved.kind === "argv"
+      ? await dependencies.runArgv({ ...run, steps: resolved.steps })
+      : await dependencies.runShell({ ...run, command: resolved.command });
     if (result.aborted) throw new Error("Cancelled.");
     const ok = result.exitCode === 0 && !result.timedOut && !result.outputLimitExceeded;
     const output = clip([result.stdout, result.stderr].filter(Boolean).join("\n"), WORKSPACE_ARTIFACT_LIMITS.actionOutputChars);
     return { ok, output: ok ? output : failure(result) };
   }
 
-  return { refresh, runAction };
+  return { refresh, runAction, check };
 }
 
 export type WorkspaceArtifactRunner = ReturnType<typeof createWorkspaceArtifactRunner>;

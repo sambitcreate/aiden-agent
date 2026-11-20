@@ -16,6 +16,9 @@ import {
 } from "../../renderer/shared/image-generation/aspect-ratio.js";
 import { MAX_GENERATED_IMAGES as MAX_IMAGES, parseGeneratedImages } from "./pi-model-image-output.js";
 import { copyBoundedJson, utf8Size } from "./bounded-json.js";
+import { SAVE_PATH_EXTENSION, checkImageSavePath } from "./image-save-path.js";
+
+export { checkImageSavePath };
 
 export const IMAGE_GENERATION_SETUP_HINT =
   "Add an image key in Settings → Image Generation.";
@@ -107,6 +110,146 @@ export interface PiModelToolsHost {
     image: ImageContent,
     signal?: AbortSignal,
   ): Promise<void>;
+  /**
+   * Writes a generated image into the chat's workspace folder, with
+   * write_file's protections, and returns the workspace-relative path written.
+   * With `replace` false it only creates a new file and refuses one already
+   * there. Only a chat that may write files has it; without it generate_image
+   * has no `savePath`.
+   */
+  saveImage?(
+    relativePath: string,
+    image: ImageContent,
+    signal?: AbortSignal,
+    options?: { replace: boolean },
+  ): Promise<string>;
+  /**
+   * Puts saved images on the chat's design canvas and returns the frames
+   * showing them, or null when design mode is off. Only a chat that could use
+   * the canvas has it; without it generate_image has no `placeOnCanvas`.
+   */
+  placeImages?(
+    images: readonly PiModelSavedImage[],
+    signal?: AbortSignal,
+  ): Promise<{ frameIds: string[] } | null>;
+}
+
+/** A generated image saved in the workspace, with its size in pixels. */
+export interface PiModelSavedImage {
+  path: string;
+  width: number;
+  height: number;
+}
+
+const IMAGE_FILE_EXTENSIONS: Readonly<Record<string, string>> = {
+  "image/png": ".png",
+  "image/jpeg": ".jpg",
+  "image/gif": ".gif",
+  "image/webp": ".webp",
+};
+/**
+ * Where each generated image is saved: the first at `savePath`, the rest with
+ * -2, -3 and so on before the extension, which always follows the image's real
+ * type (a JPEG asked for as hero.png is saved as hero.jpg). Only a path equal
+ * to `savePath` itself may replace a file (see `imageSaveMayReplace`).
+ */
+export function imageSavePaths(savePath: string, mimeTypes: readonly string[]): string[] {
+  const stem = savePath.replace(SAVE_PATH_EXTENSION, "");
+  const asked = SAVE_PATH_EXTENSION.exec(savePath)?.[0];
+  const askedType = asked ? extensionType(asked) : undefined;
+  return mimeTypes.map((mimeType, index) => {
+    const extension = IMAGE_FILE_EXTENSIONS[mimeType];
+    if (!extension) throw new Error("Generated images must be PNG, JPEG, GIF or WebP.");
+    // Keep the person's spelling (hero.jpeg, hero.PNG) when the type matches it.
+    const chosen = asked && askedType === mimeType ? asked : extension;
+    return `${stem}${index === 0 ? "" : `-${index + 1}`}${chosen}`;
+  });
+}
+
+function extensionType(extension: string): string | undefined {
+  const lower = extension.toLowerCase();
+  return lower === ".jpeg" ? "image/jpeg" : Object.keys(IMAGE_FILE_EXTENSIONS).find((type) => IMAGE_FILE_EXTENSIONS[type] === lower);
+}
+
+/**
+ * Whether saving at `path` may replace a file already there: only the exact
+ * file the approval named. A swapped extension, a numbered extra image or the
+ * file an extensionless savePath becomes is only ever a new file.
+ */
+export function imageSaveMayReplace(savePath: string, path: string): boolean {
+  return path === savePath;
+}
+
+/**
+ * The approval's account of a save, written before the image exists: the one
+ * file that may be replaced, and the new files other images may become.
+ * `savePath` is the model's argument, so paths are shown JSON-quoted.
+ */
+export function describeImageSave(rawSavePath: string): string {
+  let savePath: string;
+  try {
+    savePath = checkImageSavePath(rawSavePath);
+  } catch {
+    return `Save the image in the workspace as ${JSON.stringify(rawSavePath)} (this path will be refused before any request).`;
+  }
+  const stem = savePath.replace(SAVE_PATH_EXTENSION, "");
+  const asked = SAVE_PATH_EXTENSION.exec(savePath)?.[0];
+  if (!asked) {
+    return `Save the image in the workspace as a new file ${JSON.stringify(`${stem}.png`)}, with the extension of the image's type (such as ${JSON.stringify(`${stem}.jpg`)}), and a second or later image as ${JSON.stringify(`${stem}-2.png`)} and so on. None of them replaces an existing file.`;
+  }
+  const other = extensionType(asked) === "image/png" ? ".jpg" : ".png";
+  return `Save the image in the workspace as ${JSON.stringify(savePath)}, replacing any file there. An image of another type, or a second or later image, is saved only as a new file beside it (such as ${JSON.stringify(`${stem}${other}`)} or ${JSON.stringify(`${stem}-2${asked}`)}) and never replaces one.`;
+}
+
+function failure(error: unknown): string {
+  return error instanceof Error && error.message ? error.message : "unknown error";
+}
+
+/** Saves the images and, when asked, puts them on the canvas; returns what to tell the model. */
+async function keepGeneratedImages(
+  host: PiModelToolsHost,
+  images: readonly ImageContent[],
+  sizes: readonly { width: number; height: number }[],
+  savePath: string,
+  placeOnCanvas: boolean,
+  signal: AbortSignal | undefined,
+): Promise<string[]> {
+  const paths = imageSavePaths(savePath, images.map((image) => image.mimeType));
+  const saved: PiModelSavedImage[] = [];
+  const problems: string[] = [];
+  for (const [index, image] of images.entries()) {
+    signal?.throwIfAborted();
+    try {
+      const target = paths[index]!;
+      const written = await host.saveImage!(target, image, signal, { replace: imageSaveMayReplace(savePath, target) });
+      saved.push({ path: written, width: sizes[index]!.width, height: sizes[index]!.height });
+    } catch (error) {
+      if (signal?.aborted) throw error;
+      problems.push(
+        (error as NodeJS.ErrnoException | undefined)?.code === "EEXIST"
+          ? `Did not save ${paths[index]}: a file is already there, and only the exact savePath may replace a file (numbered extras and a name whose extension follows the image's real type are only ever new files). Pass that path as savePath to replace it, or another name to keep both.`
+          : `Could not save ${paths[index]}: ${failure(error)}`,
+      );
+    }
+  }
+  const notes = saved.length ? [`Saved in the workspace as ${saved.map((entry) => entry.path).join(", ")}.`] : [];
+  notes.push(...problems);
+  if (!placeOnCanvas || saved.length === 0) return notes;
+  signal?.throwIfAborted();
+  try {
+    const placed = await host.placeImages!(saved, signal);
+    notes.push(
+      placed === null
+        ? "Design mode is off, so the design canvas was left alone."
+        : placed.frameIds.length > 0
+          ? `On the design canvas as frame${placed.frameIds.length === 1 ? "" : "s"} ${placed.frameIds.join(", ")}.`
+          : "The design canvas has no room for another frame, so the image is only in the workspace.",
+    );
+  } catch (error) {
+    if (signal?.aborted) throw error;
+    notes.push(`Could not put the image on the design canvas: ${failure(error)}`);
+  }
+  return notes;
 }
 const MAX_JSON_BYTES = CLASSIFIER_JSON_BYTES;
 const record = (value: unknown): value is Record<string, unknown> =>
@@ -526,7 +669,13 @@ export function createPiModelTools(host: PiModelToolsHost): AgentTool[] {
     name: "generate_image",
     label: "Generate image",
     description:
-      "Send a prompt to an image-generation model and display its generated images. Uses the image key saved in Settings → Image Generation and may incur charges. Use list_operation_models to choose an image model. To edit or use reference images, list_image_references returns IDs of images attached to this chat; pass up to four as referenceImageIds. No URLs or paths are accepted. When the user asks for a shape or orientation (square, wide, landscape, portrait, a phone wallpaper, a banner), pass aspectRatio as width:height; models that can't produce that shape use their default.",
+      "Send a prompt to an image-generation model and display its generated images. Uses the image key saved in Settings → Image Generation and may incur charges. Use list_operation_models to choose an image model. To edit or use reference images, list_image_references returns IDs of images attached to this chat; pass up to four as referenceImageIds. No URLs are accepted. When the user asks for a shape or orientation (square, wide, landscape, portrait, a phone wallpaper, a banner), pass aspectRatio as width:height; models that can't produce that shape use their default." +
+      (host.saveImage
+        ? " To keep the image as a file (an asset a page uses, a hero or an icon), pass savePath, a path in the workspace folder such as design/assets/hero.png. Only a file at that exact path is replaced. An image of another type gets its own extension and further images get -2, -3; those are always new files, and one that would land on an existing file is not saved, so to replace hero.jpg or hero-2.png pass that path as savePath."
+        : "") +
+      (host.saveImage && host.placeImages
+        ? " With savePath, placeOnCanvas: true also puts the saved image on the design canvas while design mode is on."
+        : ""),
     parameters: Type.Object(
       {
         ...identity,
@@ -543,6 +692,24 @@ export function createPiModelTools(host: PiModelToolsHost): AgentTool[] {
             { description: "Image shape as width:height. Omit for the model's default (usually square)." },
           ),
         ),
+        ...(host.saveImage
+          ? {
+              savePath: Type.Optional(
+                Type.String({
+                  minLength: 1,
+                  maxLength: 512,
+                  description: "Workspace-relative file to save the image to, such as design/assets/hero.png.",
+                }),
+              ),
+            }
+          : {}),
+        ...(host.saveImage && host.placeImages
+          ? {
+              placeOnCanvas: Type.Optional(
+                Type.Boolean({ description: "Also put the saved image on the design canvas (needs savePath)." }),
+              ),
+            }
+          : {}),
       },
       { additionalProperties: false },
     ),
@@ -550,11 +717,26 @@ export function createPiModelTools(host: PiModelToolsHost): AgentTool[] {
       signal?.throwIfAborted();
       const input = fields(
         args,
-        ["provider", "model", "prompt", "referenceImageIds", "aspectRatio"],
+        [
+          "provider",
+          "model",
+          "prompt",
+          "referenceImageIds",
+          "aspectRatio",
+          ...(host.saveImage ? ["savePath"] : []),
+          ...(host.saveImage && host.placeImages ? ["placeOnCanvas"] : []),
+        ],
         "image request",
       );
       if (input.aspectRatio !== undefined && !isImageAspectRatio(input.aspectRatio))
         throw new Error(`Aspect ratio must be one of ${IMAGE_ASPECT_RATIOS.join(", ")}.`);
+      // Checked before the paid request, so a path that could never be saved costs nothing.
+      const savePath = input.savePath === undefined ? undefined : checkImageSavePath(input.savePath);
+      if (input.placeOnCanvas !== undefined && typeof input.placeOnCanvas !== "boolean")
+        throw new Error("placeOnCanvas must be true or false.");
+      const placeOnCanvas = input.placeOnCanvas === true;
+      if (placeOnCanvas && savePath === undefined)
+        throw new Error("placeOnCanvas needs savePath: the canvas shows a file saved in the workspace, such as design/assets/hero.png.");
       const aspectRatio = input.aspectRatio as ImageAspectRatio | undefined;
       const provider = text(input.provider, 128, "provider"),
         modelId = text(input.model, 256, "model"),
@@ -597,19 +779,28 @@ export function createPiModelTools(host: PiModelToolsHost): AgentTool[] {
           result.usage,
         );
       try {
-        const { images, description } = parseGeneratedImages(result.output);
+        const { images, sizes, description } = parseGeneratedImages(result.output);
         for (const image of images) {
           signal?.throwIfAborted();
           await host.onImage(id, image, signal);
         }
         signal?.throwIfAborted();
+        // The images are already in the chat, so a file that cannot be saved
+        // is reported rather than failing what was paid for.
+        const kept =
+          savePath === undefined
+            ? []
+            : await keepGeneratedImages(host, images, sizes, savePath, placeOnCanvas, signal);
+        signal?.throwIfAborted();
         return {
           content: [
             {
               type: "text",
-              text:
+              text: [
                 description ||
-                `Generated ${images.length} image${images.length === 1 ? "" : "s"}.`,
+                  `Generated ${images.length} image${images.length === 1 ? "" : "s"}.`,
+                ...kept,
+              ].join("\n"),
             },
             ...images,
           ],

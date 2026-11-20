@@ -39,11 +39,16 @@ import {
 } from "./pi-compaction-session-store.js";
 import type { ResolvedModelRuntime } from "./model-runtime-core.js";
 import type { ChatMessage } from "./types.js";
+import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { UsageLimitGate, usageLimitMaxWaitMs } from "./usage-limit-core.js";
 import { withUsageLimitWait } from "./usage-limit-stream.js";
 import { createPiSessionPort, type PiSessionPort } from "./pi-session-port.js";
 import { migratePiSessionJournal } from "./pi-session-migration.js";
 import { upgradeOldPiV4File } from "./pi-session-v4-upgrade.js";
+import { withJournaledCanvasStatusNote } from "./design-canvas/status-note.js";
+import { CANVAS_STATUS_SECTION } from "../../renderer/shared/design-canvas/canvas-summary.js";
+import { DESIGN_PAGE_INSPECT_SECTION, withDesignInspectNote } from "./design-canvas/inspect-note.js";
+import { ON_DEMAND_DECLARED_ENTRY, onDemandDeclaredOfBranch } from "./on-demand-tools.js";
 
 const ZERO_COST = {
   input: 0,
@@ -2426,6 +2431,79 @@ test("disabled skills project visible history without old expanded inputs, resul
   assert.match(JSON.stringify(await session.getEntries()), /HIDDEN_SKILL_INSTRUCTIONS/u);
 });
 
+
+test("with skills off, the design canvas notes a turn journaled are in the next turn's context, so unchanged counts add nothing", async () => {
+  const { model } = compactionFixture();
+  const session = await memorySession();
+  const notes = (messages: readonly AgentMessage[]) => messages.flatMap((message) => {
+    const sections = (message as { sections?: Record<string, string> }).sections;
+    return message.role === "system" && sections && CANVAS_STATUS_SECTION in sections ? [sections[CANVAS_STATUS_SECTION]!] : [];
+  });
+  const first: ChatMessage[] = [{ id: "u1", role: "user", content: "Sketch a pricing page", createdAt: 10 }];
+  await syncChatMessagesToPiSession(session, first, model, false);
+  const turnOne = await projectVisibleHistoryWithoutSkills(session, first, model);
+  const warnings: unknown[] = [];
+  const line = "The canvas has 2 frames, 0 open comments.";
+  const sentFirst = await withJournaledCanvasStatusNote(turnOne, (await turnOne.buildContext()).messages, line, 11, (error) => warnings.push(error));
+  assert.deepEqual(notes(sentFirst), [`Design canvas when this was noted: ${line}`]);
+  // The reply, an old skill tool call, and the next request.
+  await session.appendMessage({ ...assistant(model), content: [{ type: "toolCall", id: "skill-call", name: "skill_review", arguments: {} }] });
+  await session.appendMessage({ role: "toolResult", toolCallId: "skill-call", toolName: "skill_review",
+    content: [{ type: "text", text: "HIDDEN_SKILL_RESULT" }], isError: false, timestamp: 12 });
+  // Mid-reply, the report on a page the turn wrote is journaled as it is sent.
+  const [inspectNote] = withDesignInspectNote({ messages: [] }, [{ path: "design/pricing.html", findings: ["line 4 of design/pricing.html: ReferenceError: x is not defined"] }], 13).messages;
+  await session.appendMessage(inspectNote as AgentMessage);
+  const second: ChatMessage[] = [...first,
+    { id: "a1", role: "assistant", content: "Here is the layout", createdAt: 20 },
+    { id: "u2", role: "user", content: "Tighten it", createdAt: 30 }];
+  await syncChatMessagesToPiSession(session, second, model, false);
+
+  const turnTwo = await projectVisibleHistoryWithoutSkills(session, second, model);
+  const context = (await turnTwo.buildContext()).messages;
+  assert.doesNotMatch(JSON.stringify(context), /HIDDEN_SKILL/u);
+  // The note sits where the first turn sent it, so that request's prefix holds.
+  assert.deepEqual(context.slice(0, sentFirst.length), sentFirst);
+  const inspectNotes = context.filter((message) => {
+    const sections = (message as { sections?: Record<string, string> }).sections;
+    return message.role === "system" && sections && DESIGN_PAGE_INSPECT_SECTION in sections;
+  });
+  assert.deepEqual(inspectNotes, [inspectNote], "the page report stays in the history the next turn sends");
+  const sentSecond = await withJournaledCanvasStatusNote(turnTwo, context, line, 31, (error) => warnings.push(error));
+  assert.equal(sentSecond.length, context.length, "unchanged counts add no note");
+  const changed = await withJournaledCanvasStatusNote(turnTwo, context, "The canvas has 3 frames, 0 open comments.", 32, (error) => warnings.push(error));
+  assert.equal(notes(changed).length, 2);
+  assert.equal(warnings.length, 0);
+});
+
+test("with skills off, the on-demand tools a turn declared are still recorded for the next turn, and a newer record wins", async () => {
+  const { model } = compactionFixture();
+  const session = await memorySession();
+  const first: ChatMessage[] = [{ id: "u1", role: "user", content: "/visualize the funnel", createdAt: 10 }];
+  await syncChatMessagesToPiSession(session, first, model, false);
+  const turnOne = await projectVisibleHistoryWithoutSkills(session, first, model);
+  assert.deepEqual(onDemandDeclaredOfBranch(await turnOne.getBranch()), [], "a chat with no record carries none");
+  // A /visualize turn preloads render_artifact and never calls it; the run records what it declared.
+  await turnOne.appendCustomEntry(ON_DEMAND_DECLARED_ENTRY, { names: ["render_ui", "render_artifact"] });
+  await session.appendMessage({ ...assistant(model), content: [{ type: "toolCall", id: "skill-call", name: "skill_review", arguments: {} }] });
+  await session.appendMessage({ role: "toolResult", toolCallId: "skill-call", toolName: "skill_review",
+    content: [{ type: "text", text: "HIDDEN_SKILL_RESULT" }], isError: false, timestamp: 12 });
+  const second: ChatMessage[] = [...first,
+    { id: "a1", role: "assistant", content: "Here is the funnel", createdAt: 20 },
+    { id: "u2", role: "user", content: "Thanks", createdAt: 30 }];
+  await syncChatMessagesToPiSession(session, second, model, false);
+
+  const turnTwo = await projectVisibleHistoryWithoutSkills(session, second, model);
+  assert.deepEqual(onDemandDeclaredOfBranch(await turnTwo.getBranch()), ["render_ui", "render_artifact"],
+    "the next turn reads the list the last one declared, so it keeps declaring render_artifact in its place");
+  const context = JSON.stringify(await turnTwo.buildContext());
+  assert.doesNotMatch(context, /HIDDEN_SKILL|render_artifact/u, "the record is never model context, and skill-era entries stay hidden");
+
+  // A turn that declares a different list journals a new record, and the turn after reads that one.
+  await turnTwo.appendCustomEntry(ON_DEMAND_DECLARED_ENTRY, { names: ["render_ui"] });
+  assert.deepEqual(onDemandDeclaredOfBranch(await turnTwo.getBranch()), ["render_ui"]);
+  const turnThree = await projectVisibleHistoryWithoutSkills(session, second, model);
+  assert.deepEqual(onDemandDeclaredOfBranch(await turnThree.getBranch()), ["render_ui"]);
+});
 
 test("skill-free visible context compacts and reopens through the real JSONL repository", async (t) => {
   const root = await mkdtemp(path.join(os.tmpdir(), "aiden-skill-free-jsonl-"));

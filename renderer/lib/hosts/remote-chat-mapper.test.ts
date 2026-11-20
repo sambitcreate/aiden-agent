@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { projectAidenRemoteChatMessagesWindow } from "../../../main/services/aiden-remote-chats";
+import { compileAum } from "../../shared/aiden-ui/compile";
+import type { AidenUiNodeV1, ChatUiVisualV1 } from "../../shared/aiden-ui/types";
 import type { Chat, ChatMessage } from "../types";
 import {
   emptyRemoteTranscript,
@@ -106,6 +108,116 @@ test("a host message survives projection and mapping with what the transcript ca
   // HTML artifact frames resolve local media, so remote artifacts are not rendered.
   assert.equal(window.messages[1]?.htmlArtifacts, undefined);
   assert.deepEqual(window.messages[2]?.providerFailure, original[2]?.providerFailure);
+});
+
+function drawnLines(node: AidenUiNodeV1): string[] {
+  if (node.t === "#text") return [node.s ?? ""];
+  const own = (node.c ?? []).flatMap(drawnLines);
+  return node.t === "Text" ? [own.join("")] : own;
+}
+
+function components(node: AidenUiNodeV1): string[] {
+  return [node.t, ...(node.c ?? []).flatMap(components)];
+}
+
+test("another computer's native visual shows on this Mac as the text its phones see, where its tool call ran", () => {
+  const markup = `<Visual title="Revenue"><Data name="months">[{"month":"Jan","revenue":1200},{"month":"Feb","revenue":1500}]</Data><Chart kind="bar" data={$months} x="month" y="revenue" format="currency" label="By month" /><Button label="Approve" onClick={send("approve")} /><Checklist items={[{"label":"Ship","done":true}]} /></Visual>`;
+  const compiled = compileAum(markup, { fallback: { chartTables: true, plainTables: true } });
+  assert.ok(compiled.tree);
+  const hostVisual: ChatUiVisualV1 = {
+    version: 1, kind: "ui", id: "ui-1", toolCallId: "call-1", title: "Revenue", catalogVersion: 1,
+    tree: compiled.tree, ...(compiled.dataJson ? { dataJson: compiled.dataJson } : {}), state: { picked: "Jan" },
+    fallbackText: compiled.fallbackText, layout: "wide",
+  };
+  const [message] = served([{
+    id: "a1", role: "assistant", content: "Here it is.", createdAt: 1, timeline, uiVisuals: [hostVisual],
+  }], { limit: 50 }).messages;
+  assert.equal(message?.uiVisuals?.length, 1);
+  const [visual] = message!.uiVisuals!;
+  assert.equal(visual!.id, "ui-1");
+  assert.equal(visual!.title, "Revenue");
+  assert.equal(visual!.toolCallId, "call-1", "placed where its tool call ran");
+  assert.equal(visual!.layout, "wide");
+  // What is drawn is the host's text, line for line, with the chart's rows written out.
+  assert.deepEqual(drawnLines(visual!.tree), compiled.fallbackText.split("\n").filter((line) => line.trim()));
+  assert.ok(drawnLines(visual!.tree).includes("month: Jan · revenue: $1,200.00"));
+  // Nothing from the host's markup crosses: no controls, data or state to act on.
+  assert.deepEqual([...new Set(components(visual!.tree))].sort(), ["#text", "Text", "Visual"]);
+  assert.equal(visual!.dataJson, undefined);
+  assert.equal(visual!.state, undefined);
+});
+
+test("remote visual text is drawn as words, never as markup, and an HTML, empty or pictured visual adds no text visual", () => {
+  const visuals = [
+    { id: "ui-markup", kind: "ui", title: "Odd", fallbackText: "<Button label=\"Go\" onClick={send(\"rm\")} />\n**bold** [link](https://example.com)" },
+    { id: "ui-empty", kind: "ui", title: "Empty", fallbackText: "   " },
+    { id: "html-1", kind: "html", title: "Chart", fallbackText: "ignored" },
+    { id: "ui-markup", kind: "ui", title: "Duplicate", fallbackText: "again" },
+    { id: "ui-bad id!", kind: "ui", title: "Bad", fallbackText: "text" },
+    // Pictured on the host: its snapshot already shows as an image.
+    { id: "ui-pictured", kind: "ui", title: "Pictured", fallbackText: "text", snapshotAttachmentId: "visual-snapshot_abc" },
+  ];
+  const message = mapRemoteMessage({ id: "a1", role: "assistant", text: "Done", createdAt: new Date(1).toISOString(), visuals });
+  assert.deepEqual(message?.uiVisuals?.map((visual) => visual.id), ["ui-markup"]);
+  const [visual] = message!.uiVisuals!;
+  assert.deepEqual(drawnLines(visual!.tree), ["<Button label=\"Go\" onClick={send(\"rm\")} />", "**bold** [link](https://example.com)"]);
+  assert.deepEqual([...new Set(components(visual!.tree))].sort(), ["#text", "Text", "Visual"]);
+  // A user's message never carries one.
+  assert.equal(mapRemoteMessage({ id: "u1", role: "user", text: "Hi", createdAt: new Date(1).toISOString(), visuals })?.uiVisuals, undefined);
+
+  // However many lines the host sends, the drawn tree stays inside the visual node cap and keeps every word.
+  const many = Array.from({ length: 1_500 }, (_, index) => String(index % 10)).join("\n");
+  const [long] = mapRemoteMessage({ id: "a2", role: "assistant", text: "", createdAt: new Date(1).toISOString(), visuals: [{ id: "ui-long", kind: "ui", title: "Long", fallbackText: many }] })?.uiVisuals ?? [];
+  assert.ok(long);
+  assert.ok(components(long.tree).length <= 2_000);
+  assert.equal(drawnLines(long.tree).join(" ").split(" ").length, 1_500);
+});
+
+test("a remote visual's long or odd title and its hidden characters never cost the visual or split a character", () => {
+  const map = (title: unknown, fallbackText: string) =>
+    mapRemoteMessage({ id: "a1", role: "assistant", text: "", createdAt: new Date(1).toISOString(), visuals: [{ id: "ui-1", kind: "ui", title, fallbackText }] })?.uiVisuals?.[0];
+  const loneSurrogate = /\p{Cs}/u;
+
+  // 119 letters then emoji: the 120-unit cap falls inside the first emoji's pair.
+  const long = map(`${"a".repeat(119)}${"\u{1f600}".repeat(10)}`, "Body");
+  assert.ok(long, "a title over the cap still shows the visual");
+  assert.ok(long.title.length <= 120);
+  assert.ok(long.title.endsWith("…"));
+  assert.doesNotMatch(long.title, loneSurrogate);
+  assert.equal(map("\u202e\u0007\t", "Body")?.title, "Visual", "a title of nothing visible falls back");
+  assert.equal(map(42, "Body")?.title, "Visual");
+  assert.equal(map("Q3\trevenue\u202e \u0085report", "Body")?.title, "Q3 revenue report");
+
+  // Each line loses direction and control characters; a tab stays.
+  const odd = map("Odd", "safe\u202eexe.txt\nbell\u0007 here\u009b\r\nname\tvalue\u2066x\u2069");
+  assert.deepEqual(drawnLines(odd!.tree), ["safeexe.txt", "bell here", "name\tvalue" + "x"]);
+
+  // The 4,000-unit cap falls inside a pair: the half character is left off, not kept.
+  const capped = map("Capped", `${"b".repeat(3_999)}\u{1f600}tail`);
+  assert.ok(capped);
+  assert.equal(capped.fallbackText, "b".repeat(3_999));
+  assert.doesNotMatch(drawnLines(capped.tree).join("\n"), loneSurrogate);
+  // Hidden characters are dropped before the title or text is clipped, so a run of
+  // them neither uses up the cap nor leaves half a character behind.
+  assert.equal(map(`${"\u202e".repeat(3_999)}\u{1f600} Report`, "Body")?.title, "\u{1f600} Report");
+  const padded = map("Padded", `${"\u200b".repeat(4_000)}visible`);
+  assert.ok(padded, "a text of invisible characters before the words still shows the visual");
+  assert.deepEqual(drawnLines(padded.tree), ["visible"]);
+  // However long the hidden run, and however it lines up with the emoji after it, nothing visible is lost or split.
+  assert.equal(map(`${"​".repeat(50_000)}Long ${" ​".repeat(5_000)}title`, "Body")?.title, "Long title");
+  for (let lead = 1_015; lead <= 1_030; lead += 1) {
+    const emoji = map(`${"​".repeat(lead)}${"\u{1f600}".repeat(70)}`, `${"﻿".repeat(lead * 10)}${"\u{1f600}".repeat(2_100)}`);
+    assert.ok(emoji);
+    assert.equal(emoji.title, `${"\u{1f600}".repeat(59)}…`, `lead ${lead}`);
+    assert.equal(emoji.fallbackText, "\u{1f600}".repeat(2_000), `lead ${lead}`);
+  }
+
+  // A zero-width space, word joiner, invisible operator, BOM, interlinear annotation mark
+  // or lone half of a pair draws as nothing and is dropped; a line or paragraph separator
+  // reads as a space; the joiner inside an emoji stays.
+  assert.equal(map("Q3\u200b rev\ufeffenue\u2060\u2028report", "Body")?.title, "Q3 revenue report");
+  const hidden = map("Hidden", "pay\u200broll\u2062\ufff9note\ufffb\u2029end\ud800\n\u{1f469}\u200d\u{1f4bb} team");
+  assert.deepEqual(drawnLines(hidden!.tree), ["payrollnote end", "\u{1f469}\u200d\u{1f4bb} team"]);
 });
 
 test("rows the transcript cannot render are skipped and malformed pages are rejected", () => {

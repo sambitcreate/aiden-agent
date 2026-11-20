@@ -8,7 +8,14 @@ import test from "node:test";
 
 import type { ApprovalMode, MacGrantClass } from "../../../renderer/shared/approval-mode.js";
 import { approvalRuleHostOf, resolveApprovalRule, type ApprovalRule } from "../../../renderer/shared/approval-rules.js";
-import { workspaceAutoWouldJudge, workspaceRuleHost, workspaceToolApproval, type WorkspaceToolApprovalInput } from "./workspace-tool-approval.js";
+import {
+  fileWriteRuleTool,
+  stricterPageRule,
+  workspaceAutoWouldJudge,
+  workspaceRuleHost,
+  workspaceToolApproval,
+  type WorkspaceToolApprovalInput,
+} from "./workspace-tool-approval.js";
 
 type Call = Pick<WorkspaceToolApprovalInput, "toolName" | "args" | "connector">;
 
@@ -45,6 +52,9 @@ const CASES: ReadonlyArray<[string, Call, Record<ApprovalMode, string>]> = [
   ["background_job list", { toolName: "background_job", args: { action: "list" } }, { ask: "run", auto: "run", never: "run" }],
   ["device_screenshot saving a file", { toolName: "device_screenshot", args: { saveTo: "shots/home.png" } }, { ask: "ask:mac=files", auto: "ask:mac=files", never: "ask:mac=files" }],
   ["device_screenshot", { toolName: "device_screenshot", args: {} }, { ask: "run", auto: "run", never: "run" }],
+  // A paid image asks every time, saved to a file or not.
+  ["generate_image saving a file", { toolName: "generate_image", args: { prompt: "a hero", savePath: "design/hero.png" } }, { ask: "ask", auto: "ask", never: "ask" }],
+  ["generate_image", { toolName: "generate_image", args: { prompt: "a hero" } }, { ask: "ask", auto: "ask", never: "ask" }],
   // Reached only once the chat's Computer Use access was granted.
   ["computer_use", { toolName: "computer_use", args: { action: "click" } }, { ask: "run", auto: "run", never: "run" }],
   ["form_fill", { toolName: "form_fill", args: {} }, { ask: "ask", auto: "ask", never: "ask" }],
@@ -155,6 +165,37 @@ test("rules page: a rule from the book decides the real call, and never reaches 
   // A Bot-bound turn answers to its Bot for Allow and Ask, but a Block still stops it.
   assert.equal(withRule("ask", remove, { botBound: true }), "block:rule");
   assert.notEqual(withRule("ask", { ...docs }, { botBound: true }), "ask", "the workspace's Ask rule is not the Bot's");
+});
+
+test("rules page: a write_file Block or Ask also answers for a generated image saved as a workspace file, and its Allow never lets one through", () => {
+  const rule = (tool: string, decision: ApprovalRule["decision"]): ApprovalRule =>
+    ({ id: `r-${tool}`, target: { kind: "tool", tool }, decision, owner: { kind: "mac" }, createdAt: "2026-11-19T00:00:00.000Z" });
+  const outcome = (rules: ApprovalRule[], args: Record<string, unknown>, mode: ApprovalMode = "never") => {
+    const own = resolveApprovalRule(rules, { tool: "generate_image", workspaceId: "w1" })?.decision;
+    const alsoTool = fileWriteRuleTool("generate_image", args);
+    const also = alsoTool ? resolveApprovalRule(rules, { tool: alsoTool, workspaceId: "w1" })?.decision : undefined;
+    const pageRule = stricterPageRule(own, also);
+    const decision = workspaceToolApproval({
+      toolName: "generate_image", args, permission: "ask", workspaceId: "w1",
+      approval: { mode, macGrants: new Set(["files"]) }, judgeAvailable: true,
+      ...(pageRule ? { pageRule } : {}),
+    }).decision;
+    return decision.outcome === "block" ? `block:${decision.reason}` : decision.outcome === "allow" ? "run" : decision.outcome;
+  };
+  const saved = { prompt: "a hero", savePath: "design/hero.png" };
+  const shown = { prompt: "a hero" };
+  for (const mode of ["ask", "auto", "never"] as const) {
+    assert.equal(outcome([rule("write_file", "block")], saved, mode), "block:rule", mode);
+    // An image only shown in the chat writes no file, so the file rule leaves it alone.
+    assert.equal(outcome([rule("write_file", "block")], shown, mode), "ask", mode);
+    // Allowing file writes, and the workspace's own files grant, still leave a paid image's card.
+    assert.equal(outcome([rule("write_file", "allow")], saved, mode), "ask", mode);
+    // The image tool's own Block still wins over a looser file rule.
+    assert.equal(outcome([rule("write_file", "allow"), rule("generate_image", "block")], saved, mode), "block:rule", mode);
+  }
+  // A file rules file that can't be read asks, like any unreadable rule.
+  assert.equal(stricterPageRule("allow", "unreadable"), "unreadable");
+  assert.equal(stricterPageRule("block", "ask"), "block");
 });
 
 test("rules page: a Block applies where no approval mode runs (Assistant, no-workspace and scheduled chats); Allow and Ask don't", () => {

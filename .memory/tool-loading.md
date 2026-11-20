@@ -15,3 +15,5 @@ Branch `claude/project-thread-89sg0j`. Owner chose options A and B after the tok
 - e2e fixture (`tests/e2e/fixtures.ts`): a scripted call to a held-back tool first sends a `load_tools` call (`<id>-load-<n>`).
 - Measured (e2e fixture, fresh workspace chat): 45 → 22 tools, Built-in tools 9.7K → 3.6K. Bot held-back set (subagent 987, routines 815, share_image 204, inspect_image 131, computer_use 1808) → load_tools ~211.
 - Not done: option C (trim long descriptions: subagent, workspace_artifact, schedule_task are the largest).
+
+- Final review fix round (2026-11-19, aa8750900): when a run loads a tool mid-run, llm-client writes the `aiden.on-demand-declared.v1` record again at the run's end, inside the turn envelope before its end marker (so a rollback removes it), and a compaction that folds the `load_tools` call away keeps the tool declared in its place. Tested through the `OnDemandTools` contract in `on-demand-tools.test.ts`, not end to end through llm-client.

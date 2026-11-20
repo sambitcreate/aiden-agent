@@ -64,7 +64,7 @@ export function parseVisualViewerQuery(query: URLSearchParams): VisualViewerAppe
  * several MB), so a phone document carries only those its source names. The
  * component kit stylesheet is small and always included.
  */
-function referencedLibrary(html: string): (name: (typeof GENERATIVE_UI_HOST_LIBS)[number]) => boolean {
+export function referencedLibrary(html: string): (name: (typeof GENERATIVE_UI_HOST_LIBS)[number]) => boolean {
   const usesChart = /\bChart\b/u.test(html);
   const usesPlotly = /\bPlotly\b/u.test(html);
   const usesKatex = /katex/iu.test(html);

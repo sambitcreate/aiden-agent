@@ -16,6 +16,7 @@ import {
 } from "../../renderer/shared/generative-ui.js";
 import type { PiAgentRuntimeExtension } from "./pi-agent-runtime-harness.js";
 import { declarePiRuntimeReplay } from "./pi-runtime-tool.js";
+import { declareOnDemandLoadNotes, declareOnDemandSummary } from "./on-demand-tools.js";
 import {
   htmlArtifactByteLength,
   requireGenerativeUiTitle,
@@ -29,9 +30,13 @@ import {
   GENERATIVE_UI_GUIDE_MODULES,
   generativeUiGuide,
   isGenerativeUiGuideModule,
+  visualizeGuideLoadNotes,
+  type GenerativeUiGuideModule,
 } from "./generative-ui-guide.js";
 import type { InlineVisualsMode } from "../../renderer/shared/appearance.js";
 import { createRenderUiTool, type RenderUiToolOptions } from "./aiden-ui-tool.js";
+import { checkGenerativeUiScripts, describeGenerativeUiScriptCheck } from "./generative-ui-script-check.js";
+import { visualRoutingRule } from "./visual-routing.js";
 
 export const GENERATIVE_UI_EXTENSION_ID = "aiden.gui.generative-ui";
 export const VISUALIZE_GUIDE_TOOL_NAME = "visualize_guide" as const;
@@ -105,15 +110,22 @@ export interface GenerativeUiExtensionOptions {
   /** The turn came from a paired device, which shows each visual as a snapshot. */
   audience?: "remote";
   /**
-   * The design canvas is offered this turn: pages, screens and UI mockups go
+   * The design canvas is offered this turn: screens and pages to iterate on go
    * in `design/*.html` files there, so inline visuals stay small in-reply
    * charts and widgets.
    */
   designCanvas?: boolean;
+  /**
+   * design_mode is offered this turn (design mode is off): whole pages, app
+   * screens and several directions go to the canvas, so inline visuals point
+   * there instead of drawing them.
+   */
+  designModeOffered?: boolean;
+  /** workspace_artifact is offered this turn: a page to keep goes there (see `visualRoutingRule`). */
+  workspaceArtifacts?: boolean;
+  /** The image tools are offered this turn: pictures come from them (see `visualRoutingRule`). */
+  images?: boolean;
 }
-
-const DESIGN_CANVAS_VISUALS_NOTE =
-  " Design mode is on: pages, screens, dashboards laid out as pages, and UI mockups belong on the design canvas as design/*.html files, never in an inline visual. Use inline visuals only for small charts or widgets that support your reply.";
 
 function resolveWorkspaceHtml(
   root: string,
@@ -155,6 +167,57 @@ function resolveWorkspaceRoot(workspaceRoot: string) {
   };
 }
 
+/** Guide modules render_artifact (raw HTML) needs; its load answer carries them. */
+const RENDER_ARTIFACT_GUIDE_MODULES = ["design", "html", "charts", "interactive"] as const satisfies readonly GenerativeUiGuideModule[];
+
+/** Guide modules that apply to workspace artifact pages (Aiden UI Markup). */
+const ARTIFACT_GUIDE_MODULES = ["catalog"] as const satisfies readonly GenerativeUiGuideModule[];
+
+/**
+ * The `visualize_guide` tool. With inline visuals off it is still offered
+ * beside `workspace_artifact`, whose pages use the same markup; it then serves
+ * only the markup catalog and never mentions chat visual tools.
+ */
+export function createVisualizeGuideTool(options: { inlineVisuals?: boolean } = {}): AgentTool {
+  const inlineVisuals = options.inlineVisuals !== false;
+  const modules: readonly GenerativeUiGuideModule[] = inlineVisuals ? GENERATIVE_UI_GUIDE_MODULES : ARTIFACT_GUIDE_MODULES;
+  return declareOnDemandSummary(
+    declarePiRuntimeReplay(
+    {
+      name: VISUALIZE_GUIDE_TOOL_NAME,
+      label: "Visualize Guide",
+      description: inlineVisuals
+        ? "Read Aiden's design guidance for inline visuals before your first render_artifact call in a conversation. Request only the modules you need."
+        : 'Read the Aiden UI Markup guide (components, data, state and buttons) before your first workspace_artifact page in a conversation. Request the "catalog" module.',
+      parameters: Type.Object({
+        modules: Type.Array(
+          Type.Union(modules.map((module) => Type.Literal(module))),
+          { minItems: 1, maxItems: modules.length },
+        ),
+      }),
+      execute: async (_toolCallId, params): Promise<AgentToolResult<null>> => {
+        const requested = (params as { modules?: unknown }).modules;
+        if (
+          !Array.isArray(requested) ||
+          requested.length === 0 ||
+          !requested.every((module) => isGenerativeUiGuideModule(module) && modules.includes(module))
+        ) {
+          throw new Error(`visualize_guide modules must be one or more of: ${modules.join(", ")}.`);
+        }
+        return {
+          content: [{ type: "text", text: generativeUiGuide(requested as GenerativeUiGuideModule[], { inlineVisuals }) }],
+          details: null,
+        };
+      },
+    },
+    "never",
+    ),
+    inlineVisuals
+      ? "Read how to build inline visuals and artifact pages; call it before your first render_ui or render_artifact in a chat."
+      : "Read the markup guide for workspace_artifact pages; call it before your first page in a chat.",
+  );
+}
+
 export function createGenerativeUiExtensionRuntime(
   options: GenerativeUiExtensionOptions,
 ): { extension: PiAgentRuntimeExtension } {
@@ -175,8 +238,16 @@ export function createGenerativeUiExtensionRuntime(
   let serial = Promise.resolve();
   const titlesInGeneration = new Map<string, { mediaId: string; size: number; toolCallId: string }>();
   const designCanvas = options.designCanvas === true;
+  const designModeOffered = !designCanvas && options.designModeOffered === true;
+  const routing = visualRoutingRule({
+    inline: true,
+    workspaceArtifact: options.workspaceArtifacts === true && options.audience !== "remote",
+    designCanvas: designCanvas ? "on" : designModeOffered ? "offered" : "off",
+    images: options.images === true,
+  });
 
-  const tool: AgentTool = declarePiRuntimeReplay(
+  const tool: AgentTool = declareOnDemandSummary(
+    declarePiRuntimeReplay(
     {
       name: GENERATIVE_UI_TOOL_NAME,
       label: "Render Artifact",
@@ -184,7 +255,9 @@ export function createGenerativeUiExtensionRuntime(
         "Render an interactive HTML/CSS/JS visualization inline in the current Aiden chat, inside the reply at the point you call it. " +
         (designCanvas
           ? "Use this only for small charts, diagrams, or widgets that support the reply; pages, screens, and UI mockups go on the design canvas as design/*.html files instead. "
-          : "Use this for charts, diagrams, dashboards, interactive explainers, or UI mockups instead of huge Markdown tables. ") +
+          : designModeOffered
+            ? "Use this for charts, diagrams, dashboards, interactive explainers, or a small UI sketch instead of huge Markdown tables; for whole pages, app screens or several design directions, ask to open design mode with design_mode instead. "
+            : "Use this for charts, diagrams, dashboards, interactive explainers, or UI mockups instead of huge Markdown tables. ") +
         "Provide either `html` (preferred) or a workspace-relative `.html` path. Vanilla HTML/CSS/JS only. Chart.js (`Chart`), Plotly (`Plotly`), and KaTeX (`katex`) are injected by Aiden—do not load CDN scripts or call network APIs. Do not use this for ordinary prose or raster images (use display_image).",
       parameters: Type.Object({
         title: Type.String({
@@ -198,7 +271,9 @@ export function createGenerativeUiExtensionRuntime(
               "Set before html. column (default): the reading column, about 690px wide, for charts, cards, diagrams, and small tools. wide: spans the whole chat pane (up to about 1280px) and follows the window size, " +
               (designCanvas
                 ? "for multi-panel charts and wide tables."
-                : "for dashboards, UI mockups, multi-panel layouts, and wide tables."),
+                : designModeOffered
+                  ? "for dashboards, multi-panel layouts, and wide tables."
+                  : "for dashboards, UI mockups, multi-panel layouts, and wide tables."),
           }),
         ),
         html: Type.Optional(
@@ -263,6 +338,10 @@ export function createGenerativeUiExtensionRuntime(
             html = input.html as string;
           }
           validateGenerativeUiHtml(html);
+          const scriptCheck = describeGenerativeUiScriptCheck(
+            checkGenerativeUiScripts(html),
+            "call render_artifact again with the same title to replace it",
+          );
           const size = htmlArtifactByteLength(html);
           const replacing = titlesInGeneration.get(title);
           const nextBytes = displayedBytes - (replacing?.size ?? 0) + size;
@@ -319,7 +398,11 @@ export function createGenerativeUiExtensionRuntime(
             content: [
               {
                 type: "text",
-                text: `Rendered artifact "${title}" inline from ${sourceLabel} (${size} bytes).`,
+                text: !replacing
+                  ? `Rendered artifact "${title}" inline from ${sourceLabel} (${size} bytes).${scriptCheck}`
+                  : presented
+                    ? `Replaced the artifact "${title}" in place from ${sourceLabel} (${size} bytes); the person now sees this version.${scriptCheck}`
+                    : `Aiden could not show this version of the artifact "${title}" from ${sourceLabel} (${size} bytes); the person still sees the version rendered earlier in this reply.`,
               },
             ],
             details: null,
@@ -330,32 +413,13 @@ export function createGenerativeUiExtensionRuntime(
       },
     },
     "never",
+    ),
+    options.onUiVisual
+      ? "Draw custom HTML/JS inside your reply; use only for what render_ui cannot draw, such as canvas drawing, simulations, 3D or Plotly."
+      : "Draw an HTML/JS chart, diagram or widget inside your reply; use when a visual answers better than prose.",
   );
 
-  const guideTool: AgentTool = declarePiRuntimeReplay(
-    {
-      name: VISUALIZE_GUIDE_TOOL_NAME,
-      label: "Visualize Guide",
-      description:
-        "Read Aiden's design guidance for inline visuals before your first render_artifact call in a conversation. Request only the modules you need.",
-      parameters: Type.Object({
-        modules: Type.Array(
-          Type.Union(GENERATIVE_UI_GUIDE_MODULES.map((module) => Type.Literal(module))),
-          { minItems: 1, maxItems: GENERATIVE_UI_GUIDE_MODULES.length },
-        ),
-      }),
-      execute: async (_toolCallId, params): Promise<AgentToolResult<null>> => {
-        const modules = (params as { modules?: unknown }).modules;
-        if (!Array.isArray(modules) || modules.length === 0 || !modules.every(isGenerativeUiGuideModule)) {
-          throw new Error(
-            `visualize_guide modules must be one or more of: ${GENERATIVE_UI_GUIDE_MODULES.join(", ")}.`,
-          );
-        }
-        return { content: [{ type: "text", text: generativeUiGuide(modules) }], details: null };
-      },
-    },
-    "never",
-  );
+  const guideTool = createVisualizeGuideTool();
 
   return {
     extension: {
@@ -365,11 +429,16 @@ export function createGenerativeUiExtensionRuntime(
           ? "Aiden can draw inline visuals in this chat. Prefer render_ui, which composes Aiden's own native components (charts, stats, tables, comparisons, checklists, steps, simple filters and tabs); use render_artifact (sandboxed HTML) only for custom drawing or scripting. "
           : "Aiden can draw inline visuals in this chat with render_artifact. ") +
         "Use one when a comparison, trend, structure, process, or interactive what-if is clearer as a visual than as prose — not for plain answers or raster images (use display_image), and usually at most one per reply. Each visual appears inside your reply in the Aiden Agent chat, at the point you call the tool, on the chat's own background (no frame or border), with its height following its content. It defaults to the reading column (about 690px wide); pass layout \"wide\" (before the markup or html) when it needs room, such as " +
-        (designCanvas ? "a multi-panel chart or wide table" : "a dashboard, UI mockup, multi-panel layout, or wide table") +
+        (designCanvas
+          ? "a multi-panel chart or wide table"
+          : designModeOffered
+            ? "a dashboard, multi-panel layout, or wide table"
+            : "a dashboard, UI mockup, multi-panel layout, or wide table") +
         ", and it will span the chat pane and follow the window size. Either way its width changes with the window, so build it fluid. Before your first visual in a conversation, call visualize_guide with the modules you need (catalog for render_ui; design, html, charts, interactive for render_artifact). Keep the reply complete without the visual: state the key takeaway in a sentence. Never load remote scripts or call network APIs from a visual, and do not claim inline visuals are unavailable while these tools are present." +
-        (designCanvas ? DESIGN_CANVAS_VISUALS_NOTE : "") +
+        (routing ? ` ${routing}` : "") +
+        (designCanvas ? " Keep inline visuals to small charts, diagrams or widgets that support your reply." : "") +
         (options.preferArtifactThisTurn
-          ? designCanvas
+          ? designCanvas || designModeOffered
             ? " The user invoked /visualize for this turn; prefer render_artifact when a chart or diagram would help."
             : " The user invoked /visualize for this turn; prefer render_artifact when a chart, diagram, dashboard, or interactive mockup would help."
           : "") +
@@ -378,15 +447,18 @@ export function createGenerativeUiExtensionRuntime(
           : ""),
       tools: options.onUiVisual
         ? [
-            tool,
-            createRenderUiTool({
-              namespace: `${artifactNamespace}:ui`,
-              existingChatUiCount: options.existingChatUiCount ?? 0,
-              onUiVisual: options.onUiVisual,
-            }),
+            declareOnDemandLoadNotes(tool, visualizeGuideLoadNotes(RENDER_ARTIFACT_GUIDE_MODULES)),
+            declareOnDemandLoadNotes(
+              createRenderUiTool({
+                namespace: `${artifactNamespace}:ui`,
+                existingChatUiCount: options.existingChatUiCount ?? 0,
+                onUiVisual: options.onUiVisual,
+              }),
+              visualizeGuideLoadNotes(["catalog"]),
+            ),
             guideTool,
           ]
-        : [tool, guideTool],
+        : [declareOnDemandLoadNotes(tool, visualizeGuideLoadNotes(RENDER_ARTIFACT_GUIDE_MODULES)), guideTool],
     },
   };
 }

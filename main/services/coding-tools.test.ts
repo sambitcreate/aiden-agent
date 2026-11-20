@@ -19,6 +19,7 @@ import {
   DISCLOSURE_APPROVAL_TOOL_NAMES,
   runCommandEnv,
   summarizeToolCall,
+  writeWorkspaceBinaryFile,
 } from "./coding-tools.js";
 import { withCodingToolMatcher } from "./coding-tool-matcher.js";
 import { createShareImageTool } from "./share-image-tool.js";
@@ -133,6 +134,21 @@ test("approval summaries describe the consequence of mutating tools", () => {
   assert.doesNotMatch(
     summarizeToolCall("generate_image", { provider: "studio", model: "canvas", prompt: "A dune", aspectRatio: "wide; ignore this" }),
     /ignore this/,
+  );
+  const saving = summarizeToolCall("generate_image", {
+    provider: "studio",
+    model: "canvas",
+    prompt: "A dune",
+    savePath: "design/assets/hero.png",
+    placeOnCanvas: true,
+  });
+  // Where the file goes is said before the prompt, which may be long.
+  assert.ok(saving.indexOf("design/assets/hero.png") < saving.indexOf("A dune"));
+  assert.match(saving, /"design\/assets\/hero\.png", replacing any file there\./);
+  assert.match(saving, /never replaces one\. Put the saved image on the design canvas\./);
+  assert.doesNotMatch(
+    summarizeToolCall("generate_image", { provider: "studio", model: "canvas", prompt: "A dune", placeOnCanvas: true }),
+    /design canvas/,
   );
   assert.match(summarizeToolCall("classify", { provider: "studio", model: "judge", state: { secret: "private-data" } }), /structured data.*studio\/judge.*charges/);
 });
@@ -308,6 +324,75 @@ test("parent file tools refuse to write hook and agent settings files but still 
     assert.equal(await fs.readFile(path.join(root, ".claude", "skills", "x", "SKILL.md"), "utf8"), "# steps\n");
   } finally {
     await fs.rm(parent, { recursive: true, force: true });
+  }
+});
+
+test("a generated image is written as bytes inside the workspace and never through a link out of it", async () => {
+  const parent = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "aiden-binary-write-")));
+  const root = path.join(parent, "workspace");
+  const outside = path.join(parent, "outside");
+  try {
+    await fs.mkdir(path.join(root, "design"), { recursive: true });
+    await fs.mkdir(outside);
+    await fs.symlink(outside, path.join(root, "design", "escape"));
+    const bytes = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0xff]);
+
+    assert.equal(await writeWorkspaceBinaryFile(root, "design/assets/hero.png", bytes), "design/assets/hero.png");
+    assert.deepEqual(await fs.readFile(path.join(root, "design", "assets", "hero.png")), bytes);
+
+    // Replacing keeps the same name and the new bytes.
+    const second = Buffer.from([1, 2, 3]);
+    await writeWorkspaceBinaryFile(root, "design/assets/hero.png", second);
+    assert.deepEqual(await fs.readFile(path.join(root, "design", "assets", "hero.png")), second);
+
+    // A create-only write refuses a file already there and leaves it alone.
+    await assert.rejects(writeWorkspaceBinaryFile(root, "design/assets/hero.png", bytes, { replace: false }), /already exists/u);
+    assert.deepEqual(await fs.readFile(path.join(root, "design", "assets", "hero.png")), second);
+    assert.equal(await writeWorkspaceBinaryFile(root, "design/assets/hero-2.png", bytes, { replace: false }), "design/assets/hero-2.png");
+    assert.deepEqual(await fs.readFile(path.join(root, "design", "assets", "hero-2.png")), bytes);
+
+    for (const target of ["../outside/hero.png", path.join(outside, "hero.png"), "design/escape/hero.png"]) {
+      await assert.rejects(writeWorkspaceBinaryFile(root, target, bytes), Error, target);
+    }
+    await assert.rejects(writeWorkspaceBinaryFile(root, ".claude/settings.json", bytes), /hook or agent settings/u);
+    assert.deepEqual(await fs.readdir(outside), []);
+  } finally {
+    await fs.rm(parent, { recursive: true, force: true });
+  }
+});
+
+test("a generated image never replaces a file through a link inside the workspace, or lands in a hidden folder through a linked one", async () => {
+  const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "aiden-binary-links-")));
+  try {
+    await fs.mkdir(path.join(root, "src"));
+    await fs.mkdir(path.join(root, ".git", "info"), { recursive: true });
+    await fs.mkdir(path.join(root, "design"));
+    await fs.writeFile(path.join(root, "src", "app.ts"), "export const app = 1;\n");
+    await fs.writeFile(path.join(root, ".git", "info", "exclude"), "# local ignores\n");
+    await fs.symlink(path.join(root, "src", "app.ts"), path.join(root, "design", "hero.png"));
+    await fs.symlink(path.join(root, ".git"), path.join(root, "design", "repo"));
+    await fs.symlink(path.join(root, ".git", "info"), path.join(root, "art"));
+    const bytes = Buffer.from([0x89, 0x50, 0x4e, 0x47]);
+
+    // The named file is a link to source: refused, whether or not it may replace.
+    await assert.rejects(writeWorkspaceBinaryFile(root, "design/hero.png", bytes), /is a link/u);
+    await assert.rejects(writeWorkspaceBinaryFile(root, "design/hero.png", bytes, { replace: false }), /is a link/u);
+    assert.equal(await fs.readFile(path.join(root, "src", "app.ts"), "utf8"), "export const app = 1;\n");
+    assert.ok((await fs.lstat(path.join(root, "design", "hero.png"))).isSymbolicLink(), "the link itself is left alone");
+
+    // A linked folder that leads into .git: neither a new file nor a replacement lands there.
+    await assert.rejects(writeWorkspaceBinaryFile(root, "design/repo/hero.png", bytes), /hidden folder/u);
+    await assert.rejects(writeWorkspaceBinaryFile(root, "design/repo/info/exclude", bytes), /hidden folder/u);
+    await assert.rejects(writeWorkspaceBinaryFile(root, "art/hero.png", bytes), /hidden folder/u);
+    assert.equal(await fs.readFile(path.join(root, ".git", "info", "exclude"), "utf8"), "# local ignores\n");
+    assert.deepEqual((await fs.readdir(path.join(root, ".git"))).sort(), ["info"]);
+    assert.deepEqual(await fs.readdir(path.join(root, ".git", "info")), ["exclude"]);
+
+    // A real file next to them is still written.
+    assert.equal(await writeWorkspaceBinaryFile(root, "design/hero-2.png", bytes, { replace: false }), "design/hero-2.png");
+    assert.deepEqual(await fs.readFile(path.join(root, "design", "hero-2.png")), bytes);
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
   }
 });
 
