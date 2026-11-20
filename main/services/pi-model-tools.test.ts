@@ -1036,6 +1036,11 @@ test("a save path that could never be written, or a canvas request without one, 
     // Private-use, unassigned and noncharacter code points, a lone surrogate, and the object replacement character.
     "design/hero\ue000.png", "design/hero\u{f0000}.png", "design/hero\u0378.png", "design/hero\uffff.png", "design/hero\ud800.png",
     "design/hero\udc00.png", "design/hero\ufffc.png",
+    // Unicode reserves unassigned blocks as pictographic; they are still unassigned, alone, styled or joined.
+    "design/hero\u{1fc00}.png", "design/\u{1fffd}.png", "design/\u{1f8ff}.png", "design/\u{1fc00}\ufe0f.png",
+    "design/\u{1fc00}\ufe0f\u200d\u{1fc01}\ufe0f.png",
+    // A selector after a skin tone styles nothing: the tone already draws the emoji.
+    "design/\u{1f44b}\u{1f3fd}\ufe0f.png", "design/\u{1f44b}\u{1f3fd}\ufe0e.png", "design/\u{1f468}\u{1f3fd}\ufe0f\u200d\u{1f4bb}.png",
     // A folder or file name that ends in a space.
     "design /hero.png", "design/hero ", "design/art/hero.png ", "design/ /hero.png"]) {
     await assert.rejects(generate.execute("bad", { ...imageRequest, savePath }), Error, JSON.stringify(savePath));
@@ -1049,7 +1054,9 @@ test("a save path in any script, or named with emoji sequences, is saved as writ
     // A family, a rainbow flag, a heart on fire and a toned hand: emoji joined or styled by joiners and selectors.
     "design/\u{1f468}\u200d\u{1f469}\u200d\u{1f467}.png", "design/\u{1f3f3}\ufe0f\u200d\u{1f308}.png", "design/\u2764\ufe0f\u200d\u{1f525}.png", "design/\u{1f44b}\u{1f3fd}.png",
     // A person at a laptop, a toned one, a runner joined to a symbol styled as emoji, and an ordinary space inside a name.
-    "design/\u{1f469}\u200d\u{1f4bb}.png", "design/\u{1f469}\u{1f3fd}\u200d\u{1f4bb}.png", "design/\u{1f3c3}\u200d\u2640\ufe0f.png", "design/my hero.png"];
+    "design/\u{1f469}\u200d\u{1f4bb}.png", "design/\u{1f469}\u{1f3fd}\u200d\u{1f4bb}.png", "design/\u{1f3c3}\u200d\u2640\ufe0f.png", "design/my hero.png",
+    // A toned thumbs up, and a toned pointing finger whose plain form is drawn as text.
+    "design/\u{1f44d}\u{1f3fd}.png", "design/\u261d\u{1f3fd}.png"];
   const { saves, generate } = savingTools();
   for (const savePath of names) {
     const result = await generate.execute("ok", { ...imageRequest, savePath });

@@ -17,20 +17,25 @@ export const SAVE_PATH_EXTENSION = /\.(png|jpe?g|gif|webp)$/iu;
 // the ordinary one (the no-break, thin, hair and ideographic spaces among them).
 const SAVE_PATH_HIDDEN_CHARACTER = /[\p{Cc}\p{Cf}\p{Co}\p{Cn}\p{Cs}\p{Default_Ignorable_Code_Point}\u2028\u2029\u2800\ufffc]|(?! )\p{Zs}/u;
 
+// An assigned pictographic code point. Unicode reserves whole unassigned blocks as
+// Extended_Pictographic (U+1FC00-U+1FFFD among them); no font draws those, so
+// they stay unassigned code points and are refused with the characters above.
+const PICTOGRAPH = String.raw`[\p{Extended_Pictographic}--\p{Cn}]`;
+
 // One emoji a zero-width joiner may stand next to: one drawn as an emoji by
-// default, or one followed by the emoji presentation selector U+FE0F, either
-// with an optional skin tone.
-const JOINABLE_EMOJI = String.raw`(?:\p{Emoji_Presentation}\p{Emoji_Modifier}?\ufe0f?|\p{Extended_Pictographic}\p{Emoji_Modifier}?\ufe0f)`;
+// default, with a skin tone or the emoji presentation selector U+FE0F (never
+// both), or another pictograph with one of the two.
+const JOINABLE_EMOJI = String.raw`(?:\p{Emoji_Presentation}[\p{Emoji_Modifier}\ufe0f]?|${PICTOGRAPH}[\p{Emoji_Modifier}\ufe0f])`;
 
 // Emoji joined by zero-width joiners (a family, a flag such as 🏳️‍🌈, ❤️‍🔥,
 // 👩‍💻), or a single emoji with its skin tone or presentation selector. The
 // joiner is allowed only between two joinable emoji, where it changes the
 // picture drawn; between a symbol drawn as text and anything else (`©‍®`), or
 // anywhere else, it is refused like the characters above, and so is a selector
-// that follows no emoji.
+// that follows no emoji or follows a skin tone.
 const EMOJI_SEQUENCE = new RegExp(
-  String.raw`${JOINABLE_EMOJI}(?:\u200d${JOINABLE_EMOJI})+|\p{Extended_Pictographic}\p{Emoji_Modifier}?[\ufe0e\ufe0f]?`,
-  "gu",
+  String.raw`${JOINABLE_EMOJI}(?:\u200d${JOINABLE_EMOJI})+|${PICTOGRAPH}(?:\p{Emoji_Modifier}|[\ufe0e\ufe0f])?`,
+  "gv",
 );
 
 const hasHiddenCharacter = (value: string) => SAVE_PATH_HIDDEN_CHARACTER.test(value.replace(EMOJI_SEQUENCE, "e"));
