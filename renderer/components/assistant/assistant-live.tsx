@@ -141,7 +141,9 @@ export function AssistantLiveSetupDialog({
             <Badge color="blue">Beta</Badge>
           </div>
           <p className="mt-0.5 text-xs leading-4 text-secondary">
-            Voice, screen context, and accessibility actions stay visible and stoppable.
+            {live.computerUseOffered || live.screenShareAvailable
+              ? "Voice, screen context, and accessibility actions stay visible and stoppable."
+              : "Voice, chats, and actions inside Aiden stay visible and stoppable."}
           </p>
         </div>
       </div>
@@ -211,19 +213,21 @@ export function AssistantLiveSetupDialog({
             {live.screenError}
           </p>
         ) : null}
-        <ReadinessRow
-          icon={<MousePointer2 className="size-4" />}
-          title="Screen and Accessibility"
-          detail={
-            accessibilityReady && screenReady && live.computerUseEnabled
-              ? "Aiden can inspect the screen and propose one action at a time."
-              : live.computerUseDetail
-          }
-          ready={live.computerUseReady && live.computerUseEnabled}
-          busy={live.computerUseBusy}
-          action="Allow"
-          onAction={() => void live.prepareComputerUse()}
-        />
+        {live.computerUseOffered ? (
+          <ReadinessRow
+            icon={<MousePointer2 className="size-4" />}
+            title="Screen and Accessibility"
+            detail={
+              accessibilityReady && screenReady && live.computerUseEnabled
+                ? "Aiden can inspect the screen and propose one action at a time."
+                : `Optional, to let Aiden use other apps. ${live.computerUseDetail}`
+            }
+            ready={live.computerUseReady && live.computerUseEnabled}
+            busy={live.computerUseBusy}
+            action="Allow"
+            onAction={() => void live.prepareComputerUse()}
+          />
+        ) : null}
         <ReadinessRow
           icon={<Settings2 className="size-4" />}
           title="Scheduled tasks"
@@ -260,8 +264,10 @@ export function AssistantLiveSetupDialog({
           <HoverCardContent align="end" className="w-80">
             <p className="text-xs font-medium text-primary">Live session privacy</p>
             <p className="mt-1 text-xs leading-5 text-secondary">
-              Starting Live enables screen actions without per-action prompts until you stop. Audio and captions
-              remain in memory for this Live session and are not added to chat history.
+              {live.computerUseReady && live.computerUseEnabled
+                ? "Starting Live enables screen actions without per-action prompts until you stop. "
+                : null}
+              Audio and captions remain in memory for this Live session and are not added to chat history.
             </p>
           </HoverCardContent>
         </HoverCard>

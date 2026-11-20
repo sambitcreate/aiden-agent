@@ -17,7 +17,14 @@ test("local Aiden Live, Scheduled, Profile, and About surfaces stay safe to expl
   await expect(liveSetup.getByText("Beta", { exact: true })).toBeVisible();
   await expect(liveSetup.getByText("Google Live model", { exact: true })).toBeVisible();
   await expect(liveSetup.getByText("Microphone", { exact: true })).toBeVisible();
-  await expect(liveSetup.getByText("Screen and Accessibility", { exact: true })).toBeVisible();
+  if (process.platform === "darwin") {
+    // Computer Use is an optional extra for Live on a Mac.
+    await expect(liveSetup.getByText("Screen and Accessibility", { exact: true })).toBeVisible();
+  } else {
+    // Linux has no Computer Use and no app microphone permission, so neither blocks Live.
+    await expect(liveSetup.getByText("Screen and Accessibility", { exact: true })).toHaveCount(0);
+    await expect(liveSetup.getByText(/Linux doesn’t ask apps for microphone permission/u)).toBeVisible();
+  }
   await expect(liveSetup.getByText("Scheduled tasks", { exact: true })).toBeVisible();
   await liveSetup.getByRole("button", { name: "Not now", exact: true }).click();
   await expect(liveSetup).toHaveCount(0);

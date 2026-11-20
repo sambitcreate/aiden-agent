@@ -26,6 +26,7 @@ export const idleLiveController: AssistantLiveController = {
   startBlockedReason: null,
   computerUseEnabled: true,
   computerUseActing: false,
+  computerUseOffered: true,
   computerUseReady: true,
   computerUseBusy: false,
   computerUseDetail: "Ready",
