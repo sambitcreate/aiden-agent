@@ -3,6 +3,20 @@ import Observation
 
 enum AidenAppTab: String, Codable, CaseIterable, Hashable {
     case inbox, bots, workspaces, search
+
+    /// The tabs drawn as a list beside a detail at regular width.
+    static let listTabs: [AidenAppTab] = [.inbox, .bots, .workspaces]
+
+    /// True for a route this tab's list has a row for. Beside the list such a
+    /// route becomes the selection rather than going on top: the Inbox's chats
+    /// and Bots, the Bots tab's Bots and the Workspaces tab's workspaces.
+    func listsRow(for route: AidenAppRoute) -> Bool {
+        switch (self, route) {
+        case (.inbox, _): route.isConversation
+        case (.bots, .bot), (.workspaces, .workspace): true
+        default: false
+        }
+    }
 }
 
 enum AidenAppRoute: Hashable, Codable {
@@ -290,12 +304,13 @@ struct AidenSplitNavigationPath: Equatable {
         path = [route]
     }
 
-    /// A stack's path taken over by the list: the chat or Bot nearest the top
-    /// becomes the selection and only the screens above it stay, so the
-    /// highlighted row is the conversation on screen. Pages under it, and chats
-    /// it was opened over, go. A path with no conversation is kept as it is.
-    static func takingOver(_ path: [AidenAppRoute]) -> [AidenAppRoute] {
-        guard let index = path.lastIndex(where: \.isConversation) else { return path }
+    /// A stack's path taken over by the tab's list: the route nearest the top
+    /// that the list has a row for becomes the selection and only the screens
+    /// above it stay, so the highlighted row is what's on screen. Pages under
+    /// it, and rows it was opened over, go. A path with no such route is kept
+    /// as it is.
+    static func takingOver(_ path: [AidenAppRoute], on tab: AidenAppTab) -> [AidenAppRoute] {
+        guard let index = path.lastIndex(where: tab.listsRow) else { return path }
         return Array(path[index...])
     }
 
@@ -351,29 +366,43 @@ struct AidenSplitNavigationPath: Equatable {
 final class AidenAppNavigation {
     var tab: AidenAppTab
     var inboxPath: [AidenAppRoute] {
-        didSet { endCatchUpIfLeft() }
+        didSet {
+            endCatchUpIfLeft()
+            rememberSelection(of: .inbox)
+        }
     }
-    var botsPath: [AidenAppRoute]
-    var workspacesPath: [AidenAppRoute]
+    var botsPath: [AidenAppRoute] {
+        didSet { rememberSelection(of: .bots) }
+    }
+    var workspacesPath: [AidenAppRoute] {
+        didSet { rememberSelection(of: .workspaces) }
+    }
     private var savedPaths: [String: [AidenAppRoute]]
+    /// Each list tab's last selection: the first route its path held. A
+    /// collapsed split draws it while Back slides the detail away, after the
+    /// path has emptied. Not saved.
+    private var lastSelections: [AidenAppTab: AidenAppRoute] = [:]
 
     /// Not saved: a relaunch must not open the microphone.
     private(set) var chatStartingVoice: AidenHostObjectID?
     /// The Catch Up under way, while its chat is on top of the Inbox. Not saved:
     /// a relaunch restores the chat, as an ordinary chat.
     private(set) var catchUp: AidenCatchUpRun?
-    /// The Inbox list is beside its detail (regular width). The shell keeps it in
-    /// step with the size class. A chat or Bot opened on the Inbox then becomes
-    /// the list's selection instead of going on top of the one there, so the
-    /// highlighted row is the conversation on screen. Pages such as Settings
-    /// still go on top. Not saved: the width decides it on every launch.
-    /// Turning it on, at launch or when the display opens, hands the path to
-    /// the list (`AidenSplitNavigationPath.takingOver`).
-    var inboxBesideList = false {
+    /// Each list tab's list is beside its detail (regular width). The shell
+    /// keeps it in step with the size class. A route a tab's list has a row for
+    /// (`AidenAppTab.listsRow`) then becomes that list's selection instead of
+    /// going on top of the one there, so the highlighted row is what's on
+    /// screen. Pages such as Settings, and a workspace's chats, still go on
+    /// top. Not saved: the width decides it on every launch. Turning it on, at
+    /// launch or when the display opens, hands each path to its list
+    /// (`AidenSplitNavigationPath.takingOver`).
+    var besideList = false {
         didSet {
-            guard inboxBesideList, !oldValue else { return }
-            let path = AidenSplitNavigationPath.takingOver(inboxPath)
-            if path != inboxPath { inboxPath = path }
+            guard besideList, !oldValue else { return }
+            for tab in AidenAppTab.listTabs {
+                let path = AidenSplitNavigationPath.takingOver(path(of: tab), on: tab)
+                if path != self.path(of: tab) { setPath(path, of: tab) }
+            }
         }
     }
 
@@ -391,7 +420,34 @@ final class AidenAppNavigation {
         botsPath = snapshot.botsPath
         workspacesPath = snapshot.workspacesPath
         savedPaths = snapshot.savedPaths
+        for tab in AidenAppTab.listTabs { rememberSelection(of: tab) }
         dropRoutes(outside: installations)
+    }
+
+    /// The route a collapsed split draws in its detail once Back has emptied
+    /// the tab's path, while the detail slides away: the selection it last
+    /// had. Nil once that's gone (`forgetLastSelection`), or was never there.
+    func lastSelection(of tab: AidenAppTab) -> AidenAppRoute? {
+        lastSelections[tab]
+    }
+
+    /// The outgoing detail has left the screen. Its route isn't drawn any
+    /// more, so its screen and model can go. A tab with a selection keeps it.
+    func forgetLastSelection(of tab: AidenAppTab) {
+        guard path(of: tab).isEmpty, lastSelections[tab] != nil else { return }
+        lastSelections[tab] = nil
+    }
+
+    /// A deleted chat, or the like, isn't drawn again on its way out.
+    func forget(_ route: AidenAppRoute) {
+        for (tab, last) in lastSelections where last == route {
+            lastSelections[tab] = nil
+        }
+    }
+
+    private func rememberSelection(of tab: AidenAppTab) {
+        guard let first = path(of: tab).first, lastSelections[tab] != first else { return }
+        lastSelections[tab] = first
     }
 
     var snapshot: AidenAppNavigationSnapshot {
@@ -415,7 +471,7 @@ final class AidenAppNavigation {
     /// over it, since its row is still highlighted and it's still the detail.
     var inboxOpenChat: AidenHostObjectID? {
         if let openChat { return openChat }
-        guard inboxBesideList, tab == .inbox, case .chat(let id)? = inboxPath.first else { return nil }
+        guard besideList, tab == .inbox, case .chat(let id)? = inboxPath.first else { return nil }
         return id
     }
 
@@ -427,12 +483,22 @@ final class AidenAppNavigation {
         }
     }
 
-    private func path(of tab: AidenAppTab) -> [AidenAppRoute] {
+    /// The tab's path. Search has none.
+    func path(of tab: AidenAppTab) -> [AidenAppRoute] {
         switch tab {
         case .inbox: inboxPath
         case .bots: botsPath
         case .workspaces: workspacesPath
         case .search: []
+        }
+    }
+
+    func setPath(_ path: [AidenAppRoute], of tab: AidenAppTab) {
+        switch tab {
+        case .inbox: inboxPath = path
+        case .bots: botsPath = path
+        case .workspaces: workspacesPath = path
+        case .search: break
         }
     }
 
@@ -458,12 +524,7 @@ final class AidenAppNavigation {
         let holders = AidenAppTab.allCases.filter { path(of: $0).contains(route) }
         let tab = holders.contains(tab) ? tab : holders.first ?? tab
         self.tab = tab
-        switch tab {
-        case .inbox: showOnInbox(route)
-        case .bots: Self.show(route, on: &botsPath)
-        case .workspaces: Self.show(route, on: &workspacesPath)
-        case .search: break
-        }
+        show(route, onTab: tab)
     }
 
     /// Goes back to just below the route, wherever it is. Nothing happens when
@@ -494,7 +555,7 @@ final class AidenAppNavigation {
     /// choosing a row does, rather than going on top of it.
     @discardableResult
     func startCatchUp(in queue: AidenCatchUpQueue) -> AidenHostObjectID? {
-        if inboxBesideList { inboxPath = [] }
+        if besideList { inboxPath = [] }
         guard let first = queue.first else {
             open(.catchUpFinished(queue.ending()))
             return nil
@@ -539,19 +600,22 @@ final class AidenAppNavigation {
     private func openInInbox(_ route: AidenAppRoute) {
         chatStartingVoice = nil
         tab = .inbox
-        showOnInbox(route)
+        show(route, onTab: .inbox)
     }
 
     /// On a stack the route goes on top, or is gone back to. Beside the list a
-    /// chat or Bot becomes the selection and the detail starts over on it.
-    private func showOnInbox(_ route: AidenAppRoute) {
-        guard inboxBesideList, route.isConversation else {
-            Self.show(route, on: &inboxPath)
-            return
+    /// route the tab's list has a row for becomes the selection and the detail
+    /// starts over on it.
+    private func show(_ route: AidenAppRoute, onTab tab: AidenAppTab) {
+        var path = path(of: tab)
+        if besideList, tab.listsRow(for: route) {
+            var split = AidenSplitNavigationPath(path)
+            split.select(route)
+            path = split.path
+        } else {
+            Self.show(route, on: &path)
         }
-        var split = AidenSplitNavigationPath(inboxPath)
-        split.select(route)
-        if split.path != inboxPath { inboxPath = split.path }
+        if path != self.path(of: tab) { setPath(path, of: tab) }
     }
 
     /// A tab holding a route to a machine that's gone goes back to the last
@@ -562,10 +626,12 @@ final class AidenAppNavigation {
         func reachable(_ path: [AidenAppRoute]) -> [AidenAppRoute] {
             Array(path.prefix { $0.isReachable(on: installations) })
         }
-        inboxPath = reachable(inboxPath)
-        botsPath = reachable(botsPath)
-        workspacesPath = reachable(workspacesPath)
+        for tab in AidenAppTab.listTabs {
+            let path = reachable(path(of: tab))
+            if path != self.path(of: tab) { setPath(path, of: tab) }
+        }
         savedPaths = savedPaths.filter { _, path in path.allSatisfy { $0.isReachable(on: installations) } }
+        lastSelections = lastSelections.filter { $0.value.isReachable(on: installations) }
     }
 
     private static func remove(_ route: AidenAppRoute, from path: inout [AidenAppRoute]) {

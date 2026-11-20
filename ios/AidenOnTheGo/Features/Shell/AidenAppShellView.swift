@@ -104,22 +104,15 @@ struct AidenAppShellView: View {
     @State private var botSummaries: [AidenHostObjectID: AidenBotSummary] = [:]
     @State private var searchText = ""
     @State private var showsRunningChats = false
-    /// The Inbox split's columns. Both are asked for: the system tiles them when
-    /// they fit (an iPhone Duo open in landscape) and lays the list over the
-    /// detail when they don't (open in portrait), where picking a row puts it away.
-    @State private var inboxColumns = NavigationSplitViewVisibility.all
-    @State private var inboxSplitFrame = CGRect.zero
-    @State private var inboxDetailFrame = CGRect.zero
-    /// Whether the window was landscape the last time the split was measured.
-    @State private var inboxWasLandscape: Bool?
+    /// Each list tab's split columns.
+    @State private var inboxColumns = AidenSplitColumns()
+    @State private var botsColumns = AidenSplitColumns()
+    @State private var workspacesColumns = AidenSplitColumns()
     /// Whether the system puts its bars in a rail beside the content, as on a
     /// closed iPhone Duo.
     @State private var showsVerticalBar = false
     /// The shell's own window, for its orientation.
     @State private var window = AidenWindowReader.Window()
-    /// The last route the Inbox detail showed, drawn while a collapsed split
-    /// slides it away after Back has emptied the path.
-    @State private var lastInboxSelection: AidenAppRoute?
     /// Conversations on screen that no route names: a workspace's chats.
     @State private var conversationsOnScreen = AidenConversationsOnScreen()
 
@@ -155,7 +148,7 @@ struct AidenAppShellView: View {
                 installations: coordinator.installationStore.installations
             )
             // Set before any link or request opens a route, which reads it.
-            navigation.inboxBesideList = horizontalSizeClass == .regular
+            navigation.besideList = horizontalSizeClass == .regular
             let newWork = AidenNewWorkChatFlow(coordinator: coordinator) { [weak navigation] chat, id in
                 let home = inboxStore.homeModel(for: id.instanceId)
                 home?.accept(chat)
@@ -203,27 +196,8 @@ struct AidenAppShellView: View {
     var body: some View {
         TabView(selection: Bindable(navigation).tab) {
             Tab("Inbox", systemImage: "tray", value: AidenAppTab.inbox) {
-                // One split view at every width, collapsed by the system to a
-                // single stack when compact. Swapping it for a separate stack
-                // when an iPhone Duo closed let the split's own collapse pop
-                // land on the new stack, which emptied the path.
-                NavigationSplitView(columnVisibility: $inboxColumns, preferredCompactColumn: inboxCompactColumn) {
-                    inboxList(selection: showsInboxBesideDetail ? AidenSplitNavigationPath(displayedInboxPath).selection : nil)
-                } detail: {
-                    inboxDetail
-                        .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { inboxDetailFrame = $0 }
-                }
-                .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { inboxSplitFrame = $0 }
-                // Turning the device brings the list back. Other resizes leave
-                // the columns as the person set them; opening or closing an
-                // iPhone Duo changes the size class, handled below.
-                .onGeometryChange(for: CGSize.self) { $0.size } action: { size in
-                    showInboxListIfTurned(size: size)
-                }
-                // A chat chosen any other way: a link, Catch Up's Next.
-                .onChange(of: AidenSplitNavigationPath(navigation.inboxPath).selection, initial: true) { _, selection in
-                    if let selection { lastInboxSelection = selection }
-                    hideOverlaidInboxList()
+                splitTab(.inbox, columns: inboxColumns, empty: .inbox) { selection in
+                    inboxList(selection: selection)
                 }
             }
             .badge(inboxStore.needsYouCount)
@@ -234,22 +208,31 @@ struct AidenAppShellView: View {
             )
 
             Tab("Bots", systemImage: AidenChromeSymbols.bots, value: AidenAppTab.bots) {
-                NavigationStack(path: Bindable(navigation).botsPath) {
+                splitTab(.bots, columns: botsColumns, empty: .bots) { selection in
                     AidenBotsTabView(
                         coordinator: coordinator,
                         store: inboxStore,
                         navigation: navigation,
                         availability: botsAvailability,
-                        onOpenBot: { id, bot in botSummaries[id] = bot }
+                        selection: selection,
+                        onOpenBot: { id, bot in botSummaries[id] = bot },
+                        onOpened: { hideOverlaidList(on: .bots) }
                     )
-                    .navigationDestination(for: AidenAppRoute.self, destination: destination)
                 }
             }
 
             Tab("Workspaces", systemImage: "folder", value: AidenAppTab.workspaces) {
-                NavigationStack(path: Bindable(navigation).workspacesPath) {
-                    AidenWorkspacesTabView(coordinator: coordinator, store: inboxStore, newWork: newWork)
-                        .navigationDestination(for: AidenAppRoute.self, destination: destination)
+                splitTab(.workspaces, columns: workspacesColumns, empty: .workspaces) { selection in
+                    AidenWorkspacesTabView(
+                        coordinator: coordinator,
+                        store: inboxStore,
+                        newWork: newWork,
+                        besideList: showsListBesideDetail,
+                        selection: selection
+                    ) { route in
+                        navigation.open(route)
+                        hideOverlaidList(on: .workspaces)
+                    }
                 }
             }
 
@@ -279,7 +262,7 @@ struct AidenAppShellView: View {
         // Hiding the tab bar leaves the accessory up, under the composer.
         .aidenRunningAccessory(
             isEnabled: runningHome == .accessory && inboxStore.hasRunningChats
-                && !navigation.showsConversation && conversationsOnScreen.isEmpty
+                && !navigation.showsConversation && conversationsOnScreen.isEmpty(on: navigation.tab)
         ) {
             AidenRunningAccessoryHost(store: inboxStore, onOpen: openRow) { showsRunningChats = true }
         }
@@ -310,8 +293,8 @@ struct AidenAppShellView: View {
             inboxStore.setInboxVisible(isOnScreen)
         }
         .onChange(of: horizontalSizeClass) { _, sizeClass in
-            inboxColumns = .all
-            navigation.inboxBesideList = sizeClass == .regular
+            for columns in [inboxColumns, botsColumns, workspacesColumns] { columns.visibility = .all }
+            navigation.besideList = sizeClass == .regular
         }
         .onChange(of: navigation.inboxOpenChat, initial: true) { _, chat in
             inboxStore.openChat = chat
@@ -348,35 +331,48 @@ struct AidenAppShellView: View {
         }
     }
 
-    /// Regular width puts the Inbox list beside the chat it opened, as on an
+    /// Regular width puts each list tab's list beside what it opened, as on an
     /// iPhone Duo's inner display or an iPad. Compact width collapses the split
     /// to one stack.
-    private var showsInboxBesideDetail: Bool {
+    private var showsListBesideDetail: Bool {
         horizontalSizeClass == .regular
     }
 
-    /// The Inbox path as drawn. Beside the list it's the path the list takes
-    /// over, so the first frame after the display opens already highlights
-    /// the chat on screen; `inboxBesideList` then stores the same path.
-    private var displayedInboxPath: [AidenAppRoute] {
-        showsInboxBesideDetail ? AidenSplitNavigationPath.takingOver(navigation.inboxPath) : navigation.inboxPath
+    private func columns(for tab: AidenAppTab) -> AidenSplitColumns {
+        switch tab {
+        case .bots: botsColumns
+        case .workspaces: workspacesColumns
+        case .inbox, .search: inboxColumns
+        }
     }
 
-    /// Collapsed, the split shows the list until the path holds something,
-    /// then the detail. Back from the detail's root returns to the list, which
-    /// clears the path. Writes while not compact are the split's own and
-    /// change nothing.
-    private var inboxCompactColumn: Binding<NavigationSplitViewColumn> {
-        Binding(
-            get: { AidenSplitNavigationPath.compactShowsList(navigation.inboxPath) ? .sidebar : .detail },
-            set: { column in
-                let path = AidenSplitNavigationPath.path(
-                    navigation.inboxPath,
-                    afterShowingList: column == .sidebar,
-                    besideList: showsInboxBesideDetail
-                )
-                if path != navigation.inboxPath { navigation.inboxPath = path }
-            }
+    /// A list tab: its list, and what the list opened beside it or pushed
+    /// over it. `list` gets the row to highlight.
+    private func splitTab<Sidebar: View>(
+        _ tab: AidenAppTab,
+        columns: AidenSplitColumns,
+        empty: AidenSplitEmptyState,
+        @ViewBuilder list: @escaping (AidenAppRoute?) -> Sidebar
+    ) -> some View {
+        AidenSplitTab(
+            tab: tab,
+            navigation: navigation,
+            columns: columns,
+            besideList: showsListBesideDetail,
+            window: window,
+            empty: empty,
+            list: list,
+            screen: { route, keepsTabs in AnyView(screen(for: route, keepsTabs: keepsTabs)) }
+        )
+        .environment(\.aidenShellTab, tab)
+    }
+
+    /// Puts the tab's list away when it's laid over the detail
+    /// (`AidenSplitColumns.hideOverlaidList`).
+    private func hideOverlaidList(on tab: AidenAppTab) {
+        columns(for: tab).hideOverlaidList(
+            besideList: showsListBesideDetail,
+            hasSelection: AidenSplitNavigationPath(navigation.path(of: tab)).selection != nil
         )
     }
 
@@ -391,10 +387,13 @@ struct AidenAppShellView: View {
             onOpenMachines: { navigation.open(.machines) },
             onCatchUp: {
                 markViewed(navigation.startCatchUp(in: catchUpQueue))
-                hideOverlaidInboxList()
+                hideOverlaidList(on: .inbox)
             },
             onShowRunning: { showsRunningChats = true },
-            selection: selection
+            selection: selection,
+            // In a side rail the system lays the outgoing chip over the
+            // incoming chat while it pushes, so it goes with the list.
+            showsMachineStatus: !showsVerticalBar || showsListBesideDetail || navigation.inboxPath.isEmpty
         )
         .safeAreaInset(edge: .top, spacing: 0) {
             AidenConnectionNotice(coordinator: coordinator)
@@ -402,75 +401,9 @@ struct AidenAppShellView: View {
         .toolbar { inboxToolbar }
     }
 
-    /// The detail column: the selected route at the root of its own stack, and
-    /// the rest of the Inbox path pushed over it.
-    private var inboxDetail: some View {
-        let chosen = AidenSplitNavigationPath(displayedInboxPath).selection
-        let selection = AidenSplitNavigationPath.detailRoot(
-            selection: chosen,
-            lastSelection: lastInboxSelection,
-            besideList: showsInboxBesideDetail
-        )
-        // A route drawn only while Back slides it away mustn't keep the tabs
-        // hidden over the list it leaves.
-        let keepsTabs = showsInboxBesideDetail || chosen == nil
-        return NavigationStack(path: Binding(
-            get: { AidenSplitNavigationPath(displayedInboxPath).detailPath },
-            set: { detailPath in
-                var split = AidenSplitNavigationPath(displayedInboxPath)
-                split.setDetailPath(detailPath)
-                if split.path != navigation.inboxPath { navigation.inboxPath = split.path }
-            }
-        )) {
-            Group {
-                if let selection {
-                    screen(for: selection, keepsTabs: keepsTabs)
-                        // Another row is another screen, not this one updated.
-                        .id(selection)
-                } else {
-                    ContentUnavailableView(
-                        "No chat selected",
-                        systemImage: "bubble.left.and.bubble.right",
-                        description: Text("Pick a chat from the Inbox.")
-                    )
-                    .background(palette.canvas.ignoresSafeArea())
-                }
-            }
-            .navigationDestination(for: AidenAppRoute.self, destination: besideListDestination)
-        }
-    }
-
-    /// A screen in the detail column. Beside the list a conversation keeps the
-    /// tabs up, as the list is; collapsed it's any stack's screen.
-    private func besideListDestination(for route: AidenAppRoute) -> some View {
-        screen(for: route, keepsTabs: showsInboxBesideDetail)
-    }
-
-    /// Picking a row while the list is an overlay over the detail (a narrow
-    /// regular width, such as an iPhone Duo open in portrait) puts the overlay
-    /// away, so the chosen chat is in view, including one tapped again while
-    /// already selected. Tiled columns are left as they are.
-    private func hideOverlaidInboxList() {
-        guard showsInboxBesideDetail, inboxColumns != .detailOnly,
-              AidenSplitNavigationPath(navigation.inboxPath).selection != nil,
-              AidenSplitNavigationPath.listIsOverlaid(detailFrame: inboxDetailFrame, splitFrame: inboxSplitFrame)
-        else { return }
-        inboxColumns = .detailOnly
-    }
-
-    /// Brings the Inbox list back when the device turned. The window's
-    /// orientation decides, not the split's shape: the keyboard shortens the
-    /// split in portrait until it's wider than tall, and a turn resizes it in
-    /// two steps that pass through a square.
-    private func showInboxListIfTurned(size: CGSize) {
-        let landscape = window.isLandscape ?? (size.width > size.height)
-        defer { inboxWasLandscape = landscape }
-        guard let inboxWasLandscape, inboxWasLandscape != landscape else { return }
-        inboxColumns = .all
-    }
-
     private func deleteChat(_ id: AidenHostObjectID) {
         navigation.leave(.chat(id))
+        navigation.forget(.chat(id))
         Task {
             switch await inboxStore.delete(id) {
             case .deleted:
@@ -499,11 +432,6 @@ struct AidenAppShellView: View {
         ToolbarItem(placement: .primaryAction) {
             AidenNewWorkComposeButton(flow: newWork)
         }
-    }
-
-    /// A screen on a tab's stack.
-    private func destination(for route: AidenAppRoute) -> some View {
-        screen(for: route, keepsTabs: false)
     }
 
     /// A conversation hides the tabs on a stack, where the composer owns the
@@ -587,7 +515,7 @@ struct AidenAppShellView: View {
     private func openRow(_ route: AidenAppRoute) {
         if case .chat(let id) = route { markViewed(id) }
         navigation.openInboxRow(route)
-        hideOverlaidInboxList()
+        hideOverlaidList(on: .inbox)
     }
 
     private func nextInCatchUp() {
@@ -801,6 +729,179 @@ private struct AidenChatRouteView: View {
         }
         .task(id: coordinator.hosts.connection(for: model.id.instanceId)?.connectionState) {
             await model.load(coordinator: coordinator)
+        }
+    }
+}
+
+/// What a list tab's detail says with nothing selected.
+enum AidenSplitEmptyState {
+    case inbox, bots, workspaces
+
+    var title: LocalizedStringKey {
+        switch self {
+        case .inbox: "No chat selected"
+        case .bots: "No Bot selected"
+        case .workspaces: "No workspace selected"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .inbox: "bubble.left.and.bubble.right"
+        case .bots: AidenChromeSymbols.bots
+        case .workspaces: "folder"
+        }
+    }
+
+    var message: LocalizedStringKey {
+        switch self {
+        case .inbox: "Pick a chat from the Inbox."
+        case .bots: "Pick a Bot from the list."
+        case .workspaces: "Pick a workspace from the list."
+        }
+    }
+}
+
+/// A list tab's split view: which columns it shows, and where they were last
+/// measured. Both columns are asked for: the system tiles them when they fit
+/// (an iPhone Duo open in landscape) and lays the list over the detail when
+/// they don't (open in portrait), where picking a row puts it away.
+@MainActor @Observable
+final class AidenSplitColumns {
+    var visibility = NavigationSplitViewVisibility.all
+    @ObservationIgnored fileprivate var splitFrame = CGRect.zero
+    @ObservationIgnored fileprivate var detailFrame = CGRect.zero
+    /// Whether the window was landscape the last time the split was measured.
+    @ObservationIgnored private var wasLandscape: Bool?
+
+    /// Picking a row while the list is an overlay over the detail (a narrow
+    /// regular width, such as an iPhone Duo open in portrait) puts the overlay
+    /// away, so the chosen screen is in view, including a row tapped again
+    /// while already selected. Tiled columns are left as they are.
+    func hideOverlaidList(besideList: Bool, hasSelection: Bool) {
+        guard besideList, visibility != .detailOnly, hasSelection,
+              AidenSplitNavigationPath.listIsOverlaid(detailFrame: detailFrame, splitFrame: splitFrame)
+        else { return }
+        visibility = .detailOnly
+    }
+
+    /// With nothing chosen the detail is only a placeholder, so a hidden list
+    /// comes back rather than leaving "No … selected" on its own, as on a tab
+    /// first shown in portrait on an open iPhone Duo.
+    func showListIfNothingChosen(besideList: Bool, hasSelection: Bool) {
+        guard besideList, !hasSelection, visibility == .detailOnly else { return }
+        visibility = .all
+    }
+
+    /// Brings the list back when the device turned. The window's orientation
+    /// decides, not the split's shape: the keyboard shortens the split in
+    /// portrait until it's wider than tall, and a turn resizes it in two steps
+    /// that pass through a square.
+    fileprivate func showListIfTurned(landscape: Bool) {
+        defer { wasLandscape = landscape }
+        guard let wasLandscape, wasLandscape != landscape else { return }
+        visibility = .all
+    }
+}
+
+/// A list tab as one split view at every width, collapsed by the system to a
+/// single stack when compact. Swapping it for a separate stack when an iPhone
+/// Duo closed let the split's own collapse pop land on the new stack, which
+/// emptied the path. The tab's path is the one source of truth
+/// (`AidenSplitNavigationPath`).
+private struct AidenSplitTab<Sidebar: View>: View {
+    let tab: AidenAppTab
+    let navigation: AidenAppNavigation
+    let columns: AidenSplitColumns
+    let besideList: Bool
+    let window: AidenWindowReader.Window
+    let empty: AidenSplitEmptyState
+    let list: (AidenAppRoute?) -> Sidebar
+    /// A route's screen, and whether a conversation there keeps the tabs.
+    let screen: (AidenAppRoute, Bool) -> AnyView
+
+    @Environment(\.aidenPalette) private var palette
+
+    private var path: [AidenAppRoute] { navigation.path(of: tab) }
+
+    /// The path as drawn. Beside the list it's the path the list takes over,
+    /// so the first frame after the display opens already highlights what's
+    /// on screen; `AidenAppNavigation.besideList` then stores the same path.
+    private var displayedPath: [AidenAppRoute] {
+        besideList ? AidenSplitNavigationPath.takingOver(path, on: tab) : path
+    }
+
+    var body: some View {
+        @Bindable var columns = columns
+        NavigationSplitView(columnVisibility: $columns.visibility, preferredCompactColumn: compactColumn) {
+            list(besideList ? AidenSplitNavigationPath(displayedPath).selection : nil)
+        } detail: {
+            detail
+                .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { columns.detailFrame = $0 }
+        }
+        .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { columns.splitFrame = $0 }
+        // Turning the device brings the list back. Other resizes leave the
+        // columns as the person set them; opening or closing an iPhone Duo
+        // changes the size class, which the shell handles.
+        .onGeometryChange(for: CGSize.self) { $0.size } action: { size in
+            columns.showListIfTurned(landscape: window.isLandscape ?? (size.width > size.height))
+        }
+        // A row chosen any other way: a link, a Search result, Catch Up's Next.
+        .onChange(of: AidenSplitNavigationPath(path).selection, initial: true) { _, selection in
+            columns.hideOverlaidList(besideList: besideList, hasSelection: selection != nil)
+            columns.showListIfNothingChosen(besideList: besideList, hasSelection: selection != nil)
+        }
+    }
+
+    /// Collapsed, the split shows the list until the path holds something,
+    /// then the detail. Back from the detail's root returns to the list, which
+    /// clears the path. Writes while not compact are the split's own and
+    /// change nothing.
+    private var compactColumn: Binding<NavigationSplitViewColumn> {
+        Binding(
+            get: { AidenSplitNavigationPath.compactShowsList(path) ? .sidebar : .detail },
+            set: { column in
+                let after = AidenSplitNavigationPath.path(path, afterShowingList: column == .sidebar, besideList: besideList)
+                if after != path { navigation.setPath(after, of: tab) }
+            }
+        )
+    }
+
+    /// The detail column: the selected route at the root of its own stack, and
+    /// the rest of the path pushed over it.
+    private var detail: some View {
+        let chosen = AidenSplitNavigationPath(displayedPath).selection
+        let selection = AidenSplitNavigationPath.detailRoot(
+            selection: chosen,
+            lastSelection: navigation.lastSelection(of: tab),
+            besideList: besideList
+        )
+        // A route drawn only while Back slides it away mustn't keep the tabs
+        // hidden over the list it leaves.
+        let keepsTabs = besideList || chosen == nil
+        return NavigationStack(path: Binding(
+            get: { AidenSplitNavigationPath(displayedPath).detailPath },
+            set: { detailPath in
+                var split = AidenSplitNavigationPath(displayedPath)
+                split.setDetailPath(detailPath)
+                if split.path != path { navigation.setPath(split.path, of: tab) }
+            }
+        )) {
+            Group {
+                if let selection {
+                    screen(selection, keepsTabs)
+                        // Another row is another screen, not this one updated.
+                        .id(selection)
+                        // Once Back has slid it away, it isn't drawn again.
+                        .onDisappear { navigation.forgetLastSelection(of: tab) }
+                } else {
+                    ContentUnavailableView(empty.title, systemImage: empty.systemImage, description: Text(empty.message))
+                        .background(palette.canvas.ignoresSafeArea())
+                }
+            }
+            // Beside the list a conversation keeps the tabs up, as the list
+            // is; collapsed it's any stack's screen.
+            .navigationDestination(for: AidenAppRoute.self) { screen($0, besideList) }
         }
     }
 }

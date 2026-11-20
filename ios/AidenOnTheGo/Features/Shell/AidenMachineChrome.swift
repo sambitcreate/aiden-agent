@@ -376,36 +376,68 @@ extension EnvironmentValues {
     @Entry var aidenTabsInSideRail = false
     /// The conversations on screen, set once by the shell.
     @Entry var aidenConversationsOnScreen: AidenConversationsOnScreen?
+    /// The shell tab a screen is on. Nil outside the shell's tabs.
+    @Entry var aidenShellTab: AidenAppTab?
 }
 
-/// The conversations on screen, including ones a list pushes by view rather
-/// than by route (a workspace's chats), which the navigation paths don't see.
-/// The shell keeps the running accessory out from under their composers.
+/// The conversations on screen, by tab, including ones a list pushes by view
+/// rather than by route (a workspace's chats), which the navigation paths don't
+/// see. The shell keeps the running accessory out from under their composers.
 @MainActor @Observable
 final class AidenConversationsOnScreen {
-    private var shown: Set<UUID> = []
+    private var shown: [UUID: AidenAppTab] = [:]
 
-    var isEmpty: Bool { shown.isEmpty }
+    /// True when no conversation on `tab` is on screen. One left counted on
+    /// another tab can't hide the accessory here.
+    func isEmpty(on tab: AidenAppTab) -> Bool {
+        !shown.values.contains(tab)
+    }
 
-    func show(_ id: UUID) { shown.insert(id) }
-    func hide(_ id: UUID) { shown.remove(id) }
+    func show(_ id: UUID, on tab: AidenAppTab) { shown[id] = tab }
+    func hide(_ id: UUID) { shown.removeValue(forKey: id) }
 }
 
 extension View {
-    /// Counts this screen as a conversation while it's on screen.
+    /// Counts this screen as a conversation on its tab while it's on screen.
     func aidenConversationOnScreen() -> some View {
         modifier(AidenConversationOnScreenModifier())
     }
 }
 
+/// One screen's place in `AidenConversationsOnScreen`. It's given up when the
+/// screen leaves, and at the latest when the screen's state goes, so a
+/// disappearance that never arrives can't keep it counted.
+@MainActor
+final class AidenConversationOnScreenEntry {
+    private let id = UUID()
+    private weak var registry: AidenConversationsOnScreen?
+
+    func show(in registry: AidenConversationsOnScreen, on tab: AidenAppTab) {
+        self.registry = registry
+        registry.show(id, on: tab)
+    }
+
+    func hide() {
+        registry?.hide(id)
+    }
+
+    isolated deinit {
+        registry?.hide(id)
+    }
+}
+
 private struct AidenConversationOnScreenModifier: ViewModifier {
     @Environment(\.aidenConversationsOnScreen) private var conversations
-    @State private var id = UUID()
+    @Environment(\.aidenShellTab) private var tab
+    @State private var entry = AidenConversationOnScreenEntry()
 
     func body(content: Content) -> some View {
         content
-            .onAppear { conversations?.show(id) }
-            .onDisappear { conversations?.hide(id) }
+            .onAppear {
+                guard let conversations, let tab else { return }
+                entry.show(in: conversations, on: tab)
+            }
+            .onDisappear { entry.hide() }
     }
 }
 

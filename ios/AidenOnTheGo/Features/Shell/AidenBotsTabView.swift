@@ -17,8 +17,13 @@ struct AidenBotsTabView: View {
     let store: AidenUnifiedInboxStore
     let navigation: AidenAppNavigation
     let availability: AidenBotsAvailability
+    /// The route the detail beside the list shows, whose row is highlighted.
+    /// Nil on a stack.
+    var selection: AidenAppRoute? = nil
     /// A Bot the home already knows, so its chat opens with a title at once.
     let onOpenBot: (AidenHostObjectID, AidenBotSummary) -> Void
+    /// A Bot was opened from the list.
+    var onOpened: () -> Void = {}
 
     @Environment(\.aidenPalette) private var palette
     @State private var chatStarter = AidenBotChatStarter()
@@ -38,7 +43,7 @@ struct AidenBotsTabView: View {
             sections: store.botSections(),
             onOpen: { row in
                 onOpenBot(row.id, row.bot)
-                navigation.open(.bot(row.id))
+                open(row.id)
             }
         )
     }
@@ -58,15 +63,16 @@ struct AidenBotsTabView: View {
                 coordinator: coordinator,
                 availability: availability,
                 onOpenConversation: { conversation in
-                    if let id = route(botID: conversation.botId) { navigation.open(.bot(id)) }
+                    if let id = route(botID: conversation.botId) { open(id) }
                 },
                 onCreateConversation: createConversation,
                 onOpenBotSession: { bot in
                     guard let id = route(botID: bot.id) else { return }
                     onOpenBot(id, bot)
-                    navigation.open(.bot(id))
+                    open(id)
                 },
-                machines: machines
+                machines: machines,
+                selectedBot: selectedBot
             )
             .onChange(of: coordinator.defaultInstanceId) { _, _ in
                 chatStarter.forgetAttempt()
@@ -86,7 +92,17 @@ struct AidenBotsTabView: View {
         guard availability.canWrite,
               await chatStarter.start(botID: bot.id, coordinator: coordinator),
               let id = route(botID: bot.id) else { return }
+        open(id)
+    }
+
+    private func open(_ id: AidenHostObjectID) {
         navigation.open(.bot(id))
+        onOpened()
+    }
+
+    private var selectedBot: AidenHostObjectID? {
+        guard case .bot(let id)? = selection else { return nil }
+        return id
     }
 }
 

@@ -401,6 +401,8 @@ struct AidenInboxTabRootView: View {
     var onCatchUp: () -> Void = {}
     var onShowRunning: () -> Void = {}
     var selection: AidenAppRoute? = nil
+    /// The machine count in the toolbar.
+    var showsMachineStatus = true
 
     @Environment(\.accessibilityVoiceOverEnabled) private var voiceOverEnabled
     @Environment(\.aidenPalette) private var palette
@@ -433,8 +435,10 @@ struct AidenInboxTabRootView: View {
         )
         .navigationTitle("Inbox")
         .toolbar {
-            ToolbarItem(placement: .topBarLeading) {
-                AidenHostStatusItem(online: store.roster.online, total: store.roster.total, onOpen: onOpenMachines)
+            if showsMachineStatus {
+                ToolbarItem(placement: .topBarLeading) {
+                    AidenHostStatusItem(online: store.roster.online, total: store.roster.total, onOpen: onOpenMachines)
+                }
             }
         }
         .overlay(alignment: .top) { noticeBanner }

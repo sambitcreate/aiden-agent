@@ -263,6 +263,8 @@ struct AidenBotsHomeView: View {
     /// With more than one machine shown: every machine's Bots,
     /// listed in place of the selected machine's.
     var machines: AidenBotsHomeMachines? = nil
+    /// The Bot open beside this list, whose row is highlighted. Nil on a stack.
+    var selectedBot: AidenHostObjectID? = nil
 
     @Environment(\.aidenPalette) private var palette
     @Environment(\.aidenReduceMotion) private var reduceMotion
@@ -647,7 +649,11 @@ struct AidenBotsHomeView: View {
                 Button {
                     openChat(for: row.bot)
                 } label: {
-                    botRow(row)
+                    botRow(
+                        row,
+                        isSelected: selectedBot?.instanceId == coordinator.defaultInstanceId
+                            && selectedBot?.objectId == row.bot.id
+                    )
                 }
                 .buttonStyle(.plain)
                 .contextMenu { botContextMenu(row.bot) }
@@ -694,7 +700,7 @@ struct AidenBotsHomeView: View {
                 Button {
                     machines.onOpen(row)
                 } label: {
-                    botRow(AidenBotHomeRow(bot: row.bot, conversation: nil), machine: row.id.instanceId)
+                    botRow(AidenBotHomeRow(bot: row.bot, conversation: nil), machine: row.id.instanceId, isSelected: selectedBot == row.id)
                 }
                 .buttonStyle(.plain)
             }
@@ -709,7 +715,7 @@ struct AidenBotsHomeView: View {
             || row.bot.purpose.localizedCaseInsensitiveContains(normalizedQuery)
     }
 
-    private func botRow(_ row: AidenBotHomeRow, machine: String? = nil) -> some View {
+    private func botRow(_ row: AidenBotHomeRow, machine: String? = nil, isSelected: Bool = false) -> some View {
         HStack(alignment: .top, spacing: 14) {
             AidenBotCanonicalAvatarView(
                 coordinator: coordinator,
@@ -760,10 +766,14 @@ struct AidenBotsHomeView: View {
         }
         .padding(.horizontal, 20)
         .padding(.vertical, 12)
+        .background {
+            if isSelected { AidenInboxRowBackground(isSelected: true, palette: palette) }
+        }
         .contentShape(Rectangle())
         .accessibilityElement(children: .combine)
         .accessibilityLabel(rowAccessibilityLabel(row))
         .accessibilityHint("Opens the chat")
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
     }
 
     private func rowAccessibilityLabel(_ row: AidenBotHomeRow) -> String {

@@ -239,7 +239,7 @@ final class AidenCatchUpQueueTests: XCTestCase {
     /// selection, so the highlighted row is always the chat on screen.
     func testCatchUpBesideTheListMovesTheSelection() {
         let navigation = AidenAppNavigation()
-        navigation.inboxBesideList = true
+        navigation.besideList = true
         let other = F.id("other", on: "studio")
         navigation.openInboxRow(.chat(other))
         navigation.open(.settings)
@@ -263,7 +263,7 @@ final class AidenCatchUpQueueTests: XCTestCase {
     /// Choosing another row mid-run is leaving the run.
     func testChoosingAnotherRowEndsTheRun() {
         let navigation = AidenAppNavigation()
-        navigation.inboxBesideList = true
+        navigation.besideList = true
         XCTAssertEqual(navigation.startCatchUp(in: queue()), oldest)
 
         navigation.openInboxRow(.chat(newest))

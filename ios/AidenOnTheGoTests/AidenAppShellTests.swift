@@ -246,7 +246,7 @@ final class AidenAppShellTests: XCTestCase {
         navigation.open(.settings)
         XCTAssertEqual(navigation.inboxPath, [.chat(id("c1")), .chat(id("c2")), .settings])
 
-        navigation.inboxBesideList = true
+        navigation.besideList = true
 
         XCTAssertEqual(AidenSplitNavigationPath(navigation.inboxPath).selection, .chat(id("c2")))
         XCTAssertEqual(AidenSplitNavigationPath(navigation.inboxPath).detailPath, [.settings])
@@ -263,7 +263,7 @@ final class AidenAppShellTests: XCTestCase {
         store.save(compact.snapshot)
 
         let restored = AidenAppNavigation(restoring: store.load(), installations: [studio, laptop])
-        restored.inboxBesideList = true
+        restored.besideList = true
 
         XCTAssertEqual(restored.inboxPath, [.bot(id("b1"))])
     }
@@ -274,7 +274,7 @@ final class AidenAppShellTests: XCTestCase {
         navigation.open(.machines)
         navigation.open(.machine(instanceId: "laptop"))
 
-        navigation.inboxBesideList = true
+        navigation.besideList = true
 
         XCTAssertEqual(navigation.inboxPath, [.machines, .machine(instanceId: "laptop")])
     }
@@ -336,7 +336,7 @@ final class AidenAppShellTests: XCTestCase {
 
     private func besideList() -> AidenAppNavigation {
         let navigation = AidenAppNavigation()
-        navigation.inboxBesideList = true
+        navigation.besideList = true
         return navigation
     }
 
@@ -435,6 +435,109 @@ final class AidenAppShellTests: XCTestCase {
         XCTAssertNil(stack.inboxOpenChat)
     }
 
+    /// The Bots list beside its detail: a Bot opened from the list, a link, a
+    /// Search result or a chat that turned out to be a Bot's replaces the one
+    /// open, so its row is the highlighted one. On a stack each goes on top.
+    func testABotOpenedBesideTheBotsListReplacesTheSelection() {
+        let navigation = besideList()
+        navigation.open(.bot(id("b1")))
+        navigation.open(.bot(id("b2")))
+        XCTAssertEqual(navigation.tab, .bots)
+        XCTAssertEqual(navigation.botsPath, [.bot(id("b2"))])
+
+        navigation.open(.chat(id("c1")))
+        navigation.replace(.chat(id("c1")), with: .bot(id("b3")))
+        XCTAssertEqual(navigation.botsPath, [.bot(id("b3"))], "A Bot's chat opened from the Inbox")
+        XCTAssertEqual(navigation.inboxPath, [])
+
+        let stack = AidenAppNavigation()
+        stack.open(.bot(id("b1")))
+        stack.open(.bot(id("b2")))
+        XCTAssertEqual(stack.botsPath, [.bot(id("b1")), .bot(id("b2"))])
+    }
+
+    /// The Workspaces list beside its detail: another workspace replaces the
+    /// one open, and a chat started there goes on top of it, so Back from the
+    /// chat returns to its workspace. Going back to the open workspace pops
+    /// the chat. On a stack a workspace goes on top.
+    func testAWorkspaceOpenedBesideTheListReplacesTheSelectionAndItsChatsStackOnIt() {
+        let navigation = besideList()
+        navigation.open(.workspace(id("w1")))
+        navigation.open(.chat(id("c1")), on: .workspaces)
+        XCTAssertEqual(navigation.workspacesPath, [.workspace(id("w1")), .chat(id("c1"))])
+        XCTAssertEqual(AidenSplitNavigationPath(navigation.workspacesPath).selection, .workspace(id("w1")))
+
+        navigation.open(.workspace(id("w1")))
+        XCTAssertEqual(navigation.workspacesPath, [.workspace(id("w1"))])
+
+        navigation.open(.workspace(id("w2", on: "laptop")))
+        XCTAssertEqual(navigation.workspacesPath, [.workspace(id("w2", on: "laptop"))])
+
+        let stack = AidenAppNavigation()
+        stack.open(.workspace(id("w1")))
+        stack.open(.workspace(id("w2", on: "laptop")))
+        XCTAssertEqual(stack.workspacesPath, [.workspace(id("w1")), .workspace(id("w2", on: "laptop"))])
+    }
+
+    /// Opening the display hands every list tab's path to its own list: the
+    /// row nearest the top of each becomes its selection.
+    func testOpeningTheDisplaySelectsEachTabsRowOnScreen() {
+        let navigation = AidenAppNavigation()
+        navigation.botsPath = [.bot(id("b1")), .bot(id("b2"))]
+        navigation.workspacesPath = [.workspace(id("w1")), .workspace(id("w2")), .chat(id("c1"))]
+
+        navigation.besideList = true
+
+        XCTAssertEqual(navigation.botsPath, [.bot(id("b2"))])
+        XCTAssertEqual(navigation.workspacesPath, [.workspace(id("w2")), .chat(id("c1"))], "A workspace's chat stays over it")
+    }
+
+    /// Back on a collapsed split empties the path before the detail has slid
+    /// away, so the route that was there is still there to draw. Once it's
+    /// gone, or the chat is deleted, or its machine is, nothing is kept.
+    func testTheLastSelectionOutlivesBackUntilItsScreenHasGone() {
+        let navigation = AidenAppNavigation()
+        navigation.open(.workspace(id("w1")))
+        navigation.workspacesPath = []
+        XCTAssertEqual(navigation.lastSelection(of: .workspaces), .workspace(id("w1")))
+
+        navigation.open(.workspace(id("w2")))
+        navigation.forgetLastSelection(of: .workspaces)
+        XCTAssertEqual(navigation.lastSelection(of: .workspaces), .workspace(id("w2")), "Still selected")
+
+        navigation.workspacesPath = []
+        navigation.forgetLastSelection(of: .workspaces)
+        XCTAssertNil(navigation.lastSelection(of: .workspaces))
+
+        navigation.openInboxRow(.chat(id("c1")))
+        navigation.leave(.chat(id("c1")))
+        navigation.forget(.chat(id("c1")))
+        XCTAssertNil(navigation.lastSelection(of: .inbox), "A deleted chat")
+
+        navigation.open(.bot(id("b1", on: "laptop")))
+        navigation.botsPath = []
+        navigation.dropRoutes(outside: [studio])
+        XCTAssertNil(navigation.lastSelection(of: .bots), "A forgotten machine's Bot")
+    }
+
+    /// A workspace's chats count as on screen on their own tab only, and one
+    /// whose screen has gone without saying so stops counting.
+    func testAConversationOnScreenCountsOnItsOwnTabUntilItsScreenGoes() {
+        let registry = AidenConversationsOnScreen()
+        var entry: AidenConversationOnScreenEntry? = AidenConversationOnScreenEntry()
+        entry?.show(in: registry, on: .workspaces)
+
+        XCTAssertFalse(registry.isEmpty(on: .workspaces))
+        XCTAssertTrue(registry.isEmpty(on: .inbox))
+
+        entry?.hide()
+        XCTAssertTrue(registry.isEmpty(on: .workspaces))
+
+        entry?.show(in: registry, on: .workspaces)
+        entry = nil
+        XCTAssertTrue(registry.isEmpty(on: .workspaces), "Its screen's state went without a disappearance")
+    }
+
     /// Frames measured on an iPhone Duo's inner display.
     func testOnlyADetailStartingAtTheSplitsEdgeIsAnOverlaidList() {
         let portraitSplit = CGRect(x: 0, y: 82, width: 669, height: 786)
@@ -459,6 +562,20 @@ final class AidenAppShellTests: XCTestCase {
             "Mid-animation"
         )
         XCTAssertFalse(AidenSplitNavigationPath.listIsOverlaid(detailFrame: .zero, splitFrame: .zero), "Not measured yet")
+    }
+
+    /// A hidden list with nothing chosen would leave only "No … selected".
+    func testAHiddenListComesBackWhenNothingIsChosen() {
+        let columns = AidenSplitColumns()
+        columns.visibility = .detailOnly
+        columns.showListIfNothingChosen(besideList: true, hasSelection: true)
+        XCTAssertEqual(columns.visibility, .detailOnly, "A chosen screen keeps the list away")
+
+        columns.showListIfNothingChosen(besideList: false, hasSelection: false)
+        XCTAssertEqual(columns.visibility, .detailOnly, "Collapsed, the stack decides what shows")
+
+        columns.showListIfNothingChosen(besideList: true, hasSelection: false)
+        XCTAssertEqual(columns.visibility, .all)
     }
 
     /// The width only changes how the path is drawn, so a restored path, or one

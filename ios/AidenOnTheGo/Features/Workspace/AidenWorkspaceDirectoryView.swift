@@ -78,9 +78,11 @@ struct AidenWorkspacesDirectoryView: View {
                         if row.id.instanceId == coordinator.defaultInstanceId {
                             interactiveRow(row.workspace, isArchived: false)
                         } else {
-                            NavigationLink(value: AidenAppRoute.workspace(row.id)) {
-                                AidenWorkspaceRow(workspace: row.workspace)
-                            }
+                            AidenWorkspaceOpenRow(
+                                workspace: row.workspace,
+                                route: .workspace(row.id),
+                                tabChrome: tabChrome
+                            )
                         }
                     }
                 } header: {
@@ -121,14 +123,33 @@ struct AidenWorkspacesDirectoryView: View {
 
             if searchText.isEmpty {
                 Section {
-                    NavigationLink {
-                        AidenArchivedWorkspacesView(
-                            coordinator: coordinator,
-                            workspaces: archivedWorkspaces,
-                            row: interactiveRow
-                        )
-                    } label: {
-                        Label("Archived Workspaces", systemImage: "archivebox")
+                    if tabChrome.besideList {
+                        // Beside the detail a page link would take the detail
+                        // column outside the tab's path, and picking a
+                        // workspace afterwards couldn't bring it back. An
+                        // archived row only unarchives, so the rows open here.
+                        DisclosureGroup {
+                            if archivedWorkspaces.isEmpty {
+                                Text("Workspaces archived on this device appear here.")
+                                    .foregroundStyle(palette.secondary)
+                            } else {
+                                ForEach(archivedWorkspaces) { workspace in
+                                    interactiveRow(workspace, isArchived: true)
+                                }
+                            }
+                        } label: {
+                            Label("Archived Workspaces", systemImage: "archivebox")
+                        }
+                    } else {
+                        NavigationLink {
+                            AidenArchivedWorkspacesView(
+                                coordinator: coordinator,
+                                workspaces: archivedWorkspaces,
+                                row: interactiveRow
+                            )
+                        } label: {
+                            Label("Archived Workspaces", systemImage: "archivebox")
+                        }
                     }
                 } footer: {
                     Text("Archived workspaces and their chats are hidden only on this device.")
@@ -328,7 +349,7 @@ struct AidenWorkspacesDirectoryView: View {
             coordinator: coordinator,
             workspace: workspace,
             isArchived: isArchived,
-            route: tabChrome.route(workspace),
+            tabChrome: tabChrome,
             onRename: { requestRename(workspace) },
             onToggleArchive: { toggleArchive(workspace, isArchived: isArchived) },
             onRemove: workspace.isManagedWorktree || coordinator.workspaces.count <= 1
@@ -413,8 +434,7 @@ private struct AidenWorkspaceInteractiveRow: View {
     @Bindable var coordinator: AidenRemoteCoordinator
     let workspace: AidenWorkspace
     let isArchived: Bool
-    /// What the row pushes in the tab's stack of routes.
-    let route: AidenAppRoute
+    let tabChrome: AidenWorkspacesTabChrome
     let onRename: () -> Void
     let onToggleArchive: () -> Void
     let onRemove: (() -> Void)?
@@ -432,9 +452,7 @@ private struct AidenWorkspaceInteractiveRow: View {
                 .buttonStyle(.plain)
                 .accessibilityHint("Unarchives this workspace on this device.")
             } else {
-                NavigationLink(value: route) {
-                    AidenWorkspaceRow(workspace: workspace)
-                }
+                AidenWorkspaceOpenRow(workspace: workspace, route: tabChrome.route(workspace), tabChrome: tabChrome)
             }
         }
         .swipeActions(edge: .leading, allowsFullSwipe: false) {
@@ -515,5 +533,37 @@ struct AidenWorkspaceRow: View {
             }
         }
         .accessibilityElement(children: .combine)
+    }
+}
+
+/// A workspace row that opens its page on the Workspaces tab. The tab is a
+/// split view at every width, so the row goes through the tab's navigation
+/// rather than a link that pushes on the stack it sits in. On a stack it reads
+/// as a link; beside the page it opened it's highlighted.
+private struct AidenWorkspaceOpenRow: View {
+    @Environment(\.aidenPalette) private var palette
+    let workspace: AidenWorkspace
+    let route: AidenAppRoute
+    let tabChrome: AidenWorkspacesTabChrome
+
+    private var isSelected: Bool { tabChrome.selection == route }
+
+    var body: some View {
+        Button { tabChrome.onOpen(route) } label: {
+            HStack(spacing: AidenSpacing.s) {
+                AidenWorkspaceRow(workspace: workspace)
+                if !tabChrome.besideList {
+                    Spacer(minLength: 0)
+                    Image(systemName: "chevron.forward")
+                        .font(.footnote.weight(.semibold))
+                        .foregroundStyle(.tertiary)
+                        .accessibilityHidden(true)
+                }
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .listRowBackground(tabChrome.besideList ? AidenInboxRowBackground(isSelected: isSelected, palette: palette) : nil)
+        .accessibilityAddTraits(isSelected ? [.isSelected, .isButton] : .isButton)
     }
 }
