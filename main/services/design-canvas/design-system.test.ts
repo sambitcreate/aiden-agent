@@ -175,8 +175,8 @@ test("a quote, slash or bracket in a comment, regex literal or unclosed string i
     read(["colors: { ink: '#222222', accent: mix(colors.blue, // old: {", "  colors.red), two: '#444444' },", "fontFamily: { mono: ['Berkeley Mono'] },"]),
     { colors: [["ink", "#222222"], ["two", "#444444"]], fonts: [["mono", "Berkeley Mono"]] },
   );
-  // A slash after `i++` or `i--` divides.
-  for (const step of ["i++/2", "i-- /2"]) {
+  // A slash after `i++` or `i--` divides; after two signs apart it starts a regex.
+  for (const step of ["i++/2", "i-- /2", "a + +/[,']/.source.length"]) {
     assert.deepEqual(read([`colors:{ ink:'#111111', step: ${step}, two:'#222222' }, fontFamily:{sans:['Inter']}`]), {
       colors: [["ink", "#111111"], ["two", "#222222"]],
       fonts: [["sans", "Inter"]],
@@ -278,7 +278,7 @@ test("padding around a name's separators does not count toward its length, and d
 test("a shortened token name reads as the full one, even with more joined on either side, and its separator runs stay short", () => {
   let seed = 7;
   const random = () => (seed = (seed * 1_103_515_245 + 12_345) % 2_147_483_648) / 2_147_483_648;
-  const atoms = ["a", "B", "-", "--", "---", ".", "/", " ", "\t", " / ", "-/", "/-", " -", "- "];
+  const atoms = ["a", "B", "-", "--", "---", ".", "/", " ", "\t", " / ", "-/", "/-", " -", "- ", " -.---. "];
   const name = (length: number) => Array.from({ length }, () => atoms[Math.floor(random() * atoms.length)]).join("");
   for (let round = 0; round < 3_000; round += 1) {
     const [before, raw, after] = [name(3), name(Math.floor(random() * 40)), name(3)];
@@ -286,6 +286,7 @@ test("a shortened token name reads as the full one, even with more joined on eit
     assert.equal(collapsedName(short), collapsedName(raw), JSON.stringify(raw));
     assert.equal(collapsedName(`${before}-${short}-${after}`), collapsedName(`${before}-${raw}-${after}`), JSON.stringify([before, raw, after]));
     assert.equal(collapsedName(shortenedName(`${short}-${after}`)), collapsedName(`${raw}-${after}`), JSON.stringify([raw, after]));
+    for (const run of short.match(/[-.\s/]+/gu) ?? []) assert.ok(run.length <= 7, JSON.stringify([raw, run]));
   }
   // A key that alternates dashes and slashes is carried to its children at a short length, so each child does not copy it.
   for (const run of ["-/".repeat(50_000), "/-".repeat(50_000), ` ${"- ".repeat(50_000)}`, "-".repeat(100_000)]) {

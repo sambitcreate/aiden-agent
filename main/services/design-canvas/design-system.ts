@@ -109,9 +109,9 @@ export function collapsedName(raw: string): string {
  * A run of dashes, dots, slashes and whitespace cut to at most seven
  * characters that `collapsedName` reads the same way wherever the run sits:
  * it keeps a space at either end that had whitespace (so a trim still drops
- * it), starts and ends with the same kind of character (dash or not), and
- * stops adding pieces once they make three dashes, after which every longer
- * run collapses to the same two.
+ * it), starts with the same kind of character (dash or not), and stops adding
+ * pieces once they make three dashes, after which every longer run collapses
+ * to the same two.
  */
 function shortenedRun(run: string): string {
   if (/^\s+$/u.test(run)) return " ";
@@ -124,8 +124,6 @@ function shortenedRun(run: string): string {
     middle += isDash ? "-".repeat(Math.min(piece.length, 3)) : "/";
     dashes += isDash ? piece.length : 1;
   }
-  const lastIsDash = pieces[pieces.length - 1]?.startsWith("-") ?? false;
-  if (lastIsDash !== middle.endsWith("-")) middle += lastIsDash ? "-" : "/";
   return `${/^\s/u.test(run) ? " " : ""}${middle}${/\s$/u.test(run) ? " " : ""}`;
 }
 
@@ -435,15 +433,15 @@ const BEFORE_REGEX = "(,=:[!&|?{};+-*%<>~^";
 function skipExpression(text: string, start: number): number {
   let depth = 0;
   let index = start;
-  // The last two characters read as code, so a slash can tell a regex literal from a division.
+  // The last character read as code, and where it was, so a slash can tell a regex literal from a division.
   let previous = "";
-  let beforePrevious = "";
+  let previousIndex = -1;
   while (index < text.length) {
     const char = text[index] as string;
     if (char === '"' || char === "'" || char === "`") {
       index = stringEnd(text, index);
-      beforePrevious = "";
       previous = char;
+      previousIndex = -1;
       continue;
     }
     if (char === "/") {
@@ -453,12 +451,12 @@ function skipExpression(text: string, start: number): number {
         continue;
       }
       // So is a regex literal, so a slash, quote or bracket in it (`/a\//`, `/it's/`) is not either.
-      // After `i++` or `i--` it divides.
-      const afterIncrement = (previous === "+" || previous === "-") && beforePrevious === previous;
+      // After `i++` or `i--` it divides; after `a + +` (signs apart) it still starts a regex.
+      const afterIncrement = (previous === "+" || previous === "-") && text[previousIndex - 1] === previous;
       if (previous === "" || (BEFORE_REGEX.includes(previous) && !afterIncrement)) {
         index = regexEnd(text, index);
-        beforePrevious = "";
         previous = "/";
+        previousIndex = -1;
         continue;
       }
     }
@@ -468,8 +466,8 @@ function skipExpression(text: string, start: number): number {
       depth -= 1;
     } else if (char === "," && depth === 0) return index;
     if (!/\s/u.test(char)) {
-      beforePrevious = previous;
       previous = char;
+      previousIndex = index;
     }
     index += 1;
   }
