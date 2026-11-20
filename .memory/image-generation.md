@@ -93,3 +93,4 @@ Plan: `docs/plans/image-generation-settings-plan.md`.
 - `placeImageFrames`: image frame, longest side 480 with the image's aspect, title = file name, `createdBy: "aiden"`; an image frame on the active page with the same path is reused (not moved).
 - The approval summary adds "Save the image in the workspace as "<path>", replacing any file there[, and put it on the design canvas]." before "Complete prompt". No approval-gate change: generate_image already asks every time.
 
+- Final review fix round (2026-11-19, ea84bbfd9): `image-save-path.ts` refuses `\p{Default_Ignorable_Code_Point}` plus U+2800 and U+3000 as well as Cc/Cf and the line separators; `EMOJI_SEQUENCE` (Extended_Pictographic, optional modifier or VS15/VS16, ZWJ-joined repeats) is removed first, so ZWJ and selectors pass only inside emoji. ZWNJ stays refused, so a Persian name that needs it cannot be a save path.

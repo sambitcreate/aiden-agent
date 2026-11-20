@@ -186,3 +186,8 @@ Plan `docs/plans/smarter-artifacts-design-mode-plan.md`, branch `feat/smarter-ar
 ## Smarter artifacts Phase E2, Keep in Artifacts (2026-11-19)
 
 - A settled native visual's Actions menu offers **Keep in Artifacts** in a local, non-Bot, non-routine chat whose workspace is not the Assistant. `workspaces:artifacts:keepVisual(chatId, messageId, visualId)` reads the visual from the stored chat in main (args validated, same gating refused again there) and creates a native page with a unique title, its state kept, and no sources, actions or markup; `<Image attachment>` images do not carry over. The `created` change carries the chat id, so `revealsWorkspaceArtifact` opens the Artifacts tab on it. HTML visuals cannot be kept (no HTML artifact kind). `MARKUP_NOT_KEPT` in `tool.ts` now also names a page kept from a chat visual.
+
+## Final review fix round (2026-11-19)
+
+- `readRefused` (27eedca59) returns false when `linkOnPath` finds a link on the path, so a page whose folder became a link mid-read gets "changed", never "cannot be read", and cannot learn whether a file outside the workspace is readable.
+- Update race (d1ad8af89): `tool.ts` takes the revision the write found the page at through `onFound`; when no revision was made it compares against `replaced ?? previous` (digest and markup), leaves the undo step and own revisions alone, and adds "The page already had this content: another save made it revision N while this one was prepared." when another chat's identical save landed first.
