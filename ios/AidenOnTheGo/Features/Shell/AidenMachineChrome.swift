@@ -369,7 +369,8 @@ extension EnvironmentValues {
     @Entry var aidenConversationMachine: String?
     /// The tab bar while a conversation is on screen. Hidden on a stack, where the
     /// composer owns the bottom edge; a list beside its detail keeps it, since
-    /// the list stays up and the tabs must stay reachable from it.
+    /// the list stays up and the tabs must stay reachable from it, and so does a
+    /// screen whose bars sit in a rail at the side (a closed iPhone Duo).
     @Entry var aidenConversationTabBar: Visibility = .hidden
 }
 

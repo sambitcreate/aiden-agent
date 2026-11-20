@@ -110,7 +110,11 @@ struct AidenAppShellView: View {
     @State private var inboxColumns = NavigationSplitViewVisibility.all
     @State private var inboxSplitFrame = CGRect.zero
     @State private var inboxDetailFrame = CGRect.zero
-    @State private var inboxLayout = 0
+    /// Whether the window was landscape the last time the split was measured.
+    @State private var inboxWasLandscape: Bool?
+    /// Whether the system puts its bars in a rail beside the content, as on a
+    /// closed iPhone Duo.
+    @State private var showsVerticalBar = false
 
     init(
         coordinator: AidenRemoteCoordinator,
@@ -192,34 +196,26 @@ struct AidenAppShellView: View {
     var body: some View {
         TabView(selection: Bindable(navigation).tab) {
             Tab("Inbox", systemImage: "tray", value: AidenAppTab.inbox) {
-                if showsInboxBesideDetail {
-                    NavigationSplitView(columnVisibility: $inboxColumns) {
-                        inboxList(selection: AidenSplitNavigationPath(navigation.inboxPath).selection)
-                    } detail: {
-                        inboxDetail
-                            .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { inboxDetailFrame = $0 }
-                    }
-                    .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { inboxSplitFrame = $0 }
-                    // Turning the device brings the list back. Other width
-                    // changes, such as Stage Manager or an iPad sidebar, leave
-                    // the columns as the person set them. Opening or closing an
-                    // iPhone Duo changes the size class, handled below.
-                    .onGeometryChange(for: Bool.self) { $0.size.width > $0.size.height } action: { _ in
-                        inboxColumns = .all
-                    }
-                    // A chat chosen any other way: a link, Catch Up's Next.
-                    .onChange(of: AidenSplitNavigationPath(navigation.inboxPath).selection) {
-                        hideOverlaidInboxList()
-                    }
-                } else {
-                    NavigationStack(path: Bindable(navigation).inboxPath) {
-                        inboxList(selection: nil)
-                            .navigationDestination(for: AidenAppRoute.self, destination: destination)
-                    }
-                    // A new stack for each compact spell. Reused after the split
-                    // had the Inbox (and the tab was left and come back to), the
-                    // old stack wrote an empty path over the chat on screen.
-                    .id(inboxLayout)
+                // One split view at every width, collapsed by the system to a
+                // single stack when compact. Swapping it for a separate stack
+                // when an iPhone Duo closed let the split's own collapse pop
+                // land on the new stack, which emptied the path.
+                NavigationSplitView(columnVisibility: $inboxColumns, preferredCompactColumn: inboxCompactColumn) {
+                    inboxList(selection: showsInboxBesideDetail ? AidenSplitNavigationPath(displayedInboxPath).selection : nil)
+                } detail: {
+                    inboxDetail
+                        .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { inboxDetailFrame = $0 }
+                }
+                .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { inboxSplitFrame = $0 }
+                // Turning the device brings the list back. Other resizes leave
+                // the columns as the person set them; opening or closing an
+                // iPhone Duo changes the size class, handled below.
+                .onGeometryChange(for: CGSize.self) { $0.size } action: { size in
+                    showInboxListIfTurned(size: size)
+                }
+                // A chat chosen any other way: a link, Catch Up's Next.
+                .onChange(of: AidenSplitNavigationPath(navigation.inboxPath).selection) {
+                    hideOverlaidInboxList()
                 }
             }
             .badge(inboxStore.needsYouCount)
@@ -263,6 +259,7 @@ struct AidenAppShellView: View {
         // sidebar state while drawing the first frame, which it reports as
         // "Modifying state during view update".
         .tabViewStyle(.sidebarAdaptable)
+        .background { AidenVerticalBarReader { showsVerticalBar = $0 } }
         .tabBarMinimizeBehavior(horizontalSizeClass == .compact ? .onScrollDown : .automatic)
         .tabViewSearchActivation(.searchTabSelection)
         .aidenNewWorkPresentation(newWork, coordinator: coordinator)
@@ -299,7 +296,6 @@ struct AidenAppShellView: View {
             inboxStore.setInboxVisible(isOnScreen)
         }
         .onChange(of: horizontalSizeClass) { _, sizeClass in
-            inboxLayout += 1
             inboxColumns = .all
             navigation.inboxBesideList = sizeClass == .regular
         }
@@ -339,9 +335,31 @@ struct AidenAppShellView: View {
     }
 
     /// Regular width puts the Inbox list beside the chat it opened, as on an
-    /// iPhone Duo's inner display or an iPad. Compact width keeps one stack.
+    /// iPhone Duo's inner display or an iPad. Compact width collapses the split
+    /// to one stack.
     private var showsInboxBesideDetail: Bool {
         horizontalSizeClass == .regular
+    }
+
+    /// The Inbox path as drawn. Beside the list it's the path the list takes
+    /// over, so the first frame after the display opens already highlights
+    /// the chat on screen; `inboxBesideList` then stores the same path.
+    private var displayedInboxPath: [AidenAppRoute] {
+        showsInboxBesideDetail ? AidenSplitNavigationPath.takingOver(navigation.inboxPath) : navigation.inboxPath
+    }
+
+    /// Collapsed, the split shows the list until the path holds something,
+    /// then the detail. Back from the detail's root returns to the list, which
+    /// clears the path. Writes while not compact are the split's own and
+    /// change nothing.
+    private var inboxCompactColumn: Binding<NavigationSplitViewColumn> {
+        Binding(
+            get: { navigation.inboxPath.isEmpty ? .sidebar : .detail },
+            set: { column in
+                guard !showsInboxBesideDetail, column == .sidebar, !navigation.inboxPath.isEmpty else { return }
+                navigation.inboxPath = []
+            }
+        )
     }
 
     /// The Inbox list with its banner and toolbar. `selection` is the row the
@@ -369,11 +387,11 @@ struct AidenAppShellView: View {
     /// The detail column: the selected route at the root of its own stack, and
     /// the rest of the Inbox path pushed over it.
     private var inboxDetail: some View {
-        let selection = AidenSplitNavigationPath(navigation.inboxPath).selection
+        let selection = AidenSplitNavigationPath(displayedInboxPath).selection
         return NavigationStack(path: Binding(
-            get: { AidenSplitNavigationPath(navigation.inboxPath).detailPath },
+            get: { AidenSplitNavigationPath(displayedInboxPath).detailPath },
             set: { detailPath in
-                var split = AidenSplitNavigationPath(navigation.inboxPath)
+                var split = AidenSplitNavigationPath(displayedInboxPath)
                 split.setDetailPath(detailPath)
                 if split.path != navigation.inboxPath { navigation.inboxPath = split.path }
             }
@@ -396,12 +414,10 @@ struct AidenAppShellView: View {
         }
     }
 
-    /// A screen in the detail column. The list stays up beside a conversation,
-    /// and the tabs with it. Set on each screen, root and pushed, because a
-    /// pushed screen doesn't read the environment from outside its stack.
+    /// A screen in the detail column. Beside the list a conversation keeps the
+    /// tabs up, as the list is; collapsed it's any stack's screen.
     private func besideListDestination(for route: AidenAppRoute) -> some View {
-        destination(for: route)
-            .environment(\.aidenConversationTabBar, .automatic)
+        screen(for: route, keepsTabs: showsInboxBesideDetail)
     }
 
     /// Picking a row while the list is an overlay over the detail (a narrow
@@ -414,6 +430,27 @@ struct AidenAppShellView: View {
               AidenSplitNavigationPath.listIsOverlaid(detailFrame: inboxDetailFrame, splitFrame: inboxSplitFrame)
         else { return }
         inboxColumns = .detailOnly
+    }
+
+    /// Brings the Inbox list back when the device turned. The window's
+    /// orientation decides, not the split's shape: the keyboard shortens the
+    /// split in portrait until it's wider than tall, and a turn resizes it in
+    /// two steps that pass through a square.
+    private func showInboxListIfTurned(size: CGSize) {
+        let landscape = Self.windowIsLandscape ?? (size.width > size.height)
+        defer { inboxWasLandscape = landscape }
+        guard let inboxWasLandscape, inboxWasLandscape != landscape else { return }
+        inboxColumns = .all
+    }
+
+    /// The foreground window's orientation, or nil before there is one.
+    private static var windowIsLandscape: Bool? {
+        let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+        guard let scene = scenes.first(where: { $0.activationState == .foregroundActive }) ?? scenes.first
+        else { return nil }
+        let orientation = scene.effectiveGeometry.interfaceOrientation
+        guard orientation != .unknown else { return nil }
+        return orientation.isLandscape
     }
 
     private func deleteChat(_ id: AidenHostObjectID) {
@@ -448,8 +485,25 @@ struct AidenAppShellView: View {
         }
     }
 
-    @ViewBuilder
+    /// A screen on a tab's stack.
     private func destination(for route: AidenAppRoute) -> some View {
+        screen(for: route, keepsTabs: false)
+    }
+
+    /// A conversation hides the tabs on a stack, where the composer owns the
+    /// bottom edge. Where the system puts its bars in a rail at the side, as
+    /// on a closed iPhone Duo, the tabs stay in the rail: they cover nothing
+    /// there, and with them hidden the rail turns opaque white or black
+    /// instead of showing the canvas under it. Set on each screen, root and
+    /// pushed, because a pushed screen doesn't read the environment from
+    /// outside its stack.
+    private func screen(for route: AidenAppRoute, keepsTabs: Bool) -> some View {
+        routeScreen(for: route)
+            .environment(\.aidenConversationTabBar, keepsTabs || showsVerticalBar ? .automatic : .hidden)
+    }
+
+    @ViewBuilder
+    private func routeScreen(for route: AidenAppRoute) -> some View {
         switch route {
         case .chat(let id):
             AidenChatRouteView(
@@ -734,6 +788,60 @@ private struct AidenChatRouteView: View {
         }
         .task(id: coordinator.hosts.connection(for: model.id.instanceId)?.connectionState) {
             await model.load(coordinator: coordinator)
+        }
+    }
+}
+
+/// Reports whether the system puts its bars in a vertical rail beside the
+/// content, as on a closed iPhone Duo's outer display. SwiftUI has no
+/// environment value for it, so this reads UIKit's trait. Always false before
+/// iOS 27.1.
+private struct AidenVerticalBarReader: UIViewRepresentable {
+    let onChange: @MainActor (Bool) -> Void
+
+    func makeUIView(context: Context) -> TraitView {
+        let view = TraitView()
+        view.onChange = onChange
+        return view
+    }
+
+    func updateUIView(_ view: TraitView, context: Context) {
+        view.onChange = onChange
+    }
+
+    final class TraitView: UIView {
+        var onChange: (@MainActor (Bool) -> Void)?
+        private var reported: Bool?
+
+        override init(frame: CGRect) {
+            super.init(frame: frame)
+            isUserInteractionEnabled = false
+            if #available(iOS 27.1, *) {
+                registerForTraitChanges(UITraitCollection.systemTraitsAffectingVerticalBarEdge) { (view: TraitView, _) in
+                    view.report()
+                }
+            }
+        }
+
+        required init?(coder: NSCoder) {
+            super.init(coder: coder)
+        }
+
+        override func didMoveToWindow() {
+            super.didMoveToWindow()
+            report()
+        }
+
+        private func report() {
+            guard window != nil else { return }
+            var showsVerticalBar = false
+            if #available(iOS 27.1, *) {
+                showsVerticalBar = traitCollection.verticalBarEdge != .unspecified
+            }
+            guard showsVerticalBar != reported else { return }
+            reported = showsVerticalBar
+            // After the current update: the change sets SwiftUI state.
+            Task { @MainActor [onChange] in onChange?(showsVerticalBar) }
         }
     }
 }
