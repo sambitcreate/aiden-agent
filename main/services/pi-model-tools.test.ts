@@ -1028,7 +1028,16 @@ test("a save path that could never be written, or a canvas request without one, 
     "design/he\uffa0ro.png", "design/hero\ufe0f.png", "design/he\u034fro.png", "design/hero\u{e0041}.png",
     "design/\u2800/hero.png", "design/hero\u3000.png",
     // A zero-width joiner counts as part of an emoji only between two emoji.
-    "design/\u{1f44d}\u200d.png", "design/\u200d\u{1f44d}.png", "design/a\u200d\u{1f44d}.png", "design/\u{1f44d}\u200d\u200d\u{1f44d}.png"]) {
+    "design/\u{1f44d}\u200d.png", "design/\u200d\u{1f44d}.png", "design/a\u200d\u{1f44d}.png", "design/\u{1f44d}\u200d\u200d\u{1f44d}.png",
+    // ...and only between emoji drawn as emoji: two symbols drawn as text are not.
+    "design/\u00a9\u200d\u00ae.png", "design/\u2764\u200d\u{1f525}.png",
+    // Spaces other than the ordinary one: no-break, thin, narrow no-break and the Ogham space mark.
+    "design/hero\u00a0art.png", "design/hero\u2009art.png", "design/hero\u202fart.png", "design/hero\u1680art.png",
+    // Private-use, unassigned and noncharacter code points, a lone surrogate, and the object replacement character.
+    "design/hero\ue000.png", "design/hero\u{f0000}.png", "design/hero\u0378.png", "design/hero\uffff.png", "design/hero\ud800.png",
+    "design/hero\udc00.png", "design/hero\ufffc.png",
+    // A folder or file name that ends in a space.
+    "design /hero.png", "design/hero ", "design/art/hero.png ", "design/ /hero.png"]) {
     await assert.rejects(generate.execute("bad", { ...imageRequest, savePath }), Error, JSON.stringify(savePath));
   }
   await assert.rejects(generate.execute("canvas", { ...imageRequest, placeOnCanvas: true }), /placeOnCanvas needs savePath/);
@@ -1038,7 +1047,9 @@ test("a save path that could never be written, or a canvas request without one, 
 test("a save path in any script, or named with emoji sequences, is saved as written", async () => {
   const names = ["デザイン/ヒーロー.png", "디자인/표지.png", "تصميم/غلاف.png", "дизайн/обложка.png", "设计/封面", "design/naïve café.png",
     // A family, a rainbow flag, a heart on fire and a toned hand: emoji joined or styled by joiners and selectors.
-    "design/\u{1f468}\u200d\u{1f469}\u200d\u{1f467}.png", "design/\u{1f3f3}\ufe0f\u200d\u{1f308}.png", "design/\u2764\ufe0f\u200d\u{1f525}.png", "design/\u{1f44b}\u{1f3fd}.png"];
+    "design/\u{1f468}\u200d\u{1f469}\u200d\u{1f467}.png", "design/\u{1f3f3}\ufe0f\u200d\u{1f308}.png", "design/\u2764\ufe0f\u200d\u{1f525}.png", "design/\u{1f44b}\u{1f3fd}.png",
+    // A person at a laptop, a toned one, a runner joined to a symbol styled as emoji, and an ordinary space inside a name.
+    "design/\u{1f469}\u200d\u{1f4bb}.png", "design/\u{1f469}\u{1f3fd}\u200d\u{1f4bb}.png", "design/\u{1f3c3}\u200d\u2640\ufe0f.png", "design/my hero.png"];
   const { saves, generate } = savingTools();
   for (const savePath of names) {
     const result = await generate.execute("ok", { ...imageRequest, savePath });
