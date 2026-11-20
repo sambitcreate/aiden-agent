@@ -1971,6 +1971,25 @@ final class AidenChatTests: XCTestCase {
         XCTAssertGreaterThan(chatReads.count, readsBeforeReload)
     }
 
+    /// A chat screen that closes while its first transcript read is in flight
+    /// cancels that read. A new chat has no messages to show yet, but the
+    /// cancelled read isn't a failure to put in front of anyone.
+    @MainActor
+    func testAScreenClosedDuringTheFirstReadShowsNoError() async throws {
+        defer { AidenChatProgressLifecycleURLProtocol.reset() }
+        let model = try await makeProgressLifecycleModel(mode: .denied)
+        let arrived = expectation(description: "first transcript read held")
+        AidenChatProgressLifecycleURLProtocol.holdNextRequest(endingIn: "/chats/chat-progress-lifecycle") { arrived.fulfill() }
+        let load = Task { await model.load(observeProgress: false) }
+        await fulfillment(of: [arrived], timeout: 5)
+
+        load.cancel()
+        await load.value
+
+        XCTAssertTrue(model.chat.messages.isEmpty)
+        XCTAssertNil(model.presentedError)
+    }
+
     @MainActor
     func testFallbackDoesNotCoalesceWithPreResponseApprovalState() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)

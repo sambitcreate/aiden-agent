@@ -463,18 +463,23 @@ struct AidenInboxListRow: View {
     }
 }
 
-/// An Inbox row's ground: the canvas, with a soft raised fill under the row
-/// the detail beside the list is showing. No border: the fill is the selection.
+/// An Inbox row's ground: the canvas, with a soft accent tint under the row
+/// the detail beside the list is showing, the fill a selected theme card uses.
+/// Inset like the card rows above the list. No border: the fill is the selection.
 struct AidenInboxRowBackground: View {
     let isSelected: Bool
     let palette: AidenPalette
 
+    static func selectedFill(_ palette: AidenPalette) -> Color {
+        palette.accent.opacity(0.12)
+    }
+
     var body: some View {
         palette.canvas.overlay {
             if isSelected {
-                RoundedRectangle(cornerRadius: AidenRadius.code, style: .continuous)
-                    .fill(palette.raised)
-                    .padding(.horizontal, AidenSpacing.xs)
+                RoundedRectangle(cornerRadius: AidenRadius.control, style: .continuous)
+                    .fill(Self.selectedFill(palette))
+                    .padding(.horizontal, AidenSpacing.m)
             }
         }
     }

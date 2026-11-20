@@ -104,6 +104,12 @@ struct AidenAppShellView: View {
     @State private var botSummaries: [AidenHostObjectID: AidenBotSummary] = [:]
     @State private var searchText = ""
     @State private var showsRunningChats = false
+    /// The Inbox split's columns. Both are asked for: the system tiles them when
+    /// they fit (an iPhone Duo open in landscape) and lays the list over the
+    /// detail when they don't (open in portrait), where picking a row puts it away.
+    @State private var inboxColumns = NavigationSplitViewVisibility.all
+    @State private var inboxSplitWidth: CGFloat = 0
+    @State private var inboxDetailWidth: CGFloat = 0
 
     init(
         coordinator: AidenRemoteCoordinator,
@@ -128,7 +134,7 @@ struct AidenAppShellView: View {
     private var newWork: AidenNewWorkChatFlow { built.newWork }
 
     private var built: AidenAppShellParts.Built {
-        parts.built { [coordinator, inboxStore, navigationStore] in
+        parts.built { [coordinator, inboxStore, navigationStore, horizontalSizeClass] in
             let navigation = AidenAppNavigation(
                 restoring: navigationStore.load(
                     installations: coordinator.installationStore.installations,
@@ -136,6 +142,8 @@ struct AidenAppShellView: View {
                 ),
                 installations: coordinator.installationStore.installations
             )
+            // Set before any link or request opens a route, which reads it.
+            navigation.inboxBesideList = horizontalSizeClass == .regular
             let newWork = AidenNewWorkChatFlow(coordinator: coordinator) { [weak navigation] chat, id in
                 let home = inboxStore.homeModel(for: id.instanceId)
                 home?.accept(chat)
@@ -184,10 +192,19 @@ struct AidenAppShellView: View {
         TabView(selection: Bindable(navigation).tab) {
             Tab("Inbox", systemImage: "tray", value: AidenAppTab.inbox) {
                 if showsInboxBesideDetail {
-                    NavigationSplitView {
+                    NavigationSplitView(columnVisibility: $inboxColumns) {
                         inboxList(selection: AidenSplitNavigationPath(navigation.inboxPath).selection)
                     } detail: {
                         inboxDetail
+                            .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { inboxDetailWidth = $0 }
+                    }
+                    .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width in
+                        // A turn or a fold brings the list back.
+                        if inboxSplitWidth != 0, width != inboxSplitWidth { inboxColumns = .all }
+                        inboxSplitWidth = width
+                    }
+                    .onChange(of: AidenSplitNavigationPath(navigation.inboxPath).selection) { _, selection in
+                        hideOverlaidInboxList(after: selection)
                     }
                 } else {
                     NavigationStack(path: Bindable(navigation).inboxPath) {
@@ -272,7 +289,10 @@ struct AidenAppShellView: View {
         .onChange(of: navigation.tab == .inbox, initial: true) { _, isOnScreen in
             inboxStore.setInboxVisible(isOnScreen)
         }
-        .onChange(of: navigation.openChat, initial: true) { _, chat in
+        .onChange(of: horizontalSizeClass) { _, sizeClass in
+            navigation.inboxBesideList = sizeClass == .regular
+        }
+        .onChange(of: navigation.inboxOpenChat, initial: true) { _, chat in
             inboxStore.openChat = chat
             inboxStore.setFocusedMachine(chat?.instanceId)
         }
@@ -323,7 +343,7 @@ struct AidenAppShellView: View {
             onDelete: deleteChat,
             onOpenMachines: { navigation.open(.machines) },
             onCatchUp: {
-                markViewed(navigation.startCatchUp(in: catchUpQueue, besideList: showsInboxBesideDetail))
+                markViewed(navigation.startCatchUp(in: catchUpQueue))
             },
             onShowRunning: { showsRunningChats = true },
             selection: selection
@@ -348,7 +368,7 @@ struct AidenAppShellView: View {
         )) {
             Group {
                 if let selection {
-                    destination(for: selection)
+                    besideListDestination(for: selection)
                         // Another row is another screen, not this one updated.
                         .id(selection)
                 } else {
@@ -360,10 +380,26 @@ struct AidenAppShellView: View {
                     .background(palette.canvas.ignoresSafeArea())
                 }
             }
-            .navigationDestination(for: AidenAppRoute.self, destination: destination)
+            .navigationDestination(for: AidenAppRoute.self, destination: besideListDestination)
         }
-        // The list stays up beside a conversation, and the tabs with it.
-        .environment(\.aidenConversationTabBar, .automatic)
+    }
+
+    /// A screen in the detail column. The list stays up beside a conversation,
+    /// and the tabs with it. Set on each screen, root and pushed, because a
+    /// pushed screen doesn't read the environment from outside its stack.
+    private func besideListDestination(for route: AidenAppRoute) -> some View {
+        destination(for: route)
+            .environment(\.aidenConversationTabBar, .automatic)
+    }
+
+    /// Picking a row while the list is an overlay over the detail (a narrow
+    /// regular width, such as an iPhone Duo open in portrait) puts the overlay
+    /// away, so the chosen chat is in view. Tiled columns are left as they are.
+    private func hideOverlaidInboxList(after selection: AidenAppRoute?) {
+        guard selection != nil, inboxColumns != .detailOnly,
+              AidenSplitNavigationPath.listIsOverlaid(detailWidth: inboxDetailWidth, splitWidth: inboxSplitWidth)
+        else { return }
+        inboxColumns = .detailOnly
     }
 
     private func deleteChat(_ id: AidenHostObjectID) {
@@ -468,11 +504,7 @@ struct AidenAppShellView: View {
     /// An Inbox row: its chat, or its Bot, on the Inbox stack.
     private func openRow(_ route: AidenAppRoute) {
         if case .chat(let id) = route { markViewed(id) }
-        if showsInboxBesideDetail {
-            navigation.selectInboxRow(route)
-        } else {
-            navigation.openInboxRow(route)
-        }
+        navigation.openInboxRow(route)
     }
 
     private func nextInCatchUp() {

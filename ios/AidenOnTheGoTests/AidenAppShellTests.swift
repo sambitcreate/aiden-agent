@@ -260,32 +260,72 @@ final class AidenAppShellTests: XCTestCase {
         XCTAssertEqual(split.path, [])
     }
 
-    /// A row tapped beside the detail replaces what the detail showed instead
-    /// of stacking a second chat, from any tab, and drops a pending voice start.
-    func testARowChosenBesideTheDetailReplacesTheInboxPath() {
+    private func besideList() -> AidenAppNavigation {
         let navigation = AidenAppNavigation()
-        navigation.open(.chat(id("c1")), startsVoice: true)
+        navigation.inboxBesideList = true
+        return navigation
+    }
+
+    /// A row tapped beside the list replaces what the detail showed instead of
+    /// stacking a second chat, from any tab, and drops a pending voice start.
+    /// On a stack the same taps push.
+    func testARowChosenBesideTheListReplacesTheSelection() {
+        let navigation = besideList()
+        navigation.openInboxRow(.chat(id("c1")))
         navigation.open(.settings)
+        navigation.open(.chat(id("c1")), startsVoice: true)
         navigation.tab = .bots
 
-        navigation.selectInboxRow(.chat(id("c2")))
+        navigation.openInboxRow(.chat(id("c2")))
 
         XCTAssertEqual(navigation.tab, .inbox)
         XCTAssertEqual(navigation.inboxPath, [.chat(id("c2"))])
         XCTAssertEqual(navigation.openChat, id("c2"))
         XCTAssertNil(navigation.chatStartingVoice)
 
-        navigation.selectInboxRow(.bot(id("b1")))
+        navigation.openInboxRow(.bot(id("b1")))
         XCTAssertEqual(navigation.inboxPath, [.bot(id("b1"))])
         XCTAssertTrue(navigation.showsConversation)
+
+        let stack = AidenAppNavigation()
+        stack.openInboxRow(.chat(id("c1")))
+        stack.openInboxRow(.chat(id("c2")))
+        XCTAssertEqual(stack.inboxPath, [.chat(id("c1")), .chat(id("c2"))])
     }
 
-    /// The menu, links and Delete keep their stack rules, and the split reads
-    /// the result: a page opened from the menu goes over the chosen chat, and
-    /// deleting the chosen chat empties the detail.
+    /// A new chat from Compose, a Search result, a link or a Shortcut opens on
+    /// the Inbox without going through the list. Beside the list it still
+    /// becomes the selection, so the highlight follows it and it has no Back to
+    /// the chat before. A page from the menu still goes on top.
+    func testAChatOpenedFromOutsideTheListBecomesTheSelection() {
+        let navigation = besideList()
+        navigation.openInboxRow(.chat(id("c1")))
+        navigation.open(.settings)
+
+        navigation.open(.chat(id("c2")), on: .inbox)
+        XCTAssertEqual(navigation.inboxPath, [.chat(id("c2"))], "Compose")
+
+        navigation.open(.chat(id("c3")), startsVoice: true)
+        XCTAssertEqual(navigation.inboxPath, [.chat(id("c3"))], "A voice link")
+        XCTAssertEqual(navigation.chatStartingVoice, id("c3"))
+
+        navigation.open(.usage)
+        XCTAssertEqual(navigation.inboxPath, [.chat(id("c3")), .usage])
+
+        let stack = AidenAppNavigation()
+        stack.openInboxRow(.chat(id("c1")))
+        stack.open(.settings)
+        stack.open(.chat(id("c2")), on: .inbox)
+        stack.open(.chat(id("c3")), startsVoice: true)
+        XCTAssertEqual(stack.inboxPath, [.chat(id("c1")), .settings, .chat(id("c2")), .chat(id("c3"))])
+    }
+
+    /// Back, replace and Delete keep their stack rules, and the split reads the
+    /// result: going back to the chosen chat pops what's over it, and deleting
+    /// the chosen chat empties the detail.
     func testTheStackRulesStillHoldBesideTheList() {
-        let navigation = AidenAppNavigation()
-        navigation.selectInboxRow(.chat(id("c1")))
+        let navigation = besideList()
+        navigation.openInboxRow(.chat(id("c1")))
 
         navigation.open(.settings)
         XCTAssertEqual(AidenSplitNavigationPath(navigation.inboxPath).selection, .chat(id("c1")))
@@ -295,18 +335,44 @@ final class AidenAppShellTests: XCTestCase {
         XCTAssertEqual(navigation.inboxPath, [.chat(id("c1"))], "Going back to the chosen chat pops the detail")
 
         navigation.replace(.chat(id("c1")), with: .chat(id("c3")))
-        XCTAssertEqual(AidenSplitNavigationPath(navigation.inboxPath).selection, .chat(id("c3")))
+        XCTAssertEqual(navigation.inboxPath, [.chat(id("c3"))])
 
         navigation.leave(.chat(id("c3")))
         XCTAssertNil(AidenSplitNavigationPath(navigation.inboxPath).selection)
+    }
+
+    /// The chosen chat stays the Inbox's open chat under a page pushed over it,
+    /// so it keeps its place in the list while its row is highlighted. On a
+    /// stack the list isn't on screen then, and nothing is open.
+    func testTheChosenChatStaysOpenForTheListUnderAPage() {
+        let navigation = besideList()
+        navigation.openInboxRow(.chat(id("c1")))
+        navigation.open(.settings)
+
+        XCTAssertNil(navigation.openChat)
+        XCTAssertEqual(navigation.inboxOpenChat, id("c1"))
+
+        navigation.tab = .bots
+        XCTAssertNil(navigation.inboxOpenChat, "Another tab is showing")
+
+        let stack = AidenAppNavigation()
+        stack.openInboxRow(.chat(id("c1")))
+        stack.open(.settings)
+        XCTAssertNil(stack.inboxOpenChat)
+    }
+
+    func testOnlyADetailAsWideAsTheSplitIsAnOverlaidList() {
+        XCTAssertTrue(AidenSplitNavigationPath.listIsOverlaid(detailWidth: 669, splitWidth: 669))
+        XCTAssertFalse(AidenSplitNavigationPath.listIsOverlaid(detailWidth: 600, splitWidth: 951))
+        XCTAssertFalse(AidenSplitNavigationPath.listIsOverlaid(detailWidth: 0, splitWidth: 0), "Not measured yet")
     }
 
     /// The width only changes how the path is drawn, so a restored path, or one
     /// trimmed for a forgotten machine, keeps its selection.
     func testARestoredInboxPathKeepsItsSelection() {
         let store = AidenAppNavigationStore(defaults: AidenDemoHosts.isolatedDefaults())
-        let navigation = AidenAppNavigation()
-        navigation.selectInboxRow(.chat(id("c1")))
+        let navigation = besideList()
+        navigation.openInboxRow(.chat(id("c1")))
         navigation.open(.machine(instanceId: "laptop"))
         store.save(navigation.snapshot)
 

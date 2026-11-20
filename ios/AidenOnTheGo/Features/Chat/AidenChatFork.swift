@@ -337,6 +337,8 @@ private struct AidenChatForkLevel: View {
                     onChatActivityChanged: onChatActivityChanged,
                     onForkOpened: onForkOpened
                 )
+                // A pushed screen doesn't read the environment from outside its stack.
+                .environment(\.aidenConversationTabBar, tabBar)
                 .toolbar(tabBar, for: .tabBar)
             }
         }

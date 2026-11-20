@@ -257,7 +257,13 @@ struct AidenAppNavigationStore {
 /// path stays the one source of truth: its first route is the list's selection,
 /// and the rest are pushed on the detail column's stack. A compact width shows
 /// the same path as one stack, so closing or opening the display keeps the same
-/// screen.
+/// route on screen.
+///
+/// The route survives a size-class change but its view doesn't: the shell swaps
+/// a stack for a split view, so the screen is built again. A chat reloads from
+/// its saved transcript; per-view state such as an open fork trail or unsent
+/// attachments isn't carried across. Draft text is kept by the composer's own
+/// store.
 struct AidenSplitNavigationPath: Equatable {
     private(set) var path: [AidenAppRoute]
 
@@ -282,6 +288,12 @@ struct AidenSplitNavigationPath: Equatable {
         guard let selection else { return }
         path = [selection] + detailPath
     }
+
+    /// True when the list is drawn over the detail rather than beside it: the
+    /// detail column takes the split's whole width. Unknown widths say no.
+    static func listIsOverlaid(detailWidth: CGFloat, splitWidth: CGFloat) -> Bool {
+        detailWidth > 0 && splitWidth > 0 && detailWidth >= splitWidth - 1
+    }
 }
 
 /// Which tab is showing and what each tab has pushed. Search has no path.
@@ -300,6 +312,12 @@ final class AidenAppNavigation {
     /// The Catch Up under way, while its chat is on top of the Inbox. Not saved:
     /// a relaunch restores the chat, as an ordinary chat.
     private(set) var catchUp: AidenCatchUpRun?
+    /// The Inbox list is beside its detail (regular width). The shell keeps it in
+    /// step with the size class. A chat or Bot opened on the Inbox then becomes
+    /// the list's selection instead of going on top of the one there, so the
+    /// highlighted row is the conversation on screen. Pages such as Settings
+    /// still go on top. Not saved: the width decides it on every launch.
+    var inboxBesideList = false
 
     init() {
         tab = .inbox
@@ -331,6 +349,15 @@ final class AidenAppNavigation {
     /// The chat on screen: the top of the tab that's showing.
     var openChat: AidenHostObjectID? {
         guard case .chat(let id)? = path(of: tab).last else { return nil }
+        return id
+    }
+
+    /// The chat the Inbox counts as open, which it keeps listed and never calls
+    /// news. Beside the list that's also the selected chat under a page pushed
+    /// over it, since its row is still highlighted and it's still the detail.
+    var inboxOpenChat: AidenHostObjectID? {
+        if let openChat { return openChat }
+        guard inboxBesideList, tab == .inbox, case .chat(let id)? = inboxPath.first else { return nil }
         return id
     }
 
@@ -374,7 +401,7 @@ final class AidenAppNavigation {
         let tab = holders.contains(tab) ? tab : holders.first ?? tab
         self.tab = tab
         switch tab {
-        case .inbox: Self.show(route, on: &inboxPath)
+        case .inbox: showOnInbox(route)
         case .bots: Self.show(route, on: &botsPath)
         case .workspaces: Self.show(route, on: &workspacesPath)
         case .search: break
@@ -405,12 +432,11 @@ final class AidenAppNavigation {
     /// Opens the queue's first chat and starts a run on it. Returns the chat
     /// opened, or nil when the queue was empty and the run is already over.
     ///
-    /// `besideList` is a Catch Up started from the Inbox list beside its detail:
-    /// the run replaces whatever the detail showed, as choosing a row does,
-    /// rather than going on top of it.
+    /// Beside the list, the run replaces whatever the detail showed, as
+    /// choosing a row does, rather than going on top of it.
     @discardableResult
-    func startCatchUp(in queue: AidenCatchUpQueue, besideList: Bool = false) -> AidenHostObjectID? {
-        if besideList { inboxPath = [] }
+    func startCatchUp(in queue: AidenCatchUpQueue) -> AidenHostObjectID? {
+        if inboxBesideList { inboxPath = [] }
         guard let first = queue.first else {
             open(.catchUpFinished(queue.ending()))
             return nil
@@ -446,26 +472,32 @@ final class AidenAppNavigation {
 
     /// An Inbox, accessory or running-sheet row, chat or Bot, opens on the Inbox
     /// stack, so Back leads to the Inbox. Catch Up steps open the same way.
+    /// Beside the list, the row becomes the selection.
     func openInboxRow(_ route: AidenAppRoute) {
         openInInbox(route)
-    }
-
-    /// An Inbox, accessory or running-sheet row while the Inbox list is beside
-    /// its detail: the row becomes the selection, and the detail starts over on
-    /// it rather than stacking a second screen.
-    func selectInboxRow(_ route: AidenAppRoute?) {
-        chatStartingVoice = nil
-        tab = .inbox
-        var split = AidenSplitNavigationPath(inboxPath)
-        split.select(route)
-        inboxPath = split.path
     }
 
     /// A Catch Up step stays on the Inbox, Bot or not, so Back leads to the Inbox.
     private func openInInbox(_ route: AidenAppRoute) {
         chatStartingVoice = nil
         tab = .inbox
-        Self.show(route, on: &inboxPath)
+        showOnInbox(route)
+    }
+
+    /// On a stack the route goes on top, or is gone back to. Beside the list a
+    /// chat or Bot becomes the selection and the detail starts over on it.
+    private func showOnInbox(_ route: AidenAppRoute) {
+        let isConversation = switch route {
+        case .chat, .bot: true
+        default: false
+        }
+        guard inboxBesideList, isConversation else {
+            Self.show(route, on: &inboxPath)
+            return
+        }
+        var split = AidenSplitNavigationPath(inboxPath)
+        split.select(route)
+        if split.path != inboxPath { inboxPath = split.path }
     }
 
     /// A tab holding a route to a machine that's gone goes back to the last

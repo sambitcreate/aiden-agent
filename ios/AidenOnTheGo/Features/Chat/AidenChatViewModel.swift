@@ -1109,7 +1109,10 @@ final class AidenChatViewModel {
             clearProgressStateIfCredentialRevoked(error)
             if await coordinator.handleCredentialRevocation(error, context: context) { return }
             guard !isRemoved, coordinator.isLive(context) else { return }
-            if generation == transcriptGeneration, !isStarting, chat.messages.isEmpty { presentedError = error.localizedDescription }
+            // A screen closed mid-read cancels it; that's no failure to show.
+            if generation == transcriptGeneration, !isStarting, chat.messages.isEmpty, !aidenIsCancellation(error) {
+                presentedError = error.localizedDescription
+            }
         }
         await catalogRefresh
         await restoration

@@ -197,8 +197,14 @@ struct AidenInboxTabView: View {
     }
 
     private var runningRow: some View {
-        AidenRunningAccessory(rows: inbox.running, onOpen: onOpen, onShowAll: onShowRunning)
-            .background(palette.raised, in: RoundedRectangle(cornerRadius: AidenRadius.control))
+        // Its chat, or one of them, is the one beside the list.
+        let holdsSelection = inbox.running.contains { $0.route == selection }
+        return AidenRunningAccessory(rows: inbox.running, onOpen: onOpen, onShowAll: onShowRunning)
+            .background(
+                holdsSelection ? AidenInboxRowBackground.selectedFill(palette) : palette.raised,
+                in: RoundedRectangle(cornerRadius: AidenRadius.control)
+            )
+            .accessibilityAddTraits(holdsSelection ? .isSelected : [])
             .listRowInsets(EdgeInsets(top: AidenSpacing.s, leading: AidenSpacing.m, bottom: AidenSpacing.xs, trailing: AidenSpacing.m))
             .listRowSeparator(.hidden)
             .listRowBackground(palette.canvas)
