@@ -151,6 +151,46 @@ test("long runs of spaces in a value are read in one pass by every parser", () =
   ]);
 });
 
+test("a key too long to be a token name leaves its values unnamed, and every string value counts toward the JSON limit", () => {
+  const longKey = "k".repeat(100_000);
+  const children = (count: number, value: string) => Object.fromEntries(Array.from({ length: count }, (_, index) => [`c${index}`, value]));
+  const detected = detectDesignSystem([
+    {
+      path: "tokens.json",
+      text: JSON.stringify({
+        brand: { primary: "#111111" },
+        [longKey]: { ...children(3_000, "#222222"), deep: { [longKey]: { ink: { value: "#333333" } } } },
+        ["font".repeat(20_000)]: { body: "Inter, sans-serif" },
+      }),
+    },
+    {
+      path: "tailwind.config.js",
+      text: `colors: { ${JSON.stringify(longKey)}: { DEFAULT: "#444444", a: "#444444", b: "#555555" }, ok: { DEFAULT: "#666666", 500: "#777777" } }`,
+    },
+  ]);
+  // A value under the long key is kept as a bare colour (used more than once), never under a name built from the key.
+  assert.deepEqual(
+    detected.colors.map((color) => [color.name, color.value]),
+    [
+      ["brand-primary", "#111111"],
+      ["ok-500", "#777777"],
+      ["ok", "#666666"],
+      [null, "#222222"],
+      [null, "#444444"],
+    ],
+  );
+  // A long key that mentions a font still marks what it holds as a font.
+  assert.deepEqual(detected.fonts, [{ name: null, family: "Inter", source: "tokens.json" }]);
+
+  // The limit counts string values too, so a colour after that many of them is not read.
+  const pastLimit = detectDesignSystem([
+    { path: "tokens.json", text: JSON.stringify({ pad: children(DESIGN_SYSTEM_MAX_CONFIG_VALUES, ""), ink: "#888888" }) },
+  ]);
+  assert.deepEqual(pastLimit.colors, []);
+  const withinLimit = detectDesignSystem([{ path: "tokens.json", text: JSON.stringify({ pad: children(100, ""), ink: "#888888" }) }]);
+  assert.deepEqual(withinLimit.colors.map((color) => [color.name, color.value]), [["ink", "#888888"]]);
+});
+
 test("design-token JSON and a WordPress theme.json are read", () => {
   const tokens = detectDesignSystem([
     {

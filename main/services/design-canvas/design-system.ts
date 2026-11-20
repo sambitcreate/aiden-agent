@@ -92,8 +92,15 @@ export function parseDesignColor(raw: string): string | null {
 const TOKEN_NAME = /^(?:--|\$|@)?[A-Za-z0-9_][A-Za-z0-9_-]{0,39}$/u;
 /** Words in a token name (`--color-sidebar-primary-foreground` has five); a longer one reads like a sentence. */
 const MAX_TOKEN_NAME_WORDS = 5;
+/**
+ * A name longer than this as the file wrote it is not read as a token name
+ * (one `tokenName` accepts is at most 42 characters). Nested keys are joined
+ * only while they fit, so a long key is never copied into each child's name.
+ */
+const MAX_TOKEN_NAME_SOURCE = 64;
 
-function tokenName(raw: string): string | null {
+function tokenName(raw: string | null): string | null {
+  if (raw === null || raw.length > MAX_TOKEN_NAME_SOURCE) return null;
   const name = raw.trim().replace(/[.\s/]+/gu, "-").replace(/-{3,}/gu, "--");
   if (!TOKEN_NAME.test(name)) return null;
   const words = name.replace(/^(?:--|\$|@)/u, "").split(/[-_]+/u).filter(Boolean);
@@ -373,7 +380,16 @@ function readKey(text: string, start: number): { name: string; end: number } | n
   return match ? { name: match[0], end: start + match[0].length } : null;
 }
 
-function flattenColors(found: Found, value: Literal, prefix: string, source: string, depth = 0): void {
+/** `prefix` and `key` joined by a dash (just `key` with no prefix), or null once that is too long to be a token name. */
+function joinedName(prefix: string | null, key: string): string | null {
+  if (prefix === null) return null;
+  const length = prefix ? prefix.length + 1 + key.length : key.length;
+  if (length > MAX_TOKEN_NAME_SOURCE) return null;
+  return prefix ? `${prefix}-${key}` : key;
+}
+
+/** `prefix` is "" at the top of the block and null once the name is too long to keep. */
+function flattenColors(found: Found, value: Literal, prefix: string | null, source: string, depth = 0): void {
   if (depth > 4 || value === undefined) return;
   if (typeof value === "string") {
     addColor(found, tokenName(prefix), value, false, source);
@@ -381,7 +397,7 @@ function flattenColors(found: Found, value: Literal, prefix: string, source: str
   }
   if (Array.isArray(value)) return;
   for (const [key, entry] of Object.entries(value)) {
-    const name = key === "DEFAULT" ? prefix : prefix ? `${prefix}-${key}` : key;
+    const name = key === "DEFAULT" ? prefix : joinedName(prefix, key);
     flattenColors(found, entry, name, source, depth + 1);
   }
 }
@@ -411,12 +427,16 @@ function readTokenJson(found: Found, file: DesignSystemFile): void {
   } catch {
     return;
   }
+  // Every object, array entry and string value counts toward the limit.
   let visited = 0;
-  const walk = (node: unknown, trail: readonly string[]): void => {
+  // `name` is the keys above `node` joined by dashes ("" at the top, null once too long to be a name);
+  // `font` is whether any of those keys mentions a font. Both are carried down rather than rebuilt from the
+  // whole trail at every value, so a long key costs once, not once per child.
+  const walk = (node: unknown, depth: number, name: string | null, font: boolean): void => {
     visited += 1;
-    if (visited > DESIGN_SYSTEM_MAX_CONFIG_VALUES || trail.length > 8 || node === null || typeof node !== "object") return;
+    if (visited > DESIGN_SYSTEM_MAX_CONFIG_VALUES || depth > 8 || node === null || typeof node !== "object") return;
     if (Array.isArray(node)) {
-      for (const entry of node) walk(entry, trail);
+      for (const entry of node) walk(entry, depth, name, font);
       return;
     }
     const record = node as Record<string, unknown>;
@@ -430,23 +450,26 @@ function readTokenJson(found: Found, file: DesignSystemFile): void {
     const tokenValue = "$value" in record ? record.$value : "value" in record ? record.value : undefined;
     if (tokenValue !== undefined) {
       const type = typeof record.$type === "string" ? record.$type : typeof record.type === "string" ? record.type : "";
-      const name = tokenName(trail.join("-"));
-      if (/font/iu.test(type) || /font/iu.test(trail.join("."))) addFont(found, name, tokenValue, file.path);
-      else addColor(found, name, tokenValue, false, file.path);
+      if (/font/iu.test(type) || font) addFont(found, tokenName(name), tokenValue, file.path);
+      else addColor(found, tokenName(name), tokenValue, false, file.path);
       return;
     }
     for (const [key, entry] of Object.entries(record)) {
       if (key.startsWith("$")) continue;
+      // The keys are joined with dots for the font check, so "font" can never span two of them.
+      const childName = depth === 0 ? (key.length > MAX_TOKEN_NAME_SOURCE ? null : key) : name === null || name.length + 1 + key.length > MAX_TOKEN_NAME_SOURCE ? null : `${name}-${key}`;
+      const childFont = font || /font/iu.test(key);
       if (typeof entry === "string") {
-        const name = tokenName([...trail, key].join("-"));
-        if (/font/iu.test([...trail, key].join("."))) addFont(found, name, entry, file.path);
-        else addColor(found, name, entry, false, file.path);
+        visited += 1;
+        if (visited > DESIGN_SYSTEM_MAX_CONFIG_VALUES) return;
+        if (childFont) addFont(found, tokenName(childName), entry, file.path);
+        else addColor(found, tokenName(childName), entry, false, file.path);
       } else {
-        walk(entry, [...trail, key]);
+        walk(entry, depth + 1, childName, childFont);
       }
     }
   };
-  walk(parsed, []);
+  walk(parsed, 0, "", false);
 }
 
 /* --------------------------------- Detection ------------------------------ */
