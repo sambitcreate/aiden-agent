@@ -580,6 +580,24 @@ test("a file replaced mid-read by a link to a file Aiden may not read counts as 
   });
 });
 
+test("a file replaced mid-read by another file Aiden may not read counts as a change, not as a file that cannot be read", { skip: process.platform === "win32" || process.getuid?.() === 0 }, async (t) => {
+  const { folder } = await setup(t, { sources: [FILE] });
+  const todo = path.join(folder, "TODO.md");
+  t.after(() => fs.chmod(todo, 0o644).catch(() => undefined));
+  await assert.rejects(readWorkspaceArtifactFile(folder, "TODO.md", undefined, {
+    beforeRead: async () => {
+      // A different file under the same name, closed to Aiden: the one admitted is gone, so this is a change.
+      await fs.rm(todo);
+      await fs.writeFile(todo, "PRIVATE_FIXTURE_VALUE");
+      await fs.chmod(todo, 0o000);
+    },
+  }), (error: Error) => {
+    assert.ok(error instanceof WorkspaceArtifactFileChangedError, `${error.constructor.name}: ${error.message}`);
+    assert.doesNotMatch(error.message, /cannot be read/u);
+    return true;
+  });
+});
+
 test("a folder on the path replaced mid-read by a link to a folder with a file Aiden may not read never says whether that file can be read", { skip: process.platform === "win32" || process.getuid?.() === 0 }, async (t) => {
   const { folder } = await setup(t, { sources: [FILE] });
   await fs.mkdir(path.join(folder, "notes"));

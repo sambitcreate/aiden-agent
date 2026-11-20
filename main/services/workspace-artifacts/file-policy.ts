@@ -75,10 +75,11 @@ function withoutSystemText(file: string, error: unknown): unknown {
  * Whether the system refuses to let Aiden read `relative` in the admitted
  * workspace folder itself (its permissions), as opposed to it having changed.
  * A link or other non-file put there since the check, a link put in place of
- * a folder on the way to it, another file put in its place, or the workspace
- * folder (or a folder above it) swapped for a link or another folder all
- * count as a change: Aiden never follows them, so whether what they lead to
- * could be read is not the page's to learn. The checks run again after a
+ * a folder on the way to it, or another file put in its place counts as a
+ * change; a workspace folder (or a folder above it) swapped for a link or
+ * another folder is reported as a change or an unsafe folder, never as
+ * unreadable. Aiden never follows them, so whether what they lead to could be
+ * read is not the page's to learn. The checks run again after a
  * refusal, so a swap made and undone around the open would have to land
  * between two checks a moment apart.
  */
