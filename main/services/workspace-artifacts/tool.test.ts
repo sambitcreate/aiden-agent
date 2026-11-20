@@ -1050,6 +1050,36 @@ test("a restore the page already matches still tells open tabs when it brings ba
   assert.deepEqual(events, []);
 });
 
+test("an update that another chat's identical save beat makes no revision, says the page already had it, and claims nothing as its own", async (t) => {
+  const { store, call, nextTurn } = await harness(t, { permission: "full" });
+  await call("c1", { operation: "create", title: "Open PRs", markup: PAGE });
+  nextTurn();
+  const read = store.get.bind(store);
+  let landing: (() => Promise<unknown>) | undefined;
+  store.get = async (...args: Parameters<typeof store.get>) => {
+    const answer = await read(...args);
+    const work = landing;
+    landing = undefined;
+    await work?.();
+    return answer;
+  };
+  // Another chat saves the very description this reply is about to save, after this reply read revision 1.
+  landing = async () =>
+    store.replace("ws1", "art1", { ...(await read("ws1", "art1"))!.artifact, title: "Open PRs", description: "Same words" } as never);
+  const reply = await call("u1", { operation: "update", id: "art1", description: "Same words" });
+  assert.match(reply, /^Nothing changed: [^]*no new revision was made\. The page already had this content: another save made it revision 2/u);
+  assert.doesNotMatch(reply, /Updated the artifact/u);
+  assert.equal((await read("ws1", "art1"))!.artifact.revision, 2);
+  // Revision 2 is the other chat's, so a save based on revision 1 is still refused...
+  await assert.rejects(
+    call("u2", { operation: "update", id: "art1", baseVersion: 1, description: "late" }),
+    /changed since revision 1, in another chat or by the person: it is now revision 2/u,
+  );
+  // ...and this reply's next save keeps the other chat's revision as its own undo step.
+  await call("u3", { operation: "update", id: "art1", description: "Mine" });
+  assert.deepEqual((await store.history("ws1", "art1")).map((entry) => entry.revision), [2, 1]);
+});
+
 test("baseVersion is checked again under the store's lock, so a save landing while this one is prepared refuses it", async (t) => {
   const { store, call, nextTurn } = await harness(t, { permission: "full" });
   await call("c1", { operation: "create", title: "Open PRs", markup: PAGE });

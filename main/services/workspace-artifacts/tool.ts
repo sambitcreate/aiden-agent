@@ -1180,6 +1180,8 @@ export function createWorkspaceArtifactTool(options: WorkspaceArtifactToolOption
         // The store approves only when the allowed card listed exactly the saved
         // commands; otherwise an unchanged set keeps the approval it already had.
         let replaced: WorkspaceArtifactV1 | undefined;
+        // The revision the write found the page at, told under the store's lock.
+        let found: number | undefined;
         let artifact: WorkspaceArtifactV1;
         try {
           artifact = previous
@@ -1209,6 +1211,9 @@ export function createWorkspaceArtifactTool(options: WorkspaceArtifactToolOption
                     ...(previous.description ? { description: previous.description } : {}),
                   },
                   ...(earlier ? { fold: { revision: earlier.revision, title: earlier.title } } : {}),
+                  onFound: (at) => {
+                    found = at;
+                  },
                 },
               )
             : await store.create(workspaceId, content, { approvedDigest: shownDigest, chatId });
@@ -1218,12 +1223,19 @@ export function createWorkspaceArtifactTool(options: WorkspaceArtifactToolOption
           }
           throw error;
         }
-        if (previous && artifact.revision === previous.revision) {
-          if (artifact.approvedDigest !== previous.approvedDigest) {
+        if (previous && artifact.revision === (found ?? previous.revision)) {
+          // No revision was made, so this reply moved the page nowhere: its
+          // undo step and the revisions it went through stay as they were,
+          // even when another chat's identical save landed first.
+          const before = replaced ?? previous;
+          if (artifact.approvedDigest !== before.approvedDigest || artifact.markup !== before.markup) {
             options.onChanged({ workspaceId, artifactId: artifact.id, reason: "updated", chatId });
           }
+          const landedFirst = artifact.revision !== previous.revision
+            ? ` The page already had this content: another save made it revision ${artifact.revision} while this one was prepared.`
+            : "";
           return text(
-            `Nothing changed: the artifact "${artifact.visual.title}" (id ${artifact.id}) already has exactly this page, data and actions, so no new revision was made.${describeDiagnostics(diagnostics)}`,
+            `Nothing changed: the artifact "${artifact.visual.title}" (id ${artifact.id}) already has exactly this page, data and actions, so no new revision was made.${landedFirst}${describeDiagnostics(diagnostics)}`,
           );
         }
         // A page made in this turn keeps its first draft as the one undo step.
