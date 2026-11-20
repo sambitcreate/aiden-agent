@@ -2531,9 +2531,12 @@ export const designCanvasApi = {
       | { status: "already"; frameId: string; page?: string }
       | { error: "missing" | "unsafe" | "full" }
     >("designCanvas:placeArtifact", chatId, mediaId, ...(viewSize ? [{ viewSize }] : [])),
-  /** `aidenTurn` names the reply that made the change, when Aiden made it. */
-  onDesignCanvasUpdated: (handler: (update: { chatId: string; revision: number; aidenTurn?: string }) => void) =>
-    onNotification<{ chatId: string; revision: number; aidenTurn?: string }>("designCanvas:updated", handler),
+  /**
+   * `aidenTurn` names the reply that made the change, when Aiden made it;
+   * `step` marks the person's own change made through main (Send to canvas).
+   */
+  onDesignCanvasUpdated: (handler: (update: { chatId: string; revision: number; aidenTurn?: string; step?: string }) => void) =>
+    onNotification<{ chatId: string; revision: number; aidenTurn?: string; step?: string }>("designCanvas:updated", handler),
   /** The chat's `aiden-design://<grant>/` host for framing its workspace files. */
   getDesignCanvasGrant: (chatId: string) =>
     invoke<{ grant: string } | { error: "unavailable" }>("designCanvas:grant", chatId),

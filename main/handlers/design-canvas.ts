@@ -51,9 +51,11 @@ import type { ChatMeta } from "../services/types.js";
 /**
  * Broadcast on `designCanvas:updated` after a save or an Aiden edit lands.
  * `aidenTurn` names the reply whose change it was, so an open canvas can
- * undo all of one reply's canvas changes as one step.
+ * undo all of one reply's canvas changes as one step. `step` marks a change
+ * the person made through main (a Send to canvas that placed a frame): an
+ * open canvas makes it an undo step of its own, so Cmd+Z takes it back.
  */
-export type DesignCanvasUpdated = { chatId: string; revision: number; aidenTurn?: string };
+export type DesignCanvasUpdated = { chatId: string; revision: number; aidenTurn?: string; step?: string };
 
 /** The chat fields the canvas handlers decide on. */
 export type DesignCanvasChat = Pick<
@@ -312,6 +314,8 @@ export function registerDesignCanvasHandlers<Event>(deps: {
     }
     const frameTitle = title.trim().slice(0, DESIGN_CANVAS_LIMITS.titleChars) || "Visual";
     let outcome: DesignCanvasPlaceArtifactResult = { error: "full" };
+    // Only a placed frame is the person's undo step; showing the page a frame is on is not.
+    let placedFrame = false as boolean;
     try {
       const saved = await deps.store.update(chat.id, (doc) => {
         const existing = doc.frames.find((frame) => frame.kind === "artifact" && frame.mediaId === mediaId);
@@ -336,9 +340,14 @@ export function registerDesignCanvasHandlers<Event>(deps: {
           throw UNCHANGED;
         }
         outcome = { status: "placed", frameId: placed.id };
+        placedFrame = true;
         return placed.doc;
       });
-      deps.broadcast({ chatId: chat.id, revision: saved.revision });
+      deps.broadcast({
+        chatId: chat.id,
+        revision: saved.revision,
+        ...(placedFrame ? { step: `send-to-canvas:${saved.revision}` } : {}),
+      });
     } catch (error) {
       if (error !== UNCHANGED) throw error;
     }

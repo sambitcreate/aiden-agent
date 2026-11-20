@@ -824,7 +824,8 @@ test("Send to canvas puts a chat visual on the page on screen as the person's fr
   });
   const placed = (await invoke("designCanvas:placeArtifact", "chat-1", "media-1")) as DesignCanvasPlaceArtifactResult;
   assert.deepEqual(placed, { status: "placed", frameId: "placed-1" });
-  assert.deepEqual(broadcasts, [{ chatId: "chat-1", revision: 1 }]);
+  // Announced as the person's own step, so an open canvas can undo it.
+  assert.deepEqual(broadcasts, [{ chatId: "chat-1", revision: 1, step: "send-to-canvas:1" }]);
   const doc = (await invoke("designCanvas:get", "chat-1")) as DesignCanvas;
   const frame = doc.frames.find((entry) => entry.id === "placed-1");
   assert.ok(frame);
@@ -875,6 +876,7 @@ test("Send to canvas centres a visual in the canvas the person sees, and shows t
   assert.equal(doc.activePageId, wide.pageId);
   assert.equal(doc.frames.length, 2, "nothing new is placed");
   assert.equal(broadcasts.length, before + 1);
+  assert.equal(broadcasts[broadcasts.length - 1]?.step, undefined, "showing another page is no undo step of its own");
 });
 
 test("Send to canvas refuses a visual the chat no longer has, or HTML that fails the visual checks", async (t) => {

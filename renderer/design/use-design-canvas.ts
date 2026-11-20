@@ -22,7 +22,9 @@
 // kept step, so undo never takes back what was changed elsewhere. A fetch or
 // a save's reply can bring a reply's revision before its announcement does;
 // the history is then built again when the announcement arrives, unless the
-// person has made a step of their own since. An edit the person makes
+// person has made a step of their own since. A change the person made
+// through main (Send to canvas placing a visual) is announced as a step of
+// its own and taken in the same way, so it undoes alone. An edit the person makes
 // without a step of its own (a text frame growing to fit, say) is kept out of
 // an Aiden reply's step, so undoing the reply leaves it.
 
@@ -131,7 +133,11 @@ function createCanvasSync(chatId: string, publish: (state: SyncState) => void): 
   const guardKey = Symbol(chatId);
   /** The newest revision another writer announced. */
   let announced = 0;
-  /** The Aiden reply each announced revision came from, or null when it came from no reply. */
+  /**
+   * The undo step each announced revision belongs to: the Aiden reply it came
+   * from, or the person's own step made through main (Send to canvas), or
+   * null when it is neither and so is carried into every step.
+   */
   const aidenRevisions = new Map<number, string | null>();
   /** The one Aiden reply that made every revision after `from` up to `to`, if one did. */
   const aidenTurnBetween = (from: number, to: number): string | undefined => {
@@ -360,7 +366,13 @@ function createCanvasSync(chatId: string, publish: (state: SyncState) => void): 
   const unsubscribe = designCanvasApi.onDesignCanvasUpdated((update) => {
     if (update.chatId !== chatId) return;
     announced = Math.max(announced, update.revision);
-    aidenRevisions.set(update.revision, typeof update.aidenTurn === "string" ? update.aidenTurn : null);
+    const step =
+      typeof update.aidenTurn === "string"
+        ? update.aidenTurn
+        : typeof update.step === "string"
+          ? `person:${update.step}`
+          : null;
+    aidenRevisions.set(update.revision, step);
     if (server && update.revision <= server.revision) {
       // A canvas already taken in, announced late: now it may be known to be one reply's.
       if (unsettled) {

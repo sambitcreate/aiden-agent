@@ -502,6 +502,35 @@ test("a change no reply announced is carried into the history instead of becomin
   assert.equal(controller.canUndo, false);
 });
 
+test("a visual the person sent to the open canvas undoes as their own step, one send at a time", async () => {
+  await mount();
+  await act(async () => controller.change(moveTo("a", 10)));
+  await tick(800);
+  // Two Send to canvas placements land in main, each announced as the person's own step.
+  for (const [revision, frames] of [
+    [6, [note("a", 10), note("sent-1", 400)]],
+    [7, [note("a", 10), note("sent-1", 400), note("sent-2", 800)]],
+  ] as const) {
+    stored = canvas(revision, ...frames);
+    await act(async () =>
+      emitBotTestNotification("designCanvas:updated", { chatId: "chat-1", revision, step: `send-to-canvas:${revision}` }),
+    );
+    await settle();
+  }
+  assert.deepEqual(ids(controller.doc), ["a", "sent-1", "sent-2"]);
+
+  await act(async () => controller.undo());
+  assert.deepEqual(ids(controller.doc), ["a", "sent-1"], "undo takes back only the latest send");
+  await act(async () => controller.undo());
+  assert.deepEqual(ids(controller.doc), ["a"]);
+  assert.equal(xOf(controller.doc, "a"), 10, "the move before the sends stays");
+  await tick(800);
+  assert.deepEqual(ids(stored), ["a"], "the undone frames are saved off the canvas");
+
+  await act(async () => controller.redo());
+  assert.deepEqual(ids(controller.doc), ["a", "sent-1"]);
+});
+
 test("a save the app cannot deliver reports an error and waits for the next edit instead of retrying forever", async () => {
   await mount();
   saveReplies.push(() => {
