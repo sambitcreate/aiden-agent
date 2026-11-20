@@ -1,4 +1,4 @@
-import { expect, finishLmStudioOnboarding, test } from "./fixtures";
+import { composerPrimaryButton, expect, finishLmStudioOnboarding, test } from "./fixtures";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 
@@ -8,20 +8,31 @@ test("local Aiden Live, Scheduled, Profile, and About surfaces stay safe to expl
   const { page } = aiden;
   await finishLmStudioOnboarding(page);
 
-  // The dock is now the one-time Aiden Live setup entry point. Exercise the
-  // keyboard path without requesting system permissions or contacting Google.
+  // An empty draft's send button is the one-time Aiden Live setup entry
+  // point. Exercise the keyboard path without requesting system permissions
+  // or contacting Google. Live needs Computer Use, so only macOS offers it.
   const liveSetupTrigger = page.getByRole("button", { name: "Set up Aiden Live" });
-  await liveSetupTrigger.press("Enter");
-  const liveSetup = page.getByRole("dialog", { name: "Set up Aiden Live" });
-  await expect(liveSetup).toBeVisible();
-  await expect(liveSetup.getByText("Beta", { exact: true })).toBeVisible();
-  await expect(liveSetup.getByText("Google Live model", { exact: true })).toBeVisible();
-  await expect(liveSetup.getByText("Microphone", { exact: true })).toBeVisible();
-  await expect(liveSetup.getByText("Screen and Accessibility", { exact: true })).toBeVisible();
-  await expect(liveSetup.getByText("Scheduled tasks", { exact: true })).toBeVisible();
-  await liveSetup.getByRole("button", { name: "Not now", exact: true }).click();
-  await expect(liveSetup).toHaveCount(0);
-  await expect(liveSetupTrigger).toBeVisible();
+  if (process.platform === "darwin") {
+    await expect(page.getByRole("button", { name: "Send message" })).toHaveCount(0);
+    await liveSetupTrigger.press("Enter");
+    const liveSetup = page.getByRole("dialog", { name: "Set up Aiden Live" });
+    await expect(liveSetup).toBeVisible();
+    await expect(liveSetup.getByText("Beta", { exact: true })).toBeVisible();
+    await expect(liveSetup.getByText("Google Live model", { exact: true })).toBeVisible();
+    await expect(liveSetup.getByText("Microphone", { exact: true })).toBeVisible();
+    await expect(liveSetup.getByText("Screen and Accessibility", { exact: true })).toBeVisible();
+    await expect(liveSetup.getByText("Scheduled tasks", { exact: true })).toBeVisible();
+    await liveSetup.getByRole("button", { name: "Not now", exact: true }).click();
+    await expect(liveSetup).toHaveCount(0);
+    await expect(liveSetupTrigger).toBeVisible();
+    // Typing turns it into Send.
+    await page.locator("textarea").first().fill("Hello");
+    await expect(liveSetupTrigger).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Send message" })).toBeEnabled();
+    await page.locator("textarea").first().fill("");
+  } else {
+    await expect(liveSetupTrigger).toHaveCount(0);
+  }
 
   // Natural-language creation stays available even if manual task dependencies
   // are unavailable. Suggestions open editable chat drafts without saving tasks.
@@ -202,7 +213,7 @@ test.describe("conversational scheduling", () => {
     await expect(page.getByText("I received your custom schedule.", { exact: true }).first()).toBeVisible();
     expect(JSON.stringify(scenario.results)).toContain("Every Tuesday at noon");
     expect(JSON.stringify(scenario.results)).toContain("Brief");
-    await expect(page.getByRole("button", { name: "Send message" })).toBeVisible();
+    await expect(composerPrimaryButton(page)).toBeVisible();
   });
 
   test("a long scheduled-task review keeps its question, every fact and the buttons on screen in a short window", async ({ aiden }, testInfo) => {

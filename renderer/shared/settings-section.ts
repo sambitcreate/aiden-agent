@@ -151,6 +151,7 @@ export const SETTINGS_DESTINATIONS: ReadonlyArray<{
     keywords: [
       "live",
       "voice assistant",
+      "send button",
       "orb",
       "hotkey",
       "shortcut",

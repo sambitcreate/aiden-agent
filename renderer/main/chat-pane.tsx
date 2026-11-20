@@ -4066,6 +4066,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
                       }
                 }
                 hasQueuedMessages={queuedState.messages.length > 0}
+                offerLive={liveChatReachable(chat.data)}
                 compactionHeld={queuedState.holdReason === "compaction"}
                 forkSummaryHold={
                   forkSummary?.state === "pending" || forkSummary?.state === "failed"
