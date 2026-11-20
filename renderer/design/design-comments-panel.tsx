@@ -37,7 +37,8 @@ export function DesignCommentsPanel({ doc, onOpen }: { doc: DesignCanvas; onOpen
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
         <Button
-          variant={open ? "muted" : "transparent"}
+          variant="bar"
+          size="small"
           iconOnly
           aria-label={openCount > 0 ? `All comments, ${openCount} open` : "All comments"}
           title="All comments"

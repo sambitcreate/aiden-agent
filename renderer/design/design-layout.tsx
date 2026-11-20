@@ -24,6 +24,7 @@ import {
 import { appApi } from "../lib/ipc";
 import { DesignCanvasRegion } from "./design-canvas-region";
 import { DesignChatDivider } from "./design-chat-divider";
+import { DesignExpandContext, type DesignExpandState } from "./design-expand";
 
 export const DESIGN_CHAT_WIDTH_STORAGE_KEY = "aiden-agent.design.chat-width";
 /**
@@ -32,6 +33,11 @@ export const DESIGN_CHAT_WIDTH_STORAGE_KEY = "aiden-agent.design.chat-width";
  * whether the sidebar fits again.
  */
 const SIDEBAR_COLLAPSED_BY_DESIGN_STORAGE_KEY = "aiden-agent.design.sidebar-collapsed-by-design";
+/**
+ * "1" while the person wants design mode expanded (the sidebar collapsed), so
+ * their next entry into design mode starts expanded too. Device-local.
+ */
+const DESIGN_EXPANDED_STORAGE_KEY = "aiden-agent.design.expanded";
 /** Used when an older build saved the flag without the sidebar's width. */
 const FALLBACK_SIDEBAR_WIDTH = 272;
 /** Resizes settle (a widen animates) before Aiden asks main again or re-checks the sidebar. */
@@ -221,6 +227,11 @@ export function DesignLayout({
     [chatId],
   );
   const paneState = React.useMemo<DesignPaneState>(() => ({ stacked, pane, setPane }), [pane, setPane, stacked]);
+  const expand = windowPolicy.expand;
+  const expandAvailable = on && expand.available;
+  const toggleExpanded = React.useCallback(() => expand.setExpanded(!expand.expanded), [expand]);
+  // ⌘⇧\ is left alone outside design mode.
+  useCommandHandler("design.expand", toggleExpanded, expandAvailable);
   const [bannerHeight, setBannerHeight] = React.useState(0);
   const bannerVisible = Boolean(chatId) && windowPolicy.bannerVisible;
   const bannerState = React.useMemo<DesignBannerState>(
@@ -256,44 +267,63 @@ export function DesignLayout({
 
   return (
     <DesignPaneContext.Provider value={paneState}>
-      <DesignBannerContext.Provider value={bannerState}>
-        <div
-          ref={containerRef}
-          data-design-layout={on ? layout.mode : "off"}
-          className="relative flex h-full min-h-0 w-full"
-        >
+      <DesignExpandContext.Provider value={expand}>
+        <DesignBannerContext.Provider value={bannerState}>
           <div
-            data-design-mode={on ? "true" : undefined}
-            className="h-full min-h-0 min-w-0 flex-1"
-            style={on && !stacked ? { width: layout.chatWidth, flex: "none" } : undefined}
+            ref={containerRef}
+            data-design-layout={on ? layout.mode : "off"}
+            className="relative flex h-full min-h-0 w-full"
           >
-            {children}
-          </div>
-          {on && chatId ? (
-            <>
-              {stacked ? null : (
-                <DesignChatDivider
-                  width={layout.chatWidth}
-                  min={DESIGN_CHAT_WIDTH_BOUNDS.min}
-                  max={designChatMaxWidth(containerWidth)}
-                  onWidthChange={chatWidth.setPreferredWidth}
-                  onWidthCommit={chatWidth.commitPreferredWidth}
-                  onResizingChange={chatWidth.setResizing}
+            <div
+              data-design-mode={on ? "true" : undefined}
+              className="h-full min-h-0 min-w-0 flex-1"
+              style={on && !stacked ? { width: layout.chatWidth, flex: "none" } : undefined}
+            >
+              {children}
+            </div>
+            {on && chatId ? (
+              <>
+                {stacked ? null : (
+                  <DesignChatDivider
+                    width={layout.chatWidth}
+                    min={DESIGN_CHAT_WIDTH_BOUNDS.min}
+                    max={designChatMaxWidth(containerWidth)}
+                    onWidthChange={chatWidth.setPreferredWidth}
+                    onWidthCommit={chatWidth.commitPreferredWidth}
+                    onResizingChange={chatWidth.setResizing}
+                  />
+                )}
+                <DesignCanvasRegion
+                  chatId={chatId}
+                  width={layout.canvasWidth}
+                  placement={stacked ? "stacked" : "split"}
+                  hidden={canvasHidden}
+                  stackedTopInset={bannerVisible ? bannerHeight : 0}
                 />
-              )}
-              <DesignCanvasRegion
-                chatId={chatId}
-                width={layout.canvasWidth}
-                placement={stacked ? "stacked" : "split"}
-                hidden={canvasHidden}
-                stackedTopInset={bannerVisible ? bannerHeight : 0}
-              />
-            </>
-          ) : null}
-        </div>
-      </DesignBannerContext.Provider>
+              </>
+            ) : null}
+          </div>
+        </DesignBannerContext.Provider>
+      </DesignExpandContext.Provider>
     </DesignPaneContext.Provider>
   );
+}
+
+function readDesignExpanded(): boolean {
+  try {
+    return localStorage.getItem(DESIGN_EXPANDED_STORAGE_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+function writeDesignExpanded(expanded: boolean): void {
+  try {
+    if (expanded) localStorage.setItem(DESIGN_EXPANDED_STORAGE_KEY, "1");
+    else localStorage.removeItem(DESIGN_EXPANDED_STORAGE_KEY);
+  } catch {
+    // The preference only decides how the next entry starts.
+  }
 }
 
 function readSidebarCollapsedByDesign(): number | null {
@@ -323,13 +353,18 @@ function writeSidebarCollapsedByDesign(width: number | null): void {
  * chat switches and other windows' changes never resize anything. While the
  * layout is stacked, a banner offers to widen, but only when main says that
  * can work (not full screen, not maximized, a display at least 1280 px wide).
+ *
+ * Expand collapses the sidebar, which leaves room to split on any window wide
+ * enough to keep the sidebar beside the content, and is remembered for the
+ * person's next entry. Minimize, opening the sidebar by hand, or leaving design
+ * mode brings the sidebar back.
  */
 function useDesignWindowPolicy(
   state: WorkbenchDesignState,
   chatId: string | undefined,
   containerRef: React.RefObject<HTMLDivElement | null>,
   stacked: boolean,
-): { bannerVisible: boolean; widen(): void; dismiss(): void } {
+): { bannerVisible: boolean; widen(): void; dismiss(): void; expand: DesignExpandState } {
   const sidebar = useSplitViewSidebar();
   const sidebarRef = React.useRef(sidebar);
   sidebarRef.current = sidebar;
@@ -375,7 +410,8 @@ function useDesignWindowPolicy(
     const current = sidebarRef.current;
     const element = containerRef.current;
     const sidebarWidth = readSidebarCollapsedByDesign();
-    if (!current?.collapsed || !element || sidebarWidth === null) return;
+    // An expanded layout keeps the sidebar closed even when it would fit again.
+    if (!current?.collapsed || !element || sidebarWidth === null || readDesignExpanded()) return;
     if (element.getBoundingClientRect().width - sidebarWidth >= DESIGN_SPLIT_MIN_WIDTH) {
       writeSidebarCollapsedByDesign(null);
       current.setCollapsed(false);
@@ -393,6 +429,15 @@ function useDesignWindowPolicy(
     // Environment panel is still closing and would make the content look too narrow.
     const sidebarWidth = current?.reservedWidth ?? 0;
     const containerWidth = Math.max(0, window.innerWidth - sidebarWidth);
+    if (readDesignExpanded() && current && !current.overlaid) {
+      // The person left design mode expanded last time, so it starts that way again.
+      // A window wide enough to keep its sidebar beside the content always splits without it.
+      if (!current.collapsed) {
+        current.setCollapsed(true);
+        writeSidebarCollapsedByDesign(sidebarWidth || FALLBACK_SIDEBAR_WIDTH);
+      }
+      return;
+    }
     const action = resolveDesignEntryAction({ containerWidth, sidebarWidth, canWiden: true });
     if (action === "collapseSidebar" && current) {
       current.setCollapsed(true);
@@ -435,6 +480,46 @@ function useDesignWindowPolicy(
     };
   }, [recheckSidebar, refreshCanWiden, state]);
 
+  const collapsed = sidebar?.collapsed === true;
+  // Opening the sidebar by hand while design mode stays on undoes Expand for next time too,
+  // and makes the sidebar the person's again: a later collapse is theirs, so exit leaves it.
+  // Design mode's own reopenings clear the marker before they open the sidebar.
+  const previousRef = React.useRef({ active, collapsed });
+  React.useEffect(() => {
+    const previous = previousRef.current;
+    previousRef.current = { active, collapsed };
+    if (active && previous.active && previous.collapsed && !collapsed) {
+      writeDesignExpanded(false);
+      writeSidebarCollapsedByDesign(null);
+    }
+  }, [active, collapsed]);
+
+  const setExpanded = React.useCallback(
+    (next: boolean) => {
+      const current = sidebarRef.current;
+      if (!activeRef.current || !current || current.overlaid) return;
+      writeDesignExpanded(next);
+      if (!next) {
+        writeSidebarCollapsedByDesign(null);
+        current.setCollapsed(false);
+        return;
+      }
+      if (!current.collapsed) {
+        // Marked as design mode's own collapse, so Minimize and leaving design mode reopen it.
+        if (readSidebarCollapsedByDesign() === null) {
+          writeSidebarCollapsedByDesign(current.reservedWidth || FALLBACK_SIDEBAR_WIDTH);
+        }
+        current.setCollapsed(true);
+      }
+    },
+    [],
+  );
+  const expand = React.useMemo<DesignExpandState>(
+    // A narrow window's sidebar slides over the content, so there is nothing to expand into.
+    () => ({ available: active && sidebar !== null && !sidebar.overlaid, expanded: active && collapsed, setExpanded }),
+    [active, collapsed, setExpanded, sidebar],
+  );
+
   const dismiss = React.useCallback(() => setDismissed(true), []);
-  return { bannerVisible: stacked && canWiden && !dismissed && !widenFailed, widen, dismiss };
+  return { bannerVisible: stacked && canWiden && !dismissed && !widenFailed, widen, dismiss, expand };
 }

@@ -494,6 +494,8 @@ const SplitContext = React.createContext<{
   collapsed: boolean;
   /** The width the sidebar takes from the content: 0 while collapsed or overlaid. */
   reservedWidth: number;
+  /** True on a narrow window, where the open sidebar slides over the content. */
+  overlaid: boolean;
   toggle: () => void;
   setCollapsed: (collapsed: boolean) => void;
   leadingAnchor: HTMLDivElement | null;
@@ -522,13 +524,20 @@ export function useSplitViewSidebar(): {
   collapsed: boolean;
   /** The width the sidebar takes from the content: 0 while collapsed or overlaid. */
   reservedWidth: number;
+  /** True on a narrow window, where the open sidebar slides over the content. */
+  overlaid: boolean;
   setCollapsed: (collapsed: boolean) => void;
 } | null {
   const context = React.useContext(SplitContext);
   return React.useMemo(
     () =>
       context
-        ? { collapsed: context.collapsed, reservedWidth: context.reservedWidth, setCollapsed: context.setCollapsed }
+        ? {
+            collapsed: context.collapsed,
+            reservedWidth: context.reservedWidth,
+            overlaid: context.overlaid,
+            setCollapsed: context.setCollapsed,
+          }
         : null,
     [context],
   );
@@ -704,11 +713,12 @@ function SplitViewRoot({
     () => ({
       collapsed,
       reservedWidth: reservedSidebarWidth,
+      overlaid: compact,
       toggle,
       setCollapsed: setPersistedCollapsed,
       leadingAnchor,
     }),
-    [collapsed, reservedSidebarWidth, toggle, setPersistedCollapsed, leadingAnchor],
+    [collapsed, reservedSidebarWidth, compact, toggle, setPersistedCollapsed, leadingAnchor],
   );
 
   return (
