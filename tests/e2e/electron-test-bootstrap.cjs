@@ -67,3 +67,31 @@ if (redirects.size > 0) {
     return originalFetch(sourceUrl, init);
   };
 }
+
+// Startup milestones, read by the fixture when no window appears in time. The
+// Playwright loader runs before this file: it holds Electron's native "ready"
+// back until Playwright calls __playwright_run, so record the native
+// will-finish-launching and ready events and that call separately. Each value
+// is milliseconds since this process started.
+const startupMilestones = {
+  willFinishLaunching: null,
+  nativeReady: null,
+  playwrightRun: null,
+};
+const sinceProcessStart = () => Math.round(process.uptime() * 1000);
+globalThis.__aidenE2eStartupMilestones = startupMilestones;
+app.once("will-finish-launching", () => {
+  startupMilestones.willFinishLaunching = sinceProcessStart();
+});
+const loaderEmit = app.emit;
+app.emit = function emitWithStartupMilestones(event, ...args) {
+  if (event === "ready" && startupMilestones.nativeReady === null) startupMilestones.nativeReady = sinceProcessStart();
+  return loaderEmit.call(this, event, ...args);
+};
+const playwrightRun = globalThis.__playwright_run;
+if (typeof playwrightRun === "function") {
+  globalThis.__playwright_run = function runWithStartupMilestone(...args) {
+    if (startupMilestones.playwrightRun === null) startupMilestones.playwrightRun = sinceProcessStart();
+    return playwrightRun.apply(this, args);
+  };
+}
