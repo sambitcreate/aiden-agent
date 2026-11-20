@@ -3,7 +3,7 @@ import { parseChatInputSource } from "../../shared/chat-input-source";
 import type { ChatImagePlacementV1 } from "../../shared/chat-artifacts";
 import { AIDEN_UI_CATALOG_VERSION, AIDEN_UI_LIMITS, type AidenUiNodeV1, type ChatUiVisualV1 } from "../../shared/aiden-ui/types";
 import { parseChatUiVisualV1 } from "../../shared/aiden-ui/visual";
-import { clipUnits } from "../../shared/aiden-ui/fallback-text";
+import { cleanPrefix, clipUnits } from "../../shared/aiden-ui/fallback-text";
 import { MAX_HTML_ARTIFACT_TITLE_CHARS } from "../../shared/generative-ui";
 import { isToolStep, parseGenerationTimeline, type GenerationTimeline } from "../../shared/generation-timeline";
 import {
@@ -103,8 +103,10 @@ const REMOTE_VISUAL_SEPARATOR = /[\u2028\u2029]/gu;
 
 /** The host's title as one clean line within the title cap, or "Visual" when nothing is left. */
 function remoteVisualTitle(value: unknown): string {
-  // Hidden characters are removed before the title is clipped, so they never use up its length.
-  const title = (text(value) ?? "").replace(REMOTE_VISUAL_HIDDEN, "").replace(/\s+/gu, " ").trim();
+  // Hidden characters are removed before the title is clipped, so they never use
+  // up its length, and only as much is read as the clip can show (two more units
+  // allow for the space a collapsed run can leave at either end).
+  const title = cleanPrefix(text(value) ?? "", REMOTE_VISUAL_HIDDEN, MAX_HTML_ARTIFACT_TITLE_CHARS + 2, /\s+/gu).trim();
   if (!title) return "Visual";
   return title.length > MAX_HTML_ARTIFACT_TITLE_CHARS ? `${clipUnits(title, MAX_HTML_ARTIFACT_TITLE_CHARS - 1).trimEnd()}…` : title;
 }
@@ -120,7 +122,8 @@ function mapRemoteTextVisual(value: unknown): ChatUiVisualV1 | null {
   // A visual the host pictured already shows as that picture among the message's images.
   if (input?.kind !== "ui" || input.snapshotAttachmentId !== undefined) return null;
   const raw = text(input.fallbackText);
-  const fallbackText = raw === undefined ? "" : clipUnits(raw.replace(REMOTE_VISUAL_HIDDEN, "").replace(REMOTE_VISUAL_SEPARATOR, " "), AIDEN_UI_LIMITS.fallbackChars).trim();
+  // Only as much of the text is read as the cap can show, after hidden characters are dropped.
+  const fallbackText = raw === undefined ? "" : clipUnits(cleanPrefix(raw, REMOTE_VISUAL_HIDDEN, AIDEN_UI_LIMITS.fallbackChars).replace(REMOTE_VISUAL_SEPARATOR, " "), AIDEN_UI_LIMITS.fallbackChars).trim();
   if (!fallbackText) return null;
   const lines = fallbackText.split("\n").map((line) => line.trim()).filter(Boolean);
   const shown = lines.length > MAX_REMOTE_VISUAL_LINES

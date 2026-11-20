@@ -203,6 +203,14 @@ test("a remote visual's long or odd title and its hidden characters never cost t
   const padded = map("Padded", `${"\u200b".repeat(4_000)}visible`);
   assert.ok(padded, "a text of invisible characters before the words still shows the visual");
   assert.deepEqual(drawnLines(padded.tree), ["visible"]);
+  // However long the hidden run, and however it lines up with the emoji after it, nothing visible is lost or split.
+  assert.equal(map(`${"​".repeat(50_000)}Long ${" ​".repeat(5_000)}title`, "Body")?.title, "Long title");
+  for (let lead = 1_015; lead <= 1_030; lead += 1) {
+    const emoji = map(`${"​".repeat(lead)}${"\u{1f600}".repeat(70)}`, `${"﻿".repeat(lead * 10)}${"\u{1f600}".repeat(2_100)}`);
+    assert.ok(emoji);
+    assert.equal(emoji.title, `${"\u{1f600}".repeat(59)}…`, `lead ${lead}`);
+    assert.equal(emoji.fallbackText, "\u{1f600}".repeat(2_000), `lead ${lead}`);
+  }
 
   // A zero-width space, word joiner, invisible operator, BOM, interlinear annotation mark
   // or lone half of a pair draws as nothing and is dropped; a line or paragraph separator

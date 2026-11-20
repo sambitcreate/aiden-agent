@@ -57,6 +57,8 @@ class FallbackLines {
   private work = WORK_BUDGET;
   iterations = ITERATION_BUDGET;
   private prefix = "";
+  /** Cells already cleaned in this fallback, by how they were cleaned, then by their text. */
+  readonly cells = new Map<string, Map<string, string>>();
 
   /** True once the text is known to exceed the cap, or the work budget is spent. */
   get full(): boolean {
@@ -128,6 +130,8 @@ function inline(node: AidenUiNodeV1, scope: AidenUiScope): string {
 // shape emoji and the spelling of Persian and Indic words.
 const INVISIBLE_IN_CELL = /[\u061c\u200b\u200e\u200f\u202a-\u202e\u2060-\u2064\u2066-\u2069\ufeff\ufff9-\ufffb]|\p{Cs}/gu;
 
+const SPACE_RUN_IN_CELL = /[\p{Cc}\s]+/gu;
+
 /** The first `max` UTF-16 units of `text`, never ending halfway through a character. */
 export function clipUnits(text: string, max: number): string {
   if (text.length <= max) return text;
@@ -135,25 +139,72 @@ export function clipUnits(text: string, max: number): string {
   return text.slice(0, last >= 0xd800 && last <= 0xdbff ? max - 1 : max);
 }
 
+/** UTF-16 units read at a time by {@link cleanPrefix}. */
+const CLEAN_SLICE = 1024;
+
+/**
+ * The start of `text` with every match of `hidden` removed and, when `spaces`
+ * is given, each run of its matches made one space, as replacing them in the
+ * whole text would give. `text` is read in slices that never split a
+ * character, and reading stops once more than `keep` units are kept, so the
+ * cost follows the text actually needed: removed characters never count
+ * toward `keep`, and nothing past it is read once it is reached. Both
+ * patterns must be global and `hidden` must match single characters.
+ */
+export function cleanPrefix(text: string, hidden: RegExp, keep: number, spaces?: RegExp): string {
+  let kept = "";
+  for (let start = 0; start < text.length && kept.length <= keep;) {
+    let end = Math.min(start + CLEAN_SLICE, text.length);
+    const last = text.charCodeAt(end - 1);
+    if (end < text.length && last >= 0xd800 && last <= 0xdbff) end += 1;
+    let piece = text.slice(start, end).replace(hidden, "");
+    start = end;
+    if (spaces) {
+      piece = piece.replace(spaces, " ");
+      // A run cut by the slice edge is still one run.
+      if (piece.startsWith(" ") && kept.endsWith(" ")) piece = piece.slice(1);
+    }
+    kept += piece;
+  }
+  return kept;
+}
+
 /**
  * A table cell on one line, without control, direction or invisible characters
  * (a line or paragraph separator becomes a space), and clipped (nothing past
  * `max` is kept). Characters are removed before the cell is clipped, so they
  * never use up its length, and the clip never ends inside a character.
+ *
+ * Only as much of the cell is read as the clip can show, and a cell already
+ * cleaned the same way in the same fallback is reused, so a long cell that
+ * many columns point at is read once, not once per column. `escapePipes`
+ * escapes the kept text's pipes for a Markdown table.
  */
-function cleanCell(text: string, max: number): string {
-  const flat = clipUnits(text.replace(INVISIBLE_IN_CELL, "").replace(/[\p{Cc}\s]+/gu, " ").trim(), AIDEN_UI_LIMITS.fallbackChars + 1);
+function cleanCell(text: string, max: number, out: FallbackLines, escapePipes = false): string {
+  const how = `${max}${escapePipes ? "|" : ""}`;
+  let cleaned = out.cells.get(how);
+  if (!cleaned) out.cells.set(how, (cleaned = new Map()));
+  const known = cleaned.get(text);
+  if (known !== undefined) return known;
+  // Past 2 × max + 2 units, at least max + 1 characters are left after trimming
+  // the one space a collapsed run can leave at either end, so the clip is decided.
+  const units = Math.min(max, AIDEN_UI_LIMITS.fallbackChars + 1);
+  const flat = clipUnits(cleanPrefix(text, INVISIBLE_IN_CELL, units * 2 + 2, SPACE_RUN_IN_CELL).trim(), AIDEN_UI_LIMITS.fallbackChars + 1);
   const characters = [...flat];
-  return characters.length > max ? `${characters.slice(0, max - 1).join("")}…` : flat;
+  const clipped = characters.length > max ? `${characters.slice(0, max - 1).join("")}…` : flat;
+  // Cells are clipped before escaping: nothing past the cap is ever kept.
+  const cell = escapePipes ? clipped.replace(/\|/gu, "\\|") : clipped;
+  cleaned.set(text, cell);
+  return cell;
 }
 
-function plainCell(text: string): string {
-  return cleanCell(text, MAX_PLAIN_CELL);
+function plainCell(text: string, out: FallbackLines): string {
+  return cleanCell(text, MAX_PLAIN_CELL, out);
 }
 
 /** A chart's own label on one line, without control or direction characters. */
-function chartLabel(node: AidenUiNodeV1, scope: AidenUiScope): string {
-  return cleanCell(str(prop(node, "label", scope)), MAX_CHART_LABEL);
+function chartLabel(node: AidenUiNodeV1, scope: AidenUiScope, out: FallbackLines): string {
+  return cleanCell(str(prop(node, "label", scope)), MAX_CHART_LABEL, out);
 }
 
 /** One table row as plain `Label: value` pairs, readable in any font with nothing to line up. */
@@ -172,9 +223,9 @@ function table(rows: unknown, columns: unknown, scope: AidenUiScope, out: Fallba
     ? columns.map((column) => record(column))
     : Object.keys(record(rows[0])).map((key) => ({ key, label: key }));
   const header = columnList.map((column) => str(column.label) || str(column.key));
-  const labels = out.plainTables ? header.map(plainCell) : [];
+  const labels = out.plainTables ? header.map((cell) => plainCell(cell, out)) : [];
   if (!out.plainTables) {
-    out.push(`| ${header.map((cell) => markdownCell(cell)).join(" | ")} |`);
+    out.push(`| ${header.map((cell) => markdownCell(cell, out)).join(" | ")} |`);
     out.push(`| ${header.map(() => "---").join(" | ")} |`);
   }
   for (const row of rows.slice(0, MAX_TABLE_ROWS)) {
@@ -183,7 +234,7 @@ function table(rows: unknown, columns: unknown, scope: AidenUiScope, out: Fallba
     for (const column of columnList) {
       if (!out.take()) return;
       const value = formatted(record(row)[str(column.key)], column.format, scope);
-      cells.push(out.plainTables ? plainCell(value) : markdownCell(value));
+      cells.push(out.plainTables ? plainCell(value, out) : markdownCell(value, out));
     }
     out.push(out.plainTables ? plainRow(labels, cells) : `| ${cells.join(" | ")} |`);
   }
@@ -191,9 +242,8 @@ function table(rows: unknown, columns: unknown, scope: AidenUiScope, out: Fallba
 }
 
 /** A Markdown table cell: one line, no control or direction characters, its own pipes escaped. */
-function markdownCell(text: string): string {
-  // Cells are clipped before escaping: nothing past the cap is ever kept.
-  return cleanCell(text, AIDEN_UI_LIMITS.fallbackChars + 1).replace(/\|/gu, "\\|");
+function markdownCell(text: string, out: FallbackLines): string {
+  return cleanCell(text, AIDEN_UI_LIMITS.fallbackChars + 1, out, true);
 }
 
 /**
@@ -309,7 +359,7 @@ function lines(node: AidenUiNodeV1, scope: AidenUiScope, out: FallbackLines): vo
     }
     case "Chart": {
       const data = prop(node, "data", scope);
-      const label = chartLabel(node, scope);
+      const label = chartLabel(node, scope, out);
       const kind = str(prop(node, "kind", scope));
       out.push(`${label || "Chart"} (${kind ? `${kind} chart` : "chart"}, ${Array.isArray(data) ? data.length : 0} points)`);
       if (out.chartTables && Array.isArray(data) && data.length) {
@@ -330,7 +380,7 @@ function lines(node: AidenUiNodeV1, scope: AidenUiScope, out: FallbackLines): vo
       return;
     }
     case "Sparkline": {
-      const label = chartLabel(node, scope);
+      const label = chartLabel(node, scope, out);
       const values = prop(node, "values", scope);
       const numbers = Array.isArray(values) ? values.filter((value): value is number => typeof value === "number" && Number.isFinite(value)) : [];
       if (out.chartTables && numbers.length) {
@@ -350,7 +400,7 @@ function lines(node: AidenUiNodeV1, scope: AidenUiScope, out: FallbackLines): vo
       return;
     }
     case "Heatmap": {
-      const label = chartLabel(node, scope);
+      const label = chartLabel(node, scope, out);
       const rows = prop(node, "rows", scope);
       if (out.chartTables && Array.isArray(rows) && rows.length) {
         out.push(`${label || "Heatmap"} (heatmap, ${rows.length} cells)`);
@@ -361,8 +411,8 @@ function lines(node: AidenUiNodeV1, scope: AidenUiScope, out: FallbackLines): vo
         for (const row of rows.slice(0, MAX_TABLE_ROWS)) {
           if (!out.take()) return;
           const cell = record(row);
-          const where = [cell[y], cell[x]].map((part) => plainCell(formatted(part, "text", scope))).filter(Boolean).join(" · ");
-          out.push(`${where || "—"}: ${plainCell(formatted(cell[value], undefined, scope)) || "—"}`);
+          const where = [cell[y], cell[x]].map((part) => plainCell(formatted(part, "text", scope), out)).filter(Boolean).join(" · ");
+          out.push(`${where || "—"}: ${plainCell(formatted(cell[value], undefined, scope), out) || "—"}`);
         }
         if (rows.length > MAX_TABLE_ROWS) out.push(`(${rows.length - MAX_TABLE_ROWS} more cells)`);
       } else if (label) {

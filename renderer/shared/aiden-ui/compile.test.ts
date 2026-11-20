@@ -383,3 +383,42 @@ test("table cells drop characters drawn as nothing before they are clipped, keep
   // A lone half of a pair in the data is dropped from a cell.
   assert.doesNotMatch(fallbackTextFor(compiled.tree, { vars: { rows: [{ name: "a\ud800b", n: 1 }] } }), loneSurrogate);
 });
+
+test("a cell reads the same however long its invisible runs are and however many columns show it", () => {
+  const compiled = compileAum(`<Visual title="T"><Data name="rows">[]</Data><Data name="cols">[]</Data><Table rows={$rows} columns={$cols} /></Visual>`);
+  assert.ok(compiled.tree);
+  const one = [{ key: "name", label: "name" }];
+  const cell = (name: string, plainTables: boolean) => {
+    const text = fallbackTextFor(compiled.tree!, { vars: { rows: [{ name }], cols: one } }, { plainTables });
+    return plainTables ? text.replace(/^name: /u, "") : text.split("\n")[2]!.replace(/^\| | \|$/gu, "");
+  };
+  // Ten thousand invisible characters before the words leave just the words.
+  assert.equal(cell(`${"​".repeat(10_000)}visible text`, true), "visible text");
+  assert.equal(cell(`${"﻿".repeat(10_000)}visible text`, false), "visible text");
+  // A space run broken by invisible characters, however long, is one space.
+  assert.equal(cell(`a${" ​\t".repeat(3_000)}b`, true), "a b");
+  assert.equal(cell(`a${" ​\t".repeat(3_000)}b`, false), "a b");
+  // Fifty letters, each after a thousand invisible characters: the plain cell keeps 39 and an ellipsis, the Markdown cell all fifty.
+  const sparse = `x${"​".repeat(999)}`.repeat(50);
+  assert.equal(cell(sparse, true), `${"x".repeat(39)}…`);
+  assert.equal(cell(sparse, false), "x".repeat(50));
+  // However an invisible run lines up with the emoji after it, every emoji stays whole.
+  for (let lead = 1_015; lead <= 1_030; lead += 1) {
+    const emoji = `${"​".repeat(lead)}${"\u{1f600}".repeat(60)}`;
+    assert.equal(cell(emoji, true), `${"\u{1f600}".repeat(39)}…`, `lead ${lead}`);
+    assert.equal(cell(emoji, false), "\u{1f600}".repeat(60), `lead ${lead}`);
+  }
+  // Many columns showing one long cell each show it clipped the same way.
+  const long = `${"​".repeat(20_000)}${"y".repeat(20_000)}`;
+  const cols = Array.from({ length: 5 }, (_, index) => ({ key: "name", label: `c${index}` }));
+  const plain = fallbackTextFor(compiled.tree, { vars: { rows: [{ name: long }], cols } }, { plainTables: true });
+  assert.equal(plain, [0, 1, 2, 3, 4].map((index) => `c${index}: ${"y".repeat(39)}…`).join(" · "));
+});
+
+test("the same text is a chart's label as written and a Markdown cell with its pipes escaped", () => {
+  const compiled = compileAum(`<Visual title="T"><Data name="rows">[]</Data><Chart kind="bar" data={$rows} x="q" y="n" label={$label} /></Visual>`);
+  assert.ok(compiled.tree);
+  const text = fallbackTextFor(compiled.tree, { vars: { rows: [{ q: "Q|A", n: 1 }], label: "Q|A" } }, { chartTables: true });
+  assert.match(text, /^Q\|A \(bar chart, 1 points\)$/mu);
+  assert.match(text, /^\| Q\\\|A \| 1 \|$/mu);
+});
