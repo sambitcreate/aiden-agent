@@ -603,6 +603,27 @@ test("a folder on the path replaced mid-read by a link to a folder with a file A
   });
 });
 
+test("a workspace folder swapped mid-read for a link to a folder with a file Aiden may not read never says whether that file can be read", { skip: process.platform === "win32" || process.getuid?.() === 0 }, async (t) => {
+  const { folder } = await setup(t, { sources: [FILE] });
+  const outside = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-artifact-outside-"));
+  t.after(() => fs.rm(outside, { recursive: true, force: true }));
+  const locked = path.join(outside, "TODO.md");
+  await fs.writeFile(locked, "PRIVATE_FIXTURE_VALUE");
+  await fs.chmod(locked, 0o000);
+  t.after(() => fs.chmod(locked, 0o644).catch(() => undefined));
+  await assert.rejects(readWorkspaceArtifactFile(folder, "TODO.md", undefined, {
+    beforeRead: async () => {
+      await fs.rename(folder, `${folder}.held`);
+      await fs.symlink(outside, folder);
+    },
+  }), (error: Error) => {
+    // Linux's reader finds the link and calls it a change; the macOS helper refuses the folder as unsafe. Neither says whether the file out there can be read.
+    assert.doesNotMatch(error.message, /cannot be read/u);
+    assert.ok(error instanceof (process.platform === "linux" ? WorkspaceArtifactFileChangedError : WorkspaceArtifactFileUnsafeError), `${error.constructor.name}: ${error.message}`);
+    return true;
+  });
+});
+
 test("a file check or read in a workspace folder that is gone says the folder is gone, never the system's message, which names its full path", async (t) => {
   const { folder } = await setup(t, { sources: [FILE] });
   const gone = path.join(folder, "removed");

@@ -3,7 +3,7 @@ import { readLinuxArtifactFile, LinuxArtifactFileChangedError } from "./linux-fi
 import * as fs from "node:fs/promises";
 import path from "node:path";
 import { isProtectedCredentialPath } from "../model-file-policy.js";
-import { captureManagedWorktreeRootIdentity, readConfinedWorkspaceFile, ManagedWorktreeFileIoError } from "../managed-worktree-file-io.js";
+import { captureManagedWorktreeRootIdentity, readConfinedWorkspaceFile, ManagedWorktreeFileIoError, type ManagedWorktreeRootIdentity } from "../managed-worktree-file-io.js";
 import { decodeWorkspaceFileText } from "../workspace-files.js";
 
 export const ARTIFACT_FILE_DENIED = "Credential files are unavailable to workspace artifacts.";
@@ -72,24 +72,49 @@ function withoutSystemText(file: string, error: unknown): unknown {
 }
 
 /**
- * Whether the system refuses to let Aiden read `relative` in `root` itself
- * (its permissions), as opposed to it having changed. A link or other
- * non-file put there since the check, or a link put in place of a folder on
- * the way to it, counts as a change: Aiden never follows it, so whether what
- * it leads to could be read is not the page's to learn.
+ * Whether the system refuses to let Aiden read `relative` in the admitted
+ * workspace folder itself (its permissions), as opposed to it having changed.
+ * A link or other non-file put there since the check, a link put in place of
+ * a folder on the way to it, another file put in its place, or the workspace
+ * folder (or a folder above it) swapped for a link or another folder all
+ * count as a change: Aiden never follows them, so whether what they lead to
+ * could be read is not the page's to learn. The checks run again after a
+ * refusal, so a swap made and undone around the open would have to land
+ * between two checks a moment apart.
  */
-async function readRefused(root: string, relative: string): Promise<boolean> {
-  if (await linkOnPath(root, relative)) return false;
-  const at = path.join(root, relative);
+async function readRefused(root: ManagedWorktreeRootIdentity, relative: string, file: { device: string; inode: string }): Promise<boolean> {
+  const at = path.join(root.path, relative);
+  const refusal = (error: unknown) => ["EACCES", "EPERM"].includes((error as NodeJS.ErrnoException | undefined)?.code ?? "");
+  // "same": the admitted file is still there; "refused": a folder inside the workspace may not be entered; else it changed.
+  const check = async (): Promise<"same" | "refused" | "changed"> => {
+    if (!(await rootUnchanged(root)) || (await linkOnPath(root.path, relative))) return "changed";
+    try {
+      const info = await fs.lstat(at, { bigint: true });
+      return info.isFile() && String(info.dev) === file.device && String(info.ino) === file.inode ? "same" : "changed";
+    } catch (error) {
+      return refusal(error) ? "refused" : "changed";
+    }
+  };
+  const first = await check();
+  if (first !== "same") return first === "refused" && (await rootUnchanged(root));
   try {
-    if (!(await fs.lstat(at)).isFile()) return false;
     const { O_RDONLY, O_NOFOLLOW, O_NONBLOCK } = fs.constants;
     const handle = await fs.open(at, O_RDONLY | (O_NOFOLLOW ?? 0) | (O_NONBLOCK ?? 0));
     await handle.close();
     return false;
   } catch (error) {
-    const code = (error as NodeJS.ErrnoException | undefined)?.code;
-    return code === "EACCES" || code === "EPERM";
+    return refusal(error) && (await check()) !== "changed";
+  }
+}
+
+/** Whether `root.path` is still the folder Aiden admitted: a real folder, not a link, with no link above it, and the same device and inode. */
+async function rootUnchanged(root: ManagedWorktreeRootIdentity): Promise<boolean> {
+  try {
+    const info = await fs.lstat(root.path, { bigint: true });
+    if (!info.isDirectory() || String(info.dev) !== root.device || String(info.ino) !== root.inode) return false;
+    return (await fs.realpath(root.path)) === root.path;
+  } catch {
+    return false;
   }
 }
 
@@ -150,7 +175,7 @@ export async function readWorkspaceArtifactFile(root: string, file: string, sign
   const bytes = await reading.catch(async (error: unknown) => {
     if (error instanceof LinuxArtifactFileChangedError || (error instanceof ManagedWorktreeFileIoError && error.code === "source_changed")) {
       // A file Aiden may not read fails to open the same way a replaced one does; say which it is.
-      if (await readRefused(admitted.identity.path, admitted.relative)) throw new WorkspaceArtifactFileUnreadableError(file);
+      if (await readRefused(admitted.identity, admitted.relative, admitted.file)) throw new WorkspaceArtifactFileUnreadableError(file);
       throw new WorkspaceArtifactFileChangedError(file);
     }
     if (isUnsafeSource(error)) throw new WorkspaceArtifactFileUnsafeError(file);
