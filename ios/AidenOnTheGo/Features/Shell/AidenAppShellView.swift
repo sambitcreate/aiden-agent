@@ -108,8 +108,9 @@ struct AidenAppShellView: View {
     /// they fit (an iPhone Duo open in landscape) and lays the list over the
     /// detail when they don't (open in portrait), where picking a row puts it away.
     @State private var inboxColumns = NavigationSplitViewVisibility.all
-    @State private var inboxSplitWidth: CGFloat = 0
-    @State private var inboxDetailWidth: CGFloat = 0
+    @State private var inboxSplitFrame = CGRect.zero
+    @State private var inboxDetailFrame = CGRect.zero
+    @State private var inboxLayout = 0
 
     init(
         coordinator: AidenRemoteCoordinator,
@@ -196,21 +197,29 @@ struct AidenAppShellView: View {
                         inboxList(selection: AidenSplitNavigationPath(navigation.inboxPath).selection)
                     } detail: {
                         inboxDetail
-                            .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { inboxDetailWidth = $0 }
+                            .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { inboxDetailFrame = $0 }
                     }
-                    .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width in
-                        // A turn or a fold brings the list back.
-                        if inboxSplitWidth != 0, width != inboxSplitWidth { inboxColumns = .all }
-                        inboxSplitWidth = width
+                    .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { inboxSplitFrame = $0 }
+                    // Turning the device brings the list back. Other width
+                    // changes, such as Stage Manager or an iPad sidebar, leave
+                    // the columns as the person set them. Opening or closing an
+                    // iPhone Duo changes the size class, handled below.
+                    .onGeometryChange(for: Bool.self) { $0.size.width > $0.size.height } action: { _ in
+                        inboxColumns = .all
                     }
-                    .onChange(of: AidenSplitNavigationPath(navigation.inboxPath).selection) { _, selection in
-                        hideOverlaidInboxList(after: selection)
+                    // A chat chosen any other way: a link, Catch Up's Next.
+                    .onChange(of: AidenSplitNavigationPath(navigation.inboxPath).selection) {
+                        hideOverlaidInboxList()
                     }
                 } else {
                     NavigationStack(path: Bindable(navigation).inboxPath) {
                         inboxList(selection: nil)
                             .navigationDestination(for: AidenAppRoute.self, destination: destination)
                     }
+                    // A new stack for each compact spell. Reused after the split
+                    // had the Inbox (and the tab was left and come back to), the
+                    // old stack wrote an empty path over the chat on screen.
+                    .id(inboxLayout)
                 }
             }
             .badge(inboxStore.needsYouCount)
@@ -290,6 +299,8 @@ struct AidenAppShellView: View {
             inboxStore.setInboxVisible(isOnScreen)
         }
         .onChange(of: horizontalSizeClass) { _, sizeClass in
+            inboxLayout += 1
+            inboxColumns = .all
             navigation.inboxBesideList = sizeClass == .regular
         }
         .onChange(of: navigation.inboxOpenChat, initial: true) { _, chat in
@@ -344,6 +355,7 @@ struct AidenAppShellView: View {
             onOpenMachines: { navigation.open(.machines) },
             onCatchUp: {
                 markViewed(navigation.startCatchUp(in: catchUpQueue))
+                hideOverlaidInboxList()
             },
             onShowRunning: { showsRunningChats = true },
             selection: selection
@@ -394,10 +406,12 @@ struct AidenAppShellView: View {
 
     /// Picking a row while the list is an overlay over the detail (a narrow
     /// regular width, such as an iPhone Duo open in portrait) puts the overlay
-    /// away, so the chosen chat is in view. Tiled columns are left as they are.
-    private func hideOverlaidInboxList(after selection: AidenAppRoute?) {
-        guard selection != nil, inboxColumns != .detailOnly,
-              AidenSplitNavigationPath.listIsOverlaid(detailWidth: inboxDetailWidth, splitWidth: inboxSplitWidth)
+    /// away, so the chosen chat is in view, including one tapped again while
+    /// already selected. Tiled columns are left as they are.
+    private func hideOverlaidInboxList() {
+        guard showsInboxBesideDetail, inboxColumns != .detailOnly,
+              AidenSplitNavigationPath(navigation.inboxPath).selection != nil,
+              AidenSplitNavigationPath.listIsOverlaid(detailFrame: inboxDetailFrame, splitFrame: inboxSplitFrame)
         else { return }
         inboxColumns = .detailOnly
     }
@@ -505,6 +519,7 @@ struct AidenAppShellView: View {
     private func openRow(_ route: AidenAppRoute) {
         if case .chat(let id) = route { markViewed(id) }
         navigation.openInboxRow(route)
+        hideOverlaidInboxList()
     }
 
     private func nextInCatchUp() {

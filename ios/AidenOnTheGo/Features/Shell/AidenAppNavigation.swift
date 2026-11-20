@@ -20,6 +20,14 @@ enum AidenAppRoute: Hashable, Codable {
         }
     }
 
+    /// A chat or a Bot: a row the Inbox list can select.
+    var isConversation: Bool {
+        switch self {
+        case .chat, .bot: true
+        default: false
+        }
+    }
+
     /// What a link asks for, on the machine it names or else the selected one.
     /// Nil for a new chat, which isn't a place to go, and for a machine that
     /// isn't paired.
@@ -277,9 +285,18 @@ struct AidenSplitNavigationPath: Equatable {
     /// What's pushed in the detail column over the selection.
     var detailPath: [AidenAppRoute] { Array(path.dropFirst()) }
 
-    /// Choosing a row starts the detail over on it. Nil clears the detail.
-    mutating func select(_ route: AidenAppRoute?) {
-        path = route.map { [$0] } ?? []
+    /// Choosing a row starts the detail over on it.
+    mutating func select(_ route: AidenAppRoute) {
+        path = [route]
+    }
+
+    /// A stack's path taken over by the list: the chat or Bot nearest the top
+    /// becomes the selection and only the screens above it stay, so the
+    /// highlighted row is the conversation on screen. Pages under it, and chats
+    /// it was opened over, go. A path with no conversation is kept as it is.
+    static func takingOver(_ path: [AidenAppRoute]) -> [AidenAppRoute] {
+        guard let index = path.lastIndex(where: \.isConversation) else { return path }
+        return Array(path[index...])
     }
 
     /// The detail column's stack moved, by Back or a push. With nothing
@@ -290,9 +307,12 @@ struct AidenSplitNavigationPath: Equatable {
     }
 
     /// True when the list is drawn over the detail rather than beside it: the
-    /// detail column takes the split's whole width. Unknown widths say no.
-    static func listIsOverlaid(detailWidth: CGFloat, splitWidth: CGFloat) -> Bool {
-        detailWidth > 0 && splitWidth > 0 && detailWidth >= splitWidth - 1
+    /// detail column starts at the split's own leading edge, where tiled
+    /// columns start it after the list. Frames are global. A frame not measured
+    /// yet, or a detail narrower than half the split (one mid-animation), says no.
+    static func listIsOverlaid(detailFrame: CGRect, splitFrame: CGRect) -> Bool {
+        guard splitFrame.width > 0, detailFrame.width > splitFrame.width / 2 else { return false }
+        return abs(detailFrame.minX - splitFrame.minX) < 1
     }
 }
 
@@ -317,7 +337,15 @@ final class AidenAppNavigation {
     /// the list's selection instead of going on top of the one there, so the
     /// highlighted row is the conversation on screen. Pages such as Settings
     /// still go on top. Not saved: the width decides it on every launch.
-    var inboxBesideList = false
+    /// Turning it on, at launch or when the display opens, hands the path to
+    /// the list (`AidenSplitNavigationPath.takingOver`).
+    var inboxBesideList = false {
+        didSet {
+            guard inboxBesideList, !oldValue else { return }
+            let path = AidenSplitNavigationPath.takingOver(inboxPath)
+            if path != inboxPath { inboxPath = path }
+        }
+    }
 
     init() {
         tab = .inbox
@@ -487,11 +515,7 @@ final class AidenAppNavigation {
     /// On a stack the route goes on top, or is gone back to. Beside the list a
     /// chat or Bot becomes the selection and the detail starts over on it.
     private func showOnInbox(_ route: AidenAppRoute) {
-        let isConversation = switch route {
-        case .chat, .bot: true
-        default: false
-        }
-        guard inboxBesideList, isConversation else {
+        guard inboxBesideList, route.isConversation else {
             Self.show(route, on: &inboxPath)
             return
         }

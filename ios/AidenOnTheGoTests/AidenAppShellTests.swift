@@ -235,9 +235,48 @@ final class AidenAppShellTests: XCTestCase {
 
         split.select(.chat(id("c2")))
         XCTAssertEqual(split.path, [.chat(id("c2"))])
+    }
 
-        split.select(nil)
-        XCTAssertEqual(split.path, [])
+    /// Opening the display hands a stack's path to the list: the conversation
+    /// on screen becomes the highlighted row, with only what's above it pushed.
+    func testOpeningTheDisplaySelectsTheConversationOnScreen() {
+        let navigation = AidenAppNavigation()
+        navigation.openInboxRow(.chat(id("c1")))
+        navigation.openInboxRow(.chat(id("c2")))
+        navigation.open(.settings)
+        XCTAssertEqual(navigation.inboxPath, [.chat(id("c1")), .chat(id("c2")), .settings])
+
+        navigation.inboxBesideList = true
+
+        XCTAssertEqual(AidenSplitNavigationPath(navigation.inboxPath).selection, .chat(id("c2")))
+        XCTAssertEqual(AidenSplitNavigationPath(navigation.inboxPath).detailPath, [.settings])
+        XCTAssertEqual(navigation.inboxOpenChat, id("c2"))
+    }
+
+    /// A launch on the open display restores a chat opened from Settings as
+    /// the selection, rather than Settings with nothing highlighted.
+    func testARestoredChatUnderAPageBecomesTheSelection() {
+        let store = AidenAppNavigationStore(defaults: AidenDemoHosts.isolatedDefaults())
+        let compact = AidenAppNavigation()
+        compact.open(.settings)
+        compact.openInboxRow(.bot(id("b1")))
+        store.save(compact.snapshot)
+
+        let restored = AidenAppNavigation(restoring: store.load(), installations: [studio, laptop])
+        restored.inboxBesideList = true
+
+        XCTAssertEqual(restored.inboxPath, [.bot(id("b1"))])
+    }
+
+    /// Pages alone have no row to highlight, so the list leaves them be.
+    func testAPathWithNoConversationIsKeptWhenTheListTakesOver() {
+        let navigation = AidenAppNavigation()
+        navigation.open(.machines)
+        navigation.open(.machine(instanceId: "laptop"))
+
+        navigation.inboxBesideList = true
+
+        XCTAssertEqual(navigation.inboxPath, [.machines, .machine(instanceId: "laptop")])
     }
 
     func testBackInTheDetailKeepsTheSelection() {
@@ -361,10 +400,30 @@ final class AidenAppShellTests: XCTestCase {
         XCTAssertNil(stack.inboxOpenChat)
     }
 
-    func testOnlyADetailAsWideAsTheSplitIsAnOverlaidList() {
-        XCTAssertTrue(AidenSplitNavigationPath.listIsOverlaid(detailWidth: 669, splitWidth: 669))
-        XCTAssertFalse(AidenSplitNavigationPath.listIsOverlaid(detailWidth: 600, splitWidth: 951))
-        XCTAssertFalse(AidenSplitNavigationPath.listIsOverlaid(detailWidth: 0, splitWidth: 0), "Not measured yet")
+    /// Frames measured on an iPhone Duo's inner display.
+    func testOnlyADetailStartingAtTheSplitsEdgeIsAnOverlaidList() {
+        let portraitSplit = CGRect(x: 0, y: 82, width: 669, height: 786)
+        XCTAssertTrue(AidenSplitNavigationPath.listIsOverlaid(
+            detailFrame: CGRect(x: 0, y: 82, width: 669, height: 786), splitFrame: portraitSplit
+        ))
+        XCTAssertTrue(
+            AidenSplitNavigationPath.listIsOverlaid(
+                detailFrame: CGRect(x: 0, y: 82, width: 661, height: 786), splitFrame: portraitSplit
+            ),
+            "A detail a few points short of the split is still under the list"
+        )
+        XCTAssertFalse(
+            AidenSplitNavigationPath.listIsOverlaid(
+                detailFrame: CGRect(x: 320, y: 0, width: 631, height: 669),
+                splitFrame: CGRect(x: 0, y: 0, width: 951, height: 669)
+            ),
+            "Tiled: the detail starts after the list"
+        )
+        XCTAssertFalse(
+            AidenSplitNavigationPath.listIsOverlaid(detailFrame: CGRect(x: 0, y: 82, width: 20, height: 786), splitFrame: portraitSplit),
+            "Mid-animation"
+        )
+        XCTAssertFalse(AidenSplitNavigationPath.listIsOverlaid(detailFrame: .zero, splitFrame: .zero), "Not measured yet")
     }
 
     /// The width only changes how the path is drawn, so a restored path, or one

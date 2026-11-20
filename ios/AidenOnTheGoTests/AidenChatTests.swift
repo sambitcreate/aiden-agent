@@ -1990,6 +1990,23 @@ final class AidenChatTests: XCTestCase {
         XCTAssertNil(model.presentedError)
     }
 
+    /// A rejected certificate pin fails the read as `URLError(.cancelled)`
+    /// while the screen is still open. That is a failure to show, unlike a
+    /// screen closing mid-read.
+    @MainActor
+    func testARejectedReadOnAnOpenScreenStillShowsAnError() async throws {
+        defer { AidenChatProgressLifecycleURLProtocol.reset() }
+        let model = try await makeProgressLifecycleModel(mode: .denied, responseOverride: { request in
+            guard request.url?.path == "/api/aiden/v1/chats/chat-progress-lifecycle" else { return nil }
+            return (AidenChatProgressLifecycleURLProtocol.urlCancelledStatus, "", Data())
+        })
+
+        await model.load(observeProgress: false)
+
+        XCTAssertTrue(model.chat.messages.isEmpty)
+        XCTAssertNotNil(model.presentedError)
+    }
+
     @MainActor
     func testFallbackDoesNotCoalesceWithPreResponseApprovalState() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
@@ -11809,6 +11826,9 @@ private final class AidenChatProgressLifecycleURLProtocol: URLProtocol, @uncheck
     /// An override status that answers 200 with the given body and keeps the
     /// response open, so the test can push further frames with `pushEvent`.
     static let openEventStreamStatus = -2
+    /// An override status that fails the request with `URLError(.cancelled)`,
+    /// as a rejected certificate pin does, while the caller's task runs on.
+    static let urlCancelledStatus = -3
     nonisolated(unsafe) private static var responseOverride: Override?
     static func setResponseOverride(_ handler: @escaping Override) {
         lock.withLock { responseOverride = handler }
@@ -12020,6 +12040,10 @@ private final class AidenChatProgressLifecycleURLProtocol: URLProtocol, @uncheck
         if let custom = handlers?(request) {
             if custom.0 == Self.connectionLostStatus {
                 failCurrentRequest(URLError(.networkConnectionLost))
+                return
+            }
+            if custom.0 == Self.urlCancelledStatus {
+                failCurrentRequest(URLError(.cancelled))
                 return
             }
             if custom.0 == Self.openEventStreamStatus {
