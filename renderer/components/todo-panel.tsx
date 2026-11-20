@@ -57,14 +57,20 @@ function taskStatusText(task: TodoTaskViewV1, dependencyIds: readonly number[]):
 export function ComposerFloatingRow({
   children,
   onHeightChange,
+  onCoveredBottomChange,
 }: {
   children: React.ReactNode;
   /** Reports the chips' laid-out height, which doubles when they stack. */
   onHeightChange?: (height: number) => void;
+  /** Reports how far above the window's bottom edge the composer under this row begins. */
+  onCoveredBottomChange?: (px: number) => void;
 }) {
+  const rowRef = useRef<HTMLDivElement>(null);
   const chipsRef = useRef<HTMLDivElement>(null);
   const report = useRef(onHeightChange);
   report.current = onHeightChange;
+  const reportCovered = useRef(onCoveredBottomChange);
+  reportCovered.current = onCoveredBottomChange;
   useLayoutEffect(() => {
     const chips = chipsRef.current;
     if (!chips || typeof ResizeObserver === "undefined") return;
@@ -74,8 +80,27 @@ export function ComposerFloatingRow({
     observer.observe(chips);
     return () => observer.disconnect();
   }, []);
+  useLayoutEffect(() => {
+    const dock = rowRef.current?.parentElement;
+    if (!dock || typeof ResizeObserver === "undefined") return;
+    const update = () => {
+      const row = rowRef.current;
+      if (row) reportCovered.current?.(window.innerHeight - row.getBoundingClientRect().bottom);
+    };
+    update();
+    const observer = new ResizeObserver(update);
+    observer.observe(dock);
+    window.addEventListener("resize", update);
+    return () => {
+      observer.disconnect();
+      window.removeEventListener("resize", update);
+    };
+  }, []);
   return (
-    <div className="aiden-dock-inset chat-content-column pointer-events-none absolute inset-x-0 bottom-full z-20 mb-2 @container">
+    <div
+      ref={rowRef}
+      className="aiden-dock-inset chat-content-column pointer-events-none absolute inset-x-0 bottom-full z-20 mb-2 @container"
+    >
       <div ref={chipsRef} className="flex items-end justify-center gap-2 @max-[24rem]:flex-wrap">
         {children}
       </div>
@@ -100,6 +125,22 @@ export function composerFloatingRowOffsets(
   if (!visible) return { scrollToBottomButtonOffset: 0, scrollContentBottomOffset: 0 };
   const rowHeight = Math.max(FLOATING_ROW_LINE_HEIGHT, Math.ceil(height ?? 0));
   return { scrollToBottomButtonOffset: rowHeight + 8, scrollContentBottomOffset: rowHeight + 20 };
+}
+
+/**
+ * The floating row's height to clear, held at its tallest while `hold` is on.
+ * The subagent pill comes and goes as its transcript card scrolls in and out
+ * of view; holding the clearance keeps the transcript from shifting under it,
+ * which could otherwise move the card across the edge and back.
+ */
+export function useHeldFloatingRowHeight(height: number, hold: boolean): number {
+  const held = useRef(0);
+  if (!hold) {
+    held.current = 0;
+    return height;
+  }
+  held.current = Math.max(held.current, height);
+  return held.current;
 }
 
 export function todoPanelHasVisibleChrome(snapshot: TodoSnapshotViewV1 | null): boolean {
