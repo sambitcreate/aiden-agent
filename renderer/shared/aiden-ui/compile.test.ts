@@ -354,3 +354,32 @@ test("table cells never carry control or direction characters that could reorder
     assert.match(text, /safegnp\.exex y z/u);
   }
 });
+
+test("table cells drop characters drawn as nothing before they are clipped, keep emoji joiners, and never end inside a character", () => {
+  const compiled = compileAum(`<Visual title="T"><Data name="rows">[]</Data><Table rows={$rows} /></Visual>`);
+  assert.ok(compiled.tree);
+  const loneSurrogate = /\p{Cs}/u;
+  const rows = [
+    // A zero-width space, word joiner, invisible separator, BOM and interlinear annotation marks vanish; a line separator reads as a space.
+    { name: "pay\u200broll\u2060\u2063\ufeff\ufff9note\ufffb\u2028end", n: 1 },
+    // A run of invisible characters does not use up the cell's length.
+    { name: `${"\u200b".repeat(4_000)}visible`, n: 2 },
+    // A person at a laptop keeps the joiner that draws it as one emoji.
+    { name: "\u{1f469}\u200d\u{1f4bb} team", n: 3 },
+  ];
+  for (const plainTables of [true, false]) {
+    const text = fallbackTextFor(compiled.tree, { vars: { rows } }, { plainTables });
+    assert.doesNotMatch(text, /[\u200b\u2060-\u2064\ufeff\ufff9-\ufffb\u2028\u2029]/u, JSON.stringify(text));
+    assert.match(text, /payrollnote end/u);
+    assert.match(text, /visible/u);
+    assert.match(text, /\u{1f469}\u200d\u{1f4bb} team/u);
+  }
+  // However the text's cap falls among emoji, no half of one is left at the end.
+  for (const lead of ["", "a"]) {
+    const text = fallbackTextFor(compiled.tree, { vars: { rows: [{ name: `${lead}${"\u{1f600}".repeat(2_100)}`, n: 1 }] } });
+    assert.ok(text.endsWith("…"));
+    assert.doesNotMatch(text, loneSurrogate, `lead ${JSON.stringify(lead)}`);
+  }
+  // A lone half of a pair in the data is dropped from a cell.
+  assert.doesNotMatch(fallbackTextFor(compiled.tree, { vars: { rows: [{ name: "a\ud800b", n: 1 }] } }), loneSurrogate);
+});

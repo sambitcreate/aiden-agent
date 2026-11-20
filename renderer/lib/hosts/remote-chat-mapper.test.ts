@@ -197,6 +197,19 @@ test("a remote visual's long or odd title and its hidden characters never cost t
   assert.ok(capped);
   assert.equal(capped.fallbackText, "b".repeat(3_999));
   assert.doesNotMatch(drawnLines(capped.tree).join("\n"), loneSurrogate);
+  // Hidden characters are dropped before the title or text is clipped, so a run of
+  // them neither uses up the cap nor leaves half a character behind.
+  assert.equal(map(`${"\u202e".repeat(3_999)}\u{1f600} Report`, "Body")?.title, "\u{1f600} Report");
+  const padded = map("Padded", `${"\u200b".repeat(4_000)}visible`);
+  assert.ok(padded, "a text of invisible characters before the words still shows the visual");
+  assert.deepEqual(drawnLines(padded.tree), ["visible"]);
+
+  // A zero-width space, word joiner, invisible operator, BOM, interlinear annotation mark
+  // or lone half of a pair draws as nothing and is dropped; a line or paragraph separator
+  // reads as a space; the joiner inside an emoji stays.
+  assert.equal(map("Q3\u200b rev\ufeffenue\u2060\u2028report", "Body")?.title, "Q3 revenue report");
+  const hidden = map("Hidden", "pay\u200broll\u2062\ufff9note\ufffb\u2029end\ud800\n\u{1f469}\u200d\u{1f4bb} team");
+  assert.deepEqual(drawnLines(hidden!.tree), ["payrollnote end", "\u{1f469}\u200d\u{1f4bb} team"]);
 });
 
 test("rows the transcript cannot render are skipped and malformed pages are rejected", () => {

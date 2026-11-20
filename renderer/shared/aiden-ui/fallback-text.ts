@@ -120,12 +120,29 @@ function inline(node: AidenUiNodeV1, scope: AidenUiScope): string {
   return (node.c ?? []).map((child) => inline(child, scope)).join("");
 }
 
-// Unicode direction marks, embeddings, overrides and isolates: in a cell they could reorder the rest of its line.
-const BIDI_CONTROL = /[\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/gu;
+// Unicode direction marks, embeddings, overrides and isolates, which could reorder
+// the rest of a cell's line, and characters drawn as nothing that could hide or
+// split a word: the zero-width space, the word joiner and invisible operators
+// U+2060-U+2064, the BOM, the interlinear annotation marks U+FFF9-U+FFFB, and a
+// lone half of a surrogate pair. The zero-width joiner and non-joiner stay: they
+// shape emoji and the spelling of Persian and Indic words.
+const INVISIBLE_IN_CELL = /[\u061c\u200b\u200e\u200f\u202a-\u202e\u2060-\u2064\u2066-\u2069\ufeff\ufff9-\ufffb]|\p{Cs}/gu;
 
-/** A table cell on one line, without control or direction characters, and clipped (nothing past `max` is kept). */
+/** The first `max` UTF-16 units of `text`, never ending halfway through a character. */
+export function clipUnits(text: string, max: number): string {
+  if (text.length <= max) return text;
+  const last = text.charCodeAt(max - 1);
+  return text.slice(0, last >= 0xd800 && last <= 0xdbff ? max - 1 : max);
+}
+
+/**
+ * A table cell on one line, without control, direction or invisible characters
+ * (a line or paragraph separator becomes a space), and clipped (nothing past
+ * `max` is kept). Characters are removed before the cell is clipped, so they
+ * never use up its length, and the clip never ends inside a character.
+ */
 function cleanCell(text: string, max: number): string {
-  const flat = text.slice(0, AIDEN_UI_LIMITS.fallbackChars + 1).replace(BIDI_CONTROL, "").replace(/[\p{Cc}\s]+/gu, " ").trim();
+  const flat = clipUnits(text.replace(INVISIBLE_IN_CELL, "").replace(/[\p{Cc}\s]+/gu, " ").trim(), AIDEN_UI_LIMITS.fallbackChars + 1);
   const characters = [...flat];
   return characters.length > max ? `${characters.slice(0, max - 1).join("")}…` : flat;
 }
@@ -400,5 +417,5 @@ export function fallbackTextFor(tree: AidenUiNodeV1, scope: AidenUiScope, option
   out.plainTables = options.plainTables === true;
   lines(tree, scope, out);
   const text = out.lines.join("\n");
-  return text.length > AIDEN_UI_LIMITS.fallbackChars ? `${text.slice(0, AIDEN_UI_LIMITS.fallbackChars - 1)}…` : text;
+  return text.length > AIDEN_UI_LIMITS.fallbackChars ? `${clipUnits(text, AIDEN_UI_LIMITS.fallbackChars - 1)}…` : text;
 }
