@@ -62,14 +62,17 @@ test("public App Store identity stays aligned with shipping app links", async ()
 test("release docs agree on the current processed TestFlight candidate, and it is the newest recorded build", async () => {
   const { metadata, ascRunbook, testflight } = await loadFiles();
 
-  const named = [metadata, ascRunbook, testflight].flatMap((text) =>
-    [...text.matchAll(/build `(\d+)` is the current processed internal candidate/giu)].map((match) => Number(match[1])),
-  );
-  const [resourceBuild] = [...ascRunbook.matchAll(/Current exact build resource ID: `[0-9a-f-]+` \(build `(\d+)`/gu)].map(
-    (match) => Number(match[1]),
-  );
-  named.push(resourceBuild);
-  assert.ok(named.length >= 4, "metadata, the ASC runbook and TESTFLIGHT.md each name the current candidate");
+  const sources = {
+    "APP_STORE_METADATA.md": [metadata, /build `(\d+)` is the current processed internal candidate/giu],
+    "ASC_CLI.md": [ascRunbook, /build `(\d+)` is the current processed internal candidate/giu],
+    "TESTFLIGHT.md": [testflight, /build `(\d+)` is the current processed internal candidate/giu],
+    "ASC_CLI.md resource ID": [ascRunbook, /Current exact build resource ID: `[0-9a-f-]+` \(build `(\d+)`/gu],
+  };
+  const named = Object.entries(sources).flatMap(([source, [text, pattern]]) => {
+    const builds = [...text.matchAll(pattern)].map((match) => Number(match[1]));
+    assert.ok(builds.length > 0, `${source} names the current candidate`);
+    return builds;
+  });
   assert.deepEqual(new Set(named), new Set([named[0]]), `every current-candidate statement names one build, saw ${named}`);
 
   const recorded = [...ascRunbook.matchAll(/^## Internal build (\d+) /gmu)].map((match) => Number(match[1]));
