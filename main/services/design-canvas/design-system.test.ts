@@ -136,6 +136,44 @@ test("a tailwind config is read only up to its value limit, and a file at the si
   assert.deepEqual(nested, { colors: [], fonts: [], sources: [] });
 });
 
+test("a quote in a comment or a regex literal inside a colors block does not hide the fonts after it", () => {
+  const detected = detectDesignSystem([
+    {
+      path: "tailwind.config.js",
+      text: [
+        "module.exports = { theme: {",
+        "  colors: { brand: '#123456', primary: colors.blue // we're on blue",
+        "  },",
+        "  fontFamily: { sans: ['Inter', 'sans-serif'] },",
+        "} };",
+      ].join("\n"),
+    },
+    {
+      path: "web/tailwind.config.js",
+      text: [
+        "module.exports = { theme: {",
+        "  colors: { ink: '#222222', match: /it's/.source /* don't */ },",
+        "  fontFamily: { display: ['Fraunces'] },",
+        "} };",
+      ].join("\n"),
+    },
+  ]);
+  assert.deepEqual(
+    detected.colors.map((color) => [color.name, color.value]),
+    [
+      ["brand", "#123456"],
+      ["ink", "#222222"],
+    ],
+  );
+  assert.deepEqual(
+    detected.fonts.map((font) => [font.name, font.family, font.source]),
+    [
+      ["sans", "Inter", "tailwind.config.js"],
+      ["display", "Fraunces", "web/tailwind.config.js"],
+    ],
+  );
+});
+
 test("long runs of spaces in a value are read in one pass by every parser", () => {
   const spaces = " ".repeat(200_000);
   const files = [

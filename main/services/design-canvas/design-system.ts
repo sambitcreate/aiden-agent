@@ -278,7 +278,8 @@ function readLiteral(text: string, start: number, budget: LiteralBudget, depth =
   const char = text[index];
   if (depth > 12) return { value: undefined, end: skipExpression(text, index) };
   if (char === '"' || char === "'" || char === "`") {
-    const end = stringEnd(text, index);
+    const { end, closed } = scanString(text, index);
+    if (!closed) return { value: undefined, end };
     const body = text.slice(index + 1, end - 1);
     return { value: char === "`" && body.includes("${") ? undefined : body, end };
   }
@@ -341,13 +342,27 @@ function skipSpace(text: string, index: number): number {
   return index;
 }
 
-function stringEnd(text: string, start: number): number {
+/**
+ * The end of the string literal at `start`, and whether its own quote closed
+ * it. A '…' or "…" string cannot span a line in JavaScript, so an unclosed
+ * one ends at the line break: a stray quote (in a regex literal, say) then
+ * costs one line, not the rest of the file. Only a template literal runs on
+ * across lines.
+ */
+function scanString(text: string, start: number): { end: number; closed: boolean } {
   const quote = text[start];
   for (let index = start + 1; index < text.length; index += 1) {
-    if (text[index] === "\\") index += 1;
-    else if (text[index] === quote) return index + 1;
+    const char = text[index];
+    // An escape skips the next character; a backslash before a CRLF line ending continues the line.
+    if (char === "\\") index += text.startsWith("\r\n", index + 1) ? 2 : 1;
+    else if (char === quote) return { end: index + 1, closed: true };
+    else if (quote !== "`" && (char === "\n" || char === "\r")) return { end: index, closed: false };
   }
-  return text.length;
+  return { end: text.length, closed: false };
+}
+
+function stringEnd(text: string, start: number): number {
+  return scanString(text, start).end;
 }
 
 /** The end of the expression at `start`: the next `,` or closing bracket at its own depth. */
@@ -358,6 +373,11 @@ function skipExpression(text: string, start: number): number {
     const char = text[index] as string;
     if (char === '"' || char === "'" || char === "`") {
       index = stringEnd(text, index);
+      continue;
+    }
+    // A comment is skipped whole, so a quote or bracket in it (`// we're on blue`) is not read as code.
+    if (char === "/" && (text[index + 1] === "/" || text[index + 1] === "*")) {
+      index = skipSpace(text, index);
       continue;
     }
     if ("{[(".includes(char)) depth += 1;
@@ -373,8 +393,8 @@ function skipExpression(text: string, start: number): number {
 function readKey(text: string, start: number): { name: string; end: number } | null {
   const char = text[start];
   if (char === '"' || char === "'") {
-    const end = stringEnd(text, start);
-    return { name: text.slice(start + 1, end - 1), end };
+    const { end, closed } = scanString(text, start);
+    return closed ? { name: text.slice(start + 1, end - 1), end } : null;
   }
   const match = /^[A-Za-z0-9_$]+/u.exec(text.slice(start, start + 64));
   return match ? { name: match[0], end: start + match[0].length } : null;
