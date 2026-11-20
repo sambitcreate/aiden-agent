@@ -299,6 +299,36 @@ struct AidenSplitNavigationPath: Equatable {
         return Array(path[index...])
     }
 
+    /// Collapsed to one stack, the split shows the list while the path is
+    /// empty and the detail once it holds something.
+    static func compactShowsList(_ path: [AidenAppRoute]) -> Bool {
+        path.isEmpty
+    }
+
+    /// The path after the split shows the list or the detail. Collapsed,
+    /// showing the list is Back from the detail's root, which empties the
+    /// path. Beside the list the split's writes are its own and change nothing,
+    /// and so does showing the detail, which only a chosen route does.
+    static func path(
+        _ path: [AidenAppRoute],
+        afterShowingList showsList: Bool,
+        besideList: Bool
+    ) -> [AidenAppRoute] {
+        besideList || !showsList ? path : []
+    }
+
+    /// The route the detail column draws at its root. Collapsed, Back empties
+    /// the path before the detail has slid away, so the route that was there
+    /// is drawn until another is chosen. Beside the list, nothing selected is
+    /// the empty state.
+    static func detailRoot(
+        selection: AidenAppRoute?,
+        lastSelection: AidenAppRoute?,
+        besideList: Bool
+    ) -> AidenAppRoute? {
+        selection ?? (besideList ? nil : lastSelection)
+    }
+
     /// The detail column's stack moved, by Back or a push. With nothing
     /// selected there's no detail stack, so there's nothing to change.
     mutating func setDetailPath(_ detailPath: [AidenAppRoute]) {

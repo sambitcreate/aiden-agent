@@ -369,9 +369,63 @@ extension EnvironmentValues {
     @Entry var aidenConversationMachine: String?
     /// The tab bar while a conversation is on screen. Hidden on a stack, where the
     /// composer owns the bottom edge; a list beside its detail keeps it, since
-    /// the list stays up and the tabs must stay reachable from it, and so does a
-    /// screen whose bars sit in a rail at the side (a closed iPhone Duo).
+    /// the list stays up and the tabs must stay reachable from it.
     @Entry var aidenConversationTabBar: Visibility = .hidden
+    /// Whether the system puts its bars in a rail at the side, as on a closed
+    /// iPhone Duo. Set once by the shell, above every tab's stack.
+    @Entry var aidenTabsInSideRail = false
+    /// The conversations on screen, set once by the shell.
+    @Entry var aidenConversationsOnScreen: AidenConversationsOnScreen?
+}
+
+/// The conversations on screen, including ones a list pushes by view rather
+/// than by route (a workspace's chats), which the navigation paths don't see.
+/// The shell keeps the running accessory out from under their composers.
+@MainActor @Observable
+final class AidenConversationsOnScreen {
+    private var shown: Set<UUID> = []
+
+    var isEmpty: Bool { shown.isEmpty }
+
+    func show(_ id: UUID) { shown.insert(id) }
+    func hide(_ id: UUID) { shown.remove(id) }
+}
+
+extension View {
+    /// Counts this screen as a conversation while it's on screen.
+    func aidenConversationOnScreen() -> some View {
+        modifier(AidenConversationOnScreenModifier())
+    }
+}
+
+private struct AidenConversationOnScreenModifier: ViewModifier {
+    @Environment(\.aidenConversationsOnScreen) private var conversations
+    @State private var id = UUID()
+
+    func body(content: Content) -> some View {
+        content
+            .onAppear { conversations?.show(id) }
+            .onDisappear { conversations?.hide(id) }
+    }
+}
+
+extension View {
+    /// Shows or hides the tab bar for a conversation, as
+    /// `aidenConversationTabBar` says. Where the bars sit in a side rail the
+    /// tabs stay: they cover nothing there, and with them hidden the rail
+    /// turns opaque white or black instead of showing the canvas under it.
+    func aidenConversationTabBar() -> some View {
+        modifier(AidenConversationTabBarModifier())
+    }
+}
+
+private struct AidenConversationTabBarModifier: ViewModifier {
+    @Environment(\.aidenConversationTabBar) private var tabBar
+    @Environment(\.aidenTabsInSideRail) private var tabsInSideRail
+
+    func body(content: Content) -> some View {
+        content.toolbar(tabsInSideRail ? .automatic : tabBar, for: .tabBar)
+    }
 }
 
 /// Tiles in rows: as many columns at least `minimumWidth` wide as fit, sharing the

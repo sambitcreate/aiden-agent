@@ -290,6 +290,41 @@ final class AidenAppShellTests: XCTestCase {
         XCTAssertEqual(split.path, [.chat(id("c1")), .machines])
     }
 
+    /// Collapsed, Back from a chat shows the list and empties the path; a
+    /// deeper Back is the detail stack's own and leaves the list hidden.
+    func testCollapsedBackToTheListEmptiesThePath() {
+        let path: [AidenAppRoute] = [.chat(id("c1")), .settings]
+
+        XCTAssertFalse(AidenSplitNavigationPath.compactShowsList(path))
+        let back = AidenSplitNavigationPath.path(path, afterShowingList: true, besideList: false)
+        XCTAssertEqual(back, [])
+        XCTAssertTrue(AidenSplitNavigationPath.compactShowsList(back))
+
+        XCTAssertEqual(AidenSplitNavigationPath.path(path, afterShowingList: false, besideList: false), path)
+    }
+
+    /// Beside the list the split reports its columns as it lays them out,
+    /// as when the display opens; that's no Back, so the chat stays.
+    func testColumnWritesBesideTheListKeepThePath() {
+        let path: [AidenAppRoute] = [.chat(id("c1"))]
+
+        XCTAssertEqual(AidenSplitNavigationPath.path(path, afterShowingList: true, besideList: true), path)
+        XCTAssertEqual(AidenSplitNavigationPath.path(path, afterShowingList: false, besideList: true), path)
+    }
+
+    /// Collapsed, the chat leaving by Back stays drawn as it slides out, and
+    /// a newly chosen one replaces it at once. Beside the list nothing
+    /// selected is the empty state, never a stale chat.
+    func testTheDetailRootKeepsTheOutgoingChatOnlyWhileCollapsed() {
+        let old = AidenAppRoute.chat(id("c1"))
+        let new = AidenAppRoute.chat(id("c2"))
+
+        XCTAssertEqual(AidenSplitNavigationPath.detailRoot(selection: nil, lastSelection: old, besideList: false), old)
+        XCTAssertEqual(AidenSplitNavigationPath.detailRoot(selection: new, lastSelection: old, besideList: false), new)
+        XCTAssertNil(AidenSplitNavigationPath.detailRoot(selection: nil, lastSelection: old, besideList: true))
+        XCTAssertEqual(AidenSplitNavigationPath.detailRoot(selection: new, lastSelection: old, besideList: true), new)
+    }
+
     /// No row chosen means the detail shows its empty state and has no stack.
     func testWithNothingSelectedTheDetailPushesNothing() {
         var split = AidenSplitNavigationPath([])
