@@ -381,6 +381,7 @@
         "main/services/artificial-analysis-catalog-core.test.ts",
         "main/services/anthropic-provider.test.ts",
         "main/services/appearance-preview-core.test.ts",
+        "main/services/dock-icon.test.ts",
         "main/services/concentrate-provider.test.ts",
         "main/services/google-provider.test.ts",
         "main/services/legacy-pi-credential-migration-core.test.ts",
