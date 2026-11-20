@@ -271,6 +271,7 @@ struct AidenForkableChatDetailView: View {
     /// List bookkeeping for a fork that just opened; navigation happens here.
     var onForkOpened: @MainActor (AidenChat) -> Void = { _ in }
     @State private var trail = AidenChatForkTrail()
+    @Environment(\.aidenConversationTabBar) private var tabBar
 
     var body: some View {
         AidenChatForkLevel(
@@ -285,7 +286,7 @@ struct AidenForkableChatDetailView: View {
             onForkOpened: onForkOpened
         )
         // The composer owns the bottom edge, whichever list pushed this chat.
-        .toolbar(.hidden, for: .tabBar)
+        .toolbar(tabBar, for: .tabBar)
     }
 }
 
@@ -301,6 +302,7 @@ private struct AidenChatForkLevel: View {
     let onChatUpdated: @MainActor (AidenChat) -> Void
     let onChatActivityChanged: @MainActor (String, AidenChatSummaryActivity) -> Void
     let onForkOpened: @MainActor (AidenChat) -> Void
+    @Environment(\.aidenConversationTabBar) private var tabBar
 
     var body: some View {
         AidenChatDetailView(
@@ -335,7 +337,7 @@ private struct AidenChatForkLevel: View {
                     onChatActivityChanged: onChatActivityChanged,
                     onForkOpened: onForkOpened
                 )
-                .toolbar(.hidden, for: .tabBar)
+                .toolbar(tabBar, for: .tabBar)
             }
         }
     }

@@ -96,6 +96,7 @@ struct AidenAppShellView: View {
 
     @Environment(AidenAppearanceStore.self) private var appearance
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    @Environment(\.aidenPalette) private var palette
     /// The navigation and compose flow, made on the shell's first draw. `init`
     /// runs on every ContentView render and `State` keeps only its first value,
     /// so building them there read and decoded the saved navigation each time.
@@ -182,21 +183,17 @@ struct AidenAppShellView: View {
     var body: some View {
         TabView(selection: Bindable(navigation).tab) {
             Tab("Inbox", systemImage: "tray", value: AidenAppTab.inbox) {
-                NavigationStack(path: Bindable(navigation).inboxPath) {
-                    AidenInboxTabRootView(
-                        store: inboxStore,
-                        runningHome: runningHome,
-                        onOpen: openRow,
-                        onDelete: deleteChat,
-                        onOpenMachines: { navigation.open(.machines) },
-                        onCatchUp: { markViewed(navigation.startCatchUp(in: catchUpQueue)) },
-                        onShowRunning: { showsRunningChats = true }
-                    )
-                    .safeAreaInset(edge: .top, spacing: 0) {
-                        AidenConnectionNotice(coordinator: coordinator)
+                if showsInboxBesideDetail {
+                    NavigationSplitView {
+                        inboxList(selection: AidenSplitNavigationPath(navigation.inboxPath).selection)
+                    } detail: {
+                        inboxDetail
                     }
-                    .toolbar { inboxToolbar }
-                    .navigationDestination(for: AidenAppRoute.self, destination: destination)
+                } else {
+                    NavigationStack(path: Bindable(navigation).inboxPath) {
+                        inboxList(selection: nil)
+                            .navigationDestination(for: AidenAppRoute.self, destination: destination)
+                    }
                 }
             }
             .badge(inboxStore.needsYouCount)
@@ -310,6 +307,65 @@ struct AidenAppShellView: View {
         }
     }
 
+    /// Regular width puts the Inbox list beside the chat it opened, as on an
+    /// iPhone Duo's inner display or an iPad. Compact width keeps one stack.
+    private var showsInboxBesideDetail: Bool {
+        horizontalSizeClass == .regular
+    }
+
+    /// The Inbox list with its banner and toolbar. `selection` is the row the
+    /// detail beside it shows.
+    private func inboxList(selection: AidenAppRoute?) -> some View {
+        AidenInboxTabRootView(
+            store: inboxStore,
+            runningHome: runningHome,
+            onOpen: openRow,
+            onDelete: deleteChat,
+            onOpenMachines: { navigation.open(.machines) },
+            onCatchUp: {
+                markViewed(navigation.startCatchUp(in: catchUpQueue, besideList: showsInboxBesideDetail))
+            },
+            onShowRunning: { showsRunningChats = true },
+            selection: selection
+        )
+        .safeAreaInset(edge: .top, spacing: 0) {
+            AidenConnectionNotice(coordinator: coordinator)
+        }
+        .toolbar { inboxToolbar }
+    }
+
+    /// The detail column: the selected route at the root of its own stack, and
+    /// the rest of the Inbox path pushed over it.
+    private var inboxDetail: some View {
+        let selection = AidenSplitNavigationPath(navigation.inboxPath).selection
+        return NavigationStack(path: Binding(
+            get: { AidenSplitNavigationPath(navigation.inboxPath).detailPath },
+            set: { detailPath in
+                var split = AidenSplitNavigationPath(navigation.inboxPath)
+                split.setDetailPath(detailPath)
+                if split.path != navigation.inboxPath { navigation.inboxPath = split.path }
+            }
+        )) {
+            Group {
+                if let selection {
+                    destination(for: selection)
+                        // Another row is another screen, not this one updated.
+                        .id(selection)
+                } else {
+                    ContentUnavailableView(
+                        "No chat selected",
+                        systemImage: "bubble.left.and.bubble.right",
+                        description: Text("Pick a chat from the Inbox.")
+                    )
+                    .background(palette.canvas.ignoresSafeArea())
+                }
+            }
+            .navigationDestination(for: AidenAppRoute.self, destination: destination)
+        }
+        // The list stays up beside a conversation, and the tabs with it.
+        .environment(\.aidenConversationTabBar, .automatic)
+    }
+
     private func deleteChat(_ id: AidenHostObjectID) {
         navigation.leave(.chat(id))
         Task {
@@ -412,7 +468,11 @@ struct AidenAppShellView: View {
     /// An Inbox row: its chat, or its Bot, on the Inbox stack.
     private func openRow(_ route: AidenAppRoute) {
         if case .chat(let id) = route { markViewed(id) }
-        navigation.openInboxRow(route)
+        if showsInboxBesideDetail {
+            navigation.selectInboxRow(route)
+        } else {
+            navigation.openInboxRow(route)
+        }
     }
 
     private func nextInCatchUp() {
@@ -552,6 +612,7 @@ private struct AidenChatRouteView: View {
     @State private var model: AidenChatRouteModel
     @State private var holdsAttachments = false
     @State private var isConfirmingNext = false
+    @Environment(\.aidenConversationTabBar) private var tabBar
 
     init(
         coordinator: AidenRemoteCoordinator,
@@ -600,7 +661,7 @@ private struct AidenChatRouteView: View {
                 )
             }
         }
-        .toolbar(.hidden, for: .tabBar)
+        .toolbar(tabBar, for: .tabBar)
         .toolbar {
             if let onNext {
                 ToolbarItem(placement: .topBarTrailing) {

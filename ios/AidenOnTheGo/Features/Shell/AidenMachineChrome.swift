@@ -367,6 +367,10 @@ struct AidenHostStatusItem: View {
 extension EnvironmentValues {
     /// The name a conversation's toolbar shows under its title. Nil says nothing.
     @Entry var aidenConversationMachine: String?
+    /// The tab bar while a conversation is on screen. Hidden on a stack, where the
+    /// composer owns the bottom edge; a list beside its detail keeps it, since
+    /// the list stays up and the tabs must stay reachable from it.
+    @Entry var aidenConversationTabBar: Visibility = .hidden
 }
 
 /// Tiles in rows: as many columns at least `minimumWidth` wide as fit, sharing the

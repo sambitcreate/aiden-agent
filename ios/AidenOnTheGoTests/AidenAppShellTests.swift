@@ -217,6 +217,108 @@ final class AidenAppShellTests: XCTestCase {
         XCTAssertEqual(navigation.inboxPath, [.scheduled])
     }
 
+    // MARK: List beside detail
+
+    func testTheFirstRouteIsTheSelectionAndTheRestIsTheDetail() {
+        let split = AidenSplitNavigationPath([.chat(id("c1")), .settings, .usage])
+
+        XCTAssertEqual(split.selection, .chat(id("c1")))
+        XCTAssertEqual(split.detailPath, [.settings, .usage])
+
+        let empty = AidenSplitNavigationPath([])
+        XCTAssertNil(empty.selection)
+        XCTAssertEqual(empty.detailPath, [])
+    }
+
+    func testChoosingAnotherRowStartsTheDetailOverOnIt() {
+        var split = AidenSplitNavigationPath([.chat(id("c1")), .settings])
+
+        split.select(.chat(id("c2")))
+        XCTAssertEqual(split.path, [.chat(id("c2"))])
+
+        split.select(nil)
+        XCTAssertEqual(split.path, [])
+    }
+
+    func testBackInTheDetailKeepsTheSelection() {
+        var split = AidenSplitNavigationPath([.chat(id("c1")), .settings, .usage])
+
+        split.setDetailPath([.settings])
+        XCTAssertEqual(split.path, [.chat(id("c1")), .settings])
+        split.setDetailPath([])
+        XCTAssertEqual(split.path, [.chat(id("c1"))])
+        split.setDetailPath([.machines])
+        XCTAssertEqual(split.path, [.chat(id("c1")), .machines])
+    }
+
+    /// No row chosen means the detail shows its empty state and has no stack.
+    func testWithNothingSelectedTheDetailPushesNothing() {
+        var split = AidenSplitNavigationPath([])
+
+        split.setDetailPath([.settings])
+
+        XCTAssertEqual(split.path, [])
+    }
+
+    /// A row tapped beside the detail replaces what the detail showed instead
+    /// of stacking a second chat, from any tab, and drops a pending voice start.
+    func testARowChosenBesideTheDetailReplacesTheInboxPath() {
+        let navigation = AidenAppNavigation()
+        navigation.open(.chat(id("c1")), startsVoice: true)
+        navigation.open(.settings)
+        navigation.tab = .bots
+
+        navigation.selectInboxRow(.chat(id("c2")))
+
+        XCTAssertEqual(navigation.tab, .inbox)
+        XCTAssertEqual(navigation.inboxPath, [.chat(id("c2"))])
+        XCTAssertEqual(navigation.openChat, id("c2"))
+        XCTAssertNil(navigation.chatStartingVoice)
+
+        navigation.selectInboxRow(.bot(id("b1")))
+        XCTAssertEqual(navigation.inboxPath, [.bot(id("b1"))])
+        XCTAssertTrue(navigation.showsConversation)
+    }
+
+    /// The menu, links and Delete keep their stack rules, and the split reads
+    /// the result: a page opened from the menu goes over the chosen chat, and
+    /// deleting the chosen chat empties the detail.
+    func testTheStackRulesStillHoldBesideTheList() {
+        let navigation = AidenAppNavigation()
+        navigation.selectInboxRow(.chat(id("c1")))
+
+        navigation.open(.settings)
+        XCTAssertEqual(AidenSplitNavigationPath(navigation.inboxPath).selection, .chat(id("c1")))
+        XCTAssertEqual(AidenSplitNavigationPath(navigation.inboxPath).detailPath, [.settings])
+
+        navigation.open(.chat(id("c1")))
+        XCTAssertEqual(navigation.inboxPath, [.chat(id("c1"))], "Going back to the chosen chat pops the detail")
+
+        navigation.replace(.chat(id("c1")), with: .chat(id("c3")))
+        XCTAssertEqual(AidenSplitNavigationPath(navigation.inboxPath).selection, .chat(id("c3")))
+
+        navigation.leave(.chat(id("c3")))
+        XCTAssertNil(AidenSplitNavigationPath(navigation.inboxPath).selection)
+    }
+
+    /// The width only changes how the path is drawn, so a restored path, or one
+    /// trimmed for a forgotten machine, keeps its selection.
+    func testARestoredInboxPathKeepsItsSelection() {
+        let store = AidenAppNavigationStore(defaults: AidenDemoHosts.isolatedDefaults())
+        let navigation = AidenAppNavigation()
+        navigation.selectInboxRow(.chat(id("c1")))
+        navigation.open(.machine(instanceId: "laptop"))
+        store.save(navigation.snapshot)
+
+        let restored = AidenAppNavigation(restoring: store.load(), installations: [studio, laptop])
+        XCTAssertEqual(AidenSplitNavigationPath(restored.inboxPath).selection, .chat(id("c1")))
+        XCTAssertEqual(AidenSplitNavigationPath(restored.inboxPath).detailPath, [.machine(instanceId: "laptop")])
+
+        restored.dropRoutes(outside: [studio])
+        XCTAssertEqual(AidenSplitNavigationPath(restored.inboxPath).selection, .chat(id("c1")))
+        XCTAssertEqual(AidenSplitNavigationPath(restored.inboxPath).detailPath, [])
+    }
+
     // MARK: Restoration
 
     func testNavigationRoundTripsThroughTheStore() {

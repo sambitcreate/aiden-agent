@@ -347,6 +347,7 @@ struct AidenBotRouteView: View {
     let onNext: (() -> Void)?
 
     @Environment(\.aidenPalette) private var palette
+    @Environment(\.aidenConversationTabBar) private var tabBar
     @State private var model: AidenBotRouteModel
     @State private var holdsAttachments = false
     @State private var isConfirmingNext = false
@@ -435,7 +436,7 @@ struct AidenBotRouteView: View {
                 .background(palette.canvas.ignoresSafeArea())
             }
         }
-        .toolbar(.hidden, for: .tabBar)
+        .toolbar(tabBar, for: .tabBar)
         .toolbar {
             if let onNext {
                 ToolbarItem(placement: .topBarTrailing) {

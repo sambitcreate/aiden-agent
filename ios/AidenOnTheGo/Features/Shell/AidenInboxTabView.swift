@@ -43,6 +43,9 @@ struct AidenInboxTabView: View {
     var onReconnect: (String) -> Void = { _ in }
     var onCatchUp: () -> Void = {}
     var onShowRunning: () -> Void = {}
+    /// The route the detail beside the list shows, so its row reads as chosen.
+    /// Nil on a stack, where the list is never beside a chat.
+    var selection: AidenAppRoute? = nil
 
     @Environment(\.aidenPalette) private var palette
     @State private var snoozeCandidate: AidenHostObjectID?
@@ -144,6 +147,7 @@ struct AidenInboxTabView: View {
                 isPinned: row.isPinned,
                 machine: roster.rowChip(for: row.id.instanceId, filter: filter.wrappedValue),
                 isDimmed: roster.isOffline(row.id.instanceId),
+                isSelected: selection == row.route,
                 open: { onOpen(row.route) }
             )
             .contextMenu { contextMenu(for: row, actions: actions) }
@@ -163,9 +167,10 @@ struct AidenInboxTabView: View {
                 )
             }
             .buttonStyle(.plain)
+            .accessibilityAddTraits(selection == row.route ? .isSelected : [])
             .listRowInsets(EdgeInsets(top: 0, leading: 12, bottom: 0, trailing: 12))
             .listRowSeparator(.hidden)
-            .listRowBackground(palette.canvas)
+            .listRowBackground(AidenInboxRowBackground(isSelected: selection == row.route, palette: palette))
         }
     }
 
@@ -389,6 +394,7 @@ struct AidenInboxTabRootView: View {
     var onOpenMachines: () -> Void = {}
     var onCatchUp: () -> Void = {}
     var onShowRunning: () -> Void = {}
+    var selection: AidenAppRoute? = nil
 
     @Environment(\.accessibilityVoiceOverEnabled) private var voiceOverEnabled
     @Environment(\.aidenPalette) private var palette
@@ -416,7 +422,8 @@ struct AidenInboxTabRootView: View {
             onDelete: onDelete,
             onReconnect: { store.reconnect($0) },
             onCatchUp: onCatchUp,
-            onShowRunning: onShowRunning
+            onShowRunning: onShowRunning,
+            selection: selection
         )
         .navigationTitle("Inbox")
         .toolbar {

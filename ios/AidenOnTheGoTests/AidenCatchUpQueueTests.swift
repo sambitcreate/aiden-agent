@@ -235,6 +235,41 @@ final class AidenCatchUpQueueTests: XCTestCase {
         XCTAssertEqual(navigation.catchUp?.current, oldest)
     }
 
+    /// Beside the list, a run replaces the chosen chat and every Next moves the
+    /// selection, so the highlighted row is always the chat on screen.
+    func testCatchUpBesideTheListMovesTheSelection() {
+        let navigation = AidenAppNavigation()
+        let other = F.id("other", on: "studio")
+        navigation.selectInboxRow(.chat(other))
+        navigation.open(.settings)
+
+        XCTAssertEqual(navigation.startCatchUp(in: queue(), besideList: true), oldest)
+        XCTAssertEqual(navigation.inboxPath, [.chat(oldest)])
+        XCTAssertEqual(navigation.catchUp?.current, oldest)
+
+        XCTAssertEqual(navigation.advanceCatchUp(in: queue()), middle)
+        XCTAssertEqual(AidenSplitNavigationPath(navigation.inboxPath).selection, .chat(middle))
+        XCTAssertEqual(AidenSplitNavigationPath(navigation.inboxPath).detailPath, [])
+        XCTAssertEqual(navigation.catchUp?.current, middle)
+
+        XCTAssertNil(navigation.advanceCatchUp(in: queue(studio: ["oldest"], laptop: ["middle"])))
+        XCTAssertEqual(
+            AidenSplitNavigationPath(navigation.inboxPath).selection,
+            .catchUpFinished(AidenCatchUpEnding(walked: true, unreached: 0))
+        )
+    }
+
+    /// Choosing another row mid-run is leaving the run.
+    func testChoosingAnotherRowEndsTheRun() {
+        let navigation = AidenAppNavigation()
+        XCTAssertEqual(navigation.startCatchUp(in: queue(), besideList: true), oldest)
+
+        navigation.selectInboxRow(.chat(newest))
+
+        XCTAssertNil(navigation.catchUp)
+        XCTAssertEqual(navigation.inboxPath, [.chat(newest)])
+    }
+
     func testNextReplacesTheChatSoBackReturnsToTheInbox() {
         let navigation = openedRun()
 

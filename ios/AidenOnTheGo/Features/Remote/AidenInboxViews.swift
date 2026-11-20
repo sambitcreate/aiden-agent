@@ -412,6 +412,8 @@ struct AidenInboxListRow: View {
     var isPinned = false
     var machine: AidenMachineLabel?
     var isDimmed = false
+    /// The row whose chat the detail beside the list shows.
+    var isSelected = false
     let open: () -> Void
 
     var body: some View {
@@ -454,9 +456,27 @@ struct AidenInboxListRow: View {
             if let done = actions.done { Button(actions.doneLabel, action: done) }
             if let snooze = actions.snooze { Button(actions.snoozeLabel, action: snooze) }
         }
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
         .listRowInsets(EdgeInsets(top: 0, leading: 12, bottom: 0, trailing: 12))
         .listRowSeparator(.hidden)
-        .listRowBackground(palette.canvas)
+        .listRowBackground(AidenInboxRowBackground(isSelected: isSelected, palette: palette))
+    }
+}
+
+/// An Inbox row's ground: the canvas, with a soft raised fill under the row
+/// the detail beside the list is showing. No border: the fill is the selection.
+struct AidenInboxRowBackground: View {
+    let isSelected: Bool
+    let palette: AidenPalette
+
+    var body: some View {
+        palette.canvas.overlay {
+            if isSelected {
+                RoundedRectangle(cornerRadius: AidenRadius.code, style: .continuous)
+                    .fill(palette.raised)
+                    .padding(.horizontal, AidenSpacing.xs)
+            }
+        }
     }
 }
 
