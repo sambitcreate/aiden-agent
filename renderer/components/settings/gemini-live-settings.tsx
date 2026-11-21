@@ -41,7 +41,7 @@ function StateBadge({
 
 type AidenLiveSwitchPatch = Pick<AppSettings, "aidenLiveEnabled" | "aidenLiveButtonVisible">;
 
-/** The on/off switches. "Show Live button" exists only while Live is on. */
+/** The on/off switches. "Show Live in the send button" exists only while Live is on. */
 export function AidenLiveSwitches({
   enabled,
   buttonVisible,
@@ -65,11 +65,11 @@ export function AidenLiveSwitches({
       </Field>
       {enabled ? (
         <Field
-          label="Show Live button"
-          description="Show the Live button in the window corner. The shortcut still works when it’s hidden."
+          label="Show Live in the send button"
+          description="When the message box is empty, the send button starts Live. The shortcut still works when this is off."
         >
           <Switch
-            aria-label="Show Live button"
+            aria-label="Show Live in the send button"
             checked={buttonVisible}
             disabled={disabled}
             onCheckedChange={(checked) => onChange({ aidenLiveButtonVisible: checked })}

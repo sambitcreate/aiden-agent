@@ -1,6 +1,7 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import {
+  composerPrimaryButton,
   expect,
   expectSquircleButtons,
   finishLmStudioOnboarding,
@@ -373,7 +374,7 @@ test("Steer queues text guidance without stopping the active response", async ({
   await expect.poll(() => lmStudio.requests.some((request) =>
     JSON.stringify(request.body).includes("Use a shorter answer"),
   )).toBe(true);
-  await expect(page.getByRole("button", { name: "Send message" })).toBeVisible();
+  await expect(composerPrimaryButton(page)).toBeVisible();
   await expect(page.getByText("Use a shorter answer", { exact: true })).toHaveCount(1);
 });
 
@@ -412,7 +413,7 @@ test("Steer on a queued message adds it to the running response once", async ({ 
   await expect.poll(() => lmStudio.requests.some((request) =>
     lastUserText(request) === "Stay queued for later",
   )).toBe(true);
-  await expect(page.getByRole("button", { name: "Send message" })).toBeVisible();
+  await expect(composerPrimaryButton(page)).toBeVisible();
   await expect(page.getByText("Prefer bullet points", { exact: true })).toHaveCount(1);
 });
 
@@ -932,7 +933,7 @@ test("Escape in an empty composer stops the response, but not while a draft or m
   await composer.focus();
   await composer.press("Escape");
   await expect(stop).toBeHidden();
-  await expect(page.getByRole("button", { name: "Send message" })).toBeVisible();
+  await expect(composerPrimaryButton(page)).toBeVisible();
 });
 
 test("a blocked send explains itself beside the composer and clears when the draft changes", async ({

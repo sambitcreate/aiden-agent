@@ -117,9 +117,12 @@ function ReadinessRow({
 export function AssistantLiveSetupDialog({
   live,
   onOpenSettings,
+  onStart = live.start,
 }: {
   live: AssistantLiveController;
   onOpenSettings(section: "providers" | "computerUse" | "scheduledTasks"): void;
+  /** Starts the session from Start Live; defaults to `live.start`. */
+  onStart?: () => void;
 }): React.ReactElement {
   const accessibilityReady = live.computerUsePermissions?.accessibility === true;
   const screenReady = live.computerUsePermissions?.screenRecording === true;
@@ -135,7 +138,7 @@ export function AssistantLiveSetupDialog({
       allowCancelWhileBusy
       actionClassName={ASSISTANT_LIVE_FOCUS_CLASS}
       busy={live.busy}
-      onConfirm={live.start}
+      onConfirm={onStart}
     >
       <div className="gemini-live-setup-hero">
         <AidenLiveMark state={live.setupComplete ? "ready" : "connecting"} />
