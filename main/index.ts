@@ -22,6 +22,7 @@ import {
   startInboxDockBadge,
   stopInboxDockBadge,
 } from "./services/inbox-dock-badge-main.js";
+import { applyDockIcon } from "./services/dock-icon.js";
 import { chatReadMarkers } from "./services/chat-read-markers-main.js";
 import { forgetChatInboxState } from "./services/chat-application-service.js";
 import { terminalService } from "./services/terminal.js";
@@ -1476,8 +1477,7 @@ async function applyDockIconPreference(
   const icon = nativeImage.createFromPath(iconPath);
   if (icon.isEmpty())
     throw new Error(`Dock icon is unavailable: ${path.basename(iconPath)}`);
-  app.dock.setIcon(icon);
-  await app.dock.show();
+  await applyDockIcon(app.dock, icon);
   return true;
 }
 
