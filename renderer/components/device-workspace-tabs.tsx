@@ -29,6 +29,7 @@ import {
 import { deviceWorkspace, useChatDeviceTabs, useFloatingDevice } from "../lib/device-workspace-store";
 import { useDeviceServiceState } from "../lib/use-device-service-state";
 import type { DeviceServiceState } from "../shared/devices";
+import { isEscapeKey } from "../lib/dismiss-key";
 
 /** The device picker's tab label, and the launcher entry that opens it. */
 export const DEVICE_PICKER_LABEL = "Device";
@@ -179,7 +180,7 @@ export function DeviceTabRenameInput({
           event.preventDefault();
           doneRef.current = true;
           onCommit(event.currentTarget.value);
-        } else if (event.key === "Escape") {
+        } else if (isEscapeKey(event)) {
           event.preventDefault();
           doneRef.current = true;
           onCancel();

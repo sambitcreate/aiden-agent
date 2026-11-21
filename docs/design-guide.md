@@ -119,12 +119,59 @@ keeps the summary card.
 
 Aiden adopts the structural layer of the Untitled theme (`GUI.md`, `gui/`) while keeping its own radii and preset palettes:
 
-- **Motion.** Controls, menus, and popovers use `--motion-duration` (200ms) with `--motion-easing`; popovers enter from `--motion-popup-scale` (0.96). Shared buttons settle by `--motion-press-distance` (1px) while held. Tailwind exposes the curves as `ease-standard` and `ease-emphasized`. Shared dialogs keep their deliberate near-instant entrance and the sidebar keeps its 300ms width timing with the emphasized curve. Every motion is removed under Reduce Motion.
+- **Motion.** Controls, menus, and popovers use `--motion-duration` (200ms) with `--motion-easing`; popovers enter from `--motion-popup-scale` (0.96). Shared buttons settle by `--motion-press-distance` (1px) while held. Tailwind exposes the curves as `ease-standard` and `ease-emphasized`. Shared dialogs keep their deliberate near-instant entrance and the sidebar keeps its 300ms width timing with the emphasized curve. Every motion is removed under Reduce Motion. See [Motion](#motion) for the tokens, Reduce Motion and exit presence.
 - **Dialog sizes.** The shared `Dialog` is 440px by default, `large` (680px) for searchable lists, `wide` (860px) for a dialog with its own vertical tab list such as Workspace settings, and `full` for an image's full view. All cap at 85% of the window height and scroll their body.
 - **Surfaces.** Cards, sheets, popovers, and floating panels have no outline: fill and the existing elevation tokens define their edge. Inset row separators and header separators remain.
 - **Fields.** Inputs, textareas, and select triggers rest on the `--surface-input` fill with their neutral resting border; focus deepens the fill to `--surface-control`. No accent border or ring.
 - **Buttons.** Labeled buttons use roomier horizontal padding (12/16/20px for small/medium/large) at the existing heights.
 - **Type.** Text tokens follow Untitled's step ratios anchored to the UI font-size preference (at 14px: mini 10/14, small 12/16, regular 14/20, large-strong 16/24, heading1 24/32; heading2 stays 18/24).
+
+## Motion
+
+**Tokens.** Curves and durations come from the tokens in `renderer/styles.css`:
+`--motion-duration` (200ms) with `--motion-easing` for controls, menus and
+popovers, `--motion-large-duration` (360ms) with `--motion-large-easing` for
+panels, drawers and disclosure, and `--motion-decelerate-easing`
+(`cubic-bezier(0, 0, 0.2, 1)`) for hover lifts, tooltips and quick popover
+entrances. Tailwind reads them as `duration-(--motion-duration)`,
+`ease-standard` and `ease-emphasized`. A deliberately snappier step (150ms) may
+keep its own duration with a token curve. A one-off curve (activity marks shared
+with iOS and Android, the image scan, a Web Animations keyframe, which cannot
+read a CSS variable) needs a `literal-motion` allowance with its reason.
+
+**Reduce Motion follows Aiden's setting.** The appearance runtime writes
+`:root[data-reduce-motion]`, folding in the system preference only when the
+setting is System, so an explicit On or Off wins over the OS.
+
+- CSS keys reduced motion on `:root[data-reduce-motion="true"]` (or gates motion
+  on `="false"`), never on `@media (prefers-reduced-motion)` alone. The
+  `motion-reduce:` and `motion-safe:` Tailwind variants are redefined at the top
+  of `styles.css` to read the attribute.
+- Under Reduce Motion the duration tokens are 0ms, so anything timed from them,
+  including generated UI that receives `--motion-duration`, lands at once. A
+  global rule also collapses other animations and transitions to 0.001ms so their
+  end events still fire.
+- Generated UI is outside that rule: with a 0ms token its transitions never run,
+  so its `transitionend` does not fire. Guest code must not wait on it.
+- Script-driven motion (Web Animations, smooth scrolls, canvas and 3D loops, the
+  terminal cursor blink) asks `prefersReducedMotion()` from
+  `renderer/lib/appearance-runtime.ts`, or `useReduceMotion()` to re-render on
+  change, and listens for `APPEARANCE_CHANGE_EVENT` rather than a media query.
+  Only the sandboxed visual viewer, which has no settings, reads the OS query.
+
+**Presence.** An element that animates out stays mounted until its exit
+finishes, not for a fixed timer. `usePresence(present, ref)`
+(`renderer/lib/use-presence.ts`) returns `{ rendered, exiting }`: style the exit
+from `exiting` (usually `data-presence="exiting"` or `data-state="closed"`) on
+the element itself, and the hook waits for its finite animations
+(`Promise.allSettled` over `element.getAnimations()`; animations inside it do not
+hold the exit). With none, or under Reduce Motion, it unmounts before the next
+paint; infinite loops are ignored, and a timeout from the longest computed end
+covers a paused or cancelled animation. `whenAnimationsSettle(element, done)` is
+the same wait for non-React callers. `useCollapsibleBody` uses it to hide a
+collapsed disclosure body, so a cancelled transition with no `transitionend`
+still hides it, and `QuickViewSection`'s `bodyWhileOpen` then drops its
+children.
 
 ## Color, state, and accessibility
 
@@ -259,6 +306,293 @@ done") instead of stacking toasts. The toast's action (Undo, Open, Retry) is
 the shared small filled squircle button, not Sonner's inverted pill. A failed
 write puts the row back with one error toast in the host's own words, and an Undo that finds the chat
 changed elsewhere leaves it alone and says so in the toast.
+
+## Layers and Escape
+
+Everything open over the page sits on one stack in `renderer/lib/layer-stack.ts`.
+The Radix overlays in `renderer/components/ui.tsx` (Dialog, AlertDialog,
+DropdownMenu, ContextMenu, Select, Popover), the command palette and onboarding
+join it while open and keep handling their own Escape.
+
+- A custom surface that Escape closes calls `useLayer(open, kind, { onEscape })`
+  instead of adding its own document or window keydown listener. `onEscape` runs
+  only for an unhandled, non-composing Escape while nothing covers the layer,
+  and calls `preventDefault()` when it acted. Kinds: `sheet` for an overlay
+  over the page (the compact sidebar), `panel` for a docked surface (Quick View
+  and tools, the Bot panel). Layers stack in tiers whatever order they opened
+  in: panels, then sheets, then dialogs, menus and popovers. Within a tier the
+  newer layer is on top, except that panels never cover each other, so focus
+  decides which panel closes. A layer nested in another that opens in the same
+  render joins first (React runs layout effects child first) and sits below its
+  parent; open nested layers one after the other.
+- To ask whether a dialog, menu or popover is open, use `hasOpenLayer(...)` or a
+  handle's `isTop()`. Never search the DOM for `[data-state="open"]` overlays.
+- Escape handlers use `renderer/lib/dismiss-key.ts`. `isDismissKey(event)` is an
+  Escape that nothing nearer the focus handled and that does not end an input
+  method's composition; use it for listeners that compete for Escape.
+  `isEscapeKey(event)` drops only the composition check, for a field's own
+  `onKeyDown` that must act even though the Radix layer around it already
+  handled the key (Radix listens on the document in the capture phase).
+- An Escape that ends a composition keeps a Dialog, AlertDialog, Popover or the
+  command palette open; wrap new Radix `onEscapeKeyDown` handlers in
+  `keepOpenWhileComposing` from `ui.tsx`. A DropdownMenu, ContextMenu or Select
+  that holds a text field must pass its `onEscapeKeyDown` through
+  `keepOpenWhileComposing` too; their shared content components do not.
+
+## Focus return
+
+Put focus back after a close with `returnFocus(candidates, options)` from
+`renderer/lib/focus-return.ts`, never a bare `element.focus()`. The element to
+return to can be gone by then (a deleted row, a menu item, a toggle the layout
+hid). Each candidate (an element or a function that finds one) gets a turn in
+order; one that is disconnected, `[hidden]`, under `display: none` or `inert`,
+or disabled is skipped, and one counts only if focus really landed on it. After
+the candidates come the message box's focus-region entry (`region`, or `null`
+for none) and `[data-app-focus-root]`, but only while focus is lost: on the
+page, or still inside the `closing` surface. Focus the app already moved
+elsewhere stays there. Candidates under `aria-hidden="true"` are skipped too.
+
+- Dialog and AlertDialog already do this on close: their `returnFocus` prop
+  first, then whatever had focus when they opened, then the fallbacks.
+- Tooltips share one provider at the root: 300 ms before the first opens, then
+  a 400 ms window in which the next opens at once. Set no per-tooltip delay.
+- A tooltip does not open when `returnFocus` puts focus back on its trigger;
+  Radix Tooltip would otherwise open on any focus, programmatic or not.
+
+## Search and highlight
+
+Pickers and palettes match with `renderer/lib/text-match.ts`, not cmdk's filter
+(pass `shouldFilter={false}` and render the ranked rows in order).
+
+- `matchItem(title, keywords, query)` ignores case and accents and ranks a
+  match at the start above one at a word start, above one anywhere, then word
+  initials ("gp" finds Git push), then letters in order. `rankMatches` keeps
+  input order for equal scores, and an empty query shows everything in order.
+- Only the title a row shows is highlighted. Put other searchable text, like a
+  provider name or a folder path, in `keywords`: it matches but is never
+  marked. Never put dates or timestamps in keywords; a day number would match
+  everything from that month.
+- Render the title with `<MatchText text ranges />`: the matched part is a
+  `<mark>` in the `text-match` color (`--text-match`), with no fill or border.
+- Announce the count in a polite live region about 500 ms after typing pauses,
+  silent for an empty query (`useDebouncedAnnouncement`, `resultCountMessage`).
+- Keep the active row visible with `revealInList` from
+  `renderer/lib/reveal-in-list.ts`, never `scrollIntoView`, which can scroll
+  the page or the dialog around the list.
+
+### Long lists
+
+cmdk registers every mounted item and walks them all on each arrow key, so a
+list that can reach hundreds of rows (the model picker's List, the palette's
+chats) renders one page and a **Show N more** row, through
+`renderer/lib/list-limit.ts`.
+
+- Rank everything, then cap what renders: `limitRows(sections, limit, keep)`
+  keeps sections (Pinned, Recent, the rest) in order, and `keep` holds a later
+  row in its place (the model picker keeps the current and the highlighted
+  model, so cmdk can select it and Enter chooses it). `useListLimit(page,
+  resetKey)` goes back to one page whenever the query, mode or opening
+  changes, including back to an earlier key.
+- Show more is an ordinary option, so arrows, Enter and a click reach it and a
+  screen reader counts it. Its name is `showMoreLabel(...).label` ("Show 50
+  more, 950 not shown"). Pressing it selects the first row it revealed, in
+  its place, and keeps the list open. Keep it mounted, hidden and disabled,
+  after the last page (`grown`), or cmdk jumps to the first row.
+- The live count names every match, not just the rendered page.
+- An option holds no focusable control (axe `nested-interactive`). A row's
+  secondary actions are `aria-hidden` mouse targets with a `title`, and the
+  keyboard gets a shortcut on the highlighted row, named in its description
+  and `aria-keyshortcuts` (the model picker: ⇧⌘P pins, ⇧⌘A adds to the Pad).
+
+## Accessibility gate
+
+`tests/e2e/accessibility.spec.ts` opens Aiden's core surfaces (the chat window and composer, the model picker, the command palette, a confirm dialog, Settings) and runs axe with the WCAG 2.x A and AA tags through `auditAccessibility` in `tests/e2e/axe-gate.ts`. Each surface also gets one small `toMatchAriaSnapshot`. To add a surface, open it in a new `test.step`, call `auditAccessibility(page, { surface, include })` with its root selector, and snapshot only its stable structure: roles, names and states, with no model lists, dates or platform shortcut text. Fix violations in the component. When a fix is out of scope, add an `AXE_EXCLUSIONS` entry keyed by surface, rule id and target selector, with a reason. An entry that stops matching fails the gate until it is deleted, so the list only shrinks.
+
+## Component sink
+
+`npm run dev:sink` starts the renderer dev server on port 4144 and opens
+`component-sink.html`. While `npm run dev` is running, the same page is at
+`http://127.0.0.1:4143/component-sink.html`. It is a plain browser page with no
+preload, so only the shared primitives work there, not anything that calls IPC.
+It shows every shared primitive from `ui.tsx`, `ui-primitives.tsx`,
+`ui-info-hint.tsx` and `settings/settings-page.tsx` in its states: button
+variants at rest, disabled and loading; inputs empty, filled, disabled and
+invalid; switches, checkboxes, radios and sliders; badges and status fills;
+tooltips, menus, popovers and dialogs behind trigger buttons; and Settings
+groups, rows and folds. The toolbar picks a theme preset and Light or Dark and
+applies them with `applyAppearanceConfig`, as the app does, then puts the
+app's cached appearance back.
+
+The page exists only in development. `vite.config.ts` does not list it as a
+build input, and nothing in the app links to it, so the packaged renderer
+contains none of it. `renderer/component-sink/component-sink.test.tsx` fails
+when one of those four modules exports a component that no case's `data-sink`
+names. Add a case for a new primitive, or a reason in the test's `NOT_IN_SINK`.
+
+## Reordering
+
+A list people can reorder uses `renderer/lib/reorder-draft.ts` (Quick View's
+cards, the design side panel's Layers).
+
+- Keyboard: each item has a grip button (`Move <name>`). Space or Enter picks
+  the item up, ArrowUp and ArrowDown (Left and Right in a horizontal list,
+  swapped right to left) and Home and End move it in a draft, and Space or
+  Enter drops it. Escape, or focus leaving the grip, puts it back where it was.
+  `useReorderDraft` keeps the order in the draft and calls `onCommit` once per
+  drop that changed it, so one drop is one save and one undo step. Lay the list
+  out with `arrangeByDraft` while an item is held. Focus stays on the moved
+  item's grip.
+- Every step is announced through one `ReorderAnnouncer` (an assertive live
+  region) rendered outside the keyed items: "Picked up X, position 2 of 7.",
+  "X, position 3 of 7.", "Dropped X at position 3 of 7.", "Moved X back to
+  position 2 of 7."
+- Pointer: `usePointerReorder` starts a drag only after 3px of travel, marks
+  the landing spot in the list (no browser drag ghost), scrolls the list within
+  48px of its edges (up to 18px a frame), cancels on Escape and commits once on
+  release. Quick View keeps its own grip drag, which slides the other cards.
+- A documented shortcut that already moves an item at once (Layers' `⌥↑` and
+  `⌥↓`) stays as an alias.
+
+## Resize handles
+
+A divider that resizes one panel along one axis uses `useResizeHandle` from
+`renderer/lib/use-resize-handle.ts` and spreads its props on the
+`role="separator"` element, adding only `aria-label` and the line's classes.
+The sidebar, the workbench panels (Environment and Bot), the design chat
+column and the terminal drawer use it. The panel keeps its own size state,
+bounds and saving: `onResize` gets the size while a pointer drags and
+`onCommit` the settled one, both clamped to `min` and `max`.
+
+- `orientation` is the divider's own: `vertical` between columns (a width),
+  `horizontal` between rows (a height). `panel` says whether the sized panel
+  is before the divider (`start`) or after it (`end`); arrows and drags then
+  move the divider the way they point, and right-to-left text flips the
+  horizontal direction.
+- A press resizes only after it moves 3px along the divider's axis, so a click
+  never does. A press with Shift, Alt, Control or Meta, a button other than the
+  primary one, or a second pointer is ignored. The pointer is captured, and the
+  page keeps the resize cursor while the drag lasts. A mouse press never
+  focuses the divider, so Enter after a drag still reaches the message box
+  instead of collapsing the panel; `Tab` still focuses it.
+- Arrows step 16px, Shift with an arrow 40px, Home and End jump to `min` and
+  `max`. Alt, Control and Meta with a key are left to the system. Enter calls
+  `onToggleCollapse` when the panel can collapse; that callback puts focus
+  somewhere visible, since the divider hides with the panel.
+- Draw the focused line with `focus-visible:before:bg-focus-ring`, the neutral
+  focus token; the global separator outline stays.
+- Two-dimensional handles (the floating browser's edges and corners, the
+  browser viewport's) and the device mini player's edges are not dividers and
+  keep their own code.
+
+## Mentions
+
+The composer's `@` picker (`renderer/lib/composer-mentions.ts`,
+`renderer/components/composer-mention-picker.tsx`) names files and folders of
+the chat's workspace. It is offered only in a local workspace chat with folder
+access, and reads the Files panel's bounded index (`workspaces:files`) only
+once a mention starts.
+
+- `@` opens it at the start of the text, after whitespace, or after an opening
+  bracket or quote, never mid-word (an email address stays text). The query is
+  path characters up to the caret; a space or a new line ends it. The
+  full-width `＠` counts.
+- The textarea keeps focus and owns the listbox through `aria-controls` and
+  `aria-activedescendant`. ↑/↓ move, Enter or Tab picks, and composing keys
+  (`isComposingKey`) never move or pick. Escape closes it through the layer
+  stack (`useLayer("popover")`) and the text stays; typing on in that token
+  keeps it closed until the `@` is deleted or the box is focused again.
+- Rows rank with `rankMatches` (the name is the title and is marked with
+  `MatchText`, the path is a keyword) and scroll with `revealInList`.
+- A pick takes the typed `@query` out of the text and becomes a chip above it,
+  like attachments, so the chip is one unit: the caret can't enter it, its X
+  button removes it, and Backspace at the very start of the text removes the
+  last chip whole. Chips use the soft accent fill, with no border.
+- Send writes the chips first, in order, as `@path` (`@path/` for a folder,
+  `@"path"` when it has whitespace or a quote), then the typed text. A failed
+  send gives the chips back as chips (as `@path` text the `@` would reopen the
+  picker), while the reload-recovery copy keeps them as `@path`. Pasted
+  `@path` text is sent as is.
+- No picker while the text is an argument slash command (`/btw`, `/visualize`),
+  whose prompt is sent without the chips. While the files load, Enter waits
+  instead of sending the half-typed `@query`. A folder also matches as `dir/`.
+
+## Collections
+
+A list of rows people move through (the sidebar's chats, the Bot list) is one
+keyboard collection built from `renderer/lib/roving-rows.ts`. Rows stay
+buttons with their `•••` button beside them, so their menus and names keep
+working; mark them up instead of changing roles: `data-roving-item` on the
+row's button, `data-roving-row` on the wrapper that holds its other buttons,
+`data-roving-group` on a folder.
+
+- `useRovingRows(ref)` makes the list one `Tab` stop with ↑ ↓ Home End, → ←
+  for folders (swapped under `dir="rtl"`), and a 500 ms typeahead on the
+  visible text (parts marked `aria-hidden`, like shortcut hints, are skipped).
+  Typeahead starts only once the person moves through the list by keyboard
+  (the arrows, or Tab and F6 by the app's input modality); focus that script
+  moves to a row keeps the last way the person arrived. It sets
+  `data-typeahead="on"`, which only type-to-focus reads (`isTypeaheadTarget`),
+  so letters stay in the list while approval keys and focus still work. After
+  a click, typing still goes to the message box.
+- Focus recovery is built in (`renderer/lib/focus-recovery.ts`): when the
+  focused row leaves the page, focus goes to the next row, else the previous,
+  else the list's Tab stop, else the list itself (focusable only until it
+  loses focus), never the page. A dialog that deletes a row returns
+  focus to that row (its `returnFocus`) so recovery can move on from it.
+- Multi-select is `useRowSelection(ref, { enabled, platform })` from
+  `renderer/lib/use-row-selection.ts`, on rows that carry `data-select-id`:
+  ⌘-click (Ctrl-click off macOS) toggles, Shift-click and ⇧↑ ⇧↓ select a range
+  with the anchor-plus-base rule in `renderer/lib/range-selection.ts`, Escape
+  (`isDismissKey`) clears. A plain click and ↩ keep opening the row. Selected
+  rows use the list-selection fill and the description "Selected".
+- With two or more selected, show a compact bar under the list
+  (`SelectionBar` in `renderer/components/sidebar/selection-bar.tsx`) with the
+  count and only actions that already exist per row and are safe to repeat,
+  each looping over the existing per-row call with `runInOrder` from
+  `renderer/lib/bulk-delete.ts`, skipping a row its single action would refuse.
+  A failure stops the run, says how many went ("Deleted 2 of 5; …") and leaves
+  the rest selected. A destructive action asks once in an `AlertDialog` that
+  names the count and lists the rows.
+- Every listener sits on the list element itself, none on a row, the
+  document or the window, and plain
+  arrow keys move DOM focus without re-rendering rows.
+
+## Enforced rules
+
+`npm run check:aiden-rules` (`scripts/check-aiden-rules.mjs`) checks the rules a
+script can check and prints `file:line rule message` for each hit:
+
+- `no-brain-icon`: no `Brain*` icon imports, components or `brain` icon names in
+  the renderer, and no renderer or `public/` file named for a brain.
+- `text-input-focus-ring`: `<input>`, `<textarea>`, `Input` and `Textarea` add no
+  `focus:`/`focus-visible:`/`focus-within:` ring, outline or border class.
+  Checkbox, radio and other non-text inputs keep their rings.
+- `no-dialog-dom-sniff`: no selector strings that look for an open dialog, menu
+  or popover in the DOM; ask the layer stack instead.
+- `network-allowlist`: the models.dev, PostHog ingestion, fal, Replicate,
+  OpenRouter models/benchmarks and Artificial Analysis endpoints appear only in
+  the modules that own them (AGENTS.md "Release model metadata" and "Product
+  analytics"). Tests, docs and `.memory` are not checked.
+- `no-source-grep-test`: a test may not read a production `.ts`, `.tsx` or `.css`
+  file and `match`, `doesNotMatch` or `includes` against it.
+- `literal-motion`: no literal `cubic-bezier(` in renderer CSS or code outside a
+  `--motion-*` or `--ease-*` token definition. Comments are skipped.
+
+Known gaps: the checker does not see focus styles on `focus-within` wrappers,
+CSS `:focus` outlines, a `className` passed in through a variable, or a
+focus shadow ring that does not name the accent (`focus:shadow-[…]` with a
+literal color). It also
+misses source-grep tests that use `indexOf` or `split` instead of `match` or
+`includes`, and an OpenRouter base URL that is joined with a catalog path in
+another file.
+
+An exception needs a reason. For one line, put
+`// check-aiden-rules: allow <rule> <why>` (or `/* … */` in CSS) on that line or
+the line above. For a file, add `{"rule", "file", "reason"}` to
+`scripts/aiden-rules-allowlist.json`, with `"max": N` when the file may keep at
+most N hits. The list only shrinks: an entry that no longer matches, or whose
+`max` is above the real count, fails until you remove it or lower `max`. There
+is no `--update`.
 
 ## Verification
 

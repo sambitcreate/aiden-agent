@@ -58,8 +58,9 @@ function subscribe(listener: () => void): () => void {
 
 /**
  * The floating computer, portalled over the chat. Dock puts it back in the
- * Computer tab and shows that tab; Close only stops floating. Escape docks,
- * except on the screen, where it is a key for the computer.
+ * Computer tab and shows that tab; Close only stops floating. Escape docks
+ * (the shared `FloatingPlayerFrame` handles it), except on the screen, which
+ * sends it to the computer and marks it handled.
  */
 export function BotComputerFloat({
   bot,

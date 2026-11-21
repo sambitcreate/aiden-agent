@@ -30,6 +30,7 @@ import { LiveRibbonWave, type LiveRibbonMotion } from "./live-ribbon-wave";
 import type { AidenLivePreferencesPatch } from "./use-aiden-live-preferences";
 import type { AssistantLiveCaption, AssistantLiveController } from "./use-assistant-live";
 import { useLiveRibbonPlacement } from "./use-live-ribbon-placement";
+import { isDismissKey } from "../../lib/dismiss-key";
 
 export type LiveRibbonState = "listening" | "thinking" | "speaking" | "acting" | "approval" | "confirm";
 
@@ -248,7 +249,7 @@ export function LiveRibbon({
         onDoubleClick={placement.onDoubleClick}
         onKeyDown={(event) => {
           // Esc ends Live, but a menu inside the pill closes first.
-          if (event.key !== "Escape" || menuOpen || event.defaultPrevented) return;
+          if (!isDismissKey(event) || menuOpen) return;
           if (!pillRef.current?.contains(event.target as Node)) return;
           event.preventDefault();
           end();

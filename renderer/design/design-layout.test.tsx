@@ -524,13 +524,13 @@ test("dragging the divider saves the design chat width and leaves the panel widt
   });
   const divider = screen.getByRole("separator", { name: "Resize chat" });
   await act(async () => {
-    fireEvent.pointerDown(divider, { button: 0, clientX: 420, pointerId: 1 });
-    window.dispatchEvent(new PointerEvent("pointermove", { clientX: 470 }));
+    fireEvent.pointerDown(divider, { button: 0, clientX: 420, pointerId: 1, isPrimary: true });
+    window.dispatchEvent(new PointerEvent("pointermove", { clientX: 470, pointerId: 1 }));
   });
   assert.equal(chatColumn()?.style.width, "470px", "the column follows the drag");
   assert.equal(localStorage.getItem(DESIGN_CHAT_WIDTH_KEY), null, "nothing is saved mid-drag");
   await act(async () => {
-    window.dispatchEvent(new PointerEvent("pointerup", { clientX: 900 }));
+    window.dispatchEvent(new PointerEvent("pointerup", { clientX: 900, pointerId: 1 }));
   });
   assert.equal(localStorage.getItem(DESIGN_CHAT_WIDTH_KEY), "560", "the drag stops at the 560 px maximum");
   assert.equal(chatColumn()?.style.width, "560px");

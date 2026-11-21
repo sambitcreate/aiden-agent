@@ -608,6 +608,7 @@ function useSendMorph(
       // words arc into place (across first, then up) instead of sliding straight.
       sideways = copy.animate([{ translate: `${dx}px 0` }, { translate: "0 0" }], {
         duration: SEND_MORPH_MS,
+        // check-aiden-rules: allow literal-motion the send arc's two axes need their own paired curves, and Web Animations cannot read a CSS token
         easing: "cubic-bezier(0.35, 0, 0.15, 1)",
       });
       animation = copy.animate(
@@ -615,6 +616,7 @@ function useSendMorph(
           { transform: `translateY(${dy}px)`, backgroundColor: "transparent" },
           { transform: "translateY(0)", backgroundColor: style.backgroundColor },
         ],
+        // check-aiden-rules: allow literal-motion the rise half of the send arc (see the sideways curve above)
         { duration: SEND_MORPH_MS, easing: "cubic-bezier(0.6, 0, 0.35, 1)" },
       );
       animation.onfinish = finish;
