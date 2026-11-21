@@ -99,10 +99,22 @@ struct AidenAppShellView: View {
     /// The navigation and compose flow, made on the shell's first draw. `init`
     /// runs on every ContentView render and `State` keeps only its first value,
     /// so building them there read and decoded the saved navigation each time.
+    private enum ShellSheet: Identifiable {
+        case runningChats
+        case pairing(showsDesktopCheck: Bool)
+
+        var id: String {
+            switch self {
+            case .runningChats: "running-chats"
+            case .pairing(let showsDesktopCheck): "pairing-\(showsDesktopCheck)"
+            }
+        }
+    }
+
     @State private var parts = AidenAppShellParts()
     @State private var botSummaries: [AidenHostObjectID: AidenBotSummary] = [:]
     @State private var searchText = ""
-    @State private var showsRunningChats = false
+    @State private var activeSheet: ShellSheet?
 
     init(
         coordinator: AidenRemoteCoordinator,
@@ -179,80 +191,113 @@ struct AidenAppShellView: View {
         AidenCatchUpQueue(rows: inboxStore.inbox.needsYou)
     }
 
+    private var hasNoComputers: Bool {
+        coordinator.installationStore.installations.isEmpty
+    }
+
+    private func openAddComputer() {
+        activeSheet = .pairing(showsDesktopCheck: hasNoComputers)
+    }
+
     var body: some View {
-        TabView(selection: Bindable(navigation).tab) {
-            Tab("Inbox", systemImage: "tray", value: AidenAppTab.inbox) {
-                NavigationStack(path: Bindable(navigation).inboxPath) {
-                    AidenInboxTabRootView(
-                        store: inboxStore,
-                        runningHome: runningHome,
-                        onOpen: openRow,
-                        onDelete: deleteChat,
-                        onOpenMachines: { navigation.open(.machines) },
-                        onCatchUp: { markViewed(navigation.startCatchUp(in: catchUpQueue)) },
-                        onShowRunning: { showsRunningChats = true }
-                    )
-                    .safeAreaInset(edge: .top, spacing: 0) {
-                        AidenConnectionNotice(coordinator: coordinator)
-                    }
-                    .toolbar { inboxToolbar }
-                    .navigationDestination(for: AidenAppRoute.self, destination: destination)
-                }
-            }
-            .badge(inboxStore.needsYouCount)
-            // An iPad's tab strip draws the badge without saying it.
-            .accessibilityValue(
-                Text(inboxStore.needsYouCount == 1 ? "1 chat needs you" : "\(inboxStore.needsYouCount) chats need you"),
-                isEnabled: inboxStore.needsYouCount > 0
-            )
-
-            Tab("Bots", systemImage: AidenChromeSymbols.bots, value: AidenAppTab.bots) {
-                NavigationStack(path: Bindable(navigation).botsPath) {
-                    AidenBotsTabView(
-                        coordinator: coordinator,
-                        store: inboxStore,
-                        navigation: navigation,
-                        availability: botsAvailability,
-                        onOpenBot: { id, bot in botSummaries[id] = bot }
-                    )
-                    .navigationDestination(for: AidenAppRoute.self, destination: destination)
-                }
-            }
-
-            Tab("Workspaces", systemImage: "folder", value: AidenAppTab.workspaces) {
-                NavigationStack(path: Bindable(navigation).workspacesPath) {
-                    AidenWorkspacesTabView(coordinator: coordinator, store: inboxStore, newWork: newWork)
+        ZStack {
+            TabView(selection: Bindable(navigation).tab) {
+                Tab("Inbox", systemImage: "tray", value: AidenAppTab.inbox) {
+                    NavigationStack(path: Bindable(navigation).inboxPath) {
+                        AidenInboxTabRootView(
+                            store: inboxStore,
+                            runningHome: runningHome,
+                            hasNoComputers: hasNoComputers,
+                            onAddComputer: openAddComputer,
+                            onOpen: openRow,
+                            onDelete: deleteChat,
+                            onOpenMachines: { navigation.open(.machines) },
+                            onCatchUp: { markViewed(navigation.startCatchUp(in: catchUpQueue)) },
+                            onShowRunning: { activeSheet = .runningChats }
+                        )
+                        .safeAreaInset(edge: .top, spacing: 0) {
+                            AidenConnectionNotice(coordinator: coordinator)
+                        }
+                        .toolbar { inboxToolbar }
                         .navigationDestination(for: AidenAppRoute.self, destination: destination)
+                    }
                 }
-            }
+                .badge(inboxStore.needsYouCount)
+                // An iPad's tab strip draws the badge without saying it.
+                .accessibilityValue(
+                    Text(inboxStore.needsYouCount == 1 ? "1 chat needs you" : "\(inboxStore.needsYouCount) chats need you"),
+                    isEnabled: inboxStore.needsYouCount > 0
+                )
 
-            Tab(value: AidenAppTab.search, role: .search) {
-                // The field is on this stack's root view: on the `TabView` it would
-                // sit on every tab.
-                NavigationStack {
-                    AidenSearchTabView(coordinator: coordinator, inboxStore: inboxStore) { navigation.open($0) }
+                Tab("Bots", systemImage: AidenChromeSymbols.bots, value: AidenAppTab.bots) {
+                    NavigationStack(path: Bindable(navigation).botsPath) {
+                        AidenBotsTabView(
+                            coordinator: coordinator,
+                            store: inboxStore,
+                            navigation: navigation,
+                            availability: botsAvailability,
+                            onAddComputer: openAddComputer,
+                            onOpenBot: { id, bot in botSummaries[id] = bot }
+                        )
+                        .navigationDestination(for: AidenAppRoute.self, destination: destination)
+                    }
+                }
+
+                Tab("Workspaces", systemImage: "folder", value: AidenAppTab.workspaces) {
+                    NavigationStack(path: Bindable(navigation).workspacesPath) {
+                        AidenWorkspacesTabView(
+                            coordinator: coordinator,
+                            store: inboxStore,
+                            newWork: newWork,
+                            onAddComputer: openAddComputer
+                        )
+                            .navigationDestination(for: AidenAppRoute.self, destination: destination)
+                    }
+                }
+
+                Tab(value: AidenAppTab.search, role: .search) {
+                    // The field is on this stack's root view: on the `TabView` it would
+                    // sit on every tab.
+                    NavigationStack {
+                        AidenSearchTabView(
+                            coordinator: coordinator,
+                            inboxStore: inboxStore,
+                            hasNoComputers: hasNoComputers,
+                            onAddComputer: openAddComputer
+                        ) { navigation.open($0) }
+                    }
                 }
             }
+            // The system's own placement: an iPad opens on the tab strip, and the
+            // sidebar is a tap away. Asking for the sidebar by default
+            // (`defaultAdaptableTabBarPlacement(.sidebar)`) made SwiftUI write its
+            // sidebar state while drawing the first frame, which it reports as
+            // "Modifying state during view update".
+            .tabViewStyle(.sidebarAdaptable)
+            .tabBarMinimizeBehavior(horizontalSizeClass == .compact ? .onScrollDown : .automatic)
+            .tabViewSearchActivation(.searchTabSelection)
+            .aidenNewWorkPresentation(newWork, coordinator: coordinator)
+            // Hiding the tab bar leaves the accessory up, under the composer.
+            .aidenRunningAccessory(
+                isEnabled: runningHome == .accessory && inboxStore.hasRunningChats && !navigation.showsConversation
+            ) {
+                AidenRunningAccessoryHost(store: inboxStore, onOpen: openRow) { activeSheet = .runningChats }
+            }
         }
-        // The system's own placement: an iPad opens on the tab strip, and the
-        // sidebar is a tap away. Asking for the sidebar by default
-        // (`defaultAdaptableTabBarPlacement(.sidebar)`) made SwiftUI write its
-        // sidebar state while drawing the first frame, which it reports as
-        // "Modifying state during view update".
-        .tabViewStyle(.sidebarAdaptable)
-        .tabBarMinimizeBehavior(horizontalSizeClass == .compact ? .onScrollDown : .automatic)
-        .tabViewSearchActivation(.searchTabSelection)
-        .aidenNewWorkPresentation(newWork, coordinator: coordinator)
-        // Hiding the tab bar leaves the accessory up, under the composer.
-        .aidenRunningAccessory(
-            isEnabled: runningHome == .accessory && inboxStore.hasRunningChats && !navigation.showsConversation
-        ) {
-            AidenRunningAccessoryHost(store: inboxStore, onOpen: openRow) { showsRunningChats = true }
-        }
-        .sheet(isPresented: $showsRunningChats) {
-            AidenRunningChatsSheet(store: inboxStore) { route in
-                showsRunningChats = false
-                openRow(route)
+        .sheet(item: $activeSheet) { sheet in
+            switch sheet {
+            case .runningChats:
+                AidenRunningChatsSheet(store: inboxStore) { route in
+                    activeSheet = nil
+                    openRow(route)
+                }
+            case .pairing(let showsDesktopCheck):
+                AidenPairingView(
+                    coordinator: coordinator,
+                    showsDesktopCheck: showsDesktopCheck,
+                    onClose: { activeSheet = nil },
+                    onPaired: { activeSheet = nil }
+                )
             }
         }
         // On every tab, the accessory and its sheet, so a machine page reached from
@@ -338,7 +383,13 @@ struct AidenAppShellView: View {
         }
         ToolbarSpacer(.fixed, placement: .primaryAction)
         ToolbarItem(placement: .primaryAction) {
-            AidenNewWorkComposeButton(flow: newWork)
+            if hasNoComputers {
+                Button(action: openAddComputer) {
+                    Label("Add Computer", systemImage: "plus")
+                }
+            } else {
+                AidenNewWorkComposeButton(flow: newWork)
+            }
         }
     }
 

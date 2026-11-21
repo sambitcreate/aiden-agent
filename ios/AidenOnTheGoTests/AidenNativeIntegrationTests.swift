@@ -923,70 +923,70 @@ final class AidenNativeIntegrationTests: XCTestCase {
         )
     }
 
-    func testPairingMethodsMirrorEveryMacConnectionChoice() {
+    func testPairingInputParserNormalizesEndpointsRejectsHTTPAndDetectsPayloads() {
         XCTAssertEqual(
-            AidenPairingMethod.primary,
-            [.scanQRCode, .nearbyMac, .privateAddress]
+            AidenPairingInputParser.normalizedEndpointURL(from: "sambits-mbp.local:49220")?.absoluteString,
+            "https://sambits-mbp.local:49220/api/aiden/v1"
         )
-        XCTAssertEqual(AidenPairingMethod.advanced, [.pastePayload])
         XCTAssertEqual(
-            Set(AidenPairingMethod.allCases),
-            [.scanQRCode, .nearbyMac, .privateAddress, .pastePayload]
+            AidenPairingInputParser.normalizedEndpointURL(from: "mac.tailnet.ts.net")?.absoluteString,
+            "https://mac.tailnet.ts.net/api/aiden/v1"
         )
-        XCTAssertEqual(AidenPairingMethod.scanQRCode.badge, "Recommended")
-        XCTAssertEqual(AidenPairingMethod.nearbyMac.badge, "Local Network")
-        XCTAssertEqual(AidenPairingMethod.privateAddress.badge, "Tailscale")
-        XCTAssertNil(AidenPairingMethod.pastePayload.badge)
         XCTAssertEqual(
-            AidenPairingMethod.primary.map(\.tabTitle),
-            ["QR", "Nearby", "Tailscale"]
+            AidenPairingInputParser.normalizedEndpointURL(from: "https://mac.tailnet.ts.net/")?.absoluteString,
+            "https://mac.tailnet.ts.net/api/aiden/v1"
         )
-        XCTAssertTrue(AidenPairingMethod.nearbyMac.detail.contains("local Wi-Fi"))
-        XCTAssertTrue(AidenPairingMethod.privateAddress.detail.contains("Tailscale"))
+        XCTAssertEqual(
+            AidenPairingInputParser.normalizedEndpointURL(from: "https://mac.local:49220/api/aiden/v1")?.absoluteString,
+            "https://mac.local:49220/api/aiden/v1"
+        )
+        XCTAssertNil(AidenPairingInputParser.normalizedEndpointURL(from: "http://mac.local:49220/api/aiden/v1"))
+        XCTAssertNil(AidenPairingInputParser.normalizedEndpointURL(from: "   "))
+        XCTAssertEqual(
+            AidenPairingInputParser.compactDisplayAddress("https://mac.local:49220/api/aiden/v1"),
+            "mac.local:49220"
+        )
     }
 
-    func testMobileOnboardingMirrorsMacCapabilityGroups() {
-        XCTAssertEqual(AidenMobileOnboardingPhase.allCases, [.build, .extend, .control])
-        XCTAssertEqual(AidenMobileOnboardingPhase.build.eyebrow, "BOTS AND WORKSPACES")
-        XCTAssertEqual(AidenMobileOnboardingPhase.extend.eyebrow, "CHOOSE AND EXTEND")
+    func testPairingInputParserFormatsManualCodeAndResolvesSubmissions() {
         XCTAssertEqual(
-            AidenMobileOnboardingPhase.control.eyebrow,
-            "AUTOMATE AND STAY IN CONTROL"
+            AidenPairingInputParser.formattedManualCodeInput("k7m29p4xv8q34r1nt6b8"),
+            "K7M2-9P4X-V8Q3-4R1N-T6B8"
         )
-        XCTAssertTrue(AidenMobileOnboardingPhase.build.detail.contains("Git"))
-        XCTAssertTrue(AidenMobileOnboardingPhase.build.detail.contains("Bots"))
-        XCTAssertTrue(AidenMobileOnboardingPhase.build.detail.contains("Workspaces"))
-        XCTAssertTrue(AidenMobileOnboardingPhase.build.detail.contains("Bots tab"))
-        XCTAssertTrue(AidenMobileOnboardingPhase.extend.detail.contains("connectors"))
-        XCTAssertTrue(AidenMobileOnboardingPhase.control.detail.contains("scheduled"))
+        let jsonPayload = "{\"kind\":\"aiden-pairing\"}"
+        XCTAssertEqual(
+            AidenPairingInputParser.formattedManualCodeInput(jsonPayload),
+            jsonPayload,
+            "Pasted JSON pairing payloads must not be rewritten as setup codes"
+        )
+
+        let manual = AidenPairingInputParser.submission(
+            address: "mac.local:49220",
+            code: "K7M2-9P4X-V8Q3-4R1N-T6B8"
+        )
+        XCTAssertEqual(
+            manual,
+            .manual(
+                endpoint: URL(string: "https://mac.local:49220/api/aiden/v1")!,
+                code: "K7M2-9P4X-V8Q3-4R1N-T6B8"
+            )
+        )
+        XCTAssertEqual(
+            AidenPairingInputParser.submission(address: "", code: jsonPayload),
+            .payload(jsonPayload)
+        )
+        XCTAssertEqual(
+            AidenPairingInputParser.submission(address: jsonPayload, code: ""),
+            .payload(jsonPayload)
+        )
+        XCTAssertNil(AidenPairingInputParser.submission(address: "mac.local:49220", code: "SHORT"))
+        XCTAssertNil(AidenPairingInputParser.submission(address: "", code: "K7M2-9P4X-V8Q3-4R1N-T6B8"))
     }
 
-    func testMobileOnboardingUsesAvailableWindowSizeAndReadableMaximums() {
-        XCTAssertEqual(AidenMobileOnboardingLayout.contentWidth(for: 390), 390)
-        XCTAssertEqual(AidenMobileOnboardingLayout.contentWidth(for: 834), 620)
-        XCTAssertEqual(AidenMobileOnboardingLayout.contentWidth(for: 320), 320)
-        XCTAssertEqual(AidenMobileOnboardingLayout.contentHeight(for: 700), 700)
-        XCTAssertEqual(AidenMobileOnboardingLayout.contentHeight(for: 1_194), 760)
-        XCTAssertLessThan(
-            AidenMobileOnboardingLayout.maximumActionWidth,
-            AidenMobileOnboardingLayout.maximumContentWidth
-        )
-        XCTAssertEqual(AidenMobileOnboardingLayout.actionHorizontalPadding, 24)
-        XCTAssertEqual(AidenMobileOnboardingLayout.actionBottomPadding, 12)
-
-        // The art tile fills a phone page between the gutters, stops growing on
-        // iPad, and keeps the vignette canvas's shape so nothing extra is cropped.
-        let canvas = AidenOnboardingArtwork.canvas
-        let phone = AidenMobileOnboardingLayout.artworkSize(for: 320)
-        XCTAssertEqual(phone.width, 272)
-        let iPad = AidenMobileOnboardingLayout.artworkSize(
-            for: AidenMobileOnboardingLayout.contentWidth(for: 834)
-        )
-        XCTAssertEqual(iPad.width, AidenMobileOnboardingLayout.maximumArtworkWidth)
-        for size in [phone, iPad] {
-            XCTAssertEqual(size.width / size.height, canvas.width / canvas.height, accuracy: 0.0001)
-        }
-        XCTAssertEqual(AidenMobileOnboardingLayout.artworkSize(for: 20), .zero)
+    func testDesktopDownloadLinksPointToWebsiteForMacAndGitHubForLinuxAndServer() {
+        XCTAssertEqual(AidenDesktopDownloadLinks.macURL.absoluteString, "https://chatwithaiden.com/")
+        XCTAssertEqual(AidenDesktopDownloadLinks.linuxURL.absoluteString, "https://github.com/sambitcreate/aiden-agent")
+        XCTAssertEqual(AidenDesktopDownloadLinks.serverURL.absoluteString, "https://github.com/sambitcreate/aiden-agent")
     }
 
     func testVoiceInputModeDefaultsAndLabelsRemainStable() {

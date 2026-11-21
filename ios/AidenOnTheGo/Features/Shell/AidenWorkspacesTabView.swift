@@ -30,6 +30,7 @@ struct AidenWorkspacesTabView: View {
     @Bindable var coordinator: AidenRemoteCoordinator
     let store: AidenUnifiedInboxStore
     let newWork: AidenNewWorkChatFlow
+    var onAddComputer: (() -> Void)? = nil
 
     /// A row of the single-machine list, which shows only the default machine's
     /// workspaces (`coordinator.workspaces`). Grouped rows carry their own id.
@@ -60,16 +61,21 @@ struct AidenWorkspacesTabView: View {
     }
 
     var body: some View {
-        let machines = machines
-        AidenWorkspacesDirectoryView(
-            coordinator: coordinator,
-            archiveStore: coordinator.workspaceArchiveStore,
-            tabChrome: AidenWorkspacesTabChrome(route: route, newWork: newWork, machines: machines)
-        )
-        .safeAreaInset(edge: .top, spacing: 0) {
-            // Grouped, each machine says its own state under its name.
-            if machines == nil {
-                AidenConnectionNotice(coordinator: coordinator)
+        if coordinator.installationStore.installations.isEmpty, let onAddComputer {
+            AidenNoComputersEmptyView(surface: .workspaces, onAddComputer: onAddComputer)
+                .navigationTitle("Workspaces")
+        } else {
+            let machines = machines
+            AidenWorkspacesDirectoryView(
+                coordinator: coordinator,
+                archiveStore: coordinator.workspaceArchiveStore,
+                tabChrome: AidenWorkspacesTabChrome(route: route, newWork: newWork, machines: machines)
+            )
+            .safeAreaInset(edge: .top, spacing: 0) {
+                // Grouped, each machine says its own state under its name.
+                if machines == nil {
+                    AidenConnectionNotice(coordinator: coordinator)
+                }
             }
         }
     }
