@@ -1003,9 +1003,11 @@ test("each queued input runs with the tool policy of its own ingress", async () 
       text: "second done",
     });
 
+    // The tool list is fixed per chat so the cached prefix survives a change
+    // of ingress; the routine's policy is enforced when it calls the tool.
     assert.ok(offered[0]!.includes(QUESTION_TOOL_NAME), "the desktop turn offers questions");
-    assert.equal(offered[2]!.includes(QUESTION_TOOL_NAME), false, "the routine's request offers no question tool");
-    assert.ok(offered[4]!.includes(QUESTION_TOOL_NAME), "the desktop follow-up offers questions again");
+    assert.deepEqual(offered[2], offered[0], "the routine's request declares the same tools");
+    assert.deepEqual(offered[4], offered[0], "the desktop follow-up declares the same tools");
 
     const view = await (await service.conversation("bot:a")).context(ctx);
     const questionResults = view.entries
@@ -1014,6 +1016,11 @@ test("each queued input runs with the tool policy of its own ingress", async () 
       .filter((result) => result.toolName === QUESTION_TOOL_NAME);
     assert.equal(questionResults.length, 1);
     assert.equal(questionResults[0]!.isError, true, "the routine's question call is refused");
+    assert.match(
+      JSON.stringify(questionResults[0]),
+      /not available on this turn/,
+      "the refusal names why the tool cannot run",
+    );
   } finally {
     release();
     await service.shutdown();
@@ -1048,9 +1055,18 @@ test("a routine queued before a quit keeps its own tool policy after Resume", as
     offered.push(getCurrentTools(context.messages).map((tool) => tool.name));
     return fauxAssistantMessage(text);
   };
-  const service = await serviceFor(profile, createFauxModels([record("first done"), record("routine done")]), {
-    extension: assemblyDeps(state, { candidates: candidates(createBotQuestions()) }),
-  });
+  const askAnyway = (context: { messages: readonly { role: string }[] }) => {
+    offered.push(getCurrentTools(context.messages).map((tool) => tool.name));
+    return fauxAssistantMessage([fauxToolCall(QUESTION_TOOL_NAME, QUESTION_ARGS)], { stopReason: "toolUse" });
+  };
+  const questions = createBotQuestions();
+  let asked = 0;
+  questions.onChange(() => (asked = Math.max(asked, questions.pending().length)));
+  const service = await serviceFor(
+    profile,
+    createFauxModels([record("first done"), askAnyway, record("routine done")]),
+    { extension: assemblyDeps(state, { candidates: candidates(questions) }) },
+  );
   try {
     await service.initialize();
     assert.equal((await service.state("bot:a")).kind, "interrupted");
@@ -1060,7 +1076,15 @@ test("a routine queued before a quit keeps its own tool policy after Resume", as
       text: "routine done",
     });
     assert.ok(offered[0]!.includes(QUESTION_TOOL_NAME), "the resumed desktop turn offers questions");
-    assert.equal(offered[1]!.includes(QUESTION_TOOL_NAME), false, "the queued routine still offers none");
+    assert.deepEqual(offered[1], offered[0], "the queued routine declares the same tools");
+    assert.equal(asked, 0, "the resumed routine never shows a question card");
+    const view = await (await service.conversation("bot:a")).context(ctx);
+    const questionResults = view.entries
+      .filter((entry) => entry.kind === ToolResultEntry.kind)
+      .map((entry) => (entry as unknown as { model: Array<{ toolName: string; isError: boolean }> }).model[0]!)
+      .filter((result) => result.toolName === QUESTION_TOOL_NAME);
+    assert.equal(questionResults.length, 1);
+    assert.equal(questionResults[0]!.isError, true, "the routine keeps its policy after Resume");
   } finally {
     await service.shutdown();
   }

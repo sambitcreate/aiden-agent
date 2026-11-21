@@ -7,6 +7,7 @@ import { InfoHint } from "../ui-info-hint";
 import { providersApi, settingsApi } from "../../lib/ipc";
 import { queryKeys, useProviders, useSettings } from "../../lib/queries";
 import type { AppSettings } from "../../lib/types";
+import { providerSupportsLongPromptCache } from "../../shared/prompt-cache-retention";
 import { compactionEngineFrom, type CompactionEngine, type CompactionModelBudget } from "../../shared/compaction";
 import { CompactionBudgetSettings } from "./compaction-budget-settings";
 
@@ -92,46 +93,78 @@ export function AutomaticCompactionGroup() {
   );
 }
 
-export function PromptCacheGroup() {
+type PromptCacheSwitchKey = "cacheWarmingEnabled" | "longPromptCacheRetention";
+
+/** One switch's save, kept apart from the group's other switch so neither drops the other's change. */
+function usePromptCacheSwitch(key: PromptCacheSwitchKey, failure: string) {
   const queryClient = useQueryClient();
-  const settings = useSettings();
   const [saving, setSaving] = React.useState(false);
   const savingRef = React.useRef(false);
-
-  const setWarmingEnabled = async (enabled: boolean) => {
+  const save = async (enabled: boolean) => {
     if (savingRef.current) return;
     savingRef.current = true;
     setSaving(true);
     try {
-      const saved = await settingsApi.set({ cacheWarmingEnabled: enabled });
+      const saved = await settingsApi.set({ [key]: enabled });
       queryClient.setQueryData<AppSettings>(queryKeys.settings, saved);
     } catch {
-      toast.error("Couldn’t update cache warming.");
+      toast.error(failure);
     } finally {
       savingRef.current = false;
       setSaving(false);
     }
   };
+  return { saving, save };
+}
+
+export function PromptCacheGroup() {
+  const settings = useSettings();
+  const providers = useProviders();
+  const warming = usePromptCacheSwitch("cacheWarmingEnabled", "Couldn’t update cache warming.");
+  const hour = usePromptCacheSwitch("longPromptCacheRetention", "Couldn’t update how long caches are kept.");
+  const keepsHour = settings.data?.longPromptCacheRetention === true;
+  const hourAvailable = (providers.data ?? []).some((provider) => providerSupportsLongPromptCache(provider.id));
 
   return (
-    <FieldSet title="Prompt cache">
-      <Field
-        label="Warm caches during active chats"
-        description="Optional paid one-token requests keep an eligible provider cache warm during long agent runs in Aiden Agent. Off by default; starts with your next chat run and stops when the run ends."
-      >
-        <Switch
-          aria-label="Warm prompt caches during active chats"
-          checked={settings.data?.cacheWarmingEnabled === true}
-          disabled={settings.isLoading || saving}
-          onCheckedChange={(enabled) => void setWarmingEnabled(enabled)}
-        />
-      </Field>
-      <Text as="p" variant="small" color="secondary" className="px-4 pb-4 text-pretty">
-        Only refreshes when provider-reported usage and known pricing estimate at least $0.05 in savings. Charges appear
-        in Usage. Stops after one hour, on cancellation, or when switched off. Does not warm idle chats, Bots, scheduled
-        tasks, or subagents.
-      </Text>
-    </FieldSet>
+    <>
+      <FieldSet title="Prompt cache">
+        <Field
+          label="Warm caches during active chats"
+          description="Optional paid one-token requests keep an eligible provider cache warm during long agent runs in Aiden Agent, and for a little while after a reply while the chat stays open. Off by default."
+        >
+          <Switch
+            aria-label="Warm prompt caches during active chats"
+            checked={settings.data?.cacheWarmingEnabled === true}
+            disabled={settings.isLoading || warming.saving}
+            onCheckedChange={(enabled) => void warming.save(enabled)}
+          />
+        </Field>
+        <Text as="p" variant="small" color="secondary" className="px-4 pb-4 text-pretty">
+          Only refreshes when provider-reported usage and known pricing estimate at least $0.05 in savings. Charges appear
+          in Usage. A run stops warming after one hour, on cancellation, or when switched off. After a reply it refreshes at
+          most three times, within 30 minutes, and stops once you leave the chat or close its window; a chat whose cache is
+          kept for an hour needs no refresh then. Does not warm Bots, scheduled tasks, or subagents.
+        </Text>
+      </FieldSet>
+      <FieldSet title="Cache lifetime">
+        <Field
+          label="Keep chat caches for an hour"
+          description={hourAvailable
+            ? "Anthropic and Amazon Bedrock (newer Claude models) can keep a chat’s cache for an hour instead of five minutes. Writing it costs twice the input price on Anthropic, instead of 1.25 times for the five-minute cache, so it pays off when you come back to chats within the hour. Off by default; side questions keep the default."
+            : keepsHour
+              ? "On, but paused: add Anthropic or Amazon Bedrock in Providers to use it. Other providers keep their own cache lifetime."
+              : "Available with Anthropic or Amazon Bedrock. Add one in Providers to choose an hour-long cache."}
+        >
+          <Switch
+            aria-label="Keep chat caches for an hour"
+            checked={keepsHour}
+            // Off with no provider to use it, it can't be turned on; once on, it can always be turned off.
+            disabled={settings.isLoading || providers.isLoading || hour.saving || (!hourAvailable && !keepsHour)}
+            onCheckedChange={(enabled) => void hour.save(enabled)}
+          />
+        </Field>
+      </FieldSet>
+    </>
   );
 }
 

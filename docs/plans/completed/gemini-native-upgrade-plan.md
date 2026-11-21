@@ -5,6 +5,14 @@
 > screen sharing remains deferred; historical statements below describe this plan's
 > original boundary.
 
+> Post-plan update (2026-11-19): phase 7 of
+> [the prompt cache plan](../prompt-cache-hit-rate.md) retired the Phase 3b
+> explicit context cache (`gemini-context-cache.ts`). Its fingerprint took
+> workspace file sizes, mtimes and git counts, so it was rebuilt nearly every
+> turn. Gemini now relies on implicit prefix caching over a stable request, and
+> `cachedContentTokenCount` is still metered as cache-read tokens. Statements
+> below about the explicit cache describe what shipped in July 2026.
+
 Status: Phases 0, 1, and 3 implemented on 2026-07-23–24; deferred tracks remain planned
 Date: 2026-07-22
 Depends on: `docs/plans/pi-provider-integration-plan.md` (broader registry migration)

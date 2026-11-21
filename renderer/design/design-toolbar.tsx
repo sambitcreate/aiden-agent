@@ -111,14 +111,15 @@ export function DesignToolbar({
       className="glass-surface nodrag flex max-w-full flex-wrap items-center gap-0.5 rounded-button p-1 shadow-control"
     >
       <DesignPageMenu doc={doc} onPage={onPage} />
-      <div aria-hidden className="mx-1 h-5 w-px shrink-0 bg-separator" />
+      <div aria-hidden className="mx-1 h-4 w-px shrink-0 bg-separator" />
       {TOOLS.map(({ tool: item, label, Icon }) => {
         const shortcut = CANVAS_TOOL_SHORTCUTS[item];
         const on = tool === item && !commenting && drawTool === null;
         return (
           <Button
             key={item}
-            variant={on ? "muted" : "transparent"}
+            variant="bar"
+            size="small"
             iconOnly
             aria-label={label}
             aria-pressed={on}
@@ -130,14 +131,15 @@ export function DesignToolbar({
           </Button>
         );
       })}
-      <div aria-hidden className="mx-1 h-5 w-px shrink-0 bg-separator" />
+      <div aria-hidden className="mx-1 h-4 w-px shrink-0 bg-separator" />
       <DrawToolButton entry={DRAW_TOOLS.text} drawTool={drawTool} onDraw={onDraw} />
       <DrawToolButton entry={DRAW_TOOLS.frame} drawTool={drawTool} onDraw={onDraw} />
       <DrawToolMenu label="Shapes" tools={SHAPE_MENU} drawTool={drawTool} onDraw={onDraw} />
       <DrawToolMenu label="Draw" tools={DRAW_MENU} drawTool={drawTool} onDraw={onDraw} />
-      <div aria-hidden className="mx-1 h-5 w-px shrink-0 bg-separator" />
+      <div aria-hidden className="mx-1 h-4 w-px shrink-0 bg-separator" />
       <Button
-        variant={commenting ? "muted" : "transparent"}
+        variant="bar"
+        size="small"
         iconOnly
         aria-label="Comment"
         aria-pressed={commenting}
@@ -148,9 +150,10 @@ export function DesignToolbar({
         <MessageCircle />
       </Button>
       <DesignCommentsPanel doc={doc} onOpen={onOpenComment} />
-      <div aria-hidden className="mx-1 h-5 w-px shrink-0 bg-separator" />
+      <div aria-hidden className="mx-1 h-4 w-px shrink-0 bg-separator" />
       <Button
-        variant="transparent"
+        variant="bar"
+        size="small"
         iconOnly
         aria-label="Note"
         aria-keyshortcuts={DESIGN_NOTE_SHORTCUT}
@@ -161,7 +164,7 @@ export function DesignToolbar({
       </Button>
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
-          <Button variant="transparent" iconOnly aria-label="Add" title="Add">
+          <Button variant="bar" size="small" iconOnly aria-label="Add" title="Add">
             <Plus />
           </Button>
         </DropdownMenuTrigger>
@@ -193,7 +196,8 @@ function DrawToolButton({
   const { Icon } = entry;
   return (
     <Button
-      variant={on ? "muted" : "transparent"}
+      variant="bar"
+      size="small"
       iconOnly
       aria-label={entry.label}
       aria-pressed={on}
@@ -231,7 +235,7 @@ function DrawToolMenu({
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
         <Button
-          variant={active ? "muted" : "transparent"}
+          variant="bar"
           size="small"
           aria-label={active ? `${label}: ${shown.label}` : label}
           aria-pressed={active}
@@ -284,7 +288,7 @@ function DesignPageMenu({ doc, onPage }: { doc: DesignCanvas; onPage(action: Des
         <DropdownMenuTrigger asChild>
           <Button
             ref={trigger}
-            variant="transparent"
+            variant="bar"
             size="small"
             aria-label={`Page: ${page.name}`}
             className="max-w-48 shrink-0"

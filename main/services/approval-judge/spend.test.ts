@@ -37,14 +37,17 @@ function reply(text: string, costUsd: number, stopReason: AssistantMessage["stop
   } as AssistantMessage;
 }
 
-function streams(message: AssistantMessage | Error): Pick<Models, "streamSimple"> {
+function streams(message: AssistantMessage | Error, sent: Array<{ cacheRetention?: string } | undefined> = []): Pick<Models, "streamSimple"> {
   return {
-    streamSimple: (() => ({
-      result: async () => {
-        if (message instanceof Error) throw message;
-        return message;
-      },
-    })) as unknown as Models["streamSimple"],
+    streamSimple: ((_model: unknown, _context: unknown, options?: { cacheRetention?: string }) => {
+      sent.push(options);
+      return {
+        result: async () => {
+          if (message instanceof Error) throw message;
+          return message;
+        },
+      };
+    }) as unknown as Models["streamSimple"],
   };
 }
 
@@ -52,6 +55,7 @@ test("a judged action's cost counts toward the chat's limit and shows in usage",
   const usage: UsageRequestRecord[] = [];
   const recorded: Array<{ owner: SpendingOwner; usd: number }> = [];
   const owner: SpendingOwner = { kind: "chat", id: "chat-1" };
+  const sent: Array<{ cacheRetention?: string } | undefined> = [];
   const meter = createSpendingMeter({
     spending: { record: async (to, usd) => void recorded.push({ owner: to, usd }), refusal: async () => undefined },
     owner,
@@ -59,7 +63,7 @@ test("a judged action's cost counts toward the chat's limit and shows in usage",
   });
   const judge = createApprovalJudge({
     complete: approvalJudgeComplete(
-      { model, provider, streams: streams(reply("PASS", 0.0004)) },
+      { model, provider, streams: streams(reply("PASS", 0.0004), sent) },
       { recordUsage: (record) => void usage.push(record), countSpend: (message) => meter.count(message) },
     ),
   });
@@ -75,6 +79,8 @@ test("a judged action's cost counts toward the chat's limit and shows in usage",
   assert.equal(usage[0]!.source, "approval-judge");
   assert.equal(usage[0]!.status, "completed");
   assert.equal(usage[0]!.costUsd, 0.0004);
+  // A verdict request is never resent, so it writes no prompt cache.
+  assert.deepEqual(sent.map((options) => options?.cacheRetention), ["none"]);
 });
 
 test("a failed judge call is still listed in usage, and defers", async () => {

@@ -63,6 +63,10 @@ export function aidenAppGuidance(tools?: ReadonlySet<string>): string {
     parts.push("Read current preferences and the app control policy with aiden_get_state before stating a value.");
   if (has("aiden_show_controls"))
     parts.push("Use aiden_show_controls to show the relevant real settings in chat; showing them changes nothing.");
+  if (has("aiden_get_state"))
+    parts.push(
+      "A request from a paired device can use only aiden_help and aiden_show_controls with the panels phones show; the other Aiden tools are refused there.",
+    );
   if (has("aiden_set_preference")) {
     parts.push(
       "Only use aiden_set_preference for an explicit supported change, and report only its verified result. Respect scope, app policy and trusted confirmation.",

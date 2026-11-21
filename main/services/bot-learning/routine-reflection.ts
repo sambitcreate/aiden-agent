@@ -18,6 +18,7 @@ import type { BotLessonStore } from "../bot-lessons/store.js";
 import type { ScheduledRun, ScheduledTask } from "../types.js";
 import type { BotLearningBudget } from "./budget.js";
 import type { BotSuggestionBudget } from "../bot-runtime/bot-suggestion-budget.js";
+import { oneOffCallOptions } from "../side-call-prefix.js";
 
 export const BOT_ROUTINE_REFLECTION_INTERVAL = 5;
 export const BOT_ROUTINE_REFLECTION_OUTPUT_CHARS = 1_500;
@@ -146,7 +147,7 @@ export function createRoutineReflection(deps: RoutineReflectionDependencies) {
             answer = await admission.model.models.completeSimple(
               admission.model.model,
               { systemPrompt: REFLECTION_SYSTEM_PROMPT, messages, tools: [RECORD_TOOL, RETIRE_TOOL] },
-              { maxTokens: REFLECTION_MAX_TOKENS, signal },
+              oneOffCallOptions({ maxTokens: REFLECTION_MAX_TOKENS, signal }),
             );
           } catch (error) {
             await reserved.settle(undefined);

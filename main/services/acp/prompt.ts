@@ -28,22 +28,13 @@ function deliveredInstructions(instructions: string | undefined): string {
   return instructions?.trim().slice(0, MAX_INSTRUCTION_CHARS) ?? "";
 }
 
-// The AGENTS refresher gives each generation a new nonce in its outer tags.
-// Match only its complete host-authored frame; keep the header and JSON records
-// in the hash so a real guidance or policy change still replaces the session.
-const AGENTS_FRAME = /(^|\n\n)<agents-instructions-([0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12})>\n(User-authored AGENTS\.md instructions follow as JSON records\.[\s\S]*?)\n<\/agents-instructions-\2>(?=\n\n|$)/gu;
-const STABLE_AGENTS_NONCE = "00000000-0000-0000-0000-000000000000";
-
-/** Identity of delivered host guidance, ignoring only generated AGENTS tag nonces. */
+/**
+ * Identity of the host guidance exactly as buildPrompt delivers it. The AGENTS
+ * refresher's nonce is fixed for a chat, so any change here is a real guidance
+ * or policy change and replaces the session.
+ */
 export function hostInstructionsFingerprint(instructions: string | undefined): string {
-  // Keep the replacement exactly as long as the original UUID. The same raw
-  // 64,000-character prefix must be hashed as buildPrompt actually delivers.
-  const stable = (instructions?.trim() ?? "").replace(
-    AGENTS_FRAME,
-    (_frame, separator: string, _nonce: string, body: string) =>
-      `${separator}<agents-instructions-${STABLE_AGENTS_NONCE}>\n${body}\n</agents-instructions-${STABLE_AGENTS_NONCE}>`,
-  );
-  return createHash("sha256").update(stable.slice(0, MAX_INSTRUCTION_CHARS)).digest("hex");
+  return createHash("sha256").update(deliveredInstructions(instructions)).digest("hex");
 }
 
 export interface PromptCapabilities {

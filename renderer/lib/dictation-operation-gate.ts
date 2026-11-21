@@ -18,6 +18,11 @@ export class DictationOperationGate {
     return token === this.generation;
   }
 
+  /** A start is opening the microphone and has not finished yet. */
+  isStarting(): boolean {
+    return this.starting;
+  }
+
   finishStart(token: number): void {
     if (this.isCurrent(token)) this.starting = false;
   }

@@ -6,7 +6,7 @@ import type {
   AgentToolResult,
   AgentToolUpdateCallback,
 } from "@earendil-works/pi-agent-core";
-import { type AssistantMessage } from "@earendil-works/pi-ai";
+import { type AssistantMessage, type Message, type SimpleStreamOptions, type TranscriptContext } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
 import type {
   AskUserQuestionResponseV1,
@@ -30,6 +30,7 @@ import { declarePiRuntimeReplay } from "./pi-runtime-tool.js";
 import { isNonChatModel } from "../../renderer/shared/model-eligibility.js";
 import type { Provider } from "./types.js";
 import { isAcpHarnessProvider } from "../../renderer/shared/acp-harness.js";
+import { oneOffCallOptions, sideCallContinuation, sideCallModelKey, type SideCallPrefix } from "./side-call-prefix.js";
 
 export const ADVISOR_EXTENSION_ID = "aiden.rpiv.advisor";
 export const ADVISOR_TOOL_NAME = "advisor";
@@ -42,7 +43,15 @@ export const ADVISOR_REVIEWER_SYSTEM_PROMPT =
   "You are a tool-free advisor to another model that is executing the user's task. Read the surviving conversation and executor-tool evidence. Return exactly one concise, directive response: a concrete plan, a correction to the current approach, or a stop signal requiring user input. Never call tools, never address the user, never claim to have performed work, and do not reveal hidden reasoning. Ground guidance in the supplied evidence.";
 
 export const ADVISOR_TRANSFER_NOTICE =
-  "Advisor sends bounded surviving conversation, completed tool evidence, a sanitized tool inventory, and supported images to the selected provider in a separate tool-free request. Aiden never attaches provider credentials and applies best-effort credential redaction, but remaining content may still be sensitive.";
+  "Advisor sends bounded surviving conversation, completed tool evidence, a sanitized tool inventory, and supported images to the selected provider in a separate tool-free request. When the reviewer is the model already running this chat, the review instead continues that model's own request, so the same provider receives the conversation and tool list it already has, and no tool runs; if that review fails, the separate tool-free request is sent instead. Aiden never attaches provider credentials and applies best-effort credential redaction to a separate request, but remaining content may still be sensitive.";
+
+/**
+ * The review instruction when the reviewer is the executor's own model and the
+ * review continues the executor's request (`sideCallPrefix`). The executor's
+ * tools stay declared so its cached prefix is reused; none of them runs.
+ */
+export const ADVISOR_CONTINUATION_INSTRUCTION =
+  "Advisor review. The model executing this task, in the turns above, asked for a second opinion with the advisor tool, and the task is paused while you give it. Act as a tool-free advisor: review the conversation and tool evidence above and return exactly one concise, directive response: a concrete plan, a correction to the current approach, or a stop signal requiring user input. Do not call any tool, since none runs during this review. Never address the user, never claim to have performed work, and do not reveal hidden reasoning. Ground guidance in the evidence above.";
 
 const ADVISOR_EXECUTOR_GUIDANCE =
   "An advisor tool is available for one optional second opinion during this response. Use it only when stronger judgment would materially reduce risk—for a consequential ambiguity, a non-converging approach, or before an irreversible decision. Never silently choose a reviewer. After a successful consultation, briefly attribute and restate both the material guidance and the Advisor transfer notice in your visible reply; never expose hidden reasoning or dump the raw advisor response.";
@@ -190,7 +199,95 @@ export interface AdvisorExtensionInput {
     questions: AskUserQuestionV1[],
     signal?: AbortSignal,
   ): Promise<AskUserQuestionResponseV1>;
+  /**
+   * Whether the chooser can be shown changes from one turn to the next in this
+   * chat (a paired device that cannot show question prompts). System then
+   * states guidance true either way, and the host sends
+   * `ADVISOR_NO_CHOOSER_TURN_NOTE` after a prompt whose turn has no
+   * `requestQuestionnaire`, so the cached prefix does not follow the device.
+   */
+  chooserByTurn?: boolean;
+  /**
+   * The chat's last foreground request while its prompt cache is live. When
+   * the reviewer is the executor's own model and that request's reply holds
+   * this advisor call, the review continues it instead of sending a separate
+   * request.
+   */
+  sideCallPrefix?(): Promise<SideCallPrefix | undefined>;
 }
+
+/**
+ * The messages a same-model review appends to the executor's request: a
+ * result for each tool call in its reply and the review instruction. Tools
+ * run in order and the advisor runs alone, so each call before it has
+ * finished and gets its real result from the live turn; a call after it has
+ * not run. Undefined when an earlier call's result is missing.
+ */
+function advisorContinuationMessages(
+  prefix: SideCallPrefix,
+  toolCallId: string,
+  liveMessages: readonly AgentMessage[],
+): Message[] | undefined {
+  const timestamp = Date.now();
+  const completed = new Map<string, Message>();
+  for (const message of liveMessages) {
+    if (message.role !== "toolResult") continue;
+    const { role, toolCallId: id, toolName, content, isError, timestamp: at } = message;
+    completed.set(id, { role, toolCallId: id, toolName, content, isError, timestamp: at });
+  }
+  const calls = prefix.response.content.filter(
+    (part): part is Extract<AssistantMessage["content"][number], { type: "toolCall" }> => part.type === "toolCall",
+  );
+  const advisorAt = calls.findIndex((part) => part.id === toolCallId);
+  const results: Message[] = [];
+  for (const [index, part] of calls.entries()) {
+    if (index < advisorAt) {
+      const result = completed.get(part.id);
+      if (!result) return undefined;
+      results.push(result);
+      continue;
+    }
+    results.push({
+      role: "toolResult",
+      toolCallId: part.id,
+      toolName: part.name,
+      content: [{
+        type: "text",
+        text: index === advisorAt
+          ? "Advisor review requested; the instruction follows."
+          : "Not run: the task is paused for an advisor review.",
+      }],
+      isError: false,
+      timestamp,
+    });
+  }
+  return [
+    ...results,
+    { role: "user", content: [{ type: "text", text: ADVISOR_CONTINUATION_INSTRUCTION }], timestamp },
+  ];
+}
+
+/**
+ * The executor's request this review may continue, if any: the reviewer is
+ * the executor's model at the executor's effort, and that request's reply
+ * holds this advisor call. A different effort changes the thinking settings
+ * the cached prefix was written with, so that review is a separate request.
+ */
+async function continuableAdvisorPrefix(
+  input: AdvisorExtensionInput,
+  selection: AdvisorSelectionV1,
+  toolCallId: string,
+): Promise<SideCallPrefix | undefined> {
+  if (selection.providerId !== input.executor.providerId || selection.modelId !== input.executor.modelId) return undefined;
+  const prefix = await input.sideCallPrefix?.();
+  if (!prefix?.response.content.some((part) => part.type === "toolCall" && part.id === toolCallId)) return undefined;
+  if (selection.effort && selection.effort !== prefix.options.reasoning) return undefined;
+  return prefix;
+}
+
+/** The turn note for a turn that cannot show the Advisor model chooser (`chooserByTurn`). */
+export const ADVISOR_NO_CHOOSER_TURN_NOTE =
+  "The Advisor model chooser cannot be shown for this message. Call advisor only when the latest user request explicitly names both exact reviewer IDs; first state the Advisor transfer notice visibly, then pass both IDs. Otherwise do not call advisor.";
 
 export interface AdvisorToolDetails {
   status: "running" | "completed" | "failed" | "cancelled" | "blocked";
@@ -438,14 +535,18 @@ async function chooseAdvisorSelection(
   return questionnaireSelection(response, choices, candidates, effort);
 }
 
-function executorPrompt(candidates: readonly AdvisorCandidate[], canAskUser: boolean): string {
+function executorPrompt(candidates: readonly AdvisorCandidate[], chooser: "always" | "by-turn" | "never"): string {
   const catalog = candidates
     .slice(0, MAX_ADVISOR_PROMPT_CANDIDATES)
     .map((candidate) => `- ${candidateDescriptor(candidate)}`)
     .join("\n");
-  const selectionGuidance = canAskUser
-    ? "If the latest user request explicitly names an available reviewer provider and model, first state the Advisor transfer notice visibly, then pass both exact IDs to advisor. Otherwise call advisor without either ID: Aiden will pause and use Ask User Question so the user chooses for this consultation."
-    : "This surface cannot show the Advisor model chooser. Call advisor only when the latest user request explicitly names both exact reviewer IDs; first state the Advisor transfer notice visibly, then pass both IDs. Otherwise do not call advisor.";
+  const selectionGuidance =
+    chooser === "never"
+      ? "This surface cannot show the Advisor model chooser. Call advisor only when the latest user request explicitly names both exact reviewer IDs; first state the Advisor transfer notice visibly, then pass both IDs. Otherwise do not call advisor."
+      : "If the latest user request explicitly names an available reviewer provider and model, first state the Advisor transfer notice visibly, then pass both exact IDs to advisor. Otherwise call advisor without either ID: Aiden will pause and use Ask User Question so the user chooses for this consultation." +
+        (chooser === "by-turn"
+          ? " When a note after the user's message says the chooser cannot be shown for that message, follow the note instead."
+          : "");
   const omitted = Math.max(0, candidates.length - MAX_ADVISOR_PROMPT_CANDIDATES);
   const omittedNotice = omitted > 0 ? `\n- …and ${omitted} more configured targets` : "";
   return `${ADVISOR_EXECUTOR_GUIDANCE}\n\nAdvisor transfer notice: ${ADVISOR_TRANSFER_NOTICE}\n\n${selectionGuidance}\n\nConfigured reviewer targets (exact provider/model IDs):\n${catalog}${omittedNotice}`;
@@ -528,7 +629,9 @@ export class AdvisorRuntime {
           );
           if (!selection) {
             return normalResult(
-              "The user did not choose an advisor provider and model. Continue without a consultation and do not ask again in this response.",
+              input.requestQuestionnaire
+                ? "The user did not choose an advisor provider and model. Continue without a consultation and do not ask again in this response."
+                : "The Advisor model chooser cannot be shown in this turn, and this call did not name both exact reviewer IDs. Continue without a consultation and do not ask again in this response.",
               { status: signal?.aborted ? "cancelled" : "blocked" },
             );
           }
@@ -542,6 +645,11 @@ export class AdvisorRuntime {
           );
 
           let runtime: ResolvedModelRuntime;
+          let parentPrefix = await continuableAdvisorPrefix(input, selection, toolCallId);
+          const continuation = parentPrefix
+            ? advisorContinuationMessages(parentPrefix, toolCallId, input.getLiveMessages(toolCallId))
+            : undefined;
+          if (!continuation) parentPrefix = undefined;
           try {
             if (isAcpHarnessProvider(selection.providerId)) {
               throw new Error("Agent-backed models cannot review another model's work.");
@@ -550,12 +658,15 @@ export class AdvisorRuntime {
               selection.providerId,
               selection.modelId,
               signal,
-              // Advisor dispatch is a one-shot call; a fresh id still satisfies
-              // gateway per-request attribution.
-              randomUUID(),
+              // A review that continues the executor's request uses the chat's
+              // conversation id, as that request did. A separate review is a
+              // one-shot call; a fresh id still satisfies gateway per-request
+              // attribution.
+              parentPrefix?.conversationId ?? randomUUID(),
             );
             assertAdvisorRuntimeSelection(selection, runtime);
             await preflightAdvisorRuntimeAuth(runtime, signal);
+            if (parentPrefix && parentPrefix.modelKey !== sideCallModelKey(runtime.model)) parentPrefix = undefined;
           } catch (error) {
             this.dependencies.reportFailure?.("resolve", error);
             return normalResult(
@@ -564,114 +675,136 @@ export class AdvisorRuntime {
             );
           }
 
-          let projection;
-          try {
-            projection = projectAdvisorContext({
-              liveMessages: input.getLiveMessages(toolCallId),
-              inflightToolCallId: toolCallId,
-              executorTools: input.executorTools,
-              reviewerContextWindow: runtime.model.contextWindow,
-              reviewerSupportsImages: runtime.model.input.includes("image"),
-              reviewerSystemPrompt: ADVISOR_REVIEWER_SYSTEM_PROMPT,
-            });
-          } catch (error) {
-            this.dependencies.reportFailure?.("context", error);
-            return normalResult(
-              "Aiden could not safely prepare the advisor context. Continue without a consultation.",
-              { status: "failed", advisorModel: advisorLabel },
-            );
-          }
+          const callOptions = {
+            apiKey: runtime.apiKey,
+            timeoutMs: ADVISOR_TIMEOUT_MS,
+            maxRetries: 0,
+            maxRetryDelayMs: 0,
+            ...(runtime.headers ? { headers: runtime.headers } : {}),
+          };
 
-          const attemptId = randomUUID();
-          try {
-            await this.dependencies.attempts.prepare(
-              attemptId,
-              runtime.provider.id,
-              runtime.model.id,
-            );
-            await this.dependencies.attempts.markDispatchStarted(attemptId);
-          } catch (error) {
-            this.dependencies.reportFailure?.("journal", error);
+          // One consultation: its own attempt record and usage, whatever it returns.
+          const consult = async (
+            request: { context: TranscriptContext; options: SimpleStreamOptions },
+          ): Promise<{ state: "completed" | "failed" | "cancelled"; response?: AssistantMessage } | undefined> => {
+            const attemptId = randomUUID();
+            try {
+              await this.dependencies.attempts.prepare(
+                attemptId,
+                runtime.provider.id,
+                runtime.model.id,
+              );
+              await this.dependencies.attempts.markDispatchStarted(attemptId);
+            } catch (error) {
+              this.dependencies.reportFailure?.("journal", error);
+              return undefined;
+            }
+
+            let response: AssistantMessage | undefined;
+            let state: "completed" | "failed" | "cancelled" = "failed";
+            let failure: AdvisorAttemptFailure = "provider";
+            try {
+              response = await withRequestSignal(signal, async (requestSignal, timedOut) => {
+                try {
+                  return await runtime.streams
+                    .streamSimple(runtime.model, request.context, { ...request.options, signal: requestSignal })
+                    .result();
+                } catch (error) {
+                  failure = abortReason(requestSignal, timedOut());
+                  throw error;
+                }
+              });
+              // Providers can turn an abort into a synthetic error response. Preserve
+              // the caller's cancellation in both the attempt and usage ledger.
+              if (signal?.aborted) response = { ...response, stopReason: "aborted" };
+              if (response.stopReason === "aborted") {
+                state = "cancelled";
+                failure = signal?.aborted ? "cancelled" : "timeout";
+              } else if (response.stopReason === "error" || response.stopReason === "length") {
+                state = "failed";
+                failure = "provider";
+              } else if (!textFrom(response)) {
+                state = "failed";
+                failure = "provider";
+              } else {
+                state = "completed";
+                failure = "none";
+              }
+            } catch (error) {
+              this.dependencies.reportFailure?.("dispatch", error);
+              state = failure === "cancelled" || failure === "timeout" ? "cancelled" : "failed";
+            }
+
+            try {
+              await this.dependencies.attempts.settle(attemptId, state, failure);
+            } catch (error) {
+              this.dependencies.reportFailure?.("settle", error);
+            }
+            try {
+              if (response) await this.dependencies.recordUsage(response, runtime, attemptId);
+              else {
+                await this.dependencies.recordUnreportedUsage(
+                  runtime,
+                  state === "cancelled" ? "cancelled" : "failed",
+                  attemptId,
+                );
+              }
+              await this.dependencies.attempts.markUsageRecorded(attemptId);
+            } catch (error) {
+              this.dependencies.reportFailure?.("usage", error);
+            }
+            return { state, ...(response ? { response } : {}) };
+          };
+
+          // A same-model review continues the executor's request. When that
+          // fails or answers nothing, the separate tool-free review follows,
+          // as if there had been no prefix; a cancelled or timed-out one does
+          // not, since the time is spent.
+          const continued = parentPrefix && continuation
+            ? sideCallContinuation(parentPrefix, continuation, callOptions)
+            : undefined;
+          let outcome = continued ? await consult(continued) : undefined;
+          if (!continued || outcome?.state === "failed") {
+            let request: { context: TranscriptContext; options: SimpleStreamOptions };
+            try {
+              const projection = projectAdvisorContext({
+                liveMessages: input.getLiveMessages(toolCallId),
+                inflightToolCallId: toolCallId,
+                executorTools: input.executorTools,
+                reviewerContextWindow: runtime.model.contextWindow,
+                reviewerSupportsImages: runtime.model.input.includes("image"),
+                reviewerSystemPrompt: ADVISOR_REVIEWER_SYSTEM_PROMPT,
+              });
+              request = {
+                context: normalizeContext({
+                  systemPrompt: ADVISOR_REVIEWER_SYSTEM_PROMPT,
+                  messages: projection.messages,
+                  tools: [],
+                }),
+                options: oneOffCallOptions({
+                  ...callOptions,
+                  ...(selection.effort ? { reasoning: selection.effort } : {}),
+                }),
+              };
+            } catch (error) {
+              this.dependencies.reportFailure?.("context", error);
+              return normalResult(
+                "Aiden could not safely prepare the advisor context. Continue without a consultation.",
+                { status: "failed", advisorModel: advisorLabel },
+              );
+            }
+            outcome = await consult(request);
+          }
+          if (!outcome) {
             return normalResult(
               "Aiden could not durably begin the advisor consultation, so no reviewer request was sent.",
               { status: "failed", advisorModel: advisorLabel },
             );
           }
 
-          let response: AssistantMessage | undefined;
-          let state: "completed" | "failed" | "cancelled" = "failed";
-          let failure: AdvisorAttemptFailure = "provider";
-          try {
-            response = await withRequestSignal(signal, async (requestSignal, timedOut) => {
-              try {
-                return await runtime.streams
-                  .streamSimple(
-                    runtime.model,
-                    normalizeContext({
-                      systemPrompt: ADVISOR_REVIEWER_SYSTEM_PROMPT,
-                      messages: projection.messages,
-                      tools: [],
-                    }),
-                    {
-                      signal: requestSignal,
-                      apiKey: runtime.apiKey,
-                      cacheRetention: "none",
-                      timeoutMs: ADVISOR_TIMEOUT_MS,
-                      maxRetries: 0,
-                      maxRetryDelayMs: 0,
-                      ...(selection.effort ? { reasoning: selection.effort } : {}),
-                      ...(runtime.headers ? { headers: runtime.headers } : {}),
-                    },
-                  )
-                  .result();
-              } catch (error) {
-                failure = abortReason(requestSignal, timedOut());
-                throw error;
-              }
-            });
-            // Providers can turn an abort into a synthetic error response. Preserve
-            // the caller's cancellation in both the attempt and usage ledger.
-            if (signal?.aborted) response = { ...response, stopReason: "aborted" };
-            if (response.stopReason === "aborted") {
-              state = "cancelled";
-              failure = signal?.aborted ? "cancelled" : "timeout";
-            } else if (response.stopReason === "error" || response.stopReason === "length") {
-              state = "failed";
-              failure = "provider";
-            } else if (!textFrom(response)) {
-              state = "failed";
-              failure = "provider";
-            } else {
-              state = "completed";
-              failure = "none";
-            }
-          } catch (error) {
-            this.dependencies.reportFailure?.("dispatch", error);
-            state = failure === "cancelled" || failure === "timeout" ? "cancelled" : "failed";
-          }
-
-          try {
-            await this.dependencies.attempts.settle(attemptId, state, failure);
-          } catch (error) {
-            this.dependencies.reportFailure?.("settle", error);
-          }
-          try {
-            if (response) await this.dependencies.recordUsage(response, runtime, attemptId);
-            else {
-              await this.dependencies.recordUnreportedUsage(
-                runtime,
-                state === "cancelled" ? "cancelled" : "failed",
-                attemptId,
-              );
-            }
-            await this.dependencies.attempts.markUsageRecorded(attemptId);
-          } catch (error) {
-            this.dependencies.reportFailure?.("usage", error);
-          }
-
-          if (state === "completed" && response) {
+          if (outcome.state === "completed" && outcome.response) {
             return normalResult(
-              `Advisor transfer notice for the visible reply: ${ADVISOR_TRANSFER_NOTICE}\n\nAdvisor guidance:\n${textFrom(response)}`,
+              `Advisor transfer notice for the visible reply: ${ADVISOR_TRANSFER_NOTICE}\n\nAdvisor guidance:\n${textFrom(outcome.response)}`,
               {
                 status: "completed",
                 advisorModel: advisorLabel,
@@ -679,7 +812,7 @@ export class AdvisorRuntime {
               },
             );
           }
-          if (state === "cancelled") {
+          if (outcome.state === "cancelled") {
             return normalResult("The advisor consultation was cancelled before it completed.", {
               status: "cancelled",
               advisorModel: advisorLabel,
@@ -699,7 +832,10 @@ export class AdvisorRuntime {
 
     return {
       id: ADVISOR_EXTENSION_ID,
-      systemPrompt: executorPrompt(candidates, input.requestQuestionnaire !== undefined),
+      systemPrompt: executorPrompt(
+        candidates,
+        input.chooserByTurn ? "by-turn" : input.requestQuestionnaire ? "always" : "never",
+      ),
       tools: [tool],
     };
   }

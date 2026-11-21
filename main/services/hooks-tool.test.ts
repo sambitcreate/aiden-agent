@@ -11,7 +11,7 @@ import { hookScopesFor } from "./hooks/hook-config.js";
 import type { HookRunFunction } from "./hooks/hook-dispatcher.js";
 import { createHookService, type HookService } from "./hooks/hook-service.js";
 import type { HookDispatchContext, HookPayload } from "./hooks/hook-types.js";
-import { createHooksTool, offersHooksTool, type HooksToolApprovalCard, type HooksToolSurface } from "./hooks-tool.js";
+import { createHooksTool, hooksToolUnavailableReason, offersHooksTool, type HooksToolApprovalCard, type HooksToolSurface } from "./hooks-tool.js";
 import type { ToolApprovalOutcome } from "./tool-approval.js";
 
 interface Fixture {
@@ -99,6 +99,16 @@ test("the tool is offered on attended workspace chats only", () => {
     ["a turn that excludes it", { ...attended, excludedToolNames: new Set(["hooks"]) }],
   ];
   for (const [label, surface] of withheld) assert.equal(offersHooksTool(surface), false, label);
+});
+
+test("an unattended or paired-device turn keeps the chat's hooks declaration and refuses the call", () => {
+  // The client offers the tool by the chat's surface, without the turn's
+  // audience, so every turn of a workspace chat declares the same tools.
+  assert.equal(offersHooksTool({ ...attended, unattended: false, remoteAudience: false }), true);
+  assert.match(hooksToolUnavailableReason("hooks", { ...attended, unattended: true }) ?? "", /not available in this turn.*follow-up/su);
+  assert.match(hooksToolUnavailableReason("hooks", { ...attended, remoteAudience: true }) ?? "", /not available in this turn.*paired device/su);
+  assert.equal(hooksToolUnavailableReason("hooks", attended), undefined);
+  assert.equal(hooksToolUnavailableReason("run_command", { ...attended, unattended: true }), undefined);
 });
 
 test("an allowed proposal saves the exact hook shown on a once-only card", async (t) => {

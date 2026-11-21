@@ -248,14 +248,12 @@ function triggerLabel(markup: string): string | null {
   return /class="aiden-live-trigger-label">([^<]*)</u.exec(markup)?.[1] ?? null;
 }
 
-test("the idle Live trigger is a pill labelled Live with its setup name", () => {
+test("an idle Live shows no corner pill: the send button starts it, and the shortcut still works", () => {
   const { markup, commandEnabled } = renderDock(idleLive);
-  assert.equal(triggerLabel(markup), "Live");
-  assert.match(markup, /aria-label="Set up Aiden Live"/u);
-  assert.match(markup, /data-aiden-mark="helix-calm"/u);
-  assert.doesNotMatch(markup, /<img/u);
+  assert.equal(triggerLabel(markup), null);
+  assert.doesNotMatch(markup, /aria-label="Set up Aiden Live"/u);
   assert.equal(commandEnabled, true);
-  assert.equal(triggerLabel(renderDock({ ...idleLive, available: false, setupComplete: false }).markup), "Live");
+  assert.equal(triggerLabel(renderDock({ ...idleLive, available: false, setupComplete: false }).markup), null);
 });
 
 test("the Live pill names each state outside a session, and the ribbon names each state in one", () => {
@@ -295,7 +293,7 @@ test("the Live pill names each state outside a session, and the ribbon names eac
   assert.equal(liveTriggerLabel("listening", true, true), "Stopping…");
 });
 
-test("hiding the Live button removes only the idle pill; the shortcut still works", () => {
+test("with the send-button switch off, sessions, approvals and errors still show in the corner", () => {
   const hidden = renderDock(idleLive, { buttonVisible: false });
   assert.equal(triggerLabel(hidden.markup), null);
   assert.equal(hidden.commandEnabled, true);
@@ -382,8 +380,8 @@ test("Live settings offer the button switch only while Aiden Live is on", () => 
   const on = renderToStaticMarkup(
     <AidenLiveSwitches enabled buttonVisible={false} onChange={() => undefined} />,
   );
-  assert.deepEqual(switches(on), { "Aiden Live": true, "Show Live button": false });
-  assert.match(on, /The shortcut still works when it’s hidden\./u);
+  assert.deepEqual(switches(on), { "Aiden Live": true, "Show Live in the send button": false });
+  assert.match(on, /The shortcut still works when this is off\./u);
   const off = renderToStaticMarkup(
     <AidenLiveSwitches enabled={false} buttonVisible onChange={() => undefined} />,
   );

@@ -16,6 +16,7 @@ import {
   type AppendResult,
   type QueueIntoRunResult,
   type StartTurnResult,
+  UNATTENDED_FOLLOW_UP_GENERATION,
 } from "./notice-delivery.js";
 
 /** A headless owner for a turn nobody is watching; the Mac's run journal still mirrors it. */
@@ -104,11 +105,7 @@ async function startTurn(chatId: string, post?: AgentNoticePost): Promise<StartT
       owner,
       {
         turnId: streamId,
-        usageSource: "chat",
-        unattended: true,
-        allowSubagents: false,
-        allowComputerUse: false,
-        allowMcpTools: false,
+        ...UNATTENDED_FOLLOW_UP_GENERATION,
       },
     );
     if (!started) {

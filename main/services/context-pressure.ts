@@ -17,6 +17,7 @@ import {
   projectChatContextPressure,
   promptCacheWindow,
   type PromptCacheRefresh,
+  type PromptCacheRetentionRecord,
   type GenerationContextOptions,
 } from "./generation-context.js";
 import { resolveCompactionModelMetadata } from "./model-runtime.js";
@@ -42,6 +43,9 @@ import { mcpManager } from "./mcp.js";
 import { mcpServerOffersTools } from "../../renderer/shared/mcp-exposure.js";
 import { draftUserPiMessage } from "./generation-messages.js";
 import { RecentChatCache } from "./recent-chat-cache.js";
+import { chatPromptCacheTelemetry, forgetChatPromptCacheState } from "./chat-prompt-cache-state.js";
+
+export { chatPromptCacheTelemetry };
 
 /**
  * Profiles are kept for the chats used most recently. An evicted chat's next
@@ -76,9 +80,27 @@ export function rememberPromptCacheRefresh(chatId: string, refresh: PromptCacheR
   promptCacheRefreshes.set(chatId, refresh);
 }
 
+/**
+ * The retention of the chat's latest reply, so ambient reads count down the
+ * lifetime that reply's cache was written with. Released with the refreshes.
+ */
+const promptCacheRetentions = new Map<string, PromptCacheRetentionRecord>();
+
+export function rememberPromptCacheRetention(chatId: string, record: PromptCacheRetentionRecord): void {
+  promptCacheRetentions.set(chatId, record);
+}
+
+/** The chat's last miss in the renderer's shape. */
+export function lastPromptCacheMiss(chatId: string): ChatContextPressureV1["lastCacheMiss"] {
+  const miss = chatPromptCacheTelemetry.lastMiss(chatId);
+  return miss ? { source: miss.source, at: miss.at } : undefined;
+}
+
 export function forgetChatContextProfile(chatId: string): void {
   generationProfiles.delete(chatId);
   promptCacheRefreshes.delete(chatId);
+  promptCacheRetentions.delete(chatId);
+  forgetChatPromptCacheState(chatId);
   ambientProfiles.delete(chatId);
   journalSnapshots.delete(chatId);
 }
@@ -331,6 +353,11 @@ export async function chatContextPressure(
       ]
     : messages;
   const pressure = projectChatContextPressure(projected, options);
-  const promptCache = promptCacheWindow(model, messages, promptCacheRefreshes.get(chatId));
-  return promptCache ? { ...pressure, promptCache } : pressure;
+  const promptCache = promptCacheWindow(model, messages, promptCacheRefreshes.get(chatId), promptCacheRetentions.get(chatId));
+  const lastCacheMiss = lastPromptCacheMiss(chatId);
+  return {
+    ...pressure,
+    ...(promptCache ? { promptCache } : {}),
+    ...(lastCacheMiss ? { lastCacheMiss } : {}),
+  };
 }

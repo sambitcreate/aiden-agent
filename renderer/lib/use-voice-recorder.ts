@@ -355,6 +355,24 @@ export function useVoiceRecorder(onTranscript: (text: string) => void, options: 
     }
   }, []);
 
+  /**
+   * Lets go of the microphone for another capture (Aiden Live). A start still
+   * opening the microphone is cancelled, since it has heard nothing yet; a
+   * recording stops and is transcribed as usual. Resolves once the capture's
+   * tracks have stopped, or after `timeoutMs`.
+   */
+  const releaseMicrophone = React.useCallback(
+    async (timeoutMs = 2_000) => {
+      if (operationGate.isStarting() && !recorderRef.current) operationGate.cancel();
+      else stop();
+      const deadline = Date.now() + timeoutMs;
+      while (streamRef.current && Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+    },
+    [operationGate, stop],
+  );
+
   React.useEffect(
     () => () => {
       operationGate.cancel();
@@ -398,5 +416,6 @@ export function useVoiceRecorder(onTranscript: (text: string) => void, options: 
     resolveRecordedRetryConsent,
     start,
     stop,
+    releaseMicrophone,
   };
 }

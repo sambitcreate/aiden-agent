@@ -1,18 +1,28 @@
 # Worktree Creation Performance (Tier 1 & Tier 2)
 
-**Status:** Active (2026-11-21) on branch `worktree_performance_optimization` (based on `main` `a5b9d37f6`).
+**Status:** Implemented, in review (2026-11-21) on branch `worktree_performance_optimization` (merged with `origin/main` `6555f1767`).
 
 ## Goal
 
 Make managed worktree creation and worktree-on-send feel instantaneous and smooth on macOS and Linux without relaxing any of Aiden's ownership, admission, TOCTOU, snapshot, or disk-capacity safety invariants.
 
-## Verified Uncontended Baseline (`aiden-macos`, 6,496 tracked files, M5 Max APFS)
+## Measured Head-to-Head Results (`aiden-macos`, 6,497 tracked files, Apple Silicon APFS, 5-run medians)
 
-| Flow | Baseline | Target (Tier 1 + Tier 2) |
-| :--- | ---: | ---: |
-| Explicit Create (`git:createWorktree`) | **1,253 ms** (128 git spawns) | **~415 ms** (~4 spawns, ~3.0× faster) |
-| Worktree-on-Send → First LLM Request (local) | **~2,150 ms** (180 git spawns, ~20 IPCs) | **~535 ms** (~6 spawns, ~3 IPCs, ~4.0× faster) |
-| `.worktreeinclude` (31 files + `node_modules`) | **Fails (`output_limit` @ 8.66 MiB)** + 142 ms copy | **~50 ms total** (0 crashes, CoW batch) |
+| Operation | Before (`origin/main`) | After (this PR) | Saved | % Reduction | Speedup |
+| :--- | ---: | ---: | ---: | ---: | ---: |
+| Explicit Create (`createIn` + `createWorktree`) | **1,417 ms** (1.42 s, 127 git spawns) | **744 ms** (0.74 s, 8 git spawns) | **−673 ms** (−0.67 s) | **−47.5%** (−93.7% spawns) | **1.90×** |
+| Worktree-on-Send Backend (local base → ready for LLM) | **1,915 ms** (1.92 s, 144 git spawns) | **711 ms** (0.71 s, 12 git spawns) | **−1,204 ms** (−1.20 s) | **−62.9%** (−91.7% spawns) | **2.69×** |
+| Post-Create `git.info(worktreePath)` | **172.82 ms** (6 git spawns) | **0.77 ms** (0 git spawns) | **−172.05 ms** | **−99.6%** (−100% spawns) | **224×** |
+| Per-Op Admission (`managedWorktreeUsable`) | **15.28 ms** (4 git spawns) | **0.58 ms** (0 git spawns) | **−14.70 ms** | **−96.2%** (−100% spawns) | **26.3×** |
+| `.worktreeinclude` (31 ignored files, clean repo) | **100 ms** (31 helper spawns + 62 fsyncs) | **40 ms** (1 batched CoW helper spawn) | **−60 ms** | **−60.0%** | **2.50×** |
+| `.worktreeinclude` (31 files + 5,000-file `node_modules`) | **Crashed** (`output_limit` > 1 MiB) | **44 ms** (0 crashes) | Fixed crash | **100% crash fix** | ∞ |
+
+## As-Built Deviations & Refinements from Adversarial Reviews
+
+- **No cross-caller `usableFlights` cache (Phase 2):** Removed in-flight coalescing across callers for `managedWorktreeUsable` so live FS verification never shares a stale admission across concurrent mutations; fenced instead with `while (this.mutations.has(commonDir))` + `mutationEpochs` and `O_RDONLY | O_NOFOLLOW | O_NONBLOCK` reads.
+- **No workspace-folder read during Flow-B skill warmup (Phase 3):** `chats:createWithFirstMessage` warms `discoverSkillCandidatesWithCachedGlobals(undefined)` only when `settings.skillsEnabled !== false`, honoring No Access workspace boundaries and avoiding source-local `.claude/settings.local.json` cache-key drift.
+- **Graceful `SIGTERM` + close-gated abort settlement in `provision` (Phase 4):** `provisionManagedWorktreeFilesBatch` manages `AbortSignal` via `SIGTERM` (+ 2 s `SIGKILL` fallback) and settles strictly on `"close"` after `stdout` drains, while `native/worktree-file-io/main.c` catches `SIGTERM`, unlinks partial temps, and emits `p <idx> <bytes>` 1:1 with disk installs so rollback never races with a running helper.
+- **Deferred (out of scope):** Tier 3 standby worktree pool remains out of scope; `FirstMessageWorktreeLedger` `ready` fsync and `GitRepoWatcher` self-echo suppression were left untouched to preserve crash-safety guarantees.
 
 ## Non-Negotiable Safety Invariants
 

@@ -994,6 +994,8 @@ export function ChatPane({ chatId }: { chatId: string }) {
         generationRef.current = null;
         generationChatIdRef.current = null;
       }
+      // A reply that settled in view kept the chat's cache warm; leaving ends that.
+      if (departingChatId) void chatsApi.releaseCacheWarming(departingChatId).catch(() => {});
       const sideQuestion = btwViewRef.current;
       if (
         sideQuestion &&
@@ -4238,6 +4240,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
                       }
                 }
                 hasQueuedMessages={queuedState.messages.length > 0}
+                offerLive={liveChatReachable(chat.data)}
                 compactionHeld={queuedState.holdReason === "compaction"}
                 forkSummaryHold={
                   forkSummary?.state === "pending" || forkSummary?.state === "failed"

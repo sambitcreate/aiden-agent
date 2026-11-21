@@ -13,8 +13,9 @@ test("foreground generation adds Advisor per run before freezing runtime contrib
 });
 
 test("Advisor receives authoritative surface, mode, executor, and tool inventory", () => {
+  // The chooser is built just before the extension call and spread into it.
   const hook = source.slice(
-    source.indexOf("advisorRuntime.extensionForGeneration"),
+    source.indexOf("const advisorChooser"),
     source.indexOf(
       "const runtimeExtensions",
       source.indexOf("advisorRuntime.extensionForGeneration"),
@@ -26,7 +27,7 @@ test("Advisor receives authoritative surface, mode, executor, and tool inventory
   assert.match(hook, /mode: authoritativeMode/u);
   assert.match(hook, /bot: preparedBotContext !== undefined/u);
   assert.match(hook, /child: false/u);
-  assert.match(hook, /rendererOwner: owner\.id !== 0/u);
+  assert.match(hook, /rendererOwner: declaresWindow,/u);
   assert.match(hook, /excluded: options\.excludeToolNames\?\.has\(ADVISOR_TOOL_NAME\)/u);
   assert.match(hook, /providerId: runtime\.provider\.id/u);
   assert.match(hook, /modelId: model\.id/u);

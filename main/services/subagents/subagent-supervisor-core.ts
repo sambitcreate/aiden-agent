@@ -489,7 +489,14 @@ export class SubagentSupervisor {
     inheritFrom?: SubagentChildModel<ResolvedModelRuntime>,
   ): Promise<(SubagentChildModel<ResolvedModelRuntime> | undefined)[]> {
     const select = this.input.selectChildModel;
-    if (!select) return tasks.map(() => inheritFrom);
+    if (!select) {
+      // No model policy here: a requested model or effort would otherwise be
+      // dropped silently, so the batch fails before any child launches.
+      if (tasks.some((task) => task.model !== undefined || task.effort !== undefined)) {
+        throw new Error("Subagent model and effort overrides are not available for this response; omit them to use the current model.");
+      }
+      return tasks.map(() => inheritFrom);
+    }
     return Promise.all(
       tasks.map((task) =>
         select(
