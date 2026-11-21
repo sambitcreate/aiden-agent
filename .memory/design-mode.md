@@ -257,3 +257,7 @@ Deviations from the P1 plan:
 - `useFrameSource` keeps the last read while a changed file is read again, so the panels don't blink (and lose focus) on reload.
 - The floating panel (`React.memo`) is hidden while a picture is taken (`[data-capturing]`, counted for overlapping captures) and stops key events from reaching the canvas except Escape and ⌘/Ctrl+Z/Y outside text boxes.
 - E2E: `tests/e2e/design-canvas.spec.ts` "the Tweaks panel folds a component's controls…" (screenshots `1440-tweaks-panel`, `-float`, `-float-folded`, `-show-all`). Version chip buttons need `exact: true` in Playwright (the Delete button's name contains the version's).
+
+## Wide inline visuals in design mode (2026-11-20)
+
+- Design mode's asymmetric `.aiden-dock-inset` (`--design-mode-gutter: 16px` start, `--aiden-dock-gutter` end) caused `.aiden-inline-visual[data-layout="wide"]`'s symmetric negative `margin-inline` breakout to pull wide visuals 16 px past the start edge. In `renderer/styles.css`, wide inline visuals are now scoped under `[data-scroll-content]:has(> .chat-content-column)`, and under `[data-design-mode]` they keep `margin-inline: 0` while growing rightwards to `max(100%, min(calc(100cqi - 2 * var(--design-mode-gutter)), var(--inline-visual-wide-max)))` (still overridden by `[data-chat-card-inset]`). Covered in `tests/e2e/inline-visuals.spec.ts` for both split and stacked design mode.
