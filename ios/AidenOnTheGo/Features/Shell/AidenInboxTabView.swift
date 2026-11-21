@@ -147,7 +147,7 @@ struct AidenInboxTabView: View {
                 isPinned: row.isPinned,
                 machine: roster.rowChip(for: row.id.instanceId, filter: filter.wrappedValue),
                 isDimmed: roster.isOffline(row.id.instanceId),
-                isSelected: selection == row.route,
+                isSelected: selection?.screen == row.route,
                 open: { onOpen(row.route) }
             )
             .contextMenu { contextMenu(for: row, actions: actions) }
@@ -167,10 +167,10 @@ struct AidenInboxTabView: View {
                 )
             }
             .buttonStyle(.plain)
-            .accessibilityAddTraits(selection == row.route ? .isSelected : [])
+            .accessibilityAddTraits(selection?.screen == row.route ? .isSelected : [])
             .listRowInsets(EdgeInsets(top: 0, leading: 12, bottom: 0, trailing: 12))
             .listRowSeparator(.hidden)
-            .listRowBackground(AidenInboxRowBackground(isSelected: selection == row.route, palette: palette))
+            .listRowBackground(AidenInboxRowBackground(isSelected: selection?.screen == row.route, palette: palette))
         }
     }
 

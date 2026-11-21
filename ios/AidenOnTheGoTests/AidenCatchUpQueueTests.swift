@@ -306,6 +306,29 @@ final class AidenCatchUpQueueTests: XCTestCase {
         }
     }
 
+    /// The run's chat can already be open as a fork of another chat. Catch
+    /// Up goes back to it there, the run holds it as its chat, and Next takes
+    /// it away.
+    func testARunsChatOpenAsAForkKeepsTheRun() {
+        let source = F.id("source", on: "studio")
+        let asFork = AidenAppRoute.fork(oldest, source: source)
+        let navigation = AidenAppNavigation()
+        navigation.openInboxRow(.chat(source))
+        navigation.push(asFork, over: .chat(source))
+
+        XCTAssertEqual(navigation.startCatchUp(in: queue()), oldest)
+        XCTAssertEqual(navigation.openChat, oldest)
+        XCTAssertEqual(navigation.catchUp?.current, oldest)
+
+        navigation.push(.settings, over: asFork)
+        navigation.inboxPath.removeLast()
+        XCTAssertEqual(navigation.catchUp?.current, oldest, "Back from a page over it")
+
+        XCTAssertEqual(navigation.advanceCatchUp(in: queue()), middle)
+        XCTAssertFalse(navigation.inboxPath.contains(asFork))
+        XCTAssertEqual(navigation.openChat, middle)
+    }
+
     func testAnEmptiedQueueEndsOnTheFinishedScreen() {
         let navigation = openedRun()
 

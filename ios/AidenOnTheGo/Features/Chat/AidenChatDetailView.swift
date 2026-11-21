@@ -43,6 +43,114 @@ struct AidenChatHoldsAttachmentsKey: PreferenceKey {
     }
 }
 
+/// What a chat screen keeps across a rebuild of its views: the transcript and
+/// its model, the composer with its draft, attachments and voice, the
+/// attachment picker, and the reader's place.
+@MainActor
+final class AidenChatScreenParts {
+    let model: AidenChatViewModel
+    let composerSession: AidenComposerSession
+    let follow: AidenTranscriptFollowController
+    let attachmentPicker: AidenAttachmentPickerState
+    let botToolsModel: AidenBotChatToolsModel?
+    /// The row at the top of the transcript while the reader is scrolled away
+    /// from the latest, by row ID; nil while following the latest.
+    var readingPlace: String?
+    /// The rows in view now, which become the reading place when a scroll
+    /// settles. A layout change alone never moves the reading place.
+    var rowsInView: Set<String> = []
+    /// Until when a new or resized transcript goes back to the reading place
+    /// as its rows finish measuring. A rebuilt scroll view starts at the
+    /// latest, and a split that collapses lays the screen out at more than one
+    /// width before it settles. The reader scrolling ends it early.
+    var returningUntil: ContinuousClock.Instant?
+
+    init(
+        model: AidenChatViewModel,
+        composerSession: AidenComposerSession? = nil,
+        botToolsModel: AidenBotChatToolsModel?
+    ) {
+        self.model = model
+        self.composerSession = composerSession ?? AidenComposerSession(draftOwner: model, attachmentOwner: model)
+        follow = AidenTranscriptFollowController()
+        attachmentPicker = AidenAttachmentPickerState()
+        self.botToolsModel = botToolsModel
+    }
+}
+
+/// One chat's screen state, held by the shell rather than by its views
+/// (`AidenChatScreens`). Opening or closing an iPhone Duo can build the
+/// screen's views again, and SwiftUI then reports the old ones gone and new
+/// ones there. The new views take the same parts, so the reader stays in the
+/// same chat at the same place with the same draft, attachments and voice.
+///
+/// What a screen does once nobody sees it waits a beat, so a rebuild costs
+/// nothing: once it's hidden it stops listening and saves the draft, and once
+/// its chat has also left every tab, it lets its attachments go and the shell
+/// forgets it.
+@MainActor
+final class AidenChatScreen {
+    private(set) var parts: AidenChatScreenParts?
+    private var appearances = 0
+    private var generation = 0
+    private let isOpen: @MainActor () -> Bool
+    private let onLeft: @MainActor () -> Void
+    private let pause: @MainActor (Duration) async -> Void
+
+    /// How long a screen that left waits for its next view, and then how much
+    /// longer for its chat to come back to a tab.
+    static let rebuildGrace = Duration.milliseconds(300)
+    static let leaveGrace = Duration.seconds(1)
+
+    init(
+        isOpen: @escaping @MainActor () -> Bool,
+        onLeft: @escaping @MainActor () -> Void = {},
+        pause: @escaping @MainActor (Duration) async -> Void = { try? await Task.sleep(for: $0) }
+    ) {
+        self.isOpen = isOpen
+        self.onLeft = onLeft
+        self.pause = pause
+    }
+
+    var isShowing: Bool { appearances > 0 }
+
+    /// The parts the first view made, or `make`'s.
+    func parts(_ make: () -> AidenChatScreenParts) -> AidenChatScreenParts {
+        if let parts { return parts }
+        let made = make()
+        parts = made
+        return made
+    }
+
+    func appeared() {
+        appearances += 1
+        generation += 1
+    }
+
+    /// A view of this screen left. `hidden` runs once no view has come back
+    /// a beat later; `left` runs after that if the chat is on no tab either.
+    /// Returns once both have had their say, for tests.
+    @discardableResult
+    func disappeared(
+        hidden: @escaping @MainActor () -> Void,
+        left: @escaping @MainActor () -> Void
+    ) -> Task<Void, Never> {
+        appearances = max(0, appearances - 1)
+        let leaving = generation
+        // Holds the screen: the shell may forget it meanwhile, and the
+        // cleanup still has to run.
+        return Task { @MainActor in
+            await pause(Self.rebuildGrace)
+            guard appearances == 0, generation == leaving else { return }
+            hidden()
+            await pause(Self.leaveGrace)
+            guard appearances == 0, generation == leaving, !isOpen() else { return }
+            left()
+            onLeft()
+        }
+    }
+}
+
 struct AidenChatDetailView: View {
     @Environment(\.aidenReduceMotion) private var reduceMotion
     @Environment(\.aidenPalette) private var palette
@@ -62,10 +170,12 @@ struct AidenChatDetailView: View {
     @State private var workspaceFileReference: String?
     @State private var showsWorkspaceFile = false
     @State private var progressSheet: AidenProgressSheet?
-    @State private var follow = AidenTranscriptFollowController()
+    @State private var follow: AidenTranscriptFollowController
     /// The one settled message whose footer a tap has shown.
     @State private var footerReveal = AidenMessageFooterReveal()
-    @State private var attachmentPicker = AidenAttachmentPickerState()
+    @State private var attachmentPicker: AidenAttachmentPickerState
+    /// Everything above that outlives these views, and the reader's place.
+    @State private var parts: AidenChatScreenParts
     @State private var isFileImporterPresented = false
     @State private var attachmentButtonCenter: CGPoint?
     @Namespace private var attachmentMotionNamespace
@@ -90,6 +200,8 @@ struct AidenChatDetailView: View {
     private let onOpenChat: (@MainActor (AidenChat) -> Void)?
     /// The machine this chat stays on when the default moves.
     private let pinnedOwner: String?
+    /// The shell's hold on this chat's screen, when it keeps one.
+    private let screen: AidenChatScreen?
 
     init(
         coordinator: AidenRemoteCoordinator,
@@ -100,26 +212,36 @@ struct AidenChatDetailView: View {
         onChatUpdated: @escaping @MainActor (AidenChat) -> Void = { _ in },
         onChatActivityChanged: @escaping @MainActor (String, AidenChatSummaryActivity) -> Void = { _, _ in },
         onOpenChat: (@MainActor (AidenChat) -> Void)? = nil,
-        composerSession: AidenComposerSession? = nil
+        composerSession: AidenComposerSession? = nil,
+        screen: AidenChatScreen? = nil
     ) {
         _coordinator = State(initialValue: coordinator)
         self.onOpenChat = onOpenChat
         pinnedOwner = owner.instanceId
-        let model = AidenChatViewModel(
-            coordinator: coordinator,
-            chat: chat,
-            owner: owner,
-            allowsMutations: allowsMutations,
-            onChatUpdated: onChatUpdated,
-            onChatActivityChanged: onChatActivityChanged
-        )
-        _model = State(initialValue: model)
-        _composerSession = State(
-            initialValue: composerSession ?? AidenComposerSession(draftOwner: model, attachmentOwner: model)
-        )
-        _botToolsModel = State(initialValue: chat.botId.map {
-            AidenBotChatToolsModel(chatID: chat.id, botID: $0, machine: owner.instanceId)
-        })
+        self.screen = screen
+        let make = {
+            AidenChatScreenParts(
+                model: AidenChatViewModel(
+                    coordinator: coordinator,
+                    chat: chat,
+                    owner: owner,
+                    allowsMutations: allowsMutations,
+                    onChatUpdated: onChatUpdated,
+                    onChatActivityChanged: onChatActivityChanged
+                ),
+                composerSession: composerSession,
+                botToolsModel: chat.botId.map {
+                    AidenBotChatToolsModel(chatID: chat.id, botID: $0, machine: owner.instanceId)
+                }
+            )
+        }
+        let parts = screen?.parts(make) ?? make()
+        _parts = State(initialValue: parts)
+        _model = State(initialValue: parts.model)
+        _composerSession = State(initialValue: parts.composerSession)
+        _follow = State(initialValue: parts.follow)
+        _attachmentPicker = State(initialValue: parts.attachmentPicker)
+        _botToolsModel = State(initialValue: parts.botToolsModel)
         self.autoStartVoice = autoStartVoice
         self.allowsMutations = allowsMutations
     }
@@ -127,14 +249,18 @@ struct AidenChatDetailView: View {
 #if DEBUG
     init(readOnlyFixture chat: AidenChat) {
         _coordinator = State(initialValue: nil)
-        let model = AidenChatViewModel(readOnlyFixture: chat)
-        _model = State(initialValue: model)
-        _composerSession = State(initialValue: AidenComposerSession(draftOwner: model, attachmentOwner: model))
+        let parts = AidenChatScreenParts(model: AidenChatViewModel(readOnlyFixture: chat), botToolsModel: nil)
+        _parts = State(initialValue: parts)
+        _model = State(initialValue: parts.model)
+        _composerSession = State(initialValue: parts.composerSession)
+        _follow = State(initialValue: parts.follow)
+        _attachmentPicker = State(initialValue: parts.attachmentPicker)
         _botToolsModel = State(initialValue: nil)
         autoStartVoice = false
         allowsMutations = false
         onOpenChat = nil
         pinnedOwner = nil
+        screen = nil
     }
 #endif
 
@@ -338,6 +464,7 @@ struct AidenChatDetailView: View {
             deleteBotFromChat()
         }
         .onAppear {
+            screen?.appeared()
             model.setViewPresent(true)
             model.setHapticsActive(true)
             model.setChatForegrounded(true)
@@ -379,15 +506,27 @@ struct AidenChatDetailView: View {
 #endif
         .preference(key: AidenChatHoldsAttachmentsKey.self, value: composerSession.holdsAttachments)
         .onDisappear {
-            Task { await model.saveDraftNow() }
-            model.setViewPresent(false)
-            model.readAloud.stop()
-            model.setHapticsActive(false)
-            model.setChatForegrounded(false)
-            model.stopProgressObservation()
-            attachmentPicker.reset()
-            composerSession.stopVoice()
-            composerSession.discardAttachments()
+            let hidden = { [model, composerSession] in
+                Task { await model.saveDraftNow() }
+                model.setViewPresent(false)
+                model.readAloud.stop()
+                model.setHapticsActive(false)
+                model.setChatForegrounded(false)
+                model.stopProgressObservation()
+                composerSession.stopVoice()
+            }
+            let left = { [attachmentPicker, composerSession] in
+                attachmentPicker.reset()
+                composerSession.discardAttachments()
+            }
+            // A screen the shell keeps waits to see whether this was a
+            // rebuild or the chat leaving (`AidenChatScreen`).
+            if let screen {
+                screen.disappeared(hidden: hidden, left: left)
+            } else {
+                hidden()
+                left()
+            }
         }
     }
 
@@ -453,6 +592,27 @@ struct AidenChatDetailView: View {
                 for: .sizeChanges
             )
             .scrollDismissesKeyboard(.interactively)
+            .onScrollTargetVisibilityChange(idType: String.self, threshold: 0.5) { [parts] ids in
+                parts.rowsInView = Set(ids)
+            }
+            .onScrollPhaseChange { _, phase in
+                if phase == .interacting { parts.returningUntil = nil }
+                // Only the reader moves the reading place, not a layout pass
+                // on the way back to it.
+                guard phase == .idle, !isReturningToReadingPlace else { return }
+                parts.readingPlace = follow.isFollowing ? nil : topRowInView ?? parts.readingPlace
+            }
+            // A rebuilt screen (an iPhone Duo opening or closing) starts at
+            // the latest, and a resized one keeps its offset over reflowed
+            // rows. Either way the reader goes back to the row they were on.
+            .onAppear { startReturningToReadingPlace(proxy) }
+            .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { _ in
+                startReturningToReadingPlace(proxy)
+            }
+            .onScrollGeometryChange(for: CGSize.self) { $0.contentSize } action: { _, _ in
+                guard isReturningToReadingPlace else { return }
+                returnToReadingPlace(proxy)
+            }
             .aidenReportsTranscriptFit(to: follow)
             .aidenKeepsPlaceOnPrepend(anchorID: $keptPlaceID, proxy: proxy)
             .aidenOnComposerInsetChange { followLatest(proxy, animated: false) }
@@ -550,7 +710,9 @@ struct AidenChatDetailView: View {
                 },
                 browserRecordingsAvailable: model.supportsBrowserRecordings
             )
-            .equatable()
+            // Not wrapped in `.equatable()`: that makes the rows one child of
+            // the lazy stack, so they'd never report being in view and the
+            // reader's place couldn't be kept. Each row skips its own redraw.
             if model.showsLiveResponse {
                 AidenLiveResponseView(model: model, presentationStyle: presentationStyle)
             }
@@ -1046,6 +1208,42 @@ struct AidenChatDetailView: View {
                   // The reader may have jumped to latest, sent, or scrolled while the page loaded.
                   follow.keepsPlace(ticket) else { return }
             keptPlaceID = model.renderID(forMessageID: anchorID)
+        }
+    }
+
+    /// The first row in view, in transcript order.
+    private var topRowInView: String? {
+        guard !parts.rowsInView.isEmpty else { return nil }
+        return AidenTranscriptRowIdentity.rows(for: model.chat.messages, renderIDs: model.messageRenderIDs)
+            .first { parts.rowsInView.contains($0.id) }?.id
+    }
+
+    /// Scrolls back to where the reader was, once the rows are laid out at
+    /// this size. Nothing to do while following the latest.
+    private func startReturningToReadingPlace(_ proxy: ScrollViewProxy) {
+        guard parts.readingPlace != nil, !follow.isFollowing else { return }
+        let until = ContinuousClock.now + .milliseconds(600)
+        parts.returningUntil = until
+        returnToReadingPlace(proxy)
+        // A last look once the rows have settled at the final size, unless
+        // the reader has scrolled since.
+        Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(650))
+            guard parts.returningUntil == until else { return }
+            returnToReadingPlace(proxy)
+        }
+    }
+
+    private var isReturningToReadingPlace: Bool {
+        parts.returningUntil.map { ContinuousClock.now < $0 } ?? false
+    }
+
+    private func returnToReadingPlace(_ proxy: ScrollViewProxy) {
+        guard let place = parts.readingPlace, !follow.isFollowing else { return }
+        Task { @MainActor in
+            await Task.yield()
+            guard parts.readingPlace == place, !follow.isFollowing else { return }
+            proxy.scrollTo(place, anchor: .top)
         }
     }
 

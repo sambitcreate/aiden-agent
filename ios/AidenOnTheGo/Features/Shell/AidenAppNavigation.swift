@@ -484,11 +484,18 @@ final class AidenAppNavigation {
         lastSelections[tab] = nil
     }
 
-    /// A deleted chat, or the like, isn't drawn again on its way out.
+    /// A deleted chat, or the like, isn't drawn again on its way out, nor a
+    /// fork of it that was the selection.
     func forget(_ route: AidenAppRoute) {
-        for (tab, last) in lastSelections where last == route {
+        for (tab, last) in lastSelections where last.screen == route.screen {
             lastSelections[tab] = nil
         }
+    }
+
+    /// Whether a list tab's path holds the conversation, as a chat or a fork.
+    /// Its screen keeps its state while one does (`AidenChatScreens`).
+    func holdsConversation(_ id: AidenHostObjectID) -> Bool {
+        AidenAppTab.listTabs.contains { path(of: $0).contains { $0.chatID == id } }
     }
 
     private func rememberSelection(of tab: AidenAppTab) {
@@ -899,8 +906,8 @@ final class AidenProductNavigationStore {
 }
 
 private extension AidenCatchUpRun {
-    /// The route of the run's chat, as a chat or as a Bot.
+    /// The route of the run's chat, as a chat, a fork or a Bot.
     func holds(_ route: AidenAppRoute) -> Bool {
-        route == .chat(current) || route == .bot(current)
+        route.chatID == current || route == .bot(current)
     }
 }

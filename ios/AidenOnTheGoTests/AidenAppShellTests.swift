@@ -1079,6 +1079,166 @@ final class AidenAppShellTests: XCTestCase {
         XCTAssertEqual(responder.requests(instanceId: "studio").count, asked)
     }
 
+    /// A load started again while the first waits on the machine replaces
+    /// it: the one cancelled says nothing, and the chat opens from the new one.
+    func testAChatRouteLoadStartedAgainOpensFromTheNewLoad() async throws {
+        let responder = AidenDemoResponder()
+        let coordinator = AidenDemoHosts.coordinator(.one, responder: responder)
+        await coordinator.start()
+        let release = responder.hold(instanceId: "studio", path: "/chats/chat_studio_1")
+        let model = AidenChatRouteModel(id: id("chat_studio_1"), cache: temporaryCache())
+        func asked() -> Int {
+            responder.requests(instanceId: "studio").filter { $0 == "GET /chats/chat_studio_1" }.count
+        }
+
+        model.startLoading(coordinator: coordinator)
+        try await waitUntil("the first load asks") { asked() == 1 }
+        model.startLoading(coordinator: coordinator)
+        try await waitUntil("the second load asks") { asked() == 2 }
+        // The first load's cancellation has had time to land.
+        try await Task.sleep(for: .milliseconds(100))
+        guard case .loading = model.state else { return XCTFail("The cancelled load spoke: \(model.state)") }
+
+        release()
+        try await waitUntil("the chat opens") {
+            if case .ready = model.state { true } else { false }
+        }
+        guard case .ready(let chat, _) = model.state else { return XCTFail("\(model.state)") }
+        XCTAssertEqual(chat.id, "chat_studio_1")
+    }
+
+    /// A machine whose pin refuses the connection fails the request as
+    /// cancelled, though no newer load is coming. The chat says it can't open
+    /// rather than spinning.
+    func testAChatRouteRefusedByThePinExplainsItself() async {
+        let responder = AidenDemoResponder()
+        let coordinator = AidenDemoHosts.coordinator(.one, responder: responder)
+        await coordinator.start()
+        responder.fail(instanceId: "studio", path: "/chats/chat_studio_1", code: .cancelled)
+        let model = AidenChatRouteModel(id: id("chat_studio_1"), cache: temporaryCache())
+
+        await model.load(coordinator: coordinator)
+
+        guard case .unavailable = model.state else { return XCTFail("\(model.state)") }
+    }
+
+    private func waitUntil(_ what: String, _ condition: () -> Bool) async throws {
+        let deadline = ContinuousClock.now + .seconds(5)
+        while !condition() {
+            guard ContinuousClock.now < deadline else { return XCTFail("Timed out: \(what)") }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+    }
+
+    // MARK: Chat screens
+
+    private final class ScreenLog {
+        var hidden = 0
+        var left = 0
+        var onLeft = 0
+        var counts: [Int] { [hidden, left, onLeft] }
+    }
+
+    /// A chat screen with its waits skipped. `returningAt` brings a view back
+    /// during that wait, as a rebuilt screen's would.
+    private func chatScreen(
+        isOpen: @escaping @MainActor () -> Bool,
+        log: ScreenLog,
+        returningAt: Duration? = nil
+    ) -> AidenChatScreen {
+        var screen: AidenChatScreen?
+        let made = AidenChatScreen(
+            isOpen: isOpen,
+            onLeft: { log.onLeft += 1 },
+            pause: { wait in if wait == returningAt { screen?.appeared() } }
+        )
+        screen = made
+        return made
+    }
+
+    private func leave(_ screen: AidenChatScreen, log: ScreenLog) -> Task<Void, Never> {
+        screen.disappeared(hidden: { log.hidden += 1 }, left: { log.left += 1 })
+    }
+
+    /// Opening or closing an iPhone Duo builds the screen again: the old
+    /// view goes and a new one comes in the same update. Nothing stops.
+    func testARebuiltChatScreenKeepsGoing() async {
+        let log = ScreenLog()
+        let screen = chatScreen(isOpen: { false }, log: log)
+        screen.appeared()
+
+        let leaving = leave(screen, log: log)
+        screen.appeared()
+        await leaving.value
+
+        XCTAssertEqual(log.counts, [0, 0, 0])
+        XCTAssertTrue(screen.isShowing)
+    }
+
+    /// A screen under another, or on a tab that isn't showing, is hidden:
+    /// it stops listening, but its chat is still on a path, so it stays.
+    func testAHiddenChatScreenThatIsStillOpenIsKept() async {
+        let log = ScreenLog()
+        let screen = chatScreen(isOpen: { true }, log: log)
+        screen.appeared()
+
+        await leave(screen, log: log).value
+
+        XCTAssertEqual(log.counts, [1, 0, 0])
+    }
+
+    /// Back off the chat: once nobody sees it and no tab holds it, it lets
+    /// go and the shell forgets it. A view that comes back in the meantime
+    /// keeps it.
+    func testAChatScreenThatLeftEveryTabLetsGo() async {
+        let log = ScreenLog()
+        let screen = chatScreen(isOpen: { false }, log: log)
+        screen.appeared()
+        await leave(screen, log: log).value
+        XCTAssertEqual(log.counts, [1, 1, 1])
+
+        let back = ScreenLog()
+        let returning = chatScreen(isOpen: { false }, log: back, returningAt: AidenChatScreen.leaveGrace)
+        returning.appeared()
+        await leave(returning, log: back).value
+        XCTAssertEqual(back.counts, [1, 0, 0], "Back before it was let go")
+    }
+
+    /// The shell hands a rebuilt view the screen its chat already had, and
+    /// forgets a screen only once its chat is on no tab and nobody sees it.
+    func testTheShellKeepsAChatsScreenWhileATabHoldsIt() async {
+        var open: Set<AidenHostObjectID> = [id("c1"), id("c2")]
+        let screens = AidenChatScreens(pause: { _ in }, isOpen: { open.contains($0) })
+        let first = screens.screen(for: id("c1"))
+        XCTAssertTrue(screens.screen(for: id("c1")) === first)
+        let second = screens.screen(for: id("c2"))
+        second.chat.appeared()
+
+        await screens.pathsChanged().value
+        XCTAssertEqual(screens.kept, [id("c1"), id("c2")])
+
+        open = []
+        await screens.pathsChanged().value
+        XCTAssertEqual(screens.kept, [id("c2")], "On no tab, but still on screen")
+
+        await second.chat.disappeared(hidden: {}, left: {}).value
+        XCTAssertEqual(screens.kept, [])
+        XCTAssertFalse(screens.screen(for: id("c1")) === first, "A chat opened again starts afresh")
+    }
+
+    /// Deleting a chat forgets the selection kept for Back, also when that
+    /// selection showed the chat as a fork.
+    func testDeletingAChatForgetsItsForkKeptAsTheSelection() {
+        let navigation = AidenAppNavigation()
+        navigation.openInboxRow(.fork(id("f1"), source: id("c9")))
+        navigation.inboxPath = []
+        XCTAssertEqual(navigation.lastSelection(of: .inbox), .fork(id("f1"), source: id("c9")))
+
+        navigation.forget(.chat(id("f1")))
+
+        XCTAssertNil(navigation.lastSelection(of: .inbox))
+    }
+
     // MARK: Bot routes
 
     private func botChatJSON(chatId: String = "chat_bot", botId: String = "bot_scout") throws -> Data {

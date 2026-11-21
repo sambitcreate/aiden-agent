@@ -68,6 +68,7 @@ final class AidenAppShellParts {
     struct Built {
         let navigation: AidenAppNavigation
         let newWork: AidenNewWorkChatFlow
+        let chatScreens: AidenChatScreens
     }
 
     private var made: Built?
@@ -136,6 +137,9 @@ struct AidenAppShellView: View {
     /// picks. A chat started from Workspaces stays there; anywhere else it's the Inbox's.
     private var newWork: AidenNewWorkChatFlow { built.newWork }
 
+    /// Each open chat's screen state, kept while its chat is on a tab.
+    private var chatScreens: AidenChatScreens { built.chatScreens }
+
     private var built: AidenAppShellParts.Built {
         parts.built { [coordinator, inboxStore, navigationStore, horizontalSizeClass] in
             let navigation = AidenAppNavigation(
@@ -154,7 +158,10 @@ struct AidenAppShellView: View {
                 guard let navigation else { return }
                 navigation.open(.chat(id), on: navigation.tab == .workspaces ? .workspaces : .inbox)
             }
-            return AidenAppShellParts.Built(navigation: navigation, newWork: newWork)
+            let chatScreens = AidenChatScreens { [weak navigation] id in
+                navigation?.holdsConversation(id) ?? false
+            }
+            return AidenAppShellParts.Built(navigation: navigation, newWork: newWork, chatScreens: chatScreens)
         }
     }
 
@@ -284,6 +291,7 @@ struct AidenAppShellView: View {
         }
         .onChange(of: navigation.snapshot) { _, snapshot in
             navigationStore.save(snapshot)
+            chatScreens.pathsChanged()
         }
         .onChange(of: navigation.tab == .inbox, initial: true) { _, isOnScreen in
             inboxStore.setInboxVisible(isOnScreen)
@@ -445,8 +453,7 @@ struct AidenAppShellView: View {
         case .chat(let id), .fork(let id, _):
             AidenChatRouteView(
                 coordinator: coordinator,
-                id: id,
-                receipt: newWork.receipt(for: id),
+                screen: chatScreens.screen(for: id, receipt: newWork.receipt(for: id)),
                 autoStartVoice: navigation.chatStartingVoice == id,
                 onNext: navigation.catchUp?.current == id ? nextInCatchUp : nil,
                 onChatUpdated: { chat in
@@ -591,7 +598,10 @@ final class AidenChatRouteModel {
         do {
             let chat = try await coordinator.remoteClient(for: owner).chat(id: id.objectId)
             await present(chat, owner: owner, coordinator: coordinator)
-        } catch where aidenIsCancellation(error) {
+        } catch where Task.isCancelled || error is CancellationError {
+            // A newer load is under way. A request the machine's pin refused
+            // also reports itself cancelled (URLError.cancelled), but nothing
+            // loads again after that, so it says so below.
             return
         } catch {
             if await coordinator.handleCredentialRevocation(error, context: owner) {
@@ -660,14 +670,15 @@ private struct AidenChatRouteView: View {
     let onChatActivityChanged: @MainActor (String, AidenChatSummaryActivity) -> Void
     let onForkOpened: @MainActor (AidenChat) -> Void
     let onBotChat: @MainActor (AidenHostObjectID) -> Void
-    @State private var model: AidenChatRouteModel
+    /// The shell's, so a rebuilt screen finds the chat it already loaded.
+    let screen: AidenChatScreens.Screen
+    private var model: AidenChatRouteModel { screen.route }
     @State private var holdsAttachments = false
     @State private var isConfirmingNext = false
 
     init(
         coordinator: AidenRemoteCoordinator,
-        id: AidenHostObjectID,
-        receipt: AidenChat?,
+        screen: AidenChatScreens.Screen,
         autoStartVoice: Bool,
         onNext: (() -> Void)?,
         onChatUpdated: @escaping @MainActor (AidenChat) -> Void,
@@ -682,7 +693,7 @@ private struct AidenChatRouteView: View {
         self.onChatActivityChanged = onChatActivityChanged
         self.onForkOpened = onForkOpened
         self.onBotChat = onBotChat
-        _model = State(initialValue: AidenChatRouteModel(id: id, receipt: receipt))
+        self.screen = screen
     }
 
     var body: some View {
@@ -698,7 +709,8 @@ private struct AidenChatRouteView: View {
                     autoStartVoice: autoStartVoice,
                     onChatUpdated: onChatUpdated,
                     onChatActivityChanged: onChatActivityChanged,
-                    onOpenChat: onForkOpened
+                    onOpenChat: onForkOpened,
+                    screen: screen.chat
                 )
             case .botChat(let bot):
                 ProgressView()
@@ -738,6 +750,80 @@ private struct AidenChatRouteView: View {
         .onChange(of: coordinator.hosts.connection(for: model.id.instanceId)?.connectionState, initial: true) {
             model.startLoading(coordinator: coordinator)
         }
+        // Back to a chat that couldn't load tries again.
+        .onAppear {
+            if case .ready = model.state { return }
+            model.startLoading(coordinator: coordinator)
+        }
+    }
+}
+
+/// The shell's chat screens: each chat's route model and screen state, kept
+/// while a tab's path holds the chat, so opening or closing an iPhone Duo,
+/// which can build the screen's views again, loses nothing. A screen goes
+/// once its chat has left every tab and nobody sees it, a beat later, so the
+/// writes a fold makes on its way through don't cost it (`AidenChatScreen`).
+@MainActor
+final class AidenChatScreens {
+    final class Screen {
+        let route: AidenChatRouteModel
+        let chat: AidenChatScreen
+
+        init(route: AidenChatRouteModel, chat: AidenChatScreen) {
+            self.route = route
+            self.chat = chat
+        }
+    }
+
+    private var screens: [AidenHostObjectID: Screen] = [:]
+    private var pruning: Task<Void, Never>?
+    private let isOpen: @MainActor (AidenHostObjectID) -> Bool
+    private let pause: @MainActor (Duration) async -> Void
+
+    init(
+        pause: @escaping @MainActor (Duration) async -> Void = { try? await Task.sleep(for: $0) },
+        isOpen: @escaping @MainActor (AidenHostObjectID) -> Bool
+    ) {
+        self.pause = pause
+        self.isOpen = isOpen
+    }
+
+    /// The chats with a screen kept, for tests.
+    var kept: Set<AidenHostObjectID> { Set(screens.keys) }
+
+    /// The chat's screen, made the first time it's asked for. `receipt` is
+    /// the chat as its machine just created it, when there is one.
+    func screen(for id: AidenHostObjectID, receipt: AidenChat? = nil) -> Screen {
+        if let screen = screens[id] { return screen }
+        let screen = Screen(
+            route: AidenChatRouteModel(id: id, receipt: receipt),
+            chat: AidenChatScreen(
+                isOpen: { [weak self] in self?.isOpen(id) ?? false },
+                onLeft: { [weak self] in self?.forget(id) },
+                pause: pause
+            )
+        )
+        screens[id] = screen
+        return screen
+    }
+
+    /// A tab's path changed. A beat later, screens whose chat is on no tab and
+    /// that nobody sees go; one a view is leaving goes when it has left.
+    @discardableResult
+    func pathsChanged() -> Task<Void, Never> {
+        pruning?.cancel()
+        let pruning = Task { @MainActor [weak self] in
+            await self?.pause(AidenChatScreen.rebuildGrace + AidenChatScreen.leaveGrace)
+            guard !Task.isCancelled, let self else { return }
+            for id in screens.keys { forget(id) }
+        }
+        self.pruning = pruning
+        return pruning
+    }
+
+    private func forget(_ id: AidenHostObjectID) {
+        guard let screen = screens[id], !screen.chat.isShowing, !isOpen(id) else { return }
+        screens[id] = nil
     }
 }
 
@@ -917,14 +1003,18 @@ private struct AidenSplitTab<Sidebar: View>: View {
             // is; collapsed it's any stack's screen.
             .navigationDestination(for: AidenAppRoute.self) { screen($0, besideList) }
         }
-        // A new stack whenever the split collapses or expands. Collapsing
+        // A new stack each time the split collapses or expands. Collapsing
         // builds a new navigation controller for the single stack, and the
-        // side rail's Back (a closed iPhone Duo's floating bar) kept the old
-        // stack's state: a conversation chosen beside the list showed no Back
-        // at all, and one pushed in a workspace showed a Back that wrote
-        // nothing, while the edge swipe still went back (iOS 27.1 simulator:
-        // open, choose a chat or a workspace chat or a Bot, close). The path
-        // is the model's, so the new stack shows the same screens.
+        // side rail (a closed iPhone Duo's floating bar) showed only what a
+        // stack built beside the list had: a conversation chosen beside the
+        // list showed no Back and no More, and one pushed in a workspace
+        // showed a Back that wrote nothing, while the edge swipe still went
+        // back (iOS 27.1 simulator). Rebuilding on collapse alone wasn't
+        // enough: a stack built collapsed, expanded, then replaced on the
+        // next collapse lost them again, so expanding rebuilds too. The path
+        // is the model's, so the new stack shows the same screens, and a
+        // chat's state is the shell's (`AidenChatScreens`), so they're as
+        // they were: same draft, attachments, voice and place.
         .id(besideList)
     }
 }
