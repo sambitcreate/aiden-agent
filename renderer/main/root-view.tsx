@@ -12,7 +12,8 @@ import { PairingRequestSheet } from "../components/remote-pairing-request-sheet"
 import { useQueryClient } from "@tanstack/react-query";
 import { appControlsApi } from "../lib/ipc";
 import * as React from "react";
-import { appApi, chatsApi, claimChatHandoff, localRunsApi, onNotification, settingsApi, workspacesApi } from "../lib/ipc";
+import { appApi, chatsApi, claimChatHandoff, localRunsApi, onNotification, quickChatApi, settingsApi, workspacesApi } from "../lib/ipc";
+import { parseSettingsSection, settingsLocation } from "../lib/settings-section";
 import { consumePendingChatHandoff, notifyPendingChatHandoff } from "../lib/chat-handoff-bridge";
 import { seedComposerAttachments } from "../lib/composer-draft-store";
 import type { Attachment } from "../lib/types";
@@ -237,6 +238,9 @@ function RootContent() {
   useCommandHandler("bots.open", () => goTo("/bots"), capabilities.bots);
   useCommandHandler("scheduled.open", () => goTo("/scheduled"));
   useCommandHandler("profile.open", () => goTo("/profile"));
+  useCommandHandler("quickChat.toggle", () => {
+    void quickChatApi.toggle();
+  });
   // ⌘[ and ⌘] walk the same in-app history as the title bar's arrows.
   const historyEntryIndex = useRouterState({
     select: (state) => (state.location.state as { __TSR_index?: number }).__TSR_index,
@@ -622,6 +626,19 @@ function RootContent() {
       if (navigationBlockedReason) {
         toast.info(navigationBlockedReason);
         acknowledge("blocked");
+        return;
+      }
+      const settingsHandoffPrefix = "/quick-chat-handoff/settings/";
+      if (payload.path.startsWith(settingsHandoffPrefix)) {
+        const section = parseSettingsSection(payload.path.slice(settingsHandoffPrefix.length).trim());
+        if (!section) {
+          acknowledge("blocked");
+          return;
+        }
+        void navigate(settingsLocation(section, { pathname: router.state.location.pathname })).then(
+          () => acknowledge("opened"),
+          () => acknowledge("blocked"),
+        );
         return;
       }
       const draftHandoffPrefix = "/quick-chat-handoff/draft/";

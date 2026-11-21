@@ -52,6 +52,7 @@ import { HOOKS_CHANGED_CHANNEL } from "../../renderer/shared/hooks-settings.js";
 import { registerAnalyticsHandlers } from "./analytics.js";
 import { analyticsService } from "../services/analytics/analytics-main.js";
 import { registerDictationHandlers } from "./dictation.js";
+import { registerQuickChatHandlers } from "./quick-chat.js";
 import { registerScheduledTaskHandlers } from "./scheduled-tasks.js";
 import { registerShortcutHandlers } from "./shortcuts.js";
 import { registerTelegramHandlers } from "./telegram.js";
@@ -91,7 +92,12 @@ import { spending } from "../services/spending-main.js";
 
 import { ipcMain, logger } from "../platform.js";
 
-export function registerHandlers(isMainWindow: (event: IpcMainInvokeEvent) => boolean): void {
+export function registerHandlers(
+  isMainWindow: (event: IpcMainInvokeEvent) => boolean,
+  options?: {
+    navigateMainWindow?: (path: string) => Promise<void>;
+  },
+): void {
   logger.info("handlers", "Registering IPC handlers...");
 
   // Register app handlers using ipcMain API
@@ -193,6 +199,10 @@ export function registerHandlers(isMainWindow: (event: IpcMainInvokeEvent) => bo
     analytics: analyticsService(),
   });
   registerDictationHandlers();
+  registerQuickChatHandlers({
+    isMainWindow,
+    navigateMainWindow: options?.navigateMainWindow,
+  });
   registerScheduledTaskHandlers();
   // Bot routines are scheduled tasks owned by a Bot; they exist only where Bots do.
   if (hostPlatformCapabilities().bots) registerBotRoutineHandlers();

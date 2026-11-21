@@ -43,11 +43,13 @@ import { resolveWindowChrome } from "../renderer/shared/window-chrome.js";
 import {
   initShortcut,
   initDictationShortcut,
+  initQuickChatShortcut,
   initAssistantShortcut,
   applyShortcutFromSettings,
   disposeShortcut,
   initShortcutBindingsChanged,
   isDictationShortcutActive,
+  isQuickChatShortcutActive,
 } from "./services/shortcut.js";
 import { mcpManager, prewarmMcpServers } from "./services/mcp.js";
 import { sealPlaintextMcpServerFields } from "./services/mcp-server-save.js";
@@ -208,6 +210,11 @@ import {
 } from "./application-lifecycle-core.js";
 import { isAuxiliaryWindow } from "./windows/auxiliary-windows.js";
 import { destroyPill } from "./windows/pill-window.js";
+import {
+  destroyQuickChat,
+  prepareQuickChat,
+  toggleQuickChat,
+} from "./windows/quick-chat-window.js";
 import { hostPlatformCapabilities } from "./services/host-platform-capabilities.js";
 import { installElectronConnectorWatchTransport } from "./services/bot-routine-events/connector-watch-startup.js";
 import {
@@ -392,6 +399,7 @@ function cleanupApplication(): void {
   appUpdateService.dispose();
   disposeShortcut();
   disposeDictation();
+  destroyQuickChat();
   disposeLocalSpeech();
   disposeFoundationModelsConnection();
   formFillRuntime.dispose();
@@ -2180,7 +2188,12 @@ if (!ownsSingleInstanceLock) {
   // First, so a crash in the startup below is covered.
   installAnalyticsCrashCapture();
   registerNativeHandlers();
-  registerHandlers((event) => !!mainWindow && !mainWindow.isDestroyed() && event.sender === mainWindow.webContents);
+  registerHandlers(
+    (event) => !!mainWindow && !mainWindow.isDestroyed() && event.sender === mainWindow.webContents,
+    {
+      navigateMainWindow: (path) => deliverMainWindowNotification("app:navigate", { path }),
+    },
+  );
   registerBrowserHandlers();
   terminalService.setOutputObserver((workspaceId, data) => browserService.observeTerminalOutput(workspaceId, data));
 
@@ -2212,6 +2225,7 @@ if (!ownsSingleInstanceLock) {
       if (shouldReleaseAuxiliaryWindows(process.platform, aidenRemoteServiceKeepsApplicationAlive(), remaining)) {
         disposeVisualSnapshots();
         destroyPill();
+        destroyQuickChat();
       }
     });
   });
@@ -2746,6 +2760,15 @@ if (!ownsSingleInstanceLock) {
       initDictationShortcut(() => {
         toggleDictation();
       });
+      initQuickChatShortcut(() => {
+        void toggleQuickChat("hotkey").catch((error: unknown) => {
+          logger.warn(
+            "quick-chat",
+            "Could not toggle Quick Chat from the global shortcut",
+            error,
+          );
+        });
+      });
       initAssistantShortcut(() => {
         void deliverMainWindowNotification("app:command", {
           commandId: "assistant.open",
@@ -2772,6 +2795,11 @@ if (!ownsSingleInstanceLock) {
       setTimeout(() => {
         if (shutdownHasBegun()) return;
         if (isDictationShortcutActive()) void prepareDictationPill();
+        if (isQuickChatShortcutActive()) {
+          void prepareQuickChat().catch((error: unknown) => {
+            logger.warn("quick-chat", "Could not pre-warm Quick Chat window", error);
+          });
+        }
         void import("./services/local-voice-preload.js").then(({ preloadLocalVoice }) => preloadLocalVoice());
       }, 3_000).unref();
       resolveShortcutInitialization?.();

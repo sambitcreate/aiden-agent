@@ -10,6 +10,12 @@ import type {
   ClaimHandoffRequest,
 } from "../shared/chat-handoff";
 import type {
+  QuickChatExpandRequest,
+  QuickChatExpandResult,
+  QuickChatWindowMode,
+} from "../shared/quick-chat";
+import type { SettingsSection } from "../shared/settings-section";
+import type {
   BufferedGenerationNotification,
   GenerationStreamBuffer,
   GenerationStreamProjection,
@@ -2442,6 +2448,19 @@ export function claimChatHandoff(
 ): Promise<ClaimedDesktopHandoff | null> {
   return invoke<ClaimedDesktopHandoff | null>("chat:claimHandoff", input);
 }
+
+export const quickChatApi = {
+  toggle: (): Promise<boolean> => invoke<boolean>("quickChat:toggle"),
+  hide: (): Promise<boolean> => invoke<boolean>("quickChat:hide"),
+  setMode: (mode: QuickChatWindowMode): Promise<boolean> =>
+    invoke<boolean>("quickChat:setMode", mode),
+  suppressBlur: (durationMs?: number): Promise<boolean> =>
+    invoke<boolean>("quickChat:suppressBlur", durationMs),
+  expandToMain: (request: QuickChatExpandRequest): Promise<QuickChatExpandResult> =>
+    invoke<QuickChatExpandResult>("quickChat:expandToMain", request),
+  openSettings: (section: SettingsSection): Promise<boolean> =>
+    invoke<boolean>("quickChat:openSettings", section),
+};
 
 /**
  * Attach this renderer document to an already-running generation whose

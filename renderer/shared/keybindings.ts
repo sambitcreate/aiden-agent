@@ -9,6 +9,7 @@ export type CommandCapability = StudioFeature | "designMode";
 
 export const COMMAND_IDS = [
   "composer.focus",
+  "quickChat.toggle",
   "dictation.toggle",
   "assistant.open",
   "commandPalette.toggle",
@@ -110,6 +111,19 @@ export const COMMANDS = [
     category: "Aiden",
     keywords: ["write", "message", "input"],
     defaultBinding: "Command+Alt+Space",
+    scope: "global",
+    global: true,
+    allowInEditable: true,
+    showInPalette: true,
+    showInSettings: true,
+  }),
+  command({
+    id: "quickChat.toggle",
+    title: "Toggle Quick Chat",
+    description: "Open or hide the floating chat starter from anywhere.",
+    category: "Aiden",
+    keywords: ["floating", "quick", "starter", "ask", "spotlight", "hotkey"],
+    defaultBinding: "Command+Shift+Space",
     scope: "global",
     global: true,
     allowInEditable: true,
@@ -1192,7 +1206,12 @@ export function migrateLegacyKeybindings(
 
   const next = normalizeKeybindingOverrides(currentValue);
   const claimed = new Map<string, CommandId>();
-  for (const definition of COMMANDS.filter((item) => item.global)) {
+  const introducedGlobalIds = new Set<CommandId>(INTRODUCED_DEFAULT_COMMANDS);
+  const globalCommands = [
+    ...COMMANDS.filter((item) => item.global && !introducedGlobalIds.has(item.id)),
+    ...COMMANDS.filter((item) => item.global && introducedGlobalIds.has(item.id)),
+  ];
+  for (const definition of globalCommands) {
     let binding = effectiveBindingFromNormalized(definition.id, undefined, legacy);
     if (binding && (RESERVED_BINDINGS.has(binding) || claimed.has(binding))) {
       const fallback = defaultBinding(definition.id);
@@ -1230,6 +1249,7 @@ const INTRODUCED_DEFAULT_COMMANDS: readonly CommandId[] = [
   "shortcuts.show",
   "workspace.settings",
   "design.toggle",
+  "quickChat.toggle",
 ];
 
 function yieldIntroducedDefaults(next: KeybindingOverridesV1): void {
