@@ -89,9 +89,9 @@ export function AssistantDock({ rightInset = 0 }: { rightInset?: number }): Reac
   const navigate = useNavigate();
   const router = useRouter();
   const live = useAssistantLive(null);
-  // Live needs Computer Use today, which only macOS has, so other platforms
-  // don't offer it in the send button. The shortcut still opens setup there.
-  const { computerUse } = useAppCapabilities();
+  // Live runs on macOS and Linux (Computer Use is an optional Mac extra), so
+  // the send button offers it wherever the geminiLive capability is enabled.
+  const { geminiLive } = useAppCapabilities();
   const settings = useSettings();
   useLiveChatVoiceApprovals(settings.data);
   // Until settings load, keep Live off so a disabled feature never flashes on.
@@ -119,7 +119,7 @@ export function AssistantDock({ rightInset = 0 }: { rightInset?: number }): Reac
       rightInset={rightInset}
       enabled={enabled}
       buttonVisible={buttonVisible}
-      hostSupported={computerUse}
+      hostSupported={geminiLive}
       onOpenSettings={openSettings}
       activity={activity}
       preferences={preferences}
@@ -153,7 +153,7 @@ export function AssistantDockPresentation({
   buttonVisible?: boolean;
   /** Live can start on this computer, so the composer may offer it. */
   hostSupported?: boolean;
-  onOpenSettings?: (section: "providers" | "computerUse" | "scheduledTasks") => void;
+  onOpenSettings?: (section: "providers" | "computerUse" | "scheduledTasks" | "geminiLive") => void;
   useCommand?: typeof useCommandHandler;
   /** What Live is doing or needs, from the shared activity store. */
   activity?: LiveActivity | null;
@@ -266,7 +266,7 @@ export function AssistantDockPresentation({
       startAfterHandoff();
       return;
     }
-    onOpenSettings(live.available ? "computerUse" : "providers");
+    onOpenSettings(live.available ? "geminiLive" : "providers");
   }, [live, onOpenSettings, setupCompleted, startAfterHandoff, stopRevealed]);
   useCommand("assistant.open", openPanel, live.visible && enabled);
 

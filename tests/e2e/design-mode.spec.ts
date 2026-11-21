@@ -196,7 +196,7 @@ async function expectComposerFooterClear(
     }
     return { found, names: pieces.map((piece) => piece.name) };
   });
-  // An empty draft on macOS shows Aiden Live in Send's place.
+  // An empty draft shows Aiden Live in Send's place.
   const required = [/^Attach files or images$/u, COMPOSER_PRIMARY_NAME];
   for (const name of required)
     expect(problems.names.some((piece) => name.test(piece))).toBe(true);

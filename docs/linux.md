@@ -150,6 +150,17 @@ unlock or configure the keyring and restart Aiden to restore Bot access.
 
 [Routine models](bot-routine-models.md), thinking and explicitly chosen fallback are also available wherever Linux Bots are enabled. The owning host binds each accepted run’s selection across queues and recovery; phones manage choices through the negotiated `bot:routine-models` surface. Unconfirmed provider cost requires the same explicit Resume confirmation as on macOS.
 
+Aiden Live (voice) works on Linux: talking, captions, chat by voice, voice
+approvals and moving through Aiden's own window behave as on macOS. Linux has
+no app microphone permission, so Live's setup shows the microphone as ready and
+Live uses the input chosen in Settings → Voice & Speech → Aiden Live (or the
+system default). Live can't act in other apps on Linux, because that needs
+Computer Use. Screen share works: on Wayland, **Choose…** opens the desktop's
+own screen-sharing picker (the xdg-desktop-portal dialog, which needs PipeWire
+and your desktop's portal backend); on X11, Aiden shows its own picker of
+screens and windows. Either way Live sees one frame a second, only while it
+runs.
+
 Computer Use and Apple Foundation Models are not included in the Linux
 build. Their settings, navigation, onboarding promises, helper bundles, and
 chat controls are omitted. Bot computers (a macOS VM per Bot) need a Mac with
@@ -176,11 +187,30 @@ Settings → Providers → Advanced may refresh that cache; startup and ordinary
 
 ## Updates and troubleshooting
 
-Writable production AppImages mounted by their launcher use Settings → About
-for update checks, downloads, and restart. Downloads are verified against the
-SHA-512 digest in the architecture-specific GitHub release feed. Updates retain
-the current AppImage filename. Unlike macOS releases, this does not provide Apple
-code-signing verification.
+Aiden checks for updates in the background and from Settings → About on these
+Linux installations:
+
+- `.deb` and `.rpm` packages installed by `apt`, `dnf` or the install command.
+  Aiden downloads the package for your architecture in the background. **Update and
+  restart** then shows the desktop's password prompt (pkexec) and installs it with
+  `apt-get` or `dnf`, which the package manager records as an ordinary upgrade.
+  Closing the prompt leaves the running version open and the update ready for
+  later; Aiden never installs a package on an ordinary quit. The prompt runs the
+  package's own `/opt/Aiden Agent/Helpers/aiden-package-install` as root, which
+  copies the download into a root-only folder, checks that copy's SHA-512 digest
+  and that it is the `aiden-agent` package at the announced version, and installs
+  only that copy. Aiden reads the installed version back before restarting. This needs `pkexec` (Ubuntu, Debian, Fedora and most
+  desktops have it) and a `/opt/Aiden Agent` owned by the package. Version 0.67.0
+  and earlier cannot update a `.deb` or `.rpm` in-app, so install the first release
+  after 0.67.0 once by hand.
+- Writable production AppImages mounted by their launcher. Updates retain the
+  current AppImage filename.
+
+Downloads are verified against the SHA-512 digest in the architecture-specific
+GitHub release feed (`latest-linux.yml` or `latest-linux-arm64.yml`, which list the
+AppImage, `.deb` and `.rpm`). Unlike macOS releases, this does not provide Apple
+code-signing verification; `install.sh` and the manual `gh attestation verify`
+command remain the way to authenticate the publisher.
 
 Native subagent file replacement preserves metadata or fails closed. On an
 SELinux host, Aiden preserves a non-default `security.selinux` label when the
@@ -190,9 +220,10 @@ unchanged and reports the mutation as unavailable. Restore a normal workspace
 label or apply denied privileged metadata outside the subagent transaction
 before retrying.
 
-Install the newer `.deb` or `.rpm` through the package manager that owns the
-installation. Read-only AppImages and extraction-mode launches also use manual
-replacement. Settings → About links to GitHub Releases for these installations.
+Installations Aiden cannot update itself, such as a `.deb` or `.rpm` without
+`pkexec`, a read-only AppImage or an extraction-mode launch, use manual
+replacement: install the newer package through the package manager that owns
+the installation. Settings → About links to GitHub Releases for these installations.
 
 If a global shortcut is unavailable, check the desktop's shortcut portal or
 conflicts with another application and assign another chord under Settings →

@@ -9,9 +9,11 @@ import { TooltipProvider } from "./ui";
 import { CommandSystemProvider } from "../lib/command-system";
 import { LIVE_LAUNCH_IDLE, liveLauncher, type LiveLaunchState } from "../lib/live-launcher";
 import { LIVE_PRESS_GUARD_MS, LIVE_SWAP_DELAY_MS } from "./composer-live-button";
-import { AssistantDockPresentation } from "./assistant/assistant-dock";
+import { AssistantDock, AssistantDockPresentation } from "./assistant/assistant-dock";
 import { idleLiveController } from "./assistant/assistant-live-test-fixture";
 import type { AssistantLiveController } from "./assistant/use-assistant-live";
+import { DISABLED_APP_CAPABILITIES } from "../lib/app-capabilities";
+import { mountWithBotRouter } from "../main/bots/test-providers";
 import type { Chat, Workspace } from "../lib/types";
 
 // With an empty draft, the button in Send's place starts Aiden Live; typing,
@@ -359,4 +361,50 @@ test("setup's Start Live waits for dictation to let go of the microphone, and st
   });
   unregister();
   assert.equal(started, 1);
+});
+
+test("AssistantDock offers Live in the send button on Linux without Computer Use, and hides it when geminiLive is off", async () => {
+  installBotTestIpc({
+    "settings:get": () => ({ aidenLiveEnabled: true, aidenLiveButtonVisible: true }),
+    "providers:list": () => [],
+    "assistant-live:status": () => ({ available: false, reason: "missing_google_credential", state: "idle" }),
+    "computerUse:status": () => ({ state: "unsupported", ready: false, detail: "Computer Use is macOS-only." }),
+    "shortcut:get": () => ({ global: [] }),
+  });
+  (window as unknown as { aidenAPI: Record<string, unknown> }).aidenAPI.systemPreferences = {
+    getMediaAccessStatus: async () => "unknown",
+    askForMediaAccess: async () => true,
+  };
+  await mountWithBotRouter(<AssistantDock />, {
+    capabilities: { ...DISABLED_APP_CAPABILITIES, platform: "linux", geminiLive: true, computerUse: false },
+  });
+  await waitFor(() => assert.equal(liveLauncher.get().offered, true));
+  cleanup();
+
+  await mountWithBotRouter(<AssistantDock />, {
+    capabilities: { ...DISABLED_APP_CAPABILITIES, platform: "linux", geminiLive: false, computerUse: false },
+  });
+  await waitFor(() => assert.equal(liveLauncher.get().offered, false));
+});
+
+test("after setup, a press with missing microphone readiness opens Aiden Live settings rather than Computer Use", () => {
+  localStorage.setItem("aiden.live.setup-complete", "true");
+  const opened: string[] = [];
+  const live: AssistantLiveController = {
+    ...idleLiveController,
+    available: true,
+    setupComplete: false,
+  };
+  render(
+    <TooltipProvider>
+      <AssistantDockPresentation
+        chat={{ approvals: [], decidingApprovalId: null, decideApproval: async () => undefined }}
+        live={live}
+        onOpenSettings={(section) => opened.push(section)}
+        useCommand={() => undefined}
+      />
+    </TooltipProvider>,
+  );
+  act(() => { liveLauncher.launch(); });
+  assert.deepEqual(opened, ["geminiLive"]);
 });

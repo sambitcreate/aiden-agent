@@ -26,6 +26,11 @@ export interface HostPlatformCapabilities {
    * and offered where Remote Access runs: macOS and Linux.
    */
   mcpServer: boolean;
+  /**
+   * Aiden Live's optional screen share: the macOS system picker, Aiden's own
+   * picker on Linux under X11, or the desktop's portal under Wayland.
+   */
+  liveScreenShare: boolean;
 }
 /**
  * Main-owned host capability policy. Persisted settings and renderer state may
@@ -52,5 +57,6 @@ export function hostPlatformCapabilities(
     backgroundJobs: darwin || platform === "linux",
     hooks: darwin || platform === "linux",
     mcpServer: darwin || platform === "linux",
+    liveScreenShare: darwin || platform === "linux",
   };
 }

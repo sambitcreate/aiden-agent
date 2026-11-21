@@ -58,11 +58,7 @@ test("core surfaces pass the WCAG A/AA axe gate and keep their accessible struct
     problems.push(
       ...(await auditAccessibility(page, { surface: "chat window" })),
     );
-    // Where Aiden Live can start (macOS), an empty draft shows it in Send's place.
-    const primary =
-      process.platform === "darwin"
-        ? `button "Set up Aiden Live"`
-        : `button "Send message" [disabled]`;
+    // An empty draft shows Aiden Live in Send's place on macOS and Linux.
     await expect(page.getByRole("main")).toMatchAriaSnapshot(`
       - main:
         - region "Conversation"
@@ -71,7 +67,7 @@ test("core surfaces pass the WCAG A/AA axe gate and keep their accessible struct
         - textbox
         - button "Attach files or images"
         - 'button /^Selected model: .+\\. Choose a model\\.$/'
-        - ${primary}
+        - button "Set up Aiden Live"
     `);
   });
 

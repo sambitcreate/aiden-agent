@@ -180,6 +180,7 @@ function fakeDisplayBinding(
     bindingId,
     documentId: owner.documentId,
     owner,
+    sourceId: null,
     allowsDisplayRequest: () => true,
     allowsPermissionRequest: () => true,
   };

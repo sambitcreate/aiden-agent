@@ -95,6 +95,15 @@ test("a microphone the host can't report on is not shown as a problem", async ()
   await within(denied).findByText("Needs attention");
 });
 
+test("on Linux the microphone is ready with nothing to allow, since Linux has no app permission for it", async () => {
+  await mount({}, { ...DISABLED_APP_CAPABILITIES, geminiLive: true, platform: "linux" }, { microphone: "unknown" });
+  const row = await screen.findByRole("group", { name: "Microphone" });
+  await within(row).findByText("Ready");
+  within(row).getByText(/Linux doesn’t ask apps for microphone permission/u);
+  assert.equal(within(row).queryByRole("button", { name: "Allow" }), null);
+  assert.equal(within(row).queryByText("Not checked"), null);
+});
+
 test("Scheduled tasks reads On on a fresh install and follows the Scheduled tasks switch", async () => {
   await mount({}, undefined, { withScheduledTasks: true });
   const row = await screen.findByRole("group", { name: "Scheduled tasks" });

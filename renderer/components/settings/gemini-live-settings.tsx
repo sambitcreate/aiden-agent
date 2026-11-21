@@ -127,6 +127,8 @@ export function AidenLiveSettings(): React.ReactElement {
   const go = (section: "providers" | "computerUse" | "scheduledTasks" | "shortcut") =>
     void navigate({ ...settingsLocation(section), replace: true });
   const liveReady = capabilities.geminiLive && live?.available === true;
+  // Linux has no app microphone permission to read or request.
+  const linuxMicrophone = capabilities.platform === "linux";
   const shortcut = shortcuts.data?.global.find((item) => item.commandId === "assistant.open");
   const requestMicrophone = async () => {
     const granted = await window.aidenAPI.systemPreferences.askForMediaAccess("microphone");
@@ -146,8 +148,9 @@ export function AidenLiveSettings(): React.ReactElement {
               <Badge color="blue">Beta</Badge>
             </div>
             <Text as="p" variant="small" color="secondary" className="mt-0.5">
-              Speak naturally and let Aiden act on your screen during Live. Stop Live to end
-              session access.
+              {capabilities.computerUse
+                ? "Speak naturally and let Aiden act on your screen during Live. Stop Live to end session access."
+                : "Speak naturally with Aiden, and let it use your chats and move through Aiden during Live. Stop Live to end session access."}
             </Text>
           </div>
         </div>
@@ -179,23 +182,32 @@ export function AidenLiveSettings(): React.ReactElement {
               </Button>
             </div>
           </Field>
-          <Field label="Microphone" description="Used only while a Live session is open.">
-            <div className="flex items-center gap-2">
-              <StateBadge
-                ready={microphone === "granted"}
-                checking={microphone === null}
-                unknown={microphone === "unknown"}
-              />
-              <Button size="small" variant="filled" onClick={() => void requestMicrophone()}>
-                <Mic />
-                Allow
-              </Button>
-            </div>
-          </Field>
+          {linuxMicrophone ? (
+            <Field
+              label="Microphone"
+              description="Linux doesn’t ask apps for microphone permission. Used only while a Live session is open."
+            >
+              <StateBadge ready />
+            </Field>
+          ) : (
+            <Field label="Microphone" description="Used only while a Live session is open.">
+              <div className="flex items-center gap-2">
+                <StateBadge
+                  ready={microphone === "granted"}
+                  checking={microphone === null}
+                  unknown={microphone === "unknown"}
+                />
+                <Button size="small" variant="filled" onClick={() => void requestMicrophone()}>
+                  <Mic />
+                  Allow
+                </Button>
+              </div>
+            </Field>
+          )}
           {capabilities.computerUse ? (
             <Field
               label="Screen and Accessibility"
-              description={computerUse.data?.detail ?? "Checking the signed Computer Use helper."}
+              description={`Optional, to let Live use other apps. ${computerUse.data?.detail ?? "Checking the signed Computer Use helper."}`}
             >
               <div className="flex items-center gap-2">
                 <StateBadge ready={computerUse.data?.ready === true} checking={computerUse.isLoading} />
