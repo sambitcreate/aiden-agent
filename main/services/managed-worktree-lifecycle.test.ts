@@ -1452,15 +1452,162 @@ test(".worktreeinclude provisions only ignored+untracked files with mode preserv
     await fs.readFile(path.join(worktreePath, ".env"), "utf8"),
     "SECRET=42\n",
   );
-  assert.equal(
-    await fs.readFile(path.join(worktreePath, "generated", "fixture.bin"), "utf8"),
-    "fixture\n",
-  );
+  assert.equal(await fs.readFile(path.join(worktreePath, "generated", "fixture.bin"), "utf8"), "fixture\n");
   // Tracked and non-ignored untracked files are never provisioned this way.
   await assert.rejects(fs.lstat(path.join(worktreePath, "tracked.txt")), { code: "ENOENT" });
   await assert.rejects(fs.lstat(path.join(worktreePath, "untracked.txt")), {
     code: "ENOENT",
   });
+});
+
+test(".worktreeinclude with checkIgnored skips unrelated huge ignored trees and handles zero ignored matches", async (t) => {
+  const repository = await createRepository(t);
+  const worktreePath = await temporaryDirectory(t);
+  await fs.writeFile(path.join(repository, ".gitignore"), "node_modules/\n.env\n");
+  await git(repository, ["add", ".gitignore"]);
+  await git(repository, ["commit", "-m", "ignore node_modules and env"]);
+
+  // Populate node_modules with enough files that `ls-files --exclude-standard`
+  // exceeds this GitService's maxBufferBytes cap.
+  await fs.mkdir(path.join(repository, "node_modules", "pkg"), { recursive: true });
+  await Promise.all(
+    Array.from({ length: 120 }, (_, index) =>
+      fs.writeFile(
+        path.join(repository, "node_modules", "pkg", `module-with-long-name-${String(index).padStart(4, "0")}.js`),
+        "export {};\n",
+      ),
+    ),
+  );
+  await fs.writeFile(path.join(repository, ".env"), "SECRET=ok\n", { mode: 0o600 });
+  await fs.writeFile(path.join(repository, "untracked-only.txt"), "not ignored\n");
+  await fs.writeFile(path.join(repository, ".worktreeinclude"), ".env\nuntracked-only.txt\n");
+
+  const bounded = new GitService({ cacheTtlMs: 0, maxBufferBytes: 2_048 });
+  await assert.rejects(
+    bounded.listFiles(repository, ["ls-files", "-z", "-o", "-i", "--exclude-standard", "--full-name"]),
+    (error: unknown) => error instanceof GitServiceError && error.code === "output_limit",
+    "naive --exclude-standard overflows the stdout cap when node_modules is large",
+  );
+
+  const provisioned = await provisionWorktreeIncludedFiles(
+    {
+      listFiles: (cwd, args) => bounded.listFiles(cwd, args),
+      checkIgnored: (cwd, paths, signal) => bounded.checkIgnoredPaths(cwd, paths, signal),
+    },
+    { sourceRoot: repository, worktreePath },
+  );
+  assert.deepEqual(provisioned, [".env"]);
+  assert.equal(await fs.readFile(path.join(worktreePath, ".env"), "utf8"), "SECRET=ok\n");
+
+  // When `.worktreeinclude` matches only non-ignored untracked files,
+  // `git check-ignore` exits with code 1 and provisioning returns empty cleanly.
+  const emptyWorktree = await temporaryDirectory(t);
+  await fs.writeFile(path.join(repository, ".worktreeinclude"), "untracked-only.txt\n");
+  const none = await provisionWorktreeIncludedFiles(
+    {
+      listFiles: (cwd, args) => bounded.listFiles(cwd, args),
+      checkIgnored: (cwd, paths, signal) => bounded.checkIgnoredPaths(cwd, paths, signal),
+    },
+    { sourceRoot: repository, worktreePath: emptyWorktree },
+  );
+  assert.deepEqual(none, []);
+});
+
+test("checkIgnoredPaths neutralizes colon pathspec magic and resolves paths from repo topLevel", async (t) => {
+  const repository = await createRepository(t);
+  await fs.mkdir(path.join(repository, "nested"), { recursive: true });
+  await fs.mkdir(path.join(repository, ":"), { recursive: true });
+  await fs.writeFile(path.join(repository, ".gitignore"), "/b.log\n:!c.log\n:(icase).env\n");
+  await git(repository, ["add", ".gitignore"]);
+  await git(repository, ["commit", "-m", "ignore literal colon patterns"]);
+
+  await fs.writeFile(path.join(repository, ":", "b.log"), "not ignored\n");
+  await fs.writeFile(path.join(repository, ":!c.log"), "ignored literal\n");
+  await fs.writeFile(path.join(repository, ":(icase).env"), "ignored literal\n");
+
+  const service = new GitService({ cacheTtlMs: 0 });
+  const matched = await service.checkIgnoredPaths(path.join(repository, "nested"), [
+    ":/b.log",
+    ":!c.log",
+    ":(icase).env",
+  ]);
+  assert.deepEqual(matched.sort(), [":!c.log", ":(icase).env"]);
+});
+
+test("resolveWorktreeBase streams prefix matches without output_limit and preserves invalid_ref precedence", async (t) => {
+  const repository = await createRepository(t);
+  const head = await git(repository, ["rev-parse", "HEAD"]);
+  for (let index = 0; index < 80; index++) {
+    await git(repository, ["update-ref", `refs/heads/feat/branch-with-long-name-${String(index).padStart(3, "0")}`, head]);
+  }
+  const bounded = new GitService({ cacheTtlMs: 0, maxBufferBytes: 1_024 });
+  await assert.rejects(
+    bounded.resolveWorktreeBase(repository, "feat"),
+    (error: unknown) => error instanceof GitServiceError && error.code === "invalid_ref",
+  );
+  for (const invalid of ["", "main/", "foo..bar", "HEAD~1", "*"]) {
+    await assert.rejects(
+      bounded.resolveWorktreeBase(repository, invalid),
+      (error: unknown) => error instanceof GitServiceError && error.code === "invalid_ref",
+    );
+  }
+});
+
+test("streaming check-attr admission handles attribute output larger than maxBufferBytes and still rejects forbidden filters", async (t) => {
+  const repository = await createRepository(t);
+  await fs.mkdir(path.join(repository, "src"), { recursive: true });
+  await Promise.all(
+    Array.from({ length: 120 }, (_, index) =>
+      fs.writeFile(
+        path.join(repository, "src", `file-with-a-reasonably-long-name-${String(index).padStart(4, "0")}.ts`),
+        "export const x = 1;\n",
+      ),
+    ),
+  );
+  await fs.writeFile(
+    path.join(repository, ".gitattributes"),
+    "* text=auto eol=lf\n*.ts diff=typescript linguist-language=TypeScript\n",
+  );
+  await git(repository, ["add", "."]);
+  await git(repository, ["commit", "-m", "many attributed files"]);
+
+  // `ls-tree` output (~10 KiB) fits inside 32 KiB, while `check-attr --all`
+  // emits ~4 attributes × 120 files (~35 KiB > maxBufferBytes when set to 16 KiB).
+  // Use 14 KiB so `ls-tree` (~10 KiB) fits but buffered `check-attr --all` would overflow.
+  const service = new GitService({ cacheTtlMs: 0, maxBufferBytes: 14_000 });
+  const estimate = await service.managedWorktreeCheckoutBytes(repository);
+  assert.ok(estimate > 120 * 4096);
+
+  // Adding a single forbidden filter anywhere in the streamed output must still reject.
+  await fs.appendFile(
+    path.join(repository, ".gitattributes"),
+    "src/file-with-a-reasonably-long-name-0119.ts filter=expanding\n",
+  );
+  await git(repository, ["add", ".gitattributes"]);
+  await git(repository, ["commit", "-m", "add forbidden filter"]);
+  await assert.rejects(
+    service.managedWorktreeCheckoutBytes(repository),
+    (error: unknown) => error instanceof GitServiceError && error.code === "unsupported_scope",
+  );
+});
+
+test("createWorktree validates additionalAllocationBytes atomically before creating directories or branches", async (t) => {
+  const repository = await createRepository(t);
+  const root = await temporaryDirectory(t);
+  const service = new GitService({ cacheTtlMs: 0 });
+  await assert.rejects(
+    service.createWorktree(repository, root, "feature/bad-reserve", undefined, {
+      additionalAllocationBytes: -1,
+    }),
+    (error: unknown) => error instanceof GitServiceError && error.code === "invalid_input",
+  );
+  await assert.rejects(
+    service.createWorktree(repository, root, "feature/overflow-reserve", undefined, {
+      additionalAllocationBytes: Number.MAX_SAFE_INTEGER,
+    }),
+    (error: unknown) => error instanceof GitServiceError && error.code === "unsupported_scope",
+  );
+  await assert.rejects(git(repository, ["show-ref", "--verify", "refs/heads/feature/overflow-reserve"]));
 });
 
 test(".worktreeinclude provisioning is a no-op without the macOS transfer helper", async (t) => {

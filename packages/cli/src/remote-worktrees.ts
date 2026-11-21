@@ -62,7 +62,13 @@ return createWorkspaceWorktreeApplicationService({
     await checkSnapshotCapacity(root, estimatedBytes);
   },
   provisionIncludedFiles: (options) =>
-    provisionWorktreeIncludedFiles({ listFiles: (folderPath, args) => git.listFiles(folderPath, args) }, options),
+    provisionWorktreeIncludedFiles(
+      {
+        listFiles: (folderPath, args) => git.listFiles(folderPath, args),
+        checkIgnored: (folderPath, paths, signal) => git.checkIgnoredPaths(folderPath, paths, signal),
+      },
+      options,
+    ),
   repositoryPaths: (folderPath) => git.repositoryPaths(folderPath),
   dirtyState: (repositoryPath, worktreePath) => git.managedWorktreeDirtyState(repositoryPath, worktreePath),
   expandIgnoredPaths: (repositoryPath, worktreePath, ignoredPaths) =>

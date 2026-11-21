@@ -34,6 +34,12 @@ export class ManagedWorktreeProvisionerError extends Error {
 export interface WorktreeProvisionerDependencies {
   /** Run `git <args>` in `cwd` and return raw (-z) stdout. */
   listFiles(cwd: string, args: readonly string[]): Promise<string>;
+  /**
+   * Filter `paths` to those ignored by Git's standard ignore rules
+   * (`git check-ignore -z --stdin`). Preferred over `ls-files --exclude-standard`
+   * because large ignored trees such as `node_modules` never need to be walked.
+   */
+  checkIgnored?(cwd: string, paths: readonly string[], signal?: AbortSignal): Promise<string[]>;
 }
 
 function normalizedRelativePath(candidate: string): string | undefined {
@@ -120,37 +126,41 @@ export async function provisionWorktreeIncludedFiles(
     );
   }
 
-  // `ls-files -o -i` is "untracked AND ignored". The WI file is itself an
-  // exclude source, so intersecting standard-ignored with WI-ignored yields
-  // exactly the files that are both ignored by the project and selected for
-  // provisioning — tracked files and non-ignored untracked files can never
-  // appear in either list.
-  const standardArgs = [
+  // `ls-files -o -i --exclude-from=.worktreeinclude` lists only untracked files
+  // selected by `.worktreeinclude` (tracked files can never appear). Checking
+  // just those candidates against Git's standard ignore rules avoids walking
+  // unrelated huge ignored trees like `node_modules` (which would otherwise blow
+  // past Git's stdout cap).
+  const includedRaw = await dependencies.listFiles(canonicalSource, [
     "ls-files",
     "-z",
     "-o",
     "-i",
-    "--exclude-standard",
+    `--exclude-from=${includeFile}`,
     "--full-name",
-  ];
-  const [ignoredRaw, includedRaw] = await Promise.all([
-    dependencies.listFiles(canonicalSource, standardArgs),
-    dependencies.listFiles(canonicalSource, [
+  ]);
+  if (options.signal?.aborted) throw new Error("Provision aborted.");
+  const included = includedRaw.split("\u0000").filter(Boolean);
+  if (included.length === 0) return [];
+
+  let eligible: string[];
+  if (dependencies.checkIgnored) {
+    const ignored = new Set(await dependencies.checkIgnored(canonicalSource, included, options.signal));
+    if (options.signal?.aborted) throw new Error("Provision aborted.");
+    eligible = included.filter((entry) => ignored.has(entry)).sort();
+  } else {
+    const ignoredRaw = await dependencies.listFiles(canonicalSource, [
       "ls-files",
       "-z",
       "-o",
       "-i",
-      `--exclude-from=${includeFile}`,
+      "--exclude-standard",
       "--full-name",
-    ]),
-  ]);
-  if (options.signal?.aborted) throw new Error("Provision aborted.");
-  const ignored = new Set(ignoredRaw.split("\u0000").filter(Boolean));
-  const eligible = includedRaw
-    .split("\u0000")
-    .filter(Boolean)
-    .filter((entry) => ignored.has(entry))
-    .sort();
+    ]);
+    if (options.signal?.aborted) throw new Error("Provision aborted.");
+    const ignored = new Set(ignoredRaw.split("\u0000").filter(Boolean));
+    eligible = included.filter((entry) => ignored.has(entry)).sort();
+  }
   if (eligible.length > MAX_PROVISIONED_FILES) {
     throw new ManagedWorktreeProvisionerError(
       "too_many_files",

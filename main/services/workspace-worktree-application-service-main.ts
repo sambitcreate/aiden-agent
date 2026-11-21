@@ -5,6 +5,7 @@ import { ensureUserDataDir } from "./data-store.js";
 import {
   gitApplyManagedWorktreeSnapshot,
   gitCaptureManagedWorktreeSnapshot,
+  gitCheckIgnoredPaths,
   gitCreateWorktree,
   gitDeleteManagedWorktree,
   gitDeleteManagedWorktreeSnapshotRef,
@@ -100,7 +101,10 @@ export const workspaceWorktreeApplicationService = createWorkspaceWorktreeApplic
     await checkSnapshotCapacity(root, estimatedBytes);
   },
   provisionIncludedFiles: (options) =>
-    provisionWorktreeIncludedFiles({ listFiles: gitListFiles }, options),
+    provisionWorktreeIncludedFiles(
+      { listFiles: gitListFiles, checkIgnored: gitCheckIgnoredPaths },
+      options,
+    ),
   repositoryPaths: gitRepositoryPaths,
   dirtyState: gitManagedWorktreeDirtyState,
   expandIgnoredPaths: gitExpandManagedWorktreeIgnored,
