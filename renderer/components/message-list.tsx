@@ -152,6 +152,8 @@ interface MessageListProps {
    * in a fork is refused (a paired Mac's chat): that prompt offers no fork.
    */
   forkBeforeFirstPrompt?: boolean;
+  /** Compact layout for narrow floating surfaces (omits main-window dock gutter). */
+  compact?: boolean;
 }
 
 interface AssistantResponseProps {
@@ -828,6 +830,7 @@ export function MessageList({
   forkSummary,
   forkBeforeFirstPrompt = true,
   storedImageActions = true,
+  compact = false,
 }: MessageListProps) {
   const workDetails = useAppearancePreference("workDetails");
   const collapseTiming = useAppearancePreference("workDetailsCollapseTiming");
@@ -1199,7 +1202,11 @@ export function MessageList({
         <ForkDisabledReasonContext.Provider value={forkDisabledReason}>
           <div
             ref={transcriptRef}
-            className="aiden-dock-inset chat-content-column flex flex-col gap-5 py-6"
+            className={
+              compact
+                ? "flex flex-col gap-4 px-4 py-4"
+                : "aiden-dock-inset chat-content-column flex flex-col gap-5 py-6"
+            }
             data-subagent-chip-focus-scope="true"
             // Chat text is data, never instructions: Aiden Live sees only how many messages there are.
             data-live-content="chat"

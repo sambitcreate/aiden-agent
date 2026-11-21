@@ -24,8 +24,9 @@ export const QUICK_CHAT_INVOKE_CHANNELS = new Set([
   "modelPace:summaries",
   "modelInsights:status",
 
-  // Workspaces (list, folder presence, attach / open folder)
+  // Workspaces (list, isolated scratch folder, folder presence, attach / open folder)
   "workspaces:list",
+  "workspaces:createNoWorkspace",
   "workspaces:createFromFolder",
   "workspaces:folderPresence",
 
@@ -62,6 +63,7 @@ export const QUICK_CHAT_INVOKE_CHANNELS = new Set([
   "voice:streamFinish",
   "voice:streamCancel",
   "localVoice:status",
+  "localVoice:warm",
 ]);
 
 export const QUICK_CHAT_NOTIFICATION_CHANNELS = new Set([

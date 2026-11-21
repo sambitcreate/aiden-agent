@@ -18,7 +18,7 @@ export const QUICK_CHAT_STAGE_SIZES: Record<QuickChatWindowMode, { width: number
   // 512x132 visible starter bar + 24px shadow margin on each edge.
   starter: { width: 560, height: 180 },
   // Expands upward when ModelPicker / WorkspacePicker popover is open so nothing clips.
-  "starter-popover": { width: 560, height: 440 },
+  "starter-popover": { width: 560, height: 540 },
   // 460x592 visible mini-modal + 24px shadow margin on each edge.
   modal: { width: 508, height: 640 },
 };

@@ -654,6 +654,7 @@ function RootContent() {
               acknowledge("blocked");
               return;
             }
+            void queryClient.invalidateQueries({ queryKey: queryKeys.workspaces });
             if (claimed.providerId && claimed.model) {
               persistModelSelection(claimed.providerId, claimed.model);
             }
@@ -679,6 +680,7 @@ function RootContent() {
         }
         notifyPendingChatHandoff(targetChatId);
         void Promise.all([
+          queryClient.invalidateQueries({ queryKey: queryKeys.workspaces }),
           queryClient.invalidateQueries({ queryKey: queryKeys.chat(targetChatId) }),
           queryClient.invalidateQueries({ queryKey: queryKeys.chats }),
         ]);

@@ -4006,22 +4006,24 @@ export function ChatPane({ chatId }: { chatId: string }) {
           )
         }
         titleAccessory={
-          effectiveWorkspace ? (
+          effectiveWorkspace || chat.data?.ephemeral === true ? (
             <div className="no-drag flex min-w-0 items-center gap-1.5">
-              <WorkspaceChip
-                workspace={effectiveWorkspace}
-                git={effectiveWorkspace.folderPath ? git.data : undefined}
-                canOpenTerminal={Boolean(effectiveWorkspace.folderPath && terminal.canOpen)}
-                onOpenTerminal={() => {
-                  if (!terminal.open) terminal.toggle();
-                }}
-                onAttachToWorkspace={
-                  canAttachChatToWorkspace ? () => setAttachDialogOpen(true) : undefined
-                }
-                attachDisabledReason={attachWorkspaceBlockedReason}
-              />
+              {effectiveWorkspace && !(chat.data?.ephemeral === true && isNoWorkspace(effectiveWorkspace)) ? (
+                <WorkspaceChip
+                  workspace={effectiveWorkspace}
+                  git={effectiveWorkspace.folderPath ? git.data : undefined}
+                  canOpenTerminal={Boolean(effectiveWorkspace.folderPath && terminal.canOpen)}
+                  onOpenTerminal={() => {
+                    if (!terminal.open) terminal.toggle();
+                  }}
+                  onAttachToWorkspace={
+                    canAttachChatToWorkspace ? () => setAttachDialogOpen(true) : undefined
+                  }
+                  attachDisabledReason={attachWorkspaceBlockedReason}
+                />
+              ) : null}
               {chat.data?.ephemeral === true ? (
-                <div className="workspace-chip flex shrink-0 items-center gap-1.5">
+                <div className="workspace-chip flex min-w-0 shrink items-center gap-1 overflow-hidden">
                   <Badge color="warning" className="shrink-0 whitespace-nowrap">
                     Temporary
                   </Badge>
@@ -4037,10 +4039,11 @@ export function ChatPane({ chatId }: { chatId: string }) {
                     variant="bar"
                     size="small"
                     disabled={Boolean(attachWorkspaceBlockedReason)}
-                    title={attachWorkspaceBlockedReason ?? undefined}
+                    aria-label="Attach to workspace"
+                    title={attachWorkspaceBlockedReason ?? "Attach to workspace"}
                     onClick={() => setAttachDialogOpen(true)}
                   >
-                    Attach to workspace…
+                    Attach…
                   </Button>
                 </div>
               ) : null}

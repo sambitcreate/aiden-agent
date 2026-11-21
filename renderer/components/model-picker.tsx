@@ -64,6 +64,7 @@ import { limitRows, showMoreLabel, useListLimit } from "../lib/list-limit";
 import { ariaKeyShortcut, matchesAccelerator, prettyAccelerator } from "../shared/keybindings";
 import { isComposingKey } from "../lib/dismiss-key";
 import { revealInList } from "../lib/reveal-in-list";
+import type { SettingsSection } from "../shared/settings-section";
 
 interface ModelPickerProps {
   providers: Provider[];
@@ -73,6 +74,10 @@ interface ModelPickerProps {
   disabled?: boolean;
   settingsBlockedReason?: string;
   hiddenModelsByProvider?: HiddenModelsByProvider;
+  /** Optional override for windows without TanStack Router (e.g. Quick Chat). */
+  onOpenSettings?: (section: SettingsSection) => void;
+  /** Optional observer for popover open/close transitions. */
+  onOpenChange?: (open: boolean) => void;
 }
 
 const BENCHMARK_DATE_FORMATTER = new Intl.DateTimeFormat(undefined, { dateStyle: "medium" });
@@ -502,7 +507,25 @@ const PAD_COMMIT_CLOSE_DELAY_MS = 200;
 /** One toast for list-row removals, so only the latest removal offers Undo. */
 const REMOVE_FROM_PAD_TOAST_ID = "model-picker-remove-from-pad";
 
-export function ModelPicker({
+export function ModelPicker(props: ModelPickerProps) {
+  if (props.onOpenSettings) {
+    return <ModelPickerInner {...props} openSettings={props.onOpenSettings} />;
+  }
+  return <ModelPickerWithRouter {...props} />;
+}
+
+function ModelPickerWithRouter(props: ModelPickerProps) {
+  const navigate = useNavigate();
+  const openSettings = React.useCallback(
+    (section: SettingsSection) => {
+      void navigate({ to: "/settings", search: { section } });
+    },
+    [navigate],
+  );
+  return <ModelPickerInner {...props} openSettings={openSettings} />;
+}
+
+function ModelPickerInner({
   providers,
   providerId,
   model,
@@ -510,8 +533,9 @@ export function ModelPicker({
   disabled,
   settingsBlockedReason,
   hiddenModelsByProvider,
-}: ModelPickerProps) {
-  const navigate = useNavigate();
+  openSettings,
+  onOpenChange,
+}: ModelPickerProps & { openSettings: (section: SettingsSection) => void }) {
   const [open, setOpen] = React.useState(false);
   const [view, setView] = React.useState<"pad" | "list">("list");
   const [search, setSearch] = React.useState("");
@@ -748,11 +772,17 @@ export function ModelPicker({
     focusPad();
   }, [selectedPosition, focusPad]);
 
+  const closePicker = React.useCallback(() => {
+    setOpen(false);
+    onOpenChange?.(false);
+    setPreviewValue(undefined);
+  }, [onOpenChange]);
+
   const commit = React.useCallback(
     (entry: ModelEntry, close = false) => {
       if (entry.value !== selectedValue) onChange(entry.providerId, entry.model);
       setPreviewValue(entry.value);
-      if (close) setOpen(false);
+      if (close) closePicker();
       // Recents are history: the choice already happened, so a failed write is
       // not worth interrupting anyone for.
       void saveModelPadPreferences(({ recentModels: recent }) => {
@@ -765,7 +795,7 @@ export function ModelPicker({
         console.warn("Couldn’t record the recent model.", error);
       });
     },
-    [onChange, selectedValue, saveModelPadPreferences],
+    [closePicker, onChange, selectedValue, saveModelPadPreferences],
   );
 
   // Choosing on the Pad closes the picker once the knob's confirm pulse has shown,
@@ -784,7 +814,7 @@ export function ModelPicker({
     padCloseTimerRef.current = window.setTimeout(
       () => {
         padCloseTimerRef.current = null;
-        setOpen(false);
+        closePicker();
       },
       prefersReducedMotion() ? 0 : PAD_COMMIT_CLOSE_DELAY_MS,
     );
@@ -870,6 +900,7 @@ export function ModelPicker({
 
   const handleOpenChange = (next: boolean) => {
     setOpen(next);
+    onOpenChange?.(next);
     if (next) {
       // Cleared on open rather than close, so the list keeps its filter while the
       // popover animates out.
@@ -905,8 +936,8 @@ export function ModelPicker({
   const customizeBlockedReasonId = `${pickerId}-customize-blocked`;
   const openModelDataSettings = () => {
     if (settingsBlockedReason) return;
-    setOpen(false);
-    void navigate({ to: "/settings", search: { section: "modelData" } });
+    handleOpenChange(false);
+    openSettings("modelData");
   };
 
   const handleViewTabKeyDown = (event: React.KeyboardEvent<HTMLButtonElement>) => {

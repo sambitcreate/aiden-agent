@@ -14,6 +14,8 @@ import { Menu, nativeImage, nativeTheme } from "electron";
 import path from "node:path";
 
 import { registerHandlers } from "./handlers/index.js";
+import { aidenAppNavigation } from "./services/aiden-app-navigation.js";
+import { windowDocumentOwner } from "./services/renderer-document-owner.js";
 import { prepareLocalSpeechStorage } from "./services/local-speech-models.js";
 import { storageUsageService } from "./services/storage-usage-main.js";
 import { chatTriage, startChatTriage, stopChatTriage } from "./services/chat-triage-main.js";
@@ -1967,6 +1969,27 @@ async function deliverMainWindowNotification(
   }
 }
 
+async function navigateMainWindowAndWait(path: string): Promise<void> {
+  await createMainWindow();
+  if (!(await waitForRendererReady())) {
+    throw new Error("The main window did not become ready in time.");
+  }
+  if (!mainWindow || mainWindow.isDestroyed()) {
+    throw new Error("The main window is not available.");
+  }
+  if (mainWindow.isMinimized()) mainWindow.restore();
+  mainWindow.show();
+  mainWindow.focus();
+  const owner = windowDocumentOwner(mainWindow.webContents);
+  const status = await aidenAppNavigation.openPath(path, owner);
+  if (status === "blocked") {
+    throw new Error("Finish the current task in Aiden before expanding.");
+  }
+  if (status !== "opened") {
+    throw new Error("Aiden's main window could not open this view.");
+  }
+}
+
 function deliverMainWindowNotificationSafely(
   channel: NotificationChannel,
   payload: Record<string, unknown>,
@@ -2191,7 +2214,7 @@ if (!ownsSingleInstanceLock) {
   registerHandlers(
     (event) => !!mainWindow && !mainWindow.isDestroyed() && event.sender === mainWindow.webContents,
     {
-      navigateMainWindow: (path) => deliverMainWindowNotification("app:navigate", { path }),
+      navigateMainWindow: (path) => navigateMainWindowAndWait(path),
     },
   );
   registerBrowserHandlers();

@@ -285,6 +285,12 @@ export function useShortcutLabel(commandId: CommandId): string {
   return prettyAccelerator(useShortcutBinding(commandId));
 }
 
+/** Safe shortcut label lookup for components rendered in secondary windows outside CommandSystemProvider. */
+export function useOptionalShortcutLabel(commandId: CommandId): string {
+  const context = React.useContext(CommandSystemContext);
+  return context ? prettyAccelerator(context.binding(commandId)) : "";
+}
+
 export function useShortcutBinding(commandId: CommandId): string | null {
   const { binding } = useCommandSystem();
   return binding(commandId);
