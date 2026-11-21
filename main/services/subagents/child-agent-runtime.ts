@@ -28,6 +28,7 @@ import { isLocalProviderDeployment } from "../../../renderer/shared/provider-dep
 import { SubagentConcurrencyGate, type SubagentDeployment } from "./concurrency-gate.js";
 import type { SubagentHealthMetricsSink } from "./subagent-health-metrics-core.js";
 import { createPiCompactionModels } from "../pi-compaction-core.js";
+import { createSideCallPrefixLedger, withSideCallPrefixLedger, type SideCallPrefixLedger } from "../side-call-prefix.js";
 import {
   PiAgentRuntimeHarness,
   type PiRuntimeSessionBinding,
@@ -205,9 +206,14 @@ export class SubagentRuntimeRegistry {
    * parent chat's would; an isolated request process cannot take a recording
    * fetch, so only its response hook is read there.
    */
-  private childStreamOptions(sessionId: string, childRuntime: ResolvedModelRuntime, spec: SubagentChildSpec) {
+  private childStreamOptions(
+    sessionId: string,
+    childRuntime: ResolvedModelRuntime,
+    spec: SubagentChildSpec,
+    prefixes: SideCallPrefixLedger,
+  ) {
     const options = buildAgentRuntimeOptions(sessionId, childRuntime);
-    if (!options.streamFn || isAcpHarnessProvider(spec.runtime.provider.id)) return { agentOptions: options };
+    if (!options.streamFn || isAcpHarnessProvider(spec.runtime.provider.id)) return { agentOptions: options, keepsPrefix: false };
     const owner = { kind: "chat", id: spec.authority.chatId } as const;
     // A task-owned transform records this request under its frozen Bot/root
     // scopes; the ordinary foreground-chat meter would count it a second time.
@@ -243,7 +249,11 @@ export class SubagentRuntimeRegistry {
       // A helper's spending is its chat's, including requests after a provider wait.
       streamFn = spendingMeter.wrap(streamFn);
     }
-    return { agentOptions: { ...options, streamFn }, spendingMeter, beforeSendRefusal };
+    // The child's compactions continue its own last request, as a chat's do.
+    // A Bot helper keeps none, as a Bot chat keeps none.
+    const keepsPrefix = !spec.transformRuntime;
+    if (keepsPrefix) streamFn = withSideCallPrefixLedger(streamFn, { ledger: prefixes, chatKey: sessionId });
+    return { agentOptions: { ...options, streamFn }, spendingMeter, beforeSendRefusal, keepsPrefix };
   }
 
   get activeCount(): number {
@@ -281,7 +291,10 @@ export class SubagentRuntimeRegistry {
       }) ?? spec.runtime;
     const childRuntime = spec.transformRuntime?.(isolatedRuntime, { childId, runId: spec.runId ?? childId }) ?? isolatedRuntime;
     if (childRuntime.provider.id !== spec.runtime.provider.id || childRuntime.model.provider !== spec.runtime.model.provider || childRuntime.model.id !== spec.runtime.model.id) throw new Error("A child runtime transform cannot switch its admitted model.");
-    const { agentOptions, spendingMeter, beforeSendRefusal } = this.childStreamOptions(sessionId, childRuntime, spec);
+    // One child, one session: its ledger holds only its own last request and goes with it.
+    const prefixes = createSideCallPrefixLedger({ maxChats: 1 });
+    const { agentOptions, spendingMeter, beforeSendRefusal, keepsPrefix } =
+      this.childStreamOptions(sessionId, childRuntime, spec, prefixes);
     const budget = resolveCompactionModelBudget(spec.compactionModelOverrides, childRuntime.model, spec.compactionEngine);
     const inputReserveTokens = configuredCompactionReserveTokens(spec.compactionModelOverrides, childRuntime.model, spec.compactionEngine);
     const contextOptions = {
@@ -307,6 +320,7 @@ export class SubagentRuntimeRegistry {
       thinkingLevel: spec.thinkingLevel,
       signal: cancellation.signal,
       consumeHostFailure: childRuntime.consumeIsolatedHostFailure,
+      ...(keepsPrefix ? { cachedPrefix: () => prefixes.latest(sessionId) } : {}),
     };
     const childTools = [...spec.tools, createVccRecallTool(() => sessionPromise)];
     contextOptions.tools = childTools;

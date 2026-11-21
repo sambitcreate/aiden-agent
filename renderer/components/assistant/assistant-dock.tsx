@@ -1,9 +1,13 @@
-// Aiden's window-level Live control: one compact "Live" pill whose leading
-// Helix glyph and label follow the session state.
+// Aiden's window-level Live control. The composer's Send button starts Live
+// when the draft is empty (renderer/lib/live-launcher.ts); this dock owns the
+// session, the ribbon, setup, and a corner pill that appears only while Live
+// is connecting, stopping, needs an approval, or has disconnected.
 
 import * as React from "react";
 import { useNavigate, useRouter } from "@tanstack/react-router";
 import { useCommandHandler } from "../../lib/command-system";
+import { useAppCapabilities } from "../../lib/app-capabilities";
+import { LIVE_LAUNCH_IDLE, liveLauncher } from "../../lib/live-launcher";
 import { useSettings } from "../../lib/queries";
 import { settingsLocation, type SettingsSection } from "../../lib/settings-section";
 import { AidenActivityMark } from "../aiden-activity-mark";
@@ -85,6 +89,9 @@ export function AssistantDock({ rightInset = 0 }: { rightInset?: number }): Reac
   const navigate = useNavigate();
   const router = useRouter();
   const live = useAssistantLive(null);
+  // Live runs on macOS and Linux (Computer Use is an optional Mac extra), so
+  // the send button offers it wherever the geminiLive capability is enabled.
+  const { geminiLive } = useAppCapabilities();
   const settings = useSettings();
   useLiveChatVoiceApprovals(settings.data);
   // Until settings load, keep Live off so a disabled feature never flashes on.
@@ -112,6 +119,7 @@ export function AssistantDock({ rightInset = 0 }: { rightInset?: number }): Reac
       rightInset={rightInset}
       enabled={enabled}
       buttonVisible={buttonVisible}
+      hostSupported={geminiLive}
       onOpenSettings={openSettings}
       activity={activity}
       preferences={preferences}
@@ -126,6 +134,7 @@ export function AssistantDockPresentation({
   rightInset = 0,
   enabled = true,
   buttonVisible = true,
+  hostSupported = true,
   onOpenSettings = () => undefined,
   useCommand = useCommandHandler,
   activity = null,
@@ -137,9 +146,14 @@ export function AssistantDockPresentation({
   rightInset?: number;
   /** Settings → Voice & Speech → Aiden Live. Off renders nothing and ignores the Live command. */
   enabled?: boolean;
-  /** Settings → Voice & Speech → Aiden Live → Show Live button. Off hides only the idle pill. */
+  /**
+   * Settings → Voice & Speech → Aiden Live → Show Live in the send button.
+   * Off keeps the composer's plain Send; the shortcut still starts Live.
+   */
   buttonVisible?: boolean;
-  onOpenSettings?: (section: "providers" | "computerUse" | "scheduledTasks") => void;
+  /** Live can start on this computer, so the composer may offer it. */
+  hostSupported?: boolean;
+  onOpenSettings?: (section: "providers" | "computerUse" | "scheduledTasks" | "geminiLive") => void;
   useCommand?: typeof useCommandHandler;
   /** What Live is doing or needs, from the shared activity store. */
   activity?: LiveActivity | null;
@@ -192,6 +206,21 @@ export function AssistantDockPresentation({
     }
   }, [live.active, live.microphoneActive, setupCompleted]);
 
+  // Every start, from the shortcut, the composer or setup's Start Live, waits
+  // for composer dictation to let go of the microphone first. It is one
+  // attempt: presses while the microphone is being handed over do nothing.
+  const startPendingRef = React.useRef(false);
+  const startAfterHandoff = React.useCallback(() => {
+    if (startPendingRef.current) return;
+    startPendingRef.current = true;
+    void liveLauncher
+      .prepareStart()
+      .then(() => live.start())
+      .finally(() => {
+        startPendingRef.current = false;
+      });
+  }, [live]);
+
   const openPanel = React.useCallback(() => {
     let action = liveDockClickAction(live, setupCompleted, stopRevealed);
     if (action === "none") return;
@@ -226,22 +255,41 @@ export function AssistantDockPresentation({
       return;
     }
     if (action === "setup") {
+      // Composer dictation lets go of the microphone before Live asks for it.
+      // Setup captures nothing until its own Start Live, which waits for the
+      // same handoff.
+      void liveLauncher.prepareStart();
       live.setSetupOpen(true);
       return;
     }
     if (action === "start") {
-      void live.start();
+      startAfterHandoff();
       return;
     }
-    onOpenSettings(live.available ? "computerUse" : "providers");
-  }, [live, onOpenSettings, setupCompleted, stopRevealed]);
+    onOpenSettings(live.available ? "geminiLive" : "providers");
+  }, [live, onOpenSettings, setupCompleted, startAfterHandoff, stopRevealed]);
   useCommand("assistant.open", openPanel, live.visible && enabled);
-  if (!live.visible || !enabled) return <></>;
 
   const closing = live.state === "closing";
+  // The composer's button starts Live through the same press the shortcut uses.
+  const openPanelRef = React.useRef(openPanel);
+  openPanelRef.current = openPanel;
+  const offered = live.visible && enabled && buttonVisible && hostSupported;
+  const sessionActive = live.active || live.busy || closing;
+  React.useEffect(() => {
+    liveLauncher.publish(
+      { offered, sessionActive, needsSetup: !setupCompleted },
+      offered ? () => openPanelRef.current() : null,
+    );
+  }, [offered, sessionActive, setupCompleted]);
+  React.useEffect(() => () => liveLauncher.publish(LIVE_LAUNCH_IDLE, null), []);
+
+  if (!live.visible || !enabled) return <></>;
+
   const showStop = stopRevealed && live.active;
-  // Whenever there is a session, a pending approval, or an error to see and
-  // stop, the pill stays even if the user hid the idle button.
+  // The idle pill moved into the composer's Send button. The corner pill
+  // shows only while there is a session starting or stopping, a pending
+  // approval, or an error to see and stop.
   const sessionVisible = live.active || live.busy || closing || Boolean(live.error) || approvalPending;
   const glyph = aidenLiveMark(markState);
   const label = liveTriggerLabel(markState, closing, showStop);
@@ -283,7 +331,7 @@ export function AssistantDockPresentation({
             {approvalPrompt}
           </AssistantLiveHud>
         ) : null}
-        {!live.active && (buttonVisible || sessionVisible) ? (
+        {!live.active && sessionVisible ? (
           <button
             ref={triggerRef}
             type="button"
@@ -309,11 +357,11 @@ export function AssistantDockPresentation({
         ) : null}
         {live.active ? null : (
           <span role="status" aria-live="polite" className="sr-only">
-            {live.error ? "Disconnected — see details" : live.busy ? live.state === "closing" ? "Stopping…" : "Connecting…" : "Start Live"}
+            {live.error ? "Disconnected — see details" : live.busy ? live.state === "closing" ? "Stopping…" : "Connecting…" : ""}
           </span>
         )}
         {!setupCompleted ? (
-          <AssistantLiveSetupDialog live={live} onOpenSettings={onOpenSettings} />
+          <AssistantLiveSetupDialog live={live} onOpenSettings={onOpenSettings} onStart={startAfterHandoff} />
         ) : null}
       </div>
     </>

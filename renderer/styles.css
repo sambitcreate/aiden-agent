@@ -958,8 +958,10 @@ textarea {
 /* A wide visual leaves the reading column for the chat pane: it grows to
    the pane's width (inside a slim gutter, up to a cap), stays centred on the
    column, and follows the window. Never narrower than the column. The dock
-   gutter only guards the composer row, which content already scrolls under. */
-.aiden-inline-visual[data-layout="wide"]:not(:popover-open) {
+   gutter only guards the composer row, which content already scrolls under.
+   Scoped to the transcript's inline-size container so `100cqi` never falls
+   back to the viewport outside a chat pane. */
+[data-scroll-content]:has(> .chat-content-column) .aiden-inline-visual[data-layout="wide"]:not(:popover-open) {
   --inline-visual-wide-width: max(
     100%,
     min(calc(100cqi - 2 * var(--inline-visual-wide-gutter)), var(--inline-visual-wide-max))
@@ -969,8 +971,19 @@ textarea {
   margin-inline: calc((100% - var(--inline-visual-wide-width)) / 2);
 }
 
+/* Design mode's chat column is asymmetric (slim start gutter, dock gutter at
+   the end), so centring on the column pulls a wide visual past the start edge.
+   Stay flush with the start gutter and grow into the end dock gutter only. */
+[data-design-mode] [data-scroll-content]:has(> .chat-content-column) .aiden-inline-visual[data-layout="wide"]:not(:popover-open) {
+  width: max(
+    100%,
+    min(calc(100cqi - 2 * var(--design-mode-gutter)), var(--inline-visual-wide-max))
+  );
+  margin-inline: 0;
+}
+
 /* While Quick View is open, docked or floating, the card owns that space; stay in the column. */
-[data-chat-card-inset] .aiden-inline-visual[data-layout="wide"]:not(:popover-open) {
+[data-chat-card-inset] [data-scroll-content]:has(> .chat-content-column) .aiden-inline-visual[data-layout="wide"]:not(:popover-open) {
   width: 100%;
   margin-inline: 0;
 }
@@ -2971,9 +2984,10 @@ textarea {
    left. The title may shrink to nothing so the actions never overlap it. */
 [data-design-mode] {
   --chat-content-max-width: none;
+  --design-mode-gutter: 16px;
 }
 [data-design-mode] .aiden-dock-inset {
-  padding-inline: 16px var(--aiden-dock-gutter);
+  padding-inline: var(--design-mode-gutter) var(--aiden-dock-gutter);
 }
 [data-design-mode] .scroll-area-header h1 {
   min-width: 0;

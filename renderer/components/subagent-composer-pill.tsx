@@ -196,16 +196,10 @@ function plural(count: number, noun: string): string {
   return `${count} ${noun}${count === 1 ? "" : "s"}`;
 }
 
-function headlineText(model: SubagentPillModel): { text: string; tone: "attention" | "active" | "quiet" } {
-  if (model.attention) return { text: `${model.attention.label} needs your attention`, tone: "attention" };
-  const latest = model.latest;
-  if (latest) {
-    return {
-      text: `${latest.label} · ${subagentStatusLabel(latest.state, latest.snapshot?.activity)}`,
-      tone: "active",
-    };
-  }
-  return { text: subagentGroupSummary(model.runs.map((run) => run.state)), tone: "quiet" };
+/** "3 finished" for a batch that all completed; otherwise the card's own summary is used. */
+function allCompletedSummary(model: SubagentPillModel): string | null {
+  if (model.activeCount > 0 || !model.runs.every((run) => run.state === "completed")) return null;
+  return `${model.runs.length} finished`;
 }
 
 /** The live feed for one run: saved milestones, then the current activity and latest text. */
@@ -395,6 +389,7 @@ export interface SubagentComposerPillProps {
   returnFocus?: () => HTMLElement | null;
   /** The effective `subagents.toggleTray` binding, shown in the tray footer. */
   shortcut?: string | null;
+  className?: string;
 }
 
 const NO_STOP_ERRORS: Readonly<Record<string, string>> = {};
@@ -412,10 +407,11 @@ export function SubagentComposerPill({
   onDismiss,
   returnFocus,
   shortcut = null,
+  className,
 }: SubagentComposerPillProps) {
   const active = model.activeCount > 0;
   const now = useNow(active);
-  const headline = headlineText(model);
+  const summary = allCompletedSummary(model) ?? subagentGroupSummary(model.runs.map((run) => run.state));
   const elapsed = longestSubagentElapsedLabel(
     model.runs.map((run) => run.snapshot),
     now,
@@ -487,6 +483,7 @@ export function SubagentComposerPill({
           // never below its marks and count: the headline is the only part that gives way.
           "pointer-events-auto flex min-h-9 max-w-[min(100%,36rem)] shrink-[4] items-center rounded-pill bg-popover/95 shadow-popover backdrop-blur-xl transition-[background-color,box-shadow] duration-150 hover:bg-popover hover:shadow-modal motion-reduce:transition-none",
           model.attention && "bg-status-warning-surface hover:bg-status-warning-surface",
+          className,
         )}
       >
         <PopoverTrigger asChild>
@@ -507,26 +504,22 @@ export function SubagentComposerPill({
               // In the narrowest windows the count alone has to fit beside the controls.
               className="@max-[15rem]:hidden"
             />
+            {/* The same words as the transcript card; narrow windows fall back to the bare count. */}
             <span
               className={cn(
-                "shrink-0 font-medium whitespace-nowrap tabular-nums",
+                "line-clamp-1 min-w-0 text-left font-medium tabular-nums [overflow-wrap:anywhere] @max-[30rem]:hidden",
+                model.attention ? "text-support-warning" : allCompleted ? "text-status-green" : "text-primary",
+              )}
+            >
+              {summary}
+            </span>
+            <span
+              className={cn(
+                "hidden shrink-0 font-medium whitespace-nowrap tabular-nums @max-[30rem]:inline",
                 allCompleted ? "text-status-green" : "text-primary",
               )}
             >
-              <span className="@max-[30rem]:hidden">{active ? countText : `${countText} finished`}</span>
-              <span className="hidden @max-[30rem]:inline">
-                {active ? `${model.activeCount} running` : `${model.runs.length} finished`}
-              </span>
-            </span>
-            {/* Narrow windows keep the marks and count; the tray still has every detail. */}
-            <span aria-hidden="true" className="h-3.5 w-px shrink-0 bg-separator @max-[30rem]:hidden" />
-            <span
-              className={cn(
-                "line-clamp-1 min-w-0 text-left [overflow-wrap:anywhere] @max-[30rem]:hidden",
-                headline.tone === "attention" ? "text-support-warning" : "text-secondary",
-              )}
-            >
-              {headline.text}
+              {active ? `${model.activeCount} running` : `${model.runs.length} finished`}
             </span>
             {elapsed ? (
               <span className="shrink-0 text-mini text-tertiary tabular-nums @max-[30rem]:hidden">{elapsed}</span>

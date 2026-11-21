@@ -526,7 +526,7 @@ test("keyboard focus on a subagent group's header follows the group when it move
     subagentsEnabled: true,
   });
   const view = render(transcript(frame([])));
-  const before = screen.getByRole("button", { name: /^Kicked off 1 subagent\./u });
+  const before = screen.getByRole("button", { name: /^Kicked off 1 scout\./u });
   await act(async () => {
     before.focus();
   });
@@ -537,9 +537,36 @@ test("keyboard focus on a subagent group's header follows the group when it move
       transcript(frame([{ ...toolStep(text.length), toolName: "subagent", label: "Subagent" }])),
     );
   });
-  const after = screen.getByRole("button", { name: /^Kicked off 1 subagent\./u });
+  const after = screen.getByRole("button", { name: /^Kicked off 1 scout\./u });
   assert.equal(after === before, false, "the group remounted in its new place");
   assert.equal(document.activeElement === after, true, "focus moved with it instead of dropping to the page");
+});
+
+test("the call that started subagents has no row of its own while their card stands for it", () => {
+  document.documentElement.dataset.reduceMotion = "true";
+  const text = "Splitting the work.\n\n";
+  const frame = (subagentsEnabled: boolean, steps: AgentToolStep[]): Frame => ({
+    messages: [prompt],
+    streamingText: text,
+    timeline: { version: 3, generationId: "generation-launch", status: "running", startedAt: 1, steps },
+    liveSubagents: [{ ...liveRun("launch-run"), generationId: "generation-launch" }],
+    subagentsEnabled,
+  });
+  const launch: AgentToolStep = { ...toolStep(text.length), toolName: "subagent", label: "Subagent" };
+  const view = render(transcript(frame(true, [launch])));
+  assert.ok(screen.getByRole("button", { name: /^Kicked off 1 scout\./u }), "the card shows");
+  assert.equal(screen.queryByText("Subagent"), null, "no bare launch row above the card");
+
+  // Other work in the same stretch keeps its activity row; only the launch call leaves it.
+  const read: AgentToolStep = { ...toolStep(text.length), id: "step-read", toolName: "read_file", label: "Read notes.md" };
+  view.rerender(transcript(frame(true, [read, launch])));
+  assert.ok(view.container.querySelector(".activity-feed"), "the read keeps its row");
+  assert.equal(screen.queryByText("Subagent"), null);
+
+  // With subagents off there is no card, so the call shows as an ordinary row.
+  view.rerender(transcript(frame(false, [launch])));
+  assert.equal(chipRunIds(view.container).length, 0);
+  assert.ok(screen.getAllByText("Subagent").length > 0, "the launch row is back");
 });
 
 test("a reply steered mid-run stays the same reply through guidance, handoff and settlement", () => {

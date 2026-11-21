@@ -256,7 +256,7 @@ export const onboardingFeatures: OnboardingFeature[] = [
     group: "control",
     title: "Aiden Live",
     description:
-      "Talk to Aiden from a floating ribbon above your chat, pick its voice and speed, approve each app action, and say goodbye when you’re done. Live can move through Aiden's screens, read and send to the open chat, and take allow or deny out loud for approvals; you can turn each off in Settings.",
+      "Press the waveform where Send sits to talk to Aiden. A floating ribbon above your chat lets you pick its voice and speed and approve each app action; say goodbye when you’re done. Live can move through Aiden's screens, read and send to the open chat, and take allow or deny out loud for approvals; you can turn each off in Settings.",
     icon: AudioWaveform,
     size: "hero",
   },

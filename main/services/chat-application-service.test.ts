@@ -20,6 +20,7 @@ import { ChatReadMarkerStore } from "./chat-read-markers.js";
 import { ChatTriageStore } from "./chat-triage.js";
 import { WorkspaceMutationGate } from "./workspace-mutation-gate.js";
 import { WorkspaceOperationRegistry } from "./workspace-operation-registry.js";
+import { PiCacheWarmer, adoptChatCacheWarmer } from "./pi-cache-warming.js";
 
 function chat(id = "chat-1", workspaceId = "workspace-1"): Chat {
   return {
@@ -296,6 +297,37 @@ test("shared chat deletion removes staged artifacts after the durable tombstone"
   });
   await application.service.remove("chat-1");
   assert.deepEqual(events, ["snapshots:chat-1", "tombstone", "spills", "artifacts", "html-artifacts", "effects", "compaction", "chat", "complete", "scratch:chat-1"]);
+});
+
+test("deleting a chat from any surface stops its idle cache warmer, and a failed delete leaves it running", async () => {
+  // A warmer with no reply to replay; it only needs to be adoptable and disposable.
+  const idleWarmer = () => new PiCacheWarmer({ signal: new AbortController().signal } as ConstructorParameters<typeof PiCacheWarmer>[0]);
+  const kept = idleWarmer();
+  adoptChatCacheWarmer("chat-1", kept);
+  const failing = fixture({
+    chatStore: {
+      listRegular: async () => [],
+      list: async () => [],
+      get: async () => chat(),
+      create: async () => chat(),
+      rename: async () => chat(),
+      setChatModelSelection: async () => chat(),
+      setDesignMode: async () => chat(),
+      moveEmptyChatToWorkspace: async () => chat(),
+      remove: async () => { throw new Error("disk failed"); },
+    } as ChatApplicationDependencies["chatStore"],
+  });
+  await assert.rejects(failing.service.remove("chat-1"), /disk failed/u);
+  assert.equal(kept.isDisposed, false, "the chat still exists, so its warmer keeps running");
+
+  // A phone or `aiden serve` deletion never sends the window's leave-chat call.
+  await fixture().service.remove("chat-1");
+  assert.equal(kept.isDisposed, true);
+
+  const other = idleWarmer();
+  adoptChatCacheWarmer("chat-2", other);
+  assert.equal(other.isDisposed, false, "another chat's warmer is untouched");
+  other.dispose();
 });
 
 test("shared chat deletion keeps admission closed while a durable delete is pending", async () => {

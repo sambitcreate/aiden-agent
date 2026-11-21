@@ -249,6 +249,7 @@ import type {
   AssistantLiveRendererEvent,
   AssistantLiveSnapshot,
   AssistantLiveStartIntent,
+  LiveDisplaySources,
 } from "../shared/assistant-live";
 import {
   fallbackDetachedLifecycleStream,
@@ -602,7 +603,9 @@ export const assistantLiveApi = {
   stop: () => invoke<AssistantLiveSnapshot>("assistant-live:stop", {}),
   sendAudio: (sessionId: string, pcm: Uint8Array) =>
     invoke<boolean>("assistant-live:audio", { sessionId, pcm }),
-  bindDisplay: () => invoke<string | null>("assistant-live:display-bind", {}),
+  displaySources: () => invoke<LiveDisplaySources>("assistant-live:display-sources", {}),
+  bindDisplay: (sourceId?: string) =>
+    invoke<string | null>("assistant-live:display-bind", sourceId ? { sourceId } : {}),
   releaseDisplay: (bindingId: string) =>
     invoke<boolean>("assistant-live:display-release", { bindingId }),
   sendFrame: (sessionId: string, frame: Uint8Array) =>
@@ -1667,6 +1670,8 @@ export const chatsApi = {
         }
     >("chats:compact", id, engine),
   cancelCompact: (id: string) => invoke<boolean>("chats:cancelCompact", id),
+  // This window no longer shows the chat, so a settled reply stops keeping its cache warm.
+  releaseCacheWarming: (id: string) => invoke<boolean>("chats:releaseCacheWarming", id),
   // Next-request context projection for the composer meter. Pass the visible
   // draft, pending attachments, and the current model selection so the
   // projection matches what would actually be sent.

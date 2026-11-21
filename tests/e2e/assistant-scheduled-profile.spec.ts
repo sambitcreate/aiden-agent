@@ -1,4 +1,4 @@
-import { expect, finishLmStudioOnboarding, test } from "./fixtures";
+import { composerPrimaryButton, expect, finishLmStudioOnboarding, test } from "./fixtures";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 
@@ -8,20 +8,38 @@ test("local Aiden Live, Scheduled, Profile, and About surfaces stay safe to expl
   const { page } = aiden;
   await finishLmStudioOnboarding(page);
 
-  // The dock is now the one-time Aiden Live setup entry point. Exercise the
-  // keyboard path without requesting system permissions or contacting Google.
+  // An empty draft's send button is the one-time Aiden Live setup entry
+  // point on macOS and Linux. Exercise the keyboard path without requesting
+  // system permissions or contacting Google.
   const liveSetupTrigger = page.getByRole("button", { name: "Set up Aiden Live" });
-  await liveSetupTrigger.press("Enter");
+  await expect(liveSetupTrigger).toBeVisible();
+  await expect(page.getByRole("button", { name: "Send message" })).toHaveCount(0);
+  // The Live button ignores presses right after Send swaps to Live (press guard).
   const liveSetup = page.getByRole("dialog", { name: "Set up Aiden Live" });
-  await expect(liveSetup).toBeVisible();
+  await expect(async () => {
+    if (!(await liveSetup.isVisible())) await liveSetupTrigger.press("Enter");
+    await expect(liveSetup).toBeVisible({ timeout: 300 });
+  }).toPass({ timeout: 5_000 });
   await expect(liveSetup.getByText("Beta", { exact: true })).toBeVisible();
   await expect(liveSetup.getByText("Google Live model", { exact: true })).toBeVisible();
   await expect(liveSetup.getByText("Microphone", { exact: true })).toBeVisible();
-  await expect(liveSetup.getByText("Screen and Accessibility", { exact: true })).toBeVisible();
+  if (process.platform === "darwin") {
+    // Computer Use is an optional extra for Live on a Mac.
+    await expect(liveSetup.getByText("Screen and Accessibility", { exact: true })).toBeVisible();
+  } else {
+    // Linux has no Computer Use and no app microphone permission, so neither blocks Live.
+    await expect(liveSetup.getByText("Screen and Accessibility", { exact: true })).toHaveCount(0);
+    await expect(liveSetup.getByText(/Linux doesn’t ask apps for microphone permission/u)).toBeVisible();
+  }
   await expect(liveSetup.getByText("Scheduled tasks", { exact: true })).toBeVisible();
   await liveSetup.getByRole("button", { name: "Not now", exact: true }).click();
   await expect(liveSetup).toHaveCount(0);
   await expect(liveSetupTrigger).toBeVisible();
+  // Typing turns it into Send.
+  await page.locator("textarea").first().fill("Hello");
+  await expect(liveSetupTrigger).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Send message" })).toBeEnabled();
+  await page.locator("textarea").first().fill("");
 
   // Natural-language creation stays available even if manual task dependencies
   // are unavailable. Suggestions open editable chat drafts without saving tasks.
@@ -202,7 +220,7 @@ test.describe("conversational scheduling", () => {
     await expect(page.getByText("I received your custom schedule.", { exact: true }).first()).toBeVisible();
     expect(JSON.stringify(scenario.results)).toContain("Every Tuesday at noon");
     expect(JSON.stringify(scenario.results)).toContain("Brief");
-    await expect(page.getByRole("button", { name: "Send message" })).toBeVisible();
+    await expect(composerPrimaryButton(page)).toBeVisible();
   });
 
   test("a long scheduled-task review keeps its question, every fact and the buttons on screen in a short window", async ({ aiden }, testInfo) => {

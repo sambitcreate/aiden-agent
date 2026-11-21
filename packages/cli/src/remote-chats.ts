@@ -61,7 +61,7 @@ export async function createCliRemoteChats(agentDir: string, daemon: ReturnType<
         onMessages: (lines) => { for (const line of lines) process.stderr.write(`aiden: hook: ${line}\n`); },
       });
     },
-    piRuntimeEffectStore: { deleteChat: async (id) => { await rm(daemon.sessionPath(id), { force: true }); } },
+    piRuntimeEffectStore: { deleteChat: async (id) => { await rm(daemon.sessionPath(id), { force: true }); daemon.forgetMemoryFactsTold(id); } },
     piCompactionSessionStore: { deleteChat: async () => {} }, // Compaction checkpoints are in that same pi journal.
     workspaceMutationGate: workspace.mutationGate, workspaceOperationRegistry: workspace.operationRegistry,
     logError: (area, message) => process.stderr.write(`aiden: ${area}: ${message}\n`),

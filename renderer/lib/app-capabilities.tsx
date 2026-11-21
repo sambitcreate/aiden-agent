@@ -6,6 +6,8 @@ export interface AppCapabilities {
   subagents: boolean;
   bots: boolean;
   appUpdates: boolean;
+  /** Installing a downloaded update asks for the person's password (Linux .deb/.rpm). */
+  appUpdateNeedsPassword: boolean;
   computerUse: boolean;
   /** A macOS VM per Bot (Apple silicon only). */
   botComputers: boolean;
@@ -36,6 +38,7 @@ export const DISABLED_APP_CAPABILITIES: AppCapabilities = Object.freeze({
   subagents: false,
   bots: false,
   appUpdates: false,
+  appUpdateNeedsPassword: false,
   computerUse: false,
   botComputers: false,
   hooks: false,
@@ -66,6 +69,7 @@ export function parseAppCapabilities(value: unknown): AppCapabilities {
     subagents: record.subagents === true,
     bots: record.bots === true,
     appUpdates: record.appUpdates === true,
+    appUpdateNeedsPassword: record.appUpdateNeedsPassword === true,
     computerUse: record.computerUse === true,
     botComputers: record.botComputers === true,
     hooks: record.hooks === true,

@@ -31,6 +31,25 @@ export interface AssistantLiveSnapshot {
     | "disconnected";
 }
 
+/** One screen or window in Aiden's own Linux screen picker. */
+export interface LiveDisplaySourceSummary {
+  id: string;
+  name: string;
+  kind: "screen" | "window";
+  /** A small PNG preview as a data URL, or "" when the desktop gave none. */
+  thumbnail: string;
+}
+
+/**
+ * What Choose… shows before capture: nothing to list (macOS system picker,
+ * or screen share off), the desktop's portal picker (Linux on Wayland), or
+ * Aiden's own list (Linux on X11).
+ */
+export type LiveDisplaySources =
+  | { mode: "unavailable" }
+  | { mode: "portal" }
+  | { mode: "list"; sources: LiveDisplaySourceSummary[] };
+
 /** Safe renderer projection. Binary media, credentials, and raw tool data are absent by design. */
 export type AssistantLiveRendererEvent =
   | { type: "snapshot"; snapshot: AssistantLiveSnapshot }

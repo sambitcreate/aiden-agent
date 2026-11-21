@@ -276,8 +276,15 @@ export interface PiRuntimeSessionBinding {
   /** Explicit model override; omitted to preserve the default request safety budget. */
   compactionReserveTokens?: number;
   appendMessages?: (session: PiSessionPort, messages: readonly AgentMessage[], visibleChatMessageId?: string) => Promise<void>;
-  /** Host adapter for atomically journaling a visible user plus its sync marker. */
-  appendInput?: (session: PiSessionPort, message: AgentMessage) => Promise<void>;
+  /**
+   * Host adapter for atomically journaling a visible user plus its sync
+   * marker, followed by the run input's `following` host messages.
+   */
+  appendInput?: (
+    session: PiSessionPort,
+    message: AgentMessage,
+    following: readonly AgentMessage[],
+  ) => Promise<void>;
   /**
    * Foreground projection must save queued user guidance before Pi can
    * continue. It runs inside the managed fault boundary: app cancellation
@@ -299,7 +306,16 @@ export interface PiRuntimeSessionBinding {
 
 export type PiRuntimeRunInput =
   | { kind: "continue-durable-tail" }
-  | { kind: "append-and-run"; message: AgentMessage };
+  | {
+      kind: "append-and-run";
+      message: AgentMessage;
+      /**
+       * Host messages journaled right after `message`, never shown as the
+       * person's words: the turn's hook context and state update. Journaling
+       * them keeps every later request's history identical to this one's.
+       */
+      following?: readonly AgentMessage[];
+    };
 
 /** Every provider retry of a run of failures plus one compact-and-retry. */
 const PI_RUNTIME_MAX_ATTEMPTS = MODEL_CALL_RETRY_POLICY.maxRetries + 2;
@@ -536,6 +552,17 @@ export function extensionSkillsPrompt(extensions: readonly PiAgentRuntimeExtensi
   return formatSkillsForSystemPrompt(extensions.flatMap((extension) => extension.resources?.skills ?? []));
 }
 
+/**
+ * The frozen-state tail extensions append to the composed system prompt, after
+ * every cache-stable part. Empty when no extension has one.
+ */
+export function extensionVolatileSystemPrompt(extensions: readonly PiAgentRuntimeExtension[]): string {
+  return extensions
+    .map((extension) => extension.volatileSystemPrompt?.trim())
+    .filter((value): value is string => Boolean(value))
+    .join("\n\n");
+}
+
 function composeSystemPrompt(
   basePrompt: string,
   extensions: readonly PiAgentRuntimeExtension[],
@@ -544,10 +571,7 @@ function composeSystemPrompt(
     .map((extension) => extension.systemPrompt?.trim())
     .filter((value): value is string => Boolean(value));
   const skillsPrompt = extensionSkillsPrompt(extensions);
-  const volatileContributions = extensions
-    .map((extension) => extension.volatileSystemPrompt?.trim())
-    .filter((value): value is string => Boolean(value));
-  return [basePrompt, ...contributions, skillsPrompt, ...volatileContributions]
+  return [basePrompt, ...contributions, skillsPrompt, extensionVolatileSystemPrompt(extensions)]
     .filter(Boolean)
     .join("\n\n");
 }
@@ -2257,9 +2281,10 @@ export class PiAgentRuntimeHarness {
 
       if (input.kind === "append-and-run") {
         try {
+          const following = input.following ?? [];
           const appendOperation = durability.appendInput
-            ? durability.appendInput(session, input.message)
-            : (durability.appendMessages ?? appendPiMessages)(session, [input.message]);
+            ? durability.appendInput(session, input.message, following)
+            : (durability.appendMessages ?? appendPiMessages)(session, [input.message, ...following]);
           const appended = await waitForManagedPromise(appendOperation, abortController.signal);
           if (appended.kind === "cancelled") {
             this.trackDetachedDurability(appendOperation);
@@ -2271,7 +2296,7 @@ export class PiAgentRuntimeHarness {
             return await finish({ kind: "app_cancelled", attempts });
           }
           if (appended.kind === "failed") throw appended.error;
-          this.agent.state.messages = [...this.agent.state.messages, input.message];
+          this.agent.state.messages = [...this.agent.state.messages, input.message, ...following];
         } catch (error) {
           try {
             durability.onJournalError?.(error);

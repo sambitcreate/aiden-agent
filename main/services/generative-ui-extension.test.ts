@@ -5,10 +5,14 @@ import * as os from "node:os";
 import * as path from "node:path";
 import {
   createGenerativeUiExtension,
+  createGenerativeUiExtensionRuntime,
   GENERATIVE_UI_EXTENSION_ID,
   GENERATIVE_UI_TOOL_NAME,
+  generativeUiUnavailableReason,
+  prepareGenerativeUiTurnStore,
   shouldEnableGenerativeUiExtension,
 } from "./generative-ui-extension.js";
+import { GenerativeUiArtifactStore } from "./generative-ui-artifact-store.js";
 import { piRuntimeReplayPolicy } from "./pi-runtime-tool.js";
 import { remoteGenerationSurface } from "./conversation-surface-generation.js";
 import type { InlineVisualsMode } from "../../renderer/shared/appearance.js";
@@ -64,9 +68,10 @@ test("visuals are available without a workspace and follow the inline-visuals mo
   const base = { usageSource: "chat", assistantMode: false, permission: "none", excluded: false };
   assert.equal(shouldEnableGenerativeUiExtension({ ...base }), true);
   assert.equal(shouldEnableGenerativeUiExtension({ ...base, inlineVisuals: "automatic" }), true);
-  assert.equal(shouldEnableGenerativeUiExtension({ ...base, inlineVisuals: "off", visualize: true }), false);
-  assert.equal(shouldEnableGenerativeUiExtension({ ...base, inlineVisuals: "on_request" }), false);
-  assert.equal(shouldEnableGenerativeUiExtension({ ...base, inlineVisuals: "on_request", visualize: true }), true);
+  assert.equal(shouldEnableGenerativeUiExtension({ ...base, inlineVisuals: "off" }), false);
+  // On request keeps the tools declared on every turn; a turn without
+  // /visualize refuses the call instead of dropping the declaration.
+  assert.equal(shouldEnableGenerativeUiExtension({ ...base, inlineVisuals: "on_request" }), true);
   assert.equal(shouldEnableGenerativeUiExtension({ ...base, usageSource: "scheduled" }), false);
   assert.equal(shouldEnableGenerativeUiExtension({ ...base, excluded: true }), false);
 });
@@ -91,8 +96,116 @@ test("turns sent from a paired device follow the desktop's inline visuals settin
   // Phones see each visual as its snapshot, so they follow Appearance.
   assert.equal(enabledFor("automatic"), true);
   assert.equal(enabledFor(), true);
-  assert.equal(enabledFor("on_request"), false);
+  assert.equal(enabledFor("on_request"), true);
   assert.equal(enabledFor("off"), false);
+});
+
+test("On request declares the same drawing tools with or without /visualize and refuses them without it", async () => {
+  const build = (preferArtifactThisTurn: boolean) => createGenerativeUiExtension({
+    workspaceRoot: undefined,
+    onArtifact: () => undefined,
+    onUiVisual: () => undefined,
+    onRequest: true,
+    preferArtifactThisTurn,
+  });
+  const declaration = (extension: ReturnType<typeof build>) =>
+    JSON.stringify(extension.tools?.map((tool) => ({ name: tool.name, description: tool.description, parameters: tool.parameters })));
+  const plain = build(false);
+  const visualize = build(true);
+  assert.equal(declaration(plain), declaration(visualize));
+  assert.match(plain.systemPrompt ?? "", /On request/u);
+
+  const renderArtifact = plain.tools?.find((tool) => tool.name === GENERATIVE_UI_TOOL_NAME);
+  await assert.rejects(renderArtifact!.execute("c1", { title: "T", html: "<p>x</p>" }), /not available in this turn.*\/visualize/su);
+  const renderUi = plain.tools?.find((tool) => tool.name === "render_ui");
+  await assert.rejects(renderUi!.execute("c2", { title: "B", markup: "<Visual><Text>Hi</Text></Visual>" }), /not available in this turn/u);
+  // The design guide is reading, not drawing, so it still answers.
+  const guide = plain.tools?.find((tool) => tool.name === "visualize_guide");
+  await guide!.execute("g", { modules: ["catalog"] });
+
+  const drawn: string[] = [];
+  const allowed = createGenerativeUiExtension({
+    workspaceRoot: undefined,
+    onArtifact: (artifact) => { drawn.push(artifact.title); },
+    onRequest: true,
+    preferArtifactThisTurn: true,
+  });
+  await allowed.tools?.find((tool) => tool.name === GENERATIVE_UI_TOOL_NAME)!.execute("c3", { title: "Shown", html: "<p>x</p>" });
+  assert.deepEqual(drawn, ["Shown"]);
+});
+
+test("an On request chat with broken staging still answers a plain turn and refuses to draw", async () => {
+  const root = await workspace();
+  const file = path.join(root, "generative-ui-artifacts.json");
+  await fs.writeFile(file, "{", "utf8");
+  const store = new GenerativeUiArtifactStore({ root: () => root });
+  await store.initialize();
+  const chat = { id: "chat-1", messages: [] };
+
+  const plain = await prepareGenerativeUiTurnStore(store, chat, { onRequest: true, visualize: false });
+  assert.match(plain.unavailableReason ?? "", /unreadable.*needs repair/su);
+  const extension = createGenerativeUiExtension({ onArtifact: () => undefined, onRequest: true, preferArtifactThisTurn: false });
+  await assert.rejects(
+    extension.tools!.find((tool) => tool.name === GENERATIVE_UI_TOOL_NAME)!.execute("c1", { title: "T", html: "<p>x</p>" }),
+    /not available in this turn/u,
+  );
+
+  // A turn that may draw still fails before drawing over a broken store.
+  await assert.rejects(prepareGenerativeUiTurnStore(store, chat, { onRequest: true, visualize: true }), /needs repair/u);
+  await assert.rejects(prepareGenerativeUiTurnStore(store, chat, { onRequest: false, visualize: false }), /needs repair/u);
+  assert.equal(await fs.readFile(file, "utf8"), "{");
+});
+
+test("an On request chat with an unrecovered visual still answers a plain turn", async () => {
+  const root = await workspace();
+  const store = new GenerativeUiArtifactStore({ root: () => root });
+  await store.initialize();
+  const staged: ChatHtmlArtifactV1 = {
+    version: 1, kind: "html", id: "media-1", title: "Chart", mimeType: "text/html", size: 12, mediaId: "media-1",
+  };
+  await store.stage({ chatId: "chat-1", generationId: "gen-1", artifact: staged, html: "<p>hello</p>" });
+  const orphaned = { id: "chat-1", messages: [] };
+
+  const plain = await prepareGenerativeUiTurnStore(store, orphaned, { onRequest: true, visualize: false });
+  assert.equal(plain.pending.count, 1);
+  assert.match(plain.unavailableReason ?? "", /could not be recovered/u);
+  await assert.rejects(prepareGenerativeUiTurnStore(store, orphaned, { onRequest: true, visualize: true }), /could not be recovered/u);
+
+  // Once the chat holds the visual, reconcile commits it and drawing is allowed.
+  const persisted = { id: "chat-1", messages: [{ role: "assistant", htmlArtifacts: [staged] }] };
+  const visualize = await prepareGenerativeUiTurnStore(store, persisted, { onRequest: true, visualize: true });
+  assert.deepEqual(visualize, { pending: { bytes: 0, count: 0 } });
+});
+
+test("a reconcile failure on a plain On request turn comes back for the log, and fails a turn that may draw", async () => {
+  const root = await workspace();
+  const real = new GenerativeUiArtifactStore({ root: () => root });
+  await real.initialize();
+  const staged: ChatHtmlArtifactV1 = {
+    version: 1, kind: "html", id: "media-1", title: "Chart", mimeType: "text/html", size: 12, mediaId: "media-1",
+  };
+  await real.stage({ chatId: "chat-1", generationId: "gen-1", artifact: staged, html: "<p>hello</p>" });
+  const failure = new Error("Generative UI artifact staging is at capacity.");
+  const store = {
+    availability: () => real.availability(),
+    usageByChat: (chatId: string) => real.usageByChat(chatId),
+    reconcilePersisted: async () => { throw failure; },
+  };
+  const persisted = { id: "chat-1", messages: [{ role: "assistant", htmlArtifacts: [staged] }] };
+
+  const plain = await prepareGenerativeUiTurnStore(store, persisted, { onRequest: true, visualize: false });
+  assert.match(plain.unavailableReason ?? "", /could not be recovered/u);
+  assert.equal(plain.reconcileError, failure);
+  await assert.rejects(prepareGenerativeUiTurnStore(store, persisted, { onRequest: true, visualize: true }), failure);
+});
+
+test("the turn refusal names the On request condition only for the drawing tools", () => {
+  const off = { onRequest: true, visualize: false };
+  assert.match(generativeUiUnavailableReason(GENERATIVE_UI_TOOL_NAME, off) ?? "", /On request/u);
+  assert.match(generativeUiUnavailableReason("render_ui", off) ?? "", /\/visualize/u);
+  assert.equal(generativeUiUnavailableReason("visualize_guide", off), undefined);
+  assert.equal(generativeUiUnavailableReason(GENERATIVE_UI_TOOL_NAME, { onRequest: true, visualize: true }), undefined);
+  assert.equal(generativeUiUnavailableReason(GENERATIVE_UI_TOOL_NAME, { onRequest: false, visualize: false }), undefined);
 });
 
 test("a remote turn tells the model its visuals arrive as still images", () => {
@@ -101,14 +214,16 @@ test("a remote turn tells the model its visuals arrive as still images", () => {
     workspaceId: "workspace", providerId: "provider", model: "model",
     onTurnAccepted: () => undefined,
   });
-  const remote = createGenerativeUiExtension({
+  const remote = createGenerativeUiExtensionRuntime({
     workspaceRoot: undefined,
     onArtifact: () => undefined,
     audience: surface.options.visualAudience,
   });
-  assert.match(remote.systemPrompt ?? "", /still image/iu);
-  const desktop = createGenerativeUiExtension({ workspaceRoot: undefined, onArtifact: () => undefined });
-  assert.doesNotMatch(desktop.systemPrompt ?? "", /still image/iu);
+  assert.match(remote.turnNote, /still image/iu);
+  const desktop = createGenerativeUiExtensionRuntime({ workspaceRoot: undefined, onArtifact: () => undefined });
+  assert.equal(desktop.turnNote, "");
+  // The audience is told after the message, so system is the same on both.
+  assert.equal(remote.extension.systemPrompt, desktop.extension.systemPrompt);
 });
 
 test("path rendering is refused without a workspace while inline html works", async () => {
@@ -150,12 +265,13 @@ test("the system prompt points the model at the guide and keeps replies complete
   const extension = createGenerativeUiExtension({ workspaceRoot: undefined, onArtifact: () => undefined });
   assert.match(extension.systemPrompt ?? "", /visualize_guide/u);
   assert.match(extension.systemPrompt ?? "", /takeaway/iu);
-  const preferred = createGenerativeUiExtension({
+  const preferred = createGenerativeUiExtensionRuntime({
     workspaceRoot: undefined,
     preferArtifactThisTurn: true,
     onArtifact: () => undefined,
   });
-  assert.match(preferred.systemPrompt ?? "", /\/visualize/u);
+  assert.match(preferred.turnNote, /\/visualize/u);
+  assert.equal(preferred.extension.systemPrompt, extension.systemPrompt);
 });
 
 test("with the design canvas offered, mockups and pages go to design files rather than inline visuals", () => {
@@ -170,14 +286,15 @@ test("with the design canvas offered, mockups and pages go to design files rathe
   assert.doesNotMatch(chat.prompt, /design canvas/iu);
 
   for (const preferArtifactThisTurn of [false, true]) {
-    const canvas = steering(
-      createGenerativeUiExtension({
-        workspaceRoot: undefined,
-        designCanvas: true,
-        preferArtifactThisTurn,
-        onArtifact: () => undefined,
-      }),
-    );
+    const runtime = createGenerativeUiExtensionRuntime({
+      workspaceRoot: undefined,
+      designCanvas: true,
+      preferArtifactThisTurn,
+      onArtifact: () => undefined,
+    });
+    const steered = steering(runtime.extension);
+    // The /visualize note rides after the message; it counts as steering too.
+    const canvas = { ...steered, prompt: `${steered.prompt} ${runtime.turnNote}` };
     for (const text of [canvas.prompt, canvas.description]) {
       assert.match(text, /design\/\*\.html/u);
       assert.match(text, /design canvas/iu);

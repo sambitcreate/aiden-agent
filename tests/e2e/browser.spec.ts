@@ -103,7 +103,6 @@ test("browser user and automation share a sandboxed page, annotations and isolat
     // Keep the annotation open while checking the same real pointer action at
     // the default, minimum supported, compact and side-by-side window sizes.
     const addToChat = page.getByRole("button", { name: "Add to chat", exact: true });
-    const liveTrigger = page.getByRole("button", { name: "Set up Aiden Live" });
     for (const [width, height, mode] of [
       [1280, 800, "tools-floating"],
       [390, 456, "tools-floating"],
@@ -118,32 +117,15 @@ test("browser user and automation share a sandboxed page, annotations and isolat
       await addToChat.click();
       await expect(page.getByRole("region", { name: "Annotate browser" })).toBeVisible();
       await expect(draft).toHaveValue("Existing draft.");
-      await expect.poll(async () => {
-        const panel = await surface.boundingBox();
-        const launcher = await liveTrigger.boundingBox();
-        if (!panel || !launcher) return false;
-        return mode === "tools-floating"
-          ? panel.y + panel.height <= launcher.y
-          : launcher.x + launcher.width <= panel.x;
-      }).toBe(true);
+      // Live starts from the send button of an empty draft now, so no idle
+      // corner launcher sits over the floating panel at any window size.
+      await expect(page.getByRole("button", { name: /Aiden Live/u })).toHaveCount(0);
       await addToChat.scrollIntoViewIfNeeded();
       const screenshot = testInfo.outputPath(`annotation-controls-${width}x${height}.png`);
       await page.screenshot({ path: screenshot });
       await testInfo.attach(`annotation-controls-${width}x${height}`, {
         path: screenshot, contentType: "image/png",
       });
-      // Ordinary pointer and keyboard activation still open the setup dialog.
-      // No microphone permissions or provider requests are needed for this path.
-      await liveTrigger.click();
-      const setup = page.getByRole("dialog", { name: "Set up Aiden Live" });
-      await expect(setup).toBeVisible();
-      await setup.getByRole("button", { name: "Not now", exact: true }).click();
-      await expect(setup).toBeHidden();
-      await liveTrigger.focus();
-      await page.keyboard.press("Enter");
-      await expect(setup).toBeVisible();
-      await page.keyboard.press("Escape");
-      await expect(setup).toBeHidden();
       await addToChat.focus();
       await expect(addToChat).toBeFocused();
       await page.keyboard.press("Enter");

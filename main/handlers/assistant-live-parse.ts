@@ -4,6 +4,7 @@ import {
   type AssistantLiveStartIntent,
 } from "../../renderer/shared/assistant-live.js";
 import { GEMINI_LIVE_MAX_JPEG_BYTES } from "../services/gemini-live/protocol.js";
+import { isLiveDisplaySourceId } from "../services/gemini-live/display-source-picker.js";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === "object" && !Array.isArray(value));
@@ -90,6 +91,18 @@ export function parseAssistantLiveEmptyIntent(
   if (!isRecord(value) || !exactKeys(value, [])) {
     throw new Error(`Invalid Assistant Live ${name} request.`);
   }
+}
+
+/**
+ * `{}` lets the system picker or desktop portal choose; `{ sourceId }` carries
+ * the screen or window the person chose in Aiden's own Linux picker.
+ */
+export function parseAssistantLiveDisplayBindIntent(value: unknown): { sourceId: string | null } {
+  if (isRecord(value) && exactKeys(value, [])) return { sourceId: null };
+  if (isRecord(value) && exactKeys(value, ["sourceId"]) && isLiveDisplaySourceId(value.sourceId)) {
+    return { sourceId: value.sourceId };
+  }
+  throw new Error("Invalid Assistant Live display-bind request.");
 }
 
 export function parseAssistantLiveDisplayReleaseIntent(

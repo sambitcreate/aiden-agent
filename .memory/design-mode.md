@@ -257,3 +257,15 @@ Deviations from the P1 plan:
 - `useFrameSource` keeps the last read while a changed file is read again, so the panels don't blink (and lose focus) on reload.
 - The floating panel (`React.memo`) is hidden while a picture is taken (`[data-capturing]`, counted for overlapping captures) and stops key events from reaching the canvas except Escape and ⌘/Ctrl+Z/Y outside text boxes.
 - E2E: `tests/e2e/design-canvas.spec.ts` "the Tweaks panel folds a component's controls…" (screenshots `1440-tweaks-panel`, `-float`, `-float-folded`, `-show-all`). Version chip buttons need `exact: true` in Playwright (the Delete button's name contains the version's).
+
+## Canvas sizing and Expand / Minimize (2026-11-19)
+
+- Owner asked for the canvas chrome to match the rest of Aiden (it looked too big) and for an Expand option that collapses the sidebar with the chat on the left. Branch `claude/project-thread-kmxp1b`.
+- Sizing: every canvas toolbar button (tool rail, zoom, comments trigger, Present, side panel, Expand) is `variant="bar" size="small"` (h-7, 16 px icons), the chat top bar's size; separators are `h-4`. The pills are 36 px (h-7 + p-1) and sit at `top-2`, centred on the 52 px chat header. The E2E's `expectCanvasChrome` checks a canvas button is the Design toggle's height.
+- Expand (`renderer/design/design-expand.tsx`, state in `useDesignWindowPolicy`): "expanded" is derived as design mode on and the sidebar collapsed, so hiding the sidebar by hand also shows Minimize. Expand writes the collapsed-by-design marker (so exit restores the sidebar) and the preference `aiden-agent.design.expanded`; the next entry with the preference set collapses the sidebar again. Minimize, or opening the sidebar by hand, clears the preference. Never widens the window.
+- Unavailable where the sidebar overlays the content (`useSplitViewSidebar().overlaid`, the compact SplitView under 700 px); there the button is hidden and ⇧⌘\ is not taken.
+- Shortcut `design.expand` = ⇧⌘\ (Figma's minimize-UI key), `requiresCapability: "designMode"`, `allowInEditable`. The button swaps its label (Expand canvas / Minimize canvas) and icon (lucide Expand / Shrink) and carries no `aria-pressed`, per the label-changing toggle guidance.
+
+## Wide inline visuals in design mode (2026-11-20)
+
+- Design mode's asymmetric `.aiden-dock-inset` (`--design-mode-gutter: 16px` start, `--aiden-dock-gutter` end) caused `.aiden-inline-visual[data-layout="wide"]`'s symmetric negative `margin-inline` breakout to pull wide visuals 16 px past the start edge. In `renderer/styles.css`, wide inline visuals are now scoped under `[data-scroll-content]:has(> .chat-content-column)`, and under `[data-design-mode]` they keep `margin-inline: 0` while growing rightwards to `max(100%, min(calc(100cqi - 2 * var(--design-mode-gutter)), var(--inline-visual-wide-max)))` (still overridden by `[data-chat-card-inset]`). Covered in `tests/e2e/inline-visuals.spec.ts` for both split and stacked design mode.

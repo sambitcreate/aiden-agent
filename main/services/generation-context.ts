@@ -22,6 +22,8 @@ import type { PiDiscoverableTool } from "./pi-tool-discovery.js";
 import type { PiRuntimeTool } from "./pi-runtime-tool.js";
 
 import { promptCacheTtlMs } from "./prompt-cache-lifetimes.js";
+import { trimScreenshots } from "./screenshot-trimming.js";
+
 const TOOL_RESULT_TEXT_LIMIT_CHARS = 32_000;
 const RECENT_TOOL_OUTPUT_BUDGET_TOKENS = 40_000;
 const MIN_RECENT_TOOL_RESULTS = 2;
@@ -56,6 +58,12 @@ export interface GenerationContextOptions {
   promptSections?: Partial<Record<ContextPromptSectionId, string>>;
   /** Tools held back behind tool search: reported in the breakdown, never priced. */
   deferredTools?: readonly AgentTool[];
+  /**
+   * Applied to the messages of every request before they are fitted to the
+   * window (the chat state's `chatStateRequestMessages`). Must not change the
+   * messages it is given.
+   */
+  prepareMessages?: (messages: readonly AgentMessage[]) => AgentMessage[];
 }
 
 /** Breakdown categories recorded as prompt text where the prompt is assembled. */
@@ -411,48 +419,16 @@ export function projectMessagesForModel(
   });
 }
 
-function limitToolResultImages(
-  messages: AgentMessage[],
-  toolName: string,
-  keep: number,
-): AgentMessage[] {
-  const imageIndexes: number[] = [];
-  for (let index = 0; index < messages.length; index += 1) {
-    const message = messages[index];
-    if (
-      message?.role === "toolResult" &&
-      message.toolName === toolName &&
-      message.content.some((part) => part.type === "image")
-    ) {
-      imageIndexes.push(index);
-    }
-  }
-  const keepCount = Number.isFinite(keep)
-    ? Math.max(0, Math.floor(keep))
-    : imageIndexes.length;
-  if (imageIndexes.length <= keepCount) return messages;
-  const strip = new Set(imageIndexes.slice(0, imageIndexes.length - keepCount));
-  return messages.map((message, index) => {
-    if (!strip.has(index) || !isToolResult(message)) return message;
-    return {
-      ...message,
-      content: message.content.filter((part) => part.type !== "image"),
-    };
-  });
-}
-
-/** Keep only the newest Computer Use screenshots while preserving every text result. */
-export function limitComputerUseImages(messages: AgentMessage[], keep = 3): AgentMessage[] {
-  return limitToolResultImages(messages, "computer_use", keep);
-}
-
-/** Browser history has its own image allowance; this projection never edits the journal. */
-export function limitBrowserSnapshotImages(messages: AgentMessage[], keep = 3): AgentMessage[] {
-  return limitToolResultImages(messages, "browser_snapshot", keep);
+/**
+ * The request's Computer Use and browser screenshots, trimmed in batches
+ * (`screenshot-trimming.ts`). This projection never edits the journal.
+ */
+export function trimRequestScreenshots(messages: AgentMessage[]): AgentMessage[] {
+  return trimScreenshots(messages) as AgentMessage[];
 }
 
 function projectRequestMessages(messages: readonly AgentMessage[], supportsImages: boolean): AgentMessage[] {
-  return limitBrowserSnapshotImages(limitComputerUseImages(projectMessagesForModel(messages, supportsImages)));
+  return trimRequestScreenshots(projectMessagesForModel(messages, supportsImages));
 }
 
 const TOOL_OUTPUT_RECOVERY_NOTICE =
@@ -704,6 +680,13 @@ export interface PromptCacheRefresh {
   requestStartedAt: number;
 }
 
+/** The retention the chat's latest request from this provider and model asked for. */
+export interface PromptCacheRetentionRecord {
+  provider: string;
+  model: string;
+  retention: "short" | "long";
+}
+
 /**
  * The cache window left by the latest request from this provider and model
  * that read or wrote the prompt cache. A model switch starts a new cache, so
@@ -714,8 +697,11 @@ export function promptCacheWindow(
   model: Parameters<typeof promptCacheTtlMs>[0],
   messages: readonly AgentMessage[],
   refresh?: PromptCacheRefresh,
+  retention?: PromptCacheRetentionRecord,
 ): PromptCacheWindowV1 | undefined {
-  const ttlMs = promptCacheTtlMs(model);
+  // Another model's retention says nothing about this model's cache.
+  const kept = retention?.provider === model.provider && retention.model === model.id ? retention.retention : "short";
+  const ttlMs = promptCacheTtlMs(model, kept);
   if (ttlMs === 0) return undefined;
   for (let index = messages.length - 1; index >= 0; index--) {
     const message = messages[index];
@@ -1229,8 +1215,10 @@ export function createGenerationContextTransform(
   onCompacted?: CompactionListener,
 ): GenerationContextTransform {
   let lastEmergencyProjection: GenerationEmergencyProjection = { kind: "none" };
-  const transform = async (messages: AgentMessage[]) => {
+  const transform = async (given: AgentMessage[]) => {
+    let messages = given;
     try {
+      if (options.prepareMessages) messages = options.prepareMessages(given);
       const result = compactGenerationContext(messages, options);
       lastEmergencyProjection = result.emergencyProjection;
       if (result.compacted && onCompacted) {

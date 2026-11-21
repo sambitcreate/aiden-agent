@@ -11,6 +11,8 @@ export interface AppUpdaterEnvironment {
   runtimeProfile: "production" | "development";
   updateConfigExists: boolean;
   linuxAppImageEligible?: boolean;
+  /** A system-owned DEB or RPM install with the tools to install a newer package. */
+  linuxPackageEligible?: boolean;
 }
 
 export interface AppUpdateDriverResult {
@@ -215,7 +217,9 @@ export class AppUpdateController {
 
 export function shouldEnableAppUpdates(environment: AppUpdaterEnvironment): boolean {
   return (
-    (environment.platform === "darwin" || (environment.platform === "linux" && environment.linuxAppImageEligible === true)) &&
+    (environment.platform === "darwin" ||
+      (environment.platform === "linux" &&
+        (environment.linuxAppImageEligible === true || environment.linuxPackageEligible === true))) &&
     environment.isPackaged &&
     environment.runtimeProfile === "production" &&
     environment.updateConfigExists

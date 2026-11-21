@@ -59,7 +59,8 @@ export async function runCliSubagent(agentDir: string, input: RunSubagentChildIn
           });
           if (toolAbort.signal.aborted) throw new Error("Subagent cancelled before tool execution.");
           input.telemetry?.toolStarted(tool.name);
-          const result = tool.name === "subagent" && input.executeNested
+          // A "list" call only reads inventories, so the declared tool answers it.
+          const result = tool.name === "subagent" && input.executeNested && (args as { action?: unknown } | undefined)?.action !== "list"
             ? { content: [{ type: "text", text: await input.executeNested(args, toolAbort.signal,
               event.args?.context === "fork" ? captureLiveSubagentContext({ chatId: input.v2Authority!.chatId, parentRunId: input.runId!, messages: event.messages, descendantContextWindow: input.runtime.model.contextWindow }) : undefined) }], details: {} }
             : await tool.execute(event.id, args, toolAbort.signal);

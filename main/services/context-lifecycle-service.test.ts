@@ -7,7 +7,10 @@ import {
   createModels,
   fauxAssistantMessage,
   fauxProvider,
+  normalizeContext,
   type Api,
+  type AssistantMessage,
+  type Message,
   type Model,
 } from "@earendil-works/pi-ai";
 import type { ChatTurnLease } from "./chat-turn-admission.js";
@@ -15,7 +18,9 @@ import {
   ContextLifecycleService,
   type ContextLifecycleServiceDeps,
 } from "./context-lifecycle-service.js";
+import { chatPromptPrefixCompacted } from "./chat-prompt-cache-state.js";
 import type { ResolvedModelRuntime } from "./model-runtime-core.js";
+import { chatSideCallPrefixes } from "./side-call-prefix.js";
 import {
   PiCompactionSessionStore,
   syncChatMessagesToPiSession,
@@ -441,6 +446,51 @@ test("PreCompact hook context steers an operator compaction and a finished one i
   assert.deepEqual(asked, [{ chatId: chat.id, audience: "desktop", trigger: "manual", aborted: false }]);
   assert.match(providerPayloads.join("\n"), /Additional focus: KEEP_THE_RELEASE_CHECKLIST/u);
   assert.deepEqual(compacted, [chat.id]);
+});
+
+test("an operator compaction continues the chat's cached request, and the finished one retires that request", async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "aiden-context-cached-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const { faux, runtime, chat, session } = await compactableChat(root, "context-cached", "context-cached-model");
+  // A model whose prompt cache lives five minutes, so the chat's last request is kept.
+  const model = { ...runtime.model, promptCache: { short: 300 } } as Model<Api>;
+  const cachedRuntime: ResolvedModelRuntime = { ...runtime, model };
+  t.after(() => chatSideCallPrefixes.forget(chat.id));
+  const requests: { payload: string; retention: unknown }[] = [];
+  faux.setResponses(
+    Array.from({ length: 4 }, () => (context, options) => {
+      requests.push({ payload: JSON.stringify(context), retention: options?.cacheRetention });
+      return fauxAssistantMessage(validSummary("cached checkpoint"));
+    }),
+  );
+  // The chat's last turn: its request and reply, as the turn's stream records them.
+  const messages = (await session.buildContext()).messages as Message[];
+  const last = messages[messages.length - 1] as AssistantMessage;
+  chatSideCallPrefixes.begin(chat.id, model, normalizeContext({ systemPrompt: "You are Aiden.", messages: messages.slice(0, -1) }))({
+    ...last,
+    usage: { input: 3_000, output: 20, cacheRead: 0, cacheWrite: 0, totalTokens: 3_020, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+  });
+  assert.ok(await chatSideCallPrefixes.latest(chat.id), "the chat's cached request is on record");
+  const { value } = deps({
+    getChat: async () => chat,
+    openSession: async () => session,
+    resolveRuntime: async () => cachedRuntime,
+    cachedPrefix: (chatId) => chatSideCallPrefixes.latest(chatId),
+    compacted: (target) => chatPromptPrefixCompacted(target.id),
+  });
+
+  const result = await new ContextLifecycleService(value).compactChat(
+    chat.id,
+    { kind: "desktop", ownerId: "renderer:1" },
+    "operator",
+  );
+
+  assert.equal(result.compacted, true, JSON.stringify(result));
+  assert.equal(requests.length, 1);
+  assert.match(requests[0]!.payload, /write a checkpoint summary/u, "the summary continued the cached request");
+  assert.match(requests[0]!.payload, /You are Aiden\./u);
+  assert.equal(requests[0]!.retention, "short");
+  assert.equal(await chatSideCallPrefixes.latest(chat.id), undefined, "no later call continues the pre-compaction request");
 });
 
 test("a failing PreCompact source never fails a recovery compaction, which hooks see as auto", async (t) => {
