@@ -10,7 +10,7 @@ import {
   screen,
   shell,
 } from "./platform.js";
-import { Menu, nativeImage, nativeTheme } from "electron";
+import { Menu, nativeImage, nativeTheme, type IpcMainInvokeEvent } from "electron";
 import path from "node:path";
 
 import { registerHandlers } from "./handlers/index.js";
@@ -1426,7 +1426,7 @@ ipcMain.handle(
   },
 );
 
-ipcMain.handle("app:restartToUpdate", (event): AppUpdateRestartResult => {
+function restartToUpdateBlocker(event: IpcMainInvokeEvent): AppUpdateRestartResult | null {
   if (
     !mainWindow ||
     mainWindow.isDestroyed() ||
@@ -1449,8 +1449,25 @@ ipcMain.handle("app:restartToUpdate", (event): AppUpdateRestartResult => {
       reason: "not-ready",
     };
   }
+  return null;
+}
 
-  const window = mainWindow;
+ipcMain.handle("app:restartToUpdate", async (event): Promise<AppUpdateRestartResult> => {
+  const blocked = restartToUpdateBlocker(event);
+  if (blocked) return blocked;
+  // A Linux DEB/RPM update installs (after the password prompt) before Aiden
+  // quits, so a closed prompt or a failed install leaves Aiden open.
+  const prepared = await appUpdateService.prepareDownloadedUpdateInstall();
+  if (prepared !== "ready") {
+    return {
+      accepted: false,
+      reason: prepared === "cancelled" ? "install-cancelled" : "install-failed",
+    };
+  }
+  const blockedAfterInstall = restartToUpdateBlocker(event);
+  if (blockedAfterInstall) return blockedAfterInstall;
+
+  const window = mainWindow!;
   updateInstall.arm();
   setImmediate(() => continueApplicationQuit(window, () => updateInstall.armed));
   return {

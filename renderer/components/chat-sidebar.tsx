@@ -240,6 +240,10 @@ function updateRestartError(result: AppUpdateRestartResult): string | null {
       return "That update is no longer ready. Check for updates again.";
     case "unavailable":
       return "Aiden could not restart into the update.";
+    case "install-cancelled":
+      return "The update wasn’t installed because the password prompt was closed.";
+    case "install-failed":
+      return "Aiden couldn’t install the update. Try again, or install it from GitHub Releases.";
   }
 }
 

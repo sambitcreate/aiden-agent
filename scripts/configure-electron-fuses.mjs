@@ -1,5 +1,5 @@
 import path from "node:path";
-import { chmod, readdir, stat } from "node:fs/promises";
+import { chmod, lstat, readdir, stat } from "node:fs/promises";
 import {
   flipFuses,
   FuseState,
@@ -160,6 +160,26 @@ export async function makeSpawnHelpersExecutable(appPath, platform = "darwin") {
   }
 }
 
+/**
+ * Electron's Linux zip stores most of its files as 0666/0777, and
+ * electron-builder carries those modes into the DEB and RPM, which would
+ * install a world-writable `/opt/Aiden Agent/aiden-agent`. Remove group and
+ * other write access from the whole packaged tree before any target is built.
+ * Symlinks are skipped; their own mode is meaningless and chmod would follow them.
+ */
+export async function removeSharedWriteAccess(root) {
+  const pending = [root];
+  while (pending.length > 0) {
+    const current = pending.pop();
+    const info = await lstat(current);
+    if (info.isSymbolicLink()) continue;
+    if ((info.mode & 0o022) !== 0) await chmod(current, info.mode & 0o7755);
+    if (info.isDirectory()) {
+      for (const entry of await readdir(current)) pending.push(path.join(current, entry));
+    }
+  }
+}
+
 export async function configureElectronFuses(context) {
   const executable = packagedElectronExecutable(context);
   if (!executable) return;
@@ -170,6 +190,7 @@ export async function configureElectronFuses(context) {
       ? executable
       : context.appOutDir;
   await makeSpawnHelpersExecutable(packageRoot, context.electronPlatformName);
+  if (context.electronPlatformName === "linux") await removeSharedWriteAccess(context.appOutDir);
 }
 
 export default configureElectronFuses;

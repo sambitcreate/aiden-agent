@@ -6,7 +6,7 @@ import { appApi, appUpdatesApi, type AppInfo } from "../../lib/ipc";
 import { useAppUpdateSnapshot } from "../../lib/use-app-update-snapshot";
 import type { AppUpdateRestartResult, AppUpdateSnapshot } from "../../shared/app-update";
 import { DiagnosticsSettings } from "./diagnostics-settings";
-import { useAppCapabilities } from "../../lib/app-capabilities";
+import { useAppCapabilities, type AppCapabilities } from "../../lib/app-capabilities";
 
 const APP_ICON_URL = new URL("../../../resources/app-icon.png", import.meta.url).href;
 const REPOSITORY_URL = "https://github.com/sambitcreate/aiden-agent";
@@ -22,11 +22,20 @@ function formatMegabytes(bytes: number): string {
   return `${(bytes / (1_024 * 1_024)).toFixed(1)} MB`;
 }
 
-function updateDescription(snapshot: AppUpdateSnapshot, platform: string): string {
+type UpdateCapabilities = Pick<AppCapabilities, "platform" | "appUpdates" | "appUpdateNeedsPassword">;
+
+/** What the Software update row says for this install and update state. */
+export function softwareUpdateDescription(snapshot: AppUpdateSnapshot, capabilities: UpdateCapabilities): string {
+  if (capabilities.platform !== "darwin" && !capabilities.appUpdates) {
+    return capabilities.platform === "linux"
+      ? "Install updates through your package manager, or download the newest Linux package from GitHub Releases."
+      : "Download the newest production build from GitHub Releases.";
+  }
+  const platform = capabilities.platform;
   switch (snapshot.status) {
     case "idle":
       return platform === "linux"
-        ? "Aiden checks automatically and downloads AppImage updates without interrupting your work."
+        ? "Aiden checks automatically and downloads updates without interrupting your work."
         : "Aiden checks automatically and downloads signed updates without interrupting your work.";
     case "checking":
       return platform === "linux"
@@ -42,7 +51,9 @@ function updateDescription(snapshot: AppUpdateSnapshot, platform: string): strin
       return `Downloading Aiden Agent ${snapshot.version} · ${progress}`;
     }
     case "ready":
-      return `Aiden Agent ${snapshot.version} is ready. Restart to finish installing it.`;
+      return capabilities.appUpdateNeedsPassword
+        ? `Aiden Agent ${snapshot.version} is ready. Update and restart asks for your password to install it.`
+        : `Aiden Agent ${snapshot.version} is ready. Restart to finish installing it.`;
     case "error":
       return snapshot.error === "download-failed"
         ? `Aiden Agent${snapshot.version ? ` ${snapshot.version}` : ""} couldn’t finish downloading. Check your connection and try again.`
@@ -52,7 +63,7 @@ function updateDescription(snapshot: AppUpdateSnapshot, platform: string): strin
   }
 }
 
-function updateRestartError(result: AppUpdateRestartResult): string | null {
+export function updateRestartError(result: AppUpdateRestartResult): string | null {
   if (result.accepted) return null;
   switch (result.reason) {
     case "busy":
@@ -61,6 +72,10 @@ function updateRestartError(result: AppUpdateRestartResult): string | null {
       return "That update is no longer ready. Check for updates again.";
     case "unavailable":
       return "Aiden could not restart into the update.";
+    case "install-cancelled":
+      return "The update wasn’t installed because the password prompt was closed.";
+    case "install-failed":
+      return "Aiden couldn’t install the update. Try again, or install it from GitHub Releases.";
   }
 }
 
@@ -136,7 +151,7 @@ export function AboutSettings() {
         );
       } else if (result.outcome === "unavailable") {
         toast.info(capabilities.platform === "linux"
-          ? "Automatic updates require a production AppImage installation."
+          ? "Automatic updates need the Aiden .deb or .rpm package, or a writable Aiden AppImage."
           : "Automatic updates are available in signed production builds.");
       }
     } catch {
@@ -218,13 +233,7 @@ export function AboutSettings() {
         </Field>
         <Field
           label="Software update"
-          description={
-            showUpdateControls
-              ? updateDescription(updateSnapshot, capabilities.platform)
-              : capabilities.platform === "linux"
-                ? "Install updates through your package manager, or download the newest Linux package from GitHub Releases."
-                : "Download the newest production build from GitHub Releases."
-          }
+          description={softwareUpdateDescription(updateSnapshot, capabilities)}
         >
           {!showUpdateControls ? (
             <Button asChild size="small" variant="filled">
