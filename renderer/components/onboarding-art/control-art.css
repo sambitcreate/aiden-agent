@@ -18,10 +18,8 @@
   background: var(--surface-list-selection);
 }
 .oa-perm-selection .oa-radio { position: absolute; left: 7px; top: 10.5px; }
-@media (prefers-reduced-motion: no-preference) {
-  :root:not([data-reduce-motion="true"]) .oa-art .oa-perm-selection {
-    animation: oa-perm-selection 7s var(--motion-easing) infinite;
-  }
+:root:not([data-reduce-motion="true"]) .oa-art .oa-perm-selection {
+  animation: oa-perm-selection 7s var(--motion-easing) infinite;
 }
 @keyframes oa-perm-selection {
   0%, 30% { transform: translateY(0); }

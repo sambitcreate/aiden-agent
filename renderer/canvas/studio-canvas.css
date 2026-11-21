@@ -17,8 +17,6 @@
   outline-offset: -2px;
 }
 
-@media (prefers-reduced-motion: reduce) {
-  .studio-canvas .react-flow__viewport {
-    transition: none;
-  }
+:root[data-reduce-motion="true"] .studio-canvas .react-flow__viewport {
+  transition: none;
 }

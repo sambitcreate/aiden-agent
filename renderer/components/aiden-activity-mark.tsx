@@ -1,6 +1,6 @@
 import * as React from "react";
 import type { ActivityMark } from "../shared/activity-marks";
-import { APPEARANCE_CHANGE_EVENT } from "../lib/appearance-runtime";
+import { APPEARANCE_CHANGE_EVENT, prefersReducedMotion } from "../lib/appearance-runtime";
 import { cn } from "../lib/ui-utils";
 import { observeOffscreen } from "../lib/offscreen-pause";
 
@@ -116,11 +116,6 @@ function MarkShapes({ mark }: { mark: ActivityMark }) {
   }
 }
 
-function reduceMotionActive(): boolean {
-  return document.documentElement.dataset.reduceMotion === "true" ||
-    window.matchMedia?.("(prefers-reduced-motion: reduce)").matches === true;
-}
-
 /**
  * A mark that freezes mid-cycle (it goes inactive, or Reduce Motion turns on)
  * would otherwise hold whatever frame it was on. Rewinding its tracks to time 0
@@ -128,7 +123,7 @@ function reduceMotionActive(): boolean {
  */
 export function rewindWhenFrozen(node: SVGSVGElement): void {
   if (typeof node.getAnimations !== "function") return;
-  if (!node.hasAttribute("data-paused") && !reduceMotionActive()) return;
+  if (!node.hasAttribute("data-paused") && !prefersReducedMotion()) return;
   for (const animation of node.getAnimations({ subtree: true })) animation.currentTime = 0;
 }
 
@@ -169,13 +164,9 @@ export function AidenActivityMark({
     if (!node) return;
     const rewind = () => rewindWhenFrozen(node);
     rewind();
-    const motion = window.matchMedia?.("(prefers-reduced-motion: reduce)");
+    // A system change reaches here too: the appearance runtime re-applies and announces it.
     window.addEventListener(APPEARANCE_CHANGE_EVENT, rewind);
-    motion?.addEventListener("change", rewind);
-    return () => {
-      window.removeEventListener(APPEARANCE_CHANGE_EVENT, rewind);
-      motion?.removeEventListener("change", rewind);
-    };
+    return () => window.removeEventListener(APPEARANCE_CHANGE_EVENT, rewind);
   }, [active, mark]);
 
   // The voice level picks one of five swell sizes in CSS rather than writing a

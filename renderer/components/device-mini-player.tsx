@@ -33,6 +33,7 @@ import {
 } from "../lib/device-workspace-store";
 import type { DeviceSummary } from "../shared/devices";
 import { cn } from "../lib/ui-utils";
+import { isDismissKey } from "../lib/dismiss-key";
 
 const EDGES: ReadonlyArray<{ edge: DeviceMiniPlayerEdge; className: string }> = [
   { edge: "north", className: "inset-x-3 -top-1 h-2 cursor-ns-resize" },
@@ -173,7 +174,7 @@ export function FloatingPlayerFrame({
       }}
       onKeyDown={(event) => {
         // The screen sends its keys to the device; everywhere else Escape docks.
-        if (event.key !== "Escape" || event.defaultPrevented) return;
+        if (!isDismissKey(event)) return;
         event.preventDefault();
         event.stopPropagation();
         dock.onDock();

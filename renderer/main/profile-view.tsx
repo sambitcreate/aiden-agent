@@ -26,6 +26,7 @@ import { formatTrackedUsd, profileInitials } from "../lib/usage-profile-data";
 import { queryKeys, useProfile, useProviders, useUsageSummary } from "../lib/queries";
 import type { UsageDateRange, UsageSummary } from "../lib/types";
 import { useAppCapabilities } from "../lib/app-capabilities";
+import { isEscapeKey } from "../lib/dismiss-key";
 
 function compactNumber(value: number): string {
   return Intl.NumberFormat("en-US", {
@@ -111,7 +112,7 @@ function ProfileIdentity() {
               value={draft}
               onChange={(event) => setDraft(event.currentTarget.value)}
               onKeyDown={(event) => {
-                if (event.key === "Escape") {
+                if (isEscapeKey(event)) {
                   event.preventDefault();
                   cancelEditing();
                 }
