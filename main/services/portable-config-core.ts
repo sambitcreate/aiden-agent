@@ -6,6 +6,7 @@ import { compactionEngineFrom, parseCompactionModelOverrides } from "../../rende
 import { parseDictationDictionary } from "../../renderer/shared/dictation-dictionary.js";
 import { isLocalVoiceIdleUnloadMinutes } from "../../renderer/shared/dictation-preferences.js";
 import { normalizeLanguageIntent } from "../../renderer/shared/voice-language.js";
+import { parseQuickChatDefaultPersistence } from "../../renderer/shared/quick-chat.js";
 // Splits Aiden's persisted configuration into a portable half and a
 // machine-local half, and migrates existing installs into that layout once.
 //
@@ -659,6 +660,7 @@ function normalizeSettingsShape(value: unknown): SettingsShape {
     "computerUseAlwaysAllow",
     "aidenLiveEnabled",
     "aidenLiveButtonVisible",
+    "quickChatKeepOpenOnBlur",
     "aidenLiveChatAccess",
     "aidenLiveChatAccessNoticeShown",
     "aidenLiveVoiceApprovals",
@@ -673,6 +675,14 @@ function normalizeSettingsShape(value: unknown): SettingsShape {
   }
   if (!Number.isSafeInteger(settings.telegramAllowedUserId))
     delete normalized.telegramAllowedUserId;
+  const quickChatDefaultPersistence = parseQuickChatDefaultPersistence(
+    settings.quickChatDefaultPersistence,
+  );
+  if (quickChatDefaultPersistence) {
+    normalized.quickChatDefaultPersistence = quickChatDefaultPersistence;
+  } else {
+    delete normalized.quickChatDefaultPersistence;
+  }
   if (!isGenerationThinkingLevel(settings.telegramThinkingLevel))
     delete normalized.telegramThinkingLevel;
   if (!["quiet", "thinking", "tools", "verbose"].includes(String(settings.telegramActivity)))
@@ -764,6 +774,17 @@ export function runtimeSettingsFrom(settings: AppSettings): AppSettings {
   const onboarding = parseOnboardingState(settings.onboarding);
   if (onboarding) runtime.onboarding = onboarding;
   else delete runtime.onboarding;
+  if (settings.quickChatDefaultPersistence !== undefined) {
+    const parsedQuickChatMode = parseQuickChatDefaultPersistence(settings.quickChatDefaultPersistence);
+    if (parsedQuickChatMode) runtime.quickChatDefaultPersistence = parsedQuickChatMode;
+    else delete runtime.quickChatDefaultPersistence;
+  }
+  if (
+    settings.quickChatKeepOpenOnBlur !== undefined &&
+    typeof settings.quickChatKeepOpenOnBlur !== "boolean"
+  ) {
+    delete runtime.quickChatKeepOpenOnBlur;
+  }
   if (settings.webSearch !== undefined) {
     const webSearch = parseWebSearchSettings(settings.webSearch);
     if (webSearch) runtime.webSearch = webSearch;

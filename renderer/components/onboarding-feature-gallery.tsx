@@ -18,6 +18,7 @@ import {
   Lightbulb,
   ListTodo,
   MessageSquare,
+  MessageSquarePlus,
   Mic2,
   Monitor,
   MousePointer2,
@@ -325,6 +326,15 @@ export const onboardingFeatures: OnboardingFeature[] = [
     description: (computer) =>
       `Speak in the composer or dictate system-wide. Tap, hold, or both, and teach Aiden your names and terms in Voice & Speech settings. On-device models keep audio on this ${computer}, and on Apple silicon your words appear as you speak. Or explicitly connect cloud transcription and review what it can access.`,
     icon: Mic2,
+    size: "standard",
+  },
+  {
+    id: "quickChat",
+    group: "control",
+    title: "Floating Quick Chat",
+    description:
+      "Summon Aiden from any app with a global hotkey. Start in a Temporary chat, read the reply in a floating mini-modal, attach it to a workspace later, or expand straight into Aiden without interrupting a live stream.",
+    icon: MessageSquarePlus,
     size: "standard",
   },
   {

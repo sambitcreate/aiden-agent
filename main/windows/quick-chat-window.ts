@@ -14,6 +14,7 @@ import type {
   QuickChatWindowMode,
 } from "../../renderer/shared/quick-chat.js";
 import { configStore } from "../services/config-store.js";
+import { captureAnalyticsReporter } from "../services/analytics/analytics-report.js";
 import { rendererDocumentOwner } from "../services/renderer-document-owner.js";
 import { markAuxiliaryWindow } from "./auxiliary-windows.js";
 import { canPositionFloatingWindow } from "./pill-window-platform.js";
@@ -50,10 +51,14 @@ function windowWorkArea(window: BrowserWindow) {
   return display.workArea;
 }
 
+export function syncQuickChatSettings(settings: { quickChatKeepOpenOnBlur?: boolean }): void {
+  cachedKeepOpenOnBlur = settings.quickChatKeepOpenOnBlur !== false;
+}
+
 async function refreshKeepOpenOnBlurSetting(): Promise<boolean> {
   try {
-    const settings = (await configStore.getSettings()) as { quickChatKeepOpenOnBlur?: boolean };
-    cachedKeepOpenOnBlur = settings.quickChatKeepOpenOnBlur !== false;
+    const settings = await configStore.getSettings();
+    syncQuickChatSettings(settings);
   } catch {
     // Keep prior cached preference on transient read failure.
   }
@@ -195,6 +200,7 @@ export function notifyQuickChatHandoffComplete(payload: QuickChatHandoffComplete
  * If already hidden, places it cleanly for its current mode (`starter` or `modal`).
  */
 export async function showQuickChat(source: QuickChatOpenSource = "hotkey"): Promise<void> {
+  const report = captureAnalyticsReporter();
   const [{ window }] = await Promise.all([ensureQuickChat(), refreshKeepOpenOnBlurSetting()]);
   suppressQuickChatBlurHide(DEFAULT_BLUR_SUPPRESS_MS);
   if (canPositionFloatingWindow()) {
@@ -205,6 +211,7 @@ export async function showQuickChat(source: QuickChatOpenSource = "hotkey"): Pro
   window.show();
   window.focus();
   notifyQuickChatOpened(source);
+  report("floating_chat_opened", { source });
 }
 
 export function hideQuickChat(): void {

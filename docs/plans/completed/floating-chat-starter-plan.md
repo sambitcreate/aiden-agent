@@ -1,6 +1,6 @@
 # Floating Chat Starter, Mini-Modal & Attachable Ephemeral Chats
 
-Status: In progress on `floating_chat_starter_hotkey` (2026-11-21).
+Status: Implemented across all five phases on `floating_chat_starter_hotkey` (2026-11-21).
 Baseline: `origin/main` (`6e7dfe2b8`).
 
 ## Summary
@@ -16,7 +16,7 @@ Add a system-wide **Floating Chat Starter** invocable from anywhere while Aiden 
 | Decision | Selected Default | Notes |
 | --- | --- | --- |
 | **Global hotkey** | `⌘⇧Space` (macOS) / `Ctrl+Shift+Space` (Linux) | Conflict-free everywhere; configurable in Settings → Keyboard shortcuts |
-| **Default persistence** | **Temporary (True Ephemeral)** | Hidden from sidebar/Inbox/Memory/Remote & auto-cleaned on close; 1-click **Save to Chats** or **Attach to workspace…** |
+| **Default persistence** | **Temporary (True Ephemeral)** | Hidden from sidebar/Inbox/Memory/Remote & swept on Discard / New quick chat / startup; 1-click **Save** (to Chats) or **Attach to workspace…** |
 | **Starter mode control** | **Inline chip** inside starter bar | Switches between `Temporary`, `No workspace`, or any workspace; no extra floating pill below |
 | **State 2 click-outside (blur)** | **Stay pinned** | State 1 hides on click-outside; State 2 stays visible until `Esc`, `×`, or hotkey (configurable in Settings) |
 | **Ephemeral tool access** | **Private folder (`permission: "ask"`)** | Strictly jailed to `<userData>/chat-folders/<slug>` under global approval mode |
@@ -37,14 +37,14 @@ Add a system-wide **Floating Chat Starter** invocable from anywhere while Aiden 
 
 ### 2. Ephemeral Chats & In-Place Attach to Workspace
 - Reuses `ChatDraft` + `Workspace.noWorkspace: true` (`<userData>/chat-folders/<slug>` via `reserveNoWorkspaceChat`).
-- **Temporary (ephemeral) chats**: Real `chatId` in `chatStore` carrying `ephemeral: true` (checked in `renderer/shared/chat-visibility.ts` so they are excluded from `listRegular()`, sidebar, search, Inbox, Memory, and all Remote endpoints, while `chatStore.list()` stays unfiltered for startup GC). Auto-swept on startup if orphaned by crash; deleted with their hidden workspace on explicit close/discard.
+- **Temporary (ephemeral) chats**: Real `chatId` in `chatStore` carrying `ephemeral: true` (checked in `renderer/shared/chat-visibility.ts` so they are excluded from `listRegular()`, sidebar, search, Inbox, Memory, and all Remote endpoints, while `chatStore.list()` stays unfiltered for startup GC). Auto-swept on startup if left unsaved across restarts, and deleted with their hidden workspace on explicit Discard or New quick chat (while `×` / `Esc` hide the floating window without losing the active chat).
 - **In-place attach (`chats:inspectAttachFiles`, `chats:attachToWorkspace`)**:
   - Works on any `noWorkspace` or ephemeral chat from both the Floating Mini-Modal and Main Window's `WorkspaceChip` top bar.
   - Concurrency fences: `llmClient.beginChatWorkspaceChange(chatId)`, `followThrough.beginMove(chatId)`, dual `workspaceMutationGate.admit(oldId, targetId)`, plus `!workspaceFolderMissing(W)` & `assertManagedWorktreeAdmission(W)`.
   - Scratch folder preflight: silent `rmdir` if empty; explicit Trash vs collision-safe, symlink/config-guarded Copy if non-empty.
   - Atomic store commit (`chatStore.attachChatToWorkspace`): sets `workspaceId = W.id`, clears `ephemeral`, bumps `summaryRevision`.
   - Pi v4 journal boundary: desktop Pi journals store `header.cwd = <userData>/pi-compaction-sessions` (not the workspace folder), so no header rewrite is needed; appends an idempotent `aiden.workspace-attached.v1` custom entry so the model knows its folder changed.
-  - Cache & grant reset: `forgetChatContextProfile`, `endWorkspaceChatSession`, `designGrants.revokeChat`, `recentWrittenPages.forget`, `acpScratch.forget`, `memoryStore.deleteSourceChat`, `releaseNoWorkspaceAfterChat`.
+  - Cache & grant reset: `forgetChatContextProfile`, `resetChatWorkspaceSession` (ending the workspace chat session and forgetting ACP scratch state), `designGrants.revokeChat`, `recentWrittenPages.forget`, `memoryStore.deleteSourceChat`, `releaseNoWorkspaceAfterChat`.
   - Zero Remote protocol revision bump required (iOS & Android already handle `noWorkspace` from rev 51 and dynamic `workspaceId` changes from rev 53).
 
 ### 3. Live Cross-Window Stream & Approval Handoff

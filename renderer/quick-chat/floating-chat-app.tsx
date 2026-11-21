@@ -103,9 +103,9 @@ export function FloatingChatApp() {
   // Sync default persistence preference before user touches the target chip.
   React.useEffect(() => {
     if (targetModeTouchedRef.current || !settings) return;
-    const pref = (settings as { quickChatDefaultPersistence?: "ephemeral" | "noWorkspace" | "lastWorkspace" })
-      .quickChatDefaultPersistence;
-    setTargetMode(resolveDefaultTargetMode(pref, workspaces, undefined));
+    setTargetMode(
+      resolveDefaultTargetMode(settings.quickChatDefaultPersistence, workspaces, undefined),
+    );
   }, [settings, workspaces]);
 
   // Resolve initial model from configured providers + saved host new-chat model.

@@ -832,3 +832,36 @@ test("a created chat counts once with its workspace kind, and a refused create c
   await assert.rejects(application.service.create({ workspaceId: "workspace-1", title: "Chat" }, stale));
   assert.equal(sent.length, 1);
 });
+
+test("promoteEphemeral reports floating_chat_promoted only when the chat was actually ephemeral", async (t) => {
+  const sent = captureAnalyticsEvents(t);
+  let ephemeralFlag = true;
+  const application = fixture({
+    chatStore: {
+      promoteEphemeralChat: async (chatId: string, assertAllowed?: (chat: Chat) => Promise<void>) => {
+        const current: Chat = {
+          id: chatId,
+          workspaceId: "nows-1",
+          ...(ephemeralFlag ? { ephemeral: true as const } : {}),
+          title: "Temp",
+          providerId: "anthropic",
+          model: "claude-sonnet-4-5",
+          messages: [],
+          createdAt: 1,
+          updatedAt: 1,
+        };
+        await assertAllowed?.(current);
+        ephemeralFlag = false;
+        const { ephemeral: _dropped, ...saved } = current;
+        return saved;
+      },
+    } as unknown as ChatApplicationDependencies["chatStore"],
+  });
+
+  await application.service.promoteEphemeral("chat-ephem-1");
+  assert.deepEqual(sent, [{ event: "floating_chat_promoted", props: { target: "chats" } }]);
+
+  // A duplicate call on an already-promoted (non-ephemeral) chat must not double-count.
+  await application.service.promoteEphemeral("chat-ephem-1");
+  assert.equal(sent.length, 1);
+});

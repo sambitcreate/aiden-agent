@@ -6,7 +6,7 @@ import type {
 } from "../../renderer/shared/chat-attach-workspace.js";
 import { chatSurface } from "../../renderer/shared/chat-visibility.js";
 import { analyticsWorkspaceKind } from "./analytics/analytics-ids.js";
-import { reportAnalyticsEvent } from "./analytics/analytics-report.js";
+import { captureAnalyticsReporter, reportAnalyticsEvent } from "./analytics/analytics-report.js";
 import type { AidenRemoteAttachmentStore } from "./aiden-remote-attachments.js";
 import { appendReconciliationFailureMessage } from "../../renderer/shared/chat-message-contract.js";
 import { persistedChatWorkspaceId } from "../../renderer/shared/chat-workspace.js";
@@ -434,10 +434,16 @@ export function createChatApplicationService(deps: ChatApplicationDependencies) 
       if (!deps.chatStore.promoteEphemeralChat) {
         throw new Error("Promoting temporary chats is not available.");
       }
+      const report = captureAnalyticsReporter();
+      let wasEphemeral = false;
       const promoted = await deps.chatStore.promoteEphemeralChat(chatId, async (chat) => {
         assertRenameAllowedFromChat(chat, options);
+        wasEphemeral = chat.ephemeral === true;
         await options.assertCurrent?.(chat);
       });
+      if (wasEphemeral) {
+        report("floating_chat_promoted", { target: "chats" });
+      }
       return chatForRenderer(promoted)!;
     },
 
@@ -477,6 +483,7 @@ export function createChatApplicationService(deps: ChatApplicationDependencies) 
       if (!deps.chatStore.attachChatToWorkspace) {
         throw new Error("Attaching chats to a workspace is not available.");
       }
+      const report = captureAnalyticsReporter();
       if (targetWorkspaceId === ASSISTANT_WORKSPACE_ID) {
         throw new Error("A chat cannot attach to the Assistant workspace.");
       }
@@ -560,6 +567,7 @@ export function createChatApplicationService(deps: ChatApplicationDependencies) 
           assertAdmitted();
         }
 
+        let wasEphemeral = false;
         const updated = await deps.chatStore.attachChatToWorkspace(
           chatId,
           targetWorkspaceId,
@@ -572,11 +580,15 @@ export function createChatApplicationService(deps: ChatApplicationDependencies) 
             if (persistedChatWorkspaceId(chat.workspaceId) !== oldWorkspaceId) {
               throw new Error("This chat's workspace changed before attaching.");
             }
+            wasEphemeral = chat.ephemeral === true;
             await options.assertCurrent?.(chat);
           },
         );
         // Commit succeeded: keep copied files from here on.
         rollbackCopiedFiles = undefined;
+        if (wasEphemeral) {
+          report("floating_chat_promoted", { target: "workspace" });
+        }
 
         // Record Pi context transition boundary only if the chat already has a journal.
         if (deps.piCompactionSessionStore.recordWorkspaceAttached) {

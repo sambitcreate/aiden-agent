@@ -1,4 +1,6 @@
 import { parseAidenLiveSettingsPatch } from "../../renderer/shared/aiden-live-settings.js";
+import { parseQuickChatDefaultPersistence } from "../../renderer/shared/quick-chat.js";
+import { syncQuickChatSettings } from "../windows/quick-chat-window.js";
 import { customModelThinkingLevels } from "../../renderer/shared/custom-model-options.js";
 import { isCompactionEngine, parseCompactionModelOverrides } from "../../renderer/shared/compaction.js";
 import { parseModelPadPreferencesPatch } from "../../renderer/shared/model-pad-preferences.js";
@@ -444,6 +446,17 @@ export function registerProviderHandlers(): void {
       if (typeof p[key] !== "boolean") throw new Error("Invalid Aiden Live setting.");
       next[key] = p[key];
     }
+    if (p.quickChatDefaultPersistence !== undefined) {
+      const parsed = parseQuickChatDefaultPersistence(p.quickChatDefaultPersistence);
+      if (!parsed) throw new Error("Invalid Quick Chat default mode.");
+      next.quickChatDefaultPersistence = parsed;
+    }
+    if (p.quickChatKeepOpenOnBlur !== undefined) {
+      if (typeof p.quickChatKeepOpenOnBlur !== "boolean") {
+        throw new Error("Invalid Quick Chat blur setting.");
+      }
+      next.quickChatKeepOpenOnBlur = p.quickChatKeepOpenOnBlur;
+    }
     Object.assign(next, parseAidenLiveSettingsPatch(p as Record<string, unknown>));
     if (p.skillsEnabled !== undefined) {
       if (typeof p.skillsEnabled !== "boolean") throw new Error("Invalid skills enabled setting.");
@@ -464,6 +477,7 @@ export function registerProviderHandlers(): void {
       ? await linuxHoldSettings.apply(next.dictationHoldToTalk, (isCurrent) => configStore.setSettings(next, isCurrent))
       : await configStore.setSettings(next);
     await applySettingsEffects(saved, next);
+    if (next.quickChatKeepOpenOnBlur !== undefined) syncQuickChatSettings(saved);
     if (approval.approvalMode !== undefined) reportApprovalModeChanged("global", approvalModeBefore, saved.approvalMode);
     if (next.spendingLimits !== undefined) spending.settingsChanged();
     if (next.usageLimitWaitHours !== undefined) void usageLimits.waitSettingChanged();

@@ -119,3 +119,51 @@ test("quickChat:expandToMain creates tickets, notifies on claim, and cleans up t
   assert.equal(failing.tickets.claimChat("chat-fail"), null, "failed expand must clean up its ticket");
   assert.ok(failing.log.includes("reset-suppress"), "failed expand must reset blur suppression");
 });
+
+test("quickChat:expandToMain captures analytics reporter before async lookup and reports once on claim only", async () => {
+  const order: string[] = [];
+  const reported: Array<{ duringStream: boolean; wasEphemeral: boolean }> = [];
+  const tickets = new DesktopHandoffTicketStore();
+  const handlers = new Map<string, (event: unknown, ...args: unknown[]) => unknown>();
+
+  registerQuickChatHandlersCore({
+    isMainWindow: () => false,
+    navigateMainWindow: async () => {
+      order.push("navigate");
+    },
+    handle: (channel, listener) => {
+      handlers.set(channel, listener as (event: unknown, ...args: unknown[]) => unknown);
+    },
+    windowPort: {
+      isCurrentQuickChatEvent: () => true,
+      toggleQuickChat: async () => true,
+      hideQuickChat: () => undefined,
+      setQuickChatMode: () => undefined,
+      suppressQuickChatBlurHide: () => undefined,
+      resetQuickChatBlurSuppression: () => undefined,
+      notifyQuickChatHandoffComplete: () => undefined,
+    },
+    tickets,
+    resolveDocumentId: () => "doc-qc",
+    beginExpansionReport: () => {
+      order.push("capture-consent");
+      return (info) => {
+        order.push("emit");
+        reported.push(info);
+      };
+    },
+    inspectChatExpansionState: async () => {
+      order.push("inspect");
+      return { duringStream: true, wasEphemeral: true };
+    },
+  });
+
+  const expand = handlers.get("quickChat:expandToMain")!;
+  await expand({}, { kind: "chat", chatId: "chat-ephem" });
+  assert.deepEqual(order, ["capture-consent", "inspect", "navigate"]);
+  assert.equal(reported.length, 0, "must not report before main claims ticket");
+
+  const claimed = tickets.claimChat("chat-ephem");
+  claimed?.onClaimed?.();
+  assert.deepEqual(reported, [{ duringStream: true, wasEphemeral: true }]);
+});

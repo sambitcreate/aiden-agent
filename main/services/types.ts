@@ -937,6 +937,10 @@ export interface AppSettings extends AidenLiveSettingsFields {
   aidenLiveEnabled?: boolean;
   /** Show the idle Live button in the window corner. Omitted means shown; active sessions always show it. */
   aidenLiveButtonVisible?: boolean;
+  /** Default persistence mode for new chats started from the floating Quick Chat starter. Omitted means "ephemeral". */
+  quickChatDefaultPersistence?: import("../../renderer/shared/quick-chat.js").QuickChatDefaultPersistence;
+  /** Keep the floating Quick Chat mini-modal open when clicking outside. Omitted means true (stays pinned). */
+  quickChatKeepOpenOnBlur?: boolean;
   /** On-device Form Fill Specialist; gated on Computer Use plus a verified local model package. Default off. */
   formFillSpecialistEnabled?: boolean;
   /** Global scheduler gate. Turning it off pauses jobs without deleting them. */

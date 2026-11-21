@@ -1028,6 +1028,10 @@ export interface AppSettings extends AidenLiveSettingsFields {
   aidenLiveEnabled?: boolean;
   /** Show the idle Live button. Omitted means shown; active sessions always show it. */
   aidenLiveButtonVisible?: boolean;
+  /** Default persistence mode for new floating Quick Chat sessions. Omitted means "ephemeral". */
+  quickChatDefaultPersistence?: import("../shared/quick-chat").QuickChatDefaultPersistence;
+  /** Keep the floating Quick Chat mini-modal open when clicking outside. Omitted means true. */
+  quickChatKeepOpenOnBlur?: boolean;
   /** On-device form fill specialist. Default off; requires macOS + downloaded model. */
   formFillSpecialistEnabled?: boolean;
   /** Omitted in older configs; memory is enabled unless explicitly disabled. */

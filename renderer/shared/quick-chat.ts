@@ -5,6 +5,15 @@ import type { HandoffQueuedMessage } from "./chat-handoff.js";
 
 export type QuickChatWindowMode = "starter" | "starter-popover" | "modal";
 
+export const QUICK_CHAT_DEFAULT_PERSISTENCE_VALUES = [
+  "ephemeral",
+  "noWorkspace",
+  "lastWorkspace",
+] as const;
+
+export type QuickChatDefaultPersistence =
+  (typeof QUICK_CHAT_DEFAULT_PERSISTENCE_VALUES)[number];
+
 export type QuickChatOpenSource = "hotkey" | "command";
 
 export interface QuickChatOpenedPayload {
@@ -37,9 +46,24 @@ export interface QuickChatExpandResult {
 }
 
 const VALID_MODES = new Set<QuickChatWindowMode>(["starter", "starter-popover", "modal"]);
+const VALID_DEFAULT_PERSISTENCE = new Set<QuickChatDefaultPersistence>(
+  QUICK_CHAT_DEFAULT_PERSISTENCE_VALUES,
+);
 const MAX_DRAFT_TEXT_CHARS = 200_000;
 const MAX_ATTACHMENTS = 32;
 const MAX_QUEUED_MESSAGES = 32;
+
+export function parseQuickChatDefaultPersistence(
+  value: unknown,
+): QuickChatDefaultPersistence | undefined {
+  if (
+    typeof value === "string" &&
+    VALID_DEFAULT_PERSISTENCE.has(value as QuickChatDefaultPersistence)
+  ) {
+    return value as QuickChatDefaultPersistence;
+  }
+  return undefined;
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);

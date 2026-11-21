@@ -666,6 +666,7 @@
         "main/handlers/quick-chat.test.ts",
         "renderer/quick-chat-preload-channels.test.ts",
         "renderer/quick-chat/floating-chat-app.test.tsx",
+        "renderer/components/settings/quick-chat-settings.test.tsx",
         "renderer/components/attach-workspace-dialog.test.tsx",
         "main/services/chat-first-message-commit.test.ts",
         "main/services/chat-generation-owner.test.ts",

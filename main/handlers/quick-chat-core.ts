@@ -34,6 +34,8 @@ export interface QuickChatHandlerCoreDependencies {
   windowPort: QuickChatWindowControlPort;
   tickets: DesktopHandoffTicketStore;
   resolveDocumentId: (event: IpcMainInvokeEvent) => string;
+  inspectChatExpansionState?: (chatId: string) => Promise<{ duringStream: boolean; wasEphemeral: boolean }>;
+  beginExpansionReport?: () => (info: { duringStream: boolean; wasEphemeral: boolean }) => void;
   onWarning?: (message: string, error: unknown) => void;
 }
 
@@ -106,6 +108,8 @@ export function registerQuickChatHandlersCore(deps: QuickChatHandlerCoreDependen
         return { ok: false };
       }
       const parsed = parseQuickChatExpandRequest(input);
+      // Capture analytics consent before async metadata lookups and main-window navigation.
+      const reportExpanded = deps.beginExpansionReport?.();
       // Keep the floating window alive until the main window claims the ticket
       // so an in-flight stream isn't detached before ownership transfers.
       win.suppressQuickChatBlurHide(5_000);
@@ -119,6 +123,7 @@ export function registerQuickChatHandlersCore(deps: QuickChatHandlerCoreDependen
           onClaimed: () => {
             win.notifyQuickChatHandoffComplete({ kind: "draft" });
             win.hideQuickChat();
+            reportExpanded?.({ duringStream: false, wasEphemeral: false });
           },
         });
         try {
@@ -133,6 +138,12 @@ export function registerQuickChatHandlersCore(deps: QuickChatHandlerCoreDependen
       }
 
       const fromDocumentId = resolveDocumentId(event);
+      const expansionState = deps.inspectChatExpansionState
+        ? await deps.inspectChatExpansionState(parsed.chatId).catch(() => ({
+            duringStream: false,
+            wasEphemeral: false,
+          }))
+        : { duringStream: false, wasEphemeral: false };
       tickets.putChat({
         chatId: parsed.chatId,
         fromDocumentId,
@@ -144,6 +155,7 @@ export function registerQuickChatHandlersCore(deps: QuickChatHandlerCoreDependen
         onClaimed: () => {
           win.notifyQuickChatHandoffComplete({ kind: "chat", chatId: parsed.chatId });
           win.hideQuickChat();
+          reportExpanded?.(expansionState);
         },
       });
       try {

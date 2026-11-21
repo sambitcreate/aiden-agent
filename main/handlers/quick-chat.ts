@@ -2,7 +2,10 @@
 
 import type { IpcMainInvokeEvent } from "electron";
 import { ipcMain, logger } from "../platform.js";
+import { captureAnalyticsReporter } from "../services/analytics/analytics-report.js";
+import { chatStore } from "../services/chat-store.js";
 import { desktopHandoffTickets } from "../services/desktop-stream-handoff-main.js";
+import { llmClient } from "../services/llm-client.js";
 import { rendererDocumentOwner } from "../services/renderer-document-owner.js";
 import {
   hideQuickChat,
@@ -38,6 +41,18 @@ export function registerQuickChatHandlers(deps: QuickChatHandlerDependencies): v
     resolveDocumentId: (event) =>
       rendererDocumentOwner(event, () => new Error("Untrusted quick chat expand sender."))
         .documentId,
+    inspectChatExpansionState: async (chatId) => ({
+      duringStream: llmClient.isChatBusy(chatId),
+      wasEphemeral: (await chatStore.get(chatId))?.ephemeral === true,
+    }),
+    beginExpansionReport: () => {
+      const report = captureAnalyticsReporter();
+      return ({ duringStream, wasEphemeral }) =>
+        report("floating_chat_expanded", {
+          during_stream: duringStream,
+          was_ephemeral: wasEphemeral,
+        });
+    },
     onWarning: (message, error) => logger.warn("quick-chat", message, error),
   });
 }
