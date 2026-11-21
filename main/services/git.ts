@@ -4001,7 +4001,14 @@ export class GitService {
     }
     // Reject obvious invalid/glob/empty/slash-terminated refs before passing
     // patterns to `for-each-ref`.
-    if (!baseRef || baseRef.endsWith("/") || /[\u0000-\u001f\u007f*?[\]\\]/u.test(baseRef)) {
+    const hasControlOrGlob = (value: string): boolean => {
+      for (let i = 0; i < value.length; i += 1) {
+        const code = value.charCodeAt(i);
+        if (code <= 0x1f || code === 0x7f) return true;
+      }
+      return /[*?[\]\\]/u.test(value);
+    };
+    if (!baseRef || baseRef.endsWith("/") || hasControlOrGlob(baseRef)) {
       await this.validateBranchName(repo, baseRef);
     }
     const localRef = `refs/heads/${baseRef}`;
