@@ -53,17 +53,15 @@ final class AidenChatScreenParts {
     let follow: AidenTranscriptFollowController
     let attachmentPicker: AidenAttachmentPickerState
     let botToolsModel: AidenBotChatToolsModel?
-    /// The row at the top of the transcript while the reader is scrolled away
-    /// from the latest, by row ID; nil while following the latest.
-    var readingPlace: String?
-    /// The rows in view now, which become the reading place when a scroll
-    /// settles. A layout change alone never moves the reading place.
-    var rowsInView: Set<String> = []
-    /// Until when a new or resized transcript goes back to the reading place
-    /// as its rows finish measuring. A rebuilt scroll view starts at the
-    /// latest, and a split that collapses lays the screen out at more than one
-    /// width before it settles. The reader scrolling ends it early.
-    var returningUntil: ContinuousClock.Instant?
+    /// Where the reader is while scrolled away from the latest; nil while
+    /// following the latest.
+    var readingPlace: AidenReadingPlace?
+    /// Where the rows built now are, in the scroll view's space (whose top is
+    /// the transcript's visible top, below the bars), and how tall the part
+    /// the transcript shows is: the reading place when a scroll settles. A
+    /// layout change alone never moves the reading place.
+    var rowFrames: [String: CGRect] = [:]
+    var visibleHeight: CGFloat = 0
 
     init(
         model: AidenChatViewModel,
@@ -79,28 +77,40 @@ final class AidenChatScreenParts {
 }
 
 /// One chat's screen state, held by the shell rather than by its views
-/// (`AidenChatScreens`). Opening or closing an iPhone Duo can build the
-/// screen's views again, and SwiftUI then reports the old ones gone and new
-/// ones there. The new views take the same parts, so the reader stays in the
-/// same chat at the same place with the same draft, attachments and voice.
+/// (`AidenChatScreens`). Opening or closing an iPhone Duo swaps the shell's
+/// containers, which builds the screen's views again: SwiftUI reports the old
+/// ones gone and new ones there. The new views take the same parts, so the
+/// reader stays in the same chat at the same place with the same draft,
+/// attachments and voice. For the moment of the swap both views can hold the
+/// same parts, the composer's session included; only the one on screen takes
+/// input.
 ///
-/// What a screen does once nobody sees it waits a beat, so a rebuild costs
-/// nothing: once it's hidden it stops listening and saves the draft, and once
-/// its chat has also left every tab, it lets its attachments go and the shell
-/// forgets it.
+/// Nothing here waits to find out what happened. The shell says when it's
+/// about to swap (`rebuilding()`), so a view that leaves then is coming back
+/// and the screen stays live. Any other leave hides it at once: it stops
+/// listening and saves the draft. Once its chat is also on no tab, which the
+/// paths say, it lets its attachments go and the shell forgets it.
 @MainActor
 final class AidenChatScreen {
     private(set) var parts: AidenChatScreenParts?
     private var appearances = 0
-    private var generation = 0
+    /// Set from the shell's swap until a view of this screen comes back.
+    private(set) var isRebuilding = false
+    /// What a hidden screen lets go of once its chat has left every tab,
+    /// from the view that hid it.
+    private var letGo: (@MainActor () -> Void)?
+    /// What a view that left during a swap would have done had it not been
+    /// a swap, for the backstop.
+    private var heldHide: (@MainActor () -> Void)?
+    private var backstop: Task<Void, Never>?
     private let isOpen: @MainActor () -> Bool
     private let onLeft: @MainActor () -> Void
     private let pause: @MainActor (Duration) async -> Void
 
-    /// How long a screen that left waits for its next view, and then how much
-    /// longer for its chat to come back to a tab.
-    static let rebuildGrace = Duration.milliseconds(300)
-    static let leaveGrace = Duration.seconds(1)
+    /// How long a swap may take before a view that left during it counts as
+    /// gone. Only a backstop: the next view's appearance is what normally
+    /// ends a swap.
+    static let rebuildBackstop = Duration.seconds(2)
 
     init(
         isOpen: @escaping @MainActor () -> Bool,
@@ -122,32 +132,64 @@ final class AidenChatScreen {
         return made
     }
 
-    func appeared() {
-        appearances += 1
-        generation += 1
+    /// The shell is about to swap its containers. A screen on screen now gets
+    /// a new view, so the old one leaving isn't the reader leaving.
+    func rebuilding() {
+        guard isShowing else { return }
+        isRebuilding = true
     }
 
-    /// A view of this screen left. `hidden` runs once no view has come back
-    /// a beat later; `left` runs after that if the chat is on no tab either.
-    /// Returns once both have had their say, for tests.
+    func appeared() {
+        appearances += 1
+        isRebuilding = false
+        heldHide = nil
+        backstop?.cancel()
+        backstop = nil
+    }
+
+    /// A view of this screen left. With no view left it's hidden at once,
+    /// unless the shell is swapping its containers, and let go if its chat
+    /// is on no tab. Returns the backstop while a swap holds the hide, for
+    /// tests.
     @discardableResult
     func disappeared(
         hidden: @escaping @MainActor () -> Void,
         left: @escaping @MainActor () -> Void
-    ) -> Task<Void, Never> {
+    ) -> Task<Void, Never>? {
         appearances = max(0, appearances - 1)
-        let leaving = generation
-        // Holds the screen: the shell may forget it meanwhile, and the
-        // cleanup still has to run.
-        return Task { @MainActor in
-            await pause(Self.rebuildGrace)
-            guard appearances == 0, generation == leaving else { return }
+        letGo = left
+        guard appearances == 0 else { return nil }
+        guard isRebuilding else {
             hidden()
-            await pause(Self.leaveGrace)
-            guard appearances == 0, generation == leaving, !isOpen() else { return }
-            left()
-            onLeft()
+            leaveIfClosed()
+            return nil
         }
+        heldHide = hidden
+        let backstop = Task { @MainActor [pause] in
+            await pause(Self.rebuildBackstop)
+            guard !Task.isCancelled else { return }
+            self.endRebuild()
+        }
+        self.backstop = backstop
+        return backstop
+    }
+
+    /// The swap never brought a view back: what it held runs now.
+    private func endRebuild() {
+        guard isRebuilding, appearances == 0 else { return }
+        isRebuilding = false
+        heldHide?()
+        heldHide = nil
+        leaveIfClosed()
+    }
+
+    /// The paths changed. A hidden screen whose chat is on no tab lets go
+    /// and the shell forgets it.
+    func leaveIfClosed() {
+        guard !isShowing, !isRebuilding, !isOpen() else { return }
+        letGo?()
+        letGo = nil
+        onLeft()
     }
 }
 
@@ -519,8 +561,8 @@ struct AidenChatDetailView: View {
                 attachmentPicker.reset()
                 composerSession.discardAttachments()
             }
-            // A screen the shell keeps waits to see whether this was a
-            // rebuild or the chat leaving (`AidenChatScreen`).
+            // A screen the shell keeps knows whether this is its containers
+            // being swapped or the reader leaving (`AidenChatScreen`).
             if let screen {
                 screen.disappeared(hidden: hidden, left: left)
             } else {
@@ -592,26 +634,33 @@ struct AidenChatDetailView: View {
                 for: .sizeChanges
             )
             .scrollDismissesKeyboard(.interactively)
-            .onScrollTargetVisibilityChange(idType: String.self, threshold: 0.5) { [parts] ids in
-                parts.rowsInView = Set(ids)
-            }
             .onScrollPhaseChange { _, phase in
-                if phase == .interacting { parts.returningUntil = nil }
                 // Only the reader moves the reading place, not a layout pass
                 // on the way back to it.
-                guard phase == .idle, !isReturningToReadingPlace else { return }
-                parts.readingPlace = follow.isFollowing ? nil : topRowInView ?? parts.readingPlace
+                guard phase == .idle, !follow.holdsPlace else { return }
+                parts.readingPlace = follow.isFollowing ? nil : placeInView ?? parts.readingPlace
+            }
+            .onChange(of: follow.isFollowing) { _, following in
+                if following { parts.readingPlace = nil }
             }
             // A rebuilt screen (an iPhone Duo opening or closing) starts at
             // the latest, and a resized one keeps its offset over reflowed
-            // rows. Either way the reader goes back to the row they were on.
+            // rows. Either way the reader goes back to their place, and again
+            // each time the rows' height changes as they measure, until they
+            // scroll or ask for the latest (`AidenTranscriptFollowController.holdsPlace`).
+            // Whatever size the rows settle at, they settle at the place.
             .onAppear { startReturningToReadingPlace(proxy) }
             .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { _ in
                 startReturningToReadingPlace(proxy)
             }
             .onScrollGeometryChange(for: CGSize.self) { $0.contentSize } action: { _, _ in
-                guard isReturningToReadingPlace else { return }
+                guard follow.holdsPlace else { return }
                 returnToReadingPlace(proxy)
+            }
+            // The part the transcript shows, clear of the bars and the
+            // composer over it.
+            .onScrollGeometryChange(for: CGFloat.self) { $0.containerSize.height } action: { [parts] _, height in
+                parts.visibleHeight = height
             }
             .aidenReportsTranscriptFit(to: follow)
             .aidenKeepsPlaceOnPrepend(anchorID: $keptPlaceID, proxy: proxy)
@@ -708,11 +757,10 @@ struct AidenChatDetailView: View {
                 onVisualPrompt: model.isReadOnlyPresentation ? nil : { (prompt: String) -> Void in
                     _ = model.appendVisualPrompt(prompt)
                 },
-                browserRecordingsAvailable: model.supportsBrowserRecordings
+                browserRecordingsAvailable: model.supportsBrowserRecordings,
+                onRowFrame: { [parts] id, frame in parts.rowFrames[id] = frame }
             )
-            // Not wrapped in `.equatable()`: that makes the rows one child of
-            // the lazy stack, so they'd never report being in view and the
-            // reader's place couldn't be kept. Each row skips its own redraw.
+            .equatable()
             if model.showsLiveResponse {
                 AidenLiveResponseView(model: model, presentationStyle: presentationStyle)
             }
@@ -1211,31 +1259,22 @@ struct AidenChatDetailView: View {
         }
     }
 
-    /// The first row in view, in transcript order.
-    private var topRowInView: String? {
-        guard !parts.rowsInView.isEmpty else { return nil }
-        return AidenTranscriptRowIdentity.rows(for: model.chat.messages, renderIDs: model.messageRenderIDs)
-            .first { parts.rowsInView.contains($0.id) }?.id
+    /// Where the reader is now, from the rows built.
+    private var placeInView: AidenReadingPlace? {
+        let rows = AidenTranscriptRowIdentity.rows(for: model.chat.messages, renderIDs: model.messageRenderIDs)
+            .compactMap { row in parts.rowFrames[row.id].map { (id: row.id, frame: $0) } }
+        return AidenReadingPlace.at(top: 0, rows: rows)
     }
 
     /// Scrolls back to where the reader was, once the rows are laid out at
     /// this size. Nothing to do while following the latest.
     private func startReturningToReadingPlace(_ proxy: ScrollViewProxy) {
-        guard parts.readingPlace != nil, !follow.isFollowing else { return }
-        let until = ContinuousClock.now + .milliseconds(600)
-        parts.returningUntil = until
+        // The place is cleared whenever the reader follows the latest, so a
+        // place here means they were away from it, whatever a rebuilt scroll
+        // view starting at the bottom has told the latch since.
+        guard parts.readingPlace != nil else { return }
+        follow.handle(.holdPlace)
         returnToReadingPlace(proxy)
-        // A last look once the rows have settled at the final size, unless
-        // the reader has scrolled since.
-        Task { @MainActor in
-            try? await Task.sleep(for: .milliseconds(650))
-            guard parts.returningUntil == until else { return }
-            returnToReadingPlace(proxy)
-        }
-    }
-
-    private var isReturningToReadingPlace: Bool {
-        parts.returningUntil.map { ContinuousClock.now < $0 } ?? false
     }
 
     private func returnToReadingPlace(_ proxy: ScrollViewProxy) {
@@ -1243,7 +1282,8 @@ struct AidenChatDetailView: View {
         Task { @MainActor in
             await Task.yield()
             guard parts.readingPlace == place, !follow.isFollowing else { return }
-            proxy.scrollTo(place, anchor: .top)
+            let anchor = place.anchor(rowHeight: parts.rowFrames[place.rowID]?.height, viewHeight: parts.visibleHeight)
+            proxy.scrollTo(place.rowID, anchor: anchor)
         }
     }
 

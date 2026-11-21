@@ -298,13 +298,13 @@ struct AidenAppNavigationStore {
 /// A tab's path shown as a list beside its detail, at regular width. The tab's
 /// path stays the one source of truth: its first route is the list's selection,
 /// and the rest are pushed on the detail column's stack. A compact width shows
-/// the same path as one stack, so closing or opening the display keeps the same
-/// route on screen.
+/// the same path as one stack over the list, so closing or opening the display
+/// keeps the same route on screen.
 ///
 /// Everything on screen is on the path, a workspace's chats and the forks
 /// pushed over a chat included, so a size-class change, Back and a relaunch
-/// all see it. Per-view state such as unsent attachments isn't carried across
-/// a rebuilt screen; draft text is kept by the composer's own store.
+/// all see it. A chat's own state, such as its draft, attachments and place,
+/// is the shell's (`AidenChatScreens`), so a rebuilt screen keeps it.
 struct AidenSplitNavigationPath: Equatable {
     private(set) var path: [AidenAppRoute]
 
@@ -337,44 +337,6 @@ struct AidenSplitNavigationPath: Equatable {
         return Array(path[index...])
     }
 
-    /// Collapsed to one stack, the split shows the list while the path is
-    /// empty and the detail once it holds something.
-    static func compactShowsList(_ path: [AidenAppRoute]) -> Bool {
-        path.isEmpty
-    }
-
-    /// The path after the split shows the list or the detail. Collapsed,
-    /// showing the list is Back, which takes one screen off: from the detail's
-    /// root that empties the path, and from a screen pushed over it, such as a
-    /// workspace's chat, it returns to the one underneath. A closed iPhone Duo
-    /// reports either Back this way. Logged on the iOS 27.1 simulator, the
-    /// side rail's Back and the edge swipe from [workspace, chat] write the
-    /// column `.sidebar` first, then sometimes the detail stack's path [],
-    /// which the path already is by then. From a chat at the detail's root
-    /// only the column write comes. Choosing the showing tab again writes the
-    /// tab before the same column write (`AidenAppNavigation.chooseTab`).
-    /// Beside the list the split's writes are its own and change nothing, and
-    /// so does showing the detail, which only a chosen route does.
-    static func path(
-        _ path: [AidenAppRoute],
-        afterShowingList showsList: Bool,
-        besideList: Bool
-    ) -> [AidenAppRoute] {
-        besideList || !showsList ? path : Array(path.dropLast())
-    }
-
-    /// The route the detail column draws at its root. Collapsed, Back empties
-    /// the path before the detail has slid away, so the route that was there
-    /// is drawn until another is chosen. Beside the list, nothing selected is
-    /// the empty state.
-    static func detailRoot(
-        selection: AidenAppRoute?,
-        lastSelection: AidenAppRoute?,
-        besideList: Bool
-    ) -> AidenAppRoute? {
-        selection ?? (besideList ? nil : lastSelection)
-    }
-
     /// The detail column's stack moved, by Back or a push. With nothing
     /// selected there's no detail stack, so there's nothing to change.
     mutating func setDetailPath(_ detailPath: [AidenAppRoute]) {
@@ -397,22 +359,11 @@ struct AidenSplitNavigationPath: Equatable {
 final class AidenAppNavigation {
     var tab: AidenAppTab
     var inboxPath: [AidenAppRoute] {
-        didSet {
-            endCatchUpIfLeft()
-            rememberSelection(of: .inbox)
-        }
+        didSet { endCatchUpIfLeft() }
     }
-    var botsPath: [AidenAppRoute] {
-        didSet { rememberSelection(of: .bots) }
-    }
-    var workspacesPath: [AidenAppRoute] {
-        didSet { rememberSelection(of: .workspaces) }
-    }
+    var botsPath: [AidenAppRoute]
+    var workspacesPath: [AidenAppRoute]
     private var savedPaths: [String: [AidenAppRoute]]
-    /// Each list tab's last selection: the first route its path held. A
-    /// collapsed split draws it while Back slides the detail away, after the
-    /// path has emptied. Not saved.
-    private var lastSelections: [AidenAppTab: AidenAppRoute] = [:]
 
     /// Not saved: a relaunch must not open the microphone.
     private(set) var chatStartingVoice: AidenHostObjectID?
@@ -466,41 +417,13 @@ final class AidenAppNavigation {
         botsPath = paths[.bots] ?? []
         workspacesPath = paths[.workspaces] ?? []
         savedPaths = snapshot.savedPaths
-        for tab in AidenAppTab.listTabs { rememberSelection(of: tab) }
         dropRoutes(outside: installations)
-    }
-
-    /// The route a collapsed split draws in its detail once Back has emptied
-    /// the tab's path, while the detail slides away: the selection it last
-    /// had. Nil once that's gone (`forgetLastSelection`), or was never there.
-    func lastSelection(of tab: AidenAppTab) -> AidenAppRoute? {
-        lastSelections[tab]
-    }
-
-    /// The outgoing detail has left the screen. Its route isn't drawn any
-    /// more, so its screen and model can go. A tab with a selection keeps it.
-    func forgetLastSelection(of tab: AidenAppTab) {
-        guard path(of: tab).isEmpty, lastSelections[tab] != nil else { return }
-        lastSelections[tab] = nil
-    }
-
-    /// A deleted chat, or the like, isn't drawn again on its way out, nor a
-    /// fork of it that was the selection.
-    func forget(_ route: AidenAppRoute) {
-        for (tab, last) in lastSelections where last.screen == route.screen {
-            lastSelections[tab] = nil
-        }
     }
 
     /// Whether a list tab's path holds the conversation, as a chat or a fork.
     /// Its screen keeps its state while one does (`AidenChatScreens`).
     func holdsConversation(_ id: AidenHostObjectID) -> Bool {
         AidenAppTab.listTabs.contains { path(of: $0).contains { $0.chatID == id } }
-    }
-
-    private func rememberSelection(of tab: AidenAppTab) {
-        guard let first = path(of: tab).first, lastSelections[tab] != first else { return }
-        lastSelections[tab] = first
     }
 
     var snapshot: AidenAppNavigationSnapshot {
@@ -562,16 +485,14 @@ final class AidenAppNavigation {
         }
     }
 
-    /// The tab bar or side rail chose a tab. Choosing the tab already showing
-    /// takes a collapsed split back to its list, which SwiftUI reports only as
-    /// a write showing the list, the same as Back, which takes one screen off.
-    /// So the path empties here, before that write. Beside the list the list
-    /// is already in view, and the path is left as it is.
-    func chooseTab(_ chosen: AidenAppTab) {
-        if chosen == tab, !besideList, AidenAppTab.listTabs.contains(chosen) {
-            setPath([], of: chosen)
-        }
-        tab = chosen
+    /// A write from a list tab's container: a stack beside the list or not
+    /// (`besideList`) moved by Back or a push, or laid out. Opening or closing
+    /// an iPhone Duo swaps the container, and the one going away can still
+    /// write as it tears down, an empty path among them. A write from the
+    /// layout that's no longer current is dropped, so the swap keeps the path.
+    func setPath(_ path: [AidenAppRoute], of tab: AidenAppTab, laidOutBesideList: Bool) {
+        guard laidOutBesideList == besideList, path != self.path(of: tab) else { return }
+        setPath(path, of: tab)
     }
 
     /// Selects the route's tab and shows the route there, or goes back to it
@@ -740,7 +661,6 @@ final class AidenAppNavigation {
             if path != self.path(of: tab) { setPath(path, of: tab) }
         }
         savedPaths = savedPaths.filter { _, path in path.allSatisfy { $0.isReachable(on: installations) } }
-        lastSelections = lastSelections.filter { $0.value.isReachable(on: installations) }
     }
 
     /// Takes `route`'s screen off the path, with everything above it. A fork

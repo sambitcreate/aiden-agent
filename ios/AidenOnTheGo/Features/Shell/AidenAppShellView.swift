@@ -199,7 +199,7 @@ struct AidenAppShellView: View {
     }
 
     var body: some View {
-        TabView(selection: Binding(get: { navigation.tab }, set: { navigation.chooseTab($0) })) {
+        TabView(selection: Bindable(navigation).tab) {
             Tab("Inbox", systemImage: "tray", value: AidenAppTab.inbox) {
                 splitTab(.inbox, columns: inboxColumns, empty: .inbox) { selection in
                     inboxList(selection: selection)
@@ -262,13 +262,20 @@ struct AidenAppShellView: View {
         .environment(\.aidenTabsInSideRail, showsVerticalBar)
         .tabBarMinimizeBehavior(horizontalSizeClass == .compact ? .onScrollDown : .automatic)
         .tabViewSearchActivation(.searchTabSelection)
-        .aidenNewWorkPresentation(newWork, coordinator: coordinator)
         // Hiding the tab bar leaves the accessory up, under the composer.
         .aidenRunningAccessory(
             isEnabled: runningHome == .accessory && inboxStore.hasRunningChats && !navigation.showsConversation
         ) {
             AidenRunningAccessoryHost(store: inboxStore, onOpen: openRow) { showsRunningChats = true }
         }
+        // A new tab view each time the display opens or closes, as at launch.
+        // A closed iPhone Duo's side rail reads the showing tab's Back and
+        // More when it's built, and a list tab swapping its container under
+        // the same tab view left it reading none, along with the running
+        // accessory over a chat (iOS 27.1 simulator). The paths and chats
+        // are the shell's, so the new one opens where the old one was.
+        .id(navigation.besideList)
+        .aidenNewWorkPresentation(newWork, coordinator: coordinator)
         .sheet(isPresented: $showsRunningChats) {
             AidenRunningChatsSheet(store: inboxStore) { route in
                 showsRunningChats = false
@@ -296,9 +303,16 @@ struct AidenAppShellView: View {
         .onChange(of: navigation.tab == .inbox, initial: true) { _, isOnScreen in
             inboxStore.setInboxVisible(isOnScreen)
         }
+        // Opening or closing an iPhone Duo swaps each list tab's container
+        // (`AidenListTab`). The chat screens hear first, so the views the
+        // swap takes away don't count as the reader leaving; the containers
+        // follow `besideList`, so its new value is set before either goes.
         .onChange(of: horizontalSizeClass) { _, sizeClass in
+            let besideList = sizeClass == .regular
+            guard besideList != navigation.besideList else { return }
             for columns in [inboxColumns, botsColumns, workspacesColumns] { columns.visibility = .all }
-            navigation.besideList = sizeClass == .regular
+            chatScreens.rebuilding()
+            navigation.besideList = besideList
         }
         .onChange(of: navigation.inboxOpenChat, initial: true) { _, chat in
             inboxStore.openChat = chat
@@ -358,11 +372,10 @@ struct AidenAppShellView: View {
         empty: AidenSplitEmptyState,
         @ViewBuilder list: @escaping (AidenAppRoute?) -> Sidebar
     ) -> some View {
-        AidenSplitTab(
+        AidenListTab(
             tab: tab,
             navigation: navigation,
             columns: columns,
-            besideList: showsListBesideDetail,
             window: window,
             empty: empty,
             list: list,
@@ -406,7 +419,6 @@ struct AidenAppShellView: View {
 
     private func deleteChat(_ id: AidenHostObjectID) {
         navigation.leave(.chat(id))
-        navigation.forget(.chat(id))
         Task {
             switch await inboxStore.delete(id) {
             case .deleted:
@@ -574,10 +586,14 @@ final class AidenChatRouteModel {
     /// view's, so it isn't cancelled when SwiftUI reports the screen gone. A
     /// chat a link chose on a tab that wasn't showing appeared and disappeared
     /// in one update as the tab came forward, and never appeared again, so a
-    /// view task's load was cancelled and the chat spun for good.
-    func startLoading(coordinator: AidenRemoteCoordinator) {
+    /// view task's load was cancelled and the chat spun for good. Returns
+    /// the load, for tests.
+    @discardableResult
+    func startLoading(coordinator: AidenRemoteCoordinator) -> Task<Void, Never> {
         loading?.cancel()
-        loading = Task { [weak self] in await self?.load(coordinator: coordinator) }
+        let load = Task<Void, Never> { [weak self] in await self?.load(coordinator: coordinator) }
+        loading = load
+        return load
     }
 
     func load(coordinator: AidenRemoteCoordinator) async {
@@ -760,9 +776,8 @@ private struct AidenChatRouteView: View {
 
 /// The shell's chat screens: each chat's route model and screen state, kept
 /// while a tab's path holds the chat, so opening or closing an iPhone Duo,
-/// which can build the screen's views again, loses nothing. A screen goes
-/// once its chat has left every tab and nobody sees it, a beat later, so the
-/// writes a fold makes on its way through don't cost it (`AidenChatScreen`).
+/// which builds the screen's views again, loses nothing. A screen goes once
+/// its chat has left every tab and nobody sees it (`AidenChatScreen`).
 @MainActor
 final class AidenChatScreens {
     final class Screen {
@@ -776,7 +791,6 @@ final class AidenChatScreens {
     }
 
     private var screens: [AidenHostObjectID: Screen] = [:]
-    private var pruning: Task<Void, Never>?
     private let isOpen: @MainActor (AidenHostObjectID) -> Bool
     private let pause: @MainActor (Duration) async -> Void
 
@@ -807,18 +821,16 @@ final class AidenChatScreens {
         return screen
     }
 
-    /// A tab's path changed. A beat later, screens whose chat is on no tab and
-    /// that nobody sees go; one a view is leaving goes when it has left.
-    @discardableResult
-    func pathsChanged() -> Task<Void, Never> {
-        pruning?.cancel()
-        let pruning = Task { @MainActor [weak self] in
-            await self?.pause(AidenChatScreen.rebuildGrace + AidenChatScreen.leaveGrace)
-            guard !Task.isCancelled, let self else { return }
-            for id in screens.keys { forget(id) }
-        }
-        self.pruning = pruning
-        return pruning
+    /// The shell is about to swap its containers: the screens on screen now
+    /// get new views (`AidenChatScreen.rebuilding()`).
+    func rebuilding() {
+        for screen in screens.values { screen.chat.rebuilding() }
+    }
+
+    /// A tab's path changed. Screens whose chat is on no tab and that nobody
+    /// sees go; one a view is still leaving goes when it has left.
+    func pathsChanged() {
+        for screen in Array(screens.values) { screen.chat.leaveIfClosed() }
     }
 
     private func forget(_ id: AidenHostObjectID) {
@@ -898,19 +910,27 @@ final class AidenSplitColumns {
     }
 }
 
-/// A list tab as one split view at every width, collapsed by the system to a
-/// single stack when compact. Swapping it for a separate stack when an iPhone
-/// Duo closed let the split's own collapse pop land on the new stack, which
-/// emptied the path. The tab's path is the one source of truth
-/// (`AidenSplitNavigationPath`).
-private struct AidenSplitTab<Sidebar: View>: View {
+/// A list tab. Compact, it's one stack: the list at its root and the tab's
+/// path pushed over it, as on any iPhone. Regular, it's a split: the list
+/// beside a stack rooted at the selected row. Opening or closing an iPhone
+/// Duo swaps one for the other. A split that collapses to one stack itself
+/// left the closed iPhone Duo's side rail without a working Back (iOS 27.1
+/// simulator); a stack built while closed always has one.
+///
+/// The tab's path is the one source of truth (`AidenAppNavigation`), so the
+/// new container shows the same screens, and a chat's state is the shell's
+/// (`AidenChatScreens`), so they're as they were. The container going away
+/// can still write its path as it's taken down (a stack popping to nothing),
+/// so each container's writes count only while the navigation is in its
+/// layout: `AidenAppNavigation.besideList` changes first, then the container
+/// follows it.
+private struct AidenListTab<List: View>: View {
     let tab: AidenAppTab
     let navigation: AidenAppNavigation
     let columns: AidenSplitColumns
-    let besideList: Bool
     let window: AidenWindowReader.Window
     let empty: AidenSplitEmptyState
-    let list: (AidenAppRoute?) -> Sidebar
+    let list: (AidenAppRoute?) -> List
     /// A route's screen, and whether a conversation there keeps the tabs.
     let screen: (AidenAppRoute, Bool) -> AnyView
 
@@ -918,17 +938,32 @@ private struct AidenSplitTab<Sidebar: View>: View {
 
     private var path: [AidenAppRoute] { navigation.path(of: tab) }
 
-    /// The path as drawn. Beside the list it's the path the list takes over,
-    /// so the first frame after the display opens already highlights what's
-    /// on screen; `AidenAppNavigation.besideList` then stores the same path.
-    private var displayedPath: [AidenAppRoute] {
-        besideList ? AidenSplitNavigationPath.takingOver(path, on: tab) : path
+    var body: some View {
+        if navigation.besideList { split } else { stack }
     }
 
-    var body: some View {
+    private func write(_ path: [AidenAppRoute], besideList: Bool) {
+        navigation.setPath(path, of: tab, laidOutBesideList: besideList)
+    }
+
+    // MARK: Compact
+
+    private var stack: some View {
+        NavigationStack(path: Binding(
+            get: { path },
+            set: { write($0, besideList: false) }
+        )) {
+            list(nil)
+                .navigationDestination(for: AidenAppRoute.self) { screen($0, false) }
+        }
+    }
+
+    // MARK: Regular
+
+    private var split: some View {
         @Bindable var columns = columns
-        NavigationSplitView(columnVisibility: $columns.visibility, preferredCompactColumn: compactColumn) {
-            list(besideList ? AidenSplitNavigationPath(displayedPath).selection : nil)
+        return NavigationSplitView(columnVisibility: $columns.visibility) {
+            list(AidenSplitNavigationPath(path).selection)
                 // One width for every list tab and every launch, wide enough
                 // for a machine's status line, a row's title and the bar's
                 // title with its buttons on an iPhone Duo's inner display.
@@ -947,75 +982,36 @@ private struct AidenSplitTab<Sidebar: View>: View {
         }
         // A row chosen any other way: a link, a Search result, Catch Up's Next.
         .onChange(of: AidenSplitNavigationPath(path).selection, initial: true) { _, selection in
-            columns.hideOverlaidList(besideList: besideList, hasSelection: selection != nil)
-            columns.showListIfNothingChosen(besideList: besideList, hasSelection: selection != nil)
+            columns.hideOverlaidList(besideList: true, hasSelection: selection != nil)
+            columns.showListIfNothingChosen(besideList: true, hasSelection: selection != nil)
         }
     }
 
-    /// Collapsed, the split shows the list until the path holds something,
-    /// then the detail. Back takes one screen off the path, so from the
-    /// detail's root it returns to the list
-    /// (`AidenSplitNavigationPath.path(_:afterShowingList:besideList:)`).
-    /// Writes while not compact are the split's own and change nothing.
-    private var compactColumn: Binding<NavigationSplitViewColumn> {
-        Binding(
-            get: { AidenSplitNavigationPath.compactShowsList(path) ? .sidebar : .detail },
-            set: { column in
-                let after = AidenSplitNavigationPath.path(path, afterShowingList: column == .sidebar, besideList: besideList)
-                if after != path { navigation.setPath(after, of: tab) }
-            }
-        )
-    }
-
     /// The detail column: the selected route at the root of its own stack, and
-    /// the rest of the path pushed over it.
+    /// the rest of the path pushed over it. A conversation here keeps the
+    /// tabs up, as the list beside it does.
     private var detail: some View {
-        let chosen = AidenSplitNavigationPath(displayedPath).selection
-        let selection = AidenSplitNavigationPath.detailRoot(
-            selection: chosen,
-            lastSelection: navigation.lastSelection(of: tab),
-            besideList: besideList
-        )
-        // A route drawn only while Back slides it away mustn't keep the tabs
-        // hidden over the list it leaves.
-        let keepsTabs = besideList || chosen == nil
+        let selection = AidenSplitNavigationPath(path).selection
         return NavigationStack(path: Binding(
-            get: { AidenSplitNavigationPath(displayedPath).detailPath },
+            get: { AidenSplitNavigationPath(path).detailPath },
             set: { detailPath in
-                var split = AidenSplitNavigationPath(displayedPath)
+                var split = AidenSplitNavigationPath(path)
                 split.setDetailPath(detailPath)
-                if split.path != path { navigation.setPath(split.path, of: tab) }
+                write(split.path, besideList: true)
             }
         )) {
             Group {
                 if let selection {
-                    screen(selection, keepsTabs)
+                    screen(selection, true)
                         // Another row is another screen, not this one updated.
                         .id(selection)
-                        // Once Back has slid it away, it isn't drawn again.
-                        .onDisappear { navigation.forgetLastSelection(of: tab) }
                 } else {
                     ContentUnavailableView(empty.title, systemImage: empty.systemImage, description: Text(empty.message))
                         .background(palette.canvas.ignoresSafeArea())
                 }
             }
-            // Beside the list a conversation keeps the tabs up, as the list
-            // is; collapsed it's any stack's screen.
-            .navigationDestination(for: AidenAppRoute.self) { screen($0, besideList) }
+            .navigationDestination(for: AidenAppRoute.self) { screen($0, true) }
         }
-        // A new stack each time the split collapses or expands. Collapsing
-        // builds a new navigation controller for the single stack, and the
-        // side rail (a closed iPhone Duo's floating bar) showed only what a
-        // stack built beside the list had: a conversation chosen beside the
-        // list showed no Back and no More, and one pushed in a workspace
-        // showed a Back that wrote nothing, while the edge swipe still went
-        // back (iOS 27.1 simulator). Rebuilding on collapse alone wasn't
-        // enough: a stack built collapsed, expanded, then replaced on the
-        // next collapse lost them again, so expanding rebuilds too. The path
-        // is the model's, so the new stack shows the same screens, and a
-        // chat's state is the shell's (`AidenChatScreens`), so they're as
-        // they were: same draft, attachments, voice and place.
-        .id(besideList)
     }
 }
 

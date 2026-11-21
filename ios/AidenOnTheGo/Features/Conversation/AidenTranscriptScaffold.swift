@@ -55,9 +55,6 @@ struct AidenTranscriptRowStack<Rows: View>: View {
     var body: some View {
         VStack(alignment: .leading, spacing: spacing) {
             LazyVStack(alignment: .leading, spacing: spacing) { rows }
-                // Rows report when they're in view, so a chat can keep the
-                // reader's place (`onScrollTargetVisibilityChange`).
-                .scrollTargetLayout()
             Color.clear.frame(height: 1).id(bottomAnchorID)
         }
         .environment(\.aidenToolGroupExpansion, toolGroupExpansion)

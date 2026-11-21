@@ -15282,6 +15282,87 @@ final class AidenChatScrollFollowTests: XCTestCase {
         XCTAssertFalse(follow(false, .contentScrolled(isAtBottom: true, isUserScrolling: false, wasNearBottom: false)))
     }
 
+    /// A rebuilt transcript (an iPhone Duo opening or closing) starts at the
+    /// bottom on its way back to the reader's place. Landing there, however
+    /// near it was, doesn't turn follow on.
+    func testHoldingThePlaceKeepsALandingAtTheBottomFromReArming() {
+        let latch = reduce(
+            Latch(isFollowing: false), .holdPlace,
+            .contentScrolled(isAtBottom: true, isUserScrolling: false, wasNearBottom: true),
+            .contentScrolled(isAtBottom: true, isUserScrolling: false, wasNearBottom: true)
+        )
+        XCTAssertFalse(latch.isFollowing)
+        XCTAssertTrue(latch.holdsPlace)
+    }
+
+    /// The reader takes over again by scrolling or asking for the latest.
+    func testTheReaderEndsHoldingThePlace() {
+        let held = reduce(Latch(isFollowing: false), .holdPlace)
+        XCTAssertFalse(reduce(held, .userScrollBegin).holdsPlace)
+        XCTAssertFalse(reduce(held, .contentScrolled(isAtBottom: false, isUserScrolling: true)).holdsPlace)
+
+        let settledAtBottom = reduce(held, .userScrollEnd(isAtBottom: true))
+        XCTAssertFalse(settledAtBottom.holdsPlace)
+        XCTAssertTrue(settledAtBottom.isFollowing)
+
+        let latest = reduce(held, .reset)
+        XCTAssertFalse(latest.holdsPlace)
+        XCTAssertTrue(latest.isFollowing)
+
+        let afterScroll = reduce(held, .userScrollBegin, .userScrollEnd(isAtBottom: false))
+        XCTAssertTrue(
+            reduce(afterScroll, .contentScrolled(isAtBottom: true, isUserScrolling: false, wasNearBottom: true)).isFollowing,
+            "Landing at the bottom re-arms once the reader has scrolled"
+        )
+    }
+
+    // MARK: Reading place
+
+    private func row(_ id: String, _ minY: CGFloat, _ height: CGFloat) -> (id: String, frame: CGRect) {
+        (id: id, frame: CGRect(x: 0, y: minY, width: 300, height: height))
+    }
+
+    /// The place is the first row reaching below the transcript's top, and
+    /// how far down it that top falls.
+    func testTheReadingPlaceIsTheRowAcrossTheTop() {
+        let rows = [row("a", -300, 200), row("b", -100, 400), row("c", 300, 50)]
+
+        XCTAssertEqual(AidenReadingPlace.at(top: 0, rows: rows), AidenReadingPlace(rowID: "b", fraction: 0.25))
+        XCTAssertEqual(AidenReadingPlace.at(top: 0, rows: [row("c", 20, 50)])?.fraction, 0, "A row below the top")
+        XCTAssertNil(AidenReadingPlace.at(top: 0, rows: [row("a", -300, 200)]))
+    }
+
+    /// Scrolling to an anchor lines its point in the row up with the same
+    /// point in the view, so the row's top lands `y × (view − row)` below the
+    /// view's. The anchor puts the top of the view the same share down the
+    /// row, at the row's new height, whether it's taller or shorter than the
+    /// view.
+    func testTheReadingPlacesAnchorPutsTheSameShareOfTheRowAtTheTop() {
+        let view: CGFloat = 600
+        for (fraction, rowHeight) in [(0.25, 1600.0), (0.6, 900), (0.3, 120), (0.9, 40)] as [(CGFloat, CGFloat)] {
+            let place = AidenReadingPlace(rowID: "b", fraction: fraction)
+            let anchor = place.anchor(rowHeight: rowHeight, viewHeight: view)
+            let rowTop = anchor.y * (view - rowHeight)
+            XCTAssertEqual(rowTop, -fraction * rowHeight, accuracy: 0.001, "fraction \(fraction) row \(rowHeight)")
+        }
+        XCTAssertEqual(AidenReadingPlace(rowID: "b", fraction: 0.5).anchor(rowHeight: nil, viewHeight: view), .top)
+    }
+
+    /// Measured at one width and brought back at another, where the row has
+    /// reflowed: the reader is the same share of the way down it.
+    func testTheReadingPlaceHoldsAcrossAReflow() throws {
+        let wide = [row("a", -500, 300), row("b", -200, 500)]
+        let place = try XCTUnwrap(AidenReadingPlace.at(top: 0, rows: wide))
+        XCTAssertEqual(place.rowID, "b")
+
+        let narrowHeight: CGFloat = 900
+        let anchor = place.anchor(rowHeight: narrowHeight, viewHeight: 678)
+        let rowTop = anchor.y * (678 - narrowHeight)
+        let back = try XCTUnwrap(AidenReadingPlace.at(top: 0, rows: [row("b", rowTop, narrowHeight)]))
+        XCTAssertEqual(back.rowID, "b")
+        XCTAssertEqual(back.fraction, place.fraction, accuracy: 0.001)
+    }
+
     func testScrollAwayWithoutGestureTurnsFollowOff() {
         XCTAssertFalse(follow(true, .contentScrolled(isAtBottom: false, isUserScrolling: false, movedAwayFromBottom: true)))
     }

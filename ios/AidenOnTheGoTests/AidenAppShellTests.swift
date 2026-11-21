@@ -290,76 +290,42 @@ final class AidenAppShellTests: XCTestCase {
         XCTAssertEqual(split.path, [.chat(id("c1")), .machines])
     }
 
-    /// Collapsed, Back from a chat pushed over its workspace returns to the
-    /// workspace, which a closed iPhone Duo reports as showing the list, and
-    /// Back again empties the path and shows the list. Unfolding after the
-    /// first Back still has the workspace selected.
-    func testCollapsedBackTakesOneScreenOffAndThenShowsTheList() {
-        let workspace = AidenAppRoute.workspace(id("w1"))
-        let path: [AidenAppRoute] = [workspace, .chat(id("c1"))]
-
-        XCTAssertFalse(AidenSplitNavigationPath.compactShowsList(path))
-        let back = AidenSplitNavigationPath.path(path, afterShowingList: true, besideList: false)
-        XCTAssertEqual(back, [workspace])
-        XCTAssertFalse(AidenSplitNavigationPath.compactShowsList(back))
-        XCTAssertEqual(AidenSplitNavigationPath(back).selection, workspace)
-
-        let toList = AidenSplitNavigationPath.path(back, afterShowingList: true, besideList: false)
-        XCTAssertEqual(toList, [])
-        XCTAssertTrue(AidenSplitNavigationPath.compactShowsList(toList))
-
-        XCTAssertEqual(AidenSplitNavigationPath.path(path, afterShowingList: false, besideList: false), path)
-    }
-
-    /// Choosing the tab already showing takes a collapsed tab all the way to
-    /// its list, so the workspace's row opens it again; beside the list it
-    /// keeps what's chosen, and choosing another tab keeps every path.
-    func testChoosingTheShowingTabAgainReturnsACollapsedTabToItsList() {
+    /// Opening or closing an iPhone Duo swaps a list tab's container, and the
+    /// one going away can write as it's taken down. Only the layout the
+    /// navigation is in writes the path: the outgoing one's empty path never
+    /// loses the screens, and Back in the current one still works.
+    func testOnlyTheCurrentLayoutWritesAListTabsPath() {
         let navigation = AidenAppNavigation()
         let workspace = AidenAppRoute.workspace(id("w1"))
-        navigation.open(workspace)
-        navigation.push(.chat(id("c1")), over: workspace)
-        navigation.open(.chat(id("inbox_chat")))
-        let inboxPath = navigation.inboxPath
-
-        navigation.chooseTab(.workspaces)
-        XCTAssertEqual(navigation.tab, .workspaces)
-        XCTAssertEqual(navigation.workspacesPath, [workspace, .chat(id("c1"))])
-        XCTAssertEqual(navigation.inboxPath, inboxPath)
-
-        navigation.chooseTab(.workspaces)
-        XCTAssertEqual(navigation.workspacesPath, [])
-        XCTAssertTrue(AidenSplitNavigationPath.compactShowsList(navigation.workspacesPath))
-        XCTAssertEqual(navigation.inboxPath, inboxPath)
-
-        navigation.open(workspace)
-        XCTAssertEqual(navigation.workspacesPath, [workspace])
+        let chat = AidenAppRoute.chat(id("c1"))
+        navigation.setPath([workspace, chat], of: .workspaces, laidOutBesideList: false)
+        XCTAssertEqual(navigation.workspacesPath, [workspace, chat])
 
         navigation.besideList = true
-        navigation.chooseTab(.workspaces)
+        navigation.setPath([], of: .workspaces, laidOutBesideList: false)
+        XCTAssertEqual(navigation.workspacesPath, [workspace, chat])
+        navigation.setPath([workspace], of: .workspaces, laidOutBesideList: true)
         XCTAssertEqual(navigation.workspacesPath, [workspace])
+
+        navigation.besideList = false
+        navigation.setPath([], of: .workspaces, laidOutBesideList: true)
+        XCTAssertEqual(navigation.workspacesPath, [workspace])
+        navigation.setPath([], of: .workspaces, laidOutBesideList: false)
+        XCTAssertEqual(navigation.workspacesPath, [])
     }
 
-    /// Beside the list the split reports its columns as it lays them out,
-    /// as when the display opens; that's no Back, so the chat stays.
-    func testColumnWritesBesideTheListKeepThePath() {
-        let path: [AidenAppRoute] = [.chat(id("c1"))]
+    /// A container's write goes through `setPath(_:of:)`, so a chat it pushes
+    /// still leaves the tab that held it: one conversation, one screen.
+    func testAContainerWriteMovesAConversationFromAnotherTab() {
+        let navigation = AidenAppNavigation()
+        let chat = AidenAppRoute.chat(id("c1"))
+        navigation.open(chat)
+        let workspace = AidenAppRoute.workspace(id("w1"))
 
-        XCTAssertEqual(AidenSplitNavigationPath.path(path, afterShowingList: true, besideList: true), path)
-        XCTAssertEqual(AidenSplitNavigationPath.path(path, afterShowingList: false, besideList: true), path)
-    }
+        navigation.setPath([workspace, chat], of: .workspaces, laidOutBesideList: false)
 
-    /// Collapsed, the chat leaving by Back stays drawn as it slides out, and
-    /// a newly chosen one replaces it at once. Beside the list nothing
-    /// selected is the empty state, never a stale chat.
-    func testTheDetailRootKeepsTheOutgoingChatOnlyWhileCollapsed() {
-        let old = AidenAppRoute.chat(id("c1"))
-        let new = AidenAppRoute.chat(id("c2"))
-
-        XCTAssertEqual(AidenSplitNavigationPath.detailRoot(selection: nil, lastSelection: old, besideList: false), old)
-        XCTAssertEqual(AidenSplitNavigationPath.detailRoot(selection: new, lastSelection: old, besideList: false), new)
-        XCTAssertNil(AidenSplitNavigationPath.detailRoot(selection: nil, lastSelection: old, besideList: true))
-        XCTAssertEqual(AidenSplitNavigationPath.detailRoot(selection: new, lastSelection: old, besideList: true), new)
+        XCTAssertEqual(navigation.workspacesPath, [workspace, chat])
+        XCTAssertEqual(navigation.inboxPath, [])
     }
 
     /// No row chosen means the detail shows its empty state and has no stack.
@@ -723,34 +689,6 @@ final class AidenAppShellTests: XCTestCase {
         XCTAssertEqual(navigation.workspacesPath, [.workspace(id("w2")), .chat(id("c1"))], "A workspace's chat stays over it")
     }
 
-    /// Back on a collapsed split empties the path before the detail has slid
-    /// away, so the route that was there is still there to draw. Once it's
-    /// gone, or the chat is deleted, or its machine is, nothing is kept.
-    func testTheLastSelectionOutlivesBackUntilItsScreenHasGone() {
-        let navigation = AidenAppNavigation()
-        navigation.open(.workspace(id("w1")))
-        navigation.workspacesPath = []
-        XCTAssertEqual(navigation.lastSelection(of: .workspaces), .workspace(id("w1")))
-
-        navigation.open(.workspace(id("w2")))
-        navigation.forgetLastSelection(of: .workspaces)
-        XCTAssertEqual(navigation.lastSelection(of: .workspaces), .workspace(id("w2")), "Still selected")
-
-        navigation.workspacesPath = []
-        navigation.forgetLastSelection(of: .workspaces)
-        XCTAssertNil(navigation.lastSelection(of: .workspaces))
-
-        navigation.openInboxRow(.chat(id("c1")))
-        navigation.leave(.chat(id("c1")))
-        navigation.forget(.chat(id("c1")))
-        XCTAssertNil(navigation.lastSelection(of: .inbox), "A deleted chat")
-
-        navigation.open(.bot(id("b1", on: "laptop")))
-        navigation.botsPath = []
-        navigation.dropRoutes(outside: [studio])
-        XCTAssertNil(navigation.lastSelection(of: .bots), "A forgotten machine's Bot")
-    }
-
     /// Frames measured on an iPhone Duo's inner display.
     func testOnlyADetailStartingAtTheSplitsEdgeIsAnOverlaidList() {
         let portraitSplit = CGRect(x: 0, y: 82, width: 669, height: 786)
@@ -1091,12 +1029,13 @@ final class AidenAppShellTests: XCTestCase {
             responder.requests(instanceId: "studio").filter { $0 == "GET /chats/chat_studio_1" }.count
         }
 
-        model.startLoading(coordinator: coordinator)
+        let first = model.startLoading(coordinator: coordinator)
         try await waitUntil("the first load asks") { asked() == 1 }
         model.startLoading(coordinator: coordinator)
         try await waitUntil("the second load asks") { asked() == 2 }
-        // The first load's cancellation has had time to land.
-        try await Task.sleep(for: .milliseconds(100))
+        // The first load has finished, cancelled, while the machine still
+        // holds both requests.
+        await first.value
         guard case .loading = model.state else { return XCTFail("The cancelled load spoke: \(model.state)") }
 
         release()
@@ -1139,74 +1078,110 @@ final class AidenAppShellTests: XCTestCase {
         var counts: [Int] { [hidden, left, onLeft] }
     }
 
-    /// A chat screen with its waits skipped. `returningAt` brings a view back
-    /// during that wait, as a rebuilt screen's would.
-    private func chatScreen(
-        isOpen: @escaping @MainActor () -> Bool,
-        log: ScreenLog,
-        returningAt: Duration? = nil
-    ) -> AidenChatScreen {
-        var screen: AidenChatScreen?
-        let made = AidenChatScreen(
-            isOpen: isOpen,
-            onLeft: { log.onLeft += 1 },
-            pause: { wait in if wait == returningAt { screen?.appeared() } }
-        )
-        screen = made
-        return made
+    /// A chat screen whose backstop wait returns at once.
+    private func chatScreen(isOpen: @escaping @MainActor () -> Bool, log: ScreenLog) -> AidenChatScreen {
+        AidenChatScreen(isOpen: isOpen, onLeft: { log.onLeft += 1 }, pause: { _ in })
     }
 
-    private func leave(_ screen: AidenChatScreen, log: ScreenLog) -> Task<Void, Never> {
+    @discardableResult
+    private func leave(_ screen: AidenChatScreen, log: ScreenLog) -> Task<Void, Never>? {
         screen.disappeared(hidden: { log.hidden += 1 }, left: { log.left += 1 })
     }
 
-    /// Opening or closing an iPhone Duo builds the screen again: the old
-    /// view goes and a new one comes in the same update. Nothing stops.
+    /// Opening or closing an iPhone Duo builds the screen again: the shell
+    /// says it's swapping, the old view goes and a new one comes. Nothing
+    /// stops, even once the backstop's wait is over.
     func testARebuiltChatScreenKeepsGoing() async {
         let log = ScreenLog()
         let screen = chatScreen(isOpen: { false }, log: log)
         screen.appeared()
 
-        let leaving = leave(screen, log: log)
+        screen.rebuilding()
+        let backstop = leave(screen, log: log)
+        XCTAssertEqual(log.counts, [0, 0, 0], "Held while the swap is under way")
         screen.appeared()
-        await leaving.value
+        await backstop?.value
 
         XCTAssertEqual(log.counts, [0, 0, 0])
         XCTAssertTrue(screen.isShowing)
+        XCTAssertFalse(screen.isRebuilding)
     }
 
-    /// A screen under another, or on a tab that isn't showing, is hidden:
-    /// it stops listening, but its chat is still on a path, so it stays.
-    func testAHiddenChatScreenThatIsStillOpenIsKept() async {
+    /// A screen under another, or on a tab that isn't showing, is hidden at
+    /// once: it stops listening, but its chat is still on a path, so it stays.
+    func testAHiddenChatScreenThatIsStillOpenIsKept() {
         let log = ScreenLog()
         let screen = chatScreen(isOpen: { true }, log: log)
         screen.appeared()
 
-        await leave(screen, log: log).value
+        XCTAssertNil(leave(screen, log: log))
 
         XCTAssertEqual(log.counts, [1, 0, 0])
     }
 
-    /// Back off the chat: once nobody sees it and no tab holds it, it lets
-    /// go and the shell forgets it. A view that comes back in the meantime
-    /// keeps it.
-    func testAChatScreenThatLeftEveryTabLetsGo() async {
+    /// Back off the chat: nobody sees it and no tab holds it, so it hides and
+    /// lets go at once, and the shell forgets it.
+    func testAChatScreenThatLeftEveryTabLetsGo() {
         let log = ScreenLog()
         let screen = chatScreen(isOpen: { false }, log: log)
         screen.appeared()
-        await leave(screen, log: log).value
-        XCTAssertEqual(log.counts, [1, 1, 1])
 
-        let back = ScreenLog()
-        let returning = chatScreen(isOpen: { false }, log: back, returningAt: AidenChatScreen.leaveGrace)
-        returning.appeared()
-        await leave(returning, log: back).value
-        XCTAssertEqual(back.counts, [1, 0, 0], "Back before it was let go")
+        leave(screen, log: log)
+
+        XCTAssertEqual(log.counts, [1, 1, 1])
     }
 
-    /// The shell hands a rebuilt view the screen its chat already had, and
-    /// forgets a screen only once its chat is on no tab and nobody sees it.
-    func testTheShellKeepsAChatsScreenWhileATabHoldsIt() async {
+    /// A hidden screen lets go when the paths drop its chat, not before.
+    func testAHiddenChatScreenLetsGoWhenThePathsDropItsChat() {
+        var open = true
+        let log = ScreenLog()
+        let screen = chatScreen(isOpen: { open }, log: log)
+        screen.appeared()
+        leave(screen, log: log)
+        screen.leaveIfClosed()
+        XCTAssertEqual(log.counts, [1, 0, 0])
+
+        open = false
+        screen.leaveIfClosed()
+
+        XCTAssertEqual(log.counts, [1, 1, 1])
+    }
+
+    /// A swap that never brings a view back: once the backstop's wait is
+    /// over, the screen hides, and lets go if its chat is on no tab.
+    func testASwapThatNeverReturnsHidesTheScreenAfterTheBackstop() async {
+        let log = ScreenLog()
+        let screen = chatScreen(isOpen: { false }, log: log)
+        screen.appeared()
+
+        screen.rebuilding()
+        let backstop = leave(screen, log: log)
+        XCTAssertNotNil(backstop)
+        XCTAssertEqual(log.counts, [0, 0, 0])
+        await backstop?.value
+
+        XCTAssertEqual(log.counts, [1, 1, 1])
+        XCTAssertFalse(screen.isRebuilding)
+    }
+
+    /// A screen nobody sees isn't rebuilt by a swap, so its views leaving
+    /// afterwards hide it as usual.
+    func testASwapLeavesAScreenNobodySeesAlone() {
+        let log = ScreenLog()
+        let screen = chatScreen(isOpen: { true }, log: log)
+
+        screen.rebuilding()
+        XCTAssertFalse(screen.isRebuilding)
+        screen.appeared()
+        leave(screen, log: log)
+
+        XCTAssertEqual(log.counts, [1, 0, 0])
+    }
+
+    /// The shell hands a rebuilt view the screen its chat already had, holds
+    /// every screen on screen through a swap, and forgets a screen only once
+    /// its chat is on no tab and nobody sees it.
+    func testTheShellKeepsAChatsScreenWhileATabHoldsIt() {
         var open: Set<AidenHostObjectID> = [id("c1"), id("c2")]
         let screens = AidenChatScreens(pause: { _ in }, isOpen: { open.contains($0) })
         let first = screens.screen(for: id("c1"))
@@ -1214,29 +1189,33 @@ final class AidenAppShellTests: XCTestCase {
         let second = screens.screen(for: id("c2"))
         second.chat.appeared()
 
-        await screens.pathsChanged().value
+        screens.rebuilding()
+        XCTAssertFalse(first.chat.isRebuilding, "Not on screen")
+        XCTAssertTrue(second.chat.isRebuilding)
+        second.chat.disappeared(hidden: {}, left: {})
+        second.chat.appeared()
+
+        screens.pathsChanged()
         XCTAssertEqual(screens.kept, [id("c1"), id("c2")])
 
         open = []
-        await screens.pathsChanged().value
+        screens.pathsChanged()
         XCTAssertEqual(screens.kept, [id("c2")], "On no tab, but still on screen")
 
-        await second.chat.disappeared(hidden: {}, left: {}).value
+        second.chat.disappeared(hidden: {}, left: {})
         XCTAssertEqual(screens.kept, [])
         XCTAssertFalse(screens.screen(for: id("c1")) === first, "A chat opened again starts afresh")
     }
 
-    /// Deleting a chat forgets the selection kept for Back, also when that
-    /// selection showed the chat as a fork.
-    func testDeletingAChatForgetsItsForkKeptAsTheSelection() {
+    /// Deleting a chat takes it off every tab, also where it's open as a fork.
+    func testDeletingAChatLeavesItsFork() {
         let navigation = AidenAppNavigation()
         navigation.openInboxRow(.fork(id("f1"), source: id("c9")))
-        navigation.inboxPath = []
-        XCTAssertEqual(navigation.lastSelection(of: .inbox), .fork(id("f1"), source: id("c9")))
+        XCTAssertEqual(navigation.inboxPath.last, .fork(id("f1"), source: id("c9")))
 
-        navigation.forget(.chat(id("f1")))
+        navigation.leave(.chat(id("f1")))
 
-        XCTAssertNil(navigation.lastSelection(of: .inbox))
+        XCTAssertFalse(navigation.holdsConversation(id("f1")))
     }
 
     // MARK: Bot routes
