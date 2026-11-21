@@ -1061,6 +1061,15 @@ export class GitService {
   >();
   private readonly infoCache = new Map<string, CacheEntry<GitInfo>>();
   /**
+   * Config-signature-validated display metadata (`hasRemote`, `defaultBranch`)
+   * learned from ordinary status reads, used only to seed display-only `infoCache`
+   * immediately after `createWorktree`.
+   */
+  private readonly repoRemoteHints = new Map<
+    string,
+    { configSignature: string; hasRemote: boolean; defaultBranch?: string }
+  >();
+  /**
    * Credential-free remote identity learned by ordinary status reads, keyed by
    * repository working directory. Raw remote URLs are never retained.
    */
@@ -1647,6 +1656,7 @@ export class GitService {
   }
 
   private async status(repo: GitRepository, signal?: AbortSignal): Promise<GitInfo> {
+    const beforeHintSignature = await this.repoRemoteHintSignature(repo.commonDir);
     const [raw, remotesResult, remoteRefs] = await Promise.all([
       this.run(
         repo.cwd,
@@ -1658,6 +1668,15 @@ export class GitService {
     ]);
     const parsed = parseGitStatus(raw.stdout);
     this.rememberRepositoryIdentity(repo, remotesResult.stdout);
+    const hasRemote = remotesResult.stdout.trim().length > 0;
+    if (beforeHintSignature) {
+      await this.rememberRepoRemoteHint(
+        repo.commonDir,
+        beforeHintSignature,
+        hasRemote,
+        remoteRefs.defaultBranch,
+      );
+    }
     return {
       isRepo: true,
       branch: parsed.branch,
@@ -1668,9 +1687,101 @@ export class GitService {
       ahead: parsed.ahead,
       behind: parsed.behind,
       defaultBranch: remoteRefs.defaultBranch,
-      hasRemote: remotesResult.stdout.trim().length > 0,
+      hasRemote,
       remoteState: parsed.upstream ? "local-ref" : undefined,
     };
+  }
+
+  private async repoRemoteHintSignature(commonDir: string): Promise<string | undefined> {
+    return this.repositorySignature([
+      path.join(commonDir, "config"),
+      path.join(commonDir, "packed-refs"),
+      path.join(commonDir, "refs", "remotes"),
+    ]);
+  }
+
+  private async rememberRepoRemoteHint(
+    commonDir: string,
+    expectedSignature: string,
+    hasRemote: boolean,
+    defaultBranch: string | undefined,
+  ): Promise<void> {
+    const afterSignature = await this.repoRemoteHintSignature(commonDir);
+    if (!afterSignature || afterSignature !== expectedSignature) return;
+    this.repoRemoteHints.delete(commonDir);
+    this.repoRemoteHints.set(commonDir, { configSignature: afterSignature, hasRemote, defaultBranch });
+    if (this.repoRemoteHints.size > this.cacheEntries) {
+      const oldest = this.repoRemoteHints.keys().next().value as string | undefined;
+      if (oldest !== undefined) this.repoRemoteHints.delete(oldest);
+    }
+  }
+
+  private async seedCreatedWorktreeDisplayCache(
+    sourceRepo: GitRepository,
+    created: GitCreatedWorktree,
+    branch: string,
+  ): Promise<void> {
+    if (this.cacheTtlMs <= 0) return;
+    // Only seed root-level checkouts matching `readRepository`'s own caching boundary.
+    if (created.workspacePath !== created.path) return;
+    try {
+      // Wait for our own enqueueMutation `tail.finally` invalidation to settle,
+      // then fence the seed against any concurrent mutation epoch.
+      await Promise.resolve();
+      if (this.mutations.has(sourceRepo.commonDir)) return;
+      const epoch = this.mutationEpochs.get(sourceRepo.commonDir) ?? 0;
+      const canonical = await fs.realpath(created.path);
+      const identity = await this.rootReadIdentity(canonical);
+      if (!identity || identity.commonDir !== sourceRepo.commonDir) return;
+      if (
+        this.mutations.has(sourceRepo.commonDir) ||
+        (this.mutationEpochs.get(sourceRepo.commonDir) ?? 0) !== epoch
+      ) {
+        return;
+      }
+      const seededRepo: GitRepository = {
+        cwd: canonical,
+        topLevel: canonical,
+        commonDir: sourceRepo.commonDir,
+        readIdentity: identity,
+      };
+      this.setCached(this.repositoryCache, canonical, sourceRepo.commonDir, seededRepo);
+      const sourceIdentity =
+        this.repositoryIdentities.get(sourceRepo.topLevel) ??
+        this.repositoryIdentities.get(sourceRepo.cwd);
+      if (sourceIdentity) {
+        this.repositoryIdentities.delete(canonical);
+        this.repositoryIdentities.set(canonical, {
+          topLevel: canonical,
+          canonicalKey: sourceIdentity.canonicalKey,
+        });
+      }
+      const hint = this.repoRemoteHints.get(sourceRepo.commonDir);
+      if (hint) {
+        const currentSignature = await this.repoRemoteHintSignature(sourceRepo.commonDir);
+        if (
+          currentSignature &&
+          currentSignature === hint.configSignature &&
+          !this.mutations.has(sourceRepo.commonDir) &&
+          (this.mutationEpochs.get(sourceRepo.commonDir) ?? 0) === epoch
+        ) {
+          const info: GitInfo = {
+            isRepo: true,
+            branch,
+            detached: false,
+            unborn: false,
+            uncommitted: 0,
+            ahead: 0,
+            behind: 0,
+            defaultBranch: hint.defaultBranch,
+            hasRemote: hint.hasRemote,
+          };
+          this.setCached(this.infoCache, canonical, sourceRepo.commonDir, info, identity.signature);
+        }
+      }
+    } catch {
+      // Display cache seeding is best-effort; a cold read will succeed normally.
+    }
   }
 
   private async repositoryInfo(repo: GitRepository, signal: AbortSignal): Promise<GitInfo> {
@@ -4409,6 +4520,196 @@ export class GitService {
     });
   }
 
+  private async readBoundedNoFollowFile(
+    filePath: string,
+    maxBytes: number,
+  ): Promise<{ ok: true; text: string } | { ok: false; code?: string }> {
+    const flags =
+      fsConstants.O_RDONLY |
+      (fsConstants.O_NOFOLLOW ?? 0) |
+      (fsConstants.O_NONBLOCK ?? 0);
+    let handle: fs.FileHandle | undefined;
+    try {
+      handle = await fs.open(filePath, flags);
+      const stat = await handle.stat();
+      if (!stat.isFile() || stat.size <= 0 || stat.size > maxBytes) {
+        return { ok: false };
+      }
+      const buffer = Buffer.alloc(stat.size + 1);
+      const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
+      if (bytesRead !== stat.size) return { ok: false };
+      return { ok: true, text: buffer.subarray(0, bytesRead).toString("utf8") };
+    } catch (error) {
+      return { ok: false, code: (error as NodeJS.ErrnoException).code };
+    } finally {
+      await handle?.close().catch(() => undefined);
+    }
+  }
+
+  private async resolveCommonDirPureFs(cwd: string): Promise<string | undefined> {
+    try {
+      const canonicalCwd = await fs.realpath(cwd);
+      const dotGit = path.join(canonicalCwd, ".git");
+      const dotGitStat = await fs.lstat(dotGit);
+      let gitDir: string;
+      if (dotGitStat.isDirectory() && !dotGitStat.isSymbolicLink()) {
+        gitDir = dotGit;
+      } else if (dotGitStat.isFile() && !dotGitStat.isSymbolicLink()) {
+        const read = await this.readBoundedNoFollowFile(dotGit, 4_096);
+        if (!read.ok) return undefined;
+        const match = /^gitdir:\s*(.+)$/u.exec(read.text.trim());
+        if (!match) return undefined;
+        gitDir = path.isAbsolute(match[1]!)
+          ? path.resolve(match[1]!)
+          : path.resolve(canonicalCwd, match[1]!);
+      } else {
+        return undefined;
+      }
+      const canonicalGitDir = await fs.realpath(gitDir);
+      const commondirPath = path.join(canonicalGitDir, "commondir");
+      const commondirRead = await this.readBoundedNoFollowFile(commondirPath, 4_096);
+      if (commondirRead.ok) {
+        const rawCommon = commondirRead.text.trim();
+        if (!rawCommon) return undefined;
+        const resolvedCommon = path.isAbsolute(rawCommon)
+          ? rawCommon
+          : path.resolve(canonicalGitDir, rawCommon);
+        return await fs.realpath(resolvedCommon);
+      }
+      if (commondirRead.code === "ENOENT") {
+        const headStat = await fs.lstat(path.join(canonicalGitDir, "HEAD"));
+        if (!headStat.isFile() || headStat.isSymbolicLink()) return undefined;
+        return canonicalGitDir;
+      }
+      return undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
+  private async branchRefExistsPureFs(commonDir: string, branch: string): Promise<boolean | "fallback"> {
+    if (!branch || branch.includes("\u0000") || branch.includes("..") || branch.startsWith("/") || branch.endsWith("/")) {
+      return false;
+    }
+    // Reftable repositories do not store branches under `refs/heads` or `packed-refs`.
+    try {
+      const reftableStat = await fs.lstat(path.join(commonDir, "reftable"));
+      if (reftableStat.isDirectory()) return "fallback";
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") return "fallback";
+    }
+    const refParts = branch.split("/");
+    if (refParts.some((part) => !part || part === "." || part === "..")) return false;
+    const looseRefPath = path.join(commonDir, "refs", "heads", ...refParts);
+    const looseRead = await this.readBoundedNoFollowFile(looseRefPath, 512);
+    if (looseRead.ok && looseRead.text.trim().length > 0) return true;
+    if (!looseRead.ok && looseRead.code !== "ENOENT") return false;
+
+    const packedRefsPath = path.join(commonDir, "packed-refs");
+    const packedRead = await this.readBoundedNoFollowFile(packedRefsPath, 16 * 1024 * 1024);
+    if (!packedRead.ok) {
+      return packedRead.code === "ENOENT" ? false : "fallback";
+    }
+    const targetSuffix = ` refs/heads/${branch}`;
+    for (const line of packedRead.text.split(/\r?\n/u)) {
+      if (!line || line.startsWith("#") || line.startsWith("^")) continue;
+      if (line.endsWith(targetSuffix)) {
+        const spaceIndex = line.indexOf(" ");
+        if (spaceIndex >= 40 && line.slice(spaceIndex) === targetSuffix) return true;
+      }
+    }
+    return false;
+  }
+
+  private async managedWorktreeUsablePureFs(
+    commonDir: string,
+    worktreePath: string,
+    branch: string,
+    worktreeGitDir: string,
+    ownershipToken: string,
+    worktreeDevice: number,
+    worktreeInode: number,
+  ): Promise<boolean | "fallback"> {
+    while (this.mutations.has(commonDir)) {
+      await this.mutations.get(commonDir);
+    }
+    const epoch = this.mutationEpochs.get(commonDir) ?? 0;
+    const epochChanged = () =>
+      this.mutations.has(commonDir) || (this.mutationEpochs.get(commonDir) ?? 0) !== epoch;
+
+    const registrationsRoot = path.resolve(commonDir, "worktrees");
+    const resolvedGitDir = path.resolve(worktreeGitDir);
+    let canonicalAdminDir: string;
+    try {
+      const adminStat = await fs.lstat(resolvedGitDir);
+      if (!adminStat.isDirectory() || adminStat.isSymbolicLink()) {
+        return epochChanged() ? "fallback" : false;
+      }
+      canonicalAdminDir = await fs.realpath(resolvedGitDir);
+    } catch {
+      return epochChanged() ? "fallback" : false;
+    }
+    if (
+      path.dirname(canonicalAdminDir) !== registrationsRoot ||
+      path.basename(canonicalAdminDir).length === 0
+    ) {
+      return epochChanged() ? "fallback" : false;
+    }
+
+    const ownerPath = path.join(canonicalAdminDir, WORKTREE_OWNER_MARKER);
+    const gitdirPath = path.join(canonicalAdminDir, "gitdir");
+    const commondirPath = path.join(canonicalAdminDir, "commondir");
+    const headPath = path.join(canonicalAdminDir, "HEAD");
+    try {
+      const [ownerRead, gitdirRead, commondirRead, headRead] = await Promise.all([
+        this.readBoundedNoFollowFile(ownerPath, 128),
+        this.readBoundedNoFollowFile(gitdirPath, 4_096),
+        this.readBoundedNoFollowFile(commondirPath, 4_096),
+        this.readBoundedNoFollowFile(headPath, 4_096),
+      ]);
+      if (!ownerRead.ok || !gitdirRead.ok || !commondirRead.ok || !headRead.ok) {
+        return epochChanged() ? "fallback" : false;
+      }
+      if (ownerRead.text.trim() !== ownershipToken) return epochChanged() ? "fallback" : false;
+      if (headRead.text.trim() !== `ref: refs/heads/${branch}`) {
+        return epochChanged() ? "fallback" : false;
+      }
+
+      const commonTarget = commondirRead.text.trim();
+      const resolvedCommon = path.isAbsolute(commonTarget)
+        ? commonTarget
+        : path.resolve(canonicalAdminDir, commonTarget);
+      if ((await fs.realpath(resolvedCommon)) !== commonDir) {
+        return epochChanged() ? "fallback" : false;
+      }
+
+      const gitFile = gitdirRead.text.trim();
+      if (path.basename(gitFile) !== ".git") return epochChanged() ? "fallback" : false;
+      const absoluteGitFile = path.isAbsolute(gitFile)
+        ? path.resolve(gitFile)
+        : path.resolve(canonicalAdminDir, gitFile);
+      const registeredPath = path.dirname(absoluteGitFile);
+      if (path.resolve(registeredPath) !== path.resolve(worktreePath)) {
+        return epochChanged() ? "fallback" : false;
+      }
+
+      const refExists = await this.branchRefExistsPureFs(commonDir, branch);
+      if (refExists === "fallback") return "fallback";
+      if (!refExists) return epochChanged() ? "fallback" : false;
+
+      const checkoutOk = await this.managedWorktreeCheckoutMatches(
+        worktreePath,
+        canonicalAdminDir,
+        worktreeDevice,
+        worktreeInode,
+      );
+      if (epochChanged()) return "fallback";
+      return checkoutOk;
+    } catch {
+      return epochChanged() ? "fallback" : false;
+    }
+  }
+
   async managedWorktreeUsable(
     cwd: string,
     worktreePath: string,
@@ -4424,10 +4725,24 @@ export class GitService {
     if (
       !worktreeGitDir ||
       !ownershipToken ||
+      !WORKTREE_OWNER_TOKEN.test(ownershipToken) ||
       !Number.isSafeInteger(worktreeDevice) ||
       !Number.isSafeInteger(worktreeInode)
     ) {
       return false;
+    }
+    const commonDir = await this.resolveCommonDirPureFs(cwd);
+    if (commonDir) {
+      const direct = await this.managedWorktreeUsablePureFs(
+        commonDir,
+        worktreePath,
+        branch,
+        worktreeGitDir,
+        ownershipToken,
+        worktreeDevice!,
+        worktreeInode!,
+      );
+      if (direct !== "fallback") return direct;
     }
     const repo = this.requireRepository(await this.repository(cwd));
     return this.stableRead(repo, async () => {
@@ -6132,7 +6447,7 @@ export class GitService {
     ) {
       throw new GitServiceError("invalid_input", "The worktree capacity reserve is invalid.");
     }
-    return this.enqueueMutation(repo.commonDir, async () => {
+    const createdWorktree = await this.enqueueMutation(repo.commonDir, async () => {
       const [createdFromHead, exists] = await Promise.all([
         options?.startPoint === undefined
           ? this.requireHead(repo)
@@ -6239,6 +6554,11 @@ export class GitService {
         throw error;
       }
     });
+    // Seed display-only `repositoryCache` / `infoCache` after `enqueueMutation`
+    // settles its post-mutation invalidation so immediate display reads
+    // (`workspaces:gitInfo`, `generationGitContext`) avoid redundant cold spawns.
+    await this.seedCreatedWorktreeDisplayCache(repo, createdWorktree, branch);
+    return createdWorktree;
   }
 
   async rollbackWorktree(

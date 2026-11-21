@@ -6,7 +6,9 @@ import test from "node:test";
 import { SLASH_LIMITS } from "../../renderer/shared/slash-commands.js";
 import {
   discoverSkillCandidates,
+  discoverSkillCandidatesWithCachedGlobals,
   discoverSkills,
+  invalidateSkillDiscoveryCache,
   SKILL_DISCOVERY_LIMITS,
 } from "./skills-discovery.js";
 
@@ -717,4 +719,37 @@ test("malformed plugin metadata and nonboolean enablement fail closed without hi
   assert.deepEqual((await discoverSkillCandidates(undefined, home)).map((skill) => skill.name).sort(), ["ordinary", "plugin:review"]);
   await fs.writeFile(path.join(home, ".claude", "plugins", "installed_plugins.json"), "{");
   assert.deepEqual((await discoverSkillCandidates(undefined, home)).map((skill) => skill.name), ["ordinary"]);
+});
+
+test("discoverSkillCandidatesWithCachedGlobals reuses global skills across worktrees while scanning each workspace fresh", async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-skills-global-cache-"));
+  t.after(async () => {
+    invalidateSkillDiscoveryCache();
+    await fs.rm(root, { recursive: true, force: true });
+  });
+  const home = path.join(root, "home");
+  const ws1 = path.join(root, "ws1");
+  const ws2 = path.join(root, "ws2");
+  await writeSkill(path.join(home, ".claude", "skills"), "global-one", "Global instructions.");
+  await writeSkill(path.join(ws1, ".claude", "skills"), "ws-one", "Workspace 1.");
+  await writeSkill(path.join(ws2, ".claude", "skills"), "ws-two", "Workspace 2.");
+
+  invalidateSkillDiscoveryCache();
+  const first = await discoverSkillCandidatesWithCachedGlobals(ws1, home);
+  assert.deepEqual(first.map((skill) => skill.name), ["ws-one", "global-one"]);
+
+  // Add a second global skill without invalidating: ws2 still sees its own fresh
+  // workspace skill while reusing the cached global scan.
+  await writeSkill(path.join(home, ".claude", "skills"), "global-two", "Global 2.");
+  const second = await discoverSkillCandidatesWithCachedGlobals(ws2, home);
+  assert.deepEqual(second.map((skill) => skill.name), ["ws-two", "global-one"]);
+
+  // Uncached discoverSkillCandidates still sees the new global skill immediately.
+  const uncached = await discoverSkillCandidates(ws2, home);
+  assert.deepEqual(uncached.map((skill) => skill.name).sort(), ["global-one", "global-two", "ws-two"]);
+
+  // After invalidation, cached-global discovery observes the new global skill.
+  invalidateSkillDiscoveryCache();
+  const refreshed = await discoverSkillCandidatesWithCachedGlobals(ws2, home);
+  assert.deepEqual(refreshed.map((skill) => skill.name).sort(), ["global-one", "global-two", "ws-two"]);
 });

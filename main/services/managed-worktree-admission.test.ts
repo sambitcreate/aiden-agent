@@ -1,10 +1,20 @@
 import assert from "node:assert/strict";
+import { execFile } from "node:child_process";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import test from "node:test";
+import { promisify } from "node:util";
+import { GitService } from "./git.js";
 import { assertManagedWorktreeAdmission } from "./managed-worktree-admission.js";
 import type { Workspace } from "./types.js";
+
+const execFileAsync = promisify(execFile);
+
+async function runGit(cwd: string, args: string[]): Promise<string> {
+  const { stdout } = await execFileAsync("git", args, { cwd });
+  return stdout.trim();
+}
 
 async function fixture(t: test.TestContext): Promise<{
   workspace: Workspace;
@@ -127,4 +137,106 @@ test("fails closed for markerless, unregistered, escaped, and symlink-replaced w
     assertManagedWorktreeAdmission({ ...workspace, folderPath: linked }, verifier),
     /no longer available/u,
   );
+});
+
+test("GitService.managedWorktreeUsable verifies modern worktrees via 0-spawn pure FS and catches live external drift", async (t) => {
+  const temp = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-usable-fs-"));
+  t.after(() => fs.rm(temp, { recursive: true, force: true }));
+  const repo = path.join(temp, "repo");
+  const worktreesRoot = path.join(temp, "worktrees");
+  await fs.mkdir(repo, { recursive: true });
+  await runGit(repo, ["init", "-b", "main"]);
+  await runGit(repo, ["config", "user.name", "Aiden Test"]);
+  await runGit(repo, ["config", "user.email", "test@example.com"]);
+  await fs.writeFile(path.join(repo, "README.md"), "hello\n");
+  await runGit(repo, ["add", "README.md"]);
+  await runGit(repo, ["commit", "-m", "initial"]);
+
+  const service = new GitService({ cacheTtlMs: 60_000 });
+  await service.info(repo);
+  const created = await service.createWorktree(repo, worktreesRoot, "aiden/pure-fs");
+
+  let gitSpawns = 0;
+  const internals = service as unknown as {
+    run: (cwd: string, args: string[], options?: unknown) => Promise<unknown>;
+  };
+  const originalRun = internals.run.bind(service);
+  internals.run = async (cwd, args, options) => {
+    gitSpawns += 1;
+    return originalRun(cwd, args, options);
+  };
+
+  // Seeded display info after createWorktree requires 0 git spawns.
+  const seededInfo = await service.info(created.path);
+  assert.equal(seededInfo.isRepo, true);
+  assert.equal(seededInfo.branch, "aiden/pure-fs");
+  assert.equal(seededInfo.uncommitted, 0);
+  assert.equal(gitSpawns, 0, "immediate post-create gitInfo should hit the seeded display cache");
+
+  // Live pure-FS admission uses 0 git spawns for loose refs.
+  assert.equal(
+    await service.managedWorktreeUsable(
+      created.repositoryPath,
+      created.path,
+      created.branch,
+      created.worktreeGitDir,
+      created.ownershipToken,
+      created.worktreeDevice,
+      created.worktreeInode,
+    ),
+    true,
+  );
+  assert.equal(gitSpawns, 0, "pure-FS usability verification must spawn 0 git processes");
+
+  // Still works with 0 git spawns after refs are packed into packed-refs.
+  await runGit(repo, ["pack-refs", "--all"]);
+  assert.equal(
+    await service.managedWorktreeUsable(
+      created.repositoryPath,
+      created.path,
+      created.branch,
+      created.worktreeGitDir,
+      created.ownershipToken,
+      created.worktreeDevice,
+      created.worktreeInode,
+    ),
+    true,
+  );
+  assert.equal(gitSpawns, 0);
+
+  // External branch switch is rejected immediately (live, never cached across calls).
+  await runGit(created.path, ["switch", "-c", "aiden/drifted"]);
+  assert.equal(
+    await service.managedWorktreeUsable(
+      created.repositoryPath,
+      created.path,
+      created.branch,
+      created.worktreeGitDir,
+      created.ownershipToken,
+      created.worktreeDevice,
+      created.worktreeInode,
+    ),
+    false,
+  );
+  assert.equal(gitSpawns, 0);
+
+  // Switch back, then tamper ownership marker: immediately rejected with 0 spawns.
+  await runGit(created.path, ["switch", created.branch]);
+  await fs.writeFile(
+    path.join(created.worktreeGitDir, "aiden-owner"),
+    "00000000-0000-4000-8000-000000000000\n",
+  );
+  assert.equal(
+    await service.managedWorktreeUsable(
+      created.repositoryPath,
+      created.path,
+      created.branch,
+      created.worktreeGitDir,
+      created.ownershipToken,
+      created.worktreeDevice,
+      created.worktreeInode,
+    ),
+    false,
+  );
+  assert.equal(gitSpawns, 0);
 });
