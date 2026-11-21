@@ -52,8 +52,6 @@ enum AidenStateMatrix {
         var arguments = [
             "-AidenDemoScenario", scenario.rawValue,
             "-aiden.appearance.mode", appearance.rawValue,
-            // The first-run tour is not what these tests are about.
-            "-aiden.mobileOnboarding.v1.complete", "YES",
             // Every launch starts on the shell's default area with no chat open. The
             // app stores its navigation as Data, so a string here reads as "nothing
             // saved" and the stored value from an earlier launch is ignored.

@@ -16,7 +16,7 @@
  * ```
  */
 
-import { supportsAppUpdates } from "../services/app-updater.js";
+import { appUpdateInstallNeedsPassword, supportsAppUpdates } from "../services/app-updater.js";
 import { app, logger } from "../platform.js";
 import { currentRuntimeProfile } from "../runtime-profile.js";
 import { activeLinuxDictationHoldShortcut, linuxDictationHoldSetupAvailable, linuxDictationHoldTriggerDescription } from "../services/shortcut.js";
@@ -42,6 +42,7 @@ export const appHandlers = {
         geminiLive: geminiLiveEnabled(),
         bots: host.bots,
         appUpdates: supportsAppUpdates(),
+        appUpdateNeedsPassword: appUpdateInstallNeedsPassword(),
         computerUse: host.computerUse,
         botComputers: host.botComputers,
         hooks: host.hooks,

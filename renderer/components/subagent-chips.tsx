@@ -14,6 +14,7 @@ import {
 import { cn } from "../lib/ui-utils";
 import { useCollapsibleBody } from "../lib/use-collapsible-body";
 import { useNow } from "../lib/use-now";
+import { useObserveSubagentGroup } from "../lib/subagent-group-visibility";
 import {
   type SubagentMessageReferenceV1,
   type SubagentRunSnapshot,
@@ -228,6 +229,21 @@ export function subagentGroupSummary(states: readonly (SubagentRunViewState | "f
     .join(" · ");
 }
 
+/** The role every run in a group shares, so the header can name it once; undefined when mixed or unknown. */
+export function subagentGroupSharedRole(
+  roles: readonly (SubagentRunViewRole | undefined)[],
+): SubagentRunViewRole | undefined {
+  const first = roles[0];
+  if (!first || first === "unknown") return undefined;
+  return roles.every((role) => role === first) ? first : undefined;
+}
+
+/** "3 implementers" when every run shares a role, otherwise "3 subagents". */
+export function subagentGroupCountLabel(count: number, role: SubagentRunViewRole | undefined): string {
+  const noun = role && role !== "unknown" ? role : "subagent";
+  return `${count} ${noun}${count === 1 ? "" : "s"}`;
+}
+
 /**
  * Session memory of which transcript groups the person collapsed, keyed by
  * generation. The live group and the saved message that replaces it are
@@ -271,6 +287,7 @@ export function SubagentChips({
   }));
   const collapsed = choice.groupKey === groupKey ? choice.collapsed : collapsedGroups.has(groupKey);
   const bodyRef = React.useRef<HTMLDivElement>(null);
+  const sectionRef = React.useRef<HTMLElement>(null);
   const bodyId = React.useId();
   const { hidden, open } = useCollapsibleBody(collapsed, bodyRef);
 
@@ -288,9 +305,12 @@ export function SubagentChips({
   });
   const active = groupRuns.some((item) => isActiveState(item.state));
   const now = useNow(active);
+  // The composer pill stays away while this card is on screen.
+  useObserveSubagentGroup(sectionRef, runIds.length ? groupKey : "");
   if (runIds.length === 0) return null;
 
-  const count = `${runIds.length} subagent${runIds.length === 1 ? "" : "s"}`;
+  const sharedRole = subagentGroupSharedRole(groupRuns.map((item) => item.role));
+  const count = subagentGroupCountLabel(runIds.length, sharedRole);
   const attention = groupRuns.some((item) => item.state === "needs_attention");
   const elapsed = longestSubagentElapsedLabel(
     groupRuns.map((item) => item.run),
@@ -311,6 +331,7 @@ export function SubagentChips({
 
   return (
     <section
+      ref={sectionRef}
       className={cn("min-w-0", className)}
       role="group"
       aria-label={count}
@@ -386,7 +407,13 @@ export function SubagentChips({
         <div className="min-h-0 overflow-hidden">
           <ul className="m-0 mt-1 flex list-none flex-col rounded-card bg-well p-1">
             {groupRuns.map((item) => (
-              <SubagentGroupRow key={item.runId} item={item} now={now} onOpen={onOpen} />
+              <SubagentGroupRow
+                key={item.runId}
+                item={item}
+                now={now}
+                onOpen={onOpen}
+                showRole={sharedRole === undefined}
+              />
             ))}
           </ul>
         </div>
@@ -399,10 +426,13 @@ function SubagentGroupRow({
   item,
   now,
   onOpen,
+  showRole,
 }: {
   item: GroupRun;
   now: number;
   onOpen: (runId: string, trigger: HTMLButtonElement) => void;
+  /** False when the group header already names the role every run shares. */
+  showRole: boolean;
 }) {
   const { runId, label, role, state, run } = item;
   const status = subagentStatusLabel(state, run?.activity);
@@ -410,37 +440,32 @@ function SubagentGroupRow({
   // Older snapshots never recorded a model choice; their label stays unchanged.
   const recordedModel = run?.modelSelection !== undefined ? model : undefined;
   const elapsedMs = run ? subagentSnapshotElapsedMilliseconds(run, now) : undefined;
-  const roleName = subagentRoleLabel(role);
+  const roleName = showRole ? subagentRoleLabel(role) : null;
+  // One line per run: name, what it is doing, and how long it has run.
   const row = (
     <button
       type="button"
       data-subagent-chip-run-id={runId}
-      className="grid min-h-11 w-full grid-cols-[20px_minmax(0,1fr)_auto] items-center gap-2.5 rounded-control px-2 py-1 text-left transition-colors [--keyboard-focus-offset:-2px] duration-150 ease-out hover:bg-list-hover active:bg-list-selection motion-reduce:transition-none"
+      className="flex min-h-9 w-full min-w-0 items-center gap-2.5 rounded-control px-2 py-1 text-left transition-colors [--keyboard-focus-offset:-2px] duration-150 ease-out hover:bg-list-hover active:bg-list-selection motion-reduce:transition-none"
       aria-label={`Open ${label}. Status: ${status}.${recordedModel ? ` ${recordedModel.spoken}.` : ""}`}
       onClick={(event) => onOpen(runId, event.currentTarget)}
     >
-      <SubagentMark role={role} state={state} activity={run?.activity} size={18} />
-      <span className="flex min-w-0 flex-col">
-        <span className="flex min-w-0 items-center gap-1.5">
-          <span className="min-w-0 truncate text-small text-primary">{label}</span>
-          {roleName ? (
-            <span className="shrink-0 rounded-full bg-control px-1.5 text-mini text-secondary">
-              {roleName}
-            </span>
-          ) : null}
-        </span>
-        <span
-          className={cn(
-            "truncate text-mini text-tertiary",
-            state === "failed" && "text-red",
-            (state === "timed_out" || state === "needs_attention") && "text-support-warning",
-          )}
-          title={status}
-        >
-          {status}
-        </span>
+      <SubagentMark role={role} state={state} activity={run?.activity} size={16} />
+      <span className="min-w-0 flex-1 truncate text-small text-primary">{label}</span>
+      {roleName ? (
+        <span className="shrink-0 rounded-full bg-control px-1.5 text-mini text-secondary">{roleName}</span>
+      ) : null}
+      <span
+        className={cn(
+          "min-w-0 max-w-[45%] shrink truncate text-mini text-tertiary",
+          state === "failed" && "text-red",
+          (state === "timed_out" || state === "needs_attention") && "text-support-warning",
+        )}
+        title={status}
+      >
+        {status}
       </span>
-      <span className="text-mini whitespace-nowrap text-tertiary tabular-nums">
+      <span className="shrink-0 text-mini whitespace-nowrap text-tertiary tabular-nums">
         {elapsedMs === undefined ? "" : formatSubagentElapsed(elapsedMs)}
       </span>
     </button>

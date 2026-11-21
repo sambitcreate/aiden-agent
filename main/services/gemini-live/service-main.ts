@@ -11,14 +11,22 @@ import { GeminiLiveComputerUseBridge } from "./computer-use-bridge.js";
 import { prepareLiveToolProviders } from "./live-tool-providers.js";
 import { aidenLivePreferences } from "../../../renderer/shared/aiden-live-settings.js";
 import { app } from "../../platform.js";
+import { hostPlatformCapabilities } from "../host-platform-capabilities.js";
 import { createGeminiLiveAcceptanceEvidenceRecorder } from "./acceptance-evidence.js";
 import { AidenLiveThreadStore } from "../aiden-live-thread-store.js";
 import * as path from "node:path";
 import { randomUUID } from "node:crypto";
 import type { RendererDocumentOwner } from "../renderer-document-owner.js";
 import { Behavior } from "@google/genai";
-import { session } from "electron";
+import { desktopCapturer, session } from "electron";
 import { installGeminiLiveDisplayMediaGuards } from "./display-media-contract.js";
+import {
+  listLiveDisplaySources,
+  liveDisplayPickerMode,
+  resolveLiveDisplaySource,
+  type LiveDisplayPickerMode,
+} from "./display-source-picker.js";
+import type { LiveDisplaySources } from "../../../renderer/shared/assistant-live.js";
 
 const aidenLiveThreadStore = new AidenLiveThreadStore(() =>
   path.join(app.getPath("userData"), "aiden-live"),
@@ -76,6 +84,35 @@ const LIVE_COMPUTER_USE_DESCRIPTION =
 
 let disposeDisplayMediaGuards: (() => void) | null = null;
 
+function linuxLiveDisplayPickerMode(): LiveDisplayPickerMode {
+  const override = app.commandLine.hasSwitch("ozone-platform")
+    ? app.commandLine.getSwitchValue("ozone-platform")
+    : undefined;
+  return liveDisplayPickerMode(process.env, override);
+}
+
+/**
+ * What the renderer's Choose… shows. On Linux under X11 Aiden lists the
+ * screens and windows itself; under Wayland the desktop portal picks; macOS
+ * uses its system picker, so there is nothing to list.
+ */
+export async function liveDisplaySourcesFor(
+  owner: RendererDocumentOwner,
+): Promise<LiveDisplaySources> {
+  if (
+    process.platform !== "linux" ||
+    owner.isDestroyed() ||
+    !geminiLiveScreenEnabled() ||
+    !hostPlatformCapabilities().liveScreenShare
+  ) {
+    return { mode: "unavailable" };
+  }
+  const mode = linuxLiveDisplayPickerMode();
+  if (mode === "portal") return { mode };
+  const sources = await listLiveDisplaySources(desktopCapturer);
+  return owner.isDestroyed() ? { mode: "unavailable" } : { mode, sources };
+}
+
 /**
  * The voice-only beta resolves only the recorded
  * `gemini-3.8-live-extended-thinking` model; it
@@ -101,12 +138,17 @@ export const geminiLiveService = new GeminiLiveService({
   },
   resolveModel: () => experimentalGeminiLiveModel(),
   resolveVoice: async () => aidenLivePreferences(await configStore.getSettings()).voice,
-  screenShareEnabled: () => geminiLiveScreenEnabled(),
+  screenShareEnabled: () => geminiLiveScreenEnabled() && hostPlatformCapabilities().liveScreenShare,
   onDisplayBindingsChanged: (bindings) => {
     if (bindings.length > 0 && !disposeDisplayMediaGuards) {
       disposeDisplayMediaGuards = installGeminiLiveDisplayMediaGuards(
         session.defaultSession,
         () => geminiLiveService.displayMediaBindings(),
+        // macOS uses its system picker; Linux resolves the person's choice here.
+        process.platform === "linux"
+          ? (binding) =>
+              resolveLiveDisplaySource(desktopCapturer, linuxLiveDisplayPickerMode(), binding.sourceId)
+          : undefined,
       );
     } else if (bindings.length === 0 && disposeDisplayMediaGuards) {
       const dispose = disposeDisplayMediaGuards;

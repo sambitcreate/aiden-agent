@@ -147,8 +147,6 @@ const appSourcePaths = [
   "AidenOnTheGo/Features/Remote/Hosts/AidenHostRegistry.swift",
   "AidenOnTheGo/Features/Remote/AidenInboxViews.swift",
   "AidenOnTheGo/Features/Remote/AidenMarkdownContentCache.swift",
-  "AidenOnTheGo/Features/Remote/AidenOnboardingArtwork.swift",
-  "AidenOnTheGo/Features/Remote/AidenOnboardingVignettes.swift",
   "AidenOnTheGo/Features/Remote/AidenPairingView.swift",
   "AidenOnTheGo/Features/Remote/AidenProvidersView.swift",
   "AidenOnTheGo/Features/Shell/AidenUnifiedInboxStore.swift",
@@ -323,7 +321,6 @@ const testSources = [
   "AidenInboxTests.swift",
   "AidenNativeIntegrationTests.swift",
   "AidenNetworkPathTests.swift",
-  "AidenOnboardingArtTests.swift",
   "AidenAppShellTests+Bots.swift",
   "AidenRemoteClientTests.swift",
   "AidenRemoteContractFixture.swift",
@@ -679,7 +676,6 @@ test("the Aiden home, onboarding, composer, schedules, and activity retain the r
   const [
     shell,
     pairing,
-    content,
     chat,
     attachmentPicker,
     attachmentCamera,
@@ -693,7 +689,6 @@ test("the Aiden home, onboarding, composer, schedules, and activity retain the r
   ] = await Promise.all([
     readWorkspaceShellSources(),
     readFile(`${iosRoot}AidenOnTheGo/Features/Remote/AidenPairingView.swift`, "utf8"),
-    readFile(`${iosRoot}AidenOnTheGo/ContentView.swift`, "utf8"),
     readChatFeatureSources(),
     readFile(`${iosRoot}AidenOnTheGo/Features/Chat/AidenAttachmentPicker.swift`, "utf8"),
     readFile(`${iosRoot}AidenOnTheGo/Features/Chat/AidenAttachmentCamera.swift`, "utf8"),
@@ -781,76 +776,8 @@ test("the Aiden home, onboarding, composer, schedules, and activity retain the r
     shell,
     /isArchived\(workspaceID: chat\.workspaceId[\s\S]*?Unarchive it from Workspaces/u,
   );
-  assert.match(pairing, /Aiden, wherever you are\./u);
-  assert.match(pairing, /task\(id: step\)[\s\S]*?if step == 2[\s\S]*?discovery\.start\(\)/u);
-  assert.match(
-    pairing,
-    /static let primary: \[AidenPairingMethod\] = \[[\s\S]*?\.scanQRCode[\s\S]*?\.nearbyMac[\s\S]*?\.privateAddress/u,
-  );
-  assert.match(pairing, /static let advanced: \[AidenPairingMethod\] = \[\.pastePayload\]/u);
-  assert.match(pairing, /case \.scanQRCode: return String\(localized: "Scan QR Code"\)/u);
-  assert.match(
-    pairing,
-    /case \.nearbyMac: return String\(localized: "Nearby Computer \+ Setup Code"\)/u,
-  );
-  assert.match(
-    pairing,
-    /case \.privateAddress: return String\(localized: "Private Address \+ Setup Code"\)/u,
-  );
-  assert.match(pairing, /case \.nearbyMac: return String\(localized: "Local Network"\)/u);
-  assert.match(pairing, /case \.privateAddress: return String\(localized: "Tailscale"\)/u);
-  assert.match(pairing, /Picker\("Connection method", selection: \$selectedPairingMethod\)/u);
-  assert.match(
-    pairing,
-    /TabView\(selection: \$selectedPairingMethod\)[\s\S]*?qrPairingPage\.tag\(AidenPairingMethod\.scanQRCode\)[\s\S]*?nearbyMacPairingPage\.tag\(AidenPairingMethod\.nearbyMac\)[\s\S]*?privateAddressPairingPage\.tag\(AidenPairingMethod\.privateAddress\)/u,
-  );
-  assert.match(pairing, /\.tabViewStyle\(\.page\(indexDisplayMode: \.never\)\)/u);
-  assert.match(pairing, /Paste Pairing Payload[\s\S]*?More pairing options/u);
-  assert.match(pairing, /BOTS AND WORKSPACES/u);
-  assert.match(
-    pairing,
-    /When Bots are available on your paired computer[\s\S]*?use them as reusable helpers from the Bots tab\./u,
-  );
-  assert.match(pairing, /Image\("AidenAppIcon"\)[\s\S]*?Text\("Aiden On The Go"\)/u);
   assert.doesNotMatch(pairing, /AidenSidebarLogo/u);
-  assert.match(
-    pairing,
-    /GeometryReader \{ proxy in[\s\S]*?AidenMobileOnboardingLayout\.contentWidth\(for: proxy\.size\.width\)[\s\S]*?AidenMobileOnboardingLayout\.contentHeight\(for: proxy\.size\.height\)/u,
-  );
-  assert.match(pairing, /ViewThatFits\(in: \.vertical\)[\s\S]*?onboardingPhaseContent/u);
   assert.doesNotMatch(pairing, /UIDevice\.current\.userInterfaceIdiom/u);
-  assert.match(
-    pairing,
-    /onboardingActionButton\(action:[\s\S]*?Text\("Scan the Code"\)[\s\S]*?Label\("Open Camera", systemImage: "qrcode\.viewfinder"\)/u,
-  );
-  assert.match(
-    pairing,
-    /private var qrPairingPage:[\s\S]*?\.safeAreaInset\(edge: \.bottom, spacing: 0\) \{[\s\S]*?Label\("Open Camera", systemImage: "qrcode\.viewfinder"\)/u,
-  );
-  assert.match(
-    pairing,
-    /private func onboardingActionButton<[\s\S]*?maximumActionWidth[\s\S]*?actionHorizontalPadding/u,
-  );
-  assert.match(
-    pairing,
-    /Text\(isOnboardingLastPage \? "Set Up Connection" : "Continue"\)[\s\S]*?Text\("Scan the Code"\)[\s\S]*?Label\("Open Camera", systemImage: "qrcode\.viewfinder"\)/u,
-  );
-  assert.doesNotMatch(
-    pairing,
-    /Text\("Scan the Code"\)[\s\S]{0,180}?\.background\(\.bar\)/u,
-  );
-  assert.doesNotMatch(
-    pairing,
-    /Section \{[\s\S]{0,240}?Label\("Open Camera", systemImage: "qrcode\.viewfinder"\)/u,
-  );
-  assert.match(pairing, /button\.buttonStyle\(\.glassProminent\)/u);
-  assert.match(content, /@AppStorage\("aiden\.mobileOnboarding\.v1\.complete"\)/u);
-  assert.match(content, /showsIntroduction: !hasCompletedMobileOnboarding/u);
-  assert.match(content, /onIntroductionComplete:[\s\S]*?hasCompletedMobileOnboarding = true/u);
-  assert.match(pairing, /The QR already contains the selected Local Network or Tailscale address/u);
-  assert.match(pairing, /https:\/\/computer-name\.local:49220\/api\/aiden\/v1/u);
-  assert.match(pairing, /https:\/\/computer-name\.tailnet\.ts\.net\/api\/aiden\/v1/u);
-  assert.doesNotMatch(pairing, /ForEach\(AidenPairingMethod\.primary\)[\s\S]*?NavigationLink/u);
   assert.match(
     chat,
     /AidenAttachmentPickerOverlay\([\s\S]*?onCaptureCameraPhoto: commitCapturedPhoto[\s\S]*?onCommitPhotos: commitSelectedPhotos/u,

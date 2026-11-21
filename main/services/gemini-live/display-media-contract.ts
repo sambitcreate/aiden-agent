@@ -16,6 +16,11 @@ export interface GeminiLiveDisplayMediaBinding {
   readonly bindingId: string;
   readonly documentId: string;
   readonly owner: RendererDocumentOwner;
+  /**
+   * The screen or window the person chose in Aiden's own picker (Linux on
+   * X11), or null where the system picker or desktop portal chooses.
+   */
+  readonly sourceId: string | null;
   allowsDisplayRequest(request: Electron.DisplayMediaRequestHandlerHandlerRequest): boolean;
   allowsPermissionRequest(
     webContents: Electron.WebContents,
@@ -48,6 +53,7 @@ function liveFrame(frame: Electron.WebFrameMain): boolean {
  */
 export function bindGeminiLiveDisplayMediaDocument(
   event: Electron.IpcMainInvokeEvent,
+  sourceId: string | null = null,
 ): GeminiLiveDisplayMediaBinding {
   const owner = rendererDocumentOwner(
     event,
@@ -75,6 +81,7 @@ export function bindGeminiLiveDisplayMediaDocument(
     bindingId: randomUUID(),
     documentId: owner.documentId,
     owner,
+    sourceId,
     allowsDisplayRequest: (request) =>
       current() &&
       request.userGesture === true &&
@@ -87,10 +94,14 @@ export function bindGeminiLiveDisplayMediaDocument(
       const audioOnly =
         details.mediaType === "audio" ||
         (details.mediaTypes?.length === 1 && details.mediaTypes[0] === "audio");
+      // On Linux, getDisplayMedia asks for "media" with no camera or microphone
+      // types; the display handler then decides which screen, if any.
+      const displayOnly =
+        permission === "media" && Array.isArray(details.mediaTypes) && details.mediaTypes.length === 0;
       return (
         current() &&
         webContents === sender &&
-        (permission === "display-capture" || (permission === "media" && audioOnly)) &&
+        (permission === "display-capture" || (permission === "media" && (audioOnly || displayOnly))) &&
         details.isMainFrame === true &&
         details.requestingUrl === requestingUrl
       );
@@ -129,16 +140,27 @@ interface DisplayMediaGuardSession {
 const guardedSessions = new WeakMap<object, () => void>();
 
 /**
+ * Picks the capture source for an admitted request where no system picker
+ * runs (Linux). Null denies the request.
+ */
+export type GeminiLiveDisplaySourceResolver = (
+  binding: GeminiLiveDisplayMediaBinding,
+) => Promise<Electron.DesktopCapturerSource | null>;
+
+/**
  * Installs the display-capture boundary once per Electron session. Every
  * display or microphone permission succeeds only for a currently bound Live
  * document. Every unrelated permission is denied while this temporary guard
  * owns the session policy, and disposal restores Electron's default handlers.
- * The system-picker session never dispatches to the fallback handler; any
- * non-picker dispatch is denied rather than trusted to select a source.
+ * The macOS system-picker session never dispatches to the fallback handler.
+ * Without a resolver (macOS) any such dispatch is denied; with one (Linux) a
+ * bound document's request gets the resolver's source, and anything else is
+ * denied.
  */
 export function installGeminiLiveDisplayMediaGuards(
   electronSession: DisplayMediaGuardSession,
   getBindings: () => readonly GeminiLiveDisplayMediaBinding[],
+  resolveSource?: GeminiLiveDisplaySourceResolver,
 ): () => void {
   const installed = guardedSessions.get(electronSession);
   if (installed) return installed;
@@ -179,8 +201,25 @@ export function installGeminiLiveDisplayMediaGuards(
     },
   );
   electronSession.setDisplayMediaRequestHandler(
-    (_request, callback) => {
-      callback({});
+    (request, callback) => {
+      // macOS shows its system picker and never dispatches here. Elsewhere a
+      // resolver may supply the source, but only for a bound Live document's
+      // own request, still bound once the source is known.
+      const binding = resolveSource
+        ? getBindings().find((candidate) => candidate.allowsDisplayRequest(request))
+        : undefined;
+      if (!resolveSource || !binding) {
+        callback({});
+        return;
+      }
+      resolveSource(binding).then(
+        (source) => {
+          const stillBound =
+            active && getBindings().includes(binding) && binding.allowsDisplayRequest(request);
+          callback(source && stillBound ? { video: source } : {});
+        },
+        () => callback({}),
+      );
     },
     GEMINI_LIVE_SYSTEM_PICKER_OPTIONS,
   );

@@ -644,6 +644,81 @@ test("Computer Use cannot be enabled when the global helper is unavailable", asy
   await fixture.unmount();
 });
 
+test("Linux Live is ready with a Google key alone and starts voice-only", async () => {
+  // Linux has no system microphone permission (main reports "unknown") and no
+  // Computer Use; neither may keep Live from starting there.
+  const unsupported: ComputerUseStatus = {
+    enabled: false,
+    beta: true,
+    state: "unsupported",
+    detail: "Computer Use is not included on this platform.",
+    ready: false,
+    available: false,
+    retryable: false,
+    canRequestPermissions: false,
+    permissions: { accessibility: null, screenRecording: null },
+  };
+  const fixture = await mountHook({
+    platform: "linux",
+    getMicrophoneStatus: async () => "unknown",
+    computerUse: { status: async () => unsupported },
+  });
+  try {
+    const live = fixture.controller();
+    assert.equal(live.microphonePermission, "granted");
+    assert.match(live.microphonePermissionDetail, /Linux doesn’t ask apps for microphone permission/u);
+    assert.equal(live.computerUseOffered, false);
+    assert.equal(live.setupComplete, true);
+    assert.equal(live.startBlockedReason, null);
+    await live.start();
+    await settle();
+    assert.deepEqual(fixture.startIntents(), [
+      { microphone: true, computerUseAuthorization: null, screen: false },
+    ]);
+    assert.equal(fixture.controller().microphoneActive, true);
+  } finally {
+    await fixture.unmount();
+  }
+});
+
+test("an unreadable microphone status still blocks Live on a Mac", async () => {
+  const fixture = await mountHook({ platform: "darwin", getMicrophoneStatus: async () => "unknown" });
+  try {
+    assert.equal(fixture.controller().microphonePermission, "unavailable");
+    assert.equal(fixture.controller().setupComplete, false);
+    await fixture.controller().start();
+    assert.equal(fixture.startCalls(), 0);
+  } finally {
+    await fixture.unmount();
+  }
+});
+
+test("a Mac without Computer Use set up can still start Live without screen actions", async () => {
+  const notReady: ComputerUseStatus = {
+    enabled: false,
+    beta: true,
+    state: "disabled",
+    detail: "Turn on the Computer Use beta to make it available in individual chats.",
+    ready: false,
+    available: false,
+    retryable: false,
+    canRequestPermissions: false,
+    permissions: { accessibility: null, screenRecording: null },
+  };
+  const fixture = await mountHook({ platform: "darwin", computerUse: { status: async () => notReady } });
+  try {
+    assert.equal(fixture.controller().computerUseOffered, true);
+    assert.equal(fixture.controller().computerUseEnabled, false);
+    assert.equal(fixture.controller().setupComplete, true);
+    await fixture.controller().start();
+    assert.deepEqual(fixture.startIntents(), [
+      { microphone: true, computerUseAuthorization: null, screen: false },
+    ]);
+  } finally {
+    await fixture.unmount();
+  }
+});
+
 test("mounted Live hook allows readiness review but blocks start during an ordinary collision", async () => {
   for (const reason of [
     "Finish or stop the current Aiden response before starting Live.",
@@ -2303,4 +2378,109 @@ test("Live without a chosen source starts audio-only and the picker stays re-arm
   assert.equal(state.frameSource.captures, 0);
   await fixture.controller().stop();
   await fixture.unmount();
+});
+
+test("on Linux under X11 the person picks a screen in Aiden before capture, and cancelling binds nothing", async () => {
+  const { dependencies, state } = screenDependencies();
+  const boundSources: Array<string | undefined> = [];
+  const sources = [
+    { id: "screen:0:0", name: "Entire screen", kind: "screen" as const, thumbnail: "" },
+    { id: "window:9:0", name: "Editor", kind: "window" as const, thumbnail: "" },
+  ];
+  const api = {
+    ...dependencies.api!,
+    displaySources: async () => ({ mode: "list" as const, sources }),
+    bindDisplay: async (sourceId?: string) => {
+      boundSources.push(sourceId);
+      state.binds.push(1);
+      return `binding-${state.binds.length}`;
+    },
+  };
+  const fixture = await mountHook({ ...dependencies, api, platform: "linux" });
+  try {
+    const choosing = fixture.controller().chooseScreenSource();
+    await settle();
+    assert.deepEqual(fixture.controller().screenSourceChoices, sources);
+    assert.equal(fixture.controller().screenBusy, true);
+    assert.equal(state.binds.length, 0, "nothing is bound before the person picks");
+    fixture.controller().pickScreenSource(null);
+    await choosing;
+    await settle();
+    assert.equal(fixture.controller().screenSourceChoices, null);
+    assert.equal(state.binds.length, 0);
+    assert.equal(fixture.controller().screenError, null, "cancelling is not an error");
+    assert.equal(fixture.controller().screenBusy, false);
+
+    const choosingAgain = fixture.controller().chooseScreenSource();
+    await settle();
+    fixture.controller().pickScreenSource("window:9:0");
+    await choosingAgain;
+    await settle();
+    assert.deepEqual(boundSources, ["window:9:0"]);
+    assert.equal(fixture.controller().screenSourceLabel, "Aiden window");
+  } finally {
+    await fixture.unmount();
+  }
+});
+
+test("on Wayland the desktop portal picks, so Aiden binds without a source of its own", async () => {
+  const { dependencies } = screenDependencies();
+  const boundSources: Array<string | undefined> = [];
+  const api = {
+    ...dependencies.api!,
+    displaySources: async () => ({ mode: "portal" as const }),
+    bindDisplay: async (sourceId?: string) => {
+      boundSources.push(sourceId);
+      return "binding-portal";
+    },
+  };
+  const fixture = await mountHook({ ...dependencies, api, platform: "linux" });
+  try {
+    await fixture.controller().chooseScreenSource();
+    await settle();
+    assert.equal(fixture.controller().screenSourceChoices, null, "Aiden shows no picker of its own");
+    assert.deepEqual(boundSources, [undefined]);
+    assert.equal(fixture.controller().screenSourceLabel, "Aiden window");
+  } finally {
+    await fixture.unmount();
+  }
+});
+
+test("closing setup while Aiden's screen picker is open cancels it", async () => {
+  const { dependencies, state } = screenDependencies();
+  const api = {
+    ...dependencies.api!,
+    displaySources: async () => ({
+      mode: "list" as const,
+      sources: [{ id: "screen:0:0", name: "Entire screen", kind: "screen" as const, thumbnail: "" }],
+    }),
+  };
+  const fixture = await mountHook({ ...dependencies, api, platform: "linux" });
+  try {
+    fixture.controller().setSetupOpen(true);
+    const choosing = fixture.controller().chooseScreenSource();
+    await settle();
+    assert.notEqual(fixture.controller().screenSourceChoices, null);
+    fixture.controller().setSetupOpen(false);
+    await choosing;
+    await settle();
+    assert.equal(fixture.controller().screenSourceChoices, null);
+    assert.equal(state.binds.length, 0);
+  } finally {
+    await fixture.unmount();
+  }
+});
+
+test("a Linux desktop with nothing to share says so", async () => {
+  const { dependencies, state } = screenDependencies();
+  const api = { ...dependencies.api!, displaySources: async () => ({ mode: "list" as const, sources: [] }) };
+  const fixture = await mountHook({ ...dependencies, api, platform: "linux" });
+  try {
+    await fixture.controller().chooseScreenSource();
+    await settle();
+    assert.equal(state.binds.length, 0);
+    assert.match(fixture.controller().screenError ?? "", /couldn’t find a screen or window/u);
+  } finally {
+    await fixture.unmount();
+  }
 });

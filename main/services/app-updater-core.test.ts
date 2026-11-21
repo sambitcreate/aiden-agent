@@ -433,6 +433,13 @@ async function simulatedService() {
     // call through this empty module would fail the test instead of touching disk.
     "node:fs/promises": {},
     "node:path": nodePath,
+    // The Linux DEB/RPM installer; a macOS service never runs a command.
+    "node:child_process": {
+      execFile: () => {
+        throw new Error("the updater ran a command");
+      },
+    },
+    "node:os": { tmpdir: () => "/simulated-tmp" },
   };
   // The service loads electron-updater lazily through createRequire.
   mocks["node:module"] = {

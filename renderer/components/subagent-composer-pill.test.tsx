@@ -171,7 +171,7 @@ test("a chat whose subagents all finished earlier shows no pill", () => {
   assert.equal(screen.queryByRole("button", { name: /subagent details/u }), null);
 });
 
-test("the pill counts the running batch and headlines the run that changed most recently", () => {
+test("the pill sums up the running batch in the same words as its transcript card", () => {
   mount([
     runView("old", "completed", { generationId: "generation-1" }),
     runView("a", "running", { activity: "Reading README.md", updatedAt: Date.now() - 9_000 }),
@@ -179,8 +179,9 @@ test("the pill counts the running batch and headlines the run that changed most 
     runView("c", "completed"),
   ]);
   const trigger = pillTrigger();
-  assert.match(trigger.textContent ?? "", /2 subagents/u);
-  assert.match(trigger.textContent ?? "", /Run b · Searching workspace text/u);
+  assert.match(trigger.textContent ?? "", /^2 working · 1 completed/u);
+  // Per-run activity lives in the card and the tray, not the pill.
+  assert.doesNotMatch(trigger.textContent ?? "", /Searching workspace text/u);
   // Longest elapsed across the batch, ticking from each run's start.
   assert.match(trigger.textContent ?? "", /1m \d+s/u);
   // The label stays put while activity ticks, so a focused trigger is not re-read each step.
@@ -190,12 +191,13 @@ test("the pill counts the running batch and headlines the run that changed most 
   assert.equal(screen.queryByRole("button", { name: "Dismiss finished subagents" }), null);
 });
 
-test("a run waiting on the person outranks every other headline", () => {
+test("a run waiting on the person leads the summary and names itself to assistive tech", () => {
   mount([
     runView("a", "running", { activity: "Reading README.md", updatedAt: Date.now() }),
     runView("b", "needs_attention", { updatedAt: Date.now() - 30_000 }),
   ]);
-  assert.match(pillTrigger().textContent ?? "", /Run b needs your attention/u);
+  assert.match(pillTrigger().textContent ?? "", /^1 needs attention · 1 working/u);
+  assert.match(pillTrigger().getAttribute("aria-label") ?? "", /Run b needs your attention/u);
 });
 
 test("the tray lists the batch, opens the headline run's live feed, and closes with Escape", async () => {
@@ -316,19 +318,19 @@ test("a run whose Stop is in flight cannot be stopped again", async () => {
 
 test("a settled batch stays as a finished summary until dismissed, and the next run replaces it", () => {
   const { rerender } = mount([runView("a", "running"), runView("b", "running")]);
-  assert.match(pillTrigger().textContent ?? "", /2 subagents/u);
+  assert.match(pillTrigger().textContent ?? "", /^2 working/u);
 
   rerender([runView("a", "completed"), runView("b", "failed", { error: "Provider refused" })]);
   const trigger = pillTrigger();
-  assert.match(trigger.textContent ?? "", /2 subagents finished/u);
-  assert.match(trigger.textContent ?? "", /1 failed · 1 completed/u);
+  assert.match(trigger.textContent ?? "", /^1 failed · 1 completed/u);
+  assert.match(trigger.getAttribute("aria-label") ?? "", /^2 subagents finished\./u);
 
   fireEvent.click(screen.getByRole("button", { name: "Dismiss finished subagents" }));
   assert.equal(screen.queryByRole("button", { name: /subagent details/u }), null);
 
   // Old settled runs do not return; a run started later in the same turn brings the pill back.
   rerender([runView("a", "completed"), runView("b", "failed"), runView("c", "running")]);
-  assert.match(pillTrigger().textContent ?? "", /^1 subagent(?!s)/u);
+  assert.match(pillTrigger().textContent ?? "", /^1 working/u);
   assert.doesNotMatch(pillTrigger().textContent ?? "", /Run a|Run b/u);
 });
 
@@ -430,7 +432,7 @@ test("a batch left with only background runs can be hidden until another run sta
   assert.equal(screen.queryByRole("button", { name: /subagent details/u }), null);
 
   rerender([...backgroundOnly, runView("next", "running")]);
-  assert.match(pillTrigger().textContent ?? "", /^1 subagent(?!s)/u);
+  assert.match(pillTrigger().textContent ?? "", /^1 working/u);
 });
 
 test("a batch that settles after coming back to the chat ends, even if an earlier turn's runs never return", async () => {
@@ -442,7 +444,7 @@ test("a batch that settles after coming back to the chat ends, even if an earlie
   rerender([], "chat-1");
   rerender([runView("b", "running", { generationId: "generation-2" })]);
   rerender([runView("b", "completed", { generationId: "generation-2" })]);
-  assert.match(pillTrigger().textContent ?? "", /1 subagent finished/u);
+  assert.match(pillTrigger().textContent ?? "", /^1 finished/u);
   // The next turn starts a batch of its own instead of joining the finished one.
   rerender([
     runView("b", "completed", { generationId: "generation-2" }),
@@ -480,7 +482,8 @@ test("a hidden background run that needs the person brings the pill back until i
   assert.equal(screen.queryByRole("button", { name: /subagent details/u }), null);
 
   rerender([runView("fg", "completed"), runView("bg", "needs_attention", { execution: "background" })]);
-  assert.match(pillTrigger().textContent ?? "", /Run bg needs your attention/u);
+  assert.match(pillTrigger().textContent ?? "", /^1 needs attention/u);
+  assert.match(pillTrigger().getAttribute("aria-label") ?? "", /Run bg needs your attention/u);
   assert.equal(screen.queryByRole("button", { name: "Hide background subagents" }), null);
 });
 

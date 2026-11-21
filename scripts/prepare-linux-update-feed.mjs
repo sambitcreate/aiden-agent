@@ -5,12 +5,17 @@ import { lstat, readFile, realpath, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-export async function prepareLinuxUpdateFeed(directory, arch, version, { verify = false } = {}) {
-  if (!["x64", "arm64"].includes(arch) || !/^\d+\.\d+\.\d+$/u.test(version)) {
-    throw new Error("Expected a supported Linux architecture and stable release version.");
-  }
-  const root = await realpath(directory);
-  const name = `Aiden-Agent-${version}-${arch === "x64" ? "x86_64" : "arm64"}-linux.AppImage`;
+/** Release asset names per format; each architecture keeps its own feed. */
+export function linuxUpdateAssetNames(arch, version) {
+  const x64 = arch === "x64";
+  return [
+    `Aiden-Agent-${version}-${x64 ? "x86_64" : "arm64"}-linux.AppImage`,
+    `Aiden-Agent-${version}-${x64 ? "amd64" : "arm64"}-linux.deb`,
+    `Aiden-Agent-${version}-${x64 ? "x86_64" : "aarch64"}-linux.rpm`,
+  ];
+}
+
+async function describeAsset(root, name) {
   const asset = path.join(root, name);
   const info = await lstat(asset);
   if (!info.isFile() || info.isSymbolicLink() || info.size === 0 || await realpath(asset) !== asset) {
@@ -18,10 +23,23 @@ export async function prepareLinuxUpdateFeed(directory, arch, version, { verify 
   }
   const hash = createHash("sha512");
   for await (const chunk of createReadStream(asset)) hash.update(chunk);
-  const digest = hash.digest("base64");
-  // Generate a minimal fixed-origin feed containing only the verified AppImage.
-  // DEB/RPM installation remains owned by the distribution package manager.
-  const contents = `version: ${version}\nfiles:\n  - url: ${name}\n    sha512: ${digest}\n    size: ${info.size}\npath: ${name}\nsha512: ${digest}\n`;
+  return { name, sha512: hash.digest("base64"), size: info.size };
+}
+
+export async function prepareLinuxUpdateFeed(directory, arch, version, { verify = false } = {}) {
+  if (!["x64", "arm64"].includes(arch) || !/^\d+\.\d+\.\d+$/u.test(version)) {
+    throw new Error("Expected a supported Linux architecture and stable release version.");
+  }
+  const root = await realpath(directory);
+  const assets = [];
+  for (const name of linuxUpdateAssetNames(arch, version)) assets.push(await describeAsset(root, name));
+  // A minimal fixed-origin feed with the verified AppImage, DEB and RPM.
+  // Each installed format downloads only its own file (electron-updater picks
+  // by extension); the AppImage stays first and in the legacy path/sha512
+  // fields so older AppImage builds keep updating.
+  const [appImage] = assets;
+  const files = assets.map(({ name, sha512, size }) => `  - url: ${name}\n    sha512: ${sha512}\n    size: ${size}\n`).join("");
+  const contents = `version: ${version}\nfiles:\n${files}path: ${appImage.name}\nsha512: ${appImage.sha512}\n`;
   const feed = path.join(root, arch === "x64" ? "latest-linux.yml" : "latest-linux-arm64.yml");
   try {
     const feedInfo = await lstat(feed);
