@@ -2,6 +2,7 @@ import { ipcMain } from "../platform.js";
 import {
   authorizeAidenLiveComputerUse,
   geminiLiveService,
+  liveDisplaySourcesFor,
 } from "../services/gemini-live/service-main.js";
 import { rendererDocumentOwner } from "../services/renderer-document-owner.js";
 import {
@@ -12,6 +13,7 @@ import {
   parseAssistantLiveAudioIntent,
   parseAssistantLiveEmptyIntent,
   parseAssistantLiveFrameIntent,
+  parseAssistantLiveDisplayBindIntent,
   parseAssistantLiveDisplayReleaseIntent,
   parseAssistantLiveStopIntent,
   parseAssistantLiveToolResultIntent,
@@ -51,9 +53,13 @@ export function registerAssistantLiveHandlers(): void {
     const intent = parseAssistantLiveAudioIntent(input);
     return geminiLiveService.sendAudio(owner(event), intent.sessionId, intent.pcm);
   });
+  ipcMain.handle("assistant-live:display-sources", (event, input: unknown) => {
+    parseAssistantLiveEmptyIntent(input, "display-sources");
+    return liveDisplaySourcesFor(owner(event));
+  });
   ipcMain.handle("assistant-live:display-bind", (event, input: unknown) => {
-    parseAssistantLiveEmptyIntent(input, "display-bind");
-    const binding = bindGeminiLiveDisplayMediaDocument(event);
+    const intent = parseAssistantLiveDisplayBindIntent(input);
+    const binding = bindGeminiLiveDisplayMediaDocument(event, intent.sourceId);
     return geminiLiveService.bindDisplayMedia(owner(event), binding);
   });
   ipcMain.handle("assistant-live:display-release", (event, input: unknown) => {
