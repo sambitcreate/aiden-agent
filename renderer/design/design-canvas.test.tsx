@@ -12,7 +12,8 @@ import { useComposerTypeFocus } from "../lib/use-composer-type-focus";
 import { emptyDesignCanvas, type DesignCanvas, type DesignFrame } from "../shared/design-canvas/schema";
 import { DesignCanvasRegion } from "./design-canvas-region";
 import { designFrameSnapshots } from "./frame-snapshots";
-import { designCommentTray } from "./comment-tray-store";
+import { designCommentTray, type DesignCommentSend } from "./comment-tray-store";
+import { DESIGN_CANVAS_SAVE_DELAY_MS } from "./use-design-canvas";
 
 // The canvas imports React Flow's CSS, which Node cannot load; tests get an empty module.
 registerHooks({
@@ -535,12 +536,56 @@ test("the comment tool drops a pin on the canvas, and a saved comment waits in t
 
   const tray = designCommentTray("chat-1");
   assert.deepEqual(tray?.comments.map((entry) => [entry.label, entry.note]), [["Canvas", "Add a footer here"]]);
-  assert.match(tray!.block, /"note": "Add a footer here"/u);
+  assert.match(tray!.block(), /"note": "Add a footer here"/u);
 
-  act(() => tray!.markSent([comment.id]));
-  await waitFor(() => assert.equal(saved()?.comments[0]?.state, "sent"), SAVE_WAIT);
+  let send: DesignCommentSend | null | undefined;
+  await act(async () => {
+    send = await tray!.markSent([comment.id]);
+  });
+  // Saved before the message goes, not after the edit debounce, so Aiden's turn finds the comment sent.
+  assert.equal(saved()?.comments[0]?.state, "sent", "saved by the time markSent resolves");
   assert.equal(designCommentTray("chat-1"), null, "a sent comment leaves the tray");
   assert.ok(await screen.findByRole("button", { name: "Comment 1 on Canvas, sent to Aiden" }));
+
+  // The send then fails: the comment waits in the tray again.
+  act(() => send!.undo());
+  assert.deepEqual(designCommentTray("chat-1")?.comments.map((entry) => entry.note), ["Add a footer here"]);
+  await waitFor(() => assert.deepEqual([saved()?.comments[0]?.state, saved()?.comments[0]?.queued], ["open", true]), {
+    timeout: DESIGN_CANVAS_SAVE_DELAY_MS / 2,
+  });
+  assert.ok(await screen.findByRole("button", { name: "Comment 1 on Canvas" }));
+});
+
+test("when the canvas can't save a comment as sent, the comment stays in the tray and no send goes ahead", async () => {
+  measureCanvasAt1000x800();
+  let revision = 1;
+  let refuse = false;
+  const { saved } = setup(canvasWith(), {
+    "designCanvas:save": () => (refuse ? { ok: false, reason: "invalid", issues: ["too big"] } : { ok: true, revision: (revision += 1) }),
+  });
+  const region = await mount();
+  region.focus();
+  fireEvent.keyDown(region, { key: "c", code: "KeyC" });
+  fireEvent.click(document.querySelector(".react-flow__pane")!, { clientX: 300, clientY: 200 });
+  await screen.findByRole("dialog", { name: "New comment" });
+  const field = screen.getByRole("textbox", { name: "Comment" });
+  fireEvent.change(field, { target: { value: "Add a footer here" } });
+  fireEvent.keyDown(field, { key: "Enter", code: "Enter" });
+  await waitFor(() => assert.equal(saved()?.comments.length, 1), SAVE_WAIT);
+  const comment = saved()!.comments[0]!;
+
+  refuse = true;
+  let send: DesignCommentSend | null | undefined;
+  await act(async () => {
+    send = await designCommentTray("chat-1")!.markSent([comment.id]);
+  });
+  assert.equal(send, null, "the composer is told not to send");
+  assert.deepEqual(
+    designCommentTray("chat-1")?.comments.map((entry) => entry.note),
+    ["Add a footer here"],
+    "the comment waits in the tray for the next try",
+  );
+  assert.ok(await screen.findByRole("button", { name: "Comment 1 on Canvas" }), "and is not shown as sent");
 });
 
 test("a comment on a frame keeps its spot on the frame; with Send to Aiden off it stays a comment", async () => {
@@ -590,7 +635,7 @@ test("All comments lists comments by state, and choosing one shows its page and 
   const at = "2026-11-05T10:00:00.000Z";
   doc.comments = [
     { id: "c1", pageId: "page-1", x: 10, y: 10, note: "Warmer colours", state: "open", anchorState: "anchored", createdAt: at },
-    { id: "c2", pageId: "p2", x: 40, y: 40, note: "Show yearly prices", state: "open", anchorState: "anchored", createdAt: "2026-11-05T11:00:00.000Z" },
+    { id: "c2", pageId: "p2", x: 40, y: 40, note: "Show yearly prices", state: "open", anchorState: "anchored", createdAt: "2026-11-05T11:00:00.000Z", reply: { text: "Should yearly be the default?", at } },
     { id: "c3", pageId: "page-1", x: 0, y: 0, note: "Done already", state: "resolved", anchorState: "anchored", createdAt: at, resolvedAt: at },
   ];
   const { saved } = setup(doc);
@@ -608,7 +653,7 @@ test("All comments lists comments by state, and choosing one shows its page and 
   await waitFor(() => assert.equal(saved()?.activePageId, "p2"), SAVE_WAIT);
   const box = await screen.findByRole("dialog", { name: "Comment" });
   assert.equal((screen.getByRole("textbox", { name: "Comment" }) as HTMLTextAreaElement).value, "Show yearly prices");
-  assert.ok(box);
+  assert.ok(within(box).getByRole("region", { name: "Aiden's reply" }).textContent?.includes("Should yearly be the default?"), "Aiden's reply shows under the note");
 });
 
 test("the pen in the comment box draws marks over a frame, saved as fractions of it", async () => {

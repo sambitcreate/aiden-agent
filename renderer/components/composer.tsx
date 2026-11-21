@@ -43,7 +43,12 @@ import { AidenIcon } from "./aiden-icon";
 import { BusySendButton, type BusySendMode } from "./busy-send-button";
 import { useAppearancePreference } from "../lib/use-appearance-preference";
 import { ComposerContextBar, useAutoHideComposerContext } from "./composer-context-bar";
-import { commentCrop, designCommentAttachments, useDesignCommentTray } from "../design/comment-tray-store";
+import {
+  commentCrop,
+  designCommentAttachments,
+  useDesignCommentTray,
+  type DesignCommentSend,
+} from "../design/comment-tray-store";
 import { DesignCommentTray } from "../design/design-comment-tray";
 import { useComposerContextChips } from "./use-composer-context-chips";
 import { FollowThroughChips } from "./follow-through-chips";
@@ -670,6 +675,8 @@ export function Composer({
   const sendBlockedId = React.useId();
   const [sending, setSending] = React.useState(false);
   const sendPendingRef = React.useRef(false);
+  /** Set while a send's design comments are being marked sent, before the send itself claims `sendPendingRef`. */
+  const commentSendPendingRef = React.useRef(false);
   const firstSendPending = firstMessageSaving || (freezeWhileSending && sending);
   firstSendPendingRef.current = firstSendPending;
   const [permissionSaving, setPermissionSaving] = React.useState(false);
@@ -2134,7 +2141,7 @@ export function Composer({
     });
 
   const submit = async (busyModeOverride?: BusySendMode) => {
-    if (sendPendingRef.current || composing) return;
+    if (sendPendingRef.current || commentSendPendingRef.current || composing) return;
     if (dictationPreviewing) {
       blockSend("Wait for dictation to finish before sending.");
       return;
@@ -2199,7 +2206,7 @@ export function Composer({
     if (trayComments) {
       const extra = designCommentAttachments({
         block: trayComments.block,
-        pictures: trayComments.comments.map((comment) => commentCrop(chatId, comment.id)),
+        comments: trayComments.comments.map((comment) => ({ id: comment.id, picture: commentCrop(chatId, comment.id) })),
         existing: attachments,
         supportsImages: visionSupported !== false,
         id: crypto.randomUUID(),
@@ -2218,6 +2225,20 @@ export function Composer({
     } else if (!trimmed && attachments.length === 0) {
       return;
     }
+    // Marked sent and saved before the message goes, so Aiden's turn finds them sent.
+    let commentSend: DesignCommentSend | null = null;
+    if (trayComments) {
+      commentSendPendingRef.current = true;
+      try {
+        commentSend = await trayComments.markSent(trayComments.comments.map((comment) => comment.id));
+      } finally {
+        commentSendPendingRef.current = false;
+      }
+      if (!commentSend) {
+        blockSend("Couldn't save your design comments, so nothing was sent. Try again.");
+        return;
+      }
+    }
     try {
       const sent = await sendComposerPayload({
         draftText: text,
@@ -2230,8 +2251,10 @@ export function Composer({
         afterForkSummary: !isGenerating && !queueDuringCompaction && queueForForkSummary,
         mentions,
       });
-      if (sent && trayComments) trayComments.markSent(trayComments.comments.map((comment) => comment.id));
+      if (sent) commentSend?.done();
+      else commentSend?.undo();
     } catch (error) {
+      commentSend?.undo();
       // Cancelling a worktree send puts the text back without an error.
       if (isWorktreeSendCancelled(error)) return;
       toast.error(error instanceof Error ? error.message : "Couldn't send this message.");

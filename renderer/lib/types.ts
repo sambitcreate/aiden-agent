@@ -1234,6 +1234,8 @@ export interface ChatStartParams {
   visualize?: boolean;
   /** Settings → Appearance → Inline visuals for this turn. */
   inlineVisuals?: import("../shared/appearance").InlineVisualsMode;
+  /** A design-mode message: the frames the person had selected and the canvas region's size. */
+  designView?: import("../shared/design-canvas/canvas-summary").DesignViewState;
 }
 
 export interface ApprovalRequest {

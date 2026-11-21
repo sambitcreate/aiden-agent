@@ -724,7 +724,7 @@ test("design mode fits narrow windows: split beside the sidebar, stacked below 6
   });
 });
 
-test("Aiden asks to open design mode on a card, then puts its work on the canvas; Not now leaves the chat as it was", async ({
+test("Aiden asks to open design mode on a card, then puts its work on the canvas; Not now holds for the rest of that chat", async ({
   aiden,
 }) => {
   const { app, page, lmStudio } = aiden;
@@ -757,7 +757,27 @@ test("Aiden asks to open design mode on a card, then puts its work on the canvas
   await expect(designToggle(page)).toHaveAttribute("aria-pressed", "false");
   await expect(designCanvas(page)).toHaveCount(0);
 
-  // Enter: the canvas opens, and the same reply places a note there with the canvas tools.
+  // Not now holds for this chat: asking again shows no card and Aiden is told the person declined.
+  const askAgainPrompt = "Design consent test: now sketch a pricing page with three tiers.";
+  const askedAgain = lmStudio.enqueueToolScenario!({
+    prompt: askAgainPrompt,
+    calls: [{ name: "design_mode", arguments: { action: "enter", reason: "Three tiers are easier to judge side by side." } }],
+    finalText: "Here are the three tiers in the chat.",
+  });
+  await composer.fill(askAgainPrompt);
+  await composer.press("Enter");
+  await expect.poll(() => askedAgain.completed).toBe(true);
+  expect(askedAgain.error).toBeUndefined();
+  expect(JSON.stringify(askedAgain.results)).toContain("declined");
+  await expect(page.getByText("Here are the three tiers in the chat.").last()).toBeVisible();
+  await expect(card).toHaveCount(0);
+  await expect(designToggle(page)).toHaveAttribute("aria-pressed", "false");
+  await expect(designCanvas(page)).toHaveCount(0);
+
+  // A new chat may ask again. Enter: the canvas opens, and the same reply places a note there with the canvas tools.
+  await page.getByRole("button", { name: "New Agent", exact: true }).click();
+  await chooseWorkspace(page, new RegExp(`^${WORKSPACE_NAME}`, "u"));
+  await sendFirstMessage(page, "Second design chat for pricing");
   const enterPrompt = "Design consent test: lay out three pricing directions.";
   const entered = lmStudio.enqueueToolScenario!({
     prompt: enterPrompt,

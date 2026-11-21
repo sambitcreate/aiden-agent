@@ -1,6 +1,6 @@
 import { AIDEN_UI_CATALOG, isAidenUiIcon, PRESERVE_WHITESPACE, type CatalogEntry, type PropKind } from "./catalog.js";
 import { AIDEN_UI_NAME, parseExpression } from "./expression.js";
-import { fallbackTextFor } from "./fallback-text.js";
+import { fallbackTextFor, type FallbackTextOptions } from "./fallback-text.js";
 import { hasOwn, ownEntry } from "./own.js";
 import { parseAum, type AumAttr, type AumElement, type AumNode } from "./parse.js";
 import {
@@ -50,6 +50,8 @@ export interface CompileAumOptions {
   draft?: boolean;
   /** Accept the workspace-artifact actions compose() and run(); inline visuals reject them. */
   artifactActions?: boolean;
+  /** How `fallbackText` is written (a text-only reader also gets chart tables). */
+  fallback?: FallbackTextOptions;
 }
 
 export const MAX_RUN_ARGUMENTS = 8;
@@ -391,7 +393,7 @@ function compileUnchecked(markup: string, options: CompileAumOptions): CompiledA
     ...(state ? { state } : {}),
     ...(title ? { title } : {}),
     diagnostics: context.diagnostics,
-    fallbackText: fallbackTextFor(tree, { vars }),
+    fallbackText: fallbackTextFor(tree, { vars }, options.fallback),
   };
 }
 

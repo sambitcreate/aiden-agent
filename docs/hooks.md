@@ -131,12 +131,12 @@ A matcher that is empty or `*` matches everything. One made only of letters, dig
 
 ## Tool names
 
-Tool matchers match Aiden's name or its Claude Code name. The payload's `tool_name` uses the Claude spelling and `aiden_tool_name` the Aiden one. When `tool_input` has `path`, Aiden also adds `file_path`. A `Bash` or `run_command` matcher covers every tool that runs a shell, so a guard on shell commands can't be stepped around with a background job. `background_job` also lists, reads and stops jobs, and those calls have no `command` in `tool_input`.
+Tool matchers match Aiden's name or its Claude Code name. The payload's `tool_name` uses the Claude spelling and `aiden_tool_name` the Aiden one. When `tool_input` has `path`, Aiden also adds `file_path`. A `Bash` or `run_command` matcher covers every tool that runs a shell, so a guard on shell commands can't be stepped around with a background job. `background_job` also lists, reads and stops jobs, and those calls have no `command` in `tool_input`. Likewise a `Write` or `write_file` matcher also covers `generate_image`, which can save its image as a workspace file: its `tool_name` stays `generate_image`, and when it saves (`savePath`) `tool_input` also carries the workspace path the image is written to as `file_path`, tidied the way the tool tidies it (`./design//hero.png` becomes `design/hero.png`); a `savePath` the tool would refuse gets no `file_path`. Calls that only show the image have no `savePath` or `file_path`. A PreToolUse hook that rewrites `file_path` changes where the image is saved.
 
 | Aiden | Claude Code |
 | --- | --- |
 | `run_command`, `background_job`, `computer_shell` | `Bash` |
-| `write_file` | `Write` |
+| `write_file` (and `generate_image` for matching only) | `Write` |
 | `edit_file` | `Edit`, `MultiEdit` |
 | `read_file` | `Read` |
 | `glob` | `Glob` |

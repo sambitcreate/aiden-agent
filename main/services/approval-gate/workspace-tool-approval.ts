@@ -26,6 +26,35 @@ import { connectorToolEffect, MAC_TOOL_CLASSES } from "./tool-classes.js";
 export const WORKSPACE_COMPUTER_USE_TOOL = "computer_use";
 export const WORKSPACE_FORM_FILL_TOOL = "form_fill";
 const DEVICE_SCREENSHOT_TOOL = "device_screenshot";
+const GENERATE_IMAGE_TOOL = "generate_image";
+const WRITE_FILE_TOOL = "write_file";
+
+/**
+ * The tool whose Settings → Approvals rule also answers for this call because
+ * the call writes a workspace file without being that tool: write_file for a
+ * generate_image call that keeps its image as a file (`savePath`). The call
+ * itself already asks every time (it is paid and explicit-only).
+ */
+export function fileWriteRuleTool(toolName: string, args: unknown): string | undefined {
+  const savesFile = toolName === GENERATE_IMAGE_TOOL &&
+    args !== null && typeof args === "object" && typeof (args as { savePath?: unknown }).savePath === "string";
+  return savesFile ? WRITE_FILE_TOOL : undefined;
+}
+
+const PAGE_RULE_RANK = { allow: 1, ask: 2, unreadable: 3, block: 4 } as const;
+
+/**
+ * The call's own rule, tightened by the rule of the tool it also acts as
+ * (`fileWriteRuleTool`). The other rule may only make the call stricter: a
+ * write_file Allow never lets a paid image request through without its card.
+ */
+export function stricterPageRule(
+  own: WorkspaceToolApprovalInput["pageRule"],
+  also: WorkspaceToolApprovalInput["pageRule"],
+): WorkspaceToolApprovalInput["pageRule"] {
+  if (also === undefined || also === "allow") return own;
+  return own === undefined || PAGE_RULE_RANK[also] > PAGE_RULE_RANK[own] ? also : own;
+}
 
 export type WorkspaceGatePermission = "full" | "ask" | "read-only" | "none";
 

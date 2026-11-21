@@ -46,6 +46,7 @@ import { isChatHtmlArtifact, isChatImageArtifact } from "../shared/chat-artifact
 import { attachmentsShownWithVisuals } from "../shared/visual-snapshots";
 import { HtmlArtifactDraftFrame, HtmlArtifactFrame, type GuestPromptHandler } from "./html-artifact-frame";
 import { AidenUiBlock } from "./aiden-ui/aiden-ui-block";
+import { useKeepVisualActions, useSendToCanvasActions } from "../lib/visual-menu-actions";
 import { AIDEN_UI_LIMITS, type ChatUiVisualV1 } from "../shared/aiden-ui/types";
 import { isWireSafeKey } from "../shared/aiden-ui/visual";
 import {
@@ -222,12 +223,22 @@ function isSubagentLaunchStep(step: AgentStep): boolean {
   return isToolStep(step) && step.toolName === "subagent";
 }
 
-function FollowUpAwareHtmlArtifactFrame(props: Omit<React.ComponentProps<typeof HtmlArtifactFrame>, "followUpBusy">) {
-  return <HtmlArtifactFrame {...props} followUpBusy={React.useContext(VisualFollowUpBusyContext)} />;
+function FollowUpAwareHtmlArtifactFrame(
+  props: Omit<React.ComponentProps<typeof HtmlArtifactFrame>, "followUpBusy" | "actions">,
+) {
+  const actions = useSendToCanvasActions(props.chatId, props.artifact.mediaId);
+  return <HtmlArtifactFrame {...props} actions={actions} followUpBusy={React.useContext(VisualFollowUpBusyContext)} />;
 }
 
-function FollowUpAwareAidenUiBlock(props: Omit<React.ComponentProps<typeof AidenUiBlock>, "followUpBusy">) {
-  return <AidenUiBlock {...props} followUpBusy={React.useContext(VisualFollowUpBusyContext)} />;
+function FollowUpAwareAidenUiBlock({
+  messageId,
+  ...props
+}: Omit<React.ComponentProps<typeof AidenUiBlock>, "followUpBusy" | "actions"> & {
+  /** The settled reply it belongs to; a visual still streaming has none and cannot be kept yet. */
+  messageId?: string;
+}) {
+  const actions = useKeepVisualActions(props.draft ? undefined : messageId, props.visual.id);
+  return <AidenUiBlock {...props} actions={actions} followUpBusy={React.useContext(VisualFollowUpBusyContext)} />;
 }
 
 type RenderVisual = (
@@ -1007,6 +1018,7 @@ export function MessageList({
       <FollowUpAwareAidenUiBlock
         key={`ui:${visual.id}`}
         visual={visual}
+        messageId={message.id}
         attachments={message.attachments}
         onAction={(action) => {
           if (action.kind === "send") stableVisualPrompt(action.text, visual.id);

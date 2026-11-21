@@ -10,7 +10,9 @@ import type {
   WorkspaceArtifactsChangedEvent,
   WorkspaceArtifactView,
 } from "../../renderer/shared/workspace-artifacts.js";
+import type { ChatUiVisualV1 } from "../../renderer/shared/aiden-ui/types.js";
 import { WorkspaceArtifactStore, workspaceArtifactDigest } from "../services/workspace-artifacts/store.js";
+import type { WorkspaceArtifactChatVisual } from "./workspace-artifacts.js";
 import { registerWorkspaceArtifactHandlers, WORKSPACE_ARTIFACT_CHANNELS } from "./workspace-artifacts.js";
 
 async function setup(t: test.TestContext) {
@@ -26,11 +28,17 @@ async function setup(t: test.TestContext) {
   const disk = new Map<string, Uint8Array>();
   const suggestedNames: string[] = [];
   let clock = 1_000_000;
+  // Chats by id, each with its assistant messages' native visuals.
+  const chats = new Map<string, { chat: WorkspaceArtifactChatVisual["chat"]; messages: Record<string, ChatUiVisualV1[]> }>();
   registerWorkspaceArtifactHandlers({
     handle: (channel, handler) => handlers.set(channel, handler),
     store,
     workspaceExists: async (id) => id === "ws1" || id === "ws2",
     notify: (event) => events.push(event),
+    chatVisual: async (chatId, messageId, visualId) => {
+      const entry = chats.get(chatId);
+      return entry ? { chat: entry.chat, visual: entry.messages[messageId]?.find((visual) => visual.id === visualId) } : null;
+    },
     files: {
       chooseExportPath: async (_event, defaultName) => {
         suggestedNames.push(defaultName);
@@ -80,7 +88,7 @@ async function setup(t: test.TestContext) {
   const advance = (ms: number) => {
     clock += ms;
   };
-  return { store, events, invoke, invokeAs, ran, dialogs, disk, text, putFile, advance, suggestedNames };
+  return { store, events, invoke, invokeAs, ran, dialogs, disk, text, putFile, advance, suggestedNames, chats };
 }
 
 test("requests for a missing workspace or a malformed id are refused", async (t) => {
@@ -313,4 +321,100 @@ test("Cancel in a file dialog is not an error, and unreadable, oversized or fore
 
   await assert.rejects(invoke(C.importPreview, "ws-gone"), /no longer exists/u);
   assert.equal((await store.list("ws1")).length, 1);
+});
+
+test("the page markup Aiden keeps for the model stays in main: windows and exports never receive it", async (t) => {
+  const { store, invoke, text, dialogs } = await setup(t);
+  const saved = (await store.get("ws1", "art1"))!.artifact;
+  const markup = '<Visual title="PRs"><Text>{len($pulls)} open</Text></Visual>';
+  await store.replace("ws1", "art1", () => ({
+    title: "PRs", markup, visual: { ...saved.visual, layout: "wide" }, sources: saved.sources, actions: [], refresh: saved.refresh,
+  }));
+  assert.equal((await store.get("ws1", "art1"))!.artifact.markup, markup);
+  const [view] = (await invoke(WORKSPACE_ARTIFACT_CHANNELS.list, "ws1")) as WorkspaceArtifactView[];
+  assert.equal("markup" in view!.artifact, false);
+  const renamed = (await invoke(WORKSPACE_ARTIFACT_CHANNELS.rename, "ws1", "art1", "Open PRs")) as Record<string, unknown>;
+  assert.equal("markup" in renamed, false);
+  await invoke(WORKSPACE_ARTIFACT_CHANNELS.exportPage, "ws1", "art1");
+  const exported = text(dialogs.exportPath!);
+  assert.match(exported, /"Open PRs"/u);
+  assert.ok(!exported.includes("{len($pulls)} open"));
+});
+
+function chatVisual(title: string, state?: Record<string, unknown>): ChatUiVisualV1 {
+  const compiled = compileAum(`<Visual title="${title}"><State tab="a"/><Text>Weekly summary</Text></Visual>`);
+  return {
+    version: 1,
+    kind: "ui",
+    id: "visual-1",
+    toolCallId: "call-3",
+    title,
+    catalogVersion: AIDEN_UI_CATALOG_VERSION,
+    tree: compiled.tree!,
+    ...(state ? { state } : {}),
+    fallbackText: "Weekly summary",
+  };
+}
+
+test("Keep in Artifacts saves a chat's visual as a page of its workspace, as the person left it", async (t) => {
+  const { invoke, events, chats, store } = await setup(t);
+  chats.set("chat-1", { chat: { workspaceId: "ws1" }, messages: { "m-1": [chatVisual("PRs", { tab: "b" })] } });
+
+  const kept = (await invoke(WORKSPACE_ARTIFACT_CHANNELS.keepVisual, "chat-1", "m-1", "visual-1")) as {
+    id: string;
+    visual: ChatUiVisualV1;
+    sources: unknown[];
+    actions: unknown[];
+    initialState?: Record<string, unknown>;
+    createdByChatId?: string;
+  };
+  // A page named PRs is already there, so the copy takes the next free title.
+  assert.notEqual(kept.visual.title, "PRs");
+  assert.match(kept.visual.title, /^PRs/u);
+  assert.equal(kept.visual.fallbackText, "Weekly summary");
+  assert.deepEqual(kept.visual.state, { tab: "b" });
+  assert.deepEqual(kept.initialState, { tab: "b" });
+  assert.equal(kept.visual.toolCallId, undefined, "the page is not tied to the chat's tool call");
+  assert.deepEqual(kept.sources, []);
+  assert.deepEqual(kept.actions, []);
+  assert.equal(kept.createdByChatId, "chat-1");
+  // That chat's window opens the Artifacts tab on it.
+  assert.deepEqual(events[events.length - 1], { workspaceId: "ws1", artifactId: kept.id, reason: "created", chatId: "chat-1" });
+  const stored = await store.get("ws1", kept.id);
+  assert.ok(stored);
+  assert.equal(stored.artifact.markup, undefined, "a kept visual keeps no markup");
+
+  // The default workspace holds a chat without an explicit workspace.
+  chats.set("chat-default", { chat: {}, messages: { "m-1": [chatVisual("Default")] } });
+  await assert.rejects(invoke(WORKSPACE_ARTIFACT_CHANNELS.keepVisual, "chat-default", "m-1", "visual-1"), /no longer exists/u);
+});
+
+test("Keep in Artifacts is refused outside an attended workspace chat, or when the visual is gone", async (t) => {
+  const { invoke, events, chats } = await setup(t);
+  const messages = { "m-1": [chatVisual("Chart")] };
+  chats.set("bot", { chat: { workspaceId: "ws1", botId: "bot-1" }, messages });
+  chats.set("routine", { chat: { workspaceId: "ws1", owner: { kind: "routine" } as unknown as WorkspaceArtifactChatVisual["chat"]["owner"] }, messages });
+  chats.set("assistant", { chat: { workspaceId: "assistant" }, messages });
+  chats.set("orphan", { chat: { workspaceId: "ws-gone" }, messages });
+  chats.set("chat-1", { chat: { workspaceId: "ws1" }, messages });
+  for (const chatId of ["bot", "routine", "assistant"]) {
+    await assert.rejects(invoke(WORKSPACE_ARTIFACT_CHANNELS.keepVisual, chatId, "m-1", "visual-1"), /cannot be kept/u);
+  }
+  await assert.rejects(invoke(WORKSPACE_ARTIFACT_CHANNELS.keepVisual, "orphan", "m-1", "visual-1"), /no longer exists/u);
+  await assert.rejects(invoke(WORKSPACE_ARTIFACT_CHANNELS.keepVisual, "gone", "m-1", "visual-1"), /no longer available/u);
+  await assert.rejects(invoke(WORKSPACE_ARTIFACT_CHANNELS.keepVisual, "chat-1", "m-2", "visual-1"), /no longer in this chat/u);
+  await assert.rejects(invoke(WORKSPACE_ARTIFACT_CHANNELS.keepVisual, "chat-1", "m-1", ""), /Invalid visual/u);
+  await assert.rejects(invoke(WORKSPACE_ARTIFACT_CHANNELS.keepVisual, "chat-1", 4, "visual-1"), /Invalid message/u);
+  await assert.rejects(invoke(WORKSPACE_ARTIFACT_CHANNELS.keepVisual, "x".repeat(257), "m-1", "visual-1"), /Invalid chat/u);
+  assert.deepEqual(events, []);
+});
+
+test("Keep in Artifacts says so when the workspace already holds its 20 pages", async (t) => {
+  const { invoke, chats, store } = await setup(t);
+  const base = chatVisual("Filler");
+  for (let index = 2; index <= 20; index += 1) {
+    await store.create("ws1", { title: `Page ${index}`, visual: base, sources: [], actions: [], refresh: { onOpen: false } });
+  }
+  chats.set("chat-1", { chat: { workspaceId: "ws1" }, messages: { "m-1": [chatVisual("One more")] } });
+  await assert.rejects(invoke(WORKSPACE_ARTIFACT_CHANNELS.keepVisual, "chat-1", "m-1", "visual-1"), /already has 20 artifacts/u);
 });

@@ -3,6 +3,8 @@ import test from "node:test";
 import { ASSISTANT_WORKSPACE_ID } from "../../renderer/shared/assistant.js";
 import { emptyDesignCanvas } from "../../renderer/shared/design-canvas/schema.js";
 import { DesignGrantRegistry } from "./design-canvas/grants.js";
+import { DesignModeConsent } from "./design-canvas/design-mode-tool.js";
+import type { ChatGenerationOwner } from "./chat-generation-owner.js";
 import { DesignCanvasStore } from "./design-canvas/store.js";
 import { captureAnalyticsEvents } from "./analytics/test-support.js";
 import type { Chat, Workspace } from "./types.js";
@@ -709,6 +711,33 @@ test("a chat's design grant ends when design mode turns off, the chat moves or t
 
   await service.remove("chat-3");
   assert.equal(designGrants.resolve(bystander), null);
+});
+
+test("after a Not now, Aiden may ask about design mode again only once the person has opened it themselves", async () => {
+  const designModeConsent = new DesignModeConsent();
+  const { service } = fixture({ designModeConsent });
+  const cards: string[] = [];
+  const owner: ChatGenerationOwner = {
+    id: 7,
+    documentId: "doc-a",
+    isDestroyed: () => false,
+    send: (channel, payload) => {
+      if (channel === "designCanvas:consent") cards.push((payload as { requestId: string }).requestId);
+    },
+    onInvalidated: () => () => undefined,
+  };
+  const asked = designModeConsent.request({ chatId: "chat-1", reason: "Compare.", owner });
+  await designModeConsent.answer(cards[0], "decline", owner, async () => undefined);
+  assert.equal(await asked, "declined");
+  await service.setDesignMode("chat-1", false);
+  assert.equal(await designModeConsent.request({ chatId: "chat-1", reason: "Again.", owner }), "declined", "turning it off is not opening it");
+
+  await service.setDesignMode("chat-1", true);
+  const stop = new AbortController();
+  const again = designModeConsent.request({ chatId: "chat-1", reason: "Again.", owner, signal: stop.signal });
+  assert.equal(cards.length, 2, "a new card once the person opened design mode");
+  stop.abort();
+  assert.equal(await again, "unavailable");
 });
 
 test("turning design mode on hands the chat and its folder to the canvas once, and a failure there never fails the switch", async () => {
