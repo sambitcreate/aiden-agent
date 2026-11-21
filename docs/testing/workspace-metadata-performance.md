@@ -80,3 +80,7 @@ Searched every production caller of `listWorkspaceFiles` and `inspectAidenFilesy
 
 
 Fresh independent Astra medium caller/blast-radius review cleared the Bot follow-up; its43 tests passed with1 existing Linux-only skip. The CLI inventory omission it identified is corrected above. Final local reruns: full Remote537 passed/1 skipped; Android55 tests passed across workspace, Remote client and Bot contracts; iOS13 simulator tests passed (workspace11 plus Bot routes and scoped-grant revocation). TypeScript and scoped ESLint passed. Paginated recheck of38 other open PRs found no overlap in the Bot/identity/helper follow-up files (#85:295 files, #37:209). Latest-head hosted checks and bot re-review remain separate gates after push.
+
+## Update — 2026-11-19
+
+Phase 7 of [the prompt cache plan](../plans/prompt-cache-hit-rate.md) retired the Gemini explicit context cache. Gemini turn preparation no longer lists the workspace, so the "Eligible Gemini turn preparation" caller above is gone; Desktop Files, the CLI and the legacy Remote snapshots still share the index. The benchmark keeps its "Gemini index" operation name for comparison with the runs above, and now compares a projection of the index (entries, truncation and skipped directories) instead of the retired snapshot string. The measurements above are the 2026-09-28 record and are unchanged.

@@ -74,7 +74,7 @@ import { assertBoundBotProviderModelCurrent } from "../bot-capability-bindings.j
 import type { BotRoutineThinkingLevel } from "../../../renderer/shared/bot-routine-models.js";
 import { acknowledgeBotExecutionUnknown, botExecutionAccountableResponse, botExecutionInputSpendingRefusal, botExecutionSpendingOwner, botExecutionUnknownCostReceipt, isBotExecutionDispatchSettled, recordKnownBotExecutionResponse, recordKnownBotExecutionCost } from "./bot-execution-spending.js";
 import { botStore } from "../bot-store.js";
-import { botRoutineGuidance, botSettingsGuidance, withBotManagedWorkspace, withBotPersona, type BotWorkspacePromptAuthority } from "../bot-system-prompt.js";
+import { composeBotSystemSections, type BotWorkspacePromptAuthority } from "../bot-system-prompt.js";
 import { buildSystemPrompt } from "../chat-system-prompt.js";
 import { runtimeSupportsImages } from "../generation-runtime.js";
 import { resolveBotModelRuntime, resolveModelRuntime, type ResolvedModelRuntime } from "../model-runtime.js";
@@ -107,7 +107,7 @@ import { createBotHandoffNotifier, watchBotAccessRequests, watchBotHandoffs } fr
 import { wireBotLiveTurnIntents } from "./bot-turn-intents.js";
 import { botRunStarts, botTurnIntents } from "./bot-turn-intents-main.js";
 import type { BotExtensionDeps } from "./bot-extension.js";
-import { renderBotOpenWork } from "../bot-open-work/prompt.js";
+import { botOpenWorkPromptTail } from "../bot-open-work/prompt.js";
 import { createBotRuntimeModels, type BotModelRuntime } from "./bot-models.js";
 import type { BotReplySilenceOptions } from "./bot-reply-silence.js";
 import type { Models } from "@earendil-works/pi-ai";
@@ -122,7 +122,7 @@ import { botRunAccess, botFileLocations, createBotToolSources, isConnected, rule
 import { botRunEnded } from "./bot-run-access.js";
 import { botMemory as memory } from "../bot-memory/bot-memory-main.js";
 import { BOT_COMPACTION_FOCUS, createBotCompactionSteering } from "../bot-memory/compaction.js";
-import { renderBotMemorySection } from "../bot-memory/prompt.js";
+import { renderBotMemorySection, withBotMemoryEdits } from "../bot-memory/prompt.js";
 import { renderBotRulesSection } from "../bot-rules/prompt.js";
 import { botRules } from "../bot-rules/store-main.js";
 import { approvalRules } from "../approval-rules/store-main.js";
@@ -133,7 +133,7 @@ import { BOT_MEMORY_TOOL_NAME, botMemoryToolEntry, withBotMemoryIngress } from "
 import { BOT_RECALL_TOOL_NAME, botRecallToolEntry } from "../bot-memory/recall.js";
 
 import { createBotLiveProjection, type BotLiveProjection } from "./live-projection.js";
-import { botIngressAllowsTool, botTurnAttended } from "./bot-tool-policy.js";
+import { botIngressAllowsTool, botIngressRefusal, botTurnAttended } from "./bot-tool-policy.js";
 
 const MODEL_CACHE_MS = 30_000;
 
@@ -695,28 +695,28 @@ const extension: BotExtensionDeps = {
         tools.skillSnapshot(bot.id),
         toolNames,
       );
-      let openWorkSummary = "";
-      if (toolNames.has("open_work")) {
-        try { openWorkSummary = renderBotOpenWork(await (await import("../bot-open-work/service-main.js")).botOpenWork.toolSnapshot(bot.id)); }
-        catch { openWorkSummary = "Open work could not be read. Keep its existing records intact and report that the list is unavailable."; }
-      }
-      return [
+      return composeBotSystemSections({
         base,
-        withBotPersona("", bot).trim(),
-        [withBotManagedWorkspace("", workspace, fileAuthority).trim(), renderBotRulesSection(bot.name, await promptRules(bot.id))]
-          .filter((part) => part.length > 0)
-          .join("\n\n"),
-        [
-          botRoutineGuidance(toolNames),
-          botSettingsGuidance(toolNames, bot),
-          openWorkSummary,
-          tools.guidance(bot.id, offered.toolNames),
-          // How-to lessons from the person's corrections: below authority, as data.
-          renderBotLessons(await botLessons.list(bot.id, { scope: { kind: "bot" }, status: "active" })),
-        ].filter(Boolean).join("\n\n"),
-      ];
+        bot,
+        workspace,
+        fileAuthority,
+        rules: renderBotRulesSection(bot.name, await promptRules(bot.id)),
+        offeredToolNames: toolNames,
+        toolGuidance: tools.guidance(bot.id, offered.toolNames),
+        lessons: renderBotLessons(await botLessons.list(bot.id, { scope: { kind: "bot" }, status: "active" })),
+      });
     });
   },
+  // Open work and the person's memory edits change between turns, so they
+  // follow the person's input rather than rewriting the system sections (the
+  // head of the cached prefix).
+  promptTail: async (botId, offered) => withBotMemoryEdits(
+    await botOpenWorkPromptTail(
+      offered.toolNames,
+      async () => (await import("../bot-open-work/service-main.js")).botOpenWork.toolSnapshot(botId),
+    ),
+    memory.takeEdits(botId),
+  ),
   memorySection: async (botId, offer) => renderBotMemorySection(await memory.snapshot(botId), offer),
   currentTools: async (bot, turn) => [
     ...(await tools.currentTools(bot.id, turn)),
@@ -732,6 +732,7 @@ const extension: BotExtensionDeps = {
   // Per run: the self-intro uses no tools; routine and Telegram turns get no
   // question card; routine and self-intro turns never save memory.
   turnAllows: withBotMemoryIngress(botIngressAllowsTool),
+  turnRefusal: botIngressRefusal,
   peerReply: async (botId,message,taskId) => (await import("../bot-peers/host-main.js")).observeBotPeerReply(botId,message,taskId),
   afterReply: (botId) => withoutBotExecutionScope(() => memoryReview.afterReply(botId)),
   beforeCompact: compactionSteering,

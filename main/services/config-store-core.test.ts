@@ -3408,6 +3408,18 @@ test("cache warming is off by default and persists only an explicit boolean opt-
   assert.equal((await restarted.getSettings()).cacheWarmingEnabled, false);
 });
 
+test("hour-long prompt caches are off by default and persist only an explicit boolean opt-in", async (t) => {
+  const h = await harness(t);
+  assert.equal((await h.store.getSettings()).longPromptCacheRetention ?? false, false);
+  await h.store.setSettings({ longPromptCacheRetention: true });
+  const restarted = createConfigStore(createPortableConfigStores(() => path.dirname(h.portableFile), () => path.dirname(h.localFile)), fakeSecrets().port);
+  assert.equal((await restarted.getSettings()).longPromptCacheRetention, true);
+  assert.equal((await restarted.getSettings()).cacheWarmingEnabled ?? false, false, "the hour does not turn on warming");
+  await assert.rejects(restarted.setSettings({ longPromptCacheRetention: 1 as never }));
+  await restarted.setSettings({ longPromptCacheRetention: false });
+  assert.equal((await restarted.getSettings()).longPromptCacheRetention, false);
+});
+
 test("local classifier opt-in persists independently of cached models and can be disabled", async (t) => {
   const h = await harness(t);
   await h.store.saveProvider({ ...provider, llamaCppClassifierEnabled: true });

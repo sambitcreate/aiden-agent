@@ -22,10 +22,10 @@ Design and roadmap: [Inline Generative UI](superpowers/specs/2026-10-08-inline-g
 
 1. **Availability.** `prepareGeneration` contributes `aiden.gui.generative-ui` to every attended desktop chat, with or without a workspace, subject to Settings → Appearance → **Inline visuals**:
    - **Automatic** (default): the tools are always registered.
-   - **Only when I ask**: registered only on `/visualize` turns.
+   - **Only when I ask**: registered on every turn so the cached tool list stays the same; a turn without `/visualize` refuses the drawing calls (`visualize_guide` still answers).
    - **Off**: never registered.
 
-   The mode travels as `GenerationParams.inlineVisuals`. Telegram, Assistant, Bots, scheduled runs, and child agents do not inherit the extension. Reading a workspace `.html` file (`path`) still requires a workspace with file access.
+   The mode travels as `GenerationParams.inlineVisuals`. A `/visualize` turn and a turn from a paired device are told so in a hidden `<turn_note>` journaled right after that message (`turnNoteMessage`), not in the system prompt, so the cached prefix does not change with the message. Telegram, Assistant, Bots, scheduled runs, and child agents do not inherit the extension. Reading a workspace `.html` file (`path`) still requires a workspace with file access.
 2. **Tools.**
    - `render_artifact({ title, html } | { title, path }, layout?)` validates UTF-8 HTML (512 KiB), rejects remote scripts, frames and `javascript:` URLs, stages the bytes in `generative-ui-artifacts.json` (`0600`), and emits a `kind: "html"` `ChatArtifactEventV1` with an opaque `mediaId`. Its tool result is text only.
    - `visualize_guide({ modules })` returns design, HTML, chart, and interactivity guidance on demand (`main/services/generative-ui-guide.ts`), which keeps the system prompt short.
@@ -92,7 +92,7 @@ The model composes a visual from Aiden's own component catalog instead of writin
 2. **Storage.** Each image is an ordinary PNG (JPEG over 2 MiB) attachment on the same message with a reserved `visual-snapshot_<sha256>` id, linked by `visualSnapshots: [{visualId, attachmentId}]`. The desktop hides a snapshot only beside the visual it pictures (`attachmentsShownWithVisuals`), so a paired Mac's chat still shows it as an image. Snapshots never count against image limits and never reach the model.
 3. **Remote.** Contract revision 28 (`chat-visuals-v1`) projects `visuals` on each assistant message: kind, title, the tool call that drew it, fallback text, and the snapshot attachment id. Markup, data and saved state stay on the Mac. A new snapshot changes the chat revision.
 4. **Phones.** iOS and Android place each snapshot after its tool row, fall back to the text description, and hide snapshot attachments from the attachment strip.
-5. **Remote turns.** Turns sent from a paired device follow the Mac's Appearance setting, and the model is told those readers see still images, so the first view should carry the answer.
+5. **Remote turns.** Turns sent from a paired device follow the Mac's Appearance setting, and that message's turn note tells the model those readers see still images, so the first view should carry the answer.
 
 ## Extension points
 

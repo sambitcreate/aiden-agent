@@ -24,6 +24,7 @@ import type { piCompactionSessionStore } from "./pi-compaction-session-store.js"
 import type { piRuntimeEffectStore } from "./pi-runtime-effect-store.js";
 import type { subagentRunStore } from "./subagents/subagent-run-store.js";
 import { chatForRenderer } from "./visible-chat-projection.js";
+import { releaseChatCacheWarmer } from "./pi-cache-warming.js";
 import type { workspaceMutationGate } from "./workspace-mutation-gate.js";
 import {
   admitOwnedWorkspaceOperation,
@@ -497,6 +498,9 @@ export function createChatApplicationService(deps: ChatApplicationDependencies) 
           await options.assertCurrent?.(chat);
         });
         chatRemoved = true;
+        // The chat is gone whichever surface deleted it, so its idle cache
+        // warmer stops now rather than waiting for a window to leave it.
+        releaseChatCacheWarmer(chatId);
         // A canvas save or grant that passed its chat check before the remove
         // committed may have landed since the first cleanup; repeat it.
         deps.designGrants?.revokeChat(chatId);

@@ -12,7 +12,19 @@ import { AidenRemoteWorkspaceOwnerRegistry } from "../main/services/aiden-remote
 import { createWorkspaceEnvironmentApplicationService } from "../main/services/workspace-environment-application-service.js";
 import { WorkspaceMutationGate } from "../main/services/workspace-mutation-gate.js";
 import { WorkspaceOperationRegistry } from "../main/services/workspace-operation-registry.js";
-import { buildGeminiWorkspaceSnapshot } from "../main/services/gemini-context-cache.js";
+
+/**
+ * A deterministic projection of a file index, compared across variants. The
+ * "gemini-index" operation keeps its name from when a Gemini explicit cache
+ * read this index on every turn, so results stay comparable with earlier runs.
+ */
+function indexProjection(index: Awaited<ReturnType<typeof listWorkspaceFiles>>): string {
+  return JSON.stringify({
+    entries: index.entries,
+    truncated: index.truncated,
+    skippedDirectories: index.skippedDirectories,
+  });
+}
 
 const baseline = process.argv[2] ?? "a9baa4aa3027893e5455043083465c34b4c8b4ac";
 const latencyMs = Number(process.env.METADATA_LATENCY_MS ?? 0);
@@ -105,11 +117,11 @@ try {
                 ]);
                 return {
                   ...remote,
-                  concurrentSnapshots: [files, gemini].map(index => buildGeminiWorkspaceSnapshot(index, { isRepo: false })),
+                  concurrentSnapshots: [files, gemini].map(indexProjection),
                 };
               })();
           const comparable = operation === "gemini-index"
-            ? buildGeminiWorkspaceSnapshot(value as Awaited<ReturnType<typeof listWorkspaceFiles>>, { isRepo: false })
+            ? indexProjection(value as Awaited<ReturnType<typeof listWorkspaceFiles>>)
             : { ...value, snapshotId: "omitted", entries: value.entries.map(entry => ({ ...entry, id: "omitted" })) };
           if (variant.name === "before") expected = comparable;
           else assert.deepEqual(comparable, expected, "ordering, truncation and projected metadata must match");

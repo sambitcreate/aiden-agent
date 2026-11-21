@@ -7,7 +7,7 @@ import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { createBotLessonStore } from "../bot-lessons/store.js";
 import { renderBotLessons, renderRoutineLessons } from "../bot-lessons/prompt.js";
 import { createNoteHowToTool } from "../bot-lessons/how-to-tool.js";
-import { needsMemoryTidy, tidyOperations } from "../bot-memory/tidy.js";
+import { needsMemoryTidy, proposeMemoryTidy, tidyOperations } from "../bot-memory/tidy.js";
 import type { ScheduledRun, ScheduledTask } from "../types.js";
 import { createBotLearningBudget } from "./budget.js";
 import { botBehaviorFingerprint } from "./fingerprint.js";
@@ -192,6 +192,28 @@ test("tidy runs past 80% or 56 entries, and refuses additions", () => {
   assert.deepEqual(tidyOperations([{ action: "remove", match: "old" }]), [{ action: "remove", match: "old" }]);
 });
 
+test("a tidy proposal is a one-off request that writes no prompt cache", async () => {
+  const sent: Array<{ cacheRetention?: string } | undefined> = [];
+  const memory = { entries: [{ id: "1", text: "Old fact" }], usedChars: 900, limitChars: 1_000, overBudget: false };
+  const view = { botId: "b", revision: "r", readable: true, memory, user: { ...memory, entries: [], usedChars: 0 }, updatedAt: null };
+  const admission = {
+    ok: true,
+    model: {
+      models: {
+        completeSimple: async (_model: unknown, _context: unknown, options?: { cacheRetention?: string }) => {
+          sent.push(options);
+          return { stopReason: "toolUse", content: [{ type: "toolCall", id: "t1", name: "tidy_memory", arguments: { target: "memory", operations: [{ action: "remove", match: "Old fact" }] } }] };
+        },
+      },
+      model: {},
+    },
+    lease: { signal: new AbortController().signal, revalidate: async () => undefined, release: () => undefined },
+  } as unknown as Parameters<typeof proposeMemoryTidy>[0];
+  assert.deepEqual(await proposeMemoryTidy(admission, view as never, "memory", new AbortController().signal), [{ action: "remove", match: "Old fact" }]);
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0]?.cacheRetention, "none");
+});
+
 function run(id: string, finishedAt: number, extra: Partial<ScheduledRun> = {}): ScheduledRun {
   return { id, taskId: "r1", startedAt: finishedAt, finishedAt, result: "success", output: `Output ${id}`, ...extra };
 }
@@ -200,6 +222,7 @@ function reflectionHarness(answer: (messages: unknown) => Partial<AssistantMessa
   const store = createBotLessonStore({ profileDir: fixedRoot() });
   const entries: string[] = [];
   const requests: unknown[] = [];
+  const requestOptions: Array<{ cacheRetention?: string } | undefined> = [];
   let watermark: number | undefined;
   const reflection = createRoutineReflection({
     runs: async () => runs,
@@ -208,14 +231,14 @@ function reflectionHarness(answer: (messages: unknown) => Partial<AssistantMessa
     budget: createBotLearningBudget({ profileDir: fixedRoot(), timeZone: () => "UTC", now: () => Date.UTC(2026, 9, 27) }),
     admit: async () => ({
       ok: true,
-      model: { models: { completeSimple: async (_model: unknown, context: { messages: unknown }) => { requests.push(context.messages); return { stopReason: "toolUse", content: [], ...answer(context.messages) }; } } as never, model: {} as never },
+      model: { models: { completeSimple: async (_model: unknown, context: { messages: unknown }, options?: { cacheRetention?: string }) => { requests.push(context.messages); requestOptions.push(options); return { stopReason: "toolUse", content: [], ...answer(context.messages) }; } } as never, model: {} as never },
       lease: { signal: new AbortController().signal, revalidate: async () => undefined, release: () => undefined },
     }),
     appendEntry: async (_b, kind) => void entries.push(kind),
     state: { lastReflected: async () => watermark, set: async (_t, at) => { watermark = at; } },
   });
   const task = { id: "r1", botId: "bot-a", name: "Briefing", prompt: "Brief me." } as ScheduledTask;
-  return { store, entries, requests, reflection, task };
+  return { store, entries, requests, requestOptions, reflection, task };
 }
 
 const fiveRuns = [1, 2, 3, 4, 5].map((index) => run(`run-${index}`, index * 1_000, { fingerprint: "a".repeat(64) }));
@@ -235,6 +258,13 @@ test("reflection waits for 5 runs, proposes a helped lesson as one card, and rej
     content: [{ type: "toolCall", id: "t1", name: "record_lesson", arguments: { cue: "x", lesson: "y", component: "procedure", evidence: ["run-99"], verdict: "helped" } }],
   }), fiveRuns);
   assert.equal(await bogus.reflection.afterRun(bogus.task, fiveRuns[4]!), "no_entry");
+});
+
+test("a reflection is a one-off request that writes no prompt cache", async () => {
+  const h = reflectionHarness(() => ({ stopReason: "stop", content: [{ type: "text", text: "NO_ENTRY" }] }), fiveRuns);
+  await h.reflection.afterRun(h.task, fiveRuns[4]!);
+  assert.equal(h.requestOptions.length, 1);
+  assert.equal(h.requestOptions[0]?.cacheRetention, "none");
 });
 
 test("a confounded verdict proposes nothing; NO_ENTRY advances the watermark", async () => {

@@ -297,7 +297,7 @@ async function owedTurnConnectorSend(options: {
   });
   owedTurns.settleAfter("s", () => undefined, { committed: [{ messageId: "late" }], recordedStop: false });
   assert.equal(plans.length, 1);
-  const request = owedTurnStartRequest(plans[0]!, "owed-1", ["hooks"]);
+  const request = owedTurnStartRequest(plans[0]!, "owed-1");
   const workspaces = new Map([[options.workspace.id, options.workspace]]);
   const policy = await generationApprovalPolicy(
     {

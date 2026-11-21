@@ -90,14 +90,15 @@ const NO_ELEMENT_CONTROL_ACTION =
   "Element numbers need element control, which this computer doesn't have: act with coordinates of the newest capture.";
 
 /**
- * The tool's guidance. `hand_off` exists only on turns a person can answer:
- * on routine and Telegram turns nobody can take a step over, so the Bot is
- * told to stop and say what is needed instead of calling a tool it lacks.
+ * The tool's guidance: one description for attended and unattended runs
+ * alike, so a routine turn declares the same bytes as a person's turn and the
+ * cached tool list holds. `hand_off` is refused on runs nobody is watching,
+ * and the text tells the Bot to stop and say what is needed there instead.
  */
-export function botComputerToolDescription(attended: boolean, elementControl = false): string {
-  const sensitive = attended
-    ? "Call hand_off for passwords, codes and payments, and let the person do those steps themselves. "
-    : "Nobody is there to take a step over on this run: never enter passwords, codes or payment details; stop and say in your reply what the person needs to do. ";
+export function botComputerToolDescription(elementControl = false): string {
+  const sensitive =
+    "Call hand_off for passwords, codes and payments, and let the person do those steps themselves. " +
+    "On a run nobody is watching (a routine, Telegram or Bot-message turn) there is no hand_off: never enter passwords, codes or payment details; stop and say in your reply what the person needs to do. ";
   const lane = elementControl
     ? "Capture a screenshot first, then act with coordinates in pixels of the newest capture, and capture again (or pass capture_after) to see the result. " +
       "This computer has element control: capture with app (such as \"Safari\") also lists that app's numbered elements, and click, double_click and right_click take element in place of coordinate. Element numbers last until anything acts, so capture with app again before the next element step. "
@@ -216,7 +217,7 @@ export interface BotComputerToolTurn {
   routine: boolean;
   /**
    * Nobody can answer a card on this turn (a routine or Telegram run), so
-   * there is no `hand_off`. Defaults to `routine`.
+   * the wait for Give back is bounded. Defaults to `routine`.
    */
   unattended?: boolean;
   /** The computer has the guest driver lane: the description tells the Bot about elements. */
@@ -419,7 +420,7 @@ export function createBotComputerTool(
   return {
     name: BOT_COMPUTER_TOOL_NAME,
     label: "Computer",
-    description: botComputerToolDescription(!unattended, turn.elementControl === true),
+    description: botComputerToolDescription(turn.elementControl === true),
     parameters: BotComputerParameters,
     executionMode: "sequential",
     async execute(toolCallId, params, signal, onUpdate) {

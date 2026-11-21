@@ -16,7 +16,7 @@ import {
   writePiUpgradeEvaluationReceipt,
 } from "./pi-upgrade-rollout.js";
 import { PiCompactionSessionStore } from "./pi-compaction-session-store.js";
-import { runPiUpgradeReplayCases } from "./pi-upgrade-replay-runner.js";
+import { runPiUpgradeCachedPrefixReplay, runPiUpgradeReplayCases } from "./pi-upgrade-replay-runner.js";
 
 async function passingMeasurements(): Promise<PiUpgradeReplayMeasurement[]> {
   return runPiUpgradeReplayCases();
@@ -104,6 +104,50 @@ test("replay rejects a summary that loses a decision available only in old histo
   assert.equal(report.passed, false);
   assert.ok(report.failures.includes("continuation_correctness"));
   assert.ok(report.failures.includes("pending_reference_retention"));
+});
+
+test("the cached-prefix replay summarizes on the recorded turn's request and passes the same gate", async () => {
+  const replay = await runPiUpgradeCachedPrefixReplay();
+  const { turn, summaries } = replay.cachedRequests;
+  const [system] = turn.messages;
+  assert.equal(system?.role, "system");
+  assert.match(JSON.stringify(system), /Stable replay evaluation prompt\./u);
+
+  // The summary request repeats the recorded request byte for byte, then adds its reply and the instruction.
+  const summary = summaries[0]!;
+  assert.deepEqual(summary.messages.slice(0, turn.messages.length), turn.messages);
+  const [reply, instruction] = summary.messages.slice(turn.messages.length);
+  assert.equal(reply?.role, "assistant");
+  assert.match(JSON.stringify(reply), /Replay continuation acknowledged\./u);
+  assert.equal(instruction?.role, "user");
+  assert.equal(summary.messages.length, turn.messages.length + 2);
+
+  // The provider read the shared prefix from its cache; Pi's isolated request shares none of it.
+  assert.ok(replay.cachedCacheReadShare > 0.5, `cached share ${replay.cachedCacheReadShare}`);
+  assert.equal(replay.isolatedCacheReadShare, 0);
+  assert.ok(replay.cached.cacheReadTokens > 0);
+
+  // Both variants keep the old decision and the pending references, and the gate passes with either.
+  for (const measurement of [replay.cached, replay.isolated]) {
+    assert.equal(measurement.continuationCorrect, true);
+    assert.equal(measurement.pendingReferencesRetained, measurement.pendingReferencesExpected);
+  }
+  const measurements = await passingMeasurements();
+  const withCached = measurements.map((measurement) => measurement.caseId === replay.caseId ? replay.cached : measurement);
+  assert.equal(evaluatePiUpgradeReplay(withCached).passed, true);
+});
+
+test("the cached-prefix replay fails the gate when its summary loses old history", async () => {
+  const replay = await runPiUpgradeCachedPrefixReplay({
+    transformSummary: (text) => text.split("HISTORY-long_coding_chat").join("[decision omitted]"),
+  });
+  assert.equal(replay.cached.continuationCorrect, false);
+  const measurements = await passingMeasurements();
+  const report = evaluatePiUpgradeReplay(
+    measurements.map((measurement) => measurement.caseId === replay.caseId ? replay.cached : measurement),
+  );
+  assert.equal(report.passed, false);
+  assert.ok(report.failures.includes("continuation_correctness"));
 });
 
 test("rollout eligibility is staged and the exact-zero rollback is fail-closed", () => {

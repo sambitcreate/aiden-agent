@@ -8,7 +8,11 @@
  * number, re-expresses it as `minimum` / `maximum` so the model still sees the range.
  *
  * The normalizer is pure: it never mutates its input, and it leaves every other keyword,
- * including standard formats (`date-time`, `uri`, ...), untouched. Callers must keep
+ * including standard formats (`date-time`, `uri`, ...), untouched. Every schema object,
+ * and every name map such as `properties`, comes out with its keys in sorted order, so a
+ * server that reorders its JSON between connections produces the same tool bytes and
+ * keeps the provider prompt cache warm. Arrays and literal values (`enum`, `default`,
+ * `required`, ...) keep their order. Callers must keep
  * using the raw server schema for identity checks (fingerprints, drift detection);
  * only the schema handed to the model is normalized.
  */
@@ -90,6 +94,18 @@ function tighten(
   schema[key] = key === "minimum" ? Math.max(current, bound) : Math.min(current, bound);
 }
 
+/** Code-unit order, the same on every host and locale. */
+function byKey([a]: [string, unknown], [b]: [string, unknown]): number {
+  return a < b ? -1 : a > b ? 1 : 0;
+}
+
+/** Re-insert `record`'s keys in sorted order, keeping its identity for shared references. */
+function sortKeysInPlace(record: Record<string, unknown>): void {
+  const entries = Object.entries(record).sort(byKey);
+  for (const [key] of entries) delete record[key];
+  for (const [key, entry] of entries) record[key] = entry;
+}
+
 function normalizeSchema(value: unknown): unknown {
   const copies = new WeakMap<object, Record<string, unknown>>();
   const pending: Array<{ source: Record<string, unknown>; target: Record<string, unknown> }> = [];
@@ -110,7 +126,7 @@ function normalizeSchema(value: unknown): unknown {
     for (const [key, entry] of Object.entries(source)) {
       if (SUBSCHEMA_MAP_KEYWORDS.has(key) && isRecord(entry)) {
         target[key] = Object.fromEntries(
-          Object.entries(entry).map(([name, schema]) => [name, copySchema(schema)]),
+          Object.entries(entry).sort(byKey).map(([name, schema]) => [name, copySchema(schema)]),
         );
       } else if (SUBSCHEMA_ARRAY_KEYWORDS.has(key) && Array.isArray(entry)) {
         target[key] = entry.map(copySchema);
@@ -129,6 +145,7 @@ function normalizeSchema(value: unknown): unknown {
         tighten(target, "maximum", range.maximum);
       }
     }
+    sortKeysInPlace(target);
   }
   return result;
 }

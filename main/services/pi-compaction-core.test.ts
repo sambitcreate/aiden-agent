@@ -44,6 +44,10 @@ import { withUsageLimitWait } from "./usage-limit-stream.js";
 import { createPiSessionPort, type PiSessionPort } from "./pi-session-port.js";
 import { migratePiSessionJournal } from "./pi-session-migration.js";
 import { upgradeOldPiV4File } from "./pi-session-v4-upgrade.js";
+import { hookContextMessage } from "./workspace-chat-hooks.js";
+import { chatStateRecord, chatStateUpdateMessage, memoryFactLinesInBranch, withoutForgottenFactsSession, type ChatTurnState } from "./chat-frozen-state.js";
+import { compileVcc } from "./pi-vcc/compiler.js";
+import { rememberStableHead, withPromptCacheBreakpoints } from "./prompt-cache-breakpoints.js";
 
 const ZERO_COST = {
   input: 0,
@@ -161,6 +165,120 @@ test("Pi coordinator appends a native checkpoint and rebuilds from it", async ()
     events.map((event) => event.type),
     ["start", "end"],
   );
+});
+
+/**
+ * A chat whose older history holds a `<state_update>` that added a memory
+ * fact the person has since removed, and whose recent tail holds one that
+ * added a fact still approved.
+ */
+async function historyWithMemoryUpdates(session: PiSessionPort, model: Model<Api>): Promise<AssistantMessage> {
+  const state: ChatTurnState = { branch: "main", permission: "ask", memory: "", canvas: "" };
+  const withFact = (line: string): ChatTurnState => ({ ...state, memory: `Memory:\n${line}` });
+  await session.appendMessage(user(`old: ${"x".repeat(1_200)}`, 1));
+  await session.appendMessage(
+    chatStateUpdateMessage(chatStateRecord(state), withFact("- [memory:m2] REMOVED_FACT_CANARY deploys on Fridays."), 2),
+  );
+  await session.appendMessage(assistant(model, { input: 400, text: "middle", timestamp: 3 }));
+  await session.appendMessage(user(`latest: ${"y".repeat(500)}`, 4));
+  await session.appendMessage(
+    chatStateUpdateMessage(chatStateRecord(state), withFact("- [memory:m3] KEPT_FACT_CANARY uses pnpm."), 5),
+  );
+  const last = assistant(model, { input: 950, text: "answer", timestamp: 6 });
+  await session.appendMessage(last);
+  return last;
+}
+
+for (const trigger of ["automatic", "manual"] as const) {
+  test(`${trigger === "automatic" ? "an" : "a"} ${trigger} compaction never sends a memory fact in a state update to the summarizer`, async () => {
+    const { faux, models, model } = compactionFixture();
+    const requests: string[] = [];
+    faux.setResponses([
+      (context) => {
+        requests.push(JSON.stringify(context));
+        return fauxAssistantMessage(structuredSummary("Continue."));
+      },
+    ]);
+    const session = await memorySession(`memory-facts-${trigger}`);
+    const last = await historyWithMemoryUpdates(session, model);
+    const coordinator = new PiCompactionCoordinator({
+      session,
+      models,
+      model,
+      thinkingLevel: "off",
+      settings: { enabled: true, reserveTokens: 100, keepRecentTokens: 100 },
+    });
+
+    const result = trigger === "automatic" ? await coordinator.check(last) : await coordinator.compact();
+
+    assert.equal(result.compacted, true, result.errorMessage);
+    assert.equal(requests.length, 1);
+    assert.match(requests[0]!, /old: x/u, "the older history is summarized");
+    assert.doesNotMatch(requests[0]!, /REMOVED_FACT_CANARY|KEPT_FACT_CANARY|\[memory:/u);
+    const checkpoint = [...(await session.getEntries())].reverse().find((entry) => entry.type === "compaction");
+    assert.ok(checkpoint?.type === "compaction");
+    assert.doesNotMatch(checkpoint.summary, /REMOVED_FACT_CANARY/u);
+    assert.match(
+      JSON.stringify(checkpoint.retainedTail),
+      /KEPT_FACT_CANARY/u,
+      "the retained tail is kept as written; each turn's reading removes what is no longer approved",
+    );
+  });
+}
+
+test("a summary does not keep a removed fact the chat also stated, when the turn reads the journal with it projected out", async () => {
+  const { faux, models, model } = compactionFixture();
+  faux.setResponses([
+    () => fauxAssistantMessage(`${structuredSummary("Continue.")}\n- REMOVED_FACT_CANARY deploys on Fridays.`),
+  ]);
+  const journal = await memorySession("memory-facts-forgotten");
+  await journal.appendMessage(user("REMOVED_FACT_CANARY deploys on Fridays, so plan around it.", 0));
+  await historyWithMemoryUpdates(journal, model);
+  // The person removed m2; the turn reads the journal without it.
+  const current: ChatTurnState = {
+    branch: "main",
+    permission: "ask",
+    memory: "Memory:\n- [memory:m3] KEPT_FACT_CANARY uses pnpm.",
+    canvas: "",
+  };
+  const result = await new PiCompactionCoordinator({
+    session: withoutForgottenFactsSession(journal, current),
+    journalMemoryFacts: async () => memoryFactLinesInBranch(await journal.getBranch()),
+    models,
+    model,
+    thinkingLevel: "off",
+    settings: { enabled: true, reserveTokens: 100, keepRecentTokens: 100 },
+  }).compact();
+
+  assert.equal(result.compacted, true, result.errorMessage);
+  const checkpoint = [...(await journal.getEntries())].reverse().find((entry) => entry.type === "compaction");
+  assert.ok(checkpoint?.type === "compaction");
+  assert.doesNotMatch(checkpoint.summary, /REMOVED_FACT_CANARY/u);
+  assert.match(checkpoint.summary, /Continue\./u, "the rest of the summary is kept");
+});
+
+test("a local compaction keeps a retained tail whose state update carries a memory fact", async () => {
+  const { faux, models, model } = compactionFixture();
+  const session = await memorySession("memory-facts-local");
+  const last = await historyWithMemoryUpdates(session, model);
+  const result = await new PiCompactionCoordinator({
+    session,
+    models,
+    model,
+    thinkingLevel: "off",
+    engine: "vcc",
+    settings: { enabled: true, reserveTokens: 100, keepRecentTokens: 100 },
+    compileVcc: async (input) => compileVcc(input) as unknown as Awaited<
+      ReturnType<NonNullable<ConstructorParameters<typeof PiCompactionCoordinator>[0]["compileVcc"]>>
+    >,
+  }).check(last);
+
+  assert.equal(result.compacted, true, result.errorMessage);
+  assert.equal(faux.state.callCount, 0);
+  const checkpoint = [...(await session.getEntries())].reverse().find((entry) => entry.type === "compaction");
+  assert.ok(checkpoint?.type === "compaction");
+  assert.doesNotMatch(checkpoint.summary, /REMOVED_FACT_CANARY|KEPT_FACT_CANARY/u);
+  assert.match(JSON.stringify(checkpoint.retainedTail), /KEPT_FACT_CANARY/u);
 });
 
 test("summary instructions reach the summary request once the compaction starts", async () => {
@@ -1502,6 +1620,51 @@ test("chat synchronization is idempotent and markers stay out of context", async
   assert.equal((await session.buildContext()).messages.length, 2);
 });
 
+test("host messages that follow a chat message are journaled right after it, once", async () => {
+  const { model } = compactionFixture();
+  const session = await memorySession();
+  const prompt: ChatMessage = { id: "user-1", role: "user", content: "Hello", createdAt: 10 };
+  const reply: ChatMessage = { id: "assistant-1", role: "assistant", content: "Hi", createdAt: 20 };
+  const hook = hookContextMessage("[Aiden hook] ticket: OPS-12", 10);
+  const following = new Map([["user-1", [hook]]]);
+
+  await syncChatMessagesToPiSession(session, [prompt], model, false, new Map(), following);
+  // A retry of the same turn finds the prompt journaled and adds nothing.
+  await syncChatMessagesToPiSession(session, [prompt], model, false, new Map(), following);
+  await syncChatMessagesToPiSession(session, [prompt, reply], model, false);
+
+  const sent = (await session.buildContext()).messages.map((message) => [message.role, JSON.stringify(message)]);
+  assert.deepEqual(sent.map(([role]) => role), ["user", "custom", "assistant"]);
+  assert.match(sent[1]![1]!, /OPS-12/u);
+});
+
+test("entries that precede a chat message share its append: before it, once, and never alone", async () => {
+  const { model } = compactionFixture();
+  const session = await memorySession();
+  const prompt: ChatMessage = { id: "user-1", role: "user", content: "Hello", createdAt: 10 };
+  const preceding = new Map([["user-1", [{ customType: "test.head", data: { n: 1 } }]]]);
+  const heads = async () => (await session.getBranch()).filter((entry) => entry.type === "custom" && entry.customType === "test.head");
+
+  // The marker append fails: the head entry rolls back with the prompt.
+  const appendCustom = session.appendCustomEntry.bind(session);
+  session.appendCustomEntry = async (customType, data) => {
+    if (customType === AIDEN_CHAT_MESSAGE_MARKER) throw new Error("injected marker failure");
+    return appendCustom(customType, data);
+  };
+  await assert.rejects(syncChatMessagesToPiSession(session, [prompt], model, false, new Map(), new Map(), preceding), /marker failure/u);
+  assert.equal((await heads()).length, 0, "no head is left without its prompt");
+  session.appendCustomEntry = appendCustom;
+
+  await syncChatMessagesToPiSession(session, [prompt], model, false, new Map(), new Map(), preceding);
+  // A retry of the held prompt with a different head records neither.
+  await syncChatMessagesToPiSession(session, [prompt], model, false, new Map(), new Map(), new Map([["user-1", [{ customType: "test.head", data: { n: 2 } }]]]));
+  const branch = await session.getBranch();
+  const head = branch.findIndex((entry) => entry.type === "custom" && entry.customType === "test.head");
+  const message = branch.findIndex((entry) => entry.type === "message");
+  assert.deepEqual((await heads()).map((entry) => (entry as { data: unknown }).data), [{ n: 1 }]);
+  assert.ok(head >= 0 && head < message, "the head precedes its prompt");
+});
+
 test("chat synchronization keeps historical images model-neutral", async () => {
   const { model } = compactionFixture();
   const session = await memorySession();
@@ -1693,6 +1856,45 @@ for (const registered of [false, true]) for (const reason of ["stop", "error", "
   assert.equal(dispatched, 1);
   assert.equal(finished, 1);
 }
+});
+
+test("a compaction summary sends the same split system blocks as the chat's turn", async (t) => {
+  const chatId = "chat-split-head";
+  const head = "Stable instructions that every turn of this chat shares.";
+  const tail = "Frozen state for this chat.";
+  rememberStableHead(chatId, head);
+  t.after(() => rememberStableHead(chatId, undefined));
+  const model = { id: "offline-messages", provider: "offline", api: "anthropic-messages" } as ResolvedModelRuntime["model"];
+  for (const registered of [true, false]) {
+    const sent: unknown[] = [];
+    // The provider's transport: builds one cached system block, then lets the hook replace the payload.
+    const transport = (_model: Model<Api>, context: { systemPrompt?: string; messages: Array<{ role: string; content?: unknown }> }, options?: { onPayload?: (payload: unknown, model: Model<Api>) => unknown }) => {
+      const stream = createAssistantMessageEventStream();
+      void (async () => {
+        const [first] = context.messages;
+        const systemPrompt = context.systemPrompt ?? (first?.role === "system" && typeof first.content === "string" ? first.content : "");
+        const payload = { system: [{ type: "text", text: systemPrompt, cache_control: { type: "ephemeral" } }], messages: [] };
+        sent.push((await options?.onPayload?.(payload, _model)) ?? payload);
+        const message = fauxAssistantMessage("summary");
+        stream.push({ type: "done", reason: "stop", message });
+        stream.end(message);
+      })();
+      return stream;
+    };
+    const runtime = {
+      model,
+      models: { getModel: () => (registered ? model : undefined), streamSimple: transport },
+      streams: { streamSimple: withPromptCacheBreakpoints(transport as never) },
+      apiKey: "offline-noncredential",
+    } as unknown as ResolvedModelRuntime;
+    const context = { systemPrompt: `${head}\n\n${tail}`, messages: [] };
+    await runtime.streams.streamSimple(model, normalizeContext(context), { sessionId: chatId }).result();
+    await createPiCompactionModels(runtime).completeSimple(model, context, { sessionId: chatId });
+    const [turn, summary] = sent as Array<{ system: Array<{ text: string; cache_control?: unknown }> }>;
+    assert.equal(turn.system.length, 2, "the turn caches its stable head on its own");
+    assert.equal(turn.system[0].text, `${head}\n\n`);
+    assert.deepEqual(summary.system, turn.system, registered ? "registered model" : "connection-bound model");
+  }
 });
 
 test("journal synchronization stores the exact enriched skill turn once", async () => {

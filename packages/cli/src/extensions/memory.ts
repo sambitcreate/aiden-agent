@@ -21,8 +21,10 @@ import { join } from "node:path";
 import type { ExtensionFactory } from "@earendil-works/pi-coding-agent";
 import { MemoryStore } from "../../../../main/services/memory-store.js";
 import {
+	approvedMemoryFactLines,
 	createMemoryExtension,
 	formatAlwaysOnMemory,
+	formatMemoryFactLine,
 } from "../../../../main/services/memory-context.js";
 import { aidenExtensionToInlineFactory, type AidenExtensionShape } from "../pi-bridge/adapt-aiden-extension.ts";
 import { sharedMemoryRoot } from "../../../../main/services/memory-shared.js";
@@ -33,7 +35,28 @@ export async function createMemoryInlineExtension(options: {
 	workspaceRoot: string;
 	/** Recall-only: no remember/forget tools (unattended generations). */
 	readOnly?: boolean;
-}): Promise<{ name: string; factory: ExtensionFactory; close?: () => Promise<void> }> {
+	/**
+	 * Gains every fact line the always-on prompt tells the chat. The prompt
+	 * is not part of the session, so a compaction learns from this which
+	 * facts its summary must not keep, removed ones included.
+	 */
+	toldFacts?: Set<string>;
+}): Promise<{
+	name: string;
+	factory: ExtensionFactory;
+	close?: () => Promise<void>;
+	/**
+	 * The fact lines the chat may be told now; none once memory is off.
+	 * Still answers after the session ended, for an idle cache warmer.
+	 */
+	approvedFactLines?: () => Promise<string[]>;
+	/**
+	 * This turn's system prompt before the always-on memory was appended, or
+	 * undefined when the turn told no memory: the stable head the cache
+	 * breakpoint extension splits at.
+	 */
+	stableHead?: () => string | undefined;
+}> {
 	// Memory disabled → never open the store (no migration writes either).
 	if (!memoryEnabledFor(options.agentDir, options.workspaceRoot)) {
 		return { name: "aiden-memory", factory: () => undefined };
@@ -66,16 +89,25 @@ export async function createMemoryInlineExtension(options: {
 		id: extension.id,
 		tools: extension.tools,
 	} as AidenExtensionShape);
+	let stableHead: string | undefined;
+	// Once the session ends, a later read (an idle cache warmer confirming its
+	// facts) reopens the store only for that read.
+	let ended = false;
+	const close = () => { ended = true; return store.close(); };
 	const wrapped: ExtensionFactory = (pi) => {
 		factory(pi);
 		// Daemon chats build a fresh store per generation — release the handle
 		// when the session ends instead of leaking it until GC.
-		pi.on("session_shutdown", () => { void store.close(); });
+		pi.on("session_shutdown", () => { void close(); });
 		pi.on("before_agent_start", async (event) => {
+			stableHead = undefined;
 			if (!(await enabled())) return;
 			try {
-				const prompt = formatAlwaysOnMemory(scope, await store.alwaysOn(scope));
+				const facts = await store.alwaysOn(scope);
+				for (const fact of facts) options.toldFacts?.add(formatMemoryFactLine(fact));
+				const prompt = formatAlwaysOnMemory(scope, facts);
 				if (prompt.trim()) {
+					stableHead = event.systemPrompt;
 					return { systemPrompt: `${event.systemPrompt}\n\n${prompt}` };
 				}
 			} catch {
@@ -86,5 +118,15 @@ export async function createMemoryInlineExtension(options: {
 	};
 	// A daemon turn that fails before its session exists never emits
 	// session_shutdown, so it closes the store through this instead.
-	return { name: "aiden-memory", factory: wrapped, close: () => store.close() };
+	return {
+		name: "aiden-memory",
+		factory: wrapped,
+		close,
+		approvedFactLines: async () => {
+			if (!(await enabled())) return [];
+			try { return await approvedMemoryFactLines([extension]); }
+			finally { if (ended) await store.close(); }
+		},
+		stableHead: () => stableHead,
+	};
 }

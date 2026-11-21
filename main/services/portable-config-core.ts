@@ -746,6 +746,8 @@ export function runtimeSettingsFrom(settings: AppSettings): AppSettings {
   if (settings.botMessaging !== false) delete runtime.botMessaging;
   runtime.compactionEngine = compactionEngineFrom(settings.compactionEngine);
   if (settings.cacheWarmingEnabled !== undefined) runtime.cacheWarmingEnabled = settings.cacheWarmingEnabled === true;
+  // Only a literal true pays for hour-long caches; anything hand-edited reads as off.
+  if (settings.longPromptCacheRetention !== undefined) runtime.longPromptCacheRetention = settings.longPromptCacheRetention === true;
   if (settings.usageLimitWaitHours !== undefined && !isUsageLimitWaitHours(settings.usageLimitWaitHours)) delete runtime.usageLimitWaitHours;
   // Only a literal true lets routines go ahead; anything else hand-edited reads as off.
   if (settings.botRoutinesGoAhead !== undefined && settings.botRoutinesGoAhead !== true) delete runtime.botRoutinesGoAhead;

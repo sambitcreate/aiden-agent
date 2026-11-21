@@ -8,7 +8,7 @@ import { getCurrentTools } from "@earendil-works/pi-ai";
 import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai/providers/faux";
 import { Harness, MemoryStorage, ToolResultEntry, type Conversation } from "@earendil-works/pi-durable";
 import { createBotRegistry, type BotExtensionDeps } from "../bot-runtime/bot-extension.js";
-import { botIngressAllowsTool } from "../bot-runtime/bot-tool-policy.js";
+import { botIngressAllowsTool, botIngressRefusal } from "../bot-runtime/bot-tool-policy.js";
 import { holdNextRead, recordingDeps } from "../bot-runtime/test-support/fixtures.js";
 import { createFauxModels, FAUX_MODEL_REF, type FauxModels } from "../bot-runtime/test-support/faux.js";
 import { createBotMemoryService } from "./service.js";
@@ -38,6 +38,7 @@ async function harnessWith(memory: ReturnType<typeof memoryFor>["memory"], fauxM
     currentTools: async () => [botMemoryToolEntry(BOT, memory)],
     checkPolicy: async () => ({ allowed: true }),
     turnAllows: withBotMemoryIngress(botIngressAllowsTool),
+    turnRefusal: botIngressRefusal,
   };
   const registry = createBotRegistry(BOT, deps);
   await registry.refresh();
@@ -116,7 +117,7 @@ test("an add that would overflow is refused with the store's entries", async () 
   }
 });
 
-test("a routine turn is never offered bot_memory and cannot call it", async () => {
+test("a routine turn lists bot_memory like a person turn but its call is refused with the reason", async () => {
   const { memory, memoryFile } = memoryFor();
   const offered: string[][] = [];
   const fauxModels = createFauxModels([
@@ -142,14 +143,16 @@ test("a routine turn is never offered bot_memory and cannot call it", async () =
     await (await root.submit({ type: "input", content: "Run the brief.", requestId: "routine:task-1:1000" }, ctx)).wait(ctx);
     await (await root.submit({ type: "input", content: "Run again.", requestId: "routine:task-1:2000" }, ctx)).wait(ctx);
     await (await root.submit({ type: "input", content: "Hello", requestId: "desktop-1" }, ctx)).wait(ctx);
-    assert.deepEqual(offered, [[], [], [BOT_MEMORY_TOOL_NAME]]);
+    // One tool list for every turn, so routine and person turns share the
+    // provider prompt cache; ingress refuses the call instead.
+    assert.deepEqual(offered, [[BOT_MEMORY_TOOL_NAME], [BOT_MEMORY_TOOL_NAME], [BOT_MEMORY_TOOL_NAME]]);
     const view = await root.context(ctx);
     const results = view.entries
       .filter((entry) => entry.kind === ToolResultEntry.kind)
       .map((entry) => (entry as unknown as { model: ToolResultModel[] }).model[0]!);
     assert.equal(results.length, 1);
     assert.equal(results[0]!.isError, true, "a forced call on a routine turn is blocked");
-    assert.match(results[0]!.content[0]!.text ?? "", /not available on this turn/u);
+    assert.match(results[0]!.content[0]!.text ?? "", /not available on this turn: memory is saved only on turns that answer the person/u);
     assert.throws(() => readFileSync(memoryFile, "utf8"), /ENOENT/u, "nothing reached memory");
   } finally {
     await harness.close(ctx);
@@ -226,7 +229,7 @@ test("a routine can recall person history while memory writes remain withheld", 
     ).wait(ctx);
     assert.equal(offered.length, 1);
     assert.ok(offered[0]!.includes("bot_recall"));
-    assert.ok(!offered[0]!.includes("bot_memory"));
+    assert.ok(offered[0]!.includes("bot_memory"), "memory stays declared; ingress refuses its calls");
     const results = (await root.context(ctx)).entries
       .filter((entry) => entry.kind === ToolResultEntry.kind)
       .map((entry) => (entry as unknown as { model: ToolResultModel[] }).model[0]!);

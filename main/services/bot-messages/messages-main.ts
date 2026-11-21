@@ -13,6 +13,7 @@ import { createBotMessageLifecycle } from "./lifecycle.js";
 import { projectBotMessageRoster } from "./roster.js";
 import { createBotMessageLedger } from "./ledger.js";
 import { createBotMessageCourier, type BotMessageCourier, type BotRosterEntry } from "./courier.js";
+import { messageBotOffer } from "./candidate.js";
 export async function botMessageRoster(): Promise<readonly BotRosterEntry[]> {
   return projectBotMessageRoster(await botStore.list(), {
     paused: isBotPaused,
@@ -53,6 +54,15 @@ const courier = createBotMessageLifecycle({
       report: (error) => logger.warn("bots", "Bot message courier failed.", error),
     }),
 });
+/** This Bot's `message_bot` declaration, decided by `messageBotOffer`. */
+export function botMessageOffer(botId: string) {
+  return messageBotOffer(botId, {
+    messagingEnabled: async () => botMessagingEnabled(await configStore.getSettings()),
+    bot: (id) => botStore.get(id),
+    roster: botMessageRoster,
+    post: (input) => botMessages().post(input),
+  });
+}
 export function botMessages(): BotMessageCourier {
   return courier;
 }

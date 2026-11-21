@@ -5,11 +5,12 @@ import { fileURLToPath } from "node:url";
 import { build } from "esbuild";
 import { assistantUsageRecord } from "./usage-accounting.js";
 import { createEmptyUsageDatabase, createUsageStore } from "./usage-store-core.js";
+import { createPromptCacheTelemetry } from "./pi-cache-telemetry.js";
 import { createAssistantMessageEventStream, fauxAssistantMessage, normalizeContext, type Api, type Model, type SimpleStreamOptions } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
 import { desktopChatExecutionOptions } from "./chat-generation-start.js";
 import { createRemoteChatGenerationOwner } from "./chat-generation-owner.js";
-import { canWarmForegroundChat, PiCacheWarmer, withPiCacheWarming, cacheWarmingEconomics, stopAllPiCacheWarmers, type CacheWarmingClock } from "./pi-cache-warming.js";
+import { adoptChatCacheWarmer, canWarmForegroundChat, IDLE_WARM_LIMIT, PiCacheWarmer, releaseChatCacheWarmer, settleReplyCacheWarmer, withPiCacheWarming, cacheWarmingEconomics, stopAllPiCacheWarmers, type CacheWarmingClock } from "./pi-cache-warming.js";
 import type { ResolvedModelRuntime } from "./model-runtime-core.js";
 
 class Clock implements CacheWarmingClock {
@@ -21,7 +22,7 @@ class Clock implements CacheWarmingClock {
   async advance(ms: number) {
     this.time += ms;
     for (const [id, timer] of this.timers) if (timer.at <= this.time) { this.timers.delete(id); timer.callback(); }
-    for (let index = 0; index < 12; index++) await Promise.resolve();
+    for (let index = 0; index < 24; index++) await Promise.resolve();
   }
 }
 const model: Model<Api> = {
@@ -33,7 +34,7 @@ function usageMessage() {
   return { ...fauxAssistantMessage("ordinary response"), usage: { input: 100_000, output: 10, cacheRead: 0, cacheWrite: 0, totalTokens: 100_010, cost: { input: 1, output: 0.0003, cacheRead: 0, cacheWrite: 0, total: 1.0003 } } };
 }
 type WarmOutcome = "stop" | "length" | "error" | "aborted";
-function fixture(t: test.TestContext) {
+function fixture(t: test.TestContext, settings: { documentId?: string; withinSpendingLimit?: () => Promise<boolean>; idleOnly?: boolean; approvedMemoryFacts?: () => Promise<readonly string[]> } = {}) {
   const clock = new Clock();
   const signal = new AbortController();
   const requests: Array<SimpleStreamOptions | undefined> = [];
@@ -70,10 +71,10 @@ function fixture(t: test.TestContext) {
       return stream;
     } },
   });
-  const warmer = new PiCacheWarmer({ clock, signal: signal.signal, enabled: async () => enabled, isCurrent: () => current, resolveRuntime: async () => { resolutions++; await resolutionBarrier; return runtime(); }, recordUsage: async (message, freshRuntime) => { recorded.push(message); await usageStore.record(assistantUsageRecord({ message, provider: freshRuntime.provider, model: freshRuntime.model, source: "cache-warm" })); }, onCacheRefreshed: (at) => refreshedAt.push(at) });
+  const warmer = new PiCacheWarmer({ clock, signal: signal.signal, enabled: async () => enabled, isCurrent: () => current, resolveRuntime: async () => { resolutions++; await resolutionBarrier; return runtime(); }, recordUsage: async (message, freshRuntime) => { recorded.push(message); await usageStore.record(assistantUsageRecord({ message, provider: freshRuntime.provider, model: freshRuntime.model, source: "cache-warm" })); }, onCacheRefreshed: (at) => refreshedAt.push(at), ...(settings.documentId ? { documentId: settings.documentId } : {}), ...(settings.withinSpendingLimit ? { withinSpendingLimit: settings.withinSpendingLimit } : {}), ...(settings.idleOnly ? { idleOnly: true } : {}), ...(settings.approvedMemoryFacts ? { approvedMemoryFacts: settings.approvedMemoryFacts } : {}) });
   t.after(() => warmer.dispose());
-  const start = (options: SimpleStreamOptions = {}, selected = model) => {
-    const context = normalizeContext({ messages: [{ role: "user", content: "in-memory prompt", timestamp: 1 }] });
+  const start = (options: SimpleStreamOptions = {}, selected = model, system?: string) => {
+    const context = normalizeContext({ ...(system === undefined ? {} : { systemPrompt: system }), messages: [{ role: "user", content: "in-memory prompt", timestamp: 1 }] });
     const response = warmer.requestStarted(selected, context, options);
     response(usageMessage());
     return context;
@@ -348,10 +349,15 @@ async function cancellationHost() {
     "./chat-workspace-mutation-gate.js": { ChatWorkspaceMutationGate: UnusedService },
     "./chat-turn-admission.js": { ChatTurnAdmission: UnusedService },
     "./generation-delta-coalescer.js": { GenerationDeltaCoalescer: UnusedService },
-    "./gemini-context-cache.js": { GeminiContextCache: UnusedService },
     "./chat-run-input-admission.js": { createChatRunInputAdmission: (ports: { active: Map<string, Entry> }) => { active = ports.active; return {}; } },
     "./chat-owed-turns.js": await import("./chat-owed-turns.js"),
     "./chat-owed-turn-prompts.js": await import("./chat-owed-turn-prompts.js"),
+    "./chat-prompt-cache-state.js": {
+      chatPromptCacheTelemetry: createPromptCacheTelemetry(),
+      chatPromptGenerationStopped() {},
+      chatPromptPrefixCompacted() {},
+      forgetChatPromptCacheState() {},
+    },
     "./subagents/child-agent-runtime.js": { subagentRuntimeRegistry: { setHealthMetrics() {}, setLimits() {}, setRuntimeFaultReporter() {}, abortGeneration: (id: string) => children.push(id) } },
     "./tool-approval.js": { ToolApprovalCoordinator: class { cancelStream(id: string) { approvals.push(id); } } },
     "./approval-gate/approval-analytics.js": { ApprovalAnalytics: UnusedService },
@@ -427,4 +433,264 @@ test("one-token warming completion, provider errors and aborts retain distinct b
     // Only a completed refresh restarts the cache lifetime shown to the user, from its dispatch.
     assert.deepEqual(h.refreshedAt, reason === "length" ? [270_000] : []);
   }
+});
+
+// A Claude model on Anthropic's API with no declared tier: Pi has no
+// lifetime for it, so the documented five-minute (or hour) lifetime applies.
+const claude: Model<Api> = { ...model, id: "claude-fixture-5", provider: "anthropic", api: "anthropic-messages", name: "Claude fixture", promptCache: undefined };
+
+test("warming uses the documented lifetime for the request's retention, refreshing ahead of expiry", async (t) => {
+  const short = fixture(t);
+  short.setModel(claude);
+  short.start({}, claude);
+  await short.clock.advance(269_999);
+  assert.equal(short.requests.length, 0);
+  await short.clock.advance(1);
+  assert.equal(short.requests.length, 1, "a five-minute cache is refreshed ten percent early");
+  assert.equal(short.requests[0]?.cacheRetention, "short");
+
+  const long = fixture(t);
+  long.setModel(claude);
+  long.start({ cacheRetention: "long" }, claude);
+  await long.clock.advance(270_000);
+  assert.equal(long.requests.length, 0, "an hour-long cache does not need the five-minute refresh");
+  await long.clock.advance(3_240_000 - 270_000);
+  assert.equal(long.requests.length, 1);
+  assert.equal(long.requests[0]?.cacheRetention, "long", "the refresh keeps the hour-long entry it refreshes");
+  await long.clock.advance(3_240_000);
+  assert.equal(long.requests.length, 1, "a second refresh would pass the one-hour horizon");
+
+  for (const [label, selected, options] of [
+    ["no documented lifetime", { ...model, promptCache: undefined }, {}],
+    ["long retention without a long lifetime", model, { cacheRetention: "long" as const }],
+    ["caching off", claude, { cacheRetention: "none" as const }],
+  ] as const) {
+    const h = fixture(t);
+    h.setModel(selected);
+    h.start(options, selected);
+    for (let i = 0; i < 5; i++) await h.clock.advance(900_000);
+    assert.equal(h.requests.length, 0, label);
+    assert.equal(h.clock.timers.size, 0, label);
+  }
+});
+
+test("a settled chat its window still shows is warmed at Pi's idle odds a bounded number of times", async (t) => {
+  const h = fixture(t);
+  h.start();
+  assert.equal(h.warmer.settle({ isCurrent: () => true }), true);
+  for (let i = 0; i < IDLE_WARM_LIMIT + 3; i++) await h.clock.advance(270_000);
+  assert.equal(h.requests.length, IDLE_WARM_LIMIT);
+  assert.equal(h.clock.timers.size, 0);
+  assert.equal(h.warmer.isDisposed, true, "the warmer ends with its idle run");
+  // A 15% chance of a reply before expiry must still save the minimum:
+  // a five-minute cache whose miss costs little more than a read is not kept.
+  const cheap = fixture(t);
+  const thin = { ...model, cost: { ...model.cost, cacheWrite: 5 } };
+  cheap.setModel(thin);
+  cheap.start({}, thin);
+  assert.equal(cheap.warmer.settle({ isCurrent: () => true }), false);
+  assert.equal(cheap.warmer.isDisposed, true);
+  await cheap.clock.advance(270_000);
+  assert.equal(cheap.requests.length, 0);
+});
+
+test("an idle-only warmer sends nothing while the reply streams, then keeps the settled chat warm within the idle limits", async (t) => {
+  const h = fixture(t, { idleOnly: true });
+  h.start();
+  // The reply is still running: a host whose runtime warms during it owns that part.
+  await h.clock.advance(120_000);
+  assert.equal(h.clock.timers.size, 0);
+  assert.equal(h.requests.length, 0);
+  assert.equal(h.warmer.settle({ isCurrent: () => true }), true);
+  // The first refresh is due from the last request, not from settling.
+  await h.clock.advance(150_000);
+  assert.equal(h.requests.length, 1);
+  assert.equal(h.requests[0]?.maxTokens, 1);
+  for (let i = 0; i < IDLE_WARM_LIMIT + 3; i++) await h.clock.advance(270_000);
+  assert.equal(h.requests.length, IDLE_WARM_LIMIT);
+  assert.equal(h.warmer.isDisposed, true);
+  // A reply that outlived its cache's refresh window has nothing left to keep.
+  const late = fixture(t, { idleOnly: true });
+  late.start();
+  await late.clock.advance(600_000);
+  assert.equal(late.warmer.settle({ isCurrent: () => true }), false);
+  assert.equal(late.warmer.isDisposed, true);
+  assert.equal(late.requests.length, 0);
+});
+
+test("idle warming stops when the window leaves the chat or the chat changed, before credentials are read", async (t) => {
+  let shown = true;
+  const left = fixture(t);
+  left.start();
+  assert.equal(left.warmer.settle({ isCurrent: () => shown }), true);
+  shown = false;
+  await left.clock.advance(270_000);
+  assert.equal(left.resolutions(), 0);
+  assert.equal(left.requests.length, 0);
+  assert.equal(left.warmer.isDisposed, true);
+
+  const changed = fixture(t);
+  changed.start();
+  let checks = 0;
+  assert.equal(changed.warmer.settle({ isCurrent: () => true, stillCurrent: async () => { checks++; return checks < 2; } }), true);
+  await changed.clock.advance(270_000);
+  assert.equal(changed.requests.length, 1);
+  await changed.clock.advance(270_000);
+  assert.equal(checks, 2);
+  assert.equal(changed.resolutions(), 1, "a changed chat never resolves credentials for the stale prefix");
+  assert.equal(changed.requests.length, 1);
+
+  const off = fixture(t);
+  off.start();
+  assert.equal(off.warmer.settle({ isCurrent: () => true }), true);
+  stopAllPiCacheWarmers();
+  await off.clock.advance(270_000);
+  assert.equal(off.requests.length, 0, "turning warming off ends idle warmers too");
+});
+
+test("no refresh is sent once the chat's spending limit refuses, while streaming or idle", async (t) => {
+  for (const phase of ["streaming", "idle"] as const) {
+    // A meter that refuses once the counted warms reach the limit, as the
+    // chat's own spending gate does after its usage settles.
+    let spent = 0;
+    const limit = 0.25;
+    const h = fixture(t, { withinSpendingLimit: async () => spent < limit });
+    const recordedBefore = () => h.recorded.length;
+    h.start();
+    if (phase === "idle") assert.equal(h.warmer.settle({ isCurrent: () => true }), true);
+    spent = 0.2; // the reply itself
+    await h.clock.advance(270_000);
+    assert.equal(h.requests.length, 1, `${phase}: within the limit the first refresh is sent`);
+    spent += 0.1; // that refresh's charge takes the chat past its limit
+    for (let i = 0; i < 6; i++) await h.clock.advance(270_000);
+    assert.equal(h.requests.length, 1, `${phase}: nothing is sent after the limit refuses`);
+    assert.equal(h.resolutions(), 1, `${phase}: credentials are not read for a refused refresh`);
+    assert.equal(recordedBefore(), 1);
+    assert.equal(h.warmer.isDisposed, true, `${phase}: the warmer ends for good`);
+    assert.equal(h.clock.timers.size, 0);
+    // A new request on a refused warmer never arms another refresh.
+    spent = 0;
+    h.start();
+    await h.clock.advance(270_000);
+    assert.equal(h.requests.length, 1, `${phase}: a refused warmer stays ended`);
+  }
+  // A gate that fails to answer refuses too.
+  const failing = fixture(t, { withinSpendingLimit: async () => { throw new Error("store unavailable"); } });
+  failing.start();
+  await failing.clock.advance(270_000);
+  assert.equal(failing.requests.length, 0);
+  assert.equal(failing.resolutions(), 0);
+});
+
+test("settling keeps nothing when the reply left no economical prefix or the cache outlives the idle horizon", async (t) => {
+  const none = fixture(t);
+  assert.equal(none.warmer.settle({ isCurrent: () => true }), false);
+  assert.equal(none.warmer.isDisposed, true);
+  const hidden = fixture(t);
+  hidden.start();
+  assert.equal(hidden.warmer.settle({ isCurrent: () => false }), false);
+  // Pi's idle horizon is 30 minutes from the real request; an hour-long
+  // cache is still alive then, so there is nothing to refresh.
+  const long = fixture(t);
+  long.setModel(claude);
+  long.start({ cacheRetention: "long" }, claude);
+  assert.equal(long.warmer.settle({ isCurrent: () => true }), false);
+  await long.clock.advance(3_240_000);
+  assert.equal(long.requests.length, 0);
+});
+
+test("each chat keeps one warmer, which a new reply replaces and only the window that showed it releases", async (t) => {
+  const first = fixture(t, { documentId: "window-a" });
+  first.start();
+  first.warmer.settle({ isCurrent: () => true });
+  adoptChatCacheWarmer("chat-1", first.warmer);
+  const second = fixture(t, { documentId: "window-a" });
+  adoptChatCacheWarmer("chat-1", second.warmer);
+  assert.equal(first.warmer.isDisposed, true, "a new reply ends the earlier idle warmer");
+  await first.clock.advance(270_000);
+  assert.equal(first.requests.length, 0);
+
+  second.start();
+  second.warmer.settle({ isCurrent: () => true });
+  assert.equal(releaseChatCacheWarmer("chat-1", "window-b"), false);
+  assert.equal(second.warmer.isDisposed, false);
+  assert.equal(releaseChatCacheWarmer("chat-1", "window-a"), true);
+  assert.equal(second.warmer.isDisposed, true);
+  assert.equal(releaseChatCacheWarmer("chat-1", "window-a"), false);
+
+  const replyWithoutWarming = fixture(t);
+  replyWithoutWarming.start();
+  replyWithoutWarming.warmer.settle({ isCurrent: () => true });
+  adoptChatCacheWarmer("chat-2", replyWithoutWarming.warmer);
+  adoptChatCacheWarmer("chat-2", undefined);
+  assert.equal(replyWithoutWarming.warmer.isDisposed, true);
+});
+
+test("a saved reply in an open window keeps warming until the chat is written again; other endings stop at once", async (t) => {
+  let chat: { summaryRevision: string; providerId: string; model: string } | null = { summaryRevision: "r1", providerId: "fixture", model: "priced" };
+  let closed = false;
+  const owner = { isDestroyed: () => closed };
+  const kept = fixture(t);
+  kept.start();
+  await settleReplyCacheWarmer(kept.warmer, { owner, delivered: true, chat: async () => chat });
+  await kept.clock.advance(270_000);
+  assert.equal(kept.requests.length, 1);
+  chat = { ...chat, summaryRevision: "r2" };
+  await kept.clock.advance(270_000);
+  assert.equal(kept.requests.length, 1, "a new message, model switch or compaction rewrites the chat");
+  assert.equal(kept.warmer.isDisposed, true);
+
+  for (const [label, delivered, destroyed, stored] of [
+    ["stopped or failed reply", false, false, chat],
+    ["closed window", true, true, chat],
+    ["removed chat", true, false, null],
+  ] as const) {
+    closed = destroyed;
+    const h = fixture(t);
+    h.start();
+    await settleReplyCacheWarmer(h.warmer, { owner, delivered, chat: async () => stored });
+    assert.equal(h.warmer.isDisposed, true, label);
+    await h.clock.advance(270_000);
+    assert.equal(h.requests.length, 0, label);
+  }
+  closed = false;
+  const unreadable = fixture(t);
+  unreadable.start();
+  await settleReplyCacheWarmer(unreadable.warmer, { owner, delivered: true, chat: async () => { throw new Error("index locked"); } });
+  assert.equal(unreadable.warmer.isDisposed, true);
+});
+
+test("a request stating a memory fact the person removed is never replayed, streaming or idle", async (t) => {
+  const told = "- [memory:fact-1] Keeps bees on the roof";
+  const system = `Base instructions.\n\n<volatile_memory scope="workspace:w">\n${told}\n</volatile_memory>`;
+  for (const phase of ["streaming", "idle"] as const) {
+    let approved: readonly string[] = [told];
+    const h = fixture(t, { approvedMemoryFacts: async () => approved });
+    h.start({}, model, system);
+    if (phase === "idle") assert.equal(h.warmer.settle({ isCurrent: () => true }), true);
+    await h.clock.advance(270_000);
+    assert.equal(h.requests.length, 1, `${phase}: an approved fact is warmed`);
+    assert.match(JSON.stringify(h.contexts[0]), /bees on the roof/u);
+    // Forgetting the fact (or turning memory off) writes nothing to the chat.
+    approved = [];
+    for (let i = 0; i < 4; i++) await h.clock.advance(270_000);
+    assert.equal(h.requests.length, 1, `${phase}: the forgotten fact is not sent again`);
+    assert.equal(h.resolutions(), 1, `${phase}: credentials are not read for it`);
+    assert.equal(h.warmer.isDisposed, true, `${phase}: the warmer ends for good`);
+    assert.equal(h.clock.timers.size, 0);
+  }
+  // Facts that cannot be confirmed are not sent: no reader, or one that fails.
+  for (const [label, reader] of [["no reader", undefined], ["unreadable store", async () => { throw new Error("store locked"); }]] as const) {
+    const h = fixture(t, reader ? { approvedMemoryFacts: reader } : {});
+    h.start({}, model, system);
+    await h.clock.advance(270_000);
+    assert.equal(h.requests.length, 0, label);
+    assert.equal(h.resolutions(), 0, label);
+    assert.equal(h.warmer.isDisposed, true, label);
+  }
+  // A request that states no fact needs no reader.
+  const plain = fixture(t);
+  plain.start({}, model, "Base instructions.");
+  await plain.clock.advance(270_000);
+  assert.equal(plain.requests.length, 1);
 });

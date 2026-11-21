@@ -395,6 +395,14 @@ export async function syncChatMessagesToPiSession(
   model: Model<Api>,
   _supportsImages: boolean,
   contentOverrides: ReadonlyMap<string, string> = new Map(),
+  /** Host messages journaled right after a visible message, in its transaction (hook context, state update). */
+  followingMessages: ReadonlyMap<string, readonly AgentMessage[]> = new Map(),
+  /**
+   * Custom entries journaled right before a visible message, in its
+   * transaction (the chat head's state), so a message the branch already
+   * holds skips them with it.
+   */
+  precedingEntries: ReadonlyMap<string, readonly { customType: string; data: unknown }[]> = new Map(),
 ): Promise<void> {
   const entries = await session.getBranch();
   const synchronized = new Set(
@@ -423,11 +431,17 @@ export async function syncChatMessagesToPiSession(
     const context = await session.buildContext();
     const tail = context.messages[context.messages.length - 1];
     await appendPiTransaction(session, async () => {
+      for (const entry of precedingEntries.get(message.id) ?? []) {
+        await session.appendCustomEntry(entry.customType, entry.data);
+      }
       // A process may have died after the Pi assistant was committed and the
       // visible chat was saved, but before its marker transaction. Reconcile
       // that exact terminal projection instead of duplicating the answer.
       if (!visibleAssistantAlreadyAtTail(tail, message, desired)) {
         await session.appendMessage(desired);
+      }
+      for (const following of followingMessages.get(message.id) ?? []) {
+        await session.appendMessage(following);
       }
       await session.appendCustomEntry(AIDEN_CHAT_MESSAGE_MARKER, {
         chatMessageId: message.id,
