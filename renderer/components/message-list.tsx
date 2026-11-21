@@ -67,6 +67,7 @@ import {
 import {
   hasActiveThinkingStep,
   isToolStep,
+  type AgentStep,
   type GenerationTimeline,
 } from "../shared/generation-timeline";
 import type { SubagentRunSnapshot } from "../shared/subagent-runs";
@@ -208,6 +209,11 @@ const EMPTY_WIDE_VISUALS: ReadonlySet<string> = new Set();
  */
 const VisualFollowUpBusyContext = React.createContext(false);
 
+/** The `subagent` tool call that started a reply's subagents; their card stands for it. */
+function isSubagentLaunchStep(step: AgentStep): boolean {
+  return isToolStep(step) && step.toolName === "subagent";
+}
+
 function FollowUpAwareHtmlArtifactFrame(props: Omit<React.ComponentProps<typeof HtmlArtifactFrame>, "followUpBusy">) {
   return <HtmlArtifactFrame {...props} followUpBusy={React.useContext(VisualFollowUpBusyContext)} />;
 }
@@ -329,7 +335,9 @@ function AssistantResponse({
     const activityTimeline = timeline
       ? activityTimelineFragment(
           timeline,
-          timeline.steps.filter((step) => isToolStep(step) && !isQuestionnaireStep(step)),
+          timeline.steps.filter(
+            (step) => isToolStep(step) && !isQuestionnaireStep(step) && !(subagentChips && isSubagentLaunchStep(step)),
+          ),
         )
       : null;
     // Same slots as the chronological layout below, with the prose keyed like
@@ -386,9 +394,7 @@ function AssistantResponse({
     if (row.kind === "text") lastTextIndex = index;
   });
   const subagentActivityKey = rows.find(
-    (row) =>
-      row.kind === "activity" &&
-      row.steps.some((step) => isToolStep(step) && step.toolName === "subagent"),
+    (row) => row.kind === "activity" && row.steps.some(isSubagentLaunchStep),
   )?.key;
 
   return (
@@ -420,7 +426,11 @@ function AssistantResponse({
           return (
             <React.Fragment key={row.key}>
               <ActivityFeed
-                timeline={activityTimelineFragment(timeline, row.steps)}
+                // The subagent card stands for its launch call, so the call is not listed again here.
+                timeline={activityTimelineFragment(
+                  timeline,
+                  subagentChips ? row.steps.filter((step) => !isSubagentLaunchStep(step)) : row.steps,
+                )}
                 animate={streaming}
                 mode={workDetails}
                 retainDetails={retainWorkDetails || (streaming && !streamComplete)}
