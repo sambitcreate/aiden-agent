@@ -700,6 +700,8 @@ export interface ChatMeta {
   forkedFrom?: ChatForkLineageV1;
   /** Main-owned feature owner; owned chats never appear in chat listings or Remote. */
   owner?: ChatOwnerV1;
+  /** Temporary floating chat hidden from sidebar, Inbox, Memory, and Remote until saved or attached. */
+  ephemeral?: true;
   /** This chat opens in design mode (narrow chat beside the canvas); absent when off. */
   designMode?: true;
   createdAt: number;

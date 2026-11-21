@@ -3593,9 +3593,9 @@ export const llmClient = {
         tools: [createVccRecallTool(async () => piSession!)],
       };
       let memoryExtension: PiAgentRuntimeExtension | undefined;
-      // Bots keep their own memory files (`bot-memory/`) and never use the
-      // workspace store.
-      if (!generationChat.botId) {
+      // Bots keep their own memory files (`bot-memory/`), and ephemeral
+      // floating chats stay off the workspace memory store until promoted.
+      if (!generationChat.botId && generationChat.ephemeral !== true) {
         try {
           const memoryEligible = piUpgradeMemoryEligible(piUpgradePolicy, generationChat, {
             development: !isPackagedRuntime(),
@@ -6271,6 +6271,14 @@ export const llmClient = {
     // SessionEnd for a chat whose hooks ran in this process; never awaited.
     endWorkspaceChatSession(chatId, undefined, {
       onMessages: (lines) => logger.warn("hooks", `SessionEnd hooks for a deleted chat: ${lines.join("\n")}`),
+    });
+    return acpScratch.forget(chatId);
+  },
+
+  /** Reset workspace-bound hook/ACP scratch state after attaching a chat to a new workspace. */
+  resetChatWorkspaceSession(chatId: string): Promise<void> {
+    endWorkspaceChatSession(chatId, undefined, {
+      onMessages: (lines) => logger.warn("hooks", `SessionEnd hooks for a reattached chat: ${lines.join("\n")}`),
     });
     return acpScratch.forget(chatId);
   },

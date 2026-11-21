@@ -479,6 +479,22 @@ export async function projectVisibleHistoryWithoutSkills<M extends PiSessionMeta
       if (next) visible[after + 2] = { ...next, parentId: id };
     }
   }
+  // Preserve workspace-attached transition boundaries even when skill-era
+  // entries are projected out, so the model still knows its cwd changed.
+  for (const entry of originalEntries) {
+    if (entry.type !== "custom" || entry.customType !== AIDEN_WORKSPACE_ATTACHED_MARKER) continue;
+    const info = parseWorkspaceAttachedBoundaryData(entry.data);
+    if (!info) continue;
+    const prev = visible[visible.length - 1];
+    visible.push({
+      type: "message",
+      id: `visible-skill-free-workspace-attached-${entry.id}`,
+      parentId: prev?.id ?? null,
+      seq: prev ? prev.seq : -1,
+      timestamp: entry.timestamp,
+      message: workspaceAttachedBoundaryMessage(info, entry.timestamp),
+    });
+  }
   // Compaction fences writes against the real durable leaf. Keep that identity
   // as an inert boundary after the synthetic prefix, without exposing its data.
   if (originalLeafId) visible.push({
@@ -724,6 +740,96 @@ export async function recordPiEffectRecoveryBoundary(
         effectId: effect.effectId,
       } satisfies PiEffectRecoveryMarker);
     }
+  });
+}
+
+const AIDEN_WORKSPACE_ATTACHED_MARKER = "aiden.workspace-attached.v1";
+
+export interface PiWorkspaceAttachedBoundaryInfo {
+  targetWorkspaceId: string;
+  targetWorkspaceName: string;
+  targetFolderPath: string;
+  copiedPaths?: readonly string[];
+}
+
+function parseWorkspaceAttachedBoundaryData(data: unknown): PiWorkspaceAttachedBoundaryInfo | null {
+  if (!data || typeof data !== "object" || Array.isArray(data)) return null;
+  const record = data as Record<string, unknown>;
+  if (
+    typeof record.targetWorkspaceId !== "string" ||
+    typeof record.targetFolderPath !== "string"
+  ) {
+    return null;
+  }
+  const targetWorkspaceName =
+    typeof record.targetWorkspaceName === "string" && record.targetWorkspaceName.trim()
+      ? record.targetWorkspaceName
+      : path.basename(record.targetFolderPath) || record.targetWorkspaceId;
+  const copiedPaths = Array.isArray(record.copiedPaths)
+    ? record.copiedPaths.filter((item): item is string => typeof item === "string").slice(0, 40)
+    : [];
+  return {
+    targetWorkspaceId: record.targetWorkspaceId,
+    targetWorkspaceName,
+    targetFolderPath: record.targetFolderPath,
+    copiedPaths,
+  };
+}
+
+function workspaceAttachedBoundaryMessage(
+  info: PiWorkspaceAttachedBoundaryInfo,
+  timestamp = Date.now(),
+): AgentMessage {
+  const copied = (info.copiedPaths ?? []).slice(0, 40);
+  const copiedSuffix = copied.length > 0
+    ? ` Copied scratch files now in this workspace: ${copied.join(", ")}.`
+    : "";
+  return {
+    role: "assistant",
+    content: [
+      {
+        type: "text",
+        text:
+          `Aiden workspace boundary: this conversation was attached from its temporary private folder to workspace "${info.targetWorkspaceName}" (${info.targetFolderPath}).` +
+          " Earlier file paths or tool outputs in this history came from the previous folder. Inspect the current workspace before assuming earlier files or commands apply here." +
+          copiedSuffix,
+      },
+    ],
+    api: "openai-completions",
+    provider: "aiden",
+    model: "workspace-attached",
+    usage: {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 0,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    },
+    stopReason: "stop",
+    timestamp,
+  };
+}
+
+/**
+ * Append a workspace-transition boundary into an existing Pi journal so the
+ * model knows earlier paths/tool outputs came from the chat's private scratch
+ * folder and later turns now run inside the attached project workspace.
+ */
+export async function recordPiWorkspaceAttachedBoundary(
+  session: PiSessionPort,
+  info: PiWorkspaceAttachedBoundaryInfo,
+): Promise<void> {
+  const copied = (info.copiedPaths ?? []).slice(0, 40);
+  const message = workspaceAttachedBoundaryMessage(info);
+  await appendPiTransaction(session, async () => {
+    await session.appendMessage(message);
+    await session.appendCustomEntry(AIDEN_WORKSPACE_ATTACHED_MARKER, {
+      targetWorkspaceId: info.targetWorkspaceId,
+      targetWorkspaceName: info.targetWorkspaceName,
+      targetFolderPath: info.targetFolderPath,
+      copiedPaths: copied,
+    });
   });
 }
 
@@ -1305,6 +1411,22 @@ export class PiCompactionSessionStore {
     const branch = await opened.session.getBranch();
     const prefix = piJournalForkPrefix(branch, [{ sourceId: messageId, id: messageId }]);
     return prefix ? branch.slice(prefix.length) : undefined;
+  }
+
+  /**
+   * Record a workspace-transition boundary only when the chat already has a
+   * Pi journal. Never creates a journal for a chat without history.
+   */
+  async recordWorkspaceAttached(
+    chatId: string,
+    info: PiWorkspaceAttachedBoundaryInfo,
+  ): Promise<boolean> {
+    if (!SAFE_SESSION_ID.test(chatId)) return false;
+    if (!(await this.hasChatHistory(chatId))) return false;
+    const opened = await this.openChatIfEligible(chatId);
+    if (!opened.session) return false;
+    await recordPiWorkspaceAttachedBoundary(opened.session, info);
+    return true;
   }
 
   async deleteChat(chatId: string): Promise<void> {

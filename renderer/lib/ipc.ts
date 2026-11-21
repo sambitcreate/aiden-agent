@@ -1,5 +1,10 @@
 import { parseBotRoutineModelDirectory } from "../shared/bot-routine-model-directory";
 import type { ChatInputSourceV1 } from "../shared/chat-input-source";
+import type {
+  AttachFileAction,
+  AttachToWorkspaceResult,
+  InspectAttachFilesResult,
+} from "../shared/chat-attach-workspace";
 import { createBotPeerApi } from "./bot-peers-api";
 import { parseBotExecutionResumeStatus } from "../shared/bot-execution-resume";
 import { parseBotRoutineModelSettings, parseBotRoutineModelCatalog, parseBotRoutineModelResult, parseBotRoutineModelRuns, type BotRoutineModelSave, type BotRoutineThinkingLevel } from "../shared/bot-routine-models";
@@ -1730,6 +1735,8 @@ export const chatsApi = {
     title?: string;
     /** Ignored by main: a Bot chat always lives in its managed home. */
     workspaceId?: string;
+    /** Temporary floating chat hidden from sidebar, Inbox, Memory, and Remote until saved or attached. */
+    ephemeral?: true;
     providerId?: string;
     model?: string;
     turnId: string;
@@ -1805,6 +1812,18 @@ export const chatsApi = {
   showSavedImage: (filePath: string) => invoke<boolean>("chats:showSavedImage", filePath),
   moveEmptyToWorkspace: (id: string, workspaceId: string) =>
     invoke<Chat>("chats:moveEmptyToWorkspace", id, workspaceId),
+  /** Save a temporary floating chat so it appears in Chats (No workspace). */
+  promoteEphemeral: (id: string) =>
+    invoke<Chat>("chats:promoteEphemeral", id),
+  /** Inspect scratch files inside a No workspace or temporary chat's private folder. */
+  inspectAttachFiles: (id: string) =>
+    invoke<InspectAttachFilesResult>("chats:inspectAttachFiles", id),
+  /** Attach a No workspace or temporary chat in-place to a real project workspace. */
+  attachToWorkspace: (input: {
+    chatId: string;
+    targetWorkspaceId: string;
+    fileAction?: AttachFileAction;
+  }) => invoke<AttachToWorkspaceResult<Chat>>("chats:attachToWorkspace", input),
   /** Clear the post-restart "continue Computer Use" callout without resuming. */
   dismissComputerUseContinue: (chatId: string) =>
     invoke<Chat>("chats:dismissComputerUseContinue", chatId),

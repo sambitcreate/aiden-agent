@@ -660,6 +660,8 @@
         "main/services/bot-system-prompt.test.ts",
         "main/services/bot-tool-authority.test.ts",
         "main/services/chat-application-service.test.ts",
+        "main/services/chat-attach-workspace.test.ts",
+        "renderer/components/attach-workspace-dialog.test.tsx",
         "main/services/chat-first-message-commit.test.ts",
         "main/services/chat-generation-owner.test.ts",
         "main/services/chat-generation-start.test.ts",

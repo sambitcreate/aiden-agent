@@ -1,4 +1,10 @@
 import { ASSISTANT_WORKSPACE_ID } from "../../renderer/shared/assistant.js";
+import type {
+  AttachFileAction,
+  AttachToWorkspaceResult,
+  InspectAttachFilesResult,
+} from "../../renderer/shared/chat-attach-workspace.js";
+import { chatSurface } from "../../renderer/shared/chat-visibility.js";
 import { analyticsWorkspaceKind } from "./analytics/analytics-ids.js";
 import { reportAnalyticsEvent } from "./analytics/analytics-report.js";
 import type { AidenRemoteAttachmentStore } from "./aiden-remote-attachments.js";
@@ -18,8 +24,17 @@ import {
   isChatCreateReconciliationRequiredError,
 } from "./chat-store-core.js";
 import type { llmClient } from "./llm-client.js";
-import type { Chat } from "./types.js";
+import type { Chat, Workspace } from "./types.js";
 import { assertRenameAllowedFromChat } from "./chat-title-policy.js";
+import {
+  copyScratchFilesToWorkspaceWithRollback,
+  inspectScratchFolderFiles,
+} from "./chat-attach-workspace.js";
+import {
+  WorkspaceFolderMissingError,
+  workspaceFolderMissing as defaultWorkspaceFolderMissing,
+} from "./workspace-folder-presence.js";
+import { assertManagedWorktreeAdmission as defaultAssertManagedWorktreeAdmission } from "./managed-worktree-admission.js";
 import type { piCompactionSessionStore } from "./pi-compaction-session-store.js";
 import type { piRuntimeEffectStore } from "./pi-runtime-effect-store.js";
 import type { subagentRunStore } from "./subagents/subagent-run-store.js";
@@ -60,7 +75,16 @@ export interface ChatApplicationDependencies {
     | "setDesignMode"
     | "moveEmptyChatToWorkspace"
     | "remove"
-  > & Partial<Pick<typeof chatStore, "listSummaryMetadata" | "getWithImageReferences">>;
+  > &
+    Partial<
+      Pick<
+        typeof chatStore,
+        | "listSummaryMetadata"
+        | "getWithImageReferences"
+        | "promoteEphemeralChat"
+        | "attachChatToWorkspace"
+      >
+    >;
   configStore: Pick<typeof configStore, "getWorkspace">;
   llmClient: Pick<
     typeof llmClient,
@@ -89,7 +113,8 @@ export interface ChatApplicationDependencies {
     "deleteChat" | "completeChatDeletion" | "pendingChatDeletions"
   >;
   piRuntimeEffectStore: Pick<typeof piRuntimeEffectStore, "deleteChat">;
-  piCompactionSessionStore: Pick<typeof piCompactionSessionStore, "deleteChat">;
+  piCompactionSessionStore: Pick<typeof piCompactionSessionStore, "deleteChat"> &
+    Partial<Pick<typeof piCompactionSessionStore, "recordWorkspaceAttached">>;
   chatPullRequestStore?: Pick<ChatPullRequestStore, "deleteChat">;
   /** The chat's design canvas document goes with it; forks never copy it. */
   designCanvasStore?: Pick<DesignCanvasStore, "delete">;
@@ -111,10 +136,18 @@ export interface ChatApplicationDependencies {
   };
   memoryStore?: { deleteSourceChat(chatId: string): Promise<number> };
   attachments?: Pick<AidenRemoteAttachmentStore, "beginChatDeletion" | "revokeChat">;
-  /** Release ambient per-chat caches (context-pressure projections). */
+  /** Release ambient per-chat caches on chat deletion (including spending and interrupted waits). */
   releaseChatContext?: (chatId: string) => void;
+  /** Invalidate workspace-scoped per-chat caches on attach without clearing spending or interrupted waits. */
+  invalidateChatWorkspaceContext?: (chatId: string) => void;
   /** Remove per-chat scratch state once the chat is gone. Best effort; never throws. */
   forgetDeletedChat?: (chatId: string) => Promise<void>;
+  /** Reset workspace-bound hook/ACP scratch state after attaching a chat to a new workspace. */
+  resetChatWorkspaceSession?: (chatId: string) => Promise<void>;
+  /** Override folder-presence check in unit tests. */
+  workspaceFolderMissing?: (workspace: Workspace) => Promise<boolean>;
+  /** Override managed-worktree admission check in unit tests. */
+  assertManagedWorktreeAdmission?: (workspace: Workspace) => Promise<void>;
   /**
    * The Inbox stores whose entry for a deleted chat (its read marker and its
    * triage) is dropped once the chat is gone. Every delete runs through here
@@ -391,6 +424,224 @@ export function createChatApplicationService(deps: ChatApplicationDependencies) 
         finishFollowThroughMove?.();
         finishMove();
       }
+    },
+
+    /** Promote an ephemeral floating chat into a durable No workspace chat. */
+    async promoteEphemeral(
+      chatId: string,
+      options: ChatApplicationMutationOptions = {},
+    ): Promise<Chat> {
+      if (!deps.chatStore.promoteEphemeralChat) {
+        throw new Error("Promoting temporary chats is not available.");
+      }
+      const promoted = await deps.chatStore.promoteEphemeralChat(chatId, async (chat) => {
+        assertRenameAllowedFromChat(chat, options);
+        await options.assertCurrent?.(chat);
+      });
+      return chatForRenderer(promoted)!;
+    },
+
+    /** Inspect files inside a No workspace / ephemeral chat's private scratch folder. */
+    async inspectAttachFiles(chatId: string): Promise<InspectAttachFilesResult> {
+      const chat = await deps.chatStore.get(chatId);
+      if (!chat) throw new Error(`Chat ${chatId} not found`);
+      const surface = chatSurface(chat);
+      if (surface !== "regular" && surface !== "ephemeral") {
+        throw new Error("Only regular or temporary chats can attach to a workspace.");
+      }
+      const oldWorkspaceId = persistedChatWorkspaceId(chat.workspaceId);
+      const oldWorkspace = await deps.configStore.getWorkspace(oldWorkspaceId);
+      if (!oldWorkspace || oldWorkspace.noWorkspace !== true) {
+        throw new Error("Only No workspace or temporary chats can attach to a project workspace.");
+      }
+      if (!oldWorkspace.folderPath) {
+        return { hasFiles: false, totalBytes: 0, truncated: false, entries: [] };
+      }
+      return inspectScratchFolderFiles(oldWorkspace.folderPath);
+    },
+
+    /**
+     * Attach a No workspace or ephemeral chat in-place to a real project
+     * workspace, carrying over or trashing scratch files, recording a Pi
+     * context boundary, invalidating workspace-bound caches, and releasing the
+     * old hidden No workspace folder.
+     */
+    async attachToWorkspace(
+      chatId: string,
+      targetWorkspaceId: string,
+      options: ChatApplicationMutationOptions & {
+        fileAction?: AttachFileAction;
+        owner?: ChatApplicationOwner;
+      } = {},
+    ): Promise<AttachToWorkspaceResult<Chat>> {
+      if (!deps.chatStore.attachChatToWorkspace) {
+        throw new Error("Attaching chats to a workspace is not available.");
+      }
+      if (targetWorkspaceId === ASSISTANT_WORKSPACE_ID) {
+        throw new Error("A chat cannot attach to the Assistant workspace.");
+      }
+      const finishMove = deps.llmClient.beginChatWorkspaceChange(chatId);
+      if (!finishMove) {
+        throw new Error("Finish or stop the current response before attaching to a workspace.");
+      }
+      let finishFollowThroughMove: (() => void) | undefined;
+      const admissions: Array<{ release(): void; signal?: AbortSignal }> = [];
+      let admissionsReleased = false;
+      const releaseAdmissions = () => {
+        if (admissionsReleased) return;
+        admissionsReleased = true;
+        for (let i = admissions.length - 1; i >= 0; i -= 1) {
+          admissions[i]!.release();
+        }
+      };
+      let rollbackCopiedFiles: (() => Promise<void>) | undefined;
+      try {
+        finishFollowThroughMove = await deps.followThrough?.beginMove?.(chatId);
+        const current = await deps.chatStore.get(chatId);
+        if (!current) throw new Error(`Chat ${chatId} not found`);
+        const surface = chatSurface(current);
+        if (surface !== "regular" && surface !== "ephemeral") {
+          throw new Error("Only regular or temporary chats can attach to a workspace.");
+        }
+        const oldWorkspaceId = persistedChatWorkspaceId(current.workspaceId);
+        if (oldWorkspaceId === targetWorkspaceId) {
+          throw new Error("This chat is already in that workspace.");
+        }
+        const [oldWorkspace, targetWorkspace] = await Promise.all([
+          deps.configStore.getWorkspace(oldWorkspaceId),
+          deps.configStore.getWorkspace(targetWorkspaceId),
+        ]);
+        if (!oldWorkspace || oldWorkspace.noWorkspace !== true) {
+          throw new Error("Only No workspace or temporary chats can attach to a project workspace.");
+        }
+        if (!targetWorkspace) {
+          throw new Error(`Workspace ${targetWorkspaceId} not found.`);
+        }
+        if (targetWorkspace.noWorkspace === true) {
+          throw new Error("Choose a project workspace to attach this chat to.");
+        }
+        if (!targetWorkspace.folderPath) {
+          throw new Error("The target workspace does not have a folder on disk.");
+        }
+        const checkMissing = deps.workspaceFolderMissing ?? defaultWorkspaceFolderMissing;
+        if (await checkMissing(targetWorkspace)) {
+          throw new WorkspaceFolderMissingError(targetWorkspace);
+        }
+        const checkWorktree = deps.assertManagedWorktreeAdmission ?? defaultAssertManagedWorktreeAdmission;
+        await checkWorktree(targetWorkspace);
+
+        // Admit both workspaces in deterministic ID order so concurrent mutations cannot race.
+        for (const wsId of [oldWorkspaceId, targetWorkspaceId].sort()) {
+          const gate = deps.workspaceMutationGate.admit(wsId);
+          admissions.push(gate);
+          if (options.owner) {
+            const op = admitOwnedWorkspaceOperation(deps.workspaceOperationRegistry, options.owner, wsId);
+            admissions.push(op);
+          }
+        }
+        const assertAdmitted = () => {
+          if (options.owner?.isDestroyed()) {
+            throw new Error("The renderer document is no longer active.");
+          }
+          if (admissions.some((admission) => admission.signal?.aborted)) {
+            throw new Error("A workspace changed while attaching this chat.");
+          }
+        };
+        assertAdmitted();
+
+        let copiedPaths: string[] = [];
+        if (options.fileAction === "copy" && oldWorkspace.folderPath) {
+          const copyTx = await copyScratchFilesToWorkspaceWithRollback(
+            oldWorkspace.folderPath,
+            targetWorkspace.folderPath,
+          );
+          copiedPaths = copyTx.copiedPaths;
+          rollbackCopiedFiles = copyTx.rollback;
+          assertAdmitted();
+        }
+
+        const updated = await deps.chatStore.attachChatToWorkspace(
+          chatId,
+          targetWorkspaceId,
+          async (chat) => {
+            assertAdmitted();
+            const liveSurface = chatSurface(chat);
+            if (liveSurface !== "regular" && liveSurface !== "ephemeral") {
+              throw new Error("Only regular or temporary chats can attach to a workspace.");
+            }
+            if (persistedChatWorkspaceId(chat.workspaceId) !== oldWorkspaceId) {
+              throw new Error("This chat's workspace changed before attaching.");
+            }
+            await options.assertCurrent?.(chat);
+          },
+        );
+        // Commit succeeded: keep copied files from here on.
+        rollbackCopiedFiles = undefined;
+
+        // Record Pi context transition boundary only if the chat already has a journal.
+        if (deps.piCompactionSessionStore.recordWorkspaceAttached) {
+          await deps.piCompactionSessionStore
+            .recordWorkspaceAttached(chatId, {
+              targetWorkspaceId,
+              targetWorkspaceName: targetWorkspace.name,
+              targetFolderPath: targetWorkspace.folderPath,
+              copiedPaths,
+            })
+            .catch((error: unknown) => {
+              deps.logError("chats", "Could not record workspace-attached Pi boundary.", error);
+            });
+        }
+
+        // Invalidate only workspace-scoped per-chat caches, grants, hooks, ACP scratch, and old memory metadata.
+        // Never call `releaseChatContext` here: that clears per-chat spending and interrupted waits.
+        deps.designGrants?.revokeChat(chatId);
+        deps.invalidateChatWorkspaceContext?.(chatId);
+        await deps.resetChatWorkspaceSession?.(chatId).catch((error: unknown) => {
+          deps.logError("chats", "Could not reset workspace session after attach.", error);
+        });
+        await deps.memoryStore?.deleteSourceChat(chatId).catch((error: unknown) => {
+          deps.logError("memory", "Could not clear old workspace memory index after attach.", error);
+        });
+
+        // Release workspace operation admissions BEFORE releasing the old hidden
+        // workspace, otherwise `workspaceOperationRegistry.cancelAndSettle(oldWorkspaceId)`
+        // would wait on this exact operation and deadlock.
+        releaseAdmissions();
+        await deps.afterChatRemoved?.(oldWorkspaceId).catch((error: unknown) => {
+          deps.logError("workspace", "Could not release old No workspace folder after attach.", error);
+        });
+
+        return {
+          chat: chatForRenderer(updated)!,
+          copiedPaths,
+          oldWorkspaceId,
+        };
+      } catch (error) {
+        if (rollbackCopiedFiles) {
+          await rollbackCopiedFiles().catch(() => undefined);
+        }
+        throw error;
+      } finally {
+        releaseAdmissions();
+        finishFollowThroughMove?.();
+        finishMove();
+      }
+    },
+
+    /** Startup cleanup: remove any unpromoted ephemeral chats left over from a prior run/crash. */
+    async sweepOrphanedEphemeralChats(): Promise<number> {
+      const all = await deps.chatStore.list();
+      let swept = 0;
+      for (const meta of all) {
+        if (chatSurface(meta) !== "ephemeral") continue;
+        try {
+          await this.remove(meta.id, { rejectFeatureOwned: true });
+          swept += 1;
+        } catch (error) {
+          deps.logError("chats", `Could not sweep orphaned temporary chat ${meta.id}.`, error);
+        }
+      }
+      return swept;
     },
 
     async remove(

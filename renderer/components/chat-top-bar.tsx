@@ -12,6 +12,7 @@ import {
   Folder,
   FolderGit2,
   FolderOpen,
+  FolderPlus,
   GitBranch,
   MessageCircle,
   Pencil,
@@ -187,11 +188,15 @@ export function WorkspaceChip({
   git,
   canOpenTerminal,
   onOpenTerminal,
+  onAttachToWorkspace,
+  attachDisabledReason,
 }: {
   workspace: Workspace;
   git: GitInfo | undefined;
   canOpenTerminal: boolean;
   onOpenTerminal: () => void;
+  onAttachToWorkspace?: () => void;
+  attachDisabledReason?: string | null;
 }) {
   const qc = useQueryClient();
   const { openLink } = useLinkOpener();
@@ -271,6 +276,19 @@ export function WorkspaceChip({
           ) : null}
         </DropdownMenuLabel>
         <DropdownMenuSeparator />
+        {workspace.noWorkspace === true && onAttachToWorkspace ? (
+          <>
+            <DropdownMenuItem
+              disabled={Boolean(attachDisabledReason)}
+              title={attachDisabledReason ?? undefined}
+              onSelect={onAttachToWorkspace}
+            >
+              <FolderPlus aria-hidden="true" className="size-4" />
+              Attach to workspace…
+            </DropdownMenuItem>
+            <DropdownMenuSeparator />
+          </>
+        ) : null}
         {accessible ? (
           <>
             <DropdownMenuItem

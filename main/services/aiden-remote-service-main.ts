@@ -1187,6 +1187,20 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
           activeHostRuns = hostRuns;
           detachHostFeed?.();
           activeHostFeed?.close();
+          const isEphemeralOnlyNoWorkspace = async (workspace: { id: string; noWorkspace?: boolean }): Promise<boolean> => {
+            if (workspace.noWorkspace !== true || workspace.id === "default") return false;
+            const wsChats = await chatStore.list(workspace.id);
+            return wsChats.length > 0 && wsChats.every((meta) => meta.ephemeral === true);
+          };
+          const listRemoteVisibleWorkspaces = async () => {
+            const all = await workspaceApplicationService.list();
+            const visible = [];
+            for (const workspace of all) {
+              if (await isEphemeralOnlyNoWorkspace(workspace)) continue;
+              visible.push(workspace);
+            }
+            return visible;
+          };
           const hostFeed = new AidenRemoteHostFeedService({
             now: Date.now,
             attentionSummary: (runId) => {
@@ -1196,7 +1210,7 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
             liveRuns: () => hostRunRegistry.list(),
             source: createAidenRemoteHostFeedSource({
               chats,
-              listWorkspaces: () => workspaceApplicationService.list(),
+              listWorkspaces: listRemoteVisibleWorkspaces,
               approvalMode: async () => effectiveApprovalMode(await configStore.getSettings(), true),
               repositoryIdentity: gitCachedRepositoryIdentity,
               ...(bots ? { listBots: () => bots.list() } : {}),
@@ -1330,6 +1344,7 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
               persistIdempotency: (snapshot) => operationStore.save(snapshot),
               notifyChanged: () => ipcMain.broadcast("workspaces:changed", {}),
               approvalMode: async () => effectiveApprovalMode(await configStore.getSettings(), true),
+              isWorkspaceHidden: isEphemeralOnlyNoWorkspace,
             }),
           };
         },

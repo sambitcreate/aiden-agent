@@ -98,7 +98,7 @@ import {
   workspaceFolderCheckApplies,
 } from "../shared/workspace-folder-presence";
 import { useOptionalNewChatActions } from "../lib/new-chat-actions";
-import { Button, EmptyState, ScrollArea, ScrollAreaFooterStack, Text, toast } from "../components/ui";
+import { Badge, Button, EmptyState, ScrollArea, ScrollAreaFooterStack, Text, toast } from "../components/ui";
 import {
   agentsInstructionNoticeMessage,
   createAgentsInstructionNoticeLog,
@@ -142,6 +142,7 @@ import {
   WorkspaceChip,
   WorkspaceToolButtons,
 } from "../components/chat-top-bar";
+import { AttachWorkspaceDialog } from "../components/attach-workspace-dialog";
 import { OpenInEditorPicker } from "../components/open-in-editor-picker";
 import { DesignModeBannerSlot, useDesignChatBodyHidden } from "../design/design-layout";
 import { useCommandHandler, useCommandSystem, useShortcutBinding, useShortcutLabel } from "../lib/command-system";
@@ -3035,6 +3036,43 @@ export function ChatPane({ chatId }: { chatId: string }) {
     generating: isGenerating || isStartingGeneration,
     gitBusy: environmentPanel.gitOperationBusy,
   });
+  const [attachDialogOpen, setAttachDialogOpen] = React.useState(false);
+  const [promotingEphemeral, setPromotingEphemeral] = React.useState(false);
+  const attachWorkspaceBlockedReason = React.useMemo(() => {
+    if (documentAppendReconciliationRequired) {
+      return "Reload Aiden before attaching to a workspace.";
+    }
+    if (workspaceChangeBusy) return workspaceChangeBusy;
+    if (environmentPanel.editorState.saving) {
+      return "Wait for the open file to finish saving before attaching to a workspace.";
+    }
+    if (environmentPanel.editorState.dirty) {
+      return "Save or discard the open file's edits before attaching to a workspace.";
+    }
+    return null;
+  }, [
+    documentAppendReconciliationRequired,
+    environmentPanel.editorState.dirty,
+    environmentPanel.editorState.saving,
+    workspaceChangeBusy,
+  ]);
+  const canAttachChatToWorkspace =
+    !isNewChat && Boolean(chat.data) && effectiveWorkspace?.noWorkspace === true;
+  const promoteEphemeralChat = React.useCallback(async () => {
+    if (promotingEphemeral) return;
+    setPromotingEphemeral(true);
+    try {
+      await qc.cancelQueries({ queryKey: queryKeys.chat(chatId), exact: true });
+      const promoted = await chatsApi.promoteEphemeral(chatId);
+      qc.setQueryData(queryKeys.chat(chatId), promoted);
+      await qc.invalidateQueries({ queryKey: queryKeys.chats });
+      toast.success("Saved to Chats");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Could not save this temporary chat.");
+    } finally {
+      setPromotingEphemeral(false);
+    }
+  }, [chatId, promotingEphemeral, qc]);
   const moveNewChatToWorkspace = React.useCallback(
     async (workspaceId: string) => {
       if (documentAppendReconciliationRequired) {
@@ -3786,14 +3824,44 @@ export function ChatPane({ chatId }: { chatId: string }) {
         }
         titleAccessory={
           effectiveWorkspace ? (
-            <WorkspaceChip
-              workspace={effectiveWorkspace}
-              git={effectiveWorkspace.folderPath ? git.data : undefined}
-              canOpenTerminal={Boolean(effectiveWorkspace.folderPath && terminal.canOpen)}
-              onOpenTerminal={() => {
-                if (!terminal.open) terminal.toggle();
-              }}
-            />
+            <div className="no-drag flex min-w-0 items-center gap-1.5">
+              <WorkspaceChip
+                workspace={effectiveWorkspace}
+                git={effectiveWorkspace.folderPath ? git.data : undefined}
+                canOpenTerminal={Boolean(effectiveWorkspace.folderPath && terminal.canOpen)}
+                onOpenTerminal={() => {
+                  if (!terminal.open) terminal.toggle();
+                }}
+                onAttachToWorkspace={
+                  canAttachChatToWorkspace ? () => setAttachDialogOpen(true) : undefined
+                }
+                attachDisabledReason={attachWorkspaceBlockedReason}
+              />
+              {chat.data?.ephemeral === true ? (
+                <div className="workspace-chip flex shrink-0 items-center gap-1.5">
+                  <Badge color="warning" className="shrink-0 whitespace-nowrap">
+                    Temporary
+                  </Badge>
+                  <Button
+                    variant="bar"
+                    size="small"
+                    disabled={promotingEphemeral}
+                    onClick={() => void promoteEphemeralChat()}
+                  >
+                    Save
+                  </Button>
+                  <Button
+                    variant="bar"
+                    size="small"
+                    disabled={Boolean(attachWorkspaceBlockedReason)}
+                    title={attachWorkspaceBlockedReason ?? undefined}
+                    onClick={() => setAttachDialogOpen(true)}
+                  >
+                    Attach to workspace…
+                  </Button>
+                </div>
+              ) : null}
+            </div>
           ) : null
         }
         actions={
@@ -4406,6 +4474,43 @@ export function ChatPane({ chatId }: { chatId: string }) {
           if (!open) setForkSummaryRequest(null);
         }}
         onConfirm={forkWithSummary}
+      />
+      <AttachWorkspaceDialog
+        open={attachDialogOpen}
+        onOpenChange={setAttachDialogOpen}
+        chatId={chatId}
+        workspaces={workspaces}
+        beforeAttach={() => {
+          if (attachWorkspaceBlockedReason) throw new Error(attachWorkspaceBlockedReason);
+        }}
+        onWorkspaceCreated={(created) => {
+          qc.setQueryData<Workspace[]>(queryKeys.workspaces, (current) => {
+            const list = current ?? [];
+            return list.some((item) => item.id === created.id) ? list : [...list, created];
+          });
+        }}
+        onAttached={async (result, targetWorkspace) => {
+          effectiveWorkspaceIdRef.current = targetWorkspace.id;
+          await qc.cancelQueries({ queryKey: queryKeys.chat(chatId), exact: true });
+          qc.setQueryData(queryKeys.chat(chatId), result.chat);
+          selectWorkspace(targetWorkspace.id);
+          await Promise.all([
+            qc.invalidateQueries({ queryKey: queryKeys.chats }),
+            qc.invalidateQueries({ queryKey: queryKeys.workspaces }),
+            qc.invalidateQueries({ queryKey: queryKeys.git(targetWorkspace.id) }),
+            qc.invalidateQueries({ queryKey: queryKeys.gitReview(targetWorkspace.id) }),
+            qc.invalidateQueries({ queryKey: queryKeys.gitBranches(targetWorkspace.id) }),
+            qc.invalidateQueries({ queryKey: queryKeys.gitPushCapability(targetWorkspace.id) }),
+            qc.invalidateQueries({ queryKey: queryKeys.skillCatalog(targetWorkspace.id) }),
+            qc.invalidateQueries({ queryKey: queryKeys.workspaceFileIndex(targetWorkspace.id) }),
+            qc.invalidateQueries({ queryKey: queryKeys.workspaceFolderPresence(targetWorkspace.id) }),
+          ]);
+          const suffix =
+            result.copiedPaths.length > 0
+              ? ` (${result.copiedPaths.length} file${result.copiedPaths.length === 1 ? "" : "s"} copied)`
+              : "";
+          toast.success(`Attached to ${targetWorkspace.name}${suffix}`);
+        }}
       />
     </>
   );

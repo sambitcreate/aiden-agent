@@ -159,6 +159,7 @@ import {
 import { reconcilePendingManagedWorktreeDeletions } from "./services/managed-worktree-deletion-recovery.js";
 import { reconcilePendingChatDeletions } from "./services/chat-deletion-reconciliation.js";
 import { workspaceApplicationService } from "./services/workspace-application-service-main.js";
+import { chatApplicationService } from "./services/chat-application-service-main.js";
 import { EmptyChatMigrationSnapshotError } from "./services/empty-chat-migration.js";
 import { migrateLegacyEmptyWorkspaceChats } from "./services/empty-chat-migration-main.js";
 import { ensureUserDataDir } from "./services/data-store.js";
@@ -2525,7 +2526,11 @@ if (!ownsSingleInstanceLock) {
           logger.warn(area, message, error),
         );
       });
-      // After deletions settle and before any renderer draft exists.
+      // Sweep any temporary floating chats left over from a prior crash, then
+      // prepare No workspace folders before any renderer draft exists.
+      await chatApplicationService.sweepOrphanedEphemeralChats().catch((error: unknown) => {
+        logger.warn("chats", "Could not sweep orphaned temporary chats at startup.", error);
+      });
       await workspaceApplicationService.prepareNoWorkspaceChats().catch((error: unknown) => {
         logger.warn("workspace", "No workspace chats could not be prepared; they keep their current folders.", error);
       });
