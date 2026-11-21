@@ -22,6 +22,7 @@ import { ProviderIcon } from "./provider-icon";
 import { cn } from "../lib/ui-utils";
 import {
   ArrowUp,
+  AudioLines,
   FileText,
   Folder,
   ListPlus,
@@ -176,6 +177,13 @@ import { escapeStopsGeneration } from "../lib/composer-type-focus";
 import { isNoWorkspace, NO_WORKSPACE_LABEL } from "../lib/no-workspace";
 
 import { useAppCapabilities } from "../lib/app-capabilities";
+import { composerPrimaryAction, liveLauncher } from "../lib/live-launcher";
+import {
+  composerLiveLabel,
+  pressComposerLive,
+  useLiveLaunchState,
+  useSettledPrimaryAction,
+} from "./composer-live-button";
 import { localComputerNoun } from "../shared/computer-noun";
 import { isComposingKey, isEscapeKey } from "../lib/dismiss-key";
 
@@ -228,6 +236,11 @@ interface ComposerProps {
   onSteer?: ComposerProps["onSend"];
   queuedMessages?: React.ReactNode;
   hasQueuedMessages?: boolean;
+  /**
+   * An ordinary chat: with an empty draft, Send's place starts Aiden Live.
+   * Bot, remote and feature chats leave it off, since Live can't use them.
+   */
+  offerLive?: boolean;
   /** Queue-owned compaction hold, retained across Composer remounts. */
   compactionHeld?: boolean;
   /** This fork's summary is pending or failed; sends queue until it settles. */
@@ -432,6 +445,7 @@ export function Composer({
   onSteer,
   queuedMessages,
   hasQueuedMessages = false,
+  offerLive = false,
   compactionHeld = false,
   forkSummaryHold,
   isGenerating,
@@ -830,6 +844,30 @@ export function Composer({
     !composing &&
     !dictationPreviewing &&
     (!selectedSkillState || selectedSkillState.state === "valid");
+
+  // With an empty draft, Send's place starts Aiden Live; anything to send,
+  // a running turn or dictation keeps Send (or Stop).
+  const liveLaunch = useLiveLaunchState();
+  const primaryAction = useSettledPrimaryAction(
+    composerPrimaryAction({
+      liveOffered: offerLive && liveLaunch.offered,
+      liveSessionActive: liveLaunch.sessionActive,
+      draftHasContent:
+        text.trim().length > 0 ||
+        attachments.length > 0 ||
+        attaching ||
+        commentTray !== null ||
+        Boolean(selectedSkill) ||
+        dictationPreviewing,
+      running: isGenerating || sending || firstSendPending,
+      dictating: voice.recording || voice.transcribing,
+    }),
+  );
+  // Live and dictation never listen at once: starting Live (from here, the
+  // shortcut or /assistant) finishes a recording first, keeping its words,
+  // cancels one still opening the microphone, and waits for the release.
+  const { releaseMicrophone } = voice;
+  React.useEffect(() => liveLauncher.onBeforeStart(() => releaseMicrophone()), [releaseMicrophone]);
 
   React.useLayoutEffect(() => {
     slashPaletteBlockedRef.current = slashPaletteBlocked;
@@ -1912,6 +1950,7 @@ export function Composer({
   useCommandHandler("chat.stop", onStop, isGenerating && canStopGeneration);
   const attachBinding = commandSystem.binding("composer.attach");
   const stopBinding = commandSystem.binding("chat.stop");
+  const liveBinding = commandSystem.binding("assistant.open");
 
   const readDroppedAttachments = async (files: File[]) => {
     const token = beginAttachmentRead("Dropped files are loading before sending.");
@@ -3093,7 +3132,14 @@ export function Composer({
                   variant={voice.recording ? "destructive" : "transparent"}
                   size="small"
                   iconOnly
-                  disabled={voice.transcribing || (isGenerating && !onQueue) || sending || composerInputLocked}
+                  disabled={
+                    voice.transcribing ||
+                    (isGenerating && !onQueue) ||
+                    sending ||
+                    composerInputLocked ||
+                    (liveLaunch.sessionActive && !voice.recording)
+                  }
+                  title={liveLaunch.sessionActive && !voice.recording ? "Aiden Live is using the microphone" : undefined}
                   onClick={() => (voice.recording ? voice.stop() : voice.start())}
                   aria-label={voice.recording ? "Stop recording" : "Start voice input"}
                 >
@@ -3128,6 +3174,27 @@ export function Composer({
                     }
                   >
                     <Square className="fill-current" />
+                  </Button>
+                ) : primaryAction.action === "live" ? (
+                  <Button
+                    variant="filled"
+                    size="small"
+                    iconOnly
+                    // A solid, inverted fill tells voice apart from the accent Send it replaces.
+                    className="bg-primary text-background hover:bg-primary/85 active:bg-primary/75 focus-visible:bg-primary/85"
+                    // Live never presses its own start button from inside a session.
+                    data-live-guard="you"
+                    aria-label={composerLiveLabel(liveLaunch.needsSetup)}
+                    aria-haspopup={liveLaunch.needsSetup ? "dialog" : undefined}
+                    aria-keyshortcuts={ariaKeyShortcut(liveBinding)}
+                    title={
+                      liveBinding
+                        ? `${composerLiveLabel(liveLaunch.needsSetup)} (${prettyAccelerator(liveBinding)})`
+                        : composerLiveLabel(liveLaunch.needsSetup)
+                    }
+                    onClick={() => void pressComposerLive(primaryAction.shownAt)}
+                  >
+                    <AudioLines />
                   </Button>
                 ) : (
                   <Button

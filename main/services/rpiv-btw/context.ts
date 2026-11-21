@@ -166,3 +166,26 @@ export function assistantText(message: AssistantMessage): string {
     .map((part) => part.text)
     .join("");
 }
+
+/**
+ * The instruction a side question sends when it continues the parent's
+ * request. The parent's tools stay declared so the cached prefix is reused,
+ * but no tool call in the reply is ever executed.
+ */
+export const BTW_CONTINUATION_INSTRUCTION = `This is a quick side question about the conversation so far, asked while the task is paused. It is not part of the task: do not continue prior work, do not call any tool, and do not claim to have performed actions. Answer the side question directly and concisely in plain text. Ground claims in the conversation when possible; if it is insufficient, say so instead of guessing.`;
+
+/**
+ * The final user message of a side question sent on the parent's prefix: the
+ * instruction, earlier side questions in this thread and the new question.
+ */
+export function btwContinuationPrompt(history: readonly BtwHistoryTurn[], question: string): Message {
+  const earlier = boundedHistory(history).map(
+    (turn) => `<side_question>\n${turn.question}\n</side_question>\n<side_answer>\n${turn.answer}\n</side_answer>`,
+  );
+  const text = [
+    BTW_CONTINUATION_INSTRUCTION,
+    ...(earlier.length > 0 ? ["Earlier side questions in this thread:", ...earlier] : []),
+    `<side_question>\n${question}\n</side_question>`,
+  ].join("\n\n");
+  return { role: "user", content: [{ type: "text", text }], timestamp: Date.now() };
+}

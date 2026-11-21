@@ -112,7 +112,8 @@ export type BotMemoryApplyResult =
     };
 
 export type BotMemoryEditOutcome =
-  | { ok: true; changed: boolean; loaded: LoadedBotMemory }
+  /** `previous` is the memory the edit started from, when it changed anything. */
+  | { ok: true; changed: boolean; loaded: LoadedBotMemory; previous?: LoadedBotMemory }
   | { ok: false; code: BotMemoryEditErrorCode; message: string; loaded: LoadedBotMemory };
 
 export class BotMemoryDeletedError extends Error {
@@ -378,7 +379,7 @@ export function createBotMemoryStore(options: BotMemoryStoreOptions): BotMemoryS
           );
           const toClear = files.filter(({ file }) => file.kind === "unreadable" || (file.kind === "ok" && file.content.length > 0));
           for (const { target } of toClear) await writeStore(botId, target, []);
-          return { ok: true, changed: toClear.length > 0, loaded: toClear.length > 0 ? await load(botId) : loaded };
+          return toClear.length > 0 ? { ok: true, changed: true, loaded: await load(botId), previous: loaded } : { ok: true, changed: false, loaded };
         }
 
         if (!loaded.readable) return fail("invalid", "Memory couldn't be read. Erase it to start over.");
@@ -390,7 +391,7 @@ export function createBotMemoryStore(options: BotMemoryStoreOptions): BotMemoryS
           if (index < 0) return fail("entry_not_found", "That memory changed or was already removed.");
           const texts = current.filter((_, position) => position !== index);
           await writeStore(botId, target, texts);
-          return { ok: true, changed: true, loaded: await load(botId) };
+          return { ok: true, changed: true, loaded: await load(botId), previous: loaded };
         }
 
         const text = cleanEntryText(edit.text);
@@ -417,7 +418,7 @@ export function createBotMemoryStore(options: BotMemoryStoreOptions): BotMemoryS
           return fail("over_budget", "That's more than this memory can hold. Shorten it or delete something first.");
         }
         await writeStore(botId, target, texts);
-        return { ok: true, changed: true, loaded: await load(botId) };
+        return { ok: true, changed: true, loaded: await load(botId), previous: loaded };
       });
     },
 

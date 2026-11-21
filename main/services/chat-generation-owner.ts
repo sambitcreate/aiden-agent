@@ -42,6 +42,14 @@ function identityDigest(value: string): string {
 }
 
 /**
+ * What every generation owner a paired device starts has its `documentId`
+ * begin with, so a host can find that device's chats without keeping its id.
+ */
+export function remoteDeviceDocumentPrefix(deviceId: string): string {
+  return `remote:${identityDigest(boundedRemoteIdentity(deviceId, "device identity"))}:`;
+}
+
+/**
  * Create a paired-device generation owner whose authority survives socket and
  * SSE subscriber disconnects. The supplied publisher must target a durable
  * stream journal; only explicit invalidation revokes generation ownership.
@@ -58,7 +66,7 @@ export function createRemoteChatGenerationOwner(input: {
   const owner: ChatGenerationOwner = {
     kind: "remote",
     id: 0,
-    documentId: `remote:${identityDigest(deviceId)}:${identityDigest(streamId)}`,
+    documentId: `${remoteDeviceDocumentPrefix(deviceId)}${identityDigest(streamId)}`,
     isDestroyed: () => invalidated,
     send: (channel, payload) => {
       if (invalidated) throw new Error("The remote generation owner is no longer active.");

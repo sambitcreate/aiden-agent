@@ -22,6 +22,8 @@ import {
 import type {
   AssistantLiveRendererEvent,
   AssistantLiveSnapshot,
+  LiveDisplaySources,
+  LiveDisplaySourceSummary,
 } from "../../shared/assistant-live";
 import { assistantLiveVoiceApprovalDecision } from "./assistant-live-voice-approval";
 import { liveSessionBus } from "../../lib/live-session-bus";
@@ -67,6 +69,8 @@ export interface AssistantLiveController {
   startBlockedReason: string | null;
   computerUseEnabled: boolean;
   computerUseActing: boolean;
+  /** False where Computer Use doesn't exist (Linux), so setup leaves its row out. */
+  computerUseOffered: boolean;
   computerUseReady: boolean;
   computerUseBusy: boolean;
   computerUseDetail: string;
@@ -77,6 +81,10 @@ export interface AssistantLiveController {
   screenActive: boolean;
   screenBusy: boolean;
   screenError: string | null;
+  /** Screens and windows to pick from while Aiden's own Linux picker is open, else null. */
+  screenSourceChoices: readonly LiveDisplaySourceSummary[] | null;
+  /** Answers the open picker with a source id, or null to cancel. */
+  pickScreenSource(sourceId: string | null): void;
   setupComplete: boolean;
   setSetupOpen(open: boolean): void;
   setMicrophone(enabled: boolean): void;
@@ -122,7 +130,17 @@ export function assistantLiveAvailabilityDetail(snapshot: AssistantLiveSnapshot)
   }
 }
 
-function normalizeMicrophonePermission(status: string): AssistantLiveMicrophonePermission {
+/**
+ * Linux has no system-wide microphone permission for an app to read, so main
+ * reports "unknown" there. That is not a failed check: Live counts the
+ * microphone as ready, and a missing or busy input still fails at Start with
+ * its own error.
+ */
+export function normalizeMicrophonePermission(
+  status: string,
+  platform?: string | null,
+): AssistantLiveMicrophonePermission {
+  if (platform === "linux" && status === "unknown") return "granted";
   return ["granted", "not-determined", "denied", "restricted"].includes(status)
     ? (status as AssistantLiveMicrophonePermission)
     : "unavailable";
@@ -137,7 +155,9 @@ export function assistantLiveMicrophonePermissionDetail(
       case "checking":
         return "Checking microphone permission…";
       case "granted":
-        return "Microphone permission is allowed.";
+        return platform === "linux"
+          ? "Linux doesn’t ask apps for microphone permission. Aiden listens only while Live runs."
+          : "Microphone permission is allowed.";
       case "not-determined":
         return "Microphone permission has not been requested. You may be asked after you choose Start.";
       case "denied":
@@ -444,7 +464,9 @@ interface AssistantLiveApi {
   }): Promise<AssistantLiveSnapshot>;
   stop(): Promise<AssistantLiveSnapshot>;
   sendAudio(sessionId: string, pcm: Uint8Array): Promise<boolean>;
-  bindDisplay?(): Promise<string | null>;
+  /** Linux: what Choose… shows before capture (Aiden's list or the desktop portal). */
+  displaySources?(): Promise<LiveDisplaySources>;
+  bindDisplay?(sourceId?: string): Promise<string | null>;
   releaseDisplay?(bindingId: string): Promise<boolean>;
   sendFrame?(sessionId: string, frame: Uint8Array): Promise<boolean>;
   toolResult?(sessionId: string, requestId: string, response: Record<string, unknown>): Promise<boolean>;
@@ -760,6 +782,15 @@ export function useAssistantLiveWithDependencies(
   const [screenActive, setScreenActive] = React.useState(false);
   const [screenBusy, setScreenBusy] = React.useState(false);
   const [screenError, setScreenError] = React.useState<string | null>(null);
+  const [screenSourceChoices, setScreenSourceChoices] =
+    React.useState<readonly LiveDisplaySourceSummary[] | null>(null);
+  const screenPickResolver = React.useRef<((sourceId: string | null) => void) | null>(null);
+  const pickScreenSource = React.useCallback((sourceId: string | null) => {
+    const resolve = screenPickResolver.current;
+    screenPickResolver.current = null;
+    if (mounted.current) setScreenSourceChoices(null);
+    resolve?.(sourceId);
+  }, []);
 
   const active = Boolean(sessionRef.current) && activeSnapshot(snapshot);
 
@@ -783,6 +814,11 @@ export function useAssistantLiveWithDependencies(
 
   const releaseDisplayAuthority = React.useCallback(() => {
     screenPickerGeneration.current += 1;
+    // An open Linux picker is answered as cancelled.
+    const resolvePick = screenPickResolver.current;
+    screenPickResolver.current = null;
+    resolvePick?.(null);
+    if (mounted.current) setScreenSourceChoices(null);
     const bindingId = screenBindingRef.current;
     screenBindingRef.current = null;
     if (mounted.current) setScreenBusy(false);
@@ -1035,7 +1071,7 @@ export function useAssistantLiveWithDependencies(
     void dependencies.getMicrophoneStatus().then(
       (status) => {
         if (!cancelled && mounted.current) {
-          setMicrophonePermission(normalizeMicrophonePermission(status));
+          setMicrophonePermission(normalizeMicrophonePermission(status, dependencies.platform));
         }
       },
       () => {
@@ -1045,7 +1081,7 @@ export function useAssistantLiveWithDependencies(
     return () => {
       cancelled = true;
     };
-  }, [dependencies.geminiLive, dependencies.getMicrophoneStatus]);
+  }, [dependencies.geminiLive, dependencies.getMicrophoneStatus, dependencies.platform]);
 
   React.useEffect(() => {
     const generation = ++computerUseGeneration.current;
@@ -1153,7 +1189,25 @@ export function useAssistantLiveWithDependencies(
     setScreenError(null);
     let bindingId: string | null = null;
     try {
-      bindingId = await dependencies.api.bindDisplay();
+      // On Linux under X11 the person picks from Aiden's own list first; under
+      // Wayland the desktop's portal picks during capture; macOS lists nothing.
+      let sourceId: string | null = null;
+      const listing = (await dependencies.api.displaySources?.()) ?? { mode: "unavailable" as const };
+      if (!mounted.current || screenPickerGeneration.current !== generation) return;
+      if (listing.mode === "list") {
+        if (listing.sources.length === 0) {
+          throw new Error("Aiden couldn’t find a screen or window to share.");
+        }
+        screenPickResolver.current?.(null);
+        sourceId = await new Promise<string | null>((resolve) => {
+          screenPickResolver.current = resolve;
+          setScreenSourceChoices(listing.sources);
+        });
+        if (!mounted.current || screenPickerGeneration.current !== generation) return;
+        // Cancelling Aiden's picker keeps any previously chosen source.
+        if (!sourceId || !listing.sources.some((source) => source.id === sourceId)) return;
+      }
+      bindingId = await dependencies.api.bindDisplay(sourceId ?? undefined);
       if (!bindingId) {
         throw new Error("Screen sharing is unavailable for this window.");
       }
@@ -1205,7 +1259,9 @@ export function useAssistantLiveWithDependencies(
         setScreenError(
           name === "AbortError" || name === "NotAllowedError"
             ? null
-            : "Aiden could not open the screen picker. Try again.",
+            : cause instanceof Error && cause.message === "Aiden couldn’t find a screen or window to share."
+              ? cause.message
+              : "Aiden could not open the screen picker. Try again.",
         );
       }
     } finally {
@@ -1628,11 +1684,10 @@ export function useAssistantLiveWithDependencies(
   const availabilityDetail = assistantLiveAvailabilityDetail(snapshot);
   const microphonePermissionReady = ["granted", "not-determined"].includes(microphonePermission);
   const microphonePermissionDetail = assistantLiveMicrophonePermissionDetail(microphonePermission, dependencies.platform);
-  const setupComplete =
-    snapshot.available &&
-    microphonePermission === "granted" &&
-    computerUseStatus?.ready === true &&
-    computerUseEnabled;
+  // Computer Use is an optional extra: without it Live still talks, uses the
+  // open chat and moves through Aiden's own window. Linux never has it.
+  const setupComplete = snapshot.available && microphonePermission === "granted";
+  const computerUseOffered = computerUseStatus?.state !== "unsupported";
   return {
     visible: dependencies.geminiLive,
     available: snapshot.available,
@@ -1664,12 +1719,15 @@ export function useAssistantLiveWithDependencies(
           : null),
     computerUseEnabled,
     computerUseActing,
+    computerUseOffered,
     computerUseReady: computerUseStatus?.ready === true,
     computerUseBusy,
     computerUseDetail: computerUseStatus?.detail ?? "Checking global Computer Use readiness…",
     computerUsePermissions: computerUseStatus?.permissions ?? null,
     computerUseError,
     screenShareAvailable: snapshot.screenShareAllowed === true,
+    screenSourceChoices,
+    pickScreenSource,
     screenSourceLabel,
     screenActive,
     screenBusy,

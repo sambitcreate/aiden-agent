@@ -8,7 +8,7 @@ import type {
   BrowserCommandResult,
   BrowserState,
 } from "../../renderer/shared/browser";
-import { E2E_WORKSPACE_ID, expect, finishLmStudioOnboarding, test } from "./fixtures";
+import { composerPrimaryButton, E2E_WORKSPACE_ID, expect, finishLmStudioOnboarding, test } from "./fixtures";
 
 test.use({ workspaceSeed: true });
 type BrowserTestWindow = Window & {
@@ -62,7 +62,7 @@ test("renderer owner reload releases managed previews and scrubs echoed capabili
   ).toBe(true);
   await page.reload();
   await expect.poll(() => listenerAvailable(tab.url)).toBe(false);
-  await expect(page.getByRole("button", { name: "Send message" })).toBeVisible();
+  await expect(composerPrimaryButton(page)).toBeVisible();
   const state = await page.evaluate(
     (id) =>
       (window as unknown as BrowserTestWindow).aidenAPI.ipc.invoke<BrowserState>(

@@ -82,7 +82,7 @@ async function chooseOption(trigger: string, option: string) {
 test("the page leads with context settings, then usage and spending limits", async () => {
   await mount();
   await screen.findByRole("radiogroup", { name: "Automatic compaction engine" });
-  const titles = ["Automatic compaction", "Prompt cache", "Model compaction budgets", "Usage limits", "Spending limits"];
+  const titles = ["Automatic compaction", "Prompt cache", "Cache lifetime", "Model compaction budgets", "Usage limits", "Spending limits"];
   const text = document.body.textContent ?? "";
   const positions = titles.map((title) => text.indexOf(title));
   assert.ok(positions.every((position) => position >= 0), `missing a group: ${positions.join(", ")}`);
@@ -249,4 +249,62 @@ test("a model budget saves through its own call, without touching other settings
     ]),
   );
   assert.deepEqual(saves(), []);
+});
+
+const hourSwitch = () => screen.findByRole("switch", { name: "Keep chat caches for an hour" });
+const ANTHROPIC = { id: "anthropic", models: ["claude"], baseUrl: "https://api.anthropic.com", hasKey: true, credentialType: "api_key" };
+
+test("an hour-long cache can be chosen only with a provider that keeps one, and saves just that choice", async () => {
+  await mount({}, { providers: [METERED] });
+  const unavailable = await hourSwitch();
+  assert.equal(unavailable.hasAttribute("disabled"), true);
+  assert.equal(unavailable.getAttribute("aria-checked"), "false");
+  await screen.findByText(/Available with Anthropic or Amazon Bedrock/u);
+  cleanup();
+
+  const { saves, stored } = await mount({}, { providers: [METERED, ANTHROPIC] });
+  const available = await hourSwitch();
+  await waitFor(() => assert.equal(available.hasAttribute("disabled"), false));
+  fireEvent.click(available);
+  await waitFor(() => assert.deepEqual(saves(), [{ longPromptCacheRetention: true }]));
+  await waitFor(() => assert.equal(available.getAttribute("aria-checked"), "true"));
+  assert.equal(stored().cacheWarmingEnabled, undefined, "keeping the hour leaves warming as it was");
+});
+
+test("an hour-long cache left on after its provider is removed reads as paused and can still be turned off", async () => {
+  const { saves } = await mount({ longPromptCacheRetention: true }, { providers: [METERED] });
+  const paused = await hourSwitch();
+  await waitFor(() => assert.equal(paused.hasAttribute("disabled"), false));
+  assert.equal(paused.getAttribute("aria-checked"), "true");
+  await screen.findByText(/On, but paused/u);
+  fireEvent.click(paused);
+  await waitFor(() => assert.deepEqual(saves(), [{ longPromptCacheRetention: false }]));
+  // Once off, it can't be turned back on here.
+  await waitFor(() => assert.equal(paused.hasAttribute("disabled"), true));
+});
+
+test("warming and the hour save independently while either is still saving", async () => {
+  const { held, stored } = await mount({}, { hold: true, providers: [ANTHROPIC] });
+  fireEvent.click(await warmingSwitch());
+  await waitFor(() => assert.equal(held.length, 1));
+  const hour = await hourSwitch();
+  await waitFor(() => assert.equal(hour.hasAttribute("disabled"), false));
+  fireEvent.click(hour);
+  await waitFor(() => assert.equal(held.length, 2));
+  await act(async () => {
+    held[0]?.finish();
+    held[1]?.finish();
+  });
+  await waitFor(() => assert.equal(stored().longPromptCacheRetention, true));
+  assert.equal(stored().cacheWarmingEnabled, true);
+});
+
+test("the warming note sits with warming, and the hour-long cache is its own group", async () => {
+  await mount();
+  const group = (element: Element) => element.closest("section");
+  const warmingGroup = group(await screen.findByRole("switch", { name: "Warm prompt caches during active chats" }));
+  const hourGroup = group(await hourSwitch());
+  assert.ok(warmingGroup && hourGroup && warmingGroup !== hourGroup, "the two switches are in separate groups");
+  assert.match(warmingGroup.textContent ?? "", /refreshes at most three times/u);
+  assert.doesNotMatch(hourGroup.textContent ?? "", /refreshes at most three times/u, "the warming limits are not read as the hour's");
 });

@@ -528,7 +528,7 @@ test("streaming chips render ordered live snapshots before a message reference e
     />,
   );
 
-  assert.match(markup, /aria-label="2 subagents"/u);
+  assert.match(markup, /aria-label="2 scouts"/u);
   assert.match(markup, /role="group"/u);
   assert.ok(markup.indexOf("First scout") < markup.indexOf("Second scout"));
   assert.equal(renderToStaticMarkup(<SubagentChips runs={[]} onOpen={() => undefined} />), "");

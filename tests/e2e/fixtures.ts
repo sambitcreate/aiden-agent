@@ -425,11 +425,17 @@ async function startMockLmStudio(): Promise<MockLmStudio> {
             : undefined,
         );
         const completion = body as { messages?: Array<{ role?: string; content?: unknown; tool_call_id?: string }>; tools?: Array<{ function?: { name?: string; description?: string } }> } | null;
-        // pi-ai forwards tool-result images as a follow-up user message; that
-        // carrier is not the user's prompt.
+        // pi-ai forwards tool-result images as a follow-up user message, and
+        // Aiden follows a prompt with hidden host messages (a chat state
+        // update, a turn note); none of those is the user's prompt.
+        const hostCarrier = (content: unknown) => {
+          const text = typeof content === "string" ? content : JSON.stringify(content ?? "");
+          return text.includes("Attached image(s) from tool result:") ||
+            /^(?:\[\{"type":"text","text":")?<(?:state_update|turn_note)>/u.test(text);
+        };
         const latestUser = [...(completion?.messages ?? [])]
           .reverse()
-          .find(({ role, content }) => role === "user" && !JSON.stringify(content ?? "").includes("Attached image(s) from tool result:"));
+          .find(({ role, content }) => role === "user" && !hostCarrier(content));
         const userText = typeof latestUser?.content === "string"
           ? latestUser.content
           : JSON.stringify(latestUser?.content ?? "");
@@ -818,6 +824,17 @@ export async function finishLmStudioOnboarding(page: Page): Promise<void> {
       name: /^Selected model: .+\. Choose a model\.$/u,
     }),
   ).toBeVisible();
+}
+
+/**
+ * The composer's last button once nothing is running: Send (or Queue), or,
+ * when Aiden Live is offered and the draft is empty, the Live button that
+ * takes Send's place.
+ */
+export const COMPOSER_PRIMARY_NAME = /^(Send message|Queue message|Set up Aiden Live|Start Aiden Live)$/u;
+
+export function composerPrimaryButton(page: Page): Locator {
+  return page.getByRole("button", { name: COMPOSER_PRIMARY_NAME });
 }
 
 /**

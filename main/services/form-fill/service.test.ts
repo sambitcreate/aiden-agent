@@ -308,11 +308,10 @@ test("skip-only plans never create executable approval", async () => {
   assert.equal(controller.executed.length, 0);
 });
 
-test("tool exposes exact source ids and never reports an interrupted batch as success", async () => {
+test("tool never reports an interrupted batch as success", async () => {
   const { createFormFillAgentTool } = await import("./tool.js");
   const { service, controller } = makeService({});
   const tool = createFormFillAgentTool(service);
-  assert.match(tool.description, /att-1/);
   const descriptor = await service.approvalFor(ARGS);
   service.authorize("tc", descriptor.planId, descriptor.digest);
   controller.result = {
@@ -375,4 +374,16 @@ test("the source pool never falls back to an earlier attached turn", async () =>
     ]),
     attachments,
   );
+});
+
+test("the tool is declared the same for every message; the message's sources ride in its note", async () => {
+  const { createFormFillAgentTool, formFillTurnNote } = await import("./tool.js");
+  const first = makeService({ attachments: [makeAttachment()] }).service;
+  const second = makeService({ attachments: [makeAttachment({ id: "att-2", name: "intake.txt" })] }).service;
+  assert.equal(createFormFillAgentTool(first).description, createFormFillAgentTool(second).description);
+  assert.doesNotMatch(createFormFillAgentTool(second).description, /att-2|intake\.txt/u);
+  const note = formFillTurnNote(second);
+  assert.match(note, /"attachment_id":"att-2"/u);
+  assert.match(note, /intake\.txt/u);
+  assert.doesNotMatch(note, /att-1/u);
 });

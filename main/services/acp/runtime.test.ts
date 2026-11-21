@@ -67,8 +67,12 @@ function text(message: AssistantMessage): string {
     .join("");
 }
 
+/** One chat's secret: every generation of chat-1 derives the same AGENTS marker. */
+const CHAT_SECRET = Buffer.alloc(32, 7);
+
 async function refreshedAgentsPrompt(globalRoot: string, workspaceRoot: string): Promise<string> {
   const refresher = await createAgentsInstructionRefresher({
+    chatSecret: CHAT_SECRET,
     globalRoot,
     workspaceRoot,
     revalidate: async () => {},
@@ -266,7 +270,7 @@ test("separate AGENTS refreshers reuse a warm ACP session for the same guidance 
   const firstPrompt = await refreshedAgentsPrompt(globalRoot, h.dir);
   const first = await turn(h, [userMessage("echo:one")], { systemPrompt: firstPrompt });
   const samePrompt = await refreshedAgentsPrompt(globalRoot, h.dir);
-  assert.notEqual(samePrompt, firstPrompt, "each generation gets a distinct AGENTS marker");
+  assert.equal(samePrompt, firstPrompt, "a chat's generations send the same AGENTS block");
   const same = await turn(h, [userMessage("echo:one"), first, userMessage("prompt-dump")], { systemPrompt: samePrompt });
   assert.deepEqual(JSON.parse(text(same)), [{ type: "text", text: "prompt-dump" }]);
   assert.equal(readAgentLog(h.env).filter((entry) => entry.method === "newSession").length, 1);
@@ -299,6 +303,7 @@ test("an AGENTS edit beyond the delivered instruction limit keeps the native ACP
   await fs.writeFile(file, body);
   h.hosts.register(new RecordingHost("chat-1", h.dir));
   const refresher = await createAgentsInstructionRefresher({
+    chatSecret: CHAT_SECRET,
     globalRoot,
     workspaceRoot: h.dir,
     revalidate: async () => {},
@@ -338,7 +343,7 @@ test("an AGENTS edit beyond the delivered instruction limit keeps the native ACP
   assert.equal(readAgentLog(h.env).filter((entry) => entry.method === "newSession").length, 1);
 });
 
-test("a saved ACP session resumes across fresh AGENTS markers when file guidance is unchanged", async (t) => {
+test("a saved ACP session resumes across separate AGENTS refreshers when file guidance is unchanged", async (t) => {
   const dir = tempDir();
   const globalRoot = path.join(dir, "global");
   await fs.mkdir(globalRoot);

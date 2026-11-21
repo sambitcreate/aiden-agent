@@ -9,6 +9,7 @@ import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
+import { getCacheWarmingDelayMs } from "@earendil-works/pi-ai";
 import * as api from "../dist/parity-test-api.js";
 
 const tick = () => new Promise((resolve) => setImmediate(resolve));
@@ -60,19 +61,26 @@ async function startHooks(dir, hooks) {
   return api.startCliHooks(dir);
 }
 
-async function fixture(t, { access = "full", hooks, anthropic = false } = {}) {
+async function fixture(t, { access = "full", hooks, anthropic = false, model = {} } = {}) {
   const dir = mkdtempSync(join(tmpdir(), "aiden-daemon-turns-"));
-  const steps = [], requests = [], headers = [];
+  const steps = [], requests = [], headers = [], requestWaiters = [];
+  /** Resolves once the server has received `count` requests. */
+  const requestCount = (count) => new Promise((resolve) => {
+    if (requests.length >= count) resolve(); else requestWaiters.push({ count, resolve });
+  });
   const server = createServer(async (request, response) => {
     let body = ""; for await (const part of request) body += part;
     requests.push(JSON.parse(body)); headers.push(request.headers);
+    for (const waiter of requestWaiters.filter((entry) => requests.length >= entry.count)) {
+      requestWaiters.splice(requestWaiters.indexOf(waiter), 1); waiter.resolve();
+    }
     const step = steps.shift() ?? (anthropic ? anthropicReply("Done") : reply("Done"));
     if (step !== reject) response.writeHead(200, { "content-type": "text/event-stream" });
     step(response);
   });
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
   const base = `http://127.0.0.1:${server.address().port}`;
-  const testModel = { id: "test", name: "Test", reasoning: false, input: ["text"], contextWindow: 32000, maxTokens: 4096, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } };
+  const testModel = { id: "test", name: "Test", reasoning: false, input: ["text"], contextWindow: 32000, maxTokens: 4096, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, ...model };
   // The `anthropic` provider at a path naming api.anthropic.com gets every
   // default Pi gives Anthropic's own endpoint, message threads included.
   const providerId = anthropic ? "anthropic" : "cli-test";
@@ -89,15 +97,23 @@ async function fixture(t, { access = "full", hooks, anthropic = false } = {}) {
     server.closeAllConnections(); server.close();
     rmSync(dir, { recursive: true, force: true });
   });
-  return { dir, daemon, workspace, steps, requests, headers, providerId };
+  return { dir, daemon, workspace, steps, requests, headers, requestCount, providerId };
 }
 
 function ownerFor(documentId = "owner") {
-  const events = [], listeners = new Set();
+  const events = [], listeners = new Set(), waiters = [];
   let destroyed = false;
   return { events, id: 0, kind: "remote", documentId, isDestroyed: () => destroyed,
     onInvalidated(listener) { listeners.add(listener); return () => listeners.delete(listener); },
-    send(channel, value) { events.push({ channel, value }); },
+    send(channel, value) {
+      events.push({ channel, value });
+      for (const waiter of waiters.filter((entry) => entry.channel === channel)) { waiters.splice(waiters.indexOf(waiter), 1); waiter.resolve(value); }
+    },
+    /** The first event on `channel`: one already sent, or the next one. */
+    next(channel) {
+      const sent = events.find((event) => event.channel === channel);
+      return sent ? Promise.resolve(sent.value) : new Promise((resolve) => waiters.push({ channel, resolve }));
+    },
     invalidate() { destroyed = true; for (const listener of listeners) listener(); },
     of(channel) { return events.filter((event) => event.channel === channel).map((event) => event.value); } };
 }
@@ -850,6 +866,26 @@ test("a stop while a Stop hook runs ends the turn instead of continuing it", pos
   assertSessionReleased(f.daemon, "hook-stop");
 });
 
+test("a prompt hook's context follows its prompt as a separate message, on that turn and every later one", posix, async (t) => {
+  // The same shape the desktop journals (prompt-prefix-stability: "a turn's hook context is journaled after its prompt").
+  const additionalContext = answer({ hookSpecificOutput: { hookEventName: "UserPromptSubmit", additionalContext: "ticket: OPS-12" } });
+  const f = await fixture(t, { hooks: { UserPromptSubmit: commandHook(`grep -q OPS-TRIGGER && ${additionalContext} || true`) } });
+  f.steps.push(reply("First"), reply("Second"));
+  await beginTurn(f, "hook-context", { streamId: "hook-context-1", text: "Check OPS-TRIGGER" });
+  await f.daemon.llmClient.waitForChatIdle("hook-context");
+  await beginTurn(f, "hook-context", { streamId: "hook-context-2", text: "Two", create: false });
+  await f.daemon.llmClient.waitForChatIdle("hook-context");
+  const text = (message) => (typeof message.content === "string" ? message.content : message.content.map((part) => part.text ?? "").join(""));
+  const conversation = (request) => request.messages.filter((message) => message.role !== "system").map((message) => [message.role, text(message)]);
+  const [[, prompt], [role, context]] = conversation(f.requests[0]);
+  assert.equal(prompt, "Check OPS-TRIGGER");
+  assert.equal(role, "user");
+  // The desktop's own helpers build the expected message (each hook's context
+  // fenced under its name, "grep" from the command), so both hosts send the same text.
+  assert.equal(context, text(api.hookContextMessage(api.hookTurnContextText([api.fenceAsData('Context from hook "grep"', "ticket: OPS-12")]), 0)));
+  assert.deepEqual(conversation(f.requests[1]), [["user", "Check OPS-TRIGGER"], ["user", context], ["assistant", "First"], ["user", "Two"]]);
+});
+
 test("an Anthropic chat sends its whole conversation on every turn, never a message thread", async (t) => {
   const f = await fixture(t, { anthropic: true });
   f.steps.push(anthropicReply("First"), anthropicReply("Second"));
@@ -867,17 +903,498 @@ test("an Anthropic chat sends its whole conversation on every turn, never a mess
   assert.deepEqual(f.requests[1].messages.map((message) => message.role), ["user", "assistant", "user"]);
 });
 
-test("a server session keeps 1.4.0's cache warming unless the profile chooses a mode", () => {
+/** An Anthropic Messages reply that calls one tool. */
+const anthropicCallTool = (name, args) => (response) => {
+  response.write(anthropicEvent("message_start", { message: { id: `msg_${name}`, type: "message", role: "assistant", model: "test", content: [], stop_reason: null, usage: { input_tokens: 10, output_tokens: 0 } } }));
+  response.write(anthropicEvent("content_block_start", { index: 0, content_block: { type: "tool_use", id: "toolu_1", name, input: {} } }));
+  response.write(anthropicEvent("content_block_delta", { index: 0, delta: { type: "input_json_delta", partial_json: JSON.stringify(args) } }));
+  response.write(anthropicEvent("content_block_stop", { index: 0 }));
+  response.write(anthropicEvent("message_delta", { delta: { stop_reason: "tool_use" }, usage: { output_tokens: 4 } }));
+  response.end(anthropicEvent("message_stop", {}));
+};
+
+/** Every `cache_control` marker in a request body. */
+const cacheMarkers = (value) => Array.isArray(value) ? value.reduce((total, item) => total + cacheMarkers(item), 0)
+  : value && typeof value === "object" ? Object.entries(value).reduce((total, [key, child]) => total + (key === "cache_control" ? 1 : cacheMarkers(child)), 0) : 0;
+
+test("an Anthropic chat with always-on memory caches the system prompt before the memory on its own", async (t) => {
+  const f = await fixture(t, { anthropic: true });
+  const fact = "Prefers metric units";
+  f.steps.push(anthropicCallTool("remember_fact", { fact, alwaysOn: true }), anthropicReply("Saved."), anthropicReply("Noted."));
+  await beginTurn(f, "head", { streamId: "head-1", text: "Remember that I prefer metric units." });
+  await f.daemon.llmClient.waitForChatIdle("head");
+  // The first turn told no memory, so its system prompt stays one block.
+  assert.equal(f.requests[0].system.length, 1);
+  await beginTurn(f, "head", { streamId: "head-2", text: "How far is a marathon?", create: false });
+  await f.daemon.llmClient.waitForChatIdle("head");
+  const { system } = f.requests[2];
+  assert.equal(system.length, 2, "the stable head is its own block");
+  assert.match(system[1].text, new RegExp(fact, "u"), "the memory is in the tail");
+  assert.doesNotMatch(system[0].text, new RegExp(fact, "u"));
+  assert.ok(system[0].cache_control && system[1].cache_control, "both blocks are cached");
+  // The blocks join to the same system text the turn would have sent as one.
+  assert.ok(system[0].text.endsWith("\n\n"));
+  assert.equal(cacheMarkers(f.requests[2]), 4, "tools, head, system and last user message");
+});
+
+/** A finished reply whose prompt was large enough that keeping its cache warm pays. */
+const largePromptReply = (text) => (response) => {
+  response.write(chunk({ role: "assistant", content: text }));
+  response.write(chunk({}, "stop"));
+  response.write(`data: ${JSON.stringify({ id: "test", object: "chat.completion.chunk", choices: [], usage: { prompt_tokens: 200_000, completion_tokens: 4, total_tokens: 200_004 } })}\n\n`);
+  response.end("data: [DONE]\n\n");
+};
+
+/**
+ * Runs a second turn that streams for longer than the 5-minute cache would
+ * last, on a model whose cache Pi keeps warm, and reports how many requests
+ * the provider saw: two turns, plus one when Pi refreshed the cache mid-reply.
+ * Pi arms its refresh timer before the request goes out, so once the reply
+ * streams, a warmer that decided not to warm has armed no timer within the
+ * cache's lifetime and nothing can be sent on the tick.
+ */
+async function requestsAcrossLongReply(t, { profile, usageSource = "chat" }) {
+  const f = await fixture(t, { model: { promptCache: { short: 300 }, cost: { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 } } });
+  if (profile !== undefined) api.atomicJson(join(f.dir, "aiden.json"), profile);
+  f.steps.push(largePromptReply("First"));
+  await beginTurn(f, "warming", { usageSource });
+  await f.daemon.llmClient.waitForChatIdle("warming");
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  // Pi's refresh timers for a 5-minute cache, armed while the second turn runs.
+  // Date is real, so a timer armed a few milliseconds after Pi's clock read is a little shorter.
+  const refreshDelay = getCacheWarmingDelayMs(300_000);
+  const refreshTimers = [], mockedSetTimeout = globalThis.setTimeout;
+  globalThis.setTimeout = function (callback, delay, ...rest) {
+    if (delay > refreshDelay - 1_000 && delay <= refreshDelay) refreshTimers.push(delay);
+    return mockedSetTimeout.call(this, callback, delay, ...rest);
+  };
+  f.steps.push(hangAfter("Still"));
+  const owner = ownerFor();
+  const second = beginTurn(f, "warming", { streamId: "warming-2", create: false, usageSource, owner });
+  await owner.next("chat:delta");
+  await second;
+  t.mock.timers.tick(refreshDelay);
+  if (refreshTimers.length > 0) await f.requestCount(3);
+  const seen = f.requests.length;
+  t.mock.timers.reset();
+  await f.daemon.llmClient.cancelChat("warming", "user_stop");
+  await f.daemon.llmClient.waitForChatIdle("warming");
+  return { seen, refresh: f.requests[2], refreshTimers: refreshTimers.length };
+}
+
+test("aiden serve keeps a chat's cache warm mid-reply only when the profile turns warming on", async (t) => {
+  await t.test("on", async (t) => {
+    const { seen, refresh, refreshTimers } = await requestsAcrossLongReply(t, { profile: { cacheWarmingEnabled: true } });
+    assert.equal(refreshTimers, 1, "Pi armed one refresh");
+    assert.equal(seen, 3, "one refresh request");
+    assert.equal(refresh.max_completion_tokens ?? refresh.max_tokens, 1, "the refresh asks for a single token");
+  });
+  // Pi's own default warms after every turn; the server sends nothing extra unless asked.
+  for (const [name, profile] of [["no setting", undefined], ["off", { cacheWarmingEnabled: false }], ["not a boolean", { cacheWarmingEnabled: "true" }]]) {
+    await t.test(name, async (t) => assert.deepEqual(await requestsAcrossLongReply(t, { profile }), { seen: 2, refresh: undefined, refreshTimers: 0 }));
+  }
+  await t.test("a scheduled run, with warming on", async (t) => {
+    assert.deepEqual(await requestsAcrossLongReply(t, { profile: { cacheWarmingEnabled: true }, usageSource: "scheduled" }), { seen: 2, refresh: undefined, refreshTimers: 0 });
+  });
+});
+
+test("a server session warms only for an attended turn on a profile that opts in", () => {
   const dir = mkdtempSync(join(tmpdir(), "aiden-daemon-warming-"));
   try {
-    // Pi 1.5's own default would keep warming between turns.
-    assert.equal(api.SettingsManager.create(dir, dir).getCacheWarmingMode(), "idle");
-    assert.equal(api.daemonSettingsManager(dir, dir).getCacheWarmingMode(), "streaming");
-    for (const mode of ["off", "streaming", "idle"]) {
-      api.atomicJson(join(dir, "settings.json"), { cacheWarming: mode });
-      assert.equal(api.daemonSettingsManager(dir, dir).getCacheWarmingMode(), mode);
-    }
-    api.atomicJson(join(dir, "settings.json"), { cacheWarming: "always" });
-    assert.equal(api.daemonSettingsManager(dir, dir).getCacheWarmingMode(), "streaming");
+    assert.equal(api.SettingsManager.create(dir, dir).getCacheWarmingMode(), "idle", "Pi's own default keeps warming between turns");
+    assert.equal(api.daemonSettingsManager(dir, dir, { attended: true }).getCacheWarmingMode(), "off");
+    // Pi's own warming setting does not override the profile's switch.
+    api.atomicJson(join(dir, "settings.json"), { cacheWarming: "idle" });
+    assert.equal(api.daemonSettingsManager(dir, dir, { attended: true }).getCacheWarmingMode(), "off");
+    api.atomicJson(join(dir, "aiden.json"), { cacheWarmingEnabled: true });
+    assert.equal(api.daemonSettingsManager(dir, dir, { attended: true }).getCacheWarmingMode(), "streaming");
+    assert.equal(api.daemonSettingsManager(dir, dir, { attended: false }).getCacheWarmingMode(), "off");
+    // Pi would replay an hour-long request at the default lifetime, so a turn that asked for the hour is not warmed by Pi.
+    assert.equal(api.daemonSettingsManager(dir, dir, { attended: true, longRetention: true }).getCacheWarmingMode(), "off");
+    writeFileSync(join(dir, "aiden.json"), "{ not json");
+    assert.equal(api.daemonSettingsManager(dir, dir, { attended: true }).getCacheWarmingMode(), "off");
   } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+/** Every `cache_control.ttl` an Anthropic request body asks for. */
+const cacheTtls = (value) => Array.isArray(value) ? value.flatMap(cacheTtls)
+  : value && typeof value === "object" ? Object.entries(value).flatMap(([key, child]) => key === "cache_control" ? [child.ttl ?? "default"] : cacheTtls(child)) : [];
+
+test("aiden serve asks for the hour-long cache only on an attended chat whose profile opts in", async (t) => {
+  // The `anthropic` provider keeps an hour only for a model named as its own family.
+  const f = await fixture(t, { anthropic: true, model: { name: "claude-test" } });
+  const ttlsOf = async (chatId, usageSource) => {
+    const before = f.requests.length;
+    await beginTurn(f, chatId, { usageSource, providerId: f.providerId });
+    await f.daemon.llmClient.waitForChatIdle(chatId);
+    assert.equal(f.requests.length, before + 1, "one request");
+    return [...new Set(cacheTtls(f.requests[before]))];
+  };
+  assert.deepEqual(await ttlsOf("no-setting", "chat"), ["default"]);
+  api.atomicJson(join(f.dir, "aiden.json"), { cacheWarmingEnabled: true, longPromptCacheRetention: true });
+  assert.deepEqual(await ttlsOf("attended", "chat"), ["1h"]);
+  assert.equal(f.daemon.isKeepingChatWarm("attended"), false, "an hour-long cache is not kept warm as well");
+  assert.deepEqual(await ttlsOf("scheduled", "scheduled"), ["default"]);
+  assert.deepEqual(await ttlsOf("telegram", "telegram"), ["default"]);
+});
+
+/**
+ * Drives a settled chat's idle refreshes: each time a refresh timer of the
+ * model's warming delay is pending, the mocked clock passes it, and the next
+ * refresh's request (if any) must arrive before the clock moves again. `Date`
+ * is mocked with the timers, so however long the real turn takes, the warmer
+ * arms its refresh at exactly the warming delay.
+ */
+function idleRefreshDriver(t, f, chatId) {
+  const refreshDelay = getCacheWarmingDelayMs(300_000);
+  t.mock.timers.enable({ apis: ["setTimeout", "Date"], now: Date.now() });
+  const pending = new Set(), mockedSetTimeout = globalThis.setTimeout, mockedClearTimeout = globalThis.clearTimeout;
+  globalThis.setTimeout = function (callback, delay, ...rest) {
+    const watched = delay > refreshDelay - 1_000 && delay <= refreshDelay;
+    const timer = mockedSetTimeout.call(this, (...args) => { pending.delete(timer); callback(...args); }, delay, ...rest);
+    if (watched) pending.add(timer);
+    return timer;
+  };
+  globalThis.clearTimeout = function (timer) { pending.delete(timer); return mockedClearTimeout.call(this, timer); };
+  // The mocked `Date` stands still between ticks, so the wait is bounded on the real clock.
+  const settled = async (condition) => {
+    const deadline = performance.now() + 10_000;
+    while (!condition()) {
+      if (performance.now() > deadline) throw new Error("Timed out waiting for the idle warmer.");
+      await new Promise((resolve) => setImmediate(resolve));
+    }
+  };
+  return {
+    /** Passes every pending refresh until the chat is no longer kept warm, and returns the requests it sent. */
+    async drain() {
+      const start = f.requests.length;
+      for (let rounds = 0; rounds < 10; rounds += 1) {
+        await settled(() => pending.size > 0 || !f.daemon.isKeepingChatWarm(chatId));
+        if (!f.daemon.isKeepingChatWarm(chatId)) break;
+        const before = f.requests.length;
+        t.mock.timers.tick(refreshDelay);
+        await settled(() => f.requests.length > before || !f.daemon.isKeepingChatWarm(chatId));
+      }
+      return f.requests.slice(start);
+    },
+    /** Waits until the chat's refresh is armed, and returns how many refresh timers are pending. */
+    async armed() { await settled(() => pending.size > 0 || !f.daemon.isKeepingChatWarm(chatId)); return pending.size; },
+    /** How many refresh timers are pending now. */
+    pendingRefreshes: () => pending.size,
+    /** Passes one warming delay on the mocked clock, and returns the requests sent meanwhile. */
+    async passRefreshDelay() {
+      const start = f.requests.length;
+      t.mock.timers.tick(refreshDelay);
+      for (let turns = 0; turns < 20; turns += 1) await new Promise((resolve) => setImmediate(resolve));
+      return f.requests.slice(start);
+    },
+    reset() { t.mock.timers.reset(); },
+  };
+}
+
+test("aiden serve keeps a settled attended chat warm within the desktop's idle limits", async (t) => {
+  // Pricier than the mid-reply case: a settled chat must still save $0.05 on a 15% chance of a reply.
+  const warmingFixture = async (t, profile = { cacheWarmingEnabled: true }) => {
+    const f = await fixture(t, { model: { promptCache: { short: 300 }, cost: { input: 15, output: 75, cacheRead: 1.5, cacheWrite: 18.75 } } });
+    api.atomicJson(join(f.dir, "aiden.json"), profile);
+    return f;
+  };
+  await t.test("at most three one-token refreshes, then none", async (t) => {
+    const f = await warmingFixture(t);
+    const driver = idleRefreshDriver(t, f, "idle");
+    f.steps.push(largePromptReply("First"));
+    await beginTurn(f, "idle");
+    await f.daemon.llmClient.waitForChatIdle("idle");
+    assert.equal(f.daemon.isKeepingChatWarm("idle"), true);
+    const refreshes = await driver.drain();
+    driver.reset();
+    assert.equal(refreshes.length, 3);
+    for (const refresh of refreshes) {
+      assert.equal(refresh.max_completion_tokens ?? refresh.max_tokens, 1, "a refresh asks for a single token");
+      assert.deepEqual(refresh.messages, f.requests[0].messages, "a refresh replays the reply's own request");
+    }
+    assert.equal(f.daemon.isKeepingChatWarm("idle"), false);
+  });
+  await t.test("a new message on the chat ends warming with no refresh", async (t) => {
+    const f = await warmingFixture(t);
+    const driver = idleRefreshDriver(t, f, "written");
+    f.steps.push(largePromptReply("First"));
+    await beginTurn(f, "written");
+    await f.daemon.llmClient.waitForChatIdle("written");
+    assert.equal(f.daemon.isKeepingChatWarm("written"), true);
+    await f.daemon.chatStore.appendMessage("written", { role: "user", content: "One more thing" });
+    assert.deepEqual(await driver.drain(), []);
+    driver.reset();
+    assert.equal(f.daemon.isKeepingChatWarm("written"), false);
+  });
+  await t.test("a new turn ends the last reply's warming", async (t) => {
+    const f = await warmingFixture(t);
+    const driver = idleRefreshDriver(t, f, "again");
+    f.steps.push(largePromptReply("First"), reply("Second"));
+    await beginTurn(f, "again", { streamId: "again-1" });
+    await f.daemon.llmClient.waitForChatIdle("again");
+    assert.equal(await driver.armed(), 1, "the first reply armed its refresh");
+    await beginTurn(f, "again", { streamId: "again-2", create: false });
+    await f.daemon.llmClient.waitForChatIdle("again");
+    assert.equal(driver.pendingRefreshes(), 0, "the first reply's refresh is cleared");
+    assert.deepEqual(await driver.passRefreshDelay(), [], "and never sent");
+    driver.reset();
+    // The second reply's prompt is too small to be worth keeping warm.
+    assert.equal(f.daemon.isKeepingChatWarm("again"), false);
+    assert.equal(f.requests.length, 2);
+  });
+  await t.test("changing the chat's model ends warming with no refresh", async (t) => {
+    const f = await warmingFixture(t);
+    const driver = idleRefreshDriver(t, f, "switched");
+    f.steps.push(largePromptReply("First"));
+    await beginTurn(f, "switched");
+    await f.daemon.llmClient.waitForChatIdle("switched");
+    assert.equal(await driver.armed(), 1);
+    // A model change is a chat write, so the settled reply is no longer the chat's latest.
+    await f.daemon.chatStore.setChatModelSelection("switched", "cli-test", "another-model");
+    assert.deepEqual(await driver.drain(), []);
+    driver.reset();
+    assert.equal(f.daemon.isKeepingChatWarm("switched"), false);
+  });
+  await t.test("deleting the chat ends warming with no refresh", async (t) => {
+    const f = await warmingFixture(t);
+    const driver = idleRefreshDriver(t, f, "deleted");
+    f.steps.push(largePromptReply("First"));
+    await beginTurn(f, "deleted");
+    await f.daemon.llmClient.waitForChatIdle("deleted");
+    assert.equal(await driver.armed(), 1);
+    // The hook a chat deletion runs once the chat's journal is gone (remote-chats.ts).
+    f.daemon.forgetMemoryFactsTold("deleted");
+    assert.equal(f.daemon.isKeepingChatWarm("deleted"), false);
+    assert.equal(driver.pendingRefreshes(), 0, "the refresh is cleared");
+    assert.deepEqual(await driver.passRefreshDelay(), [], "and never sent");
+    driver.reset();
+  });
+  // The memory prompt is not part of the chat, so turning memory off writes nothing the summary revision sees.
+  for (const [name, memoryEnabled, expected] of [["a told fact still approved keeps warming", true, 3], ["turning memory off ends warming with no refresh", false, 0]]) {
+    await t.test(name, async (t) => {
+      const f = await warmingFixture(t);
+      const driver = idleRefreshDriver(t, f, "told");
+      const fact = "Keeps bees on the roof";
+      f.steps.push(callTool("remember_fact", { fact, alwaysOn: true }), reply("Saved."));
+      await beginTurn(f, "told", { text: "Remember my bees.", streamId: "told-1" });
+      await f.daemon.llmClient.waitForChatIdle("told");
+      f.steps.push(largePromptReply("You keep bees."));
+      await beginTurn(f, "told", { text: "What do I keep?", streamId: "told-2", create: false });
+      await f.daemon.llmClient.waitForChatIdle("told");
+      const told = f.requests.at(-1);
+      assert.match(JSON.stringify(told.messages[0]), /bees on the roof/u, "the system prompt told the chat the fact");
+      assert.equal(await driver.armed(), 1);
+      api.atomicJson(join(f.dir, "aiden.json"), { cacheWarmingEnabled: true, memoryEnabled });
+      const refreshes = await driver.drain();
+      driver.reset();
+      assert.equal(refreshes.length, expected);
+      for (const refresh of refreshes) assert.deepEqual(refresh.messages, told.messages, "a refresh replays the told request");
+      assert.equal(f.daemon.isKeepingChatWarm("told"), false);
+    });
+  }
+  await t.test("revoking the device whose turn it was ends warming", async (t) => {
+    const f = await warmingFixture(t);
+    f.steps.push(largePromptReply("First"));
+    await beginTurn(f, "revoked", { owner: ownerFor(`${api.remoteDeviceDocumentPrefix("phone")}stream`) });
+    await f.daemon.llmClient.waitForChatIdle("revoked");
+    f.daemon.releaseDeviceAttendance("another-phone");
+    assert.equal(f.daemon.isKeepingChatWarm("revoked"), true, "another device's revocation leaves it");
+    f.daemon.releaseDeviceAttendance("phone");
+    assert.equal(f.daemon.isKeepingChatWarm("revoked"), false);
+  });
+  for (const [name, profile, usageSource] of [["warming off", { cacheWarmingEnabled: false }, "chat"], ["a scheduled run", { cacheWarmingEnabled: true }, "scheduled"]]) {
+    await t.test(name, async (t) => {
+      const f = await warmingFixture(t, profile);
+      f.steps.push(largePromptReply("First"));
+      await beginTurn(f, "quiet", { usageSource });
+      await f.daemon.llmClient.waitForChatIdle("quiet");
+      assert.equal(f.daemon.isKeepingChatWarm("quiet"), false);
+    });
+  }
+});
+
+test("a server session sends Codex requests over a WebSocket unless SSE is asked for or a proxy is set", (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "aiden-daemon-transport-"));
+  const proxyNames = ["HTTPS_PROXY", "https_proxy", "ALL_PROXY", "all_proxy", "NO_PROXY", "no_proxy"];
+  const saved = proxyNames.map((name) => [name, process.env[name]]);
+  for (const name of proxyNames) delete process.env[name];
+  t.after(() => {
+    for (const [name, value] of saved) { if (value === undefined) delete process.env[name]; else process.env[name] = value; }
+    rmSync(dir, { recursive: true, force: true });
+  });
+  // Pi's default sends previous-response deltas over the socket.
+  assert.equal(api.SettingsManager.create(dir, dir).getTransport(), "auto");
+  assert.equal(api.daemonSettingsManager(dir, dir, { attended: true }).getTransport(), "websocket");
+  api.atomicJson(join(dir, "settings.json"), { transport: "websocket-cached" });
+  assert.equal(api.daemonSettingsManager(dir, dir, { attended: false }).getTransport(), "websocket");
+  api.atomicJson(join(dir, "settings.json"), { transport: "sse" });
+  assert.equal(api.daemonSettingsManager(dir, dir, { attended: true }).getTransport(), "sse");
+  api.atomicJson(join(dir, "settings.json"), {});
+  // Node's WebSocket does not go through the proxy HTTP requests use.
+  process.env.HTTPS_PROXY = "http://proxy.invalid:3128";
+  assert.equal(api.daemonSettingsManager(dir, dir, { attended: true }).getTransport(), "sse");
+  process.env.NO_PROXY = "chatgpt.com";
+  assert.equal(api.daemonSettingsManager(dir, dir, { attended: true }).getTransport(), "websocket");
+  // A helper agent's worker is a short-lived child process: SSE, whatever settings.json asks.
+  api.atomicJson(join(dir, "settings.json"), { transport: "websocket-cached", cacheWarming: "streaming" });
+  const worker = api.subagentWorkerSettingsManager(dir, dir);
+  assert.equal(worker.getTransport(), "sse");
+  assert.equal(worker.getCacheWarmingMode(), "off");
+});
+
+/** A reply whose usage reports `promptTokens`, so the turn ends past the compaction threshold. */
+const replyAtContext = (text, promptTokens) => (response) => {
+  response.write(chunk({ role: "assistant", content: text }));
+  response.write(chunk({}, "stop"));
+  response.write(`data: ${JSON.stringify({ id: "test", object: "chat.completion.chunk", choices: [], usage: { prompt_tokens: promptTokens, completion_tokens: 4, total_tokens: promptTokens + 4 } })}\n\n`);
+  response.end("data: [DONE]\n\n");
+};
+
+const compactionSummaries = (daemon, chatId) => readFileSync(daemon.sessionPath(chatId), "utf8").split("\n").filter(Boolean)
+  .map((line) => JSON.parse(line)).filter((entry) => entry.type === "compaction").map((entry) => entry.summary);
+
+test("a fact the chat was told and then forgot does not survive a serve compaction", async (t) => {
+  const f = await fixture(t);
+  // Every turn's history but the last exchange is summarized.
+  api.atomicJson(join(f.dir, "settings.json"), { compaction: { keepRecentTokens: 1 } });
+  const fact = "Plays the theremin on Tuesdays";
+  const run = async (text, steps, create = false) => {
+    f.steps.push(...steps);
+    await beginTurn(f, "forgets", { text, create, streamId: `stream-${f.requests.length}` });
+    await f.daemon.llmClient.waitForChatIdle("forgets");
+  };
+  await run("Remember my hobby.", [callTool("remember_fact", { fact, alwaysOn: true }), reply("Saved.")], true);
+  const factId = /\[memory:([^\]]+)\]/u.exec(toolResultSeen(f.requests[1]))?.[1];
+  assert.ok(factId, "the fact was saved");
+  // The always-on prompt tells the next turn, and the reply restates it.
+  await run("What do I do on Tuesdays?", [reply("You play the theremin on Tuesdays.")]);
+  assert.match(JSON.stringify(f.requests[2].messages[0]), /theremin/u, "the system prompt told the chat");
+  // The fact is forgotten, the turn ends past the threshold, and the summarizer restates it anyway.
+  await run("Forget my hobby.", [
+    callTool("forget_fact", { factId }),
+    replyAtContext("Forgotten.", 30_000),
+    reply(`## Goal\nThe user plays the theremin on Tuesdays.\nThe user asked to forget a hobby.`),
+  ]);
+  const [summary] = compactionSummaries(f.daemon, "forgets");
+  assert.ok(summary, "the compaction was stored");
+  assert.doesNotMatch(summary, /theremin/iu, "the forgotten fact is not in the stored summary");
+  assert.match(summary, /asked to forget a hobby/u, "the summarizer's other lines are kept");
+});
+
+test("a fact the chat learned only from the always-on prompt, then removed elsewhere, does not survive its compaction", async (t) => {
+  const f = await fixture(t);
+  api.atomicJson(join(f.dir, "settings.json"), { compaction: { keepRecentTokens: 1 } });
+  const fact = "Keeps bees on the roof";
+  const run = async (chatId, text, steps, create) => {
+    f.steps.push(...steps);
+    await beginTurn(f, chatId, { text, create, streamId: `stream-${f.requests.length}` });
+    await f.daemon.llmClient.waitForChatIdle(chatId);
+  };
+  // Another chat saves the fact, so no copy of it is in this chat's history.
+  await run("saver", "Remember my bees.", [callTool("remember_fact", { fact, alwaysOn: true }), reply("Saved.")], true);
+  const factId = /\[memory:([^\]]+)\]/u.exec(toolResultSeen(f.requests[1]))?.[1];
+  assert.ok(factId, "the fact was saved");
+  await run("told", "Hello.", [reply("Hello.")], true);
+  assert.match(JSON.stringify(f.requests[2].messages[0]), /bees on the roof/u, "the always-on prompt told the chat");
+  // The other chat removes it, and this chat's next turn ends past the threshold; the summarizer states it anyway.
+  await run("saver", "Forget my bees.", [callTool("forget_fact", { factId }), reply("Forgotten.")], false);
+  const before = f.requests.length;
+  await run("told", "What is new?", [
+    replyAtContext("Nothing much.", 30_000),
+    reply("## Goal\nThe user keeps bees on the roof.\nThe user said hello."),
+  ], false);
+  const sent = f.requests.slice(before);
+  assert.ok(sent.length >= 2, "the turn and its summarizer requests");
+  assert.doesNotMatch(JSON.stringify(sent), /bees/iu, "the removed fact reaches neither the turn nor the summarizer");
+  const [summary] = compactionSummaries(f.daemon, "told");
+  assert.ok(summary, "the compaction was stored");
+  assert.doesNotMatch(summary, /bees/iu, "the stored summary does not state the removed fact");
+  assert.match(summary, /said hello/u, "the summarizer's other lines are kept");
+});
+
+test("a serve compaction whose summary still states a fact across lines is not stored", async (t) => {
+  const f = await fixture(t);
+  api.atomicJson(join(f.dir, "settings.json"), { compaction: { keepRecentTokens: 1 } });
+  f.steps.push(callTool("remember_fact", { fact: "Owns a red canoe", alwaysOn: true }), reply("Saved."));
+  await beginTurn(f, "split", { text: "Remember my boat." });
+  await f.daemon.llmClient.waitForChatIdle("split");
+  f.steps.push(replyAtContext("You own a red canoe.", 30_000), reply("## Goal\nThe user owns a red\ncanoe and paddles."));
+  const before = f.requests.length;
+  await beginTurn(f, "split", { text: "What boat do I own?", create: false, streamId: "stream-split-2" });
+  await f.daemon.llmClient.waitForChatIdle("split");
+  assert.ok(f.requests.length >= before + 2, "the summarizer was asked");
+  assert.deepEqual(compactionSummaries(f.daemon, "split"), [], "no summary stating the fact was written");
+  assert.deepEqual((await assistantMessages(f.daemon, "split")).map((message) => message.content).at(-1), "You own a red canoe.", "the turn's answer stands");
+});
+
+/** An Anthropic Messages reply whose usage reports `inputTokens`, so the turn ends past the compaction threshold. */
+const anthropicReplyAtContext = (text, inputTokens) => (response) => {
+  response.write(anthropicEvent("message_start", { message: { id: `msg_${text}`, type: "message", role: "assistant", model: "test", content: [], stop_reason: null, usage: { input_tokens: inputTokens, output_tokens: 0 } } }));
+  response.write(anthropicEvent("content_block_start", { index: 0, content_block: { type: "text", text: "" } }));
+  response.write(anthropicEvent("content_block_delta", { index: 0, delta: { type: "text_delta", text } }));
+  response.write(anthropicEvent("content_block_stop", { index: 0 }));
+  response.write(anthropicEvent("message_delta", { delta: { stop_reason: "end_turn" }, usage: { output_tokens: 4 } }));
+  response.end(anthropicEvent("message_stop", {}));
+};
+
+/** A request body without its cache markers, which move to the newest user message. */
+const withoutCacheMarkers = (value) => JSON.parse(JSON.stringify(value ?? null, (key, child) => key === "cache_control" ? undefined : child));
+
+test("a serve compaction after a turn continues the turn's request, at the default cache lifetime", async (t) => {
+  const f = await fixture(t, { anthropic: true, model: { name: "claude-test" } });
+  api.atomicJson(join(f.dir, "settings.json"), { compaction: { keepRecentTokens: 1 } });
+  // The turn keeps its cache for an hour; the summary is never continued, so it asks for the default.
+  api.atomicJson(join(f.dir, "aiden.json"), { longPromptCacheRetention: true });
+  f.steps.push(anthropicReply("Hello."));
+  await beginTurn(f, "cached", { text: "Hello." });
+  await f.daemon.llmClient.waitForChatIdle("cached");
+  f.steps.push(anthropicReplyAtContext("Plenty.", 20_000), anthropicReply("## Goal\nThe user said hello twice."));
+  const before = f.requests.length;
+  await beginTurn(f, "cached", { text: "And again.", create: false, streamId: "stream-cached-2" });
+  await f.daemon.llmClient.waitForChatIdle("cached");
+  assert.equal(f.requests.length, before + 2, "the turn and one summary request");
+  const [turn, summary] = f.requests.slice(before);
+  assert.deepEqual(withoutCacheMarkers(summary.system), withoutCacheMarkers(turn.system), "the turn's system prompt");
+  assert.deepEqual(withoutCacheMarkers(summary.tools), withoutCacheMarkers(turn.tools), "the turn's tools");
+  assert.deepEqual(withoutCacheMarkers(summary.messages.slice(0, turn.messages.length)), withoutCacheMarkers(turn.messages), "the turn's messages, unchanged");
+  const added = summary.messages.slice(turn.messages.length);
+  assert.deepEqual(added.map((message) => message.role), ["assistant", "user"], "the turn's reply, then the instruction");
+  assert.match(JSON.stringify(added[0]), /Plenty\./u);
+  assert.deepEqual([...new Set(cacheTtls(turn))], ["1h"]);
+  assert.deepEqual([...new Set(cacheTtls(summary))], ["default"]);
+  const [stored] = compactionSummaries(f.daemon, "cached");
+  assert.match(stored ?? "", /said hello twice/u, "the continuation's summary was stored");
+});
+
+test("a serve compaction after a removed fact sends the isolated request", async (t) => {
+  const f = await fixture(t, { anthropic: true, model: { name: "claude-test" } });
+  api.atomicJson(join(f.dir, "settings.json"), { compaction: { keepRecentTokens: 1 } });
+  const run = async (chatId, text, steps, create) => {
+    f.steps.push(...steps);
+    await beginTurn(f, chatId, { text, create, streamId: `stream-${f.requests.length}` });
+    await f.daemon.llmClient.waitForChatIdle(chatId);
+  };
+  // Another chat saves the fact, so this chat learns it only from the always-on prompt.
+  await run("saver", "Remember my bees.", [anthropicCallTool("remember_fact", { fact: "Keeps bees on the roof", alwaysOn: true }), anthropicReply("Saved.")], true);
+  const factId = /\[memory:([^\]]+)\]/u.exec(JSON.stringify(f.requests[1].messages))?.[1];
+  assert.ok(factId, "the fact was saved");
+  await run("removed", "Hello.", [anthropicReply("Hello.")], true);
+  assert.match(JSON.stringify(f.requests[2].system), /bees on the roof/u, "the always-on prompt told the chat");
+  await run("saver", "Forget my bees.", [anthropicCallTool("forget_fact", { factId }), anthropicReply("Forgotten.")], false);
+  const before = f.requests.length;
+  await run("removed", "What is new?", [
+    anthropicReplyAtContext("Nothing much.", 20_000),
+    anthropicReply("## Goal\nThe user said hello."),
+    anthropicReply("The turn asked what is new."),
+  ], false);
+  const [turn, ...summaries] = f.requests.slice(before);
+  assert.ok(summaries.length >= 1, "the summarizer was asked");
+  for (const summary of summaries) {
+    assert.notDeepEqual(withoutCacheMarkers(summary.system), withoutCacheMarkers(turn.system), "Pi's own summarizer prompt, not the turn's");
+    assert.equal(summary.messages.length, 1, "the history goes as one summarizer input, not as the turn's messages");
+    assert.doesNotMatch(JSON.stringify(summary), /bees/iu, "the removed fact does not reach the summarizer");
+  }
+  const [stored] = compactionSummaries(f.daemon, "removed");
+  assert.match(stored ?? "", /said hello/u, "the isolated summary was stored");
 });

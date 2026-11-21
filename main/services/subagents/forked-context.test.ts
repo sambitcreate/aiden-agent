@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { createModels, type Api, type Model } from "@earendil-works/pi-ai";
+import { createFauxCore, fauxAssistantMessage } from "@earendil-works/pi-ai/providers/faux";
 import type { ResolvedModelRuntime } from "../model-runtime-core.js";
+import { SubagentRuntimeRegistry } from "./child-agent-runtime.js";
 import {
   MAX_FORK_CONTEXT_MESSAGES,
   captureLiveSubagentContext,
@@ -441,4 +443,90 @@ test("live child fork never observes transcript mutation after capture", () => {
   transcript.push({ role: "user", content: "new later message", timestamp: 5 });
   assert.equal(capture.revisionHash, revision);
   assert.doesNotMatch(JSON.stringify(capture), /mutated later|new later message/u);
+});
+
+interface RecordedRequest {
+  messages: { role: string; content: unknown }[];
+}
+
+/**
+ * A child whose one reply crosses its compaction trigger while the summary
+ * still fits: an 8,192-token window, a 2,048-token reserve and a 512-token
+ * output cap put the trigger above 6,144 tokens and the cached summary's fit
+ * below about 7,600. The reply's 26,000 characters are about 6,500 tokens.
+ */
+async function childCompactingAfterItsReply(options: { botHelper?: boolean } = {}) {
+  const core = createFauxCore({
+    provider: "aiden-child-prefix",
+    models: [{ id: "child-prefix", contextWindow: 8_192, maxTokens: 512 }],
+  });
+  const requests: RecordedRequest[] = [];
+  const record = (context: unknown) => {
+    requests.push(structuredClone(context) as RecordedRequest);
+  };
+  core.setResponses([
+    (context) => {
+      record(context);
+      return fauxAssistantMessage(`CHILD-FINDINGS ${"finding ".repeat(3_250)}`);
+    },
+    ...Array.from({ length: 4 }, () => (context: unknown) => {
+      record(context);
+      return fauxAssistantMessage("## Goal\nchild checkpoint\n\n## Next Steps\n1. Report the findings.");
+    }),
+  ]);
+  // A documented five-minute lifetime, so the child's ledger keeps its request.
+  const model = { ...core.getModel(), promptCache: { short: 300 } } as Model<Api>;
+  const modelRuntime: ResolvedModelRuntime = {
+    models: createModels(),
+    provider: {
+      id: model.provider,
+      kind: "openai",
+      label: "Child prefix provider",
+      baseUrl: model.baseUrl,
+      models: [model.id],
+      needsKey: false,
+      deployment: "hosted",
+    },
+    model,
+    apiKey: undefined,
+    headers: undefined,
+    streams: { streamSimple: core.streamSimple },
+  };
+  const registry = new SubagentRuntimeRegistry();
+  const child = registry.create({
+    authority: { generationId: "child-prefix-generation", chatId: "child-prefix-chat", workspaceId: "child-prefix-workspace" },
+    groupId: "child-prefix",
+    runtime: modelRuntime,
+    ...(options.botHelper ? { transformRuntime: (runtime: ResolvedModelRuntime) => runtime } : {}),
+    compactionModelOverrides: { "aiden-child-prefix/child-prefix": { reserveTokens: 2_048, keepRecentTokens: 1_024 } },
+    thinkingLevel: "high",
+    systemPrompt: "Complete one bounded child task.",
+    tools: [],
+  });
+  const outcome = await child.prompt("Collect the findings.");
+  return { outcome, requests };
+}
+
+test("a child's compaction after its reply extends the child's last request byte for byte", async () => {
+  const { outcome, requests } = await childCompactingAfterItsReply();
+
+  assert.equal(outcome.kind, "completed", JSON.stringify(outcome));
+  assert.equal(requests.length, 2, "one child turn, then one summary request");
+  const [turn, summary] = requests as [RecordedRequest, RecordedRequest];
+  assert.equal(summary.messages.length, turn.messages.length + 2);
+  assert.deepEqual(summary.messages.slice(0, turn.messages.length), turn.messages);
+  const reply = summary.messages[turn.messages.length]!;
+  assert.equal(reply.role, "assistant");
+  assert.match(JSON.stringify(reply.content), /CHILD-FINDINGS/u);
+  assert.equal(summary.messages[turn.messages.length + 1]!.role, "user");
+});
+
+test("a Bot helper child's compaction keeps the isolated summary request", async () => {
+  const { outcome, requests } = await childCompactingAfterItsReply({ botHelper: true });
+
+  assert.equal(outcome.kind, "completed", JSON.stringify(outcome));
+  assert.ok(requests.length >= 2, "the reply crosses the trigger, so a summary is requested");
+  const [turn, summary] = requests as [RecordedRequest, RecordedRequest];
+  assert.notDeepEqual(summary.messages[0], turn.messages[0], "the summary has its own system prompt");
+  assert.match(JSON.stringify(summary.messages[0]), /context summarization assistant/u);
 });

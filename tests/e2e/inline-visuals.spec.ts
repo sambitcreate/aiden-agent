@@ -133,6 +133,65 @@ test("a reply draws native and HTML visuals inline, and both get snapshots for p
   await restoredNative.scrollIntoViewIfNeeded();
   await restoredNative.getByRole("tab", { name: "Team" }).click();
   await expect(restoredNative.getByText("$60.00")).toBeVisible();
+
+  // In design mode the chat column has an asymmetric 16px / dock-gutter inset;
+  // a wide visual must stay flush with the 16px start gutter (never clipped on
+  // the left) and grow into the end gutter in both split and stacked layouts.
+  await reopened.getByRole("button", { name: "Design mode", exact: true }).click();
+  await expect(reopened.locator('[data-design-layout="split"]')).toBeVisible();
+  const expectDesignWideFrameClear = async () => {
+    await expect
+      .poll(async () => {
+        await frame.evaluate((element) => element.scrollIntoView({ block: "center" }));
+        return frame.evaluate((element) => {
+          const box = element.getBoundingClientRect();
+          const scrollContent = element.closest("[data-scroll-content]")!;
+          const contentBox = scrollContent.getBoundingClientRect();
+          const scrollport = scrollContent.parentElement!;
+          const column = element.closest(".chat-content-column")!;
+          const columnStyle = getComputedStyle(column);
+          const columnBox = column.getBoundingClientRect();
+          const columnContentLeft = columnBox.left + parseFloat(columnStyle.paddingLeft);
+          const columnContentRight = columnBox.right - parseFloat(columnStyle.paddingRight);
+          const y = box.top + box.height / 2;
+          return {
+            alignedWithStart: Math.abs(box.left - columnContentLeft) <= 2,
+            insideStart: box.left >= contentBox.left + 14,
+            insideEnd: box.right <= contentBox.right - 14,
+            expandsIntoDockGutter: box.right > columnContentRight + 10,
+            leftHit: document.elementFromPoint(box.left + 8, y) === element,
+            rightHit: document.elementFromPoint(box.right - 8, y) === element,
+            noHorizontalOverflow: scrollport.scrollWidth <= scrollport.clientWidth + 1,
+          };
+        });
+      })
+      .toEqual({
+        alignedWithStart: true,
+        insideStart: true,
+        insideEnd: true,
+        expandsIntoDockGutter: true,
+        leftHit: true,
+        rightHit: true,
+        noHorizontalOverflow: true,
+      });
+  };
+  await expectDesignWideFrameClear();
+
+  // Expanding a wide visual in design mode still promotes it to a full popover dialog.
+  await reopened.getByRole("button", { name: "Expand Weekly total" }).click();
+  await expect(reopened.getByRole("dialog", { name: "Weekly total" })).toBeVisible();
+  await reopened.getByRole("button", { name: "Close Weekly total" }).click();
+  await expect(reopened.getByRole("dialog", { name: "Weekly total" })).toHaveCount(0);
+
+  const hideSidebar = reopened.getByRole("button", { name: "Hide sidebar" });
+  if (await hideSidebar.isVisible()) {
+    await hideSidebar.click();
+    await expect(reopened.getByRole("button", { name: "Show sidebar" })).toBeVisible();
+  }
+  await aiden.app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().find((window) => window.isVisible())!.setSize(640, 900));
+  await expect.poll(() => reopened.evaluate(() => window.innerWidth)).toBe(640);
+  await expect(reopened.locator('[data-design-layout="stacked"]')).toBeVisible();
+  await expectDesignWideFrameClear();
 });
 
 test("snapshots run guest HTML offline and keep everything down to its last margin", async ({ aiden }) => {

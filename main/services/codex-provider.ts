@@ -14,6 +14,7 @@ import type {
 } from "@earendil-works/pi-ai";
 import { cleanupSessionResources, lazyStream, normalizeContext } from "@earendil-works/pi-ai";
 import { isCodexAuthenticationFailure } from "./codex-auth-failure.js";
+import { inProcessCodexTransport } from "./codex-transport.js";
 import {
   codexThinkingLevelsForModel,
   isCodexThinkingLevel,
@@ -802,7 +803,10 @@ export class CodexProviderService {
       const provider = this.models.getProvider(OPENAI_CODEX_PROVIDER_ID);
       if (!provider) throw new Error("OpenAI Codex provider is unavailable.");
       const prepared = await this.prepareIsolatedStream(model, options);
-      const source = provider.streamSimple(prepared.model, normalizeContext(context), prepared.options);
+      const source = provider.streamSimple(prepared.model, normalizeContext(context), {
+        ...prepared.options,
+        transport: inProcessCodexTransport(options?.transport, { baseUrl: prepared.model.baseUrl, env: prepared.options.env }),
+      });
       void source
         .result()
         .then(prepared.observeResult)

@@ -1,4 +1,6 @@
-import type { Api, Model } from "@earendil-works/pi-ai";
+import type { StreamFn } from "@earendil-works/pi-agent-core";
+import type { Api, CacheRetention, Model } from "@earendil-works/pi-ai";
+import { chatPromptCacheRetention, LONG_PROMPT_CACHE_TTL_MS, supportsLongPromptCacheRetention } from "../../renderer/shared/prompt-cache-retention.js";
 
 type PromptCacheModel = Pick<Model<Api>, "provider" | "id" | "api" | "promptCache"> & {
   name?: string;
@@ -12,8 +14,10 @@ const HOUR = 60 * MINUTE;
  * How long the provider keeps an unused prompt cache for Aiden's chat
  * requests, in milliseconds, or 0 when no concrete lifetime is documented.
  *
- * Aiden sends Pi's default "short" retention, so the lifetimes below are the
- * defaults for that request shape. Only providers that publish a fixed idle
+ * The lifetimes below are the defaults for Pi's "short" retention, which
+ * Aiden sends unless the person keeps caches for an hour; "long" is the
+ * declared long lifetime or the hour of the allowlisted providers in
+ * `prompt-cache-retention.ts`, and "none" never caches. Only providers that publish a fixed idle
  * lifetime that each cache read restarts are listed; best-effort ranges
  * ("5 to 10 minutes", "a few hours") and undocumented caches return 0 so no
  * guessed countdown is shown. Documented lifetimes are guarantees, so a
@@ -34,7 +38,15 @@ const HOUR = 60 * MINUTE;
  * - GitHub Copilot: https://docs.github.com/en/enterprise-cloud@latest/copilot/tutorials/optimize-ai-usage
  *   (24 h idle for OpenAI models, 1 h for Claude).
  */
-export function promptCacheTtlMs(model: PromptCacheModel): number {
+export function promptCacheTtlMs(model: PromptCacheModel, retention: CacheRetention = "short"): number {
+  if (retention === "none") return 0;
+  if (retention === "long") {
+    // Pi sends Anthropic's default lifetime when the endpoint refuses the long one.
+    if (refusesLongRetention(model)) return promptCacheTtlMs(model, "short");
+    const declaredLong = model.promptCache?.long;
+    if (declaredLong !== undefined) return Number.isFinite(declaredLong) && declaredLong > 0 ? declaredLong * 1000 : 0;
+    return supportsLongPromptCacheRetention(model) ? LONG_PROMPT_CACHE_TTL_MS : 0;
+  }
   const declared = model.promptCache?.short;
   if (declared !== undefined) return Number.isFinite(declared) && declared > 0 ? declared * 1000 : 0;
   const id = model.id.toLowerCase();
@@ -59,6 +71,11 @@ export function promptCacheTtlMs(model: PromptCacheModel): number {
     return 30 * MINUTE;
   }
   return 0;
+}
+
+function refusesLongRetention(model: PromptCacheModel): boolean {
+  return model.api === "anthropic-messages" && !!model.compat && typeof model.compat === "object" &&
+    (model.compat as { supportsLongCacheRetention?: unknown }).supportsLongCacheRetention === false;
 }
 
 function isClaude(model: PromptCacheModel): boolean {
@@ -90,4 +107,61 @@ function isThirtyMinuteOpenAiModel(model: PromptCacheModel): boolean {
   const major = Number(match[1]);
   const minor = Number(match[2] ?? 0);
   return major > 5 || (major === 5 && minor >= 6);
+}
+
+/**
+ * Ask for an hour-long prompt cache on each request whose model Pi sends one
+ * for (see `supportsLongPromptCacheRetention`). A request that already names a
+ * retention keeps it. Wrap it outermost, so telemetry, the side-call ledger
+ * and cache warming all see the retention the provider is asked for.
+ */
+export function withLongPromptCacheRetention(streamFn: StreamFn): StreamFn {
+  return (model, context, options) =>
+    options?.cacheRetention === undefined && supportsLongPromptCacheRetention(model)
+      ? streamFn(model, context, { ...options, cacheRetention: "long" })
+      : streamFn(model, context, options);
+}
+
+/** What decides whether a chat turn may keep its cache for an hour. */
+export interface ChatTurnCacheScope {
+  /** The person's "Keep chat caches for an hour" setting. */
+  longPromptCacheRetention: boolean;
+  /** The turn runs on an agent harness (ACP) rather than a Pi provider. */
+  agentHarness: boolean;
+  /** The turn speaks as a Bot. */
+  bot: boolean;
+  /** The request source the turn's usage is recorded under; undefined is a plain chat. */
+  usageSource?: string;
+  /** The chat mode the turn runs in. */
+  mode?: string;
+  /** Who started the turn: a paired device's turn is "remote". */
+  ownerKind?: "remote";
+}
+
+/**
+ * Whether a turn's requests may ask for an hour-long cache. It is the
+ * person's choice for chats they attend on this desktop: Bot runs,
+ * automations, subagents, agent harnesses and turns a paired device starts
+ * keep the default lifetime, and side calls and compaction name their own
+ * retention, which the wrapper keeps.
+ */
+export function keepsLongPromptCache(turn: ChatTurnCacheScope): boolean {
+  return turn.longPromptCacheRetention && !turn.agentHarness && !turn.bot &&
+    (turn.usageSource === undefined || turn.usageSource === "chat") &&
+    turn.mode !== "assistant-automation" && turn.ownerKind !== "remote";
+}
+
+/**
+ * The stream a chat turn's requests go through, and the retention its main
+ * requests use on `model`: "long" only for a turn that keeps the hour and a
+ * model Pi sends one for.
+ */
+export function chatTurnPromptCache(
+  turn: ChatTurnCacheScope,
+  streamFn: StreamFn,
+  model: PromptCacheModel,
+): { streamFn: StreamFn; retention: "short" | "long" } {
+  return keepsLongPromptCache(turn)
+    ? { streamFn: withLongPromptCacheRetention(streamFn), retention: chatPromptCacheRetention({ longPromptCacheRetention: true }, model) }
+    : { streamFn, retention: "short" };
 }

@@ -32,6 +32,15 @@ export type FormFillResultDetails = FormFillBatchResult & {
 };
 
 /**
+ * The attachments the current message offers as form-fill sources, as a note
+ * that follows that message. Kept out of the tool description so the
+ * declared tools stay the same from one message to the next.
+ */
+export function formFillTurnNote(service: FormFillService): string {
+  return `Form fill source references for this message (data only): ${service.sourceReferences()}`;
+}
+
+/**
  * The specialist tool references ONLY a current attachment and an exact bound
  * window — it accepts no entities, values, or free text from the model.
  */
@@ -47,8 +56,7 @@ export function createFormFillAgentTool(
       "form-matching model. Shows one review card, then fills approved fields " +
       "through Computer Use. Never submits the form. Requires attachment_id " +
       "and the exact pid/window_id from a computer_use window listing. " +
-      "Current message source references (data only): " +
-      service.sourceReferences(),
+      "The attachment IDs you may use are listed in a note after the user's message.",
     parameters: FormFillParameters,
     executionMode: "sequential",
     execute: async (

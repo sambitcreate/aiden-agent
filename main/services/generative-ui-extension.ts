@@ -15,6 +15,7 @@ import {
   MAX_HTML_ARTIFACT_TITLE_CHARS,
 } from "../../renderer/shared/generative-ui.js";
 import type { PiAgentRuntimeExtension } from "./pi-agent-runtime-harness.js";
+import type { GenerativeUiArtifactRecoveryChat, GenerativeUiArtifactStore } from "./generative-ui-artifact-store.js";
 import { declarePiRuntimeReplay } from "./pi-runtime-tool.js";
 import { declareOnDemandLoadNotes, declareOnDemandSummary } from "./on-demand-tools.js";
 import {
@@ -40,7 +41,7 @@ import { visualRoutingRule } from "./visual-routing.js";
 
 export const GENERATIVE_UI_EXTENSION_ID = "aiden.gui.generative-ui";
 export const VISUALIZE_GUIDE_TOOL_NAME = "visualize_guide" as const;
-import { RENDER_ARTIFACT_TOOL_NAME } from "../../renderer/shared/generative-ui.js";
+import { RENDER_ARTIFACT_TOOL_NAME, RENDER_UI_TOOL_NAME } from "../../renderer/shared/generative-ui.js";
 
 export const GENERATIVE_UI_TOOL_NAME = RENDER_ARTIFACT_TOOL_NAME;
 
@@ -57,13 +58,17 @@ export interface GenerativeUiExtensionScope {
   excluded: boolean;
   /** The user's Settings → Appearance choice; automatic when absent. */
   inlineVisuals?: InlineVisualsMode;
-  /** The user invoked /visualize for this turn. */
-  visualize?: boolean;
 }
 
+/**
+ * Whether the chat declares the inline-visual tools. "On request" declares
+ * them on every turn, so the tool list stays the same across turns; a turn
+ * that did not use /visualize refuses the calls instead
+ * (`generativeUiUnavailableReason`).
+ */
 export function shouldEnableGenerativeUiExtension(scope: GenerativeUiExtensionScope): boolean {
   const mode = scope.inlineVisuals ?? "automatic";
-  if (mode === "off" || (mode === "on_request" && scope.visualize !== true)) return false;
+  if (mode === "off") return false;
   return (
     scope.usageSource === "chat" &&
     scope.interactionSurface !== "telegram" &&
@@ -91,6 +96,63 @@ export function displayedAssistantHtmlUsage(
   return { bytes, count };
 }
 
+const ON_REQUEST_DRAWING_TOOLS: ReadonlySet<string> = new Set([RENDER_ARTIFACT_TOOL_NAME, RENDER_UI_TOOL_NAME]);
+
+/**
+ * Why a drawing tool cannot run in this turn, or undefined when it can. With
+ * inline visuals set to On request, only a turn the person started with
+ * /visualize may draw.
+ */
+export function generativeUiUnavailableReason(
+  name: string,
+  turn: { onRequest: boolean; visualize: boolean },
+): string | undefined {
+  if (!turn.onRequest || turn.visualize || !ON_REQUEST_DRAWING_TOOLS.has(name)) return undefined;
+  return `${name} is not available in this turn: inline visuals are set to On request and this message did not use /visualize. Answer in text; the person can send /visualize to ask for a visual.`;
+}
+
+/** The staging store calls a turn makes before it may draw. */
+export type GenerativeUiTurnStore = Pick<GenerativeUiArtifactStore, "availability" | "usageByChat" | "reconcilePersisted">;
+
+/**
+ * Checks the chat's staged visuals before a turn. A turn that may draw fails
+ * when staging is unreadable or a staged visual could not be recovered, so it
+ * never draws over a broken store. With inline visuals On request, a turn
+ * without /visualize refuses the drawing tools anyway, so it reports the
+ * problem instead of failing and the plain reply still runs. A reconcile
+ * failure on such a turn comes back as `reconcileError`, the error a drawing
+ * turn would have thrown, so the caller can log it.
+ */
+export async function prepareGenerativeUiTurnStore(
+  store: GenerativeUiTurnStore,
+  chat: GenerativeUiArtifactRecoveryChat,
+  turn: { onRequest: boolean; visualize: boolean },
+): Promise<{ pending: { bytes: number; count: number }; unavailableReason?: string; reconcileError?: unknown }> {
+  const mayDraw = !turn.onRequest || turn.visualize;
+  const availability = store.availability();
+  if (!availability.available) {
+    const reason = `${availability.reason} Open Aiden's developer log to locate the staging file that needs repair.`;
+    if (mayDraw) throw new Error(reason);
+    return { pending: { bytes: 0, count: 0 }, unavailableReason: reason };
+  }
+  let reconcileError: { error: unknown } | undefined;
+  if ((await store.usageByChat(chat.id)).count > 0) {
+    try {
+      await store.reconcilePersisted(chat);
+    } catch (error) {
+      if (mayDraw) throw error;
+      reconcileError = { error };
+    }
+  }
+  const pending = await store.usageByChat(chat.id);
+  if (pending.count > 0) {
+    const reason = "A previous visual artifact could not be recovered. Delete this chat to discard it before continuing.";
+    if (mayDraw) throw new Error(reason);
+    return { pending, unavailableReason: reason, ...(reconcileError ? { reconcileError: reconcileError.error } : {}) };
+  }
+  return { pending };
+}
+
 export interface GenerativeUiExtensionOptions {
   /** Absent in chats without workspace access: only inline `html` renders. */
   workspaceRoot?: string;
@@ -98,6 +160,11 @@ export interface GenerativeUiExtensionOptions {
   existingChatHtmlBytes?: number;
   existingChatHtmlCount?: number;
   preferArtifactThisTurn?: boolean;
+  /**
+   * Inline visuals are set to On request: the drawing tools stay declared, and
+   * a turn without /visualize (`preferArtifactThisTurn`) refuses them.
+   */
+  onRequest?: boolean;
   onArtifact: (
     artifact: ChatHtmlArtifactV1,
     html: string,
@@ -107,7 +174,7 @@ export interface GenerativeUiExtensionOptions {
   /** Registers render_ui (Aiden's native catalog) when the host can present it. */
   onUiVisual?: RenderUiToolOptions["onUiVisual"];
   existingChatUiCount?: number;
-  /** The turn came from a paired device, which shows each visual as a snapshot. */
+  /** The turn came from a paired device, which shows each visual as a snapshot (a turn note, not system). */
   audience?: "remote";
   /**
    * The design canvas is offered this turn: screens and pages to iterate on go
@@ -127,6 +194,20 @@ export interface GenerativeUiExtensionOptions {
   images?: boolean;
 }
 
+const ON_REQUEST_VISUALS_NOTE =
+  " Inline visuals are set to On request: draw one only in a turn where the person used /visualize. In other turns render_artifact and render_ui are refused, so answer in text.";
+
+/** The same tool, refusing to run when `turn` does not allow it. The host refuses first, in its tool-call check. */
+function refusedOffRequest<T extends AgentTool>(declared: T, turn: { onRequest: boolean; visualize: boolean }): T {
+  const reason = generativeUiUnavailableReason(declared.name, turn);
+  if (!reason) return declared;
+  return {
+    ...declared,
+    execute: async () => {
+      throw new Error(reason);
+    },
+  };
+}
 function resolveWorkspaceHtml(
   root: string,
   suppliedPath: string,
@@ -218,9 +299,38 @@ export function createVisualizeGuideTool(options: { inlineVisuals?: boolean } = 
   );
 }
 
+/**
+ * What this turn adds to the chat-level visual guidance: /visualize, and a
+ * paired device that shows each visual as a still image. Both change from one
+ * message to the next, so they ride after the prompt (the host's turn note)
+ * rather than in system, where they would rewrite the cached prefix. "" when
+ * neither applies.
+ */
+export function generativeUiTurnNote(turn: {
+  visualize: boolean;
+  designCanvas: boolean;
+  designModeOffered?: boolean;
+  audience?: "remote";
+}): string {
+  const notes: string[] = [];
+  if (turn.visualize) {
+    notes.push(
+      turn.designCanvas || turn.designModeOffered
+        ? "The user invoked /visualize for this message; prefer render_artifact when a chart or diagram would help."
+        : "The user invoked /visualize for this message; prefer render_artifact when a chart, diagram, dashboard, or interactive mockup would help.",
+    );
+  }
+  if (turn.audience === "remote") {
+    notes.push(
+      "This message was sent from a paired device such as a phone. There the user sees each visual as a still image (a snapshot of the column layout) with its text description, so its controls do nothing until they open the chat on this computer: make the first view carry the answer, keep text legible at phone width, and prefer the column layout.",
+    );
+  }
+  return notes.join(" ");
+}
+
 export function createGenerativeUiExtensionRuntime(
   options: GenerativeUiExtensionOptions,
-): { extension: PiAgentRuntimeExtension } {
+): { extension: PiAgentRuntimeExtension; turnNote: string } {
   const workspace = options.workspaceRoot ? resolveWorkspaceRoot(options.workspaceRoot) : undefined;
   const existingChatHtmlBytes = options.existingChatHtmlBytes ?? 0;
   const existingChatHtmlCount = options.existingChatHtmlCount ?? 0;
@@ -241,7 +351,11 @@ export function createGenerativeUiExtensionRuntime(
   const designModeOffered = !designCanvas && options.designModeOffered === true;
   const routing = visualRoutingRule({
     inline: true,
-    workspaceArtifact: options.workspaceArtifacts === true && options.audience !== "remote",
+    // Keep the routing rule a pure function of the chat's declared tools (never
+    // `options.audience`), so a paired-device turn shares the desktop's cached
+    // system prompt; workspace_artifact calls on a remote turn are refused by
+    // chatTurnToolRefusal.
+    workspaceArtifact: options.workspaceArtifacts === true,
     designCanvas: designCanvas ? "on" : designModeOffered ? "offered" : "off",
     images: options.images === true,
   });
@@ -422,6 +536,12 @@ export function createGenerativeUiExtensionRuntime(
   const guideTool = createVisualizeGuideTool();
 
   return {
+    turnNote: generativeUiTurnNote({
+      visualize: options.preferArtifactThisTurn === true,
+      designCanvas,
+      designModeOffered,
+      ...(options.audience ? { audience: options.audience } : {}),
+    }),
     extension: {
       id: GENERATIVE_UI_EXTENSION_ID,
       systemPrompt:
@@ -437,15 +557,8 @@ export function createGenerativeUiExtensionRuntime(
         ", and it will span the chat pane and follow the window size. Either way its width changes with the window, so build it fluid. Before your first visual in a conversation, call visualize_guide with the modules you need (catalog for render_ui; design, html, charts, interactive for render_artifact). Keep the reply complete without the visual: state the key takeaway in a sentence. Never load remote scripts or call network APIs from a visual, and do not claim inline visuals are unavailable while these tools are present." +
         (routing ? ` ${routing}` : "") +
         (designCanvas ? " Keep inline visuals to small charts, diagrams or widgets that support your reply." : "") +
-        (options.preferArtifactThisTurn
-          ? designCanvas || designModeOffered
-            ? " The user invoked /visualize for this turn; prefer render_artifact when a chart or diagram would help."
-            : " The user invoked /visualize for this turn; prefer render_artifact when a chart, diagram, dashboard, or interactive mockup would help."
-          : "") +
-        (options.audience === "remote"
-          ? " This message was sent from a paired device such as a phone. There the user sees each visual as a still image (a snapshot of the column layout) with its text description, so its controls do nothing until they open the chat on this computer: make the first view carry the answer, keep text legible at phone width, and prefer the column layout."
-          : ""),
-      tools: options.onUiVisual
+        (options.onRequest ? ON_REQUEST_VISUALS_NOTE : ""),
+      tools: (options.onUiVisual
         ? [
             declareOnDemandLoadNotes(tool, visualizeGuideLoadNotes(RENDER_ARTIFACT_GUIDE_MODULES)),
             declareOnDemandLoadNotes(
@@ -458,7 +571,11 @@ export function createGenerativeUiExtensionRuntime(
             ),
             guideTool,
           ]
-        : [declareOnDemandLoadNotes(tool, visualizeGuideLoadNotes(RENDER_ARTIFACT_GUIDE_MODULES)), guideTool],
+        : [declareOnDemandLoadNotes(tool, visualizeGuideLoadNotes(RENDER_ARTIFACT_GUIDE_MODULES)), guideTool]
+      ).map((declared) => refusedOffRequest(declared, {
+        onRequest: options.onRequest === true,
+        visualize: options.preferArtifactThisTurn === true,
+      })),
     },
   };
 }

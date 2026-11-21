@@ -39,6 +39,7 @@ import {
   type BotMemoryAdmission,
 } from "./review.js";
 import type { BotMemoryRuntime } from "./service.js";
+import { oneOffCallOptions } from "../side-call-prefix.js";
 
 /** What a Bot's compaction summary must keep. Also the `/new` instructions. */
 export const BOT_COMPACTION_FOCUS =
@@ -244,7 +245,7 @@ export function createBotCompactionSteering(deps: BotCompactionSteeringDeps): Bo
               },
             ],
           },
-          { maxTokens, signal },
+          oneOffCallOptions({ maxTokens, signal }),
         );
         if (lease.signal.aborted) return undefined;
         if (answer.stopReason !== "stop" || answer.content.some((part) => part.type === "toolCall")) return undefined;

@@ -125,10 +125,16 @@ import {
 import {
   ComposerFloatingRow,
   composerFloatingRowOffsets,
+  useHeldFloatingRowHeight,
   TodoPanel,
   todoPanelHasVisibleChrome,
 } from "../components/todo-panel";
 import { revealSubagentRunInTranscript } from "../components/subagent-chips";
+import {
+  onScreenSubagentGroupElement,
+  setSubagentGroupBottomInset,
+  useSubagentGroupOnScreen,
+} from "../lib/subagent-group-visibility";
 import {
   SubagentComposerPill,
   useSubagentComposerPill,
@@ -985,6 +991,8 @@ export function ChatPane({ chatId }: { chatId: string }) {
         generationRef.current = null;
         generationChatIdRef.current = null;
       }
+      // A reply that settled in view kept the chat's cache warm; leaving ends that.
+      if (departingChatId) void chatsApi.releaseCacheWarming(departingChatId).catch(() => {});
       const sideQuestion = btwViewRef.current;
       if (
         sideQuestion &&
@@ -1136,12 +1144,30 @@ export function ChatPane({ chatId }: { chatId: string }) {
     environmentPanel.subagentsEnabled,
   );
   const [subagentTrayOpen, setSubagentTrayOpen] = React.useState(false);
-  const [floatingRowHeight, setFloatingRowHeight] = React.useState(0);
+  const [measuredFloatingRowHeight, setFloatingRowHeight] = React.useState(0);
   const subagentTrayShortcut = useShortcutBinding("subagents.toggleTray");
+  // A batch to present, whether or not its pill is on screen right now.
   const subagentPillVisible = subagentPill.model !== null;
+  const subagentPillGenerations = React.useMemo(
+    () => [...new Set(subagentPill.model?.runs.map((run) => run.generationId) ?? [])],
+    [subagentPill.model],
+  );
+  // One indicator at a time: while the batch's transcript card is on screen the
+  // pill steps aside, unless its tray is open.
+  const subagentCardOnScreen = useSubagentGroupOnScreen(subagentPillGenerations);
+  const subagentPillShown = subagentPillVisible && (!subagentCardOnScreen || subagentTrayOpen);
+  const floatingRowHeight = useHeldFloatingRowHeight(measuredFloatingRowHeight, subagentPillVisible);
   React.useEffect(() => {
     if (!subagentPillVisible) setSubagentTrayOpen(false);
   }, [subagentPillVisible]);
+  // A finished batch's summary is for someone who scrolled away; once its card
+  // is back on screen it has been seen.
+  const subagentBatchSettled =
+    subagentPill.model !== null && subagentPill.model.activeCount === 0 && !subagentPill.model.attention;
+  const dismissSubagentPill = subagentPill.dismiss;
+  React.useEffect(() => {
+    if (subagentBatchSettled && subagentCardOnScreen && !subagentTrayOpen) dismissSubagentPill();
+  }, [dismissSubagentPill, subagentBatchSettled, subagentCardOnScreen, subagentTrayOpen]);
   React.useEffect(() => setSubagentTrayOpen(false), [chatId]);
   useCommandHandler(
     "subagents.toggleTray",
@@ -3918,10 +3944,14 @@ export function ChatPane({ chatId }: { chatId: string }) {
                 />
               ) : null}
             </EventPresence>
-            <ComposerFloatingRow onHeightChange={setFloatingRowHeight}>
+            <ComposerFloatingRow
+              onHeightChange={setFloatingRowHeight}
+              onCoveredBottomChange={setSubagentGroupBottomInset}
+            >
               <TodoPanel snapshot={todoSnapshot} floating={false} />
-              {subagentPill.model ? (
+              {subagentPill.model && subagentPillShown ? (
                 <SubagentComposerPill
+                  className="agent-event-in"
                   model={subagentPill.model}
                   open={subagentTrayOpen}
                   onOpenChange={setSubagentTrayOpen}
@@ -3936,7 +3966,12 @@ export function ChatPane({ chatId }: { chatId: string }) {
                     setSubagentTrayOpen(false);
                     subagentPill.dismiss();
                   }}
-                  returnFocus={() => composerRef.current}
+                  returnFocus={() =>
+                    // Stepping aside for its card hands focus to that card.
+                    onScreenSubagentGroupElement(subagentPillGenerations)?.querySelector<HTMLElement>(
+                      "[data-subagent-chip-group-toggle]",
+                    ) ?? composerRef.current
+                  }
                 />
               ) : null}
             </ComposerFloatingRow>
@@ -4076,6 +4111,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
                       }
                 }
                 hasQueuedMessages={queuedState.messages.length > 0}
+                offerLive={liveChatReachable(chat.data)}
                 compactionHeld={queuedState.holdReason === "compaction"}
                 forkSummaryHold={
                   forkSummary?.state === "pending" || forkSummary?.state === "failed"

@@ -5,6 +5,7 @@ import { parseAskUserQuestions } from "../../renderer/shared/ask-user-question.j
 import type { ResolvedModelRuntime } from "./model-runtime-core.js";
 import { piRuntimeReplayPolicy } from "./pi-runtime-tool.js";
 import {
+  ADVISOR_NO_CHOOSER_TURN_NOTE,
   AdvisorRuntime,
   advisorAllowedForGeneration,
   advisorCandidatesFromProviders,
@@ -239,6 +240,44 @@ test("partial or malformed exact identities fail closed without opening the choo
     assert.equal(asked, false);
     assert.equal(fixtureValue.getResolveCalls(), 0);
   }
+});
+
+test("when the chooser follows the turn, system is the same with or without it and a turn without it refuses an unnamed call", async () => {
+  const fixtureValue = fixture();
+  let asked = false;
+  const withChooser = await fixtureValue.advisor.extensionForGeneration(
+    input({
+      chooserByTurn: true,
+      requestQuestionnaire: async () => {
+        asked = true;
+        throw new Error("unused");
+      },
+    }),
+  );
+  const withoutChooser = await fixtureValue.advisor.extensionForGeneration(input({ chooserByTurn: true }));
+  assert.ok(withChooser && withoutChooser?.tools?.[0]);
+  assert.equal(withChooser.systemPrompt, withoutChooser.systemPrompt);
+  assert.deepEqual(
+    withChooser.tools?.map((tool) => [tool.name, tool.description, tool.parameters]),
+    withoutChooser.tools.map((tool) => [tool.name, tool.description, tool.parameters]),
+  );
+  // System names the chooser and defers to the turn's note; the note is what says this turn has none.
+  assert.match(withoutChooser.systemPrompt ?? "", /use Ask User Question/u);
+  assert.match(withoutChooser.systemPrompt ?? "", /note after the user's message/u);
+  assert.match(ADVISOR_NO_CHOOSER_TURN_NOTE, /cannot be shown/u);
+
+  const result = await withoutChooser.tools[0].execute("advisor-no-chooser", {});
+  assert.equal(result.details?.status, "blocked");
+  assert.match(result.content[0]?.type === "text" ? result.content[0].text : "", /chooser cannot be shown/u);
+  assert.doesNotMatch(result.content[0]?.type === "text" ? result.content[0].text : "", /did not choose/u);
+  assert.equal(asked, false);
+  assert.equal(fixtureValue.getResolveCalls(), 0);
+  assert.deepEqual(fixtureValue.events, []);
+
+  // A surface that never has a chooser keeps its own stable guidance.
+  const headless = await fixtureValue.advisor.extensionForGeneration(input());
+  assert.match(headless?.systemPrompt ?? "", /cannot show the Advisor model chooser/u);
+  assert.doesNotMatch(headless?.systemPrompt ?? "", /use Ask User Question/u);
 });
 
 test("cancelled or skipped chooser performs no provider or journal effects", async () => {

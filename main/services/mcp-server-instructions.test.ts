@@ -156,6 +156,29 @@ test("hostile or huge service text stays inert and the section stays within its 
   assert.match(section, /- …and \d+ more; find them with codemode or tool_search\./u);
 });
 
+test("servers still connecting get one fixed line naming where they will appear", () => {
+  const github = { id: "gh", name: "GitHub", description: "Code hosting" };
+  const note = /^More services may still be connecting; once connected, find them with codemode or tool_search\.$/mu;
+  const withServer = renderMcpServersSection(serverTools(github, ["search"]), { declared: deferred, connecting: true });
+  assert.match(withServer, note);
+  assert.match(withServer, /Code hosting/u);
+  // Nothing admitted yet: the section still tells the model more may arrive.
+  const empty = renderMcpServersSection([], { declared: deferred, connecting: true });
+  assert.match(empty, note);
+  assert.ok(empty.startsWith("<mcp_servers>\n") && empty.endsWith("\n</mcp_servers>"));
+  // Without codemode or tool_search a late server is unreachable this turn, so nothing is promised.
+  assert.equal(renderMcpServersSection([], { declared: new Set(), connecting: true }), "");
+  assert.doesNotMatch(renderMcpServersSection(serverTools(github, ["search"]), { declared: new Set(), connecting: true }), /still be connecting/u);
+});
+
+test("the connecting line fits the budget when many servers overflow", () => {
+  const servers = Array.from({ length: 80 }, (_, index) => ({ id: `server-${index}`, name: `Service ${index}`, description: "d".repeat(200) }));
+  const section = renderMcpServersSection(servers.flatMap((server) => serverTools(server, ["tool"], servers)), { declared: deferred, connecting: true });
+  assert.ok(Buffer.byteLength(section) <= MCP_SERVERS_SECTION_LIMITS.totalBytes);
+  assert.match(section, /- …and \d+ more; find them with codemode or tool_search\./u);
+  assert.match(section, /still be connecting/u);
+});
+
 test("server changes append section patches and never rewrite earlier prompt bytes", () => {
   const github = { id: "gh", name: "GitHub", description: "Code hosting" };
   const linear = { id: "ln", name: "Linear", description: "Issue tracking" };

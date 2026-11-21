@@ -269,7 +269,7 @@ export async function createCliRemote(agentDir: string, chats: ReturnType<typeof
   });
   // As on the desktop: drain host-wide and Bot subscriptions before and after the revocation fence; no run is cancelled.
   const revokeDevice = async (id: string, botNotices: BotNoticeRevokePolicy = "required") => {
-    const drain = () => { hostFeed?.revokeDevice(id); hostRuns?.revokeDevice(id); botSessions?.revokeDevice(id); };
+    const drain = () => { hostFeed?.revokeDevice(id); hostRuns?.revokeDevice(id); botSessions?.revokeDevice(id); chats.releaseDeviceAttendance(id); };
     drain();
     const revoked = await revokeAidenRemoteRuntimeDevice({ state, streams: chatApi?.streams, chats: chatApi?.chats, workspaceOwners: owners }, id);
     drain();
