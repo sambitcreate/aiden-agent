@@ -46,13 +46,18 @@ export function presentationKey(event: Pick<CanvasKeyEvent, "key" | "metaKey" | 
 
 export function DesignPresentButton({ onPresent }: { onPresent(): void }) {
   return (
-    <div className="glass-surface rounded-button p-1 shadow-control">
-      <Button variant="transparent" aria-label="Present this page" title="Present" onClick={onPresent}>
-        <Play aria-hidden />
-        {/* A narrow canvas keeps the tools whole and shows the button as its icon. */}
-        <span className="@max-[40rem]:hidden">Present</span>
-      </Button>
-    </div>
+    <Button
+      variant="bar"
+      size="small"
+      aria-label="Present this page"
+      title="Present"
+      className="px-2 text-small @max-[40rem]:aspect-square @max-[40rem]:px-0"
+      onClick={onPresent}
+    >
+      <Play aria-hidden />
+      {/* A narrow canvas keeps the tools whole and shows the button as its icon. */}
+      <span className="@max-[40rem]:hidden">Present</span>
+    </Button>
   );
 }
 

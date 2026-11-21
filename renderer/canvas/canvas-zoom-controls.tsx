@@ -36,7 +36,8 @@ export function CanvasZoomControls({
       className="glass-surface flex items-center gap-0.5 rounded-button p-1 shadow-control"
     >
       <Button
-        variant="transparent"
+        variant="bar"
+        size="small"
         iconOnly
         aria-label="Zoom out"
         aria-keyshortcuts={CANVAS_COMMAND_SHORTCUTS.zoomOut}
@@ -47,16 +48,18 @@ export function CanvasZoomControls({
         <ZoomOut />
       </Button>
       <Button
-        variant="transparent"
+        variant="bar"
+        size="small"
         aria-label={`Zoom ${percent}, reset to 100%`}
         aria-keyshortcuts={CANVAS_COMMAND_SHORTCUTS.zoomReset}
-        className="min-w-14 tabular-nums"
+        className="min-w-12 px-2 text-small tabular-nums"
         onClick={onResetZoom}
       >
         {percent}
       </Button>
       <Button
-        variant="transparent"
+        variant="bar"
+        size="small"
         iconOnly
         aria-label="Zoom in"
         aria-keyshortcuts={CANVAS_COMMAND_SHORTCUTS.zoomIn}
@@ -67,7 +70,8 @@ export function CanvasZoomControls({
         <ZoomIn />
       </Button>
       <Button
-        variant="transparent"
+        variant="bar"
+        size="small"
         iconOnly
         aria-label="Fit to screen"
         aria-keyshortcuts={CANVAS_COMMAND_SHORTCUTS.fitView}
@@ -76,7 +80,8 @@ export function CanvasZoomControls({
         <Maximize />
       </Button>
       <Button
-        variant={minimapVisible ? "muted" : "transparent"}
+        variant="bar"
+        size="small"
         iconOnly
         aria-label="Overview map"
         aria-pressed={minimapVisible}
