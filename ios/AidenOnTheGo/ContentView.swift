@@ -181,7 +181,6 @@ struct ContentView: View {
     @Bindable var coordinator: AidenRemoteCoordinator
     var inboxStore: AidenUnifiedInboxStore
     @Environment(\.scenePhase) private var scenePhase
-    @AppStorage("aiden.mobileOnboarding.v1.complete") private var hasCompletedMobileOnboarding = false
     @State private var newChatConsent = AidenNewChatLinkConsent()
     @State private var externalNewChats = AidenExternalNewChatQueue()
     @State private var lastExternalNewChat: AidenNavigationRequest?
@@ -210,30 +209,16 @@ struct ContentView: View {
     }
 
     var body: some View {
-        Group {
-            // One branch for the shell, whatever the state: a chat held open on a
-            // revoked machine must not lose its view to a change of case.
-            if coordinator.connectionState == .needsPairing, !coordinator.isHoldingRevokedChat {
-                AidenPairingView(
-                    coordinator: coordinator,
-                    showsIntroduction: !hasCompletedMobileOnboarding,
-                    onIntroductionComplete: {
-                        hasCompletedMobileOnboarding = true
-                    }
-                )
-            } else {
-                // Above the shell, not an inset on it: an inset leaves the
-                // navigation bars behind the banner, Back included.
-                VStack(spacing: 0) {
-                    connectionRecovery
-                    AidenAppShellView(
-                        coordinator: coordinator,
-                        inboxStore: inboxStore,
-                        navigationRequest: $navigationRequest,
-                        routeRequest: $shellRoute
-                    )
-                }
-            }
+        // Above the shell, not an inset on it: an inset leaves the
+        // navigation bars behind the banner, Back included.
+        VStack(spacing: 0) {
+            connectionRecovery
+            AidenAppShellView(
+                coordinator: coordinator,
+                inboxStore: inboxStore,
+                navigationRequest: $navigationRequest,
+                routeRequest: $shellRoute
+            )
         }
         .task { await coordinator.start() }
         .task {
