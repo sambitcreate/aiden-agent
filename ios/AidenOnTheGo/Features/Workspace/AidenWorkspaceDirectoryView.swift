@@ -157,6 +157,7 @@ struct AidenWorkspacesDirectoryView: View {
             }
         }
         .listStyle(.plain)
+        .aidenKeepsListScroll()
         .scrollContentBackground(.hidden)
         .background { palette.canvas.ignoresSafeArea() }
         .navigationTitle("Workspaces")

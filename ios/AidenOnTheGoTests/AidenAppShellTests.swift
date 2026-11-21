@@ -314,6 +314,27 @@ final class AidenAppShellTests: XCTestCase {
         XCTAssertEqual(navigation.workspacesPath, [])
     }
 
+    /// Closing the display, the split hears the compact width an update before
+    /// the shell moves `besideList`, and collapsing pops its detail. That
+    /// write comes from a split whose own width is no longer regular, so it's
+    /// dropped though `besideList` still says regular.
+    func testASplitCollapsingBeforeTheShellHearsTheWidthKeepsThePath() {
+        let navigation = AidenAppNavigation()
+        navigation.besideList = true
+        let workspace = AidenAppRoute.workspace(id("w1"))
+        let chat = AidenAppRoute.chat(id("c1"))
+        navigation.setPath([workspace, chat], of: .workspaces, laidOutBesideList: true, widthIsRegular: true)
+
+        navigation.setPath([workspace], of: .workspaces, laidOutBesideList: true, widthIsRegular: false)
+        XCTAssertEqual(navigation.workspacesPath, [workspace, chat])
+
+        navigation.besideList = false
+        navigation.setPath([workspace], of: .workspaces, laidOutBesideList: false, widthIsRegular: true)
+        XCTAssertEqual(navigation.workspacesPath, [workspace, chat], "A stack that hears regular width is on the way out too")
+        navigation.setPath([workspace], of: .workspaces, laidOutBesideList: false, widthIsRegular: false)
+        XCTAssertEqual(navigation.workspacesPath, [workspace])
+    }
+
     /// A container's write goes through `setPath(_:of:)`, so a chat it pushes
     /// still leaves the tab that held it: one conversation, one screen.
     func testAContainerWriteMovesAConversationFromAnotherTab() {

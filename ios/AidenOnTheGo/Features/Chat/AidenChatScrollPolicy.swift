@@ -88,6 +88,10 @@ enum AidenChatScrollPolicy {
         /// starts at the bottom, so until the reader scrolls or asks for the
         /// latest, landing there never turns follow on.
         case holdPlace
+        /// The place's row is gone (its message was deleted or isn't loaded),
+        /// so there's nowhere to go back to: landing at the bottom may turn
+        /// follow on again.
+        case releasePlace
     }
 
     /// The scroll geometry one metrics report is derived from.
@@ -162,6 +166,8 @@ enum AidenChatScrollPolicy {
             latch.isFollowing = false
             latch.ignoresCoastingGesture = false
             latch.holdsPlace = true
+        case .releasePlace:
+            latch.holdsPlace = false
         }
         return latch
     }
@@ -223,8 +229,8 @@ struct AidenReadingPlace: Equatable {
     let rowID: String
     let fraction: CGFloat
 
-    /// The place in rows laid out at `rows` (frames in the scroll view's
-    /// space, in transcript order) with the transcript's top edge at `top`:
+    /// The place in rows laid out at `rows` (frames in the transcript
+    /// content's space, in transcript order) with the transcript's top edge at `top`:
     /// the first row that reaches below it. Nil when no row does.
     static func at(top: CGFloat, rows: [(id: String, frame: CGRect)]) -> AidenReadingPlace? {
         guard let row = rows.first(where: { $0.frame.maxY > top }) else { return nil }

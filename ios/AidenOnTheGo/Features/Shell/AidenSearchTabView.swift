@@ -3,10 +3,12 @@ import SwiftUI
 /// The Search tab: loaded chats, matched on the phone, and Bot conversations,
 /// which each connected machine matches itself. Rows are plain list rows.
 struct AidenSearchTabView: View {
+    /// The shell's, so the query and what it found outlive a fold, which
+    /// builds this view again.
+    @Bindable var model: AidenSearchModel
     let inboxStore: AidenUnifiedInboxStore
     let onOpen: (AidenAppRoute) -> Void
 
-    @State private var model: AidenSearchModel
     @FocusState private var searchIsFocused: Bool
     /// What the last row needs below it so the search field, which grows with the
     /// text size, never sits on it.
@@ -18,19 +20,6 @@ struct AidenSearchTabView: View {
     /// picked, so there the field sits under the title, always up.
     private var fieldPlacement: SearchFieldPlacement {
         horizontalSizeClass == .regular ? .navigationBarDrawer(displayMode: .always) : .automatic
-    }
-
-    init(
-        coordinator: AidenRemoteCoordinator,
-        inboxStore: AidenUnifiedInboxStore,
-        onOpen: @escaping (AidenAppRoute) -> Void
-    ) {
-        self.inboxStore = inboxStore
-        self.onOpen = onOpen
-        _model = State(initialValue: AidenSearchModel(
-            chatInput: { AidenSearchChatInput(store: inboxStore) },
-            machines: { AidenSearchMachine.machines(in: coordinator) }
-        ))
     }
 
     var body: some View {

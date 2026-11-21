@@ -15316,11 +15316,61 @@ final class AidenChatScrollFollowTests: XCTestCase {
         )
     }
 
+    /// The place's row is gone, so there's nothing to hold: the next landing
+    /// at the bottom turns follow on, as it would for any reader.
+    func testReleasingThePlaceLetsALandingAtTheBottomReArm() {
+        let released = reduce(Latch(isFollowing: false), .holdPlace, .releasePlace)
+        XCTAssertFalse(released.holdsPlace)
+        XCTAssertFalse(released.isFollowing, "Releasing alone doesn't jump to the latest")
+        XCTAssertTrue(
+            reduce(released, .contentScrolled(isAtBottom: true, isUserScrolling: false, wasNearBottom: true)).isFollowing
+        )
+        XCTAssertTrue(
+            reduce(Latch(isFollowing: true), .releasePlace).isFollowing,
+            "A reader following the latest keeps following"
+        )
+    }
+
     // MARK: Reading place
 
     private func row(_ id: String, _ minY: CGFloat, _ height: CGFloat) -> (id: String, frame: CGRect) {
         (id: id, frame: CGRect(x: 0, y: minY, width: 300, height: height))
     }
+
+#if DEBUG
+    /// A fold builds the new screen's rows before the old screen's leave.
+    /// The old rows leaving must not take away what the new rows measured,
+    /// or the next settled scroll finds no row across the top.
+    @MainActor
+    func testRowsLeavingAFoldedScreenKeepTheNewScreensFrames() {
+        let chat = AidenChat(
+            id: "chat-1",
+            workspaceId: "workspace-1",
+            title: "Aiden chat",
+            providerId: "openai",
+            modelId: "gpt-5.6",
+            messages: [],
+            createdAt: Date(timeIntervalSince1970: 1_787_100_000),
+            updatedAt: Date(timeIntervalSince1970: 1_787_100_001),
+            revision: "revision-1"
+        )
+        let parts = AidenChatScreenParts(model: AidenChatViewModel(readOnlyFixture: chat), botToolsModel: nil)
+        let open = UUID()
+        let closed = UUID()
+        parts.setRowFrame(CGRect(x: 0, y: 20, width: 600, height: 250), for: "a", from: open)
+        parts.setRowFrame(CGRect(x: 0, y: 20, width: 380, height: 400), for: "a", from: closed)
+        parts.setRowFrame(nil, for: "a", from: open)
+
+        XCTAssertEqual(parts.rowFrames["a"]?.height, 400)
+        XCTAssertEqual(
+            AidenReadingPlace.at(top: 120, rows: parts.rowFrames.map { (id: $0.key, frame: $0.value) })?.rowID,
+            "a"
+        )
+
+        parts.setRowFrame(nil, for: "a", from: closed)
+        XCTAssertNil(parts.rowFrames["a"], "A row leaving its own screen takes its frame back")
+    }
+#endif
 
     /// The place is the first row reaching below the transcript's top, and
     /// how far down it that top falls.

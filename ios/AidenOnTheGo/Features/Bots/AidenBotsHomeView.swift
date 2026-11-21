@@ -506,6 +506,7 @@ struct AidenBotsHomeView: View {
 
     private var home: some View {
         homeScroll
+            .aidenKeepsListScroll()
             .navigationTitle("Bots")
             .searchable(text: $query, prompt: "Search Bots")
             .searchToolbarBehavior(.minimize)

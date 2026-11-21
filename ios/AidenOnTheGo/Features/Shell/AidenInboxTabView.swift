@@ -73,6 +73,7 @@ struct AidenInboxTabView: View {
             if moreChats != .none { moreChatsRow }
         }
         .listStyle(.plain)
+        .aidenKeepsListScroll()
         .scrollContentBackground(.hidden)
         .background(palette.canvas.ignoresSafeArea())
         .overlay { emptyState }

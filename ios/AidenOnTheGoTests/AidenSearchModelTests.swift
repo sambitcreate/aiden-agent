@@ -260,6 +260,56 @@ final class AidenSearchModelTests: XCTestCase {
         XCTAssertFalse(model.isSearchingBots)
     }
 
+    /// A fold builds the Search view again, and its task runs the same query.
+    func testTheSameQueryRunAgainKeepsWhatItFoundUntilTheMachinesChange() async {
+        machineList = [machine("studio", "Studio Mac"), machine("laptop", "Laptop", isConnected: false)]
+        desk.reply("studio", "scout", [conversation("chat_1", title: "Scout digest")])
+        desk.reply("laptop", "scout", [conversation("chat_2", title: "Laptop notes", minutesAgo: 30)])
+        let model = makeModel()
+        model.query = "scout"
+        let first = await startRun(model)
+        pastDebounce()
+        await first.value
+
+        let again = Task { await model.run() }
+        for _ in 0..<50 { await Task.yield() }
+        let waited = clock.sleeperCount
+        pastDebounce()
+        await again.value
+        XCTAssertEqual(waited, 0, "The same query waited out the debounce again")
+        XCTAssertEqual(desk.asks, ["studio: scout"])
+        XCTAssertEqual(model.bots.map(\.title), ["Scout digest"])
+        XCTAssertEqual(model.unsearchedMachines, ["Laptop"])
+
+        // A machine that connects since is worth asking.
+        machineList[1] = machine("laptop", "Laptop")
+        let third = await startRun(model)
+        pastDebounce()
+        await third.value
+        XCTAssertEqual(desk.asks.sorted(), ["laptop: scout", "studio: scout", "studio: scout"])
+        XCTAssertEqual(model.bots.map(\.title), ["Scout digest", "Laptop notes"])
+    }
+
+    func testASearchStoppedPartWayIsAskedAgain() async {
+        machineList = [machine("studio", "Studio Mac")]
+        desk.hold("studio", "scout", ignoringCancellation: false)
+        let model = makeModel()
+        model.query = "scout"
+        let first = await startRun(model)
+        pastDebounce()
+        await settle("asked") { desk.asks.count == 1 }
+        // The view went away mid-search.
+        first.cancel()
+        await first.value
+
+        desk.reply("studio", "scout", [conversation("chat_1", title: "Scout digest")])
+        let second = await startRun(model)
+        pastDebounce()
+        await second.value
+        XCTAssertEqual(desk.asks, ["studio: scout", "studio: scout"])
+        XCTAssertEqual(model.bots.map(\.title), ["Scout digest"])
+    }
+
     func testTheDebounceWaitsForTheLastKeystroke() async {
         machineList = [machine("studio", "Studio Mac")]
         let model = makeModel()

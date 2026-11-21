@@ -62,6 +62,10 @@ final class AidenSearchModel {
     /// Each `run()` takes a number. Only the newest one may change what's shown.
     @ObservationIgnored private var generation = 0
     @ObservationIgnored private var inFlight: Task<Void, Never>?
+    /// The query whose search finished, and the machines it could ask. The
+    /// view runs a search each time it appears, and a fold builds a new one;
+    /// the same query to the same machines keeps what's shown.
+    @ObservationIgnored private var answered: (query: String, machines: Set<String>)?
 
     init(
         chatInput: @escaping @MainActor () -> AidenSearchChatInput,
@@ -153,6 +157,11 @@ final class AidenSearchModel {
         inFlight = nil
         let text = trimmedQuery
         let all = machines()
+        if !text.isEmpty, let answered, answered.query == text,
+           answered.machines == Self.askable(in: all) {
+            return
+        }
+        answered = nil
         hitsByMachine = [:]
         failedMachines = []
         skippedMachines = []
@@ -164,7 +173,10 @@ final class AidenSearchModel {
         isSearching = true
         skippedMachines = Self.skipped(in: all)
         isSearchingBots = all.contains(where: \.canBeAsked)
-        guard isSearchingBots else { return }
+        guard isSearchingBots else {
+            answered = (text, [])
+            return
+        }
 
         let work = Task { await self.askMachines(about: text, generation: mine) }
         inFlight = work
@@ -219,6 +231,12 @@ final class AidenSearchModel {
         }
         guard mine == generation else { return }
         isSearchingBots = false
+        // A search stopped part way may have missed a machine's reply.
+        if !Task.isCancelled { answered = (text, Set(askable.map(\.instanceId))) }
+    }
+
+    private static func askable(in machines: [AidenSearchMachine]) -> Set<String> {
+        Set(machines.filter(\.canBeAsked).map(\.instanceId))
     }
 
     /// Machines with Bots that weren't connected when the search began.

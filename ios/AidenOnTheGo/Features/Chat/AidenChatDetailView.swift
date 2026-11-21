@@ -56,12 +56,14 @@ final class AidenChatScreenParts {
     /// Where the reader is while scrolled away from the latest; nil while
     /// following the latest.
     var readingPlace: AidenReadingPlace?
-    /// Where the rows built now are, in the scroll view's space (whose top is
-    /// the transcript's visible top, below the bars), and how tall the part
-    /// the transcript shows is: the reading place when a scroll settles. A
-    /// layout change alone never moves the reading place.
-    var rowFrames: [String: CGRect] = [:]
+    /// Where the rows built now are in the transcript's content
+    /// (`AidenTranscriptRowSpace`), and how tall the part the transcript
+    /// shows clear of the bars and the composer is: the reading place when a
+    /// scroll settles. A layout change alone never moves the reading place.
+    private(set) var rowFrames: [String: CGRect] = [:]
     var visibleHeight: CGFloat = 0
+    /// Which screen's rows each frame came from (`setRowFrame`).
+    private var rowFrameScreens: [String: UUID] = [:]
 
     init(
         model: AidenChatViewModel,
@@ -73,6 +75,21 @@ final class AidenChatScreenParts {
         follow = AidenTranscriptFollowController()
         attachmentPicker = AidenAttachmentPickerState()
         self.botToolsModel = botToolsModel
+    }
+
+    /// A row's frame as the screen `screen` built it, or nil as that row
+    /// leaves. A fold builds the new screen's rows before the old screen's
+    /// leave, so a leaving row only takes back a frame its own screen gave:
+    /// the frames are in the content's space and don't move with scrolling,
+    /// so a row the new screen already measured wouldn't report again.
+    func setRowFrame(_ frame: CGRect?, for id: String, from screen: UUID) {
+        if let frame {
+            rowFrames[id] = frame
+            rowFrameScreens[id] = screen
+        } else if rowFrameScreens[id] == screen {
+            rowFrames[id] = nil
+            rowFrameScreens[id] = nil
+        }
     }
 }
 
@@ -205,6 +222,8 @@ struct AidenChatDetailView: View {
     @State private var chatLoadEpoch = 0
     /// The message to scroll back to once a page of earlier messages is laid out.
     @State private var keptPlaceID: String?
+    /// This screen's rows, as against those of the screen a fold replaces.
+    @State private var rowFrameScreen = UUID()
     @State private var botToolsModel: AidenBotChatToolsModel?
     @State private var botSheet: AidenBotChatSheet?
     @State private var isConfirmingBotDelete = false
@@ -618,6 +637,7 @@ struct AidenChatDetailView: View {
         ScrollViewReader { proxy in
             ScrollView {
                 messageList(proxy)
+                    .coordinateSpace(.named(AidenTranscriptRowSpace.name))
                     .background {
                         AidenChatScrollObserver(
                             onFollowEvent: { follow.handle($0) },
@@ -634,11 +654,11 @@ struct AidenChatDetailView: View {
                 for: .sizeChanges
             )
             .scrollDismissesKeyboard(.interactively)
-            .onScrollPhaseChange { _, phase in
+            .onScrollPhaseChange { _, phase, context in
                 // Only the reader moves the reading place, not a layout pass
                 // on the way back to it.
                 guard phase == .idle, !follow.holdsPlace else { return }
-                parts.readingPlace = follow.isFollowing ? nil : placeInView ?? parts.readingPlace
+                parts.readingPlace = follow.isFollowing ? nil : place(in: context.geometry) ?? parts.readingPlace
             }
             .onChange(of: follow.isFollowing) { _, following in
                 if following { parts.readingPlace = nil }
@@ -658,8 +678,13 @@ struct AidenChatDetailView: View {
                 returnToReadingPlace(proxy)
             }
             // The part the transcript shows, clear of the bars and the
-            // composer over it.
-            .onScrollGeometryChange(for: CGFloat.self) { $0.containerSize.height } action: { [parts] _, height in
+            // composer over it. The container is already that part: its
+            // height leaves out the content insets (iOS 27.1, iPhone Duo
+            // closed: 318 points of a 678-point screen with 82 and 277 of
+            // insets), so taking them off again would leave it negative.
+            .onScrollGeometryChange(for: CGFloat.self) { geometry in
+                geometry.containerSize.height
+            } action: { [parts] _, height in
                 parts.visibleHeight = height
             }
             .aidenReportsTranscriptFit(to: follow)
@@ -758,7 +783,9 @@ struct AidenChatDetailView: View {
                     _ = model.appendVisualPrompt(prompt)
                 },
                 browserRecordingsAvailable: model.supportsBrowserRecordings,
-                onRowFrame: { [parts] id, frame in parts.rowFrames[id] = frame }
+                onRowFrame: { [parts, rowFrameScreen] id, frame in
+                    parts.setRowFrame(frame, for: id, from: rowFrameScreen)
+                }
             )
             .equatable()
             if model.showsLiveResponse {
@@ -1259,11 +1286,12 @@ struct AidenChatDetailView: View {
         }
     }
 
-    /// Where the reader is now, from the rows built.
-    private var placeInView: AidenReadingPlace? {
+    /// Where the reader is now, from the rows built: the first row across
+    /// the visible top, below the bars, in the content's space.
+    private func place(in geometry: ScrollGeometry) -> AidenReadingPlace? {
         let rows = AidenTranscriptRowIdentity.rows(for: model.chat.messages, renderIDs: model.messageRenderIDs)
             .compactMap { row in parts.rowFrames[row.id].map { (id: row.id, frame: $0) } }
-        return AidenReadingPlace.at(top: 0, rows: rows)
+        return AidenReadingPlace.at(top: geometry.contentOffset.y + geometry.contentInsets.top, rows: rows)
     }
 
     /// Scrolls back to where the reader was, once the rows are laid out at
@@ -1282,6 +1310,14 @@ struct AidenChatDetailView: View {
         Task { @MainActor in
             await Task.yield()
             guard parts.readingPlace == place, !follow.isFollowing else { return }
+            // The place's message was deleted or isn't loaded: nothing to go
+            // back to, so follow may turn on at the bottom again.
+            guard AidenTranscriptRowIdentity.rows(for: model.chat.messages, renderIDs: model.messageRenderIDs)
+                .contains(where: { $0.id == place.rowID }) else {
+                parts.readingPlace = nil
+                follow.handle(.releasePlace)
+                return
+            }
             let anchor = place.anchor(rowHeight: parts.rowFrames[place.rowID]?.height, viewHeight: parts.visibleHeight)
             proxy.scrollTo(place.rowID, anchor: anchor)
         }

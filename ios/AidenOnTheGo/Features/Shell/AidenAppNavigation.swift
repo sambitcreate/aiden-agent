@@ -490,8 +490,21 @@ final class AidenAppNavigation {
     /// an iPhone Duo swaps the container, and the one going away can still
     /// write as it tears down, an empty path among them. A write from the
     /// layout that's no longer current is dropped, so the swap keeps the path.
-    func setPath(_ path: [AidenAppRoute], of tab: AidenAppTab, laidOutBesideList: Bool) {
-        guard laidOutBesideList == besideList, path != self.path(of: tab) else { return }
+    ///
+    /// `widthIsRegular` is the width the container sees now, nil when it
+    /// doesn't know. The container hears the new width an update before the
+    /// shell moves `besideList`, so a split collapsing as the display closes
+    /// writes while `besideList` still says regular: its own width says it's
+    /// on the way out.
+    func setPath(
+        _ path: [AidenAppRoute],
+        of tab: AidenAppTab,
+        laidOutBesideList: Bool,
+        widthIsRegular: Bool? = nil
+    ) {
+        guard laidOutBesideList == besideList,
+              laidOutBesideList == (widthIsRegular ?? laidOutBesideList),
+              path != self.path(of: tab) else { return }
         setPath(path, of: tab)
     }
 

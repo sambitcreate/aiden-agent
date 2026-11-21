@@ -69,6 +69,8 @@ final class AidenAppShellParts {
         let navigation: AidenAppNavigation
         let newWork: AidenNewWorkChatFlow
         let chatScreens: AidenChatScreens
+        let search: AidenSearchModel
+        let listScroll: AidenListScrollPlaces
     }
 
     private var made: Built?
@@ -161,7 +163,17 @@ struct AidenAppShellView: View {
             let chatScreens = AidenChatScreens { [weak navigation] id in
                 navigation?.holdsConversation(id) ?? false
             }
-            return AidenAppShellParts.Built(navigation: navigation, newWork: newWork, chatScreens: chatScreens)
+            let search = AidenSearchModel(
+                chatInput: { AidenSearchChatInput(store: inboxStore) },
+                machines: { AidenSearchMachine.machines(in: coordinator) }
+            )
+            return AidenAppShellParts.Built(
+                navigation: navigation,
+                newWork: newWork,
+                chatScreens: chatScreens,
+                search: search,
+                listScroll: AidenListScrollPlaces()
+            )
         }
     }
 
@@ -232,7 +244,7 @@ struct AidenAppShellView: View {
                         coordinator: coordinator,
                         store: inboxStore,
                         newWork: newWork,
-                        besideList: showsListBesideDetail,
+                        besideList: navigation.besideList,
                         selection: selection
                     ) { route in
                         navigation.pick(route, fromListOf: .workspaces)
@@ -245,7 +257,7 @@ struct AidenAppShellView: View {
                 // The field is on this stack's root view: on the `TabView` it would
                 // sit on every tab.
                 NavigationStack {
-                    AidenSearchTabView(coordinator: coordinator, inboxStore: inboxStore) { navigation.open($0) }
+                    AidenSearchTabView(model: built.search, inboxStore: inboxStore) { navigation.open($0) }
                 }
             }
         }
@@ -349,13 +361,6 @@ struct AidenAppShellView: View {
         }
     }
 
-    /// Regular width puts each list tab's list beside what it opened, as on an
-    /// iPhone Duo's inner display or an iPad. Compact width collapses the split
-    /// to one stack.
-    private var showsListBesideDetail: Bool {
-        horizontalSizeClass == .regular
-    }
-
     private func columns(for tab: AidenAppTab) -> AidenSplitColumns {
         switch tab {
         case .bots: botsColumns
@@ -375,6 +380,7 @@ struct AidenAppShellView: View {
         AidenListTab(
             tab: tab,
             navigation: navigation,
+            scrollPlaces: built.listScroll,
             columns: columns,
             window: window,
             empty: empty,
@@ -387,7 +393,7 @@ struct AidenAppShellView: View {
     /// (`AidenSplitColumns.hideOverlaidList`).
     private func hideOverlaidList(on tab: AidenAppTab) {
         columns(for: tab).hideOverlaidList(
-            besideList: showsListBesideDetail,
+            besideList: navigation.besideList,
             hasSelection: AidenSplitNavigationPath(navigation.path(of: tab)).selection != nil
         )
     }
@@ -409,7 +415,7 @@ struct AidenAppShellView: View {
             selection: selection,
             // In a side rail the system lays the outgoing chip over the
             // incoming chat while it pushes, so it goes with the list.
-            showsMachineStatus: !showsVerticalBar || showsListBesideDetail || navigation.inboxPath.isEmpty
+            showsMachineStatus: !showsVerticalBar || navigation.besideList || navigation.inboxPath.isEmpty
         )
         .safeAreaInset(edge: .top, spacing: 0) {
             AidenConnectionNotice(coordinator: coordinator)
@@ -927,6 +933,7 @@ final class AidenSplitColumns {
 private struct AidenListTab<List: View>: View {
     let tab: AidenAppTab
     let navigation: AidenAppNavigation
+    let scrollPlaces: AidenListScrollPlaces
     let columns: AidenSplitColumns
     let window: AidenWindowReader.Window
     let empty: AidenSplitEmptyState
@@ -935,6 +942,7 @@ private struct AidenListTab<List: View>: View {
     let screen: (AidenAppRoute, Bool) -> AnyView
 
     @Environment(\.aidenPalette) private var palette
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
 
     private var path: [AidenAppRoute] { navigation.path(of: tab) }
 
@@ -943,7 +951,12 @@ private struct AidenListTab<List: View>: View {
     }
 
     private func write(_ path: [AidenAppRoute], besideList: Bool) {
-        navigation.setPath(path, of: tab, laidOutBesideList: besideList)
+        navigation.setPath(
+            path,
+            of: tab,
+            laidOutBesideList: besideList,
+            widthIsRegular: horizontalSizeClass.map { $0 == .regular }
+        )
     }
 
     // MARK: Compact
@@ -954,6 +967,7 @@ private struct AidenListTab<List: View>: View {
             set: { write($0, besideList: false) }
         )) {
             list(nil)
+                .environment(\.aidenListScroll, AidenListScrollKeeping(places: scrollPlaces, tab: tab))
                 .navigationDestination(for: AidenAppRoute.self) { screen($0, false) }
         }
     }
@@ -964,6 +978,7 @@ private struct AidenListTab<List: View>: View {
         @Bindable var columns = columns
         return NavigationSplitView(columnVisibility: $columns.visibility) {
             list(AidenSplitNavigationPath(path).selection)
+                .environment(\.aidenListScroll, AidenListScrollKeeping(places: scrollPlaces, tab: tab))
                 // One width for every list tab and every launch, wide enough
                 // for a machine's status line, a row's title and the bar's
                 // title with its buttons on an iPhone Duo's inner display.
@@ -1012,6 +1027,176 @@ private struct AidenListTab<List: View>: View {
             }
             .navigationDestination(for: AidenAppRoute.self) { screen($0, true) }
         }
+    }
+}
+
+/// How far down each list tab's list was scrolled, kept by the shell so a
+/// fold, which builds the list again in the other container, keeps it.
+@MainActor
+final class AidenListScrollPlaces {
+    /// Points from the top of the list's content, by tab.
+    private var offsets: [AidenAppTab: CGFloat] = [:]
+
+    func offset(of tab: AidenAppTab) -> CGFloat { offsets[tab] ?? 0 }
+
+    func record(_ offset: CGFloat, of tab: AidenAppTab) {
+        offsets[tab] = max(0, offset)
+    }
+}
+
+/// Which tab's list scroll to keep, for the list a list tab shows
+/// (`View.aidenKeepsListScroll()`).
+struct AidenListScrollKeeping {
+    let places: AidenListScrollPlaces
+    let tab: AidenAppTab
+}
+
+extension EnvironmentValues {
+    @Entry var aidenListScroll: AidenListScrollKeeping?
+}
+
+extension View {
+    /// On a list tab's own scrolling list: keeps where it's scrolled to when
+    /// a fold builds it again. Placed on the scroll view itself, as a row
+    /// strip that scrolls sideways inside it would take a position meant for
+    /// the list.
+    func aidenKeepsListScroll() -> some View {
+        modifier(AidenListScrollKeeperReader())
+    }
+}
+
+private struct AidenListScrollKeeperReader: ViewModifier {
+    @Environment(\.aidenListScroll) private var keeping
+
+    func body(content: Content) -> some View {
+        if let keeping {
+            content.modifier(AidenListScrollKeeper(places: keeping.places, tab: keeping.tab))
+        } else {
+            content
+        }
+    }
+}
+
+/// Records where a list tab's list is while the person scrolls it, and puts
+/// a new list there once its content reaches that far. Only the person's
+/// scrolling records: a list taken down as the display folds reflows and
+/// reports its own geometry on the way out, and that isn't where they left it.
+///
+/// `ScrollPosition` doesn't move a `List` (iOS 27.1 simulator: the binding
+/// never hears the person scroll it either), so the place is put back on the
+/// list's own scroll view (`AidenListScrollViewFinder`).
+private struct AidenListScrollKeeper: ViewModifier {
+    private struct Reach: Equatable {
+        var offset: CGFloat
+        var farthest: CGFloat
+    }
+
+    let places: AidenListScrollPlaces
+    let tab: AidenAppTab
+
+    @State private var finder = AidenListScrollViewFinder.Handle()
+    /// The place to go back to, until it's reached or the person scrolls.
+    @State private var pending: CGFloat?
+    /// The person is scrolling the list, or it's still coasting.
+    @State private var moving = false
+
+    func body(content: Content) -> some View {
+        content
+            .background { AidenListScrollViewFinder(handle: finder) }
+            .onAppear {
+                let offset = places.offset(of: tab)
+                pending = offset > 0 ? offset : nil
+            }
+            .onScrollPhaseChange { old, phase, context in
+                if phase == .interacting { pending = nil }
+                moving = phase == .interacting || phase == .decelerating
+                // Where a scroll came to rest. A list being built or taken
+                // down reports from idle, and that's no one's place.
+                guard old != .idle else { return }
+                let geometry = context.geometry
+                places.record(geometry.contentOffset.y + geometry.contentInsets.top, of: tab)
+            }
+            .onScrollGeometryChange(for: Reach.self) { geometry in
+                Reach(
+                    offset: geometry.contentOffset.y + geometry.contentInsets.top,
+                    farthest: geometry.contentSize.height + geometry.contentInsets.top
+                        + geometry.contentInsets.bottom - geometry.containerSize.height
+                )
+            } action: { _, reach in
+                if moving { places.record(reach.offset, of: tab) }
+                guard let target = pending, reach.farthest >= target else { return }
+                pending = nil
+                guard abs(reach.offset - target) > 1 else { return }
+                // After this layout pass, which may still set the offset.
+                Task { @MainActor [finder] in
+                    await Task.yield()
+                    finder.scroll(toDistanceFromTop: target)
+                }
+            }
+    }
+}
+
+/// Finds the scroll view behind the SwiftUI view it's the background of: the
+/// nearest one that starts at the same left edge and takes in all of it.
+/// The scroll view runs on under the bars, where the SwiftUI view stops (a
+/// closed iPhone Duo's side rail included); a strip that scrolls sideways
+/// inside a list is a row tall, so it never takes it in.
+private struct AidenListScrollViewFinder: UIViewRepresentable {
+    @MainActor
+    final class Handle {
+        fileprivate weak var marker: UIView?
+
+        var scrollView: UIScrollView? {
+            guard let marker, let window = marker.window else { return nil }
+            let frame = marker.convert(marker.bounds, to: window)
+            var ancestor = marker.superview
+            while let current = ancestor {
+                if let match = Self.scrollView(in: current, around: frame, window: window) { return match }
+                ancestor = current.superview
+            }
+            return nil
+        }
+
+        /// Scrolls so the content `distance` points from its top is at the
+        /// top of the visible part, or as near as the content allows.
+        func scroll(toDistanceFromTop distance: CGFloat) {
+            guard let scrollView else { return }
+            let insets = scrollView.adjustedContentInset
+            let lowest = scrollView.contentSize.height + insets.bottom - scrollView.bounds.height
+            let y = max(min(distance - insets.top, lowest), -insets.top)
+            scrollView.setContentOffset(CGPoint(x: scrollView.contentOffset.x, y: y), animated: false)
+        }
+
+        private static func scrollView(in root: UIView, around frame: CGRect, window: UIWindow) -> UIScrollView? {
+            var queue: [UIView] = [root]
+            var visited = 0
+            while !queue.isEmpty, visited < 600 {
+                let view = queue.removeFirst()
+                visited += 1
+                if let scrollView = view as? UIScrollView {
+                    let visible = scrollView.convert(scrollView.bounds, to: window)
+                    if abs(visible.minX - frame.minX) < 1, visible.insetBy(dx: -1, dy: -1).contains(frame) {
+                        return scrollView
+                    }
+                }
+                queue.append(contentsOf: view.subviews)
+            }
+            return nil
+        }
+    }
+
+    let handle: Handle
+
+    func makeUIView(context: Context) -> UIView {
+        let view = UIView()
+        view.isUserInteractionEnabled = false
+        view.isAccessibilityElement = false
+        handle.marker = view
+        return view
+    }
+
+    func updateUIView(_ view: UIView, context: Context) {
+        handle.marker = view
     }
 }
 
