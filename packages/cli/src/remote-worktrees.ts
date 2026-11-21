@@ -1,7 +1,7 @@
 import * as fs from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import { createWorkspaceWorktreeApplicationService } from "../../../main/services/workspace-worktree-application-service.js";
-import { runWorktreeSetupHooks } from "../../../main/services/agent-surface-hooks.js";
+import { runWorktreeSetupHooksWithResult } from "../../../main/services/agent-surface-hooks.js";
 import { checkCreateCapacity, checkSnapshotCapacity, checkWorktreeAllocation } from "../../../main/services/managed-worktree-capacity.js";
 import { provisionWorktreeIncludedFiles } from "../../../main/services/managed-worktree-provisioner.js";
 import type { createCliWorkspaceApplication } from "./workspace-application.ts";
@@ -109,10 +109,13 @@ return createWorkspaceWorktreeApplicationService({
   logError: (area, message) => process.stderr.write(`aiden: ${area}: ${message}\n`),
   // WorktreeSetup hooks: the source workspace's, run in the new worktree.
   onWorktreeCreated: async (event) => {
-    const notices = await runWorktreeSetupHooks({
+    const { notices, ranHooks } = await runWorktreeSetupHooksWithResult({
       sourceFolderPath: event.sourceFolderPath, sourceRoot: event.sourceRoot, worktreePath: event.worktreePath,
       workspacePath: event.workspacePath, workspaceId: event.workspace.id, branch: event.branch,
     });
+    if (ranHooks.length > 0) {
+      await git.invalidateWorktreeDisplayCache(event.worktreePath);
+    }
     for (const notice of notices) process.stderr.write(`aiden: hooks: ${notice}\n`);
   },
 });

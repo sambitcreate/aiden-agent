@@ -2278,26 +2278,14 @@ export function ChatPane({ chatId }: { chatId: string }) {
                 if (outcome.workspace) {
                   const createdWorkspace = outcome.workspace;
                   upsertCreatedWorkspaceInCache(qc, createdWorkspace);
-                  // Seed display-only caches for a brand-new worktree so the
-                  // promoted chat skips redundant post-create IPCs; reused
-                  // worktrees still read live status.
-                  if (!outcome.worktree.reused) {
-                    const sourceGit = qc.getQueryData<GitInfo>(
-                      queryKeys.git(worktreeRequest.sourceWorkspaceId),
+                  // Seed folder-presence for a brand-new worktree; leave Git
+                  // status to main's `infoCache` (0-spawn when clean, or live
+                  // post-hook status if WorktreeSetup modified the checkout).
+                  if (!outcome.worktree.reused && createdWorkspace.folderPath) {
+                    qc.setQueryData<WorkspaceFolderPresenceResult>(
+                      queryKeys.workspaceFolderPresence(createdWorkspace.id),
+                      { presence: "present" },
                     );
-                    qc.setQueryData<GitInfo>(queryKeys.git(createdWorkspace.id), {
-                      isRepo: true,
-                      branch: outcome.worktree.branch,
-                      defaultBranch: sourceGit?.isRepo ? sourceGit.defaultBranch : undefined,
-                      hasRemote: sourceGit?.isRepo ? sourceGit.hasRemote : undefined,
-                      uncommitted: 0,
-                    });
-                    if (createdWorkspace.folderPath) {
-                      qc.setQueryData<WorkspaceFolderPresenceResult>(
-                        queryKeys.workspaceFolderPresence(createdWorkspace.id),
-                        { presence: "present" },
-                      );
-                    }
                   }
                   if (mountedRef.current && chatIdRef.current === chatId) {
                     React.startTransition(() => {
@@ -3318,18 +3306,8 @@ export function ChatPane({ chatId }: { chatId: string }) {
         // Ignore missing marks if the performance buffer was cleared.
       }
       upsertCreatedWorkspaceInCache(qc, workspace);
-      // Seed display-only initial caches for the new worktree so switching to it
-      // does not wait on redundant post-create IPCs.
-      if (workspace.managedWorktree?.branch) {
-        const sourceGit = qc.getQueryData<GitInfo>(queryKeys.git(effectiveWorkspace.id));
-        qc.setQueryData<GitInfo>(queryKeys.git(workspace.id), {
-          isRepo: true,
-          branch: workspace.managedWorktree.branch,
-          defaultBranch: sourceGit?.isRepo ? sourceGit.defaultBranch : undefined,
-          hasRemote: sourceGit?.isRepo ? sourceGit.hasRemote : undefined,
-          uncommitted: 0,
-        });
-      }
+      // Seed folder-presence for the new worktree; leave Git status to main's
+      // `infoCache` so synchronous WorktreeSetup hook edits are never hidden.
       if (workspace.folderPath) {
         qc.setQueryData<WorkspaceFolderPresenceResult>(
           queryKeys.workspaceFolderPresence(workspace.id),

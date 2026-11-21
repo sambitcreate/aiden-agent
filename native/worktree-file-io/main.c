@@ -704,6 +704,7 @@ static int provision_try_clone(int source, const struct stat *before,
              dst_stat.st_size == before->st_size &&
              flistxattr(cloned, NULL, 0, 0) == 0 &&
              fchmod(cloned, mode) == 0 &&
+             fsync(cloned) == 0 &&
              fstat(source, &after) == 0 &&
              same_provision_source(before, &after);
   if (cloned >= 0) close(cloned);
@@ -924,7 +925,7 @@ static int provision_files(int argc, char **argv) {
            copied != (uint64_t)before.st_size)) {
         src_err = 1;
       }
-      if (!io_err && !src_err && fchmod(target, mode) != 0) io_err = 1;
+      if (!io_err && !src_err && (fchmod(target, mode) != 0 || fsync(target) != 0)) io_err = 1;
       if (!io_err && !src_err && provision_interrupted) io_err = 1;
       close(target);
       close(source);

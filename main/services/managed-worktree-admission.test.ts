@@ -239,4 +239,51 @@ test("GitService.managedWorktreeUsable verifies modern worktrees via 0-spawn pur
     false,
   );
   assert.equal(gitSpawns, 0);
+
+  // Restore valid ownership marker, verify 0-spawn admission works again, then
+  // modify repository config (`core.bare=true`): must fall back to Git discovery
+  // and fail closed instead of admitting across repository-config revocation.
+  await fs.writeFile(
+    path.join(created.worktreeGitDir, "aiden-owner"),
+    `${created.ownershipToken}\n`,
+  );
+  gitSpawns = 0;
+  assert.equal(
+    await service.managedWorktreeUsable(
+      created.repositoryPath,
+      created.path,
+      created.branch,
+      created.worktreeGitDir,
+      created.ownershipToken,
+      created.worktreeDevice,
+      created.worktreeInode,
+    ),
+    true,
+  );
+  assert.equal(gitSpawns, 0);
+
+  await runGit(repo, ["config", "core.bare", "true"]);
+  gitSpawns = 0;
+  await assert.rejects(
+    service.managedWorktreeUsable(
+      created.repositoryPath,
+      created.path,
+      created.branch,
+      created.worktreeGitDir,
+      created.ownershipToken,
+      created.worktreeDevice,
+      created.worktreeInode,
+    ),
+    /not a Git repository/u,
+  );
+  assert.ok(gitSpawns > 0, "config change must fall back to Git discovery");
+  await runGit(repo, ["config", "--unset", "core.bare"]);
+
+  // Invalidating display cache after a WorktreeSetup hook modifies the checkout
+  // ensures git.info observes dirty changes instead of stale uncommitted: 0.
+  await fs.writeFile(path.join(created.path, "README.md"), "# modified by hook\n");
+  await service.invalidateWorktreeDisplayCache(created.path);
+  const postHookInfo = await service.info(created.path);
+  assert.equal(postHookInfo.isRepo, true);
+  assert.equal(postHookInfo.uncommitted, 1);
 });

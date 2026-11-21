@@ -1070,6 +1070,16 @@ export class GitService {
     { configSignature: string; hasRemote: boolean; defaultBranch?: string }
   >();
   /**
+   * Git-verified repository routing & config signatures keyed by canonical root
+   * path. Used to gate the 0-spawn pure-FS `managedWorktreeUsable` fast path so
+   * any external config change (e.g. `core.bare=true`) immediately falls back
+   * to Git discovery and fails closed.
+   */
+  private readonly verifiedRepoIdentities = new Map<
+    string,
+    { commonDir: string; signature: string }
+  >();
+  /**
    * Credential-free remote identity learned by ordinary status reads, keyed by
    * repository working directory. Raw remote URLs are never retained.
    */
@@ -1295,18 +1305,25 @@ export class GitService {
     } catch {
       return null;
     }
+    const beforeIdentity = await this.rootReadIdentity(canonicalCwd);
     const probe = await this.run(
       canonicalCwd,
       ["rev-parse", "--is-inside-work-tree", "--show-toplevel", "--git-common-dir"],
       { allowExitCodes: [128], signal },
     );
-    if (probe.exitCode !== 0) return null;
+    if (probe.exitCode !== 0) {
+      this.verifiedRepoIdentities.delete(canonicalCwd);
+      return null;
+    }
     const raw = probe.stdout.replace(/\r?\n$/u, "");
     const lines = raw.split(/\r?\n/u);
     let topLevelPath: string;
     let commonPath: string;
     if (lines.length === 3) {
-      if (lines[0].trim() !== "true") return null;
+      if (lines[0].trim() !== "true") {
+        this.verifiedRepoIdentities.delete(canonicalCwd);
+        return null;
+      }
       topLevelPath = lines[1];
       commonPath = lines[2];
     } else {
@@ -1315,7 +1332,10 @@ export class GitService {
         allowExitCodes: [128],
         signal,
       });
-      if (inside.exitCode !== 0 || inside.stdout.trim() !== "true") return null;
+      if (inside.exitCode !== 0 || inside.stdout.trim() !== "true") {
+        this.verifiedRepoIdentities.delete(canonicalCwd);
+        return null;
+      }
       const [topLevelResult, commonDirResult] = await Promise.all([
         this.run(canonicalCwd, ["rev-parse", "--show-toplevel"], { signal }),
         this.run(canonicalCwd, ["rev-parse", "--git-common-dir"], { signal }),
@@ -1332,6 +1352,23 @@ export class GitService {
         path.isAbsolute(commonPath) ? commonPath : path.resolve(canonicalCwd, commonPath),
       ),
     ]);
+    if (
+      beforeIdentity &&
+      canonicalCwd === topLevel &&
+      beforeIdentity.commonDir === commonDir &&
+      (await this.repositorySignature(beforeIdentity.paths)) === beforeIdentity.signature
+    ) {
+      this.verifiedRepoIdentities.delete(canonicalCwd);
+      this.verifiedRepoIdentities.set(canonicalCwd, {
+        commonDir,
+        signature: beforeIdentity.signature,
+      });
+      while (this.verifiedRepoIdentities.size > this.cacheEntries) {
+        const oldest = this.verifiedRepoIdentities.keys().next().value as string | undefined;
+        if (!oldest) break;
+        this.verifiedRepoIdentities.delete(oldest);
+      }
+    }
     return { cwd: canonicalCwd, topLevel, commonDir };
   }
 
@@ -1781,6 +1818,20 @@ export class GitService {
       }
     } catch {
       // Display cache seeding is best-effort; a cold read will succeed normally.
+    }
+  }
+
+  /**
+   * Drop any pre-hook cached status/branch entries for `worktreePath` (for
+   * example after a synchronous `WorktreeSetup` hook modifies the checkout).
+   */
+  async invalidateWorktreeDisplayCache(worktreePath: string): Promise<void> {
+    const candidates = new Set<string>([worktreePath, path.resolve(worktreePath)]);
+    const canonical = await fs.realpath(worktreePath).catch(() => undefined);
+    if (canonical) candidates.add(canonical);
+    for (const key of candidates) {
+      this.infoCache.delete(key);
+      this.branchCache.delete(key);
     }
   }
 
@@ -4667,6 +4718,13 @@ export class GitService {
     const gitdirPath = path.join(canonicalAdminDir, "gitdir");
     const commondirPath = path.join(canonicalAdminDir, "commondir");
     const headPath = path.join(canonicalAdminDir, "HEAD");
+    // Per-worktree config (e.g. `core.bare`, `core.worktree`) must be evaluated by Git.
+    try {
+      await fs.lstat(path.join(canonicalAdminDir, "config.worktree"));
+      return "fallback";
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") return "fallback";
+    }
     try {
       const [ownerRead, gitdirRead, commondirRead, headRead] = await Promise.all([
         this.readBoundedNoFollowFile(ownerPath, 128),
@@ -4738,18 +4796,37 @@ export class GitService {
     ) {
       return false;
     }
-    const commonDir = await this.resolveCommonDirPureFs(cwd);
-    if (commonDir) {
-      const direct = await this.managedWorktreeUsablePureFs(
-        commonDir,
-        worktreePath,
-        branch,
-        worktreeGitDir,
-        ownershipToken,
-        worktreeDevice!,
-        worktreeInode!,
-      );
-      if (direct !== "fallback") return direct;
+    // Use the 0-spawn pure-FS fast path only while Git's verified routing &
+    // config proof for `cwd` is still current. Any external config edit (e.g.
+    // `core.bare=true`) or unverified repository falls back to Git discovery.
+    const canonicalCwd = await fs.realpath(cwd).catch(() => undefined);
+    const cwdIdentity = canonicalCwd ? await this.rootReadIdentity(canonicalCwd) : undefined;
+    const verified = canonicalCwd ? this.verifiedRepoIdentities.get(canonicalCwd) : undefined;
+    if (
+      canonicalCwd &&
+      cwdIdentity &&
+      verified &&
+      verified.commonDir === cwdIdentity.commonDir &&
+      verified.signature === cwdIdentity.signature
+    ) {
+      const commonDir = await this.resolveCommonDirPureFs(canonicalCwd);
+      if (commonDir && commonDir === cwdIdentity.commonDir) {
+        const direct = await this.managedWorktreeUsablePureFs(
+          commonDir,
+          worktreePath,
+          branch,
+          worktreeGitDir,
+          ownershipToken,
+          worktreeDevice!,
+          worktreeInode!,
+        );
+        if (
+          direct !== "fallback" &&
+          (await this.repositorySignature(cwdIdentity.paths)) === cwdIdentity.signature
+        ) {
+          return direct;
+        }
+      }
     }
     const repo = this.requireRepository(await this.repository(cwd));
     return this.stableRead(repo, async () => {
@@ -8098,6 +8175,8 @@ export const gitCreateWorktree = (
   signal?: AbortSignal,
   options?: GitCreateWorktreeOptions,
 ) => gitService.createWorktree(folderPath, root, branch, signal, options);
+export const gitInvalidateWorktreeDisplayCache = (worktreePath: string) =>
+  gitService.invalidateWorktreeDisplayCache(worktreePath);
 export const gitResolveWorktreeBase = (folderPath: string, baseRef: string, signal?: AbortSignal) =>
   gitService.resolveWorktreeBase(folderPath, baseRef, signal);
 export const gitFetchWorktreeBase = (
