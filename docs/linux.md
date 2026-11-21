@@ -150,6 +150,13 @@ unlock or configure the keyring and restart Aiden to restore Bot access.
 
 [Routine models](bot-routine-models.md), thinking and explicitly chosen fallback are also available wherever Linux Bots are enabled. The owning host binds each accepted run’s selection across queues and recovery; phones manage choices through the negotiated `bot:routine-models` surface. Unconfirmed provider cost requires the same explicit Resume confirmation as on macOS.
 
+Aiden Live (voice) works on Linux: talking, captions, chat by voice, voice
+approvals and moving through Aiden's own window behave as on macOS. Linux has
+no app microphone permission, so Live's setup shows the microphone as ready and
+Live uses the input chosen in Settings → Voice & Speech → Aiden Live (or the
+system default). Live can't act in other apps on Linux, because that needs
+Computer Use, and it doesn't offer screen share yet.
+
 Computer Use and Apple Foundation Models are not included in the Linux
 build. Their settings, navigation, onboarding promises, helper bundles, and
 chat controls are omitted. Bot computers (a macOS VM per Bot) need a Mac with

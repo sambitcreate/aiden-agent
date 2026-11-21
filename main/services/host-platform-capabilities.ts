@@ -26,6 +26,11 @@ export interface HostPlatformCapabilities {
    * and offered where Remote Access runs: macOS and Linux.
    */
   mcpServer: boolean;
+  /**
+   * Aiden Live's optional screen share. It relies on the macOS system screen
+   * picker; Linux has no picker wired in yet, so Live runs voice-only there.
+   */
+  liveScreenShare: boolean;
 }
 /**
  * Main-owned host capability policy. Persisted settings and renderer state may
@@ -52,5 +57,6 @@ export function hostPlatformCapabilities(
     backgroundJobs: darwin || platform === "linux",
     hooks: darwin || platform === "linux",
     mcpServer: darwin || platform === "linux",
+    liveScreenShare: darwin,
   };
 }

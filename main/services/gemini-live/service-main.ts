@@ -11,6 +11,7 @@ import { GeminiLiveComputerUseBridge } from "./computer-use-bridge.js";
 import { prepareLiveToolProviders } from "./live-tool-providers.js";
 import { aidenLivePreferences } from "../../../renderer/shared/aiden-live-settings.js";
 import { app } from "../../platform.js";
+import { hostPlatformCapabilities } from "../host-platform-capabilities.js";
 import { createGeminiLiveAcceptanceEvidenceRecorder } from "./acceptance-evidence.js";
 import { AidenLiveThreadStore } from "../aiden-live-thread-store.js";
 import * as path from "node:path";
@@ -101,7 +102,8 @@ export const geminiLiveService = new GeminiLiveService({
   },
   resolveModel: () => experimentalGeminiLiveModel(),
   resolveVoice: async () => aidenLivePreferences(await configStore.getSettings()).voice,
-  screenShareEnabled: () => geminiLiveScreenEnabled(),
+  // Off Mac there is no system screen picker yet, so Live never offers screen share there.
+  screenShareEnabled: () => geminiLiveScreenEnabled() && hostPlatformCapabilities().liveScreenShare,
   onDisplayBindingsChanged: (bindings) => {
     if (bindings.length > 0 && !disposeDisplayMediaGuards) {
       disposeDisplayMediaGuards = installGeminiLiveDisplayMediaGuards(
