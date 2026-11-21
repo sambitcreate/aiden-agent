@@ -384,6 +384,14 @@
       "renderer/canvas/studio",
       "main/services/studio"
     ],
+    "subagent-pill.spec.ts": [
+      "renderer/components/chat-top-bar",
+      "renderer/components/message-list",
+      "renderer/components/subagent-chips",
+      "renderer/components/subagent-composer-pill",
+      "renderer/components/todo-panel",
+      "renderer/lib/subagent-group-visibility"
+    ],
     "svg-code-preview.spec.ts": [
       "renderer/components/code-block",
       "renderer/components/copy-button",

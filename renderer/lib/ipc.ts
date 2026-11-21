@@ -229,6 +229,7 @@ import type {
   AssistantLiveRendererEvent,
   AssistantLiveSnapshot,
   AssistantLiveStartIntent,
+  LiveDisplaySources,
 } from "../shared/assistant-live";
 import {
   fallbackDetachedLifecycleStream,
@@ -582,7 +583,9 @@ export const assistantLiveApi = {
   stop: () => invoke<AssistantLiveSnapshot>("assistant-live:stop", {}),
   sendAudio: (sessionId: string, pcm: Uint8Array) =>
     invoke<boolean>("assistant-live:audio", { sessionId, pcm }),
-  bindDisplay: () => invoke<string | null>("assistant-live:display-bind", {}),
+  displaySources: () => invoke<LiveDisplaySources>("assistant-live:display-sources", {}),
+  bindDisplay: (sourceId?: string) =>
+    invoke<string | null>("assistant-live:display-bind", sourceId ? { sourceId } : {}),
   releaseDisplay: (bindingId: string) =>
     invoke<boolean>("assistant-live:display-release", { bindingId }),
   sendFrame: (sessionId: string, frame: Uint8Array) =>

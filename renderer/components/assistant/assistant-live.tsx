@@ -1,5 +1,6 @@
 import * as React from "react";
 import {
+  AppWindow,
   Check,
   ChevronRight,
   CircleAlert,
@@ -17,6 +18,9 @@ import {
   HoverCard,
   HoverCardContent,
   HoverCardTrigger,
+  Label,
+  RadioGroup,
+  RadioGroupItem,
 } from "../ui";
 import { AidenLiveMark, type AidenLiveMarkState } from "./aiden-live-mark";
 import type { AssistantLiveCaption, AssistantLiveController } from "./use-assistant-live";
@@ -141,7 +145,9 @@ export function AssistantLiveSetupDialog({
             <Badge color="blue">Beta</Badge>
           </div>
           <p className="mt-0.5 text-xs leading-4 text-secondary">
-            Voice, screen context, and accessibility actions stay visible and stoppable.
+            {live.computerUseOffered || live.screenShareAvailable
+              ? "Voice, screen context, and accessibility actions stay visible and stoppable."
+              : "Voice, chats, and actions inside Aiden stay visible and stoppable."}
           </p>
         </div>
       </div>
@@ -211,19 +217,21 @@ export function AssistantLiveSetupDialog({
             {live.screenError}
           </p>
         ) : null}
-        <ReadinessRow
-          icon={<MousePointer2 className="size-4" />}
-          title="Screen and Accessibility"
-          detail={
-            accessibilityReady && screenReady && live.computerUseEnabled
-              ? "Aiden can inspect the screen and propose one action at a time."
-              : live.computerUseDetail
-          }
-          ready={live.computerUseReady && live.computerUseEnabled}
-          busy={live.computerUseBusy}
-          action="Allow"
-          onAction={() => void live.prepareComputerUse()}
-        />
+        {live.computerUseOffered ? (
+          <ReadinessRow
+            icon={<MousePointer2 className="size-4" />}
+            title="Screen and Accessibility"
+            detail={
+              accessibilityReady && screenReady && live.computerUseEnabled
+                ? "Aiden can inspect the screen and propose one action at a time."
+                : `Optional, to let Aiden use other apps. ${live.computerUseDetail}`
+            }
+            ready={live.computerUseReady && live.computerUseEnabled}
+            busy={live.computerUseBusy}
+            action="Allow"
+            onAction={() => void live.prepareComputerUse()}
+          />
+        ) : null}
         <ReadinessRow
           icon={<Settings2 className="size-4" />}
           title="Scheduled tasks"
@@ -260,12 +268,79 @@ export function AssistantLiveSetupDialog({
           <HoverCardContent align="end" className="w-80">
             <p className="text-xs font-medium text-primary">Live session privacy</p>
             <p className="mt-1 text-xs leading-5 text-secondary">
-              Starting Live enables screen actions without per-action prompts until you stop. Audio and captions
-              remain in memory for this Live session and are not added to chat history.
+              {live.computerUseReady && live.computerUseEnabled
+                ? "Starting Live enables screen actions without per-action prompts until you stop. "
+                : null}
+              Audio and captions remain in memory for this Live session and are not added to chat history.
             </p>
           </HoverCardContent>
         </HoverCard>
       </div>
+      <LiveScreenSourcePicker live={live} />
+    </Dialog>
+  );
+}
+
+/**
+ * Aiden's own screen picker for Linux under X11, where the desktop offers no
+ * picker of its own. Selection shows with the radio and a background fill.
+ */
+export function LiveScreenSourcePicker({
+  live,
+}: {
+  live: Pick<AssistantLiveController, "screenSourceChoices" | "pickScreenSource">;
+}): React.ReactElement | null {
+  const choices = live.screenSourceChoices;
+  const [selected, setSelected] = React.useState<string | null>(null);
+  React.useEffect(() => {
+    setSelected(choices?.[0]?.id ?? null);
+  }, [choices]);
+  if (!choices) return null;
+  return (
+    <Dialog
+      open
+      onOpenChange={(open) => {
+        if (!open) live.pickScreenSource(null);
+      }}
+      title="Choose what to share"
+      description="Aiden sees one frame a second, only while Live runs."
+      size="large"
+      confirmLabel="Share"
+      confirmDisabled={!selected}
+      cancelLabel="Cancel"
+      actionClassName={ASSISTANT_LIVE_FOCUS_CLASS}
+      onConfirm={() => live.pickScreenSource(selected)}
+    >
+      <RadioGroup
+        value={selected ?? ""}
+        onValueChange={setSelected}
+        aria-label="Screens and windows"
+        className="grid grid-cols-2 gap-2"
+      >
+        {choices.map((source) => (
+          <Label
+            key={source.id}
+            className="flex-col items-stretch gap-2 rounded-control bg-well p-2 transition-colors duration-150 hover:bg-list-hover has-[[data-state=checked]]:bg-list-selection motion-reduce:transition-none"
+          >
+            <span className="block aspect-[16/10] overflow-hidden rounded-control bg-secondary">
+              {source.thumbnail ? (
+                <img src={source.thumbnail} alt="" className="size-full object-contain" draggable={false} />
+              ) : (
+                <span className="grid size-full place-items-center text-tertiary" aria-hidden="true">
+                  {source.kind === "screen" ? <Monitor className="size-6" /> : <AppWindow className="size-6" />}
+                </span>
+              )}
+            </span>
+            <span className="flex min-w-0 items-center gap-2">
+              <RadioGroupItem value={source.id} className={`shrink-0 ${ASSISTANT_LIVE_FOCUS_CLASS}`} />
+              <span className="min-w-0">
+                <span className="block truncate text-sm text-primary">{source.name}</span>
+                <span className="block text-xs text-secondary">{source.kind === "screen" ? "Screen" : "Window"}</span>
+              </span>
+            </span>
+          </Label>
+        ))}
+      </RadioGroup>
     </Dialog>
   );
 }

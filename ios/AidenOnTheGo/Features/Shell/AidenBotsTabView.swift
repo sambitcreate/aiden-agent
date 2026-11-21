@@ -17,6 +17,7 @@ struct AidenBotsTabView: View {
     let store: AidenUnifiedInboxStore
     let navigation: AidenAppNavigation
     let availability: AidenBotsAvailability
+    var onAddComputer: (() -> Void)? = nil
     /// A Bot the home already knows, so its chat opens with a title at once.
     let onOpenBot: (AidenHostObjectID, AidenBotSummary) -> Void
 
@@ -45,7 +46,10 @@ struct AidenBotsTabView: View {
 
     var body: some View {
         let machines = machines
-        if machines == nil, let explanation = availability.tabExplanation {
+        if coordinator.installationStore.installations.isEmpty, let onAddComputer {
+            AidenNoComputersEmptyView(surface: .bots, onAddComputer: onAddComputer)
+                .navigationTitle("Bots")
+        } else if machines == nil, let explanation = availability.tabExplanation {
             ContentUnavailableView(
                 "Bots unavailable",
                 systemImage: "person.2.slash",

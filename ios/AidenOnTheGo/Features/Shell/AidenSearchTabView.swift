@@ -4,6 +4,8 @@ import SwiftUI
 /// which each connected machine matches itself. Rows are plain list rows.
 struct AidenSearchTabView: View {
     let inboxStore: AidenUnifiedInboxStore
+    let hasNoComputers: Bool
+    let onAddComputer: (() -> Void)?
     let onOpen: (AidenAppRoute) -> Void
 
     @State private var model: AidenSearchModel
@@ -23,9 +25,13 @@ struct AidenSearchTabView: View {
     init(
         coordinator: AidenRemoteCoordinator,
         inboxStore: AidenUnifiedInboxStore,
+        hasNoComputers: Bool = false,
+        onAddComputer: (() -> Void)? = nil,
         onOpen: @escaping (AidenAppRoute) -> Void
     ) {
         self.inboxStore = inboxStore
+        self.hasNoComputers = hasNoComputers
+        self.onAddComputer = onAddComputer
         self.onOpen = onOpen
         _model = State(initialValue: AidenSearchModel(
             chatInput: { AidenSearchChatInput(store: inboxStore) },
@@ -48,7 +54,9 @@ struct AidenSearchTabView: View {
 
     @ViewBuilder
     private var content: some View {
-        if !model.hasQuery {
+        if hasNoComputers, let onAddComputer, !model.hasQuery {
+            AidenNoComputersEmptyView(surface: .search, onAddComputer: onAddComputer)
+        } else if !model.hasQuery {
             scrolling {
                 ContentUnavailableView(
                     "Search",

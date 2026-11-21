@@ -235,6 +235,17 @@ test("session guards gate display-capture only and install exactly once", () => 
     granted = next;
   }, videoRequestDetails);
   assert.equal(granted, false);
+  // Linux's getDisplayMedia asks for "media" with no camera or microphone types.
+  granted = null;
+  installed.request?.(sender as unknown as Electron.WebContents, "media", (next) => {
+    granted = next;
+  }, { ...details, mediaTypes: [] } as unknown as Electron.MediaAccessPermissionRequest);
+  assert.equal(granted, true);
+  granted = null;
+  installed.request?.(sender as unknown as Electron.WebContents, "media", (next) => {
+    granted = next;
+  }, { ...details, mediaTypes: ["audio", "video"] } as unknown as Electron.MediaAccessPermissionRequest);
+  assert.equal(granted, false, "a camera and microphone request stays denied");
   assert.equal(
     installed.check?.(sender as unknown as Electron.WebContents, "notifications", "file:///Aiden/", details),
     false,
@@ -261,6 +272,65 @@ test("session guards gate display-capture only and install exactly once", () => 
   assert.equal(installed.check, null);
   assert.equal(installed.request, null);
   assert.equal(installed.display, null);
+});
+
+test("with a source resolver (Linux) only a still-bound document's request gets a source", async () => {
+  let display:
+    | ((
+        request: Electron.DisplayMediaRequestHandlerHandlerRequest,
+        callback: (streams: Electron.Streams) => void,
+      ) => void)
+    | null = null;
+  const electronSession = {
+    setPermissionCheckHandler() {},
+    setPermissionRequestHandler() {},
+    setDisplayMediaRequestHandler(handler: typeof display) {
+      display = handler;
+    },
+  };
+  const frame = new FakeFrame(10, 20, "document-one", "file:///Aiden/main-window.html");
+  const sender = new FakeWebContents(7, frame);
+  const other = new FakeFrame(11, 21, "document-two", "file:///Aiden/main-window.html");
+  const bindings: GeminiLiveDisplayMediaBinding[] = [];
+  const chosen = { id: "window:9:0", name: "Editor" } as Electron.DesktopCapturerSource;
+  const resolved: Array<string | null> = [];
+  let releaseResolve: (() => void) | null = null;
+  const dispose = installGeminiLiveDisplayMediaGuards(electronSession, () => bindings, async (binding) => {
+    resolved.push(binding.sourceId);
+    await new Promise<void>((resolve) => {
+      releaseResolve = resolve;
+    });
+    return chosen;
+  });
+  const ask = () =>
+    new Promise<Electron.Streams>((resolve) => display?.(displayRequest(frame), resolve));
+
+  // No binding: denied without consulting the resolver.
+  assert.deepEqual(await ask(), {});
+  assert.deepEqual(resolved, []);
+
+  const binding = bindGeminiLiveDisplayMediaDocument(invokeEvent(sender, frame), "window:9:0");
+  assert.equal(binding.sourceId, "window:9:0");
+  bindings.push(binding);
+  let pending = ask();
+  await Promise.resolve();
+  releaseResolve!();
+  assert.deepEqual(await pending, { video: chosen });
+  assert.deepEqual(resolved, ["window:9:0"]);
+
+  // Another document's request never uses this binding.
+  const foreign = await new Promise<Electron.Streams>((resolve) =>
+    display?.(displayRequest(other), resolve),
+  );
+  assert.deepEqual(foreign, {});
+
+  // Released while the desktop was still choosing: the late source is dropped.
+  pending = ask();
+  await Promise.resolve();
+  bindings.pop();
+  releaseResolve!();
+  assert.deepEqual(await pending, {});
+  dispose();
 });
 
 test("navigation, replacement frames, and unrelated WebContents fail closed", () => {
