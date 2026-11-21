@@ -248,7 +248,7 @@ Core easing curves:
 | Annotation/editor surface | Fade, 4px rise, and `.96 → 1` scale over the basic duration. | Reuse for a future review comment or inline edit surface, not for full dialogs. |
 | Loading text | A slow, stepped shimmer; generated assets use low-contrast pulsing. | Use only when it communicates active generation. Freeze to a static state under reduced motion. |
 | Scroll edges | Scroll-driven mask fades rather than animated shadows or separators. | Add to Aiden's sidebar and long menus; the existing composer/footer fade already points in this direction. |
-| Reduced motion | Panel, chip, toast-adjacent, shimmer, editor, and specialty animations are disabled or flattened. | Keep every new motion behind `prefers-reduced-motion`. Do not replace motion with a hidden initial state. |
+| Reduced motion | Panel, chip, toast-adjacent, shimmer, editor, and specialty animations are disabled or flattened. | Keep every new motion behind Aiden's Reduce Motion (`:root[data-reduce-motion]`), not the OS query alone. Do not replace motion with a hidden initial state. |
 
 ## Shadow and interactive-state inventory
 

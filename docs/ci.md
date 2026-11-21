@@ -339,6 +339,42 @@ On 2026-11-12 the design-canvas watcher and frame-picture gaps left out of
   so neither `waitFor`'s interval nor its timeout could run. The check now compares a
   boolean, as the rest of the file does, and uses `waitFor`.
 
+On 2026-11-20 the macOS Electron E2E startup hang was traced to
+`crash-reporting.spec.ts:41`. The hang hit `guided-setup.spec.ts:6` (job
+136038828632), `follow-through-lifecycle.spec.ts:30` (job 136069197442) and
+`environment-devices-tab.spec.ts:16` on `main` (job 136046189973). In each, the
+first launch showed no window within 30 seconds, quitting then hung, and the log
+showed `settingsPrepared:false`.
+
+- The crash test ended its app with `process.crash()`. On macOS, ReportCrash
+  then spends about 30 seconds on the crashed process and raises a "quit
+  unexpectedly" dialog through UserNotificationCenter. An Electron launch that
+  overlaps that window reaches `will-finish-launching` but never gets AppKit's
+  `applicationDidFinishLaunching`, so `ready` never fires. Its main thread
+  waits idle in `-[NSApplication run]`, and `app.quit()` before `ready` never
+  completes.
+- The hangs began when the shards moved on 2026-11-20, which put another spec's
+  launch 30 to 50 seconds after the crash test. In 4 of the 5 jobs where the
+  crash test sat just before `environment-devices-tab.spec.ts`, that launch
+  hung. None of about 30 jobs that ran other specs straight after it hung.
+- A probe workflow reproduced it (run 44680079058, 2 of 2 jobs). The fixture's
+  new startup milestones read "will-finish-launching 1065 ms, native ready
+  never, Playwright run 1878 ms". This also explains the `firstWindow` timeouts
+  in local repeats of the crash test, listed as still open on 2026-11-11.
+- The test now ends the process with `SIGKILL` from the same
+  `uncaughtExceptionMonitor`, after Aiden's own monitor has written the pending
+  crash record. A killed process leaves no crash report and no dialog, and the
+  test's assertions do not depend on the signal: the relaunch's `after_crash`
+  comes from the unclean-run marker. In the probe's validation run
+  (44681438771), three macOS jobs ran the crash test with `SIGKILL` and then
+  the device-tab and follow-through specs, three rounds each: all 9 rounds
+  passed and no crash dialog appeared. Two control jobs kept `process.crash()`:
+  both raised the dialog, and 2 of their 6 rounds hung with "native ready
+  never".
+- When the first window does not open, the fixture's error now lists the
+  startup milestones the bootstrap recorded, so a later hang shows how far
+  launch got.
+
 Release workflows, signing/notarization, publication and repository protection
 settings remain unchanged. The previous draft's release-admission rewrite has
 been removed to keep release hardening separate from this CI rollout.

@@ -10,6 +10,7 @@ import {
   parseRecommendedOptionLabel,
   recommendedAskUserAnswers,
 } from "../shared/ask-user-question";
+import { isEscapeKey } from "../lib/dismiss-key";
 
 export function AskUserQuestionComposer({
   prompt,
@@ -145,7 +146,7 @@ export function AskUserQuestionComposer({
       return;
     }
     if (event.metaKey || event.ctrlKey) return;
-    if (event.key === "Escape") {
+    if (isEscapeKey(event)) {
       event.preventDefault();
       event.stopPropagation();
       commit();

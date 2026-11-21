@@ -125,7 +125,7 @@ function pullRequestChip() {
 }
 
 function workspaceButton() {
-  return screen.queryByRole("button", { name: "Open folder in file manager" });
+  return screen.queryByRole("button", { name: /\. Open folder in file manager\.$/u });
 }
 
 function status(): string {

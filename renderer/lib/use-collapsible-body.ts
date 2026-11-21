@@ -1,5 +1,5 @@
 import * as React from "react";
-import { prefersReducedMotion } from "./appearance-runtime";
+import { whenAnimationsSettle } from "./use-presence";
 
 /**
  * Keeps a collapsing body laid out until its grid-row transition finishes, and lays out an
@@ -12,7 +12,6 @@ export function useCollapsibleBody(collapsed: boolean, body: React.RefObject<HTM
   React.useLayoutEffect(() => {
     if (collapsed) {
       setOpened(false);
-      if (prefersReducedMotion()) setRendered(false);
       return;
     }
     setRendered(true);
@@ -25,9 +24,12 @@ export function useCollapsibleBody(collapsed: boolean, body: React.RefObject<HTM
     setOpened(true);
   }, [body, collapsed, opened, rendered]);
 
-  const onTransitionEnd = (event: React.TransitionEvent<HTMLDivElement>) => {
-    if (collapsed && event.target === event.currentTarget) setRendered(false);
-  };
+  // Waits on the transition itself rather than `transitionend`, which never fires for a
+  // transition that was cancelled or never started (collapsed within a frame, Reduce Motion).
+  React.useLayoutEffect(() => {
+    if (!collapsed || opened || !rendered) return;
+    return whenAnimationsSettle(body.current, () => setRendered(false));
+  }, [body, collapsed, opened, rendered]);
 
-  return { hidden: !rendered, open: opened && !collapsed, onTransitionEnd };
+  return { hidden: !rendered, open: opened && !collapsed };
 }

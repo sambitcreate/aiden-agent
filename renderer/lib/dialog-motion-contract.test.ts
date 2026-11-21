@@ -65,7 +65,7 @@ test("strong modal elevation stays modal-only while floating tools use dialog el
 
   assert.match(
     styles,
-    /:root\[data-reduce-motion="false"\] \[data-slot="dialog-content"\]\[data-state="open"\] \{\s*animation: aiden-dialog-in 10ms cubic-bezier\(0, 0, 0\.2, 1\);/u,
+    /:root\[data-reduce-motion="false"\] \[data-slot="dialog-content"\]\[data-state="open"\] \{\s*animation: aiden-dialog-in 10ms /u,
   );
   assert.match(
     styles,

@@ -181,11 +181,14 @@ function systemUsesReducedMotion(): boolean {
     && window.matchMedia?.("(prefers-reduced-motion: reduce)").matches === true;
 }
 
-/** True when Aiden's applied Reduce Motion setting or the system asks for reduced motion. */
+/**
+ * Aiden's applied Reduce Motion (`:root[data-reduce-motion]`). The attribute already folds
+ * in the system preference when the setting is System, so an explicit On or Off wins over
+ * the OS. Before the first appearance is applied the system preference stands in.
+ */
 export function prefersReducedMotion(): boolean {
-  return (typeof document !== "undefined"
-    && document.documentElement.dataset.reduceMotion === "true")
-    || systemUsesReducedMotion();
+  const applied = typeof document === "undefined" ? undefined : document.documentElement.dataset.reduceMotion;
+  return applied === undefined ? systemUsesReducedMotion() : applied === "true";
 }
 
 export function effectiveAppearanceScheme(

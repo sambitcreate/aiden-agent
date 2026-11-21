@@ -31,8 +31,15 @@ export const BUILT_IN_KEYS: readonly BuiltInKey[] = [
   {
     id: "rows",
     title: "Move through the sidebar",
-    description: "Chats or Bots; Home and End jump to the first and last.",
+    description: "Chats or Bots; Home and End jump to the first and last. Type a title's first letters to go to it.",
     keys: ["Up", "Down"],
+    section: "Moving around",
+  },
+  {
+    id: "select-rows",
+    title: "Select several chats",
+    description: "In the sidebar, from the focused chat. ⌘-click (Ctrl-click on Linux) adds or removes one, Shift-click selects a run, Esc clears.",
+    keys: ["Shift+Up", "Shift+Down"],
     section: "Moving around",
   },
   {
@@ -71,6 +78,13 @@ export const BUILT_IN_KEYS: readonly BuiltInKey[] = [
     section: "In a chat",
   },
   {
+    id: "mention",
+    title: "Mention a workspace file",
+    description: "Type @ in the message box; Return or Tab adds it as a chip, Backspace at the start removes the last one.",
+    keys: ["@"],
+    section: "In a chat",
+  },
+  {
     id: "edit-last",
     title: "Fix and resend your last message",
     description: "In an empty message box after a finished reply; pauses during dictation.",
@@ -104,6 +118,13 @@ export const BUILT_IN_KEYS: readonly BuiltInKey[] = [
     title: "Deny",
     description: "Turn down the waiting approval, under the same conditions as Allow once.",
     keys: ["Command+Backspace"],
+    section: "In a chat",
+  },
+  {
+    id: "model-row-actions",
+    title: "Pin / add to Pad",
+    description: "On the highlighted model in the model picker's List; pressed again, unpins it or takes it off the Pad.",
+    keys: ["Command+Shift+P", "Command+Shift+A"],
     section: "In a chat",
   },
   {
@@ -181,7 +202,7 @@ export const BUILT_IN_KEYS: readonly BuiltInKey[] = [
   {
     id: "canvas-side-panel",
     title: "Show / hide the side panel",
-    description: "Properties, Layers and Code. In Layers, Option+Up and Option+Down reorder; F2 renames.",
+    description: "Properties, Layers and Code. In Layers, Option+Up and Option+Down reorder, or Space on a row's grip picks it up; F2 renames.",
     keys: ["I"],
     section: "Design canvas",
     requiresCapability: "designMode",

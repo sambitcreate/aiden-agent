@@ -36,7 +36,7 @@ import {
 } from "./environment-overview";
 import { ContextBreakdown, contextApproaching } from "./context-breakdown";
 import { ContextPips, contextPercentLabel } from "./context-tiles";
-import { QuickViewMoveStatus, QuickViewSection, type QuickViewSectionProps } from "./quick-view-section";
+import { QuickViewSection, type QuickViewSectionProps } from "./quick-view-section";
 import { subagentRunTranscriptTarget } from "./subagent-chips";
 import { SubagentStatusGroups } from "./subagent-status-groups";
 import {
@@ -116,6 +116,9 @@ import {
 } from "../lib/device-tabs";
 import { deviceWorkspace, useFloatingDevice } from "../lib/device-workspace-store";
 import { prefersReducedMotion } from "../lib/appearance-runtime";
+import { usePresence } from "../lib/use-presence";
+import { useLayer } from "../lib/layer-stack";
+import { arrangeByDraft, ReorderAnnouncer, reorderMessage, useReorderDraft } from "../lib/reorder-draft";
 import {
   DeviceTabContextMenu,
   DeviceTabRenameInput,
@@ -260,7 +263,6 @@ const SURFACE_STORAGE_VERSION_KEY = "aiden-agent.environment.surface-state-versi
 const TAB_STORAGE_KEY = "aiden-agent.environment.tab";
 const LAST_TOOLS_TAB_STORAGE_KEY = "aiden-agent.environment.last-tools-tab";
 const WIDTH_STORAGE_KEY = "aiden-agent.environment.width";
-const SUMMARY_CARD_EXIT_MS = 120;
 const EMPTY_EDITOR_STATE: FilesEditorState = {
   workspaceId: undefined,
   path: null,
@@ -1663,8 +1665,6 @@ const QUICK_VIEW_SECTION_TITLES: Record<QuickViewSectionId, string> = {
 
 /** Gap between Quick View cards (`gap-2`), added to the dragged card's height when siblings shift. */
 const QUICK_VIEW_CARD_GAP_PX = 8;
-/** Keeps a collapsing body's content until its row transition (`--motion-duration`) has run. */
-const QUICK_VIEW_BODY_UNMOUNT_MS = 300;
 
 function readQuickViewLayout(): QuickViewLayout {
   try {
@@ -1680,24 +1680,6 @@ function writeQuickViewLayout(layout: QuickViewLayout): void {
   } catch {
     // Storage can be unavailable; the layout still applies for this session.
   }
-}
-
-/** True while `open`, and for a moment after it closes so a collapsing body keeps its content. */
-function useMountedWhileOpen(open: boolean): boolean {
-  const [mounted, setMounted] = React.useState(open);
-  React.useEffect(() => {
-    if (open) {
-      setMounted(true);
-      return;
-    }
-    if (prefersReducedMotion()) {
-      setMounted(false);
-      return;
-    }
-    const timeout = window.setTimeout(() => setMounted(false), QUICK_VIEW_BODY_UNMOUNT_MS);
-    return () => window.clearTimeout(timeout);
-  }, [open]);
-  return open || mounted;
 }
 
 function ContextSummaryMeter({
@@ -1723,6 +1705,11 @@ interface QuickViewDragPreview {
   offset: number;
 }
 
+/** A Quick View card's reorder grip. */
+function gripOf(id: QuickViewSectionId): HTMLElement | null {
+  return document.querySelector<HTMLElement>(`[data-quick-view-section="${id}"] [aria-label^="Move "]`);
+}
+
 /**
  * Quick View's cards for a workspace with a readable folder. Environment always shows; the
  * others appear once they have something to say, and every card starts collapsed.
@@ -1732,7 +1719,6 @@ export function QuickViewCards({ workspace, live }: { workspace: Workspace; live
   const chatId = panel.activeChat.chatId ?? undefined;
   const [layout, setLayout] = React.useState(readQuickViewLayout);
   const [dragPreview, setDragPreview] = React.useState<QuickViewDragPreview | null>(null);
-  const [announcement, setAnnouncement] = React.useState("");
   const [changesDialogOpen, setChangesDialogOpen] = React.useState(false);
   const [entering, setEntering] = React.useState<ReadonlySet<QuickViewSectionId>>(() => new Set());
   const [changesWasShown, setChangesWasShown] = React.useState(false);
@@ -1747,7 +1733,6 @@ export function QuickViewCards({ workspace, live }: { workspace: Workspace; live
   const pressure = panel.contextDetails?.pressure ?? null;
   const compacting = Boolean(panel.contextDetails?.compacting);
   const subagentSummary = subagentOverviewSummary(panel.subagentViews);
-  const subagentsBodyMounted = useMountedWhileOpen(Boolean(layout.expanded.subagents));
 
   const visible = quickViewVisibleSections(layout.order, {
     changesVisible,
@@ -1785,9 +1770,7 @@ export function QuickViewCards({ workspace, live }: { workspace: Workspace; live
     const id = focusGripRef.current;
     if (!id) return;
     focusGripRef.current = null;
-    document
-      .querySelector<HTMLElement>(`[data-quick-view-section="${id}"] [aria-label^="Move "]`)
-      ?.focus();
+    gripOf(id)?.focus();
   }, [layout.order]);
 
   const commitLayout = (next: QuickViewLayout) => {
@@ -1795,13 +1778,23 @@ export function QuickViewCards({ workspace, live }: { workspace: Workspace; live
     writeQuickViewLayout(next);
   };
 
+  const reorder = useReorderDraft({
+    groupOf: () => visible,
+    label: (id) => QUICK_VIEW_SECTION_TITLES[id as QuickViewSectionId],
+    handle: (id) => gripOf(id as QuickViewSectionId),
+    onCommit: (order, id) =>
+      commitLayout(moveSection(layout, id as QuickViewSectionId, order.indexOf(id), visible)),
+  });
+  const shown = arrangeByDraft(visible, (id) => id, reorder.draft);
+
+  /** A pointer drag dropped a card. */
   const onMove = (id: QuickViewSectionId, toIndex: number) => {
     const card = cardRefs.current.get(id);
     // Reordering moves the card's DOM node, which drops focus; put it back on the grip.
     if (card?.contains(document.activeElement)) focusGripRef.current = id;
     commitLayout(moveSection(layout, id, toIndex, visible));
     const position = Math.max(0, Math.min(visible.length - 1, toIndex)) + 1;
-    setAnnouncement(`${QUICK_VIEW_SECTION_TITLES[id]} moved to position ${position} of ${visible.length}`);
+    reorder.setAnnouncement(reorderMessage("drop", QUICK_VIEW_SECTION_TITLES[id], position, visible.length));
   };
 
   const onDragPreview = (id: QuickViewSectionId, to: number | null) => {
@@ -1831,7 +1824,7 @@ export function QuickViewCards({ workspace, live }: { workspace: Workspace; live
   const toolsBlocked = panel.gitOperationBusy;
   const sections: Record<
     QuickViewSectionId,
-    Pick<QuickViewSectionProps, "summary" | "summaryLabel" | "headerAction" | "children">
+    Pick<QuickViewSectionProps, "summary" | "summaryLabel" | "headerAction" | "bodyWhileOpen" | "children">
   > = {
     environment: {
       summary: environmentSummary?.node,
@@ -1892,7 +1885,8 @@ export function QuickViewCards({ workspace, live }: { workspace: Workspace; live
         disabled: toolsBlocked,
       },
       // The run list ticks elapsed time, so it only exists while the card is open.
-      children: subagentsBodyMounted ? (
+      bodyWhileOpen: true,
+      children: (
         <SubagentStatusGroups
           runs={panel.subagentViews}
           stopPendingRunIds={panel.subagentStopPendingRunIds}
@@ -1900,13 +1894,13 @@ export function QuickViewCards({ workspace, live }: { workspace: Workspace; live
           onOpen={panel.openSubagent}
           onStop={panel.stopSubagent}
         />
-      ) : null,
+      ),
     },
   };
 
   return (
     <>
-      {visible.map((id, index) => {
+      {shown.map((id, index) => {
         const shift = siblingShift(index);
         return (
           <div
@@ -1937,8 +1931,8 @@ export function QuickViewCards({ workspace, live }: { workspace: Workspace; live
               collapsed={!layout.expanded[id]}
               onToggle={() => commitLayout(toggleSectionExpanded(layout, id))}
               index={index}
-              count={visible.length}
               onMove={onMove}
+              gripProps={reorder.handleProps(id)}
               measureSiblings={measureSiblings}
               onDragPreview={onDragPreview}
               {...sections[id]}
@@ -1946,7 +1940,7 @@ export function QuickViewCards({ workspace, live }: { workspace: Workspace; live
           </div>
         );
       })}
-      <QuickViewMoveStatus message={announcement} />
+      <ReorderAnnouncer message={reorder.announcement} />
     </>
   );
 }
@@ -1966,23 +1960,9 @@ function QuickViewCard({
   const panel = useEnvironmentPanel();
   const { active } = useActiveWorkspace();
   const open = panel.quickViewOpen;
-  const [present, setPresent] = React.useState(open);
   const stackRef = React.useRef<HTMLElement | null>(null);
+  const { rendered: present } = usePresence(open, stackRef);
   const available = Boolean(active?.folderPath) && active?.permission !== "none";
-
-  React.useLayoutEffect(() => {
-    if (open) {
-      setPresent(true);
-      return;
-    }
-    if (!present) return;
-    if (prefersReducedMotion()) {
-      setPresent(false);
-      return;
-    }
-    const timeout = window.setTimeout(() => setPresent(false), SUMMARY_CARD_EXIT_MS);
-    return () => window.clearTimeout(timeout);
-  }, [open, present]);
 
   React.useLayoutEffect(() => {
     if (open && present && presented && panel.frontSurface === "quick-view") {
@@ -2220,12 +2200,9 @@ export function EnvironmentWorkbench({
     return () => observer.disconnect();
   }, []);
 
-  React.useEffect(() => {
-    if (!toolsOpen && !quickViewOpen) return;
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.defaultPrevented || event.key !== "Escape") return;
-      if (document.querySelector('[data-slot="dialog-content"][data-state="open"]')) return;
-      if (document.querySelector('[data-compact-sidebar-open="true"]')) return;
+  // A dialog, menu or the compact sidebar above the panel takes Escape first.
+  useLayer(toolsOpen || quickViewOpen, "panel", {
+    onEscape: (event) => {
       if (panel.gitOperationBusy) return;
       const activeElement = document.activeElement;
       const focusedSurface =
@@ -2239,17 +2216,8 @@ export function EnvironmentWorkbench({
       event.preventDefault();
       if (focusedSurface === "quick-view") panel.closeQuickView();
       else panel.closeTools();
-    };
-    document.addEventListener("keydown", onKeyDown);
-    return () => document.removeEventListener("keydown", onKeyDown);
-  }, [
-    panel.closeQuickView,
-    panel.closeTools,
-    panel.frontSurface,
-    panel.gitOperationBusy,
-    quickViewOpen,
-    toolsOpen,
-  ]);
+    },
+  });
 
   const reportSurfaceLayout = panel.reportSurfaceLayout;
   React.useLayoutEffect(() => {

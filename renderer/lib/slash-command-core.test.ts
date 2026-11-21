@@ -17,7 +17,6 @@ import {
   successfulSendAttachmentRemainder,
   slashActionCommitIsCurrent,
   slashActionDraftCommitIsCurrent,
-  slashPalettePresenceState,
   slashTabAcceptsSelection,
   updateSlashSessionTracker,
 } from "./slash-command-core.js";
@@ -386,45 +385,6 @@ test("Tab never accepts a slash option while its action is pending", () => {
   assert.equal(slashTabAcceptsSelection(1, false), true);
   assert.equal(slashTabAcceptsSelection(1, true), false);
   assert.equal(slashTabAcceptsSelection(2, false), false);
-});
-
-test("palette presence closes synchronously and reopens visibly", () => {
-  assert.equal(
-    slashPalettePresenceState({
-      present: false,
-      retained: true,
-      immediate: true,
-      reduceMotion: false,
-    }),
-    "hidden",
-  );
-  assert.equal(
-    slashPalettePresenceState({
-      present: false,
-      retained: true,
-      immediate: false,
-      reduceMotion: true,
-    }),
-    "hidden",
-  );
-  assert.equal(
-    slashPalettePresenceState({
-      present: false,
-      retained: true,
-      immediate: false,
-      reduceMotion: false,
-    }),
-    "exiting",
-  );
-  assert.equal(
-    slashPalettePresenceState({
-      present: true,
-      retained: true,
-      immediate: false,
-      reduceMotion: false,
-    }),
-    "visible",
-  );
 });
 
 test("a sent draft runs an argument command by name or alias and leaves other text alone", () => {

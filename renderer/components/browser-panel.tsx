@@ -12,6 +12,7 @@ import { BrowserAnnotationEditor } from "./browser-annotation-editor";
 import { captureBrowserAnnotation } from "../lib/browser-annotation-capture";
 import { BROWSER_ANNOTATION_UNAVAILABLE, browserAnnotationDelivery } from "../lib/browser-annotation-delivery";
 import { BrowserAnnotationPreviewQueue } from "../lib/browser-annotation-preview-queue";
+import { isEscapeKey } from "../lib/dismiss-key";
 
 /* Browser is an extension of the Environment work surface. Compact tab and
  * navigation rows follow the supplied reference; page content owns the area.
@@ -323,7 +324,7 @@ export function BrowserPanel({ workspaceId, active, onDock, integratedTabs = fal
         <Button variant="transparent" size="small" iconOnly aria-label={tab?.loading ? "Stop loading" : "Reload"} disabled={!tab?.url} onClick={() => tab && void run({ action: tab.loading ? "stop" : "reload", tabId: tab.id })}>{tab?.loading ? <Square /> : <RotateCw />}</Button>
       </div>
       <form className="browser-address-form" onSubmit={(event) => { event.preventDefault(); submitAddress(address); }}>
-        <Input ref={addressRef} aria-label="Search or enter URL" placeholder="Search or enter URL" spellCheck={false} autoComplete="off" value={addressFocused ? address : tab?.url === "about:blank" ? "" : tab?.url ?? ""} onChange={(event) => setAddress(event.target.value)} onFocus={() => { setAddress(tab?.url === "about:blank" ? "" : tab?.url ?? ""); setAddressFocused(true); queueMicrotask(() => addressRef.current?.select()); }} onBlur={() => setAddressFocused(false)} onKeyDown={(event) => { if (event.key === "Escape") { event.stopPropagation(); setAddressFocused(false); event.currentTarget.blur(); } }} />
+        <Input ref={addressRef} aria-label="Search or enter URL" placeholder="Search or enter URL" spellCheck={false} autoComplete="off" value={addressFocused ? address : tab?.url === "about:blank" ? "" : tab?.url ?? ""} onChange={(event) => setAddress(event.target.value)} onFocus={() => { setAddress(tab?.url === "about:blank" ? "" : tab?.url ?? ""); setAddressFocused(true); queueMicrotask(() => addressRef.current?.select()); }} onBlur={() => setAddressFocused(false)} onKeyDown={(event) => { if (isEscapeKey(event)) { event.stopPropagation(); setAddressFocused(false); event.currentTarget.blur(); } }} />
       </form>
       {bot ? null : <Button ref={annotateButtonRef} variant={pickerActive || annotation ? "muted" : "transparent"} size="small" iconOnly aria-label={pickerActive || annotation ? "Cancel annotation" : "Annotate"} aria-pressed={pickerActive || Boolean(annotation)} aria-keyshortcuts="Meta+." title="Annotate ⌘." disabled={!ready} onClick={() => void annotate()}><MessageCirclePlus /></Button>}
       {integratedTabs && tab && (tab.audible || tab.muted) ? <Button variant="transparent" size="small" iconOnly aria-label={tab.muted ? "Unmute tab" : "Mute tab"} onClick={() => void run({ action: "mute", tabId: tab.id, muted: !tab.muted })}>{tab.muted ? <VolumeX /> : <Volume2 />}</Button> : null}

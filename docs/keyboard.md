@@ -39,14 +39,29 @@ one starts unassigned.
 | `F6` / `⇧F6` | Move to the next / previous area: sidebar, conversation, message box, side panel |
 | `↑` `↓` | Move between chats or Bots in the sidebar |
 | `Home` / `End` | First / last row in the sidebar |
-| `←` / `→` | In the sidebar, close / open a project folder; `←` on a chat goes to its folder |
+| `←` / `→` | In the sidebar, close / open a project folder; `←` on a chat goes to its folder (swapped in a right-to-left layout) |
+| Letters | In the sidebar, go to the next row whose title starts with what you type |
+| `⇧↑` / `⇧↓` | Select a run of chats in the sidebar from the focused one; `Esc` clears the selection |
+| `←` `→` / `↑` `↓` | On a focused divider (the sidebar's, the Environment or Bot panel's, the design chat's, the terminal drawer's), move it 16 px; with `⇧`, 40 px (left and right swap in a right-to-left layout) |
+| `Home` / `End` | On a focused divider, make the panel as small / as large as it goes |
+| `↩` | On a focused divider, hide the sidebar or close the Environment panel, Bot panel or terminal |
 
 `F6` lands on the sidebar's open chat, on the conversation itself (scroll it
 with the arrow keys, Page Up and Page Down), in the message box, or on the
 side panel's selected tab. Areas that are hidden or closed are skipped, and
 `F6` does nothing while a menu or dialog is open. The sidebar list is a
 single `Tab` stop: `Tab` reaches the open chat (and its `•••`), then leaves the
-list. ⌘K also has **Focus sidebar**, **Focus conversation** and **Focus side
+list. Typed letters search the list only once you are moving through it with
+the keyboard (`Tab`, the arrow keys); after a click on a chat, typing goes to
+the message box as before. When the focused row is deleted, focus moves to the
+row that took its place, or the one before it when it was last.
+
+To work on several chats at once, `⌘`-click them (Ctrl-click on Linux),
+Shift-click to select a run, or use `⇧↑` / `⇧↓`. With two or more selected, a
+bar under the list shows the count and **Delete**, which asks once for all of
+them. A plain click or `↩` still opens a chat (and clears the selection).
+Selection is for this computer's chats in the Workspaces and Recent views; the Inbox
+keeps its own triage actions. ⌘K also has **Focus sidebar**, **Focus conversation** and **Focus side
 panel**, which can be given their own keys in Settings.
 
 Saved shortcuts take priority over the built-in focus keys (`⇧F6` and
@@ -74,6 +89,8 @@ work while Aiden is in the background.
 | `⌘↩` | Allow once, while an approval is waiting and the message box is empty |
 | `⌘⌫` | Deny, under the same conditions |
 | `/` | Slash commands in the message box |
+| `@` | Mention a file or folder of the chat's workspace: `↑` / `↓` choose, `↩` or `⇥` adds it as a chip, `Esc` closes; `⌫` at the start of the text removes the last chip |
+| `⇧⌘P` / `⇧⌘A` | In the model picker's List, pin the highlighted model or add it to your Pad (again to undo). The row's pin and Pad icons do the same with the mouse |
 | `⇧⌘L` | Design mode on / off for this chat (`/design` and `/design off` do the same; gone while `AIDEN_DESIGN_MODE=0` turns design mode off). `Esc` never leaves design mode |
 
 On the design canvas (with the canvas focused, not a note or an entered
@@ -86,7 +103,9 @@ element's parent; in the comment box `↩` saves and `Esc` closes; `Esc` again
 leaves the tool), `F2` renames the selected frame (as does a double-click on
 its title; `↩` keeps the name, `Esc` cancels), `M` shows the minimap and
 `I` shows or hides the side panel (in its Layers list, `F2` renames a row and
-`⌥↑` / `⌥↓` bring the item forward or send it back).
+`⌥↑` / `⌥↓` bring the item forward or send it back; on a row's grip, `Space`
+picks the item up, `↑` / `↓`, `Home` and `End` move it, `Space` or `↩` drops
+it and `Esc` puts it back).
 The drawing tools: `T` text, `F` an artboard, `R` a rectangle, `O` an oval,
 `L` a line, `⇧L` an arrow, `P` the pencil and `⇧P` the pen (hold `⇧` while
 dragging for a square box or a 45° line; `↩`, `Esc` or a double-click
@@ -127,6 +146,10 @@ approval appears, screen readers announce it.
 During an Aiden Live session the open chat's approval can also be answered by
 voice: say allow or deny (Settings → Voice & Speech → Aiden Live → Answer approvals by voice).
 Voice allow is allow once, the same as `⌘↩`.
+
+In Quick View, a card's grip (**Move** at its right edge) reorders it:
+`Space` or `↩` picks the card up, `↑` / `↓`, `Home` and `End` move it, `Space`
+or `↩` drops it where it is, and `Esc` (or moving focus away) puts it back.
 
 In the Browser panel, `⌘.` starts page markup instead of stopping the reply,
 but only while focus is inside the browser.
