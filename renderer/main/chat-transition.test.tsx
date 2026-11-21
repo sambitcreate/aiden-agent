@@ -11,8 +11,13 @@ import test from "node:test";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { Outlet, RouterProvider } from "@tanstack/react-router";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { installAppendedChatSnapshot, queryKeys } from "../lib/queries.js";
-import type { Chat } from "../lib/types.js";
+import {
+  installAppendedChatSnapshot,
+  markChatRecentlyPromoted,
+  queryKeys,
+  upsertCreatedWorkspaceInCache,
+} from "../lib/queries.js";
+import type { Chat, Workspace } from "../lib/types.js";
 import { WorkspaceProvider } from "../lib/workspace-context";
 import { WorkspaceTerminalProvider } from "../components/terminal-drawer";
 import { EnvironmentPanelProvider } from "../components/environment-panel";
@@ -529,13 +534,13 @@ test("session navigation seeds caches, respects route intent, and restores desti
     "const createGitWorktree = React.useCallback(",
     "React.useEffect(() => {\n    environmentPanel.setCreateWorktreeHandler",
   );
-  assert.match(worktree, /setQueryData<Workspace\[\]>/u);
+  assert.match(worktree, /upsertCreatedWorkspaceInCache\(qc, workspace\)/u);
   assert.match(worktree, /chatIdRef\.current !== sourceChatId/u);
   assert.match(worktree, /The worktree was created, but Aiden could not open its new chat/u);
   assert.match(worktree, /createChatDraft\(workspace.id\)/u);
   assert.doesNotMatch(worktree, /chatsApi\.create\(/u);
   assert.match(worktree, /await navigate/u);
-  assert.match(worktree, /requestAnimationFrame\(\(\) => composerRef\.current\?\.focus/u);
+  assert.match(worktree, /requestChatDraftComposerFocus\(created\.id\)/u);
 });
 
 test("a committed append is not presented as unsent when generation start later fails", () => {
@@ -997,6 +1002,100 @@ test("a dismissed recovered question stays gone when the chat opens again", asyn
     cleanup();
     queryClient.clear();
   }
+});
+
+test("a recently promoted draft skips its immediate mount chats:get while leaving and revisiting still re-reads", async () => {
+  const reads: string[] = [];
+  const handlers = {
+    "chats:get": (id: unknown) => {
+      reads.push(String(id));
+      return chatReadResponse(String(id));
+    },
+  };
+  const promotedId = "chat-promoted";
+  const seeded = chatReadResponse(promotedId);
+  const { queryClient, router } = await mountRoutedChatPane("chat-other", handlers);
+  try {
+    reads.length = 0;
+    await installAppendedChatSnapshot(queryClient, promotedId, seeded.chat as Chat);
+    markChatRecentlyPromoted(promotedId);
+    await act(async () => {
+      await router.navigate({ to: "/chat/$chatId", params: { chatId: promotedId } });
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    });
+    assert.deepEqual(
+      reads,
+      [],
+      "Immediate activation after draft promotion reuses the seeded snapshot without a redundant chats:get",
+    );
+    assert.equal(screen.getByRole("heading", { level: 1 }).textContent, `Chat ${promotedId}`);
+
+    // Navigating away clears the one-shot marker, so revisiting re-reads live state.
+    await act(async () => {
+      await router.navigate({ to: "/chat/$chatId", params: { chatId: "chat-other" } });
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    });
+    reads.length = 0;
+    await act(async () => {
+      await router.navigate({ to: "/chat/$chatId", params: { chatId: promotedId } });
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    });
+    assert.deepEqual(reads, [promotedId], "Revisiting the chat after leaving re-reads chats:get");
+  } finally {
+    cleanup();
+    queryClient.clear();
+  }
+});
+
+test("upsertCreatedWorkspaceInCache patches hydrated idle lists and falls back to invalidation when unhydrated or fetching", async () => {
+  const existing: Workspace = {
+    id: "ws-existing",
+    name: "Existing",
+    folderPath: "/projects/existing",
+    permission: "ask",
+    createdAt: 1,
+    updatedAt: 1,
+  };
+  const created: Workspace = {
+    id: "ws-worktree",
+    name: "Existing · aiden/fast",
+    folderPath: "/tmp/wt",
+    permission: "ask",
+    createdAt: 2,
+    updatedAt: 2,
+  };
+
+  // 1. Hydrated & idle: patches in-place without invalidating.
+  const qc1 = new QueryClient();
+  qc1.setQueryData<Workspace[]>(queryKeys.workspaces, [existing]);
+  upsertCreatedWorkspaceInCache(qc1, created);
+  assert.deepEqual(
+    qc1.getQueryData<Workspace[]>(queryKeys.workspaces)?.map((w) => w.id),
+    ["ws-worktree", "ws-existing"],
+  );
+  assert.equal(qc1.getQueryState(queryKeys.workspaces)?.isInvalidated, false);
+  qc1.clear();
+
+  // 2. Unhydrated cache: does NOT overwrite with a 1-element list; invalidates instead.
+  const qc2 = new QueryClient();
+  upsertCreatedWorkspaceInCache(qc2, created);
+  assert.equal(qc2.getQueryData(queryKeys.workspaces), undefined);
+  qc2.clear();
+
+  // 3. In-flight workspaces:list fetch: invalidates instead of racing with stale read.
+  const qc3 = new QueryClient();
+  qc3.setQueryData<Workspace[]>(queryKeys.workspaces, [existing]);
+  let resolveFetch!: (list: Workspace[]) => void;
+  const inflight = qc3.fetchQuery({
+    queryKey: queryKeys.workspaces,
+    queryFn: () => new Promise<Workspace[]>((resolve) => { resolveFetch = resolve; }),
+  });
+  await Promise.resolve();
+  upsertCreatedWorkspaceInCache(qc3, created);
+  assert.equal(qc3.getQueryState(queryKeys.workspaces)?.isInvalidated, true);
+  resolveFetch([existing, created]);
+  await inflight;
+  qc3.clear();
 });
 
 test("a send waiting on its folder check sends nothing once the person moves to another chat", async () => {

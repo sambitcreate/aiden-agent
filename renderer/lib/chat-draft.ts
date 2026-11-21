@@ -41,13 +41,17 @@ export interface ChatDraft {
 function rememberedGitState(
   workspaceId: string,
   gitMode?: ChatDraftGitMode,
+  fallbackWorktree?: ChatDraftWorktree,
 ): Pick<ChatDraft, "gitMode" | "worktree"> {
   const memory = readChatDraftGitMemory(workspaceId);
+  const worktree =
+    fallbackWorktree ??
+    (memory.baseRef
+      ? { baseRef: memory.baseRef, fromOrigin: memory.fromOrigin ?? false }
+      : undefined);
   return {
     gitMode: gitMode ?? memory.gitMode,
-    ...(memory.baseRef
-      ? { worktree: { baseRef: memory.baseRef, fromOrigin: memory.fromOrigin ?? false } }
-      : {}),
+    ...(worktree ? { worktree } : {}),
   };
 }
 
@@ -86,7 +90,7 @@ export function createChatDraft(
   workspaceId: string,
   id: string = newChatUuid(() => crypto.randomUUID()),
   initialText?: string,
-  options: { gitMode?: ChatDraftGitMode } = {},
+  options: { gitMode?: ChatDraftGitMode; worktree?: ChatDraftWorktree } = {},
 ): ChatDraft {
   if (drafts.has(id)) throw new Error("This draft already exists.");
   closedEmptyDrafts.delete(id);
@@ -106,7 +110,7 @@ export function createChatDraft(
     sending: false,
     hasContent: Boolean(initialText?.trim()),
     ...(initialText ? { initialText } : {}),
-    ...rememberedGitState(workspaceId, options.gitMode),
+    ...rememberedGitState(workspaceId, options.gitMode, options.worktree),
   };
   drafts.set(id, draft);
   notify();

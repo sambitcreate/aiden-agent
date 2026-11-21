@@ -16,8 +16,10 @@ import {
   type ContinuedWorktreeTurn,
   type WorktreeSendView,
 } from "./draft-worktree-send";
-import type { Chat } from "./types";
+import type { Chat, Workspace } from "./types";
 import type { FirstMessageWorktreeRequest } from "../shared/worktree-on-send";
+import { createChatDraft, discardChatDraft } from "./chat-draft";
+import { seedDraftWorktreeFromGitInfo } from "./chat-draft-git-memory";
 
 // The draft's first send through the real `chatsApi` wrappers over a fake
 // main process: what is sent on each attempt, and what the user sees.
@@ -396,4 +398,63 @@ test("a /visualize turn continued from another view still asks for a visual", ()
     received.map((turn) => [turn.turnId, turn.visualize]),
     [["turn-v", true], ["turn-plain", false]],
   );
+});
+
+test("a successful worktree send forwards the created workspace record inline", async () => {
+  const workspace: Workspace = {
+    id: "ws-worktree",
+    name: "repo · aiden/fix-the-login-bug",
+    folderPath: "/tmp/wt",
+    permission: "ask",
+    createdAt: 10,
+    updatedAt: 10,
+  };
+  replies.push({ ok: true, chat: savedChat("ws-worktree"), worktree: WORKTREE_INFO, workspace });
+  const send = start([]);
+  const outcome = await send.result;
+  assert.deepEqual(outcome.workspace, workspace);
+  send.release();
+});
+
+test("seedDraftWorktreeFromGitInfo seeds baseRef on frame 0 and respects unborn/detached/remote flags", () => {
+  assert.deepEqual(
+    seedDraftWorktreeFromGitInfo(
+      { gitMode: "checkout" },
+      { isRepo: true, branch: "feature", defaultBranch: "main", hasRemote: true },
+    ),
+    { baseRef: "main", fromOrigin: true },
+  );
+  assert.deepEqual(
+    seedDraftWorktreeFromGitInfo(
+      { gitMode: "worktree", fromOrigin: false },
+      { isRepo: true, branch: "feature", hasRemote: true },
+    ),
+    { baseRef: "feature", fromOrigin: false },
+  );
+  assert.deepEqual(
+    seedDraftWorktreeFromGitInfo(
+      { gitMode: "checkout" },
+      { isRepo: true, branch: "main", hasRemote: false },
+    ),
+    { baseRef: "main", fromOrigin: false },
+  );
+  assert.equal(
+    seedDraftWorktreeFromGitInfo({ gitMode: "checkout" }, { isRepo: true, unborn: true, branch: "main" }),
+    undefined,
+  );
+  assert.equal(
+    seedDraftWorktreeFromGitInfo({ gitMode: "checkout" }, { isRepo: true, detached: true, branch: "HEAD" }),
+    undefined,
+  );
+
+  const seededDraft = createChatDraft("ws-seed-test", undefined, undefined, {
+    gitMode: "worktree",
+    worktree: { baseRef: "main", fromOrigin: true },
+  });
+  try {
+    assert.equal(seededDraft.gitMode, "worktree");
+    assert.deepEqual(seededDraft.worktree, { baseRef: "main", fromOrigin: true });
+  } finally {
+    discardChatDraft(seededDraft.chat.id);
+  }
 });

@@ -11,6 +11,8 @@ import { latestWorkDetailsStart } from "../lib/work-details";
 import type { WorkDetailsMode } from "../shared/appearance";
 import { EventPresence } from "./event-presence";
 import { SafeMessageBubble } from "./message-bubble";
+import { DraftWorktreeSendStatus } from "./draft-worktree-send-view";
+import type { ActiveWorktreeSend } from "../lib/draft-worktree-send";
 import { AgentNoticeCard } from "./agent-notice-card";
 import type { ReadAloudActionProps } from "./read-aloud-button";
 import { ForkDisabledReasonContext, MessageForkContextMenu, type MessageForkAction } from "./fork-message-button";
@@ -153,6 +155,12 @@ interface MessageListProps {
    * in a fork is refused (a paired Mac's chat): that prompt offers no fork.
    */
   forkBeforeFirstPrompt?: boolean;
+  /**
+   * Active first-message worktree creation state for an unsent draft. Rendered
+   * inside the same transcript container so promotion to persisted messages
+   * avoids unmounting and remounting the transcript and first user bubble.
+   */
+  draftWorktreeSend?: ActiveWorktreeSend;
 }
 
 interface AssistantResponseProps {
@@ -516,6 +524,12 @@ interface SettledMessageRowProps {
   renderSettledUiVisual?: (visual: ChatUiVisualV1, message: ChatMessage) => React.ReactNode;
   /** False for a chat stored on a paired host: Save and Copy read this Mac's chats. */
   storedImageActions?: boolean;
+  /**
+   * Keep `<MessageForkContextMenu>` mounted even before `onFork` is enabled,
+   * so a draft prompt row settles into `messages[0]` without remounting its
+   * bubble and attachments.
+   */
+  keepForkWrapper?: boolean;
 }
 
 /**
@@ -541,6 +555,7 @@ const SettledMessageRow = React.memo(function SettledMessageRow({
   uiVisuals,
   renderSettledUiVisual,
   storedImageActions = true,
+  keepForkWrapper = false,
 }: SettledMessageRowProps) {
   const placements = message?.htmlArtifactPlacements;
   const visualPlacements = React.useMemo(
@@ -646,8 +661,9 @@ const SettledMessageRow = React.memo(function SettledMessageRow({
       )}
     </div>
   );
-  // A reply keeps its wrapper before it can fork, so settling does not remount it.
-  if (!fork && !assistant) return row;
+  // A reply (and a pending draft prompt that will settle with fork enabled)
+  // keeps its wrapper before it can fork, so settling does not remount it.
+  if (!fork && !assistant && !keepForkWrapper) return row;
   return (
     <MessageForkContextMenu action={fork} kind={assistant ? "fork" : "edit"}>
       {row}
@@ -838,6 +854,7 @@ export function MessageList({
   forkSummary,
   forkBeforeFirstPrompt = true,
   storedImageActions = true,
+  draftWorktreeSend,
 }: MessageListProps) {
   const workDetails = useAppearancePreference("workDetails");
   const collapseTiming = useAppearancePreference("workDetailsCollapseTiming");
@@ -863,6 +880,7 @@ export function MessageList({
   const settledReplyKeysRef = React.useRef<ReadonlySet<string>>(new Set());
   const liveKeyRef = React.useRef<{ base: string; key: string } | null>(null);
   const handedOffKeysRef = React.useRef(new Map<string, string>());
+  const draftPromptKeyActiveRef = React.useRef(false);
   const liveRunRef = React.useRef<{ promptId: string; handoffId: string | null } | null>(null);
   const chipFocusCaptureRef = React.useRef<SubagentChipFocusCapture | null>(null);
   const persistedAttachmentIds = React.useMemo(() => {
@@ -1086,6 +1104,19 @@ export function MessageList({
     : undefined;
   const promptMessageForLiveRow =
     startedFrom ?? (settlingIndex >= 0 ? messages[settlingIndex - 1] : messages[messages.length - 1]);
+  const showDraftWorktreeSend =
+    messages.length === 0 && streamingText === null && Boolean(draftWorktreeSend);
+  if (showDraftWorktreeSend) {
+    draftPromptKeyActiveRef.current = true;
+  } else if (draftPromptKeyActiveRef.current && messages.length > 0 && messages[0]?.role === "user") {
+    // Hand the draft prompt's key to the persisted first user message so the
+    // transcript settles in place without remounting the user's bubble.
+    handedOffKeysRef.current.set(messages[0].id, "draft-prompt");
+    draftPromptKeyActiveRef.current = false;
+  } else if (!draftWorktreeSend) {
+    draftPromptKeyActiveRef.current = false;
+  }
+
   // Every saved row's key is settled before the live row picks its own, so the
   // two never collide in one render.
   const settledRowKeys = new Map<string, string>();
@@ -1163,6 +1194,32 @@ export function MessageList({
     />
   ) : null;
 
+  if (showDraftWorktreeSend && draftWorktreeSend) {
+    const pendingMessage: ChatMessage = {
+      id: "draft-prompt",
+      role: "user",
+      content: draftWorktreeSend.text,
+      attachments: draftWorktreeSend.attachments.length > 0 ? [...draftWorktreeSend.attachments] : undefined,
+      ...(draftWorktreeSend.inputSource ? { inputSource: draftWorktreeSend.inputSource } : {}),
+      createdAt: 0,
+    };
+    transcriptRows.push(
+      <SettledMessageRow
+        key="draft-prompt"
+        imageScope={`${chatId}:draft-prompt`}
+        workDetails={workDetails}
+        retainWorkDetails={false}
+        chatId={chatId}
+        deferOffscreenLayout={false}
+        message={pendingMessage}
+        subagentsEnabled={false}
+        onOpenSubagent={onOpenSubagent}
+        storedImageActions={storedImageActions}
+        keepForkWrapper={forkEnabled && forkBeforeFirstPrompt}
+      />,
+    );
+  }
+
   for (const [messageIndex, message] of messages.entries()) {
     if (message.id === settlingMessageId) {
       transcriptRows.push(liveRow);
@@ -1213,10 +1270,15 @@ export function MessageList({
             data-subagent-chip-focus-scope="true"
             // Chat text is data, never instructions: Aiden Live sees only how many messages there are.
             data-live-content="chat"
+            data-draft-worktree-send={showDraftWorktreeSend ? draftWorktreeSend!.view.status : undefined}
           >
             {transcriptRows}
 
-            <AgentActivityTransition activity={agentActivity} onRetryUsageLimit={onRetryUsageLimit} />
+            {showDraftWorktreeSend && draftWorktreeSend ? (
+              <DraftWorktreeSendStatus view={draftWorktreeSend.view} onDecide={draftWorktreeSend.decide} />
+            ) : (
+              <AgentActivityTransition activity={agentActivity} onRetryUsageLimit={onRetryUsageLimit} />
+            )}
 
             <EventPresence present={Boolean(error)}>
               {error ? (

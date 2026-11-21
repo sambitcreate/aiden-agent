@@ -169,7 +169,7 @@ export interface WorkspaceWorktreeApplicationDependencies {
   resumeWorkspaceSchedules(workspaceId: string): Promise<void>;
   createWorkspaceId(): string;
   now(): number;
-  notifyChanged(): void;
+  notifyChanged(createdWorkspace?: Workspace): void;
   logError(area: string, message: string, error: unknown): void;
   /**
    * Runs once a new managed worktree is saved (the `WorktreeSetup` hook).
@@ -396,7 +396,7 @@ export function createWorkspaceWorktreeApplicationService(
             provisionedIgnored: provisionedFiles,
           }),
       });
-      dependencies.notifyChanged();
+      dependencies.notifyChanged(saved);
       await announceCreated({
         workspace: saved,
         workspacePath: worktree.workspacePath,

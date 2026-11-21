@@ -44,17 +44,21 @@ export function useWorkspaceArtifacts(
     workspaceArtifactsApi.list(id).then(
       (views) => {
         if (request !== requestRef.current) return;
-        setState({ workspaceId: id, views, loaded: true, error: null });
+        React.startTransition(() => {
+          setState({ workspaceId: id, views, loaded: true, error: null });
+        });
       },
       (error: unknown) => {
         if (request !== requestRef.current) return;
-        setState((current) => ({
-          workspaceId: id,
-          // Keep the last good list for this workspace; a failed re-read is not an empty one.
-          views: current.workspaceId === id ? current.views : [],
-          loaded: true,
-          error: error instanceof Error ? error.message : "Could not load artifacts.",
-        }));
+        React.startTransition(() => {
+          setState((current) => ({
+            workspaceId: id,
+            // Keep the last good list for this workspace; a failed re-read is not an empty one.
+            views: current.workspaceId === id ? current.views : [],
+            loaded: true,
+            error: error instanceof Error ? error.message : "Could not load artifacts.",
+          }));
+        });
       },
     );
   }, []);

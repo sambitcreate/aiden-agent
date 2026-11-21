@@ -136,9 +136,14 @@ export function GitBranchPicker({
   const [busy, setBusy] = React.useState(false);
 
   const draftNewWorktree = draft?.gitMode === "worktree";
+  // New worktree and an existing worktree replace the branch list with their own settings.
+  const showBranchList =
+    !draft ||
+    (draft.gitMode !== "worktree" && !(draft.workIn.selectedWorktreeId && draft.workIn.source));
   // A New worktree draft reads branches while closed too, to resolve its base.
   const branches = useGitBranches(workspaceId, open || draftNewWorktree);
-  const worktrees = useGitWorktrees(workspaceId, open);
+  // Only fetch the worktree list when the branch list rows that display worktree badges are visible.
+  const worktrees = useGitWorktrees(workspaceId, open && showBranchList && !createMode);
   const detached = branches.data?.detached ?? detachedProp;
   const unborn = branches.data?.unborn ?? unbornProp;
   const currentRef = branches.data?.current ?? branch;
@@ -180,10 +185,6 @@ export function GitBranchPicker({
   // On a draft, uncommitted changes keep this checkout on its branch: the
   // escape hatch is a new worktree, which starts clean.
   const draftDirty = Boolean(draft) && uncommitted > 0;
-  // New worktree and an existing worktree replace the branch list with their own settings.
-  const showBranchList =
-    !draft ||
-    (draft.gitMode !== "worktree" && !(draft.workIn.selectedWorktreeId && draft.workIn.source));
 
   const refresh = () =>
     Promise.all([

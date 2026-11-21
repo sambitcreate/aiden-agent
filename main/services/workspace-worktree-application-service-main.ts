@@ -155,7 +155,11 @@ export const workspaceWorktreeApplicationService = createWorkspaceWorktreeApplic
   resumeWorkspaceSchedules: (workspaceId) => scheduleService.resumeWorkspace(workspaceId),
   createWorkspaceId: defaultWorkspaceId,
   now: Date.now,
-  notifyChanged: () => ipcMain.broadcast("workspaces:changed", {}),
+  notifyChanged: (createdWorkspace) =>
+    ipcMain.broadcast(
+      "workspaces:changed",
+      createdWorkspace ? { kind: "created", workspace: createdWorkspace } : {},
+    ),
   logError: (area, message, error) => logger.error(area, message, error),
   // WorktreeSetup hooks: the source workspace's, run in the new worktree.
   onWorktreeCreated: async (event) => {

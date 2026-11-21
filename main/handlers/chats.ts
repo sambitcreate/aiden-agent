@@ -17,6 +17,7 @@ import {
   wrapStoredHtmlArtifact,
 } from "../services/gui-artifact-recovery.js";
 import { skillRegistry } from "../services/skill-registry-main.js";
+import { discoverSkillCandidatesWithCachedGlobals } from "../services/skills-discovery.js";
 import { workspaceMutationGate } from "../services/workspace-mutation-gate.js";
 import {
   admitRendererOwnedWorkspaceOperation,
@@ -154,14 +155,33 @@ export function registerChatHistoryHandlers(): void {
     const parsed = parseChatFirstMessage(input);
     const owner = rendererDocumentOwner(event, () => new Error("Chats require the active application document."));
     if (parsed.worktree) {
+      // Warm global skill discovery (read-only, 5 s TTL) in parallel with worktree
+      // creation when skills are enabled, without reading any workspace folder
+      // (honoring No Access boundaries and avoiding source-local plugin config drift).
+      void configStore
+        .getSettings()
+        .then((settings) => {
+          if (settings.skillsEnabled !== false) {
+            return discoverSkillCandidatesWithCachedGlobals(undefined);
+          }
+          return undefined;
+        })
+        .catch(() => undefined);
       // New worktree: the result is a FirstMessageWorktreeResult, and progress
       // goes only to this document.
       return commitFirstMessageInWorktree(parsed, owner, (progress) => {
         if (!owner.isDestroyed()) owner.send("chats:first-message-worktree-progress", progress);
-      }).then((result) => {
+      }).then(async (result) => {
         if (!result.ok) return result;
         announceFirstMessage(result.chat);
-        return { ...result, chat: chatForRenderer(result.chat) };
+        const workspace = await configStore
+          .getWorkspace(result.worktree.workspaceId)
+          .catch(() => undefined);
+        return {
+          ...result,
+          chat: chatForRenderer(result.chat),
+          ...(workspace ? { workspace } : {}),
+        };
       });
     }
     return commitFirstMessage(parsed, owner).then((chat) => {
