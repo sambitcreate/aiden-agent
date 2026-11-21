@@ -1,4 +1,8 @@
 import assert from "node:assert/strict";
+import * as fs from "node:fs/promises";
+import * as os from "node:os";
+import * as path from "node:path";
+import { writeWorkspaceBinaryFile } from "./coding-tools.js";
 import { createPiModelImageReferences } from "./pi-model-image-references.js";
 import type { Attachment } from "./types.js";
 import test from "node:test";
@@ -9,12 +13,16 @@ import type {
   Usage,
 } from "@earendil-works/pi-ai";
 import {
+  checkImageSavePath,
   createPiModelTools,
+  describeImageSave,
   classifierApprovalFor,
+  imageSavePaths,
   piModelOperationProviderLabel,
   piModelOperationsSystemPrompt,
   piModelOperationUsage,
   resolvePiModelImageInputs,
+  type PiModelSavedImage,
   type PiModelToolsHost,
 } from "./pi-model-tools.js";
 
@@ -955,4 +963,186 @@ test("an image model without a key, or no image model at all, points to Settings
   });
   const classifiersOnly = await get("list_operation_models").execute("list", { type: "classifier" });
   assert.deepEqual(classifiersOnly.structuredContent, { models: [], truncated: false });
+});
+
+function savingTools(options: { save?: (path: string) => Promise<string>; placed?: { frameIds: string[] } | null } = {}) {
+  const { controls, models } = fixture();
+  const saves: { path: string; data: string }[] = [];
+  const placements: PiModelSavedImage[][] = [];
+  const tools = createPiModelTools({
+    ...registries(models),
+    onImage: async () => {},
+    saveImage: async (path, item) => {
+      saves.push({ path, data: item.data });
+      return options.save ? options.save(path) : path;
+    },
+    placeImages: async (images) => {
+      placements.push([...images]);
+      return options.placed === undefined ? { frameIds: images.map((_, index) => `frame-${index + 1}`) } : options.placed;
+    },
+  });
+  const generate = tools.find((tool) => tool.name === "generate_image")!;
+  return { controls, saves, placements, generate };
+}
+
+const resultText = (result: { content: readonly { type: string; text?: string }[] }) =>
+  result.content.flatMap((part) => (part.type === "text" && part.text ? [part.text] : [])).join("\n");
+
+test("a generated image saved in the workspace and put on the canvas reports its path and frame", async () => {
+  const { saves, placements, generate } = savingTools();
+  const result = await generate.execute("save", { ...imageRequest, savePath: "./design/assets/hero.png", placeOnCanvas: true });
+  assert.equal(result.isError, undefined);
+  assert.deepEqual(saves, [{ path: "design/assets/hero.png", data: PNG }]);
+  assert.deepEqual(placements, [[{ path: "design/assets/hero.png", width: 1, height: 1 }]]);
+  const text = resultText(result);
+  assert.match(text, /Saved in the workspace as design\/assets\/hero\.png\./);
+  assert.match(text, /On the design canvas as frame frame-1\./);
+  assert.equal(result.content.filter((part) => part.type === "image").length, 1, "the image is still shown in the chat");
+});
+
+test("with design mode off the image is saved and the canvas left alone, and a failed save keeps what was paid for", async () => {
+  const off = savingTools({ placed: null });
+  const kept = await off.generate.execute("off", { ...imageRequest, savePath: "logo", placeOnCanvas: true });
+  assert.match(resultText(kept), /Saved in the workspace as logo\.png\.[\s\S]*Design mode is off/);
+
+  const failing = savingTools({ save: async () => { throw new Error("Path is outside the workspace."); } });
+  const failed = await failing.generate.execute("fail", { ...imageRequest, savePath: "hero.png", placeOnCanvas: true });
+  assert.equal(failed.isError, undefined);
+  assert.deepEqual(failed.usage, usage);
+  assert.match(resultText(failed), /Could not save hero\.png: Path is outside the workspace\./);
+  assert.deepEqual(failing.placements, [], "nothing unsaved goes on the canvas");
+});
+
+test("a save path that could never be written, or a canvas request without one, is refused before the paid request", async () => {
+  const { controls, generate } = savingTools();
+  for (const savePath of ["../outside.png", "/Users/person/hero.png", "C:\\art\\hero.png", "design/../../hero.png", "notes.txt", ".png", "", "a\u0000.png",
+    ".ssh/id.png", ".git/hooks/pre-commit.png", "design/.hidden/hero.png", "~/hero.png", "~\\hero.png",
+    "design/hero\u202egnp.png", "design/he\u2066ro.png", "design/\nhero.png", "design/hero\u0085.png",
+    // Invisible on the card: a zero-width space and joiner, a soft hyphen, the BOM,
+    // the line and paragraph separators, and the Hangul fillers.
+    "design/he\u200bro.png", "design/he\u200dro.png", "design/he\u00adro.png", "design/\ufeffhero.png",
+    "design/hero\u2028.png", "design/hero\u2029.png", "design/\u3164/hero.png", "design/he\u115fro.png", "design/he\u1160ro.png",
+    // Drawn as nothing or as a blank: the half-width Hangul filler, a variation selector
+    // and the combining grapheme joiner away from any emoji, a tag character, the
+    // braille blank and the ideographic space.
+    "design/he\uffa0ro.png", "design/hero\ufe0f.png", "design/he\u034fro.png", "design/hero\u{e0041}.png",
+    "design/\u2800/hero.png", "design/hero\u3000.png",
+    // A zero-width joiner counts as part of an emoji only between two emoji.
+    "design/\u{1f44d}\u200d.png", "design/\u200d\u{1f44d}.png", "design/a\u200d\u{1f44d}.png", "design/\u{1f44d}\u200d\u200d\u{1f44d}.png",
+    // ...and only between emoji drawn as emoji: two symbols drawn as text are not.
+    "design/\u00a9\u200d\u00ae.png", "design/\u2764\u200d\u{1f525}.png",
+    // Spaces other than the ordinary one: no-break, thin, narrow no-break and the Ogham space mark.
+    "design/hero\u00a0art.png", "design/hero\u2009art.png", "design/hero\u202fart.png", "design/hero\u1680art.png",
+    // Private-use, unassigned and noncharacter code points, a lone surrogate, and the object replacement character.
+    "design/hero\ue000.png", "design/hero\u{f0000}.png", "design/hero\u0378.png", "design/hero\uffff.png", "design/hero\ud800.png",
+    "design/hero\udc00.png", "design/hero\ufffc.png",
+    // Unicode reserves unassigned blocks as pictographic; they are still unassigned, alone, styled or joined.
+    "design/hero\u{1fc00}.png", "design/\u{1fffd}.png", "design/\u{1f8ff}.png", "design/\u{1fc00}\ufe0f.png",
+    "design/\u{1fc00}\ufe0f\u200d\u{1fc01}\ufe0f.png",
+    // A selector after a skin tone styles nothing: the tone already draws the emoji.
+    "design/\u{1f44b}\u{1f3fd}\ufe0f.png", "design/\u{1f44b}\u{1f3fd}\ufe0e.png", "design/\u{1f468}\u{1f3fd}\ufe0f\u200d\u{1f4bb}.png",
+    // A folder or file name that ends in a space.
+    "design /hero.png", "design/hero ", "design/art/hero.png ", "design/ /hero.png"]) {
+    await assert.rejects(generate.execute("bad", { ...imageRequest, savePath }), Error, JSON.stringify(savePath));
+  }
+  await assert.rejects(generate.execute("canvas", { ...imageRequest, placeOnCanvas: true }), /placeOnCanvas needs savePath/);
+  assert.equal(controls.imageCalls, 0);
+});
+
+test("a save path in any script, or named with emoji sequences, is saved as written", async () => {
+  const names = ["デザイン/ヒーロー.png", "디자인/표지.png", "تصميم/غلاف.png", "дизайн/обложка.png", "设计/封面", "design/naïve café.png",
+    // A family, a rainbow flag, a heart on fire and a toned hand: emoji joined or styled by joiners and selectors.
+    "design/\u{1f468}\u200d\u{1f469}\u200d\u{1f467}.png", "design/\u{1f3f3}\ufe0f\u200d\u{1f308}.png", "design/\u2764\ufe0f\u200d\u{1f525}.png", "design/\u{1f44b}\u{1f3fd}.png",
+    // A person at a laptop, a toned one, a runner joined to a symbol styled as emoji, and an ordinary space inside a name.
+    "design/\u{1f469}\u200d\u{1f4bb}.png", "design/\u{1f469}\u{1f3fd}\u200d\u{1f4bb}.png", "design/\u{1f3c3}\u200d\u2640\ufe0f.png", "design/my hero.png",
+    // A toned thumbs up, and a toned pointing finger whose plain form is drawn as text.
+    "design/\u{1f44d}\u{1f3fd}.png", "design/\u261d\u{1f3fd}.png"];
+  const { saves, generate } = savingTools();
+  for (const savePath of names) {
+    const result = await generate.execute("ok", { ...imageRequest, savePath });
+    assert.equal(result.isError, undefined, JSON.stringify(savePath));
+  }
+  assert.deepEqual(saves.map((save) => save.path), names.map((name) => (name.endsWith(".png") ? name : `${name}.png`)));
+});
+
+test("savePath and placeOnCanvas exist only for a chat whose host can save and place", async () => {
+  const { get, controls } = fixture();
+  const parameters = get("generate_image").parameters as { properties: Record<string, unknown> };
+  assert.equal("savePath" in parameters.properties, false);
+  assert.equal("placeOnCanvas" in parameters.properties, false);
+  await assert.rejects(get("generate_image").execute("save", { ...imageRequest, savePath: "hero.png" }));
+  assert.equal(controls.imageCalls, 0);
+
+  const { models } = fixture();
+  const saveOnly = createPiModelTools({ ...registries(models), onImage: async () => {}, saveImage: async (path) => path })
+    .find((tool) => tool.name === "generate_image")!;
+  const saveOnlyParameters = saveOnly.parameters as { properties: Record<string, unknown> };
+  assert.equal("savePath" in saveOnlyParameters.properties, true);
+  assert.equal("placeOnCanvas" in saveOnlyParameters.properties, false);
+});
+
+test("only the file the approval named is replaced; another type or an extra image never overwrites a file", async () => {
+  const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "aiden-image-save-")));
+  try {
+    await fs.mkdir(path.join(root, "design"));
+    for (const name of ["hero.png", "hero-2.png", "logo.jpg"]) await fs.writeFile(path.join(root, "design", name), "old");
+    const { controls, models } = fixture();
+    const generate = createPiModelTools({
+      ...registries(models),
+      onImage: async () => {},
+      // The real workspace writer, so the test sees what lands on disk.
+      saveImage: async (relative, item, signal, options) =>
+        writeWorkspaceBinaryFile(root, relative, Buffer.from(item.data, "base64"), {
+          ...(signal ? { signal } : {}),
+          ...(options ? { replace: options.replace } : {}),
+        }),
+    }).find((tool) => tool.name === "generate_image")!;
+    const read = (name: string) => fs.readFile(path.join(root, "design", name), "utf8").catch(() => "missing");
+    const png = Buffer.from(PNG, "base64").toString("utf8");
+
+    controls.imageResult.output = [image, image, image];
+    const named = resultText(await generate.execute("named", { ...imageRequest, savePath: "design/hero.png" }));
+    assert.equal(await read("hero.png"), png, "the named file is replaced");
+    assert.equal(await read("hero-2.png"), "old", "an extra image never overwrites a file the approval did not name");
+    assert.equal(await read("hero-3.png"), png, "an extra image with a free name is saved");
+    assert.match(named, /Saved in the workspace as design\/hero\.png, design\/hero-3\.png\./);
+    assert.match(named, /Did not save design\/hero-2\.png: a file is already there.*Pass that path as savePath to replace it/);
+
+    // A PNG asked for as logo.jpg becomes logo.png, a new file, and logo.jpg stays.
+    controls.imageResult.output = [image];
+    await generate.execute("swapped", { ...imageRequest, savePath: "design/logo.jpg" });
+    assert.equal(await read("logo.jpg"), "old");
+    assert.equal(await read("logo.png"), png);
+    // An extensionless savePath names no file to replace either.
+    const bare = resultText(await generate.execute("bare", { ...imageRequest, savePath: "design/hero" }));
+    assert.equal(await read("hero.png"), png);
+    assert.match(bare, /Did not save design\/hero\.png: a file is already there/);
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+test("the approval names the file that may be replaced and the new files other images become", () => {
+  const named = describeImageSave("./design/hero.png");
+  assert.match(named, /"design\/hero\.png", replacing any file there/);
+  assert.match(named, /"design\/hero\.jpg"/);
+  assert.match(named, /"design\/hero-2\.png"/);
+  assert.match(named, /never replaces one/);
+  const bare = describeImageSave("icons/star");
+  assert.doesNotMatch(bare, /replacing/);
+  assert.match(bare, /new file "icons\/star\.png"/);
+  assert.match(bare, /None of them replaces an existing file/);
+});
+
+test("saved file names follow each image's real type and number the extra images", () => {
+  assert.deepEqual(imageSavePaths("design/hero.png", ["image/png", "image/jpeg", "image/webp"]), [
+    "design/hero.png",
+    "design/hero-2.jpg",
+    "design/hero-3.webp",
+  ]);
+  assert.deepEqual(imageSavePaths("photo.jpeg", ["image/jpeg"]), ["photo.jpeg"]);
+  // The person's spelling stays when the type matches, so the named file is the one replaced.
+  assert.deepEqual(imageSavePaths("Hero.PNG", ["image/png", "image/png"]), ["Hero.PNG", "Hero-2.PNG"]);
+  assert.deepEqual(imageSavePaths("icons/star", ["image/gif"]), ["icons/star.gif"]);
+  assert.equal(checkImageSavePath("design\\assets\\hero.webp"), "design/assets/hero.webp");
 });

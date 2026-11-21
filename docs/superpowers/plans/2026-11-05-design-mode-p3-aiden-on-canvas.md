@@ -25,7 +25,7 @@ Each slice lands as its own commit set with behavioral tests. Screenshots are ne
    - `canvas_place_frame` (`file | image | note | group`). File and image paths must already exist and resolve inside the workspace through `resolveDesignFile`. File frames default to 1280 design width and a 640 × 436 box.
    - `canvas_update_frame` (move, resize, retitle, regroup, note text).
    - `canvas_remove_frame`. A person's frame needs `confirm: true`.
-   - The tools allow at most 20 calls per turn, then return `limit_reached`. Coordinates are canvas units.
+   - The tools allow at most 20 calls per turn (60 now), then return `limit_reached`. Coordinates are canvas units.
    - The tools are created with `createDesignCanvasTools({ chatId, workspaceRoot, store, broadcast })`.
 4. Wiring in `llm-client.ts`: offer the tools when the flag is on, the chat has `designMode`, and the owner is a local renderer (not remote). Exclude Bot, Assistant-unattended, Telegram and `excludeToolNames`. Add a short, static "Design mode is on" system prompt section, and put `canvasPromptLine` in the volatile prompt slot so a changing canvas never breaks the prompt cache. Both arrive as the `aiden.design-canvas` runtime extension.
 5. Tests:

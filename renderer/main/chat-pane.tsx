@@ -110,12 +110,14 @@ import {
 } from "../lib/composer-placeholder";
 import { AppWindow, GitFork, TerminalSquare } from "lucide-react";
 import { MessageList } from "../components/message-list";
+import { KeepVisualChatContext } from "../lib/visual-menu-actions";
 import { useReadAloud } from "../lib/tts-client";
 import type { ReadAloudActionProps } from "../components/read-aloud-button";
 import { Composer, type ComposerApprovalsPatch } from "../components/composer";
 import { AskUserQuestionComposer } from "../components/ask-user-question-composer";
 import { DesignModeConsentCard, useDesignModeConsent } from "../design/design-mode-consent";
 import { useCanvasFocusRequests } from "../design/canvas-focus-requests";
+import { designCanvasViewFor } from "../lib/design-mode";
 import {
   AskUserQuestionCountdown,
   AskUserQuestionExpiryNotice,
@@ -383,6 +385,11 @@ export function ChatPane({ chatId }: { chatId: string }) {
   const chatWorkspaceId = chat.data?.workspaceId;
   const effectiveWorkspaceId = chat.data ? persistedChatWorkspaceId(chatWorkspaceId) : undefined;
   const effectiveWorkspace = workspaces.find((workspace) => workspace.id === effectiveWorkspaceId);
+  // Settled native visuals here can be kept in this workspace's Artifacts.
+  const keepVisualChatId =
+    chat.data && !chat.data.botId && !chat.data.owner && effectiveWorkspace && effectiveWorkspaceId !== ASSISTANT_WORKSPACE_ID
+      ? chatId
+      : null;
   const effectiveWorkspaceIdRef = React.useRef(effectiveWorkspaceId);
   effectiveWorkspaceIdRef.current = effectiveWorkspaceId;
   // A moved or deleted folder is named above the composer, and a send is
@@ -1672,6 +1679,8 @@ export function ChatPane({ chatId }: { chatId: string }) {
       };
       const visualize = visualizeTurnRef.current === true;
       visualizeTurnRef.current = false;
+      // A chat whose canvas is open says what it shows: the selection and its size on screen.
+      const designView = designCanvasViewFor(chatId);
       const handle = startGeneration(
         {
           chatId,
@@ -1681,6 +1690,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
           providerId,
           model,
           ...(visualize ? { visualize: true as const } : {}),
+          ...(designView ? { designView } : {}),
           inlineVisuals: readCachedAppearance()?.inlineVisuals ?? "automatic",
           thinkingLevel: googleThinkingSupported
             ? googleThinkingLevel
@@ -4364,64 +4374,66 @@ export function ChatPane({ chatId }: { chatId: string }) {
             )}
           </div>
         ) : (
-          <MessageList
-            key={chatId}
-            chatId={chatId}
-            messages={messages}
-            streamingText={displayedStreamingText}
-            streamingReasoning={displayedStreamingReasoning}
-            streamingArtifacts={displayedStreamingArtifacts}
-            streamingArtifactPlacements={streamingArtifactPlacements}
-            streamingWideVisuals={streamingWideVisuals}
-            onVisualPrompt={handleVisualPrompt}
-            visualFollowUpBusy={visualPromptBusy}
-            streamingVisualDrafts={visualDrafts}
-            streamingUiVisuals={displayedStreamingUiVisuals}
-            streamingUiDrafts={uiDrafts}
-            streamComplete={streamComplete || detachedProjectionStreamComplete(visibleDetachedProjection)}
-            persistedHandoffMessageId={persistedHandoffMessageId}
-            onStreamHandoffComplete={() => streamHandoffRef.current?.()}
-            timeline={displayedGenerationTimeline}
-            liveSubagents={displayedLiveSubagents}
-            subagentsEnabled={environmentPanel.subagentsEnabled}
-            onOpenSubagent={environmentPanel.openSubagent}
-            agentActivity={visibleAgentActivity}
-            onRetryUsageLimit={() => void retryUsageLimitNow("chat", chatId)}
-            readAloudMessageId={readAloudCandidateId}
-            failureActions={failureActions}
-            interruptedReply={interruptedReply}
-            readAloud={readAloudProps}
-            onFork={forkFromTranscript}
-            forkDisabledReason={forkDisabledReason}
-            onForkWithSummary={(messageId, position) =>
-              setForkSummaryRequest({ messageId, position })
-            }
-            forkSummary={
-              forkSummary
-                ? {
-                    afterMessageId: forkSummary.afterMessageId,
-                    node: (
-                      <ForkSummaryCard
-                        key={`${forkSummary.state}:${forkSummary.afterMessageId}`}
-                        summary={forkSummary}
-                        busy={forkSummaryBusy}
-                        onCancel={() => void runForkSummaryAction("cancel")}
-                        onRetry={() => void runForkSummaryAction("retry")}
-                        onSkip={() => void runForkSummaryAction("skip")}
-                      />
-                    ),
-                  }
-                : undefined
-            }
-            error={
-              error ??
-              (imageArtifactRecoveryUnavailable
-                ? "Visual artifact staging is unavailable. Open Settings → About → Diagnostics and choose Reveal to locate the staging file that needs repair."
-                : imageArtifactRecoveryPending
-                  ? "A visual artifact could not be recovered. Delete this chat to discard it before continuing."
-                  : null)
-            }
-          />
+          <KeepVisualChatContext.Provider value={keepVisualChatId}>
+            <MessageList
+              key={chatId}
+              chatId={chatId}
+              messages={messages}
+              streamingText={displayedStreamingText}
+              streamingReasoning={displayedStreamingReasoning}
+              streamingArtifacts={displayedStreamingArtifacts}
+              streamingArtifactPlacements={streamingArtifactPlacements}
+              streamingWideVisuals={streamingWideVisuals}
+              onVisualPrompt={handleVisualPrompt}
+              visualFollowUpBusy={visualPromptBusy}
+              streamingVisualDrafts={visualDrafts}
+              streamingUiVisuals={displayedStreamingUiVisuals}
+              streamingUiDrafts={uiDrafts}
+              streamComplete={streamComplete || detachedProjectionStreamComplete(visibleDetachedProjection)}
+              persistedHandoffMessageId={persistedHandoffMessageId}
+              onStreamHandoffComplete={() => streamHandoffRef.current?.()}
+              timeline={displayedGenerationTimeline}
+              liveSubagents={displayedLiveSubagents}
+              subagentsEnabled={environmentPanel.subagentsEnabled}
+              onOpenSubagent={environmentPanel.openSubagent}
+              agentActivity={visibleAgentActivity}
+              onRetryUsageLimit={() => void retryUsageLimitNow("chat", chatId)}
+              readAloudMessageId={readAloudCandidateId}
+              failureActions={failureActions}
+              interruptedReply={interruptedReply}
+              readAloud={readAloudProps}
+              onFork={forkFromTranscript}
+              forkDisabledReason={forkDisabledReason}
+              onForkWithSummary={(messageId, position) =>
+                setForkSummaryRequest({ messageId, position })
+              }
+              forkSummary={
+                forkSummary
+                  ? {
+                      afterMessageId: forkSummary.afterMessageId,
+                      node: (
+                        <ForkSummaryCard
+                          key={`${forkSummary.state}:${forkSummary.afterMessageId}`}
+                          summary={forkSummary}
+                          busy={forkSummaryBusy}
+                          onCancel={() => void runForkSummaryAction("cancel")}
+                          onRetry={() => void runForkSummaryAction("retry")}
+                          onSkip={() => void runForkSummaryAction("skip")}
+                        />
+                      ),
+                    }
+                  : undefined
+              }
+              error={
+                error ??
+                (imageArtifactRecoveryUnavailable
+                  ? "Visual artifact staging is unavailable. Open Settings → About → Diagnostics and choose Reveal to locate the staging file that needs repair."
+                  : imageArtifactRecoveryPending
+                    ? "A visual artifact could not be recovered. Delete this chat to discard it before continuing."
+                    : null)
+              }
+            />
+          </KeepVisualChatContext.Provider>
         )}
       </ScrollArea>
       {cloningProject && isNewChat && effectiveWorkspace ? <PeerProjectCloneDialog workspaceId={effectiveWorkspace.id} onClose={() => setCloningProject(false)} onCreated={(hostId, workspace) => {

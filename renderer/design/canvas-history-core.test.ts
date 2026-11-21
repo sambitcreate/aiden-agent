@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { emptyDesignCanvas, type DesignCanvas } from "../shared/design-canvas/schema";
 import { addPage, deletePage, showPage } from "../shared/design-canvas/pages";
-import { changesBetween, record, redo, undo, type CanvasHistory } from "./canvas-history-core";
+import { changesBetween, keepUnchanged, record, redo, takeIn, undo, type CanvasHistory } from "./canvas-history-core";
 
 const state = (label: string): DesignCanvas => ({
   ...emptyDesignCanvas(),
@@ -87,4 +87,49 @@ test("undoing a comment edit keeps comments someone else changed, and a comment 
 
   const removed = changesBetween(before, { ...before, frames: [] })({ ...before });
   assert.deepEqual(removed.comments.map((entry) => entry.id), ["mine"], "removing a frame removes its comments");
+});
+
+const note = (id: string, x = 0) => ({
+  id, kind: "note" as const, title: id, x, y: 0, w: 200, h: 120, text: id, pageId: "page-1", createdBy: "person" as const,
+});
+const withFrames = (...frames: ReturnType<typeof note>[]): DesignCanvas => ({ ...emptyDesignCanvas(), frames });
+const ids = (doc: DesignCanvas | undefined) => doc?.frames.map((frame) => frame.id);
+
+test("every change from one reply undoes as one step, and a second reply is a step of its own", () => {
+  const start = withFrames(note("a"));
+  const first = withFrames(note("a"), note("b"));
+  const second = withFrames(note("a"), note("b"), note("c"));
+  const third = withFrames(note("a"), note("b"), note("c"), note("d"));
+  let history = takeIn(fresh, { before: start, from: start, to: first, aidenTurn: "reply-1" });
+  history = takeIn(history, { before: first, from: first, to: second, aidenTurn: "reply-1" });
+  history = takeIn(history, { before: second, from: second, to: third, aidenTurn: "reply-2" });
+
+  const back = undo(history, third);
+  assert.deepEqual(ids(back?.doc), ["a", "b", "c"], "the second reply goes first");
+  const backAgain = undo(back!.history, back!.doc);
+  assert.deepEqual(ids(backAgain?.doc), ["a"], "both of the first reply's changes go together");
+  assert.equal(undo(backAgain!.history, backAgain!.doc), null);
+});
+
+test("a change from another writer is carried into earlier steps rather than becoming a step", () => {
+  const start = withFrames(note("a"));
+  const moved = withFrames(note("a", 100));
+  let history = record(fresh, start); // the person moved a to 100
+  const elsewhere = keepUnchanged(moved, withFrames(note("a", 100), note("z")));
+  history = takeIn(history, { before: moved, from: moved, to: elsewhere });
+  const back = undo(history, elsewhere);
+  assert.deepEqual(back?.doc.frames.map((frame) => [frame.id, frame.x]), [["a", 0], ["z", 0]], "undo takes back the move and keeps z");
+  assert.equal(undo(back!.history, back!.doc), null, "z's arrival is not an undo step");
+});
+
+test("a fetched canvas keeps the objects of frames that did not change, so undo leaves them alone", () => {
+  const local = withFrames(note("a"), note("b"));
+  const fetched = withFrames(note("a"), note("b", 300));
+  const merged = keepUnchanged(local, fetched);
+  assert.equal(merged.frames[0], local.frames[0]);
+  assert.notEqual(merged.frames[1], local.frames[1]);
+  assert.equal(merged.frames[1]?.x, 300);
+  // Only b differs, so carrying the change into an old snapshot touches only b.
+  const carried = changesBetween(local, merged)(withFrames(note("a", 50), note("b")));
+  assert.deepEqual(carried.frames.map((frame) => [frame.id, frame.x]), [["a", 50], ["b", 300]]);
 });

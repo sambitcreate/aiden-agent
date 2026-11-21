@@ -3,7 +3,7 @@ import * as fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { readWorkspaceArtifactFile } from "./file-policy.js";
+import { readWorkspaceArtifactFile, WorkspaceArtifactFileChangedError } from "./file-policy.js";
 import { readLinuxArtifactFile, LinuxArtifactFileChangedError } from "./linux-file-read.js";
 import { captureManagedWorktreeRootIdentity } from "../managed-worktree-file-io.js";
 
@@ -30,7 +30,7 @@ test("Linux artifact reads ordinary and empty files without the macOS native hel
   assert.equal(await readWorkspaceArtifactFile(root, ".env.example"), "TEMPLATE=");
 });
 
-test("Linux artifact reads reject lexical/canonical secret aliases and pre-open directory or file replacement", linuxOnly, async (t) => {
+test("Linux artifact reads deny lexical/canonical secret aliases and report pre-open directory or file replacement as a change", linuxOnly, async (t) => {
   const { root } = await fixture(t);
   await fs.symlink(".env", path.join(root, "ordinary.txt"));
   await assert.rejects(readWorkspaceArtifactFile(root, ".env"), /Credential files/u);
@@ -40,14 +40,14 @@ test("Linux artifact reads reject lexical/canonical secret aliases and pre-open 
       await fs.rename(path.join(root, "selected"), path.join(root, "held"));
       await fs.symlink("held", path.join(root, "selected"));
     },
-  }), /Credential files/u);
+  }), WorkspaceArtifactFileChangedError);
   await fs.unlink(path.join(root, "selected")); await fs.rename(path.join(root, "held"), path.join(root, "selected"));
   await assert.rejects(readWorkspaceArtifactFile(root, "selected/nested/data.txt", undefined, {
     beforeRead: async () => {
       await fs.rename(path.join(root, "selected", "nested", "data.txt"), path.join(root, "original.txt"));
       await fs.writeFile(path.join(root, "selected", "nested", "data.txt"), "REPLACEMENT_FIXTURE_VALUE");
     },
-  }), /Credential files/u);
+  }), WorkspaceArtifactFileChangedError);
 });
 
 test("Linux descriptor traversal retains the opened directory during an adversarial mid-walk swap", linuxOnly, async (t) => {

@@ -89,6 +89,7 @@ export function registerDesignCanvasIpc(): void {
     renderFrame: renderDesignFrame,
     artifactPreview: (chatId, mediaId, theme) => wrapStoredHtmlArtifact({ chatId, mediaId, theme }),
     artifactHtml: (chatId, mediaId) => generativeUiArtifactStore.htmlFor(chatId, mediaId),
+    artifactTitle: async (chatId, mediaId) => (await generativeUiArtifactStore.artifactFor(chatId, mediaId))?.title,
     exportArtifactSource: async (event, chatId, mediaId) => {
       const parent = BrowserWindow.fromWebContents(event.sender);
       if (!parent || parent.isDestroyed()) throw new Error("The export window is unavailable.");

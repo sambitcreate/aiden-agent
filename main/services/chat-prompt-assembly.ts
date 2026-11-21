@@ -106,7 +106,11 @@ export interface ChatPromptAssembly {
   /** Held-back tools a script can still call. */
   onDemandCallable: AgentTool[];
   /** The tools a run over `history` (the chat so far) can execute. */
-  toolsFor(history: readonly AgentMessage[]): AgentTool[];
+  toolsFor(
+    history: readonly AgentMessage[],
+    preload?: readonly string[],
+    declaredBefore?: readonly string[],
+  ): AgentTool[];
   /**
    * The tools the transcript head declares, fixed for the chat. Tools loaded
    * since are declared by the system messages the journal kept, after the head.
@@ -154,8 +158,9 @@ export function assembleChatPrompt(input: ChatPromptAssemblyInput): ChatPromptAs
     deferredTools,
     ...(onDemandTools ? { onDemandTools } : {}),
     onDemandCallable,
-    // Tools this chat already loaded or called stay callable from the start.
-    toolsFor: (history) => (onDemandTools ? onDemandTools.initialTools(history) : declared),
+    // Tools this chat already loaded, called or was given stay callable from the start.
+    toolsFor: (history, preload, declaredBefore) =>
+      onDemandTools ? onDemandTools.initialTools(history, preload, declaredBefore) : declared,
     headTools: onDemandTools ? [...onDemandTools.headTools] : declared,
   };
 }

@@ -6,6 +6,7 @@ import { createHash, randomUUID } from "node:crypto";
 import path from "node:path";
 import * as fs from "node:fs/promises";
 import {
+  DESIGN_CANVAS_LIMITS,
   isDesignRelativePath,
   type DesignCanvas,
   type DesignPaper,
@@ -28,10 +29,15 @@ import {
 import {
   DESIGN_TEXT_EDIT_LIMITS,
   planDesignTextEdit,
-  stampLine,
   type DesignTextChange,
 } from "../../renderer/shared/design-canvas/text-edit.js";
+import { canvasView, parseDesignViewState } from "../../renderer/shared/design-canvas/canvas-summary.js";
+import { showPage } from "../../renderer/shared/design-canvas/pages.js";
+import { placeFrame } from "../../renderer/shared/design-canvas/placement.js";
+import { isHtmlArtifactMediaId } from "../../renderer/shared/generative-ui.js";
+import { ARTIFACT_FRAME_BOX } from "../services/design-canvas/artifact-frames.js";
 import type { DesignGrantRegistry } from "../services/design-canvas/grants.js";
+import { validateGenerativeUiHtml } from "../services/generative-ui-html.js";
 import { replaceWorkspaceText } from "../services/design-canvas/text-write.js";
 import { resolveDesignFile } from "../services/design-canvas/resolve-core.js";
 import type { DesignFileWatcher } from "../services/design-canvas/watch.js";
@@ -42,14 +48,32 @@ import {
 } from "../services/design-canvas/store.js";
 import type { ChatMeta } from "../services/types.js";
 
-/** Broadcast on `designCanvas:updated` after a save or an Aiden edit lands. */
-export type DesignCanvasUpdated = { chatId: string; revision: number };
+/**
+ * Broadcast on `designCanvas:updated` after a save or an Aiden edit lands.
+ * `aidenTurn` names the reply whose change it was, so an open canvas can
+ * undo all of one reply's canvas changes as one step. `step` marks a change
+ * the person made through main (a Send to canvas that placed a frame): an
+ * open canvas makes it an undo step of its own, so Cmd+Z takes it back.
+ */
+export type DesignCanvasUpdated = { chatId: string; revision: number; aidenTurn?: string; step?: string };
 
 /** The chat fields the canvas handlers decide on. */
 export type DesignCanvasChat = Pick<
   ChatMeta,
   "id" | "workspaceId" | "designMode" | "botId" | "owner"
 >;
+
+/**
+ * `designCanvas:placeArtifact` reply. `already` names the frame that shows the
+ * visual and, when it was on another page, that page's name (the canvas now
+ * shows that page); `missing` means the chat no longer has it, `unsafe` that
+ * its HTML no longer passes the visual checks, and `full` that the canvas
+ * holds no more frames.
+ */
+export type DesignCanvasPlaceArtifactResult =
+  | { status: "placed"; frameId: string }
+  | { status: "already"; frameId: string; page?: string }
+  | { error: "missing" | "unsafe" | "full" };
 
 /** `designCanvas:grant` reply: an `aiden-design://<grant>/` host, or no access. */
 export type DesignCanvasGrantResult = { grant: string } | { error: "unavailable" };
@@ -174,10 +198,25 @@ export const DESIGN_CAPTURE_MAX_SIDE = 1024;
 export const DESIGN_CANVAS_UPDATED_CHANNEL = "designCanvas:updated";
 const UNAVAILABLE = "Design mode is not available.";
 
+/** The pages a save says the person's undo took off; anything malformed is refused. */
+function saveUndone(options: unknown): string[] {
+  if (options === undefined || options === null) return [];
+  const undone = typeof options === "object" && !Array.isArray(options) ? (options as { undone?: unknown }).undone : null;
+  if (undone === undefined) return [];
+  if (
+    !Array.isArray(undone) ||
+    undone.length > DESIGN_CANVAS_LIMITS.frames ||
+    !undone.every((entry) => typeof entry === "string" && isDesignRelativePath(entry))
+  ) {
+    throw new Error("Invalid canvas save options.");
+  }
+  return undone as string[];
+}
+
 export function registerDesignCanvasHandlers<Event>(deps: {
   enabled: () => boolean;
   handle(channel: string, handler: (event: Event, ...args: unknown[]) => unknown): void;
-  store: Pick<DesignCanvasStore, "get" | "save">;
+  store: Pick<DesignCanvasStore, "get" | "save" | "update">;
   broadcast(update: DesignCanvasUpdated): void;
   getChat(chatId: string): Promise<DesignCanvasChat | null>;
   grants: Pick<DesignGrantRegistry, "issue" | "revokeChat">;
@@ -198,6 +237,10 @@ export function registerDesignCanvasHandlers<Event>(deps: {
   exportArtifactSource(event: Event, chatId: string, mediaId: string): Promise<{ saved: boolean; canceled: boolean }>;
   /** An artifact's own HTML, or undefined when it is gone. */
   artifactHtml(chatId: string, mediaId: string): Promise<string | undefined>;
+  /** An artifact's title, or undefined when this chat has no such artifact. */
+  artifactTitle(chatId: string, mediaId: string): Promise<string | undefined>;
+  /** New frame ids; tests pin them. */
+  newId?: () => string;
 }): void {
   if (!deps.enabled()) return;
 
@@ -230,7 +273,7 @@ export function registerDesignCanvasHandlers<Event>(deps: {
     return deps.store.get(chat.id);
   });
 
-  deps.handle("designCanvas:save", async (_event, chatId, doc, baseRevision) => {
+  deps.handle("designCanvas:save", async (_event, chatId, doc, baseRevision, options) => {
     if (
       typeof baseRevision !== "number" ||
       !Number.isSafeInteger(baseRevision) ||
@@ -238,10 +281,77 @@ export function registerDesignCanvasHandlers<Event>(deps: {
     ) {
       throw new Error("Invalid canvas revision.");
     }
+    const undone = saveUndone(options);
     const chat = await requireChat(chatId);
-    const result = await deps.store.save(chat.id, doc as DesignCanvas, baseRevision);
+    const result = await deps.store.save(chat.id, doc as DesignCanvas, baseRevision, { undone });
     if (result.ok) deps.broadcast({ chatId: chat.id, revision: result.revision });
     return result;
+  });
+
+  // The person's Send to canvas on a visual in the chat: puts that visual on
+  // the page on screen as a frame of their own, beside the frames in view, the
+  // way Add would. It needs no design mode (the renderer turns it on after),
+  // only an attended chat that still holds the visual and HTML that still
+  // passes the visual checks. `options.viewSize` is the canvas's size on
+  // screen, when the renderer knows it; a size that does not parse is ignored.
+  const UNCHANGED = Symbol("unchanged");
+  deps.handle("designCanvas:placeArtifact", async (_event, chatId, mediaId, options): Promise<DesignCanvasPlaceArtifactResult> => {
+    const chat = await requireChat(chatId);
+    if (!isHtmlArtifactMediaId(mediaId)) throw new Error("Invalid visual.");
+    const viewSize =
+      typeof options === "object" && options !== null && "viewSize" in options
+        ? parseDesignViewState({ selection: [], viewSize: (options as { viewSize: unknown }).viewSize })?.viewSize
+        : undefined;
+    const [title, html] = await Promise.all([
+      deps.artifactTitle(chat.id, mediaId),
+      deps.artifactHtml(chat.id, mediaId),
+    ]);
+    if (title === undefined || html === undefined) return { error: "missing" };
+    try {
+      validateGenerativeUiHtml(html);
+    } catch {
+      return { error: "unsafe" };
+    }
+    const frameTitle = title.trim().slice(0, DESIGN_CANVAS_LIMITS.titleChars) || "Visual";
+    let outcome: DesignCanvasPlaceArtifactResult = { error: "full" };
+    // Only a placed frame is the person's undo step; showing the page a frame is on is not.
+    let placedFrame = false as boolean;
+    try {
+      const saved = await deps.store.update(chat.id, (doc) => {
+        const existing = doc.frames.find((frame) => frame.kind === "artifact" && frame.mediaId === mediaId);
+        if (existing) {
+          if (existing.pageId === doc.activePageId) {
+            outcome = { status: "already", frameId: existing.id };
+            throw UNCHANGED;
+          }
+          // It is on another page: show that page, so the person sees it.
+          const page = doc.pages.find((entry) => entry.id === existing.pageId)?.name;
+          outcome = { status: "already", frameId: existing.id, ...(page ? { page } : {}) };
+          return showPage(doc, existing.pageId);
+        }
+        const placed = placeFrame(
+          doc,
+          { kind: "artifact", title: frameTitle, mediaId, createdBy: "person", ...ARTIFACT_FRAME_BOX },
+          canvasView(doc, viewSize),
+          deps.newId ?? randomUUID,
+        );
+        if ("error" in placed) {
+          outcome = { error: "full" };
+          throw UNCHANGED;
+        }
+        outcome = { status: "placed", frameId: placed.id };
+        placedFrame = true;
+        return placed.doc;
+      });
+      deps.broadcast({
+        chatId: chat.id,
+        revision: saved.revision,
+        ...(placedFrame ? { step: `send-to-canvas:${saved.revision}` } : {}),
+      });
+    } catch (error) {
+      if (error !== UNCHANGED) throw error;
+    }
+    return outcome;
   });
 
   // Only an attended desktop chat in design mode may frame its own workspace
@@ -494,7 +604,7 @@ export function registerDesignCanvasHandlers<Event>(deps: {
       if (!parsed) throw new Error("Invalid text change.");
       if (stamp !== undefined && (typeof stamp !== "string" || stamp.length > 1024)) throw new Error("Invalid stamp.");
       const result = await rewriteFrameFile(chatId, frameId, (source, framePath) => {
-        const plan = planDesignTextEdit(source, parsed, stampLine(stamp as string | undefined, framePath));
+        const plan = planDesignTextEdit(source, parsed, { stamp: stamp as string | undefined, path: framePath });
         return plan.ok ? { ok: true as const, source: plan.source } : plan;
       });
       return result.ok ? { ok: true } : (result as DesignCanvasEditTextResult);
