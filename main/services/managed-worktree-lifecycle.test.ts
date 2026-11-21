@@ -26,6 +26,7 @@ import {
   provisionWorktreeIncludedFiles,
   readWorktreeInclude,
 } from "./managed-worktree-provisioner.js";
+import { provisionManagedWorktreeFilesBatch } from "./managed-worktree-file-io.js";
 import {
   restoreManagedWorktreeSnapshot,
   type ManagedWorktreeRestoreDependencies,
@@ -1674,6 +1675,64 @@ test("provisioning refuses symlinked sources, escapes, and existing destinations
     (error: unknown) =>
       error instanceof ManagedWorktreeProvisionerError &&
       (error.code === "unsafe_source" || error.code === "destination_exists"),
+  );
+});
+
+test("provisionManagedWorktreeFilesBatch settles only after exit on abort and keeps disk 1:1 with onProvisioned", async (t) => {
+  if (process.platform !== "darwin") return;
+  const sourceRoot = await temporaryDirectory(t);
+  const destinationRoot = await temporaryDirectory(t);
+  const paths: string[] = [];
+  for (let i = 0; i < 40; i += 1) {
+    const name = `f-${String(i).padStart(2, "0")}.txt`;
+    await fs.writeFile(path.join(sourceRoot, name), `payload-${i}\n`);
+    paths.push(name);
+  }
+
+  // 1. Mid-batch AbortSignal: helper exits cleanly before rejection, every
+  // file on disk was reported to onProvisioned (0 untracked/temp files), and
+  // no callbacks fire after rejection.
+  const controller = new AbortController();
+  const reported: string[] = [];
+  await assert.rejects(
+    provisionManagedWorktreeFilesBatch({
+      sourceRoot,
+      destinationRoot,
+      relativePaths: paths,
+      totalByteLimit: 1024 * 1024,
+      signal: controller.signal,
+      onProvisioned: (relativePath) => {
+        reported.push(relativePath);
+        if (reported.length === 5) controller.abort();
+      },
+    }),
+    /Provision aborted\./u,
+  );
+  const countAtReject = reported.length;
+  const filesOnDiskAtReject = (await fs.readdir(destinationRoot)).sort();
+  assert.deepEqual(
+    filesOnDiskAtReject,
+    [...reported].sort(),
+    "Every file installed on disk must match onProvisioned 1:1 at rejection (no untracked or .tmp leftovers)",
+  );
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  assert.equal(reported.length, countAtReject, "No onProvisioned callbacks may fire after rejection");
+  assert.deepEqual((await fs.readdir(destinationRoot)).sort(), filesOnDiskAtReject);
+
+  // 2. Throwing inside onProvisioned rejects cleanly instead of crashing the process.
+  const destinationRoot2 = await temporaryDirectory(t);
+  const boom = new Error("callback boom");
+  await assert.rejects(
+    provisionManagedWorktreeFilesBatch({
+      sourceRoot,
+      destinationRoot: destinationRoot2,
+      relativePaths: paths.slice(0, 5),
+      totalByteLimit: 1024 * 1024,
+      onProvisioned: () => {
+        throw boom;
+      },
+    }),
+    (error: unknown) => error === boom,
   );
 });
 

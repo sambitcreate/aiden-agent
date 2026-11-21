@@ -4,7 +4,11 @@
 
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { captureManagedWorktreeRootIdentity, ManagedWorktreeFileIoError, transferManagedWorktreeFile } from "./managed-worktree-file-io.js";
+import {
+  captureManagedWorktreeRootIdentity,
+  ManagedWorktreeFileIoError,
+  provisionManagedWorktreeFilesBatch,
+} from "./managed-worktree-file-io.js";
 
 const INCLUDE_FILE = ".worktreeinclude";
 const MAX_INCLUDE_BYTES = 64 * 1024;
@@ -147,7 +151,7 @@ export async function provisionWorktreeIncludedFiles(
   if (dependencies.checkIgnored) {
     const ignored = new Set(await dependencies.checkIgnored(canonicalSource, included, options.signal));
     if (options.signal?.aborted) throw new Error("Provision aborted.");
-    eligible = included.filter((entry) => ignored.has(entry)).sort();
+    eligible = [...new Set(included.filter((entry) => ignored.has(entry)))].sort();
   } else {
     const ignoredRaw = await dependencies.listFiles(canonicalSource, [
       "ls-files",
@@ -159,7 +163,7 @@ export async function provisionWorktreeIncludedFiles(
     ]);
     if (options.signal?.aborted) throw new Error("Provision aborted.");
     const ignored = new Set(ignoredRaw.split("\u0000").filter(Boolean));
-    eligible = included.filter((entry) => ignored.has(entry)).sort();
+    eligible = [...new Set(included.filter((entry) => ignored.has(entry)))].sort();
   }
   if (eligible.length > MAX_PROVISIONED_FILES) {
     throw new ManagedWorktreeProvisionerError(
@@ -168,10 +172,8 @@ export async function provisionWorktreeIncludedFiles(
     );
   }
 
-  const provisioned: string[] = [];
-  let totalBytes = 0;
+  const normalizedPaths: string[] = [];
   for (const entry of eligible) {
-    if (options.signal?.aborted) throw new Error("Provision aborted.");
     const relativePath = normalizedRelativePath(entry);
     if (relativePath === undefined) {
       throw new ManagedWorktreeProvisionerError(
@@ -179,39 +181,40 @@ export async function provisionWorktreeIncludedFiles(
         "A provisioned file path could not be verified.",
       );
     }
-    try {
-      const copied = await transferManagedWorktreeFile({
-        operation: "copy",
-        sourceRoot: canonicalSource,
-        sourceIdentity,
-        sourceRelativePath: relativePath,
-        destinationRoot: canonicalWorktree,
-        destinationIdentity,
-        destinationRelativePath: relativePath,
-        byteLimit: MAX_PROVISIONED_BYTES - totalBytes,
-        mode: "source",
-      });
-      totalBytes += copied.size;
-    } catch (error) {
-      if (error instanceof ManagedWorktreeFileIoError) {
-        const code = error.code === "destination_exists" ? "destination_exists"
-          : error.code === "too_many_bytes" ? "too_many_bytes"
-          : error.code === "source_changed" ? "source_changed"
-          : error.code === "unsafe_source" ? "unsafe_source"
-          : error.code === "invalid_input" ? "unsafe_source"
-          : "unsafe_source";
-        throw new ManagedWorktreeProvisionerError(
-          code,
-          code === "destination_exists"
-            ? "A provisioned file would overwrite an existing worktree file."
-            : "A provisioned file could not be copied safely.",
-          error,
-        );
-      }
-      throw error;
-    }
-    provisioned.push(relativePath);
-    options.onProvisioned?.(relativePath);
+    normalizedPaths.push(relativePath);
   }
-  return provisioned;
+  if (options.signal?.aborted) throw new Error("Provision aborted.");
+
+  try {
+    const { provisioned } = await provisionManagedWorktreeFilesBatch({
+      sourceRoot: canonicalSource,
+      sourceIdentity,
+      destinationRoot: canonicalWorktree,
+      destinationIdentity,
+      relativePaths: normalizedPaths,
+      totalByteLimit: MAX_PROVISIONED_BYTES,
+      signal: options.signal,
+      onProvisioned: (relativePath) => {
+        options.onProvisioned?.(relativePath);
+      },
+    });
+    return provisioned;
+  } catch (error) {
+    if (error instanceof ManagedWorktreeFileIoError) {
+      const code = error.code === "destination_exists" ? "destination_exists"
+        : error.code === "too_many_bytes" ? "too_many_bytes"
+        : error.code === "source_changed" ? "source_changed"
+        : error.code === "unsafe_source" ? "unsafe_source"
+        : error.code === "invalid_input" ? "unsafe_source"
+        : "unsafe_source";
+      throw new ManagedWorktreeProvisionerError(
+        code,
+        code === "destination_exists"
+          ? "A provisioned file would overwrite an existing worktree file."
+          : "A provisioned file could not be copied safely.",
+        error,
+      );
+    }
+    throw error;
+  }
 }
