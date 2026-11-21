@@ -719,9 +719,18 @@ struct AidenPairingView: View {
                 )
 
                 if active {
-                    AidenInlineQRScannerView { payload in
-                        handleScannedQRPayload(payload)
-                    }
+                    AidenInlineQRScannerView(
+                        onCode: { payload in
+                            handleScannedQRPayload(payload)
+                        },
+                        onUnavailable: {
+                            isCameraActive = false
+                            scanComplete = false
+                            inlineError = String(
+                                localized: "Camera is unavailable on this device. Enter the address and setup code below."
+                            )
+                        }
+                    )
                     AidenFrostedCutoutView(
                         cutoutTop: 34,
                         cutoutSize: 144,
@@ -1145,9 +1154,10 @@ private struct AidenFrostedCutoutView: UIViewRepresentable {
 
 private struct AidenInlineQRScannerView: UIViewRepresentable {
     let onCode: (String) -> Void
+    let onUnavailable: () -> Void
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(onCode: onCode)
+        Coordinator(onCode: onCode, onUnavailable: onUnavailable)
     }
 
     func makeUIView(context: Context) -> PreviewUIView {
@@ -1158,6 +1168,7 @@ private struct AidenInlineQRScannerView: UIViewRepresentable {
 
     func updateUIView(_ uiView: PreviewUIView, context: Context) {
         context.coordinator.onCode = onCode
+        context.coordinator.onUnavailable = onUnavailable
     }
 
     static func dismantleUIView(_ uiView: PreviewUIView, coordinator: Coordinator) {
@@ -1171,22 +1182,32 @@ private struct AidenInlineQRScannerView: UIViewRepresentable {
 
     final class Coordinator: NSObject, AVCaptureMetadataOutputObjectsDelegate {
         var onCode: (String) -> Void
+        var onUnavailable: () -> Void
         private let session = AVCaptureSession()
         private let queue = DispatchQueue(label: "aiden.inline-qr-scanner")
         private var configured = false
+        private var sessionStopped = false
         private var delivered = false
+        private var isDismantled = false
 
-        init(onCode: @escaping (String) -> Void) {
+        init(onCode: @escaping (String) -> Void, onUnavailable: @escaping () -> Void) {
             self.onCode = onCode
+            self.onUnavailable = onUnavailable
         }
 
         func start(in view: PreviewUIView) {
             view.previewLayer.session = session
             view.previewLayer.videoGravity = .resizeAspectFill
             queue.async { [weak self] in
-                guard let self else { return }
+                guard let self, !self.sessionStopped else { return }
                 if !self.configured {
-                    self.configureSession()
+                    guard self.configureSession() else {
+                        DispatchQueue.main.async { [weak self] in
+                            guard let self, !self.isDismantled else { return }
+                            self.onUnavailable()
+                        }
+                        return
+                    }
                     self.configured = true
                 }
                 if !self.session.isRunning {
@@ -1196,28 +1217,44 @@ private struct AidenInlineQRScannerView: UIViewRepresentable {
         }
 
         func stop() {
-            queue.async { [session] in
-                if session.isRunning {
-                    session.stopRunning()
+            isDismantled = true
+            queue.async { [weak self] in
+                guard let self else { return }
+                self.sessionStopped = true
+                if self.session.isRunning {
+                    self.session.stopRunning()
                 }
             }
         }
 
-        private func configureSession() {
+        private func configureSession() -> Bool {
             guard let camera = AVCaptureDevice.default(for: .video),
-                  let input = try? AVCaptureDeviceInput(device: camera),
-                  session.canAddInput(input) else {
-                return
+                  let input = try? AVCaptureDeviceInput(device: camera) else {
+                return false
             }
             session.beginConfiguration()
-            session.addInput(input)
-            let output = AVCaptureMetadataOutput()
-            if session.canAddOutput(output) {
-                session.addOutput(output)
-                output.setMetadataObjectsDelegate(self, queue: .main)
-                output.metadataObjectTypes = [.qr]
+            defer { session.commitConfiguration() }
+
+            guard session.canAddInput(input) else {
+                return false
             }
-            session.commitConfiguration()
+            session.addInput(input)
+
+            let output = AVCaptureMetadataOutput()
+            guard session.canAddOutput(output) else {
+                session.removeInput(input)
+                return false
+            }
+            session.addOutput(output)
+
+            guard output.availableMetadataObjectTypes.contains(.qr) else {
+                session.removeOutput(output)
+                session.removeInput(input)
+                return false
+            }
+            output.setMetadataObjectsDelegate(self, queue: .main)
+            output.metadataObjectTypes = [.qr]
+            return true
         }
 
         func metadataOutput(
@@ -1225,7 +1262,7 @@ private struct AidenInlineQRScannerView: UIViewRepresentable {
             didOutput metadataObjects: [AVMetadataObject],
             from connection: AVCaptureConnection
         ) {
-            guard !delivered,
+            guard !delivered, !isDismantled,
                   let object = metadataObjects.first as? AVMetadataMachineReadableCodeObject,
                   object.type == .qr,
                   let value = object.stringValue else { return }

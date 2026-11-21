@@ -676,7 +676,6 @@ test("the Aiden home, onboarding, composer, schedules, and activity retain the r
   const [
     shell,
     pairing,
-    content,
     chat,
     attachmentPicker,
     attachmentCamera,
@@ -690,7 +689,6 @@ test("the Aiden home, onboarding, composer, schedules, and activity retain the r
   ] = await Promise.all([
     readWorkspaceShellSources(),
     readFile(`${iosRoot}AidenOnTheGo/Features/Remote/AidenPairingView.swift`, "utf8"),
-    readFile(`${iosRoot}AidenOnTheGo/ContentView.swift`, "utf8"),
     readChatFeatureSources(),
     readFile(`${iosRoot}AidenOnTheGo/Features/Chat/AidenAttachmentPicker.swift`, "utf8"),
     readFile(`${iosRoot}AidenOnTheGo/Features/Chat/AidenAttachmentCamera.swift`, "utf8"),
