@@ -1233,9 +1233,8 @@ private struct AidenInlineQRScannerView: UIViewRepresentable {
                 return false
             }
             session.beginConfiguration()
-            defer { session.commitConfiguration() }
-
             guard session.canAddInput(input) else {
+                session.commitConfiguration()
                 return false
             }
             session.addInput(input)
@@ -1243,13 +1242,17 @@ private struct AidenInlineQRScannerView: UIViewRepresentable {
             let output = AVCaptureMetadataOutput()
             guard session.canAddOutput(output) else {
                 session.removeInput(input)
+                session.commitConfiguration()
                 return false
             }
             session.addOutput(output)
+            session.commitConfiguration()
 
             guard output.availableMetadataObjectTypes.contains(.qr) else {
+                session.beginConfiguration()
                 session.removeOutput(output)
                 session.removeInput(input)
+                session.commitConfiguration()
                 return false
             }
             output.setMetadataObjectsDelegate(self, queue: .main)
