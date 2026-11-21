@@ -12,8 +12,11 @@ import { PairingRequestSheet } from "../components/remote-pairing-request-sheet"
 import { useQueryClient } from "@tanstack/react-query";
 import { appControlsApi } from "../lib/ipc";
 import * as React from "react";
-import { appApi, chatsApi, localRunsApi, onNotification, settingsApi, workspacesApi } from "../lib/ipc";
-import { mirrorNewChatModelToHost, subscribeHostNewChatModel } from "../lib/use-model-selection";
+import { appApi, chatsApi, claimChatHandoff, localRunsApi, onNotification, settingsApi, workspacesApi } from "../lib/ipc";
+import { consumePendingChatHandoff, notifyPendingChatHandoff } from "../lib/chat-handoff-bridge";
+import { seedComposerAttachments } from "../lib/composer-draft-store";
+import type { Attachment } from "../lib/types";
+import { mirrorNewChatModelToHost, persistModelSelection, subscribeHostNewChatModel } from "../lib/use-model-selection";
 import { useTheme } from "../lib/use-theme";
 import { useActiveWorkspace, WorkspaceProvider } from "../lib/workspace-context";
 import { WorkspaceTerminalProvider, useWorkspaceTerminal } from "../components/terminal-drawer";
@@ -261,7 +264,7 @@ function RootContent() {
     async (
       workspaceId: string,
       initialText?: string,
-      options: { gitMode?: ChatDraftGitMode } = {},
+      options: { gitMode?: ChatDraftGitMode; attachments?: readonly Attachment[] } = {},
     ): Promise<string | undefined> => {
       if (appendReconciliationRequired) {
         toast.error("Reload Aiden before creating another chat.");
@@ -271,7 +274,8 @@ function RootContent() {
         toast.info(navigationBlockedReason);
         return undefined;
       }
-      const reusable = initialText ? undefined : findReusableChatDraft(workspaceId);
+      const hasAttachments = Boolean(options.attachments && options.attachments.length > 0);
+      const reusable = initialText || hasAttachments ? undefined : findReusableChatDraft(workspaceId);
       if (workspaceId !== activeId && environmentPanel.agentBusy) environmentPanel.cancelAgent?.();
       const chat =
         reusable?.chat ??
@@ -282,6 +286,9 @@ function RootContent() {
           options.gitMode ? { gitMode: options.gitMode } : {},
         ).chat;
       if (reusable && options.gitMode) setChatDraftGitMode(reusable.chat.id, options.gitMode);
+      if (hasAttachments && options.attachments) {
+        seedComposerAttachments(chat.id, [...options.attachments]);
+      }
       const previousWorkspaceId = activeId;
       selectWorkspace(workspaceId);
       try {
@@ -617,9 +624,59 @@ function RootContent() {
         acknowledge("blocked");
         return;
       }
+      const draftHandoffPrefix = "/quick-chat-handoff/draft/";
+      if (payload.path.startsWith(draftHandoffPrefix)) {
+        const ticketId = payload.path.slice(draftHandoffPrefix.length).trim();
+        if (!ticketId) {
+          acknowledge("blocked");
+          return;
+        }
+        void claimChatHandoff({ ticketId })
+          .then(async (claimed) => {
+            if (!claimed || claimed.kind !== "draft") {
+              acknowledge("blocked");
+              return;
+            }
+            if (claimed.providerId && claimed.model) {
+              persistModelSelection(claimed.providerId, claimed.model);
+            }
+            const targetWorkspaceId = claimed.workspaceId || activeId || "default";
+            const createdDraftId = await openNewChatIn(targetWorkspaceId, claimed.text, {
+              attachments: claimed.attachments as Attachment[],
+            });
+            if (!createdDraftId) {
+              acknowledge("blocked");
+              return;
+            }
+            acknowledge("opened");
+          })
+          .catch(() => acknowledge("blocked"));
+        return;
+      }
+      const chatHandoffPrefix = "/quick-chat-handoff/chat/";
+      if (payload.path.startsWith(chatHandoffPrefix)) {
+        const targetChatId = payload.path.slice(chatHandoffPrefix.length).trim();
+        if (!targetChatId) {
+          acknowledge("blocked");
+          return;
+        }
+        notifyPendingChatHandoff(targetChatId);
+        void Promise.all([
+          queryClient.invalidateQueries({ queryKey: queryKeys.chat(targetChatId) }),
+          queryClient.invalidateQueries({ queryKey: queryKeys.chats }),
+        ]);
+        void navigate({ to: "/chat/$chatId", params: { chatId: targetChatId } }).then(
+          () => acknowledge("opened"),
+          () => {
+            consumePendingChatHandoff(targetChatId);
+            acknowledge("blocked");
+          },
+        );
+        return;
+      }
       void navigate({ to: payload.path }).then(() => acknowledge("opened"), () => acknowledge("blocked"));
     });
-  }, [navigate, navigationBlockedReason]);
+  }, [activeId, navigate, navigationBlockedReason, openNewChatIn, queryClient]);
 
   React.useEffect(() => {
     const syncFocus = () =>

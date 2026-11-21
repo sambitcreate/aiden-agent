@@ -5,6 +5,15 @@ import type {
   AttachToWorkspaceResult,
   InspectAttachFilesResult,
 } from "../shared/chat-attach-workspace";
+import type {
+  ClaimedDesktopHandoff,
+  ClaimHandoffRequest,
+} from "../shared/chat-handoff";
+import type {
+  BufferedGenerationNotification,
+  GenerationStreamBuffer,
+  GenerationStreamProjection,
+} from "./generation-stream";
 import { createBotPeerApi } from "./bot-peers-api";
 import { parseBotExecutionResumeStatus } from "../shared/bot-execution-resume";
 import { parseBotRoutineModelSettings, parseBotRoutineModelCatalog, parseBotRoutineModelResult, parseBotRoutineModelRuns, type BotRoutineModelSave, type BotRoutineThinkingLevel } from "../shared/bot-routine-models";
@@ -267,7 +276,7 @@ import type {
   ImageModelRef,
   ImageGenerationSetModelEnabledRequest,
 } from "../shared/image-generation/types";
-import { subscribeGenerationStream } from "./generation-stream";
+import { createGenerationStreamBuffer, subscribeGenerationStream } from "./generation-stream";
 import { parseTodoSnapshotView, type TodoSnapshotViewV1 } from "../shared/todo";
 import type {
   ChatPullRequestCandidatesResult,
@@ -2419,6 +2428,107 @@ export function startGeneration(
       });
     },
   };
+}
+
+export {
+  createGenerationStreamBuffer,
+  type BufferedGenerationNotification,
+  type GenerationStreamBuffer,
+};
+
+/** Claim a pending cross-window draft or live-stream handoff ticket from main. */
+export function claimChatHandoff(
+  input: ClaimHandoffRequest,
+): Promise<ClaimedDesktopHandoff | null> {
+  return invoke<ClaimedDesktopHandoff | null>("chat:claimHandoff", input);
+}
+
+/**
+ * Attach this renderer document to an already-running generation whose
+ * ownership was just transferred to it via `chat:claimHandoff`.
+ */
+export function attachGenerationStream(
+  streamId: string,
+  scope: { chatId: string; workspaceId?: string },
+  initialProjection: Partial<GenerationStreamProjection>,
+  callbacks: StreamCallbacks,
+  bufferedNotifications?: readonly BufferedGenerationNotification[],
+  onBeforeReplay?: (handle: GenerationHandle) => void,
+): GenerationHandle {
+  rememberOwnGenerationStream(streamId);
+  const stream = subscribeGenerationStream(
+    streamId,
+    scope,
+    callbacks,
+    initialProjection,
+  );
+  const dispose = stream.dispose;
+  let lifecycleDetached = false;
+  let userStopRequested = false;
+
+  const handle: GenerationHandle = {
+    streamId,
+    started: Promise.resolve({ ok: true as const }),
+    cancel: (origin) => {
+      if (origin === "lifecycle") {
+        if (lifecycleDetached || stream.settled()) return;
+        lifecycleDetached = true;
+        rememberDetachedLifecycleStream(
+          {
+            streamId,
+            chatId: scope.chatId,
+            workspaceId: scope.workspaceId ?? "default",
+          },
+          stream.projection(),
+        );
+        dispose();
+      } else {
+        if (userStopRequested) return;
+        userStopRequested = true;
+      }
+      void invoke("chat:cancel", streamId, origin).catch((error: unknown) => {
+        if (origin === "user_stop") {
+          callbacks.onError(error instanceof Error ? error.message : String(error));
+          dispose();
+        }
+      });
+    },
+  };
+  onBeforeReplay?.(handle);
+  if (bufferedNotifications && bufferedNotifications.length > 0) {
+    stream.replay(bufferedNotifications);
+  }
+  return handle;
+}
+
+/**
+ * Detach a handed-off stream if the target pane unmounted or navigated away
+ * while `claimChatHandoff` was in flight, so main does not keep sending events
+ * to a detached pane.
+ */
+export function detachHandoffStream(
+  streamId: string,
+  scope: { chatId: string; workspaceId: string },
+  projection: Partial<GenerationStreamProjection>,
+): void {
+  rememberOwnGenerationStream(streamId);
+  rememberDetachedLifecycleStream(
+    {
+      streamId,
+      chatId: scope.chatId,
+      workspaceId: scope.workspaceId,
+    },
+    {
+      content: projection.content ?? "",
+      lastTextDeltaAt: projection.lastTextDeltaAt ?? null,
+      reasoning: projection.reasoning ?? "",
+      timeline: projection.timeline ?? null,
+      artifacts: projection.artifacts ?? [],
+      uiVisuals: projection.uiVisuals ?? [],
+      subagents: projection.subagents ?? [],
+    },
+  );
+  void invoke("chat:cancel", streamId, "lifecycle").catch(() => undefined);
 }
 
 // --- Text to Speech (Read aloud) ---

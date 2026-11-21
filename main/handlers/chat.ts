@@ -17,6 +17,11 @@ import { parseParams } from "./chat-params.js";
 import { geminiLiveService } from "../services/gemini-live/service-main.js";
 import { parseToolApprovalScope } from "../../renderer/shared/tool-approval-scope.js";
 import { toolApprovalRules } from "../services/tool-approval-rules-main.js";
+import {
+  parseClaimHandoffRequest,
+  type ClaimedDesktopHandoff,
+} from "../../renderer/shared/chat-handoff.js";
+import { desktopHandoffTickets } from "../services/desktop-stream-handoff-main.js";
 
 // Re-exported so the IPC contract surface stays queryable from one module.
 export { parseParams };
@@ -196,6 +201,54 @@ export function registerChatGenerationHandlers(): void {
       // "expired" tells the renderer the agent already moved on, so it can
       // offer the answer as a follow-up message instead of losing it.
       return { status: outcome };
+    },
+  );
+
+  ipcMain.handle(
+    "chat:claimHandoff",
+    async (event, input: unknown): Promise<ClaimedDesktopHandoff | null> => {
+      const owner = chatGenerationOwner(event);
+      const parsed = parseClaimHandoffRequest(input);
+      if (parsed.ticketId) {
+        const draft = desktopHandoffTickets.claimDraft(parsed.ticketId);
+        if (!draft) return null;
+        try {
+          draft.onClaimed?.();
+        } catch {
+          // Best-effort source window cleanup after draft handoff.
+        }
+        return {
+          kind: "draft",
+          ticketId: draft.ticketId,
+          workspaceId: draft.workspaceId,
+          text: draft.text,
+          attachments: draft.attachments,
+          ...(draft.providerId ? { providerId: draft.providerId } : {}),
+          ...(draft.model ? { model: draft.model } : {}),
+        };
+      }
+      if (parsed.chatId) {
+        const chatTicket = desktopHandoffTickets.claimChat(parsed.chatId);
+        if (!chatTicket) return null;
+        const liveStream =
+          chatTicket.fromDocumentId !== owner.documentId
+            ? llmClient.transferGenerationOwner(chatTicket.chatId, chatTicket.fromDocumentId, owner)
+            : null;
+        try {
+          chatTicket.onClaimed?.();
+        } catch {
+          // Ownership has already transferred; never reject the claim on source cleanup errors.
+        }
+        return {
+          kind: "chat",
+          chatId: chatTicket.chatId,
+          liveStream,
+          ...(chatTicket.draftText !== undefined ? { draftText: chatTicket.draftText } : {}),
+          ...(chatTicket.draftAttachments !== undefined ? { draftAttachments: chatTicket.draftAttachments } : {}),
+          ...(chatTicket.queuedMessages !== undefined ? { queuedMessages: chatTicket.queuedMessages } : {}),
+        };
+      }
+      return null;
     },
   );
 }
