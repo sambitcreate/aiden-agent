@@ -87,6 +87,20 @@ export interface ChatTurnAudienceParams {
   visualize?: boolean;
 }
 
+/**
+ * A windowless turn answers the person when the screened prompt it answers is
+ * a message the person wrote (queued while the chat's previous run went). A
+ * turn answering a notice (a finished job, a check-back) is not the person's,
+ * so it can't set check-backs of its own.
+ */
+export function screenedPromptAnswersPerson(
+  messages: readonly { id: string; role: string; notice?: unknown }[],
+  screenedPrompt: { messageId: string } | undefined,
+): boolean {
+  if (screenedPrompt === undefined) return false;
+  return messages.some((message) => message.id === screenedPrompt.messageId && message.role === "user" && !message.notice);
+}
+
 /** The turn's audience, from the generation's options and parameters. */
 export function chatTurnAudienceFor(options: ChatTurnAudienceOptions, params: ChatTurnAudienceParams): ChatTurnAudience {
   return {

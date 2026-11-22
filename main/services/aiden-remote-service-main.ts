@@ -549,6 +549,10 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
     hostPlatform: aidenRemoteHostPlatform(process.platform),
     botRoutineWebhook: async (request) =>
       (await import("./bot-routine-events/sources-main.js")).handleBotRoutineWebhook(request),
+    taskTriggerWebhook: {
+      admit: async (request) => (await import("./scheduled-task-triggers-main.js")).admitTaskTriggerWebhook(request),
+      deliver: async (request) => (await import("./scheduled-task-triggers-main.js")).deliverTaskTriggerWebhook(request),
+    },
     workspaceApi: remoteWorkspaceApi = async (instanceId) => {
       // A failed build is retried by the next start rather than replayed.
       const api = await workspaceApis(

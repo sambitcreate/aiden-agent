@@ -1,4 +1,5 @@
 import * as React from "react";
+import { ScheduledTaskLinkPanel } from "./scheduled-task-link-panel";
 import { LiveGuard } from "./live-guard";
 import { useNavigate, useSearch } from "@tanstack/react-router";
 import { useQueryClient } from "@tanstack/react-query";
@@ -56,6 +57,7 @@ import {
   filterScheduledTasks,
   formatNextRun,
   formatSchedule,
+  formatTaskWhen,
   scheduledTaskProviderPin,
   scheduledTaskStatus,
   type ScheduledTaskTab,
@@ -110,6 +112,7 @@ function taskInput(task: ScheduledTask, mcpServers: McpServer[]): ScheduledTaskI
     enabled: task.enabled,
     mode: task.mode,
     cron: task.cron,
+    ...(task.trigger ? { trigger: task.trigger } : {}),
     timezone: task.timezone,
     workspaceId: task.workspaceId,
     providerId: task.providerId,
@@ -209,7 +212,7 @@ function ScheduledTaskDetail({
   onDelete: () => void;
 }) {
   const status = statusPresentation(task);
-  const cadence = formatSchedule(task.cron, task.timezone);
+  const cadence = formatTaskWhen(task);
   return (
     <aside
       className="scheduled-task-detail sticky top-4 min-w-0 self-start overflow-hidden rounded-card bg-well"
@@ -228,7 +231,13 @@ function ScheduledTaskDetail({
           {task.name}
         </Text>
         <Text as="p" variant="small" color="secondary" className="mt-1">
-          {task.enabled ? `Next run ${formatNextRun(task.nextRunAt)}` : "Automatic runs are paused"}
+          {!task.enabled
+            ? "Automatic runs are paused"
+            : task.trigger?.kind === "webhook"
+              ? "Runs when its link is called"
+              : task.trigger
+                ? "Runs when something changes"
+                : `Next run ${formatNextRun(task.nextRunAt)}`}
         </Text>
 
         <div className="mt-4 rounded-control bg-background px-3 py-2.5">
@@ -244,7 +253,7 @@ function ScheduledTaskDetail({
           <div className="flex items-start gap-3 py-3">
             <Clock3 className="mt-0.5 size-4 shrink-0 text-secondary" aria-hidden="true" />
             <div className="min-w-0 flex-1">
-              <dt className="text-small text-tertiary">Schedule</dt>
+              <dt className="text-small text-tertiary">{task.trigger ? "When" : "Schedule"}</dt>
               <dd className="mt-0.5 text-small text-primary">{cadence}</dd>
             </div>
           </div>
@@ -279,6 +288,8 @@ function ScheduledTaskDetail({
             </div>
           </div>
         </dl>
+
+        {task.trigger?.kind === "webhook" ? <ScheduledTaskLinkPanel taskId={task.id} busy={busy} /> : null}
 
         {task.lastError ? (
           <Callout className="mb-3" color="red">
@@ -668,7 +679,7 @@ export function ScheduledTasksView() {
                               ) : null}
                             </span>
                             <Text variant="small" color="secondary" truncate className="mt-1 block">
-                              {formatSchedule(task.cron, task.timezone)}
+                              {formatTaskWhen(task)}
                               {task.mode === "script" && task.script ? ` · ${task.script}` : ""}
                               {task.enabled
                                 ? ` · Next run ${formatNextRun(task.nextRunAt)}`

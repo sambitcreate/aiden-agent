@@ -11,6 +11,7 @@ import type { AppearanceConfig } from "../shared/appearance";
 import type { ChatOwnerV1 } from "../shared/chat-visibility";
 import type { KeybindingOverridesV1 } from "../shared/keybindings";
 import type { AnthropicThinkingLevel } from "../shared/anthropic-thinking";
+import type { ScheduledTaskTrigger } from "../shared/scheduled-task-trigger";
 import type { CodexThinkingLevel } from "../shared/codex-thinking";
 import type { GenerationThinkingLevel } from "../shared/generation-thinking";
 import type { GenerationTimeline } from "../shared/generation-timeline";
@@ -761,6 +762,8 @@ export interface ScheduledTask {
   chatId?: string;
   /** Main-owned, read-only: the chat this task was made in, where its runs post. */
   originChatId?: string;
+  /** What starts the task instead of its schedule; `cron` is empty when set. */
+  trigger?: ScheduledTaskTrigger;
   notify: boolean;
   lastResult?: ScheduledRunResult;
   lastError?: string;
@@ -796,6 +799,8 @@ export interface ScheduledTaskInput {
   mcpServerIds?: string[];
   /** Explicit Web Search authority. New tasks default to false. */
   webSearchEnabled?: boolean;
+  /** What starts the task instead of `cron`; `null` turns a trigger task back into a scheduled one. */
+  trigger?: ScheduledTaskTrigger | null;
   notify?: boolean;
 }
 

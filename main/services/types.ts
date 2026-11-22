@@ -550,7 +550,7 @@ export type ScheduledTaskMode = "llm" | "script";
 export type ScheduledTaskPermission = "read-only" | "full";
 export type ScheduledTaskExecutionProfile = "assistant";
 export type ScheduledRunResult = "success" | "error" | "silent" | "blocked" | "skipped";
-/** Why a run was recorded without doing work. Only Bot routines skip today. */
+/** Why a run was recorded without doing work. */
 export type ScheduledRunSkipReason =
   | "bot_paused"
   | "duplicate"
@@ -558,7 +558,9 @@ export type ScheduledRunSkipReason =
   /** The task posts into a chat that stayed busy past the bounded wait. */
   | "chat_busy"
   /** The task posts into a chat that already ran its hourly share of task runs. */
-  | "chat_budget";
+  | "chat_budget"
+  /** A chat task's automatic fire more than 12 hours late (asleep or closed); it waits for its next time. */
+  | "too_late";
 
 export interface ScheduledMcpServerBinding {
   id: string;
@@ -621,6 +623,11 @@ export interface ScheduledTask {
    */
   originChatId?: string;
   /**
+   * What starts this task instead of a cron schedule (a watch). A task with a
+   * trigger has an empty `cron` and no `nextRunAt`. Never on a Bot routine.
+   */
+  trigger?: import("../../renderer/shared/scheduled-task-trigger.js").ScheduledTaskTrigger;
+  /**
    * Main-owned Bot that owns this routine. A Bot routine submits to that Bot's
    * conversation instead of a workspace chat and is hidden from the generic
    * scheduled-task surfaces. Immutable once set.
@@ -635,6 +642,11 @@ export interface ScheduledTask {
   notify: boolean;
   lastResult?: ScheduledRunResult;
   lastError?: string;
+  /**
+   * Main-owned: when repeated failed runs last paused this chat task. Only
+   * failures after it count toward the next pause. Never on a Bot routine.
+   */
+  failurePausedAt?: number;
   createdAt: number;
   updatedAt: number;
 }
@@ -685,6 +697,11 @@ export interface ScheduledTaskInput {
   webSearchEnabled?: boolean;
   /** Main-owned: the chat a new task posts into. Only read when creating; saves of an existing task keep its binding. */
   originChatId?: string;
+  /**
+   * What starts the task instead of `cron`. Undefined keeps the saved trigger
+   * (older callers never send one); `null` removes it so the task runs on `cron`.
+   */
+  trigger?: import("../../renderer/shared/scheduled-task-trigger.js").ScheduledTaskTrigger | null;
   /** Main-owned Bot routine owner. Renderer schedule mutations cannot set this field. */
   botId?: string;
   /** Main-owned Bot routine schedule; when set, `cron` is derived from it. */

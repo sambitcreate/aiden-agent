@@ -112,7 +112,7 @@ export function ScheduledTaskApproval({
   now?: number;
 }) {
   const { platform } = useAppCapabilities();
-  const cadence = formatScheduledTaskCadence(details.cron, details.timezone, new Date(now));
+  const cadence = details.whenLabel ?? formatScheduledTaskCadence(details.cron, details.timezone, new Date(now));
   const script = details.kind === "scheduled-task" && details.mode === "script" ? details.script : null;
   const body = script ?? details.prompt;
   const full = details.permission === "full";

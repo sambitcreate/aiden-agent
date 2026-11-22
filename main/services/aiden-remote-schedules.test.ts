@@ -383,3 +383,37 @@ test("a desktop-only toggle doesn't make a phone's settings edit fail as changed
   await service.updateSettings(saved.revision, { confirmedForeground: true, defaultNotify: true });
   await assert.rejects(application.updateSettings(before.revision, { keepAwakeWhileWorking: true }), /changed/u);
 });
+
+test("phones never see a task that runs when something changes, its runs, or a way to change or run it", async () => {
+  const value = fixture();
+  const visible = await value.service.create("device-1", "create-key-123456", llmMutation);
+  const watched = await value.service.create("device-1", "create-key-654321", { ...llmMutation, name: "Status page" });
+  // The desktop turns the second task into a watch: no cron, a trigger instead.
+  value.tasks.set(watched.id, {
+    ...value.tasks.get(watched.id)!, cron: "",
+    trigger: { kind: "watch", source: { type: "url", url: "https://example.com/status" }, everyMinutes: 15 },
+  });
+  value.histories.set(watched.id, [
+    { id: "run-watch", taskId: watched.id, startedAt: 10, finishedAt: 11, result: "success", output: "The status page changed." },
+  ]);
+  value.histories.set(visible.id, [
+    { id: "run-ok", taskId: visible.id, startedAt: 12, finishedAt: 13, result: "success", output: "All green." },
+  ]);
+  const revision = scheduledTaskRevision(value.tasks.get(watched.id)!);
+
+  assert.deepEqual((await value.service.list("device-1")).tasks.map((task) => task.id), [visible.id]);
+  assert.deepEqual((await value.service.notifications()).notifications.map((item) => item.id), ["run-ok"]);
+  const hidden = (work: Promise<unknown>) => assert.rejects(work, (error: { status?: number }) => error.status === 404);
+  await hidden(value.service.get("device-1", watched.id));
+  await hidden(value.service.runs(watched.id));
+  await hidden(value.service.update("device-1", watched.id, revision, llmMutation));
+  await hidden(value.service.pause("device-1", watched.id, revision, "pause-key-1234567"));
+  await hidden(value.service.resume("device-1", watched.id, revision, "resume-key-123456"));
+  await hidden(value.service.run("device-1", watched.id, revision, "run-key-12345678"));
+  await hidden(value.service.remove(watched.id, revision));
+
+  const kept = value.tasks.get(watched.id)!;
+  assert.equal(kept.enabled, true);
+  assert.equal(kept.trigger?.kind, "watch");
+  assert.equal(value.runStarts(), 0);
+});

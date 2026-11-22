@@ -148,6 +148,12 @@ export interface EventWatchDependencies<R extends EventRoutine> {
   onError?(error: unknown): void;
   /** A check's result was saved: what the owner's view shows has changed. */
   checked?(routine: R): void;
+  /**
+   * True when what the check prints is itself the news (a chat task's script
+   * watch): empty output means nothing to report, and any other output is
+   * handed on as it is, with no baseline and no diff.
+   */
+  reportsOutput?(routine: R): boolean;
 }
 
 /** A Bot's watches: the owner key is the Bot id. */
@@ -327,6 +333,18 @@ export function createEventWatches<R extends EventRoutine>(dependencies: EventWa
         const snapshot = text.slice(0, BOT_WATCH_SNAPSHOT_CHARS);
         const { lastError: _lastError, unsettledFailure: _unsettled, ...rest } = state;
         const base: BotWatchState = { ...rest, failures: 0, lastCheckAt: checkedAt, nextCheckAt };
+        if (dependencies.reportsOutput?.(fresh)) {
+          const said = text.trim();
+          if (!said) {
+            const next = { ...fresh, watch: { ...base, lastResult: "no_change" as const } };
+            return { next, result: { outcome: "no_change", routine: next, hadFailure } };
+          }
+          const room = BOT_ROUTINE_EVENT_LIMITS.payloadChars;
+          const payload = [...said].length > room ? `${[...said].slice(0, room - 1).join("")}…` : said;
+          const pending = { eventId: `${hash.slice(0, 24)}-${checkedAt.toString(36)}`, payload, revision: fresh.updatedAt, nextAttemptAt: checkedAt };
+          const next = { ...fresh, watch: { ...base, hash, pending, sameSince: checkedAt, lastResult: "changed" as const } };
+          return { next, result: { outcome: "changed", routine: next, hadFailure } };
+        }
         if (!state.hash) {
           const next = { ...fresh, watch: { ...base, hash, snapshot, sameSince: checkedAt, lastResult: "baseline" as const } };
           return { next, result: { outcome: "baseline", routine: next, hadFailure } };
