@@ -9,445 +9,134 @@ struct AidenLiveActivityWidgetBundle: WidgetBundle {
     }
 }
 
+/// Plain text on the system background: a title, one status line and, when a
+/// run finishes, its reply excerpt. No status marks, colors or tints.
 struct AgentRunLiveActivityWidget: Widget {
     var body: some WidgetConfiguration {
         ActivityConfiguration(for: AgentRunActivityAttributes.self) { context in
-            AgentRunLockScreenView(context: context)
-                .activityBackgroundTint(AgentRunLiveActivityTheme.background)
-                .activitySystemActionForegroundColor(AgentRunLiveActivityTheme.primaryText)
-                .widgetURL(AidenDeepLink.chatURL(
-                    instanceId: context.attributes.instanceID,
-                    chatId: context.state.sessionID
-                ))
+            AgentRunLockScreenView(
+                presentation: Self.presentation(context),
+                chatURL: Self.chatURL(context)
+            )
+            .widgetURL(Self.chatURL(context))
         } dynamicIsland: { context in
-            DynamicIsland {
-                DynamicIslandExpandedRegion(.leading) {
-                    AgentRunIslandBadge(
-                        status: context.state.status,
-                        isStale: AgentRunFreshness.isStale(context.state, systemMarkedStale: context.isStale)
-                    )
-                        .padding(.leading, 18)
-                }
-
-                DynamicIslandExpandedRegion(.trailing) {
-                    AgentRunIslandStatusView(
-                        state: context.state,
-                        systemMarkedStale: context.isStale
-                    )
-                        .padding(.trailing, 18)
-                }
-
+            let presentation = Self.presentation(context)
+            let chatURL = Self.chatURL(context)
+            return DynamicIsland {
                 DynamicIslandExpandedRegion(.bottom) {
-                    AgentRunExpandedIslandBottomView(
-                        state: context.state,
-                        systemMarkedStale: context.isStale
-                    )
+                    AgentRunTextCard(presentation: presentation, chatURL: chatURL)
+                        .padding(.horizontal, 4)
                 }
             } compactLeading: {
-                AgentRunIslandCompactMark(
-                    status: context.state.status,
-                    isStale: AgentRunFreshness.isStale(context.state, systemMarkedStale: context.isStale)
-                )
-            } compactTrailing: {
-                Text(context.state.status.compactTitle)
+                Text(presentation.compactStatus)
                     .font(.caption2.weight(.semibold))
-                    .foregroundStyle(AgentRunStatusStyle.color(for: context.state.status, isStale: AgentRunFreshness.isStale(context.state, systemMarkedStale: context.isStale)))
+                    .lineLimit(1)
                     .minimumScaleFactor(0.72)
-                    .lineLimit(1)
-            } minimal: {
-                AgentRunIslandCompactMark(
-                    status: context.state.status,
-                    isStale: AgentRunFreshness.isStale(context.state, systemMarkedStale: context.isStale)
-                )
-            }
-            .widgetURL(AidenDeepLink.chatURL(
-                instanceId: context.attributes.instanceID,
-                chatId: context.state.sessionID
-            ))
-            .keylineTint(AgentRunStatusStyle.color(for: context.state.status, isStale: AgentRunFreshness.isStale(context.state, systemMarkedStale: context.isStale)))
-        }
-    }
-}
-
-private struct AgentRunExpandedIslandBottomView: View {
-    let state: AgentRunActivityAttributes.ContentState
-    let systemMarkedStale: Bool
-
-    /// A stale run that is still waiting on the user keeps its ask here,
-    /// ahead of any older reply text.
-    private var staleAnswerLine: String? {
-        guard let copy = AgentRunStalePresentation.copy(for: state, systemMarkedStale: systemMarkedStale),
-              let action = copy.action else { return nil }
-        return "\(copy.lead) · \(action)"
-    }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            AgentRunProgressRail(status: state.status)
-
-            AgentRunFreshnessChips(state: state, systemMarkedStale: systemMarkedStale)
-
-            if let staleAnswerLine {
-                Text(staleAnswerLine)
-                    .font(.caption2.weight(.semibold))
-                    .foregroundStyle(AgentRunLiveActivityTheme.primaryText)
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-            } else if !state.responseExcerpt.isEmpty {
-                Text(state.responseExcerpt)
+            } compactTrailing: {
+                AgentRunTimingText(timing: presentation.timing)
                     .font(.caption2)
-                    .foregroundStyle(AgentRunLiveActivityTheme.secondaryText)
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-            } else {
-                Text(state.currentActivity)
+                    .foregroundStyle(.secondary)
+            } minimal: {
+                Text(verbatim: "A")
                     .font(.caption2.weight(.semibold))
-                    .foregroundStyle(AgentRunLiveActivityTheme.secondaryText)
-                    .lineLimit(1)
-                    .truncationMode(.tail)
             }
+            .widgetURL(chatURL)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.top, 2)
-        .padding(.horizontal, 12)
-        .padding(.bottom, 4)
+        .supplementalActivityFamilies([.small])
+    }
+
+    private static func presentation(_ context: ActivityViewContext<AgentRunActivityAttributes>) -> AgentRunTextPresentation {
+        AgentRunTextPresentation.make(state: context.state, systemMarkedStale: context.isStale)
+    }
+
+    private static func chatURL(_ context: ActivityViewContext<AgentRunActivityAttributes>) -> URL? {
+        AidenDeepLink.chatURL(instanceId: context.attributes.instanceID, chatId: context.state.sessionID)
     }
 }
 
 private struct AgentRunLockScreenView: View {
-    let context: ActivityViewContext<AgentRunActivityAttributes>
+    let presentation: AgentRunTextPresentation
+    let chatURL: URL?
+    @Environment(\.activityFamily) private var activityFamily
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            header
-            activityProgressRow(progressWidth: 112)
-            transcriptPanel
-        }
-        .frame(maxWidth: .infinity, alignment: .topLeading)
-        .padding(.horizontal, 16)
-        .padding(.vertical, 14)
-    }
-
-    private var isStale: Bool {
-        AgentRunFreshness.isStale(context.state, systemMarkedStale: context.isStale)
-    }
-
-    private var staleCopy: AgentRunStalePresentation.Copy? {
-        AgentRunStalePresentation.copy(for: context.state, systemMarkedStale: context.isStale)
-    }
-
-    private var activityText: String {
-        if let staleCopy {
-            return staleCopy.lead
-        }
-
-        if let errorSummary = context.state.errorSummary, !errorSummary.isEmpty {
-            return errorSummary
-        }
-
-        return context.state.currentActivity
-    }
-
-    private var header: some View {
-        HStack(alignment: .center, spacing: 10) {
-            AgentRunStatusDot(status: context.state.status, isStale: isStale, size: 34)
-
+        if activityFamily == .small {
+            // Watch Smart Stack and CarPlay: the title and the status only.
             VStack(alignment: .leading, spacing: 2) {
-                HStack(spacing: 6) {
-                    Text("Aiden")
-                        .font(.caption2.weight(.bold))
-                        .foregroundStyle(AgentRunLiveActivityTheme.secondaryText)
-                        .textCase(.uppercase)
+                Text(presentation.title)
+                    .font(.headline)
+                    .lineLimit(1)
+                Text(presentation.status)
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(10)
+        } else {
+            AgentRunTextCard(presentation: presentation, chatURL: chatURL)
+                .padding(16)
+        }
+    }
+}
 
-                    AgentRunFreshnessChips(state: context.state, systemMarkedStale: context.isStale)
-                }
+private struct AgentRunTextCard: View {
+    let presentation: AgentRunTextPresentation
+    let chatURL: URL?
+    @Environment(\.isLuminanceReduced) private var isLuminanceReduced
 
-                Text(context.state.sessionTitle)
-                    .font(.headline.weight(.semibold))
-                    .foregroundStyle(AgentRunLiveActivityTheme.primaryText)
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Text(presentation.title)
+                    .font(.headline)
                     .lineLimit(1)
                     .truncationMode(.tail)
-                    .minimumScaleFactor(0.82)
-            }
-            .layoutPriority(1)
-
-            Spacer(minLength: 8)
-
-            AgentRunTimerPill(state: context.state)
-        }
-    }
-
-    private func activityProgressRow(progressWidth: CGFloat) -> some View {
-        HStack(alignment: .center, spacing: 8) {
-            Text(activityText)
-                .font(.subheadline.weight(.semibold))
-                .foregroundStyle(AgentRunLiveActivityTheme.primaryText)
-                .lineLimit(1)
-                .minimumScaleFactor(0.82)
-                .layoutPriority(1)
-
-            Spacer(minLength: 8)
-
-            AgentRunProgressRail(status: context.state.status)
-                .frame(width: progressWidth)
-        }
-    }
-
-    private var transcriptPanel: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            if let action = staleCopy?.action {
-                Text(action)
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(AgentRunLiveActivityTheme.primaryText)
-                    .lineLimit(1)
-            }
-
-            Text(excerptText)
-                .font(.caption)
-                .foregroundStyle(AgentRunLiveActivityTheme.secondaryText)
-                .lineLimit(staleCopy?.action == nil ? 2 : 1)
-                .fixedSize(horizontal: false, vertical: true)
-                .frame(maxWidth: .infinity, alignment: .topLeading)
-        }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 9)
-        .background(AgentRunStatusStyle.color(for: context.state.status, isStale: isStale).opacity(0.14), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .stroke(AgentRunLiveActivityTheme.stroke, lineWidth: 1)
-        )
-    }
-
-    private var excerptText: String {
-        if !context.state.responseExcerpt.isEmpty {
-            return context.state.responseExcerpt
-        }
-
-        if context.state.isFinal {
-            return "Response is ready to review."
-        }
-
-        return "Waiting for the next agent update."
-    }
-}
-
-/// Tool-call count plus "updated … ago" so a Live Activity that stopped
-/// receiving updates reads as old at a glance. The relative date is rendered
-/// by the system, so it keeps aging while the app is suspended.
-private struct AgentRunFreshnessChips: View {
-    let state: AgentRunActivityAttributes.ContentState
-    let systemMarkedStale: Bool
-
-    private var isStale: Bool {
-        AgentRunFreshness.isStale(state, systemMarkedStale: systemMarkedStale)
-    }
-
-    var body: some View {
-        HStack(spacing: 4) {
-            if let toolLabel = AgentRunFreshness.toolCallLabel(count: state.toolCallCount) {
-                chip(systemImage: "wrench.and.screwdriver", color: AgentRunLiveActivityTheme.secondaryText) {
-                    Text(toolLabel)
-                }
-                .accessibilityLabel(Text(toolLabel))
-            }
-
-            if !state.isFinal {
-                chip(
-                    systemImage: isStale ? "clock.badge.exclamationmark" : "clock",
-                    color: isStale ? AgentRunLiveActivityTheme.staleText : AgentRunLiveActivityTheme.secondaryText
-                ) {
-                    Text("\(isStale ? String(localized: "Stale") : String(localized: "Updated")) \(Text(state.updatedAt, style: .relative)) ago")
+                    .layoutPriority(1)
+                Spacer(minLength: 8)
+                if !isLuminanceReduced {
+                    AgentRunTimingText(timing: presentation.timing)
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
                 }
             }
-        }
-        .lineLimit(1)
-        .minimumScaleFactor(0.8)
-    }
 
-    private func chip<Label: View>(
-        systemImage: String,
-        color: Color,
-        @ViewBuilder label: () -> Label
-    ) -> some View {
-        HStack(spacing: 3) {
-            Image(systemName: systemImage)
-                .imageScale(.small)
-            label()
-                .monospacedDigit()
-        }
-        .font(.caption2.weight(.semibold))
-        .foregroundStyle(color)
-        .padding(.horizontal, 6)
-        .padding(.vertical, 1)
-        .background(AgentRunLiveActivityTheme.pillBackground, in: Capsule(style: .continuous))
-    }
-}
-
-private struct AgentRunIslandBadge: View {
-    let status: AgentRunActivityStatus
-    let isStale: Bool
-
-    var body: some View {
-        HStack(spacing: 6) {
-            AgentRunStatusDot(status: status, isStale: isStale)
-            Text("Aiden")
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(AgentRunLiveActivityTheme.primaryText)
+            Text(presentation.status)
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
                 .lineLimit(1)
-        }
-    }
-}
+                .truncationMode(.tail)
 
-private struct AgentRunIslandStatusView: View {
-    let state: AgentRunActivityAttributes.ContentState
-    let systemMarkedStale: Bool
-
-    private var isStale: Bool {
-        AgentRunFreshness.isStale(state, systemMarkedStale: systemMarkedStale)
-    }
-
-    var body: some View {
-        VStack(alignment: .trailing, spacing: 3) {
-            Text(state.status.title)
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(AgentRunStatusStyle.color(for: state.status, isStale: isStale))
-                .lineLimit(1)
-
-            if state.isFinal {
-                Text("Ready")
-                    .font(.caption2.weight(.medium))
-                    .foregroundStyle(AgentRunLiveActivityTheme.secondaryText)
-            } else if isStale {
-                Text("Latest")
-                    .font(.caption2.weight(.medium))
-                    .foregroundStyle(AgentRunLiveActivityTheme.secondaryText)
-            } else {
-                HStack(spacing: 3) {
-                    Circle()
-                        .fill(AgentRunLiveActivityTheme.liveDot)
-                        .frame(width: 4, height: 4)
-                    AgentRunElapsedTimerText(startedAt: state.startedAt, alignment: .trailing)
-                }
-                .font(.caption2.weight(.medium))
-                .foregroundStyle(AgentRunLiveActivityTheme.secondaryText)
+            if let detail = presentation.detail, !isLuminanceReduced {
+                Text(detail)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+                    .fixedSize(horizontal: false, vertical: true)
             }
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 
-private struct AgentRunIslandCompactMark: View {
-    let status: AgentRunActivityStatus
-    let isStale: Bool
-
-    var body: some View {
-        ZStack {
-            Circle()
-                .fill(AgentRunStatusStyle.color(for: status, isStale: isStale).opacity(0.25))
-
-            AgentRunStatusMark(status: status, size: 10)
-        }
-        .frame(width: 22, height: 22)
-    }
-}
-
-private struct AgentRunStatusDot: View {
-    let status: AgentRunActivityStatus
-    let isStale: Bool
-    var size: CGFloat = 22
-
-    var body: some View {
-        AgentRunStatusMark(status: status, size: size * 0.46)
-            .foregroundStyle(color)
-            .frame(width: size, height: size)
-            .background(color.opacity(0.18), in: Circle())
-            .overlay(Circle().stroke(color.opacity(0.36), lineWidth: 1))
-    }
-
-    var color: Color {
-        AgentRunStatusStyle.color(for: status, isStale: isStale)
-    }
-
-}
-
-private struct AgentRunStatusMark: View {
-    let status: AgentRunActivityStatus
-    let size: CGFloat
+/// A running run counts up, a stale one says how long ago it last updated
+/// (drawn by the system, so it keeps aging while the app is suspended), and a
+/// finished one shows no time.
+private struct AgentRunTimingText: View {
+    let timing: AgentRunTextPresentation.Timing
 
     @ViewBuilder
     var body: some View {
-        if status == .starting || status == .thinking {
-            Image("aiden-sidebar-logo")
-                .renderingMode(.template)
-                .resizable()
-                .scaledToFit()
-                .frame(width: size, height: size)
-        } else {
-            Image(systemName: AgentRunStatusStyle.symbolName(for: status))
-                .font(.system(size: size, weight: .bold))
+        switch timing {
+        case .running(let startedAt):
+            AgentRunElapsedTimerText(startedAt: startedAt)
+        case .updated(let date):
+            Text("\(Text(date, style: .relative)) ago")
+                .monospacedDigit()
+                .lineLimit(1)
+        case .none:
+            EmptyView()
         }
-    }
-}
-
-private struct AgentRunProgressRail: View {
-    let status: AgentRunActivityStatus
-
-    var body: some View {
-        GeometryReader { geometry in
-            ZStack(alignment: .leading) {
-                Capsule(style: .continuous)
-                    .fill(AgentRunLiveActivityTheme.railBackground)
-
-                Capsule(style: .continuous)
-                    .fill(AgentRunStatusStyle.color(for: status, isStale: false))
-                    .frame(width: max(12, geometry.size.width * progressFraction))
-            }
-        }
-        .frame(height: 6)
-    }
-
-    private var progressFraction: CGFloat {
-        switch status {
-        case .starting:
-            0.14
-        case .thinking:
-            0.3
-        case .usingTool, .searchingFiles, .readingFiles, .runningCommand:
-            0.52
-        case .waitingForApproval, .waitingForAnswer:
-            0.62
-        case .responding:
-            0.78
-        case .complete:
-            1
-        case .failed, .cancelled:
-            1
-        }
-    }
-}
-
-private struct AgentRunTimerPill: View {
-    let state: AgentRunActivityAttributes.ContentState
-
-    var body: some View {
-        HStack(spacing: 4) {
-            Circle()
-                .fill(state.isFinal ? AgentRunStatusStyle.color(for: state.status, isStale: state.isStale) : AgentRunLiveActivityTheme.liveDot)
-                .frame(width: 5, height: 5)
-
-            if state.isFinal {
-                Text("Done")
-            } else {
-                AgentRunElapsedTimerText(startedAt: state.startedAt, alignment: .center)
-            }
-        }
-        .font(.caption2.weight(.semibold))
-        .foregroundStyle(AgentRunLiveActivityTheme.secondaryText)
-        .lineLimit(1)
-        .padding(.horizontal, 8)
-        .padding(.vertical, 5)
-        .frame(width: 62, alignment: .center)
-        .background(AgentRunLiveActivityTheme.pillBackground, in: Capsule(style: .continuous))
-        .overlay(Capsule(style: .continuous).stroke(AgentRunLiveActivityTheme.stroke, lineWidth: 1))
     }
 }
 
@@ -458,9 +147,8 @@ private struct AgentRunElapsedTimerText: View {
     // `Text(timerInterval:)` reserves layout width for the largest value its range
     // could ever show, then draws the shorter live value leading-aligned inside that
     // leftover slack — which left-shifted the digits in the Dynamic Island and the
-    // Lock Screen pill (#247). Bounding the range keeps an MM:SS-sized box, and an
-    // explicit `multilineTextAlignment` pins the digits to the edge each call site
-    // wants (trailing under the Dynamic Island status, centered in the pill).
+    // Lock Screen (#247). Bounding the range keeps an MM:SS-sized box, and an
+    // explicit `multilineTextAlignment` pins the digits to the trailing edge.
     private static let maxDisplayInterval: TimeInterval = 99 * 60 + 59
 
     var body: some View {
@@ -472,72 +160,5 @@ private struct AgentRunElapsedTimerText: View {
         .monospacedDigit()
         .multilineTextAlignment(alignment)
         .lineLimit(1)
-    }
-}
-
-private enum AgentRunLiveActivityTheme {
-    static let background = Color(red: 0.025, green: 0.028, blue: 0.038)
-    static let primaryText = Color.white
-    static let secondaryText = Color.white.opacity(0.68)
-    static let stroke = Color.white.opacity(0.13)
-    static let pillBackground = Color.white.opacity(0.08)
-    static let railBackground = Color.white.opacity(0.14)
-    static let liveDot = Color(red: 0.35, green: 0.95, blue: 0.7)
-    static let staleText = Color(red: 1.0, green: 0.78, blue: 0.45)
-}
-
-private enum AgentRunStatusStyle {
-    static func color(for status: AgentRunActivityStatus, isStale: Bool) -> Color {
-        if isStale {
-            return Color.white.opacity(0.52)
-        }
-
-        switch status {
-        case .starting, .thinking, .responding:
-            return Color(red: 1.0, green: 0.82, blue: 0.18)
-        case .usingTool:
-            return Color(red: 0.50, green: 0.72, blue: 1.0)
-        case .searchingFiles:
-            return Color(red: 0.22, green: 0.92, blue: 0.95)
-        case .readingFiles:
-            return Color(red: 0.58, green: 0.78, blue: 1.0)
-        case .runningCommand:
-            return Color(red: 0.76, green: 0.55, blue: 1.0)
-        case .waitingForApproval, .waitingForAnswer:
-            return Color(red: 1.0, green: 0.58, blue: 0.24)
-        case .complete:
-            return Color(red: 0.35, green: 0.95, blue: 0.55)
-        case .failed:
-            return Color(red: 1.0, green: 0.32, blue: 0.32)
-        case .cancelled:
-            return Color.white.opacity(0.56)
-        }
-    }
-
-    static func symbolName(for status: AgentRunActivityStatus) -> String {
-        switch status {
-        case .starting, .thinking:
-            preconditionFailure("Starting and thinking use the Aiden logo resource")
-        case .usingTool:
-            "wrench.and.screwdriver"
-        case .searchingFiles:
-            "magnifyingglass"
-        case .readingFiles:
-            "doc.text"
-        case .runningCommand:
-            "terminal"
-        case .responding:
-            "text.bubble"
-        case .waitingForApproval:
-            "checkmark.shield"
-        case .waitingForAnswer:
-            "questionmark.bubble"
-        case .complete:
-            "checkmark"
-        case .failed:
-            "exclamationmark"
-        case .cancelled:
-            "xmark"
-        }
     }
 }

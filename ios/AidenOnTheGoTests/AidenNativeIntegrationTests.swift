@@ -398,7 +398,6 @@ final class AidenNativeIntegrationTests: XCTestCase {
             startedAt: start
         )
         XCTAssertEqual(state.toolCallCount, 0)
-        XCTAssertNil(AgentRunFreshness.toolCallLabel(count: state.toolCallCount))
 
         state = AgentRunActivityStateReducer.toolStarted(name: "read_file", state: state, now: start + 1)
         state = AgentRunActivityStateReducer.toolCompleted(state: state, now: start + 2)
@@ -410,7 +409,6 @@ final class AidenNativeIntegrationTests: XCTestCase {
         state = AgentRunActivityStateReducer.clearingResponseExcerpt(state: state)
         state = AgentRunActivityStateReducer.updatingSessionTitle("Renamed", state: state)
         XCTAssertEqual(state.toolCallCount, 2)
-        XCTAssertEqual(AgentRunFreshness.toolCallLabel(count: state.toolCallCount), "2 tools")
         XCTAssertEqual(state.updatedAt, start + 7)
 
         // Status events and reconciliation update labels without extending the
@@ -471,11 +469,7 @@ final class AidenNativeIntegrationTests: XCTestCase {
         XCTAssertEqual(restarted.toolCallCount, 2)
     }
 
-    func testLiveActivityToolCallChipIsBoundedAndSingular() {
-        XCTAssertEqual(AgentRunFreshness.toolCallLabel(count: 1), "1 tool")
-        XCTAssertEqual(AgentRunFreshness.toolCallLabel(count: 99), "99 tools")
-        XCTAssertEqual(AgentRunFreshness.toolCallLabel(count: 100), "99+ tools")
-        XCTAssertNil(AgentRunFreshness.toolCallLabel(count: -3))
+    func testLiveActivityToolCallCountIsBounded() {
         let negative = AgentRunActivityAttributes.ContentState(
             sessionID: "chat-1",
             sessionTitle: "Chat",

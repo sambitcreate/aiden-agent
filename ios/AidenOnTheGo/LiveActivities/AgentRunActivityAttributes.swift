@@ -13,9 +13,9 @@ struct AgentRunActivityAttributes: ActivityAttributes {
         var isStale: Bool
         var isFinal: Bool
         var errorSummary: String?
-        /// Tool calls started during this run, shown as a freshness chip. It is
-        /// a bounded counter only: tool names and arguments never reach the
-        /// widget beyond the sanitized activity line.
+        /// Tool calls started during this run. It is a bounded counter only:
+        /// tool names and arguments never reach the widget beyond the
+        /// sanitized activity line.
         var toolCallCount: Int
 
         init(
@@ -295,23 +295,14 @@ enum AgentRunActivitySanitizer {
     }
 }
 
-/// Freshness chips make a stale Live Activity obvious: how many tools the run
-/// has started, and when the last real agent update arrived.
+/// When a Live Activity counts as stale: no real agent update for five
+/// minutes, or the app marked it stale. The tool-call count stays a bounded
+/// counter in the state.
 enum AgentRunFreshness {
-    static let maximumDisplayedToolCalls = 99
     static let staleAfter: TimeInterval = 300
 
     static func clampedToolCallCount(_ count: Int) -> Int {
         min(max(0, count), 9_999)
-    }
-
-    /// `nil` hides the chip until the run starts its first tool.
-    static func toolCallLabel(count: Int) -> String? {
-        guard count > 0 else { return nil }
-        if count > maximumDisplayedToolCalls {
-            return String(localized: "\(maximumDisplayedToolCalls)+ tools")
-        }
-        return count == 1 ? String(localized: "1 tool") : String(localized: "\(count) tools")
     }
 
     /// A finished run is never "stale"; otherwise either the app marked it
