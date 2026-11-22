@@ -273,3 +273,70 @@ test("an active exact owner retains native V2 context metadata", async () => {
   assert.deepEqual(result, v2);
   assert.equal(owner.removed(), true);
 });
+
+test("history detail adds the saved conversation only for a run proven to belong to the chat", async () => {
+  const saved = {
+    version: 1 as const,
+    runId: "run-1",
+    revision: 3,
+    trimmed: false,
+    entries: [{ kind: "task" as const, text: "Review the workspace." }],
+  };
+  const asked: Array<[string, string]> = [];
+  const getTranscript = async (runId: string, chatId: string) => {
+    asked.push([runId, chatId]);
+    return saved;
+  };
+  const owner = fakeOwner();
+  const result = await readSubagentHistoryDetailForOwner(owner.owner, "chat-1", "run-1", {
+    getChat: async () => chat,
+    getSnapshot: async () => snapshot(),
+    getEffectActivity: async () => [],
+    getTranscript,
+  });
+  assert.deepEqual(result?.transcript, saved);
+  assert.deepEqual(asked, [["run-1", "chat-1"]]);
+
+  // Another chat's run, a run in another workspace, or one the chat never
+  // referenced: the saved conversation is never even looked up.
+  const refusals = [
+    { getChat: async () => ({ ...chat, id: "chat-2" }), getSnapshot: async () => snapshot() },
+    { getChat: async () => chat, getSnapshot: async () => ({ ...snapshot(), chatId: "chat-2" }) },
+    { getChat: async () => chat, getSnapshot: async () => ({ ...snapshot(), workspaceId: "workspace-2" }) },
+    { getChat: async () => ({ ...chat, messages: [] }), getSnapshot: async () => snapshot() },
+  ];
+  for (const dependencies of refusals) {
+    asked.length = 0;
+    const refused = await readSubagentHistoryDetailForOwner(fakeOwner().owner, "chat-1", "run-1", {
+      ...dependencies,
+      getEffectActivity: async () => [],
+      getTranscript,
+    });
+    assert.equal(refused, null);
+    assert.deepEqual(asked, []);
+  }
+
+  // A transcript for a different run is dropped rather than shown under this one.
+  const mismatched = await readSubagentHistoryDetailForOwner(fakeOwner().owner, "chat-1", "run-1", {
+    getChat: async () => chat,
+    getSnapshot: async () => snapshot(),
+    getEffectActivity: async () => [],
+    getTranscript: async () => ({ ...saved, runId: "run-2" }),
+  });
+  assert.equal(mismatched?.transcript, undefined);
+
+  // A window that closed while the conversation was loading gets nothing.
+  const closing = fakeOwner();
+  const loading = deferred<typeof saved>();
+  const reading = readSubagentHistoryDetailForOwner(closing.owner, "chat-1", "run-1", {
+    getChat: async () => chat,
+    getSnapshot: async () => snapshot(),
+    getEffectActivity: async () => [],
+    getTranscript: () => loading.promise,
+  });
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  closing.invalidate();
+  loading.resolve(saved);
+  await assert.rejects(reading, /renderer document is no longer active/u);
+  assert.equal(closing.removed(), true);
+});

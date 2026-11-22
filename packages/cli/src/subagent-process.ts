@@ -7,6 +7,7 @@ import { validateToolArguments, type AssistantMessage } from "@earendil-works/pi
 import { projectSubagentPartialFindings, type RunSubagentChildInput } from "../../../main/services/subagents/subagent-child-runner.js";
 import { subagentRoleSystemPrompt } from "../../../main/services/subagents/role-catalog.js";
 import { MAX_SUBAGENT_SUMMARY_CHARS } from "../../../main/services/subagents/contracts.js";
+import { terminalAssistantText } from "../../../main/services/generation-runtime.js";
 import { recordUsage } from "./usage-ledger.ts";
 
 /** Inference is isolated; exact tools and approvals remain owned by the parent. */
@@ -40,6 +41,8 @@ export async function runCliSubagent(agentDir: string, input: RunSubagentChildIn
     if (++events > limits.events || (bytes += Buffer.byteLength(JSON.stringify(event))) > limits.protocol) { stop(new Error("Subagent protocol budget exhausted.")); return; }
     if (event.type === "tool") {
       if (++toolCalls > limits.tools) { stop(new Error("Subagent tool budget exhausted.")); return; }
+      // The helper's saved conversation shows each tool once it is allowed to run.
+      let recorded = false;
       const operation = (async () => {
         try {
           if (typeof event.id !== "string" || event.id.length > 256) throw new Error("Invalid child tool call identity.");
@@ -47,6 +50,7 @@ export async function runCliSubagent(agentDir: string, input: RunSubagentChildIn
           if (!tool) throw new Error("Tool outside delegated capability profile.");
           const toolCall = { type: "toolCall" as const, id: event.id, name: tool.name, arguments: event.args };
           const args = validateToolArguments(tool, toolCall);
+          input.transcript?.toolStarted(event.id, tool.name, args); recorded = true;
           const assistantMessage = messages.at(-1);
           if (!assistantMessage) throw new Error("Child tool call has no assistant turn.");
           // A stopped child (deadline, budget, cancel) must not leave the run waiting on an approval gate.
@@ -65,21 +69,25 @@ export async function runCliSubagent(agentDir: string, input: RunSubagentChildIn
               event.args?.context === "fork" ? captureLiveSubagentContext({ chatId: input.v2Authority!.chatId, parentRunId: input.runId!, messages: event.messages, descendantContextWindow: input.runtime.model.contextWindow }) : undefined) }], details: {} }
             : await tool.execute(event.id, args, toolAbort.signal);
           if (Buffer.byteLength(JSON.stringify(result)) > 1024 * 1024) throw new Error("The child tool result exceeds its transport budget.");
+          if (recorded) input.transcript?.toolFinished(event.id, "completed");
           reply({ type: "tool-result", id: event.id, result });
-        } catch (error) { reply({ type: "tool-result", id: event.id, error: error instanceof Error ? error.message : String(error) }); }
+        } catch (error) {
+          if (recorded) input.transcript?.toolFinished(event.id, "failed");
+          reply({ type: "tool-result", id: event.id, error: error instanceof Error ? error.message : String(error) });
+        }
       })();
       activeTools.add(operation); void operation.finally(() => activeTools.delete(operation));
     } else if (event.type === "turn") {
       // Each model turn's streamed text starts on its own line, so handed-over partial text never runs two turns together.
       if (text && !text.endsWith("\n")) text += "\n";
-      if (++turns > limits.turns) stop(new Error("Subagent turn budget exhausted.")); else input.telemetry?.turnStarted();
+      if (++turns > limits.turns) stop(new Error("Subagent turn budget exhausted.")); else { input.telemetry?.turnStarted(); input.transcript?.messageStarted(); }
     }
-    else if (event.type === "delta" && typeof event.text === "string") { text += event.text; if (text.length > limits.output) stop(new Error("Subagent output budget exhausted.")); else input.telemetry?.textDelta(event.text); }
+    else if (event.type === "delta" && typeof event.text === "string") { text += event.text; if (text.length > limits.output) stop(new Error("Subagent output budget exhausted.")); else { input.telemetry?.textDelta(event.text); input.transcript?.textDelta(event.text); } }
     else if (event.type === "protocol" && Number.isSafeInteger(event.chars) && event.chars >= 0) {
       bytes += event.chars; input.telemetry?.protocolDelta?.(event.chars);
       if (bytes > limits.protocol) stop(new Error("Subagent protocol budget exhausted."));
     }
-    else if (event.type === "assistant") { messages.push(event.message); input.telemetry?.usage(event.message); }
+    else if (event.type === "assistant") { messages.push(event.message); input.telemetry?.usage(event.message); input.transcript?.messageEnded(terminalAssistantText(event.message ?? {})); }
     else if (event.type === "done") done = true;
     else if (event.type === "failure") stop(new Error(typeof event.message === "string" ? event.message : "The child model could not complete this task."));
   });

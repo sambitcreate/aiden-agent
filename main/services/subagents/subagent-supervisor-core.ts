@@ -28,6 +28,10 @@ import {
   type SubagentTimeLimit,
 } from "./subagent-child-policy.js";
 import type { RunSubagentChildInput } from "./subagent-child-runner.js";
+import type {
+  SubagentTranscriptFinishStatus,
+  SubagentTranscriptRecorder,
+} from "./subagent-transcript-recorder.js";
 import type { SurfaceHooks } from "../agent-surface-hooks.js";
 import type { SubagentReadToolName } from "./capability-profile.js";
 import {
@@ -155,6 +159,46 @@ export interface PreparedSubagentRun {
   ): "accepted" | "stopped" | Promise<"accepted" | "stopped">;
 }
 
+export type SubagentTranscriptFactory = (input: {
+  runId: string;
+  chatId: string;
+  task: string;
+}) => SubagentTranscriptRecorder | undefined;
+
+function transcriptStatus(status: SubagentTaskResult["status"]): SubagentTranscriptFinishStatus {
+  if (status === "completed") return "completed";
+  if (status === "interrupted") return "cancelled";
+  return "failed";
+}
+
+/** Wrap a child runner so each child's conversation is recorded and settled. */
+export function recordSubagentTranscripts(
+  runChild: (input: RunSubagentChildInput) => Promise<SubagentTaskResult>,
+  transcripts: SubagentTranscriptFactory | undefined,
+): (input: RunSubagentChildInput) => Promise<SubagentTaskResult> {
+  if (!transcripts) return runChild;
+  return async (input) => {
+    let recorder: SubagentTranscriptRecorder | undefined;
+    try {
+      recorder = input.runId
+        ? transcripts({ runId: input.runId, chatId: input.authority.chatId, task: input.request.task })
+        : undefined;
+    } catch {
+      recorder = undefined;
+    }
+    if (!recorder) return runChild(input);
+    let result: SubagentTaskResult;
+    try {
+      result = await runChild({ ...input, transcript: recorder });
+    } catch (error) {
+      await recorder.finish(input.signal?.aborted ? "cancelled" : "failed").catch(() => {});
+      throw error;
+    }
+    await recorder.finish(transcriptStatus(result.status)).catch(() => {});
+    return result;
+  };
+}
+
 export interface SubagentSupervisorInput {
   compactionEngine?: CompactionEngine;
   compactionModelOverrides?: CompactionModelOverrides;
@@ -199,6 +243,12 @@ export interface SubagentSupervisorInput {
   healthMetrics?: SubagentHealthMetricsSink;
   policy?: SubagentSupervisorPolicy;
   runChild?: (input: RunSubagentChildInput) => Promise<SubagentTaskResult>;
+  /**
+   * Starts saving one helper's conversation. Called once per child, just
+   * before it runs; the supervisor writes the final state when it settles.
+   * Absent means nothing is saved.
+   */
+  transcripts?: SubagentTranscriptFactory;
   /**
    * The parent's hooks, for `SubagentStop` when each child reaches a terminal
    * state. Observe-only and never awaited; absent means no hooks run.
@@ -494,7 +544,7 @@ export class SubagentSupervisor {
       input.policy?.launchBudget ?? MAX_SUBAGENT_LAUNCHES_PER_GENERATION;
     this.randomUUID = input.randomUUID ?? randomUUID;
     if (!input.runChild) throw new Error("A subagent child runner must be injected.");
-    this.runChild = input.runChild;
+    this.runChild = recordSubagentTranscripts(input.runChild, input.transcripts);
     if (
       (this.timeLimit !== "chat" && this.timeLimit !== "bot") ||
       !Number.isFinite(this.childDeadlineMs) ||

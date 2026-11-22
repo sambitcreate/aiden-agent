@@ -1,6 +1,6 @@
 # Subagent helper chat (give every helper its own chat, with no time limit)
 
-Written 2026-11-22 from main at `1afb737c`. Built as one PR in three reviewed phases (the "PR 1/2/3" sections below are those phases).
+Written 2026-11-22 from main at `1afb737c`. Built as one PR in three reviewed phases (the "PR 1/2/3" sections below are those phases). Phases 1 and 2 are implemented on `claude/subagent-helper-chat`; Phase 3 is next.
 
 **Decision on the 24-hour question:** option (a). "No limit" in attended chats is a 24-hour safety net; the safety grant keeps its 24-hour ceiling. Bots get 60 minutes per reply.
 
@@ -265,7 +265,7 @@ Removing the clock doesn't remove every limit, so a confused helper still can't 
 | Showing more text | Today's panel shows little on purpose. The helper chat shows what the helper did. | The main chat's own display filter hides passwords and keys, the same as for the main chat's steps. A dedicated security review comes before PR 2 merges. |
 | Disk use | Many long helpers add up. | 2 MB cap per helper, deleted with the chat, and shown in Settings → Storage. |
 | Overlap with "Make Aiden more proactive" | Its background helpers touch the same code. | That thread knows this plan. Its helper PRs build on these three, which give them a place to show their work. |
-| Privacy filter change | Loosening the label rule could let a real secret through. | Only names on a fixed allow-list of display labels count as labels, and a secret hint anywhere in the name overrides the list. Every other name still hides in the panel, secret-named blocks hide on every line for the main chat, and tests cover both, including `PASSPHRASE:`, `KEY:`, `APITOKEN:` and multi-line `PASSWORD:`. |
+| Privacy filter change | Loosening the label rule could let a real secret through. | A name counts as a label only when it is a bare all-capital word of letters (no digits, `_` or `-`) with no secret hint, and a label's block still hides when its value looks like a credential. The secret-ending match (`key`, `token`, `secret`, `password` and the rest) applies only to setting-shaped names: all caps, containing `_` or `-`, or camelCase. Every all-caps name is setting-shaped, so `KEY:`, `APITOKEN:` and `PASSPHRASE:` never count as labels. Other names, such as prose headings, are hints only when they are exactly a secret word (`Password:`, `Credentials:`), so `Keys:` and `Design tokens:` survive; a few whole names (`AUTHORIZATION`, `SESSION_ID`, `SESSION_TOKEN`, `PRIVATE_KEY`) and a whole-segment `PIN` are always hints (`colonBlockNameIsLabel` and `blockNameHasSecretHint` in `renderer/shared/subagent-safe-text.ts`). Every other name still hides in the panel, secret-named blocks hide on every line for the main chat, and tests cover both, including `PASSPHRASE:`, `KEY:`, `APITOKEN:` and multi-line `PASSWORD:`. |
 
 ## Order
 

@@ -47,6 +47,8 @@ import { inheritedSubagentReadToolCeiling } from "../subagents/capability-profil
 import { subagentsAllowedForGeneration } from "../subagents/eligibility.js";
 import { subagentHealthMetrics } from "../subagents/subagent-health-metrics.js";
 import { SubagentSupervisor } from "../subagents/subagent-supervisor.js";
+import { subagentTranscriptStore } from "../subagents/subagent-run-store.js";
+import { createSubagentTranscriptFactory } from "../subagents/subagent-transcript-store.js";
 import { botSurfaceHooks } from "../agent-surface-hooks.js";
 import { createSubagentTool } from "../subagents/subagent-tool.js";
 import { buildAgentTools } from "../tools.js";
@@ -312,6 +314,11 @@ export function createBotToolSources(deps: BotToolSourceDeps): BotToolSourcesMai
               // SubagentStop runs the Bot's hooks, in the Bot's folder.
               stopHooks: botSurfaceHooks(botId, authority.workingDirectory, undefined, {
                 report: (lines) => logger.info("hooks", `Bot ${botId} hook messages.`, lines),
+              }),
+              // Each helper's conversation is saved under the Bot's chat and
+              // removed with it. Nothing is streamed: no window owns this run.
+              transcripts: createSubagentTranscriptFactory(subagentTranscriptStore, {
+                onError: (error) => logger.warn("subagents", "Could not save a Bot helper conversation.", error),
               }),
             });
             return createSubagentTool(supervisor).execute(toolCallId, params, signal, onUpdate);

@@ -9,7 +9,10 @@ import {
   assertSubagentHistoryEnabled,
   subagentV2Enabled,
 } from "../services/subagents/feature-flag.js";
-import { subagentRunStore } from "../services/subagents/subagent-run-store.js";
+import {
+  subagentRunStore,
+  subagentTranscriptStore,
+} from "../services/subagents/subagent-run-store.js";
 import { manageSubagentForDocumentV2 } from "../services/subagents/subagent-control-ipc-core.js";
 import { subagentControlMainV2 } from "../services/subagents/subagent-control-main.js";
 
@@ -29,6 +32,7 @@ export function registerSubagentHandlers(): void {
         getSnapshot: (id) => subagentRunStore.get(id),
         getEffectActivity: (id, owningChatId) =>
           subagentRunStore.listEffectActivityForRun(id, owningChatId),
+        getTranscript: (id, owningChatId) => subagentTranscriptStore.read(owningChatId, id),
       });
     } catch (error) {
       if (owner.isDestroyed()) throw new Error("The renderer document is no longer active.");

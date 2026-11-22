@@ -10,6 +10,11 @@ import { parseChatContextPressureNotification } from "../shared/context-pressure
 import { parseModelCallRetryView } from "../shared/model-call-retry";
 import type { ChatTimelineNotification, GenerationTimeline } from "../shared/generation-timeline";
 import { parseSubagentRunSnapshot, type SubagentRunSnapshot } from "../shared/subagent-runs";
+import {
+  foldLiveSubagentTranscript,
+  parseSubagentTranscriptNotification,
+  type LiveSubagentTranscripts,
+} from "../shared/subagent-transcript";
 import { parseToolApprovalScope } from "../shared/tool-approval-scope";
 import { parseToolApprovalPreview } from "../shared/tool-approval-preview";
 import { parseTodoSnapshotView } from "../shared/todo";
@@ -103,6 +108,8 @@ export interface GenerationStreamProjection {
   /** Native (render_ui) visuals presented so far. */
   uiVisuals?: ChatUiVisualV1[];
   subagents: SubagentRunSnapshot[];
+  /** Live helper conversation updates folded so far, by run id. */
+  subagentTranscripts?: LiveSubagentTranscripts;
 }
 
 export interface GenerationStreamSubscription {
@@ -122,6 +129,7 @@ export function subscribeGenerationStream(
   let projectedArtifacts: ChatArtifactV1[] = [];
   let projectedUiVisuals: ChatUiVisualV1[] = [];
   let projectedSubagents: SubagentRunSnapshot[] = [];
+  let projectedSubagentTranscripts: LiveSubagentTranscripts | undefined;
   const unsubs: Array<() => void> = [];
   const dispose = () => {
     for (const u of unsubs) u();
@@ -253,6 +261,20 @@ export function subscribeGenerationStream(
       }),
     );
   }
+  // Folded whenever helpers are shown, so a detached run hands them over.
+  if (callbacks.onSubagents || callbacks.onSubagentTranscript) {
+    unsubs.push(
+      onNotification<unknown>("chat:subagent-transcript", (payload) => {
+        const notification = parseSubagentTranscriptNotification(payload);
+        if (!notification || notification.streamId !== streamId) return;
+        projectedSubagentTranscripts = foldLiveSubagentTranscript(
+          projectedSubagentTranscripts,
+          notification.update,
+        );
+        callbacks.onSubagentTranscript?.(notification.update);
+      }),
+    );
+  }
   unsubs.push(
     onNotification<ChatTool>("chat:tool", (p) => {
       if (p.streamId === streamId) callbacks.onTool?.(p.phase, p.toolName);
@@ -304,6 +326,7 @@ export function subscribeGenerationStream(
       artifacts: projectedArtifacts,
       uiVisuals: projectedUiVisuals,
       subagents: projectedSubagents,
+      ...(projectedSubagentTranscripts ? { subagentTranscripts: projectedSubagentTranscripts } : {}),
     }),
   };
 }

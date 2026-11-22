@@ -12,6 +12,7 @@ import { botSurfaceHooks } from "../../../main/services/agent-surface-hooks.js";
 import { SubagentEventProjector } from "../../../main/services/subagents/subagent-event-projector.js";
 import { createSubagentRunStore } from "../../../main/services/subagents/subagent-run-store-core.js";
 import { createNativeSubagentRunStoreStorage } from "../../../main/services/subagents/subagent-run-store-io.js";
+import { createSubagentTranscriptFactory, createSubagentTranscriptStore } from "../../../main/services/subagents/subagent-transcript-store.js";
 import { SUBAGENT_READ_TOOL_NAMES } from "../../../main/services/subagents/capability-profile.js";
 import { createCliModelRuntime } from "./providers.ts";
 import { resolveRuntimeFromContext } from "./pi-bridge/model-runtime.ts";
@@ -42,7 +43,11 @@ export function createBotSubagentTool(agentDir: string, admission: BotRuntimeAut
         onSnapshot: async (snapshot) => { await store.upsert(snapshot); } });
       supervisor = new SubagentSupervisor({ generationId, chatId: cliSubagentIdentity(authority.chatId), workspaceId: cliSubagentIdentity(authority.managedHome.workspaceId),
         workspaceRoot: authority.workingDirectory, runtime, thinkingLevel: "off", policy: { timeLimit: "bot", replyClock }, permission: "full", inheritedCeiling: SUBAGENT_READ_TOOL_NAMES.filter((name) => reads.some((tool) => tool.name === name)),
-        loadPersistedChatForFork: loadChat, projector, stopHooks: botSurfaceHooks(authority.botId, authority.workingDirectory, undefined, {
+        loadPersistedChatForFork: loadChat, projector,
+        // Each helper's conversation is saved beside its record; phones get nothing yet.
+        transcripts: createSubagentTranscriptFactory(createSubagentTranscriptStore(async () => root), {
+          onError: () => process.stderr.write(`aiden: Bot ${authority.botId} could not save a helper conversation.\n`) }),
+        stopHooks: botSurfaceHooks(authority.botId, authority.workingDirectory, undefined, {
           report: (lines) => { for (const line of lines) process.stderr.write(`aiden: Bot ${authority.botId} hook: ${line.replace(/[\r\n]+/gu, " ").slice(0, 500)}\n`); } }),
         runChild: (input) => runCliSubagent(agentDir, input, reads, async () => { combined.throwIfAborted(); await admission.revalidateBeforeEffect(); }),
       });
@@ -60,6 +65,8 @@ export async function deleteCliBotSubagentHistory(agentDir: string, chatId: stri
   const release = acquireLease(root);
   const binary = join(dirname(process.env.AIDEN_CLI_ENTRY!), "native/aiden-subagent-run-store");
   const store = createSubagentRunStore(async () => root, { storageFactory: (directory) => createNativeSubagentRunStoreStorage(directory, binary) });
-  try { await store.deleteChat(cliSubagentIdentity(chatId)); }
-  finally { try { await store.close(); } finally { release(); } }
+  try {
+    await store.deleteChat(cliSubagentIdentity(chatId));
+    await createSubagentTranscriptStore(async () => root).deleteChat(cliSubagentIdentity(chatId));
+  } finally { try { await store.close(); } finally { release(); } }
 }

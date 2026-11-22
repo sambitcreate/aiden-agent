@@ -388,7 +388,9 @@ import {
 } from "./subagents/feature-flag.js";
 import { inheritedSubagentReadToolCeiling } from "./subagents/capability-profile.js";
 import { SubagentEventProjector } from "./subagents/subagent-event-projector.js";
-import { subagentRunStore } from "./subagents/subagent-run-store.js";
+import { subagentRunStore, subagentTranscriptStore } from "./subagents/subagent-run-store.js";
+import { createSubagentTranscriptFactory } from "./subagents/subagent-transcript-store.js";
+import type { SubagentTranscriptUpdateV1 } from "../../renderer/shared/subagent-transcript.js";
 import { createForegroundSubagentPersistenceV2 } from "./subagents/subagent-foreground-persistence-v2.js";
 import { subagentHealthMetrics } from "./subagents/subagent-health-metrics.js";
 import { subagentRuntimeRegistry } from "./subagents/child-agent-runtime.js";
@@ -1036,6 +1038,24 @@ function settleGeneration<Entry extends GenerationOwnershipEntry>(
     broadcastSettled: () =>
       broadcastChatSettled(streamId, params.chatId, entry.workspaceId, params.workspaceId),
   });
+}
+
+/**
+ * Helper conversation updates go only to the window that owns the stream.
+ * They are not journaled: each one is already saved, and a window that joins
+ * later reads the saved copy. Paired devices get nothing until the Remote
+ * protocol carries helper conversations.
+ */
+function sendSubagentTranscript(streamId: string, update: SubagentTranscriptUpdateV1): void {
+  const owner = ownerForStream(streamId);
+  if (!owner || owner.isDestroyed() || owner.kind === "remote") return;
+  // Keep the order with the text and reasoning batches sent before it.
+  deltaCoalescer.flush(streamId);
+  try {
+    owner.send("chat:subagent-transcript", { streamId, update });
+  } catch {
+    // A closed window reads the saved copy when it opens the helper.
+  }
 }
 
 function sendGeneration(streamId: string, channel: NotificationChannel, payload: unknown): boolean {
@@ -1789,6 +1809,10 @@ async function prepareGeneration(
       ? new SubagentSupervisor({
           compactionEngine: compactionEngineFrom(settings.compactionEngine),
           compactionModelOverrides: settings.compactionModelOverrides,
+          transcripts: createSubagentTranscriptFactory(subagentTranscriptStore, {
+            publish: (update) => sendSubagentTranscript(streamId, update),
+            onError: (error) => logger.warn("subagents", "Could not save a helper conversation.", error),
+          }),
           generationId: streamId,
           chatId: params.chatId,
           workspaceId: workspace.id,
