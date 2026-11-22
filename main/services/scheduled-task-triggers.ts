@@ -230,7 +230,7 @@ export function createScheduledTaskTriggers(deps: ScheduledTaskTriggersDependenc
     // Calls inside a link's gap are batched (20 at most); a watch keeps its
     // newest change first, then earlier ones not yet delivered.
     mergeHeld: (held, incoming, routine) => combineHeld(routine.task.trigger.kind === "webhook", held.payload, incoming.payload),
-    heldDropped: async (routine, _held, reason) => {
+    heldDropped: async (routine, _held, reason, already = []) => {
       const link = routine.task.trigger.kind === "webhook";
       const what = link ? "the calls" : "the change";
       const were = link ? "were" : "was";
@@ -243,13 +243,23 @@ export function createScheduledTaskTriggers(deps: ScheduledTaskTriggersDependenc
           summary: "Couldn't deliver, dropped",
           text: `Scheduled task "${routine.task.name}" tried ${TASK_TRIGGER_RETRIES + 1} times but couldn't deliver (its chat was busy or out of task runs, or the run couldn't start), so ${what} it was holding ${were} dropped. It runs again on the next ${link ? "call" : "change"}.`,
         };
-      if (link) {
-        await deps.store.appendLog(routine.id, reason === "daily_limit"
-          ? { at: deps.now(), outcome: "daily_limit", preview: "Held calls dropped: today's runs were used up." }
-          : { at: deps.now(), outcome: "dropped", preview: "Held calls dropped: they couldn't be delivered." });
+      // Each part is shown once: a retry after a failure skips what was already shown.
+      const done = new Set(already);
+      try {
+        if (!done.has("card")) await deps.dropped?.(routine.task, card);
+        done.add("card");
+        if (link && !done.has("log")) {
+          await deps.store.appendLog(routine.id, reason === "daily_limit"
+            ? { at: deps.now(), outcome: "daily_limit", preview: "Held calls dropped: today's runs were used up." }
+            : { at: deps.now(), outcome: "dropped", preview: "Held calls dropped: they couldn't be delivered." });
+        }
+        done.add("log");
+      } catch (error) {
+        return { done: [...done], failed: error };
+      } finally {
+        deps.changed?.(routine.id);
       }
-      await deps.dropped?.(routine.task, card);
-      deps.changed?.(routine.id);
+      return { done: [...done] };
     },
     now: deps.now,
     timeZone: deps.timeZone,

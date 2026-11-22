@@ -16,7 +16,7 @@ import type { BotRoutineTrigger } from "../../renderer/shared/bot-routine-trigge
 import { BOT_ROUTINE_EVENT_LIMITS, BOT_WATCH_LIMITS } from "../../renderer/shared/bot-routine-trigger.js";
 import { SCHEDULED_TASK_LINK_LIMITS, SCHEDULED_TASK_TRIGGER_LIMITS, type ScheduledTaskTrigger } from "../../renderer/shared/scheduled-task-trigger.js";
 import type { EventRoutine, EventRoutineStore } from "./bot-routine-events/dispatcher.js";
-import { BOT_EVENT_RUNNING_MAX, BOT_WATCH_SNAPSHOT_CHARS, type BotEventDropNotice, type BotEventPublicationGuard, type BotEventReceipt, type BotWatchState } from "./bot-routine-events/store.js";
+import { BOT_EVENT_RUNNING_MAX, BOT_WATCH_SNAPSHOT_CHARS, type BotEventDropNotice, type BotEventDropPart, type BotEventPublicationGuard, type BotEventReceipt, type BotWatchState } from "./bot-routine-events/store.js";
 import { parseConnectorBaseline, parseConnectorPrivate } from "./bot-routine-events/connector-types.js";
 import type { TaskConnectorSource } from "./scheduled-task-connector-trigger.js";
 import type { ScheduledTask } from "./types.js";
@@ -222,7 +222,10 @@ function parseBook(value: unknown): TaskTriggerBook | undefined {
       if (!entry || typeof entry !== "object") return [];
       const item = entry as Record<string, unknown>;
       const held = parseReceipt(item.held);
-      return typeof item.id === "string" && item.id.length <= 300 && item.reason === "retries" && held ? [{ id: item.id, reason: "retries", held }] : [];
+      if (typeof item.id !== "string" || item.id.length > 300 || item.reason !== "retries" || !held) return [];
+      const done = Array.isArray(item.done) ? [...new Set(item.done.filter((part): part is BotEventDropPart => part === "card" || part === "log"))] : [];
+      return [{ id: item.id, reason: "retries", held, ...(done.length ? { done } : {}),
+        ...(finite(item.failures) && item.failures > 0 && item.failures <= 100 ? { failures: item.failures } : {}) }];
     }).slice(-DROP_NOTICES_MAX)
     : [];
   const log = Array.isArray(row.log)

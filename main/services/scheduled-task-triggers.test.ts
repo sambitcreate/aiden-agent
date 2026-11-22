@@ -43,8 +43,9 @@ function watchTask(overrides: Partial<ScheduledTask> = {}): ScheduledTask {
   } as ScheduledTask;
 }
 
-function harness(options: { tasks?: ScheduledTask[]; checks?: BotWatchCheck[]; runResult?: ScheduledRun["result"]; runResults?: RunScript; stateDir?: string; fireDueTimers?: boolean; connector?: TaskConnectorTriggers; linkSecret?: string } = {}) {
+function harness(options: { cardFailures?: number; tasks?: ScheduledTask[]; checks?: BotWatchCheck[]; runResult?: ScheduledRun["result"]; runResults?: RunScript; stateDir?: string; fireDueTimers?: boolean; connector?: TaskConnectorTriggers; linkSecret?: string } = {}) {
   let clock = 1_800_000_000_000;
+  let cardFailures = options.cardFailures ?? 0;
   const later: Array<{ at: number; fn: () => void; cancelled: boolean }> = [];
   const tasks = options.tasks ?? [watchTask()];
   const checks = [...(options.checks ?? [])];
@@ -91,7 +92,10 @@ function harness(options: { tasks?: ScheduledTask[]; checks?: BotWatchCheck[]; r
     linkSecret: async () => options.linkSecret ?? null,
     ...(options.connector ? { connector: options.connector } : {}),
     paused: async (task, error, afterFailures) => { cards.push({ taskId: task.id, error, afterFailures }); },
-    dropped: async (task, card) => { notices.push({ taskId: task.id, text: card.text }); },
+    dropped: async (task, card) => {
+      if (cardFailures > 0) { cardFailures -= 1; throw new Error("EIO: the chat could not be saved"); }
+      notices.push({ taskId: task.id, text: card.text });
+    },
     needsSource: async (task) => { needsSource.push(task.id); },
     now: () => clock,
     timeZone: () => "UTC",
@@ -310,8 +314,8 @@ test("trigger runs share one cap of four at once across every task", async () =>
   emitted.stop();
 });
 
-function linkHarness(trigger: Record<string, unknown> = { kind: "webhook", gapMinutes: 10 }, runResults?: RunScript) {
-  const value = harness({ tasks: [watchTask({ trigger: trigger as ScheduledTask["trigger"] })], fireDueTimers: true, ...(runResults ? { runResults } : {}) });
+function linkHarness(trigger: Record<string, unknown> = { kind: "webhook", gapMinutes: 10 }, runResults?: RunScript, cardFailures?: number) {
+  const value = harness({ tasks: [watchTask({ trigger: trigger as ScheduledTask["trigger"] })], fireDueTimers: true, ...(runResults ? { runResults } : {}), ...(cardFailures ? { cardFailures } : {}) });
   const token = "L".repeat(43);
   return {
     ...value,
@@ -1072,6 +1076,40 @@ test("a drop after the last retry whose write lands and then fails still shows i
   assert.equal(link.notices.length, 1);
   assert.equal(await dropped(), 1);
   link.triggers.stop();
+});
+
+test("a drop card or log line that fails to show is tried again and shown once", async () => {
+  for (const failing of ["card", "log"] as const) {
+    const busy = Array.from({ length: 10 }, () => ({ result: "skipped" as const, reason: "chat_busy" as const }));
+    // The card fails before it is recorded, or the log line fails after the card is posted.
+    const link = linkHarness({ kind: "webhook", gapMinutes: 1 }, busy, failing === "card" ? 1 : 0);
+    await link.setUp();
+    let logFailures = failing === "log" ? 1 : 0;
+    const appendLog = link.store.appendLog.bind(link.store);
+    link.store.appendLog = async (id, entry) => {
+      if (entry.outcome === "dropped" && logFailures > 0) { logFailures -= 1; throw new Error("EIO: the log could not be saved"); }
+      return appendLog(id, entry);
+    };
+    const dropped = async () => ((await link.store.linkState("task-1"))?.log ?? []).filter((entry) => entry.outcome === "dropped").length;
+    type Book = { dropNotices?: Array<{ done?: string[] }> };
+    const book = () => (link.persistence.snapshot() as { tasks: Record<string, Book> }).tasks["task-1"];
+    assert.equal(await link.call({ n: 0 }), 202);
+    // Aiden keeps running: every retry and the second try at the notice run off their timers.
+    for (let step = 0; step < 12 && link.events.length < 7; step += 1) {
+      link.advance(MINUTE);
+      await link.fireTimers();
+    }
+    assert.equal(link.events.length, 7, `${failing}: the first run and 6 retries`);
+    assert.equal(link.notices.length + await dropped(), failing === "card" ? 0 : 1, `${failing}: only what showed before the failure is there`);
+    assert.equal(book()?.dropNotices?.length, 1, `${failing}: the notice is kept`);
+    link.advance(MINUTE);
+    await link.fireTimers();
+    assert.equal(link.notices.length, 1, `${failing}: the card is shown once`);
+    assert.match(link.notices[0]!.text, /tried 7 times/u);
+    assert.equal(await dropped(), 1, `${failing}: the log line is written once`);
+    assert.equal(book()?.dropNotices, undefined, `${failing}: the notice is cleared once both are shown`);
+    link.triggers.stop();
+  }
 });
 
 test("a held change of emoji up to the event bound survives a reload", async () => {

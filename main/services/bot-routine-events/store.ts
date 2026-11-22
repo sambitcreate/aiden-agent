@@ -45,7 +45,17 @@ export interface BotEventDropNotice {
   id: string;
   reason: "retries";
   held: BotEventReceipt;
+  /** The parts already shown, so a retry doesn't show them twice. */
+  done?: BotEventDropPart[];
+  /** Showing it failed this many times; it is given up after `BOT_EVENT_DROP_NOTICE_TRIES`. */
+  failures?: number;
 }
+
+/** What showing a drop takes: the card where the runs land, and a line in a link's recent calls. */
+export type BotEventDropPart = "card" | "log";
+
+/** Tries to show a drop notice before it is given up (and logged). */
+export const BOT_EVENT_DROP_NOTICE_TRIES = 6;
 
 export interface BotEventExecutionSnapshot {
   name: string;

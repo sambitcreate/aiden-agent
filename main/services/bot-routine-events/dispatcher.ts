@@ -7,7 +7,7 @@
 // reuse the same gap, dedupe, hold and replay rules with their own store.
 
 import { BOT_ROUTINE_EVENT_LIMITS, type BotRoutineTriggerKind } from "../../../renderer/shared/bot-routine-trigger.js";
-import { BOT_EVENT_RUNNING_MAX, type BotEventPublicationGuard, type BotEventRoutine, type BotEventRoutineStore, type BotEventDropNotice, type BotEventExecutionSnapshot, type BotEventReceipt } from "./store.js";
+import { BOT_EVENT_RUNNING_MAX, type BotEventPublicationGuard, type BotEventRoutine, type BotEventRoutineStore, BOT_EVENT_DROP_NOTICE_TRIES, type BotEventDropNotice, type BotEventDropPart, type BotEventExecutionSnapshot, type BotEventReceipt } from "./store.js";
 
 export type BotRoutineEventOutcome = "queued" | "held" | "duplicate" | "daily_limit" | "disabled" | "unknown";
 export interface BotRoutineEvent {
@@ -70,7 +70,14 @@ export interface EventRoutineDispatcherDependencies<R extends EventRoutine> {
    * A held event was dropped: the day's runs were used up, or a requeued
    * payload went past its retries. Without it the drop is silent (Bots).
    */
-  heldDropped?(routine: R, held: BotEventReceipt, reason: "daily_limit" | "retries"): Promise<void>;
+  /**
+   * Shows that a held payload was dropped. `done` lists the parts a previous
+   * try already showed, which must not be shown again. Resolves with what is
+   * shown now and the error that stopped the rest, if any; nothing (or no
+   * `failed`) means every part is shown.
+   */
+  heldDropped?(routine: R, held: BotEventReceipt, reason: "daily_limit" | "retries", done?: readonly BotEventDropPart[]):
+    Promise<void | { done: BotEventDropPart[]; failed?: unknown }>;
   now(): number;
   timeZone(): string;
   setTimer(fn: () => void, ms: number): { cancel(): void };
@@ -103,8 +110,10 @@ export function createEventRoutineDispatcher<R extends EventRoutine>(dependencie
   const heldTimers = new Map<string, { cancel(): void }>();
   /** Reconciles and replays scheduled after a requeue whose write came back rejected. */
   const recoveryTimers = new Set<{ cancel(): void }>();
-  /** Drop notices this process has shown; one whose clearing write failed isn't shown again. */
-  const shownNotices = new Set<string>();
+  /** Drop notices being shown now, so two passes never show one at once. */
+  const showingNotices = new Set<string>();
+  /** Parts each notice has shown in this process, kept when the write recording them fails. */
+  const shownParts = new Map<string, Set<BotEventDropPart>>();
   /** Runs started and admissions still deciding, not yet settled in the store, for `idle()`. */
   const pending = new Set<Promise<void>>();
   const active = new Set<string>();
@@ -294,9 +303,11 @@ export function createEventRoutineDispatcher<R extends EventRoutine>(dependencie
   }
 
   /**
-   * Shows each saved drop notice once (`heldDropped`), then clears the ones
-   * shown. A notice is shown by its id, so a clearing write that fails is
-   * tried again later without showing the card twice.
+   * Shows each saved drop notice (`heldDropped`) and clears it only once
+   * every part is shown. A part already shown (saved in the notice, or seen
+   * in this process) is never shown again. A notice whose showing fails is
+   * kept with its progress and tried again later, waiting longer each time;
+   * after `BOT_EVENT_DROP_NOTICE_TRIES` failures it is given up and logged.
    */
   async function showDrops(ownerKey: string, routineId: string, armedFor: number, attempt = 0): Promise<void> {
     if (!live(armedFor)) return;
@@ -311,23 +322,55 @@ export function createEventRoutineDispatcher<R extends EventRoutine>(dependencie
     const notices = routine?.dropNotices ?? [];
     if (!routine || !notices.length) return;
     const key = (notice: BotEventDropNotice) => `${ownerKey}\0${routineId}\0${notice.id}`;
+    const outcomes = new Map<string, { done: BotEventDropPart[]; failed: boolean }>();
     for (const notice of notices) {
-      if (shownNotices.has(key(notice))) continue;
-      shownNotices.add(key(notice));
-      await dependencies.heldDropped?.(routine, notice.held, notice.reason).catch((error: unknown) => dependencies.onError?.(error));
+      const id = key(notice);
+      if (showingNotices.has(id)) continue;
+      showingNotices.add(id);
+      const parts = shownParts.get(id) ?? new Set(notice.done ?? []);
+      shownParts.set(id, parts);
+      let failed = false;
+      try {
+        const shown = await dependencies.heldDropped?.(routine, notice.held, notice.reason, [...parts]);
+        for (const part of shown?.done ?? []) parts.add(part);
+        if (shown?.failed !== undefined) {
+          failed = true;
+          dependencies.onError?.(shown.failed);
+        }
+      } catch (error) {
+        failed = true;
+        dependencies.onError?.(error);
+      } finally {
+        showingNotices.delete(id);
+      }
+      outcomes.set(notice.id, { done: [...parts], failed });
     }
-    const shown = new Set(notices.map((notice) => notice.id));
+    if (!outcomes.size) return;
+    let retry = false;
     try {
       await dependencies.store.mutate(ownerKey, routineId, (current) => {
-        const kept = (current.dropNotices ?? []).filter((notice) => !shown.has(notice.id));
-        if (kept.length === (current.dropNotices ?? []).length) return { result: undefined };
-        const { dropNotices: _shown, ...rest } = current;
+        const kept: BotEventDropNotice[] = [];
+        for (const notice of current.dropNotices ?? []) {
+          const outcome = outcomes.get(notice.id);
+          if (!outcome) { kept.push(notice); continue; }
+          if (!outcome.failed) continue;
+          const failures = (notice.failures ?? 0) + 1;
+          if (failures >= BOT_EVENT_DROP_NOTICE_TRIES) {
+            dependencies.onError?.(new Error(`A dropped event's notice couldn't be shown after ${failures} tries; it is given up.`));
+            continue;
+          }
+          retry = true;
+          kept.push({ ...notice, done: outcome.done, failures });
+        }
+        const { dropNotices: _previous, ...rest } = current;
         return { next: (kept.length ? { ...rest, dropNotices: kept } : rest) as R, result: undefined };
       });
     } catch (error) {
       dependencies.onError?.(error);
-      later(retryWait(attempt), () => showDrops(ownerKey, routineId, armedFor, attempt + 1), armedFor);
+      retry = true;
     }
+    for (const [noticeId, outcome] of outcomes) if (!outcome.failed) shownParts.delete(`${ownerKey}\0${routineId}\0${noticeId}`);
+    if (retry) later(retryWait(attempt), () => showDrops(ownerKey, routineId, armedFor, attempt + 1), armedFor);
   }
 
   async function releaseHeld(ownerKey: string, routineId: string, armedFor: number): Promise<void> {
@@ -359,7 +402,10 @@ export function createEventRoutineDispatcher<R extends EventRoutine>(dependencie
     });
     if (claimed) await claimAndStart(claimed.routine, claimed.event, armedFor);
     else if (retryAt !== undefined) armHeld(ownerKey, routineId, retryAt, armedFor);
-    if (dropped) await dependencies.heldDropped?.(dropped.routine, dropped.held, "daily_limit").catch((error: unknown) => dependencies.onError?.(error));
+    if (dropped) {
+      const shown = await dependencies.heldDropped?.(dropped.routine, dropped.held, "daily_limit").catch((error: unknown) => ({ done: [], failed: error }));
+      if (shown?.failed !== undefined) dependencies.onError?.(shown.failed);
+    }
   }
 
   async function emit(ownerKey: string, routineId: string, event: BotRoutineEvent, armedFor: number): Promise<BotRoutineEventOutcome> {
