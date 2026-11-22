@@ -12,6 +12,7 @@ import {
   useChatPullRequestPending,
   useChatPullRequests,
   useScheduledTasks,
+  useStartedChats,
   useWorkspaceRepositoryIdentity,
 } from "../lib/queries";
 import { tasksPostingInChat } from "./chat-task-chips";
@@ -24,6 +25,9 @@ import {
 import { chatPullRequestChipLabels } from "../lib/chat-pull-request-chip";
 import type { GitInfo, ScheduledTask, Workspace } from "../lib/types";
 import { hasActiveFollowThrough } from "../shared/follow-through";
+import type { StartedChatView } from "../shared/child-chats";
+
+const EMPTY_STARTED_CHATS: StartedChatView[] = [];
 
 export interface ComposerContextChipsState {
   chips: ComposerContextChips;
@@ -34,6 +38,8 @@ export interface ComposerContextChipsState {
   pullRequestAnnouncement: string;
   /** Enabled scheduled tasks that post into this chat, soonest first. */
   postingTasks: ScheduledTask[];
+  /** The chats this chat started. */
+  startedChats: StartedChatView[];
 }
 
 export function useComposerContextChips({
@@ -61,6 +67,8 @@ export function useComposerContextChips({
   const current = useChatCurrentPullRequest(chatId, remoteReadable);
   const pending = useChatPullRequestPending(chatId, remoteReadable);
   const followThrough = useChatFollowThrough(chatId, started && hasFolder && !accessOff);
+  const startedChatsQuery = useStartedChats(chatId, started);
+  const startedChats = startedChatsQuery.data ?? EMPTY_STARTED_CHATS;
   const scheduledTasks = useScheduledTasks();
   const postingTasks = React.useMemo(() => tasksPostingInChat(scheduledTasks.data, chatId), [scheduledTasks.data, chatId]);
   const views = links.data?.links ?? [];
@@ -88,6 +96,7 @@ export function useComposerContextChips({
     },
     followThrough: hasActiveFollowThrough(followThrough.data) || Boolean(followThrough.data?.check),
     postingTasks: postingTasks.length > 0,
+    startedChats: startedChats.length > 0,
   });
   const pullRequestSettled =
     !remoteReadable || (!identity.isPending && !links.isPending && !current.isPending && !pending.isPending);
@@ -118,5 +127,5 @@ export function useComposerContextChips({
           : "",
     });
   }
-  return { chips, pullRequestAnnouncement: seen.announcement, postingTasks };
+  return { chips, pullRequestAnnouncement: seen.announcement, postingTasks, startedChats };
 }

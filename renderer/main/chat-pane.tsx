@@ -108,7 +108,12 @@ import {
   chatReadinessMessage as chatReadinessMessageFor,
   DENIED_APPROVAL_COMPOSER_PLACEHOLDER,
 } from "../lib/composer-placeholder";
-import { AppWindow, GitFork, TerminalSquare } from "lucide-react";
+import {
+  AppWindow,
+  GitFork,
+  TerminalSquare,
+  MessagesSquare,
+} from "lucide-react";
 import { MessageList } from "../components/message-list";
 import { KeepVisualChatContext } from "../lib/visual-menu-actions";
 import { useReadAloud } from "../lib/tts-client";
@@ -209,6 +214,7 @@ import {
   useSettings,
 } from "../lib/queries";
 import { forkedFromLabel, withForkLineage } from "../lib/chat-copy-view";
+import { fromLeadChatLabel, startedByChatLabel } from "../lib/chat-lineage";
 import {
   chatModelSelection,
   isModelSelectionReadyForNewWork,
@@ -1390,7 +1396,13 @@ export function ChatPane({ chatId }: { chatId: string }) {
   );
 
   const forkLineage = chat.data?.forkedFrom;
-  const allChats = useAllRegularChats(Boolean(forkLineage));
+  // A chat another chat started (Phase 5, D7). It wins over an outside app's provenance.
+  const chatLineage = chat.data?.startedBy;
+  const allChats = useAllRegularChats(Boolean(forkLineage) || Boolean(chatLineage));
+  const leadChat = chatLineage ? allChats.data?.find((candidate) => candidate.id === chatLineage.chatId) : undefined;
+  const leadChatLoading = Boolean(chatLineage) && allChats.isPending;
+  const startedByChat = chatLineage ? (leadChatLoading ? "Started by another chat" : startedByChatLabel(leadChat?.title)) : undefined;
+  const leadChatMessageLabel = chatLineage && !leadChatLoading ? fromLeadChatLabel(leadChat?.title) : undefined;
   const forkSource = forkLineage
     ? allChats.data?.find((candidate) => candidate.id === forkLineage.chatId)
     : undefined;
@@ -1403,7 +1415,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
     chatId,
     capabilities.mcpServer && !draft && Boolean(persistedChat.data),
   );
-  const startedByLabel = startedBy ? `Started by ${startedBy.name}` : undefined;
+  const startedByLabel = startedBy && !chatLineage ? `Started by ${startedBy.name}` : undefined;
 
   const forkDisabledReason =
     isGenerating || isStartingGeneration || approvals.length > 0
@@ -3784,13 +3796,30 @@ export function ChatPane({ chatId }: { chatId: string }) {
         className="h-full min-h-0"
         alignFooterToScrollContent
         title={
-          forkSourceLabel || startedByLabel ? (
+          forkSourceLabel || startedByLabel || startedByChat ? (
             <span
               className="block min-w-0"
               data-chat-fork-lineage={forkSourceLabel ? true : undefined}
               data-chat-started-by={startedByLabel ? true : undefined}
+              data-chat-started-by-chat={startedByChat ? true : undefined}
             >
               {chatTitleMenu}
+              {startedByChat ? (
+                <span className="flex min-w-0 items-center gap-1 text-small font-normal text-secondary">
+                  <MessagesSquare aria-hidden="true" className="size-3 shrink-0" />
+                  {leadChat ? (
+                    <button
+                      type="button"
+                      className="min-w-0 truncate rounded-control text-left outline-none hover:text-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                      onClick={() => void navigate({ to: "/chat/$chatId", params: { chatId: leadChat.id } })}
+                    >
+                      {startedByChat}
+                    </button>
+                  ) : (
+                    <span className="min-w-0 truncate">{startedByChat}</span>
+                  )}
+                </span>
+              ) : null}
               {forkSourceLabel ? (
                 <span className="flex min-w-0 items-center gap-1 text-small font-normal text-secondary">
                   <GitFork aria-hidden="true" className="size-3 shrink-0" />
@@ -4378,6 +4407,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
             <MessageList
               key={chatId}
               chatId={chatId}
+              {...(leadChatMessageLabel ? { leadChatLabel: leadChatMessageLabel } : {})}
               messages={messages}
               streamingText={displayedStreamingText}
               streamingReasoning={displayedStreamingReasoning}

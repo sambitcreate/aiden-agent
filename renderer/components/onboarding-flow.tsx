@@ -88,9 +88,10 @@ export function OnboardingFlow({
         computerUse: capabilities.computerUse,
         designMode: capabilities.designMode,
         mcpServer: capabilities.mcpServer,
+        childChats: capabilities.childChats,
         platform: capabilities.platform,
       }),
-    [capabilities.bots, capabilities.botComputers, capabilities.computerUse, capabilities.designMode, capabilities.mcpServer, capabilities.platform],
+    [capabilities.bots, capabilities.botComputers, capabilities.computerUse, capabilities.designMode, capabilities.mcpServer, capabilities.childChats, capabilities.platform],
   );
   const providers = useProviders();
   const settings = useSettings();

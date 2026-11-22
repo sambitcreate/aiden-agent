@@ -167,6 +167,13 @@
       "renderer/components/scroll-area-follow",
       "renderer/lib/sticky-section.ts"
     ],
+    "chats-that-run-chats.spec.ts": [
+      "renderer/components/started-chats-chip",
+      "renderer/lib/chat-lineage.ts",
+      "renderer/shared/child-chats.ts",
+      "main/services/chat-orchestration",
+      "main/handlers/child-chats.ts"
+    ],
     "chat-fork.spec.ts": [
       "renderer/components/chat",
       "main/services/chat-fork"

@@ -1956,7 +1956,7 @@ async function prepareGeneration(
   // and the lead's `send` and Stop leave it alone (Phase 5, D3).
   if (params.chatId && chatLineage?.startedBy && options.leadChatTurn !== true && !aidenStartedTurn(turnAudience)) {
     const tookOverChatId = params.chatId;
-    await (await import("./chat-orchestration/links-main.js")).markPersonTookOver(tookOverChatId).catch((error: unknown) => {
+    await (await import("./chat-orchestration/child-chats-main.js")).personTookOverStartedChat(tookOverChatId).catch((error: unknown) => {
       logger.warn("chat-orchestration", "Could not record that the person took over a started chat.", error);
     });
   }

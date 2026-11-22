@@ -987,6 +987,7 @@ export function createChatStore(
           message.role === "user"
             ? parseChatInputSource(message.inputSource)
             : undefined,
+        fromLeadChat: message.role === "user" && message.fromLeadChat === true && !message.notice ? true : undefined,
         // Only a blocked prompt carries the key, so unmarked messages keep their old shape.
         ...hookBlockedField(message),
       };
@@ -2349,6 +2350,7 @@ export function createChatStore(
             message.role === "user"
               ? parseChatInputSource(message.inputSource)
               : undefined,
+          fromLeadChat: message.role === "user" && message.fromLeadChat === true && !message.notice ? true : undefined,
           timeline:
             message.role === "assistant"
               ? parseGenerationTimeline(message.timeline, message.content.length)

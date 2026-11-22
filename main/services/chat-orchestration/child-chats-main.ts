@@ -3,10 +3,10 @@
 import { configStore } from "../config-store.js";
 import { chatStore } from "../chat-store.js";
 import { approvalCeilingOf, currentWorkspaceApproval } from "../approval-gate/run-approval.js";
-import { logger } from "../../platform.js";
+import { ipcMain, logger } from "../../platform.js";
 import { ChildChats } from "./child-chats.js";
 import { ChildChatCompletions } from "./completion-delivery.js";
-import { chatLinks } from "./links-main.js";
+import { chatLinks, markPersonTookOver } from "./links-main.js";
 
 async function remote() {
   return import("../aiden-remote-service-main.js");
@@ -42,7 +42,20 @@ export const childChats = new ChildChats({
   },
   answerIn: async () => `Aiden on ${await (await remote()).aidenHostDisplayName()}`,
   onRunEnded: (event) => void childChatCompletions.runEnded(event),
+  onChanged: (leadChatId) => childChatsChanged(leadChatId),
 });
+
+/** Tells the desktop a lead's started chats changed: `{leadChatId}`. */
+export function childChatsChanged(leadChatId: string): void {
+  ipcMain.broadcast("chats:child-chats-changed", { leadChatId });
+}
+
+/** The person wrote in a started chat: it is theirs now. */
+export async function personTookOverStartedChat(chatId: string): Promise<void> {
+  await markPersonTookOver(chatId);
+  const lead = chatLinks.get(chatId)?.leadChatId;
+  if (lead) childChatsChanged(lead);
+}
 
 /**
  * The person pressed Stop in a chat. If it leads started chats, their running

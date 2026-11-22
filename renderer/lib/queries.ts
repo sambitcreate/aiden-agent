@@ -1,5 +1,6 @@
 // React Query hooks for providers, chats, and settings.
 
+import { startedChatWorking } from "../shared/child-chats";
 import { useCallback, useEffect, useMemo } from "react";
 import {
   keepPreviousData,
@@ -126,6 +127,7 @@ export const queryKeys = {
     ["workspace-repository-identity", workspaceId ?? "none"] as const,
   chatPullRequests: (chatId: string | undefined) =>
     ["chat-pull-requests", chatId ?? "none"] as const,
+  startedChats: (leadChatId: string | undefined) => ["started-chats", leadChatId ?? ""] as const,
   chatFollowThrough: (chatId: string | undefined) =>
     ["chat-follow-through", chatId ?? "none"] as const,
   chatCurrentPullRequest: (chatId: string | undefined) =>
@@ -594,6 +596,18 @@ export function useChatPullRequests(chatId: string | undefined, enabled = true) 
     queryFn: () => pullRequestsApi.list(chatId as string),
     enabled: Boolean(chatId) && enabled,
     staleTime: 30_000,
+  });
+}
+
+/** The chats a lead chat started; `chats:child-chats-changed` invalidates it. */
+export function useStartedChats(leadChatId: string | undefined, enabled = true) {
+  return useQuery({
+    queryKey: queryKeys.startedChats(leadChatId),
+    queryFn: () => chatsApi.startedChats(leadChatId as string),
+    enabled: Boolean(leadChatId) && enabled,
+    staleTime: 15_000,
+    // Starts and endings notify; a turn moving to "needs you" does not, so look again while any is working.
+    refetchInterval: (query) => (query.state.data?.some(startedChatWorking) ? 4_000 : false),
   });
 }
 

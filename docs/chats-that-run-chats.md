@@ -109,6 +109,28 @@ turn of every chat it started, except chats you've written in. Until you next
 send in the lead, its started chats' endings are only recorded and don't wake
 it. Stop in a started chat stops only that chat.
 
+## On the desktop
+
+- **The lead's chip.** A lead chat's composer shows a chip with how many of its
+  started chats are working ("3 chats working"), or how many it started once
+  none is ("3 started chats"). It names any that need you. Its list shows each
+  chat's title and state (Working, Needs your approval, Needs your answer,
+  Done, Stopped, Interrupted, Stopped with an error, or Yours now after you
+  write in it) and the branch of a chat in its own worktree. **Open** goes to
+  the chat; **Stop** stops one; **Stop all** works like Stop in the lead, so
+  endings don't wake it until you next send there. A chat you stop from the
+  list never wakes the lead either.
+- **Lineage.** A started chat's header says "Started by “Release prep”", and
+  the title links back to the lead; its sidebar row carries a small chat glyph
+  with the same text for screen readers. If the lead was deleted, it reads
+  "Started by a deleted chat". When a chat somehow carries both a lead and an
+  outside app's "Started by \<app>", the lead wins.
+- **Messages.** Messages the lead sent there show "From “Release prep”" under
+  them. The marker is stored on the message (`fromLeadChat`) and is display
+  only: phones don't receive it yet.
+- **Onboarding.** The feature tour has a **Chats that run chats** tile on macOS
+  and Linux.
+
 ## When you write in a started chat
 
 Once you send a message in a started chat after the lead's last message, the

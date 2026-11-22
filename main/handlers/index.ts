@@ -80,6 +80,7 @@ import { registerStorageHandlers } from "./storage.js";
 import { hostPlatformCapabilities } from "../services/host-platform-capabilities.js";
 import { registerBtwHandlers } from "./btw.js";
 import { registerFollowThroughHandlers } from "./follow-through.js";
+import { registerChildChatsHandlers } from "./child-chats.js";
 import { registerTtsHandlers } from "./tts.js";
 import { registerDeviceHandlers } from "./devices.js";
 import { registerCreateImagesIpc } from "./create-images/index.js";
@@ -231,6 +232,7 @@ export function registerHandlers(isMainWindow: (event: IpcMainInvokeEvent) => bo
   if (hostPlatformCapabilities().bots) registerBotHandlers();
   registerBtwHandlers();
   registerFollowThroughHandlers();
+  registerChildChatsHandlers();
   registerTtsHandlers();
   registerStorageHandlers();
   registerDeviceHandlers();

@@ -3013,6 +3013,8 @@ export class AidenRemoteChatService {
                   content: parsed.text,
                   ...(attachments?.length ? { attachments } : {}),
                   ...(preparedSkill ? { skill: preparedSkill.provenance } : {}),
+                  // The lead chat sent it: the desktop labels it "From “<lead>”".
+                  ...(isChatAudience(deviceId) ? { fromLeadChat: true as const } : {}),
                 },
                 {
                   providerId: selection.providerId,

@@ -392,6 +392,8 @@ export interface ChatMessage {
   notice?: import("../../renderer/shared/agent-notices.js").AgentNoticeV1;
   /** User messages Aiden Live sent for the person ("By voice"); display-only. */
   inputSource?: import("../../renderer/shared/chat-input-source.js").ChatInputSourceV1;
+  /** A user message the chat that started this one sent (Phase 5, D7); display-only, desktop only. */
+  fromLeadChat?: true;
   /** Set when a UserPromptSubmit hook blocked this user message; it never reaches a model. */
   hookBlocked?: import("./hook-blocked-prompt.js").HookBlockedPromptV1;
   /** Renderer-safe tool milestones associated with this assistant response. */

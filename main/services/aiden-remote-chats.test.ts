@@ -191,6 +191,7 @@ function fixture(
           createdAt: 3_000,
           ...(message.attachments ? { attachments: structuredClone(message.attachments) } : {}),
           ...(message.skill ? { skill: structuredClone(message.skill) } : {}),
+          ...(message.fromLeadChat ? { fromLeadChat: message.fromLeadChat } : {}),
         };
         current.messages.push(stored);
         current.providerId = meta.providerId;
@@ -3599,6 +3600,15 @@ test("a lead chat's started chat records its lead, sends no usage data and can a
   assert.deepEqual(sent, []);
   assert.equal(app.lastGenerationOptions()?.leadChatTurn, true);
   assert.equal(app.lastGenerationOptions()?.questionPromptsUnavailable, undefined);
+  // The desktop labels the lead's message "From “<lead>”"; a phone's message carries no such mark.
+  const lastUserMessage = () => app.current()?.messages.filter((message) => message.role === "user").pop();
+  const leadMessage = lastUserMessage();
+  assert.equal(leadMessage?.content, "Run the tests");
+  assert.equal(leadMessage?.fromLeadChat, true);
+  await app.service.startTurn("device-1", "chat-3", "agent-turn-0000000002", { text: "From the phone" });
+  const phoneMessage = lastUserMessage();
+  assert.equal(phoneMessage?.content, "From the phone");
+  assert.equal(phoneMessage?.fromLeadChat, undefined);
 });
 
 test("a phone's message outside a real workspace is not counted as in one", async (t) => {

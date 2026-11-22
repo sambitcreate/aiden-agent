@@ -677,6 +677,8 @@ export interface ChatMessage {
   notice?: import("../shared/agent-notices").AgentNoticeV1;
   /** Aiden Live sent this user message for the person ("By voice"). */
   inputSource?: import("../shared/chat-input-source").ChatInputSourceV1;
+  /** Sent by the chat that started this one (desktop label "From “<lead>”"). */
+  fromLeadChat?: true;
   /** Set when a UserPromptSubmit hook refused this message; it never reached a model. */
   hookBlocked?: { reason: string };
   timeline?: GenerationTimeline;

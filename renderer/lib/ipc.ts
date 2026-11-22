@@ -1,3 +1,4 @@
+import { parseStartedChatViews, type StartedChatView } from "../shared/child-chats";
 import { parseBotRoutineModelDirectory } from "../shared/bot-routine-model-directory";
 import type { ChatInputSourceV1 } from "../shared/chat-input-source";
 import { createBotPeerApi } from "./bot-peers-api";
@@ -1735,6 +1736,11 @@ export const chatsApi = {
     invoke<void>("chats:followThroughSetCheck", { chatId, command }),
   clearDoneWhenCheck: (chatId: string) => invoke<void>("chats:followThroughClearCheck", { chatId }),
   cancelCheckBack: (chatId: string, id: string) => invoke<void>("chats:followThroughCancelCheckBack", { chatId, id }),
+  // Chats a lead chat started (Phase 5).
+  startedChats: async (leadChatId: string): Promise<StartedChatView[]> =>
+    parseStartedChatViews(await invoke<unknown>("chats:childChats", leadChatId)),
+  stopStartedChat: (leadChatId: string, chatId: string) => invoke<unknown>("chats:childChatsStop", { leadChatId, chatId }),
+  stopAllStartedChats: (leadChatId: string) => invoke<void>("chats:childChatsStopAll", { leadChatId }),
   onBtwEvent: (handler: (event: BtwEventV1) => void) =>
     onNotification<unknown>("chats:btw-event", (payload) => {
       const event = parseBtwEvent(payload);

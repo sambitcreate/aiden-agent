@@ -845,6 +845,25 @@ test("the By voice marker survives a restart on user messages only", async (t) =
   assert.equal(chatForRenderer(loaded)?.messages[0]?.inputSource, "voice");
 });
 
+test("the From-the-lead-chat marker survives a restart on plain user messages only", async (t) => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-chat-lead-"));
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const store = createChatStore(async () => directory);
+  const chat = await store.create({});
+  await store.appendMessage(chat.id, { role: "user", content: "Run the tests.", fromLeadChat: true });
+  await store.appendMessage(chat.id, { role: "assistant", content: "On it.", fromLeadChat: true } as never);
+  await store.appendMessage(chat.id, { role: "user", content: "Also lint.", fromLeadChat: "yes" } as never);
+  await store.appendMessage(chat.id, { role: "user", content: "Typed by the person." });
+
+  const loaded = await createChatStore(async () => directory).get(chat.id);
+  assert.deepEqual(
+    loaded?.messages.map((message) => message.fromLeadChat),
+    [true, undefined, undefined, undefined],
+    "only a user message keeps the marker, and only the exact value",
+  );
+  assert.equal(chatForRenderer(loaded)?.messages[0]?.fromLeadChat, true);
+});
+
 test("renderer ownership is checked again at the atomic append commit", async (t) => {
   const directory = await fs.mkdtemp(
     path.join(os.tmpdir(), "aiden-chat-owner-guard-"),

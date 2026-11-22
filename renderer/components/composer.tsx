@@ -52,6 +52,7 @@ import {
 import { DesignCommentTray } from "../design/design-comment-tray";
 import { useComposerContextChips } from "./use-composer-context-chips";
 import { FollowThroughChips } from "./follow-through-chips";
+import { StartedChatsChip } from "./started-chats-chip";
 import { ChatTaskChip } from "./chat-task-chips";
 import { ChatPullRequestsChip } from "./chat-pull-requests";
 import { GitBranchPicker, type GitBranchPickerDraft } from "./git-branch-picker";
@@ -2443,7 +2444,7 @@ export function Composer({
   const WorkspaceChipIcon = noWorkspace ? MessageCircle : Folder;
   const hasUserMessages =
     sessionChat?.messages.some((message) => message.role === "user") ?? hasMessages;
-  const { chips: contextChips, pullRequestAnnouncement, postingTasks } = useComposerContextChips({
+  const { chips: contextChips, pullRequestAnnouncement, postingTasks, startedChats } = useComposerContextChips({
     chatId,
     started: hasUserMessages,
     workspace,
@@ -2632,6 +2633,11 @@ export function Composer({
             {contextChips.pullRequest ? (
               <span className="composer-context-chip-enter flex shrink-0">
                 <ChatPullRequestsChip chatId={chatId} />
+              </span>
+            ) : null}
+            {contextChips.startedChats ? (
+              <span className="composer-context-chip-enter flex shrink-0">
+                <StartedChatsChip leadChatId={chatId} views={startedChats} />
               </span>
             ) : null}
             {contextChips.followThrough ? <FollowThroughChips chatId={chatId} /> : null}

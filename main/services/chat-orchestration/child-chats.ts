@@ -49,6 +49,8 @@ export interface ChildChatsDependencies {
   answerIn(): Promise<string>;
   /** A turn the lead started in a chat ended (not an approval or question wait: those never end a turn). */
   onRunEnded?(event: ChildChatRunEnded): void;
+  /** The lead's started chats changed (a start, a new turn, a stop, an end), for the desktop's chip. */
+  onChanged?(leadChatId: string): void;
   now?(): number;
 }
 
@@ -110,6 +112,8 @@ export type ChildChatView = {
   reply?: string;
   /** The newest result the chat submitted that matched its schema. */
   result?: unknown;
+  /** The branch of its new worktree, when it runs in one. */
+  branch?: string;
 };
 
 const ENDED: ReadonlySet<ChatRunSnapshot["state"]> = new Set(["done", "failed"]);
@@ -372,13 +376,14 @@ export class ChildChats {
       draft.leadSentAt = this.now();
     });
     this.follow(services, link, turn.streamId);
+    this.dependencies.onChanged?.(link.leadChatId);
     return turn.streamId;
   }
 
   /** Tells `onRunEnded` once the run ends. In memory: nothing resumes after a quit. */
   private follow(services: ChildChatServices, link: ChatLink, runId: string): void {
-    const onRunEnded = this.dependencies.onRunEnded;
-    if (!onRunEnded || this.followed.has(runId)) return;
+    const onRunEnded = this.dependencies.onRunEnded ?? (() => undefined);
+    if (this.followed.has(runId)) return;
     this.followed.add(runId);
     const audience = chatAudience(link.leadChatId);
     let detach: (() => void) | undefined;
@@ -397,6 +402,7 @@ export class ChildChats {
       if (!end) return;
       finish();
       onRunEnded({ leadChatId: link.leadChatId, chatId: link.childChatId, runId, end });
+      this.dependencies.onChanged?.(link.leadChatId);
     };
     const finish = () => {
       done = true;
@@ -460,6 +466,7 @@ export class ChildChats {
       chatId: link.childChatId,
       title: link.title,
       ...(personTookOver(link) ? { tookOver: true as const } : {}),
+      ...(link.branch ? { branch: link.branch } : {}),
     };
     if (!link.runId) return { ...base, state: "idle", ...(link.result ? { result: link.result.value } : {}) };
     let snapshot: ChatRunSnapshot;
