@@ -20,7 +20,7 @@ import { compileResultSchema } from "./result-schema.js";
 
 export interface ChildChatsToolOptions {
   leadChatId: string;
-  childChats: Pick<ChildChats, "start" | "send" | "wait" | "read" | "list" | "stop">;
+  childChats: Pick<ChildChats, "start" | "send" | "wait" | "read" | "list" | "stop" | "childTainted">;
   /** This turn's refusal for a call, checked again here in case the call skipped the turn policy. */
   refusal?(args: unknown): string | undefined;
   /**
@@ -54,12 +54,22 @@ type Params = {
   limit?: unknown;
 };
 
-function result(value: unknown, isError = false): AgentToolResult<Record<string, never>> {
+/**
+ * `outside`: the result carries the words of a started chat whose run held
+ * outside content (`childTainted`), so the lead's run is tainted from here
+ * on (`toolResultSaysOutside`). Every other result is the lead's own.
+ */
+function result(value: unknown, isError = false, outside = false): AgentToolResult<{ outside?: true }> {
   return {
     content: [{ type: "text", text: JSON.stringify(value) }],
-    details: {},
+    details: outside ? { outside: true } : {},
     ...(isError ? { isError: true } : {}),
-  } as AgentToolResult<Record<string, never>>;
+  } as AgentToolResult<{ outside?: true }>;
+}
+
+/** A chat's view carries its own words: its reply, its result, or what it asks to approve. */
+function viewHasWords(view: { reply?: unknown; result?: unknown; approval?: unknown }): boolean {
+  return view.reply !== undefined || view.result !== undefined || view.approval !== undefined;
 }
 
 function refuse(message: string) {
@@ -198,16 +208,21 @@ export function createChildChatsTool(options: ChildChatsToolOptions): AgentTool 
               },
               signal ?? new AbortController().signal,
             );
-            return result({ ok: true, chats });
+            const tainted = chats.some((view) => viewHasWords(view) && options.childChats.childTainted(view.chatId));
+            return result({ ok: true, chats }, false, tainted);
           }
           case "read": {
             const chatId = id(params.chat_id);
             if (!chatId) return refuse("read needs chat_id.");
             const limit = typeof params.limit === "number" ? params.limit : CHILD_CHATS_LIMITS.readDefaultMessages;
-            return result({ ok: true, ...(await options.childChats.read(lead, { chatId, limit: Math.min(Math.max(1, limit), CHILD_CHATS_LIMITS.readMessages) })) });
+            const read = await options.childChats.read(lead, { chatId, limit: Math.min(Math.max(1, limit), CHILD_CHATS_LIMITS.readMessages) });
+            return result({ ok: true, ...read }, false, read.messages.length > 0 && options.childChats.childTainted(read.chatId));
           }
-          case "list":
-            return result({ ok: true, chats: await options.childChats.list(lead) });
+          case "list": {
+            // A list has no replies, but a chat's result or approval summary is its own words.
+            const chats = await options.childChats.list(lead);
+            return result({ ok: true, chats }, false, chats.some((view) => viewHasWords(view) && options.childChats.childTainted(view.chatId)));
+          }
           case "stop": {
             const chatId = id(params.chat_id);
             if (!chatId) return refuse("stop needs chat_id.");

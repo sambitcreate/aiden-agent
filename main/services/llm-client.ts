@@ -25,7 +25,7 @@ import { createSpendingMeter, spendCounts } from "./spending-service.js";
 import { parseApprovalModel, type MacGrantClass } from "../../renderer/shared/approval-mode.js";
 import { currentWorkspaceApproval, generationApprovalPolicy, legacyAccessOf, runJudgeAvailable } from "./approval-gate/run-approval.js";
 import { CHAT_AUDIENCE_PROMPT_LIFETIME_MS } from "./chat-orchestration/audience.js";
-import { ownerRequestText, RunTaint, runTaintHistoryOfBranch, runTaintHistoryOfMessages, runTaintPersonText } from "./approval-gate/run-taint.js";
+import { ownerRequestText, RunTaint, runTaintHistoryEntryOf, runTaintHistoryOfBranch, runTaintHistoryOfMessages, runTaintPersonText, toolResultSaysOutside } from "./approval-gate/run-taint.js";
 import { declaredReadOnlyHint } from "./approval-gate/tool-classes.js";
 import { approvalJudgeAction, createApprovalJudge, type ApprovalJudge } from "./approval-judge/judge.js";
 import { approvalJudgeComplete } from "./approval-judge/model-complete.js";
@@ -4822,9 +4822,10 @@ export const llmClient = {
         // A tainted lead's own words are not the person naming a site.
         personText: runTaintPersonText(generationChat.messages, { leadWordsTrusted: judgeTrusted() }),
         history: [
-          ...initialMessages.map((message) => ({
+          ...initialMessages.map((message) => runTaintHistoryEntryOf({
             role: message.role,
-            ...("toolName" in message && typeof message.toolName === "string" ? { toolName: message.toolName } : {}),
+            ...("toolName" in message ? { toolName: message.toolName } : {}),
+            ...("details" in message ? { details: message.details } : {}),
           })),
           ...journalHistory,
           // Notices and task prompts that quote outside text, in this turn or any earlier one.
@@ -6133,6 +6134,9 @@ export const llmClient = {
               phase: denied ? "blocked" : event.isError ? "error" : "result",
               toolName: event.toolName,
             });
+            // A result that says it brought outside content in (a started chat's words, when
+            // that chat's run held outside content) taints the rest of the run.
+            if (!denied && toolResultSaysOutside(event.result?.details)) runTaint?.markOutside();
             // A failed command may still have written files, so only a denied call is skipped.
             if (!denied) notifyWorkspaceFilesTouched(workspaceId, event.toolName);
             // A write or edit that finished before Stop took effect already changed the file on disk.

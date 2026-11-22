@@ -49,7 +49,9 @@ export const BOT_EXEMPT_TOOL_NAMES: ReadonlySet<string> = new Set([
  * (it may have read anything), a pull request's comments, and codemode (it
  * calls connectors). Shell output and the person's workspace files are their
  * own project and do not taint; a command that fetches runs only on the
- * person's shell grant.
+ * person's shell grant. `child_chats` is not here: only a call that returns
+ * the words of a started chat whose run held outside content taints, and its
+ * result says so (`toolResultSaysOutside`).
  */
 const TAINT_SOURCE_TOOL_NAMES: ReadonlySet<string> = new Set([
   "web_fetch",
@@ -59,9 +61,6 @@ const TAINT_SOURCE_TOOL_NAMES: ReadonlySet<string> = new Set([
   "subagent",
   "follow_pull_request",
   "codemode",
-  // Started chats' replies may carry anything they read; every action counts,
-  // since taint is decided by tool name.
-  "child_chats",
 ]);
 
 /** Browser tools that only change the window, never read the page. */

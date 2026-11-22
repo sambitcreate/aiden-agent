@@ -366,6 +366,15 @@ export class ChildChats {
     return { chatId: link.childChatId, title: link.title, messages };
   }
 
+  /**
+   * Whether a run in this started chat held outside content (`childTainted`),
+   * so its words in a `wait`, `read` or `list` result are outside content for
+   * the lead. Read after the call that restored the links.
+   */
+  childTainted(chatId: string): boolean {
+    return this.dependencies.links.get(chatId)?.childTainted === true;
+  }
+
   async list(leadChatId: string): Promise<ChildChatView[]> {
     await this.dependencies.links.restore();
     const links = this.dependencies.links.childrenOf(leadChatId);

@@ -164,6 +164,10 @@ export const noticeDelivery = new NoticeDelivery({
   waitForRunToSettle: async (chatId) => {
     await llmClient.waitForChatIdleWithin(chatId, OTHER_RUN_WAIT_MS);
   },
+  // No bound of its own: the holding run's time limit ends it.
+  waitForRunToEnd: async (chatId) => {
+    await llmClient.waitForChatIdleWithin(chatId, Number.POSITIVE_INFINITY);
+  },
   now: Date.now,
   onError: (error) => logger.warn("follow-through", "A follow-up notice was not delivered.", error),
 });

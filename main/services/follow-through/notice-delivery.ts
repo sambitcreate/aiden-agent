@@ -3,9 +3,11 @@
 // woken with a main-owned turn that nobody is watching, within an hourly
 // budget; otherwise the notice is only recorded and the agent reads it with
 // the person's next message. A run another feature owns (a scheduled task's)
-// never takes a notice: delivery waits for it to settle once, for at most
-// `waitForRunToSettle`'s bound, then joins or wakes the chat's own turn, or
-// records the notice if the chat is still busy. While the chat has an active
+// never takes a notice: delivery waits for it to settle, for at most
+// `waitForRunToSettle`'s bound, then joins or wakes the chat's own turn. A run
+// that still holds the chat after that keeps the notice waiting, with no
+// further bound (the run's own time limit ends it), and once it settles the
+// notice is only recorded, never woken. While the chat has an active
 // keep-going goal, a waking notice starts a goal round instead, which the
 // person attends and which uses no wake budget. Notices for one chat are
 // delivered in order. Delivery lives in memory: a notice still waiting when
@@ -75,6 +77,11 @@ export interface NoticeDeliveryDeps {
    * chat settles. A notice waits like this at most once.
    */
   waitForRunToSettle(chatId: string): Promise<void>;
+  /**
+   * Waits with no bound until a run that still holds the chat after
+   * `waitForRunToSettle` settles; that run's own time limit ends it.
+   */
+  waitForRunToEnd(chatId: string): Promise<void>;
   now(): number;
   onError?(error: unknown): void;
 }
@@ -145,10 +152,10 @@ export class NoticeDelivery {
     return this.chains.has(chatId) && !this.waitingOnRun.has(chatId);
   }
 
-  private async waitOnRun(chatId: string): Promise<void> {
+  private async waitOnRun(chatId: string, wait: (chatId: string) => Promise<void>): Promise<void> {
     this.waitingOnRun.set(chatId, (this.waitingOnRun.get(chatId) ?? 0) + 1);
     try {
-      await this.deps.waitForRunToSettle(chatId);
+      await wait(chatId);
     } finally {
       const left = (this.waitingOnRun.get(chatId) ?? 1) - 1;
       if (left > 0) this.waitingOnRun.set(chatId, left);
@@ -183,11 +190,15 @@ export class NoticeDelivery {
         continue;
       }
       if (queued.kind === "busy") {
-        // One bounded wait; a chat still held after it only records the notice.
-        if (waitedOnRun) break;
-        waitedOnRun = true;
-        await this.waitOnRun(post.chatId);
-        continue;
+        if (!waitedOnRun) {
+          waitedOnRun = true;
+          await this.waitOnRun(post.chatId, (chatId) => this.deps.waitForRunToSettle(chatId));
+          continue;
+        }
+        // Still held after the long wait: stay waiting until that run settles,
+        // however long, then only record; the news is too old to wake for.
+        await this.waitOnRun(post.chatId, (chatId) => this.deps.waitForRunToEnd(chatId));
+        return this.record(post, post.wake ? "wake-unavailable" : "not-waking");
       }
       const round = post.wake ? await this.deps.startGoalRound?.(post.chatId, post) : undefined;
       if (round) {
