@@ -179,21 +179,29 @@ export function untilGoalObjective(command: string): string {
  * after an update), keeping the checks it had used. Passed and given-up
  * checks are finished and are dropped, as is a check whose chat already has
  * a goal, a command a new `/until` would refuse, and a chat that can't have a
- * goal (`eligible`).
+ * goal (`eligible` false). A check whose chat couldn't be read (`eligible`
+ * undefined) is kept as it was, in `kept`, for the next launch to try again.
  */
 export function migrateDoneWhenRecords(
   records: readonly unknown[],
   goals: readonly GoalRecordV1[],
-  make: { now: number; newId: () => string; eligible: (chatId: string) => boolean },
-): GoalRecordV1[] {
+  make: { now: number; newId: () => string; eligible: (chatId: string) => boolean | undefined },
+): { goals: GoalRecordV1[]; kept: unknown[] } {
   const taken = new Set(goals.map((goal) => goal.chatId));
   const migrated: GoalRecordV1[] = [];
+  const kept: unknown[] = [];
   for (const entry of records) {
     const record = entry as Partial<DoneWhenRecord> | null;
     if (record?.version !== 1 || typeof record.chatId !== "string" || typeof record.command !== "string") continue;
     if (record.state !== "waiting" && record.state !== "running") continue;
     const command = validateGoalCheck(record.command)?.command;
-    if (!command || taken.has(record.chatId) || !make.eligible(record.chatId)) continue;
+    if (!command || taken.has(record.chatId)) continue;
+    const eligible = make.eligible(record.chatId);
+    if (eligible === undefined) {
+      kept.push(entry);
+      continue;
+    }
+    if (!eligible) continue;
     taken.add(record.chatId);
     const used = typeof record.checksRun === "number" && Number.isSafeInteger(record.checksRun) ? record.checksRun : 0;
     // A check cut off while running had not used its attempt.
@@ -219,5 +227,5 @@ export function migrateDoneWhenRecords(
       unusableReviews: 0,
     });
   }
-  return migrated;
+  return { goals: migrated, kept };
 }

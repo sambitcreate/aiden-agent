@@ -121,7 +121,8 @@ test("checks saved by an older release become paused goals that keep their used 
   const existing = createGoal({ id: "goal-x", chatId: "chat-goal", objective: "Ship it", source: "slash", boot: "b", now: 1 });
   assert.ok(existing.ok);
   const goals: GoalRecordV1[] = [existing.goal];
-  const migrated = migrateDoneWhenRecords(
+  const unreadable = { version: 1, chatId: "chat-unreadable", workspaceId: "ws-1", command: "npm run lint", state: "waiting", checksRun: 1, setAt: 1 };
+  const { goals: migrated, kept } = migrateDoneWhenRecords(
     [
       { version: 1, chatId: "chat-waiting", workspaceId: "ws-1", command: " npm test ", state: "waiting", checksRun: 2, setAt: 500 },
       // Cut off while running: that attempt was never used.
@@ -136,9 +137,15 @@ test("checks saved by an older release become paused goals that keep their used 
       { version: 1, chatId: "chat-long", workspaceId: "ws-1", command: "x".repeat(5_000), state: "waiting", checksRun: 0, setAt: 1 },
       // A chat that can't have a goal (a Bot's, or gone) gets none.
       { version: 1, chatId: "chat-bot", workspaceId: "ws-1", command: "npm test", state: "waiting", checksRun: 0, setAt: 1 },
+      // A chat that couldn't be read is neither migrated nor dropped.
+      unreadable,
     ],
     goals,
-    { now: 10_000, newId: () => `goal-${++ids}`, eligible: (chatId) => chatId !== "chat-bot" },
+    {
+      now: 10_000,
+      newId: () => `goal-${++ids}`,
+      eligible: (chatId) => (chatId === "chat-unreadable" ? undefined : chatId !== "chat-bot"),
+    },
   );
   assert.deepEqual(
     migrated.map((goal) => [goal.chatId, goal.status, goal.cause, goal.rounds, goal.maxRounds, goal.check?.command, goal.source]),
@@ -149,6 +156,8 @@ test("checks saved by an older release become paused goals that keep their used 
   );
   assert.equal(migrated[0]!.objective, "Keep going until npm test passes");
   assert.equal(migrated[0]!.setAt, 500);
+  // The unreadable chat's check is kept as saved, for the next launch to try again.
+  assert.deepEqual(kept, [unreadable]);
   // What migration writes reads back as goals on the next launch.
   assert.deepEqual(parseGoalRecords(JSON.parse(JSON.stringify(migrated))), migrated);
 });

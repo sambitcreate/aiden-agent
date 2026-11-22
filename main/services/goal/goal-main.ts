@@ -31,11 +31,11 @@ import {
 import { noticeDelivery } from "../follow-through/notice-delivery-main.js";
 import type { StartTurnResult } from "../follow-through/notice-delivery.js";
 import type { ChatGenerationOwner } from "../chat-generation-owner.js";
+import type { OwedTurnContext } from "../chat-owed-turn-start.js";
 import type { Chat } from "../types.js";
-import type { AgentNoticeV1 } from "../../../renderer/shared/agent-notices.js";
 import { goalChatRefusal } from "./goal-core.js";
 import { GoalLoop, type GoalRoundStart } from "./goal-loop.js";
-import { goalRoundStartRequest } from "./goal-round-start.js";
+import { createGoalRoundStarter, type GoalRoundMessage, type RoundStillCurrent, type WindowRoundPayload } from "./goal-round-starter.js";
 import { reviewGoal } from "./goal-reviewer.js";
 import { installGoalTurnHooks } from "./goal-turn-hooks.js";
 import { GoalWindowRounds, type GoalWindowDocument, type GoalWindowView } from "./goal-window-rounds.js";
@@ -74,84 +74,6 @@ const roundPromptLifetime: OwedTurnPromptLifetime = {
   expired: (chatId) => goalLoop.promptExpired(chatId),
 };
 
-/** Whether the goal a round was started for is still the one at work; a round for anything else never begins. */
-type RoundStillCurrent = () => boolean;
-
-/** A window-owned round: the window's document owns it, with the stream the window subscribed to. */
-interface WindowRoundOwner {
-  owner: ChatGenerationOwner;
-  streamId: string;
-}
-
-/**
- * Starts an attended round in the chat: with `message` saved first (the
- * continuation note, or a notice), or answering the chat's latest saved
- * message. Without a window its cards wait 30 minutes; in a window
- * (`window`) the round is that window's run, with every tool. A goal round
- * passes `isCurrent`: it is checked when the round's message is saved and
- * again just before the turn starts.
- */
-async function startAttendedRound(
-  chatId: string,
-  context: Parameters<typeof goalRoundStartRequest>[1],
-  message: { text: string; notice: AgentNoticeV1 } | undefined,
-  window?: WindowRoundOwner,
-  isCurrent: RoundStillCurrent = () => true,
-): Promise<StartTurnResult> {
-  const streamId = window?.streamId ?? `goal-${Date.now().toString(36)}-${randomUUID().slice(0, 8)}`;
-  const owner = window?.owner ?? llmClient.attendedTurnOwner(chatId, `goal:${streamId}`, roundPromptLifetime);
-  const lease = llmClient.beginChatTurn(chatId, streamId, owner.documentId);
-  if (!lease) return { kind: "busy" };
-  let messageId: string | undefined;
-  try {
-    if (message) {
-      lease.reserveAppendPayload(Buffer.byteLength(message.text, "utf8") + 1_024);
-      const saved = await chatStore.appendMessage(
-        chatId,
-        { role: "user", content: message.text, notice: message.notice },
-        {
-          providerId: context.providerId,
-          model: context.model,
-          ...(context.workspaceId !== undefined ? { expectedWorkspaceId: context.workspaceId } : {}),
-          isCurrent: () => lease.isActive() && isCurrent(),
-        },
-      );
-      messageId = saved.messages[saved.messages.length - 1]?.id;
-      transcriptChanged(chatId);
-    }
-    lease.settleAsyncWork();
-    if (!isCurrent()) {
-      lease.release();
-      return { kind: "unavailable", reason: "The goal changed before the round began.", ...(messageId ? { messageId } : {}) };
-    }
-    const request = goalRoundStartRequest(chatId, context, streamId);
-    const started = await llmClient.start(streamId, request.params, owner, request.options);
-    if (!started) {
-      lease.release();
-      return { kind: "unavailable", reason: "The round stopped before it began.", ...(messageId ? { messageId } : {}) };
-    }
-    return { kind: "started", streamId, ...(messageId ? { messageId } : {}) };
-  } catch (error) {
-    lease.release();
-    lease.settleAsyncWork();
-    logger.warn("goal", "A keep-going round could not start.", error);
-    return {
-      kind: "unavailable",
-      reason: error instanceof Error ? error.message : "The round could not start.",
-      ...(messageId ? { messageId } : {}),
-    };
-  }
-}
-
-interface WindowRoundPayload {
-  context: Parameters<typeof goalRoundStartRequest>[1];
-  /** The round's message; none when it answers a notice already saved. */
-  round: { text: string; notice: AgentNoticeV1 } | undefined;
-  isCurrent: RoundStillCurrent;
-  /** How the window's start went, set by `startGoalWindowRound`. */
-  outcome?: StartTurnResult;
-}
-
 /** Which window, if any, starts each due round (`goal-window-rounds.ts`). */
 const goalWindowRounds = new GoalWindowRounds<WindowRoundPayload>({
   newToken: () => randomUUID(),
@@ -168,30 +90,21 @@ const goalWindowRounds = new GoalWindowRounds<WindowRoundPayload>({
   },
 });
 
-/**
- * A round, the next one or one that answers a notice, starts in a focused
- * window that shows the chat when there is one, and without a window otherwise.
- */
-async function startGoalRound(
-  chatId: string,
-  context: Parameters<typeof goalRoundStartRequest>[1],
-  round: { text: string; notice: AgentNoticeV1 } | undefined,
-  isCurrent: RoundStillCurrent,
-): Promise<StartTurnResult> {
-  const payload: WindowRoundPayload = { context, round, isCurrent };
-  const inWindow = await goalWindowRounds.offer(chatId, payload);
-  if (inWindow !== "no-window") {
-    return payload.outcome ?? (inWindow === "busy" ? { kind: "busy" } : { kind: "unavailable", reason: "The round could not start." });
-  }
-  // The offer can wait up to 5 seconds for a window: the person may have paused meanwhile.
-  if (!isCurrent()) return { kind: "unavailable", reason: "The goal changed before the round began." };
-  return startAttendedRound(chatId, context, round, undefined, isCurrent);
-}
+const { startAttendedRound, startGoalRound } = createGoalRoundStarter({
+  offer: (chatId, payload) => goalWindowRounds.offer(chatId, payload),
+  newStreamId: () => `goal-${Date.now().toString(36)}-${randomUUID().slice(0, 8)}`,
+  attendedTurnOwner: (chatId, streamId) => llmClient.attendedTurnOwner(chatId, `goal:${streamId}`, roundPromptLifetime),
+  beginChatTurn: (chatId, streamId, ownerId) => llmClient.beginChatTurn(chatId, streamId, ownerId),
+  appendMessage: (chatId, message, options) => chatStore.appendMessage(chatId, message, options),
+  start: (streamId, params, owner, options) => llmClient.start(streamId, params, owner, options),
+  transcriptChanged,
+  log: (message, error) => logger.warn("goal", message, error),
+});
 
 async function startRound(
   chatId: string,
-  context: Parameters<typeof goalRoundStartRequest>[1],
-  round: { text: string; notice: AgentNoticeV1 },
+  context: OwedTurnContext,
+  round: GoalRoundMessage,
   isCurrent: RoundStillCurrent,
 ): Promise<GoalRoundStart> {
   const started = await startGoalRound(chatId, context, round, isCurrent);

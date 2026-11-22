@@ -4,6 +4,7 @@
 // stream and sends through the host's Bot session routes.
 
 import * as React from "react";
+import { useReportGoalView } from "../lib/use-report-goal-view";
 import { skipToken, useQuery } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import { Ellipsis, Pause, Play, Square } from "lucide-react";
@@ -122,6 +123,8 @@ function sameSend(pending: UnsettledBotSend, text: string, photos: readonly (rea
 }
 
 export function RemoteBotChatView({ hostId, botId }: { hostId: string; botId: string }) {
+  // A chat on a paired host is not a local workspace chat: a keep-going round this window owns stops.
+  useReportGoalView(null);
   const navigate = useNavigate();
   const list = useQuery<PeerHostView[]>({ queryKey: hostQueryKeys.list(), queryFn: skipToken });
   const feed = useQuery<PeerHostFeedSnapshot | null>({ queryKey: hostQueryKeys.feed(hostId), queryFn: skipToken });

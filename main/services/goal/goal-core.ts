@@ -209,10 +209,13 @@ export function goalWindowWanted(goal: GoalRecordV1, wanted: boolean, now: numbe
 /**
  * News for the chat (a job ending, a pull request update) starts a round: it
  * counts like any round, toward the same limit, and ends a `wait`. At the
- * limit the goal pauses instead, and the news wakes the chat as usual.
+ * limit the goal pauses instead, and the news wakes the chat as usual. A
+ * command goal's limit is of checks, and a notice round runs none (the check
+ * after it counts), so it spends nothing.
  */
 export function goalNoticeRound(goal: GoalRecordV1, now: number): GoalRecordV1 {
   if (goal.status !== "active") return goal;
+  if (goal.check) return nextRound(goal, now, {});
   if (goal.rounds >= goal.maxRounds) return stop(goal, now, "paused", "round-limit");
   return nextRound(goal, now, { rounds: goal.rounds + 1 });
 }

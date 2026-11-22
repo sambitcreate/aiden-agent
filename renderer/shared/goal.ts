@@ -160,11 +160,19 @@ export function validateGoalObjective(value: string): { kind: "set"; objective: 
   return { kind: "set", objective };
 }
 
-/** An objective the agent suggests: one line of up to 300 characters, so nothing hides past what the card shows. */
+/**
+ * An objective the agent suggests: one line of up to 300 characters, so nothing
+ * hides past what the card shows. Invisible format characters (bidi overrides,
+ * zero-width spaces) are refused too, so the card shows what Start sends; the
+ * zero-width joiner stays, for emoji.
+ */
 export function validateGoalProposal(value: string): { kind: "set"; objective: string } | { kind: "invalid"; message: string } {
   const objective = value.trim();
   if (!objective) return { kind: "invalid", message: "Say what the goal is." };
   if (/[\p{Cc}\u2028\u2029]/u.test(objective)) return { kind: "invalid", message: "A suggested goal must be one line." };
+  if (/(?!\u200D)\p{Cf}/u.test(objective)) {
+    return { kind: "invalid", message: "A suggested goal can't contain invisible characters." };
+  }
   if ([...objective].length > MAX_GOAL_PROPOSAL_CHARS) {
     return { kind: "invalid", message: `A suggested goal can be up to ${MAX_GOAL_PROPOSAL_CHARS} characters.` };
   }

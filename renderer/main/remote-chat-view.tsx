@@ -28,6 +28,7 @@ import {
   toast,
 } from "../components/ui";
 import { createChatTurnId, peerHostsApi, type ApprovalPrompt } from "../lib/ipc";
+import { useReportGoalView } from "../lib/use-report-goal-view";
 import { committedRunInputNotice, steerQueuedMessage, steerRejectionMessage } from "../lib/chat-message-queue";
 import { useChatMessageQueue } from "../lib/use-chat-message-queue";
 import { forkedFromLabel } from "../lib/chat-copy-view";
@@ -1290,6 +1291,8 @@ function feedRowLineage(row: Record<string, unknown> | undefined): ChatForkLinea
 }
 
 export function RemoteChatView({ hostId, chatId }: { hostId: string; chatId: string }) {
+  // A chat on a paired host is not a local workspace chat: a keep-going round this window owns stops.
+  useReportGoalView(null);
   const navigate = useNavigate();
   const manage = React.useCallback(() => {
     void navigate({ to: "/settings", search: { section: "peerHosts" } });

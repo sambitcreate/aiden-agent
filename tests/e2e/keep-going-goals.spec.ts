@@ -1,4 +1,5 @@
 import type { Page } from "@playwright/test";
+import { botFixture } from "../../renderer/main/bots/test-fixtures";
 import { expect, finishLmStudioOnboarding, test, E2E_ASSISTANT_RESPONSE } from "./fixtures";
 
 // The reviewer's instructions, as the deterministic model sees them in the side call.
@@ -144,6 +145,51 @@ test("a round on screen keeps running while its window shows Settings, and goes 
   expect(round.error).toBeUndefined();
   await expect(bar).toHaveAttribute("data-goal-status", "done", { timeout: 45_000 });
   await expect(bar).not.toContainText("The chat was closed");
+});
+
+test("a round on screen stops, pausing the goal as closed, when its window opens a Bot's conversation", async ({ aiden }) => {
+  test.setTimeout(120_000);
+  const { lmStudio, page } = aiden;
+  await finishLmStudioOnboarding(page);
+  // Bot persistence needs Keychain authority the mock profile lacks: one Bot's feed is stubbed, its pane is real.
+  await aiden.app.evaluate(({ ipcMain }, fixture) => {
+    for (const channel of ["bots:list", "bots:get", "bots:getCanonicalPhoto", "bots:live:summary", "bots:live:subscribe", "bots:pendingApprovals"])
+      ipcMain.removeHandler(channel);
+    ipcMain.handle("bots:list", () => [fixture]);
+    ipcMain.handle("bots:get", () => fixture);
+    ipcMain.handle("bots:getCanonicalPhoto", () => null);
+    ipcMain.handle("bots:pendingApprovals", () => []);
+    ipcMain.handle("bots:live:summary", () => ({
+      botId: fixture.id, preview: "", updatedAt: 1000, state: { kind: "idle" }, needsYou: false, lastReplyAt: null,
+    }));
+    ipcMain.handle("bots:live:subscribe", () => ({
+      botId: fixture.id, epoch: "goal-fixture", seq: 0, partial: null, state: { kind: "idle" }, question: null, activity: null, queued: [], entries: [],
+    }));
+  }, botFixture({ id: "bot-planner", name: "Planner" }));
+  lmStudio.answerToolFreeCompletions!(REVIEW_PROMPT, '{"verdict": "continue", "reason": "The outline style is not chosen yet."}', { times: 1 });
+  // Round 2 asks a question, so it is still running in the window when the person moves on.
+  lmStudio.enqueueToolScenario!({
+    prompt: "Keep going · round 2 of 50",
+    calls: [{ name: "ask_user_question", arguments: { questions: [{
+      question: "Which outline style?", header: "Style",
+      options: [{ label: "Bullets", description: "Short bullet points." }, { label: "Prose", description: "Full paragraphs." }],
+    }] } }],
+    finalText: "The outline is drafted.",
+  });
+  await setGoal(page, "Draft the outline");
+  await expect(page.getByRole("heading", { name: "Which outline style?" })).toBeVisible({ timeout: 45_000 });
+  const chatId = await page.evaluate(async () => {
+    const chats = (await window.aidenAPI.ipc.invoke("chats:list")) as Array<{ id: string }>;
+    return chats[0]!.id;
+  });
+  const goal = () => page.evaluate(async (id) => (await window.aidenAPI.ipc.invoke("chats:goal:get", id)) as { status: string; reason?: string } | null, chatId);
+  expect((await goal())?.status).toBe("active");
+
+  // A Bot's conversation is another chat: the round this window owns stops, and the goal says why.
+  await page.getByRole("button", { name: "Bots", exact: true }).click();
+  await expect(page.getByPlaceholder("Ask Planner")).toBeVisible({ timeout: 15_000 });
+  await expect.poll(async () => (await goal())?.status, { timeout: 15_000 }).toBe("paused");
+  expect((await goal())?.reason).toBe("The chat was closed");
 });
 
 /** A suggestion near the 300-character limit: the card must show all of it. */

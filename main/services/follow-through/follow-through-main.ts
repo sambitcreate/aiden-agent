@@ -84,6 +84,8 @@ interface SavedState {
 let savedFollows: PullRequestFollowRecord[] = [];
 let savedCheckBacks: CheckBackRecord[] = [];
 let savedGoals: GoalRecordV1[] = [];
+/** `/until` checks from an older release whose chat couldn't be read yet: kept for the next launch. */
+let savedLegacyChecks: unknown[] = [];
 let saveChain: Promise<void> = Promise.resolve();
 let saveScheduled = false;
 
@@ -93,7 +95,7 @@ function scheduleSave(): void {
   saveChain = saveChain
     .then(async () => {
       saveScheduled = false;
-      const state: SavedState = { version: 1, follows: savedFollows, checks: [], checkBacks: savedCheckBacks, goals: savedGoals };
+      const state: SavedState = { version: 1, follows: savedFollows, checks: savedLegacyChecks, checkBacks: savedCheckBacks, goals: savedGoals };
       await fsp.mkdir(followThroughDir(), { recursive: true, mode: 0o700 });
       const target = path.join(followThroughDir(), "state.json");
       const temporary = `${target}.${process.pid}.tmp`;
@@ -365,21 +367,28 @@ export async function startFollowThrough(): Promise<void> {
   savedCheckBacks = Array.isArray(state.checkBacks) ? state.checkBacks : [];
   savedGoals = parseGoalRecords(state.goals);
   // `/until` checks saved before they became goals come back as paused goals,
-  // in chats that can still have one.
+  // in chats that can still have one. A check whose chat can't be read now
+  // stays saved, for the next launch.
   const savedChecks: unknown[] = Array.isArray(state.checks) ? state.checks : [];
-  const refusals = new Map<string, string | undefined>();
+  const eligibility = new Map<string, boolean | undefined>();
   for (const entry of savedChecks) {
     const chatId = (entry as { chatId?: unknown } | null)?.chatId;
-    if (typeof chatId !== "string" || refusals.has(chatId)) continue;
-    refusals.set(chatId, goalChatRefusal(await chatStore.get(chatId).catch(() => null)));
+    if (typeof chatId !== "string" || eligibility.has(chatId)) continue;
+    try {
+      eligibility.set(chatId, goalChatRefusal(await chatStore.get(chatId)) === undefined);
+    } catch (error) {
+      logger.warn("follow-through", "A saved check's chat could not be read; it stays for the next launch.", error);
+      eligibility.set(chatId, undefined);
+    }
   }
-  const migrated = migrateDoneWhenRecords(savedChecks, savedGoals, {
+  const migration = migrateDoneWhenRecords(savedChecks, savedGoals, {
     now: Date.now(),
     newId: () => `goal-${randomUUID()}`,
-    eligible: (chatId) => refusals.has(chatId) && refusals.get(chatId) === undefined,
+    eligible: (chatId) => eligibility.get(chatId),
   });
-  if (migrated.length > 0) savedGoals = [...savedGoals, ...migrated];
-  if (migrated.length > 0 || (Array.isArray(state.checks) && state.checks.length > 0)) scheduleSave();
+  savedLegacyChecks = migration.kept;
+  if (migration.goals.length > 0) savedGoals = [...savedGoals, ...migration.goals];
+  if (migration.goals.length > 0 || savedLegacyChecks.length !== savedChecks.length) scheduleSave();
   pullRequestFollows.restore(state.follows);
   checkBacks.restore(savedCheckBacks);
   // Older releases could leave persisted follows behind after access was revoked.
