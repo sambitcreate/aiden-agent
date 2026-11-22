@@ -25,7 +25,7 @@ import { createSpendingMeter, spendCounts } from "./spending-service.js";
 import { parseApprovalModel, type MacGrantClass } from "../../renderer/shared/approval-mode.js";
 import { currentWorkspaceApproval, generationApprovalPolicy, legacyAccessOf, runJudgeAvailable } from "./approval-gate/run-approval.js";
 import { CHAT_AUDIENCE_PROMPT_LIFETIME_MS } from "./chat-orchestration/audience.js";
-import { ownerRequestText, RunTaint, runTaintHistoryEntryOf, runTaintHistoryOfBranch, runTaintHistoryOfMessages, runTaintPersonText, toolResultSaysOutside } from "./approval-gate/run-taint.js";
+import { ownerRequestText, RunTaint, runTaintHistoryOfRun, runTaintPersonText, toolResultSaysOutside } from "./approval-gate/run-taint.js";
 import { declaredReadOnlyHint } from "./approval-gate/tool-classes.js";
 import { approvalJudgeAction, createApprovalJudge, type ApprovalJudge } from "./approval-judge/judge.js";
 import { approvalJudgeComplete } from "./approval-judge/model-complete.js";
@@ -4817,20 +4817,10 @@ export const llmClient = {
         }
         onDemandDeclaredRecord = { recorded: declaredNow, current: () => onDemandTools.declaredNames() };
       }
-      const journalHistory = runTaintHistoryOfBranch(journalBranch);
       runTaint = new RunTaint({
         // A tainted lead's own words are not the person naming a site.
         personText: runTaintPersonText(generationChat.messages, { leadWordsTrusted: judgeTrusted() }),
-        history: [
-          ...initialMessages.map((message) => runTaintHistoryEntryOf({
-            role: message.role,
-            ...("toolName" in message ? { toolName: message.toolName } : {}),
-            ...("details" in message ? { details: message.details } : {}),
-          })),
-          ...journalHistory,
-          // Notices and task prompts that quote outside text, in this turn or any earlier one.
-          ...runTaintHistoryOfMessages(generationChat.messages),
-        ],
+        history: runTaintHistoryOfRun({ initialMessages, branch: journalBranch, messages: generationChat.messages }),
         isConnectorTool: (name) => claimCheckOptions.isConnectorTool(name),
         // In a started chat, the lead's notice of this run's ending will quote outside content.
         onOutside: () => {

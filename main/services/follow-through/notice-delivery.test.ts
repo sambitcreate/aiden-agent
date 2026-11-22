@@ -96,6 +96,10 @@ function fakeChat(options: { running?: boolean; scheduledRun?: boolean; now?: ()
     runWaitTimedOut() {
       for (const resolve of runWaiters.splice(0)) resolve();
     },
+    /** The day-long wait ran out too, the scheduled run still holding the chat. */
+    runEndWaitTimedOut() {
+      for (const resolve of runEndWaiters.splice(0)) resolve();
+    },
     get running() {
       return running;
     },
@@ -241,6 +245,32 @@ test("a notice outlasts another feature's run that holds the chat past the long 
   assert.deepEqual(chat.transcript, [{ text: "checks failed", via: "recorded" }], "recorded, not woken: the news is hours old");
   assert.equal(chat.calls.filter((call) => call === "wait-run").length, 1, "the long wait runs once");
   assert.equal(delivery.hasPending("chat-1"), false);
+});
+
+test("a run that never ends holds a notice for at most the day-long wait; then it is dropped and logged, and the chat's next notice gets through", async () => {
+  const chat = fakeChat({ scheduledRun: true });
+  const errors: unknown[] = [];
+  chat.deps.onError = (error) => void errors.push(error);
+  // Recording's own short waits for the chat return at once: the run never ends.
+  chat.deps.waitForIdle = async () => void chat.calls.push("wait");
+  const delivery = new NoticeDelivery(chat.deps);
+  const stuck = delivery.post(post("checks failed"));
+  const next = delivery.post(post("checks passed", false));
+  await new Promise((resolve) => setImmediate(resolve));
+  chat.runWaitTimedOut();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(chat.calls.includes("wait-run-end"), true);
+  chat.runEndWaitTimedOut();
+  const outcome = await stuck;
+  assert.equal(outcome.kind, "dropped");
+  assert.equal(outcome.kind === "dropped" ? outcome.gone : undefined, undefined, "not gone: the chat is still there");
+  assert.deepEqual(chat.transcript, []);
+  assert.equal(errors.length, 1, "the drop is logged");
+  // The chat's next notice no longer waits behind it, and is recorded once the run is gone.
+  await new Promise((resolve) => setImmediate(resolve));
+  chat.finishScheduledRun();
+  assert.equal((await next).kind, "recorded");
+  assert.deepEqual(chat.transcript, [{ text: "checks passed", via: "recorded" }]);
 });
 
 test("a notice joins only the chat's own running turn, never a run another feature owns", () => {

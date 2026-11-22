@@ -22,6 +22,8 @@ import {
 
 /** How long a notice waits for a scheduled task's run in its chat before trying again. */
 const OTHER_RUN_WAIT_MS = 30 * 60 * 1000;
+/** A run still holding the chat after that: runs have no time limit, so a day at most. */
+const LONG_RUN_WAIT_MS = 24 * 60 * 60 * 1000;
 
 /** A headless owner for a turn nobody is watching; the Mac's run journal still mirrors it. */
 function createUnattendedOwner(streamId: string): ChatGenerationOwner {
@@ -164,9 +166,8 @@ export const noticeDelivery = new NoticeDelivery({
   waitForRunToSettle: async (chatId) => {
     await llmClient.waitForChatIdleWithin(chatId, OTHER_RUN_WAIT_MS);
   },
-  // No bound of its own: the holding run's time limit ends it.
   waitForRunToEnd: async (chatId) => {
-    await llmClient.waitForChatIdleWithin(chatId, Number.POSITIVE_INFINITY);
+    await llmClient.waitForChatIdleWithin(chatId, LONG_RUN_WAIT_MS);
   },
   now: Date.now,
   onError: (error) => logger.warn("follow-through", "A follow-up notice was not delivered.", error),

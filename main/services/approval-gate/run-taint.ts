@@ -129,6 +129,31 @@ export function runTaintHistoryOfBranch(branch: readonly RunTaintBranchEntry[]):
   return history;
 }
 
+/**
+ * A run's whole taint history, as llm-client builds it: the model context it
+ * starts from, the chat's journal branch, and the chat's transcript notices.
+ * The model context's summaries are the branch's own compactions, which the
+ * branch already checks against what they folded away, so only the context's
+ * tool results count there (by name, or by saying they brought outside
+ * content in).
+ */
+export function runTaintHistoryOfRun(input: {
+  initialMessages: readonly RunTaintTranscriptMessage[];
+  branch: readonly RunTaintBranchEntry[];
+  messages: readonly RunTaintMessage[];
+}): RunTaintHistoryEntry[] {
+  return [
+    ...input.initialMessages.map((message): RunTaintHistoryEntry => ({
+      role: message.role,
+      ...(typeof message.toolName === "string" ? { toolName: message.toolName } : {}),
+      ...(message.role === "toolResult" && toolResultSaysOutside(message.details) ? { outside: true as const } : {}),
+    })),
+    ...runTaintHistoryOfBranch(input.branch),
+    // Notices and task prompts that quote outside text, in this turn or any earlier one.
+    ...runTaintHistoryOfMessages(input.messages),
+  ];
+}
+
 /** A transcript message, as far as taint and the approval request read it. */
 export interface RunTaintMessage {
   role: string;
