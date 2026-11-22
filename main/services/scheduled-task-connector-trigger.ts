@@ -55,8 +55,7 @@ const READ_TIMEOUT_MS = 15_000;
 
 export class TaskConnectorChoiceError extends Error {}
 
-/** What a connected-app task that is on but has no source bound shows (it never checks). */
-export const TASK_CONNECTOR_NEEDS_SOURCE = "Needs its source: open the task, choose Find sources and save it.";
+export { TASK_CONNECTOR_NEEDS_SOURCE } from "../../renderer/shared/scheduled-task-trigger.js";
 
 const templateOf = (binding: BotConnectorWatchBinding) => (binding.adapter === "imcp-mail-v1" ? "mail_messages" as const : "calendar_upcoming" as const);
 

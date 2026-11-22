@@ -300,6 +300,7 @@
         "main/services/schedule-chat-delivery.test.ts",
         "main/services/schedule-store.test.ts",
         "main/services/scheduled-task-triggers.test.ts",
+        "main/services/public-only-fetch.test.ts",
         "main/services/schedule-tool.test.ts",
         "main/services/scheduled-bot-routines.test.ts",
         "main/services/scheduled-chat-creation.test.ts",

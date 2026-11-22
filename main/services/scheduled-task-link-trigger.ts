@@ -1,7 +1,7 @@
 // Link triggers for chat tasks: `POST /hooks/tasks/<token>` on Aiden On The
 // Go's listener (docs/scheduled-task-triggers.md). The router asks `admit`
 // before it reads a body (unknown or disabled link 404, 60 calls a minute
-// 429, wrong content type 415), reads at most 256 KB (413), then `deliver`
+// 429, wrong content type 415; nothing on that path writes), reads at most 256 KB (413), then `deliver`
 // checks the optional signature, the filters and repeats and hands the call
 // to the shared event core. Accepted calls answer 202 with no body, whatever
 // happened to them, so a caller learns nothing about the task.
@@ -146,6 +146,9 @@ const LOG_OF: Record<BotRoutineEventOutcome, TaskLinkLogEntry["outcome"]> = {
 export interface TaskLinkWebhookDependencies {
   /** Only while trigger tasks are running (Aiden open, scheduled tasks on). */
   active(): boolean;
+  /** The task id a token belongs to, from memory only: no task read, no write. */
+  tokenTask(token: string): Promise<string | undefined>;
+  /** The task a token opens, read-only (disabled tasks too). */
   findByToken(token: string): Promise<TaskTriggerRoutine | undefined>;
   /** The link's signing secret (`aiden-internal:task-hook:<taskId>`). */
   secret(taskId: string): Promise<string | null>;
@@ -154,42 +157,53 @@ export interface TaskLinkWebhookDependencies {
   now(): number;
 }
 
-/** Calls with a token no task has, across every link, before they are refused without a lookup. */
+/** Calls with a token no task has, across every link, before further unknown tokens get 429. */
 export const UNKNOWN_LINK_CALLS_PER_MINUTE = 120;
-/** Calls one link refuses (bad signature, not JSON) before it answers 429; they don't use its 60. */
+/**
+ * Calls one link refuses (bad signature, not JSON) that are logged in a
+ * minute; later refusals are answered without a log entry. They never use the
+ * link's 60, so a properly signed sender keeps getting through.
+ */
 export const REFUSED_LINK_CALLS_PER_MINUTE = 30;
+
+type LinkRoutine = TaskTriggerRoutine & { task: { trigger: ScheduledTaskLinkTrigger } };
 
 export function createTaskLinkWebhook(deps: TaskLinkWebhookDependencies) {
   /** Recent call times per task, for 60 a minute. */
   const recent = new Map<string, number[]>();
-  /** Recent refused calls per task, kept apart so they can't use up real calls. */
+  /** Recent logged refusals per task, kept apart so they can't use up real calls. */
   const refused = new Map<string, number[]>();
   /** Recent calls with an unknown token, across every link. */
   let unknown: number[] = [];
 
   const within = (times: number[] | undefined, now: number) => (times ?? []).filter((at) => at > now - 60_000);
 
-  async function open(token: string): Promise<(TaskTriggerRoutine & { task: { trigger: ScheduledTaskLinkTrigger } }) | "flood" | undefined> {
-    if (!deps.active()) return undefined;
-    const now = deps.now();
-    unknown = within(unknown, now);
-    // A flood of made-up tokens is shed before any lookup.
-    if (unknown.length >= UNKNOWN_LINK_CALLS_PER_MINUTE) return "flood";
+  /** The task behind a link, read-only, if it is on and still a link task. */
+  async function open(token: string): Promise<LinkRoutine | undefined> {
     const routine = await deps.findByToken(token);
-    if (!routine) unknown.push(now);
     if (!routine || !routine.enabled || routine.task.trigger.kind !== "webhook") return undefined;
-    return routine as TaskTriggerRoutine & { task: { trigger: ScheduledTaskLinkTrigger } };
+    return routine as LinkRoutine;
   }
 
-  /** A refused call gives back its place in the 60 a minute and counts toward the refused limit instead. */
-  function refuse(taskId: string, admittedAt: number | undefined): void {
+  /**
+   * A refused call gives back its place in the 60 a minute. Whether it is
+   * logged: only the first 30 refusals a minute are, so a flood of bad calls
+   * neither blocks the real sender nor keeps writing the log.
+   */
+  function refuse(taskId: string, admittedAt: number | undefined): boolean {
     const now = deps.now();
     if (admittedAt !== undefined) {
       const calls = recent.get(taskId) ?? [];
       const index = calls.lastIndexOf(admittedAt);
       if (index >= 0) calls.splice(index, 1);
     }
-    refused.set(taskId, [...within(refused.get(taskId), now), now]);
+    const lately = within(refused.get(taskId), now);
+    if (lately.length >= REFUSED_LINK_CALLS_PER_MINUTE) {
+      refused.set(taskId, lately);
+      return false;
+    }
+    refused.set(taskId, [...lately, now]);
+    return true;
   }
 
   const mediaType = (contentType: string | undefined) => (contentType ?? "text/plain").split(";")[0]!.trim().toLowerCase();
@@ -197,19 +211,28 @@ export function createTaskLinkWebhook(deps: TaskLinkWebhookDependencies) {
   return {
     /** Before the body is read: 404, 429 or 415, or the header the signature comes in. */
     async admit(request: { token: string; contentType?: string }): Promise<{ status: 404 | 415 | 429 } | { accept: true; signatureHeader?: string }> {
-      const routine = await open(request.token);
-      if (routine === "flood") return { status: 429 };
-      if (!routine) return { status: 404 };
+      if (!deps.active()) return { status: 404 };
       const now = deps.now();
-      const calls = within(recent.get(routine.id), now);
-      const refusedLately = within(refused.get(routine.id), now);
-      refused.set(routine.id, refusedLately);
-      if (calls.length >= SCHEDULED_TASK_LINK_LIMITS.callsPerMinute || refusedLately.length >= REFUSED_LINK_CALLS_PER_MINUTE) {
-        recent.set(routine.id, calls);
+      // The in-memory index first: only a miss counts as an unknown token, so
+      // a flood of made-up tokens never puts a real link on 429.
+      const taskId = await deps.tokenTask(request.token);
+      if (taskId === undefined) {
+        unknown = within(unknown, now);
+        if (unknown.length >= UNKNOWN_LINK_CALLS_PER_MINUTE) return { status: 429 };
+        unknown.push(now);
+        return { status: 404 };
+      }
+      // A known token, even one whose task is off, uses its link's 60 a minute
+      // before anything else is read.
+      const calls = within(recent.get(taskId), now);
+      if (calls.length >= SCHEDULED_TASK_LINK_LIMITS.callsPerMinute) {
+        recent.set(taskId, calls);
         return { status: 429 };
       }
       calls.push(now);
-      recent.set(routine.id, calls);
+      recent.set(taskId, calls);
+      const routine = await open(request.token);
+      if (!routine) return { status: 404 };
       const type = mediaType(request.contentType);
       if (type !== "application/json" && type !== "text/plain") return { status: 415 };
       const header = routine.task.trigger.signatureHeader;
@@ -218,8 +241,8 @@ export function createTaskLinkWebhook(deps: TaskLinkWebhookDependencies) {
 
     /** The call itself: signature, filters, repeats, then the event core. */
     async deliver(request: { token: string; contentType?: string; signature?: string; body: Uint8Array }): Promise<{ status: 202 | 400 | 401 | 404 | 413 | 415 }> {
+      if (!deps.active()) return { status: 404 };
       const routine = await open(request.token);
-      if (routine === "flood") return { status: 404 };
       if (!routine) return { status: 404 };
       const admitted = recent.get(routine.id);
       const admittedAt = admitted?.length ? admitted[admitted.length - 1] : undefined;
@@ -233,8 +256,9 @@ export function createTaskLinkWebhook(deps: TaskLinkWebhookDependencies) {
       if (trigger.signatureHeader) {
         const secret = await deps.secret(routine.id);
         if (!secret || !signatureMatches(secret, request.body, request.signature)) {
-          refuse(routine.id, admittedAt);
-          await deps.log(routine.id, { at: deps.now(), outcome: "bad_signature", preview: previewOf(cut(redactCredentialText(text), 2_048)) }, { coalesce: true });
+          if (refuse(routine.id, admittedAt)) {
+            await deps.log(routine.id, { at: deps.now(), outcome: "bad_signature", preview: previewOf(cut(redactCredentialText(text), 2_048)) }, { coalesce: true });
+          }
           return { status: 401 };
         }
       }
@@ -243,8 +267,9 @@ export function createTaskLinkWebhook(deps: TaskLinkWebhookDependencies) {
         try {
           json = JSON.parse(text) as unknown;
         } catch {
-          refuse(routine.id, admittedAt);
-          await deps.log(routine.id, { at: deps.now(), outcome: "invalid", preview: previewOf(cut(redactCredentialText(text), 2_048)) }, { coalesce: true });
+          if (refuse(routine.id, admittedAt)) {
+            await deps.log(routine.id, { at: deps.now(), outcome: "invalid", preview: previewOf(cut(redactCredentialText(text), 2_048)) }, { coalesce: true });
+          }
           return { status: 400 };
         }
       }

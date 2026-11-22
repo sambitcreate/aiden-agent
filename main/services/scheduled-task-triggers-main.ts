@@ -6,6 +6,7 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 import { ipcMain, logger } from "../platform.js";
 import { fetchBotWatchUrl } from "./bot-routine-events/watch-sources.js";
+import { publicOnlyFetch } from "./public-only-fetch.js";
 import { DataStore } from "./data-store.js";
 import { scheduleExecution } from "./schedule-execution.js";
 import { resolveScheduledScript, runScheduledScript } from "./schedule-script.js";
@@ -57,7 +58,7 @@ const triggers = createScheduledTaskTriggers({
   isActive: () => scheduleService.isActive(),
   runEvent: (taskId, event, runId) => scheduleService.runEvent(taskId, event, runId),
   findRun: (taskId, runId) => scheduleStore.runById(taskId, runId),
-  fetchUrl: (url, signal) => fetchBotWatchUrl(url, { signal }),
+  fetchUrl: (url, signal, options) => fetchBotWatchUrl(url, { signal, ...(options.publicOnly ? { fetch: publicOnlyFetch } : {}) }),
   resolveScript: async (task, script) => {
     if (task.permission !== "full") throw new Error("A script watch needs Full permission.");
     const folder = await scheduleExecution.taskWorkspaceFolder(task);
@@ -80,8 +81,8 @@ const triggers = createScheduledTaskTriggers({
     });
   },
   needsSource: (task) => markTaskNeedsSource(task.id),
-  dailyLimit: async (task, text) => {
-    await scheduleExecution.recordInLandingChat(task, { tone: "info", summary: "Today's 48 runs were used up", text });
+  dropped: async (task, card) => {
+    await scheduleExecution.recordInLandingChat(task, { tone: "info", ...card });
   },
   changed: (taskId) => ipcMain.broadcast("schedule:updated", { taskId }),
   now: Date.now,

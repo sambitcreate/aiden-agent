@@ -34,7 +34,8 @@ export interface ScheduledTaskTriggersDependencies {
   runEvent(taskId: string, event: EventTrigger, runId: string): Promise<ScheduledRun>;
   /** The run recorded under this id, if any (a replayed event that already ran). */
   findRun(taskId: string, runId: string): Promise<ScheduledRun | undefined>;
-  fetchUrl(url: string, signal: AbortSignal): Promise<BotWatchCheck>;
+  /** One GET of a watched address; `publicOnly` for a watch Aiden proposed (never this computer or a private network). */
+  fetchUrl(url: string, signal: AbortSignal, options: { publicOnly: boolean }): Promise<BotWatchCheck>;
   /** The script's path and the folder it runs in (the task's project), or why it can't run. */
   resolveScript(task: ScheduledTask, script: string): Promise<{ path: string; cwd: string }>;
   /** Runs a script check (runScheduledScript in production). */
@@ -54,8 +55,11 @@ export interface ScheduledTaskTriggersDependencies {
    * stopped before binding it): show that it needs one, since it never checks.
    */
   needsSource?(task: ScheduledTask): Promise<void>;
-  /** What the task held was dropped: today's 48 runs were used up. One card where its runs land. */
-  dailyLimit?(task: ScheduledTask, text: string): Promise<void>;
+  /**
+   * What the task held was dropped (today's 48 runs were used up, or its chat
+   * stayed busy through every retry). One card where its runs land.
+   */
+  dropped?(task: ScheduledTask, card: { summary: string; text: string }): Promise<void>;
   /** A check's result was saved, so the task's row may show something new. */
   changed?(taskId: string): void;
   now(): number;
@@ -117,6 +121,9 @@ export function taskCheckStateFile(dir: string, taskId: string): string {
 
 /** A chat that used its task runs for the hour has room again within the hour. */
 export const CHAT_BUDGET_RETRY_MS = 60 * 60_000;
+/** Times a run that delivered nothing (busy chat, chat out of task runs) is held again before its payload is dropped. */
+export const TASK_TRIGGER_RETRIES = 6;
+
 /** A link's log changes at most this often reach the task list. */
 const LOG_BROADCAST_MS = 2_000;
 
@@ -128,7 +135,7 @@ export function createScheduledTaskTriggers(deps: ScheduledTaskTriggersDependenc
   const slots = createSlots(SCHEDULED_TASK_TRIGGER_LIMITS.runningOverall);
   let stopped = true;
 
-  async function runOnce(routine: TaskTriggerRoutine, event: { eventId: string; payload: string; watchRevision?: number }): Promise<{ settled: boolean }> {
+  async function runOnce(routine: TaskTriggerRoutine, event: { eventId: string; payload: string; watchRevision?: number; retries?: number }): Promise<{ settled: boolean }> {
     const release = await slots.take();
     try {
       if (stopped) return { settled: false };
@@ -153,8 +160,11 @@ export function createScheduledTaskTriggers(deps: ScheduledTaskTriggersDependenc
             eventId: `${event.eventId.slice(0, 120)}~${deps.now().toString(36)}`,
             payload: event.payload,
             ...(event.watchRevision !== undefined ? { watchRevision: event.watchRevision } : {}),
+            ...(event.retries ? { retries: event.retries } : {}),
           }, (older, newer) => combineHeld(link, older, newer), {
+            settles: event.eventId,
             refund: true,
+            maxRetries: TASK_TRIGGER_RETRIES,
             ...(run.reason === "chat_budget" ? { notBefore: deps.now() + CHAT_BUDGET_RETRY_MS } : {}),
           });
         }
@@ -185,11 +195,25 @@ export function createScheduledTaskTriggers(deps: ScheduledTaskTriggersDependenc
     // Calls inside a link's gap are batched (20 at most); a watch keeps its
     // newest change first, then earlier ones not yet delivered.
     mergeHeld: (held, incoming, routine) => combineHeld(routine.task.trigger.kind === "webhook", held.payload, incoming.payload),
-    heldDropped: async (routine) => {
+    heldDropped: async (routine, _held, reason) => {
       const link = routine.task.trigger.kind === "webhook";
-      const text = `Scheduled task "${routine.task.name}" already ran ${SCHEDULED_TASK_TRIGGER_LIMITS.perDay} times today, so ${link ? "the calls" : "the change"} it was holding ${link ? "were" : "was"} dropped. It runs again tomorrow.`;
-      if (link) await deps.store.appendLog(routine.id, { at: deps.now(), outcome: "daily_limit", preview: "Held calls dropped: today's runs were used up." });
-      await deps.dailyLimit?.(routine.task, text);
+      const what = link ? "the calls" : "the change";
+      const were = link ? "were" : "was";
+      const card = reason === "daily_limit"
+        ? {
+          summary: `Today's ${SCHEDULED_TASK_TRIGGER_LIMITS.perDay} runs were used up`,
+          text: `Scheduled task "${routine.task.name}" already ran ${SCHEDULED_TASK_TRIGGER_LIMITS.perDay} times today, so ${what} it was holding ${were} dropped. It runs again tomorrow.`,
+        }
+        : {
+          summary: "Couldn't deliver, dropped",
+          text: `Scheduled task "${routine.task.name}" tried ${TASK_TRIGGER_RETRIES + 1} times but its chat was busy or out of task runs each time, so ${what} it was holding ${were} dropped. It runs again on the next ${link ? "call" : "change"}.`,
+        };
+      if (link) {
+        await deps.store.appendLog(routine.id, reason === "daily_limit"
+          ? { at: deps.now(), outcome: "daily_limit", preview: "Held calls dropped: today's runs were used up." }
+          : { at: deps.now(), outcome: "dropped", preview: "Held calls dropped: the chat stayed busy." });
+      }
+      await deps.dropped?.(routine.task, card);
       deps.changed?.(routine.id);
     },
     now: deps.now,
@@ -223,7 +247,7 @@ export function createScheduledTaskTriggers(deps: ScheduledTaskTriggersDependenc
     }
     if (routine.task.trigger.kind !== "watch") return { ok: false, error: "This task has no watch." };
     const source = routine.task.trigger.source;
-    if (source.type === "url") return deps.fetchUrl(source.url, signal);
+    if (source.type === "url") return deps.fetchUrl(source.url, signal, { publicOnly: routine.task.trigger.agentProposed === true });
     let resolved: { path: string; cwd: string };
     try {
       resolved = await deps.resolveScript(routine.task, source.script);
@@ -289,6 +313,7 @@ export function createScheduledTaskTriggers(deps: ScheduledTaskTriggersDependenc
 
   const webhook = createTaskLinkWebhook({
     active: () => !stopped && deps.isActive(),
+    tokenTask: (token) => deps.store.tokenTask(token),
     findByToken: (token) => deps.store.findByToken(token),
     secret: (taskId) => deps.linkSecret(taskId),
     emit: (taskId, event) => dispatcher.emit(taskId, taskId, event),

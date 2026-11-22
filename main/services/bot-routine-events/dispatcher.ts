@@ -15,6 +15,8 @@ export interface BotRoutineEvent {
   payload: string;
   /** A watch hand-off must still be owed by this exact configuration. */
   watchRevision?: number;
+  /** Times this payload was held again after delivering nothing (see `requeue`). */
+  retries?: number;
   /** Live host authority only; never stored or accepted from a caller over IPC. */
   isCurrent?: () => boolean;
 }
@@ -44,7 +46,7 @@ export interface EventRoutineDispatcherDependencies<R extends EventRoutine> {
    * `settled: false` (or a throw): the outcome is unknown, so the receipt
    * stays for the next start to replay.
    */
-  run(routine: R, event: { eventId: string; source: BotRoutineTriggerKind; payload: string }, signal?: AbortSignal): Promise<{ settled: boolean } | void>;
+  run(routine: R, event: { eventId: string; source: BotRoutineTriggerKind; payload: string; retries?: number }, signal?: AbortSignal): Promise<{ settled: boolean } | void>;
   /** Original-choice comparison, without creating this event's execution claim. */
   prepareRoutineExecution?(routine: R): Promise<string>;
   /** Idempotent protected choice, after this event's payload is durable. */
@@ -64,8 +66,11 @@ export interface EventRoutineDispatcherDependencies<R extends EventRoutine> {
    * already held. Without it the newest wins; a link trigger batches them.
    */
   mergeHeld?(held: BotEventReceipt, incoming: { eventId: string; payload: string }, routine: R): string;
-  /** A held event was dropped because the day's runs were used up; without it the drop is silent (Bots). */
-  heldDropped?(routine: R, held: BotEventReceipt): Promise<void>;
+  /**
+   * A held event was dropped: the day's runs were used up, or a requeued
+   * payload went past its retries. Without it the drop is silent (Bots).
+   */
+  heldDropped?(routine: R, held: BotEventReceipt, reason: "daily_limit" | "retries"): Promise<void>;
   now(): number;
   timeZone(): string;
   setTimer(fn: () => void, ms: number): { cancel(): void };
@@ -121,7 +126,8 @@ export function createEventRoutineDispatcher<R extends EventRoutine>(dependencie
     const others = (routine.running ?? []).filter((entry) => entry.eventId !== event.eventId);
     return [...others, { eventId: event.eventId, payload: event.payload, at, execution,
       ...(dependencies.claimRoutineExecution ? { claimPending: true as const } : {}),
-      ...(event.watchRevision !== undefined ? { watchRevision: event.watchRevision } : {}) }];
+      ...(event.watchRevision !== undefined ? { watchRevision: event.watchRevision } : {}),
+      ...(event.retries ? { retries: event.retries } : {}) }];
   }
 
   async function prepare(routine: R): Promise<BotEventExecutionSnapshot> {
@@ -262,7 +268,7 @@ export function createEventRoutineDispatcher<R extends EventRoutine>(dependencie
     });
     if (claimed) await claimAndStart(claimed.routine, claimed.event, armedFor);
     else if (retryAt !== undefined) armHeld(ownerKey, routineId, retryAt, armedFor);
-    if (dropped) await dependencies.heldDropped?.(dropped.routine, dropped.held).catch((error: unknown) => dependencies.onError?.(error));
+    if (dropped) await dependencies.heldDropped?.(dropped.routine, dropped.held, "daily_limit").catch((error: unknown) => dependencies.onError?.(error));
   }
 
   async function emit(ownerKey: string, routineId: string, event: BotRoutineEvent, armedFor: number): Promise<BotRoutineEventOutcome> {
@@ -353,30 +359,43 @@ export function createEventRoutineDispatcher<R extends EventRoutine>(dependencie
      * busy): hold its payload again for the next allowed run. `combine` joins
      * it (older) with anything already held (newer); the held event keeps its
      * id, otherwise the payload is held under `eventId`, which must be new.
-     * `refund` gives back the run's place in the day's count, since nothing
-     * was delivered; `notBefore` keeps it (and anything else) waiting until
-     * then, by moving the gap's start.
+     * `settles` is the run's own receipt, dropped in the same write so a
+     * restart can't replay it next to the held copy. `refund` gives back the
+     * run's place in the day's count, since nothing was delivered;
+     * `notBefore` keeps it (and anything else) waiting until then, by moving
+     * the gap's start. Past `maxRetries` the payload is dropped instead, with
+     * `heldDropped`.
      */
     requeue(ownerKey: string, routineId: string, event: BotRoutineEvent, combine: (older: string, newer: string | undefined) => string,
-      options: { refund?: boolean; notBefore?: number } = {}): Promise<void> {
+      options: { settles?: string; refund?: boolean; notBefore?: number; maxRetries?: number } = {}): Promise<void> {
       const armedFor = generation;
       return admitting((async () => {
         if (!live(armedFor)) return;
+        const retries = (event.retries ?? 0) + 1;
+        let dropped: { routine: R; held: BotEventReceipt } | undefined;
         const at = await dependencies.store.mutate<number | undefined>(ownerKey, routineId, (routine) => {
-          if (!routine.enabled) return { result: undefined };
+          const running = (routine.running ?? []).filter((entry) => entry.eventId !== options.settles);
+          const { running: _previous, ...rest } = routine;
+          const settled = (running.length ? { ...rest, running } : rest) as R;
+          const day = options.refund && routine.day && routine.day.count > 0 ? { ...routine.day, count: routine.day.count - 1 } : routine.day;
+          if (!routine.enabled) return running.length === (routine.running ?? []).length ? { result: undefined } : { next: settled, result: undefined };
+          if (options.maxRetries !== undefined && retries > options.maxRetries) {
+            dropped = { routine, held: { eventId: event.eventId, payload: event.payload, at: dependencies.now(), retries: retries - 1 } };
+            return { next: { ...settled, ...(day ? { day } : {}) }, result: undefined };
+          }
           const payload = [...combine(event.payload, routine.held?.payload).slice(0, payloadChars * 2)].slice(0, payloadChars).join("");
-          const held = routine.held
-            ? { ...routine.held, payload }
-            : { eventId: event.eventId, payload, at: dependencies.now(), ...(event.watchRevision !== undefined ? { watchRevision: event.watchRevision } : {}) };
+          const held: BotEventReceipt = routine.held
+            ? { ...routine.held, payload, retries: Math.max(routine.held.retries ?? 0, retries) }
+            : { eventId: event.eventId, payload, at: dependencies.now(), retries, ...(event.watchRevision !== undefined ? { watchRevision: event.watchRevision } : {}) };
           const gap = limitsOf(routine).minGapMs;
           const lastRunAt = options.notBefore !== undefined ? Math.max(routine.lastRunAt ?? 0, options.notBefore - gap) : routine.lastRunAt;
-          const day = options.refund && routine.day && routine.day.count > 0 ? { ...routine.day, count: routine.day.count - 1 } : routine.day;
           return {
-            next: { ...routine, held, ...(lastRunAt !== undefined ? { lastRunAt } : {}), ...(day ? { day } : {}) },
+            next: { ...settled, held, ...(lastRunAt !== undefined ? { lastRunAt } : {}), ...(day ? { day } : {}) },
             result: (lastRunAt ?? 0) + gap,
           };
         });
         if (at !== undefined) armHeld(ownerKey, routineId, at, armedFor);
+        if (dropped) await dependencies.heldDropped?.(dropped.routine, dropped.held, "retries").catch((error: unknown) => dependencies.onError?.(error));
       })());
     },
 

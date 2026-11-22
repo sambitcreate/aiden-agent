@@ -293,8 +293,12 @@ function toolTrigger(value: unknown, assistant: boolean): ScheduledTaskTrigger |
     throw new Error("Aiden Assistant automations can watch a web address or run from a link, not run a script.");
   }
   // A proposed watch never points at this computer or a private network; the person can set one up in the editor.
-  if (trigger.kind === "watch" && trigger.source.type === "url" && isPrivateWatchAddress(trigger.source.url)) {
-    throw new Error("A task Aiden proposes can't watch this computer or a private network address. The person can set that up in the task editor.");
+  if (trigger.kind === "watch" && trigger.source.type === "url") {
+    if (isPrivateWatchAddress(trigger.source.url)) {
+      throw new Error("A task Aiden proposes can't watch this computer or a private network address. The person can set that up in the task editor.");
+    }
+    // Its checks connect only to public addresses, wherever the name resolves.
+    return { ...trigger, agentProposed: true };
   }
   return trigger;
 }

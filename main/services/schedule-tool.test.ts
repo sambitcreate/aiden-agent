@@ -1749,7 +1749,7 @@ test("an Aiden Assistant automation may watch an address or run from a link, nev
   const base = { action: "create", name: "Status", prompt: "Tell me what changed on the status page." };
   const watch = { kind: "watch", source: { type: "url", url: "https://status.example.com/" }, everyMinutes: 30 };
   const canonical = canonicalizeAssistantScheduleToolArguments({ ...base, trigger: watch });
-  assert.deepEqual(canonical.trigger, watch);
+  assert.deepEqual(canonical.trigger, { ...watch, agentProposed: true }, "saved as an address Aiden proposed");
   assert.equal(canonical.cron, undefined);
   const proposal = prepareAssistantScheduleProposal({ ...base, trigger: { kind: "webhook", gapMinutes: 5 } });
   assert.equal(proposal.input.cron, "");
@@ -1779,7 +1779,9 @@ test("Aiden can't create a task that runs when a connected app has news; the per
 test("a watch Aiden proposes can't point at this computer or a private network, and its card shows the whole host", async () => {
   const base = { action: "create", name: "Status", prompt: "Tell me what changed." };
   const watch = (url: string) => ({ kind: "watch", source: { type: "url", url }, everyMinutes: 30 });
-  for (const url of ["https://192.168.1.10/status", "https://10.0.0.2/", "https://169.254.169.254/latest", "https://printer.local/", "https://build.internal/", "https://[::1]/", "https://[fd00::1]/", "http://localhost:8080/"]) {
+  for (const url of ["https://192.168.1.10/status", "https://10.0.0.2/", "https://169.254.169.254/latest", "https://printer.local/", "https://build.internal/", "https://[::1]/", "https://[fd00::1]/", "http://localhost:8080/",
+    "https://[::7f00:1]/", "https://[64:ff9b::a00:1]/", "https://[fec0::1]/", "https://198.18.0.5/", "https://192.0.0.8/", "https://239.0.0.1/",
+    "https://255.255.255.255/", "https://nas.home.arpa/", "https://router.lan/", "https://nas/", "https://2130706433/"]) {
     assert.throws(() => canonicalizeAssistantScheduleToolArguments({ ...base, trigger: watch(url) }), /private network/u, url);
     const fake = fakeDependencies();
     const tool = createScheduleTaskTool({ kind: "standard", modelSelection: ASSISTANT_MODEL_SELECTION }, fake.dependencies);
@@ -1790,4 +1792,10 @@ test("a watch Aiden proposes can't point at this computer or a private network, 
   const proposal = prepareAssistantScheduleProposal({ ...base, trigger: watch(`https://${host}/${"a".repeat(120)}`) });
   assert.ok(proposal.details.whenLabel?.includes(host), "the full host is on the card");
   assert.ok((proposal.details.whenLabel?.length ?? 0) < 160, "only the path is shortened");
+
+  // A public address is saved marked as Aiden's, so each check connects only to public addresses.
+  const fake = fakeDependencies();
+  const tool = createScheduleTaskTool({ kind: "standard", modelSelection: ASSISTANT_MODEL_SELECTION }, fake.dependencies);
+  await tool.execute("create-public", { ...base, trigger: watch("https://status.example.com/api") });
+  assert.deepEqual(fake.tasks[0]?.trigger, { ...watch("https://status.example.com/api"), agentProposed: true });
 });

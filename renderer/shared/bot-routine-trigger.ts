@@ -133,12 +133,26 @@ function shortened(text: string, limit: number): string {
   return text.length > limit ? `${text.slice(0, limit - 1)}…` : text;
 }
 
+/**
+ * A watch address for a label: the whole host, always, and only the path
+ * shortened, so an approval card can't hide where an address points.
+ */
+export function watchAddressLabel(value: string, options: { scheme: boolean; query: boolean; pathChars: number }): string {
+  try {
+    const url = new URL(value);
+    const path = `${url.pathname === "/" ? "" : url.pathname}${options.query ? url.search : ""}`;
+    return `${options.scheme ? `${url.protocol}//` : ""}${url.host}${shortened(path, options.pathChars)}`;
+  } catch {
+    return shortened(value, 120);
+  }
+}
+
 export function formatBotRoutineTriggerLabel(trigger: BotRoutineTrigger): string {
   if (trigger.kind === "webhook") return "When this routine's link is called";
   if (trigger.kind === "watch") {
     if (trigger.source.type === "connector") return `Every ${formatBotWatchInterval(trigger.everyMinutes)}, when its connector watch changes`;
     const what = trigger.source.type === "url"
-      ? shortened(trigger.source.url, 80)
+      ? watchAddressLabel(trigger.source.url, { scheme: true, query: true, pathChars: 60 })
       : `the output of ${shortened(trigger.source.script, 60)}`;
     return `Every ${formatBotWatchInterval(trigger.everyMinutes)}, when ${what} changes`;
   }

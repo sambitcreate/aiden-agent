@@ -43,6 +43,8 @@ export interface TaskRunExecution {
   result: ScheduledRun["result"];
   output: string;
   error?: string;
+  /** The person stopped the run (the chat's Stop button): neither a success nor a failure. */
+  cancelled?: true;
 }
 
 /** A model turn for the task, admitted in the chat. */

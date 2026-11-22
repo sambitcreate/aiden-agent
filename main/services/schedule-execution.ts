@@ -394,6 +394,11 @@ export function createScheduleExecution(store: ScheduleStore = scheduleStore) {
         await onCancelled();
         return { result: "blocked", output: "", error: "Scheduled task was cancelled." };
       }
+      // The person pressed Stop in the chat: the partial answer stays there,
+      // and the run counts as stopped, never as a success or a failure.
+      if (!("message" in terminal) && terminal.timeline?.status === "cancelled") {
+        return { result: "blocked", output: terminal.content, error: "Stopped before it finished.", cancelled: true };
+      }
       if ("message" in terminal) {
         const error = terminal.message;
         return {
@@ -547,6 +552,7 @@ export function createScheduleExecution(store: ScheduleStore = scheduleStore) {
       let reason: ScheduledRun["reason"];
       let output = "";
       let error: string | undefined;
+      let stopped = false;
       try {
         assertAssistantScheduleExecutionBoundary(task);
         // A trigger's event reaches the model only as fenced data after the prompt.
@@ -560,11 +566,14 @@ export function createScheduleExecution(store: ScheduleStore = scheduleStore) {
         } else {
           result = outcome.result;
           error = outcome.error;
+          stopped = outcome.cancelled === true;
         }
       } catch (cause) {
         error = resultError(cause).slice(0, 4_096);
         if (controller.signal.aborted) result = "blocked";
       }
+      // Stopped from the task list (the scheduler's cancel) or with the chat's Stop button.
+      const cancelled = controller.signal.aborted || stopped;
       try {
         const run = await store.recordRun({
           id: runId,
@@ -577,10 +586,10 @@ export function createScheduleExecution(store: ScheduleStore = scheduleStore) {
           error,
           chatId,
           ...(trigger?.kind === "manual" ? { byHand: true as const } : {}),
-          ...(result === "blocked" && controller.signal.aborted ? { cancelled: true as const } : {}),
+          ...(result === "blocked" && cancelled ? { cancelled: true as const } : {}),
         });
-        reportScheduledTaskRan(result, trigger, controller.signal.aborted);
-        if (result !== "silent" && result !== "skipped") notify(task, error ?? output, chatId);
+        reportScheduledTaskRan(result, trigger, cancelled);
+        if (result !== "silent" && result !== "skipped" && !cancelled) notify(task, error ?? output, chatId);
         ipcMain.broadcast("schedule:updated", { taskId: task.id, run });
         return run;
       } finally {
