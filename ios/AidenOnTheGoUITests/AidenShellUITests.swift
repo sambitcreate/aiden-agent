@@ -1877,12 +1877,15 @@ final class AidenShellUITests: XCTestCase {
             // and a `_UIBarBadgeView`). The system draws the strip at one size, as it
             // does the phone's tab bar, and the app neither draws nor sizes it.
             // XCTest can't resolve the strip's `_UIFloatingTabBarItemCell` to an
-            // element, so the findings come with none. With the strip hidden (a
-            // chat, a Bot) or the sidebar open in its place there are none.
+            // element, so the findings come with none. With the sidebar open in
+            // its place there are none. A chat or a Bot opens in the list's
+            // detail column, which keeps the strip up as the list does, so
+            // they count the same four.
             reason: "Text size of the floating tab strip's titles and badge, which the audit can't name",
             ceiling: [:],
             ceilingInRegularWidth: [
-                "inbox": 4, "bots": 4, "machines": 4, "machine editor": 4, "settings": 4, "search": 4,
+                "inbox": 4, "bots": 4, "bot": 4, "chat": 4, "machines": 4, "machine editor": 4, "settings": 4,
+                "search": 4,
             ],
             matches: { $0.type == .dynamicType && $0.frame == nil && $0.tabStrip != nil }
         ),
@@ -2175,6 +2178,7 @@ final class AidenShellUITests: XCTestCase {
                     .waitForExistence(timeout: 10),
                 "The Bot did not open"
             )
+            waitForTheListToMoveAside(from: bot, in: app)
             try audit("bot")
             goBack(in: app)
 
@@ -2183,6 +2187,7 @@ final class AidenShellUITests: XCTestCase {
             hideOverlaySidebar(in: app)
             row.tap()
             XCTAssertTrue(app.buttons["Send message"].firstMatch.waitForExistence(timeout: 10), "The chat did not open")
+            waitForTheListToMoveAside(from: row, in: app)
             try audit("chat")
             goBack(in: app)
 
@@ -2193,6 +2198,7 @@ final class AidenShellUITests: XCTestCase {
             XCTAssertTrue(app.navigationBars["Computers"].waitForExistence(timeout: 10), "Machines did not open")
             let studio = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Studio Mac,")).firstMatch
             XCTAssertTrue(studio.waitForExistence(timeout: 10), "Machines doesn't list the machine")
+            waitForTheListToMoveAside(from: status, in: app)
             try audit("machines")
             studio.tap()
             XCTAssertTrue(app.textFields["aiden.machine-name"].firstMatch.waitForExistence(timeout: 10), "The machine editor did not open")
@@ -2409,6 +2415,11 @@ final class AidenShellUITests: XCTestCase {
 
     private func openInboxMenu(in app: XCUIApplication) {
         let menu = app.navigationBars.buttons["Inbox menu"].firstMatch
+        // The menu is in the list's bar. A chat chosen in a list laid over the
+        // detail (an iPad in portrait) put the list away, and the detail's
+        // column toggle brings it back.
+        let showList = app.navigationBars.buttons["Show Sidebar"].firstMatch
+        if !menu.waitForExistence(timeout: 3), showList.exists { showList.tap() }
         XCTAssertTrue(menu.waitForExistence(timeout: 10), "No Inbox menu")
         menu.tap()
         // An open sidebar sits over the page in a narrow window: the first tap closes it.
@@ -2426,8 +2437,23 @@ final class AidenShellUITests: XCTestCase {
         }
     }
 
-    /// An open sidebar sits over the page in a narrow window and takes the next
-    /// touch. A portrait iPad opens on it.
+    /// Picking a row from a list laid over the detail (an iPad in portrait)
+    /// slides the list away and lifts its dimming. Until it's gone the detail
+    /// is still dimmed, so an audit reads it as low contrast, and a tap on it
+    /// only puts the list away. Tiled columns keep the list, so there it waits
+    /// out the timeout and goes on.
+    private func waitForTheListToMoveAside(from listElement: XCUIElement, in app: XCUIApplication) {
+        guard AidenStateMatrix.window(of: app).frame.width > AidenStateMatrix.compactWidth else { return }
+        let gone = XCTNSPredicateExpectation(predicate: NSPredicate(format: "isHittable == false"), object: listElement)
+        _ = XCTWaiter().wait(for: [gone], timeout: 5)
+        // The dimming fades out after the list has left.
+        Thread.sleep(forTimeInterval: 0.5)
+    }
+
+    /// The tab view's own sidebar (identifier `ToggleSidebar`), which sits over
+    /// the page in a narrow window and takes the next touch. A list tab's
+    /// split has its own column toggle with no identifier; that list isn't
+    /// put away here, since with nothing chosen the list is what shows.
     private func hideOverlaySidebar(in app: XCUIApplication) {
         let toggle = app.buttons["ToggleSidebar"].firstMatch
         if toggle.exists, toggle.label == "Hide Sidebar" {
