@@ -12,7 +12,6 @@ import {
   Folder,
   MessageSquare,
   MoreHorizontal,
-  PencilLine,
   Play,
   Search,
   ShieldCheck,
@@ -430,7 +429,6 @@ export function ScheduledTasksView() {
         actions={
           <div className="flex items-center gap-1.5">
             <Button variant="accent" onClick={() => requestAssistantAutomationComposer()}>
-              <Sparkles className="size-4" />
               Create with Aiden
             </Button>
             <DropdownMenu>
@@ -454,7 +452,6 @@ export function ScheduledTasksView() {
                     assistantHandoffRef.current = true;
                   }}
                 >
-                  <Sparkles className="size-4" />
                   Ask Aiden in chat
                 </DropdownMenuItem>
                 <DropdownMenuItem
@@ -472,7 +469,6 @@ export function ScheduledTasksView() {
                     );
                   }}
                 >
-                  <PencilLine className="size-4" />
                   Set up with controls
                 </DropdownMenuItem>
               </DropdownMenuContent>
