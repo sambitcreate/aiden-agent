@@ -90,6 +90,8 @@ import {
 import { isUsable } from "../lib/model-picker-data";
 import { openWorkspaceSettings } from "./workspace-settings-dialog";
 import { aidenLivePreferences } from "../shared/aiden-live-settings";
+import { parseGoalCommand } from "../shared/goal";
+import { goalBarView } from "./goal-bar";
 import {
   APPROVAL_MODE_LABELS,
   APPROVAL_MODES,
@@ -987,6 +989,7 @@ export function Composer({
           : workspace.permission === "none"
             ? "Turn on folder access for this chat first."
             : undefined,
+      goalBlockedReason: surfaces.localContext ? undefined : `Available in chats on this ${localComputerNoun(platform)}.`,
       chatCloneBlockedReason: forkEligibility.cloneBlocked
         ? "This chat has too many messages to clone safely. Fork from an earlier turn instead."
         : undefined,
@@ -1628,6 +1631,55 @@ export function Composer({
             return true;
           } catch (error) {
             toast.error(error instanceof Error ? error.message : "That could not be set up.");
+            return false;
+          }
+        },
+        goal: async (argument) => {
+          const command = parseGoalCommand(argument ? `/goal ${argument}` : "/goal");
+          if (!command) return false;
+          try {
+            switch (command.kind) {
+              case "invalid":
+                toast.info(command.message);
+                return false;
+              case "show": {
+                const goal = await chatsApi.goal(chatId);
+                if (!goal) toast.info("This chat has no goal. Type /goal and what Aiden should finish.");
+                else {
+                  const view = goalBarView(goal);
+                  toast.info(`${view.title}: ${view.detail}`);
+                }
+                return true;
+              }
+              case "pause":
+                if (!(await chatsApi.pauseGoal(chatId))) toast.info("This chat has no goal to pause.");
+                return true;
+              case "resume":
+                if (!(await chatsApi.resumeGoal(chatId))) toast.info("This chat has no goal to resume.");
+                return true;
+              case "clear":
+                await chatsApi.clearGoal(chatId);
+                return true;
+              case "set": {
+                if (isGenerating || sending) {
+                  toast.info("Finish the current answer first, then set the goal.");
+                  return false;
+                }
+                // The goal first, so the kickoff note rides on the turn the objective starts.
+                await chatsApi.setGoal(chatId, command.objective, "slash");
+                const sent = await sendComposerPayload({
+                  draftText: text,
+                  sendText: command.objective,
+                  attachments,
+                  selectedSkill,
+                  skillRevision: skillSelection.revision,
+                });
+                if (!sent) await chatsApi.clearGoal(chatId).catch(() => undefined);
+                return sent;
+              }
+            }
+          } catch (error) {
+            toast.error(error instanceof Error ? error.message : "The goal could not be changed.");
             return false;
           }
         },

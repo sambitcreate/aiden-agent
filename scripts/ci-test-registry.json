@@ -97,6 +97,8 @@
         "main/services/goal/goal-loop.test.ts",
         "main/services/goal/goal-round-start.test.ts",
         "main/handlers/goals.test.ts",
+        "renderer/components/goal-bar.test.tsx",
+        "renderer/lib/goal-notification.test.ts",
         "main/services/follow-through/chat-settlement.test.ts",
         "main/services/follow-through/answering-runs.test.ts",
         "main/services/follow-through/listening-ports.test.ts",

@@ -164,6 +164,12 @@ export type LmStudioEndpoint = {
    * dropped connection, or normally. Deterministic model only.
    */
   cutOffCompletions?: (prompt: string, parts: readonly CutOffCompletionPart[]) => void;
+  /**
+   * Answers every tool-free completion whose latest user message contains
+   * `prompt` with `text`: a side call such as a goal review, which a model
+   * without a prompt cache sends as an isolated request. Deterministic model only.
+   */
+  answerToolFreeCompletions?: (prompt: string, text: string) => void;
 };
 
 export type CutOffCompletionPart = { text: string; end: "length" | "drop" | "stop" };
@@ -343,6 +349,7 @@ function flushStreamedReply(reply: StreamedReply): void {
 async function startMockLmStudio(): Promise<MockLmStudio> {
   const requests: CapturedLmStudioRequest[] = [];
   const streamedReplies: StreamedReply[] = [];
+  const toolFreeAnswers: Array<{ prompt: string; text: string }> = [];
   const enqueueStreamedReply = (prompt: string): StreamedReplyController => {
     if (!prompt.trim() || streamedReplies.some((reply) => reply.prompt === prompt)) {
       throw new Error("A streamed reply needs a unique, non-empty prompt.");
@@ -439,6 +446,11 @@ async function startMockLmStudio(): Promise<MockLmStudio> {
         const userText = typeof latestUser?.content === "string"
           ? latestUser.content
           : JSON.stringify(latestUser?.content ?? "");
+        const toolFree = completion?.tools?.length ? undefined : toolFreeAnswers.find((answer) => userText.includes(answer.prompt));
+        if (toolFree) {
+          sendCompletion({ text: toolFree.text });
+          return;
+        }
         const rateLimit = completion?.tools?.length
           ? rateLimits.find((limit) => limit.remaining > 0 && userText.includes(limit.prompt))
           : undefined;
@@ -566,6 +578,10 @@ async function startMockLmStudio(): Promise<MockLmStudio> {
     },
     enqueueToolScenario,
     enqueueStreamedReply,
+    answerToolFreeCompletions: (prompt: string, text: string) => {
+      if (!prompt.trim()) throw new Error("A tool-free answer needs a prompt to match.");
+      toolFreeAnswers.push({ prompt, text });
+    },
     rateLimitCompletions: (prompt, count, headers) => {
       if (!prompt.trim() || !Number.isInteger(count) || count < 1) throw new Error("A rate limit needs a prompt and a positive count.");
       rateLimits.push({ prompt, remaining: count, headers: { ...headers } });

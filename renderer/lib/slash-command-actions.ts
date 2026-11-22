@@ -24,6 +24,8 @@ export interface SlashCommandActionContext {
   worktreeBlockedReason?: string;
   /** Why `/until` and `/follow` cannot run here (folder access off, a Bot, a phone-hosted chat). */
   followThroughBlockedReason?: string;
+  /** Why `/goal` cannot run here (a chat hosted on another computer). */
+  goalBlockedReason?: string;
   payloadAfterToken: boolean;
   hasAttachmentsOrSelectedSkill?: boolean;
   /** The open chat can use design mode (the flag is on and it is a local project chat). */
@@ -63,6 +65,8 @@ export interface SlashCommandActionHandlers {
   followThrough?: (action: "until" | "follow", argument: string) => boolean | Promise<boolean>;
   /** `/design` and `/design off`; false when the chat cannot use design mode. */
   setDesignMode?: (on: boolean) => boolean;
+  /** `/goal`, with whatever follows it; false when nothing was done. */
+  goal?: (argument: string) => boolean | Promise<boolean>;
 }
 
 const unavailable = (reason: string): SlashCommandAvailabilityResult => ({
@@ -143,6 +147,10 @@ export function slashCommandAvailability(
       break;
     case "design-chat":
       if (!context.designModeAvailable) return unavailable("Design mode isn't available in this chat.");
+      break;
+    case "goal-chat":
+      if (!context.hasChat) return unavailable("Send a message first, then set a goal.");
+      if (context.goalBlockedReason) return unavailable(context.goalBlockedReason);
       break;
     case "idle-workspace":
       if (!context.hasWorkspace) return unavailable("Open a workspace first.");
@@ -341,6 +349,9 @@ export function executeSlashCommandAction(
       if (!handlers.followThrough) return false;
       return handlers.followThrough(command.action.action, argument.trim());
     }
+    case "goal":
+      if (!handlers.goal) return false;
+      return handlers.goal(argument.trim());
     case "design-mode":
       if (!handlers.setDesignMode) return false;
       return handlers.setDesignMode(argument.trim().toLocaleLowerCase() !== "off");

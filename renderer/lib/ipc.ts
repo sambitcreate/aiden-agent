@@ -279,6 +279,7 @@ import type {
 } from "../shared/chat-pull-requests";
 import { parseBtwEvent, type BtwEventV1, type BtwStartReceiptV1 } from "../shared/btw";
 import { parseChatFollowThrough, type ChatFollowThroughV1 } from "../shared/follow-through";
+import { parseGoalView, type GoalView } from "../shared/goal";
 import type { BackgroundJobOutput } from "../shared/background-jobs";
 import {
   parseDeviceHostCheck,
@@ -1732,6 +1733,32 @@ export const chatsApi = {
     invoke<void>("chats:followThroughSetCheck", { chatId, command }),
   clearDoneWhenCheck: (chatId: string) => invoke<void>("chats:followThroughClearCheck", { chatId }),
   cancelCheckBack: (chatId: string, id: string) => invoke<void>("chats:followThroughCancelCheckBack", { chatId, id }),
+  // Keep-going goals: one per chat; `chats:goal-changed` carries every change.
+  goal: async (chatId: string): Promise<GoalView | null> => {
+    const value = await invoke<unknown>("chats:goal:get", chatId);
+    if (value === null) return null;
+    const goal = parseGoalView(value);
+    if (!goal || goal.chatId !== chatId) throw new Error("The goal response was invalid.");
+    return goal;
+  },
+  /** Sets the chat's goal (replacing any earlier one); send the objective as the next message after it. */
+  setGoal: async (chatId: string, objective: string, source: "slash" | "menu"): Promise<GoalView> => {
+    const goal = parseGoalView(await invoke<unknown>("chats:goal:set", { chatId, objective, source }));
+    if (!goal) throw new Error("The goal response was invalid.");
+    return goal;
+  },
+  pauseGoal: async (chatId: string): Promise<GoalView | null> => parseGoalView(await invoke<unknown>("chats:goal:pause", { chatId })),
+  /** Resume, or Keep going: round 1 again, and a round starts now if the chat is idle. */
+  resumeGoal: async (chatId: string): Promise<GoalView | null> => parseGoalView(await invoke<unknown>("chats:goal:resume", { chatId })),
+  clearGoal: (chatId: string) => invoke<void>("chats:goal:clear", { chatId }),
+  onGoalChanged: (handler: (chatId: string, goal: GoalView | null) => void) =>
+    onNotification<unknown>("chats:goal-changed", (payload) => {
+      const update = payload && typeof payload === "object" ? (payload as { chatId?: unknown; goal?: unknown }) : {};
+      if (typeof update.chatId !== "string" || !update.chatId) return;
+      const goal = update.goal === null ? null : parseGoalView(update.goal);
+      if (update.goal !== null && !goal) return;
+      handler(update.chatId, goal);
+    }),
   onBtwEvent: (handler: (event: BtwEventV1) => void) =>
     onNotification<unknown>("chats:btw-event", (payload) => {
       const event = parseBtwEvent(payload);

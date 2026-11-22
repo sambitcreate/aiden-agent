@@ -135,11 +135,11 @@ export function goalRoundLabel(goal: Pick<GoalRecordV1, "rounds" | "maxRounds" |
 }
 
 /**
- * Whether the keep-going goal loop is switched on. Off until the desktop
- * goal bar ships; main refuses to set goals while it is off.
+ * Whether the keep-going goal loop is switched on. Main refuses to set or
+ * resume goals while it is off; kept as the one place to switch it off again.
  */
 export function goalLoopEnabled(): boolean {
-  return false;
+  return true;
 }
 
 /** How many rounds a goal ran when it settled, for analytics: shows how often goals reach 50. */

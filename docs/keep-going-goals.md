@@ -1,0 +1,64 @@
+# Keep going until it's done
+
+Give a chat a goal and Aiden keeps working on it in new rounds until it is done, it needs you, or a limit pauses it. You don't have to type "continue".
+
+## Setting a goal
+
+- Type `/goal` and what should be finished, for example `/goal Get the test suite passing and write up what changed`, and send. The objective is sent as your own message, so the first round starts at once. It can be up to 2,000 characters on one line. The slash menu lists it as **Keep going until done**.
+- A chat has one goal. Setting a new one replaces the old one.
+- A goal needs a saved chat (send a first message), and the chat must be idle when you set it.
+- Goals work in any ordinary chat on this computer, with or without a workspace folder. They are not available in Bot chats, the Assistant, agent-harness chats (such as Google Antigravity), chats hosted on a paired Mac, or chats with no model chosen.
+
+Other commands:
+
+| Command | What it does |
+| --- | --- |
+| `/goal` | Shows the goal and where it stands. |
+| `/goal pause` | Pauses it after the current answer. |
+| `/goal resume` | Starts it again from round 1. |
+| `/goal clear` | Removes it. |
+
+## The goal bar
+
+While a chat has a goal, a bar above the composer shows it:
+
+| State | Shows | Actions |
+| --- | --- | --- |
+| Working | "Working · round 3 of 50" and the objective | Pause, Clear |
+| Paused by you | "Paused" | Resume, Clear |
+| Paused by Aiden | "Paused" and why (for example "Not making progress") | Keep going, Clear |
+| Needs you | "Needs you" and what it needs | Keep going, Clear |
+| Done | "Done" and the reason | Clear |
+
+Resume and Keep going both start again from round 1 with a fresh progress count; the limit stays 50 rounds. Taps take effect at once. If Aiden can't make the change, the bar goes back and says why.
+
+## How a round works
+
+1. After an answer in the chat ends, Aiden waits a moment and checks the chat is still idle. If you sent something in the meantime, your message goes first and the check happens after it.
+2. The chat's own model reads the conversation and judges the goal: **done**, **needs you**, **paused** (your latest message asked to stop), **wait** (background jobs are still running), or **continue**. It judges on evidence in the conversation, such as command output and files read, not on claims. This check reuses the chat's cached prompt and is counted as "goal review" in usage.
+3. On **continue**, a new round starts with a "Keep going · round 4 of 50" card in the chat. Rounds are ordinary answers: your approval mode applies exactly as for your own messages, and a goal never raises access. A round cannot set check-backs.
+
+## When a goal pauses on its own
+
+- You pressed Stop, or the last answer failed.
+- Aiden restarted. Goals that were working come back paused; press Keep going to continue.
+- 50 rounds ran.
+- Three rounds in a row made no progress: the same reason as the round before, or a round that ran no tools and wrote little. A round that wrote a long answer without tools still counts as progress, so writing goals keep going.
+- The check couldn't produce a usable answer twice in a row.
+- It waited 30 minutes for background work or a helper.
+- The chat reached its spending limit. **Allow more** doesn't restart the goal; Keep going does.
+- The chat's folder access changed.
+
+A chat with a working goal can't be moved to another workspace; pause or clear the goal first. Deleting the chat removes its goal, and forks don't copy it.
+
+## Notifications
+
+When a goal finishes on its own (Done, Needs you, or paused by Aiden), Aiden shows one desktop notification, unless the chat is already open in a focused window. Clicking it opens the chat. Your own Pause or Clear doesn't notify.
+
+## Privacy
+
+The objective and the reviewer's reasons stay on your device. Anonymous usage data records only that a goal started (from `/goal`) and how it ended, with the number of rounds in ranges; see [analytics](analytics.md).
+
+## Not yet
+
+Phones show the round cards but can't set or change goals. `/until` checks stay separate for now. Rounds run without a window, so browser, Computer Use and other window-only tools are refused in rounds.

@@ -26,6 +26,7 @@ import {
   TerminalSquare,
   Wrench,
   PencilRuler,
+  Repeat,
 } from "lucide-react";
 import { AidenIcon } from "./aiden-icon";
 import { cn } from "../lib/ui-utils";
@@ -64,6 +65,7 @@ const ICONS: Record<SlashCommandIcon, React.ComponentType<{ className?: string }
   logout: LogOut,
   providers: Wrench,
   "pull-request": GitPullRequest,
+  goal: Repeat,
   rename: Pencil,
   review: FileSearch,
   settings: Settings,

@@ -82,6 +82,7 @@ import { useNavigate } from "@tanstack/react-router";
 import { retryUsageLimitNow, useUsageLimitNow, useUsageLimitWait } from "../lib/use-usage-limit-wait";
 import { useSpendingStatus } from "../lib/use-spending-status";
 import { SpendingLimitNotice } from "../components/spending/spending-limit-notice";
+import { ChatGoalBar } from "../components/goal-bar";
 import { spendingNotice } from "../shared/spending";
 import { hookMessagesNotice } from "../shared/hooks-settings";
 import { useMarkChatRead } from "../lib/use-mark-chat-read";
@@ -3975,6 +3976,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
                 />
               ) : null}
             </ComposerFloatingRow>
+            {draft ? null : <ChatGoalBar chatId={chatId} className="aiden-dock-inset chat-content-column pb-2" />}
             {spending.status ? (
               <SpendingLimitNotice
                 status={spending.status}

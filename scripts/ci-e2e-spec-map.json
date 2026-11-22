@@ -267,6 +267,13 @@
       "main/services/follow-through",
       "main/services/durable-jobs/"
     ],
+    "keep-going-goals.spec.ts": [
+      "renderer/components/goal-bar",
+      "renderer/lib/goal-notification",
+      "renderer/shared/goal.ts",
+      "main/services/goal/",
+      "main/handlers/goals.ts"
+    ],
     "guided-setup.spec.ts": [
       "renderer/components/onboarding",
       "renderer/components/guided-provider-chooser"
