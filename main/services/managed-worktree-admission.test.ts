@@ -325,6 +325,43 @@ test("GitService.managedWorktreeUsable verifies modern worktrees via 0-spawn pur
   await fs.writeFile(includeTarget, "");
   await runGit(repo, ["config", "--unset-all", "include.path"]);
 
+  // Custom-named `GIT_CONFIG_GLOBAL` files (not matching `*.gitconfig` or
+  // `*/config`) must also be scanned for `[include]` / `[includeIf]` and fall
+  // back to Git discovery when an included target changes.
+  const customGlobalConfig = path.join(temp, "custom-global.cfg");
+  const globalIncludeTarget = path.join(temp, "global-extra.cfg");
+  await fs.writeFile(globalIncludeTarget, "# benign global include\n");
+  await fs.writeFile(customGlobalConfig, `[include]\n\tpath = ${globalIncludeTarget}\n`);
+  process.env.GIT_CONFIG_GLOBAL = customGlobalConfig;
+  assert.equal(
+    await service.managedWorktreeUsable(
+      created.repositoryPath,
+      created.path,
+      created.branch,
+      created.worktreeGitDir,
+      created.ownershipToken,
+      created.worktreeDevice,
+      created.worktreeInode,
+    ),
+    true,
+  );
+  await fs.writeFile(globalIncludeTarget, "[core\n");
+  gitSpawns = 0;
+  await assert.rejects(
+    service.managedWorktreeUsable(
+      created.repositoryPath,
+      created.path,
+      created.branch,
+      created.worktreeGitDir,
+      created.ownershipToken,
+      created.worktreeDevice,
+      created.worktreeInode,
+    ),
+    /not a Git repository/u,
+  );
+  assert.ok(gitSpawns > 0, "changed custom GIT_CONFIG_GLOBAL include target must fall back to Git discovery");
+  process.env.GIT_CONFIG_GLOBAL = "/dev/null";
+
   // Invalidating display cache after a WorktreeSetup hook modifies the checkout
   // ensures git.info observes dirty changes instead of stale uncommitted: 0.
   await fs.writeFile(path.join(created.path, "README.md"), "# modified by hook\n");

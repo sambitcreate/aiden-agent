@@ -1077,7 +1077,7 @@ export class GitService {
    */
   private readonly verifiedRepoIdentities = new Map<
     string,
-    { commonDir: string; paths: string[]; signature: string }
+    { commonDir: string; identityPaths: string[]; paths: string[]; signature: string }
   >();
   /**
    * Credential-free remote identity learned by ordinary status reads, keyed by
@@ -1295,37 +1295,46 @@ export class GitService {
     });
   }
 
-  private admissionConfigPaths(identityPaths: readonly string[]): string[] {
+  private admissionConfigPaths(
+    canonicalCwd: string,
+    identityPaths: readonly string[],
+    repoConfigFiles: readonly string[],
+  ): { allPaths: string[]; configFiles: string[] } {
     const env = gitEnvironment(false);
-    const paths = new Set<string>(identityPaths);
+    const allPaths = new Set<string>(identityPaths);
+    const configFiles = new Set<string>(repoConfigFiles);
+    const addConfigFile = (filePath: string) => {
+      allPaths.add(filePath);
+      configFiles.add(filePath);
+    };
     if (env.GIT_CONFIG_GLOBAL !== undefined) {
       if (env.GIT_CONFIG_GLOBAL && env.GIT_CONFIG_GLOBAL !== "/dev/null") {
-        paths.add(path.resolve(env.GIT_CONFIG_GLOBAL));
+        addConfigFile(path.resolve(canonicalCwd, env.GIT_CONFIG_GLOBAL));
       }
     } else {
       const home = env.HOME || os.homedir();
       if (home) {
-        paths.add(path.join(home, ".gitconfig"));
+        addConfigFile(path.join(home, ".gitconfig"));
         const xdg = env.XDG_CONFIG_HOME || path.join(home, ".config");
-        paths.add(path.join(xdg, "git", "config"));
+        addConfigFile(path.join(xdg, "git", "config"));
       }
     }
     const noSystem = env.GIT_CONFIG_NOSYSTEM === "1" || env.GIT_CONFIG_NOSYSTEM === "true";
     if (!noSystem) {
       if (env.GIT_CONFIG_SYSTEM !== undefined) {
         if (env.GIT_CONFIG_SYSTEM && env.GIT_CONFIG_SYSTEM !== "/dev/null") {
-          paths.add(path.resolve(env.GIT_CONFIG_SYSTEM));
+          addConfigFile(path.resolve(canonicalCwd, env.GIT_CONFIG_SYSTEM));
         }
       } else {
-        paths.add("/etc/gitconfig");
+        addConfigFile("/etc/gitconfig");
         if (process.platform === "darwin") {
-          paths.add("/opt/homebrew/etc/gitconfig");
-          paths.add("/usr/local/etc/gitconfig");
-          paths.add("/Library/Developer/CommandLineTools/usr/etc/gitconfig");
+          addConfigFile("/opt/homebrew/etc/gitconfig");
+          addConfigFile("/usr/local/etc/gitconfig");
+          addConfigFile("/Library/Developer/CommandLineTools/usr/etc/gitconfig");
         }
       }
     }
-    return [...paths];
+    return { allPaths: [...allPaths], configFiles: [...configFiles] };
   }
 
   /**
@@ -1337,16 +1346,15 @@ export class GitService {
    */
   private async pureFsAdmissionProof(
     canonicalCwd: string,
-  ): Promise<{ commonDir: string; paths: string[]; signature: string } | undefined> {
+  ): Promise<
+    { commonDir: string; identityPaths: string[]; paths: string[]; signature: string } | undefined
+  > {
     const identity = await this.rootReadIdentity(canonicalCwd);
     if (!identity) return undefined;
-    const allPaths = this.admissionConfigPaths(identity.paths);
-    const configFiles = allPaths.filter(
-      (filePath) =>
-        filePath.endsWith("/config") ||
-        filePath.endsWith("/.gitconfig") ||
-        filePath.endsWith("/gitconfig") ||
-        filePath.endsWith("/config.worktree"),
+    const { allPaths, configFiles } = this.admissionConfigPaths(
+      canonicalCwd,
+      identity.paths,
+      identity.configFiles,
     );
     const beforeSig = await this.repositorySignature(allPaths);
     if (!beforeSig) return undefined;
@@ -1356,13 +1364,61 @@ export class GitService {
         if (read.code === "ENOENT") continue;
         return undefined;
       }
-      if (/^\s*\[\s*include(?:if\b|\s*\])/im.test(read.text)) {
+      if (/^\uFEFF?\s*\[\s*include(?:if)?(?:\s|"|\])/im.test(read.text)) {
         return undefined;
       }
     }
     const afterSig = await this.repositorySignature(allPaths);
     if (!afterSig || afterSig !== beforeSig) return undefined;
-    return { commonDir: identity.commonDir, paths: allPaths, signature: afterSig };
+    return {
+      commonDir: identity.commonDir,
+      identityPaths: identity.paths,
+      paths: allPaths,
+      signature: afterSig,
+    };
+  }
+
+  private async isVerifiedRepoIdentityCurrent(
+    canonicalCwd: string,
+    verified: { commonDir: string; identityPaths: string[]; paths: string[]; signature: string },
+  ): Promise<boolean> {
+    const { allPaths } = this.admissionConfigPaths(canonicalCwd, verified.identityPaths, []);
+    if (
+      allPaths.length !== verified.paths.length ||
+      !allPaths.every((filePath, index) => filePath === verified.paths[index])
+    ) {
+      return false;
+    }
+    return (await this.repositorySignature(verified.paths)) === verified.signature;
+  }
+
+  private async verifyAdmissionRepository(
+    cwd: string,
+    signal?: AbortSignal,
+  ): Promise<GitRepository | null> {
+    const canonicalCwd = await fs.realpath(cwd).catch(() => undefined);
+    const beforeProof = canonicalCwd ? await this.pureFsAdmissionProof(canonicalCwd) : undefined;
+    const repo = await this.repository(cwd, signal);
+    if (
+      repo &&
+      canonicalCwd &&
+      beforeProof &&
+      repo.cwd === canonicalCwd &&
+      canonicalCwd === repo.topLevel &&
+      beforeProof.commonDir === repo.commonDir &&
+      (await this.isVerifiedRepoIdentityCurrent(canonicalCwd, beforeProof))
+    ) {
+      this.verifiedRepoIdentities.delete(canonicalCwd);
+      this.verifiedRepoIdentities.set(canonicalCwd, beforeProof);
+      while (this.verifiedRepoIdentities.size > this.cacheEntries) {
+        const oldest = this.verifiedRepoIdentities.keys().next().value as string | undefined;
+        if (!oldest) break;
+        this.verifiedRepoIdentities.delete(oldest);
+      }
+    } else if (canonicalCwd) {
+      this.verifiedRepoIdentities.delete(canonicalCwd);
+    }
+    return repo;
   }
 
   private async repository(cwd: string, signal?: AbortSignal): Promise<GitRepository | null> {
@@ -1375,7 +1431,6 @@ export class GitService {
     } catch {
       return null;
     }
-    const beforeProof = await this.pureFsAdmissionProof(canonicalCwd);
     const probe = await this.run(
       canonicalCwd,
       ["rev-parse", "--is-inside-work-tree", "--show-toplevel", "--git-common-dir"],
@@ -1422,22 +1477,6 @@ export class GitService {
         path.isAbsolute(commonPath) ? commonPath : path.resolve(canonicalCwd, commonPath),
       ),
     ]);
-    if (
-      beforeProof &&
-      canonicalCwd === topLevel &&
-      beforeProof.commonDir === commonDir &&
-      (await this.repositorySignature(beforeProof.paths)) === beforeProof.signature
-    ) {
-      this.verifiedRepoIdentities.delete(canonicalCwd);
-      this.verifiedRepoIdentities.set(canonicalCwd, beforeProof);
-      while (this.verifiedRepoIdentities.size > this.cacheEntries) {
-        const oldest = this.verifiedRepoIdentities.keys().next().value as string | undefined;
-        if (!oldest) break;
-        this.verifiedRepoIdentities.delete(oldest);
-      }
-    } else {
-      this.verifiedRepoIdentities.delete(canonicalCwd);
-    }
     return { cwd: canonicalCwd, topLevel, commonDir };
   }
 
@@ -1521,7 +1560,7 @@ export class GitService {
   }
 
   private async rootReadIdentity(cwd: string): Promise<
-    { paths: string[]; signature: string; commonDir: string } | undefined
+    { paths: string[]; configFiles: string[]; signature: string; commonDir: string } | undefined
   > {
     try {
       const marker = path.join(cwd, ".git");
@@ -1552,15 +1591,18 @@ export class GitService {
       try { commonPath = path.resolve(gitDir, (await readPointer(commonPointer)).trim()); }
       catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
       const commonDir = await fs.realpath(commonPath);
-      const paths = [...basePaths, ...adminPaths, commonPath, commonDir,
-        path.join(gitDir, "config"), path.join(gitDir, "config.worktree"),
-        path.join(commonDir, "config")];
+      const configFiles = [
+        path.join(gitDir, "config"),
+        path.join(gitDir, "config.worktree"),
+        path.join(commonDir, "config"),
+      ];
+      const paths = [...basePaths, ...adminPaths, commonPath, commonDir, ...configFiles];
       const signature = await this.repositorySignature(paths);
       // Pointer parsing must describe the same routing files as the proof.
       if (!signature || !baseSignature || !adminSignature ||
           baseSignature !== await this.repositorySignature(basePaths) ||
           adminSignature !== await this.repositorySignature(adminPaths)) return undefined;
-      return { paths, signature, commonDir };
+      return { paths, configFiles, signature, commonDir };
     } catch { return undefined; }
   }
 
@@ -4874,7 +4916,7 @@ export class GitService {
     if (
       canonicalCwd &&
       verified &&
-      (await this.repositorySignature(verified.paths)) === verified.signature
+      (await this.isVerifiedRepoIdentityCurrent(canonicalCwd, verified))
     ) {
       const commonDir = await this.resolveCommonDirPureFs(canonicalCwd);
       if (commonDir && commonDir === verified.commonDir) {
@@ -4889,13 +4931,13 @@ export class GitService {
         );
         if (
           direct !== "fallback" &&
-          (await this.repositorySignature(verified.paths)) === verified.signature
+          (await this.isVerifiedRepoIdentityCurrent(canonicalCwd, verified))
         ) {
           return direct;
         }
       }
     }
-    const repo = this.requireRepository(await this.repository(cwd));
+    const repo = this.requireRepository(await this.verifyAdmissionRepository(cwd));
     return this.stableRead(repo, async () => {
       const registered = await this.managedWorktreeRegistration(
         repo,
@@ -6586,7 +6628,7 @@ export class GitService {
     signal?: AbortSignal,
     options?: GitCreateWorktreeOptions,
   ): Promise<GitCreatedWorktree> {
-    const repo = this.requireRepository(await this.repository(cwd));
+    const repo = this.requireRepository(await this.verifyAdmissionRepository(cwd));
     await this.validateBranchName(repo, branch);
     const requestedOwnershipToken = options?.ownershipToken === undefined
       ? undefined
