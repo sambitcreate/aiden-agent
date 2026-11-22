@@ -68,6 +68,11 @@ export const SCHEDULED_TASK_TRIGGER_LIMITS = {
   runningOverall: 4,
   /** A script check's private state file. */
   checkStateBytes: 8 * 1024,
+  /**
+   * What one trigger run hands the model, in characters: a watch's newest
+   * change first, a link's heading and calls. Held payloads use the same bound.
+   */
+  eventTextChars: 24_000,
 } as const;
 
 /** Link (webhook) limits per task. */
@@ -273,14 +278,50 @@ export function formatScheduledTaskTriggerLabel(trigger: ScheduledTaskTrigger): 
   }
   const every = formatBotWatchInterval(trigger.everyMinutes);
   if (trigger.source.type === "url") {
-    let shown = trigger.source.url;
+    // The whole host, always: only the path is shortened, so an approval card
+    // can't hide where an address really points.
+    let shown = shortened(trigger.source.url, 120);
     try {
       const url = new URL(trigger.source.url);
-      shown = `${url.host}${url.pathname === "/" ? "" : url.pathname}`;
+      shown = `${url.host}${url.pathname === "/" ? "" : shortened(url.pathname, 40)}`;
     } catch {
       // Keep the address as written.
     }
-    return `Every ${every}, when ${shortened(shown, 80)} changes`;
+    return `Every ${every}, when ${shown} changes`;
   }
   return `Every ${every}, when ${shortened(trigger.source.script, 60)} prints something`;
+}
+
+function privateIpv4(host: string): boolean {
+  const parts = host.split(".");
+  if (parts.length !== 4 || !parts.every((part) => /^\d{1,3}$/u.test(part))) return false;
+  const [a, b] = parts.map(Number) as [number, number, number, number];
+  return a === 0 || a === 10 || a === 127 || (a === 169 && b === 254) || (a === 172 && b >= 16 && b <= 31) ||
+    (a === 192 && b === 168) || (a === 100 && b >= 64 && b <= 127);
+}
+
+/**
+ * Whether a watch address points at this computer or a private network: a
+ * loopback, private, link-local or carrier-grade IP literal, `localhost`, or a
+ * `.local`, `.internal` or `.localhost` name. The person's editor may watch
+ * these; a watch the agent proposes may not.
+ */
+export function isPrivateWatchAddress(value: string): boolean {
+  let host: string;
+  try {
+    host = new URL(value).hostname.toLowerCase().replace(/\.$/u, "");
+  } catch {
+    return true;
+  }
+  if (host === "localhost" || /\.(?:localhost|local|internal)$/u.test(host)) return true;
+  if (privateIpv4(host)) return true;
+  if (host.startsWith("[") && host.endsWith("]")) {
+    const ip = host.slice(1, -1);
+    if (ip === "::" || ip === "::1") return true;
+    const mapped = /^::ffff:(\d+\.\d+\.\d+\.\d+)$/u.exec(ip);
+    if (mapped) return privateIpv4(mapped[1]!);
+    if (/^::ffff:[0-9a-f]{1,4}:[0-9a-f]{1,4}$/u.test(ip)) return true;
+    return /^f[cd][0-9a-f]{0,2}:/u.test(ip) || /^fe[89ab][0-9a-f]?:/u.test(ip);
+  }
+  return false;
 }

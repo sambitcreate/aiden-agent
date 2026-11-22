@@ -49,6 +49,13 @@ export interface ScheduledTaskTriggersDependencies {
   linkSecret(taskId: string): Promise<string | null>;
   /** Three failed checks (or one revoked connected app) turned the trigger off: one card in the task's landing chat. */
   paused(task: ScheduledTask, error: string, afterFailures: boolean): Promise<void>;
+  /**
+   * A connected-app task that is on but has no source bound (a save that
+   * stopped before binding it): show that it needs one, since it never checks.
+   */
+  needsSource?(task: ScheduledTask): Promise<void>;
+  /** What the task held was dropped: today's 48 runs were used up. One card where its runs land. */
+  dailyLimit?(task: ScheduledTask, text: string): Promise<void>;
   /** A check's result was saved, so the task's row may show something new. */
   changed?(taskId: string): void;
   now(): number;
@@ -103,6 +110,20 @@ function combineHeld(link: boolean, older: string, newer: string | undefined): s
 
 const errorText = (error: unknown) => (error instanceof Error ? error.message : String(error));
 
+/** A script watch's private state file (`AIDEN_CHECK_STATE`) in the check state folder. */
+export function taskCheckStateFile(dir: string, taskId: string): string {
+  return path.join(dir, `${taskId.replace(/[^A-Za-z0-9_-]/gu, "_")}.state`);
+}
+
+/** A chat that used its task runs for the hour has room again within the hour. */
+export const CHAT_BUDGET_RETRY_MS = 60 * 60_000;
+/** A link's log changes at most this often reach the task list. */
+const LOG_BROADCAST_MS = 2_000;
+
+/** A run that went ahead but delivered nothing: its chat was busy or out of task runs this hour. */
+const undelivered = (run: ScheduledRun | undefined) =>
+  run?.result === "skipped" && (run.reason === "chat_busy" || run.reason === "chat_budget");
+
 export function createScheduledTaskTriggers(deps: ScheduledTaskTriggersDependencies) {
   const slots = createSlots(SCHEDULED_TASK_TRIGGER_LIMITS.runningOverall);
   let stopped = true;
@@ -113,23 +134,29 @@ export function createScheduledTaskTriggers(deps: ScheduledTaskTriggersDependenc
       if (stopped) return { settled: false };
       const runId = `event:${routine.id}:${event.eventId}`;
       const recorded = await deps.findRun(routine.id, runId);
-      if (recorded && recorded.result !== "blocked") return { settled: true };
+      // A run that delivered nothing (Aiden may have stopped before its
+      // payload was held again) runs again, like one that was cut short.
+      if (recorded && recorded.result !== "blocked" && !undelivered(recorded)) return { settled: true };
       try {
         const link = routine.task.trigger.kind === "webhook";
         const run = await deps.runEvent(routine.id, {
           kind: "event",
           eventId: event.eventId,
           source: link ? "webhook" : "watch",
-          payload: link ? linkEventText(event.payload) : event.payload,
+          payload: link ? linkEventText(event.payload, TASK_TRIGGER_PAYLOAD_CHARS) : event.payload,
         }, runId);
         // Its chat was busy or out of task runs this hour: what happened waits
-        // for the next allowed run instead of being lost.
-        if (!stopped && run.result === "skipped" && (run.reason === "chat_busy" || run.reason === "chat_budget")) {
+        // for the next allowed run instead of being lost, and the run doesn't
+        // count toward the day's 48. A chat out of runs has room within the hour.
+        if (!stopped && undelivered(run)) {
           await dispatcher.requeue(routine.id, routine.id, {
             eventId: `${event.eventId.slice(0, 120)}~${deps.now().toString(36)}`,
             payload: event.payload,
             ...(event.watchRevision !== undefined ? { watchRevision: event.watchRevision } : {}),
-          }, (older, newer) => combineHeld(link, older, newer));
+          }, (older, newer) => combineHeld(link, older, newer), {
+            refund: true,
+            ...(run.reason === "chat_budget" ? { notBefore: deps.now() + CHAT_BUDGET_RETRY_MS } : {}),
+          });
         }
         // A run cut short by Aiden stopping runs again at the next start.
         return { settled: !stopped };
@@ -158,6 +185,13 @@ export function createScheduledTaskTriggers(deps: ScheduledTaskTriggersDependenc
     // Calls inside a link's gap are batched (20 at most); a watch keeps its
     // newest change first, then earlier ones not yet delivered.
     mergeHeld: (held, incoming, routine) => combineHeld(routine.task.trigger.kind === "webhook", held.payload, incoming.payload),
+    heldDropped: async (routine) => {
+      const link = routine.task.trigger.kind === "webhook";
+      const text = `Scheduled task "${routine.task.name}" already ran ${SCHEDULED_TASK_TRIGGER_LIMITS.perDay} times today, so ${link ? "the calls" : "the change"} it was holding ${link ? "were" : "was"} dropped. It runs again tomorrow.`;
+      if (link) await deps.store.appendLog(routine.id, { at: deps.now(), outcome: "daily_limit", preview: "Held calls dropped: today's runs were used up." });
+      await deps.dailyLimit?.(routine.task, text);
+      deps.changed?.(routine.id);
+    },
     now: deps.now,
     timeZone: deps.timeZone,
     setTimer: deps.setTimer,
@@ -167,7 +201,7 @@ export function createScheduledTaskTriggers(deps: ScheduledTaskTriggersDependenc
   async function checkState(taskId: string): Promise<string> {
     const dir = await deps.checkStateDir();
     await fs.mkdir(dir, { recursive: true, mode: 0o700 });
-    const file = path.join(dir, `${taskId.replace(/[^A-Za-z0-9_-]/gu, "_")}.state`);
+    const file = taskCheckStateFile(dir, taskId);
     const handle = await fs.open(file, "a", 0o600);
     await handle.close();
     return file;
@@ -234,14 +268,33 @@ export function createScheduledTaskTriggers(deps: ScheduledTaskTriggersDependenc
     checked: (routine) => deps.changed?.(routine.id),
   });
 
+  /** A busy link tells the task list at most once every 2 seconds, and always about its latest call. */
+  const logBroadcasts = new Map<string, { at: number; pending?: { cancel(): void } }>();
+  function broadcastLog(taskId: string): void {
+    if (!deps.changed) return;
+    const now = deps.now();
+    const state = logBroadcasts.get(taskId) ?? { at: -Infinity };
+    if (state.pending) return;
+    if (now - state.at >= LOG_BROADCAST_MS) {
+      logBroadcasts.set(taskId, { at: now });
+      deps.changed(taskId);
+      return;
+    }
+    state.pending = deps.setTimer(() => {
+      logBroadcasts.set(taskId, { at: deps.now() });
+      deps.changed?.(taskId);
+    }, state.at + LOG_BROADCAST_MS - now);
+    logBroadcasts.set(taskId, state);
+  }
+
   const webhook = createTaskLinkWebhook({
     active: () => !stopped && deps.isActive(),
     findByToken: (token) => deps.store.findByToken(token),
     secret: (taskId) => deps.linkSecret(taskId),
     emit: (taskId, event) => dispatcher.emit(taskId, taskId, event),
-    log: async (taskId, entry) => {
-      await deps.store.appendLog(taskId, entry);
-      deps.changed?.(taskId);
+    log: async (taskId, entry, options) => {
+      await deps.store.appendLog(taskId, entry, options);
+      broadcastLog(taskId);
     },
     now: deps.now,
   });
@@ -249,11 +302,16 @@ export function createScheduledTaskTriggers(deps: ScheduledTaskTriggersDependenc
   return {
     webhook,
     /** Arms every enabled watch and replays accepted events after a restart. */
-    start(): Promise<void> {
+    async start(): Promise<void> {
       stopped = false;
       dispatcher.resume();
       watches.resume();
-      return this.rearm();
+      await this.rearm();
+      if (!deps.needsSource) return;
+      for (const routine of await deps.store.all()) {
+        if (!routine.task.enabled || routine.task.trigger.kind !== "connector" || routine.connectorSource) continue;
+        await deps.needsSource(routine.task).catch((error: unknown) => deps.onError?.(error));
+      }
     },
     /** Re-read the tasks: watch what's new, stop watching what's gone. */
     async rearm(): Promise<void> {
@@ -269,6 +327,8 @@ export function createScheduledTaskTriggers(deps: ScheduledTaskTriggersDependenc
     },
     stop(): void {
       stopped = true;
+      for (const state of logBroadcasts.values()) state.pending?.cancel();
+      logBroadcasts.clear();
       watches.dispose();
       dispatcher.dispose();
     },

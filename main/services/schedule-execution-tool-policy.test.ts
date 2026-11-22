@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
 import * as crypto from "node:crypto";
+import * as fs from "node:fs/promises";
+import * as os from "node:os";
 import * as path from "node:path";
 import test from "node:test";
 import { analyticsSettled, captureAnalyticsEvents } from "./analytics/test-support.js";
@@ -13,6 +15,7 @@ import * as geminiUsageScope from "../../renderer/shared/gemini-usage-scope.js";
 import * as modelVisibility from "../../renderer/shared/model-visibility.js";
 import { APPROVAL_TOOL_NAMES } from "./coding-tools.js";
 import { generationModelMeta } from "./chat-model-selection-meta.js";
+import { createChatStore } from "./chat-store-core.js";
 import * as conversationSurfaceGeneration from "./conversation-surface-generation.js";
 import * as scheduleGuard from "./schedule-guard.js";
 import * as scheduleNotification from "./schedule-notification.js";
@@ -70,6 +73,8 @@ async function executionHarness(
     workspace?: { id: string };
     /** Runs while the generation is going, after it switched the chat to the task's model. */
     duringRun?: (chat: { providerId?: string; model?: string }) => void;
+    /** The real chat store, so what the run saves goes through its own rules. */
+    chatStore?: ReturnType<typeof createChatStore>;
   } = {},
 ) {
   const started: StartedGeneration[] = [];
@@ -92,7 +97,7 @@ async function executionHarness(
       ipcMain: { broadcast: () => undefined },
       logger: { warn: () => undefined },
     },
-    "./chat-store.js": {
+    "./chat-store.js": extra.chatStore ? { chatStore: extra.chatStore } : {
       chatStore: {
         get: async (id: string) => extra.chats?.[id] ?? chat,
         appendMessage: async (
@@ -163,6 +168,16 @@ async function executionHarness(
           options: StartedGeneration["options"],
         ) => {
           started.push({ params, options });
+          if (extra.chatStore && params.chatId) {
+            // As the generation client saves its answer: with the model fields
+            // `generationModelMeta` gives for the options the run passed.
+            await extra.chatStore.appendMessage(params.chatId, { role: "assistant", content: "Done.", model: params.model }, {
+              expectedWorkspaceId: "workspace-1",
+              ...generationModelMeta(params, options.keepChatModel),
+            });
+            owner.send(...finish);
+            return true;
+          }
           // The real generation saves its answer with the model fields
           // `generationModelMeta` gives, which the store copies onto the chat.
           const target = params.chatId ? extra.chats?.[params.chatId] : undefined;
@@ -226,10 +241,11 @@ async function executionHarness(
   return {
     async run(scheduled: ScheduledTask) {
       current = scheduled;
+      const before = started.length;
       const run = await execution.run(scheduled);
       assert.equal(run.result, "success", run.error);
-      assert.equal(started.length, 1, "exactly one generation starts");
-      return started[0]!;
+      assert.equal(started.length, before + 1, "exactly one generation starts");
+      return started[started.length - 1]!;
     },
     runToEnd: (scheduled: ScheduledTask) => execution.run((current = scheduled)),
     appended,
@@ -331,6 +347,28 @@ test("a task made in a chat runs there under the task's own policy, its prompt s
   assert.equal(prompt?.chatId, "chat-origin");
   assert.equal(prompt?.message.notice?.source, "schedule");
   assert.match(prompt?.message.content ?? "", /Summarize my inbox\./u);
+});
+
+test("a task run in its chat saves its prompt and answer there, and the stored chat keeps the person's model", async (t) => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-task-chat-model-"));
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const chats = createChatStore(async () => directory);
+  const chosen = await chats.create({ workspaceId: "workspace-1", providerId: "chat-provider", model: "chat-model" });
+  const unset = await chats.create({ workspaceId: "workspace-1" });
+  const h = await executionHarness(notReady, undefined, { chatStore: chats, workspace: { id: "workspace-1" } });
+  for (const chat of [chosen, unset]) {
+    const { params } = await h.run(task({ id: `task-${chat.id}`, workspaceId: "workspace-1", originChatId: chat.id }));
+    assert.equal(params.chatId, chat.id);
+  }
+
+  const after = await chats.get(chosen.id);
+  assert.deepEqual([after?.providerId, after?.model], ["chat-provider", "chat-model"], "the chat stays on the model the person chose");
+  const saved = after?.messages ?? [];
+  assert.match(saved[0]?.content ?? "", /Summarize my inbox\./u, "the prompt is saved in the chat");
+  assert.equal(saved[saved.length - 1]?.content, "Done.");
+  assert.equal(saved[saved.length - 1]?.model, "model-1", "the answer says which model wrote it");
+  const afterUnset = await chats.get(unset.id);
+  assert.deepEqual([afterUnset?.providerId, afterUnset?.model], [undefined, undefined], "a chat with no model doesn't take the task's");
 });
 
 test("a task answering in a chat with another model leaves the chat on its own model", async () => {

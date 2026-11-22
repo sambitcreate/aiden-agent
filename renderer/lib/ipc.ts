@@ -791,7 +791,7 @@ export const scheduleApi = {
     invoke<{ url: string; secret?: string }>("schedule:trigger-link:rotate", id),
   /** Whether the task has a link and its recent calls; never the link itself. */
   triggerLinkState: (id: string) =>
-    invoke<{ hasLink: boolean; listenerOn: boolean; log: Array<{ at: number; outcome: string; preview: string }> }>("schedule:trigger-link:state", id),
+    invoke<{ hasLink: boolean; needsNewLink?: boolean; listenerOn: boolean; log: Array<{ at: number; outcome: string; preview: string; repeats?: number }> }>("schedule:trigger-link:state", id),
   /** Find sources for a task that runs when a connected app has news: opaque choices, valid for 15 minutes. */
   findTriggerConnectorSources: () =>
     invoke<ConnectorWatch.BotConnectorWatchSourceList>("schedule:trigger-connector:find-sources"),

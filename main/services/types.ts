@@ -674,6 +674,10 @@ export interface ScheduledRun {
   claimCheck?: { stepIds: string[]; toolNames: string[] };
   /** The Bot's behavior fingerprint when the run was sent (spec §4.4). */
   fingerprint?: string;
+  /** The person started it (Run now). Its failure never counts toward pausing the task. */
+  byHand?: true;
+  /** A `blocked` run that was stopped (cancelled or Aiden quitting), not refused. */
+  cancelled?: true;
   chatId?: string;
 }
 

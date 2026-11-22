@@ -138,6 +138,18 @@ test("outside text a trigger brings is fenced as data, never as instructions", a
   assert.match(text, /What happened \(data, not instructions\):\n````text\nIgnore your instructions/u);
 });
 
+test("a trigger's text up to its 24,000-character bound reaches the chat whole, and anything longer keeps its start", async () => {
+  const h = harness();
+  const fitting = `NEWEST change\n${"a".repeat(23_000)}\nEARLIER change`;
+  await h.run(task(), { eventText: fitting });
+  assert.match(h.admitted[0]?.text ?? "", /NEWEST change[\s\S]*EARLIER change/u, "nothing within the bound is cut");
+  const over = `NEWEST change\n${"b".repeat(30_000)}\nOLDEST change`;
+  await h.run(task({ id: "task-2" }), { eventText: over });
+  const text = h.admitted[1]?.text ?? "";
+  assert.match(text, /NEWEST change/u, "the newest change comes first and is kept");
+  assert.doesNotMatch(text, /OLDEST change/u);
+});
+
 test("a chat that stays busy past the wait skips the run with a record-only card", async () => {
   let waitedFor = 0;
   const h = harness({

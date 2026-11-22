@@ -7,9 +7,10 @@ import type { BotWatchCheck } from "./bot-routine-events/watch-sources.js";
 import { runScheduledScript } from "./schedule-script.js";
 import type { ScheduledRunTrigger } from "./schedule-service-core.js";
 import { createScheduledTaskTriggers } from "./scheduled-task-triggers.js";
+import { UNKNOWN_LINK_CALLS_PER_MINUTE } from "./scheduled-task-link-trigger.js";
 import { compareImcpWatch, type ConnectorWatchBaseline, type ConnectorWatchItem } from "./bot-routine-events/connector-watch-imcp.js";
 import type { BotConnectorWatchBinding } from "./bot-routine-events/connector-types.js";
-import { TaskConnectorChoiceError, connectorTriggerForSave, createTaskConnectorTriggers, type TaskConnectorTriggers } from "./scheduled-task-connector-trigger.js";
+import { TaskConnectorChoiceError, connectorTriggerForSave, createTaskConnectorTriggers, saveConnectorTask, type TaskConnectorTriggers } from "./scheduled-task-connector-trigger.js";
 import type { ScheduledTaskConnectorTrigger } from "../../renderer/shared/scheduled-task-trigger.js";
 import { createScheduledTaskTriggerStore, hashTaskLinkToken } from "./scheduled-task-triggers-store.js";
 import type { ScheduledRun, ScheduledTask } from "./types.js";
@@ -44,6 +45,9 @@ function harness(options: { tasks?: ScheduledTask[]; checks?: BotWatchCheck[]; r
   const events: Array<{ taskId: string; event: Extract<ScheduledRunTrigger, { kind: "event" }>; runId: string }> = [];
   const cards: Array<{ taskId: string; error: string; afterFailures: boolean }> = [];
   const runs = new Map<string, ScheduledRun>();
+  const notices: Array<{ taskId: string; text: string }> = [];
+  const released: string[] = [];
+  const needsSource: string[] = [];
   const persistence = new MemoryPersistence<unknown>({ version: 1, tasks: {} });
   const store = createScheduledTaskTriggerStore({
     persistence,
@@ -52,6 +56,7 @@ function harness(options: { tasks?: ScheduledTask[]; checks?: BotWatchCheck[]; r
       const index = tasks.findIndex((task) => task.id === taskId);
       tasks[index] = { ...tasks[index]!, enabled: false, lastError: reason, updatedAt: tasks[index]!.updatedAt + 1 };
     },
+    released: (taskId) => { released.push(taskId); },
     now: () => clock,
   });
   const triggers = createScheduledTaskTriggers({
@@ -75,6 +80,8 @@ function harness(options: { tasks?: ScheduledTask[]; checks?: BotWatchCheck[]; r
     linkSecret: async () => null,
     ...(options.connector ? { connector: options.connector } : {}),
     paused: async (task, error, afterFailures) => { cards.push({ taskId: task.id, error, afterFailures }); },
+    dailyLimit: async (task, text) => { notices.push({ taskId: task.id, text }); },
+    needsSource: async (task) => { needsSource.push(task.id); },
     now: () => clock,
     timeZone: () => "UTC",
     // Timers that are already due fire on the next tick when asked; later ones wait for the test.
@@ -86,7 +93,7 @@ function harness(options: { tasks?: ScheduledTask[]; checks?: BotWatchCheck[]; r
   });
   const bytes = (text: string): BotWatchCheck => ({ ok: true, bytes: new TextEncoder().encode(text) });
   return {
-    tasks, store, triggers, events, cards, persistence, bytes,
+    tasks, store, triggers, events, cards, persistence, bytes, runs, notices, released, needsSource,
     advance: (ms: number) => { clock += ms; },
     async check(taskId = "task-1") {
       const outcome = await triggers.checkNow(taskId);
@@ -381,7 +388,10 @@ test("a skipped link batch stays bounded to 20 calls and says how many were drop
   assert.match(link.events[1]?.event.payload ?? "", /^15 calls arrived/u, "this batch was skipped: the chat used its hourly share");
   for (let n = 16; n <= 25; n += 1) assert.equal(await link.call({ n }), 202);
 
+  // A chat out of task runs for the hour has room again within the hour, not after the link's gap.
   await runHeld(link, 10 * MINUTE, 3);
+  assert.equal(link.events.length, 2, "nothing retries while the chat's hour is used up");
+  await runHeld(link, 50 * MINUTE, 3);
   const payload = link.events[2]?.event.payload ?? "";
   assert.match(payload, /^20 calls arrived while the task waited\. 5 more calls were dropped\./u);
   assert.match(payload, /Call 1:\n\{\n {2}"n": 6\n\}/u, "the oldest calls are the ones dropped");
@@ -411,7 +421,7 @@ test("a watched change whose run was skipped for a busy chat is delivered in the
   assert.equal(await second.check(), "changed");
   second.advance(MINUTE);
   assert.equal(await second.check(), "changed");
-  await runHeld(second, 5 * MINUTE, 2);
+  await runHeld(second, 60 * MINUTE, 2);
   const combined = second.events[1]?.event.payload ?? "";
   assert.match(combined, /down[\s\S]*An earlier change that wasn't delivered yet:[\s\S]*degraded/u);
   value.triggers.stop();
@@ -557,4 +567,159 @@ test("saving a connected-app task needs a fresh choice, unless an edit keeps wat
   const found = await connector.findSources(new AbortController().signal);
   const fresh = connectorTriggerForSave({ ...draft, sourceChoiceId: found.choices[0]!.id }, saved, connector.takeChoice);
   assert.equal(fresh.source?.binding.adapter, "imcp-mail-v1");
+});
+
+test("a save uses up its Find sources choice, so the same source can't be saved into a second task", async () => {
+  const { connector } = connectedMail();
+  const found = await connector.findSources(new AbortController().signal);
+  const draft = { ...(mailTask().trigger as ScheduledTaskConnectorTrigger), sourceChoiceId: found.choices[0]!.id };
+  const bound: string[] = [];
+  let saves = 0;
+  const steps = (id: string, fail = false) => ({
+    connector,
+    save: async (trigger: ScheduledTaskConnectorTrigger) => {
+      saves += 1;
+      if (fail) throw new Error("This automation changed. Refresh it before trying again.");
+      return { id, trigger };
+    },
+    bind: async (taskId: string) => { bound.push(taskId); },
+    needsSource: async () => undefined,
+  });
+
+  await assert.rejects(saveConnectorTask(draft, undefined, steps("task-1", true)), /changed/u);
+  const saved = await saveConnectorTask(draft, undefined, steps("task-1"));
+  assert.equal(saved.trigger.source.resourceLabel, "Inbox");
+  assert.deepEqual(bound, ["task-1"], "a save that didn't land leaves the choice for the retry");
+  await assert.rejects(saveConnectorTask(draft, undefined, steps("task-2")), /expired/u);
+  assert.equal(saves, 2, "the second task isn't saved");
+  assert.deepEqual(bound, ["task-1"]);
+});
+
+test("a connected-app task saved without its source says it needs one, at the save and after a restart", async () => {
+  const { connector } = connectedMail();
+  const found = await connector.findSources(new AbortController().signal);
+  const marked: string[] = [];
+  const failed = saveConnectorTask(
+    { ...(mailTask().trigger as ScheduledTaskConnectorTrigger), sourceChoiceId: found.choices[0]!.id },
+    undefined,
+    {
+      connector,
+      save: async (trigger) => ({ id: "task-1", trigger }),
+      bind: async () => { throw new Error("disk full"); },
+      needsSource: async (taskId) => { marked.push(taskId); },
+    },
+  );
+  await assert.rejects(failed, /saved, but its source couldn't be connected/u);
+  assert.deepEqual(marked, ["task-1"]);
+
+  // After a restart (or a save that stopped before binding), the task is on but never checks: say so.
+  const off = { ...mailTask(), id: "task-off", enabled: false };
+  const value = harness({ tasks: [mailTask(), off], connector });
+  await value.triggers.start();
+  assert.deepEqual(value.needsSource, ["task-1"], "only the task that is on and unbound");
+  assert.equal(await value.check(), "skipped");
+  await bindMail(value, connector);
+  value.triggers.stop();
+  await value.triggers.start();
+  assert.deepEqual(value.needsSource, ["task-1"], "a bound task isn't flagged again");
+  value.triggers.stop();
+});
+
+test("an unknown link token is refused without reading the tasks or writing the file, and a flood of them is shed", async () => {
+  const link = linkHarness();
+  await link.setUp();
+  let writes = 0;
+  const update = link.persistence.update.bind(link.persistence);
+  link.persistence.update = (mutation) => { writes += 1; return update(mutation); };
+  for (let n = 0; n < UNKNOWN_LINK_CALLS_PER_MINUTE; n += 1) {
+    const admitted = await link.triggers.webhook.admit({ token: `unknown${String(n).padStart(20, "0")}`, contentType: "application/json" });
+    assert.deepEqual(admitted, { status: 404 });
+  }
+  assert.equal(writes, 0, "made-up tokens never touch the bookkeeping file");
+  assert.deepEqual(await link.triggers.webhook.admit({ token: "unknown-over-the-limit-0000", contentType: "application/json" }), { status: 429 });
+  assert.equal(await link.call({ a: 1 }), 429, "during a flood every call is shed before a lookup");
+  await link.store.linkState("task-1");
+  assert.equal(writes, 0, "an open link panel only reads");
+  link.advance(MINUTE + 1);
+  assert.equal(await link.call({ a: 1 }), 202, "the real link works once the flood passes");
+  link.triggers.stop();
+});
+
+test("bad calls don't use a link's 60 a minute and share one log entry", async () => {
+  const link = linkHarness();
+  await link.setUp();
+  for (let n = 0; n < 25; n += 1) assert.equal(await link.call("{not json"), 400);
+  assert.equal(await link.call({ a: 1 }), 202, "real calls still get through");
+  const state = await link.store.linkState("task-1");
+  assert.deepEqual(state?.log.map((entry) => [entry.outcome, entry.repeats ?? 0]), [["ran", 0], ["invalid", 24]]);
+  link.triggers.stop();
+});
+
+test("a long link batch reaches the run with its heading and every call, inside one bound", async () => {
+  const link = linkHarness();
+  await link.setUp();
+  assert.equal(await link.call({ n: 0 }), 202);
+  for (let n = 1; n <= 25; n += 1) assert.equal(await link.call({ n, filler: "x".repeat(1_500) }), 202);
+  await runHeld(link, 10 * MINUTE, 2);
+  const payload = link.events[1]?.event.payload ?? "";
+  assert.ok(payload.length <= 24_000, `the run's text is within the bound (${payload.length})`);
+  assert.match(payload, /^20 calls arrived while the task waited\. 5 more calls were dropped\./u);
+  for (const n of [1, 20]) assert.match(payload, new RegExp(`Call ${n}:\\n`, "u"));
+  assert.match(payload, /"n": 6,/u, "the oldest kept call is there");
+  assert.match(payload, /"n": 25,/u, "and so is the newest");
+  link.triggers.stop();
+});
+
+test("a skipped run doesn't count toward the day's runs, and held calls dropped at 48 leave a card and a log line", async () => {
+  const link = linkHarness({ kind: "webhook", gapMinutes: 10 }, [{ result: "skipped", reason: "chat_busy" }]);
+  await link.setUp();
+  assert.equal(await link.call({ n: 0 }), 202);
+  let [routine] = await link.store.list("task-1");
+  assert.equal(routine!.day?.count, 0, "the busy chat's skip gave its run back");
+  assert.ok(routine!.held, "and the call waits for the next run");
+
+  // Today's runs are used up while the call waits: it is dropped, visibly.
+  await link.store.mutate("task-1", "task-1", (current) => ({ next: { ...current, day: { key: current.day!.key, count: 48 } }, result: undefined }));
+  await runHeld(link, 10 * MINUTE, 2);
+  for (let tick = 0; tick < 5; tick += 1) await new Promise((resolve) => setTimeout(resolve, 0));
+  [routine] = await link.store.list("task-1");
+  assert.equal(routine!.held, undefined);
+  assert.equal(link.events.length, 1);
+  assert.equal(link.notices.length, 1);
+  assert.match(link.notices[0]!.text, /already ran 48 times today/u);
+  assert.equal((await link.store.linkState("task-1"))?.log[0]?.outcome, "daily_limit");
+  link.triggers.stop();
+});
+
+test("a skipped run recorded just before Aiden stopped runs again at the next start", async () => {
+  const value = harness();
+  await value.store.mutate("task-1", "task-1", (current) => ({
+    next: { ...current, running: [{ eventId: "change-1", payload: "Status: degraded", at: 1 }] },
+    result: undefined,
+  }));
+  value.runs.set("event:task-1:change-1", { id: "event:task-1:change-1", taskId: "task-1", startedAt: 1, finishedAt: 1, result: "skipped", reason: "chat_busy", output: "" });
+  await value.triggers.start();
+  await value.triggers.idle();
+  assert.equal(value.events.length, 1, "the undelivered change runs instead of counting as settled");
+  assert.match(value.events[0]!.event.payload, /degraded/u);
+  value.triggers.stop();
+});
+
+test("changing a link task to a schedule or removing it releases its secret, and a new signature header asks for a new link", async () => {
+  const link = linkHarness();
+  await link.setUp();
+  link.tasks[0] = { ...link.tasks[0]!, trigger: { kind: "webhook", gapMinutes: 10, signatureHeader: "x-signature-256" }, updatedAt: 2 };
+  assert.equal((await link.store.linkState("task-1"))?.needsNewLink, false, "nothing changes until the bookkeeping catches up");
+  await link.triggers.rearm();
+  assert.equal((await link.store.linkState("task-1"))?.needsNewLink, true);
+  await link.store.setTokenHash("task-1", hashTaskLinkToken("R".repeat(43)));
+  assert.equal((await link.store.linkState("task-1"))?.needsNewLink, false, "rotating clears it");
+  assert.deepEqual(link.released, []);
+  link.tasks[0] = { ...link.tasks[0]!, trigger: { kind: "watch", source: { type: "url", url: "https://example.com/" }, everyMinutes: 15 }, updatedAt: 3 };
+  await link.triggers.rearm();
+  assert.deepEqual(link.released, ["task-1"]);
+  link.tasks.splice(0, 1);
+  await link.triggers.rearm();
+  assert.deepEqual(link.released, ["task-1"], "a URL watch leaves nothing behind");
+  link.triggers.stop();
 });

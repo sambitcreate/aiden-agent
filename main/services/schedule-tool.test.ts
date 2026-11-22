@@ -1734,7 +1734,7 @@ test("a trigger Aiden proposes survives approval unchanged, shows its label on t
   const created = jsonResult(await tool.execute("create-trigger", args));
   assert.deepEqual(fake.tasks[0]?.trigger, trigger, "exactly what was approved is saved");
   assert.equal(fake.tasks[0]?.cron, "");
-  assert.equal(created.link, "shown_to_person");
+  assert.equal(created.link, "person_creates_in_task_details");
   assert.equal((created.task as Record<string, unknown>).trigger, approval.details.whenLabel);
   assert.doesNotMatch(JSON.stringify(created), /hooks\/tasks/u, "no link reaches the agent");
 
@@ -1774,4 +1774,20 @@ test("Aiden can't create a task that runs when a connected app has news; the per
   await assert.rejects(tool.execute("create-connector", args), /Find sources/u);
   assert.equal(fake.tasks.length, 0, "nothing is saved");
   assert.throws(() => canonicalizeAssistantScheduleToolArguments({ action: "create", name: "New mail", prompt: "Sort new mail.", trigger }), /Find sources/u);
+});
+
+test("a watch Aiden proposes can't point at this computer or a private network, and its card shows the whole host", async () => {
+  const base = { action: "create", name: "Status", prompt: "Tell me what changed." };
+  const watch = (url: string) => ({ kind: "watch", source: { type: "url", url }, everyMinutes: 30 });
+  for (const url of ["https://192.168.1.10/status", "https://10.0.0.2/", "https://169.254.169.254/latest", "https://printer.local/", "https://build.internal/", "https://[::1]/", "https://[fd00::1]/", "http://localhost:8080/"]) {
+    assert.throws(() => canonicalizeAssistantScheduleToolArguments({ ...base, trigger: watch(url) }), /private network/u, url);
+    const fake = fakeDependencies();
+    const tool = createScheduleTaskTool({ kind: "standard", modelSelection: ASSISTANT_MODEL_SELECTION }, fake.dependencies);
+    await assert.rejects(tool.execute("create-private", { ...base, trigger: watch(url) }), /private network/u, url);
+    assert.equal(fake.tasks.length, 0);
+  }
+  const host = "github.com.account-security-check.example.net";
+  const proposal = prepareAssistantScheduleProposal({ ...base, trigger: watch(`https://${host}/${"a".repeat(120)}`) });
+  assert.ok(proposal.details.whenLabel?.includes(host), "the full host is on the card");
+  assert.ok((proposal.details.whenLabel?.length ?? 0) < 160, "only the path is shortened");
 });

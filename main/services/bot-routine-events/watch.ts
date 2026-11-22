@@ -319,6 +319,11 @@ export function createEventWatches<R extends EventRoutine>(dependencies: EventWa
           const { lastError: _error, unsettledFailure: _failure, pending: _oldPending, ...rest } = state;
           const watch: BotWatchState = { ...rest, failures: 0, hash, connectorBaseline: semantic.baseline,
             connectorItemCount: semantic.itemCount, lastCheckAt: checkedAt, nextCheckAt };
+          // A Bot's Composio calendar reports what's already ahead on its first
+          // check. Chat tasks keep their source in `connectorSource`, not
+          // `connector`, so they never take this exception: a task's first
+          // check always only records a baseline (deliberate; see
+          // docs/scheduled-task-triggers.md).
           if (semantic.changeCount === 0 || !state.connectorBaseline && fresh.connector?.binding.adapter !== "composio-calendar-v1") {
             const outcome = state.connectorBaseline ? "no_change" as const : "baseline" as const;
             return { next: { ...fresh, watch: { ...watch, lastResult: outcome } }, result: { outcome, routine: { ...fresh, watch }, hadFailure } };

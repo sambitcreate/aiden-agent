@@ -64,6 +64,8 @@ export interface EventRoutineDispatcherDependencies<R extends EventRoutine> {
    * already held. Without it the newest wins; a link trigger batches them.
    */
   mergeHeld?(held: BotEventReceipt, incoming: { eventId: string; payload: string }, routine: R): string;
+  /** A held event was dropped because the day's runs were used up; without it the drop is silent (Bots). */
+  heldDropped?(routine: R, held: BotEventReceipt): Promise<void>;
   now(): number;
   timeZone(): string;
   setTimer(fn: () => void, ms: number): { cancel(): void };
@@ -236,6 +238,7 @@ export function createEventRoutineDispatcher<R extends EventRoutine>(dependencie
     const now = dependencies.now();
     const today = dayKey(now, dependencies.timeZone());
     let retryAt: number | undefined;
+    let dropped: { routine: R; held: BotEventReceipt } | undefined;
     const claimed = await dependencies.store.mutate(ownerKey, routineId, async (routine) => {
       if (!routine.held || !routine.enabled) return { result: undefined };
       // Still inside the 5-minute gap (a newer event ran since this was held),
@@ -246,7 +249,10 @@ export function createEventRoutineDispatcher<R extends EventRoutine>(dependencie
         return { result: undefined };
       }
       const count = routine.day?.key === today ? routine.day.count : 0;
-      if (count >= limitsOf(routine).perDay) return { next: { ...routine, held: undefined }, result: undefined };
+      if (count >= limitsOf(routine).perDay) {
+        dropped = { routine, held: routine.held };
+        return { next: { ...routine, held: undefined }, result: undefined };
+      }
       const event = routine.held;
       const execution = await prepare(routine);
       return {
@@ -256,6 +262,7 @@ export function createEventRoutineDispatcher<R extends EventRoutine>(dependencie
     });
     if (claimed) await claimAndStart(claimed.routine, claimed.event, armedFor);
     else if (retryAt !== undefined) armHeld(ownerKey, routineId, retryAt, armedFor);
+    if (dropped) await dependencies.heldDropped?.(dropped.routine, dropped.held).catch((error: unknown) => dependencies.onError?.(error));
   }
 
   async function emit(ownerKey: string, routineId: string, event: BotRoutineEvent, armedFor: number): Promise<BotRoutineEventOutcome> {
@@ -346,8 +353,12 @@ export function createEventRoutineDispatcher<R extends EventRoutine>(dependencie
      * busy): hold its payload again for the next allowed run. `combine` joins
      * it (older) with anything already held (newer); the held event keeps its
      * id, otherwise the payload is held under `eventId`, which must be new.
+     * `refund` gives back the run's place in the day's count, since nothing
+     * was delivered; `notBefore` keeps it (and anything else) waiting until
+     * then, by moving the gap's start.
      */
-    requeue(ownerKey: string, routineId: string, event: BotRoutineEvent, combine: (older: string, newer: string | undefined) => string): Promise<void> {
+    requeue(ownerKey: string, routineId: string, event: BotRoutineEvent, combine: (older: string, newer: string | undefined) => string,
+      options: { refund?: boolean; notBefore?: number } = {}): Promise<void> {
       const armedFor = generation;
       return admitting((async () => {
         if (!live(armedFor)) return;
@@ -357,7 +368,13 @@ export function createEventRoutineDispatcher<R extends EventRoutine>(dependencie
           const held = routine.held
             ? { ...routine.held, payload }
             : { eventId: event.eventId, payload, at: dependencies.now(), ...(event.watchRevision !== undefined ? { watchRevision: event.watchRevision } : {}) };
-          return { next: { ...routine, held }, result: (routine.lastRunAt ?? 0) + limitsOf(routine).minGapMs };
+          const gap = limitsOf(routine).minGapMs;
+          const lastRunAt = options.notBefore !== undefined ? Math.max(routine.lastRunAt ?? 0, options.notBefore - gap) : routine.lastRunAt;
+          const day = options.refund && routine.day && routine.day.count > 0 ? { ...routine.day, count: routine.day.count - 1 } : routine.day;
+          return {
+            next: { ...routine, held, ...(lastRunAt !== undefined ? { lastRunAt } : {}), ...(day ? { day } : {}) },
+            result: (lastRunAt ?? 0) + gap,
+          };
         });
         if (at !== undefined) armHeld(ownerKey, routineId, at, armedFor);
       })());

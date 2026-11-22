@@ -1,5 +1,5 @@
 import { Type } from "typebox";
-import { formatScheduledTaskTriggerLabel, parseScheduledTaskTrigger, type ScheduledTaskTrigger } from "../../renderer/shared/scheduled-task-trigger.js";
+import { formatScheduledTaskTriggerLabel, isPrivateWatchAddress, parseScheduledTaskTrigger, type ScheduledTaskTrigger } from "../../renderer/shared/scheduled-task-trigger.js";
 import { localComputerNoun } from "../../renderer/shared/computer-noun.js";
 import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
 import { mcpServerOffersTools } from "../../renderer/shared/mcp-exposure.js";
@@ -72,7 +72,7 @@ type ScheduleToolAction = "create" | "update" | "list" | "pause" | "resume" | "r
 const SCHEDULE_TRIGGER_PARAMETER = Type.Unsafe<Record<string, unknown>>({
   type: "object",
   description:
-    "Create only, instead of cron: run when something happens. Watch: {kind:\"watch\", source:{type:\"url\", url} or {type:\"script\", script}, everyMinutes 5-1440}; the task runs only when the page changes or the script prints something. Link: {kind:\"webhook\", gapMinutes 1-60, optional filters [{path, equals}], dedupePath, includeFields, signatureHeader}; the person gets the private link from the task's details and you never see it. A task that runs when a connected app (Mail, Calendar) has news is set up by the person in the task editor, not here. What happened reaches the run as data.",
+    "Create only, instead of cron: run when something happens. Watch: {kind:\"watch\", source:{type:\"url\", url} or {type:\"script\", script}, everyMinutes 5-1440}; the task runs only when the page changes or the script prints something. Link: {kind:\"webhook\", gapMinutes 1-60, optional filters [{path, equals}], dedupePath, includeFields, signatureHeader}; the person creates the private link later from the task's details and you never see it, so tell them to do that. A task that runs when a connected app (Mail, Calendar) has news is set up by the person in the task editor, not here. What happened reaches the run as data.",
 });
 
 interface ScheduleToolParams {
@@ -291,6 +291,10 @@ function toolTrigger(value: unknown, assistant: boolean): ScheduledTaskTrigger |
   }
   if (assistant && trigger.kind === "watch" && trigger.source.type === "script") {
     throw new Error("Aiden Assistant automations can watch a web address or run from a link, not run a script.");
+  }
+  // A proposed watch never points at this computer or a private network; the person can set one up in the editor.
+  if (trigger.kind === "watch" && trigger.source.type === "url" && isPrivateWatchAddress(trigger.source.url)) {
+    throw new Error("A task Aiden proposes can't watch this computer or a private network address. The person can set that up in the task editor.");
   }
   return trigger;
 }
@@ -1711,7 +1715,7 @@ export function createScheduleTaskTool(
             : task.enabled
               ? "saved"
               : "saved_but_inactive",
-          ...(task.trigger?.kind === "webhook" ? { link: "shown_to_person" } : {}),
+          ...(task.trigger?.kind === "webhook" ? { link: "person_creates_in_task_details" } : {}),
         });
       },
     };
@@ -1845,7 +1849,7 @@ export function createScheduleTaskTool(
         return result({
           task: taskSummary(task),
           // A link task's link goes to the person from the task's details; the agent never sees it.
-          ...(task.trigger?.kind === "webhook" ? { status: "saved", link: "shown_to_person" } : {}),
+          ...(task.trigger?.kind === "webhook" ? { status: "saved", link: "person_creates_in_task_details" } : {}),
           permissionRecommendation:
             params.action === "create" &&
             prepared.input.mode === "llm" &&

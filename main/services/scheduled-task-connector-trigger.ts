@@ -55,6 +55,9 @@ const READ_TIMEOUT_MS = 15_000;
 
 export class TaskConnectorChoiceError extends Error {}
 
+/** What a connected-app task that is on but has no source bound shows (it never checks). */
+export const TASK_CONNECTOR_NEEDS_SOURCE = "Needs its source: open the task, choose Find sources and save it.";
+
 const templateOf = (binding: BotConnectorWatchBinding) => (binding.adapter === "imcp-mail-v1" ? "mail_messages" as const : "calendar_upcoming" as const);
 
 /**
@@ -117,6 +120,11 @@ export function createTaskConnectorTriggers(ports: TaskConnectorPorts) {
       return { trigger: { ...rest, source: { ...choice.labels } }, source: structuredClone(choice.source) };
     },
 
+    /** A choice a save used: it can't be saved again, for this task or another. */
+    forgetChoice(id: string): void {
+      choices.delete(id.toLowerCase());
+    },
+
     /** One background check. The first check of a source only records a baseline. */
     async check(
       task: { id: string; trigger: ScheduledTaskConnectorTrigger },
@@ -169,4 +177,34 @@ export function connectorTriggerForSave(
     throw new TaskConnectorChoiceError("Choose this task's source with Find sources.");
   }
   return { trigger: { ...trigger, source: { ...existing.source } } };
+}
+
+/**
+ * Saves a connected-app task. A Find sources choice becomes the task's exact
+ * source and is used up once the save lands; the source is bound after it.
+ * The two steps can't share one store write (the binding stays out of the
+ * task file), so a bind that fails marks the task as needing its source
+ * rather than leaving it on and silently never checking.
+ */
+export async function saveConnectorTask<T extends { id: string }>(
+  trigger: ScheduledTaskConnectorTrigger,
+  existing: ScheduledTaskTrigger | undefined,
+  steps: {
+    connector: Pick<TaskConnectorTriggers, "takeChoice" | "forgetChoice">;
+    save(trigger: ScheduledTaskConnectorTrigger): Promise<T>;
+    bind(taskId: string, source: TaskConnectorSource): Promise<void>;
+    needsSource(taskId: string): Promise<void>;
+  },
+): Promise<T> {
+  const { trigger: next, source } = connectorTriggerForSave(trigger, existing, steps.connector.takeChoice);
+  const saved = await steps.save(next);
+  if (trigger.sourceChoiceId) steps.connector.forgetChoice(trigger.sourceChoiceId);
+  if (!source) return saved;
+  try {
+    await steps.bind(saved.id, source);
+  } catch (error) {
+    await steps.needsSource(saved.id).catch(() => undefined);
+    throw Object.assign(new Error("The task was saved, but its source couldn't be connected. Open it, choose Find sources and save it again."), { cause: error });
+  }
+  return saved;
 }

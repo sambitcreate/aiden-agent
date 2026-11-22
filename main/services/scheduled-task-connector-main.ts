@@ -45,12 +45,18 @@ async function admit(owner: string, serverId: string): Promise<BotConnectorSourc
   return { signal: lease.signal, assertCurrent: () => lease.assertCurrent(), revalidateBeforeEffect: current, release: () => {} };
 }
 
+/**
+ * The shared hosts ask whether their owner is paused and would then say "This
+ * Bot is paused."; a task says why in its own words instead, so this throws
+ * rather than answering true.
+ */
 async function isPaused(owner: string): Promise<boolean> {
   const taskId = taskOf(owner);
   if (taskId === undefined) return false;
-  if (!scheduleService.isActive()) return true;
+  if (!scheduleService.isActive()) fail("Scheduled tasks are paused.");
   const task = await scheduleStore.get(taskId);
-  return !task?.enabled;
+  if (!task?.enabled) fail("This task is off.");
+  return false;
 }
 
 const mail = createImcpMailHost({

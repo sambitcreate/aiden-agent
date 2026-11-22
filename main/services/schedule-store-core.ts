@@ -411,7 +411,10 @@ function normalizeInput(
     notify: input.notify ?? existing?.notify ?? true,
     lastResult: existing?.lastResult,
     lastError: existing?.lastError,
-    ...(botId === undefined && existing?.failurePausedAt !== undefined ? { failurePausedAt: existing.failurePausedAt } : {}),
+    // Turning a chat task back on starts a new count of failed runs.
+    ...(botId === undefined && (existing && !existing.enabled && enabled ? now : existing?.failurePausedAt) !== undefined
+      ? { failurePausedAt: existing && !existing.enabled && enabled ? now : existing!.failurePausedAt }
+      : {}),
     createdAt: existing?.createdAt ?? now,
     updatedAt: nextTaskRevision(now, existing?.updatedAt),
   };
@@ -664,6 +667,8 @@ function normalizeStoredRun(value: unknown): ScheduledRun | null {
     ...(failure ? { failure } : {}),
     ...(claimCheck ? { claimCheck } : {}),
     ...(typeof run.fingerprint === "string" && /^[a-f0-9]{64}$/u.test(run.fingerprint) ? { fingerprint: run.fingerprint } : {}),
+    ...(run.byHand === true ? { byHand: true as const } : {}),
+    ...(run.cancelled === true && run.result === "blocked" ? { cancelled: true as const } : {}),
     chatId: typeof run.chatId === "string" ? run.chatId : undefined,
   };
 }
@@ -839,6 +844,8 @@ export function createScheduleStore(
         nextRunAt: enabled && !existing.trigger
           ? nextScheduledRun(existing.cron, existing.timezone, new Date(timestamp))
           : undefined,
+        // Turning a chat task back on starts a new count of failed runs.
+        ...(existing.botId === undefined && enabled && !existing.enabled ? { failurePausedAt: timestamp } : {}),
         updatedAt: nextTaskRevision(timestamp, existing.updatedAt),
       };
       draft[index] = task;
