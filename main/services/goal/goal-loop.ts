@@ -304,11 +304,16 @@ export class GoalLoop {
     } catch (error) {
       // The notice is still saved, as one no round could answer.
       this.deps.log("A keep-going notice round could not read the chat.", error);
-      return this.goals.get(chatId)?.status === "active" ? { kind: "unavailable", reason: "The round could not start." } : undefined;
+      if (this.goals.get(chatId)?.status !== "active") return undefined;
+      this.relookAfterNotice(chatId);
+      return { kind: "unavailable", reason: "The round could not start." };
     }
     const latest = this.goals.get(chatId);
     if (latest?.status !== "active") return undefined;
-    if (!context) return { kind: "unavailable", reason: "The chat has no model yet." };
+    if (!context) {
+      this.relookAfterNotice(chatId);
+      return { kind: "unavailable", reason: "The chat has no model yet." };
+    }
     // A notice round is a round: it counts toward the limit, and at the limit
     // the goal pauses and the notice wakes the chat as any notice does.
     const counted = goalNoticeRound(latest, this.deps.now());
@@ -332,8 +337,18 @@ export class GoalLoop {
     if (result.kind !== "started") {
       const restored = compareAndSetGoal(this.goals.get(chatId), counted, (current) => goalRoundNotStarted(current, latest.rounds, this.deps.now()));
       if (restored.ok && restored.goal !== this.goals.get(chatId)) this.write(restored.goal);
+      this.relookAfterNotice(chatId);
     }
     return result;
+  }
+
+  /**
+   * A notice round didn't start, after it dropped the look under way: nothing
+   * would look at the goal again, so it looks once the chat is idle (the
+   * notice saved, or another run settled, which looks instead).
+   */
+  private relookAfterNotice(chatId: string): void {
+    this.relookWhenIdle(chatId, { stopped: false, failed: false });
   }
 
   /** A round's approval or question expired unanswered: the goal waits for the person. */

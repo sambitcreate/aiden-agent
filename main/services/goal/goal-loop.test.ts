@@ -814,3 +814,38 @@ test("while the loop checks a goal between rounds it holds the computer awake, a
   await h.flush();
   assert.deepEqual(keepAwake.read(0).reasons, [], "a finished look holds nothing");
 });
+
+test("news that drops a review but whose round doesn't start leaves the goal looked at again, not stuck at Working", async () => {
+  const news = () => ({ text: "job ended", notice: agentNotice({ source: "background_job", tone: "success", title: "Done", summary: "x" }) });
+  for (const failure of ["unavailable", "busy"] as const) {
+    const h = harness();
+    await h.loop.set(CHAT, { objective: "Ship it", source: "slash" });
+    const { held, review } = heldReview();
+    h.state.review = review;
+    await h.runSettles();
+    assert.equal(held.length, 1, `${failure}: a review is under way`);
+    h.state.noticeStart = failure;
+    assert.equal((await h.loop.noticeRound(CHAT, news()))?.kind, failure);
+    held[0]!.answer(continueWith("Keep going"));
+    await h.flush();
+    assert.equal(h.rounds.length, 0, `${failure}: the dropped review starts nothing`);
+    assert.equal(h.goal()?.rounds, 1, `${failure}: nothing ran, so nothing is counted`);
+
+    // Once the notice is saved and the chat is idle, the goal is looked at again and goes on.
+    h.state.review = async (goal) => continueWith(`Next step ${goal.rounds}`);
+    await h.becomeIdle();
+    assert.equal(h.reviews(), 2, `${failure}: a new review`);
+    assert.equal(h.rounds.length, 1, `${failure}: and the next round starts`);
+    assert.equal(h.goal()?.status, "active", failure);
+  }
+
+  // A chat that couldn't be read for the notice round is looked at again too.
+  const h = harness();
+  await h.loop.set(CHAT, { objective: "Ship it", source: "slash" });
+  h.state.throws.noticeContext = true;
+  assert.equal((await h.loop.noticeRound(CHAT, news()))?.kind, "unavailable");
+  h.state.throws.noticeContext = false;
+  await h.becomeIdle();
+  assert.equal(h.reviews(), 1);
+  assert.equal(h.rounds.length, 1);
+});
