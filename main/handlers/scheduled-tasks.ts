@@ -3,6 +3,7 @@ import { parseScheduledTaskInput } from "./scheduled-tasks-parse.js";
 import { scheduledTaskApplicationService } from "../services/scheduled-task-application-service-main.js";
 import { scheduledTaskRevision } from "../services/scheduled-task-application-service.js";
 import { systemTimezone } from "../services/schedule-store.js";
+import { keepAwakeStatus } from "../services/keep-awake/keep-awake-main.js";
 
 function requiredString(value: unknown, name: string): string {
   if (typeof value !== "string" || !value.trim()) {
@@ -77,6 +78,7 @@ export function registerScheduledTaskHandlers(): void {
   );
   ipcMain.handle("schedule:scripts", (_event, workspaceId?: unknown) =>
     scheduledTaskApplicationService.scripts(optionalString(workspaceId)));
+  ipcMain.handle("schedule:keepAwakeStatus", () => keepAwakeStatus());
   ipcMain.handle("schedule:settings", async (_event, patch?: unknown) => {
     const current = await scheduledTaskApplicationService.settings();
     if (patch === undefined) return current.value;

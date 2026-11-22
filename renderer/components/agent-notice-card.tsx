@@ -1,10 +1,11 @@
 // A follow-up notice in the transcript: a background job ended, a followed
-// pull request has news, or a "done when" check ran. It is stored as a user
+// pull request has news, a "done when" check ran, or the agent is checking
+// back as it promised. It is stored as a user
 // message for the model, so the card replaces the user bubble. The details
 // disclosure shows exactly what the agent was told, output included.
 
 import * as React from "react";
-import { CalendarClock, ChevronDown, GitPullRequest, ListChecks, TerminalSquare } from "lucide-react";
+import { AlarmClock, CalendarClock, ChevronDown, GitPullRequest, ListChecks, TerminalSquare } from "lucide-react";
 import type { AgentNoticeV1 } from "../shared/agent-notices";
 import { Markdown } from "./markdown";
 import { Button, Text } from "./ui";
@@ -14,6 +15,7 @@ const SOURCE_ICONS = {
   background_job: TerminalSquare,
   pull_request: GitPullRequest,
   check: ListChecks,
+  check_back: AlarmClock,
   schedule: CalendarClock,
 } as const;
 
@@ -21,6 +23,7 @@ const SOURCE_LABELS = {
   background_job: "Background job",
   pull_request: "Pull request",
   check: "Done-when check",
+  check_back: "Check-back",
   schedule: "Scheduled task",
 } as const;
 

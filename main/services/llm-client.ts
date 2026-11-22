@@ -81,6 +81,7 @@ import { devicesEnabled } from "./devices/feature-flag.js";
 import { geminiLiveEnabled } from "./gemini-live/feature-flag.js";
 import { webSearchService } from "./web-search-main.js";
 import { WEB_FETCH_TOOL_NAME } from "../../renderer/shared/web-extract.js";
+import { CHECK_BACK_TOOL_NAME } from "../../renderer/shared/check-backs.js";
 import { webFetchService } from "./web-fetch-main.js";
 import { createVisionAnalysisTool, INSPECT_IMAGE_TOOL_NAME } from "./vision-analysis-tool.js";
 import {
@@ -525,7 +526,7 @@ import {
   createVisualizeGuideTool,
   VISUALIZE_GUIDE_TOOL_NAME,
 } from "./generative-ui-extension.js";
-import { chatToolOffers, chatTurnAudienceFor, chatTurnToolRefusal, declaresAppTools, declaresWindowTools, firstTurnToolRefusal, windowlessChatTurn, type ChatToolSurface, type TurnToolRefusal } from "./chat-turn-tool-policy.js";
+import { chatToolOffers, chatTurnArgsToolRefusal, chatTurnAudienceFor, chatTurnToolRefusal, declaresAppTools, declaresWindowTools, firstTurnToolRefusal, windowlessChatTurn, type ChatToolSurface, type TurnToolRefusal } from "./chat-turn-tool-policy.js";
 import { createGenerativeUiDraftSession } from "./generative-ui-draft.js";
 import { createUiDraftSession } from "./aiden-ui-draft.js";
 import { withoutVisualSnapshots } from "../../renderer/shared/visual-snapshots.js";
@@ -1918,6 +1919,8 @@ async function prepareGeneration(
     ...chatTurnAudienceFor({ ...options, windowless }, params),
     ...(windowless ? { windowOnlyToolNames } : {}),
   };
+  /** Calls this turn refuses because of their arguments (a woken turn setting a check-back). */
+  const turnArgsRefusal = chatTurnArgsToolRefusal(turnAudience);
   // Offered by the chat's surface alone; a turn nobody watches, or one a paired
   // device sent, keeps the declaration and refuses the call.
   const offerHooksTool = hostPlatformCapabilities().hooks && chatToolOffers(chatToolSurface).hooks;
@@ -2239,6 +2242,28 @@ async function prepareGeneration(
         ...(deviceShimDir ? { pathPrefix: deviceShimDir } : {}),
         isCurrent: () => !signal.aborted && active.has(streamId),
         excludeToolNames: options.excludeToolNames,
+      }),
+    );
+  }
+  // Check-backs: every turn of an ordinary workspace chat declares the tool,
+  // read-only folders included, so the chat's tool list holds; a turn Aiden
+  // started refuses `set` (`turnArgsRefusal`).
+  if (
+    !botContext &&
+    !assistantMode &&
+    params.chatId &&
+    workspace?.folderPath &&
+    options.usageSource === "chat" &&
+    options.interactionSurface !== "telegram" &&
+    hostPlatformCapabilities().chatCheckBacks &&
+    !options.excludeToolNames?.has(CHECK_BACK_TOOL_NAME)
+  ) {
+    const { createChatCheckBackTool } = await import("./follow-through/follow-through-tools-main.js");
+    tools.push(
+      createChatCheckBackTool({
+        chatId: params.chatId,
+        turnId: options.turnId ?? streamId,
+        refusal: (args) => turnArgsRefusal(CHECK_BACK_TOOL_NAME, args),
       }),
     );
   }
@@ -2669,7 +2694,7 @@ async function prepareGeneration(
    * the reason names the condition, and the call is refused before it runs.
    */
   const turnToolRefusals: TurnToolRefusal[] = [];
-  turnToolRefusals.push(chatTurnToolRefusal(chatToolSurface, turnAudience));
+  turnToolRefusals.push(chatTurnToolRefusal(chatToolSurface, turnAudience), turnArgsRefusal);
   if (declaresAppTools(ownerScope, { attendedAssistant, schedulingAllowed })) {
     // A windowless turn declares them with no live state and no navigation,
     // and refuses every call (`chatTurnToolRefusal`).

@@ -23,4 +23,7 @@ export const scheduledTaskApplicationService = createScheduledTaskApplicationSer
   validateTimezone,
   settingsPatch: (input) => scheduledSettingsPatch(input, validateTimezone),
   notifyChanged: (payload) => ipcMain.broadcast("schedule:updated", payload),
+  // Loaded on use: follow-through reaches the chat runtime.
+  chatCheckBacksChanged: async (enabled) =>
+    (await import("./follow-through/follow-through-main.js")).chatCheckBacksSwitched(enabled),
 });

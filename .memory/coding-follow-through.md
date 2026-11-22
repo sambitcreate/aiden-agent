@@ -47,3 +47,5 @@ A check whose process cleanup cannot be confirmed returns to waiting with its pr
 A failed check-ledger admission keeps the shell gated and leaves the check waiting without a wake or a spent attempt. After verified exit, a failed ledger release is logged and the command keeps its actual result. The stale durable entry is rechecked during recovery.
 
 2026-11-11 (W9 phase A, `claude/pr-follow-event-nudges`): pull request follows take debounced nudges (push, `gh` command, opening the list, focus, wake, online), probe with ETags so an unchanged look skips the full read, and back off quiet pull requests to 30 minutes. Details and the phase B webhook spike notes: `pr-follow-event-nudges.md`.
+
+2026-11-22 (Proactive Aiden C2): chats that check back (`check_back` tool, `CheckBacks` in `follow-through/check-backs.ts`, `checkBacks` in `state.json`, notice source `check_back`) and the args-aware turn refusal in `chat-turn-tool-policy.ts`. Details: `chat-check-backs.md`.

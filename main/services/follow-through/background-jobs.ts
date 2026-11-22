@@ -512,6 +512,11 @@ export class BackgroundJobs {
       .sort((left, right) => right.startedAt - left.startedAt);
   }
 
+  /** Every job Aiden tracks, in every chat (keep-awake reads which are running). */
+  listAll(): BackgroundJobView[] {
+    return [...this.jobs.values()].map((job) => ({ ...job.view }));
+  }
+
   get(chatId: string, jobId: string): BackgroundJobView | undefined {
     const job = this.jobs.get(jobId);
     return job && job.view.chatId === chatId ? { ...job.view } : undefined;

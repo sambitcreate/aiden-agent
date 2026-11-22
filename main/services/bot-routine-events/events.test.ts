@@ -7,7 +7,7 @@ import { formatBotRoutineTriggerLabel, parseBotRoutineTrigger } from "../../../r
 import { botRoutineEventBlock, botRoutineMessage, botRoutineRequestId, botRoutineExecutionInput, createBotRoutineExecutor, type BotRoutineExecutorPorts } from "../scheduled-bot-routines.js";
 import { openProtectedRoutineClaims, claimTestModule, killAfterRoutineReceipt } from "../bot-routine-model-claim-test-support.js";
 import { createScheduleStore } from "../schedule-store.js";
-import { createBotRoutineEventDispatcher } from "./dispatcher.js";
+import { createBotRoutineEventDispatcher, createEventRoutineDispatcher, type EventRoutine, type EventRoutineStore } from "./dispatcher.js";
 import { createBotFolderWatches, folderEventPayload } from "./folder-watch.js";
 import { createBotOwnWrites } from "./own-writes.js";
 import { createBotEventRunner, eventRoutineRunStore, eventRoutineTask } from "./runner.js";
@@ -969,4 +969,94 @@ test("a deep JSON body stays as sent and is never pretty-printed into a huge str
   assert.ok(payload.length <= 4_000, String(payload.length));
   assert.ok(Date.now() - started < 200);
   assert.equal(webhookPayload("application/json", new TextEncoder().encode("{\"a\":1}")), "{\n  \"a\": 1\n}");
+});
+
+/** An in-memory store for an owner that isn't a Bot, serialised per owner key like the Bot store. */
+function memoryEventStore<R extends EventRoutine & { ownerKey: string }>(rows: R[]): EventRoutineStore<R> & { rows: R[] } {
+  const tails = new Map<string, Promise<unknown>>();
+  const serial = <T>(owner: string, work: () => Promise<T>): Promise<T> => {
+    const next = (tails.get(owner) ?? Promise.resolve()).catch(() => undefined).then(work);
+    tails.set(owner, next);
+    return next;
+  };
+  const store = {
+    rows,
+    list: async (owner: string) => structuredClone(store.rows.filter((row) => row.ownerKey === owner)),
+    mutate: <T>(owner: string, id: string, change: (routine: R, routines: readonly R[]) => { next?: R; result: T } | Promise<{ next?: R; result: T }>) =>
+      serial(owner, async () => {
+        const mine = store.rows.filter((row) => row.ownerKey === owner);
+        const routine = mine.find((row) => row.id === id);
+        if (!routine) return undefined;
+        const { next, result } = await change(structuredClone(routine), structuredClone(mine));
+        if (next) store.rows = store.rows.map((row) => (row.ownerKey === owner && row.id === id ? structuredClone(next) : row));
+        return result;
+      }),
+  };
+  return store;
+}
+
+test("an owner that isn't a Bot gets the same gap, dedupe and replay under its own key", async () => {
+  type TaskRoutine = EventRoutine & { ownerKey: string };
+  const task = (ownerKey: string): TaskRoutine => ({
+    id: "trigger-1", ownerKey, name: "Build check", prompt: "Look at the build.", trigger: { kind: "webhook" },
+    enabled: true, createdAt: 1, updatedAt: 1, seenEventIds: [],
+  });
+  // Two owners share a routine id; nothing crosses between them.
+  const store = memoryEventStore<TaskRoutine>([task("task:a"), task("task:b")]);
+  const clock = { at: Date.UTC(2026, 10, 22, 12) };
+  const timers: Array<{ at: number; fn: () => void; cancelled: boolean }> = [];
+  const paused = new Set<string>();
+  const harness = (run: (owner: string, eventId: string) => Promise<{ settled: boolean } | void>) => {
+    const runs: Array<[string, string]> = [];
+    const dispatcher = createEventRoutineDispatcher<TaskRoutine>({
+      ownerKey: (routine) => routine.ownerKey,
+      store,
+      run: async (routine, event) => {
+        runs.push([routine.ownerKey, event.eventId]);
+        return run(routine.ownerKey, event.eventId);
+      },
+      isPaused: async (owner) => paused.has(owner),
+      now: () => clock.at,
+      timeZone: () => "UTC",
+      setTimer: (fn, ms) => {
+        const timer = { at: clock.at + ms, fn, cancelled: false };
+        timers.push(timer);
+        return { cancel: () => { timer.cancelled = true; } };
+      },
+    });
+    return { dispatcher, runs };
+  };
+  const waitFor = async (check: () => boolean) => {
+    for (let attempt = 0; attempt < 200 && !check(); attempt += 1) await new Promise((resolve) => setTimeout(resolve, 5));
+  };
+
+  // The first process quits while e1 runs.
+  const first = harness(() => new Promise<void>(() => undefined));
+  assert.equal(await first.dispatcher.emit("task:a", "trigger-1", { eventId: "e1", payload: "{}" }), "queued");
+  assert.equal(await first.dispatcher.emit("task:a", "trigger-1", { eventId: "e1", payload: "{}" }), "duplicate");
+  assert.equal(await first.dispatcher.emit("task:a", "trigger-1", { eventId: "e2", payload: "{}" }), "held", "inside the 5-minute gap");
+  assert.equal(await first.dispatcher.emit("task:b", "trigger-1", { eventId: "e1", payload: "{}" }), "queued", "another owner has its own ids and gap");
+  paused.add("task:c");
+  assert.equal(await first.dispatcher.emit("task:c", "trigger-1", { eventId: "e1", payload: "{}" }), "disabled", "a paused owner accepts nothing");
+  await waitFor(() => first.runs.length >= 2);
+  assert.deepEqual(first.runs.sort(), [["task:a", "e1"], ["task:b", "e1"]]);
+  first.dispatcher.dispose();
+
+  // After a restart the unfinished e1 runs again, and the held e2 waits out the gap.
+  const restarted = harness(async () => ({ settled: true }));
+  await restarted.dispatcher.rearm(await store.list("task:a"));
+  await waitFor(() => restarted.runs.length >= 1);
+  assert.deepEqual(restarted.runs, [["task:a", "e1"]]);
+  clock.at += 5 * MIN;
+  for (const timer of timers.filter((entry) => !entry.cancelled && entry.at <= clock.at)) {
+    timer.cancelled = true;
+    timer.fn();
+  }
+  await waitFor(() => restarted.runs.length >= 2);
+  await restarted.dispatcher.idle();
+  assert.deepEqual(restarted.runs, [["task:a", "e1"], ["task:a", "e2"]]);
+  const [owned] = await store.list("task:a");
+  assert.equal(owned?.running, undefined, "settled runs leave no receipt");
+  assert.equal(owned?.held, undefined);
+  assert.deepEqual((await store.list("task:b"))[0]?.running?.map((entry) => entry.eventId), ["e1"], "task:b's receipt is untouched");
 });

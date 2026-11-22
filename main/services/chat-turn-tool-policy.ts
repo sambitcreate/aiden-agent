@@ -14,9 +14,14 @@
 // is the same whoever started the turn, and refuses every call that needs the
 // window: Computer Use, hooks, questions, the to-do list, the advisor, the
 // browser, simulators, Aiden's settings tools and the design canvas.
+//
+// Some refusals depend on a call's arguments, not just the tool's name: a
+// woken turn may list and cancel check-backs but not set one. Those are rows
+// in `TURN_ARGS_REFUSAL_RULES`, read by `chatTurnArgsToolRefusal`.
 
 import type { InlineVisualsMode } from "../../renderer/shared/appearance.js";
 import { ASK_USER_QUESTION_TOOL_NAME } from "../../renderer/shared/ask-user-question.js";
+import { CHECK_BACK_TOOL_NAME } from "../../renderer/shared/check-backs.js";
 import { WORKSPACE_ARTIFACT_TOOL_NAME } from "../../renderer/shared/workspace-artifacts.js";
 import { COMPUTER_USE_TOOL_NAME } from "./computer-use/tool.js";
 import { generativeUiUnavailableReason } from "./generative-ui-extension.js";
@@ -53,6 +58,11 @@ export interface ChatTurnAudience {
    * each call, so names added after the refusal is built count.
    */
   windowOnlyToolNames?: ReadonlySet<string>;
+  /**
+   * A round of a goal the person started: attended, but Aiden began it. It
+   * may not set promises for later (check-backs) or start work that outlives it.
+   */
+  goalRound?: boolean;
 }
 
 /** What a generation's execution options say about who the turn serves. */
@@ -61,6 +71,7 @@ export interface ChatTurnAudienceOptions {
   visualAudience?: "remote";
   questionPromptsUnavailable?: boolean;
   windowless?: boolean;
+  goalRound?: boolean;
 }
 
 /** What the turn's own parameters say about inline visuals. */
@@ -78,6 +89,7 @@ export function chatTurnAudienceFor(options: ChatTurnAudienceOptions, params: Ch
     ...(params.inlineVisuals ? { inlineVisuals: params.inlineVisuals } : {}),
     visualize: params.visualize === true,
     ...(options.windowless === true ? { windowless: true } : {}),
+    ...(options.goalRound === true ? { goalRound: true } : {}),
   };
 }
 
@@ -196,5 +208,61 @@ export function chatTurnToolRefusal(
       return `${WORKSPACE_ARTIFACT_TOOL_NAME} is not available in this turn: the request came from a paired device, which cannot show workspace artifacts. Open the chat on this computer to create, refresh or run one.`;
     }
     return generativeUiUnavailableReason(name, visuals);
+  };
+}
+
+// ── Refusals that read a call's arguments ──────────────────────────────────
+
+/**
+ * One (tool, arguments) refusal: in turns `turns` matches, a call to `tool`
+ * whose arguments `args` matches is refused with `reason`. Adding a rule is
+ * one row in `TURN_ARGS_REFUSAL_RULES`.
+ */
+export interface TurnArgsRefusalRule {
+  tool: string;
+  /** Which turns the rule applies to. */
+  turns: (turn: ChatTurnAudience) => boolean;
+  /** Which calls of `tool` it refuses. */
+  args: (args: Record<string, unknown>) => boolean;
+  /** What the model reads; it names the condition and what to do instead. */
+  reason: string;
+}
+
+/** Matches a call whose `key` argument is one of `values`, e.g. `argIs("action", "set")`. */
+export function argIs(key: string, ...values: readonly unknown[]): (args: Record<string, unknown>) => boolean {
+  return (args) => values.includes(args[key]);
+}
+
+/** A turn nobody started on purpose: an unattended follow-up, a windowless turn, or a goal round. */
+export function aidenStartedTurn(turn: ChatTurnAudience): boolean {
+  return turn.unattended || turn.windowless === true || turn.goalRound === true;
+}
+
+export const TURN_ARGS_REFUSAL_RULES: readonly TurnArgsRefusalRule[] = [
+  {
+    tool: CHECK_BACK_TOOL_NAME,
+    turns: aidenStartedTurn,
+    args: argIs("action", "set"),
+    reason:
+      `${CHECK_BACK_TOOL_NAME} cannot set a check-back in this turn: Aiden started it, not the person, and a check-back set here could chain into another. ` +
+      "Finish what you can now, or say in your reply what is still left to check. list and cancel still work.",
+  },
+];
+
+/**
+ * A call this turn refuses because of its arguments, with the reason the
+ * model reads, or undefined. Runs with the name-only refusals through
+ * `firstTurnToolRefusal`.
+ */
+export function chatTurnArgsToolRefusal(
+  turn: ChatTurnAudience,
+  rules: readonly TurnArgsRefusalRule[] = TURN_ARGS_REFUSAL_RULES,
+): TurnToolRefusal {
+  return (name, args) => {
+    const values = typeof args === "object" && args !== null && !Array.isArray(args) ? (args as Record<string, unknown>) : {};
+    for (const rule of rules) {
+      if (rule.tool === name && rule.turns(turn) && rule.args(values)) return rule.reason;
+    }
+    return undefined;
   };
 }

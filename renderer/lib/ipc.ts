@@ -15,6 +15,7 @@ import type { SavedChatIntent } from "../shared/chat-intent";
 import type { CompactionEngine } from "../shared/compaction";
 import type { WorkspaceFolderPresenceResult } from "../shared/workspace-folder-presence";
 import type { ModelPaceSummary } from "../shared/model-pace";
+import { KEEP_AWAKE_CHANGED_CHANNEL, parseKeepAwakeStatus, type KeepAwakeStatus } from "../shared/keep-awake";
 import { parseWindowControlsState, type WindowControlsState } from "../shared/window-chrome";
 import {
   parseUsageLimitWaits,
@@ -788,6 +789,10 @@ export const scheduleApi = {
   scripts: (workspaceId?: string) => invoke<string[]>("schedule:scripts", workspaceId),
   settings: (patch?: Partial<ScheduledTaskSettings>) =>
     invoke<ScheduledTaskSettings>("schedule:settings", patch),
+  /** What keeps this computer awake right now (Settings → Scheduled tasks → While you're away). */
+  keepAwakeStatus: async () => parseKeepAwakeStatus(await invoke<unknown>("schedule:keepAwakeStatus")),
+  onKeepAwakeChanged: (handler: (status: KeepAwakeStatus) => void) =>
+    onNotification<unknown>(KEEP_AWAKE_CHANGED_CHANNEL, (status) => handler(parseKeepAwakeStatus(status))),
 };
 
 export const profileApi = {
@@ -1729,6 +1734,7 @@ export const chatsApi = {
   setDoneWhenCheck: (chatId: string, command: string) =>
     invoke<void>("chats:followThroughSetCheck", { chatId, command }),
   clearDoneWhenCheck: (chatId: string) => invoke<void>("chats:followThroughClearCheck", { chatId }),
+  cancelCheckBack: (chatId: string, id: string) => invoke<void>("chats:followThroughCancelCheckBack", { chatId, id }),
   onBtwEvent: (handler: (event: BtwEventV1) => void) =>
     onNotification<unknown>("chats:btw-event", (payload) => {
       const event = parseBtwEvent(payload);

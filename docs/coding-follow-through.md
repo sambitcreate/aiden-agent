@@ -1,12 +1,13 @@
 # Coding follow-through
 
-Aiden can keep working after an answer ends. Three features keep a coding chat moving without the person checking back:
+Aiden can keep working after an answer ends. Four features keep a coding chat moving without the person checking back:
 
 - **Background jobs**: the agent starts a long command (a dev server, a watcher, a long test run), keeps working, and hears when the command ends.
 - **Following a pull request**: Aiden watches a pull request and tells the chat about failed checks, merge conflicts and reviewers' comments until the pull request is merged or closed.
 - **Keep going until a check passes**: the person names a check with `/until npm test`, and Aiden runs it after each answer. While it fails, the agent gets the end of its output and keeps fixing, up to five checks.
+- **Chats that check back**: the agent promises to look again later ("I'll check the deploy in 20 minutes"), and at that minute Aiden posts its note into the chat. See [Checking back later](#checking-back-later).
 
-All three run on the macOS and Linux desktop, in workspace chats whose folder access is **Full access** or **Ask first**. They are not available in Bot chats, the Assistant, Telegram chats, a chat hosted on a paired Mac, or the CLI. Phones show the chat's follow-up messages but cannot start them.
+The first three run on the macOS and Linux desktop, in workspace chats whose folder access is **Full access** or **Ask first**; check-backs also work in **Read only** workspaces. They are not available in Bot chats, the Assistant, Telegram chats, a chat hosted on a paired Mac, or the CLI. Phones show the chat's follow-up messages but cannot start them.
 
 ## Follow-up messages
 
@@ -92,6 +93,21 @@ A chat has one check at a time; `/until` with a new command replaces it. A repla
 
 Aiden records the check’s process group before running its command. If Aiden cannot save the recovery record, the command stays unstarted and waits for the next answer without using an attempt or waking the agent. Once Aiden verifies the group has exited, a failure to remove the saved entry is logged. The check keeps its command result, and startup can discard the stale entry. If a stop signal fails and a descendant stays alive, Aiden retains the recovery record and blocks changes to that workspace until it can confirm the group has ended. The chat receives a **Check waiting** notice. The interrupted check keeps its attempt count and does not wake the agent. After a crash, startup reaps recorded groups before opening desktop and remote requests. An interrupted check waits for the next answer and keeps its previous attempt count.
 
+## Checking back later
+
+In a workspace chat, the agent can use its `check_back` tool to promise to look at something again later, such as a deploy, a long build or a reply it is waiting for. It sets a time with `in_minutes` (1 to 1,440) or a local 24-hour time `"HH:MM"` within the next 24 hours, and a note of up to 500 characters saying what to check.
+
+- A chat can have up to 3 pending check-backs, and Aiden keeps up to 20 across all chats.
+- The composer shows a **Checking back at 3:10 PM** chip. Its list shows each note with **Cancel**. The activity row of the call reads "Will check back at 3:10 PM".
+- At that minute Aiden posts a **Checking back** card with the note. It goes through the same delivery as other follow-up messages: it joins a running answer, or wakes an idle chat within the six-an-hour limit, or is saved for the next message. The woken answer runs with nobody watching, so it has no approvals, connectors, subagents or Computer Use, and the tool tells the agent so before it promises anything.
+- Only a turn the person started can set a check-back: one typed in the chat's window, or sent from a paired phone or Mac. An answer Aiden started itself (a follow-up, a check-back firing, a turn owed after a run) can list and cancel check-backs but not set one, so they can't chain.
+- If the computer was asleep or Aiden was closed at that minute, a check-back up to 2 hours late still wakes the chat and says it is late. An older one leaves a **Missed check-back (due 3:10 PM)** card without waking the chat. A check-back that was being delivered when Aiden quit also becomes a Missed card at the next launch, so nothing fires twice.
+- When the computer is plugged in, a check-back due within the hour keeps it from idle-sleeping, so it is awake when the check-back fires (Settings → Scheduled tasks → While you're away → **Keep this computer awake while Aiden works**, on by default). On battery nothing holds in advance, and a check-back more than an hour overdue stops holding.
+- **Stop** leaves pending check-backs in place. Deleting the chat drops them. If the chat's folder access is off when one fires, the card is only saved.
+- **Settings → Scheduled tasks → While you're away → Let chats check back later** (on by default) turns the feature off. Turning it off cancels every pending check-back, and the tool answers `off` until it is back on. Turning it back on restores nothing.
+
+Check-backs are saved with the other follow-through state in Aiden's data folder (`follow-through/state.json`). Bots set their own wake-ups instead (see [Bot routines](bot-routines.md#wake-ups-a-bot-sets-for-itself)); the Assistant, Telegram chats, subagents and scheduled runs do not get the tool. Phones show the card as one line.
+
 ## Network
 
-Background jobs and checks run on this computer and contact nothing themselves beyond what the command does. Following a pull request reads the GitHub API (`api.github.com`, or the GitHub Enterprise host of that pull request) for that pull request only, until the follow ends. Each look first sends up to three conditional REST requests (the pull request, its head commit's check runs and its commit status) and only then the full read. Nothing is polled for chats that follow no pull request, and Aiden does not receive GitHub webhooks.
+Background jobs and checks run on this computer and contact nothing themselves beyond what the command does. Check-backs contact nothing. Following a pull request reads the GitHub API (`api.github.com`, or the GitHub Enterprise host of that pull request) for that pull request only, until the follow ends. Each look first sends up to three conditional REST requests (the pull request, its head commit's check runs and its commit status) and only then the full read. Nothing is polled for chats that follow no pull request, and Aiden does not receive GitHub webhooks.
