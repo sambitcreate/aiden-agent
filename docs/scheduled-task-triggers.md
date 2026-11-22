@@ -28,6 +28,10 @@ A call is `POST` with a `text/plain` or `application/json` body up to 256 KB. Ai
 
 The task's details list the last calls (50 kept) with what happened to each and a short preview, credentials withheld.
 
+## Asking Aiden for one
+
+In a chat, Aiden can propose a task with a trigger instead of a schedule (the `trigger` field of the schedule tool's create). The approval card shows the trigger in place of the schedule, and what you approve is exactly what is saved. Aiden can't add a trigger to an existing task, and a scheduled run never has the schedule tool, so a run can't create more tasks. For a link task Aiden only hears that the link is shown to you; you make it from the task's details. Aiden Assistant automations may watch a web address or use a link, but never run a script. The headless `aiden serve` server has no watches or links and refuses such tasks.
+
 ## Where runs land and how often
 
 Runs land the same way as scheduled runs: in the chat the task was made in, sharing that chat's six task runs an hour, otherwise in the task's own chat. The task keeps its own permission and tools, and a run never gets the `schedule` tool, so a run can't create more tasks.

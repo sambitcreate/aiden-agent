@@ -22,3 +22,10 @@ Proactive Aiden plan, Phase 4 (docs/plans/proactive-aiden-plan.md). Guide: docs/
 - Token by hash in the bookkeeping (`setTokenHash`, `findByToken`), log of 50 (`appendLog`, `linkState`), secret `aiden-internal:task-hook:<taskId>` (deleted when the task is removed, via the schedule service broadcast payload). IPC `schedule:trigger-link:rotate` (needs Aiden On The Go on; returns url+secret once) and `schedule:trigger-link:state` (never the link).
 - UI: editor **When its link is called** + `LinkTriggerFields`; task details `ScheduledTaskLinkPanel` (Create/Rotate link, Copy once, Recent calls).
 - Tests: router test in `aiden-remote-router.test.ts` (order, signature, filter, 429, no token in logs); batch/redaction/dedupe/log/rotation in `scheduled-task-triggers.test.ts`.
+
+## E4 Aiden can propose triggers
+
+- `schedule_task` create takes `trigger` (standard and Assistant; `SCHEDULE_TRIGGER_PARAMETER`, parsed by `toolTrigger`); refused on update. Assistant refuses script watches; its schema's `cron` is now optional (required unless trigger). Canonical Assistant args carry `trigger` instead of `cron`.
+- Approval details (`ScheduledTaskApprovalDetails`, `AssistantAutomationApprovalDetails`) gained optional `whenLabel`; a trigger task has `cron: ""`, `nextRunAt: 0`, and the validators accept an empty cron only with a `whenLabel` (phones that require a cron fail closed until E6). `whenLabel` is in the run-journal allowlists (`run-event-projection.ts`). Card shows it instead of the cadence.
+- Results: task summaries carry `trigger` (the label); a link task's create result adds `link: "shown_to_person"` (standard also `status: "saved"`). The agent never sees the link.
+- CLI `packages/cli/src/schedules.ts` `saveInput` refuses `trigger`.

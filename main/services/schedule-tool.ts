@@ -1,4 +1,5 @@
 import { Type } from "typebox";
+import { formatScheduledTaskTriggerLabel, parseScheduledTaskTrigger, type ScheduledTaskTrigger } from "../../renderer/shared/scheduled-task-trigger.js";
 import { localComputerNoun } from "../../renderer/shared/computer-noun.js";
 import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
 import { mcpServerOffersTools } from "../../renderer/shared/mcp-exposure.js";
@@ -67,6 +68,13 @@ export const LIST_SCHEDULED_TASKS_TOOL_NAME = "list_scheduled_tasks";
 
 type ScheduleToolAction = "create" | "update" | "list" | "pause" | "resume" | "remove" | "run_now";
 
+/** The `trigger` a create may carry instead of a cron (docs/scheduled-task-triggers.md). */
+const SCHEDULE_TRIGGER_PARAMETER = Type.Unsafe<Record<string, unknown>>({
+  type: "object",
+  description:
+    "Create only, instead of cron: run when something happens. Watch: {kind:\"watch\", source:{type:\"url\", url} or {type:\"script\", script}, everyMinutes 5-1440}; the task runs only when the page changes or the script prints something. Link: {kind:\"webhook\", gapMinutes 1-60, optional filters [{path, equals}], dedupePath, includeFields, signatureHeader}; the person gets the private link from the task's details and you never see it. What happened reaches the run as data.",
+});
+
 interface ScheduleToolParams {
   action: ScheduleToolAction;
   id?: string;
@@ -85,6 +93,8 @@ interface ScheduleToolParams {
   notify?: boolean;
   /** Create only: post each run into the chat that made the task. */
   post_in_chat?: boolean;
+  /** Create only: run when a watch sees a change or a link is called, instead of on a cron. */
+  trigger?: unknown;
 }
 
 interface EditAutomationToolParams {
@@ -268,11 +278,33 @@ function approvalScheduleLabel(
   return cadence === "Custom schedule" ? `custom schedule in ${resolvedTimezone}` : cadence;
 }
 
+/**
+ * The trigger a create asks for, checked strictly. Aiden Assistant tasks may
+ * watch an address or run from a link, never run a script unattended.
+ */
+function toolTrigger(value: unknown, assistant: boolean): ScheduledTaskTrigger | undefined {
+  if (value === undefined) return undefined;
+  const trigger = parseScheduledTaskTrigger(value);
+  if (assistant && trigger.kind === "watch" && trigger.source.type === "script") {
+    throw new Error("Aiden Assistant automations can watch a web address or run from a link, not run a script.");
+  }
+  return trigger;
+}
+
+function triggerLabelForSummary(value: unknown): string | undefined {
+  if (value === undefined) return undefined;
+  try {
+    return formatScheduledTaskTriggerLabel(parseScheduledTaskTrigger(value));
+  } catch {
+    return "an invalid trigger";
+  }
+}
+
 export function summarizeScheduleToolCall(value: unknown): string {
   const params = scheduleToolParams(value);
   switch (params.action) {
     case "create":
-      return `Create scheduled task "${approvalDisplayValue(params.name, ASSISTANT_AUTOMATION_NAME_LIMIT, "Untitled")}" (${approvalScheduleLabel(params.cron, params.timezone)}) with ${params.mode === "script" ? "Full" : params.permission === "full" || (params.mcpServerIds?.length ?? 0) > 0 ? "Full" : "read-only"} access${(params.mcpServerIds?.length ?? 0) > 0 ? " and MCP tools" : ""}`;
+      return `Create scheduled task "${approvalDisplayValue(params.name, ASSISTANT_AUTOMATION_NAME_LIMIT, "Untitled")}" (${triggerLabelForSummary(params.trigger) ?? approvalScheduleLabel(params.cron, params.timezone)}) with ${params.mode === "script" ? "Full" : params.permission === "full" || (params.mcpServerIds?.length ?? 0) > 0 ? "Full" : "read-only"} access${(params.mcpServerIds?.length ?? 0) > 0 ? " and MCP tools" : ""}`;
     case "update": {
       const changes = [
         params.name !== undefined ? "name" : undefined,
@@ -433,6 +465,7 @@ function bounded(value: string, label: string, limit: number): string {
 const ASSISTANT_CREATE_KEYS = new Set([
   "action",
   "name",
+  "trigger",
   "cron",
   "timezone",
   "prompt",
@@ -518,7 +551,8 @@ export function prepareAssistantScheduleProposal(
     "prompt",
     ASSISTANT_AUTOMATION_PROMPT_LIMIT,
   );
-  const cron = bounded(
+  const trigger = toolTrigger(record.trigger, true);
+  const cron = trigger ? "" : bounded(
     required(typeof record.cron === "string" ? record.cron : undefined, "cron"),
     "cron",
     ASSISTANT_AUTOMATION_CRON_LIMIT,
@@ -531,7 +565,7 @@ export function prepareAssistantScheduleProposal(
   const timezone = validateTimezone(requestedTimezone);
   assertSafeDisplayText(name, "Task name");
   assertSafeDisplayText(prompt, "Task prompt", true);
-  assertSafeDisplayText(cron, "Cron schedule");
+  if (!trigger) assertSafeDisplayText(cron, "Cron schedule");
   assertSafeDisplayText(timezone, "Timezone");
   assertSafeScheduledPrompt(prompt);
   const workspaceId =
@@ -563,11 +597,13 @@ export function prepareAssistantScheduleProposal(
     );
   }
   const notify = record.notify !== false;
-  const nextRunAt = nextScheduledRun(cron, timezone, from);
+  // A trigger task has no next run: it runs when its watch or link fires.
+  const nextRunAt = trigger ? 0 : nextScheduledRun(cron, timezone, from);
   return {
     input: {
       name,
       cron,
+      ...(trigger ? { trigger } : {}),
       timezone,
       mode: "llm",
       prompt,
@@ -584,6 +620,7 @@ export function prepareAssistantScheduleProposal(
       name,
       prompt,
       cron,
+      ...(trigger ? { whenLabel: formatScheduledTaskTriggerLabel(trigger) } : {}),
       timezone,
       nextRunAt,
       notify,
@@ -608,7 +645,7 @@ export function canonicalizeAssistantScheduleToolArguments(
   return {
     action: "create",
     name: proposal.input.name,
-    cron: proposal.input.cron,
+    ...(proposal.input.trigger ? { trigger: proposal.input.trigger } : { cron: proposal.input.cron }),
     timezone: proposal.input.timezone,
     prompt: proposal.input.prompt,
     ...(proposal.input.workspaceId ? { workspaceId: proposal.input.workspaceId } : {}),
@@ -646,7 +683,7 @@ export async function repairAssistantScheduleMcpTarget(
     {
       action: "create",
       name: proposal.input.name,
-      cron: proposal.input.cron,
+      ...(proposal.input.trigger ? { trigger: proposal.input.trigger } : { cron: proposal.input.cron }),
       timezone: proposal.input.timezone,
       prompt: proposal.input.prompt,
       permission: "full",
@@ -825,6 +862,7 @@ function taskSummary(task: ScheduledTask) {
     lastResult: task.lastResult,
     updatedAt: task.updatedAt,
     postsInChat: Boolean(task.originChatId),
+    ...(task.trigger ? { trigger: formatScheduledTaskTriggerLabel(task.trigger) } : {}),
   };
 }
 
@@ -842,6 +880,7 @@ function assistantTaskSummary(task: ScheduledTask) {
     notify: task.notify,
     updatedAt: task.updatedAt,
     editable: task.mode === "llm" && task.executionProfile === ASSISTANT_SCHEDULE_EXECUTION_PROFILE,
+    ...(task.trigger ? { trigger: formatScheduledTaskTriggerLabel(task.trigger) } : {}),
     nextRunAt: task.nextRunAt,
     lastRunAt: task.lastRunAt,
     lastResult: task.lastResult,
@@ -1086,7 +1125,7 @@ function standardApprovalSummary(details: ScheduledTaskApprovalDetails): string 
             : details.action === "remove"
               ? "Delete"
               : "Run now";
-  const cadence = approvalScheduleLabel(details.cron, details.timezone);
+  const cadence = details.whenLabel ?? approvalScheduleLabel(details.cron, details.timezone);
   const scope = details.workspaceName
     ? `project ${approvalDisplayValue(details.workspaceName, ASSISTANT_AUTOMATION_WORKSPACE_NAME_LIMIT, "unknown")} (${approvalDisplayValue(details.workspaceId, ASSISTANT_AUTOMATION_WORKSPACE_ID_LIMIT, "unknown")})`
     : details.mcpServerNames.length > 0
@@ -1183,6 +1222,9 @@ async function resolveStandardScheduleApproval(
     return defaultModelPromise;
   };
 
+  if (action !== "create" && params.trigger !== undefined) {
+    throw new Error("trigger applies only when creating a task. Change when a task runs in its settings.");
+  }
   if (action !== "create" && params.post_in_chat !== undefined) {
     throw new Error(
       "post_in_chat applies only when creating a task. To stop a task posting into a chat, choose Use its own chat in its settings.",
@@ -1269,6 +1311,8 @@ async function resolveStandardScheduleApproval(
       }
     }
     const selected = await standardSelection(existing, selection, defaultModel);
+    const trigger = action === "create" ? toolTrigger(params.trigger, false) : undefined;
+    if (trigger && mode !== "llm") throw new Error("A task that runs from a trigger asks Aiden; use mode llm.");
     input = {
       id: existing?.id,
       name: bounded(
@@ -1278,11 +1322,12 @@ async function resolveStandardScheduleApproval(
       ),
       enabled: existing?.enabled ?? true,
       mode,
-      cron: bounded(
+      cron: trigger ? "" : bounded(
         required(params.cron ?? existing?.cron, "cron"),
         "cron",
         ASSISTANT_AUTOMATION_CRON_LIMIT,
       ),
+      ...(trigger ? { trigger } : {}),
       timezone: validateTimezone(params.timezone ?? existing?.timezone ?? systemTimezone()),
       workspaceId,
       providerId: existing?.providerId ?? (selection ? selected.providerId : undefined),
@@ -1301,7 +1346,8 @@ async function resolveStandardScheduleApproval(
       const bound = chatBindingForCreate(params, workspaceId, originChatId, defaultWorkspaceId);
       if (bound) {
         try {
-          assertChatTaskCadence(input.cron, input.timezone ?? systemTimezone(), from);
+          // A trigger has no cron floor: the chat's hourly share and the trigger's gap bound it.
+          if (!trigger) assertChatTaskCadence(input.cron, input.timezone ?? systemTimezone(), from);
         } catch {
           throw new Error(
             "This task would run more often than every 15 minutes, so it can't post into this chat. Choose a slower schedule, or set post_in_chat to false so it runs in its own chat.",
@@ -1311,7 +1357,7 @@ async function resolveStandardScheduleApproval(
       }
     }
     assertSafeDisplayText(input.name, "Task name");
-    assertSafeDisplayText(input.cron, "Cron schedule");
+    if (!trigger) assertSafeDisplayText(input.cron, "Cron schedule");
   } else {
     input = { ...existing! };
     if (
@@ -1340,7 +1386,8 @@ async function resolveStandardScheduleApproval(
   }
   const selected = await standardSelection(existing, selection, defaultModel);
   const schedulerEnabled = await dependencies.isSchedulingEnabled();
-  const cron = required(input.cron, "cron");
+  const savedTrigger = input.trigger ?? undefined;
+  const cron = savedTrigger ? "" : required(input.cron, "cron");
   const timezone = validateTimezone(input.timezone ?? systemTimezone());
   const details: ScheduledTaskApprovalDetails = {
     kind: "scheduled-task",
@@ -1352,8 +1399,9 @@ async function resolveStandardScheduleApproval(
     prompt: input.mode === "llm" ? required(input.prompt, "prompt") : null,
     script: input.mode === "script" ? required(input.script, "script") : null,
     cron,
+    ...(savedTrigger ? { whenLabel: formatScheduledTaskTriggerLabel(savedTrigger) } : {}),
     timezone,
-    nextRunAt: nextScheduledRun(cron, timezone, from),
+    nextRunAt: savedTrigger ? 0 : nextScheduledRun(cron, timezone, from),
     notify: input.notify !== false,
     mode: input.mode,
     permission: input.mode === "script" ? "full" : (input.permission ?? "read-only"),
@@ -1569,15 +1617,15 @@ export function createScheduleTaskTool(
       name: SCHEDULE_TOOL_NAME,
       label: "Scheduled Tasks",
       description:
-        "Propose one new LLM automation. action, name, cron, and prompt are required. Creation always pauses for explicit confirmation. Full access requires an exact project ID from list_projects or exact enabled server IDs from list_mcp_servers. MCP-enabled automations run with Full access. Listing, scripts, run-now, pause, resume, and delete are unavailable.",
+        "Propose one new LLM automation. action, name, prompt and either cron or trigger (a URL watch or a link; never a script) are required. Creation always pauses for explicit confirmation. Full access requires an exact project ID from list_projects or exact enabled server IDs from list_mcp_servers. MCP-enabled automations run with Full access. Listing, scripts, run-now, pause, resume, and delete are unavailable.",
       parameters: Type.Object(
         {
           action: Type.Literal("create"),
           name: Type.String({ description: "Required task name." }),
-          cron: Type.String({
+          cron: Type.Optional(Type.String({
             description:
-              'Required five- or six-part cron expression. For every day at 9 AM use "0 9 * * *". The field name is cron, not schedule.',
-          }),
+              'Five- or six-part cron expression, required unless trigger is set. For every day at 9 AM use "0 9 * * *". The field name is cron, not schedule.',
+          })),
           prompt: Type.String({
             description: "Required automation instruction.",
           }),
@@ -1616,11 +1664,12 @@ export function createScheduleTaskTool(
               description: "Show a desktop notification after non-silent runs.",
             }),
           ),
+          trigger: Type.Optional(SCHEDULE_TRIGGER_PARAMETER),
         },
         {
           additionalProperties: false,
           description:
-            "Propose one approval-gated automation. action, name, cron, and prompt are all required.",
+            "Propose one approval-gated automation. action, name, prompt and either cron or trigger are required.",
         },
       ),
       prepareArguments: (rawParams) => canonicalizeAssistantScheduleToolArguments(rawParams),
@@ -1658,6 +1707,7 @@ export function createScheduleTaskTool(
             : task.enabled
               ? "saved"
               : "saved_but_inactive",
+          ...(task.trigger?.kind === "webhook" ? { link: "shown_to_person" } : {}),
         });
       },
     };
@@ -1667,7 +1717,7 @@ export function createScheduleTaskTool(
     name: SCHEDULE_TOOL_NAME,
     label: "Scheduled Tasks",
     description:
-      "Manage Aiden scheduled tasks. Actions: create, update, list, pause, resume, remove, run_now. List tasks immediately before any existing-task action, then pass its exact id, taskName, and updatedAt revision so stale changes and runs fail closed. Create requires name and cron plus prompt for llm mode or script for script mode. Tasks default to read-only; use full only when the task clearly needs unattended writes or commands. Scheduled runs cannot call this tool.",
+      "Manage Aiden scheduled tasks. Actions: create, update, list, pause, resume, remove, run_now. List tasks immediately before any existing-task action, then pass its exact id, taskName, and updatedAt revision so stale changes and runs fail closed. Create requires name and cron plus prompt for llm mode or script for script mode; an llm task can instead take a trigger (a URL or script watch, or a link) to run when something happens. Tasks default to read-only; use full only when the task clearly needs unattended writes or commands. Scheduled runs cannot call this tool.",
     parameters: Type.Object({
       action: Type.Union([
         Type.Literal("create"),
@@ -1699,7 +1749,7 @@ export function createScheduleTaskTool(
       name: Type.Optional(Type.String({ description: "Task name. Required for create." })),
       cron: Type.Optional(
         Type.String({
-          description: "Five- or six-part cron expression. Required for create.",
+          description: "Five- or six-part cron expression. Required for create unless trigger is set.",
         }),
       ),
       timezone: Type.Optional(
@@ -1748,6 +1798,7 @@ export function createScheduleTaskTool(
           description: "Show a desktop notification after non-silent runs.",
         }),
       ),
+      trigger: Type.Optional(SCHEDULE_TRIGGER_PARAMETER),
       post_in_chat: Type.Optional(
         Type.Boolean({
           description:
@@ -1789,6 +1840,8 @@ export function createScheduleTaskTool(
         );
         return result({
           task: taskSummary(task),
+          // A link task's link goes to the person from the task's details; the agent never sees it.
+          ...(task.trigger?.kind === "webhook" ? { status: "saved", link: "shown_to_person" } : {}),
           permissionRecommendation:
             params.action === "create" &&
             prepared.input.mode === "llm" &&

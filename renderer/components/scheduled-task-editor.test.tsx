@@ -175,3 +175,11 @@ test("link filters are written one field = value per line; lines without a field
     { path: "pull_request.state", equals: "closed = yes" },
   ]);
 });
+
+test("a trigger task's approval names its trigger instead of a schedule and promises no next run", () => {
+  const markup = renderApproval({ ...approval, cron: "", nextRunAt: 0, schedulerEnabled: true, whenLabel: "Every 15 min, when example.com/status changes" });
+  assert.ok(markup.includes("Every 15 min, when example.com/status changes"));
+  assert.ok(!markup.includes("Next run"));
+  assert.ok(markup.includes("Allow once"));
+  assert.ok(!renderApproval({ ...approval, cron: "" }).includes("Allow once"), "an empty cron without a trigger withholds Allow");
+});
