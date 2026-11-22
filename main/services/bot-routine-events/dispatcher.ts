@@ -87,6 +87,11 @@ function dayKey(at: number, timeZone: string): string {
   return new Intl.DateTimeFormat("en-CA", { timeZone, year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date(at));
 }
 
+/** The first wait before a failed requeue reconcile is tried again; it doubles each time. */
+export const REQUEUE_RECONCILE_MS = 5_000;
+/** The longest wait between requeue reconcile tries. */
+export const REQUEUE_RECONCILE_MAX_MS = 5 * 60_000;
+
 export function createBotRoutineEventDispatcher(dependencies: BotRoutineEventDispatcherDependencies) {
   return createEventRoutineDispatcher<BotEventRoutine>({ ...dependencies, ownerKey: (routine) => routine.botId });
 }
@@ -96,6 +101,8 @@ export function createEventRoutineDispatcher<R extends EventRoutine>(dependencie
   const limitsOf = (routine: R) => dependencies.limits?.(routine) ?? BOT_ROUTINE_EVENT_LIMITS;
   const payloadChars = dependencies.payloadChars ?? BOT_ROUTINE_EVENT_LIMITS.payloadChars;
   const heldTimers = new Map<string, { cancel(): void }>();
+  /** Reconciles and replays scheduled after a requeue whose write came back rejected. */
+  const recoveryTimers = new Set<{ cancel(): void }>();
   /** Runs started and admissions still deciding, not yet settled in the store, for `idle()`. */
   const pending = new Set<Promise<void>>();
   const active = new Set<string>();
@@ -239,6 +246,54 @@ export function createEventRoutineDispatcher<R extends EventRoutine>(dependencie
     }, Math.max(0, at - dependencies.now())));
   }
 
+  function later(ms: number, work: () => Promise<void>, armedFor: number): void {
+    if (!live(armedFor)) return;
+    const timer = dependencies.setTimer(() => {
+      recoveryTimers.delete(timer);
+      if (live(armedFor)) track(work());
+    }, Math.max(0, ms));
+    recoveryTimers.add(timer);
+  }
+
+  /**
+   * A requeue's write was rejected, so whether it landed is unknown. Reads the
+   * routine again (through the store's per-owner queue) and carries on from
+   * what is there: a held copy is armed; a receipt still running is replayed
+   * once the requeue's wait is over; with neither, the event is settled. A
+   * read that fails is tried again later, waiting longer each time.
+   */
+  async function reconcileRequeue(ownerKey: string, routineId: string, eventId: string, settles: string | undefined,
+    notBefore: number | undefined, armedFor: number, attempt = 0): Promise<void> {
+    if (!live(armedFor)) return;
+    let found: { routine: R; held: boolean; receipt?: BotEventReceipt } | undefined;
+    try {
+      found = await dependencies.store.mutate(ownerKey, routineId, (routine) => ({
+        result: {
+          routine,
+          held: routine.held !== undefined,
+          receipt: settles === undefined ? undefined : routine.running?.find((entry) => entry.eventId === settles),
+        },
+      }));
+    } catch (error) {
+      dependencies.onError?.(error);
+      const wait = Math.min(REQUEUE_RECONCILE_MAX_MS, REQUEUE_RECONCILE_MS * 2 ** attempt);
+      later(wait, () => reconcileRequeue(ownerKey, routineId, eventId, settles, notBefore, armedFor, attempt + 1), armedFor);
+      return;
+    }
+    if (!found || !live(armedFor)) return;
+    const { routine } = found;
+    const gapEnds = (routine.lastRunAt ?? 0) + limitsOf(routine).minGapMs;
+    if (found.held) {
+      armHeld(ownerKey, routineId, gapEnds, armedFor);
+      return;
+    }
+    const receipt = found.receipt;
+    if (!receipt || !routine.enabled) return;
+    const due = Math.max(notBefore ?? gapEnds, dependencies.now() + 1);
+    // claimAndStart reads the receipt again, so one settled meanwhile runs nothing.
+    later(due - dependencies.now(), () => claimAndStart(routine, receipt, armedFor), armedFor);
+  }
+
   async function releaseHeld(ownerKey: string, routineId: string, armedFor: number): Promise<void> {
     if (!live(armedFor) || await dependencies.isPaused(ownerKey)) return;
     const now = dependencies.now();
@@ -374,32 +429,40 @@ export function createEventRoutineDispatcher<R extends EventRoutine>(dependencie
         if (!live(armedFor)) return;
         const retries = (event.retries ?? 0) + 1;
         let dropped: { routine: R; held: BotEventReceipt } | undefined;
-        const at = await dependencies.store.mutate<number | undefined>(ownerKey, routineId, (routine) => {
-          // Once per event: a write that was rejected after it landed already
-          // settled the receipt (or holds this event), so a second call
-          // changes nothing rather than combining the payload twice.
-          if (routine.held?.eventId === event.eventId) return { result: undefined };
-          if (options.settles !== undefined && !(routine.running ?? []).some((entry) => entry.eventId === options.settles)) return { result: undefined };
-          const running = (routine.running ?? []).filter((entry) => entry.eventId !== options.settles);
-          const { running: _previous, ...rest } = routine;
-          const settled = (running.length ? { ...rest, running } : rest) as R;
-          const day = options.refund && routine.day && routine.day.count > 0 ? { ...routine.day, count: routine.day.count - 1 } : routine.day;
-          if (!routine.enabled) return running.length === (routine.running ?? []).length ? { result: undefined } : { next: settled, result: undefined };
-          if (options.maxRetries !== undefined && retries > options.maxRetries) {
-            dropped = { routine, held: { eventId: event.eventId, payload: event.payload, at: dependencies.now(), retries: retries - 1 } };
-            return { next: { ...settled, ...(day ? { day } : {}) }, result: undefined };
-          }
-          const payload = [...combine(event.payload, routine.held?.payload).slice(0, payloadChars * 2)].slice(0, payloadChars).join("");
-          const held: BotEventReceipt = routine.held
-            ? { ...routine.held, payload, retries: Math.max(routine.held.retries ?? 0, retries) }
-            : { eventId: event.eventId, payload, at: dependencies.now(), retries, ...(event.watchRevision !== undefined ? { watchRevision: event.watchRevision } : {}) };
-          const gap = limitsOf(routine).minGapMs;
-          const lastRunAt = options.notBefore !== undefined ? Math.max(routine.lastRunAt ?? 0, options.notBefore - gap) : routine.lastRunAt;
-          return {
-            next: { ...settled, held, ...(lastRunAt !== undefined ? { lastRunAt } : {}), ...(day ? { day } : {}) },
-            result: (lastRunAt ?? 0) + gap,
-          };
-        });
+        let at: number | undefined;
+        try {
+          at = await dependencies.store.mutate<number | undefined>(ownerKey, routineId, (routine) => {
+            // Once per event: a write that was rejected after it landed already
+            // settled the receipt (or holds this event), so a second call
+            // changes nothing rather than combining the payload twice.
+            if (routine.held?.eventId === event.eventId) return { result: undefined };
+            if (options.settles !== undefined && !(routine.running ?? []).some((entry) => entry.eventId === options.settles)) return { result: undefined };
+            const running = (routine.running ?? []).filter((entry) => entry.eventId !== options.settles);
+            const { running: _previous, ...rest } = routine;
+            const settled = (running.length ? { ...rest, running } : rest) as R;
+            const day = options.refund && routine.day && routine.day.count > 0 ? { ...routine.day, count: routine.day.count - 1 } : routine.day;
+            if (!routine.enabled) return running.length === (routine.running ?? []).length ? { result: undefined } : { next: settled, result: undefined };
+            if (options.maxRetries !== undefined && retries > options.maxRetries) {
+              dropped = { routine, held: { eventId: event.eventId, payload: event.payload, at: dependencies.now(), retries: retries - 1 } };
+              return { next: { ...settled, ...(day ? { day } : {}) }, result: undefined };
+            }
+            const payload = [...combine(event.payload, routine.held?.payload).slice(0, payloadChars * 2)].slice(0, payloadChars).join("");
+            const held: BotEventReceipt = routine.held
+              ? { ...routine.held, payload, retries: Math.max(routine.held.retries ?? 0, retries) }
+              : { eventId: event.eventId, payload, at: dependencies.now(), retries, ...(event.watchRevision !== undefined ? { watchRevision: event.watchRevision } : {}) };
+            const gap = limitsOf(routine).minGapMs;
+            const lastRunAt = options.notBefore !== undefined ? Math.max(routine.lastRunAt ?? 0, options.notBefore - gap) : routine.lastRunAt;
+            return {
+              next: { ...settled, held, ...(lastRunAt !== undefined ? { lastRunAt } : {}), ...(day ? { day } : {}) },
+              result: (lastRunAt ?? 0) + gap,
+            };
+          });
+        } catch (error) {
+          // The write may have landed before it was reported failed: what is
+          // there decides what runs next, so the event isn't left until a restart.
+          track(reconcileRequeue(ownerKey, routineId, event.eventId, options.settles, options.notBefore, armedFor));
+          throw error;
+        }
         if (at !== undefined) armHeld(ownerKey, routineId, at, armedFor);
         if (dropped) await dependencies.heldDropped?.(dropped.routine, dropped.held, "retries").catch((error: unknown) => dependencies.onError?.(error));
       })());
@@ -410,6 +473,8 @@ export function createEventRoutineDispatcher<R extends EventRoutine>(dependencie
       generation += 1;
       for (const timer of heldTimers.values()) timer.cancel();
       heldTimers.clear();
+      for (const timer of recoveryTimers) timer.cancel();
+      recoveryTimers.clear();
     },
 
     /** Accepts events again after `dispose()`; work begun before the stop stays stopped. */

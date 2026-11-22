@@ -26,6 +26,7 @@ class MemoryPersistence<T> {
     return result;
   }
   snapshot(): T { return structuredClone(this.data); }
+  restore(data: T): void { this.data = structuredClone(data); }
 }
 
 const MINUTE = 60_000;
@@ -44,6 +45,7 @@ function watchTask(overrides: Partial<ScheduledTask> = {}): ScheduledTask {
 
 function harness(options: { tasks?: ScheduledTask[]; checks?: BotWatchCheck[]; runResult?: ScheduledRun["result"]; runResults?: RunScript; stateDir?: string; fireDueTimers?: boolean; connector?: TaskConnectorTriggers; linkSecret?: string } = {}) {
   let clock = 1_800_000_000_000;
+  const later: Array<{ at: number; fn: () => void; cancelled: boolean }> = [];
   const tasks = options.tasks ?? [watchTask()];
   const checks = [...(options.checks ?? [])];
   const events: Array<{ taskId: string; event: Extract<ScheduledRunTrigger, { kind: "event" }>; runId: string }> = [];
@@ -93,9 +95,14 @@ function harness(options: { tasks?: ScheduledTask[]; checks?: BotWatchCheck[]; r
     needsSource: async (task) => { needsSource.push(task.id); },
     now: () => clock,
     timeZone: () => "UTC",
-    // Timers that are already due fire on the next tick when asked; later ones wait for the test.
+    // Timers that are already due fire on the next tick when asked; later ones wait for the test (`fireTimers`).
     setTimer: (fn, ms) => {
-      if (!options.fireDueTimers || ms > 0) return { cancel() {} };
+      if (ms > 0) {
+        const timer = { at: clock + ms, fn, cancelled: false };
+        later.push(timer);
+        return { cancel: () => { timer.cancelled = true; } };
+      }
+      if (!options.fireDueTimers) return { cancel() {} };
       const handle = setTimeout(fn, 0);
       return { cancel: () => clearTimeout(handle) };
     },
@@ -104,6 +111,20 @@ function harness(options: { tasks?: ScheduledTask[]; checks?: BotWatchCheck[]; r
   return {
     tasks, store, triggers, events, cards, persistence, bytes, runs, notices, released, needsSource, fetched,
     advance: (ms: number) => { clock += ms; },
+    /** Runs the later timers that are due by now (and any they set that are due too), then waits for the work they start. */
+    async fireTimers() {
+      for (let pass = 0; pass < 20; pass += 1) {
+        const due = later.filter((timer) => !timer.cancelled && timer.at <= clock);
+        for (const timer of due) {
+          timer.cancelled = true;
+          timer.fn();
+        }
+        // Due timers (and those set with no wait) start their work on the next tick.
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        await triggers.idle();
+        if (!due.length) break;
+      }
+    },
     async check(taskId = "task-1") {
       const outcome = await triggers.checkNow(taskId);
       await triggers.idle();
@@ -907,6 +928,61 @@ test("a hold-again write that lands and then reports failure leaves exactly one 
     await runHeld(link, 60 * MINUTE, 2);
     assert.equal(link.events.length, 2, `${label}: one more run, not two`);
     assert.equal((link.events[1]!.event.payload.match(/"n": 0/gu) ?? []).length, 1, `${label}: carrying the call once`);
+    link.triggers.stop();
+  }
+});
+
+test("a hold-again write reported failed still runs the call once, without a restart", async () => {
+  for (const scenario of [
+    { label: "the write landed", lands: true, readFails: false },
+    { label: "the write never landed", lands: false, readFails: false },
+    { label: "the write landed and the first look back failed", lands: true, readFails: true },
+  ]) {
+    const link = linkHarness({ kind: "webhook", gapMinutes: 10 }, [{ result: "skipped", reason: "chat_busy" }]);
+    await link.setUp();
+    type Book = { held?: { payload: string }; running?: unknown[] };
+    const book = () => (link.persistence.snapshot() as { tasks: Record<string, Book> }).tasks["task-1"];
+    // The write that holds the call is reported failed: after it was published, or before.
+    let holdRejected = false;
+    let readRejected = !scenario.readFails;
+    const update = link.persistence.update.bind(link.persistence);
+    link.persistence.update = async (mutation) => {
+      if (holdRejected && !readRejected) {
+        readRejected = true;
+        throw new Error("EIO: the task store could not be read");
+      }
+      const before = book()?.held !== undefined;
+      if (!holdRejected && !scenario.lands) {
+        // Reject only the hold-again write: run it on a copy to see whether it would hold the call.
+        const snapshot = structuredClone(link.persistence.snapshot());
+        const result = await update(mutation);
+        if (!before && book()?.held !== undefined) {
+          link.persistence.restore(snapshot);
+          holdRejected = true;
+          throw new Error("EIO: the write could not be saved");
+        }
+        return result;
+      }
+      const result = await update(mutation);
+      if (!holdRejected && !before && book()?.held !== undefined) {
+        holdRejected = true;
+        throw new Error("EIO: the folder could not be synced");
+      }
+      return result;
+    };
+    assert.equal(await link.call({ n: 0 }), 202);
+    await link.triggers.idle();
+    assert.equal(holdRejected, true, `${scenario.label}: the hold-again write was reported failed`);
+    assert.equal(link.events.length, 1, `${scenario.label}: the busy run`);
+
+    // Aiden keeps running: no stop, start or rearm. Past the wait, the call runs once.
+    for (let step = 0; step < 8 && link.events.length < 3; step += 1) {
+      link.advance(10 * MINUTE);
+      await link.fireTimers();
+    }
+    assert.equal(link.events.length, 2, `${scenario.label}: one more run, not two`);
+    assert.equal((link.events[1]!.event.payload.match(/"n": 0/gu) ?? []).length, 1, `${scenario.label}: carrying the call once`);
+    assert.equal(book()?.held, undefined, `${scenario.label}: nothing is left held`);
     link.triggers.stop();
   }
 });
