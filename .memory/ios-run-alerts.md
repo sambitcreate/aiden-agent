@@ -58,3 +58,8 @@ Branch `feature/aiden-ios-notifications-activities-62cf67`, plan `docs/plans/ios
   (`DenyApprovalIntent`, a `LiveActivityIntent` that runs in the app process). Approve is never on the card.
 - The responder answers once (scope nil); 409 with an `*_already_resolved`/`*_expired`/`approval_resolved` code counts
   as done; a forgotten Mac drops the action.
+- Summary Live Activity (`AidenRunsSummaryActivityAttributes` + `AidenRunsSummaryPolicy`, app and widget targets):
+  a second live run on the same `instanceID` merges every card for that Mac into one summary (rows keyed by streamID).
+  The manager keeps `summaryRuns[instance][stream]`; `update`/`finish` fall through to the summary when the per-run
+  activity is gone. It ends 300 s after every row is final; `endAll` and `reconcile` handle summaries too. The summary
+  has no buttons; a tap opens the most urgent chat (waiting > failed > working > done, newest first).

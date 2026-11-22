@@ -6,6 +6,7 @@ import WidgetKit
 struct AidenLiveActivityWidgetBundle: WidgetBundle {
     var body: some Widget {
         AgentRunLiveActivityWidget()
+        AidenRunsSummaryLiveActivityWidget()
     }
 }
 

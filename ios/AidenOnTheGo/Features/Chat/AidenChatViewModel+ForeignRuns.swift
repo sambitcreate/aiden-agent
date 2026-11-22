@@ -344,7 +344,8 @@ extension AidenChatViewModel {
             deviceID: context.deviceId,
             chatID: chat.id,
             title: chat.displayTitle,
-            streamID: projection.runId
+            streamID: projection.runId,
+            machineName: ownerMachineName
         )
         if let approval = projection.pendingApproval {
             await liveActivities.approvalRequired(

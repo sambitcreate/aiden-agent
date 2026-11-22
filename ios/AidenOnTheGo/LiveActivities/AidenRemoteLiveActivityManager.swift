@@ -25,6 +25,13 @@ final class AidenRemoteLiveActivityManager {
     }
 
     private typealias ContentState = AgentRunActivityAttributes.ContentState
+    private typealias SummaryActivity = Activity<AidenRunsSummaryActivityAttributes>
+    private typealias SummaryState = AidenRunsSummaryActivityAttributes.ContentState
+
+    private struct SummaryRun {
+        var chatID: String
+        var state: ContentState
+    }
 
     private let preferences: @MainActor () -> AidenNotificationPreferences
     /// False keeps this manager off the device's ActivityKit entirely: it
@@ -33,6 +40,10 @@ final class AidenRemoteLiveActivityManager {
     private var currentActivity: Activity<AgentRunActivityAttributes>?
     private var stateByActivityID: [String: ContentState] = [:]
     private var throttleByActivityID: [String: AidenLatestValueThrottle<ContentState>] = [:]
+    /// Runs on each Mac's summary card, by Mac then stream. The reducer
+    /// state keeps advancing here after the run's own card has ended.
+    private var summaryRuns: [String: [String: SummaryRun]] = [:]
+    private var summaryThrottleByID: [String: AidenLatestValueThrottle<SummaryState>] = [:]
 
     /// `preferences` defaults to the person's saved ones in `defaults`.
     init(
@@ -48,6 +59,10 @@ final class AidenRemoteLiveActivityManager {
         drivesActivityKit ? Activity<AgentRunActivityAttributes>.activities : []
     }
 
+    private var systemSummaries: [SummaryActivity] {
+        drivesActivityKit ? SummaryActivity.activities : []
+    }
+
     /// Settings → Notifications → Reply text on Lock Screen; off by default.
     var includesResponseExcerpts: Bool {
         preferences().replyTextOnLockScreen
@@ -61,7 +76,16 @@ final class AidenRemoteLiveActivityManager {
         attributes.instanceID == instanceID && attributes.streamID == streamID
     }
 
-    func start(instanceID: String, deviceID: String? = nil, chatID: String, title: String, streamID: String) async {
+    /// A second live run on the same Mac turns that Mac's cards into one
+    /// summary card, named after `machineName`.
+    func start(
+        instanceID: String,
+        deviceID: String? = nil,
+        chatID: String,
+        title: String,
+        streamID: String,
+        machineName: String = String(localized: "your computer")
+    ) async {
         guard drivesActivityKit, ActivityAuthorizationInfo().areActivitiesEnabled else { return }
         let startedAt = Date()
         let attributes = AgentRunActivityAttributes(
@@ -82,6 +106,20 @@ final class AidenRemoteLiveActivityManager {
             currentActivity = existing
             stateByActivityID[existing.id] = state
             await throttle(for: existing).submitUrgent(state)
+            return
+        }
+
+        let others = systemActivities.filter {
+            $0.attributes.instanceID == instanceID && isLive($0) && !self.state(for: $0).isFinal
+        }
+        if summary(for: instanceID) != nil || !others.isEmpty {
+            await mergeIntoSummary(
+                instanceID: instanceID,
+                deviceID: deviceID,
+                machineName: machineName,
+                others: others,
+                adding: (streamID: streamID, run: SummaryRun(chatID: chatID, state: state))
+            )
             return
         }
 
@@ -184,6 +222,13 @@ final class AidenRemoteLiveActivityManager {
             currentActivity = activity
             await throttle(for: activity).submitUrgent(next)
         }
+        for (instanceID, runs) in summaryRuns {
+            for (streamID, run) in runs where run.state.approval?.approvalID == approvalID {
+                await updateSummaryRun(instanceID: instanceID, streamID: streamID, urgency: .immediate) {
+                    AgentRunActivityStateReducer.answered(decision: decision, state: $0)
+                }
+            }
+        }
     }
 
     func questionRequired(instanceID: String, streamID: String) async {
@@ -220,6 +265,10 @@ final class AidenRemoteLiveActivityManager {
             stateByActivityID[activity.id] = nil
             if currentActivity?.id == activity.id { currentActivity = nil }
         }
+        for summary in systemSummaries where summary.attributes.instanceID == instanceID && isLive(summary) {
+            await endSummary(summary, state: summary.content.state, dismissalPolicy: .immediate)
+        }
+        summaryRuns[instanceID] = nil
     }
 
     func finish(
@@ -229,7 +278,17 @@ final class AidenRemoteLiveActivityManager {
         message: String,
         errorSummary: String? = nil
     ) async {
-        guard let activity = activity(instanceID: instanceID, streamID: streamID) else { return }
+        guard let activity = activity(instanceID: instanceID, streamID: streamID) else {
+            await updateSummaryRun(instanceID: instanceID, streamID: streamID, urgency: .immediate) {
+                AgentRunActivityStateReducer.final(
+                    status: status,
+                    activity: message,
+                    state: $0,
+                    errorSummary: errorSummary
+                )
+            }
+            return
+        }
         var state = AgentRunActivityStateReducer.final(
             status: status,
             activity: message,
@@ -287,6 +346,21 @@ final class AidenRemoteLiveActivityManager {
                 await throttle(for: activity).submitUrgent(state)
             }
         }
+        for summary in systemSummaries where summary.attributes.instanceID == instanceID && isLive(summary) {
+            guard isCurrent() else { return }
+            // A summary from an older pairing of the machine.
+            guard Self.isSamePairing(summary.attributes.deviceID, deviceID) else {
+                await endSummary(summary, state: summary.content.state, dismissalPolicy: .immediate)
+                summaryRuns[instanceID] = nil
+                continue
+            }
+            rehydrateSummaryRuns(from: summary)
+            for (streamID, run) in summaryRuns[instanceID] ?? [:] where !run.state.isFinal {
+                guard let status = try? await client.streamStatus(id: streamID) else { continue }
+                guard isCurrent() else { return }
+                await updateStatus(instanceID: instanceID, streamID: streamID, state: status.state)
+            }
+        }
     }
 
     /// Unset on either side counts as a match: an activity from an older build
@@ -325,13 +399,156 @@ final class AidenRemoteLiveActivityManager {
         }
     }
 
+    // MARK: Summary card
+
+    private func summary(for instanceID: String) -> SummaryActivity? {
+        systemSummaries.first { $0.attributes.instanceID == instanceID && isLive($0) }
+    }
+
+    /// Requests the Mac's summary (or updates the one there), then ends the
+    /// single-run cards it replaces. It stays a summary until every run ends.
+    private func mergeIntoSummary(
+        instanceID: String,
+        deviceID: String?,
+        machineName: String,
+        others: [Activity<AgentRunActivityAttributes>],
+        adding new: (streamID: String, run: SummaryRun)
+    ) async {
+        let existing = summary(for: instanceID)
+        if let existing { rehydrateSummaryRuns(from: existing) }
+        var runs = summaryRuns[instanceID] ?? [:]
+        for other in others {
+            runs[other.attributes.streamID ?? other.id] = SummaryRun(
+                chatID: other.attributes.sessionID,
+                state: state(for: other)
+            )
+        }
+        runs[new.streamID] = new.run
+        summaryRuns[instanceID] = runs
+        let summaryState = summaryState(for: instanceID)
+
+        if let existing {
+            await summaryThrottle(for: existing).submitUrgent(summaryState)
+        } else {
+            do {
+                let activity = try SummaryActivity.request(
+                    attributes: AidenRunsSummaryActivityAttributes(
+                        instanceID: instanceID,
+                        deviceID: deviceID,
+                        machineName: machineName
+                    ),
+                    content: ActivityContent(state: summaryState, staleDate: nil),
+                    pushType: nil
+                )
+                summaryThrottle(for: activity).markDelivered(summaryState)
+            } catch {
+                summaryRuns[instanceID] = nil
+                AidenDiagnostics.record(.liveActivity, event: .liveActivityFailed, outcome: .degraded, code: .unavailable)
+                return
+            }
+        }
+
+        for other in others {
+            let state = state(for: other)
+            discardThrottle(for: other.id)
+            await other.end(content(for: state), dismissalPolicy: .immediate)
+            stateByActivityID[other.id] = nil
+            if currentActivity?.id == other.id { currentActivity = nil }
+        }
+    }
+
+    private func updateSummaryRun(
+        instanceID: String,
+        streamID: String,
+        urgency: UpdateUrgency,
+        transform: (ContentState) -> ContentState
+    ) async {
+        guard let summary = summary(for: instanceID) else {
+            summaryRuns[instanceID] = nil
+            return
+        }
+        rehydrateSummaryRuns(from: summary)
+        guard var run = summaryRuns[instanceID]?[streamID] else { return }
+        run.state = transform(run.state)
+        summaryRuns[instanceID]?[streamID] = run
+        let state = summaryState(for: instanceID)
+        if state.rows.allSatisfy(\.isFinal) {
+            await endSummary(summary, state: state, dismissalPolicy: .after(Date().addingTimeInterval(300)))
+            return
+        }
+        switch urgency {
+        case .coalesced:
+            await summaryThrottle(for: summary).submit(state)
+        case .immediate:
+            await summaryThrottle(for: summary).submitUrgent(state)
+        }
+    }
+
+    /// After a relaunch the summary's rows are all that's left of its runs.
+    private func rehydrateSummaryRuns(from summary: SummaryActivity) {
+        let instanceID = summary.attributes.instanceID
+        guard summaryRuns[instanceID]?.isEmpty != false else { return }
+        var runs: [String: SummaryRun] = [:]
+        for row in summary.content.state.rows {
+            var state = AgentRunActivityStateReducer.initialState(
+                sessionID: row.chatID,
+                sessionTitle: row.title,
+                startedAt: row.updatedAt
+            )
+            state.status = row.status
+            state.updatedAt = row.updatedAt
+            state.isFinal = row.isFinal
+            runs[row.streamID] = SummaryRun(chatID: row.chatID, state: state)
+        }
+        summaryRuns[instanceID] = runs
+    }
+
+    private func summaryState(for instanceID: String) -> SummaryState {
+        let rows = (summaryRuns[instanceID] ?? [:]).map { streamID, run in
+            AidenRunsSummaryActivityAttributes.Row(
+                streamID: streamID,
+                chatID: run.chatID,
+                title: run.state.sessionTitle,
+                status: run.state.status,
+                updatedAt: run.state.updatedAt,
+                isFinal: run.state.isFinal
+            )
+        }
+        return SummaryState(rows: AidenRunsSummaryPolicy.ordered(rows))
+    }
+
+    private func endSummary(
+        _ summary: SummaryActivity,
+        state: SummaryState,
+        dismissalPolicy: ActivityUIDismissalPolicy
+    ) async {
+        summaryThrottleByID.removeValue(forKey: summary.id)?.cancel()
+        summaryRuns[summary.attributes.instanceID] = nil
+        await summary.end(ActivityContent(state: state, staleDate: nil), dismissalPolicy: dismissalPolicy)
+    }
+
+    private func summaryThrottle(for activity: SummaryActivity) -> AidenLatestValueThrottle<SummaryState> {
+        if let existing = summaryThrottleByID[activity.id] { return existing }
+        let throttle = AidenLatestValueThrottle<SummaryState>(
+            interval: Self.coalescedUpdateInterval
+        ) { [weak self, weak activity] state in
+            guard let self, let activity, self.isLive(activity) else { return }
+            await activity.update(ActivityContent(state: state, staleDate: nil))
+        }
+        summaryThrottleByID[activity.id] = throttle
+        return throttle
+    }
+
     private func update(
         instanceID: String,
         streamID: String,
         urgency: UpdateUrgency = .coalesced,
         transform: (ContentState) -> ContentState
     ) async {
-        guard let activity = activity(instanceID: instanceID, streamID: streamID), isLive(activity) else { return }
+        guard let activity = activity(instanceID: instanceID, streamID: streamID), isLive(activity) else {
+            await updateSummaryRun(instanceID: instanceID, streamID: streamID, urgency: urgency, transform: transform)
+            return
+        }
         currentActivity = activity
         var state = transform(state(for: activity))
         if !includesResponseExcerpts, !state.responseExcerpt.isEmpty {
@@ -386,7 +603,7 @@ final class AidenRemoteLiveActivityManager {
         }
     }
 
-    private func isLive(_ activity: Activity<AgentRunActivityAttributes>) -> Bool {
+    private func isLive<Attributes: ActivityAttributes>(_ activity: Activity<Attributes>) -> Bool {
         activity.activityState == .active || activity.activityState == .stale
     }
 

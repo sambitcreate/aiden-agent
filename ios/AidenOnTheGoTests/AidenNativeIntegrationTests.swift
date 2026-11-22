@@ -891,6 +891,167 @@ final class AidenNativeIntegrationTests: XCTestCase {
         XCTAssertEqual(ran, [])
     }
 
+    // MARK: Runs summary
+
+    private func row(
+        _ chatID: String,
+        _ status: AgentRunActivityStatus,
+        t: Double = 0,
+        final: Bool = false
+    ) -> AidenRunsSummaryActivityAttributes.Row {
+        AidenRunsSummaryActivityAttributes.Row(
+            streamID: "stream-\(chatID)",
+            chatID: chatID,
+            title: "Chat \(chatID)",
+            status: status,
+            updatedAt: Date(timeIntervalSince1970: t),
+            isFinal: final
+        )
+    }
+
+    func testSummaryOrdersByUrgencyThenRecency() {
+        let rows = [
+            row("a", .complete, t: 5, final: true),
+            row("b", .runningCommand, t: 4),
+            row("c", .waitingForApproval, t: 1),
+            row("d", .failed, t: 2, final: true),
+            row("e", .thinking, t: 6),
+            row("f", .waitingForAnswer, t: 3),
+        ]
+        XCTAssertEqual(AidenRunsSummaryPolicy.ordered(rows).map(\.chatID), ["f", "c", "d", "e", "b", "a"])
+        XCTAssertEqual(AidenRunsSummaryPolicy.tapChatID(rows), "f")
+        XCTAssertNil(AidenRunsSummaryPolicy.tapChatID([]))
+    }
+
+    func testSummaryHeadlineCountsRunsAndAsks() {
+        let rows = [row("a", .waitingForApproval), row("b", .thinking), row("c", .complete, final: true)]
+        let headline = AidenRunsSummaryPolicy.headline(rows: rows, machineName: "MacBook Pro")
+        XCTAssertEqual(headline.title, "3 runs on MacBook Pro")
+        XCTAssertEqual(headline.trailing, "1 needs you")
+        let two = AidenRunsSummaryPolicy.headline(
+            rows: [row("a", .waitingForApproval), row("b", .waitingForAnswer)],
+            machineName: "Mac"
+        )
+        XCTAssertEqual(two.trailing, "2 need you")
+        XCTAssertNil(AidenRunsSummaryPolicy.headline(rows: [row("b", .thinking), row("c", .thinking)], machineName: "Mac").trailing)
+    }
+
+    func testSummaryRowStatusUsesPlainWords() {
+        XCTAssertEqual(AidenRunsSummaryPolicy.rowStatus(row("a", .waitingForApproval)), "Needs approval")
+        XCTAssertEqual(AidenRunsSummaryPolicy.rowStatus(row("a", .waitingForAnswer)), "Has a question")
+        XCTAssertEqual(AidenRunsSummaryPolicy.rowStatus(row("a", .runningCommand)), AgentRunActivityStatus.runningCommand.title)
+        XCTAssertEqual(AidenRunsSummaryPolicy.rowStatus(row("a", .complete, final: true)), "Done")
+        XCTAssertEqual(AidenRunsSummaryPolicy.rowStatus(row("a", .failed, final: true)), "Failed")
+        XCTAssertEqual(AidenRunsSummaryPolicy.rowStatus(row("a", .cancelled, final: true)), "Stopped")
+    }
+
+    func testSummaryShowsThreeRowsAndCountsTheRest() {
+        let rows = (0..<5).map { row("r\($0)", .thinking, t: Double($0)) }
+        let visible = AidenRunsSummaryPolicy.visible(rows)
+        XCTAssertEqual(visible.shown.map(\.chatID), ["r4", "r3", "r2"])
+        XCTAssertEqual(visible.hiddenCount, 2)
+        XCTAssertEqual(AidenRunsSummaryPolicy.visible(Array(rows.prefix(2))).hiddenCount, 0)
+    }
+
+    @MainActor
+    func testSecondRunOnTheSameMacMergesIntoOneSummaryCard() async throws {
+        guard ActivityAuthorizationInfo().areActivitiesEnabled else {
+            throw XCTSkip("Live Activities are disabled on this device.")
+        }
+        let mac = "summary-mac-\(UUID().uuidString)"
+        let manager = AidenRemoteLiveActivityManager(preferences: { AidenNotificationPreferences() })
+        defer { Task { @MainActor in await manager.endAll(forInstanceID: mac) } }
+        func summaries() -> [Activity<AidenRunsSummaryActivityAttributes>] {
+            Activity<AidenRunsSummaryActivityAttributes>.activities.filter {
+                $0.attributes.instanceID == mac && ($0.activityState == .active || $0.activityState == .stale)
+            }
+        }
+
+        await manager.start(instanceID: mac, chatID: "c1", title: "Fix login", streamID: "s1", machineName: "MacBook Pro")
+        let first = try XCTUnwrap(Activity<AgentRunActivityAttributes>.activities.first {
+            $0.attributes.instanceID == mac && $0.attributes.streamID == "s1"
+        })
+        XCTAssertTrue(summaries().isEmpty, "one run keeps its own card")
+
+        await manager.start(instanceID: mac, chatID: "c2", title: "Write docs", streamID: "s2", machineName: "MacBook Pro")
+        await assertDeliveredEnd(of: first)
+        XCTAssertFalse(Activity<AgentRunActivityAttributes>.activities.contains {
+            $0.attributes.instanceID == mac && ($0.activityState == .active || $0.activityState == .stale)
+        })
+        let summary = try XCTUnwrap(summaries().first)
+        XCTAssertEqual(summaries().count, 1)
+        XCTAssertEqual(summary.attributes.machineName, "MacBook Pro")
+        XCTAssertEqual(Set(summary.content.state.rows.map(\.streamID)), ["s1", "s2"])
+
+        await manager.approvalRequired(instanceID: mac, streamID: "s1", target: nil)
+        let waiting = await eventually("s1 to read Needs approval") {
+            summary.content.state.rows.first { $0.streamID == "s1" }?.status == .waitingForApproval
+        }
+        XCTAssertTrue(waiting)
+
+        await manager.finish(instanceID: mac, streamID: "s1", status: .complete, message: "Done")
+        XCTAssertEqual(summaries().count, 1, "a summary stays while any run is live")
+        await manager.finish(instanceID: mac, streamID: "s2", status: .failed, message: "Failed")
+        let ended = await eventually("the summary to end") { summaries().isEmpty }
+        XCTAssertTrue(ended)
+        XCTAssertEqual(summary.content.state.rows.filter(\.isFinal).count, 2)
+    }
+
+    @MainActor
+    func testRunsOnDifferentMacsNeverMergeIntoOneSummary() async throws {
+        guard ActivityAuthorizationInfo().areActivitiesEnabled else {
+            throw XCTSkip("Live Activities are disabled on this device.")
+        }
+        let macA = "summary-a-\(UUID().uuidString)"
+        let macB = "summary-b-\(UUID().uuidString)"
+        let manager = AidenRemoteLiveActivityManager(preferences: { AidenNotificationPreferences() })
+        await manager.start(instanceID: macA, chatID: "c1", title: "One", streamID: "s1", machineName: "Mac A")
+        await manager.start(instanceID: macB, chatID: "c2", title: "Two", streamID: "s2", machineName: "Mac B")
+        let runs = Activity<AgentRunActivityAttributes>.activities.filter {
+            ($0.attributes.instanceID == macA || $0.attributes.instanceID == macB) && $0.activityState == .active
+        }
+        XCTAssertEqual(runs.count, 2)
+        XCTAssertFalse(Activity<AidenRunsSummaryActivityAttributes>.activities.contains {
+            $0.attributes.instanceID == macA || $0.attributes.instanceID == macB
+        })
+        await manager.endAll(forInstanceID: macA)
+        await manager.endAll(forInstanceID: macB)
+    }
+
+    @MainActor
+    func testEndAllEndsAMacsSummaryToo() async throws {
+        guard ActivityAuthorizationInfo().areActivitiesEnabled else {
+            throw XCTSkip("Live Activities are disabled on this device.")
+        }
+        let mac = "summary-forget-\(UUID().uuidString)"
+        let manager = AidenRemoteLiveActivityManager(preferences: { AidenNotificationPreferences() })
+        await manager.start(instanceID: mac, chatID: "c1", title: "One", streamID: "s1", machineName: "Mac")
+        await manager.start(instanceID: mac, chatID: "c2", title: "Two", streamID: "s2", machineName: "Mac")
+        let summary = try XCTUnwrap(Activity<AidenRunsSummaryActivityAttributes>.activities.first {
+            $0.attributes.instanceID == mac
+        })
+        await manager.endAll(forInstanceID: mac)
+        let ended = await eventually("the summary to end") {
+            summary.activityState == .ended || summary.activityState == .dismissed
+        }
+        XCTAssertTrue(ended)
+    }
+
+    @MainActor
+    private func eventually(
+        _ what: String,
+        ceiling: TimeInterval = 30,
+        _ check: () -> Bool
+    ) async -> Bool {
+        let deadline = Date().addingTimeInterval(ceiling)
+        while Date() < deadline {
+            if check() { return true }
+            try? await Task.sleep(for: .milliseconds(100))
+        }
+        XCTFail("Timed out waiting for \(what)")
+        return false
+    }
+
     // MARK: Notification preferences
 
     func testPreferencesDefaultAndRoundTrip() throws {

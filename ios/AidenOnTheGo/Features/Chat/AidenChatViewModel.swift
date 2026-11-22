@@ -478,6 +478,11 @@ final class AidenChatViewModel {
         isReadOnlyFixture ? nil : coordinator.hosts.connection(for: owner.instanceId)
     }
 
+    /// The owner Mac's name, as a summary Live Activity names it.
+    var ownerMachineName: String {
+        ownerConnection?.installation.name ?? String(localized: "your computer")
+    }
+
     /// The owner's `/server` answer. Nil until that machine has connected,
     /// which a machine that isn't selected may not have done yet.
     var ownerServer: AidenServer? { ownerConnection?.server }
@@ -2003,7 +2008,8 @@ final class AidenChatViewModel {
                     deviceID: context.deviceId,
                     chatID: chat.id,
                     title: chat.displayTitle,
-                    streamID: response.streamId
+                    streamID: response.streamId,
+                    machineName: ownerMachineName
                 )
             }
             accepted = accepted && cache.isChatWriteRetained(acceptedWriteToken, instanceId: instanceId, chatId: chat.id)
@@ -2968,7 +2974,8 @@ final class AidenChatViewModel {
                     deviceID: context.deviceId,
                     chatID: chat.id,
                     title: chat.displayTitle,
-                    streamID: stream.streamId
+                    streamID: stream.streamId,
+                    machineName: ownerMachineName
                 )
             }
             guard !isRemoved, activeStreamID == stream.streamId else {

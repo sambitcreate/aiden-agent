@@ -198,6 +198,9 @@
 		A04500000000000000000004 /* AgentRunActivityAttributes.swift in Sources */ = {isa = PBXBuildFile; fileRef = A04500000000000000000010 /* AgentRunActivityAttributes.swift */; };
 		A04500000000000000000005 /* AidenDeepLink.swift in Sources */ = {isa = PBXBuildFile; fileRef = A04500000000000000000011 /* AidenDeepLink.swift */; };
 		A04500000000000000000006 /* AgentRunLiveActivityWidget.swift in Sources */ = {isa = PBXBuildFile; fileRef = A04500000000000000000013 /* AgentRunLiveActivityWidget.swift */; };
+		A1A100000000000000000006 /* AidenRunsSummaryActivityAttributes.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1A100000000000000000015 /* AidenRunsSummaryActivityAttributes.swift */; };
+		A1A100000000000000000007 /* AidenRunsSummaryActivityAttributes.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1A100000000000000000015 /* AidenRunsSummaryActivityAttributes.swift */; };
+		A1A100000000000000000008 /* AidenRunsSummaryLiveActivityWidget.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1A100000000000000000016 /* AidenRunsSummaryLiveActivityWidget.swift */; };
 		A04500000000000000000007 /* AidenLiveActivityWidget.appex in Embed App Extensions */ = {isa = PBXBuildFile; fileRef = A04500000000000000000017 /* AidenLiveActivityWidget.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		A04500000000000000000008 /* aiden-sidebar-logo.png in Resources */ = {isa = PBXBuildFile; fileRef = A04500000000000000000018 /* aiden-sidebar-logo.png */; };
 		A0DB00000000000000000001 /* AidenRemoteLiveActivityManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0DB00000000000000000011 /* AidenRemoteLiveActivityManager.swift */; };
@@ -555,6 +558,8 @@
 		A04500000000000000000010 /* AgentRunActivityAttributes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentRunActivityAttributes.swift; sourceTree = "<group>"; };
 		A04500000000000000000011 /* AidenDeepLink.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenDeepLink.swift; sourceTree = "<group>"; };
 		A04500000000000000000013 /* AgentRunLiveActivityWidget.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentRunLiveActivityWidget.swift; sourceTree = "<group>"; };
+		A1A100000000000000000015 /* AidenRunsSummaryActivityAttributes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenRunsSummaryActivityAttributes.swift; sourceTree = "<group>"; };
+		A1A100000000000000000016 /* AidenRunsSummaryLiveActivityWidget.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenRunsSummaryLiveActivityWidget.swift; sourceTree = "<group>"; };
 		A04500000000000000000014 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		A04500000000000000000018 /* aiden-sidebar-logo.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; name = "aiden-sidebar-logo.png"; path = AidenOnTheGo/Resources/Assets.xcassets/AidenSidebarLogo.imageset/aiden-sidebar-logo.png; sourceTree = SOURCE_ROOT; };
 		A04500000000000000000017 /* AidenLiveActivityWidget.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = AidenLiveActivityWidget.appex; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -1067,6 +1072,7 @@
 			isa = PBXGroup;
 			children = (
 				A04500000000000000000010 /* AgentRunActivityAttributes.swift */,
+				A1A100000000000000000015 /* AidenRunsSummaryActivityAttributes.swift */,
 				A04500000000000000000011 /* AidenDeepLink.swift */,
 				A1A100000000000000000011 /* AidenApprovalIntents.swift */,
 				A0DB00000000000000000011 /* AidenRemoteLiveActivityManager.swift */,
@@ -1087,6 +1093,7 @@
 			isa = PBXGroup;
 			children = (
 				A04500000000000000000013 /* AgentRunLiveActivityWidget.swift */,
+				A1A100000000000000000016 /* AidenRunsSummaryLiveActivityWidget.swift */,
 				A04500000000000000000022 /* Resources */,
 			);
 			path = AidenLiveActivityWidget;
@@ -1365,6 +1372,7 @@
 				A0F000000000000000000001 /* AidenProviderIcon.swift in Sources */,
 				1A2B3C4D5E6F700000000338 /* AidenAppIntents.swift in Sources */,
 				A04500000000000000000001 /* AgentRunActivityAttributes.swift in Sources */,
+				A1A100000000000000000006 /* AidenRunsSummaryActivityAttributes.swift in Sources */,
 				A04500000000000000000002 /* AidenDeepLink.swift in Sources */,
 				A0DB00000000000000000001 /* AidenRemoteLiveActivityManager.swift in Sources */,
 				A0F100000000000000000011 /* AidenLatestValueThrottle.swift in Sources */,
@@ -1559,9 +1567,11 @@
 			buildActionMask = 2147483647;
 			files = (
 				A04500000000000000000004 /* AgentRunActivityAttributes.swift in Sources */,
+				A1A100000000000000000007 /* AidenRunsSummaryActivityAttributes.swift in Sources */,
 				A04500000000000000000005 /* AidenDeepLink.swift in Sources */,
 				A1A100000000000000000002 /* AidenApprovalIntents.swift in Sources */,
 				A04500000000000000000006 /* AgentRunLiveActivityWidget.swift in Sources */,
+				A1A100000000000000000008 /* AidenRunsSummaryLiveActivityWidget.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
