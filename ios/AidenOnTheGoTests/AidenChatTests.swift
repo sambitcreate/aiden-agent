@@ -16610,6 +16610,9 @@ final class AidenMessageVisualSnapshotLayoutTests: XCTestCase {
         }
         .environment(AidenHapticCenter())
         let host = UIHostingController(rootView: view)
+        // Drawn at `width` whatever the screen's insets, which a window narrower
+        // than the screen still takes (84 pt on the right of an open iPhone Duo).
+        host.safeAreaRegions = []
         // Host in the app's scene. A window that belongs to no scene can take a
         // layout pass whose thumbnail loads never reach the screen, leaving the
         // spinners in place however long the test waits.
