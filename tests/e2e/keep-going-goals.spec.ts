@@ -192,12 +192,19 @@ test("a round on screen stops, pausing the goal as closed, when its window opens
   });
   const goal = () => page.evaluate(async (id) => (await window.aidenAPI.ipc.invoke("chats:goal:get", id)) as { status: string; reason?: string } | null, chatId);
   expect((await goal())?.status).toBe("active");
+  // Leaving the chat pane detaches the round and closes its question, and the
+  // round then asks the model again. A real model takes a while to answer; the
+  // deterministic one answers at once, which could end the round before the
+  // Bot's pane reports what the window shows. Holding the answer keeps the
+  // round running, as it would be, when the window moves on.
+  lmStudio.holdCompletions!();
 
   // A Bot's conversation is another chat: the round this window owns stops, and the goal says why.
   await page.getByRole("button", { name: "Bots", exact: true }).click();
   await expect(page.getByPlaceholder("Ask Planner")).toBeVisible({ timeout: 15_000 });
   await expect.poll(async () => (await goal())?.status, { timeout: 15_000 }).toBe("paused");
   expect((await goal())?.reason).toBe("The chat was closed");
+  lmStudio.releaseCompletions!();
 });
 
 /** A suggestion near the 300-character limit: the card must show all of it. */
