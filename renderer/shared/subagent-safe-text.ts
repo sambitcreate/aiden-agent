@@ -98,6 +98,7 @@ const ASSIGNMENT_KEY_LEFT_BOUNDARY = /[\p{L}\p{M}\p{N}_-]/u;
 const COMBINING_MARK = /\p{M}/u;
 const INTERNAL_SECURITY_MARKUP = /(?<=[A-Za-z0-9_])(?:\*{1,2}|__|~~|`{1,3})(?=[A-Za-z0-9_=:])/gu;
 const ENCODED_TEXT_REDACTION = "[REDACTED ENCODED TEXT]";
+const UNSETTLED_TEXT_REDACTION = "[REDACTED TEXT]";
 const CONTROL_SPLIT_REDACTION = "[REDACTED CONTROL-SPLIT TEXT]";
 const MARKDOWN_CONTENT_REDACTION = "[REDACTED MARKDOWN CONTENT]";
 const RENDERED_REDACTION_PLACEHOLDER = /\[?REDACTED(?: [A-Z-]+)*\]?/gu;
@@ -938,24 +939,48 @@ function quotedEnvironmentValueEnd(value: string, start: number): number | undef
   return value.length;
 }
 
+/**
+ * End of an indented block value. The block ends at the line break before the
+ * next unindented line, so that line break stays in the output and a second
+ * pass over redacted text gives the same text. Blank lines inside the block
+ * are kept with it only when more indented lines follow them.
+ */
 function indentedEnvironmentValueEnd(value: string, end: number): number {
   let valueEnd = end;
+  let cursor = end;
   let sawIndentedLine = false;
-  while (value[valueEnd] === "\r" || value[valueEnd] === "\n") {
-    let next = valueEnd + 1;
-    if (value[valueEnd] === "\r" && value[next] === "\n") next += 1;
+  while (value[cursor] === "\r" || value[cursor] === "\n") {
+    let next = cursor + 1;
+    if (value[cursor] === "\r" && value[next] === "\n") next += 1;
     const contentStart = next;
     while (value[next] === " " || value[next] === "\t") next += 1;
     if (next === contentStart) {
       if (!sawIndentedLine) return valueEnd;
-      valueEnd = next;
+      cursor = next;
       continue;
     }
     sawIndentedLine = true;
     while (next < value.length && value[next] !== "\r" && value[next] !== "\n") next += 1;
     valueEnd = next;
+    cursor = next;
   }
   return valueEnd;
+}
+
+function blockValueStartsOnNextLine(value: string, start: number): boolean {
+  return value[start] === "\r" || value[start] === "\n";
+}
+
+/**
+ * `JSON:`, `HTML:`, `NOTE:` or `TASK:` followed by an indented block is a
+ * label, not a setting. A colon-and-block is private only when the name looks
+ * like a real setting: it has an underscore or digit, or it is a known
+ * sensitive name such as `TOKEN` or `PASSWORD`.
+ */
+function colonBlockNameLooksLikeSetting(name: string): boolean {
+  if (/[_0-9]/u.test(name)) return true;
+  const skeleton = name.toLowerCase();
+  return (SENSITIVE_KEY_SKELETONS as readonly string[]).includes(skeleton);
 }
 
 function environmentValueEnd(value: string, start: number): number {
@@ -1004,6 +1029,13 @@ function redactEnvironmentAssignments(value: string): string {
       continue;
     }
     const valueStart = offset + match[0].length;
+    if (
+      !isTightEqualsAssignment &&
+      blockValueStartsOnNextLine(value, valueStart) &&
+      !colonBlockNameLooksLikeSetting(name)
+    ) {
+      continue;
+    }
     const valueEnd = environmentValueEnd(value, valueStart);
     if (valueEnd <= valueStart) continue;
     redacted += `${value.slice(cursor, offset)}${match[0]}[REDACTED ENVIRONMENT VALUE]`;
@@ -1259,15 +1291,43 @@ export interface SubagentTextSanitization {
   privacyReplacement: boolean;
 }
 
+/** Passes of the plain filter before its output must be stable. */
+const MAX_SANITIZE_PASSES = 3;
+
+/**
+ * Re-run the plain filter until its output stops changing, so one redaction
+ * that exposes another (for example a credential assignment that now owns an
+ * environment placeholder) settles instead of hiding the whole text.
+ */
+function settledSanitizeVariant(value: string, includeEnvironment: boolean): string {
+  let safe = sanitizeVariant(value, includeEnvironment);
+  for (let pass = 1; pass < MAX_SANITIZE_PASSES; pass += 1) {
+    const next = sanitizeVariant(safe, includeEnvironment);
+    if (next === safe) break;
+    safe = next;
+  }
+  return safe;
+}
+
 function sanitizeWithPolicyFacts(
   value: string,
   includeEnvironment: boolean,
 ): SubagentTextSanitization {
   const { compact, hadControls, spaced } = controlVariants(value);
-  const safe = sanitizeVariant(spaced, includeEnvironment);
+  const safe = settledSanitizeVariant(spaced, includeEnvironment);
   const directReplacement = safe !== spaced;
   if (nonMarkdownPolicyIsUnsafe(safe, includeEnvironment)) {
-    return { text: ENCODED_TEXT_REDACTION, privacyReplacement: true };
+    // The encoded-text marker is for credentials hidden by an encoding or a
+    // look-alike key. Plain text whose filter output never settles gets the
+    // generic marker instead.
+    const settled = controlVariants(safe);
+    const unsettledPlainText =
+      !containsObfuscatedAssignmentKey(settled.spaced) &&
+      sanitizeVariant(settled.spaced, includeEnvironment) !== settled.spaced;
+    return {
+      text: unsettledPlainText ? UNSETTLED_TEXT_REDACTION : ENCODED_TEXT_REDACTION,
+      privacyReplacement: true,
+    };
   }
   if (hadControls) {
     const compactSafe = sanitizeVariant(compact, includeEnvironment);
@@ -1308,4 +1368,20 @@ export function sanitizeSubagentSnapshotText(value: string): string {
  */
 export function sanitizeSubagentSnapshotTextWithFacts(value: string): SubagentTextSanitization {
   return sanitizeWithPolicyFacts(value, true);
+}
+
+const LABEL_LINE_BREAK = /(?<![A-Za-z0-9_])([A-Z]{2,64}):[ \t]*(?:\r\n?|\n)[ \t]*/gu;
+
+/**
+ * Collapse text onto one line for single-line previews. A bare all-caps label
+ * that ends its line, such as `JSON:` or `TASK:`, is joined to what follows
+ * with a dash instead of `: `. On one line, `JSON: value` reads as a setting
+ * and would be hidden, although the multi-line text treats it as a label.
+ */
+export function collapseSubagentTextToSingleLine(value: string): string {
+  return value
+    .replace(LABEL_LINE_BREAK, (whole, name: string) =>
+      colonBlockNameLooksLikeSetting(name) ? whole : `${name} — `,
+    )
+    .replace(/\s+/gu, " ");
 }

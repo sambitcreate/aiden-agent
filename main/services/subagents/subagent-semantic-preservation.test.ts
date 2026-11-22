@@ -144,3 +144,65 @@ test("terminal controls cannot survive either exposure boundary", () => {
     }
   }
 });
+
+const IMPLEMENTER_TASK_WITH_LABEL_BLOCKS = [
+  "Add cooking times to cookbook.html.",
+  "",
+  "JSON:",
+  '  {"recipes": [{"name": "Dal", "minutes": 40}]}',
+  "TASK:",
+  "  Keep the layout; add a time badge.",
+  "Report the files you changed.",
+].join("\n");
+
+test("a task with JSON: and TASK: label blocks shows in full in the saved panel view", () => {
+  const projector = new SubagentEventProjector({
+    generationId: "generation-label-blocks",
+    chatId: "chat-label-blocks",
+    workspaceId: "workspace-label-blocks",
+    modelId: "test-model",
+    now: () => 1_000,
+  });
+  projector.begin(
+    { runId: "run-label-blocks", groupId: "group-label-blocks", childId: "child-label-blocks" },
+    { role: "implementer", label: "Cooking times", task: IMPLEMENTER_TASK_WITH_LABEL_BLOCKS },
+  );
+  const snapshot = projector.snapshot()[0];
+  assert.ok(snapshot);
+  assert.equal(
+    snapshot.taskPreview,
+    'Add cooking times to cookbook.html. JSON — {"recipes": [{"name": "Dal", "minutes": 40}]} ' +
+      "TASK — Keep the layout; add a time badge. Report the files you changed.",
+  );
+  assert.equal(snapshot.projectionNotices, undefined);
+  assert.deepEqual(parseSubagentRunSnapshotV1(snapshot), snapshot);
+  assert.equal(sanitizeSubagentText(IMPLEMENTER_TASK_WITH_LABEL_BLOCKS), IMPLEMENTER_TASK_WITH_LABEL_BLOCKS);
+});
+
+test("a real API_KEY: block stays hidden while the text around it survives", () => {
+  const value = "Use this config:\nAPI_KEY:\n  abcd1234efgh5678\nDone.";
+  for (const sanitize of [sanitizeSubagentText, sanitizeSubagentSnapshotText]) {
+    const safe = sanitize(value);
+    assert.doesNotMatch(safe, /abcd1234efgh5678/u);
+    assert.match(safe, /^Use this config:\n/u);
+    assert.match(safe, /\nDone\.$/u);
+  }
+});
+
+test("filtering already-filtered text changes nothing", () => {
+  const samples = [
+    ...SAFE_TASK_AND_MODEL_TEXT,
+    SAFE_TASK_AND_MODEL_TEXT.join("\n"),
+    IMPLEMENTER_TASK_WITH_LABEL_BLOCKS,
+    "Use this config:\nAPI_KEY:\n  abcd1234efgh5678\nDone.",
+    "api_key=actual-secret-value",
+    "Authorization: Bearer eyJhbGciOiJIUzI1NiJ9.actual.signature",
+    "Document [REDACTED] then token=actual-secret-value",
+  ];
+  for (const sample of samples) {
+    for (const sanitize of [sanitizeSubagentText, sanitizeSubagentSnapshotText]) {
+      const once = sanitize(sample);
+      assert.equal(sanitize(once), once, sample);
+    }
+  }
+});

@@ -26,7 +26,10 @@ import {
 import type { SubagentTaskRequest, SubagentTaskResult } from "./contracts.js";
 import type { GenerationThinkingLevel } from "../../../renderer/shared/generation-thinking.js";
 import type { SubagentModelSelectionSource } from "../../../renderer/shared/subagent-runs.js";
-import { sanitizeSubagentSnapshotTextWithFacts } from "../../../renderer/shared/subagent-safe-text.js";
+import {
+  collapseSubagentTextToSingleLine,
+  sanitizeSubagentSnapshotTextWithFacts,
+} from "../../../renderer/shared/subagent-safe-text.js";
 
 const MAX_DURABLE_LIVE_MILESTONES = 4;
 
@@ -134,7 +137,7 @@ function boundedSingleLineProjection(
   marker?: string,
 ): ProjectedText {
   const normalized = normalizeProjectedTextWithFacts(value);
-  const projected = boundedProjection(normalized.text.replace(/\s+/gu, " "), maximum, marker);
+  const projected = boundedProjection(collapseSubagentTextToSingleLine(normalized.text), maximum, marker);
   return {
     ...projected,
     displayFiltered: normalized.displayFiltered || projected.displayFiltered,
