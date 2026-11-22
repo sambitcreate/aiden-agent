@@ -55,7 +55,6 @@ function mount(state: ChatFollowThroughV1 | undefined, handlers: Record<string, 
   const calls = installBotTestIpc({
     "chats:followThroughStopJob": () => undefined,
     "chats:followThroughStopFollow": () => undefined,
-    "chats:followThroughClearCheck": () => undefined,
     "chats:followThroughNudgePullRequests": () => undefined,
     "chats:followThroughJobOutput": () => ({ job: job(), output: "VITE ready on http://localhost:5173\n", truncated: false }),
     ...handlers,
@@ -188,29 +187,6 @@ test("the follow chip names the pull request, opens it, and stops following", as
   assert.deepEqual(calls.find((call) => call.channel === "chats:followThroughStopFollow")?.args, [
     { chatId: "chat-1", host: "github.com", repository: "acme/app", number: 42 },
   ]);
-});
-
-test("the check chip reads as the loop's state and can be stopped or dismissed", async () => {
-  const waiting = {
-    ...emptyChatFollowThrough("chat-1"),
-    check: { command: "npm test", state: "waiting" as const, checksRun: 2, setAt: NOW, lastExitCode: 1 },
-  };
-  const first = mount(waiting);
-  const chip = screen.getByRole("button", { name: /^Done when: npm test\./u });
-  assert.equal(chip.textContent, "Until npm test passes");
-  fireEvent.click(chip);
-  const dialog = await screen.findByRole("dialog", { name: "Done-when check" });
-  assert.ok(within(dialog).getByText("Last run failed with code 1 · 2 of 5 checks used"));
-  fireEvent.click(within(dialog).getByRole("button", { name: "Stop checking" }));
-  await waitFor(() => assert.equal(first.changed(), 1));
-  assert.deepEqual(first.calls.find((call) => call.channel === "chats:followThroughClearCheck")?.args, [{ chatId: "chat-1" }]);
-  cleanup();
-
-  mount({ ...waiting, check: { ...waiting.check, state: "passed", checksRun: 3, lastExitCode: 0 } });
-  const passed = screen.getByRole("button", { name: /^Done when: npm test\./u });
-  assert.equal(passed.textContent, "Check passed");
-  fireEvent.click(passed);
-  assert.ok(await screen.findByRole("button", { name: "Dismiss" }));
 });
 
 test("a notice card shows its heading and opens to exactly what the agent was told", () => {

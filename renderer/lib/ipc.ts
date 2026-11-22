@@ -1716,7 +1716,7 @@ export const chatsApi = {
   btwCancel: (chatId: string, requestId: string) =>
     invoke<boolean>("chats:btwCancel", { chatId, requestId }),
   btwClear: (chatId: string) => invoke<void>("chats:btwClear", { chatId }),
-  // Follow-through: background jobs, followed pull requests and the done-when check.
+  // Follow-through: background jobs, followed pull requests and check-backs.
   followThrough: async (chatId: string): Promise<ChatFollowThroughV1> => {
     const value = parseChatFollowThrough(await invoke<unknown>("chats:followThrough", chatId));
     if (!value || value.chatId !== chatId) throw new Error("The follow-through response was invalid.");
@@ -1732,9 +1732,6 @@ export const chatsApi = {
   /** Read this chat's followed pull requests soon, or every chat's when `chatId` is omitted. */
   nudgeFollowedPullRequests: (chatId?: string) =>
     invoke<void>("chats:followThroughNudgePullRequests", chatId === undefined ? {} : { chatId }),
-  setDoneWhenCheck: (chatId: string, command: string) =>
-    invoke<void>("chats:followThroughSetCheck", { chatId, command }),
-  clearDoneWhenCheck: (chatId: string) => invoke<void>("chats:followThroughClearCheck", { chatId }),
   cancelCheckBack: (chatId: string, id: string) => invoke<void>("chats:followThroughCancelCheckBack", { chatId, id }),
   // Keep-going goals: one per chat; `chats:goal-changed` carries every change.
   goal: async (chatId: string): Promise<GoalView | null> => {
@@ -1747,6 +1744,12 @@ export const chatsApi = {
   /** Sets the chat's goal (replacing any earlier one); send the objective as the next message after it. */
   setGoal: async (chatId: string, objective: string, source: "slash" | "menu"): Promise<GoalView> => {
     const goal = parseGoalView(await invoke<unknown>("chats:goal:set", { chatId, objective, source }));
+    if (!goal) throw new Error("The goal response was invalid.");
+    return goal;
+  },
+  /** `/until <command>`: a goal that is done when the command exits 0, checked after each answer, 5 checks at most. */
+  setGoalCheck: async (chatId: string, command: string): Promise<GoalView> => {
+    const goal = parseGoalView(await invoke<unknown>("chats:goal:set", { chatId, source: "until", check: command }));
     if (!goal) throw new Error("The goal response was invalid.");
     return goal;
   },

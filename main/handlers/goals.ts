@@ -5,6 +5,9 @@
 //   earlier one. The renderer then sends the objective as the person's message;
 //   the kickoff note rides on that turn. Throws the loop's refusal (a Bot's or
 //   an owned chat, no model, the switch off, an objective over the limit).
+//   With `source: "until"` it takes `check` (the `/until` command) instead of
+//   an objective: the goal is done when that command exits 0, and its first
+//   check runs at once in an idle chat.
 // - `chats:goal:pause|resume|clear({chatId})`: the person's actions. Resume is
 //   also Keep going: round 1 again, and a round starts if the chat is idle.
 //
@@ -13,6 +16,7 @@
 
 import type { GoalLoop } from "../services/goal/goal-loop.js";
 import type { GoalSource, GoalView } from "../../renderer/shared/goal.js";
+import { untilGoalObjective } from "../services/follow-through/done-when.js";
 
 export const GOAL_GET_CHANNEL = "chats:goal:get";
 export const GOAL_SET_CHANNEL = "chats:goal:set";
@@ -20,8 +24,8 @@ export const GOAL_PAUSE_CHANNEL = "chats:goal:pause";
 export const GOAL_RESUME_CHANNEL = "chats:goal:resume";
 export const GOAL_CLEAR_CHANNEL = "chats:goal:clear";
 
-/** The sources a desktop window may claim; phone and `/until` goals arrive by other routes. */
-const DESKTOP_SOURCES: readonly GoalSource[] = ["slash", "menu", "proposal"];
+/** The sources a desktop window may claim; phone goals arrive by another route. */
+const DESKTOP_SOURCES: readonly GoalSource[] = ["slash", "menu", "proposal", "until"];
 
 export interface GoalHandlerDependencies {
   handle(channel: string, handler: (event: unknown, ...args: unknown[]) => unknown): void;
@@ -49,9 +53,14 @@ export function registerGoalHandlers(dependencies: GoalHandlerDependencies): voi
     activeDocument(event);
     const value = record(input);
     const id = chatId(value.chatId);
-    if (typeof value.objective !== "string") throw new Error("Say what the goal is.");
     const source = value.source as GoalSource;
     if (!DESKTOP_SOURCES.includes(source)) throw new Error("Invalid goal source.");
+    if (source === "until") {
+      const command = typeof value.check === "string" ? value.check.trim() : "";
+      if (!command) throw new Error("Name the check to run, for example /until npm test.");
+      return loop.set(id, { objective: untilGoalObjective(command), source, check: command });
+    }
+    if (typeof value.objective !== "string") throw new Error("Say what the goal is.");
     return loop.set(id, { objective: value.objective, source });
   });
 

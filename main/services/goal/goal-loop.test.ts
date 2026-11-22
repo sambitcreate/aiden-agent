@@ -8,6 +8,7 @@ import { agentNotice, type AgentNoticeV1 } from "../../../renderer/shared/agent-
 import { createGoal, type GoalRoundActivity } from "./goal-core.js";
 import { GoalLoop, type GoalAnalyticsEvent, type GoalRoundStart } from "./goal-loop.js";
 import type { GoalReviewOutcome } from "./goal-reviewer.js";
+import type { GoalCheckResult } from "../follow-through/done-when.js";
 
 const CHAT = "chat-1";
 
@@ -23,7 +24,12 @@ function continueWith(reason: string): GoalReviewOutcome {
   return { kind: "verdict", verdict: { verdict: "continue", reason }, via: "continuation" };
 }
 
-function harness(options: { enabled?: boolean; refusal?: string } = {}) {
+function harness(options: {
+  enabled?: boolean;
+  refusal?: string;
+  check?: (goal: GoalRecordV1) => Promise<GoalCheckResult>;
+  checkRefusal?: string;
+} = {}) {
   let clock = 1_000;
   let ids = 0;
   let reviewCount = 0;
@@ -60,6 +66,14 @@ function harness(options: { enabled?: boolean; refusal?: string } = {}) {
       reviewCount += 1;
       return state.review(goal, input);
     },
+    ...(options.check
+      ? {
+          runCheck: (goal: GoalRecordV1) => options.check!(goal),
+          prepareCheck: async () => {
+            if (options.checkRefusal) throw new Error(options.checkRefusal);
+          },
+        }
+      : {}),
     startRound: async (_chatId, _context, round) => {
       rounds.push(round);
       return state.roundStart;
@@ -367,4 +381,59 @@ test("a waking notice starts a goal round only while the goal is active", async 
   h.loop.pause(CHAT);
   assert.equal(await h.loop.noticeRound(CHAT), undefined, "a paused goal leaves notices to the usual wake");
   assert.deepEqual(h.noticeRounds, ["job ended"]);
+});
+
+test("an /until goal runs its check at once in an idle chat, starts a round on failure and stops after 5 checks", async () => {
+  const checks: number[] = [];
+  const h = harness({
+    check: async (goal) => {
+      checks.push(goal.rounds);
+      return { kind: "finished", passed: false, summary: "`npm test` failed (exit code 1)", details: "The check printed nothing." };
+    },
+  });
+  const view = await h.loop.set(CHAT, { objective: "Keep going until `npm test` passes", source: "until", check: "npm test" });
+  assert.equal(view.maxRounds, 5);
+  assert.equal(h.loop.kickoff(CHAT), undefined, "no objective message, so no kickoff note");
+  await h.flush();
+  assert.deepEqual(checks, [1], "the first check ran without waiting for an answer");
+  assert.equal(h.reviews(), 0, "a command goal has no reviewer");
+  assert.equal(h.rounds.length, 1);
+  assert.equal(h.rounds[0]!.notice.title, "Keep going · check 2 of 5");
+  assert.match(h.rounds[0]!.text, /keep going until this check passes: `npm test`/u);
+  for (let round = 0; round < 4; round += 1) await h.runSettles();
+  assert.deepEqual(checks, [1, 2, 3, 4, 5]);
+  assert.equal(h.goal()?.status, "paused");
+  assert.equal(h.goal()?.reason, "Check still failing after 5 checks");
+  assert.equal(h.rounds.length, 4, "no round after the fifth check");
+  // Keep going grants five more checks.
+  h.state.busy = true;
+  await h.loop.resume(CHAT);
+  assert.equal(h.goal()?.rounds, 1);
+  assert.equal(h.goal()?.maxRounds, 5);
+});
+
+test("an /until goal set during an answer checks when it ends; a pass is done and a stopped check pauses", async () => {
+  let result: GoalCheckResult = { kind: "finished", passed: true, summary: "`npm test` passed", details: "" };
+  const h = harness({ check: async () => result });
+  h.state.busy = true;
+  await h.loop.set(CHAT, { objective: "Keep going until `npm test` passes", source: "until", check: "npm test" });
+  await h.flush();
+  assert.equal(h.goal()?.status, "active", "nothing runs while the answer is going");
+  h.state.busy = false;
+  await h.runSettles();
+  assert.equal(h.goal()?.status, "done");
+  assert.equal(h.goal()?.reason, "`npm test` passed");
+
+  result = { kind: "stopped", summary: "The check `npm test` was stopped before it finished" };
+  await h.loop.set(CHAT, { objective: "Keep going until `npm test` passes", source: "until", check: "npm test" });
+  await h.flush();
+  assert.equal(h.goal()?.status, "paused");
+  assert.equal(h.goal()?.reason, "The check `npm test` was stopped before it finished");
+  assert.equal(h.rounds.length, 0);
+});
+
+test("an /until goal is refused where its check can't run", async () => {
+  const h = harness({ check: async () => ({ kind: "stopped", summary: "x" }), checkRefusal: "Folder access is off for this chat." });
+  await assert.rejects(h.loop.set(CHAT, { objective: "Keep going until `npm test` passes", source: "until", check: "npm test" }), /Folder access is off/);
+  assert.equal(h.goal(), null);
 });

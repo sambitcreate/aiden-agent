@@ -45,6 +45,7 @@ import { goalContinuationNote, goalKickoffNote, goalReminder, goalRoundTitle } f
 import type { GoalReviewOutcome } from "./goal-reviewer.js";
 import type { GoalRunSettled } from "./goal-turn-hooks.js";
 import type { StartTurnResult } from "../follow-through/notice-delivery.js";
+import type { GoalCheckResult } from "../follow-through/done-when.js";
 
 export type GoalAnalyticsEvent =
   | { event: "goal_started"; properties: { source: GoalSource } }
@@ -76,7 +77,9 @@ export interface GoalLoopDependencies {
   fallbackContext(chatId: string): Promise<OwedTurnContext | undefined>;
   review(goal: GoalRecordV1, input: { allowWait: boolean; signal: AbortSignal }): Promise<GoalReviewOutcome>;
   /** A command goal's check; without it, command goals are refused. */
-  runCheck?(goal: GoalRecordV1, signal: AbortSignal): Promise<{ passed: boolean; summary: string }>;
+  runCheck?(goal: GoalRecordV1, signal: AbortSignal): Promise<GoalCheckResult>;
+  /** Throws why this chat can't run a command goal's check (folder access off, a replaced worktree). */
+  prepareCheck?(chatId: string): Promise<void>;
   startRound(chatId: string, context: OwedTurnContext, round: { text: string; notice: AgentNoticeV1 }): Promise<GoalRoundStart>;
   /**
    * A round that answers a notice (a finished job, a pull request update):
@@ -128,6 +131,7 @@ export class GoalLoop {
       if (!this.deps.runCheck) throw new GoalLoopError("Goals checked by a command aren't available yet.");
       check = validateGoalCheck(input.check);
       if (!check) throw new GoalLoopError("The check must be one command line of up to 1,000 characters.");
+      await this.deps.prepareCheck?.(chatId);
     }
     const created = createGoal({
       id: this.deps.newId(),
@@ -142,9 +146,13 @@ export class GoalLoop {
     const previous = this.goals.get(chatId);
     this.stopReview(chatId);
     if (previous?.status === "active") this.reportSettled(previous, "cleared");
-    this.kickoffs.add(created.goal.id);
+    // A command goal sends no objective message: its first check runs now if
+    // the chat is idle, or when the current answer ends, and the round after
+    // a failure says what the goal is.
+    if (!check) this.kickoffs.add(created.goal.id);
     this.write(created.goal);
     this.deps.report({ event: "goal_started", properties: { source: input.source } });
+    if (check && !this.deps.isChatBusy(chatId)) this.look(chatId);
     return goalView(created.goal);
   }
 
@@ -200,14 +208,19 @@ export class GoalLoop {
   runSettled(event: GoalRunSettled): void {
     if (this.stopped) return;
     this.contexts.set(event.chatId, event.context);
-    const goal = this.goals.get(event.chatId);
-    if (!goal || goal.status !== "active" || this.reviews.has(event.chatId)) return;
+    this.look(event.chatId, event);
+  }
+
+  /** Runs the loop for the chat: after a run settled, or for a command goal's first check. */
+  private look(chatId: string, event: Pick<GoalRunSettled, "stopped" | "failed"> = { stopped: false, failed: false }): void {
+    const goal = this.goals.get(chatId);
+    if (this.stopped || !goal || goal.status !== "active" || this.reviews.has(chatId)) return;
     const controller = new AbortController();
-    this.reviews.set(event.chatId, controller);
-    void this.afterSettle(event, controller)
+    this.reviews.set(chatId, controller);
+    void this.afterSettle({ chatId, stopped: event.stopped, failed: event.failed }, controller)
       .catch((error: unknown) => this.deps.log("The keep-going goal could not continue.", error))
       .finally(() => {
-        if (this.reviews.get(event.chatId) === controller) this.reviews.delete(event.chatId);
+        if (this.reviews.get(chatId) === controller) this.reviews.delete(chatId);
       });
   }
 
@@ -267,7 +280,7 @@ export class GoalLoop {
 
   // ── The loop ─────────────────────────────────────────────────────────────
 
-  private async afterSettle(event: GoalRunSettled, controller: AbortController): Promise<void> {
+  private async afterSettle(event: Pick<GoalRunSettled, "chatId" | "stopped" | "failed">, controller: AbortController): Promise<void> {
     const { signal } = controller;
     try {
       await this.deps.delay(GOAL_SETTLE_DELAY_MS, signal);
@@ -300,11 +313,17 @@ export class GoalLoop {
     if (signal.aborted) return;
     let next: GoalStep | undefined;
     let reason: string | undefined;
+    let details: string | undefined;
     if (step.kind === "check") {
       const result = await this.deps.runCheck!(goal, signal);
       if (signal.aborted) return;
-      next = applyGoalCheck(goal, result, this.deps.now());
-      reason = result.summary;
+      if (result.kind === "stopped") {
+        next = { goal: pauseGoal(goal, { now: this.deps.now(), cause: "failed", reason: result.summary }), next: "settled" };
+      } else {
+        next = applyGoalCheck(goal, result, this.deps.now());
+        reason = result.summary;
+        details = result.details;
+      }
     } else {
       let current = goal;
       for (let attempt = 0; attempt < 2; attempt += 1) {
@@ -335,11 +354,11 @@ export class GoalLoop {
     if (next.next === "round") {
       this.cancelWatchdog(event.chatId);
       // A send from the person during the review is this round's work.
-      if (!this.deps.isChatBusy(event.chatId)) await this.startRound(next.goal, reason);
+      if (!this.deps.isChatBusy(event.chatId)) await this.startRound(next.goal, reason, details);
     }
   }
 
-  private async startRound(goal: GoalRecordV1, reason?: string): Promise<void> {
+  private async startRound(goal: GoalRecordV1, reason?: string, details?: string): Promise<void> {
     const context = this.contexts.get(goal.chatId) ?? (await this.deps.fallbackContext(goal.chatId));
     const current = this.goals.get(goal.chatId);
     if (this.stopped || current?.id !== goal.id || current.revision !== goal.revision) return;
@@ -348,7 +367,7 @@ export class GoalLoop {
       return;
     }
     const started = await this.deps.startRound(goal.chatId, context, {
-      text: goalContinuationNote(goal, reason),
+      text: goalContinuationNote(goal, reason, details),
       notice: agentNotice({ source: "goal", tone: "info", title: goalRoundTitle(goal), summary: reason ?? goal.objective }),
     });
     if (started === "unavailable") {

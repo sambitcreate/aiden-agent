@@ -583,7 +583,7 @@ export const SLASH_COMMANDS = Object.freeze([
     name: "until",
     aliases: ["done-when"],
     title: "Until a check passes",
-    description: "Run a check, such as your tests, after each answer; the agent keeps fixing until it passes, 5 checks at most.",
+    description: "Keep going until a check, such as your tests, passes: Aiden runs it after each answer and keeps fixing, 5 checks at most.",
     keywords: ["test", "check", "loop", "done when", "ci"],
     icon: "check",
     action: { kind: "follow-through", action: "until" },

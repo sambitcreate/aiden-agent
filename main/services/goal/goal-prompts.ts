@@ -39,8 +39,20 @@ export function goalRoundTitle(goal: GoalText): string {
   return `Keep going · ${goalRoundLabel(goal)}`;
 }
 
-/** The message that starts the next round. */
-export function goalContinuationNote(goal: GoalText, reason?: string): string {
+/**
+ * The message that starts the next round. A command goal's round says what
+ * the goal is (no objective message started it), the check's result and the
+ * end of its output, already fenced as data in `details`.
+ */
+export function goalContinuationNote(goal: GoalText, reason?: string, details?: string): string {
+  if (goal.check) {
+    return [
+      `${goalRoundTitle(goal)}. The person asked you to keep going until this check passes: \`${goal.check.command}\`. Aiden runs it after each answer, ${goal.maxRounds} checks at most.`,
+      ...(reason ? [`Last check: ${reason}.`] : []),
+      ...(details ? [details] : []),
+      "Find the cause and fix it. Aiden runs the check again when your answer ends. If you need the person, say so plainly and stop.",
+    ].join("\n\n");
+  }
   return [
     `${goalRoundTitle(goal)}. The goal set earlier in this chat is not done yet.`,
     ...(reason ? [fenceAsData("What is still missing, per the last check", reason)] : []),

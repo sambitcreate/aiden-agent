@@ -596,8 +596,8 @@ async function runShutdownAndQuit(settingsPrepared: boolean): Promise<void> {
       "Parent generation did not settle before the shutdown deadline; forcing application shutdown.",
     );
   }
-  // Background jobs and done-when checks stop with the app; follows and
-  // checks are saved for the next launch. Bounded so a stuck job never holds quit.
+  // Background jobs and goal checks stop with the app; follows and
+  // goals are saved for the next launch. Bounded so a stuck job never holds quit.
   await settleShutdownStep("follow-through", "Background jobs", SHUTDOWN_BUDGET_MS.backgroundJobs, () => shutdownFollowThrough());
   // Settled generations have recorded their last pace samples; persist the
   // debounced remainder. Never fatal: it is a regenerable measurement cache.

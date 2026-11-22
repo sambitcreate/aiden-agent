@@ -15,6 +15,7 @@ import {
 
 function setup() {
   const rounds: string[] = [];
+  const checks: string[] = [];
   const loop = new GoalLoop({
     enabled: () => true,
     boot: "boot",
@@ -36,6 +37,10 @@ function setup() {
       return "started";
     },
     startNoticeRound: async () => ({ kind: "busy" }),
+    runCheck: async (goal) => {
+      checks.push(goal.check!.command);
+      return { kind: "finished", passed: true, summary: `\`${goal.check!.command}\` passed`, details: "" };
+    },
     report: () => {},
     log: () => {},
   });
@@ -51,7 +56,7 @@ function setup() {
   const invoke = (channel: string, ...args: unknown[]) => Promise.resolve().then(() => handlers.get(channel)!({}, ...args));
   const invokeFrom = (event: unknown, channel: string, ...args: unknown[]) =>
     Promise.resolve().then(() => handlers.get(channel)!(event, ...args));
-  return { invoke, invokeFrom, inactive, rounds };
+  return { invoke, invokeFrom, inactive, rounds, checks };
 }
 
 test("set, get, pause, resume and clear drive the chat's goal", async () => {
@@ -79,4 +84,20 @@ test("changes are refused from an inactive document, for malformed input, a phon
   await assert.rejects(invoke(GOAL_SET_CHANNEL, { chatId: "bot-chat", objective: "Ship it", source: "menu" }), /Bot's chat/);
   await assert.rejects(invoke(GOAL_PAUSE_CHANNEL, "chat-1"), /Invalid request/);
   assert.equal(await invoke(GOAL_GET_CHANNEL, "chat-1"), null);
+});
+
+test("/until sets a goal checked by its command, which runs at once in an idle chat", async () => {
+  const { invoke, checks } = setup();
+  const set = (await invoke(GOAL_SET_CHANNEL, { chatId: "chat-1", source: "until", check: "  npm test  " })) as {
+    objective: string;
+    maxRounds: number;
+    check?: { command: string };
+    source: string;
+  };
+  assert.deepEqual([set.objective, set.maxRounds, set.check?.command, set.source], ["Keep going until npm test passes", 5, "npm test", "until"]);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(checks, ["npm test"]);
+  assert.equal(((await invoke(GOAL_GET_CHANNEL, "chat-1")) as { status: string }).status, "done");
+  await assert.rejects(invoke(GOAL_SET_CHANNEL, { chatId: "chat-1", source: "until", check: "  " }), /Name the check/);
+  await assert.rejects(invoke(GOAL_SET_CHANNEL, { chatId: "chat-1", source: "until", check: "a\nb" }), /one command line/);
 });

@@ -1630,8 +1630,7 @@ export function Composer({
               toast.info("Add the check after /until, for example /until npm test.");
               return false;
             }
-            await chatsApi.setDoneWhenCheck(chatId, argument);
-            toast.success(`Aiden runs ${argument} after each answer until it passes, 5 checks at most.`);
+            await chatsApi.setGoalCheck(chatId, argument);
             return true;
           } catch (error) {
             toast.error(error instanceof Error ? error.message : "That could not be set up.");

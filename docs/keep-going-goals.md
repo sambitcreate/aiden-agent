@@ -9,6 +9,8 @@ Give a chat a goal and Aiden keeps working on it in new rounds until it is done,
 - `/goal` can be a new chat's first message: the chat is created with the objective and the goal starts with it. In a chat that is answering, finish or stop the answer first.
 - Goals work in any ordinary chat on this computer, with or without a workspace folder. They are not available in Bot chats, the Assistant, agent-harness chats (such as Google Antigravity), chats hosted on a paired Mac, or chats with no model chosen.
 
+- `/until` followed by a check, for example `/until npm test`, sets a goal that Aiden judges by running the command instead of reading the conversation: it passes and the goal is done, or it fails and the next round gets its output. These goals stop after 5 checks ("check 2 of 5"), and Keep going grants 5 more. See [keep going until a check passes](coding-follow-through.md#keep-going-until-a-check-passes). It needs a workspace chat with folder access.
+
 Other commands:
 
 | Command | What it does |
@@ -67,8 +69,8 @@ When a goal finishes on its own (Done, Needs you, or paused by Aiden), Aiden sho
 
 ## Privacy
 
-The objective and the reviewer's reasons stay on your device. Anonymous usage data records only that a goal started (from `/goal`) and how it ended, with the number of rounds in ranges; see [analytics](analytics.md).
+The objective and the reviewer's reasons stay on your device. Anonymous usage data records only that a goal started (from `/goal` or `/until`) and how it ended, with the number of rounds in ranges; see [analytics](analytics.md).
 
 ## Not yet
 
-Phones show the round cards but can't set or change goals. `/until` checks stay separate for now. Rounds run without a window, so browser, Computer Use and other window-only tools are refused in rounds.
+Phones show the round cards but can't set or change goals. Rounds run without a window, so browser, Computer Use and other window-only tools are refused in rounds.

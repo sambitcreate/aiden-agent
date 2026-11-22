@@ -37,7 +37,7 @@ export interface KeepAwakeJob {
   origin?: string;
 }
 
-/** The parts of a `DoneWhenRecord` this input reads. */
+/** The parts of a running goal check this input reads. */
 export interface KeepAwakeCheck {
   chatId: string;
   state: string;
@@ -115,7 +115,7 @@ export function backgroundJobKeepAwakeInput(jobs: () => readonly KeepAwakeJob[])
   };
 }
 
-/** A "done when" (`/until`) check whose command is running now. */
+/** A goal check (`/until`) whose command is running now. */
 export function doneWhenKeepAwakeInput(checks: () => readonly KeepAwakeCheck[]): KeepAwakeInput {
   return {
     read() {

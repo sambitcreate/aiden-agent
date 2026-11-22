@@ -23,7 +23,13 @@ import { createSpendingMeter, spendCounts } from "../spending-service.js";
 import { spending } from "../spending-main.js";
 import { isLocalModelProvider } from "../usage-accounting.js";
 import { usageStore } from "../usage-store.js";
-import { backgroundJobs, saveFollowThroughGoals, savedFollowThroughGoals } from "../follow-through/follow-through-main.js";
+import {
+  backgroundJobs,
+  prepareGoalCheck,
+  runGoalCheck,
+  saveFollowThroughGoals,
+  savedFollowThroughGoals,
+} from "../follow-through/follow-through-main.js";
 import { noticeDelivery } from "../follow-through/notice-delivery-main.js";
 import type { StartTurnResult } from "../follow-through/notice-delivery.js";
 import type { Chat } from "../types.js";
@@ -193,6 +199,8 @@ export const goalLoop = new GoalLoop({
     await meter.settled().catch((error: unknown) => logger.warn("goal", "The goal review's cost could not be counted.", error));
     return outcome;
   },
+  runCheck: (goal, signal) => runGoalCheck(goal.chatId, goal.check!.command, signal),
+  prepareCheck: prepareGoalCheck,
   startRound,
   startNoticeRound: startAttendedRound,
   report: (event) => {
