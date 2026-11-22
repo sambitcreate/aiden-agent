@@ -119,3 +119,10 @@ test("/until takes the rest of the line as the check", () => {
   assert.equal(parseUntilCommand("npm test"), "npm test");
   assert.equal(parseUntilCommand("/untilnpm"), "/untilnpm", "only the command word is removed");
 });
+
+test("a started chat's notice round-trips, and an unknown source is refused", () => {
+  const notice = agentNotice({ source: "chat", tone: "success", title: "“Docs” finished", summary: "" });
+  assert.deepEqual(parseAgentNoticeV1(JSON.parse(JSON.stringify(notice))), notice);
+  assert.equal(agentNoticeDisplayText(notice), "“Docs” finished");
+  assert.equal(parseAgentNoticeV1({ ...notice, source: "lead" }), undefined);
+});

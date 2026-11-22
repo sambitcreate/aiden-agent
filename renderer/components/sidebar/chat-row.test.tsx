@@ -6,6 +6,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { ChatRow, type ChatRowInbox, type ChatRowMenu, type ChatRowProps } from "./chat-row.js";
 import { TooltipProvider } from "../ui.js";
+import { startedByChatLabel } from "../../lib/chat-lineage.js";
 import { RowGroup } from "./row-group.js";
 import { SectionHeader } from "./section-header.js";
 import { remoteChatRowMenu } from "./remote-chat-row-menu.js";
@@ -414,4 +415,13 @@ test("an Inbox remote row's triage follows its one action, as on a local row", a
   fireEvent.contextMenu(inboxRowButton());
   const items = within(await screen.findByRole("menu")).getAllByRole("menuitem");
   assert.deepEqual(items.map((item) => item.textContent), ["Open", hoverLabel, "Pin", "Mark done", "Snooze", "Rename"]);
+});
+
+test("a chat another chat started names that chat on its row and in its description", () => {
+  const markup = row({ startedByChat: startedByChatLabel("Release prep") });
+  assert.match(markup, /data-started-by-chat="true"/u);
+  assert.match(markup, /aria-description="Started by “Release prep”"/u);
+  assert.match(markup, />Fix the build</u, "the title still shows");
+  assert.match(row({ startedByChat: startedByChatLabel(undefined) }), /Started by a deleted chat/u);
+  assert.doesNotMatch(row(), /Started by/u);
 });

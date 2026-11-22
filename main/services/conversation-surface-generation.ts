@@ -68,6 +68,11 @@ export interface RemoteGenerationSurfaceInput {
    * refuses its call (chat-turn-tool-policy.ts).
    */
   questionPromptsUnavailable?: boolean;
+  /**
+   * The turn was sent by the lead chat that started this chat (Phase 5): its
+   * approval cards and questions stay open 30 minutes, not 5.
+   */
+  leadChatTurn?: boolean;
   /** The Mac's Settings → Appearance choice; automatic when absent. */
   inlineVisuals?: InlineVisualsMode;
   onTurnAccepted(): void;
@@ -99,6 +104,7 @@ export function remoteGenerationSurface(input: RemoteGenerationSurfaceInput) {
       ...(input.botAudienceId ? { botAudienceId: input.botAudienceId } : {}),
       ...(input.excludeToolNames ? { excludeToolNames: input.excludeToolNames } : {}),
       ...(input.questionPromptsUnavailable === true ? { questionPromptsUnavailable: true as const } : {}),
+      ...(input.leadChatTurn === true ? { leadChatTurn: true as const } : {}),
       onTurnAccepted: input.onTurnAccepted,
     },
   };

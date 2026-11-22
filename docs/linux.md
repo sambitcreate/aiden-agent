@@ -108,7 +108,7 @@ The workspace agent, providers, local models, MCP, skills, Web Search,
 web page reading with extract mode,
 schedules, terminal, Git, file editor, generative UI artifacts, workspace
 artifacts, coding follow-through (background jobs, followed pull requests,
-`/until` checks and check-backs), diagnostics,
+`/until` checks and check-backs), [chats that run other chats](chats-that-run-chats.md), diagnostics,
 Gemini voice transcription, remote access, notifications, profile, themes, and
 native subagents and [hooks](hooks.md) use the same contracts as macOS. Linux-specific integrations include:
 

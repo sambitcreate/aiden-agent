@@ -21,6 +21,7 @@ import type { SubagentMessageReferenceV1 } from "../shared/subagent-runs";
 import type { SkillProvenanceV1 } from "../shared/slash-commands";
 import type { ProviderFailureV1 } from "../shared/provider-failure";
 import type { ChatForkLineageV1 } from "../shared/chat-copy-contract";
+import type { ChatStartedByV1 } from "../shared/chat-started-by";
 import type { ProviderArtwork } from "../shared/provider-artwork";
 import type { WebFetchSettingsV1 } from "../shared/web-fetch-settings";
 import type {
@@ -677,6 +678,8 @@ export interface ChatMessage {
   notice?: import("../shared/agent-notices").AgentNoticeV1;
   /** Aiden Live sent this user message for the person ("By voice"). */
   inputSource?: import("../shared/chat-input-source").ChatInputSourceV1;
+  /** Sent by the chat that started this one (desktop label "From “<lead>”"). */
+  fromLeadChat?: true;
   /** Set when a UserPromptSubmit hook refused this message; it never reached a model. */
   hookBlocked?: { reason: string };
   timeline?: GenerationTimeline;
@@ -699,6 +702,8 @@ export interface ChatMeta {
   lastAssistantFailed?: boolean;
   /** Set when this chat was created by Fork. */
   forkedFrom?: ChatForkLineageV1;
+  /** Set when another chat started this one through `child_chats`. */
+  startedBy?: ChatStartedByV1;
   /** Main-owned feature owner; owned chats never appear in chat listings or Remote. */
   owner?: ChatOwnerV1;
   /** This chat opens in design mode (narrow chat beside the canvas); absent when off. */
@@ -981,6 +986,8 @@ export interface AppSettings extends AidenLiveSettingsFields {
   /** Approvals → Advanced: the model Auto asks instead of the chat's own. */
   approvalModel?: { providerId: string; model: string };
   botMessaging?: boolean;
+  /** Approvals → Advanced: "Chats can start other chats". On unless false. */
+  childChats?: boolean;
   /** Settings → Context & Limits: dollar limits per chat, Bot month and routine run. Absent amounts: no limit. */
   spendingLimits?: import("../shared/spending").SpendingLimitsSettings;
   lastProviderId?: string;

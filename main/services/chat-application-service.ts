@@ -5,6 +5,7 @@ import type { AidenRemoteAttachmentStore } from "./aiden-remote-attachments.js";
 import { appendReconciliationFailureMessage } from "../../renderer/shared/chat-message-contract.js";
 import { persistedChatWorkspaceId } from "../../renderer/shared/chat-workspace.js";
 import type { ParsedPublicChatCreate } from "../handlers/chat-create-params.js";
+import type { ChatStartedByV1 } from "../../renderer/shared/chat-started-by.js";
 import type { chatStore } from "./chat-store.js";
 import type { ChatPullRequestStore } from "./chat-pull-request-store.js";
 import type { configStore } from "./config-store.js";
@@ -250,7 +251,11 @@ export function createChatApplicationService(deps: ChatApplicationDependencies) 
     },
 
     /** `reportAnalytics: false` keeps `chat_created` unsent (an outside MCP app made the chat). */
-    async create(input: ParsedPublicChatCreate, owner: ChatApplicationOwner, options?: { reportAnalytics?: boolean }) {
+    async create(
+      input: ParsedPublicChatCreate,
+      owner: ChatApplicationOwner,
+      options?: { reportAnalytics?: boolean; startedBy?: ChatStartedByV1 },
+    ) {
       if (deps.llmClient.requiresAppendReconciliation(owner.documentId)) {
         throw new Error(appendReconciliationFailureMessage("blocked"));
       }
@@ -282,7 +287,11 @@ export function createChatApplicationService(deps: ChatApplicationDependencies) 
           }
         };
         try {
-          const chat = chatForRenderer(await deps.chatStore.create({ ...input, assertCurrent }));
+          const chat = chatForRenderer(await deps.chatStore.create({
+            ...input,
+            ...(options?.startedBy ? { startedBy: options.startedBy } : {}),
+            assertCurrent,
+          }));
           if (options?.reportAnalytics !== false) {
             reportAnalyticsEvent("chat_created", { workspace_kind: analyticsWorkspaceKind(workspace) });
           }

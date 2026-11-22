@@ -404,3 +404,8 @@
 .oa-ctl-head { display: flex; align-items: center; gap: 4px; height: 22px; padding: 0 7px; color: var(--text-secondary); }
 .oa-ctl-head .oa-chip { height: 14px; font-size: 7px; }
 .oa-ctl-row { display: flex; align-items: center; gap: 6px; height: 19px; padding: 0 8px; color: var(--text-primary); font-size: 8px; white-space: nowrap; }
+
+/* Chats that run chats: the lead chat's started-chats list. */
+.oa-sched-dot[data-chat-state="working"] { background: var(--accent); }
+.oa-sched-dot[data-chat-state="needs"] { background: var(--status-warning); }
+.oa-sched-dot[data-chat-state="done"] { background: var(--status-green); }

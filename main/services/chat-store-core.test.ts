@@ -846,6 +846,25 @@ test("the By voice marker survives a restart on user messages only", async (t) =
   assert.equal(chatForRenderer(loaded)?.messages[0]?.inputSource, "voice");
 });
 
+test("the From-the-lead-chat marker survives a restart on plain user messages only", async (t) => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-chat-lead-"));
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const store = createChatStore(async () => directory);
+  const chat = await store.create({});
+  await store.appendMessage(chat.id, { role: "user", content: "Run the tests.", fromLeadChat: true });
+  await store.appendMessage(chat.id, { role: "assistant", content: "On it.", fromLeadChat: true } as never);
+  await store.appendMessage(chat.id, { role: "user", content: "Also lint.", fromLeadChat: "yes" } as never);
+  await store.appendMessage(chat.id, { role: "user", content: "Typed by the person." });
+
+  const loaded = await createChatStore(async () => directory).get(chat.id);
+  assert.deepEqual(
+    loaded?.messages.map((message) => message.fromLeadChat),
+    [true, undefined, undefined, undefined],
+    "only a user message keeps the marker, and only the exact value",
+  );
+  assert.equal(chatForRenderer(loaded)?.messages[0]?.fromLeadChat, true);
+});
+
 test("renderer ownership is checked again at the atomic append commit", async (t) => {
   const directory = await fs.mkdtemp(
     path.join(os.tmpdir(), "aiden-chat-owner-guard-"),
@@ -2090,4 +2109,27 @@ test("an in-chat task run on another model leaves the chat's own model unchanged
   await store.appendMessage(chosen.id, { role: "assistant", content: "Chat answer" },
     { ...generationModelMeta({ providerId: "other-provider", model: "other-model" }, false), expectedWorkspaceId: "workspace" });
   assert.equal((await store.get(chosen.id))?.model, "other-model");
+});
+
+test("a started chat keeps who started it across a restart, and a damaged record drops only that", async (t) => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-started-by-store-"));
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const store = createChatStore(async () => directory);
+  const startedBy = { version: 1 as const, kind: "chat" as const, chatId: "lead-1", at: 1_000 };
+  const child = await store.create({ workspaceId: "workspace-1", title: "Run the tests", startedBy });
+  const plain = await store.create({ workspaceId: "workspace-1" });
+  await assert.rejects(store.create({ workspaceId: "workspace-1", startedBy: { ...startedBy, kind: "app" } as never }));
+
+  const restarted = createChatStore(async () => directory);
+  assert.deepEqual((await restarted.get(child.id))?.startedBy, startedBy);
+  assert.deepEqual((await restarted.getMeta(child.id))?.startedBy, startedBy);
+  assert.equal("startedBy" in (await restarted.get(plain.id))!, false);
+
+  const file = path.join(directory, `${child.id}.json`);
+  const payload = JSON.parse(await fs.readFile(file, "utf-8")) as Record<string, unknown>;
+  payload.startedBy = { version: 1, kind: "chat", chatId: "../escape", at: 1_000, extra: true };
+  await fs.writeFile(file, JSON.stringify(payload), "utf-8");
+  const damaged = await createChatStore(async () => directory).get(child.id);
+  assert.equal(damaged?.title, "Run the tests");
+  assert.equal("startedBy" in damaged!, false);
 });

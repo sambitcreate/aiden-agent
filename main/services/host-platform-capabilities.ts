@@ -42,6 +42,11 @@ export interface HostPlatformCapabilities {
    * is best-effort because not every desktop runs one.
    */
   keepAwake: boolean;
+  /**
+   * A workspace chat can start and run other chats (`child_chats`): offered
+   * where follow-through notices wake a chat, macOS and Linux.
+   */
+  childChats: boolean;
 }
 /**
  * Main-owned host capability policy. Persisted settings and renderer state may
@@ -71,5 +76,6 @@ export function hostPlatformCapabilities(
     liveScreenShare: darwin || platform === "linux",
     chatCheckBacks: darwin || platform === "linux",
     keepAwake: darwin || platform === "linux",
+    childChats: darwin || platform === "linux",
   };
 }

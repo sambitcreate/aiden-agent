@@ -104,6 +104,8 @@ async function fixture(options: {
   skillsAvailable?: boolean;
   agentInterruptAvailable?: boolean;
   deviceType?: "iphone" | "ipad" | "android" | "mac" | "linux" | "agent";
+  /** The id the registry answers for the credential; a normal device id when absent. */
+  deviceId?: string;
   simulators?: AidenRemoteSimulatorRelay;
   /** `true` installs a recording fake; an object installs that feed service. */
   hostFeed?: boolean | NonNullable<Parameters<typeof createAidenRemoteRequestHandler>[0]["hostFeed"]>;
@@ -252,7 +254,7 @@ async function fixture(options: {
           return null;
         }
         return {
-          id: "device-authorized-12345678",
+          id: options.deviceId ?? "device-authorized-12345678",
           name: "iPhone",
           revoked: options.authenticate === "revoked",
           acceptsBotCapabilities: options.acceptsBotCapabilities === true,
@@ -4047,6 +4049,19 @@ test("revoked and capability-limited credentials fail with stable classification
     } finally {
       await app.close();
     }
+  }
+});
+
+test("a lead chat's internal chat audience is never reachable over HTTP", async () => {
+  const app = await fixture({ deviceId: "chat:lead-1", capabilities: ["server:read", "chat:read", "chat:write"] });
+  try {
+    const response = await fetch(`${app.base}/server`, {
+      headers: { authorization: `Bearer ${"a".repeat(43)}`, "aiden-protocol-version": "1" },
+    });
+    assert.equal(response.status, 401);
+    assert.equal((await response.json()).error.code, "authentication_required");
+  } finally {
+    await app.close();
   }
 });
 

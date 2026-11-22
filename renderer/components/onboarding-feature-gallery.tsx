@@ -18,6 +18,7 @@ import {
   Lightbulb,
   ListTodo,
   MessageSquare,
+  MessagesSquare,
   Mic2,
   Monitor,
   MousePointer2,
@@ -316,6 +317,15 @@ export const onboardingFeatures: OnboardingFeature[] = [
     description:
       "Ask Aiden in any chat to schedule recurring work, review its unattended access, then run, change, or pause it anytime. A task made in a chat posts each result there, and Aiden can check back in a chat later.",
     icon: CalendarClock,
+    size: "tall",
+  },
+  {
+    id: "chatsRunChats",
+    group: "control",
+    title: "Chats that run chats",
+    description:
+      "Ask a chat to split up a job: it starts other chats, in this workspace or their own worktrees, and hears back as each finishes. Their approvals still come to you, and Stop all ends every one.",
+    icon: MessagesSquare,
     size: "tall",
   },
   {

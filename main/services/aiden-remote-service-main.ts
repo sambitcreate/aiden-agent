@@ -59,6 +59,7 @@ import {
   type AidenMcpServerStatus,
 } from "./aiden-mcp-server.js";
 import { AidenMcpToolRunner } from "./aiden-mcp-tools.js";
+import { audienceReportsAnalytics } from "./chat-orchestration/audience.js";
 import {
   AidenMcpProvenanceLog,
   emptyAidenMcpProvenanceDocument,
@@ -329,6 +330,8 @@ export interface AidenRemoteRuntime {
   mcp: AidenMcpHost;
   /** Which outside app started a chat; read only by Aiden on this computer. */
   mcpProvenance: AidenMcpProvenanceLog;
+  /** The chat and stream services, for chats a lead chat starts (`child_chats`). */
+  chatServices(): Promise<{ chats: AidenRemoteChatService; streams: AidenRemoteStreamService }>;
   revokeDevice(deviceId: string): Promise<boolean>;
   pendingApprovalForChat(chatId: string): AidenRemotePendingApproval | null;
   pendingQuestionForChat(chatId: string): AidenRemotePendingQuestion | null;
@@ -616,6 +619,7 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
               ensure: (request, seed, owner) => firstMessageWorktrees.ensure(request, seed, owner),
               owner: (deviceId) => workspaceOwners.owner(deviceId),
               record: (key) => firstMessageWorktrees.record(key),
+              listWorkspaces: () => configStore.listWorkspaces(),
             }),
             application: chatApplicationService,
             chatStore,
@@ -713,9 +717,9 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
               const device = (await state.snapshot()).devices.find((candidate) => candidate.id === deviceId);
               return device?.type === "mac" || device?.type === "linux";
             },
-            // An outside MCP app's chats and turns are never product analytics.
+            // An outside MCP app's and a lead chat's started chats are never product analytics.
             deviceReportsAnalytics: async (deviceId) =>
-              (await state.snapshot()).devices.find((candidate) => candidate.id === deviceId)?.type !== "agent",
+              audienceReportsAnalytics(deviceId, (await state.snapshot()).devices),
             noWorkspace: {
               // The desktop's sidebar lists a chat only once it knows the chat's workspace, so a
               // hidden record made or removed here is announced like any other workspace change.
@@ -1386,6 +1390,11 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
     approvedRoots: new AidenRemoteApprovedRootService(state),
     mcp,
     mcpProvenance,
+    chatServices: async () => {
+      const api = await remoteWorkspaceApi?.((await state.snapshot()).instanceId);
+      if (!api) throw new Error("Aiden's chat services are unavailable.");
+      return api;
+    },
     revokeDevice,
     // A phone turn's card first, then the card of an owed turn no window owns.
     pendingApprovalForChat: (chatId) =>
@@ -1458,4 +1467,14 @@ export async function revokeAidenMcpApp(appId: string): Promise<boolean> {
 /** The outside app that started `chatId` through the MCP server, for the chat's "Started by" label. */
 export async function aidenMcpChatProvenance(chatId: string): Promise<AidenMcpChatProvenance | undefined> {
   return (await getAidenRemoteRuntime()).mcpProvenance.get(chatId);
+}
+
+/** The chat and stream services `child_chats` runs started chats through. */
+export async function aidenChatOrchestrationServices() {
+  return (await getAidenRemoteRuntime()).chatServices();
+}
+
+/** This computer's name as the person sees it, for "approve in Aiden on …". */
+export async function aidenHostDisplayName(): Promise<string> {
+  return (await (await getAidenRemoteRuntime()).state.snapshot()).displayName;
 }

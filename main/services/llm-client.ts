@@ -24,6 +24,7 @@ import { spending } from "./spending-main.js";
 import { createSpendingMeter, spendCounts } from "./spending-service.js";
 import { parseApprovalModel, type MacGrantClass } from "../../renderer/shared/approval-mode.js";
 import { currentWorkspaceApproval, generationApprovalPolicy, legacyAccessOf } from "./approval-gate/run-approval.js";
+import { CHAT_AUDIENCE_PROMPT_LIFETIME_MS } from "./chat-orchestration/audience.js";
 import { RunTaint, runTaintHistoryOfBranch } from "./approval-gate/run-taint.js";
 import { declaredReadOnlyHint } from "./approval-gate/tool-classes.js";
 import { approvalJudgeAction, createApprovalJudge, type ApprovalJudge } from "./approval-judge/judge.js";
@@ -82,6 +83,7 @@ import { geminiLiveEnabled } from "./gemini-live/feature-flag.js";
 import { webSearchService } from "./web-search-main.js";
 import { WEB_FETCH_TOOL_NAME } from "../../renderer/shared/web-extract.js";
 import { CHECK_BACK_TOOL_NAME } from "../../renderer/shared/check-backs.js";
+import { CHILD_CHATS_TOOL_NAME, SUBMIT_RESULT_TOOL_NAME, childChatsEnabled } from "../../renderer/shared/child-chats.js";
 import { webFetchService } from "./web-fetch-main.js";
 import { createVisionAnalysisTool, INSPECT_IMAGE_TOOL_NAME } from "./vision-analysis-tool.js";
 import {
@@ -527,7 +529,7 @@ import {
   createVisualizeGuideTool,
   VISUALIZE_GUIDE_TOOL_NAME,
 } from "./generative-ui-extension.js";
-import { chatToolOffers, chatTurnArgsToolRefusal, chatTurnAudienceFor, chatTurnToolRefusal, screenedPromptAnswersPerson, declaresAppTools, declaresWindowTools, firstTurnToolRefusal, windowlessChatTurn, type ChatToolSurface, type TurnToolRefusal } from "./chat-turn-tool-policy.js";
+import { aidenStartedTurn, chatToolOffers, chatTurnArgsToolRefusal, chatTurnAudienceFor, chatTurnToolRefusal, screenedPromptAnswersPerson, declaresAppTools, declaresWindowTools, firstTurnToolRefusal, windowlessChatTurn, type ChatToolSurface, type TurnToolRefusal } from "./chat-turn-tool-policy.js";
 import { createGenerativeUiDraftSession } from "./generative-ui-draft.js";
 import { createUiDraftSession } from "./aiden-ui-draft.js";
 import { withoutVisualSnapshots } from "../../renderer/shared/visual-snapshots.js";
@@ -711,6 +713,11 @@ export interface GenerationExecutionOptions {
    * The question tool stays declared and its call is refused.
    */
   questionPromptsUnavailable?: boolean;
+  /**
+   * Main-owned: the lead chat that started this chat sent this turn (Phase 5).
+   * Its questions wait 30 minutes for the person, like its approval cards.
+   */
+  leadChatTurn?: boolean;
   /**
    * Main-owned: this turn answers input UserPromptSubmit already accepted
    * while the chat's previous run was going, so the hooks do not screen it
@@ -1428,6 +1435,7 @@ async function prepareGeneration(
               questions,
               timeoutMs: resolveAskUserQuestionTimeoutMs(timeoutSeconds, {
                 unattended: browserOwner.kind === "remote",
+                ...(options.leadChatTurn === true ? { maxSeconds: CHAT_AUDIENCE_PROMPT_LIFETIME_MS / 1_000 } : {}),
               }),
             },
             ownerDocumentId,
@@ -1453,8 +1461,19 @@ async function prepareGeneration(
   // A person's workspace chat follows the global approval mode, or the
   // workspace's own when it is customized (plan §3.1). Internal policies
   // (scheduled runs), Bot-bound turns and the Assistant keep their access.
+  // A chat another chat started never gets more than its lead allowed (Phase 5, D2).
+  // `undefined` when the chat's record can't be read: such a chat is not offered `child_chats`.
+  const chatLineage = workspace && !botBound && params.chatId
+    ? await chatStore.getMeta(params.chatId).then((meta) => ({ startedBy: meta?.startedBy }), () => undefined)
+    : undefined;
+  const approvalCeiling = workspace && !botBound && params.chatId && params.mode === undefined
+    ? await (await import("./chat-orchestration/links-main.js")).startedChatApprovalCeiling(
+        params.chatId,
+        chatLineage?.startedBy,
+      )
+    : undefined;
   const approvalPolicy = await generationApprovalPolicy(
-    { workspace, botBound, mode: params.mode, permission: options.permission },
+    { workspace, botBound, mode: params.mode, permission: options.permission, ceiling: approvalCeiling },
     () => configStore.getSettings(),
   );
   const permission: GenerationPermission =
@@ -1930,6 +1949,19 @@ async function prepareGeneration(
   };
   /** Calls this turn refuses because of their arguments (a woken turn setting a check-back). */
   const turnArgsRefusal = chatTurnArgsToolRefusal(turnAudience);
+  // The person sent in a lead chat: its started chats' endings may wake it
+  // again after a Stop (Phase 5, D4).
+  if (params.chatId && chatLineage && !chatLineage.startedBy && !aidenStartedTurn(turnAudience)) {
+    (await import("./chat-orchestration/child-chats-main.js")).leadChatResumed(params.chatId);
+  }
+  // The person wrote in a chat another chat started: from now on it is theirs,
+  // and the lead's `send` and Stop leave it alone (Phase 5, D3).
+  if (params.chatId && chatLineage?.startedBy && options.leadChatTurn !== true && !aidenStartedTurn(turnAudience)) {
+    const tookOverChatId = params.chatId;
+    await (await import("./chat-orchestration/child-chats-main.js")).personTookOverStartedChat(tookOverChatId).catch((error: unknown) => {
+      logger.warn("chat-orchestration", "Could not record that the person took over a started chat.", error);
+    });
+  }
   // Offered by the chat's surface alone; a turn nobody watches, or one a paired
   // device sent, keeps the declaration and refuses the call.
   const offerHooksTool = hostPlatformCapabilities().hooks && chatToolOffers(chatToolSurface).hooks;
@@ -2275,6 +2307,44 @@ async function prepareGeneration(
         refusal: (args) => turnArgsRefusal(CHECK_BACK_TOOL_NAME, args),
       }),
     );
+  }
+  // Chats that run other chats (Phase 5, D3): a workspace chat with the
+  // follow-through checks, not itself started by a chat (depth 1). A turn
+  // Aiden started refuses `start` (`turnArgsRefusal`).
+  if (
+    followThroughAvailable &&
+    params.chatId &&
+    workspace &&
+    chatLineage &&
+    !chatLineage.startedBy &&
+    childChatsEnabled(settings) &&
+    hostPlatformCapabilities().childChats &&
+    !options.excludeToolNames?.has(CHILD_CHATS_TOOL_NAME)
+  ) {
+    const [{ createChildChatsTool }, { childChats }] = await Promise.all([
+      import("./chat-orchestration/child-chats-tool.js"),
+      import("./chat-orchestration/child-chats-main.js"),
+    ]);
+    tools.push(
+      createChildChatsTool({
+        leadChatId: params.chatId,
+        childChats,
+        refusal: (args) => turnArgsRefusal(CHILD_CHATS_TOOL_NAME, args),
+      }),
+    );
+  }
+  // A started chat whose lead asked for a structured result (Phase 5, D6).
+  if (params.chatId && chatLineage?.startedBy && !options.excludeToolNames?.has(SUBMIT_RESULT_TOOL_NAME)) {
+    const { chatLinks } = await import("./chat-orchestration/links-main.js");
+    await chatLinks.restore();
+    const resultSchema = chatLinks.get(params.chatId)?.resultSchema;
+    if (resultSchema) {
+      const [{ createSubmitResultTool }, { childChats }] = await Promise.all([
+        import("./chat-orchestration/submit-result-tool.js"),
+        import("./chat-orchestration/child-chats-main.js"),
+      ]);
+      tools.push(createSubmitResultTool({ chatId: params.chatId, schema: resultSchema, childChats }));
+    }
   }
   const botMutatingToolNames = new Set<string>();
   if (botContext) {
@@ -3040,6 +3110,7 @@ async function prepareGeneration(
     permission,
     /** The run decides approvals by the mode, read fresh before each call. */
     usesApprovalModes: approvalPolicy !== undefined,
+    approvalCeiling,
     folderPath,
     git,
     tools,
@@ -3488,6 +3559,7 @@ export const llmClient = {
       botMutatingToolNames,
       offerHooksTool,
       usesApprovalModes,
+      approvalCeiling,
       scheduleOriginChatId,
       turnToolRefusal,
     } = setup;
@@ -5007,7 +5079,7 @@ export const llmClient = {
           // (plan §3.2): a connector's real name and declared hint, and
           // whether it is a new destination after outside content.
           const runApproval = usesApprovalModes && workspaceId
-            ? await currentWorkspaceApproval(configStore, workspaceId).catch((error: unknown) => {
+            ? await currentWorkspaceApproval(configStore, workspaceId, approvalCeiling).catch((error: unknown) => {
                 logger.warn("pi", "Could not read the approval mode; asking as in Ask.", error);
                 return { mode: "ask" as const, macGrants: new Set<MacGrantClass>(), customized: false, chatOnly: false, legacyFull: false };
               })
@@ -6793,6 +6865,12 @@ export const llmClient = {
     subagentRuntimeRegistry.abortGeneration(streamId);
     approvals.cancelStream(streamId);
     logger.info("pi", `Generation ${streamId} cancellation requested (${origin}).`);
+    // The person's Stop in a lead chat also stops the chats it started (Phase 5, D4).
+    if (origin === "user_stop" && stoppedChatId) {
+      void import("./chat-orchestration/child-chats-main.js")
+        .then(({ leadChatStopped }) => leadChatStopped(stoppedChatId))
+        .catch((error: unknown) => logger.warn("chat-orchestration", "Could not stop a lead chat's started chats.", error));
+    }
     return true;
   },
 

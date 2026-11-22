@@ -39,6 +39,8 @@ export interface ComposerContextChipsInput {
   followThrough?: boolean;
   /** Enabled scheduled tasks post into this chat. */
   postingTasks?: boolean;
+  /** This chat started other chats (Phase 5). */
+  startedChats?: boolean;
 }
 
 export interface ComposerContextChips {
@@ -52,6 +54,8 @@ export interface ComposerContextChips {
   followThrough: boolean;
   /** The chip for scheduled tasks that post into this chat. */
   tasks: boolean;
+  /** The chip for the chats this chat started; needs no folder. */
+  startedChats: boolean;
   barMode: ComposerContextBarMode;
 }
 
@@ -65,9 +69,10 @@ export function composerContextChips(input: ComposerContextChipsInput): Composer
     (linked > 0 || pending > 0 || current || branchCanOpen);
   const followThrough = input.stage === "started" && input.hasFolder && !input.accessOff && input.followThrough === true;
   const tasks = input.stage === "started" && input.hasFolder && !input.accessOff && input.postingTasks === true;
+  const startedChats = input.stage === "started" && input.startedChats === true;
   // Running work keeps a summary strip even in a folder without Git.
   const barMode: ComposerContextBarMode =
-    input.stage === "draft" || !input.autoHide ? "full" : branch || followThrough || tasks ? "summary" : "hidden";
+    input.stage === "draft" || !input.autoHide ? "full" : branch || followThrough || tasks || startedChats ? "summary" : "hidden";
   const full = barMode === "full";
   return {
     workspace: full,
@@ -77,6 +82,7 @@ export function composerContextChips(input: ComposerContextChipsInput): Composer
     pullRequest: pullRequest && barMode !== "hidden",
     followThrough: followThrough && barMode !== "hidden",
     tasks: tasks && barMode !== "hidden",
+    startedChats: startedChats && barMode !== "hidden",
     barMode,
   };
 }

@@ -206,4 +206,8 @@ test("attended owners wait unless asked; unattended owners always get a capped d
   assert.equal(resolveAskUserQuestionTimeoutMs(undefined, { unattended: true }), cap);
   assert.equal(resolveAskUserQuestionTimeoutMs(60, { unattended: true }), 60_000);
   assert.equal(resolveAskUserQuestionTimeoutMs(3_600, { unattended: true }), cap);
+  // A lead chat's started chat waits up to 30 minutes for the person.
+  assert.equal(resolveAskUserQuestionTimeoutMs(undefined, { unattended: true, maxSeconds: 1_800 }), 1_800_000);
+  assert.equal(resolveAskUserQuestionTimeoutMs(3_600, { unattended: true, maxSeconds: 1_800 }), 1_800_000);
+  assert.equal(resolveAskUserQuestionTimeoutMs(60, { unattended: true, maxSeconds: 1_800 }), 60_000);
 });

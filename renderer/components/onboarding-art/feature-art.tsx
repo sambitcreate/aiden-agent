@@ -7,6 +7,7 @@ import { BotWatchesArt } from "./bot-watches-art";
 import { BotOpenWorkArt } from "./bot-open-work-art";
 import { BotRoutineModelsArt } from "./bot-routine-models-art";
 import { BotPeersArt } from "./bot-peers-art";
+import { ChatsThatRunChatsArt } from "./chats-that-run-chats-art";
 import {
   BrowserArt,
   ComputerUseArt,
@@ -89,6 +90,7 @@ export const FEATURE_ART = {
   botPeers: { tint: "aqua", Art: BotPeersArt },
   botComputers: { tint: "aqua", Art: BotComputersArt },
   schedules: { tint: "mint", Art: ScheduledAutomationsArt },
+  chatsRunChats: { tint: "peach", Art: ChatsThatRunChatsArt },
   voice: { tint: "coral", Art: VoiceDictationArt },
   commands: { tint: "periwinkle", Art: CommandPaletteArt },
   chatControls: { tint: "plum", Art: ChatControlsArt },

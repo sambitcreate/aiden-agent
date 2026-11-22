@@ -67,6 +67,11 @@ const CASES: ReadonlyArray<[string, Call, Record<ApprovalMode, string>]> = [
   ["gmail send (MCP)", gmail("gmail_send_message"), { ask: "ask", auto: "judge", never: "run" }],
   ["gmail list (MCP)", gmail("gmail_list_messages"), { ask: "run", auto: "run", never: "run" }],
   ["read_file", { toolName: "read_file", args: { path: "a.txt" } }, { ask: "run", auto: "run", never: "run" }],
+  // Starting chats is Consequential; reaching the chats it started is Exempt.
+  ["child_chats start", { toolName: "child_chats", args: { action: "start", chats: [{ title: "Docs", task: "Update the docs" }] } }, { ask: "ask", auto: "judge", never: "run" }],
+  ["child_chats send", { toolName: "child_chats", args: { action: "send", chat_id: "c1", text: "go on" } }, { ask: "run", auto: "run", never: "run" }],
+  ["child_chats wait", { toolName: "child_chats", args: { action: "wait", chat_ids: ["c1"] } }, { ask: "run", auto: "run", never: "run" }],
+  ["child_chats stop", { toolName: "child_chats", args: { action: "stop", chat_id: "c1" } }, { ask: "run", auto: "run", never: "run" }],
 ];
 
 for (const [name, call, expected] of CASES) {
