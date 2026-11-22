@@ -20,7 +20,7 @@ import { comparePromptRequests, createPromptPrefixHarness, type PromptProviderCo
 import { createSideCallPrefixLedger, withSideCallPrefixLedger } from "../side-call-prefix.js";
 import type { StoredProvider } from "../types.js";
 import type { UsageRequestRecord } from "../usage-store-core.js";
-import { reviewGoal, type GoalReviewerDependencies } from "./goal-reviewer.js";
+import { goalReviewMaxTokens, reviewGoal, type GoalReviewerDependencies } from "./goal-reviewer.js";
 
 const CHAT_ID = "chat-goal";
 const goal = { objective: "Make the test suite pass", rounds: 2, maxRounds: 50 };
@@ -82,11 +82,17 @@ const provider: StoredProvider = {
   needsKey: true,
 } as StoredProvider;
 
-async function chatTurn() {
+async function chatTurn(reasoning?: "high") {
   listRuns = 0;
   const ledger = createSideCallPrefixLedger({ ttlMs: () => 300_000 });
   const harness = createPromptPrefixHarness({
-    wrapStream: (streamFn) => withSideCallPrefixLedger(streamFn, { ledger, chatKey: CHAT_ID }),
+    wrapStream: (streamFn) => {
+      const ledgered = withSideCallPrefixLedger(streamFn, { ledger, chatKey: CHAT_ID });
+      // A chat that thinks: its requests carry the reasoning level.
+      return reasoning
+        ? (streamModel, streamContext, options) => ledgered({ ...streamModel, reasoning: true }, streamContext, { ...options, reasoning })
+        : ledgered;
+    },
   });
   const requests = await harness.turn({
     prompt: "/goal Make the test suite pass",
@@ -250,4 +256,29 @@ test("a cancelled review sends nothing more", async () => {
   const { deps } = dependencies({ model: harness.model, answers: [{ text: DONE }], sent, prefix: () => ledger.latest(CHAT_ID) });
   assert.deepEqual(await reviewGoal(deps, { goal, allowWait: false, signal: controller.signal }), { kind: "cancelled" });
   assert.equal(sent.length, 0);
+});
+
+test("a chat that thinks keeps its thinking, and the review's cap makes room for it", async () => {
+  const { harness, ledger, parent } = await chatTurn("high");
+  // The same model the chat's request went to, so its cached prefix matches.
+  const thinking = { ...harness.model, reasoning: true } as Model<Api>;
+  const sent: Sent[] = [];
+  const { deps } = dependencies({ model: thinking, answers: [{ text: DONE }], sent, prefix: () => ledger.latest(CHAT_ID) });
+  const outcome = await reviewGoal(deps, { goal, allowWait: false, signal: open() });
+  assert.equal(outcome.kind === "verdict" && outcome.via, "continuation");
+  assert.equal(sent[0]!.options?.reasoning, "high", "the chat's thinking level is replayed unchanged");
+  assert.equal(sent[0]!.options?.maxTokens, Math.min(400 + 16_384, thinking.maxTokens));
+  assert.ok((sent[0]!.options?.maxTokens ?? 0) > 400, "more than the bare 400");
+  const review = await harness.record(sent[0]!.context, { turn: 2, step: 1 });
+  assert.equal(comparePromptRequests(parent, review).wire, undefined);
+});
+
+test("the review's output cap", () => {
+  const model = { maxTokens: 64_000 };
+  assert.equal(goalReviewMaxTokens({}, model), 400, "no thinking: 400");
+  assert.equal(goalReviewMaxTokens({ reasoning: "low" }, model), 400 + 2_048);
+  assert.equal(goalReviewMaxTokens({ reasoning: "medium", thinkingBudgets: { medium: 4_000 } }, model), 4_400, "the chat's own budget");
+  assert.equal(goalReviewMaxTokens({ reasoning: "xhigh" }, model), 400 + 16_384, "bounded at the high budget");
+  assert.equal(goalReviewMaxTokens({ reasoning: "high", thinkingBudgets: { high: 100_000 } }, model), 400 + 16_384, "a huge budget is bounded");
+  assert.equal(goalReviewMaxTokens({ reasoning: "high" }, { maxTokens: 8_192 }), 8_192, "never above the model's cap");
 });

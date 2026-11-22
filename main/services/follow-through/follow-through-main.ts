@@ -1,5 +1,6 @@
 // Main-process follow-through: background jobs, followed pull requests,
-// "done when" checks and check-backs, wired to the chat. Each one turns its news into a
+// "done when" checks and check-backs, wired to the chat. Keep-going goals are
+// saved here too (`goal/goal-main.ts` runs them). Each one turns its news into a
 // follow-up notice through `noticeDelivery`, which queues it into a running
 // answer, wakes an idle chat, or records it. State that must outlive a quit
 // (follows, checks and check-backs) is saved under userData; jobs stop when
@@ -46,6 +47,8 @@ import { PullRequestFollows } from "./pull-request-follows.js";
 import { AnsweringRuns } from "./answering-runs.js";
 import { CheckBacks, type CheckBackRecord } from "./check-backs.js";
 import { systemTimezone } from "../schedule-store-core.js";
+import { parseGoalRecords, type GoalRecordV1 } from "../../../renderer/shared/goal.js";
+import { goalTurnHooks } from "../goal/goal-turn-hooks.js";
 
 const chatConfiguration = new WorkspaceMutationGate();
 const commandHandoffs = new WorkspaceOperationRegistry();
@@ -68,11 +71,14 @@ interface SavedState {
   checks: DoneWhenRecord[];
   /** Absent in files older releases wrote. */
   checkBacks?: CheckBackRecord[];
+  /** Keep-going goals, one per chat. Absent in files older releases wrote. */
+  goals?: GoalRecordV1[];
 }
 
 let savedFollows: PullRequestFollowRecord[] = [];
 let savedChecks: DoneWhenRecord[] = [];
 let savedCheckBacks: CheckBackRecord[] = [];
+let savedGoals: GoalRecordV1[] = [];
 let saveChain: Promise<void> = Promise.resolve();
 let saveScheduled = false;
 
@@ -82,7 +88,7 @@ function scheduleSave(): void {
   saveChain = saveChain
     .then(async () => {
       saveScheduled = false;
-      const state: SavedState = { version: 1, follows: savedFollows, checks: savedChecks, checkBacks: savedCheckBacks };
+      const state: SavedState = { version: 1, follows: savedFollows, checks: savedChecks, checkBacks: savedCheckBacks, goals: savedGoals };
       await fsp.mkdir(followThroughDir(), { recursive: true, mode: 0o700 });
       const target = path.join(followThroughDir(), "state.json");
       const temporary = `${target}.${process.pid}.tmp`;
@@ -363,6 +369,7 @@ export async function startFollowThrough(): Promise<void> {
   savedFollows = state.follows;
   savedChecks = state.checks;
   savedCheckBacks = Array.isArray(state.checkBacks) ? state.checkBacks : [];
+  savedGoals = parseGoalRecords(state.goals);
   pullRequestFollows.restore(state.follows);
   doneWhen.restore(state.checks);
   checkBacks.restore(savedCheckBacks);
@@ -391,9 +398,21 @@ export async function shutdownFollowThrough(): Promise<void> {
   await saveChain;
 }
 
-/** A deleted chat loses its jobs, follows, check and check-backs. */
+/** The keep-going goals saved with follow-through, as loaded by `startFollowThrough`. */
+export function savedFollowThroughGoals(): readonly GoalRecordV1[] {
+  return savedGoals;
+}
+
+/** Saves the keep-going goals with the rest of follow-through. */
+export function saveFollowThroughGoals(goals: readonly GoalRecordV1[]): void {
+  savedGoals = [...goals];
+  scheduleSave();
+}
+
+/** A deleted chat loses its jobs, follows, check, check-backs and goal. */
 export async function deleteChatFollowThrough(chatId: string): Promise<void> {
   pullRequestFollows.deleteChat(chatId);
+  goalTurnHooks().chatDeleted(chatId);
   checkBacks.deleteChat(chatId);
   const checkStopped = doneWhen.clearAndSettle(chatId);
   answeringRuns.deleteChat(chatId);
@@ -427,6 +446,7 @@ export async function closeWorkspaceFollowThrough(workspaceId: string): Promise<
           for (const follow of pullRequestFollows.list(chatId)) pullRequestFollows.stop(chatId, follow, "access-changed");
         }
         await doneWhen.clearWorkspace(workspaceId);
+        goalTurnHooks().accessChanged(chatIds);
         await saveChain;
       }
     } finally {
@@ -515,6 +535,8 @@ export async function beginFollowThroughMove(chatId: string): Promise<() => void
   if (doneWhen.isActive(chatId) || pullRequestFollows.list(chatId).some((follow) => follow.state === "following")) {
     throw new Error("Stop this chat’s check or pull request follow before changing workspaces.");
   }
+  const goalRefusal = goalTurnHooks().moveRefusal(chatId);
+  if (goalRefusal) throw new Error(goalRefusal);
   const finish = chatConfiguration.begin(chatId);
   try {
     await backgroundJobs.confirmChatChecksStopped(chatId);

@@ -51,6 +51,9 @@ import { chatToolOffers, chatTurnAudienceFor, chatTurnToolRefusal, declaresAppTo
 import { remoteGenerationSurface, scheduledGenerationSurface } from "./conversation-surface-generation.js";
 import { UNATTENDED_FOLLOW_UP_GENERATION } from "./follow-through/notice-delivery.js";
 import { owedTurnStartRequest } from "./chat-owed-turn-start.js";
+import { goalRoundStartRequest } from "./goal/goal-round-start.js";
+import { goalKickoffNote } from "./goal/goal-prompts.js";
+import { createGoal } from "./goal/goal-core.js";
 import { assembleAgentTools } from "./agent-tool-assembly.js";
 import { subagentsAllowedForGeneration } from "./subagents/eligibility.js";
 import { createGenerativeUiExtensionRuntime, shouldEnableGenerativeUiExtension } from "./generative-ui-extension.js";
@@ -886,6 +889,23 @@ describe("prompt prefix stability: tool list identical across turns", () => {
     for (const name of ["read_file", "workspace_artifact", "subagent"]) assert.equal(refuse(name), undefined, name);
     const refuseAttended = chatTurnToolRefusal(workspaceSurface, chatTurnAudienceFor({ windowless: windowlessChatTurn(desktopScope) }, {}));
     for (const name of ["computer_use", "hooks", "ask_user_question"]) assert.equal(refuseAttended(name), undefined, name);
+  });
+
+  test("a goal's kickoff rides after the person's objective, and its round keeps the chat's prefix", async () => {
+    const created = createGoal({ id: "goal", chatId: "chat", objective: "Make the tests pass", source: "slash", boot: "boot", now: 1 });
+    assert.ok(created.ok);
+    // llm-client journals the kickoff as the objective turn's note, right after the prompt.
+    const kickoff = (timestamp: number) => [turnNoteMessage([goalKickoffNote(created.goal)], timestamp)!];
+    const round = goalRoundStartRequest("chat", { providerId: "provider", model: "model" }, "round");
+    const roundScope: ChatTurnOwnerScope = { window: false, remote: false, usageSource: round.options.usageSource, assistantMode: false, botBound: false };
+    const { previous, current } = await twoTurns(
+      {},
+      { assembly: await workspaceChat({ tools: ownedTurnTools(desktopScope, {}) }), following: kickoff },
+      { assembly: await workspaceChat({ tools: ownedTurnTools(roundScope, round.options) }) },
+    );
+    assert.deepEqual(comparePromptRequests(previous, current), {}, "the round declares the chat's tools; nothing before its prompt changes");
+    const texts = userTexts(current);
+    assert.ok(texts.some((text) => /<turn_note>[\s\S]*<untrusted_objective>[\s\S]*Make the tests pass/u.test(text)), "the kickoff stays in the history");
   });
 
   test("a scheduled run in a chat, then a turn on this computer: the desktop turn keeps the chat's tools", async () => {

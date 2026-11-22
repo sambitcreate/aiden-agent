@@ -80,6 +80,8 @@ import { registerStorageHandlers } from "./storage.js";
 import { hostPlatformCapabilities } from "../services/host-platform-capabilities.js";
 import { registerBtwHandlers } from "./btw.js";
 import { registerFollowThroughHandlers } from "./follow-through.js";
+import { registerGoalHandlers } from "./goals.js";
+import { goalLoop } from "../services/goal/goal-main.js";
 import { registerTtsHandlers } from "./tts.js";
 import { registerDeviceHandlers } from "./devices.js";
 import { registerCreateImagesIpc } from "./create-images/index.js";
@@ -231,6 +233,13 @@ export function registerHandlers(isMainWindow: (event: IpcMainInvokeEvent) => bo
   if (hostPlatformCapabilities().bots) registerBotHandlers();
   registerBtwHandlers();
   registerFollowThroughHandlers();
+  registerGoalHandlers({
+    handle: (channel, handler) => ipcMain.handle(channel, handler),
+    loop: goalLoop,
+    activeDocument: (event) => {
+      rendererDocumentOwner(event as IpcMainInvokeEvent, () => new Error("Goal changes require the active application document."));
+    },
+  });
   registerTtsHandlers();
   registerStorageHandlers();
   registerDeviceHandlers();

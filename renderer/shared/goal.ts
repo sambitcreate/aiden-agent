@@ -133,3 +133,107 @@ export function validateGoalCheck(command: string): GoalCheck | undefined {
 export function goalRoundLabel(goal: Pick<GoalRecordV1, "rounds" | "maxRounds" | "check">): string {
   return goal.check ? `check ${goal.rounds} of ${goal.maxRounds}` : `round ${goal.rounds} of ${goal.maxRounds}`;
 }
+
+/**
+ * Whether the keep-going goal loop is switched on. Off until the desktop
+ * goal bar ships; main refuses to set goals while it is off.
+ */
+export function goalLoopEnabled(): boolean {
+  return false;
+}
+
+/** How many rounds a goal ran when it settled, for analytics: shows how often goals reach 50. */
+export const GOAL_ROUND_BUCKETS = ["1", "2-5", "6-10", "11-20", "21-49", "50"] as const;
+export type GoalRoundBucket = (typeof GOAL_ROUND_BUCKETS)[number];
+
+export function goalRoundBucket(rounds: number): GoalRoundBucket {
+  if (rounds >= 50) return "50";
+  if (rounds >= 21) return "21-49";
+  if (rounds >= 11) return "11-20";
+  if (rounds >= 6) return "6-10";
+  if (rounds >= 2) return "2-5";
+  return "1";
+}
+
+/** What the renderer is told about a chat's goal: the record without its loop bookkeeping. */
+export type GoalView = Pick<
+  GoalRecordV1,
+  "id" | "chatId" | "objective" | "status" | "rounds" | "maxRounds" | "stalls" | "reason" | "cause" | "source" | "setAt" | "updatedAt" | "revision" | "check"
+>;
+
+export function goalView(goal: GoalRecordV1): GoalView {
+  return {
+    id: goal.id,
+    chatId: goal.chatId,
+    objective: goal.objective,
+    status: goal.status,
+    rounds: goal.rounds,
+    maxRounds: goal.maxRounds,
+    stalls: goal.stalls,
+    ...(goal.reason !== undefined ? { reason: goal.reason } : {}),
+    ...(goal.cause !== undefined ? { cause: goal.cause } : {}),
+    source: goal.source,
+    setAt: goal.setAt,
+    updatedAt: goal.updatedAt,
+    revision: goal.revision,
+    ...(goal.check ? { check: { command: goal.check.command } } : {}),
+  };
+}
+
+const GOAL_STATUSES: readonly GoalStatus[] = ["active", "paused", "needs-you", "done"];
+const GOAL_SOURCES: readonly GoalSource[] = ["slash", "menu", "proposal", "phone", "until"];
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function count(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
+}
+
+/** Reads a goal view from IPC, or null for none; anything malformed is null too. */
+export function parseGoalView(value: unknown): GoalView | null {
+  if (!isRecord(value)) return null;
+  const { id, chatId, objective, status, rounds, maxRounds, stalls, reason, cause, source, setAt, updatedAt, revision, check } = value;
+  if (typeof id !== "string" || typeof chatId !== "string" || typeof objective !== "string") return null;
+  if (!GOAL_STATUSES.includes(status as GoalStatus) || !GOAL_SOURCES.includes(source as GoalSource)) return null;
+  if (![rounds, maxRounds, stalls, setAt, updatedAt, revision].every(count)) return null;
+  if (reason !== undefined && typeof reason !== "string") return null;
+  if (cause !== undefined && typeof cause !== "string") return null;
+  if (check !== undefined && !(isRecord(check) && typeof check.command === "string")) return null;
+  return {
+    id,
+    chatId,
+    objective,
+    status: status as GoalStatus,
+    rounds: rounds as number,
+    maxRounds: maxRounds as number,
+    stalls: stalls as number,
+    ...(typeof reason === "string" ? { reason } : {}),
+    ...(typeof cause === "string" ? { cause: cause as GoalCause } : {}),
+    source: source as GoalSource,
+    setAt: setAt as number,
+    updatedAt: updatedAt as number,
+    revision: revision as number,
+    ...(isRecord(check) ? { check: { command: check.command as string } } : {}),
+  };
+}
+
+/** Restores saved goals; malformed entries are dropped. */
+export function parseGoalRecords(value: unknown): GoalRecordV1[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((entry): GoalRecordV1[] => {
+    const view = parseGoalView(entry);
+    if (!view || !isRecord(entry) || entry.version !== GOAL_VERSION || typeof entry.boot !== "string" || !count(entry.unusableReviews)) return [];
+    return [
+      {
+        ...view,
+        version: GOAL_VERSION,
+        boot: entry.boot,
+        unusableReviews: entry.unusableReviews,
+        ...(typeof entry.lastContinueReason === "string" ? { lastContinueReason: entry.lastContinueReason } : {}),
+        ...(count(entry.waitingSince) ? { waitingSince: entry.waitingSince } : {}),
+      },
+    ];
+  });
+}

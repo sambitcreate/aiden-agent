@@ -430,6 +430,7 @@ import {
 } from "./chat-run-input-admission.js";
 import { createChatOwedTurns, type OwedTurnPlan } from "./chat-owed-turns.js";
 import { owedTurnStartRequest, type OwedTurnContext } from "./chat-owed-turn-start.js";
+import { goalTurnHooks } from "./goal/goal-turn-hooks.js";
 import { createOwedTurnPrompts } from "./chat-owed-turn-prompts.js";
 import { persistedChatWorkspaceId } from "../../renderer/shared/chat-workspace.js";
 import { btwOperationRegistry, btwService } from "./rpiv-btw/service.js";
@@ -716,6 +717,12 @@ export interface GenerationExecutionOptions {
    * again and what they said then is this turn's prompt context.
    */
   screenedPrompt?: { messageId: string; context?: string };
+  /**
+   * Main-owned: a round of a keep-going goal the person set. Attended (its
+   * approvals and questions wait for the person), but Aiden began it, so it
+   * may not set check-backs (`TURN_ARGS_REFUSAL_RULES`).
+   */
+  goalRound?: boolean;
 }
 
 interface BotGenerationAuthorityContext {
@@ -857,6 +864,19 @@ function startOwedTurn(plan: OwedTurnPlan<OwedTurnContext, GenerationCancellatio
       logger.warn("pi", `The chat's owed turn after stream ${plan.settledStreamId} failed to start.`, error);
     },
   );
+}
+
+/** What a run that can owe its chat a turn ran with: an owed turn or a goal round starts with the same. */
+function owedTurnContextOf(params: ChatStartParams, options: GenerationExecutionOptions): OwedTurnContext {
+  return {
+    ...(params.workspaceId !== undefined ? { workspaceId: params.workspaceId } : {}),
+    providerId: params.providerId,
+    model: params.model,
+    ...(params.thinkingLevel !== undefined ? { thinkingLevel: params.thinkingLevel } : {}),
+    ...(params.inlineVisuals !== undefined ? { inlineVisuals: params.inlineVisuals } : {}),
+    ...(options.visualAudience !== undefined ? { visualAudience: options.visualAudience } : {}),
+    ...(options.excludeToolNames !== undefined ? { excludeToolNames: options.excludeToolNames } : {}),
+  };
 }
 
 /**
@@ -4350,7 +4370,9 @@ export const llmClient = {
         deferredTools,
         // Every request drops removed memory facts and, after a compaction
         // inside the turn, states the current state again.
-        prepareMessages: chatStateRequestMessages(chatStatePlan.head, currentChatState),
+        // While a goal is active, its byte-stable reminder sits right after a
+        // compaction summary.
+        prepareMessages: chatStateRequestMessages(chatStatePlan.head, currentChatState, goalTurnHooks().reminder(params.chatId)),
       };
       assertGenerationContextCapacity(generationContextOptions);
       const onCompactionEvent = (event: PiCompactionEvent) => {
@@ -4563,11 +4585,16 @@ export const llmClient = {
             contentOverrides.get(currentUser.id),
           )
         : undefined;
+      // A keep-going goal the person just set: its kickoff note follows their
+      // objective, once. A notice (a round's continuation) never carries it.
+      const goalKickoffNote = currentPromptMessage && currentUser?.notice === undefined
+        ? goalTurnHooks().kickoff(params.chatId) ?? ""
+        : "";
       turnFollowingMessages = currentPromptMessage
         ? [
             ...(hookTurnContext ? [hookContextMessage(hookTurnContext, currentPromptMessage.timestamp)] : []),
             ...(chatStatePlan.update ? [chatStatePlan.update(currentPromptMessage.timestamp)] : []),
-            ...[turnNoteMessage([generativeUiTurnNote, advisorTurnNote, formFillNote, mcpServersSection.turnNote], currentPromptMessage.timestamp)].filter(
+            ...[turnNoteMessage([goalKickoffNote, generativeUiTurnNote, advisorTurnNote, formFillNote, mcpServersSection.turnNote], currentPromptMessage.timestamp)].filter(
               (note): note is AgentMessage => note !== undefined,
             ),
           ]
@@ -6184,6 +6211,8 @@ export const llmClient = {
       generationChat.owner === undefined;
     // The outcome the run records (a Stop, or not), once it has one.
     let owedRunRecordedStop: boolean | undefined;
+    // The run ended in an error, for a keep-going goal's pre-checks.
+    let goalRunFailed = false;
     // Only a turn that ended normally counts a design-system offer as made.
     let designSystemOfferDelivered = false;
     // Ends the run's ownership, then settles its owed turn even when a
@@ -6200,20 +6229,27 @@ export const llmClient = {
           recordedStop,
         },
       );
+      // A keep-going goal looks at the chat once it is idle again; a round
+      // starts with what this run ran with, as an owed turn does.
+      if (owesItsChatTurns) {
+        try {
+          goalTurnHooks().runSettled({
+            chatId: params.chatId,
+            streamId,
+            context: owedTurnContextOf(params, options),
+            stopped: recordedStop,
+            failed: goalRunFailed && !recordedStop,
+          });
+        } catch (error) {
+          logger.warn("goal", "The keep-going goal could not observe a settled run.", error);
+        }
+      }
     };
     if (owesItsChatTurns) {
       owedTurns.open(streamId, {
         chatId: params.chatId,
         ownerDocumentId: owner.documentId,
-        context: {
-          ...(params.workspaceId !== undefined ? { workspaceId: params.workspaceId } : {}),
-          providerId: params.providerId,
-          model: params.model,
-          ...(params.thinkingLevel !== undefined ? { thinkingLevel: params.thinkingLevel } : {}),
-          ...(params.inlineVisuals !== undefined ? { inlineVisuals: params.inlineVisuals } : {}),
-          ...(options.visualAudience !== undefined ? { visualAudience: options.visualAudience } : {}),
-          ...(options.excludeToolNames !== undefined ? { excludeToolNames: options.excludeToolNames } : {}),
-        },
+        context: owedTurnContextOf(params, options),
       });
       activeGeneration.owedTurn = { hold: () => owedTurns.hold(streamId) };
     }
@@ -6248,6 +6284,7 @@ export const llmClient = {
       return promotedRunAbandoned;
     };
     escape.settle = async () => {
+      goalRunFailed = !activeGeneration.cancelRequested;
       try {
         await abandonPromotedRun(activeGeneration.cancelRequested ? "cancelled" : "failed");
       } finally {
@@ -6552,6 +6589,7 @@ export const llmClient = {
         collectUndeliveredGuidance();
         // A failed run records a failure, never a Stop, so the input it owes still runs.
         owedRunRecordedStop = false;
+        goalRunFailed = true;
         logger.error("pi", `Generation failed for stream ${streamId}`, error);
         const finalTimeline = attachClaimCheck(timeline.finish("failed"), full, claimCheckOptions);
         const persisted = await persistAssistant(full, reasoning, finalTimeline);
@@ -6638,6 +6676,26 @@ export const llmClient = {
   },
 
   /** The open approval of this chat's owed turn, for the desktop's host card. */
+  /**
+   * The owner of a turn main starts for an attended chat with no window behind
+   * it (a goal round): approvals and questions go where an owed turn's do, to
+   * a desktop window showing the chat or a paired phone, whichever answers.
+   */
+  attendedTurnOwner(chatId: string, documentId: string): ChatGenerationOwner {
+    return {
+      id: 0,
+      documentId,
+      isDestroyed: () => false,
+      send: (channel, payload) => owedTurnPrompts.publish(chatId, channel, payload),
+      onInvalidated: () => () => undefined,
+    };
+  },
+
+  /** The chat has a helper (subagent) still running. */
+  chatHasLiveHelpers(chatId: string): boolean {
+    return subagentRuntimeRegistry.hasLiveChatChildren(chatId);
+  },
+
   pendingOwedTurnApproval(chatId: string) {
     return owedTurnPrompts.approvalForChat(chatId);
   },

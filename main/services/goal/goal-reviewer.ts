@@ -6,6 +6,9 @@
  *   tools, system prompt and reasoning, with the reviewer's instructions as
  *   the last user message), so the provider reads the prefix the chat already
  *   cached. Short cache retention, 400 output tokens, 60 seconds, no retries.
+ *   The thinking settings are the chat's own (changing them would miss the
+ *   cache), so when the chat thinks, the output cap adds that thinking budget
+ *   (bounded) on top of the 400, or reasoning would use up the answer.
  * - When that prefix is gone (lapsed, another model, a newer request) or the
  *   continuation fails, it falls back to a tool-free, isolated projection of
  *   the conversation, the one the advisor uses.
@@ -37,7 +40,12 @@ import type { UsageRequestRecord } from "../usage-store-core.js";
 import { goalReviewerPrompt } from "./goal-prompts.js";
 import { parseGoalVerdict, type GoalVerdict } from "./goal-verdict.js";
 
+/** Visible answer tokens a review may write. */
 export const GOAL_REVIEW_MAX_TOKENS = 400;
+/** The most thinking a continued review makes room for on top of its answer. */
+export const GOAL_REVIEW_MAX_THINKING_TOKENS = 16_384;
+/** pi-ai's default thinking budgets, used when the chat's request named none. */
+const DEFAULT_THINKING_BUDGETS: Record<string, number> = { minimal: 1_024, low: 2_048, medium: 8_192, high: 16_384 };
 export const GOAL_REVIEW_TIMEOUT_MS = 60_000;
 /** The isolated review's system prompt; the continuation keeps the chat's own. */
 export const GOAL_REVIEWER_SYSTEM_PROMPT =
@@ -138,7 +146,9 @@ export async function reviewGoal(
 
   const prefix = await dependencies.prefix().catch(() => undefined);
   if (prefix && prefix.modelKey === sideCallModelKey(runtime.model)) {
-    const continued = await send(sideCallContinuation(prefix, [instruction], call));
+    const continued = await send(
+      sideCallContinuation(prefix, [instruction], { ...call, maxTokens: goalReviewMaxTokens(prefix.options, runtime.model) }),
+    );
     // A failed continuation falls back to the isolated review; anything else answers.
     if (continued.state !== "failed") return answer(continued, "continuation");
   }
@@ -163,6 +173,24 @@ export async function reviewGoal(
     return { kind: "unusable", why: "failed", via: "isolated" };
   }
   return answer(await send(isolated), "isolated");
+}
+
+/**
+ * The output cap for a review that continues the chat's request: 400 visible
+ * tokens, plus the request's thinking budget when it thinks (its own budgets,
+ * else the defaults), bounded, and never above the model's own cap.
+ */
+export function goalReviewMaxTokens(
+  replay: Pick<SideCallPrefix["options"], "reasoning" | "thinkingBudgets">,
+  model: Pick<Model<Api>, "maxTokens">,
+): number {
+  const level = replay.reasoning;
+  if (!level || (level as string) === "off") return GOAL_REVIEW_MAX_TOKENS;
+  const named = level === "xhigh" || (level as string) === "max" ? "high" : level;
+  const budgets = { ...DEFAULT_THINKING_BUDGETS, ...(replay.thinkingBudgets as Record<string, number> | undefined) };
+  const thinking = Math.min(Math.max(0, budgets[named] ?? 0), GOAL_REVIEW_MAX_THINKING_TOKENS);
+  const cap = GOAL_REVIEW_MAX_TOKENS + thinking;
+  return model.maxTokens > 0 ? Math.min(cap, model.maxTokens) : cap;
 }
 
 function replyText(message: AssistantMessage): string {
