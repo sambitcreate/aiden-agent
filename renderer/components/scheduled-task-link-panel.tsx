@@ -64,7 +64,7 @@ export function ScheduledTaskLinkPanel({ taskId, busy, recentCalls }: {
         </Button>
       </div>
       {revealed ? (
-        <div className="mt-2 grid gap-2" role="status">
+        <div className="mt-2 grid grid-cols-[minmax(0,1fr)] gap-2" role="status">
           <Text variant="small" color="secondary">Copy it now: Aiden won't show it again. Rotate to get a new one.</Text>
           <div className="flex items-center gap-2">
             <code className="min-w-0 flex-1 truncate rounded-control bg-well px-2 py-1 text-small">{revealed.url}</code>
