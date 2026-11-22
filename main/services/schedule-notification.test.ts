@@ -12,6 +12,8 @@ import { mkdtempSync, promises as fsPromises, rmSync } from "node:fs";
 import os from "node:os";
 import * as path from "node:path";
 import { showScheduledNotification } from "./schedule-notification.js";
+import * as scheduleChatDelivery from "./schedule-chat-delivery.js";
+import * as scheduledTaskPresentation from "../../renderer/shared/scheduled-task-presentation.js";
 import type { ScheduledRun, ScheduledTask } from "./types.js";
 
 function task(patch: Partial<ScheduledTask> = {}): ScheduledTask {
@@ -267,6 +269,8 @@ async function executionHarness(
       get: async () => ({ name: "Planner", interruptions: { quietHours: { enabled: false, start: "22:00", end: "07:00" }, dailyLimit: 20 } }),
     },
   };
+  ports["./schedule-chat-delivery.js"] = scheduleChatDelivery;
+  ports["../../renderer/shared/scheduled-task-presentation.js"] = scheduledTaskPresentation;
   ports["./analytics/analytics-report.js"] = analyticsReport;
   ports["./analytics/analytics-ids.js"] = analyticsIds;
   ports["./analytics/analytics-feature-reports.js"] = analyticsFeatureReports;

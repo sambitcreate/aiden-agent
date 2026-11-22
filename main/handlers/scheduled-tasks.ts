@@ -56,6 +56,12 @@ export function registerScheduledTaskHandlers(): void {
       await revisionFor(requiredString(id, "id"), updatedAt),
     ),
   );
+  ipcMain.handle("schedule:use-own-chat", async (_event, id: unknown, updatedAt: unknown) =>
+    scheduledTaskApplicationService.useOwnChat(
+      requiredString(id, "id"),
+      await revisionFor(requiredString(id, "id"), updatedAt),
+    ),
+  );
   ipcMain.handle("schedule:runNow", async (_event, id: unknown, updatedAt: unknown) =>
     scheduledTaskApplicationService.runNow(
       requiredString(id, "id"),

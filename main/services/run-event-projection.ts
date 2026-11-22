@@ -98,7 +98,7 @@ const SCHEDULED_TASK_DETAIL_KEYS = [
   "kind", "action", "taskId", "expectedUpdatedAt", "enabled", "name", "prompt", "script",
   "cron", "timezone", "nextRunAt", "notify", "mode", "permission", "workspaceId",
   "workspaceName", "mcpServerIds", "mcpServerNames", "providerId", "providerName", "model",
-  "modelName", "legacyGlobalMcp", "schedulerEnabled",
+  "modelName", "legacyGlobalMcp", "schedulerEnabled", "postsIn",
 ] as const;
 
 function pickDeclared(

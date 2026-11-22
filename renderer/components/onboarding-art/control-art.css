@@ -191,6 +191,23 @@
 .oa-sched-field .oa-bar { height: 4px; }
 .oa-sched-detail .oa-button[data-variant="ghost"] { background: var(--surface-popover); }
 
+/* Scheduled Automations: a task's run posted into the chat it was made in. */
+.oa-schat { display: flex; flex-direction: column; }
+.oa-schat-head { display: flex; align-items: center; gap: 5px; height: 22px; padding: 0 9px; color: var(--text-secondary); }
+.oa-schat-head .oa-icon { width: 9px; height: 9px; }
+.oa-schat-head .oa-bar { height: 4.5px; }
+.oa-schat-chat { display: grid; gap: 8px; padding: 9px 9px 0; }
+.oa-schat-bubble { display: grid; gap: 4px; width: 62%; margin-left: auto; padding: 6px 7px; border-radius: 9px; background: var(--oa-fill); }
+.oa-schat-card { display: flex; align-items: center; gap: 6px; padding: 6px 8px; border-radius: 9px; background: var(--surface-popover); box-shadow: var(--elevation-control); }
+.oa-schat-card > .oa-icon { width: 11px; height: 11px; color: var(--text-secondary); }
+.oa-schat-card-text { display: grid; gap: 2px; min-width: 0; color: var(--text-tertiary); font-size: 7.5px; line-height: 9px; white-space: nowrap; }
+.oa-schat-card-text .oa-strong { font-size: 8px; }
+.oa-schat-reply { display: grid; gap: 4px; width: 96%; }
+.oa-schat-reply .oa-bar { height: 4.5px; }
+.oa-schat-foot { display: grid; gap: 5px; padding: 10px 7px 0; }
+.oa-schat-chips { flex-wrap: wrap; gap: 3px; row-gap: 3px; }
+.oa-schat-foot .oa-composer { height: 46px; }
+
 /* Voice & Dictation */
 .oa-voice-composer { height: 58px; }
 .oa-voice-composer .oa-bar { height: 4.5px; }

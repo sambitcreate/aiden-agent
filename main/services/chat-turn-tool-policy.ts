@@ -54,6 +54,12 @@ export interface ChatTurnAudience {
    */
   windowless?: boolean;
   /**
+   * A windowless turn that answers the person's own queued message (the turn
+   * a settled run owed the chat): the person started it, so it may set a
+   * check-back. A turn answering a notice never is.
+   */
+  answersPerson?: boolean;
+  /**
    * Window-dependent tools this turn declared from its runtime sources (the
    * browser, simulators, Aiden's settings tools, the design canvas). Read on
    * each call, so names added after the refusal is built count.
@@ -72,6 +78,7 @@ export interface ChatTurnAudienceOptions {
   visualAudience?: "remote";
   questionPromptsUnavailable?: boolean;
   windowless?: boolean;
+  answersPerson?: boolean;
   goalRound?: boolean;
 }
 
@@ -90,6 +97,9 @@ export function chatTurnAudienceFor(options: ChatTurnAudienceOptions, params: Ch
     ...(params.inlineVisuals ? { inlineVisuals: params.inlineVisuals } : {}),
     visualize: params.visualize === true,
     ...(options.windowless === true ? { windowless: true } : {}),
+    ...(options.windowless === true && options.answersPerson === true && options.unattended !== true
+      ? { answersPerson: true }
+      : {}),
     ...(options.goalRound === true ? { goalRound: true } : {}),
   };
 }
@@ -234,9 +244,12 @@ export function argIs(key: string, ...values: readonly unknown[]): (args: Record
   return (args) => values.includes(args[key]);
 }
 
-/** A turn nobody started on purpose: an unattended follow-up, a windowless turn, or a goal round. */
+/**
+ * A turn nobody started on purpose: an unattended follow-up, a windowless
+ * turn that isn't answering the person's own queued message, or a goal round.
+ */
 export function aidenStartedTurn(turn: ChatTurnAudience): boolean {
-  return turn.unattended || turn.windowless === true || turn.goalRound === true;
+  return turn.unattended || (turn.windowless === true && turn.answersPerson !== true) || turn.goalRound === true;
 }
 
 export const TURN_ARGS_REFUSAL_RULES: readonly TurnArgsRefusalRule[] = [

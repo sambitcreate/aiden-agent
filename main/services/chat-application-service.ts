@@ -128,6 +128,8 @@ export interface ChatApplicationDependencies {
   inboxState?: ChatInboxStateStores;
   /** After a deletion commits: lets a No workspace chat's hidden folder go with it. */
   afterChatRemoved?: (workspaceId: string) => Promise<void>;
+  /** After a deletion commits: tasks that posted into the chat carry on in their own chats. */
+  scheduledTasks?: { releaseOriginChat(chatId: string): Promise<unknown> };
   logError(area: string, message: string, error: unknown): void;
 }
 
@@ -520,6 +522,10 @@ export function createChatApplicationService(deps: ChatApplicationDependencies) 
           deps.logError("design", "Could not delete the deleted chat's design canvas.", error);
         });
         void forgetChatInboxState(deps.inboxState, chatId, deps.logError);
+        await deps.scheduledTasks?.releaseOriginChat(chatId).catch((error: unknown) => {
+          // A run finds the chat gone and falls back anyway; this keeps the editor truthful.
+          deps.logError("schedule", "Could not move the deleted chat's scheduled tasks to their own chats.", error);
+        });
         await deps.subagentRunStore.completeChatDeletion(chatId);
         releaseAdmission = true;
         // Scratch cleanup is best effort and must not delay the delete reply.

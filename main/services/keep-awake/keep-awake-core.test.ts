@@ -191,3 +191,35 @@ test("disposing releases the hold and ignores later changes", () => {
   assert.equal(h.blocker.active.size, 0);
   assert.equal(h.clock.pending(), 0);
 });
+
+test("after 4 idle hours a due check-back or wake-up still holds; other work lets go", () => {
+  const h = harness();
+  h.setIdle(KEEP_AWAKE_IDLE_CAP_SECONDS);
+  h.set([chat("a")]);
+  assert.equal(h.blocker.active.size, 0, "a chat's work lets go when nobody is around");
+  for (const kind of ["check-back", "wake-up"] as const) {
+    h.set([chat("a"), { kind, id: `${kind}:1` }]);
+    assert.equal(h.blocker.active.size, 1, `a ${kind} due soon keeps the unattended computer awake`);
+    assert.equal(h.controller.status().pausedWhileIdle, false);
+    h.set([chat("a")]);
+    assert.equal(h.blocker.active.size, 0);
+  }
+});
+
+test("a recheck time far ahead (or behind a clock jump) waits at most an hour, never firing at once", () => {
+  const clock = fakeClock();
+  let reads = 0;
+  const controller = new KeepAwakeController<number, number>({
+    blocker: { start: () => 1, stop: () => undefined },
+    clock,
+    idleSeconds: () => 0,
+  });
+  // Past 2^31-1 ms a plain timer would fire after 1 ms, again and again.
+  controller.addInput({ read: (now) => { reads += 1; return { reasons: [], recheckAt: now + 40 * 24 * 60 * 60_000 }; } });
+  const afterAdd = reads;
+  clock.advance(59 * 60_000);
+  assert.equal(reads, afterAdd, "no re-read inside the hour");
+  clock.advance(60_000);
+  assert.equal(reads, afterAdd + 1, "one hourly re-read");
+  controller.dispose();
+});

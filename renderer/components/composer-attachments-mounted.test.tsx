@@ -52,6 +52,7 @@ async function loadComposer() {
       "export const useComposerContextChips=()=>({chips:{workspace:true,machine:false,branch:false,changesBadge:0,pullRequest:false,barMode:'full'},pullRequestAnnouncement:''});",
     "./chat-pull-requests": "export const ChatPullRequestsChip=()=>null;",
     "./follow-through-chips": "export const FollowThroughChips=()=>null;",
+    "./chat-task-chips": "export const ChatTaskChip=()=>null;",
     "./busy-send-button": "export const BusySendButton=()=>null;",
     "./provider-icon": "export const ProviderIcon=()=>null;",
     "../lib/design-mode": "export const useDesignModeControls=()=>null;",

@@ -70,3 +70,11 @@ test("scheduled task parser carries only an explicit boolean Web Search grant", 
     undefined,
   );
 });
+
+test("a desktop save can't choose the chat a task posts into", () => {
+  assert.throws(
+    () => parseScheduledTaskInput({ ...valid, originChatId: "someone-elses-chat" }),
+    /can't be set here/u,
+  );
+  assert.equal("originChatId" in parseScheduledTaskInput(valid), false);
+});

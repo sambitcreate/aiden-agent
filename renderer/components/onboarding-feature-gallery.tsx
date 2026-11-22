@@ -314,7 +314,7 @@ export const onboardingFeatures: OnboardingFeature[] = [
     group: "control",
     title: "Scheduled Automations",
     description:
-      "Ask Aiden in any chat to schedule recurring work, review its unattended access, then run, change, or pause it anytime.",
+      "Ask Aiden in any chat to schedule recurring work, review its unattended access, then run, change, or pause it anytime. A task made in a chat posts each result there, and Aiden can check back in a chat later.",
     icon: CalendarClock,
     size: "tall",
   },

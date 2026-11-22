@@ -781,6 +781,9 @@ export const scheduleApi = {
     invoke<ScheduledTask>("schedule:resume", id, expectedUpdatedAt),
   runNow: (id: string, expectedUpdatedAt: number) =>
     invoke<ScheduledRun>("schedule:runNow", id, expectedUpdatedAt),
+  /** Later runs post into the task's own chat instead of the chat that made it. */
+  useOwnChat: (id: string, expectedUpdatedAt: number) =>
+    invoke<ScheduledTask>("schedule:use-own-chat", id, expectedUpdatedAt),
   preview: (cron: string, timezone: string, count = 3) =>
     invoke<number[]>("schedule:preview", cron, timezone, count),
   scripts: (workspaceId?: string) => invoke<string[]>("schedule:scripts", workspaceId),

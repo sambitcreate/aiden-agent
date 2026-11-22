@@ -554,7 +554,14 @@ export type ScheduledTaskPermission = "read-only" | "full";
 export type ScheduledTaskExecutionProfile = "assistant";
 export type ScheduledRunResult = "success" | "error" | "silent" | "blocked" | "skipped";
 /** Why a run was recorded without doing work. Only Bot routines skip today. */
-export type ScheduledRunSkipReason = "bot_paused" | "duplicate" | "paused_by_person";
+export type ScheduledRunSkipReason =
+  | "bot_paused"
+  | "duplicate"
+  | "paused_by_person"
+  /** The task posts into a chat that stayed busy past the bounded wait. */
+  | "chat_busy"
+  /** The task posts into a chat that already ran its hourly share of task runs. */
+  | "chat_budget";
 
 export interface ScheduledMcpServerBinding {
   id: string;
@@ -609,6 +616,13 @@ export interface ScheduledTask {
   /** Explicit Web Search authority. Missing legacy values are always treated as false. */
   webSearchEnabled?: boolean;
   chatId?: string;
+  /**
+   * Main-owned: the chat this task was made in, where its runs post. Set once
+   * at creation by the `schedule_task` tool; renderer and phone saves keep it
+   * and cannot set it. Cleared only by "Use its own chat" or by deleting that
+   * chat, after which runs go to the task's own chat (`chatId`).
+   */
+  originChatId?: string;
   /**
    * Main-owned Bot that owns this routine. A Bot routine submits to that Bot's
    * conversation instead of a workspace chat and is hidden from the generic
@@ -672,6 +686,8 @@ export interface ScheduledTaskInput {
   executionProfile?: ScheduledTaskExecutionProfile;
   /** Explicit Web Search authority. New tasks default to false. */
   webSearchEnabled?: boolean;
+  /** Main-owned: the chat a new task posts into. Only read when creating; saves of an existing task keep its binding. */
+  originChatId?: string;
   /** Main-owned Bot routine owner. Renderer schedule mutations cannot set this field. */
   botId?: string;
   /** Main-owned Bot routine schedule; when set, `cron` is derived from it. */

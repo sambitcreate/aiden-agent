@@ -37,6 +37,15 @@ test("task approval discloses instructions, runtime, exact connectors and paused
   assert.ok(!markup.includes("Remember this exact action"));
 });
 
+test("task approval says whether results post in this chat or the task's own chat", () => {
+  const here = renderApproval({ ...approval, postsIn: "this_chat" });
+  assert.ok(here.includes("Posts in") && here.includes("This chat"));
+  const own = renderApproval({ ...approval, postsIn: "own_chat" });
+  assert.ok(own.includes("Posts in") && own.includes("Its own chat"));
+  assert.ok(!renderApproval(approval).includes("Posts in"), "older approvals carry no row");
+  assert.ok(!renderApproval({ ...approval, postsIn: "somewhere" }).includes("Allow once"), "an unknown value withholds Allow");
+});
+
 test("malformed schedule approval withholds Allow instead of presenting incomplete consent", () => {
   const markup = renderApproval({ ...approval, providerName: undefined });
   assert.ok(markup.includes("Invalid privileged approval blocked"));
