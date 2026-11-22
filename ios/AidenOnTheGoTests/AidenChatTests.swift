@@ -9037,25 +9037,38 @@ final class AidenChatTests: XCTestCase {
         ).frame(width: 320, alignment: .leading))
         renderer.scale = 3
 
-        let image = try XCTUnwrap(renderer.cgImage)
-        let width = image.width
-        let height = image.height
-        var pixels = [UInt8](repeating: 0, count: width * height * 4)
-        let context = try XCTUnwrap(CGContext(
-            data: &pixels,
-            width: width,
-            height: height,
-            bitsPerComponent: 8,
-            bytesPerRow: width * 4,
-            space: CGColorSpaceCreateDeviceRGB(),
-            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
-        ))
-        context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
-
-        let firstPaintedColumn = (0..<width).first { x in
-            (0..<height).contains { y in pixels[((y * width + x) * 4) + 3] > 8 }
+        /// The leftmost column with any paint in a fresh render, or nil when
+        /// the render came out blank.
+        func firstPaintedColumn() throws -> Int? {
+            let image = try XCTUnwrap(renderer.cgImage)
+            let width = image.width
+            let height = image.height
+            var pixels = [UInt8](repeating: 0, count: width * height * 4)
+            let context = try XCTUnwrap(CGContext(
+                data: &pixels,
+                width: width,
+                height: height,
+                bitsPerComponent: 8,
+                bytesPerRow: width * 4,
+                space: CGColorSpaceCreateDeviceRGB(),
+                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+            ))
+            context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
+            return (0..<width).first { x in
+                (0..<height).contains { y in pixels[((y * width + x) * 4) + 3] > 8 }
+            }
         }
-        XCTAssertGreaterThan(try XCTUnwrap(firstPaintedColumn), 0)
+
+        // A render can come out blank while the text system is still
+        // getting ready (seen on CI's iPhone Duo under load): render again
+        // until the text is drawn, then check where it starts.
+        var column = try firstPaintedColumn()
+        let deadline = Date().addingTimeInterval(2)
+        while column == nil, Date() < deadline {
+            RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+            column = try firstPaintedColumn()
+        }
+        XCTAssertGreaterThan(try XCTUnwrap(column, "The reply never rendered"), 0)
     }
 
     func testSSEParserAcceptsCanonicalFrameAndRejectsIdentityMismatches() throws {
