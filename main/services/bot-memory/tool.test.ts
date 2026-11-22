@@ -250,3 +250,55 @@ test("a routine can recall person history while memory writes remain withheld", 
     await harness.close(ctx);
   }
 });
+
+test("while the Bot has routines, a note saying it can't schedule or message first is refused", async () => {
+  const { memory, memoryFile } = memoryFor();
+  let asked = 0;
+  const tool = createBotMemoryTool(BOT, memory, { canSchedule: async () => { asked += 1; return true; } });
+  const save = async (target: "memory" | "user", content: string) => {
+    const result = await tool.execute("call", { target, operations: [{ action: "add", content }] }, undefined);
+    return { isError: result.isError === true, json: JSON.parse((result.content[0] as { text: string }).text) as Record<string, unknown> };
+  };
+
+  // The note a Chief of Staff Bot really kept, and the ways small models word it.
+  for (const note of [
+    "I cannot self-schedule; ask the person to set a calendar nudge instead.",
+    "I can’t start a conversation on my own.",
+    "Cannot self-schedule or run on a timer.",
+    "I'm unable to message you first.",
+    "The bot doesn't have the ability to schedule future check-ins.",
+  ]) {
+    const refused = await save("memory", note);
+    assert.equal(refused.isError, true, note);
+    assert.match(String(refused.json.error), /routines tool/u, note);
+  }
+  assert.equal((await save("user", "I can't reach out first, so the person messages me each morning.")).isError, true);
+  assert.throws(() => readFileSync(memoryFile, "utf8"), /ENOENT/u, "nothing was saved");
+  const askedForClaims = asked;
+
+  // Facts about the person, and true notes about other limits, still save without asking.
+  assert.equal((await save("user", "Can't start conversations at work before 10 AM.")).isError, false);
+  assert.equal((await save("memory", "I can't see their Outlook calendar yet.")).isError, false);
+  assert.equal(asked, askedForClaims, "only an entry that makes the claim asks about routines");
+
+  // Replacing an entry with the claim is refused too; removing the claim works.
+  const replaced = await tool.execute("call", { target: "memory", operations: [{ action: "replace", match: "Outlook", content: "I can't schedule follow-up messages." }] }, undefined);
+  assert.equal(replaced.isError, true);
+  assert.match(readFileSync(memoryFile, "utf8"), /Outlook/u);
+});
+
+test("a note that it can't schedule is refused when Aiden can't tell whether the Bot has routines", async () => {
+  const { memory, memoryFile } = memoryFor();
+  const tool = createBotMemoryTool(BOT, memory, { canSchedule: async () => { throw new Error("access unavailable"); } });
+  const result = await tool.execute("call", { target: "memory", operations: [{ action: "add", content: "I cannot self-schedule." }] }, undefined);
+  assert.equal(result.isError, true);
+  assert.throws(() => readFileSync(memoryFile, "utf8"), /ENOENT/u);
+});
+
+test("a Bot without routines may keep a note that it can't schedule", async () => {
+  const { memory, memoryFile } = memoryFor();
+  const tool = createBotMemoryTool(BOT, memory, { canSchedule: async () => false });
+  const result = await tool.execute("call", { target: "memory", operations: [{ action: "add", content: "I cannot self-schedule." }] }, undefined);
+  assert.equal(result.isError, undefined);
+  assert.match(readFileSync(memoryFile, "utf8"), /cannot self-schedule/u);
+});

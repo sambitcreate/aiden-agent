@@ -148,6 +148,8 @@ export interface MemoryReviewRun {
    * tell the model when to use them.
    */
   extras?: MemoryReviewExtras;
+  /** The Bot has routines now: an entry saying it can't schedule or message first is refused. */
+  canSchedule?: () => Promise<boolean>;
 }
 
 export interface MemoryReviewExtras {
@@ -189,7 +191,11 @@ export async function runMemoryReview(run: MemoryReviewRun): Promise<MemoryRevie
     signal.throwIfAborted();
   };
   // The store re-runs the fence under its write lock and right before it publishes.
-  const tool = createBotMemoryTool(run.botId, run.memory, { addOnly: true, assertCurrent: fence });
+  const tool = createBotMemoryTool(run.botId, run.memory, {
+    addOnly: true,
+    assertCurrent: fence,
+    ...(run.canSchedule ? { canSchedule: run.canSchedule } : {}),
+  });
   const declaration: Tool = { name: tool.name, description: tool.description, parameters: tool.parameters };
   const extraTools = new Map((run.extras?.tools ?? []).map((extra) => [extra.name, extra] as const));
   const declarations: Tool[] = [
@@ -551,6 +557,8 @@ export interface BotMemoryReviewDeps {
   onError?(botId: string, error: unknown): void;
   /** Extra add-only tools for this Bot's review, built per run. */
   extras?(botId: string): MemoryReviewExtras | undefined;
+  /** Whether the Bot has routines now (see `MemoryReviewRun.canSchedule`). */
+  canSchedule?(botId: string): Promise<boolean>;
   /** The daily learning budget; a refused reservation skips the run without a marker. */
   reserve?(botId: string): Promise<{ ok: true; settle(outputTokens: number | undefined): Promise<void> } | { ok: false }>;
   /** Memory as text before the run, and a record of what the run added (for Undo). */
@@ -630,6 +638,7 @@ export function createBotMemoryReview(deps: BotMemoryReviewDeps): BotMemoryRevie
           timeoutMs: deps.timeoutMs ?? BOT_MEMORY_REVIEW_TIMEOUT_MS,
           signal: controller.signal,
           ...(extras ? { extras } : {}),
+          ...(deps.canSchedule ? { canSchedule: () => deps.canSchedule!(botId) } : {}),
         });
       } catch (error) {
         await reserved?.settle(undefined).catch(() => undefined);
