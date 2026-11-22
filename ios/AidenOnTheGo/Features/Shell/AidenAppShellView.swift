@@ -9,13 +9,19 @@ enum AidenChromeSymbols {
 extension ToolbarContent {
     /// The item the bar gives up last when it runs out of room, as a closed
     /// iPhone Duo's side rail does: compose. Before iOS 27 the system decides.
+    /// `visibilityPriority` is in the iOS 27.0 SDK (SwiftUI 8.0); the SDK
+    /// check lets the iOS 26 SDK (Xcode 26.6, CI) build without it.
     @ToolbarContentBuilder
     func aidenKeptLongestInBar() -> some ToolbarContent {
+        #if canImport(SwiftUI, _version: 8.0)
         if #available(iOS 27.0, *) {
             visibilityPriority(.high)
         } else {
             self
         }
+        #else
+        self
+        #endif
     }
 }
 
