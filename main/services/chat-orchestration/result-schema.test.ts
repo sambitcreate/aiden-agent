@@ -307,3 +307,22 @@ test("a schema is compiled once: the same schema, in any key order, reuses its v
   assert.notEqual(again.validate, first.validate);
   assert.deepEqual(checkResult(schema, { done: false }), { ok: true });
 });
+
+test("a schema with a number JSON can't carry is refused, at start and when a stored link loads", () => {
+  // 1e400 parses to Infinity; saved with the link it would come back as null.
+  for (const text of ['{"type":"number","maximum":1e400}', '{"type":"number","minimum":-1e400}', '{"type":"array","items":{"enum":[1,1e999]}}']) {
+    const schema = JSON.parse(text) as Record<string, unknown>;
+    const compiled = compileResultSchema(schema);
+    assert.equal(compiled.ok, false, text);
+    assert.match(compiled.ok ? "" : compiled.error, /number too large to write as JSON/u, text);
+    assert.equal(isStorableResultSchema(schema), false, text);
+  }
+  assert.equal(compileResultSchema({ const: Number.NaN }).ok, false);
+
+  // The schema with null in the same place is its own schema, checked as itself.
+  const withNull = { type: "number", maximum: null, description: "not a twin" };
+  compileResultSchema({ type: "number", maximum: Number.POSITIVE_INFINITY, description: "not a twin" });
+  const checked = compileResultSchema(withNull);
+  assert.equal(checked.ok, false, "maximum must be a number, so ajv refuses it");
+  assert.equal(compileResultSchema({ type: "number", maximum: 1e300 }).ok, true);
+});
