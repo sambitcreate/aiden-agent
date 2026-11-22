@@ -26,7 +26,7 @@ export interface ChildChatsToolOptions {
 
 export const CHILD_CHATS_TOOL_DESCRIPTION =
   "Start other chats in this workspace and run them: each gets its own task and works on its own, like a teammate. " +
-  "Actions (one per call): start {chats: [{title, task}]} starts each chat with its task as the first message; " +
+  "Actions (one per call): start {chats: [{title, task, workspace?: same|new_worktree, base_ref?, branch_name?}]} starts each chat with its task as the first message, in this workspace or a new worktree of it; " +
   "send {chat_id, text, mode: auto|queue|steer} sends a follow-up (auto steers a running turn or starts a new one); " +
   `wait {chat_ids (up to ${CHILD_CHATS_LIMITS.waitChats}), timeout_seconds (up to ${CHILD_CHATS_LIMITS.waitMaxSeconds}), until: any|all} waits for their turns to end and returns their last replies (a timeout never stops them); ` +
   `read {chat_id, limit (up to ${CHILD_CHATS_LIMITS.readMessages})} reads a chat's newest messages; list shows every chat this chat started; stop {chat_id} stops its running turn. ` +
@@ -83,7 +83,16 @@ export function createChildChatsTool(options: ChildChatsToolOptions): AgentTool 
               {
                 title: Type.String({ minLength: 1, maxLength: CHILD_CHATS_LIMITS.titleChars }),
                 task: Type.String({ minLength: 1, maxLength: CHILD_CHATS_LIMITS.taskChars }),
-                workspace: Type.Optional(Type.Literal("same", { description: "Started chats run in this chat's workspace." })),
+                workspace: Type.Optional(
+                  Type.Union([Type.Literal("same"), Type.Literal("new_worktree")], {
+                    description:
+                      "same (default) runs in this chat's workspace; new_worktree runs in a new Git worktree of it, so parallel edits don't collide.",
+                  }),
+                ),
+                base_ref: Type.Optional(
+                  Type.String({ maxLength: 255, description: "new_worktree only: the branch to start from. Default: the repository's default branch, or this chat's branch when it is itself in a worktree." }),
+                ),
+                branch_name: Type.Optional(Type.String({ maxLength: 255, description: "new_worktree only: the new branch's name. Default: named from the task." })),
                 model: Type.Optional(Type.String({ maxLength: 256, description: "A model id; the default model when absent." })),
               },
               { additionalProperties: false },
@@ -118,13 +127,25 @@ export function createChildChatsTool(options: ChildChatsToolOptions): AgentTool 
               if (typeof entry?.title !== "string" || typeof entry.task !== "string" || !entry.task.trim()) {
                 return refuse("Each chat needs a title and a task.");
               }
-              if (entry.workspace !== undefined && entry.workspace !== "same") {
-                return refuse('Started chats run in this workspace for now: leave workspace out or use "same".');
+              if (entry.workspace !== undefined && entry.workspace !== "same" && entry.workspace !== "new_worktree") {
+                return refuse('workspace is "same" or "new_worktree".');
+              }
+              const worktree = entry.workspace === "new_worktree";
+              if (!worktree && (entry.base_ref !== undefined || entry.branch_name !== undefined)) {
+                return refuse('base_ref and branch_name need workspace: "new_worktree".');
+              }
+              for (const field of ["base_ref", "branch_name"] as const) {
+                if (entry[field] !== undefined && (typeof entry[field] !== "string" || !entry[field].trim())) {
+                  return refuse(`${field} must be a branch name.`);
+                }
               }
               requests.push({
                 title: entry.title,
                 task: entry.task,
                 ...(typeof entry.model === "string" && entry.model.trim() ? { model: entry.model.trim() } : {}),
+                ...(worktree ? { workspace: "new_worktree" as const } : {}),
+                ...(typeof entry.base_ref === "string" ? { baseRef: entry.base_ref.trim() } : {}),
+                ...(typeof entry.branch_name === "string" ? { branchName: entry.branch_name.trim() } : {}),
               });
             }
             const started = await options.childChats.start(lead, toolCallId, requests);

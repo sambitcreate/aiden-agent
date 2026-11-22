@@ -615,6 +615,7 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
               ensure: (request, seed, owner) => firstMessageWorktrees.ensure(request, seed, owner),
               owner: (deviceId) => workspaceOwners.owner(deviceId),
               record: (key) => firstMessageWorktrees.record(key),
+              listWorkspaces: () => configStore.listWorkspaces(),
             }),
             application: chatApplicationService,
             chatStore,

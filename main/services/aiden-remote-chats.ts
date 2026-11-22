@@ -1,3 +1,4 @@
+import type { AidenRemoteNewWorktreeOptions } from "./aiden-remote-new-worktree.js";
 import { parseChatInputSource } from "../../renderer/shared/chat-input-source.js";
 import type { WorkspaceChatAssignment } from "./workspace-application-service.js";
 import { agentNoticeDisplayText, parseAgentNoticeV1 } from "../../renderer/shared/agent-notices.js";
@@ -1465,9 +1466,10 @@ export class AidenRemoteChatService {
           sourceWorkspaceId: string,
           text: string,
           chatId: string,
+          options?: AidenRemoteNewWorktreeOptions,
         ): Promise<{ workspaceId: string; branch: string }>;
         /** The branch of the worktree New worktree made for this chat, when the chat is in it. */
-        worktreeBranch(chatId: string, workspaceId: string): Promise<string | undefined>;
+        worktreeBranch(chatId: string, workspaceId: string, key?: string): Promise<string | undefined>;
       };
       idempotency?: AidenIdempotencyLedger;
       persistIdempotency?: (snapshot: AidenIdempotencySnapshot) => Promise<void>;
@@ -2317,6 +2319,8 @@ export class AidenRemoteChatService {
     revision: string,
     key: string,
     input: unknown,
+    /** Set only in-process, for a chat a lead chat started (Phase 5, D5); never from a phone. */
+    worktree: AidenRemoteNewWorktreeOptions = {},
   ): Promise<{ chat: AidenRemoteChatProjection; branch: string }> {
     const newWorktrees = this.options.newWorktrees;
     if (!newWorktrees) throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
@@ -2346,7 +2350,7 @@ export class AidenRemoteChatService {
         async () => {
           const chat = await this.chat(chatId);
           if (chat.messages.length === 0 && chat.workspaceId) {
-            const branch = await newWorktrees.worktreeBranch(chatId, chat.workspaceId);
+            const branch = await newWorktrees.worktreeBranch(chatId, chat.workspaceId, worktree.key);
             if (branch) return { chat: projectAidenRemoteChat(chat), branch };
           }
           // Messages first: appending one changes the revision, and a chat that
@@ -2359,7 +2363,7 @@ export class AidenRemoteChatService {
           const sourceWorkspaceId = chat.workspaceId;
           let created: { workspaceId: string; branch: string };
           try {
-            created = await newWorktrees.create(deviceId, sourceWorkspaceId, parsed.text, chatId);
+            created = await newWorktrees.create(deviceId, sourceWorkspaceId, parsed.text, chatId, worktree);
           } catch (error) {
             if (error instanceof AidenRemoteServiceError) throw error;
             throw new AidenRemoteServiceError(

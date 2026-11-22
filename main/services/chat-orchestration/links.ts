@@ -9,6 +9,7 @@
 // failed save is logged and the memory copy stays current, so a full disk
 // costs the record after a restart, never the running work.
 
+import { isValidBranchName } from "../../../renderer/shared/worktree-on-send.js";
 import { APPROVAL_MODES, MAC_GRANT_CLASSES, type ApprovalMode, type MacGrantClass } from "../../../renderer/shared/approval-mode.js";
 import type { ApprovalCeiling } from "../approval-gate/run-approval.js";
 
@@ -32,6 +33,8 @@ export interface ChatLink {
   owed?: { runId: string; end: ChatLinkRunEnd; at: number };
   /** Runs the lead has already been told about, newest last. */
   delivered?: string[];
+  /** The branch of the new worktree the chat runs in, when the lead asked for one. */
+  branch?: string;
 }
 
 export interface ChatLinkDocument {
@@ -104,6 +107,7 @@ export function parseChatLink(value: unknown): ChatLink | undefined {
       RUN_ENDS.includes(owed.end as ChatLinkRunEnd) && time(owed.at) !== undefined) {
     link.owed = { runId: owed.runId, end: owed.end as ChatLinkRunEnd, at: owed.at as number };
   }
+  if (typeof record.branch === "string" && record.branch.length <= 255 && isValidBranchName(record.branch)) link.branch = record.branch;
   if (Array.isArray(record.delivered)) {
     const delivered = record.delivered.filter((runId): runId is string => typeof runId === "string" && KEY.test(runId));
     if (delivered.length > 0) link.delivered = delivered.slice(-DELIVERED_LIMIT);

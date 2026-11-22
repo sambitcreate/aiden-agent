@@ -31,7 +31,10 @@ function fakeRemote() {
   const runs = new Map<string, Run>();
   const watchers = new Map<string, Set<{ onChange(): void; onClose(): void }>>();
   const cancels: string[] = [];
+  const worktreeMoves: Array<{ chatId: string; key: string; text: string; options: unknown }> = [];
+  const worktreesByKey = new Map<string, string>();
   let failNextCreate: Error | undefined;
+  let failNextMove: Error | undefined;
   const find = (owner: string, runId: string) => {
     const run = runs.get(runId);
     if (!run || run.owner !== owner) throw new Error("unknown stream");
@@ -58,6 +61,18 @@ function fakeRemote() {
       rename: async (chatId: string, _revision: string, input: { title: string }) => {
         chats.get(chatId)!.title = input.title;
         return {};
+      },
+      moveToNewWorktree: async (audience: string, chatId: string, _revision: string, key: string, input: { text: string }, options: unknown) => {
+        if (failNextMove) {
+          const error = failNextMove;
+          failNextMove = undefined;
+          throw error;
+        }
+        worktreeMoves.push({ chatId, key, text: input.text, options });
+        const branch = worktreesByKey.get(`${audience}\n${key}`) ?? `aiden/wt-${worktreesByKey.size + 1}`;
+        worktreesByKey.set(`${audience}\n${key}`, branch);
+        chats.get(chatId)!.workspaceId = `wt-${branch}`;
+        return { chat: { id: chatId, revision: "r2" }, branch };
       },
       classify: async () => ({ kind: "ordinary" }),
       runMutation: async (_audience: string, _chatId: string, _classification: unknown, fn: () => Promise<unknown>) => fn(),
@@ -111,8 +126,12 @@ function fakeRemote() {
     chats,
     runs,
     cancels,
+    worktreeMoves,
     failCreateOnce(error: Error) {
       failNextCreate = error;
+    },
+    failMoveOnce(error: Error) {
+      failNextMove = error;
     },
     setState(runId: string, state: AidenRemoteStreamState) {
       runs.get(runId)!.state = state;
@@ -318,7 +337,7 @@ test("the tool turns a Remote refusal into the model's error, and validates each
   for (const [args, error] of [
     [{ action: "send", chat_id: "c1" }, /send needs chat_id and text/u],
     [{ action: "wait", chat_ids: [] }, /wait needs chat_ids/u],
-    [{ action: "start", chats: [{ title: "x", task: "x", workspace: "new_worktree" }] }, /run in this workspace for now/u],
+    [{ action: "start", chats: [{ title: "x", task: "x", base_ref: "main" }] }, /base_ref and branch_name need workspace: "new_worktree"/u],
     [{ action: "dance" }, /Unknown action/u],
   ] as const) {
     const outcome = await plain.execute("call-x", args, never());
@@ -348,4 +367,33 @@ test("a turn the lead stopped itself counts as told, so its end is no news", asy
   assert.deepEqual(await childChats.stop(LEAD, outcome!.chatId), { chatId: outcome!.chatId, stopped: true });
   assert.deepEqual(ended.map((event) => event.end), ["stopped"]);
   assert.deepEqual(links.get(outcome!.chatId)!.delivered, [outcome!.runId]);
+});
+
+test("a chat started in a new worktree runs there, keyed so a replay finds the same worktree", async () => {
+  const { remote, links, childChats } = setup();
+  const request = { title: "Docs", task: "Update the docs", workspace: "new_worktree" as const, baseRef: "main", branchName: "docs/update" };
+  const [first] = await childChats.start(LEAD, "call-1", [request]);
+  assert.equal((first as { branch?: string }).branch, "aiden/wt-1");
+  assert.deepEqual(remote.worktreeMoves, [
+    {
+      chatId: "chat-1",
+      key: "agent-chat:lead-1:call-1:0:worktree",
+      text: "Update the docs",
+      options: { key: "agent-chat:lead-1:call-1:0:worktree", stackOnWorktree: true, baseRef: "main", branchName: "docs/update" },
+    },
+  ]);
+  assert.equal(remote.chats.get("chat-1")!.workspaceId, "wt-aiden/wt-1");
+  assert.equal(links.get("chat-1")!.branch, "aiden/wt-1");
+  const [again] = await childChats.start(LEAD, "call-1", [request]);
+  assert.deepEqual(again, first);
+  assert.equal(remote.worktreeMoves.length, 1);
+});
+
+test("a worktree that can't be made is reported for that chat, with no turn started", async () => {
+  const { remote, childChats } = setup();
+  remote.failMoveOnce(new AidenRemoteServiceError("git_capability_denied", "There isn't enough free disk space on your computer for a new worktree. Free some space, then try again.", 409));
+  const [outcome] = await childChats.start(LEAD, "call-1", [{ title: "Docs", task: "x", workspace: "new_worktree" }]);
+  assert.deepEqual(outcome, { title: "Docs", error: "There isn't enough free disk space on your computer for a new worktree. Free some space, then try again." });
+  assert.equal(remote.runs.size, 0);
+  assert.deepEqual(await childChats.list(LEAD), []);
 });

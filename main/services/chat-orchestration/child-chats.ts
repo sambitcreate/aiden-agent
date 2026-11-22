@@ -21,7 +21,10 @@ import type { ChatLink, ChatLinkRunEnd, ChatLinkStore } from "./links.js";
 import { CHAT_RUN_TERMINAL_STATES, ChatRunCore, projectRunMessage, type ChatRunSnapshot } from "./run-core.js";
 
 export interface ChildChatServices {
-  chats: Pick<AidenRemoteChatService, "create" | "rename" | "startTurn" | "runMutation" | "classify" | "messagesWindow">;
+  chats: Pick<
+    AidenRemoteChatService,
+    "create" | "rename" | "startTurn" | "runMutation" | "classify" | "messagesWindow" | "moveToNewWorktree"
+  >;
   streams: Pick<
     AidenRemoteStreamService,
     "status" | "pendingApproval" | "pendingQuestion" | "watch" | "cancel" | "submitInput"
@@ -77,10 +80,14 @@ export interface ChildChatStartRequest {
   title: string;
   task: string;
   model?: string;
+  /** Run in a new worktree of the lead's workspace (or, for a lead in a worktree, stacked on its branch). */
+  workspace?: "same" | "new_worktree";
+  baseRef?: string;
+  branchName?: string;
 }
 
 export type ChildChatStartOutcome =
-  | { chatId: string; title: string; runId: string; state: "running" }
+  | { chatId: string; title: string; runId: string; state: "running"; branch?: string }
   | { title: string; error: string };
 
 export type ChildChatView = {
@@ -146,7 +153,20 @@ export class ChildChats {
             workspaceId: lead.workspaceId,
             ...(request.model ? { modelId: request.model } : {}),
           });
-          await services.chats.rename(created.id, created.revision, { title }).catch(() => undefined);
+          let revision = created.revision;
+          let branch: string | undefined;
+          if (request.workspace === "new_worktree") {
+            // Keyed like the chat, so a replay finds the worktree instead of making another.
+            const moved = await services.chats.moveToNewWorktree(audience, created.id, revision, `${key}:worktree`, { text: request.task }, {
+              key: `${key}:worktree`,
+              stackOnWorktree: true,
+              ...(request.baseRef ? { baseRef: request.baseRef } : {}),
+              ...(request.branchName ? { branchName: request.branchName } : {}),
+            });
+            revision = moved.chat.revision;
+            branch = moved.branch;
+          }
+          await services.chats.rename(created.id, revision, { title }).catch(() => undefined);
           link = await this.dependencies.links.add({
             childChatId: created.id,
             leadChatId,
@@ -154,10 +174,11 @@ export class ChildChats {
             title,
             createdAt: this.now(),
             ceiling: lead.ceiling,
+            ...(branch ? { branch } : {}),
           });
         }
         const runId = link.runId ?? (await this.startTurn(services, link, `${key}:turn`, firstMessage(lead.title, request.task)));
-        outcomes.push({ chatId: link.childChatId, title: link.title, runId, state: "running" });
+        outcomes.push({ chatId: link.childChatId, title: link.title, runId, state: "running", ...(link.branch ? { branch: link.branch } : {}) });
       } catch (error) {
         outcomes.push({ title, error: errorText(error) });
       }

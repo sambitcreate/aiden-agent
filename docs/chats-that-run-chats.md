@@ -19,7 +19,7 @@ The lead's model gets one tool, `child_chats`, with one action per call:
 
 | Action | What it does |
 | --- | --- |
-| `start` | Starts up to 20 chats per call, each `{title, task}`, in the lead's workspace. The task is the chat's first message, after a line naming the lead. |
+| `start` | Starts up to 20 chats per call, each `{title, task}`, in the lead's workspace or a new worktree of it (see below). The task is the chat's first message, after a line naming the lead. |
 | `send` | Sends a follow-up to a started chat. `auto` (the default) and `steer` steer a running turn, `queue` waits for it to end, and an idle chat starts a new turn. |
 | `wait` | Waits up to 600 seconds (default 120) for up to 8 started chats, until `any` or `all` of them end, and returns each chat's state and last reply. A timeout never stops anything. |
 | `read` | Reads a started chat's newest messages (up to 20, each cut at 20,000 characters). |
@@ -36,6 +36,21 @@ The lead's model gets one tool, `child_chats`, with one action per call:
   (`agent-chat:<leadChatId>:<toolCallId>:<index>`), and the tool is declared
   never-replay, so a resumed or repeated call finds the chats it already
   started instead of starting more.
+
+## New worktrees
+
+`workspace: "new_worktree"` runs a started chat in a new managed worktree, so
+parallel edits don't collide. It goes through the same first-message worktree
+coordinator as a phone's New worktree, keyed by the start
+(`agent-chat:<lead>:<toolCallId>:<index>:worktree`), so a replay finds the
+worktree instead of making another. The base is the repository's default
+branch unless `base_ref` names a local or remote-tracking branch, and the
+branch is named from the task unless `branch_name` gives one. A lead that is
+itself in a managed worktree stacks: the new worktree is made from the
+workspace it came from, starting at the lead's branch. Every refusal is a
+fixed sentence (an unknown or invalid branch, no free disk space, the source
+workspace gone), reported for that chat while the others still start. The
+ceiling still comes from the lead.
 
 ## Approvals
 
