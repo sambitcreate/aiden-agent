@@ -49,6 +49,11 @@ export interface ScheduledTaskTriggersDependencies {
   linkSecret(taskId: string): Promise<string | null>;
   /** Three failed checks (or one revoked connected app) turned the trigger off: one card in the task's landing chat. */
   paused(task: ScheduledTask, error: string, afterFailures: boolean): Promise<void>;
+  /**
+   * A connected-app task that is on but has no source bound (a save that
+   * stopped before binding it): show that it needs one, since it never checks.
+   */
+  needsSource?(task: ScheduledTask): Promise<void>;
   /** What the task held was dropped: today's 48 runs were used up. One card where its runs land. */
   dailyLimit?(task: ScheduledTask, text: string): Promise<void>;
   /** A check's result was saved, so the task's row may show something new. */
@@ -297,11 +302,16 @@ export function createScheduledTaskTriggers(deps: ScheduledTaskTriggersDependenc
   return {
     webhook,
     /** Arms every enabled watch and replays accepted events after a restart. */
-    start(): Promise<void> {
+    async start(): Promise<void> {
       stopped = false;
       dispatcher.resume();
       watches.resume();
-      return this.rearm();
+      await this.rearm();
+      if (!deps.needsSource) return;
+      for (const routine of await deps.store.all()) {
+        if (!routine.task.enabled || routine.task.trigger.kind !== "connector" || routine.connectorSource) continue;
+        await deps.needsSource(routine.task).catch((error: unknown) => deps.onError?.(error));
+      }
     },
     /** Re-read the tasks: watch what's new, stop watching what's gone. */
     async rearm(): Promise<void> {

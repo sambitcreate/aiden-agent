@@ -1318,7 +1318,7 @@ test("a deferred startup catch-up does not re-run a fire the Cron already claime
 const HOUR = 60 * 60_000;
 
 /** A service on a mocked clock whose runs record themselves the way the real execution does. */
-function lateHarness(t: TestContext, now: number, results: ScheduledRun["result"][] = []) {
+function lateHarness(t: TestContext, now: number, results: Array<ScheduledRun["result"] | "cancelled"> = []) {
   t.mock.timers.enable({ apis: ["setTimeout", "Date"], now });
   const store = createScheduleStore(
     new MemoryPersistence<unknown[]>([]),
@@ -1332,7 +1332,8 @@ function lateHarness(t: TestContext, now: number, results: ScheduledRun["result"
     execution: {
       run: async (task, runId, trigger) => {
         ran.push(trigger);
-        const result = results.shift() ?? "success";
+        const planned = results.shift() ?? "success";
+        const result = planned === "cancelled" ? "blocked" : planned;
         return store.recordRun({
           ...(runId ? { id: runId } : {}),
           taskId: task.id,
@@ -1340,7 +1341,10 @@ function lateHarness(t: TestContext, now: number, results: ScheduledRun["result"
           finishedAt: Date.now(),
           result,
           output: "",
-          ...(result === "error" ? { error: "The provider refused the key." } : {}),
+          ...(result === "error" || result === "blocked" ? { error: "The provider refused the key." } : {}),
+          // As schedule-execution records them: a run started by hand, a stopped run.
+          ...(trigger?.kind === "manual" ? { byHand: true as const } : {}),
+          ...(planned === "cancelled" ? { cancelled: true as const } : {}),
         });
       },
       cancel: () => false,
@@ -1483,5 +1487,49 @@ test("runs you start by hand never pause a chat task", async (t) => {
     assert.equal((await late.service.runNow(task.id)).result, "error");
   }
   assert.equal((await late.store.get(task.id))?.enabled, true);
+  assert.deepEqual(late.cards, []);
+});
+
+test("failed runs you started by hand don't add to the count, but a refused run does and a stopped one doesn't", async (t) => {
+  const late = lateHarness(t, JAN_5_9AM - 60_000, ["error", "error", "error", "cancelled", "blocked", "blocked"]);
+  const task = await addTask(late.store);
+  await late.service.start();
+  const fireNext = async () => {
+    t.mock.timers.setTime((await late.store.get(task.id))!.nextRunAt!);
+    await late.job(task.id).trigger();
+    await late.settle();
+  };
+  for (let index = 0; index < 2; index += 1) {
+    t.mock.timers.setTime(Date.now() + 1_000);
+    assert.equal((await late.service.runNow(task.id)).result, "error");
+  }
+  await fireNext();
+  assert.equal((await late.store.get(task.id))?.enabled, true, "two failures by hand and one scheduled failure stay on");
+
+  await fireNext(); // stopped: neither a failure nor a break
+  await fireNext(); // refused
+  assert.equal((await late.store.get(task.id))?.enabled, true);
+  await fireNext(); // refused again: the third unattended failure
+  assert.equal((await late.store.get(task.id))?.enabled, false, "refusals count toward the pause");
+  assert.equal(late.cards.length, 1);
+});
+
+test("turning a chat task off and on by hand starts a new count of failed runs", async (t) => {
+  const late = lateHarness(t, JAN_5_9AM - 60_000, ["error", "error", "error"]);
+  const task = await addTask(late.store);
+  await late.service.start();
+  const fireNext = async () => {
+    t.mock.timers.setTime((await late.store.get(task.id))!.nextRunAt!);
+    await late.job(task.id).trigger();
+    await late.settle();
+  };
+  await fireNext();
+  await fireNext();
+  t.mock.timers.setTime(Date.now() + 1_000);
+  await late.service.pause(task.id);
+  t.mock.timers.setTime(Date.now() + 1_000);
+  await late.service.resume(task.id);
+  await fireNext();
+  assert.equal((await late.store.get(task.id))?.enabled, true, "the failure after turning it back on is the first of a new count");
   assert.deepEqual(late.cards, []);
 });

@@ -3,7 +3,7 @@ import { parseScheduledTaskInput } from "./scheduled-tasks-parse.js";
 import { scheduledTaskApplicationService } from "../services/scheduled-task-application-service-main.js";
 import { scheduledTaskRevision } from "../services/scheduled-task-application-service.js";
 import { systemTimezone } from "../services/schedule-store.js";
-import { connectorTriggerForSave } from "../services/scheduled-task-connector-trigger.js";
+import { saveConnectorTask } from "../services/scheduled-task-connector-trigger.js";
 import { keepAwakeStatus } from "../services/keep-awake/keep-awake-main.js";
 
 function requiredString(value: unknown, name: string): string {
@@ -42,10 +42,12 @@ export function registerScheduledTaskHandlers(): void {
     // which stays in main and is bound once the task is saved.
     const triggers = await import("../services/scheduled-task-triggers-main.js");
     const existing = parsed.id ? (await scheduledTaskApplicationService.get(parsed.id)).trigger : undefined;
-    const { trigger, source } = connectorTriggerForSave(parsed.trigger, existing, triggers.takeTaskConnectorChoice);
-    const saved = await scheduledTaskApplicationService.save({ ...parsed, trigger }, { expectedRevision: revision });
-    if (source) await triggers.bindTaskConnectorSource(saved.id, source);
-    return saved;
+    return saveConnectorTask(parsed.trigger, existing, {
+      connector: triggers.taskConnectorChoices,
+      save: (trigger) => scheduledTaskApplicationService.save({ ...parsed, trigger }, { expectedRevision: revision }),
+      bind: triggers.bindTaskConnectorSource,
+      needsSource: triggers.markTaskNeedsSource,
+    });
   });
   ipcMain.handle("schedule:remove", async (_event, id: unknown, updatedAt: unknown) =>
     scheduledTaskApplicationService.remove(

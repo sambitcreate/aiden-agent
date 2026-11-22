@@ -317,25 +317,32 @@ export function createScheduleServiceCore(
     }
   }
 
+  /** A run that failed or was refused; a stopped run isn't a failure. */
+  const failedRun = (value: ScheduledRun) => value.result === "error" || (value.result === "blocked" && !value.cancelled);
+
   /**
    * After an unattended run fails: the third failure in a row (since the last
-   * such pause) turns a chat task off with one card in its landing chat.
-   * Skipped and cancelled runs neither count nor break the streak.
+   * such pause, or since the task was turned back on) turns a chat task off
+   * with one card in its landing chat.
    */
+
   async function pauseAfterRepeatedFailures(
     taskId: string,
     run: ScheduledRun,
     isCurrent: () => boolean,
   ): Promise<void> {
-    if (run.result !== "error" || !isCurrent()) return;
+    if (!failedRun(run) || !isCurrent()) return;
     try {
       const task = await store.get(taskId);
       if (!task || task.botId !== undefined || !task.enabled) return;
+      // Since the last pause or since the task was turned back on. Skipped and
+      // stopped runs don't count; a failed run started by hand doesn't either,
+      // though one that worked still ends the streak. A refusal counts.
       const since = task.failurePausedAt ?? 0;
       const recent = (await store.runs(taskId))
-        .filter((value) => value.result !== "skipped" && value.result !== "blocked" && value.startedAt > since)
+        .filter((value) => value.startedAt > since && value.result !== "skipped" && !value.cancelled && !(value.byHand && failedRun(value)))
         .slice(0, CHAT_TASK_FAILURES_TO_PAUSE);
-      if (recent.length < CHAT_TASK_FAILURES_TO_PAUSE || recent.some((value) => value.result !== "error")) return;
+      if (recent.length < CHAT_TASK_FAILURES_TO_PAUSE || !recent.every(failedRun)) return;
       if (!isCurrent()) return;
       const error = run.error ?? "";
       const paused = await store.updateRuntime(taskId, {

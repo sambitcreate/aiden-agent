@@ -576,6 +576,8 @@ export function createScheduleExecution(store: ScheduleStore = scheduleStore) {
           output,
           error,
           chatId,
+          ...(trigger?.kind === "manual" ? { byHand: true as const } : {}),
+          ...(result === "blocked" && controller.signal.aborted ? { cancelled: true as const } : {}),
         });
         reportScheduledTaskRan(result, trigger, controller.signal.aborted);
         if (result !== "silent" && result !== "skipped") notify(task, error ?? output, chatId);

@@ -13,7 +13,7 @@ import { scheduleService } from "./schedule-service.js";
 import { scheduleStore } from "./schedule-store.js";
 import { createScheduledTaskTriggers, taskCheckStateFile } from "./scheduled-task-triggers.js";
 import { taskConnectorTriggers } from "./scheduled-task-connector-main.js";
-import type { TaskConnectorSource } from "./scheduled-task-connector-trigger.js";
+import { TASK_CONNECTOR_NEEDS_SOURCE, type TaskConnectorSource } from "./scheduled-task-connector-trigger.js";
 import type { BotConnectorWatchSourceList } from "../../renderer/shared/bot-connector-watches.js";
 import { SCHEDULED_TASK_TRIGGERS_FILE, createScheduledTaskTriggerStore, hashTaskLinkToken, type TaskLinkLogEntry } from "./scheduled-task-triggers-store.js";
 import { secrets } from "./secrets.js";
@@ -74,9 +74,12 @@ const triggers = createScheduledTaskTriggers({
       summary: afterFailures ? "Paused after 3 failed checks" : "Paused",
       text: !afterFailures
         ? `Scheduled task "${task.name}" was paused: ${error || "its source couldn't be checked."} Then turn the task back on.`
-        : `Scheduled task "${task.name}" was paused: its watch failed 3 times in a row${error ? ` (${error})` : ""}. Check the address or script, then turn the task back on.`,
+        : `Scheduled task "${task.name}" was paused: its watch failed 3 times in a row${error ? ` (${error})` : ""}. ${
+          task.trigger?.kind === "connector" ? "Check the connected app in Settings → Connectors" : "Check the address or script"
+        }, then turn the task back on.`,
     });
   },
+  needsSource: (task) => markTaskNeedsSource(task.id),
   dailyLimit: async (task, text) => {
     await scheduleExecution.recordInLandingChat(task, { tone: "info", summary: "Today's 48 runs were used up", text });
   },
@@ -164,11 +167,25 @@ export function findTaskConnectorSources(signal: AbortSignal): Promise<BotConnec
   return taskConnectorTriggers.findSources(signal);
 }
 
-/** Swap a saved Find sources choice for its exact source (see the schedule:save handler). */
-export const takeTaskConnectorChoice = taskConnectorTriggers.takeChoice;
+/** The Find sources choices a save swaps for an exact source and then uses up (see the schedule:save handler). */
+export const taskConnectorChoices = {
+  takeChoice: taskConnectorTriggers.takeChoice,
+  forgetChoice: taskConnectorTriggers.forgetChoice,
+};
 
 /** Bind a saved connected-app task to its source; its first check then records a baseline. */
 export async function bindTaskConnectorSource(taskId: string, source: TaskConnectorSource): Promise<void> {
   await triggers.bindConnectorSource(taskId, source);
+  if ((await scheduleStore.get(taskId))?.lastError === TASK_CONNECTOR_NEEDS_SOURCE) {
+    await scheduleStore.updateRuntime(taskId, { lastError: undefined });
+  }
+  ipcMain.broadcast("schedule:updated", { taskId });
+}
+
+/** A connected-app task that is on without a bound source shows that it needs one. */
+export async function markTaskNeedsSource(taskId: string): Promise<void> {
+  const task = await scheduleStore.get(taskId);
+  if (!task || task.lastError === TASK_CONNECTOR_NEEDS_SOURCE) return;
+  await scheduleStore.updateRuntime(taskId, { lastError: TASK_CONNECTOR_NEEDS_SOURCE });
   ipcMain.broadcast("schedule:updated", { taskId });
 }

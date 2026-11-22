@@ -10,7 +10,7 @@ import { createScheduledTaskTriggers } from "./scheduled-task-triggers.js";
 import { UNKNOWN_LINK_CALLS_PER_MINUTE } from "./scheduled-task-link-trigger.js";
 import { compareImcpWatch, type ConnectorWatchBaseline, type ConnectorWatchItem } from "./bot-routine-events/connector-watch-imcp.js";
 import type { BotConnectorWatchBinding } from "./bot-routine-events/connector-types.js";
-import { TaskConnectorChoiceError, connectorTriggerForSave, createTaskConnectorTriggers, type TaskConnectorTriggers } from "./scheduled-task-connector-trigger.js";
+import { TaskConnectorChoiceError, connectorTriggerForSave, createTaskConnectorTriggers, saveConnectorTask, type TaskConnectorTriggers } from "./scheduled-task-connector-trigger.js";
 import type { ScheduledTaskConnectorTrigger } from "../../renderer/shared/scheduled-task-trigger.js";
 import { createScheduledTaskTriggerStore, hashTaskLinkToken } from "./scheduled-task-triggers-store.js";
 import type { ScheduledRun, ScheduledTask } from "./types.js";
@@ -47,6 +47,7 @@ function harness(options: { tasks?: ScheduledTask[]; checks?: BotWatchCheck[]; r
   const runs = new Map<string, ScheduledRun>();
   const notices: Array<{ taskId: string; text: string }> = [];
   const released: string[] = [];
+  const needsSource: string[] = [];
   const persistence = new MemoryPersistence<unknown>({ version: 1, tasks: {} });
   const store = createScheduledTaskTriggerStore({
     persistence,
@@ -80,6 +81,7 @@ function harness(options: { tasks?: ScheduledTask[]; checks?: BotWatchCheck[]; r
     ...(options.connector ? { connector: options.connector } : {}),
     paused: async (task, error, afterFailures) => { cards.push({ taskId: task.id, error, afterFailures }); },
     dailyLimit: async (task, text) => { notices.push({ taskId: task.id, text }); },
+    needsSource: async (task) => { needsSource.push(task.id); },
     now: () => clock,
     timeZone: () => "UTC",
     // Timers that are already due fire on the next tick when asked; later ones wait for the test.
@@ -91,7 +93,7 @@ function harness(options: { tasks?: ScheduledTask[]; checks?: BotWatchCheck[]; r
   });
   const bytes = (text: string): BotWatchCheck => ({ ok: true, bytes: new TextEncoder().encode(text) });
   return {
-    tasks, store, triggers, events, cards, persistence, bytes, runs, notices, released,
+    tasks, store, triggers, events, cards, persistence, bytes, runs, notices, released, needsSource,
     advance: (ms: number) => { clock += ms; },
     async check(taskId = "task-1") {
       const outcome = await triggers.checkNow(taskId);
@@ -565,6 +567,62 @@ test("saving a connected-app task needs a fresh choice, unless an edit keeps wat
   const found = await connector.findSources(new AbortController().signal);
   const fresh = connectorTriggerForSave({ ...draft, sourceChoiceId: found.choices[0]!.id }, saved, connector.takeChoice);
   assert.equal(fresh.source?.binding.adapter, "imcp-mail-v1");
+});
+
+test("a save uses up its Find sources choice, so the same source can't be saved into a second task", async () => {
+  const { connector } = connectedMail();
+  const found = await connector.findSources(new AbortController().signal);
+  const draft = { ...(mailTask().trigger as ScheduledTaskConnectorTrigger), sourceChoiceId: found.choices[0]!.id };
+  const bound: string[] = [];
+  let saves = 0;
+  const steps = (id: string, fail = false) => ({
+    connector,
+    save: async (trigger: ScheduledTaskConnectorTrigger) => {
+      saves += 1;
+      if (fail) throw new Error("This automation changed. Refresh it before trying again.");
+      return { id, trigger };
+    },
+    bind: async (taskId: string) => { bound.push(taskId); },
+    needsSource: async () => undefined,
+  });
+
+  await assert.rejects(saveConnectorTask(draft, undefined, steps("task-1", true)), /changed/u);
+  const saved = await saveConnectorTask(draft, undefined, steps("task-1"));
+  assert.equal(saved.trigger.source.resourceLabel, "Inbox");
+  assert.deepEqual(bound, ["task-1"], "a save that didn't land leaves the choice for the retry");
+  await assert.rejects(saveConnectorTask(draft, undefined, steps("task-2")), /expired/u);
+  assert.equal(saves, 2, "the second task isn't saved");
+  assert.deepEqual(bound, ["task-1"]);
+});
+
+test("a connected-app task saved without its source says it needs one, at the save and after a restart", async () => {
+  const { connector } = connectedMail();
+  const found = await connector.findSources(new AbortController().signal);
+  const marked: string[] = [];
+  const failed = saveConnectorTask(
+    { ...(mailTask().trigger as ScheduledTaskConnectorTrigger), sourceChoiceId: found.choices[0]!.id },
+    undefined,
+    {
+      connector,
+      save: async (trigger) => ({ id: "task-1", trigger }),
+      bind: async () => { throw new Error("disk full"); },
+      needsSource: async (taskId) => { marked.push(taskId); },
+    },
+  );
+  await assert.rejects(failed, /saved, but its source couldn't be connected/u);
+  assert.deepEqual(marked, ["task-1"]);
+
+  // After a restart (or a save that stopped before binding), the task is on but never checks: say so.
+  const off = { ...mailTask(), id: "task-off", enabled: false };
+  const value = harness({ tasks: [mailTask(), off], connector });
+  await value.triggers.start();
+  assert.deepEqual(value.needsSource, ["task-1"], "only the task that is on and unbound");
+  assert.equal(await value.check(), "skipped");
+  await bindMail(value, connector);
+  value.triggers.stop();
+  await value.triggers.start();
+  assert.deepEqual(value.needsSource, ["task-1"], "a bound task isn't flagged again");
+  value.triggers.stop();
 });
 
 test("an unknown link token is refused without reading the tasks or writing the file, and a flood of them is shed", async () => {
