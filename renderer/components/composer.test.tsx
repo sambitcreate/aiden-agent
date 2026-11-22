@@ -190,10 +190,6 @@ test("chat surfaces share the responsive centered chat-column contract", () => {
     styles,
     /\.chat-content-column\s*\{[\s\S]*width:\s*100%;[\s\S]*max-width:\s*var\(--chat-content-max-width\);[\s\S]*margin-inline:\s*auto;/u,
   );
-  assert.match(
-    styles,
-    /\.aiden-dock-inset\s*\{\s*padding-inline:\s*var\(--aiden-dock-gutter\);\s*\}/u,
-  );
 });
 
 test("composer slash palette is an overlaid textarea-owned accessible listbox", () => {

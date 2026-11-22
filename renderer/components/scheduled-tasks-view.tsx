@@ -13,11 +13,9 @@ import {
   Folder,
   MessageSquare,
   MoreHorizontal,
-  PencilLine,
   Play,
   Search,
   ShieldCheck,
-  Sparkles,
   Trash2,
   X,
 } from "lucide-react";
@@ -467,7 +465,6 @@ export function ScheduledTasksView() {
         actions={
           <div className="flex items-center gap-1.5">
             <Button variant="accent" onClick={() => requestAssistantAutomationComposer()}>
-              <Sparkles className="size-4" />
               Create with Aiden
             </Button>
             <DropdownMenu>
@@ -491,7 +488,6 @@ export function ScheduledTasksView() {
                     assistantHandoffRef.current = true;
                   }}
                 >
-                  <Sparkles className="size-4" />
                   Ask Aiden in chat
                 </DropdownMenuItem>
                 <DropdownMenuItem
@@ -509,7 +505,6 @@ export function ScheduledTasksView() {
                     );
                   }}
                 >
-                  <PencilLine className="size-4" />
                   Set up with controls
                 </DropdownMenuItem>
               </DropdownMenuContent>
@@ -519,9 +514,6 @@ export function ScheduledTasksView() {
       >
         <main className="mx-auto w-full max-w-6xl px-5 pb-10 pt-4">
           <div className="mb-5 flex items-start gap-3 rounded-card bg-well px-4 py-3.5">
-            <span className="grid size-9 shrink-0 place-items-center rounded-full bg-control text-secondary">
-              <Sparkles className="size-4" aria-hidden="true" />
-            </span>
             <div className="min-w-0 flex-1">
               <Text variant="strong">Describe it in your own words</Text>
               <Text as="p" variant="small" color="secondary" className="mt-0.5 max-w-2xl">
