@@ -12,8 +12,12 @@ import type { GoalProposalView } from "../../../renderer/shared/goal.js";
 export interface GoalRunSettled {
   chatId: string;
   streamId: string;
-  /** What the run started with: the next round starts with the same. */
-  context: OwedTurnContext;
+  /**
+   * What the run started with: the next round starts with the same. Only an
+   * ordinary chat run gives one; any other run in the chat (a scheduled
+   * task's, a phone's) leaves the last one in place.
+   */
+  context?: OwedTurnContext;
   /** The run recorded a Stop. */
   stopped: boolean;
   /** The run ended in an error. */
@@ -25,7 +29,7 @@ export interface GoalTurnHooks {
   kickoff(chatId: string): string | undefined;
   /** The reminder kept after a compaction summary while the chat's goal is active. */
   reminder(chatId: string): string | undefined;
-  /** An ordinary chat run settled. */
+  /** A run in the chat settled, whatever started it. */
   runSettled(event: GoalRunSettled): void;
   /** The chat was deleted: its goal goes with it. */
   chatDeleted(chatId: string): void;

@@ -43,6 +43,17 @@ import { GoalProposals } from "./goal-proposals.js";
 
 const BOOT = randomUUID();
 
+/** How often a look waiting for a busy chat checks it again. */
+const IDLE_POLL_MS = 1_000;
+
+const lookingListeners = new Set<() => void>();
+
+/** Called when the loop starts or stops looking at a chat (`goalLoop.looking()`), for keep-awake. */
+export function onGoalLookingChanged(listener: () => void): () => void {
+  lookingListeners.add(listener);
+  return () => lookingListeners.delete(listener);
+}
+
 function transcriptChanged(chatId: string): void {
   ipcMain.broadcast("chats:changed", {});
   ipcMain.broadcast("chats:follow-through-changed", { chatId, transcript: true });
@@ -219,6 +230,21 @@ export const goalLoop = new GoalLoop({
   prepareCheck: prepareGoalCheck,
   startRound,
   startNoticeRound: startGoalRound,
+  waitForIdle: async (chatId, signal) => {
+    // Whatever holds the chat may settle no run (a notice saved as a card, a
+    // scheduled task's admission): poll until nothing does.
+    while (!signal.aborted && (llmClient.isChatBusy(chatId) || noticeDelivery.hasPending(chatId))) {
+      if (!(await llmClient.waitForChatIdleWithin(chatId, IDLE_POLL_MS)) || noticeDelivery.hasPending(chatId)) {
+        await new Promise<void>((resolve) => {
+          const timer = setTimeout(resolve, IDLE_POLL_MS);
+          timer.unref?.();
+        });
+      }
+    }
+  },
+  lookingChanged: () => {
+    for (const listener of lookingListeners) listener();
+  },
   report: (event) => {
     if (event.event === "goal_started") reportAnalyticsEvent("goal_started", event.properties);
     else reportAnalyticsEvent("goal_settled", event.properties);

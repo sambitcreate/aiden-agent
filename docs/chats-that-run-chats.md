@@ -93,6 +93,8 @@ for approval.
 - A turn Aiden started (a woken lead, an owed turn with no window, a goal
   round) can list, read, wait, send and stop, but `start` is refused: starting
   chats needs the person here.
+- A turn the lead sends into a started chat counts as Aiden-started too: the
+  started chat can't set a check-back or suggest a goal in it.
 - **A started chat never does more than its lead allowed.** The lead's approval
   policy at start time is stored with the link as a ceiling. Every turn in the
   started chat, and every later decision in that turn, takes the stricter

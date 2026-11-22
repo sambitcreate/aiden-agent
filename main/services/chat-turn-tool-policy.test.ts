@@ -157,6 +157,8 @@ test("a check-back is set only in a turn the person started; list and cancel wor
     ["an owed turn answering the person's queued message", { windowless: true, answersPerson: true }, true],
     ["an unattended follow-up never counts as the person's", { ...UNATTENDED_FOLLOW_UP_GENERATION, windowless: true, answersPerson: true }, false],
     ["a goal round", { goalRound: true }, false],
+    // A lead chat's agent sent it into a chat it started: not the person.
+    ["a lead chat's turn in a chat it started", { leadChatTurn: true, visualAudience: "remote" }, false],
   ];
   for (const [label, options, maySet] of cases) {
     // Run the way a turn runs them: the name-only refusal first, then the args-aware one.
@@ -184,6 +186,7 @@ test("child_chats starts chats only in a turn the person started; its other acti
     ["an unattended follow-up (a woken lead)", { ...UNATTENDED_FOLLOW_UP_GENERATION }, false],
     ["an owed turn with no window", { windowless: true }, false],
     ["a goal round", { goalRound: true }, false],
+    ["a lead chat's turn in a chat it started", { leadChatTurn: true, visualAudience: "remote" }, false],
   ];
   for (const [label, options, mayStart] of cases) {
     const turn = chatTurnAudienceFor(options, {});
@@ -268,6 +271,7 @@ test("propose_goal runs only in a turn the person started on this computer", () 
     ["an unattended follow-up", { unattended: true }],
     ["a turn answering a notice", { windowless: true }],
     ["a paired device's turn", { visualAudience: "remote" as const }],
+    ["a lead chat's turn in a chat it started", { leadChatTurn: true }],
   ] as const) {
     assert.match(refusal(options) ?? "", /^propose_goal is not available in this turn/u, label);
   }

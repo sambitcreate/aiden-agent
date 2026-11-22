@@ -6421,16 +6421,18 @@ export const llmClient = {
           recordedStop,
         },
       );
-      // A keep-going goal looks at the chat once it is idle again; a round
-      // starts with what this run ran with, as an owed turn does.
-      if (owesItsChatTurns) {
+      // A keep-going goal looks at the chat once it is idle again, whatever
+      // run held it (a scheduled task's or a phone's too, or the goal would
+      // wait for a settle that never comes). A round starts with what an
+      // ordinary run ran with, as an owed turn does.
+      if (params.chatId && !generationChat.botId && generationChat.owner === undefined) {
         try {
           goalTurnHooks().runSettled({
             chatId: params.chatId,
             streamId,
-            context: owedTurnContextOf(params, options),
+            ...(owesItsChatTurns ? { context: owedTurnContextOf(params, options) } : {}),
             stopped: recordedStop,
-            failed: goalRunFailed && !recordedStop,
+            failed: owesItsChatTurns && goalRunFailed && !recordedStop,
           });
         } catch (error) {
           logger.warn("goal", "The keep-going goal could not observe a settled run.", error);

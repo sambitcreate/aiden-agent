@@ -112,6 +112,14 @@ export interface GoalLoopDependencies {
     notice: { text: string; notice: AgentNoticeV1 } | undefined,
     isCurrent: () => boolean,
   ): Promise<StartTurnResult>;
+  /**
+   * Resolves once nothing holds the chat (no turn, no notice on its way in).
+   * Once `signal` aborts it may settle early; the loop ignores it then. A look that backed off because the chat was
+   * busy looks again then, for holders that settle no run the loop hears of.
+   */
+  waitForIdle(chatId: string, signal: AbortSignal): Promise<void>;
+  /** A look at a chat (a review, a check, a round starting) began or ended: keep-awake reads `looking()`. */
+  lookingChanged?(): void;
   report(event: GoalAnalyticsEvent): void;
   /** A goal settled on its own (done, needs you, or paused by the system). */
   settled?(goal: GoalRecordV1): void;
@@ -128,6 +136,8 @@ export class GoalLoop {
   private readonly reviews = new Map<string, AbortController>();
   /** Each chat's look under way, with `reviews`. */
   private readonly looks = new Map<string, LookRef>();
+  /** Looks that backed off for a busy chat, waiting for it to be idle. */
+  private readonly relooks = new Map<string, AbortController>();
   private readonly watchdogs = new Map<string, () => void>();
   /** The app is quitting: runs that settle now are its own aborts, not the person's. */
   private stopped = false;
@@ -235,16 +245,17 @@ export class GoalLoop {
 
   runSettled(event: GoalRunSettled): void {
     if (this.stopped) return;
-    this.contexts.set(event.chatId, event.context);
+    if (event.context) this.contexts.set(event.chatId, event.context);
     // A run that settles while the loop still looks at an earlier one is the
     // newer news (the person's Stop, a failure, a message the review didn't
     // read): that look is dropped, and this run's settling is looked at instead.
-    // A round it counted that hasn't started is uncounted first, so the new
-    // look starts from the right count and its writes aren't refused.
-    const dropped = this.looks.get(event.chatId);
-    this.stopReview(event.chatId);
-    if (dropped) this.restoreUncounted(event.chatId, dropped);
+    this.dropLook(event.chatId);
     this.look(event.chatId, event);
+  }
+
+  /** The chats the loop is looking at now (a review, a check, a round starting). */
+  looking(): string[] {
+    return [...this.reviews.keys()];
   }
 
   /** Runs the loop for the chat: after a run settled, or for a command goal's first check. */
@@ -255,6 +266,7 @@ export class GoalLoop {
     this.reviews.set(chatId, controller);
     const look: LookRef = { ref: { id: goal.id, revision: goal.revision } };
     this.looks.set(chatId, look);
+    this.deps.lookingChanged?.();
     void this.afterSettle({ chatId, stopped: event.stopped, failed: event.failed }, controller, look)
       .catch((error: unknown) => {
         if (controller.signal.aborted) return;
@@ -268,7 +280,10 @@ export class GoalLoop {
         if (written.ok && written.goal.status !== "active") this.settle(written.goal);
       })
       .finally(() => {
-        if (this.reviews.get(chatId) === controller) this.reviews.delete(chatId);
+        if (this.reviews.get(chatId) === controller) {
+          this.reviews.delete(chatId);
+          this.deps.lookingChanged?.();
+        }
         if (this.looks.get(chatId) === look) this.looks.delete(chatId);
       });
   }
@@ -279,8 +294,10 @@ export class GoalLoop {
    * its settling runs the loop as any round's does. Undefined with no active goal.
    */
   async noticeRound(chatId: string, notice?: { text: string; notice: AgentNoticeV1 }): Promise<StartTurnResult | undefined> {
-    const goal = this.goals.get(chatId);
-    if (this.stopped || goal?.status !== "active") return undefined;
+    if (this.stopped || this.goals.get(chatId)?.status !== "active") return undefined;
+    // The news is newer than what a look under way read: its review is
+    // dropped (its verdict would be stale) and this round's settling is looked at.
+    this.dropLook(chatId);
     let context: OwedTurnContext | undefined;
     try {
       context = this.contexts.get(chatId) ?? (await this.deps.fallbackContext(chatId));
@@ -385,7 +402,7 @@ export class GoalLoop {
 
   shutdown(): void {
     this.stopped = true;
-    for (const chatId of [...this.reviews.keys()]) this.stopReview(chatId);
+    for (const chatId of [...this.reviews.keys(), ...this.relooks.keys()]) this.stopReview(chatId);
     for (const chatId of [...this.watchdogs.keys()]) this.cancelWatchdog(chatId);
   }
 
@@ -402,8 +419,12 @@ export class GoalLoop {
     } catch {
       return;
     }
-    // The person's queued send wins: their run settles later and the loop looks again.
-    if (signal.aborted || this.deps.isChatBusy(event.chatId)) return;
+    if (signal.aborted) return;
+    // The person's queued send wins: the loop looks again once the chat is idle.
+    if (this.deps.isChatBusy(event.chatId)) {
+      this.relookWhenIdle(event.chatId, event);
+      return;
+    }
     const goal = this.goals.get(event.chatId);
     if (!goal) return;
     look.ref = { id: goal.id, revision: goal.revision };
@@ -478,6 +499,8 @@ export class GoalLoop {
       // No round began, so it isn't counted (a newer settle already did this).
       if (started === "busy" || started === "stale") this.restoreUncounted(event.chatId, look);
       else delete look.uncounted;
+      // Busy: whatever holds the chat may settle no run the loop hears of, so it looks again once idle.
+      if (started === "busy" && !signal.aborted) this.relookWhenIdle(event.chatId, { stopped: false, failed: false });
     }
   }
 
@@ -579,8 +602,50 @@ export class GoalLoop {
   }
 
   private stopReview(chatId: string): void {
-    this.reviews.get(chatId)?.abort();
+    const review = this.reviews.get(chatId);
+    review?.abort();
     this.reviews.delete(chatId);
+    this.relooks.get(chatId)?.abort();
+    this.relooks.delete(chatId);
+    if (review) this.deps.lookingChanged?.();
+  }
+
+  /**
+   * Drops the look under way. A round it counted that hasn't started is
+   * uncounted first, so the next look starts from the right count and its
+   * writes aren't refused.
+   */
+  private dropLook(chatId: string): void {
+    const dropped = this.looks.get(chatId);
+    this.stopReview(chatId);
+    if (dropped) this.restoreUncounted(chatId, dropped);
+  }
+
+  /**
+   * Looks at the chat again once nothing holds it, if the goal is still the
+   * one this look saw and no run settled meanwhile (that run's settling is
+   * looked at instead, and cancels this).
+   */
+  private relookWhenIdle(chatId: string, event: Pick<GoalRunSettled, "stopped" | "failed">): void {
+    const goal = this.goals.get(chatId);
+    if (this.stopped || goal?.status !== "active") return;
+    const ref: GoalRef = { id: goal.id, revision: goal.revision };
+    this.relooks.get(chatId)?.abort();
+    const controller = new AbortController();
+    this.relooks.set(chatId, controller);
+    this.deps.waitForIdle(chatId, controller.signal).then(
+      () => {
+        if (controller.signal.aborted || this.relooks.get(chatId) !== controller) return;
+        this.relooks.delete(chatId);
+        const current = this.goals.get(chatId);
+        if (this.stopped || current?.id !== ref.id || current.revision !== ref.revision || current.status !== "active") return;
+        if (this.deps.isChatBusy(chatId)) this.relookWhenIdle(chatId, event);
+        else this.look(chatId, event);
+      },
+      (error: unknown) => {
+        if (!controller.signal.aborted) this.deps.log("The keep-going goal could not wait for the chat to be idle.", error);
+      },
+    );
   }
 
   /** The 30-minute limit on a `wait` or a running helper. */

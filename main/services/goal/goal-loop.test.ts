@@ -9,6 +9,7 @@ import { createGoal, type GoalRoundActivity } from "./goal-core.js";
 import { GoalLoop, type GoalAnalyticsEvent, type GoalRoundStart } from "./goal-loop.js";
 import type { GoalReviewOutcome } from "./goal-reviewer.js";
 import type { GoalCheckResult } from "../follow-through/done-when.js";
+import { goalLookKeepAwakeInput } from "../keep-awake/keep-awake-inputs.js";
 
 const CHAT = "chat-1";
 
@@ -53,6 +54,9 @@ function harness(options: {
   const changes: Array<GoalView | null> = [];
   const saved: GoalRecordV1[][] = [];
   const settled: GoalRecordV1[] = [];
+  /** Looks waiting for the chat to be idle; `becomeIdle` releases them. */
+  let idleWaiters: Array<() => void> = [];
+  let lookingChanges = 0;
   const loop = new GoalLoop({
     enabled: () => options.enabled ?? true,
     boot: BOOT,
@@ -100,6 +104,8 @@ function harness(options: {
       if (state.noticeStart !== "started") return state.noticeStart === "busy" ? { kind: "busy" } : { kind: "unavailable", reason: "No model" };
       return { kind: "started", streamId: `notice-${chatId}-${noticeRounds.length}` };
     },
+    waitForIdle: () => new Promise<void>((resolve) => idleWaiters.push(resolve)),
+    lookingChanged: () => (lookingChanges += 1),
     report: (event) => events.push(event),
     settled: (goal) => settled.push(goal),
     log: () => {},
@@ -130,6 +136,15 @@ function harness(options: {
     settle,
     flush,
     reviews: () => reviewCount,
+    /** Whatever held the chat lets go without a run settling. */
+    becomeIdle: async () => {
+      state.busy = false;
+      const waiters = idleWaiters;
+      idleWaiters = [];
+      for (const resolve of waiters) resolve();
+      await flush();
+    },
+    lookingChanges: () => lookingChanges,
     tick: (ms: number) => (clock += ms),
     goal: () => loop.get(CHAT),
   };
@@ -707,4 +722,95 @@ test("an /until goal's notice rounds spend none of its checks: only the checks c
   await h.runSettles();
   assert.deepEqual(checks, [1], "the check after the news is the first one");
   assert.equal(h.goal()?.rounds, 2);
+});
+
+test("a look that backs off for a busy chat looks again once it is idle, even if no run settles", async () => {
+  const h = harness();
+  await h.loop.set(CHAT, { objective: "Ship it", source: "slash" });
+  // A notice saved as a card (or a scheduled task's admission) holds the chat, and settles no run.
+  h.state.busy = true;
+  await h.runSettles();
+  assert.equal(h.reviews(), 0, "the busy chat is not reviewed");
+  assert.equal(h.rounds.length, 0);
+  await h.becomeIdle();
+  assert.equal(h.reviews(), 1, "the goal is looked at once the chat is idle");
+  assert.equal(h.rounds.length, 1, "and its next round starts");
+  assert.equal(h.goal()?.rounds, 2);
+});
+
+test("a round that found the chat busy is given back and tried again once the chat is idle", async () => {
+  const h = harness();
+  await h.loop.set(CHAT, { objective: "Ship it", source: "slash" });
+  // The chat becomes busy while the review runs, with a holder that never settles a run.
+  h.state.review = async (goal) => {
+    h.state.busy = true;
+    return continueWith(`Next step ${goal.rounds}`);
+  };
+  await h.runSettles();
+  assert.equal(h.rounds.length, 0);
+  assert.equal(h.goal()?.rounds, 1, "the round that didn't start isn't counted");
+  h.state.review = async (goal) => continueWith(`Next step ${goal.rounds}`);
+  await h.becomeIdle();
+  assert.equal(h.rounds.length, 1, "the goal doesn't stay at Working with nothing running");
+  assert.equal(h.goal()?.rounds, 2);
+});
+
+test("a look waiting for an idle chat is dropped when a run settles or the person pauses", async () => {
+  const h = harness();
+  await h.loop.set(CHAT, { objective: "Ship it", source: "slash" });
+  h.state.busy = true;
+  await h.runSettles();
+  // The holder's own run settles: that settling is looked at, and the waiting look doesn't add a second review.
+  h.state.busy = false;
+  await h.runSettles();
+  assert.equal(h.reviews(), 1);
+  await h.becomeIdle();
+  assert.equal(h.reviews(), 1, "no second look for the same idle chat");
+
+  const paused = harness();
+  await paused.loop.set(CHAT, { objective: "Ship it", source: "slash" });
+  paused.state.busy = true;
+  await paused.runSettles();
+  paused.loop.pause(CHAT);
+  await paused.becomeIdle();
+  assert.equal(paused.reviews(), 0, "a paused goal isn't looked at");
+  assert.equal(paused.rounds.length, 0);
+});
+
+test("news during a review drops that review: its verdict is stale, and the notice round is the one counted", async () => {
+  const h = harness();
+  await h.loop.set(CHAT, { objective: "Ship it", source: "slash" });
+  const { held, review } = heldReview();
+  const signals: AbortSignal[] = [];
+  h.state.review = (goal, input) => {
+    signals.push(input.signal);
+    return review(goal, input);
+  };
+  await h.runSettles();
+  assert.equal(held.length, 1, "a review is under way");
+  const news = { text: "job ended", notice: agentNotice({ source: "background_job", tone: "success", title: "Done", summary: "x" }) };
+  assert.equal((await h.loop.noticeRound(CHAT, news))?.kind, "started");
+  assert.equal(signals[0]!.aborted, true, "the review's model call is cancelled rather than paid for and discarded");
+  held[0]!.answer(continueWith("Keep going"));
+  await h.flush();
+  assert.equal(h.rounds.length, 0, "the dropped review starts no round of its own");
+  assert.deepEqual(h.noticeRounds, ["job ended"]);
+  assert.equal(h.goal()?.rounds, 2, "only the notice round is counted");
+});
+
+test("while the loop checks a goal between rounds it holds the computer awake, and lets go after", async () => {
+  const h = harness();
+  const keepAwake = goalLookKeepAwakeInput(() => h.loop.looking());
+  await h.loop.set(CHAT, { objective: "Ship it", source: "slash" });
+  assert.deepEqual(keepAwake.read(0).reasons, []);
+  const { held, review } = heldReview();
+  h.state.review = review;
+  const before = h.lookingChanges();
+  await h.runSettles();
+  assert.equal(held.length, 1, "the review is under way");
+  assert.deepEqual(keepAwake.read(0).reasons, [{ kind: "goal", id: CHAT }]);
+  assert.ok(h.lookingChanges() > before, "keep-awake is told to read again");
+  held[0]!.answer({ kind: "verdict", verdict: { verdict: "done", reason: "Shipped" }, via: "continuation" });
+  await h.flush();
+  assert.deepEqual(keepAwake.read(0).reasons, [], "a finished look holds nothing");
 });

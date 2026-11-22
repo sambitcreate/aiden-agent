@@ -14,6 +14,7 @@ import {
 import { configStore } from "../config-store.js";
 import { backgroundJobs, checkBacks, goalChecks } from "../follow-through/follow-through-main.js";
 import { hostPlatformCapabilities } from "../host-platform-capabilities.js";
+import { goalLoop, onGoalLookingChanged } from "../goal/goal-main.js";
 import { hostRunRegistry } from "../host-runs-main.js";
 import { usageLimits } from "../usage-limit-main.js";
 import { KeepAwakeController, type KeepAwakeInput } from "./keep-awake-core.js";
@@ -21,6 +22,7 @@ import {
   backgroundJobKeepAwakeInput,
   doneWhenKeepAwakeInput,
   dueSoonKeepAwakeInput,
+  goalLookKeepAwakeInput,
   hostRunKeepAwakeInput,
   usageLimitKeepAwakeInput,
   type KeepAwakeDue,
@@ -136,6 +138,7 @@ export async function startKeepAwake(): Promise<void> {
   created.addInput(usageLimitKeepAwakeInput(waits));
   created.addInput(backgroundJobKeepAwakeInput(() => backgroundJobs.listAll()));
   created.addInput(doneWhenKeepAwakeInput(() => goalChecks.list()));
+  created.addInput(goalLookKeepAwakeInput(() => goalLoop.looking()));
   created.addInput(
     dueSoonKeepAwakeInput({
       checkBacks: () => checkBacks.pendingAll(),
@@ -155,6 +158,7 @@ export async function startKeepAwake(): Promise<void> {
 
   unsubscribers.push(
     hostRunRegistry.onChange(update),
+    onGoalLookingChanged(update),
     usageLimits.gate.onChange(update),
     () => {
       powerMonitor.removeListener("on-ac", powerChanged);
