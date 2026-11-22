@@ -196,9 +196,11 @@ test("a turn that saved the notice before failing to start is not saved twice", 
 test("a deleted chat drops the notice, and a throwing dependency never rejects the post", async () => {
   const gone = fakeChat();
   gone.deps.appendAnswer = () => ({ kind: "gone", reason: "The chat no longer exists." });
+  // Marked gone: a retry never could deliver it, unlike a chat that stayed busy.
   assert.deepEqual(await new NoticeDelivery(gone.deps).post(post("x", false)), {
     kind: "dropped",
     reason: "The chat no longer exists.",
+    gone: true,
   });
 
   const errors: unknown[] = [];

@@ -6,7 +6,7 @@ import test from "node:test";
 
 import type { AidenRemoteStreamState } from "../aiden-remote-streams.js";
 import { AidenRemoteServiceError } from "../aiden-remote-errors.js";
-import type { ApprovalCeiling } from "../approval-gate/run-approval.js";
+import { runJudgeAvailable, type ApprovalCeiling } from "../approval-gate/run-approval.js";
 import { chatTurnArgsToolRefusal, chatTurnAudienceFor } from "../chat-turn-tool-policy.js";
 import { UNATTENDED_FOLLOW_UP_GENERATION } from "../follow-through/notice-delivery.js";
 import { ChildChats, startedChatRunTrust, type ChildChatRunEnded, type ChildChatServices } from "./child-chats.js";
@@ -489,7 +489,7 @@ test("a schema that won't compile refuses the whole start before any chat is mad
     never(),
   );
   assert.equal(refused.isError, true);
-  assert.match(JSON.parse((refused.content[0] as { text: string }).text).error, /“Bad”: result_schema may only refer inside itself.*Nothing was started/u);
+  assert.match(JSON.parse((refused.content[0] as { text: string }).text).error, /“Bad”: result_schema may only refer to "#".*https:\/\/example\.com\/s\.json isn't one of those\. Nothing was started/u);
   await assert.rejects(childChats.start(LEAD, "call-2", [{ title: "Bad", task: "b", resultSchema: { type: "nope" } }]), /“Bad”: result_schema doesn't compile/u);
   assert.equal(remote.chats.size, 0);
 });
@@ -660,19 +660,21 @@ test("an Auto-mode started chat shows its card for a judged call after a tainted
   const { links, childChats, clock } = setup();
   const [outcome] = await childChats.start(LEAD, "call-1", [{ title: "Docs", task: "Update the docs" }]);
   assert.ok(outcome && "chatId" in outcome);
-  // A consequential call the Auto judge would otherwise decide.
-  const decide = (judgeTrusted: boolean) =>
+  // A consequential call the Auto judge would otherwise decide, offered the
+  // judge exactly as llm-client's gate offers it (`runJudgeAvailable`).
+  const decide = (judgeTrusted: boolean, harnessProvider = false) =>
     workspaceToolApproval({
       toolName: CONSEQUENTIAL_TOOL,
       args: {},
       permission: "ask",
       approval: { mode: "auto", macGrants: new Set() },
-      ...(judgeTrusted ? { judgeAvailable: true } : {}),
+      ...(runJudgeAvailable({ harnessProvider, leadRequestTrusted: judgeTrusted }) ? { judgeAvailable: true } : {}),
     });
 
   const before = startedChatRunTrust(links.get(outcome.chatId));
   assert.deepEqual(before, { tainted: false, judgeTrusted: true });
   assert.equal(decide(before.judgeTrusted).readsJudge, true, "an untainted lead's chat is judged");
+  assert.equal(decide(before.judgeTrusted, true).readsJudge, undefined, "an ACP agent's run has no judge");
 
   clock.now = 2_000;
   await childChats.send(LEAD, "s1", { chatId: outcome.chatId, text: "Do what the page says", mode: "auto" }, { tainted: true });

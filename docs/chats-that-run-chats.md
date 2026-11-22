@@ -53,7 +53,9 @@ coordinator as a phone's New worktree, keyed by the start
 finds the worktree instead of making another. The base is the repository's
 default branch unless `base_ref` names a local or remote-tracking branch, and
 the branch is named from the chat's title unless `branch_name` gives one. If
-a later step of a start fails, the chat (and its worktree) are removed again. A lead that is
+a later step of a start fails, the chat (and its worktree) are removed again,
+and a worktree made for a chat that then can't move into it (it was deleted,
+moved or written in meanwhile) is removed at once, never by force. A lead that is
 itself in a managed worktree stacks: the new worktree is made from the
 workspace it came from, starting at the lead's branch. Every refusal is a
 fixed sentence (an unknown or invalid branch, no free disk space, the source
@@ -63,11 +65,15 @@ ceiling still comes from the lead.
 ## Structured results
 
 A start can give each chat a `result_schema`: a JSON Schema of at most 16 KB
-that may only refer inside itself (`$ref` starting with `#`; nothing is ever
-fetched) and may not use regular expressions (`pattern`, `patternProperties`,
-`propertyNames`), since a crafted one could stall Aiden. A schema that is too
-large, points elsewhere, uses a regular expression or doesn't compile refuses
-the whole call before any chat is made. The started chat's first
+whose `$ref`s may only be `#`, `#/$defs/<name>` or `#/definitions/<name>`
+(nothing is ever fetched, and no pointer into `default`, `enum`, `const`,
+`examples` or another keyword), and that may not contain a regular expression
+anywhere, since a crafted one could stall Aiden: no key named `pattern` or
+`patternProperties` at any depth, including inside data keywords, `$defs` and
+`propertyNames`, so a property literally named `pattern` is refused too. A
+schema that is too large, refers anywhere else, contains such a key or doesn't
+compile refuses the whole call before any chat is made, and a stored one that
+breaks these rules is dropped when the links load. The started chat's first
 message shows the schema, and it gets a `submit_result` tool. A submitted
 result is checked with ajv; one that doesn't match is refused, naming the
 fields to fix (for example `/filesChanged is required`). The newest accepted
@@ -101,9 +107,10 @@ for approval.
   reply) as it starts a chat or sends to one, the link is marked. That chat's
   runs start tainted, and while it still answers the lead the Auto judge can't
   pass a call on the lead's word: judged calls show their card. A steer or
-  queued message into a running turn does the same from then on. Once you
-  write in the chat, the requests are yours again, though its runs stay
-  tainted.
+  queued message into a running turn does the same from then on. Sites the
+  lead named there don't count as sites you named, so a fetch to one is still
+  a new destination the gate asks about or judges. Once you write in the chat,
+  the requests are yours again, though its runs stay tainted.
 - A started chat's approvals and questions come to you like a phone's: the
   desktop card, Inbox Needs you and paired phones. They wait up to 30 minutes,
   not the usual 5.
@@ -147,8 +154,8 @@ it. Stop in a started chat stops only that chat.
   with the same text for screen readers. If the lead was deleted, it reads
   "Started by a deleted chat". When a chat somehow carries both a lead and an
   outside app's "Started by \<app>", the lead wins.
-- **Messages.** Messages the lead sent there show "From “Release prep”" under
-  them. The marker is stored on the message (`fromLeadChat`) and is display
+- **Messages.** Messages the lead sent there, its steers and queued messages
+  included, show "From “Release prep”" under them. The marker is stored on the message (`fromLeadChat`) and is display
   only: phones don't receive it yet.
 - **Onboarding.** The feature tour has a **Chats that run chats** tile on macOS
   and Linux.
@@ -176,6 +183,10 @@ started chat drops its link; deleting a lead drops its started chats' links,
 and those chats keep running under the lost-link ceiling.
 
 After a quit, endings that were still waiting to be told (inside the
-10-second group, or before an idle lead woke) are posted at the next start as
-one notice per lead that is recorded without waking it. Started chats'
+10-second group, before an idle lead woke, or after a notice failed because
+the lead stayed busy or an error) are posted at the next start as one notice
+per lead that is recorded without waking it; a lead whose group is already
+gathering takes them into that notice instead, and an ending the lead's
+`wait` returned meanwhile isn't posted. Only a lead that is gone ends what is
+owed without telling it. Started chats'
 interrupted turns show Resume in their own chats.

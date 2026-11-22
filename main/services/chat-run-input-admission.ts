@@ -258,6 +258,9 @@ export function createChatRunInputAdmission(deps: ChatRunInputAdmissionDeps) {
               content: input.text,
               ...(input.notice ? { notice: input.notice } : {}),
               ...(input.inputSource && !input.notice ? { inputSource: input.inputSource } : {}),
+              // A lead chat's steer or queued message is marked like its task,
+              // so it shows "From “<lead>”" and never counts as the person's words.
+              ...(input.fromLeadChat && !input.notice ? { fromLeadChat: true as const } : {}),
             },
             {
               isCurrent: () =>

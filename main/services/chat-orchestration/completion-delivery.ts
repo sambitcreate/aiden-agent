@@ -31,6 +31,8 @@ export interface ChildChatCompletionDeps {
   onError?(error: unknown): void;
 }
 
+type OwedLink = ChatLink & { owed: NonNullable<ChatLink["owed"]> };
+
 const END_WORDS: Readonly<Record<ChatLinkRunEnd, string>> = {
   done: "finished",
   stopped: "was stopped",
@@ -83,24 +85,33 @@ export class ChildChatCompletions {
 
   /**
    * At startup: endings recorded as owed whose notice never went out (Aiden
-   * quit inside the 10-second group, or before an idle lead woke) are posted
-   * now as one notice per lead that records without waking it. Never rejects.
+   * quit inside the 10-second group, before an idle lead woke, or a notice
+   * failed for a reason other than the lead being gone) are posted now as one
+   * notice per lead that records without waking it. A lead that already has a
+   * group waiting takes them into it instead. Never rejects.
    */
   async recoverOwed(): Promise<void> {
     try {
       await this.deps.links.restore();
-      const byLead = new Map<string, Array<ChatLink & { owed: NonNullable<ChatLink["owed"]> }>>();
+      const byLead = new Map<string, string[]>();
       for (const link of this.deps.links.all()) {
-        if (!link.owed || link.delivered?.includes(link.owed.runId) || this.groups.has(link.leadChatId)) continue;
-        const owed = byLead.get(link.leadChatId) ?? [];
-        owed.push(link as ChatLink & { owed: NonNullable<ChatLink["owed"]> });
-        byLead.set(link.leadChatId, owed);
+        if (!link.owed || link.delivered?.includes(link.owed.runId)) continue;
+        const group = this.groups.get(link.leadChatId);
+        if (group) {
+          group.chats.add(link.childChatId);
+          continue;
+        }
+        byLead.set(link.leadChatId, [...(byLead.get(link.leadChatId) ?? []), link.childChatId]);
       }
-      for (const [leadChatId, owed] of byLead) {
+      for (const [leadChatId, chatIds] of byLead) {
         try {
+          // Each lead's post awaits the one before; a resumed lead's `wait`
+          // may have returned some of these meanwhile, so read them again.
+          const owed = this.stillOwed(chatIds, leadChatId);
+          if (owed.length === 0) continue;
           const replies = await Promise.all(owed.map((link) => this.deps.lastReply(link.childChatId).catch(() => undefined)));
           const outcome = await this.deps.post({ chatId: leadChatId, notice: noticeFor(owed), text: noticeText(owed, replies), wake: false });
-          await this.settle(owed, outcome.kind !== "dropped");
+          await this.settle(owed, outcome);
         } catch (error) {
           this.deps.onError?.(error);
         }
@@ -110,12 +121,28 @@ export class ChildChatCompletions {
     }
   }
 
-  /** Clears the owed endings a post handled; ones it delivered count as told. */
-  private async settle(owed: ReadonlyArray<ChatLink & { owed: NonNullable<ChatLink["owed"]> }>, delivered: boolean): Promise<void> {
+  /** The chats whose ending is still owed to this lead and not yet told. */
+  private stillOwed(chatIds: Iterable<string>, leadChatId: string): OwedLink[] {
+    const owed: OwedLink[] = [];
+    for (const chatId of chatIds) {
+      const link = this.deps.links.get(chatId);
+      if (link?.leadChatId === leadChatId && link.owed && !link.delivered?.includes(link.owed.runId)) owed.push(link as OwedLink);
+    }
+    return owed;
+  }
+
+  /**
+   * Clears the owed endings a post handled; ones it delivered count as told.
+   * Only a lead that is gone ends what is owed without telling it. A notice
+   * dropped for any other reason (the chat stayed busy, an error) stays owed,
+   * so the next start's `recoverOwed` posts it again.
+   */
+  private async settle(owed: readonly OwedLink[], outcome: AgentNoticeOutcome): Promise<void> {
+    const delivered = outcome.kind !== "dropped";
+    if (!delivered && outcome.gone !== true) return;
     for (const link of owed) {
       await this.deps.links.update(link.childChatId, (draft) => {
         if (delivered && !draft.delivered?.includes(link.owed.runId)) draft.delivered = [...(draft.delivered ?? []), link.owed.runId];
-        // A dropped notice (the lead is gone) is not retried, so it is not owed either.
         if (draft.owed?.runId === link.owed.runId) delete draft.owed;
       });
     }
@@ -128,12 +155,8 @@ export class ChildChatCompletions {
     this.groups.delete(leadChatId);
     this.deps.clearTimer(group.timer);
     try {
-      const owed: Array<ChatLink & { owed: NonNullable<ChatLink["owed"]> }> = [];
-      for (const chatId of group.chats) {
-        const link = this.deps.links.get(chatId);
-        // `wait` may have returned it in the meantime.
-        if (link?.owed && !link.delivered?.includes(link.owed.runId)) owed.push(link as (typeof owed)[number]);
-      }
+      // `wait` may have returned some in the meantime.
+      const owed = this.stillOwed(group.chats, leadChatId);
       if (owed.length === 0) return undefined;
       const replies = await Promise.all(owed.map((link) => this.deps.lastReply(link.childChatId).catch(() => undefined)));
       const outcome = await this.deps.post({
@@ -142,7 +165,7 @@ export class ChildChatCompletions {
         text: noticeText(owed, replies),
         wake: !this.quiet.has(leadChatId),
       });
-      await this.settle(owed, outcome.kind !== "dropped");
+      await this.settle(owed, outcome);
       return outcome;
     } catch (error) {
       this.deps.onError?.(error);
@@ -151,7 +174,7 @@ export class ChildChatCompletions {
   }
 }
 
-function noticeFor(links: ReadonlyArray<ChatLink & { owed: NonNullable<ChatLink["owed"]> }>) {
+function noticeFor(links: readonly OwedLink[]) {
   const troubled = links.some((link) => link.owed.end === "failed" || link.owed.end === "interrupted");
   const tone: AgentNoticeTone = troubled ? "failure" : links.every((link) => link.owed.end === "done") ? "success" : "info";
   const title =
@@ -163,7 +186,7 @@ function noticeFor(links: ReadonlyArray<ChatLink & { owed: NonNullable<ChatLink[
 }
 
 function noticeText(
-  links: ReadonlyArray<ChatLink & { owed: NonNullable<ChatLink["owed"]> }>,
+  links: readonly OwedLink[],
   replies: ReadonlyArray<string | undefined>,
 ): string {
   const parts = [links.length === 1 ? "A chat this chat started has ended." : "Chats this chat started have ended."];

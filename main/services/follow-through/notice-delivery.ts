@@ -21,7 +21,8 @@ export type AgentNoticeOutcome =
   | { kind: "queued"; messageId: string }
   | { kind: "woke"; messageId: string; streamId: string }
   | { kind: "recorded"; messageId: string; reason: "not-waking" | "wake-budget" | "wake-unavailable" }
-  | { kind: "dropped"; reason: string };
+  /** Not delivered. `gone`: the chat itself no longer exists, so a retry never could be. */
+  | { kind: "dropped"; reason: string; gone?: true };
 
 export type QueueIntoRunResult =
   /** Nothing is running in the chat that takes input. */
@@ -204,7 +205,7 @@ export class NoticeDelivery {
     for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt += 1) {
       const appended = await this.deps.append(post);
       if (appended.kind === "appended") return { kind: "recorded", messageId: appended.messageId, reason };
-      if (appended.kind === "gone") return { kind: "dropped", reason: appended.reason };
+      if (appended.kind === "gone") return { kind: "dropped", reason: appended.reason, gone: true };
       // A turn started meanwhile: hand the notice to it instead.
       const queued = await this.deps.queueIntoRun(post);
       if (queued.kind === "queued") return { kind: "queued", messageId: queued.messageId };

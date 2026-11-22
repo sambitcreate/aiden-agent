@@ -1,4 +1,5 @@
 import type { GenerationCancellationOrigin } from "../../renderer/shared/generation-timeline.js";
+import { generationModelMeta } from "./chat-model-selection-meta.js";
 import { GenerationTimelineProjector } from "./generation-timeline.js";
 
 export interface GenerationInitializationTerminalState {
@@ -17,6 +18,31 @@ export interface GenerationInitializationTerminalMeta {
   model: string;
   expectedWorkspaceId: string;
   isCurrent: () => boolean;
+}
+
+/**
+ * The `append` a generation start hands `persistGenerationInitializationTerminal`:
+ * the outcome goes into the chat store in the same write that checks the run
+ * still owns the chat, and moves the chat to the run's model unless the run
+ * keeps the chat's own (an in-chat task run).
+ */
+export function chatStoreInitializationTerminalAppend(
+  chatStore: {
+    appendMessage(
+      chatId: string,
+      message: GenerationInitializationTerminalMessage,
+      meta: { expectedWorkspaceId: string; isCurrent: () => boolean; providerId?: string; model?: string },
+    ): Promise<unknown>;
+  },
+  chatId: string,
+  keepChatModel: boolean | undefined,
+): (message: GenerationInitializationTerminalMessage, meta: GenerationInitializationTerminalMeta) => Promise<unknown> {
+  return (message, meta) =>
+    chatStore.appendMessage(chatId, message, {
+      expectedWorkspaceId: meta.expectedWorkspaceId,
+      isCurrent: meta.isCurrent,
+      ...generationModelMeta(meta, keepChatModel),
+    });
 }
 
 export async function persistGenerationInitializationTerminal(options: {
