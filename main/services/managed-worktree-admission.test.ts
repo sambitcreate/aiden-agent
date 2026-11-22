@@ -370,3 +370,182 @@ test("GitService.managedWorktreeUsable verifies modern worktrees via 0-spawn pur
   assert.equal(postHookInfo.isRepo, true);
   assert.equal(postHookInfo.uncommitted, 1);
 });
+
+test("GitService.managedWorktreeUsable discovers alternate Git system config origins and fails closed on revoking edits", async (t) => {
+  const prevGlobalConfig = process.env.GIT_CONFIG_GLOBAL;
+  const prevSystemConfig = process.env.GIT_CONFIG_SYSTEM;
+  const prevNoSystem = process.env.GIT_CONFIG_NOSYSTEM;
+  process.env.GIT_CONFIG_GLOBAL = "/dev/null";
+  delete process.env.GIT_CONFIG_SYSTEM;
+  delete process.env.GIT_CONFIG_NOSYSTEM;
+  t.after(() => {
+    if (prevGlobalConfig === undefined) delete process.env.GIT_CONFIG_GLOBAL;
+    else process.env.GIT_CONFIG_GLOBAL = prevGlobalConfig;
+    if (prevSystemConfig === undefined) delete process.env.GIT_CONFIG_SYSTEM;
+    else process.env.GIT_CONFIG_SYSTEM = prevSystemConfig;
+    if (prevNoSystem === undefined) delete process.env.GIT_CONFIG_NOSYSTEM;
+    else process.env.GIT_CONFIG_NOSYSTEM = prevNoSystem;
+  });
+
+  const temp = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-usable-alt-sys-"));
+  t.after(() => fs.rm(temp, { recursive: true, force: true }));
+  const repo = path.join(temp, "repo");
+  const worktreesRoot = path.join(temp, "worktrees");
+  await fs.mkdir(repo, { recursive: true });
+  await runGit(repo, ["init", "-b", "main"]);
+  await runGit(repo, ["config", "user.name", "Aiden Test"]);
+  await runGit(repo, ["config", "user.email", "test@example.com"]);
+  await fs.writeFile(path.join(repo, "README.md"), "hello\n");
+  await runGit(repo, ["add", "README.md"]);
+  await runGit(repo, ["commit", "-m", "initial"]);
+
+  const altSystemConfig = path.join(temp, "alt-prefix-gitconfig");
+  const gitWrapper = path.join(temp, "alt-git.sh");
+  await fs.writeFile(
+    gitWrapper,
+    `#!/bin/sh\nexport GIT_CONFIG_SYSTEM=${JSON.stringify(altSystemConfig)}\nexec git "$@"\n`,
+    { encoding: "utf8", mode: 0o700 },
+  );
+
+  // Case 1: Alternate system config exists with benign settings.
+  await fs.writeFile(altSystemConfig, "[user]\n\tname = Alt Prefix\n");
+  const service = new GitService({ gitBinary: gitWrapper, cacheTtlMs: 60_000 });
+  const created = await service.createWorktree(repo, worktreesRoot, "aiden/alt-sys");
+
+  let gitSpawns = 0;
+  const internals = service as unknown as {
+    run: (cwd: string, args: string[], options?: unknown) => Promise<unknown>;
+  };
+  const originalRun = internals.run.bind(service);
+  internals.run = async (cwd, args, options) => {
+    gitSpawns += 1;
+    return originalRun(cwd, args, options);
+  };
+
+  assert.equal(
+    await service.managedWorktreeUsable(
+      created.repositoryPath,
+      created.path,
+      created.branch,
+      created.worktreeGitDir,
+      created.ownershipToken,
+      created.worktreeDevice,
+      created.worktreeInode,
+    ),
+    true,
+  );
+  assert.equal(gitSpawns, 0, "verified alternate system config still allows 0-spawn admission");
+
+  await fs.writeFile(altSystemConfig, "[core\n");
+  gitSpawns = 0;
+  await assert.rejects(
+    service.managedWorktreeUsable(
+      created.repositoryPath,
+      created.path,
+      created.branch,
+      created.worktreeGitDir,
+      created.ownershipToken,
+      created.worktreeDevice,
+      created.worktreeInode,
+    ),
+    /not a Git repository/u,
+  );
+  assert.ok(gitSpawns > 0, "revoking edit to alternate system config must force Git discovery");
+
+  // Case 2: Alternate system config starts missing, then is created to revoke.
+  await fs.rm(altSystemConfig, { force: true });
+  const missingSysService = new GitService({ gitBinary: gitWrapper, cacheTtlMs: 60_000 });
+  let missingSysSpawns = 0;
+  const missingInternals = missingSysService as unknown as {
+    run: (cwd: string, args: string[], options?: unknown) => Promise<unknown>;
+  };
+  const origMissingRun = missingInternals.run.bind(missingSysService);
+  missingInternals.run = async (cwd, args, options) => {
+    missingSysSpawns += 1;
+    return origMissingRun(cwd, args, options);
+  };
+
+  assert.equal(
+    await missingSysService.managedWorktreeUsable(
+      created.repositoryPath,
+      created.path,
+      created.branch,
+      created.worktreeGitDir,
+      created.ownershipToken,
+      created.worktreeDevice,
+      created.worktreeInode,
+    ),
+    true,
+  );
+  missingSysSpawns = 0;
+  assert.equal(
+    await missingSysService.managedWorktreeUsable(
+      created.repositoryPath,
+      created.path,
+      created.branch,
+      created.worktreeGitDir,
+      created.ownershipToken,
+      created.worktreeDevice,
+      created.worktreeInode,
+    ),
+    true,
+  );
+  assert.equal(missingSysSpawns, 0);
+
+  await fs.writeFile(altSystemConfig, "[core\n");
+  missingSysSpawns = 0;
+  await assert.rejects(
+    missingSysService.managedWorktreeUsable(
+      created.repositoryPath,
+      created.path,
+      created.branch,
+      created.worktreeGitDir,
+      created.ownershipToken,
+      created.worktreeDevice,
+      created.worktreeInode,
+    ),
+    /not a Git repository/u,
+  );
+  assert.ok(missingSysSpawns > 0, "creating missing alternate system config must force Git discovery");
+
+  // Case 3: Existing empty alternate system config fails closed (never caches pure-FS proof).
+  await fs.writeFile(altSystemConfig, "");
+  const emptySysService = new GitService({ gitBinary: gitWrapper, cacheTtlMs: 60_000 });
+  let emptySysSpawns = 0;
+  const emptyInternals = emptySysService as unknown as {
+    run: (cwd: string, args: string[], options?: unknown) => Promise<unknown>;
+  };
+  const origEmptyRun = emptyInternals.run.bind(emptySysService);
+  emptyInternals.run = async (cwd, args, options) => {
+    emptySysSpawns += 1;
+    return origEmptyRun(cwd, args, options);
+  };
+
+  assert.equal(
+    await emptySysService.managedWorktreeUsable(
+      created.repositoryPath,
+      created.path,
+      created.branch,
+      created.worktreeGitDir,
+      created.ownershipToken,
+      created.worktreeDevice,
+      created.worktreeInode,
+    ),
+    true,
+  );
+  await fs.writeFile(altSystemConfig, "[core\n");
+  emptySysSpawns = 0;
+  await assert.rejects(
+    emptySysService.managedWorktreeUsable(
+      created.repositoryPath,
+      created.path,
+      created.branch,
+      created.worktreeGitDir,
+      created.ownershipToken,
+      created.worktreeDevice,
+      created.worktreeInode,
+    ),
+    /not a Git repository/u,
+  );
+  assert.ok(emptySysSpawns > 0, "empty alternate system config must stay Git-backed and fail closed");
+});

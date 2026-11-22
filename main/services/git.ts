@@ -1077,8 +1077,16 @@ export class GitService {
    */
   private readonly verifiedRepoIdentities = new Map<
     string,
-    { commonDir: string; identityPaths: string[]; paths: string[]; signature: string }
+    {
+      commonDir: string;
+      identityPaths: string[];
+      systemConfigKey: string;
+      systemConfigPaths: string[];
+      paths: string[];
+      signature: string;
+    }
   >();
+  private readonly discoveredSystemConfigPaths = new Map<string, readonly string[] | null>();
   /**
    * Credential-free remote identity learned by ordinary status reads, keyed by
    * repository working directory. Raw remote URLs are never retained.
@@ -1295,18 +1303,131 @@ export class GitService {
     });
   }
 
+  private systemConfigEnvKey(env: NodeJS.ProcessEnv): string {
+    return JSON.stringify([
+      this.gitBinary,
+      env.GIT_CONFIG_NOSYSTEM ?? null,
+      env.GIT_CONFIG_SYSTEM ?? null,
+      env.PATH ?? "",
+    ]);
+  }
+
+  /**
+   * Identify the exact system Git config path(s) used by `this.gitBinary`
+   * instead of guessing hardcoded platform defaults. Returns `undefined` when
+   * the system config origin cannot be proven (for example, an existing empty
+   * system config file or an unrecognized error) so pure-FS admission fails
+   * closed and falls back to Git discovery.
+   */
+  private async resolveSystemConfigPaths(
+    canonicalCwd: string,
+    env: NodeJS.ProcessEnv,
+    signal?: AbortSignal,
+  ): Promise<readonly string[] | undefined> {
+    const noSystem = env.GIT_CONFIG_NOSYSTEM === "1" || env.GIT_CONFIG_NOSYSTEM === "true";
+    if (noSystem) return [];
+    if (env.GIT_CONFIG_SYSTEM !== undefined) {
+      if (!env.GIT_CONFIG_SYSTEM || env.GIT_CONFIG_SYSTEM === "/dev/null") return [];
+      return [path.resolve(canonicalCwd, env.GIT_CONFIG_SYSTEM)];
+    }
+    const cacheKey = JSON.stringify([this.gitBinary, env.PATH ?? ""]);
+    if (this.discoveredSystemConfigPaths.has(cacheKey)) {
+      return this.discoveredSystemConfigPaths.get(cacheKey) ?? undefined;
+    }
+    let probe: Awaited<ReturnType<GitService["run"]>>;
+    try {
+      probe = await this.run(
+        canonicalCwd,
+        ["config", "--system", "--list", "--show-origin", "-z"],
+        { allowExitCodes: [128], signal },
+      );
+    } catch (error) {
+      if (signal?.aborted) throw error;
+      return undefined;
+    }
+    const storeCache = (value: readonly string[] | null) => {
+      this.discoveredSystemConfigPaths.delete(cacheKey);
+      this.discoveredSystemConfigPaths.set(cacheKey, value);
+      while (this.discoveredSystemConfigPaths.size > this.cacheEntries) {
+        const oldest = this.discoveredSystemConfigPaths.keys().next().value as string | undefined;
+        if (!oldest) break;
+        this.discoveredSystemConfigPaths.delete(oldest);
+      }
+    };
+    if (probe.exitCode === 0) {
+      if (!probe.stdout) {
+        // An existing empty/comment-only system config emits no origin record;
+        // fail closed because its path cannot be proven from `--list`.
+        storeCache(null);
+        return undefined;
+      }
+      const tokens = probe.stdout.split("\0");
+      if (
+        tokens.length < 3 ||
+        tokens[tokens.length - 1] !== "" ||
+        (tokens.length - 1) % 2 !== 0
+      ) {
+        storeCache(null);
+        return undefined;
+      }
+      const origins = new Set<string>();
+      for (let i = 0; i + 1 < tokens.length - 1; i += 2) {
+        const origin = tokens[i];
+        if (!origin.startsWith("file:")) {
+          storeCache(null);
+          return undefined;
+        }
+        const filePath = origin.slice(5);
+        if (!filePath) {
+          storeCache(null);
+          return undefined;
+        }
+        origins.add(filePath);
+      }
+      if (origins.size === 0) {
+        storeCache(null);
+        return undefined;
+      }
+      const rawPaths = [...origins];
+      const resolved = rawPaths.map((filePath) => path.resolve(canonicalCwd, filePath));
+      if (rawPaths.every((filePath) => path.isAbsolute(filePath))) {
+        storeCache(resolved);
+      }
+      return resolved;
+    }
+    if (probe.exitCode === 128) {
+      const missingMatch = probe.stderr.match(
+        /unable to read config file '(.+)': No such file or directory/u,
+      );
+      if (missingMatch?.[1]) {
+        const rawPath = missingMatch[1];
+        const resolved = [path.resolve(canonicalCwd, rawPath)];
+        if (path.isAbsolute(rawPath)) {
+          storeCache(resolved);
+        }
+        return resolved;
+      }
+    }
+    storeCache(null);
+    return undefined;
+  }
+
   private admissionConfigPaths(
     canonicalCwd: string,
+    env: NodeJS.ProcessEnv,
     identityPaths: readonly string[],
     repoConfigFiles: readonly string[],
+    systemConfigPaths: readonly string[],
   ): { allPaths: string[]; configFiles: string[] } {
-    const env = gitEnvironment(false);
     const allPaths = new Set<string>(identityPaths);
     const configFiles = new Set<string>(repoConfigFiles);
     const addConfigFile = (filePath: string) => {
       allPaths.add(filePath);
       configFiles.add(filePath);
     };
+    if (this.gitBinary.includes(path.sep)) {
+      allPaths.add(path.resolve(this.gitBinary));
+    }
     if (env.GIT_CONFIG_GLOBAL !== undefined) {
       if (env.GIT_CONFIG_GLOBAL && env.GIT_CONFIG_GLOBAL !== "/dev/null") {
         addConfigFile(path.resolve(canonicalCwd, env.GIT_CONFIG_GLOBAL));
@@ -1319,20 +1440,8 @@ export class GitService {
         addConfigFile(path.join(xdg, "git", "config"));
       }
     }
-    const noSystem = env.GIT_CONFIG_NOSYSTEM === "1" || env.GIT_CONFIG_NOSYSTEM === "true";
-    if (!noSystem) {
-      if (env.GIT_CONFIG_SYSTEM !== undefined) {
-        if (env.GIT_CONFIG_SYSTEM && env.GIT_CONFIG_SYSTEM !== "/dev/null") {
-          addConfigFile(path.resolve(canonicalCwd, env.GIT_CONFIG_SYSTEM));
-        }
-      } else {
-        addConfigFile("/etc/gitconfig");
-        if (process.platform === "darwin") {
-          addConfigFile("/opt/homebrew/etc/gitconfig");
-          addConfigFile("/usr/local/etc/gitconfig");
-          addConfigFile("/Library/Developer/CommandLineTools/usr/etc/gitconfig");
-        }
-      }
+    for (const filePath of systemConfigPaths) {
+      addConfigFile(filePath);
     }
     return { allPaths: [...allPaths], configFiles: [...configFiles] };
   }
@@ -1341,20 +1450,36 @@ export class GitService {
    * Prove that every Git config file in scope (repo-local, global, system) is a
    * plain bounded file without `[include]` / `[includeIf]` directives, and
    * return a signature across all routing + config paths. Returns `undefined`
-   * when any include directive or unreadable/symlinked config is present so
-   * pure-FS admission always falls back to Git discovery.
+   * when any include directive, unknown system config origin, or
+   * unreadable/symlinked config is present so pure-FS admission always falls
+   * back to Git discovery.
    */
   private async pureFsAdmissionProof(
     canonicalCwd: string,
+    signal?: AbortSignal,
   ): Promise<
-    { commonDir: string; identityPaths: string[]; paths: string[]; signature: string } | undefined
+    | {
+        commonDir: string;
+        identityPaths: string[];
+        systemConfigKey: string;
+        systemConfigPaths: string[];
+        paths: string[];
+        signature: string;
+      }
+    | undefined
   > {
     const identity = await this.rootReadIdentity(canonicalCwd);
     if (!identity) return undefined;
+    const env = gitEnvironment(false);
+    const systemConfigKey = this.systemConfigEnvKey(env);
+    const systemConfigPaths = await this.resolveSystemConfigPaths(canonicalCwd, env, signal);
+    if (!systemConfigPaths) return undefined;
     const { allPaths, configFiles } = this.admissionConfigPaths(
       canonicalCwd,
+      env,
       identity.paths,
       identity.configFiles,
+      systemConfigPaths,
     );
     const beforeSig = await this.repositorySignature(allPaths);
     if (!beforeSig) return undefined;
@@ -1373,6 +1498,8 @@ export class GitService {
     return {
       commonDir: identity.commonDir,
       identityPaths: identity.paths,
+      systemConfigKey,
+      systemConfigPaths: [...systemConfigPaths],
       paths: allPaths,
       signature: afterSig,
     };
@@ -1380,9 +1507,24 @@ export class GitService {
 
   private async isVerifiedRepoIdentityCurrent(
     canonicalCwd: string,
-    verified: { commonDir: string; identityPaths: string[]; paths: string[]; signature: string },
+    verified: {
+      commonDir: string;
+      identityPaths: string[];
+      systemConfigKey: string;
+      systemConfigPaths: string[];
+      paths: string[];
+      signature: string;
+    },
   ): Promise<boolean> {
-    const { allPaths } = this.admissionConfigPaths(canonicalCwd, verified.identityPaths, []);
+    const env = gitEnvironment(false);
+    if (this.systemConfigEnvKey(env) !== verified.systemConfigKey) return false;
+    const { allPaths } = this.admissionConfigPaths(
+      canonicalCwd,
+      env,
+      verified.identityPaths,
+      [],
+      verified.systemConfigPaths,
+    );
     if (
       allPaths.length !== verified.paths.length ||
       !allPaths.every((filePath, index) => filePath === verified.paths[index])
@@ -1397,7 +1539,9 @@ export class GitService {
     signal?: AbortSignal,
   ): Promise<GitRepository | null> {
     const canonicalCwd = await fs.realpath(cwd).catch(() => undefined);
-    const beforeProof = canonicalCwd ? await this.pureFsAdmissionProof(canonicalCwd) : undefined;
+    const beforeProof = canonicalCwd
+      ? await this.pureFsAdmissionProof(canonicalCwd, signal)
+      : undefined;
     const repo = await this.repository(cwd, signal);
     if (
       repo &&
