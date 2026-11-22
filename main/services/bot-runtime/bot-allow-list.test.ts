@@ -42,7 +42,9 @@ async function fixture(t: import("node:test").TestContext) {
 }
 
 test("service: three approvals offer Always, once assigns one durable weekly hint, and publication resets only its history", async t => {
-  const f = await fixture(t); await f.seed();
+  const f = await fixture(t);
+  assert.deepEqual(await f.service.offer("bot", CAL), { count: 0 }, "the first card already offers Always, without a repeat count");
+  await f.seed();
   assert.deepEqual(await f.service.offer("bot", CAL), { count: 3 });
   const once = await f.input("fourth", "allow", true), result = await f.service.settle(once);
   assert.equal(result.hint, botApprovalNudgeHint({ label: "Google Calendar · Create event", count: 4, choice: "Always allow for Jester", place: "add a rule in Settings → Approvals" }));
@@ -59,6 +61,18 @@ test("service: three approvals offer Always, once assigns one durable weekly hin
   assert.equal((await f.rules.listBot("bot"))[0]?.uses, 1);
 });
 
+test("service: Always allow on the very first card saves the rule and stops the next card", async t => {
+  const f = await fixture(t);
+  const first = await f.input("first", "allow_always");
+  first.remember.offer = await f.service.offer("bot", CAL);
+  assert.deepEqual(first.remember.offer, { count: 0 });
+  const saved = await f.service.settle(first, { validatePublication: async () => {} });
+  assert.ok(saved.publication);
+  assert.equal((await f.rules.listBot("bot"))[0]?.label, "Google Calendar · Create event");
+  assert.ok(await f.service.match("bot", CAL), "the next call runs without a card");
+  assert.equal(await f.service.offer("bot", CAL), undefined);
+});
+
 test("service: Once and Deny replay use the original offer while keeping exact decision identity", async t => {
   const f = await fixture(t);
   for (const id of ["first", "second"]) await f.service.settle(await f.input(id));
@@ -71,7 +85,7 @@ test("service: Once and Deny replay use the original offer while keeping exact d
   const deny = await f.input("denied", "deny", true);
   assert.deepEqual(await f.service.settle(deny), {});
   delete deny.remember.offer;
-  assert.equal(await f.service.offer("bot", CAL), undefined);
+  assert.deepEqual(await f.service.offer("bot", CAL), { count: 0 }, "a denial drops the repeat count; Always stays offered");
   const ledgerPath = path.join(botSessionDirectory(f.dir, "bot"), BOT_APPROVAL_TALLIES_FILE);
   const beforeReplay = await readFile(ledgerPath, "utf8");
   assert.deepEqual(await createBotAllowList(f.deps).settle(deny), {});
@@ -193,7 +207,7 @@ test("service: committed publication with lost acknowledgement reconciles histor
   assert.equal((await f.tallies.publication("bot", "ambiguous", "fp-ambiguous"))?.status, "published");
   await f.rules.revokeBot("bot", (await f.rules.listBot("bot"))[0]!.id);
   assert.deepEqual(await f.service.settle(input), {});
-  assert.equal(await f.service.offer("bot", CAL), undefined);
+  assert.deepEqual(await f.service.offer("bot", CAL), { count: 0 });
   assert.equal((await f.rules.listBot("bot")).length, 0);
 });
 
@@ -294,7 +308,7 @@ test("service: expiry and automatic approvals never count as person consent or h
       assert.deepEqual(await f.service.settle(input), {});
     }
   }
-  assert.equal(await f.service.offer("bot", CAL), undefined);
+  assert.deepEqual(await f.service.offer("bot", CAL), { count: 0 }, "no repeat count");
   assert.equal((await f.rules.listBot("bot")).length, 0);
 });
 

@@ -21,6 +21,7 @@ import { BOT_OPEN_WORK_TOOL } from "../bot-open-work/tool.js";
 import { UPDATE_BOT_TOOL_NAME } from "../../../renderer/shared/bot-settings-changes.js";
 import { BOT_ROUTINES_TOOL_NAME } from "../../../renderer/shared/bot-routine-proposals.js";
 import { composioServiceCallRequiresForeground, isComposioServiceToolDescriptor } from "../composio-service-tool.js";
+import { composioApprovalSummary } from "../composio-operation-text.js";
 import { BOT_FILE_TOOL_NAMES } from "../bot-file-tool-router.js";
 import type { BotRuntimeEffectiveAuthority, BotRuntimeMcpToolAuthority } from "../bot-runtime-authority.js";
 import { isComputerUseCapabilityTool } from "../bot-tool-authority.js";
@@ -336,5 +337,7 @@ export async function botToolApprovalSummary(
   const watch=botExecutionScope()?.claim.connectorRestriction;
   if(watch?.binding.adapter==="composio-calendar-v1"&&calendarWatchCallAllowed(watch,args)&&isComposioServiceToolDescriptor(await facts.mcpToolDescriptor?.(name)))return undefined;
   const grant = (await facts.mcpTools()).get(name);
-  return grant?.effect === "mutating" ? summarizeToolCall(name, args) : undefined;
+  if (grant?.effect !== "mutating") return undefined;
+  // One Composio tool runs every enabled app action: name the action, not "composio".
+  return isComposioServiceToolDescriptor(await facts.mcpToolDescriptor?.(name)) ? composioApprovalSummary(args) : summarizeToolCall(name, args);
 }

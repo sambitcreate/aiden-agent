@@ -21,6 +21,7 @@ import { BOT_MEMORY_LIMITS, type BotMemoryTarget } from "../../../renderer/share
 import { BOT_INTRO_REQUEST_PREFIX } from "../bot-runtime/bot-intro.js";
 import type { BotToolEntry } from "../bot-runtime/bot-extension.js";
 import { memoryLimit, usedChars } from "./files.js";
+import { BOT_MEMORY_REACH_OUT_CLAIM_ERROR, botMemoryClaimsNoReachOut } from "./reach-out-claims.js";
 import { BOT_MEMORY_NOTES_ROUTE, BOT_MEMORY_USER_ROUTE } from "./routing.js";
 import type { BotMemoryRuntime } from "./service.js";
 import type { BotMemoryApplyResult, BotMemoryOperation } from "./store.js";
@@ -136,6 +137,12 @@ export interface BotMemoryToolOptions {
    * publication; a rejection aborts the batch unwritten and propagates.
    */
   assertCurrent?: () => Promise<void>;
+  /**
+   * Whether the Bot has routines now (Schedules in its access). While it
+   * does, an entry saying it can't schedule or message first is refused.
+   * Asked only when an entry says so.
+   */
+  canSchedule?: () => Promise<boolean>;
 }
 
 export function createBotMemoryTool(
@@ -161,6 +168,14 @@ export function createBotMemoryTool(
       if (typeof operations === "string") {
         return resultOf({ ok: false, code: "invalid", target, error: operations }, { changed: 0, targets: [] }, true);
       }
+      if (
+        options.canSchedule
+        && operations.some((operation) => operation.action !== "remove" && botMemoryClaimsNoReachOut(operation.content, target))
+        // Unable to tell whether the Bot has routines: refuse, rather than save a note that may be false.
+        && await options.canSchedule().catch(() => true)
+      ) {
+        return resultOf({ ok: false, code: "invalid", target, error: BOT_MEMORY_REACH_OUT_CLAIM_ERROR }, { changed: 0, targets: [] }, true);
+      }
       // A call aborted (its turn stopped, its review revoked) while its batch
       // waited or read is never published.
       const assertCurrent = async () => {
@@ -173,8 +188,12 @@ export function createBotMemoryTool(
 }
 
 /** The attended-turn entry `bot-session-main` adds to every Bot's tools. */
-export function botMemoryToolEntry(botId: string, memory: Pick<BotMemoryRuntime, "apply">): BotToolEntry {
-  return { tool: createBotMemoryTool(botId, memory) as unknown as AgentTool, replay: "unsafe" };
+export function botMemoryToolEntry(
+  botId: string,
+  memory: Pick<BotMemoryRuntime, "apply">,
+  options: Pick<BotMemoryToolOptions, "canSchedule"> = {},
+): BotToolEntry {
+  return { tool: createBotMemoryTool(botId, memory, options) as unknown as AgentTool, replay: "unsafe" };
 }
 
 /** Whether a run serving inputs with these request ids may save memory: never on routine or self-intro turns. */
