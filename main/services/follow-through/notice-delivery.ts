@@ -93,6 +93,22 @@ export class NoticeDelivery {
     return next;
   }
 
+  /**
+   * Runs `work` after any earlier notice for the chat, so a scheduled task
+   * run's prompt keeps its place among notices. The chain waits only for
+   * `work`, so keep it to admission, not a whole turn.
+   */
+  inOrder<T>(chatId: string, work: () => Promise<T>): Promise<T> {
+    const previous = this.chains.get(chatId) ?? Promise.resolve();
+    const next = previous.then(work);
+    const settled = next.catch(() => undefined);
+    this.chains.set(chatId, settled);
+    void settled.finally(() => {
+      if (this.chains.get(chatId) === settled) this.chains.delete(chatId);
+    });
+    return next;
+  }
+
   hasPending(chatId: string): boolean {
     return this.chains.has(chatId);
   }

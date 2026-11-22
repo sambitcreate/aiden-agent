@@ -195,7 +195,7 @@ Forbidden: private run/session/group/generation/child/workspace identifiers, chi
 
 Allowed: task ID/revision, safe name/description, workspace/provider/model IDs, schedule/timezone, mode/permission, selected MCP IDs, notification preference, validated script ID/display name, enabled/running state, next/previous dates, bounded redacted run result.
 
-Forbidden: provider fingerprint, resolved MCP bindings, chat ID, credentials, process environment, raw script path, unredacted stdout/stderr, internal cancellation handles.
+Forbidden: provider fingerprint, resolved MCP bindings, chat ID, credentials, process environment, raw script path, unredacted stdout/stderr, internal cancellation handles. The chat a task made in a desktop chat posts into (`originChatId`) is not projected either: a `PATCH` keeps it, a phone cannot set or change it, and a phone edit that would run such a task more often than every 15 minutes is refused.
 
 ### Speech
 

@@ -15,6 +15,8 @@ export interface ScheduledTaskApplicationDependencies {
     list(): Promise<ScheduledTask[]>;
     get(id: string): Promise<ScheduledTask | undefined>;
     runs(id: string): Promise<ScheduledRun[]>;
+    /** Drop the task's chat binding; undefined when it had none. */
+    clearOriginChat(id: string, expectedChatId?: string): Promise<ScheduledTask | undefined>;
   };
   service: {
     save(
@@ -210,6 +212,9 @@ export function createScheduledTaskApplicationService(
     resume: (id: string, revision?: string, signal?: AbortSignal) =>
       mutateExisting(id, revision, (expectedUpdatedAt) =>
         dependencies.service.resume(id, { signal, expectedUpdatedAt })),
+    /** "Use its own chat": later runs post into the task's own chat instead of the chat that made it. */
+    useOwnChat: (id: string, revision?: string) =>
+      mutateExisting(id, revision, async () => (await dependencies.store.clearOriginChat(id)) ?? (await get(id))),
     runNow: async (id: string, runId?: string, revision?: string) => {
       const expectedUpdatedAt = expectedTaskRevision(await get(id), revision);
       const run = dependencies.service.runNow(id, { runId, expectedUpdatedAt });

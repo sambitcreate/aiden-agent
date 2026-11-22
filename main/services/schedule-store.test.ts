@@ -773,3 +773,61 @@ test("loads legacy Azure scheduled tasks through the renamed native provider", a
   );
   assert.equal((await store.list())[0]?.providerId, "azure");
 });
+
+function chatTaskInput(patch: Record<string, unknown> = {}) {
+  return {
+    name: "Daily build check",
+    mode: "llm" as const,
+    cron: "0 9 * * *",
+    timezone: "UTC",
+    workspaceId: "workspace-a",
+    prompt: "Run the build and report.",
+    ...patch,
+  };
+}
+
+test("the chat a task posts into is set once at creation and every later save keeps it", async () => {
+  const persistence = new MemoryPersistence<unknown[]>([]);
+  const store = createScheduleStore(persistence, new MemoryPersistence<unknown[]>([]), () => 1_800_000_000_000);
+  const created = await store.save(chatTaskInput({ originChatId: "chat-1" }));
+  assert.equal(created.originChatId, "chat-1");
+  // An editor or phone save carries no binding: it is kept, not cleared.
+  const edited = await store.save({ ...chatTaskInput({ name: "Build check" }), id: created.id });
+  assert.equal(edited.originChatId, "chat-1");
+  // Nor can a save move it to another chat.
+  const moved = await store.save({ ...chatTaskInput({ originChatId: "chat-2" }), id: created.id });
+  assert.equal(moved.originChatId, "chat-1");
+  // It survives a reload from disk.
+  const reloaded = createScheduleStore(persistence, new MemoryPersistence<unknown[]>([]));
+  assert.equal((await reloaded.get(created.id))?.originChatId, "chat-1");
+});
+
+test("a task bound to a chat can't be edited to run more often than every 15 minutes", async () => {
+  const store = testStore();
+  const bound = await store.save(chatTaskInput({ originChatId: "chat-1" }));
+  await assert.rejects(
+    store.save({ ...chatTaskInput({ cron: "*/5 * * * *" }), id: bound.id }),
+    /at most every 15 minutes/u,
+  );
+  assert.equal((await store.get(bound.id))?.cron, "0 9 * * *");
+  await assert.rejects(store.save(chatTaskInput({ originChatId: "chat-1", cron: "*/14 * * * *" })), /15 minutes/u);
+  // Its own chat has no floor.
+  const own = await store.save(chatTaskInput({ cron: "*/5 * * * *" }));
+  assert.equal(own.cron, "*/5 * * * *");
+});
+
+test("Use its own chat and deleting the chat drop the binding, and nothing else", async () => {
+  const store = testStore();
+  const first = await store.save(chatTaskInput({ originChatId: "chat-1" }));
+  const second = await store.save(chatTaskInput({ name: "Second", originChatId: "chat-1" }));
+  const other = await store.save(chatTaskInput({ name: "Other", originChatId: "chat-2" }));
+  assert.equal(await store.clearOriginChat(first.id, "chat-9"), undefined);
+  const moved = await store.clearOriginChat(first.id);
+  assert.equal(moved?.originChatId, undefined);
+  assert.ok((moved?.updatedAt ?? 0) > first.updatedAt, "the change is a new revision");
+  assert.equal(moved?.prompt, first.prompt);
+  assert.equal(await store.clearOriginChat(first.id), undefined, "nothing left to clear");
+  assert.deepEqual(await store.releaseOriginChat("chat-1"), [second.id]);
+  assert.equal((await store.get(second.id))?.originChatId, undefined);
+  assert.equal((await store.get(other.id))?.originChatId, "chat-2");
+});

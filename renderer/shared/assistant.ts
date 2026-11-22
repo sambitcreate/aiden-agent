@@ -88,6 +88,12 @@ export interface ScheduledTaskApprovalDetails {
   /** True only while migrating a legacy Full task that inherited enabled connectors. */
   legacyGlobalMcp: boolean;
   schedulerEnabled: boolean;
+  /**
+   * Where the task's runs post: this chat, or the task's own chat. Absent on
+   * older cards and for a task bound to another chat; phones show the card
+   * without it.
+   */
+  postsIn?: "this_chat" | "own_chat";
 }
 
 /** Renderer-safe facts for one exact, attended child file mutation. */
@@ -723,7 +729,8 @@ export function isScheduledTaskApprovalDetails(
     safeApprovalText(details.modelName, ASSISTANT_AUTOMATION_MODEL_NAME_LIMIT) &&
     (mcpServerIds.length === 0 || details.permission === "full") &&
     typeof details.legacyGlobalMcp === "boolean" &&
-    typeof details.schedulerEnabled === "boolean"
+    typeof details.schedulerEnabled === "boolean" &&
+    (details.postsIn === undefined || details.postsIn === "this_chat" || details.postsIn === "own_chat")
   );
 }
 

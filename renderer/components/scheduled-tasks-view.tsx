@@ -1,6 +1,6 @@
 import * as React from "react";
 import { LiveGuard } from "./live-guard";
-import { useNavigate } from "@tanstack/react-router";
+import { useNavigate, useSearch } from "@tanstack/react-router";
 import { useQueryClient } from "@tanstack/react-query";
 import {
   Bell,
@@ -45,6 +45,7 @@ import { requestAssistantAutomationComposer } from "../lib/assistant-dock";
 import { scheduleApi } from "../lib/ipc";
 import {
   queryKeys,
+  useChats,
   useMcpServers,
   useProviders,
   useScheduledTasks,
@@ -334,7 +335,13 @@ export function ScheduledTasksView() {
   const [query, setQuery] = React.useState("");
   const searchInputRef = React.useRef<HTMLInputElement>(null);
   const [tab, setTab] = React.useState<ScheduledTaskTab>("all");
-  const [selectedTaskId, setSelectedTaskId] = React.useState<string | null>(null);
+  const requestedTaskId = (useSearch({ strict: false }) as { task?: unknown }).task;
+  const [selectedTaskId, setSelectedTaskId] = React.useState<string | null>(
+    typeof requestedTaskId === "string" ? requestedTaskId : null,
+  );
+  React.useEffect(() => {
+    if (typeof requestedTaskId === "string") setSelectedTaskId(requestedTaskId);
+  }, [requestedTaskId]);
   const [editing, setEditing] = React.useState<ScheduledTaskInput | null>(null);
   const [editingUpdatedAt, setEditingUpdatedAt] = React.useState<number | undefined>();
   const [removing, setRemoving] = React.useState<ScheduledTask | null>(null);
@@ -386,6 +393,7 @@ export function ScheduledTasksView() {
       await refresh();
       if (run.result === "success") toast.success(`${task.name} finished.`);
       else if (run.result === "silent") toast.info(`${task.name} finished with no output.`);
+      else if (run.result === "skipped") toast.info(run.output || `${task.name} was skipped.`);
       else toast.error(run.error ?? `${task.name} did not complete.`);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Couldn't run this task.");
@@ -395,11 +403,27 @@ export function ScheduledTasksView() {
   };
 
   const openChat = (task: ScheduledTask) => {
-    if (!task.chatId) {
+    // A task made in a chat posts there, so that is the chat to open.
+    const chatId = task.originChatId ?? task.chatId;
+    if (!chatId) {
       toast.info("Run this task once to create its dedicated chat.");
       return;
     }
-    void navigate({ to: "/chat/$chatId", params: { chatId: task.chatId } });
+    void navigate({ to: "/chat/$chatId", params: { chatId } });
+  };
+
+  const editingTask = editing?.id ? tasks.data?.find((task) => task.id === editing.id) : undefined;
+  const originChats = useChats(editingTask?.originChatId ? editingTask.workspaceId : undefined);
+  const editingOriginChatTitle = editingTask?.originChatId
+    ? (originChats.data?.find((chat) => chat.id === editingTask.originChatId)?.title ?? "the chat it was made in")
+    : undefined;
+  const moveToOwnChat = async () => {
+    if (!editingTask) return;
+    const saved = await scheduleApi.useOwnChat(editingTask.id, editingTask.updatedAt);
+    // The draft's revision moves with the change, so saving the editor afterwards still works.
+    setEditingUpdatedAt(saved.updatedAt);
+    await refresh();
+    toast.success(`${editingTask.name} will run in its own chat.`);
   };
 
   const globallyEnabled = settings.data?.enabled;
@@ -812,6 +836,11 @@ export function ScheduledTasksView() {
             ),
           )}
           busy={saving}
+          postsIn={
+            editingOriginChatTitle !== undefined
+              ? { chatTitle: editingOriginChatTitle, onUseOwnChat: moveToOwnChat }
+              : undefined
+          }
           onOpenChange={(open) => {
             if (!open && !saving) {
               setEditing(null);

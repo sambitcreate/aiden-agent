@@ -8,7 +8,12 @@ import {
   recommendedScheduledPermission,
   validateScheduledMcpServerIds,
 } from "./schedule-guard.js";
-import { nextScheduledRun, systemTimezone, validateTimezone } from "./schedule-store.js";
+import {
+  assertChatTaskCadence,
+  nextScheduledRun,
+  systemTimezone,
+  validateTimezone,
+} from "./schedule-store.js";
 import type {
   AppSettings,
   McpServer,
@@ -78,6 +83,8 @@ interface ScheduleToolParams {
   permission?: "read-only" | "full";
   mcpServerIds?: string[];
   notify?: boolean;
+  /** Create only: post each run into the chat that made the task. */
+  post_in_chat?: boolean;
 }
 
 interface EditAutomationToolParams {
@@ -107,6 +114,11 @@ export type ScheduleToolAccess =
       kind: "standard";
       defaultWorkspaceId?: string;
       modelSelection?: AssistantScheduleModelSelection;
+      /**
+       * The ordinary workspace chat the tool runs in. A task created here
+       * posts its runs into this chat unless `post_in_chat` is false.
+       */
+      originChatId?: string;
     }
   | {
       kind: "assistant-attended";
@@ -812,6 +824,7 @@ function taskSummary(task: ScheduledTask) {
     lastRunAt: task.lastRunAt,
     lastResult: task.lastResult,
     updatedAt: task.updatedAt,
+    postsInChat: Boolean(task.originChatId),
   };
 }
 
@@ -1091,7 +1104,45 @@ function standardApprovalSummary(details: ScheduledTaskApprovalDetails): string 
       ? `script ${approvalDisplayValue(details.script, ASSISTANT_AUTOMATION_PROMPT_LIMIT, "unknown")}`
       : `${approvalDisplayValue(details.providerName, ASSISTANT_AUTOMATION_PROVIDER_NAME_LIMIT, "unknown")} / ${approvalDisplayValue(details.modelName, ASSISTANT_AUTOMATION_MODEL_NAME_LIMIT, "unknown")}`;
   const legacy = details.legacyGlobalMcp ? " · freezes legacy inherited MCP access" : "";
-  return `${verb} scheduled task "${approvalDisplayValue(details.name, ASSISTANT_AUTOMATION_NAME_LIMIT, "Untitled")}" · ${cadence} · ${details.permission === "full" ? "Full" : "Read-only"} access · ${scope} · ${runtime}${legacy}`;
+  const postsIn =
+    details.postsIn === "this_chat" ? " · posts in this chat" : details.postsIn === "own_chat" ? " · runs in its own chat" : "";
+  return `${verb} scheduled task "${approvalDisplayValue(details.name, ASSISTANT_AUTOMATION_NAME_LIMIT, "Untitled")}" · ${cadence} · ${details.permission === "full" ? "Full" : "Read-only"} access · ${scope} · ${runtime}${legacy}${postsIn}`;
+}
+
+/**
+ * The card's "Posts in" row: a new task, or an existing one bound to this
+ * chat or to none. A task bound to another chat shows no row from here.
+ */
+function postsInForApproval(
+  action: PreparedStandardScheduleApproval["action"],
+  input: ScheduledTaskInput,
+  existing: ScheduledTask | undefined,
+  originChatId: string | undefined,
+): ScheduledTaskApprovalDetails["postsIn"] {
+  if (action === "create") return input.originChatId ? "this_chat" : "own_chat";
+  if (!existing?.originChatId) return "own_chat";
+  return existing.originChatId === originChatId ? "this_chat" : undefined;
+}
+
+/** Where a created task's runs post: the chat that made it, when that chat shares the task's workspace. */
+function chatBindingForCreate(
+  params: Partial<ScheduleToolParams>,
+  workspaceId: string | undefined,
+  originChatId: string | undefined,
+  chatWorkspaceId: string | undefined,
+): string | undefined {
+  if (params.post_in_chat !== undefined && typeof params.post_in_chat !== "boolean") {
+    throw new Error("post_in_chat must be true or false.");
+  }
+  const sameWorkspace = Boolean(originChatId) && workspaceId !== undefined && workspaceId === chatWorkspaceId;
+  if (params.post_in_chat === true && !sameWorkspace) {
+    throw new Error(
+      originChatId
+        ? "A task can post into this chat only when it runs in this chat's workspace. Leave post_in_chat unset to run it in its own chat."
+        : "This conversation can't receive scheduled task results. Leave post_in_chat unset to run the task in its own chat.",
+    );
+  }
+  return params.post_in_chat !== false && sameWorkspace ? originChatId : undefined;
 }
 
 async function resolveStandardScheduleApproval(
@@ -1099,6 +1150,7 @@ async function resolveStandardScheduleApproval(
   selection: AssistantScheduleModelSelection | undefined,
   dependencies: ScheduleToolDependencies,
   defaultWorkspaceId?: string,
+  originChatId?: string,
   from = new Date(),
 ): Promise<PreparedStandardScheduleApproval> {
   const params = scheduleToolParams(value);
@@ -1131,6 +1183,11 @@ async function resolveStandardScheduleApproval(
     return defaultModelPromise;
   };
 
+  if (action !== "create" && params.post_in_chat !== undefined) {
+    throw new Error(
+      "post_in_chat applies only when creating a task. To stop a task posting into a chat, choose Use its own chat in its settings.",
+    );
+  }
   let input: ScheduledTaskInput;
   if (action === "create" || action === "update") {
     if (params.workspaceId?.trim() && params.clearWorkspace) {
@@ -1240,6 +1297,19 @@ async function resolveStandardScheduleApproval(
       notify: params.notify ?? existing?.notify,
       executionProfile: existing?.executionProfile,
     };
+    if (action === "create") {
+      const bound = chatBindingForCreate(params, workspaceId, originChatId, defaultWorkspaceId);
+      if (bound) {
+        try {
+          assertChatTaskCadence(input.cron, input.timezone ?? systemTimezone(), from);
+        } catch {
+          throw new Error(
+            "This task would run more often than every 15 minutes, so it can't post into this chat. Choose a slower schedule, or set post_in_chat to false so it runs in its own chat.",
+          );
+        }
+        input.originChatId = bound;
+      }
+    }
     assertSafeDisplayText(input.name, "Task name");
     assertSafeDisplayText(input.cron, "Cron schedule");
   } else {
@@ -1298,6 +1368,8 @@ async function resolveStandardScheduleApproval(
     legacyGlobalMcp,
     schedulerEnabled,
   };
+  const postsIn = postsInForApproval(action, input, existing, originChatId);
+  if (postsIn) details.postsIn = postsIn;
   const summary = standardApprovalSummary(details);
   if (summary.length > 1_900) {
     throw new Error(
@@ -1313,12 +1385,14 @@ export async function prepareStandardScheduleApproval(
   selection?: AssistantScheduleModelSelection,
   dependencies: ScheduleToolDependencies = defaultDependencies,
   defaultWorkspaceId?: string,
+  originChatId?: string,
 ): Promise<Pick<PreparedStandardScheduleApproval, "summary" | "details">> {
   const prepared = await resolveStandardScheduleApproval(
     value,
     selection,
     dependencies,
     defaultWorkspaceId,
+    originChatId,
   );
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw new Error("Scheduled task arguments are invalid.");
@@ -1332,13 +1406,14 @@ async function standardScheduleApprovalForExecution(
   selection: AssistantScheduleModelSelection | undefined,
   dependencies: ScheduleToolDependencies,
   defaultWorkspaceId?: string,
+  originChatId?: string,
 ): Promise<PreparedStandardScheduleApproval> {
   const attached =
     value && typeof value === "object" && !Array.isArray(value)
       ? preparedStandardByArguments.get(value)
       : undefined;
   if (attached) return structuredClone(attached);
-  return resolveStandardScheduleApproval(value, selection, dependencies, defaultWorkspaceId);
+  return resolveStandardScheduleApproval(value, selection, dependencies, defaultWorkspaceId, originChatId);
 }
 
 export function createAssistantScheduleListTool(
@@ -1673,6 +1748,12 @@ export function createScheduleTaskTool(
           description: "Show a desktop notification after non-silent runs.",
         }),
       ),
+      post_in_chat: Type.Optional(
+        Type.Boolean({
+          description:
+            "Create only. Post each run into the chat you are in (the default when the task uses this chat's workspace); such a task can run at most every 15 minutes. Set false to run it in its own chat.",
+        }),
+      ),
     }),
     execute: async (_toolCallId, rawParams, signal): Promise<AgentToolResult<null>> => {
       const params = rawParams as ScheduleToolParams;
@@ -1687,6 +1768,7 @@ export function createScheduleTaskTool(
           access.modelSelection,
           dependencies,
           access.defaultWorkspaceId,
+          access.originChatId,
         );
         throwIfScheduleToolAborted(signal);
         // Revalidate mutable inventories after approval. Persistence performs
@@ -1991,6 +2073,8 @@ export function createBotRoutinesTool(botId: string, routines: BotRoutinesToolDe
 
 export function scheduleTaskToolsForContext(context: {
   workspaceId?: string;
+  /** The ordinary workspace chat the tools run in; tasks created here post into it. */
+  originChatId?: string;
   allowScheduling?: boolean;
   mode?: "standard" | "assistant-attended";
   assistantModelSelection?: AssistantScheduleModelSelection;
@@ -2015,6 +2099,7 @@ export function scheduleTaskToolsForContext(context: {
       kind: "standard",
       defaultWorkspaceId: context.workspaceId,
       modelSelection: context.assistantModelSelection,
+      ...(context.originChatId ? { originChatId: context.originChatId } : {}),
     }),
   ];
 }
