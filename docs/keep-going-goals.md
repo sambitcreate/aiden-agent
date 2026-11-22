@@ -6,7 +6,7 @@ Give a chat a goal and Aiden keeps working on it in new rounds until it is done,
 
 - Type `/goal` and what should be finished, for example `/goal Get the test suite passing and write up what changed`, and send. The objective is sent as your own message, so the first round starts at once. It can be up to 2,000 characters on one line. The slash menu lists it as **Keep going until done**.
 - A chat has one goal. Setting a new one replaces the old one.
-- A goal needs a saved chat (send a first message), and the chat must be idle when you set it.
+- `/goal` can be a new chat's first message: the chat is created with the objective and the goal starts with it. In a chat that is answering, finish or stop the answer first.
 - Goals work in any ordinary chat on this computer, with or without a workspace folder. They are not available in Bot chats, the Assistant, agent-harness chats (such as Google Antigravity), chats hosted on a paired Mac, or chats with no model chosen.
 
 Other commands:

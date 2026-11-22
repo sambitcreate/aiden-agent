@@ -149,7 +149,7 @@ export function slashCommandAvailability(
       if (!context.designModeAvailable) return unavailable("Design mode isn't available in this chat.");
       break;
     case "goal-chat":
-      if (!context.hasChat) return unavailable("Send a message first, then set a goal.");
+      // A new chat works too: the objective is its first message.
       if (context.goalBlockedReason) return unavailable(context.goalBlockedReason);
       break;
     case "idle-workspace":

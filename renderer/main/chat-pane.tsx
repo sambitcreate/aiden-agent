@@ -2094,7 +2094,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
       text: string,
       attachments: Attachment[],
       skillInvocation?: SkillInvocationV1,
-      options?: { visualize?: boolean; btw?: boolean; inputSource?: ChatInputSourceV1 },
+      options?: { visualize?: boolean; btw?: boolean; goal?: string; inputSource?: ChatInputSourceV1 },
     ) => {
       // Only Aiden Live's chat tools set this; the message shows "By voice".
       const inputSource = options?.inputSource;
@@ -2326,6 +2326,13 @@ export function ChatPane({ chatId }: { chatId: string }) {
         // which this render has not seen yet.
         // A No workspace draft that needed its own folder was saved in a fresh one.
         if (firstDraft) effectiveWorkspaceIdRef.current = updated.workspaceId;
+        if (options?.goal) {
+          // The chat exists now (a draft was just saved): set its goal before the answer
+          // starts, so the kickoff note rides on it. A refusal leaves an ordinary answer.
+          await chatsApi.setGoal(updated.id, options.goal, "slash").catch((error: unknown) => {
+            toast.error(error instanceof Error ? error.message : "The goal could not be set.");
+          });
+        }
         void runGeneration(messageTurnId).then((started) => {
           if (!started.ok && mountedRef.current && chatIdRef.current === chatId) {
             setError(started.error.message);
@@ -2487,7 +2494,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
       text: string,
       attachments: Attachment[],
       skillInvocation?: SkillInvocationV1,
-      options?: { visualize?: boolean; btw?: boolean; inputSource?: ChatInputSourceV1 },
+      options?: { visualize?: boolean; btw?: boolean; goal?: string; inputSource?: ChatInputSourceV1 },
     ) => {
       if (stopRequestedRef.current) {
         throw new Error("Aiden is stopping this response. Send your message after it stops.");

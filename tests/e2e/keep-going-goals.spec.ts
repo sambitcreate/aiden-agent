@@ -21,19 +21,15 @@ async function setGoal(page: Page, objective: string): Promise<void> {
   }).toPass({ timeout: 20_000 });
 }
 
-test("/goal sends the objective, the goal bar follows the round to Done, and Clear removes it", async ({ aiden }) => {
+test("/goal as a new chat's first message creates the chat, the bar follows the round to Done, and Clear removes it", async ({ aiden }) => {
   test.setTimeout(120_000);
   const { lmStudio, page } = aiden;
   await finishLmStudioOnboarding(page);
   // The deterministic model keeps no prompt cache, so the review is an isolated, tool-free request.
   lmStudio.answerToolFreeCompletions!(REVIEW_PROMPT, '{"verdict": "done", "reason": "The release notes are written."}');
-  const composer = page.locator("textarea");
-  await composer.fill("Hello there");
-  await composer.press("Enter");
-  await expect(page.getByText(E2E_ASSISTANT_RESPONSE).last()).toBeVisible({ timeout: 15_000 });
-
-  // The objective is sent as the person's own message, and the bar appears above the composer.
+  // A fresh draft: the objective becomes the chat's first message, and the bar appears above the composer.
   await setGoal(page, "Write the release notes");
+  await expect(page.getByText(E2E_ASSISTANT_RESPONSE).last()).toBeVisible({ timeout: 15_000 });
   const bar = page.getByRole("group", { name: "Goal: Write the release notes" });
   await expect(bar).toBeVisible({ timeout: 15_000 });
 

@@ -122,7 +122,7 @@ export type SlashCommandAvailability =
   | "workspace-chat"
   /** A local project or No workspace chat that can use design mode. */
   | "design-chat"
-  /** A saved chat on this computer; main refuses the chats a goal can't run in (Bots, agent harnesses). */
+  /** A chat on this computer, new ones included; main refuses the chats a goal can't run in (Bots, agent harnesses). */
   | "goal-chat";
 
 export interface SlashCommandDefinition {

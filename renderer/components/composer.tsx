@@ -233,7 +233,8 @@ interface ComposerProps {
     text: string,
     attachments: Attachment[],
     skillInvocation?: SkillInvocationV1,
-    options?: { visualize?: boolean; btw?: boolean },
+    /** `goal`: set this chat's keep-going goal once the message is saved, before its answer starts. */
+    options?: { visualize?: boolean; btw?: boolean; goal?: string },
   ) => Promise<void>;
   onQueue?: ComposerProps["onSend"];
   onSteer?: ComposerProps["onSend"];
@@ -1388,6 +1389,8 @@ export function Composer({
       skillRevision: number;
       visualize?: boolean;
       btw?: boolean;
+      /** The message is a goal's objective: the chat's goal is set before its answer starts. */
+      goal?: string;
       mode?: BusySendMode;
       afterCompaction?: boolean;
       afterForkSummary?: boolean;
@@ -1441,8 +1444,8 @@ export function Composer({
           payload.sendText,
           payload.attachments,
           payload.selectedSkill?.invocation,
-          payload.visualize || payload.btw
-            ? { visualize: payload.visualize, btw: payload.btw }
+          payload.visualize || payload.btw || payload.goal
+            ? { visualize: payload.visualize, btw: payload.btw, ...(payload.goal ? { goal: payload.goal } : {}) }
             : undefined,
         );
         if (payload.mode === "queue") {
@@ -1662,21 +1665,21 @@ export function Composer({
                 await chatsApi.clearGoal(chatId);
                 return true;
               case "set": {
-                if (isGenerating || sending) {
+                if (isGenerating || sending || hasQueuedMessages) {
                   toast.info("Finish the current answer first, then set the goal.");
                   return false;
                 }
-                // The goal first, so the kickoff note rides on the turn the objective starts.
-                await chatsApi.setGoal(chatId, command.objective, "slash");
-                const sent = await sendComposerPayload({
+                // The objective is the person's message. The pane sets the goal once it is
+                // saved (creating the chat first in a draft), before the answer starts, so
+                // the kickoff note rides on that answer.
+                return sendComposerPayload({
                   draftText: text,
                   sendText: command.objective,
                   attachments,
                   selectedSkill,
                   skillRevision: skillSelection.revision,
+                  goal: command.objective,
                 });
-                if (!sent) await chatsApi.clearGoal(chatId).catch(() => undefined);
-                return sent;
               }
             }
           } catch (error) {

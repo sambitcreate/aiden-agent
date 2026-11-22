@@ -421,12 +421,12 @@ test("/until and /follow need a chat with folder access, and /until can be set w
   assert.equal(executeSlashCommandAction(until, "npm test", { ...handlers, followThrough: undefined }), false);
 });
 
-test("/goal needs a saved chat on this computer, works while an answer runs, and passes what follows it", () => {
+test("/goal works in a new chat and while an answer runs, only on this computer, and passes what follows it", () => {
   const goal = command("goal");
   assert.deepEqual(slashCommandAvailability(goal, context), { available: true });
   assert.deepEqual(slashCommandAvailability(goal, { ...context, idle: false }), { available: true }, "pause and clear work mid-answer");
   assert.deepEqual(slashCommandAvailability(goal, { ...context, hasWorkspace: false }), { available: true }, "chats without a folder can have goals");
-  assert.match(slashCommandAvailability(goal, { ...context, hasChat: false }).reason ?? "", /send a message first/iu);
+  assert.deepEqual(slashCommandAvailability(goal, { ...context, hasChat: false }), { available: true }, "the objective can be a new chat's first message");
   assert.equal(
     slashCommandAvailability(goal, { ...context, goalBlockedReason: "Available in chats on this Mac." }).reason,
     "Available in chats on this Mac.",
