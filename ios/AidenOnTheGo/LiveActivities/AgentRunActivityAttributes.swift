@@ -358,6 +358,83 @@ enum AgentRunStalePresentation {
     }
 }
 
+/// Everything a Live Activity surface shows, as plain words: a title, one
+/// status line, an optional final excerpt and how time is drawn. Surfaces
+/// render this text on a clean background with no status marks or colors.
+struct AgentRunTextPresentation: Equatable {
+    enum Timing: Equatable {
+        /// Live elapsed timer since the run started.
+        case running(startedAt: Date)
+        /// Stale: the system draws a relative "updated" time.
+        case updated(at: Date)
+        /// Final: no time is shown.
+        case none
+    }
+
+    let title: String
+    let status: String
+    let compactStatus: String
+    let detail: String?
+    let timing: Timing
+
+    static func make(
+        state: AgentRunActivityAttributes.ContentState,
+        systemMarkedStale: Bool
+    ) -> AgentRunTextPresentation {
+        if state.isFinal {
+            let word: String
+            var detail: String?
+            switch state.status {
+            case .failed:
+                word = state.errorSummary.flatMap { $0.isEmpty ? nil : $0 } ?? String(localized: "Failed")
+            case .cancelled:
+                word = String(localized: "Stopped")
+            default:
+                word = String(localized: "Done")
+                detail = state.responseExcerpt.isEmpty ? nil : state.responseExcerpt
+            }
+            return AgentRunTextPresentation(
+                title: state.sessionTitle,
+                status: word,
+                compactStatus: state.status == .failed ? String(localized: "Failed") : word,
+                detail: detail,
+                timing: .none
+            )
+        }
+
+        if let stale = AgentRunStalePresentation.copy(for: state, systemMarkedStale: systemMarkedStale) {
+            return AgentRunTextPresentation(
+                title: state.sessionTitle,
+                status: stale.action.map { "\(stale.lead) · \($0)" } ?? stale.lead,
+                compactStatus: String(localized: "Latest"),
+                detail: nil,
+                timing: .updated(at: state.updatedAt)
+            )
+        }
+
+        let status: String
+        let compact: String
+        switch state.status {
+        case .waitingForApproval:
+            status = String(localized: "Needs your approval")
+            compact = String(localized: "Needs you")
+        case .waitingForAnswer:
+            status = String(localized: "Has a question for you")
+            compact = String(localized: "Needs you")
+        default:
+            status = state.currentActivity.isEmpty ? state.status.title : state.currentActivity
+            compact = state.status.compactTitle
+        }
+        return AgentRunTextPresentation(
+            title: state.sessionTitle,
+            status: status,
+            compactStatus: compact,
+            detail: nil,
+            timing: .running(startedAt: state.startedAt)
+        )
+    }
+}
+
 enum AgentLiveActivityReusePolicy {
     static func normalizedStreamID(_ streamID: String?) -> String? {
         guard let streamID else { return nil }

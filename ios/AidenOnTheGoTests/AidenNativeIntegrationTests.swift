@@ -578,6 +578,97 @@ final class AidenNativeIntegrationTests: XCTestCase {
         XCTAssertEqual(AgentRunActivityStateReducer.stale(state: thinking).currentActivity, "Latest status shown")
     }
 
+    func testTextPresentationNamesBlockingWaitsInPlainWords() {
+        let started = Date(timeIntervalSince1970: 1_000)
+        let approval = liveState(status: .waitingForApproval, startedAt: started, updatedAt: started)
+        let p = AgentRunTextPresentation.make(state: approval, systemMarkedStale: false)
+        XCTAssertEqual(p.status, "Needs your approval")
+        XCTAssertEqual(p.compactStatus, "Needs you")
+        XCTAssertEqual(p.timing, .running(startedAt: started))
+        XCTAssertEqual(
+            AgentRunTextPresentation.make(state: liveState(status: .waitingForAnswer), systemMarkedStale: false).status,
+            "Has a question for you"
+        )
+    }
+
+    func testTextPresentationWorkingUsesTheSanitizedActivityLine() {
+        let p = AgentRunTextPresentation.make(
+            state: liveState(status: .runningCommand, activity: "Running   npm\ntest"),
+            systemMarkedStale: false
+        )
+        XCTAssertEqual(p.status, "Running npm test")
+        XCTAssertEqual(p.compactStatus, AgentRunActivityStatus.runningCommand.compactTitle)
+        XCTAssertNil(p.detail)
+        XCTAssertEqual(
+            AgentRunTextPresentation.make(state: liveState(status: .thinking, activity: ""), systemMarkedStale: false).status,
+            "Thinking"
+        )
+    }
+
+    func testTextPresentationForStaleRunsUsesLatestStatusCopy() {
+        let updated = Date(timeIntervalSince1970: 2_000)
+        let reading = AgentRunTextPresentation.make(
+            state: liveState(status: .readingFiles, updatedAt: updated),
+            systemMarkedStale: true
+        )
+        XCTAssertEqual(reading.status, "Latest status shown")
+        XCTAssertEqual(reading.compactStatus, "Latest")
+        XCTAssertEqual(reading.timing, .updated(at: updated))
+        let waiting = AgentRunTextPresentation.make(state: liveState(status: .waitingForApproval), systemMarkedStale: true)
+        XCTAssertEqual(waiting.status, "Waiting for approval · Open to answer")
+    }
+
+    func testTextPresentationFinalStates() {
+        let done = AgentRunTextPresentation.make(
+            state: liveState(status: .complete, excerpt: "All 12 tests pass.", isFinal: true),
+            systemMarkedStale: true
+        )
+        XCTAssertEqual(done.status, "Done")
+        XCTAssertEqual(done.compactStatus, "Done")
+        XCTAssertEqual(done.detail, "All 12 tests pass.")
+        XCTAssertEqual(done.timing, .none)
+        XCTAssertNil(
+            AgentRunTextPresentation.make(state: liveState(status: .complete, isFinal: true), systemMarkedStale: false).detail
+        )
+        XCTAssertEqual(
+            AgentRunTextPresentation.make(
+                state: liveState(status: .failed, error: "Mac went to sleep", isFinal: true),
+                systemMarkedStale: false
+            ).status,
+            "Mac went to sleep"
+        )
+        XCTAssertEqual(
+            AgentRunTextPresentation.make(state: liveState(status: .failed, isFinal: true), systemMarkedStale: false).status,
+            "Failed"
+        )
+        XCTAssertEqual(
+            AgentRunTextPresentation.make(state: liveState(status: .cancelled, isFinal: true), systemMarkedStale: false).status,
+            "Stopped"
+        )
+    }
+
+    private func liveState(
+        status: AgentRunActivityStatus,
+        activity: String = "Working",
+        excerpt: String = "",
+        error: String? = nil,
+        startedAt: Date = Date(timeIntervalSince1970: 1_000),
+        updatedAt: Date = Date(timeIntervalSince1970: 1_005),
+        isFinal: Bool = false
+    ) -> AgentRunActivityAttributes.ContentState {
+        AgentRunActivityAttributes.ContentState(
+            sessionID: "chat-1",
+            sessionTitle: "Fix the flaky test",
+            status: status,
+            currentActivity: activity,
+            responseExcerpt: excerpt,
+            startedAt: startedAt,
+            updatedAt: updatedAt,
+            isFinal: isFinal,
+            errorSummary: error
+        )
+    }
+
     @MainActor
     func testLiveActivityStateIsBoundedAndResponseExcerptDefaultsOff() throws {
         let longTitle = String(repeating: "Title ", count: 30)
