@@ -382,8 +382,8 @@ final class AidenAppNavigation {
         didSet {
             guard besideList, !oldValue else { return }
             for tab in AidenAppTab.listTabs {
-                let path = AidenSplitNavigationPath.takingOver(path(of: tab), on: tab)
-                if path != self.path(of: tab) { setPath(path, of: tab) }
+                let updated = AidenSplitNavigationPath.takingOver(path(of: tab), on: tab)
+                if updated != self.path(of: tab) { setPath(updated, of: tab) }
             }
         }
     }
@@ -541,9 +541,9 @@ final class AidenAppNavigation {
         guard besideList, tab.listsRow(for: route) else { return open(route) }
         chatStartingVoice = nil
         for other in AidenAppTab.listTabs where other != tab {
-            var path = path(of: other)
-            Self.remove(route, from: &path)
-            if path != self.path(of: other) { setPath(path, of: other) }
+            var updated = path(of: other)
+            Self.remove(route, from: &updated)
+            if updated != self.path(of: other) { setPath(updated, of: other) }
         }
         self.tab = tab
         show(route, onTab: tab)
@@ -560,8 +560,8 @@ final class AidenAppNavigation {
               let index = path(of: holder).firstIndex(of: parent) else { return open(route) }
         chatStartingVoice = nil
         tab = holder
-        let path = Array(path(of: holder)[...index]) + [route]
-        if path != self.path(of: holder) { setPath(path, of: holder) }
+        let updated = Array(path(of: holder)[...index]) + [route]
+        if updated != self.path(of: holder) { setPath(updated, of: holder) }
     }
 
     /// Goes back to just below the route, wherever it is. Nothing happens when
@@ -650,15 +650,15 @@ final class AidenAppNavigation {
     /// starts over on it, unless it's already on the path: a fork over its
     /// source is gone back to there, so its source keeps the highlight.
     private func show(_ route: AidenAppRoute, onTab tab: AidenAppTab) {
-        var path = path(of: tab)
-        if besideList, tab.listsRow(for: route), !path.contains(where: { $0.screen == route.screen }) {
-            var split = AidenSplitNavigationPath(path)
+        var updated = path(of: tab)
+        if besideList, tab.listsRow(for: route), !updated.contains(where: { $0.screen == route.screen }) {
+            var split = AidenSplitNavigationPath(updated)
             split.select(route)
-            path = split.path
+            updated = split.path
         } else {
-            Self.show(route, on: &path)
+            Self.show(route, on: &updated)
         }
-        if path != self.path(of: tab) { setPath(path, of: tab) }
+        if updated != self.path(of: tab) { setPath(updated, of: tab) }
     }
 
     /// A tab holding a route to a machine that's gone goes back to the last
@@ -670,8 +670,8 @@ final class AidenAppNavigation {
             Array(path.prefix { $0.isReachable(on: installations) })
         }
         for tab in AidenAppTab.listTabs {
-            let path = reachable(path(of: tab))
-            if path != self.path(of: tab) { setPath(path, of: tab) }
+            let updated = reachable(path(of: tab))
+            if updated != self.path(of: tab) { setPath(updated, of: tab) }
         }
         savedPaths = savedPaths.filter { _, path in path.allSatisfy { $0.isReachable(on: installations) } }
     }
