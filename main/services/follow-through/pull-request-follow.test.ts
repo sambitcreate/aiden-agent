@@ -261,6 +261,12 @@ test("checks turning green wake the agent once per commit to wrap up, without me
   const startedGreen = evaluateFollow(record(), passing, noLogs, START + MINUTE);
   assert.equal(startedGreen.notices.length, 1);
   assert.equal(startedGreen.notices[0]!.wake, false);
+
+  // A failed read before the first successful one saw nothing, so green is still the baseline.
+  const failedFirst = followReadFailed(record(), "GitHub did not answer.", START + MINUTE);
+  const greenAfterFailure = evaluateFollow(failedFirst, passing, noLogs, START + 6 * MINUTE);
+  assert.equal(greenAfterFailure.notices[0]!.notice.title, "Checks passed");
+  assert.equal(greenAfterFailure.notices[0]!.wake, false);
 });
 
 test("a merged or closed pull request ends the follow with a notice that needs nothing", () => {

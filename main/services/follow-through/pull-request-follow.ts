@@ -455,9 +455,11 @@ export function evaluateFollow(
         "Wrap up: if review comments you were working through are all handled, tell the person in one line that the pull request is ready (ready to merge, if they asked for a merge). Do not merge it yourself in this answer. If nothing is left to say, end your answer without a reply.",
         "Aiden keeps following it for review comments until it is merged or closed.",
       ].join("\n\n"),
-      // The first read only learns where things stand; a follow started on a
-      // green pull request has nothing to wrap up.
-      wake: previous.lastCheckedAt !== undefined,
+      // The first successful read only learns where things stand; a follow
+      // started on a green pull request has nothing to wrap up. A failed
+      // read before it set lastCheckedAt but saw nothing, so the head commit
+      // (set only from an observation) is the baseline.
+      wake: previous.headSha !== undefined,
     });
   }
 
@@ -523,21 +525,27 @@ export function followUnchanged(previous: PullRequestFollowRecord, now: number, 
 }
 
 /**
- * Whether an unchanged probe may stand in for the full read. Not while a
- * check is failing and the early-failure or still-failing card may still be
- * due (those decisions need the clock, not a change), and not once the last
- * full read is old.
+ * Whether a read may send conditional probes at all. Not while a check is
+ * failing and the early-failure or still-failing card may still be due:
+ * those decisions need the clock, not a change. Once the still-failing card
+ * went out for this commit, nothing waits on the clock any more, so a quiet
+ * red pull request probes too.
+ */
+export function followMayAskForChanges(record: PullRequestFollowRecord): boolean {
+  return record.failingSince === undefined || (record.headSha !== undefined && record.stillFailingSha === record.headSha);
+}
+
+/**
+ * Whether an unchanged probe may stand in for the full read: probes are
+ * allowed, the stored tags are usable, and the last full read is recent.
  */
 export function followMayProbe(record: PullRequestFollowRecord, now: number): boolean {
   return (
+    followMayAskForChanges(record) &&
     record.etags !== undefined &&
     Object.keys(record.etags).length > 0 &&
     record.etagsAt !== undefined &&
-    now - record.etagsAt < FOLLOW_FULL_READ_MS &&
-    (record.failingSince === undefined ||
-      // Once the still-failing card went out for this commit, no decision
-      // waits on the clock any more, so a quiet red pull request probes too.
-      (record.headSha !== undefined && record.stillFailingSha === record.headSha))
+    now - record.etagsAt < FOLLOW_FULL_READ_MS
   );
 }
 
