@@ -45,6 +45,8 @@ export function scheduledGenerationSurface(input: ScheduledGenerationSurfaceInpu
       providerFingerprint: input.providerFingerprint,
       allowSubagents: false as const,
       usageSource: "scheduled" as const,
+      // On its schedule, from a trigger or from Run now, Aiden started this turn, not the person.
+      scheduledRun: true as const,
       turnId: input.streamId,
       ...(input.keepChatModel ? { keepChatModel: true as const } : {}),
     },

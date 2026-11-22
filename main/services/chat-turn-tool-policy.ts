@@ -77,6 +77,11 @@ export interface ChatTurnAudience {
    * the person, began it, so it is Aiden-started like a goal round.
    */
   leadChatTurn?: boolean;
+  /**
+   * A scheduled task's run (on its schedule, from a trigger, or Run now),
+   * whatever its usage source: Aiden started it, not the person.
+   */
+  scheduledRun?: boolean;
 }
 
 /** What a generation's execution options say about who the turn serves. */
@@ -88,6 +93,7 @@ export interface ChatTurnAudienceOptions {
   answersPerson?: boolean;
   goalRound?: boolean;
   leadChatTurn?: boolean;
+  scheduledRun?: boolean;
 }
 
 /** What the turn's own parameters say about inline visuals. */
@@ -124,6 +130,7 @@ export function chatTurnAudienceFor(options: ChatTurnAudienceOptions, params: Ch
       : {}),
     ...(options.goalRound === true ? { goalRound: true } : {}),
     ...(options.leadChatTurn === true ? { leadChatTurn: true } : {}),
+    ...(options.scheduledRun === true ? { scheduledRun: true } : {}),
   };
 }
 
@@ -316,15 +323,17 @@ export function argIs(key: string, ...values: readonly unknown[]): (args: Record
 
 /**
  * A turn nobody started on purpose: an unattended follow-up, a windowless
- * turn that isn't answering the person's own queued message, a goal round, or
- * a lead chat's turn in a chat it started.
+ * turn that isn't answering the person's own queued message, a goal round,
+ * a lead chat's turn in a chat it started, or a scheduled task's run (Run now
+ * included).
  */
 export function aidenStartedTurn(turn: ChatTurnAudience): boolean {
   return (
     turn.unattended ||
     (turn.windowless === true && turn.answersPerson !== true) ||
     turn.goalRound === true ||
-    turn.leadChatTurn === true
+    turn.leadChatTurn === true ||
+    turn.scheduledRun === true
   );
 }
 

@@ -5,6 +5,7 @@ import {
   type ChatToolSurface, type ChatTurnOwnerScope, type ChatTurnAudience, type ChatTurnAudienceOptions, type ChatTurnAudienceParams,
 } from "./chat-turn-tool-policy.js";
 import { UNATTENDED_FOLLOW_UP_GENERATION } from "./follow-through/notice-delivery.js";
+import { scheduledGenerationSurface } from "./conversation-surface-generation.js";
 
 const workspace: ChatToolSurface = { usageSource: "chat", bot: false, assistant: false, harnessProvider: false };
 const attended: ChatTurnAudience = { unattended: false, remoteAudience: false, visualize: false };
@@ -310,4 +311,42 @@ test("child_chats is offered to a workspace chat nobody started, never to a star
   assert.equal(offersChildChats({ ...offer, excludedToolNames: new Set(["ask_user_question"]) }), true);
   assert.equal(offersChildChats({ ...offer, enabled: false }), false);
   assert.equal(offersChildChats({ ...offer, workspace: false }), false);
+});
+
+test("a scheduled task's run (on its schedule, from a trigger, or Run now) can't set a check-back, suggest a goal or start chats", () => {
+  const surface = (input: { prompt: string; keepChatModel?: boolean }) =>
+    scheduledGenerationSurface({
+      chatId: "chat-1",
+      streamId: "scheduled-task-1-abc",
+      ownerId: "background-scheduled-task-1-abc",
+      workspaceId: "ws-1",
+      providerId: "anthropic",
+      model: "claude",
+      mode: undefined,
+      permission: "read-only",
+      excludeToolNames: new Set<string>(),
+      allowMcpTools: false,
+      ...input,
+    });
+  const runs = [
+    // The task's own chat, on its schedule or Run now (the same run).
+    ["a run in the task's own chat", surface({ prompt: "Summarize the open pull requests" })],
+    // A trigger's event follows the person's instructions as data.
+    ["a trigger run", surface({ prompt: "Summarize the change\n\n<event>diff</event>" })],
+    // Posting into the chat the task was made in, which keeps its own model.
+    ["a run posting into the chat it was made in", surface({ prompt: "Check the deploy", keepChatModel: true })],
+  ] as const;
+  for (const [label, run] of runs) {
+    for (const options of [run.options, { ...run.options, usageSource: "chat" as const }]) {
+      const turn = chatTurnAudienceFor(options, {});
+      const refuse = firstTurnToolRefusal([chatTurnToolRefusal(workspace, turn), chatTurnArgsToolRefusal(turn)]);
+      const as = `${label} (${options.usageSource})`;
+      assert.match(refuse("check_back", { action: "set", in_minutes: 10, note: "look again" }) ?? "", /^check_back cannot set a check-back in this turn/u, as);
+      assert.match(refuse("propose_goal", { objective: "Ship the release" }) ?? "", /^propose_goal is not available in this turn/u, as);
+      assert.match(refuse("child_chats", { action: "start", chats: [{ title: "Docs", task: "Update the docs" }] }) ?? "", /^child_chats cannot start chats in this turn/u, as);
+      // Reading and tidying up still work.
+      assert.equal(refuse("check_back", { action: "list" }), undefined, as);
+      assert.equal(refuse("child_chats", { action: "list" }), undefined, as);
+    }
+  }
 });

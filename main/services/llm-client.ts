@@ -722,6 +722,12 @@ export interface GenerationExecutionOptions {
    */
   leadChatTurn?: boolean;
   /**
+   * Main-owned: a scheduled task's run (on its schedule, from a trigger, or
+   * from Run now). Aiden started it, so it can't set check-backs, suggest a
+   * goal or start chats (`aidenStartedTurn`).
+   */
+  scheduledRun?: boolean;
+  /**
    * Main-owned: this turn answers input UserPromptSubmit already accepted
    * while the chat's previous run was going, so the hooks do not screen it
    * again and what they said then is this turn's prompt context.
