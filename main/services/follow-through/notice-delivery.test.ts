@@ -87,6 +87,10 @@ function fakeChat(options: { running?: boolean; scheduledRun?: boolean; now?: ()
       scheduledRun = false;
       for (const resolve of runWaiters.splice(0)) resolve();
     },
+    /** The long wait ran out with the scheduled run still holding the chat. */
+    runWaitTimedOut() {
+      for (const resolve of runWaiters.splice(0)) resolve();
+    },
     get running() {
       return running;
     },
@@ -208,6 +212,24 @@ test("a scheduled task's run in the chat never takes a notice; once it settles t
   quiet.finishScheduledRun();
   assert.equal((await recorded).kind, "recorded");
   assert.deepEqual(quiet.transcript, [{ text: "checks passed", via: "recorded" }]);
+});
+
+test("a notice waits out another feature's run once; still held after that, it is only recorded", async () => {
+  const chat = fakeChat({ scheduledRun: true });
+  const delivery = new NoticeDelivery(chat.deps);
+  const pending = delivery.post(post("checks failed"));
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(delivery.hasPending("chat-1"), false, "a goal is not held back while the other run keeps the chat busy");
+  chat.runWaitTimedOut();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(delivery.hasPending("chat-1"), true);
+  // Recording only waits briefly for the chat, never the long wait again.
+  chat.finishScheduledRun();
+  chat.finishTurn();
+  const outcome = await pending;
+  assert.deepEqual(outcome.kind === "recorded" ? outcome.reason : outcome.kind, "wake-unavailable");
+  assert.deepEqual(chat.transcript, [{ text: "checks failed", via: "recorded" }], "recorded, not woken");
+  assert.equal(chat.calls.filter((call) => call === "wait-run").length, 1);
 });
 
 test("a notice joins only the chat's own running turn, never a run another feature owns", () => {

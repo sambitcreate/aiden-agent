@@ -124,13 +124,18 @@ for approval.
   lead named there don't count as sites you named, so a fetch to one is still
   a new destination the gate asks about or judges. Once you write in the chat,
   the requests are yours again, though its runs stay tainted.
-- **A started chat's reply taints the lead.** A **Started chat** notice
-  quotes the started chat's reply, so the lead's run that reads it, and every
-  later run in the lead, holds outside content, and so do chats it starts or
-  sends to from then on. A pull request's news and a trigger's event text
-  count the same way. On a turn a notice woke, the Auto judge reads your last
-  message as the request, never the notice; with none, it judges with no
-  request.
+- **A started chat's reply taints the lead when that chat read outside
+  content.** Once a run in a started chat holds outside content (it read a web
+  page or a connector's data, or its lead's words carried some), its link is
+  marked and its **Started chat** notices say so. The lead's run that reads
+  such a notice, and every later run in the lead, holds outside content, and
+  so do chats it starts or sends to from then on. An ending from a chat that
+  read nothing outside leaves the lead as it was. A pull request's news and a
+  trigger's event text always count. On a turn a notice woke, the Auto judge
+  reads your last message as the request, never the notice; with none, it
+  judges with no request. A scheduled task's run is judged against the task's
+  prompt (without the event text it quotes), and a goal round against the
+  goal's objective.
 - **Only your own words name sites.** A notice is never counted as yours, in
   any chat: a **Started chat** notice (which quotes the started chat's reply),
   a scheduled task's, a check or check-back's, a goal round's, or a job or pull

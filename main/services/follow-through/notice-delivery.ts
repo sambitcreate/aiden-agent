@@ -3,10 +3,14 @@
 // woken with a main-owned turn that nobody is watching, within an hourly
 // budget; otherwise the notice is only recorded and the agent reads it with
 // the person's next message. A run another feature owns (a scheduled task's)
-// never takes a notice: delivery waits for it to settle, then joins or wakes
-// the chat's own turn. While the chat has an active keep-going goal, a
-// waking notice starts a goal round instead, which the person attends and
-// which uses no wake budget. Notices for one chat are delivered in order.
+// never takes a notice: delivery waits for it to settle once, for at most
+// `waitForRunToSettle`'s bound, then joins or wakes the chat's own turn, or
+// records the notice if the chat is still busy. While the chat has an active
+// keep-going goal, a waking notice starts a goal round instead, which the
+// person attends and which uses no wake budget. Notices for one chat are
+// delivered in order. Delivery lives in memory: a notice still waiting when
+// Aiden quits is lost, except a started chat's ending, which its link keeps
+// owed until `ChildChatCompletions.recoverOwed` posts it at the next start.
 
 import type { AgentNoticeV1 } from "../../../renderer/shared/agent-notices.js";
 
@@ -66,7 +70,10 @@ export interface NoticeDeliveryDeps {
   startGoalRound?(chatId: string, post?: AgentNoticePost): Promise<StartTurnResult | undefined>;
   append(post: AgentNoticePost): Promise<AppendResult>;
   waitForIdle(chatId: string): Promise<void>;
-  /** Waits, for as long as a whole run may take, until a run that holds the chat settles. */
+  /**
+   * Waits, for as long as a whole run may take, until a run that holds the
+   * chat settles. A notice waits like this at most once.
+   */
   waitForRunToSettle(chatId: string): Promise<void>;
   now(): number;
   onError?(error: unknown): void;
@@ -94,6 +101,8 @@ const MAX_ATTEMPTS = 4;
 export class NoticeDelivery {
   private readonly chains = new Map<string, Promise<unknown>>();
   private readonly wakes = new Map<string, number[]>();
+  /** Chats whose notice is waiting out a run another feature owns, and how many such waits. */
+  private readonly waitingOnRun = new Map<string, number>();
 
   constructor(private readonly deps: NoticeDeliveryDeps) {}
 
@@ -127,8 +136,24 @@ export class NoticeDelivery {
     return next;
   }
 
+  /**
+   * A notice for the chat is on its way. Not while it waits out a run another
+   * feature owns: that run already keeps the chat busy, and its settling is
+   * what a keep-going goal looks again after.
+   */
   hasPending(chatId: string): boolean {
-    return this.chains.has(chatId);
+    return this.chains.has(chatId) && !this.waitingOnRun.has(chatId);
+  }
+
+  private async waitOnRun(chatId: string): Promise<void> {
+    this.waitingOnRun.set(chatId, (this.waitingOnRun.get(chatId) ?? 0) + 1);
+    try {
+      await this.deps.waitForRunToSettle(chatId);
+    } finally {
+      const left = (this.waitingOnRun.get(chatId) ?? 1) - 1;
+      if (left > 0) this.waitingOnRun.set(chatId, left);
+      else this.waitingOnRun.delete(chatId);
+    }
   }
 
   /** Wakes left in the current hour for a chat. */
@@ -145,6 +170,7 @@ export class NoticeDelivery {
   }
 
   private async deliver(post: AgentNoticePost): Promise<AgentNoticeOutcome> {
+    let waitedOnRun = false;
     for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt += 1) {
       const queued = await this.deps.queueIntoRun(post);
       if (queued.kind === "queued") return { kind: "queued", messageId: queued.messageId };
@@ -157,7 +183,10 @@ export class NoticeDelivery {
         continue;
       }
       if (queued.kind === "busy") {
-        await this.deps.waitForRunToSettle(post.chatId);
+        // One bounded wait; a chat still held after it only records the notice.
+        if (waitedOnRun) break;
+        waitedOnRun = true;
+        await this.waitOnRun(post.chatId);
         continue;
       }
       const round = post.wake ? await this.deps.startGoalRound?.(post.chatId, post) : undefined;
@@ -185,7 +214,7 @@ export class NoticeDelivery {
       }
       return this.record(post, post.wake ? "wake-budget" : "not-waking");
     }
-    return this.record(post, "wake-unavailable");
+    return this.record(post, post.wake ? "wake-unavailable" : "not-waking");
   }
 
   private async wakeSaved(post: AgentNoticePost, messageId: string): Promise<AgentNoticeOutcome> {
@@ -223,8 +252,8 @@ export class NoticeDelivery {
       const queued = await this.deps.queueIntoRun(post);
       if (queued.kind === "queued") return { kind: "queued", messageId: queued.messageId };
       if (queued.kind === "saved") return { kind: "recorded", messageId: queued.messageId, reason };
-      if (queued.kind === "busy") await this.deps.waitForRunToSettle(post.chatId);
-      else await this.deps.waitForIdle(post.chatId);
+      // Recording never waits out another feature's run: a short wait, then it gives up.
+      await this.deps.waitForIdle(post.chatId);
     }
     return { kind: "dropped", reason: "The chat stayed busy." };
   }

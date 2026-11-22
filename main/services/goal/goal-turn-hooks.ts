@@ -29,6 +29,8 @@ export interface GoalTurnHooks {
   kickoff(chatId: string): string | undefined;
   /** The reminder kept after a compaction summary while the chat's goal is active. */
   reminder(chatId: string): string | undefined;
+  /** The chat's goal objective, as the person set it, for the Auto judge's request. */
+  objective(chatId: string): string | undefined;
   /** A run in the chat settled, whatever started it. */
   runSettled(event: GoalRunSettled): void;
   /** The chat was deleted: its goal goes with it. */
@@ -52,6 +54,7 @@ export interface GoalTurnHooks {
 const none: GoalTurnHooks = {
   kickoff: () => undefined,
   reminder: () => undefined,
+  objective: () => undefined,
   runSettled: () => undefined,
   chatDeleted: () => undefined,
   accessChanged: () => undefined,

@@ -182,7 +182,9 @@ function noticeFor(links: readonly OwedLink[]) {
       ? `“${links[0]!.title}” ${END_WORDS[links[0]!.owed.end]}`
       : `${links.length} started chats ${troubled ? "ended" : "finished"}`;
   const summary = links.length === 1 ? "" : links.map((link) => `${link.title}: ${END_WORDS[link.owed.end]}`).join(" · ");
-  return agentNotice({ source: "chat", tone, title, summary });
+  // A chat whose run held outside content may quote it in its reply or result.
+  const outside = links.some((link) => link.childTainted === true);
+  return agentNotice({ source: "chat", tone, title, summary, ...(outside ? { outside: true as const } : {}) });
 }
 
 function noticeText(
