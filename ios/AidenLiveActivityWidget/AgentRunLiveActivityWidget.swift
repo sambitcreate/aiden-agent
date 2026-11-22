@@ -131,8 +131,11 @@ private struct AgentRunTimingText: View {
         case .running(let startedAt):
             AgentRunElapsedTimerText(startedAt: startedAt)
         case .updated(let date):
+            // The relative style reserves width for longer values; pin the
+            // text to the trailing edge so it lines up with the card's edge.
             Text("\(Text(date, style: .relative)) ago")
                 .monospacedDigit()
+                .multilineTextAlignment(.trailing)
                 .lineLimit(1)
         case .none:
             EmptyView()
