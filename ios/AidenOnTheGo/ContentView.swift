@@ -189,6 +189,8 @@ struct ContentView: View {
     @State private var navigationRequest: AidenNavigationRequest?
     /// A place in the shell to show, asked for from outside it.
     @State private var shellRoute: AidenAppRoute?
+    /// A tab root asked for by a Home Screen widget button or Quick Action.
+    @State private var shellTab: AidenAppTab?
     @State private var sceneConnectionRefreshInProgress = false
     @State private var sceneRefreshGate = AidenSceneRefreshGate(refreshOnFirstActivation: true)
     @State private var connectScheduler: AidenHostConnectScheduler?
@@ -217,7 +219,8 @@ struct ContentView: View {
                 coordinator: coordinator,
                 inboxStore: inboxStore,
                 navigationRequest: $navigationRequest,
-                routeRequest: $shellRoute
+                routeRequest: $shellRoute,
+                tabRequest: $shellTab
             )
         }
         .task { await coordinator.start() }
@@ -259,6 +262,15 @@ struct ContentView: View {
             Button("Cancel", role: .cancel) { newChatConsent.invalidate() }
         } message: { target in
             Text("Create a chat in \(target.workspaceName) on \(target.installationName)? Use the microphone button when you are ready to dictate.")
+        }
+        // Taken here, where the link consent lives, so a newer tab request
+        // always supersedes a waiting link before the shell shows the tab.
+        .onChange(of: foregroundIntents.pendingTab, initial: true) {
+            guard let tab = foregroundIntents.takePendingTab() else { return }
+            externalNewChats.invalidate()
+            newChatConsent.invalidate()
+            showsNewChatConsent = false
+            shellTab = tab
         }
         .task(id: foregroundIntents.actions.map(\.id)) {
             // A newer native intent supersedes a link still waiting for readiness.
