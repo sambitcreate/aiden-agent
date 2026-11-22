@@ -39,6 +39,7 @@ function harness(options: {
     jobs: false,
     activity: { toolCalls: 1, newTextChars: 0 } as GoalRoundActivity,
     roundStart: "started" as GoalRoundStart,
+    noticeStart: "started" as GoalRoundStart,
     /** Steps that throw, as a missing provider or a broken chat file would. */
     throws: { activity: false, context: false, start: false },
     /** Holds startRound open, as a window's 5-second claim does. */
@@ -94,6 +95,7 @@ function harness(options: {
     },
     startNoticeRound: async (chatId, _context, notice) => {
       noticeRounds.push(notice?.text ?? "(saved)");
+      if (state.noticeStart !== "started") return state.noticeStart === "busy" ? { kind: "busy" } : { kind: "unavailable", reason: "No model" };
       return { kind: "started", streamId: `notice-${chatId}-${noticeRounds.length}` };
     },
     report: (event) => events.push(event),
@@ -420,7 +422,7 @@ test("a waking notice starts a goal round only while the goal is active", async 
   const started = await h.loop.noticeRound(CHAT, { text: "job ended", notice: agentNotice({ source: "background_job", tone: "success", title: "Done", summary: "x" }) });
   assert.equal(started?.kind, "started");
   assert.deepEqual(h.noticeRounds, ["job ended"]);
-  assert.equal(h.goal()?.rounds, 1, "answering a notice is part of the current round");
+  assert.equal(h.goal()?.rounds, 2, "answering a notice is a round of its own");
   h.loop.pause(CHAT);
   assert.equal(await h.loop.noticeRound(CHAT), undefined, "a paused goal leaves notices to the usual wake");
   assert.deepEqual(h.noticeRounds, ["job ended"]);
@@ -607,4 +609,26 @@ test("a round still starting stops counting as current once the person pauses, c
     release();
     await h.flush();
   }
+});
+
+test("a notice round counts as a round: a job that keeps ending can't run past the round limit", async () => {
+  const h = harness();
+  await h.loop.set(CHAT, { objective: "Ship it", source: "slash" });
+  const news = () => ({ text: "job ended", notice: agentNotice({ source: "background_job", tone: "success", title: "Done", summary: "x" }) });
+  assert.equal((await h.loop.noticeRound(CHAT, news()))?.kind, "started");
+  assert.equal(h.goal()?.rounds, 2, "the notice's round is round 2");
+
+  h.state.noticeStart = "busy";
+  assert.equal((await h.loop.noticeRound(CHAT, news()))?.kind, "busy");
+  assert.equal(h.goal()?.rounds, 2, "a round that didn't start isn't counted");
+  h.state.noticeStart = "started";
+
+  for (let round = 3; round <= GOAL_MAX_ROUNDS; round += 1) await h.loop.noticeRound(CHAT, news());
+  assert.equal(h.goal()?.rounds, GOAL_MAX_ROUNDS);
+  const started = h.noticeRounds.length;
+  assert.equal(await h.loop.noticeRound(CHAT, news()), undefined, "past the limit the notice wakes the chat as usual");
+  assert.equal(h.noticeRounds.length, started, "no 51st round");
+  assert.equal(h.goal()?.status, "paused");
+  assert.equal(h.goal()?.cause, "round-limit");
+  assert.equal(h.settled.length, 1, "the person is told once");
 });

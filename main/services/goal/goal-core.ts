@@ -28,6 +28,22 @@ import {
   type GoalSource,
 } from "../../../renderer/shared/goal.js";
 import type { GoalVerdict } from "./goal-verdict.js";
+import { ASSISTANT_WORKSPACE_ID } from "../../../renderer/shared/assistant.js";
+import { isAcpHarnessProvider } from "../../../renderer/shared/acp-harness.js";
+import type { Chat } from "../types.js";
+
+/** Why this chat cannot have a goal: Bots, the Assistant, agent harnesses and chats another feature owns. */
+export function goalChatRefusal(
+  chat: Pick<Chat, "botId" | "owner" | "workspaceId" | "providerId" | "model"> | null | undefined,
+): string | undefined {
+  if (!chat) return "This chat no longer exists.";
+  if (chat.botId) return "Bots can't have a keep-going goal.";
+  if (chat.owner !== undefined) return "This chat runs its own way, so it can't have a goal.";
+  if (chat.workspaceId === ASSISTANT_WORKSPACE_ID) return "The Assistant can't have a keep-going goal.";
+  if (!chat.providerId || !chat.model) return "Choose a model for this chat first.";
+  if (isAcpHarnessProvider(chat.providerId)) return "Chats with an agent harness can't have a keep-going goal.";
+  return undefined;
+}
 
 export interface GoalRef {
   id: string;
@@ -111,6 +127,13 @@ function write(goal: GoalRecordV1, now: number, change: Partial<GoalRecordV1>): 
   return { ...goal, ...change, updatedAt: now, revision: goal.revision + 1 };
 }
 
+/**
+ * Stops that can follow from a round that wanted the chat's window: the
+ * reviewer saying the person is needed, or rounds going nowhere. Only these
+ * keep `windowWanted`, so the bar's Continue here never hides another reason.
+ */
+const WINDOW_WANTED_CAUSES: ReadonlySet<GoalCause> = new Set(["blocked", "stalled"]);
+
 function stop(
   goal: GoalRecordV1,
   now: number,
@@ -120,6 +143,15 @@ function stop(
 ): GoalRecordV1 {
   const next = write(goal, now, { status, cause, reason: reason ?? goalCauseText(cause, goal) });
   delete next.waitingSince;
+  if (!WINDOW_WANTED_CAUSES.has(cause)) delete next.windowWanted;
+  return next;
+}
+
+/** A new round: what the round before wanted is its own; this one sets it again if it needs the window too. */
+function nextRound(goal: GoalRecordV1, now: number, change: Partial<GoalRecordV1>): GoalRecordV1 {
+  const next = write(goal, now, change);
+  delete next.waitingSince;
+  delete next.windowWanted;
   return next;
 }
 
@@ -156,6 +188,7 @@ export function resumeGoal(goal: GoalRecordV1, input: { now: number; boot: strin
   delete next.reason;
   delete next.lastContinueReason;
   delete next.waitingSince;
+  delete next.windowWanted;
   return next;
 }
 
@@ -171,6 +204,17 @@ export function goalWindowWanted(goal: GoalRecordV1, wanted: boolean, now: numbe
   const next = write(goal, now, {});
   delete next.windowWanted;
   return next;
+}
+
+/**
+ * News for the chat (a job ending, a pull request update) starts a round: it
+ * counts like any round, toward the same limit, and ends a `wait`. At the
+ * limit the goal pauses instead, and the news wakes the chat as usual.
+ */
+export function goalNoticeRound(goal: GoalRecordV1, now: number): GoalRecordV1 {
+  if (goal.status !== "active") return goal;
+  if (goal.rounds >= goal.maxRounds) return stop(goal, now, "paused", "round-limit");
+  return nextRound(goal, now, { rounds: goal.rounds + 1 });
 }
 
 /**
@@ -309,9 +353,7 @@ function continueGoal(goal: GoalRecordV1, reason: string, round: GoalRoundActivi
   const base = { ...goal, stalls, lastContinueReason: reason };
   if (stalls >= GOAL_MAX_STALLS) return { goal: stop(base, now, "paused", "stalled"), next: "settled" };
   if (goal.rounds >= goal.maxRounds) return { goal: stop(base, now, "paused", "round-limit"), next: "settled" };
-  const next = write(base, now, { rounds: goal.rounds + 1, reason });
-  delete next.waitingSince;
-  return { goal: next, next: "round" };
+  return { goal: nextRound(base, now, { rounds: goal.rounds + 1, reason }), next: "round" };
 }
 
 /** A command goal's check result: exit code 0 is done; otherwise the next round, up to the limit. */
@@ -319,7 +361,7 @@ export function applyGoalCheck(goal: GoalRecordV1, result: { passed: boolean; su
   if (goal.status !== "active" || !goal.check) return { goal, next: "settled" };
   if (result.passed) return { goal: stop(goal, now, "done", "done", result.summary), next: "settled" };
   if (goal.rounds >= goal.maxRounds) return { goal: stop(goal, now, "paused", "round-limit"), next: "settled" };
-  return { goal: write(goal, now, { rounds: goal.rounds + 1, reason: result.summary }), next: "round" };
+  return { goal: nextRound(goal, now, { rounds: goal.rounds + 1, reason: result.summary }), next: "round" };
 }
 
 function sameReason(left: string, right: string): boolean {

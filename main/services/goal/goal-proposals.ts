@@ -4,7 +4,7 @@
  * Start sets the goal (the renderer sends the objective as the person's
  * message, as `/goal` does). Proposals live in memory: a restart forgets them.
  */
-import { validateGoalObjective, type GoalProposalView } from "../../../renderer/shared/goal.js";
+import { validateGoalProposal, type GoalProposalView } from "../../../renderer/shared/goal.js";
 
 export interface GoalProposalsDependencies {
   now(): number;
@@ -24,7 +24,7 @@ export class GoalProposals {
 
   /** Shows the card, replacing an earlier proposal. Throws why it can't (an invalid objective, a goal at work). */
   async propose(chatId: string, objective: string): Promise<GoalProposalView> {
-    const valid = validateGoalObjective(objective);
+    const valid = validateGoalProposal(objective);
     if (valid.kind === "invalid") throw new Error(valid.message);
     const refusal = await this.deps.refusal(chatId);
     if (refusal) throw new Error(refusal);

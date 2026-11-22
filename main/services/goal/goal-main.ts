@@ -7,8 +7,6 @@
  */
 import { randomUUID } from "node:crypto";
 import { ipcMain, logger, powerMonitor } from "../../platform.js";
-import { ASSISTANT_WORKSPACE_ID } from "../../../renderer/shared/assistant.js";
-import { isAcpHarnessProvider } from "../../../renderer/shared/acp-harness.js";
 import { goalLoopEnabled, type GoalView } from "../../../renderer/shared/goal.js";
 import { reportAnalyticsEvent } from "../analytics/analytics-report.js";
 import { ATTENDED_TURN_PROMPT_LIFETIME_MS, type OwedTurnPromptLifetime } from "../chat-owed-turn-prompts.js";
@@ -35,6 +33,7 @@ import type { StartTurnResult } from "../follow-through/notice-delivery.js";
 import type { ChatGenerationOwner } from "../chat-generation-owner.js";
 import type { Chat } from "../types.js";
 import type { AgentNoticeV1 } from "../../../renderer/shared/agent-notices.js";
+import { goalChatRefusal } from "./goal-core.js";
 import { GoalLoop, type GoalRoundStart } from "./goal-loop.js";
 import { goalRoundStartRequest } from "./goal-round-start.js";
 import { reviewGoal } from "./goal-reviewer.js";
@@ -49,16 +48,9 @@ function transcriptChanged(chatId: string): void {
   ipcMain.broadcast("chats:follow-through-changed", { chatId, transcript: true });
 }
 
-/** Why this chat cannot have a goal: Bots, the Assistant, agent harnesses and chats another feature owns. */
+/** Why this chat cannot have a goal (`goalChatRefusal`). */
 async function eligibility(chatId: string): Promise<string | undefined> {
-  const chat = await chatStore.get(chatId);
-  if (!chat) return "This chat no longer exists.";
-  if (chat.botId) return "Bots can't have a keep-going goal.";
-  if (chat.owner !== undefined) return "This chat runs its own way, so it can't have a goal.";
-  if (chat.workspaceId === ASSISTANT_WORKSPACE_ID) return "The Assistant can't have a keep-going goal.";
-  if (!chat.providerId || !chat.model) return "Choose a model for this chat first.";
-  if (isAcpHarnessProvider(chat.providerId)) return "Chats with an agent harness can't have a keep-going goal.";
-  return undefined;
+  return goalChatRefusal(await chatStore.get(chatId));
 }
 
 /** What the round that just settled did: everything after the chat's last user message. */
@@ -153,8 +145,11 @@ async function startAttendedRound(
 
 interface WindowRoundPayload {
   context: Parameters<typeof goalRoundStartRequest>[1];
-  round: { text: string; notice: AgentNoticeV1 };
+  /** The round's message; none when it answers a notice already saved. */
+  round: { text: string; notice: AgentNoticeV1 } | undefined;
   isCurrent: RoundStillCurrent;
+  /** How the window's start went, set by `startGoalWindowRound`. */
+  outcome?: StartTurnResult;
 }
 
 /** Which window, if any, starts each due round (`goal-window-rounds.ts`). */
@@ -173,18 +168,33 @@ const goalWindowRounds = new GoalWindowRounds<WindowRoundPayload>({
   },
 });
 
-/** A round starts in a focused window that shows the chat when there is one, and without a window otherwise. */
+/**
+ * A round, the next one or one that answers a notice, starts in a focused
+ * window that shows the chat when there is one, and without a window otherwise.
+ */
+async function startGoalRound(
+  chatId: string,
+  context: Parameters<typeof goalRoundStartRequest>[1],
+  round: { text: string; notice: AgentNoticeV1 } | undefined,
+  isCurrent: RoundStillCurrent,
+): Promise<StartTurnResult> {
+  const payload: WindowRoundPayload = { context, round, isCurrent };
+  const inWindow = await goalWindowRounds.offer(chatId, payload);
+  if (inWindow !== "no-window") {
+    return payload.outcome ?? (inWindow === "busy" ? { kind: "busy" } : { kind: "unavailable", reason: "The round could not start." });
+  }
+  // The offer can wait up to 5 seconds for a window: the person may have paused meanwhile.
+  if (!isCurrent()) return { kind: "unavailable", reason: "The goal changed before the round began." };
+  return startAttendedRound(chatId, context, round, undefined, isCurrent);
+}
+
 async function startRound(
   chatId: string,
   context: Parameters<typeof goalRoundStartRequest>[1],
   round: { text: string; notice: AgentNoticeV1 },
   isCurrent: RoundStillCurrent,
 ): Promise<GoalRoundStart> {
-  const inWindow = await goalWindowRounds.offer(chatId, { context, round, isCurrent });
-  if (inWindow !== "no-window") return inWindow;
-  // The offer can wait up to 5 seconds for a window: the person may have paused meanwhile.
-  if (!isCurrent()) return "unavailable";
-  const started = await startAttendedRound(chatId, context, round, undefined, isCurrent);
+  const started = await startGoalRound(chatId, context, round, isCurrent);
   return started.kind === "started" ? "started" : started.kind === "busy" ? "busy" : "unavailable";
 }
 
@@ -216,9 +226,12 @@ export async function startGoalWindowRound(owner: ChatGenerationOwner, token: st
   if (!claim) throw new Error("This keep-going round is no longer waiting for this window.");
   let result: StartTurnResult = { kind: "unavailable", reason: "The round could not start." };
   try {
-    result = await startAttendedRound(claim.chatId, claim.payload.context, claim.payload.round, { owner, streamId }, claim.payload.isCurrent);
+    // Its cards show in the window, and one unanswered for 30 minutes moves the goal to Needs you, as off screen.
+    const roundOwner = llmClient.attendedWindowOwner(owner, claim.chatId, roundPromptLifetime);
+    result = await startAttendedRound(claim.chatId, claim.payload.context, claim.payload.round, { owner: roundOwner, streamId }, claim.payload.isCurrent);
     return result;
   } finally {
+    claim.payload.outcome = result;
     claim.settle(result.kind === "started" ? { kind: "started", streamId } : { kind: result.kind === "busy" ? "busy" : "unavailable" });
     if (result.kind === "started") goalLoop.windowRoundStarted(claim.chatId);
   }
@@ -292,7 +305,7 @@ export const goalLoop = new GoalLoop({
   runCheck: (goal, signal) => runGoalCheck(goal.chatId, goal.check!.command, signal),
   prepareCheck: prepareGoalCheck,
   startRound,
-  startNoticeRound: startAttendedRound,
+  startNoticeRound: startGoalRound,
   report: (event) => {
     if (event.event === "goal_started") reportAnalyticsEvent("goal_started", event.properties);
     else reportAnalyticsEvent("goal_settled", event.properties);

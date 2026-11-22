@@ -73,7 +73,10 @@ test("every action is a real, keyboard-reachable button, and a pending one waits
   }
   const pending = render(active, "pause");
   assert.equal(pending.buttons.find((button) => button.textContent === "Pause")?.hasAttribute("disabled"), true);
-  assert.equal(pending.buttons.find((button) => button.textContent === "Clear")?.hasAttribute("disabled"), false);
+  assert.equal(pending.buttons.find((button) => button.textContent === "Clear")?.hasAttribute("disabled"), true, "nothing else can race it");
+  // The bar already shows the Pause it's waiting on: Resume and Clear wait too.
+  const shown = render({ ...active, status: "paused", cause: "person" }, "pause");
+  assert.deepEqual(shown.buttons.map((button) => [button.textContent, button.hasAttribute("disabled")]), [["Resume", true], ["Clear", true]]);
 });
 
 test("a tap shows its result at once: pause, Keep going from round 1, and clear", () => {

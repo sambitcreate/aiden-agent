@@ -7,6 +7,12 @@ import { MAX_DONE_WHEN_CHECKS, MAX_DONE_WHEN_COMMAND_CHARS } from "./follow-thro
 
 export const GOAL_VERSION = 1;
 export const MAX_GOAL_OBJECTIVE_CHARS = 2_000;
+/**
+ * The longest objective the agent may suggest (`propose_goal`). Shorter than
+ * the person's own, and one line, so the card shows every character the
+ * person's Start would send.
+ */
+export const MAX_GOAL_PROPOSAL_CHARS = 300;
 /** Rounds a reviewed goal runs before it pauses. Keep going starts again at round 1. */
 export const GOAL_MAX_ROUNDS = 50;
 /** Checks a command goal (`/until`) runs before it pauses: each is a full round plus the command. */
@@ -150,6 +156,17 @@ export function validateGoalObjective(value: string): { kind: "set"; objective: 
   if (!objective) return { kind: "invalid", message: "Say what the goal is." };
   if ([...objective].length > MAX_GOAL_OBJECTIVE_CHARS) {
     return { kind: "invalid", message: `A goal can be up to ${MAX_GOAL_OBJECTIVE_CHARS.toLocaleString("en-US")} characters.` };
+  }
+  return { kind: "set", objective };
+}
+
+/** An objective the agent suggests: one line of up to 300 characters, so nothing hides past what the card shows. */
+export function validateGoalProposal(value: string): { kind: "set"; objective: string } | { kind: "invalid"; message: string } {
+  const objective = value.trim();
+  if (!objective) return { kind: "invalid", message: "Say what the goal is." };
+  if (/[\p{Cc}\u2028\u2029]/u.test(objective)) return { kind: "invalid", message: "A suggested goal must be one line." };
+  if ([...objective].length > MAX_GOAL_PROPOSAL_CHARS) {
+    return { kind: "invalid", message: `A suggested goal can be up to ${MAX_GOAL_PROPOSAL_CHARS} characters.` };
   }
   return { kind: "set", objective };
 }
@@ -299,6 +316,8 @@ export interface GoalProposalView {
 export function parseGoalProposal(value: unknown): GoalProposalView | null {
   if (!isRecord(value)) return null;
   const { chatId, objective, proposedAt } = value;
-  if (typeof chatId !== "string" || !chatId || typeof objective !== "string" || !objective || !count(proposedAt)) return null;
+  if (typeof chatId !== "string" || !chatId || typeof objective !== "string" || !count(proposedAt)) return null;
+  const valid = validateGoalProposal(objective);
+  if (valid.kind === "invalid" || valid.objective !== objective) return null;
   return { chatId, objective, proposedAt };
 }

@@ -7,13 +7,13 @@
  */
 import { Type } from "typebox";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
-import { MAX_GOAL_OBJECTIVE_CHARS, PROPOSE_GOAL_TOOL_NAME } from "../../../renderer/shared/goal.js";
+import { MAX_GOAL_PROPOSAL_CHARS, PROPOSE_GOAL_TOOL_NAME } from "../../../renderer/shared/goal.js";
 import type { GoalProposals } from "./goal-proposals.js";
 
 const PARAMETERS = Type.Object(
   {
     objective: Type.String({
-      description: `What "done" means, as one line the person would recognise (up to ${MAX_GOAL_OBJECTIVE_CHARS} characters), e.g. "Get the test suite passing and write up what changed".`,
+      description: `What "done" means, as one line the person would recognise (up to ${MAX_GOAL_PROPOSAL_CHARS} characters), e.g. "Get the test suite passing and write up what changed".`,
     }),
   },
   { additionalProperties: false },

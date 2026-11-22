@@ -22,7 +22,7 @@ Other commands:
 
 ## Aiden can suggest a goal
 
-When a request in a chat you're typing in looks like longer work, Aiden can suggest a goal instead of setting one. A card above the composer shows "Keep going until:" and the objective, with **Start** and **Not now**. Nothing starts until you press Start: Start sends the objective as your message and sets the goal, as if you had typed `/goal`, and Not now removes the card. Setting any goal, or deleting the chat, removes it too, and a chat shows one suggestion at a time.
+When a request in a chat you're typing in looks like longer work, Aiden can suggest a goal instead of setting one. A card above the composer shows "Keep going until:" and the objective, with **Start** and **Not now**. A suggested objective is one line of up to 300 characters and the card shows all of it, so you see everything Start would send. Nothing starts until you press Start: Start sends the objective as your message and sets the goal, as if you had typed `/goal`, and Not now removes the card. Setting any goal, or deleting the chat, removes it too, and a chat shows one suggestion at a time.
 
 Aiden can only suggest a goal in a turn you started in a chat that can have one and has no goal at work. It can't suggest one in a goal round, a follow-up or check-back answer, a task, a phone turn, a Bot or the Assistant. Suggestions are kept in memory only, so a restart clears them. The suggestion shows in the answer's activity as **Suggest a goal**.
 
@@ -38,7 +38,7 @@ While a chat has a goal, a bar above the composer shows it:
 | Needs you | "Needs you" and what it needs | Keep going, Clear |
 | Done | "Done" and the reason | Clear |
 
-Resume and Keep going both start again from round 1 with a fresh progress count; the limit stays 50 rounds. A round counts only once it starts: if you send a message while Aiden is checking, your message's answer is that round's work and the count stays. Taps take effect at once. If Aiden can't make the change, the bar goes back and says why.
+Resume and Keep going both start again from round 1 with a fresh progress count; the limit stays 50 rounds. A round counts only once it starts: if you send a message while Aiden is checking, your message's answer is that round's work and the count stays. Taps take effect at once, and the bar's buttons wait while one change is on its way. If Aiden can't make the change, the bar goes back and says why.
 
 ## How a round works
 
@@ -48,18 +48,18 @@ Resume and Keep going both start again from round 1 with a fresh progress count;
 
 ### Approvals, helpers and notices in rounds
 
-- **Approvals and questions** from a round show in the chat (and on a paired phone) like any other, and wait 30 minutes instead of an owed turn's 5. One nobody answers is denied, the round is told, and the goal moves to **Needs you**.
+- **Approvals and questions** from a round show in the chat (and on a paired phone) like any other, and wait 30 minutes instead of an owed turn's 5, also in a round running in a window. One nobody answers is denied, the round is told, and the goal moves to **Needs you**.
 - Tools that only the chat's own window can approve (image classification and image generation) are refused in rounds that run without a window; the round is told why. A round in a window can use them (see below).
 - A round may run **read-only helpers** (scout, planner and reviewer, without writes, shell, mutating connectors or nesting). A helper that would change something is refused, and the round does the change itself.
-- While a goal is working, news that would wake the chat (a background job ending, a pull request update) starts a goal round instead of an unattended follow-up. These rounds don't count toward the 6 automatic wake-ups an hour, and the goal's own limits apply.
+- While a goal is working, news that would wake the chat (a background job ending, a pull request update) starts a goal round instead of an unattended follow-up, in a focused window showing the chat when there is one. These rounds don't count toward the 6 automatic wake-ups an hour; each counts as a round toward the goal's 50, and at the limit the goal pauses and the news wakes the chat as usual.
 - A goal at **Needs you** shows in the Inbox's **Needs you** section with its reason, and counts toward the Dock badge, until you press Keep going or clear it.
 
 ### Rounds on screen: the browser and Computer Use
 
 - When a round is due and a focused Aiden window shows the chat (and the screen isn't locked), the round starts in that window, as if you had sent it there. It can use everything your own message could: the browser, Computer Use, the to-do list and the approvals only the window can give. Computer Use keeps its own access card and approval mode.
 - Focus is checked only when the round starts. Computer Use brings other apps to the front, so Aiden losing focus during the round is fine.
-- If that window closes, reloads or switches to another chat during the round, the round stops and the goal pauses with "The chat was closed". Keep going starts it again.
-- Otherwise rounds run without a window, and a call that needs one (the browser, Computer Use) is refused; the round is told why. The goal bar then says "Open this chat to let Aiden use the browser or Computer Use" with **Continue here** once the goal stops at Needs you or Aiden pauses it; pressing it starts the next round from that window.
+- If that window closes, reloads or switches to another chat (or a new chat) during the round, the round stops and the goal pauses with "The chat was closed". Keep going starts it again. Opening Settings or another page in that window doesn't stop the round.
+- Otherwise rounds run without a window, and a call that needs one (the browser, Computer Use) is refused; the round is told why. The goal bar then says "Open this chat to let Aiden use the browser or Computer Use" with **Continue here** once the goal stops at Needs you or Aiden pauses it because of that round; pressing it starts the next round from that window. Any other stop, and Keep going, show the goal's own reason again.
 
 ## When a goal pauses on its own
 

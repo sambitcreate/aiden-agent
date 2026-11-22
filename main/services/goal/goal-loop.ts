@@ -32,6 +32,7 @@ import {
   compareAndSetGoal,
   createGoal,
   goalAfterSettle,
+  goalNoticeRound,
   goalPromptUnanswered,
   goalRoundNotStarted,
   goalWaitExpired,
@@ -103,7 +104,12 @@ export interface GoalLoopDependencies {
    * A round that answers a notice (a finished job, a pull request update):
    * with `notice` saved first, or answering the notice already saved.
    */
-  startNoticeRound(chatId: string, context: OwedTurnContext, notice?: { text: string; notice: AgentNoticeV1 }): Promise<StartTurnResult>;
+  startNoticeRound(
+    chatId: string,
+    context: OwedTurnContext,
+    notice: { text: string; notice: AgentNoticeV1 } | undefined,
+    isCurrent: () => boolean,
+  ): Promise<StartTurnResult>;
   report(event: GoalAnalyticsEvent): void;
   /** A goal settled on its own (done, needs you, or paused by the system). */
   settled?(goal: GoalRecordV1): void;
@@ -266,9 +272,34 @@ export class GoalLoop {
     const goal = this.goals.get(chatId);
     if (this.stopped || goal?.status !== "active") return undefined;
     const context = this.contexts.get(chatId) ?? (await this.deps.fallbackContext(chatId));
-    if (this.goals.get(chatId)?.status !== "active") return undefined;
+    const latest = this.goals.get(chatId);
+    if (latest?.status !== "active") return undefined;
     if (!context) return { kind: "unavailable", reason: "The chat has no model yet." };
-    return this.deps.startNoticeRound(chatId, context, notice);
+    // A notice round is a round: it counts toward the limit, and at the limit
+    // the goal pauses and the notice wakes the chat as any notice does.
+    const counted = goalNoticeRound(latest, this.deps.now());
+    if (counted.status !== "active") {
+      this.stopReview(chatId);
+      this.settle(counted);
+      return undefined;
+    }
+    this.write(counted);
+    const isCurrent = () => {
+      const current = this.goals.get(chatId);
+      return !this.stopped && current?.id === counted.id && current.revision === counted.revision && current.status === "active";
+    };
+    let result: StartTurnResult;
+    try {
+      result = await this.deps.startNoticeRound(chatId, context, notice, isCurrent);
+    } catch (error) {
+      this.deps.log("A keep-going notice round could not start.", error);
+      result = { kind: "unavailable", reason: "The round could not start." };
+    }
+    if (result.kind !== "started") {
+      const restored = compareAndSetGoal(this.goals.get(chatId), counted, (current) => goalRoundNotStarted(current, latest.rounds, this.deps.now()));
+      if (restored.ok && restored.goal !== this.goals.get(chatId)) this.write(restored.goal);
+    }
+    return result;
   }
 
   /** A round's approval or question expired unanswered: the goal waits for the person. */

@@ -58,7 +58,6 @@ test("a due round goes to the focused window showing the chat, which starts it",
   assert.equal(h.rounds.claim(request!.token, "doc-b"), undefined, "a round is taken once");
   claim!.settle({ kind: "started", streamId: "stream-1" });
   assert.equal(await offered, "started");
-  assert.equal(h.rounds.hasWindowRound("chat-1"), true);
   assert.equal(h.timers[0]?.cancelled, true, "the claim timer stops once the window takes it");
 });
 
@@ -98,7 +97,8 @@ test("a window that couldn't start the round says so", async () => {
   const offered = h.rounds.offer("chat-1", { round: 2 });
   h.rounds.claim(h.requests("doc-a")[0]!.token, "doc-a")!.settle({ kind: "busy" });
   assert.equal(await offered, "busy");
-  assert.equal(h.rounds.hasWindowRound("chat-1"), false);
+  h.rounds.gone("doc-a");
+  assert.deepEqual(h.lost, [], "a round that never started isn't the window's to stop");
 });
 
 test("the window closing or showing another chat mid-round stops that round; losing focus doesn't", async () => {
@@ -130,7 +130,6 @@ test("a round that settles is no longer the window's, so closing afterwards stop
   h.rounds.settled("stream-1");
   h.rounds.gone("doc-a");
   assert.deepEqual(h.lost, []);
-  assert.equal(h.rounds.hasWindowRound("chat-1"), false);
 });
 
 test("a window that switches chats while the round is starting stops it as soon as it starts", async () => {

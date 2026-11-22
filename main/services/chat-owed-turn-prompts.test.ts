@@ -4,6 +4,7 @@ import {
   ATTENDED_TURN_PROMPT_LIFETIME_MS,
   createOwedTurnPrompts,
   OWED_TURN_PROMPT_LIFETIME_MS,
+  withPromptLifetime,
 } from "./chat-owed-turn-prompts.js";
 
 /**
@@ -200,4 +201,83 @@ test("the owed turn ending takes its open cards with it", () => {
   assert.equal(b.prompts.approvalForChat("chat-2")?.approvalId, "approval-2", "another turn's card stays");
   b.advance(OWED_TURN_PROMPT_LIFETIME_MS);
   assert.deepEqual(b.expired, ["approval:approval-2"]);
+});
+
+/** A window's owner wrapped for a goal round on screen, with a hand-driven clock. */
+function windowRound() {
+  let now = Date.parse("2026-11-11T10:00:00.000Z");
+  const timers: Array<{ at: number; run: () => void; cleared: boolean }> = [];
+  const sent: string[] = [];
+  const expired: string[] = [];
+  const answered = new Set<string>();
+  const expiredCards: string[] = [];
+  const owner = withPromptLifetime(
+    { id: 7, documentId: "window-doc", isDestroyed: () => false, send: (channel) => sent.push(channel), onInvalidated: () => () => undefined },
+    "chat-1",
+    { ms: ATTENDED_TURN_PROMPT_LIFETIME_MS, expired: (chatId, kind) => expired.push(`${chatId}:${kind}`) },
+    {
+      now: () => now,
+      setTimer: (run, ms) => {
+        const timer = { at: now + ms, run, cleared: false };
+        timers.push(timer);
+        return timer;
+      },
+      clearTimer: (handle) => {
+        (handle as { cleared: boolean }).cleared = true;
+      },
+      expireApproval: (id) => {
+        if (answered.has(id)) return false;
+        expiredCards.push(`approval:${id}`);
+        return true;
+      },
+      expireQuestion: (id) => {
+        if (answered.has(id)) return false;
+        expiredCards.push(`question:${id}`);
+        return true;
+      },
+    },
+  );
+  const advance = (ms: number) => {
+    now += ms;
+    for (const timer of timers) {
+      if (!timer.cleared && timer.at <= now) {
+        timer.cleared = true;
+        timer.run();
+      }
+    }
+  };
+  return { owner, sent, expired, expiredCards, answered, advance, now: () => now };
+}
+
+test("a goal round on screen shows its cards in the window, and one unanswered for 30 minutes is denied and reported", () => {
+  const round = windowRound();
+  assert.equal(round.owner.documentId, "window-doc", "the window still owns the round");
+  round.owner.send("chat:approval", { approvalId: "a1", streamId: "s1", toolName: "bash", toolCallId: "t1", summary: "Run tests" });
+  round.owner.send("chat:approval", { approvalId: "a2", streamId: "s1", toolName: "bash", toolCallId: "t2", summary: "Run lint" });
+  assert.deepEqual(round.sent, ["chat:approval", "chat:approval"], "the window gets its cards as usual");
+  round.answered.add("a2"); // the person answered the second card in the window
+  round.advance(ATTENDED_TURN_PROMPT_LIFETIME_MS - 1);
+  assert.deepEqual(round.expired, [], "29 minutes is not long enough");
+  round.advance(1);
+  assert.deepEqual(round.expiredCards, ["approval:a1"], "only the unanswered card is denied");
+  assert.deepEqual(round.expired, ["chat-1:approval"], "and the goal hears it once");
+});
+
+test("a goal round on screen: a question past 30 minutes closes, its own sooner deadline doesn't count, and the round ending stops the clock", () => {
+  const round = windowRound();
+  round.owner.send("chat:questionnaire", { promptId: "q1", streamId: "s1", toolCallId: "t1", questions: [] });
+  round.owner.send("chat:questionnaire", {
+    promptId: "q2", streamId: "s1", toolCallId: "t2", questions: [],
+    expiresAt: new Date(round.now() + 60_000).toISOString(),
+  });
+  round.advance(ATTENDED_TURN_PROMPT_LIFETIME_MS);
+  assert.deepEqual(round.expiredCards, ["question:q1"], "the agent's own one-minute question closes itself");
+  assert.deepEqual(round.expired, ["chat-1:question"]);
+
+  const ended = windowRound();
+  ended.owner.send("chat:approval", { approvalId: "a1", streamId: "s1", toolName: "bash", toolCallId: "t1", summary: "Run tests" });
+  ended.owner.send("chat:done", { streamId: "s1" });
+  ended.advance(ATTENDED_TURN_PROMPT_LIFETIME_MS);
+  assert.deepEqual(ended.expired, [], "a round that ended has no card left to expire");
+  assert.deepEqual(ended.sent, ["chat:approval", "chat:done"]);
 });
