@@ -974,21 +974,36 @@ function blockValueStartsOnNextLine(value: string, start: number): boolean {
 }
 
 /**
- * Secret hints in a colon-and-block name: the name, without `_` and `-`, ends
- * in one of these words, so `API_KEY`, `APITOKEN` and `PASSPHRASE` count but
- * prose headings such as `Authentication`, `Keyboard` or `Authors` do not.
+ * Secret hints in a setting-shaped colon-and-block name: all caps, snake or
+ * kebab case, or camelCase. The name, without `_` and `-`, ends in one of
+ * these words, so `API_KEY`, `APITOKEN`, `apiToken` and `PASSPHRASE` count.
  */
 const BLOCK_NAME_SECRET_ENDING =
   /(?:key|token|secret|password|passwd|passphrase|pwd|jwt|cred|creds|credential|cookie)s?$/u;
+/**
+ * A plain word, such as a prose heading, is a hint only when it is exactly one
+ * of these, so `Password:` counts but `Keys:`, `Hotkeys:` and `Design tokens:`
+ * do not.
+ */
+const BLOCK_NAME_SECRET_WORD: ReadonlySet<string> = new Set([
+  "key", "token", "secret", "password", "passwd", "passphrase", "pwd", "jwt", "cred",
+  "credential", "cookie",
+]);
 /** Whole names that are secrets without a secret ending. */
 const BLOCK_NAME_SECRET_EXACT: ReadonlySet<string> = new Set([
   "authorization", "sessionid", "sessiontoken", "privatekey",
 ]);
 
+function blockNameIsSettingShaped(name: string): boolean {
+  return /^[A-Z0-9_-]*[A-Z][A-Z0-9_-]*$/u.test(name) || /[_-]/u.test(name) || /[a-z0-9][A-Z]/u.test(name);
+}
+
 function blockNameHasSecretHint(name: string): boolean {
   const normalized = name.toLowerCase().replace(/[_-]/gu, "");
   return (
-    BLOCK_NAME_SECRET_ENDING.test(normalized) ||
+    (blockNameIsSettingShaped(name)
+      ? BLOCK_NAME_SECRET_ENDING.test(normalized)
+      : BLOCK_NAME_SECRET_WORD.has(normalized)) ||
     BLOCK_NAME_SECRET_EXACT.has(normalized) ||
     // A PIN is only a whole segment: `PIN`, `ATM_PIN`, but not `SPIN`.
     /(?:^|[_-])pin$/iu.test(name)

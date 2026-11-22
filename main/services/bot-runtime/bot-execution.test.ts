@@ -468,10 +468,14 @@ test("person Resume after an interrupted unsafe child tool does not restart the 
   assert.equal(toolRuns, 1); assert.equal(env.calls.filter((row) => row.model === "B").length, 1); assert.equal(env.charges.filter((row) => row.id === receipt).length, 1);
 });
 
-test("helper calls in one Bot reply share its 60 minutes, and the next input gets a fresh limit", async (t) => {
-  const folder = await mkdtemp(path.join(os.tmpdir(), "aiden-helper-reply-clock-")); t.after(() => rm(folder, { recursive: true, force: true }));
+/**
+ * A Bot whose `subagent` tool runs a real supervisor on the given reply clocks
+ * with a faked child. Each call reads its time from `offsets`, in order.
+ */
+async function helperClockBot(t: import("node:test").TestContext, name: string, offsets: readonly number[], hooks: { afterLaunch?(label: string): Promise<void> | void; configure?(env: Awaited<ReturnType<typeof environment>>): void } = {}) {
+  const folder = await mkdtemp(path.join(os.tmpdir(), `aiden-helper-${name}-`)); t.after(() => rm(folder, { recursive: true, force: true }));
   const env = await environment(path.join(folder, "unused.sqlite")); await env.harness.close(ctx);
-  const clocks = createBotSubagentReplyClocks(), minute = 60_000, offsets = [0, 61 * minute, 62 * minute], launched: string[] = [], results: string[] = [];
+  const clocks = createBotSubagentReplyClocks(), launched: string[] = [], results: string[] = [];
   let calls = 0;
   const helperRuntime: ResolvedModelRuntime = {
     models: env.models,
@@ -487,10 +491,19 @@ test("helper calls in one Bot reply share its 60 minutes, and the next input get
       now: () => now, policy: { timeLimit: "bot", replyClock: clocks.clockFor("bot:one") },
       runChild: async ({ request }) => { launched.push(request.label); return { role: "scout", label: request.label, status: "completed", summary: `Done ${request.label}` }; },
     });
-    const result = await supervisor.execute({ tasks: [{ role: "scout", label: text, task: `Investigate ${text}.` }] }); results.push(result); return result;
+    const result = await supervisor.execute({ tasks: [{ role: "scout", label: text, task: `Investigate ${text}.` }] }); results.push(result);
+    await hooks.afterLaunch?.(text);
+    return result;
   }) }] });
-  const options = { profileDir: folder, models: env.models, execution: clocks.releasingWith(env.port), extension, resolveModel: async () => ({ provider: "proof", modelId: "D" }), knownBotIds: async () => new Set(["bot:one"]), settings: { compaction: { enabled: false } } };
-  const service = await createBotSessionService(options); t.after(() => service.shutdown());
+  hooks.configure?.(env);
+  const service = await createBotSessionService({ profileDir: folder, models: env.models, execution: clocks.releasingWith(env.port), extension, resolveModel: async () => ({ provider: "proof", modelId: "D" }), knownBotIds: async () => new Set(["bot:one"]), settings: { compaction: { enabled: false } } });
+  t.after(() => service.shutdown());
+  return { env, clocks, launched, results, service };
+}
+const minute = 60_000;
+
+test("helper calls in one Bot reply share its 60 minutes, and the next input gets a fresh limit", async (t) => {
+  const { env, clocks, launched, results, service } = await helperClockBot(t, "reply-clock", [0, 61 * minute, 62 * minute]);
   env.faux.setResponses([
     fauxAssistantMessage([fauxToolCall("subagent", { text: "First" })], { stopReason: "toolUse" }),
     fauxAssistantMessage([fauxToolCall("subagent", { text: "Second" })], { stopReason: "toolUse" }),
@@ -507,6 +520,46 @@ test("helper calls in one Bot reply share its 60 minutes, and the next input get
   assert.equal((await service.awaitReply("bot:one", b.submissionId, new AbortController().signal)).kind, "completed");
   assert.deepEqual(launched, ["First", "Next"]); assert.notEqual(results[2], BOT_SUBAGENT_LIMIT_REACHED_RESULT);
   await waitFor(() => clocks.size === 0, { what: "the next reply's clock to be released" });
+});
+
+test("a reply that ends while the next message waits still releases its helper clock", async (t) => {
+  const entered = gate(), finish = gate();
+  const { env, clocks, launched, service } = await helperClockBot(t, "queued-clock", [0], { afterLaunch: async () => { entered.release(); await finish.promise; } });
+  env.faux.setResponses([
+    fauxAssistantMessage([fauxToolCall("subagent", { text: "First" })], { stopReason: "toolUse" }),
+    fauxAssistantMessage("Finished the first reply."),
+    fauxAssistantMessage("Finished the queued reply."),
+  ]);
+  const a = await service.send("bot:one", { requestId: "A", text: "A" }); await entered.promise;
+  assert.equal(clocks.size, 1);
+  const b = await service.send("bot:one", { requestId: "B", text: "B", whenBusy: "followUp" }); finish.release();
+  assert.equal((await service.awaitReply("bot:one", a.submissionId, new AbortController().signal)).kind, "completed");
+  assert.equal((await service.awaitReply("bot:one", b.submissionId, new AbortController().signal)).kind, "completed");
+  assert.deepEqual(launched, ["First"]);
+  await waitFor(() => clocks.size === 0, { timeoutMs: 2_000, what: "the first reply's clock to be released" });
+});
+
+test("a person Resume gives a blocked Bot reply a fresh 60 minutes for helpers", async (t) => {
+  let blockNext = false;
+  const { env, launched, results, service } = await helperClockBot(t, "resume-clock", [0, 61 * minute], {
+    afterLaunch: (label) => { if (label === "First") blockNext = true; },
+    configure: ({ port }) => {
+      const base = port.resolve;
+      port.resolve = async (...args) => ({ ...await base(...args), beforeDispatch: async () => { if (blockNext) { blockNext = false; throw new SpendingDispatchError("limit", "This Bot's spending limit was reached."); } } });
+    },
+  });
+  env.faux.setResponses([
+    fauxAssistantMessage([fauxToolCall("subagent", { text: "First" })], { stopReason: "toolUse" }),
+    fauxAssistantMessage([fauxToolCall("subagent", { text: "Second" })], { stopReason: "toolUse" }),
+    fauxAssistantMessage("Finished after Resume."),
+  ]);
+  const a = await service.send("bot:one", { requestId: "A", text: "A" });
+  await waitFor(async () => (await service.routineState("bot:one")).kind === "interrupted", { what: "the reply to block" });
+  assert.deepEqual(launched, ["First"]);
+  // The person resumes 61 minutes after the reply's first helper launch.
+  await service.resume("bot:one", "person-resume");
+  assert.equal((await service.awaitReply("bot:one", a.submissionId, new AbortController().signal)).kind, "completed");
+  assert.deepEqual(launched, ["First", "Second"]); assert.notEqual(results[1], BOT_SUBAGENT_LIMIT_REACHED_RESULT);
 });
 
 test("actual registry image conversion refuses a text model without a companion and preserves the explicit image helper", async (t) => {

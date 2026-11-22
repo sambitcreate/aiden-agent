@@ -63,8 +63,10 @@ export interface BotExecutionPort {
   acknowledgeUnknown?(botId: string, claim: BotExecutionClaim, expectedDispatchId?: string): Promise<boolean | "recorded">;
   hasUnknown?(botId: string, claim: BotExecutionClaim): Promise<boolean>;
   dismissed?(botId: string, claim: BotExecutionClaim): Promise<void>;
-  /** The claim's generation committed its final outcome with no continuation: its reply ended. */
+  /** The claim's generation committed its final outcome and no new generation carries its inputs: its reply ended. */
   settled?(botId: string, claim: BotExecutionClaim): Promise<void>;
+  /** The person resumed the claim's interrupted reply, so it starts again with fresh per-reply limits. */
+  resumed?(botId: string, claim: BotExecutionClaim): Promise<void>;
   verifyResponse?(facts: BotProviderResponseFacts): Promise<boolean>;
   reconcileResponseCosts?(botId: string, taskId: string, scopeId: string): Promise<void>;
   recordKnownResponse?(facts: BotProviderResponseFacts, message: AssistantMessage): Promise<void>;
@@ -342,12 +344,16 @@ export function createBotExecutionRegistry(botId: string, registry: RegistryRead
             return id;
           }) as Tx["createTask"] });
           const next = await change(decorated, current);
+          // A queued message can start its own generation in this same commit;
+          // only a generation that carries one of this claim's inputs continues its reply.
+          let continues = false;
           for (const created of generations) {
             const final = await tx.doc(LiveDoc, created.conversationId);
             if (final.run?.taskId !== created.id || !final.run.inputs.length) throw new Error("New generation has no exact staged input owner.");
             const child = await tx.doc(BotExecutionDoc, created.id); child.sourceInputs = [...final.run.inputs];
+            if (final.run.inputs.some((input) => binding!.sourceInputs?.includes(input))) continues = true;
           }
-          ends = original.definition.name === GenerationTask.definition.name && generations.length === 0 && (next as { status?: unknown } | undefined)?.status === "terminal";
+          ends = original.definition.name === GenerationTask.definition.name && !continues && (next as { status?: unknown } | undefined)?.status === "terminal";
           return next;
         }, at); if (ends) generationEnded = true; return committed; }) as TaskRuntime<I, S, R, H>["commit"],
       });

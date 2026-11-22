@@ -3,8 +3,9 @@
 // A claim is one admitted input and the reply it produces. The Bot's tools
 // are rebuilt for every durable task phase, so a clock held by the tool would
 // restart on each helper call. These clocks live outside the tools, keyed by
-// the claim, and are dropped when the claim's reply ends or is dismissed. A
-// new input gets a new claim, so it starts a new reply with a fresh 60 minutes.
+// the claim, and are dropped when the claim's reply ends, is dismissed or is
+// resumed. A new input gets a new claim, so it starts a new reply with a fresh
+// 60 minutes, and a person's Resume starts the interrupted reply's clock again.
 
 import { SubagentReplyClock } from "../subagents/subagent-supervisor-core.js";
 import { botExecutionScope, type BotExecutionPort } from "./bot-execution.js";
@@ -19,7 +20,7 @@ export interface BotSubagentReplyClocks {
   forgetBot(botId: string): void;
   /** Clocks currently held. */
   readonly size: number;
-  /** The port, releasing a claim's clock when its reply ends or is dismissed. */
+  /** The port, releasing a claim's clock when its reply ends, is dismissed or is resumed. */
   releasingWith(port: BotExecutionPort): BotExecutionPort;
 }
 
@@ -58,6 +59,10 @@ export function createBotSubagentReplyClocks(): BotSubagentReplyClocks {
         async dismissed(botId, claim) {
           release(botId, claim.id);
           await port.dismissed?.(botId, claim);
+        },
+        async resumed(botId, claim) {
+          release(botId, claim.id);
+          await port.resumed?.(botId, claim);
         },
       };
     },

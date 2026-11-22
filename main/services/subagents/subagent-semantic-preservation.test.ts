@@ -193,6 +193,13 @@ const SECRET_NAMED_BLOCKS = [
   { name: "PASSPHRASE", text: "Setup:\nPASSPHRASE:\n  correct-horse-battery\nDone.", secrets: ["correct-horse-battery"] },
   { name: "KEY", text: "Setup:\nKEY:\n  zq81LmPq0xWv\nDone.", secrets: ["zq81LmPq0xWv"] },
   { name: "APITOKEN", text: "Setup:\nAPITOKEN:\n  tok9vXaa71Rr\nDone.", secrets: ["tok9vXaa71Rr"] },
+  { name: "API_KEY", text: "Setup:\nAPI_KEY:\n  mz71Qa0bWx4Kp\nDone.", secrets: ["mz71Qa0bWx4Kp"] },
+  { name: "apiToken", text: "Setup:\napiToken:\n  rt5Nv8Xq2Lw9\nDone.", secrets: ["rt5Nv8Xq2Lw9"] },
+  {
+    name: "multi-line Password",
+    text: "Setup:\nPassword:\n  hunter2-plain\n  hunter3-second\nDone.",
+    secrets: ["hunter2-plain", "hunter3-second"],
+  },
   {
     name: "multi-line PASSWORD",
     text: "Setup:\nPASSWORD:\n  firstline-hunter2\n  secondline-hunter3\nDone.",
@@ -231,6 +238,9 @@ test("prose heading blocks without a secret-like name survive the parent and pan
     "Keyboard:\n  Shortcuts work.\nAuthors:\n  The core team.\nDone.",
     "README:\n  Install with npm, then run the dev server.\nDone.",
     "PROMPT:\n  Summarise the attached notes.\nDATA:\n  rows 1 to 20\nDone.",
+    "Design tokens:\n  --color-bg is reused in styles.css\nDone.",
+    "Hotkeys:\n  Cmd+K opens search\nDone.",
+    "Keys:\n  Arrow keys move the selection.\nCookies:\n  None are set.\nDone.",
   ]) {
     assert.equal(sanitizeSubagentText(value), value);
     assert.equal(sanitizeSubagentSnapshotText(value), value);
