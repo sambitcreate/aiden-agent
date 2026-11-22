@@ -84,7 +84,9 @@ contains such a key or doesn't
 compile refuses the whole call before any chat is made, and a stored one that
 breaks these rules is dropped when the links load. The started chat's first
 message shows the schema, and it gets a `submit_result` tool. A submitted
-result is checked with ajv; one that doesn't match is refused, naming the
+result is checked with ajv (each schema is compiled once, its `$defs` entries
+not copied into every ref, and the newest 32 compiled schemas are kept, so
+every `submit_result` reuses the start's); one that doesn't match is refused, naming the
 first field to fix (for example `/filesChanged is required`). Before ajv sees
 it, a result over 64 KB, holding more than 10,000 values or nested more than 64
 levels is refused, and so is one whose size (its values, plus one per 64
