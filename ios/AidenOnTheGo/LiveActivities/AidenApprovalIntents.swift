@@ -27,7 +27,8 @@ enum AidenAlertActionOutcome: Equatable, Sendable {
     /// The Mac took the answer.
     case done
     /// Someone answered first, or the ask expired; nothing is left to do.
-    case alreadyResolved
+    /// `winner` is what the Mac says was chosen for an approval, when it says.
+    case alreadyResolved(winner: AgentRunApprovalAnswer?)
     /// The answer didn't land; open this chat so the person can answer there.
     case openApp(URL?)
     /// The Mac was removed from this phone; the action is ignored.
@@ -42,12 +43,24 @@ final class AidenBackgroundActionBroker {
     static let shared = AidenBackgroundActionBroker()
 
     var perform: (@MainActor (AidenAlertAction) async -> AidenAlertActionOutcome)?
+    /// Tells the person when an answer from a Live Activity didn't reach the
+    /// Mac; the card itself can't open the app.
+    var onCardActionUnanswered: (@MainActor (AidenAlertAction, URL?) async -> Void)?
 
     init() {}
 
     func run(_ action: AidenAlertAction) async -> AidenAlertActionOutcome {
         guard let perform else { return .openApp(nil) }
         return await perform(action)
+    }
+
+    /// `run`, for a button on a Live Activity.
+    func runFromCard(_ action: AidenAlertAction) async -> AidenAlertActionOutcome {
+        let outcome = await run(action)
+        if case let .openApp(link) = outcome {
+            await onCardActionUnanswered?(action, link)
+        }
+        return outcome
     }
 }
 
@@ -81,9 +94,9 @@ struct DenyApprovalIntent: LiveActivityIntent {
 
     @MainActor
     func perform() async throws -> some IntentResult {
-        // When the answer doesn't land the card keeps Review, which opens the
-        // chat; the app's broker updates the card when it does.
-        _ = await AidenBackgroundActionBroker.shared.run(
+        // When the answer doesn't land the card keeps Review and an alert
+        // offers to open the chat; the app's broker updates the card when it does.
+        _ = await AidenBackgroundActionBroker.shared.runFromCard(
             .deny(
                 instanceID: instanceID,
                 chatID: chatID,

@@ -3269,6 +3269,45 @@ final class AidenChatTests: XCTestCase {
         XCTAssertEqual(deviceID, "device-progress-lifecycle")
     }
 
+    /// A run started on the Mac that waits for approval offers Deny on the
+    /// card only when this phone may answer it: run control as well as
+    /// approval access. Without it the card offers Review alone.
+    @MainActor
+    func testAForeignRunsCardOffersDenyOnlyWhenThePhoneMayAnswer() async throws {
+        guard ActivityAuthorizationInfo().areActivitiesEnabled else {
+            throw XCTSkip("Live Activities are disabled here.")
+        }
+        for (control, expectsTarget) in [(true, true), (false, false)] {
+            let root = FileManager.default.temporaryDirectory.appending(path: "aiden-foreign-approval-\(UUID())")
+            defer { try? FileManager.default.removeItem(at: root); AidenChatProgressLifecycleURLProtocol.reset() }
+            let manager = AidenRemoteLiveActivityManager(defaults: UserDefaults(suiteName: "foreign-approval-\(UUID())")!)
+            let fixture = AidenForeignRunApprovalFixture(grantsRunControl: control)
+            let model = try await makeProgressLifecycleModel(
+                mode: .denied,
+                cache: AidenChatCache(root: root),
+                draftStore: AidenChatDraftStore(root: root.appending(path: "drafts")),
+                responseOverride: { fixture.response($0) },
+                extraCapabilities: control ? [.runsObserve, .runsControl] : [.runsObserve],
+                liveActivities: manager
+            )
+            await model.load(observeProgress: false)
+
+            func waiting() -> AgentRunActivityAttributes.ContentState? {
+                Activity<AgentRunActivityAttributes>.activities.first {
+                    $0.attributes.instanceID == "instance-progress-lifecycle" && $0.attributes.streamID == "run-approval"
+                }?.content.state
+            }
+            for _ in 0..<1_000 where waiting()?.status != .waitingForApproval {
+                try await Task.sleep(for: .milliseconds(10))
+            }
+            let state = waiting()
+            await manager.endAll(forInstanceID: "instance-progress-lifecycle")
+
+            XCTAssertEqual(state?.status, .waitingForApproval, "run control: \(control)")
+            XCTAssertEqual(state?.approval != nil, expectsTarget, "run control: \(control)")
+        }
+    }
+
     @MainActor
     func testOpeningAnEndedForeignRunReconcilesAfterTheInitialTranscriptRead() async throws {
         defer { AidenChatProgressLifecycleURLProtocol.reset() }
@@ -14559,6 +14598,42 @@ private final class AidenForeignRunRecoveryFixture: @unchecked Sendable {
 
     private func event(_ sequence: Int, _ type: String, _ payload: String, terminal: Bool = false) -> String {
         "id: \(sequence)\nevent: \(type)\ndata: {\"protocolVersion\":1,\"streamId\":\"run-mac\",\"sequence\":\(sequence),\"timestamp\":\"2026-10-05T10:00:00Z\",\"type\":\"\(type)\",\"terminal\":\(terminal),\"payload\":\(payload)}\n\n"
+    }
+}
+
+/// A run started on the Mac (`run-approval`) that waits for an approval.
+private final class AidenForeignRunApprovalFixture: @unchecked Sendable {
+    private let grantsRunControl: Bool
+
+    init(grantsRunControl: Bool) {
+        self.grantsRunControl = grantsRunControl
+    }
+
+    func response(_ request: URLRequest) -> (Int, String, Data)? {
+        switch request.url!.path {
+        case "/api/aiden/v1/server":
+            let control = grantsRunControl ? #","runs:control""# : ""
+            let grants = #"["server:read","workspace:read","chat:read","chat:write","tasks:read","agents:read","approval:respond","runs:observe"\#(control)]"#
+            return (200, "application/json", Data("""
+            {"protocolVersion":1,"instanceId":"instance-progress-lifecycle","name":"Progress Lifecycle Mac","appVersion":"1.0","capabilities":\(grants),"serverCapabilities":\(grants),"features":["phone-run-control-v1"],"connectionMode":"lan","serverTime":"2026-10-05T10:00:00Z"}
+            """.utf8))
+        case "/api/aiden/v1/chats/chat-progress-lifecycle":
+            return (200, "application/json", Data("""
+            {"id":"chat-progress-lifecycle","workspaceId":"workspace-1","title":"Progress lifecycle","messages":[],"createdAt":"2026-09-14T12:00:00Z","updatedAt":"2026-09-14T12:00:01Z","revision":"revision-1"}
+            """.utf8))
+        case "/api/aiden/v1/chats/chat-progress-lifecycle/runs/current/events",
+             "/api/aiden/v1/runs/run-approval/events":
+            return (200, "text/event-stream", Data((
+                event(1, "run.started", #"{"runId":"run-approval","chatId":"chat-progress-lifecycle","origin":"renderer"}"#)
+                    + event(2, "approval_required", #"{"approvalId":"ap-mac","summary":"Run the tests?","toolName":"bash","canAllow":false}"#)
+            ).utf8))
+        default:
+            return nil
+        }
+    }
+
+    private func event(_ sequence: Int, _ type: String, _ payload: String) -> String {
+        "id: \(sequence)\nevent: \(type)\ndata: {\"protocolVersion\":1,\"streamId\":\"run-approval\",\"sequence\":\(sequence),\"timestamp\":\"2026-10-05T10:00:00Z\",\"type\":\"\(type)\",\"terminal\":false,\"payload\":\(payload)}\n\n"
     }
 }
 

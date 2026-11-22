@@ -640,13 +640,18 @@ enum AgentRunActivityStateReducer {
     /// The person answered the approval from a card or notification: the run
     /// goes back to work, and the card says what they chose.
     static func answered(
-        decision: AgentRunApprovalAnswer,
+        decision: AgentRunApprovalAnswer?,
         state: AgentRunActivityAttributes.ContentState,
         now: Date = Date()
     ) -> AgentRunActivityAttributes.ContentState {
-        statusState(
+        let line = switch decision {
+        case .deny: String(localized: "Denied")
+        case .allow: String(localized: "Approved")
+        case nil: String(localized: "No longer waiting")
+        }
+        return statusState(
             .thinking,
-            activity: decision == .deny ? String(localized: "Denied") : String(localized: "Approved"),
+            activity: line,
             state: state,
             now: now
         )

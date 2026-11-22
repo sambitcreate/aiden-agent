@@ -1,5 +1,7 @@
 # Live Activity freshness chips and Bot deep links (2026-09-27)
 
+> **Superseded 2026-11-22 (ios-alerts-app-only plan):** the Live Activity and Dynamic Island are now plain text on a clean background. The chips, status dot, rail, pill, tints and keyline described below are gone; see `.memory/ios-run-alerts.md`. The state, freshness and deep-link notes still apply.
+
 Branch: `feature/live-activity-freshness`. Plan: `docs/plans/completed/live-activity-freshness-bot-deeplinks-plan.md`.
 
 ## Live Activity state and chips

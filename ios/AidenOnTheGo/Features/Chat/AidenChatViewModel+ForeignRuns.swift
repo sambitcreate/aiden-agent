@@ -351,7 +351,7 @@ extension AidenChatViewModel {
             await liveActivities.approvalRequired(
                 instanceID: instanceId,
                 streamID: projection.runId,
-                target: AgentRunApprovalTarget(approvalID: approval.approvalId, runID: projection.runId)
+                target: foreignApprovalTarget(approvalID: approval.approvalId, runID: projection.runId, context: context)
             )
         } else if let state = streamState {
             await publishLiveActivityStatus(streamID: projection.runId, state: state)
@@ -430,6 +430,17 @@ extension AidenChatViewModel {
         )
     }
 
+    /// The card offers Deny on a run from the Mac only when this phone may
+    /// answer it there; otherwise it offers Review alone.
+    private func foreignApprovalTarget(
+        approvalID: String,
+        runID: String,
+        context: AidenRemoteRequestContext
+    ) -> AgentRunApprovalTarget? {
+        guard foreignApprovalCapabilities(context: context).canRespond else { return nil }
+        return AgentRunApprovalTarget(approvalID: approvalID, runID: runID)
+    }
+
     private func canRespondToForeignQuestions(context: AidenRemoteRequestContext) -> Bool {
         canRespondToQuestions(for: context) && hasForeignRunControl(context: context)
     }
@@ -465,7 +476,7 @@ extension AidenChatViewModel {
             await liveActivities.approvalRequired(
                 instanceID: instanceId,
                 streamID: runId,
-                target: AgentRunApprovalTarget(approvalID: id, runID: runId)
+                target: foreignApprovalTarget(approvalID: id, runID: runId, context: context)
             )
         case let .questionRequired(id):
             coordinator.haptics.play(.warning, scope: hapticScope, dedupeKey: "question-required:\(id)")

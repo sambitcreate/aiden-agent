@@ -15,6 +15,14 @@ struct AidenRunsSummaryActivityAttributes: ActivityAttributes {
 
     struct ContentState: Codable, Hashable, Sendable {
         var rows: [Row]
+        /// Set when the app stops updating (it left the screen); any update
+        /// clears it.
+        var isStale: Bool
+
+        init(rows: [Row], isStale: Bool = false) {
+            self.rows = rows
+            self.isStale = isStale
+        }
     }
 
     var instanceID: String
@@ -25,6 +33,7 @@ struct AidenRunsSummaryActivityAttributes: ActivityAttributes {
 /// What the summary card says, in plain words.
 enum AidenRunsSummaryPolicy {
     typealias Row = AidenRunsSummaryActivityAttributes.Row
+    typealias ContentState = AidenRunsSummaryActivityAttributes.ContentState
 
     static let maximumShownRows = 3
 
@@ -63,6 +72,24 @@ enum AidenRunsSummaryPolicy {
         case .cancelled: String(localized: "Stopped")
         default: row.status.title
         }
+    }
+
+    /// Shown under the rows when they may be out of date: the app marked the
+    /// card stale, or ActivityKit passed its stale date. Never once every run
+    /// has ended.
+    static func staleNote(_ state: ContentState, systemMarkedStale: Bool) -> String? {
+        guard state.rows.contains(where: { !$0.isFinal }), state.isStale || systemMarkedStale else { return nil }
+        return String(localized: "Latest status shown")
+    }
+
+    /// When ActivityKit should treat the card as stale: the newest unfinished
+    /// run's last update plus a single card's window.
+    static func staleDate(_ state: ContentState) -> Date? {
+        latestUnfinishedUpdate(state.rows)?.addingTimeInterval(AgentRunFreshness.staleAfter)
+    }
+
+    static func latestUnfinishedUpdate(_ rows: [Row]) -> Date? {
+        rows.filter { !$0.isFinal }.map(\.updatedAt).max()
     }
 
     /// The chat a tap on the card opens: the most urgent one.

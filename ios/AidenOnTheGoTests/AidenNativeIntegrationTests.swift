@@ -720,12 +720,67 @@ final class AidenNativeIntegrationTests: XCTestCase {
             let fake = FakeAlertTransport(failure: try alertServerError(409, code: code))
             let outcome = await AidenAlertActionResponder(lookup: { _ in .client(fake) })
                 .run(.deny(instanceID: "mac", chatID: "c", target: .init(approvalID: "ap", runID: nil)))
-            XCTAssertEqual(outcome, .alreadyResolved, code)
+            XCTAssertEqual(outcome, .alreadyResolved(winner: nil), code)
         }
         let other = FakeAlertTransport(failure: try alertServerError(500, code: "internal_error"))
         let outcome = await AidenAlertActionResponder(lookup: { _ in .client(other) })
             .run(.deny(instanceID: "mac", chatID: "c1", target: .init(approvalID: "ap", runID: nil)))
         XCTAssertEqual(outcome, .openApp(AidenDeepLink.chatURL(instanceId: "mac", chatId: "c1")))
+    }
+
+    /// Someone answered on the Mac first: the outcome carries what they chose,
+    /// not what the phone asked for.
+    @MainActor
+    func testResponderReportsTheMacsWinningDecision() async throws {
+        for (decision, winner) in [("allow", AgentRunApprovalAnswer.allow), ("deny", .deny)] {
+            let fake = FakeAlertTransport(
+                failure: try alertServerError(409, code: "approval_resolved", details: ["decision": decision])
+            )
+            let outcome = await AidenAlertActionResponder(lookup: { _ in .client(fake) })
+                .run(.deny(instanceID: "mac", chatID: "c", target: .init(approvalID: "ap", runID: "r1")))
+            XCTAssertEqual(outcome, .alreadyResolved(winner: winner), decision)
+        }
+        let expired = FakeAlertTransport(
+            failure: try alertServerError(409, code: "approval_resolved", details: ["decision": "expired"])
+        )
+        let outcome = await AidenAlertActionResponder(lookup: { _ in .client(expired) })
+            .run(.approve(instanceID: "mac", chatID: "c", target: .init(approvalID: "ap", runID: "r1")))
+        XCTAssertEqual(outcome, .alreadyResolved(winner: nil))
+    }
+
+    func testAnswerFromElsewhereWithoutAKnownDecisionReadsNeutrally() {
+        let target = AgentRunApprovalTarget(approvalID: "ap-1", runID: nil)
+        let waiting = AgentRunActivityStateReducer.waitingForApproval(state: approvalBase(), target: target)
+        let closed = AgentRunActivityStateReducer.answered(decision: nil, state: waiting)
+        XCTAssertNil(closed.approval)
+        XCTAssertEqual(closed.currentActivity, "No longer waiting")
+    }
+
+    /// The card shows the Mac's answer when the phone's Deny lost the race:
+    /// someone allowed it on the Mac, so the card must not say "Denied".
+    @MainActor
+    func testBrokerShowsTheMacsDecisionWhenThePhonesAnswerLost() async throws {
+        guard ActivityAuthorizationInfo().areActivitiesEnabled else {
+            throw XCTSkip("Live Activities are disabled on this device.")
+        }
+        let mac = "broker-\(UUID().uuidString)"
+        let manager = AidenRemoteLiveActivityManager(preferences: { AidenNotificationPreferences() })
+        defer { Task { @MainActor in await manager.endAll(forInstanceID: mac) } }
+        let target = AgentRunApprovalTarget(approvalID: "ap-\(UUID().uuidString)", runID: "r1")
+        await manager.start(instanceID: mac, chatID: "c1", title: "Fix login", streamID: "s1")
+        await manager.approvalRequired(instanceID: mac, streamID: "s1", target: target)
+        let activity = try XCTUnwrap(Activity<AgentRunActivityAttributes>.activities.first {
+            $0.attributes.instanceID == mac && $0.attributes.streamID == "s1"
+        })
+
+        let fake = FakeAlertTransport(
+            failure: try alertServerError(409, code: "approval_resolved", details: ["decision": "allow"])
+        )
+        let perform = AidenBackgroundActionBroker.perform(lookup: { _ in .client(fake) }, liveActivities: manager)
+        let outcome = await perform(.deny(instanceID: mac, chatID: "c1", target: target))
+        XCTAssertEqual(outcome, .alreadyResolved(winner: .allow))
+        let shown = await deliveredContent(of: activity, expecting: "the answered state", where: { $0.approval == nil })
+        XCTAssertEqual(shown?.currentActivity, "Approved")
     }
 
     @MainActor
@@ -763,6 +818,41 @@ final class AidenNativeIntegrationTests: XCTestCase {
         broker.perform = { _ in .done }
         let wired = await broker.run(deny)
         XCTAssertEqual(wired, .done)
+    }
+
+    /// Deny on the card that can't reach the Mac tells the person, with an
+    /// alert that opens the chat to answer there. A Deny that lands, or a
+    /// forgotten Mac, posts nothing.
+    @MainActor
+    func testCardDenyThatCannotReachTheMacPostsAnAlertThatOpensTheChat() async throws {
+        let center = AidenNotificationCenterFake()
+        let broker = AidenBackgroundActionBroker()
+        broker.onCardActionUnanswered = { action, link in
+            await AidenUnansweredCardAction.post(action, link: link, center: center)
+        }
+        let deny = AidenAlertAction.deny(instanceID: "mac", chatID: "c1", target: .init(approvalID: "ap", runID: nil))
+
+        for outcome in [AidenAlertActionOutcome.done, .alreadyResolved(winner: .allow), .dropped] {
+            broker.perform = { _ in outcome }
+            _ = await broker.runFromCard(deny)
+        }
+        XCTAssertTrue(center.posted.isEmpty)
+
+        let chatURL = AidenDeepLink.chatURL(instanceId: "mac", chatId: "c1")
+        broker.perform = { _ in .openApp(chatURL) }
+        let outcome = await broker.runFromCard(deny)
+        XCTAssertEqual(outcome, .openApp(chatURL))
+        XCTAssertEqual(center.posted.count, 1)
+        let posted = try XCTUnwrap(center.posted.first)
+        XCTAssertEqual(posted.content.title, "Deny didn't reach your computer")
+        XCTAssertEqual(posted.content.body, "Open the chat to answer there.")
+        let tap = await AidenNotificationPresentationDelegate.respond(
+            actionIdentifier: UNNotificationDefaultActionIdentifier,
+            userInfo: posted.content.userInfo,
+            replyText: nil,
+            broker: broker
+        )
+        XCTAssertEqual(tap, AidenNotificationTap(link: chatURL, instanceID: "mac"))
     }
 
     // MARK: Run alert actions
@@ -953,6 +1043,58 @@ final class AidenNativeIntegrationTests: XCTestCase {
         XCTAssertEqual(AidenRunsSummaryPolicy.visible(Array(rows.prefix(2))).hiddenCount, 0)
     }
 
+    /// A summary is no more trustworthy than a single card: once the app
+    /// stops updating it, it says so until every run has ended.
+    func testSummaryNotesStalenessUntilEveryRunEnds() {
+        let working = AidenRunsSummaryActivityAttributes.ContentState(rows: [
+            row("a", .runningCommand, t: 100),
+            row("b", .waitingForApproval, t: 150),
+            row("c", .complete, t: 200, final: true),
+        ])
+        XCTAssertNil(AidenRunsSummaryPolicy.staleNote(working, systemMarkedStale: false))
+        XCTAssertEqual(AidenRunsSummaryPolicy.staleNote(working, systemMarkedStale: true), "Latest status shown")
+        var marked = working
+        marked.isStale = true
+        XCTAssertEqual(AidenRunsSummaryPolicy.staleNote(marked, systemMarkedStale: false), "Latest status shown")
+
+        let allDone = AidenRunsSummaryActivityAttributes.ContentState(
+            rows: [row("c", .complete, t: 200, final: true)],
+            isStale: true
+        )
+        XCTAssertNil(AidenRunsSummaryPolicy.staleNote(allDone, systemMarkedStale: true))
+
+        // ActivityKit marks it stale once the newest unfinished run has gone
+        // as long without news as a single card would.
+        XCTAssertEqual(
+            AidenRunsSummaryPolicy.staleDate(working),
+            Date(timeIntervalSince1970: 150 + AgentRunFreshness.staleAfter)
+        )
+        XCTAssertNil(AidenRunsSummaryPolicy.staleDate(allDone))
+    }
+
+    @MainActor
+    func testLeavingTheAppMarksASummaryStaleUntilItsNextUpdate() async throws {
+        guard ActivityAuthorizationInfo().areActivitiesEnabled else {
+            throw XCTSkip("Live Activities are disabled on this device.")
+        }
+        let mac = "summary-stale-\(UUID().uuidString)"
+        let manager = AidenRemoteLiveActivityManager(preferences: { AidenNotificationPreferences() })
+        defer { Task { @MainActor in await manager.endAll(forInstanceID: mac) } }
+        await manager.start(instanceID: mac, chatID: "c1", title: "One", streamID: "s1", machineName: "Mac")
+        await manager.start(instanceID: mac, chatID: "c2", title: "Two", streamID: "s2", machineName: "Mac")
+        let summary = try XCTUnwrap(Activity<AidenRunsSummaryActivityAttributes>.activities.first {
+            $0.attributes.instanceID == mac
+        })
+
+        await manager.markAllStale()
+        let stale = await eventually("the summary to be marked stale") { summary.content.state.isStale }
+        XCTAssertTrue(stale)
+
+        await manager.updateStatus(instanceID: mac, streamID: "s1", state: .waitingForApproval)
+        let fresh = await eventually("the next update to clear it") { !summary.content.state.isStale }
+        XCTAssertTrue(fresh)
+    }
+
     @MainActor
     func testSecondRunOnTheSameMacMergesIntoOneSummaryCard() async throws {
         guard ActivityAuthorizationInfo().areActivitiesEnabled else {
@@ -1016,6 +1158,38 @@ final class AidenNativeIntegrationTests: XCTestCase {
         })
         await manager.endAll(forInstanceID: macA)
         await manager.endAll(forInstanceID: macB)
+    }
+
+    /// A run that finishes while its card is being merged into the summary
+    /// still counts as finished, so the summary ends once every run has.
+    @MainActor
+    func testARunFinishingDuringTheMergeStillEndsTheSummary() async throws {
+        guard ActivityAuthorizationInfo().areActivitiesEnabled else {
+            throw XCTSkip("Live Activities are disabled on this device.")
+        }
+        let mac = "summary-race-\(UUID().uuidString)"
+        let manager = AidenRemoteLiveActivityManager(preferences: { AidenNotificationPreferences() })
+        defer { Task { @MainActor in await manager.endAll(forInstanceID: mac) } }
+        await manager.start(instanceID: mac, chatID: "c1", title: "One", streamID: "s1", machineName: "Mac")
+
+        // The finish runs while the merge waits on ActivityKit.
+        let merge = Task { @MainActor in
+            await manager.start(instanceID: mac, chatID: "c2", title: "Two", streamID: "s2", machineName: "Mac")
+        }
+        let finishFirst = Task { @MainActor in
+            await manager.finish(instanceID: mac, streamID: "s1", status: .complete, message: "Done")
+        }
+        await merge.value
+        await finishFirst.value
+        let summary = try XCTUnwrap(Activity<AidenRunsSummaryActivityAttributes>.activities.first {
+            $0.attributes.instanceID == mac
+        })
+        await manager.finish(instanceID: mac, streamID: "s2", status: .complete, message: "Done")
+
+        let ended = await eventually("the summary to end once both runs finished") {
+            summary.activityState == .ended || summary.activityState == .dismissed
+        }
+        XCTAssertTrue(ended)
     }
 
     @MainActor
@@ -1243,12 +1417,18 @@ final class AidenNativeIntegrationTests: XCTestCase {
         )
     }
 
-    private func alertServerError(_ status: Int, code: String) throws -> AidenRemoteClientError {
+    private func alertServerError(
+        _ status: Int,
+        code: String,
+        details: [String: Any]? = nil
+    ) throws -> AidenRemoteClientError {
+        var envelope: [String: Any] = [
+            "code": code, "message": "Refused", "requestId": "request-1", "retryable": false,
+        ]
+        if let details { envelope["details"] = details }
         let body = try JSONDecoder().decode(
             AidenRemoteErrorEnvelope.Body.self,
-            from: JSONSerialization.data(withJSONObject: [
-                "code": code, "message": "Refused", "requestId": "request-1", "retryable": false,
-            ])
+            from: JSONSerialization.data(withJSONObject: envelope)
         )
         return .server(statusCode: status, body: body)
     }

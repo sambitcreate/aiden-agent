@@ -7,14 +7,22 @@ import WidgetKit
 struct AidenRunsSummaryLiveActivityWidget: Widget {
     var body: some WidgetConfiguration {
         ActivityConfiguration(for: AidenRunsSummaryActivityAttributes.self) { context in
-            AidenRunsSummaryLockScreenView(rows: context.state.rows, machineName: context.attributes.machineName)
+            AidenRunsSummaryLockScreenView(
+                state: context.state,
+                machineName: context.attributes.machineName,
+                systemMarkedStale: context.isStale
+            )
                 .widgetURL(Self.tapURL(context))
         } dynamicIsland: { context in
             let rows = context.state.rows
             let headline = AidenRunsSummaryPolicy.headline(rows: rows, machineName: context.attributes.machineName)
             return DynamicIsland {
                 DynamicIslandExpandedRegion(.bottom) {
-                    AidenRunsSummaryCard(rows: rows, machineName: context.attributes.machineName)
+                    AidenRunsSummaryCard(
+                        state: context.state,
+                        machineName: context.attributes.machineName,
+                        systemMarkedStale: context.isStale
+                    )
                         .padding(.horizontal, 4)
                 }
             } compactLeading: {
@@ -46,11 +54,13 @@ struct AidenRunsSummaryLiveActivityWidget: Widget {
 }
 
 private struct AidenRunsSummaryLockScreenView: View {
-    let rows: [AidenRunsSummaryActivityAttributes.Row]
+    let state: AidenRunsSummaryActivityAttributes.ContentState
     let machineName: String
+    let systemMarkedStale: Bool
     @Environment(\.activityFamily) private var activityFamily
 
     var body: some View {
+        let rows = state.rows
         if activityFamily == .small {
             // Watch Smart Stack and CarPlay: the headline only.
             let headline = AidenRunsSummaryPolicy.headline(rows: rows, machineName: machineName)
@@ -68,17 +78,19 @@ private struct AidenRunsSummaryLockScreenView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(10)
         } else {
-            AidenRunsSummaryCard(rows: rows, machineName: machineName)
+            AidenRunsSummaryCard(state: state, machineName: machineName, systemMarkedStale: systemMarkedStale)
                 .padding(16)
         }
     }
 }
 
 private struct AidenRunsSummaryCard: View {
-    let rows: [AidenRunsSummaryActivityAttributes.Row]
+    let state: AidenRunsSummaryActivityAttributes.ContentState
     let machineName: String
+    let systemMarkedStale: Bool
 
     var body: some View {
+        let rows = state.rows
         let headline = AidenRunsSummaryPolicy.headline(rows: rows, machineName: machineName)
         let visible = AidenRunsSummaryPolicy.visible(rows)
         VStack(alignment: .leading, spacing: 6) {
@@ -122,6 +134,21 @@ private struct AidenRunsSummaryCard: View {
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 }
+            }
+
+            // Once the app stops updating, the rows may be out of date.
+            if let note = AidenRunsSummaryPolicy.staleNote(state, systemMarkedStale: systemMarkedStale) {
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Text(note)
+                    Spacer(minLength: 8)
+                    if let updated = AidenRunsSummaryPolicy.latestUnfinishedUpdate(rows) {
+                        Text(updated, style: .relative)
+                            .multilineTextAlignment(.trailing)
+                    }
+                }
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)

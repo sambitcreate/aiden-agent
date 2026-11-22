@@ -1,6 +1,7 @@
 import SwiftUI
 import MetricKit
 import OSLog
+import UserNotifications
 
 enum AidenDiagnosticArea: String, CaseIterable {
     case connection, authentication, contract, cache, stream, speech
@@ -121,6 +122,9 @@ struct AidenOnTheGoApp: App {
             coordinator: coordinator,
             liveActivities: .shared
         )
+        AidenBackgroundActionBroker.shared.onCardActionUnanswered = { action, link in
+            await AidenUnansweredCardAction.post(action, link: link, center: UNUserNotificationCenter.current())
+        }
         // A run still going when the app leaves the screen gets a little
         // more time, so it can still update its card and alert when it ends.
         let grace = AidenBackgroundGrace(host: AidenApplicationBackgroundTaskHost())

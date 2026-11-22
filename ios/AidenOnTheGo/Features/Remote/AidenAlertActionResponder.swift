@@ -1,4 +1,5 @@
 import Foundation
+import UserNotifications
 
 /// The Remote calls a background action needs. `AidenRemoteClient` is the
 /// real one; tests use a recording fake.
@@ -91,9 +92,19 @@ struct AidenAlertActionResponder {
             return .done
         } catch let AidenRemoteClientError.server(statusCode, body)
             where statusCode == 409 && Self.resolvedCodes.contains(body.code.rawValue) {
-            return .alreadyResolved
+            return .alreadyResolved(winner: Self.winner(body.details?.decision))
         } catch {
             return .openApp(chatURL)
+        }
+    }
+
+    /// The Mac's winning decision, when it names one; expired, cancelled or
+    /// unnamed reads as nil.
+    private static func winner(_ decision: String?) -> AgentRunApprovalAnswer? {
+        switch decision {
+        case "allow": .allow
+        case "deny": .deny
+        default: nil
         }
     }
 
@@ -128,25 +139,89 @@ extension AidenBackgroundActionBroker {
         coordinator: AidenRemoteCoordinator,
         liveActivities: AidenRemoteLiveActivityManager
     ) -> @MainActor (AidenAlertAction) async -> AidenAlertActionOutcome {
-        { [weak coordinator] action in
-            guard let coordinator else { return .openApp(nil) }
-            let responder = AidenAlertActionResponder(lookup: { instanceID in
+        let perform = perform(
+            lookup: { [weak coordinator] instanceID in
+                guard let coordinator else { return .unreachable }
                 guard coordinator.hosts.connection(for: instanceID) != nil else { return .forgotten }
                 guard let context = try? coordinator.ownerContext(for: instanceID),
                       let client = try? coordinator.remoteClient(for: context) else { return .unreachable }
                 return .client(client)
-            })
-            let outcome = await responder.run(action)
-            guard outcome == .done || outcome == .alreadyResolved else { return outcome }
+            },
+            liveActivities: liveActivities
+        )
+        return { [weak coordinator] action in
+            guard coordinator != nil else { return .openApp(nil) }
+            return await perform(action)
+        }
+    }
+
+    /// The card shows the answer that counts: the phone's own when the Mac
+    /// took it, the Mac's winning one when someone answered first, and a
+    /// neutral line when the Mac doesn't say who won.
+    static func perform(
+        lookup: @escaping @MainActor (String) -> AidenAlertActionResponder.ClientLookup,
+        liveActivities: AidenRemoteLiveActivityManager
+    ) -> @MainActor (AidenAlertAction) async -> AidenAlertActionOutcome {
+        { action in
+            let outcome = await AidenAlertActionResponder(lookup: lookup).run(action)
+            let target: AgentRunApprovalTarget
+            let asked: AgentRunApprovalAnswer
             switch action {
-            case let .approve(_, _, target):
-                await liveActivities.approvalAnswered(approvalID: target.approvalID, decision: .allow)
-            case let .deny(_, _, target):
-                await liveActivities.approvalAnswered(approvalID: target.approvalID, decision: .deny)
+            case let .approve(_, _, approval):
+                (target, asked) = (approval, .allow)
+            case let .deny(_, _, approval):
+                (target, asked) = (approval, .deny)
             case .reply:
+                return outcome
+            }
+            switch outcome {
+            case .done:
+                await liveActivities.approvalAnswered(approvalID: target.approvalID, decision: asked)
+            case let .alreadyResolved(winner):
+                await liveActivities.approvalAnswered(approvalID: target.approvalID, decision: winner)
+            case .openApp, .dropped:
                 break
             }
             return outcome
         }
+    }
+}
+
+/// The alert for an answer from a Live Activity that didn't reach the Mac.
+/// It names no chat or approval text, and a tap opens the chat to answer.
+enum AidenUnansweredCardAction {
+    nonisolated static let identifierPrefix = "aiden.card-unanswered."
+
+    @MainActor
+    static func post(_ action: AidenAlertAction, link: URL?, center: AidenRunAlertCenter) async {
+        switch await center.currentAuthorizationStatus() {
+        case .authorized, .provisional, .ephemeral:
+            break
+        default:
+            return
+        }
+        guard let link = link ?? AidenDeepLink.chatURL(instanceId: action.instanceID, chatId: action.chatID) else {
+            return
+        }
+        let content = UNMutableNotificationContent()
+        content.title = switch action {
+        case .deny: String(localized: "Deny didn't reach your computer")
+        case .approve, .reply: String(localized: "Your answer didn't reach your computer")
+        }
+        content.body = String(localized: "Open the chat to answer there.")
+        content.userInfo = [
+            AidenRunAlertNotifier.deepLinkUserInfoKey: link.absoluteString,
+            AidenRunAlertNotifier.instanceUserInfoKey: action.instanceID,
+        ]
+        let request = UNNotificationRequest(
+            identifier: AidenMachineNotificationIdentifier.make(
+                prefix: identifierPrefix,
+                instanceId: action.instanceID,
+                id: action.chatID
+            ),
+            content: content,
+            trigger: nil
+        )
+        try? await center.add(request)
     }
 }

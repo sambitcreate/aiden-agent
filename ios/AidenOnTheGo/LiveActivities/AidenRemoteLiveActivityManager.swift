@@ -44,6 +44,9 @@ final class AidenRemoteLiveActivityManager {
     /// state keeps advancing here after the run's own card has ended.
     private var summaryRuns: [String: [String: SummaryRun]] = [:]
     private var summaryThrottleByID: [String: AidenLatestValueThrottle<SummaryState>] = [:]
+    /// Single-run cards being folded into a summary. They stay live until
+    /// their end lands, so updates skip them and go to the summary row.
+    private var mergingActivityIDs: Set<String> = []
     /// Every run started and not yet finished, by Mac then stream, whether or
     /// not it has a card: background grace keeps alerts going without one.
     private var liveRuns: [String: Set<String>] = [:] {
@@ -129,6 +132,7 @@ final class AidenRemoteLiveActivityManager {
 
         let others = systemActivities.filter {
             $0.attributes.instanceID == instanceID && isLive($0) && !self.state(for: $0).isFinal
+                && !mergingActivityIDs.contains($0.id)
         }
         if summary(for: instanceID) != nil || !others.isEmpty {
             await mergeIntoSummary(
@@ -230,8 +234,9 @@ final class AidenRemoteLiveActivityManager {
     }
 
     /// An approval answered from a card or notification: every card still
-    /// waiting on it shows the answer and drops its buttons.
-    func approvalAnswered(approvalID: String, decision: AgentRunApprovalAnswer) async {
+    /// waiting on it shows the answer and drops its buttons. A nil decision
+    /// means it was settled elsewhere without saying how.
+    func approvalAnswered(approvalID: String, decision: AgentRunApprovalAnswer?) async {
         for activity in systemActivities where isLive(activity) {
             let current = state(for: activity)
             guard current.approval?.approvalID == approvalID else { continue }
@@ -266,6 +271,13 @@ final class AidenRemoteLiveActivityManager {
             let state = AgentRunActivityStateReducer.stale(state: state(for: activity))
             stateByActivityID[activity.id] = state
             await throttle(for: activity).submitUrgent(state)
+        }
+        for summary in systemSummaries where isLive(summary) {
+            rehydrateSummaryRuns(from: summary)
+            var state = summaryState(for: summary.attributes.instanceID)
+            guard state.rows.contains(where: { !$0.isFinal }) else { continue }
+            state.isStale = true
+            await summaryThrottle(for: summary).submitUrgent(state)
         }
     }
 
@@ -437,6 +449,10 @@ final class AidenRemoteLiveActivityManager {
     ) async {
         let existing = summary(for: instanceID)
         if let existing { rehydrateSummaryRuns(from: existing) }
+        // From here on, before the first await, events for these runs land on
+        // their summary rows rather than the cards that are ending.
+        mergingActivityIDs.formUnion(others.map(\.id))
+        defer { mergingActivityIDs.subtract(others.map(\.id)) }
         var runs = summaryRuns[instanceID] ?? [:]
         for other in others {
             runs[other.attributes.streamID ?? other.id] = SummaryRun(
@@ -458,7 +474,7 @@ final class AidenRemoteLiveActivityManager {
                         deviceID: deviceID,
                         machineName: machineName
                     ),
-                    content: ActivityContent(state: summaryState, staleDate: nil),
+                    content: summaryContent(summaryState),
                     pushType: nil
                 )
                 summaryThrottle(for: activity).markDelivered(summaryState)
@@ -545,7 +561,7 @@ final class AidenRemoteLiveActivityManager {
     ) async {
         summaryThrottleByID.removeValue(forKey: summary.id)?.cancel()
         summaryRuns[summary.attributes.instanceID] = nil
-        await summary.end(ActivityContent(state: state, staleDate: nil), dismissalPolicy: dismissalPolicy)
+        await summary.end(summaryContent(state), dismissalPolicy: dismissalPolicy)
     }
 
     private func summaryThrottle(for activity: SummaryActivity) -> AidenLatestValueThrottle<SummaryState> {
@@ -554,7 +570,7 @@ final class AidenRemoteLiveActivityManager {
             interval: Self.coalescedUpdateInterval
         ) { [weak self, weak activity] state in
             guard let self, let activity, self.isLive(activity) else { return }
-            await activity.update(ActivityContent(state: state, staleDate: nil))
+            await activity.update(self.summaryContent(state))
         }
         summaryThrottleByID[activity.id] = throttle
         return throttle
@@ -616,16 +632,23 @@ final class AidenRemoteLiveActivityManager {
     private func activity(instanceID: String, streamID: String) -> Activity<AgentRunActivityAttributes>? {
         if let currentActivity,
            Self.matches(currentActivity.attributes, instanceID: instanceID, streamID: streamID),
-           isLive(currentActivity) {
+           isLive(currentActivity),
+           !mergingActivityIDs.contains(currentActivity.id) {
             return currentActivity
         }
         return systemActivities.first {
-            Self.matches($0.attributes, instanceID: instanceID, streamID: streamID) && isLive($0)
+            Self.matches($0.attributes, instanceID: instanceID, streamID: streamID)
+                && isLive($0)
+                && !mergingActivityIDs.contains($0.id)
         }
     }
 
     private func isLive<Attributes: ActivityAttributes>(_ activity: Activity<Attributes>) -> Bool {
         activity.activityState == .active || activity.activityState == .stale
+    }
+
+    private func summaryContent(_ state: SummaryState) -> ActivityContent<SummaryState> {
+        ActivityContent(state: state, staleDate: AidenRunsSummaryPolicy.staleDate(state))
     }
 
     private func content(for state: AgentRunActivityAttributes.ContentState) -> ActivityContent<AgentRunActivityAttributes.ContentState> {
