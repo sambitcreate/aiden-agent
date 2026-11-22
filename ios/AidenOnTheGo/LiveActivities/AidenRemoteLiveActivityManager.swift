@@ -44,6 +44,23 @@ final class AidenRemoteLiveActivityManager {
     /// state keeps advancing here after the run's own card has ended.
     private var summaryRuns: [String: [String: SummaryRun]] = [:]
     private var summaryThrottleByID: [String: AidenLatestValueThrottle<SummaryState>] = [:]
+    /// Every run started and not yet finished, by Mac then stream, whether or
+    /// not it has a card: background grace keeps alerts going without one.
+    private var liveRuns: [String: Set<String>] = [:] {
+        didSet {
+            let now = hasLiveRuns
+            guard now != (oldValue.values.contains { !$0.isEmpty }) else { return }
+            onLiveRunsChange?(now)
+        }
+    }
+
+    /// Whether any run is still going on any Mac, merged into a summary or not.
+    var hasLiveRuns: Bool {
+        liveRuns.values.contains { !$0.isEmpty }
+    }
+
+    /// Called once each time `hasLiveRuns` flips.
+    var onLiveRunsChange: (@MainActor (Bool) -> Void)?
 
     /// `preferences` defaults to the person's saved ones in `defaults`.
     init(
@@ -86,6 +103,7 @@ final class AidenRemoteLiveActivityManager {
         streamID: String,
         machineName: String = String(localized: "your computer")
     ) async {
+        liveRuns[instanceID, default: []].insert(streamID)
         guard drivesActivityKit, ActivityAuthorizationInfo().areActivitiesEnabled else { return }
         let startedAt = Date()
         let attributes = AgentRunActivityAttributes(
@@ -269,6 +287,7 @@ final class AidenRemoteLiveActivityManager {
             await endSummary(summary, state: summary.content.state, dismissalPolicy: .immediate)
         }
         summaryRuns[instanceID] = nil
+        liveRuns[instanceID] = nil
     }
 
     func finish(
@@ -278,6 +297,8 @@ final class AidenRemoteLiveActivityManager {
         message: String,
         errorSummary: String? = nil
     ) async {
+        // The card's final write goes first; the change can end the grace.
+        defer { liveRuns[instanceID]?.remove(streamID) }
         guard let activity = activity(instanceID: instanceID, streamID: streamID) else {
             await updateSummaryRun(instanceID: instanceID, streamID: streamID, urgency: .immediate) {
                 AgentRunActivityStateReducer.final(

@@ -178,7 +178,7 @@ If the selected local speech model is not installed, the mobile settings can ask
 
 ## Notifications
 
-Aiden On The Go for iPhone alerts you when a chat run needs you while you're away from it: one Time Sensitive notification when it first waits for an approval or a question, and one when it finishes or fails. These are local notifications, so they fire only while the app still holds the run's connection (for example shortly after you leave the app); there is no cloud push yet.
+Aiden On The Go for iPhone alerts you when a chat run needs you while you're away from it: one Time Sensitive notification when it first waits for an approval or a question, and one when it finishes or fails. These are local notifications, so they fire only while the app still holds the run's connection; there is no cloud push yet. When you leave the app while a run is going, it asks iOS for a little more time (usually about half a minute) so a run that finishes then still alerts and its Live Activity reads Done. A longer run's card shows the last status it had.
 
 - **Approval.** The notification shows the chat title and the approval's summary ("Run npm run test:e2e"). **Approve** asks for Face ID or the passcode first and allows it once, never for the session or always. **Deny** works straight from the Lock Screen. **Open chat** opens the chat. If the phone may only deny, Approve is not offered.
 - **Question.** A single question offers **Reply**, which needs an unlocked phone and sends your words as its answer. A prompt with more than one question offers only **Open chat**.

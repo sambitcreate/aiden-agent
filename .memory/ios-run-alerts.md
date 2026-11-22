@@ -63,3 +63,4 @@ Branch `feature/aiden-ios-notifications-activities-62cf67`, plan `docs/plans/ios
   The manager keeps `summaryRuns[instance][stream]`; `update`/`finish` fall through to the summary when the per-run
   activity is gone. It ends 300 s after every row is final; `endAll` and `reconcile` handle summaries too. The summary
   has no buttons; a tap opens the most urgent chat (waiting > failed > working > done, newest first).
+- Background grace: `AidenBackgroundGrace` (Features/Remote) holds one UIKit background task from `.background` while `AidenRemoteLiveActivityManager.hasLiveRuns`; it ends on foreground, iOS expiry, or 3 s after the last run finishes (`onLiveRunsChange`, wired in `AidenOnTheGoApp`). `hasLiveRuns` tracks started-not-finished streams independent of ActivityKit.

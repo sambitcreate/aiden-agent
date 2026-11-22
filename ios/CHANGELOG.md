@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- **2026-11-22 — A finishing run still alerts after you leave the app.** When the app goes to the background while a run is going, it asks iOS for a little more time (usually about half a minute) and gives it back once the runs end or you return. A run that finishes in that window still posts its alert and its Live Activity reads Done instead of freezing. No Remote wire or revision change.
+
 - **2026-11-22 — One summary Live Activity per Mac.** When a second run starts on the same Mac, the per-run cards merge into one summary Live Activity: a headline ("4 runs on MacBook Pro", "1 needs you"), up to three chats with a plain status, most urgent first, and "+N more". The compact Dynamic Island shows the run count and how many need you. A tap opens the most urgent chat. Runs on different Macs keep separate cards, and the summary ends a few minutes after its last run finishes. No Remote wire or revision change.
 
 - **2026-11-22 — Settings → Notifications.** App settings has a Notifications page: the iOS permission with Turn on or Open Settings, a switch for each alert (approval or question, response ready, response failed, a Bot handing you a step), and Privacy switches for message text in alerts, reply text on the Lock Screen (off by default; it replaces the Appearance switch and starts off again) and quiet for the open chat. No Remote wire or revision change.

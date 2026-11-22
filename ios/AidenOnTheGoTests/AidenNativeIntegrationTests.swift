@@ -1037,6 +1037,60 @@ final class AidenNativeIntegrationTests: XCTestCase {
         XCTAssertTrue(ended)
     }
 
+    // MARK: Background grace
+
+    @MainActor
+    func testGraceBeginsOnlyWithLiveRunsAndEndsWhenTheyFinish() {
+        let host = FakeBackgroundTaskHost()
+        let grace = AidenBackgroundGrace(host: host)
+        grace.appDidEnterBackground(hasLiveRuns: false)
+        XCTAssertEqual(host.begun, 0)
+        grace.appDidEnterBackground(hasLiveRuns: true)
+        XCTAssertEqual(host.begun, 1)
+        grace.appDidEnterBackground(hasLiveRuns: true)
+        XCTAssertEqual(host.begun, 1, "never two tasks")
+        grace.liveRunsDidChange(hasLiveRuns: false)
+        XCTAssertEqual(host.ended, 1)
+    }
+
+    @MainActor
+    func testGraceEndsExactlyOnceOnExpirationOrForeground() {
+        let host = FakeBackgroundTaskHost()
+        let grace = AidenBackgroundGrace(host: host)
+        grace.appDidEnterBackground(hasLiveRuns: true)
+        host.expire()
+        grace.appWillEnterForeground()
+        grace.liveRunsDidChange(hasLiveRuns: false)
+        XCTAssertEqual(host.ended, 1)
+    }
+
+    /// The grace is for alerts too, so it counts runs even when Live
+    /// Activities are off; a run merged into a Mac's summary still counts.
+    @MainActor
+    func testLiveRunsCountStartedRunsUntilEachFinishes() async {
+        let manager = AidenRemoteLiveActivityManager(
+            drivesActivityKit: false,
+            preferences: { AidenNotificationPreferences() }
+        )
+        var changes: [Bool] = []
+        manager.onLiveRunsChange = { changes.append($0) }
+        XCTAssertFalse(manager.hasLiveRuns)
+
+        await manager.start(instanceID: "mac", chatID: "c1", title: "One", streamID: "s1")
+        await manager.start(instanceID: "mac", chatID: "c2", title: "Two", streamID: "s2")
+        XCTAssertTrue(manager.hasLiveRuns)
+        await manager.finish(instanceID: "mac", streamID: "s1", status: .complete, message: "Done")
+        XCTAssertTrue(manager.hasLiveRuns, "one run is still going")
+        await manager.updateStatus(instanceID: "mac", streamID: "s2", state: .done)
+        XCTAssertFalse(manager.hasLiveRuns)
+
+        await manager.start(instanceID: "other", chatID: "c3", title: "Three", streamID: "s3")
+        await manager.endAll(forInstanceID: "other")
+        XCTAssertFalse(manager.hasLiveRuns, "forgetting a Mac ends its runs")
+        XCTAssertEqual(changes, [true, false, true, false], "one call per change, never a repeat")
+    }
+
+
     @MainActor
     private func eventually(
         _ what: String,
@@ -2823,4 +2877,26 @@ private final class AidenNativeActivityURLProtocol: URLProtocol, @unchecked Send
     }
 
     override func stopLoading() {}
+}
+
+@MainActor
+private final class FakeBackgroundTaskHost: AidenBackgroundTaskHost {
+    private(set) var begun = 0
+    private(set) var ended = 0
+    private var expirationHandler: (@MainActor () -> Void)?
+
+    func beginBackgroundTask(expirationHandler: @escaping @MainActor () -> Void) -> UIBackgroundTaskIdentifier {
+        begun += 1
+        self.expirationHandler = expirationHandler
+        return UIBackgroundTaskIdentifier(rawValue: begun)
+    }
+
+    func endBackgroundTask(_ identifier: UIBackgroundTaskIdentifier) {
+        ended += 1
+    }
+
+    /// iOS calls the handler when the time runs out; the app must end the task.
+    func expire() {
+        expirationHandler?()
+    }
 }

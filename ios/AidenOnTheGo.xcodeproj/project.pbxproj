@@ -175,6 +175,7 @@
 		A1A100000000000000000002 /* AidenApprovalIntents.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1A100000000000000000011 /* AidenApprovalIntents.swift */; };
 		A1A100000000000000000003 /* AidenAlertActionResponder.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1A100000000000000000012 /* AidenAlertActionResponder.swift */; };
 		A1A100000000000000000004 /* AidenNotificationPreferences.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1A100000000000000000013 /* AidenNotificationPreferences.swift */; };
+		A1A100000000000000000009 /* AidenBackgroundGrace.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1A100000000000000000017 /* AidenBackgroundGrace.swift */; };
 		A1A100000000000000000005 /* AidenNotificationSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1A100000000000000000014 /* AidenNotificationSettingsView.swift */; };
 		A0DA00000000000000000003 /* AidenScheduledTaskTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0DA00000000000000000013 /* AidenScheduledTaskTests.swift */; };
 		A0D000000000000000000004 /* AidenRemoteContractV1.json in Resources */ = {isa = PBXBuildFile; fileRef = A0D000000000000000000014 /* AidenRemoteContractV1.json */; };
@@ -492,6 +493,7 @@
 		A1A100000000000000000011 /* AidenApprovalIntents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenApprovalIntents.swift; sourceTree = "<group>"; };
 		A1A100000000000000000012 /* AidenAlertActionResponder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenAlertActionResponder.swift; sourceTree = "<group>"; };
 		A1A100000000000000000013 /* AidenNotificationPreferences.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenNotificationPreferences.swift; sourceTree = "<group>"; };
+		A1A100000000000000000017 /* AidenBackgroundGrace.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenBackgroundGrace.swift; sourceTree = "<group>"; };
 		A1A100000000000000000014 /* AidenNotificationSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenNotificationSettingsView.swift; sourceTree = "<group>"; };
 		A0DA00000000000000000013 /* AidenScheduledTaskTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenScheduledTaskTests.swift; sourceTree = "<group>"; };
 		351C0F1600000000000000A1 /* Shared.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; name = Shared.xcconfig; path = Config/Shared.xcconfig; sourceTree = "<group>"; };
@@ -895,6 +897,7 @@
 				A0DD00000000000000000011 /* AidenScheduledRunNotifier.swift */,
 				A1A100000000000000000012 /* AidenAlertActionResponder.swift */,
 				A1A100000000000000000013 /* AidenNotificationPreferences.swift */,
+				A1A100000000000000000017 /* AidenBackgroundGrace.swift */,
 				A0D900000000000000000012 /* AidenWorkspaceEnvironmentView.swift */,
 				A0D600000000000000000014 /* AidenRemoteCoordinator.swift */,
 				A0D600000000000000000015 /* AidenPairingView.swift */,
@@ -1412,6 +1415,7 @@
 				A1A100000000000000000001 /* AidenApprovalIntents.swift in Sources */,
 				A1A100000000000000000003 /* AidenAlertActionResponder.swift in Sources */,
 				A1A100000000000000000004 /* AidenNotificationPreferences.swift in Sources */,
+				A1A100000000000000000009 /* AidenBackgroundGrace.swift in Sources */,
 				A1A100000000000000000005 /* AidenNotificationSettingsView.swift in Sources */,
 				A0D900000000000000000001 /* AidenWorkspaceEnvironment.swift in Sources */,
 				A0D900000000000000000002 /* AidenWorkspaceEnvironmentView.swift in Sources */,
