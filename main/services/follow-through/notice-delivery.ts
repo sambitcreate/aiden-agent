@@ -5,9 +5,10 @@
 // the person's next message. A run another feature owns (a scheduled task's)
 // never takes a notice: delivery waits for it to settle, for at most
 // `waitForRunToSettle`'s bound, then joins or wakes the chat's own turn. A run
-// that still holds the chat after that keeps the notice waiting, with no
-// further bound (the run's own time limit ends it), and once it settles the
-// notice is only recorded, never woken. While the chat has an active
+// that still holds the chat after that keeps the notice waiting longer, for at
+// most `waitForRunToEnd`'s bound (a day; nothing else ends a run that never
+// does), and then the notice is only recorded, never woken; a chat still held
+// then drops it, and says so through `onError`. While the chat has an active
 // keep-going goal, a waking notice starts a goal round instead, which the
 // person attends and which uses no wake budget. Notices for one chat are
 // delivered in order. Delivery lives in memory: a notice still waiting when
@@ -78,8 +79,9 @@ export interface NoticeDeliveryDeps {
    */
   waitForRunToSettle(chatId: string): Promise<void>;
   /**
-   * Waits with no bound until a run that still holds the chat after
-   * `waitForRunToSettle` settles; that run's own time limit ends it.
+   * Waits, for at most a day, until a run that still holds the chat after
+   * `waitForRunToSettle` settles. Runs have no time limit of their own, so
+   * this bound is what keeps a stuck run from holding the chat's notices.
    */
   waitForRunToEnd(chatId: string): Promise<void>;
   now(): number;
@@ -198,7 +200,11 @@ export class NoticeDelivery {
         // Still held after the long wait: stay waiting until that run settles,
         // however long, then only record; the news is too old to wake for.
         await this.waitOnRun(post.chatId, (chatId) => this.deps.waitForRunToEnd(chatId));
-        return this.record(post, post.wake ? "wake-unavailable" : "not-waking");
+        const recorded = await this.record(post, post.wake ? "wake-unavailable" : "not-waking");
+        if (recorded.kind === "dropped" && !recorded.gone) {
+          this.deps.onError?.(new Error("A notice waited a day for another run in its chat to end, and was dropped."));
+        }
+        return recorded;
       }
       const round = post.wake ? await this.deps.startGoalRound?.(post.chatId, post) : undefined;
       if (round) {

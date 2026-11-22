@@ -15,6 +15,7 @@ import {
   RunTaint,
   runTaintHistoryOfBranch,
   runTaintHistoryOfMessages,
+  runTaintHistoryOfRun,
   runTaintPersonText,
   type RunTaintMessage,
 } from "./run-taint.js";
@@ -132,6 +133,35 @@ test("a lead's child_chats results taint its runs only where they carry a tainte
   // A result that isn't a tool result, or a flag that isn't `true`, says nothing.
   assert.equal(taintedOf([{ type: "message", message: { role: "assistant", details: { outside: true } } }]), false);
   assert.equal(taintedOf([{ type: "message", message: { role: "toolResult", toolName: "child_chats", details: { outside: "yes" } } }]), false);
+});
+
+test("a compacted chat starts its next run clean unless what it holds brought outside content in, with history built as a run builds it", async () => {
+  const { createInMemoryPiSession } = await import("../pi-session-repository-port.js");
+  const now = Date.now();
+  const user = (text: string) => ({ role: "user" as const, content: text, timestamp: now });
+  const assistant = (text: string) => ({ role: "assistant" as const, content: [{ type: "text" as const, text }], api: "openai-completions" as const,
+    provider: "test", model: "m", usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+    stopReason: "stop" as const, timestamp: now });
+  const result = (toolName: string, details?: { outside?: true }) => ({ role: "toolResult" as const, toolCallId: `t-${toolName}`, toolName, content: [{ type: "text" as const, text: "…" }],
+    isError: false, timestamp: now, ...(details === undefined ? {} : { details }) });
+  type Message = ReturnType<typeof user> | ReturnType<typeof assistant> | ReturnType<typeof result>;
+  // A chat's journal, compacted after `before` with `tail` kept; then the run's start as llm-client reads it.
+  const nextRun = async (before: Message[], tail: Message[] = [user("Thanks")], transcript: RunTaintMessage[] = []) => {
+    const journal = await createInMemoryPiSession("chat-1");
+    for (const message of before) await journal.appendMessage(message);
+    await journal.appendCompaction({ id: "c1", summary: "Earlier work.", retainedTail: tail, tokensBefore: 50_000 });
+    const branch = await journal.getBranch();
+    const initialMessages = (await journal.buildContext(branch)).messages;
+    assert.equal(initialMessages.some((message) => message.role === "compactionSummary"), true, "the model starts from the compaction's summary");
+    return new RunTaint({ personText: [], history: runTaintHistoryOfRun({ initialMessages, branch, messages: transcript }) }).tainted;
+  };
+  const ask = user("Fix the login page");
+  assert.equal(await nextRun([ask, result("read_file"), assistant("Fixed.")]), false, "a chat that only read its own files");
+  assert.equal(await nextRun([ask, result("child_chats"), assistant("Started.")], [result("child_chats", {})]), false, "a lead whose started chats read nothing outside");
+  assert.equal(await nextRun([ask, result("web_fetch"), assistant("Read it.")]), true, "a page the summary folded away");
+  assert.equal(await nextRun([ask, assistant("Waiting.")], [result("child_chats", { outside: true })]), true, "a tainted chat's words kept after compaction");
+  const ending = { role: "user", content: "“Docs” finished.", notice: agentNotice({ source: "chat", tone: "success", title: "“Docs” finished", summary: "", outside: true }) };
+  assert.equal(await nextRun([ask, assistant("Started.")], undefined, [ending]), true, "a tainted chat's ending in the transcript");
 });
 
 test("a run a tainted lead chat wrote into counts as holding outside content from then on", () => {
