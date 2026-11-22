@@ -58,6 +58,7 @@ struct AidenRunningAccessory: View {
 
     @Environment(\.aidenPalette) private var palette
     @Environment(\.tabViewBottomAccessoryPlacement) private var placement
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     init(
         rows: [AidenUnifiedInboxRow],
@@ -70,6 +71,13 @@ struct AidenRunningAccessory: View {
     }
 
     private var isCompact: Bool { placement == .inline }
+
+    /// A bar keeps its height, so there the title stays on one line and a held
+    /// press shows it large. As the Inbox's first row (a sidebar, or iOS 26.0)
+    /// it grows with the text as the rows below it do.
+    private var titleLineLimit: Int {
+        placement == nil && dynamicTypeSize.isAccessibilitySize ? 3 : 1
+    }
 
     var body: some View {
         if let title = summary.title {
@@ -85,7 +93,7 @@ struct AidenRunningAccessory: View {
                     Text(title)
                         .font(isCompact ? .footnote.weight(.medium) : .subheadline.weight(.medium))
                         .foregroundStyle(palette.foreground)
-                        .lineLimit(1)
+                        .lineLimit(titleLineLimit)
                     Spacer(minLength: 0)
                     if summary.othersCount > 0 {
                         // On glass the quieter colour falls under 4.5:1 over light content.
