@@ -83,7 +83,9 @@ export function ScheduledTaskLinkPanel({ taskId, busy, recentCalls }: {
       ) : (
         <Text as="p" variant="small" color="secondary" className="mt-1">
           {state?.hasLink
-            ? state.listenerOn ? "Calls run this task. The link stays private to you." : "Turn on Aiden On The Go so calls can reach this computer."
+            ? state.needsNewLink
+              ? "The signature header changed. Rotate the link to get its new signing secret; until then signed calls are refused."
+              : state.listenerOn ? "Calls run this task. The link stays private to you." : "Turn on Aiden On The Go so calls can reach this computer."
             : "Make a private link that runs this task when something calls it."}
         </Text>
       )}
@@ -95,6 +97,7 @@ export function ScheduledTaskLinkPanel({ taskId, busy, recentCalls }: {
             {state.log.slice(0, 10).map((entry, index) => (
               <li key={`${entry.at}-${index}`} className="text-small">
                 <span className="text-primary">{OUTCOME_LABELS[entry.outcome] ?? entry.outcome}</span>
+                {entry.repeats ? <span className="text-tertiary"> · {entry.repeats + 1} calls</span> : null}
                 <span className="text-tertiary"> · {new Date(entry.at).toLocaleString()}</span>
                 {entry.preview ? <span className="block truncate text-tertiary">{entry.preview}</span> : null}
               </li>

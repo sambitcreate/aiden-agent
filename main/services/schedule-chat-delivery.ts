@@ -15,6 +15,7 @@ import {
 import type { AgentNoticeOutcome, AgentNoticePost } from "./follow-through/notice-delivery.js";
 import type { ScheduledRunTrigger } from "./schedule-service-core.js";
 import type { ScheduledRun, ScheduledTask } from "./types.js";
+import { SCHEDULED_TASK_TRIGGER_LIMITS } from "../../renderer/shared/scheduled-task-trigger.js";
 
 /** Task runs one chat may take in an hour, shared by schedules and triggers. */
 export const MAX_TASK_RUNS_PER_CHAT_PER_HOUR = 6;
@@ -23,8 +24,20 @@ export const TASK_RUN_CHAT_IDLE_WAIT_MS = 10 * 60 * 1000;
 const TASK_RUN_WINDOW_MS = 60 * 60 * 1000;
 /** Script output shown to the agent: the end, where results and errors are. */
 const SCRIPT_OUTPUT_NOTICE_CHARS = 8_000;
-/** Outside text a trigger saw, shown to the agent as data. */
-const EVENT_TEXT_CHARS = 8_000;
+/**
+ * Outside text a trigger saw, shown to the agent as data. The trigger already
+ * fits it to this bound with what matters first (a watch's newest change, a
+ * link's heading), so a longer text keeps its start.
+ */
+const EVENT_TEXT_CHARS = SCHEDULED_TASK_TRIGGER_LIMITS.eventTextChars;
+
+function headText(text: string, maxChars: number): string {
+  if (text.length <= maxChars) return text;
+  let end = maxChars - 1;
+  const code = text.charCodeAt(end - 1);
+  if (code >= 0xd800 && code <= 0xdbff) end -= 1;
+  return `${text.slice(0, end)}…`;
+}
 
 export interface TaskRunExecution {
   result: ScheduledRun["result"];
@@ -161,7 +174,7 @@ export function scheduledTaskNoticeText(task: ScheduledTask, cadence: string, ev
     task.prompt?.trim() ?? "",
   ];
   if (eventText?.trim()) {
-    lines.push("", fenceAsData("What happened", tailText(eventText, EVENT_TEXT_CHARS).text));
+    lines.push("", fenceAsData("What happened", headText(eventText, EVENT_TEXT_CHARS)));
   }
   return lines.join("\n");
 }
@@ -195,7 +208,7 @@ export function createTaskRunChatDelivery(deps: TaskRunChatDeliveryDeps) {
 
   async function inOwnChat(task: ScheduledTask, signal: AbortSignal, eventText?: string): Promise<TaskRunOutcome> {
     const chatId = await deps.ensureOwnChat(task);
-    const fenced = eventText?.trim() ? fenceAsData("What happened", tailText(eventText, EVENT_TEXT_CHARS).text) : undefined;
+    const fenced = eventText?.trim() ? fenceAsData("What happened", headText(eventText, EVENT_TEXT_CHARS)) : undefined;
     try {
       return { kind: "fell_back", chatId, ...(await deps.runInOwnChat(task, chatId, signal, fenced)) };
     } catch (cause) {

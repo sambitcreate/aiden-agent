@@ -52,3 +52,14 @@ Proactive Aiden plan, Phase 4 (docs/plans/proactive-aiden-plan.md). Guide: docs/
 - IPC `schedule:trigger-connector:find-sources` (60 s), `schedule:save` swaps the choice (`takeTaskConnectorChoice`) before saving and calls `bindTaskConnectorSource` after. Renderer `scheduleApi.findTriggerConnectorSources`; editor **When a connected app has news** + `ConnectorTriggerFields` / `connectorTriggerReady`.
 - `schedule_task` refuses `connector` (set up in the editor). CLI refuses all triggers. Phones hide trigger tasks (generic `task.trigger`). Analytics: `source: "watch"`.
 - Tests: `scheduled-task-triggers.test.ts` (fake ports + real `compareImcpWatch`: unbound skipped, baseline then one run, discover only once, drift/revoked, choice expiry/kind, save rules), `scheduled-tasks-parse.test.ts`, `schedule-tool.test.ts`, new `renderer/components/scheduled-task-connector-fields.test.tsx` (test:scheduled).
+
+## Phase 4 review fixes (E2–E4)
+
+- Token lookup: the store keeps an in-memory `tokenIndex` (hash → task id) rebuilt in every `load()` and `setTokenHash`; `findByToken` only takes the serial `load()` for a hit, so unknown tokens never read tasks or write. `linkState` is read-only. The webhook sheds calls with 429 after `UNKNOWN_LINK_CALLS_PER_MINUTE` (120) unknown tokens a minute across links.
+- Refused calls (bad signature, invalid JSON) refund their slot in the 60/min, count toward `REFUSED_LINK_CALLS_PER_MINUTE` (30) and log with `coalesce` (same outcome within a minute bumps `repeats`). Log broadcasts throttled to one per 2 s per task (trailing).
+- One event bound: `SCHEDULED_TASK_TRIGGER_LIMITS.eventTextChars` (24,000) = `TASK_TRIGGER_PAYLOAD_CHARS` = delivery's `EVENT_TEXT_CHARS`; delivery keeps the start (`headText`); `linkEventText(payload, maxChars)` fits heading + calls by shortening the longest.
+- `dispatcher.requeue(..., {refund, notBefore})`: skipped chat_busy/chat_budget runs give back their day count; chat_budget waits `CHAT_BUDGET_RETRY_MS` (1 h) by moving `lastRunAt` to `notBefore - gap`. New dispatcher dep `heldDropped` (tasks: `dailyLimit` card + link log `daily_limit`; Bots unchanged).
+- Replay: a recorded skipped chat_busy/chat_budget run counts as unsettled (like blocked) and runs again.
+- Book `needsNewLink` when a save adds or changes `signatureHeader` on a task with a link; cleared by `setTokenHash`; `linkState.needsNewLink` → panel says Rotate.
+- Store dep `released(taskId)` when a link or script-watch task changes away or is deleted → main deletes the link secret and `taskCheckStateFile`.
+- `schedule_task` refuses proposed URL watches where `isPrivateWatchAddress` (renderer/shared/scheduled-task-trigger.ts); the label shows the whole host and cuts only the path; link results say `person_creates_in_task_details`.

@@ -2,6 +2,7 @@
 // bookkeeping file, the schedule service and execution, and the watch sources.
 
 import { randomBytes } from "node:crypto";
+import { promises as fs } from "node:fs";
 import path from "node:path";
 import { ipcMain, logger } from "../platform.js";
 import { fetchBotWatchUrl } from "./bot-routine-events/watch-sources.js";
@@ -10,7 +11,7 @@ import { scheduleExecution } from "./schedule-execution.js";
 import { resolveScheduledScript, runScheduledScript } from "./schedule-script.js";
 import { scheduleService } from "./schedule-service.js";
 import { scheduleStore } from "./schedule-store.js";
-import { createScheduledTaskTriggers } from "./scheduled-task-triggers.js";
+import { createScheduledTaskTriggers, taskCheckStateFile } from "./scheduled-task-triggers.js";
 import { taskConnectorTriggers } from "./scheduled-task-connector-main.js";
 import type { TaskConnectorSource } from "./scheduled-task-connector-trigger.js";
 import type { BotConnectorWatchSourceList } from "../../renderer/shared/bot-connector-watches.js";
@@ -19,6 +20,10 @@ import { secrets } from "./secrets.js";
 
 /** Where a link task's signing secret lives; the agent and phones never see it. */
 const linkSecretKey = (taskId: string) => `aiden-internal:task-hook:${taskId}`;
+
+async function checkStateDir(): Promise<string> {
+  return path.join((await import("../platform.js")).app.getPath("userData"), "scheduled-task-check-state");
+}
 
 const triggerStore = createScheduledTaskTriggerStore({
   persistence: new DataStore<unknown>(SCHEDULED_TASK_TRIGGERS_FILE, { version: 1, tasks: {} }),
@@ -29,6 +34,14 @@ const triggerStore = createScheduledTaskTriggerStore({
       lastError: `${afterFailures ? "Paused after 3 failed checks" : "Paused"}${reason ? `: ${reason}` : "."}`.slice(0, 4_096),
     });
     ipcMain.broadcast("schedule:updated", { taskId });
+  },
+  // A task that stopped being a link or script task (or lost its trigger)
+  // leaves no signing secret or script state file behind.
+  released: (taskId) => {
+    void secrets.deleteKey(linkSecretKey(taskId)).catch((error: unknown) => logger.warn("schedule", "Could not remove a task link's secret.", error));
+    void checkStateDir()
+      .then((dir) => fs.rm(taskCheckStateFile(dir, taskId), { force: true }))
+      .catch((error: unknown) => logger.warn("schedule", "Could not remove a task's check state.", error));
   },
   now: Date.now,
 });
@@ -54,7 +67,7 @@ const triggers = createScheduledTaskTriggers({
   execScript: (scriptPath, options) => runScheduledScript(scriptPath, options),
   linkSecret: (taskId) => secrets.getKey(linkSecretKey(taskId)),
   connector: taskConnectorTriggers,
-  checkStateDir: async () => path.join((await import("../platform.js")).app.getPath("userData"), "scheduled-task-check-state"),
+  checkStateDir,
   paused: async (task, error, afterFailures) => {
     await scheduleExecution.recordInLandingChat(task, {
       tone: "failure",
@@ -63,6 +76,9 @@ const triggers = createScheduledTaskTriggers({
         ? `Scheduled task "${task.name}" was paused: ${error || "its source couldn't be checked."} Then turn the task back on.`
         : `Scheduled task "${task.name}" was paused: its watch failed 3 times in a row${error ? ` (${error})` : ""}. Check the address or script, then turn the task back on.`,
     });
+  },
+  dailyLimit: async (task, text) => {
+    await scheduleExecution.recordInLandingChat(task, { tone: "info", summary: "Today's 48 runs were used up", text });
   },
   changed: (taskId) => ipcMain.broadcast("schedule:updated", { taskId }),
   now: Date.now,
@@ -138,9 +154,9 @@ export async function rotateTaskTriggerLink(taskId: string): Promise<{ url: stri
 }
 
 /** Whether a link task has a link, whether the listener is on, and its recent calls (never the link). */
-export async function taskTriggerLinkState(taskId: string): Promise<{ hasLink: boolean; listenerOn: boolean; log: TaskLinkLogEntry[] }> {
+export async function taskTriggerLinkState(taskId: string): Promise<{ hasLink: boolean; needsNewLink: boolean; listenerOn: boolean; log: TaskLinkLogEntry[] }> {
   const state = await triggerStore.linkState(taskId);
-  return { hasLink: state?.hasLink ?? false, listenerOn: (await listenerBase()) !== null, log: state?.log ?? [] };
+  return { hasLink: state?.hasLink ?? false, needsNewLink: state?.needsNewLink ?? false, listenerOn: (await listenerBase()) !== null, log: state?.log ?? [] };
 }
 
 /** The foreground Find sources step of a connected-app task: lists sources through connections that are already open. */

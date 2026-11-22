@@ -263,7 +263,7 @@ Refactor only. Widen `bot-routine-events/dispatcher.ts` and `watch.ts` from `bot
 
 ### E4. Aiden can propose triggers
 
-`trigger` parameter on the `schedule` tool's `create`, canonicalised and summarised; the approval card shows the trigger label; Assistant tasks may use links and URL watches only; one prompt line. Result is `{task, status, link: "shown_to_person"}`. Tests: the trigger survives approval unchanged; Assistant rejects script watches; the summary names the trigger; a scheduled run has no `schedule` tool. Lanes `test:scheduled`, `test:assistant-automations`. Docs: the trigger guide. **Screenshots:** yes. **Size:** S–M. **Waits on:** E2, E3.
+`trigger` parameter on the `schedule` tool's `create`, canonicalised and summarised; the approval card shows the trigger label; Assistant tasks may use links and URL watches only; one prompt line. Result is `{task, status, link: "person_creates_in_task_details"}`. Tests: the trigger survives approval unchanged; Assistant rejects script watches; the summary names the trigger; a scheduled run has no `schedule` tool. Lanes `test:scheduled`, `test:assistant-automations`. Docs: the trigger guide. **Screenshots:** yes. **Size:** S–M. **Waits on:** E2, E3.
 
 ### E5. Failure pause and the 12-hour rule (answer 18a)
 
