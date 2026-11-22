@@ -110,6 +110,13 @@ export type BotClassifiableAction =
       description?: string;
       annotations?: { title?: string; readOnlyHint?: boolean; destructiveHint?: boolean; openWorldHint?: boolean };
       destructive: "destructive" | "additive" | "unknown";
+      /**
+       * A service tool's own operation names for this call (the app actions a
+       * Composio call runs). Their verbs are read like a tool name's.
+       */
+      operations?: readonly string[];
+      /** The call can reach anything (code, raw API calls), so Always allow never covers it. */
+      neverRemembered?: true;
     };
 
 export interface BotActionEvidence {
@@ -395,10 +402,30 @@ const SEND = stem("send");
 const MCP_SEND_MONEY_WORDS: ReadonlySet<string> = new Set(["money", "payment", "fund", "cash"].map(stem));
 
 function classifyMcp(action: Extract<BotClassifiableAction, { surface: "mcp" }>, out: Collector): void {
-  const nameStems = tokenize(action.remoteName.slice(0, MAX_TEXT)).map(stem);
   const additive = action.destructive === "additive";
-  out.text(action.modelName, action.remoteName, action.summary, action.annotations?.title, action.description);
+  const operations = (action.operations ?? []).slice(0, 20).map((name) => name.slice(0, MAX_TEXT));
+  out.text(action.modelName, action.remoteName, action.summary, action.annotations?.title, action.description, ...operations);
 
+  classifyMcpName(tokenize(action.remoteName.slice(0, MAX_TEXT)).map(stem), additive, "tool name", 0, out);
+  // `GMAIL_SEND_EMAIL`: the app's name leads, so its verb may stand second.
+  for (const operation of operations) {
+    classifyMcpName(tokenize(operation).map(stem), additive, "app action", 1, out);
+    out.words(operation, "app action", LOCKED_CLASSES);
+  }
+  // Credential and money words in the name or summary (`reset_password`,
+  // `update_card_details`). The other classes come from the name's verbs
+  // above: a noun such as `update_book` or `list_post_drafts` is not a verb.
+  out.words(action.remoteName, "tool name", LOCKED_CLASSES);
+  out.words(action.summary, "tool summary", LOCKED_CLASSES);
+  out.words(action.annotations?.title, "tool title", additive ? WITHOUT_DELETE : ALL);
+  // A description is long and mentions other tools; only its first sentence,
+  // and never for a locked class.
+  const firstSentence = action.description?.split(/(?<=[.!?])\s|\n/u)[0];
+  out.words(firstSentence, "tool description", additive ? NOT_LOCKED_WITHOUT_DELETE : NOT_LOCKED);
+}
+
+/** The classes a tool or operation name's verbs name; `lastLeading` is the last index a leading verb may sit at. */
+function classifyMcpName(nameStems: readonly string[], additive: boolean, source: string, lastLeading: number, out: Collector): void {
   for (const verbs of MCP_NAME_VERBS) {
     if (verbs.actionClass === "delete" && additive) continue;
     const anywhere = verbs.anywhere.map(stem);
@@ -412,7 +439,7 @@ function classifyMcp(action: Extract<BotClassifiableAction, { surface: "mcp" }>,
       if (verbs.actionClass === "communicate" && word === SEND && MCP_SEND_MONEY_WORDS.has(next)) return false;
       return true;
     });
-    if (matched === undefined && nameStems[0] !== undefined && leading.includes(nameStems[0])) matched = nameStems[0];
+    if (matched === undefined) matched = nameStems.slice(0, lastLeading + 1).find((word) => leading.includes(word));
     if (matched === undefined) {
       for (const phrase of verbs.phrases ?? []) {
         const words = phraseStems(phrase);
@@ -423,18 +450,8 @@ function classifyMcp(action: Extract<BotClassifiableAction, { surface: "mcp" }>,
         }
       }
     }
-    if (matched !== undefined) out.strong(verbs.actionClass, `tool name: “${matched}”`);
+    if (matched !== undefined) out.strong(verbs.actionClass, `${source}: “${matched}”`);
   }
-  // Credential and money words in the name or summary (`reset_password`,
-  // `update_card_details`). The other classes come from the name's verbs
-  // above: a noun such as `update_book` or `list_post_drafts` is not a verb.
-  out.words(action.remoteName, "tool name", LOCKED_CLASSES);
-  out.words(action.summary, "tool summary", LOCKED_CLASSES);
-  out.words(action.annotations?.title, "tool title", additive ? WITHOUT_DELETE : ALL);
-  // A description is long and mentions other tools; only its first sentence,
-  // and never for a locked class.
-  const firstSentence = action.description?.split(/(?<=[.!?])\s|\n/u)[0];
-  out.words(firstSentence, "tool description", additive ? NOT_LOCKED_WITHOUT_DELETE : NOT_LOCKED);
 }
 
 /**

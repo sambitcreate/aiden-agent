@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- **2026-11-22 — No "Sending…" in Bot chats.** A message you send to a Bot looks sent from the moment you press Send and never gains a "Sending…" caption, however long the Mac takes to take it. The status line ("Getting ready", then "Thinking" once the model starts) shows the wait; Queued and "Couldn’t send · Try again" are unchanged. Paired Macs on the next Aiden release also start a Bot's reply much sooner, because a turn no longer re-reads every provider, connector and skill a dozen times before asking the model. No Remote wire or revision change.
 - **2026-11-22 — Quieter lists and an ink accent.** No Remote wire or revision change.
   - The default Aiden theme's accent is muted ink instead of blue. Status colours stay coloured.
   - Links in replies and HTML previews are underlined and take the theme's accent in every theme.
@@ -9,7 +10,7 @@
   - Computers' note about hiding a computer is plain text on the page, with no band or line behind it, and its rows leave room before the chevron.
   - A list's heading stays readable while rows scroll under it.
   - At the largest text sizes, list rows no longer end in a tall empty gap.
-  - Settings → Appearance shows each theme's light and dark look side by side, with its sidebar and cards.
+  - Settings → Appearance tiles draw each theme with its sidebar and a raised card, in the look the chosen mode gives it, so Aiden and Monochrome no longer read alike.
   - A switch that is on uses the theme's accent, or green where the accent is too close to the white knob to see (Aiden and Monochrome in dark).
   - A Bot row in the Inbox keeps its avatar beside the name at the largest text sizes.
   - Reading partway down a long answer on an iPhone Duo, unfolding or folding keeps you at the same spot in it, even at the largest text sizes, instead of jumping to the question above it.

@@ -259,6 +259,7 @@ final class AidenChatViewModel {
     @ObservationIgnored private var draftGeneration: UInt64 = 0
     @ObservationIgnored private var composerGeneration: UInt64 = 0
     @ObservationIgnored private var didConsumeVoiceLaunch = false
+    @ObservationIgnored private var didConsumeCameraLaunch = false
     @ObservationIgnored private var uploadTask: Task<Int, Never>?
     @ObservationIgnored var ownedUploadReferences: [String: (AidenAttachmentReference, AidenRemoteRequestContext, AidenRemoteClient)] = [:]
     @ObservationIgnored private var attachmentCleanupTasks: [String: Task<Void, Never>] = [:]
@@ -2448,6 +2449,17 @@ final class AidenChatViewModel {
         guard !isReadOnlyPresentation, !isRemoved, isConnected, !isStreaming, pendingQuestion == nil,
               liveOwner != nil, !Task.isCancelled else { return }
         await start()
+    }
+
+    /// One-shot launch admission for opening the in-app camera picker from a
+    /// Home Screen widget or Shortcut. Consumed before opening so remounts never
+    /// reopen the camera.
+    func startCameraForLaunch(if requested: Bool, start: () -> Void) {
+        guard requested, !didConsumeCameraLaunch else { return }
+        didConsumeCameraLaunch = true
+        guard !isReadOnlyPresentation, !isRemoved, isConnected, !isStreaming, pendingQuestion == nil,
+              liveOwner != nil, acceptsImageAttachments else { return }
+        start()
     }
 
     @discardableResult

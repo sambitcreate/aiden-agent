@@ -1,12 +1,15 @@
 // The rules classifier's view of a mutating connection (MCP) tool call: its
 // names, its summary, and the live server tool's title, description and
 // destructiveness. Read-only tools are not classified, since they change
-// nothing a rule covers. Arguments never reach the classifier.
+// nothing a rule covers. Arguments never reach the classifier, except the
+// Composio app action names a call runs, which only add classes.
 
 import { summarizeToolCall } from "../coding-tools.js";
 import { classifySubagentMcpToolV2 } from "../subagents/subagent-mcp-read.js";
 import type { BotToolFacts } from "../bot-runtime/bot-tool-policy.js";
 import type { BotClassifiableAction } from "./classify.js";
+import { isComposioServiceToolDescriptor } from "../composio-service-tool.js";
+import { composioCallShape, composioClassifiedOperations } from "../composio-operation-text.js";
 
 const MAX_DESCRIPTION_CHARS = 2_000;
 const MAX_TITLE_CHARS = 200;
@@ -49,12 +52,18 @@ export async function describeMcpAction(
   const effect = classifySubagentMcpToolV2(live?.annotations, live?.execution);
   const annotations = annotationsOf(live?.annotations);
   const description = typeof live?.description === "string" ? live.description.slice(0, MAX_DESCRIPTION_CHARS) : undefined;
+  // One Composio tool runs any enabled app action: the classifier reads the
+  // actions this call names, so "Gmail: Send email" meets the send rule.
+  const composio = isComposioServiceToolDescriptor(live) ? composioCallShape(args) : undefined;
+  const operations = composioClassifiedOperations(composio);
   return {
     surface: "mcp",
     modelName: name,
     serverId: connection?.sourceId ?? "",
     remoteName: live?.name ?? grant.name,
     summary: summarizeToolCall(name, args),
+    ...(operations.length > 0 ? { operations } : {}),
+    ...(composio?.kind === "call" && composio.unbounded ? { neverRemembered: true as const } : {}),
     ...(description === undefined || description.length === 0 ? {} : { description }),
     ...(annotations === undefined ? {} : { annotations }),
     destructive: effect?.effect === "mutating" ? effect.effectProfile.destructive : "unknown",

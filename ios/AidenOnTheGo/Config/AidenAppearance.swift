@@ -561,6 +561,13 @@ private struct AidenSolidFillButtonBody<Label: View, S: Shape>: View {
 }
 
 enum AidenThemeCatalog {
+    /// The palette a theme tile in Settings shows. Every theme has a light and a dark look
+    /// and the mode picks which one the app uses, so the tile shows the look this theme
+    /// would have right now: System follows the phone's scheme.
+    static func tilePreview(preset: AidenThemePresetID, mode: AidenAppearanceMode, systemScheme: ColorScheme) -> AidenPalette {
+        palette(preset: preset, scheme: mode.colorScheme ?? systemScheme)
+    }
+
     static func palette(preset: AidenThemePresetID, scheme: ColorScheme) -> AidenPalette {
         palettes[preset]![scheme == .dark ? 1 : 0]
     }
@@ -872,57 +879,13 @@ struct AidenAppearanceSettingsView: View {
         }
     }
 
-    /// One half of a theme's tile: its sidebar down the leading edge, its
-    /// canvas, a raised card with the type, and the accent. Showing both
-    /// schemes side by side tells apart presets whose light canvases are all
-    /// near white (Aiden's cool grey, Graphite's neutral, Monochrome's pure white).
-    private func themeTileHalf(_ p: AidenPalette) -> some View {
-        HStack(spacing: 0) {
-            p.sidebar.frame(width: 9)
-            p.canvas
-                .overlay {
-                    RoundedRectangle(cornerRadius: 5, style: .continuous)
-                        .fill(p.raised)
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 9)
-                        .overlay {
-                            Text("Aa")
-                                .font(.system(size: 17, weight: .medium))
-                                .foregroundStyle(p.foreground)
-                        }
-                }
-                .overlay(alignment: .bottomTrailing) {
-                    Circle()
-                        .fill(p.accent)
-                        .frame(width: 8, height: 8)
-                        .padding(4)
-                }
-        }
-    }
-
     private func themeTile(for preset: AidenThemePresetID) -> some View {
         let selected = preset == selectedPreset
         return Button {
             appearance.selectTheme(preset)
         } label: {
             VStack(spacing: 7) {
-                HStack(spacing: 0) {
-                    themeTileHalf(AidenThemeCatalog.palette(preset: preset, scheme: .light))
-                    themeTileHalf(AidenThemeCatalog.palette(preset: preset, scheme: .dark))
-                }
-                    .aspectRatio(1.52, contentMode: .fit)
-                    .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-                    .overlay(alignment: .topTrailing) {
-                        if selected {
-                            Image(systemName: "checkmark")
-                                .font(.system(size: 10, weight: .bold))
-                                .foregroundStyle(palette.accent)
-                                .frame(width: 21, height: 21)
-                                .background(palette.raised, in: Circle())
-                                .overlay(Circle().stroke(palette.foreground.opacity(0.18), lineWidth: 0.5))
-                                .offset(x: 7, y: -7)
-                        }
-                    }
+                AidenThemeTileSwatch(preset: preset, mode: appearance.mode, selected: selected)
                     .accessibilityHidden(true)
                 Text(preset.title)
                     .font(.caption.weight(.medium))
@@ -938,6 +901,58 @@ struct AidenAppearanceSettingsView: View {
         .buttonStyle(.plain)
         .accessibilityLabel(preset.title)
         .accessibilityAddTraits(selected ? [.isButton, .isSelected] : [.isButton])
+    }
+}
+
+/// A theme tile's preview. Every theme has a light and a dark look and the mode picks
+/// which one the app uses, so the tile draws the look this theme would have right now:
+/// System follows the phone's scheme. It shows the theme's sidebar down the leading
+/// edge, its canvas, a raised card with the type, and the accent, which tells apart
+/// presets whose canvases are all near white or near black (Aiden, Graphite, Monochrome).
+struct AidenThemeTileSwatch: View {
+    let preset: AidenThemePresetID
+    let mode: AidenAppearanceMode
+    let selected: Bool
+    @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.aidenPalette) private var palette
+
+    var body: some View {
+        let preview = AidenThemeCatalog.tilePreview(preset: preset, mode: mode, systemScheme: colorScheme)
+        HStack(spacing: 0) {
+            preview.sidebar.frame(width: 12)
+            preview.canvas
+                .overlay {
+                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        .fill(preview.raised)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 14)
+                        .overlay {
+                            Text("Aa")
+                                .font(.system(size: 22, weight: .medium))
+                                .foregroundStyle(preview.foreground)
+                        }
+                }
+                .overlay(alignment: .bottomTrailing) {
+                    Circle()
+                        .fill(preview.accent)
+                        .overlay(Circle().stroke(.white.opacity(0.55), lineWidth: 1))
+                        .frame(width: 11, height: 11)
+                        .padding(6)
+                }
+        }
+        .aspectRatio(1.52, contentMode: .fit)
+        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .overlay(alignment: .topTrailing) {
+            if selected {
+                Image(systemName: "checkmark")
+                    .font(.system(size: 10, weight: .bold))
+                    .foregroundStyle(palette.accent)
+                    .frame(width: 21, height: 21)
+                    .background(palette.raised, in: Circle())
+                    .overlay(Circle().stroke(palette.foreground.opacity(0.18), lineWidth: 0.5))
+                    .offset(x: 7, y: -7)
+            }
+        }
     }
 }
 

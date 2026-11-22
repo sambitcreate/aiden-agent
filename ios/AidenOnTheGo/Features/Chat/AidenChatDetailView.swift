@@ -290,6 +290,7 @@ struct AidenChatDetailView: View {
     @State private var isRenaming = false
     @State private var renameTitle = ""
     let autoStartVoice: Bool
+    let autoStartCamera: Bool
     let allowsMutations: Bool
     /// Opens a chat this one was forked into. Nil hides the fork actions,
     /// for surfaces that cannot navigate to a new Workspace chat.
@@ -304,6 +305,7 @@ struct AidenChatDetailView: View {
         chat: AidenChat,
         owner: AidenRemoteRequestContext,
         autoStartVoice: Bool = false,
+        autoStartCamera: Bool = false,
         allowsMutations: Bool = true,
         onChatUpdated: @escaping @MainActor (AidenChat) -> Void = { _ in },
         onChatActivityChanged: @escaping @MainActor (String, AidenChatSummaryActivity) -> Void = { _, _ in },
@@ -339,6 +341,7 @@ struct AidenChatDetailView: View {
         _attachmentPicker = State(initialValue: parts.attachmentPicker)
         _botToolsModel = State(initialValue: parts.botToolsModel)
         self.autoStartVoice = autoStartVoice
+        self.autoStartCamera = autoStartCamera
         self.allowsMutations = allowsMutations
     }
 
@@ -353,6 +356,7 @@ struct AidenChatDetailView: View {
         _attachmentPicker = State(initialValue: parts.attachmentPicker)
         _botToolsModel = State(initialValue: nil)
         autoStartVoice = false
+        autoStartCamera = false
         allowsMutations = false
         onOpenChat = nil
         pinnedOwner = nil
@@ -568,6 +572,14 @@ struct AidenChatDetailView: View {
             model.setChatForegrounded(true)
             model.setSceneActive(scenePhase == .active)
             if scenePhase == .background { _ = sceneRefreshGate.transition(to: .background) }
+        }
+        .task {
+            // Consumed even when it can't open now, so a later remount never
+            // surprises the person with the camera.
+            model.startCameraForLaunch(if: autoStartCamera) {
+                guard scenePhase == .active else { return }
+                openCameraForLaunch()
+            }
         }
         .onChange(of: model.readAloudCandidateID) { _, candidate in
             if let active = model.readAloud.activeMessageID, active != candidate { model.readAloud.stop() }
@@ -1077,6 +1089,12 @@ struct AidenChatDetailView: View {
         } else {
             attachmentPicker.openMenu()
         }
+    }
+
+    private func openCameraForLaunch() {
+        guard canToggleAttachmentPicker, model.acceptsImageAttachments else { return }
+        composerSession.putAwayKeyboard()
+        attachmentPicker.beginShowingCamera()
     }
 
     private func commitSelectedPhotos() {

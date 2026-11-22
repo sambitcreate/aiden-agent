@@ -169,7 +169,12 @@ export async function createCliBots(agentDir: string, daemon: ReturnType<typeof 
       scopeFingerprint: botCapabilityFactsFingerprint({ device: item.device, inode: item.inode, policyRevision: item.policyRevision }) })),
     incarnations, getSettings: async () => ({}),
     webSearchAvailability: () => web.availability(), subagentsAvailable: () => subagentsEnabled(),
-  }), { onRuntimeSnapshot: (id, snapshot) => inventoryLeases.publishFingerprint(id ? `bot:${id}` : "global", snapshot.catalog.revision) });
+  }), {
+    onRuntimeSnapshot: (id, snapshot) => inventoryLeases.publishFingerprint(id ? `bot:${id}` : "global", snapshot.catalog.revision),
+    // A Bot turn reads its authority many times before its model request; share one inventory
+    // read per revision (the watcher below moves it) for at most a few seconds, as the desktop does.
+    runtimeReuse: { revision: () => inventoryLeases.revision(), ttlMs: 3_000 },
+  });
   const application = createBotApplicationService({ botStore, chatStore: daemon.chatStore, capabilityStore: capabilities,
     catalog, managedWorkspace, lifecycleJournal: createBotLifecycleJournal({ root }), migrationSeal: createBotCapabilityMigrationSeal({ root }), mutationGate, inventoryLeases,
     deleteChatWithEffects: async (id, assertCurrent, onRollForward) => {
