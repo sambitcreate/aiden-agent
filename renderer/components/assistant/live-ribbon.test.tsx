@@ -9,7 +9,7 @@ import { AidenLiveVoiceAndLookFields } from "../settings/aiden-live-voice-settin
 import { idleLiveController } from "./assistant-live-test-fixture";
 import { LiveRibbon, LiveRibbonMenuItems } from "./live-ribbon";
 import { AssistantDockPresentation } from "./assistant-dock";
-import { measureLiveRibbonFootprint, placeLiveRibbon } from "./use-live-ribbon-placement";
+import { liveCornerClearance, measureLiveRibbonFootprint, placeLiveRibbon } from "./use-live-ribbon-placement";
 import { useLiveVoiceEnding, waitForLivePlayback } from "./live-ribbon-session";
 import type { AidenLiveMarkState } from "./aiden-live-mark";
 import { createLivePreferenceSaver, type AidenLivePreferencesPatch } from "./use-aiden-live-preferences";
@@ -362,6 +362,19 @@ test("a ribbon dragged to a window edge keeps its captions and approval cards in
   const corner = placeLiveRibbon(anchor, { x: 2_000, y: 2_000 }, footprint, viewport);
   assert.ok(corner.left + footprint.width / 2 <= viewport.width);
   assert.ok(corner.bottom >= 0);
+});
+
+test("the corner Live pill rises above a chat composer it would cover, and stays in the corner otherwise", () => {
+  // A 900 px tall window whose composer card runs from y 760 to 880, x 300 to 700.
+  const composer = { left: 300, right: 700, top: 760 };
+  const containerBottom = 900;
+  // Over the composer's Send end: the pill's bottom edge sits above the composer's top edge.
+  const lifted = liveCornerClearance({ composer, dock: { left: 600, right: 690 }, containerBottom });
+  assert.ok(containerBottom - lifted < composer.top, `pill bottom at y ${containerBottom - lifted}`);
+  assert.ok(lifted - (containerBottom - composer.top) <= 16, "and only just above it");
+  // A pill to the right of the composer's card, or no chat on screen, keeps the usual corner.
+  assert.equal(liveCornerClearance({ composer, dock: { left: 720, right: 800 }, containerBottom }), 0);
+  assert.equal(liveCornerClearance({ composer: null, dock: { left: 600, right: 690 }, containerBottom }), 0);
 });
 
 // ---- The Live shortcut while a session runs ----

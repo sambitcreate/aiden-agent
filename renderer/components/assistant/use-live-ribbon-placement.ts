@@ -52,16 +52,42 @@ function writeLiveRibbonOffset(offset: LiveRibbonOffset): void {
   }
 }
 
-/** The chat composer's column, or the window's bottom centre when no chat is open. */
-export function measureLiveRibbonAnchor(doc: Document = document, view: Window = window): LiveRibbonAnchor {
+/** The visible chat composer's box, or null when no chat composer is on screen. */
+export function measureChatComposer(doc: Document = document): DOMRect | null {
   const composers = Array.from(doc.querySelectorAll<HTMLElement>('[data-browser-composer-inset="true"]'));
   for (const inset of composers) {
     const target = inset.querySelector<HTMLElement>('[data-focus-region="composer"]') ?? inset;
     const rect = target.getBoundingClientRect();
-    if (rect.width <= 0 || rect.height <= 0) continue;
+    if (rect.width > 0 && rect.height > 0) return rect;
+  }
+  return null;
+}
+
+/** The chat composer's column, or the window's bottom centre when no chat is open. */
+export function measureLiveRibbonAnchor(doc: Document = document, view: Window = window): LiveRibbonAnchor {
+  const rect = measureChatComposer(doc);
+  if (rect) {
     return { centerX: rect.left + rect.width / 2, bottom: Math.max(EDGE_MARGIN, view.innerHeight - rect.top + GAP_ABOVE_COMPOSER) };
   }
   return { centerX: view.innerWidth / 2, bottom: 24 };
+}
+
+/**
+ * The lowest the window's corner Live pill (and the details beside it) may
+ * sit, as a distance up from the bottom of its container, so it never covers
+ * the chat composer's Send button. It is 0 (the usual corner) when no
+ * composer is showing or the pill's column is clear of the composer.
+ */
+export function liveCornerClearance(input: {
+  composer: { left: number; right: number; top: number } | null;
+  dock: { left: number; right: number };
+  containerBottom: number;
+}): number {
+  const { composer, dock, containerBottom } = input;
+  if (!composer) return 0;
+  const overlaps = dock.left < composer.right && dock.right > composer.left;
+  if (!overlaps) return 0;
+  return Math.max(0, Math.ceil(containerBottom - composer.top + GAP_ABOVE_COMPOSER));
 }
 
 /**
