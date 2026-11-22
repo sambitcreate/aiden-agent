@@ -8,7 +8,9 @@
 // that still holds the chat after that keeps the notice waiting longer, for at
 // most `waitForRunToEnd`'s bound (a day; nothing else ends a run that never
 // does), and then the notice is only recorded, never woken; a chat still held
-// then drops it, and says so through `onError`. While the chat has an active
+// then drops it, and says so through `onError`. Later notices that find that
+// same run still holding the chat don't wait again: they are only recorded,
+// or dropped without another report. While the chat has an active
 // keep-going goal, a waking notice starts a goal round instead, which the
 // person attends and which uses no wake budget. Notices for one chat are
 // delivered in order. Delivery lives in memory: a notice still waiting when
@@ -39,8 +41,10 @@ export type QueueIntoRunResult =
   /**
    * A run another feature owns holds the chat (a scheduled task posting
    * there). It never reads notices, so its tools could not act on one: wait.
+   * `holder` names that run, so a run that outlasted one notice's waits isn't
+   * waited on again for the next.
    */
-  | { kind: "busy" }
+  | { kind: "busy"; holder?: string }
   | { kind: "queued"; messageId: string }
   /** The run ended after the message was saved: it is in the transcript, unread. */
   | { kind: "saved"; messageId: string }
@@ -56,7 +60,13 @@ export type StartTurnResult =
    */
   | { kind: "unavailable"; reason: string; messageId?: string };
 
-export type AppendResult = { kind: "appended"; messageId: string } | { kind: "busy" } | { kind: "gone"; reason: string };
+export type AppendResult =
+  | { kind: "appended"; messageId: string }
+  | { kind: "busy" }
+  /** The chat no longer exists. */
+  | { kind: "gone"; reason: string }
+  /** The chat is there but the notice could not be saved. */
+  | { kind: "failed"; reason: string };
 
 export interface NoticeDeliveryDeps {
   queueIntoRun(post: AgentNoticePost): Promise<QueueIntoRunResult>;
@@ -80,10 +90,11 @@ export interface NoticeDeliveryDeps {
   waitForRunToSettle(chatId: string): Promise<void>;
   /**
    * Waits, for at most a day, until a run that still holds the chat after
-   * `waitForRunToSettle` settles. Runs have no time limit of their own, so
-   * this bound is what keeps a stuck run from holding the chat's notices.
+   * `waitForRunToSettle` settles; false when it still holds the chat then.
+   * Runs have no time limit of their own, so this bound is what keeps a stuck
+   * run from holding the chat's notices.
    */
-  waitForRunToEnd(chatId: string): Promise<void>;
+  waitForRunToEnd(chatId: string): Promise<boolean>;
   now(): number;
   onError?(error: unknown): void;
 }
@@ -112,6 +123,8 @@ export class NoticeDelivery {
   private readonly wakes = new Map<string, number[]>();
   /** Chats whose notice is waiting out a run another feature owns, and how many such waits. */
   private readonly waitingOnRun = new Map<string, number>();
+  /** Per chat, the run that outlasted a notice's day-long wait and still holds the chat. */
+  private readonly outlasted = new Map<string, string>();
 
   constructor(private readonly deps: NoticeDeliveryDeps) {}
 
@@ -154,10 +167,10 @@ export class NoticeDelivery {
     return this.chains.has(chatId) && !this.waitingOnRun.has(chatId);
   }
 
-  private async waitOnRun(chatId: string, wait: (chatId: string) => Promise<void>): Promise<void> {
+  private async waitOnRun<T>(chatId: string, wait: (chatId: string) => Promise<T>): Promise<T> {
     this.waitingOnRun.set(chatId, (this.waitingOnRun.get(chatId) ?? 0) + 1);
     try {
-      await wait(chatId);
+      return await wait(chatId);
     } finally {
       const left = (this.waitingOnRun.get(chatId) ?? 1) - 1;
       if (left > 0) this.waitingOnRun.set(chatId, left);
@@ -182,6 +195,8 @@ export class NoticeDelivery {
     let waitedOnRun = false;
     for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt += 1) {
       const queued = await this.deps.queueIntoRun(post);
+      const outlasted = this.outlasted.get(post.chatId);
+      if (outlasted !== undefined && (queued.kind !== "busy" || queued.holder !== outlasted)) this.outlasted.delete(post.chatId);
       if (queued.kind === "queued") return { kind: "queued", messageId: queued.messageId };
       if (queued.kind === "saved") {
         // Saved but the run had just ended: answer it with a turn of its own.
@@ -192,17 +207,24 @@ export class NoticeDelivery {
         continue;
       }
       if (queued.kind === "busy") {
+        if (queued.holder !== undefined && queued.holder === this.outlasted.get(post.chatId)) {
+          // That run already outlasted an earlier notice's day-long wait, which reported it.
+          return this.record(post, post.wake ? "wake-unavailable" : "not-waking");
+        }
         if (!waitedOnRun) {
           waitedOnRun = true;
           await this.waitOnRun(post.chatId, (chatId) => this.deps.waitForRunToSettle(chatId));
           continue;
         }
-        // Still held after the long wait: stay waiting until that run settles,
-        // however long, then only record; the news is too old to wake for.
-        await this.waitOnRun(post.chatId, (chatId) => this.deps.waitForRunToEnd(chatId));
+        // Still held after the long wait: wait for that run to settle, for at
+        // most a day, then only record; the news is too old to wake for.
+        const settled = await this.waitOnRun(post.chatId, (chatId) => this.deps.waitForRunToEnd(chatId));
+        if (!settled && queued.holder !== undefined) this.outlasted.set(post.chatId, queued.holder);
         const recorded = await this.record(post, post.wake ? "wake-unavailable" : "not-waking");
         if (recorded.kind === "dropped" && !recorded.gone) {
-          this.deps.onError?.(new Error("A notice waited a day for another run in its chat to end, and was dropped."));
+          this.deps.onError?.(new Error(settled
+            ? `A notice waited for another run in its chat to end, then could not be saved: ${recorded.reason}`
+            : "A notice waited a day for another run in its chat to end, and was dropped."));
         }
         return recorded;
       }
@@ -265,6 +287,7 @@ export class NoticeDelivery {
       const appended = await this.deps.append(post);
       if (appended.kind === "appended") return { kind: "recorded", messageId: appended.messageId, reason };
       if (appended.kind === "gone") return { kind: "dropped", reason: appended.reason, gone: true };
+      if (appended.kind === "failed") return { kind: "dropped", reason: appended.reason };
       // A turn started meanwhile: hand the notice to it instead.
       const queued = await this.deps.queueIntoRun(post);
       if (queued.kind === "queued") return { kind: "queued", messageId: queued.messageId };
@@ -293,18 +316,18 @@ export interface NoticeRunCandidate {
 
 /**
  * Where a notice for `chatId` goes now: into the chat's own running turn,
- * `"busy"` while a run another feature owns holds the chat, or undefined when
- * nothing runs there.
+ * `busyWith` a run another feature owns while one holds the chat, or
+ * undefined when nothing runs there.
  */
 export function agentNoticeRun(
   runs: Iterable<readonly [string, NoticeRunCandidate]>,
   chatId: string,
-): { streamId: string } | "busy" | undefined {
-  let busy = false;
+): { streamId: string } | { busyWith: string } | undefined {
+  let busyWith: string | undefined;
   for (const [streamId, run] of runs) {
     if (run.chatId !== chatId || run.cancelRequested) continue;
     if (run.chatTurn) return { streamId };
-    busy = true;
+    busyWith ??= streamId;
   }
-  return busy ? "busy" : undefined;
+  return busyWith === undefined ? undefined : { busyWith };
 }

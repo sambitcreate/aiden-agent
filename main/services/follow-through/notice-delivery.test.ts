@@ -30,7 +30,9 @@ function fakeChat(options: { running?: boolean; scheduledRun?: boolean; now?: ()
   // A scheduled task's run holds the chat: it takes no input and blocks other turns.
   let scheduledRun = options.scheduledRun ?? false;
   const runWaiters: Array<() => void> = [];
-  const runEndWaiters: Array<() => void> = [];
+  const runEndWaiters: Array<(settled: boolean) => void> = [];
+  // The scheduled task's run that holds the chat; a new one gets a new id.
+  let holder = "s-task-1";
   let ids = 0;
   const transcript: Array<{ text: string; via: string }> = [];
   const idleWaiters: Array<() => void> = [];
@@ -44,7 +46,7 @@ function fakeChat(options: { running?: boolean; scheduledRun?: boolean; now?: ()
       calls.push("queue");
       const forced = deps.queueAnswer?.(item);
       if (forced) return forced;
-      if (scheduledRun) return { kind: "busy" };
+      if (scheduledRun) return { kind: "busy", holder };
       if (!running) return { kind: "no-run" };
       transcript.push({ text: item.text, via: "queued" });
       return { kind: "queued", messageId: `m${++ids}` };
@@ -76,7 +78,7 @@ function fakeChat(options: { running?: boolean; scheduledRun?: boolean; now?: ()
     },
     waitForRunToEnd() {
       calls.push("wait-run-end");
-      return new Promise<void>((resolve) => runEndWaiters.push(resolve));
+      return new Promise<boolean>((resolve) => runEndWaiters.push(resolve));
     },
     now: options.now ?? (() => 0),
   };
@@ -90,7 +92,8 @@ function fakeChat(options: { running?: boolean; scheduledRun?: boolean; now?: ()
     },
     finishScheduledRun() {
       scheduledRun = false;
-      for (const resolve of [...runWaiters.splice(0), ...runEndWaiters.splice(0)]) resolve();
+      for (const resolve of runWaiters.splice(0)) resolve();
+      for (const resolve of runEndWaiters.splice(0)) resolve(true);
     },
     /** The long wait ran out with the scheduled run still holding the chat. */
     runWaitTimedOut() {
@@ -98,7 +101,12 @@ function fakeChat(options: { running?: boolean; scheduledRun?: boolean; now?: ()
     },
     /** The day-long wait ran out too, the scheduled run still holding the chat. */
     runEndWaitTimedOut() {
-      for (const resolve of runEndWaiters.splice(0)) resolve();
+      for (const resolve of runEndWaiters.splice(0)) resolve(false);
+    },
+    /** Another scheduled task's run takes the chat. */
+    startScheduledRun() {
+      scheduledRun = true;
+      holder = `s-task-${Number(holder.slice(7)) + 1}`;
     },
     get running() {
       return running;
@@ -247,37 +255,61 @@ test("a notice outlasts another feature's run that holds the chat past the long 
   assert.equal(delivery.hasPending("chat-1"), false);
 });
 
-test("a run that never ends holds a notice for at most the day-long wait; then it is dropped and logged, and the chat's next notice gets through", async () => {
+test("behind a run that never ends, only the first notice waits the day out; later ones are dropped at once, and a new run is waited on again", async () => {
   const chat = fakeChat({ scheduledRun: true });
   const errors: unknown[] = [];
   chat.deps.onError = (error) => void errors.push(error);
   // Recording's own short waits for the chat return at once: the run never ends.
   chat.deps.waitForIdle = async () => void chat.calls.push("wait");
   const delivery = new NoticeDelivery(chat.deps);
-  const stuck = delivery.post(post("checks failed"));
-  const next = delivery.post(post("checks passed", false));
+  const first = delivery.post(post("checks failed"));
+  const later = [delivery.post(post("checks passed", false)), delivery.post(post("review requested"))];
   await new Promise((resolve) => setImmediate(resolve));
   chat.runWaitTimedOut();
   await new Promise((resolve) => setImmediate(resolve));
-  assert.equal(chat.calls.includes("wait-run-end"), true);
   chat.runEndWaitTimedOut();
-  const outcome = await stuck;
+  const outcome = await first;
   assert.equal(outcome.kind, "dropped");
   assert.equal(outcome.kind === "dropped" ? outcome.gone : undefined, undefined, "not gone: the chat is still there");
+  // No further waits: each later notice is settled without anyone finishing a wait.
+  for (const notice of await Promise.all(later)) assert.equal(notice.kind, "dropped");
+  assert.equal(chat.calls.filter((call) => call === "wait-run").length, 1, "the 30-minute wait ran once for that run");
+  assert.equal(chat.calls.filter((call) => call === "wait-run-end").length, 1, "and the day-long wait once");
+  assert.equal(errors.length, 1, "reported once for that run");
   assert.deepEqual(chat.transcript, []);
-  assert.equal(errors.length, 1, "the drop is logged");
-  // The chat's next notice no longer waits behind it, and is recorded once the run is gone.
-  await new Promise((resolve) => setImmediate(resolve));
+
+  // That run ends and another takes the chat: a notice waits on the new one again.
   chat.finishScheduledRun();
-  assert.equal((await next).kind, "recorded");
-  assert.deepEqual(chat.transcript, [{ text: "checks passed", via: "recorded" }]);
+  chat.startScheduledRun();
+  const fresh = delivery.post(post("checks failed again"));
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(chat.calls.filter((call) => call === "wait-run").length, 2);
+  chat.finishScheduledRun();
+  assert.equal((await fresh).kind, "woke");
+});
+
+test("a notice that waited out another run and then can't be saved is dropped and reported, not taken for a deleted chat", async () => {
+  const chat = fakeChat({ scheduledRun: true });
+  const errors: unknown[] = [];
+  chat.deps.onError = (error) => void errors.push(error);
+  chat.deps.appendAnswer = () => ({ kind: "failed", reason: "disk full" });
+  const pending = new NoticeDelivery(chat.deps).post(post("checks failed"));
+  await new Promise((resolve) => setImmediate(resolve));
+  chat.runWaitTimedOut();
+  await new Promise((resolve) => setImmediate(resolve));
+  // The run ends within the day; saving the notice then fails.
+  chat.finishScheduledRun();
+  const outcome = await pending;
+  assert.deepEqual(outcome, { kind: "dropped", reason: "disk full" });
+  assert.equal(errors.length, 1);
+  assert.match(String(errors[0]), /disk full/u);
 });
 
 test("a notice joins only the chat's own running turn, never a run another feature owns", () => {
   const own = { chatId: "chat-1", cancelRequested: false, chatTurn: true };
   const scheduled = { chatId: "chat-1", cancelRequested: false, chatTurn: false };
   assert.deepEqual(agentNoticeRun([["s-own", own]], "chat-1"), { streamId: "s-own" });
-  assert.equal(agentNoticeRun([["s-task", scheduled]], "chat-1"), "busy");
+  assert.deepEqual(agentNoticeRun([["s-task", scheduled]], "chat-1"), { busyWith: "s-task" });
   assert.deepEqual(agentNoticeRun([["s-task", scheduled], ["s-own", own]], "chat-1"), { streamId: "s-own" });
   assert.equal(agentNoticeRun([["s-own", { ...own, cancelRequested: true }]], "chat-1"), undefined, "a stopping run takes nothing");
   assert.equal(agentNoticeRun([["s-own", { ...own, chatId: "chat-2" }]], "chat-1"), undefined);

@@ -68,7 +68,7 @@ async function followUpChat(chatId: string): Promise<FollowUpChat | { unavailabl
 async function queueIntoRun(post: AgentNoticePost): Promise<QueueIntoRunResult> {
   const result = await llmClient.admitAgentNotice(post.chatId, { text: post.text, notice: post.notice });
   if (!result) return { kind: "no-run" };
-  if (result === "busy") return { kind: "busy" };
+  if ("busyWith" in result) return { kind: "busy", holder: result.busyWith };
   if (result.committed) transcriptChanged(post.chatId);
   if (result.admitted && result.messageId) return { kind: "queued", messageId: result.messageId };
   if (result.committed && result.messageId) return { kind: "saved", messageId: result.messageId };
@@ -148,7 +148,10 @@ async function append(post: AgentNoticePost): Promise<AppendResult> {
     transcriptChanged(post.chatId);
     return { kind: "appended", messageId: lastMessageId(saved) };
   } catch (error) {
-    return { kind: "gone", reason: error instanceof Error ? error.message : "The notice could not be saved." };
+    const reason = error instanceof Error ? error.message : "The notice could not be saved.";
+    if (!(await chatStore.get(post.chatId).catch(() => undefined))) return { kind: "gone", reason };
+    logger.warn("follow-through", "A follow-up notice could not be saved.", error);
+    return { kind: "failed", reason };
   } finally {
     lease.release();
     lease.settleAsyncWork();
@@ -166,9 +169,7 @@ export const noticeDelivery = new NoticeDelivery({
   waitForRunToSettle: async (chatId) => {
     await llmClient.waitForChatIdleWithin(chatId, OTHER_RUN_WAIT_MS);
   },
-  waitForRunToEnd: async (chatId) => {
-    await llmClient.waitForChatIdleWithin(chatId, LONG_RUN_WAIT_MS);
-  },
+  waitForRunToEnd: (chatId) => llmClient.waitForChatIdleWithin(chatId, LONG_RUN_WAIT_MS),
   now: Date.now,
   onError: (error) => logger.warn("follow-through", "A follow-up notice was not delivered.", error),
 });

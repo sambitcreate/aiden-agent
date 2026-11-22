@@ -7079,20 +7079,20 @@ export const llmClient = {
 
   /**
    * Queue a follow-up notice into the chat's own running turn, whoever owns
-   * it. `"busy"` while a run another feature owns (a scheduled task's) holds
-   * the chat: it never takes notices. Null when nothing runs there.
+   * it. `busyWith` that run while a run another feature owns (a scheduled
+   * task's) holds the chat: it never takes notices. Null when nothing runs there.
    */
   async admitAgentNotice(
     chatId: string,
     input: { text: string; notice: AgentNoticeV1 },
-  ): Promise<ChatRunInputAdmissionResult | "busy" | null> {
+  ): Promise<ChatRunInputAdmissionResult | { busyWith: string } | null> {
     // Only the chat's own turns open an owed turn (`owesItsChatTurns`).
     const target = agentNoticeRun(
       [...active.entries()].map(([id, entry]) => [id, { chatId: entry.chatId, cancelRequested: entry.cancelRequested, chatTurn: entry.owedTurn !== undefined }] as const),
       chatId,
     );
-    if (target === "busy") return "busy";
     if (!target) return null;
+    if ("busyWith" in target) return target;
     const { streamId } = target;
     return runInputAdmission.admit({
       streamId,
