@@ -247,14 +247,26 @@ page's own rules live in `approval-rules.json`, which it ignores.
 
 ## Allowed without asking (from cards)
 
-After you approve the same app action or website action three times in 14 days,
-with no denial in that period, the next eligible card offers **Always allow
-for <Bot>**. A class is one exact connected app tool, or one website host and
+Every eligible card offers **Always allow for <Bot>**, the first one
+included. After you approve the same app action or website action three times
+in 14 days, with no denial in that period, the card also notes how often you
+allowed it ("You’ve allowed this 3 times in the last 2 weeks"). A class is one exact connected app tool, or one website host and
 action such as click, type or press. Website names ignore letter case and a
 leading `www.`; other subdomains and actions remain separate. The row appears
 in Always allow on the rules page, and Remove there stops it on the next call.
 Paired iOS and Android clients still show the Bot's list when the host grants
-`bot:allowed`.
+`bot:allowed`. Phones that read the typed approval card offer Always on the
+first card too; an older phone that reads only the repeat count offers it
+from the third approval.
+
+Composio is one tool that runs many app actions, so a Composio card names the
+action it runs ("Composio · Gmail: Send email") and Always allow covers the
+Composio tool for this Bot. The rules still read each app action the call
+names: sending, posting, deleting, publishing and buying keep asking (or are
+handed off) as the built-in and your own rules say, even after Always allow.
+Calls that can reach anything (Composio's workbench, its shell and raw API
+calls, or a call whose app actions can't be read) never offer Always and are
+never covered by it.
 
 Choosing Always saves that allowance for this Bot. While this Mac is in Ask
 and a model could judge (an agent-runtime provider alone can't), the card
@@ -269,8 +281,8 @@ Switching doesn't answer the card on screen; it still needs your answer. Allow o
 one short sentence, at most once a week for that class. Decisions on a
 Bot-message turn still count, but do not send or consume that hint because the
 reply goes to another Bot. Expiry and automatic
-answers do not count as your approvals or denials. A denial withholds an
-offer for 14 days. Transport retries and recovery do not count a choice twice.
+answers do not count as your approvals or denials. A denial withholds the
+repeat note, Switch to Auto and the hint for 14 days; Always allow stays on the card. Transport retries and recovery do not count a choice twice.
 
 Remembered entries follow current access, rules, routine behavior and approved
 plan coverage. They apply to eligible calls on every turn kind, but never

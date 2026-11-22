@@ -2407,9 +2407,11 @@ final class AidenBotSessionModel {
     }
 
     /// The scopes `POST /approvals/{waitId}/respond` takes for a Bot approval:
-    /// once, and Always only with `bot:allowed` and the Mac's approval count.
+    /// once, and Always only with `bot:allowed` when the Mac offers it, either
+    /// on the typed card (any eligible card) or with the older approval count.
     func sendableScopes(for approval: AidenRemoteBotApproval) -> Set<AidenApprovalScope> {
-        allowedSupported && approval.alwaysCount != nil ? [.once, .always] : [.once]
+        let cardOffersAlways = approval.card?.buttons.contains { $0.decision == .allow && $0.offeredScope == .always } == true
+        return allowedSupported && (approval.alwaysCount != nil || cardOffersAlways) ? [.once, .always] : [.once]
     }
 
     /// Revision 61: answers with one of the card's buttons, exactly as offered.

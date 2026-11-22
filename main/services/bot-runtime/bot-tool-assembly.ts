@@ -174,6 +174,7 @@ export interface BotToolSources {
 export interface BotAllowListPort {
   consentRevision(botId: string, target: BotApprovalRuleTarget): Promise<string>;
   match(botId: string, target: BotApprovalRuleTarget): Promise<{ id: string } | undefined>;
+  /** Always allow for an eligible card; `count` is the repeat nudge's (3 to 20), else 0. */
   offer(botId: string, target: BotApprovalRuleTarget): Promise<{ count: number } | undefined>;
   used(botId: string, ruleId: string): Promise<void>;
 }

@@ -127,6 +127,9 @@ export function describeBotApprovalRule(rule: Pick<BotApprovalRuleView, "target"
   return `${verb} on ${rule.target.host}`;
 }
 
+/** Approvals of one class in 14 days, with no denial, that count as a repeat. */
+export const BOT_APPROVAL_REPEAT_COUNT = 3;
+
 export function botAlwaysAllowLabel(botName: string): string {
   return `Always allow for ${botName}`;
 }
