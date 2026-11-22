@@ -1,5 +1,10 @@
 import assert from "node:assert/strict";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import test from "node:test";
+import { generationModelMeta } from "./chat-model-selection-meta.js";
+import { createChatStore } from "./chat-store-core.js";
 import {
   persistGenerationInitializationTerminal,
   type GenerationInitializationTerminalMessage,
@@ -79,4 +84,48 @@ test("initialization terminal persistence is authority gated and unknown outcome
   assert.equal(await persistGenerationInitializationTerminal(options), "skipped");
   assert.equal(appends, 1);
   assert.equal(unknowns, 1);
+});
+
+test("a run that fails while starting saves its outcome in the chat while it still owns it, and an in-chat task run leaves the chat's model alone", async (t) => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-init-terminal-"));
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const store = createChatStore(async () => directory);
+
+  // Wired as llm-client's generation start wires it: the chat store, with the run's model unless it keeps the chat's.
+  const persist = async (chatId: string, input: { owns: () => boolean; keepChatModel?: boolean; streamId: string }) =>
+    persistGenerationInitializationTerminal({
+      state: { attempted: false },
+      hasAuthoritativeChat: true,
+      workspaceId: "workspace-1",
+      streamId: input.streamId,
+      providerId: "task-provider",
+      model: "task-model",
+      status: "failed",
+      isCurrent: input.owns,
+      append: (message, meta) =>
+        store.appendMessage(chatId, message, {
+          expectedWorkspaceId: meta.expectedWorkspaceId,
+          isCurrent: meta.isCurrent,
+          ...generationModelMeta(meta, input.keepChatModel),
+        }),
+      onUnknownOutcome: (error) => assert.fail(String(error)),
+    });
+
+  const taskChat = await store.create({ workspaceId: "workspace-1", providerId: "chat-provider", model: "chat-model" });
+  assert.equal(await persist(taskChat.id, { owns: () => true, keepChatModel: true, streamId: "stream-task" }), "persisted");
+  const afterTask = await store.get(taskChat.id);
+  const outcome = afterTask?.messages[afterTask.messages.length - 1];
+  assert.equal(outcome?.role, "assistant");
+  assert.equal(outcome?.timeline?.status, "failed");
+  assert.deepEqual([afterTask?.providerId, afterTask?.model], ["chat-provider", "chat-model"], "the chat stays on its own model");
+
+  const ordinary = await store.create({ workspaceId: "workspace-1", providerId: "chat-provider", model: "chat-model" });
+  assert.equal(await persist(ordinary.id, { owns: () => true, streamId: "stream-ordinary" }), "persisted");
+  const afterOrdinary = await store.get(ordinary.id);
+  assert.deepEqual([afterOrdinary?.providerId, afterOrdinary?.model], ["task-provider", "task-model"]);
+
+  // Once the run no longer owns its chat, nothing is written for it.
+  const released = await store.create({ workspaceId: "workspace-1" });
+  assert.equal(await persist(released.id, { owns: () => false, streamId: "stream-released" }), "skipped");
+  assert.equal((await store.get(released.id))?.messages.length, 0);
 });
