@@ -114,10 +114,32 @@ const SCHEMA_MAP = ["properties", "patternProperties", "dependentSchemas", "depe
 const RESOURCE_KEYS: ReadonlySet<string> = new Set(["$id", "id", "$anchor", "$dynamicAnchor", "$recursiveAnchor"]);
 const SCALAR_TYPES: ReadonlySet<string> = new Set(["string", "number", "integer", "boolean", "null"]);
 
+/** One more unit of cost per this many bytes of data a keyword compares against. */
+const DATA_BYTES_PER_UNIT = 64;
+
+/**
+ * What a node's own keywords cost besides its subschemas: `enum` compares the
+ * value with every member (and deep-compares objects, arrays and long
+ * strings), `const` deep-compares once, and `required`, `dependentRequired`
+ * and draft-07 array `dependencies` check every name they list.
+ */
+function dataCost(node: Record<string, unknown>): number {
+  let extra = 0;
+  const data = (value: unknown) => Math.floor(byteLength(value) / DATA_BYTES_PER_UNIT);
+  if (Array.isArray(node.enum)) extra += node.enum.length + data(node.enum);
+  if ("const" in node) extra += data(node.const);
+  if (Array.isArray(node.required)) extra += node.required.length;
+  for (const key of ["dependentRequired", "dependencies"]) {
+    const map = node[key];
+    if (isRecord(map)) for (const names of Object.values(map)) if (Array.isArray(names)) extra += names.length;
+  }
+  return extra;
+}
+
 /**
  * The worst-case work of one check, before ajv sees the schema. Each node
- * costs 1 plus every subschema it applies, with references followed (and
- * memoized), so `anyOf` chains that branch through `$defs` are counted at
+ * costs 1, plus its data keywords (`dataCost`), plus every subschema it
+ * applies, with references followed (and memoized), so `anyOf` chains that branch through `$defs` are counted at
  * their real, multiplied size. ajv's `anyOf` has to try every branch when
  * none matches, which is why this is the number that matters. References may
  * not loop, and `uniqueItems` needs items of a plain type: comparing objects
@@ -148,7 +170,7 @@ function schemaCost(root: Record<string, unknown>): { ok: true; cost: number } |
       return over;
     }
     visiting.add(node);
-    let total = 1;
+    let total = 1 + dataCost(node);
     const add = (child: unknown) => { total = Math.min(over, total + cost(child, false)); };
     for (const key of Object.keys(node)) {
       if (!top && RESOURCE_KEYS.has(key)) {
@@ -195,7 +217,7 @@ function schemaCost(root: Record<string, unknown>): { ok: true; cost: number } |
   const total = cost(root, true);
   if (problem) return { ok: false, error: problem };
   if (total > RESULT_SCHEMA_MAX_COST) {
-    return { ok: false, error: "result_schema could take too long to check: its anyOf, oneOf or allOf branches multiply through references. Use fewer branches or a flatter shape." };
+    return { ok: false, error: "result_schema could take too long to check: its anyOf, oneOf or allOf branches multiply through references, or its enum, const or required lists are too long for them. Use fewer branches, shorter lists or a flatter shape." };
   }
   return { ok: true, cost: total };
 }
