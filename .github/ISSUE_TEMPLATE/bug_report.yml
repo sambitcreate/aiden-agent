@@ -1,0 +1,60 @@
+name: Bug report
+description: Report a bug, crash, or regression in Aiden Agent
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting a bug! Please search open issues first to avoid duplicates, and never include API keys, tokens, or private files.
+  - type: dropdown
+    id: surface
+    attributes:
+      label: Surface
+      options:
+        - Desktop (macOS Apple silicon)
+        - Desktop (macOS Intel — source build)
+        - Desktop (Linux x64)
+        - Desktop (Linux arm64)
+        - Headless server (aiden serve)
+        - iOS / iPadOS (Aiden On The Go)
+        - Android (Aiden On The Go)
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: App / CLI version and OS version
+      description: Desktop version is in Settings → About; headless CLI version is `aiden --version`.
+      placeholder: "e.g. Desktop 0.67.0 (or CLI 0.1.0) on macOS 15.4 / Ubuntu 24.04"
+    validations:
+      required: true
+  - type: textarea
+    id: description
+    attributes:
+      label: What happened?
+      description: Clear summary of the bug and what you observed.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: Minimal steps needed to trigger the issue.
+      placeholder: |
+        1. Open...
+        2. Run...
+        3. See error...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: context
+    attributes:
+      label: Logs, diagnostics, or screenshots
+      description: Redacted error text, screenshots, or screen recordings if helpful.

@@ -1,0 +1,43 @@
+name: Feature request
+description: Propose a new capability, workflow improvement, or design change
+title: "[Feature]: "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        We align on feature design in an issue before reviewing implementation PRs. Please explain the user problem clearly first.
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Desktop workspace & chat
+        - Bots, routines, & Bot computers
+        - Design mode & artifacts
+        - Aiden Live & voice
+        - Aiden On The Go (iOS / Android) & Remote Access
+        - Headless server (aiden serve)
+        - Providers, skills, hooks, or MCP Connectors
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem or use case
+      description: What are you trying to accomplish, and what gets in the way today?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: How should this work from the user's perspective?
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives or workarounds considered
+      description: Optional. Any workarounds you've tried or constraints to keep in mind.
