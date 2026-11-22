@@ -31,6 +31,11 @@ export interface HostPlatformCapabilities {
    * picker on Linux under X11, or the desktop's portal under Wayland.
    */
   liveScreenShare: boolean;
+  /**
+   * A workspace chat's agent may promise to check back later (`check_back`):
+   * offered where follow-through notices wake a chat, macOS and Linux.
+   */
+  chatCheckBacks: boolean;
 }
 /**
  * Main-owned host capability policy. Persisted settings and renderer state may
@@ -58,5 +63,6 @@ export function hostPlatformCapabilities(
     hooks: darwin || platform === "linux",
     mcpServer: darwin || platform === "linux",
     liveScreenShare: darwin || platform === "linux",
+    chatCheckBacks: darwin || platform === "linux",
   };
 }

@@ -199,7 +199,7 @@ const storedTask = (patch: Partial<ScheduledTask>): ScheduledTask => ({
 });
 const scheduledSettings: ScheduledTaskSettings = {
   enabled: true, defaultMode: "llm", defaultPermission: "full", defaultMcpEnabled: true,
-  defaultNotify: true, defaultTimezone: "UTC",
+  defaultNotify: true, defaultTimezone: "UTC", chatCheckBacks: true,
 };
 
 /** The detail panel's Edit button (the task row's menu has its own). */

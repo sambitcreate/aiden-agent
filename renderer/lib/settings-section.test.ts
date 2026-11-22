@@ -221,6 +221,12 @@ test("settings search matches every term in any order across title and keywords"
   assert.equal(searchIds("phone zzqx").length, 0);
 });
 
+test("settings search finds the check-back switch by what it does", () => {
+  for (const term of ["check back", "come back later", "check-backs"]) {
+    assert.ok(searchIds(term).includes("scheduledTasks"), term);
+  }
+});
+
 test("settings search finds About by update, diagnostics, logs, and reset terms", () => {
   for (const term of ["update", "diagnostics", "logs", "reset onboarding"]) {
     assert.ok(searchIds(term).includes("about"), term);

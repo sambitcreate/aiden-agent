@@ -212,6 +212,7 @@ import { hostPlatformCapabilities } from "./services/host-platform-capabilities.
 import { installElectronConnectorWatchTransport } from "./services/bot-routine-events/connector-watch-startup.js";
 import {
   backgroundJobs,
+  checkBacks,
   pullRequestFollows,
   reapFollowThroughProcesses,
   shutdownFollowThrough,
@@ -2826,6 +2827,10 @@ if (!ownsSingleInstanceLock) {
       app.on("browser-window-focus", nudgeFollows);
       powerMonitor.on("resume", nudgeFollows);
       powerMonitor.on("unlock-screen", nudgeFollows);
+      // A check-back due while the computer slept fires now (or leaves a
+      // "Missed" card when it is over 2 hours late); the timer re-arms.
+      powerMonitor.on("resume", () => checkBacks.rearm());
+      powerMonitor.on("unlock-screen", () => checkBacks.rearm());
       try {
         if (!shutdownHasBegun()) await initializeAidenRemoteService();
       } catch (error) {

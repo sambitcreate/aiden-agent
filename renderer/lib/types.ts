@@ -804,6 +804,8 @@ export interface ScheduledTaskSettings {
   defaultMcpEnabled: boolean;
   defaultNotify: boolean;
   defaultTimezone: string;
+  /** "Let chats check back later": a workspace chat's agent may set check-backs. */
+  chatCheckBacks: boolean;
 }
 
 export interface ChatMetadataUpdated {
@@ -1039,6 +1041,8 @@ export interface AppSettings extends AidenLiveSettingsFields {
   scheduledDefaultPermission?: ScheduledTaskPermission;
   scheduledDefaultMcpEnabled?: boolean;
   scheduledDefaultNotify?: boolean;
+  /** Workspace chats may promise to check back later. Omitted means on. */
+  chatCheckBacks?: boolean;
   scheduledDefaultTimezone?: string;
   assistant?: AssistantConfig;
   profileName?: string;

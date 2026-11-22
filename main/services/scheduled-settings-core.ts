@@ -23,6 +23,7 @@ export function scheduledSettingsPatch(
     patch.scheduledDefaultMcpEnabled = input.defaultMcpEnabled;
   }
   if (typeof input.defaultNotify === "boolean") patch.scheduledDefaultNotify = input.defaultNotify;
+  if (typeof input.chatCheckBacks === "boolean") patch.chatCheckBacks = input.chatCheckBacks;
   if (input.defaultTimezone !== undefined) {
     patch.scheduledDefaultTimezone = validateTimezone(
       requiredString(input.defaultTimezone, "defaultTimezone"),

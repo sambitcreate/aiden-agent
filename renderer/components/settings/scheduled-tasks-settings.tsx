@@ -202,6 +202,22 @@ export function ScheduledTasksSettings() {
         </Field>
       </FieldSet>
 
+      <FieldSet title="While you're away">
+        <Field
+          label="Let chats check back later"
+          description="Aiden can promise to look again later in a chat, such as checking a deploy in 20 minutes, and posts its note there at that time. Turning this off cancels every pending check-back."
+        >
+          <div className="flex justify-end">
+            <Switch
+              checked={value?.chatCheckBacks ?? true}
+              onCheckedChange={(chatCheckBacks) => void save({ chatCheckBacks })}
+              disabled={settings.isLoading || saving || authoritativeError}
+              aria-label="Let chats check back later"
+            />
+          </div>
+        </Field>
+      </FieldSet>
+
       <FieldSet title="Current tasks">
         {tasks.isError ? (
           <div className="p-4">

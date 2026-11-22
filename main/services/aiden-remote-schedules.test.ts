@@ -13,7 +13,7 @@ function fixture() {
     revision: "rev_settings",
     value: {
       enabled: true, defaultMode: "llm" as const, defaultPermission: "read-only" as const,
-      defaultMcpEnabled: false, defaultNotify: true, defaultTimezone: "UTC",
+      defaultMcpEnabled: false, defaultNotify: true, defaultTimezone: "UTC", chatCheckBacks: true,
     },
   };
   const application = {
@@ -231,5 +231,23 @@ test("scheduled task mutations require foreground confirmation and stale edits f
       defaultMode: "garbage",
     }),
     /settings are invalid/u,
+  );
+});
+
+test("phones read and write only the scheduled-task settings the Remote contract names", async () => {
+  const value = fixture();
+  const expected = {
+    enabled: true, defaultMode: "llm", defaultPermission: "read-only",
+    defaultMcpEnabled: false, defaultNotify: true, defaultTimezone: "UTC",
+  };
+  // The desktop-only check-back switch stays off the wire, whose schema allows no other keys.
+  assert.deepEqual(await value.service.settings(), { revision: "rev_settings", ...expected });
+  assert.deepEqual(
+    await value.service.updateSettings("rev_settings", { confirmedForeground: true, defaultNotify: false }),
+    { revision: "rev_settings_2", ...expected, defaultNotify: false },
+  );
+  await assert.rejects(
+    value.service.updateSettings("rev_settings_2", { confirmedForeground: true, chatCheckBacks: false }),
+    /foreground confirmation/u,
   );
 });

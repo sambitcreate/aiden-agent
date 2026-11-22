@@ -1726,6 +1726,7 @@ export const chatsApi = {
   setDoneWhenCheck: (chatId: string, command: string) =>
     invoke<void>("chats:followThroughSetCheck", { chatId, command }),
   clearDoneWhenCheck: (chatId: string) => invoke<void>("chats:followThroughClearCheck", { chatId }),
+  cancelCheckBack: (chatId: string, id: string) => invoke<void>("chats:followThroughCancelCheckBack", { chatId, id }),
   onBtwEvent: (handler: (event: BtwEventV1) => void) =>
     onNotification<unknown>("chats:btw-event", (payload) => {
       const event = parseBtwEvent(payload);

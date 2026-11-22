@@ -693,6 +693,8 @@ export interface ScheduledTaskSettings {
   defaultMcpEnabled: boolean;
   defaultNotify: boolean;
   defaultTimezone: string;
+  /** "Let chats check back later": a workspace chat's agent may set check-backs. */
+  chatCheckBacks: boolean;
 }
 
 export type McpTransport = "stdio" | "http";
@@ -949,6 +951,8 @@ export interface AppSettings extends AidenLiveSettingsFields {
   scheduledDefaultMcpEnabled?: boolean;
   scheduledDefaultNotify?: boolean;
   scheduledDefaultTimezone?: string;
+  /** Workspace chats may promise to check back later (`check_back`). Omitted means on. */
+  chatCheckBacks?: boolean;
   /** Aiden assistant window, hotkey, and proactivity settings. */
   assistant?: AssistantConfig;
   /** Device-local display name used by the private usage profile. */
