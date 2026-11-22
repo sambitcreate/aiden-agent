@@ -6,7 +6,6 @@ import {
 } from "./chat-turn-tool-policy.js";
 import { scheduledGenerationSurface } from "./conversation-surface-generation.js";
 import { UNATTENDED_FOLLOW_UP_GENERATION } from "./follow-through/notice-delivery.js";
-import { scheduledGenerationSurface } from "./conversation-surface-generation.js";
 
 const workspace: ChatToolSurface = { usageSource: "chat", bot: false, assistant: false, harnessProvider: false };
 const attended: ChatTurnAudience = { unattended: false, remoteAudience: false, visualize: false };
