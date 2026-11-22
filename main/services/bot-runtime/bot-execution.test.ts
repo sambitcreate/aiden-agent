@@ -539,10 +539,10 @@ test("a reply that ends while the next message waits still releases its helper c
   await waitFor(() => clocks.size === 0, { timeoutMs: 2_000, what: "the first reply's clock to be released" });
 });
 
-test("a person Resume gives a blocked Bot reply a fresh 60 minutes for helpers", async (t) => {
+test("a quiet retry keeps a blocked Bot reply's helper deadline and a person Resume resets it", async (t) => {
   let blockNext = false;
-  const { env, launched, results, service } = await helperClockBot(t, "resume-clock", [0, 61 * minute], {
-    afterLaunch: (label) => { if (label === "First") blockNext = true; },
+  const { env, launched, results, service } = await helperClockBot(t, "resume-clock", [0, 61 * minute, 62 * minute], {
+    afterLaunch: (label) => { if (label !== "Third") blockNext = true; },
     configure: ({ port }) => {
       const base = port.resolve;
       port.resolve = async (...args) => ({ ...await base(...args), beforeDispatch: async () => { if (blockNext) { blockNext = false; throw new SpendingDispatchError("limit", "This Bot's spending limit was reached."); } } });
@@ -551,15 +551,20 @@ test("a person Resume gives a blocked Bot reply a fresh 60 minutes for helpers",
   env.faux.setResponses([
     fauxAssistantMessage([fauxToolCall("subagent", { text: "First" })], { stopReason: "toolUse" }),
     fauxAssistantMessage([fauxToolCall("subagent", { text: "Second" })], { stopReason: "toolUse" }),
+    fauxAssistantMessage([fauxToolCall("subagent", { text: "Third" })], { stopReason: "toolUse" }),
     fauxAssistantMessage("Finished after Resume."),
   ]);
   const a = await service.send("bot:one", { requestId: "A", text: "A" });
   await waitFor(async () => (await service.routineState("bot:one")).kind === "interrupted", { what: "the reply to block" });
   assert.deepEqual(launched, ["First"]);
-  // The person resumes 61 minutes after the reply's first helper launch.
+  // A quiet retry, 61 minutes after the first helper launch, keeps the reply's deadline.
+  await service.resume("bot:one", "auto-retry:A:1", { automatic: true });
+  await waitFor(async () => results.length === 2 && (await service.routineState("bot:one")).kind === "interrupted", { what: "the retried reply to block again" });
+  assert.deepEqual(launched, ["First"]); assert.equal(results[1], BOT_SUBAGENT_LIMIT_REACHED_RESULT);
+  // The person's Resume starts the reply's helper clock again.
   await service.resume("bot:one", "person-resume");
   assert.equal((await service.awaitReply("bot:one", a.submissionId, new AbortController().signal)).kind, "completed");
-  assert.deepEqual(launched, ["First", "Second"]); assert.notEqual(results[1], BOT_SUBAGENT_LIMIT_REACHED_RESULT);
+  assert.deepEqual(launched, ["First", "Third"]); assert.notEqual(results[2], BOT_SUBAGENT_LIMIT_REACHED_RESULT);
 });
 
 test("actual registry image conversion refuses a text model without a companion and preserves the explicit image helper", async (t) => {

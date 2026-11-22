@@ -982,12 +982,13 @@ const BLOCK_NAME_SECRET_ENDING =
   /(?:key|token|secret|password|passwd|passphrase|pwd|jwt|cred|creds|credential|cookie)s?$/u;
 /**
  * A plain word, such as a prose heading, is a hint only when it is exactly one
- * of these, so `Password:` counts but `Keys:`, `Hotkeys:` and `Design tokens:`
- * do not.
+ * of these, so `Password:` and `Credentials:` count but `Keys:`, `Tokens:`,
+ * `Hotkeys:` and `Design tokens:` do not. Plurals that read as prose headings
+ * (`keys`, `tokens`, `cookies`) stay out on purpose.
  */
 const BLOCK_NAME_SECRET_WORD: ReadonlySet<string> = new Set([
-  "key", "token", "secret", "password", "passwd", "passphrase", "pwd", "jwt", "cred",
-  "credential", "cookie",
+  "key", "token", "secret", "secrets", "password", "passwd", "passphrase", "pwd", "jwt",
+  "cred", "creds", "credential", "credentials", "cookie", "apikey", "authtoken", "accesstoken",
 ]);
 /** Whole names that are secrets without a secret ending. */
 const BLOCK_NAME_SECRET_EXACT: ReadonlySet<string> = new Set([

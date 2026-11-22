@@ -65,7 +65,7 @@ export interface BotExecutionPort {
   dismissed?(botId: string, claim: BotExecutionClaim): Promise<void>;
   /** The claim's generation committed its final outcome and no new generation carries its inputs: its reply ended. */
   settled?(botId: string, claim: BotExecutionClaim): Promise<void>;
-  /** The person resumed the claim's interrupted reply, so it starts again with fresh per-reply limits. */
+  /** The person resumed the claim's interrupted reply, so it starts again with fresh per-reply limits. A quiet automatic retry does not call this. */
   resumed?(botId: string, claim: BotExecutionClaim): Promise<void>;
   verifyResponse?(facts: BotProviderResponseFacts): Promise<boolean>;
   reconcileResponseCosts?(botId: string, taskId: string, scopeId: string): Promise<void>;

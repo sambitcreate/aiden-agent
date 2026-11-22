@@ -490,7 +490,7 @@ const executionIssues = createBotExecutionIssues(botIssues, spending, {
     const before = await service.state(botId);
     if (before.kind !== "interrupted" || before.blocked) return "moot";
     try {
-      const after = await service.resume(botId, `auto-retry:${claim.id}:${attempt}`);
+      const after = await service.resume(botId, `auto-retry:${claim.id}:${attempt}`, { automatic: true });
       return after.kind === "running" ? "resumed" : after.kind === "interrupted" ? "failed" : "moot";
     } catch {
       return "failed";

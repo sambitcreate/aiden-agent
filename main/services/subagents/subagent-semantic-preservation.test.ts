@@ -200,12 +200,27 @@ const SECRET_NAMED_BLOCKS = [
     text: "Setup:\nPassword:\n  hunter2-plain\n  hunter3-second\nDone.",
     secrets: ["hunter2-plain", "hunter3-second"],
   },
+  // Plain single-word names that must match exactly: the second line is not
+  // caught by the shared credential filter, so it shows the block rule works.
+  ...[
+    ["apikey", "ak7Qw2Zx9Lm4", "ak8Rt3Yv0Np5"],
+    ["authtoken", "at4Hd8Ks1Pq6", "at5Je9Lt2Qr7"],
+    ["accesstoken", "ac3Fg7Jm0Ow2", "ac4Gh8Kn1Px3"],
+    ["Credentials", "cr6Tb0Wd4Ys8", "cr7Uc1Xe5Zt9"],
+    ["creds", "cs2Mn6Pr0Tv4", "cs3No7Qs1Uw5"],
+    ["Creds", "cd9Vb3Xd7Zf1", "cd0Wc4Ye8Ag2"],
+    ["Secrets", "se5Kl9Np3Rt7", "se6Lm0Oq4Su8"],
+  ].map(([name, first, second]) => ({
+    name: `multi-line ${name}`,
+    text: `Setup:\n${name}:\n  ${first}\n  ${second}\nDone.`,
+    secrets: [first, second],
+  })),
   {
     name: "multi-line PASSWORD",
     text: "Setup:\nPASSWORD:\n  firstline-hunter2\n  secondline-hunter3\nDone.",
     secrets: ["firstline-hunter2", "secondline-hunter3"],
   },
-] as const;
+];
 
 for (const block of SECRET_NAMED_BLOCKS) {
   test(`a ${block.name}: block is hidden by the parent, snapshot and panel filters`, () => {
@@ -232,7 +247,7 @@ for (const block of SECRET_NAMED_BLOCKS) {
   });
 }
 
-test("prose heading blocks without a secret-like name survive the parent and panel filters", () => {
+test("prose heading blocks without a secret-like name survive the parent, panel and preview filters", () => {
   for (const value of [
     "Findings:\nAuthentication:\n  The login flow uses OAuth.\n  Tests cover it.\nNext steps.",
     "Keyboard:\n  Shortcuts work.\nAuthors:\n  The core team.\nDone.",
@@ -241,9 +256,23 @@ test("prose heading blocks without a secret-like name survive the parent and pan
     "Design tokens:\n  --color-bg is reused in styles.css\nDone.",
     "Hotkeys:\n  Cmd+K opens search\nDone.",
     "Keys:\n  Arrow keys move the selection.\nCookies:\n  None are set.\nDone.",
+    "Tokens:\n  Spacing tokens live in theme.ts\nDone.",
   ]) {
     assert.equal(sanitizeSubagentText(value), value);
     assert.equal(sanitizeSubagentSnapshotText(value), value);
+    const projector = new SubagentEventProjector({
+      generationId: "generation-prose-block",
+      chatId: "chat-prose-block",
+      workspaceId: "workspace-prose-block",
+      modelId: "test-model",
+      now: () => 1_000,
+    });
+    projector.begin(
+      { runId: "run-prose-block", groupId: "group-prose-block", childId: "child-prose-block" },
+      { role: "scout", label: "Prose block", task: value },
+    );
+    const preview = projector.snapshot()[0]?.taskPreview ?? "";
+    assert.doesNotMatch(preview, /\[REDACTED\]/u, `prose heading hidden in preview: ${preview}`);
   }
 });
 

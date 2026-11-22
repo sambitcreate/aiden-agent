@@ -9,6 +9,8 @@ import { randomUUID } from "node:crypto";
 import { botResponseDigest } from "./bot-response-digest.js";
 import { botCostReceiptScope, consumeBotResumeOperation } from "./bot-resume-operations.js";
 import type { BotExecutionResumeStatus, BotResumeAcknowledgement } from "../../../renderer/shared/bot-execution-resume.js";
+/** Resume options: the person's cost acknowledgement, plus an in-process flag for quiet retries. Never parsed from IPC. */
+export type BotResumeOptions = BotResumeAcknowledgement & { automatic?: true };
 import { reportChatMessageSent } from "../analytics/analytics-feature-reports.js";
 import { botMessageTurnOf, isBotMessageRequestId } from "../../../renderer/shared/bot-messages.js";
 import { BOT_MESSAGE_INPUT_KIND, type BotMessageInputMetadata } from "./bot-input-entry.js";
@@ -225,7 +227,12 @@ export interface BotSessionService {
   canRetryRoutineRequest(botId: string, requestId: string): Promise<boolean>;
   submissionForRequest(botId: string, requestId: string): Promise<string | undefined>;
   send(botId: string, input: BotSendInput): Promise<{ submissionId: string; deduped: boolean }>;
-  resume(botId: string, requestId: string, options?: BotResumeAcknowledgement): Promise<BotSessionState>;
+  /**
+   * Resume an interrupted reply. `automatic` marks a quiet retry made with no
+   * person involved: it resumes the same way but keeps the reply's helper
+   * clock, so only a person's Resume gives helpers a fresh 60 minutes.
+   */
+  resume(botId: string, requestId: string, options?: BotResumeOptions): Promise<BotSessionState>;
   executionResumeStatus(botId: string): Promise<BotExecutionResumeStatus>;
   dismiss(botId: string, requestId: string): Promise<BotSessionState>;
   /**
@@ -958,7 +965,9 @@ export async function createBotSessionService(deps: BotSessionServiceDeps): Prom
       return { requiresUnknownCostAcknowledgement: false, interruptedSubmissionId: before.submissionId };
     },
 
-    resume(botId, requestId, options) {
+    resume(botId, requestId, resumeOptions) {
+      const { automatic, ...acknowledgement } = resumeOptions ?? {};
+      const options: BotResumeAcknowledgement | undefined = resumeOptions ? acknowledgement : undefined;
       return serialize(botId, async () => {
         const { conversation: controlConversation } = await openBot(botId);
         const current = await currentState(botId, false);
@@ -1032,7 +1041,7 @@ export async function createBotSessionService(deps: BotSessionServiceDeps): Prom
             } else if (binding.blocked) await conversation.commit(async (tx) => { delete (await tx.doc(BotExecutionDoc, item.id)).blocked; }, ctx);
           }
           for (const taskId of waitingForCostOwner) await conversation.commit(async (tx) => { delete (await tx.doc(BotExecutionDoc, taskId)).blocked; }, ctx);
-          for (const claim of resumedClaims.values()) await deps.execution.resumed?.(botId, claim);
+          if (automatic !== true) for (const claim of resumedClaims.values()) await deps.execution.resumed?.(botId, claim);
           blocked.delete(botId); opened.harness.resume(); deps.onResumed?.(botId); requireHost().touch(botId);
           return publish(botId, await currentState(botId, false));
         }

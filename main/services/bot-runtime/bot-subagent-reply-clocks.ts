@@ -4,7 +4,7 @@
 // are rebuilt for every durable task phase, so a clock held by the tool would
 // restart on each helper call. These clocks live outside the tools, keyed by
 // the claim, and are dropped when the claim's reply ends, is dismissed or is
-// resumed. A new input gets a new claim, so it starts a new reply with a fresh
+// resumed by a person. A quiet automatic retry keeps the clock. A new input gets a new claim, so it starts a new reply with a fresh
 // 60 minutes, and a person's Resume starts the interrupted reply's clock again.
 
 import { SubagentReplyClock } from "../subagents/subagent-supervisor-core.js";
@@ -20,7 +20,7 @@ export interface BotSubagentReplyClocks {
   forgetBot(botId: string): void;
   /** Clocks currently held. */
   readonly size: number;
-  /** The port, releasing a claim's clock when its reply ends, is dismissed or is resumed. */
+  /** The port, releasing a claim's clock when its reply ends, is dismissed or is resumed by a person. */
   releasingWith(port: BotExecutionPort): BotExecutionPort;
 }
 
