@@ -36,3 +36,8 @@ Proactive Aiden plan, Phase 4 (docs/plans/proactive-aiden-plan.md). Guide: docs/
 - `pauseAfterRepeatedFailures` after `execution.run` for automatic or event dispatches of chat tasks: newest 3 runs after `task.failurePausedAt`, ignoring `skipped` and `blocked`, all `error` → `updateRuntime({enabled:false, nextRunAt:undefined, failurePausedAt, lastError})` (before `stopJob`, else `isCurrent` turns false and the write is refused) then dependency `pausedAfterFailures` → `scheduleExecution.recordInLandingChat` card (desktop only; CLI has no card).
 - `ScheduledTask.failurePausedAt` (main-owned, chat tasks only) kept by save/normalize; `ScheduledRunSkipReason` gained `too_late`. Phones see skips as succeeded runs with the output as summary, so no contract change.
 - Tests in `schedule-service-core.test.ts`; old tests' `nextRunAt: 1` overdue values became `Date.now() - 60_000` so they don't depend on the time of day.
+
+## Skipped trigger runs keep their payload (after E5)
+
+- `runOnce` in `scheduled-task-triggers.ts`: a run recorded `skipped` with `chat_busy`/`chat_budget` calls `dispatcher.requeue` (new generic method in `bot-routine-events/dispatcher.ts`) with a fresh event id (`<eventId>~<now base36>`, so the recorded skip's run id doesn't short-circuit `findRun`). It merges into `held` (older first) and arms the held timer at `lastRunAt + gap`.
+- `combineHeld`: link → `mergeLinkBatches(older, newer)` (both may be batches; 20 calls, dropped counts summed); watch → newest change, then "An earlier change that wasn't delivered yet:" plus the older one, cut at 24,000 chars. The watch's in-gap `mergeHeld` now uses the same (it was newest-wins), otherwise a requeued change would be dropped by the next change.

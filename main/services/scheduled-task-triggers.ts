@@ -19,7 +19,7 @@ import { createEventWatches } from "./bot-routine-events/watch.js";
 import type { BotWatchCheck } from "./bot-routine-events/watch-sources.js";
 import type { ScriptProcessResult } from "./schedule-script.js";
 import type { ScheduledRunTrigger } from "./schedule-service-core.js";
-import { createTaskLinkWebhook, linkEventText, mergeLinkBatch } from "./scheduled-task-link-trigger.js";
+import { createTaskLinkWebhook, linkEventText, mergeLinkBatches } from "./scheduled-task-link-trigger.js";
 import { TASK_TRIGGER_PAYLOAD_CHARS, type ScheduledTaskTriggerStore, type TaskTriggerRoutine } from "./scheduled-task-triggers-store.js";
 import type { ScheduledRun, ScheduledTask } from "./types.js";
 
@@ -86,13 +86,25 @@ function createSlots(size: number) {
   };
 }
 
+/**
+ * Two undelivered payloads as one (a change held inside the gap, or a run
+ * skipped for a busy chat): a link's calls join one batch (20 at most, saying
+ * how many were dropped); a watch's newest change comes first, then the
+ * earlier one, and the end is cut at the payload bound.
+ */
+function combineHeld(link: boolean, older: string, newer: string | undefined): string {
+  if (newer === undefined) return older;
+  if (link) return mergeLinkBatches(older, newer, TASK_TRIGGER_PAYLOAD_CHARS);
+  return `${newer}\n\nAn earlier change that wasn't delivered yet:\n${older}`;
+}
+
 const errorText = (error: unknown) => (error instanceof Error ? error.message : String(error));
 
 export function createScheduledTaskTriggers(deps: ScheduledTaskTriggersDependencies) {
   const slots = createSlots(SCHEDULED_TASK_TRIGGER_LIMITS.runningOverall);
   let stopped = true;
 
-  async function runOnce(routine: TaskTriggerRoutine, event: { eventId: string; payload: string }): Promise<{ settled: boolean }> {
+  async function runOnce(routine: TaskTriggerRoutine, event: { eventId: string; payload: string; watchRevision?: number }): Promise<{ settled: boolean }> {
     const release = await slots.take();
     try {
       if (stopped) return { settled: false };
@@ -101,12 +113,21 @@ export function createScheduledTaskTriggers(deps: ScheduledTaskTriggersDependenc
       if (recorded && recorded.result !== "blocked") return { settled: true };
       try {
         const link = routine.task.trigger.kind === "webhook";
-        await deps.runEvent(routine.id, {
+        const run = await deps.runEvent(routine.id, {
           kind: "event",
           eventId: event.eventId,
           source: link ? "webhook" : "watch",
           payload: link ? linkEventText(event.payload) : event.payload,
         }, runId);
+        // Its chat was busy or out of task runs this hour: what happened waits
+        // for the next allowed run instead of being lost.
+        if (!stopped && run.result === "skipped" && (run.reason === "chat_busy" || run.reason === "chat_budget")) {
+          await dispatcher.requeue(routine.id, routine.id, {
+            eventId: `${event.eventId.slice(0, 120)}~${deps.now().toString(36)}`,
+            payload: event.payload,
+            ...(event.watchRevision !== undefined ? { watchRevision: event.watchRevision } : {}),
+          }, (older, newer) => combineHeld(link, older, newer));
+        }
         // A run cut short by Aiden stopping runs again at the next start.
         return { settled: !stopped };
       } catch (error) {
@@ -131,10 +152,9 @@ export function createScheduledTaskTriggers(deps: ScheduledTaskTriggersDependenc
       perDay: SCHEDULED_TASK_TRIGGER_LIMITS.perDay,
     }),
     payloadChars: TASK_TRIGGER_PAYLOAD_CHARS,
-    // Calls inside a link's gap are batched (20 at most); a watch's newest change wins.
-    mergeHeld: (held, incoming, routine) => routine.task.trigger.kind === "webhook"
-      ? mergeLinkBatch(held.payload, incoming.payload, TASK_TRIGGER_PAYLOAD_CHARS)
-      : incoming.payload,
+    // Calls inside a link's gap are batched (20 at most); a watch keeps its
+    // newest change first, then earlier ones not yet delivered.
+    mergeHeld: (held, incoming, routine) => combineHeld(routine.task.trigger.kind === "webhook", held.payload, incoming.payload),
     now: deps.now,
     timeZone: deps.timeZone,
     setTimer: deps.setTimer,

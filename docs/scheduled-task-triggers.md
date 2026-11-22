@@ -36,7 +36,7 @@ In a chat, Aiden can propose a task with a trigger instead of a schedule (the `t
 
 Runs land the same way as scheduled runs: in the chat the task was made in, sharing that chat's six task runs an hour, otherwise in the task's own chat. The task keeps its own permission and tools, and a run never gets the `schedule` tool, so a run can't create more tasks.
 
-Per task, a watch runs at most once every 5 minutes (a link chooses 1 to 60) and 48 times a day; a change that comes sooner waits and runs once the gap allows (for a watch the newest change wins; a link batches its calls). Across every task, at most 4 trigger runs go at once. A run skipped because its chat was busy or had used its hourly share is recorded as skipped; the next change runs again. A change accepted just before Aiden quits runs again at the next start.
+Per task, a watch runs at most once every 5 minutes (a link chooses 1 to 60) and 48 times a day; a change that comes sooner waits and runs once the gap allows (a watch hands over its newest change first, then earlier ones not yet delivered, cut to 24,000 characters; a link batches its calls). Across every task, at most 4 trigger runs go at once. A run skipped because its chat was busy or had used its hourly share is recorded as skipped, and what it carried waits again: it runs at the next allowed time together with anything that arrived since (a link still keeps at most 20 calls and says how many were dropped). A change accepted just before Aiden quits runs again at the next start.
 
 Triggers never keep the computer awake. Checks happen only while Aiden is open and scheduled tasks are on.
 

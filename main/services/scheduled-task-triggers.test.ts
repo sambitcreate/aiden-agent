@@ -33,7 +33,7 @@ function watchTask(overrides: Partial<ScheduledTask> = {}): ScheduledTask {
   } as ScheduledTask;
 }
 
-function harness(options: { tasks?: ScheduledTask[]; checks?: BotWatchCheck[]; runResult?: ScheduledRun["result"]; stateDir?: string; fireDueTimers?: boolean } = {}) {
+function harness(options: { tasks?: ScheduledTask[]; checks?: BotWatchCheck[]; runResult?: ScheduledRun["result"]; runResults?: Array<Pick<ScheduledRun, "result" | "reason">>; stateDir?: string; fireDueTimers?: boolean } = {}) {
   let clock = 1_800_000_000_000;
   const tasks = options.tasks ?? [watchTask()];
   const checks = [...(options.checks ?? [])];
@@ -55,7 +55,8 @@ function harness(options: { tasks?: ScheduledTask[]; checks?: BotWatchCheck[]; r
     isActive: () => true,
     runEvent: async (taskId, event, runId) => {
       events.push({ taskId, event, runId });
-      const run: ScheduledRun = { id: runId, taskId, startedAt: clock, finishedAt: clock, result: options.runResult ?? "success", output: "" };
+      const outcome = options.runResults?.shift() ?? { result: options.runResult ?? "success" };
+      const run: ScheduledRun = { id: runId, taskId, startedAt: clock, finishedAt: clock, ...outcome, output: "" };
       runs.set(runId, run);
       return run;
     },
@@ -257,8 +258,8 @@ test("trigger runs share one cap of four at once across every task", async () =>
   emitted.stop();
 });
 
-function linkHarness(trigger: Record<string, unknown> = { kind: "webhook", gapMinutes: 10 }) {
-  const value = harness({ tasks: [watchTask({ trigger: trigger as ScheduledTask["trigger"] })], fireDueTimers: true });
+function linkHarness(trigger: Record<string, unknown> = { kind: "webhook", gapMinutes: 10 }, runResults?: Array<Pick<ScheduledRun, "result" | "reason">>) {
+  const value = harness({ tasks: [watchTask({ trigger: trigger as ScheduledTask["trigger"] })], fireDueTimers: true, ...(runResults ? { runResults } : {}) });
   const token = "L".repeat(43);
   return {
     ...value,
@@ -337,4 +338,77 @@ test("a task's link stops at once when it is rotated, and a stopped or paused ta
   await link.store.setTokenHash("task-1", hashTaskLinkToken(link.token));
   assert.equal(await link.call({ a: 3 }), 404);
   link.triggers.stop();
+});
+
+/** Moves past the gap and lets the held run go. */
+async function runHeld(value: { advance(ms: number): void; triggers: ReturnType<typeof createScheduledTaskTriggers>; events: unknown[] }, gapMs: number, expected: number) {
+  value.advance(gapMs);
+  await value.triggers.rearm();
+  for (let tick = 0; tick < 20 && value.events.length < expected; tick += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await value.triggers.idle();
+  }
+}
+
+test("a link call whose run was skipped for a busy chat runs with the calls that came after it", async () => {
+  const link = linkHarness({ kind: "webhook", gapMinutes: 10 }, [{ result: "skipped", reason: "chat_busy" }]);
+  await link.setUp();
+  assert.equal(await link.call({ n: 0 }), 202);
+  assert.equal(link.events.length, 1, "the run went ahead and its chat was busy");
+  assert.equal(await link.call({ n: 1 }), 202);
+  assert.equal(await link.call({ n: 2 }), 202);
+
+  await runHeld(link, 10 * MINUTE, 2);
+  const next = link.events[1]?.event;
+  assert.match(next?.payload ?? "", /^3 calls arrived while the task waited\.\n/u);
+  assert.match(next?.payload ?? "", /Call 1:\n\{\n {2}"n": 0\n\}/u, "the skipped call comes first");
+  assert.match(next?.payload ?? "", /Call 3:\n\{\n {2}"n": 2\n\}/u);
+  assert.notEqual(link.events[1]?.runId, link.events[0]?.runId, "it is a new run, not the recorded skip");
+  link.triggers.stop();
+});
+
+test("a skipped link batch stays bounded to 20 calls and says how many were dropped", async () => {
+  const link = linkHarness({ kind: "webhook", gapMinutes: 10 }, [{ result: "success" }, { result: "skipped", reason: "chat_budget" }]);
+  await link.setUp();
+  assert.equal(await link.call({ n: 0 }), 202);
+  for (let n = 1; n <= 15; n += 1) assert.equal(await link.call({ n }), 202);
+  await runHeld(link, 10 * MINUTE, 2);
+  assert.match(link.events[1]?.event.payload ?? "", /^15 calls arrived/u, "this batch was skipped: the chat used its hourly share");
+  for (let n = 16; n <= 25; n += 1) assert.equal(await link.call({ n }), 202);
+
+  await runHeld(link, 10 * MINUTE, 3);
+  const payload = link.events[2]?.event.payload ?? "";
+  assert.match(payload, /^20 calls arrived while the task waited\. 5 more calls were dropped\./u);
+  assert.match(payload, /Call 1:\n\{\n {2}"n": 6\n\}/u, "the oldest calls are the ones dropped");
+  assert.match(payload, /Call 20:\n\{\n {2}"n": 25\n\}/u);
+  link.triggers.stop();
+});
+
+test("a watched change whose run was skipped for a busy chat is delivered in the next allowed run", async () => {
+  const pages = ["Status: all good", "Status: degraded", "Status: down"];
+  const value = harness({ checks: pages.map((page) => ({ ok: true, bytes: new TextEncoder().encode(page) })), runResults: [{ result: "skipped", reason: "chat_busy" }], fireDueTimers: true });
+  await value.triggers.start();
+  assert.equal(await value.check(), "baseline");
+  value.advance(15 * MINUTE);
+  assert.equal(await value.check(), "changed");
+  assert.equal(value.events.length, 1);
+  assert.match(value.events[0]!.event.payload, /degraded/u);
+
+  await runHeld(value, 5 * MINUTE, 2);
+  assert.equal(value.events.length, 2, "the change runs again once the gap allows");
+  assert.match(value.events[1]!.event.payload, /degraded/u);
+
+  // A newer change waiting alongside a skipped one keeps both, newest first.
+  const second = harness({ checks: pages.map((page) => ({ ok: true, bytes: new TextEncoder().encode(page) })), runResults: [{ result: "skipped", reason: "chat_budget" }], fireDueTimers: true });
+  await second.triggers.start();
+  assert.equal(await second.check(), "baseline");
+  second.advance(15 * MINUTE);
+  assert.equal(await second.check(), "changed");
+  second.advance(MINUTE);
+  assert.equal(await second.check(), "changed");
+  await runHeld(second, 5 * MINUTE, 2);
+  const combined = second.events[1]?.event.payload ?? "";
+  assert.match(combined, /down[\s\S]*An earlier change that wasn't delivered yet:[\s\S]*degraded/u);
+  value.triggers.stop();
+  second.triggers.stop();
 });
