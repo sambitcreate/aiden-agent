@@ -131,6 +131,14 @@ export class RunTaint {
     return this.outside;
   }
 
+  /**
+   * Outside content reached the run another way: a lead chat whose own run
+   * was tainted sent this chat a message (Phase 5 review).
+   */
+  markOutside(): void {
+    this.outside = true;
+  }
+
   /** The person named another site mid-run (a steering message). */
   addPersonText(text: string): void {
     for (const host of namedHosts(text)) this.hosts.add(host);

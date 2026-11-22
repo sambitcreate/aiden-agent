@@ -700,6 +700,8 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
                 device.capabilities.includes("questions:respond")
               );
             },
+            deviceIsOutsideApp: async (deviceId) =>
+              (await state.snapshot()).devices.some((candidate) => candidate.id === deviceId && candidate.type === "agent"),
             workspaceFolderRefusal: async (workspaceId) => {
               const workspace = await configStore.getWorkspace(workspaceId);
               return workspace ? workspaceFolderRemoteRefusal(workspace) : undefined;

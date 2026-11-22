@@ -49,6 +49,20 @@ export function approvalCeilingOf(policy: WorkspaceApprovalPolicy): ApprovalCeil
 }
 
 /**
+ * Both ceilings at once: the stricter mode, only the Mac grants both allow,
+ * and Chat only if either is. Without `other`, `ceiling` is unchanged.
+ */
+export function narrowApprovalCeiling(ceiling: ApprovalCeiling, other: ApprovalCeiling | undefined): ApprovalCeiling {
+  if (!other) return ceiling;
+  const allowed = new Set(other.macGrants);
+  return {
+    mode: MODE_STRICTNESS[other.mode] < MODE_STRICTNESS[ceiling.mode] ? other.mode : ceiling.mode,
+    macGrants: ceiling.macGrants.filter((grant) => allowed.has(grant)),
+    chatOnly: ceiling.chatOnly || other.chatOnly,
+  };
+}
+
+/**
  * `policy` held under `ceiling`: the stricter mode, only the Mac grants both
  * allow, and Chat only if either is. Without a ceiling the policy is unchanged.
  */

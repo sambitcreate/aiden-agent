@@ -733,6 +733,11 @@ export async function appendPiMessages(
 export async function recordPiEffectRecoveryBoundary(
   session: PiSessionPort,
   effects: readonly DurablePiRuntimeEffect[],
+  /**
+   * What the caller knows those calls already did, given the pending
+   * effects (for example the chats a cut-off `child_chats` start made).
+   */
+  describe?: (pending: readonly DurablePiRuntimeEffect[]) => Promise<string | undefined>,
 ): Promise<void> {
   if (effects.length === 0) return;
   const entries = await session.getBranch();
@@ -747,6 +752,7 @@ export async function recordPiEffectRecoveryBoundary(
   if (pending.length === 0) return;
   const toolNames = [...new Set(pending.map(({ toolName }) => toolName))].slice(0, 20);
   const tools = toolNames.length > 0 ? ` Tools involved: ${toolNames.join(", ")}.` : "";
+  const known = (await describe?.(pending).catch(() => undefined))?.trim();
   const message: AgentMessage = {
     role: "assistant",
     content: [
@@ -755,7 +761,8 @@ export async function recordPiEffectRecoveryBoundary(
         text:
           "Aiden recovery boundary: one or more prior tool calls may have crossed execution before their results were durably committed." +
           tools +
-          " Do not repeat these operations automatically. Inspect the current state or ask the user before retrying.",
+          " Do not repeat these operations automatically. Inspect the current state or ask the user before retrying." +
+          (known ? ` ${known}` : ""),
       },
     ],
     api: "openai-completions",

@@ -334,7 +334,7 @@ export const onboardingFeatures: OnboardingFeature[] = [
     group: "control",
     title: "Chats that run chats",
     description:
-      "Ask a chat to split up a job: it starts other chats, in this workspace or their own worktrees, and hears back as each finishes. Their approvals still come to you, and Stop all ends every one.",
+      "Ask a chat to split up a job: it starts other chats, in this workspace or their own worktrees, and hears back as each finishes. Their approvals still come to you, and Stop all ends the ones you haven't taken over.",
     icon: MessagesSquare,
     size: "tall",
   },

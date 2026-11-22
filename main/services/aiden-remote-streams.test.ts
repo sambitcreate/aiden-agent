@@ -1580,6 +1580,16 @@ test("run input admission binds to the stream owner and returns an accepted rece
   assert.equal(app.calls[0]!.ownerDocumentId, owner.owner.documentId);
 });
 
+test("input a lead chat sends to a chat it started reaches the host as the lead's, and a phone's as the person's", async () => {
+  const app = inputFixture(async () => ({ admitted: true, queue: "steer", committed: true, messageId: "m" }));
+  app.service.create("chat:lead-1", "stream-lead", "chat-2", "turn-2");
+  app.service.create("device-1", "stream-phone", "chat-3", "turn-3");
+  await app.service.submitInput("chat:lead-1", "stream-lead", { mode: "steer", text: "From the lead" }, "input-key-lead-00001", inputPassthrough);
+  await app.service.submitInput("device-1", "stream-phone", { mode: "steer", text: "From the phone" }, "input-key-phone-0001", inputPassthrough);
+  assert.equal(app.calls[0]!.fromLeadChat, true);
+  assert.equal("fromLeadChat" in app.calls[1]!, false);
+});
+
 test("run input admission rejects terminal and cancelled streams without calling the host", async () => {
   const app = inputFixture(async () => ({
     admitted: true,

@@ -41,6 +41,11 @@ export const childChats = new ChildChats({
     return { workspaceId: meta.workspaceId, title: meta.title, ceiling: approvalCeilingOf(policy) };
   },
   answerIn: async () => `Aiden on ${await (await remote()).aidenHostDisplayName()}`,
+  discardWorktree: async (workspaceId) => {
+    const { workspaceWorktreeApplicationService } = await import("../workspace-worktree-application-service-main.js");
+    // Main itself removes it: no window or device owns this operation, so nothing invalidates it.
+    await workspaceWorktreeApplicationService.remove({ isDestroyed: () => false, onInvalidated: () => () => undefined }, workspaceId, undefined, { force: false });
+  },
   onRunEnded: (event) => void childChatCompletions.runEnded(event),
   onChanged: (leadChatId) => childChatsChanged(leadChatId),
 });

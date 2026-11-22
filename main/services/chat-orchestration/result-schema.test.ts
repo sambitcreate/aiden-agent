@@ -40,3 +40,25 @@ test("a schema that refers outside itself, is too large or doesn't compile is re
     assert.match((outcome as { error: string }).error, pattern, name);
   }
 });
+
+test("a schema with a regular expression anywhere is refused, so a crafted pattern can't freeze Aiden", () => {
+  const nested = { type: "object", properties: { id: { type: "string", pattern: "^(a+)+$" } } };
+  const keyed = { type: "object", patternProperties: { "^x": { type: "string" } } };
+  const names = { type: "object", propertyNames: { pattern: "^[a-z]+$" } };
+  const deep = { type: "object", $defs: { item: { anyOf: [{ type: "string", pattern: "(.*a){20}" }] } }, properties: { item: { $ref: "#/$defs/item" } } };
+  for (const [schema, keyword] of [[nested, "pattern"], [keyed, "patternProperties"], [names, "propertyNames"], [deep, "pattern"]] as const) {
+    const compiled = compileResultSchema(schema);
+    assert.equal(compiled.ok, false, keyword);
+    assert.match(compiled.ok ? "" : compiled.error, new RegExp(`can't use ${keyword}`, "u"));
+  }
+  // A field merely named "pattern", or an enum value that reads like one, is fine.
+  const fieldNamed = { type: "object", properties: { pattern: { type: "string", enum: ["pattern"] } }, required: ["pattern"] };
+  assert.equal(compileResultSchema(fieldNamed).ok, true);
+  assert.deepEqual(checkResult(fieldNamed, { pattern: "pattern" }), { ok: true });
+
+  // The catastrophic pattern would hang a check of this short value; refused, nothing runs.
+  const started = Date.now();
+  const outcome = checkResult(nested, { id: `${"a".repeat(28)}!` });
+  assert.equal(outcome.ok, false);
+  assert.ok(Date.now() - started < 1_000);
+});

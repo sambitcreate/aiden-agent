@@ -12,6 +12,7 @@ import {
   timingSafeEqual,
 } from "node:crypto";
 import { ASSISTANT_WORKSPACE_ID } from "../../renderer/shared/assistant.js";
+import { CHILD_CHATS_TOOL_NAME } from "../../renderer/shared/child-chats.js";
 import { chatSurface } from "../../renderer/shared/chat-visibility.js";
 import { hostInboxPlacement, type HostInboxSignals, type InboxBucket } from "../../renderer/shared/inbox-state.js";
 import { persistedChatWorkspaceId } from "../../renderer/shared/chat-workspace.js";
@@ -134,6 +135,9 @@ import {
 import type { RegisteredSkill } from "./skill-registry.js";
 import { workspaceMutationGate } from "./workspace-mutation-gate.js";
 import { chatAudienceLead, isChatAudience } from "./chat-orchestration/audience.js";
+
+/** Tools an outside MCP app's turns are never offered (Phase 5 review). */
+const OUTSIDE_APP_EXCLUDED_TOOLS: ReadonlySet<string> = new Set([CHILD_CHATS_TOOL_NAME]);
 
 const SAFE_ID = /^[A-Za-z0-9._:-]{1,128}$/u;
 const IDEMPOTENCY_KEY = /^[\x21-\x7e]{16,128}$/u;
@@ -1479,6 +1483,12 @@ export class AidenRemoteChatService {
        * excluded from that device's turns so a prompt can never be stranded.
        */
       deviceSupportsQuestionPrompts?: (deviceId: string) => Promise<boolean>;
+      /**
+       * Whether the device is an outside MCP app (type "agent"). Its turns are
+       * never offered `child_chats`: a chat it started can't start chats past
+       * the app's own limits (Phase 5 review).
+       */
+      deviceIsOutsideApp?: (deviceId: string) => Promise<boolean>;
       /**
        * Why a workspace's turns are refused when its folder (or its managed
        * worktree's checkout) was moved or deleted, so a paired device hears
@@ -2884,6 +2894,9 @@ export class AidenRemoteChatService {
               ? {}
               : { questionPromptsUnavailable: true }),
             ...(isChatAudience(deviceId) ? { leadChatTurn: true } : {}),
+            ...(!isChatAudience(deviceId) && (await this.options.deviceIsOutsideApp?.(deviceId)) === true
+              ? { excludeToolNames: OUTSIDE_APP_EXCLUDED_TOOLS }
+              : {}),
             onTurnAccepted: () => {
               accepted = true;
               this.options.streams.markRunning(deviceId, streamId);

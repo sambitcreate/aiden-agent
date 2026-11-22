@@ -213,7 +213,7 @@ test("Mac and Linux tours show a chat's started chats working, waiting for you a
     if (platform === "win32") assert.equal(tile, null, "no desktop host there runs started chats");
     else {
       assert.ok(tile, `${platform} can run started chats`);
-      assert.match(tile.getAttribute("aria-label") ?? "", /^Chats that run chats\. .*Their approvals still come to you, and Stop all ends every one\./u);
+      assert.match(tile.getAttribute("aria-label") ?? "", /^Chats that run chats\. .*Their approvals still come to you, and Stop all ends the ones you haven't taken over\./u);
     }
     unmount();
     cleanup();

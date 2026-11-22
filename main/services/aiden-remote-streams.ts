@@ -1869,6 +1869,8 @@ export class AidenRemoteStreamService {
               mode: parsed.mode,
               text: parsed.text,
               ownerDocumentId: stream.owner.owner.documentId,
+              // A lead chat's message to a chat it started is not the person writing (Phase 5).
+              ...(isChatAudience(deviceId) ? { fromLeadChat: true as const } : {}),
             });
             // A queued input while a prompt is pending does not resume the
             // run — emitting running would clobber waiting_for_approval and

@@ -3,7 +3,7 @@
 // the rest act only on chats this chat started and never ask. A turn Aiden
 // started (a follow-up, a woken turn, a goal round) refuses `start` before it
 // runs (`TURN_ARGS_REFUSAL_RULES`), and a chat that was itself started never
-// gets the tool (depth 1).
+// gets the tool (depth 1), nor does an outside MCP app's turn.
 
 import { Type } from "typebox";
 import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
@@ -23,6 +23,12 @@ export interface ChildChatsToolOptions {
   childChats: Pick<ChildChats, "start" | "send" | "wait" | "read" | "list" | "stop">;
   /** This turn's refusal for a call, checked again here in case the call skipped the turn policy. */
   refusal?(args: unknown): string | undefined;
+  /**
+   * Whether the lead's own run holds outside content right now. A chat it
+   * starts or sends to is then marked, so the started chat's runs start
+   * tainted and its Auto judge never passes a call on the lead's word.
+   */
+  leadTainted?(): boolean;
 }
 
 export const CHILD_CHATS_TOOL_DESCRIPTION =
@@ -161,7 +167,7 @@ export function createChildChatsTool(options: ChildChatsToolOptions): AgentTool 
                 ...(entry.result_schema !== undefined ? { resultSchema: entry.result_schema as Record<string, unknown> } : {}),
               });
             }
-            const started = await options.childChats.start(lead, toolCallId, requests);
+            const started = await options.childChats.start(lead, toolCallId, requests, { tainted: options.leadTainted?.() === true });
             return result({
               ok: started.some((outcome) => "chatId" in outcome),
               started,
@@ -172,7 +178,10 @@ export function createChildChatsTool(options: ChildChatsToolOptions): AgentTool 
             const chatId = id(params.chat_id);
             if (!chatId || typeof params.text !== "string" || !params.text.trim()) return refuse("send needs chat_id and text.");
             const mode = (CHILD_CHATS_SEND_MODES as readonly unknown[]).includes(params.mode) ? (params.mode as ChildChatsSendMode) : "auto";
-            return result({ ok: true, ...(await options.childChats.send(lead, toolCallId, { chatId, text: params.text, mode })) });
+            return result({
+              ok: true,
+              ...(await options.childChats.send(lead, toolCallId, { chatId, text: params.text, mode }, { tainted: options.leadTainted?.() === true })),
+            });
           }
           case "wait": {
             const chatIds = Array.isArray(params.chat_ids) ? params.chat_ids.map(id) : [];

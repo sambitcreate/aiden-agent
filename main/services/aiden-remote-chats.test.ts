@@ -83,6 +83,7 @@ function fixture(
     imageArtifactRecoveryPending?: boolean;
     imageArtifactRecoveryUnavailable?: boolean;
     deviceSupportsQuestionPrompts?: (deviceId: string) => Promise<boolean>;
+    deviceIsOutsideApp?: (deviceId: string) => Promise<boolean>;
     deviceSupportsSkillInvocation?: (deviceId: string) => Promise<boolean>;
     skillCatalog?: (workspaceId: string) => Promise<readonly SkillCatalogEntry[]>;
     botSkillCatalog?: (
@@ -320,6 +321,7 @@ function fixture(
     ...(fixtureOptions.deviceSupportsQuestionPrompts
       ? { deviceSupportsQuestionPrompts: fixtureOptions.deviceSupportsQuestionPrompts }
       : {}),
+    ...(fixtureOptions.deviceIsOutsideApp ? { deviceIsOutsideApp: fixtureOptions.deviceIsOutsideApp } : {}),
     ...(fixtureOptions.deviceSupportsSkillInvocation
       ? { deviceSupportsSkillInvocation: fixtureOptions.deviceSupportsSkillInvocation }
       : {}),
@@ -2492,6 +2494,18 @@ test("a device without question prompts keeps the question tool declared and has
     /not available in this turn/u,
     "without a host capability lookup the question call must be refused",
   );
+});
+
+test("an outside MCP app's turns are never offered child_chats; a phone's are", async () => {
+  const apps = new Set(["mcp-app-1"]);
+  const remote = fixture(chat(), { deviceIsOutsideApp: async (deviceId) => apps.has(deviceId) });
+  await remote.service.startTurn("mcp-app-1", "chat-1", "outside-app-turn-001", { text: "start some chats" });
+  assert.equal(remote.lastGenerationOptions()?.excludeToolNames instanceof Set, true);
+  assert.equal((remote.lastGenerationOptions()?.excludeToolNames as Set<string>).has("child_chats"), true);
+
+  const phone = fixture(chat(), { deviceIsOutsideApp: async (deviceId) => apps.has(deviceId) });
+  await phone.service.startTurn("device-1", "chat-1", "phone-turn-00001", { text: "start some chats" });
+  assert.equal(phone.lastGenerationOptions()?.excludeToolNames, undefined);
 });
 
 test("chat skill catalog revalidates the workspace projection and narrows Bot chats", async () => {

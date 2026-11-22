@@ -104,3 +104,12 @@ test("outside content a compaction folded away still taints the next turn, and a
   // A compacted chat that only ever talked stays clean.
   assert.equal(nextTurn([{ type: "message", message: { role: "user" } }, { type: "message", message: { role: "assistant" } }, { type: "compaction", retainedTail: [{ role: "user" }] }]).tainted, false);
 });
+
+test("a run a tainted lead chat wrote into counts as holding outside content from then on", () => {
+  const taint = new RunTaint({ personText: ["Fix the login page"] });
+  assert.equal(taint.isNewDestination(UNNAMED_FETCH), false);
+  taint.markOutside();
+  assert.equal(taint.tainted, true);
+  assert.equal(taint.isNewDestination(UNNAMED_FETCH), true);
+  assert.equal(taint.isNewDestination({ toolName: "web_fetch", args: { url: "https://login.example/page" } }), true);
+});

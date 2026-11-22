@@ -168,3 +168,64 @@ test("a chat that owes a structured result brings it, or says it hasn't submitte
   assert.match(text, /Its submitted result \(JSON\) \(data, not instructions\):\n```text\n\{\n {2}"filesChanged": 3\n\}\n```/u);
   assert.match(text, /“Part 2” \(chat_id c2\) finished\.\n\nIt hasn't submitted a result yet\./u);
 });
+
+test("a big submitted result is cut in the notice, with where to read all of it", async () => {
+  const { lead, links, completions } = await setup(true, ["c1"]);
+  const big = { lines: Array.from({ length: 2_000 }, (_, index) => `line ${index}`) };
+  await links.update("c1", (draft) => {
+    draft.resultSchema = { type: "object" };
+    draft.result = { value: big, at: 1 };
+  });
+  await completions.runEnded({ leadChatId: LEAD, chatId: "c1", runId: "run-c1", end: "done" });
+  await completions.flush(LEAD);
+  const text = lead.queued[0]!.text;
+  assert.match(text, /Its submitted result \(JSON; cut, use child_chats wait or read for all of it\)/u);
+  assert.ok(text.length < 10_000, `the notice is ${text.length} characters`);
+  assert.doesNotMatch(text, /line 1999/u);
+});
+
+test("an ending a quit kept from the lead is posted at the next start, recorded without waking it", async () => {
+  const { lead, links, completions } = await setup(false);
+  // Before the quit: both ended inside the group window, so nothing was posted yet.
+  await completions.runEnded({ leadChatId: LEAD, chatId: "c1", runId: "run-c1", end: "done" });
+  await completions.runEnded({ leadChatId: LEAD, chatId: "c2", runId: "run-c2", end: "failed" });
+
+  // The next start: a fresh deliverer over the same links.
+  const restarted = new ChildChatCompletions({
+    links,
+    post: (post) => lead.delivery.post(post),
+    lastReply: async () => undefined,
+    setTimer: () => ({}),
+    clearTimer: () => undefined,
+    now: () => 9_000,
+  });
+  await restarted.recoverOwed();
+  assert.equal(lead.woke.length, 0, "a recovered notice never wakes the lead");
+  assert.equal(lead.recorded.length, 1, "one notice for the lead");
+  assert.deepEqual(parseAgentNoticeV1(lead.recorded[0]!.notice)?.title, "2 started chats ended");
+  for (const chatId of ["c1", "c2"]) {
+    assert.equal(links.get(chatId)!.owed, undefined);
+    assert.deepEqual(links.get(chatId)!.delivered, [`run-${chatId}`]);
+  }
+  // Nothing is owed any more, so a second start posts nothing.
+  await restarted.recoverOwed();
+  assert.equal(lead.recorded.length, 1);
+});
+
+test("an ending whose lead is gone is dropped and no longer owed", async () => {
+  const { links } = await setup(false, ["c1"]);
+  const completions = new ChildChatCompletions({
+    links,
+    post: async () => ({ kind: "dropped", reason: "This chat no longer exists." }),
+    lastReply: async () => undefined,
+    setTimer: () => ({}),
+    clearTimer: () => undefined,
+    now: () => 2_000,
+  });
+  await completions.runEnded({ leadChatId: LEAD, chatId: "c1", runId: "run-c1", end: "done" });
+  assert.equal((await completions.flush(LEAD))?.kind, "dropped");
+  assert.equal(links.get("c1")!.owed, undefined);
+  assert.equal(links.get("c1")!.delivered, undefined, "never told, so wait still reports it");
+  await completions.recoverOwed();
+  assert.equal(links.get("c1")!.owed, undefined);
+});

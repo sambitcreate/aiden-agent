@@ -4,7 +4,7 @@ import { app, logger } from "../../platform.js";
 import { DataStore } from "../data-store.js";
 import type { ApprovalCeiling } from "../approval-gate/run-approval.js";
 import type { ChatStartedByV1 } from "../../../renderer/shared/chat-started-by.js";
-import { ChatLinkStore, emptyChatLinkDocument, parseChatLinkDocument, startedChatCeiling, type ChatLinkDocument } from "./links.js";
+import { ChatLinkStore, emptyChatLinkDocument, parseChatLinkDocument, startedChatTurnCeiling, type ChatLinkDocument } from "./links.js";
 
 const CHAT_LINKS_FILE = "chat-orchestration.json";
 const CHAT_LINKS_MAX_BYTES = 8 * 1024 * 1024;
@@ -28,15 +28,31 @@ export const chatLinks = new ChatLinkStore(
 
 /**
  * The ceiling a started chat's turns run under, or `undefined` for any other
- * chat. A chat that says another chat started it but whose link is gone (a
- * damaged links file) runs as Ask with no Mac grants rather than unbounded.
+ * chat: the stored one narrowed by the lead's workspace as it is now. A chat
+ * that says another chat started it but whose link is gone (a damaged links
+ * file) runs as Ask with no Mac grants rather than unbounded.
  */
 export async function startedChatApprovalCeiling(
   chatId: string,
   startedBy: ChatStartedByV1 | undefined,
 ): Promise<ApprovalCeiling | undefined> {
   await chatLinks.restore();
-  return startedChatCeiling(chatLinks, chatId, startedBy);
+  return startedChatTurnCeiling({
+    links: chatLinks,
+    chatId,
+    startedBy,
+    // What the lead's workspace allows now, read on every turn of the chat.
+    leadCeiling: async (leadChatId) => {
+      const [{ chatStore }, { configStore }, { approvalCeilingOf, currentWorkspaceApproval }] = await Promise.all([
+        import("../chat-store.js"),
+        import("../config-store.js"),
+        import("../approval-gate/run-approval.js"),
+      ]);
+      const workspaceId = (await chatStore.getMeta(leadChatId))?.workspaceId;
+      const policy = workspaceId ? await currentWorkspaceApproval(configStore, workspaceId) : undefined;
+      return policy ? approvalCeilingOf(policy) : undefined;
+    },
+  });
 }
 
 /** The person wrote in a started chat: the lead's `send` and Stop leave it alone from now on. */

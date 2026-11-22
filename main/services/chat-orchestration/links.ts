@@ -12,7 +12,7 @@
 import { isStorableResult, isStorableResultSchema } from "./result-schema.js";
 import { isValidBranchName } from "../../../renderer/shared/worktree-on-send.js";
 import { APPROVAL_MODES, MAC_GRANT_CLASSES, type ApprovalMode, type MacGrantClass } from "../../../renderer/shared/approval-mode.js";
-import type { ApprovalCeiling } from "../approval-gate/run-approval.js";
+import { narrowApprovalCeiling, type ApprovalCeiling } from "../approval-gate/run-approval.js";
 
 export type ChatLinkRunEnd = "done" | "stopped" | "failed" | "interrupted";
 
@@ -26,6 +26,13 @@ export interface ChatLink {
   ceiling: ApprovalCeiling;
   /** When the lead last sent a message into this chat. */
   leadSentAt?: number;
+  /**
+   * A lead whose own run held outside content (a web page, a connector's
+   * data) sent this chat a message or its task. Its runs start tainted, and
+   * a turn the lead began never lets the Auto judge pass a call on the
+   * lead's word (Phase 5 review).
+   */
+  leadTainted?: true;
   /** The person typed in this chat after the lead's last message. */
   tookOverAt?: number;
   /** The run the lead started most recently in this chat. */
@@ -55,6 +62,12 @@ export interface ChatLinkStorage {
 /** Links kept, oldest dropped first; a memory guard, not a limit on started chats. */
 export const CHAT_LINK_LIMIT = 5_000;
 const DELIVERED_LIMIT = 16;
+/**
+ * Only the newest links keep a result schema and a submitted result (up to
+ * 16 KB and 64 KB each): older ones drop them, so the file stays small. The
+ * lead can still read those chats.
+ */
+export const CHAT_LINK_RESULTS_KEPT = 64;
 const TITLE_CHARS = 200;
 const ID = /^[A-Za-z0-9._-]{1,128}$/u;
 const KEY = /^[A-Za-z0-9._:-]{1,300}$/u;
@@ -104,6 +117,7 @@ export function parseChatLink(value: unknown): ChatLink | undefined {
   };
   const leadSentAt = time(record.leadSentAt);
   if (leadSentAt !== undefined) link.leadSentAt = leadSentAt;
+  if (record.leadTainted === true) link.leadTainted = true;
   const tookOverAt = time(record.tookOverAt);
   if (tookOverAt !== undefined) link.tookOverAt = tookOverAt;
   if (typeof record.runId === "string" && KEY.test(record.runId)) link.runId = record.runId;
@@ -156,10 +170,32 @@ export function startedChatCeiling(
   return links.ceilingFor(chatId) ?? (startedBy ? { ...LOST_LINK_CEILING, macGrants: [] } : undefined);
 }
 
+/**
+ * The ceiling a started chat's turn runs under now: its stored ceiling (or
+ * the lost-link one) narrowed by what its lead's workspace allows today, so
+ * tightening the lead's mode or taking back a grant reaches the chats it
+ * started on their next turn. `leadCeiling` is undefined when the lead or its
+ * workspace is gone; the stored ceiling then holds alone.
+ */
+export async function startedChatTurnCeiling(input: {
+  links: Pick<ChatLinkStore, "ceilingFor" | "get">;
+  chatId: string;
+  startedBy: { chatId: string } | undefined;
+  leadCeiling(leadChatId: string): Promise<ApprovalCeiling | undefined>;
+}): Promise<ApprovalCeiling | undefined> {
+  const stored = startedChatCeiling(input.links, input.chatId, input.startedBy);
+  if (!stored) return undefined;
+  const leadChatId = input.links.get(input.chatId)?.leadChatId ?? input.startedBy?.chatId;
+  const now = leadChatId ? await input.leadCeiling(leadChatId).catch(() => undefined) : undefined;
+  return narrowApprovalCeiling(stored, now);
+}
+
 export class ChatLinkStore {
   private readonly links = new Map<string, ChatLink>();
   private restored: Promise<void> | undefined;
   private writes: Promise<void> = Promise.resolve();
+  /** A save queued behind the current one; later changes ride along with it. */
+  private queued: Promise<void> | undefined;
 
   constructor(
     private readonly storage: ChatLinkStorage,
@@ -195,6 +231,11 @@ export class ChatLinkStore {
     return undefined;
   }
 
+  /** Every link, as copies. */
+  all(): ChatLink[] {
+    return [...this.links.values()].map((link) => structuredClone(link));
+  }
+
   /** The chats this lead started, oldest first. */
   childrenOf(leadChatId: string): ChatLink[] {
     return [...this.links.values()].filter((link) => link.leadChatId === leadChatId).map((link) => structuredClone(link));
@@ -217,6 +258,13 @@ export class ChatLinkStore {
       const oldest = this.links.keys().next().value;
       if (oldest === undefined) break;
       this.links.delete(oldest);
+    }
+    let newer = this.links.size;
+    for (const kept of this.links.values()) {
+      newer -= 1;
+      if (newer < CHAT_LINK_RESULTS_KEPT) break;
+      delete kept.resultSchema;
+      delete kept.result;
     }
     return this.persist().then(() => structuredClone(parsed));
   }
@@ -260,14 +308,22 @@ export class ChatLinkStore {
     return this.writes;
   }
 
+  /**
+   * Saves the whole document. Changes made while a save is already queued
+   * share it, since it reads the links when it starts, so a burst of updates
+   * costs one write after the one in progress.
+   */
   private persist(): Promise<void> {
+    if (this.queued) return this.queued;
     const write = this.writes.then(async () => {
+      this.queued = undefined;
       try {
         await this.storage.save({ version: 1, links: [...this.links.values()].map((link) => structuredClone(link)) });
       } catch (error) {
         this.log("Could not save the started-chat links.", error);
       }
     });
+    this.queued = write;
     this.writes = write;
     return write;
   }
