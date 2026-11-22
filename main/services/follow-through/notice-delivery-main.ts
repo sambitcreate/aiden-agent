@@ -20,6 +20,9 @@ import {
   UNATTENDED_FOLLOW_UP_GENERATION,
 } from "./notice-delivery.js";
 
+/** How long a notice waits for a scheduled task's run in its chat before trying again. */
+const OTHER_RUN_WAIT_MS = 30 * 60 * 1000;
+
 /** A headless owner for a turn nobody is watching; the Mac's run journal still mirrors it. */
 function createUnattendedOwner(streamId: string): ChatGenerationOwner {
   return {
@@ -63,6 +66,7 @@ async function followUpChat(chatId: string): Promise<FollowUpChat | { unavailabl
 async function queueIntoRun(post: AgentNoticePost): Promise<QueueIntoRunResult> {
   const result = await llmClient.admitAgentNotice(post.chatId, { text: post.text, notice: post.notice });
   if (!result) return { kind: "no-run" };
+  if (result === "busy") return { kind: "busy" };
   if (result.committed) transcriptChanged(post.chatId);
   if (result.admitted && result.messageId) return { kind: "queued", messageId: result.messageId };
   if (result.committed && result.messageId) return { kind: "saved", messageId: result.messageId };
@@ -156,6 +160,9 @@ export const noticeDelivery = new NoticeDelivery({
   append,
   waitForIdle: async (chatId) => {
     await llmClient.waitForChatIdle(chatId);
+  },
+  waitForRunToSettle: async (chatId) => {
+    await llmClient.waitForChatIdleWithin(chatId, OTHER_RUN_WAIT_MS);
   },
   now: Date.now,
   onError: (error) => logger.warn("follow-through", "A follow-up notice was not delivered.", error),

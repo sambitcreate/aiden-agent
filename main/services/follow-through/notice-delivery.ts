@@ -2,7 +2,9 @@
 // queued follow-up, so the agent reads it before it finishes. An idle chat is
 // woken with a main-owned turn that nobody is watching, within an hourly
 // budget; otherwise the notice is only recorded and the agent reads it with
-// the person's next message. While the chat has an active keep-going goal, a
+// the person's next message. A run another feature owns (a scheduled task's)
+// never takes a notice: delivery waits for it to settle, then joins or wakes
+// the chat's own turn. While the chat has an active keep-going goal, a
 // waking notice starts a goal round instead, which the person attends and
 // which uses no wake budget. Notices for one chat are delivered in order.
 
@@ -27,6 +29,11 @@ export type AgentNoticeOutcome =
 export type QueueIntoRunResult =
   /** Nothing is running in the chat that takes input. */
   | { kind: "no-run" }
+  /**
+   * A run another feature owns holds the chat (a scheduled task posting
+   * there). It never reads notices, so its tools could not act on one: wait.
+   */
+  | { kind: "busy" }
   | { kind: "queued"; messageId: string }
   /** The run ended after the message was saved: it is in the transcript, unread. */
   | { kind: "saved"; messageId: string }
@@ -59,6 +66,8 @@ export interface NoticeDeliveryDeps {
   startGoalRound?(chatId: string, post?: AgentNoticePost): Promise<StartTurnResult | undefined>;
   append(post: AgentNoticePost): Promise<AppendResult>;
   waitForIdle(chatId: string): Promise<void>;
+  /** Waits, for as long as a whole run may take, until a run that holds the chat settles. */
+  waitForRunToSettle(chatId: string): Promise<void>;
   now(): number;
   onError?(error: unknown): void;
 }
@@ -147,6 +156,10 @@ export class NoticeDelivery {
         await this.deps.waitForIdle(post.chatId);
         continue;
       }
+      if (queued.kind === "busy") {
+        await this.deps.waitForRunToSettle(post.chatId);
+        continue;
+      }
       const round = post.wake ? await this.deps.startGoalRound?.(post.chatId, post) : undefined;
       if (round) {
         if (round.kind === "started") return { kind: "woke", messageId: round.messageId ?? "", streamId: round.streamId };
@@ -210,7 +223,8 @@ export class NoticeDelivery {
       const queued = await this.deps.queueIntoRun(post);
       if (queued.kind === "queued") return { kind: "queued", messageId: queued.messageId };
       if (queued.kind === "saved") return { kind: "recorded", messageId: queued.messageId, reason };
-      await this.deps.waitForIdle(post.chatId);
+      if (queued.kind === "busy") await this.deps.waitForRunToSettle(post.chatId);
+      else await this.deps.waitForIdle(post.chatId);
     }
     return { kind: "dropped", reason: "The chat stayed busy." };
   }
@@ -218,4 +232,33 @@ export class NoticeDelivery {
   private recordWake(chatId: string): void {
     this.wakes.set(chatId, [...this.recentWakes(chatId), this.deps.now()]);
   }
+}
+
+/** A running generation, as far as notice routing cares. */
+export interface NoticeRunCandidate {
+  chatId: string;
+  cancelRequested: boolean;
+  /**
+   * The chat's own turn: the person's, an owed turn, a follow-up or a goal
+   * round. A scheduled task, Telegram, a Bot or the Assistant run their own way.
+   */
+  chatTurn: boolean;
+}
+
+/**
+ * Where a notice for `chatId` goes now: into the chat's own running turn,
+ * `"busy"` while a run another feature owns holds the chat, or undefined when
+ * nothing runs there.
+ */
+export function agentNoticeRun(
+  runs: Iterable<readonly [string, NoticeRunCandidate]>,
+  chatId: string,
+): { streamId: string } | "busy" | undefined {
+  let busy = false;
+  for (const [streamId, run] of runs) {
+    if (run.chatId !== chatId || run.cancelRequested) continue;
+    if (run.chatTurn) return { streamId };
+    busy = true;
+  }
+  return busy ? "busy" : undefined;
 }

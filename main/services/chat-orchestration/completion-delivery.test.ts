@@ -32,6 +32,7 @@ function leadChat(state: { running: boolean }) {
       return { kind: "appended", messageId: `m${++id}` };
     },
     waitForIdle: async () => undefined,
+    waitForRunToSettle: async () => undefined,
     now: () => 1_000,
   });
   return { delivery, queued, woke, recorded };
@@ -222,6 +223,7 @@ function failingLead(how: "gone" | "busy" | "throws") {
     startTurn: async () => (how === "busy" ? { kind: "busy" } : { kind: "unavailable", reason: "This chat no longer exists." }),
     append: async () => (how === "gone" ? { kind: "gone", reason: "This chat no longer exists." } : { kind: "busy" }),
     waitForIdle: async () => undefined,
+    waitForRunToSettle: async () => undefined,
     now: () => 1_000,
   });
 }

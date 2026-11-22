@@ -337,6 +337,16 @@ export function aidenStartedTurn(turn: ChatTurnAudience): boolean {
   );
 }
 
+/**
+ * A workspace chat turn the person wrote: neither one Aiden started nor a run
+ * another feature owns (a scheduled task, Telegram, a side run), which keeps
+ * its own audience even when it posts into a chat. Desktop and paired-device
+ * turns leave `usageSource` unset; it means "chat".
+ */
+export function personWroteChatTurn(usageSource: string | undefined, turn: ChatTurnAudience): boolean {
+  return (usageSource === undefined || usageSource === "chat") && !aidenStartedTurn(turn);
+}
+
 /** Subagent roles that only read: everything but the implementer. */
 const READ_ONLY_SUBAGENT_ROLES: ReadonlySet<string> = new Set(["scout", "planner", "reviewer"]);
 
