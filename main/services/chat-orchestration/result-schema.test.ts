@@ -235,3 +235,33 @@ test("a result with too many values or too deep a nesting is refused before it i
   const report = { files: Array.from({ length: 400 }, (_, i) => `src/file-${i}.ts`), passed: true };
   assert.deepEqual(checkResult(SCHEMA, report), { ok: true });
 });
+
+test("long enum, const and required lists count toward a schema's cost, so branching over them is refused quickly", () => {
+  const sixThousand = { enum: Array.from({ length: 6_000 }, (_, i) => i % 10) };
+  const names = Array.from({ length: 1_700 }, (_, i) => `k${i}`);
+  const constObject = Object.fromEntries(Array.from({ length: 1_200 }, (_, i) => [`a${i}`, i % 10]));
+  const refused: Array<[string, unknown, unknown]> = [
+    // A 15 KB schema whose 4,900 branches each compare against 6,000 members.
+    ["enum under 70 × 70 branches", { $defs: tree(2, 70, sixThousand), $ref: "#/$defs/d0" }, -1],
+    ["enum under 70 × 70 branches, as items", { $defs: tree(2, 70, sixThousand), type: "array", items: { anyOf: [{ $ref: "#/$defs/d0" }, { type: "string" }] } }, Array(90).fill(-1)],
+    ["enum under 12 × 12 × 12 branches", { $defs: tree(3, 12, { enum: Array.from({ length: 5_000 }, (_, i) => i % 10) }), type: "array", items: { anyOf: [{ $ref: "#/$defs/d0" }, { type: "string" }] } }, [-1]],
+    ["required under 70 × 70 branches", { $defs: tree(2, 70, { required: names }), $ref: "#/$defs/d0" }, {}],
+    ["const under 70 × 70 branches", { $defs: tree(2, 70, { const: constObject }), $ref: "#/$defs/d0" }, { ...constObject, a1199: 99 }],
+  ];
+  for (const [name, schema, value] of refused) {
+    const started = performance.now();
+    const compiled = compileResultSchema(schema);
+    const checked = checkResult(schema, value);
+    const ms = performance.now() - started;
+    assert.equal(compiled.ok, false, name);
+    assert.match(compiled.ok ? "" : compiled.error, /could take too long to check/u, name);
+    assert.equal(checked.ok, false, name);
+    assert.equal(isStorableResultSchema(schema), false, name);
+    assert.ok(ms < 100, `${name} took ${ms} ms`);
+  }
+
+  // An ordinary list of choices, used for every item, still works.
+  const labels = { type: "array", items: { enum: Array.from({ length: 200 }, (_, i) => `label-${i}`) } };
+  assert.deepEqual(checkResult(labels, Array.from({ length: 100 }, (_, i) => `label-${i}`)), { ok: true });
+  assert.match((checkResult(labels, ["label-1", "nope"]) as { error: string }).error, /\/1 must be equal to one of the allowed values/u);
+});

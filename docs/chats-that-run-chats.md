@@ -73,7 +73,9 @@ anywhere, since a crafted one could stall Aiden: no key named `pattern` or
 `patternProperties` at any depth, including inside data keywords, `$defs` and
 `propertyNames`, so a property literally named `pattern` is refused too.
 Checking must stay cheap however the result looks: Aiden adds up every
-subschema a check could visit, following each ref, and refuses a schema whose
+subschema a check could visit, following each ref (each `enum` member and
+`required` or `dependentRequired` name adds one, and `enum` and `const` data
+one more per 64 bytes), and refuses a schema whose
 `anyOf`, `oneOf` or `allOf` branches multiply past 10,000 that way, one with
 more than 256 refs, and a `uniqueItems` whose items aren't a plain type
 (string, number, integer, boolean or null). A
