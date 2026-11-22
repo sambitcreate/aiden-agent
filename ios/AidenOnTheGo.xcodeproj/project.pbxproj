@@ -200,6 +200,7 @@
 		A04500000000000000000006 /* AgentRunLiveActivityWidget.swift in Sources */ = {isa = PBXBuildFile; fileRef = A04500000000000000000013 /* AgentRunLiveActivityWidget.swift */; };
 		A04500000000000000000007 /* AidenLiveActivityWidget.appex in Embed App Extensions */ = {isa = PBXBuildFile; fileRef = A04500000000000000000017 /* AidenLiveActivityWidget.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		A04500000000000000000008 /* aiden-sidebar-logo.png in Resources */ = {isa = PBXBuildFile; fileRef = A04500000000000000000018 /* aiden-sidebar-logo.png */; };
+		F10E00000000000000000006 /* aiden-icon-june15.png in Resources */ = {isa = PBXBuildFile; fileRef = F10E00000000000000000014 /* aiden-icon-june15.png */; };
 		A0DB00000000000000000001 /* AidenRemoteLiveActivityManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0DB00000000000000000011 /* AidenRemoteLiveActivityManager.swift */; };
 		A0F100000000000000000011 /* AidenLatestValueThrottle.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0F100000000000000000010 /* AidenLatestValueThrottle.swift */; };
 		A0DB00000000000000000002 /* AidenNativeIntegrationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0DB00000000000000000012 /* AidenNativeIntegrationTests.swift */; };
@@ -557,6 +558,7 @@
 		F10E00000000000000000013 /* AidenHomeActionsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenHomeActionsTests.swift; sourceTree = "<group>"; };
 		A04500000000000000000014 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		A04500000000000000000018 /* aiden-sidebar-logo.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; name = "aiden-sidebar-logo.png"; path = AidenOnTheGo/Resources/Assets.xcassets/AidenSidebarLogo.imageset/aiden-sidebar-logo.png; sourceTree = SOURCE_ROOT; };
+		F10E00000000000000000014 /* aiden-icon-june15.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; name = "aiden-icon-june15.png"; path = AidenOnTheGo/Resources/Assets.xcassets/AppIcon.appiconset/aiden-icon-june15.png; sourceTree = SOURCE_ROOT; };
 		A04500000000000000000017 /* AidenLiveActivityWidget.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = AidenLiveActivityWidget.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		A0F100000000000000000010 /* AidenLatestValueThrottle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenLatestValueThrottle.swift; sourceTree = "<group>"; };
 		A0DB00000000000000000011 /* AidenRemoteLiveActivityManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenRemoteLiveActivityManager.swift; sourceTree = "<group>"; };
@@ -1097,6 +1099,7 @@
 			children = (
 				A04500000000000000000014 /* Info.plist */,
 				A04500000000000000000018 /* aiden-sidebar-logo.png */,
+				F10E00000000000000000014 /* aiden-icon-june15.png */,
 			);
 			path = Resources;
 			sourceTree = "<group>";
@@ -1292,6 +1295,7 @@
 			files = (
 				10CA110C0DE000000000B003 /* Localizable.xcstrings in Resources */,
 				A04500000000000000000008 /* aiden-sidebar-logo.png in Resources */,
+				F10E00000000000000000006 /* aiden-icon-june15.png in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

@@ -1,5 +1,7 @@
 import AppIntents
+import ImageIO
 import SwiftUI
+import UIKit
 import WidgetKit
 
 struct AidenQuickActionsEntry: TimelineEntry {
@@ -82,13 +84,7 @@ private struct AidenQuickActionsWidgetView: View {
     private var askPromptButton: some View {
         Button(intent: AidenHomeActionIntent(.newChat)) {
             HStack(spacing: family == .systemSmall ? 8 : 10) {
-                Image("aiden-sidebar-logo")
-                    .renderingMode(.template)
-                    .resizable()
-                    .scaledToFit()
-                    .frame(width: family == .systemSmall ? 20 : 24, height: family == .systemSmall ? 20 : 24)
-                    .foregroundStyle(theme.brandMark)
-                    .widgetAccentable()
+                AidenWidgetBrandMark(size: family == .systemSmall ? 22 : 26)
 
                 Text(family == .systemSmall ? "Ask" : "Ask Aiden")
                     .font(family == .systemSmall ? .headline.weight(.medium) : .title3.weight(.medium))
@@ -150,6 +146,47 @@ private struct AidenQuickActionsWidgetItem {
     let label: LocalizedStringKey
 }
 
+/// Downsamples the bundled Aiden app icon (`aiden-icon-june15.png`, 1024×1024)
+/// to a 96 px image so it stays well within WidgetKit's image pixel budget
+/// while adapting to accented and Liquid Glass rendering modes.
+private struct AidenWidgetBrandMark: View {
+    let size: CGFloat
+
+    private static let downsampledLogo: UIImage? = {
+        guard let url = Bundle.main.url(forResource: "aiden-icon-june15", withExtension: "png"),
+              let source = CGImageSourceCreateWithURL(url as CFURL, nil) else {
+            return nil
+        }
+        let options: [CFString: Any] = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+            kCGImageSourceShouldCacheImmediately: true,
+            kCGImageSourceThumbnailMaxPixelSize: 96,
+        ]
+        guard let cgImage = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) else {
+            return nil
+        }
+        return UIImage(cgImage: cgImage, scale: 3, orientation: .up)
+    }()
+
+    var body: some View {
+        if let logo = Self.downsampledLogo {
+            Image(uiImage: logo)
+                .resizable()
+                .widgetAccentedRenderingMode(.accentedDesaturated)
+                .scaledToFill()
+                .frame(width: size, height: size)
+                .clipShape(RoundedRectangle(cornerRadius: size * 0.24, style: .continuous))
+                .accessibilityHidden(true)
+        } else {
+            Image(systemName: "bubble.left.and.text.bubble.right")
+                .font(.system(size: size * 0.8, weight: .semibold))
+                .frame(width: size, height: size)
+                .accessibilityHidden(true)
+        }
+    }
+}
+
 private struct AidenQuickActionsWidgetTheme {
     let colorScheme: ColorScheme
     let isAccented: Bool
@@ -195,15 +232,5 @@ private struct AidenQuickActionsWidgetTheme {
             return Color(red: 0.949, green: 0.957, blue: 0.973) // #F2F4F8
         }
         return Color(red: 0.122, green: 0.137, blue: 0.157) // #1F2328
-    }
-
-    var brandMark: Color {
-        if isAccented {
-            return .white
-        }
-        if colorScheme == .dark {
-            return Color(red: 0.243, green: 0.592, blue: 0.965) // #3E97F6
-        }
-        return Color(red: 0.0, green: 0.416, blue: 0.839) // #006AD6
     }
 }
