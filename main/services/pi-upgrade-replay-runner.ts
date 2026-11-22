@@ -1,5 +1,5 @@
 import { InMemorySessionRepo } from "./pi-session-repository-port.js";
-import type { AgentMessage } from "@earendil-works/pi-agent-core";
+import type { AgentMessage, StreamFn } from "@earendil-works/pi-agent-core";
 
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
@@ -12,6 +12,8 @@ import {
   type AssistantMessage,
   type Model,
   type ToolResultMessage,
+  type TranscriptContext,
+  type Usage,
   type UserMessage,
 } from "@earendil-works/pi-ai";
 import { createFauxCore } from "@earendil-works/pi-ai/providers/faux";
@@ -26,6 +28,7 @@ import {
   type PiUpgradeReplayMeasurement,
 } from "./pi-upgrade-evaluation.js";
 import { PiCompactionCoordinator, type PiCompactionEvent } from "./pi-compaction-core.js";
+import { createSideCallPrefixLedger, withSideCallPrefixLedger } from "./side-call-prefix.js";
 import { createPiSessionPort } from "./pi-session-port.js";
 import { migratePiSessionJournal } from "./pi-session-migration.js";
 import type { ResolvedModelRuntime } from "./model-runtime-core.js";
@@ -290,9 +293,29 @@ async function botTelegramSurfaceReplay(): Promise<boolean> {
     JSON.stringify((await session.buildContext()).messages).includes("BOT-314");
 }
 
+/**
+ * A replay whose last turn is sent to the provider through a side-call prefix
+ * ledger, so the compaction that follows it can continue that request.
+ */
+interface RecordedTurn {
+  /** Whether the coordinator is given the ledger's prefix. */
+  cachedPrefix: boolean;
+  /** Each summary request the provider received, in order. */
+  summaryRequests?: TranscriptContext[];
+  /** The recorded turn's own request. */
+  turnRequest?: TranscriptContext;
+  /** Each compaction's usage, for the cache-read share. */
+  usages?: Usage[];
+}
+
 // Replay text must fit the declared summary window. Synthetic usage still crosses
 // the trigger deliberately; these fixtures are not installed/provider acceptance evidence.
-async function semanticReplay(caseId: PiUpgradeReplayCaseId, fixture: ExecutableCase, replayOptions: PiUpgradeReplayOptions): Promise<PiUpgradeReplayMeasurement> {
+async function semanticReplay(
+  caseId: PiUpgradeReplayCaseId,
+  fixture: ExecutableCase,
+  replayOptions: PiUpgradeReplayOptions,
+  recorded?: RecordedTurn,
+): Promise<PiUpgradeReplayMeasurement> {
   const provider = fauxProvider({
     api: "openai-completions",
     provider: `replay-${caseId}`,
@@ -306,18 +329,32 @@ async function semanticReplay(caseId: PiUpgradeReplayCaseId, fixture: Executable
     { length: responseCount },
     () => replayResponse(fixture.markers, providerObservedMarkers, replayOptions.transformSummary ?? ((text) => text)),
   );
-  provider.setResponses(responses);
+  // The recorded turn's reply observes no marker: only summaries count.
+  const summaryResponses = responses.map((respond) => (context: TranscriptContext) => {
+    recorded?.summaryRequests?.push(context);
+    return respond(context);
+  });
+  provider.setResponses(recorded
+    ? [(context: TranscriptContext) => {
+      if (recorded.turnRequest === undefined) recorded.turnRequest = context;
+      return fauxAssistantMessage("Replay continuation acknowledged.");
+    }, ...summaryResponses]
+    : responses);
   const models = createModels();
   models.setProvider(provider.provider);
   const model = provider.getModel() as Model<Api>;
   const session = createPiSessionPort(await new InMemorySessionRepo().create({ id: `replay-${caseId}` }));
   const events: PiCompactionEvent[] = [];
+  const chatKey = `replay-${caseId}`;
+  // The replay's clock is synthetic, so the recorded prefix stays live for the whole case.
+  const ledger = createSideCallPrefixLedger({ ttlMs: () => 3_600_000 });
   const coordinator = new PiCompactionCoordinator({
     session,
     models,
     model,
     thinkingLevel: "off",
     settings: { enabled: true, reserveTokens: 100, keepRecentTokens: 100 },
+    ...(recorded?.cachedPrefix ? { cachedPrefix: () => ledger.latest(chatKey) } : {}),
     onEvent: (event) => events.push(event),
   });
   const started = performance.now();
@@ -340,6 +377,22 @@ async function semanticReplay(caseId: PiUpgradeReplayCaseId, fixture: Executable
     };
   });
   const primaryChecks: Array<{ compacted: boolean }> = [];
+  // The recorded turn sends the replay's context to the provider, keyed by the chat, and
+  // reports the synthetic usage that crosses the trigger.
+  const recordedTurn = async (messages: AgentMessage[], synthetic: AssistantMessage) => {
+    for (const message of messages) await session.appendMessage(message);
+    const send: StreamFn = (requestModel, context, streamOptions) => models.streamSimple(requestModel, context, streamOptions);
+    const context = { systemPrompt: options.systemPrompt, messages: (await session.buildContext()).messages, tools: [] };
+    const stream = await withSideCallPrefixLedger(send, { ledger, chatKey })(
+      model, context as unknown as TranscriptContext, { sessionId: chatKey, cacheRetention: "short" },
+    );
+    const reply = await stream.result();
+    // Await the ledger's own read of the reply before the compaction asks for it.
+    await ledger.latest(chatKey);
+    const terminal = { ...reply, usage: synthetic.usage } as AssistantMessage;
+    await session.appendMessage(terminal);
+    primaryChecks.push(await coordinator.check(terminal));
+  };
   const appendAndCheck = async (messages: AgentMessage[], timestampOffset = 0) => {
     const adjusted = messages.map((message) => ({
       ...message,
@@ -353,7 +406,10 @@ async function semanticReplay(caseId: PiUpgradeReplayCaseId, fixture: Executable
     const check = await coordinator.check(terminal);
     primaryChecks.push(check);
   };
-  if (caseId === "repeated_compaction") {
+  if (recorded) {
+    if (caseId === "repeated_compaction") throw new Error("A recorded replay covers one checkpoint.");
+    await recordedTurn(replayMessages.slice(0, -1), replayMessages[replayMessages.length - 1] as AssistantMessage);
+  } else if (caseId === "repeated_compaction") {
     const firstCheckpointEnd = 14;
     await appendAndCheck(replayMessages.slice(0, firstCheckpointEnd));
     await appendAndCheck(replayMessages.slice(firstCheckpointEnd), 10_000);
@@ -361,6 +417,7 @@ async function semanticReplay(caseId: PiUpgradeReplayCaseId, fixture: Executable
     await appendAndCheck(replayMessages);
   }
   const primaryResults = events.flatMap((event) => event.type === "end" && event.result ? [event.result] : []);
+  recorded?.usages?.push(...primaryResults.flatMap((result) => result.usage ? [result.usage] : []));
   const context = await session.buildContext();
   const serialized = JSON.stringify(context.messages);
   const retained = fixture.markers.filter((marker) => serialized.includes(marker)).length;
@@ -417,6 +474,51 @@ async function semanticReplay(caseId: PiUpgradeReplayCaseId, fixture: Executable
     noOpAttempts: primaryChecks.filter((check) => !check.compacted).length +
       Math.max(0, primaryResultCount - primaryChecks.length),
     migrationFailures: 0,
+  };
+}
+
+/** The share of a request's prompt tokens read from the provider's cache. */
+function cacheReadShare(usages: readonly Usage[]): number {
+  const read = usages.reduce((total, usage) => total + usage.cacheRead, 0);
+  const prompt = usages.reduce((total, usage) => total + usage.input + usage.cacheRead + usage.cacheWrite, 0);
+  return prompt === 0 ? 0 : read / prompt;
+}
+
+export interface PiUpgradeCachedPrefixReplay {
+  caseId: PiUpgradeReplayCaseId;
+  /** The case with its turn sent to the provider and the summary sent as Pi's isolated request. */
+  isolated: PiUpgradeReplayMeasurement;
+  /** The same turn, with the summary sent as the ledger's continuation of that request. */
+  cached: PiUpgradeReplayMeasurement;
+  /** Cache-read tokens over prompt tokens across each variant's summary requests. */
+  isolatedCacheReadShare: number;
+  cachedCacheReadShare: number;
+  /** The provider contexts the cached variant sent: its turn, then each summary request. */
+  cachedRequests: { turn: TranscriptContext; summaries: TranscriptContext[] };
+}
+
+/**
+ * The cached-prefix replay case: the long coding chat's last turn is recorded
+ * on a side-call prefix ledger and compacted twice, once isolated and once on
+ * the recorded prefix, against a provider that simulates prompt caching.
+ * Offline; never invokes a real provider.
+ */
+export async function runPiUpgradeCachedPrefixReplay(
+  replayOptions: PiUpgradeReplayOptions = {},
+): Promise<PiUpgradeCachedPrefixReplay> {
+  const caseId = "long_coding_chat" satisfies PiUpgradeReplayCaseId;
+  const isolatedTurn: RecordedTurn = { cachedPrefix: false, usages: [] };
+  const cachedTurn: RecordedTurn = { cachedPrefix: true, usages: [], summaryRequests: [] };
+  const isolated = await semanticReplay(caseId, executableCase(caseId), replayOptions, isolatedTurn);
+  const cached = await semanticReplay(caseId, executableCase(caseId), replayOptions, cachedTurn);
+  if (!cachedTurn.turnRequest) throw new Error("The cached-prefix replay sent no turn.");
+  return {
+    caseId,
+    isolated,
+    cached,
+    isolatedCacheReadShare: cacheReadShare(isolatedTurn.usages ?? []),
+    cachedCacheReadShare: cacheReadShare(cachedTurn.usages ?? []),
+    cachedRequests: { turn: cachedTurn.turnRequest, summaries: cachedTurn.summaryRequests ?? [] },
   };
 }
 

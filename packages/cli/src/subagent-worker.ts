@@ -3,6 +3,7 @@ import { Type } from "typebox";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { withoutMessageThreads } from "../../../main/services/pi-message-threads.js";
 import { createCliModelRuntime } from "./providers.ts";
+import { subagentWorkerSettingsManager } from "./daemon-session-settings.ts";
 
 interface Start {
   type: "start"; agentDir: string; cwd: string; provider: string; model: string; prompt: string; systemPrompt: string;
@@ -41,7 +42,7 @@ async function run(input: Start) {
     if (message.role !== "user" && message.role !== "assistant") throw new Error("Only visible user and assistant context may be forked.");
     manager.appendMessage(message);
   }
-  const created = await createAgentSession({ cwd: input.cwd, agentDir: input.agentDir, modelRuntime: runtime, model, thinkingLevel: input.thinkingLevel, tools: input.tools.map((tool) => tool.name), sessionManager: manager, resourceLoader: loader });
+  const created = await createAgentSession({ cwd: input.cwd, agentDir: input.agentDir, settingsManager: subagentWorkerSettingsManager(input.cwd, input.agentDir), modelRuntime: runtime, model, thinkingLevel: input.thinkingLevel, tools: input.tools.map((tool) => tool.name), sessionManager: manager, resourceLoader: loader });
   session = created.session;
   const unsubscribe = session.subscribe((event) => {
     if (event.type === "message_update" && event.assistantMessageEvent.type === "text_delta") send({ type: "delta", text: event.assistantMessageEvent.delta });

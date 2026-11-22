@@ -67,7 +67,8 @@ import { createHash, randomUUID } from "node:crypto";
 import type { Context } from "@earendil-works/chord/context";
 import type { JsonValue } from "@earendil-works/chord/json";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
-import type { AssistantMessage, Message } from "@earendil-works/pi-ai";
+import type { AssistantMessage, Message, SystemMessage } from "@earendil-works/pi-ai";
+import { botMemorySectionRemovedFrom } from "../bot-memory/prompt.js";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { CodemodeSandbox, type CodemodeSandboxBase } from "@earendil-works/pi-codemode";
 import { createCodemodeExtension } from "@earendil-works/pi-durable/codemode";
@@ -101,14 +102,8 @@ import type {
   BotHandoffRule,
 } from "../../../renderer/shared/bot-handoffs.js";
 import { handoffSkippedText, ruleHandoffDoneBlock, ruleUnattendedBlock } from "./bot-handoff-text.js";
-import {
-  BOT_BROWSER_SNAPSHOT_IMAGES_KEPT,
-  BOT_COMPUTER_CAPTURE_IMAGES_KEPT,
-  BOT_OLDER_COMPUTER_CAPTURE_NOTE,
-  withImageReferences,
-  withNewestToolImages,
-} from "./bot-images.js";
-import { BOT_COMPUTER_TOOL_NAME } from "../bot-computers/types.js";
+import { withImageReferences } from "./bot-images.js";
+import { trimScreenshots } from "../screenshot-trimming.js";
 import { withheldUntilDisclosed } from "./bot-tool-disclosure.js";
 import { LOAD_TOOLS_TOOL_NAME, createOnDemandTools, withheldUntilLoaded } from "../on-demand-tools.js";
 import { adaptAidenTool, type BotToolCall, type DurableTool, type ToolReplay } from "./tool-adapter.js";
@@ -132,8 +127,11 @@ import type { HookDispatcher } from "../hooks/hook-types.js";
 export const BOT_EXTENSION_NAME = "aiden-bot";
 /** Section keys, in render order. */
 export const BOT_SECTION_KEYS = ["aiden-base", "aiden-persona", "aiden-authority", "aiden-guidance", "aiden-memory"] as const;
+const MEMORY_SECTION_KEY = "aiden-memory" satisfies (typeof BOT_SECTION_KEYS)[number];
 /** The tool whose offer decides how the memory section reads. */
 const MEMORY_TOOL_NAME = "bot_memory";
+/** Inputs whose `promptTail` this process keeps (see `withPromptTail`). */
+const MAX_PROMPT_TAILS = 256;
 const APPROVAL_MEMO = "aiden.approval";
 export const BOT_EXECUTION_ID_MEMO = "aiden.execution.id";
 const EXECUTION_ID_MEMO = BOT_EXECUTION_ID_MEMO;
@@ -433,9 +431,18 @@ export interface BotExtensionDeps {
   systemSections(bot: BotDefinition, offered: BotOfferedTools): Promise<string[]>;
   /**
    * The `aiden-memory` section, rendered before every request. `memoryOffered`
-   * says whether this request offers `bot_memory`. Absent or "": no section.
+   * says whether the Bot declares `bot_memory`, whatever the turn's ingress
+   * (a call the ingress refuses is blocked when made). Absent or "": no section.
    */
   memorySection?(botId: string, offer: { memoryOffered: boolean }): Promise<string>;
+  /**
+   * State that changes between turns (open work), appended after the
+   * person's latest input instead of rewriting the system sections. Rendered
+   * once per input, the first time a request carries it, and kept with that
+   * input for every later request of this process, so earlier turns render
+   * the same bytes each time. Absent or "": nothing is appended.
+   */
+  promptTail?(botId: string, offered: BotOfferedTools): Promise<string>;
   /** The Bot gave a final answer. Called without waiting; must not throw. */
   afterReply?(botId: string): void;
   /** Awaited host peer outcome observation; never creates a new model request. */
@@ -456,10 +463,19 @@ export interface BotExtensionDeps {
   checkPolicy(botId: string, toolName: string, call?: BotToolCallCheck): Promise<BotPolicyDecision>;
   /**
    * Whether a run serving inputs with these request ids may use `toolName`
-   * (ingress rules only). Applied to every request's offer and every call.
+   * (ingress rules only). Checked on every call, before it runs and again
+   * before its effect. The offer never changes with it: every installed tool
+   * stays declared on every turn so the tool list, the head of the provider
+   * prompt cache, is the same whatever input a turn serves.
    * Absent: every tool installed is allowed.
    */
   turnAllows?(toolName: string, requestIds: readonly (string | undefined)[]): boolean;
+  /**
+   * The sentence a call `turnAllows` refused returns, naming the condition
+   * (an unattended run, the self-introduction, a routine-only tool). Absent:
+   * a generic "not available on this turn".
+   */
+  turnRefusal?(toolName: string, requestIds: readonly (string | undefined)[]): string;
   /**
    * Ask the person. Resolves with their answer; rejects when `signal` aborts
    * (the turn stopped or the app is quitting), so the call stays unanswered
@@ -905,6 +921,10 @@ export function createBotRegistry(botId: string, deps: BotExtensionDeps): BotReg
     if (expectedOwner && approvalHash(owner) !== approvalHash(expectedOwner)) throw new Error("This tool's owning inputs changed. Ask again.");
   }
 
+  function turnRefusal(toolName: string, requestIds: readonly (string | undefined)[]): string {
+    return deps.turnRefusal?.(toolName, requestIds) ?? "This tool is not available on this turn.";
+  }
+
   /** Whether the run being served may use `bot_memory`. */
   async function memoryOffered(
     api: Pick<DocumentReader, "snapshot"> & { readonly conversationId: ConversationId },
@@ -977,7 +997,7 @@ export function createBotRegistry(botId: string, deps: BotExtensionDeps): BotReg
     // A throw here blocks the call, so an unreadable run fails closed.
     const requestIds = await runRequestIds(api, context);
     if (deps.turnAllows !== undefined && !deps.turnAllows(call.name, requestIds)) {
-      return { block: "This tool is not available on this turn." };
+      return { block: turnRefusal(call.name, requestIds) };
     }
     // Codemode itself does nothing; every call its script makes is checked on its own.
     if (call.name === BOT_CODEMODE_TOOL_NAME && scriptable.length > 0) return undefined;
@@ -1321,6 +1341,76 @@ export function createBotRegistry(botId: string, deps: BotExtensionDeps): BotReg
   let sessionStart: "pending" | "compact" | "done" = "pending";
   /** SessionStart context, for the requests of the run it opened. */
   let sessionContext: { runKey: string; text: string } | undefined;
+  /**
+   * `promptTail` text by the input it was rendered for, in this process.
+   * Bounded; an input that falls out (or a restart) renders without its old
+   * tail, which costs one cache miss from that input on, never correctness.
+   */
+  const promptTails = new Map<string, string>();
+
+  function promptTailKey(message: Message): string | undefined {
+    if (message.role !== "user") return undefined;
+    const hash = createHash("sha256").update(String(message.timestamp ?? "")).update("\0");
+    if (typeof message.content === "string") hash.update(message.content);
+    else for (const block of message.content) hash.update(block.type === "text" ? `t${block.text}` : `i${block.mimeType}:${block.data.length}`).update("\0");
+    return hash.digest("hex");
+  }
+
+  /**
+   * Earlier system messages without a memory section a later one no longer
+   * shows an entry of. Pi Durable journals each re-read snapshot as a section
+   * patch after the first, and a wire that keeps system messages in place
+   * would otherwise send an entry the person removed in every later request.
+   * The section is dropped whole (the latest carries the current one), which
+   * rewrites that message once; additions alone never do.
+   */
+  function withoutRemovedMemory(messages: readonly Message[]): readonly Message[] {
+    let latest = -1;
+    for (let index = messages.length - 1; index >= 0; index -= 1) {
+      const message = messages[index]!;
+      if (message.role === "system" && message.sections !== undefined && MEMORY_SECTION_KEY in message.sections) {
+        latest = index;
+        break;
+      }
+    }
+    if (latest <= 0) return messages;
+    const current = (messages[latest] as SystemMessage).sections![MEMORY_SECTION_KEY] ?? null;
+    let next: Message[] | undefined;
+    for (let index = 0; index < latest; index += 1) {
+      const message = messages[index]!;
+      if (message.role !== "system") continue;
+      const earlier = message.sections?.[MEMORY_SECTION_KEY];
+      if (typeof earlier !== "string" || !botMemorySectionRemovedFrom(earlier, current)) continue;
+      const { [MEMORY_SECTION_KEY]: _dropped, ...sections } = message.sections!;
+      next ??= [...messages];
+      next[index] = { ...message, sections };
+    }
+    return next ?? messages;
+  }
+
+  /** Each input with its own `promptTail`, the latest one rendered now if new. */
+  async function withPromptTail(messages: readonly Message[]): Promise<readonly Message[]> {
+    if (deps.promptTail === undefined) return messages;
+    for (let index = messages.length - 1; index >= 0; index -= 1) {
+      const key = promptTailKey(messages[index]!);
+      if (key === undefined) continue;
+      if (!promptTails.has(key)) {
+        promptTails.set(key, await deps.promptTail(botId, { toolNames: [...installedToolNames] }));
+        while (promptTails.size > MAX_PROMPT_TAILS) promptTails.delete(promptTails.keys().next().value!);
+      }
+      break;
+    }
+    let next: Message[] | undefined;
+    for (let index = 0; index < messages.length; index += 1) {
+      const key = promptTailKey(messages[index]!);
+      const text = key === undefined ? undefined : promptTails.get(key);
+      if (text === undefined || text.length === 0) continue;
+      next ??= [...messages];
+      next[index] = withAppendedText(messages[index]!, text);
+    }
+    return next ?? messages;
+  }
+
   /** Stop continuations per run, in this process. */
   const stopContinuations = new Map<string, number>();
 
@@ -1467,16 +1557,17 @@ export function createBotRegistry(botId: string, deps: BotExtensionDeps): BotReg
           if (refusal !== undefined) return failClosed(api.taskId, context, new BotSpendingLimitError(refusal));
         }
         let messages = messageExpired || owner.inputs.length === 0 ? withoutTools(request.messages, () => true) : request.messages;
-        const turnAllows = deps.turnAllows;
-        if (turnAllows !== undefined) {
-          const requestIds = await runRequestIds(api, context);
-          messages = withoutTools(messages, (name) => !turnAllows(name, requestIds));
-        }
+        // Ingress (`turnAllows`) does not filter the offer: a refused tool
+        // stays declared and its call is blocked with the reason, so routine,
+        // Telegram and person turns share one cached tool list.
         messages = withoutTools(messages, withheldUntilDisclosed(messages));
         if (onDemandNames.size > 0) messages = withoutTools(messages, withheldUntilLoaded(messages, onDemandNames));
-        messages = withNewestToolImages(messages, "browser_snapshot", BOT_BROWSER_SNAPSHOT_IMAGES_KEPT);
-        messages = withNewestToolImages(messages, BOT_COMPUTER_TOOL_NAME, BOT_COMPUTER_CAPTURE_IMAGES_KEPT, BOT_OLDER_COMPUTER_CAPTURE_NOTE);
+        // Screenshots are cut in batches, shared with workspace chats, so
+        // earlier messages stay byte-identical between cuts.
+        messages = trimScreenshots(messages);
         if (deps.imageInput !== undefined && !(await deps.imageInput(botId))) messages = withImageReferences(messages);
+        messages = withoutRemovedMemory(messages);
+        messages = await withPromptTail(messages);
         messages = await withSessionContext(messages, api, context);
         const finalOwner = await runOwner(api, context);
         const finalExpired = expired(finalOwner);
@@ -1566,16 +1657,15 @@ export function createBotRegistry(botId: string, deps: BotExtensionDeps): BotReg
       name: BOT_EXTENSION_NAME,
       tools,
       sections: BOT_SECTION_KEYS.map((key, index) =>
-        key === "aiden-memory"
+        key === MEMORY_SECTION_KEY
           ? section(
               key,
-              async (input, context) => {
+              async () => {
                 if (deps.memorySection === undefined) return undefined;
-                const offered = await memoryOffered(
-                  { snapshot: input.read.snapshot.bind(input.read), conversationId: input.conversationId },
-                  context,
-                );
-                const text = await deps.memorySection(botId, { memoryOffered: offered });
+                // The guidance follows the declaration, not the turn's ingress:
+                // a routine or Bot-message turn keeps the same system text and
+                // its bot_memory call is refused in `authorizeTool`.
+                const text = await deps.memorySection(botId, { memoryOffered: installedToolNames.has(MEMORY_TOOL_NAME) });
                 return text.length === 0 ? undefined : text;
               },
               { tag: false },
@@ -1645,8 +1735,9 @@ export function createBotRegistry(botId: string, deps: BotExtensionDeps): BotReg
               const key = String(api.taskId);
               const owner = await runOwner(api, context);
               if (owner.inputs.length === 0) throw new Error("This tool is not available without an active input.");
-              if (deps.turnAllows && !deps.turnAllows(tool.name, owner.inputs.map(input => input.requestId))) {
-                throw new Error("This tool is not available on this turn.");
+              const effectRequestIds = owner.inputs.map(input => input.requestId);
+              if (deps.turnAllows && !deps.turnAllows(tool.name, effectRequestIds)) {
+                throw new Error(turnRefusal(tool.name, effectRequestIds));
               }
               const guardedStart = () => {
                 context.abortSignal?.throwIfAborted();

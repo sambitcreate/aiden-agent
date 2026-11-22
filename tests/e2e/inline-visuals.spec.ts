@@ -1,8 +1,10 @@
-import { readFile, writeFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import path from "node:path";
-import { expect, finishLmStudioOnboarding, test } from "./fixtures";
+import type { Page } from "@playwright/test";
+import { chooseWorkspace, designCanvas, previewAppearance, setDisplayWidth, setWindowWidth, WORKSPACE_NAME } from "./design-mode-helpers";
+import { expect, finishLmStudioOnboarding, test, waitForToastsToClear } from "./fixtures";
 
 type StoredAttachment = { id: string; mimeType: string; kind: string; size: number; data?: string; sha256?: string };
 
@@ -131,6 +133,65 @@ test("a reply draws native and HTML visuals inline, and both get snapshots for p
   await restoredNative.scrollIntoViewIfNeeded();
   await restoredNative.getByRole("tab", { name: "Team" }).click();
   await expect(restoredNative.getByText("$60.00")).toBeVisible();
+
+  // In design mode the slim chat column has the same 16px gutter on each side;
+  // a wide visual fills that column, never clipped on either side, in both
+  // split and stacked layouts.
+  await reopened.getByRole("button", { name: "Design mode", exact: true }).click();
+  await expect(reopened.locator('[data-design-layout="split"]')).toBeVisible();
+  const expectDesignWideFrameClear = async () => {
+    await expect
+      .poll(async () => {
+        await frame.evaluate((element) => element.scrollIntoView({ block: "center" }));
+        return frame.evaluate((element) => {
+          const box = element.getBoundingClientRect();
+          const scrollContent = element.closest("[data-scroll-content]")!;
+          const contentBox = scrollContent.getBoundingClientRect();
+          const scrollport = scrollContent.parentElement!;
+          const column = element.closest(".chat-content-column")!;
+          const columnStyle = getComputedStyle(column);
+          const columnBox = column.getBoundingClientRect();
+          const columnContentLeft = columnBox.left + parseFloat(columnStyle.paddingLeft);
+          const columnContentRight = columnBox.right - parseFloat(columnStyle.paddingRight);
+          const y = box.top + box.height / 2;
+          return {
+            alignedWithStart: Math.abs(box.left - columnContentLeft) <= 2,
+            insideStart: box.left >= contentBox.left + 14,
+            insideEnd: box.right <= contentBox.right - 14,
+            alignedWithEnd: Math.abs(box.right - columnContentRight) <= 2,
+            leftHit: document.elementFromPoint(box.left + 8, y) === element,
+            rightHit: document.elementFromPoint(box.right - 8, y) === element,
+            noHorizontalOverflow: scrollport.scrollWidth <= scrollport.clientWidth + 1,
+          };
+        });
+      })
+      .toEqual({
+        alignedWithStart: true,
+        insideStart: true,
+        insideEnd: true,
+        alignedWithEnd: true,
+        leftHit: true,
+        rightHit: true,
+        noHorizontalOverflow: true,
+      });
+  };
+  await expectDesignWideFrameClear();
+
+  // Expanding a wide visual in design mode still promotes it to a full popover dialog.
+  await reopened.getByRole("button", { name: "Expand Weekly total" }).click();
+  await expect(reopened.getByRole("dialog", { name: "Weekly total" })).toBeVisible();
+  await reopened.getByRole("button", { name: "Close Weekly total" }).click();
+  await expect(reopened.getByRole("dialog", { name: "Weekly total" })).toHaveCount(0);
+
+  const hideSidebar = reopened.getByRole("button", { name: "Hide sidebar" });
+  if (await hideSidebar.isVisible()) {
+    await hideSidebar.click();
+    await expect(reopened.getByRole("button", { name: "Show sidebar" })).toBeVisible();
+  }
+  await aiden.app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().find((window) => window.isVisible())!.setSize(640, 900));
+  await expect.poll(() => reopened.evaluate(() => window.innerWidth)).toBe(640);
+  await expect(reopened.locator('[data-design-layout="stacked"]')).toBeVisible();
+  await expectDesignWideFrameClear();
 });
 
 test("snapshots run guest HTML offline and keep everything down to its last margin", async ({ aiden }) => {
@@ -231,4 +292,119 @@ test("a runaway visual is abandoned at the snapshot timeout and the next visual 
   );
   expect(windows.filter(Boolean)).toHaveLength(1);
   expect(windows.filter((visible) => !visible).length).toBeLessThanOrEqual(1);
+});
+
+/** Set to a folder to save light and dark screenshots of the visual Actions menus there. */
+const SCREENSHOT_DIR = process.env.AIDEN_DESIGN_SCREENSHOTS?.trim();
+
+/** Saves the window with a menu open, in light and dark, at twice its size as a Retina display draws it. */
+async function captureMenu(page: Page, name: string, open: () => Promise<void>): Promise<void> {
+  if (!SCREENSHOT_DIR) return;
+  await mkdir(SCREENSHOT_DIR, { recursive: true });
+  const cdp = await page.context().newCDPSession(page);
+  const [width, height] = await page.evaluate(() => [window.innerWidth, window.innerHeight]);
+  await cdp.send("Emulation.setDeviceMetricsOverride", { width, height, deviceScaleFactor: 2, mobile: false });
+  try {
+    for (const scheme of ["light", "dark"] as const) {
+      await previewAppearance(page, scheme);
+      await expect(page.locator("html")).toHaveAttribute("data-appearance-scheme", scheme);
+      await open();
+      // Let the menu finish its open motion and the HTML visual redraw in the new scheme.
+      await page.getByRole("menu").evaluate((menu) => Promise.all(menu.getAnimations({ subtree: true }).map((animation) => animation.finished)));
+      await expect(page.frameLocator('iframe[title="Weekly total"]').getByRole("heading", { name: "Weekly total" })).toBeVisible();
+      // Playwright's own screenshot redraws at the window's scale, so ask the page for the 2x picture directly.
+      const shot = await cdp.send("Page.captureScreenshot", { format: "png" });
+      await writeFile(path.join(SCREENSHOT_DIR, `${name}-${scheme}.png`), Buffer.from(shot.data, "base64"));
+      await page.keyboard.press("Escape");
+      await expect(page.getByRole("menu")).toHaveCount(0);
+    }
+  } finally {
+    await previewAppearance(page, null);
+    await cdp.send("Emulation.clearDeviceMetricsOverride");
+    await cdp.detach();
+  }
+}
+
+async function keptArtifactTitles(userDataDir: string): Promise<string[]> {
+  const root = path.join(userDataDir, "workspace-artifacts");
+  let names: string[] = [];
+  try {
+    names = (await readdir(root)).filter((name) => name.endsWith(".json") && !name.endsWith(".snapshots.json") && !name.endsWith(".history.json"));
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+    throw error;
+  }
+  const titles: string[] = [];
+  for (const name of names) {
+    const doc = JSON.parse(await readFile(path.join(root, name), "utf8")) as { artifacts?: { visual?: { title?: string } }[] };
+    for (const artifact of doc.artifacts ?? []) if (artifact.visual?.title) titles.push(artifact.visual.title);
+  }
+  return titles;
+}
+
+test.describe("in a workspace", () => {
+  test.use({ workspaceSeed: true });
+
+  test("a visual's Actions menu keeps a native visual in Artifacts and sends an HTML visual to the canvas", async ({ aiden }) => {
+    const { app, page, lmStudio } = aiden;
+    await finishLmStudioOnboarding(page);
+    await waitForToastsToClear(page);
+    await setDisplayWidth(app, 1440);
+    await setWindowWidth(app, page, 1440);
+    await chooseWorkspace(page, new RegExp(`^${WORKSPACE_NAME}`, "u"));
+    const prompt = "Visual actions scenario: show my plan options and weekly total.";
+    const scenario = lmStudio.enqueueToolScenario!({
+      prompt,
+      calls: [
+        { name: "render_ui", arguments: { title: "Plan options", markup: MARKUP } },
+        { name: "render_artifact", arguments: { title: "Weekly total", html: HTML } },
+      ],
+      finalText: "Here are your plan options and weekly total.",
+    });
+    await page.locator("textarea").first().fill(prompt);
+    await page.getByRole("button", { name: "Send message" }).click();
+    await expect(page.getByText("Here are your plan options and weekly total.", { exact: true }).first()).toBeVisible({ timeout: 45_000 });
+    expect(scenario.error).toBeUndefined();
+    await expect(page.getByRole("button", { name: "Stop generating" })).toBeHidden();
+    await waitForToastsToClear(page);
+
+    // A native visual's menu copies it as text or keeps it in Artifacts; it cannot go on the canvas.
+    const native = page.getByRole("figure", { name: "Plan options" });
+    const nativeMenuButton = native.getByRole("button", { name: "Actions for Plan options" });
+    const openNativeMenu = async () => {
+      await nativeMenuButton.click();
+      await expect(page.getByRole("menu")).toBeVisible();
+    };
+    await captureMenu(page, "visual-actions-native", openNativeMenu);
+    await openNativeMenu();
+    const menu = page.getByRole("menu");
+    await expect(menu.getByRole("menuitem")).toHaveText(["Copy as text", "Keep in Artifacts"]);
+    await menu.getByRole("menuitem", { name: "Keep in Artifacts" }).click();
+    await expect(page.getByText("Kept in Artifacts.", { exact: true })).toBeVisible();
+    // The page is saved in the chat's workspace, and the Artifacts tab opens on it.
+    const userData = await app.evaluate(({ app: electronApp }) => electronApp.getPath("userData"));
+    await expect.poll(() => keptArtifactTitles(userData)).toEqual(["Plan options"]);
+    await expect(page.getByRole("tabpanel", { name: "Artifacts" }).getByRole("figure", { name: "Plan options" })).toBeVisible();
+    await waitForToastsToClear(page);
+
+    // An HTML visual's menu exports it or sends it to the canvas, which turns design mode on.
+    const htmlMenuButton = page.getByRole("button", { name: "Actions for Weekly total" });
+    const openHtmlMenu = async () => {
+      await htmlMenuButton.click();
+      await expect(page.getByRole("menu")).toBeVisible();
+    };
+    await captureMenu(page, "visual-actions-html", openHtmlMenu);
+    await openHtmlMenu();
+    await expect(menu.getByRole("menuitem")).toHaveText(["Export…", "Send to canvas"]);
+    await menu.getByRole("menuitem", { name: "Send to canvas" }).click();
+    await expect(page.getByText("Sent to the canvas.", { exact: true })).toBeVisible();
+    await expect(designCanvas(page).getByRole("group", { name: "Weekly total", exact: true })).toBeVisible();
+    await waitForToastsToClear(page);
+
+    // Sending it again leaves the one frame and says so.
+    await openHtmlMenu();
+    await menu.getByRole("menuitem", { name: "Send to canvas" }).click();
+    await expect(page.getByText("That visual is already on the canvas.", { exact: true })).toBeVisible();
+    await expect(designCanvas(page).getByRole("group", { name: "Weekly total", exact: true })).toHaveCount(1);
+  });
 });

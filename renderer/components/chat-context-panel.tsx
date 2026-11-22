@@ -1,6 +1,6 @@
 import type * as React from "react";
 import type { Chat } from "../lib/types";
-import { formatContextTokenCount, type ChatContextPressureV1 } from "../shared/context-pressure";
+import { describePromptCacheMissSource, formatContextTokenCount, type ChatContextPressureV1, type PromptCacheMissV1 } from "../shared/context-pressure";
 import { parseAssistantTurnStatsV1 } from "../shared/assistant-turn-stats";
 import { ContextBreakdown } from "./context-breakdown";
 import { ProviderIcon } from "./provider-icon";
@@ -80,11 +80,24 @@ const USAGE_PARTS = [
   { key: "output", label: "Output", fill: "var(--chart-5)" },
 ] as const;
 
-function UsageSection({ usage }: { usage: ReturnType<typeof recordedChatUsage> }) {
+function UsageSection({
+  usage,
+  lastCacheMiss,
+  cacheKnown,
+}: {
+  usage: ReturnType<typeof recordedChatUsage>;
+  lastCacheMiss?: PromptCacheMissV1;
+  /** The model has a documented prompt cache. */
+  cacheKnown: boolean;
+}) {
   const reported = usage.turns > 0;
   const token = (value: number) => value.toLocaleString();
   const cacheable = usage.cacheRead + usage.cacheWrite + usage.input;
-  const cachePercent = reported && usage.cacheRead > 0 && cacheable > 0 ? Math.round((usage.cacheRead / cacheable) * 100) : null;
+  // 0% is worth seeing only where a cache exists: one that reported activity,
+  // a model with a documented cache, or a measured miss. A provider with no
+  // cache shows no figure rather than a misleading 0%.
+  const cacheActive = usage.cacheRead + usage.cacheWrite > 0 || cacheKnown || lastCacheMiss !== undefined;
+  const cachePercent = reported && cacheable > 0 && cacheActive ? Math.round((usage.cacheRead / cacheable) * 100) : null;
   const barTotal = USAGE_PARTS.reduce((sum, part) => sum + usage[part.key], 0);
   return (
     <section className="rounded-card bg-well p-4">
@@ -103,11 +116,20 @@ function UsageSection({ usage }: { usage: ReturnType<typeof recordedChatUsage> }
           </span>
           <span className="text-regular text-secondary">tokens</span>
           {cachePercent !== null ? (
-            <span className="ml-auto rounded-control bg-status-green-surface px-2.5 py-0.5 text-small text-status-green">
+            <span
+              className={
+                cachePercent > 0
+                  ? "ml-auto rounded-control bg-status-green-surface px-2.5 py-0.5 text-small text-status-green"
+                  : "ml-auto rounded-control bg-control px-2.5 py-0.5 text-small text-secondary"
+              }
+            >
               {`${cachePercent}% from cache`}
             </span>
           ) : null}
         </div>
+      ) : null}
+      {lastCacheMiss ? (
+        <p className="mt-1 text-mini text-tertiary">{`Cache missed: ${describePromptCacheMissSource(lastCacheMiss.source)}`}</p>
       ) : null}
       {reported && barTotal > 0 ? (
         <div
@@ -254,7 +276,7 @@ export function ChatContextPanel({
               ))}
             </dl>
           </section>
-          <UsageSection usage={usage} />
+          <UsageSection usage={usage} lastCacheMiss={details.pressure?.lastCacheMiss} cacheKnown={details.pressure?.promptCache !== undefined} />
         </div>
       </div>
     </div>

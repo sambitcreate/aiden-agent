@@ -110,3 +110,7 @@ test("an argument of thousands of spaces is cut without stalling the main proces
 test('message_bot shows the peer but never message contents',()=>{
  assert.deepEqual(botStepDescriptor('message_bot',{bot:'COS',message:'private'}),{kind:'helper',label:'Messaged COS',app:'COS'});
 });
+
+test('the message_bot list action reads as a check, not a sent message',()=>{
+ assert.deepEqual(botStepDescriptor('message_bot',{action:'list'}),{kind:'helper',label:'Checked which Bots to message'});
+});

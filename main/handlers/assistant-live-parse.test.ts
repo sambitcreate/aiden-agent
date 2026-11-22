@@ -3,6 +3,7 @@ import test from "node:test";
 import { GEMINI_LIVE_MAX_JPEG_BYTES } from "../services/gemini-live/protocol.js";
 import {
   parseAssistantLiveAudioIntent,
+  parseAssistantLiveDisplayBindIntent,
   parseAssistantLiveEmptyIntent,
   parseAssistantLiveFrameIntent,
   parseAssistantLiveDisplayReleaseIntent,
@@ -77,18 +78,29 @@ test("Assistant Live frame admission accepts only one bounded copied JPEG byte r
   ]) assert.throws(() => parseAssistantLiveFrameIntent(value), /frame request/u);
 });
 
-test("Assistant Live display bind accepts only an exact empty record", () => {
-  for (const name of ["display-bind"]) {
-    assert.doesNotThrow(() => parseAssistantLiveEmptyIntent({}, name));
-    assert.throws(
-      () => parseAssistantLiveEmptyIntent({ sessionId: "forged" }, name),
-      new RegExp(`Invalid Assistant Live ${name}`, "u"),
-    );
-    assert.throws(
-      () => parseAssistantLiveEmptyIntent(null, name),
-      new RegExp(`Invalid Assistant Live ${name}`, "u"),
-    );
+test("Assistant Live display bind accepts an empty record or one well-formed chosen source", () => {
+  assert.deepEqual(parseAssistantLiveDisplayBindIntent({}), { sourceId: null });
+  assert.deepEqual(parseAssistantLiveDisplayBindIntent({ sourceId: "screen:0:0" }), { sourceId: "screen:0:0" });
+  assert.deepEqual(parseAssistantLiveDisplayBindIntent({ sourceId: "window:73400323:0" }), {
+    sourceId: "window:73400323:0",
+  });
+  for (const bad of [
+    null,
+    { sessionId: "forged" },
+    { sourceId: "" },
+    { sourceId: "tab:1:0" },
+    { sourceId: "screen:0:0", extra: true },
+    { sourceId: "screen:../../x:0" },
+    { sourceId: `window:${"9".repeat(80)}:0` },
+    { sourceId: 7 },
+  ]) {
+    assert.throws(() => parseAssistantLiveDisplayBindIntent(bad), /Invalid Assistant Live display-bind/u);
   }
+});
+
+test("Assistant Live display sources takes only an exact empty record", () => {
+  assert.doesNotThrow(() => parseAssistantLiveEmptyIntent({}, "display-sources"));
+  assert.throws(() => parseAssistantLiveEmptyIntent({ all: true }, "display-sources"), /display-sources/u);
 });
 
 test("Assistant Live display release requires one bounded binding token", () => {

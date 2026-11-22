@@ -20,6 +20,7 @@ struct AidenBotsTabView: View {
     /// The route the detail beside the list shows, whose row is highlighted.
     /// Nil on a stack.
     var selection: AidenAppRoute? = nil
+    var onAddComputer: (() -> Void)? = nil
     /// A Bot the home already knows, so its chat opens with a title at once.
     let onOpenBot: (AidenHostObjectID, AidenBotSummary) -> Void
     /// A Bot was opened from the list.
@@ -50,7 +51,10 @@ struct AidenBotsTabView: View {
 
     var body: some View {
         let machines = machines
-        if machines == nil, let explanation = availability.tabExplanation {
+        if coordinator.installationStore.installations.isEmpty, let onAddComputer {
+            AidenNoComputersEmptyView(surface: .bots, onAddComputer: onAddComputer)
+                .navigationTitle("Bots")
+        } else if machines == nil, let explanation = availability.tabExplanation {
             ContentUnavailableView(
                 "Bots unavailable",
                 systemImage: "person.2.slash",

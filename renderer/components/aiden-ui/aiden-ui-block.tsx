@@ -10,6 +10,7 @@ import { Button, ErrorBoundary, toast, TooltipProvider } from "../ui";
 import { CATALOG_COMPONENTS } from "./components";
 import { AidenUiContext, asString, type AidenUiRenderContext } from "./render-context";
 import { useLinkOpener } from "../../lib/link-opener";
+import { VisualCaptionActions, type VisualMenuAction } from "../visual-actions-menu";
 
 /**
  * Draws a native Aiden UI visual: the model's component tree rendered with
@@ -89,6 +90,11 @@ export interface AidenUiBlockProps {
    * requested text here instead of the inline Send chip.
    */
   onFollowUp?: (text: string) => void;
+  /**
+   * More things the person can do with this visual (Keep in Artifacts). With
+   * any, the caption's Copy button becomes an Actions menu that lists Copy first.
+   */
+  actions?: readonly VisualMenuAction[];
 }
 
 /**
@@ -120,6 +126,7 @@ function AidenUiVisualBody({
   hideCaption = false,
   followUpBusy = false,
   onFollowUp,
+  actions,
 }: AidenUiBlockProps) {
   const { openLink } = useLinkOpener();
   const [state, setLocalState] = React.useState<Record<string, unknown>>(() => initialState(visual));
@@ -301,15 +308,16 @@ function AidenUiVisualBody({
       {draft || hideCaption ? null : (
         <div className="aiden-inline-visual-caption">
           <span className="min-w-0 flex-1 truncate text-small text-tertiary">{visual.title}</span>
-          <Button
-            iconOnly
-            size="small"
-            variant="transparent"
-            aria-label={`Copy ${visual.title} as text`}
-            onClick={() => copyText(visual.fallbackText)}
-          >
-            <Copy aria-hidden="true" />
-          </Button>
+          <VisualCaptionActions
+            title={visual.title}
+            primary={{
+              ariaLabel: `Copy ${visual.title} as text`,
+              menuLabel: "Copy as text",
+              icon: Copy,
+              onSelect: () => copyText(visual.fallbackText),
+            }}
+            extras={actions}
+          />
         </div>
       )}
     </section>

@@ -826,6 +826,11 @@ export interface AppSettings extends AidenLiveSettingsFields {
   compactionModelOverrides?: CompactionModelOverrides;
   /** Explicit opt-in to paid cache refreshes during active foreground runs. */
   cacheWarmingEnabled?: boolean;
+  /**
+   * Explicit opt-in to hour-long prompt caches for chat requests on the
+   * providers in `prompt-cache-retention.ts`; side calls keep the default.
+   */
+  longPromptCacheRetention?: boolean;
   /** Longest wait, in hours, for a usage limit to clear before a reply fails; 0 turns waiting off. Absent means 6. */
   usageLimitWaitHours?: import("../../renderer/shared/usage-limits.js").UsageLimitWaitHours;
   /**
@@ -1108,6 +1113,11 @@ export interface ChatStartParams {
   visualize?: boolean;
   /** Settings → Appearance → Inline visuals; automatic when absent. */
   inlineVisuals?: import("../../renderer/shared/appearance.js").InlineVisualsMode;
+  /**
+   * A desktop design-mode message: the frames the person had selected and the
+   * canvas region's size on their screen. Absent from phones and other turns.
+   */
+  designView?: import("../../renderer/shared/design-canvas/canvas-summary.js").DesignViewState;
   messages: Array<{
     role: ChatRole;
     content: string;

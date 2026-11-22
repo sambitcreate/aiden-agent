@@ -12,6 +12,7 @@ import {
   WORKSPACE_NAME,
 } from "./design-mode-helpers";
 import {
+  COMPOSER_PRIMARY_NAME,
   expect,
   finishLmStudioOnboarding,
   test,
@@ -20,6 +21,7 @@ import {
 
 const PRIMARY_MODIFIER = process.platform === "darwin" ? "Meta" : "Control";
 const DESIGN_SHORTCUT = `${PRIMARY_MODIFIER}+Shift+L`;
+const EXPAND_SHORTCUT = `${PRIMARY_MODIFIER}+Shift+Backslash`;
 const DESIGN_CHAT = "Design chat for the landing page";
 const NOTES_CHAT = "Notes chat about something else";
 
@@ -195,7 +197,8 @@ async function expectComposerFooterClear(
     }
     return { found, names: pieces.map((piece) => piece.name) };
   });
-  const required = [/^Attach files or images$/u, /^(Send|Queue) message$/u];
+  // An empty draft shows Aiden Live in Send's place.
+  const required = [/^Attach files or images$/u, COMPOSER_PRIMARY_NAME];
   for (const name of required)
     expect(problems.names.some((piece) => name.test(piece))).toBe(true);
   expect(problems.names.some((piece) => /^Context usage/u.test(piece))).toBe(
@@ -264,6 +267,38 @@ async function expectCanvasChrome(page: Page): Promise<void> {
   expect(apart((await tools.boundingBox())!, (await zoom.boundingBox())!)).toBe(
     true,
   );
+  // The canvas's buttons are the chat top bar's size, not a larger set of their own.
+  const barButton = (await designToggle(page).boundingBox())!;
+  for (const button of [
+    tools.getByRole("button").first(),
+    zoom.getByRole("button", { name: "Zoom in" }),
+  ]) {
+    const box = (await button.boundingBox())!;
+    expect(Math.abs(box.height - barButton.height)).toBeLessThanOrEqual(0.5);
+  }
+}
+
+/**
+ * The composer sits in the middle of the design chat column, with the same small gap on
+ * each side, rather than leaving an empty lane on its right.
+ */
+async function expectComposerCentredInColumn(page: Page): Promise<void> {
+  const gaps = await page.locator('[data-design-mode="true"]').first().evaluate((column) => {
+    const card = column.querySelector('[data-browser-composer-inset="true"] [data-focus-region="composer"]');
+    if (!card) return null;
+    const outer = column.getBoundingClientRect();
+    const inner = card.getBoundingClientRect();
+    // Classic scrollbars keep a gutter at the transcript's end, and the composer lines up with the transcript.
+    const viewport = column.querySelector<HTMLElement>(".scroll-edge-mask");
+    const scrollbar = viewport ? viewport.offsetWidth - viewport.clientWidth : 0;
+    return {
+      left: Math.round(inner.left - outer.left),
+      right: Math.round(outer.right - inner.right - scrollbar),
+    };
+  });
+  expect(gaps).not.toBeNull();
+  expect(Math.abs(gaps!.left - gaps!.right), JSON.stringify(gaps)).toBeLessThanOrEqual(2);
+  expect(gaps!.right).toBeLessThanOrEqual(24);
 }
 
 const composerFooter = (page: Page) =>
@@ -343,7 +378,47 @@ test("design mode puts the chat beside a canvas, stays with its chat and gives t
   await expect(sidebarChat(page, NOTES_CHAT)).toHaveCount(0);
   await expectCanvasChrome(page);
   await expectComposerFooterClear(composerFooter(page));
+  await expectComposerCentredInColumn(page);
   await capture(page, "1440-design-on");
+
+  // Expand hides the sidebar so the chat (on the left) and the canvas fill the window,
+  // and Minimize brings it back. Focus stays on the button as its label swaps.
+  await designCanvas(page)
+    .getByRole("button", { name: "Expand canvas" })
+    .click();
+  await expect(
+    page.getByRole("button", { name: "Show sidebar" }),
+  ).toBeVisible();
+  const expandedColumn = await settledBox(
+    page.locator('[data-design-mode="true"]'),
+  );
+  expect(expandedColumn.x).toBeLessThanOrEqual(1);
+  await expect(designLayout(page)).toHaveAttribute(
+    "data-design-layout",
+    "split",
+  );
+  const minimize = designCanvas(page).getByRole("button", {
+    name: "Minimize canvas",
+  });
+  await expect(minimize).toBeFocused();
+  await expectCanvasChrome(page);
+  await capture(page, "1440-design-expanded");
+  await minimize.click();
+  await expect(
+    page.getByRole("button", { name: "Hide sidebar" }),
+  ).toBeVisible();
+  await expect(
+    designCanvas(page).getByRole("button", { name: "Expand canvas" }),
+  ).toBeFocused();
+
+  // ⇧⌘\ does the same from the message box.
+  await page.locator("textarea").first().focus();
+  await page.keyboard.press(EXPAND_SHORTCUT);
+  await expect(minimize).toBeVisible();
+  await page.keyboard.press(EXPAND_SHORTCUT);
+  await expect(
+    page.getByRole("button", { name: "Hide sidebar" }),
+  ).toBeVisible();
 
   // Escape belongs to whatever has focus; it never leaves design mode.
   await page.locator("textarea").first().focus();
@@ -501,6 +576,7 @@ test("design mode fits narrow windows: split beside the sidebar, stacked below 6
   // The 320 px canvas keeps its tool rail and zoom controls.
   await expectCanvasChrome(page);
   await expectComposerFooterClear(composerFooter(page));
+  await expectComposerCentredInColumn(page);
   await capture(page, "1000-split-sidebar-open");
   await page.getByRole("button", { name: "Hide sidebar" }).click();
   await expect(
@@ -510,6 +586,10 @@ test("design mode fits narrow windows: split beside the sidebar, stacked below 6
     "data-design-layout",
     "split",
   );
+  // Hiding the sidebar by hand is the expanded layout, so the canvas offers Minimize.
+  await expect(
+    designCanvas(page).getByRole("button", { name: "Minimize canvas" }),
+  ).toBeVisible();
   await expectCanvasChrome(page);
   await capture(page, "1000-split-sidebar-collapsed");
 
@@ -669,7 +749,7 @@ test("design mode fits narrow windows: split beside the sidebar, stacked below 6
   });
 });
 
-test("Aiden asks to open design mode on a card, then puts its work on the canvas; Not now leaves the chat as it was", async ({
+test("Aiden asks to open design mode on a card, then puts its work on the canvas; Not now holds for the rest of that chat", async ({
   aiden,
 }) => {
   const { app, page, lmStudio } = aiden;
@@ -702,7 +782,27 @@ test("Aiden asks to open design mode on a card, then puts its work on the canvas
   await expect(designToggle(page)).toHaveAttribute("aria-pressed", "false");
   await expect(designCanvas(page)).toHaveCount(0);
 
-  // Enter: the canvas opens, and the same reply places a note there with the canvas tools.
+  // Not now holds for this chat: asking again shows no card and Aiden is told the person declined.
+  const askAgainPrompt = "Design consent test: now sketch a pricing page with three tiers.";
+  const askedAgain = lmStudio.enqueueToolScenario!({
+    prompt: askAgainPrompt,
+    calls: [{ name: "design_mode", arguments: { action: "enter", reason: "Three tiers are easier to judge side by side." } }],
+    finalText: "Here are the three tiers in the chat.",
+  });
+  await composer.fill(askAgainPrompt);
+  await composer.press("Enter");
+  await expect.poll(() => askedAgain.completed).toBe(true);
+  expect(askedAgain.error).toBeUndefined();
+  expect(JSON.stringify(askedAgain.results)).toContain("declined");
+  await expect(page.getByText("Here are the three tiers in the chat.").last()).toBeVisible();
+  await expect(card).toHaveCount(0);
+  await expect(designToggle(page)).toHaveAttribute("aria-pressed", "false");
+  await expect(designCanvas(page)).toHaveCount(0);
+
+  // A new chat may ask again. Enter: the canvas opens, and the same reply places a note there with the canvas tools.
+  await page.getByRole("button", { name: "New Agent", exact: true }).click();
+  await chooseWorkspace(page, new RegExp(`^${WORKSPACE_NAME}`, "u"));
+  await sendFirstMessage(page, "Second design chat for pricing");
   const enterPrompt = "Design consent test: lay out three pricing directions.";
   const entered = lmStudio.enqueueToolScenario!({
     prompt: enterPrompt,

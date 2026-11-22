@@ -480,3 +480,24 @@ test("a stranded Bot notice preserves person memory while later Bot inputs remai
     await harness.close(ctx);
   }
 });
+
+test("only a review's last round skips the prompt cache, since every earlier round's prefix is resent", async () => {
+  const retention: Array<string | undefined> = [];
+  const step: FauxResponseStep = (context, options) => {
+    if (!isReviewRequest(context.messages)) return fauxAssistantMessage("ok");
+    retention.push(options?.cacheRetention);
+    return addFact(`Fact ${retention.length}.`)();
+  };
+  const { harness, review, personTurns, errors } = await setup(Array.from({ length: 60 }, () => step));
+  try {
+    await personTurns(10);
+    const result = await review.runNow(BOT);
+    assert.equal(result.kind, "reviewed");
+    assert.equal(retention.length, 3, "the review used every round it is allowed");
+    assert.equal(retention[retention.length - 1], "none", "nothing reads the last round again");
+    for (const earlier of retention.slice(0, -1)) assert.notEqual(earlier, "none", "the next round reads this round's prefix");
+    assert.deepEqual(errors, []);
+  } finally {
+    await harness.close(ctx);
+  }
+});

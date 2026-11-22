@@ -437,15 +437,24 @@ struct AidenMachinesView: View {
 struct AidenMachinesRouteView: View {
     let coordinator: AidenRemoteCoordinator
     @State private var showsPairing = false
+    @State private var pairingShowsDesktopCheck = false
 
     var body: some View {
         AidenMachinesView(
             coordinator: coordinator,
             preferences: .shared,
-            addMachine: { showsPairing = true }
+            addMachine: {
+                pairingShowsDesktopCheck = coordinator.installationStore.installations.isEmpty
+                showsPairing = true
+            }
         )
             .sheet(isPresented: $showsPairing) {
-                AidenPairingView(coordinator: coordinator, onPaired: { showsPairing = false })
+                AidenPairingView(
+                    coordinator: coordinator,
+                    showsDesktopCheck: pairingShowsDesktopCheck,
+                    onClose: { showsPairing = false },
+                    onPaired: { showsPairing = false }
+                )
             }
     }
 }

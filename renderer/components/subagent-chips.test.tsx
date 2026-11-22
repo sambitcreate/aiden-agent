@@ -87,12 +87,12 @@ test("a working batch reads as kicked off and a settled one as ran, with the lon
       onOpen={(runId) => opened.push(runId)}
     />,
   );
-  const group = screen.getByRole("group", { name: "2 subagents" });
+  const group = screen.getByRole("group", { name: "2 scouts" });
   // The name leaves out the elapsed time, so a focused header is not re-read every second.
-  const toggle = screen.getByRole("button", { name: "Kicked off 2 subagents. 1 working · 1 completed." });
+  const toggle = screen.getByRole("button", { name: "Kicked off 2 scouts. 1 working · 1 completed." });
   assert.equal(toggle === header(), true);
   assert.equal(toggle.getAttribute("aria-expanded"), "true");
-  assert.match(toggle.textContent ?? "", /Kicked off 2 subagents/u);
+  assert.match(toggle.textContent ?? "", /Kicked off 2 scouts/u);
   assert.match(toggle.textContent ?? "", /1 working · 1 completed/u);
   // The running run has worked for over two minutes; the finished one for five seconds.
   assert.match(toggle.textContent ?? "", /2m \d+s/u);
@@ -109,7 +109,7 @@ test("a working batch reads as kicked off and a settled one as ran, with the lon
       onOpen={() => undefined}
     />,
   );
-  assert.match(header().textContent ?? "", /Ran 2 subagents/u);
+  assert.match(header().textContent ?? "", /Ran 2 scouts/u);
   assert.match(header().textContent ?? "", /1 failed · 1 completed/u);
   assert.match(header().textContent ?? "", /1m 5s/u);
 });
@@ -142,7 +142,7 @@ test("collapsing hides the rows, and the choice survives the saved message repla
     />,
   );
   assert.equal(header().getAttribute("aria-expanded"), "false");
-  assert.match(header().textContent ?? "", /Ran 2 subagents/u);
+  assert.match(header().textContent ?? "", /Ran 2 scouts/u);
   assert.equal(screen.queryAllByRole("button", { name: /^Open Run/u }).length, 0);
 
   await act(async () => {
@@ -150,6 +150,36 @@ test("collapsing hides the rows, and the choice survives the saved message repla
   });
   assert.equal(header().getAttribute("aria-expanded"), "true");
   assert.equal(screen.getAllByRole("button", { name: /^Open Run/u }).length, 2);
+});
+
+test("the header names a role every run shares once; mixed roles keep a tag on each row", () => {
+  const { rerender } = render(
+    <SubagentChips
+      runs={[run("a", "gen-roles", { role: "implementer" }), run("b", "gen-roles", { role: "implementer" })]}
+      onOpen={() => undefined}
+    />,
+  );
+  assert.match(header().textContent ?? "", /Ran 2 implementers/u);
+  const rows = screen.getAllByRole("button", { name: /^Open Run/u });
+  assert.equal(rows.length, 2);
+  for (const row of rows) assert.doesNotMatch(row.textContent ?? "", /Implementer/u, "the header already says it");
+
+  rerender(
+    <SubagentChips
+      runs={[run("a", "gen-roles", { role: "implementer" }), run("b", "gen-roles", { role: "reviewer" })]}
+      onOpen={() => undefined}
+    />,
+  );
+  assert.match(header().textContent ?? "", /Ran 2 subagents/u);
+  const [first, second] = screen.getAllByRole("button", { name: /^Open Run/u });
+  assert.match(first?.textContent ?? "", /Implementer/u);
+  assert.match(second?.textContent ?? "", /Reviewer/u);
+});
+
+test("a single run is named in the singular", () => {
+  render(<SubagentChips runs={[run("a", "gen-one", { role: "planner" })]} onOpen={() => undefined} />);
+  assert.ok(screen.getByRole("group", { name: "1 planner" }));
+  assert.match(header().textContent ?? "", /Ran 1 planner/u);
 });
 
 test("another generation does not inherit a collapsed group", async () => {

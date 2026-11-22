@@ -81,3 +81,6 @@ A gitignored throwaway at `tmp/onboarding-art-preview.html` renders the real gal
 Each gallery tile joins the shared off-screen observer (`pauseWhenUnseen` from `renderer/lib/offscreen-pause.ts`).
 `onboarding-art.css` pauses `.oa-art` animations under `.oa-tile[data-offscreen]` or `:root[data-document-hidden]`.
 Paused tiles are out of view, so nothing visible changes. Covered by `renderer/components/onboarding-feature-gallery.test.tsx`.
+
+## iOS shell-first onboarding (2026-11-20)
+iOS moved to shell-first launch (`AidenAppShellView` renders immediately with zero-computer empty states across all four tabs) and an inline frosted-cutout QR + unified manual entry sheet (`AidenPairingView`), with a first-time desktop check and Mac (`https://chatwithaiden.com/`) / Linux & Server (`https://github.com/sambitcreate/aiden-agent`) download + ShareLink sheet. `AidenOnboardingArtwork.swift`, `AidenOnboardingVignettes.swift`, and `AidenOnboardingArtTests.swift` were removed from the iOS target. Desktop's Snapshot feature tour is unchanged.

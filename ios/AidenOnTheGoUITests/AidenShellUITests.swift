@@ -625,8 +625,71 @@ final class AidenShellUITests: XCTestCase {
         let pair = app.buttons["Pair a computer"].firstMatch
         XCTAssertTrue(pair.waitForExistence(timeout: 10), "No way to pair another machine")
         pair.tap()
-        XCTAssertTrue(app.navigationBars["Pair Aiden"].waitForExistence(timeout: 10), "Pairing did not open")
+        XCTAssertTrue(app.navigationBars["Add Computer"].waitForExistence(timeout: 10), "Pairing did not open")
         app.terminate()
+    }
+
+    /// Zero paired computers launches straight into the shell, asks whether the
+    /// desktop app is installed, offers Mac/Linux/Server links, and opens Add Computer.
+    /// Set `TEST_RUNNER_AIDEN_CAPTURE_DIR` to capture screenshots of each screen.
+    func testUnpairedShellFirstRunWalksDesktopCheckDownloadLinksAndAddComputer() {
+        let captureDir = ProcessInfo.processInfo.environment["AIDEN_CAPTURE_DIR"]
+        let appearances: [String] = captureDir != nil ? ["light", "dark"] : ["light"]
+
+        func capture(_ name: String) {
+            guard let captureDir else { return }
+            Thread.sleep(forTimeInterval: 0.6)
+            let url = URL(fileURLWithPath: captureDir).appending(path: "\(name).png")
+            XCTAssertNoThrow(
+                try XCUIScreen.main.screenshot().pngRepresentation.write(to: url),
+                "Couldn't save \(name)"
+            )
+        }
+
+        for appearance in appearances {
+            let app = XCUIApplication()
+            app.launchArguments = [
+                "-aiden.appearance.mode", appearance,
+                "-aiden.product-navigation.v1", "reset",
+                "-aiden.product-navigation.v2", "reset",
+                "-AppleLanguages", "(en)",
+                "-AppleLocale", "en_US",
+            ]
+            app.launch()
+
+            XCTAssertTrue(app.navigationBars["Inbox"].waitForExistence(timeout: 10), "Unpaired launch should enter the shell")
+            XCTAssertTrue(app.staticTexts["No computers connected"].waitForExistence(timeout: 5), "Empty state title missing")
+            capture("sim_\(appearance)_1_inbox")
+
+            let addComputer = app.buttons["Add Computer"].firstMatch
+            XCTAssertTrue(addComputer.waitForExistence(timeout: 5), "Add Computer CTA missing")
+            addComputer.tap()
+
+            XCTAssertTrue(app.navigationBars["Connect Aiden"].waitForExistence(timeout: 10), "Desktop check step did not open")
+            XCTAssertTrue(app.staticTexts["Do you have Aiden on your computer?"].exists)
+            capture("sim_\(appearance)_2_desktop_check")
+
+            let notYet = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "Not yet")).firstMatch
+            XCTAssertTrue(notYet.waitForExistence(timeout: 5), "Not yet option missing")
+            notYet.tap()
+
+            XCTAssertTrue(app.navigationBars["Get Aiden"].waitForExistence(timeout: 10), "Download links page did not open")
+            XCTAssertTrue(app.buttons["Mac, chatwithaiden.com"].waitForExistence(timeout: 5), "Mac website link missing")
+            XCTAssertTrue(app.buttons["Linux, github.com/sambitcreate/aiden-agent"].exists, "Linux GitHub link missing")
+            XCTAssertTrue(app.buttons["Server, aiden serve · GitHub"].exists, "Server GitHub link missing")
+            capture("sim_\(appearance)_3_get_aiden")
+
+            let haveAiden = app.buttons["I Have Aiden — Continue"].firstMatch
+            XCTAssertTrue(haveAiden.waitForExistence(timeout: 5), "Continue CTA missing on Get Aiden")
+            haveAiden.tap()
+
+            XCTAssertTrue(app.navigationBars["Add Computer"].waitForExistence(timeout: 10), "Add Computer screen did not open")
+            XCTAssertTrue(app.buttons["Scan QR code"].waitForExistence(timeout: 5), "Inline scan card missing")
+            XCTAssertTrue(app.textFields["Computer address"].exists, "Address input missing")
+            XCTAssertTrue(app.textFields["Setup code or pairing payload"].exists, "Code input missing")
+            capture("sim_\(appearance)_4_add_computer")
+            app.terminate()
+        }
     }
 
     /// Every step is a route: the tab's stack holds nothing else.

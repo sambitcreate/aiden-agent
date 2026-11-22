@@ -957,9 +957,10 @@ textarea {
 
 /* A wide visual leaves the reading column for the chat pane: it grows to
    the pane's width (inside a slim gutter, up to a cap), stays centred on the
-   column, and follows the window. Never narrower than the column. The dock
-   gutter only guards the composer row, which content already scrolls under. */
-.aiden-inline-visual[data-layout="wide"]:not(:popover-open) {
+   column, and follows the window. Never narrower than the column, so in
+   design mode's slim chat column it simply fills the column. Scoped to the transcript's inline-size container so `100cqi` never falls
+   back to the viewport outside a chat pane. */
+[data-scroll-content]:has(> .chat-content-column) .aiden-inline-visual[data-layout="wide"]:not(:popover-open) {
   --inline-visual-wide-width: max(
     100%,
     min(calc(100cqi - 2 * var(--inline-visual-wide-gutter)), var(--inline-visual-wide-max))
@@ -970,7 +971,7 @@ textarea {
 }
 
 /* While Quick View is open, docked or floating, the card owns that space; stay in the column. */
-[data-chat-card-inset] .aiden-inline-visual[data-layout="wide"]:not(:popover-open) {
+[data-chat-card-inset] [data-scroll-content]:has(> .chat-content-column) .aiden-inline-visual[data-layout="wide"]:not(:popover-open) {
   width: 100%;
   margin-inline: 0;
 }
@@ -2938,42 +2939,59 @@ textarea {
   color: var(--support-red);
 }
 
-/* ── Aiden dock inset ──────────────────────────────────────────────────── */
-/* Aiden's idle Live pill sits in the bottom-right of the window, right where
-   the composer's send controls are. The chat column reserves that width on
-   BOTH sides so the composer and the messages above it stay optically centered
-   rather than sliding left to dodge the pill. The gutter clears the ~72px idle
-   "Live" pill plus its 16px offset plus a little breathing room; longer
-   in-session labels may reach the composer edge in narrow windows, like the HUD. */
+/* ── Chat column gutter ────────────────────────────────────────────────── */
+/* The transcript, pending approvals and composer share one centered column.
+   `--aiden-dock-gutter` is its inner padding on each side at the usual widths,
+   which sets the reading width inside the Appearance cap. When the pane is too
+   narrow for that, the padding gives way first, down to
+   `--chat-column-gutter-min`, so a narrow chat uses its width instead of
+   keeping empty lanes. (The lanes once kept clear for Live's idle corner pill;
+   Live now starts from the composer's Send button, and its brief corner pill
+   rises above the composer rather than taking a lane beside it.) Percentages
+   in padding are of the column's parent, the pane. */
 :root {
   --aiden-dock-gutter: 6rem;
+  --chat-column-gutter-min: 1rem;
   --chat-content-max-width: 52rem;
   --inline-visual-wide-max: 80rem;
   --inline-visual-wide-gutter: 1.5rem;
 }
 
 .aiden-dock-inset {
+  padding-inline: clamp(
+    var(--chat-column-gutter-min),
+    calc(50% - var(--chat-content-max-width) / 2 + var(--aiden-dock-gutter)),
+    var(--aiden-dock-gutter)
+  );
+}
+/* Full has no cap to measure against, so it narrows like Default does. */
+:root[data-chat-width="full"] .aiden-dock-inset {
+  padding-inline: clamp(
+    var(--chat-column-gutter-min),
+    calc(50% - 26rem + var(--aiden-dock-gutter)),
+    var(--aiden-dock-gutter)
+  );
+}
+/* Quick View's docking math expects the usual padding, which the card may cover. */
+:root [data-chat-card-inset] .aiden-dock-inset {
   padding-inline: var(--aiden-dock-gutter);
 }
 
-/* Keep the transcript, pending approval, and composer on one centered column.
-   The dock inset remains separate so the floating Aiden control has matching
-   clearance on both sides at every available width. */
+/* Keep the transcript, pending approval, and composer on one centered column. */
 .chat-content-column {
   width: 100%;
   max-width: var(--chat-content-max-width);
   margin-inline: auto;
 }
 
-/* Design mode's narrow chat column fills its width. The Live pill sits at the
-   column's bottom-right edge (clear of the canvas controls), so the column
-   keeps the usual pill clearance on the right only and a small gutter on the
-   left. The title may shrink to nothing so the actions never overlap it. */
+/* Design mode's narrow chat column fills its width with the same small gutter
+   on both sides. The title may shrink to nothing so the actions never overlap it. */
 [data-design-mode] {
   --chat-content-max-width: none;
+  --design-mode-gutter: 16px;
 }
-[data-design-mode] .aiden-dock-inset {
-  padding-inline: 16px var(--aiden-dock-gutter);
+:root [data-design-mode] .aiden-dock-inset {
+  padding-inline: var(--design-mode-gutter);
 }
 [data-design-mode] .scroll-area-header h1 {
   min-width: 0;

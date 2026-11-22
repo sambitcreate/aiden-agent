@@ -1,9 +1,8 @@
-import { botMessageChainOf } from "../../../renderer/shared/bot-messages.js";
 import { createBotMessageLedger } from "../../../main/services/bot-messages/ledger.js";
 import { createBotMessageCourier } from "../../../main/services/bot-messages/courier.js";
 import { createBotMessageLifecycle } from "../../../main/services/bot-messages/lifecycle.js";
 import { projectBotMessageRoster } from "../../../main/services/bot-messages/roster.js";
-import { messageBotCandidate } from "../../../main/services/bot-messages/candidate.js";
+import { messageBotOffer } from "../../../main/services/bot-messages/candidate.js";
 import { createCliBotSpending } from "./bot-spending.ts";
 import { cliSubagentIdentity } from "./subagent-identity.ts";
 import { imageAttachmentsFromEntries } from "../../../main/services/bot-runtime/bot-images.js";
@@ -31,10 +30,10 @@ import { createBotRuntimeModels } from "../../../main/services/bot-runtime/bot-m
 import { createBotApprovals } from "../../../main/services/bot-runtime/bot-approvals.js";
 import { createBotMemoryService } from "../../../main/services/bot-memory/service.js";
 import { createBotMemoryStore } from "../../../main/services/bot-memory/store.js";
-import { renderBotMemorySection } from "../../../main/services/bot-memory/prompt.js";
+import { renderBotMemorySection, withBotMemoryEdits } from "../../../main/services/bot-memory/prompt.js";
 import { botMemoryToolEntry, withBotMemoryIngress } from "../../../main/services/bot-memory/tool.js";
 import { botRecallToolEntry } from "../../../main/services/bot-memory/recall.js";
-import { botIngressAllowsTool, botTurnAttended } from "../../../main/services/bot-runtime/bot-tool-policy.js";
+import { botIngressAllowsTool, botIngressRefusal, botTurnAttended } from "../../../main/services/bot-runtime/bot-tool-policy.js";
 import { composioServiceCallRequiresForeground, isComposioServiceToolDescriptor } from "../../../main/services/composio-service-tool.js";
 import { mcpAgentToolDescriptor } from "../../../main/services/mcp-agent-tool-descriptor.js";
 import type { BotRuntimeAuthorityAdmission } from "../../../main/services/bot-runtime-authority.js";
@@ -175,14 +174,14 @@ export async function createCliDurableBots(profileDir: string, ports: CliDurable
       systemSections: (bot) => admitted(bot.id, async (lease) => [await ports.instructions(lease), `Working directory: ${lease.authority.workingDirectory}. Use only the offered tools within their granted locations.`]),
       imageInput: async (botId) => imageInputs.get(botId) ?? false,
       memorySection: async (botId, offer) => renderBotMemorySection(await memory.snapshot(botId), offer),
-      currentTools: async (bot, turn) => {
-        const available = botMessageChainOf([turn.requestId]).canSend && (await (ports.messagingEnabled?.() ?? Promise.resolve(true)))
-          ? (await ports.botStore.list()).map((peer) => ({
-            id: peer.id, name: peer.name, purpose: peer.description ?? "",
-            acceptsMessages: peer.acceptsBotMessages !== false,
-            sendsMessages: peer.messagesOtherBots !== false,
-          })) : [];
-        const offer = available.find((item) => item.id === bot.id)?.sendsMessages && available.some((item) => item.id !== bot.id && item.acceptsMessages);
+      // The person's memory edits follow their next input, leaving system cached.
+      promptTail: async (botId) => withBotMemoryEdits("", memory.takeEdits(botId)),
+      currentTools: async (bot) => {
+        // The desktop's rule (candidate.ts), with the Bot just loaded for this turn.
+        const messageBot = await messageBotOffer(bot.id, {
+          messagingEnabled: () => ports.messagingEnabled?.() ?? Promise.resolve(true),
+          bot: async () => bot, roster, post: (input) => messages.post(input),
+        });
         return [
           ...(await currentTools(bot.id)).map((tool) => ({
             tool: { ...tool, execute: async () => { throw new Error("A durable Bot tool requires its calling conversation."); } },
@@ -190,7 +189,7 @@ export async function createCliDurableBots(profileDir: string, ports: CliDurable
             replay: "unsafe" as const, ...(mcpAgentToolDescriptor(tool) ? { mcp: true } : {}),
           })),
           botMemoryToolEntry(bot.id, memory), botRecallToolEntry(),
-          ...(offer ? [{ ...await messageBotCandidate(bot.id, { roster, descriptionRoster: available, post: (input) => messages.post(input) }), replay: "safe" as const }] : []),
+          ...(messageBot ? [{ ...messageBot, replay: "safe" as const }] : []),
         ];
       },
       checkPolicy: async (botId, name, call) => admitted(botId, async (lease) => {
@@ -214,6 +213,7 @@ export async function createCliDurableBots(profileDir: string, ports: CliDurable
       },
       codemodeSandbox: botCodemodeSandbox,
       turnAllows: withBotMemoryIngress(botIngressAllowsTool),
+      turnRefusal: botIngressRefusal,
       // The person's global and Bot hooks, run in the Bot's working directory.
       hooks: { cwd: (botId) => admitted(botId, async (lease) => lease.authority.workingDirectory), attended: botTurnAttended,
         // A Bot run has no transcript notice row, so hook messages go to the daemon log.

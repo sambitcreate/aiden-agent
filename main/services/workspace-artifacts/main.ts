@@ -8,6 +8,7 @@ import { agentShellCommandEnvironment } from "../agent-command-environment.js";
 import { runBoundedShellCommand } from "../bounded-shell-command.js";
 import { writeFileAtomic } from "../durable-fs.js";
 import { configStore } from "../config-store.js";
+import { runArgvPlan } from "./argv-runner.js";
 import { artifactFileAllowed, readWorkspaceArtifactFile } from "./file-policy.js";
 import { createWorkspaceArtifactRunner } from "./runner.js";
 import { WorkspaceArtifactStore } from "./store.js";
@@ -75,6 +76,7 @@ export const workspaceArtifactFiles: WorkspaceArtifactFiles = {
 
 export const workspaceArtifactRunner = createWorkspaceArtifactRunner({
   runShell: runBoundedShellCommand,
+  runArgv: runArgvPlan,
   readFile: readWorkspaceArtifactFile,
   env: agentShellCommandEnvironment,
   store: workspaceArtifactStore,

@@ -15,6 +15,7 @@ import type { AssistantMessage } from "@earendil-works/pi-ai";
 import type { Chat, ChatMeta } from "./types.js";
 import type { ChatTurnLease } from "./chat-turn-admission.js";
 import type { PiSessionPort } from "./pi-session-port.js";
+import type { SideCallPrefix } from "./side-call-prefix.js";
 
 export type ContextLifecycleAudience =
   | { kind: "desktop"; ownerId: string }
@@ -85,6 +86,12 @@ export interface ContextLifecycleServiceDeps {
   ): Promise<string | undefined>;
   /** A compaction of `chat` finished and was saved. */
   compacted?(chat: Chat, audience: ContextLifecycleAudience): void;
+  /**
+   * The chat's last request while its cache is live (see side-call-prefix).
+   * The summary then continues it and reads the cache; without one, or when
+   * the journal has moved past it, Pi's isolated request is sent.
+   */
+  cachedPrefix?(chatId: string): Promise<SideCallPrefix | undefined>;
 }
 
 function cancelled(cause: unknown): boolean {
@@ -200,9 +207,12 @@ export class ContextLifecycleService {
         model,
         model.input.includes("image"),
       );
-      if ((await this.deps.skillsEnabled?.()) === false) {
+      // A projection without skills is not the request the cache holds.
+      const skillsProjected = (await this.deps.skillsEnabled?.()) === false;
+      if (skillsProjected) {
         session = await projectVisibleHistoryWithoutSkills(session, chat.messages, model);
       }
+      const cachedPrefix = this.deps.cachedPrefix;
       const coordinator = new PiCompactionCoordinator({
         session,
         engine,
@@ -217,6 +227,7 @@ export class ContextLifecycleService {
           ? await this.deps.resolveThinkingLevel(chat, audience, runtime)
           : "off",
         signal: operationAbort.signal,
+        ...(runtime && cachedPrefix && !skillsProjected ? { cachedPrefix: () => cachedPrefix(chat.id) } : {}),
         ...(this.deps.preCompact
           ? {
               summaryInstructions: (_reason: unknown, signal: AbortSignal) =>

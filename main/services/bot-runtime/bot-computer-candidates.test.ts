@@ -80,15 +80,18 @@ test("a model that can't take images gets the shell alone", async () => {
   assert.deepEqual(names(await botComputerCandidates(BOT, turn({ supportsImages: false, computers: fake.computers }))), ["computer_shell"]);
 });
 
-test("hand_off is offered only on turns a person can answer", async () => {
-  const description = async (overrides: Partial<BotComputerCandidateInput>) => {
+test("the computer is declared with the same guidance on attended and unattended turns", async () => {
+  const declared = async (overrides: Partial<BotComputerCandidateInput>) => {
     const fake = services();
     const candidates = await botComputerCandidates(BOT, turn({ ...overrides, computers: fake.computers }));
-    return candidates.find((candidate) => candidate.tool.name === "computer")?.tool.description ?? "";
+    return candidates.map((candidate) => ({ name: candidate.tool.name, description: candidate.tool.description, parameters: candidate.tool.parameters }));
   };
-  assert.match(await description({}), /hand_off/u);
-  assert.doesNotMatch(await description({ routine: true }), /hand_off/u);
-  assert.doesNotMatch(await description({ telegram: true }), /hand_off/u);
+  const attended = await declared({});
+  assert.deepEqual(await declared({ routine: true }), attended, "a routine turn declares the same bytes");
+  assert.deepEqual(await declared({ telegram: true }), attended, "a Telegram turn declares the same bytes");
+  const guidance = attended.find((tool) => tool.name === "computer")?.description ?? "";
+  assert.match(guidance, /hand_off/u, "a person's turn is told to hand secrets to the person");
+  assert.match(guidance, /nobody is watching[^.]*never enter passwords/u, "an unattended run is told never to enter secrets");
 });
 
 test("the element lane is described only for a computer whose base passed its probe", async () => {

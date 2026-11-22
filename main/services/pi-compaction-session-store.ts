@@ -31,6 +31,9 @@ import { piUpgradeRolloutStore } from "./pi-upgrade-rollout-main.js";
 import type { DurablePiRuntimeEffect } from "./pi-runtime-effect-core.js";
 import type { ChatMessage } from "./types.js";
 import type { ChatForkSummaryV1 } from "../../renderer/shared/chat-copy-contract.js";
+import { CANVAS_STATUS_SECTION } from "../../renderer/shared/design-canvas/canvas-summary.js";
+import { DESIGN_PAGE_INSPECT_SECTION } from "./design-canvas/inspect-note.js";
+import { ON_DEMAND_DECLARED_ENTRY, onDemandDeclaredOfBranch } from "./on-demand-tools.js";
 
 export const AIDEN_CHAT_MESSAGE_MARKER = "aiden.chat-message.v1";
 export const AIDEN_PI_TRANSACTION = "aiden.pi-transaction.v1";
@@ -395,6 +398,14 @@ export async function syncChatMessagesToPiSession(
   model: Model<Api>,
   _supportsImages: boolean,
   contentOverrides: ReadonlyMap<string, string> = new Map(),
+  /** Host messages journaled right after a visible message, in its transaction (hook context, state update). */
+  followingMessages: ReadonlyMap<string, readonly AgentMessage[]> = new Map(),
+  /**
+   * Custom entries journaled right before a visible message, in its
+   * transaction (the chat head's state), so a message the branch already
+   * holds skips them with it.
+   */
+  precedingEntries: ReadonlyMap<string, readonly { customType: string; data: unknown }[]> = new Map(),
 ): Promise<void> {
   const entries = await session.getBranch();
   const synchronized = new Set(
@@ -423,11 +434,17 @@ export async function syncChatMessagesToPiSession(
     const context = await session.buildContext();
     const tail = context.messages[context.messages.length - 1];
     await appendPiTransaction(session, async () => {
+      for (const entry of precedingEntries.get(message.id) ?? []) {
+        await session.appendCustomEntry(entry.customType, entry.data);
+      }
       // A process may have died after the Pi assistant was committed and the
       // visible chat was saved, but before its marker transaction. Reconcile
       // that exact terminal projection instead of duplicating the answer.
       if (!visibleAssistantAlreadyAtTail(tail, message, desired)) {
         await session.appendMessage(desired);
+      }
+      for (const following of followingMessages.get(message.id) ?? []) {
+        await session.appendMessage(following);
       }
       await session.appendCustomEntry(AIDEN_CHAT_MESSAGE_MARKER, {
         chatMessageId: message.id,
@@ -453,32 +470,49 @@ export async function projectVisibleHistoryWithoutSkills<M extends PiSessionMeta
   const originalEntries = await session.getEntries();
   const originalLeafId = await session.getLeafId();
   const cutoff = originalEntries.reduce((latest, entry) => Math.max(latest, entry.seq), -1);
-  const visible: PiSessionEntry[] = messages.flatMap((message, index) => {
-    const id = `visible-skill-free-${message.id}`;
-    const parentId = index === 0 ? null : `visible-skill-free-marker-${messages[index - 1]!.id}`;
-    return [
-      { type: "message" as const, id, parentId, seq: index * 2 - messages.length * 2,
+  const forkSummaryEntry = (marker: PiSessionEntry): PiSessionEntry[] =>
+    forkSummary?.state === "ready" && forkSummary.text && marker.id === `visible-skill-free-marker-${forkSummary.afterMessageId}`
+      ? [{
+          type: "message", id: `visible-skill-free-${FORK_SUMMARY_ENTRY_PREFIX}${forkSummary.afterMessageId}`, parentId: null,
+          seq: marker.seq, timestamp: marker.timestamp,
+          message: { role: "branchSummary", summary: forkSummaryModelText(forkSummary), fromId: null, timestamp: marker.timestamp },
+        }]
+      : [];
+  const durableBranch = await session.getBranch();
+  const notesAfter = canvasStatusNotesByMessage(durableBranch);
+  const visible: PiSessionEntry[] = [];
+  for (const [index, message] of messages.entries()) {
+    const marker: PiSessionEntry = {
+      type: "custom", id: `visible-skill-free-marker-${message.id}`, parentId: null,
+      seq: index * 2 + 1 - messages.length * 2, timestamp: message.createdAt,
+      customType: AIDEN_CHAT_MESSAGE_MARKER, data: { chatMessageId: message.id },
+    };
+    visible.push(
+      { type: "message", id: `visible-skill-free-${message.id}`, parentId: null, seq: index * 2 - messages.length * 2,
         timestamp: message.createdAt, message: chatMessageToPiMessage(message, model, true) },
-      { type: "custom" as const, id: `visible-skill-free-marker-${message.id}`, parentId: id,
-        seq: index * 2 + 1 - messages.length * 2, timestamp: message.createdAt,
-        customType: AIDEN_CHAT_MESSAGE_MARKER, data: { chatMessageId: message.id } },
-    ];
-  });
-  // A fork's ready summary follows its last copied message here too; the
-  // durable journal's copy is hidden with the rest of the skill-era entries.
-  if (forkSummary?.state === "ready" && forkSummary.text) {
-    const after = visible.findIndex((entry) => entry.id === `visible-skill-free-marker-${forkSummary.afterMessageId}`);
-    if (after >= 0) {
-      const marker = visible[after]!;
-      const id = `visible-skill-free-${FORK_SUMMARY_ENTRY_PREFIX}${forkSummary.afterMessageId}`;
-      visible.splice(after + 1, 0, {
-        type: "message", id, parentId: marker.id, seq: marker.seq, timestamp: marker.timestamp,
-        message: { role: "branchSummary", summary: forkSummaryModelText(forkSummary), fromId: null, timestamp: marker.timestamp },
-      });
-      const next = visible[after + 2];
-      if (next) visible[after + 2] = { ...next, parentId: id };
-    }
+      marker,
+      // A fork's ready summary follows its last copied message here too; the
+      // durable journal's copy is hidden with the rest of the skill-era entries.
+      ...forkSummaryEntry(marker),
+      // Design canvas notes earlier turns sent stay where they were, so
+      // a turn whose counts are unchanged adds no note and the prefix holds.
+      ...(notesAfter.get(message.id) ?? []).map((note): PiSessionEntry => ({
+        type: "message", id: `visible-skill-free-note-${note.id}`, parentId: null,
+        seq: marker.seq, timestamp: note.timestamp, message: note.message,
+      })),
+    );
   }
+  // The on-demand tools the last run declared hold only tool names. Carried
+  // forward, the next run declares them in the same place, so its cached tool
+  // prefix holds; a run that declares a different list journals a new record
+  // after the cutoff, which then wins.
+  if (durableBranch.some((entry) => entry.type === "custom" && entry.customType === ON_DEMAND_DECLARED_ENTRY)) {
+    visible.push({
+      type: "custom", id: "visible-skill-free-on-demand-declared", parentId: null, seq: -1, timestamp: 0,
+      customType: ON_DEMAND_DECLARED_ENTRY, data: { names: onDemandDeclaredOfBranch(durableBranch) },
+    });
+  }
+  for (const [index, entry] of visible.entries()) entry.parentId = index === 0 ? null : visible[index - 1]!.id;
   // Compaction fences writes against the real durable leaf. Keep that identity
   // as an inert boundary after the synthetic prefix, without exposing its data.
   if (originalLeafId) visible.push({
@@ -524,6 +558,27 @@ export async function projectVisibleHistoryWithoutSkills<M extends PiSessionMeta
     };
   };
   return view();
+}
+
+/**
+ * The design canvas notes on a branch (status notes and the reports on pages
+ * Aiden wrote), by the chat message whose marker precedes them. They hold
+ * only canvas counts, page findings and the one-time design-system offer
+ * (colours and fonts reduced to a strict shape), never skill data.
+ */
+function canvasStatusNotesByMessage(branch: readonly PiSessionEntry[]): Map<string, Extract<PiSessionEntry, { type: "message" }>[]> {
+  const notes = new Map<string, Extract<PiSessionEntry, { type: "message" }>[]>();
+  let after: string | undefined;
+  for (const entry of branch) {
+    if (entry.type === "custom" && entry.customType === AIDEN_CHAT_MESSAGE_MARKER) after = markerId(entry.data) ?? after;
+    if (entry.type !== "message" || after === undefined) continue;
+    const sections = (entry.message as { role?: unknown; sections?: Record<string, unknown> }).sections;
+    if (entry.message.role !== "system" || !sections || !(CANVAS_STATUS_SECTION in sections || DESIGN_PAGE_INSPECT_SECTION in sections)) {
+      continue;
+    }
+    notes.set(after, [...(notes.get(after) ?? []), entry]);
+  }
+  return notes;
 }
 
 async function appendPiTransaction<T>(

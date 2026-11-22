@@ -9,6 +9,7 @@ import { CANVAS_MIN_ZOOM } from "../canvas/canvas-viewport-core";
 import { EmptyState, toast } from "../components/ui";
 import { isMacPlatform } from "../lib/ghostty-terminal/host-platform";
 import { prefersReducedMotion } from "../lib/appearance-runtime";
+import { noteDesignCanvasView } from "../lib/design-mode";
 import { designCanvasApi } from "../lib/ipc";
 import {
   addPage,
@@ -56,6 +57,7 @@ import {
 } from "../shared/design-canvas/tweaks";
 import { postToDesignPage } from "../shared/design-canvas/bridge-messages";
 import { useDesignDrawing, type DesignDrawTool } from "./design-drawing";
+import { DesignExpandButton } from "./design-expand";
 import { DesignPresentBar, DesignPresentButton, presentationKey, type DesignPresentation } from "./design-present";
 import {
   DESIGN_PANEL_TABS,
@@ -308,6 +310,14 @@ function LoadedDesignCanvas({
     },
     [],
   );
+  // A design-mode message carries the selection and the canvas's size on screen.
+  React.useEffect(() => {
+    noteDesignCanvasView(chatId, {
+      selection: [...selection],
+      ...(viewSize.w >= 1 && viewSize.h >= 1 ? { viewSize: { w: viewSize.w, h: viewSize.h } } : {}),
+    });
+  }, [chatId, selection, viewSize]);
+  React.useEffect(() => () => noteDesignCanvasView(chatId, null), [chatId]);
 
   const versionOf = React.useCallback(
     (path: string | undefined) => (path ? (versions.paths.get(path) ?? 0) : 0),
@@ -353,7 +363,7 @@ function LoadedDesignCanvas({
   }, [doc, missing, frameVersionOf, viewport, viewSize, selection, entered]);
 
   const nodes = React.useMemo(() => nodesFromCanvas(doc, selection), [doc, selection]);
-  const comments = useDesignComments({ chatId, doc, change, flow, wrapper, live, versionOf });
+  const comments = useDesignComments({ chatId, doc, change, flush, flow, wrapper, live, versionOf });
   const pageWindow = React.useCallback((frameId: string) => frameIframe(wrapper.current, frameId)?.contentWindow ?? null, []);
   const reloadPath = React.useCallback(
     (path: string, keep?: string) => {
@@ -1201,13 +1211,19 @@ function LoadedDesignCanvas({
             resolveKey={resolveKey}
             presenting={presentation !== null}
             actions={
-              <>
+              <div
+                role="toolbar"
+                aria-label="Canvas view"
+                className="glass-surface flex items-center gap-0.5 rounded-button p-1 shadow-control"
+              >
                 <DesignPresentButton onPresent={() => present(null)} />
+                <div aria-hidden className="mx-1 h-4 w-px shrink-0 bg-separator" />
+                <DesignExpandButton />
                 <DesignPanelButton
                   open={panel.open}
                   onToggle={() => setPanel((current) => ({ ...current, open: !current.open }))}
                 />
-              </>
+              </div>
             }
             overlay={
               presentation ? (

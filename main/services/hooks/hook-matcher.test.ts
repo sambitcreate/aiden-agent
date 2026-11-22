@@ -52,3 +52,13 @@ test("a Bash matcher covers every tool that runs a shell", () => {
   }
   assert.equal(hookMatcherMatches("Bash", "read_file"), false);
 });
+
+test("a Write matcher also covers generate_image, which can save its image as a workspace file", () => {
+  for (const matcher of ["Write", "write_file", "Write|Edit"]) {
+    assert.equal(hookMatcherMatches(matcher, "generate_image"), true, matcher);
+  }
+  assert.equal(hookMatcherMatches("generate_image", "generate_image"), true);
+  assert.equal(hookMatcherMatches("generate_image", "write_file"), false, "a generate_image matcher stays its own");
+  assert.equal(hookMatcherMatches("Bash", "generate_image"), false);
+  assert.equal(hookMatcherMatches("Write", "display_image"), false);
+});

@@ -138,13 +138,25 @@ struct AidenAppShellView: View {
     @Environment(AidenAppearanceStore.self) private var appearance
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @Environment(\.aidenPalette) private var palette
+    private enum ShellSheet: Identifiable {
+        case runningChats
+        case pairing(showsDesktopCheck: Bool)
+
+        var id: String {
+            switch self {
+            case .runningChats: "running-chats"
+            case .pairing(let showsDesktopCheck): "pairing-\(showsDesktopCheck)"
+            }
+        }
+    }
+
     /// The navigation and compose flow, made on the shell's first draw. `init`
     /// runs on every ContentView render and `State` keeps only its first value,
     /// so building them there read and decoded the saved navigation each time.
     @State private var parts = AidenAppShellParts()
     @State private var botSummaries: [AidenHostObjectID: AidenBotSummary] = [:]
     @State private var searchText = ""
-    @State private var showsRunningChats = false
+    @State private var activeSheet: ShellSheet?
     /// Each list tab's split columns.
     @State private var inboxColumns = AidenSplitColumns()
     @State private var botsColumns = AidenSplitColumns()
@@ -249,6 +261,14 @@ struct AidenAppShellView: View {
         AidenCatchUpQueue(rows: inboxStore.inbox.needsYou)
     }
 
+    private var hasNoComputers: Bool {
+        coordinator.installationStore.installations.isEmpty
+    }
+
+    private func openAddComputer() {
+        activeSheet = .pairing(showsDesktopCheck: hasNoComputers)
+    }
+
     var body: some View {
         TabView(selection: Bindable(navigation).tab) {
             Tab("Inbox", systemImage: "tray", value: AidenAppTab.inbox) {
@@ -265,30 +285,13 @@ struct AidenAppShellView: View {
 
             Tab("Bots", systemImage: AidenChromeSymbols.bots, value: AidenAppTab.bots) {
                 splitTab(.bots, columns: botsColumns, empty: .bots) { selection in
-                    AidenBotsTabView(
-                        coordinator: coordinator,
-                        store: inboxStore,
-                        navigation: navigation,
-                        availability: botsAvailability,
-                        selection: selection,
-                        onOpenBot: { id, bot in botSummaries[id] = bot },
-                        onOpened: { hideOverlaidList(on: .bots) }
-                    )
+                    botsList(selection: selection)
                 }
             }
 
             Tab("Workspaces", systemImage: "folder", value: AidenAppTab.workspaces) {
                 splitTab(.workspaces, columns: workspacesColumns, empty: .workspaces) { selection in
-                    AidenWorkspacesTabView(
-                        coordinator: coordinator,
-                        store: inboxStore,
-                        newWork: newWork,
-                        besideList: navigation.besideList,
-                        selection: selection
-                    ) { route in
-                        navigation.pick(route, fromListOf: .workspaces)
-                        hideOverlaidList(on: .workspaces)
-                    }
+                    workspacesList(selection: selection)
                 }
             }
 
@@ -296,7 +299,12 @@ struct AidenAppShellView: View {
                 // The field is on this stack's root view: on the `TabView` it would
                 // sit on every tab.
                 NavigationStack {
-                    AidenSearchTabView(model: built.search, inboxStore: inboxStore) { navigation.open($0) }
+                    AidenSearchTabView(
+                        model: built.search,
+                        inboxStore: inboxStore,
+                        hasNoComputers: hasNoComputers,
+                        onAddComputer: openAddComputer
+                    ) { navigation.open($0) }
                 }
             }
         }
@@ -318,7 +326,7 @@ struct AidenAppShellView: View {
         .aidenRunningAccessory(
             isEnabled: runningHome == .accessory && inboxStore.hasRunningChats && !navigation.showsConversation
         ) {
-            AidenRunningAccessoryHost(store: inboxStore, onOpen: openRow) { showsRunningChats = true }
+            AidenRunningAccessoryHost(store: inboxStore, onOpen: openRow) { activeSheet = .runningChats }
         }
         // A new tab view each time the display opens or closes, as at launch.
         // A closed iPhone Duo's side rail reads the showing tab's Back and
@@ -328,10 +336,20 @@ struct AidenAppShellView: View {
         // are the shell's, so the new one opens where the old one was.
         .id(navigation.besideList)
         .aidenNewWorkPresentation(newWork, coordinator: coordinator)
-        .sheet(isPresented: $showsRunningChats) {
-            AidenRunningChatsSheet(store: inboxStore) { route in
-                showsRunningChats = false
-                openRow(route)
+        .sheet(item: $activeSheet) { sheet in
+            switch sheet {
+            case .runningChats:
+                AidenRunningChatsSheet(store: inboxStore) { route in
+                    activeSheet = nil
+                    openRow(route)
+                }
+            case .pairing(let showsDesktopCheck):
+                AidenPairingView(
+                    coordinator: coordinator,
+                    showsDesktopCheck: showsDesktopCheck,
+                    onClose: { activeSheet = nil },
+                    onPaired: { activeSheet = nil }
+                )
             }
         }
         // On every tab, the accessory and its sheet, so a machine page reached from
@@ -444,6 +462,8 @@ struct AidenAppShellView: View {
         AidenInboxTabRootView(
             store: inboxStore,
             runningHome: runningHome,
+            hasNoComputers: hasNoComputers,
+            onAddComputer: openAddComputer,
             onOpen: openRow,
             onDelete: deleteChat,
             onOpenMachines: { navigation.open(.machines) },
@@ -451,7 +471,7 @@ struct AidenAppShellView: View {
                 markViewed(navigation.startCatchUp(in: catchUpQueue))
                 hideOverlaidList(on: .inbox)
             },
-            onShowRunning: { showsRunningChats = true },
+            onShowRunning: { activeSheet = .runningChats },
             selection: selection,
             // In a side rail the system lays the outgoing chip over the
             // incoming chat while it pushes, so it goes with the list.
@@ -461,6 +481,36 @@ struct AidenAppShellView: View {
             AidenConnectionNotice(coordinator: coordinator)
         }
         .toolbar { inboxToolbar }
+    }
+
+    /// The Bots list. Its own function, as the Inbox's is, so the tab view
+    /// type-checks in reasonable time.
+    private func botsList(selection: AidenAppRoute?) -> some View {
+        AidenBotsTabView(
+            coordinator: coordinator,
+            store: inboxStore,
+            navigation: navigation,
+            availability: botsAvailability,
+            selection: selection,
+            onAddComputer: openAddComputer,
+            onOpenBot: { id, bot in botSummaries[id] = bot },
+            onOpened: { hideOverlaidList(on: .bots) }
+        )
+    }
+
+    /// The Workspaces list.
+    private func workspacesList(selection: AidenAppRoute?) -> some View {
+        AidenWorkspacesTabView(
+            coordinator: coordinator,
+            store: inboxStore,
+            newWork: newWork,
+            besideList: navigation.besideList,
+            selection: selection,
+            onAddComputer: openAddComputer
+        ) { route in
+            navigation.pick(route, fromListOf: .workspaces)
+            hideOverlaidList(on: .workspaces)
+        }
     }
 
     private func deleteChat(_ id: AidenHostObjectID) {
@@ -491,7 +541,13 @@ struct AidenAppShellView: View {
         }
         ToolbarSpacer(.fixed, placement: .primaryAction)
         ToolbarItem(placement: .primaryAction) {
-            AidenNewWorkComposeButton(flow: newWork)
+            if hasNoComputers {
+                Button(action: openAddComputer) {
+                    Label("Add Computer", systemImage: "plus")
+                }
+            } else {
+                AidenNewWorkComposeButton(flow: newWork)
+            }
         }
         .aidenKeptLongestInBar()
     }

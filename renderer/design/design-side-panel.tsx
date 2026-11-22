@@ -218,19 +218,18 @@ function PanelSection({ title, children }: { title: string; children: React.Reac
 /** The canvas's top-right button that shows or hides the panel. */
 export function DesignPanelButton({ open, onToggle }: { open: boolean; onToggle(): void }) {
   return (
-    <div className="glass-surface rounded-button p-1 shadow-control">
-      <Button
-        iconOnly
-        variant={open ? "muted" : "transparent"}
-        aria-label={open ? "Hide side panel" : "Show side panel"}
-        aria-pressed={open}
-        aria-keyshortcuts="I"
-        title="Side panel (I)"
-        onClick={onToggle}
-      >
-        <PanelRight aria-hidden />
-      </Button>
-    </div>
+    <Button
+      iconOnly
+      variant="bar"
+      size="small"
+      aria-label={open ? "Hide side panel" : "Show side panel"}
+      aria-pressed={open}
+      aria-keyshortcuts="I"
+      title="Side panel (I)"
+      onClick={onToggle}
+    >
+      <PanelRight aria-hidden />
+    </Button>
   );
 }
 

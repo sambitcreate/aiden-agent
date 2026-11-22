@@ -38,6 +38,7 @@ struct AidenWorkspacesTabView: View {
     let newWork: AidenNewWorkChatFlow
     var besideList = false
     var selection: AidenAppRoute? = nil
+    var onAddComputer: (() -> Void)? = nil
     var onOpen: (AidenAppRoute) -> Void = { _ in }
 
     /// A row of the single-machine list, which shows only the default machine's
@@ -69,23 +70,28 @@ struct AidenWorkspacesTabView: View {
     }
 
     var body: some View {
-        let machines = machines
-        AidenWorkspacesDirectoryView(
-            coordinator: coordinator,
-            archiveStore: coordinator.workspaceArchiveStore,
-            tabChrome: AidenWorkspacesTabChrome(
-                route: route,
-                newWork: newWork,
-                machines: machines,
-                besideList: besideList,
-                selection: selection,
-                onOpen: onOpen
+        if coordinator.installationStore.installations.isEmpty, let onAddComputer {
+            AidenNoComputersEmptyView(surface: .workspaces, onAddComputer: onAddComputer)
+                .navigationTitle("Workspaces")
+        } else {
+            let machines = machines
+            AidenWorkspacesDirectoryView(
+                coordinator: coordinator,
+                archiveStore: coordinator.workspaceArchiveStore,
+                tabChrome: AidenWorkspacesTabChrome(
+                    route: route,
+                    newWork: newWork,
+                    machines: machines,
+                    besideList: besideList,
+                    selection: selection,
+                    onOpen: onOpen
+                )
             )
-        )
-        .safeAreaInset(edge: .top, spacing: 0) {
-            // Grouped, each machine says its own state under its name.
-            if machines == nil {
-                AidenConnectionNotice(coordinator: coordinator)
+            .safeAreaInset(edge: .top, spacing: 0) {
+                // Grouped, each machine says its own state under its name.
+                if machines == nil {
+                    AidenConnectionNotice(coordinator: coordinator)
+                }
             }
         }
     }

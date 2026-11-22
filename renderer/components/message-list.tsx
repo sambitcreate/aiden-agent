@@ -44,6 +44,7 @@ import { isChatHtmlArtifact, isChatImageArtifact } from "../shared/chat-artifact
 import { attachmentsShownWithVisuals } from "../shared/visual-snapshots";
 import { HtmlArtifactDraftFrame, HtmlArtifactFrame, type GuestPromptHandler } from "./html-artifact-frame";
 import { AidenUiBlock } from "./aiden-ui/aiden-ui-block";
+import { useKeepVisualActions, useSendToCanvasActions } from "../lib/visual-menu-actions";
 import { AIDEN_UI_LIMITS, type ChatUiVisualV1 } from "../shared/aiden-ui/types";
 import { isWireSafeKey } from "../shared/aiden-ui/visual";
 import {
@@ -67,6 +68,7 @@ import {
 import {
   hasActiveThinkingStep,
   isToolStep,
+  type AgentStep,
   type GenerationTimeline,
 } from "../shared/generation-timeline";
 import type { SubagentRunSnapshot } from "../shared/subagent-runs";
@@ -208,12 +210,27 @@ const EMPTY_WIDE_VISUALS: ReadonlySet<string> = new Set();
  */
 const VisualFollowUpBusyContext = React.createContext(false);
 
-function FollowUpAwareHtmlArtifactFrame(props: Omit<React.ComponentProps<typeof HtmlArtifactFrame>, "followUpBusy">) {
-  return <HtmlArtifactFrame {...props} followUpBusy={React.useContext(VisualFollowUpBusyContext)} />;
+/** The `subagent` tool call that started a reply's subagents; their card stands for it. */
+function isSubagentLaunchStep(step: AgentStep): boolean {
+  return isToolStep(step) && step.toolName === "subagent";
 }
 
-function FollowUpAwareAidenUiBlock(props: Omit<React.ComponentProps<typeof AidenUiBlock>, "followUpBusy">) {
-  return <AidenUiBlock {...props} followUpBusy={React.useContext(VisualFollowUpBusyContext)} />;
+function FollowUpAwareHtmlArtifactFrame(
+  props: Omit<React.ComponentProps<typeof HtmlArtifactFrame>, "followUpBusy" | "actions">,
+) {
+  const actions = useSendToCanvasActions(props.chatId, props.artifact.mediaId);
+  return <HtmlArtifactFrame {...props} actions={actions} followUpBusy={React.useContext(VisualFollowUpBusyContext)} />;
+}
+
+function FollowUpAwareAidenUiBlock({
+  messageId,
+  ...props
+}: Omit<React.ComponentProps<typeof AidenUiBlock>, "followUpBusy" | "actions"> & {
+  /** The settled reply it belongs to; a visual still streaming has none and cannot be kept yet. */
+  messageId?: string;
+}) {
+  const actions = useKeepVisualActions(props.draft ? undefined : messageId, props.visual.id);
+  return <AidenUiBlock {...props} actions={actions} followUpBusy={React.useContext(VisualFollowUpBusyContext)} />;
 }
 
 type RenderVisual = (
@@ -329,7 +346,9 @@ function AssistantResponse({
     const activityTimeline = timeline
       ? activityTimelineFragment(
           timeline,
-          timeline.steps.filter((step) => isToolStep(step) && !isQuestionnaireStep(step)),
+          timeline.steps.filter(
+            (step) => isToolStep(step) && !isQuestionnaireStep(step) && !(subagentChips && isSubagentLaunchStep(step)),
+          ),
         )
       : null;
     // Same slots as the chronological layout below, with the prose keyed like
@@ -386,9 +405,7 @@ function AssistantResponse({
     if (row.kind === "text") lastTextIndex = index;
   });
   const subagentActivityKey = rows.find(
-    (row) =>
-      row.kind === "activity" &&
-      row.steps.some((step) => isToolStep(step) && step.toolName === "subagent"),
+    (row) => row.kind === "activity" && row.steps.some(isSubagentLaunchStep),
   )?.key;
 
   return (
@@ -420,7 +437,11 @@ function AssistantResponse({
           return (
             <React.Fragment key={row.key}>
               <ActivityFeed
-                timeline={activityTimelineFragment(timeline, row.steps)}
+                // The subagent card stands for its launch call, so the call is not listed again here.
+                timeline={activityTimelineFragment(
+                  timeline,
+                  subagentChips ? row.steps.filter((step) => !isSubagentLaunchStep(step)) : row.steps,
+                )}
                 animate={streaming}
                 mode={workDetails}
                 retainDetails={retainWorkDetails || (streaming && !streamComplete)}
@@ -979,6 +1000,7 @@ export function MessageList({
       <FollowUpAwareAidenUiBlock
         key={`ui:${visual.id}`}
         visual={visual}
+        messageId={message.id}
         attachments={message.attachments}
         onAction={(action) => {
           if (action.kind === "send") stableVisualPrompt(action.text, visual.id);

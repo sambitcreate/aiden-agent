@@ -123,6 +123,7 @@ test("image inspection propagates cancellation instead of turning revocation int
 });
 
 test("a successful image inspection survives local usage-store failure", async () => {
+  const sent: Array<{ cacheRetention?: string } | undefined> = [];
   const response: AssistantMessage = {
     role: "assistant",
     content: [{ type: "text", text: "The receipt total is $12.00." }],
@@ -153,7 +154,12 @@ test("a successful image inspection survives local usage-store failure", async (
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
       },
       apiKey: "private-key",
-      streams: { streamSimple: () => ({ result: async () => response }) },
+      streams: {
+        streamSimple: (_model: unknown, _context: unknown, options?: { cacheRetention?: string }) => {
+          sent.push(options);
+          return { result: async () => response };
+        },
+      },
     }) as never,
     recordUsage: async () => {
       throw new Error("usage store unavailable");
@@ -166,4 +172,6 @@ test("a successful image inspection survives local usage-store failure", async (
   });
 
   assert.equal(text(inspected), "The receipt total is $12.00.");
+  // One inspection is never resent, so it writes no prompt cache.
+  assert.deepEqual(sent.map((options) => options?.cacheRetention), ["none"]);
 });

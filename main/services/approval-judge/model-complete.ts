@@ -8,6 +8,7 @@ import type { StoredProvider } from "../types.js";
 import type { UsageRequestRecord } from "../usage-store-core.js";
 import { assistantUsageRecord, isLocalModelProvider, unreportedUsageRecord } from "../usage-accounting.js";
 import type { ApprovalJudgeComplete } from "./judge.js";
+import { oneOffCallOptions } from "../side-call-prefix.js";
 
 export interface ApprovalJudgeRuntime {
   model: Model<Api>;
@@ -43,7 +44,7 @@ export function approvalJudgeComplete(runtime: ApprovalJudgeRuntime, accounting:
             systemPrompt: request.systemPrompt,
             messages: [{ role: "user", content: [{ type: "text", text: request.prompt }], timestamp: Date.now() }],
           }),
-          {
+          oneOffCallOptions({
             apiKey: runtime.apiKey,
             headers: runtime.headers,
             signal,
@@ -51,8 +52,7 @@ export function approvalJudgeComplete(runtime: ApprovalJudgeRuntime, accounting:
             maxTokens: request.maxTokens,
             timeoutMs: request.timeoutMs,
             maxRetries: 0,
-            cacheRetention: "none",
-          },
+          }),
         )
         .result();
     } catch (error) {

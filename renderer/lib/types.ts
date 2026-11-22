@@ -951,6 +951,8 @@ export interface AppSettings extends AidenLiveSettingsFields {
   compactionModelOverrides?: CompactionModelOverrides;
   /** Explicit opt-in to paid cache refreshes during active foreground runs. */
   cacheWarmingEnabled?: boolean;
+  /** Explicit opt-in to hour-long prompt caches on the providers that offer them. */
+  longPromptCacheRetention?: boolean;
   /** Longest wait, in hours, for a usage limit to clear before a reply fails; 0 turns waiting off. Absent means 6. */
   usageLimitWaitHours?: import("../shared/usage-limits").UsageLimitWaitHours;
   /**
@@ -1232,6 +1234,8 @@ export interface ChatStartParams {
   visualize?: boolean;
   /** Settings → Appearance → Inline visuals for this turn. */
   inlineVisuals?: import("../shared/appearance").InlineVisualsMode;
+  /** A design-mode message: the frames the person had selected and the canvas region's size. */
+  designView?: import("../shared/design-canvas/canvas-summary").DesignViewState;
 }
 
 export interface ApprovalRequest {

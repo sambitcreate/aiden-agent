@@ -31,6 +31,8 @@ struct AidenInboxTabView: View {
     var moreChats = AidenInboxMoreChats.none
     var roster = AidenMachineRoster()
     var filter = Binding.constant(AidenMachineFilter.all)
+    var hasNoComputers = false
+    var onAddComputer: (() -> Void)? = nil
     /// A chat row opens its chat, a Bot row its Bot.
     let onOpen: (AidenAppRoute) -> Void
     let onAction: (AidenInboxRowAction, AidenHostObjectID) -> Void
@@ -353,41 +355,45 @@ struct AidenInboxTabView: View {
     /// Over the list, not in it, so it centres and pull to refresh still works.
     @ViewBuilder
     private var emptyState: some View {
-        switch state {
-        case .rows where runningHome.leavesListEmpty(inbox):
-            ContentUnavailableView(
-                "Nothing needs you yet",
-                systemImage: "tray",
-                description: Text("Running chats are above the tab bar until they finish or need you.")
-            )
-        case .rows, .loading:
-            EmptyView()
-        case .caughtUp:
-            ContentUnavailableView(
-                "All caught up",
-                systemImage: "tray",
-                description: Text("Chats that need you or have news show up here.")
-            )
-        case .noChats:
-            ContentUnavailableView(
-                "No chats yet",
-                systemImage: "tray",
-                description: Text("Start a new chat to begin.")
-            )
-        case .offline(let machines):
-            unavailable(
-                machines == 1 ? "Can’t reach your computer" : "Can’t reach your computers",
-                systemImage: "wifi.slash",
-                description: "Saved chats appear here after this phone has connected once."
-            )
-        case .failed(let message):
-            unavailable("Chats unavailable", systemImage: "tray", description: message)
-        case .allHidden:
-            ContentUnavailableView(
-                "Every computer is hidden",
-                systemImage: "eye.slash",
-                description: Text("Turn off Hide from Inbox on a computer to see its chats here.")
-            )
+        if hasNoComputers, let onAddComputer {
+            AidenNoComputersEmptyView(surface: .inbox, onAddComputer: onAddComputer)
+        } else {
+            switch state {
+            case .rows where runningHome.leavesListEmpty(inbox):
+                ContentUnavailableView(
+                    "Nothing needs you yet",
+                    systemImage: "tray",
+                    description: Text("Running chats are above the tab bar until they finish or need you.")
+                )
+            case .rows, .loading:
+                EmptyView()
+            case .caughtUp:
+                ContentUnavailableView(
+                    "All caught up",
+                    systemImage: "tray",
+                    description: Text("Chats that need you or have news show up here.")
+                )
+            case .noChats:
+                ContentUnavailableView(
+                    "No chats yet",
+                    systemImage: "tray",
+                    description: Text("Start a new chat to begin.")
+                )
+            case .offline(let machines):
+                unavailable(
+                    machines == 1 ? "Can’t reach your computer" : "Can’t reach your computers",
+                    systemImage: "wifi.slash",
+                    description: "Saved chats appear here after this phone has connected once."
+                )
+            case .failed(let message):
+                unavailable("Chats unavailable", systemImage: "tray", description: message)
+            case .allHidden:
+                ContentUnavailableView(
+                    "Every computer is hidden",
+                    systemImage: "eye.slash",
+                    description: Text("Turn off Hide from Inbox on a computer to see its chats here.")
+                )
+            }
         }
     }
 
@@ -411,6 +417,8 @@ struct AidenInboxTabRootView: View {
 
     let store: AidenUnifiedInboxStore
     var runningHome = AidenRunningHome.accessory
+    var hasNoComputers = false
+    var onAddComputer: (() -> Void)? = nil
     let onOpen: (AidenAppRoute) -> Void
     var onDelete: ((AidenHostObjectID) -> Void)? = nil
     var onOpenMachines: () -> Void = {}
@@ -435,6 +443,8 @@ struct AidenInboxTabRootView: View {
             moreChats: store.moreChats,
             roster: store.roster,
             filter: Binding(get: { store.inboxFilter }, set: { store.filter = $0 }),
+            hasNoComputers: hasNoComputers,
+            onAddComputer: onAddComputer,
             onOpen: onOpen,
             onAction: { action, id in
                 Task { await store.perform(action, on: id) }

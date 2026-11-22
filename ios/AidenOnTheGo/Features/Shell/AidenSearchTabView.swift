@@ -7,6 +7,8 @@ struct AidenSearchTabView: View {
     /// builds this view again.
     @Bindable var model: AidenSearchModel
     let inboxStore: AidenUnifiedInboxStore
+    var hasNoComputers = false
+    var onAddComputer: (() -> Void)? = nil
     let onOpen: (AidenAppRoute) -> Void
 
     @FocusState private var searchIsFocused: Bool
@@ -37,7 +39,9 @@ struct AidenSearchTabView: View {
 
     @ViewBuilder
     private var content: some View {
-        if !model.hasQuery {
+        if hasNoComputers, let onAddComputer, !model.hasQuery {
+            AidenNoComputersEmptyView(surface: .search, onAddComputer: onAddComputer)
+        } else if !model.hasQuery {
             scrolling {
                 ContentUnavailableView(
                     "Search",

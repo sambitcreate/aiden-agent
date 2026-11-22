@@ -1,5 +1,6 @@
 import AVFoundation
 import SwiftUI
+import UIKit
 
 struct AidenDiscoveredAgent: Identifiable, Equatable {
     let id: String
@@ -10,6 +11,119 @@ struct AidenDiscoveredAgent: Identifiable, Equatable {
 enum AidenPairingAlertCopy {
     static let title = String(localized: "Aiden On The Go")
     static let fallbackMessage = String(localized: "Try again from Aiden Agent → Settings → Connections.")
+}
+
+enum AidenDesktopDownloadLinks {
+    static let macURL = URL(string: "https://chatwithaiden.com/")!
+    static let linuxURL = URL(string: "https://github.com/sambitcreate/aiden-agent")!
+    static let serverURL = URL(string: "https://github.com/sambitcreate/aiden-agent")!
+}
+
+enum AidenPairingSubmission: Equatable {
+    case payload(String)
+    case manual(endpoint: URL, code: String)
+}
+
+enum AidenPairingInputParser {
+    private static let allowedCodeScalars = Set("0123456789ABCDEFGHJKMNPQRSTVWXYZ")
+
+    /// Detects a full one-time pairing payload pasted into either input field.
+    static func fullPayload(from raw: String) -> String? {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        guard trimmed.hasPrefix("{")
+            || trimmed.hasPrefix("aiden-otg:")
+            || trimmed.hasPrefix("aiden-pair:") else {
+            return nil
+        }
+        guard let data = trimmed.data(using: .utf8),
+              (try? AidenRemoteJSONDecoder.decodePairingPayload(from: data)) != nil else {
+            return trimmed.hasPrefix("{") ? trimmed : nil
+        }
+        return trimmed
+    }
+
+    /// Normalizes a canonical URL or bare host[:port] (e.g. `mac.local:49220` or
+    /// `mac.tailnet.ts.net`) into a validated canonical `https://.../api/aiden/v1` URL.
+    /// Rejects plaintext `http://` and malformed endpoints.
+    static func normalizedEndpointURL(from raw: String) -> URL? {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        if isCanonicalAidenEndpoint(trimmed) {
+            return URL(string: trimmed)
+        }
+        let lowercased = trimmed.lowercased()
+        if lowercased.hasPrefix("http://") {
+            return nil
+        }
+
+        var candidate = trimmed
+        if !candidate.contains("://") {
+            candidate = "https://\(candidate)"
+        }
+        while candidate.hasSuffix("/") {
+            candidate.removeLast()
+        }
+        if !candidate.hasSuffix(AidenRemoteProtocol.basePath) {
+            candidate += AidenRemoteProtocol.basePath
+        }
+        guard isCanonicalAidenEndpoint(candidate) else { return nil }
+        return URL(string: candidate)
+    }
+
+    /// Formats a 20-character Crockford Base32 manual pairing code as 4-character
+    /// groups without mangling a pasted JSON/URI payload.
+    static func formattedManualCodeInput(_ value: String) -> String {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.hasPrefix("{") || trimmed.hasPrefix("aiden-") {
+            return value
+        }
+        guard value.unicodeScalars.allSatisfy({ scalar in
+            scalar.isASCII && (scalar.value == 32 || scalar.value == 45
+                || (48...57).contains(scalar.value)
+                || (65...90).contains(scalar.value)
+                || (97...122).contains(scalar.value))
+        }) else { return value }
+        let characters = value
+            .uppercased()
+            .filter { $0 != "-" && $0 != " " }
+            .prefix(20)
+        guard characters.allSatisfy(allowedCodeScalars.contains) else { return value }
+        return stride(from: 0, to: characters.count, by: 4).map { start in
+            let lower = characters.index(characters.startIndex, offsetBy: start)
+            let upper = characters.index(
+                lower,
+                offsetBy: min(4, characters.count - start),
+                limitedBy: characters.endIndex
+            ) ?? characters.endIndex
+            return String(characters[lower..<upper])
+        }.joined(separator: "-")
+    }
+
+    /// Resolves whether the current Address + Code fields can be submitted as a
+    /// full pasted payload or as a manual endpoint + setup code pair.
+    static func submission(address: String, code: String) -> AidenPairingSubmission? {
+        if let payload = fullPayload(from: code) ?? fullPayload(from: address) {
+            return .payload(payload)
+        }
+        guard let endpoint = normalizedEndpointURL(from: address),
+              (try? AidenRemoteClient.normalizeManualPairingCode(code)) != nil else {
+            return nil
+        }
+        return .manual(endpoint: endpoint, code: code)
+    }
+
+    /// Compact display form for a Bonjour-resolved endpoint (`host:port`).
+    static func compactDisplayAddress(_ endpoint: String) -> String {
+        var value = endpoint
+        if value.hasPrefix("https://") {
+            value.removeFirst("https://".count)
+        }
+        if value.hasSuffix(AidenRemoteProtocol.basePath) {
+            value.removeLast(AidenRemoteProtocol.basePath.count)
+        }
+        return value
+    }
 }
 
 enum AidenDiscoveryIdentity {
@@ -110,763 +224,784 @@ final class AidenDiscoveryModel: NSObject, ObservableObject, NetServiceBrowserDe
     }
 }
 
-enum AidenPairingMethod: String, CaseIterable, Identifiable, Hashable {
-    case scanQRCode
-    case nearbyMac
-    case privateAddress
-    case pastePayload
+/// Calm zero-computer empty state shared across the shell tabs.
+struct AidenNoComputersEmptyView: View {
+    enum Surface {
+        case inbox
+        case bots
+        case workspaces
+        case search
 
-    var id: String { rawValue }
-
-    static let primary: [AidenPairingMethod] = [
-        .scanQRCode,
-        .nearbyMac,
-        .privateAddress,
-    ]
-
-    static let advanced: [AidenPairingMethod] = [.pastePayload]
-
-    var tabTitle: String {
-        switch self {
-        case .scanQRCode: return String(localized: "QR")
-        case .nearbyMac: return String(localized: "Nearby")
-        case .privateAddress: return String(localized: "Tailscale")
-        case .pastePayload: return String(localized: "Payload")
+        var description: String {
+            switch self {
+            case .inbox:
+                String(localized: "Connect a Mac, Linux desktop, or server running Aiden to access your workspaces and Bots.")
+            case .bots:
+                String(localized: "Connect a computer running Aiden to see and chat with your Bots.")
+            case .workspaces:
+                String(localized: "Connect a computer running Aiden to browse workspaces and start chats.")
+            case .search:
+                String(localized: "Connect a computer running Aiden to search your chats and Bots.")
+            }
         }
     }
 
-    var title: String {
-        switch self {
-        case .scanQRCode: return String(localized: "Scan QR Code")
-        case .nearbyMac: return String(localized: "Nearby Computer + Setup Code")
-        case .privateAddress: return String(localized: "Private Address + Setup Code")
-        case .pastePayload: return String(localized: "Paste Pairing Payload")
+    let surface: Surface
+    let onAddComputer: () -> Void
+
+    @Environment(\.aidenPalette) private var palette
+
+    var body: some View {
+        VStack(spacing: AidenSpacing.l) {
+            Image(systemName: "point.3.connected.trianglepath.dotted")
+                .font(.system(size: 22, weight: .medium))
+                .foregroundStyle(palette.secondary)
+                .frame(width: 48, height: 48)
+                .background(palette.sidebar, in: RoundedRectangle(cornerRadius: AidenRadius.control, style: .continuous))
+                .accessibilityHidden(true)
+
+            VStack(spacing: AidenSpacing.s) {
+                Text("No computers connected")
+                    .font(.title3.bold())
+                    .foregroundStyle(palette.foreground)
+                    .multilineTextAlignment(.center)
+                Text(surface.description)
+                    .font(.subheadline)
+                    .foregroundStyle(palette.secondary)
+                    .multilineTextAlignment(.center)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .frame(maxWidth: 320)
+
+            Button(action: onAddComputer) {
+                Text("Add Computer")
+                    .font(.headline)
+                    .padding(.horizontal, AidenSpacing.xl)
+                    .foregroundStyle(palette.onFillAccent)
+            }
+            .controlSize(.large)
+            .aidenSolidFillTint()
+            .buttonStyle(.glassProminent)
+            .padding(.top, AidenSpacing.xs)
         }
-    }
-
-    var detail: String {
-        switch self {
-        case .scanQRCode:
-            return String(localized: "Scan the one-time QR shown on your computer.")
-        case .nearbyMac:
-            return String(localized: "Find your computer on local Wi-Fi, then enter its setup code.")
-        case .privateAddress:
-            return String(localized: "Enter the private Tailscale address and setup code shown on your computer.")
-        case .pastePayload:
-            return String(localized: "Use the complete one-time payload when the camera is unavailable.")
-        }
-    }
-
-    var systemImage: String {
-        switch self {
-        case .scanQRCode: return "qrcode.viewfinder"
-        case .nearbyMac: return "wifi"
-        case .privateAddress: return "network"
-        case .pastePayload: return "doc.on.clipboard"
-        }
-    }
-
-    var badge: String? {
-        switch self {
-        case .scanQRCode: return String(localized: "Recommended")
-        case .nearbyMac: return String(localized: "Local Network")
-        case .privateAddress: return String(localized: "Tailscale")
-        case .pastePayload: return nil
-        }
-    }
-}
-
-enum AidenMobileOnboardingPhase: String, CaseIterable, Identifiable, Hashable {
-    case build
-    case extend
-    case control
-
-    var id: String { rawValue }
-
-    var eyebrow: String {
-        switch self {
-        case .build: return String(localized: "BOTS AND WORKSPACES")
-        case .extend: return String(localized: "CHOOSE AND EXTEND")
-        case .control: return String(localized: "AUTOMATE AND STAY IN CONTROL")
-        }
-    }
-
-    var title: String {
-        switch self {
-        case .build: return String(localized: "Choose how Aiden helps")
-        case .extend: return String(localized: "Bring the right intelligence")
-        case .control: return String(localized: "Keep Aiden moving")
-        }
-    }
-
-    var detail: String {
-        switch self {
-        case .build:
-            return String(localized: "Use Workspaces for project-focused work with files, commands, review, and Git. Expand folders as needed and preview source before editing. When Bots are available on your paired computer, use them as reusable helpers from the Bots tab.")
-        case .extend:
-            return String(localized: "Choose models and thinking levels, attach images, use web search, and extend Aiden with skills and connectors.")
-        case .control:
-            return String(localized: "Approve actions, manage scheduled work, use voice, and follow private usage from your iPhone or iPad.")
-        }
-    }
-}
-
-enum AidenMobileOnboardingLayout {
-    static let maximumContentWidth: CGFloat = 620
-    static let maximumContentHeight: CGFloat = 760
-    static let maximumActionWidth: CGFloat = 360
-    static let actionHorizontalPadding: CGFloat = 24
-    static let actionBottomPadding: CGFloat = 12
-    static let maximumArtworkWidth: CGFloat = 320
-    static let artworkHorizontalPadding: CGFloat = 24
-
-    static func contentWidth(for availableWidth: CGFloat) -> CGFloat {
-        max(0, min(availableWidth, maximumContentWidth))
-    }
-
-    /// The art tile keeps the vignette canvas's aspect ratio and shrinks with
-    /// narrow windows instead of cropping more of it.
-    static func artworkSize(for contentWidth: CGFloat) -> CGSize {
-        let canvas = AidenOnboardingArtwork.canvas
-        let width = max(0, min(maximumArtworkWidth, contentWidth - 2 * artworkHorizontalPadding))
-        return CGSize(width: width, height: width * canvas.height / canvas.width)
-    }
-
-    static func contentHeight(for availableHeight: CGFloat) -> CGFloat {
-        max(0, min(availableHeight, maximumContentHeight))
+        .padding(.horizontal, AidenSpacing.xxl)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(palette.canvas.ignoresSafeArea())
     }
 }
 
 struct AidenPairingView: View {
+    private enum Route: Hashable {
+        case getDesktop
+        case addComputer
+    }
+
+    private enum Field: Hashable {
+        case address
+        case code
+    }
+
     @Bindable var coordinator: AidenRemoteCoordinator
-    @Environment(AidenAppearanceStore.self) private var appearance
-    @Environment(\.aidenPalette) private var palette
-    @Environment(\.aidenCodeTypography) private var codeTypography
+    let showsDesktopCheck: Bool
+    var onClose: (() -> Void)?
     var onPaired: (() -> Void)?
 
+    @Environment(\.aidenPalette) private var palette
+    @Environment(\.aidenCodeTypography) private var codeTypography
+    @Environment(\.openURL) private var openURL
+    @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+
     @StateObject private var discovery = AidenDiscoveryModel()
-    @State private var pairingPayload = ""
-    @State private var manualCode = ""
-    @State private var manualEndpoint = ""
+    @State private var path: [Route] = []
+    @State private var addressInput = ""
+    @State private var codeInput = ""
     @State private var selectedAgentID: String?
-    @State private var selectedPairingMethod: AidenPairingMethod = .scanQRCode
-    @State private var selectedOnboardingPhase: AidenMobileOnboardingPhase = .build
-    @State private var isShowingScanner = false
-    @State private var isShowingAppearance = false
-    @State private var isShowingPayloadFallback = false
+    @State private var inlineError: String?
+    @State private var isCameraActive = false
+    @State private var scanComplete = false
+    @State private var showsCameraPermissionAlert = false
     @State private var pairingTask: Task<Void, Never>?
     @State private var hapticScope = UUID()
-    @State private var step: Int
-
-    private let onIntroductionComplete: (() -> Void)?
+    @FocusState private var focusedField: Field?
 
     init(
         coordinator: AidenRemoteCoordinator,
-        showsIntroduction: Bool = true,
-        onIntroductionComplete: (() -> Void)? = nil,
+        showsDesktopCheck: Bool = false,
+        onClose: (() -> Void)? = nil,
         onPaired: (() -> Void)? = nil
     ) {
         self.coordinator = coordinator
-        self.onIntroductionComplete = onIntroductionComplete
+        self.showsDesktopCheck = showsDesktopCheck
+        self.onClose = onClose
         self.onPaired = onPaired
-        _step = State(initialValue: onPaired == nil && showsIntroduction ? 0 : 2)
     }
 
-    private var canPair: Bool {
-        !pairingPayload.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !coordinator.isMutating
-    }
-
-    private var manualEndpointURL: URL? {
-        let value = manualEndpoint.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard isCanonicalAidenEndpoint(value) else { return nil }
-        return URL(string: value)
-    }
-
-    private var canPairManually: Bool {
-        (try? AidenRemoteClient.normalizeManualPairingCode(manualCode)) != nil
-            && manualEndpointURL != nil
-            && !coordinator.isMutating
+    private var submission: AidenPairingSubmission? {
+        guard !coordinator.isMutating else { return nil }
+        return AidenPairingInputParser.submission(address: addressInput, code: codeInput)
     }
 
     var body: some View {
-        NavigationStack {
+        NavigationStack(path: $path) {
             Group {
-                switch step {
-                case 0: welcomePage
-                case 1: preparePage
-                default: pairingPage
-                }
-            }
-            .background(palette.canvas)
-            .toolbar {
-                if step > 0 && onPaired == nil {
-                    ToolbarItem(placement: .topBarLeading) {
-                        Button { step -= 1 } label: { Image(systemName: "chevron.left") }
-                            .accessibilityLabel("Back")
-                    }
-                }
-                ToolbarItem(placement: .topBarTrailing) {
-                    if step == 2 {
-                        Menu {
-                            Button {
-                                isShowingPayloadFallback = true
-                            } label: {
-                                Label("Paste Pairing Payload", systemImage: "doc.on.clipboard")
-                            }
-                            Button {
-                                isShowingAppearance = true
-                            } label: {
-                                Label("Appearance", systemImage: "circle.lefthalf.filled")
-                            }
-                        } label: {
-                            Image(systemName: AidenChromeSymbols.overflowMenu)
-                        }
-                        .accessibilityLabel("More pairing options")
-                    } else {
-                        Button {
-                            isShowingAppearance = true
-                        } label: {
-                            Image(systemName: "circle.lefthalf.filled")
-                        }
-                        .accessibilityLabel("Appearance")
-                    }
-                }
-            }
-            .overlay {
-                if coordinator.isMutating {
-                    ProgressView("Pairing…")
-                        .padding()
-                        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
-                }
-            }
-            .task(id: step) {
-                if step == 2 {
-                    discovery.start()
+                if showsDesktopCheck {
+                    desktopCheckPage
                 } else {
-                    discovery.stop()
+                    addComputerPage(isRoot: true)
                 }
             }
-            .onDisappear {
-                coordinator.haptics.deactivate(scope: hapticScope)
-                pairingTask?.cancel()
-                pairingTask = nil
-                discovery.stop()
-                pairingPayload = ""
-                manualCode = ""
-                manualEndpoint = ""
-                selectedAgentID = nil
-            }
-            .onAppear { coordinator.haptics.activate(scope: hapticScope) }
-            .sheet(isPresented: $isShowingScanner) {
-                NavigationStack {
-                    AidenQRCodeScanner { payload in
-                        pairingPayload = payload
-                        isShowingScanner = false
-                        startPairing { await coordinator.pair(qrPayload: payload) }
-                    }
-                    .ignoresSafeArea(edges: .bottom)
-                    .navigationTitle("Scan Pairing QR")
-                    .navigationBarTitleDisplayMode(.inline)
-                    .toolbar {
-                        ToolbarItem(placement: .cancellationAction) {
-                            Button("Cancel") { isShowingScanner = false }
-                        }
-                    }
+            .navigationDestination(for: Route.self) { route in
+                switch route {
+                case .getDesktop:
+                    getDesktopPage
+                case .addComputer:
+                    addComputerPage(isRoot: false)
                 }
             }
-            .sheet(isPresented: $isShowingAppearance) {
-                AidenAppearanceSettingsView(appearance: appearance)
-            }
-            .sheet(isPresented: $isShowingPayloadFallback) {
-                NavigationStack {
-                    pastePayloadPairingPage
-                        .toolbar {
-                            ToolbarItem(placement: .confirmationAction) {
-                                Button("Done") { isShowingPayloadFallback = false }
-                            }
-                        }
+        }
+        .background(palette.canvas.ignoresSafeArea())
+        .onAppear {
+            coordinator.haptics.activate(scope: hapticScope)
+            discovery.start()
+        }
+        .onDisappear {
+            coordinator.haptics.deactivate(scope: hapticScope)
+            pairingTask?.cancel()
+            pairingTask = nil
+            isCameraActive = false
+            discovery.stop()
+            addressInput = ""
+            codeInput = ""
+            selectedAgentID = nil
+            inlineError = nil
+        }
+        .alert("Camera access needed", isPresented: $showsCameraPermissionAlert) {
+            Button("Cancel", role: .cancel) {}
+            Button("Open Settings") {
+                if let url = URL(string: UIApplication.openSettingsURLString) {
+                    openURL(url)
                 }
             }
-            .alert(
-                AidenPairingAlertCopy.title,
-                isPresented: Binding(
-                    get: { coordinator.presentedError != nil },
-                    set: { if !$0 { coordinator.presentedError = nil } }
-                )
-            ) {
-                Button("OK", role: .cancel) { coordinator.presentedError = nil }
-            } message: {
-                Text(coordinator.presentedError ?? AidenPairingAlertCopy.fallbackMessage)
-            }
+        } message: {
+            Text("Allow camera access in Settings to scan the pairing QR, or enter the address and setup code below.")
         }
     }
 
-    private var welcomePage: some View {
-        GeometryReader { proxy in
-            VStack(spacing: 0) {
-                HStack(spacing: 10) {
-                    Image("AidenAppIcon")
-                        .resizable()
-                        .scaledToFit()
-                        .frame(width: 42, height: 42)
-                        .accessibilityHidden(true)
-                    VStack(alignment: .leading, spacing: 1) {
-                        Text("Aiden On The Go")
-                            .font(.headline)
-                        Text("Aiden, wherever you are.")
-                            .font(.caption)
-                            .foregroundStyle(palette.secondary)
-                    }
-                    Spacer()
-                }
-                .padding(.horizontal, 24)
-                .padding(.top, 16)
+    // MARK: - Step 1: Desktop Check
 
-                TabView(selection: $selectedOnboardingPhase) {
-                    ForEach(AidenMobileOnboardingPhase.allCases) { phase in
-                        onboardingPhasePage(
-                            phase,
-                            artworkSize: AidenMobileOnboardingLayout.artworkSize(
-                                for: AidenMobileOnboardingLayout.contentWidth(for: proxy.size.width)
-                            )
-                        )
-                            .tag(phase)
-                    }
-                }
-                .tabViewStyle(.page(indexDisplayMode: .never))
-                .accessibilityLabel("Aiden capabilities")
-
-            }
-            .frame(
-                width: AidenMobileOnboardingLayout.contentWidth(for: proxy.size.width),
-                height: AidenMobileOnboardingLayout.contentHeight(for: proxy.size.height)
-            )
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-        }
-        .safeAreaInset(edge: .bottom, spacing: 0) {
-            VStack(spacing: 12) {
-                onboardingPageIndicator
-                onboardingActionButton(action: advanceOnboarding) {
-                    Text(isOnboardingLastPage ? "Set Up Connection" : "Continue")
-                }
-            }
-            .padding(.bottom, AidenMobileOnboardingLayout.actionBottomPadding)
-        }
-        .navigationBarHidden(true)
-    }
-
-    private func onboardingPhasePage(_ phase: AidenMobileOnboardingPhase, artworkSize: CGSize) -> some View {
-        ViewThatFits(in: .vertical) {
-            VStack(spacing: 0) {
-                Spacer(minLength: 16)
-                onboardingPhaseContent(phase, artworkSize: artworkSize)
-                Spacer(minLength: 16)
-            }
-
-            ScrollView {
-                onboardingPhaseContent(phase, artworkSize: artworkSize)
-                    .padding(.vertical, 16)
-            }
-            .scrollIndicators(.hidden)
-        }
-    }
-
-    private func onboardingPhaseContent(_ phase: AidenMobileOnboardingPhase, artworkSize: CGSize) -> some View {
-        VStack(spacing: 22) {
-            AidenOnboardingArtwork(phase: phase, isActive: phase == selectedOnboardingPhase)
-                .frame(width: artworkSize.width, height: artworkSize.height)
-                .frame(maxWidth: .infinity)
-
-            VStack(spacing: 10) {
-                Text(phase.eyebrow)
-                    .font(.caption2.weight(.bold))
-                    .tracking(0.8)
-                    .foregroundStyle(palette.accent)
-                Text(phase.title)
-                    .font(.title.bold())
-                    .multilineTextAlignment(.center)
-                Text(phase.detail)
-                    .font(.subheadline)
-                    .foregroundStyle(palette.secondary)
-                    .multilineTextAlignment(.center)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            .frame(maxWidth: 480)
-            .padding(.horizontal, 26)
-        }
-        .frame(maxWidth: .infinity)
-    }
-
-    private var isOnboardingLastPage: Bool {
-        selectedOnboardingPhase == AidenMobileOnboardingPhase.allCases.last
-    }
-
-    private var onboardingPageIndicator: some View {
-        HStack(spacing: 4) {
-            ForEach(AidenMobileOnboardingPhase.allCases) { phase in
-                Button {
-                    selectedOnboardingPhase = phase
-                } label: {
-                    Capsule()
-                        .fill(phase == selectedOnboardingPhase ? palette.accent : palette.secondary.opacity(0.24))
-                        .frame(width: phase == selectedOnboardingPhase ? 22 : 7, height: 7)
-                        .frame(width: 34, height: 28)
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel(phase.title)
-                .accessibilityValue(phase == selectedOnboardingPhase ? "Current page" : "")
-            }
-        }
-    }
-
-    private func advanceOnboarding() {
-        if isOnboardingLastPage {
-            step = 1
-        } else if let index = AidenMobileOnboardingPhase.allCases.firstIndex(of: selectedOnboardingPhase) {
-            selectedOnboardingPhase = AidenMobileOnboardingPhase.allCases[index + 1]
-        }
-    }
-
-    private func onboardingActionButton<Label: View>(
-        action: @escaping () -> Void,
-        @ViewBuilder label: () -> Label
-    ) -> some View {
-        prominentGlassButton(action: action, label: label)
-            .frame(maxWidth: AidenMobileOnboardingLayout.maximumActionWidth)
-            .padding(.horizontal, AidenMobileOnboardingLayout.actionHorizontalPadding)
-    }
-
-    @ViewBuilder
-    private func prominentGlassButton<Label: View>(
-        action: @escaping () -> Void,
-        @ViewBuilder label: () -> Label
-    ) -> some View {
-        let button = Button(action: action) {
-            label()
-                .frame(maxWidth: .infinity)
-                .foregroundStyle(palette.onFillAccent)
-        }
-        .font(.headline)
-        .frame(maxWidth: .infinity)
-        .controlSize(.large)
-        .aidenSolidFillTint()
-
-        button.buttonStyle(.glassProminent)
-    }
-
-    private var preparePage: some View {
+    private var desktopCheckPage: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 28) {
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("Prepare your computer").font(.largeTitle.bold())
-                    Text("Your computer does the work. Your AI account keys stay there.")
+            VStack(alignment: .leading, spacing: AidenSpacing.xl) {
+                VStack(alignment: .leading, spacing: AidenSpacing.s) {
+                    Text("Do you have Aiden on your computer?")
+                        .font(.title2.bold())
+                        .foregroundStyle(palette.foreground)
+                    Text("Aiden On The Go connects directly to Aiden Agent on your Mac, Linux computer, or server.")
+                        .font(.subheadline)
                         .foregroundStyle(palette.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
+                .padding(.horizontal, AidenSpacing.xs)
 
-                pairingStep(number: 1, title: "Open Aiden Agent", detail: "On your computer, go to Settings → Connections.")
-                pairingStep(number: 2, title: "Connect your phone", detail: "Choose where you’ll use Aiden, then select Connect a device. Review what Aiden will enable.")
-                pairingStep(number: 3, title: "Scan to finish", detail: "Keep the QR or setup code visible. Both expire after five minutes and can be used once.")
-                Text("On a server, `aiden serve` shows the code in its terminal, or run `aiden remote pair lan`.")
-                    .font(.footnote)
-                    .foregroundStyle(palette.secondary)
-                Text("Read Aloud uses Aiden Agent’s settings on your computer. Turn it on there; selected response text is sent to Google only when you press Play. Charges may apply.")
-                    .font(.footnote)
-                    .foregroundStyle(palette.secondary)
+                VStack(spacing: 0) {
+                    NavigationLink(value: Route.addComputer) {
+                        desktopCheckRow(
+                            title: String(localized: "Yes, it’s installed"),
+                            subtitle: String(localized: "Scan a QR code or enter a setup code"),
+                            systemImage: "checkmark.circle",
+                            iconForeground: palette.accent,
+                            iconBackground: palette.accent.opacity(0.12)
+                        )
+                    }
+                    .buttonStyle(.plain)
 
-                VStack(alignment: .leading, spacing: 10) {
-                    Label("Only devices you connect can access Aiden", systemImage: "key.fill")
-                    Label("Encrypted connection to your computer", systemImage: "lock.shield.fill")
-                    Label("Remove access from your computer at any time", systemImage: "checkmark.shield")
+                    Divider().padding(.leading, 64)
+
+                    NavigationLink(value: Route.getDesktop) {
+                        desktopCheckRow(
+                            title: String(localized: "Not yet — get Aiden"),
+                            subtitle: String(localized: "Download for Mac, Linux, or server"),
+                            systemImage: "arrow.down.circle",
+                            iconForeground: palette.foreground,
+                            iconBackground: palette.sidebar
+                        )
+                    }
+                    .buttonStyle(.plain)
                 }
-                .font(.subheadline)
-                .foregroundStyle(palette.secondary)
+                .background(palette.raised, in: RoundedRectangle(cornerRadius: AidenRadius.card, style: .continuous))
+
+                if let firstAgent = discovery.agents.first {
+                    HStack(spacing: AidenSpacing.s) {
+                        Circle()
+                            .fill(palette.success)
+                            .frame(width: 8, height: 8)
+                            .accessibilityHidden(true)
+                        Text(
+                            discovery.agents.count == 1
+                                ? String(localized: "\(firstAgent.name) is already running on this Wi-Fi.")
+                                : String(localized: "\(discovery.agents.count) computers are already running on this Wi-Fi.")
+                        )
+                        .font(.footnote)
+                        .foregroundStyle(palette.secondary)
+                    }
+                    .padding(.horizontal, AidenSpacing.xs)
+                }
             }
-            .frame(maxWidth: AidenMobileOnboardingLayout.maximumContentWidth, alignment: .leading)
+            .frame(maxWidth: 560, alignment: .leading)
             .frame(maxWidth: .infinity)
-            .padding(24)
+            .padding(.horizontal, AidenSpacing.l)
+            .padding(.top, AidenSpacing.xl)
+            .padding(.bottom, AidenSpacing.xxl)
         }
-        .safeAreaInset(edge: .bottom, spacing: 0) {
-            onboardingActionButton(action: {
-                onIntroductionComplete?()
-                step = 2
-            }) {
-                Text("Scan the Code")
-            }
-            .padding(.bottom, AidenMobileOnboardingLayout.actionBottomPadding)
-        }
-        .navigationTitle("Connect")
+        .background(palette.canvas.ignoresSafeArea())
+        .navigationTitle("Connect Aiden")
         .navigationBarTitleDisplayMode(.inline)
-    }
-
-    private func pairingStep(number: Int, title: String, detail: String) -> some View {
-        HStack(alignment: .top, spacing: 14) {
-            Text("\(number)")
-                .font(.caption.bold())
-                .foregroundStyle(palette.onFillAccent)
-                .frame(width: 26, height: 26)
-                .background(palette.fillAccent, in: Circle())
-            VStack(alignment: .leading, spacing: 4) {
-                Text(title).font(.headline)
-                Text(detail).font(.subheadline).foregroundStyle(palette.secondary)
+        .toolbar {
+            if let onClose {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button {
+                        onClose()
+                    } label: {
+                        Image(systemName: "xmark")
+                    }
+                    .accessibilityLabel("Close")
+                }
             }
         }
     }
 
-    private var pairingPage: some View {
-        VStack(spacing: 0) {
-            VStack(alignment: .leading, spacing: 12) {
-                Text("Scan the code from Settings → Connections in Aiden Agent, or from `aiden serve` on a server.")
+    private func desktopCheckRow(
+        title: String,
+        subtitle: String,
+        systemImage: String,
+        iconForeground: Color,
+        iconBackground: Color
+    ) -> some View {
+        HStack(spacing: AidenSpacing.m) {
+            Image(systemName: systemImage)
+                .font(.system(size: 18, weight: .semibold))
+                .foregroundStyle(iconForeground)
+                .frame(width: 36, height: 36)
+                .background(iconBackground, in: RoundedRectangle(cornerRadius: 11, style: .continuous))
+                .accessibilityHidden(true)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(.body.weight(.semibold))
+                    .foregroundStyle(palette.foreground)
+                Text(subtitle)
+                    .font(.footnote)
+                    .foregroundStyle(palette.secondary)
+            }
+
+            Spacer(minLength: AidenSpacing.s)
+
+            Image(systemName: "chevron.right")
+                .font(.footnote.weight(.semibold))
+                .foregroundStyle(palette.secondary.opacity(0.65))
+                .accessibilityHidden(true)
+        }
+        .padding(.horizontal, AidenSpacing.l)
+        .padding(.vertical, 14)
+        .contentShape(Rectangle())
+    }
+
+    // MARK: - Step 2: Get Aiden (Desktop / Server Links)
+
+    private var getDesktopPage: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: AidenSpacing.l) {
+                Text("Install Aiden on the computer you want to connect. Share a link to open it on your Mac or Linux machine.")
                     .font(.subheadline)
                     .foregroundStyle(palette.secondary)
                     .fixedSize(horizontal: false, vertical: true)
+                    .padding(.horizontal, AidenSpacing.xs)
 
-                DisclosureGroup("Other ways to connect") {
-                Picker("Connection method", selection: $selectedPairingMethod) {
-                    ForEach(AidenPairingMethod.primary) { method in
-                        Text(method.tabTitle).tag(method)
+                VStack(spacing: 0) {
+                    downloadRow(
+                        title: String(localized: "Mac"),
+                        subtitle: "chatwithaiden.com",
+                        systemImage: "laptopcomputer",
+                        url: AidenDesktopDownloadLinks.macURL,
+                        accentIcon: true
+                    )
+                    Divider().padding(.leading, 62)
+                    downloadRow(
+                        title: String(localized: "Linux"),
+                        subtitle: "github.com/sambitcreate/aiden-agent",
+                        systemImage: "terminal",
+                        url: AidenDesktopDownloadLinks.linuxURL,
+                        accentIcon: false
+                    )
+                    Divider().padding(.leading, 62)
+                    downloadRow(
+                        title: String(localized: "Server"),
+                        subtitle: "aiden serve · GitHub",
+                        systemImage: "server.rack",
+                        url: AidenDesktopDownloadLinks.serverURL,
+                        accentIcon: false
+                    )
+                }
+                .background(palette.raised, in: RoundedRectangle(cornerRadius: AidenRadius.card, style: .continuous))
+
+                Text("Once installed, open Settings → Connections in Aiden Agent or run `aiden serve`.")
+                    .font(.footnote)
+                    .foregroundStyle(palette.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.horizontal, AidenSpacing.xs)
+            }
+            .frame(maxWidth: 560, alignment: .leading)
+            .frame(maxWidth: .infinity)
+            .padding(.horizontal, AidenSpacing.l)
+            .padding(.top, AidenSpacing.l)
+            .padding(.bottom, AidenSpacing.xxl)
+        }
+        .background(palette.canvas.ignoresSafeArea())
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            Button {
+                path.append(.addComputer)
+            } label: {
+                Text("I Have Aiden — Continue")
+                    .font(.headline)
+                    .frame(maxWidth: .infinity)
+                    .foregroundStyle(palette.onFillAccent)
+            }
+            .controlSize(.large)
+            .aidenSolidFillTint()
+            .buttonStyle(.glassProminent)
+            .frame(maxWidth: 420)
+            .padding(.horizontal, AidenSpacing.xl)
+            .padding(.top, AidenSpacing.s)
+            .padding(.bottom, AidenSpacing.m)
+        }
+        .navigationTitle("Get Aiden")
+        .navigationBarTitleDisplayMode(.inline)
+    }
+
+    private func downloadRow(
+        title: String,
+        subtitle: String,
+        systemImage: String,
+        url: URL,
+        accentIcon: Bool
+    ) -> some View {
+        HStack(spacing: AidenSpacing.m) {
+            Button {
+                openURL(url)
+            } label: {
+                HStack(spacing: AidenSpacing.m) {
+                    Image(systemName: systemImage)
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundStyle(accentIcon ? palette.accent : palette.foreground)
+                        .frame(width: 36, height: 36)
+                        .background(
+                            accentIcon ? palette.accent.opacity(0.12) : palette.sidebar,
+                            in: RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        )
+                        .accessibilityHidden(true)
+
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(title)
+                            .font(.body.weight(.semibold))
+                            .foregroundStyle(palette.foreground)
+                        Text(subtitle)
+                            .font(.footnote)
+                            .foregroundStyle(palette.secondary)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                    }
+
+                    Spacer(minLength: AidenSpacing.s)
+
+                    Image(systemName: "arrow.up.right")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(accentIcon ? palette.accent : palette.secondary)
+                        .accessibilityHidden(true)
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("\(title), \(subtitle)")
+            .accessibilityHint("Opens download link in Safari.")
+
+            ShareLink(item: url) {
+                Image(systemName: "square.and.arrow.up")
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(palette.foreground)
+                    .frame(width: 32, height: 32)
+                    .background(palette.sidebar, in: Circle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Share \(title) link")
+        }
+        .padding(.horizontal, AidenSpacing.l)
+        .padding(.vertical, 13)
+    }
+
+    // MARK: - Step 3: Add Computer (Inline Frosted QR + Nearby + Manual)
+
+    private func addComputerPage(isRoot: Bool) -> some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 22) {
+                scanCard
+
+                if !discovery.agents.isEmpty {
+                    nearbySection
+                }
+
+                manualEntrySection
+            }
+            .frame(maxWidth: 560, alignment: .leading)
+            .frame(maxWidth: .infinity)
+            .padding(.horizontal, AidenSpacing.l)
+            .padding(.top, AidenSpacing.s)
+            .padding(.bottom, AidenSpacing.xxxl)
+        }
+        .scrollDismissesKeyboard(.interactively)
+        .background(palette.canvas.ignoresSafeArea())
+        .navigationTitle("Add Computer")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            if isRoot, let onClose {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button {
+                        onClose()
+                    } label: {
+                        Image(systemName: "xmark")
+                    }
+                    .accessibilityLabel("Close")
+                }
+            }
+            ToolbarItem(placement: .confirmationAction) {
+                Button {
+                    submitManual()
+                } label: {
+                    if coordinator.isMutating {
+                        ProgressView()
+                    } else {
+                        Image(systemName: "checkmark")
                     }
                 }
-                .pickerStyle(.segmented)
-                .accessibilityHint("Swipe the content below or choose a tab.")
-                }
+                .disabled(submission == nil)
+                .accessibilityLabel(coordinator.isMutating ? "Connecting" : "Add Computer")
             }
-            .padding(.horizontal, 18)
-            .padding(.top, 12)
-            .padding(.bottom, 10)
-
-            TabView(selection: $selectedPairingMethod) {
-                qrPairingPage.tag(AidenPairingMethod.scanQRCode)
-                nearbyMacPairingPage.tag(AidenPairingMethod.nearbyMac)
-                privateAddressPairingPage.tag(AidenPairingMethod.privateAddress)
-            }
-            .tabViewStyle(.page(indexDisplayMode: .never))
-            .accessibilityLabel("Connection setup")
         }
-        .background(palette.canvas)
-        .navigationTitle("Pair Aiden")
-        .navigationBarTitleDisplayMode(.inline)
         .onChange(of: discovery.agents) { _, agents in
             guard let selectedAgentID else { return }
             guard let selected = agents.first(where: { $0.id == selectedAgentID }),
-                  selected.endpoint == manualEndpoint else {
+                  selected.endpoint == addressInput else {
                 self.selectedAgentID = nil
                 return
             }
         }
-    }
-
-    private var qrPairingPage: some View {
-        Form {
-            Section {
-                Label("Open Aiden Agent’s Add Device window and keep the one-time QR visible.", systemImage: "desktopcomputer")
-                Label("The QR already contains the selected Local Network or Tailscale address.", systemImage: "network")
-            } header: {
-                Text("On your computer")
-            }
-
-            Section("Private pairing") {
-                Text("The QR expires after five minutes and can be used once. Aiden pins the computer’s HTTPS identity during pairing.")
-                    .foregroundStyle(palette.secondary)
-            }
-        }
-        .scrollContentBackground(.hidden)
-        .safeAreaInset(edge: .bottom, spacing: 0) {
-            onboardingActionButton(action: { isShowingScanner = true }) {
-                Label("Open Camera", systemImage: "qrcode.viewfinder")
-            }
-            .padding(.bottom, AidenMobileOnboardingLayout.actionBottomPadding)
+        .onDisappear {
+            isCameraActive = false
         }
     }
 
-    private var nearbyMacPairingPage: some View {
-        Form {
-            Section {
-                if discovery.agents.isEmpty {
-                    HStack(spacing: 10) {
-                        if discovery.isSearching { ProgressView() }
-                        Text(discovery.isSearching ? "Looking for Aiden Agent…" : "No nearby Aiden Agent found")
-                            .foregroundStyle(palette.secondary)
-                    }
-                } else {
-                    ForEach(discovery.agents) { agent in
-                        discoveredAgentButton(agent)
-                    }
-                }
-            } header: {
-                Text("Nearby computers")
-            } footer: {
-                Text("Your iPhone or iPad and computer must be on the same local network. Select the computer shown in Aiden Agent’s Add Device window.")
-            }
+    private var scanCard: some View {
+        let isDark = colorScheme == .dark
+        let cardShape = RoundedRectangle(cornerRadius: 26, style: .continuous)
+        let active = isCameraActive && !scanComplete && !coordinator.isMutating
 
-            Section {
-                manualEndpointField(
-                    placeholder: "https://computer-name.local:49220/api/aiden/v1",
-                    accessibilityLabel: "Nearby Aiden Agent address"
-                )
-                manualSetupCodeField
-                manualPairingButton
-            } header: {
-                Text("Setup code")
-            } footer: {
-                Text("If discovery is unavailable, enter the exact nearby computer address shown in Aiden Agent. The setup code is encrypted and can be used once.")
-            }
-        }
-        .scrollContentBackground(.hidden)
-        .scrollDismissesKeyboard(.interactively)
-    }
-
-    private var privateAddressPairingPage: some View {
-        Form {
-            Section {
-                manualEndpointField(
-                    placeholder: "https://computer-name.tailnet.ts.net/api/aiden/v1",
-                    accessibilityLabel: "Private Tailscale address"
-                )
-                manualSetupCodeField
-                manualPairingButton
-            } header: {
-                Text("Private address and setup code")
-            } footer: {
-                Text("Copy both values exactly from Aiden Agent. The private address must use HTTPS and end in /api/aiden/v1. Your setup code never leaves this device.")
-            }
-
-            Section("Before pairing") {
-                Label("Sign in to the same Tailscale network on both devices", systemImage: "network")
-                Label("Keep Aiden Agent open on your computer", systemImage: "desktopcomputer")
-            }
-        }
-        .scrollContentBackground(.hidden)
-        .scrollDismissesKeyboard(.interactively)
-    }
-
-    private var pastePayloadPairingPage: some View {
-        Form {
-            Section {
-                PasteButton(payloadType: String.self) { values in
-                    if let payload = values.first { pairingPayload = payload }
-                }
-
-                TextEditor(text: $pairingPayload)
-                    .frame(minHeight: 120)
-                    .font(codeTypography.swiftUIFont(relativeTo: .footnote))
-                    .textInputAutocapitalization(.never)
-                    .autocorrectionDisabled()
-                    .accessibilityLabel("Full pairing setup payload")
-
-                Button("Pair with Setup Payload") {
-                    let payload = pairingPayload.trimmingCharacters(in: .whitespacesAndNewlines)
-                    startPairing { await coordinator.pair(qrPayload: payload) }
-                }
-                .disabled(!canPair)
-            } header: {
-                Text("One-time pairing payload")
-            } footer: {
-                Text("Use only the complete payload copied from your own computer. It contains a one-time secret and expires after five minutes.")
-            }
-        }
-        .scrollContentBackground(.hidden)
-        .scrollDismissesKeyboard(.interactively)
-        .navigationTitle("Paste Payload")
-        .navigationBarTitleDisplayMode(.inline)
-    }
-
-    private func discoveredAgentButton(_ agent: AidenDiscoveredAgent) -> some View {
-        Button {
-            guard let endpoint = agent.endpoint else { return }
-            selectedAgentID = agent.id
-            manualEndpoint = endpoint
+        return Button {
+            activateCameraIfAllowed()
         } label: {
-            HStack {
-                VStack(alignment: .leading, spacing: 3) {
-                    Label(agent.name, systemImage: "desktopcomputer")
-                    if let endpoint = agent.endpoint {
-                        Text(endpoint)
-                            .font(codeTypography.swiftUIFont(relativeTo: .caption))
-                            .foregroundStyle(palette.secondary)
+            ZStack {
+                RadialGradient(
+                    colors: isDark
+                        ? [Color(aidenHex: "#2B2F38"), Color(aidenHex: "#111318")]
+                        : [palette.raised, palette.sidebar],
+                    center: .center,
+                    startRadius: 10,
+                    endRadius: 210
+                )
+
+                if active {
+                    AidenInlineQRScannerView(
+                        onCode: { payload in
+                            handleScannedQRPayload(payload)
+                        },
+                        onUnavailable: {
+                            isCameraActive = false
+                            scanComplete = false
+                            inlineError = String(
+                                localized: "Camera is unavailable on this device. Enter the address and setup code below."
+                            )
+                        }
+                    )
+                    AidenFrostedCutoutView(
+                        cutoutTop: 34,
+                        cutoutSize: 144,
+                        cutoutRadius: 28,
+                        isDark: isDark,
+                        reduceTransparency: reduceTransparency,
+                        fallbackFill: UIColor(palette.canvas)
+                    )
+                    .allowsHitTesting(false)
+                }
+
+                VStack(spacing: 14) {
+                    ZStack {
+                        RoundedRectangle(cornerRadius: 28, style: .continuous)
+                            .stroke(
+                                active
+                                    ? Color.white.opacity(0.88)
+                                    : (isDark ? Color.white.opacity(0.75) : palette.foreground.opacity(0.68)),
+                                lineWidth: 2.8
+                            )
+                            .frame(width: 144, height: 144)
+
+                        if coordinator.isMutating {
+                            VStack(spacing: AidenSpacing.s) {
+                                ProgressView()
+                                Text("Connecting…")
+                                    .font(.subheadline.weight(.medium))
+                                    .foregroundStyle(isDark ? Color.white.opacity(0.84) : palette.foreground)
+                            }
+                        } else if !active {
+                            VStack(spacing: 6) {
+                                Image(systemName: "qrcode.viewfinder")
+                                    .font(.system(size: 40, weight: .light))
+                                Text("Tap to scan")
+                                    .font(.subheadline.weight(.medium))
+                            }
+                            .foregroundStyle(isDark ? Color.white.opacity(0.78) : palette.foreground.opacity(0.76))
+                        }
                     }
+
+                    Group {
+                        if active {
+                            Text("Point at the QR on your computer")
+                        } else {
+                            Text("Scan the code from `aiden serve` or Connections settings")
+                        }
+                    }
+                    .font(.footnote.weight(active ? .medium : .regular))
+                    .foregroundStyle(
+                        active
+                            ? (isDark ? Color.white.opacity(0.90) : palette.foreground.opacity(0.85))
+                            : (isDark ? Color.white.opacity(0.72) : palette.foreground.opacity(0.72))
+                    )
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, AidenSpacing.l)
                 }
-                Spacer()
-                if selectedAgentID == agent.id {
-                    Image(systemName: "checkmark.circle.fill")
-                        .foregroundStyle(palette.accent)
-                        .accessibilityHidden(true)
-                }
+                .padding(.top, 34)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
             }
+            .frame(height: 244)
+            .clipShape(cardShape)
         }
         .buttonStyle(.plain)
-        .disabled(agent.endpoint == nil)
-        .accessibilityLabel(agent.endpoint.map { "\(agent.name), \($0)" } ?? agent.name)
-        .accessibilityValue(selectedAgentID == agent.id ? "Selected" : "Not selected")
-        .accessibilityAddTraits(selectedAgentID == agent.id ? .isSelected : [])
-        .accessibilityHint(agent.endpoint == nil
-            ? "This computer is still resolving its network address."
-            : "Use this computer for setup-code pairing.")
+        .disabled(active || coordinator.isMutating)
+        .accessibilityLabel(active ? "QR camera active" : "Scan QR code")
+        .accessibilityHint(active ? "Point your camera at the QR shown on your computer." : "Activates the camera to scan your computer’s pairing QR.")
     }
 
-    private func manualEndpointField(
-        placeholder: String,
-        accessibilityLabel: String
-    ) -> some View {
-        TextField(placeholder, text: $manualEndpoint)
-            .font(codeTypography.swiftUIFont(relativeTo: .footnote))
-            .textInputAutocapitalization(.never)
-            .autocorrectionDisabled()
-            .keyboardType(.URL)
-            .accessibilityLabel(accessibilityLabel)
-            .onChange(of: manualEndpoint) { _, value in
-                guard let selectedAgentID else { return }
-                let selectedEndpoint = discovery.agents.first {
-                    $0.id == selectedAgentID
-                }?.endpoint
-                if selectedEndpoint != value { self.selectedAgentID = nil }
+    private var nearbySection: some View {
+        VStack(alignment: .leading, spacing: AidenSpacing.s) {
+            Text("Nearby on Wi-Fi")
+                .font(.subheadline.weight(.medium))
+                .foregroundStyle(palette.secondary)
+                .padding(.horizontal, AidenSpacing.m)
+
+            VStack(spacing: 0) {
+                ForEach(Array(discovery.agents.enumerated()), id: \.element.id) { index, agent in
+                    if index > 0 {
+                        Divider().padding(.leading, AidenSpacing.l)
+                    }
+                    Button {
+                        guard let endpoint = agent.endpoint else { return }
+                        selectedAgentID = agent.id
+                        addressInput = endpoint
+                        inlineError = nil
+                        focusedField = .code
+                    } label: {
+                        HStack(spacing: 10) {
+                            Circle()
+                                .fill(agent.endpoint != nil ? palette.success : palette.secondary.opacity(0.4))
+                                .frame(width: 8, height: 8)
+                                .accessibilityHidden(true)
+
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(agent.name)
+                                    .font(.body.weight(.semibold))
+                                    .foregroundStyle(palette.foreground)
+                                    .lineLimit(1)
+                                if let endpoint = agent.endpoint {
+                                    Text(AidenPairingInputParser.compactDisplayAddress(endpoint))
+                                        .font(codeTypography.swiftUIFont(relativeTo: .caption))
+                                        .foregroundStyle(palette.secondary)
+                                        .lineLimit(1)
+                                        .truncationMode(.middle)
+                                } else {
+                                    Text("Resolving address…")
+                                        .font(.caption)
+                                        .foregroundStyle(palette.secondary)
+                                }
+                            }
+
+                            Spacer(minLength: AidenSpacing.s)
+
+                            if selectedAgentID == agent.id {
+                                Image(systemName: "checkmark")
+                                    .font(.subheadline.weight(.semibold))
+                                    .foregroundStyle(palette.accent)
+                                    .accessibilityHidden(true)
+                            } else if agent.endpoint != nil {
+                                Text("Use")
+                                    .font(.subheadline.weight(.semibold))
+                                    .foregroundStyle(palette.accent)
+                            }
+                        }
+                        .padding(.horizontal, AidenSpacing.l)
+                        .frame(minHeight: 54)
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(agent.endpoint == nil)
+                    .accessibilityLabel(agent.endpoint.map { "\(agent.name), \(AidenPairingInputParser.compactDisplayAddress($0))" } ?? agent.name)
+                    .accessibilityValue(selectedAgentID == agent.id ? "Selected" : "Not selected")
+                    .accessibilityAddTraits(selectedAgentID == agent.id ? .isSelected : [])
+                }
             }
+            .background(palette.raised, in: RoundedRectangle(cornerRadius: AidenRadius.card, style: .continuous))
+        }
     }
 
-    private var manualSetupCodeField: some View {
-        TextField("XXXX-XXXX-XXXX-XXXX-XXXX", text: $manualCode)
-            .font(codeTypography.swiftUIFont(relativeTo: .body))
-            .textInputAutocapitalization(.characters)
-            .autocorrectionDisabled()
-            .keyboardType(.asciiCapable)
-            .onChange(of: manualCode) { _, value in
-                manualCode = formattedManualCodeInput(value)
+    private var manualEntrySection: some View {
+        let cardShape = RoundedRectangle(cornerRadius: AidenRadius.card, style: .continuous)
+
+        return VStack(alignment: .leading, spacing: AidenSpacing.s) {
+            Text("Or enter it")
+                .font(.subheadline.weight(.medium))
+                .foregroundStyle(palette.secondary)
+                .padding(.horizontal, AidenSpacing.m)
+
+            VStack(spacing: 0) {
+                HStack(spacing: AidenSpacing.m) {
+                    Text("Address")
+                        .font(.body)
+                        .foregroundStyle(palette.secondary)
+                        .frame(width: 72, alignment: .leading)
+                        .accessibilityHidden(true)
+
+                    TextField("mac.local or host.ts.net", text: $addressInput)
+                        .font(codeTypography.swiftUIFont(relativeTo: .subheadline))
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                        .keyboardType(.URL)
+                        .submitLabel(.next)
+                        .focused($focusedField, equals: .address)
+                        .onSubmit { focusedField = .code }
+                        .accessibilityLabel("Computer address")
+                        .onChange(of: addressInput) { _, value in
+                            inlineError = nil
+                            if let selectedAgentID {
+                                let selectedEndpoint = discovery.agents.first { $0.id == selectedAgentID }?.endpoint
+                                if selectedEndpoint != value { self.selectedAgentID = nil }
+                            }
+                        }
+                }
+                .padding(.horizontal, AidenSpacing.l)
+                .frame(minHeight: 52)
+
+                Divider().padding(.leading, AidenSpacing.l)
+
+                HStack(spacing: AidenSpacing.m) {
+                    Text("Code")
+                        .font(.body)
+                        .foregroundStyle(palette.secondary)
+                        .frame(width: 72, alignment: .leading)
+                        .accessibilityHidden(true)
+
+                    TextField("Setup code or payload", text: $codeInput)
+                        .font(codeTypography.swiftUIFont(relativeTo: .subheadline))
+                        .textInputAutocapitalization(.characters)
+                        .autocorrectionDisabled()
+                        .keyboardType(.asciiCapable)
+                        .submitLabel(.go)
+                        .focused($focusedField, equals: .code)
+                        .onSubmit { submitManual() }
+                        .accessibilityLabel("Setup code or pairing payload")
+                        .onChange(of: codeInput) { _, value in
+                            inlineError = nil
+                            let formatted = AidenPairingInputParser.formattedManualCodeInput(value)
+                            if formatted != value {
+                                codeInput = formatted
+                            }
+                        }
+                }
+                .padding(.horizontal, AidenSpacing.l)
+                .frame(minHeight: 52)
             }
-            .accessibilityLabel("Manual pairing setup code")
+            .background(palette.raised, in: cardShape)
+            .overlay {
+                if inlineError != nil {
+                    cardShape.stroke(palette.danger, lineWidth: 1)
+                }
+            }
+
+            Text(
+                inlineError
+                    ?? String(localized: "For computers on your local network or Tailscale. Your provider keys stay on your computer.")
+            )
+            .font(.footnote)
+            .foregroundStyle(inlineError != nil ? palette.dangerText : palette.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+            .padding(.horizontal, AidenSpacing.m)
+        }
     }
 
-    private var manualPairingButton: some View {
-        Button("Pair with Setup Code") {
-            guard let endpoint = manualEndpointURL else { return }
-            let code = manualCode
+    // MARK: - Actions
+
+    private func activateCameraIfAllowed() {
+        inlineError = nil
+        switch AVCaptureDevice.authorizationStatus(for: .video) {
+        case .authorized:
+            scanComplete = false
+            isCameraActive = true
+        case .notDetermined:
+            AVCaptureDevice.requestAccess(for: .video) { granted in
+                DispatchQueue.main.async {
+                    if granted {
+                        scanComplete = false
+                        isCameraActive = true
+                    } else {
+                        showsCameraPermissionAlert = true
+                    }
+                }
+            }
+        default:
+            showsCameraPermissionAlert = true
+        }
+    }
+
+    private func handleScannedQRPayload(_ payload: String) {
+        guard !scanComplete else { return }
+        scanComplete = true
+        isCameraActive = false
+        inlineError = nil
+        startPairing {
+            await coordinator.pair(qrPayload: payload)
+        }
+    }
+
+    private func submitManual() {
+        guard let submission else { return }
+        focusedField = nil
+        inlineError = nil
+        switch submission {
+        case .payload(let payload):
+            startPairing {
+                await coordinator.pair(qrPayload: payload)
+            }
+        case .manual(let endpoint, let code):
             startPairing {
                 await coordinator.pair(manualCode: code, endpoint: endpoint)
             }
         }
-        .disabled(!canPairManually)
-    }
-
-    private func formattedManualCodeInput(_ value: String) -> String {
-        guard value.unicodeScalars.allSatisfy({ scalar in
-            scalar.isASCII && (scalar.value == 32 || scalar.value == 45
-                || (48...57).contains(scalar.value)
-                || (65...90).contains(scalar.value)
-                || (97...122).contains(scalar.value))
-        }) else { return value }
-        let allowed = Set("0123456789ABCDEFGHJKMNPQRSTVWXYZ")
-        let characters = value
-            .uppercased()
-            .filter { $0 != "-" && $0 != " " }
-            .prefix(20)
-        guard characters.allSatisfy(allowed.contains) else { return value }
-        return stride(from: 0, to: characters.count, by: 4).map { start in
-            let lower = characters.index(characters.startIndex, offsetBy: start)
-            let upper = characters.index(
-                lower,
-                offsetBy: min(4, characters.count - start),
-                limitedBy: characters.endIndex
-            ) ?? characters.endIndex
-            return String(characters[lower..<upper])
-        }.joined(separator: "-")
     }
 
     private func startPairing(
@@ -886,10 +1021,10 @@ struct AidenPairingView: View {
                     scope: hapticScope,
                     dedupeKey: "pair:\(attemptID.uuidString)"
                 )
-                pairingPayload = ""
-                manualCode = ""
-                manualEndpoint = ""
+                addressInput = ""
+                codeInput = ""
                 selectedAgentID = nil
+                inlineError = nil
                 onPaired?()
             } else if result == .failed {
                 coordinator.haptics.play(
@@ -897,116 +1032,246 @@ struct AidenPairingView: View {
                     scope: hapticScope,
                     dedupeKey: "pair:\(attemptID.uuidString)"
                 )
+                inlineError = coordinator.presentedError ?? AidenPairingAlertCopy.fallbackMessage
+                coordinator.presentedError = nil
+                scanComplete = false
             }
             pairingTask = nil
         }
     }
 }
 
-private struct AidenQRCodeScanner: UIViewControllerRepresentable {
-    let onCode: (String) -> Void
+// MARK: - Frosted Cutout & Inline QR Camera
 
-    func makeUIViewController(context: Context) -> AidenQRCodeScannerViewController {
-        let controller = AidenQRCodeScannerViewController()
-        controller.onCode = onCode
-        return controller
+/// One continuous blur with a rounded-rect hole, horizontally centered, avoiding
+/// seams from tiling separate blur views. Falls back to an opaque mask under
+/// Reduce Transparency.
+private struct AidenFrostedCutoutView: UIViewRepresentable {
+    let cutoutTop: CGFloat
+    let cutoutSize: CGFloat
+    let cutoutRadius: CGFloat
+    let isDark: Bool
+    let reduceTransparency: Bool
+    let fallbackFill: UIColor
+
+    func makeUIView(context: Context) -> FrostedCutoutUIView {
+        FrostedCutoutUIView()
     }
 
-    func updateUIViewController(_ uiViewController: AidenQRCodeScannerViewController, context: Context) {}
+    func updateUIView(_ uiView: FrostedCutoutUIView, context: Context) {
+        uiView.configure(
+            cutoutTop: cutoutTop,
+            cutoutSize: cutoutSize,
+            cutoutRadius: cutoutRadius,
+            isDark: isDark,
+            reduceTransparency: reduceTransparency,
+            fallbackFill: fallbackFill
+        )
+    }
+
+    final class FrostedCutoutUIView: UIView {
+        private var cutoutTop: CGFloat = 0
+        private var cutoutSize: CGFloat = 0
+        private var cutoutRadius: CGFloat = 0
+        private var isDark = false
+        private var reduceTransparency = false
+        private var fallbackFill: UIColor = .systemBackground
+
+        private let effectView = UIVisualEffectView(effect: UIBlurEffect(style: .systemThinMaterialDark))
+        private let opaqueOverlayView = UIView()
+        private let maskHostView = UIView()
+        private let maskLayer = CAShapeLayer()
+
+        override init(frame: CGRect) {
+            super.init(frame: frame)
+            isUserInteractionEnabled = false
+            maskLayer.fillRule = .evenOdd
+            maskHostView.layer.addSublayer(maskLayer)
+            addSubview(effectView)
+            addSubview(opaqueOverlayView)
+            opaqueOverlayView.isHidden = true
+            effectView.mask = maskHostView
+        }
+
+        @available(*, unavailable)
+        required init?(coder: NSCoder) {
+            fatalError("init(coder:) has not been implemented")
+        }
+
+        func configure(
+            cutoutTop: CGFloat,
+            cutoutSize: CGFloat,
+            cutoutRadius: CGFloat,
+            isDark: Bool,
+            reduceTransparency: Bool,
+            fallbackFill: UIColor
+        ) {
+            self.cutoutTop = cutoutTop
+            self.cutoutSize = cutoutSize
+            self.cutoutRadius = cutoutRadius
+            self.isDark = isDark
+            self.reduceTransparency = reduceTransparency
+            self.fallbackFill = fallbackFill
+
+            effectView.effect = UIBlurEffect(
+                style: isDark ? .systemThinMaterialDark : .systemThinMaterialLight
+            )
+            opaqueOverlayView.backgroundColor = fallbackFill.withAlphaComponent(0.92)
+            effectView.isHidden = reduceTransparency
+            opaqueOverlayView.isHidden = !reduceTransparency
+
+            if reduceTransparency {
+                effectView.mask = nil
+                opaqueOverlayView.mask = maskHostView
+            } else {
+                opaqueOverlayView.mask = nil
+                effectView.mask = maskHostView
+            }
+            setNeedsLayout()
+        }
+
+        override func layoutSubviews() {
+            super.layoutSubviews()
+            effectView.frame = bounds
+            opaqueOverlayView.frame = bounds
+            maskHostView.frame = bounds
+            maskLayer.frame = bounds
+
+            let path = UIBezierPath(rect: bounds)
+            if cutoutSize > 0 {
+                let hole = CGRect(
+                    x: (bounds.width - cutoutSize) / 2,
+                    y: cutoutTop,
+                    width: cutoutSize,
+                    height: cutoutSize
+                )
+                path.append(UIBezierPath(roundedRect: hole, cornerRadius: cutoutRadius))
+            }
+            maskLayer.path = path.cgPath
+        }
+    }
 }
 
-private final class AidenQRCodeScannerViewController: UIViewController, AVCaptureMetadataOutputObjectsDelegate {
-    var onCode: ((String) -> Void)?
+private struct AidenInlineQRScannerView: UIViewRepresentable {
+    let onCode: (String) -> Void
+    let onUnavailable: () -> Void
 
-    private let session = AVCaptureSession()
-    private var previewLayer: AVCaptureVideoPreviewLayer?
-    private var deliveredCode = false
-
-    override func viewDidLoad() {
-        super.viewDidLoad()
-        view.backgroundColor = .black
-        requestCameraAndConfigure()
+    func makeCoordinator() -> Coordinator {
+        Coordinator(onCode: onCode, onUnavailable: onUnavailable)
     }
 
-    override func viewDidLayoutSubviews() {
-        super.viewDidLayoutSubviews()
-        previewLayer?.frame = view.bounds
+    func makeUIView(context: Context) -> PreviewUIView {
+        let view = PreviewUIView()
+        context.coordinator.start(in: view)
+        return view
     }
 
-    override func viewWillDisappear(_ animated: Bool) {
-        super.viewWillDisappear(animated)
-        if session.isRunning {
-            DispatchQueue.global(qos: .userInitiated).async { [session] in session.stopRunning() }
+    func updateUIView(_ uiView: PreviewUIView, context: Context) {
+        context.coordinator.onCode = onCode
+        context.coordinator.onUnavailable = onUnavailable
+    }
+
+    static func dismantleUIView(_ uiView: PreviewUIView, coordinator: Coordinator) {
+        coordinator.stop()
+    }
+
+    final class PreviewUIView: UIView {
+        override class var layerClass: AnyClass { AVCaptureVideoPreviewLayer.self }
+        var previewLayer: AVCaptureVideoPreviewLayer { layer as! AVCaptureVideoPreviewLayer }
+    }
+
+    final class Coordinator: NSObject, AVCaptureMetadataOutputObjectsDelegate {
+        var onCode: (String) -> Void
+        var onUnavailable: () -> Void
+        private let session = AVCaptureSession()
+        private let queue = DispatchQueue(label: "aiden.inline-qr-scanner")
+        private var configured = false
+        private var sessionStopped = false
+        private var delivered = false
+        private var isDismantled = false
+
+        init(onCode: @escaping (String) -> Void, onUnavailable: @escaping () -> Void) {
+            self.onCode = onCode
+            self.onUnavailable = onUnavailable
         }
-    }
 
-    private func requestCameraAndConfigure() {
-        switch AVCaptureDevice.authorizationStatus(for: .video) {
-        case .authorized:
-            configureSession()
-        case .notDetermined:
-            AVCaptureDevice.requestAccess(for: .video) { [weak self] granted in
-                guard granted else { return }
-                DispatchQueue.main.async { self?.configureSession() }
+        func start(in view: PreviewUIView) {
+            view.previewLayer.session = session
+            view.previewLayer.videoGravity = .resizeAspectFill
+            queue.async { [weak self] in
+                guard let self, !self.sessionStopped else { return }
+                if !self.configured {
+                    guard self.configureSession() else {
+                        DispatchQueue.main.async { [weak self] in
+                            guard let self, !self.isDismantled else { return }
+                            self.onUnavailable()
+                        }
+                        return
+                    }
+                    self.configured = true
+                }
+                if !self.session.isRunning {
+                    self.session.startRunning()
+                }
             }
-        default:
-            showCameraUnavailable()
         }
-    }
 
-    private func configureSession() {
-        guard let camera = AVCaptureDevice.default(for: .video),
-              let input = try? AVCaptureDeviceInput(device: camera),
-              session.canAddInput(input) else {
-            showCameraUnavailable()
-            return
+        func stop() {
+            isDismantled = true
+            queue.async { [weak self] in
+                guard let self else { return }
+                self.sessionStopped = true
+                if self.session.isRunning {
+                    self.session.stopRunning()
+                }
+            }
         }
-        session.addInput(input)
 
-        let output = AVCaptureMetadataOutput()
-        guard session.canAddOutput(output) else {
-            showCameraUnavailable()
-            return
+        private func configureSession() -> Bool {
+            guard let camera = AVCaptureDevice.default(for: .video),
+                  let input = try? AVCaptureDeviceInput(device: camera) else {
+                return false
+            }
+            session.beginConfiguration()
+            guard session.canAddInput(input) else {
+                session.commitConfiguration()
+                return false
+            }
+            session.addInput(input)
+
+            let output = AVCaptureMetadataOutput()
+            guard session.canAddOutput(output) else {
+                session.removeInput(input)
+                session.commitConfiguration()
+                return false
+            }
+            session.addOutput(output)
+            session.commitConfiguration()
+
+            guard output.availableMetadataObjectTypes.contains(.qr) else {
+                session.beginConfiguration()
+                session.removeOutput(output)
+                session.removeInput(input)
+                session.commitConfiguration()
+                return false
+            }
+            output.setMetadataObjectsDelegate(self, queue: .main)
+            output.metadataObjectTypes = [.qr]
+            return true
         }
-        session.addOutput(output)
-        output.setMetadataObjectsDelegate(self, queue: .main)
-        output.metadataObjectTypes = [.qr]
 
-        let layer = AVCaptureVideoPreviewLayer(session: session)
-        layer.videoGravity = .resizeAspectFill
-        layer.frame = view.bounds
-        view.layer.addSublayer(layer)
-        previewLayer = layer
-
-        DispatchQueue.global(qos: .userInitiated).async { [session] in session.startRunning() }
-    }
-
-    private func showCameraUnavailable() {
-        let label = UILabel()
-        label.text = "Camera access is required to scan the pairing QR. You can paste the pairing payload instead."
-        label.textColor = .white
-        label.textAlignment = .center
-        label.numberOfLines = 0
-        label.translatesAutoresizingMaskIntoConstraints = false
-        view.addSubview(label)
-        NSLayoutConstraint.activate([
-            label.leadingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.leadingAnchor, constant: 24),
-            label.trailingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.trailingAnchor, constant: -24),
-            label.centerYAnchor.constraint(equalTo: view.centerYAnchor),
-        ])
-    }
-
-    func metadataOutput(
-        _ output: AVCaptureMetadataOutput,
-        didOutput metadataObjects: [AVMetadataObject],
-        from connection: AVCaptureConnection
-    ) {
-        guard !deliveredCode,
-              let object = metadataObjects.first as? AVMetadataMachineReadableCodeObject,
-              object.type == .qr,
-              let value = object.stringValue else { return }
-        deliveredCode = true
-        session.stopRunning()
-        onCode?(value)
+        func metadataOutput(
+            _ output: AVCaptureMetadataOutput,
+            didOutput metadataObjects: [AVMetadataObject],
+            from connection: AVCaptureConnection
+        ) {
+            guard !delivered, !isDismantled,
+                  let object = metadataObjects.first as? AVMetadataMachineReadableCodeObject,
+                  object.type == .qr,
+                  let value = object.stringValue else { return }
+            delivered = true
+            stop()
+            onCode(value)
+        }
     }
 }

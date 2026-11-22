@@ -229,6 +229,7 @@ import type {
   AssistantLiveRendererEvent,
   AssistantLiveSnapshot,
   AssistantLiveStartIntent,
+  LiveDisplaySources,
 } from "../shared/assistant-live";
 import {
   fallbackDetachedLifecycleStream,
@@ -582,7 +583,9 @@ export const assistantLiveApi = {
   stop: () => invoke<AssistantLiveSnapshot>("assistant-live:stop", {}),
   sendAudio: (sessionId: string, pcm: Uint8Array) =>
     invoke<boolean>("assistant-live:audio", { sessionId, pcm }),
-  bindDisplay: () => invoke<string | null>("assistant-live:display-bind", {}),
+  displaySources: () => invoke<LiveDisplaySources>("assistant-live:display-sources", {}),
+  bindDisplay: (sourceId?: string) =>
+    invoke<string | null>("assistant-live:display-bind", sourceId ? { sourceId } : {}),
   releaseDisplay: (bindingId: string) =>
     invoke<boolean>("assistant-live:display-release", { bindingId }),
   sendFrame: (sessionId: string, frame: Uint8Array) =>
@@ -1586,6 +1589,9 @@ export const workspaceArtifactsApi = {
     invoke<WorkspaceArtifactV1>("workspaces:artifacts:importConfirm", workspaceId, token),
   importDiscard: (workspaceId: string, token: string) =>
     invoke<{ discarded: boolean }>("workspaces:artifacts:importDiscard", workspaceId, token),
+  /** Keep in Artifacts: saves a chat's native visual as a page of the chat's workspace. */
+  keepVisual: (chatId: string, messageId: string, visualId: string) =>
+    invoke<WorkspaceArtifactV1>("workspaces:artifacts:keepVisual", chatId, messageId, visualId),
   onChanged: (handler: (event: WorkspaceArtifactsChangedEvent) => void) =>
     onNotification<WorkspaceArtifactsChangedEvent>("workspaces:artifacts-changed", handler),
 };
@@ -1647,6 +1653,8 @@ export const chatsApi = {
         }
     >("chats:compact", id, engine),
   cancelCompact: (id: string) => invoke<boolean>("chats:cancelCompact", id),
+  // This window no longer shows the chat, so a settled reply stops keeping its cache warm.
+  releaseCacheWarming: (id: string) => invoke<boolean>("chats:releaseCacheWarming", id),
   // Next-request context projection for the composer meter. Pass the visible
   // draft, pending attachments, and the current model selection so the
   // projection matches what would actually be sent.
@@ -2512,10 +2520,28 @@ export const designCanvasApi = {
       theme,
     ),
   /** Compare-and-swap: lands only if `baseRevision` is still the stored revision. */
-  saveDesignCanvas: (chatId: string, doc: DesignCanvas, baseRevision: number) =>
-    invoke<DesignCanvasSaveResult>("designCanvas:save", chatId, doc, baseRevision),
-  onDesignCanvasUpdated: (handler: (update: { chatId: string; revision: number }) => void) =>
-    onNotification<{ chatId: string; revision: number }>("designCanvas:updated", handler),
+  /** `undone` names pages the person's undo took off, which are not remembered as removed. */
+  saveDesignCanvas: (chatId: string, doc: DesignCanvas, baseRevision: number, options?: { undone?: string[] }) =>
+    options === undefined
+      ? invoke<DesignCanvasSaveResult>("designCanvas:save", chatId, doc, baseRevision)
+      : invoke<DesignCanvasSaveResult>("designCanvas:save", chatId, doc, baseRevision, options),
+  /**
+   * Send to canvas: puts one of the chat's HTML visuals on the page on screen,
+   * placed for a canvas of `viewSize` when known. A visual already there on
+   * another page shows that page and names it.
+   */
+  placeDesignArtifact: (chatId: string, mediaId: string, viewSize?: { w: number; h: number }) =>
+    invoke<
+      | { status: "placed"; frameId: string }
+      | { status: "already"; frameId: string; page?: string }
+      | { error: "missing" | "unsafe" | "full" }
+    >("designCanvas:placeArtifact", chatId, mediaId, ...(viewSize ? [{ viewSize }] : [])),
+  /**
+   * `aidenTurn` names the reply that made the change, when Aiden made it;
+   * `step` marks the person's own change made through main (Send to canvas).
+   */
+  onDesignCanvasUpdated: (handler: (update: { chatId: string; revision: number; aidenTurn?: string; step?: string }) => void) =>
+    onNotification<{ chatId: string; revision: number; aidenTurn?: string; step?: string }>("designCanvas:updated", handler),
   /** The chat's `aiden-design://<grant>/` host for framing its workspace files. */
   getDesignCanvasGrant: (chatId: string) =>
     invoke<{ grant: string } | { error: "unavailable" }>("designCanvas:grant", chatId),
