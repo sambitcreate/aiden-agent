@@ -127,7 +127,8 @@ for approval.
 When a turn the lead started in a chat ends (finished, stopped, failed or
 interrupted), the lead gets a **Started chat** notice card with the chat's
 last reply fenced as data (up to 4,000 characters; `child_chats read` has the
-rest). Like other follow-up notices it is queued into a running lead, or wakes
+rest). Like other follow-up notices it is queued into a running lead (never
+into a scheduled task's run there, which it waits out), or wakes
 an idle one within the chat's budget of six unattended follow-up answers an
 hour; past that it is only recorded. Chats that end within 10 seconds of each
 other share one notice ("2 started chats ended").
@@ -143,7 +144,8 @@ other share one notice ("2 started chats ended").
 Stop in the lead (on the desktop or a phone) stops its turn and the running
 turn of every chat it started, except chats you've written in. Until you next
 send in the lead, its started chats' endings are only recorded and don't wake
-it. Stop in a started chat stops only that chat.
+it; a scheduled task's run in the lead doesn't count as you sending. Stop in a
+started chat stops only that chat.
 
 ## On the desktop
 
@@ -173,7 +175,8 @@ Once you send a message in a started chat after the lead's last message
 (including a steer or queued message into its running turn, from the desktop
 composer or a phone), the chat is yours: the lead's `send` refuses, its Stop leaves the chat alone, and
 `list` and `wait` mark it `tookOver`. The lead can still read it, and turns you
-start there never notify the lead.
+start there never notify the lead. A scheduled task's run posting into the
+chat is not you writing, and leaves it the lead's.
 
 ## How it runs
 

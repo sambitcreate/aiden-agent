@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { agentNotice } from "../../../renderer/shared/agent-notices.js";
 import {
+  agentNoticeRun,
   MAX_WAKES_PER_CHAT_PER_HOUR,
   NoticeDelivery,
   type AgentNoticePost,
@@ -24,8 +25,11 @@ function post(text: string, wake = true, chatId = "chat-1"): AgentNoticePost {
  * A chat that is either running a turn (which takes queued input) or idle.
  * Transcript order is what the chat would show.
  */
-function fakeChat(options: { running?: boolean; now?: () => number } = {}) {
+function fakeChat(options: { running?: boolean; scheduledRun?: boolean; now?: () => number } = {}) {
   let running = options.running ?? false;
+  // A scheduled task's run holds the chat: it takes no input and blocks other turns.
+  let scheduledRun = options.scheduledRun ?? false;
+  const runWaiters: Array<() => void> = [];
   let ids = 0;
   const transcript: Array<{ text: string; via: string }> = [];
   const idleWaiters: Array<() => void> = [];
@@ -39,6 +43,7 @@ function fakeChat(options: { running?: boolean; now?: () => number } = {}) {
       calls.push("queue");
       const forced = deps.queueAnswer?.(item);
       if (forced) return forced;
+      if (scheduledRun) return { kind: "busy" };
       if (!running) return { kind: "no-run" };
       transcript.push({ text: item.text, via: "queued" });
       return { kind: "queued", messageId: `m${++ids}` };
@@ -47,7 +52,7 @@ function fakeChat(options: { running?: boolean; now?: () => number } = {}) {
       calls.push(item ? "start-with-notice" : "start");
       const forced = deps.startAnswer?.(item);
       if (forced) return forced;
-      if (running) return { kind: "busy" };
+      if (running || scheduledRun) return { kind: "busy" };
       running = true;
       if (item) transcript.push({ text: item.text, via: "woke" });
       return { kind: "started", streamId: `s-${chatId}-${ids}`, ...(item ? { messageId: `m${++ids}` } : {}) };
@@ -56,13 +61,17 @@ function fakeChat(options: { running?: boolean; now?: () => number } = {}) {
       calls.push("append");
       const forced = deps.appendAnswer?.(item);
       if (forced) return forced;
-      if (running) return { kind: "busy" };
+      if (running || scheduledRun) return { kind: "busy" };
       transcript.push({ text: item.text, via: "recorded" });
       return { kind: "appended", messageId: `m${++ids}` };
     },
     waitForIdle() {
       calls.push("wait");
       return new Promise<void>((resolve) => idleWaiters.push(resolve));
+    },
+    waitForRunToSettle() {
+      calls.push("wait-run");
+      return new Promise<void>((resolve) => runWaiters.push(resolve));
     },
     now: options.now ?? (() => 0),
   };
@@ -73,6 +82,10 @@ function fakeChat(options: { running?: boolean; now?: () => number } = {}) {
     finishTurn() {
       running = false;
       for (const resolve of idleWaiters.splice(0)) resolve();
+    },
+    finishScheduledRun() {
+      scheduledRun = false;
+      for (const resolve of runWaiters.splice(0)) resolve();
     },
     get running() {
       return running;
@@ -174,6 +187,38 @@ test("when another turn holds the chat, delivery waits for it and then joins or 
   const outcome = await pending;
   assert.equal(outcome.kind, "woke");
   assert.deepEqual(chat.transcript, [{ text: "failure", via: "woke" }]);
+});
+
+test("a scheduled task's run in the chat never takes a notice; once it settles the chat's own turn answers it", async () => {
+  const chat = fakeChat({ scheduledRun: true });
+  const delivery = new NoticeDelivery(chat.deps);
+  const pending = delivery.post(post("“Run tests” finished"));
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(chat.transcript, [], "nothing lands in the scheduled run");
+  assert.deepEqual(chat.calls, ["queue", "wait-run"]);
+  chat.finishScheduledRun();
+  const outcome = await pending;
+  assert.equal(outcome.kind, "woke");
+  assert.deepEqual(chat.transcript, [{ text: "“Run tests” finished", via: "woke" }]);
+
+  const quiet = fakeChat({ scheduledRun: true });
+  const recorded = new NoticeDelivery(quiet.deps).post(post("checks passed", false));
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(quiet.transcript, []);
+  quiet.finishScheduledRun();
+  assert.equal((await recorded).kind, "recorded");
+  assert.deepEqual(quiet.transcript, [{ text: "checks passed", via: "recorded" }]);
+});
+
+test("a notice joins only the chat's own running turn, never a run another feature owns", () => {
+  const own = { chatId: "chat-1", cancelRequested: false, chatTurn: true };
+  const scheduled = { chatId: "chat-1", cancelRequested: false, chatTurn: false };
+  assert.deepEqual(agentNoticeRun([["s-own", own]], "chat-1"), { streamId: "s-own" });
+  assert.equal(agentNoticeRun([["s-task", scheduled]], "chat-1"), "busy");
+  assert.deepEqual(agentNoticeRun([["s-task", scheduled], ["s-own", own]], "chat-1"), { streamId: "s-own" });
+  assert.equal(agentNoticeRun([["s-own", { ...own, cancelRequested: true }]], "chat-1"), undefined, "a stopping run takes nothing");
+  assert.equal(agentNoticeRun([["s-own", { ...own, chatId: "chat-2" }]], "chat-1"), undefined);
+  assert.equal(agentNoticeRun([], "chat-1"), undefined);
 });
 
 test("a chat that cannot take a follow-up turn still shows the notice", async () => {

@@ -1,9 +1,10 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
-  argIs, chatToolOffers, offersChildChats, screenedPromptAnswersPerson, chatTurnArgsToolRefusal, chatTurnAudienceFor, chatTurnToolRefusal, declaresAppTools, declaresWindowTools, firstTurnToolRefusal, refusedForWantOfWindow, windowlessChatTurn,
+  argIs, chatToolOffers, offersChildChats, screenedPromptAnswersPerson, chatTurnArgsToolRefusal, chatTurnAudienceFor, chatTurnToolRefusal, declaresAppTools, declaresWindowTools, firstTurnToolRefusal, personWroteChatTurn, refusedForWantOfWindow, windowlessChatTurn,
   type ChatToolSurface, type ChatTurnOwnerScope, type ChatTurnAudience, type ChatTurnAudienceOptions, type ChatTurnAudienceParams,
 } from "./chat-turn-tool-policy.js";
+import { scheduledGenerationSurface } from "./conversation-surface-generation.js";
 import { UNATTENDED_FOLLOW_UP_GENERATION } from "./follow-through/notice-delivery.js";
 
 const workspace: ChatToolSurface = { usageSource: "chat", bot: false, assistant: false, harnessProvider: false };
@@ -194,6 +195,28 @@ test("child_chats starts chats only in a turn the person started; its other acti
     for (const action of ["list", "read", "wait", "send", "stop"]) {
       assert.equal(refuse("child_chats", { action, chat_id: "c1", chat_ids: ["c1"], text: "go on" }), undefined, `${label}: ${action}`);
     }
+  }
+});
+
+test("only a chat turn the person wrote counts as theirs; a scheduled run posting into the chat does not", () => {
+  // The options a scheduled task's run starts with, as its surface builds them.
+  const scheduled = scheduledGenerationSurface({
+    chatId: "c1", streamId: "s1", ownerId: "o1", providerId: "p", model: "m", mode: undefined,
+    prompt: "Check the build", permission: "full", excludeToolNames: new Set(), allowMcpTools: false, keepChatModel: true,
+  }).options;
+  const cases: Array<[string, string | undefined, ChatTurnAudienceOptions, boolean]> = [
+    // label, the run's usage source, the turn's options, the person wrote it
+    ["a turn in the chat's window", undefined, {}, true],
+    ["a phone- or paired-Mac-sent turn", undefined, { visualAudience: "remote" }, true],
+    ["an owed turn answering the person's queued message", "chat", { windowless: true, answersPerson: true }, true],
+    ["a scheduled task's run in the chat", scheduled.usageSource, scheduled as ChatTurnAudienceOptions, false],
+    ["an unattended follow-up", UNATTENDED_FOLLOW_UP_GENERATION.usageSource, { ...UNATTENDED_FOLLOW_UP_GENERATION }, false],
+    ["an owed turn answering a notice", "chat", { windowless: true }, false],
+    ["a goal round", "chat", { goalRound: true }, false],
+    ["a Telegram turn", "telegram", {}, false],
+  ];
+  for (const [label, usageSource, options, personWrote] of cases) {
+    assert.equal(personWroteChatTurn(usageSource, chatTurnAudienceFor(options, {})), personWrote, label);
   }
 });
 

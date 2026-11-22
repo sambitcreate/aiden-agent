@@ -532,7 +532,8 @@ import {
   createVisualizeGuideTool,
   VISUALIZE_GUIDE_TOOL_NAME,
 } from "./generative-ui-extension.js";
-import { aidenStartedTurn, chatToolOffers, offersChildChats, chatTurnArgsToolRefusal, chatTurnAudienceFor, chatTurnToolRefusal, screenedPromptAnswersPerson, declaresAppTools, declaresWindowTools, firstTurnToolRefusal, refusedForWantOfWindow, windowlessChatTurn, type ChatToolSurface, type TurnToolRefusal } from "./chat-turn-tool-policy.js";
+import { agentNoticeRun } from "./follow-through/notice-delivery.js";
+import { chatToolOffers, personWroteChatTurn, offersChildChats, chatTurnArgsToolRefusal, chatTurnAudienceFor, chatTurnToolRefusal, screenedPromptAnswersPerson, declaresAppTools, declaresWindowTools, firstTurnToolRefusal, refusedForWantOfWindow, windowlessChatTurn, type ChatToolSurface, type TurnToolRefusal } from "./chat-turn-tool-policy.js";
 import { createGenerativeUiDraftSession } from "./generative-ui-draft.js";
 import { createUiDraftSession } from "./aiden-ui-draft.js";
 import { withoutVisualSnapshots } from "../../renderer/shared/visual-snapshots.js";
@@ -1986,13 +1987,14 @@ async function prepareGeneration(
   /** Calls this turn refuses because of their arguments (a woken turn setting a check-back). */
   const turnArgsRefusal = chatTurnArgsToolRefusal(turnAudience);
   // The person sent in a lead chat: its started chats' endings may wake it
-  // again after a Stop (Phase 5, D4).
-  if (params.chatId && chatLineage && !chatLineage.startedBy && !aidenStartedTurn(turnAudience)) {
+  // again after a Stop (Phase 5, D4). A scheduled run posting here is not them.
+  const personWroteTurn = personWroteChatTurn(options.usageSource, turnAudience);
+  if (params.chatId && chatLineage && !chatLineage.startedBy && personWroteTurn) {
     (await import("./chat-orchestration/child-chats-main.js")).leadChatResumed(params.chatId);
   }
   // The person wrote in a chat another chat started: from now on it is theirs,
   // and the lead's `send` and Stop leave it alone (Phase 5, D3).
-  if (params.chatId && chatLineage?.startedBy && options.leadChatTurn !== true && !aidenStartedTurn(turnAudience)) {
+  if (params.chatId && chatLineage?.startedBy && options.leadChatTurn !== true && personWroteTurn) {
     const tookOverChatId = params.chatId;
     await (await import("./chat-orchestration/child-chats-main.js")).personTookOverStartedChat(tookOverChatId).catch((error: unknown) => {
       logger.warn("chat-orchestration", "Could not record that the person took over a started chat.", error);
@@ -6867,7 +6869,6 @@ export const llmClient = {
     return questionnaires.respondAsHost(promptId, response);
   },
 
-  /** The open approval of this chat's owed turn, for the desktop's host card. */
   /**
    * The owner of a turn main starts for an attended chat with no window behind
    * it (a goal round): approvals and questions go where an owed turn's do, to
@@ -6910,6 +6911,7 @@ export const llmClient = {
     return subagentRuntimeRegistry.hasLiveChatChildren(chatId);
   },
 
+  /** The open approval of this chat's owed turn, for the desktop's host card. */
   pendingOwedTurnApproval(chatId: string) {
     return owedTurnPrompts.approvalForChat(chatId);
   },
@@ -7061,17 +7063,22 @@ export const llmClient = {
   },
 
   /**
-   * Queue a follow-up notice into the chat's running generation, whoever owns
-   * it. Null when nothing is running there that takes input.
+   * Queue a follow-up notice into the chat's own running turn, whoever owns
+   * it. `"busy"` while a run another feature owns (a scheduled task's) holds
+   * the chat: it never takes notices. Null when nothing runs there.
    */
   async admitAgentNotice(
     chatId: string,
     input: { text: string; notice: AgentNoticeV1 },
-  ): Promise<ChatRunInputAdmissionResult | null> {
-    const streamId = [...active.entries()].find(
-      ([, entry]) => entry.chatId === chatId && !entry.cancelRequested,
-    )?.[0];
-    if (!streamId) return null;
+  ): Promise<ChatRunInputAdmissionResult | "busy" | null> {
+    // Only the chat's own turns open an owed turn (`owesItsChatTurns`).
+    const target = agentNoticeRun(
+      [...active.entries()].map(([id, entry]) => [id, { chatId: entry.chatId, cancelRequested: entry.cancelRequested, chatTurn: entry.owedTurn !== undefined }] as const),
+      chatId,
+    );
+    if (target === "busy") return "busy";
+    if (!target) return null;
+    const { streamId } = target;
     return runInputAdmission.admit({
       streamId,
       chatId,
