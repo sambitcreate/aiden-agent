@@ -526,6 +526,7 @@
         "main/services/aiden-remote-simulators.test.ts",
         "main/services/aiden-remote-speech.test.ts",
         "main/services/aiden-mcp-server.test.ts",
+        "main/services/chat-orchestration/run-core.test.ts",
         "main/handlers/aiden-mcp.test.ts",
         "renderer/components/settings/aiden-mcp-settings.test.tsx",
         "renderer/shared/aiden-mcp-token-env.test.ts",
