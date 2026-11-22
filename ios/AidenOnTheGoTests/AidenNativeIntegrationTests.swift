@@ -891,6 +891,119 @@ final class AidenNativeIntegrationTests: XCTestCase {
         XCTAssertEqual(ran, [])
     }
 
+    // MARK: Notification preferences
+
+    func testPreferencesDefaultAndRoundTrip() throws {
+        let suiteName = "AidenNativeIntegrationTests.\(UUID().uuidString)"
+        let suite = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { suite.removePersistentDomain(forName: suiteName) }
+        var prefs = AidenNotificationPreferences.load(from: suite)
+        XCTAssertTrue(prefs.needsAnswer)
+        XCTAssertTrue(prefs.responseReady)
+        XCTAssertTrue(prefs.runFailed)
+        XCTAssertTrue(prefs.botNeedsMe)
+        XCTAssertTrue(prefs.showMessageText)
+        XCTAssertFalse(prefs.replyTextOnLockScreen)
+        XCTAssertTrue(prefs.quietInOpenChat)
+        prefs.responseReady = false
+        prefs.replyTextOnLockScreen = true
+        prefs.save(to: suite)
+        let loaded = AidenNotificationPreferences.load(from: suite)
+        XCTAssertFalse(loaded.responseReady)
+        XCTAssertTrue(loaded.replyTextOnLockScreen)
+        XCTAssertTrue(loaded.runFailed)
+
+        suite.set(Data("not json".utf8), forKey: AidenNotificationPreferences.defaultsKey)
+        XCTAssertEqual(AidenNotificationPreferences.load(from: suite), AidenNotificationPreferences())
+    }
+
+    func testPreferencesGateEachAlertKind() {
+        func posts(_ kind: AidenRunAlertKind, _ prefs: AidenNotificationPreferences) -> Bool {
+            AidenRunAlertPolicy.shouldPost(
+                kind: kind, appState: .background, isChatOnScreen: false,
+                alreadyAlerted: false, isAuthorized: true, preferences: prefs
+            )
+        }
+        var prefs = AidenNotificationPreferences()
+        prefs.needsAnswer = false
+        XCTAssertFalse(posts(.needsApproval, prefs))
+        XCTAssertFalse(posts(.needsAnswer, prefs))
+        XCTAssertTrue(posts(.completed, prefs))
+        XCTAssertTrue(posts(.failed, prefs))
+        prefs = AidenNotificationPreferences()
+        prefs.responseReady = false
+        XCTAssertFalse(posts(.completed, prefs))
+        XCTAssertTrue(posts(.failed, prefs))
+        prefs = AidenNotificationPreferences()
+        prefs.runFailed = false
+        XCTAssertFalse(posts(.failed, prefs))
+        XCTAssertTrue(posts(.needsApproval, prefs))
+    }
+
+    func testQuietInOpenChatOffAlertsForTheChatOnScreenWhileInactive() {
+        var prefs = AidenNotificationPreferences()
+        XCTAssertFalse(AidenRunAlertPolicy.shouldPost(
+            kind: .completed, appState: .inactive, isChatOnScreen: true,
+            alreadyAlerted: false, isAuthorized: true, preferences: prefs
+        ))
+        prefs.quietInOpenChat = false
+        XCTAssertTrue(AidenRunAlertPolicy.shouldPost(
+            kind: .completed, appState: .inactive, isChatOnScreen: true,
+            alreadyAlerted: false, isAuthorized: true, preferences: prefs
+        ))
+        XCTAssertFalse(AidenRunAlertPolicy.shouldPost(
+            kind: .completed, appState: .active, isChatOnScreen: true,
+            alreadyAlerted: false, isAuthorized: true, preferences: prefs
+        ))
+    }
+
+    func testDeniedPermissionBlocksEveryKindAndShowsOpenSettings() {
+        for kind in [AidenRunAlertKind.needsApproval, .needsAnswer, .completed, .failed] {
+            XCTAssertFalse(AidenRunAlertPolicy.shouldPost(
+                kind: kind, appState: .background, isChatOnScreen: false,
+                alreadyAlerted: false, isAuthorized: false, preferences: .init()
+            ))
+        }
+        XCTAssertEqual(AidenNotificationPermissionRow.state(for: .denied), .off(canAsk: false))
+        XCTAssertEqual(AidenNotificationPermissionRow.state(for: .notDetermined), .off(canAsk: true))
+        XCTAssertEqual(AidenNotificationPermissionRow.state(for: .authorized), .on)
+        XCTAssertEqual(AidenNotificationPermissionRow.state(for: .provisional), .on)
+    }
+
+    @MainActor
+    func testReplyTextStaysOffTheLockScreenUnlessTurnedOn() async throws {
+        guard ActivityAuthorizationInfo().areActivitiesEnabled else {
+            throw XCTSkip("Live Activities are disabled on this device.")
+        }
+        func finalExcerpt(replyTextOnLockScreen: Bool) async -> String? {
+            var prefs = AidenNotificationPreferences()
+            prefs.replyTextOnLockScreen = replyTextOnLockScreen
+            let id = "reply-text-\(UUID().uuidString)"
+            let manager = AidenRemoteLiveActivityManager(preferences: { prefs })
+            await manager.start(instanceID: id, chatID: id, title: "Fix flaky login test", streamID: id)
+            guard let activity = Activity<AgentRunActivityAttributes>.activities.first(where: {
+                $0.attributes.instanceID == id && $0.attributes.streamID == id
+            }) else {
+                XCTFail("ActivityKit did not create the requested Aiden Live Activity.")
+                return nil
+            }
+            await manager.appendResponse("All 12 tests pass.", instanceID: id, streamID: id)
+            await manager.finish(instanceID: id, streamID: id, status: .complete, message: "Done")
+            let final = await deliveredContent(of: activity, expecting: "the final state", where: { $0.isFinal })
+            await manager.endAll(forInstanceID: id)
+            return final?.responseExcerpt
+        }
+
+        let hidden = await finalExcerpt(replyTextOnLockScreen: false)
+        XCTAssertEqual(hidden, "")
+        XCTAssertNil(AgentRunTextPresentation.make(
+            state: liveState(status: .complete, excerpt: hidden ?? "", isFinal: true),
+            systemMarkedStale: false
+        ).detail)
+        let shown = await finalExcerpt(replyTextOnLockScreen: true)
+        XCTAssertEqual(shown, "All 12 tests pass.")
+    }
+
     private func make(
         _ kind: AidenRunAlertKind,
         _ detail: AidenRunAlertDetail?,

@@ -187,6 +187,8 @@ Aiden On The Go for iPhone alerts you when a chat run needs you while you're awa
 
 Answers carry only ids and your reply text; a notification never carries tool output or replies.
 
+**Settings → Notifications** on iPhone controls these alerts. The top row shows whether iOS allows notifications, with **Turn on** (or **Open Settings** once iOS won't ask again). **Tell me when** has a switch each for approvals and questions, a finished response, a failed response, and a Bot handing you a step. **Privacy** has **Show message text in alerts** (on: alerts show the approval summary or question; off: fixed text such as "Needs your approval"), **Show reply text on Lock Screen** (off by default: the Live Activity adds the end of a finished reply only when on; this replaces the old Appearance switch), and **Quiet for the open chat** (on by default: no alert for the chat you're looking at behind Notification Center or the app switcher). These choices stay on the iPhone.
+
 ## Troubleshooting
 
 - **Remote Access says Off:** enable it locally in Aiden Settings. No listener or Bonjour advertisement exists while it is off.

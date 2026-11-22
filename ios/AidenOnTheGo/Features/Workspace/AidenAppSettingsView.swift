@@ -108,6 +108,12 @@ struct AidenAppSettingsView: View {
             }
 
             Section {
+                NavigationLink { AidenNotificationSettingsView() } label: {
+                    Label("Notifications", systemImage: "bell")
+                }
+            } footer: { Text("What this iPhone tells you about chats, and what shows on the Lock Screen.") }
+
+            Section {
                 NavigationLink { AidenProvidersView(coordinator: coordinator) } label: {
                     Label("Providers", systemImage: "server.rack")
                 }

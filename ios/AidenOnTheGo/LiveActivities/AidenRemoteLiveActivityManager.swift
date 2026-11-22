@@ -14,8 +14,6 @@ final class AidenRemoteLiveActivityManager {
         drivesActivityKit: ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] == nil
     )
 
-    static let responseExcerptPreferenceKey = "aiden.live-activities.response-excerpts"
-
     /// ActivityKit budgets updates, so streamed tokens, reasoning, and tool
     /// churn coalesce to the newest state at most once per interval. Phase
     /// changes (status, approval, stale, end) bypass the window.
@@ -28,7 +26,7 @@ final class AidenRemoteLiveActivityManager {
 
     private typealias ContentState = AgentRunActivityAttributes.ContentState
 
-    private let defaults: UserDefaults
+    private let preferences: @MainActor () -> AidenNotificationPreferences
     /// False keeps this manager off the device's ActivityKit entirely: it
     /// requests, updates and ends nothing and sees no existing activities.
     private let drivesActivityKit: Bool
@@ -36,17 +34,23 @@ final class AidenRemoteLiveActivityManager {
     private var stateByActivityID: [String: ContentState] = [:]
     private var throttleByActivityID: [String: AidenLatestValueThrottle<ContentState>] = [:]
 
-    init(defaults: UserDefaults = .standard, drivesActivityKit: Bool = true) {
-        self.defaults = defaults
+    /// `preferences` defaults to the person's saved ones in `defaults`.
+    init(
+        defaults: UserDefaults = .standard,
+        drivesActivityKit: Bool = true,
+        preferences: (@MainActor () -> AidenNotificationPreferences)? = nil
+    ) {
         self.drivesActivityKit = drivesActivityKit
+        self.preferences = preferences ?? { AidenNotificationPreferences.load(from: defaults) }
     }
 
     private var systemActivities: [Activity<AgentRunActivityAttributes>] {
         drivesActivityKit ? Activity<AgentRunActivityAttributes>.activities : []
     }
 
+    /// Settings → Notifications → Reply text on Lock Screen; off by default.
     var includesResponseExcerpts: Bool {
-        defaults.bool(forKey: Self.responseExcerptPreferenceKey)
+        preferences().replyTextOnLockScreen
     }
 
     static func matches(
@@ -226,12 +230,15 @@ final class AidenRemoteLiveActivityManager {
         errorSummary: String? = nil
     ) async {
         guard let activity = activity(instanceID: instanceID, streamID: streamID) else { return }
-        let state = AgentRunActivityStateReducer.final(
+        var state = AgentRunActivityStateReducer.final(
             status: status,
             activity: message,
             state: state(for: activity),
             errorSummary: errorSummary
         )
+        if !includesResponseExcerpts, !state.responseExcerpt.isEmpty {
+            state = AgentRunActivityStateReducer.clearingResponseExcerpt(state: state)
+        }
         stateByActivityID[activity.id] = state
         discardThrottle(for: activity.id)
         let policy: ActivityUIDismissalPolicy = status == .complete

@@ -697,18 +697,55 @@ enum AidenRunAlertPolicy {
     /// the user is away. An active app already shows the prompt or result in
     /// app. Quiet Open Chat: a transient overlay over the chat that is on
     /// screen returns straight to that chat, so it stays silent too.
+    /// The person's notification preferences can turn a kind off, and
+    /// Quiet Open Chat off.
     static func shouldPost(
+        kind: AidenRunAlertKind,
         appState: AidenRunAlertAppState,
         isChatOnScreen: Bool,
         alreadyAlerted: Bool,
-        isAuthorized: Bool
+        isAuthorized: Bool,
+        preferences: AidenNotificationPreferences
+    ) -> Bool {
+        preferences.allows(kind) && isAway(
+            appState: appState,
+            isChatOnScreen: isChatOnScreen,
+            alreadyAlerted: alreadyAlerted,
+            isAuthorized: isAuthorized,
+            quietInOpenChat: preferences.quietInOpenChat
+        )
+    }
+
+    /// A Bot hand-off alert, which "A Bot hands me a step" can turn off.
+    static func shouldPostBotHandoff(
+        appState: AidenRunAlertAppState,
+        isChatOnScreen: Bool,
+        alreadyAlerted: Bool,
+        isAuthorized: Bool,
+        preferences: AidenNotificationPreferences
+    ) -> Bool {
+        preferences.botNeedsMe && isAway(
+            appState: appState,
+            isChatOnScreen: isChatOnScreen,
+            alreadyAlerted: alreadyAlerted,
+            isAuthorized: isAuthorized,
+            quietInOpenChat: preferences.quietInOpenChat
+        )
+    }
+
+    private static func isAway(
+        appState: AidenRunAlertAppState,
+        isChatOnScreen: Bool,
+        alreadyAlerted: Bool,
+        isAuthorized: Bool,
+        quietInOpenChat: Bool
     ) -> Bool {
         guard isAuthorized, !alreadyAlerted else { return false }
         switch appState {
         case .active:
             return false
         case .inactive:
-            return !isChatOnScreen
+            return !(quietInOpenChat && isChatOnScreen)
         case .background:
             return true
         }
@@ -819,8 +856,7 @@ final class AidenRunAlertNotifier {
         chatID: String,
         chatTitle: String,
         isChatOnScreen: Bool,
-        detail: AidenRunAlertDetail? = nil,
-        showMessageText: Bool = true
+        detail: AidenRunAlertDetail? = nil
     ) async {
         guard isEnabled else { return }
         var status = await center.currentAuthorizationStatus()
@@ -837,11 +873,14 @@ final class AidenRunAlertNotifier {
         }
         let key = AidenRunAlertPolicy.dedupeKey(kind: kind, instanceID: instanceID, id: id)
         var alerted = defaults.stringArray(forKey: Self.alertedKeysKey) ?? []
+        let preferences = AidenNotificationPreferences.load(from: defaults)
         guard AidenRunAlertPolicy.shouldPost(
+            kind: kind,
             appState: appState(),
             isChatOnScreen: isChatOnScreen,
             alreadyAlerted: alerted.contains(key),
-            isAuthorized: AidenRunAlertPolicy.isAuthorized(status)
+            isAuthorized: AidenRunAlertPolicy.isAuthorized(status),
+            preferences: preferences
         ), let url = AidenDeepLink.chatURL(instanceId: instanceID, chatId: chatID) else { return }
 
         let content = AidenRunAlertContent.make(
@@ -851,7 +890,7 @@ final class AidenRunAlertNotifier {
             chatID: chatID,
             chatTitle: chatTitle,
             deepLink: url,
-            showMessageText: showMessageText
+            showMessageText: preferences.showMessageText
         )
         let request = UNNotificationRequest(
             identifier: "\(Self.identifierPrefix)\(kind.rawValue).\(instanceID).\(id)",
@@ -881,11 +920,12 @@ final class AidenRunAlertNotifier {
         let status = await center.currentAuthorizationStatus()
         let key = "\(instanceID)|handoff|\(botID)|\(waitID)"
         var alerted = defaults.stringArray(forKey: Self.alertedKeysKey) ?? []
-        guard AidenRunAlertPolicy.shouldPost(
+        guard AidenRunAlertPolicy.shouldPostBotHandoff(
             appState: appState(),
             isChatOnScreen: isChatOnScreen,
             alreadyAlerted: alerted.contains(key),
-            isAuthorized: AidenRunAlertPolicy.isAuthorized(status)
+            isAuthorized: AidenRunAlertPolicy.isAuthorized(status),
+            preferences: AidenNotificationPreferences.load(from: defaults)
         ), let url = AidenDeepLink.botChatURL(instanceId: instanceID, botId: botID) else { return }
 
         let content = UNMutableNotificationContent()

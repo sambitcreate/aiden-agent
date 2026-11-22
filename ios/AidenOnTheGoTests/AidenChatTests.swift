@@ -14053,6 +14053,40 @@ final class AidenRunAlertTests: XCTestCase {
         }
     }
 
+    func testNotificationPreferencesSilenceTurnedOffAlertsAndHideMessageText() async throws {
+        var prefs = AidenNotificationPreferences()
+        prefs.responseReady = false
+        prefs.botNeedsMe = false
+        prefs.showMessageText = false
+        prefs.save(to: defaults)
+        let center = FakeRunAlertCenter()
+        let notifier = notifier(center)
+
+        await notify(notifier, .completed, id: "stream-1")
+        await notifier.notifyBotHandoff(
+            waitID: "wait-1",
+            kind: .action,
+            instanceID: "mac-a",
+            botID: "bot_fixture_01",
+            botName: "Scout",
+            isChatOnScreen: false
+        )
+        XCTAssertTrue(center.posted.isEmpty, "turned-off alerts stay silent")
+
+        await notifier.notify(
+            .needsApproval,
+            id: "approval-1",
+            instanceID: "mac-a",
+            chatID: "chat-1",
+            chatTitle: "Ship the release",
+            isChatOnScreen: false,
+            detail: .approval(target: .init(approvalID: "approval-1", runID: nil), summary: "Run npm publish", canAllow: true)
+        )
+        let content = try XCTUnwrap(center.posted.first?.content)
+        XCTAssertEqual(content.body, "Needs your approval", "message text stays in the app when it is off")
+        XCTAssertEqual(content.categoryIdentifier, AidenRunAlertCategory.approval, "actions still work")
+    }
+
     func testPermissionIsRequestedOnceAfterTheFirstCompletedRunWhileInApp() async {
         let center = FakeRunAlertCenter(status: .notDetermined, grantsAuthorization: false)
         let notifier = notifier(center)
