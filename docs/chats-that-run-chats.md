@@ -111,6 +111,13 @@ for approval.
   lead named there don't count as sites you named, so a fetch to one is still
   a new destination the gate asks about or judges. Once you write in the chat,
   the requests are yours again, though its runs stay tainted.
+- **Only your own words name sites.** A notice is never counted as yours, in
+  any chat: a **Started chat** notice (which quotes the started chat's reply),
+  a scheduled task's, a check or check-back's, a goal round's, or a job or pull
+  request's. A site that appears only in a notice is still a new destination.
+  The sites you named are read from the chat when a run starts; a site you
+  name in a steer during a run counts from the next run, so until then a
+  fetch to it still asks or is judged.
 - A started chat's approvals and questions come to you like a phone's: the
   desktop card, Inbox Needs you and paired phones. They wait up to 30 minutes,
   not the usual 5.
