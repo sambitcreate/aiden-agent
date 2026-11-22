@@ -772,6 +772,10 @@ final class AidenNativeIntegrationTests: XCTestCase {
         let activity = try XCTUnwrap(Activity<AgentRunActivityAttributes>.activities.first {
             $0.attributes.instanceID == mac && $0.attributes.streamID == "s1"
         })
+        // The card starts without an approval, so wait for the approval to land
+        // before answering; otherwise the opening state reads as "answered".
+        let waiting = await deliveredContent(of: activity, expecting: "the approval", where: { $0.approval != nil })
+        XCTAssertNotNil(waiting)
 
         let fake = FakeAlertTransport(
             failure: try alertServerError(409, code: "approval_resolved", details: ["decision": "allow"])
