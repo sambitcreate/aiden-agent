@@ -113,6 +113,12 @@ struct AidenOnTheGoApp: App {
         _inboxStore = State(initialValue: AidenUnifiedInboxStore(coordinator: coordinator))
         // A tap can launch the app, so this can't wait for `ContentView`.
         AidenNotificationPresentationDelegate.openTap = { $0.open(coordinator: coordinator) }
+        // Deny on a Live Activity (and notification actions) can launch the
+        // app in the background, so this can't wait for `ContentView` either.
+        AidenBackgroundActionBroker.shared.perform = AidenBackgroundActionBroker.perform(
+            coordinator: coordinator,
+            liveActivities: .shared
+        )
         // The unit-test host never touches the device's notifications.
         if ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] == nil {
             Task { await AidenNotificationIdentifierMigration.runOnce() }

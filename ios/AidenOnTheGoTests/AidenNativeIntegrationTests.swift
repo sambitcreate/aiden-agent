@@ -641,6 +641,148 @@ final class AidenNativeIntegrationTests: XCTestCase {
         )
     }
 
+    func testApprovalTargetIsSetWhileWaitingAndClearedByAnyLaterTransition() {
+        let target = AgentRunApprovalTarget(approvalID: "ap-1", runID: nil)
+        let waiting = AgentRunActivityStateReducer.waitingForApproval(state: approvalBase(), target: target)
+        XCTAssertEqual(waiting.approval, target)
+        // Relabeling and going stale keep the ask the person can still answer.
+        XCTAssertEqual(AgentRunActivityStateReducer.stale(state: waiting).approval, target)
+        XCTAssertEqual(AgentRunActivityStateReducer.refreshedWaiting(state: waiting).approval, target)
+        XCTAssertEqual(AgentRunActivityStateReducer.updatingSessionTitle("Renamed", state: waiting).approval, target)
+        XCTAssertNil(AgentRunActivityStateReducer.toolStarted(name: "bash", state: waiting).approval)
+        XCTAssertNil(AgentRunActivityStateReducer.reasoning("", state: waiting).approval)
+        XCTAssertNil(
+            AgentRunActivityStateReducer.final(status: .complete, activity: "Done", state: waiting, errorSummary: nil).approval
+        )
+        let denied = AgentRunActivityStateReducer.answered(decision: .deny, state: waiting)
+        XCTAssertNil(denied.approval)
+        XCTAssertEqual(denied.status, .thinking)
+        XCTAssertEqual(denied.currentActivity, "Denied")
+    }
+
+    func testCardOffersReviewAndDenyOnlyForAFreshAnswerableApproval() {
+        let target = AgentRunApprovalTarget(approvalID: "ap-1", runID: nil)
+        let fresh = AgentRunActivityStateReducer.waitingForApproval(state: approvalBase(), target: target)
+        XCTAssertEqual(AgentRunTextPresentation.make(state: fresh, systemMarkedStale: false).actions, [.review, .deny])
+        XCTAssertEqual(AgentRunTextPresentation.make(state: fresh, systemMarkedStale: true).actions, [.review])
+        let unanswerable = AgentRunActivityStateReducer.waitingForApproval(state: approvalBase(), target: nil)
+        XCTAssertEqual(AgentRunTextPresentation.make(state: unanswerable, systemMarkedStale: false).actions, [.review])
+        let question = AgentRunActivityStateReducer.waitingForAnswer(state: approvalBase())
+        XCTAssertEqual(AgentRunTextPresentation.make(state: question, systemMarkedStale: false).actions, [.review])
+        XCTAssertEqual(AgentRunTextPresentation.make(state: approvalBase(), systemMarkedStale: false).actions, [])
+        let done = AgentRunActivityStateReducer.final(status: .complete, activity: "Done", state: fresh)
+        XCTAssertEqual(AgentRunTextPresentation.make(state: done, systemMarkedStale: false).actions, [])
+    }
+
+    func testStateWithoutApprovalTargetDecodesWithoutActions() throws {
+        // Encoded by a build before approval targets existed.
+        let json = Data("""
+        {"sessionID":"chat-1","sessionTitle":"Chat","status":"waitingForApproval",
+         "currentActivity":"Needs your approval","responseExcerpt":"","startedAt":0,
+         "updatedAt":12,"isStale":false,"isFinal":false,"toolCallCount":1}
+        """.utf8)
+        let state = try JSONDecoder().decode(AgentRunActivityAttributes.ContentState.self, from: json)
+        XCTAssertNil(state.approval)
+        XCTAssertEqual(AgentRunTextPresentation.make(state: state, systemMarkedStale: false).actions, [.review])
+
+        let target = AgentRunApprovalTarget(approvalID: "ap-1", runID: "run-1")
+        let waiting = AgentRunActivityStateReducer.waitingForApproval(state: state, target: target)
+        let roundTripped = try JSONDecoder().decode(
+            AgentRunActivityAttributes.ContentState.self,
+            from: JSONEncoder().encode(waiting)
+        )
+        XCTAssertEqual(roundTripped.approval, target)
+    }
+
+    @MainActor
+    func testResponderDeniesOnTheStreamOrRunRoute() async throws {
+        let fake = FakeAlertTransport()
+        let responder = AidenAlertActionResponder(lookup: { _ in .client(fake) })
+        let streamOutcome = await responder.run(.deny(instanceID: "mac", chatID: "c", target: .init(approvalID: "ap", runID: nil)))
+        XCTAssertEqual(streamOutcome, .done)
+        let runOutcome = await responder.run(.deny(instanceID: "mac", chatID: "c", target: .init(approvalID: "ap", runID: "r1")))
+        XCTAssertEqual(runOutcome, .done)
+        let approveOutcome = await responder.run(.approve(instanceID: "mac", chatID: "c", target: .init(approvalID: "ap2", runID: nil)))
+        XCTAssertEqual(approveOutcome, .done)
+        XCTAssertEqual(fake.calls, [
+            .streamApproval(id: "ap", decision: .deny, scope: nil),
+            .runApproval(runId: "r1", approvalId: "ap", decision: .deny, scope: nil),
+            .streamApproval(id: "ap2", decision: .allow, scope: nil),
+        ])
+        // Every attempt carries its own idempotency key.
+        XCTAssertEqual(Set(fake.idempotencyKeys).count, 3)
+    }
+
+    @MainActor
+    func testResponderTreatsResolvedApprovalAsDone() async throws {
+        for code in ["approval_resolved", "approval_already_resolved", "approval_expired",
+                     "question_already_resolved", "question_expired"] {
+            let fake = FakeAlertTransport(failure: try alertServerError(409, code: code))
+            let outcome = await AidenAlertActionResponder(lookup: { _ in .client(fake) })
+                .run(.deny(instanceID: "mac", chatID: "c", target: .init(approvalID: "ap", runID: nil)))
+            XCTAssertEqual(outcome, .alreadyResolved, code)
+        }
+        let other = FakeAlertTransport(failure: try alertServerError(500, code: "internal_error"))
+        let outcome = await AidenAlertActionResponder(lookup: { _ in .client(other) })
+            .run(.deny(instanceID: "mac", chatID: "c1", target: .init(approvalID: "ap", runID: nil)))
+        XCTAssertEqual(outcome, .openApp(AidenDeepLink.chatURL(instanceId: "mac", chatId: "c1")))
+    }
+
+    @MainActor
+    func testResponderOpensChatWhenMacUnreachable() async {
+        let outcome = await AidenAlertActionResponder(lookup: { _ in .unreachable })
+            .run(.deny(instanceID: "mac", chatID: "c1", target: .init(approvalID: "ap", runID: nil)))
+        XCTAssertEqual(outcome, .openApp(AidenDeepLink.chatURL(instanceId: "mac", chatId: "c1")))
+    }
+
+    @MainActor
+    func testResponderDropsActionForForgottenMac() async {
+        let outcome = await AidenAlertActionResponder(lookup: { _ in .forgotten })
+            .run(.deny(instanceID: "gone", chatID: "c", target: .init(approvalID: "ap", runID: nil)))
+        XCTAssertEqual(outcome, .dropped)
+    }
+
+    @MainActor
+    func testResponderRepliesAsTheFirstQuestionsCustomAnswer() async {
+        let fake = FakeAlertTransport()
+        let responder = AidenAlertActionResponder(lookup: { _ in .client(fake) })
+        _ = await responder.run(.reply(instanceID: "mac", chatID: "c", promptID: "q1", runID: nil, text: "Just the App Store version"))
+        _ = await responder.run(.reply(instanceID: "mac", chatID: "c", promptID: "q2", runID: "r1", text: "Yes"))
+        XCTAssertEqual(fake.calls, [
+            .question(id: "q1", request: .init(cancelled: false, answers: [.custom(questionIndex: 0, answer: "Just the App Store version")])),
+            .runQuestion(runId: "r1", promptId: "q2", request: .init(cancelled: false, answers: [.custom(questionIndex: 0, answer: "Yes")])),
+        ])
+    }
+
+    @MainActor
+    func testBackgroundBrokerOpensTheAppUntilWired() async {
+        let broker = AidenBackgroundActionBroker()
+        let deny = AidenAlertAction.deny(instanceID: "mac", chatID: "c", target: .init(approvalID: "ap", runID: nil))
+        let unwired = await broker.run(deny)
+        XCTAssertEqual(unwired, .openApp(nil))
+        broker.perform = { _ in .done }
+        let wired = await broker.run(deny)
+        XCTAssertEqual(wired, .done)
+    }
+
+    private func approvalBase() -> AgentRunActivityAttributes.ContentState {
+        AgentRunActivityStateReducer.initialState(
+            sessionID: "chat-1",
+            sessionTitle: "Chat",
+            startedAt: Date(timeIntervalSince1970: 1_000)
+        )
+    }
+
+    private func alertServerError(_ status: Int, code: String) throws -> AidenRemoteClientError {
+        let body = try JSONDecoder().decode(
+            AidenRemoteErrorEnvelope.Body.self,
+            from: JSONSerialization.data(withJSONObject: [
+                "code": code, "message": "Refused", "requestId": "request-1", "retryable": false,
+            ])
+        )
+        return .server(statusCode: status, body: body)
+    }
+
     private func liveState(
         status: AgentRunActivityStatus,
         activity: String = "Working",
@@ -2037,6 +2179,56 @@ private final class AidenRecoveryMemoryKeychain: KeychainStoring {
     func load(_ key: KeychainStore.Key, scope: String) throws -> String? { nil }
     func delete(_ key: KeychainStore.Key, scope: String) throws {}
 }
+
+private final class FakeAlertTransport: AidenAlertActionTransport, @unchecked Sendable {
+    enum Call: Equatable {
+        case streamApproval(id: String, decision: AidenApprovalDecision, scope: AidenApprovalScope?)
+        case runApproval(runId: String, approvalId: String, decision: AidenApprovalDecision, scope: AidenApprovalScope?)
+        case question(id: String, request: AidenQuestionRespondRequest)
+        case runQuestion(runId: String, promptId: String, request: AidenQuestionRespondRequest)
+    }
+
+    private let lock = NSLock()
+    private var recorded: [Call] = []
+    private var keys: [UUID] = []
+    private let failure: AidenRemoteClientError?
+
+    init(failure: AidenRemoteClientError? = nil) {
+        self.failure = failure
+    }
+
+    var calls: [Call] { lock.withLock { recorded } }
+    var idempotencyKeys: [UUID] { lock.withLock { keys } }
+
+    private func record(_ call: Call, key: UUID) throws {
+        lock.withLock {
+            recorded.append(call)
+            keys.append(key)
+        }
+        if let failure { throw failure }
+    }
+
+    func respondToApproval(id: String, decision: AidenApprovalDecision, scope: AidenApprovalScope?, idempotencyKey: UUID) async throws -> AidenApprovalResponse {
+        try record(.streamApproval(id: id, decision: decision, scope: scope), key: idempotencyKey)
+        return AidenApprovalResponse(approvalId: id, decision: decision, scope: scope, resolvedAt: Date())
+    }
+
+    func respondToRunApproval(runId: String, approvalId: String, decision: AidenApprovalDecision, scope: AidenApprovalScope?, idempotencyKey: UUID) async throws -> AidenRemoteRunApprovalResult {
+        try record(.runApproval(runId: runId, approvalId: approvalId, decision: decision, scope: scope), key: idempotencyKey)
+        return AidenRemoteRunApprovalResult(runId: runId, approvalId: approvalId, decision: decision, scope: scope, resolvedAt: Date())
+    }
+
+    func respondToQuestion(id: String, request: AidenQuestionRespondRequest, idempotencyKey: UUID) async throws -> AidenQuestionRespondResponse {
+        try record(.question(id: id, request: request), key: idempotencyKey)
+        return AidenQuestionRespondResponse(promptId: id, resolvedAt: Date())
+    }
+
+    func respondToRunQuestion(runId: String, promptId: String, request: AidenQuestionRespondRequest, idempotencyKey: UUID) async throws -> AidenRemoteRunQuestionResult {
+        try record(.runQuestion(runId: runId, promptId: promptId, request: request), key: idempotencyKey)
+        return AidenRemoteRunQuestionResult(runId: runId, promptId: promptId, outcome: "answered", resolvedAt: Date())
+    }
+}
+
 
 /// ActivityKit echoes an app's own `update(_:)` back to its `Activity`
 /// instances asynchronously and throttles those echoes: an update issued right

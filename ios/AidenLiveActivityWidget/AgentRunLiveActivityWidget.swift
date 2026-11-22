@@ -16,7 +16,8 @@ struct AgentRunLiveActivityWidget: Widget {
         ActivityConfiguration(for: AgentRunActivityAttributes.self) { context in
             AgentRunLockScreenView(
                 presentation: Self.presentation(context),
-                chatURL: Self.chatURL(context)
+                chatURL: Self.chatURL(context),
+                deny: Self.denyIntent(context)
             )
             .widgetURL(Self.chatURL(context))
         } dynamicIsland: { context in
@@ -24,7 +25,7 @@ struct AgentRunLiveActivityWidget: Widget {
             let chatURL = Self.chatURL(context)
             return DynamicIsland {
                 DynamicIslandExpandedRegion(.bottom) {
-                    AgentRunTextCard(presentation: presentation, chatURL: chatURL)
+                    AgentRunTextCard(presentation: presentation, chatURL: chatURL, deny: Self.denyIntent(context))
                         .padding(.horizontal, 4)
                 }
             } compactLeading: {
@@ -52,11 +53,21 @@ struct AgentRunLiveActivityWidget: Widget {
     private static func chatURL(_ context: ActivityViewContext<AgentRunActivityAttributes>) -> URL? {
         AidenDeepLink.chatURL(instanceId: context.attributes.instanceID, chatId: context.state.sessionID)
     }
+
+    private static func denyIntent(_ context: ActivityViewContext<AgentRunActivityAttributes>) -> DenyApprovalIntent? {
+        guard let target = context.state.approval else { return nil }
+        return DenyApprovalIntent(
+            instanceID: context.attributes.instanceID,
+            chatID: context.state.sessionID,
+            target: target
+        )
+    }
 }
 
 private struct AgentRunLockScreenView: View {
     let presentation: AgentRunTextPresentation
     let chatURL: URL?
+    let deny: DenyApprovalIntent?
     @Environment(\.activityFamily) private var activityFamily
 
     var body: some View {
@@ -74,7 +85,7 @@ private struct AgentRunLockScreenView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(10)
         } else {
-            AgentRunTextCard(presentation: presentation, chatURL: chatURL)
+            AgentRunTextCard(presentation: presentation, chatURL: chatURL, deny: deny)
                 .padding(16)
         }
     }
@@ -83,6 +94,7 @@ private struct AgentRunLockScreenView: View {
 private struct AgentRunTextCard: View {
     let presentation: AgentRunTextPresentation
     let chatURL: URL?
+    let deny: DenyApprovalIntent?
     @Environment(\.isLuminanceReduced) private var isLuminanceReduced
 
     var body: some View {
@@ -114,8 +126,42 @@ private struct AgentRunTextCard: View {
                     .lineLimit(2)
                     .fixedSize(horizontal: false, vertical: true)
             }
+
+            if !presentation.actions.isEmpty {
+                actions
+                    .padding(.top, 8)
+            }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    /// Plain text buttons, trailing: Review opens the chat, Deny answers
+    /// without opening the app.
+    private var actions: some View {
+        HStack(spacing: 22) {
+            Spacer(minLength: 0)
+            ForEach(presentation.actions, id: \.self) { action in
+                switch action {
+                case .review:
+                    if let chatURL {
+                        Link(destination: chatURL) {
+                            Text("Review")
+                                .font(.subheadline.weight(.semibold))
+                                .foregroundStyle(.primary)
+                        }
+                    }
+                case .deny:
+                    if let deny {
+                        Button(intent: deny) {
+                            Text("Deny")
+                                .font(.subheadline.weight(.semibold))
+                                .foregroundStyle(.secondary)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+            }
+        }
     }
 }
 

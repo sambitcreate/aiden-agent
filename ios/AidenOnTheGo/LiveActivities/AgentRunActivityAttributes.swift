@@ -1,6 +1,21 @@
 import ActivityKit
 import Foundation
 
+/// The approval a waiting card can answer: the chat stream's approval, or a
+/// run's approval when `runID` is set. Only ids; the widget never sees what
+/// is being approved.
+struct AgentRunApprovalTarget: Codable, Hashable, Sendable {
+    let approvalID: String
+    let runID: String?
+}
+
+/// How the person answered a card's approval. The widget target has no
+/// Remote contract types, so this mirrors `AidenApprovalDecision`.
+enum AgentRunApprovalAnswer: Equatable, Sendable {
+    case allow
+    case deny
+}
+
 struct AgentRunActivityAttributes: ActivityAttributes {
     struct ContentState: Codable, Hashable {
         var sessionID: String
@@ -17,6 +32,9 @@ struct AgentRunActivityAttributes: ActivityAttributes {
         /// tool names and arguments never reach the widget beyond the
         /// sanitized activity line.
         var toolCallCount: Int
+        /// Set only while the run waits for an approval this device may
+        /// answer; any other status clears it.
+        var approval: AgentRunApprovalTarget?
 
         init(
             sessionID: String,
@@ -29,7 +47,8 @@ struct AgentRunActivityAttributes: ActivityAttributes {
             isStale: Bool = false,
             isFinal: Bool = false,
             errorSummary: String? = nil,
-            toolCallCount: Int = 0
+            toolCallCount: Int = 0,
+            approval: AgentRunApprovalTarget? = nil
         ) {
             self.sessionID = sessionID
             self.sessionTitle = AgentRunActivitySanitizer.sessionTitle(sessionTitle)
@@ -42,10 +61,11 @@ struct AgentRunActivityAttributes: ActivityAttributes {
             self.isFinal = isFinal
             self.errorSummary = errorSummary.map(AgentRunActivitySanitizer.activityLine)
             self.toolCallCount = AgentRunFreshness.clampedToolCallCount(toolCallCount)
+            self.approval = status == .waitingForApproval ? approval : nil
         }
 
         // iOS persists running activities across app updates, so state encoded
-        // by an older build (without `toolCallCount`) must still decode.
+        // by an older build (without `toolCallCount` or `approval`) must still decode.
         init(from decoder: Decoder) throws {
             let values = try decoder.container(keyedBy: CodingKeys.self)
             self.init(
@@ -59,7 +79,8 @@ struct AgentRunActivityAttributes: ActivityAttributes {
                 isStale: try values.decode(Bool.self, forKey: .isStale),
                 isFinal: try values.decode(Bool.self, forKey: .isFinal),
                 errorSummary: try values.decodeIfPresent(String.self, forKey: .errorSummary),
-                toolCallCount: try values.decodeIfPresent(Int.self, forKey: .toolCallCount) ?? 0
+                toolCallCount: try values.decodeIfPresent(Int.self, forKey: .toolCallCount) ?? 0,
+                approval: try values.decodeIfPresent(AgentRunApprovalTarget.self, forKey: .approval)
             )
         }
     }
@@ -352,6 +373,13 @@ enum AgentRunStalePresentation {
 /// Everything a Live Activity surface shows, as plain words: a title, one
 /// status line, an optional final excerpt and how time is drawn. Surfaces
 /// render this text on a clean background with no status marks or colors.
+/// Plain-text buttons a card can offer. Review opens the chat; Deny answers a
+/// fresh approval without opening the app. Approve is never offered here.
+enum AgentRunTextAction: Equatable {
+    case review
+    case deny
+}
+
 struct AgentRunTextPresentation: Equatable {
     enum Timing: Equatable {
         /// Live elapsed timer since the run started.
@@ -367,6 +395,7 @@ struct AgentRunTextPresentation: Equatable {
     let compactStatus: String
     let detail: String?
     let timing: Timing
+    var actions: [AgentRunTextAction] = []
 
     static func make(
         state: AgentRunActivityAttributes.ContentState,
@@ -399,19 +428,25 @@ struct AgentRunTextPresentation: Equatable {
                 status: stale.action.map { "\(stale.lead) · \($0)" } ?? stale.lead,
                 compactStatus: String(localized: "Latest"),
                 detail: nil,
-                timing: .updated(at: state.updatedAt)
+                timing: .updated(at: state.updatedAt),
+                // A stale card can't tell whether the ask still stands, so it
+                // only offers to open the chat.
+                actions: state.status.isAwaitingUser ? [.review] : []
             )
         }
 
         let status: String
         let compact: String
+        var actions: [AgentRunTextAction] = []
         switch state.status {
         case .waitingForApproval:
             status = String(localized: "Needs your approval")
             compact = String(localized: "Needs you")
+            actions = state.approval == nil ? [.review] : [.review, .deny]
         case .waitingForAnswer:
             status = String(localized: "Has a question for you")
             compact = String(localized: "Needs you")
+            actions = [.review]
         default:
             status = state.currentActivity.isEmpty ? state.status.title : state.currentActivity
             compact = state.status.compactTitle
@@ -421,7 +456,8 @@ struct AgentRunTextPresentation: Equatable {
             status: status,
             compactStatus: compact,
             detail: nil,
-            timing: .running(startedAt: state.startedAt)
+            timing: .running(startedAt: state.startedAt),
+            actions: actions
         )
     }
 }
@@ -452,7 +488,8 @@ enum AgentRunActivityStateReducer {
             isStale: state.isStale,
             isFinal: state.isFinal,
             errorSummary: state.errorSummary,
-            toolCallCount: state.toolCallCount
+            toolCallCount: state.toolCallCount,
+            approval: state.approval
         )
     }
 
@@ -548,7 +585,8 @@ enum AgentRunActivityStateReducer {
             isStale: state.isStale,
             isFinal: state.isFinal,
             errorSummary: state.errorSummary,
-            toolCallCount: state.toolCallCount
+            toolCallCount: state.toolCallCount,
+            approval: state.approval
         )
     }
 
@@ -587,11 +625,31 @@ enum AgentRunActivityStateReducer {
         statusState(.responding, activity: String(localized: "Processing result"), state: state, now: now)
     }
 
+    /// `target` is the approval this device may answer from the card; nil
+    /// leaves the card with Review only.
     static func waitingForApproval(
+        state: AgentRunActivityAttributes.ContentState,
+        target: AgentRunApprovalTarget? = nil,
+        now: Date = Date()
+    ) -> AgentRunActivityAttributes.ContentState {
+        var waiting = blocked(.waitingForApproval, state: state, now: now)
+        waiting.approval = target
+        return waiting
+    }
+
+    /// The person answered the approval from a card or notification: the run
+    /// goes back to work, and the card says what they chose.
+    static func answered(
+        decision: AgentRunApprovalAnswer,
         state: AgentRunActivityAttributes.ContentState,
         now: Date = Date()
     ) -> AgentRunActivityAttributes.ContentState {
-        blocked(.waitingForApproval, state: state, now: now)
+        statusState(
+            .thinking,
+            activity: decision == .deny ? String(localized: "Denied") : String(localized: "Approved"),
+            state: state,
+            now: now
+        )
     }
 
     static func waitingForAnswer(
@@ -643,7 +701,8 @@ enum AgentRunActivityStateReducer {
             isStale: true,
             isFinal: state.isFinal,
             errorSummary: state.errorSummary,
-            toolCallCount: state.toolCallCount
+            toolCallCount: state.toolCallCount,
+            approval: state.approval
         )
     }
 
@@ -683,7 +742,10 @@ enum AgentRunActivityStateReducer {
             responseExcerpt: state.responseExcerpt,
             startedAt: state.startedAt,
             updatedAt: now,
-            toolCallCount: state.toolCallCount
+            toolCallCount: state.toolCallCount,
+            // Kept only while the status stays `.waitingForApproval`; the
+            // initializer drops it for every other status.
+            approval: state.approval
         )
     }
 }

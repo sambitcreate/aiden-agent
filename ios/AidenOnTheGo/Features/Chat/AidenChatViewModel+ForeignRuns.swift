@@ -346,8 +346,12 @@ extension AidenChatViewModel {
             title: chat.displayTitle,
             streamID: projection.runId
         )
-        if projection.pendingApproval != nil {
-            await liveActivities.approvalRequired(instanceID: instanceId, streamID: projection.runId)
+        if let approval = projection.pendingApproval {
+            await liveActivities.approvalRequired(
+                instanceID: instanceId,
+                streamID: projection.runId,
+                target: AgentRunApprovalTarget(approvalID: approval.approvalId, runID: projection.runId)
+            )
         } else if let state = streamState {
             await publishLiveActivityStatus(streamID: projection.runId, state: state)
         }
@@ -457,7 +461,11 @@ extension AidenChatViewModel {
             if ambient { await liveActivities.toolFinished(instanceID: instanceId, streamID: runId) }
         case let .approvalRequired(id):
             coordinator.haptics.play(.warning, scope: hapticScope, dedupeKey: "approval-required:\(id)")
-            await liveActivities.approvalRequired(instanceID: instanceId, streamID: runId)
+            await liveActivities.approvalRequired(
+                instanceID: instanceId,
+                streamID: runId,
+                target: AgentRunApprovalTarget(approvalID: id, runID: runId)
+            )
         case let .questionRequired(id):
             coordinator.haptics.play(.warning, scope: hapticScope, dedupeKey: "question-required:\(id)")
             await publishLiveActivityStatus(streamID: runId, state: .waitingForApproval)

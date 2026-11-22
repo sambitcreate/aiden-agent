@@ -161,9 +161,24 @@ final class AidenRemoteLiveActivityManager {
         }
     }
 
-    func approvalRequired(instanceID: String, streamID: String) async {
+    /// `target` is set only when this device may answer the approval, so
+    /// the card can offer Deny.
+    func approvalRequired(instanceID: String, streamID: String, target: AgentRunApprovalTarget?) async {
         await update(instanceID: instanceID, streamID: streamID, urgency: .immediate) {
-            AgentRunActivityStateReducer.waitingForApproval(state: $0)
+            AgentRunActivityStateReducer.waitingForApproval(state: $0, target: target)
+        }
+    }
+
+    /// An approval answered from a card or notification: every card still
+    /// waiting on it shows the answer and drops its buttons.
+    func approvalAnswered(approvalID: String, decision: AgentRunApprovalAnswer) async {
+        for activity in systemActivities where isLive(activity) {
+            let current = state(for: activity)
+            guard current.approval?.approvalID == approvalID else { continue }
+            let next = AgentRunActivityStateReducer.answered(decision: decision, state: current)
+            stateByActivityID[activity.id] = next
+            currentActivity = activity
+            await throttle(for: activity).submitUrgent(next)
         }
     }
 

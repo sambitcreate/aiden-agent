@@ -3534,7 +3534,11 @@ final class AidenChatViewModel {
                     dedupeKey: "approval-required:\(approval.id)"
                 )
             }
-            await liveActivities.approvalRequired(instanceID: instanceId, streamID: streamID)
+            await liveActivities.approvalRequired(
+                instanceID: instanceId,
+                streamID: streamID,
+                target: approval.canRespond ? AgentRunApprovalTarget(approvalID: approval.id, runID: nil) : nil
+            )
             // A question prompt may be pending alongside the approval; a nil
             // snapshot simply clears stale card state without touching status.
             await restorePendingQuestion(
