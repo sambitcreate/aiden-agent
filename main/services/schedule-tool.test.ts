@@ -1762,3 +1762,16 @@ test("an Aiden Assistant automation may watch an address or run from a link, nev
     /not run a script/u,
   );
 });
+
+test("Aiden can't create a task that runs when a connected app has news; the person sets it up with Find sources", async () => {
+  const fake = fakeDependencies();
+  const trigger = {
+    kind: "connector", everyMinutes: 15, condition: { kind: "email", unreadOnly: false },
+    source: { providerLabel: "iMCP Mail", accountLabel: "me@example.test", resourceLabel: "Inbox" },
+  };
+  const args = { action: "create", name: "New mail", prompt: "Sort new mail.", trigger };
+  const tool = createScheduleTaskTool({ kind: "standard", modelSelection: ASSISTANT_MODEL_SELECTION }, fake.dependencies);
+  await assert.rejects(tool.execute("create-connector", args), /Find sources/u);
+  assert.equal(fake.tasks.length, 0, "nothing is saved");
+  assert.throws(() => canonicalizeAssistantScheduleToolArguments({ action: "create", name: "New mail", prompt: "Sort new mail.", trigger }), /Find sources/u);
+});

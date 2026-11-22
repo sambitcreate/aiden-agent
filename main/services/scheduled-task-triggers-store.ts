@@ -13,10 +13,12 @@
 
 import { createHash, timingSafeEqual } from "node:crypto";
 import type { BotRoutineTrigger } from "../../renderer/shared/bot-routine-trigger.js";
-import { BOT_ROUTINE_EVENT_LIMITS } from "../../renderer/shared/bot-routine-trigger.js";
+import { BOT_ROUTINE_EVENT_LIMITS, BOT_WATCH_LIMITS } from "../../renderer/shared/bot-routine-trigger.js";
 import { SCHEDULED_TASK_LINK_LIMITS, type ScheduledTaskTrigger } from "../../renderer/shared/scheduled-task-trigger.js";
 import type { EventRoutine, EventRoutineStore } from "./bot-routine-events/dispatcher.js";
 import { BOT_EVENT_RUNNING_MAX, BOT_WATCH_SNAPSHOT_CHARS, type BotEventPublicationGuard, type BotEventReceipt, type BotWatchState } from "./bot-routine-events/store.js";
+import { parseConnectorBaseline, parseConnectorPrivate } from "./bot-routine-events/connector-types.js";
+import type { TaskConnectorSource } from "./scheduled-task-connector-trigger.js";
 import type { ScheduledTask } from "./types.js";
 
 export const SCHEDULED_TASK_TRIGGERS_FILE = "scheduled-task-triggers.json";
@@ -50,6 +52,8 @@ export interface TaskTriggerRoutine extends EventRoutine {
   task: ScheduledTask & { trigger: ScheduledTaskTrigger };
   /** Script checks that finished so far (`AIDEN_CHECK_RUNS`). */
   checkRuns: number;
+  /** A connected-app task's exact source; until one is bound the routine stays off. */
+  connectorSource?: TaskConnectorSource;
 }
 
 interface TaskTriggerBook {
@@ -66,6 +70,8 @@ interface TaskTriggerBook {
   /** A link task's token, by hash; the token itself is never stored. */
   tokenHash?: string;
   log?: TaskLinkLogEntry[];
+  /** A connected-app task's exact source, set only by a save after Find sources. */
+  connector?: TaskConnectorSource;
 }
 
 interface Persistence<T> {
@@ -77,8 +83,11 @@ export interface ScheduledTaskTriggerStoreDependencies {
   persistence: Persistence<unknown>;
   /** Every saved task; trigger tasks of the person's own (no Bot) become routines. */
   tasks(): Promise<ScheduledTask[]>;
-  /** The event core turned a routine off (three failed checks): the task pauses. */
-  pauseTask(taskId: string, reason: string): Promise<void>;
+  /**
+   * The event core turned a routine off: the task pauses. `afterFailures` is
+   * false when one check paused it at once (a connected app that was removed).
+   */
+  pauseTask(taskId: string, reason: string, afterFailures: boolean): Promise<void>;
   now(): number;
 }
 
@@ -102,11 +111,16 @@ function parseFingerprint(value: string): { trigger?: ScheduledTaskTrigger; prom
 }
 
 const sourceKey = (trigger: ScheduledTaskTrigger | undefined) =>
-  JSON.stringify(trigger ? (trigger.kind === "watch" ? [trigger.kind, trigger.source] : [trigger.kind]) : null);
+  JSON.stringify(trigger
+    ? trigger.kind === "watch" ? [trigger.kind, trigger.source]
+      : trigger.kind === "connector" ? [trigger.kind, trigger.condition, trigger.source]
+        : [trigger.kind]
+    : null);
 
 /** The shared core's trigger shape: a task's watch has the same fields as a Bot watch. */
-function coreTrigger(trigger: ScheduledTaskTrigger): BotRoutineTrigger {
+function coreTrigger(trigger: ScheduledTaskTrigger, taskId: string): BotRoutineTrigger {
   if (trigger.kind === "webhook") return { kind: "webhook" } as BotRoutineTrigger;
+  if (trigger.kind === "connector") return { kind: "watch", source: { type: "connector", watchId: taskId }, everyMinutes: trigger.everyMinutes };
   return { kind: "watch", source: { ...trigger.source }, everyMinutes: trigger.everyMinutes } as BotRoutineTrigger;
 }
 
@@ -144,7 +158,36 @@ function parseWatch(value: unknown): BotWatchState | undefined {
     ...(typeof row.lastResult === "string" && results.has(row.lastResult) ? { lastResult: row.lastResult as BotWatchState["lastResult"] } : {}),
     ...(typeof row.lastError === "string" ? { lastError: row.lastError.slice(0, 200) } : {}),
     ...(row.unsettledFailure === true ? { unsettledFailure: true as const } : {}),
+    ...connectorWatchFields(row),
   };
+}
+
+/** A connected-app check's saved comparison state; anything unreadable starts a new baseline. */
+function connectorWatchFields(row: Record<string, unknown>): Pick<BotWatchState, "connectorBaseline" | "connectorItemCount"> {
+  let baseline: BotWatchState["connectorBaseline"];
+  try {
+    baseline = row.connectorBaseline === undefined ? undefined : parseConnectorBaseline(row.connectorBaseline);
+  } catch {
+    baseline = undefined;
+  }
+  return {
+    ...(baseline ? { connectorBaseline: baseline } : {}),
+    ...(finite(row.connectorItemCount) ? { connectorItemCount: row.connectorItemCount } : {}),
+  };
+}
+
+function parseConnectorSource(value: unknown): TaskConnectorSource | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const row = value as Record<string, unknown>;
+  if (typeof row.serverFingerprint !== "string" || !/^[a-f0-9]{64}$/u.test(row.serverFingerprint)) return undefined;
+  const binding = row.binding as TaskConnectorSource["binding"] | undefined;
+  if (!binding || typeof binding !== "object") return undefined;
+  // The Bot watch validator checks the binding with a matching condition.
+  const condition = binding.adapter === "imcp-mail-v1"
+    ? { kind: "email" as const, unreadOnly: false }
+    : { kind: "calendar" as const, lookAheadMinutes: 60, timezone: "UTC" };
+  const parsed = parseConnectorPrivate({ binding, condition, createDigest: "task", mutations: [] });
+  return parsed ? { binding: parsed.binding, serverFingerprint: row.serverFingerprint } : undefined;
 }
 
 function parseBook(value: unknown): TaskTriggerBook | undefined {
@@ -181,6 +224,7 @@ function parseBook(value: unknown): TaskTriggerBook | undefined {
     checkRuns: finite(row.checkRuns) ? row.checkRuns : 0,
     ...(typeof row.tokenHash === "string" && /^[a-f0-9]{64}$/u.test(row.tokenHash) ? { tokenHash: row.tokenHash } : {}),
     ...(log.length ? { log } : {}),
+    ...(parseConnectorSource(row.connector) ? { connector: parseConnectorSource(row.connector)! } : {}),
   };
 }
 
@@ -217,9 +261,14 @@ export function reconcileTaskTriggerBook(book: TaskTriggerBook | undefined, task
       delete next.tokenHash;
       delete next.log;
     }
+    // A connected-app source stays bound through filter edits; switching
+    // between Mail and Calendar needs a new one from Find sources.
+    if (task.trigger.kind !== "connector" || before.trigger?.kind !== "connector" ||
+      before.trigger.condition.kind !== task.trigger.condition.kind) delete next.connector;
     return next;
   }
-  if (before.trigger?.kind === "watch" && task.trigger.kind === "watch" && before.trigger.everyMinutes !== task.trigger.everyMinutes) {
+  if ((before.trigger?.kind === "watch" || before.trigger?.kind === "connector") && (task.trigger.kind === "watch" || task.trigger.kind === "connector") &&
+    before.trigger.everyMinutes !== task.trigger.everyMinutes) {
     watch = { ...watch, nextCheckAt: (watch.lastCheckAt ?? now) + task.trigger.everyMinutes * 60_000 };
   }
   if (before.enabled === false && task.enabled) watch = { ...watch, failures: 0, nextCheckAt: now };
@@ -244,8 +293,9 @@ function routineOf(task: TriggerTask, book: TaskTriggerBook): TaskTriggerRoutine
     id: task.id,
     name: task.name,
     prompt: task.prompt ?? "",
-    trigger: coreTrigger(task.trigger),
-    enabled: task.enabled,
+    trigger: coreTrigger(task.trigger, task.id),
+    // A connected-app task does nothing until a save binds its source.
+    enabled: task.enabled && (task.trigger.kind !== "connector" || book.connector !== undefined),
     createdAt: task.createdAt,
     updatedAt: book.revision,
     seenEventIds: [...book.seenEventIds],
@@ -257,6 +307,7 @@ function routineOf(task: TriggerTask, book: TaskTriggerBook): TaskTriggerRoutine
     ...(book.tokenHash ? { tokenHash: book.tokenHash } : {}),
     task,
     checkRuns: book.checkRuns,
+    ...(book.connector ? { connectorSource: structuredClone(book.connector) } : {}),
   };
 }
 
@@ -274,6 +325,7 @@ function bookOf(routine: TaskTriggerRoutine, base: TaskTriggerBook): TaskTrigger
     // The token and the call log change only through their own methods.
     ...(base.tokenHash ? { tokenHash: base.tokenHash } : {}),
     ...(base.log ? { log: base.log } : {}),
+    ...(base.connector ? { connector: base.connector } : {}),
   };
 }
 
@@ -342,7 +394,7 @@ export function createScheduledTaskTriggerStore(dependencies: ScheduledTaskTrigg
         guard?.assertCurrent();
         let fingerprint: string | undefined;
         if (!next.enabled && current.enabled) {
-          await dependencies.pauseTask(id, next.watch?.lastError ?? "");
+          await dependencies.pauseTask(id, next.watch?.lastError ?? "", (next.watch?.failures ?? 0) >= BOT_WATCH_LIMITS.failuresBeforePause);
           // The pause is part of this change: same revision, so the work it
           // held stays tied to it until the person turns the task back on.
           fingerprint = fingerprintOf({ ...current.task, enabled: false });
@@ -400,6 +452,25 @@ export function createScheduledTaskTriggerStore(dependencies: ScheduledTaskTrigg
         if (!(await load()).has(id)) return undefined;
         const book = parseBook(books(await dependencies.persistence.load())[id]);
         return { hasLink: book?.tokenHash !== undefined, log: [...(book?.log ?? [])].reverse() };
+      });
+    },
+
+    /**
+     * A save after Find sources binds the task's exact source. A new source
+     * starts over: a fresh baseline, checked right away.
+     */
+    setConnectorSource(id: string, source: TaskConnectorSource): Promise<boolean> {
+      return serial(async () => {
+        const routine = (await load()).get(id);
+        if (!routine || routine.task.trigger.kind !== "connector") return false;
+        await dependencies.persistence.update((draft) => {
+          const stored = books(draft);
+          const base = parseBook(stored[id]);
+          if (!base) return;
+          const { held: _held, running: _running, ...rest } = base;
+          stored[id] = { ...rest, connector: structuredClone(source), watch: { failures: 0, nextCheckAt: dependencies.now() } };
+        });
+        return true;
       });
     },
 

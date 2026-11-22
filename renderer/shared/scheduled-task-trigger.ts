@@ -7,6 +7,7 @@
 // phone input is never trusted as-is.
 
 import { BOT_WATCH_LIMITS, formatBotWatchInterval, parseBotWatchUrl } from "./bot-routine-trigger.js";
+import { BOT_CONNECTOR_WATCH_LIMITS, type BotConnectorWatchCondition, type BotConnectorWatchInterval } from "./bot-connector-watches.js";
 
 /** A watch checks one https address (http only to this computer) or one script from `.aiden/scripts`. */
 export type ScheduledTaskWatchSource = { type: "url"; url: string } | { type: "script"; script: string };
@@ -35,7 +36,25 @@ export type ScheduledTaskLinkTrigger = {
   includeFields?: string[];
 };
 
-export type ScheduledTaskTrigger = ScheduledTaskWatchTrigger | ScheduledTaskLinkTrigger;
+/** What the person picked in Find sources: names to show, never the account or tool identities. */
+export type ScheduledTaskConnectorSourceLabels = { providerLabel: string; accountLabel: string; resourceLabel: string };
+
+/**
+ * A connected app checked every 15, 30 or 60 minutes (a local Mail mailbox
+ * through iMCP on a Mac, or a Composio calendar). The exact source binding is
+ * made in the foreground by Find sources and stays in main; a background
+ * check only reads through a connection that is already open.
+ */
+export type ScheduledTaskConnectorTrigger = {
+  kind: "connector";
+  everyMinutes: BotConnectorWatchInterval;
+  condition: BotConnectorWatchCondition;
+  source: ScheduledTaskConnectorSourceLabels;
+  /** Only on a save from the editor: the Find sources choice main swaps for the private binding. */
+  sourceChoiceId?: string;
+};
+
+export type ScheduledTaskTrigger = ScheduledTaskWatchTrigger | ScheduledTaskLinkTrigger | ScheduledTaskConnectorTrigger;
 
 export type ScheduledTaskTriggerKind = ScheduledTaskTrigger["kind"];
 
@@ -139,11 +158,78 @@ function parseLinkTrigger(record: Record<string, unknown>): ScheduledTaskLinkTri
   return trigger;
 }
 
+/** The intervals a connected-app check may use, in minutes. */
+export const SCHEDULED_TASK_CONNECTOR_INTERVALS = [15, 30, 60] as const;
+
+const CHOICE_ID = /^[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/iu;
+
+function label(value: unknown, limit: number): string | undefined {
+  const text = typeof value === "string" ? value.trim() : "";
+  return text && text.length <= limit && !text.includes("\0") ? text : undefined;
+}
+
+function parseConnectorCondition(value: unknown): BotConnectorWatchCondition {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return invalid();
+  const record = value as Record<string, unknown>;
+  if (record.kind === "email") {
+    if (!Object.keys(record).every((key) => ["kind", "unreadOnly", "sender", "subject"].includes(key)) || typeof record.unreadOnly !== "boolean") return invalid();
+    const condition: BotConnectorWatchCondition = { kind: "email", unreadOnly: record.unreadOnly };
+    for (const key of ["sender", "subject"] as const) {
+      if (record[key] === undefined || record[key] === "") continue;
+      const text = label(record[key], BOT_CONNECTOR_WATCH_LIMITS.filterChars);
+      if (!text) throw new Error("A Mail filter is at most 200 characters.");
+      condition[key] = text;
+    }
+    return condition;
+  }
+  if (record.kind === "calendar") {
+    if (Object.keys(record).sort().join(",") !== "kind,lookAheadMinutes,timezone") return invalid();
+    const ahead = record.lookAheadMinutes;
+    if (typeof ahead !== "number" || !Number.isInteger(ahead) ||
+      ahead < BOT_CONNECTOR_WATCH_LIMITS.lookAheadMinMinutes || ahead > BOT_CONNECTOR_WATCH_LIMITS.lookAheadMaxMinutes) {
+      throw new Error("Look ahead between 15 minutes and one day.");
+    }
+    const timezone = label(record.timezone, BOT_CONNECTOR_WATCH_LIMITS.timezoneChars);
+    try {
+      if (!timezone) throw new Error();
+      new Intl.DateTimeFormat("en", { timeZone: timezone });
+    } catch {
+      throw new Error("Choose a valid time zone for the calendar.");
+    }
+    return { kind: "calendar", lookAheadMinutes: ahead, timezone };
+  }
+  return invalid();
+}
+
+function parseConnectorTrigger(record: Record<string, unknown>): ScheduledTaskConnectorTrigger {
+  if (!Object.keys(record).every((key) => ["kind", "everyMinutes", "condition", "source", "sourceChoiceId"].includes(key))) return invalid();
+  if (!SCHEDULED_TASK_CONNECTOR_INTERVALS.includes(record.everyMinutes as 15)) throw new Error("A connected app is checked every 15, 30 or 60 minutes.");
+  const condition = parseConnectorCondition(record.condition);
+  const source = record.source;
+  if (!source || typeof source !== "object" || Array.isArray(source)) throw new Error("Find a source for this task first.");
+  const fields = source as Record<string, unknown>;
+  if (Object.keys(fields).sort().join(",") !== "accountLabel,providerLabel,resourceLabel") return invalid();
+  const labels = (["providerLabel", "accountLabel", "resourceLabel"] as const).map((key) => label(fields[key], BOT_CONNECTOR_WATCH_LIMITS.labelChars));
+  if (labels.some((value) => value === undefined)) return invalid();
+  const trigger: ScheduledTaskConnectorTrigger = {
+    kind: "connector",
+    everyMinutes: record.everyMinutes as BotConnectorWatchInterval,
+    condition,
+    source: { providerLabel: labels[0]!, accountLabel: labels[1]!, resourceLabel: labels[2]! },
+  };
+  if (record.sourceChoiceId !== undefined) {
+    if (typeof record.sourceChoiceId !== "string" || !CHOICE_ID.test(record.sourceChoiceId)) return invalid();
+    trigger.sourceChoiceId = record.sourceChoiceId.toLowerCase();
+  }
+  return trigger;
+}
+
 /** Strict: only these shapes, nothing extra. Throws a message for the person otherwise. */
 export function parseScheduledTaskTrigger(value: unknown): ScheduledTaskTrigger {
   if (!value || typeof value !== "object" || Array.isArray(value)) return invalid();
   const record = value as Record<string, unknown>;
   if (record.kind === "webhook") return parseLinkTrigger(record);
+  if (record.kind === "connector") return parseConnectorTrigger(record);
   if (record.kind !== "watch") return invalid();
   if (!Object.keys(record).every((key) => key === "kind" || key === "source" || key === "everyMinutes")) return invalid();
   const every = record.everyMinutes;
@@ -177,6 +263,13 @@ export function formatScheduledTaskTriggerLabel(trigger: ScheduledTaskTrigger): 
   if (trigger.kind === "webhook") {
     const filtered = trigger.filters?.length ? ", when it matches" : "";
     return `When its link is called${filtered} (at most every ${formatBotWatchInterval(trigger.gapMinutes)})`;
+  }
+  if (trigger.kind === "connector") {
+    const every = formatBotWatchInterval(trigger.everyMinutes);
+    const where = shortened(trigger.source.resourceLabel, 60);
+    return trigger.condition.kind === "email"
+      ? `Every ${every}, when ${where} gets new mail`
+      : `Every ${every}, when ${where} has events coming up`;
   }
   const every = formatBotWatchInterval(trigger.everyMinutes);
   if (trigger.source.type === "url") {

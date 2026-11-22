@@ -26,7 +26,7 @@ import { createComposioInspectionAccess } from "./composio-inspection-access.js"
 import { saveComposioWatchInspection } from "./composio-inspection-file.js";
 
 const unavailable = (message: string): never => { throw new BotConnectorWatchError("unavailable", message); };
-async function trustedServer(serverId: string): Promise<McpServer> {
+export async function trustedServer(serverId: string): Promise<McpServer> {
   const server = (await configStore.listMcpServers()).find((candidate) => candidate.id === serverId);
   if (!server || !server.enabled || !mcpServerOffersTools(server) || server.presetId !== "imcp" || server.authProvider) return unavailable("This connector changed or is off. Review it in Settings → Connectors.");
   try { assertMcpPresetServer(server); } catch { return unavailable("This connector launch configuration changed. Restore the trusted iMCP preset in Settings → Connectors."); }
@@ -43,7 +43,7 @@ const composioAccess=createComposioInspectionAccess({ store: botCapabilityStore,
     schedulesEnabled: async () => (await configStore.getSettings()).scheduledTasksEnabled !== false,
     connectionFingerprint: async (serverId, signal) => (await resolveBotRuntimeMcpConnectionIdentities(signal)).find((identity) => identity.serverId === serverId)?.connectionFingerprint,
   });
-async function trustedComposioServer(serverId:string):Promise<McpServer>{const server=(await configStore.listMcpServers()).find(row=>row.id===serverId);if(!server||!server.enabled||!mcpServerOffersTools(server)||server.hiddenTools?.length)return unavailable("Review the saved Composio connection in Settings → Connectors.");try{if(!isComposioServiceServer(server))return unavailable("Restore the trusted Composio preset.");}catch{return unavailable("Restore the trusted Composio preset.");}if(!mcpManager.hasExistingConnector(serverId))return unavailable("Connect Composio in the foreground first. Calendar watches never reconnect it.");return server;}
+export async function trustedComposioServer(serverId:string):Promise<McpServer>{const server=(await configStore.listMcpServers()).find(row=>row.id===serverId);if(!server||!server.enabled||!mcpServerOffersTools(server)||server.hiddenTools?.length)return unavailable("Review the saved Composio connection in Settings → Connectors.");try{if(!isComposioServiceServer(server))return unavailable("Restore the trusted Composio preset.");}catch{return unavailable("Restore the trusted Composio preset.");}if(!mcpManager.hasExistingConnector(serverId))return unavailable("Connect Composio in the foreground first. Calendar watches never reconnect it.");return server;}
 const sourceAdmitCore=createConnectorSourceAdmission({sourceSelectionIds:botConnectorSourceSelectionIds,store:botCapabilityStore,audienceId:BOT_DESKTOP_AUDIENCE_ID,
   canonicalChat:botId=>botApplicationService.getCanonicalChat(botId),schedulesEnabled:async()=>(await configStore.getSettings()).scheduledTasksEnabled!==false});
 async function sourceAdmit(botId:string,serverId:string){
@@ -54,7 +54,7 @@ async function sourceAdmit(botId:string,serverId:string){
     return {...held,assertCurrent:()=>{held.assertCurrent?.();connector.assertCurrent();inventory.assertCurrent();},signal:AbortSignal.any([held.signal,connector.signal,inventory.signal]),release:()=>{held.release();inventory.release();},revalidateBeforeEffect:async()=>{connector.assertCurrent();inventory.assertCurrent();await held.revalidateBeforeEffect();connector.assertCurrent();inventory.assertCurrent();}};
   }catch(error){inventory.release();throw error;}
 }
-async function sourceFingerprint(admission:BotConnectorSourceAdmission,serverId:string,raw:import("../mcp.js").BotConnectorMcpClientPort,foreground:boolean):Promise<string>{
+export async function sourceFingerprint(admission:BotConnectorSourceAdmission,serverId:string,raw:import("../mcp.js").BotConnectorMcpClientPort,foreground:boolean):Promise<string>{
   await admission.revalidateBeforeEffect();
   if(foreground&&!raw.connectionFingerprint?.()){
     const identity=(await resolveBotRuntimeMcpConnectionIdentities(admission.signal)).find(item=>item.serverId===serverId);

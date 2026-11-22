@@ -11,6 +11,9 @@ import { resolveScheduledScript, runScheduledScript } from "./schedule-script.js
 import { scheduleService } from "./schedule-service.js";
 import { scheduleStore } from "./schedule-store.js";
 import { createScheduledTaskTriggers } from "./scheduled-task-triggers.js";
+import { taskConnectorTriggers } from "./scheduled-task-connector-main.js";
+import type { TaskConnectorSource } from "./scheduled-task-connector-trigger.js";
+import type { BotConnectorWatchSourceList } from "../../renderer/shared/bot-connector-watches.js";
 import { SCHEDULED_TASK_TRIGGERS_FILE, createScheduledTaskTriggerStore, hashTaskLinkToken, type TaskLinkLogEntry } from "./scheduled-task-triggers-store.js";
 import { secrets } from "./secrets.js";
 
@@ -20,10 +23,10 @@ const linkSecretKey = (taskId: string) => `aiden-internal:task-hook:${taskId}`;
 const triggerStore = createScheduledTaskTriggerStore({
   persistence: new DataStore<unknown>(SCHEDULED_TASK_TRIGGERS_FILE, { version: 1, tasks: {} }),
   tasks: () => scheduleStore.list(),
-  pauseTask: async (taskId, reason) => {
+  pauseTask: async (taskId, reason, afterFailures) => {
     await scheduleStore.updateRuntime(taskId, {
       enabled: false,
-      lastError: `Paused after 3 failed checks${reason ? `: ${reason}` : "."}`.slice(0, 4_096),
+      lastError: `${afterFailures ? "Paused after 3 failed checks" : "Paused"}${reason ? `: ${reason}` : "."}`.slice(0, 4_096),
     });
     ipcMain.broadcast("schedule:updated", { taskId });
   },
@@ -50,12 +53,15 @@ const triggers = createScheduledTaskTriggers({
   },
   execScript: (scriptPath, options) => runScheduledScript(scriptPath, options),
   linkSecret: (taskId) => secrets.getKey(linkSecretKey(taskId)),
+  connector: taskConnectorTriggers,
   checkStateDir: async () => path.join((await import("../platform.js")).app.getPath("userData"), "scheduled-task-check-state"),
-  paused: async (task, error) => {
+  paused: async (task, error, afterFailures) => {
     await scheduleExecution.recordInLandingChat(task, {
       tone: "failure",
-      summary: "Paused after 3 failed checks",
-      text: `Scheduled task "${task.name}" was paused: its watch failed 3 times in a row${error ? ` (${error})` : ""}. Check the address or script, then turn the task back on.`,
+      summary: afterFailures ? "Paused after 3 failed checks" : "Paused",
+      text: !afterFailures
+        ? `Scheduled task "${task.name}" was paused: ${error || "its source couldn't be checked."} Then turn the task back on.`
+        : `Scheduled task "${task.name}" was paused: its watch failed 3 times in a row${error ? ` (${error})` : ""}. Check the address or script, then turn the task back on.`,
     });
   },
   changed: (taskId) => ipcMain.broadcast("schedule:updated", { taskId }),
@@ -135,4 +141,18 @@ export async function rotateTaskTriggerLink(taskId: string): Promise<{ url: stri
 export async function taskTriggerLinkState(taskId: string): Promise<{ hasLink: boolean; listenerOn: boolean; log: TaskLinkLogEntry[] }> {
   const state = await triggerStore.linkState(taskId);
   return { hasLink: state?.hasLink ?? false, listenerOn: (await listenerBase()) !== null, log: state?.log ?? [] };
+}
+
+/** The foreground Find sources step of a connected-app task: lists sources through connections that are already open. */
+export function findTaskConnectorSources(signal: AbortSignal): Promise<BotConnectorWatchSourceList> {
+  return taskConnectorTriggers.findSources(signal);
+}
+
+/** Swap a saved Find sources choice for its exact source (see the schedule:save handler). */
+export const takeTaskConnectorChoice = taskConnectorTriggers.takeChoice;
+
+/** Bind a saved connected-app task to its source; its first check then records a baseline. */
+export async function bindTaskConnectorSource(taskId: string, source: TaskConnectorSource): Promise<void> {
+  await triggers.bindConnectorSource(taskId, source);
+  ipcMain.broadcast("schedule:updated", { taskId });
 }

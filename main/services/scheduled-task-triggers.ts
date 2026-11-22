@@ -20,6 +20,7 @@ import type { BotWatchCheck } from "./bot-routine-events/watch-sources.js";
 import type { ScriptProcessResult } from "./schedule-script.js";
 import type { ScheduledRunTrigger } from "./schedule-service-core.js";
 import { createTaskLinkWebhook, linkEventText, mergeLinkBatches } from "./scheduled-task-link-trigger.js";
+import type { TaskConnectorSource, TaskConnectorTriggers } from "./scheduled-task-connector-trigger.js";
 import { TASK_TRIGGER_PAYLOAD_CHARS, type ScheduledTaskTriggerStore, type TaskTriggerRoutine } from "./scheduled-task-triggers-store.js";
 import type { ScheduledRun, ScheduledTask } from "./types.js";
 
@@ -42,10 +43,12 @@ export interface ScheduledTaskTriggersDependencies {
   }): Promise<ScriptProcessResult>;
   /** The folder each task's private check state file lives in. */
   checkStateDir(): Promise<string>;
+  /** Connected-app checks (scheduled-task-connector-trigger.ts); they never connect or sign in. */
+  connector?: Pick<TaskConnectorTriggers, "check">;
   /** A link's signing secret, when it has one. */
   linkSecret(taskId: string): Promise<string | null>;
-  /** Three failed checks turned the trigger off: one card in the task's landing chat. */
-  paused(task: ScheduledTask, error: string): Promise<void>;
+  /** Three failed checks (or one revoked connected app) turned the trigger off: one card in the task's landing chat. */
+  paused(task: ScheduledTask, error: string, afterFailures: boolean): Promise<void>;
   /** A check's result was saved, so the task's row may show something new. */
   changed?(taskId: string): void;
   now(): number;
@@ -179,6 +182,11 @@ export function createScheduledTaskTriggers(deps: ScheduledTaskTriggersDependenc
   }
 
   async function check(routine: TaskTriggerRoutine, signal: AbortSignal): Promise<BotWatchCheck> {
+    if (routine.task.trigger.kind === "connector") {
+      if (!deps.connector) return { ok: false, error: "Connected-app checks aren't available here." };
+      const trigger = routine.task.trigger;
+      return deps.connector.check({ id: routine.id, trigger }, routine.connectorSource, routine.watch?.connectorBaseline, signal);
+    }
     if (routine.task.trigger.kind !== "watch") return { ok: false, error: "This task has no watch." };
     const source = routine.task.trigger.source;
     if (source.type === "url") return deps.fetchUrl(source.url, signal);
@@ -215,7 +223,7 @@ export function createScheduledTaskTriggers(deps: ScheduledTaskTriggersDependenc
     dispatcher,
     isPaused: async () => !deps.isActive(),
     paused: async (routine, error) => {
-      await deps.paused(routine.task, error);
+      await deps.paused(routine.task, error, (routine.watch?.failures ?? 0) >= BOT_WATCH_LIMITS.failuresBeforePause);
       deps.changed?.(routine.id);
     },
     recovered: async () => undefined,
@@ -252,6 +260,12 @@ export function createScheduledTaskTriggers(deps: ScheduledTaskTriggersDependenc
       if (stopped) return;
       await watches.rearm();
       await dispatcher.rearm(deps.store.all());
+    },
+    /** A save after Find sources: bind the task's exact source and check it right away. */
+    async bindConnectorSource(taskId: string, source: TaskConnectorSource): Promise<boolean> {
+      const bound = await deps.store.setConnectorSource(taskId, source);
+      await this.rearm();
+      return bound;
     },
     stop(): void {
       stopped = true;

@@ -129,6 +129,13 @@ function assertTriggerShape(
   }
 }
 
+/** A Find sources choice is only ever swapped for a binding in main; it is never stored. */
+function storedTrigger(trigger: ScheduledTaskTrigger): ScheduledTaskTrigger {
+  if (trigger.kind !== "connector" || trigger.sourceChoiceId === undefined) return trigger;
+  const { sourceChoiceId: _choice, ...rest } = trigger;
+  return rest;
+}
+
 /** A task that posts into a chat runs at most this often. */
 export const MIN_CHAT_TASK_INTERVAL_MS = 15 * 60 * 1000;
 /** How many upcoming runs the chat cadence floor checks. */
@@ -247,7 +254,7 @@ function normalizeInput(
     input.trigger === null
       ? undefined
       : input.trigger !== undefined
-        ? parseScheduledTaskTrigger(input.trigger)
+        ? storedTrigger(parseScheduledTaskTrigger(input.trigger))
         : existing?.trigger;
   const cron = trigger ? "" : routineSchedule ? botRoutineCron(routineSchedule) : input.cron.trim();
   const enabled = input.enabled ?? existing?.enabled ?? true;
@@ -513,7 +520,7 @@ function normalizeStoredTask(value: unknown): ScheduledTask | null {
   let trigger: ScheduledTaskTrigger | undefined;
   try {
     if (task.trigger !== undefined) {
-      trigger = parseScheduledTaskTrigger(task.trigger);
+      trigger = storedTrigger(parseScheduledTaskTrigger(task.trigger));
       assertTriggerShape(trigger, { botId, mode: task.mode, permission: task.permission });
     }
     if (botId !== undefined) {
