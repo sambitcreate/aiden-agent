@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
-  chatToolOffers, chatTurnAudienceFor, chatTurnToolRefusal, declaresAppTools, declaresWindowTools, firstTurnToolRefusal, windowlessChatTurn,
+  argIs, chatToolOffers, chatTurnArgsToolRefusal, chatTurnAudienceFor, chatTurnToolRefusal, declaresAppTools, declaresWindowTools, firstTurnToolRefusal, windowlessChatTurn,
   type ChatToolSurface, type ChatTurnOwnerScope, type ChatTurnAudience, type ChatTurnAudienceOptions, type ChatTurnAudienceParams,
 } from "./chat-turn-tool-policy.js";
 import { UNATTENDED_FOLLOW_UP_GENERATION } from "./follow-through/notice-delivery.js";
@@ -145,4 +145,44 @@ test("Aiden's settings and scheduling tools are declared only for a turn a perso
     ["an attended Assistant turn", { ...owed, window: true, assistantMode: true }, { ...may, attendedAssistant: true }, true],
   ];
   for (const [label, scope, turn, declares] of cases) assert.equal(declaresAppTools(scope, turn), declares, label);
+});
+
+test("a check-back is set only in a turn the person started; list and cancel work in every turn", () => {
+  const cases: Array<[string, ChatTurnAudienceOptions, boolean]> = [
+    // label, the turn's options, may set
+    ["a turn in the chat's window", {}, true],
+    ["a phone- or paired-Mac-sent turn", { visualAudience: "remote" }, true],
+    ["an unattended follow-up (a check-back firing)", { ...UNATTENDED_FOLLOW_UP_GENERATION }, false],
+    ["an owed turn with no window", { windowless: true }, false],
+    ["a goal round", { goalRound: true }, false],
+  ];
+  for (const [label, options, maySet] of cases) {
+    // Run the way a turn runs them: the name-only refusal first, then the args-aware one.
+    const turn = chatTurnAudienceFor(options, {});
+    const refuse = firstTurnToolRefusal([chatTurnToolRefusal(workspace, turn), chatTurnArgsToolRefusal(turn)]);
+    const reason = refuse("check_back", { action: "set", in_minutes: 10, note: "look again" });
+    if (maySet) assert.equal(reason, undefined, label);
+    else assert.match(reason ?? "", /^check_back cannot set a check-back in this turn: Aiden started it/u, label);
+    assert.equal(refuse("check_back", { action: "list" }), undefined, label);
+    assert.equal(refuse("check_back", { action: "cancel", id: "cb_1" }), undefined, label);
+    // The same arguments on another tool are not this rule's business.
+    assert.equal(refuse("wake_up", { action: "set" }), undefined, label);
+  }
+  // Arguments the model sent malformed are left for the tool's own validation.
+  const woken = chatTurnArgsToolRefusal(chatTurnAudienceFor({ unattended: true }, {}));
+  assert.equal(woken("check_back", null), undefined);
+  assert.equal(woken("check_back", ["set"]), undefined);
+});
+
+test("an args-aware rule is one row: a tool, which turns, which arguments and a reason", () => {
+  const refuse = chatTurnArgsToolRefusal(chatTurnAudienceFor({ goalRound: true }, {}), [
+    { tool: "subagent", turns: (turn) => turn.goalRound === true, args: argIs("execution", "background"), reason: "no background helpers in a goal round" },
+  ]);
+  assert.equal(refuse("subagent", { execution: "background" }), "no background helpers in a goal round");
+  assert.equal(refuse("subagent", { execution: "foreground" }), undefined);
+  assert.equal(refuse("subagent", {}), undefined);
+  const attended = chatTurnArgsToolRefusal(chatTurnAudienceFor({}, {}), [
+    { tool: "subagent", turns: (turn) => turn.goalRound === true, args: argIs("execution", "background"), reason: "x" },
+  ]);
+  assert.equal(attended("subagent", { execution: "background" }), undefined, "the rule applies only to the turns it names");
 });

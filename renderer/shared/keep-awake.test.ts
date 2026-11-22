@@ -11,6 +11,10 @@ test("the live line says what keeps the computer awake", () => {
     keepAwakeStatusLine({ ...base, holding: true, counts: { chat: 2, job: 1, check: 3 } }),
     "Keeping awake: 2 chats working, 1 background job running, 3 checks running",
   );
+  assert.equal(
+    keepAwakeStatusLine({ ...base, holding: true, counts: { "check-back": 1, "wake-up": 2 } }),
+    "Keeping awake: 1 check-back due soon, 2 Bot wake-ups due soon",
+  );
   assert.equal(keepAwakeStatusLine({ ...base, holding: true }), "Keeping awake for one more minute");
   assert.equal(keepAwakeStatusLine({ ...base, pausedWhileIdle: true }), "Paused: nobody has used this computer for 4 hours");
   assert.equal(keepAwakeStatusLine({ ...base, enabled: false }), "Off: this computer sleeps as usual");

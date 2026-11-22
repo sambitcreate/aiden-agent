@@ -1,13 +1,21 @@
-// The inputs that hold the computer awake in C1 of
+// The inputs that hold the computer awake in C1 and C3 of
 // docs/plans/proactive-aiden-plan.md. Each is a pure adapter from a service's
 // current state to keep-awake reasons, so it is tested without Electron.
-// Later inputs (check-backs and Bot wake-ups due soon on AC power, goals)
-// are added the same way, with `KeepAwakeController.addInput`.
+// Later inputs (goals) are added the same way, with `KeepAwakeController.addInput`.
 
 import type { KeepAwakeInput, KeepAwakeReason } from "./keep-awake-core.js";
 
 /** A usage-limit wait that ends this soon holds the computer awake. */
 export const KEEP_AWAKE_USAGE_LIMIT_WINDOW_MS = 10 * 60_000;
+
+/** A check-back or Bot wake-up due this soon holds the computer awake, on AC power only. */
+export const KEEP_AWAKE_DUE_SOON_WINDOW_MS = 60 * 60_000;
+/**
+ * While something is due soon the power source is read again this often, so
+ * plugging in or unplugging is noticed on a host that sends no power events
+ * (Linux).
+ */
+export const KEEP_AWAKE_POWER_RECHECK_MS = 5 * 60_000;
 
 /** The parts of a `HostRunSummary` this input reads. */
 export interface KeepAwakeRun {
@@ -116,6 +124,52 @@ export function doneWhenKeepAwakeInput(checks: () => readonly KeepAwakeCheck[]):
           .filter((check) => check.state === "running")
           .map((check) => ({ kind: "check" as const, id: check.chatId })),
       };
+    },
+  };
+}
+
+/** The parts of a pending check-back or Bot wake-up this input reads. */
+export interface KeepAwakeDue {
+  id: string;
+  /** When it fires (epoch ms). */
+  fireAt: number;
+}
+
+/**
+ * A pending check-back or Bot wake-up due within the hour, so the computer is
+ * still awake when it fires. Only on AC power: on battery nothing holds in
+ * advance. One that is already more than the window overdue no longer holds,
+ * so a stuck record can't keep the computer awake for good. Recurring
+ * schedules, triggers and watches never hold in advance.
+ */
+export function dueSoonKeepAwakeInput(sources: {
+  checkBacks(): readonly KeepAwakeDue[];
+  wakeUps(): readonly KeepAwakeDue[];
+  onBattery(): boolean;
+}): KeepAwakeInput {
+  return {
+    read(now) {
+      const reasons: KeepAwakeReason[] = [];
+      const recheckTimes: number[] = [];
+      const due: Array<[kind: "check-back" | "wake-up", items: readonly KeepAwakeDue[]]> = [
+        ["check-back", sources.checkBacks()],
+        ["wake-up", sources.wakeUps()],
+      ];
+      for (const [kind, items] of due) {
+        for (const item of items) {
+          if (!Number.isFinite(item.fireAt)) continue;
+          const until = item.fireAt - now;
+          if (until > KEEP_AWAKE_DUE_SOON_WINDOW_MS) {
+            recheckTimes.push(item.fireAt - KEEP_AWAKE_DUE_SOON_WINDOW_MS);
+          } else if (until > -KEEP_AWAKE_DUE_SOON_WINDOW_MS) {
+            reasons.push({ kind, id: item.id });
+            recheckTimes.push(item.fireAt + KEEP_AWAKE_DUE_SOON_WINDOW_MS);
+          }
+        }
+      }
+      if (reasons.length > 0) recheckTimes.push(now + KEEP_AWAKE_POWER_RECHECK_MS);
+      const reading = recheckTimes.length > 0 ? { recheckAt: Math.min(...recheckTimes) } : {};
+      return { reasons: reasons.length > 0 && sources.onBattery() ? [] : reasons, ...reading };
     },
   };
 }

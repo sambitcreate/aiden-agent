@@ -1,8 +1,9 @@
-// Main-process follow-through: background jobs, followed pull requests and
-// "done when" checks, wired to the chat. Each one turns its news into a
+// Main-process follow-through: background jobs, followed pull requests,
+// "done when" checks and check-backs, wired to the chat. Each one turns its news into a
 // follow-up notice through `noticeDelivery`, which queues it into a running
 // answer, wakes an idle chat, or records it. State that must outlive a quit
-// (follows and checks) is saved under userData; jobs stop when Aiden quits.
+// (follows, checks and check-backs) is saved under userData; jobs stop when
+// Aiden quits.
 
 import * as fsp from "node:fs/promises";
 import * as path from "node:path";
@@ -43,6 +44,8 @@ import { commandMayChangePullRequest, type PullRequestFollowRecord } from "./pul
 import { PullRequestFollowReader } from "./pull-request-follow-github.js";
 import { PullRequestFollows } from "./pull-request-follows.js";
 import { AnsweringRuns } from "./answering-runs.js";
+import { CheckBacks, type CheckBackRecord } from "./check-backs.js";
+import { systemTimezone } from "../schedule-store-core.js";
 
 const chatConfiguration = new WorkspaceMutationGate();
 const commandHandoffs = new WorkspaceOperationRegistry();
@@ -63,10 +66,13 @@ interface SavedState {
   version: 1;
   follows: PullRequestFollowRecord[];
   checks: DoneWhenRecord[];
+  /** Absent in files older releases wrote. */
+  checkBacks?: CheckBackRecord[];
 }
 
 let savedFollows: PullRequestFollowRecord[] = [];
 let savedChecks: DoneWhenRecord[] = [];
+let savedCheckBacks: CheckBackRecord[] = [];
 let saveChain: Promise<void> = Promise.resolve();
 let saveScheduled = false;
 
@@ -76,7 +82,7 @@ function scheduleSave(): void {
   saveChain = saveChain
     .then(async () => {
       saveScheduled = false;
-      const state: SavedState = { version: 1, follows: savedFollows, checks: savedChecks };
+      const state: SavedState = { version: 1, follows: savedFollows, checks: savedChecks, checkBacks: savedCheckBacks };
       await fsp.mkdir(followThroughDir(), { recursive: true, mode: 0o700 });
       const target = path.join(followThroughDir(), "state.json");
       const temporary = `${target}.${process.pid}.tmp`;
@@ -96,7 +102,7 @@ async function loadState(): Promise<SavedState> {
   } catch {
     // No saved state yet, or unreadable: start empty.
   }
-  return { version: 1, follows: [], checks: [] };
+  return { version: 1, follows: [], checks: [], checkBacks: [] };
 }
 
 // ── When each chat was answering (own-comment detection, check trigger) ──
@@ -250,6 +256,25 @@ export const pullRequestFollows = new PullRequestFollows({
   log: (message, error) => logger.warn("follow-through", message, error),
 });
 
+/** Settings → Scheduled tasks → "Let chats check back later" (on unless turned off). */
+export async function chatCheckBacksEnabled(): Promise<boolean> {
+  return (await configStore.getSettings()).chatCheckBacks !== false;
+}
+
+export const checkBacks = new CheckBacks({
+  persist: (records) => {
+    savedCheckBacks = records;
+    scheduleSave();
+  },
+  flush: () => saveChain,
+  post: (post) => noticeDelivery.post(post),
+  onChange: changed,
+  enabled: () => hostPlatformCapabilities().chatCheckBacks && chatCheckBacksEnabled(),
+  timezone: systemTimezone,
+  now: Date.now,
+  log: (message, error) => logger.warn("follow-through", message, error),
+});
+
 /**
  * A push Aiden made (the Push dialog, a paired device, or the agent): read
  * the followed pull requests in that repository soon. `repository` is the
@@ -337,8 +362,10 @@ export async function startFollowThrough(): Promise<void> {
   const state = await loadState();
   savedFollows = state.follows;
   savedChecks = state.checks;
+  savedCheckBacks = Array.isArray(state.checkBacks) ? state.checkBacks : [];
   pullRequestFollows.restore(state.follows);
   doneWhen.restore(state.checks);
+  checkBacks.restore(savedCheckBacks);
   // Older releases could leave persisted follows behind after access was revoked.
   for (const follow of pullRequestFollows.all()) {
     if (follow.state !== "following") continue;
@@ -355,6 +382,7 @@ export async function startFollowThrough(): Promise<void> {
 }
 
 export async function shutdownFollowThrough(): Promise<void> {
+  checkBacks.shutdown();
   chatSettlement.shutdown();
   answeringRuns.shutdown();
   pullRequestFollows.shutdown();
@@ -363,9 +391,10 @@ export async function shutdownFollowThrough(): Promise<void> {
   await saveChain;
 }
 
-/** A deleted chat loses its jobs, follows and check. */
+/** A deleted chat loses its jobs, follows, check and check-backs. */
 export async function deleteChatFollowThrough(chatId: string): Promise<void> {
   pullRequestFollows.deleteChat(chatId);
+  checkBacks.deleteChat(chatId);
   const checkStopped = doneWhen.clearAndSettle(chatId);
   answeringRuns.deleteChat(chatId);
   chatSettlement.clear(chatId);
@@ -425,7 +454,19 @@ export function chatFollowThrough(chatId: string): ChatFollowThroughV1 {
           ...(check.lastTimedOut ? { lastTimedOut: true } : {}),
         }
       : null,
+    checkBacks: checkBacks.list(chatId),
   };
+}
+
+/** The person cancelled a check-back from the composer chip. */
+export async function cancelCheckBackForPerson(chatId: string, id: string): Promise<void> {
+  const outcome = await checkBacks.cancel(chatId, id);
+  if (!outcome.ok) throw new Error("That check-back already ran or was cancelled.");
+}
+
+/** The person turned "Let chats check back later" off: every pending one is cancelled. */
+export function chatCheckBacksSwitched(enabled: boolean): void {
+  if (!enabled) checkBacks.cancelAll();
 }
 
 export function readJobOutput(chatId: string, jobId: string): BackgroundJobOutput {

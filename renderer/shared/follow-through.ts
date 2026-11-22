@@ -1,9 +1,11 @@
 // Follow-through contract shared by main and the renderer: what a chat has
 // going on after a reply ends. Background jobs keep running, a pull request is
 // followed until its checks pass, and a "done when" check reruns after each
-// answer. Main owns all three; the renderer lists them and can stop each one.
+// answer, and a check-back the agent promised waits for its minute. Main owns
+// all four; the renderer lists them and can stop or cancel each one.
 
 import type { BackgroundJobView } from "./background-jobs.js";
+import { parseCheckBackView, type CheckBackView } from "./check-backs.js";
 
 export const FOLLOW_THROUGH_VERSION = 1;
 
@@ -73,10 +75,12 @@ export interface ChatFollowThroughV1 {
   jobs: BackgroundJobView[];
   pullRequests: PullRequestFollowView[];
   check: DoneWhenCheckView | null;
+  /** Check-backs still waiting for their minute, soonest first. */
+  checkBacks: CheckBackView[];
 }
 
 export function emptyChatFollowThrough(chatId: string): ChatFollowThroughV1 {
-  return { version: 1, chatId, jobs: [], pullRequests: [], check: null };
+  return { version: 1, chatId, jobs: [], pullRequests: [], check: null, checkBacks: [] };
 }
 
 /** True when anything is running, followed or checked, so the composer shows chips. */
@@ -85,7 +89,8 @@ export function hasActiveFollowThrough(state: ChatFollowThroughV1 | null | undef
   return (
     state.jobs.some((job) => job.state === "running") ||
     state.pullRequests.some((follow) => follow.state === "following") ||
-    Boolean(state.check && (state.check.state === "waiting" || state.check.state === "running"))
+    Boolean(state.check && (state.check.state === "waiting" || state.check.state === "running")) ||
+    state.checkBacks.length > 0
   );
 }
 
@@ -113,7 +118,10 @@ export function parseChatFollowThrough(value: unknown): ChatFollowThroughV1 | nu
     isRecord(value.check) && typeof value.check.command === "string" && typeof value.check.state === "string"
       ? (value.check as unknown as DoneWhenCheckView)
       : null;
-  return { version: 1, chatId: value.chatId, jobs, pullRequests, check };
+  const checkBacks = Array.isArray(value.checkBacks)
+    ? value.checkBacks.flatMap((entry) => parseCheckBackView(entry) ?? [])
+    : [];
+  return { version: 1, chatId: value.chatId, jobs, pullRequests, check, checkBacks };
 }
 
 /** The "done when" command from `/until <command>`; empty when none was given. */

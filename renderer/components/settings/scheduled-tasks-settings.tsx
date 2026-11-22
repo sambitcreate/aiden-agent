@@ -208,15 +208,16 @@ export function ScheduledTasksSettings() {
         </Field>
       </FieldSet>
 
-      {showKeepAwake ? (
-        <FieldSet title="While you're away">
+      <FieldSet title="While you're away">
+        {showKeepAwake ? (
           <Field
             label="Keep this computer awake while Aiden works"
             description={
               <>
                 <span className="block">
-                  Stops idle sleep while a chat answers or a build, test or check runs. The display can still
-                  sleep, and closing a laptop&apos;s lid still puts it to sleep.
+                  Stops idle sleep while a chat answers or a build, test or check runs, and, when plugged in,
+                  for the hour before a check-back or Bot wake-up is due. The display can still sleep, and closing
+                  a laptop&apos;s lid still puts it to sleep.
                 </span>
                 {keepAwakeLine ? (
                   <span className="mt-1 block text-tertiary" aria-live="polite">
@@ -235,8 +236,21 @@ export function ScheduledTasksSettings() {
               />
             </div>
           </Field>
-        </FieldSet>
-      ) : null}
+        ) : null}
+        <Field
+          label="Let chats check back later"
+          description="Aiden can promise to look again later in a chat, such as checking a deploy in 20 minutes, and posts its note there at that time. Turning this off cancels every pending check-back."
+        >
+          <div className="flex justify-end">
+            <Switch
+              checked={value?.chatCheckBacks ?? true}
+              onCheckedChange={(chatCheckBacks) => void save({ chatCheckBacks })}
+              disabled={settings.isLoading || saving || authoritativeError}
+              aria-label="Let chats check back later"
+            />
+          </div>
+        </Field>
+      </FieldSet>
 
       <FieldSet title="Current tasks">
         {tasks.isError ? (

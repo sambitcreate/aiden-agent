@@ -76,7 +76,7 @@ While Inbox is the chosen view, and only on a host with the `badgeCount` capabil
 
 ## Scheduled tasks: While you're away
 
-Settings → Scheduled tasks has a "While you're away" group right after "Background execution". It holds standard `Field` rows with a trailing `Switch`, stored in the scheduled-task settings (`scheduleApi.settings`), where a default-on choice stores only `false`. Its first row is **Keep this computer awake while Aiden works** (`keepAwakeWhileWorking`). Its description says the display can still sleep and closing a laptop's lid still sleeps it, then shows a live status line in tertiary text ("Keeping awake: 1 chat working", "Not needed right now", "Paused: nobody has used this computer for 4 hours"). Main pushes that line on `schedule:keep-awake-changed`, so the page never polls. The row is hidden on a host that can't keep itself awake. Settings search finds it by awake, sleep, caffeinate and keep awake. `scheduled-tasks-settings.test.tsx` covers the group order, saving `false`, the live line and the unsupported host.
+Settings → Scheduled tasks has a "While you're away" group right after "Background execution". It holds standard `Field` rows with a trailing `Switch`, stored in the scheduled-task settings (`scheduleApi.settings`), where a default-on choice stores only `false`. Its first row is **Keep this computer awake while Aiden works** (`keepAwakeWhileWorking`). Its description names what holds (running work, and on AC power the hour before a check-back or Bot wake-up is due), says the display can still sleep and closing a laptop's lid still sleeps it, then shows a live status line in tertiary text ("Keeping awake: 1 chat working", "Keeping awake: 1 check-back due soon", "Not needed right now", "Paused: nobody has used this computer for 4 hours"). Main pushes that line on `schedule:keep-awake-changed`, so the page never polls. The row is hidden on a host that can't keep itself awake. Settings search finds it by awake, sleep, caffeinate and keep awake. `scheduled-tasks-settings.test.tsx` covers the group order, saving `false`, the live line and the unsupported host.
 
 ## Window (Linux only)
 
@@ -151,6 +151,10 @@ A proposal card shows the name, a New hook, Change or Delete badge, the agent's 
 ## Web pages
 
 Settings → Web Search ends with a "Web pages" `FieldSet` (`renderer/components/settings/web-page-settings.tsx`). **Read web pages** is a trailing switch whose description says the Web Search switch above must be on. While it is on, the group adds **Extract only the values asked for** with a soft status `Badge` (On, Off or Needs setup) beside the label; the switch stays disabled until the Cloudflare account ID and a key are saved, and the row offers **Set up Cloudflare…** until the form is showing. If the setup is removed while the switch is on, the switch keeps showing the saved choice and the row reads "Paused" with Needs setup, so it can still be turned off. The account ID is a vertical field with an inline Save, the key list reuses the Web Search key pool editor, and a last row, "What leaves this device", says what extract mode sends to Cloudflare. Extract mode never turns itself on.
+
+## Scheduled tasks
+
+Settings → Scheduled tasks (section id `scheduledTasks`) keeps the "Background execution" `FieldSet` first. After it, a "While you're away" `FieldSet` holds settings for what Aiden does on its own between your messages. Its **Let chats check back later** row is a trailing switch saved in the scheduled-task settings store as `AppSettings.chatCheckBacks` (omitted means on). Off cancels every pending check-back, and the description says so. The switch is desktop-only: the Remote scheduled-task settings response leaves it out. Settings search finds the page by "check back" and "come back later". See [coding follow-through](coding-follow-through.md#checking-back-later).
 
 ## Storage
 

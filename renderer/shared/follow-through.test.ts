@@ -96,6 +96,23 @@ test("the follow-through answer is checked for shape and drops malformed rows", 
   assert.equal(parseChatFollowThrough(null), null);
 });
 
+test("a check-back notice round-trips and reads as one line on clients without the card", () => {
+  const notice = agentNotice({ source: "check_back", tone: "info", title: "Checking back", summary: "See whether the deploy finished" });
+  assert.deepEqual(parseAgentNoticeV1(JSON.parse(JSON.stringify(notice))), notice);
+  assert.equal(agentNoticeDisplayText(notice), "Checking back: See whether the deploy finished");
+});
+
+test("pending check-backs are part of the answer and keep the chips showing", () => {
+  const empty = emptyChatFollowThrough("c");
+  const checkBack = { id: "cb_1", fireAt: 2, note: "look again", setAt: 1 };
+  assert.equal(hasActiveFollowThrough({ ...empty, checkBacks: [checkBack] }), true);
+  const parsed = parseChatFollowThrough({ ...empty, checkBacks: [checkBack, { id: "cb_2", note: "no time" }] });
+  assert.deepEqual(parsed?.checkBacks, [checkBack], "a malformed row is dropped");
+  // An answer from a main process older than check-backs still parses.
+  const { checkBacks: _omitted, ...older } = empty;
+  assert.deepEqual(parseChatFollowThrough(older)?.checkBacks, []);
+});
+
 test("/until takes the rest of the line as the check", () => {
   assert.equal(parseUntilCommand("/until npm test -- --run"), "npm test -- --run");
   assert.equal(parseUntilCommand("  /until   "), "");

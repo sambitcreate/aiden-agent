@@ -13,6 +13,7 @@ import { botRoutineCron, type BotRoutineSchedule } from "../../../renderer/share
 import { nextScheduledRun } from "../schedule-store-core.js";
 import { BOT_ROUTINE_CATCH_UP_WINDOW_MS, isSpentBotWakeUp, type BotRoutineService } from "../scheduled-bot-routines.js";
 import type { ScheduledTask } from "../types.js";
+import { localClockParts, resolveWakeUpTime, WAKE_UP_INVALID_TIME_MESSAGE, type WakeUpWhen } from "../wake-up-time.js";
 
 export interface BotWakeUp {
   id: string;
@@ -24,7 +25,7 @@ export interface BotWakeUp {
   setAt: number;
 }
 
-export type BotWakeUpWhen = { inMinutes: number } | { at: string };
+export type BotWakeUpWhen = WakeUpWhen;
 
 export type BotWakeUpFailureCode =
   | "invalid_time"
@@ -47,63 +48,21 @@ export interface BotWakeUpDependencies {
   now?: () => number;
 }
 
-const MINUTE = 60_000;
-/** A fire is never set closer than this, so the minute can't pass while the routine is saved. */
-const HEADWAY_MS = 30_000;
-const AT_PATTERN = /^([01]\d|2[0-3]):([0-5]\d)$/u;
-
-function localParts(timestamp: number, zone: string): { date: string; time: string } {
-  const parts = new Intl.DateTimeFormat("en-CA", {
-    timeZone: zone,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    hourCycle: "h23",
-  }).formatToParts(new Date(timestamp));
-  const part = (type: string) => parts.find((entry) => entry.type === type)?.value ?? "";
-  return { date: `${part("year")}-${part("month")}-${part("day")}`, time: `${part("hour")}:${part("minute")}` };
-}
-
 /**
  * The minute a wake-up fires and the one-time schedule that names it, or
- * `undefined` when `when` is out of bounds. `in_minutes` rounds down to a whole
- * minute but never to one less than 30 seconds away; `at` is the next time the
- * local clock reads that time (today, or tomorrow when it has passed). A time
- * the schedule can't name is refused: the second pass through an hour a
- * daylight-saving change repeats reads the same as the first, and the routine
- * would fire at the first.
+ * `undefined` when `when` is out of bounds (the shared rules in
+ * `wake-up-time.ts`). A time the schedule can't name is refused: the second
+ * pass through an hour a daylight-saving change repeats reads the same as the
+ * first, and the routine would fire at the first.
  */
 export function resolveBotWakeUpTime(
   when: BotWakeUpWhen,
   now: number,
   zone: string,
 ): { fireAt: number; schedule: Extract<BotRoutineSchedule, { kind: "once" }> } | undefined {
-  let fireAt: number;
-  if ("inMinutes" in when) {
-    const minutes = when.inMinutes;
-    if (
-      !Number.isInteger(minutes) ||
-      minutes < BOT_WAKE_UP_LIMITS.minMinutes ||
-      minutes > BOT_WAKE_UP_LIMITS.maxMinutes
-    ) {
-      return undefined;
-    }
-    fireAt = Math.floor((now + minutes * MINUTE) / MINUTE) * MINUTE;
-    if (fireAt - now < HEADWAY_MS) fireAt += MINUTE;
-  } else {
-    const match = AT_PATTERN.exec(when.at.trim());
-    if (!match) return undefined;
-    try {
-      fireAt = nextScheduledRun(`${Number(match[2])} ${Number(match[1])} * * *`, zone, new Date(now));
-    } catch {
-      return undefined;
-    }
-    // A daylight-saving change can stretch "tomorrow at this time" past a day.
-    if (fireAt - now > (BOT_WAKE_UP_LIMITS.maxMinutes + 60) * MINUTE) return undefined;
-  }
-  const local = localParts(fireAt, zone);
+  const resolved = resolveWakeUpTime(when, now, zone);
+  if (!resolved) return undefined;
+  const { fireAt, local } = resolved;
   const schedule = { kind: "once" as const, date: local.date, time: local.time };
   try {
     if (nextScheduledRun(botRoutineCron(schedule), zone, new Date(now)) !== fireAt) return undefined;
@@ -115,7 +74,7 @@ export function resolveBotWakeUpTime(
 
 function projectWakeUp(task: ScheduledTask, zone: string): BotWakeUp {
   const fireAt = task.nextRunAt ?? 0;
-  const local = localParts(fireAt, task.timezone || zone);
+  const local = localClockParts(fireAt, task.timezone || zone);
   return {
     id: task.id,
     fireAt,
@@ -130,7 +89,7 @@ function isPendingWakeUp(task: ScheduledTask, botId: string): boolean {
   return task.botId === botId && task.wakeUp !== undefined && task.enabled && task.nextRunAt !== undefined;
 }
 
-const INVALID_TIME_MESSAGE = `Pick in_minutes from ${BOT_WAKE_UP_LIMITS.minMinutes} to ${BOT_WAKE_UP_LIMITS.maxMinutes}, or a local time "HH:MM" within the next 24 hours. A time in the hour a daylight-saving change repeats can't be set; pick one after it.`;
+const INVALID_TIME_MESSAGE = `${WAKE_UP_INVALID_TIME_MESSAGE} A time in the hour a daylight-saving change repeats can't be set; pick one after it.`;
 
 export function createBotWakeUps(dependencies: BotWakeUpDependencies) {
   const now = dependencies.now ?? Date.now;

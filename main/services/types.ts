@@ -693,6 +693,8 @@ export interface ScheduledTaskSettings {
   defaultMcpEnabled: boolean;
   defaultNotify: boolean;
   defaultTimezone: string;
+  /** "Let chats check back later": a workspace chat's agent may set check-backs. */
+  chatCheckBacks: boolean;
   /** Keep this computer awake while Aiden works (on by default). Desktop-only; not sent to phones. */
   keepAwakeWhileWorking: boolean;
 }
@@ -951,6 +953,8 @@ export interface AppSettings extends AidenLiveSettingsFields {
   scheduledDefaultMcpEnabled?: boolean;
   scheduledDefaultNotify?: boolean;
   scheduledDefaultTimezone?: string;
+  /** Workspace chats may promise to check back later (`check_back`). Omitted means on. */
+  chatCheckBacks?: boolean;
   /** Settings → Scheduled tasks → While you're away. Omitted means on; only `false` is stored. */
   keepAwakeWhileWorking?: boolean;
   /** Aiden assistant window, hotkey, and proactivity settings. */

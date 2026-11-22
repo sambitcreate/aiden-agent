@@ -132,7 +132,8 @@ function mapRun(run: ScheduledRun, summaryLimit = 20_000) {
 
 /**
  * The scheduled-task settings phones know about. Desktop-only rows in the same
- * store (Keep this computer awake) stay off the wire, so the contract is unchanged.
+ * store (Keep this computer awake, Let chats check back later) stay off the
+ * wire, so the contract is unchanged.
  */
 function remoteScheduledSettings(value: ScheduledTaskSettings) {
   return {

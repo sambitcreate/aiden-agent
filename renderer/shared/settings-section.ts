@@ -143,7 +143,7 @@ export const SETTINGS_DESTINATIONS: ReadonlyArray<{
   {
     id: "scheduledTasks",
     title: "Scheduled tasks",
-    keywords: ["automation", "cron", "recurring", "background", "scripts", "notifications", "do this every day", "run later", "awake", "sleep", "caffeinate", "keep awake", "while you're away"],
+    keywords: ["automation", "cron", "recurring", "background", "scripts", "notifications", "do this every day", "run later", "awake", "sleep", "caffeinate", "keep awake", "check back", "check-backs", "come back later", "while you're away"],
   },
   {
     id: "geminiLive",

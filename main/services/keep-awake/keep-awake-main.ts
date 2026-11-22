@@ -1,4 +1,4 @@
-// Electron binding of keep-awake (docs/plans/proactive-aiden-plan.md, C1).
+// Electron binding of keep-awake (docs/plans/proactive-aiden-plan.md, C1 and C3).
 //
 // Holds one `prevent-app-suspension` power-save blocker while Aiden works:
 // the display can still sleep, and closing a Mac's lid still sleeps it unless
@@ -12,7 +12,7 @@ import {
   type KeepAwakeStatus,
 } from "../../../renderer/shared/keep-awake.js";
 import { configStore } from "../config-store.js";
-import { backgroundJobs, doneWhen } from "../follow-through/follow-through-main.js";
+import { backgroundJobs, checkBacks, doneWhen } from "../follow-through/follow-through-main.js";
 import { hostPlatformCapabilities } from "../host-platform-capabilities.js";
 import { hostRunRegistry } from "../host-runs-main.js";
 import { usageLimits } from "../usage-limit-main.js";
@@ -20,8 +20,10 @@ import { KeepAwakeController, type KeepAwakeInput } from "./keep-awake-core.js";
 import {
   backgroundJobKeepAwakeInput,
   doneWhenKeepAwakeInput,
+  dueSoonKeepAwakeInput,
   hostRunKeepAwakeInput,
   usageLimitKeepAwakeInput,
+  type KeepAwakeDue,
 } from "./keep-awake-inputs.js";
 
 let controller: KeepAwakeController<number, ReturnType<typeof setTimeout>> | undefined;
@@ -32,9 +34,45 @@ export function keepAwakeStatus(): KeepAwakeStatus {
   return controller?.status() ?? KEEP_AWAKE_UNSUPPORTED;
 }
 
-/** Adds a later input (C3's check-backs due soon, goals) to the running controller. */
+/** Adds a later input (goals) to the running controller. */
 export function addKeepAwakeInput(input: KeepAwakeInput): () => void {
   return controller?.addInput(input) ?? (() => undefined);
+}
+
+/**
+ * Pending Bot wake-ups, read from the schedule store. The store reads
+ * asynchronously and inputs read synchronously, so this keeps a copy that is
+ * refreshed whenever routines or schedules change.
+ */
+let pendingWakeUps: readonly KeepAwakeDue[] = [];
+let wakeUpRead: Promise<void> | undefined;
+let wakeUpReadAgain = false;
+
+function refreshWakeUps(): void {
+  if (wakeUpRead) {
+    wakeUpReadAgain = true;
+    return;
+  }
+  wakeUpRead = (async () => {
+    try {
+      // Loaded lazily, like the Bot wake-up wiring: the scheduler must not load early.
+      const { scheduleStore } = await import("../schedule-store.js");
+      pendingWakeUps = (await scheduleStore.list()).flatMap((task) =>
+        task.wakeUp !== undefined && task.enabled && task.nextRunAt !== undefined
+          ? [{ id: task.id, fireAt: task.nextRunAt }]
+          : [],
+      );
+    } catch (error) {
+      logger.warn("keep-awake", "Could not read pending Bot wake-ups.", error);
+    }
+    controller?.update();
+  })().finally(() => {
+    wakeUpRead = undefined;
+    if (wakeUpReadAgain) {
+      wakeUpReadAgain = false;
+      refreshWakeUps();
+    }
+  });
 }
 
 async function readEnabled(): Promise<boolean> {
@@ -98,15 +136,40 @@ export async function startKeepAwake(): Promise<void> {
   created.addInput(usageLimitKeepAwakeInput(waits));
   created.addInput(backgroundJobKeepAwakeInput(() => backgroundJobs.listAll()));
   created.addInput(doneWhenKeepAwakeInput(() => doneWhen.list()));
+  created.addInput(
+    dueSoonKeepAwakeInput({
+      checkBacks: () => checkBacks.pendingAll(),
+      wakeUps: () => pendingWakeUps,
+      onBattery: () => powerMonitor.isOnBatteryPower(),
+    }),
+  );
+  refreshWakeUps();
+
+  // Plugging in or unplugging (macOS; Linux is re-read on a timer by the input),
+  // and waking from sleep, which can move due times into the window.
+  const powerChanged = () => update();
+  const resumed = () => refreshWakeUps();
+  powerMonitor.on("on-ac", powerChanged);
+  powerMonitor.on("on-battery", powerChanged);
+  powerMonitor.on("resume", resumed);
 
   unsubscribers.push(
     hostRunRegistry.onChange(update),
     usageLimits.gate.onChange(update),
+    () => {
+      powerMonitor.removeListener("on-ac", powerChanged);
+      powerMonitor.removeListener("on-battery", powerChanged);
+      powerMonitor.removeListener("resume", resumed);
+    },
     onBroadcast((channel) => {
-      // Jobs (including their ports) and checks announce themselves here.
+      // Jobs (including their ports), checks and check-backs announce themselves here.
       if (channel === "chats:follow-through-changed") update();
-      // The Settings switch saves through the scheduled-task settings.
+      // Bot routines (and so Bot wake-ups) changed.
+      else if (channel === "bots:changed") refreshWakeUps();
+      // The Settings switch saves through the scheduled-task settings, and a
+      // routine run (a Bot wake-up firing) reports here too.
       else if (channel === "schedule:updated") {
+        refreshWakeUps();
         void readEnabled().then((enabled) => controller?.setEnabled(enabled));
       }
     }),
@@ -118,4 +181,5 @@ export function stopKeepAwake(): void {
   for (const unsubscribe of unsubscribers.splice(0)) unsubscribe();
   controller?.dispose();
   controller = undefined;
+  pendingWakeUps = [];
 }
