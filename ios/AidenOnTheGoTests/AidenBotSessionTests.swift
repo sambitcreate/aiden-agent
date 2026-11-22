@@ -6200,6 +6200,32 @@ private struct AidenBotViewHostView: View {
     }
 }
 
+@MainActor
+@Observable
+private final class AidenBotFoldHost {
+    var besideList = false
+    var showsBot = true
+}
+
+/// A Bot's route, as the shell draws it: on its screen the shell keeps, and
+/// built again when the iPhone Duo opens or closes (`.id(besideList)`).
+private struct AidenBotFoldHostView: View {
+    let host: AidenBotFoldHost
+    let coordinator: AidenRemoteCoordinator
+    let screen: AidenChatScreens.BotScreen
+
+    var body: some View {
+        NavigationStack {
+            if host.showsBot {
+                AidenBotRouteView(coordinator: coordinator, screen: screen, initialSummary: nil)
+            } else {
+                Text("Bots")
+            }
+        }
+        .id(host.besideList)
+    }
+}
+
 /// A Bot screen another tab can cover. The tab switch ends its load, as a return
 /// from another area of the app does, while its state stays.
 private struct AidenBotTabHostView: View {
@@ -6706,6 +6732,121 @@ extension AidenBotSessionTests {
         defer { close(again) }
 
         await assertSettles({ returned.text == "Finish this later" }, timeout: 15)
+    }
+
+    /// The screen of a Bot route the shell keeps, on a machine that's started.
+    private func botFoldScreen(
+        _ coordinator: AidenRemoteCoordinator,
+        isOpen: @escaping @MainActor () -> Bool,
+        session: AidenComposerSession? = nil
+    ) async throws -> AidenChatScreens.BotScreen {
+        await coordinator.start()
+        await AidenChatDraftStore.shared.purge(instanceId: "studio")
+        addTeardownBlock { await AidenChatDraftStore.shared.purge(instanceId: "studio") }
+        let studio = try XCTUnwrap(coordinator.hosts.connection(for: "studio"))
+        let id = AidenHostObjectID(instanceId: "studio", deviceId: studio.installation.deviceId, objectId: Self.demoBot)
+        return AidenChatScreens.BotScreen(
+            route: AidenBotRouteModel(id: id),
+            chat: AidenChatScreen(isOpen: isOpen),
+            session: AidenBotSessionScreenParts(composerSession: session ?? AidenComposerSession())
+        )
+    }
+
+    /// Opening or closing an iPhone Duo builds a Bot's durable chat again. The
+    /// new screen takes over the conversation the old one had: its feed keeps
+    /// running, so the machine isn't asked for the session again, and the
+    /// draft, the staged photo and a recording under way all stay. Leaving
+    /// the chat for real still ends the feed and the recording.
+    func testAFoldKeepsADurableBotChatGoing() async throws {
+        var studio = AidenDemoHosts.installation(instanceId: "studio", name: "Studio")
+        studio.serverFeatures.append(AidenBotHostFeature.attachments)
+        let (coordinator, responder) = demoCoordinator(studio)
+        let staged = try JSONSerialization.data(withJSONObject: [
+            "id": "att_" + String(repeating: "b", count: 43), "name": "receipt.png", "mimeType": "image/png",
+            "kind": "image", "size": 4, "expiresAt": "2099-01-01T00:00:00.000Z",
+        ])
+        responder.reply(instanceId: "studio", method: "POST", path: "/bots/\(Self.demoBot)/attachments", status: 201, json: staged)
+        let voice = AidenComposerFakeVoice()
+        let session = AidenComposerSession(voice: voice)
+        var open = true
+        let screen = try await botFoldScreen(coordinator, isOpen: { open }, session: session)
+        let host = AidenBotFoldHost()
+        let window = try await show(AidenBotFoldHostView(host: host, coordinator: coordinator, screen: screen))
+        defer { close(window) }
+        await assertSettles({ self.model(of: session)?.hasLoaded == true }, "The Bot never loaded", timeout: 15)
+        let model = try XCTUnwrap(model(of: session))
+        session.text = "Plan my week"
+        let failures = await model.attach([{ .image(name: "receipt.png", mimeType: "image/png", data: Data([0x89, 0x50, 0x4e, 0x47])) }])
+        XCTAssertEqual(failures, 0)
+        await session.toggleVoice()
+        XCTAssertTrue(voice.isListening)
+        func sessionLoads() -> Int {
+            responder.requests(instanceId: "studio").filter { $0 == "GET /bots/\(Self.demoBot)/session" }.count
+        }
+        let loads = sessionLoads()
+
+        screen.chat.rebuilding()
+        host.besideList = true
+        await assertSettles({ screen.chat.isShowing && !screen.chat.isRebuilding }, "The new screen never appeared")
+        await settle()
+
+        XCTAssertTrue(self.model(of: session) === model, "A new conversation took over the composer")
+        XCTAssertEqual(sessionLoads(), loads, "The rebuilt screen asked for the session again")
+        XCTAssertEqual(session.text, "Plan my week")
+        XCTAssertEqual(model.pendingAttachments.map(\.name), ["receipt.png"])
+        XCTAssertTrue(voice.isListening, "The fold ended the recording")
+        XCTAssertEqual(voice.discards, 0)
+        XCTAssertTrue(screen.session.model === model, "The fold ended the feed")
+
+        open = false
+        host.showsBot = false
+        await assertSettles({ !voice.isListening }, "Leaving the chat left the recording running")
+        XCTAssertEqual(voice.discards, 1)
+        XCTAssertNil(screen.session.model, "Leaving the chat left its feed running")
+    }
+
+    /// A Bot on a machine from before durable sessions opens its newest chat.
+    /// Opening or closing an iPhone Duo builds that chat's screen again, on
+    /// the parts it had: the same chat, draft and staged attachment, and the
+    /// Bot isn't looked up again from scratch.
+    func testAFoldKeepsALegacyBotChatsScreen() async throws {
+        var older = AidenDemoHosts.installation(instanceId: "studio", name: "Studio")
+        older.serverFeatures.removeAll { $0 == "bot-durable-session-v1" }
+        let (coordinator, responder) = demoCoordinator(older)
+        let chat = try JSONSerialization.data(withJSONObject: [
+            "id": "chat_bot_scout", "workspaceId": "workspace_app", "botId": Self.demoBot, "title": "Scout",
+            "createdAt": "2026-11-05T09:00:00.000Z", "updatedAt": "2026-11-05T09:00:01.000Z", "revision": "r1",
+            "messages": [[
+                "id": "m1", "role": "assistant", "text": "Flagged the flaky upload test again this week",
+                "createdAt": "2026-11-05T09:00:00.000Z",
+            ]],
+        ])
+        responder.reply(instanceId: "studio", path: "/chats/chat_bot_scout", status: 200, json: chat)
+        let screen = try await botFoldScreen(coordinator, isOpen: { true })
+        let host = AidenBotFoldHost()
+        let window = try await show(AidenBotFoldHostView(host: host, coordinator: coordinator, screen: screen))
+        defer { close(window) }
+        await assertSettles({ screen.chat.parts != nil && screen.chat.isShowing }, "The Bot's chat never opened", timeout: 15)
+        let parts = try XCTUnwrap(screen.chat.parts)
+        XCTAssertEqual(parts.model.chat.id, "chat_bot_scout")
+        parts.composerSession.text = "Ask about the upload test"
+        parts.model.pendingAttachments = [AidenDemoStagedAttachment.reference]
+        func conversationLookups() -> Int {
+            responder.requests(instanceId: "studio").filter { $0 == "GET /bot-conversations" }.count
+        }
+        let lookups = conversationLookups()
+
+        screen.chat.rebuilding()
+        host.besideList = true
+        await assertSettles({ screen.chat.isShowing && !screen.chat.isRebuilding }, "The new screen never appeared")
+        await settle()
+
+        XCTAssertTrue(screen.chat.parts === parts, "The rebuilt chat made new parts")
+        XCTAssertEqual(conversationLookups(), lookups, "The rebuilt route looked the Bot's chat up again")
+        XCTAssertEqual(parts.composerSession.text, "Ask about the upload test")
+        XCTAssertTrue(parts.composerSession.holdsAttachments)
+        guard case .chat(let shown, _) = screen.route.state else { return XCTFail("\(screen.route.state)") }
+        XCTAssertEqual(shown.id, "chat_bot_scout")
     }
 
     /// A machine that revokes this phone while its Bot chat is open keeps its

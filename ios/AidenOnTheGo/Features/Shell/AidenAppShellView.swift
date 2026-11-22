@@ -216,9 +216,10 @@ struct AidenAppShellView: View {
                 guard let navigation else { return }
                 navigation.open(.chat(id), on: navigation.tab == .workspaces ? .workspaces : .inbox)
             }
-            let chatScreens = AidenChatScreens { [weak navigation] id in
-                navigation?.holdsConversation(id) ?? false
-            }
+            let chatScreens = AidenChatScreens(
+                isOpen: { [weak navigation] id in navigation?.holdsConversation(id) ?? false },
+                isBotOpen: { [weak navigation] id in navigation?.holdsBot(id) ?? false }
+            )
             let search = AidenSearchModel(
                 chatInput: { AidenSearchChatInput(store: inboxStore) },
                 machines: { AidenSearchMachine.machines(in: coordinator) }
@@ -604,7 +605,7 @@ struct AidenAppShellView: View {
         case .bot(let id):
             AidenBotRouteView(
                 coordinator: coordinator,
-                id: id,
+                screen: chatScreens.botScreen(for: id),
                 initialSummary: botSummaries[id],
                 onNext: navigation.catchUp?.current == id ? nextInCatchUp : nil
             )
@@ -904,10 +905,11 @@ private struct AidenChatRouteView: View {
     }
 }
 
-/// The shell's chat screens: each chat's route model and screen state, kept
-/// while a tab's path holds the chat, so opening or closing an iPhone Duo,
-/// which builds the screen's views again, loses nothing. A screen goes once
-/// its chat has left every tab and nobody sees it (`AidenChatScreen`).
+/// The shell's chat screens: each chat's and each Bot's route model and
+/// screen state, kept while a tab's path holds the chat or the Bot, so opening
+/// or closing an iPhone Duo, which builds the screen's views again, loses
+/// nothing. A screen goes once its route has left every tab and nobody sees
+/// it (`AidenChatScreen`).
 @MainActor
 final class AidenChatScreens {
     final class Screen {
@@ -920,20 +922,57 @@ final class AidenChatScreens {
         }
     }
 
+    /// A Bot's screen: its route model, and what its chat keeps, the durable
+    /// conversation's (`session`) or a legacy chat's (`chat`'s parts).
+    final class BotScreen {
+        let route: AidenBotRouteModel
+        let chat: AidenChatScreen
+        let session: AidenBotSessionScreenParts
+
+        init(route: AidenBotRouteModel, chat: AidenChatScreen, session: AidenBotSessionScreenParts) {
+            self.route = route
+            self.chat = chat
+            self.session = session
+        }
+    }
+
     private var screens: [AidenHostObjectID: Screen] = [:]
+    private var botScreens: [AidenHostObjectID: BotScreen] = [:]
     private let isOpen: @MainActor (AidenHostObjectID) -> Bool
+    private let isBotOpen: @MainActor (AidenHostObjectID) -> Bool
     private let pause: @MainActor (Duration) async -> Void
 
     init(
         pause: @escaping @MainActor (Duration) async -> Void = { try? await Task.sleep(for: $0) },
-        isOpen: @escaping @MainActor (AidenHostObjectID) -> Bool
+        isOpen: @escaping @MainActor (AidenHostObjectID) -> Bool,
+        isBotOpen: @escaping @MainActor (AidenHostObjectID) -> Bool = { _ in false }
     ) {
         self.pause = pause
         self.isOpen = isOpen
+        self.isBotOpen = isBotOpen
     }
 
     /// The chats with a screen kept, for tests.
     var kept: Set<AidenHostObjectID> { Set(screens.keys) }
+
+    /// The Bots with a screen kept, for tests.
+    var keptBots: Set<AidenHostObjectID> { Set(botScreens.keys) }
+
+    /// The Bot's screen, made the first time it's asked for.
+    func botScreen(for id: AidenHostObjectID) -> BotScreen {
+        if let screen = botScreens[id] { return screen }
+        let screen = BotScreen(
+            route: AidenBotRouteModel(id: id),
+            chat: AidenChatScreen(
+                isOpen: { [weak self] in self?.isBotOpen(id) ?? false },
+                onLeft: { [weak self] in self?.forgetBot(id) },
+                pause: pause
+            ),
+            session: AidenBotSessionScreenParts()
+        )
+        botScreens[id] = screen
+        return screen
+    }
 
     /// The chat's screen, made the first time it's asked for. `receipt` is
     /// the chat as its machine just created it, when there is one.
@@ -955,17 +994,24 @@ final class AidenChatScreens {
     /// get new views (`AidenChatScreen.rebuilding()`).
     func rebuilding() {
         for screen in screens.values { screen.chat.rebuilding() }
+        for screen in botScreens.values { screen.chat.rebuilding() }
     }
 
     /// A tab's path changed. Screens whose chat is on no tab and that nobody
     /// sees go; one a view is still leaving goes when it has left.
     func pathsChanged() {
         for screen in Array(screens.values) { screen.chat.leaveIfClosed() }
+        for screen in Array(botScreens.values) { screen.chat.leaveIfClosed() }
     }
 
     private func forget(_ id: AidenHostObjectID) {
         guard let screen = screens[id], !screen.chat.isShowing, !isOpen(id) else { return }
         screens[id] = nil
+    }
+
+    private func forgetBot(_ id: AidenHostObjectID) {
+        guard let screen = botScreens[id], !screen.chat.isShowing, !isBotOpen(id) else { return }
+        botScreens[id] = nil
     }
 }
 

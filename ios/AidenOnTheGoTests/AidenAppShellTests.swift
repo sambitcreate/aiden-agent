@@ -1328,6 +1328,39 @@ final class AidenAppShellTests: XCTestCase {
         XCTAssertFalse(screens.screen(for: id("c1")) === first, "A chat opened again starts afresh")
     }
 
+    /// A Bot's screen is kept the same way: a rebuilt view gets the screen
+    /// the Bot already had, a swap holds it while it's on screen, and the
+    /// shell forgets it only once the Bot is on no tab and nobody sees it.
+    func testTheShellKeepsABotsScreenWhileATabHoldsIt() {
+        let navigation = AidenAppNavigation()
+        navigation.open(.bot(id("b1")), on: .bots)
+        let screens = AidenChatScreens(
+            pause: { _ in },
+            isOpen: { _ in false },
+            isBotOpen: { navigation.holdsBot($0) }
+        )
+        let bot = screens.botScreen(for: id("b1"))
+        XCTAssertTrue(screens.botScreen(for: id("b1")) === bot)
+        XCTAssertEqual(screens.kept, [], "A Bot's screen isn't a chat's")
+        bot.chat.appeared()
+        var hidden = 0
+
+        screens.rebuilding()
+        XCTAssertTrue(bot.chat.isRebuilding)
+        bot.chat.disappeared(hidden: { hidden += 1 }, left: {})
+        bot.chat.appeared()
+        XCTAssertEqual(hidden, 0, "A swap hid the Bot's chat")
+
+        navigation.leave(.bot(id("b1")))
+        screens.pathsChanged()
+        XCTAssertEqual(screens.keptBots, [id("b1")], "On no tab, but still on screen")
+
+        bot.chat.disappeared(hidden: { hidden += 1 }, left: {})
+        XCTAssertEqual(hidden, 1)
+        XCTAssertEqual(screens.keptBots, [])
+        XCTAssertFalse(screens.botScreen(for: id("b1")) === bot, "A Bot opened again starts afresh")
+    }
+
     /// Deleting a chat takes it off every tab, also where it's open as a fork.
     func testDeletingAChatLeavesItsFork() {
         let navigation = AidenAppNavigation()

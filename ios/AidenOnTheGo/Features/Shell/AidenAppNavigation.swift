@@ -426,6 +426,12 @@ final class AidenAppNavigation {
         AidenAppTab.listTabs.contains { path(of: $0).contains { $0.chatID == id } }
     }
 
+    /// Whether a list tab's path holds the Bot's route. Its screen keeps its
+    /// state while one does (`AidenChatScreens`).
+    func holdsBot(_ id: AidenHostObjectID) -> Bool {
+        AidenAppTab.listTabs.contains { path(of: $0).contains { $0 == .bot(id) } }
+    }
+
     var snapshot: AidenAppNavigationSnapshot {
         AidenAppNavigationSnapshot(
             tab: tab,

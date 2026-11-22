@@ -26,6 +26,7 @@
   - On an iPad in portrait, the list laid over an empty detail no longer shows faint "No … selected" words behind it, and VoiceOver stays in the list.
   - On an iPad in portrait, opening Computers or Settings from the list puts the list away, as picking a row does, instead of leaving the page dimmed behind it.
   - As the Inbox's first row (iPad, or iOS 26.0), the running chat's title wraps at the largest text sizes like the rows below it.
+  - Unfolding or folding an iPhone Duo in a Bot chat keeps its draft, attachments, a recording under way, the conversation's live connection and your place in it, as a workspace chat does.
 
 - **2026-11-20 — Shell-first launch and inline pairing.** A fresh install now opens directly into the tab shell instead of a full-screen onboarding gate, with an empty state and **Add Computer** action across tabs when no computer is paired. Adding the first computer asks whether Aiden is already installed on a computer, offers open-and-share download links for Mac (`chatwithaiden.com`), Linux, and Server (`aiden serve`), and then opens a single **Add Computer** sheet with an inline frosted-cutout QR scanner (auto-pairing on scan, with inline fallback when the camera is unavailable), conditional nearby Wi-Fi discovery, and unified Address and Code entry. Adding additional computers skips straight to **Add Computer**, and the legacy onboarding artwork files are removed. No Remote wire or revision change.
 

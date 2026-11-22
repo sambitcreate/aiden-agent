@@ -367,20 +367,23 @@ struct AidenBotRouteView: View {
     let onNext: (() -> Void)?
 
     @Environment(\.aidenPalette) private var palette
-    @State private var model: AidenBotRouteModel
+    /// The shell's, so a rebuilt screen finds the Bot it already loaded, and
+    /// its chat keeps its draft, attachments, voice and place.
+    let screen: AidenChatScreens.BotScreen
+    private var model: AidenBotRouteModel { screen.route }
     @State private var holdsAttachments = false
     @State private var isConfirmingNext = false
 
     init(
         coordinator: AidenRemoteCoordinator,
-        id: AidenHostObjectID,
+        screen: AidenChatScreens.BotScreen,
         initialSummary: AidenBotSummary?,
         onNext: (() -> Void)? = nil
     ) {
         self.coordinator = coordinator
+        self.screen = screen
         self.initialSummary = initialSummary
         self.onNext = onNext
-        _model = State(initialValue: AidenBotRouteModel(id: id))
     }
 
     private var connection: AidenHostConnection? {
@@ -405,7 +408,9 @@ struct AidenBotRouteView: View {
                     coordinator: coordinator,
                     botID: model.id.objectId,
                     initialSummary: initialSummary,
-                    machine: model.id.instanceId
+                    machine: model.id.instanceId,
+                    screen: screen.chat,
+                    parts: screen.session
                 )
                 .id("\(model.id.instanceId)-\(model.id.objectId)")
             case .chat(let chat, let allowsMutations):
@@ -417,7 +422,8 @@ struct AidenBotRouteView: View {
                         chat: chat,
                         owner: owner,
                         allowsMutations: allowsMutations,
-                        onChatUpdated: { model.accept($0) }
+                        onChatUpdated: { model.accept($0) },
+                        screen: screen.chat
                     )
                     .id("\(model.id.instanceId)-\(chat.id)")
                 } else {

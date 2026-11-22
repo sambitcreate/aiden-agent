@@ -43,16 +43,11 @@ struct AidenChatHoldsAttachmentsKey: PreferenceKey {
     }
 }
 
-/// What a chat screen keeps across a rebuild of its views: the transcript and
-/// its model, the composer with its draft, attachments and voice, the
-/// attachment picker, and the reader's place.
+/// The reader's place in a transcript, kept across a rebuild of its views:
+/// the row they're reading and how far into it, and where the rows built
+/// now are, so a rebuilt screen can scroll back there.
 @MainActor
-final class AidenChatScreenParts {
-    let model: AidenChatViewModel
-    let composerSession: AidenComposerSession
-    let follow: AidenTranscriptFollowController
-    let attachmentPicker: AidenAttachmentPickerState
-    let botToolsModel: AidenBotChatToolsModel?
+class AidenTranscriptPlace {
     /// Where the reader is while scrolled away from the latest; nil while
     /// following the latest.
     var readingPlace: AidenReadingPlace?
@@ -67,18 +62,6 @@ final class AidenChatScreenParts {
     /// The screen that appeared most recently, and the ones it replaced.
     private var shownScreen: UUID?
     private var replacedScreens: Set<UUID> = []
-
-    init(
-        model: AidenChatViewModel,
-        composerSession: AidenComposerSession? = nil,
-        botToolsModel: AidenBotChatToolsModel?
-    ) {
-        self.model = model
-        self.composerSession = composerSession ?? AidenComposerSession(draftOwner: model, attachmentOwner: model)
-        follow = AidenTranscriptFollowController()
-        attachmentPicker = AidenAttachmentPickerState()
-        self.botToolsModel = botToolsModel
-    }
 
     /// A row's frame as the screen `screen` built it, or nil as that row
     /// leaves. A fold builds the new screen's rows before the old screen's
@@ -117,6 +100,31 @@ final class AidenChatScreenParts {
             rowFrames[id] = nil
             rowFrameScreens[id] = nil
         }
+    }
+}
+
+/// What a chat screen keeps across a rebuild of its views: the transcript and
+/// its model, the composer with its draft, attachments and voice, the
+/// attachment picker, and the reader's place.
+@MainActor
+final class AidenChatScreenParts: AidenTranscriptPlace {
+    let model: AidenChatViewModel
+    let composerSession: AidenComposerSession
+    let follow: AidenTranscriptFollowController
+    let attachmentPicker: AidenAttachmentPickerState
+    let botToolsModel: AidenBotChatToolsModel?
+
+    init(
+        model: AidenChatViewModel,
+        composerSession: AidenComposerSession? = nil,
+        botToolsModel: AidenBotChatToolsModel?
+    ) {
+        self.model = model
+        self.composerSession = composerSession ?? AidenComposerSession(draftOwner: model, attachmentOwner: model)
+        follow = AidenTranscriptFollowController()
+        attachmentPicker = AidenAttachmentPickerState()
+        self.botToolsModel = botToolsModel
+        super.init()
     }
 }
 
