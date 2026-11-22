@@ -92,6 +92,12 @@ export interface GoalRecordV1 {
   unusableReviews: number;
   /** Since when a `wait` verdict or a running helper has held the goal. */
   waitingSince?: number;
+  /**
+   * A round without a window had a call refused that needs the chat on screen
+   * (the browser, Computer Use, an approval only the window can give). The
+   * goal bar offers Continue here; a round started in a window clears it.
+   */
+  windowWanted?: boolean;
 }
 
 export type GoalCommand =
@@ -160,7 +166,7 @@ export function goalRoundBucket(rounds: number): GoalRoundBucket {
 /** What the renderer is told about a chat's goal: the record without its loop bookkeeping. */
 export type GoalView = Pick<
   GoalRecordV1,
-  "id" | "chatId" | "objective" | "status" | "rounds" | "maxRounds" | "stalls" | "reason" | "cause" | "source" | "setAt" | "updatedAt" | "revision" | "check"
+  "id" | "chatId" | "objective" | "status" | "rounds" | "maxRounds" | "stalls" | "reason" | "cause" | "source" | "setAt" | "updatedAt" | "revision" | "check" | "windowWanted"
 >;
 
 export function goalView(goal: GoalRecordV1): GoalView {
@@ -179,6 +185,7 @@ export function goalView(goal: GoalRecordV1): GoalView {
     updatedAt: goal.updatedAt,
     revision: goal.revision,
     ...(goal.check ? { check: { command: goal.check.command } } : {}),
+    ...(goal.windowWanted === true ? { windowWanted: true } : {}),
   };
 }
 
@@ -196,7 +203,7 @@ function count(value: unknown): value is number {
 /** Reads a goal view from IPC, or null for none; anything malformed is null too. */
 export function parseGoalView(value: unknown): GoalView | null {
   if (!isRecord(value)) return null;
-  const { id, chatId, objective, status, rounds, maxRounds, stalls, reason, cause, source, setAt, updatedAt, revision, check } = value;
+  const { id, chatId, objective, status, rounds, maxRounds, stalls, reason, cause, source, setAt, updatedAt, revision, check, windowWanted } = value;
   if (typeof id !== "string" || typeof chatId !== "string" || typeof objective !== "string") return null;
   if (!GOAL_STATUSES.includes(status as GoalStatus) || !GOAL_SOURCES.includes(source as GoalSource)) return null;
   if (![rounds, maxRounds, stalls, setAt, updatedAt, revision].every(count)) return null;
@@ -218,6 +225,7 @@ export function parseGoalView(value: unknown): GoalView | null {
     updatedAt: updatedAt as number,
     revision: revision as number,
     ...(isRecord(check) ? { check: { command: check.command as string } } : {}),
+    ...(windowWanted === true ? { windowWanted: true } : {}),
   };
 }
 

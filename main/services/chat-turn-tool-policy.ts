@@ -185,6 +185,18 @@ export function firstTurnToolRefusal(refusals: readonly TurnToolRefusal[]): Turn
   };
 }
 
+/**
+ * Whether a windowless turn refuses `name` because only the chat's own window
+ * can run or approve it: the browser, Computer Use and the other window tools,
+ * or (in a goal round) an approval only the window can give. A goal round that
+ * hits one offers Continue here, so a round on screen can do it.
+ */
+export function refusedForWantOfWindow(turn: ChatTurnAudience, name: string): boolean {
+  if (turn.windowless !== true) return false;
+  if (WINDOW_TOOL_NAMES.has(name) || turn.windowOnlyToolNames?.has(name) === true) return true;
+  return turn.goalRound === true && !approvalAllowableAwayFromOwner(name);
+}
+
 /** Declarations that depend on the chat alone, never on the turn's audience. */
 export function chatToolOffers(surface: ChatToolSurface): { hooks: boolean } {
   return { hooks: offersHooksTool({ ...surface, unattended: false, remoteAudience: false }) };
@@ -212,11 +224,11 @@ export function chatTurnToolRefusal(
     if (turn.questionPromptsUnavailable === true && name === ASK_USER_QUESTION_TOOL_NAME) {
       return `${ASK_USER_QUESTION_TOOL_NAME} is not available in this turn: the paired device that sent it cannot show question prompts. Ask your question in your reply instead.`;
     }
-    if (turn.windowless === true && (WINDOW_TOOL_NAMES.has(name) || turn.windowOnlyToolNames?.has(name) === true)) {
+    if (refusedForWantOfWindow(turn, name)) {
+      if (turn.goalRound === true) {
+        return `${name} is not available in this round: the chat isn't open on screen, and this tool needs the chat's own window. Say in your reply what you would do with it; the next round can use it once the person opens the chat and presses Continue here.`;
+      }
       return `${name} is not available in this turn: Aiden started this turn itself and no window owns it, and this tool needs the chat's own window. Say in your reply what you would do with it.`;
-    }
-    if (turn.windowless === true && turn.goalRound === true && !approvalAllowableAwayFromOwner(name)) {
-      return `${name} is not available in this round: only the chat's own window can approve it, and this keep-going round runs without one. Say in your reply what you would do with it; it works when the person sends the request from the chat.`;
     }
     if (turn.remoteAudience && name === WORKSPACE_ARTIFACT_TOOL_NAME) {
       return `${WORKSPACE_ARTIFACT_TOOL_NAME} is not available in this turn: the request came from a paired device, which cannot show workspace artifacts. Open the chat on this computer to create, refresh or run one.`;

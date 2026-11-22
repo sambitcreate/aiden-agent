@@ -92,3 +92,18 @@ test("a tap shows its result at once: pause, Keep going from round 1, and clear"
   assert.equal(optimisticGoal(active, "clear", 10), null);
   assert.equal(optimisticGoal(stalled, "pause", 10), stalled, "pausing a goal that isn't running changes nothing");
 });
+
+test("after a round off screen needed the window, Needs you and Aiden's pause offer Continue here; the person's pause and a working goal don't", () => {
+  const needsYou = render({ ...active, status: "needs-you", cause: "blocked", reason: "It needs the browser", windowWanted: true });
+  assert.match(needsYou.text, /Needs you/u);
+  assert.match(needsYou.text, /Open this chat to let Aiden use the browser or Computer Use/u);
+  assert.deepEqual(needsYou.actions, ["Continue here", "Clear"]);
+
+  const stalled = render({ ...active, status: "paused", cause: "stalled", reason: "Not making progress", windowWanted: true });
+  assert.deepEqual(stalled.actions, ["Continue here", "Clear"]);
+
+  assert.deepEqual(render({ ...active, status: "paused", cause: "person", windowWanted: true }).actions, ["Resume", "Clear"]);
+  assert.deepEqual(render({ ...active, windowWanted: true }).actions, ["Pause", "Clear"]);
+  // Continue here starts the next round as Keep going does.
+  assert.equal(optimisticGoal({ ...active, status: "needs-you", windowWanted: true }, "continue-here", 9)?.status, "active");
+});

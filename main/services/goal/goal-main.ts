@@ -6,7 +6,7 @@
  * comes back paused.
  */
 import { randomUUID } from "node:crypto";
-import { ipcMain, logger } from "../../platform.js";
+import { ipcMain, logger, powerMonitor } from "../../platform.js";
 import { ASSISTANT_WORKSPACE_ID } from "../../../renderer/shared/assistant.js";
 import { isAcpHarnessProvider } from "../../../renderer/shared/acp-harness.js";
 import { goalLoopEnabled, type GoalView } from "../../../renderer/shared/goal.js";
@@ -32,12 +32,14 @@ import {
 } from "../follow-through/follow-through-main.js";
 import { noticeDelivery } from "../follow-through/notice-delivery-main.js";
 import type { StartTurnResult } from "../follow-through/notice-delivery.js";
+import type { ChatGenerationOwner } from "../chat-generation-owner.js";
 import type { Chat } from "../types.js";
 import type { AgentNoticeV1 } from "../../../renderer/shared/agent-notices.js";
 import { GoalLoop, type GoalRoundStart } from "./goal-loop.js";
 import { goalRoundStartRequest } from "./goal-round-start.js";
 import { reviewGoal } from "./goal-reviewer.js";
 import { installGoalTurnHooks } from "./goal-turn-hooks.js";
+import { GoalWindowRounds, type GoalWindowDocument, type GoalWindowView } from "./goal-window-rounds.js";
 
 const BOOT = randomUUID();
 
@@ -79,18 +81,26 @@ const roundPromptLifetime: OwedTurnPromptLifetime = {
   expired: (chatId) => goalLoop.promptExpired(chatId),
 };
 
+/** A window-owned round: the window's document owns it, with the stream the window subscribed to. */
+interface WindowRoundOwner {
+  owner: ChatGenerationOwner;
+  streamId: string;
+}
+
 /**
  * Starts an attended round in the chat: with `message` saved first (the
  * continuation note, or a notice), or answering the chat's latest saved
- * message. Its cards wait 30 minutes.
+ * message. Without a window its cards wait 30 minutes; in a window
+ * (`window`) the round is that window's run, with every tool.
  */
 async function startAttendedRound(
   chatId: string,
   context: Parameters<typeof goalRoundStartRequest>[1],
   message: { text: string; notice: AgentNoticeV1 } | undefined,
+  window?: WindowRoundOwner,
 ): Promise<StartTurnResult> {
-  const streamId = `goal-${Date.now().toString(36)}-${randomUUID().slice(0, 8)}`;
-  const owner = llmClient.attendedTurnOwner(chatId, `goal:${streamId}`, roundPromptLifetime);
+  const streamId = window?.streamId ?? `goal-${Date.now().toString(36)}-${randomUUID().slice(0, 8)}`;
+  const owner = window?.owner ?? llmClient.attendedTurnOwner(chatId, `goal:${streamId}`, roundPromptLifetime);
   const lease = llmClient.beginChatTurn(chatId, streamId, owner.documentId);
   if (!lease) return { kind: "busy" };
   let messageId: string | undefined;
@@ -130,13 +140,78 @@ async function startAttendedRound(
   }
 }
 
+interface WindowRoundPayload {
+  context: Parameters<typeof goalRoundStartRequest>[1];
+  round: { text: string; notice: AgentNoticeV1 };
+}
+
+/** Which window, if any, starts each due round (`goal-window-rounds.ts`). */
+const goalWindowRounds = new GoalWindowRounds<WindowRoundPayload>({
+  newToken: () => randomUUID(),
+  screenLocked: () => powerMonitor.getSystemIdleState(1) === "locked",
+  setTimer: (run, ms) => {
+    const timer = setTimeout(run, ms);
+    timer.unref?.();
+    return () => clearTimeout(timer);
+  },
+  closedMidRound: ({ chatId, streamId, documentId }) => {
+    // Pause first, so the stop below reads as the window closing, not the person's Stop.
+    goalLoop.windowClosed(chatId);
+    llmClient.cancel(streamId, "user_stop", documentId);
+  },
+});
+
+/** A round starts in a focused window that shows the chat when there is one, and without a window otherwise. */
 async function startRound(
   chatId: string,
   context: Parameters<typeof goalRoundStartRequest>[1],
   round: { text: string; notice: AgentNoticeV1 },
 ): Promise<GoalRoundStart> {
+  const inWindow = await goalWindowRounds.offer(chatId, { context, round });
+  if (inWindow !== "no-window") return inWindow;
   const started = await startAttendedRound(chatId, context, round);
   return started.kind === "started" ? "started" : started.kind === "busy" ? "busy" : "unavailable";
+}
+
+/** Documents whose end is already watched. */
+const watchedDocuments = new Set<string>();
+
+/** A window says which chat its pane shows and whether it has focus; the view ends when the document does. */
+export function reportGoalWindowView(
+  document: GoalWindowDocument & { onGone(listener: () => void): () => void },
+  view: GoalWindowView,
+): void {
+  goalWindowRounds.report(document, view);
+  if (watchedDocuments.has(document.documentId)) return;
+  watchedDocuments.add(document.documentId);
+  const stop = document.onGone(() => {
+    stop();
+    watchedDocuments.delete(document.documentId);
+    goalWindowRounds.gone(document.documentId);
+  });
+}
+
+/**
+ * The window takes the round it was offered with `token` and starts it as its
+ * own run on `streamId`. Throws when the offer is gone (it timed out, or went
+ * to another window), so the window drops it.
+ */
+export async function startGoalWindowRound(owner: ChatGenerationOwner, token: string, streamId: string): Promise<StartTurnResult> {
+  const claim = goalWindowRounds.claim(token, owner.documentId);
+  if (!claim) throw new Error("This keep-going round is no longer waiting for this window.");
+  let result: StartTurnResult = { kind: "unavailable", reason: "The round could not start." };
+  try {
+    result = await startAttendedRound(claim.chatId, claim.payload.context, claim.payload.round, { owner, streamId });
+    return result;
+  } finally {
+    claim.settle(result.kind === "started" ? { kind: "started", streamId } : { kind: result.kind === "busy" ? "busy" : "unavailable" });
+    if (result.kind === "started") goalLoop.windowRoundStarted(claim.chatId);
+  }
+}
+
+/** The window can't take the round (busy, or showing a draft): it runs without one. */
+export function declineGoalWindowRound(documentId: string, token: string): void {
+  goalWindowRounds.decline(token, documentId);
 }
 
 export const goalLoop = new GoalLoop({
@@ -220,11 +295,15 @@ export function startGoalLoop(): void {
   installGoalTurnHooks({
     kickoff: (chatId) => goalLoop.kickoff(chatId),
     reminder: (chatId) => goalLoop.reminder(chatId),
-    runSettled: (event) => goalLoop.runSettled(event),
+    runSettled: (event) => {
+      goalWindowRounds.settled(event.streamId);
+      goalLoop.runSettled(event);
+    },
     chatDeleted: (chatId) => goalLoop.deleteChat(chatId),
     accessChanged: (chatIds) => goalLoop.accessChanged(chatIds),
     moveRefusal: (chatId) => goalLoop.moveRefusal(chatId),
     noticeRound: (chatId, notice) => goalLoop.noticeRound(chatId, notice),
+    windowToolRefused: (chatId) => goalLoop.windowWanted(chatId),
   });
 }
 

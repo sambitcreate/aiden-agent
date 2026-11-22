@@ -9,9 +9,13 @@ import {
   GOAL_GET_CHANNEL,
   GOAL_PAUSE_CHANNEL,
   GOAL_RESUME_CHANNEL,
+  GOAL_DECLINE_WINDOW_ROUND_CHANNEL,
   GOAL_SET_CHANNEL,
+  GOAL_START_WINDOW_ROUND_CHANNEL,
+  GOAL_VIEW_CHANNEL,
   registerGoalHandlers,
 } from "./goals.js";
+import { GoalWindowRounds } from "../services/goal/goal-window-rounds.js";
 
 function setup() {
   const rounds: string[] = [];
@@ -100,4 +104,58 @@ test("/until sets a goal checked by its command, which runs at once in an idle c
   assert.equal(((await invoke(GOAL_GET_CHANNEL, "chat-1")) as { status: string }).status, "done");
   await assert.rejects(invoke(GOAL_SET_CHANNEL, { chatId: "chat-1", source: "until", check: "  " }), /Name the check/);
   await assert.rejects(invoke(GOAL_SET_CHANNEL, { chatId: "chat-1", source: "until", check: "a\nb" }), /one command line/);
+});
+
+test("a window reports its chat, takes the round it is offered on its own stream, and a declined round runs without it", async () => {
+  const handlers = new Map<string, (event: unknown, ...args: unknown[]) => unknown>();
+  const rounds = new GoalWindowRounds<{ round: number }>({
+    newToken: () => `token-${handlers.size}-${Math.random()}`,
+    screenLocked: () => false,
+    setTimer: () => () => {},
+    closedMidRound: () => {},
+  });
+  const sent = new Map<string, Array<{ chatId: string; token: string }>>();
+  const started: Array<{ chatId: string; streamId: string }> = [];
+  registerGoalHandlers({
+    handle: (channel, handler) => handlers.set(channel, handler),
+    loop: {} as never,
+    activeDocument: () => {},
+    windowRounds: {
+      report: (event, view) => {
+        const documentId = (event as { documentId: string }).documentId;
+        rounds.report({ documentId, send: (request) => sent.set(documentId, [...(sent.get(documentId) ?? []), request]) }, view);
+      },
+      start: async (event, token, streamId) => {
+        const claim = rounds.claim(token, (event as { documentId: string }).documentId);
+        if (!claim) throw new Error("This keep-going round is no longer waiting for this window.");
+        started.push({ chatId: claim.chatId, streamId });
+        claim.settle({ kind: "started", streamId });
+        return { kind: "started", streamId };
+      },
+      decline: (event, token) => rounds.decline(token, (event as { documentId: string }).documentId),
+    },
+  });
+  const invoke = (documentId: string, channel: string, input: unknown) =>
+    Promise.resolve().then(() => handlers.get(channel)!({ documentId }, input));
+
+  await assert.rejects(invoke("doc-a", GOAL_VIEW_CHANNEL, { chatId: "chat-1" }), /Invalid view/u);
+  await invoke("doc-a", GOAL_VIEW_CHANNEL, { chatId: "chat-1", focused: true });
+  const offered = rounds.offer("chat-1", { round: 2 });
+  const [request] = sent.get("doc-a") ?? [];
+  assert.equal(request?.chatId, "chat-1");
+  await assert.rejects(invoke("doc-a", GOAL_START_WINDOW_ROUND_CHANNEL, { token: request!.token, streamId: "bad stream id!" }), /Invalid chat stream/u);
+  await assert.rejects(invoke("doc-b", GOAL_START_WINDOW_ROUND_CHANNEL, { token: request!.token, streamId: "s-1" }), /no longer waiting/u);
+  assert.deepEqual(await invoke("doc-a", GOAL_START_WINDOW_ROUND_CHANNEL, { token: request!.token, streamId: "s-1" }), {
+    streamId: "s-1",
+    accepted: true,
+    started: true,
+  });
+  assert.equal(await offered, "started");
+  assert.deepEqual(started, [{ chatId: "chat-1", streamId: "s-1" }]);
+
+  const next = rounds.offer("chat-1", { round: 3 });
+  await invoke("doc-a", GOAL_DECLINE_WINDOW_ROUND_CHANNEL, { token: sent.get("doc-a")![1]!.token });
+  assert.equal(await next, "no-window");
+  await invoke("doc-a", GOAL_VIEW_CHANNEL, { chatId: null, focused: true });
+  assert.equal(await rounds.offer("chat-1", { round: 4 }), "no-window", "a window showing no chat is not asked");
 });

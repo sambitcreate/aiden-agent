@@ -145,6 +145,7 @@ export const NOTIFICATION_CHANNEL_VALUES = [
   "chats:follow-through-changed",
   /** A chat's keep-going goal changed: `{chatId, goal}` (the goal's view, or null once cleared). */
   "chats:goal-changed",
+  "chats:goal-window-round",
   "chats:settled",
   "git:changed",
   "imageWorkflows:run-changed",

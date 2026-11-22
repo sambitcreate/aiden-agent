@@ -437,3 +437,42 @@ test("an /until goal is refused where its check can't run", async () => {
   await assert.rejects(h.loop.set(CHAT, { objective: "Keep going until `npm test` passes", source: "until", check: "npm test" }), /Folder access is off/);
   assert.equal(h.goal(), null);
 });
+
+test("the window owning a round closing pauses the goal as closed, and its stopped run isn't read as the person's Stop", async () => {
+  const h = harness();
+  await h.loop.set(CHAT, { objective: "Ship it", source: "slash" });
+  await h.runSettles();
+  assert.equal(h.goal()?.rounds, 2, "round 2 is running in the window");
+  h.loop.windowClosed(CHAT);
+  assert.equal(h.goal()?.status, "paused");
+  assert.equal(h.goal()?.cause, "chat-closed");
+  assert.equal(h.goal()?.reason, "The chat was closed");
+  assert.deepEqual(last(h.events), { event: "goal_settled", properties: { outcome: "paused", rounds: "2-5" } });
+  // goal-main stops the round after pausing; that run settles as stopped.
+  await h.runSettles({ stopped: true });
+  assert.equal(h.goal()?.cause, "chat-closed");
+  assert.equal(h.settled.length, 1);
+  h.loop.windowClosed(CHAT);
+  assert.equal(h.settled.length, 1, "a paused goal doesn't pause again");
+});
+
+test("a round off screen wanting the window shows on the goal until a round starts in a window", async () => {
+  const h = harness();
+  await h.loop.set(CHAT, { objective: "Book the table", source: "slash" });
+  h.loop.windowWanted(CHAT);
+  assert.equal(h.goal()?.windowWanted, true);
+  const revision = h.goal()!.revision;
+  h.loop.windowWanted(CHAT);
+  assert.equal(h.goal()?.revision, revision, "saying it twice changes nothing");
+  // The reviewer then says the person is needed: the bar keeps the hint for Continue here.
+  h.state.review = async () => ({ kind: "verdict", verdict: { verdict: "blocked", reason: "It needs the browser" }, via: "continuation" });
+  await h.runSettles();
+  assert.equal(h.goal()?.status, "needs-you");
+  assert.equal(h.goal()?.windowWanted, true);
+  const settledRevision = h.goal()!.revision;
+  h.loop.windowWanted(CHAT);
+  assert.equal(h.goal()?.revision, settledRevision, "a goal that isn't working doesn't take it");
+  await h.loop.resume(CHAT);
+  h.loop.windowRoundStarted(CHAT);
+  assert.equal(h.goal()?.windowWanted, undefined);
+});

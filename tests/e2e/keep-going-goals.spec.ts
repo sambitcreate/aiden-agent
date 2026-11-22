@@ -90,3 +90,29 @@ test("Pause and Resume from the bar, and /goal clear from the composer", async (
   await composer.press("Enter");
   await expect(page.getByRole("group", { name: "Goal: Tidy the changelog" })).toHaveCount(0, { timeout: 15_000 });
 });
+
+test("a round due while the chat is on screen starts in its window, where it can use the window's tools", async ({ aiden }) => {
+  test.setTimeout(120_000);
+  const { lmStudio, page } = aiden;
+  await finishLmStudioOnboarding(page);
+  // The first review asks for another round; the second finds it done.
+  lmStudio.answerToolFreeCompletions!(REVIEW_PROMPT, '{"verdict": "continue", "reason": "The outline is not drafted yet."}', { times: 1 });
+  lmStudio.answerToolFreeCompletions!(REVIEW_PROMPT, '{"verdict": "done", "reason": "The outline is drafted."}');
+  // Round 2 calls the to-do list, a tool only the chat's own window runs: a round without a window is refused it.
+  const round = lmStudio.enqueueToolScenario!({
+    prompt: "Keep going · round 2 of 50",
+    calls: [{ name: "todo", arguments: { action: "create", subject: "Draft the outline" } }],
+    finalText: "The outline is drafted.",
+  });
+  await setGoal(page, "Draft the outline");
+  const bar = page.getByRole("group", { name: "Goal: Draft the outline" });
+  await expect(bar).toBeVisible({ timeout: 15_000 });
+
+  await expect.poll(() => round.completed, { timeout: 45_000 }).toBe(true);
+  expect(round.error).toBeUndefined();
+  expect(round.issuedToolNames).toEqual(["todo"]);
+  expect(JSON.stringify(round.results[0]?.content ?? "")).not.toMatch(/not available in this (?:round|turn)/u);
+  await expect(page.getByText("Keep going · round 2 of 50").first()).toBeVisible({ timeout: 15_000 });
+  await expect(page.getByText("The outline is drafted.").first()).toBeVisible({ timeout: 15_000 });
+  await expect(bar).toHaveAttribute("data-goal-status", "done", { timeout: 30_000 });
+});

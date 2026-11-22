@@ -2,8 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
   argIs, chatToolOffers, chatTurnArgsToolRefusal, chatTurnAudienceFor, chatTurnToolRefusal, declaresAppTools, declaresWindowTools, firstTurnToolRefusal, windowlessChatTurn,
-  type ChatToolSurface, type ChatTurnOwnerScope, type ChatTurnAudience, type ChatTurnAudienceOptions, type ChatTurnAudienceParams,
-} from "./chat-turn-tool-policy.js";
+  type ChatToolSurface, type ChatTurnOwnerScope, type ChatTurnAudience, type ChatTurnAudienceOptions, type ChatTurnAudienceParams, refusedForWantOfWindow } from "./chat-turn-tool-policy.js";
 import { UNATTENDED_FOLLOW_UP_GENERATION } from "./follow-through/notice-delivery.js";
 
 const workspace: ChatToolSurface = { usageSource: "chat", bot: false, assistant: false, harnessProvider: false };
@@ -215,14 +214,23 @@ test("a goal round may run only read-only helpers; the person's own turns may ru
   }
 });
 
-test("a windowless goal round refuses tools only the chat's window can approve, and an owed turn keeps their Deny-only card", () => {
-  const round = chatTurnToolRefusal(workspace, chatTurnAudienceFor({ goalRound: true, windowless: true }, {}));
-  for (const name of ["classify", "generate_image"]) {
-    assert.match(round(name) ?? "", new RegExp(`^${name} is not available in this round: only the chat's own window can approve it`, "u"), name);
+test("a windowless goal round refuses window tools and approvals only the chat's window can give, pointing at Continue here; a round on screen has them", () => {
+  const audience = { ...chatTurnAudienceFor({ goalRound: true, windowless: true }, {}), windowOnlyToolNames: new Set(["browser_navigate"]) };
+  const round = chatTurnToolRefusal(workspace, audience);
+  for (const name of ["classify", "generate_image", "computer_use", "browser_navigate", "todo"]) {
+    assert.match(round(name) ?? "", new RegExp(`^${name} is not available in this round: the chat isn't open on screen.*Continue here`, "u"), name);
+    assert.equal(refusedForWantOfWindow(audience, name), true, name);
   }
   assert.equal(round("bash"), undefined, "an ordinary approval waits for the person");
-  const owed = chatTurnToolRefusal(workspace, chatTurnAudienceFor({ windowless: true }, {}));
-  assert.equal(owed("generate_image"), undefined);
-  const onScreen = chatTurnToolRefusal(workspace, chatTurnAudienceFor({ goalRound: true }, {}));
-  assert.equal(onScreen("generate_image"), undefined, "a round a window owns can ask its window");
+  assert.equal(refusedForWantOfWindow(audience, "bash"), false);
+  const owedAudience = chatTurnAudienceFor({ windowless: true }, {});
+  const owed = chatTurnToolRefusal(workspace, owedAudience);
+  assert.equal(owed("generate_image"), undefined, "an owed turn keeps its Deny-only card");
+  assert.match(owed("computer_use") ?? "", /no window owns it/u, "an owed turn has no Continue here");
+  const onScreenAudience = chatTurnAudienceFor({ goalRound: true }, {});
+  const onScreen = chatTurnToolRefusal(workspace, onScreenAudience);
+  for (const name of ["generate_image", "computer_use", "todo"]) {
+    assert.equal(onScreen(name), undefined, `${name}: a round a window owns can use its window`);
+    assert.equal(refusedForWantOfWindow(onScreenAudience, name), false, name);
+  }
 });

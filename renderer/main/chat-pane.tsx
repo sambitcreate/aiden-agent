@@ -187,6 +187,7 @@ import {
   chatsApi,
   aidenRemoteApi,
   createChatTurnId,
+  goalRoundStart,
   settingsApi,
   startGeneration,
   gitApi,
@@ -857,6 +858,8 @@ export function ChatPane({ chatId }: { chatId: string }) {
   const generationChatIdRef = React.useRef<string | null>(null);
   const generationIntentRef = React.useRef(0);
   const visualizeTurnRef = React.useRef(false);
+  /** The keep-going round main offered this window, which the next run starts instead of answering a send. */
+  const goalRoundTokenRef = React.useRef<string | null>(null);
   const mountedRef = React.useRef(true);
   const chatIdRef = React.useRef(chatId);
   const todoSnapshotReadFenceRef = React.useRef<TodoSnapshotReadFence | null>(null);
@@ -1680,6 +1683,8 @@ export function ChatPane({ chatId }: { chatId: string }) {
       };
       const visualize = visualizeTurnRef.current === true;
       visualizeTurnRef.current = false;
+      const goalRoundToken = goalRoundTokenRef.current;
+      goalRoundTokenRef.current = null;
       // A chat whose canvas is open says what it shows: the selection and its size on screen.
       const designView = designCanvasViewFor(chatId);
       const handle = startGeneration(
@@ -2044,6 +2049,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
           },
         },
         messageTurnId,
+        goalRoundToken ? goalRoundStart(goalRoundToken) : undefined,
       );
       generationRef.current = handle;
       generationChatIdRef.current = chatId;
@@ -2481,6 +2487,37 @@ export function ChatPane({ chatId }: { chatId: string }) {
   React.useLayoutEffect(() => {
     visualPromptBusyRef.current = visualPromptBusy;
   }, [visualPromptBusy]);
+
+  // Keep-going rounds on screen: main starts a due round in a focused window
+  // showing its chat, so the round can use the browser and Computer Use. Tell
+  // main which chat this pane shows; leaving it (or closing the window) stops
+  // a round this window owns.
+  React.useEffect(() => {
+    if (draft) return;
+    const report = () => void chatsApi.reportGoalView(chatId, document.hasFocus()).catch(() => undefined);
+    report();
+    window.addEventListener("focus", report);
+    window.addEventListener("blur", report);
+    return () => {
+      window.removeEventListener("focus", report);
+      window.removeEventListener("blur", report);
+      void chatsApi.reportGoalView(null, document.hasFocus()).catch(() => undefined);
+    };
+  }, [chatId, draft]);
+  React.useEffect(() => {
+    if (draft) return;
+    return chatsApi.onGoalWindowRound(({ chatId: roundChatId, token }) => {
+      if (roundChatId !== chatId) return;
+      if (visualPromptBusyRef.current || !mountedRef.current) {
+        // Main runs it without this window instead.
+        void chatsApi.declineGoalWindowRound(token).catch(() => undefined);
+        return;
+      }
+      ++generationIntentRef.current;
+      goalRoundTokenRef.current = token;
+      void runGeneration(createChatTurnId());
+    });
+  }, [chatId, draft, runGeneration]);
 
   // Main refuses a fork's sends while its summary is pending or failed, so
   // follow-ups wait in the queue until the summary is ready or skipped.

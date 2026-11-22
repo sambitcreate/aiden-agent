@@ -43,10 +43,17 @@ Resume and Keep going both start again from round 1 with a fresh progress count;
 ### Approvals, helpers and notices in rounds
 
 - **Approvals and questions** from a round show in the chat (and on a paired phone) like any other, and wait 30 minutes instead of an owed turn's 5. One nobody answers is denied, the round is told, and the goal moves to **Needs you**.
-- Tools that only the chat's own window can approve (image classification and image generation) are refused in rounds that run without a window; the round is told why.
+- Tools that only the chat's own window can approve (image classification and image generation) are refused in rounds that run without a window; the round is told why. A round in a window can use them (see below).
 - A round may run **read-only helpers** (scout, planner and reviewer, without writes, shell, mutating connectors or nesting). A helper that would change something is refused, and the round does the change itself.
 - While a goal is working, news that would wake the chat (a background job ending, a pull request update) starts a goal round instead of an unattended follow-up. These rounds don't count toward the 6 automatic wake-ups an hour, and the goal's own limits apply.
 - A goal at **Needs you** shows in the Inbox's **Needs you** section with its reason, and counts toward the Dock badge, until you press Keep going or clear it.
+
+### Rounds on screen: the browser and Computer Use
+
+- When a round is due and a focused Aiden window shows the chat (and the screen isn't locked), the round starts in that window, as if you had sent it there. It can use everything your own message could: the browser, Computer Use, the to-do list and the approvals only the window can give. Computer Use keeps its own access card and approval mode.
+- Focus is checked only when the round starts. Computer Use brings other apps to the front, so Aiden losing focus during the round is fine.
+- If that window closes, reloads or switches to another chat during the round, the round stops and the goal pauses with "The chat was closed". Keep going starts it again.
+- Otherwise rounds run without a window, and a call that needs one (the browser, Computer Use) is refused; the round is told why. The goal bar then says "Open this chat to let Aiden use the browser or Computer Use" with **Continue here** once the goal stops at Needs you or Aiden pauses it; pressing it starts the next round from that window.
 
 ## When a goal pauses on its own
 
@@ -58,6 +65,7 @@ Resume and Keep going both start again from round 1 with a fresh progress count;
 - It waited 30 minutes for background work or a helper.
 - The chat reached its spending limit. **Allow more** doesn't restart the goal; Keep going does.
 - The chat's folder access changed.
+- The window running a round on screen closed, reloaded or switched chats.
 
 A round's approval or question that waits 30 minutes with no answer moves the goal to **Needs you** instead.
 
@@ -73,4 +81,4 @@ The objective and the reviewer's reasons stay on your device. Anonymous usage da
 
 ## Not yet
 
-Phones show the round cards but can't set or change goals. Rounds run without a window, so browser, Computer Use and other window-only tools are refused in rounds.
+Phones show the round cards but can't set or change goals.

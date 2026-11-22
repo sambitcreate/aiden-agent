@@ -527,7 +527,7 @@ import {
   createVisualizeGuideTool,
   VISUALIZE_GUIDE_TOOL_NAME,
 } from "./generative-ui-extension.js";
-import { chatToolOffers, chatTurnArgsToolRefusal, chatTurnAudienceFor, chatTurnToolRefusal, declaresAppTools, declaresWindowTools, firstTurnToolRefusal, windowlessChatTurn, type ChatToolSurface, type TurnToolRefusal } from "./chat-turn-tool-policy.js";
+import { chatToolOffers, chatTurnArgsToolRefusal, chatTurnAudienceFor, chatTurnToolRefusal, declaresAppTools, declaresWindowTools, firstTurnToolRefusal, refusedForWantOfWindow, windowlessChatTurn, type ChatToolSurface, type TurnToolRefusal } from "./chat-turn-tool-policy.js";
 import { createGenerativeUiDraftSession } from "./generative-ui-draft.js";
 import { createUiDraftSession } from "./aiden-ui-draft.js";
 import { withoutVisualSnapshots } from "../../renderer/shared/visual-snapshots.js";
@@ -2721,7 +2721,18 @@ async function prepareGeneration(
    * the reason names the condition, and the call is refused before it runs.
    */
   const turnToolRefusals: TurnToolRefusal[] = [];
-  turnToolRefusals.push(chatTurnToolRefusal(chatToolSurface, turnAudience), turnArgsRefusal);
+  const audienceRefusal = chatTurnToolRefusal(chatToolSurface, turnAudience);
+  turnToolRefusals.push(
+    turnAudience.goalRound === true && windowless
+      ? (name) => {
+          // A goal round off screen that needs the window: the goal bar offers Continue here.
+          const reason = audienceRefusal(name);
+          if (reason && refusedForWantOfWindow(turnAudience, name)) goalTurnHooks().windowToolRefused(params.chatId);
+          return reason;
+        }
+      : audienceRefusal,
+    turnArgsRefusal,
+  );
   if (declaresAppTools(ownerScope, { attendedAssistant, schedulingAllowed })) {
     // A windowless turn declares them with no live state and no navigation,
     // and refuses every call (`chatTurnToolRefusal`).

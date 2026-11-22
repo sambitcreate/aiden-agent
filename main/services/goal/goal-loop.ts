@@ -34,6 +34,7 @@ import {
   goalAfterSettle,
   goalPromptUnanswered,
   goalWaitExpired,
+  goalWindowWanted,
   pauseGoal,
   restoreGoal,
   resumeGoal,
@@ -244,6 +245,36 @@ export class GoalLoop {
     if (goal?.status !== "active") return;
     this.stopReview(chatId);
     this.settle(goalPromptUnanswered(goal, this.deps.now()));
+  }
+
+  /**
+   * The window that owned this round closed, reloaded or showed another chat:
+   * the round stops (goal-main cancels it after this) and the goal pauses.
+   */
+  windowClosed(chatId: string): void {
+    const goal = this.goals.get(chatId);
+    if (goal?.status !== "active") return;
+    this.stopReview(chatId);
+    this.settle(pauseGoal(goal, { now: this.deps.now(), cause: "chat-closed" }));
+  }
+
+  /**
+   * A round without a window had a call refused that needs the chat on screen.
+   * The goal bar then offers Continue here. Rounds of an inactive goal don't count.
+   */
+  windowWanted(chatId: string): void {
+    const goal = this.goals.get(chatId);
+    if (goal?.status !== "active") return;
+    const next = goalWindowWanted(goal, true, this.deps.now());
+    if (next !== goal) this.write(next);
+  }
+
+  /** A round started in a window that shows the chat: it has every tool, so nothing is wanted. */
+  windowRoundStarted(chatId: string): void {
+    const goal = this.goals.get(chatId);
+    if (!goal) return;
+    const next = goalWindowWanted(goal, false, this.deps.now());
+    if (next !== goal) this.write(next);
   }
 
   deleteChat(chatId: string): void {

@@ -1765,6 +1765,16 @@ export const chatsApi = {
       if (update.goal !== null && !goal) return;
       handler(update.chatId, goal);
     }),
+  /** This window's pane shows `chatId` (or no chat), with or without focus: where a due goal round can start. */
+  reportGoalView: (chatId: string | null, focused: boolean) => invoke<void>("chats:goal:view", { chatId, focused }),
+  /** A goal round main offered this window is due: start it here, or decline it so it runs without the window. */
+  onGoalWindowRound: (handler: (request: { chatId: string; token: string }) => void) =>
+    onNotification<unknown>("chats:goal-window-round", (payload) => {
+      const request = payload && typeof payload === "object" ? (payload as { chatId?: unknown; token?: unknown }) : {};
+      if (typeof request.chatId !== "string" || !request.chatId || typeof request.token !== "string" || !request.token) return;
+      handler({ chatId: request.chatId, token: request.token });
+    }),
+  declineGoalWindowRound: (token: string) => invoke<void>("chats:goal:declineWindowRound", { token }),
   onBtwEvent: (handler: (event: BtwEventV1) => void) =>
     onNotification<unknown>("chats:btw-event", (payload) => {
       const event = parseBtwEvent(payload);
@@ -2364,10 +2374,28 @@ export function createChatTurnId(): string {
  * (filtered by a client-generated streamId) BEFORE kicking off the backend, so
  * no opening tokens are missed. Auto-unsubscribes on done/error.
  */
+/** What main answers a request to start a generation (`chat:start`, or a goal round's start). */
+interface GenerationStartReply {
+  streamId: string;
+  accepted: boolean;
+  started: boolean;
+  error?: string;
+}
+
+/**
+ * Starts a goal round main offered this window (`token`), as this window's
+ * own run, instead of answering a message the person sent.
+ */
+export function goalRoundStart(token: string): (streamId: string) => Promise<GenerationStartReply> {
+  return (streamId) => invoke<GenerationStartReply>("chats:goal:startWindowRound", { token, streamId });
+}
+
 export function startGeneration(
   params: ChatStartParams,
   callbacks: StreamCallbacks,
   messageTurnId: string,
+  /** Starts the run another way than `chat:start` (a goal round in this window). */
+  start?: (streamId: string) => Promise<GenerationStartReply>,
 ): GenerationHandle {
   const streamId = messageTurnId;
   rememberOwnGenerationStream(streamId);
@@ -2378,12 +2406,9 @@ export function startGeneration(
   );
   const dispose = stream.dispose;
 
-  const started: Promise<GenerationStartResult> = invoke<{
-    streamId: string;
-    accepted: boolean;
-    started: boolean;
-    error?: string;
-  }>("chat:start", streamId, params, messageTurnId).then(
+  const started: Promise<GenerationStartResult> = (
+    start ? start(streamId) : invoke<GenerationStartReply>("chat:start", streamId, params, messageTurnId)
+  ).then(
     (result) => {
       if (result.accepted) {
         if (result.error) {

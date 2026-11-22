@@ -159,6 +159,20 @@ export function resumeGoal(goal: GoalRecordV1, input: { now: number; boot: strin
   return next;
 }
 
+/**
+ * Marks whether the goal's rounds want the chat on screen: set when a round
+ * without a window had a window-only call refused, cleared when a round starts
+ * in a window. Unchanged (the same object) when it already says so, so the
+ * revision moves only on a real change.
+ */
+export function goalWindowWanted(goal: GoalRecordV1, wanted: boolean, now: number): GoalRecordV1 {
+  if ((goal.windowWanted === true) === wanted) return goal;
+  if (wanted) return write(goal, now, { windowWanted: true });
+  const next = write(goal, now, {});
+  delete next.windowWanted;
+  return next;
+}
+
 /** On load: a goal left active by another Aiden process comes back paused. */
 export function restoreGoal(goal: GoalRecordV1, input: { now: number; boot: string }): GoalRecordV1 {
   if (goal.status !== "active" || goal.boot === input.boot) return goal;

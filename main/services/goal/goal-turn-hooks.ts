@@ -38,6 +38,8 @@ export interface GoalTurnHooks {
    * the chat has no active goal.
    */
   noticeRound(chatId: string, notice?: { text: string; notice: AgentNoticeV1 }): Promise<StartTurnResult | undefined>;
+  /** A goal round without a window refused a call that needs the chat on screen. */
+  windowToolRefused(chatId: string): void;
 }
 
 const none: GoalTurnHooks = {
@@ -48,6 +50,7 @@ const none: GoalTurnHooks = {
   accessChanged: () => undefined,
   moveRefusal: () => undefined,
   noticeRound: async () => undefined,
+  windowToolRefused: () => undefined,
 };
 
 let current: GoalTurnHooks = none;

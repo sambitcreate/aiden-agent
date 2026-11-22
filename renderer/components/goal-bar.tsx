@@ -15,7 +15,7 @@ import { queryKeys, useChatGoal } from "../lib/queries";
 import { cn } from "../lib/ui-utils";
 import { goalRoundLabel, type GoalView } from "../shared/goal";
 
-export type GoalBarAction = "pause" | "resume" | "keep-going" | "clear";
+export type GoalBarAction = "pause" | "resume" | "keep-going" | "continue-here" | "clear";
 
 type Tone = "neutral" | "warning" | "green";
 
@@ -39,11 +39,27 @@ const ACTION_LABEL: Record<GoalBarAction, string> = {
   pause: "Pause",
   resume: "Resume",
   "keep-going": "Keep going",
+  "continue-here": "Continue here",
   clear: "Clear",
 };
 
+/** What the bar says when a round off screen needed the chat's window. */
+export const GOAL_WINDOW_WANTED_DETAIL = "Open this chat to let Aiden use the browser or Computer Use";
+
 /** What the bar shows for a goal: its state line, the detail under it, and the actions it offers. */
 export function goalBarView(goal: GoalView): GoalBarView {
+  // A round off screen needed the window (the browser, Computer Use): Continue
+  // here starts the next round from this window, which then has those tools.
+  if (goal.windowWanted === true && (goal.status === "needs-you" || (goal.status === "paused" && goal.cause !== "person"))) {
+    return {
+      title: goal.status === "needs-you" ? "Needs you" : "Paused",
+      detail: GOAL_WINDOW_WANTED_DETAIL,
+      tone: "warning",
+      icon: goal.status === "needs-you" ? "needs-you" : "paused",
+      actions: ["continue-here", "clear"],
+      primary: "continue-here",
+    };
+  }
   switch (goal.status) {
     case "active":
       return { title: `Working · ${goalRoundLabel(goal)}`, detail: goal.objective, tone: "neutral", icon: "working", actions: ["pause", "clear"] };
