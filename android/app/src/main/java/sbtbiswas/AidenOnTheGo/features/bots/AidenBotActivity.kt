@@ -190,7 +190,7 @@ fun aidenBotSkeletonLook(ui: AidenBotSessionUiState): AidenBotSkeletonLook = whe
 }
 
 /** The small line under a bubble the Mac's transcript doesn't hold yet. */
-enum class AidenBotPendingCaption { QUEUED, SENDING, FAILED }
+enum class AidenBotPendingCaption { QUEUED, FAILED }
 
 /** How a waiting bubble draws: [faded] for one not yet in the reply, with an optional caption. */
 data class AidenBotPendingBubble(val faded: Boolean, val caption: AidenBotPendingCaption?)
@@ -200,16 +200,12 @@ fun aidenBotQueuedBubble(mode: AidenStreamInputMode): AidenBotPendingBubble =
     if (mode == AidenStreamInputMode.QUEUE) AidenBotPendingBubble(true, AidenBotPendingCaption.QUEUED)
     else AidenBotPendingBubble(false, null)
 
-/** A message on its way looks sent at once; "Sending…" shows once it has waited this long for the Mac. */
-const val AIDEN_BOT_SENDING_CAPTION_DELAY_MS = 2_000L
-
-/** [waitedMs]: how long the message has waited since it was sent, for "Sending…" (offline, or a slow Mac). */
-fun aidenBotOutgoingBubble(look: AidenBotOutgoingLook, waitedMs: Long = 0L): AidenBotPendingBubble = when (look) {
-    AidenBotOutgoingLook.Sending -> AidenBotPendingBubble(
-        false,
-        if (waitedMs >= AIDEN_BOT_SENDING_CAPTION_DELAY_MS) AidenBotPendingCaption.SENDING else null
-    )
-    AidenBotOutgoingLook.Sent -> AidenBotPendingBubble(false, null)
+/**
+ * A message on its way looks sent at once and stays that way while the Mac takes it: the
+ * status line carries the wait, and only a send that fails says so.
+ */
+fun aidenBotOutgoingBubble(look: AidenBotOutgoingLook): AidenBotPendingBubble = when (look) {
+    AidenBotOutgoingLook.Sending, AidenBotOutgoingLook.Sent -> AidenBotPendingBubble(false, null)
     is AidenBotOutgoingLook.Queued -> aidenBotQueuedBubble(look.mode)
     AidenBotOutgoingLook.Failed -> AidenBotPendingBubble(false, AidenBotPendingCaption.FAILED)
 }
@@ -441,7 +437,7 @@ private fun AidenBotQueuedLook(text: String, mode: AidenStreamInputMode) {
 
 /**
  * A message the person sent from this phone, before the Mac's transcript shows it (R14):
- * drawn as sent at once ("Sending…" only once it has waited a moment), Queued while the Bot
+ * drawn as sent at once (the status line carries the wait), Queued while the Bot
  * works, or "Couldn't send" with Try again and remove, each a full touch target.
  */
 @Composable
@@ -457,7 +453,7 @@ fun AidenBotOutgoingBubble(
         AidenBotQueuedLook(message.text, look.mode)
         return
     }
-    val bubble = aidenBotOutgoingBubble(look, rememberAidenBotSendWaitMs(message.createdAtMs, look == AidenBotOutgoingLook.Sending))
+    val bubble = aidenBotOutgoingBubble(look)
     val text = aidenBotChatTextColors(MaterialTheme.colorScheme)
     when (bubble.caption) {
         AidenBotPendingCaption.FAILED -> {
@@ -493,28 +489,8 @@ fun AidenBotOutgoingBubble(
                 }
             }
         }
-        AidenBotPendingCaption.SENDING -> AidenBotPendingBubbleView(
-            message.text,
-            faded = bubble.faded,
-            modifier = Modifier.semantics(mergeDescendants = true) {}
-        ) {
-            AidenBotPendingCaptionText(stringResource(R.string.bot_session_sending))
-        }
         else -> AidenBotPendingBubbleView(message.text, faded = bubble.faded)
     }
-}
-
-/** How long a message still on its way has waited, updated once it passes [AIDEN_BOT_SENDING_CAPTION_DELAY_MS]. */
-@Composable
-private fun rememberAidenBotSendWaitMs(createdAtMs: Long, sending: Boolean): Long {
-    var waitedMs by remember(createdAtMs) { mutableLongStateOf(System.currentTimeMillis() - createdAtMs) }
-    LaunchedEffect(createdAtMs, sending) {
-        if (!sending) return@LaunchedEffect
-        val remaining = AIDEN_BOT_SENDING_CAPTION_DELAY_MS - (System.currentTimeMillis() - createdAtMs)
-        if (remaining > 0) delay(remaining)
-        waitedMs = System.currentTimeMillis() - createdAtMs
-    }
-    return waitedMs
 }
 
 /**

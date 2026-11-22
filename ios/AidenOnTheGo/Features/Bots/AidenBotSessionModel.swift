@@ -534,14 +534,6 @@ struct AidenBotOutgoingMessage: Equatable, Identifiable, Sendable {
         echoSubmissionID = nil
     }
 
-    /// A message on its way looks sent at once; "Sending…" shows only once it
-    /// has waited this long for the Mac (offline, or a slow Mac).
-    static let sendingCaptionDelay: TimeInterval = 2
-
-    static func showsSendingCaption(sentAt: Date, now: Date) -> Bool {
-        now.timeIntervalSince(sentAt) >= sendingCaptionDelay
-    }
-
     /// Whether the Mac may hold it, so its echo can stand in for it.
     fileprivate var mayHaveReachedMac: Bool {
         guard request != nil else { return false }
@@ -580,7 +572,7 @@ func aidenBotOutboxFailureStep(
 
 /// How the chat draws an outgoing message (R14).
 enum AidenBotOutgoingLook: Equatable {
-    /// On its way: drawn as sent, with "Sending…" once it has waited a moment.
+    /// On its way: drawn as sent; the status line carries the wait.
     case sending
     /// The Mac took it; its own entry replaces it shortly.
     case sent
