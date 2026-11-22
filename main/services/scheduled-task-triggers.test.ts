@@ -6,7 +6,7 @@ import path from "node:path";
 import test from "node:test";
 import type { BotWatchCheck } from "./bot-routine-events/watch-sources.js";
 import { runScheduledScript } from "./schedule-script.js";
-import type { ScheduledRunTrigger } from "./schedule-service-core.js";
+import { ScheduledTaskIneligible, type ScheduledRunTrigger } from "./schedule-service-core.js";
 import { createScheduledTaskTriggers } from "./scheduled-task-triggers.js";
 import { REFUSED_LINK_CALLS_PER_MINUTE, UNKNOWN_LINK_CALLS_PER_MINUTE } from "./scheduled-task-link-trigger.js";
 import { compareImcpWatch, type ConnectorWatchBaseline, type ConnectorWatchItem } from "./bot-routine-events/connector-watch-imcp.js";
@@ -30,6 +30,9 @@ class MemoryPersistence<T> {
 
 const MINUTE = 60_000;
 
+/** What each run does in turn: records a result, or fails before anything is recorded. */
+type RunScript = Array<Pick<ScheduledRun, "result" | "reason"> | { throws: Error }>;
+
 function watchTask(overrides: Partial<ScheduledTask> = {}): ScheduledTask {
   return {
     id: "task-1", name: "Status page", enabled: true, mode: "llm", cron: "", timezone: "UTC",
@@ -39,7 +42,7 @@ function watchTask(overrides: Partial<ScheduledTask> = {}): ScheduledTask {
   } as ScheduledTask;
 }
 
-function harness(options: { tasks?: ScheduledTask[]; checks?: BotWatchCheck[]; runResult?: ScheduledRun["result"]; runResults?: Array<Pick<ScheduledRun, "result" | "reason">>; stateDir?: string; fireDueTimers?: boolean; connector?: TaskConnectorTriggers; linkSecret?: string } = {}) {
+function harness(options: { tasks?: ScheduledTask[]; checks?: BotWatchCheck[]; runResult?: ScheduledRun["result"]; runResults?: RunScript; stateDir?: string; fireDueTimers?: boolean; connector?: TaskConnectorTriggers; linkSecret?: string } = {}) {
   let clock = 1_800_000_000_000;
   const tasks = options.tasks ?? [watchTask()];
   const checks = [...(options.checks ?? [])];
@@ -67,6 +70,7 @@ function harness(options: { tasks?: ScheduledTask[]; checks?: BotWatchCheck[]; r
     runEvent: async (taskId, event, runId) => {
       events.push({ taskId, event, runId });
       const outcome = options.runResults?.shift() ?? { result: options.runResult ?? "success" };
+      if ("throws" in outcome) throw outcome.throws;
       const run: ScheduledRun = { id: runId, taskId, startedAt: clock, finishedAt: clock, ...outcome, output: "" };
       runs.set(runId, run);
       return run;
@@ -285,7 +289,7 @@ test("trigger runs share one cap of four at once across every task", async () =>
   emitted.stop();
 });
 
-function linkHarness(trigger: Record<string, unknown> = { kind: "webhook", gapMinutes: 10 }, runResults?: Array<Pick<ScheduledRun, "result" | "reason">>) {
+function linkHarness(trigger: Record<string, unknown> = { kind: "webhook", gapMinutes: 10 }, runResults?: RunScript) {
   const value = harness({ tasks: [watchTask({ trigger: trigger as ScheduledTask["trigger"] })], fireDueTimers: true, ...(runResults ? { runResults } : {}) });
   const token = "L".repeat(43);
   return {
@@ -804,6 +808,66 @@ test("calls held again after every busy run are dropped with a card after 6 retr
   assert.equal(routine!.running, undefined);
   assert.equal(routine!.day?.count ?? 0, 0, "busy runs never used the day's runs");
   assert.equal(link.notices.length, 1);
+  assert.match(link.notices[0]!.text, /tried 7 times/u);
+  assert.equal((await link.store.linkState("task-1"))?.log[0]?.outcome, "dropped");
+  link.triggers.stop();
+});
+
+test("a run that fails before it is recorded keeps its call and runs it again later under the same event", async () => {
+  const link = linkHarness({ kind: "webhook", gapMinutes: 10 }, [{ throws: new Error("EIO: the task store could not be read") }]);
+  await link.setUp();
+  assert.equal(await link.call({ n: 0 }), 202);
+  assert.equal(link.events.length, 1);
+  const [routine] = await link.store.list("task-1");
+  assert.ok(routine!.held, "the call is kept instead of being dropped");
+  assert.equal(routine!.running, undefined, "in the same write that settles the failed receipt");
+  assert.equal(routine!.day?.count ?? 0, 0, "the failed run gives back its place in the day's runs");
+
+  // Aiden restarts before the retry is due: the held call is still there.
+  link.triggers.stop();
+  await link.triggers.start();
+  await link.triggers.idle();
+  assert.equal(link.events.length, 1, "nothing runs before the retry is due");
+  await runHeld(link, 10 * MINUTE, 2);
+  assert.equal(link.events.length, 2, "the kept call runs once it is due");
+  assert.equal(link.events[1]!.runId, link.events[0]!.runId, "under the same run id, so a recorded run is never repeated");
+  assert.match(link.events[1]!.event.payload, /"n": 0/u);
+  assert.equal(link.notices.length, 0);
+  link.triggers.stop();
+});
+
+test("an event for a task that was paused or lost its trigger is dropped, not tried again", async () => {
+  for (const error of [
+    new ScheduledTaskIneligible("paused", "This scheduled task is paused."),
+    new ScheduledTaskIneligible("no_trigger", "This scheduled task no longer has a trigger."),
+    new ScheduledTaskIneligible("missing", "Scheduled task task-1 not found."),
+  ]) {
+    const link = linkHarness({ kind: "webhook", gapMinutes: 1 }, [{ throws: error }]);
+    await link.setUp();
+    assert.equal(await link.call({ n: 0 }), 202);
+    const [routine] = await link.store.list("task-1");
+    assert.equal(routine!.held, undefined, `${error.reason}: nothing is held for later`);
+    assert.equal(routine!.running, undefined, `${error.reason}: the receipt is settled`);
+    await runHeld(link, 60 * MINUTE, 2);
+    assert.equal(link.events.length, 1, `${error.reason}: it is not run again`);
+    link.triggers.stop();
+  }
+});
+
+test("a run that keeps failing before it is recorded backs off and is dropped with a card after 6 retries", async () => {
+  const failing = Array.from({ length: 10 }, () => ({ throws: new Error("EIO: the task store could not be read") }));
+  const link = linkHarness({ kind: "webhook", gapMinutes: 1 }, failing);
+  await link.setUp();
+  assert.equal(await link.call({ n: 0 }), 202);
+  // The first retry waits a minute; it is not run again at once.
+  await runHeld(link, 30_000, 2);
+  assert.equal(link.events.length, 1, "no retry inside the backoff");
+  for (let attempt = 2; attempt <= 8; attempt += 1) await runHeld(link, 60 * MINUTE, attempt);
+  assert.equal(link.events.length, 7, "the first run and 6 retries, then no more");
+  const [routine] = await link.store.list("task-1");
+  assert.equal(routine!.held, undefined);
+  assert.equal(routine!.running, undefined);
+  assert.equal(link.notices.length, 1, "the drop is shown on a card");
   assert.match(link.notices[0]!.text, /tried 7 times/u);
   assert.equal((await link.store.linkState("task-1"))?.log[0]?.outcome, "dropped");
   link.triggers.stop();

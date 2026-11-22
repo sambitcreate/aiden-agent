@@ -57,6 +57,18 @@ type DispatchResult =
  */
 export class UnclaimableScheduledFire extends Error {}
 
+/**
+ * The task can no longer run at all: it was deleted, paused or turned off
+ * (or scheduled tasks are), or it no longer has a trigger. An event for it is
+ * dropped; any other failure leaves the event to be tried again.
+ */
+export class ScheduledTaskIneligible extends Error {
+  constructor(readonly reason: "missing" | "paused" | "no_trigger", message: string) {
+    super(message);
+    this.name = "ScheduledTaskIneligible";
+  }
+}
+
 /** Structured Bot recurrences coalesce sleep into their newest due occurrence. */
 function latestBotOccurrence(task: ScheduledTask, due: number, now: number): number {
   if (!task.botId || !task.routineSchedule || task.routineSchedule.kind === "once" || due > now) return due;
@@ -391,7 +403,7 @@ export function createScheduleServiceCore(
     const operation = (async () => {
       try {
         const task = await store.get(taskId);
-        if (!task) throw new Error(`Scheduled task ${taskId} not found.`);
+        if (!task) throw new ScheduledTaskIneligible("missing", `Scheduled task ${taskId} not found.`);
         if (
           options.expectedUpdatedAt !== undefined &&
           task.updatedAt !== options.expectedUpdatedAt
@@ -424,15 +436,15 @@ export function createScheduleServiceCore(
           (options.automatic || options.catchUp !== undefined || event !== undefined) &&
           (!started || !globallyEnabled || (!task.enabled && !spentOnceCatchUp && !options.automatic))
         ) {
-          throw new Error("This scheduled task is paused.");
+          throw new ScheduledTaskIneligible("paused", "This scheduled task is paused.");
         }
         // A trigger's event only runs the task that still has a trigger; a
         // task turned back into a scheduled one ignores what was queued.
         if (event !== undefined && (!task.trigger || task.botId !== undefined)) {
-          throw new Error("This scheduled task no longer has a trigger.");
+          throw new ScheduledTaskIneligible("no_trigger", "This scheduled task no longer has a trigger.");
         }
         if (options.automatic && !options.recovery && !task.enabled)
-          throw new Error("This scheduled task is paused.");
+          throw new ScheduledTaskIneligible("paused", "This scheduled task is paused.");
         if (!isCurrent())
           throw new Error("This scheduled task was cancelled.");
         const fireTime = options.automatic

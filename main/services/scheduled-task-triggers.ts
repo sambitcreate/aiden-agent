@@ -18,7 +18,7 @@ import { createEventRoutineDispatcher } from "./bot-routine-events/dispatcher.js
 import { createEventWatches } from "./bot-routine-events/watch.js";
 import type { BotWatchCheck } from "./bot-routine-events/watch-sources.js";
 import type { ScriptProcessResult } from "./schedule-script.js";
-import type { ScheduledRunTrigger } from "./schedule-service-core.js";
+import { ScheduledTaskIneligible, type ScheduledRunTrigger } from "./schedule-service-core.js";
 import { createTaskLinkWebhook, linkEventText, mergeLinkBatches } from "./scheduled-task-link-trigger.js";
 import type { TaskConnectorSource, TaskConnectorTriggers } from "./scheduled-task-connector-trigger.js";
 import { TASK_TRIGGER_PAYLOAD_CHARS, type ScheduledTaskTriggerStore, type TaskTriggerRoutine } from "./scheduled-task-triggers-store.js";
@@ -124,6 +124,14 @@ export const CHAT_BUDGET_RETRY_MS = 60 * 60_000;
 /** Times a run that delivered nothing (busy chat, chat out of task runs) is held again before its payload is dropped. */
 export const TASK_TRIGGER_RETRIES = 6;
 
+/**
+ * A run that failed before it could be recorded (the task store couldn't be
+ * read, its workspace was changing) is tried again after this, doubling with
+ * each retry up to an hour, at most `TASK_TRIGGER_RETRIES` times.
+ */
+export const TASK_TRIGGER_FAILURE_RETRY_MS = 60_000;
+const TASK_TRIGGER_FAILURE_RETRY_MAX_MS = 60 * 60_000;
+
 /** A link's log changes at most this often reach the task list. */
 const LOG_BROADCAST_MS = 2_000;
 
@@ -172,9 +180,32 @@ export function createScheduledTaskTriggers(deps: ScheduledTaskTriggersDependenc
         return { settled: !stopped };
       } catch (error) {
         if (stopped) return { settled: false };
-        // The task was paused, turned off or lost its trigger: the event is dropped.
         deps.onError?.(error);
-        return { settled: true };
+        // The task was deleted, paused, turned off or lost its trigger: the event is dropped.
+        if (error instanceof ScheduledTaskIneligible) return { settled: true };
+        // Anything else may pass: hold the event again under its own id, so a
+        // replay reads a run it may have recorded instead of running twice,
+        // and try again later, at most TASK_TRIGGER_RETRIES times.
+        const link = routine.task.trigger.kind === "webhook";
+        const retries = event.retries ?? 0;
+        try {
+          await dispatcher.requeue(routine.id, routine.id, {
+            eventId: event.eventId,
+            payload: event.payload,
+            ...(event.watchRevision !== undefined ? { watchRevision: event.watchRevision } : {}),
+            ...(retries ? { retries } : {}),
+          }, (older, newer) => combineHeld(link, older, newer), {
+            settles: event.eventId,
+            refund: true,
+            maxRetries: TASK_TRIGGER_RETRIES,
+            notBefore: deps.now() + Math.min(TASK_TRIGGER_FAILURE_RETRY_MAX_MS, TASK_TRIGGER_FAILURE_RETRY_MS * 2 ** retries),
+          });
+        } catch (requeueError) {
+          // The receipt is still there: the next start replays it.
+          deps.onError?.(requeueError);
+          return { settled: false };
+        }
+        return { settled: !stopped };
       }
     } finally {
       release();
@@ -206,12 +237,12 @@ export function createScheduledTaskTriggers(deps: ScheduledTaskTriggersDependenc
         }
         : {
           summary: "Couldn't deliver, dropped",
-          text: `Scheduled task "${routine.task.name}" tried ${TASK_TRIGGER_RETRIES + 1} times but its chat was busy or out of task runs each time, so ${what} it was holding ${were} dropped. It runs again on the next ${link ? "call" : "change"}.`,
+          text: `Scheduled task "${routine.task.name}" tried ${TASK_TRIGGER_RETRIES + 1} times but couldn't deliver (its chat was busy or out of task runs, or the run couldn't start), so ${what} it was holding ${were} dropped. It runs again on the next ${link ? "call" : "change"}.`,
         };
       if (link) {
         await deps.store.appendLog(routine.id, reason === "daily_limit"
           ? { at: deps.now(), outcome: "daily_limit", preview: "Held calls dropped: today's runs were used up." }
-          : { at: deps.now(), outcome: "dropped", preview: "Held calls dropped: the chat stayed busy." });
+          : { at: deps.now(), outcome: "dropped", preview: "Held calls dropped: they couldn't be delivered." });
       }
       await deps.dropped?.(routine.task, card);
       deps.changed?.(routine.id);
