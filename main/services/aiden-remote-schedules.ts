@@ -461,7 +461,9 @@ export class AidenRemoteScheduleService {
       }
       for (const run of runs) {
         if (since !== undefined && run.finishedAt < since) continue;
-        if (run.result === "silent") continue;
+        // Quiet and skipped runs (a busy chat, a chat's hourly share) never notify,
+        // as on the desktop.
+        if (run.result === "silent" || run.result === "skipped") continue;
         // A corrupt stored row must not poison the whole feed.
         if (!isWellFormedRun(run)) continue;
         notifications.push({ ...mapRun(run, 2_000), taskName, notify: task.notify });

@@ -324,8 +324,13 @@ function normalizeInput(
   }
   // Set once, when the schedule tool creates a task from a chat; every later
   // save (desktop editor, phone, tool update) keeps it. Bot routines never post into a chat.
+  // A task moved to another project no longer belongs in its old chat.
   const originChatId =
-    botId !== undefined ? undefined : existing ? existing.originChatId : cleanOptional(input.originChatId, 200);
+    botId !== undefined
+      ? undefined
+      : existing
+        ? workspaceId === existing.workspaceId ? existing.originChatId : undefined
+        : cleanOptional(input.originChatId, 200);
   if (originChatId) assertChatTaskCadence(cron, timezone, new Date(now));
   const retiredRetries = existing && (!enabled || !existing.enabled || existing.prompt !== prompt ||
     existing.cron !== cron || existing.timezone !== timezone);
@@ -967,11 +972,18 @@ export function createScheduleStore(
      * task's own chat. With `expectedChatId`, only that binding is dropped.
      * Returns the task, or undefined when nothing changed.
      */
-    async clearOriginChat(id: string, expectedChatId?: string): Promise<ScheduledTask | undefined> {
+    async clearOriginChat(
+      id: string,
+      options: { expectedChatId?: string; expectedUpdatedAt?: number } = {},
+    ): Promise<ScheduledTask | undefined> {
+      const { expectedChatId, expectedUpdatedAt } = options;
       return tasks.update((draft) => {
         const index = draft.map(normalizeStoredTask).findIndex((task) => task?.id === id);
         const existing = index >= 0 ? normalizeStoredTask(draft[index]) : null;
         if (!existing) throw new Error(`Scheduled task ${id} not found.`);
+        if (expectedUpdatedAt !== undefined && existing.updatedAt !== expectedUpdatedAt) {
+          throw new Error("This automation changed. Refresh it before trying again.");
+        }
         if (!existing.originChatId) return undefined;
         if (expectedChatId !== undefined && existing.originChatId !== expectedChatId) return undefined;
         const { originChatId: _dropped, ...rest } = existing;

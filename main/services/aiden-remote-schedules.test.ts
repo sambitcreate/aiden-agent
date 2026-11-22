@@ -326,3 +326,15 @@ test("phones never see or change the desktop-only keep-awake setting", async () 
   assert.equal("keepAwakeWhileWorking" in saved, false);
   assert.equal((await value.application.settings()).value.keepAwakeWhileWorking, false, "the desktop's choice is untouched");
 });
+
+test("a run skipped because its chat was busy or over its hourly share never notifies a phone", async () => {
+  const value = fixture();
+  const created = await value.service.create("device-1", "create-key-123456", llmMutation);
+  value.histories.set(created.id, [
+    { id: "run-busy", taskId: created.id, startedAt: 10, finishedAt: 11, result: "skipped", reason: "chat_busy", output: "Skipped: the chat stayed busy for 10 minutes." },
+    { id: "run-budget", taskId: created.id, startedAt: 12, finishedAt: 13, result: "skipped", reason: "chat_budget", output: "Skipped: this chat already ran 6 scheduled tasks in the last hour." },
+    { id: "run-ok", taskId: created.id, startedAt: 14, finishedAt: 15, result: "success", output: "All green." },
+  ]);
+  const feed = await value.service.notifications();
+  assert.deepEqual(feed.notifications.map((item) => item.id), ["run-ok"]);
+});

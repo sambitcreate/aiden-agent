@@ -36,7 +36,7 @@ const automatic = { kind: "automatic", fireTime: 1 } as const;
 
 function harness(options: {
   chats?: TaskRunChat[];
-  idle?: (timeoutMs: number) => boolean;
+  idle?: (timeoutMs: number, chats: Map<string, TaskRunChat>) => boolean;
   admit?: () => AdmittedTaskTurn | Promise<AdmittedTaskTurn>;
   script?: TaskRunExecution | Error;
 } = {}) {
@@ -48,6 +48,7 @@ function harness(options: {
   const released: Array<[string, string]> = [];
   let ordered = 0;
   let inOrder = false;
+  const delays: number[] = [];
   const delivery = createTaskRunChatDelivery({
     getChat: async (id) => chats.get(id),
     releaseOriginChat: async (taskId, chatId) => {
@@ -72,7 +73,7 @@ function harness(options: {
       if (result.kind === "admitted") admitted.push(post);
       return result;
     },
-    waitForIdle: async (_chatId, timeoutMs) => options.idle?.(timeoutMs) ?? true,
+    waitForIdle: async (_chatId, timeoutMs) => options.idle?.(timeoutMs, chats) ?? true,
     postNotice: async (post) => {
       notices.push(post);
       return { kind: "recorded", messageId: `notice-${notices.length}`, reason: "not-waking" };
@@ -88,6 +89,10 @@ function harness(options: {
     },
     cadence: () => "Every day at 9:00 AM",
     now: () => clock,
+    delay: async (ms) => {
+      delays.push(ms);
+      clock += ms;
+    },
   });
   const run = (scheduled: ScheduledTask, extra: { trigger?: Parameters<typeof delivery.deliverTaskRunToChat>[1]["trigger"]; eventText?: string } = {}) =>
     delivery.deliverTaskRunToChat(scheduled, { trigger: automatic, signal: new AbortController().signal, ...extra });
@@ -98,6 +103,7 @@ function harness(options: {
     ownChatRuns,
     released,
     ordered: () => ordered,
+    delays,
     advance: (ms: number) => {
       clock += ms;
     },
@@ -185,14 +191,14 @@ test("a deleted chat sends the run to the task's own chat and drops the binding"
   assert.equal(h.notices.length, 0);
 });
 
-test("a Bot conversation or another workspace's chat never takes the run", async () => {
+test("a chat that moved to another project, or a Bot conversation, never takes the run and drops the binding", async () => {
   for (const chat of [
     { id: "chat-1", workspaceId: "workspace-1", botId: "bot-1" },
     { id: "chat-1", workspaceId: "workspace-2" },
   ]) {
     const h = harness({ chats: [chat] });
     assert.equal((await h.run(task())).kind, "fell_back");
-    assert.deepEqual(h.released, [], "the binding stays; the chat still exists");
+    assert.deepEqual(h.released, [["task-1", "chat-1"]], "the chip and editor stop naming a chat that can't take it");
     assert.equal(h.admitted.length, 0);
   }
   const unbound = harness();
@@ -230,4 +236,45 @@ test("a run that can't start says so in the chat and records an error", async ()
   assert.equal(outcome.kind === "ran" && outcome.result, "error");
   assert.equal(h.notices[0]?.notice.tone, "failure");
   assert.match(h.notices[0]?.text ?? "", /Choose a model/u);
+});
+
+test("a busy chat gets one skipped card an hour, not one per run", async () => {
+  const h = harness({ idle: () => false });
+  assert.equal((await h.run(task())).kind, "skipped");
+  assert.equal((await h.run(task({ id: "task-2", name: "Another task" }))).kind, "skipped");
+  assert.equal(h.notices.length, 1);
+  h.advance(HOUR);
+  await h.run(task());
+  assert.equal(h.notices.length, 2, "a new hour gets a new card");
+});
+
+test("a chat held by a turn that doesn't count as busy is retried with a pause, then skipped at the deadline", async () => {
+  let attempts = 0;
+  const h = harness({
+    admit: () => {
+      attempts += 1;
+      return { kind: "busy" };
+    },
+  });
+  const outcome = await h.run(task());
+  assert.equal(outcome.kind === "skipped" && outcome.reason, "chat_busy");
+  assert.ok(h.delays.length > 0 && h.delays.every((ms) => ms > 0 && ms <= 2_000), "each retry waits");
+  assert.ok(attempts <= 10 * 60 / 2 + 1, `bounded retries, got ${attempts}`);
+});
+
+test("a chat deleted while the run waited sends the run to the task's own chat", async () => {
+  let waits = 0;
+  const h = harness({
+    idle: (_timeoutMs, chats) => {
+      waits += 1;
+      chats.delete("chat-1");
+      return true;
+    },
+  });
+  const outcome = await h.run(task());
+  assert.equal(waits, 1);
+  assert.equal(outcome.kind, "fell_back");
+  assert.deepEqual(h.released, [["task-1", "chat-1"]]);
+  assert.equal(h.admitted.length, 0, "nothing was posted into the deleted chat");
+  assert.deepEqual(h.ownChatRuns, ["own-task-1"]);
 });

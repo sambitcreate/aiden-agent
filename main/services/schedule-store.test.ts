@@ -797,9 +797,14 @@ test("the chat a task posts into is set once at creation and every later save ke
   // Nor can a save move it to another chat.
   const moved = await store.save({ ...chatTaskInput({ originChatId: "chat-2" }), id: created.id });
   assert.equal(moved.originChatId, "chat-1");
+  // Moving the task to another project drops the binding: that chat is in the old project.
+  const otherProject = await store.save({ ...chatTaskInput({ workspaceId: "workspace-b" }), id: created.id });
+  assert.equal(otherProject.originChatId, undefined);
+  const rebound = await store.save(chatTaskInput({ originChatId: "chat-1" }));
   // It survives a reload from disk.
   const reloaded = createScheduleStore(persistence, new MemoryPersistence<unknown[]>([]));
-  assert.equal((await reloaded.get(created.id))?.originChatId, "chat-1");
+  assert.equal((await reloaded.get(rebound.id))?.originChatId, "chat-1");
+  assert.equal((await reloaded.get(created.id))?.originChatId, undefined);
 });
 
 test("a task bound to a chat can't be edited to run more often than every 15 minutes", async () => {
@@ -821,8 +826,11 @@ test("Use its own chat and deleting the chat drop the binding, and nothing else"
   const first = await store.save(chatTaskInput({ originChatId: "chat-1" }));
   const second = await store.save(chatTaskInput({ name: "Second", originChatId: "chat-1" }));
   const other = await store.save(chatTaskInput({ name: "Other", originChatId: "chat-2" }));
-  assert.equal(await store.clearOriginChat(first.id, "chat-9"), undefined);
-  const moved = await store.clearOriginChat(first.id);
+  assert.equal(await store.clearOriginChat(first.id, { expectedChatId: "chat-9" }), undefined);
+  // Use its own chat is checked against the revision the person saw.
+  await assert.rejects(store.clearOriginChat(first.id, { expectedUpdatedAt: first.updatedAt - 1 }), /changed/u);
+  assert.equal((await store.get(first.id))?.originChatId, "chat-1");
+  const moved = await store.clearOriginChat(first.id, { expectedUpdatedAt: first.updatedAt });
   assert.equal(moved?.originChatId, undefined);
   assert.ok((moved?.updatedAt ?? 0) > first.updatedAt, "the change is a new revision");
   assert.equal(moved?.prompt, first.prompt);
