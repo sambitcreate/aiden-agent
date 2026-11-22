@@ -60,7 +60,7 @@ Providers lists configured services and offers **Connect AI** on a fresh install
 
 ## Theme tiles
 
-Every theme preset has a light and a dark look, and the System, Light and Dark cards above the tiles pick which look Aiden uses; a theme never forces one. So each tile previews its theme in the look the window shows now: Light shows every theme's light look (Graphite, Dusk and Midnight included), Dark shows every dark look (Paper and Monochrome included), and System follows the computer. A Light or Dark choice shows on the tiles at once, before the system confirms it. The tiles read the applied scheme from `:root[data-appearance-scheme]` (`readAppliedAppearanceScheme`). `appearance-settings.test.tsx` checks that every tile turns light or dark with the mode.
+Every theme preset has a light and a dark look, and the System, Light and Dark cards above the tiles pick which look Aiden uses; a theme never forces one. So each tile previews its theme in the look the window shows now: Light shows every theme's light look (Graphite, Dusk and Midnight included), Dark shows every dark look (Paper and Monochrome included), and System follows the computer. A Light or Dark choice shows on the tiles at once, before the system confirms it. The tiles read the applied scheme from `:root[data-appearance-scheme]` (`readAppliedAppearanceScheme`). iOS (`AidenThemeCatalog.tilePreview`) and Android (`aidenUsesDarkColors`, the same rule `AidenTheme` uses) follow the same rule. `appearance-settings.test.tsx`, iOS `testThemeTilesPreviewTheLookTheModeGivesEveryTheme` and Android `AidenThemeCatalogTest` check that every tile turns light or dark with the mode.
 
 ## Workspace labels
 

@@ -13150,6 +13150,31 @@ final class AidenAppearanceTests: XCTestCase {
         XCTAssertEqual(restored.darkPreset, .dusk)
     }
 
+    /// Every theme has a light and a dark look; its tile shows the one the mode gives it,
+    /// so Graphite, Dusk and Midnight read light in Light mode and the rest read dark in Dark.
+    func testThemeTilesPreviewTheLookTheModeGivesEveryTheme() {
+        func luminance(_ hex: String) -> Double {
+            func channel(_ shift: Int) -> Double {
+                let value = Double((Int(hex.dropFirst(), radix: 16)! >> shift) & 0xFF) / 255
+                return value <= 0.03928 ? value / 12.92 : pow((value + 0.055) / 1.055, 2.4)
+            }
+            return 0.2126 * channel(16) + 0.7152 * channel(8) + 0.0722 * channel(0)
+        }
+        let cases: [(AidenAppearanceMode, ColorScheme, Bool)] = [
+            (.light, .dark, false), (.dark, .light, true), (.system, .light, false), (.system, .dark, true),
+        ]
+        for preset in AidenThemePresetID.allCases {
+            for (mode, system, dark) in cases {
+                let canvas = luminance(AidenThemeCatalog.tilePreview(preset: preset, mode: mode, systemScheme: system).canvasHex)
+                if dark {
+                    XCTAssertLessThan(canvas, 0.1, "\(preset) in \(mode) with a \(system) phone should preview dark")
+                } else {
+                    XCTAssertGreaterThan(canvas, 0.5, "\(preset) in \(mode) with a \(system) phone should preview light")
+                }
+            }
+        }
+    }
+
     /// A v1 snapshot from an older build carries keys this build dropped
     /// (areas, sidebar views, expanded rows). The rest still restores, so the
     /// v2 store can migrate it.

@@ -518,6 +518,13 @@ private struct AidenSolidFillButtonBody<Label: View, S: Shape>: View {
 }
 
 enum AidenThemeCatalog {
+    /// The palette a theme tile in Settings shows. Every theme has a light and a dark look
+    /// and the mode picks which one the app uses, so the tile shows the look this theme
+    /// would have right now: System follows the phone's scheme.
+    static func tilePreview(preset: AidenThemePresetID, mode: AidenAppearanceMode, systemScheme: ColorScheme) -> AidenPalette {
+        palette(preset: preset, scheme: mode.colorScheme ?? systemScheme)
+    }
+
     static func palette(preset: AidenThemePresetID, scheme: ColorScheme) -> AidenPalette {
         palettes[preset]![scheme == .dark ? 1 : 0]
     }
@@ -829,14 +836,8 @@ struct AidenAppearanceSettingsView: View {
         }
     }
 
-    /// Every theme has a light and a dark look and the mode picks which one the app uses,
-    /// so each tile shows the look this theme would have right now (System follows the phone).
-    private var tileScheme: ColorScheme {
-        appearance.mode.colorScheme ?? colorScheme
-    }
-
     private func themeTile(for preset: AidenThemePresetID) -> some View {
-        let preview = AidenThemeCatalog.palette(preset: preset, scheme: tileScheme)
+        let preview = AidenThemeCatalog.tilePreview(preset: preset, mode: appearance.mode, systemScheme: colorScheme)
         let selected = preset == selectedPreset
         return Button {
             appearance.selectTheme(preset)

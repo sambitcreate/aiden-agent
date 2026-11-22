@@ -107,8 +107,11 @@ fun AidenTheme(
 
 /** Whether [mode] shows the dark look right now: System follows the device. */
 @Composable
-fun aidenUsesDarkColors(mode: AidenAppearanceMode): Boolean = when (mode) {
-    AidenAppearanceMode.SYSTEM -> isSystemInDarkTheme()
+fun aidenUsesDarkColors(mode: AidenAppearanceMode): Boolean = aidenUsesDarkColors(mode, isSystemInDarkTheme())
+
+/** Whether [mode] shows the dark look on a device whose own scheme is [systemDark]. */
+fun aidenUsesDarkColors(mode: AidenAppearanceMode, systemDark: Boolean): Boolean = when (mode) {
+    AidenAppearanceMode.SYSTEM -> systemDark
     AidenAppearanceMode.LIGHT -> false
     AidenAppearanceMode.DARK -> true
 }
