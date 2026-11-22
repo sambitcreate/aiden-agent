@@ -727,7 +727,6 @@
     <string name="bot_chat_activity_preview_step_edit">Edited 1 file</string>
     <string name="bot_session_queued">Queued</string>
     <string name="bot_session_queued_hint">Sends when the current reply finishes</string>
-    <string name="bot_session_sending">Sending…</string>
     <string name="bot_session_send_failed">Couldn’t send</string>
     <string name="bot_session_try_again">Try again</string>
     <!-- Joins "Couldn’t send" and "Try again" into "Couldn’t send · Try again" (copy shared with iOS). -->
