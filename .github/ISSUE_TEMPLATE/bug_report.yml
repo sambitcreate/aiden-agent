@@ -26,7 +26,7 @@ body:
     attributes:
       label: App / CLI version and OS version
       description: Desktop version is in Settings → About; headless CLI version is `aiden --version`.
-      placeholder: "e.g. Desktop 0.67.0 (or CLI 0.1.0) on macOS 15.4 / Ubuntu 24.04"
+      placeholder: "e.g. Desktop 0.68.0 (or CLI 0.1.0) on macOS 15.4 / Ubuntu 24.04"
     validations:
       required: true
   - type: textarea
