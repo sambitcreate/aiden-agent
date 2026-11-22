@@ -24,7 +24,7 @@ import {
 } from "./managed-worktree-removal-core.js";
 import type { GitBranches, GitInfo, GitWorktree } from "./types.js";
 import { reportAnalyticsEvent } from "./analytics/analytics-report.js";
-import { resolveGitExecutableMemoized } from "./git-executable.js";
+import { resolveGitExecutable, resolveGitExecutableMemoized } from "./git-executable.js";
 import { agentCommandEnvironment } from "./agent-command-environment.js";
 import {
   finalizeManagedWorktreeRemovalManifest,
@@ -1023,6 +1023,74 @@ function reviewFileSignature(stats: BigIntStats): string {
   return `${stats.dev}:${stats.ino}:${stats.mode}:${stats.size}:${stats.mtimeNs}:${stats.ctimeNs}`;
 }
 
+interface VerifiedRepoIdentityProof {
+  commonDir: string;
+  identityPaths: string[];
+  systemConfigKey: string;
+  systemConfigPaths: string[];
+  resolvedExecutable: string;
+  viaDarwinShim: boolean;
+  execSignature: string;
+  paths: string[];
+  signature: string;
+}
+
+/**
+ * Verifies that `realPath` is a native Mach-O (macOS) or ELF (Linux) regular
+ * executable file rather than a shebang/interpreted script or text wrapper.
+ * Unsupported platforms fail closed so pure-FS admission falls back to Git.
+ */
+async function isNativeExecutableBinary(realPath: string): Promise<boolean> {
+  if (process.platform !== "darwin" && process.platform !== "linux") {
+    return false;
+  }
+  const flags =
+    fsConstants.O_RDONLY |
+    (fsConstants.O_NOFOLLOW ?? 0) |
+    (fsConstants.O_NONBLOCK ?? 0);
+  let handle: fs.FileHandle | undefined;
+  try {
+    handle = await fs.open(realPath, flags);
+    const stat = await handle.stat();
+    if (!stat.isFile() || stat.size < 64) return false;
+    const header = Buffer.alloc(8);
+    const { bytesRead } = await handle.read(header, 0, header.length, 0);
+    if (bytesRead < 8) return false;
+    if (process.platform === "darwin") {
+      const magic = header.readUInt32BE(0);
+      if (
+        magic === 0xfeedface ||
+        magic === 0xcefaedfe ||
+        magic === 0xfeedfacf ||
+        magic === 0xcffaedfe
+      ) {
+        return true;
+      }
+      if (magic === 0xcafebabe || magic === 0xcafebabf) {
+        const archCount = header.readUInt32BE(4);
+        return archCount >= 1 && archCount <= 32;
+      }
+      if (magic === 0xbebafeca || magic === 0xbfbafeca) {
+        const archCount = header.readUInt32LE(4);
+        return archCount >= 1 && archCount <= 32;
+      }
+      return false;
+    }
+    return (
+      header[0] === 0x7f &&
+      header[1] === 0x45 &&
+      header[2] === 0x4c &&
+      header[3] === 0x46 &&
+      (header[4] === 1 || header[4] === 2) &&
+      (header[5] === 1 || header[5] === 2)
+    );
+  } catch {
+    return false;
+  } finally {
+    await handle?.close().catch(() => undefined);
+  }
+}
+
 export class GitService {
   private readonly gitBinary: string;
   private readonly maxBufferBytes: number;
@@ -1075,18 +1143,7 @@ export class GitService {
    * any external config change (including `core.bare=true` or included config
    * files) immediately falls back to Git discovery and fails closed.
    */
-  private readonly verifiedRepoIdentities = new Map<
-    string,
-    {
-      commonDir: string;
-      identityPaths: string[];
-      systemConfigKey: string;
-      systemConfigPaths: string[];
-      execSignature: string;
-      paths: string[];
-      signature: string;
-    }
-  >();
+  private readonly verifiedRepoIdentities = new Map<string, VerifiedRepoIdentityProof>();
   /**
    * Credential-free remote identity learned by ordinary status reads, keyed by
    * repository working directory. Raw remote URLs are never retained.
@@ -1308,47 +1365,160 @@ export class GitService {
       this.gitBinary,
       env.GIT_CONFIG_NOSYSTEM ?? null,
       env.GIT_CONFIG_SYSTEM ?? null,
-      env.PATH ?? "",
+      env.GIT_CONFIG_GLOBAL ?? null,
+      env.HOME ?? null,
+      env.XDG_CONFIG_HOME ?? null,
+      env.PATH ?? null,
+      env.DEVELOPER_DIR ?? null,
+      env.GIT_EXEC_PATH ?? null,
+      env.LD_PRELOAD ?? null,
+      env.DYLD_INSERT_LIBRARIES ?? null,
     ]);
   }
 
-  private async executableIdentitySignature(env: NodeJS.ProcessEnv): Promise<string | undefined> {
-    const statExecutable = async (candidate: string): Promise<string | undefined> => {
-      try {
-        const lstat = await fs.lstat(candidate, { bigint: true });
-        if (lstat.isDirectory()) return undefined;
-        await fs.access(candidate, fsConstants.X_OK);
-        const linkTarget = lstat.isSymbolicLink() ? await fs.readlink(candidate) : "";
-        const real = await fs.realpath(candidate);
-        const realStat = await fs.stat(real, { bigint: true });
-        if (!realStat.isFile()) return undefined;
-        return [
-          candidate,
-          linkTarget,
-          `${lstat.dev}:${lstat.ino}:${lstat.mode}:${lstat.size}:${lstat.mtimeNs}:${lstat.ctimeNs}`,
-          real,
-          `${realStat.dev}:${realStat.ino}:${realStat.mode}:${realStat.size}:${realStat.mtimeNs}:${realStat.ctimeNs}`,
-        ].join("|");
-      } catch {
-        return undefined;
+  private async signExecutablePathChain(candidate: string): Promise<
+    | {
+        real: string;
+        realStat: BigIntStats;
+        signature: string;
       }
-    };
-    if (this.gitBinary.includes(path.sep)) {
-      return statExecutable(path.resolve(this.gitBinary));
+    | undefined
+  > {
+    try {
+      const hops: string[] = [];
+      let current = candidate;
+      const MAX_SYMLINK_HOPS = 40;
+      for (let hop = 0; hop <= MAX_SYMLINK_HOPS; hop += 1) {
+        const st = await fs.lstat(current, { bigint: true });
+        if (st.isDirectory()) return undefined;
+        if (st.isSymbolicLink()) {
+          if (hop === MAX_SYMLINK_HOPS) return undefined;
+          const target = await fs.readlink(current);
+          hops.push(
+            `link:${current}:${st.dev}:${st.ino}:${st.mode}:${st.size}:${st.mtimeNs}:${st.ctimeNs}->${target}`,
+          );
+          current = path.resolve(path.dirname(current), target);
+          continue;
+        }
+        if (!st.isFile()) return undefined;
+        hops.push(
+          `file:${current}:${st.dev}:${st.ino}:${st.mode}:${st.size}:${st.mtimeNs}:${st.ctimeNs}`,
+        );
+        break;
+      }
+      await fs.access(candidate, fsConstants.X_OK);
+      const real = await fs.realpath(candidate);
+      const realStat = await fs.stat(real, { bigint: true });
+      if (!realStat.isFile()) return undefined;
+      return {
+        real,
+        realStat,
+        signature: [
+          ...hops,
+          `real:${real}:${realStat.dev}:${realStat.ino}:${realStat.mode}:${realStat.size}:${realStat.mtimeNs}:${realStat.ctimeNs}`,
+        ].join("|"),
+      };
+    } catch {
+      return undefined;
     }
-    const pathEnv = env.PATH ?? "";
+  }
+
+  private async signOptionalRoutingPath(filePath: string): Promise<string | undefined> {
+    try {
+      const st = await fs.lstat(filePath, { bigint: true });
+      if (st.isSymbolicLink()) {
+        const target = await fs.readlink(filePath);
+        return `link:${filePath}:${st.dev}:${st.ino}:${st.mode}:${st.mtimeNs}:${st.ctimeNs}->${target}`;
+      }
+      if (st.isFile()) {
+        return `file:${filePath}:${st.dev}:${st.ino}:${st.mode}:${st.size}:${st.mtimeNs}:${st.ctimeNs}`;
+      }
+      if (st.isDirectory()) {
+        return `dir:${filePath}:${st.dev}:${st.ino}:${st.mode}:${st.mtimeNs}:${st.ctimeNs}`;
+      }
+      return undefined;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+        return `missing:${filePath}`;
+      }
+      return undefined;
+    }
+  }
+
+  private async signDarwinShimRouting(env: NodeJS.ProcessEnv): Promise<string | undefined> {
+    const routingPaths = [
+      "/var/db/xcode_select_link",
+      "/usr/share/xcode-select/xcode_dir_path",
+      "/Applications/Xcode.app/Contents/Developer/usr/bin/git",
+      "/Library/Developer/CommandLineTools/usr/bin/git",
+    ];
+    if (env.DEVELOPER_DIR && path.isAbsolute(env.DEVELOPER_DIR)) {
+      routingPaths.push(path.join(env.DEVELOPER_DIR, "usr/bin/git"));
+    }
+    const entries = await Promise.all(
+      routingPaths.map((filePath) => this.signOptionalRoutingPath(filePath)),
+    );
+    if (entries.some((entry) => entry === undefined)) return undefined;
+    return `darwin-routing[${entries.join(",")}]`;
+  }
+
+  private async executableIdentitySignature(
+    canonicalCwd: string,
+    env: NodeJS.ProcessEnv,
+    expectedResolved: string,
+    viaDarwinShim: boolean,
+  ): Promise<{ real: string; realStat: BigIntStats; signature: string } | undefined> {
+    if (process.platform !== "darwin" && process.platform !== "linux") {
+      return undefined;
+    }
+    if (process.platform === "darwin" && expectedResolved === "/usr/bin/git") {
+      return undefined;
+    }
+    const candidates = this.gitBinary.includes("/")
+      ? [path.resolve(canonicalCwd, this.gitBinary)]
+      : (env.PATH ?? "/usr/bin:/bin")
+          .split(":")
+          .filter((dir) => path.isAbsolute(dir))
+          .map((dir) => path.join(dir, this.gitBinary));
+
     const parts: string[] = [];
-    for (const dir of pathEnv.split(path.delimiter)) {
-      if (!dir) continue;
-      const candidate = path.join(dir, this.gitBinary);
-      const matched = await statExecutable(candidate);
+    for (const candidate of candidates) {
+      const matched = await this.signExecutablePathChain(candidate);
       if (matched) {
-        parts.push(matched);
-        return parts.join(";");
+        if (process.platform === "darwin" && matched.real === "/usr/bin/git") {
+          const darwinRouting = await this.signDarwinShimRouting(env);
+          if (!darwinRouting) return undefined;
+          parts.push(`darwin-shim:${matched.signature}`);
+          parts.push(darwinRouting);
+          if (viaDarwinShim) {
+            const resolvedChain = await this.signExecutablePathChain(expectedResolved);
+            if (!resolvedChain || resolvedChain.real !== expectedResolved) {
+              return undefined;
+            }
+            parts.push(`resolved:${resolvedChain.signature}`);
+            return {
+              real: resolvedChain.real,
+              realStat: resolvedChain.realStat,
+              signature: parts.join(";"),
+            };
+          }
+          continue;
+        }
+        if (viaDarwinShim || matched.real !== expectedResolved) {
+          return undefined;
+        }
+        parts.push(matched.signature);
+        return {
+          real: matched.real,
+          realStat: matched.realStat,
+          signature: parts.join(";"),
+        };
       }
       try {
         const lstat = await fs.lstat(candidate, { bigint: true });
-        parts.push(`skip:${candidate}:${lstat.dev}:${lstat.ino}:${lstat.mode}:${lstat.mtimeNs}`);
+        parts.push(
+          `skip:${candidate}:${lstat.dev}:${lstat.ino}:${lstat.mode}:${lstat.mtimeNs}:${lstat.ctimeNs}`,
+        );
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code === "ENOENT") {
           parts.push(`missing:${candidate}`);
@@ -1361,21 +1531,69 @@ export class GitService {
   }
 
   /**
+   * Proves that the resolved native binary is the actual Git executable itself
+   * (its own `<exec-path>/git` resolves to the exact same binary or inode) and
+   * not a compiled wrapper or dynamic shim delegating to a separate Git binary.
+   */
+  private async verifyDirectGitExecPath(
+    canonicalCwd: string,
+    resolvedRealPath: string,
+    resolvedRealStat: BigIntStats,
+    signal?: AbortSignal,
+  ): Promise<boolean> {
+    let probe: GitCommandResult;
+    try {
+      probe = await this.run(canonicalCwd, ["--exec-path"], { signal });
+    } catch (error) {
+      if (signal?.aborted) throw error;
+      return false;
+    }
+    const execPath = probe.stdout.replace(/\r?\n$/u, "");
+    if (!execPath || /[\r\n\u0000]/u.test(execPath) || !path.isAbsolute(execPath)) {
+      return false;
+    }
+    try {
+      const execGitReal = await fs.realpath(path.join(execPath, "git"));
+      const execGitStat = await fs.stat(execGitReal, { bigint: true });
+      if (!execGitStat.isFile()) return false;
+      return (
+        execGitReal === resolvedRealPath ||
+        (execGitStat.dev === resolvedRealStat.dev && execGitStat.ino === resolvedRealStat.ino)
+      );
+    } catch {
+      return false;
+    }
+  }
+
+  /**
    * Identify the exact system Git config path(s) used by `this.gitBinary`
    * instead of guessing hardcoded platform defaults. Reprobes on every fresh
-   * proof construction so an updated wrapper or in-place Git binary never
-   * republishes a stale system-config origin. Returns `undefined` when the
-   * system config origin cannot be proven (for example, an existing empty
-   * system config file or an unrecognized error) so pure-FS admission fails
-   * closed and falls back to Git discovery.
+   * proof construction so an updated Git binary never republishes a stale
+   * system-config origin. Returns `undefined` when the system config origin
+   * cannot be proven (for example, an existing empty system config file or an
+   * unrecognized error) so pure-FS admission fails closed and falls back to
+   * Git discovery.
    */
   private async resolveSystemConfigPaths(
     canonicalCwd: string,
     env: NodeJS.ProcessEnv,
     signal?: AbortSignal,
   ): Promise<readonly string[] | undefined> {
-    const noSystem = env.GIT_CONFIG_NOSYSTEM === "1" || env.GIT_CONFIG_NOSYSTEM === "true";
-    if (noSystem) return [];
+    if (env.GIT_CONFIG_NOSYSTEM !== undefined) {
+      const normalized = env.GIT_CONFIG_NOSYSTEM.trim().toLowerCase();
+      if (normalized === "1" || normalized === "true" || normalized === "yes" || normalized === "on") {
+        return [];
+      }
+      if (
+        normalized !== "" &&
+        normalized !== "0" &&
+        normalized !== "false" &&
+        normalized !== "no" &&
+        normalized !== "off"
+      ) {
+        return undefined;
+      }
+    }
     if (env.GIT_CONFIG_SYSTEM !== undefined) {
       if (!env.GIT_CONFIG_SYSTEM || env.GIT_CONFIG_SYSTEM === "/dev/null") return [];
       return [path.resolve(canonicalCwd, env.GIT_CONFIG_SYSTEM)];
@@ -1465,36 +1683,66 @@ export class GitService {
   }
 
   /**
-   * Prove that every Git config file in scope (repo-local, global, system) is a
-   * plain bounded file without `[include]` / `[includeIf]` directives, and
-   * return a signature across all routing, executable, and config paths.
-   * Returns `undefined` when any include directive, unknown system config
-   * origin, or unreadable/symlinked config is present so pure-FS admission
-   * always falls back to Git discovery.
+   * Prove that the active Git executable is a directly-invoked native Git
+   * binary (not a script, wrapper, or dynamic shim), that every Git config
+   * file in scope (repo-local, global, system) is a plain bounded file without
+   * `[include]` / `[includeIf]` directives, and return a signature across all
+   * routing, executable, and config paths. Returns `undefined` when any
+   * wrapper/shim, include directive, unknown system config origin, or
+   * unreadable/symlinked config is present so pure-FS admission always fails
+   * closed to Git discovery.
    */
   private async pureFsAdmissionProof(
     canonicalCwd: string,
     signal?: AbortSignal,
-  ): Promise<
-    | {
-        commonDir: string;
-        identityPaths: string[];
-        systemConfigKey: string;
-        systemConfigPaths: string[];
-        execSignature: string;
-        paths: string[];
-        signature: string;
-      }
-    | undefined
-  > {
+  ): Promise<VerifiedRepoIdentityProof | undefined> {
     const identity = await this.rootReadIdentity(canonicalCwd);
     if (!identity) return undefined;
     const env = gitEnvironment(false);
+    if (env.GIT_EXEC_PATH || env.LD_PRELOAD || env.DYLD_INSERT_LIBRARIES) {
+      return undefined;
+    }
     const systemConfigKey = this.systemConfigEnvKey(env);
-    const execSigBefore = await this.executableIdentitySignature(env);
-    if (!execSigBefore) return undefined;
-    const systemConfigPaths = await this.resolveSystemConfigPaths(canonicalCwd, env, signal);
-    if (!systemConfigPaths) return undefined;
+    let freshExecutable: string;
+    let memoizedExecutable: string;
+    try {
+      [freshExecutable, memoizedExecutable] = await Promise.all([
+        resolveGitExecutable(this.gitBinary, canonicalCwd, env, signal),
+        resolveGitExecutableMemoized(this.gitBinary, canonicalCwd, env, signal),
+      ]);
+    } catch (error) {
+      if (signal?.aborted) throw error;
+      return undefined;
+    }
+    if (freshExecutable !== memoizedExecutable) return undefined;
+
+    let viaDarwinShim = false;
+    let execBefore = await this.executableIdentitySignature(
+      canonicalCwd,
+      env,
+      freshExecutable,
+      false,
+    );
+    if (!execBefore && process.platform === "darwin") {
+      viaDarwinShim = true;
+      execBefore = await this.executableIdentitySignature(
+        canonicalCwd,
+        env,
+        freshExecutable,
+        true,
+      );
+    }
+    if (!execBefore) return undefined;
+    if (!(await isNativeExecutableBinary(execBefore.real))) {
+      return undefined;
+    }
+
+    const [directGitBinary, systemConfigPaths] = await Promise.all([
+      this.verifyDirectGitExecPath(canonicalCwd, execBefore.real, execBefore.realStat, signal),
+      this.resolveSystemConfigPaths(canonicalCwd, env, signal),
+    ]);
+    if (!directGitBinary || !systemConfigPaths) return undefined;
+
     const { allPaths, configFiles } = this.admissionConfigPaths(
       canonicalCwd,
       env,
@@ -1514,11 +1762,16 @@ export class GitService {
         return undefined;
       }
     }
-    const [afterSig, execSigAfter] = await Promise.all([
+    const [afterSig, execAfter] = await Promise.all([
       this.repositorySignature(allPaths),
-      this.executableIdentitySignature(env),
+      this.executableIdentitySignature(canonicalCwd, env, freshExecutable, viaDarwinShim),
     ]);
-    if (!afterSig || afterSig !== beforeSig || !execSigAfter || execSigAfter !== execSigBefore) {
+    if (
+      !afterSig ||
+      afterSig !== beforeSig ||
+      !execAfter ||
+      execAfter.signature !== execBefore.signature
+    ) {
       return undefined;
     }
     return {
@@ -1526,7 +1779,9 @@ export class GitService {
       identityPaths: identity.paths,
       systemConfigKey,
       systemConfigPaths: [...systemConfigPaths],
-      execSignature: execSigAfter,
+      resolvedExecutable: execAfter.real,
+      viaDarwinShim,
+      execSignature: execAfter.signature,
       paths: allPaths,
       signature: afterSig,
     };
@@ -1534,17 +1789,12 @@ export class GitService {
 
   private async isVerifiedRepoIdentityCurrent(
     canonicalCwd: string,
-    verified: {
-      commonDir: string;
-      identityPaths: string[];
-      systemConfigKey: string;
-      systemConfigPaths: string[];
-      execSignature: string;
-      paths: string[];
-      signature: string;
-    },
+    verified: VerifiedRepoIdentityProof,
   ): Promise<boolean> {
     const env = gitEnvironment(false);
+    if (env.GIT_EXEC_PATH || env.LD_PRELOAD || env.DYLD_INSERT_LIBRARIES) {
+      return false;
+    }
     if (this.systemConfigEnvKey(env) !== verified.systemConfigKey) return false;
     const { allPaths } = this.admissionConfigPaths(
       canonicalCwd,
@@ -1559,11 +1809,20 @@ export class GitService {
     ) {
       return false;
     }
-    const [currentSig, currentExecSig] = await Promise.all([
+    const [currentSig, currentExec] = await Promise.all([
       this.repositorySignature(verified.paths),
-      this.executableIdentitySignature(env),
+      this.executableIdentitySignature(
+        canonicalCwd,
+        env,
+        verified.resolvedExecutable,
+        verified.viaDarwinShim,
+      ),
     ]);
-    return currentSig === verified.signature && currentExecSig === verified.execSignature;
+    return (
+      currentSig === verified.signature &&
+      currentExec !== undefined &&
+      currentExec.signature === verified.execSignature
+    );
   }
 
   private async verifyAdmissionRepository(
