@@ -172,8 +172,18 @@ struct AidenWorkspaceIntentQuery: EntityQuery {
     }
 }
 
+/// Immediate capture action requested by an OS-authenticated foreground launch
+/// (App Intent, Home Screen widget button, or Home Screen Quick Action).
+/// Never constructed from a public URL and never persisted across launches.
+enum AidenChatLaunchAction: Equatable, Sendable {
+    case none
+    case voice
+    case camera
+}
+
 /// In-process delivery survives a cold foreground launch before ContentView mounts.
-/// An `Action` only comes from an App Intent: nothing in a URL, App Group, saved state,
+/// An `Action` only comes from an OS-authenticated foreground entry point (App Intent,
+/// widget button, or Home Screen Quick Action): nothing in a URL, App Group, saved state,
 /// or notification can claim that provenance. A route only says where to go, and a
 /// notification tap can queue one too.
 @MainActor @Observable
@@ -182,17 +192,23 @@ final class AidenForegroundIntentRouter {
         let id = UUID()
         let instanceID: String?
         let workspaceID: String?
-        let startsVoice: Bool
+        let launchAction: AidenChatLaunchAction
         let createdAt: Date
+
+        var startsVoice: Bool { launchAction == .voice }
+        var startsCamera: Bool { launchAction == .camera }
     }
 
-    /// A place waiting for the shell. `startsVoice` rides beside the route,
+    /// A place waiting for the shell. `launchAction` rides beside the route,
     /// because routes are saved between launches and this must never be. Queued,
     /// it's only a request: `takeRoutes` decides whether it still stands.
     struct QueuedRoute: Equatable {
         let route: AidenAppRoute
-        let startsVoice: Bool
+        let launchAction: AidenChatLaunchAction
         let requestedAt: Date
+
+        var startsVoice: Bool { launchAction == .voice }
+        var startsCamera: Bool { launchAction == .camera }
     }
 
     static let shared = AidenForegroundIntentRouter()
@@ -200,28 +216,99 @@ final class AidenForegroundIntentRouter {
     /// Kept until the shell takes them, so a tap or an intent can arrive before
     /// it mounts.
     private(set) var routes: [QueuedRoute] = []
+    /// A tab root asked for by a widget button or Home Screen Quick Action.
+    private(set) var pendingTab: AidenAppTab?
     var pending: Action? { actions.first }
 
     @ObservationIgnored private var isOpeningChats = false
+    /// Bumped by whatever ends the foreground claim of earlier actions (a link,
+    /// a tab request, the view leaving). A chat still being created when it
+    /// changes opens without its microphone or camera.
+    @ObservationIgnored private var captureGeneration = 0
 
     func submit(instanceID: String?, workspaceID: String?, startsVoice: Bool, now: Date = Date()) {
-        actions.append(Action(instanceID: instanceID, workspaceID: workspaceID, startsVoice: startsVoice, createdAt: now))
+        submit(
+            instanceID: instanceID,
+            workspaceID: workspaceID,
+            launchAction: startsVoice ? .voice : .none,
+            now: now
+        )
+    }
+
+    func submit(
+        instanceID: String?,
+        workspaceID: String?,
+        launchAction: AidenChatLaunchAction,
+        now: Date = Date()
+    ) {
+        pendingTab = nil
+        actions.append(Action(instanceID: instanceID, workspaceID: workspaceID, launchAction: launchAction, createdAt: now))
+    }
+
+    /// A newer Home Screen request for a tab root supersedes waiting chat
+    /// actions, and a chat already being created loses its capture launch.
+    func submit(tab: AidenAppTab) {
+        actions = []
+        captureGeneration &+= 1
+        pendingTab = tab
+    }
+
+    func takePendingTab() -> AidenAppTab? {
+        defer { pendingTab = nil }
+        return pendingTab
+    }
+
+    /// A Home Screen widget button or Quick Action. New chats go to the active
+    /// machine the App Group catalog names, like the New Chat shortcut.
+    func submit(
+        homeAction: AidenHomeAction,
+        catalogStore: AidenIntentCatalogStore = .shared,
+        now: Date = Date()
+    ) {
+        let launchAction: AidenChatLaunchAction
+        switch homeAction {
+        case .newChat: launchAction = .none
+        case .newChatCamera: launchAction = .camera
+        case .newChatVoice: launchAction = .voice
+        case .workspaces: return submit(tab: .workspaces)
+        case .bots: return submit(tab: .bots)
+        }
+        submit(
+            instanceID: catalogStore.load().activeInstallationId,
+            workspaceID: nil,
+            launchAction: launchAction,
+            now: now
+        )
     }
 
     /// For what ends an intent's claim on the foreground. Routes stay: they only
     /// say where to go, and a tap is still owed its screen.
     func discardActions() {
         actions = []
+        captureGeneration &+= 1
+        pendingTab = nil
     }
 
     func submit(route: AidenAppRoute, startsVoice: Bool = false, requestedAt: Date = Date()) {
-        routes.append(QueuedRoute(route: route, startsVoice: startsVoice, requestedAt: requestedAt))
+        submit(
+            route: route,
+            launchAction: startsVoice ? .voice : .none,
+            requestedAt: requestedAt
+        )
+    }
+
+    func submit(
+        route: AidenAppRoute,
+        launchAction: AidenChatLaunchAction,
+        requestedAt: Date = Date()
+    ) {
+        routes.append(QueuedRoute(route: route, launchAction: launchAction, requestedAt: requestedAt))
     }
 
     /// Empties the queue, so each route reaches exactly one shell. A route whose
     /// machine left or was revoked while it waited is dropped here. The microphone
-    /// only opens in front of the person, within the minute of them asking; a route
-    /// that misses either still opens its chat, silently.
+    /// and camera only open in front of the person, within the minute of them
+    /// asking; a route that misses either still opens its chat, silently.
     func takeRoutes(
         openableOn coordinator: AidenRemoteCoordinator,
         isForeground: @MainActor () -> Bool = { AidenRunAlertNotifier.currentAppState() == .active },
@@ -232,7 +319,7 @@ final class AidenForegroundIntentRouter {
         return routes.filter { coordinator.canOpen($0.route) }.map { queued in
             QueuedRoute(
                 route: queued.route,
-                startsVoice: queued.startsVoice && isInFront && Self.isFresh(queued.requestedAt, now: now),
+                launchAction: (isInFront && Self.isFresh(queued.requestedAt, now: now)) ? queued.launchAction : .none,
                 requestedAt: queued.requestedAt
             )
         }
@@ -315,6 +402,7 @@ final class AidenForegroundIntentRouter {
             coordinator.presentedError = String(localized: "Open this installation and choose an available workspace before starting a chat.")
             return
         }
+        let generation = captureGeneration
         do {
             let client = try coordinator.remoteClient(for: owner)
             let chat = try await client.createChat(workspaceId: workspace.id, noWorkspace: workspace.noWorkspace)
@@ -331,7 +419,9 @@ final class AidenForegroundIntentRouter {
             }
             submit(
                 route: .chat(AidenHostObjectID(instanceId: owner.instanceId, deviceId: owner.deviceId, objectId: chat.id)),
-                startsVoice: action.startsVoice,
+                // Something newer took the foreground while the chat was made:
+                // it still opens, but never with the microphone or camera.
+                launchAction: generation == captureGeneration ? action.launchAction : .none,
                 requestedAt: action.createdAt
             )
         } catch where aidenIsCancellation(error) {

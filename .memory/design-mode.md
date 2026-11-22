@@ -347,3 +347,9 @@ Deviations from the P1 plan:
 ## Wide inline visuals in design mode (2026-11-20)
 
 - Design mode's asymmetric `.aiden-dock-inset` (`--design-mode-gutter: 16px` start, `--aiden-dock-gutter` end) caused `.aiden-inline-visual[data-layout="wide"]`'s symmetric negative `margin-inline` breakout to pull wide visuals 16 px past the start edge. In `renderer/styles.css`, wide inline visuals are now scoped under `[data-scroll-content]:has(> .chat-content-column)`, and under `[data-design-mode]` they keep `margin-inline: 0` while growing rightwards to `max(100%, min(calc(100cqi - 2 * var(--design-mode-gutter)), var(--inline-visual-wide-max)))` (still overridden by `[data-chat-card-inset]`). Covered in `tests/e2e/inline-visuals.spec.ts` for both split and stacked design mode.
+
+## Symmetric chat gutter (2026-11-22)
+
+- Live's idle corner pill left in #855, but design mode still kept `--aiden-dock-gutter` (96 px) on the chat column's right only, so the narrow design chat showed an empty lane right of the composer. The design column now uses `--design-mode-gutter` (16 px) on both sides, and the design-mode-only wide inline visual rule above is gone: the generic rule fills the slim column.
+- Outside design mode, `.aiden-dock-inset` keeps 6rem per side at usual widths (reading width unchanged) but gives way down to `--chat-column-gutter-min` (1rem) when the pane is narrow; Full narrows like Default; `[data-chat-card-inset]` keeps the fixed 6rem because Quick View's docking math assumes it.
+- Live's transient corner pill (connecting, stopping, disconnected, approval) now rises just above the composer when it would cover it (`liveCornerClearance` in `use-live-ribbon-placement.ts`).

@@ -31,7 +31,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.clearAndSetSemantics
@@ -49,6 +48,7 @@ import sbtbiswas.AidenOnTheGo.config.AidenThemePresetID
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenSegmentedPillRow
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenTheme
 import sbtbiswas.AidenOnTheGo.ui.theme.aidenPresetPalette
+import sbtbiswas.AidenOnTheGo.ui.theme.aidenUsesDarkColors
 import sbtbiswas.AidenOnTheGo.ui.theme.tactilePress
 
 /** Appearance: mode, theme, text size, and motion. Changes apply immediately and persist. */
@@ -167,10 +167,6 @@ internal fun AidenThemeTileGrid(
     }
 }
 
-/** Scheme whose palette visually defines this preset on its tile. */
-private val AidenThemePresetID.signatureIsDark: Boolean
-    get() = this == AidenThemePresetID.GRAPHITE || this == AidenThemePresetID.DUSK || this == AidenThemePresetID.MIDNIGHT
-
 /**
  * One theme choice. The tile is a single radio button for accessibility services: its
  * name, selection, and click are set on the tile and the decorative preview is cleared.
@@ -184,7 +180,9 @@ private fun AidenThemeTile(
     modifier: Modifier = Modifier
 ) {
     val palette = AidenTheme.palette
-    val previewDark = if (preset.isDynamic) palette.canvas.luminance() < 0.5f else preset.signatureIsDark
+    // Every theme has a light and a dark look and the mode picks which one the app uses,
+    // so each tile shows the look this theme would have right now.
+    val previewDark = aidenUsesDarkColors(AidenTheme.config.mode)
     val preview = aidenPresetPalette(preset, previewDark)
     val interaction = remember { MutableInteractionSource() }
     Column(

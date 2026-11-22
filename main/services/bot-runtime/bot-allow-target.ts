@@ -13,6 +13,7 @@ export function botApprovalTargetOf(
 ): { target: BotApprovalRuleTarget; title: string } | undefined {
   if (EXCLUDED.has(toolName) || !action) return undefined;
   if (action.surface === "mcp") {
+    if (action.neverRemembered) return undefined;
     if (!validIdentity(action.serverId) || !validIdentity(action.remoteName)) return undefined;
     const title = (action.annotations?.title ?? "").replace(/\s+/gu, " ").replace(/[\p{Cc}\p{Cf}]/gu, "").trim().slice(0, 200);
     return { target: { kind: "connection", serverId: action.serverId, tool: action.remoteName }, title: title || action.remoteName };

@@ -59,6 +59,41 @@
 	<string>Aiden On The Go uses Apple speech recognition when you choose on-device voice input to fill the chat composer.</string>
 	<key>NSSupportsLiveActivities</key>
 	<true/>
+	<key>UIApplicationShortcutItems</key>
+	<array>
+		<dict>
+			<key>UIApplicationShortcutItemType</key>
+			<string>aiden.quickAction.newChat</string>
+			<key>UIApplicationShortcutItemTitle</key>
+			<string>New Chat</string>
+			<key>UIApplicationShortcutItemIconSymbolName</key>
+			<string>square.and.pencil</string>
+		</dict>
+		<dict>
+			<key>UIApplicationShortcutItemType</key>
+			<string>aiden.quickAction.startVoice</string>
+			<key>UIApplicationShortcutItemTitle</key>
+			<string>Start Voice</string>
+			<key>UIApplicationShortcutItemIconSymbolName</key>
+			<string>waveform</string>
+		</dict>
+		<dict>
+			<key>UIApplicationShortcutItemType</key>
+			<string>aiden.quickAction.workspaces</string>
+			<key>UIApplicationShortcutItemTitle</key>
+			<string>Workspaces</string>
+			<key>UIApplicationShortcutItemIconSymbolName</key>
+			<string>folder</string>
+		</dict>
+		<dict>
+			<key>UIApplicationShortcutItemType</key>
+			<string>aiden.quickAction.bots</string>
+			<key>UIApplicationShortcutItemTitle</key>
+			<string>Bots</string>
+			<key>UIApplicationShortcutItemIconSymbolName</key>
+			<string>person.2</string>
+		</dict>
+	</array>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>
