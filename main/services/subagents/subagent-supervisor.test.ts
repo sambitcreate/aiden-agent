@@ -1440,9 +1440,11 @@ test("a Bot reply stops its helpers at the limit and refuses every later launch"
   assert.equal(prepared, 0);
 });
 
-test("stopping a helper that edited a file hands the parent its last message and changed files", async () => {
+for (const drains of [false, true]) {
+test(`stopping a helper that edited a file hands the parent its last message and changed files (${drains ? "clean stop" : "stop not finished"})`, async () => {
   const stops: Array<(reason?: Error) => void> = [];
   const wrote = deferred<void>();
+  let finishStopping = (): void => undefined;
   let tools: AgentTool[] = [];
   const control = fakeChild(async ({ emit }) => {
     const write = tools.find((tool) => tool.name === "write_file")!;
@@ -1451,7 +1453,11 @@ test("stopping a helper that edited a file hands the parent its last message and
     await emit({ type: "message_start", message } as AgentEvent);
     await emit({ type: "message_end", message: { ...message, stopReason: "toolUse" } } as AgentEvent);
     wrote.resolve();
-    await new Promise<void>(() => {});
+    await new Promise<void>((resolve) => {
+      finishStopping = resolve;
+    });
+  }, () => {
+    if (drains) finishStopping();
   });
   const supervisor = new SubagentSupervisor({
     generationId: "generation-phase6b",
@@ -1515,11 +1521,17 @@ test("stopping a helper that edited a file hands the parent its last message and
   assert.match(result, /## 1\. Cookbook[\s\S]*Status: interrupted/u);
   assert.match(result, /Added the soup section to cookbook\.html; the salad section is next\./u);
   assert.match(result, /Files it changed:\n> - cookbook\.html\n/u);
-  // This child never finishes stopping, so a gated write could still land.
-  assert.match(result, /- cookbook\.html\n> The helper had not finished stopping, so this list may be incomplete\./u);
+  if (drains) {
+    // A helper that finished stopping cannot add a write, so its list is complete.
+    assert.doesNotMatch(result, /may be incomplete/u);
+  } else {
+    // This child never finishes stopping, so a gated write could still land.
+    assert.match(result, /- cookbook\.html\n> The helper had not finished stopping, so this list may be incomplete\./u);
+  }
   assert.doesNotMatch(result, /ran commands/u);
   assert.match(result, /incomplete, unverified partial findings/u);
 });
+}
 
 test("changed-file notes keep each path whole even when names contain list separators", () => {
   const paths = ["notes, drafts.md", "salt and pepper.html", ...Array.from({ length: 21 }, (_v, i) => `page-${i}.html`)];

@@ -334,7 +334,7 @@ export function redactMultilineCredentialBlocks(value: string): string {
 }
 
 export function sanitizeCredentialText(value: string): string {
-  let sanitized = redactSensitiveNextLineBlocks(value);
+  let sanitized = value;
   if ((value.includes("=") || value.includes(":")) && ASSIGNMENT_SECRET_HINT.test(value)) {
     sanitized = sanitized
       .replace(CONNECTION_STRING_SECRET, "$1[REDACTED]")
@@ -974,26 +974,49 @@ function blockValueStartsOnNextLine(value: string, start: number): boolean {
 }
 
 /**
- * Known display labels such as `JSON:`, `HTML:`, `NOTE:` or `TASK:` followed
- * by an indented block. Only these names count as labels; every other
- * colon-and-block name is treated as a setting and its block stays private.
+ * Secret hints in a colon-and-block name: the name, without `_` and `-`, ends
+ * in one of these words, so `API_KEY`, `APITOKEN` and `PASSPHRASE` count but
+ * prose headings such as `Authentication`, `Keyboard` or `Authors` do not.
  */
-const DISPLAY_BLOCK_LABELS: ReadonlySet<string> = new Set([
-  "ANSWER", "BLOCKERS", "BODY", "CHANGES", "CODE", "CONSTRAINTS", "CONTEXT",
-  "CSS", "DESCRIPTION", "DETAILS", "DIFF", "ERROR", "ERRORS", "EVIDENCE",
-  "EXAMPLE", "EXAMPLES", "FILES", "FINDINGS", "GOAL", "GOALS", "HTML", "INPUT",
-  "ISSUES", "JSON", "LOG", "LOGS", "MARKDOWN", "NEXT", "NOTE", "NOTES",
-  "OUTPUT", "PLAN", "QUESTION", "REQUEST", "REQUIREMENTS", "RESPONSE",
-  "RESULT", "RESULTS", "SQL", "STATUS", "STEPS", "SUMMARY", "TASK", "TESTS",
-  "TODO", "TOML", "WARNING", "WARNINGS", "XML", "YAML",
+const BLOCK_NAME_SECRET_ENDING =
+  /(?:key|token|secret|password|passwd|passphrase|pwd|jwt|cred|creds|credential|cookie)s?$/u;
+/** Whole names that are secrets without a secret ending. */
+const BLOCK_NAME_SECRET_EXACT: ReadonlySet<string> = new Set([
+  "authorization", "sessionid", "sessiontoken", "privatekey",
 ]);
 
-/** Secret hints matched anywhere in a block's name. */
-const BLOCK_NAME_SECRET_HINT =
-  /key|pass|pwd|jwt|cred|token|secret|auth|cookie|session|private|(?:^|[_-])pin(?:[_-]|$)/iu;
+function blockNameHasSecretHint(name: string): boolean {
+  const normalized = name.toLowerCase().replace(/[_-]/gu, "");
+  return (
+    BLOCK_NAME_SECRET_ENDING.test(normalized) ||
+    BLOCK_NAME_SECRET_EXACT.has(normalized) ||
+    // A PIN is only a whole segment: `PIN`, `ATM_PIN`, but not `SPIN`.
+    /(?:^|[_-])pin$/iu.test(name)
+  );
+}
 
-function colonBlockNameIsDisplayLabel(name: string): boolean {
-  return DISPLAY_BLOCK_LABELS.has(name) && !BLOCK_NAME_SECRET_HINT.test(name);
+/**
+ * A bare all-caps word followed by a colon and an indented block, like
+ * `JSON:`, `README:` or `TASK:`, reads as a label when the word carries no
+ * secret hint. Names with an underscore or digit stay setting-shaped.
+ */
+function colonBlockNameIsLabel(name: string): boolean {
+  return /^[A-Z]{2,64}$/u.test(name) && !blockNameHasSecretHint(name);
+}
+
+/** One opaque token of letters and digits on a line of its own. */
+const OPAQUE_BLOCK_TOKEN = /^(?=[^\s]*\d)(?=[^\s]*[A-Za-z])[A-Za-z0-9+/_=.-]{12,}$/u;
+
+/**
+ * A label's block still hides when its value looks like a credential: the
+ * existing credential detectors flag it, or it is a single opaque token.
+ */
+function labelBlockLooksLikeCredential(block: string): boolean {
+  const lines = block.split(/\r\n|[\r\n]/u).map((line) => line.trim()).filter(Boolean);
+  return (
+    containsHighConfidenceSecretIncludingEncodings(block) ||
+    (lines.length === 1 && OPAQUE_BLOCK_TOKEN.test(lines[0]!))
+  );
 }
 
 const NEXT_LINE_BLOCK_ASSIGNMENT =
@@ -1012,7 +1035,7 @@ export function redactSensitiveNextLineBlocks(value: string): string {
     const offset = match.index;
     if (offset === undefined || offset < cursor) continue;
     const name = match[2]!;
-    if (!BLOCK_NAME_SECRET_HINT.test(name) || colonBlockNameIsDisplayLabel(name)) continue;
+    if (!blockNameHasSecretHint(name)) continue;
     const blockStart = offset + match[0].length;
     const valueEnd = indentedEnvironmentValueEnd(value, blockStart);
     if (valueEnd <= blockStart) continue;
@@ -1071,15 +1094,16 @@ function redactEnvironmentAssignments(value: string): string {
       continue;
     }
     const valueStart = offset + match[0].length;
+    const valueEnd = environmentValueEnd(value, valueStart);
+    if (valueEnd <= valueStart) continue;
     if (
       !isTightEqualsAssignment &&
       blockValueStartsOnNextLine(value, valueStart) &&
-      colonBlockNameIsDisplayLabel(name)
+      colonBlockNameIsLabel(name) &&
+      !labelBlockLooksLikeCredential(value.slice(valueStart, valueEnd))
     ) {
       continue;
     }
-    const valueEnd = environmentValueEnd(value, valueStart);
-    if (valueEnd <= valueStart) continue;
     redacted += `${value.slice(cursor, offset)}${match[0]}[REDACTED ENVIRONMENT VALUE]`;
     cursor = valueEnd;
     changed = true;
@@ -1088,9 +1112,12 @@ function redactEnvironmentAssignments(value: string): string {
 }
 
 function sanitizeVariant(value: string, includeEnvironment: boolean): string {
+  // Subagent text only: the shared credential filter, which main-chat
+  // compaction also uses, leaves prose blocks alone.
+  const blockSafe = redactSensitiveNextLineBlocks(value);
   const environmentSafe = includeEnvironment
-    ? redactEnvironmentAssignments(value).replace(/(\[REDACTED ENVIRONMENT VALUE\])\]+/gu, "$1")
-    : value;
+    ? redactEnvironmentAssignments(blockSafe).replace(/(\[REDACTED ENVIRONMENT VALUE\])\]+/gu, "$1")
+    : blockSafe;
   return sanitizePaths(sanitizePaths(environmentSafe));
 }
 
@@ -1429,7 +1456,7 @@ const LABEL_LINE_BREAK = /(?<![A-Za-z0-9_])([A-Z]{2,64}):[ \t]*(?:\r\n?|\n)[ \t]
 export function collapseSubagentTextToSingleLine(value: string): string {
   return value
     .replace(LABEL_LINE_BREAK, (whole, name: string) =>
-      colonBlockNameIsDisplayLabel(name) ? `${name} — ` : whole,
+      colonBlockNameIsLabel(name) ? `${name} — ` : whole,
     )
     .replace(/\s+/gu, " ");
 }

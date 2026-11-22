@@ -46,7 +46,7 @@ import { skillRegistry } from "../skill-registry-main.js";
 import { inheritedSubagentReadToolCeiling } from "../subagents/capability-profile.js";
 import { subagentsAllowedForGeneration } from "../subagents/eligibility.js";
 import { subagentHealthMetrics } from "../subagents/subagent-health-metrics.js";
-import { SubagentReplyClock, SubagentSupervisor } from "../subagents/subagent-supervisor.js";
+import { SubagentSupervisor } from "../subagents/subagent-supervisor.js";
 import { botSurfaceHooks } from "../agent-surface-hooks.js";
 import { createSubagentTool } from "../subagents/subagent-tool.js";
 import { buildAgentTools } from "../tools.js";
@@ -85,6 +85,7 @@ import { BOT_COMPUTER_SHELL_TOOL_NAME, BOT_COMPUTER_TOOL_NAME } from "../bot-com
 import { botOwnWrites } from "../bot-routine-events/own-writes.js";
 import { botFileCandidates } from "./bot-file-candidates.js";
 import { botExecutionScope } from "./bot-execution.js";
+import { botSubagentReplyClocks } from "./bot-subagent-reply-clocks.js";
 import { createBotRunAccess } from "./bot-run-access.js";
 import { botAccessRequestCandidate, botSavedLocationForCall } from "./bot-access-request-tool.js";
 import { botAccessRequests } from "./bot-access-requests-main.js";
@@ -275,9 +276,6 @@ export function createBotToolSources(deps: BotToolSourceDeps): BotToolSourcesMai
 
   function subagentCandidate(botId: string, admission: BotAdmission, schema: AgentTool): BotToolCandidate {
     const authority = admission.authority;
-    // The tools are rebuilt for each admitted request, so this one clock covers
-    // every helper call in the reply: 60 minutes from the first launch.
-    const replyClock = new SubagentReplyClock();
     return {
       tool: schema,
       replay: "unsafe",
@@ -307,7 +305,10 @@ export function createBotToolSources(deps: BotToolSourceDeps): BotToolSourcesMai
               permission: "full",
               inheritedCeiling: authority.files.botHome ? inheritedSubagentReadToolCeiling(undefined) : [],
               healthMetrics: subagentHealthMetrics,
-              policy: { timeLimit: "bot", replyClock },
+              // The tools are rebuilt for every task phase, so the clock is held
+              // per execution claim: every helper call in this reply shares 60
+              // minutes from the first launch.
+              policy: { timeLimit: "bot", replyClock: botSubagentReplyClocks.clockFor(botId) },
               // SubagentStop runs the Bot's hooks, in the Bot's folder.
               stopHooks: botSurfaceHooks(botId, authority.workingDirectory, undefined, {
                 report: (lines) => logger.info("hooks", `Bot ${botId} hook messages.`, lines),
@@ -620,6 +621,7 @@ export function createBotToolSources(deps: BotToolSourceDeps): BotToolSourcesMai
 
     async forgetBot(botId) {
       botRunAccess.clearBot(botId);
+      botSubagentReplyClocks.forgetBot(botId);
       await closeController(botId);
       // The host deletes the Bot's computer on its own Delete Bot step.
       botComputerToolState?.forget(botId);

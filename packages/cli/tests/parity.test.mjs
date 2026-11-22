@@ -1077,19 +1077,29 @@ test("a CLI subagent that runs out of time hands over what it streamed, filtered
   process.env.AIDEN_CLI_ENTRY = join(pkg, "dist/app/cli.js");
   t.after(() => { if (original === undefined) delete process.env.AIDEN_CLI_ENTRY; else process.env.AIDEN_CLI_ENTRY = original; });
   const server = createServer(async (request, response) => {
-    request.resume();
-    await new Promise((resolve) => request.on("end", resolve));
+    let body = ""; for await (const chunk of request) body += chunk;
     response.writeHead(200, { "content-type": "text/event-stream" });
-    // The reply streams a finding and a token, then never finishes.
+    if (!JSON.parse(body).messages.some((message) => message.role === "tool")) {
+      // The first turn says what it checked, with no trailing newline, then reads a file.
+      response.write(`data: ${JSON.stringify({ id: "slow", object: "chat.completion.chunk", choices: [{ index: 0, delta: { role: "assistant", content: "Checked the parser tests.", tool_calls: [{ index: 0, id: "read-slow", type: "function", function: { name: "read_file", arguments: JSON.stringify({ path: "parser.ts" }) } }] }, finish_reason: null }] })}\n\n`);
+      response.write(`data: ${JSON.stringify({ id: "slow", object: "chat.completion.chunk", choices: [{ index: 0, delta: {}, finish_reason: "tool_calls" }] })}\n\n`);
+      response.end("data: [DONE]\n\n");
+      return;
+    }
+    // The next turn streams a finding and a token, then never finishes.
     response.write(`data: ${JSON.stringify({ id: "slow", object: "chat.completion.chunk", choices: [{ index: 0, delta: { role: "assistant", content: `Found the bug in parser.ts\ntoken ${secret}\n` }, finish_reason: null }] })}\n\n`);
   });
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
   t.after(() => { server.closeAllConnections(); server.close(); });
   api.atomicJson(join(dir, "models.json"), { providers: { "cli-test": { api: "openai-completions", baseUrl: `http://127.0.0.1:${server.address().port}/v1`, apiKey: "test-only", models: [{ id: "test", name: "Test", reasoning: false, input: ["text"], contextWindow: 32000, maxTokens: 4096, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } }] } } });
   const runtime = await api.createCliModelRuntime(dir);
-  const result = await api.runCliSubagent(dir, { runtime: { model: runtime.getModel("cli-test", "test") }, workspaceRoot: dir, permission: "ask", thinkingLevel: "off", context: { mode: "fork", revisionHash: "slow", messages: [{ role: "user", content: "Find the bug", timestamp: 1 }] }, request: { role: "scout", label: "Slow scout", task: "Find the bug" }, policy: { deadlineMs: 3000 } }, [], async () => {});
+  const result = await api.runCliSubagent(dir, { runtime: { model: runtime.getModel("cli-test", "test") }, workspaceRoot: dir, permission: "ask", thinkingLevel: "off", context: { mode: "fork", revisionHash: "slow", messages: [{ role: "user", content: "Find the bug", timestamp: 1 }] }, request: { role: "scout", label: "Slow scout", task: "Find the bug" }, policy: { deadlineMs: 3000 } }, [{
+    name: "read_file", description: "Read a file", parameters: { type: "object", properties: { path: { type: "string" } }, required: ["path"] },
+    execute: async () => ({ content: [{ type: "text", text: "export function parse() {}" }], details: {} }),
+  }], async () => {});
   assert.equal(result.status, "timed_out", JSON.stringify(result));
-  assert.match(result.summary, /Found the bug in parser\.ts/u);
+  // Text from the two turns stays apart rather than running into one sentence.
+  assert.match(result.summary, /Checked the parser tests\.\s+Found the bug in parser\.ts/u);
   assert.ok(!result.summary.includes(secret), result.summary);
   assert.match(result.warning, /did not complete/u);
   assert.match(result.warning, /incomplete, unverified partial findings/u);

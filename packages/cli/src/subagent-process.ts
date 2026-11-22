@@ -69,7 +69,11 @@ export async function runCliSubagent(agentDir: string, input: RunSubagentChildIn
         } catch (error) { reply({ type: "tool-result", id: event.id, error: error instanceof Error ? error.message : String(error) }); }
       })();
       activeTools.add(operation); void operation.finally(() => activeTools.delete(operation));
-    } else if (event.type === "turn") { if (++turns > limits.turns) stop(new Error("Subagent turn budget exhausted.")); else input.telemetry?.turnStarted(); }
+    } else if (event.type === "turn") {
+      // Each model turn's streamed text starts on its own line, so handed-over partial text never runs two turns together.
+      if (text && !text.endsWith("\n")) text += "\n";
+      if (++turns > limits.turns) stop(new Error("Subagent turn budget exhausted.")); else input.telemetry?.turnStarted();
+    }
     else if (event.type === "delta" && typeof event.text === "string") { text += event.text; if (text.length > limits.output) stop(new Error("Subagent output budget exhausted.")); else input.telemetry?.textDelta(event.text); }
     else if (event.type === "protocol" && Number.isSafeInteger(event.chars) && event.chars >= 0) {
       bytes += event.chars; input.telemetry?.protocolDelta?.(event.chars);

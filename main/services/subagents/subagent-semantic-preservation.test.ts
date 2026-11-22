@@ -225,10 +225,22 @@ for (const block of SECRET_NAMED_BLOCKS) {
   });
 }
 
-test("an unknown block name keeps its value out of the panel even without a secret-like name", () => {
-  const value = "MAPPING:\n  zz-unlisted-value\nDone.";
-  assert.doesNotMatch(sanitizeSubagentSnapshotText(value), /zz-unlisted-value/u);
-  assert.equal(sanitizeSubagentText(value), value, "the parent keeps ordinary prose blocks");
+test("prose heading blocks without a secret-like name survive the parent and panel filters", () => {
+  for (const value of [
+    "Findings:\nAuthentication:\n  The login flow uses OAuth.\n  Tests cover it.\nNext steps.",
+    "Keyboard:\n  Shortcuts work.\nAuthors:\n  The core team.\nDone.",
+    "README:\n  Install with npm, then run the dev server.\nDone.",
+    "PROMPT:\n  Summarise the attached notes.\nDATA:\n  rows 1 to 20\nDone.",
+  ]) {
+    assert.equal(sanitizeSubagentText(value), value);
+    assert.equal(sanitizeSubagentSnapshotText(value), value);
+  }
+});
+
+test("a label block whose value is a lone opaque token stays out of the panel", () => {
+  const value = "DATA:\n  q8Zr2LmPx0Wv7Tn\nDone.";
+  assert.doesNotMatch(sanitizeSubagentSnapshotText(value), /q8Zr2LmPx0Wv7Tn/u);
+  assert.match(sanitizeSubagentSnapshotText(value), /\nDone\.$/u);
 });
 
 test("filtering already-filtered text changes nothing", () => {

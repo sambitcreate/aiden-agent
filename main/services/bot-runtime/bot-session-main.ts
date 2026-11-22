@@ -134,6 +134,7 @@ import { BOT_RECALL_TOOL_NAME, botRecallToolEntry } from "../bot-memory/recall.j
 
 import { createBotLiveProjection, type BotLiveProjection } from "./live-projection.js";
 import { botIngressAllowsTool, botIngressRefusal, botTurnAttended } from "./bot-tool-policy.js";
+import { botSubagentReplyClocks } from "./bot-subagent-reply-clocks.js";
 
 const MODEL_CACHE_MS = 30_000;
 
@@ -533,7 +534,8 @@ async function reconcileBotPendingKnownCost(claim: BotExecutionClaim):Promise<vo
   const proof=await botRoutineModels.responseCostForDispatch(claim,pending);
   if(proof)await recordKnownBotExecutionCost(spending,proof.dispatch,proof.reportedCostUsd);
 }
-const execution: BotExecutionPort = {
+// Each claim's helper clock is dropped when its reply ends or is dismissed.
+const execution: BotExecutionPort = botSubagentReplyClocks.releasingWith({
   async reconcileResponseCosts(botId,taskId,scopeId) { for(const proof of await botRoutineModels.responseCosts(botId,taskId,scopeId)) await recordKnownBotExecutionCost(spending,proof.dispatch,proof.reportedCostUsd); },
   verifyResponse: async (facts) => Boolean(await botRoutineModels.responseEvidence(facts)),
   async recordKnownResponse(facts, message) { const dispatch = await botRoutineModels.responseEvidence(facts); if (dispatch) await recordKnownBotExecutionResponse(spending, facts.botId, dispatch.dispatchId, message, dispatch, facts.responseDigest); },
@@ -609,7 +611,7 @@ const execution: BotExecutionPort = {
 
     } catch (error) { admission.release(); peerLease?.release(); throw error; }
   },
-};
+});
 
 const helperRuntimeBindings = new WeakMap<ResolvedModelRuntime, { owner: NonNullable<ReturnType<typeof botExecutionScope>>; execution: BotExecutionRuntime }>();
 

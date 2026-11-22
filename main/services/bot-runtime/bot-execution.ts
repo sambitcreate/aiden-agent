@@ -63,6 +63,8 @@ export interface BotExecutionPort {
   acknowledgeUnknown?(botId: string, claim: BotExecutionClaim, expectedDispatchId?: string): Promise<boolean | "recorded">;
   hasUnknown?(botId: string, claim: BotExecutionClaim): Promise<boolean>;
   dismissed?(botId: string, claim: BotExecutionClaim): Promise<void>;
+  /** The claim's generation committed its final outcome with no continuation: its reply ended. */
+  settled?(botId: string, claim: BotExecutionClaim): Promise<void>;
   verifyResponse?(facts: BotProviderResponseFacts): Promise<boolean>;
   reconcileResponseCosts?(botId: string, taskId: string, scopeId: string): Promise<void>;
   recordKnownResponse?(facts: BotProviderResponseFacts, message: AssistantMessage): Promise<void>;
@@ -324,14 +326,14 @@ export function createBotExecutionRegistry(botId: string, registry: RegistryRead
       const selected = claim.actual === "fallback" ? claim.fallback! : claim.primary;
       const prepared = task.state.checkpoint as S & { model?: { provider: string; modelId: string }; thinkingLevel?: string };
       if (prepared.model && (prepared.model.provider !== execution.model.provider || prepared.model.modelId !== execution.model.id || prepared.thinkingLevel !== undefined && prepared.thinkingLevel !== selected.thinkingLevel)) { execution.release(); throw new Error("Prepared model settings disagree with the durable execution choice."); }
-      let settledTerminal = false;
+      let settledTerminal = false, generationEnded = false;
       const verifyCostApproval = port.verifyCostApproval ?? (async () => false);
       const boundModels = executionModels(runtime, execution, claim, original.definition.name, phase, task.state.checkpoint, context, binding.dispatchGeneration ?? 0, responseScopeId, port, block, () => { settledTerminal = true; }, verifyCostApproval);
       const scoped = proxyBound(runtime, {
         agent: async (at: Context) => ({ ...await runtime.agent(at), model: { provider: execution.model.provider, modelId: execution.model.id }, thinkingLevel: selected.thinkingLevel }),
         models: boundModels,
         get settings() { const settings = runtime.settings; return settledTerminal ? { ...settings, retry: { ...settings.retry, enabled: false }, compaction: { ...settings.compaction, enabled: false, modelOverrides: {} } } : settings; },
-        commit: ((change, at) => runtime.commit(async (tx, current) => {
+        commit: (async (change, at) => { let ends = false; const committed = await runtime.commit(async (tx, current) => {
           const generations: { id: TaskId; conversationId: typeof runtime.conversationId }[] = [];
           const decorated = proxyBound(tx, { createTask: (async (definition, input, options) => {
             const id = await tx.createTask(definition, input, options), kind = definition.definition.name;
@@ -345,8 +347,9 @@ export function createBotExecutionRegistry(botId: string, registry: RegistryRead
             if (final.run?.taskId !== created.id || !final.run.inputs.length) throw new Error("New generation has no exact staged input owner.");
             const child = await tx.doc(BotExecutionDoc, created.id); child.sourceInputs = [...final.run.inputs];
           }
+          ends = original.definition.name === GenerationTask.definition.name && generations.length === 0 && (next as { status?: unknown } | undefined)?.status === "terminal";
           return next;
-        }, at)) as TaskRuntime<I, S, R, H>["commit"],
+        }, at); if (ends) generationEnded = true; return committed; }) as TaskRuntime<I, S, R, H>["commit"],
       });
       let active = true;
       const helpers: BotExecutionRuntime[] = [];
@@ -362,6 +365,7 @@ export function createBotExecutionRegistry(botId: string, registry: RegistryRead
         }
         await handler(task, scoped, context);
         if ((phase === "abort" || settledTerminal) && original.definition.name === GenerationTask.definition.name) await port.dismissed?.(botId, claim);
+        if (generationEnded) await port.settled?.(botId, claim);
       });
       try { await claimScope(claim, run); }
       finally { active = false; for (const helper of helpers) helper.release(); execution.release(); }
