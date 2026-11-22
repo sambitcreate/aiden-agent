@@ -18,14 +18,26 @@ struct AidenWorkingIndicator: View {
             .accessibilityHidden(accessibilityLabel == nil)
     }
 
+    static func lineWidth(for size: CGFloat) -> CGFloat { max(1.5, size / 7) }
+
+    /// The ring is pinned square inside the timeline, inset by half its line so
+    /// the round caps stay in the frame, and turns about its own centre. The
+    /// geometry group resolves its frame with its parent's: in a moving
+    /// container, such as the tab bar's accessory as the bar minimizes, the
+    /// ring used to animate its position on its own and drift out of its
+    /// place while it turned.
     private var ring: some View {
-        TimelineView(.animation(minimumInterval: 1 / 30, paused: reduceMotion)) { context in
+        let lineWidth = Self.lineWidth(for: size)
+        return TimelineView(.animation(minimumInterval: 1 / 30, paused: reduceMotion)) { context in
             Circle()
+                .inset(by: lineWidth / 2)
                 .trim(from: 0, to: 0.75)
-                .stroke(tint ?? palette.accent, style: StrokeStyle(lineWidth: max(1.5, size / 7), lineCap: .round))
+                .stroke(tint ?? palette.accent, style: StrokeStyle(lineWidth: lineWidth, lineCap: .round))
+                .frame(width: size, height: size)
                 .rotationEffect(.degrees(reduceMotion ? 0 : Self.angle(at: context.date)))
         }
         .frame(width: size, height: size)
+        .geometryGroup()
         .opacity(0.6)
     }
 
@@ -110,14 +122,14 @@ struct AidenInboxRowMachineLine: View {
                 AidenMachineChip(label: machine, namesItselfWithoutColor: true)
                 if differentiateWithoutColor, detail != nil {
                     Text(verbatim: "·")
-                        .font(.caption)
+                        .font(.subheadline)
                         .foregroundStyle(palette.secondary)
                         .accessibilityHidden(true)
                 }
             }
             if let detail {
                 Text(detail)
-                    .font(.caption)
+                    .font(.subheadline)
                     .foregroundStyle(palette.secondary)
                     .lineLimit(isStacked ? 2 : 1)
             }
@@ -125,7 +137,124 @@ struct AidenInboxRowMachineLine: View {
     }
 }
 
-/// One compact Inbox row: title, workspace, status and wait.
+/// A list row's anatomy, shared by every list in the app: a fixed mark column
+/// centred on the title's line, so every title starts on one edge; the title;
+/// one quieter summary line; and the trailing marks on the summary's baseline.
+/// Whitespace, not hairlines, separates rows. Every measure scales with the text.
+/// An avatar takes a wider column and centres on the whole row.
+struct AidenListRowLayout<Mark: View, Title: View, Summary: View, Trailing: View>: View {
+    enum MarkStyle: Equatable {
+        /// A small status mark or symbol, centred on the title's line.
+        case glyph
+        /// An avatar this wide, centred on the row.
+        case avatar(CGFloat)
+    }
+
+    let isStacked: Bool
+    let hasSummary: Bool
+    var markStyle: MarkStyle = .glyph
+    @ViewBuilder let mark: () -> Mark
+    @ViewBuilder let title: () -> Title
+    @ViewBuilder let summary: () -> Summary
+    @ViewBuilder let trailing: () -> Trailing
+
+    @ScaledMetric(relativeTo: .body) private var markColumn: CGFloat = 28
+    /// The body style's line height, so the mark centres on the first line.
+    @ScaledMetric(relativeTo: .body) private var titleLine: CGFloat = 22
+    @ScaledMetric(relativeTo: .body) private var verticalPadding: CGFloat = 15
+    @ScaledMetric(relativeTo: .subheadline) private var lineGap: CGFloat = 4
+
+    var body: some View {
+        HStack(alignment: markStyle == .glyph ? .top : .center, spacing: 0) {
+            switch markStyle {
+            case .glyph:
+                mark()
+                    .frame(width: markColumn, height: titleLine)
+            case .avatar(let size):
+                mark()
+                    .frame(width: size, height: size)
+                    .padding(.leading, AidenSpacing.s)
+                    .padding(.trailing, AidenSpacing.m)
+            }
+            VStack(alignment: .leading, spacing: lineGap) {
+                if isStacked {
+                    // At the largest sizes the marks go under the words, so they
+                    // never squeeze the title.
+                    title()
+                    if hasSummary { summary() }
+                    HStack(spacing: AidenSpacing.s) { trailing() }
+                } else if hasSummary {
+                    title()
+                    HStack(alignment: .firstTextBaseline, spacing: AidenSpacing.s) {
+                        summary()
+                        Spacer(minLength: AidenSpacing.s)
+                        trailing()
+                    }
+                } else {
+                    HStack(alignment: .firstTextBaseline, spacing: AidenSpacing.s) {
+                        title()
+                        Spacer(minLength: AidenSpacing.s)
+                        trailing()
+                    }
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .padding(.leading, AidenSpacing.xs)
+        .padding(.trailing, AidenSpacing.l)
+        .padding(.vertical, verticalPadding)
+        .frame(minHeight: 44)
+        .contentShape(Rectangle())
+    }
+}
+
+/// The mark in a row's leading column: a spinner while it runs, a filled dot
+/// when unread, else an open circle. Decoration only: the row's spoken name
+/// already says working and unread.
+struct AidenListRowMark: View {
+    enum Mark: Equatable { case working, unread, idle }
+    let mark: Mark
+    var isDimmed = false
+
+    @Environment(\.aidenPalette) private var palette
+    @ScaledMetric(relativeTo: .body) private var dot: CGFloat = 9
+    @ScaledMetric(relativeTo: .body) private var spinner: CGFloat = 13
+
+    var body: some View {
+        Group {
+            switch mark {
+            case .working:
+                AidenWorkingIndicator(size: spinner)
+            case .unread:
+                Circle()
+                    .fill(isDimmed ? palette.secondary : palette.accent)
+                    .frame(width: dot, height: dot)
+            case .idle:
+                Circle()
+                    .strokeBorder(palette.secondary.opacity(0.55), lineWidth: 1.5)
+                    .frame(width: dot, height: dot)
+            }
+        }
+        .accessibilityHidden(true)
+    }
+}
+
+/// A symbol in a row's mark column, in the quieter ink: what kind of thing
+/// the row is, when nothing about its state needs saying.
+struct AidenListRowGlyph: View {
+    let systemName: String
+    var tint: Color? = nil
+    @Environment(\.aidenPalette) private var palette
+
+    var body: some View {
+        Image(systemName: systemName)
+            .font(.subheadline)
+            .foregroundStyle(tint ?? palette.secondary)
+            .accessibilityHidden(true)
+    }
+}
+
+/// One Inbox row: title, workspace, status and wait.
 struct AidenInboxRowView: View {
     let row: AidenInboxProjection.Row
     let section: AidenInboxSection
@@ -162,49 +291,37 @@ struct AidenInboxRowView: View {
     }
 
     private func content(status: AidenInboxRowStatus) -> some View {
-        HStack(alignment: .center, spacing: 10) {
-            Circle()
-                .fill(unread ? (isDimmed ? palette.secondary : palette.accent) : Color.clear)
-                .frame(width: 7, height: 7)
-
-            if isStacked {
-                VStack(alignment: .leading, spacing: AidenSpacing.xs) {
-                    words
-                    HStack(spacing: 10) { statusLine(status) }
-                }
-                Spacer(minLength: 0)
-            } else {
-                words
-                Spacer(minLength: 8)
-                statusLine(status)
-            }
+        AidenListRowLayout(isStacked: isStacked, hasSummary: machine != nil || detail != nil) {
+            AidenListRowMark(
+                mark: status.tone == .working ? .working : unread ? .unread : .idle,
+                isDimmed: isDimmed
+            )
+        } title: {
+            title
+        } summary: {
+            AidenInboxRowMachineLine(machine: machine, detail: detail, isStacked: isStacked)
+        } trailing: {
+            statusLine(status)
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 6)
-        .frame(minHeight: 44)
-        .contentShape(Rectangle())
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(accessibilityName(status))
     }
 
     private var isFork: Bool { row.summary.forkedFrom != nil }
 
-    private var words: some View {
-        VStack(alignment: .leading, spacing: 1) {
-            HStack(alignment: .firstTextBaseline, spacing: 5) {
-                if isFork {
-                    Image(systemName: "arrow.triangle.branch")
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(palette.secondary)
-                }
-                Text(row.summary.title)
-                    .font(.subheadline.weight(unread ? .semibold : .medium))
-                    .foregroundStyle(isDimmed ? palette.secondary : palette.foreground)
-                    .lineLimit(isStacked ? 3 : 1)
+    private var title: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 5) {
+            if isFork {
+                Image(systemName: "arrow.triangle.branch")
+                    .font(.subheadline)
+                    .foregroundStyle(palette.secondary)
             }
-            if machine != nil || detail != nil {
-                AidenInboxRowMachineLine(machine: machine, detail: detail, isStacked: isStacked)
-            }
+            // Never bold: an unread title only steps up to medium, and the mark
+            // beside it carries the rest.
+            Text(row.summary.title)
+                .font(.body.weight(unread ? .medium : .regular))
+                .foregroundStyle(isDimmed ? palette.secondary : palette.foreground)
+                .lineLimit(isStacked ? 3 : 1)
         }
     }
 
@@ -214,9 +331,6 @@ struct AidenInboxRowView: View {
             Image(systemName: "pin.fill")
                 .font(.caption2)
                 .foregroundStyle(palette.secondary)
-        }
-        if status.tone == .working {
-            AidenWorkingIndicator(size: 12)
         }
         if let label = status.label {
             statusLabel(label, tone: status.tone)
@@ -351,31 +465,77 @@ struct AidenInboxSectionHeader: View {
     let palette: AidenPalette
 
     var body: some View {
-        HStack(spacing: 6) {
+        AidenListSectionHeader(title: section.title, count: count) {
             if section == .working {
                 AidenWorkingIndicator(size: 10)
             }
-            Text(section.title)
-                .font(.footnote.weight(.semibold))
-                .foregroundStyle(palette.secondary)
-            // The title's colour and weight. Weight doesn't change contrast: the
-            // colour itself holds 4.5:1 on the canvas in every theme
-            // (`AidenDesignTokenTests`). The audit read a lone regular-weight digit
-            // under that in the iPad layout, which the weight only stopped.
-            Text("\(count)")
-                .font(.footnote.weight(.semibold).monospacedDigit())
-                .foregroundStyle(palette.secondary)
         }
-        .padding(.horizontal, 24)
-        .padding(.top, 14)
-        .padding(.bottom, 2)
+    }
+}
+
+/// A list section's heading, above its card: small, regular and quiet, with
+/// an optional count after it and an optional mark before it. VoiceOver reads
+/// the title and count as one heading. The colour holds 4.5:1 on the canvas in
+/// every theme (`AidenDesignTokenTests`), at any weight.
+struct AidenListSectionHeader<Leading: View>: View {
+    let title: String
+    var count: Int? = nil
+    @ViewBuilder var leading: () -> Leading
+
+    @Environment(\.aidenPalette) private var palette
+
+    var body: some View {
+        HStack(spacing: 6) {
+            leading()
+            // One run of text, so the title and its count wrap and scale together.
+            Group {
+                if let count {
+                    Text("\(title)  \(Text("\(count)").monospacedDigit())")
+                } else {
+                    Text(title)
+                }
+            }
+            .font(.footnote)
+            .foregroundStyle(palette.secondary)
+        }
+        .padding(.horizontal, AidenSpacing.xl)
+        .padding(.bottom, AidenSpacing.s)
         .frame(maxWidth: .infinity, alignment: .leading)
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel("\(section.title), \(count)")
+        .accessibilityLabel(count.map { "\(title), \($0)" } ?? title)
         .accessibilityAddTraits(.isHeader)
         .listRowInsets(EdgeInsets())
         .listRowSeparator(.hidden)
         .listRowBackground(palette.canvas)
+    }
+}
+
+extension AidenListSectionHeader where Leading == EmptyView {
+    init(title: String, count: Int? = nil) {
+        self.init(title: title, count: count) { EmptyView() }
+    }
+}
+
+extension View {
+    /// Puts a list row in its section's card: inset like the Catch Up card,
+    /// no separator, the card's fill (with the selected tint), and a context
+    /// menu preview clipped to the card's corners.
+    func aidenListCardRow(_ position: AidenListCardPosition?, isSelected: Bool = false) -> some View {
+        modifier(AidenListCardRow(position: position, isSelected: isSelected))
+    }
+}
+
+private struct AidenListCardRow: ViewModifier {
+    let position: AidenListCardPosition?
+    let isSelected: Bool
+    @Environment(\.aidenPalette) private var palette
+
+    func body(content: Content) -> some View {
+        content
+            .listRowInsets(EdgeInsets(top: 0, leading: AidenListRowBackground.cardInset, bottom: 0, trailing: AidenListRowBackground.cardInset))
+            .listRowSeparator(.hidden)
+            .listRowBackground(AidenListRowBackground(isSelected: isSelected, palette: palette, card: position))
+            .contentShape(.contextMenuPreview, RoundedRectangle(cornerRadius: AidenRadius.control, style: .continuous))
     }
 }
 
@@ -414,6 +574,10 @@ struct AidenInboxListRow: View {
     var isDimmed = false
     /// The row whose chat the detail beside the list shows.
     var isSelected = false
+    /// The row's identity in a list that keeps its place across a fold.
+    var scrollRow: AnyHashable? = nil
+    /// The row's place in its section's card, or nil for a row on the canvas.
+    var card: AidenListCardPosition? = nil
     let open: () -> Void
 
     var body: some View {
@@ -427,6 +591,7 @@ struct AidenInboxListRow: View {
                 machine: machine,
                 isDimmed: isDimmed
             )
+            .aidenListScrollRow(scrollRow)
         }
         .buttonStyle(.plain)
         .swipeActions(edge: .leading, allowsFullSwipe: true) {
@@ -434,7 +599,7 @@ struct AidenInboxListRow: View {
                 Button(action: markRead) {
                     Label("Mark read", systemImage: "envelope.open")
                 }
-                .tint(palette.accent)
+                .aidenSolidFillTint()
             }
         }
         .swipeActions(edge: .trailing, allowsFullSwipe: true) {
@@ -457,18 +622,50 @@ struct AidenInboxListRow: View {
             if let snooze = actions.snooze { Button(actions.snoozeLabel, action: snooze) }
         }
         .accessibilityAddTraits(isSelected ? .isSelected : [])
-        .listRowInsets(EdgeInsets(top: 0, leading: 12, bottom: 0, trailing: 12))
-        .listRowSeparator(.hidden)
-        .listRowBackground(AidenInboxRowBackground(isSelected: isSelected, palette: palette))
+        .aidenListCardRow(card, isSelected: isSelected)
+    }
+}
+
+/// Where a row sits in its section's card: the card rounds its first row's
+/// top corners and its last row's bottom ones. Rows inside are parted by
+/// their own padding, not separators.
+enum AidenListCardPosition: Equatable, Sendable {
+    case only, first, middle, last
+
+    /// The position of the row at `index` among `count` rows.
+    init(index: Int, count: Int) {
+        switch (index == 0, index == count - 1) {
+        case (true, true): self = .only
+        case (true, false): self = .first
+        case (false, true): self = .last
+        case (false, false): self = .middle
+        }
+    }
+
+    var roundsTop: Bool { self == .only || self == .first }
+    var roundsBottom: Bool { self == .only || self == .last }
+
+    /// Each id's position in a card that holds `ids` in order.
+    static func positions<ID: Hashable>(_ ids: [ID]) -> [ID: AidenListCardPosition] {
+        Dictionary(
+            ids.enumerated().map { ($1, AidenListCardPosition(index: $0, count: ids.count)) },
+            uniquingKeysWith: { first, _ in first }
+        )
     }
 }
 
 /// An Inbox row's ground: the canvas, with a soft accent tint under the row
 /// the detail beside the list is showing, the fill a selected theme card uses.
-/// Inset like the card rows above the list. No border: the fill is the selection.
-struct AidenInboxRowBackground: View {
+/// In a section's card, the raised fill inset like the Catch Up card above
+/// the list. No border: the fill is the selection.
+struct AidenListRowBackground: View {
     let isSelected: Bool
     let palette: AidenPalette
+    /// The row's place in its section's card, or nil for a row on the canvas.
+    var card: AidenListCardPosition? = nil
+
+    /// The card's inset from the list's edges, the Catch Up card's.
+    static let cardInset = AidenSpacing.m
 
     static func selectedFill(_ palette: AidenPalette) -> Color {
         palette.accent.opacity(0.12)
@@ -476,7 +673,19 @@ struct AidenInboxRowBackground: View {
 
     var body: some View {
         palette.canvas.overlay {
-            if isSelected {
+            if let card {
+                let shape = UnevenRoundedRectangle(
+                    topLeadingRadius: card.roundsTop ? AidenRadius.control : 0,
+                    bottomLeadingRadius: card.roundsBottom ? AidenRadius.control : 0,
+                    bottomTrailingRadius: card.roundsBottom ? AidenRadius.control : 0,
+                    topTrailingRadius: card.roundsTop ? AidenRadius.control : 0,
+                    style: .continuous
+                )
+                shape
+                    .fill(isSelected ? AnyShapeStyle(Self.selectedFill(palette)) : AnyShapeStyle(Color.clear))
+                    .background(palette.raised, in: shape)
+                    .padding(.horizontal, Self.cardInset)
+            } else if isSelected {
                 RoundedRectangle(cornerRadius: AidenRadius.control, style: .continuous)
                     .fill(Self.selectedFill(palette))
                     .padding(.horizontal, AidenSpacing.m)

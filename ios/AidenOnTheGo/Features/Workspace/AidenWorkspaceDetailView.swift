@@ -54,9 +54,9 @@ struct AidenWorkspaceDetailView: View {
                         Label("Workspace Settings", systemImage: "gearshape")
                     }
                 } label: {
-                    Image(systemName: AidenChromeSymbols.overflowMenu)
+                    // A title as well as the symbol, for the side rail's overflow.
+                    Label("Workspace menu", systemImage: AidenChromeSymbols.overflowMenu)
                 }
-                .accessibilityLabel("Workspace menu")
             }
         }
         .sheet(isPresented: $isShowingSettings) {

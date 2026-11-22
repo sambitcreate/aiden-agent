@@ -316,7 +316,7 @@ final class AidenSandboxedHTMLTests: XCTestCase {
         )
         // Aiden light, as the catalog defines it.
         XCTAssertTrue(css.contains("--surface-background:#F6F7F9"), css)
-        XCTAssertTrue(css.contains("--accent:#006AD6"), css)
+        XCTAssertTrue(css.contains("--accent:#1F2228"), css)
         XCTAssertTrue(css.contains("--text-primary:#3D3F41"), css)
         XCTAssertTrue(css.contains("--border-separator:rgb(61 63 65 / 0.087)"), css)
         XCTAssertTrue(css.contains("color-scheme:light"), css)
@@ -380,7 +380,7 @@ final class AidenSandboxedHTMLTests: XCTestCase {
         let plainStyles = try await plain.callAsyncJavaScript(probe, contentWorld: .defaultClient) as? [String]
         XCTAssertEqual(plainStyles, [
             "rgb(246, 247, 249)", "rgba(0, 0, 0, 0)", "rgb(61, 63, 65)", "rgb(61, 63, 65)",
-            "16px", "16px", "rgb(0, 106, 214)",
+            "16px", "16px", "rgb(31, 34, 40)",
         ])
 
         // The page's own rules, even bare element selectors, beat the theme.

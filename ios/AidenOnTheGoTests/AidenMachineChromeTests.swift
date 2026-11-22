@@ -232,6 +232,59 @@ final class AidenMachineChromeTests: XCTestCase {
         XCTAssertEqual(filter, .machine("laptop"))
     }
 
+    func testAnOfflineMachinesChipSaysSoWithoutColour() throws {
+        let window = try show(AidenMachineStrip(
+            labels: [label("Studio Mac"), label("Laptop", id: "laptop", color: .teal)],
+            offline: ["laptop"],
+            filter: .constant(.all)
+        ))
+        defer { close(window) }
+
+        let elements = accessibleElements(in: window)
+        XCTAssertEqual(elements.compactMap(\.accessibilityLabel), ["All computers", "Studio Mac", "Laptop"])
+        XCTAssertEqual(elements[2].accessibilityValue, "Offline", "The status dot isn't the only signal")
+        XCTAssertNotEqual(elements[1].accessibilityValue, "Offline")
+    }
+
+    func testTheStripFadesOnlyAnEdgeWithChipsPastIt() {
+        typealias Fades = AidenMachineStrip.Fades
+        // 500 points of chips in a 300-point column, with 16-point margins.
+        func fades(at offset: CGFloat, content: CGFloat = 500) -> Fades {
+            Fades(offset: offset, contentWidth: content, containerWidth: 300, leadingInset: 16, trailingInset: 16)
+        }
+
+        let start = fades(at: -16)
+        XCTAssertFalse(start.leading, "Nothing is scrolled past the leading edge yet")
+        XCTAssertTrue(start.trailing)
+
+        let middle = fades(at: 100)
+        XCTAssertTrue(middle.leading)
+        XCTAssertTrue(middle.trailing)
+
+        let end = fades(at: 216)
+        XCTAssertTrue(end.leading)
+        XCTAssertFalse(end.trailing, "The last chip is in full view")
+
+        let fits = fades(at: -16, content: 200)
+        XCTAssertFalse(fits.leading)
+        XCTAssertFalse(fits.trailing, "Chips that fit aren't faded")
+    }
+
+    func testACardRoundsItsOuterRowsOnly() {
+        let positions = AidenListCardPosition.positions(["a", "b", "c"])
+        XCTAssertEqual(positions["a"], .first)
+        XCTAssertEqual(positions["b"], .middle)
+        XCTAssertEqual(positions["c"], .last)
+        XCTAssertTrue(positions["a"]!.roundsTop)
+        XCTAssertFalse(positions["a"]!.roundsBottom)
+        XCTAssertFalse(positions["b"]!.roundsTop || positions["b"]!.roundsBottom)
+        XCTAssertTrue(positions["c"]!.roundsBottom)
+
+        let alone = AidenListCardPosition.positions(["only"])["only"]
+        XCTAssertEqual(alone, .only)
+        XCTAssertTrue(alone!.roundsTop && alone!.roundsBottom)
+    }
+
     func testAStripWithOneMachineDrawsNothing() throws {
         let window = try show(AidenMachineStrip(labels: [label("Studio Mac")], filter: .constant(.all)))
         defer { close(window) }
@@ -581,6 +634,43 @@ final class AidenMachineChromeTests: XCTestCase {
             .compactMap(\.accessibilityLabel)
 
         XCTAssertEqual(buttons, ["Reconnect Laptop", "Reconnect Build Box"], "A rotor of buttons can't tell identical names apart")
+    }
+
+    func testAClosableOfflineRowSaysWhoseNoticeItHides() throws {
+        var dismissals = 0
+        var reconnects = 0
+        let window = try show(AidenMachineOfflineRow(
+            label: label("Laptop", id: "laptop"),
+            lastSeen: nil,
+            onReconnect: { reconnects += 1 },
+            onDismiss: { dismissals += 1 }
+        ))
+        defer { close(window) }
+
+        let buttons = accessibleElements(in: window).filter { $0.accessibilityTraits.contains(.button) }
+        XCTAssertEqual(buttons.compactMap(\.accessibilityLabel), ["Reconnect Laptop", "Hide Laptop offline notice"])
+        XCTAssertTrue(try XCTUnwrap(buttons.last).accessibilityActivate())
+        XCTAssertEqual(dismissals, 1)
+        XCTAssertEqual(reconnects, 0, "Closing the notice tried the machine")
+        XCTAssertGreaterThanOrEqual(try XCTUnwrap(buttons.last).accessibilityFrame.height, 44)
+    }
+
+    func testAClosedOfflineNoticeStaysClosedForTheSessionAndOnlyForItsMachine() {
+        let laptop = AidenMachineRoster.OfflineMachine(label: label("Laptop", id: "laptop"), lastSeen: nil, isReconnecting: false)
+        let mini = AidenMachineRoster.OfflineMachine(label: label("Home Mini", id: "mini"), lastSeen: nil, isReconnecting: false)
+        let notices = AidenOfflineNoticeDismissals()
+        XCTAssertEqual(notices.shown([laptop, mini]).map(\.id), ["laptop", "mini"])
+
+        notices.dismiss("laptop")
+        XCTAssertEqual(notices.shown([laptop, mini]).map(\.id), ["mini"])
+
+        // Laptop comes back, then drops off again, retrying as it goes.
+        XCTAssertEqual(notices.shown([mini]).map(\.id), ["mini"])
+        let retrying = AidenMachineRoster.OfflineMachine(label: label("Laptop", id: "laptop"), lastSeen: Date(), isReconnecting: true)
+        XCTAssertEqual(notices.shown([retrying, mini]).map(\.id), ["mini"])
+
+        // The next launch starts with every notice showing.
+        XCTAssertEqual(AidenOfflineNoticeDismissals().shown([laptop, mini]).map(\.id), ["laptop", "mini"])
     }
 
     func testAnOfflineRowIsDimmedAndKeepsItsChip() throws {

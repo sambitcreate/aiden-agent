@@ -26,6 +26,57 @@ final class AidenDesignTokenTests: XCTestCase {
         }
     }
 
+    /// The accent is text too: the machine pill's count, toolbar glyphs, the
+    /// Catch Up icon, unread dots. It reads on every ground a list puts it on.
+    func testAccentMeetsFourPointFiveToOneOnCanvasSidebarAndRaised() {
+        for (name, p) in allPalettes() {
+            for ground in [p.canvasHex, p.sidebarHex, p.raisedHex] {
+                XCTAssertGreaterThanOrEqual(
+                    p.contrastRatio(foregroundHex: p.accentHex, backgroundHex: ground),
+                    4.5,
+                    "\(name): accent \(p.accentHex) on \(ground)"
+                )
+            }
+        }
+    }
+
+    /// A prominent button's label on its solid fill, near-black and near-white
+    /// accents included.
+    func testSolidFillContentMeetsFourPointFiveToOneOnItsFill() {
+        for (name, p) in allPalettes() {
+            for tone in [AidenSolidFillTone.accent, .danger] {
+                let fill = p.solidFill(tone)
+                XCTAssertGreaterThanOrEqual(
+                    p.contrastRatio(foregroundHex: fill.contentHex, backgroundHex: fill.fillHex),
+                    4.5,
+                    "\(name) \(tone): \(fill.contentHex) on \(fill.fillHex)"
+                )
+                XCTAssertNotEqual(fill.pressedHex, fill.fillHex, "\(name) \(tone): a press shows no change")
+            }
+        }
+    }
+
+    /// The default theme's accent is ink, not a hue: dark on light, light on
+    /// dark, and its channels within a few steps of one another. Status
+    /// colours keep their hue.
+    func testTheDefaultAccentIsMutedInkThatFollowsTheScheme() {
+        func channels(_ hex: String) -> [Int] {
+            let digits = Array(hex.dropFirst())
+            return stride(from: 0, to: 6, by: 2).map { Int(String(digits[$0..<$0 + 2]), radix: 16)! }
+        }
+        for scheme in [ColorScheme.light, .dark] {
+            let p = AidenThemeCatalog.palette(preset: .aiden, scheme: scheme)
+            let accent = channels(p.accentHex)
+            XCTAssertLessThanOrEqual(accent.max()! - accent.min()!, 12, "\(scheme): \(p.accentHex) has a hue")
+            let canvasIsLight = Color.relativeLuminance(p.canvasHex) > 0.5
+            XCTAssertEqual(Color.relativeLuminance(p.accentHex) < 0.2, canvasIsLight, "\(scheme): \(p.accentHex) on \(p.canvasHex)")
+            for status in [p.successHex, p.warningHex, p.dangerHex] {
+                let c = channels(status)
+                XCTAssertGreaterThan(c.max()! - c.min()!, 60, "\(scheme): \(status) lost its hue")
+            }
+        }
+    }
+
     func testStatusTextMeetsFourPointFiveToOneInEveryTheme() {
         for preset in AidenThemePresetID.allCases { for scheme in [ColorScheme.light, .dark] {
             let p = AidenThemeCatalog.palette(preset: preset, scheme: scheme)

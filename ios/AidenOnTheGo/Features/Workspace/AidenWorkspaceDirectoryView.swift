@@ -54,7 +54,7 @@ struct AidenWorkspacesDirectoryView: View {
     /// actions; another machine's open its page, where Settings works on it.
     @ViewBuilder
     private func machineRows(_ machines: AidenWorkspacesTabMachines) -> some View {
-        AidenMachineStrip(labels: machines.roster.tabMachines, filter: machines.filter)
+        AidenMachineStrip(labels: machines.roster.tabMachines, offline: machines.roster.offlineIDs, filter: machines.filter)
             .listRowInsets(EdgeInsets(top: AidenSpacing.xs, leading: 0, bottom: AidenSpacing.xs, trailing: 0))
             .listRowSeparator(.hidden)
             .listRowBackground(Color.clear)
@@ -73,22 +73,15 @@ struct AidenWorkspacesDirectoryView: View {
         }
         ForEach(sections) { section in
             if !section.rows.isEmpty {
+                let positions = AidenListCardPosition.positions(section.rows.map(\.id))
                 Section {
                     ForEach(section.rows) { row in
-                        if row.id.instanceId == coordinator.defaultInstanceId {
-                            interactiveRow(row.workspace, isArchived: false)
-                        } else {
-                            AidenWorkspaceOpenRow(
-                                workspace: row.workspace,
-                                route: .workspace(row.id),
-                                tabChrome: tabChrome
-                            )
-                        }
+                        machineRow(row, card: positions[row.id])
                     }
                 } header: {
                     VStack(alignment: .leading, spacing: 2) {
                         if machines.filter.wrappedValue == .all {
-                            Text(machines.roster.labels[section.instanceId]?.name ?? "")
+                            AidenListSectionHeader(title: machines.roster.labels[section.instanceId]?.name ?? "")
                         }
                         AidenMachineSectionStatus(
                             coordinator: coordinator,
@@ -96,7 +89,12 @@ struct AidenWorkspacesDirectoryView: View {
                             savedListName: String(localized: "workspaces")
                         )
                         .textCase(nil)
+                        .padding(.horizontal, AidenSpacing.xl)
+                        .padding(.bottom, AidenSpacing.s)
                     }
+                    // The header row is this stack, so the zero inset goes
+                    // here for its titles to line up with the other lists'.
+                    .listRowInsets(EdgeInsets())
                 }
             }
         }
@@ -116,8 +114,13 @@ struct AidenWorkspacesDirectoryView: View {
                 )
                 .listRowBackground(Color.clear)
             } else {
+                let positions = AidenListCardPosition.positions(filteredWorkspaces.map(\.id))
+                Color.clear.frame(height: AidenSpacing.s)
+                    .listRowSeparator(.hidden)
+                    .listRowBackground(palette.canvas)
+                    .listRowInsets(EdgeInsets())
                 ForEach(filteredWorkspaces) { workspace in
-                    interactiveRow(workspace, isArchived: false)
+                    interactiveRow(workspace, isArchived: false, scrollRow: AnyHashable(workspace.id), card: positions[workspace.id])
                 }
             }
 
@@ -133,8 +136,9 @@ struct AidenWorkspacesDirectoryView: View {
                                 Text("Workspaces archived on this device appear here.")
                                     .foregroundStyle(palette.secondary)
                             } else {
+                                let positions = AidenListCardPosition.positions(archivedWorkspaces.map(\.id))
                                 ForEach(archivedWorkspaces) { workspace in
-                                    interactiveRow(workspace, isArchived: true)
+                                    interactiveRow(workspace, isArchived: true, card: positions[workspace.id])
                                 }
                             }
                         } label: {
@@ -145,18 +149,26 @@ struct AidenWorkspacesDirectoryView: View {
                             AidenArchivedWorkspacesView(
                                 coordinator: coordinator,
                                 workspaces: archivedWorkspaces,
-                                row: interactiveRow
+                                row: { interactiveRow($0, isArchived: $1, card: $2) }
                             )
                         } label: {
                             Label("Archived Workspaces", systemImage: "archivebox")
+                                .padding(.vertical, AidenSpacing.m)
+                                .padding(.horizontal, AidenSpacing.s)
                         }
+                        .aidenListCardRow(.only)
                     }
                 } footer: {
                     Text("Archived workspaces and their chats are hidden only on this device.")
+                        .font(.footnote)
+                        .foregroundStyle(palette.secondary)
                 }
+                .listRowSeparator(.hidden)
+                .listRowBackground(palette.canvas)
             }
         }
         .listStyle(.plain)
+        .listSectionSpacing(AidenSpacing.l)
         .aidenKeepsListScroll()
         .scrollContentBackground(.hidden)
         .background { palette.canvas.ignoresSafeArea() }
@@ -185,6 +197,7 @@ struct AidenWorkspacesDirectoryView: View {
                     offersHiddenMachines: true
                 )
             }
+            .aidenKeptLongestInBar()
         }
         .sheet(isPresented: $isShowingFolderBrowser) {
             AidenFolderBrowserView(coordinator: coordinator) { workspace in
@@ -347,12 +360,33 @@ struct AidenWorkspacesDirectoryView: View {
         .accessibilityLabel("Add workspace")
     }
 
-    private func interactiveRow(_ workspace: AidenWorkspace, isArchived: Bool) -> some View {
+    /// A workspace on any machine: the default machine's can be changed from
+    /// here, another's only opened.
+    @ViewBuilder
+    private func machineRow(_ row: AidenMachineWorkspaceRow, card: AidenListCardPosition?) -> some View {
+        if row.id.instanceId == coordinator.defaultInstanceId {
+            interactiveRow(row.workspace, isArchived: false, scrollRow: AnyHashable(row.id), card: card)
+        } else {
+            AidenWorkspaceOpenRow(
+                workspace: row.workspace,
+                route: .workspace(row.id),
+                tabChrome: tabChrome,
+                scrollRow: AnyHashable(row.id),
+                card: card
+            )
+        }
+    }
+
+    private func interactiveRow(
+        _ workspace: AidenWorkspace, isArchived: Bool, scrollRow: AnyHashable? = nil, card: AidenListCardPosition? = nil
+    ) -> some View {
         AidenWorkspaceInteractiveRow(
             coordinator: coordinator,
             workspace: workspace,
             isArchived: isArchived,
             tabChrome: tabChrome,
+            scrollRow: scrollRow,
+            card: card,
             onRename: { requestRename(workspace) },
             onToggleArchive: { toggleArchive(workspace, isArchived: isArchived) },
             onRemove: workspace.isManagedWorktree || coordinator.workspaces.count <= 1
@@ -395,7 +429,7 @@ struct AidenWorkspacesDirectoryView: View {
 private struct AidenArchivedWorkspacesView<Row: View>: View {
     @Bindable var coordinator: AidenRemoteCoordinator
     let workspaces: [AidenWorkspace]
-    @ViewBuilder let row: (AidenWorkspace, Bool) -> Row
+    @ViewBuilder let row: (AidenWorkspace, Bool, AidenListCardPosition?) -> Row
     @Environment(\.aidenPalette) private var palette
     @State private var searchText = ""
 
@@ -421,12 +455,14 @@ private struct AidenArchivedWorkspacesView<Row: View>: View {
                 .listRowBackground(Color.clear)
                 .listRowSeparator(.hidden)
             } else {
+                let positions = AidenListCardPosition.positions(filteredWorkspaces.map(\.id))
                 ForEach(filteredWorkspaces) { workspace in
-                    row(workspace, true)
+                    row(workspace, true, positions[workspace.id])
                 }
             }
         }
         .listStyle(.plain)
+        .listSectionSpacing(AidenSpacing.l)
         // The canvas, as on the Workspaces list it opens from.
         .scrollContentBackground(.hidden)
         .background { palette.canvas.ignoresSafeArea() }
@@ -443,6 +479,8 @@ private struct AidenWorkspaceInteractiveRow: View {
     let workspace: AidenWorkspace
     let isArchived: Bool
     let tabChrome: AidenWorkspacesTabChrome
+    let scrollRow: AnyHashable?
+    let card: AidenListCardPosition?
     let onRename: () -> Void
     let onToggleArchive: () -> Void
     let onRemove: (() -> Void)?
@@ -459,8 +497,9 @@ private struct AidenWorkspaceInteractiveRow: View {
                 }
                 .buttonStyle(.plain)
                 .accessibilityHint("Unarchives this workspace on this device.")
+                .aidenListCardRow(card)
             } else {
-                AidenWorkspaceOpenRow(workspace: workspace, route: tabChrome.route(workspace), tabChrome: tabChrome)
+                AidenWorkspaceOpenRow(workspace: workspace, route: tabChrome.route(workspace), tabChrome: tabChrome, scrollRow: scrollRow, card: card)
             }
         }
         .swipeActions(edge: .leading, allowsFullSwipe: false) {
@@ -518,27 +557,29 @@ private struct AidenWorkspaceInteractiveRow: View {
 
 struct AidenWorkspaceRow: View {
     let workspace: AidenWorkspace
+    @Environment(\.aidenPalette) private var palette
+
+    private var detail: String {
+        [workspace.permission.title, workspace.branchName ?? workspace.git?.branch]
+            .compactMap { $0 }
+            .joined(separator: " · ")
+    }
 
     var body: some View {
-        HStack(spacing: 12) {
-            Image(systemName: workspace.isManagedWorktree ? "hammer.fill" : workspace.hasFolder ? "folder.fill" : "folder")
-                .foregroundStyle(.tint)
-                .frame(width: 24)
-
-            VStack(alignment: .leading, spacing: 3) {
-                Text(workspace.name)
-                    .lineLimit(1)
-                HStack(spacing: 5) {
-                    Text(workspace.permission.title)
-                    if let branch = workspace.branchName ?? workspace.git?.branch {
-                        Text("·")
-                        Text(branch)
-                    }
-                }
-                .font(.caption)
-                .foregroundStyle(.secondary)
+        AidenListRowLayout(isStacked: false, hasSummary: true) {
+            AidenListRowGlyph(systemName: workspace.isManagedWorktree ? "hammer" : workspace.hasFolder ? "folder" : "folder.badge.questionmark")
+        } title: {
+            Text(workspace.name)
+                .font(.body)
+                .foregroundStyle(palette.foreground)
                 .lineLimit(1)
-            }
+        } summary: {
+            Text(detail)
+                .font(.subheadline)
+                .foregroundStyle(palette.secondary)
+                .lineLimit(1)
+        } trailing: {
+            EmptyView()
         }
         .accessibilityElement(children: .combine)
     }
@@ -553,25 +594,21 @@ private struct AidenWorkspaceOpenRow: View {
     let workspace: AidenWorkspace
     let route: AidenAppRoute
     let tabChrome: AidenWorkspacesTabChrome
+    /// The row's identity in a list that keeps its place across a fold.
+    var scrollRow: AnyHashable? = nil
+    /// The row's place in its section's card.
+    var card: AidenListCardPosition? = nil
 
     private var isSelected: Bool { tabChrome.selection == route }
 
     var body: some View {
         Button { tabChrome.onOpen(route) } label: {
-            HStack(spacing: AidenSpacing.s) {
-                AidenWorkspaceRow(workspace: workspace)
-                if !tabChrome.besideList {
-                    Spacer(minLength: 0)
-                    Image(systemName: "chevron.forward")
-                        .font(.footnote.weight(.semibold))
-                        .foregroundStyle(.tertiary)
-                        .accessibilityHidden(true)
-                }
-            }
-            .contentShape(Rectangle())
+            AidenWorkspaceRow(workspace: workspace)
+                .contentShape(Rectangle())
+                .aidenListScrollRow(scrollRow)
         }
         .buttonStyle(.plain)
-        .listRowBackground(tabChrome.besideList ? AidenInboxRowBackground(isSelected: isSelected, palette: palette) : nil)
+        .aidenListCardRow(card, isSelected: tabChrome.besideList && isSelected)
         .accessibilityAddTraits(isSelected ? [.isSelected, .isButton] : .isButton)
     }
 }

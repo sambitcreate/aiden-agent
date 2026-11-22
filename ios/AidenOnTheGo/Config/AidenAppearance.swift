@@ -524,8 +524,8 @@ enum AidenThemeCatalog {
 
     static let palettes: [AidenThemePresetID: [AidenPalette]] = [
         .aiden: [
-            .init(canvasHex: "#F6F7F9", sidebarHex: "#EEF0F3", raisedHex: "#FFFFFF", foregroundHex: "#3D3F41", secondaryHex: "#6B7280", accentHex: "#006AD6", successHex: "#30D158", warningHex: "#FF9F0A", dangerHex: "#FF453A"),
-            .init(canvasHex: "#181B21", sidebarHex: "#20242C", raisedHex: "#292E37", foregroundHex: "#D1D4DA", secondaryHex: "#9AA3AE", accentHex: "#3E97F6", successHex: "#32D17A", warningHex: "#FFB020", dangerHex: "#FF5E57"),
+            .init(canvasHex: "#F6F7F9", sidebarHex: "#EEF0F3", raisedHex: "#FFFFFF", foregroundHex: "#3D3F41", secondaryHex: "#6B7280", accentHex: "#1F2228", successHex: "#30D158", warningHex: "#FF9F0A", dangerHex: "#FF453A"),
+            .init(canvasHex: "#181B21", sidebarHex: "#20242C", raisedHex: "#292E37", foregroundHex: "#D1D4DA", secondaryHex: "#9AA3AE", accentHex: "#E4E7EC", successHex: "#32D17A", warningHex: "#FFB020", dangerHex: "#FF5E57"),
         ],
         .slate: [
             .init(canvasHex: "#F2F5F9", sidebarHex: "#E6EBF2", raisedHex: "#FFFFFF", foregroundHex: "#3A434E", secondaryHex: "#637083", accentHex: "#087581", successHex: "#2DB67D", warningHex: "#E0A72E", dangerHex: "#E24D5B"),

@@ -365,6 +365,10 @@ final class AidenShellUITests: XCTestCase {
         XCTAssertTrue(prompt.waitForExistence(timeout: 10), "No chat rows in the inbox")
         let idle = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Compare two caching strategies")).firstMatch
         XCTAssertTrue(idle.waitForExistence(timeout: 10), "No Earlier row")
+        // Clear of the running accessory and the tab bar, so the swipe lands on the row.
+        for _ in 0..<4 where idle.frame.maxY > app.frame.height * 0.6 {
+            app.swipeUp(velocity: .slow)
+        }
 
         idle.swipeLeft()
         XCTAssertTrue(app.buttons["Done"].waitForExistence(timeout: 5), "The swipe offered no Done")
@@ -380,6 +384,8 @@ final class AidenShellUITests: XCTestCase {
         app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.1)).tap()
         XCTAssertTrue(app.buttons["Done"].waitForNonExistence(timeout: 5))
 
+        // Scrolling to the Earlier row may have taken the prompt off the top.
+        for _ in 0..<4 where !prompt.isHittable { app.swipeDown(velocity: .slow) }
         prompt.swipeLeft()
         XCTAssertFalse(app.buttons["Done"].waitForExistence(timeout: 2), "A prompt row offered Done")
         XCTAssertFalse(app.buttons["Snooze"].exists, "A prompt row offered Snooze")
@@ -890,9 +896,14 @@ final class AidenShellUITests: XCTestCase {
         // Back past Machines to the Inbox, then over to Workspaces.
         goBack(in: app)
         goBack(in: app)
-        // Scrolling down to the switch minimised the tab bar; scroll back up.
+        // Scrolling down to the switch minimised the tab bar. The Inbox comes
+        // back at its top, where pulling down alone doesn't scroll it, so
+        // scroll it a little and back up to bring the bar back.
         let workspacesTab = app.tabBars.buttons["Workspaces"].firstMatch
-        for _ in 0..<3 where !workspacesTab.exists { app.swipeDown(velocity: .slow) }
+        for _ in 0..<3 where !workspacesTab.isHittable {
+            app.swipeUp(velocity: .slow)
+            app.swipeDown(velocity: .slow)
+        }
         AidenStateMatrix.openArea("Workspaces", in: app)
         XCTAssertTrue(app.navigationBars["Workspaces"].waitForExistence(timeout: 10))
         let laptop = app.buttons["Laptop"].firstMatch
@@ -1702,6 +1713,8 @@ final class AidenShellUITests: XCTestCase {
         let fadedEdges: [CGRect]
         /// The machine filter strip, when the screen has one.
         let strip: CGRect?
+        /// The part of the strip on screen, whose edges fade when more chips lie past them.
+        let stripVisible: CGRect?
         /// iPad's floating tab strip at the top of a regular-width window, when it
         /// shows. It is glass too, so it is also one of `bars`.
         let tabStrip: CGRect?
@@ -1829,6 +1842,21 @@ final class AidenShellUITests: XCTestCase {
             }
         ),
         AuditAllowance(
+            // The chip row fades out at an edge with more chips past it
+            // (`AidenMachineStrip.Fades`), so a chip that edge cuts is drawn
+            // faded on purpose and reads as low contrast. Only a chip running
+            // past the strip's visible frame counts: a whole chip must pass, or
+            // fall under the symbol-tile rule below.
+            reason: "A machine filter chip cut and faded by the strip's edge",
+            ceiling: ["inbox": 1, "bots": 1],
+            ceilingInRegularWidth: ["inbox": 1, "bots": 1],
+            matches: { finding in
+                guard finding.type == .contrast, let frame = finding.frame,
+                      let visible = finding.stripVisible else { return false }
+                return frame.intersects(visible) && !visible.contains(frame)
+            }
+        ),
+        AuditAllowance(
             // A filter chip is its name beside a coloured symbol tile. The audit
             // measures the whole 44 pt button, tile included, and the tile is a
             // graphic, whose bar is 3:1. The name itself is the foreground colour
@@ -1900,8 +1928,11 @@ final class AidenShellUITests: XCTestCase {
             // regular-width run record in option-a-accessibility.md). The editor's
             // Hide from Inbox footer, the section above them, is reported in some
             // runs and not others on iOS 27, and in every iOS 26.5 run.
-            reason: "Text the larger sizes push below the screen (Computers footer and Pair a computer, the computer editor's lower sections, Settings' Read Aloud note, Search's unsearched note)",
-            ceiling: ["machines": 2, "search": 1],
+            // The Inbox's Updates heading sits just above the running accessory
+            // at the default size, so the Needs you rows push it under the
+            // accessory as they grow.
+            reason: "Text the larger sizes push below the screen (Computers footer and Pair a computer, the computer editor's lower sections, Settings' Read Aloud note, Search's unsearched note, the Inbox's Updates heading)",
+            ceiling: ["machines": 2, "search": 1, "inbox": 1],
             ceilingInRegularWidth: ["machines": 2, "machine editor": 5, "settings": 1, "search": 1],
             matches: { finding in
                 finding.type == .dynamicType
@@ -1962,6 +1993,7 @@ final class AidenShellUITests: XCTestCase {
         ("machine editor", "Identity"), ("machine editor", "Reconnect"),
         ("settings", "Read Aloud is unavailable"),
         ("search", "Couldn’t search Bot conversations on "),
+        ("inbox", "Updates"),
     ]
 
     /// Text the regular-width audit calls partially unsupported that grows at
@@ -2008,6 +2040,9 @@ final class AidenShellUITests: XCTestCase {
                 let strip = stripElement.exists
                     ? CGRect(x: 0, y: stripElement.frame.minY, width: .greatestFiniteMagnitude, height: stripElement.frame.height)
                     : nil
+                let stripContainer = app.descendants(matching: .any)
+                    .matching(NSPredicate(format: "label == %@", "Filter by computer")).firstMatch
+                let stripVisible = stripContainer.exists ? stripContainer.frame : nil
                 var excused: [String: Int] = [:]
                 // Every type runs, in two passes. The Dynamic Type checks change the
                 // text size and the screen lays itself out again, and checks that ran
@@ -2027,6 +2062,7 @@ final class AidenShellUITests: XCTestCase {
                             bars: bars,
                             fadedEdges: fadedEdges,
                             strip: strip,
+                            stripVisible: stripVisible,
                             tabStrip: tabStrip
                         )
                         let place = element.map { "\($0.elementType.rawValue) '\($0.label)' at \($0.frame)" } ?? "no element"

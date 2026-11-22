@@ -97,6 +97,8 @@ struct AidenMachineRoster: Equatable {
         usable > 1 ? labels[instanceId]?.name : nil
     }
 
+    var offlineIDs: Set<String> { Set(offline.map(\.id)) }
+
     func isOffline(_ instanceId: String) -> Bool {
         offline.contains { $0.id == instanceId }
     }
@@ -156,16 +158,44 @@ struct AidenMachineChip: View {
 }
 
 /// All, then a chip for each machine. Drawn only when there's a choice to make.
+/// Each machine's chip carries a small status dot: filled success green when
+/// it answers, an open secondary ring when it's offline. The row scrolls edge
+/// to edge and fades out at whichever edge has more chips past it, so a chip
+/// is never chopped at the column's edge.
 struct AidenMachineStrip: View {
     private let labels: [AidenMachineLabel]
+    private let offline: Set<String>
     @Binding private var filter: AidenMachineFilter
+    @State private var fades = Fades()
 
+    @Environment(\.aidenPalette) private var palette
     /// Past this a long name truncates, however large the text is.
     @ScaledMetric(relativeTo: .subheadline) private var scaledNameWidth: CGFloat = 160
+    @ScaledMetric(relativeTo: .subheadline) private var dot: CGFloat = 7
     private var nameWidth: CGFloat { min(scaledNameWidth, 240) }
 
-    init(labels: [AidenMachineLabel], filter: Binding<AidenMachineFilter>) {
+    /// The width of the fade at an edge with more chips past it.
+    static let fadeWidth: CGFloat = 28
+
+    /// Which edges have chips scrolled past them.
+    struct Fades: Equatable {
+        var leading = false
+        var trailing = false
+
+        /// `offset` is the scroll view's content offset, which starts at minus
+        /// the leading inset; the insets are the content margins.
+        init(offset: CGFloat = 0, contentWidth: CGFloat = 0, containerWidth: CGFloat = 0,
+             leadingInset: CGFloat = 0, trailingInset: CGFloat = 0) {
+            let start = -leadingInset
+            let end = contentWidth + trailingInset - containerWidth
+            leading = offset > start + 1
+            trailing = offset < end - 1
+        }
+    }
+
+    init(labels: [AidenMachineLabel], offline: Set<String> = [], filter: Binding<AidenMachineFilter>) {
         self.labels = labels
+        self.offline = offline
         _filter = filter
     }
 
@@ -174,14 +204,16 @@ struct AidenMachineStrip: View {
     var body: some View {
         if Self.isShown(for: labels) {
             ScrollView(.horizontal) {
-                HStack(spacing: AidenSpacing.s) {
+                HStack(spacing: AidenSpacing.m) {
                     button(for: .all, spokenAs: String(localized: "All computers")) {
                         Text("All")
                     }
                     ForEach(labels, id: \.instanceId) { label in
-                        button(for: .machine(label.instanceId), spokenAs: label.name) {
+                        let isOffline = offline.contains(label.instanceId)
+                        button(for: .machine(label.instanceId), spokenAs: label.name, isOffline: isOffline) {
                             AidenMachineChip(label: label)
                                 .accessibilityHidden(true)
+                            statusDot(isOffline: isOffline)
                             Text(label.name)
                                 .frame(maxWidth: nameWidth, alignment: .leading)
                                 .fixedSize(horizontal: true, vertical: false)
@@ -191,14 +223,50 @@ struct AidenMachineStrip: View {
             }
             .contentMargins(.horizontal, AidenSpacing.l, for: .scrollContent)
             .scrollIndicators(.hidden)
+            .onScrollGeometryChange(for: Fades.self) { geometry in
+                Fades(
+                    offset: geometry.contentOffset.x,
+                    contentWidth: geometry.contentSize.width,
+                    containerWidth: geometry.containerSize.width,
+                    leadingInset: geometry.contentInsets.leading,
+                    trailingInset: geometry.contentInsets.trailing
+                )
+            } action: { _, new in
+                fades = new
+            }
+            // An alpha mask, so the canvas shows through in every theme.
+            .mask { fadeMask }
             .accessibilityElement(children: .contain)
             .accessibilityLabel("Filter by computer")
         }
     }
 
+    private var fadeMask: some View {
+        HStack(spacing: 0) {
+            LinearGradient(colors: [.clear, .black], startPoint: .leading, endPoint: .trailing)
+                .frame(width: fades.leading ? Self.fadeWidth : 0)
+            Rectangle()
+            LinearGradient(colors: [.black, .clear], startPoint: .leading, endPoint: .trailing)
+                .frame(width: fades.trailing ? Self.fadeWidth : 0)
+        }
+    }
+
+    private func statusDot(isOffline: Bool) -> some View {
+        Group {
+            if isOffline {
+                Circle().strokeBorder(palette.secondary, lineWidth: 1.5)
+            } else {
+                Circle().fill(palette.success)
+            }
+        }
+        .frame(width: dot, height: dot)
+        .accessibilityHidden(true)
+    }
+
     private func button(
         for choice: AidenMachineFilter,
         spokenAs name: String,
+        isOffline: Bool = false,
         @ViewBuilder content: () -> some View
     ) -> some View {
         let isSelected = filter == choice
@@ -208,6 +276,7 @@ struct AidenMachineStrip: View {
         }
         .buttonStyle(.plain)
         .accessibilityLabel(name)
+        .accessibilityValue(isOffline ? String(localized: "Offline") : "")
         .accessibilityAddTraits(isSelected ? .isSelected : [])
     }
 }
@@ -230,7 +299,7 @@ struct AidenMachineFilterChoiceLabel<Content: View>: View {
             }
             content()
         }
-        .font(.subheadline.weight(isSelected ? .semibold : .medium))
+        .font(.subheadline.weight(isSelected ? .medium : .regular))
         .lineLimit(1)
         .truncationMode(.tail)
         .foregroundStyle(isSelected ? palette.onFillAccent : palette.foreground)
@@ -247,15 +316,24 @@ struct AidenMachineOfflineRow: View {
     private let lastSeen: Date?
     private let isReconnecting: Bool
     private let onReconnect: () -> Void
+    private let onDismiss: (() -> Void)?
 
     @Environment(\.aidenPalette) private var palette
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
-    init(label: AidenMachineLabel, lastSeen: Date?, isReconnecting: Bool = false, onReconnect: @escaping () -> Void) {
+    /// With `onDismiss`, the row has a close button beside its title.
+    init(
+        label: AidenMachineLabel,
+        lastSeen: Date?,
+        isReconnecting: Bool = false,
+        onReconnect: @escaping () -> Void,
+        onDismiss: (() -> Void)? = nil
+    ) {
         self.label = label
         self.lastSeen = lastSeen
         self.isReconnecting = isReconnecting
         self.onReconnect = onReconnect
+        self.onDismiss = onDismiss
     }
 
     private var title: String { String(localized: "\(label.name) is offline") }
@@ -284,7 +362,10 @@ struct AidenMachineOfflineRow: View {
             .accessibilityElement(children: .ignore)
             .accessibilityLabel("\(title), \(detail)")
             if !dynamicTypeSize.isAccessibilitySize { Spacer(minLength: 0) }
-            reconnect
+            HStack(spacing: 0) {
+                reconnect
+                if let onDismiss { dismissButton(onDismiss) }
+            }
         }
         .padding(.leading, AidenSpacing.m)
         .padding(.trailing, AidenSpacing.s)
@@ -314,6 +395,48 @@ struct AidenMachineOfflineRow: View {
         .accessibilityLabel(String(localized: "Reconnect \(label.name)"))
         .disabled(isReconnecting)
     }
+
+    private func dismissButton(_ onDismiss: @escaping () -> Void) -> some View {
+        Button(action: onDismiss) {
+            Image(systemName: "xmark")
+                .font(.footnote.weight(.semibold))
+                .foregroundStyle(palette.secondary)
+                .frame(width: 44, height: 44)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(String(localized: "Hide \(label.name) offline notice"))
+        .accessibilityHint("Hides it until Aiden On The Go is opened again")
+        .accessibilityIdentifier("aiden.machine-offline.dismiss")
+    }
+}
+
+/// Offline notices the person closed. In memory only, for as long as the app
+/// runs: a relaunch shows them again. Keyed by machine, so closing one
+/// machine's notice leaves another's, and a machine that comes back and drops
+/// off again stays closed. The shell owns it, so every tab and both sides of
+/// a fold share it.
+@MainActor @Observable
+final class AidenOfflineNoticeDismissals {
+    private var dismissed: Set<String> = []
+
+    func dismiss(_ instanceId: String) {
+        dismissed.insert(instanceId)
+    }
+
+    func isDismissed(_ instanceId: String) -> Bool {
+        dismissed.contains(instanceId)
+    }
+
+    /// The rows still to show.
+    func shown(_ rows: [AidenMachineRoster.OfflineMachine]) -> [AidenMachineRoster.OfflineMachine] {
+        rows.filter { !dismissed.contains($0.id) }
+    }
+}
+
+extension EnvironmentValues {
+    /// The shell's, set above every tab. Without one, notices can't be closed.
+    @Entry var aidenOfflineNotices: AidenOfflineNoticeDismissals?
 }
 
 /// "3 of 4": how many machines are online, in the Inbox's toolbar. It opens Machines.

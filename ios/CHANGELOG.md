@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- **2026-11-22 — Quieter lists and an ink accent.** No Remote wire or revision change.
+  - The default Aiden theme's accent is muted ink instead of blue. Status colours stay coloured.
+  - The Inbox, Running chats, Search, Bots, Workspaces, a workspace's chats and Computers group their rows into rounded cards, with no lines between rows and small headings above each card.
+  - A row shows its state in a leading mark: a spinner while running, a dot when unread.
+  - Bot rows on Bots drop the purpose bubble.
+  - Machine chips show a green dot when the computer is online, and fade at the edge instead of being cut off.
+  - The Inbox offline notice can be closed until the app is opened again.
+  - The Running accessory's ring stays in place when the tab bar shrinks.
+
 - **2026-11-18 — Terminal theme control removed.** The app no longer accepts the retired `appearance.terminalTheme` chat control, which no host has sent since the interactive CLI was retired on 2026-10-30. No Remote wire or revision change.
 
 - **2026-11-11 — Continue in a new chat (Remote revision 64; written as 63, re-claimed at merge on 2026-11-17).** When the Mac can't send a message because the chat's workspace folder was moved, renamed or deleted, or its drive isn't connected, the alert shows the Mac's own sentence and, if the Mac offers it, a **Continue in a New Chat** button. It opens a sheet of the Mac's other workspaces, by name only, with no "No workspace" choice. Picking one copies the whole chat into a new chat there and opens it; the original chat stays as it is. If the Mac refuses, its sentence shows in the sheet. The app asks for `chat:continue-in-new-chat` on its own, and only then does the Mac send the refusal's `reason` and `canContinueInNewChat`; an older Mac's refusal shows its sentence with no button, as before.

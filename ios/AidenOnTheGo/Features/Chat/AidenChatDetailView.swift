@@ -64,6 +64,9 @@ final class AidenChatScreenParts {
     var visibleHeight: CGFloat = 0
     /// Which screen's rows each frame came from (`setRowFrame`).
     private var rowFrameScreens: [String: UUID] = [:]
+    /// The screen that appeared most recently, and the ones it replaced.
+    private var shownScreen: UUID?
+    private var replacedScreens: Set<UUID> = []
 
     init(
         model: AidenChatViewModel,
@@ -83,10 +86,27 @@ final class AidenChatScreenParts {
     /// the frames are in the content's space and don't move with scrolling,
     /// so a row the new screen already measured wouldn't report again.
     func setRowFrame(_ frame: CGRect?, for id: String, from screen: UUID) {
+        // A screen a newer one replaced is on its way out: whatever its rows
+        // report, late, is at the width it had.
+        guard !replacedScreens.contains(screen) else { return }
         if let frame {
             rowFrames[id] = frame
             rowFrameScreens[id] = screen
         } else if rowFrameScreens[id] == screen {
+            rowFrames[id] = nil
+            rowFrameScreens[id] = nil
+        }
+    }
+
+    /// `screen` appeared, so only its rows' frames count from now on. Its rows
+    /// may have reported before it appeared, so those stay; frames from the
+    /// screen it replaces go.
+    func screenAppeared(_ screen: UUID) {
+        guard screen != shownScreen else { return }
+        if let shownScreen { replacedScreens.insert(shownScreen) }
+        shownScreen = screen
+        replacedScreens.remove(screen)
+        for (id, owner) in rowFrameScreens where replacedScreens.contains(owner) {
             rowFrames[id] = nil
             rowFrameScreens[id] = nil
         }
@@ -389,9 +409,10 @@ struct AidenChatDetailView: View {
             composerSession.putAwayKeyboard()
             attachmentPicker.dismiss()
         }
-        .navigationTitle(presentationStyle == .botMessages ? "" : model.chat.displayTitle)
+        .navigationTitle(screenTitle)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar { chatToolbar }
+        .aidenPrefersToolbarItems()
         .task(id: backgroundJobsRefreshKey) {
             // Not pushed: read after each reply settles, and every few seconds
             // while something runs or the list is open. Only while the app
@@ -526,6 +547,7 @@ struct AidenChatDetailView: View {
         }
         .onAppear {
             screen?.appeared()
+            parts.screenAppeared(rowFrameScreen)
             model.setViewPresent(true)
             model.setHapticsActive(true)
             model.setChatForegrounded(true)
@@ -1069,6 +1091,13 @@ struct AidenChatDetailView: View {
         }
     }
 
+    /// A Bot's header pill takes the title's place in a bar along the top. A
+    /// side rail can't hold it, so there the title names the Bot.
+    private var screenTitle: String {
+        guard presentationStyle == .botMessages else { return model.chat.displayTitle }
+        return botToolsModel?.bot?.name ?? model.chat.title
+    }
+
     @ToolbarContentBuilder
     private var chatToolbar: some ToolbarContent {
         if let coordinator, let botToolsModel {
@@ -1085,12 +1114,12 @@ struct AidenChatDetailView: View {
         Button {
             showsSessionSheet = true
         } label: {
-            Image(systemName: AidenChromeSymbols.overflowMenu)
+            // A title as well as the symbol, for the side rail's overflow.
+            Label("More", systemImage: AidenChromeSymbols.overflowMenu)
                 .font(.body.weight(.semibold))
                 .contentShape(Circle())
         }
         .buttonBorderShape(.circle)
-        .accessibilityLabel("More")
     }
 
     private var sessionSheetConfig: AidenSessionSheetConfig {

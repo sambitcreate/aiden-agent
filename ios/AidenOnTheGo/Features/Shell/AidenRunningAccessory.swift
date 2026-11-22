@@ -75,7 +75,13 @@ struct AidenRunningAccessory: View {
         if let title = summary.title {
             Button(action: tap) {
                 HStack(spacing: AidenSpacing.s) {
+                    // A ring per placement: the bar swaps the accessory between
+                    // its inline and expanded places in an animation, and one
+                    // ring carried across slid from the old place to the new
+                    // while it turned, so it wandered. A new ring fades in
+                    // where it belongs, as the title does.
                     AidenWorkingIndicator(size: isCompact ? 12 : 16)
+                        .id(isCompact)
                     Text(title)
                         .font(isCompact ? .footnote.weight(.medium) : .subheadline.weight(.medium))
                         .foregroundStyle(palette.foreground)
@@ -144,8 +150,9 @@ struct AidenRunningChatsSheet: View {
 
     var body: some View {
         NavigationStack {
+            let positions = AidenListCardPosition.positions(rows.map(\.id))
             List(rows) { row in
-                listRow(row)
+                listRow(row, card: positions[row.id] ?? .middle)
             }
             .listStyle(.plain)
             .scrollContentBackground(.hidden)
@@ -166,7 +173,7 @@ struct AidenRunningChatsSheet: View {
         .presentationDetents([.medium, .large])
     }
 
-    private func listRow(_ row: AidenUnifiedInboxRow) -> some View {
+    private func listRow(_ row: AidenUnifiedInboxRow, card: AidenListCardPosition) -> some View {
         Button {
             onOpen(row.route)
         } label: {
@@ -190,9 +197,7 @@ struct AidenRunningChatsSheet: View {
             }
         }
         .buttonStyle(.plain)
-        .listRowInsets(EdgeInsets(top: 0, leading: AidenSpacing.m, bottom: 0, trailing: AidenSpacing.m))
-        .listRowSeparator(.hidden)
-        .listRowBackground(palette.canvas)
+        .aidenListCardRow(card)
     }
 }
 

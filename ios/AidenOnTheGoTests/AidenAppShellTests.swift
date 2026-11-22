@@ -314,6 +314,29 @@ final class AidenAppShellTests: XCTestCase {
         XCTAssertEqual(navigation.workspacesPath, [])
     }
 
+    /// A list's place is the row across the top of what shows under the bar:
+    /// one cut by the bar's edge counts, one wholly behind the bar doesn't.
+    /// Unmeasured rows (the list builds only those near the screen) are none.
+    @MainActor
+    func testAListsPlaceIsTheRowAcrossTheTopUnderTheBar() {
+        let frames: [AnyHashable: CGRect] = [
+            "behind-bar": CGRect(x: 0, y: 30, width: 400, height: 60),
+            "cut-by-bar": CGRect(x: 0, y: 90, width: 400, height: 60),
+            "below": CGRect(x: 0, y: 150, width: 400, height: 60),
+        ]
+        XCTAssertEqual(AidenListScrollPlaces.topRow(frames: frames, visibleTop: 100), "cut-by-bar")
+        XCTAssertEqual(AidenListScrollPlaces.topRow(frames: frames, visibleTop: 150), "below")
+        XCTAssertEqual(AidenListScrollPlaces.topRow(frames: frames, visibleTop: 0), "behind-bar")
+        XCTAssertNil(AidenListScrollPlaces.topRow(frames: [:], visibleTop: 100))
+
+        let places = AidenListScrollPlaces()
+        places.record("cut-by-bar", of: .inbox)
+        places.record("below", of: .workspaces)
+        places.record(nil, of: .workspaces)
+        XCTAssertEqual(places.topRow(of: .inbox), "cut-by-bar")
+        XCTAssertNil(places.topRow(of: .workspaces), "Back at the top keeps no row, so the rows above any row show")
+    }
+
     /// Closing the display, the split hears the compact width an update before
     /// the shell moves `besideList`, and collapsing pops its detail. That
     /// write comes from a split whose own width is no longer regular, so it's

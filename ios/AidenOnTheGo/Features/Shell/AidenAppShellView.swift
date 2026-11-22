@@ -6,6 +6,43 @@ enum AidenChromeSymbols {
     static let bots = "person.2.fill"
 }
 
+extension ToolbarContent {
+    /// The item the bar gives up last when it runs out of room, as a closed
+    /// iPhone Duo's side rail does: compose. Before iOS 27 the system decides.
+    @ToolbarContentBuilder
+    func aidenKeptLongestInBar() -> some ToolbarContent {
+        if #available(iOS 27.0, *) {
+            visibilityPriority(.high)
+        } else {
+            self
+        }
+    }
+}
+
+extension View {
+    /// For a task view, such as a conversation: where the bars run short of
+    /// height, as in a closed iPhone Duo's side rail, the system keeps the
+    /// screen's own actions and shrinks the tab bar first. The API arrived in
+    /// the iOS 27.1 SDK (UIKit 9127.0.85), so Xcode 27.0 builds without it.
+    func aidenPrefersToolbarItems() -> some View {
+        modifier(AidenPrefersToolbarItems())
+    }
+}
+
+private struct AidenPrefersToolbarItems: ViewModifier {
+    func body(content: Content) -> some View {
+        #if canImport(UIKit, _version: 9127.0.85)
+        if #available(iOS 27.1, *) {
+            content.toolbarVerticalCompressionBehavior(.prefersToolbarItems)
+        } else {
+            content
+        }
+        #else
+        content
+        #endif
+    }
+}
+
 enum AidenBotsAvailability: Equatable, Sendable {
     case available(canWrite: Bool)
     case mobileDisabled
@@ -71,6 +108,7 @@ final class AidenAppShellParts {
         let chatScreens: AidenChatScreens
         let search: AidenSearchModel
         let listScroll: AidenListScrollPlaces
+        let offlineNotices: AidenOfflineNoticeDismissals
     }
 
     private var made: Built?
@@ -172,7 +210,8 @@ struct AidenAppShellView: View {
                 newWork: newWork,
                 chatScreens: chatScreens,
                 search: search,
-                listScroll: AidenListScrollPlaces()
+                listScroll: AidenListScrollPlaces(),
+                offlineNotices: AidenOfflineNoticeDismissals()
             )
         }
     }
@@ -272,6 +311,7 @@ struct AidenAppShellView: View {
         }
         // Above every tab's stack, so pushed screens read them too.
         .environment(\.aidenTabsInSideRail, showsVerticalBar)
+        .environment(\.aidenOfflineNotices, built.offlineNotices)
         .tabBarMinimizeBehavior(horizontalSizeClass == .compact ? .onScrollDown : .automatic)
         .tabViewSearchActivation(.searchTabSelection)
         // Hiding the tab bar leaves the accessory up, under the composer.
@@ -453,6 +493,7 @@ struct AidenAppShellView: View {
         ToolbarItem(placement: .primaryAction) {
             AidenNewWorkComposeButton(flow: newWork)
         }
+        .aidenKeptLongestInBar()
     }
 
     /// A conversation hides the tabs on a stack, where the composer owns the
@@ -1030,17 +1071,29 @@ private struct AidenListTab<List: View>: View {
     }
 }
 
-/// How far down each list tab's list was scrolled, kept by the shell so a
-/// fold, which builds the list again in the other container, keeps it.
+/// Where each list tab's list was scrolled to, kept by the shell so a fold,
+/// which builds the list again in the other container, keeps it. A place is
+/// the row across the top of the list, so it holds through a reflow at the
+/// new width and through rows or banners that arrive above it.
 @MainActor
 final class AidenListScrollPlaces {
-    /// Points from the top of the list's content, by tab.
-    private var offsets: [AidenAppTab: CGFloat] = [:]
+    /// The row across the top of each tab's list, or none at the very top.
+    private var topRows: [AidenAppTab: AnyHashable] = [:]
 
-    func offset(of tab: AidenAppTab) -> CGFloat { offsets[tab] ?? 0 }
+    func topRow(of tab: AidenAppTab) -> AnyHashable? { topRows[tab] }
 
-    func record(_ offset: CGFloat, of tab: AidenAppTab) {
-        offsets[tab] = max(0, offset)
+    func record(_ row: AnyHashable?, of tab: AidenAppTab) {
+        topRows[tab] = row
+    }
+
+    /// The row across the top of the visible part: the highest row whose
+    /// bottom reaches below `visibleTop`. Frames and `visibleTop` are in the
+    /// same space, the list's own.
+    static func topRow(frames: [AnyHashable: CGRect], visibleTop: CGFloat) -> AnyHashable? {
+        frames
+            .filter { $0.value.maxY > visibleTop + 1 }
+            .min { $0.value.minY < $1.value.minY }?
+            .key
     }
 }
 
@@ -1051,17 +1104,46 @@ struct AidenListScrollKeeping {
     let tab: AidenAppTab
 }
 
+/// The frames of one list's rows as they're laid out, in the list's own space.
+/// Not observed: only the person's scroll reads them.
+@MainActor
+final class AidenListRowFrames {
+    fileprivate var frames: [AnyHashable: CGRect] = [:]
+    /// Whether the person's scroll is moving the list.
+    fileprivate var moving = false
+
+    fileprivate func set(_ frame: CGRect?, for id: AnyHashable) {
+        frames[id] = frame
+    }
+}
+
 extension EnvironmentValues {
     @Entry var aidenListScroll: AidenListScrollKeeping?
+    @Entry var aidenListRowFrames: AidenListRowFrames?
+}
+
+private enum AidenListScrollSpace {
+    static let name = "aiden.list.scroll"
 }
 
 extension View {
     /// On a list tab's own scrolling list: keeps where it's scrolled to when
     /// a fold builds it again. Placed on the scroll view itself, as a row
     /// strip that scrolls sideways inside it would take a position meant for
-    /// the list.
+    /// the list. Its rows say who they are with `aidenListScrollRow(_:)`.
     func aidenKeepsListScroll() -> some View {
         modifier(AidenListScrollKeeperReader())
+    }
+
+    /// A row the list's place can be: the list comes back with this row at
+    /// its top. `id` is the row's identity in its `ForEach`, which is what
+    /// `ScrollViewReader` scrolls to; nil marks nothing.
+    ///
+    /// Goes on the row's content (a button's label), never on the row
+    /// itself: on the view a `ForEach` hands the list, the geometry reading
+    /// hides the row's own list insets, background and swipe actions.
+    func aidenListScrollRow(_ id: AnyHashable?) -> some View {
+        modifier(AidenListScrollRow(id: id))
     }
 }
 
@@ -1077,126 +1159,76 @@ private struct AidenListScrollKeeperReader: ViewModifier {
     }
 }
 
-/// Records where a list tab's list is while the person scrolls it, and puts
-/// a new list there once its content reaches that far. Only the person's
-/// scrolling records: a list taken down as the display folds reflows and
-/// reports its own geometry on the way out, and that isn't where they left it.
-///
-/// `ScrollPosition` doesn't move a `List` (iOS 27.1 simulator: the binding
-/// never hears the person scroll it either), so the place is put back on the
-/// list's own scroll view (`AidenListScrollViewFinder`).
-private struct AidenListScrollKeeper: ViewModifier {
-    private struct Reach: Equatable {
-        var offset: CGFloat
-        var farthest: CGFloat
-    }
+private struct AidenListScrollRow: ViewModifier {
+    let id: AnyHashable?
 
-    let places: AidenListScrollPlaces
-    let tab: AidenAppTab
-
-    @State private var finder = AidenListScrollViewFinder.Handle()
-    /// The place to go back to, until it's reached or the person scrolls.
-    @State private var pending: CGFloat?
-    /// The person is scrolling the list, or it's still coasting.
-    @State private var moving = false
+    @Environment(\.aidenListRowFrames) private var rowFrames
 
     func body(content: Content) -> some View {
         content
-            .background { AidenListScrollViewFinder(handle: finder) }
-            .onAppear {
-                let offset = places.offset(of: tab)
-                pending = offset > 0 ? offset : nil
+            .onGeometryChange(for: CGRect.self) { proxy in
+                proxy.frame(in: .named(AidenListScrollSpace.name))
+            } action: { frame in
+                if let id { rowFrames?.set(frame, for: id) }
             }
-            .onScrollPhaseChange { old, phase, context in
-                if phase == .interacting { pending = nil }
-                moving = phase == .interacting || phase == .decelerating
-                // Where a scroll came to rest. A list being built or taken
-                // down reports from idle, and that's no one's place.
-                guard old != .idle else { return }
-                let geometry = context.geometry
-                places.record(geometry.contentOffset.y + geometry.contentInsets.top, of: tab)
-            }
-            .onScrollGeometryChange(for: Reach.self) { geometry in
-                Reach(
-                    offset: geometry.contentOffset.y + geometry.contentInsets.top,
-                    farthest: geometry.contentSize.height + geometry.contentInsets.top
-                        + geometry.contentInsets.bottom - geometry.containerSize.height
-                )
-            } action: { _, reach in
-                if moving { places.record(reach.offset, of: tab) }
-                guard let target = pending, reach.farthest >= target else { return }
-                pending = nil
-                guard abs(reach.offset - target) > 1 else { return }
-                // After this layout pass, which may still set the offset.
-                Task { @MainActor [finder] in
-                    await Task.yield()
-                    finder.scroll(toDistanceFromTop: target)
-                }
+            .onDisappear {
+                if let id { rowFrames?.set(nil, for: id) }
             }
     }
 }
 
-/// Finds the scroll view behind the SwiftUI view it's the background of: the
-/// nearest one that starts at the same left edge and takes in all of it.
-/// The scroll view runs on under the bars, where the SwiftUI view stops (a
-/// closed iPhone Duo's side rail included); a strip that scrolls sideways
-/// inside a list is a row tall, so it never takes it in.
-private struct AidenListScrollViewFinder: UIViewRepresentable {
-    @MainActor
-    final class Handle {
-        fileprivate weak var marker: UIView?
+/// Records the row across the top of a list tab's list while the person
+/// scrolls it and when it comes to rest, and brings a new list back to that
+/// row once, after its first layout. A list taken down as the display folds
+/// reports its own geometry on the way out from rest, and that isn't where
+/// they left it, so a list at rest records nothing more.
+private struct AidenListScrollKeeper: ViewModifier {
+    let places: AidenListScrollPlaces
+    let tab: AidenAppTab
 
-        var scrollView: UIScrollView? {
-            guard let marker, let window = marker.window else { return nil }
-            let frame = marker.convert(marker.bounds, to: window)
-            var ancestor = marker.superview
-            while let current = ancestor {
-                if let match = Self.scrollView(in: current, around: frame, window: window) { return match }
-                ancestor = current.superview
-            }
-            return nil
-        }
+    @State private var rowFrames = AidenListRowFrames()
+    /// The row to go back to, until the list's first layout.
+    @State private var pending: AnyHashable?
 
-        /// Scrolls so the content `distance` points from its top is at the
-        /// top of the visible part, or as near as the content allows.
-        func scroll(toDistanceFromTop distance: CGFloat) {
-            guard let scrollView else { return }
-            let insets = scrollView.adjustedContentInset
-            let lowest = scrollView.contentSize.height + insets.bottom - scrollView.bounds.height
-            let y = max(min(distance - insets.top, lowest), -insets.top)
-            scrollView.setContentOffset(CGPoint(x: scrollView.contentOffset.x, y: y), animated: false)
-        }
-
-        private static func scrollView(in root: UIView, around frame: CGRect, window: UIWindow) -> UIScrollView? {
-            var queue: [UIView] = [root]
-            var visited = 0
-            while !queue.isEmpty, visited < 600 {
-                let view = queue.removeFirst()
-                visited += 1
-                if let scrollView = view as? UIScrollView {
-                    let visible = scrollView.convert(scrollView.bounds, to: window)
-                    if abs(visible.minX - frame.minX) < 1, visible.insetBy(dx: -1, dy: -1).contains(frame) {
-                        return scrollView
+    func body(content: Content) -> some View {
+        ScrollViewReader { proxy in
+            content
+                .coordinateSpace(.named(AidenListScrollSpace.name))
+                .environment(\.aidenListRowFrames, rowFrames)
+                .onAppear { pending = places.topRow(of: tab) }
+                .onScrollPhaseChange { old, phase, context in
+                    if phase == .interacting { pending = nil }
+                    rowFrames.moving = phase.isScrolling
+                    // Coming to rest, and each change of phase on the way.
+                    if old.isScrolling { record(context.geometry) }
+                }
+                .onScrollGeometryChange(for: ScrollGeometry.self) { $0 } action: { _, geometry in
+                    if rowFrames.moving { record(geometry) }
+                }
+                .onScrollGeometryChange(for: Bool.self) { geometry in
+                    geometry.contentSize.height > 0
+                } action: { _, laidOut in
+                    guard laidOut, let row = pending else { return }
+                    pending = nil
+                    // `scrollTo` matches a `ForEach` identity by its own type,
+                    // not wrapped. After this layout pass, which may still set
+                    // the offset itself.
+                    guard let id = row.base as? any Hashable else { return }
+                    Task { @MainActor in
+                        await Task.yield()
+                        proxy.scrollTo(id, anchor: .top)
                     }
                 }
-                queue.append(contentsOf: view.subviews)
-            }
-            return nil
         }
     }
 
-    let handle: Handle
-
-    func makeUIView(context: Context) -> UIView {
-        let view = UIView()
-        view.isUserInteractionEnabled = false
-        view.isAccessibilityElement = false
-        handle.marker = view
-        return view
-    }
-
-    func updateUIView(_ view: UIView, context: Context) {
-        handle.marker = view
+    private func record(_ geometry: ScrollGeometry) {
+        let atTop = geometry.contentOffset.y + geometry.contentInsets.top <= 1
+        // The list's own space starts where it shows, under the bar: its
+        // scrolling runs on under the bar, its frame doesn't (iOS 27.1,
+        // iPhone Duo).
+        let row = atTop ? nil : AidenListScrollPlaces.topRow(frames: rowFrames.frames, visibleTop: 0)
+        places.record(row, of: tab)
     }
 }
 

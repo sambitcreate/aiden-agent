@@ -214,11 +214,15 @@ struct AidenBotSessionChatView: View {
             model?.setResumeForegroundVisit(active: active)
         }
         .background(palette.canvas.ignoresSafeArea())
+        // The header takes the title's place in a bar along the top. A side
+        // rail can't hold it, so the title says whose chat this is there.
+        .navigationTitle(bot?.name ?? String(localized: "Bot"))
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .principal) { header }
             ToolbarItem(placement: .topBarTrailing) { moreMenu }
         }
+        .aidenPrefersToolbarItems()
         .aidenBotDeleteConfirmation(
             isPresented: $isConfirmingDelete,
             botName: bot?.name ?? "this Bot",
@@ -376,7 +380,8 @@ struct AidenBotSessionChatView: View {
         Button {
             showsSessionSheet = true
         } label: {
-            Image(systemName: "ellipsis")
+            // A title as well as the symbol, for the side rail's overflow.
+            Label("More", systemImage: AidenChromeSymbols.overflowMenu)
         }
         .disabled(bot == nil)
         .accessibilityLabel("More for \(bot?.name ?? "this Bot")")

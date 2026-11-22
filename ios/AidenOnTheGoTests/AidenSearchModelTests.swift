@@ -136,13 +136,24 @@ final class AidenSearchModelTests: XCTestCase {
         return try! AidenRemoteJSONDecoder.decode(AidenBotConversationItem.self, from: data)
     }
 
+    /// Time since `now`, as the model reads it.
+    private var elapsed: TimeInterval = 0
+
     private func makeModel() -> AidenSearchModel {
         AidenSearchModel(
             chatInput: { [unowned self] in AidenSearchChatInput(snapshots: snapshots) },
             machines: { [unowned self] in machineList },
-            now: { [now] in now },
+            now: { [unowned self] in now.addingTimeInterval(elapsed) },
             clock: clock
         )
+    }
+
+    /// Runs the current query to the end: one that asks the machines, so it
+    /// waits out the debounce.
+    private func runToEnd(_ model: AidenSearchModel) async {
+        let run = await startRun(model)
+        pastDebounce()
+        await run.value
     }
 
     /// Lets queued main-actor work run until `condition` holds.
@@ -308,6 +319,52 @@ final class AidenSearchModelTests: XCTestCase {
         await second.value
         XCTAssertEqual(desk.asks, ["studio: scout", "studio: scout"])
         XCTAssertEqual(model.bots.map(\.title), ["Scout digest"])
+    }
+
+    /// A machine that didn't answer isn't settled: the same query asks it again,
+    /// and what it finds then shows.
+    func testTheSameQueryAsksAMachineThatFailedAgain() async {
+        machineList = [machine("studio", "Studio Mac"), machine("laptop", "Laptop")]
+        desk.reply("studio", "scout", [conversation("chat_1", title: "Scout digest")])
+        desk.fail("laptop", "scout")
+        let model = makeModel()
+        model.query = "scout"
+        await runToEnd(model)
+        XCTAssertEqual(model.unsearchedMachines, ["Laptop"])
+
+        desk.reply("laptop", "scout", [conversation("chat_2", title: "Laptop notes", minutesAgo: 30)])
+        await runToEnd(model)
+        XCTAssertEqual(desk.asks.sorted(), ["laptop: scout", "laptop: scout", "studio: scout", "studio: scout"])
+        XCTAssertEqual(model.bots.map(\.title), ["Scout digest", "Laptop notes"])
+        XCTAssertEqual(model.unsearchedMachines, [])
+    }
+
+    /// A fold runs the query again at once and keeps what it found; coming back
+    /// to Search later asks again, so a Bot's newer conversations show.
+    func testAnAnswerStandsForAFoldButNotForALaterVisit() async {
+        machineList = [machine("studio", "Studio Mac")]
+        desk.reply("studio", "scout", [conversation("chat_1", title: "Scout digest")])
+        let model = makeModel()
+        model.query = "scout"
+        await runToEnd(model)
+
+        elapsed = 2
+        let again = Task { await model.run() }
+        for _ in 0..<50 { await Task.yield() }
+        XCTAssertEqual(clock.sleeperCount, 0, "A run right after waited to ask again")
+        pastDebounce()
+        await again.value
+        XCTAssertEqual(desk.asks, ["studio: scout"], "A run right after asked again")
+
+        desk.reply("studio", "scout", [
+            conversation("chat_3", title: "Scout weekly", minutesAgo: 1),
+            conversation("chat_1", title: "Scout digest"),
+        ])
+        elapsed = 2 + AidenSearchModel.answerLifetime
+        await runToEnd(model)
+        XCTAssertEqual(desk.asks, ["studio: scout", "studio: scout"])
+        // The Bot's newest conversation is the one it shows.
+        XCTAssertEqual(model.bots.map(\.title), ["Scout weekly"])
     }
 
     func testTheDebounceWaitsForTheLastKeystroke() async {

@@ -52,9 +52,13 @@ struct AidenWorkspaceChatsView: View {
                         .foregroundStyle(.secondary)
                 }
                 .padding(.vertical, 8)
+                .padding(.horizontal, AidenSpacing.xl)
+                .listRowInsets(EdgeInsets())
+                .listRowSeparator(.hidden)
+                .listRowBackground(palette.canvas)
             }
 
-            Section("Chats") {
+            Section {
                 if model.chats.isEmpty, !model.isLoading {
                     ContentUnavailableView(
                         "No Chats",
@@ -63,28 +67,29 @@ struct AidenWorkspaceChatsView: View {
                     )
                     .listRowBackground(Color.clear)
                 } else {
+                    let positions = AidenListCardPosition.positions(model.chats.map(\.id))
                     ForEach(model.chats) { chat in
                         // Opened by the shell rather than a value link: a chat
                         // another tab holds leaves it first, and doing that
                         // while the stack writes its own path collapsed the
                         // split to its list on a closed iPhone Duo.
                         Button { onOpenChat(chatID(chat.id)) } label: {
-                            HStack {
-                                VStack(alignment: .leading, spacing: 4) {
-                                    AidenForkableChatTitle(title: chat.displayTitle, isFork: chat.forkedFrom != nil)
-                                    AidenRelativeTimestampView(date: chat.updatedAt)
-                                        .font(.caption)
-                                        .foregroundStyle(palette.secondary)
-                                }
-                                Spacer(minLength: 8)
-                                Image(systemName: "chevron.right")
-                                    .font(.footnote.weight(.semibold))
+                            AidenListRowLayout(isStacked: false, hasSummary: true) {
+                                AidenListRowGlyph(systemName: "bubble.left")
+                            } title: {
+                                AidenForkableChatTitle(title: chat.displayTitle, isFork: chat.forkedFrom != nil)
+                                    .font(.body)
+                                    .foregroundStyle(palette.foreground)
+                            } summary: {
+                                AidenRelativeTimestampView(date: chat.updatedAt)
+                                    .font(.subheadline)
                                     .foregroundStyle(palette.secondary)
-                                    .accessibilityHidden(true)
+                            } trailing: {
+                                EmptyView()
                             }
-                            .contentShape(Rectangle())
                         }
-                        .tint(palette.foreground)
+                        .buttonStyle(.plain)
+                        .aidenListCardRow(positions[chat.id])
                         .swipeActions(edge: .trailing) {
                             Button(role: .destructive) { deleteChat = chat } label: {
                                 Label("Delete", systemImage: "trash")
@@ -100,8 +105,12 @@ struct AidenWorkspaceChatsView: View {
                         }
                     }
                 }
+            } header: {
+                AidenListSectionHeader(title: String(localized: "Chats"))
             }
         }
+        .listStyle(.plain)
+        .listSectionSpacing(AidenSpacing.l)
         .scrollContentBackground(.hidden)
         .background(palette.canvas)
         .overlay { if model.isLoading && model.chats.isEmpty { ProgressView() } }

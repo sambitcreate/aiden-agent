@@ -12906,7 +12906,7 @@ final class AidenAppearanceTests: XCTestCase {
         let raised: String
         let foreground: String
         let secondary: String
-        let accent: String
+        var accent: String
         let success: String
         let warning: String
         let danger: String
@@ -12934,8 +12934,18 @@ final class AidenAppearanceTests: XCTestCase {
         for entry in fixture.presets {
             let preset = try XCTUnwrap(AidenThemePresetID(rawValue: entry.id))
             XCTAssertEqual(entry.label, preset.title)
-            XCTAssertEqual(entry.light, Palette(AidenThemeCatalog.palette(preset: preset, scheme: .light)))
-            XCTAssertEqual(entry.dark, Palette(AidenThemeCatalog.palette(preset: preset, scheme: .dark)))
+            var light = Palette(AidenThemeCatalog.palette(preset: preset, scheme: .light))
+            var dark = Palette(AidenThemeCatalog.palette(preset: preset, scheme: .dark))
+            if preset == .aiden {
+                // The phone's Aiden accent is muted ink while the desktop's stays
+                // blue; `testTheDefaultAccentIsMutedInkThatFollowsTheScheme` holds it.
+                // Every other token still matches the desktop.
+                XCTAssertNotEqual(light.accent, entry.light.accent)
+                light.accent = entry.light.accent
+                dark.accent = entry.dark.accent
+            }
+            XCTAssertEqual(entry.light, light)
+            XCTAssertEqual(entry.dark, dark)
         }
     }
 
@@ -12972,7 +12982,8 @@ final class AidenAppearanceTests: XCTestCase {
         for preset in AidenThemePresetID.allCases {
             let palette = AidenThemeCatalog.palette(preset: preset, scheme: .dark)
             var fills = [("danger", palette.dangerHex, palette.dangerSolidFill)]
-            if preset != .monochrome {
+            // Monochrome's and Aiden's accents are ink, not a hue.
+            if preset != .monochrome, preset != .aiden {
                 fills.append(("accent", palette.accentHex, palette.accentSolidFill))
             }
             for (tone, rawHex, fill) in fills {
@@ -12989,14 +13000,15 @@ final class AidenAppearanceTests: XCTestCase {
 
     func testDarkFillsMatchTheDesktopResolver() {
         // Values produced by the desktop `solidFill()` in renderer/shared/appearance.ts.
-        let expected: [(AidenThemePresetID, accent: String, danger: String)] = [
-            (.aiden, "#3177C2", "#CC4B46"),
+        // Aiden's accent is ink on the phone, so only its danger fill is shared.
+        let expected: [(AidenThemePresetID, accent: String?, danger: String)] = [
+            (.aiden, nil, "#CC4B46"),
             (.berry, "#BE5082", "#B9575E"),
             (.paper, "#897354", "#BC5656"),
         ]
         for (preset, accent, danger) in expected {
             let palette = AidenThemeCatalog.palette(preset: preset, scheme: .dark)
-            XCTAssertEqual(palette.accentSolidFill.fillHex, accent, "\(preset)")
+            if let accent { XCTAssertEqual(palette.accentSolidFill.fillHex, accent, "\(preset)") }
             XCTAssertEqual(palette.dangerSolidFill.fillHex, danger, "\(preset)")
         }
         XCTAssertEqual(AidenThemeCatalog.palette(preset: .monochrome, scheme: .dark).dangerSolidFill.fillHex, "#D4404E")
@@ -13348,12 +13360,12 @@ final class AidenAppearanceTests: XCTestCase {
         ))
     }
 
-    func testAttachmentPickerLayoutStaysBoundedAcrossIPadWindowSizes() {
+    func testAttachmentPickerLayoutStaysBoundedAcrossRegularWidthWindowSizes() {
         let fullSize = AidenAttachmentPickerLayout.resolve(
             containerSize: CGSize(width: 1_024, height: 1_260),
             mode: .photos,
             attachmentButtonCenter: CGPoint(x: 50, y: 1_224),
-            isPad: true
+            widthIsRegular: true
         )
         XCTAssertEqual(fullSize.panelSize.width, 620, accuracy: 0.001)
         XCTAssertEqual(fullSize.panelSize.height, 700, accuracy: 0.001)
@@ -13363,7 +13375,7 @@ final class AidenAppearanceTests: XCTestCase {
             containerSize: CGSize(width: 540, height: 720),
             mode: .camera,
             attachmentButtonCenter: CGPoint(x: 50, y: 684),
-            isPad: true
+            widthIsRegular: true
         )
         XCTAssertEqual(splitView.panelSize.width, 516, accuracy: 0.001)
         XCTAssertLessThanOrEqual(splitView.panelSize.height + splitView.bottomPadding, 720)
@@ -13374,7 +13386,7 @@ final class AidenAppearanceTests: XCTestCase {
             windowSize: CGSize(width: 1_024, height: 768),
             mode: .photos,
             attachmentButtonCenter: CGPoint(x: 50, y: 684),
-            isPad: true
+            widthIsRegular: true
         )
         XCTAssertEqual(narrowDetailInLandscapeWindow.panelSize.width, 488, accuracy: 0.001)
         XCTAssertEqual(narrowDetailInLandscapeWindow.leadingPadding, 26, accuracy: 0.001)
@@ -13382,7 +13394,7 @@ final class AidenAppearanceTests: XCTestCase {
         let unknownWindow = AidenChatReadableLayout.contentWidth(
             containerSize: CGSize(width: 1_024, height: 768),
             windowSize: .zero,
-            isPad: true
+            widthIsRegular: true
         )
         XCTAssertEqual(unknownWindow, 512, accuracy: 0.001)
     }
@@ -13392,7 +13404,7 @@ final class AidenAppearanceTests: XCTestCase {
             containerSize: CGSize(width: 1_366, height: 900),
             mode: .photos,
             attachmentButtonCenter: CGPoint(x: 50, y: 864),
-            isPad: true
+            widthIsRegular: true
         )
         XCTAssertEqual(landscape.panelSize.width, 620, accuracy: 0.001)
         XCTAssertEqual(landscape.panelSize.height, 594, accuracy: 0.001)
@@ -13401,7 +13413,7 @@ final class AidenAppearanceTests: XCTestCase {
             containerSize: CGSize(width: 375, height: 300),
             mode: .camera,
             attachmentButtonCenter: CGPoint(x: 50, y: 264),
-            isPad: false
+            widthIsRegular: false
         )
         XCTAssertEqual(compactHeight.panelSize.width, 351, accuracy: 0.001)
         XCTAssertEqual(compactHeight.panelSize.height, 280, accuracy: 0.001)
@@ -15357,8 +15369,16 @@ final class AidenChatScrollFollowTests: XCTestCase {
         let parts = AidenChatScreenParts(model: AidenChatViewModel(readOnlyFixture: chat), botToolsModel: nil)
         let open = UUID()
         let closed = UUID()
+        parts.screenAppeared(open)
         parts.setRowFrame(CGRect(x: 0, y: 20, width: 600, height: 250), for: "a", from: open)
+        parts.setRowFrame(CGRect(x: 0, y: 270, width: 600, height: 250), for: "b", from: open)
+        // The new screen's rows report before it appears.
         parts.setRowFrame(CGRect(x: 0, y: 20, width: 380, height: 400), for: "a", from: closed)
+        parts.screenAppeared(closed)
+        XCTAssertNil(parts.rowFrames["b"], "A row only the replaced screen measured kept its old width")
+
+        // The old screen, on its way out, reports late and then leaves.
+        parts.setRowFrame(CGRect(x: 0, y: 20, width: 600, height: 250), for: "a", from: open)
         parts.setRowFrame(nil, for: "a", from: open)
 
         XCTAssertEqual(parts.rowFrames["a"]?.height, 400)
