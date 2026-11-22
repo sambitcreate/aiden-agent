@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- **2026-11-22 — Approve, Deny and Reply on run alerts.** A run alert that waits for an approval now shows the approval's summary and offers **Approve** (after Face ID or the passcode, once only), **Deny** (from the Lock Screen) and **Open chat**; Approve is left off when the phone may only deny. A single question shows its text and offers **Reply**, which needs an unlocked phone; a prompt with several questions offers Open chat. An answer that doesn't reach the Mac puts the notification back and opens the chat next time; one already answered or expired counts as done. No Remote wire or revision change.
+
 - **2026-11-22 — Deny and Review on the Live Activity.** While a run waits for an approval the phone may answer, the Live Activity and expanded Dynamic Island offer **Review**, which opens the chat, and **Deny**, which answers the approval without opening the app. Approving still happens in the app. A denied or already-resolved approval moves the card on ("Denied"); if the Mac can't be reached, the card keeps Review. A question offers Review only. No Remote wire or revision change.
 
 - **2026-11-22 — Plain-text Live Activity.** The Live Activity and Dynamic Island now show plain text on a clean system background: the chat title, one status line in words ("Needs your approval", "Running npm test", "Done"), and the elapsed time as secondary text. A finished run adds its reply excerpt when excerpts are on. The status dot, progress rail, timer pill, tool-count and freshness chips, tints and keyline colors are gone. A stale run says "Latest status shown" and how long ago it last updated. Apple Watch and CarPlay show the title and status, and Always-On hides the time and excerpt. No Remote wire or revision change.

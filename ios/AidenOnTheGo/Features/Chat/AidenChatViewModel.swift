@@ -993,7 +993,7 @@ final class AidenChatViewModel {
 
     /// Local run alert while the user is away; the notifier owns dedupe,
     /// permission timing, and the inactive-only / Quiet Open Chat policy.
-    private func alertRun(_ kind: AidenRunAlertKind, id: String) {
+    private func alertRun(_ kind: AidenRunAlertKind, id: String, detail: AidenRunAlertDetail? = nil) {
         let instanceID = instanceId
         let chatID = chat.id
         let title = chat.title
@@ -1005,7 +1005,8 @@ final class AidenChatViewModel {
                 instanceID: instanceID,
                 chatID: chatID,
                 chatTitle: title,
-                isChatOnScreen: isChatOnScreen
+                isChatOnScreen: isChatOnScreen,
+                detail: detail
             )
         }
     }
@@ -3526,7 +3527,17 @@ final class AidenChatViewModel {
             }
             pendingApproval = approval
             streamState = .waitingForApproval
-            alertRun(.needsApproval, id: approval.id)
+            alertRun(
+                .needsApproval,
+                id: approval.id,
+                detail: approval.canRespond
+                    ? .approval(
+                        target: AgentRunApprovalTarget(approvalID: approval.id, runID: nil),
+                        summary: approval.summary,
+                        canAllow: approval.canAllow
+                    )
+                    : nil
+            )
             if announce {
                 coordinator.haptics.play(
                     .warning,
@@ -3613,7 +3624,18 @@ final class AidenChatViewModel {
                 hasPendingQuestion: true
             ) == .waitingForAnswer {
                 await liveActivities.questionRequired(instanceID: instanceId, streamID: streamID)
-                alertRun(.needsAnswer, id: question.id)
+                alertRun(
+                    .needsAnswer,
+                    id: question.id,
+                    detail: question.canRespond
+                        ? .question(
+                            promptID: question.id,
+                            runID: nil,
+                            text: question.questions.first?.question ?? "",
+                            acceptsReply: question.questions.count == 1
+                        )
+                        : nil
+                )
             }
             if announce {
                 coordinator.haptics.play(

@@ -39,9 +39,71 @@ final class AidenNotificationPresentationDelegate: NSObject, UNUserNotificationC
         _ center: UNUserNotificationCenter,
         didReceive response: UNNotificationResponse
     ) async {
-        guard response.actionIdentifier == UNNotificationDefaultActionIdentifier else { return }
-        let tap = AidenNotificationTap(userInfo: response.notification.request.content.userInfo)
-        await MainActor.run { Self.openTap?(tap) }
+        let identifier = response.actionIdentifier
+        let request = response.notification.request
+        let tap = AidenNotificationTap(userInfo: request.content.userInfo)
+        let action = AidenAlertAction(
+            actionIdentifier: identifier,
+            userInfo: request.content.userInfo,
+            replyText: (response as? UNTextInputNotificationResponse)?.userText
+        )
+        let opens = await Self.respond(
+            actionIdentifier: identifier,
+            action: action,
+            tap: tap,
+            broker: nil
+        )
+        guard let opens else { return }
+        await MainActor.run { Self.openTap?(opens) }
+        // An answer from the notification that didn't land puts the ask back,
+        // so it isn't mistaken for answered. Opening the app lands in the chat.
+        if identifier != UNNotificationDefaultActionIdentifier, identifier != AidenRunAlertCategory.actionOpen {
+            try? await center.add(UNNotificationRequest(identifier: request.identifier, content: request.content, trigger: nil))
+        }
+    }
+
+    /// What a notification response should open, if anything. Approve, Deny
+    /// and Reply answer through the broker without opening the app; a blank
+    /// reply, or an answer that didn't land, opens the chat instead.
+    @MainActor
+    static func respond(
+        actionIdentifier: String,
+        userInfo: [AnyHashable: Any],
+        replyText: String?,
+        broker: AidenBackgroundActionBroker
+    ) async -> AidenNotificationTap? {
+        await respond(
+            actionIdentifier: actionIdentifier,
+            action: AidenAlertAction(actionIdentifier: actionIdentifier, userInfo: userInfo, replyText: replyText),
+            tap: AidenNotificationTap(userInfo: userInfo),
+            broker: broker
+        )
+    }
+
+    /// `broker` nil means the app's shared broker.
+    @MainActor
+    private static func respond(
+        actionIdentifier: String,
+        action: AidenAlertAction?,
+        tap: AidenNotificationTap,
+        broker: AidenBackgroundActionBroker?
+    ) async -> AidenNotificationTap? {
+        switch actionIdentifier {
+        case UNNotificationDismissActionIdentifier:
+            return nil
+        case UNNotificationDefaultActionIdentifier, AidenRunAlertCategory.actionOpen:
+            return tap
+        default:
+            break
+        }
+        guard let action else { return tap }
+        switch await (broker ?? .shared).run(action) {
+        case .done, .alreadyResolved, .dropped:
+            return nil
+        case let .openApp(url):
+            guard let url else { return tap }
+            return AidenNotificationTap(link: url, instanceID: action.instanceID)
+        }
     }
 }
 
@@ -53,6 +115,11 @@ struct AidenNotificationTap: Equatable, Sendable {
     init(userInfo: [AnyHashable: Any]) {
         link = AidenRunAlertNotifier.deepLink(from: userInfo)
         instanceID = userInfo[AidenRunAlertNotifier.instanceUserInfoKey] as? String
+    }
+
+    init(link: URL?, instanceID: String?) {
+        self.link = link
+        self.instanceID = instanceID
     }
 
     /// Queues a route to the notification's own machine. A machine that's gone
@@ -172,9 +239,12 @@ final class AidenScheduledRunNotifier {
         self.center = center
     }
 
-    /// Install once at app launch so foregrounded polls still alert.
+    /// Install once at app launch so foregrounded polls still alert, and run
+    /// alerts carry their Approve, Deny and Reply actions.
     static func installPresentationDelegate() {
-        UNUserNotificationCenter.current().delegate = presentationDelegate
+        let center = UNUserNotificationCenter.current()
+        center.delegate = presentationDelegate
+        center.setNotificationCategories(AidenRunAlertCategory.all())
     }
 
     private func cursorKey(_ instanceId: String) -> String {
@@ -472,14 +542,144 @@ enum AidenRunAlertKind: String, Equatable, Sendable {
 
     var isBlocking: Bool { self == .needsApproval || self == .needsAnswer }
 
-    /// Lock-screen body. Fixed copy only: prompt text, tool arguments, and
-    /// replies never leave the app through a notification.
+    /// Fixed lock-screen body. A blocking alert shows the approval summary or
+    /// question instead while message text is allowed; replies and tool
+    /// output never leave the app through a notification.
     var body: String {
         switch self {
         case .needsApproval: String(localized: "Needs your approval")
         case .needsAnswer: String(localized: "Needs your answer")
         case .completed: String(localized: "Response complete")
         case .failed: String(localized: "Response failed")
+        }
+    }
+}
+
+/// What a blocking run alert can answer from the notification itself.
+enum AidenRunAlertDetail: Equatable, Sendable {
+    case approval(target: AgentRunApprovalTarget, summary: String, canAllow: Bool)
+    /// `acceptsReply` only for a single question: a reply is its custom answer.
+    case question(promptID: String, runID: String?, text: String, acceptsReply: Bool)
+}
+
+/// Run alert categories and their actions. Approve asks for Face ID or the
+/// passcode; Deny works from the Lock Screen; Reply needs an unlocked phone
+/// because its words reach the agent.
+enum AidenRunAlertCategory {
+    static let approval = "aiden.run.approval"
+    static let approvalDenyOnly = "aiden.run.approval.deny"
+    static let questionReply = "aiden.run.question.reply"
+    static let question = "aiden.run.question"
+    static let actionApprove = "aiden.action.approve"
+    static let actionDeny = "aiden.action.deny"
+    static let actionReply = "aiden.action.reply"
+    static let actionOpen = "aiden.action.open"
+
+    static func all() -> Set<UNNotificationCategory> {
+        let approve = UNNotificationAction(
+            identifier: actionApprove,
+            title: String(localized: "Approve"),
+            options: [.authenticationRequired]
+        )
+        let deny = UNNotificationAction(identifier: actionDeny, title: String(localized: "Deny"), options: [.destructive])
+        let open = UNNotificationAction(identifier: actionOpen, title: String(localized: "Open chat"), options: [.foreground])
+        let reply = UNTextInputNotificationAction(
+            identifier: actionReply,
+            title: String(localized: "Reply"),
+            options: [.authenticationRequired],
+            textInputButtonTitle: String(localized: "Send"),
+            textInputPlaceholder: String(localized: "Your answer")
+        )
+        return [
+            UNNotificationCategory(identifier: approval, actions: [approve, deny, open], intentIdentifiers: []),
+            UNNotificationCategory(identifier: approvalDenyOnly, actions: [deny, open], intentIdentifiers: []),
+            UNNotificationCategory(identifier: questionReply, actions: [reply, open], intentIdentifiers: []),
+            UNNotificationCategory(identifier: question, actions: [open], intentIdentifiers: []),
+        ]
+    }
+}
+
+/// Builds a run alert's content. Only ids travel in `userInfo`, never what
+/// is being approved.
+enum AidenRunAlertContent {
+    static let chatIDKey = "aiden.chatID"
+    static let approvalIDKey = "aiden.approvalID"
+    static let runIDKey = "aiden.runID"
+    static let promptIDKey = "aiden.promptID"
+
+    static func make(
+        kind: AidenRunAlertKind,
+        detail: AidenRunAlertDetail?,
+        instanceID: String,
+        chatID: String,
+        chatTitle: String,
+        deepLink: URL,
+        showMessageText: Bool
+    ) -> UNMutableNotificationContent {
+        let content = UNMutableNotificationContent()
+        content.title = AidenScheduledRunNotifier.displaySafe(
+            AgentRunActivitySanitizer.sessionTitle(chatTitle),
+            limit: 120
+        )
+        content.body = kind.body
+        content.threadIdentifier = "aiden.run.\(instanceID).\(chatID)"
+        content.interruptionLevel = kind.isBlocking ? .timeSensitive : .active
+        if kind.isBlocking { content.sound = .default }
+        var userInfo: [AnyHashable: Any] = [
+            AidenRunAlertNotifier.deepLinkUserInfoKey: deepLink.absoluteString,
+            AidenRunAlertNotifier.instanceUserInfoKey: instanceID,
+            chatIDKey: chatID,
+        ]
+        let messageText: String
+        switch detail {
+        case nil:
+            messageText = ""
+        case let .approval(target, summary, canAllow):
+            userInfo[approvalIDKey] = target.approvalID
+            userInfo[runIDKey] = target.runID
+            content.categoryIdentifier = canAllow ? AidenRunAlertCategory.approval : AidenRunAlertCategory.approvalDenyOnly
+            messageText = summary
+        case let .question(promptID, runID, text, acceptsReply):
+            userInfo[promptIDKey] = promptID
+            userInfo[runIDKey] = runID
+            content.categoryIdentifier = acceptsReply ? AidenRunAlertCategory.questionReply : AidenRunAlertCategory.question
+            messageText = text
+        }
+        let shown = AidenScheduledRunNotifier.displaySafe(
+            messageText.trimmingCharacters(in: .whitespacesAndNewlines),
+            limit: 180
+        ).trimmingCharacters(in: .whitespacesAndNewlines)
+        if showMessageText, !shown.isEmpty { content.body = shown }
+        content.userInfo = userInfo
+        return content
+    }
+}
+
+extension AidenAlertAction {
+    /// The answer a run alert's action stands for; nil for Open chat, an
+    /// unknown action, an alert without the ids it needs, or a blank reply.
+    init?(actionIdentifier: String, userInfo: [AnyHashable: Any], replyText: String?) {
+        func value(_ key: String) -> String? {
+            guard let value = userInfo[key] as? String, !value.isEmpty else { return nil }
+            return value
+        }
+        guard let instanceID = value(AidenRunAlertNotifier.instanceUserInfoKey),
+              let chatID = value(AidenRunAlertContent.chatIDKey) else { return nil }
+        let runID = value(AidenRunAlertContent.runIDKey)
+        switch actionIdentifier {
+        case AidenRunAlertCategory.actionApprove, AidenRunAlertCategory.actionDeny:
+            guard let approvalID = value(AidenRunAlertContent.approvalIDKey) else { return nil }
+            let target = AgentRunApprovalTarget(approvalID: approvalID, runID: runID)
+            self = actionIdentifier == AidenRunAlertCategory.actionApprove
+                ? .approve(instanceID: instanceID, chatID: chatID, target: target)
+                : .deny(instanceID: instanceID, chatID: chatID, target: target)
+        case AidenRunAlertCategory.actionReply:
+            guard let promptID = value(AidenRunAlertContent.promptIDKey),
+                  let text = replyText?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  !text.isEmpty else { return nil }
+            self = .reply(instanceID: instanceID, chatID: chatID, promptID: promptID, runID: runID, text: text)
+        default:
+            return nil
         }
     }
 }
@@ -577,7 +777,7 @@ final class AidenRunAlertNotifier {
 
     nonisolated static let identifierPrefix = "aiden.run."
     nonisolated static let deepLinkUserInfoKey = "aidenURL"
-    /// On every scheduled-run and Bot routine notification. See
+    /// On every scheduled-run, Bot routine and run alert notification. See
     /// `AidenNotificationIdentifierMigration`.
     nonisolated static let instanceUserInfoKey = "aidenInstance"
     static let permissionRequestedKey = "aiden.runAlerts.permissionRequested"
@@ -611,13 +811,16 @@ final class AidenRunAlertNotifier {
     }
 
     /// `id` is the prompt id for blocking kinds and the stream id otherwise.
+    /// `detail` lets a blocking alert be answered from the notification.
     func notify(
         _ kind: AidenRunAlertKind,
         id: String,
         instanceID: String,
         chatID: String,
         chatTitle: String,
-        isChatOnScreen: Bool
+        isChatOnScreen: Bool,
+        detail: AidenRunAlertDetail? = nil,
+        showMessageText: Bool = true
     ) async {
         guard isEnabled else { return }
         var status = await center.currentAuthorizationStatus()
@@ -641,16 +844,15 @@ final class AidenRunAlertNotifier {
             isAuthorized: AidenRunAlertPolicy.isAuthorized(status)
         ), let url = AidenDeepLink.chatURL(instanceId: instanceID, chatId: chatID) else { return }
 
-        let content = UNMutableNotificationContent()
-        content.title = AidenScheduledRunNotifier.displaySafe(
-            AgentRunActivitySanitizer.sessionTitle(chatTitle),
-            limit: 120
+        let content = AidenRunAlertContent.make(
+            kind: kind,
+            detail: detail,
+            instanceID: instanceID,
+            chatID: chatID,
+            chatTitle: chatTitle,
+            deepLink: url,
+            showMessageText: showMessageText
         )
-        content.body = kind.body
-        content.threadIdentifier = "aiden.run.\(instanceID).\(chatID)"
-        content.userInfo = [Self.deepLinkUserInfoKey: url.absoluteString]
-        content.interruptionLevel = kind.isBlocking ? .timeSensitive : .active
-        if kind.isBlocking { content.sound = .default }
         let request = UNNotificationRequest(
             identifier: "\(Self.identifierPrefix)\(kind.rawValue).\(instanceID).\(id)",
             content: content,

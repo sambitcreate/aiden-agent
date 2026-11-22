@@ -765,6 +765,148 @@ final class AidenNativeIntegrationTests: XCTestCase {
         XCTAssertEqual(wired, .done)
     }
 
+    // MARK: Run alert actions
+
+    func testApprovalAlertCarriesApproveOnlyWhenThePhoneMayAllow() {
+        let target = AgentRunApprovalTarget(approvalID: "ap", runID: nil)
+        let allowed = make(.needsApproval, .approval(target: target, summary: "Run npm run test:e2e", canAllow: true))
+        XCTAssertEqual(allowed.categoryIdentifier, AidenRunAlertCategory.approval)
+        let denyOnly = make(.needsApproval, .approval(target: target, summary: "Run npm run test:e2e", canAllow: false))
+        XCTAssertEqual(denyOnly.categoryIdentifier, AidenRunAlertCategory.approvalDenyOnly)
+    }
+
+    func testAlertBodyShowsMessageTextOnlyWhenAllowed() {
+        let detail = AidenRunAlertDetail.approval(
+            target: .init(approvalID: "ap", runID: nil),
+            summary: "Run npm run test:e2e",
+            canAllow: true
+        )
+        XCTAssertEqual(make(.needsApproval, detail, showMessageText: true).body, "Run npm run test:e2e")
+        XCTAssertEqual(make(.needsApproval, detail, showMessageText: false).body, AidenRunAlertKind.needsApproval.body)
+        let question = AidenRunAlertDetail.question(promptID: "q", runID: nil, text: "Which build?\u{202E}", acceptsReply: true)
+        XCTAssertEqual(make(.needsAnswer, question).body, "Which build?")
+        XCTAssertEqual(make(.completed, nil).body, AidenRunAlertKind.completed.body)
+    }
+
+    func testAlertTitleThreadAndUrgencyStayAsBefore() {
+        let content = make(.needsAnswer, .question(promptID: "q", runID: nil, text: "Which build?", acceptsReply: true))
+        XCTAssertEqual(content.title, "Fix flaky login test")
+        XCTAssertEqual(content.threadIdentifier, "aiden.run.mac.c1")
+        XCTAssertEqual(content.interruptionLevel, .timeSensitive)
+        XCTAssertEqual(make(.completed, nil).interruptionLevel, .active)
+        XCTAssertEqual(make(.completed, nil).categoryIdentifier, "")
+    }
+
+    func testMultiQuestionPromptGetsOpenOnly() {
+        let content = make(.needsAnswer, .question(promptID: "q", runID: nil, text: "Which build?", acceptsReply: false))
+        XCTAssertEqual(content.categoryIdentifier, AidenRunAlertCategory.question)
+        let single = make(.needsAnswer, .question(promptID: "q", runID: nil, text: "Which build?", acceptsReply: true))
+        XCTAssertEqual(single.categoryIdentifier, AidenRunAlertCategory.questionReply)
+    }
+
+    func testAlertActionRoundTripsThroughUserInfo() {
+        let target = AgentRunApprovalTarget(approvalID: "ap", runID: "r1")
+        let content = make(.needsApproval, .approval(target: target, summary: "x", canAllow: true))
+        XCTAssertEqual(
+            AidenAlertAction(actionIdentifier: AidenRunAlertCategory.actionDeny, userInfo: content.userInfo, replyText: nil),
+            .deny(instanceID: "mac", chatID: "c1", target: target)
+        )
+        XCTAssertEqual(
+            AidenAlertAction(actionIdentifier: AidenRunAlertCategory.actionApprove, userInfo: content.userInfo, replyText: nil),
+            .approve(instanceID: "mac", chatID: "c1", target: target)
+        )
+        XCTAssertNil(AidenAlertAction(actionIdentifier: "unknown", userInfo: content.userInfo, replyText: nil))
+        XCTAssertNil(AidenAlertAction(actionIdentifier: AidenRunAlertCategory.actionReply, userInfo: content.userInfo, replyText: "  "))
+
+        let question = make(.needsAnswer, .question(promptID: "q", runID: "r2", text: "Which build?", acceptsReply: true))
+        XCTAssertEqual(
+            AidenAlertAction(actionIdentifier: AidenRunAlertCategory.actionReply, userInfo: question.userInfo, replyText: " staging "),
+            .reply(instanceID: "mac", chatID: "c1", promptID: "q", runID: "r2", text: "staging")
+        )
+        XCTAssertNil(AidenAlertAction(actionIdentifier: AidenRunAlertCategory.actionReply, userInfo: question.userInfo, replyText: "  "))
+        XCTAssertNil(AidenAlertAction(actionIdentifier: AidenRunAlertCategory.actionDeny, userInfo: question.userInfo, replyText: nil))
+    }
+
+    func testAlertTapOpensTheChatOnItsOwnMac() {
+        let content = make(.needsApproval, .approval(target: .init(approvalID: "ap", runID: nil), summary: "x", canAllow: true))
+        let tap = AidenNotificationTap(userInfo: content.userInfo)
+        XCTAssertEqual(tap.link, AidenDeepLink.chatURL(instanceId: "mac", chatId: "c1"))
+        XCTAssertEqual(tap.instanceID, "mac")
+    }
+
+    func testRegisteredApproveActionRequiresUnlock() {
+        let categories = AidenRunAlertCategory.all()
+        let approval = categories.first { $0.identifier == AidenRunAlertCategory.approval }!
+        let approve = approval.actions.first { $0.identifier == AidenRunAlertCategory.actionApprove }!
+        XCTAssertTrue(approve.options.contains(.authenticationRequired))
+        XCTAssertTrue(approval.actions.first { $0.identifier == AidenRunAlertCategory.actionDeny }!.options.contains(.destructive))
+        let denyOnly = categories.first { $0.identifier == AidenRunAlertCategory.approvalDenyOnly }!
+        XCTAssertFalse(denyOnly.actions.contains { $0.identifier == AidenRunAlertCategory.actionApprove })
+        let reply = categories.first { $0.identifier == AidenRunAlertCategory.questionReply }!
+        XCTAssertTrue(reply.actions.contains { $0 is UNTextInputNotificationAction })
+        XCTAssertEqual(categories.count, 4)
+    }
+
+    @MainActor
+    func testNotificationActionAnswersInPlaceOrOpensTheChat() async {
+        let content = make(.needsApproval, .approval(target: .init(approvalID: "ap", runID: nil), summary: "x", canAllow: true))
+        let chatURL = AidenDeepLink.chatURL(instanceId: "mac", chatId: "c1")
+        let broker = AidenBackgroundActionBroker()
+        var ran: [AidenAlertAction] = []
+        broker.perform = { action in ran.append(action); return .done }
+
+        let answered = await AidenNotificationPresentationDelegate.respond(
+            actionIdentifier: AidenRunAlertCategory.actionDeny, userInfo: content.userInfo, replyText: nil, broker: broker
+        )
+        XCTAssertNil(answered)
+        XCTAssertEqual(ran, [.deny(instanceID: "mac", chatID: "c1", target: .init(approvalID: "ap", runID: nil))])
+
+        broker.perform = { _ in .openApp(nil) }
+        let failed = await AidenNotificationPresentationDelegate.respond(
+            actionIdentifier: AidenRunAlertCategory.actionDeny, userInfo: content.userInfo, replyText: nil, broker: broker
+        )
+        XCTAssertEqual(failed?.link, chatURL)
+        XCTAssertEqual(failed?.instanceID, "mac")
+
+        broker.perform = { _ in .dropped }
+        let forgotten = await AidenNotificationPresentationDelegate.respond(
+            actionIdentifier: AidenRunAlertCategory.actionDeny, userInfo: content.userInfo, replyText: nil, broker: broker
+        )
+        XCTAssertNil(forgotten)
+
+        ran = []
+        broker.perform = { action in ran.append(action); return .done }
+        let blankReply = await AidenNotificationPresentationDelegate.respond(
+            actionIdentifier: AidenRunAlertCategory.actionReply, userInfo: content.userInfo, replyText: " ", broker: broker
+        )
+        XCTAssertEqual(blankReply?.link, chatURL)
+        let tapped = await AidenNotificationPresentationDelegate.respond(
+            actionIdentifier: UNNotificationDefaultActionIdentifier, userInfo: content.userInfo, replyText: nil, broker: broker
+        )
+        XCTAssertEqual(tapped?.link, chatURL)
+        let dismissed = await AidenNotificationPresentationDelegate.respond(
+            actionIdentifier: UNNotificationDismissActionIdentifier, userInfo: content.userInfo, replyText: nil, broker: broker
+        )
+        XCTAssertNil(dismissed)
+        XCTAssertEqual(ran, [])
+    }
+
+    private func make(
+        _ kind: AidenRunAlertKind,
+        _ detail: AidenRunAlertDetail?,
+        showMessageText: Bool = true
+    ) -> UNMutableNotificationContent {
+        AidenRunAlertContent.make(
+            kind: kind,
+            detail: detail,
+            instanceID: "mac",
+            chatID: "c1",
+            chatTitle: "Fix flaky login test",
+            deepLink: AidenDeepLink.chatURL(instanceId: "mac", chatId: "c1")!,
+            showMessageText: showMessageText
+        )
+    }
+
     private func approvalBase() -> AgentRunActivityAttributes.ContentState {
         AgentRunActivityStateReducer.initialState(
             sessionID: "chat-1",

@@ -176,6 +176,17 @@ The Mac processes that recording locally. Aiden does not persist the recording o
 
 If the selected local speech model is not installed, the mobile settings can ask the paired Mac to set it up. Aiden downloads only that model's fixed, hash-pinned file: a release archive from the k2-fsa GitHub release host, or, for Parakeet on Metal on an Apple silicon Mac, one GGUF file from a fixed Hugging Face revision. It caps the download at 800 MiB, verifies its exact size and SHA-256, unpacks or moves it into staging, validates the required model files, and stores it in Aiden Agent's device-local model directory. The phone cannot provide a model URL or Mac destination. Model setup requires Aiden Agent to remain running and online.
 
+## Notifications
+
+Aiden On The Go for iPhone alerts you when a chat run needs you while you're away from it: one Time Sensitive notification when it first waits for an approval or a question, and one when it finishes or fails. These are local notifications, so they fire only while the app still holds the run's connection (for example shortly after you leave the app); there is no cloud push yet.
+
+- **Approval.** The notification shows the chat title and the approval's summary ("Run npm run test:e2e"). **Approve** asks for Face ID or the passcode first and allows it once, never for the session or always. **Deny** works straight from the Lock Screen. **Open chat** opens the chat. If the phone may only deny, Approve is not offered.
+- **Question.** A single question offers **Reply**, which needs an unlocked phone and sends your words as its answer. A prompt with more than one question offers only **Open chat**.
+- **Live Activity.** While a run waits for an approval the phone may answer, the Live Activity and expanded Dynamic Island offer **Review** (opens the chat) and **Deny**. Approving happens in the app or from the notification.
+- **When an answer doesn't land.** If the Mac can't be reached, the notification comes back and the app opens on the chat next time. An approval or question someone already answered, or that expired, is treated as done. A Mac you've removed from the phone ignores the action.
+
+Answers carry only ids and your reply text; a notification never carries tool output or replies.
+
 ## Troubleshooting
 
 - **Remote Access says Off:** enable it locally in Aiden Settings. No listener or Bonjour advertisement exists while it is off.
