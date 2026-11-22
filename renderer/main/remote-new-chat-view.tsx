@@ -42,6 +42,7 @@ import {
 } from "../lib/hosts/new-chat-targets";
 import { useAppCapabilities } from "../lib/app-capabilities";
 import { peerHostsApi } from "../lib/ipc";
+import { useReportGoalView } from "../lib/use-report-goal-view";
 import type { Attachment } from "../lib/types";
 import { localComputerNoun } from "../shared/computer-noun";
 import type { PeerHostFeedSnapshot, PeerHostStatus, PeerHostView } from "../shared/peer-host";
@@ -485,6 +486,8 @@ export function RemoteNewChatRoute({ hostId, workspaceId, onOpenChat, onSelectMa
 }
 
 export function RemoteNewChatView({ hostId, workspaceId }: { hostId: string; workspaceId?: string }) {
+  // A chat on a paired host is not a local workspace chat: a keep-going round this window owns stops.
+  useReportGoalView(null);
   const navigate = useNavigate();
   const openChat = React.useCallback(
     (chatId: string) => void navigate({ to: "/host/$hostId/chat/$chatId", params: { hostId, chatId } }),

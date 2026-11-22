@@ -41,7 +41,7 @@ function harness(options: {
     roundStart: "started" as GoalRoundStart,
     noticeStart: "started" as GoalRoundStart,
     /** Steps that throw, as a missing provider or a broken chat file would. */
-    throws: { activity: false, context: false, start: false },
+    throws: { activity: false, context: false, start: false, noticeContext: false },
     /** Holds startRound open, as a window's 5-second claim does. */
     holdStart: undefined as Promise<void> | undefined,
     review: (async (goal) => continueWith(`Next step ${goal.rounds}`)) as Review,
@@ -71,7 +71,7 @@ function harness(options: {
       return state.activity;
     },
     fallbackContext: async () => {
-      if (state.throws.context) throw new Error("The chat file could not be read.");
+      if (state.throws.context || state.throws.noticeContext) throw new Error("The chat file could not be read.");
       return CONTEXT;
     },
     review: (goal, input) => {
@@ -90,6 +90,8 @@ function harness(options: {
       roundCurrent.push(isCurrent);
       await state.holdStart;
       if (state.throws.start) throw new Error("No window could take the round.");
+      // As the real start does: a round for a goal that moved on never begins.
+      if (!isCurrent()) return "unavailable";
       rounds.push(round);
       return state.roundStart;
     },
@@ -631,4 +633,78 @@ test("a notice round counts as a round: a job that keeps ending can't run past t
   assert.equal(h.goal()?.status, "paused");
   assert.equal(h.goal()?.cause, "round-limit");
   assert.equal(h.settled.length, 1, "the person is told once");
+});
+
+test("a newer run settling while a round starts makes that round stale at once, and its count is given back", async () => {
+  const h = harness();
+  await h.loop.set(CHAT, { objective: "Ship it", source: "slash" });
+  let release!: () => void;
+  h.state.holdStart = new Promise<void>((resolve) => (release = resolve));
+  h.settle();
+  await h.flush();
+  assert.equal(h.roundCurrent.length, 1, "the round's start is waiting on a window");
+  assert.equal(h.goal()?.rounds, 2, "the verdict counted round 2");
+  const first = h.roundCurrent[0]!;
+
+  // The person's Stop settles a run before the look applies it: the waiting round is already stale.
+  h.settle({ stopped: true });
+  assert.equal(first(), false, "a round from the dropped look can't start after Stop");
+  assert.equal(h.goal()?.rounds, 1, "the round that didn't start isn't counted");
+  release();
+  await h.flush();
+  assert.equal(h.rounds.length, 0);
+  assert.equal(h.goal()?.status, "paused");
+  assert.equal(h.goal()?.cause, "stopped");
+});
+
+test("a round dropped for a newer run's look is counted once: only the round that starts counts", async () => {
+  const h = harness();
+  await h.loop.set(CHAT, { objective: "Ship it", source: "slash" });
+  let release!: () => void;
+  h.state.holdStart = new Promise<void>((resolve) => (release = resolve));
+  h.settle();
+  await h.flush();
+  assert.equal(h.roundCurrent.length, 1);
+  // A run the person sent settles while the round waits on a window; its look counts its own round.
+  h.settle();
+  await h.flush();
+  assert.equal(h.roundCurrent.length, 2, "the newer look's round waits too");
+  release();
+  await h.flush();
+  assert.equal(h.rounds.length, 1, "only the newer look's round starts");
+  assert.equal(h.goal()?.status, "active");
+  assert.equal(h.goal()?.rounds, 2, "one round started, so one round is counted");
+});
+
+test("a notice round whose chat can't be read leaves the notice saved and the goal at work", async () => {
+  const h = harness();
+  await h.loop.set(CHAT, { objective: "Ship it", source: "slash" });
+  h.state.throws.noticeContext = true;
+  const news = { text: "job ended", notice: agentNotice({ source: "background_job", tone: "success", title: "Done", summary: "x" }) };
+  const result = await h.loop.noticeRound(CHAT, news);
+  assert.equal(result?.kind, "unavailable", "the notice is recorded instead of lost");
+  assert.deepEqual(h.noticeRounds, []);
+  assert.equal(h.goal()?.status, "active");
+  assert.equal(h.goal()?.rounds, 1, "nothing ran, so nothing is counted");
+});
+
+test("an /until goal's notice rounds spend none of its checks: only the checks count", async () => {
+  const checks: number[] = [];
+  const h = harness({
+    check: async (goal) => {
+      checks.push(goal.rounds);
+      return { kind: "finished", passed: false, summary: "`npm test` failed (exit code 1)", details: "" };
+    },
+  });
+  h.state.busy = true;
+  await h.loop.set(CHAT, { objective: "Keep going until `npm test` passes", source: "until", check: "npm test" });
+  h.state.busy = false;
+  const news = () => ({ text: "job ended", notice: agentNotice({ source: "background_job", tone: "success", title: "Done", summary: "x" }) });
+  for (let notice = 0; notice < 8; notice += 1) assert.equal((await h.loop.noticeRound(CHAT, news()))?.kind, "started");
+  assert.equal(h.goal()?.status, "active", "news alone never uses up the five checks");
+  assert.equal(h.goal()?.rounds, 1);
+  assert.deepEqual(checks, [], "no check ran");
+  await h.runSettles();
+  assert.deepEqual(checks, [1], "the check after the news is the first one");
+  assert.equal(h.goal()?.rounds, 2);
 });

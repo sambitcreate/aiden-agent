@@ -186,6 +186,7 @@ import {
   usePublishLiveChatApprovals,
 } from "../components/assistant/use-live-chat-voice-approvals";
 import { liveChatReachable, stopForLive, useLiveChatController } from "./live-chat-controller";
+import { useReportGoalView } from "../lib/use-report-goal-view";
 import type { ChatInputSourceV1 } from "../shared/chat-input-source";
 import { ComputerUseContinueCallout } from "../components/computer-use-access-approval";
 import {
@@ -2509,29 +2510,9 @@ export function ChatPane({ chatId }: { chatId: string }) {
     [handleSend],
   );
 
-  // Keep-going rounds on screen: main starts a due round in a focused window
-  // showing its chat, so the round can use the browser and Computer Use. Tell
-  // main which chat this pane shows; showing another chat (or closing or
-  // reloading the window) stops a round this window owns.
-  React.useEffect(() => {
-    if (draft) {
-      // A new chat is another chat: a round this window owns elsewhere stops.
-      void chatsApi.reportGoalView(null, document.hasFocus()).catch(() => undefined);
-      return;
-    }
-    const report = () => void chatsApi.reportGoalView(chatId, document.hasFocus()).catch(() => undefined);
-    report();
-    window.addEventListener("focus", report);
-    window.addEventListener("blur", report);
-    return () => {
-      window.removeEventListener("focus", report);
-      window.removeEventListener("blur", report);
-      // Leaving for Settings or another page keeps the round this window owns
-      // (the window shows no other chat); it just isn't offered new ones. A
-      // different chat's pane reports itself, which ends the round.
-      void chatsApi.reportGoalView(chatId, false).catch(() => undefined);
-    };
-  }, [chatId, draft]);
+  // Keep-going rounds on screen: tell main which chat this pane shows (a new
+  // chat counts as another chat), so a round this window owns elsewhere stops.
+  useReportGoalView(draft ? null : chatId);
   React.useEffect(() => {
     if (draft) return;
     return chatsApi.onGoalWindowRound(({ chatId: roundChatId, token }) => {

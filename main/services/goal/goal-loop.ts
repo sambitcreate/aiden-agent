@@ -59,6 +59,8 @@ export type GoalRoundStart = "started" | "busy" | "unavailable";
 /** The goal and revision a look at the chat last saw or wrote: what its system writes compare against. */
 interface LookRef {
   ref: GoalRef;
+  /** The round count from before this look counted a round that hasn't started yet. */
+  uncounted?: number;
 }
 
 export interface GoalLoopDependencies {
@@ -124,6 +126,8 @@ export class GoalLoop {
   /** Goals whose kickoff note has not followed the person's objective yet. */
   private readonly kickoffs = new Set<string>();
   private readonly reviews = new Map<string, AbortController>();
+  /** Each chat's look under way, with `reviews`. */
+  private readonly looks = new Map<string, LookRef>();
   private readonly watchdogs = new Map<string, () => void>();
   /** The app is quitting: runs that settle now are its own aborts, not the person's. */
   private stopped = false;
@@ -235,7 +239,11 @@ export class GoalLoop {
     // A run that settles while the loop still looks at an earlier one is the
     // newer news (the person's Stop, a failure, a message the review didn't
     // read): that look is dropped, and this run's settling is looked at instead.
+    // A round it counted that hasn't started is uncounted first, so the new
+    // look starts from the right count and its writes aren't refused.
+    const dropped = this.looks.get(event.chatId);
     this.stopReview(event.chatId);
+    if (dropped) this.restoreUncounted(event.chatId, dropped);
     this.look(event.chatId, event);
   }
 
@@ -246,6 +254,7 @@ export class GoalLoop {
     const controller = new AbortController();
     this.reviews.set(chatId, controller);
     const look: LookRef = { ref: { id: goal.id, revision: goal.revision } };
+    this.looks.set(chatId, look);
     void this.afterSettle({ chatId, stopped: event.stopped, failed: event.failed }, controller, look)
       .catch((error: unknown) => {
         if (controller.signal.aborted) return;
@@ -260,6 +269,7 @@ export class GoalLoop {
       })
       .finally(() => {
         if (this.reviews.get(chatId) === controller) this.reviews.delete(chatId);
+        if (this.looks.get(chatId) === look) this.looks.delete(chatId);
       });
   }
 
@@ -271,7 +281,14 @@ export class GoalLoop {
   async noticeRound(chatId: string, notice?: { text: string; notice: AgentNoticeV1 }): Promise<StartTurnResult | undefined> {
     const goal = this.goals.get(chatId);
     if (this.stopped || goal?.status !== "active") return undefined;
-    const context = this.contexts.get(chatId) ?? (await this.deps.fallbackContext(chatId));
+    let context: OwedTurnContext | undefined;
+    try {
+      context = this.contexts.get(chatId) ?? (await this.deps.fallbackContext(chatId));
+    } catch (error) {
+      // The notice is still saved, as one no round could answer.
+      this.deps.log("A keep-going notice round could not read the chat.", error);
+      return this.goals.get(chatId)?.status === "active" ? { kind: "unavailable", reason: "The round could not start." } : undefined;
+    }
     const latest = this.goals.get(chatId);
     if (latest?.status !== "active") return undefined;
     if (!context) return { kind: "unavailable", reason: "The chat has no model yet." };
@@ -456,16 +473,27 @@ export class GoalLoop {
       this.cancelWatchdog(event.chatId);
       // A send from the person during the review is this round's work, so no
       // round starts; either way a round is counted only once one starts.
-      const started = this.deps.isChatBusy(event.chatId) ? "busy" : await this.startRound(next.goal, reason, details);
-      if (started === "busy") {
-        const restored = compareAndSetGoal(this.goals.get(event.chatId), look.ref, (current) =>
-          goalRoundNotStarted(current, goal.rounds, this.deps.now()),
-        );
-        if (restored.ok && restored.goal !== this.goals.get(event.chatId)) {
-          this.write(restored.goal);
-          look.ref = { id: restored.goal.id, revision: restored.goal.revision };
-        }
-      }
+      look.uncounted = goal.rounds;
+      const started = this.deps.isChatBusy(event.chatId) ? "busy" : await this.startRound(next.goal, reason, details, controller.signal);
+      // No round began, so it isn't counted (a newer settle already did this).
+      if (started === "busy" || started === "stale") this.restoreUncounted(event.chatId, look);
+      else delete look.uncounted;
+    }
+  }
+
+  /**
+   * The round a look counted didn't start: the goal goes back to the count it
+   * had, if it is still as the look left it (after the person's pause, clear
+   * or new goal the compare-and-set leaves it alone).
+   */
+  private restoreUncounted(chatId: string, look: LookRef): void {
+    const rounds = look.uncounted;
+    if (rounds === undefined) return;
+    delete look.uncounted;
+    const restored = compareAndSetGoal(this.goals.get(chatId), look.ref, (current) => goalRoundNotStarted(current, rounds, this.deps.now()));
+    if (restored.ok && restored.goal !== this.goals.get(chatId)) {
+      this.write(restored.goal);
+      look.ref = { id: restored.goal.id, revision: restored.goal.revision };
     }
   }
 
@@ -480,10 +508,17 @@ export class GoalLoop {
     }
   }
 
-  private async startRound(goal: GoalRecordV1, reason?: string, details?: string): Promise<GoalRoundStart | "stale"> {
+  /** `signal` is the look's: once it aborts (a Stop, or a newer settle), the round is stale. */
+  private async startRound(goal: GoalRecordV1, reason?: string, details?: string, signal?: AbortSignal): Promise<GoalRoundStart | "stale"> {
     const isCurrent = () => {
       const current = this.goals.get(goal.chatId);
-      return !this.stopped && current?.id === goal.id && current.revision === goal.revision && current.status === "active";
+      return (
+        !this.stopped &&
+        !signal?.aborted &&
+        current?.id === goal.id &&
+        current.revision === goal.revision &&
+        current.status === "active"
+      );
     };
     let started: GoalRoundStart;
     try {
@@ -506,6 +541,8 @@ export class GoalLoop {
       this.deps.log("The next keep-going round could not start.", error);
       started = "unavailable";
     }
+    // Refused because the goal moved on meanwhile (or the look was aborted): not a failure.
+    if (started === "unavailable" && !isCurrent()) return "stale";
     if (started === "unavailable") {
       const latest = this.goals.get(goal.chatId);
       if (latest?.id === goal.id && latest.revision === goal.revision) {
