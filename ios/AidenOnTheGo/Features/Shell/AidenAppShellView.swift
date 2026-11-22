@@ -90,6 +90,8 @@ struct AidenAppShellView: View {
     /// A route asked for from outside the shell, such as Machines from the
     /// connection recovery banner. Shown on its own tab, then cleared.
     @Binding private var routeRequest: AidenAppRoute?
+    /// A tab root asked for from the Home Screen. Shown at its root, then cleared.
+    @Binding private var tabRequest: AidenAppTab?
     private let inboxStore: AidenUnifiedInboxStore
     private let navigationStore: AidenAppNavigationStore
     private let intents: AidenForegroundIntentRouter
@@ -121,6 +123,7 @@ struct AidenAppShellView: View {
         inboxStore: AidenUnifiedInboxStore,
         navigationRequest: Binding<AidenNavigationRequest?> = .constant(nil),
         routeRequest: Binding<AidenAppRoute?> = .constant(nil),
+        tabRequest: Binding<AidenAppTab?> = .constant(nil),
         navigationStore: AidenAppNavigationStore = AidenAppNavigationStore(),
         intents: AidenForegroundIntentRouter? = nil
     ) {
@@ -128,6 +131,7 @@ struct AidenAppShellView: View {
         self.inboxStore = inboxStore
         _navigationRequest = navigationRequest
         _routeRequest = routeRequest
+        _tabRequest = tabRequest
         self.navigationStore = navigationStore
         self.intents = intents ?? .shared
     }
@@ -344,8 +348,19 @@ struct AidenAppShellView: View {
         }
         .onChange(of: intents.routes, initial: true) {
             for queued in intents.takeRoutes(openableOn: coordinator) {
-                navigation.open(queued.route, startsVoice: queued.startsVoice)
+                navigation.open(
+                    queued.route,
+                    startsVoice: queued.startsVoice,
+                    startsCamera: queued.startsCamera
+                )
             }
+        }
+        .onChange(of: tabRequest, initial: true) { _, tab in
+            guard let tab else { return }
+            tabRequest = nil
+            // Pairing stays open: leaving it mid-scan would lose the person's place.
+            if case .runningChats? = activeSheet { activeSheet = nil }
+            navigation.selectTabRoot(tab)
         }
         .onChange(of: coordinator.defaultInstanceId) { _, _ in
             navigation.leaveSelectedMachineRoutes()
@@ -402,6 +417,7 @@ struct AidenAppShellView: View {
                 id: id,
                 receipt: newWork.receipt(for: id),
                 autoStartVoice: navigation.chatStartingVoice == id,
+                autoStartCamera: navigation.chatStartingCamera == id,
                 onNext: navigation.catchUp?.current == id ? nextInCatchUp : nil,
                 onChatUpdated: { chat in
                     inboxStore.homeModel(for: id.instanceId)?.accept(chat)
@@ -422,6 +438,7 @@ struct AidenAppShellView: View {
             .id(id)
             .onDisappear {
                 navigation.finishStartingVoice(id)
+                navigation.finishStartingCamera(id)
                 newWork.forgetReceipt(id)
             }
         case .bot(let id):
@@ -592,6 +609,7 @@ final class AidenChatRouteModel {
 private struct AidenChatRouteView: View {
     let coordinator: AidenRemoteCoordinator
     let autoStartVoice: Bool
+    let autoStartCamera: Bool
     /// Set only while this chat is a Catch Up run's. On the route rather than the
     /// chat, so a chat that can't load can still be moved on from, and a fork
     /// pushed over it has no Next of its own.
@@ -609,6 +627,7 @@ private struct AidenChatRouteView: View {
         id: AidenHostObjectID,
         receipt: AidenChat?,
         autoStartVoice: Bool,
+        autoStartCamera: Bool,
         onNext: (() -> Void)?,
         onChatUpdated: @escaping @MainActor (AidenChat) -> Void,
         onChatActivityChanged: @escaping @MainActor (String, AidenChatSummaryActivity) -> Void,
@@ -617,6 +636,7 @@ private struct AidenChatRouteView: View {
     ) {
         self.coordinator = coordinator
         self.autoStartVoice = autoStartVoice
+        self.autoStartCamera = autoStartCamera
         self.onNext = onNext
         self.onChatUpdated = onChatUpdated
         self.onChatActivityChanged = onChatActivityChanged
@@ -636,6 +656,7 @@ private struct AidenChatRouteView: View {
                     chat: chat,
                     owner: owner,
                     autoStartVoice: autoStartVoice,
+                    autoStartCamera: autoStartCamera,
                     onChatUpdated: onChatUpdated,
                     onChatActivityChanged: onChatActivityChanged,
                     onForkOpened: onForkOpened

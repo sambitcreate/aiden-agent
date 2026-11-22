@@ -177,6 +177,11 @@
 		1A2B3C4D5E6F700000000001 /* AidenOnTheGoApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A2B3C4D5E6F700000000011 /* AidenOnTheGoApp.swift */; };
 		1A2B3C4D5E6F700000000002 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A2B3C4D5E6F700000000012 /* ContentView.swift */; };
 		1A2B3C4D5E6F700000000338 /* AidenAppIntents.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A2B3C4D5E6F700000000337 /* AidenAppIntents.swift */; };
+		F10E00000000000000000001 /* AidenHomeActionIntent.swift in Sources */ = {isa = PBXBuildFile; fileRef = F10E00000000000000000010 /* AidenHomeActionIntent.swift */; };
+		F10E00000000000000000002 /* AidenQuickActions.swift in Sources */ = {isa = PBXBuildFile; fileRef = F10E00000000000000000011 /* AidenQuickActions.swift */; };
+		F10E00000000000000000003 /* AidenHomeActionIntent.swift in Sources */ = {isa = PBXBuildFile; fileRef = F10E00000000000000000010 /* AidenHomeActionIntent.swift */; };
+		F10E00000000000000000004 /* AidenQuickActionsWidget.swift in Sources */ = {isa = PBXBuildFile; fileRef = F10E00000000000000000012 /* AidenQuickActionsWidget.swift */; };
+		F10E00000000000000000005 /* AidenHomeActionsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F10E00000000000000000013 /* AidenHomeActionsTests.swift */; };
 		1A2B3C4D5E6F700000000003 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 1A2B3C4D5E6F700000000014 /* Assets.xcassets */; };
 		A1DE00000000000000000001 /* AppIcon.icon in Resources */ = {isa = PBXBuildFile; fileRef = A1DE00000000000000000002 /* AppIcon.icon */; };
 		10CA110C0DE000000000B001 /* Localizable.xcstrings in Resources */ = {isa = PBXBuildFile; fileRef = 10CA110C0DE000000000B002 /* Localizable.xcstrings */; };
@@ -546,6 +551,10 @@
 		A04500000000000000000010 /* AgentRunActivityAttributes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentRunActivityAttributes.swift; sourceTree = "<group>"; };
 		A04500000000000000000011 /* AidenDeepLink.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenDeepLink.swift; sourceTree = "<group>"; };
 		A04500000000000000000013 /* AgentRunLiveActivityWidget.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentRunLiveActivityWidget.swift; sourceTree = "<group>"; };
+		F10E00000000000000000010 /* AidenHomeActionIntent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenHomeActionIntent.swift; sourceTree = "<group>"; };
+		F10E00000000000000000011 /* AidenQuickActions.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenQuickActions.swift; sourceTree = "<group>"; };
+		F10E00000000000000000012 /* AidenQuickActionsWidget.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenQuickActionsWidget.swift; sourceTree = "<group>"; };
+		F10E00000000000000000013 /* AidenHomeActionsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenHomeActionsTests.swift; sourceTree = "<group>"; };
 		A04500000000000000000014 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		A04500000000000000000018 /* aiden-sidebar-logo.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; name = "aiden-sidebar-logo.png"; path = AidenOnTheGo/Resources/Assets.xcassets/AidenSidebarLogo.imageset/aiden-sidebar-logo.png; sourceTree = SOURCE_ROOT; };
 		A04500000000000000000017 /* AidenLiveActivityWidget.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = AidenLiveActivityWidget.appex; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -698,6 +707,7 @@
 				B07400000000000000000012 /* AidenAppShellTests+Bots.swift */,
 				B07300000000000000000012 /* AidenBotContractTests.swift */,
 				A0DB00000000000000000012 /* AidenNativeIntegrationTests.swift */,
+				F10E00000000000000000013 /* AidenHomeActionsTests.swift */,
 				A0DA00000000000000000013 /* AidenScheduledTaskTests.swift */,
 				A0D900000000000000000013 /* AidenWorkspaceEnvironmentTests.swift */,
 				A0D000000000000000000013 /* AidenRemotePhase0Tests.swift */,
@@ -1066,6 +1076,8 @@
 			isa = PBXGroup;
 			children = (
 				1A2B3C4D5E6F700000000337 /* AidenAppIntents.swift */,
+				F10E00000000000000000010 /* AidenHomeActionIntent.swift */,
+				F10E00000000000000000011 /* AidenQuickActions.swift */,
 			);
 			path = AppIntents;
 			sourceTree = "<group>";
@@ -1073,6 +1085,7 @@
 		A04500000000000000000021 /* AidenLiveActivityWidget */ = {
 			isa = PBXGroup;
 			children = (
+				F10E00000000000000000012 /* AidenQuickActionsWidget.swift */,
 				A04500000000000000000013 /* AgentRunLiveActivityWidget.swift */,
 				A04500000000000000000022 /* Resources */,
 			);
@@ -1351,6 +1364,8 @@
 				AC7100000000000000000004 /* AidenActivityMarkMapping.swift in Sources */,
 				A0F000000000000000000001 /* AidenProviderIcon.swift in Sources */,
 				1A2B3C4D5E6F700000000338 /* AidenAppIntents.swift in Sources */,
+				F10E00000000000000000001 /* AidenHomeActionIntent.swift in Sources */,
+				F10E00000000000000000002 /* AidenQuickActions.swift in Sources */,
 				A04500000000000000000001 /* AgentRunActivityAttributes.swift in Sources */,
 				A04500000000000000000002 /* AidenDeepLink.swift in Sources */,
 				A0DB00000000000000000001 /* AidenRemoteLiveActivityManager.swift in Sources */,
@@ -1514,6 +1529,7 @@
 				D0A100000000000000000007 /* AidenBotOpenWorkTests.swift in Sources */,
 				B0E700000000000000000001 /* AidenRemoteContractFixture.swift in Sources */,
 				A0DB00000000000000000002 /* AidenNativeIntegrationTests.swift in Sources */,
+				F10E00000000000000000005 /* AidenHomeActionsTests.swift in Sources */,
 				A0DA00000000000000000003 /* AidenScheduledTaskTests.swift in Sources */,
 				A0D900000000000000000003 /* AidenWorkspaceEnvironmentTests.swift in Sources */,
 				A0D000000000000000000003 /* AidenRemotePhase0Tests.swift in Sources */,
@@ -1543,6 +1559,8 @@
 			files = (
 				A04500000000000000000004 /* AgentRunActivityAttributes.swift in Sources */,
 				A04500000000000000000005 /* AidenDeepLink.swift in Sources */,
+				F10E00000000000000000003 /* AidenHomeActionIntent.swift in Sources */,
+				F10E00000000000000000004 /* AidenQuickActionsWidget.swift in Sources */,
 				A04500000000000000000006 /* AgentRunLiveActivityWidget.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
