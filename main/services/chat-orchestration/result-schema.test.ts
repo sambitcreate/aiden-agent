@@ -4,7 +4,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { RESULT_MAX_BYTES, RESULT_SCHEMA_MAX_BYTES, checkResult, compileResultSchema, isStorableResultSchema } from "./result-schema.js";
+import { RESULT_MAX_BYTES, RESULT_MAX_VALUES, RESULT_SCHEMA_MAX_BYTES, checkResult, compileResultSchema, isStorableResultSchema } from "./result-schema.js";
 
 const SCHEMA = {
   type: "object",
@@ -174,4 +174,64 @@ test("a reasonable nested schema is accepted, and checking hostile values agains
     checkResult(schema, value);
     assert.ok(performance.now() - started < 100, `took ${performance.now() - started} ms`);
   }
+});
+
+/** `$defs` d0…d<depth-1>, each an anyOf of `fan` refs to the next, ending in `leaf`. */
+function tree(depth: number, fan: number, leaf: unknown): Record<string, unknown> {
+  const $defs: Record<string, unknown> = { [`d${depth}`]: leaf };
+  for (let level = 0; level < depth; level++) {
+    $defs[`d${level}`] = { anyOf: Array.from({ length: fan }, () => ({ $ref: `#/$defs/d${level + 1}` })) };
+  }
+  return $defs;
+}
+
+function timedCheck(schema: unknown, value: unknown) {
+  const started = performance.now();
+  const checked = checkResult(schema, value);
+  return { checked, ms: performance.now() - started };
+}
+
+test("a large result against a schema whose branches are costly is refused quickly, before ajv walks it", () => {
+  const minLengths = { anyOf: Array.from({ length: 8 }, () => ({ minLength: 999_999 })) };
+  const attacks: Array<[string, unknown, unknown]> = [
+    // Each array item tries a ~8,700-node branch tree before the plain number branch matches.
+    ["items through a branch tree", { $defs: tree(3, 16, { type: "string" }), type: "array", items: { anyOf: [{ $ref: "#/$defs/d0" }, { type: "number" }] } }, Array(9_000).fill(0)],
+    // Every branch measures the whole 64 KB string again.
+    ["minLength per branch", { $defs: tree(3, 8, minLengths), anyOf: [{ $ref: "#/$defs/d0" }, { type: "string" }] }, "a".repeat(64_000)],
+    ["minLength per branch, surrogate pairs", { $defs: tree(3, 8, minLengths), anyOf: [{ $ref: "#/$defs/d0" }, { type: "string" }] }, "\u{1F600}".repeat(10_000)],
+    ["minLength inside items", { $defs: tree(3, 8, minLengths), type: "array", items: { anyOf: [{ $ref: "#/$defs/d0" }, { type: "string" }] } }, ["a".repeat(63_000)]],
+  ];
+  for (const [name, schema, value] of attacks) {
+    assert.equal(compileResultSchema(schema).ok, true, `${name}: the schema alone is allowed`);
+    assert.ok(Buffer.byteLength(JSON.stringify(value)) <= RESULT_MAX_BYTES, `${name}: within the size limit`);
+    const { checked, ms } = timedCheck(schema, value);
+    assert.equal(checked.ok, false, name);
+    assert.match(checked.ok ? "" : checked.error, /too large to check against this schema/u, name);
+    assert.ok(ms < 100, `${name} took ${ms} ms`);
+  }
+
+  // A normal result still checks against the same costly schema, pass or fail.
+  const costly = attacks[0]![1];
+  assert.deepEqual(checkResult(costly, [1, 2, 3, "x"]), { ok: true });
+  assert.equal(checkResult(costly, [1, {}]).ok, false);
+  assert.match((checkResult(costly, [1, {}]) as { error: string }).error, /doesn't match the schema/u);
+});
+
+test("a result with too many values or too deep a nesting is refused before it is checked or serialized", () => {
+  const many = timedCheck({ type: "array" }, Array(32_000).fill(0));
+  assert.equal(many.checked.ok, false);
+  assert.match((many.checked as { error: string }).error, new RegExp(`more than ${RESULT_MAX_VALUES.toLocaleString("en-US")} values`, "u"));
+  assert.ok(many.ms < 100, `took ${many.ms} ms`);
+
+  let deep: unknown = 0;
+  for (let level = 0; level < 50_000; level++) deep = [deep];
+  const nested = timedCheck({ type: "array" }, deep);
+  assert.equal(nested.checked.ok, false);
+  assert.match((nested.checked as { error: string }).error, /nested more than 64 levels/u);
+  assert.ok(nested.ms < 100, `took ${nested.ms} ms`);
+
+  assert.deepEqual(checkResult({ type: "array" }, [1, [2, [3]], []]), { ok: true });
+  // Plenty of room for an ordinary structured answer.
+  const report = { files: Array.from({ length: 400 }, (_, i) => `src/file-${i}.ts`), passed: true };
+  assert.deepEqual(checkResult(SCHEMA, report), { ok: true });
 });

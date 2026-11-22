@@ -83,8 +83,12 @@ compile refuses the whole call before any chat is made, and a stored one that
 breaks these rules is dropped when the links load. The started chat's first
 message shows the schema, and it gets a `submit_result` tool. A submitted
 result is checked with ajv; one that doesn't match is refused, naming the
-first field to fix (for example `/filesChanged is required`). The newest accepted
-result (up to 64 KB) replaces any earlier one, is stored on the link, comes
+first field to fix (for example `/filesChanged is required`). Before ajv sees
+it, a result over 64 KB, holding more than 10,000 values or nested more than 64
+levels is refused, and so is one whose size (its values, plus one per 64
+characters of text) times the schema's cost is over 1,000,000, so a costly
+schema only takes short answers. The newest accepted
+result replaces any earlier one, is stored on the link, comes
 back from `wait` and `list` as `result`, and is quoted, fenced as data, in the
 lead's completion notice (cut at 4,000 characters there). Only the newest 64
 links keep their schema and result; older ones drop them to keep the links

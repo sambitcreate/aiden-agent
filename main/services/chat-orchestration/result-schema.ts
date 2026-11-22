@@ -4,7 +4,9 @@
 // schema is at most 16 KB, may only refer to its root or its own `$defs` /
 // `definitions` (nothing is ever fetched to resolve it; references must not
 // loop), may not contain a regular expression anywhere, and its worst-case
-// checking work is bounded before ajv compiles it.
+// checking work is bounded before ajv compiles it. A submitted result is
+// bounded too (64 KB, 10,000 values, 64 levels), and its size times the
+// schema's cost must stay under a fixed budget before ajv checks it.
 
 import Ajv, { type ErrorObject, type ValidateFunction } from "ajv";
 
@@ -12,7 +14,20 @@ export const RESULT_SCHEMA_MAX_BYTES = 16 * 1024;
 /** The most a submitted result may weigh, as JSON. */
 export const RESULT_MAX_BYTES = 64 * 1024;
 
-export type ResultSchemaCheck = { ok: true; validate: ValidateFunction } | { ok: false; error: string };
+/** The most values (objects, arrays, strings, numbers…) a submitted result may hold. */
+export const RESULT_MAX_VALUES = 10_000;
+/** The most levels a submitted result may nest. */
+export const RESULT_MAX_DEPTH = 64;
+/**
+ * The most work one check may do: the schema's cost (`schemaCost`) times the
+ * result's size (`resultSize`). ajv may try every branch of the schema at
+ * every value, and string keywords (`minLength`) read each string per branch.
+ */
+export const RESULT_CHECK_MAX_WORK = 1_000_000;
+/** Characters of string that count as one more value of size. */
+const STRING_CHARS_PER_UNIT = 64;
+
+export type ResultSchemaCheck = { ok: true; validate: ValidateFunction; cost: number } | { ok: false; error: string };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -209,7 +224,7 @@ export function compileResultSchema(schema: unknown): ResultSchemaCheck {
   try {
     // The first error is enough to name what failed, and stops each check early.
     const ajv = new Ajv({ strict: false, validateFormats: false });
-    return { ok: true, validate: ajv.compile(schema) };
+    return { ok: true, validate: ajv.compile(schema), cost: cost.cost };
   } catch (error) {
     const reason = error instanceof Error ? error.message.split("\n")[0]!.slice(0, 200) : "it is not a valid JSON Schema";
     return { ok: false, error: `result_schema doesn't compile: ${reason}.` };
@@ -227,12 +242,53 @@ function describe(error: ErrorObject): string {
   return `${where} ${error.message ?? "is invalid"}`;
 }
 
+/**
+ * A result's size for the work budget: one per value (object, array, string,
+ * number, boolean, null, and each object key), plus one per 64 characters of
+ * every string and key. Walked without recursion, and stopped as soon as the
+ * result holds more than `RESULT_MAX_VALUES` values or nests more than
+ * `RESULT_MAX_DEPTH` levels, so a hostile value costs little to measure.
+ */
+function resultSize(value: unknown): { ok: true; size: number } | { ok: false; error: string } {
+  let values = 0;
+  let chars = 0;
+  const stack: Array<{ value: unknown; depth: number }> = [{ value, depth: 0 }];
+  while (stack.length) {
+    const next = stack.pop()!;
+    values += 1;
+    if (values > RESULT_MAX_VALUES) {
+      return { ok: false, error: `The result holds more than ${RESULT_MAX_VALUES.toLocaleString("en-US")} values; send a shorter one.` };
+    }
+    if (next.depth > RESULT_MAX_DEPTH) return { ok: false, error: `The result is nested more than ${RESULT_MAX_DEPTH} levels deep.` };
+    if (typeof next.value === "string") chars += next.value.length;
+    else if (Array.isArray(next.value)) {
+      for (const item of next.value) stack.push({ value: item, depth: next.depth + 1 });
+    } else if (isRecord(next.value)) {
+      for (const [key, item] of Object.entries(next.value)) {
+        values += 1;
+        chars += key.length;
+        stack.push({ value: item, depth: next.depth + 1 });
+      }
+    }
+  }
+  return { ok: true, size: values + Math.floor(chars / STRING_CHARS_PER_UNIT) };
+}
+
 /** Checks a submitted result against its schema, naming the fields that fail. */
 export function checkResult(schema: unknown, value: unknown): { ok: true } | { ok: false; error: string } {
   if (value === undefined) return { ok: false, error: "submit_result needs a result." };
+  // Measured before anything serializes it, so a deep value can't overflow the stack.
+  const size = resultSize(value);
+  if (!size.ok) return size;
   if (byteLength(value) > RESULT_MAX_BYTES) return { ok: false, error: `The result is larger than ${RESULT_MAX_BYTES / 1024} KB.` };
   const compiled = compileResultSchema(schema);
   if (!compiled.ok) return compiled;
+  if (compiled.cost * size.size > RESULT_CHECK_MAX_WORK) {
+    return {
+      ok: false,
+      error: "The result is too large to check against this schema, whose branches make every value costly to check. Send a shorter result (fewer items, shorter text).",
+    };
+  }
   if (compiled.validate(value)) return { ok: true };
   const reasons = (compiled.validate.errors ?? []).slice(0, 5).map(describe);
   return { ok: false, error: `The result doesn't match the schema: ${reasons.join("; ")}.` };
