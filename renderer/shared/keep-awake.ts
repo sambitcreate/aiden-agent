@@ -6,10 +6,11 @@
 export const KEEP_AWAKE_CHANGED_CHANNEL = "schedule:keep-awake-changed";
 
 /**
- * What can hold the computer awake. Later inputs (check-backs and Bot
- * wake-ups due soon, goals) add their own kind and label here.
+ * What can hold the computer awake. `check-back` and `wake-up` are a chat's
+ * check-back or a Bot's wake-up due within the hour, on AC power only. Later
+ * inputs (goals) add their own kind and label here.
  */
-export const KEEP_AWAKE_REASON_KINDS = ["chat", "job", "check", "usage-limit"] as const;
+export const KEEP_AWAKE_REASON_KINDS = ["chat", "job", "check", "usage-limit", "check-back", "wake-up"] as const;
 export type KeepAwakeReasonKind = (typeof KEEP_AWAKE_REASON_KINDS)[number];
 
 export interface KeepAwakeStatus {
@@ -58,6 +59,8 @@ const REASON_LABELS: Readonly<Record<KeepAwakeReasonKind, readonly [one: string,
   job: ["background job running", "background jobs running"],
   check: ["check running", "checks running"],
   "usage-limit": ["usage limit ending soon", "usage limits ending soon"],
+  "check-back": ["check-back due soon", "check-backs due soon"],
+  "wake-up": ["Bot wake-up due soon", "Bot wake-ups due soon"],
 };
 
 /** The live line under the Settings row, or null where the host can't keep awake. */

@@ -42,6 +42,8 @@ export interface ScheduledTaskApplicationDependencies {
   validateTimezone(value: string): string;
   settingsPatch(input: Record<string, unknown>): Partial<AppSettings>;
   notifyChanged(payload: Record<string, unknown>): void;
+  /** "Let chats check back later" changed; off cancels every pending check-back. */
+  chatCheckBacksChanged?(enabled: boolean): void | Promise<void>;
 }
 
 export interface RevisionedScheduledTaskSettings {
@@ -63,6 +65,7 @@ function settingsValue(
     defaultTimezone: dependencies.validateTimezone(
       input.scheduledDefaultTimezone ?? dependencies.systemTimezone(),
     ),
+    chatCheckBacks: input.chatCheckBacks !== false,
   };
 }
 
@@ -183,6 +186,9 @@ export function createScheduledTaskApplicationService(
       const next = settingsValue(saved, dependencies);
       if (next.enabled !== current.value.enabled) {
         await dependencies.service.setGlobalEnabled(next.enabled);
+      }
+      if (next.chatCheckBacks !== current.value.chatCheckBacks) {
+        await dependencies.chatCheckBacksChanged?.(next.chatCheckBacks);
       }
       dependencies.notifyChanged({ settings: true });
       return { revision: scheduledSettingsRevision(next), value: next };

@@ -27,6 +27,7 @@ import {
 } from "../../renderer/shared/ask-user-question.js";
 import { WEB_FETCH_TOOL_NAME, parseWebExtractRecap } from "../../renderer/shared/web-extract.js";
 import { BROWSER_RECORDING_STOP_TOOL_NAME, parseBrowserRecordingRecap } from "../../renderer/shared/browser-recording.js";
+import { CHECK_BACK_TOOL_NAME, checkBackWhen } from "../../renderer/shared/check-backs.js";
 
 const MAX_TOOL_NAME_LENGTH = 80;
 const MAX_TARGET_LENGTH = 240;
@@ -322,6 +323,12 @@ export function safeToolDescriptor(toolName: string, args: unknown): SafeToolDes
             : values.action === "list"
               ? "List followed pull requests"
               : "Follow pull request",
+      };
+    // The note stays out of the feed; a set row names its time once it settles.
+    case CHECK_BACK_TOOL_NAME:
+      return {
+        label:
+          values.action === "list" ? "List check-backs" : values.action === "cancel" ? "Cancel check-back" : "Set check-back",
       };
     case "share_image":
       return { label: "Share image", target: path };
@@ -860,6 +867,10 @@ export class GenerationTimelineProjector {
         if (step.toolName === WEB_FETCH_TOOL_NAME) {
           const extraction = parseWebExtractRecap(resultDetails);
           if (extraction) step.extraction = extraction;
+        }
+        if (step.toolName === CHECK_BACK_TOOL_NAME) {
+          const fireAt = record(record(resultDetails).checkBack).fireAt;
+          if (typeof fireAt === "number" && Number.isFinite(fireAt)) step.detail = checkBackWhen(fireAt, timestamp);
         }
         if (step.toolName === BROWSER_RECORDING_STOP_TOOL_NAME) {
           const recording = parseBrowserRecordingRecap(record(resultDetails).recording);

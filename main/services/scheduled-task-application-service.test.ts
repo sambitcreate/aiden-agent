@@ -14,6 +14,7 @@ function fixture(
   const tasks = new Map<string, ScheduledTask>();
   const runs = new Map<string, ScheduledRun[]>();
   const savedOptions: Array<{ expectedUpdatedAt?: number; runId?: string }> = [];
+  const checkBackSwitches: boolean[] = [];
   const service = createScheduledTaskApplicationService({
     store: {
       list: async () => [...tasks.values()],
@@ -82,8 +83,11 @@ function fixture(
     validateTimezone: (value) => value,
     settingsPatch,
     notifyChanged: () => undefined,
+    chatCheckBacksChanged: (enabled) => {
+      checkBackSwitches.push(enabled);
+    },
   });
-  return { service, tasks, savedOptions, storedSettings: () => settings };
+  return { service, tasks, savedOptions, checkBackSwitches, storedSettings: () => settings };
 }
 
 test("shared scheduled-task service validates inventory and carries revisions into lifecycle commits", async () => {
@@ -159,6 +163,22 @@ test("the schedule server picker (desktop and Remote) lists only servers a sched
   const remote = (id: string, patch: Partial<McpServer> = {}): McpServer => ({ id, name: id, transport: "http", url: `https://${id}.test`, enabled: true, ...patch });
   const value = fixture([remote("gmail"), remote("off", { enabled: false }), remote("hidden", { exposure: "hidden" }), remote("partial", { hiddenTools: ["send"] })]);
   assert.deepEqual(await value.service.mcpServers(), [{ id: "gmail", name: "gmail" }, { id: "partial", name: "partial" }]);
+});
+
+test("check-backs are on by default, and only a change of the switch reaches follow-through", async () => {
+  const value = fixture([], (input) => scheduledSettingsPatch(input, (zone) => zone));
+  const initial = await value.service.settings();
+  assert.equal(initial.value.chatCheckBacks, true);
+  const off = await value.service.updateSettings(initial.revision, { chatCheckBacks: false });
+  assert.equal(off.value.chatCheckBacks, false);
+  assert.notEqual(off.revision, initial.revision);
+  // An unrelated edit, and saving the same value again, cancel nothing more.
+  const notify = await value.service.updateSettings(off.revision, { defaultNotify: false });
+  await value.service.updateSettings(notify.revision, { chatCheckBacks: false });
+  assert.deepEqual(value.checkBackSwitches, [false]);
+  const latest = await value.service.settings();
+  await value.service.updateSettings(latest.revision, { chatCheckBacks: true });
+  assert.deepEqual(value.checkBackSwitches, [false, true]);
 });
 
 test("keep this computer awake is on by default and only an off choice is stored", async () => {

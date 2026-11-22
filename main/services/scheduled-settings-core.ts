@@ -23,7 +23,8 @@ export function scheduledSettingsPatch(
     patch.scheduledDefaultMcpEnabled = input.defaultMcpEnabled;
   }
   if (typeof input.defaultNotify === "boolean") patch.scheduledDefaultNotify = input.defaultNotify;
-  // On is the default, so only `false` is stored; turning it back on clears it.
+  // On is the default, so only `false` is stored; turning one back on clears it.
+  if (typeof input.chatCheckBacks === "boolean") patch.chatCheckBacks = input.chatCheckBacks ? undefined : false;
   if (typeof input.keepAwakeWhileWorking === "boolean") {
     patch.keepAwakeWhileWorking = input.keepAwakeWhileWorking ? undefined : false;
   }
