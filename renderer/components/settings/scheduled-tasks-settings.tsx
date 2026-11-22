@@ -215,8 +215,9 @@ export function ScheduledTasksSettings() {
             description={
               <>
                 <span className="block">
-                  Stops idle sleep while a chat answers or a build, test or check runs. The display can still
-                  sleep, and closing a laptop&apos;s lid still puts it to sleep.
+                  Stops idle sleep while a chat answers or a build, test or check runs, and, when plugged in,
+                  for the hour before a check-back or Bot wake-up is due. The display can still sleep, and closing
+                  a laptop&apos;s lid still puts it to sleep.
                 </span>
                 {keepAwakeLine ? (
                   <span className="mt-1 block text-tertiary" aria-live="polite">

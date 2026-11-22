@@ -142,7 +142,10 @@ native subagents and [hooks](hooks.md) use the same contracts as macOS. Linux-sp
   It is best-effort: GNOME and KDE honour it, while a minimal window manager
   with no inhibit service can still suspend on its own timer. Check that the
   hold took effect with `systemd-inhibit --list` while a chat answers. Closing
-  a laptop's lid still follows the desktop's lid setting.
+  a laptop's lid still follows the desktop's lid setting. A check-back or Bot
+  wake-up due within the hour holds only on AC power; Linux sends Electron no
+  plug or unplug events, so while one is due Aiden reads the power source
+  again every 5 minutes.
 
 Bots use the same roster, definitions, access controls, conversations, schedules,
 and Telegram bindings as macOS. Their native authority helper requires an
