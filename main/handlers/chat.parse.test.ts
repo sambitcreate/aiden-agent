@@ -312,4 +312,15 @@ test("parseParams keeps bounded generation selectors and creates empty authorita
   assert.equal(parseParams(base).inlineVisuals, undefined);
   assert.throws(() => parseParams({ ...base, inlineVisuals: "sometimes" }), /Invalid generation fields/);
   assert.throws(() => parseParams({ ...base, inlineVisuals: 1 }), /Invalid generation fields/);
+  assert.deepEqual(parseParams({ ...base, designView: { selection: ["f1"], viewSize: { w: 900, h: 600 } } }).designView, {
+    selection: ["f1"],
+    viewSize: { w: 900, h: 600 },
+  });
+  assert.equal(parseParams(base).designView, undefined);
+  // A canvas view that does not parse is dropped; the message itself still goes.
+  for (const designView of [{ selection: [42] }, { selection: [], viewSize: { w: -1, h: 600 } }, "canvas", null]) {
+    const parsed = parseParams({ ...base, designView });
+    assert.equal(parsed.designView, undefined);
+    assert.equal(parsed.chatId, base.chatId);
+  }
 });

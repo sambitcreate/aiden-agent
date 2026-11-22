@@ -17,7 +17,7 @@ import { spending } from "./spending-main.js";
 import { remoteAttachmentStore } from "./aiden-remote-attachments-main.js";
 import { toolOutputStore } from "./tool-output-store.js";
 import { chatPullRequestStore } from "./chat-pull-request-service-main.js";
-import { designCanvasStore, designGrants, recentWrittenPages } from "./design-canvas/main.js";
+import { designCanvasStore, designGrants, designModeConsent, recentWrittenPages } from "./design-canvas/main.js";
 import { EARLIER_PAGES_LIMIT, pagesWrittenInChat, placeWrittenPagesOnCanvas } from "./design-canvas/written-pages.js";
 import { DESIGN_CANVAS_UPDATED_CHANNEL } from "../handlers/design-canvas.js";
 import { cancelVisualSnapshots } from "./visual-snapshot-service.js";
@@ -42,6 +42,7 @@ export const chatApplicationService = createChatApplicationService({
   chatPullRequestStore,
   designCanvasStore,
   designGrants,
+  designModeConsent,
   designPagesOnEntry: async (chat, workspaceRoot) => {
     const frameIds = await placeWrittenPagesOnCanvas({
       chatId: chat.id,

@@ -17,6 +17,7 @@ import {
 import { AidenActivityMark } from "./aiden-activity-mark";
 import { Button, Callout, Text } from "./ui";
 import { cn } from "../lib/ui-utils";
+import { VisualCaptionActions, type VisualMenuAction } from "./visual-actions-menu";
 
 /** Height before the guest first reports its content size. */
 const INITIAL_VISUAL_HEIGHT = 160;
@@ -271,9 +272,12 @@ function HtmlArtifactFrameImpl({
   followUpBusy = false,
   placementCallId,
   layout,
+  actions,
 }: {
   chatId: string;
   artifact: ChatHtmlArtifactV1;
+  /** More things the person can do with it, listed in its caption's Actions menu. */
+  actions?: readonly VisualMenuAction[] | undefined;
   /** A guest asked to send a follow-up; the caller applies the admission policy. */
   onGuestPrompt?: GuestPromptHandler;
   /** The render_artifact call it came from; its draft's height seeds this frame. */
@@ -430,17 +434,20 @@ function HtmlArtifactFrameImpl({
     }
   }, [artifact.mediaId, chatId, exporting]);
 
-  const exportButton = (
-    <Button
-      iconOnly
-      size="small"
-      variant="transparent"
-      aria-label={`Export ${artifact.title}`}
-      disabled={exporting}
-      onClick={() => void exportArtifact()}
-    >
-      <Download aria-hidden="true" />
-    </Button>
+  // The expanded view sits in the top layer, where a portalled menu would hide
+  // behind it and light-dismiss it, so only the inline caption carries extras.
+  const exportActions = (extras?: readonly VisualMenuAction[]) => (
+    <VisualCaptionActions
+      title={artifact.title}
+      primary={{
+        ariaLabel: `Export ${artifact.title}`,
+        menuLabel: "Export…",
+        icon: Download,
+        disabled: exporting,
+        onSelect: () => void exportArtifact(),
+      }}
+      extras={extras}
+    />
   );
 
   return (
@@ -467,7 +474,7 @@ function HtmlArtifactFrameImpl({
           >
             {artifact.title}
           </h2>
-          {exportButton}
+          {exportActions()}
           <Button
             ref={expandedCloseRef}
             iconOnly
@@ -565,7 +572,7 @@ function HtmlArtifactFrameImpl({
           >
             <Maximize2 aria-hidden="true" />
           </Button>
-          {exportButton}
+          {exportActions(actions)}
         </div>
       )}
     </section>

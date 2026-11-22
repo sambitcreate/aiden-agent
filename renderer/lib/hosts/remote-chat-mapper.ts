@@ -1,6 +1,10 @@
 import type { Attachment, Chat, ChatMessage } from "../types";
 import { parseChatInputSource } from "../../shared/chat-input-source";
 import type { ChatImagePlacementV1 } from "../../shared/chat-artifacts";
+import { AIDEN_UI_CATALOG_VERSION, AIDEN_UI_LIMITS, type AidenUiNodeV1, type ChatUiVisualV1 } from "../../shared/aiden-ui/types";
+import { parseChatUiVisualV1 } from "../../shared/aiden-ui/visual";
+import { cleanPrefix, clipUnits } from "../../shared/aiden-ui/fallback-text";
+import { MAX_HTML_ARTIFACT_TITLE_CHARS } from "../../shared/generative-ui";
 import { isToolStep, parseGenerationTimeline, type GenerationTimeline } from "../../shared/generation-timeline";
 import {
   parseProviderFailureV1,
@@ -80,6 +84,72 @@ function mapOutcome(value: unknown): ProviderFailureV1 | undefined {
   });
 }
 
+/** Lines drawn for one remote visual; anything past them joins the last line, so the tree stays inside the node cap. */
+const MAX_REMOTE_VISUAL_LINES = 400;
+
+// Direction marks, embeddings, overrides and isolates could reorder the rest of a
+// line; C0 and C1 controls draw as nothing or as boxes; and the zero-width
+// space, the word joiner and invisible operators U+2060-U+2064, the BOM, the
+// interlinear annotation marks U+FFF9-U+FFFB and a lone half of a surrogate pair
+// draw as nothing. A tab stays (as a space in the title); a line break only
+// separates lines. The zero-width joiner and non-joiner stay: they shape emoji
+// and the spelling of Persian and Indic words.
+// eslint-disable-next-line no-control-regex
+const REMOTE_VISUAL_HIDDEN = /[\u0000-\u0008\u000b-\u001f\u007f-\u009f\u061c\u200b\u200e\u200f\u202a-\u202e\u2060-\u2064\u2066-\u2069\ufeff\ufff9-\ufffb]|\p{Cs}/gu;
+
+// A line or paragraph separator would break a line where the host's text has no
+// line break; it reads as a space instead.
+const REMOTE_VISUAL_SEPARATOR = /[\u2028\u2029]/gu;
+
+/** The host's title as one clean line within the title cap, or "Visual" when nothing is left. */
+function remoteVisualTitle(value: unknown): string {
+  // Hidden characters are removed before the title is clipped, so they never use
+  // up its length, and only as much is read as the clip can show (two more units
+  // allow for the space a collapsed run can leave at either end).
+  const title = cleanPrefix(text(value) ?? "", REMOTE_VISUAL_HIDDEN, MAX_HTML_ARTIFACT_TITLE_CHARS + 2, /\s+/gu).trim();
+  if (!title) return "Visual";
+  return title.length > MAX_HTML_ARTIFACT_TITLE_CHARS ? `${clipUnits(title, MAX_HTML_ARTIFACT_TITLE_CHARS - 1).trimEnd()}…` : title;
+}
+
+/**
+ * A native visual from the host as the text it projects. The host sends no
+ * markup, so this Mac draws the fallback text phones show: one plain
+ * paragraph per line (never Markdown or markup, since the text is the host's),
+ * placed where the visual's tool call ran.
+ */
+function mapRemoteTextVisual(value: unknown): ChatUiVisualV1 | null {
+  const input = record(value);
+  // A visual the host pictured already shows as that picture among the message's images.
+  if (input?.kind !== "ui" || input.snapshotAttachmentId !== undefined) return null;
+  const raw = text(input.fallbackText);
+  // Only as much of the text is read as the cap can show, after hidden characters are dropped.
+  const fallbackText = raw === undefined ? "" : clipUnits(cleanPrefix(raw, REMOTE_VISUAL_HIDDEN, AIDEN_UI_LIMITS.fallbackChars).replace(REMOTE_VISUAL_SEPARATOR, " "), AIDEN_UI_LIMITS.fallbackChars).trim();
+  if (!fallbackText) return null;
+  const lines = fallbackText.split("\n").map((line) => line.trim()).filter(Boolean);
+  const shown = lines.length > MAX_REMOTE_VISUAL_LINES
+    ? [...lines.slice(0, MAX_REMOTE_VISUAL_LINES - 1), lines.slice(MAX_REMOTE_VISUAL_LINES - 1).join(" ")]
+    : lines;
+  const title = remoteVisualTitle(input.title);
+  const tree: AidenUiNodeV1 = {
+    t: "Visual",
+    k: "0",
+    p: { title: { op: "lit", v: title } },
+    c: shown.map((line, index) => ({ t: "Text", k: `0.${index}`, c: [{ t: "#text", k: `0.${index}.0`, s: line }] })),
+  };
+  const toolCallId = text(input.toolCallId);
+  return parseChatUiVisualV1({
+    version: 1,
+    kind: "ui",
+    id: input.id,
+    ...(toolCallId && /^call-[1-9][0-9]{0,8}$/u.test(toolCallId) ? { toolCallId } : {}),
+    title,
+    catalogVersion: AIDEN_UI_CATALOG_VERSION,
+    tree,
+    fallbackText,
+    ...(input.layout === "wide" ? { layout: "wide" } : {}),
+  }) ?? null;
+}
+
 /** Maps one projected message; returns null for a row the transcript cannot show. */
 export function mapRemoteMessage(value: unknown): ChatMessage | null {
   const input = record(value);
@@ -116,6 +186,17 @@ export function mapRemoteMessage(value: unknown): ChatMessage | null {
   if (role === "assistant") {
     const timeline = parseGenerationTimeline(input.timeline, content.length, reasoning?.length ?? 0);
     if (timeline) message.timeline = withoutHostLocalRecaps(timeline);
+    if (Array.isArray(input.visuals)) {
+      const visuals: ChatUiVisualV1[] = [];
+      const seen = new Set<string>();
+      for (const value of input.visuals.slice(0, AIDEN_UI_LIMITS.perChat)) {
+        const visual = mapRemoteTextVisual(value);
+        if (!visual || seen.has(visual.id)) continue;
+        seen.add(visual.id);
+        visuals.push(visual);
+      }
+      if (visuals.length > 0) message.uiVisuals = visuals;
+    }
   }
   return message;
 }

@@ -86,6 +86,7 @@ import { createVisionAnalysisTool, INSPECT_IMAGE_TOOL_NAME } from "./vision-anal
 import {
   buildPinnedCodingTools,
   summarizeToolCall,
+  writeWorkspaceBinaryFile,
 } from "./coding-tools.js";
 import {
   BOT_FILE_TOOL_NAMES,
@@ -115,7 +116,13 @@ import {
 } from "./bot-runtime-authority-main.js";
 import type { BotRuntimeAuthorityAdmission } from "./bot-runtime-authority.js";
 import { hostPlatformCapabilities } from "./host-platform-capabilities.js";
-import { workspaceAutoWouldJudge, workspaceRuleHost, workspaceToolApproval } from "./approval-gate/workspace-tool-approval.js";
+import {
+  fileWriteRuleTool,
+  stricterPageRule,
+  workspaceAutoWouldJudge,
+  workspaceRuleHost,
+  workspaceToolApproval,
+} from "./approval-gate/workspace-tool-approval.js";
 import { pageRuleFor } from "./approval-rules/resolve-main.js";
 import { ApprovalAnalytics, approvalAnalyticsMode, type ApprovalAnalyticsMode } from "./approval-gate/approval-analytics.js";
 import {
@@ -430,6 +437,13 @@ import { createPiToolDiscovery } from "./pi-tool-discovery.js";
 import { NO_LATE_MCP_DISCOVERY, type McpLateDiscovery } from "./mcp-tool-discovery-core.js";
 import { isPiCodemodeCallable } from "./pi-runtime-tool.js";
 import {
+  ON_DEMAND_DECLARED_ENTRY,
+  declareOnDemandLoadNotes,
+  onDemandDeclaredNames,
+  onDemandDeclaredOfBranch,
+} from "./on-demand-tools.js";
+import { visualizeGuideLoadNotes } from "./generative-ui-guide.js";
+import {
   chatHeadJournaling,
   chatStateRequestMessages,
   extensionChatState,
@@ -499,7 +513,7 @@ import {
   CHAT_ARTIFACT_VERSION,
   type ChatHtmlArtifactV1,
 } from "../../renderer/shared/chat-artifacts.js";
-import { MAX_HTML_ARTIFACTS_PER_RESPONSE } from "../../renderer/shared/generative-ui.js";
+import { MAX_HTML_ARTIFACTS_PER_RESPONSE, RENDER_UI_TOOL_NAME } from "../../renderer/shared/generative-ui.js";
 import { displayImageArtifactStore } from "./display-image-artifact-store.js";
 import {
   createGenerativeUiExtensionRuntime,
@@ -508,6 +522,8 @@ import {
   GENERATIVE_UI_TOOL_NAME,
   prepareGenerativeUiTurnStore,
   shouldEnableGenerativeUiExtension,
+  createVisualizeGuideTool,
+  VISUALIZE_GUIDE_TOOL_NAME,
 } from "./generative-ui-extension.js";
 import { chatToolOffers, chatTurnAudienceFor, chatTurnToolRefusal, declaresAppTools, declaresWindowTools, firstTurnToolRefusal, windowlessChatTurn, type ChatToolSurface, type TurnToolRefusal } from "./chat-turn-tool-policy.js";
 import { createGenerativeUiDraftSession } from "./generative-ui-draft.js";
@@ -556,7 +572,7 @@ import { desktopHandoffTickets } from "./desktop-stream-handoff-main.js";
 import type { DesktopHandoffLiveStreamSnapshot } from "../../renderer/shared/chat-handoff.js";
 import { randomUUID } from "node:crypto";
 import { designModeEnabled } from "./studio/feature-flags.js";
-import { designCanvasSnapshots, designCanvasStore, designGrants, designModeConsent, recentWrittenPages } from "./design-canvas/main.js";
+import { designCanvasSnapshots, designCanvasStore, designGrants, designModeConsent, designSystemOffers, recentWrittenPages } from "./design-canvas/main.js";
 import {
   createDesignCanvasTools,
   DESIGN_MODE_PROMPT_SECTION,
@@ -565,10 +581,21 @@ import {
 } from "./design-canvas/canvas-tools.js";
 import { createDesignModeTool, DESIGN_MODE_TOOL_NAME } from "./design-canvas/design-mode-tool.js";
 import { chatSurface } from "../../renderer/shared/chat-visibility.js";
-import { canvasPromptLine } from "../../renderer/shared/design-canvas/canvas-summary.js";
-import { placeArtifactsOnCanvas, type CanvasArtifact } from "./design-canvas/artifact-frames.js";
-import { placeWrittenPagesOnCanvas, writtenPagePath } from "./design-canvas/written-pages.js";
-import { DESIGN_CANVAS_UPDATED_CHANNEL } from "../handlers/design-canvas.js";
+import { CANVAS_STATUS_SECTION, canvasPromptLine, withCanvasStatusNote } from "../../renderer/shared/design-canvas/canvas-summary.js";
+import { withJournaledCanvasStatusNote } from "./design-canvas/status-note.js";
+import { placeArtifactsOnCanvas, placeImagesOnCanvas, type CanvasArtifact } from "./design-canvas/artifact-frames.js";
+import { createDesignPageScanner, placeWrittenPagesOnCanvas, writtenPagePath } from "./design-canvas/written-pages.js";
+import { inspectDesignFrame } from "./design-canvas/frame-render.js";
+import { inspectDesignPage } from "./design-canvas/inspect.js";
+import {
+  createWrittenPageInspector,
+  DESIGN_PAGE_INSPECT_SECTION,
+  withDesignInspectNote,
+  type WrittenPageInspector,
+} from "./design-canvas/inspect-note.js";
+import { designUrl } from "../../renderer/shared/design-canvas/url.js";
+import { frameShowingDesignPage } from "../../renderer/shared/design-canvas/schema.js";
+import { DESIGN_CANVAS_UPDATED_CHANNEL, type DesignCanvasUpdated } from "../handlers/design-canvas.js";
 
 subagentRuntimeRegistry.setHealthMetrics(subagentHealthMetrics);
 subagentRuntimeRegistry.setLimits({
@@ -581,15 +608,36 @@ subagentRuntimeRegistry.setRuntimeFaultReporter((source) => {
 
 type GenerationPermission = WorkspacePermission | "read-only";
 
+/** The inline visual tools, declared from the start on /visualize turns and in design mode. */
+const VISUAL_TOOL_NAMES: readonly string[] = [RENDER_UI_TOOL_NAME, GENERATIVE_UI_TOOL_NAME, VISUALIZE_GUIDE_TOOL_NAME];
+
+/** Tools whose writes are not reported file by file, so design/ is looked at after each one ends. */
+const DESIGN_PAGE_COMMAND_TOOLS: ReadonlySet<string> = new Set(["run_command", "codemode"]);
+
 /** Transcript section carrying the design-mode prompt once design mode is entered mid-reply. */
 const DESIGN_MODE_SECTION = "design-mode";
 
 /** Canvas tools held back until the person enters design mode during the turn. */
 interface EnteredCanvasTools {
-  /** Adds the held canvas tools and the design-mode prompt section once design mode is on. */
-  prepare(context: AgentContext): Promise<AgentContext>;
+  /**
+   * Adds the held canvas tools and the design-mode prompt section once design
+   * mode is on, the canvas status note on the turn's first design step, and
+   * the report on pages written in the last step (`withDesignInspectNote`).
+   */
+  prepare(context: AgentContext, signal?: AbortSignal): Promise<AgentContext>;
+  /**
+   * The canvas status line for the turn's first request, when design mode is
+   * on as the turn starts. Taking it counts as this turn's note.
+   */
+  initialStatusLine(): Promise<string | undefined>;
   /** The held canvas tools once entered, for codemode's late deferred tools. */
   deferred(): readonly AgentTool[];
+  /**
+   * Settles a design-system offer this turn's status note carried: logged as
+   * made once the turn ended normally, or offered again on a later turn when
+   * it failed or was stopped.
+   */
+  settleDesignSystemOffer(delivered: boolean): void;
 }
 
 /**
@@ -1875,7 +1923,7 @@ async function prepareGeneration(
     !options.excludeToolNames?.has(DESIGN_MODE_TOOL_NAME) &&
     designModeToolAllowed({ ...designTurn, regularChat: chatSurface(chat) === "regular", inlineVisuals: params.inlineVisuals });
   // Even when the design_mode card is not offered (for example while Inline
-  // visuals is automatic), the person can switch design mode on mid-reply.
+  // visuals is not automatic), the person can switch design mode on mid-reply.
   const canvasHoldable =
     !designCanvasOffered &&
     !options.excludeToolNames?.has("canvas_place_frame") &&
@@ -2418,6 +2466,60 @@ async function prepareGeneration(
       resolveRuntime: (providerId, modelId, requestSignal) => resolveModelRuntime(providerId, modelId, requestSignal, chat.id),
     });
     const operationProviders = [runtime.provider, ...savedOperationProviders];
+    // generate_image may keep its image as a workspace file where this chat
+    // could write one with write_file, and put it on the design canvas where
+    // the canvas tools could. Both re-check the workspace when they run.
+    const imageRoot = folderPath;
+    const imageWorkspaceUnchanged = async () => {
+      const current = workspace ? await configStore.getWorkspace(workspace.id) : undefined;
+      return current !== undefined && current.folderPath === imageRoot && current.permission !== "none";
+    };
+    const imageSaving =
+      imageRoot &&
+      !botContext &&
+      !assistantMode &&
+      permission !== "none" &&
+      permission !== "read-only" &&
+      !options.excludeToolNames?.has("write_file")
+        ? {
+            saveImage: async (
+              relativePath: string,
+              image: { data: string },
+              saveSignal?: AbortSignal,
+              saveOptions?: { replace: boolean },
+            ) => {
+              if (!(await imageWorkspaceUnchanged())) throw new Error("This chat's workspace folder changed or lost file access.");
+              return await writeWorkspaceBinaryFile(imageRoot, relativePath, Buffer.from(image.data, "base64"), {
+                ...(saveSignal ? { signal: saveSignal } : {}),
+                // Only the file the approval named may be replaced.
+                replace: saveOptions?.replace === true,
+              });
+            },
+            ...(!options.excludeToolNames?.has("canvas_place_frame") &&
+            designCanvasToolsAllowed({ ...designTurn, designMode: true })
+              ? {
+                  placeImages: async (images: readonly { path: string; width: number; height: number }[]) => {
+                    const allowed = async () => (await designModeOn()) && (await imageWorkspaceUnchanged());
+                    if (!(await allowed())) return null;
+                    const frameIds = await placeImagesOnCanvas({
+                      chatId: params.chatId,
+                      images,
+                      ...(params.designView?.viewSize ? { viewSize: params.designView.viewSize } : {}),
+                      shouldSave: allowed,
+                      store: designCanvasStore,
+                      broadcast: announceCanvasChange,
+                      newId: randomUUID,
+                    });
+                    if (frameIds === null) return null;
+                    if (frameIds.length > 0 && !browserOwner.isDestroyed()) {
+                      browserOwner.send("designCanvas:focus", { chatId: params.chatId, frameIds });
+                    }
+                    return { frameIds };
+                  },
+                }
+              : {}),
+          }
+        : {};
     generationExtensions.push({
       id: "aiden.model-operations",
       systemPrompt: piModelOperationsSystemPrompt({
@@ -2435,6 +2537,7 @@ async function prepareGeneration(
         resolveImage: modelImageReferences.resolveImage,
         resolveImages: modelImageReferences.resolveImages,
         onImage: displayImageRuntime.presentGeneratedImage,
+        ...imageSaving,
         // Account at the provider-call boundary, not at nested/parent tool events.
         onUsage: async (record) => {
           // Image providers are always hosted; chat provider deployments never apply to them.
@@ -2448,6 +2551,7 @@ async function prepareGeneration(
         .filter((tool) => !options.excludeToolNames?.has(tool.name)),
     });
   }
+  let visualizeGuideOffered = false;
   // /visualize and a paired-device audience go after this turn's prompt, not in system.
   let generativeUiTurnNote = "";
   if (
@@ -2490,6 +2594,10 @@ async function prepareGeneration(
       ...(params.inlineVisuals === "on_request" ? { onRequest: true } : {}),
       ...(options.visualAudience ? { audience: options.visualAudience } : {}),
       ...(designCanvasOffered ? { designCanvas: true } : {}),
+      ...(designModeToolOffered && !designCanvasOffered ? { designModeOffered: true } : {}),
+      // Where a visual goes names only the destinations this turn has tools for.
+      ...(offerWorkspaceArtifacts ? { workspaceArtifacts: true } : {}),
+      ...(modelOperationsPlan.imageTools ? { images: true } : {}),
       existingChatUiCount: displayedAssistantUiCount(chat.messages),
       onUiVisual: (visual, context) => {
         uiVisualPlacements.record(visual.id, context.toolCallId, visual.layout ?? "column");
@@ -2540,21 +2648,27 @@ async function prepareGeneration(
     });
     generativeUiTurnNote = generativeUiRuntime.turnNote;
     generationExtensions.push(generativeUiRuntime.extension);
+    visualizeGuideOffered = true;
   }
   if (offerWorkspaceArtifacts && workspace) {
-    // Gated by offerWorkspaceArtifacts above.
+    // Gated by offerWorkspaceArtifacts above. Pages use the same markup as
+    // render_ui, so the markup guide comes with them even while Inline
+    // visuals is off and the visuals extension (and its guide) is not here.
     generationExtensions.push({
       id: "aiden.workspace-artifacts",
       tools: [
-        createWorkspaceArtifactTool({
+        ...(visualizeGuideOffered ? [] : [createVisualizeGuideTool({ inlineVisuals: false })]),
+        declareOnDemandLoadNotes(createWorkspaceArtifactTool({
           workspaceId: workspace.id,
           chatId: params.chatId,
           permission,
           hasFolder: Boolean(folderPath),
           store: workspaceArtifactStore,
           takeApprovedDigest: (toolCallId) => takeApprovedWorkspaceArtifactCall(streamId, toolCallId),
-          refresh: (artifact, refreshSignal) =>
-            workspaceArtifactRunner.refresh(workspace.id, artifact.id, { folderPath, permission }, refreshSignal),
+          refresh: (artifact, refreshSignal, reuseFrom) =>
+            workspaceArtifactRunner.refresh(workspace.id, artifact.id, { folderPath, permission }, refreshSignal, { reuseFrom }),
+          check: (sources, approved, checkSignal) =>
+            workspaceArtifactRunner.check(sources, approved, { folderPath, permission }, checkSignal),
           runAction: (artifactId, actionName, args, expectedDigest, runSignal) =>
             workspaceArtifactRunner.runAction(
               workspace.id,
@@ -2567,7 +2681,7 @@ async function prepareGeneration(
             ),
           workspaceExists: async () => Boolean(await configStore.getWorkspace(workspace.id)),
           onChanged: notifyWorkspaceArtifactsChanged,
-        }),
+        }), visualizeGuideLoadNotes(["catalog"], { inlineVisuals: visualizeGuideOffered })),
       ],
     });
   }
@@ -2612,6 +2726,13 @@ async function prepareGeneration(
     for (const { name } of windowless ? appTools : []) windowOnlyToolNames.add(name);
     tools.push(...appTools);
   }
+  /**
+   * Announces a canvas change this reply made, named by the reply, so an open
+   * canvas undoes all of one reply's canvas changes as one step.
+   */
+  const aidenCanvasTurn = randomUUID();
+  const announceCanvasChange = (update: { chatId: string; revision: number }) =>
+    ipcMain.broadcast(DESIGN_CANVAS_UPDATED_CHANNEL, { ...update, aidenTurn: aidenCanvasTurn } satisfies DesignCanvasUpdated);
   /** Set while this turn may use the canvas: puts its committed visuals there. */
   let placeCanvasArtifacts: ((artifacts: readonly CanvasArtifact[]) => Promise<void>) | undefined;
   /**
@@ -2619,6 +2740,8 @@ async function prepareGeneration(
    * from Aiden's card or with the toggle themselves.
    */
   let heldCanvasTools: AgentTool[] = [];
+  /** Design mode was on when the turn started, so the canvas status note applies from the first step. */
+  let canvasStatusOffered = false;
   let enteredDesignModeThisTurn = false;
   // Held canvas tools exist whenever this turn could use the canvas, even when
   // Aiden may not offer the design_mode card, since the person can switch
@@ -2630,7 +2753,7 @@ async function prepareGeneration(
       chatId: params.chatId,
       workspaceRoot: canvasRoot,
       store: designCanvasStore,
-      broadcast: (update) => ipcMain.broadcast(DESIGN_CANVAS_UPDATED_CHANNEL, update),
+      broadcast: announceCanvasChange,
       focus: (frameIds) => {
         const liveOwner = getOwner();
         if (!liveOwner.isDestroyed()) liveOwner.send("designCanvas:focus", { chatId: params.chatId, frameIds });
@@ -2639,6 +2762,19 @@ async function prepareGeneration(
         supportsImages
           ? designCanvasSnapshots.request({ chatId: params.chatId, owner: getOwner(), signal: toolSignal ?? signal })
           : null,
+      seesImages: supportsImages,
+      ...(params.designView ? { viewState: params.designView } : {}),
+      // Drawn offline in a hidden window, through the same scheme and grant the canvas uses.
+      inspect: (frame, inspectOptions, toolSignal) =>
+        inspectDesignPage({
+          workspaceRoot: canvasRoot,
+          frame,
+          pageUrl: (relativePath) => designUrl(designGrants.issue(params.chatId, canvasRoot), relativePath),
+          render: inspectDesignFrame,
+          picture: inspectOptions.picture ? { top: inspectOptions.top } : null,
+          seesImages: supportsImages,
+          signal: toolSignal ?? signal,
+        }),
       // Turning design mode off, deleting the chat or moving its workspace mid-turn ends the canvas tools.
       stillAvailable: async () => {
         if (signal.aborted) return false;
@@ -2652,8 +2788,9 @@ async function prepareGeneration(
         await placeArtifactsOnCanvas({
           chatId: params.chatId,
           artifacts,
+          ...(params.designView?.viewSize ? { viewSize: params.designView.viewSize } : {}),
           store: designCanvasStore,
-          broadcast: (update) => ipcMain.broadcast(DESIGN_CANVAS_UPDATED_CHANNEL, update),
+          broadcast: announceCanvasChange,
           newId: randomUUID,
         });
       };
@@ -2662,6 +2799,7 @@ async function prepareGeneration(
       ? [
           createDesignModeTool({
             isOn: designModeOn,
+            canvasToolNames: canvasTools.map((tool) => tool.name),
             requestEnter: async (reason, toolSignal) => {
               const answer = await designModeConsent.request({
                 chatId: params.chatId,
@@ -2684,11 +2822,10 @@ async function prepareGeneration(
       for (const { name } of [...canvasTools, ...designModeTool]) windowOnlyToolNames.add(name);
     }
     if (designCanvasOffered && canvasTools.length > 0) {
-      const canvas = await designCanvasStore.get(params.chatId);
+      canvasStatusOffered = true;
       generationExtensions.push({
         id: "aiden.design-canvas",
         systemPrompt: DESIGN_MODE_PROMPT_SECTION,
-        volatileSystemPrompt: canvasPromptLine(canvas),
         tools: [...canvasTools, ...designModeTool],
       });
     } else {
@@ -2703,6 +2840,10 @@ async function prepareGeneration(
    * mid-reply works too. Writes are placed one after another.
    */
   let placeWrittenPage: ((relativePath: string) => void) | undefined;
+  /** Inspects each page `placeWrittenPage` placed; its reports join the next request (see `withDesignInspectNote`). */
+  let writtenPageInspector: WrittenPageInspector | undefined;
+  /** Puts the design/ pages a terminal command made or changed on the canvas, as `placeWrittenPage` does for file tools. */
+  let commandPages: { started(): void; finished(): void } | undefined;
   if (
     folderPath &&
     !windowless &&
@@ -2716,28 +2857,75 @@ async function prepareGeneration(
       const current = workspace ? await configStore.getWorkspace(workspace.id) : undefined;
       return current?.folderPath === pageRoot && current.permission !== "none";
     };
+    const inspector = createWrittenPageInspector({
+      // The frame showing the page on the page the person is looking at, drawn
+      // as text only: the report is short and costs no picture.
+      inspect: async (relativePath) => {
+        if (signal.aborted || !(await canSaveWrittenPage())) return null;
+        const doc = await designCanvasStore.get(params.chatId);
+        const frame = frameShowingDesignPage(doc, relativePath);
+        if (!frame) return null;
+        const inspected = await inspectDesignPage({
+          workspaceRoot: pageRoot,
+          frame,
+          pageUrl: (pagePath) => designUrl(designGrants.issue(params.chatId, pageRoot), pagePath),
+          render: inspectDesignFrame,
+          picture: null,
+          seesImages: false,
+          signal,
+        });
+        return { frameId: frame.id, findings: inspected.findings };
+      },
+      onError: (relativePath, error) => {
+        if (!signal.aborted) logger.warn("pi", `Could not inspect the design page ${relativePath} after it was written.`, error);
+      },
+    });
+    writtenPageInspector = inspector;
     placeWrittenPage = (relativePath) => {
       recentWrittenPages.note(params.chatId, relativePath);
       pagesPlaced = pagesPlaced.then(async () => {
         // The write already happened, so Stop does not drop it; design mode
         // and the chat's workspace folder are checked as they are now.
         if (!(await canSaveWrittenPage())) return;
+        let leftOff = false;
         const placedIds = await placeWrittenPagesOnCanvas({
           chatId: params.chatId,
           workspaceRoot: pageRoot,
           paths: [relativePath],
+          ...(params.designView?.viewSize ? { viewSize: params.designView.viewSize } : {}),
           shouldSave: canSaveWrittenPage,
           store: designCanvasStore,
-          broadcast: (update) => ipcMain.broadcast(DESIGN_CANVAS_UPDATED_CHANNEL, update),
+          broadcast: announceCanvasChange,
           newId: randomUUID,
+          onRemoved: () => {
+            leftOff = true;
+          },
         });
         const liveCanvasOwner = getOwner();
         if (placedIds.length > 0 && !liveCanvasOwner.isDestroyed()) {
           liveCanvasOwner.send("designCanvas:focus", { chatId: params.chatId, frameIds: placedIds });
         }
+        if (leftOff) inspector.removed(relativePath);
+        else inspector.written(relativePath);
       }).catch((error) => {
         logger.warn("pi", "Could not put a written page on the design canvas.", error);
       });
+    };
+    // A design turn notes design/ before its first command; a turn that
+    // enters design mode later notes it when its next command starts.
+    let pageScanner = canvasStatusOffered ? createDesignPageScanner(pageRoot) : undefined;
+    commandPages = {
+      started: () => {
+        if (!pageScanner && canvasToolsEntered) pageScanner = createDesignPageScanner(pageRoot);
+      },
+      finished: () => {
+        pageScanner?.changedSinceLastLook().then(
+          (pages) => {
+            for (const page of pages) placeWrittenPage?.(page);
+          },
+          (error) => logger.warn("pi", "Could not look for pages a command wrote in design/.", error),
+        );
+      },
     };
   }
   /**
@@ -2753,36 +2941,97 @@ async function prepareGeneration(
     if (enteredDesignModeThisTurn || (await designModeOn())) canvasToolsEntered = true;
     return canvasToolsEntered;
   };
+  /**
+   * The canvas's counts go to the conversation once per turn, at the first
+   * request design mode is on, and only when they changed since the last note
+   * the transcript holds (see `withCanvasStatusNote`), so the system prompt
+   * and its cache stay the same from turn to turn. The note is journaled (at
+   * turn start here, mid-reply through the harness's `durableSections`), so
+   * the next turn's transcript holds it and an unchanged count adds nothing.
+   */
+  let canvasStatusNoted = false;
+  // The first time design mode is on in a workspace with no design/tokens.css,
+  // the note also offers a tokens file and a specimen page built from the
+  // workspace's own colours and fonts (see `DesignSystemOffers`): only where
+  // this chat could write them, and Aiden writes them only once the person
+  // says yes in chat.
+  const designSystemOfferable =
+    !botContext && !assistantMode && !windowless && permission !== "none" && permission !== "read-only" && !options.excludeToolNames?.has("write_file");
+  let offeredDesignSystemFolder: string | undefined;
+  const canvasStatusLine = async (): Promise<string> => {
+    const line = canvasPromptLine(await designCanvasStore.get(params.chatId), params.designView?.selection);
+    if (!folderPath || !designSystemOfferable) return line;
+    try {
+      const offer = await designSystemOffers.offerFor(folderPath, signal);
+      if (offer) offeredDesignSystemFolder = folderPath;
+      return offer ? `${line} ${offer}` : line;
+    } catch (error) {
+      if (!signal.aborted) logger.warn("pi", "Could not read the workspace's colours and fonts for a design-system offer.", error);
+      return line;
+    }
+  };
+  const withCanvasStatus = async (context: AgentContext): Promise<AgentContext> => {
+    if (canvasStatusNoted || !(canvasStatusOffered || canvasToolsEntered)) return context;
+    canvasStatusNoted = true;
+    try {
+      return withCanvasStatusNote(context, await canvasStatusLine(), Date.now());
+    } catch (error) {
+      logger.warn("pi", "Could not read the design canvas for its status note.", error);
+      return context;
+    }
+  };
+  // Pages written in the last step come back inspected before the next request.
+  const withWrittenPageReports = async (context: AgentContext, requestSignal?: AbortSignal): Promise<AgentContext> =>
+    writtenPageInspector
+      ? withDesignInspectNote(context, await writtenPageInspector.take(undefined, requestSignal), Date.now())
+      : context;
+  const prepareCanvasTools = async (context: AgentContext): Promise<AgentContext> => {
+    if (!(await canvasToolsEnteredNow())) return withCanvasStatus(context);
+    const present = new Set(context.tools?.map((tool) => tool.name) ?? []);
+    const additions = heldCanvasTools.filter((tool) => !present.has(tool.name));
+    // The prompt is read-only here: the section is patched into the
+    // transcript once, as browser discovery and MCP servers do.
+    const sectionPresent = context.messages.some(
+      (message) =>
+        message.role === "system" &&
+        typeof (message as { sections?: Record<string, unknown> }).sections?.[DESIGN_MODE_SECTION] === "string",
+    );
+    if (additions.length === 0 && sectionPresent) return withCanvasStatus(context);
+    return withCanvasStatus({
+      ...context,
+      messages: sectionPresent
+        ? context.messages
+        : [
+            ...context.messages,
+            {
+              role: "system",
+              content: "",
+              sections: { [DESIGN_MODE_SECTION]: DESIGN_MODE_PROMPT_SECTION },
+              timestamp: Date.now(),
+            },
+          ],
+      tools: [...(context.tools ?? []), ...additions],
+    });
+  };
   const enteredCanvasTools: EnteredCanvasTools = {
-    prepare: async (context) => {
-      if (!(await canvasToolsEnteredNow())) return context;
-      const present = new Set(context.tools?.map((tool) => tool.name) ?? []);
-      const additions = heldCanvasTools.filter((tool) => !present.has(tool.name));
-      // The prompt is read-only here: the section is patched into the
-      // transcript once, as browser discovery and MCP servers do.
-      const sectionPresent = context.messages.some(
-        (message) =>
-          message.role === "system" &&
-          typeof (message as { sections?: Record<string, unknown> }).sections?.[DESIGN_MODE_SECTION] === "string",
-      );
-      if (additions.length === 0 && sectionPresent) return context;
-      return {
-        ...context,
-        messages: sectionPresent
-          ? context.messages
-          : [
-              ...context.messages,
-              {
-                role: "system",
-                content: "",
-                sections: { [DESIGN_MODE_SECTION]: DESIGN_MODE_PROMPT_SECTION },
-                timestamp: Date.now(),
-              },
-            ],
-        tools: [...(context.tools ?? []), ...additions],
-      };
+    prepare: async (context, requestSignal) => withWrittenPageReports(await prepareCanvasTools(context), requestSignal),
+    initialStatusLine: async () => {
+      if (canvasStatusNoted || !canvasStatusOffered) return undefined;
+      canvasStatusNoted = true;
+      try {
+        return await canvasStatusLine();
+      } catch (error) {
+        logger.warn("pi", "Could not read the design canvas for its status note.", error);
+        return undefined;
+      }
     },
     deferred: () => (canvasToolsEntered ? heldCanvasTools : []),
+    settleDesignSystemOffer: (delivered) => {
+      if (offeredDesignSystemFolder === undefined) return;
+      const folder = offeredDesignSystemFolder;
+      offeredDesignSystemFolder = undefined;
+      void designSystemOffers.settle(folder, delivered);
+    },
   };
   return {
     runtime: { ...runtime, model },
@@ -2806,7 +3055,12 @@ async function prepareGeneration(
     displayedHtmlArtifacts,
     placeCanvasArtifacts,
     placeWrittenPage,
+    commandPages,
     enteredCanvasTools,
+    // On a /visualize turn and in design mode the visual tools are declared
+    // from the start, so the first visual needs no load step. Design mode
+    // preloads them every turn, so its tool list stays one list.
+    preloadedOnDemandTools: params.visualize === true || designCanvasOffered ? VISUAL_TOOL_NAMES : [],
     appPanels,
     htmlArtifactPlacements,
     imagePlacements,
@@ -3214,7 +3468,9 @@ export const llmClient = {
       displayedHtmlArtifacts,
       placeCanvasArtifacts,
       placeWrittenPage,
+      commandPages,
       enteredCanvasTools,
+      preloadedOnDemandTools,
       appPanels,
       htmlArtifactPlacements,
       imagePlacements,
@@ -3688,6 +3944,9 @@ export const llmClient = {
     let piJournalStopNoted = false;
     let piJournalless = false;
     let piUpgradeCompactionEnabled = false;
+    // The on-demand list this run recorded (or found recorded) at its start,
+    // and the live list, so the run's end records what it loaded mid-run.
+    let onDemandDeclaredRecord: { recorded: readonly string[]; current: () => string[] } | undefined;
     let memoryApprovalContext: { scope: MemoryScope; provenance: MemoryProvenance } | undefined;
     try {
       const piUpgradePolicy = await piUpgradeRolloutStore.load();
@@ -4082,7 +4341,7 @@ export const llmClient = {
       const modelContributions = assembly.contributions;
       const contextPromptSections = assembly.promptSections;
       const { deferredTools, onDemandTools, onDemandCallable } = assembly;
-      let runtimeTools: AgentTool[] = assembly.toolsFor([]);
+      let runtimeTools: AgentTool[] = assembly.toolsFor([], preloadedOnDemandTools);
       const runtimeContributions = {
         ...modelContributions,
         tools: runtimeTools,
@@ -4363,9 +4622,19 @@ export const llmClient = {
       for (const entry of headJournaling.alone) await promptJournal.appendCustomEntry(entry.customType, entry.data);
       let initialMessages = (await promptJournal.buildContext(journalBranch)).messages;
       if (onDemandTools) {
-        // Tools this chat already loaded or called stay declared from the start.
-        runtimeTools = assembly.toolsFor(initialMessages);
+        // Tools this chat already loaded, called or was given stay declared
+        // from the start, in the place an earlier run declared them.
+        const declaredBefore = onDemandDeclaredOfBranch(journalBranch);
+        runtimeTools = assembly.toolsFor(initialMessages, preloadedOnDemandTools, declaredBefore);
         generationContextOptions.tools = runtimeTools;
+        // Record the list when it changed, so a preloaded tool the turn never
+        // called (a /visualize turn's render_artifact) keeps its place on the
+        // next turn instead of dropping out of the cached tool prefix.
+        const declaredNow = onDemandDeclaredNames(runtimeTools, onDemandTools.onDemand);
+        if (declaredNow.join("\n") !== declaredBefore.join("\n")) {
+          await promptJournal.appendCustomEntry(ON_DEMAND_DECLARED_ENTRY, { names: declaredNow });
+        }
+        onDemandDeclaredRecord = { recorded: declaredNow, current: () => onDemandTools.declaredNames() };
       }
       const journalHistory = runTaintHistoryOfBranch(journalBranch);
       runTaint = new RunTaint({
@@ -4380,6 +4649,18 @@ export const llmClient = {
         isConnectorTool: (name) => claimCheckOptions.isConnectorTool(name),
       });
       approvalRequestText = currentUser?.content ?? "";
+      // A design turn's first request carries the canvas counts, journaled
+      // after the history they follow (see `withJournaledCanvasStatusNote`).
+      const canvasStatusLine = await enteredCanvasTools.initialStatusLine();
+      if (canvasStatusLine !== undefined) {
+        initialMessages = await withJournaledCanvasStatusNote(
+          promptJournal,
+          initialMessages,
+          canvasStatusLine,
+          Date.now(),
+          (error) => logger.warn("pi", "Could not journal the design canvas status note.", error),
+        );
+      }
       // The head declares the chat's fixed tools; loaded tools are declared by
       // the system messages the journal kept, or appended before this prompt.
       const head = createInitialSystemMessage(systemPrompt, (onDemandTools ? assembly.headTools : runtimeTools).map(toToolDeclaration));
@@ -4611,6 +4892,7 @@ export const llmClient = {
             }),
         durability: {
           session: promptJournal,
+          durableSections: [CANVAS_STATUS_SECTION, DESIGN_PAGE_INSPECT_SECTION],
           compaction: compactionOptions,
           compactionReserveTokens: compactionInputReserveTokens,
           signal: initialization.controller.signal,
@@ -4700,7 +4982,7 @@ export const llmClient = {
                 : undefined,
               runtime.provider.modelMetadata?.[model.id]?.overrides,
             );
-            prepared = await enteredCanvasTools.prepare(prepared);
+            prepared = await enteredCanvasTools.prepare(prepared, requestSignal);
             if (agentsInstructions) prepared = await agentsInstructions.apply(prepared, requestSignal);
             return mcpServersSection.apply(prepared);
           },
@@ -4961,14 +5243,23 @@ export const llmClient = {
                 : browserSelection.initialized ? browserSelection.tabId : (await browserService.getState(workspaceId)).activeTabId ?? undefined;
               return tabId ? browserService.getApprovalTarget(workspaceId, tabId).url : undefined;
             });
-            const pageRule = await pageRuleFor({
+            const pageRuleOwner = {
+              ...(workspaceId ? { workspaceId } : {}),
+              ...(preparedBotContext ? { botId: preparedBotContext.admission.authority.botId } : {}),
+            };
+            const ownPageRule = await pageRuleFor({
               ...(calledMcp
                 ? { connector: { serverId: calledMcp.serverId, tool: calledMcp.toolName } }
                 : { tool: context.toolCall.name }),
               ...(pageHost ? { host: pageHost } : {}),
-              ...(workspaceId ? { workspaceId } : {}),
-              ...(preparedBotContext ? { botId: preparedBotContext.admission.authority.botId } : {}),
+              ...pageRuleOwner,
             });
+            // A call that also writes a workspace file (generate_image with
+            // savePath) answers to write_file's Block or Ask as well.
+            const fileWriteTool = calledMcp ? undefined : fileWriteRuleTool(context.toolCall.name, context.args);
+            const pageRule = fileWriteTool
+              ? stricterPageRule(ownPageRule, await pageRuleFor({ tool: fileWriteTool, ...pageRuleOwner }))
+              : ownPageRule;
             const workspaceGateInput = {
               toolName: context.toolCall.name,
               args: context.args,
@@ -5593,6 +5884,7 @@ export const llmClient = {
           }
           case "tool_execution_start":
             timeline.toolStarted(event.toolCallId, event.toolName, event.args);
+            if (DESIGN_PAGE_COMMAND_TOOLS.has(event.toolName)) commandPages?.started();
             sendGeneration(streamId, "chat:tool", {
               streamId,
               phase: "call",
@@ -5653,6 +5945,8 @@ export const llmClient = {
               const page = writtenPagePath(event.toolName, event.result?.details);
               if (page) placeWrittenPage(page);
             }
+            // A command, even a failed one, may have written or copied pages into design/.
+            if (!denied && DESIGN_PAGE_COMMAND_TOOLS.has(event.toolName)) commandPages?.finished();
             break;
           }
           default:
@@ -5810,6 +6104,20 @@ export const llmClient = {
         }
         return;
       }
+      if (onDemandDeclaredRecord) {
+        // Tools loaded or called mid-run are recorded inside the turn's
+        // envelope, so a compaction that folds away the load keeps them
+        // declared, and a rolled-back turn takes the record with it.
+        const declaredAtEnd = onDemandDeclaredRecord.current();
+        if (declaredAtEnd.join("\n") !== onDemandDeclaredRecord.recorded.join("\n")) {
+          try {
+            await piJournal.appendCustomEntry(ON_DEMAND_DECLARED_ENTRY, { names: declaredAtEnd });
+          } catch (error) {
+            // The next run still finds the load in the transcript unless a compaction folds it away.
+            logger.warn("pi", `Could not record the on-demand tools of stream ${streamId}.`, error);
+          }
+        }
+      }
       try {
         if (reconcileAbandonedVisibleAssistant) {
           const visible = persisted.chat?.messages.find(
@@ -5925,6 +6233,8 @@ export const llmClient = {
       generationChat.owner === undefined;
     // The outcome the run records (a Stop, or not), once it has one.
     let owedRunRecordedStop: boolean | undefined;
+    // Only a turn that ended normally counts a design-system offer as made.
+    let designSystemOfferDelivered = false;
     // Ends the run's ownership, then settles its owed turn even when a
     // settlement step throws, so saved input never stays unanswered.
     const settleRun = (committedIds: readonly string[], recordedStop: boolean) => {
@@ -6280,6 +6590,7 @@ export const llmClient = {
               timeline: finalTimeline,
             }));
           } else {
+            designSystemOfferDelivered = !wasCancelled;
             sendGeneration(streamId, "chat:done", withUndeliveredGuidance({
               streamId,
               content: full,
@@ -6311,6 +6622,7 @@ export const llmClient = {
         }));
       } finally {
         try {
+          enteredCanvasTools.settleDesignSystemOffer(designSystemOfferDelivered);
           endLoadMonitor(activeGeneration, streamId, false);
           await settleReplyCacheWarmer(cacheWarmer, {
             owner,

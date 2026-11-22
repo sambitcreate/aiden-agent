@@ -1,6 +1,18 @@
 import { isHtmlArtifactTitle } from "./generative-ui.js";
 import { AIDEN_UI_LIMITS, type ChatUiVisualV1 } from "./aiden-ui/types.js";
 import { isWireSafeKey, parseAidenUiState, parseChatUiVisualV1 } from "./aiden-ui/visual.js";
+import {
+  checkWorkspaceArtifactTemplate,
+  workspaceArtifactValueProblem,
+  fillWorkspaceArtifactTemplate,
+  previewWorkspaceArtifactTemplate,
+  WORKSPACE_ARTIFACT_ARGUMENT_PROGRAMS,
+  WORKSPACE_ARTIFACT_PLACEHOLDER,
+  workspaceArtifactTemplateHasParams,
+  type WorkspaceArtifactArgvStep,
+} from "./workspace-artifact-template.js";
+
+export type { WorkspaceArtifactArgvCommand, WorkspaceArtifactArgvStep, WorkspaceArtifactRedirect } from "./workspace-artifact-template.js";
 
 /**
  * Workspace artifacts: persistent Aiden UI pages a workspace owns and the
@@ -39,6 +51,12 @@ export const WORKSPACE_ARTIFACT_LIMITS = {
   maxIntervalSeconds: 24 * 60 * 60,
   /** Earlier versions kept per page; the oldest is dropped first. */
   history: 5,
+  /**
+   * Page markup a save takes, and keeps with the version so the model can read
+   * and edit it. The two are one limit, so every page saved whole keeps its
+   * markup unless the workspace's files run out of room for it.
+   */
+  markupChars: 400_000,
 } as const;
 
 export type WorkspaceArtifactParse = "json" | "lines" | "text";
@@ -57,7 +75,12 @@ export interface WorkspaceArtifactParamV1 {
 export interface WorkspaceArtifactActionV1 {
   name: string;
   label: string;
-  /** Shell template; `{{param}}` placeholders are filled with shell-quoted values. */
+  /**
+   * Command template. With `{{param}}` placeholders it never reaches a shell:
+   * it is parsed into argv commands, each placeholder fills exactly one
+   * argument, and it may sit only in a slot its program's table lists
+   * (`workspace-artifact-slots.ts`). A template without params runs in a shell.
+   */
   command: string;
   params: WorkspaceArtifactParamV1[];
 }
@@ -74,6 +97,20 @@ export interface WorkspaceArtifactV1 {
   description?: string;
   /** The page: a compiled render_ui visual whose id is the artifact id. */
   visual: ChatUiVisualV1;
+  /**
+   * The Aiden UI Markup `visual` was compiled from, kept in main only so the
+   * model can read the page and edit it (`get`, `edits`). Absent for pages
+   * saved before it was kept, imported pages, and pages whose markup was
+   * dropped to keep the workspace's files within their size (`markupDropped`).
+   * Never sent to the renderer, and never exported.
+   */
+  markup?: string;
+  /**
+   * Set when this version's markup was dropped, oldest first, so the
+   * workspace's saved pages or their history stay within their file's size.
+   * Only ever set without `markup`.
+   */
+  markupDropped?: true;
   /**
    * The state the markup declared (`<Visual state={{…}}>`), kept apart from
    * `visual.state`, which the person's own choices overwrite. Export writes
@@ -102,6 +139,11 @@ export interface WorkspaceArtifactSourceResultV1 {
   /** The parsed value as JSON, present when `status` is ok. */
   dataJson?: string;
   error?: string;
+  /**
+   * A short hash of the real workspace folder a good read came from, so a
+   * read is kept across a save only for that same folder. Never the path.
+   */
+  folder?: string;
 }
 
 /** The last read of each source; failing reads keep the last good data. */
@@ -172,9 +214,6 @@ export interface WorkspaceArtifactsChangedEvent {
 const NAME = /^[A-Za-z_][A-Za-z0-9_]*$/u;
 const ARTIFACT_ID = /^[A-Za-z0-9_-]{1,64}$/u;
 const WORKSPACE_ID = /^[A-Za-z0-9_-]{1,128}$/u;
-const PLACEHOLDER = /\{\{\s*([A-Za-z_][A-Za-z0-9_]*)\s*\}\}/gu;
-const PLACEHOLDER_AT = /\{\{\s*([A-Za-z_][A-Za-z0-9_]*)\s*\}\}/uy;
-const PLACEHOLDER_TEST = /\{\{\s*[A-Za-z_][A-Za-z0-9_]*\s*\}\}/u;
 const RESERVED_NAMES = new Set(["__proto__", "constructor", "prototype"]);
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -210,341 +249,6 @@ function hasControlCharacter(value: string, allowLineBreaks: boolean): boolean {
   return INVISIBLE.test(value.replace(EMOJI_PARTS, ""));
 }
 
-const WORD_BREAK_AFTER = /[\s;&|)]/u;
-/** Reserved words that come before a command's name without being it. */
-const COMMAND_PREFIX_WORDS = new Set(["!", "coproc", "do", "elif", "else", "if", "then", "until", "while"]);
-/** `NAME=value` (or `NAME[i]=`, `NAME+=`) before a command's name. */
-const ASSIGNMENT_WORD = /^[A-Za-z_][A-Za-z0-9_]*(?:\[[^\]]*\])?\+?=/u;
-/** A redirection operator; one ending in `&2` or `&-` has no target word. */
-const REDIRECTION = /^(?:&>>?|<<<|<>|[<>]&(?:[0-9]+-?|-)|[<>]&|>>|>\||[<>])/u;
-/** Commands that run their arguments as code or as another program. */
-const RUNS_ARGUMENT = new Set([
-  ".",
-  "arch",
-  "builtin",
-  "bunx",
-  "busybox",
-  "caffeinate",
-  "chroot",
-  "command",
-  "doas",
-  "env",
-  "eval",
-  "exec",
-  "flock",
-  "ionice",
-  "nice",
-  "nohup",
-  "npx",
-  "parallel",
-  "pkexec",
-  "pnpx",
-  "runuser",
-  "setsid",
-  "sg",
-  "source",
-  "ssh",
-  "stdbuf",
-  "strace",
-  "su",
-  "sudo",
-  "systemd-run",
-  "time",
-  "timeout",
-  "trap",
-  "unbuffer",
-  "uvx",
-  "watch",
-  "xargs",
-  "xcrun",
-]);
-
-/**
- * Programs that read some argument as code: `code` matches the options whose
- * value is code or names the code to run, `valued` the other options that take
- * the next word, and `operand` says which plain arguments are code (the first
- * for `awk '{…}' file` unless a code option gave it, or each after the first
- * for `sqlite3 db 'select …'`).
- */
-interface CodeArguments {
-  code: RegExp;
-  valued?: RegExp;
-  operand?: "first" | "after-first";
-  /**
-   * Code options count only before the subcommand, the first operand this
-   * matches (as git's do). Before it, any option not in `flags` is taken to
-   * consume the next word, so an option this list does not know cannot pass
-   * its value off as the subcommand.
-   */
-  subcommand?: RegExp;
-  flags?: RegExp;
-}
-const SHELL_CODE: CodeArguments = { code: /^-[A-Za-z]*c$/u, valued: /^[-+][oO]$/u, operand: "first" };
-const AWK_CODE: CodeArguments = { code: /^(?:-[feE]|--file|--source|--exec)$/u, valued: /^(?:-[Fv]|--field-separator|--assign)$/u, operand: "first" };
-const NODE_CODE: CodeArguments = { code: /^(?:-[epr]|--eval|--print|--require|--import|--loader|--experimental-loader)$/u, operand: "first" };
-const CODE_ARGUMENTS: Record<string, CodeArguments> = {
-  ash: SHELL_CODE,
-  bash: SHELL_CODE,
-  csh: SHELL_CODE,
-  dash: SHELL_CODE,
-  fish: SHELL_CODE,
-  ksh: SHELL_CODE,
-  mksh: SHELL_CODE,
-  sh: SHELL_CODE,
-  tcsh: SHELL_CODE,
-  zsh: SHELL_CODE,
-  awk: AWK_CODE,
-  gawk: AWK_CODE,
-  mawk: AWK_CODE,
-  nawk: AWK_CODE,
-  sed: { code: /^(?:-[A-Za-z]*[ef]|--expression|--file)$/u, valued: /^(?:-l|--line-length)$/u, operand: "first" },
-  gsed: { code: /^(?:-[A-Za-z]*[ef]|--expression|--file)$/u, valued: /^(?:-l|--line-length)$/u, operand: "first" },
-  python: { code: /^-[A-Za-z]*[cm]$/u, valued: /^-[WX]$/u, operand: "first" },
-  pypy: { code: /^-[A-Za-z]*[cm]$/u, valued: /^-[WX]$/u, operand: "first" },
-  node: NODE_CODE,
-  nodejs: NODE_CODE,
-  bun: NODE_CODE,
-  perl: { code: /^(?:-[A-Za-z]*[eE]|-[mM])$/u, valued: /^-[Ix]$/u, operand: "first" },
-  ruby: { code: /^(?:-[A-Za-z]*e|-r)$/u, valued: /^-[IC]$/u, operand: "first" },
-  php: { code: /^-[rBREf]$/u, operand: "first" },
-  lua: { code: /^-[el]$/u, operand: "first" },
-  luajit: { code: /^-[el]$/u, operand: "first" },
-  osascript: { code: /^-e$/u, operand: "first" },
-  R: { code: /^(?:-e|--file)$/u },
-  Rscript: { code: /^-e$/u, operand: "first" },
-  pwsh: { code: /^-(?:c|command|e|ec|encodedcommand|f|file)$/iu, operand: "first" },
-  powershell: { code: /^-(?:c|command|e|ec|encodedcommand|f|file)$/iu, operand: "first" },
-  sqlite: { code: /^-(?:cmd|init)$/u, valued: /^-(?:separator|nullvalue|newline|vfs|mmap|maxsize|lookaside|pagecache|heap)$/u, operand: "after-first" },
-  psql: { code: /^(?:-c|--command|-f|--file)$/u },
-  mysql: { code: /^(?:-e|--execute)$/u },
-  mariadb: { code: /^(?:-e|--execute)$/u },
-  git: {
-    code: /^(?:-c|--config-env|--exec-path)$/u,
-    valued: /^-C$/u,
-    subcommand: /^[a-z][a-z0-9-]*$/u,
-    flags: /^(?:-[pPv]|--(?:paginate|no-pager|bare|version|help|no-replace-objects|no-lazy-fetch|no-optional-locks|no-advice|(?:no-)?(?:literal|glob|noglob|icase)-pathspecs|(?:html|man|info)-path))$/u,
-  },
-};
-/** Builtins that read a word as a variable name or arithmetic; bash evaluates a name's `[subscript]`. */
-const NAME_COMMANDS = new Set(["declare", "export", "getopts", "let", "local", "mapfile", "read", "readarray", "readonly", "typeset", "unset"]);
-/** Builtins whose `-v` (or `wait -p`) value is a variable name. */
-const NAME_OPTION_COMMANDS: Record<string, RegExp> = { printf: /^-v$/u, test: /^-[vR]$/u, "[": /^-[vR]$/u, wait: /^-[A-Za-z]*p$/u };
-
-interface PlaceholderPlacement {
-  /** Where a placeholder sits wrongly for any value. */
-  misplaced?: string;
-  /** A placeholder bash evaluates as arithmetic; only numbers are safe there. */
-  arithmetic?: string;
-}
-
-/** A word as the shell reads it once quotes, backslashes and line continuations go. */
-function unquotedWord(word: string): string {
-  return word.replace(/\\\n/gu, "").replace(/["'\\]/gu, "");
-}
-
-/**
- * Judges a placeholder by the words of its simple command before it (as
- * written, without redirections): whether it would be the command itself, an
- * argument that command runs as code, or a word bash reads as a variable name
- * or arithmetic. Returns a reason for any value, `"name"` when only text
- * values are unsafe, or undefined.
- */
-function placeholderCommandProblem(words: readonly string[], inArithmetic: boolean): string | "name" | undefined {
-  let start = 0;
-  while (start < words.length && (COMMAND_PREFIX_WORDS.has(words[start]!) || ASSIGNMENT_WORD.test(words[start]!))) start += 1;
-  if (start >= words.length) return inArithmetic ? "name" : "the command itself";
-  const command = unquotedWord(words[start]!);
-  // A name built by expansion, a glob or braces is only known when it runs.
-  if (/[$`*?{}]/u.test(command) || (command !== "[" && command.includes("["))) return "an argument to a command chosen when it runs";
-  const base = command.replace(/^.*\//u, "");
-  // python3.12 and lua5.4 follow python and lua's rules.
-  const name = base.replace(/[0-9][0-9.]*$/u, "") || base;
-  if (RUNS_ARGUMENT.has(base) || RUNS_ARGUMENT.has(name)) return `an argument to ${base}, which runs it`;
-  const args = words.slice(start + 1).map(unquotedWord);
-  const last = args[args.length - 1] ?? "";
-  if (base === "find" && args.some((arg) => /^-(?:exec|execdir|ok|okdir)$/u.test(arg))) return "an argument to find -exec, which runs it";
-  const spec = CODE_ARGUMENTS[base] ?? CODE_ARGUMENTS[name];
-  if (spec) {
-    const scan = (words: readonly string[]) => {
-      let operands = 0;
-      let codeGiven = false;
-      let subcommand = false;
-      for (let index = 0; index < words.length; index += 1) {
-        const arg = words[index]!;
-        if (arg === "--") {
-          operands += words.length - index - 1;
-          break;
-        }
-        if (spec.code.test(arg)) {
-          codeGiven = true;
-          index += 1;
-        } else if (spec.valued?.test(arg)) index += 1;
-        else if (spec.subcommand && !subcommand && arg.startsWith("-") && !arg.includes("=") && !spec.flags?.test(arg)) index += 1;
-        else if (!arg.startsWith("-") || arg === "-") {
-          operands += 1;
-          subcommand ||= spec.subcommand?.test(arg) === true;
-        }
-      }
-      return { operands, codeGiven, subcommand };
-    };
-    if (spec.code.test(last) && !scan(args.slice(0, -1)).subcommand) return `the code given to ${base} ${last}`;
-    const { operands, codeGiven } = scan(args);
-    if (spec.operand === "first" && !codeGiven && operands === 0) return `the program ${base} runs`;
-    if (spec.operand === "after-first" && operands >= 1) return `the code ${base} runs`;
-  }
-  if (inArithmetic || NAME_COMMANDS.has(base) || NAME_OPTION_COMMANDS[base]?.test(last)) return "name";
-  return undefined;
-}
-
-/**
- * Each placeholder must stand alone as an unquoted argument (`gh pr merge
- * {{number}}`): never inside quotes, backticks, `$(…)`, `${…}`, a heredoc,
- * a comment or a longer word, never the command itself, and never an
- * argument a command runs as code (`eval`, `sh -c`, `python -c`, an awk
- * program). Returns where a placeholder sits wrongly, or undefined. The value
- * itself never becomes shell code (see `resolveWorkspaceArtifactCommand`);
- * this keeps each value one plain argument, as the person's confirmation
- * shows it. The list of programs that run code is the common ones, not every
- * program; under Ask each press still shows the exact command.
- */
-function placeholderPlacement(template: string, isText: (name: string) => boolean): PlaceholderPlacement {
-  const misplaced = (reason: string): PlaceholderPlacement => ({ misplaced: reason });
-  if (!PLACEHOLDER_TEST.test(template)) return {};
-  if (template.includes("AIDEN_ARG_")) return misplaced("next to AIDEN_ARG_ variables, which are reserved");
-  if (/<<(?!<)/u.test(template)) return misplaced("inside a heredoc");
-  type Quote = "'" | '"' | "`" | "$'" | null;
-  let quote: Quote = null;
-  // Open $(…), ${…}, $[…], <(…) and >(…), each with the quoting it started in.
-  const expansions: { close: string; quote: Quote }[] = [];
-  // Unquoted [[ … ]] and (( … )), where bash reads words as arithmetic.
-  let testBrackets = false;
-  let arithmeticParens = 0;
-  // The words so far of the current top-level simple command, as written,
-  // without redirections; where the word being read started; and whether
-  // that word is a redirection's target rather than an argument.
-  let words: string[] = [];
-  let wordStart = -1;
-  let redirectTarget = false;
-  const endWord = (index: number) => {
-    if (wordStart < 0) return;
-    if (redirectTarget) redirectTarget = false;
-    else words.push(template.slice(wordStart, index));
-    wordStart = -1;
-  };
-  const checked = new Set<number>();
-  for (let index = 0; index < template.length; index += 1) {
-    const char = template[index]!;
-    if (quote === "'" || quote === "$'") {
-      if (quote === "$'" && char === "\\") index += 1;
-      else if (char === "'") quote = null;
-      continue;
-    }
-    const depth = expansions.length;
-    const top = quote === null && depth === 0;
-    if (char === "\\") {
-      // A line continuation joins words; any other backslash starts or extends one.
-      if (top && wordStart < 0 && template[index + 1] !== "\n") wordStart = index;
-      index += 1;
-      continue;
-    }
-    if (top && wordStart < 0 && char === "#") {
-      // A comment runs to the end of its line, which then ends the command.
-      const newline = template.indexOf("\n", index);
-      if (newline < 0) break;
-      index = newline - 1;
-      continue;
-    }
-    if (template.startsWith("{{", index)) {
-      PLACEHOLDER_AT.lastIndex = index;
-      const match = PLACEHOLDER_AT.exec(template);
-      if (match) {
-        checked.add(index);
-        if (quote === '"') return misplaced("inside double quotes");
-        if (quote === "`") return misplaced("inside backticks");
-        if (depth > 0) return misplaced("inside a $(…), ${…}, $[…] or <(…) expansion");
-        const end = index + match[0].length;
-        const after = end >= template.length ? " " : template[end]!;
-        if (wordStart >= 0 || !WORD_BREAK_AFTER.test(after)) return misplaced("part of a longer word");
-        // A redirection's target is only ever a file name (`cat > {{x}}`).
-        const problem = redirectTarget ? undefined : placeholderCommandProblem(words, arithmeticParens > 0 || testBrackets);
-        if (problem === "name") {
-          if (isText(match[1]!)) return { arithmetic: match[1]! };
-        } else if (problem !== undefined) return misplaced(problem);
-        wordStart = index;
-        index = end - 1;
-        continue;
-      }
-    }
-    if (top) {
-      // Inside (( )) and [[ ]], < and > compare rather than redirect.
-      const redirects = arithmeticParens === 0 && !testBrackets;
-      if (redirects && (char === "<" || char === ">" || (char === "&" && template[index + 1] === ">"))) {
-        if (char !== "&" && template[index + 1] === "(") {
-          // <(…) and >(…) are words whose inside is a command.
-          if (wordStart < 0) wordStart = index;
-          expansions.push({ close: ")", quote: null });
-          index += 1;
-          continue;
-        }
-        // An fd written against the operator (2>, {fd}>) belongs to it.
-        if (wordStart >= 0 && /^(?:[0-9]+|\{[A-Za-z_][A-Za-z0-9_]*\})$/u.test(template.slice(wordStart, index))) wordStart = -1;
-        endWord(index);
-        const operator = REDIRECTION.exec(template.slice(index))![0];
-        redirectTarget = !/&(?:[0-9]+-?|-)$/u.test(operator);
-        index += operator.length - 1;
-        continue;
-      }
-      const startsWord = wordStart < 0;
-      // `{` and `}` group commands only as words of their own.
-      const brace = (char === "{" && startsWord && /\s/u.test(template[index + 1] ?? " ")) || (char === "}" && startsWord);
-      if (";&|()\n".includes(char) || brace) {
-        endWord(index);
-        words = [];
-        redirectTarget = false;
-      } else if (/\s/u.test(char)) {
-        endWord(index);
-        continue;
-      } else if (startsWord) wordStart = index;
-      if (!testBrackets && startsWord && template.startsWith("[[", index)) {
-        testBrackets = true;
-        wordStart = -1;
-        index += 1;
-        continue;
-      }
-      if (testBrackets && template.startsWith("]]", index)) {
-        testBrackets = false;
-        wordStart = -1;
-        index += 1;
-        continue;
-      }
-      if (arithmeticParens === 0 && startsWord && template.startsWith("((", index)) {
-        arithmeticParens = 2;
-        index += 1;
-        continue;
-      }
-      if (arithmeticParens > 0 && (char === "(" || char === ")")) {
-        arithmeticParens += char === "(" ? 1 : -1;
-        continue;
-      }
-    }
-    if (quote === null && char === "$" && template[index + 1] === "'") {
-      quote = "$'";
-      index += 1;
-    } else if (quote === null && (char === "'" || char === '"' || char === "`")) quote = char;
-    else if (quote !== null && char === quote) quote = null;
-    else if ((quote === null || quote === '"') && char === "$" && "({[".includes(template[index + 1] ?? " ")) {
-      expansions.push({ close: { "(": ")", "{": "}", "[": "]" }[template[index + 1] as "(" | "{" | "["], quote });
-      quote = null;
-      index += 1;
-    } else if (quote === null && depth > 0 && char === "(") expansions.push({ close: ")", quote: null });
-    else if (quote === null && depth > 0 && char === expansions[depth - 1]!.close) quote = expansions.pop()!.quote;
-  }
-  if (quote !== null || expansions.length !== 0) return misplaced("after an unclosed quote or expansion");
-  // A placeholder the scan stepped over (say, right after a backslash) was never checked.
-  for (const match of template.matchAll(PLACEHOLDER)) if (!checked.has(match.index)) return misplaced("after a backslash or other escape");
-  return {};
-}
-
 function byteLength(text: string): number {
   return new TextEncoder().encode(text).length;
 }
@@ -571,6 +275,21 @@ export function isWorkspaceArtifactName(value: unknown): value is string {
     !RESERVED_NAMES.has(value) &&
     isWireSafeKey(value)
   );
+}
+
+/**
+ * Refuses a source, action or param name. A well-formed name that is reserved
+ * (a built-in object property, or a key Aiden's phone apps treat as private)
+ * says so and offers one that is free, rather than calling it malformed.
+ */
+function invalidName(where: string, value: unknown, example: string): never {
+  if (typeof value === "string" && value.length <= WORKSPACE_ARTIFACT_LIMITS.nameChars && NAME.test(value)) {
+    const why = RESERVED_NAMES.has(value) ? "it is a built-in object property" : "Aiden's phone apps treat a key with that name as private";
+    const suggestion = `my${value.charAt(0).toUpperCase()}${value.slice(1)}`;
+    const free = isWorkspaceArtifactName(suggestion) ? `, so try "${suggestion}"` : ", so pick another";
+    return invalid(`${where}: the name "${value}" is reserved (${why})${free}.`);
+  }
+  return invalid(`${where}: name must be an identifier like "${example}" (letters, digits, _; at most ${WORKSPACE_ARTIFACT_LIMITS.nameChars}).`);
 }
 
 export function isWorkspaceArtifactTitle(value: unknown): value is string {
@@ -624,9 +343,7 @@ export function parseWorkspaceArtifactSources(value: unknown): WorkspaceArtifact
   return value.map((entry, index) => {
     const where = `sources[${index}]`;
     if (!isRecord(entry)) return invalid(`${where} must be an object.`);
-    if (!isWorkspaceArtifactName(entry.name)) {
-      return invalid(`${where}: name must be an identifier like "pulls" (letters, digits, _; at most ${WORKSPACE_ARTIFACT_LIMITS.nameChars}).`);
-    }
+    if (!isWorkspaceArtifactName(entry.name)) return invalidName(where, entry.name, "pulls");
     if (seen.has(entry.name)) return invalid(`${where}: the name "${entry.name}" is used twice.`);
     seen.add(entry.name);
     const parse = parseMode(entry.parse, where);
@@ -636,7 +353,35 @@ export function parseWorkspaceArtifactSources(value: unknown): WorkspaceArtifact
   });
 }
 
-export function parseWorkspaceArtifactActions(value: unknown): WorkspaceArtifactActionV1[] {
+/** Why an action's command may not take page data as written, or undefined when it may. */
+function actionPlacementProblem(template: string): string | undefined {
+  if (!workspaceArtifactTemplateHasParams(template)) return undefined;
+  const checked = checkWorkspaceArtifactTemplate(template);
+  if (checked.ok) return undefined;
+  const { kind, reason } = checked.problem;
+  if (kind === "misplaced") return reason;
+  if (kind === "slot") return `page data may not be passed ${reason}`;
+  if (kind === "syntax") return `a command with {{params}} runs without a shell, so it may not use ${reason}. ${TEMPLATE_GRAMMAR}`;
+  return `page data may not be passed to a command that uses ${reason}. In a command with {{params}}, every command (piped or chained) must start with one of: ${WORKSPACE_ARTIFACT_ARGUMENT_PROGRAMS}, written as a plain word. A command without {{params}} is not limited this way (it runs in a shell, exactly as saved), so write a fixed command instead, or ask the person.`;
+}
+
+const TEMPLATE_GRAMMAR = "Put | && || ; or a line break between commands, quote text with ' or \", and use only 2>&1, >/dev/null or 2>/dev/null as redirections.";
+
+/**
+ * Why a stored action is turned off: its command no longer passes the
+ * placeholder rules, which can tighten after a page was saved. A page keeps
+ * such an action so nothing is lost, but it never runs until rewritten.
+ */
+export function workspaceArtifactActionProblem(action: Pick<WorkspaceArtifactActionV1, "command" | "params">): string | undefined {
+  return actionPlacementProblem(action.command);
+}
+
+/**
+ * Reads a page's actions. `stored` keeps an action whose placeholders the
+ * current rules refuse (see `workspaceArtifactActionProblem`), for pages saved
+ * before a rule tightened; anything a person or the model writes is strict.
+ */
+export function parseWorkspaceArtifactActions(value: unknown, options: { stored?: boolean } = {}): WorkspaceArtifactActionV1[] {
   if (value === undefined) return [];
   if (!Array.isArray(value)) return invalid("actions must be a list.");
   if (value.length > WORKSPACE_ARTIFACT_LIMITS.actions) {
@@ -646,7 +391,7 @@ export function parseWorkspaceArtifactActions(value: unknown): WorkspaceArtifact
   return value.map((entry, index) => {
     const where = `actions[${index}]`;
     if (!isRecord(entry)) return invalid(`${where} must be an object.`);
-    if (!isWorkspaceArtifactName(entry.name)) return invalid(`${where}: name must be an identifier like "merge".`);
+    if (!isWorkspaceArtifactName(entry.name)) return invalidName(where, entry.name, "merge");
     if (seen.has(entry.name)) return invalid(`${where}: the name "${entry.name}" is used twice.`);
     seen.add(entry.name);
     const label = typeof entry.label === "string" ? entry.label.trim() : "";
@@ -660,7 +405,8 @@ export function parseWorkspaceArtifactActions(value: unknown): WorkspaceArtifact
     const paramNames = new Set<string>();
     const params = rawParams.map((param, paramIndex): WorkspaceArtifactParamV1 => {
       const at = `${where}.params[${paramIndex}]`;
-      if (!isRecord(param) || !isWorkspaceArtifactName(param.name)) return invalid(`${at}: name must be an identifier.`);
+      if (!isRecord(param)) return invalid(`${at} must be an object.`);
+      if (!isWorkspaceArtifactName(param.name)) return invalidName(at, param.name, "number");
       if (paramNames.has(param.name)) return invalid(`${at}: the name "${param.name}" is used twice.`);
       paramNames.add(param.name);
       const type = param.type ?? "string";
@@ -668,18 +414,11 @@ export function parseWorkspaceArtifactActions(value: unknown): WorkspaceArtifact
       return { name: param.name, type };
     });
     const template = command(entry.command, where);
-    for (const match of template.matchAll(PLACEHOLDER)) {
+    for (const match of template.matchAll(WORKSPACE_ARTIFACT_PLACEHOLDER)) {
       if (!paramNames.has(match[1]!)) return invalid(`${where}: {{${match[1]}}} is not one of its params.`);
     }
-    const placement = placeholderPlacement(template, (name) => params.some((param) => param.name === name && param.type === "string"));
-    if (placement.misplaced) {
-      return invalid(`${where}: each {{param}} must be its own unquoted word, not ${placement.misplaced}. Write gh pr comment {{number}} --body {{body}}.`);
-    }
-    if (placement.arithmetic) {
-      return invalid(
-        `${where}: {{${placement.arithmetic}}} is text, and bash evaluates text inside [[ ]], (( )), let or declare as arithmetic. Give it type "number", or compare with [ … ].`,
-      );
-    }
+    const problem = options.stored ? undefined : actionPlacementProblem(template);
+    if (problem) return invalid(`${where}: ${problem}`);
     return { name: entry.name, label, command: template, params };
   });
 }
@@ -726,19 +465,29 @@ function finiteTime(value: unknown): number | undefined {
   return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : undefined;
 }
 
-/** Lenient for stored files: an entry that no longer validates is dropped, never repaired. */
+/**
+ * Lenient for stored files: an entry that no longer validates is dropped,
+ * never repaired, except an action the placeholder rules now refuse, which
+ * stays on the page turned off (`workspaceArtifactActionProblem`).
+ */
 export function parseWorkspaceArtifactV1(value: unknown): WorkspaceArtifactV1 | undefined {
   if (!isRecord(value) || value.version !== 1) return undefined;
   if (!isWorkspaceArtifactId(value.id) || !isWorkspaceArtifactWorkspaceId(value.workspaceId)) return undefined;
   const visual = parseChatUiVisualV1(value.visual);
   if (!visual || visual.id !== value.id || !isWorkspaceArtifactTitle(visual.title)) return undefined;
   const sources = tryParse(() => parseWorkspaceArtifactSources(value.sources));
-  const actions = tryParse(() => parseWorkspaceArtifactActions(value.actions));
+  const actions = tryParse(() => parseWorkspaceArtifactActions(value.actions, { stored: true }));
   const refresh = tryParse(() => parseWorkspaceArtifactRefresh(value.refresh));
   const description = tryParse(() => parseWorkspaceArtifactDescription(value.description));
   if (!sources || !actions || !refresh || (value.description !== undefined && description === undefined)) return undefined;
   const initialState = value.initialState === undefined ? undefined : parseAidenUiState(value.initialState);
   if (value.initialState !== undefined && !initialState) return undefined;
+  // Only a convenience for editing: markup that does not fit is dropped, never the page.
+  const markup =
+    typeof value.markup === "string" && value.markup.length > 0 && value.markup.length <= WORKSPACE_ARTIFACT_LIMITS.markupChars
+      ? value.markup
+      : undefined;
+  const markupDropped = markup === undefined && value.markupDropped === true;
   const revision = value.revision;
   const createdAt = finiteTime(value.createdAt);
   const updatedAt = finiteTime(value.updatedAt);
@@ -754,6 +503,8 @@ export function parseWorkspaceArtifactV1(value: unknown): WorkspaceArtifactV1 | 
     workspaceId: value.workspaceId,
     ...(description ? { description } : {}),
     visual,
+    ...(markup !== undefined ? { markup } : {}),
+    ...(markupDropped ? { markupDropped: true as const } : {}),
     ...(initialState ? { initialState } : {}),
     sources,
     actions,
@@ -782,8 +533,9 @@ export function parseWorkspaceArtifactSnapshotV1(value: unknown): WorkspaceArtif
       typeof entry.dataJson === "string" && byteLength(entry.dataJson) <= WORKSPACE_ARTIFACT_LIMITS.sourceDataBytes
         ? entry.dataJson
         : undefined;
-    const error = typeof entry.error === "string" ? entry.error.slice(0, WORKSPACE_ARTIFACT_LIMITS.errorChars) : undefined;
-    sources[name] = { status: entry.status, at, ...(entry.policyDenied === true ? { policyDenied: true as const } : {}), ...(dataJson !== undefined ? { dataJson } : {}), ...(error ? { error } : {}) };
+    const error = typeof entry.error === "string" ? entry.error.slice(0, safeCut(entry.error, WORKSPACE_ARTIFACT_LIMITS.errorChars)) : undefined;
+    const folder = typeof entry.folder === "string" && /^[0-9a-f]{16}$/u.test(entry.folder) ? entry.folder : undefined;
+    sources[name] = { status: entry.status, at, ...(entry.policyDenied === true ? { policyDenied: true as const } : {}), ...(dataJson !== undefined ? { dataJson } : {}), ...(error ? { error } : {}), ...(folder ? { folder } : {}) };
   }
   return { revision, refreshedAt, sources, ...(value.filePolicyVersion === 1 ? { filePolicyVersion: 1 as const } : {}) };
 }
@@ -826,6 +578,211 @@ export function workspaceArtifactDataJson(
   return artifact.visual.dataJson;
 }
 
+const JSON_SNIPPET_CHARS = 30;
+
+const isJsonSpace = (code: number) => code === 0x20 || code === 0x09 || code === 0x0a || code === 0x0d;
+const isDigit = (code: number) => code >= 0x30 && code <= 0x39;
+const isHex = (code: number) => isDigit(code) || (code >= 0x41 && code <= 0x46) || (code >= 0x61 && code <= 0x66);
+
+/**
+ * The offset of the first character that breaks the JSON grammar (RFC 8259,
+ * as `JSON.parse` reads it), `text.length` when the text ends too early, or
+ * undefined when the scan finds nothing wrong. One pass with an explicit
+ * stack, so it is linear and never recurses however deep the text nests; it
+ * never reads the parser's message, whose wording differs between engines.
+ */
+export function firstJsonErrorOffset(text: string): number | undefined {
+  const length = text.length;
+  const stack: Array<"{" | "["> = [];
+  let i = 0;
+  const skipSpace = () => {
+    while (i < length && isJsonSpace(text.charCodeAt(i))) i += 1;
+  };
+  /** Advances past a string starting at `i`; returns an error offset or -1. */
+  const scanString = (): number => {
+    i += 1;
+    while (i < length) {
+      const code = text.charCodeAt(i);
+      if (code === 0x22) {
+        i += 1;
+        return -1;
+      }
+      if (code < 0x20) return i;
+      if (code === 0x5c) {
+        const escape = text.charCodeAt(i + 1);
+        if (i + 1 >= length) return length;
+        if (escape === 0x75) {
+          for (let k = 2; k < 6; k += 1) {
+            if (i + k >= length) return length;
+            if (!isHex(text.charCodeAt(i + k))) return i + k;
+          }
+          i += 6;
+          continue;
+        }
+        if (!'"\\/bfnrt'.includes(text[i + 1]!)) return i + 1;
+        i += 2;
+        continue;
+      }
+      i += 1;
+    }
+    return length;
+  };
+  const digits = (): number => {
+    const from = i;
+    while (i < length && isDigit(text.charCodeAt(i))) i += 1;
+    return i - from;
+  };
+  /** Advances past a number starting at `i`; returns an error offset or -1. */
+  const scanNumber = (): number => {
+    if (text.charCodeAt(i) === 0x2d) i += 1;
+    if (i >= length) return length;
+    if (text.charCodeAt(i) === 0x30) i += 1;
+    else if (digits() === 0) return i;
+    if (text.charCodeAt(i) === 0x2e) {
+      i += 1;
+      if (i >= length) return length;
+      if (digits() === 0) return i;
+    }
+    const exponent = text.charCodeAt(i);
+    if (exponent === 0x65 || exponent === 0x45) {
+      i += 1;
+      const sign = text.charCodeAt(i);
+      if (sign === 0x2b || sign === 0x2d) i += 1;
+      if (i >= length) return length;
+      if (digits() === 0) return i;
+    }
+    return -1;
+  };
+  // Each turn reads one value, then the punctuation after it up to the next value.
+  for (;;) {
+    skipSpace();
+    if (i >= length) return length;
+    const code = text.charCodeAt(i);
+    let failed = -1;
+    if (code === 0x7b || code === 0x5b) {
+      stack.push(code === 0x7b ? "{" : "[");
+      i += 1;
+      skipSpace();
+      if (i >= length) return length;
+      const close = text.charCodeAt(i);
+      if (code === 0x5b && close === 0x5d) {
+        stack.pop();
+        i += 1;
+      } else if (code === 0x7b && close === 0x7d) {
+        stack.pop();
+        i += 1;
+      } else if (code === 0x7b) {
+        if (close !== 0x22) return i;
+        failed = scanString();
+        if (failed >= 0) return failed;
+        skipSpace();
+        if (i >= length) return length;
+        if (text.charCodeAt(i) !== 0x3a) return i;
+        i += 1;
+        continue;
+      } else {
+        continue;
+      }
+    } else if (code === 0x22) {
+      failed = scanString();
+    } else if (code === 0x2d || isDigit(code)) {
+      failed = scanNumber();
+    } else if (code === 0x74 || code === 0x66 || code === 0x6e) {
+      const word = code === 0x74 ? "true" : code === 0x66 ? "false" : "null";
+      for (let k = 0; k < word.length; k += 1) {
+        if (i + k >= length) return length;
+        if (text[i + k] !== word[k]) return i + k;
+      }
+      i += word.length;
+    } else {
+      return i;
+    }
+    if (failed >= 0) return failed;
+    // After a value: close containers, or a comma that leads to the next value.
+    for (;;) {
+      skipSpace();
+      const top = stack[stack.length - 1];
+      if (top === undefined) return i < length ? i : undefined;
+      if (i >= length) return length;
+      const next = text.charCodeAt(i);
+      if ((top === "[" && next === 0x5d) || (top === "{" && next === 0x7d)) {
+        stack.pop();
+        i += 1;
+        continue;
+      }
+      if (next !== 0x2c) return i;
+      i += 1;
+      if (top === "{") {
+        skipSpace();
+        if (i >= length) return length;
+        if (text.charCodeAt(i) !== 0x22) return i;
+        failed = scanString();
+        if (failed >= 0) return failed;
+        skipSpace();
+        if (i >= length) return length;
+        if (text.charCodeAt(i) !== 0x3a) return i;
+        i += 1;
+      }
+      break;
+    }
+  }
+}
+
+/**
+ * Why `text` is not JSON, with where: the line and column of the first
+ * character that breaks the grammar and the text around it, so a stray log
+ * line or a trailing comma can be found without the whole output. Lines end
+ * at LF, CRLF or a lone CR; columns count characters from 1. When the scan
+ * finds no fault the parser did, the message names no place rather than a
+ * wrong one.
+ */
+function invalidJsonMessage(text: string): string {
+  if (!text.trim()) return "The output is empty, not JSON.";
+  const at = firstJsonErrorOffset(text);
+  if (at === undefined) return "The output is not valid JSON.";
+  const before = text.slice(0, at);
+  const line = (before.match(/\r\n|\r|\n/gu)?.length ?? 0) + 1;
+  const lineStart = Math.max(before.lastIndexOf("\n"), before.lastIndexOf("\r")) + 1;
+  const column = Array.from(text.slice(lineStart, at)).length + 1;
+  const oneLine = (part: string) => part.replace(/\s+/gu, " ");
+  const start = safeCut(text, Math.max(0, at - JSON_SNIPPET_CHARS));
+  const end = safeCut(text, Math.min(text.length, at + JSON_SNIPPET_CHARS));
+  const near = `${start > 0 ? "…" : ""}${oneLine(text.slice(start, at))}⟨here⟩${oneLine(text.slice(at, end))}${end < text.length ? "…" : ""}`;
+  const where = at >= text.length ? "it ends early" : `at line ${line}, column ${column}`;
+  return `The output is not valid JSON: ${where}, near ${JSON.stringify(near)}.`;
+}
+
+/**
+ * `at` moved back off the low half of a surrogate pair, so a slice that
+ * starts or ends there never splits one character into two broken halves.
+ */
+export function safeCut(text: string, at: number): number {
+  if (at <= 0 || at >= text.length) return at;
+  const low = text.charCodeAt(at);
+  const high = text.charCodeAt(at - 1);
+  return low >= 0xdc00 && low <= 0xdfff && high >= 0xd800 && high <= 0xdbff ? at - 1 : at;
+}
+
+/**
+ * `text` with the characters a model or a log can read as a line break or as
+ * a change of reading direction written as `\uXXXX` escapes: U+0085 (next
+ * line), U+2028 and U+2029 (line and paragraph separators), and the bidi
+ * embeddings, overrides and isolates U+202A–U+202E and U+2066–U+2069.
+ * JSON.stringify leaves all of them as they are, so quoted file or command
+ * text could otherwise seem to start a line of its own, or show text in an
+ * order other than the one it is sent in.
+ */
+export function escapeForModel(text: string): string {
+  return text.replace(MODEL_UNSAFE, (char) => `\\u${char.charCodeAt(0).toString(16).padStart(4, "0")}`);
+}
+
+const MODEL_UNSAFE = /[\u0085\u2028\u2029\u202a-\u202e\u2066-\u2069]/gu;
+
+/** `value` as JSON for text sent to the model, with the characters `escapeForModel` names escaped. */
+export function quoteForModel(value: unknown): string {
+  return escapeForModel(JSON.stringify(value) ?? "null");
+}
+
 /** Turns command output or file text into the value a page reads. */
 export function parseWorkspaceArtifactOutput(
   mode: WorkspaceArtifactParse,
@@ -836,11 +793,11 @@ export function parseWorkspaceArtifactOutput(
     try {
       value = JSON.parse(text);
     } catch {
-      return { ok: false, error: "The output is not valid JSON." };
+      return { ok: false, error: invalidJsonMessage(text) };
     }
   } else if (mode === "lines") {
     value = text
-      .split(/\r?\n/u)
+      .split(/\r\n|\r|\n/u)
       .map((line) => line.trimEnd())
       .filter((line) => line.trim())
       .slice(0, WORKSPACE_ARTIFACT_LIMITS.lines);
@@ -862,25 +819,44 @@ function shellQuote(value: string): string {
   return `'${value.replace(/'/gu, `'\\''`)}'`;
 }
 
-export interface ResolvedWorkspaceArtifactCommand {
-  /** What runs: the values are bound to read-only variables and the template reads them as "${AIDEN_ARG_1}"… */
-  command: string;
-  /** The same command with each value quoted in place, for the confirmation dialog. */
-  preview: string;
-}
+/**
+ * What a button runs. A command without placeholders runs through the shell
+ * as written; one with placeholders never does: it runs as argument lists,
+ * each value exactly one argument, with the pipes and `&&`, `||`, `;` the
+ * template wrote (see `workspace-artifact-template.ts`).
+ */
+export type ResolvedWorkspaceArtifactCommand =
+  | {
+      kind: "shell";
+      command: string;
+      /** The command as written, for the confirmation dialog. */
+      preview: string;
+    }
+  | {
+      kind: "argv";
+      steps: WorkspaceArtifactArgvStep[];
+      /**
+       * The template with each value shell-quoted in place, and what the
+       * checked plan adds written in (`GIT_LITERAL_PATHSPECS=1` before git,
+       * `./` after `HEAD:`), for the confirmation dialog; a shell would run
+       * it the same way.
+       */
+      preview: string;
+    };
 
 /**
  * Fills an action's template. Arguments line up with its params in order.
- * The values never become shell code: they are quoted into read-only
- * variables and the template refers to them only as "${AIDEN_ARG_N}", so even
- * a template that wraps a placeholder in quotes or `$(…)` cannot run what a
- * page passes in. Read-only, unlike "$1", means `set --`, `shift` or a shell
- * function cannot swap the value the confirmation showed for another.
+ * The values never become code: a template with placeholders is read by
+ * Aiden's own grammar and run without a shell, so each value is one
+ * argument to the program the template names and nothing else.
  */
 export function resolveWorkspaceArtifactCommand(
   action: WorkspaceArtifactActionV1,
   args: readonly unknown[],
 ): ResolvedWorkspaceArtifactCommand {
+  // Checked again here, so a stored action the rules now refuse never runs.
+  const problem = workspaceArtifactActionProblem(action);
+  if (problem) invalid(`${action.label} is turned off: its command no longer passes Aiden's checks (${problem}) Update the page's actions to rewrite it.`);
   if (args.length > action.params.length) invalid(`${action.label} takes ${action.params.length} value(s).`);
   const values = action.params.map((param, index) => {
     const raw = args[index];
@@ -893,26 +869,28 @@ export function resolveWorkspaceArtifactCommand(
     }
     if (typeof raw !== "string" && typeof raw !== "number") invalid(`${action.label} needs text for ${param.name}.`);
     const text = String(raw);
-    if (text.length > WORKSPACE_ARTIFACT_LIMITS.argumentChars || hasControlCharacter(text, false)) {
-      invalid(`${action.label}: ${param.name} is too long or contains control characters.`);
+    if (text.length > WORKSPACE_ARTIFACT_LIMITS.argumentChars) {
+      invalid(`${action.label}: ${param.name} is longer than ${WORKSPACE_ARTIFACT_LIMITS.argumentChars} characters.`);
     }
-    // A leading dash would reach the command as an option (--upload-pack=…).
-    if (text.startsWith("-")) invalid(`${action.label}: ${param.name} cannot start with "-".`);
+    // A value is one argument and never reaches a shell, so a line break or tab (a commit message body, a comment) is plain text.
+    if (hasControlCharacter(text, true)) invalid(`${action.label}: ${param.name} contains a control character.`);
     return text;
   });
+  if (!workspaceArtifactTemplateHasParams(action.command)) return { kind: "shell", command: action.command, preview: action.command };
   const position = new Map(action.params.map((param, index) => [param.name, index]));
-  const fill = (render: (index: number) => string) =>
-    action.command.replace(PLACEHOLDER, (_match, name: string) => {
-      const index = position.get(name);
-      if (index === undefined) return invalid(`${action.label} needs a value for ${name}.`);
-      return render(index);
-    });
-  const variable = (index: number) => `AIDEN_ARG_${index + 1}`;
-  const body = fill((index) => `"\${${variable(index)}}"`);
-  const bind = values.map((value, index) => `${variable(index)}=${shellQuote(value)}`).join(" ");
+  const value = (name: string): string => {
+    const index = position.get(name);
+    return index === undefined ? invalid(`${action.label} needs a value for ${name}.`) : values[index]!;
+  };
+  const checked = checkWorkspaceArtifactTemplate(action.command);
+  if (!checked.ok) return invalid(`${action.label} is turned off.`);
+  // Where the value lands decides what it may be: never an option, a refspec git would force or delete with, or a file outside the workspace.
+  const problem_ = workspaceArtifactValueProblem(checked.steps, value);
+  if (problem_) invalid(`${action.label}: ${problem_}`);
   return {
-    command: values.length ? `readonly ${bind}\n${body}` : body,
-    preview: fill((index) => shellQuote(values[index]!)),
+    kind: "argv",
+    steps: fillWorkspaceArtifactTemplate(checked.steps, value),
+    preview: previewWorkspaceArtifactTemplate(action.command, checked.steps, value, shellQuote),
   };
 }
 
@@ -951,7 +929,10 @@ export function workspaceArtifactCommandList(
 ): { label: string; command: string }[] {
   return [
     ...sources.flatMap((source) => (source.kind === "shell" ? [{ label: `Source ${source.name}`, command: source.command }] : [])),
-    ...actions.map((action) => ({ label: `Button “${action.label}”`, command: action.command })),
+    ...actions.map((action) => ({
+      label: workspaceArtifactActionProblem(action) ? `Button “${action.label}” (turned off: it won’t run)` : `Button “${action.label}”`,
+      command: action.command,
+    })),
   ];
 }
 

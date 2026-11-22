@@ -4,7 +4,7 @@ import {
   RENDER_ARTIFACT_TOOL_NAME,
   isHtmlArtifactTitle,
 } from "../../renderer/shared/generative-ui.js";
-import { isGenerativeUiDraftAcceptable } from "./generative-ui-html.js";
+import { createGenerativeUiDraftCheck, isGenerativeUiDraftAcceptable, type GenerativeUiDraftCheck } from "./generative-ui-html.js";
 import { openGenerativeUiDraftStream } from "./generative-ui-preview-store.js";
 
 /**
@@ -76,8 +76,8 @@ interface DraftCall {
   /** The draft event last announced for the open stream, re-sent when layout changes. */
   label?: string;
   wide: boolean;
-  /** Accumulated HTML already admitted, for prefix admission checks. */
-  admitted: string;
+  /** The open stream's admission check, fed each chunk once. */
+  check: GenerativeUiDraftCheck;
   stopped: boolean;
 }
 
@@ -125,7 +125,7 @@ export function createGenerativeUiDraftSession(options: GenerativeUiDraftSession
 
   const openStream = (call: DraftCall, title: string | undefined) => {
     call.stream?.close();
-    call.admitted = "";
+    call.check = createGenerativeUiDraftCheck();
     call.label = title && isHtmlArtifactTitle(title) ? title : undefined;
     call.stream = open(call.label ?? "Visualizing");
     call.wide = requestsWide(call.latestArgs);
@@ -157,13 +157,13 @@ export function createGenerativeUiDraftSession(options: GenerativeUiDraftSession
         openStream(call, action.title);
         continue;
       }
-      const next = call.admitted + action.chunk;
-      if (!isGenerativeUiDraftAcceptable(next)) {
+      // Only the text the check has read is shown; it may hold a short chunk for a while.
+      const checked = call.check.append(action.chunk);
+      if (checked === false) {
         stop(rawToolCallId, call, true);
         return;
       }
-      call.admitted = next;
-      call.stream?.append(action.chunk);
+      if (checked) call.stream?.append(checked);
       followLayout(call);
       return;
     }
@@ -174,7 +174,7 @@ export function createGenerativeUiDraftSession(options: GenerativeUiDraftSession
       if (options.enabled === false || toolName !== RENDER_ARTIFACT_TOOL_NAME) return;
       let call = calls.get(rawToolCallId);
       if (!call) {
-        call = { admitted: "", stopped: false, wide: false };
+        call = { check: createGenerativeUiDraftCheck(), stopped: false, wide: false };
         calls.set(rawToolCallId, call);
       }
       if (call.stopped) return;
@@ -189,6 +189,13 @@ export function createGenerativeUiDraftSession(options: GenerativeUiDraftSession
       if (!call || call.stopped) return;
       if (call.timer !== undefined) cancelScheduled(call.timer);
       apply(rawToolCallId);
+      if (call.stopped) return;
+      const rest = call.check.finish();
+      if (rest === false) {
+        stop(rawToolCallId, call, true);
+        return;
+      }
+      if (rest) call.stream?.append(rest);
       stop(rawToolCallId, call, false);
     },
     /** The call will not present an artifact (error or abort): retract its draft. */

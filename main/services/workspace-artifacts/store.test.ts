@@ -5,7 +5,13 @@ import * as path from "node:path";
 import test from "node:test";
 import { compileAum } from "../../../renderer/shared/aiden-ui/compile.js";
 import { AIDEN_UI_CATALOG_VERSION, type ChatUiVisualV1 } from "../../../renderer/shared/aiden-ui/types.js";
-import { WORKSPACE_ARTIFACT_LIMITS, type WorkspaceArtifactSourceV1 } from "../../../renderer/shared/workspace-artifacts.js";
+import {
+  resolveWorkspaceArtifactCommand,
+  WORKSPACE_ARTIFACT_LIMITS,
+  workspaceArtifactActionProblem,
+  type WorkspaceArtifactActionV1,
+  type WorkspaceArtifactSourceV1,
+} from "../../../renderer/shared/workspace-artifacts.js";
 import {
   freeWorkspaceArtifactTitle,
   WorkspaceArtifactStore,
@@ -63,9 +69,12 @@ test("artifacts persist per workspace and survive a restart", async (t) => {
 
 test("a workspace keeps titles unique and stops at its artifact limit", async (t) => {
   const { store } = await openStore(t);
-  await store.create("ws1", content());
-  await assert.rejects(store.create("ws1", content()), /already exists/u);
-  for (let index = 1; index < WORKSPACE_ARTIFACT_LIMITS.perWorkspace; index += 1) {
+  const first = await store.create("ws1", content());
+  // The refusal names the page to update, so the caller need not list again.
+  await assert.rejects(store.create("ws1", content()), new RegExp(`already exists here \\(id ${first.id}\\)`, "u"));
+  const second = await store.create("ws1", content({ title: "Second" }));
+  await assert.rejects(store.rename("ws1", second.id, "Open PRs"), new RegExp(`\\(id ${first.id}\\) is already named "Open PRs"`, "u"));
+  for (let index = 2; index < WORKSPACE_ARTIFACT_LIMITS.perWorkspace; index += 1) {
     await store.create("ws1", content({ title: `Page ${index}` }));
   }
   await assert.rejects(store.create("ws1", content({ title: "One more" })), /Update or delete one first/u);
@@ -94,6 +103,30 @@ test("an approval covers only the exact commands that were approved", async (t) 
   const view = (await store.get("ws1", created.id))!;
   const approved = await store.approve("ws1", created.id, view.digest);
   assert.equal(approved.approvedDigest, view.digest);
+});
+
+test("an unchanged save makes no version but still records an approval the person just gave", async (t) => {
+  const { store } = await openStore(t);
+  const created = await store.create("ws1", content());
+  // Key order in the saved value does not make an identical page look new.
+  const reordered = { refresh: { onOpen: true }, actions: [], sources: [pulls], visual: page(), title: "Open PRs" };
+  const same = await store.replace("ws1", created.id, reordered);
+  assert.equal(same.revision, 1);
+  assert.deepEqual(await store.history("ws1", created.id), []);
+  const approved = await store.replace("ws1", created.id, content(), allowed(content()));
+  assert.equal(approved.revision, 1);
+  assert.equal(approved.approvedDigest, workspaceArtifactDigest([pulls], []));
+  assert.equal((await store.get("ws1", created.id))!.artifact.approvedDigest, approved.approvedDigest);
+});
+
+test("replacing the revision a caller saved earlier keeps no version for it", async (t) => {
+  const { store } = await openStore(t);
+  const created = await store.create("ws1", content());
+  const first = await store.replace("ws1", created.id, content({ description: "one" }));
+  const second = await store.replace("ws1", created.id, content({ description: "two" }), { fold: { revision: first.revision, title: first.visual.title } });
+  // A stale fold revision does not fold: the version it would drop is not the caller's.
+  await store.replace("ws1", created.id, content({ description: "three" }), { fold: { revision: first.revision, title: first.visual.title } });
+  assert.deepEqual((await store.history("ws1", created.id)).map((entry) => entry.revision), [second.revision, created.revision]);
 });
 
 test("a failed refresh keeps the last good data and drops sources that were removed", async (t) => {
@@ -141,6 +174,83 @@ test("an entry edited into an invalid shape is set aside, not repaired, and surv
   await reopened.create("ws1", content({ title: "Third" }));
   const written = JSON.parse(await fs.readFile(file, "utf8")) as { unreadable?: { sources: unknown }[] };
   assert.deepEqual(written.unreadable?.[0]?.sources, [{ name: "x", kind: "file", file: "../../etc/passwd" }]);
+});
+
+test("a page saved before a placeholder rule tightened stays listed, with that action turned off", async (t) => {
+  const { store, reopen, dir } = await openStore(t);
+  const fetch: WorkspaceArtifactActionV1 = { name: "fetch", label: "Fetch", command: "git fetch origin {{ref}}", params: [{ name: "ref", type: "string" }] };
+  const created = await store.create("ws1", content({ actions: [fetch] }));
+  // Written by an earlier release, whose rules let a value reach --upload-pack.
+  const file = path.join(dir, "ws1.json");
+  const document = JSON.parse(await fs.readFile(file, "utf8")) as { artifacts: { actions: WorkspaceArtifactActionV1[] }[] };
+  const stale = { ...fetch, name: "probe", label: "Probe", command: "git fetch --upload-p {{ref}} ." };
+  document.artifacts[0]!.actions.push(stale);
+  await fs.writeFile(file, JSON.stringify(document));
+
+  const reopened = reopen();
+  const kept = (await reopened.get("ws1", created.id))!.artifact;
+  assert.deepEqual(kept.actions.map((action) => action.name), ["fetch", "probe"]);
+  const probe = kept.actions.find((action) => action.name === "probe")!;
+  assert.match(workspaceArtifactActionProblem(probe) ?? "", /names/u);
+  assert.throws(() => resolveWorkspaceArtifactCommand(probe, ["./x.sh"]), /Probe is turned off/u);
+  assert.equal(workspaceArtifactActionProblem(kept.actions[0]!), undefined);
+  assert.equal(resolveWorkspaceArtifactCommand(kept.actions[0]!, ["main"]).preview, "GIT_LITERAL_PATHSPECS=1 git fetch origin 'main'");
+
+  // Later writes keep the page, and replacing it keeps the old version in its history.
+  await reopened.create("ws1", content({ title: "Second" }));
+  await reopened.replace("ws1", created.id, content({ actions: [fetch] }));
+  const written = JSON.parse(await fs.readFile(file, "utf8")) as { artifacts: unknown[]; unreadable?: unknown[] };
+  assert.equal(written.artifacts.length, 2);
+  assert.equal(written.unreadable, undefined);
+  const earlier = (await reopen().revision("ws1", created.id, created.revision))!;
+  assert.deepEqual(earlier.actions.map((action) => action.name), ["fetch", "probe"]);
+});
+
+test("an approval given while a button was turned off asks again once a later release's rules turn it on", async (t) => {
+  const { store, reopen, dir } = await openStore(t);
+  const comment: WorkspaceArtifactActionV1 = {
+    name: "comment",
+    label: "Comment",
+    command: "gh issue comment {{issue}} --body {{text}}",
+    params: [{ name: "issue", type: "string" }, { name: "text", type: "string" }],
+  };
+  const created = await store.create("ws1", content({ actions: [comment] }));
+  assert.equal(workspaceArtifactActionProblem(comment), undefined);
+  // The person allowed the card an earlier release showed, whose rules turned Comment off.
+  const shownWhileOff = workspaceArtifactDigest([pulls], [comment], () => true);
+  const file = path.join(dir, "ws1.json");
+  const document = JSON.parse(await fs.readFile(file, "utf8")) as { artifacts: { approvedDigest?: string }[] };
+  document.artifacts[0]!.approvedDigest = shownWhileOff;
+  await fs.writeFile(file, JSON.stringify(document));
+
+  const view = (await reopen().get("ws1", created.id))!;
+  assert.equal(view.artifact.approvedDigest, shownWhileOff);
+  assert.notEqual(view.digest, shownWhileOff, "Comment runs now, which the approval never allowed");
+  // Allowed while every button ran, the page keeps its approval across a rule change that leaves them all on.
+  assert.equal(view.digest, workspaceArtifactDigest([pulls], [comment], () => false));
+  const approved = await store.approve("ws1", created.id, view.digest);
+  assert.equal(approved.approvedDigest, view.digest);
+});
+
+test("a page set aside earlier comes back once it reads again, and a copy of a live page stays aside", async (t) => {
+  const { store, reopen, dir } = await openStore(t);
+  const first = await store.create("ws1", content());
+  const second = await store.create("ws1", content({ title: "Second" }));
+  const file = path.join(dir, "ws1.json");
+  const document = JSON.parse(await fs.readFile(file, "utf8")) as { artifacts: Record<string, unknown>[]; unreadable?: unknown[] };
+  // An earlier release set Second aside; a copy of the first page sits there too.
+  document.unreadable = [document.artifacts[1], { ...document.artifacts[0], description: "stale copy" }];
+  document.artifacts = [document.artifacts[0]!];
+  await fs.writeFile(file, JSON.stringify(document));
+
+  const reopened = reopen();
+  const listed = await reopened.list("ws1");
+  assert.deepEqual(listed.map((view) => view.artifact.id).sort(), [first.id, second.id].sort());
+  assert.equal((await reopened.get("ws1", first.id))!.artifact.description, undefined);
+  await reopened.rename("ws1", second.id, "Back");
+  const written = JSON.parse(await fs.readFile(file, "utf8")) as { artifacts: unknown[]; unreadable?: { description?: string }[] };
+  assert.equal(written.artifacts.length, 2);
+  assert.deepEqual(written.unreadable?.map((entry) => entry.description), ["stale copy"]);
 });
 
 test("page state is saved only while it stays small and wire-safe", async (t) => {
@@ -396,6 +506,106 @@ test("history that would outgrow its file drops the oldest versions instead of f
   assert.equal((await store.get("ws1", first.id))!.artifact.revision, 5);
 });
 
+test("history that would outgrow its file drops older versions' markup before any version, and a restore says so", async (t) => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-artifacts-"));
+  t.after(() => fs.rm(dir, { recursive: true, force: true }));
+  let clock = 1_000;
+  const errors: unknown[] = [];
+  const make = () =>
+    new WorkspaceArtifactStore({
+      root: () => dir,
+      now: () => (clock += 1),
+      newId: () => "art1",
+      historyMaxBytes: 9_000,
+      onHistoryError: (error) => errors.push(error),
+    });
+  const store = make();
+  const markup = (version: number) => `<Visual title="Open PRs">${`v${version} `.repeat(600)}</Visual>`;
+  await store.create("ws1", content({ visual: heading("v1"), markup: markup(1) }));
+  for (let version = 2; version <= 6; version += 1) {
+    await store.replace("ws1", "art1", content({ visual: heading(`v${version}`), markup: markup(version) }));
+  }
+  assert.deepEqual(errors, []);
+  assert.ok((await fs.stat(path.join(dir, "ws1.history.json"))).size <= 9_000);
+  const reopened = make();
+  // All five earlier versions are still there to restore; only the oldest lost their markup.
+  assert.deepEqual(await reopened.earlierRevisions("ws1"), { art1: [5, 4, 3, 2, 1] });
+  const oldest = (await reopened.revision("ws1", "art1", 1))!;
+  assert.equal(oldest.markup, undefined);
+  assert.equal(oldest.markupDropped, true);
+  assert.equal((await reopened.revision("ws1", "art1", 5))!.markup, markup(5));
+  assert.equal((await reopened.get("ws1", "art1"))!.artifact.markup, markup(6));
+  // Restoring a version without its markup brings the page back and says why the markup is missing.
+  const restored = await reopened.restore("ws1", "art1", 1);
+  assert.equal(restored.visual.fallbackText, heading("v1").fallbackText);
+  assert.equal(restored.markup, undefined);
+  assert.equal(restored.markupDropped, true);
+});
+
+test("pages that would outgrow their file drop the least recently changed pages' markup, the saved page's last", async (t) => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-artifacts-"));
+  t.after(() => fs.rm(dir, { recursive: true, force: true }));
+  let clock = 1_000;
+  let ids = 0;
+  const make = () =>
+    new WorkspaceArtifactStore({ root: () => dir, now: () => (clock += 1), newId: () => `art${++ids}`, artifactsMaxBytes: 12_000 });
+  const store = make();
+  const markup = (word: string) => `<Visual title="x">${`${word} `.repeat(1_000)}</Visual>`;
+  await store.create("ws1", content({ title: "A", markup: markup("aaa") }));
+  await store.create("ws1", content({ title: "B", markup: markup("bbb") }));
+  // A changed since B, so B is now the least recently changed page.
+  await store.replace("ws1", "art1", content({ title: "A", visual: heading("a2"), markup: markup("aa2") }));
+  await store.create("ws1", content({ title: "C", markup: markup("ccc") }));
+  assert.ok((await fs.stat(path.join(dir, "ws1.json"))).size <= 12_000);
+  const pages = new Map((await make().list("ws1")).map((view) => [view.artifact.visual.title, view.artifact]));
+  assert.equal(pages.size, 3);
+  assert.equal(pages.get("B")!.markup, undefined);
+  assert.equal(pages.get("B")!.markupDropped, true);
+  assert.equal(pages.get("A")!.markup, markup("aa2"));
+  assert.equal(pages.get("C")!.markup, markup("ccc"));
+  // Markup that could not fit even without the others' goes alone; the page still saves.
+  const huge = await store.create("ws1", content({ title: "D", markup: markup("d".repeat(12)) }));
+  assert.equal(huge.markup, undefined);
+  assert.equal(huge.markupDropped, true);
+  const after = new Map((await make().list("ws1")).map((view) => [view.artifact.visual.title, view.artifact.markup]));
+  assert.equal(after.get("A"), markup("aa2"));
+  assert.equal(after.get("C"), markup("ccc"));
+  // Saving B's markup again (here, its unchanged page) keeps it once there is room.
+  await store.delete("ws1", huge.id);
+  await store.delete("ws1", "art3");
+  const resaved = await store.replace("ws1", "art2", content({ title: "B", markup: markup("bbb") }));
+  assert.equal(resaved.revision, 1);
+  assert.equal(resaved.markup, markup("bbb"));
+  assert.equal(resaved.markupDropped, undefined);
+});
+
+test("saving one page's state near the size cap drops only that page's markup, and fails rather than drop another's", async (t) => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-artifacts-"));
+  t.after(() => fs.rm(dir, { recursive: true, force: true }));
+  let ids = 0;
+  const make = (artifactsMaxBytes?: number) =>
+    new WorkspaceArtifactStore({ root: () => dir, newId: () => `art${++ids}`, ...(artifactsMaxBytes ? { artifactsMaxBytes } : {}) });
+  const markup = (word: string) => `<Visual title="x">${`${word} `.repeat(1_000)}</Visual>`;
+  const loose = make();
+  const other = await loose.create("ws1", content({ title: "Other", markup: markup("aaa") }));
+  const saving = await loose.create("ws1", content({ title: "Saving", markup: markup("bbb") }));
+  const size = async () => (await fs.stat(path.join(dir, "ws1.json"))).size;
+  // Room for 1 KB more: a 2 KB state fits only once this page's own markup goes.
+  const tight = make((await size()) + 1_000);
+  await tight.saveState("ws1", saving.id, saving.revision, { note: "x".repeat(2_000) });
+  let pages = new Map((await make().list("ws1")).map((view) => [view.artifact.id, view.artifact]));
+  assert.equal(pages.get(other.id)!.markup, markup("aaa"));
+  assert.equal(pages.get(saving.id)!.markup, undefined);
+  assert.equal(pages.get(saving.id)!.markupDropped, true);
+  assert.deepEqual(pages.get(saving.id)!.visual.state, { note: "x".repeat(2_000) });
+  // With no markup of its own left to drop, a state that does not fit is refused and nothing changes.
+  const full = make((await size()) + 100);
+  await assert.rejects(full.saveState("ws1", saving.id, saving.revision, { note: "y".repeat(4_000) }));
+  pages = new Map((await make().list("ws1")).map((view) => [view.artifact.id, view.artifact]));
+  assert.equal(pages.get(other.id)!.markup, markup("aaa"));
+  assert.deepEqual(pages.get(saving.id)!.visual.state, { note: "x".repeat(2_000) });
+});
+
 test("a history write that fails is reported, and the update still succeeds", async (t) => {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-artifacts-"));
   t.after(() => fs.rm(dir, { recursive: true, force: true }));
@@ -479,6 +689,19 @@ test("canonical policy changes invalidate validated caches before get while tran
   assert.equal((await denied.get("ws1", artifact.id))!.snapshot!.sources.data!.dataJson, undefined);
 });
 
+test("one listing asks the file policy once per file however many pages read it, and asks again on the next listing", async (t) => {
+  const { dir, store } = await openStore(t);
+  const shared = { name: "data", kind: "file" as const, file: "notes.md", parse: "text" as const };
+  await store.create("ws1", content({ title: "One", sources: [shared] }));
+  await store.create("ws1", content({ title: "Two", sources: [shared, { name: "other", kind: "file", file: "todo.md", parse: "text" }] }));
+  const asked: string[] = [];
+  const counting = new WorkspaceArtifactStore({ root: () => dir, fileSourceAllowed: async (_workspace, file) => { asked.push(file); return true; } });
+  assert.equal((await counting.list("ws1")).length, 2);
+  assert.deepEqual([...asked].sort(), ["notes.md", "todo.md"]);
+  await counting.list("ws1");
+  assert.equal(asked.length, 4);
+});
+
 test("no write stores a file source that names a credential path", async (t) => {
   const { store } = await openStore(t);
   const secrets: WorkspaceArtifactSourceV1 = { name: "env", kind: "file", file: ".env", parse: "text" };
@@ -486,4 +709,18 @@ test("no write stores a file source that names a credential path", async (t) => 
   const created = await store.create("ws1", content());
   await assert.rejects(store.replace("ws1", created.id, content({ sources: [secrets] })), /Credential files/u);
   assert.deepEqual((await store.get("ws1", created.id))!.artifact.sources, created.sources);
+});
+
+test("each version keeps the markup it was saved from, up to the markup limit, across a restart", async (t) => {
+  const { store, reopen } = await openStore(t);
+  await store.create("ws1", content({ markup: "<Visual title=\"Open PRs\">first</Visual>" }));
+  await store.replace("ws1", "art1", content({ markup: "<Visual title=\"Open PRs\">second</Visual>", visual: { ...page(), layout: "wide" } }));
+  const reopened = reopen();
+  assert.equal((await reopened.get("ws1", "art1"))!.artifact.markup, "<Visual title=\"Open PRs\">second</Visual>");
+  assert.equal((await reopened.revision("ws1", "art1", 1))!.markup, "<Visual title=\"Open PRs\">first</Visual>");
+  // Markup longer than the limit is not kept; the page itself still saves.
+  const long = "x".repeat(WORKSPACE_ARTIFACT_LIMITS.markupChars + 1);
+  const saved = await reopened.replace("ws1", "art1", content({ markup: long }));
+  assert.equal(saved.revision, 3);
+  assert.equal((await reopen().get("ws1", "art1"))!.artifact.markup, undefined);
 });

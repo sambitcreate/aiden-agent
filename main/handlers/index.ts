@@ -14,6 +14,7 @@ import { registerChatGenerationHandlers } from "./chat.js";
 import { registerWorkspaceHandlers } from "./workspaces.js";
 import { registerPullRequestHandlers } from "./pull-requests.js";
 import { registerWorkspaceArtifactHandlers } from "./workspace-artifacts.js";
+import { chatStore } from "../services/chat-store.js";
 import { configStore } from "../services/config-store.js";
 import {
   notifyWorkspaceArtifactsChanged,
@@ -124,6 +125,12 @@ export function registerHandlers(
     store: workspaceArtifactStore,
     workspaceExists: async (id) => Boolean(await configStore.getWorkspace(id)),
     notify: notifyWorkspaceArtifactsChanged,
+    chatVisual: async (chatId, messageId, visualId) => {
+      const chat = await chatStore.get(chatId);
+      if (!chat) return null;
+      const message = chat.messages.find((entry) => entry.id === messageId && entry.role === "assistant");
+      return { chat, visual: message?.uiVisuals?.find((visual) => visual.id === visualId) };
+    },
     files: workspaceArtifactFiles,
     owner: (event) => {
       const owner = rendererDocumentOwner(event as IpcMainInvokeEvent, () => new Error("Artifacts need the active window."));

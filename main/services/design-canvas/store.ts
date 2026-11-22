@@ -7,6 +7,7 @@ import path from "node:path";
 import {
   emptyDesignCanvas,
   parseDesignCanvas,
+  withRemovedPagePaths,
   type DesignCanvas,
 } from "../../../renderer/shared/design-canvas/schema.js";
 import { writeJsonAtomic } from "../durable-fs.js";
@@ -54,11 +55,16 @@ export class DesignCanvasStore {
     return this.serialize(chatId, () => this.read(chatId));
   }
 
-  /** Stores `doc` as `baseRevision + 1` only if `baseRevision` is still the stored revision. */
+  /**
+   * Stores `doc` as `baseRevision + 1` only if `baseRevision` is still the
+   * stored revision. `undone` names pages the person's undo took off, which
+   * are not remembered as removed, so Aiden writing one again shows it again.
+   */
   async save(
     chatId: string,
     doc: DesignCanvas,
     baseRevision: number,
+    options: { undone?: readonly string[] } = {},
   ): Promise<DesignCanvasSaveResult> {
     assertDesignCanvasChatId(chatId);
     if (!Number.isSafeInteger(baseRevision) || baseRevision < 0) {
@@ -66,14 +72,22 @@ export class DesignCanvasStore {
     }
     const parsed = parseDesignCanvas(isRecord(doc) ? { ...doc, revision: baseRevision } : doc);
     if (!parsed.ok) return { ok: false, reason: "invalid", issues: parsed.issues };
-    if (this.tooLarge(parsed.doc)) {
-      return { ok: false, reason: "invalid", issues: ["The canvas is too large to save."] };
-    }
+    const tooLarge = (): DesignCanvasSaveResult => ({
+      ok: false,
+      reason: "invalid",
+      issues: ["The canvas is too large to save."],
+    });
+    if (this.tooLarge(parsed.doc)) return tooLarge();
     return this.serialize(chatId, async () => {
       const current = await this.read(chatId);
       if (current.revision !== baseRevision) return { ok: false, reason: "conflict", doc: current };
       const revision = baseRevision + 1;
-      await this.write(chatId, { ...parsed.doc, revision });
+      // A save comes from the person's canvas: a page they took off is remembered,
+      // unless it was their undo that took it off.
+      const doc = withRemovedPagePaths(current, { ...parsed.doc, revision }, true, new Set(options.undone ?? []));
+      // The pages remembered as taken off count too: what is written must read back.
+      if (this.tooLarge(doc)) return tooLarge();
+      await this.write(chatId, doc);
       return { ok: true, revision };
     });
   }
@@ -96,10 +110,12 @@ export class DesignCanvasStore {
       const revision = current.revision + 1;
       const parsed = parseDesignCanvas(isRecord(next) ? { ...next, revision } : next);
       if (!parsed.ok) throw new Error(`The canvas update is invalid: ${parsed.issues.join(" ")}`);
-      if (this.tooLarge(parsed.doc)) throw new Error("The canvas is too large to save.");
+      // An update comes from Aiden or the app itself: a page shown again is forgotten, but no removal is noted.
+      const doc = withRemovedPagePaths(current, parsed.doc, false);
+      if (this.tooLarge(doc)) throw new Error("The canvas is too large to save.");
       await options.beforeWrite?.();
-      await this.write(chatId, parsed.doc);
-      return parsed.doc;
+      await this.write(chatId, doc);
+      return doc;
     });
   }
 

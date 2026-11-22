@@ -1,13 +1,17 @@
-// HTML pages Aiden writes or edits while design mode is on land on the canvas
-// by themselves, so the person watches the design take shape without waiting
-// for the model to call `canvas_place_frame`. A page that is already on the
-// canvas is left where it is: the watcher reloads it after each edit. The
-// rule is pure (`placeWrittenPageFrames`) and llm-client runs it after each
-// completed `write_file` or `edit_file`, and the design-mode switch runs it
-// once over the pages this chat wrote before the canvas opened.
+// HTML pages Aiden writes or edits under design/ while design mode is on land
+// on the canvas by themselves, so the person watches the design take shape
+// without waiting for the model to call `canvas_place_frame`. A page that is
+// already on the canvas is left where it is: the watcher reloads it after each
+// edit. The rule is pure (`placeWrittenPageFrames`) and llm-client runs it
+// after each completed `write_file` or `edit_file`, and after each terminal
+// command for the design/ pages it made or changed (`createDesignPageScanner`).
+// The design-mode switch runs it once over the pages this chat wrote before
+// the canvas opened. Pages elsewhere in the workspace stay off the canvas
+// unless Aiden or the person places them.
 
-import { constants as fsConstants } from "node:fs";
+import { constants as fsConstants, type Dirent } from "node:fs";
 import * as fs from "node:fs/promises";
+import * as path from "node:path";
 import { canvasView } from "../../../renderer/shared/design-canvas/canvas-summary.js";
 import { placeFrame } from "../../../renderer/shared/design-canvas/placement.js";
 import { parseProducedFile } from "../../../renderer/shared/produced-file.js";
@@ -31,7 +35,21 @@ export const EARLIER_PAGES_LIMIT = 12;
 /** Per-chat in-memory cap on recently written pages so deleted newest pages do not starve older ones. */
 export const RECENT_WRITTEN_PAGES_LIMIT = 50;
 
+/** The workspace folder whose pages land on the canvas by themselves. */
+export const DESIGN_PAGES_FOLDER = "design";
+
+/** A terminal command's design/ pages are looked for among at most this many entries, this deep. */
+export const DESIGN_PAGE_SCAN_LIMITS = { entries: 2_000, depth: 6 } as const;
+
 const PAGE_EXTENSION = /\.html?$/iu;
+
+/** A design/ HTML page outside hidden folders and `node_modules`, which may land on the canvas by itself. */
+export function isAutoPlacedPagePath(relativePath: string): boolean {
+  if (!PAGE_EXTENSION.test(relativePath) || !isDesignRelativePath(relativePath)) return false;
+  const segments = relativePath.split("/");
+  if (segments[0] !== DESIGN_PAGES_FOLDER || segments.length < 2) return false;
+  return !segments.some((segment) => segment.startsWith(".") || segment === "node_modules");
+}
 
 /** The design width a numeric viewport or shell width stands for, when it clearly names one. */
 function widthFromPixels(pixels: number): DesignWidth | undefined {
@@ -112,8 +130,8 @@ export async function readDesignWidthHint(absolutePath: string): Promise<DesignW
 
 /**
  * The workspace-relative page a completed file tool call wrote, or undefined
- * when the call was not a first-party write or edit of an HTML file outside
- * hidden folders and `node_modules`.
+ * when the call was not a first-party write or edit of an HTML file under
+ * design/, outside hidden folders and `node_modules`.
  */
 export function writtenPagePath(toolName: string, details: unknown): string | undefined {
   const produced = parseProducedFile(
@@ -121,11 +139,101 @@ export function writtenPagePath(toolName: string, details: unknown): string | un
     toolName,
   );
   if (!produced) return undefined;
-  const relativePath = produced.relativePath;
-  if (!PAGE_EXTENSION.test(relativePath) || !isDesignRelativePath(relativePath)) return undefined;
-  const segments = relativePath.split("/");
-  if (segments.some((segment) => segment.startsWith(".") || segment === "node_modules")) return undefined;
-  return relativePath;
+  return isAutoPlacedPagePath(produced.relativePath) ? produced.relativePath : undefined;
+}
+
+/** Each design/ page's modification stamp, by workspace-relative path. */
+export type DesignPageStamps = ReadonlyMap<string, { mtimeMs: number; size: number }>;
+
+/**
+ * The HTML pages under the workspace's design/ folder with their size and
+ * modification time. Symbolic links, hidden folders and `node_modules` are
+ * skipped, and the walk stops at `DESIGN_PAGE_SCAN_LIMITS`. A missing folder
+ * has no pages.
+ */
+export async function scanDesignPages(workspaceRoot: string): Promise<DesignPageStamps> {
+  const stamps = new Map<string, { mtimeMs: number; size: number }>();
+  let seen = 0;
+  const walk = async (relativeDir: string, depth: number): Promise<void> => {
+    let entries: Dirent[];
+    try {
+      entries = await fs.readdir(path.join(workspaceRoot, ...relativeDir.split("/")), { withFileTypes: true });
+    } catch {
+      return;
+    }
+    entries.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+    for (const entry of entries) {
+      if (seen >= DESIGN_PAGE_SCAN_LIMITS.entries) return;
+      seen += 1;
+      const relativePath = `${relativeDir}/${entry.name}`;
+      if (entry.isDirectory()) {
+        if (depth < DESIGN_PAGE_SCAN_LIMITS.depth && !entry.name.startsWith(".") && entry.name !== "node_modules") {
+          await walk(relativePath, depth + 1);
+        }
+      } else if (entry.isFile() && isAutoPlacedPagePath(relativePath)) {
+        try {
+          const stat = await fs.lstat(path.join(workspaceRoot, ...relativePath.split("/")));
+          if (stat.isFile()) stamps.set(relativePath, { mtimeMs: stat.mtimeMs, size: stat.size });
+        } catch {
+          // Gone between the listing and the stat: not a page any more.
+        }
+      }
+    }
+  };
+  await walk(DESIGN_PAGES_FOLDER, 1);
+  return stamps;
+}
+
+/**
+ * How long before the scanner's first look a page's modification time may be
+ * and still count as written after it, for file systems whose clock lags
+ * `Date.now()` by a tick.
+ */
+export const DESIGN_PAGE_CLOCK_SLACK_MS = 100;
+
+/**
+ * The pages that are new in `after` or whose size or modification time
+ * changed, oldest change first. With `changedSince`, a page `before` already
+ * had also counts when it was modified at or after that time: the first look
+ * runs while the first command may already be writing.
+ */
+export function changedDesignPages(before: DesignPageStamps, after: DesignPageStamps, changedSince?: number): string[] {
+  return [...after]
+    .filter(([relativePath, stamp]) => {
+      const earlier = before.get(relativePath);
+      if (!earlier || earlier.mtimeMs !== stamp.mtimeMs || earlier.size !== stamp.size) return true;
+      return changedSince !== undefined && stamp.mtimeMs >= changedSince;
+    })
+    .sort(([pathA, a], [pathB, b]) => a.mtimeMs - b.mtimeMs || (pathA < pathB ? -1 : pathA > pathB ? 1 : 0))
+    .map(([relativePath]) => relativePath);
+}
+
+/**
+ * Finds the design/ pages each terminal command made or changed: it notes the
+ * folder when created (before the turn's first command) and, after each
+ * command, answers the pages that changed since the last look. Looks run one
+ * after another, so commands that end together are each compared with the
+ * state before them.
+ */
+export function createDesignPageScanner(
+  workspaceRoot: string,
+  scan: (workspaceRoot: string) => Promise<DesignPageStamps> = scanDesignPages,
+  now: () => number = Date.now,
+): { changedSinceLastLook(): Promise<string[]> } {
+  const safeScan = (fallback: DesignPageStamps) => scan(workspaceRoot).catch(() => fallback);
+  // The first look is not awaited before a command starts, so it can see a
+  // page that command wrote; anything modified from now on is still news.
+  let changedSince: number | undefined = now() - DESIGN_PAGE_CLOCK_SLACK_MS;
+  let last: Promise<DesignPageStamps> = safeScan(new Map());
+  return {
+    changedSinceLastLook() {
+      const since = changedSince;
+      changedSince = undefined;
+      const look = last.then(async (before) => ({ before, after: await safeScan(before) }));
+      last = look.then(({ after }) => after);
+      return look.then(({ before, after }) => changedDesignPages(before, after, since));
+    },
+  };
 }
 
 function basename(relativePath: string): string {
@@ -135,20 +243,30 @@ function basename(relativePath: string): string {
 /**
  * Puts each page that is not on the canvas yet (on any page of it) beside the
  * frames in view on the page the person is looking at, at the design width
- * its source asked for (`widths`, 1280 otherwise) and that width's box.
- * Returns the new frames' ids; `changed` is false when every page was
- * already there.
+ * its source asked for (`widths`, 1280 otherwise) and that width's box. A page
+ * the person took off the canvas (`removedPagePaths`) is not put back: it is
+ * listed in `removed`, and comes back only when Aiden places it with
+ * canvas_place_frame or the person adds it. Returns the new frames' ids;
+ * `changed` is false when every page was already there or removed.
  */
 export function placeWrittenPageFrames(
   doc: DesignCanvas,
   paths: readonly string[],
   newId: () => string,
   widths: ReadonlyMap<string, DesignWidth> = new Map(),
-): { doc: DesignCanvas; changed: boolean; placedIds: string[] } {
+  /** The canvas region's size on the person's screen, when their message said it. */
+  viewSize?: { w: number; h: number },
+): { doc: DesignCanvas; changed: boolean; placedIds: string[]; removed: string[] } {
   let next = doc;
   const placedIds: string[] = [];
+  const removed: string[] = [];
+  const takenOff = new Set(doc.removedPagePaths ?? []);
   for (const relativePath of paths) {
     if (next.frames.some((frame) => frame.kind === "file" && frame.path === relativePath)) continue;
+    if (takenOff.has(relativePath)) {
+      removed.push(relativePath);
+      continue;
+    }
     const designWidth = widths.get(relativePath) ?? DESIGN_DEFAULT_FILE_WIDTH;
     const placed = placeFrame(
       next,
@@ -160,7 +278,7 @@ export function placeWrittenPageFrames(
         createdBy: "aiden",
         ...defaultFileBox(designWidth),
       },
-      canvasView(next),
+      canvasView(next, viewSize),
       newId,
     );
     // A full canvas takes no more frames; the file is still in the workspace.
@@ -168,7 +286,7 @@ export function placeWrittenPageFrames(
     next = placed.doc;
     placedIds.push(placed.id);
   }
-  return { doc: next, changed: placedIds.length > 0, placedIds };
+  return { doc: next, changed: placedIds.length > 0, placedIds, removed };
 }
 
 /**
@@ -244,6 +362,10 @@ export async function placeWrittenPagesOnCanvas(input: {
   limit?: number;
   /** Checked on the canvas's own chain just before the save, so a deleted chat or exited mode is not saved. */
   shouldSave?: () => Promise<boolean> | boolean;
+  /** Told the pages left off because the person took them off the canvas. */
+  onRemoved?: (paths: readonly string[]) => void;
+  /** The canvas region's size on the person's screen, when their message said it. */
+  viewSize?: { w: number; h: number };
 }): Promise<string[]> {
   if (input.limit !== undefined && input.limit <= 0) return [];
   const newestFirst: string[] = [];
@@ -268,12 +390,18 @@ export async function placeWrittenPagesOnCanvas(input: {
   if (showable.length === 0) return [];
   const shouldSave = input.shouldSave;
   let placedIds: string[] = [];
+  let removed: string[] = [];
+  // Reported whether or not anything was saved, once the canvas has been read.
+  const reportRemoved = () => {
+    if (removed.length > 0) input.onRemoved?.(removed);
+  };
   try {
     const saved = await input.store.update(
       input.chatId,
       (doc) => {
         if (input.onlyIfEmpty && doc.frames.length > 0) throw UNCHANGED;
-        const placed = placeWrittenPageFrames(doc, showable, input.newId, widths);
+        const placed = placeWrittenPageFrames(doc, showable, input.newId, widths, input.viewSize);
+        removed = placed.removed;
         if (!placed.changed) throw UNCHANGED;
         placedIds = placed.placedIds;
         return placed.doc;
@@ -282,7 +410,10 @@ export async function placeWrittenPagesOnCanvas(input: {
       shouldSave
         ? {
             beforeWrite: async () => {
-              if (!(await shouldSave())) throw UNCHANGED;
+              if (!(await shouldSave())) {
+                removed = [];
+                throw UNCHANGED;
+              }
             },
           }
         : {},
@@ -295,9 +426,13 @@ export async function placeWrittenPagesOnCanvas(input: {
       return [];
     }
     input.broadcast({ chatId: input.chatId, revision: saved.revision });
+    reportRemoved();
     return placedIds;
   } catch (error) {
-    if (error === UNCHANGED) return [];
+    if (error === UNCHANGED) {
+      reportRemoved();
+      return [];
+    }
     throw error;
   }
 }

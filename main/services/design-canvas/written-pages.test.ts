@@ -5,6 +5,7 @@ import path from "node:path";
 import test from "node:test";
 import { emptyDesignCanvas, type DesignCanvas, type DesignFrame } from "../../../renderer/shared/design-canvas/schema.js";
 import {
+  createDesignPageScanner,
   DESIGN_WIDTH_HINT_BYTES,
   EARLIER_PAGES_LIMIT,
   inferDesignWidth,
@@ -41,6 +42,10 @@ test("only a first-party write or edit of a visible HTML page counts as a writte
   assert.equal(writtenPagePath("write_file", produced("design/parsely.css")), undefined, "a stylesheet is not a page");
   assert.equal(writtenPagePath("write_file", produced(".agent/preview.html")), undefined, "hidden folders stay off the canvas");
   assert.equal(writtenPagePath("write_file", produced("node_modules/pkg/index.html")), undefined);
+  assert.equal(writtenPagePath("write_file", produced("design/node_modules/pkg/index.html")), undefined);
+  assert.equal(writtenPagePath("write_file", produced("index.html")), undefined, "a page outside design/ is not a design page");
+  assert.equal(writtenPagePath("write_file", produced("site/design/home.html")), undefined, "design/ means the workspace's own design folder");
+  assert.equal(writtenPagePath("write_file", produced("design/flows/checkout.html")), "design/flows/checkout.html");
   assert.equal(writtenPagePath("run_command", produced("design/home.html")), undefined, "only file tools report what they wrote");
   assert.equal(
     writtenPagePath("edit_file", produced("design/home.html", "written")),
@@ -139,6 +144,126 @@ test("only pages that exist are placed, the canvas is saved once per change, and
   const doc = await store.get("chat-1");
   assert.deepEqual(doc.frames.map((frame) => frame.path), ["design/home.html", "design/library.html"]);
   assert.deepEqual(broadcasts, [1, 2]);
+});
+
+test("a page the person takes off the canvas is not put back when Aiden writes it again, until Aiden places it or the person adds it", async (t) => {
+  const base = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-written-pages-"));
+  t.after(() => fs.rm(base, { recursive: true, force: true }));
+  const workspaceRoot = path.join(base, "workspace");
+  await fs.mkdir(path.join(workspaceRoot, "design"), { recursive: true });
+  for (const name of ["home", "about"]) await fs.writeFile(path.join(workspaceRoot, "design", `${name}.html`), "<!doctype html><title>x</title>");
+  const store = new DesignCanvasStore({ root: () => path.join(base, "canvases") });
+  const removedSeen: string[][] = [];
+  const newId = ids();
+  const place = (paths: string[]) =>
+    placeWrittenPagesOnCanvas({
+      chatId: "chat-1",
+      workspaceRoot,
+      paths,
+      store,
+      broadcast: () => undefined,
+      newId,
+      onRemoved: (removed) => removedSeen.push([...removed]),
+    });
+  const [homeId] = await place(["design/home.html"]);
+  const [aboutId] = await place(["design/about.html"]);
+
+  // Aiden's own removal is not the person's: the page comes back on the next write.
+  await store.update("chat-1", (doc) => ({ ...doc, frames: doc.frames.filter((frame) => frame.id !== aboutId) }));
+  assert.equal((await place(["design/about.html"])).length, 1);
+
+  // The person deletes home.html's frame on their canvas (a save), then Aiden edits the page twice.
+  const before = await store.get("chat-1");
+  const saved = await store.save("chat-1", { ...before, frames: before.frames.filter((frame) => frame.id !== homeId) }, before.revision);
+  assert.equal(saved.ok, true);
+  assert.deepEqual(await place(["design/home.html"]), []);
+  assert.deepEqual(await place(["design/home.html"]), []);
+  assert.deepEqual(removedSeen, [["design/home.html"], ["design/home.html"]]);
+  assert.equal((await store.get("chat-1")).frames.some((frame) => frame.path === "design/home.html"), false);
+
+  // Placing it on purpose (any frame showing it again) clears the memory, and later writes land as before.
+  await store.update("chat-1", (doc) => ({
+    ...doc,
+    frames: [...doc.frames, { id: "again", kind: "file", title: "home.html", path: "design/home.html", x: 0, y: 3000, w: 640, h: 436, designWidth: 1280, pageId: doc.activePageId, createdBy: "aiden" }],
+  }));
+  assert.equal((await store.get("chat-1")).removedPagePaths, undefined);
+  const again = await store.get("chat-1");
+  await store.save("chat-1", { ...again, frames: again.frames.filter((frame) => frame.id !== "again") }, again.revision);
+  assert.deepEqual((await store.get("chat-1")).removedPagePaths, ["design/home.html"]);
+  // The person adding it back, even through a canvas that never knew the list, clears it too.
+  const cleared = await store.get("chat-1");
+  const { removedPagePaths: _list, ...withoutList } = cleared;
+  await store.save("chat-1", { ...withoutList, frames: [...cleared.frames, { ...again.frames.find((frame) => frame.id === "again")!, id: "mine", createdBy: "person" }] }, cleared.revision);
+  assert.equal((await store.get("chat-1")).removedPagePaths, undefined);
+
+  // The person undoing the reply that placed about.html takes it off, but that is no removal of theirs:
+  // the next write puts it back.
+  const placed = await store.get("chat-1");
+  const undoneSave = await store.save(
+    "chat-1",
+    { ...placed, frames: placed.frames.filter((frame) => frame.path !== "design/about.html") },
+    placed.revision,
+    { undone: ["design/about.html"] },
+  );
+  assert.equal(undoneSave.ok, true);
+  assert.equal((await store.get("chat-1")).removedPagePaths, undefined);
+  assert.equal((await place(["design/about.html"])).length, 1);
+});
+
+test("after each command, the design/ pages it made or changed are found, and nothing else", async (t) => {
+  const base = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-command-pages-"));
+  t.after(() => fs.rm(base, { recursive: true, force: true }));
+  const workspaceRoot = path.join(base, "workspace");
+  const design = path.join(workspaceRoot, "design");
+  await fs.mkdir(design, { recursive: true });
+  await fs.writeFile(path.join(design, "home.html"), "<!doctype html><title>Home</title>");
+  const anHourAgo = new Date(Date.now() - 60 * 60 * 1000);
+  await fs.utimes(path.join(design, "home.html"), anHourAgo, anHourAgo);
+  await fs.writeFile(path.join(workspaceRoot, "index.html"), "<!doctype html>");
+  const scanner = createDesignPageScanner(workspaceRoot);
+
+  // As if `cp`, a build script or a heredoc wrote them.
+  await fs.mkdir(path.join(design, "flows"));
+  await fs.writeFile(path.join(design, "flows", "checkout.html"), "<!doctype html><title>Checkout</title>");
+  await fs.writeFile(path.join(design, "tokens.css"), ":root{}");
+  await fs.mkdir(path.join(design, ".cache"));
+  await fs.writeFile(path.join(design, ".cache", "draft.html"), "<!doctype html>");
+  await fs.writeFile(path.join(workspaceRoot, "about.html"), "<!doctype html>");
+  await fs.symlink(path.join(workspaceRoot, "about.html"), path.join(design, "linked.html"));
+  assert.deepEqual(await scanner.changedSinceLastLook(), ["design/flows/checkout.html"], "the page existing before the turn is not news");
+
+  assert.deepEqual(await scanner.changedSinceLastLook(), [], "a command that wrote nothing places nothing");
+
+  await fs.writeFile(path.join(design, "home.html"), "<!doctype html><title>Home, edited by sed</title>");
+  assert.deepEqual(await scanner.changedSinceLastLook(), ["design/home.html"]);
+});
+
+test("a page the first command writes while the scanner takes its first look is still found", async () => {
+  // The first look is not awaited before the command starts, so it can
+  // already see what the command wrote.
+  const start = 1_000_000;
+  const scans: Array<Map<string, { mtimeMs: number; size: number }>> = [
+    new Map([
+      ["design/old.html", { mtimeMs: start - 60_000, size: 10 }],
+      ["design/raced.html", { mtimeMs: start + 5, size: 20 }],
+    ]),
+  ];
+  scans.push(new Map(scans[0]));
+  scans.push(new Map(scans[0]));
+  const scanner = createDesignPageScanner("/workspace", async () => scans.shift() ?? new Map(), () => start);
+  assert.deepEqual(await scanner.changedSinceLastLook(), ["design/raced.html"], "the page edited before the turn is not news");
+  assert.deepEqual(await scanner.changedSinceLastLook(), [], "a page is found once");
+});
+
+test("a workspace without a design folder has no command pages", async (t) => {
+  const base = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-command-pages-"));
+  t.after(() => fs.rm(base, { recursive: true, force: true }));
+  const scanner = createDesignPageScanner(base);
+  await fs.writeFile(path.join(base, "index.html"), "<!doctype html>");
+  assert.deepEqual(await scanner.changedSinceLastLook(), []);
+  await fs.mkdir(path.join(base, "design"));
+  await fs.writeFile(path.join(base, "design", "first.html"), "<!doctype html>");
+  assert.deepEqual(await scanner.changedSinceLastLook(), ["design/first.html"], "a design folder a command creates counts");
 });
 
 test("pages a running reply wrote join the saved ones for design mode's entry, newest last and bounded", () => {

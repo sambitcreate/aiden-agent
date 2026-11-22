@@ -12,6 +12,7 @@ import {
   parseWorkspaceArtifactSnapshotV1,
   parseWorkspaceArtifactV1,
   WORKSPACE_ARTIFACT_LIMITS,
+  workspaceArtifactActionProblem,
   workspaceArtifactCommandsNeedApproval,
   type WorkspaceArtifactActionV1,
   type WorkspaceArtifactRefreshV1,
@@ -60,6 +61,10 @@ export interface WorkspaceArtifactRevisionV1 {
   savedAt: number;
   description?: string;
   visual: ChatUiVisualV1;
+  /** The markup this version was compiled from; absent for versions saved before it was kept. */
+  markup?: string;
+  /** Set when the markup was dropped to keep a file within its size; see `WorkspaceArtifactV1`. */
+  markupDropped?: true;
   initialState?: Record<string, unknown>;
   sources: WorkspaceArtifactSourceV1[];
   actions: WorkspaceArtifactActionV1[];
@@ -102,6 +107,8 @@ function parseRevision(workspaceId: string, artifactId: string, value: unknown):
     workspaceId,
     ...(value.description !== undefined ? { description: value.description } : {}),
     visual: value.visual,
+    ...(value.markup !== undefined ? { markup: value.markup } : {}),
+    ...(value.markupDropped !== undefined ? { markupDropped: value.markupDropped } : {}),
     ...(value.initialState !== undefined ? { initialState: value.initialState } : {}),
     sources: value.sources,
     actions: value.actions,
@@ -120,11 +127,64 @@ function historyEntryOf(artifact: WorkspaceArtifactV1, savedAt: number): Workspa
     savedAt,
     ...(artifact.description ? { description: artifact.description } : {}),
     visual: artifact.visual,
+    ...(artifact.markup !== undefined ? { markup: artifact.markup } : {}),
+    ...(artifact.markupDropped ? { markupDropped: true as const } : {}),
     ...(artifact.initialState ? { initialState: artifact.initialState } : {}),
     sources: artifact.sources,
     actions: artifact.actions,
     refresh: artifact.refresh,
   };
+}
+
+const jsonBytes = (value: unknown) => Buffer.byteLength(JSON.stringify(value), "utf8");
+
+/**
+ * Drops the markup of `entries`, in the order given, until `size` (the
+ * file's compact JSON plus its trailing newline) fits `maxBytes`. Each one
+ * keeps its page and is marked `markupDropped`. Returns the size left.
+ */
+function dropMarkupToFit(entries: Iterable<{ markup?: string; markupDropped?: true }>, size: number, maxBytes: number): number {
+  for (const entry of entries) {
+    if (size <= maxBytes) break;
+    if (entry.markup === undefined) continue;
+    const before = jsonBytes(entry);
+    delete entry.markup;
+    entry.markupDropped = true;
+    size -= before - jsonBytes(entry);
+  }
+  return size;
+}
+
+/**
+ * Keeps a workspace's pages within `maxBytes` by dropping markup, never a
+ * page: other pages' first, least recently changed first, and `keepId`'s
+ * (the page being saved) only when nothing else is left. Markup too large to
+ * fit even then goes first, so other pages keep theirs. A file that is still
+ * too large fails its write, as before.
+ */
+function fitPagesToBudget(draft: WorkspaceArtifactsDocument, keepId: string, maxBytes: number): void {
+  const size = jsonBytes(draft) + 1;
+  if (size <= maxBytes) return;
+  const others = draft.artifacts
+    .filter((artifact) => artifact.markup !== undefined && artifact.id !== keepId)
+    .sort((a, b) => a.updatedAt - b.updatedAt);
+  const saved = draft.artifacts.find((artifact) => artifact.id === keepId && artifact.markup !== undefined);
+  // What dropping every other page's markup would save, near enough to decide the order.
+  const othersMarkup = others.reduce((total, artifact) => total + jsonBytes(artifact.markup), 0);
+  const order = saved ? (size - othersMarkup > maxBytes ? [saved, ...others] : [...others, saved]) : others;
+  dropMarkupToFit(order, size, maxBytes);
+}
+
+/**
+ * Keeps a workspace's pages within `maxBytes` for a change to `id` alone,
+ * such as its saved state, by dropping only that page's markup: a small
+ * change to one page never costs another page its markup. A file that is
+ * still too large fails its write.
+ */
+function fitPageToBudget(draft: WorkspaceArtifactsDocument, id: string, maxBytes: number): void {
+  const size = jsonBytes(draft) + 1;
+  if (size <= maxBytes) return;
+  dropMarkupToFit(draft.artifacts.filter((artifact) => artifact.id === id), size, maxBytes);
 }
 
 export function normalizeWorkspaceArtifactHistoryDocument(workspaceId: string) {
@@ -145,14 +205,22 @@ export function normalizeWorkspaceArtifactHistoryDocument(workspaceId: string) {
 }
 
 /**
- * Drops the oldest earlier versions, across pages, until the document fits
- * `maxBytes`, so recording history never fails a write for its size.
+ * Fits the history document to `maxBytes`, so recording history never fails
+ * a write for its size: first by dropping earlier versions' markup, oldest
+ * first, then by dropping the oldest versions, across pages.
  */
 function trimHistoryToFit(draft: WorkspaceArtifactHistoryDocument, maxBytes: number): void {
-  const bytes = (value: unknown) => Buffer.byteLength(JSON.stringify(value), "utf8");
+  const bytes = jsonBytes;
   // Measured once; each removal subtracts exactly what it takes out of the
   // compact JSON. The +1 is the trailing newline the store writes.
   let size = bytes(draft) + 1;
+  if (size <= maxBytes) return;
+  // Markup goes before any version does, oldest first: an earlier version
+  // without its markup can still be restored, and then sent whole to change.
+  const byAge = Object.values(draft.revisions)
+    .flat()
+    .sort((a, b) => a.savedAt - b.savedAt);
+  size = dropMarkupToFit(byAge, size, maxBytes);
   while (size > maxBytes) {
     let oldest: { id: string; savedAt: number } | undefined;
     for (const [id, entries] of Object.entries(draft.revisions)) {
@@ -177,11 +245,17 @@ export function normalizeWorkspaceArtifactsDocument(workspaceId: string) {
     if (!isRecord(value) || !Array.isArray(value.artifacts)) return emptyArtifacts();
     const seen = new Set<string>();
     const artifacts: WorkspaceArtifactV1[] = [];
-    const unreadable: unknown[] = Array.isArray(value.unreadable) ? value.unreadable.slice(0, UNREADABLE_LIMIT) : [];
-    for (const entry of value.artifacts) {
+    const unreadable: unknown[] = [];
+    // Entries set aside earlier are read again, so a page a looser reader
+    // (a newer release, or a rule that keeps rather than drops) can read comes back.
+    const earlier = Array.isArray(value.unreadable) ? value.unreadable.slice(0, UNREADABLE_LIMIT) : [];
+    const entries = [...value.artifacts, ...earlier];
+    for (const [index, entry] of entries.entries()) {
+      const setAside = index >= value.artifacts.length;
       const artifact = parseWorkspaceArtifactV1(entry);
-      if (artifact && seen.has(artifact.id)) continue;
-      if (!artifact || artifact.workspaceId !== workspaceId || artifacts.length >= WORKSPACE_ARTIFACT_LIMITS.perWorkspace) {
+      // A second copy of a live page is dropped, unless it was already set aside: that stays as it was.
+      if (artifact && seen.has(artifact.id) && !setAside) continue;
+      if (!artifact || seen.has(artifact.id) || artifact.workspaceId !== workspaceId || artifacts.length >= WORKSPACE_ARTIFACT_LIMITS.perWorkspace) {
         if (unreadable.length < UNREADABLE_LIMIT) unreadable.push(entry);
         continue;
       }
@@ -203,12 +277,23 @@ export function normalizeWorkspaceArtifactSnapshotsDocument(value: unknown): Wor
   return { version: 1, snapshots };
 }
 
-/** What an approval covers: every command the artifact can run, exactly as written. */
+/**
+ * What an approval covers: every command the artifact can run, exactly as
+ * written, and which buttons are turned off (the card shows them as never
+ * running). A rule change that turns a button off or back on changes the
+ * digest, so the page asks once more: failing safe, since the person never
+ * allowed a button that was off to run. `isTurnedOff` is the current rules
+ * unless given; a page with no turned-off button digests as its commands
+ * alone, so a rule change that leaves every button as it was keeps the
+ * approval.
+ */
 export function workspaceArtifactDigest(
   sources: readonly WorkspaceArtifactSourceV1[],
   actions: readonly WorkspaceArtifactActionV1[],
+  isTurnedOff: (action: WorkspaceArtifactActionV1) => boolean = (action) => workspaceArtifactActionProblem(action) !== undefined,
 ): string {
-  return createHash("sha256").update(JSON.stringify({ sources, actions })).digest("hex");
+  const covered = actions.map((action) => (isTurnedOff(action) ? { ...action, turnedOff: true } : action));
+  return createHash("sha256").update(JSON.stringify({ sources, actions: covered })).digest("hex");
 }
 
 export interface WorkspaceArtifactContent {
@@ -216,6 +301,13 @@ export interface WorkspaceArtifactContent {
   description?: string;
   /** Compiled page; its id and title are replaced by the store. */
   visual: ChatUiVisualV1;
+  /**
+   * The markup `visual` was compiled from, kept so the page can be read back
+   * and edited. Left out, the page keeps none.
+   */
+  markup?: string;
+  /** Without `markup`: the version this content comes from had its markup dropped for size. */
+  markupDropped?: true;
   /** The state the markup declared; `saveState` never changes it. */
   initialState?: Record<string, unknown>;
   sources: WorkspaceArtifactSourceV1[];
@@ -236,6 +328,26 @@ export interface WorkspaceArtifactWriteOptions {
    * "Title (2)", "Title (3)"… instead of failing, as an import needs.
    */
   uniqueTitle?: boolean;
+  /**
+   * Update only: the version this caller saved earlier in the same agent
+   * turn. Replacing that version keeps no history entry for it, so one turn's
+   * saves are a single undo step back to the page before the turn. A version
+   * renamed since (same revision, other title) is the person's, and is kept.
+   */
+  fold?: { revision: number; title: string };
+  /**
+   * Update only: the title and description of the page the caller built this
+   * content from. If another save or a rename changed either after that read
+   * and the content keeps the old value, the page keeps the newer one; a value
+   * of the content's own still wins.
+   */
+  base?: { title: string; description?: string };
+  /**
+   * Update and restore: told, under the store's lock, the revision the write
+   * found the page at, so a caller can tell a write that made a new revision
+   * from one that found the page already matching and made none.
+   */
+  onFound?: (revision: number) => void;
 }
 
 /** `title`, or the first "Title (n)" no page in `taken` has, within the title limit. */
@@ -252,6 +364,46 @@ export function freeWorkspaceArtifactTitle(title: string, taken: ReadonlySet<str
   throw new Error(`An artifact named "${title}" already exists here.`);
 }
 
+/** JSON with object keys sorted, so equal values compare equal whatever their key order. */
+function canonicalJson(value: unknown): string {
+  return JSON.stringify(value, (_key, entry: unknown) =>
+    entry && typeof entry === "object" && !Array.isArray(entry)
+      ? Object.fromEntries(Object.entries(entry as Record<string, unknown>).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)))
+      : entry,
+  );
+}
+
+/**
+ * Whether saving `content` over `previous` would change nothing the page shows
+ * or runs. The live state the person changed since is not part of the page:
+ * an identical re-save keeps it rather than resetting it.
+ */
+function sameArtifactContent(previous: WorkspaceArtifactV1, content: WorkspaceArtifactContent): boolean {
+  const page = (visual: ChatUiVisualV1) => {
+    const { id: _id, title: _title, state: _state, ...rest } = visual;
+    return rest;
+  };
+  const shape = (value: {
+    title: string;
+    description?: string;
+    visual: ChatUiVisualV1;
+    initialState?: Record<string, unknown>;
+    sources: unknown;
+    actions: unknown;
+    refresh: unknown;
+  }) =>
+    canonicalJson({
+      title: value.title,
+      description: value.description ?? null,
+      visual: page(value.visual),
+      initialState: value.initialState ?? null,
+      sources: value.sources,
+      actions: value.actions,
+      refresh: value.refresh,
+    });
+  return shape({ ...previous, title: previous.visual.title }) === shape(content);
+}
+
 /** Thrown inside a history write whose workspace was removed, so nothing is written. */
 class HistoryDetachedError extends Error {}
 
@@ -260,8 +412,10 @@ export interface WorkspaceArtifactStoreOptions {
   root?: () => string;
   now?: () => number;
   newId?: () => string;
-  /** Size cap of one workspace's history file; the oldest versions go first. */
+  /** Size cap of one workspace's history file; the oldest versions' markup goes first, then the versions. */
   historyMaxBytes?: number;
+  /** Size cap of one workspace's pages file; the least recently changed pages' markup goes first. */
+  artifactsMaxBytes?: number;
   /**
    * Reports a failure to record an earlier version. The page itself is saved
    * by then, so the update still succeeds.
@@ -301,6 +455,7 @@ export class WorkspaceArtifactStore {
   private readonly now: () => number;
   private readonly newId: () => string;
   private readonly historyMaxBytes: number;
+  private readonly artifactsMaxBytes: number;
   private readonly onHistoryError: (error: unknown) => void;
 
   constructor(private readonly options: WorkspaceArtifactStoreOptions = {}) {
@@ -312,6 +467,7 @@ export class WorkspaceArtifactStore {
     this.now = options.now ?? Date.now;
     this.newId = options.newId ?? randomUUID;
     this.historyMaxBytes = options.historyMaxBytes ?? HISTORY_MAX_BYTES;
+    this.artifactsMaxBytes = options.artifactsMaxBytes ?? ARTIFACTS_MAX_BYTES;
     // The Electron binding (main.ts) logs it; stores built without one (tests) ignore it.
     this.onHistoryError = options.onHistoryError ?? (() => undefined);
   }
@@ -321,7 +477,7 @@ export class WorkspaceArtifactStore {
     let store = this.artifactStores.get(id);
     if (!store) {
       store = new DataStore<WorkspaceArtifactsDocument>(`${id}.json`, emptyArtifacts(), this.root, {
-        maxBytes: ARTIFACTS_MAX_BYTES,
+        maxBytes: this.artifactsMaxBytes,
         fileMode: 0o600,
         compact: true,
         normalize: normalizeWorkspaceArtifactsDocument(id),
@@ -476,6 +632,8 @@ export class WorkspaceArtifactStore {
         title: previous.visual.title,
         ...(entry.description ? { description: entry.description } : {}),
         visual: entry.visual,
+        ...(entry.markup !== undefined ? { markup: entry.markup } : {}),
+        ...(entry.markupDropped ? { markupDropped: true as const } : {}),
         ...(entry.initialState ? { initialState: entry.initialState } : {}),
         sources: entry.sources,
         actions: entry.actions,
@@ -490,15 +648,26 @@ export class WorkspaceArtifactStore {
       this.artifacts(workspaceId).load(), this.snapshots(workspaceId).load(),
     ]);
     const denied = new Map<string, Set<string>>();
+    // Pages often read the same file, so each file's policy is asked once per listing; a throw keeps the cache.
+    const policy = new Map<string, Promise<boolean | undefined>>();
+    const fileSourceAllowed = this.options.fileSourceAllowed;
+    const allowedByPolicy = (file: string): Promise<boolean | undefined> => {
+      let answer = policy.get(file);
+      if (!answer) {
+        answer = fileSourceAllowed
+          ? Promise.resolve().then(() => fileSourceAllowed(workspaceId, file)).catch(() => undefined)
+          : Promise.resolve(true);
+        policy.set(file, answer);
+      }
+      return answer;
+    };
     for (const artifact of artifacts) {
       const names = new Set<string>();
       for (const source of artifact.sources) {
         if (source.kind !== "file") continue;
         let allowed = !isProtectedCredentialPath(source.file, "file");
-        if (allowed && this.options.fileSourceAllowed) {
-          try { allowed = await this.options.fileSourceAllowed(workspaceId, source.file); }
-          catch { /* Missing or temporarily inaccessible ordinary files retain their validated cache. */ }
-        }
+        // Missing or temporarily inaccessible ordinary files (a throw) retain their validated cache.
+        if (allowed) allowed = (await allowedByPolicy(source.file)) ?? true;
         const snapshot = loaded.snapshots[artifact.id];
         const before = snapshot?.sources[source.name];
         if (before && ((!allowed && (!before.policyDenied || before.dataJson !== undefined)) || snapshot?.filePolicyVersion !== 1)) names.add(source.name);
@@ -549,8 +718,9 @@ export class WorkspaceArtifactStore {
       const title = options.uniqueTitle
         ? freeWorkspaceArtifactTitle(content.title, new Set(draft.artifacts.map((artifact) => artifact.visual.title)))
         : content.title;
-      if (draft.artifacts.some((artifact) => artifact.visual.title === title)) {
-        throw new Error(`An artifact named "${title}" already exists here. Update it instead.`);
+      const named = draft.artifacts.find((artifact) => artifact.visual.title === title);
+      if (named) {
+        throw new Error(`An artifact named "${title}" already exists here (id ${named.id}). Update it by that id instead.`);
       }
       const id = requireArtifactId(this.newId());
       const now = this.now();
@@ -560,6 +730,8 @@ export class WorkspaceArtifactStore {
         workspaceId,
         ...(content.description ? { description: content.description } : {}),
         visual: { ...content.visual, id, title },
+        ...(content.markup !== undefined ? { markup: content.markup } : {}),
+        ...(content.markup === undefined && content.markupDropped ? { markupDropped: true as const } : {}),
         ...(content.initialState ? { initialState: content.initialState } : {}),
         sources: content.sources,
         actions: content.actions,
@@ -576,18 +748,24 @@ export class WorkspaceArtifactStore {
       const checked = parseWorkspaceArtifactV1(artifact);
       if (!checked) throw new Error("The artifact could not be saved because its page is too large or invalid.");
       draft.artifacts.push(checked);
-      return checked;
+      fitPagesToBudget(draft, id, this.artifactsMaxBytes);
+      return structuredClone(checked);
     });
   }
 
-  /** Replaces the page and everything it runs; a changed command needs a fresh approval. */
+  /**
+   * Replaces the page and everything it runs; a changed command needs a fresh
+   * approval. Given a function, the content is built under the store's lock
+   * from the page as it is then, so a save that landed since the caller read
+   * it is not written over.
+   */
   async replace(
     workspaceId: string,
     artifactId: string,
-    content: WorkspaceArtifactContent,
+    content: WorkspaceArtifactContent | ((current: WorkspaceArtifactV1) => WorkspaceArtifactContent),
     options: WorkspaceArtifactWriteOptions = {},
   ): Promise<WorkspaceArtifactV1> {
-    return this.replaceWith(workspaceId, artifactId, () => content, options);
+    return this.replaceWith(workspaceId, artifactId, typeof content === "function" ? content : () => content, options);
   }
 
   /**
@@ -606,23 +784,52 @@ export class WorkspaceArtifactStore {
       const index = draft.artifacts.findIndex((artifact) => artifact.id === id);
       if (index < 0) notFound();
       const previous = draft.artifacts[index]!;
-      const content = contentFor(previous);
+      const built = contentFor(previous);
+      options.onFound?.(previous.revision);
+      // Decided here, under the store's lock, so a rename or another chat's
+      // description that landed while the caller prepared this save is never
+      // written over by the value the caller read.
+      const { base } = options;
+      const content = { ...built };
+      if (base && previous.visual.title !== base.title && built.title === base.title) {
+        content.title = previous.visual.title;
+      }
+      if (base && previous.description !== base.description && built.description === base.description) {
+        if (previous.description) content.description = previous.description;
+        else delete content.description;
+      }
       if (!isWorkspaceArtifactTitle(content.title)) throw new Error(TITLE_RULE);
       assertNoCredentialFiles(content);
-      if (draft.artifacts.some((artifact) => artifact.id !== id && artifact.visual.title === content.title)) {
-        throw new Error(`Another artifact here is already named "${content.title}".`);
+      const named = draft.artifacts.find((artifact) => artifact.id !== id && artifact.visual.title === content.title);
+      if (named) {
+        throw new Error(`Another artifact here (id ${named.id}) is already named "${content.title}"; pick another title.`);
       }
       const digest = workspaceArtifactDigest(content.sources, content.actions);
       // Only a card that showed exactly these commands approves them;
       // otherwise an unchanged set keeps the approval it had.
       const approvedDigest =
         options.approvedDigest === digest || previous.approvedDigest === digest ? digest : undefined;
+      // A save that changes nothing makes no version; it can only add the
+      // approval the person just gave for these exact commands.
+      if (sameArtifactContent(previous, content)) {
+        if (approvedDigest) previous.approvedDigest = approvedDigest;
+        // Markup that compiles to the same page (spacing, say) is kept as the
+        // source to edit, without a version of its own.
+        if (content.markup !== undefined && content.markup.length <= WORKSPACE_ARTIFACT_LIMITS.markupChars) {
+          previous.markup = content.markup;
+          delete previous.markupDropped;
+        }
+        fitPagesToBudget(draft, id, this.artifactsMaxBytes);
+        return { saved: structuredClone(previous), replaced: undefined };
+      }
       const next: WorkspaceArtifactV1 = {
         version: 1,
         id,
         workspaceId,
         ...(content.description ? { description: content.description } : {}),
         visual: { ...content.visual, id, title: content.title },
+        ...(content.markup !== undefined ? { markup: content.markup } : {}),
+        ...(content.markup === undefined && content.markupDropped ? { markupDropped: true as const } : {}),
         ...(content.initialState ? { initialState: content.initialState } : {}),
         sources: content.sources,
         actions: content.actions,
@@ -636,9 +843,15 @@ export class WorkspaceArtifactStore {
       const checked = parseWorkspaceArtifactV1(next);
       if (!checked) throw new Error("The artifact could not be saved because its page is too large or invalid.");
       draft.artifacts[index] = checked;
-      return { saved: checked, replaced: structuredClone(previous) };
+      fitPagesToBudget(draft, id, this.artifactsMaxBytes);
+      // A version this turn already saved is not an undo step of its own.
+      const folded =
+        options.fold !== undefined &&
+        options.fold.revision === previous.revision &&
+        options.fold.title === previous.visual.title;
+      return { saved: structuredClone(checked), replaced: folded ? undefined : structuredClone(previous) };
     });
-    await this.recordRevision(workspaceId, pages, replaced);
+    if (replaced) await this.recordRevision(workspaceId, pages, replaced);
     return saved;
   }
 
@@ -648,11 +861,13 @@ export class WorkspaceArtifactStore {
     if (!isWorkspaceArtifactTitle(trimmed)) throw new Error(TITLE_RULE);
     return this.artifacts(workspaceId).update((draft) => {
       const artifact = draft.artifacts.find((entry) => entry.id === id) ?? notFound();
-      if (draft.artifacts.some((entry) => entry.id !== id && entry.visual.title === trimmed)) {
-        throw new Error(`Another artifact here is already named "${trimmed}".`);
+      const named = draft.artifacts.find((entry) => entry.id !== id && entry.visual.title === trimmed);
+      if (named) {
+        throw new Error(`Another artifact here (id ${named.id}) is already named "${trimmed}"; pick another title.`);
       }
       artifact.visual = { ...artifact.visual, title: trimmed };
       artifact.updatedAt = this.now();
+      fitPagesToBudget(draft, id, this.artifactsMaxBytes);
       return artifact;
     });
   }
@@ -683,6 +898,7 @@ export class WorkspaceArtifactStore {
       const next = parseWorkspaceArtifactV1({ ...artifact, visual: { ...artifact.visual, state } });
       if (!next) throw new Error("The artifact's state is too large or uses a reserved key name.");
       artifact.visual = next.visual;
+      fitPageToBudget(draft, id, this.artifactsMaxBytes);
     });
   }
 

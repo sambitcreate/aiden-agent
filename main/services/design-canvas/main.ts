@@ -2,9 +2,10 @@
 // handlers are tested directly. Constructing the store does no I/O, so chat
 // deletion can clean up a canvas even while the design-mode flag is off.
 import path from "node:path";
-import { app, ipcMain } from "../../platform.js";
+import { app, ipcMain, logger } from "../../platform.js";
 import { DesignCanvasSnapshots } from "./canvas-snapshots.js";
 import { DesignModeConsent } from "./design-mode-tool.js";
+import { DesignSystemOffers } from "./design-system-offers.js";
 import { DesignGrantRegistry } from "./grants.js";
 import { DesignCanvasStore } from "./store.js";
 import { DESIGN_FILES_CHANGED_CHANNEL, DesignFileWatcher } from "./watch.js";
@@ -35,3 +36,9 @@ export const designCanvasSnapshots = new DesignCanvasSnapshots();
 
 /** HTML pages each chat's replies wrote in this run, for opening design mode mid-reply. Memory only. */
 export const recentWrittenPages = new RecentWrittenPages();
+
+/** Workspaces already offered a tokens file from their own colours and fonts. */
+export const designSystemOffers = new DesignSystemOffers({
+  file: () => path.join(app.getPath("userData"), "design-system-offers.json"),
+  onSaveError: (error) => logger.warn("design", "Could not record the design-system offer.", error),
+});
