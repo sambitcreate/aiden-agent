@@ -6,7 +6,8 @@
 // change by itself). The controller holds one blocker while any input has a
 // reason, keeps it for a short grace after the last one ends so back-to-back
 // runs share one hold, and lets go when nobody has used the computer for
-// 4 hours, until they come back.
+// 4 hours, until they come back; a check-back or Bot wake-up that is due soon
+// keeps it anyway, since keeping an unattended computer awake for it is the point.
 
 import type { KeepAwakeReasonKind, KeepAwakeStatus } from "../../../renderer/shared/keep-awake.js";
 
@@ -18,6 +19,16 @@ export const KEEP_AWAKE_IDLE_CAP_SECONDS = 4 * 60 * 60;
 export const KEEP_AWAKE_IDLE_POLL_MS = 60_000;
 /** A recheck time already due is read again after this, never in a tight loop. */
 const KEEP_AWAKE_MIN_RECHECK_MS = 1_000;
+/**
+ * A recheck never waits longer than this, so a far-off time (or a clock that
+ * jumped) can't overflow the timer, which would fire at once, again and again.
+ */
+const KEEP_AWAKE_MAX_RECHECK_MS = 60 * 60_000;
+/**
+ * Holds for a check-back or Bot wake-up exist to keep an unattended computer
+ * awake until it fires, so the idle cap never lets go of them.
+ */
+const IDLE_CAP_EXEMPT_KINDS: ReadonlySet<KeepAwakeReasonKind> = new Set(["check-back", "wake-up"]);
 
 export interface KeepAwakeReason {
   kind: KeepAwakeReasonKind;
@@ -119,7 +130,8 @@ export class KeepAwakeController<Handle = unknown, Timer = unknown> {
     } else if (reasons.length > 0) {
       this.clearGrace();
       this.startIdlePoll();
-      if (this.readIdleSeconds() >= KEEP_AWAKE_IDLE_CAP_SECONDS) {
+      const due = reasons.some((reason) => IDLE_CAP_EXEMPT_KINDS.has(reason.kind));
+      if (!due && this.readIdleSeconds() >= KEEP_AWAKE_IDLE_CAP_SECONDS) {
         this.pausedWhileIdle = true;
         this.release();
       } else {
@@ -229,7 +241,7 @@ export class KeepAwakeController<Handle = unknown, Timer = unknown> {
     this.recheckTimer = this.options.clock.setTimeout(() => {
       this.recheckTimer = undefined;
       this.update();
-    }, Math.max(KEEP_AWAKE_MIN_RECHECK_MS, at - now));
+    }, Math.min(KEEP_AWAKE_MAX_RECHECK_MS, Math.max(KEEP_AWAKE_MIN_RECHECK_MS, at - now)));
   }
 
   private publish(): void {

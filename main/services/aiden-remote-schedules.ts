@@ -9,7 +9,7 @@ import {
   type AidenIdempotencySnapshot,
 } from "./aiden-remote-operation-contract.js";
 import type { ScheduledTaskApplicationService } from "./scheduled-task-application-service.js";
-import { scheduledTaskRevision } from "./scheduled-task-application-service.js";
+import { scheduledSettingsRevision, scheduledTaskRevision } from "./scheduled-task-application-service.js";
 import type {
   ScheduledRun,
   ScheduledTask,
@@ -144,6 +144,11 @@ function remoteScheduledSettings(value: ScheduledTaskSettings) {
     defaultNotify: value.defaultNotify,
     defaultTimezone: value.defaultTimezone,
   };
+}
+
+/** The revision a phone sees: of the fields it knows, so a desktop-only toggle doesn't invalidate its edit. */
+export function remoteScheduledSettingsRevision(value: ScheduledTaskSettings): string {
+  return scheduledSettingsRevision(remoteScheduledSettings(value));
 }
 
 function mapError(error: unknown): never {
@@ -507,7 +512,7 @@ export class AidenRemoteScheduleService {
 
   async settings() {
     const current = await this.options.application.settings();
-    return { revision: current.revision, ...remoteScheduledSettings(current.value) };
+    return { revision: remoteScheduledSettingsRevision(current.value), ...remoteScheduledSettings(current.value) };
   }
 
   async updateSettings(revision: string, value: unknown) {
@@ -525,8 +530,10 @@ export class AidenRemoteScheduleService {
     }
     const { confirmedForeground: _confirmed, ...patch } = record;
     try {
-      const saved = await this.options.application.updateSettings(revision, patch);
-      return { revision: saved.revision, ...remoteScheduledSettings(saved.value) };
+      const saved = await this.options.application.updateSettings(revision, patch, {
+        revisionOf: remoteScheduledSettingsRevision,
+      });
+      return { revision: remoteScheduledSettingsRevision(saved.value), ...remoteScheduledSettings(saved.value) };
     } catch (error) { mapError(error); }
   }
 }

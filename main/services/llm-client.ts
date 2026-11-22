@@ -1915,8 +1915,15 @@ async function prepareGeneration(
     harnessProvider: isAcpHarnessProvider(runtime.provider.id),
     excludedToolNames: options.excludeToolNames,
   };
+  // The owed turn for the person's queued message is theirs; one answering a notice is not.
+  const answersPerson =
+    windowless &&
+    options.screenedPrompt !== undefined &&
+    chat.messages.some(
+      (message) => message.id === options.screenedPrompt?.messageId && message.role === "user" && !message.notice,
+    );
   const turnAudience = {
-    ...chatTurnAudienceFor({ ...options, windowless }, params),
+    ...chatTurnAudienceFor({ ...options, windowless, answersPerson }, params),
     ...(windowless ? { windowOnlyToolNames } : {}),
   };
   /** Calls this turn refuses because of their arguments (a woken turn setting a check-back). */

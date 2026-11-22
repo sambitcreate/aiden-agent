@@ -153,7 +153,9 @@ test("a check-back is set only in a turn the person started; list and cancel wor
     ["a turn in the chat's window", {}, true],
     ["a phone- or paired-Mac-sent turn", { visualAudience: "remote" }, true],
     ["an unattended follow-up (a check-back firing)", { ...UNATTENDED_FOLLOW_UP_GENERATION }, false],
-    ["an owed turn with no window", { windowless: true }, false],
+    ["an owed turn answering a notice, with no window", { windowless: true }, false],
+    ["an owed turn answering the person's queued message", { windowless: true, answersPerson: true }, true],
+    ["an unattended follow-up never counts as the person's", { ...UNATTENDED_FOLLOW_UP_GENERATION, windowless: true, answersPerson: true }, false],
     ["a goal round", { goalRound: true }, false],
   ];
   for (const [label, options, maySet] of cases) {
