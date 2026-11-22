@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- **2026-11-22 — Pairing feedback and QR framing.** Add Computer scans for QR codes inside the visible viewfinder. Manual pairing shows what to correct below the address or setup code field. Search keeps Add Computer available until a computer is paired.
+
 - **2026-11-20 — Shell-first launch and inline pairing.** A fresh install now opens directly into the tab shell instead of a full-screen onboarding gate, with an empty state and **Add Computer** action across tabs when no computer is paired. Adding the first computer asks whether Aiden is already installed on a computer, offers open-and-share download links for Mac (`chatwithaiden.com`), Linux, and Server (`aiden serve`), and then opens a single **Add Computer** sheet with an inline frosted-cutout QR scanner (auto-pairing on scan, with inline fallback when the camera is unavailable), conditional nearby Wi-Fi discovery, and unified Address and Code entry. Adding additional computers skips straight to **Add Computer**, and the legacy onboarding artwork files are removed. No Remote wire or revision change.
 
 - **2026-11-18 — Terminal theme control removed.** The app no longer accepts the retired `appearance.terminalTheme` chat control, which no host has sent since the interactive CLI was retired on 2026-10-30. No Remote wire or revision change.

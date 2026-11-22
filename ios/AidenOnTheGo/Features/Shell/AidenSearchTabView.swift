@@ -5,7 +5,7 @@ import SwiftUI
 struct AidenSearchTabView: View {
     let inboxStore: AidenUnifiedInboxStore
     let hasNoComputers: Bool
-    let onAddComputer: (() -> Void)?
+    let onAddComputer: () -> Void
     let onOpen: (AidenAppRoute) -> Void
 
     @State private var model: AidenSearchModel
@@ -25,8 +25,8 @@ struct AidenSearchTabView: View {
     init(
         coordinator: AidenRemoteCoordinator,
         inboxStore: AidenUnifiedInboxStore,
-        hasNoComputers: Bool = false,
-        onAddComputer: (() -> Void)? = nil,
+        hasNoComputers: Bool,
+        onAddComputer: @escaping () -> Void,
         onOpen: @escaping (AidenAppRoute) -> Void
     ) {
         self.inboxStore = inboxStore
@@ -40,6 +40,15 @@ struct AidenSearchTabView: View {
     }
 
     var body: some View {
+        if hasNoComputers {
+            AidenNoComputersEmptyView(surface: .search, onAddComputer: onAddComputer)
+                .navigationTitle("Search")
+        } else {
+            searchableContent
+        }
+    }
+
+    private var searchableContent: some View {
         content
             .background(palette.canvas.ignoresSafeArea())
             .navigationTitle("Search")
@@ -54,9 +63,7 @@ struct AidenSearchTabView: View {
 
     @ViewBuilder
     private var content: some View {
-        if hasNoComputers, let onAddComputer, !model.hasQuery {
-            AidenNoComputersEmptyView(surface: .search, onAddComputer: onAddComputer)
-        } else if !model.hasQuery {
+        if !model.hasQuery {
             scrolling {
                 ContentUnavailableView(
                     "Search",

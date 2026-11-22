@@ -2,6 +2,8 @@
 
 Aiden On The Go is the native SwiftUI companion for Aiden Agent on macOS and Linux. The paired desktop owns execution, persistence, providers, workspaces, and permissions; iPhone and iPad provide an authenticated remote control surface over a local network or Tailscale.
 
+Choose **Add Computer** from any tab to pair your first computer. In the scanner, center the QR code inside the viewfinder. To pair by hand, copy the address and setup code shown on the computer. The app points out invalid input below the field that needs attention.
+
 Opening a chat already running on another device restores available reply text, reasoning and tool activity from a revision 58 host. The phone resumes live updates from the same point. Earlier hosts use their retained run events.
 
 An HTML visual whose snapshot is missing shows its title with **Open interactive** when the Mac offers the visual viewer (revision 35's `chat-visual-viewer-v1`), and the “Can't view on this device” card only when it doesn't.
