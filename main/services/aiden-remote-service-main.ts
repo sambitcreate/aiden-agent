@@ -330,6 +330,8 @@ export interface AidenRemoteRuntime {
   mcp: AidenMcpHost;
   /** Which outside app started a chat; read only by Aiden on this computer. */
   mcpProvenance: AidenMcpProvenanceLog;
+  /** The chat and stream services, for chats a lead chat starts (`child_chats`). */
+  chatServices(): Promise<{ chats: AidenRemoteChatService; streams: AidenRemoteStreamService }>;
   revokeDevice(deviceId: string): Promise<boolean>;
   pendingApprovalForChat(chatId: string): AidenRemotePendingApproval | null;
   pendingQuestionForChat(chatId: string): AidenRemotePendingQuestion | null;
@@ -1383,6 +1385,11 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
     approvedRoots: new AidenRemoteApprovedRootService(state),
     mcp,
     mcpProvenance,
+    chatServices: async () => {
+      const api = await remoteWorkspaceApi?.((await state.snapshot()).instanceId);
+      if (!api) throw new Error("Aiden's chat services are unavailable.");
+      return api;
+    },
     revokeDevice,
     // A phone turn's card first, then the card of an owed turn no window owns.
     pendingApprovalForChat: (chatId) =>
@@ -1455,4 +1462,14 @@ export async function revokeAidenMcpApp(appId: string): Promise<boolean> {
 /** The outside app that started `chatId` through the MCP server, for the chat's "Started by" label. */
 export async function aidenMcpChatProvenance(chatId: string): Promise<AidenMcpChatProvenance | undefined> {
   return (await getAidenRemoteRuntime()).mcpProvenance.get(chatId);
+}
+
+/** The chat and stream services `child_chats` runs started chats through. */
+export async function aidenChatOrchestrationServices() {
+  return (await getAidenRemoteRuntime()).chatServices();
+}
+
+/** This computer's name as the person sees it, for "approve in Aiden on …". */
+export async function aidenHostDisplayName(): Promise<string> {
+  return (await (await getAidenRemoteRuntime()).state.snapshot()).displayName;
 }

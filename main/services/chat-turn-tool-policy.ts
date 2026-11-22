@@ -22,6 +22,7 @@
 import type { InlineVisualsMode } from "../../renderer/shared/appearance.js";
 import { ASK_USER_QUESTION_TOOL_NAME } from "../../renderer/shared/ask-user-question.js";
 import { CHECK_BACK_TOOL_NAME } from "../../renderer/shared/check-backs.js";
+import { CHILD_CHATS_TOOL_NAME } from "../../renderer/shared/child-chats.js";
 import { WORKSPACE_ARTIFACT_TOOL_NAME } from "../../renderer/shared/workspace-artifacts.js";
 import { COMPUTER_USE_TOOL_NAME } from "./computer-use/tool.js";
 import { generativeUiUnavailableReason } from "./generative-ui-extension.js";
@@ -246,6 +247,14 @@ export const TURN_ARGS_REFUSAL_RULES: readonly TurnArgsRefusalRule[] = [
     reason:
       `${CHECK_BACK_TOOL_NAME} cannot set a check-back in this turn: Aiden started it, not the person, and a check-back set here could chain into another. ` +
       "Finish what you can now, or say in your reply what is still left to check. list and cancel still work.",
+  },
+  {
+    tool: CHILD_CHATS_TOOL_NAME,
+    turns: aidenStartedTurn,
+    args: argIs("action", "start"),
+    reason:
+      `${CHILD_CHATS_TOOL_NAME} cannot start chats in this turn: starting chats needs the person here, and Aiden started this turn. ` +
+      "list, read, wait, send and stop still work; say in your reply what you would start.",
   },
 ];
 

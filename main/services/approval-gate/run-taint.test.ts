@@ -15,7 +15,7 @@ function taintedAfter(toolName: string, args: unknown = {}): boolean {
   return taint.isNewDestination(UNNAMED_FETCH);
 }
 
-test("outside content taints the run: the web, every browser read or action, a device screen, a subagent's report, a pull request's comments, codemode", () => {
+test("outside content taints the run: the web, every browser read or action, a device screen, a subagent's report, a pull request's comments, codemode, a started chat's reply", () => {
   for (const toolName of [
     "web_fetch", "web_search", "web_search_exa",
     "browser_status", "browser_open", "browser_navigate", "browser_snapshot", "browser_click", "browser_type",
@@ -25,6 +25,7 @@ test("outside content taints the run: the web, every browser read or action, a d
     "subagent",
     "follow_pull_request",
     "codemode",
+    "child_chats",
   ]) {
     assert.equal(taintedAfter(toolName), true, toolName);
   }

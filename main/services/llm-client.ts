@@ -83,6 +83,7 @@ import { geminiLiveEnabled } from "./gemini-live/feature-flag.js";
 import { webSearchService } from "./web-search-main.js";
 import { WEB_FETCH_TOOL_NAME } from "../../renderer/shared/web-extract.js";
 import { CHECK_BACK_TOOL_NAME } from "../../renderer/shared/check-backs.js";
+import { CHILD_CHATS_TOOL_NAME, childChatsEnabled } from "../../renderer/shared/child-chats.js";
 import { webFetchService } from "./web-fetch-main.js";
 import { createVisionAnalysisTool, INSPECT_IMAGE_TOOL_NAME } from "./vision-analysis-tool.js";
 import {
@@ -527,7 +528,7 @@ import {
   createVisualizeGuideTool,
   VISUALIZE_GUIDE_TOOL_NAME,
 } from "./generative-ui-extension.js";
-import { chatToolOffers, chatTurnArgsToolRefusal, chatTurnAudienceFor, chatTurnToolRefusal, declaresAppTools, declaresWindowTools, firstTurnToolRefusal, windowlessChatTurn, type ChatToolSurface, type TurnToolRefusal } from "./chat-turn-tool-policy.js";
+import { aidenStartedTurn, chatToolOffers, chatTurnArgsToolRefusal, chatTurnAudienceFor, chatTurnToolRefusal, declaresAppTools, declaresWindowTools, firstTurnToolRefusal, windowlessChatTurn, type ChatToolSurface, type TurnToolRefusal } from "./chat-turn-tool-policy.js";
 import { createGenerativeUiDraftSession } from "./generative-ui-draft.js";
 import { createUiDraftSession } from "./aiden-ui-draft.js";
 import { withoutVisualSnapshots } from "../../renderer/shared/visual-snapshots.js";
@@ -1448,10 +1449,14 @@ async function prepareGeneration(
   // workspace's own when it is customized (plan §3.1). Internal policies
   // (scheduled runs), Bot-bound turns and the Assistant keep their access.
   // A chat another chat started never gets more than its lead allowed (Phase 5, D2).
+  // `undefined` when the chat's record can't be read: such a chat is not offered `child_chats`.
+  const chatLineage = workspace && !botBound && params.chatId
+    ? await chatStore.getMeta(params.chatId).then((meta) => ({ startedBy: meta?.startedBy }), () => undefined)
+    : undefined;
   const approvalCeiling = workspace && !botBound && params.chatId && params.mode === undefined
     ? await (await import("./chat-orchestration/links-main.js")).startedChatApprovalCeiling(
         params.chatId,
-        (await chatStore.getMeta(params.chatId).catch(() => null))?.startedBy,
+        chatLineage?.startedBy,
       )
     : undefined;
   const approvalPolicy = await generationApprovalPolicy(
@@ -1929,6 +1934,14 @@ async function prepareGeneration(
   };
   /** Calls this turn refuses because of their arguments (a woken turn setting a check-back). */
   const turnArgsRefusal = chatTurnArgsToolRefusal(turnAudience);
+  // The person wrote in a chat another chat started: from now on it is theirs,
+  // and the lead's `send` and Stop leave it alone (Phase 5, D3).
+  if (params.chatId && chatLineage?.startedBy && options.leadChatTurn !== true && !aidenStartedTurn(turnAudience)) {
+    const tookOverChatId = params.chatId;
+    await (await import("./chat-orchestration/links-main.js")).markPersonTookOver(tookOverChatId).catch((error: unknown) => {
+      logger.warn("chat-orchestration", "Could not record that the person took over a started chat.", error);
+    });
+  }
   // Offered by the chat's surface alone; a turn nobody watches, or one a paired
   // device sent, keeps the declaration and refuses the call.
   const offerHooksTool = hostPlatformCapabilities().hooks && chatToolOffers(chatToolSurface).hooks;
@@ -2266,6 +2279,31 @@ async function prepareGeneration(
         chatId: params.chatId,
         turnId: options.turnId ?? streamId,
         refusal: (args) => turnArgsRefusal(CHECK_BACK_TOOL_NAME, args),
+      }),
+    );
+  }
+  // Chats that run other chats (Phase 5, D3): a workspace chat with the
+  // follow-through checks, not itself started by a chat (depth 1). A turn
+  // Aiden started refuses `start` (`turnArgsRefusal`).
+  if (
+    followThroughAvailable &&
+    params.chatId &&
+    workspace &&
+    chatLineage &&
+    !chatLineage.startedBy &&
+    childChatsEnabled(settings) &&
+    hostPlatformCapabilities().childChats &&
+    !options.excludeToolNames?.has(CHILD_CHATS_TOOL_NAME)
+  ) {
+    const [{ createChildChatsTool }, { childChats }] = await Promise.all([
+      import("./chat-orchestration/child-chats-tool.js"),
+      import("./chat-orchestration/child-chats-main.js"),
+    ]);
+    tools.push(
+      createChildChatsTool({
+        leadChatId: params.chatId,
+        childChats,
+        refusal: (args) => turnArgsRefusal(CHILD_CHATS_TOOL_NAME, args),
       }),
     );
   }

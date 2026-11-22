@@ -174,6 +174,27 @@ test("a check-back is set only in a turn the person started; list and cancel wor
   assert.equal(woken("check_back", ["set"]), undefined);
 });
 
+test("child_chats starts chats only in a turn the person started; its other actions work in every turn", () => {
+  const cases: Array<[string, ChatTurnAudienceOptions, boolean]> = [
+    // label, the turn's options, may start
+    ["a turn in the chat's window", {}, true],
+    ["a phone- or paired-Mac-sent turn", { visualAudience: "remote" }, true],
+    ["an unattended follow-up (a woken lead)", { ...UNATTENDED_FOLLOW_UP_GENERATION }, false],
+    ["an owed turn with no window", { windowless: true }, false],
+    ["a goal round", { goalRound: true }, false],
+  ];
+  for (const [label, options, mayStart] of cases) {
+    const turn = chatTurnAudienceFor(options, {});
+    const refuse = firstTurnToolRefusal([chatTurnToolRefusal(workspace, turn), chatTurnArgsToolRefusal(turn)]);
+    const reason = refuse("child_chats", { action: "start", chats: [{ title: "Docs", task: "Update the docs" }] });
+    if (mayStart) assert.equal(reason, undefined, label);
+    else assert.match(reason ?? "", /^child_chats cannot start chats in this turn: starting chats needs the person here/u, label);
+    for (const action of ["list", "read", "wait", "send", "stop"]) {
+      assert.equal(refuse("child_chats", { action, chat_id: "c1", chat_ids: ["c1"], text: "go on" }), undefined, `${label}: ${action}`);
+    }
+  }
+});
+
 test("an args-aware rule is one row: a tool, which turns, which arguments and a reason", () => {
   const refuse = chatTurnArgsToolRefusal(chatTurnAudienceFor({ goalRound: true }, {}), [
     { tool: "subagent", turns: (turn) => turn.goalRound === true, args: argIs("execution", "background"), reason: "no background helpers in a goal round" },

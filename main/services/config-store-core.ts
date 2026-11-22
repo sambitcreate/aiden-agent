@@ -1157,6 +1157,7 @@ export function createConfigStore(
       if (patch.longPromptCacheRetention !== undefined && typeof patch.longPromptCacheRetention !== "boolean") throw new Error("Invalid prompt cache lifetime setting.");
       if (patch.usageLimitWaitHours !== undefined && !isUsageLimitWaitHours(patch.usageLimitWaitHours)) throw new Error("Invalid usage limit wait setting.");
       if (patch.botMessaging !== undefined && typeof patch.botMessaging !== "boolean") throw new Error("Invalid Bot messaging setting.");
+      if (patch.childChats !== undefined && typeof patch.childChats !== "boolean") throw new Error("Invalid started chats setting.");
       if (patch.botRoutinesGoAhead !== undefined && typeof patch.botRoutinesGoAhead !== "boolean") throw new Error("Invalid Bot routines setting.");
       if (patch.approvalMode !== undefined && parseApprovalMode(patch.approvalMode) === undefined) throw new Error("Invalid approval mode.");
       if (patch.spendingLimits !== undefined) {

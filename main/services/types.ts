@@ -863,6 +863,8 @@ export interface AppSettings extends AidenLiveSettingsFields {
   /** Advanced: the model the Auto judge uses. Absent: the chat's own model. */
   approvalModel?: { providerId: string; model: string };
   botMessaging?: boolean;
+  /** Approvals → Advanced: "Chats can start other chats". On unless false; only false is stored. */
+  childChats?: boolean;
   /** Settings → Context & Limits: dollar limits per chat, Bot month and routine run. Absent amounts: no limit. */
   spendingLimits?: import("../../renderer/shared/spending.js").SpendingLimitsSettings;
   lastProviderId?: string;

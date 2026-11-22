@@ -19,6 +19,7 @@ import { toolApprovalRuleTarget, type ToolApprovalRuleTarget } from "../tool-app
 import type { ApprovalMode, MacGrantClass } from "../../../renderer/shared/approval-mode.js";
 import { approvalRuleHostOf } from "../../../renderer/shared/approval-rules.js";
 import { ASK_USER_QUESTION_TOOL_NAME } from "../../../renderer/shared/ask-user-question.js";
+import { childChatsRequiresApproval } from "../../../renderer/shared/child-chats.js";
 import { planActionGate, type GateAction, type GateContext } from "./gate.js";
 import { connectorToolEffect, MAC_TOOL_CLASSES } from "./tool-classes.js";
 
@@ -160,7 +161,9 @@ export function workspaceGateAction(input: WorkspaceToolApprovalInput): GateActi
     APPROVAL_TOOL_NAMES.has(toolName) ||
     BROWSER_MUTATION_TOOL_NAMES.has(toolName) ||
     deviceToolRequiresApproval(toolName, args) ||
-    backgroundJobRequiresApproval(toolName, args);
+    backgroundJobRequiresApproval(toolName, args) ||
+    // Starting chats is Consequential; the rest of child_chats acts on the lead's own chats.
+    childChatsRequiresApproval(toolName, args);
   const explicitOnly =
     toolName === WORKSPACE_FORM_FILL_TOOL ||
     (toolName === SCHEDULE_TOOL_NAME && scheduleToolRequiresApproval(args)) ||

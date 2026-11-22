@@ -1271,6 +1271,25 @@ test("a run that writes a line before every call still keeps a timeline past the
   assert.equal(toolSteps(final)[0]?.target, "src/file-30.ts");
 });
 
+test("a started-chats row names the action and how many chats, never a task or message", () => {
+  const projector = new GenerationTimelineProjector("generation-child-chats", () => {}, () => Date.UTC(2026, 10, 22, 14, 50));
+  projector.toolStarted("start", "child_chats", {
+    action: "start",
+    chats: [
+      { title: "Docs", task: "private task about the release" },
+      { title: "Tests", task: "another private task" },
+    ],
+  });
+  projector.toolStarted("send", "child_chats", { action: "send", chat_id: "c1", text: "private follow-up" });
+  projector.toolStarted("wait", "child_chats", { action: "wait", chat_ids: ["c1"] });
+  const [start, send, wait] = toolSteps(projector.snapshot());
+  assert.equal(start!.label, "Start chats");
+  assert.equal(start!.detail, "2 chats");
+  assert.equal(send!.label, "Send to a started chat");
+  assert.equal(wait!.label, "Wait for started chats");
+  assert.doesNotMatch(JSON.stringify(projector.snapshot()), /private/u);
+});
+
 test("a check-back row names its time once set, and never the note", () => {
   const projector = new GenerationTimelineProjector("generation-check-back", () => {}, () => Date.UTC(2026, 10, 22, 14, 50));
   projector.toolStarted("set", "check_back", { action: "set", in_minutes: 20, note: "private note about the deploy" });

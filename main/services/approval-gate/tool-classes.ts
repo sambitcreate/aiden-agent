@@ -59,6 +59,9 @@ const TAINT_SOURCE_TOOL_NAMES: ReadonlySet<string> = new Set([
   "subagent",
   "follow_pull_request",
   "codemode",
+  // Started chats' replies may carry anything they read; every action counts,
+  // since taint is decided by tool name.
+  "child_chats",
 ]);
 
 /** Browser tools that only change the window, never read the page. */

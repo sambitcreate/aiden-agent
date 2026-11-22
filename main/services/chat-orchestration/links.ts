@@ -224,7 +224,11 @@ export class ChatLinkStore {
     return this.persist().then(() => structuredClone(parsed));
   }
 
-  /** A deleted chat: its own link goes, and chats it started become ordinary chats. */
+  /**
+   * A deleted chat: its own link goes, and so do the links of chats it
+   * started. Those chats keep `startedBy`, so they run under the lost-link
+   * ceiling (Ask, no Mac grants) and never get `child_chats` themselves.
+   */
   deleteChat(chatId: string): Promise<void> {
     let changed = this.links.delete(chatId);
     for (const [child, link] of this.links) {

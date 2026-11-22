@@ -38,3 +38,11 @@ export async function startedChatApprovalCeiling(
   await chatLinks.restore();
   return startedChatCeiling(chatLinks, chatId, startedBy);
 }
+
+/** The person wrote in a started chat: the lead's `send` and Stop leave it alone from now on. */
+export async function markPersonTookOver(chatId: string, now = Date.now()): Promise<void> {
+  await chatLinks.restore();
+  await chatLinks.update(chatId, (link) => {
+    link.tookOverAt = now;
+  });
+}

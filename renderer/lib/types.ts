@@ -977,6 +977,8 @@ export interface AppSettings extends AidenLiveSettingsFields {
   /** Approvals → Advanced: the model Auto asks instead of the chat's own. */
   approvalModel?: { providerId: string; model: string };
   botMessaging?: boolean;
+  /** Approvals → Advanced: "Chats can start other chats". On unless false. */
+  childChats?: boolean;
   /** Settings → Context & Limits: dollar limits per chat, Bot month and routine run. Absent amounts: no limit. */
   spendingLimits?: import("../shared/spending").SpendingLimitsSettings;
   lastProviderId?: string;

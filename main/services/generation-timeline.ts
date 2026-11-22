@@ -28,6 +28,7 @@ import {
 import { WEB_FETCH_TOOL_NAME, parseWebExtractRecap } from "../../renderer/shared/web-extract.js";
 import { BROWSER_RECORDING_STOP_TOOL_NAME, parseBrowserRecordingRecap } from "../../renderer/shared/browser-recording.js";
 import { CHECK_BACK_TOOL_NAME, checkBackWhen } from "../../renderer/shared/check-backs.js";
+import { CHILD_CHATS_TOOL_NAME } from "../../renderer/shared/child-chats.js";
 
 const MAX_TOOL_NAME_LENGTH = 80;
 const MAX_TARGET_LENGTH = 240;
@@ -330,6 +331,24 @@ export function safeToolDescriptor(toolName: string, args: unknown): SafeToolDes
         label:
           values.action === "list" ? "List check-backs" : values.action === "cancel" ? "Cancel check-back" : "Set check-back",
       };
+    // Only the action and how many chats: tasks and messages stay out of the feed.
+    case CHILD_CHATS_TOOL_NAME: {
+      const count = Array.isArray(values.chats) ? values.chats.length : 0;
+      switch (values.action) {
+        case "start":
+          return { label: count === 1 ? "Start a chat" : "Start chats", ...(count > 1 ? { detail: `${count} chats` } : {}) };
+        case "send":
+          return { label: "Send to a started chat" };
+        case "wait":
+          return { label: "Wait for started chats" };
+        case "read":
+          return { label: "Read a started chat" };
+        case "stop":
+          return { label: "Stop a started chat" };
+        default:
+          return { label: "List started chats" };
+      }
+    }
     case "share_image":
       return { label: "Share image", target: path };
     case "generate_image":

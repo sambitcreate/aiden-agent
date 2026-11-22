@@ -177,6 +177,9 @@ export const SETTINGS_DESTINATIONS: ReadonlyArray<{
       "revoke",
       "commands",
       "stop asking me",
+      "chats can start other chats",
+      "started chats",
+      "child chats",
     ],
   },
   {
