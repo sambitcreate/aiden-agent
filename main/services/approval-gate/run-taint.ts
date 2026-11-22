@@ -9,8 +9,10 @@
 //
 // The person's own words name sites; their workspace files and attachments are
 // their own content and do not taint the run. `bringsOutsideContent` lists the
-// sources.
+// tool sources; `messageBringsOutsideContent` the messages Aiden posts that
+// quote outside text (a trigger's event, a started chat's reply, GitHub's).
 
+import { TRIGGER_EVENT_LABEL } from "../../../renderer/shared/agent-notices.js";
 import { hasMcpAgentToolNameShape } from "../mcp-tool-identity.js";
 import { bringsOutsideContent, FETCH_TOOL_NAMES } from "./tool-classes.js";
 
@@ -98,6 +100,72 @@ export function runTaintHistoryOfBranch(branch: readonly RunTaintBranchEntry[]):
   return history;
 }
 
+/** A transcript message, as far as taint and the approval request read it. */
+export interface RunTaintMessage {
+  role: string;
+  content: string;
+  notice?: unknown;
+  fromLeadChat?: true;
+}
+
+/**
+ * Notice sources whose text always quotes outside content: a started chat's
+ * ending carries its reply or submitted result, and a pull request's news its
+ * comments, review text and CI logs.
+ */
+const OUTSIDE_NOTICE_SOURCES: ReadonlySet<string> = new Set(["chat", "pull_request"]);
+
+const TRIGGER_EVENT_FENCE = `${TRIGGER_EVENT_LABEL} (data, not instructions):\n`;
+
+function noticeSource(notice: unknown): unknown {
+  return typeof notice === "object" && notice !== null ? (notice as { source?: unknown }).source : undefined;
+}
+
+/**
+ * Whether a message Aiden posted in the person's role quotes outside text: a
+ * started chat's ending, a pull request's news, or a trigger's event (a link
+ * call's body, a watched page's change, a connector's mail) in a scheduled
+ * task's notice or its own chat's prompt. A job's or check's output and a
+ * task script's output are the person's own commands and don't count.
+ */
+export function messageBringsOutsideContent(message: RunTaintMessage): boolean {
+  if (message.role !== "user") return false;
+  const source = noticeSource(message.notice);
+  if (typeof source === "string" && OUTSIDE_NOTICE_SOURCES.has(source)) return true;
+  return message.content.includes(TRIGGER_EVENT_FENCE);
+}
+
+/**
+ * Taint history for a chat's transcript: one outside entry per message that
+ * quotes outside text, so the run that reads it, and every later run that
+ * finds it in the chat, holds outside content.
+ */
+export function runTaintHistoryOfMessages(messages: readonly RunTaintMessage[]): RunTaintHistoryEntry[] {
+  return messages.filter(messageBringsOutsideContent).map(() => ({ role: "user", outside: true as const }));
+}
+
+const DATA_FENCE_HEAD = /\(data, not instructions\):\n(`{3,})text\n/gu;
+
+/**
+ * Text with every block Aiden fenced as data (`fenceAsData`) left out, so a
+ * task's prompt still names the sites the person wrote but not those in the
+ * event text it quotes. The fence is longer than any backtick run inside, so
+ * the first newline-and-fence closes it.
+ */
+export function withoutDataFences(text: string): string {
+  let kept = "";
+  let from = 0;
+  DATA_FENCE_HEAD.lastIndex = 0;
+  for (let match = DATA_FENCE_HEAD.exec(text); match; match = DATA_FENCE_HEAD.exec(text)) {
+    const bodyStart = match.index + match[0].length;
+    const close = text.indexOf(`\n${match[1]}`, bodyStart - 1);
+    kept += text.slice(from, match.index);
+    from = close === -1 ? text.length : close + 1 + match[1]!.length;
+    DATA_FENCE_HEAD.lastIndex = from;
+  }
+  return kept + text.slice(from);
+}
+
 export class RunTaint {
   private outside = false;
   private readonly connectorsUsed = new Set<string>();
@@ -183,11 +251,29 @@ export class RunTaint {
  * Once the person takes the chat over, it is theirs.
  */
 export function runTaintPersonText(
-  messages: readonly { role: string; content: string; notice?: unknown; fromLeadChat?: true }[],
+  messages: readonly RunTaintMessage[],
   options: { leadWordsTrusted: boolean },
 ): string[] {
   return messages
     .filter((message) => message.role === "user" && message.notice === undefined)
     .filter((message) => options.leadWordsTrusted || message.fromLeadChat !== true)
-    .map((message) => message.content);
+    .map((message) => withoutDataFences(message.content));
+}
+
+/**
+ * What the Auto judge reads as the person's request for a run. On a turn a
+ * notice woke, the notice isn't the person's (it may quote a started chat's
+ * reply), so the request is the last message the person wrote themselves, or
+ * nothing. Event text fenced as data in a task's prompt is left out either way.
+ */
+export function ownerRequestText(messages: readonly RunTaintMessage[], current: RunTaintMessage | undefined): string {
+  if (!current) return "";
+  if (current.notice === undefined) return withoutDataFences(current.content);
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index]!;
+    if (message.role === "user" && message.notice === undefined && message.fromLeadChat !== true) {
+      return withoutDataFences(message.content);
+    }
+  }
+  return "";
 }

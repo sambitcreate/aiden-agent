@@ -4,7 +4,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { RESULT_SCHEMA_MAX_BYTES, checkResult, compileResultSchema, isStorableResultSchema } from "./result-schema.js";
+import { RESULT_MAX_BYTES, RESULT_SCHEMA_MAX_BYTES, checkResult, compileResultSchema, isStorableResultSchema } from "./result-schema.js";
 
 const SCHEMA = {
   type: "object",
@@ -13,14 +13,12 @@ const SCHEMA = {
   additionalProperties: false,
 };
 
-test("a result that matches is accepted, and one that doesn't names the fields to fix", () => {
+test("a result that matches is accepted, and one that doesn't names the field to fix", () => {
   assert.deepEqual(checkResult(SCHEMA, { files: ["a.ts"], passed: true }), { ok: true });
-  const wrong = checkResult(SCHEMA, { files: "a.ts", extra: 1 });
-  assert.equal(wrong.ok, false);
-  const error = (wrong as { error: string }).error;
-  assert.match(error, /\/files must be array/u);
-  assert.match(error, /\/passed is required/u);
-  assert.match(error, /\/extra is not allowed/u);
+  const error = (value: unknown) => (checkResult(SCHEMA, value) as { error: string }).error;
+  assert.match(error({ files: "a.ts", passed: true }), /\/files must be array/u);
+  assert.match(error({ files: [] }), /\/passed is required/u);
+  assert.match(error({ files: [], passed: true, extra: 1 }), /\/extra is not allowed/u);
   assert.match((checkResult(SCHEMA, undefined) as { error: string }).error, /needs a result/u);
 });
 
@@ -28,7 +26,11 @@ test("a schema that refers outside itself, is too large or doesn't compile is re
   assert.equal(compileResultSchema(SCHEMA).ok, true);
   assert.equal(compileResultSchema({ $defs: { n: { type: "number" } }, $ref: "#/$defs/n" }).ok, true, "local refs are fine");
   assert.equal(compileResultSchema({ definitions: { n: { type: "number" } }, $ref: "#/definitions/n" }).ok, true);
-  assert.equal(compileResultSchema({ type: "object", properties: { child: { $ref: "#" } } }).ok, true, "the root is fine");
+  const loop = compileResultSchema({ type: "object", properties: { child: { $ref: "#" } } });
+  assert.match(loop.ok ? "" : loop.error, /refs must not loop/u, "a reference back to the root loops");
+  const defsLoop = { $defs: { a: { $ref: "#/$defs/b" }, b: { anyOf: [{ type: "string" }, { $ref: "#/$defs/a" }] } }, $ref: "#/$defs/a" };
+  assert.equal(compileResultSchema(defsLoop).ok, false);
+  assert.equal(isStorableResultSchema(defsLoop), false);
   const cases: Array<[string, unknown, RegExp]> = [
     ["remote $ref", { $ref: "https://example.com/schema.json" }, /may only refer to .*; https:\/\/example\.com\/schema\.json isn't/u],
     ["nested remote $ref", { properties: { a: { $ref: "other.json#/a" } } }, /other\.json#\/a isn't/u],
@@ -110,4 +112,66 @@ test("a pattern hidden in data keywords, $defs names or dependentSchemas is refu
     assert.equal(compileResultSchema({ default: { type: "string" }, examples: [{}], enum: [{}], const: {}, $ref: ref }).ok, false, ref);
   }
   assert.equal(isStorableResultSchema({ $defs: { n: { type: "number" } }, $ref: "#/$defs/n" }), true);
+});
+
+/** The reviewer's shape: each level an anyOf of ten references to the next; the leaf a string. */
+function branching(depth: number, width = 10): Record<string, unknown> {
+  const $defs: Record<string, unknown> = { [`d${depth}`]: { type: "string" } };
+  for (let level = depth - 1; level >= 0; level--) {
+    $defs[`d${level}`] = { anyOf: Array.from({ length: width }, () => ({ $ref: `#/$defs/d${level + 1}` })) };
+  }
+  return { $defs, $ref: "#/$defs/d0" };
+}
+
+test("a schema whose branches multiply through references is refused before ajv sees it, in milliseconds", () => {
+  for (let depth = 4; depth <= 8; depth++) {
+    const schema = branching(depth);
+    const started = performance.now();
+    const compiled = compileResultSchema(schema);
+    const checked = checkResult(schema, 1);
+    assert.equal(compiled.ok, false, `depth ${depth}`);
+    assert.match(compiled.ok ? "" : compiled.error, /could take too long to check/u);
+    assert.equal(checked.ok, false);
+    assert.equal(isStorableResultSchema(schema), false);
+    assert.ok(performance.now() - started < 100, `depth ${depth} took ${performance.now() - started} ms`);
+  }
+  const refs = { $defs: { s: { type: "string" } }, type: "object", properties: Object.fromEntries(Array.from({ length: 300 }, (_, i) => [`f${i}`, { $ref: "#/$defs/s" }])) };
+  assert.match((compileResultSchema(refs) as { error: string }).error, /more than 256 references/u);
+  const unique = { type: "array", uniqueItems: true };
+  assert.match((compileResultSchema(unique) as { error: string }).error, /uniqueItems needs items with a plain type/u);
+  assert.equal(compileResultSchema({ type: "array", uniqueItems: true, items: { type: "string" } }).ok, true);
+});
+
+test("a reasonable nested schema is accepted, and checking hostile values against it stays fast", () => {
+  const schema = {
+    type: "object",
+    $defs: {
+      file: { type: "object", properties: { path: { type: "string" }, lines: { type: "array", items: { type: "integer" } } }, required: ["path"] },
+      status: { enum: ["passed", "failed", "skipped"] },
+      note: { anyOf: [{ type: "string" }, { type: "null" }, { $ref: "#/$defs/file" }] },
+    },
+    properties: {
+      files: { type: "array", items: { $ref: "#/$defs/file" } },
+      status: { $ref: "#/$defs/status" },
+      notes: { type: "array", items: { $ref: "#/$defs/note" } },
+      tags: { type: "array", uniqueItems: true, items: { type: "string" } },
+      groups: { type: "array", items: { type: "array", items: { anyOf: [{ type: "string" }, { type: "boolean" }, { type: "integer" }] } } },
+    },
+    required: ["files", "status"],
+  };
+  assert.equal(compileResultSchema(schema).ok, true);
+  assert.equal(branching(2).$ref, "#/$defs/d0");
+  assert.equal(compileResultSchema(branching(2)).ok, true, "ten-by-ten branching is fine");
+  const hostile: unknown[] = [
+    { files: [], status: "passed", notes: Array.from({ length: 16_000 }, () => [1]) },
+    { files: [], status: "passed", tags: Array.from({ length: 6_000 }, (_, i) => `t${i}`) },
+    { files: [], status: "passed", groups: Array.from({ length: 12_000 }, () => [{}]) },
+    { files: Array.from({ length: 5_000 }, () => ({ path: 1 })), status: "nope" },
+  ];
+  for (const value of hostile) {
+    assert.ok(Buffer.byteLength(JSON.stringify(value)) <= RESULT_MAX_BYTES, "a value the size limit lets through");
+    const started = performance.now();
+    checkResult(schema, value);
+    assert.ok(performance.now() - started < 100, `took ${performance.now() - started} ms`);
+  }
 });

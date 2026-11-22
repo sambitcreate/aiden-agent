@@ -97,6 +97,7 @@ import { projectDiagnosticError } from "./services/diagnostics-contract.js";
 import { flushDiagnosticHealth } from "./services/diagnostic-health.js";
 import { pruneExpiredDiagnosticCrashDumps } from "./services/diagnostic-support.js";
 import { scheduleService } from "./services/schedule-service.js";
+import { startScheduledTaskTriggers, stopScheduledTaskTriggers } from "./services/scheduled-task-triggers-main.js";
 import { analyticsService, installAnalyticsCrashCapture } from "./services/analytics/analytics-main.js";
 import { initializeHookService } from "./services/hooks/hook-service-main.js";
 import { telegramService } from "./services/telegram/telegram-service.js";
@@ -409,7 +410,8 @@ function cleanupApplication(): void {
   formFillRuntime.dispose();
   computerUseStatus.invalidate();
   scheduleService.stop();
-  void import("./services/scheduled-task-triggers-main.js").then(({ stopScheduledTaskTriggers }) => stopScheduledTaskTriggers());
+  // Synchronously, so no trigger timer fires once cleanup has begun.
+  stopScheduledTaskTriggers();
   stopKeepAwake();
   stopChatTriage();
   stopInboxDockBadge();
@@ -2897,7 +2899,6 @@ if (!ownsSingleInstanceLock) {
         if (!shutdownHasBegun()) await scheduleService.start();
         // Chat tasks that run when something happens; never hold keep-awake.
         if (!shutdownHasBegun()) {
-          const { startScheduledTaskTriggers } = await import("./services/scheduled-task-triggers-main.js");
           await startScheduledTaskTriggers();
         }
       } catch (error) {

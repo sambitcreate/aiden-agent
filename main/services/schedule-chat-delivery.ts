@@ -9,6 +9,7 @@ import {
   agentNotice,
   fenceAsData,
   tailText,
+  TRIGGER_EVENT_LABEL,
   type AgentNoticeTone,
   type AgentNoticeV1,
 } from "../../renderer/shared/agent-notices.js";
@@ -176,7 +177,7 @@ export function scheduledTaskNoticeText(task: ScheduledTask, cadence: string, ev
     task.prompt?.trim() ?? "",
   ];
   if (eventText?.trim()) {
-    lines.push("", fenceAsData("What happened", headText(eventText, EVENT_TEXT_CHARS)));
+    lines.push("", fenceAsData(TRIGGER_EVENT_LABEL, headText(eventText, EVENT_TEXT_CHARS)));
   }
   return lines.join("\n");
 }
@@ -210,7 +211,7 @@ export function createTaskRunChatDelivery(deps: TaskRunChatDeliveryDeps) {
 
   async function inOwnChat(task: ScheduledTask, signal: AbortSignal, eventText?: string): Promise<TaskRunOutcome> {
     const chatId = await deps.ensureOwnChat(task);
-    const fenced = eventText?.trim() ? fenceAsData("What happened", headText(eventText, EVENT_TEXT_CHARS)) : undefined;
+    const fenced = eventText?.trim() ? fenceAsData(TRIGGER_EVENT_LABEL, headText(eventText, EVENT_TEXT_CHARS)) : undefined;
     try {
       return { kind: "fell_back", chatId, ...(await deps.runInOwnChat(task, chatId, signal, fenced)) };
     } catch (cause) {

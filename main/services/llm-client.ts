@@ -25,7 +25,7 @@ import { createSpendingMeter, spendCounts } from "./spending-service.js";
 import { parseApprovalModel, type MacGrantClass } from "../../renderer/shared/approval-mode.js";
 import { currentWorkspaceApproval, generationApprovalPolicy, legacyAccessOf, runJudgeAvailable } from "./approval-gate/run-approval.js";
 import { CHAT_AUDIENCE_PROMPT_LIFETIME_MS } from "./chat-orchestration/audience.js";
-import { RunTaint, runTaintHistoryOfBranch, runTaintPersonText } from "./approval-gate/run-taint.js";
+import { ownerRequestText, RunTaint, runTaintHistoryOfBranch, runTaintHistoryOfMessages, runTaintPersonText } from "./approval-gate/run-taint.js";
 import { declaredReadOnlyHint } from "./approval-gate/tool-classes.js";
 import { approvalJudgeAction, createApprovalJudge, type ApprovalJudge } from "./approval-judge/judge.js";
 import { approvalJudgeComplete } from "./approval-judge/model-complete.js";
@@ -779,6 +779,8 @@ interface ActiveGeneration {
   owedTurn?: ChatRunInputGenerationRef["owedTurn"];
   /** The lead chat that started this chat steered or queued a message into the run. */
   leadChatInput?: ChatRunInputGenerationRef["leadChatInput"];
+  /** A notice quoting outside text was saved into the run. */
+  outsideInput?: ChatRunInputGenerationRef["outsideInput"];
 }
 
 const active = new Map<string, ActiveGeneration>();
@@ -4817,12 +4819,14 @@ export const llmClient = {
             ...("toolName" in message && typeof message.toolName === "string" ? { toolName: message.toolName } : {}),
           })),
           ...journalHistory,
+          // Notices and task prompts that quote outside text, in this turn or any earlier one.
+          ...runTaintHistoryOfMessages(generationChat.messages),
         ],
         isConnectorTool: (name) => claimCheckOptions.isConnectorTool(name),
       });
       if (leadTaintedRun) runTaint.markOutside();
       leadRunTaint.tainted = () => runTaint?.tainted === true;
-      approvalRequestText = currentUser?.content ?? "";
+      approvalRequestText = ownerRequestText(generationChat.messages, currentUser);
       // A design turn's first request carries the canvas counts, journaled
       // after the history they follow (see `withJournaledCanvasStatusNote`).
       const canvasStatusLine = await enteredCanvasTools.initialStatusLine();
@@ -6346,6 +6350,7 @@ export const llmClient = {
         leadTaintedRequest = true;
         runTaint?.markOutside();
       },
+      outsideInput: () => runTaint?.markOutside(),
       ...(chatHooks
         ? {
             inputHooks: {
