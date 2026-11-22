@@ -135,6 +135,12 @@ export async function deliverTaskTriggerWebhook(request: { token: string; conten
   return triggers.webhook.deliver(request);
 }
 
+/** `POST /hooks/tasks/<token>` with a body over 256 KB: 413, and the call's capacity given back. */
+export async function taskTriggerWebhookTooLarge(request: { token: string }) {
+  if (!started) return { status: 404 as const };
+  return triggers.webhook.tooLarge(request);
+}
+
 /**
  * A new link for a link task, shown to the person once: the old link stops
  * working at once. A signed link also gets a new signing secret.

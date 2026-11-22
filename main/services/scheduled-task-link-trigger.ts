@@ -1,7 +1,8 @@
 // Link triggers for chat tasks: `POST /hooks/tasks/<token>` on Aiden On The
 // Go's listener (docs/scheduled-task-triggers.md). The router asks `admit`
 // before it reads a body (unknown or disabled link 404, 60 calls a minute
-// 429, wrong content type 415; nothing on that path writes), reads at most 256 KB (413), then `deliver`
+// 429, wrong content type 415; nothing on that path writes), reads at most
+// 256 KB (413, through `tooLarge`), then `deliver`
 // checks the optional signature, the filters and repeats and hands the call
 // to the shared event core. Accepted calls answer 202 with no body, whatever
 // happened to them, so a caller learns nothing about the task.
@@ -177,9 +178,10 @@ export interface TaskLinkWebhookDependencies {
 /** Calls with a token no task has, across every link, before further unknown tokens get 429. */
 export const UNKNOWN_LINK_CALLS_PER_MINUTE = 120;
 /**
- * Calls one link refuses (bad signature, not JSON) that are logged in a
- * minute; later refusals are answered without a log entry. They never use the
- * link's 60, so a properly signed sender keeps getting through.
+ * Calls one link refuses (bad signature, not JSON, wrong content type, too
+ * large) counted in a minute; only refusals with a body worth showing are
+ * logged, and later ones are answered without a log entry. They never use
+ * the link's 60, so a properly signed sender keeps getting through.
  */
 export const REFUSED_LINK_CALLS_PER_MINUTE = 30;
 
@@ -224,6 +226,16 @@ export function createTaskLinkWebhook(deps: TaskLinkWebhookDependencies) {
   }
 
   const mediaType = (contentType: string | undefined) => (contentType ?? "text/plain").split(";")[0]!.trim().toLowerCase();
+  const acceptedType = (contentType: string | undefined) => {
+    const type = mediaType(contentType);
+    return type === "application/json" || type === "text/plain";
+  };
+
+  /** The admission the router's call reserved, the newest one for the link. */
+  function admissionOf(taskId: string): number | undefined {
+    const admitted = recent.get(taskId);
+    return admitted?.length ? admitted[admitted.length - 1] : undefined;
+  }
 
   return {
     /** Before the body is read: 404, 429 or 415, or the header the signature comes in. */
@@ -239,6 +251,10 @@ export function createTaskLinkWebhook(deps: TaskLinkWebhookDependencies) {
         unknown.push(now);
         return { status: 404 };
       }
+      const typeAccepted = acceptedType(request.contentType);
+      // A wrong content type never uses the link's 60. Once a minute's worth
+      // of refusals is reached it is answered without reading the task.
+      if (!typeAccepted && within(refused.get(taskId), now).length >= REFUSED_LINK_CALLS_PER_MINUTE) return { status: 415 };
       // A known token, even one whose task is off, uses its link's 60 a minute
       // before anything else is read.
       const calls = within(recent.get(taskId), now);
@@ -250,10 +266,23 @@ export function createTaskLinkWebhook(deps: TaskLinkWebhookDependencies) {
       recent.set(taskId, calls);
       const routine = await open(request.token);
       if (!routine) return { status: 404 };
-      const type = mediaType(request.contentType);
-      if (type !== "application/json" && type !== "text/plain") return { status: 415 };
+      if (!typeAccepted) {
+        refuse(taskId, now);
+        return { status: 415 };
+      }
       const header = routine.task.trigger.signatureHeader;
       return { accept: true, ...(header ? { signatureHeader: header } : {}) };
+    },
+
+    /**
+     * The router stopped reading a body over 256 KB: answer 413 and give the
+     * call's place in the 60 a minute back, as any refusal does.
+     */
+    async tooLarge(request: { token: string }): Promise<{ status: 404 | 413 }> {
+      if (!deps.active()) return { status: 404 };
+      const taskId = await deps.tokenTask(request.token);
+      if (taskId !== undefined) refuse(taskId, admissionOf(taskId));
+      return { status: 413 };
     },
 
     /** The call itself: signature, filters, repeats, then the event core. */
@@ -261,11 +290,12 @@ export function createTaskLinkWebhook(deps: TaskLinkWebhookDependencies) {
       if (!deps.active()) return { status: 404 };
       const routine = await open(request.token);
       if (!routine) return { status: 404 };
-      const admitted = recent.get(routine.id);
-      const admittedAt = admitted?.length ? admitted[admitted.length - 1] : undefined;
-      if (request.body.byteLength > SCHEDULED_TASK_LINK_LIMITS.bodyBytes) return { status: 413 };
+      const admittedAt = admissionOf(routine.id);
+      if (request.body.byteLength > SCHEDULED_TASK_LINK_LIMITS.bodyBytes || !acceptedType(request.contentType)) {
+        refuse(routine.id, admittedAt);
+        return { status: request.body.byteLength > SCHEDULED_TASK_LINK_LIMITS.bodyBytes ? 413 : 415 };
+      }
       const type = mediaType(request.contentType);
-      if (type !== "application/json" && type !== "text/plain") return { status: 415 };
       const trigger = routine.task.trigger;
       const text = new TextDecoder("utf-8", { fatal: false }).decode(request.body);
       const log = (outcome: TaskLinkLogEntry["outcome"], shown: string) =>

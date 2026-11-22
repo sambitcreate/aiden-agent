@@ -7136,7 +7136,7 @@ test("a chat task's link answers 405, 404, 429, 415 and 413 in order, checks its
   });
   const app = await fixture({
     authenticate: "invalid",
-    taskTriggerWebhook: { admit: core.admit, deliver: async (request) => { delivered += 1; return core.deliver(request); } },
+    taskTriggerWebhook: { admit: core.admit, tooLarge: core.tooLarge, deliver: async (request) => { delivered += 1; return core.deliver(request); } },
   });
   const sign = (body: string) => `sha256=${createHmac("sha256", secret).update(body).digest("hex")}`;
   const post = (path: string, body: string, headers: Record<string, string> = {}) =>
@@ -7158,15 +7158,57 @@ test("a chat task's link answers 405, 404, 429, 415 and 413 in order, checks its
     assert.equal((await post(`/hooks/tasks/${token}`, closed, { "x-signature-256": sign(closed) })).status, 202, "a filter miss looks the same to the caller");
     assert.deepEqual(emitted.map((event) => JSON.parse(event.payload).title), ["Fix login"]);
     assert.deepEqual(logged.map((entry) => entry.outcome), ["bad_signature", "ran", "filtered"]);
-    // 60 calls a minute, counted before any body is read: the 415, the 413 and
-    // the two signed calls used four; the bad signature gave its place back.
-    for (let used = 4; used < 60; used += 1) {
+    // 60 calls a minute, counted before any body is read: the two signed calls
+    // used two; the 415, the 413 and the bad signature gave their places back.
+    for (let used = 2; used < 60; used += 1) {
       assert.equal((await post(`/hooks/tasks/${token}`, closed, { "x-signature-256": sign(closed) })).status, 202);
     }
     assert.equal((await post(`/hooks/tasks/${token}`, unsigned)).status, 429);
     clock += 61_000;
     assert.equal((await post(`/hooks/tasks/${token}`, unsigned, { "x-signature-256": sign(unsigned) })).status, 202);
     assert.ok(!JSON.stringify(app.logs).includes(token), "the link never reaches the log");
+  } finally {
+    await app.close();
+  }
+});
+
+test("a flood of wrong-type and oversized calls to a chat task's link never blocks its signed sender", async () => {
+  const token = "F".repeat(43);
+  const secret = "s".repeat(64);
+  const emitted: string[] = [];
+  let reads = 0;
+  const routine = {
+    id: "task-1", enabled: true,
+    task: { trigger: { kind: "webhook", gapMinutes: 5, signatureHeader: "x-signature-256" } },
+  } as unknown as import("./scheduled-task-triggers-store.js").TaskTriggerRoutine;
+  const core = createTaskLinkWebhook({
+    active: () => true,
+    tokenTask: async (candidate) => (candidate === token ? routine.id : undefined),
+    findByToken: async (candidate) => { reads += 1; return candidate === token ? routine : undefined; },
+    secret: async () => secret,
+    emit: async (_taskId, event) => { emitted.push(event.payload); return "queued"; },
+    log: async () => undefined,
+    now: () => 1_800_000_000_000,
+  });
+  const app = await fixture({ authenticate: "invalid", taskTriggerWebhook: { admit: core.admit, tooLarge: core.tooLarge, deliver: core.deliver } });
+  const post = (body: string, headers: Record<string, string>) =>
+    fetch(`${app.base}/hooks/tasks/${token}`, { method: "POST", headers, body });
+  try {
+    for (let call = 0; call < 70; call += 1) {
+      assert.equal((await post("hi", { "content-type": "text/html" })).status, 415);
+    }
+    assert.ok(reads <= 31, `a wrong-type flood stops reading the task once a minute's refusals are reached (read ${reads} times)`);
+    const big = JSON.stringify({ text: "x".repeat(300 * 1024) });
+    for (let call = 0; call < 70; call += 1) {
+      assert.equal((await post(big, { "content-type": "application/json" })).status, 413);
+    }
+    const body = JSON.stringify({ action: "opened" });
+    const signed = await post(body, {
+      "content-type": "application/json",
+      "x-signature-256": `sha256=${createHmac("sha256", secret).update(body).digest("hex")}`,
+    });
+    assert.equal(signed.status, 202, "the signed sender still has its 60 calls");
+    assert.equal(emitted.length, 1);
   } finally {
     await app.close();
   }

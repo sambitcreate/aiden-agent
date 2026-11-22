@@ -226,10 +226,12 @@ export interface AidenRemoteRouterDependencies {
   /**
    * Chat tasks' links (`POST /hooks/tasks/{token}`): `admit` runs before the
    * body is read (404, 429, 415), `deliver` gets the body and the header the
-   * link's signature comes in.
+   * link's signature comes in, and `tooLarge` answers a body over the limit
+   * (413) so the call does not keep its place in the link's capacity.
    */
   taskTriggerWebhook?: {
     admit(request: { token: string; contentType?: string }): Promise<{ status: number } | { accept: true; signatureHeader?: string }>;
+    tooLarge(request: { token: string }): Promise<{ status: number }>;
     deliver(request: { token: string; contentType?: string; signature?: string; body: Uint8Array }): Promise<{ status: number }>;
   };
   instanceId: string;
@@ -2583,7 +2585,7 @@ export function createAidenRemoteRequestHandler(
         const body = await readRawBody(request, TASK_TRIGGER_WEBHOOK_MAX_BYTES);
         const signatureValue = admitted.signatureHeader ? request.headers[admitted.signatureHeader] : undefined;
         const answer = body === undefined
-          ? { status: 413 }
+          ? await dependencies.taskTriggerWebhook.tooLarge({ token })
           : await dependencies.taskTriggerWebhook.deliver({
             token,
             ...(contentType ? { contentType } : {}),
