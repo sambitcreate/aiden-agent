@@ -1,0 +1,30 @@
+# Pull request babysitting
+
+Status: In progress (2026-11-22). A1 in review; B1, C1, C2, D1, D2 and G1 not started.
+
+Owner decision (2026-11-22): build options A, B, C and D from the comparison of how other coding agents see a pull request through, and answer every question with (a). The goal is that a chat asked to finish or merge work in a pull request keeps working on it, through review bots, red checks and conflicts, until the job is done, without the person checking back.
+
+Owner answers:
+
+1. Any GitHub App account counts as a reviewer, except deploy, coverage and dependency bots (Vercel, Netlify, Codecov, GitHub Actions, Dependabot).
+2. The agent may reply on and resolve review bots' threads. It replies to people on GitHub only when asked.
+3. Merging always needs the person's tap. "Merge when green" turns on GitHub auto-merge once the person approves.
+4. In an Ask first workspace an unattended answer prepares the fix, and the chat goes to Needs you with "Push needs your OK".
+5. The agent follows on its own when asked to see work through, and follows until merged when asked to merge.
+6. Phones show watched pull requests, Stop and a notification, in a new **Pull requests** item in the chat's ⋯ menu (iOS session sheet, Android chat menu), not a chip.
+
+## Pull requests
+
+| Step | What it does | Status |
+| --- | --- | --- |
+| A1 | Follow stays until the job is done: review bots count as reviewers (skip list above); the 10-update total cap becomes 10 comment-only updates in a row (a commit or check, conflict or merge news resets it); an hour of red checks posts one "Still failing after an hour" card per commit instead of ending the follow, and the free probe works again after it; checks passing wakes the agent once per commit (not on the first read) to wrap up, never to merge; review comments come with a playbook (verify, fix and push, say why a finding is wrong, reply and resolve only on bot threads); workspace chats that have `follow_pull_request` are told to follow on their own when seeing work through. | In review |
+| B1 | Richer signals: required versus optional checks, `action_required` no longer counted as failed (awaiting a maintainer), the branch falling behind its base, removal from a merge queue, no checks 15 minutes after a push. | Not started |
+| C1 | An on-demand `pull_request` tool: read, job logs, rerun failed jobs, reply on and resolve threads (bot threads only, per answer 2). Consequential, its output treated as outside text. | Not started |
+| C2 | Merge with a head-commit guard, and GitHub auto-merge. Explicit-only: always the person's tap. | Not started |
+| D1 | Follow until checks pass or until merged; a Watching signal in the Inbox and a new Needs-you tier for "Push needs your OK"; a desktop notification. | Not started |
+| D2 | Phones: the **Pull requests** item in the chat ⋯ menu with Stop, and a notification. Claims the next Remote protocol revision at merge. | Not started |
+| G1 | Goals can wait on a watched pull request. Waits for proactive step A3. | Not started |
+
+Every step follows the proactive plan's shared rules: one wake budget (six unattended answers an hour per chat), one delivery path, unattended answers get no approvals, chat Stop does not end a follow, and docs, tests and screenshots ship in the same PR.
+
+Guide: [coding follow-through](../coding-follow-through.md).

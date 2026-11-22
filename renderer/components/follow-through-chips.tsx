@@ -14,7 +14,7 @@ import { cn } from "../lib/ui-utils";
 import { backgroundJobLabel, backgroundJobPortUrl, type BackgroundJobView } from "../shared/background-jobs";
 import {
   MAX_DONE_WHEN_CHECKS,
-  MAX_PULL_REQUEST_FOLLOW_NOTICES,
+  MAX_COMMENT_ONLY_FOLLOW_UPDATES,
   type ChatFollowThroughV1,
   type DoneWhenCheckView,
   type PullRequestFollowView,
@@ -74,7 +74,8 @@ const FOLLOW_END_LABELS: Record<NonNullable<PullRequestFollowView["endedReason"]
   closed: "Closed",
   quiet: "Stopped: nothing new for two weeks",
   failing: "Stopped: checks kept failing for an hour",
-  "notice-limit": `Stopped after ${MAX_PULL_REQUEST_FOLLOW_NOTICES} updates`,
+  "notice-limit": "Stopped after 10 updates",
+  "comment-limit": `Stopped after ${MAX_COMMENT_ONLY_FOLLOW_UPDATES} comment-only updates in a row`,
   person: "Stopped",
   agent: "Stopped by the agent",
   "access-changed": "Stopped: folder access changed",
@@ -83,7 +84,10 @@ const FOLLOW_END_LABELS: Record<NonNullable<PullRequestFollowView["endedReason"]
 
 export function pullRequestFollowStatus(follow: PullRequestFollowView): string {
   if (follow.state === "ended") return follow.endedReason ? FOLLOW_END_LABELS[follow.endedReason] : "Stopped";
-  const parts = [follow.status ?? "Waiting for the first read", `${follow.noticesSent} of ${MAX_PULL_REQUEST_FOLLOW_NOTICES} updates sent`];
+  const parts = [
+    follow.status ?? "Waiting for the first read",
+    `${follow.noticesSent} ${follow.noticesSent === 1 ? "update" : "updates"} sent`,
+  ];
   return parts.join(" · ");
 }
 
@@ -309,7 +313,7 @@ function FollowChip({ chatId, follows, onChanged }: { chatId: string; follows: P
           ))}
         </ul>
         <p className="border-t border-separator px-3 py-2 text-small text-tertiary">
-          Only comments from people who can write to the repository reach the agent.
+          Only comments from people who can write to the repository and from review bots reach the agent.
         </p>
       </PopoverContent>
     </Popover>
