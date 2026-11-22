@@ -132,6 +132,21 @@ test("concurrent desktop and remote lifecycle edits admit only one revision", as
   assert.equal(results.filter((result) => result.status === "rejected").length, 1);
 });
 
+test("Use its own chat drops a task's chat binding only on the current revision", async () => {
+  const value = fixture();
+  const task = await value.service.save({ name: "Chat task", mode: "llm", cron: "0 9 * * *", timezone: "UTC", permission: "read-only", prompt: "hello" });
+  value.tasks.set(task.id, { ...task, originChatId: "chat-1" });
+  const bound = value.tasks.get(task.id)!;
+  await assert.rejects(value.service.useOwnChat(task.id, "rev_stale"), /changed/u);
+  assert.equal(value.tasks.get(task.id)?.originChatId, "chat-1");
+  const moved = await value.service.useOwnChat(task.id, scheduledTaskRevision(bound));
+  assert.equal(moved.originChatId, undefined);
+  assert.equal(value.tasks.get(task.id)?.originChatId, undefined);
+  assert.notEqual(scheduledTaskRevision(moved), scheduledTaskRevision(bound), "the move is a new revision");
+  const again = await value.service.useOwnChat(task.id, scheduledTaskRevision(moved));
+  assert.equal(again.originChatId, undefined, "moving an unbound task is a no-op");
+});
+
 test("Bot routines stay out of the generic automation surfaces", async () => {
   const value = fixture();
   const ordinary = await value.service.save({

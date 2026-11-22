@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { AidenRemoteScheduleService } from "./aiden-remote-schedules.js";
+import { createScheduleStore } from "./schedule-store.js";
 import { scheduledTaskRevision } from "./scheduled-task-application-service.js";
 import type { ScheduledRun, ScheduledTask, ScheduledTaskInput } from "./types.js";
 
@@ -232,4 +233,60 @@ test("scheduled task mutations require foreground confirmation and stale edits f
     }),
     /settings are invalid/u,
   );
+});
+
+class MemoryPersistence<T> {
+  constructor(private data: T) {}
+  async load(): Promise<T> { return structuredClone(this.data); }
+  async update<R>(mutation: (draft: T) => R | Promise<R>): Promise<R> {
+    const draft = structuredClone(this.data);
+    const result = await mutation(draft);
+    this.data = draft;
+    return result;
+  }
+}
+
+test("a phone edit keeps the chat a task posts into, and the phone never sees which chat it is", async () => {
+  const store = createScheduleStore(new MemoryPersistence<unknown[]>([]), new MemoryPersistence<unknown[]>([]), () => 1_800_000_000_000);
+  const seeded = await store.save({
+    name: "Morning review", mode: "llm", cron: "0 8 * * *", timezone: "UTC", workspaceId: "workspace-1",
+    prompt: "Summarize the workspace", originChatId: "chat-private-1",
+  });
+  const base = fixture().application;
+  const service = new AidenRemoteScheduleService({
+    application: {
+      ...base,
+      list: () => store.list(),
+      get: async (id: string) => (await store.list()).find((task) => task.id === id)!,
+      save: async (input: ScheduledTaskInput, options: { expectedRevision?: string } = {}) => {
+        const existing = (await store.list()).find((task) => task.id === input.id);
+        if (options.expectedRevision && (!existing || options.expectedRevision !== scheduledTaskRevision(existing))) {
+          throw new Error("This automation changed.");
+        }
+        return store.save(input);
+      },
+    },
+    models: { resolve: async () => ({ providerId: "provider-1", modelId: "model-1", thinkingLevels: [], supportsImages: true }) },
+  });
+
+  const projected = await service.get("device-1", seeded.id);
+  const edited = await service.update("device-1", seeded.id, projected.revision, {
+    ...llmMutation, name: "Evening review", schedule: "0 18 * * *", workspaceId: "workspace-1",
+  });
+  assert.equal(edited.name, "Evening review");
+  assert.doesNotMatch(JSON.stringify(edited), /chat-private-1|originChatId/u);
+  const stored = (await store.list()).find((task) => task.id === seeded.id);
+  assert.equal(stored?.originChatId, "chat-private-1");
+  assert.equal(stored?.cron, "0 18 * * *");
+
+  await assert.rejects(
+    service.update("device-1", seeded.id, edited.revision, { ...llmMutation, workspaceId: "workspace-1", originChatId: "chat-2" }),
+    "a phone cannot name the chat",
+  );
+  await assert.rejects(
+    service.update("device-1", seeded.id, edited.revision, { ...llmMutation, workspaceId: "workspace-1", schedule: "*/5 * * * *" }),
+    /15 minutes/u,
+    "a phone cannot speed a chat task past the floor",
+  );
+  assert.equal((await store.list()).find((task) => task.id === seeded.id)?.originChatId, "chat-private-1");
 });

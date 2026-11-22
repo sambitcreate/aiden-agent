@@ -29,7 +29,7 @@ import type { ScheduledTask } from "./types.js";
 const FINGERPRINT = "a".repeat(64);
 
 interface StartedGeneration {
-  params: { mode?: string; providerId: string; model: string };
+  params: { mode?: string; providerId: string; model: string; chatId?: string };
   options: {
     permission: string;
     excludeToolNames: ReadonlySet<string>;
@@ -63,8 +63,10 @@ function task(patch: Partial<ScheduledTask> = {}): ScheduledTask {
 async function executionHarness(
   webSearch: () => Promise<{ ready?: boolean }>,
   finish: [channel: string, payload: unknown] = ["chat:done", { content: "Done." }],
+  extra: { chats?: Record<string, object>; workspace?: { id: string } } = {},
 ) {
   const started: StartedGeneration[] = [];
+  const appended: Array<{ chatId: string; message: { role: string; content: string; notice?: { source: string } } }> = [];
   let availabilityReads = 0;
   const chat = { id: "chat-1", title: "Morning brief", updatedAt: 1 };
   const ports: Record<string, unknown> = {
@@ -79,11 +81,30 @@ async function executionHarness(
       ipcMain: { broadcast: () => undefined },
       logger: { warn: () => undefined },
     },
-    "./chat-store.js": { chatStore: { get: async () => chat, appendMessage: async () => chat } },
+    "./chat-store.js": {
+      chatStore: {
+        get: async (id: string) => extra.chats?.[id] ?? chat,
+        appendMessage: async (chatId: string, message: (typeof appended)[number]["message"]) => {
+          appended.push({ chatId, message });
+          return chat;
+        },
+      },
+    },
+    "./workspace-folder-presence.js": { assertWorkspaceFolderPresent: async () => undefined },
+    "./managed-worktree-admission.js": { assertManagedWorktreeAdmission: async () => undefined },
+    "./follow-through/notice-delivery-main.js": {
+      noticeDelivery: {
+        post: async () => ({ kind: "recorded", messageId: "notice-1", reason: "not-waking" }),
+        inOrder: (_chatId: string, work: () => Promise<unknown>) => work(),
+      },
+    },
     "./config-store.js": {
       configStore: {
         getSettings: async () => ({}),
-        getWorkspace: async () => null,
+        getWorkspace: async (id: string) =>
+          extra.workspace?.id === id
+            ? { ...extra.workspace, name: "Workspace", permission: "full", folderPath: "/workspace", createdAt: 1, updatedAt: 1 }
+            : null,
         getProvider: async () => null,
       },
     },
@@ -102,7 +123,7 @@ async function executionHarness(
     },
     "./llm-client.js": {
       llmClient: {
-        beginChatTurn: () => ({ release() {}, settleAsyncWork() {} }),
+        beginChatTurn: () => ({ release() {}, settleAsyncWork() {}, reserveAppendPayload() {}, isActive: () => true }),
         start: async (
           _streamId: string,
           params: StartedGeneration["params"],
@@ -114,6 +135,7 @@ async function executionHarness(
           return true;
         },
         waitForChatIdle: async () => true,
+        waitForChatIdleWithin: async () => true,
         cancel: () => false,
       },
     },
@@ -168,6 +190,7 @@ async function executionHarness(
       return started[0]!;
     },
     runToEnd: (scheduled: ScheduledTask) => execution.run(scheduled),
+    appended,
     availabilityReads: () => availabilityReads,
   };
 }
@@ -246,4 +269,24 @@ test("a scheduled run counts its one generated message as coming from the schedu
     sent.filter(({ event }) => event === "chat_message_sent").map(({ props }) => props?.origin),
     ["schedule"],
   );
+});
+
+test("a task made in a chat runs there under the task's own policy, its prompt saved as a notice", async () => {
+  // A chat-bound task always has a project, and a project task has no MCP
+  // servers, so the policy that matters is the task's permission.
+  const h = await executionHarness(notReady, undefined, {
+    chats: { "chat-origin": { id: "chat-origin", title: "Planning", workspaceId: "workspace-1", updatedAt: 1 } },
+    workspace: { id: "workspace-1" },
+  });
+  const { params, options } = await h.run(task({
+    permission: "read-only", mcpServerIds: [], workspaceId: "workspace-1", originChatId: "chat-origin",
+  }));
+  assert.equal(params.chatId, "chat-origin", "the answer is generated in the chat the task was made in");
+  for (const name of APPROVAL_TOOL_NAMES) assert.ok(options.excludeToolNames.has(name), name);
+  assert.equal(options.allowMcpTools, false);
+  assert.ok(options.excludeToolNames.has(SCHEDULE_TOOL_NAME), "a bound run still can't schedule more work");
+  const prompt = h.appended.find((entry) => entry.message.role === "user");
+  assert.equal(prompt?.chatId, "chat-origin");
+  assert.equal(prompt?.message.notice?.source, "schedule");
+  assert.match(prompt?.message.content ?? "", /Summarize my inbox\./u);
 });
