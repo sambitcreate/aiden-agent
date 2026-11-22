@@ -36,6 +36,17 @@ export interface BotEventReceipt {
   retries?: number;
 }
 
+/**
+ * A payload dropped after its last retry whose card isn't shown yet. Saved in
+ * the same write that drops the payload, so the card survives a write that
+ * lands and then reports failure; cleared once shown (see `requeue`).
+ */
+export interface BotEventDropNotice {
+  id: string;
+  reason: "retries";
+  held: BotEventReceipt;
+}
+
 export interface BotEventExecutionSnapshot {
   name: string;
   prompt: string;
@@ -79,6 +90,8 @@ export interface BotEventRoutine {
   held?: BotEventReceipt;
   /** Accepted events whose run isn't recorded yet; replayed after a restart. */
   running?: BotEventReceipt[];
+  /** Drops still to be shown (`requeue` with `maxRetries`). Only scheduled tasks retry, so the Bot store doesn't keep these. */
+  dropNotices?: BotEventDropNotice[];
   /** Private connector binding/receipts, never part of event-routine views. */
   connector?: BotConnectorWatchPrivate;
   /** Watch routines only: what the last checks found. */

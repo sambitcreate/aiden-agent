@@ -987,6 +987,93 @@ test("a hold-again write reported failed still runs the call once, without a res
   }
 });
 
+test("a hold-again write that never landed still runs the call when another call was held meanwhile", async () => {
+  const link = linkHarness({ kind: "webhook", gapMinutes: 10 }, [{ result: "skipped", reason: "chat_busy" }]);
+  await link.setUp();
+  type Book = { held?: { payload: string }; running?: unknown[] };
+  const book = () => (link.persistence.snapshot() as { tasks: Record<string, Book> }).tasks["task-1"];
+  // The hold-again write is refused before it is saved, and the first look back fails too.
+  let holdRefused = false;
+  let readFailed = false;
+  const update = link.persistence.update.bind(link.persistence);
+  link.persistence.update = async (mutation) => {
+    if (holdRefused && !readFailed) {
+      readFailed = true;
+      throw new Error("EIO: the task store could not be read");
+    }
+    const before = link.persistence.snapshot();
+    const result = await update(mutation);
+    if (!holdRefused && (before as { tasks: Record<string, Book> }).tasks["task-1"]?.held === undefined && book()?.held !== undefined) {
+      link.persistence.restore(before);
+      holdRefused = true;
+      throw new Error("EIO: the write could not be saved");
+    }
+    return result;
+  };
+  assert.equal(await link.call({ n: 0 }), 202);
+  await link.triggers.idle();
+  assert.equal(holdRefused && readFailed, true, "the hold-again write and the first look back failed");
+  assert.equal(book()?.held, undefined, "nothing was held for the first call");
+  // Another call arrives inside the gap and is held before the look back is tried again.
+  assert.equal(await link.call({ n: 1 }), 202);
+  await link.triggers.idle();
+  assert.match(book()?.held?.payload ?? "", /"n": 1/u);
+
+  // Aiden keeps running: no stop, start or rearm. Both calls run, each once.
+  for (let step = 0; step < 6 && link.events.length < 3; step += 1) {
+    link.advance(10 * MINUTE);
+    await link.fireTimers();
+  }
+  const later = link.events.slice(1).map((entry) => entry.event.payload);
+  assert.equal(later.length, 2, "one run for each call");
+  assert.equal(later.join("\n").match(/"n": 0/gu)?.length, 1, "the first call runs once");
+  assert.equal(later.join("\n").match(/"n": 1/gu)?.length, 1, "the held call runs once");
+  link.triggers.stop();
+});
+
+test("a drop after the last retry whose write lands and then fails still shows its card once", async () => {
+  const busy = Array.from({ length: 10 }, () => ({ result: "skipped" as const, reason: "chat_busy" as const }));
+  const link = linkHarness({ kind: "webhook", gapMinutes: 1 }, busy);
+  await link.setUp();
+  type Book = { dropNotices?: unknown[] };
+  const book = () => (link.persistence.snapshot() as { tasks: Record<string, Book> }).tasks["task-1"];
+  // The write that drops the call is saved, then reported failed.
+  let rejected = 0;
+  const update = link.persistence.update.bind(link.persistence);
+  link.persistence.update = async (mutation) => {
+    const had = (book()?.dropNotices ?? []).length > 0;
+    const result = await update(mutation);
+    if (!had && (book()?.dropNotices ?? []).length > 0 && rejected === 0) {
+      rejected += 1;
+      throw new Error("EIO: the folder could not be synced");
+    }
+    return result;
+  };
+  assert.equal(await link.call({ n: 0 }), 202);
+  // Aiden keeps running: each retry runs when its timer is due.
+  for (let step = 0; step < 20 && rejected === 0; step += 1) {
+    link.advance(MINUTE);
+    await link.fireTimers();
+  }
+  assert.equal(rejected, 1, "the drop's write landed and was reported failed");
+  await link.fireTimers();
+  const dropped = async () => ((await link.store.linkState("task-1"))?.log ?? []).filter((entry) => entry.outcome === "dropped").length;
+  assert.equal(link.events.length, 7, "the first run and 6 retries");
+  assert.equal(link.notices.length, 1, "the card is shown");
+  assert.match(link.notices[0]!.text, /tried 7 times/u);
+  assert.equal(await dropped(), 1, "and the link's recent calls say so");
+  assert.equal(book()?.dropNotices, undefined, "the shown notice is cleared");
+
+  // A restart doesn't show it again.
+  link.triggers.stop();
+  await link.triggers.start();
+  await link.triggers.idle();
+  await link.fireTimers();
+  assert.equal(link.notices.length, 1);
+  assert.equal(await dropped(), 1);
+  link.triggers.stop();
+});
+
 test("a held change of emoji up to the event bound survives a reload", async () => {
   const value = harness();
   const payload = "\u{1F600}".repeat(20_000);

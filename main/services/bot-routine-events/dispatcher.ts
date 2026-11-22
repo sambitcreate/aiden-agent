@@ -7,7 +7,7 @@
 // reuse the same gap, dedupe, hold and replay rules with their own store.
 
 import { BOT_ROUTINE_EVENT_LIMITS, type BotRoutineTriggerKind } from "../../../renderer/shared/bot-routine-trigger.js";
-import { BOT_EVENT_RUNNING_MAX, type BotEventPublicationGuard, type BotEventRoutine, type BotEventRoutineStore, type BotEventExecutionSnapshot, type BotEventReceipt } from "./store.js";
+import { BOT_EVENT_RUNNING_MAX, type BotEventPublicationGuard, type BotEventRoutine, type BotEventRoutineStore, type BotEventDropNotice, type BotEventExecutionSnapshot, type BotEventReceipt } from "./store.js";
 
 export type BotRoutineEventOutcome = "queued" | "held" | "duplicate" | "daily_limit" | "disabled" | "unknown";
 export interface BotRoutineEvent {
@@ -103,6 +103,8 @@ export function createEventRoutineDispatcher<R extends EventRoutine>(dependencie
   const heldTimers = new Map<string, { cancel(): void }>();
   /** Reconciles and replays scheduled after a requeue whose write came back rejected. */
   const recoveryTimers = new Set<{ cancel(): void }>();
+  /** Drop notices this process has shown; one whose clearing write failed isn't shown again. */
+  const shownNotices = new Set<string>();
   /** Runs started and admissions still deciding, not yet settled in the store, for `idle()`. */
   const pending = new Set<Promise<void>>();
   const active = new Set<string>();
@@ -258,40 +260,74 @@ export function createEventRoutineDispatcher<R extends EventRoutine>(dependencie
   /**
    * A requeue's write was rejected, so whether it landed is unknown. Reads the
    * routine again (through the store's per-owner queue) and carries on from
-   * what is there: a held copy is armed; a receipt still running is replayed
-   * once the requeue's wait is over; with neither, the event is settled. A
-   * read that fails is tried again later, waiting longer each time.
+   * each part of what is there: a held event is armed; this run's receipt, if
+   * it is still running, is replayed once the requeue's wait is over; a drop
+   * the write saved is shown. With none of these, the event is settled. A read
+   * that fails is tried again later, waiting longer each time.
    */
-  async function reconcileRequeue(ownerKey: string, routineId: string, eventId: string, settles: string | undefined,
+  async function reconcileRequeue(ownerKey: string, routineId: string, settles: string | undefined,
     notBefore: number | undefined, armedFor: number, attempt = 0): Promise<void> {
     if (!live(armedFor)) return;
-    let found: { routine: R; held: boolean; receipt?: BotEventReceipt } | undefined;
+    let routine: R | undefined;
     try {
-      found = await dependencies.store.mutate(ownerKey, routineId, (routine) => ({
-        result: {
-          routine,
-          held: routine.held !== undefined,
-          receipt: settles === undefined ? undefined : routine.running?.find((entry) => entry.eventId === settles),
-        },
-      }));
+      routine = await dependencies.store.mutate(ownerKey, routineId, (current) => ({ result: current }));
     } catch (error) {
       dependencies.onError?.(error);
-      const wait = Math.min(REQUEUE_RECONCILE_MAX_MS, REQUEUE_RECONCILE_MS * 2 ** attempt);
-      later(wait, () => reconcileRequeue(ownerKey, routineId, eventId, settles, notBefore, armedFor, attempt + 1), armedFor);
+      later(retryWait(attempt), () => reconcileRequeue(ownerKey, routineId, settles, notBefore, armedFor, attempt + 1), armedFor);
       return;
     }
-    if (!found || !live(armedFor)) return;
-    const { routine } = found;
+    if (!routine || !live(armedFor)) return;
     const gapEnds = (routine.lastRunAt ?? 0) + limitsOf(routine).minGapMs;
-    if (found.held) {
-      armHeld(ownerKey, routineId, gapEnds, armedFor);
+    // An unrelated event may have been held since: it is armed, and this run's receipt still replays.
+    if (routine.held) armHeld(ownerKey, routineId, gapEnds, armedFor);
+    const receipt = settles === undefined ? undefined : routine.running?.find((entry) => entry.eventId === settles);
+    if (receipt && routine.enabled) {
+      const due = Math.max(notBefore ?? gapEnds, dependencies.now() + 1);
+      // claimAndStart reads the receipt again, so one settled meanwhile runs nothing.
+      later(due - dependencies.now(), () => claimAndStart(routine, receipt, armedFor), armedFor);
+    }
+    if (routine.dropNotices?.length) await showDrops(ownerKey, routineId, armedFor);
+  }
+
+  function retryWait(attempt: number): number {
+    return Math.min(REQUEUE_RECONCILE_MAX_MS, REQUEUE_RECONCILE_MS * 2 ** attempt);
+  }
+
+  /**
+   * Shows each saved drop notice once (`heldDropped`), then clears the ones
+   * shown. A notice is shown by its id, so a clearing write that fails is
+   * tried again later without showing the card twice.
+   */
+  async function showDrops(ownerKey: string, routineId: string, armedFor: number, attempt = 0): Promise<void> {
+    if (!live(armedFor)) return;
+    let routine: R | undefined;
+    try {
+      routine = await dependencies.store.mutate(ownerKey, routineId, (current) => ({ result: current }));
+    } catch (error) {
+      dependencies.onError?.(error);
+      later(retryWait(attempt), () => showDrops(ownerKey, routineId, armedFor, attempt + 1), armedFor);
       return;
     }
-    const receipt = found.receipt;
-    if (!receipt || !routine.enabled) return;
-    const due = Math.max(notBefore ?? gapEnds, dependencies.now() + 1);
-    // claimAndStart reads the receipt again, so one settled meanwhile runs nothing.
-    later(due - dependencies.now(), () => claimAndStart(routine, receipt, armedFor), armedFor);
+    const notices = routine?.dropNotices ?? [];
+    if (!routine || !notices.length) return;
+    const key = (notice: BotEventDropNotice) => `${ownerKey}\0${routineId}\0${notice.id}`;
+    for (const notice of notices) {
+      if (shownNotices.has(key(notice))) continue;
+      shownNotices.add(key(notice));
+      await dependencies.heldDropped?.(routine, notice.held, notice.reason).catch((error: unknown) => dependencies.onError?.(error));
+    }
+    const shown = new Set(notices.map((notice) => notice.id));
+    try {
+      await dependencies.store.mutate(ownerKey, routineId, (current) => {
+        const kept = (current.dropNotices ?? []).filter((notice) => !shown.has(notice.id));
+        if (kept.length === (current.dropNotices ?? []).length) return { result: undefined };
+        const { dropNotices: _shown, ...rest } = current;
+        return { next: (kept.length ? { ...rest, dropNotices: kept } : rest) as R, result: undefined };
+      });
+    } catch (error) {
+      dependencies.onError?.(error);
+      later(retryWait(attempt), () => showDrops(ownerKey, routineId, armedFor, attempt + 1), armedFor);
+    }
   }
 
   async function releaseHeld(ownerKey: string, routineId: string, armedFor: number): Promise<void> {
@@ -403,6 +439,8 @@ export function createEventRoutineDispatcher<R extends EventRoutine>(dependencie
           for (const event of routine.running ?? []) {
             track(claimAndStart(routine, event, armedFor));
           }
+          // Drops saved before a stop whose cards weren't shown (or cleared) yet.
+          if (routine.dropNotices?.length) track(showDrops(ownerOf(routine), routine.id, armedFor));
           if (!routine.held) continue;
           armHeld(ownerOf(routine), routine.id, (routine.lastRunAt ?? 0) + limitsOf(routine).minGapMs, armedFor);
         }
@@ -419,7 +457,9 @@ export function createEventRoutineDispatcher<R extends EventRoutine>(dependencie
      * run's place in the day's count, since nothing was delivered;
      * `notBefore` keeps it (and anything else) waiting until then, by moving
      * the gap's start. Past `maxRetries` the payload is dropped instead, with
-     * `heldDropped`. It happens once per event: when `settles` is no longer
+     * `heldDropped`; the drop's notice is saved in the same write
+     * (`dropNotices`) and shown once by its id, so it survives a write that
+     * lands and then reports failure. It happens once per event: when `settles` is no longer
      * running, or the held event already is this one, nothing changes.
      */
     requeue(ownerKey: string, routineId: string, event: BotRoutineEvent, combine: (older: string, newer: string | undefined) => string,
@@ -428,7 +468,7 @@ export function createEventRoutineDispatcher<R extends EventRoutine>(dependencie
       return admitting((async () => {
         if (!live(armedFor)) return;
         const retries = (event.retries ?? 0) + 1;
-        let dropped: { routine: R; held: BotEventReceipt } | undefined;
+        let dropped = false;
         let at: number | undefined;
         try {
           at = await dependencies.store.mutate<number | undefined>(ownerKey, routineId, (routine) => {
@@ -443,8 +483,15 @@ export function createEventRoutineDispatcher<R extends EventRoutine>(dependencie
             const day = options.refund && routine.day && routine.day.count > 0 ? { ...routine.day, count: routine.day.count - 1 } : routine.day;
             if (!routine.enabled) return running.length === (routine.running ?? []).length ? { result: undefined } : { next: settled, result: undefined };
             if (options.maxRetries !== undefined && retries > options.maxRetries) {
-              dropped = { routine, held: { eventId: event.eventId, payload: event.payload, at: dependencies.now(), retries: retries - 1 } };
-              return { next: { ...settled, ...(day ? { day } : {}) }, result: undefined };
+              // The card is saved with the drop, so a write that lands and then fails still shows it.
+              const notice: BotEventDropNotice = {
+                id: `${event.eventId}:retries`,
+                reason: "retries",
+                held: { eventId: event.eventId, payload: event.payload, at: dependencies.now(), retries: retries - 1 },
+              };
+              dropped = true;
+              const dropNotices = [...(routine.dropNotices ?? []).filter((entry) => entry.id !== notice.id), notice];
+              return { next: { ...settled, dropNotices, ...(day ? { day } : {}) }, result: undefined };
             }
             const payload = [...combine(event.payload, routine.held?.payload).slice(0, payloadChars * 2)].slice(0, payloadChars).join("");
             const held: BotEventReceipt = routine.held
@@ -460,11 +507,11 @@ export function createEventRoutineDispatcher<R extends EventRoutine>(dependencie
         } catch (error) {
           // The write may have landed before it was reported failed: what is
           // there decides what runs next, so the event isn't left until a restart.
-          track(reconcileRequeue(ownerKey, routineId, event.eventId, options.settles, options.notBefore, armedFor));
+          track(reconcileRequeue(ownerKey, routineId, options.settles, options.notBefore, armedFor));
           throw error;
         }
         if (at !== undefined) armHeld(ownerKey, routineId, at, armedFor);
-        if (dropped) await dependencies.heldDropped?.(dropped.routine, dropped.held, "retries").catch((error: unknown) => dependencies.onError?.(error));
+        if (dropped) await showDrops(ownerKey, routineId, armedFor);
       })());
     },
 

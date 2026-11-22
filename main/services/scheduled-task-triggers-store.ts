@@ -16,7 +16,7 @@ import type { BotRoutineTrigger } from "../../renderer/shared/bot-routine-trigge
 import { BOT_ROUTINE_EVENT_LIMITS, BOT_WATCH_LIMITS } from "../../renderer/shared/bot-routine-trigger.js";
 import { SCHEDULED_TASK_LINK_LIMITS, SCHEDULED_TASK_TRIGGER_LIMITS, type ScheduledTaskTrigger } from "../../renderer/shared/scheduled-task-trigger.js";
 import type { EventRoutine, EventRoutineStore } from "./bot-routine-events/dispatcher.js";
-import { BOT_EVENT_RUNNING_MAX, BOT_WATCH_SNAPSHOT_CHARS, type BotEventPublicationGuard, type BotEventReceipt, type BotWatchState } from "./bot-routine-events/store.js";
+import { BOT_EVENT_RUNNING_MAX, BOT_WATCH_SNAPSHOT_CHARS, type BotEventDropNotice, type BotEventPublicationGuard, type BotEventReceipt, type BotWatchState } from "./bot-routine-events/store.js";
 import { parseConnectorBaseline, parseConnectorPrivate } from "./bot-routine-events/connector-types.js";
 import type { TaskConnectorSource } from "./scheduled-task-connector-trigger.js";
 import type { ScheduledTask } from "./types.js";
@@ -36,6 +36,8 @@ export interface TaskLinkLogEntry {
   repeats?: number;
 }
 
+/** Drop cards waiting to be shown, per task. */
+const DROP_NOTICES_MAX = 8;
 const LOG_OUTCOMES = new Set<TaskLinkLogEntry["outcome"]>(["ran", "batched", "duplicate", "daily_limit", "dropped", "filtered", "bad_signature", "invalid", "off"]);
 
 export function hashTaskLinkToken(token: string): string {
@@ -67,6 +69,8 @@ interface TaskTriggerBook {
   day?: { key: string; count: number };
   held?: BotEventReceipt;
   running?: BotEventReceipt[];
+  /** Retry drops whose card isn't shown yet (`requeue`). */
+  dropNotices?: BotEventDropNotice[];
   watch?: BotWatchState;
   checkRuns: number;
   /** A link task's token, by hash; the token itself is never stored. */
@@ -213,6 +217,14 @@ function parseBook(value: unknown): TaskTriggerBook | undefined {
     ? row.running.map(parseReceipt).filter((receipt): receipt is BotEventReceipt => receipt !== undefined).slice(-BOT_EVENT_RUNNING_MAX)
     : [];
   const watch = parseWatch(row.watch);
+  const dropNotices = Array.isArray(row.dropNotices)
+    ? row.dropNotices.flatMap((entry): BotEventDropNotice[] => {
+      if (!entry || typeof entry !== "object") return [];
+      const item = entry as Record<string, unknown>;
+      const held = parseReceipt(item.held);
+      return typeof item.id === "string" && item.id.length <= 300 && item.reason === "retries" && held ? [{ id: item.id, reason: "retries", held }] : [];
+    }).slice(-DROP_NOTICES_MAX)
+    : [];
   const log = Array.isArray(row.log)
     ? row.log.flatMap((entry): TaskLinkLogEntry[] => {
       if (!entry || typeof entry !== "object") return [];
@@ -234,6 +246,7 @@ function parseBook(value: unknown): TaskTriggerBook | undefined {
     ...(day && typeof day.key === "string" && finite(day.count) ? { day: { key: day.key, count: day.count } } : {}),
     ...(held ? { held } : {}),
     ...(running.length ? { running } : {}),
+    ...(dropNotices.length ? { dropNotices } : {}),
     ...(watch ? { watch } : {}),
     checkRuns: finite(row.checkRuns) ? row.checkRuns : 0,
     ...(typeof row.tokenHash === "string" && /^[a-f0-9]{64}$/u.test(row.tokenHash) ? { tokenHash: row.tokenHash } : {}),
@@ -323,6 +336,7 @@ function routineOf(task: TriggerTask, book: TaskTriggerBook): TaskTriggerRoutine
     ...(book.day ? { day: { ...book.day } } : {}),
     ...(book.held ? { held: structuredClone(book.held) } : {}),
     ...(book.running ? { running: structuredClone(book.running) } : {}),
+    ...(book.dropNotices ? { dropNotices: structuredClone(book.dropNotices) } : {}),
     ...(book.watch ? { watch: structuredClone(book.watch) } : {}),
     ...(book.tokenHash ? { tokenHash: book.tokenHash } : {}),
     task,
@@ -340,6 +354,7 @@ function bookOf(routine: TaskTriggerRoutine, base: TaskTriggerBook): TaskTrigger
     ...(routine.day ? { day: routine.day } : {}),
     ...(routine.held ? { held: routine.held } : {}),
     ...(routine.running?.length ? { running: routine.running.slice(-BOT_EVENT_RUNNING_MAX) } : {}),
+    ...(routine.dropNotices?.length ? { dropNotices: routine.dropNotices.slice(-DROP_NOTICES_MAX) } : {}),
     ...(routine.watch ? { watch: routine.watch } : {}),
     checkRuns: routine.checkRuns,
     // The token and the call log change only through their own methods.
