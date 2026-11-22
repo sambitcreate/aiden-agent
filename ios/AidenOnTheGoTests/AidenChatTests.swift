@@ -13152,24 +13152,42 @@ final class AidenAppearanceTests: XCTestCase {
 
     /// Every theme has a light and a dark look; its tile shows the one the mode gives it,
     /// so Graphite, Dusk and Midnight read light in Light mode and the rest read dark in Dark.
-    func testThemeTilesPreviewTheLookTheModeGivesEveryTheme() {
-        func luminance(_ hex: String) -> Double {
-            func channel(_ shift: Int) -> Double {
-                let value = Double((Int(hex.dropFirst(), radix: 16)! >> shift) & 0xFF) / 255
-                return value <= 0.03928 ? value / 12.92 : pow((value + 0.055) / 1.055, 2.4)
+    @MainActor
+    func testThemeTilesPreviewTheLookTheModeGivesEveryTheme() throws {
+        /// WCAG relative luminance of the drawn tile, sampled inside its top-left, clear of
+        /// the rounded corner, the "Aa" and the selection badge.
+        func drawnLuminance(_ preset: AidenThemePresetID, mode: AidenAppearanceMode, phone: ColorScheme) throws -> Double {
+            let swatch = AidenThemeTileSwatch(preset: preset, mode: mode, selected: false)
+                .frame(width: 120)
+                .environment(\.colorScheme, phone)
+            let renderer = ImageRenderer(content: swatch)
+            renderer.scale = 1
+            let image = try XCTUnwrap(renderer.cgImage, "\(preset) drew nothing")
+            var pixel = [UInt8](repeating: 0, count: 4)
+            let context = try XCTUnwrap(CGContext(
+                data: &pixel, width: 1, height: 1, bitsPerComponent: 8, bytesPerRow: 4,
+                space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+            ))
+            let (x, y) = (image.width / 5, image.height / 6)
+            context.draw(image, in: CGRect(x: -x, y: y - image.height + 1, width: image.width, height: image.height))
+            func channel(_ value: UInt8) -> Double {
+                let unit = Double(value) / 255
+                return unit <= 0.03928 ? unit / 12.92 : pow((unit + 0.055) / 1.055, 2.4)
             }
-            return 0.2126 * channel(16) + 0.7152 * channel(8) + 0.0722 * channel(0)
+            XCTAssertEqual(pixel[3], 255, "\(preset) left its preview transparent")
+            return 0.2126 * channel(pixel[0]) + 0.7152 * channel(pixel[1]) + 0.0722 * channel(pixel[2])
         }
         let cases: [(AidenAppearanceMode, ColorScheme, Bool)] = [
             (.light, .dark, false), (.dark, .light, true), (.system, .light, false), (.system, .dark, true),
         ]
         for preset in AidenThemePresetID.allCases {
-            for (mode, system, dark) in cases {
-                let canvas = luminance(AidenThemeCatalog.tilePreview(preset: preset, mode: mode, systemScheme: system).canvasHex)
+            for (mode, phone, dark) in cases {
+                let luminance = try drawnLuminance(preset, mode: mode, phone: phone)
                 if dark {
-                    XCTAssertLessThan(canvas, 0.1, "\(preset) in \(mode) with a \(system) phone should preview dark")
+                    XCTAssertLessThan(luminance, 0.1, "\(preset) in \(mode) on a \(phone) phone should preview dark")
                 } else {
-                    XCTAssertGreaterThan(canvas, 0.5, "\(preset) in \(mode) with a \(system) phone should preview light")
+                    XCTAssertGreaterThan(luminance, 0.5, "\(preset) in \(mode) on a \(phone) phone should preview light")
                 }
             }
         }
