@@ -16,7 +16,10 @@ export interface ScheduledTaskApplicationDependencies {
     get(id: string): Promise<ScheduledTask | undefined>;
     runs(id: string): Promise<ScheduledRun[]>;
     /** Drop the task's chat binding; undefined when it had none. */
-    clearOriginChat(id: string, expectedChatId?: string): Promise<ScheduledTask | undefined>;
+    clearOriginChat(
+      id: string,
+      options?: { expectedChatId?: string; expectedUpdatedAt?: number },
+    ): Promise<ScheduledTask | undefined>;
   };
   service: {
     save(
@@ -77,7 +80,7 @@ export function scheduledTaskRevision(task: ScheduledTask): string {
     .digest("base64url")}`;
 }
 
-export function scheduledSettingsRevision(settings: ScheduledTaskSettings): string {
+export function scheduledSettingsRevision(settings: object): string {
   return `rev_${createHash("sha256")
     .update(JSON.stringify(settings))
     .digest("base64url")}`;
@@ -165,10 +168,17 @@ export function createScheduledTaskApplicationService(
     return { revision: scheduledSettingsRevision(value), value };
   };
 
+  /**
+   * `revisionOf` lets a caller that sees only some fields (a phone) check and
+   * return a revision of just those, so a desktop-only change it can't see
+   * doesn't make its save fail as "changed".
+   */
   const updateSettings = async (
     expectedRevision: string,
     patch: Record<string, unknown>,
+    options: { revisionOf?: (value: ScheduledTaskSettings) => string } = {},
   ): Promise<RevisionedScheduledTaskSettings> => {
+    const revisionOf = options.revisionOf ?? scheduledSettingsRevision;
     const previous = settingsTail;
     let release!: () => void;
     settingsTail = new Promise<void>((resolve) => {
@@ -177,7 +187,7 @@ export function createScheduledTaskApplicationService(
     await previous.catch(() => undefined);
     try {
       const current = await settings();
-      if (current.revision !== expectedRevision) {
+      if (revisionOf(current.value) !== expectedRevision) {
         throw new Error("Scheduled-task settings changed. Refresh them before trying again.");
       }
       const parsed = dependencies.settingsPatch(patch);
@@ -193,7 +203,7 @@ export function createScheduledTaskApplicationService(
         await dependencies.chatCheckBacksChanged?.(next.chatCheckBacks);
       }
       dependencies.notifyChanged({ settings: true });
-      return { revision: scheduledSettingsRevision(next), value: next };
+      return { revision: revisionOf(next), value: next };
     } finally {
       release();
     }
@@ -214,7 +224,12 @@ export function createScheduledTaskApplicationService(
         dependencies.service.resume(id, { signal, expectedUpdatedAt })),
     /** "Use its own chat": later runs post into the task's own chat instead of the chat that made it. */
     useOwnChat: (id: string, revision?: string) =>
-      mutateExisting(id, revision, async () => (await dependencies.store.clearOriginChat(id)) ?? (await get(id))),
+      mutateExisting(
+        id,
+        revision,
+        async (expectedUpdatedAt) =>
+          (await dependencies.store.clearOriginChat(id, { expectedUpdatedAt })) ?? (await get(id)),
+      ),
     runNow: async (id: string, runId?: string, revision?: string) => {
       const expectedUpdatedAt = expectedTaskRevision(await get(id), revision);
       const run = dependencies.service.runNow(id, { runId, expectedUpdatedAt });

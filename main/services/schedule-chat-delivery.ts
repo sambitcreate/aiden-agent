@@ -65,7 +65,7 @@ export interface TaskRunChat {
 
 export interface TaskRunChatDeliveryDeps {
   getChat(chatId: string): Promise<TaskRunChat | undefined>;
-  /** The chat it posted into is gone: later runs use the task's own chat. */
+  /** The chat it posted into is gone or can no longer take it: later runs use the task's own chat. */
   releaseOriginChat(taskId: string, chatId: string): Promise<void>;
   /** The task's own chat, created on first use. */
   ensureOwnChat(task: ScheduledTask): Promise<string>;
@@ -89,7 +89,24 @@ export interface TaskRunChatDeliveryDeps {
   /** "Every day at 9:00 AM": the notice's summary line. */
   cadence(task: ScheduledTask): string;
   now(): number;
+  /** Wait before trying a chat again after another turn took it. Defaults to a timer. */
+  delay?(ms: number, signal: AbortSignal): Promise<void>;
   onError?(error: unknown): void;
+}
+
+/** How long a run waits before trying again when another turn took the chat at the last moment. */
+export const TASK_RUN_ADMISSION_RETRY_MS = 2_000;
+
+function timerDelay(ms: number, signal: AbortSignal): Promise<void> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(done, ms);
+    function done() {
+      clearTimeout(timer);
+      signal.removeEventListener("abort", done);
+      resolve();
+    }
+    signal.addEventListener("abort", done, { once: true });
+  });
 }
 
 /** In-memory hourly task-run counter per chat. A restart resets it; nothing restarts by itself after a quit. */
@@ -107,11 +124,12 @@ export class TaskRunBudget {
     this.runs.set(chatId, [...this.recent(chatId), this.now()]);
   }
 
-  /** One "over the limit" notice per chat per hour. */
-  takeSkipNotice(chatId: string): boolean {
-    const last = this.skipNotices.get(chatId);
+  /** One skip card of each kind ("over the limit", "chat busy") per chat per hour. */
+  takeSkipNotice(chatId: string, kind: "budget" | "busy" = "budget"): boolean {
+    const key = `${kind}:${chatId}`;
+    const last = this.skipNotices.get(key);
     if (last !== undefined && this.now() - last < TASK_RUN_WINDOW_MS) return false;
-    this.skipNotices.set(chatId, this.now());
+    this.skipNotices.set(key, this.now());
     return true;
   }
 
@@ -149,19 +167,27 @@ const CHAT_BUSY_OUTPUT = "Skipped: the chat stayed busy for 10 minutes.";
 
 export function createTaskRunChatDelivery(deps: TaskRunChatDeliveryDeps) {
   const budget = new TaskRunBudget(deps.now);
+  const delay = deps.delay ?? timerDelay;
 
-  /** The chat a bound task posts into, or undefined to use its own chat. */
+  /**
+   * The chat a bound task posts into, or undefined to use its own chat. A
+   * chat that is gone, or can no longer take the task (another project, a
+   * Bot or feature-owned conversation), loses the binding, so the composer
+   * chip and the editor stop naming it.
+   */
   async function originChat(task: ScheduledTask): Promise<string | undefined> {
     const chatId = task.originChatId;
     if (!chatId || task.botId !== undefined) return undefined;
     const chat = await deps.getChat(chatId);
-    if (!chat) {
-      await deps.releaseOriginChat(task.id, chatId).catch((error: unknown) => deps.onError?.(error));
-      return undefined;
-    }
-    if (chat.botId !== undefined || chat.owner !== undefined) return undefined;
-    if (!task.workspaceId || chat.workspaceId !== task.workspaceId) return undefined;
-    return chat.id;
+    const usable =
+      chat !== undefined &&
+      chat.botId === undefined &&
+      chat.owner === undefined &&
+      task.workspaceId !== undefined &&
+      chat.workspaceId === task.workspaceId;
+    if (usable) return chat.id;
+    await deps.releaseOriginChat(task.id, chatId).catch((error: unknown) => deps.onError?.(error));
+    return undefined;
   }
 
   async function inOwnChat(task: ScheduledTask, signal: AbortSignal): Promise<TaskRunOutcome> {
@@ -196,11 +222,13 @@ export function createTaskRunChatDelivery(deps: TaskRunChatDeliveryDeps) {
   }
 
   async function chatBusy(task: ScheduledTask, chatId: string): Promise<TaskRunOutcome> {
-    await record(
-      chatId,
-      taskNotice(task, "info", "Skipped: the chat stayed busy"),
-      `${CHAT_BUSY_OUTPUT} The task runs again at its next time.`,
-    );
+    if (budget.takeSkipNotice(chatId, "busy")) {
+      await record(
+        chatId,
+        taskNotice(task, "info", "Skipped: the chat stayed busy"),
+        `${CHAT_BUSY_OUTPUT} The task runs again at its next time.`,
+      );
+    }
     return { kind: "skipped", reason: "chat_busy", chatId, output: CHAT_BUSY_OUTPUT };
   }
 
@@ -228,7 +256,7 @@ export function createTaskRunChatDelivery(deps: TaskRunChatDeliveryDeps) {
     chatId: string,
     options: TaskRunDeliveryOptions,
     countsAgainstBudget: boolean,
-  ): Promise<TaskRunOutcome> {
+  ): Promise<TaskRunOutcome | { kind: "moved" }> {
     const { signal } = options;
     const cadence = deps.cadence(task);
     const post: AgentNoticePost = {
@@ -244,15 +272,21 @@ export function createTaskRunChatDelivery(deps: TaskRunChatDeliveryDeps) {
       if (signal.aborted) throw new Error("Scheduled task was cancelled.");
       if (!idle) return chatBusy(task, chatId);
       const admission = await deps.inChatOrder(chatId, async () => {
+        // The chat may have been deleted or moved while the run waited.
+        if ((await originChat(task)) !== chatId) return { kind: "moved" as const };
         if (countsAgainstBudget && budget.left(chatId) <= 0) return { kind: "budget" as const };
         const admitted = await deps.admitTurn(task, chatId, post, signal);
         if (admitted.kind === "admitted" && countsAgainstBudget) budget.take(chatId);
         return admitted;
       });
+      if (admission.kind === "moved") return { kind: "moved" };
       if (admission.kind === "budget") return overBudget(task, chatId);
       if (admission.kind === "admitted") return { kind: "ran", chatId, ...(await admission.finish()) };
-      // Another turn took the chat between the wait and the admission.
+      // Another turn took the chat between the wait and the admission. Back
+      // off before trying again, so a chat that is held without counting as
+      // busy isn't asked hundreds of times a minute.
       if (deps.now() >= deadline) return chatBusy(task, chatId);
+      await delay(Math.min(TASK_RUN_ADMISSION_RETRY_MS, Math.max(0, deadline - deps.now())), signal);
     }
   }
 
@@ -267,12 +301,13 @@ export function createTaskRunChatDelivery(deps: TaskRunChatDeliveryDeps) {
     if (!chatId) return inOwnChat(task, options.signal);
     const countsAgainstBudget = options.trigger?.kind !== "manual";
     if (countsAgainstBudget && budget.left(chatId) <= 0) return overBudget(task, chatId);
+    let outcome: TaskRunOutcome | { kind: "moved" };
     try {
       if (task.mode === "script") {
         if (countsAgainstBudget) budget.take(chatId);
         return await runScriptInChat(task, chatId, options.signal);
       }
-      return await runModelInChat(task, chatId, options, countsAgainstBudget);
+      outcome = await runModelInChat(task, chatId, options, countsAgainstBudget);
     } catch (cause) {
       const error = errorText(cause);
       await record(
@@ -282,6 +317,7 @@ export function createTaskRunChatDelivery(deps: TaskRunChatDeliveryDeps) {
       ).catch((recordError: unknown) => deps.onError?.(recordError));
       return { kind: "ran", chatId, result: options.signal.aborted ? "blocked" : "error", output: "", error };
     }
+    return outcome.kind === "moved" ? inOwnChat(task, options.signal) : outcome;
   }
 
   return { deliverTaskRunToChat, budget };

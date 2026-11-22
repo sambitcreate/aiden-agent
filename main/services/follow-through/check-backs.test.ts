@@ -12,7 +12,7 @@ const MINUTE = 60_000;
 /** 2026-11-22 14:50:00 UTC. */
 const START = Date.UTC(2026, 10, 22, 14, 50);
 
-function harness(options: { enabled?: boolean; holdPosts?: boolean } = {}) {
+function harness(options: { enabled?: boolean; holdPosts?: boolean; enabledRead?: () => boolean | Promise<boolean> } = {}) {
   let now = START;
   let enabled = options.enabled ?? true;
   let nextId = 0;
@@ -29,7 +29,7 @@ function harness(options: { enabled?: boolean; holdPosts?: boolean } = {}) {
       await postsHeld;
     },
     onChange: (chatId) => changed.push(chatId),
-    enabled: () => enabled,
+    enabled: () => options.enabledRead?.() ?? enabled,
     timezone: () => "UTC",
     now: () => now,
     newId: () => `cb_${(nextId += 1)}`,
@@ -117,7 +117,8 @@ test("a check-back is saved as claimed before its notice goes out, so a quit mid
   await relaunch.settle();
   assert.equal(relaunch.posts.length, 1);
   assert.equal(relaunch.posts[0]!.wake, false, "only a card: the chat is not woken a second time");
-  assert.equal(relaunch.posts[0]!.notice.title, "Missed check-back (due 2:55 PM)");
+  assert.equal(relaunch.posts[0]!.notice.title, "Check-back interrupted (due 2:55 PM)");
+  assert.match(relaunch.posts[0]!.text, /may not have finished\. Look at the chat above before redoing anything/u, "not told it never happened");
   assert.equal(last(relaunch.saved)?.[0]?.state, "fired");
   await relaunch.advance(24 * 60 * MINUTE);
   assert.equal(relaunch.posts.length, 1);
@@ -280,4 +281,63 @@ test("the tool refuses set in a turn the policy refuses it, but still lists and 
   await assert.rejects(call({ action: "set", in_minutes: 5, note: "x" }), /refused here/u);
   assert.deepEqual(value.checkBacks.pendingAll(), []);
   assert.equal((await call({ action: "list" })).body.ok, true);
+});
+
+test("a check-back set before the clock jumped back waits with an hourly recheck, never a tight loop", async () => {
+  const value = harness();
+  // Saved at a clock 40 days ahead of now: its delay is past what a timer can hold.
+  value.checkBacks.restore([
+    { id: "cb_far", chatId: "chat-1", fireAt: START + 40 * 24 * 60 * MINUTE, note: "Look again", setAt: START + 40 * 24 * 60 * MINUTE - 20 * MINUTE, state: "pending" },
+  ]);
+  await value.settle();
+  const [timer] = value.liveTimers();
+  assert.ok(timer, "one timer armed");
+  assert.ok(timer.at - START <= 60 * MINUTE && timer.at - START > 0, "it waits at most an hour");
+  await value.advance(60 * MINUTE);
+  assert.equal(value.posts.length, 0);
+  assert.equal(value.liveTimers().length, 1, "re-armed once, not spinning");
+  assert.ok(value.liveTimers()[0]!.at - (START + 60 * MINUTE) >= 59 * MINUTE);
+});
+
+test("a check-back due while reading the setting failed is tried again a minute later", async () => {
+  let reads = 0;
+  const value = harness({
+    enabledRead: () => {
+      reads += 1;
+      if (reads === 2) return Promise.reject(new Error("settings unreadable"));
+      return true;
+    },
+  });
+  await value.checkBacks.set("chat-1", { when: { inMinutes: 5 }, note: "Look at the build" });
+  await value.advance(5 * MINUTE);
+  assert.equal(value.posts.length, 0, "the failed read posts nothing");
+  const [retry] = value.liveTimers();
+  assert.ok(retry, "a retry is armed instead of waiting for a resume or unlock");
+  assert.ok(retry.at - (START + 5 * MINUTE) >= MINUTE);
+  await value.advance(MINUTE);
+  assert.equal(value.posts.length, 1);
+  assert.equal(value.posts[0]!.notice.title, "Checking back");
+});
+
+test("quitting while a check-back is being delivered waits for it, so it is saved as fired", async () => {
+  const value = harness({ holdPosts: true });
+  await value.checkBacks.set("chat-1", { when: { inMinutes: 5 }, note: "Look at the build" });
+  await value.advance(5 * MINUTE);
+  assert.equal(last(value.saved)?.[0]?.state, "claimed");
+  let quit = false;
+  const quitting = value.checkBacks.shutdown().then(() => (quit = true));
+  await value.settle();
+  assert.equal(quit, false, "quitting waits for the notice already going out");
+  value.releasePosts();
+  await quitting;
+  assert.equal(last(value.saved)?.[0]?.state, "fired", "the next launch shows no interrupted card");
+});
+
+test("a restored note is trimmed to the note limit", async () => {
+  const value = harness();
+  value.checkBacks.restore([
+    { id: "cb_long", chatId: "chat-1", fireAt: START + 30 * MINUTE, note: "x".repeat(1_200), setAt: START, state: "pending" },
+  ]);
+  await value.settle();
+  assert.equal(value.checkBacks.list("chat-1")[0]?.note.length, 500);
 });

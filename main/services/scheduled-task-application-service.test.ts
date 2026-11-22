@@ -20,8 +20,11 @@ function fixture(
       list: async () => [...tasks.values()],
       get: async (id) => tasks.get(id),
       runs: async (id) => runs.get(id) ?? [],
-      clearOriginChat: async (id) => {
+      clearOriginChat: async (id, options = {}) => {
         const existing = tasks.get(id);
+        if (options.expectedUpdatedAt !== undefined && existing?.updatedAt !== options.expectedUpdatedAt) {
+          throw new Error("This automation changed.");
+        }
         if (!existing?.originChatId) return undefined;
         clock += 1;
         const { originChatId: _dropped, ...rest } = existing;

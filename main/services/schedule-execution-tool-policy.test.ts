@@ -63,10 +63,19 @@ function task(patch: Partial<ScheduledTask> = {}): ScheduledTask {
 async function executionHarness(
   webSearch: () => Promise<{ ready?: boolean }>,
   finish: [channel: string, payload: unknown] = ["chat:done", { content: "Done." }],
-  extra: { chats?: Record<string, object>; workspace?: { id: string } } = {},
+  extra: {
+    chats?: Record<string, { id: string; providerId?: string; model?: string; [key: string]: unknown }>;
+    workspace?: { id: string };
+    /** Runs while the generation is going, after it switched the chat to the task's model. */
+    duringRun?: (chat: { providerId?: string; model?: string }) => void;
+  } = {},
 ) {
   const started: StartedGeneration[] = [];
-  const appended: Array<{ chatId: string; message: { role: string; content: string; notice?: { source: string } } }> = [];
+  const appended: Array<{
+    chatId: string;
+    message: { role: string; content: string; notice?: { source: string } };
+    meta?: { providerId?: string; model?: string };
+  }> = [];
   let availabilityReads = 0;
   const chat = { id: "chat-1", title: "Morning brief", updatedAt: 1 };
   const ports: Record<string, unknown> = {
@@ -84,9 +93,30 @@ async function executionHarness(
     "./chat-store.js": {
       chatStore: {
         get: async (id: string) => extra.chats?.[id] ?? chat,
-        appendMessage: async (chatId: string, message: (typeof appended)[number]["message"]) => {
-          appended.push({ chatId, message });
+        appendMessage: async (
+          chatId: string,
+          message: (typeof appended)[number]["message"],
+          meta?: (typeof appended)[number]["meta"],
+        ) => {
+          appended.push({ chatId, message, meta });
+          // Like the real store, an append's model becomes the chat's model.
+          const target = extra.chats?.[chatId];
+          if (target && meta?.providerId) target.providerId = meta.providerId;
+          if (target && meta?.model) target.model = meta.model;
           return chat;
+        },
+        setChatModelSelection: async (
+          chatId: string,
+          providerId: string,
+          model: string,
+          assertCurrent: (current: { providerId?: string; model?: string }) => void,
+        ) => {
+          const target = extra.chats?.[chatId];
+          if (!target) throw new Error("Chat not found");
+          assertCurrent(target);
+          target.providerId = providerId;
+          target.model = model;
+          return target;
         },
       },
     },
@@ -131,6 +161,14 @@ async function executionHarness(
           options: StartedGeneration["options"],
         ) => {
           started.push({ params, options });
+          // The real generation saves its answer with its model, which the
+          // store copies onto the chat.
+          const target = params.chatId ? extra.chats?.[params.chatId] : undefined;
+          if (target) {
+            target.providerId = params.providerId;
+            target.model = params.model;
+            extra.duringRun?.(target);
+          }
           owner.send(...finish);
           return true;
         },
@@ -289,4 +327,27 @@ test("a task made in a chat runs there under the task's own policy, its prompt s
   assert.equal(prompt?.chatId, "chat-origin");
   assert.equal(prompt?.message.notice?.source, "schedule");
   assert.match(prompt?.message.content ?? "", /Summarize my inbox\./u);
+});
+
+test("a task answering in a chat with another model leaves the chat on its own model", async () => {
+  const origin = { id: "chat-origin", title: "Planning", workspaceId: "workspace-1", updatedAt: 1, providerId: "chat-provider", model: "chat-model" };
+  const h = await executionHarness(notReady, undefined, { chats: { "chat-origin": origin }, workspace: { id: "workspace-1" } });
+  const { params } = await h.run(task({ workspaceId: "workspace-1", originChatId: "chat-origin" }));
+  assert.equal(params.model, "model-1", "the task answers with its own model");
+  const notice = h.appended.find((entry) => entry.message.notice?.source === "schedule");
+  assert.equal(notice?.meta?.providerId, undefined, "the notice doesn't switch the chat's model");
+  assert.equal(notice?.meta?.model, undefined);
+  assert.deepEqual([origin.providerId, origin.model], ["chat-provider", "chat-model"]);
+
+  const picked = { ...origin, id: "chat-picked" };
+  const during = await executionHarness(notReady, undefined, {
+    chats: { "chat-picked": picked },
+    workspace: { id: "workspace-1" },
+    duringRun: (chat) => {
+      chat.providerId = "picked-provider";
+      chat.model = "picked-model";
+    },
+  });
+  await during.run(task({ workspaceId: "workspace-1", originChatId: "chat-picked" }));
+  assert.deepEqual([picked.providerId, picked.model], ["picked-provider", "picked-model"], "a model the person picked mid-run wins");
 });

@@ -2,7 +2,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { AidenRemoteScheduleService } from "./aiden-remote-schedules.js";
 import { createScheduleStore } from "./schedule-store.js";
-import { scheduledTaskRevision } from "./scheduled-task-application-service.js";
+import { createScheduledTaskApplicationService, scheduledTaskRevision } from "./scheduled-task-application-service.js";
+import { scheduledSettingsPatch } from "./scheduled-settings-core.js";
 import type { ScheduledRun, ScheduledTask, ScheduledTaskInput } from "./types.js";
 
 function fixture() {
@@ -299,13 +300,13 @@ test("phones read and write only the scheduled-task settings the Remote contract
     defaultMcpEnabled: false, defaultNotify: true, defaultTimezone: "UTC",
   };
   // The desktop-only switches stay off the wire, whose schema allows no other keys.
-  assert.deepEqual(await value.service.settings(), { revision: "rev_settings", ...expected });
-  assert.deepEqual(
-    await value.service.updateSettings("rev_settings", { confirmedForeground: true, defaultNotify: false }),
-    { revision: "rev_settings_2", ...expected, defaultNotify: false },
-  );
+  const { revision, ...read } = await value.service.settings();
+  assert.deepEqual(read, expected);
+  const { revision: next, ...saved } = await value.service.updateSettings(revision, { confirmedForeground: true, defaultNotify: false });
+  assert.deepEqual(saved, { ...expected, defaultNotify: false });
+  assert.notEqual(next, revision);
   await assert.rejects(
-    value.service.updateSettings("rev_settings_2", { confirmedForeground: true, chatCheckBacks: false }),
+    value.service.updateSettings(next, { confirmedForeground: true, chatCheckBacks: false }),
     /foreground confirmation/u,
   );
 });
@@ -325,4 +326,60 @@ test("phones never see or change the desktop-only keep-awake setting", async () 
   assert.equal(saved.defaultNotify, false);
   assert.equal("keepAwakeWhileWorking" in saved, false);
   assert.equal((await value.application.settings()).value.keepAwakeWhileWorking, false, "the desktop's choice is untouched");
+});
+
+test("a run skipped because its chat was busy or over its hourly share never notifies a phone", async () => {
+  const value = fixture();
+  const created = await value.service.create("device-1", "create-key-123456", llmMutation);
+  value.histories.set(created.id, [
+    { id: "run-busy", taskId: created.id, startedAt: 10, finishedAt: 11, result: "skipped", reason: "chat_busy", output: "Skipped: the chat stayed busy for 10 minutes." },
+    { id: "run-budget", taskId: created.id, startedAt: 12, finishedAt: 13, result: "skipped", reason: "chat_budget", output: "Skipped: this chat already ran 6 scheduled tasks in the last hour." },
+    { id: "run-ok", taskId: created.id, startedAt: 14, finishedAt: 15, result: "success", output: "All green." },
+  ]);
+  const feed = await value.service.notifications();
+  assert.deepEqual(feed.notifications.map((item) => item.id), ["run-ok"]);
+});
+
+test("a desktop-only toggle doesn't make a phone's settings edit fail as changed", async () => {
+  let stored: Record<string, unknown> = {};
+  const application = createScheduledTaskApplicationService({
+    store: { list: async () => [], get: async () => undefined, runs: async () => [], clearOriginChat: async () => undefined },
+    service: {
+      save: async () => { throw new Error("unused"); },
+      remove: async () => undefined,
+      pause: async () => { throw new Error("unused"); },
+      resume: async () => { throw new Error("unused"); },
+      runNow: async () => undefined,
+      setGlobalEnabled: async () => undefined,
+      isRunning: () => false,
+    },
+    getSettings: async () => stored,
+    setSettings: async (patch: Record<string, unknown>) => (stored = { ...stored, ...patch }),
+    getWorkspace: async () => undefined,
+    listMcpServers: async () => [],
+    validateMcpSelection: () => undefined,
+    listScripts: async () => [],
+    nextRuns: () => [],
+    systemTimezone: () => "UTC",
+    validateTimezone: (zone: string) => zone,
+    settingsPatch: (input: Record<string, unknown>) => scheduledSettingsPatch(input, (zone) => zone),
+    notifyChanged: () => undefined,
+  } as unknown as Parameters<typeof createScheduledTaskApplicationService>[0]);
+  const service = new AidenRemoteScheduleService({
+    application,
+    models: { resolve: async () => ({ providerId: "provider-1", modelId: "model-1", thinkingLevels: [], supportsImages: true }) },
+  });
+  const phone = await service.settings();
+  const desktop = await application.settings();
+  // The person turns keep-awake off on the desktop while the phone's form is open.
+  await application.updateSettings(desktop.revision, { keepAwakeWhileWorking: false });
+  const saved = await service.updateSettings(phone.revision, { confirmedForeground: true, defaultNotify: false });
+  assert.equal(saved.defaultNotify, false);
+  assert.equal((await application.settings()).value.keepAwakeWhileWorking, false, "the desktop's choice is kept");
+  // A change the phone can see still conflicts.
+  await assert.rejects(service.updateSettings(phone.revision, { confirmedForeground: true, defaultNotify: true }), /changed/u);
+  // And the desktop's revision still covers its own switches.
+  const before = await application.settings();
+  await service.updateSettings(saved.revision, { confirmedForeground: true, defaultNotify: true });
+  await assert.rejects(application.updateSettings(before.revision, { keepAwakeWhileWorking: true }), /changed/u);
 });

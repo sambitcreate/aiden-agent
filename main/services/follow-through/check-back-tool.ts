@@ -1,7 +1,8 @@
 // The `check_back` tool: a workspace chat's agent promises to look again later
 // and Aiden keeps the promise, posting a "Checking back" notice into this chat
 // at that minute. Setting one needs a turn the person started (desktop or
-// phone): woken, windowless and goal-round turns refuse `set` before it runs
+// phone, or the owed turn answering the person's queued message): woken
+// turns, other windowless turns and goal rounds refuse `set` before it runs
 // (`chatTurnArgsToolRefusal`), so check-backs can't chain. `list` and
 // `cancel` always work.
 
