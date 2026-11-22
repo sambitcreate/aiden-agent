@@ -230,9 +230,9 @@ export interface AidenRemoteRouterDependencies {
    * (413) so the call does not keep its place in the link's capacity.
    */
   taskTriggerWebhook?: {
-    admit(request: { token: string; contentType?: string }): Promise<{ status: number } | { accept: true; signatureHeader?: string }>;
-    tooLarge(request: { token: string }): Promise<{ status: number }>;
-    deliver(request: { token: string; contentType?: string; signature?: string; body: Uint8Array }): Promise<{ status: number }>;
+    admit(request: { token: string; contentType?: string }): Promise<{ status: number } | { accept: true; admission?: string; signatureHeader?: string }>;
+    tooLarge(request: { token: string; admission?: string }): Promise<{ status: number }>;
+    deliver(request: { token: string; admission?: string; contentType?: string; signature?: string; body: Uint8Array }): Promise<{ status: number }>;
   };
   instanceId: string;
   displayName(): string;
@@ -2585,9 +2585,10 @@ export function createAidenRemoteRequestHandler(
         const body = await readRawBody(request, TASK_TRIGGER_WEBHOOK_MAX_BYTES);
         const signatureValue = admitted.signatureHeader ? request.headers[admitted.signatureHeader] : undefined;
         const answer = body === undefined
-          ? await dependencies.taskTriggerWebhook.tooLarge({ token })
+          ? await dependencies.taskTriggerWebhook.tooLarge({ token, ...(admitted.admission ? { admission: admitted.admission } : {}) })
           : await dependencies.taskTriggerWebhook.deliver({
             token,
+            ...(admitted.admission ? { admission: admitted.admission } : {}),
             ...(contentType ? { contentType } : {}),
             ...(typeof signatureValue === "string" ? { signature: signatureValue } : {}),
             body,

@@ -7214,6 +7214,59 @@ test("a flood of wrong-type and oversized calls to a chat task's link never bloc
   }
 });
 
+test("a refused link call gives back only its own place, so valid calls never pass 60 in any rolling minute", async () => {
+  const token = "R".repeat(43);
+  let clock = 1_800_000_000_000;
+  const routine = {
+    id: "task-1", enabled: true,
+    task: { trigger: { kind: "webhook", gapMinutes: 1 } },
+  } as unknown as import("./scheduled-task-triggers-store.js").TaskTriggerRoutine;
+  const core = createTaskLinkWebhook({
+    active: () => true,
+    tokenTask: async (candidate) => (candidate === token ? routine.id : undefined),
+    findByToken: async (candidate) => (candidate === token ? routine : undefined),
+    secret: async () => null,
+    emit: async () => "queued",
+    log: async () => undefined,
+    now: () => clock,
+  });
+  // When each valid call was accepted, counted here rather than read from the limiter.
+  const accepted: number[] = [];
+  const valid = async (n: number) => {
+    const admitted = await core.admit({ token, contentType: "application/json" });
+    if ("status" in admitted) return admitted.status;
+    const answer = await core.deliver({ token, admission: admitted.admission, contentType: "application/json", body: new TextEncoder().encode(JSON.stringify({ n })) });
+    if (answer.status === 202) accepted.push(clock);
+    return answer.status;
+  };
+  const admitOversized = async () => {
+    const admitted = await core.admit({ token, contentType: "application/json" });
+    assert.ok(!("status" in admitted), "an oversized call is admitted before its body is read");
+    return admitted.admission;
+  };
+  const busiestMinute = () => Math.max(0, ...accepted.map((start) => accepted.filter((at) => at >= start && at < start + 60_000).length));
+
+  // Inside one minute: 30 oversized calls are admitted, then 30 valid ones; the
+  // oversized ones finish last and give back exactly their own 30 places.
+  const early = await Promise.all(Array.from({ length: 30 }, admitOversized));
+  clock += 10_000;
+  for (let n = 0; n < 30; n += 1) assert.equal(await valid(n), 202);
+  for (const admission of early) assert.equal((await core.tooLarge({ token, admission })).status, 413);
+  for (let n = 30; n < 60; n += 1) assert.equal(await valid(n), 202);
+  assert.equal(await valid(60), 429, "the 61st valid call in the minute waits");
+
+  // Across a minute boundary: 60 oversized calls held until they age out, a
+  // new minute of valid calls, then the old bodies finish. Their refunds find
+  // nothing of theirs left and free none of the new calls' places.
+  clock += 61_000;
+  const held = await Promise.all(Array.from({ length: 60 }, admitOversized));
+  clock += 60_001;
+  for (let n = 0; n < 60; n += 1) assert.equal(await valid(100 + n), 202);
+  for (const admission of held) assert.equal((await core.tooLarge({ token, admission })).status, 413);
+  assert.equal(await valid(200), 429, "the late refunds did not open more room");
+  assert.ok(busiestMinute() <= 60, `at most 60 valid calls in any rolling minute (saw ${busiestMinute()})`);
+});
+
 test("context pressure is a desktop chat read gated by its feature, chat:read and the Bot-chat rule", async () => {
   const answer = {
     chatId: "chat-1",

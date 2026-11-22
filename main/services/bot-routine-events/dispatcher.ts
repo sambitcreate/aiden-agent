@@ -364,7 +364,8 @@ export function createEventRoutineDispatcher<R extends EventRoutine>(dependencie
      * run's place in the day's count, since nothing was delivered;
      * `notBefore` keeps it (and anything else) waiting until then, by moving
      * the gap's start. Past `maxRetries` the payload is dropped instead, with
-     * `heldDropped`.
+     * `heldDropped`. It happens once per event: when `settles` is no longer
+     * running, or the held event already is this one, nothing changes.
      */
     requeue(ownerKey: string, routineId: string, event: BotRoutineEvent, combine: (older: string, newer: string | undefined) => string,
       options: { settles?: string; refund?: boolean; notBefore?: number; maxRetries?: number } = {}): Promise<void> {
@@ -374,6 +375,11 @@ export function createEventRoutineDispatcher<R extends EventRoutine>(dependencie
         const retries = (event.retries ?? 0) + 1;
         let dropped: { routine: R; held: BotEventReceipt } | undefined;
         const at = await dependencies.store.mutate<number | undefined>(ownerKey, routineId, (routine) => {
+          // Once per event: a write that was rejected after it landed already
+          // settled the receipt (or holds this event), so a second call
+          // changes nothing rather than combining the payload twice.
+          if (routine.held?.eventId === event.eventId) return { result: undefined };
+          if (options.settles !== undefined && !(routine.running ?? []).some((entry) => entry.eventId === options.settles)) return { result: undefined };
           const running = (routine.running ?? []).filter((entry) => entry.eventId !== options.settles);
           const { running: _previous, ...rest } = routine;
           const settled = (running.length ? { ...rest, running } : rest) as R;

@@ -303,7 +303,7 @@ function linkHarness(trigger: Record<string, unknown> = { kind: "webhook", gapMi
       const admitted = await value.triggers.webhook.admit({ token, contentType });
       if ("status" in admitted) return admitted.status;
       const text = typeof body === "string" ? body : JSON.stringify(body);
-      const answer = await value.triggers.webhook.deliver({ token, contentType, body: new TextEncoder().encode(text) });
+      const answer = await value.triggers.webhook.deliver({ token, admission: admitted.admission, contentType, body: new TextEncoder().encode(text) });
       await value.triggers.idle();
       return answer.status;
     },
@@ -692,7 +692,7 @@ test("a properly signed sender keeps getting through while bad signatures flood 
   const send = async (body: string, signature: string) => {
     const admitted = await value.triggers.webhook.admit({ token, contentType: "application/json" });
     if ("status" in admitted) return admitted.status;
-    return (await value.triggers.webhook.deliver({ token, contentType: "application/json", signature, body: new TextEncoder().encode(body) })).status;
+    return (await value.triggers.webhook.deliver({ token, admission: admitted.admission, contentType: "application/json", signature, body: new TextEncoder().encode(body) })).status;
   };
   let writes = 0;
   const update = value.persistence.update.bind(value.persistence);
@@ -871,6 +871,44 @@ test("a run that keeps failing before it is recorded backs off and is dropped wi
   assert.match(link.notices[0]!.text, /tried 7 times/u);
   assert.equal((await link.store.linkState("task-1"))?.log[0]?.outcome, "dropped");
   link.triggers.stop();
+});
+
+test("a hold-again write that lands and then reports failure leaves exactly one copy of the call", async () => {
+  for (const first of [
+    { result: "skipped" as const, reason: "chat_busy" as const },
+    { throws: new Error("EIO: the task store could not be read") },
+  ]) {
+    const link = linkHarness({ kind: "webhook", gapMinutes: 10 }, [first]);
+    await link.setUp();
+    type Book = { held?: { payload: string }; running?: unknown[] };
+    const book = () => (link.persistence.snapshot() as { tasks: Record<string, Book> }).tasks["task-1"];
+    // The store publishes the write that holds the call, then rejects it (a failed directory sync).
+    let rejected = 0;
+    const update = link.persistence.update.bind(link.persistence);
+    link.persistence.update = async (mutation) => {
+      const hadHeld = book()?.held !== undefined;
+      const result = await update(mutation);
+      if (!hadHeld && book()?.held !== undefined && rejected === 0) {
+        rejected += 1;
+        throw new Error("EIO: the folder could not be synced");
+      }
+      return result;
+    };
+    assert.equal(await link.call({ n: 0 }), 202);
+    assert.equal(rejected, 1, "the hold-again write landed and was reported failed");
+    const label = "throws" in first ? "a failed run" : "a busy run";
+    assert.equal((book()?.held?.payload.match(/"n": 0/gu) ?? []).length, 1, `${label}: the call is held once`);
+    assert.deepEqual(book()?.running ?? [], [], `${label}: and its receipt is not left to replay beside it`);
+
+    // A restart and the held run deliver it once.
+    link.triggers.stop();
+    await link.triggers.start();
+    await link.triggers.idle();
+    await runHeld(link, 60 * MINUTE, 2);
+    assert.equal(link.events.length, 2, `${label}: one more run, not two`);
+    assert.equal((link.events[1]!.event.payload.match(/"n": 0/gu) ?? []).length, 1, `${label}: carrying the call once`);
+    link.triggers.stop();
+  }
 });
 
 test("a held change of emoji up to the event bound survives a reload", async () => {

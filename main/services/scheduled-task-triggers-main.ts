@@ -130,13 +130,13 @@ export async function admitTaskTriggerWebhook(request: { token: string; contentT
 }
 
 /** `POST /hooks/tasks/<token>`, with the body (at most 256 KB) and the signature header. */
-export async function deliverTaskTriggerWebhook(request: { token: string; contentType?: string; signature?: string; body: Uint8Array }) {
+export async function deliverTaskTriggerWebhook(request: { token: string; admission?: string; contentType?: string; signature?: string; body: Uint8Array }) {
   if (!started) return { status: 404 as const };
   return triggers.webhook.deliver(request);
 }
 
 /** `POST /hooks/tasks/<token>` with a body over 256 KB: 413, and the call's capacity given back. */
-export async function taskTriggerWebhookTooLarge(request: { token: string }) {
+export async function taskTriggerWebhookTooLarge(request: { token: string; admission?: string }) {
   if (!started) return { status: 404 as const };
   return triggers.webhook.tooLarge(request);
 }

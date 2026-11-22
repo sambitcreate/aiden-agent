@@ -143,6 +143,27 @@ export function createScheduledTaskTriggers(deps: ScheduledTaskTriggersDependenc
   const slots = createSlots(SCHEDULED_TASK_TRIGGER_LIMITS.runningOverall);
   let stopped = true;
 
+  /**
+   * Holds an event's payload again in the write that settles its receipt. A
+   * rejected write may still have landed, so it is never repeated here: the
+   * receipt (or the held copy, if the write landed) is what the next start
+   * replays, and `requeue` itself does nothing for a receipt already settled.
+   */
+  async function holdAgain(routine: TaskTriggerRoutine, held: { eventId: string; payload: string; watchRevision?: number; retries?: number }, settles: string, link: boolean, notBefore: number | undefined): Promise<{ settled: boolean }> {
+    try {
+      await dispatcher.requeue(routine.id, routine.id, held, (older, newer) => combineHeld(link, older, newer), {
+        settles,
+        refund: true,
+        maxRetries: TASK_TRIGGER_RETRIES,
+        ...(notBefore !== undefined ? { notBefore } : {}),
+      });
+    } catch (error) {
+      deps.onError?.(error);
+      return { settled: false };
+    }
+    return { settled: !stopped };
+  }
+
   async function runOnce(routine: TaskTriggerRoutine, event: { eventId: string; payload: string; watchRevision?: number; retries?: number }): Promise<{ settled: boolean }> {
     const release = await slots.take();
     try {
@@ -152,32 +173,15 @@ export function createScheduledTaskTriggers(deps: ScheduledTaskTriggersDependenc
       // A run that delivered nothing (Aiden may have stopped before its
       // payload was held again) runs again, like one that was cut short.
       if (recorded && recorded.result !== "blocked" && !undelivered(recorded)) return { settled: true };
+      const link = routine.task.trigger.kind === "webhook";
+      let run: ScheduledRun;
       try {
-        const link = routine.task.trigger.kind === "webhook";
-        const run = await deps.runEvent(routine.id, {
+        run = await deps.runEvent(routine.id, {
           kind: "event",
           eventId: event.eventId,
           source: link ? "webhook" : "watch",
           payload: link ? linkEventText(event.payload, TASK_TRIGGER_PAYLOAD_CHARS) : event.payload,
         }, runId);
-        // Its chat was busy or out of task runs this hour: what happened waits
-        // for the next allowed run instead of being lost, and the run doesn't
-        // count toward the day's 48. A chat out of runs has room within the hour.
-        if (!stopped && undelivered(run)) {
-          await dispatcher.requeue(routine.id, routine.id, {
-            eventId: `${event.eventId.slice(0, 120)}~${deps.now().toString(36)}`,
-            payload: event.payload,
-            ...(event.watchRevision !== undefined ? { watchRevision: event.watchRevision } : {}),
-            ...(event.retries ? { retries: event.retries } : {}),
-          }, (older, newer) => combineHeld(link, older, newer), {
-            settles: event.eventId,
-            refund: true,
-            maxRetries: TASK_TRIGGER_RETRIES,
-            ...(run.reason === "chat_budget" ? { notBefore: deps.now() + CHAT_BUDGET_RETRY_MS } : {}),
-          });
-        }
-        // A run cut short by Aiden stopping runs again at the next start.
-        return { settled: !stopped };
       } catch (error) {
         if (stopped) return { settled: false };
         deps.onError?.(error);
@@ -186,27 +190,27 @@ export function createScheduledTaskTriggers(deps: ScheduledTaskTriggersDependenc
         // Anything else may pass: hold the event again under its own id, so a
         // replay reads a run it may have recorded instead of running twice,
         // and try again later, at most TASK_TRIGGER_RETRIES times.
-        const link = routine.task.trigger.kind === "webhook";
         const retries = event.retries ?? 0;
-        try {
-          await dispatcher.requeue(routine.id, routine.id, {
-            eventId: event.eventId,
-            payload: event.payload,
-            ...(event.watchRevision !== undefined ? { watchRevision: event.watchRevision } : {}),
-            ...(retries ? { retries } : {}),
-          }, (older, newer) => combineHeld(link, older, newer), {
-            settles: event.eventId,
-            refund: true,
-            maxRetries: TASK_TRIGGER_RETRIES,
-            notBefore: deps.now() + Math.min(TASK_TRIGGER_FAILURE_RETRY_MAX_MS, TASK_TRIGGER_FAILURE_RETRY_MS * 2 ** retries),
-          });
-        } catch (requeueError) {
-          // The receipt is still there: the next start replays it.
-          deps.onError?.(requeueError);
-          return { settled: false };
-        }
-        return { settled: !stopped };
+        return holdAgain(routine, {
+          eventId: event.eventId,
+          payload: event.payload,
+          ...(event.watchRevision !== undefined ? { watchRevision: event.watchRevision } : {}),
+          ...(retries ? { retries } : {}),
+        }, event.eventId, link, deps.now() + Math.min(TASK_TRIGGER_FAILURE_RETRY_MAX_MS, TASK_TRIGGER_FAILURE_RETRY_MS * 2 ** retries));
       }
+      // Its chat was busy or out of task runs this hour: what happened waits
+      // for the next allowed run instead of being lost, and the run doesn't
+      // count toward the day's 48. A chat out of runs has room within the hour.
+      if (!stopped && undelivered(run)) {
+        return holdAgain(routine, {
+          eventId: `${event.eventId.slice(0, 120)}~${deps.now().toString(36)}`,
+          payload: event.payload,
+          ...(event.watchRevision !== undefined ? { watchRevision: event.watchRevision } : {}),
+          ...(event.retries ? { retries: event.retries } : {}),
+        }, event.eventId, link, run.reason === "chat_budget" ? deps.now() + CHAT_BUDGET_RETRY_MS : undefined);
+      }
+      // A run cut short by Aiden stopping runs again at the next start.
+      return { settled: !stopped };
     } finally {
       release();
     }

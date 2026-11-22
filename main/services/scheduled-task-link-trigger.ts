@@ -185,17 +185,22 @@ export const UNKNOWN_LINK_CALLS_PER_MINUTE = 120;
  */
 export const REFUSED_LINK_CALLS_PER_MINUTE = 30;
 
+/** One call's place in a link's 60 a minute. */
+interface Admission { at: number; id: string }
+
 type LinkRoutine = TaskTriggerRoutine & { task: { trigger: ScheduledTaskLinkTrigger } };
 
 export function createTaskLinkWebhook(deps: TaskLinkWebhookDependencies) {
-  /** Recent call times per task, for 60 a minute. */
-  const recent = new Map<string, number[]>();
+  /** Recent admissions per task, for 60 a minute; each has its own id, so a refusal gives back only its own. */
+  const recent = new Map<string, Admission[]>();
+  let admissions = 0;
   /** Recent logged refusals per task, kept apart so they can't use up real calls. */
   const refused = new Map<string, number[]>();
   /** Recent calls with an unknown token, across every link. */
   let unknown: number[] = [];
 
   const within = (times: number[] | undefined, now: number) => (times ?? []).filter((at) => at > now - 60_000);
+  const admittedWithin = (calls: Admission[] | undefined, now: number) => (calls ?? []).filter((call) => call.at > now - 60_000);
 
   /** The task behind a link, read-only, if it is on and still a link task. */
   async function open(token: string): Promise<LinkRoutine | undefined> {
@@ -209,11 +214,12 @@ export function createTaskLinkWebhook(deps: TaskLinkWebhookDependencies) {
    * logged: only the first 30 refusals a minute are, so a flood of bad calls
    * neither blocks the real sender nor keeps writing the log.
    */
-  function refuse(taskId: string, admittedAt: number | undefined): boolean {
+  function refuse(taskId: string, admission: string | undefined): boolean {
     const now = deps.now();
-    if (admittedAt !== undefined) {
+    if (admission !== undefined) {
+      // Only this call's own reservation; one that already aged out leaves nothing to give back.
       const calls = recent.get(taskId) ?? [];
-      const index = calls.lastIndexOf(admittedAt);
+      const index = calls.findIndex((call) => call.id === admission);
       if (index >= 0) calls.splice(index, 1);
     }
     const lately = within(refused.get(taskId), now);
@@ -231,15 +237,9 @@ export function createTaskLinkWebhook(deps: TaskLinkWebhookDependencies) {
     return type === "application/json" || type === "text/plain";
   };
 
-  /** The admission the router's call reserved, the newest one for the link. */
-  function admissionOf(taskId: string): number | undefined {
-    const admitted = recent.get(taskId);
-    return admitted?.length ? admitted[admitted.length - 1] : undefined;
-  }
-
   return {
     /** Before the body is read: 404, 429 or 415, or the header the signature comes in. */
-    async admit(request: { token: string; contentType?: string }): Promise<{ status: 404 | 415 | 429 } | { accept: true; signatureHeader?: string }> {
+    async admit(request: { token: string; contentType?: string }): Promise<{ status: 404 | 415 | 429 } | { accept: true; admission: string; signatureHeader?: string }> {
       if (!deps.active()) return { status: 404 };
       const now = deps.now();
       // The in-memory index first: only a miss counts as an unknown token, so
@@ -257,40 +257,42 @@ export function createTaskLinkWebhook(deps: TaskLinkWebhookDependencies) {
       if (!typeAccepted && within(refused.get(taskId), now).length >= REFUSED_LINK_CALLS_PER_MINUTE) return { status: 415 };
       // A known token, even one whose task is off, uses its link's 60 a minute
       // before anything else is read.
-      const calls = within(recent.get(taskId), now);
+      const calls = admittedWithin(recent.get(taskId), now);
       if (calls.length >= SCHEDULED_TASK_LINK_LIMITS.callsPerMinute) {
         recent.set(taskId, calls);
         return { status: 429 };
       }
-      calls.push(now);
+      const admission = `a${(admissions += 1).toString(36)}`;
+      calls.push({ at: now, id: admission });
       recent.set(taskId, calls);
       const routine = await open(request.token);
       if (!routine) return { status: 404 };
       if (!typeAccepted) {
-        refuse(taskId, now);
+        refuse(taskId, admission);
         return { status: 415 };
       }
       const header = routine.task.trigger.signatureHeader;
-      return { accept: true, ...(header ? { signatureHeader: header } : {}) };
+      return { accept: true, admission, ...(header ? { signatureHeader: header } : {}) };
     },
 
     /**
      * The router stopped reading a body over 256 KB: answer 413 and give the
      * call's place in the 60 a minute back, as any refusal does.
      */
-    async tooLarge(request: { token: string }): Promise<{ status: 404 | 413 }> {
+    async tooLarge(request: { token: string; admission?: string }): Promise<{ status: 404 | 413 }> {
       if (!deps.active()) return { status: 404 };
       const taskId = await deps.tokenTask(request.token);
-      if (taskId !== undefined) refuse(taskId, admissionOf(taskId));
+      if (taskId !== undefined) refuse(taskId, request.admission);
       return { status: 413 };
     },
 
     /** The call itself: signature, filters, repeats, then the event core. */
-    async deliver(request: { token: string; contentType?: string; signature?: string; body: Uint8Array }): Promise<{ status: 202 | 400 | 401 | 404 | 413 | 415 }> {
+    async deliver(request: { token: string; admission?: string; contentType?: string; signature?: string; body: Uint8Array }): Promise<{ status: 202 | 400 | 401 | 404 | 413 | 415 }> {
       if (!deps.active()) return { status: 404 };
       const routine = await open(request.token);
       if (!routine) return { status: 404 };
-      const admittedAt = admissionOf(routine.id);
+      // The reservation `admit` made for this call, if it came through `admit`.
+      const admittedAt = request.admission;
       if (request.body.byteLength > SCHEDULED_TASK_LINK_LIMITS.bodyBytes || !acceptedType(request.contentType)) {
         refuse(routine.id, admittedAt);
         return { status: request.body.byteLength > SCHEDULED_TASK_LINK_LIMITS.bodyBytes ? 413 : 415 };
