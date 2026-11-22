@@ -862,6 +862,8 @@ export interface AppSettings extends AidenLiveSettingsFields {
   spendingLimits?: import("../../renderer/shared/spending.js").SpendingLimitsSettings;
   lastProviderId?: string;
   lastModel?: string;
+  /** Most recently selected real project workspace ID in the main window (shared with Quick Chat). */
+  lastWorkspaceId?: string;
   /** Presentation-only chat models hidden from Mac and paired mobile selection UI. */
   hiddenModelsByProvider?: HiddenModelsByProvider;
   /** Presentation-only Model Pad positions keyed `provider::model` (at most 2,000). */

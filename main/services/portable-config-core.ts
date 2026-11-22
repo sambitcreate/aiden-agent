@@ -625,6 +625,7 @@ function normalizeSettingsShape(value: unknown): SettingsShape {
   for (const key of [
     "lastProviderId",
     "lastModel",
+    "lastWorkspaceId",
     "voiceModel",
     "localVoiceModel",
     "voiceLanguage",

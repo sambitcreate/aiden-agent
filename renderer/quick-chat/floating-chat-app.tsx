@@ -34,7 +34,6 @@ import {
 import { queryKeys } from "../lib/queries";
 import { newChatUuid } from "../shared/chat-identity";
 import { isNoWorkspace, noWorkspaceHome, workspaceChoices } from "../lib/no-workspace";
-import { readLastWorkspaceId } from "../lib/workspace-context";
 import { resolveVisibleModelSelection } from "../lib/use-model-selection";
 import { isEscapeKey } from "../lib/dismiss-key";
 import { hasOpenLayer } from "../lib/layer-stack";
@@ -108,7 +107,7 @@ export function FloatingChatApp() {
       resolveDefaultTargetMode(
         settings.quickChatDefaultPersistence,
         workspaces,
-        readLastWorkspaceId(),
+        settings.lastWorkspaceId,
       ),
     );
   }, [settings, workspaces]);

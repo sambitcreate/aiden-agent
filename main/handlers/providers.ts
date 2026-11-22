@@ -389,6 +389,13 @@ export function registerProviderHandlers(): void {
     }
     if (typeof p.lastProviderId === "string") next.lastProviderId = p.lastProviderId;
     if (typeof p.lastModel === "string") next.lastModel = p.lastModel;
+    if (
+      typeof p.lastWorkspaceId === "string" &&
+      p.lastWorkspaceId.length <= 256 &&
+      !p.lastWorkspaceId.includes("\0")
+    ) {
+      next.lastWorkspaceId = p.lastWorkspaceId;
+    }
     if (typeof p.exaEnabled === "boolean") next.exaEnabled = p.exaEnabled;
     Object.assign(next, parseVoiceProviderPatch(p));
     if (typeof p.voiceModel === "string") next.voiceModel = p.voiceModel;

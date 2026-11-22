@@ -449,20 +449,23 @@ test("State 1 draft Expand preserves ephemeral flag and Stop restores queued att
   }
 });
 
-test("lastWorkspace default persistence selects persisted localStorage workspace ID", async () => {
+test("lastWorkspace default persistence reads shared main-process lastWorkspaceId even when Quick Chat localStorage is isolated", async () => {
   const prevStorage = globalThis.localStorage;
-  const store = new Map<string, string>([["aiden-agent.workspaceId", "ws-second"]]);
+  // Model packaged file:// isolation: Quick Chat's own document localStorage points elsewhere/empty.
+  const isolatedQuickChatStorage = new Map<string, string>([
+    ["aiden-agent.workspaceId", "ws-project"],
+  ]);
   Object.defineProperty(globalThis, "localStorage", {
     configurable: true,
     value: {
-      getItem: (key: string) => store.get(key) ?? null,
+      getItem: (key: string) => isolatedQuickChatStorage.get(key) ?? null,
       setItem: (key: string, value: string) => {
-        store.set(key, value);
+        isolatedQuickChatStorage.set(key, value);
       },
       removeItem: (key: string) => {
-        store.delete(key);
+        isolatedQuickChatStorage.delete(key);
       },
-      clear: () => store.clear(),
+      clear: () => isolatedQuickChatStorage.clear(),
     },
   });
   const { qc } = mountFloatingApp({
@@ -470,6 +473,7 @@ test("lastWorkspace default persistence selects persisted localStorage workspace
       lastProviderId: "lmstudio",
       lastModel: "local-model",
       quickChatDefaultPersistence: "lastWorkspace",
+      lastWorkspaceId: "ws-second",
     }),
     "workspaces:list": () => [
       ...WORKSPACES,

@@ -2511,8 +2511,9 @@ async function prepareGeneration(
                       newId: randomUUID,
                     });
                     if (frameIds === null) return null;
-                    if (frameIds.length > 0 && !browserOwner.isDestroyed()) {
-                      browserOwner.send("designCanvas:focus", { chatId: params.chatId, frameIds });
+                    const liveOwner = getOwner();
+                    if (frameIds.length > 0 && !liveOwner.isDestroyed()) {
+                      liveOwner.send("designCanvas:focus", { chatId: params.chatId, frameIds });
                     }
                     return { frameIds };
                   },

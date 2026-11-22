@@ -58,7 +58,10 @@ const owners = new Map<string, number>();
  * page). Returning to that address with Back reopens a blank new agent there
  * instead of a chat that "is no longer available".
  */
-const closedEmptyDrafts = new Map<string, { workspaceId: string; gitMode: ChatDraftGitMode }>();
+const closedEmptyDrafts = new Map<
+  string,
+  { workspaceId: string; gitMode: ChatDraftGitMode; ephemeral?: true }
+>();
 const CLOSED_EMPTY_DRAFT_LIMIT = 32;
 const listeners = new Set<() => void>();
 let snapshot: readonly ChatDraft[] | null = null;
@@ -130,7 +133,10 @@ export function reopenClosedChatDraft(id: string): ChatDraft | undefined {
   if (drafts.has(id)) return undefined;
   const closed = closedEmptyDrafts.get(id);
   if (!closed) return undefined;
-  return createChatDraft(closed.workspaceId, id, undefined, { gitMode: closed.gitMode });
+  return createChatDraft(closed.workspaceId, id, undefined, {
+    gitMode: closed.gitMode,
+    ...(closed.ephemeral ? { ephemeral: true } : {}),
+  });
 }
 
 export function updateChatDraft(id: string, update: Pick<Partial<Chat>, "workspaceId" | "title">): void {
@@ -302,7 +308,11 @@ export function discardChatDraft(id: string): void {
 
 function rememberClosedEmptyDraft(draft: ChatDraft, workspaceId: string): void {
   closedEmptyDrafts.delete(draft.chat.id);
-  closedEmptyDrafts.set(draft.chat.id, { workspaceId, gitMode: draft.gitMode });
+  closedEmptyDrafts.set(draft.chat.id, {
+    workspaceId,
+    gitMode: draft.gitMode,
+    ...(draft.chat.ephemeral ? { ephemeral: true as const } : {}),
+  });
   if (closedEmptyDrafts.size > CLOSED_EMPTY_DRAFT_LIMIT) {
     closedEmptyDrafts.delete(closedEmptyDrafts.keys().next().value!);
   }

@@ -976,6 +976,8 @@ export interface AppSettings extends AidenLiveSettingsFields {
   spendingLimits?: import("../shared/spending").SpendingLimitsSettings;
   lastProviderId?: string;
   lastModel?: string;
+  /** Most recently selected real project workspace ID in the main window (shared with Quick Chat). */
+  lastWorkspaceId?: string;
   hiddenModelsByProvider?: HiddenModelsByProvider;
   /** Presentation-only Model Pad positions keyed `provider::model` (at most 2,000). */
   modelPadPlacements?: ModelPadPlacements;

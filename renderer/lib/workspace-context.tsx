@@ -5,21 +5,13 @@
 import * as React from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { getChatDraft, listChatDrafts, updateChatDraft } from "./chat-draft";
-import { workspacesApi } from "./ipc";
+import { settingsApi, workspacesApi } from "./ipc";
 import { isNoWorkspace, noWorkspaceHome } from "./no-workspace";
 import { rehomeStrandedNoWorkspaceDrafts, releasedNoWorkspaceIds } from "./no-workspace-send";
 import { queryKeys, useWorkspaces } from "./queries";
 import type { Workspace } from "./types";
 
 const STORAGE_KEY = "aiden-agent.workspaceId";
-
-export function readLastWorkspaceId(): string | undefined {
-  try {
-    return typeof localStorage !== "undefined" ? localStorage.getItem(STORAGE_KEY) ?? undefined : undefined;
-  } catch {
-    return undefined;
-  }
-}
 
 interface WorkspaceContextValue {
   workspaces: Workspace[];
@@ -89,6 +81,16 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
   }, [list, activeId, qc, select]);
 
   const active = list.find((w) => w.id === activeId) ?? list[0];
+  // Mirror the active project workspace into main-process settings so auxiliary
+  // windows (like packaged file:// Quick Chat) read the same lastWorkspaceId.
+  const lastPersistedWorkspaceIdRef = React.useRef<string | undefined>(undefined);
+  React.useEffect(() => {
+    if (!active || isNoWorkspace(active) || lastPersistedWorkspaceIdRef.current === active.id) {
+      return;
+    }
+    lastPersistedWorkspaceIdRef.current = active.id;
+    void Promise.resolve(settingsApi.set({ lastWorkspaceId: active.id })).catch(() => undefined);
+  }, [active]);
   const isLoading = workspaces.isLoading;
   const isReady = workspaces.isSuccess;
   const value = React.useMemo<WorkspaceContextValue>(
