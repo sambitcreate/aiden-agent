@@ -1,3 +1,5 @@
+import type { GrabbedElementAccent, GrabbedElementCapture } from "./browser-element-grab";
+
 /** The desktop browser is shared by the visible Environment surface and agent tools. */
 export type BrowserAppearance = "system" | "light" | "dark";
 export type BrowserLinkOpening = "ask" | "browser" | "external";
@@ -71,6 +73,7 @@ export interface BrowserTab {
   appearance: BrowserAppearance;
   zoom: number;
   recording: boolean;
+  grabbing?: boolean;
   agentControlling: boolean;
   floating: boolean;
   pictureInPicture?: boolean;
@@ -300,6 +303,7 @@ export type BrowserCommand =
       timeoutMs?: number;
     }
   | { action: "annotate"; tabId: string; enabled: boolean }
+  | { action: "grab"; tabId: string; enabled: boolean; accent?: GrabbedElementAccent }
   | { action: "annotation_preview"; tabId: string; changes: BrowserStylePreview[] }
   | { action: "annotation_reset"; tabId: string }
   | {
@@ -321,6 +325,14 @@ export interface BrowserCommandResult {
   importResult?: BrowserImportResult;
   value?: unknown;
 }
+export type BrowserGrabEndReason =
+  | "picked"
+  | "escape"
+  | "cancelled"
+  | "navigation"
+  | "crash"
+  | "closed";
+
 export type BrowserEvent =
   | { type: "state"; state: BrowserState }
   | { type: "show"; workspaceId: string; tabId: string }
@@ -328,9 +340,11 @@ export type BrowserEvent =
       type: "shortcut";
       workspaceId: string;
       tabId: string;
-      shortcut: "annotate" | "focus_address" | "reload" | "hard_reload";
+      shortcut: "annotate" | "grab" | "focus_address" | "reload" | "hard_reload";
     }
   | { type: "annotation"; workspaceId: string; tabId: string; annotation: BrowserAnnotation }
+  | { type: "grab"; workspaceId: string; tabId: string; capture: GrabbedElementCapture }
+  | { type: "grab-ended"; workspaceId: string; tabId: string; reason: BrowserGrabEndReason }
   | { type: "link-preference"; linkOpening: BrowserLinkOpening };
 
 export const DEFAULT_BROWSER_SETTINGS: BrowserDefaults = {
