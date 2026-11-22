@@ -9,7 +9,7 @@ Branch `feature/bot-message-latency-ef3d2d`. Plan record: `docs/plans/instant-ui
 
 ## Fix
 - `BotCapabilityCatalogMainService` takes `hooks.runtimeReuse: { revision(), ttlMs, now? }`. Production (`bot-capability-services-main.ts`) passes `botRuntimeInventoryLeases.revision()` and `BOT_RUNTIME_SNAPSHOT_REUSE_MS = 3_000`.
-- Entries are keyed by botId, retainedBindings and retainedProviders. They are single-flight, `structuredClone`d per caller, never cached on failure, and capped at 32 entries (LRU). The caller's abort only detaches that caller (`abortable`).
+- Entries are keyed by botId, retainedBindings and each retained provider's `{sourceProviderId, sourceModelId}` only. The CLI tool build passes full `BotRuntimeProviderAuthority` objects, and admission passes the bare pair; both must hit one entry (PR #877 review). Expiry uses `performance.now()` (monotonic), not `Date.now()`. They are single-flight, `structuredClone`d per caller, never cached on failure, and capped at 32 entries (LRU). The caller's abort only detaches that caller (`abortable`).
 - Hooked changes (`invalidateBotRuntimeInventoryAuthority`) move the revision, so they are read at once. Unhooked drift is read within 3 s.
 - `aiden serve` gets the same reuse in `packages/cli/src/bots.ts` (its watcher on auth/models/MCP/web-search files and approved roots moves `inventoryLeases`).
 - Tests: three cases at the end of `main/services/bot-capability-bindings.test.ts` (`countingPorts`).

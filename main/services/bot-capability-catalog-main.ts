@@ -100,6 +100,7 @@ export interface BotRuntimeSnapshotReuse {
   /** The inventory revision a snapshot is read at (`botRuntimeInventoryLeases.revision()`). */
   revision(): number;
   ttlMs: number;
+  /** Milliseconds on a monotonic clock; defaults to `performance.now()` so a wall-clock change never stretches the TTL. */
   now?(): number;
 }
 
@@ -309,6 +310,10 @@ export class BotCapabilityCatalogMainService {
     } = {},
   ): Promise<BotCapabilityCatalogSnapshot> {
     const reuse = this.hooks.runtimeReuse;
+    // A snapshot reads only each retained provider's identity. Callers pass
+    // richer authority objects (with fingerprints) or the bare pair; both
+    // must read, and share, the same inspection.
+    const retainedProviders = input.retainedProviders?.map(({ sourceProviderId, sourceModelId }) => ({ sourceProviderId, sourceModelId }));
     const build = async (signal: AbortSignal | undefined) => {
       const snapshot = await this.buildSnapshot({
         notice: {
@@ -316,7 +321,7 @@ export class BotCapabilityCatalogMainService {
           requiresAcknowledgement: true,
         },
         retainedBindings: input.retainedBindings,
-        retainedProviders: input.retainedProviders,
+        retainedProviders,
         signal,
         botId: input.botId,
       });
@@ -328,9 +333,9 @@ export class BotCapabilityCatalogMainService {
     // One turn admits and re-checks its authority many times before a single
     // model request. While nothing changed, those reads share one inspection
     // instead of each reading every provider, connection and skill again.
-    const key = JSON.stringify([input.botId ?? null, input.retainedBindings ?? [], input.retainedProviders ?? []]);
+    const key = JSON.stringify([input.botId ?? null, input.retainedBindings ?? [], retainedProviders ?? []]);
     const revision = reuse.revision();
-    const now = reuse.now?.() ?? Date.now();
+    const now = reuse.now?.() ?? performance.now();
     let entry = this.runtimeSnapshots.get(key);
     if (entry === undefined || entry.revision !== revision || entry.expiresAt <= now) {
       // Shared by every caller, so no one caller's cancellation stops it.

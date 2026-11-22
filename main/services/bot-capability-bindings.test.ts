@@ -30,6 +30,7 @@ import {
   BotCapabilityCatalogMainService,
   type BotCapabilityInventoryPorts,
 } from "./bot-capability-catalog-main.js";
+import type { BotRetainedProvider } from "./bot-capability-retained-provider.js";
 import { COMPOSIO_SERVICE_ACCESS_IDENTITY } from "./bot-connection-capability-identity.js";
 
 function digest(value: string): string {
@@ -835,6 +836,27 @@ test("runtime reads at one inventory revision share one inspection, and a moved 
   const changed = await service.snapshotForRuntime({ botId: "bot:one" });
   assert.equal(reads.providers, 3);
   assert.notEqual(changed.catalog.revision, first.catalog.revision);
+});
+
+test("a turn's bare provider choice and its full provider authority share one runtime inspection", async () => {
+  const state = { inventory: inventory(), keyLoads: 0, noticeLoads: [] as string[] };
+  const { reads, ports } = countingPorts(state);
+  const service = new BotCapabilityCatalogMainService(ports, { runtimeReuse: { revision: () => 1, ttlMs: 60_000 } });
+  const providerId = state.inventory.providers[0]!.sourceId;
+  const modelId = state.inventory.providers[0]!.models[0]!.sourceId;
+  // Admission and revalidation retain the bare pair; tool assembly passes the
+  // admitted authority, which also carries its fingerprints.
+  const bare: BotRetainedProvider = { sourceProviderId: providerId, sourceModelId: modelId };
+  const authority = { ...bare, connectionFingerprint: "c", providerExactFingerprint: "p", modelFingerprint: "m", modelExactFingerprint: "x" };
+
+  const fromAdmission = await service.snapshotForRuntime({ botId: "bot:one", retainedProviders: [bare] });
+  const fromTools = await service.snapshotForRuntime({ botId: "bot:one", retainedProviders: [authority] });
+  assert.equal(reads.providers, 1);
+  assert.deepEqual(fromTools, fromAdmission);
+
+  // A different retained model is a different read.
+  await service.snapshotForRuntime({ botId: "bot:one", retainedProviders: [{ ...bare, sourceModelId: `${modelId}-other` }] });
+  assert.equal(reads.providers, 2);
 });
 
 test("an expired runtime read inspects again, a failed one is never reused, and one caller's cancel leaves the others", async () => {
