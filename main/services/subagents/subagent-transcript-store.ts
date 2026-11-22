@@ -33,7 +33,11 @@ export interface SubagentTranscriptStore {
 
 export interface SubagentTranscriptStoreOptions {
   maxPerChat?: number;
+  now?: () => number;
 }
+
+/** A temporary save file this old is left over from a crash. */
+const STALE_TEMPORARY_FILE_MS = 60_000;
 
 function chatFolderName(chatId: string): string {
   return createHash("sha256").update(chatId, "utf8").digest("hex");
@@ -57,6 +61,7 @@ export function createSubagentTranscriptStore(
   options: SubagentTranscriptStoreOptions = {},
 ): SubagentTranscriptStore {
   const maxPerChat = options.maxPerChat ?? MAX_SUBAGENT_TRANSCRIPTS_PER_CHAT;
+  const now = options.now ?? Date.now;
   const tails = new Map<string, Promise<void>>();
   const deleted = new Set<string>();
   const known = new Set<string>();
@@ -83,7 +88,16 @@ export function createSubagentTranscriptStore(
   }
 
   async function pruneOldest(directory: string, keep: string): Promise<void> {
-    const names = (await fs.readdir(directory)).filter((name) => name.endsWith(".json"));
+    const all = await fs.readdir(directory);
+    // A save cut short by a crash leaves its temporary file behind. One older
+    // than a minute belongs to no write still in progress.
+    const staleBefore = now() - STALE_TEMPORARY_FILE_MS;
+    for (const name of all) {
+      if (!name.endsWith(".tmp")) continue;
+      const stat = await fs.lstat(path.join(directory, name)).catch(() => null);
+      if (stat?.isFile() && stat.mtimeMs < staleBefore) await fs.rm(path.join(directory, name), { force: true }).catch(() => undefined);
+    }
+    const names = all.filter((name) => name.endsWith(".json"));
     if (names.length <= maxPerChat) return;
     const dated = await Promise.all(
       names.map(async (name) => {

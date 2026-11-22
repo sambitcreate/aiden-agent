@@ -119,6 +119,28 @@ test("each chat keeps a bounded number of helper conversations, newest first", a
   assert.ok(await store.read("chat-1", "run-3"));
 });
 
+test("a temporary file left by a crashed save is removed once it is stale", async (t) => {
+  const root = await tempRoot(t);
+  const now = Date.now();
+  const store = createSubagentTranscriptStore(async () => root, { now: () => now });
+  await store.write("chat-1", transcript("run-1"));
+  const [chat] = (await savedFiles(root)).map((file) => file.split("/")[0]!);
+  const directory = path.join(root, SUBAGENT_TRANSCRIPTS_DIRECTORY, chat!);
+  const leftover = path.join(directory, ".run-9.json.crashed.tmp");
+  const recent = path.join(directory, ".run-8.json.in-progress.tmp");
+  await fs.writeFile(leftover, "{");
+  await fs.writeFile(recent, "{");
+  const old = new Date(now - 120_000);
+  await fs.utimes(leftover, old, old);
+
+  await store.write("chat-1", transcript("run-2"));
+  const names = await fs.readdir(directory);
+  assert.equal(names.includes(path.basename(leftover)), false, "the stale leftover is gone");
+  assert.equal(names.includes(path.basename(recent)), true, "a save that may still be running is left alone");
+  assert.ok(await store.read("chat-1", "run-1"));
+  assert.ok(await store.read("chat-1", "run-2"));
+});
+
 test("deleting a chat removes its helper conversations and refuses late writes", async (t) => {
   const root = await tempRoot(t);
   const store = createSubagentTranscriptStore(async () => root);

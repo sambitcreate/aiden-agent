@@ -1072,6 +1072,53 @@ test("isolated subagent inference executes only parent-owned tools with immutabl
   }
 });
 
+test("a CLI helper's conversation is recorded with its edits, and a broken recorder never stops the helper", async (t) => {
+  const dir = temporary(t), original = process.env.AIDEN_CLI_ENTRY;
+  process.env.AIDEN_CLI_ENTRY = join(pkg, "dist/app/cli.js");
+  t.after(() => { if (original === undefined) delete process.env.AIDEN_CLI_ENTRY; else process.env.AIDEN_CLI_ENTRY = original; });
+  const server = createServer(async (request, response) => {
+    let body = ""; for await (const chunk of request) body += chunk;
+    const parsed = JSON.parse(body);
+    response.writeHead(200, { "content-type": "text/event-stream" });
+    const first = !parsed.messages.some((message) => message.role === "tool");
+    const delta = first ? { role: "assistant", tool_calls: [{ index: 0, id: "edit-test", type: "function", function: { name: "edit_file", arguments: JSON.stringify({ path: "note.txt" }) } }] } : { role: "assistant", content: "Updated the note." };
+    response.write(`data: ${JSON.stringify({ id: "test", object: "chat.completion.chunk", choices: [{ index: 0, delta, finish_reason: null }] })}\n\n`);
+    response.write(`data: ${JSON.stringify({ id: "test", object: "chat.completion.chunk", choices: [{ index: 0, delta: {}, finish_reason: first ? "tool_calls" : "stop" }], usage: { prompt_tokens: 10, completion_tokens: 4, total_tokens: 14 } })}\n\n`);
+    response.end("data: [DONE]\n\n");
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => { server.closeAllConnections(); server.close(); });
+  api.atomicJson(join(dir, "models.json"), { providers: { "cli-test": { api: "openai-completions", baseUrl: `http://127.0.0.1:${server.address().port}/v1`, apiKey: "test-only", models: [{ id: "test", name: "Test", reasoning: false, input: ["text"], contextWindow: 32000, maxTokens: 4096, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } }] } } });
+  const runtime = await api.createCliModelRuntime(dir);
+  const tools = [{
+    name: "edit_file", description: "Edit the note", parameters: { type: "object", properties: { path: { type: "string" } }, required: ["path"] },
+    execute: async () => ({ content: [{ type: "text", text: "Edited note.txt" }], details: { kind: "file_line_changes", version: 1, additions: 2, deletions: 1 } }),
+  }];
+  const run = (transcript, diagnostics) => api.runCliSubagent(dir, { runtime: { model: runtime.getModel("cli-test", "test") }, workspaceRoot: dir, permission: "ask", thinkingLevel: "off", context: { mode: "fresh", revisionHash: "record", messages: [] }, request: { role: "implementer", label: "Editor", task: "Update the note" }, policy: { deadlineMs: 15000 }, transcript }, tools, async () => {}, (error) => diagnostics.push(error.message));
+
+  const saved = [];
+  const recorder = new api.SubagentTranscriptRecorder({ runId: "run-cli", task: "Update the note", sink: { persist: async (transcript, final) => { saved.push({ transcript, final }); } } });
+  const diagnostics = [];
+  const result = await run(recorder, diagnostics);
+  assert.equal(result.status, "completed", JSON.stringify({ result, diagnostics }));
+  await recorder.finish("completed");
+  const last = saved.at(-1);
+  assert.equal(last.final, true);
+  const entries = last.transcript.entries.slice(1);
+  const step = entries.flatMap((entry) => entry.steps).find((candidate) => candidate.kind === "tool");
+  assert.deepEqual(step && [step.label, step.target, step.status, step.lineChanges], ["Edit file", "note.txt", "completed", { additions: 2, deletions: 1 }]);
+  assert.equal(entries.at(-1).text, "Updated the note.");
+  assert.deepEqual(diagnostics, []);
+
+  // A recorder that throws on every call is reported once and the helper still finishes.
+  const broken = new Proxy({}, { get: () => () => { throw new Error("recorder broke"); } });
+  const brokenDiagnostics = [];
+  const brokenResult = await run(broken, brokenDiagnostics);
+  assert.equal(brokenResult.status, "completed", JSON.stringify({ brokenResult, brokenDiagnostics }));
+  assert.equal(brokenResult.summary, "Updated the note.");
+  assert.equal(brokenDiagnostics.filter((message) => /recorder broke|transcript/iu.test(message)).length, 1, JSON.stringify(brokenDiagnostics));
+});
+
 test("a CLI subagent that runs out of time hands over what it streamed, filtered and marked unverified", async (t) => {
   const dir = temporary(t), original = process.env.AIDEN_CLI_ENTRY, secret = `ghp_${"a1B2c3D4e5".repeat(4)}`;
   process.env.AIDEN_CLI_ENTRY = join(pkg, "dist/app/cli.js");

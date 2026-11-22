@@ -979,7 +979,7 @@ function blockValueStartsOnNextLine(value: string, start: number): boolean {
  * these words, so `API_KEY`, `APITOKEN`, `apiToken` and `PASSPHRASE` count.
  */
 const BLOCK_NAME_SECRET_ENDING =
-  /(?:key|token|secret|password|passwd|passphrase|pwd|jwt|cred|creds|credential|cookie)s?$/u;
+  /(?:key|token|secret|password|passwd|passphrase|passcode|pwd|jwt|cred|creds|credential|cookie|otp|totp|cvv|seed|mnemonic|private|signature)s?$/u;
 /**
  * A plain word, such as a prose heading, is a hint only when it is exactly one
  * of these, so `Password:` and `Credentials:` count but `Keys:`, `Tokens:`,
@@ -987,8 +987,9 @@ const BLOCK_NAME_SECRET_ENDING =
  * (`keys`, `tokens`, `cookies`) stay out on purpose.
  */
 const BLOCK_NAME_SECRET_WORD: ReadonlySet<string> = new Set([
-  "key", "token", "secret", "secrets", "password", "passwd", "passphrase", "pwd", "jwt",
+  "key", "token", "secret", "secrets", "password", "passwd", "passphrase", "passcode", "pwd", "jwt",
   "cred", "creds", "credential", "credentials", "cookie", "apikey", "authtoken", "accesstoken",
+  "otp", "totp", "cvv", "seed", "mnemonic", "private", "signature",
 ]);
 /** Whole names that are secrets without a secret ending. */
 const BLOCK_NAME_SECRET_EXACT: ReadonlySet<string> = new Set([
@@ -1031,8 +1032,92 @@ function labelBlockLooksLikeCredential(block: string): boolean {
   const lines = block.split(/\r\n|[\r\n]/u).map((line) => line.trim()).filter(Boolean);
   return (
     containsHighConfidenceSecretIncludingEncodings(block) ||
-    (lines.length === 1 && OPAQUE_BLOCK_TOKEN.test(lines[0]!))
+    (lines.length === 1 && OPAQUE_BLOCK_TOKEN.test(lines[0]!)) ||
+    // A base64 body wrapped over several lines, like a key or certificate.
+    (lines.length > 1 && lines.every((line) => MULTILINE_BASE64_LINE.test(line))) ||
+    // A recovery phrase: twelve or more lowercase words and nothing else.
+    (lines.length >= 1 && RECOVERY_PHRASE.test(lines.join(" ")))
   );
+}
+
+const MULTILINE_BASE64_LINE = /^[A-Za-z0-9+/]{16,}={0,2}$/u;
+const RECOVERY_PHRASE = /^[a-z]{2,12}(?: [a-z]{2,12}){11,}$/u;
+
+/** `NAME: value` or `NAME=value` on one line, where the value starts on that line. */
+const SAME_LINE_NAMED_VALUE =
+  /(^|[^A-Za-z0-9_.$])((?:\*{1,2}|_{1,2}|~~)?(["'`]?)([A-Za-z_][A-Za-z0-9_-]{0,63})\3(?:\*{1,2}|_{1,2}|~~)?[ \t]*(?::(?!:)|=(?![=>~]))[ \t]*)(?=[^\s])/gu;
+const REFERENCE_VALUE =
+  /^(?:\$|%[A-Za-z_]|(?:process|import\.meta)\.env\b|os\.environ\b|Deno\.env\b|getenv\(|env\(|\[REDACTED|<[^>]*>$|\*{3,}|x{3,}$|(?:\/|~\/|\.\.?\/)|(?:true|false|null|undefined|none|nil|yes|no|on|off|required|optional|n\/a)\b)/iu;
+const CALL_OR_MEMBER_VALUE = /^[A-Za-z_$][A-Za-z0-9_$]*(?:\??\.[A-Za-z_$][A-Za-z0-9_$]*)*(?:\(|\??\.[A-Za-z_$])/u;
+const PLAIN_NAME_PREFIX = /(?:^|[\r\n])[ \t]*(?:(?:[-*+\u2022]|\d{1,3}[.)])[ \t]+)?(?:\*{1,2}|_{1,2}|~~)?$/u;
+
+function secretValueEnd(line: string, start: number, toEndOfLine: boolean): number {
+  const quote = line[start];
+  if (quote === "\"" || quote === "'" || quote === "`") {
+    const close = line.indexOf(quote, start + 1);
+    return close === -1 ? line.length : close + 1;
+  }
+  if (toEndOfLine) {
+    let end = line.length;
+    while (end > start && /\s/u.test(line[end - 1]!)) end -= 1;
+    return end;
+  }
+  let end = start;
+  while (end < line.length && !/[\s,;)\]}]/u.test(line[end]!)) end += 1;
+  return end;
+}
+
+function secretValueIsShown(value: string): boolean {
+  const unquoted = value.replace(/^["'`]|["'`]$/gu, "").trim();
+  return (
+    unquoted.length < 3 ||
+    REFERENCE_VALUE.test(unquoted) ||
+    CALL_OR_MEMBER_VALUE.test(unquoted)
+  );
+}
+
+/**
+ * Hide the value of a secret-named setting written on one line, such as
+ * `OTP: 731905`, `PIN=4821` or `"cvv": "123"`. Setting-shaped and quoted
+ * names hide the rest of the line, and `=` hides one token. A plain prose
+ * word such as `Password:` counts only at the start of a line or list item,
+ * and hides a lone value, a value with a digit, or a whole recovery phrase. References (`$VAR`, `process.env.X`, a call), paths,
+ * booleans and placeholders stay readable, and so do labels without a secret
+ * name, like `NOTE:` or `Design tokens:`.
+ */
+export function redactSecretNamedSameLineValues(value: string): string {
+  if (!value.includes(":") && !value.includes("=")) return value;
+  let cursor = 0;
+  let redacted = "";
+  for (const match of value.matchAll(SAME_LINE_NAMED_VALUE)) {
+    const offset = (match.index ?? 0) + match[1]!.length;
+    if (offset < cursor) continue;
+    const quoted = match[3]!.length > 0;
+    const name = match[4]!;
+    if (!blockNameHasSecretHint(name)) continue;
+    const settingShaped = quoted || blockNameIsSettingShaped(name);
+    const equals = match[2]!.trimEnd().endsWith("=");
+    if (!settingShaped && !equals && !PLAIN_NAME_PREFIX.test(value.slice(Math.max(0, offset - 64), offset))) continue;
+    const valueStart = offset + match[2]!.length;
+    const quotedValue = /["'`]/u.test(value[valueStart] ?? "");
+    // Code such as `const pin = readPin()` stays; a quoted literal still hides.
+    if (!quotedValue && sourceCodeAssignmentContext(value, offset)) continue;
+    let lineEnd = valueStart;
+    while (lineEnd < value.length && !/[\r\n\u2028\u2029]/u.test(value[lineEnd]!)) lineEnd += 1;
+    const line = value.slice(0, lineEnd);
+    const rest = line.slice(valueStart).trim();
+    const phrase = RECOVERY_PHRASE.test(rest);
+    const valueEnd = secretValueEnd(line, valueStart, (settingShaped && !equals) || phrase);
+    const secret = value.slice(valueStart, valueEnd);
+    if (valueEnd <= valueStart || secretValueIsShown(secret)) continue;
+    // After a prose word, a value followed by more words is a sentence, such
+    // as `Token: the parser emits it`, unless the word carries a digit.
+    if (!settingShaped && !equals && !phrase && !quotedValue &&
+      secret.trim() !== rest && !/\d/u.test(secret)) continue;
+    redacted += `${value.slice(cursor, valueStart)}[REDACTED]`;
+    cursor = valueEnd;
+  }
+  return cursor === 0 ? value : `${redacted}${value.slice(cursor)}`;
 }
 
 const NEXT_LINE_BLOCK_ASSIGNMENT =

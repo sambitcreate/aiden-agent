@@ -14,7 +14,8 @@ import {
  * One helper's conversation, saved beside its run record: the task it was
  * given, then each message it wrote with that message's steps. Steps use the
  * main chat's `GenerationTimeline` step format so they can render the same
- * rows. Text has already been through the main chat's credential filter.
+ * rows. Text has already been through the parent/helper credential filter
+ * (the one Phase 1 applies to a stopped helper's partial work).
  */
 export const SUBAGENT_TRANSCRIPT_VERSION = 1 as const;
 /** Saved size cap per helper, measured as UTF-8 JSON. */
@@ -369,57 +370,110 @@ export function subagentTranscriptBytes(transcript: SubagentTranscriptV1): numbe
   return new TextEncoder().encode(JSON.stringify(transcript)).length;
 }
 
-const TRIMMED_TEXT_MARKER = "[Earlier text removed to save space.]";
+export const SUBAGENT_TRANSCRIPT_TRIMMED_TEXT_MARKER = "[Earlier text removed to save space.]";
+const TRIMMED_TEXT_MARKER = SUBAGENT_TRANSCRIPT_TRIMMED_TEXT_MARKER;
+/** What starts a message whose front was cut to fit. */
+export const SUBAGENT_TRANSCRIPT_TRIMMED_TEXT_PREFIX = `${TRIMMED_TEXT_MARKER}\n`;
+const TRIMMED_TEXT_PREFIX = SUBAGENT_TRANSCRIPT_TRIMMED_TEXT_PREFIX;
+
+/** A message's text without the marker of an earlier front cut. */
+export function trimmedTextBody(text: string): string {
+  return text.startsWith(TRIMMED_TEXT_PREFIX) ? text.slice(TRIMMED_TEXT_PREFIX.length) : text;
+}
+
+/**
+ * Where a step lands once `removed` characters are cut from the front of the
+ * text it sat in (`offset` is its place in the uncut text). A step from the
+ * removed part moves to the start; any other keeps its place after the marker.
+ */
+export function trimmedStepOffset(offset: number, removed: number): number {
+  const kept = offset - removed;
+  return kept <= 0 ? 0 : TRIMMED_TEXT_PREFIX.length + kept;
+}
+
+/** UTF-8 size of one entry's JSON, as it appears inside `entries`. */
+export function subagentTranscriptEntryBytes(entry: SubagentTranscriptEntry): number {
+  return utf8Bytes(JSON.stringify(entry));
+}
+
+function utf8Bytes(text: string): number {
+  return new TextEncoder().encode(text).length;
+}
 
 /**
  * Keep a transcript under `maxBytes`. The oldest steps go first, from the
  * earliest message onward. If that is still too big, the oldest message text
  * is replaced by a short marker. The task and the newest message stay.
+ *
+ * Sizes are kept per entry, so each drop re-measures only the entry it
+ * changed. `entryBytes`, when given, holds each entry's
+ * `subagentTranscriptEntryBytes` so the caller's cached sizes are reused.
  */
 export function trimSubagentTranscriptToBytes(
   transcript: SubagentTranscriptV1,
   maxBytes: number = MAX_SUBAGENT_TRANSCRIPT_BYTES,
+  entryBytes?: readonly number[],
 ): SubagentTranscriptV1 {
-  if (subagentTranscriptBytes(transcript) <= maxBytes) return transcript;
-  const entries = transcript.entries.map((entry) =>
-    entry.kind === "message" ? { ...entry, steps: [...entry.steps] } : { ...entry },
-  );
-  const next = (): SubagentTranscriptV1 => ({ ...transcript, trimmed: true, entries });
-  let size = subagentTranscriptBytes(next());
-  for (let index = 1; index < entries.length && size > maxBytes; index += 1) {
-    const entry = entries[index]!;
+  const sizes = entryBytes && entryBytes.length === transcript.entries.length
+    ? [...entryBytes]
+    : transcript.entries.map(subagentTranscriptEntryBytes);
+  const commas = Math.max(0, transcript.entries.length - 1);
+  const envelope = (trimmed: boolean) => utf8Bytes(JSON.stringify({ ...transcript, trimmed, entries: [] }));
+  let entriesSize = sizes.reduce((sum, size) => sum + size, 0) + commas;
+  if (envelope(transcript.trimmed) + entriesSize <= maxBytes) return transcript;
+  // Unchanged entries keep their identity, so a caller can reuse what it
+  // cached for them.
+  const entries = [...transcript.entries];
+  const fixed = envelope(true);
+  const replace = (index: number, entry: SubagentTranscriptEntry) => {
+    entries[index] = entry;
+    const size = subagentTranscriptEntryBytes(entry);
+    entriesSize += size - sizes[index]!;
+    sizes[index] = size;
+  };
+  const over = () => fixed + entriesSize - maxBytes;
+  for (let index = 1; index < entries.length && over() > 0; index += 1) {
+    let entry = entries[index]!;
     if (entry.kind !== "message") continue;
-    while (entry.steps.length > 0 && size > maxBytes) {
-      // Drop in chunks so a large run does not re-measure once per step.
-      const excess = size - maxBytes;
-      const average = Math.max(1, Math.ceil(JSON.stringify(entry.steps).length / entry.steps.length));
-      const count = Math.min(entry.steps.length, Math.max(1, Math.ceil(excess / average)));
-      entry.steps = entry.steps
-        .slice(count)
-        .map((step, order) => ({ ...step, order }) as AgentStep);
-      size = subagentTranscriptBytes(next());
+    while (entry.kind === "message" && entry.steps.length > 0 && over() > 0) {
+      // Drop in chunks sized from the average step, so a large message is
+      // re-measured a few times rather than once per step.
+      const average = Math.max(1, Math.ceil(sizes[index]! / (entry.steps.length + 1)));
+      const count = Math.min(entry.steps.length, Math.max(1, Math.ceil(over() / average)));
+      replace(index, {
+        ...entry,
+        steps: entry.steps.slice(count).map((step, order) => ({ ...step, order }) as AgentStep),
+      });
+      entry = entries[index]!;
     }
   }
-  for (let index = 1; index < entries.length - 1 && size > maxBytes; index += 1) {
+  for (let index = 1; index < entries.length - 1 && over() > 0; index += 1) {
     const entry = entries[index]!;
     if (entry.kind !== "message" || entry.text === TRIMMED_TEXT_MARKER) continue;
-    entries[index] = { ...entry, text: TRIMMED_TEXT_MARKER, steps: [] };
-    size = subagentTranscriptBytes(next());
+    replace(index, { ...entry, text: TRIMMED_TEXT_MARKER, steps: [] });
   }
-  if (size > maxBytes) {
+  const lastIndex = entries.length - 1;
+  const last = entries[lastIndex]!;
+  if (over() > 0 && lastIndex > 0 && last.kind === "message") {
     // Only the task and the newest message remain: shorten the newest text
-    // from the front, keeping its latest words.
-    const lastIndex = entries.length - 1;
-    const last = entries[lastIndex]!;
-    if (last.kind === "message") {
-      const keep = Math.max(0, last.text.length - (size - maxBytes) - TRIMMED_TEXT_MARKER.length - 8);
-      const text = `${TRIMMED_TEXT_MARKER}\n${last.text.slice(last.text.length - keep)}`;
-      entries[lastIndex] = {
+    // from the front, keeping its latest words. Text is measured in bytes,
+    // so cut again if multi-byte characters left it over.
+    const original = trimmedTextBody(last.text);
+    let body = original;
+    for (let attempt = 0; attempt < 8 && over() > 0; attempt += 1) {
+      const keep = Math.max(0, body.length - over() - TRIMMED_TEXT_PREFIX.length);
+      body = body.slice(body.length - keep);
+      const removed = original.length - body.length;
+      replace(lastIndex, {
         ...last,
-        text,
-        steps: last.steps.map((step) => ({ ...step, contentOffset: 0 }) as AgentStep),
-      };
+        text: `${TRIMMED_TEXT_PREFIX}${body}`,
+        steps: last.steps.map((step) => ({
+          ...step,
+          contentOffset: trimmedStepOffset((step.contentOffset ?? 0) - (last.text.length - original.length), removed),
+        }) as AgentStep),
+      });
+      if (keep === 0) break;
     }
   }
-  return next();
+  return { ...transcript, trimmed: true, entries };
 }

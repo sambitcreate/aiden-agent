@@ -165,10 +165,76 @@ export type SubagentTranscriptFactory = (input: {
   task: string;
 }) => SubagentTranscriptRecorder | undefined;
 
-function transcriptStatus(status: SubagentTaskResult["status"]): SubagentTranscriptFinishStatus {
+/** A stopped or timed-out helper's open steps were cancelled, not failed. */
+export function transcriptStatus(status: SubagentTaskResult["status"]): SubagentTranscriptFinishStatus {
   if (status === "completed") return "completed";
-  if (status === "interrupted") return "cancelled";
+  if (status === "interrupted" || status === "timed_out") return "cancelled";
   return "failed";
+}
+
+/**
+ * Records each child's conversation. A child's result is handed back without
+ * waiting for its final save; the save finishes in the background, and
+ * `flush()` waits for every outstanding one. `settle` closes a recording from
+ * the supervisor's own outcome, which also covers a child whose runner never
+ * settled before its seal.
+ */
+export class SubagentTranscriptRecordings {
+  private readonly live = new Map<string, SubagentTranscriptRecorder>();
+  private readonly pending = new Set<Promise<void>>();
+
+  constructor(private readonly transcripts: SubagentTranscriptFactory) {}
+
+  wrap(
+    runChild: (input: RunSubagentChildInput) => Promise<SubagentTaskResult>,
+  ): (input: RunSubagentChildInput) => Promise<SubagentTaskResult> {
+    return async (input) => {
+      let recorder: SubagentTranscriptRecorder | undefined;
+      try {
+        recorder = input.runId
+          ? this.transcripts({ runId: input.runId, chatId: input.authority.chatId, task: input.request.task })
+          : undefined;
+      } catch {
+        recorder = undefined;
+      }
+      if (!recorder || !input.runId) return runChild(input);
+      const runId = input.runId;
+      this.live.set(runId, recorder);
+      try {
+        const result = await runChild({ ...input, transcript: recorder });
+        this.settleRecorder(runId, recorder, transcriptStatus(result.status));
+        return result;
+      } catch (error) {
+        this.settleRecorder(runId, recorder, input.signal?.aborted ? "cancelled" : "failed");
+        throw error;
+      }
+    };
+  }
+
+  /** Close a child's recording with the outcome the supervisor settled on. */
+  settle(runId: string, status: SubagentTranscriptFinishStatus): void {
+    const recorder = this.live.get(runId);
+    if (recorder) this.settleRecorder(runId, recorder, status);
+  }
+
+  /** Wait for every final save still in progress. */
+  async flush(): Promise<void> {
+    while (this.pending.size > 0) await Promise.allSettled([...this.pending]);
+  }
+
+  private settleRecorder(runId: string, recorder: SubagentTranscriptRecorder, status: SubagentTranscriptFinishStatus): void {
+    if (this.live.get(runId) === recorder) this.live.delete(runId);
+    // The recorder reports its own save failures; finish never rejects in
+    // practice, but a throw here must not reach the child's result.
+    let finishing: Promise<void>;
+    try {
+      finishing = recorder.finish(status).catch(() => {});
+    } catch {
+      return;
+    }
+    this.pending.add(finishing);
+    void finishing.finally(() => this.pending.delete(finishing));
+  }
 }
 
 /** Wrap a child runner so each child's conversation is recorded and settled. */
@@ -176,27 +242,7 @@ export function recordSubagentTranscripts(
   runChild: (input: RunSubagentChildInput) => Promise<SubagentTaskResult>,
   transcripts: SubagentTranscriptFactory | undefined,
 ): (input: RunSubagentChildInput) => Promise<SubagentTaskResult> {
-  if (!transcripts) return runChild;
-  return async (input) => {
-    let recorder: SubagentTranscriptRecorder | undefined;
-    try {
-      recorder = input.runId
-        ? transcripts({ runId: input.runId, chatId: input.authority.chatId, task: input.request.task })
-        : undefined;
-    } catch {
-      recorder = undefined;
-    }
-    if (!recorder) return runChild(input);
-    let result: SubagentTaskResult;
-    try {
-      result = await runChild({ ...input, transcript: recorder });
-    } catch (error) {
-      await recorder.finish(input.signal?.aborted ? "cancelled" : "failed").catch(() => {});
-      throw error;
-    }
-    await recorder.finish(transcriptStatus(result.status)).catch(() => {});
-    return result;
-  };
+  return transcripts ? new SubagentTranscriptRecordings(transcripts).wrap(runChild) : runChild;
 }
 
 export interface SubagentSupervisorInput {
@@ -515,6 +561,7 @@ export class SubagentSupervisor {
   private readonly treeDeadlineMs: number;
   private readonly cancellationGraceMs: number;
   private readonly launchBudget: number;
+  private readonly recordings: SubagentTranscriptRecordings | undefined;
   private readonly runChild: (
     input: RunSubagentChildInput,
   ) => Promise<SubagentTaskResult>;
@@ -544,7 +591,8 @@ export class SubagentSupervisor {
       input.policy?.launchBudget ?? MAX_SUBAGENT_LAUNCHES_PER_GENERATION;
     this.randomUUID = input.randomUUID ?? randomUUID;
     if (!input.runChild) throw new Error("A subagent child runner must be injected.");
-    this.runChild = recordSubagentTranscripts(input.runChild, input.transcripts);
+    this.recordings = input.transcripts ? new SubagentTranscriptRecordings(input.transcripts) : undefined;
+    this.runChild = this.recordings ? this.recordings.wrap(input.runChild) : input.runChild;
     if (
       (this.timeLimit !== "chat" && this.timeLimit !== "bot") ||
       !Number.isFinite(this.childDeadlineMs) ||
@@ -570,8 +618,9 @@ export class SubagentSupervisor {
     return this.input.projector?.snapshot() ?? [];
   }
 
-  flush(): Promise<void> {
-    return this.input.projector?.flush() ?? Promise.resolve();
+  /** Wait for pending run snapshots and every helper conversation's final save. */
+  async flush(): Promise<void> {
+    await Promise.all([this.input.projector?.flush(), this.recordings?.flush()]);
   }
 
   /**
@@ -1781,6 +1830,9 @@ export class SubagentSupervisor {
                     cancellationKind === "interrupted"
                   ? withPartialWork(interruptedResult(task, index), childResult)
                   : childResult!;
+        // A sealed child's runner may never return, so its conversation is
+        // closed from this outcome; a recording already closed ignores it.
+        this.recordings?.settle(identity.runId, transcriptStatus(result.status));
         const disposition = await preparedRun?.complete(result);
         if (disposition !== "stopped") this.finishRun(identity.runId, result);
         return result;

@@ -1,5 +1,7 @@
 import {
   containsHighConfidenceSecretIncludingEncodings,
+  redactMultilineCredentialBlocks,
+  redactSecretNamedSameLineValues,
   redactSensitiveNextLineBlocks,
   sanitizeCredentialText,
 } from "../../../renderer/shared/subagent-safe-text.js";
@@ -7,18 +9,61 @@ import {
 export const REDACTED_CREDENTIAL = "[REDACTED CREDENTIAL]";
 const MAX_PARTIAL_BOUNDARY_COMPARISONS = 50_000;
 const PARTIAL_SCAN_LIMIT_NOTICE = "[Additional partial findings omitted after safety scan limit.]";
+const PRIVATE_KEY_BEGIN = /-----BEGIN [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?-----/gu;
+const PRIVATE_KEY_END = /-----END [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?-----/u;
+
+/**
+ * Join lines for the split-key checks. A line that already ends in a
+ * redaction marker is a closed value, so the next line starts a new token
+ * instead of reading as that value's continuation (`SECRET=[REDACTED]Done.`).
+ */
+function joinForSplitCheck(lines: readonly string[]): string {
+  let joined = "";
+  for (const line of lines) {
+    joined += /\[REDACTED(?: CREDENTIAL)?\]$/u.test(joined) ? `\n${line}` : line;
+  }
+  return joined;
+}
+
+/** Whether `text` opens a private key block that it does not close. */
+function opensPrivateKey(text: string): boolean {
+  let lastBegin = -1;
+  for (const match of text.matchAll(PRIVATE_KEY_BEGIN)) lastBegin = match.index ?? lastBegin;
+  return lastBegin >= 0 && !PRIVATE_KEY_END.test(text.slice(lastBegin));
+}
+
+/**
+ * Hide whole private key blocks before the text is split into lines, so the
+ * body never reaches the line scan without its header. A block left open by
+ * one report hides the next report up to its END line, or all of it.
+ */
+function redactPrivateKeyBlocks(reports: readonly string[]): string[] {
+  let open = false;
+  return reports.map((entry) => {
+    let text = entry;
+    if (open) {
+      const end = PRIVATE_KEY_END.exec(text);
+      text = end ? `[REDACTED PRIVATE KEY]${text.slice(end.index + end[0].length)}` : "[REDACTED PRIVATE KEY]";
+      if (!end) return text;
+    }
+    open = opensPrivateKey(text);
+    return redactMultilineCredentialBlocks(text);
+  });
+}
 
 /**
  * The display filter for a helper's own words. It hides credentials,
- * including secret-named blocks and keys split across lines, while leaving
- * ordinary text such as file paths readable. Phase 1 uses it for the partial
+ * including private key blocks, secret-named values on one line or as a
+ * block, and keys split across lines, while leaving ordinary text such as
+ * file paths readable. Phase 1 uses it for the partial
  * work a stopped helper hands back; the saved helper conversation uses it for
  * every message the helper writes.
  */
 export function sanitizePartialFindingsForParent(reports: readonly string[]): string {
   // The line scan below cannot see that `PASSWORD:` owns the indented lines
   // under it, so hide secret-named blocks across lines first.
-  const rawReports = reports.map((entry) => redactSensitiveNextLineBlocks(entry).split(/\r\n|[\n\r\u2028\u2029]/u));
+  const rawReports = redactPrivateKeyBlocks(reports).map((entry) =>
+    redactSensitiveNextLineBlocks(entry).split(/\r\n|[\n\r\u2028\u2029]/u));
   const safeReports = rawReports.map((lines) => [...lines]);
   const earlierReportTails: Array<{ text: string; reportIndex: number; lineIndex: number }> = [];
   let comparisons = 0;
@@ -53,14 +98,14 @@ export function sanitizePartialFindingsForParent(reports: readonly string[]): st
   const report = safeReports.map((lines) => lines.join("\n")).join("\n\n");
   const lines = report.split(/\r\n|[\n\r\u2028\u2029]/u);
   const safeLines = lines.map((line) => {
-    const directSafe = sanitizeCredentialText(line);
+    const directSafe = redactSecretNamedSameLineValues(sanitizeCredentialText(line));
     return containsHighConfidenceSecretIncludingEncodings(directSafe)
       ? REDACTED_CREDENTIAL
       : directSafe;
   });
   // A sensitive assignment key can be split across lines or settled messages.
   // Find the shortest unsafe adjacent span so unrelated source-path lines stay.
-  if (containsHighConfidenceSecretIncludingEncodings(safeLines.join(""))) {
+  if (containsHighConfidenceSecretIncludingEncodings(joinForSplitCheck(safeLines))) {
     // A hostile report can consist of thousands of one-character lines. Keep
     // the local span search bounded; the whole-report fallback remains closed.
     if (safeLines.length > 256) return REDACTED_CREDENTIAL;
@@ -70,7 +115,7 @@ export function sanitizePartialFindingsForParent(reports: readonly string[]): st
         const indices = Array.from({ length: width }, (_value, offset) => start + offset);
         if (indices.some((index) => redacted.has(index))) continue;
         if (containsHighConfidenceSecretIncludingEncodings(
-          safeLines.slice(start, start + width).join(""),
+          joinForSplitCheck(safeLines.slice(start, start + width)),
         )) {
           for (const index of indices) redacted.add(index);
         }
@@ -82,7 +127,7 @@ export function sanitizePartialFindingsForParent(reports: readonly string[]): st
   // Arbitrarily fragmented or encoded material beyond the local span limit
   // cannot be reconstructed safely; fail closed before the parent sees it.
   if (containsHighConfidenceSecretIncludingEncodings(partial) ||
-    containsHighConfidenceSecretIncludingEncodings(safeLines.join(""))
+    containsHighConfidenceSecretIncludingEncodings(joinForSplitCheck(safeLines))
   ) return REDACTED_CREDENTIAL;
   return scanLimitReached ? `${partial}\n${PARTIAL_SCAN_LIMIT_NOTICE}`.trim() : partial;
 }

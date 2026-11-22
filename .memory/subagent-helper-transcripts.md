@@ -1,0 +1,36 @@
+# Saved helper conversations — 2026-11-22 (helper chat plan, Phase 2)
+
+Plan: `docs/plans/subagent-helper-chat-plan.md` (PR 2 section). Branch `claude/subagent-helper-chat`; Phase 3 (the side-panel helper chat UI) reads what this phase saves.
+
+## Shape
+
+- `renderer/shared/subagent-transcript.ts`: `SubagentTranscriptV1` {version 1, runId, revision, trimmed, entries}. Entry 0 is `{kind: "task", text}`; later entries are `{kind: "message", text, steps: AgentStep[], startedAt, finishedAt?}`, using the main chat's `GenerationTimeline` step format. Strict parsers for the transcript, the live update and the `{streamId, update}` notification. Caps: 2 MB serialized, 600 entries, 200k chars of text per entry.
+- Live update `SubagentTranscriptUpdateV1`: {runId, baseRevision, revision, trimmed, entryCount, changes[{index, entry}]}. Only changed entries are sent; the current message is re-sent whole on each update.
+- Late joiner: subscribe first, then read the saved copy; `mergeSubagentTranscript(saved, live)` returns `{transcript, complete}` (`complete: false` on a revision gap). `foldLiveSubagentTranscript` keeps the newest 16 runs per window.
+
+## Recording
+
+- `subagent-transcript-recorder.ts` maps Pi events as the main chat does (`observe`: thinking, `toolcall_start` as a pending step, text with content offsets, `message_end` with `terminalAssistantActivityAnchors`, tool update/end with `result.details`), or takes the CLI's direct calls, into `GenerationTimelineProjector`. MCP tool labels are not special-cased (left as the generic label). Throttled to 250 ms with backoff after failures; one save in flight at a time; revision 1 (task alone) is enqueued from the constructor.
+- Each revision is persisted, then published. A failed persist publishes nothing, keeps the state dirty and retries; the final save tries 3 times. Revision numbers advance only on a successful save, so the stream always chains.
+- Trimming uses cached per-entry sizes (`trimSubagentTranscriptToBytes(..., entryBytes)`), and what a trim dropped is applied back to the recorder (closed messages frozen, dropped step ids and characters remembered), so later saves never bring it back.
+- Text and every step string (label, target, detail) go through `sanitizeSubagentWorkText` (`subagent-work-text-filter.ts`, built on `sanitizePartialFindingsForParent`), the parent/helper credential filter: `[REDACTED CREDENTIAL]` / `[REDACTED]`, private key blocks (complete or cut off) hidden, same-line secret-named values (`OTP:`, `PIN=`, `PASSCODE:`, `CVV:`, `SEED:`) hidden, paths kept. Not the panel's `sanitizeSubagentSnapshotText`. While a message streams, `streamingVisibleText` holds back the unfinished last word and any open `-----BEGIN` block. Sanitizing is per entry, so a secret split across two entries is not caught.
+- Edits: the helper's `write_file`/`edit_file` (`subagent-workspace-write.ts`) return `file_line_changes` details; the desktop passes `result.details` through `observe`, the CLI forwards them in `subagent-process.ts`, so steps carry `lineChanges`.
+- `SubagentTranscriptRecordings` in `subagent-supervisor-core.ts` wraps every child (in-process and inference-process helpers). It hands the result back without awaiting `finish` (the final save is tracked and awaited by `supervisor.flush()`), and the supervisor's seal settles a recorder whose child never returns. `transcriptStatus` maps interrupted and timed_out to cancelled, other non-completed statuses to failed. CLI recorder calls are wrapped so a throwing recorder is reported once and never breaks the helper.
+
+## Storage and deletion
+
+- `subagent-transcript-store.ts`: `<root>/transcripts/<sha256(chatId)>/<runId>.json`, mode 0600, `writeFileAtomic`, 512 per chat (oldest by mtime pruned; stale `*.tmp` files older than 60 s from a crashed save are removed first). Reads: O_NOFOLLOW, size cap, strict parser, runId must match. An in-memory deleted fence refuses late writes after a chat delete.
+- Desktop root `userData/subagent-runs-v2`. `subagentRunStore.deleteChat` removes transcripts early (best effort); `completeChatDeletion` removes them first and rethrows, so the tombstone stays for `reconcilePendingChatDeletions` on the next start.
+- `subagents:get` returns `transcript` only after ownership is proven (the window owns the chat, the run belongs to that chat and workspace, and the chat's history references the run), asked with the owning chat id.
+- Live stream `chat:subagent-transcript`, sent only to the owning window, not journaled.
+
+## Bots and the CLI
+
+- Desktop Bot helpers record through the same factory; there is no read path for them (Bot runs have no history snapshot view).
+- `aiden serve`: `bot-subagents.ts` saves under `<agentDir>/bot-subagent-history/<sha256(chatId)>/transcripts/…` with chat key `cliSubagentIdentity(chatId)`; `deleteCliBotSubagentHistory` removes them. Thinking steps are not recorded there. No Remote protocol revision was claimed; phones get nothing.
+
+## Correction to the Phase 1 notes
+
+The panel label rule is not an allow-list. `colonBlockNameIsLabel` accepts a bare all-capital word of letters with no secret hint; `blockNameHasSecretHint` applies the secret-ending match only to setting-shaped names (all caps, `_`/`-`, or camelCase) and otherwise needs an exact secret word, plus a few whole names and a whole-segment `PIN`. The plan's Risks row now says this.
+
+Tests: `renderer/shared/subagent-transcript.test.ts`, `main/services/subagents/subagent-transcript-recorder.test.ts`, `main/services/subagents/subagent-transcript-store.test.ts`, `subagent-semantic-preservation.test.ts` (key blocks, same-line secret names, labels that survive), the CLI recording test in `packages/cli/tests/parity.test.mjs`, plus extensions to `subagent-history-read-core.test.ts`, `subagent-workspace-write.test.ts` and `renderer/lib/generation-stream.test.ts`.

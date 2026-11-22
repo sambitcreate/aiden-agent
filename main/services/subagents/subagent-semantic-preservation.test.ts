@@ -9,6 +9,7 @@ import {
 import { parseSubagentRunSnapshotV1 } from "../../../renderer/shared/subagent-runs.js";
 import { parseSubagentToolRequest } from "./contracts.js";
 import { SubagentEventProjector } from "./subagent-event-projector.js";
+import { sanitizeSubagentWorkText } from "./subagent-work-text-filter.js";
 
 const SAFE_TASK_AND_MODEL_TEXT = [
   "and report back",
@@ -299,3 +300,74 @@ test("filtering already-filtered text changes nothing", () => {
     }
   }
 });
+
+// Assembled at runtime so no key block sits in the source.
+const KEY_BEGIN = ["-----BEGIN", "OPENSSH", "PRIVATE", "KEY-----"].join(" ");
+const KEY_END = ["-----END", "OPENSSH", "PRIVATE", "KEY-----"].join(" ");
+const KEY_BODY = ["b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAAAMwAAAAtzc2gtZW", "QyNTUxOQAAACDhLz4wKzN0bXhyZWFsa2V5bWF0ZXJpYWxub3RmYWtlAAAAoHN0dWZm"];
+
+test("a helper's saved words hide a whole private key block and keep the text around it", () => {
+  const value = `Found this in ~/.ssh:\n${KEY_BEGIN}\n${KEY_BODY.join("\n")}\n${KEY_END}\nDone.`;
+  const safe = sanitizeSubagentWorkText(value);
+  for (const line of KEY_BODY) assert.ok(!safe.includes(line), `key body leaked: ${safe}`);
+  assert.doesNotMatch(safe, /BEGIN OPENSSH/u);
+  assert.match(safe, /^Found this in ~\/\.ssh:\n/u);
+  assert.match(safe, /\nDone\.$/u);
+});
+
+test("a helper's saved words hide a private key cut off before its END line", () => {
+  const value = `Found this:\n${KEY_BEGIN}\n${KEY_BODY[0]}\n${KEY_BODY[1]!.slice(0, 30)}`;
+  const safe = sanitizeSubagentWorkText(value);
+  assert.ok(!safe.includes(KEY_BODY[0]!.slice(0, 24)), safe);
+  assert.ok(!safe.includes(KEY_BODY[1]!.slice(0, 24)), safe);
+  assert.match(safe, /^Found this:\n/u);
+});
+
+const SECRET_NAMED_SAME_LINE = [
+  { text: "Sign in with OTP: 731905 now.", secret: "731905" },
+  { text: "PIN=4821", secret: "4821" },
+  { text: "PASSCODE: 99812", secret: "99812" },
+  { text: '{"cvv": "381"}', secret: "381" },
+  { text: "CVV: 381", secret: "381" },
+  { text: "SEED: abandon ability able about above absent absorb abstract absurd abuse access accident", secret: "abandon ability" },
+  { text: "- TOTP_SECRET=JBSWY3DPEHPK3PXP", secret: "JBSWY3DPEHPK3PXP" },
+];
+
+for (const { text, secret } of SECRET_NAMED_SAME_LINE) {
+  test(`a secret-named value on one line is hidden: ${JSON.stringify(text.slice(0, 24))}`, () => {
+    const safe = sanitizeSubagentWorkText(`Setup notes.\n${text}\nDone.`);
+    assert.ok(!safe.includes(secret), `${secret} leaked: ${safe}`);
+    assert.match(safe, /^Setup notes\.\n/u);
+    assert.match(safe, /\nDone\.$/u);
+  });
+}
+
+test("labels without a secret name, and secret words used in prose, survive the helper filter", () => {
+  for (const value of [
+    "NOTE: run the tests before the build.",
+    "README: install with npm, then run the dev server.",
+    "Design tokens: --color-bg is reused in styles.css",
+    "Keys: arrow keys move the selection.",
+    "Signature: see the docs for the request format.",
+    "Private: these notes stay in the repo.",
+    "The seed data lives in fixtures/seed.json.",
+    "const pin = readPin();",
+    "OTP: $OTP_FROM_ENV",
+  ]) {
+    assert.equal(sanitizeSubagentWorkText(value), value);
+  }
+});
+
+for (const name of ["OTP", "PASSCODE", "CVV", "SEED", "mnemonic", "signature"]) {
+  test(`a ${name}: block on the next lines is hidden by the parent, snapshot and helper filters`, () => {
+    const secret = name === "SEED" || name === "mnemonic"
+      ? "abandon ability able about above absent absorb abstract absurd abuse access accident"
+      : "z8Kq2Lm0Px7Wv";
+    const value = `Setup:\n${name}:\n  ${secret}\nDone.`;
+    for (const safe of [sanitizeSubagentText(value), sanitizeSubagentSnapshotText(value), sanitizeSubagentWorkText(value)]) {
+      assert.ok(!safe.includes(secret), `${name} leaked: ${safe}`);
+      assert.match(safe, /^Setup:\n/u);
+      assert.match(safe, /\nDone\.$/u);
+    }
+  });
+}

@@ -41,6 +41,7 @@ export { createCurrentPiSessionRepository } from "../../../main/services/pi-sess
 export * from "./bots.ts";
 
 export { runCliSubagent } from "./subagent-process.ts";
+export { SubagentTranscriptRecorder } from "../../../main/services/subagents/subagent-transcript-recorder.js";
 export { createCliAuthCoordinator } from "./auth.ts";
 
 export { createCliBotAvatars } from "./bot-avatars.ts";

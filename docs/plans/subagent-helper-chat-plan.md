@@ -127,7 +127,9 @@ Nothing yet. This PR records each helper's task, messages and steps while it run
    new `main/services/subagents/subagent-transcript-recorder.ts`; hooked into `subagent-child-runner.ts` where it already subscribes to the helper's events
    - Feed the helper's events into `GenerationTimelineProjector`, the main chat's step builder, plus a text collector.
    - Send at most about 4 live updates a second, and always send the final state.
-   - Text goes through the main chat's display filter: passwords and keys are hidden, and file paths are kept. It does not use the panel's stricter summary filter, because this is the helper's actual work.
+   - Text and every step field (label, target, detail) go through the parent/helper credential filter, the one Phase 1 uses for a stopped helper's partial work: API keys, tokens, private key blocks and secret-named values (`PASSWORD:`, `OTP: 731905`, `PIN=4821`, a `SEED:` phrase) are hidden, and file paths are kept. It does not use the panel's stricter summary filter, because this is the helper's actual work. While a message streams, its unfinished last word and any open `-----BEGIN` block are held back until they settle.
+   - Each revision is saved before it is streamed. A failed save streams nothing and is retried with backoff; the final save is retried a bounded number of times. One save runs at a time.
+   - Edits show their line counts (+N −M), as in the main chat.
    - Helpers running in the separate model process (`subagent-inference-process`) report through the same event stream, so this covers them too.
 3. ### Keep it with the chat
 
@@ -139,7 +141,7 @@ Nothing yet. This PR records each helper's task, messages and steps while it run
 4. ### Let the panel read it, live and saved
 
    `main/handlers/subagents.ts`, `main/services/subagents/subagent-history-read-core.ts`, `main/services/llm-client.ts`, `renderer/lib/generation-stream.ts`, `renderer/lib/chat-terminal-sync.ts`, preload
-   - Saved: extend the existing `subagents:get` read, which checks that the chat belongs to this window, to return the transcript alongside the summary.
+   - Saved: extend the existing `subagents:get` read to return the transcript alongside the summary, only after it proves ownership: the chat belongs to this window, the run belongs to that chat and workspace, and the chat's history references the run.
    - Live: a new `chat:subagent-transcript` stream message (run, revision, changed entries), sent the same way as `chat:subagents` today.
    - A late joiner, such as someone who opens the panel mid-run, reads the saved copy, then applies newer live revisions.
 5. ### Bots and the Aiden server
@@ -151,9 +153,13 @@ Nothing yet. This PR records each helper's task, messages and steps while it run
 - A fake helper run (task, two tool calls, a final answer) saves, reloads and comes back with the same entries and steps.
 - Live updates arrive in order, and a reader that joins mid-run ends up with the same final transcript.
 - A key such as `sk-…` in the helper's text is hidden in the transcript, while a file path stays readable.
-- A run that goes past 2 MB drops its oldest steps and sets the trimmed flag.
+- A key in a tool's command or search is hidden in the step; a whole or cut-off private key block never reaches a save or the stream.
+- A run that goes past 2 MB drops its oldest steps and sets the trimmed flag, and what was dropped stays dropped in later saves.
+- A failed save streams nothing and is retried; a slow save keeps one save in flight.
+- A cancelled or timed-out helper marks its unfinished tools cancelled, and the result is handed back without waiting for the final save.
+- An edit's line counts reach its step, on the desktop and under `aiden serve`.
 - Deleting a chat removes its helpers' transcripts, including after a crash mid-delete.
-- The read refuses a chat that belongs to another window.
+- The read refuses another window's chat, another chat's or workspace's run, and a run the chat's history does not reference.
 
 Register any new test file in the matching `package.json` test script, as the repo rules require.
 
@@ -262,10 +268,10 @@ Removing the clock doesn't remove every limit, so a confused helper still can't 
 | Risk | What could happen | Handling |
 | --- | --- | --- |
 | Longer waits | With no clock, the main chat waits as long as its slowest helper. | The pill and "No recent update" show it, Stop is one click away, and the 24-hour net stays. |
-| Showing more text | Today's panel shows little on purpose. The helper chat shows what the helper did. | The main chat's own display filter hides passwords and keys, the same as for the main chat's steps. A dedicated security review comes before PR 2 merges. |
+| Showing more text | Today's panel shows little on purpose. The helper chat shows what the helper did. | The parent/helper credential filter (the one Phase 1 uses for a stopped helper's partial work) hides API keys, tokens, private key blocks and secret-named values in the text and in every step field. A dedicated security review comes before PR 2 merges. |
 | Disk use | Many long helpers add up. | 2 MB cap per helper, deleted with the chat, and shown in Settings → Storage. |
 | Overlap with "Make Aiden more proactive" | Its background helpers touch the same code. | That thread knows this plan. Its helper PRs build on these three, which give them a place to show their work. |
-| Privacy filter change | Loosening the label rule could let a real secret through. | A name counts as a label only when it is a bare all-capital word of letters (no digits, `_` or `-`) with no secret hint, and a label's block still hides when its value looks like a credential. The secret-ending match (`key`, `token`, `secret`, `password` and the rest) applies only to setting-shaped names: all caps, containing `_` or `-`, or camelCase. Every all-caps name is setting-shaped, so `KEY:`, `APITOKEN:` and `PASSPHRASE:` never count as labels. Other names, such as prose headings, are hints only when they are exactly a secret word (`Password:`, `Credentials:`), so `Keys:` and `Design tokens:` survive; a few whole names (`AUTHORIZATION`, `SESSION_ID`, `SESSION_TOKEN`, `PRIVATE_KEY`) and a whole-segment `PIN` are always hints (`colonBlockNameIsLabel` and `blockNameHasSecretHint` in `renderer/shared/subagent-safe-text.ts`). Every other name still hides in the panel, secret-named blocks hide on every line for the main chat, and tests cover both, including `PASSPHRASE:`, `KEY:`, `APITOKEN:` and multi-line `PASSWORD:`. |
+| Privacy filter change | Loosening the label rule could let a real secret through. | A name counts as a label only when it is a bare all-capital word of letters (no digits, `_` or `-`) with no secret hint, and a label's block still hides when its value looks like a credential. The secret-ending match (`key`, `token`, `secret`, `password` and the rest) applies only to setting-shaped names: all caps, containing `_` or `-`, or camelCase. Every all-caps name is setting-shaped, so `KEY:`, `APITOKEN:` and `PASSPHRASE:` never count as labels. Other names, such as prose headings, are hints only when they are exactly a secret word (`Password:`, `Credentials:`), so `Keys:` and `Design tokens:` survive; the secret words include `passcode`, `otp`, `totp`, `cvv`, `seed`, `mnemonic`, `private` and `signature` as well; a few whole names (`AUTHORIZATION`, `SESSION_ID`, `SESSION_TOKEN`, `PRIVATE_KEY`) and a whole-segment `PIN` are always hints (`colonBlockNameIsLabel` and `blockNameHasSecretHint` in `renderer/shared/subagent-safe-text.ts`). Every other name still hides in the panel, secret-named blocks hide on every line for the main chat, and tests cover both, including `PASSPHRASE:`, `KEY:`, `APITOKEN:` and multi-line `PASSWORD:`. The saved helper conversation also hides a secret-named value on the same line (`OTP: 731905`, `PIN=4821`, `"cvv": "381"`); references, paths, placeholders and prose such as `Signature: see the docs` stay, and `NOTE:`, `README:`, `Design tokens:` and `Keys:` survive. |
 
 ## Order
 
