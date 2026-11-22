@@ -74,6 +74,26 @@ function latestBotOccurrence(task: ScheduledTask, due: number, now: number): num
   return latest;
 }
 
+/** A chat task's automatic fire this late is skipped. Bot routines keep their own catch-up rules. */
+export const CHAT_TASK_LATE_LIMIT_MS = 12 * 60 * 60_000;
+/** Failed runs in a row that pause a chat task. */
+export const CHAT_TASK_FAILURES_TO_PAUSE = 3;
+
+const TOO_LATE_OUTPUT = "Skipped: this run was more than 12 hours late (the computer was asleep or Aiden was closed). The task runs again at its next time.";
+
+/**
+ * A chat task's missed fire runs once only when its most recent missed time
+ * is under 12 hours ago; otherwise it is skipped and waits for its next time.
+ */
+function chatFireTooLate(task: ScheduledTask, fireTime: number, now: number): boolean {
+  if (task.botId !== undefined || now - fireTime <= CHAT_TASK_LATE_LIMIT_MS) return false;
+  try {
+    return nextScheduledRun(task.cron, task.timezone, new Date(now - CHAT_TASK_LATE_LIMIT_MS)) > now;
+  } catch {
+    return true;
+  }
+}
+
 const ignoreUnclaimableFire = (error: unknown): void => {
   if (!(error instanceof UnclaimableScheduledFire)) throw error;
 };
@@ -185,6 +205,8 @@ export interface ScheduleServiceDependencies {
   warn(message: string): void;
   error(message: string, cause: unknown): void;
   catchUp?: CatchUpQueueOptions;
+  /** Three failed runs in a row paused a chat task: one card where its runs land. */
+  pausedAfterFailures?(task: ScheduledTask, error: string): Promise<void>;
   /** Test seam for the periodic pending-fire reconciliation scan. */
   pendingRetryIntervalMs?: number;
 }
@@ -295,6 +317,41 @@ export function createScheduleServiceCore(
     }
   }
 
+  /**
+   * After an unattended run fails: the third failure in a row (since the last
+   * such pause) turns a chat task off with one card in its landing chat.
+   * Skipped and cancelled runs neither count nor break the streak.
+   */
+  async function pauseAfterRepeatedFailures(
+    taskId: string,
+    run: ScheduledRun,
+    isCurrent: () => boolean,
+  ): Promise<void> {
+    if (run.result !== "error" || !isCurrent()) return;
+    try {
+      const task = await store.get(taskId);
+      if (!task || task.botId !== undefined || !task.enabled) return;
+      const since = task.failurePausedAt ?? 0;
+      const recent = (await store.runs(taskId))
+        .filter((value) => value.result !== "skipped" && value.result !== "blocked" && value.startedAt > since)
+        .slice(0, CHAT_TASK_FAILURES_TO_PAUSE);
+      if (recent.length < CHAT_TASK_FAILURES_TO_PAUSE || recent.some((value) => value.result !== "error")) return;
+      if (!isCurrent()) return;
+      const error = run.error ?? "";
+      const paused = await store.updateRuntime(taskId, {
+        enabled: false,
+        nextRunAt: undefined,
+        failurePausedAt: Date.now(),
+        lastError: `Paused after ${CHAT_TASK_FAILURES_TO_PAUSE} failed runs in a row${error ? `: ${error}` : "."}`.slice(0, 4_096),
+      }, isCurrent);
+      stopJob(taskId);
+      dependencies.broadcast({ taskId });
+      await dependencies.pausedAfterFailures?.(paused, error);
+    } catch (error) {
+      if (isCurrent()) dependencies.error(`Could not pause scheduled task ${taskId} after repeated failures.`, error);
+    }
+  }
+
   function dispatch(
     taskId: string,
     options: DispatchOptions,
@@ -379,6 +436,28 @@ export function createScheduleServiceCore(
         if (missedFireClaimed || (fireTime !== undefined && fireTime > Date.now())) {
           throw new UnclaimableScheduledFire(`Scheduled task ${taskId} has no due fire to claim.`);
         }
+        // A chat task's fire more than 12 hours late (startup catch-up or a
+        // timer that woke from sleep) is recorded skipped; the claim moves the
+        // task on to its next time.
+        if (options.automatic && !options.recovery && chatFireTooLate(task, fireTime!, Date.now())) {
+          const claimed = await advanceBeforeRun(task, fireTime!, isCurrent);
+          if (!isCurrent())
+            throw new Error("This scheduled task was cancelled.");
+          const at = Date.now();
+          const skipped = await store.recordRun({
+            id: `late:${task.id}:${fireTime}`,
+            taskId: task.id,
+            startedAt: at,
+            finishedAt: at,
+            result: "skipped",
+            reason: "too_late",
+            output: TOO_LATE_OUTPUT,
+            chatId: claimed.chatId,
+          }, isCurrent);
+          if (!claimed.enabled) stopJob(task.id);
+          dependencies.broadcast({ taskId: task.id });
+          return skipped;
+        }
         const pendingFire = options.automatic && options.recovery
           ? task.pendingRoutineFires?.find((fire) => fire.fireTime === fireTime)
           : undefined;
@@ -410,7 +489,12 @@ export function createScheduleServiceCore(
         const executionTask = pendingFire
           ? { ...claimed, prompt: pendingFire.prompt, name: pendingFire.name, ...(pendingFire.routineTiming?.timezone ? { timezone: pendingFire.routineTiming.timezone } : {}) }
           : claimed;
-        return execution.run(executionTask, pendingFire?.requestId ?? options.runId, trigger);
+        const run = await execution.run(executionTask, pendingFire?.requestId ?? options.runId, trigger);
+        // Only unattended runs pause a task; one you started by hand never does.
+        if (task.botId === undefined && (options.automatic || event !== undefined)) {
+          await pauseAfterRepeatedFailures(task.id, run, isCurrent);
+        }
+        return run;
       } finally {
         if (!workspaceResolved) {
           workspaceResolved = true;

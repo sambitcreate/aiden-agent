@@ -29,3 +29,10 @@ Proactive Aiden plan, Phase 4 (docs/plans/proactive-aiden-plan.md). Guide: docs/
 - Approval details (`ScheduledTaskApprovalDetails`, `AssistantAutomationApprovalDetails`) gained optional `whenLabel`; a trigger task has `cron: ""`, `nextRunAt: 0`, and the validators accept an empty cron only with a `whenLabel` (phones that require a cron fail closed until E6). `whenLabel` is in the run-journal allowlists (`run-event-projection.ts`). Card shows it instead of the cadence.
 - Results: task summaries carry `trigger` (the label); a link task's create result adds `link: "shown_to_person"` (standard also `status: "saved"`). The agent never sees the link.
 - CLI `packages/cli/src/schedules.ts` `saveInput` refuses `trigger`.
+
+## E5 Failure pause and the 12-hour rule (chat tasks only)
+
+- `schedule-service-core.ts`: `chatFireTooLate` in `dispatch` (automatic, not recovery, no `botId`): fire more than `CHAT_TASK_LATE_LIMIT_MS` (12 h) late and no cron time in the last 12 h → `advanceBeforeRun` claim, record `skipped` / reason `too_late` (run id `late:<taskId>:<fireTime>`), no execution. Covers startup catch-up and a Cron timer waking from sleep (both pass through `dispatch` with the stored `nextRunAt` as fire time). Bot routines untouched (7-day window in `scheduled-bot-routines.ts`).
+- `pauseAfterRepeatedFailures` after `execution.run` for automatic or event dispatches of chat tasks: newest 3 runs after `task.failurePausedAt`, ignoring `skipped` and `blocked`, all `error` → `updateRuntime({enabled:false, nextRunAt:undefined, failurePausedAt, lastError})` (before `stopJob`, else `isCurrent` turns false and the write is refused) then dependency `pausedAfterFailures` → `scheduleExecution.recordInLandingChat` card (desktop only; CLI has no card).
+- `ScheduledTask.failurePausedAt` (main-owned, chat tasks only) kept by save/normalize; `ScheduledRunSkipReason` gained `too_late`. Phones see skips as succeeded runs with the output as summary, so no contract change.
+- Tests in `schedule-service-core.test.ts`; old tests' `nextRunAt: 1` overdue values became `Date.now() - 60_000` so they don't depend on the time of day.

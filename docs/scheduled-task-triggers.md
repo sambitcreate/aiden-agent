@@ -44,6 +44,12 @@ Triggers never keep the computer awake. Checks happen only while Aiden is open a
 
 Three failed checks in a row pause the task, with one card in the chat its runs land in. Fix the address or script and turn the task back on; that clears the count and checks again right away.
 
+## When runs fail
+
+This applies to every chat task, scheduled or triggered: three failed runs in a row turn the task off, with one "Paused after 3 failed runs" card where its runs land. Skipped and stopped runs don't count, and a run you start by hand never pauses a task. Turning it back on starts a new count.
+
+A scheduled chat task's missed time runs once when Aiden starts or the computer wakes, but only if it was under 12 hours ago. Anything later is recorded as skipped and the task waits for its next time. Bot routines keep their own 7-day catch-up.
+
 ## Storage
 
 The trigger lives on the task in `schedules.json`. Bookkeeping (seen changes, the held change or batch, accepted changes not yet run, the watch's last result and failure count, a link's token hash and call log) is in `<userData>/scheduled-task-triggers.json`, script state files are in `<userData>/scheduled-task-check-state/`, and a signed link's secret is in the encrypted key store under `aiden-internal:task-hook:<taskId>`.

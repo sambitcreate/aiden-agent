@@ -550,7 +550,7 @@ export type ScheduledTaskMode = "llm" | "script";
 export type ScheduledTaskPermission = "read-only" | "full";
 export type ScheduledTaskExecutionProfile = "assistant";
 export type ScheduledRunResult = "success" | "error" | "silent" | "blocked" | "skipped";
-/** Why a run was recorded without doing work. Only Bot routines skip today. */
+/** Why a run was recorded without doing work. */
 export type ScheduledRunSkipReason =
   | "bot_paused"
   | "duplicate"
@@ -558,7 +558,9 @@ export type ScheduledRunSkipReason =
   /** The task posts into a chat that stayed busy past the bounded wait. */
   | "chat_busy"
   /** The task posts into a chat that already ran its hourly share of task runs. */
-  | "chat_budget";
+  | "chat_budget"
+  /** A chat task's automatic fire more than 12 hours late (asleep or closed); it waits for its next time. */
+  | "too_late";
 
 export interface ScheduledMcpServerBinding {
   id: string;
@@ -640,6 +642,11 @@ export interface ScheduledTask {
   notify: boolean;
   lastResult?: ScheduledRunResult;
   lastError?: string;
+  /**
+   * Main-owned: when repeated failed runs last paused this chat task. Only
+   * failures after it count toward the next pause. Never on a Bot routine.
+   */
+  failurePausedAt?: number;
   createdAt: number;
   updatedAt: number;
 }

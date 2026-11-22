@@ -404,6 +404,7 @@ function normalizeInput(
     notify: input.notify ?? existing?.notify ?? true,
     lastResult: existing?.lastResult,
     lastError: existing?.lastError,
+    ...(botId === undefined && existing?.failurePausedAt !== undefined ? { failurePausedAt: existing.failurePausedAt } : {}),
     createdAt: existing?.createdAt ?? now,
     updatedAt: nextTaskRevision(now, existing?.updatedAt),
   };
@@ -425,7 +426,8 @@ function isSkipReason(value: unknown): value is ScheduledRunSkipReason {
     value === "duplicate" ||
     value === "paused_by_person" ||
     value === "chat_busy" ||
-    value === "chat_budget"
+    value === "chat_budget" ||
+    value === "too_late"
   );
 }
 
@@ -618,6 +620,9 @@ function normalizeStoredTask(value: unknown): ScheduledTask | null {
       : typeof task.lastError === "string"
         ? task.lastError
         : undefined,
+    ...(botId === undefined && typeof task.failurePausedAt === "number" && Number.isFinite(task.failurePausedAt)
+      ? { failurePausedAt: task.failurePausedAt }
+      : {}),
     createdAt: task.createdAt,
     updatedAt: task.updatedAt,
   };
@@ -746,7 +751,7 @@ export function createScheduleStore(
     patch: Partial<
       Pick<
         ScheduledTask,
-        "nextRunAt" | "lastRunAt" | "lastResult" | "lastError" | "chatId" | "enabled"
+        "nextRunAt" | "lastRunAt" | "lastResult" | "lastError" | "chatId" | "enabled" | "failurePausedAt"
       >
     >,
     isCurrent: () => boolean = () => true,
