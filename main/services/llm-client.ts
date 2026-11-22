@@ -97,6 +97,7 @@ import {
 import { generationGitContext } from "./generation-git-context.js";
 import { configStore } from "./config-store.js";
 import { chatStore } from "./chat-store.js";
+import { generationModelMeta } from "./chat-model-selection-meta.js";
 import { botStore } from "./bot-store.js";
 import {
   resolveBotForGeneration,
@@ -526,7 +527,7 @@ import {
   createVisualizeGuideTool,
   VISUALIZE_GUIDE_TOOL_NAME,
 } from "./generative-ui-extension.js";
-import { chatToolOffers, chatTurnArgsToolRefusal, chatTurnAudienceFor, chatTurnToolRefusal, declaresAppTools, declaresWindowTools, firstTurnToolRefusal, windowlessChatTurn, type ChatToolSurface, type TurnToolRefusal } from "./chat-turn-tool-policy.js";
+import { chatToolOffers, chatTurnArgsToolRefusal, chatTurnAudienceFor, chatTurnToolRefusal, screenedPromptAnswersPerson, declaresAppTools, declaresWindowTools, firstTurnToolRefusal, windowlessChatTurn, type ChatToolSurface, type TurnToolRefusal } from "./chat-turn-tool-policy.js";
 import { createGenerativeUiDraftSession } from "./generative-ui-draft.js";
 import { createUiDraftSession } from "./aiden-ui-draft.js";
 import { withoutVisualSnapshots } from "../../renderer/shared/visual-snapshots.js";
@@ -716,6 +717,12 @@ export interface GenerationExecutionOptions {
    * again and what they said then is this turn's prompt context.
    */
   screenedPrompt?: { messageId: string; context?: string };
+  /**
+   * Main-owned: this turn answers on another model than the chat's own (a
+   * scheduled task running in the chat it was made in). Its saved messages
+   * never change the chat's stored model.
+   */
+  keepChatModel?: boolean;
 }
 
 interface BotGenerationAuthorityContext {
@@ -1916,12 +1923,7 @@ async function prepareGeneration(
     excludedToolNames: options.excludeToolNames,
   };
   // The owed turn for the person's queued message is theirs; one answering a notice is not.
-  const answersPerson =
-    windowless &&
-    options.screenedPrompt !== undefined &&
-    chat.messages.some(
-      (message) => message.id === options.screenedPrompt?.messageId && message.role === "user" && !message.notice,
-    );
+  const answersPerson = windowless && screenedPromptAnswersPerson(chat.messages, options.screenedPrompt);
   const turnAudience = {
     ...chatTurnAudienceFor({ ...options, windowless, answersPerson }, params),
     ...(windowless ? { windowOnlyToolNames } : {}),
@@ -3242,7 +3244,11 @@ export const llmClient = {
         isCurrent: () =>
           initializing.get(streamId) === initialization ||
           (active.get(streamId)?.chatId === params.chatId && active.get(streamId)?.owner === owner),
-        append: (message, meta) => chatStore.appendMessage(params.chatId, message, meta),
+        append: (message, meta) => chatStore.appendMessage(params.chatId, message, {
+          expectedWorkspaceId: meta.expectedWorkspaceId,
+          isCurrent: meta.isCurrent,
+          ...generationModelMeta(meta, options.keepChatModel),
+        }),
         onUnknownOutcome: (terminalError) =>
           logger.error(
             "pi",
@@ -3829,8 +3835,7 @@ export const llmClient = {
               : undefined,
           },
           {
-            providerId: params.providerId,
-            model: params.model,
+            ...generationModelMeta(params, options.keepChatModel),
             expectedWorkspaceId: initialization.workspaceId,
           },
         );
@@ -4894,8 +4899,7 @@ export const llmClient = {
               params.chatId,
               { role: "user", content: message.content, model: params.model },
               {
-                providerId: params.providerId,
-                model: params.model,
+                ...generationModelMeta(params, options.keepChatModel),
                 expectedWorkspaceId: initialization.workspaceId,
               },
             );

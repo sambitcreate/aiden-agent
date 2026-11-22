@@ -12,6 +12,7 @@ import * as acpHarness from "../../renderer/shared/acp-harness.js";
 import * as geminiUsageScope from "../../renderer/shared/gemini-usage-scope.js";
 import * as modelVisibility from "../../renderer/shared/model-visibility.js";
 import { APPROVAL_TOOL_NAMES } from "./coding-tools.js";
+import { generationModelMeta } from "./chat-model-selection-meta.js";
 import * as conversationSurfaceGeneration from "./conversation-surface-generation.js";
 import * as scheduleGuard from "./schedule-guard.js";
 import * as scheduleNotification from "./schedule-notification.js";
@@ -38,6 +39,7 @@ interface StartedGeneration {
     allowMcpTools: boolean;
     mcpServerIds?: readonly string[];
     providerFingerprint?: string;
+    keepChatModel?: boolean;
   };
 }
 
@@ -161,12 +163,11 @@ async function executionHarness(
           options: StartedGeneration["options"],
         ) => {
           started.push({ params, options });
-          // The real generation saves its answer with its model, which the
-          // store copies onto the chat.
+          // The real generation saves its answer with the model fields
+          // `generationModelMeta` gives, which the store copies onto the chat.
           const target = params.chatId ? extra.chats?.[params.chatId] : undefined;
           if (target) {
-            target.providerId = params.providerId;
-            target.model = params.model;
+            Object.assign(target, generationModelMeta(params, options.keepChatModel));
             extra.duringRun?.(target);
           }
           owner.send(...finish);
@@ -215,19 +216,22 @@ async function executionHarness(
     module.exports,
   );
   const { createScheduleExecution } = module.exports as typeof import("./schedule-execution.js");
+  let current: ScheduledTask | undefined;
   const store = {
+    get: async (id: string) => (current?.id === id ? current : undefined),
     ensureChatId: async () => chat.id,
     recordRun: async (run: object) => ({ ...run, id: "run-1" }),
   };
   const execution = createScheduleExecution(store as unknown as Parameters<typeof createScheduleExecution>[0]);
   return {
     async run(scheduled: ScheduledTask) {
+      current = scheduled;
       const run = await execution.run(scheduled);
       assert.equal(run.result, "success", run.error);
       assert.equal(started.length, 1, "exactly one generation starts");
       return started[0]!;
     },
-    runToEnd: (scheduled: ScheduledTask) => execution.run(scheduled),
+    runToEnd: (scheduled: ScheduledTask) => execution.run((current = scheduled)),
     appended,
     availabilityReads: () => availabilityReads,
   };
@@ -332,8 +336,9 @@ test("a task made in a chat runs there under the task's own policy, its prompt s
 test("a task answering in a chat with another model leaves the chat on its own model", async () => {
   const origin = { id: "chat-origin", title: "Planning", workspaceId: "workspace-1", updatedAt: 1, providerId: "chat-provider", model: "chat-model" };
   const h = await executionHarness(notReady, undefined, { chats: { "chat-origin": origin }, workspace: { id: "workspace-1" } });
-  const { params } = await h.run(task({ workspaceId: "workspace-1", originChatId: "chat-origin" }));
+  const { params, options } = await h.run(task({ workspaceId: "workspace-1", originChatId: "chat-origin" }));
   assert.equal(params.model, "model-1", "the task answers with its own model");
+  assert.equal(options.keepChatModel, true, "nothing the run saves changes the chat's model");
   const notice = h.appended.find((entry) => entry.message.notice?.source === "schedule");
   assert.equal(notice?.meta?.providerId, undefined, "the notice doesn't switch the chat's model");
   assert.equal(notice?.meta?.model, undefined);
@@ -350,4 +355,10 @@ test("a task answering in a chat with another model leaves the chat on its own m
   });
   await during.run(task({ workspaceId: "workspace-1", originChatId: "chat-picked" }));
   assert.deepEqual([picked.providerId, picked.model], ["picked-provider", "picked-model"], "a model the person picked mid-run wins");
+
+  // A chat with no stored model stays that way.
+  const unset = { id: "chat-unset", title: "Planning", workspaceId: "workspace-1", updatedAt: 1 } as typeof origin;
+  const blank = await executionHarness(notReady, undefined, { chats: { "chat-unset": unset }, workspace: { id: "workspace-1" } });
+  await blank.run(task({ workspaceId: "workspace-1", originChatId: "chat-unset" }));
+  assert.deepEqual([unset.providerId, unset.model], [undefined, undefined]);
 });

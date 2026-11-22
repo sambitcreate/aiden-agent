@@ -65,6 +65,8 @@ export interface TaskRunChat {
 
 export interface TaskRunChatDeliveryDeps {
   getChat(chatId: string): Promise<TaskRunChat | undefined>;
+  /** The task as saved now: the person may have chosen "Use its own chat" while the run waited. */
+  currentTask(taskId: string): Promise<ScheduledTask | undefined>;
   /** The chat it posted into is gone or can no longer take it: later runs use the task's own chat. */
   releaseOriginChat(taskId: string, chatId: string): Promise<void>;
   /** The task's own chat, created on first use. */
@@ -272,8 +274,10 @@ export function createTaskRunChatDelivery(deps: TaskRunChatDeliveryDeps) {
       if (signal.aborted) throw new Error("Scheduled task was cancelled.");
       if (!idle) return chatBusy(task, chatId);
       const admission = await deps.inChatOrder(chatId, async () => {
-        // The chat may have been deleted or moved while the run waited.
-        if ((await originChat(task)) !== chatId) return { kind: "moved" as const };
+        // The chat may have been deleted or moved, or the person may have
+        // chosen "Use its own chat", while the run waited.
+        const saved = await deps.currentTask(task.id);
+        if (!saved || (await originChat(saved)) !== chatId) return { kind: "moved" as const };
         if (countsAgainstBudget && budget.left(chatId) <= 0) return { kind: "budget" as const };
         const admitted = await deps.admitTurn(task, chatId, post, signal);
         if (admitted.kind === "admitted" && countsAgainstBudget) budget.take(chatId);

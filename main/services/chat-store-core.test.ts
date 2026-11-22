@@ -12,6 +12,7 @@ import type { GenerationTimeline } from "../../renderer/shared/generation-timeli
 import type { SubagentMessageReferenceV1 } from "../../renderer/shared/subagent-runs.js";
 import { chatForRenderer } from "./visible-chat-projection.js";
 import { ChatForkError } from "./chat-fork-error.js";
+import { generationModelMeta } from "./chat-model-selection-meta.js";
 
 async function testStore(t: test.TestContext) {
   const directory = await fs.mkdtemp(
@@ -2060,4 +2061,33 @@ test("getMeta answers from the index without reading the chat's transcript", asy
   assert.equal(await store.getMeta("no-such-chat"), null);
   await store.setDesignMode(chat.id, false);
   assert.equal("designMode" in (await store.getMeta(chat.id))!, false);
+});
+
+test("an in-chat task run on another model leaves the chat's own model unchanged", async (t) => {
+  const store = await testStore(t);
+  const taskModel = { providerId: "task-provider", model: "task-model" };
+  const chosen = await store.create({ workspaceId: "workspace", providerId: "person-provider", model: "person-model" });
+  const unset = await store.create({ workspaceId: "workspace" });
+  for (const chat of [chosen, unset]) {
+    // What a scheduled run saves in the chat it was made in: its notice prompt,
+    // guidance the person queued while it ran, and the answer.
+    await store.appendMessage(chat.id, { role: "user", content: "Scheduled task prompt" }, { expectedWorkspaceId: "workspace" });
+    await store.appendMessage(chat.id, { role: "user", content: "Queued guidance", model: taskModel.model },
+      { ...generationModelMeta(taskModel, true), expectedWorkspaceId: "workspace" });
+    await store.appendMessage(chat.id, { role: "assistant", content: "Task answer", model: taskModel.model },
+      { ...generationModelMeta(taskModel, true), expectedWorkspaceId: "workspace" });
+  }
+  const afterChosen = await store.get(chosen.id);
+  assert.equal(afterChosen?.providerId, "person-provider");
+  assert.equal(afterChosen?.model, "person-model");
+  const afterUnset = await store.get(unset.id);
+  assert.equal(afterUnset?.providerId, undefined);
+  assert.equal(afterUnset?.model, undefined);
+  // The answer still says which model wrote it.
+  assert.equal(afterChosen?.messages[afterChosen.messages.length - 1]?.model, "task-model");
+
+  // An ordinary turn keeps the chat on the model it answered with.
+  await store.appendMessage(chosen.id, { role: "assistant", content: "Chat answer" },
+    { ...generationModelMeta({ providerId: "other-provider", model: "other-model" }, false), expectedWorkspaceId: "workspace" });
+  assert.equal((await store.get(chosen.id))?.model, "other-model");
 });

@@ -17,6 +17,8 @@ export interface ScheduledGenerationSurfaceInput {
   mcpServerIds?: readonly string[];
   mcpServerBindings?: readonly ScheduledMcpServerBinding[];
   providerFingerprint?: string;
+  /** The run answers in a chat that keeps its own model (a task posting into the chat it was made in). */
+  keepChatModel?: boolean;
 }
 
 export function scheduledGenerationSurface(input: ScheduledGenerationSurfaceInput) {
@@ -44,6 +46,7 @@ export function scheduledGenerationSurface(input: ScheduledGenerationSurfaceInpu
       allowSubagents: false as const,
       usageSource: "scheduled" as const,
       turnId: input.streamId,
+      ...(input.keepChatModel ? { keepChatModel: true as const } : {}),
     },
   };
 }

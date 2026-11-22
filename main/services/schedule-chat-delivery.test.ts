@@ -39,6 +39,8 @@ function harness(options: {
   idle?: (timeoutMs: number, chats: Map<string, TaskRunChat>) => boolean;
   admit?: () => AdmittedTaskTurn | Promise<AdmittedTaskTurn>;
   script?: TaskRunExecution | Error;
+  /** The task as saved now; defaults to the task handed to the run. */
+  saved?: () => ScheduledTask | undefined;
 } = {}) {
   let clock = 1_800_000_000_000;
   const chats = new Map((options.chats ?? [{ id: "chat-1", workspaceId: "workspace-1" }]).map((chat) => [chat.id, chat]));
@@ -51,6 +53,7 @@ function harness(options: {
   const delays: number[] = [];
   const delivery = createTaskRunChatDelivery({
     getChat: async (id) => chats.get(id),
+    currentTask: async (taskId) => options.saved ? options.saved() : lastRun?.id === taskId ? lastRun : undefined,
     releaseOriginChat: async (taskId, chatId) => {
       released.push([taskId, chatId]);
     },
@@ -94,8 +97,9 @@ function harness(options: {
       clock += ms;
     },
   });
+  let lastRun: ScheduledTask | undefined;
   const run = (scheduled: ScheduledTask, extra: { trigger?: Parameters<typeof delivery.deliverTaskRunToChat>[1]["trigger"]; eventText?: string } = {}) =>
-    delivery.deliverTaskRunToChat(scheduled, { trigger: automatic, signal: new AbortController().signal, ...extra });
+    delivery.deliverTaskRunToChat((lastRun = scheduled), { trigger: automatic, signal: new AbortController().signal, ...extra });
   return {
     run,
     notices,
@@ -276,5 +280,22 @@ test("a chat deleted while the run waited sends the run to the task's own chat",
   assert.equal(outcome.kind, "fell_back");
   assert.deepEqual(h.released, [["task-1", "chat-1"]]);
   assert.equal(h.admitted.length, 0, "nothing was posted into the deleted chat");
+  assert.deepEqual(h.ownChatRuns, ["own-task-1"]);
+});
+
+test("choosing Use its own chat while a run waits sends that run to the task's own chat", async () => {
+  let saved: ScheduledTask | undefined = task();
+  const h = harness({
+    saved: () => saved,
+    idle: () => {
+      // The person moves the task while the run waits for the chat to go quiet.
+      const { originChatId: _moved, ...own } = task();
+      saved = own;
+      return true;
+    },
+  });
+  const outcome = await h.run(task());
+  assert.equal(outcome.kind, "fell_back");
+  assert.deepEqual(h.admitted, [], "nothing was posted into the chat it left");
   assert.deepEqual(h.ownChatRuns, ["own-task-1"]);
 });

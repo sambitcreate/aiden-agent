@@ -265,7 +265,7 @@ export function createScheduleExecution(store: ScheduleStore = scheduleStore) {
   }
 
   /** Everything a model run needs, checked before it takes the chat. */
-  async function prepareLlm(task: ScheduledTask, chatId: string, prompt: string) {
+  async function prepareLlm(task: ScheduledTask, chatId: string, prompt: string, keepChatModel = false) {
     assertAssistantScheduleExecutionBoundary(task);
     await assertTaskWorkspaceReady(task);
     const settings = await configStore.getSettings();
@@ -311,6 +311,7 @@ export function createScheduleExecution(store: ScheduleStore = scheduleStore) {
       prompt,
       permission: task.permission,
       ...toolPolicy,
+      ...(keepChatModel ? { keepChatModel: true } : {}),
     });
     return { providerId, model, surface, background, streamId };
   }
@@ -432,7 +433,9 @@ export function createScheduleExecution(store: ScheduleStore = scheduleStore) {
     post: AgentNoticePost,
     signal: AbortSignal,
   ): Promise<AdmittedTaskTurn> {
-    const prepared = await prepareLlm(task, chatId, post.text);
+    // The task may answer on another model than the chat's own; the chat
+    // keeps its choice, so nothing this run saves changes the chat's model.
+    const prepared = await prepareLlm(task, chatId, post.text, true);
     if (signal.aborted) {
       prepared.background.destroy();
       throw new Error("Scheduled task was cancelled.");
@@ -442,11 +445,6 @@ export function createScheduleExecution(store: ScheduleStore = scheduleStore) {
       prepared.background.destroy();
       return { kind: "busy" };
     }
-    // The task may answer with another model than the chat's own; the chat
-    // keeps its choice, so the notice carries no model and the run puts the
-    // chat's model back when it ends.
-    const current = await chatStore.get(chatId).catch(() => null);
-    const chatModel = current ? { providerId: current.providerId, model: current.model } : null;
     try {
       turn.reserveAppendPayload(Buffer.byteLength(post.text, "utf8") + 1_024);
       await chatStore.appendMessage(
@@ -468,43 +466,13 @@ export function createScheduleExecution(store: ScheduleStore = scheduleStore) {
     }
     return {
       kind: "admitted",
-      finish: async () => {
-        try {
-          return await finishLlm(task, prepared, turn, signal, async () => undefined);
-        } finally {
-          await restoreChatModel(chatId, chatModel, prepared);
-        }
-      },
+      finish: () => finishLlm(task, prepared, turn, signal, async () => undefined),
     };
-  }
-
-  /**
-   * Put a chat's own model back after a task answered in it with another
-   * one. A model the person picked during the run wins: nothing changes
-   * unless the chat still has the task's model.
-   */
-  async function restoreChatModel(
-    chatId: string,
-    before: { providerId?: string; model?: string } | null,
-    run: { providerId: string; model: string },
-  ): Promise<void> {
-    if (!before?.providerId || !before.model) return;
-    if (before.providerId === run.providerId && before.model === run.model) return;
-    let kept = false;
-    await chatStore
-      .setChatModelSelection(chatId, before.providerId, before.model, (chat) => {
-        if (chat.providerId !== run.providerId || chat.model !== run.model) {
-          kept = true;
-          throw new Error("The chat's model changed during the run.");
-        }
-      })
-      .catch((error: unknown) => {
-        if (!kept) logger.warn("schedule", "A chat's model could not be restored after a scheduled task.", error);
-      });
   }
 
   const chatDelivery = createTaskRunChatDelivery({
     getChat: async (chatId) => (await chatStore.get(chatId)) ?? undefined,
+    currentTask: (taskId) => store.get(taskId),
     releaseOriginChat: async (taskId, chatId) => {
       if (await store.clearOriginChat(taskId, { expectedChatId: chatId })) {
         ipcMain.broadcast("schedule:updated", { taskId });

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
-  argIs, chatToolOffers, chatTurnArgsToolRefusal, chatTurnAudienceFor, chatTurnToolRefusal, declaresAppTools, declaresWindowTools, firstTurnToolRefusal, windowlessChatTurn,
+  argIs, chatToolOffers, screenedPromptAnswersPerson, chatTurnArgsToolRefusal, chatTurnAudienceFor, chatTurnToolRefusal, declaresAppTools, declaresWindowTools, firstTurnToolRefusal, windowlessChatTurn,
   type ChatToolSurface, type ChatTurnOwnerScope, type ChatTurnAudience, type ChatTurnAudienceOptions, type ChatTurnAudienceParams,
 } from "./chat-turn-tool-policy.js";
 import { UNATTENDED_FOLLOW_UP_GENERATION } from "./follow-through/notice-delivery.js";
@@ -187,4 +187,18 @@ test("an args-aware rule is one row: a tool, which turns, which arguments and a 
     { tool: "subagent", turns: (turn) => turn.goalRound === true, args: argIs("execution", "background"), reason: "x" },
   ]);
   assert.equal(attended("subagent", { execution: "background" }), undefined, "the rule applies only to the turns it names");
+});
+
+test("a queued turn answers the person only when its screened prompt is the person's own message", () => {
+  const messages = [
+    { id: "person", role: "user" },
+    { id: "notice", role: "user", notice: { version: 1, source: "check_back", tone: "info", title: "Check-back", summary: "Now" } },
+    { id: "reply", role: "assistant" },
+  ];
+  assert.equal(screenedPromptAnswersPerson(messages, { messageId: "person" }), true);
+  // A notice wakes the chat; it is not the person asking.
+  assert.equal(screenedPromptAnswersPerson(messages, { messageId: "notice" }), false);
+  assert.equal(screenedPromptAnswersPerson(messages, { messageId: "reply" }), false);
+  assert.equal(screenedPromptAnswersPerson(messages, { messageId: "gone" }), false);
+  assert.equal(screenedPromptAnswersPerson(messages, undefined), false);
 });
