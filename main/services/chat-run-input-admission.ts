@@ -52,9 +52,10 @@ export interface ChatRunInputGenerationRef {
    */
   leadChatInput?(): Promise<void>;
   /**
-   * A notice that quotes outside text (a started chat's reply, a pull
-   * request's news, a trigger's event) was saved into this run, so the run
-   * holds outside content before the model reads it.
+   * A notice that quotes outside text (the reply of a started chat whose run
+   * held outside content, a pull request's news, a trigger's event; the same
+   * rule as run taint's `messageBringsOutsideContent`) was saved into this run,
+   * so the run holds outside content before the model reads it.
    */
   outsideInput?(): void;
   agent: {

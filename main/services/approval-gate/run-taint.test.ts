@@ -27,7 +27,7 @@ function taintedAfter(toolName: string, args: unknown = {}): boolean {
   return taint.isNewDestination(UNNAMED_FETCH);
 }
 
-test("outside content taints the run: the web, every browser read or action, a device screen, a subagent's report, a pull request's comments, codemode, a started chat's reply", () => {
+test("outside content taints the run: the web, every browser read or action, a device screen, a subagent's report, a pull request's comments, codemode", () => {
   for (const toolName of [
     "web_fetch", "web_search", "web_search_exa",
     "browser_status", "browser_open", "browser_navigate", "browser_snapshot", "browser_click", "browser_type",
@@ -37,7 +37,6 @@ test("outside content taints the run: the web, every browser read or action, a d
     "subagent",
     "follow_pull_request",
     "codemode",
-    "child_chats",
   ]) {
     assert.equal(taintedAfter(toolName), true, toolName);
   }
@@ -117,6 +116,24 @@ test("outside content a compaction folded away still taints the next turn, and a
   assert.equal(nextTurn([{ type: "message", message: { role: "user" } }, { type: "message", message: { role: "assistant" } }, { type: "compaction", retainedTail: [{ role: "user" }] }]).tainted, false);
 });
 
+test("a lead's child_chats results taint its runs only where they carry a tainted chat's words, before and after compaction", () => {
+  const user = { type: "message", message: { role: "user" } } as const;
+  const clean = { type: "message", message: { role: "toolResult", toolName: "child_chats", details: {} } } as const;
+  const tainted = { type: "message", message: { role: "toolResult", toolName: "child_chats", details: { outside: true } } } as const;
+  const taintedOf = (branch: Parameters<typeof runTaintHistoryOfBranch>[0], messages: Parameters<typeof runTaintHistoryOfMessages>[0] = []) =>
+    new RunTaint({ personText: [], history: [...runTaintHistoryOfBranch(branch), ...runTaintHistoryOfMessages(messages)] }).tainted;
+  const cleanEnding = { role: "user", content: "“Docs” finished.", notice: agentNotice({ source: "chat", tone: "success", title: "“Docs” finished", summary: "" }) };
+  // Every lead that runs chats has child_chats results on its branch.
+  assert.equal(taintedOf([user, clean, clean, user], [cleanEnding]), false, "a lead whose started chats read nothing outside");
+  assert.equal(taintedOf([user, clean, tainted, user]), true);
+  assert.equal(taintedOf([user, { type: "compaction", retainedTail: [{ role: "toolResult", toolName: "child_chats", details: {} }] }]), false);
+  assert.equal(taintedOf([user, { type: "compaction", retainedTail: [{ role: "toolResult", toolName: "child_chats", details: { outside: true } }] }]), true);
+  assert.equal(taintedOf([user, tainted, { type: "compaction", retainedTail: [] }]), true, "the summary of a tainted result");
+  // A result that isn't a tool result, or a flag that isn't `true`, says nothing.
+  assert.equal(taintedOf([{ type: "message", message: { role: "assistant", details: { outside: true } } }]), false);
+  assert.equal(taintedOf([{ type: "message", message: { role: "toolResult", toolName: "child_chats", details: { outside: "yes" } } }]), false);
+});
+
 test("a run a tainted lead chat wrote into counts as holding outside content from then on", () => {
   const taint = new RunTaint({ personText: ["Fix the login page"] });
   assert.equal(taint.isNewDestination(UNNAMED_FETCH), false);
@@ -170,8 +187,11 @@ test("a site that appears only in a notice is still a new destination; the perso
     { role: "user", content: "Goal round: open goal.example", notice: agentNotice({ source: "goal", tone: "info", title: "Goal round", summary: "" }) },
     { role: "assistant", content: "Reading the reply." },
   ];
-  const taint = new RunTaint({ personText: runTaintPersonText(messages, { leadWordsTrusted: true }) });
-  taint.observeRunning({ toolName: "child_chats", args: { action: "read" } });
+  // The lead read a started chat whose run held outside content.
+  const taint = new RunTaint({
+    personText: runTaintPersonText(messages, { leadWordsTrusted: true }),
+    history: runTaintHistoryOfBranch([{ type: "message", message: { role: "toolResult", toolName: "child_chats", details: { outside: true } } }]),
+  });
   for (const url of ["https://collector.example/drop?d=1", "https://status.example/", "https://mirror.example/", "https://goal.example/"]) {
     assert.equal(taint.isNewDestination({ toolName: "web_fetch", args: { url } }), true, url);
   }

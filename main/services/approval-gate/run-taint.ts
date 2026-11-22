@@ -56,6 +56,18 @@ export interface RunTaintCall {
   connectorId?: string;
 }
 
+const SUMMARY_ROLES: ReadonlySet<string> = new Set(["compactionSummary", "branchSummary"]);
+
+/**
+ * Whether a tool's result says it brought outside content in (`details.outside`):
+ * a `child_chats` wait, read or list that returned the words of a started chat
+ * whose run held outside content. Tools whose every result is outside content
+ * are named in `bringsOutsideContent` instead.
+ */
+export function toolResultSaysOutside(details: unknown): boolean {
+  return typeof details === "object" && details !== null && (details as { outside?: unknown }).outside === true;
+}
+
 export interface RunTaintHistoryEntry {
   role: string;
   toolName?: string;
@@ -66,11 +78,29 @@ export interface RunTaintHistoryEntry {
 /** One entry of a chat's journal branch, as far as taint reads it. */
 export interface RunTaintBranchEntry {
   type: string;
-  message?: { role: string; toolName?: unknown };
-  retainedTail?: readonly { role: string; toolName?: unknown }[];
+  message?: RunTaintTranscriptMessage;
+  retainedTail?: readonly RunTaintTranscriptMessage[];
 }
 
-const SUMMARY_ROLES: ReadonlySet<string> = new Set(["compactionSummary", "branchSummary"]);
+/** A model-transcript message (a journal entry's, or a run's starting messages), as far as taint reads it. */
+export interface RunTaintTranscriptMessage {
+  role: string;
+  toolName?: unknown;
+  details?: unknown;
+}
+
+/**
+ * One transcript message as taint history: a summary can't be checked, and a
+ * tool result that says it brought outside content in counts as such.
+ */
+export function runTaintHistoryEntryOf(message: RunTaintTranscriptMessage): RunTaintHistoryEntry {
+  const outside = SUMMARY_ROLES.has(message.role) || (message.role === "toolResult" && toolResultSaysOutside(message.details));
+  return {
+    role: message.role,
+    ...(typeof message.toolName === "string" ? { toolName: message.toolName } : {}),
+    ...(outside ? { outside: true as const } : {}),
+  };
+}
 
 /**
  * A chat's whole journal branch, root to tip, as taint history: tool results
@@ -81,9 +111,8 @@ const SUMMARY_ROLES: ReadonlySet<string> = new Set(["compactionSummary", "branch
  */
 export function runTaintHistoryOfBranch(branch: readonly RunTaintBranchEntry[]): RunTaintHistoryEntry[] {
   const history: RunTaintHistoryEntry[] = [];
-  const add = (message: { role: string; toolName?: unknown }) => {
-    history.push({ role: message.role, ...(typeof message.toolName === "string" ? { toolName: message.toolName } : {}),
-      ...(SUMMARY_ROLES.has(message.role) ? { outside: true as const } : {}) });
+  const add = (message: RunTaintTranscriptMessage) => {
+    history.push(runTaintHistoryEntryOf(message));
   };
   let folded = false;
   for (const entry of branch) {

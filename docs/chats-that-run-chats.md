@@ -118,8 +118,8 @@ for approval.
   started chats on their next turn. If the link is lost (a damaged file), the
   chat runs under Ask with no Mac grants.
 - **Outside content travels with the lead's words.** When the lead's own run
-  holds outside content (a web page, a connector's data, a started chat's
-  reply) as it starts a chat or sends to one, the link is marked. That chat's
+  holds outside content (a web page, a connector's data, the reply of a
+  started chat that read some) as it starts a chat or sends to one, the link is marked. That chat's
   runs start tainted, and while it still answers the lead the Auto judge can't
   pass a call on the lead's word: judged calls show their card. A steer or
   queued message into a running turn does the same from then on. Sites the
@@ -129,10 +129,14 @@ for approval.
 - **A started chat's reply taints the lead when that chat read outside
   content.** Once a run in a started chat holds outside content (it read a web
   page or a connector's data, or its lead's words carried some), its link is
-  marked and its **Started chat** notices say so. The lead's run that reads
-  such a notice, and every later run in the lead, holds outside content, and
-  so do chats it starts or sends to from then on. An ending from a chat that
-  read nothing outside leaves the lead as it was. A pull request's news and a
+  marked and its **Started chat** notices say so, and so does a `child_chats`
+  `wait`, `read` or `list` that returns that chat's words (its reply, its
+  transcript, its result or an approval it is waiting on). The lead's run that
+  reads such a notice or result, and every later run in the lead, holds
+  outside content, and so do chats it starts or sends to from then on. An
+  ending or a reply from a chat that read nothing outside leaves the lead as
+  it was, and `start`, `send` and `stop`, or a `wait` on a chat still running,
+  never taint it. A pull request's news and a
   trigger's event text always count. On a turn a notice woke, the Auto judge
   reads your last message as the request, never the notice; with none, it
   judges with no request. A scheduled task's run is judged against the task's

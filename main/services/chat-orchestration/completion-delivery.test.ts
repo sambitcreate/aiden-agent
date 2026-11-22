@@ -34,6 +34,7 @@ function leadChat(state: { running: boolean }) {
     },
     waitForIdle: async () => undefined,
     waitForRunToSettle: async () => undefined,
+    waitForRunToEnd: async () => undefined,
     now: () => 1_000,
   });
   return { delivery, queued, woke, recorded };
@@ -253,6 +254,7 @@ function failingLead(how: "gone" | "busy" | "throws") {
     append: async () => (how === "gone" ? { kind: "gone", reason: "This chat no longer exists." } : { kind: "busy" }),
     waitForIdle: async () => undefined,
     waitForRunToSettle: async () => undefined,
+    waitForRunToEnd: async () => undefined,
     now: () => 1_000,
   });
 }

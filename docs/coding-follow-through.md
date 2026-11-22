@@ -14,7 +14,7 @@ The first three run on the macOS and Linux desktop, in workspace chats whose fol
 News reaches the chat as a follow-up message. The transcript shows it as a small card with a heading and one line, such as "A check failed · #42 in acme/app · unit". **Details** opens exactly what Aiden told the agent, including the end of any output.
 
 - If the agent is still answering, the message joins that answer as the next thing it reads.
-- A scheduled task's run posting into the chat never takes a follow-up message: its tools are the task's, not the chat's. The message waits up to 30 minutes for that run to end, then joins or wakes the chat's own answer as below; if the chat is still busy, the message is only saved.
+- A scheduled task's run posting into the chat never takes a follow-up message: its tools are the task's, not the chat's. The message waits up to 30 minutes for that run to end, then joins or wakes the chat's own answer as below. If that run is still going after 30 minutes, the message keeps waiting until it ends (the run's own time limit ends it), and is then only saved, without waking the chat.
 - Waiting messages live in memory. If Aiden quits before one is delivered it is lost, except a started chat's ending, which is posted (without waking the chat) at the next start.
 - If the chat is idle and the news needs work (a failure, a conflict, a comment), Aiden starts a follow-up answer on its own. A chat can start at most six such answers an hour; after that the message is only saved, and the agent reads it with the person's next message.
 - News that needs nothing (checks passed, a merge) is only saved.
