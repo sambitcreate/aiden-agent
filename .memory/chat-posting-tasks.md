@@ -17,6 +17,8 @@ Design decisions worth keeping:
 
 UI: approval card **Posts in** row (`postsIn` on `ScheduledTaskApprovalDetails`, in the run-journal allowlist); editor **Posts in <chat>** field with **Use its own chat**; composer chip in `renderer/components/chat-task-chips.tsx` (kept out of follow-through-chips.tsx) linking to `/scheduled?task=<id>`; delete-chat dialogs name tasks that will move; a skipped run shows an info toast.
 
+Onboarding (C5): the Scheduled Automations tile (`ScheduledAutomationsArt` in `onboarding-art/control-art.tsx`, `oa-schat-*` rules in `control-art.css`) now draws a workspace chat with the "Scheduled task" card, its answer, and the "Checking back at 3:10 PM" and task chips above the composer. The old `oa-sched-*` rules stay: Bot watches, routine models and Bot messaging art reuse them. Covered in `onboarding-feature-gallery.test.tsx`.
+
 Tests: `schedule-chat-delivery.test.ts`, `schedule-tool.test.ts`, `schedule-store.test.ts`, `scheduled-tasks-parse.test.ts`, `scheduled-task-application-service.test.ts`, `schedule-execution-tool-policy.test.ts` (bound run), `aiden-remote-schedules.test.ts` (PATCH keeps the binding), `renderer/components/chat-task-chips.test.ts`, `scheduled-task-editor.test.tsx` (approval row). Lanes: `test:scheduled`, `test:assistant-automations`.
 
 Open: native phone cards for `schedule` notices, phone display of skipped runs, screenshots.
