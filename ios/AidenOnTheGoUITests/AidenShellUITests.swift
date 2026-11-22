@@ -1791,6 +1791,8 @@ final class AidenShellUITests: XCTestCase {
         let tabStrip: CGRect?
         /// The app's window, whose bottom edge cuts a row scrolled partly past it.
         let window: CGRect
+        /// The list rows the window's bottom edge runs through.
+        let cutRows: [CGRect]
 
         /// For contrast: the element touches glass, or on iOS 26 a band the
         /// scroll-edge effect fades. The search field and the connection hint draw
@@ -1935,14 +1937,18 @@ final class AidenShellUITests: XCTestCase {
         AuditAllowance(
             // With no bar along the bottom (a regular width), the window's edge
             // cuts the last row the list scrolls past it, and the audit reads the
-            // cut text as low contrast. Only text the edge runs through counts:
-            // text wholly on the screen must pass.
-            reason: "Text the window's bottom edge cuts, in a list scrolled past it",
+            // cut text as low contrast. Only a row's text the edge runs through
+            // counts: text wholly on the screen, and controls and graphics
+            // anywhere, must pass.
+            reason: "A list row's text the window's bottom edge cuts",
             ceiling: [:],
             ceilingInRegularWidth: ["inbox": 1],
             matches: { finding in
-                guard finding.type == .contrast, let frame = finding.frame else { return false }
-                return frame.minY < finding.window.maxY && frame.maxY > finding.window.maxY
+                guard finding.type == .contrast, finding.elementType == .staticText,
+                      let frame = finding.frame else { return false }
+                let edge = finding.window.maxY
+                return frame.minY < edge && frame.maxY > edge
+                    && finding.cutRows.contains { $0.intersects(frame) }
             }
         ),
         AuditAllowance(
@@ -2095,6 +2101,12 @@ final class AidenShellUITests: XCTestCase {
         ("search", "Scout"), ("search", "Flagged the flaky upload test again this week"), ("search", "Bot conversation · "),
     ]
 
+    /// Every list row's frame in `snapshot`, read in one query.
+    private static func cells(in snapshot: XCUIElementSnapshot) -> [CGRect] {
+        (snapshot.elementType == .cell ? [snapshot.frame] : [])
+            + snapshot.children.flatMap { cells(in: $0) }
+    }
+
     /// The system audit finds nothing on any main screen of the tab shell, in
     /// light and in dark, in the compact layout and in a regular width. Every audit
     /// type runs, and an issue fails the test unless `auditAllowances` gives a
@@ -2133,6 +2145,8 @@ final class AidenShellUITests: XCTestCase {
                     .matching(NSPredicate(format: "label == %@", "Filter by computer")).firstMatch
                 let stripVisible = stripContainer.exists ? stripContainer.frame : nil
                 let window = AidenStateMatrix.window(of: app).frame
+                let cutRows = ((try? app.snapshot()).map(Self.cells) ?? [])
+                    .filter { $0.minY < window.maxY && $0.maxY > window.maxY }
                 var excused: [String: Int] = [:]
                 // Every type runs, in two passes. The Dynamic Type checks change the
                 // text size and the screen lays itself out again, and checks that ran
@@ -2154,7 +2168,8 @@ final class AidenShellUITests: XCTestCase {
                             strip: strip,
                             stripVisible: stripVisible,
                             tabStrip: tabStrip,
-                            window: window
+                            window: window,
+                            cutRows: cutRows
                         )
                         let place = element.map { "\($0.elementType.rawValue) '\($0.label)' at \($0.frame)" } ?? "no element"
                         let line = "\(screen) (\(appearance)): \(issue.compactDescription) on \(place)"
