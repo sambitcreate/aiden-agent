@@ -1145,6 +1145,63 @@ test("a drop's log line whose write lands and then fails is written once when th
   link.triggers.stop();
 });
 
+test("a drop's log line is written once even when new calls push it out of the recent calls before the retry", async () => {
+  const busy = Array.from({ length: 10 }, () => ({ result: "skipped" as const, reason: "chat_busy" as const }));
+  const link = linkHarness({ kind: "webhook", gapMinutes: 1 }, busy);
+  await link.setUp();
+  type Book = { log?: Array<{ outcome: string }>; appliedLogKeys?: string[]; dropNotices?: unknown[] };
+  const book = (data: unknown = link.persistence.snapshot()) => (data as { tasks: Record<string, Book> }).tasks["task-1"];
+  const droppedRows = (data?: unknown) => (book(data)?.log ?? []).filter((entry) => entry.outcome === "dropped").length;
+  // Every dropped line ever written, even after it scrolls out of the recent calls.
+  let written = 0;
+  let rejected = 0;
+  const update = link.persistence.update.bind(link.persistence);
+  link.persistence.update = async (mutation) => {
+    const before = droppedRows();
+    const result = await update(mutation);
+    const after = droppedRows();
+    if (after > before) written += after - before;
+    if (rejected === 0 && after > before) {
+      rejected += 1;
+      throw new Error("EIO: the folder could not be synced");
+    }
+    return result;
+  };
+  assert.equal(await link.call({ n: 0 }), 202);
+  for (let step = 0; step < 12 && link.events.length < 7; step += 1) {
+    link.advance(MINUTE);
+    await link.fireTimers();
+  }
+  assert.equal(rejected, 1, "the log line's write landed and was reported failed");
+  assert.equal(book()?.dropNotices?.length, 1, "the notice waits to be tried again");
+  // 60 more calls before the retry: the recent calls roll over and the dropped line scrolls out.
+  for (let n = 1; n <= 60; n += 1) assert.equal(await link.call({ n }), 202);
+  await link.triggers.idle();
+  assert.equal(droppedRows(), 0, "the dropped line is no longer among the recent calls");
+
+  link.advance(MINUTE);
+  await link.fireTimers();
+  assert.equal(written, 1, "exactly one dropped line was ever written");
+  assert.equal(link.notices.length, 1, "and one card");
+  assert.equal(book()?.dropNotices, undefined, "the notice is cleared");
+  assert.equal(book()?.appliedLogKeys, undefined, "and its key goes with it");
+  const shown = await link.store.linkState("task-1");
+  assert.equal(JSON.stringify(shown).includes("retries:log"), false, "the key is never shown");
+  link.triggers.stop();
+});
+
+test("with every remembered log key still pending, a new keyed line is refused rather than forgetting one", async () => {
+  const link = linkHarness({ kind: "webhook", gapMinutes: 1 });
+  await link.setUp();
+  const entry = { at: 1, outcome: "dropped" as const, preview: "Held calls dropped: they couldn't be delivered." };
+  for (let n = 0; n < 32; n += 1) await link.store.appendLog("task-1", entry, { key: `event-${n}:retries:log` });
+  await assert.rejects(link.store.appendLog("task-1", entry, { key: "event-32:retries:log" }), /tried again later/u);
+  await link.store.appendLog("task-1", entry, { key: "event-0:retries:log" });
+  const log = (await link.store.linkState("task-1"))?.log ?? [];
+  assert.equal(log.length, 32, "a key already remembered adds nothing, and the refused one added nothing");
+  link.triggers.stop();
+});
+
 test("a held change of emoji up to the event bound survives a reload", async () => {
   const value = harness();
   const payload = "\u{1F600}".repeat(20_000);

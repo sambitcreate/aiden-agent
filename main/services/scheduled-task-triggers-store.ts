@@ -34,12 +34,20 @@ export interface TaskLinkLogEntry {
   preview: string;
   /** Refused calls within a minute share one entry: how many more came after the first. */
   repeats?: number;
-  /** Stored only: a write retried under the same key appends nothing more. Never shown. */
-  key?: string;
 }
 
 /** Drop cards waiting to be shown, per task. */
 const DROP_NOTICES_MAX = 8;
+/** Keyed log lines remembered per task (`appliedLogKeys`). */
+export const APPLIED_LOG_KEYS_MAX = 32;
+
+function appliedLogKeysOf(value: unknown): Pick<TaskTriggerBook, "appliedLogKeys"> {
+  const keys = Array.isArray(value) ? [...new Set(value.filter((key): key is string => typeof key === "string" && key.length > 0 && key.length <= 300))].slice(-APPLIED_LOG_KEYS_MAX) : [];
+  return keys.length ? { appliedLogKeys: keys } : {};
+}
+
+/** A drop notice's log line is keyed `<notice id>:log`; its key is kept while the notice is. */
+const logKeyOf = (notice: BotEventDropNotice) => `${notice.id}:log`;
 const LOG_OUTCOMES = new Set<TaskLinkLogEntry["outcome"]>(["ran", "batched", "duplicate", "daily_limit", "dropped", "filtered", "bad_signature", "invalid", "off"]);
 
 export function hashTaskLinkToken(token: string): string {
@@ -82,6 +90,12 @@ interface TaskTriggerBook {
   connector?: TaskConnectorSource;
   /** A save added or changed the link's signature header: the link needs rotating to get a secret. */
   needsNewLink?: true;
+  /**
+   * Keys of log lines already written by a write that may be retried (a drop
+   * notice's line), kept apart from the visible log so new calls can't push
+   * one out. A key goes in the write that clears its notice. Never shown.
+   */
+  appliedLogKeys?: string[];
 }
 
 interface Persistence<T> {
@@ -237,8 +251,7 @@ function parseBook(value: unknown): TaskTriggerBook | undefined {
       return finite(item.at) && typeof item.outcome === "string" && LOG_OUTCOMES.has(item.outcome as TaskLinkLogEntry["outcome"]) &&
         typeof item.preview === "string"
         ? [{ at: item.at, outcome: item.outcome as TaskLinkLogEntry["outcome"], preview: item.preview.slice(0, SCHEDULED_TASK_LINK_LIMITS.previewBytes),
-          ...(finite(item.repeats) && item.repeats > 0 ? { repeats: item.repeats } : {}),
-          ...(typeof item.key === "string" && item.key.length <= 300 ? { key: item.key } : {}) }]
+          ...(finite(item.repeats) && item.repeats > 0 ? { repeats: item.repeats } : {}) }]
         : [];
     }).slice(-SCHEDULED_TASK_LINK_LIMITS.log)
     : [];
@@ -259,6 +272,7 @@ function parseBook(value: unknown): TaskTriggerBook | undefined {
     ...(log.length ? { log } : {}),
     ...(parseConnectorSource(row.connector) ? { connector: parseConnectorSource(row.connector)! } : {}),
     ...(row.needsNewLink === true && typeof row.tokenHash === "string" ? { needsNewLink: true as const } : {}),
+    ...appliedLogKeysOf(row.appliedLogKeys),
   };
 }
 
@@ -298,6 +312,7 @@ export function reconcileTaskTriggerBook(book: TaskTriggerBook | undefined, task
     if (task.trigger.kind !== "webhook") {
       delete next.tokenHash;
       delete next.log;
+      delete next.appliedLogKeys;
       delete next.needsNewLink;
     }
     // A connected-app source stays bound through filter edits; switching
@@ -368,6 +383,8 @@ function bookOf(routine: TaskTriggerRoutine, base: TaskTriggerBook): TaskTrigger
     ...(base.log ? { log: base.log } : {}),
     ...(base.connector ? { connector: base.connector } : {}),
     ...(base.needsNewLink ? { needsNewLink: true as const } : {}),
+    // A key leaves with its notice: once the notice is cleared, nothing retries its line.
+    ...appliedLogKeysOf(base.appliedLogKeys?.filter((key) => routine.dropNotices?.some((notice) => logKeyOf(notice) === key))),
   };
 }
 
@@ -546,8 +563,11 @@ export function createScheduledTaskTriggerStore(dependencies: ScheduledTaskTrigg
      */
     /**
      * Adds a line to the link's recent calls. With `key`, a line already
-     * saved under that key (a retry after a write that landed and then
-     * reported failure) adds nothing.
+     * written under that key (a retry after a write that landed and then
+     * reported failure) adds nothing; the keys are kept apart from the
+     * visible log (`appliedLogKeys`), so new calls never push one out. With
+     * every key slot held by a pending notice, it refuses (throws) rather
+     * than forget one, and the caller tries again later.
      */
     appendLog(id: string, entry: TaskLinkLogEntry, options: { coalesce?: boolean; key?: string } = {}): Promise<void> {
       return serial(async () => {
@@ -555,8 +575,11 @@ export function createScheduledTaskTriggerStore(dependencies: ScheduledTaskTrigg
           const stored = books(draft);
           const base = parseBook(stored[id]);
           if (!base) return;
-          if (options.key !== undefined && base.log?.some((line) => line.key === options.key)) return;
-          if (options.key !== undefined) entry = { ...entry, key: options.key };
+          const keys = base.appliedLogKeys ?? [];
+          if (options.key !== undefined && keys.includes(options.key)) return;
+          if (options.key !== undefined && keys.length >= APPLIED_LOG_KEYS_MAX) {
+            throw new Error("Too many log lines are waiting to be confirmed; this one is tried again later.");
+          }
           const log = [...(base.log ?? [])];
           const last = log.length ? log[log.length - 1] : undefined;
           if (options.coalesce && last && last.outcome === entry.outcome && entry.at - last.at < 60_000) {
@@ -564,7 +587,7 @@ export function createScheduledTaskTriggerStore(dependencies: ScheduledTaskTrigg
           } else {
             log.push(entry);
           }
-          stored[id] = { ...base, log: log.slice(-SCHEDULED_TASK_LINK_LIMITS.log) };
+          stored[id] = { ...base, log: log.slice(-SCHEDULED_TASK_LINK_LIMITS.log), ...(options.key !== undefined ? { appliedLogKeys: [...keys, options.key] } : {}) };
         });
       });
     },
@@ -578,7 +601,7 @@ export function createScheduledTaskTriggerStore(dependencies: ScheduledTaskTrigg
       if (!task || !isTriggerTask(task)) return undefined;
       const book = parseBook(books(await dependencies.persistence.load())[id]);
       const link = task.trigger.kind === "webhook" && book?.tokenHash !== undefined;
-      return { hasLink: link, needsNewLink: link && book?.needsNewLink === true, log: [...(book?.log ?? [])].reverse().map(({ key: _key, ...line }) => line) };
+      return { hasLink: link, needsNewLink: link && book?.needsNewLink === true, log: [...(book?.log ?? [])].reverse() };
     },
 
     /**
