@@ -1541,6 +1541,9 @@ test("an accepted Bot turn stays unskippable when later redeliveries fail on the
   } finally {
     service.stop();
     ingress.stop();
+    // Delivery confirms with an atomic outbox write after the reply lands; let
+    // it finish so removing the folder does not race its temp file.
+    await ingress.idle();
     await rm(dir, { recursive: true, force: true });
   }
 });
@@ -1615,6 +1618,9 @@ test("a message to a paused Bot is answered with its one line, consumed once, an
   } finally {
     service.stop();
     ingress.stop();
+    // Delivery confirms with an atomic outbox write after the reply lands; let
+    // it finish so removing the folder does not race its temp file.
+    await ingress.idle();
     await rm(dir, { recursive: true, force: true });
   }
 });
