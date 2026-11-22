@@ -5,7 +5,7 @@ import { cleanup, render, within } from "@testing-library/react";
 import { OnboardingFeatureGallery, onboardingFeatures } from "./onboarding-feature-gallery.js";
 import { visibleOnboardingFeatures } from "../lib/onboarding-provider.js";
 import { hostPlatformCapabilities } from "../../main/services/host-platform-capabilities.js";
-import { BotsArt, ScheduledAutomationsArt } from "./onboarding-art/control-art.js";
+import { BotsArt, KeepGoingArt, ScheduledAutomationsArt } from "./onboarding-art/control-art.js";
 import { ChatsThatRunChatsArt } from "./onboarding-art/chats-that-run-chats-art.js";
 
 /** A stand-in for the browser's IntersectionObserver that the test scrolls by hand. */
@@ -168,6 +168,32 @@ test("the Scheduled Automations tile shows a task's result posted in its chat an
   assert.ok(within(card).getByText("Every day at 9:00 AM"));
   const chips = within(view.getByRole("list", { name: "Chat chips" })).getAllByRole("listitem");
   assert.deepEqual(chips.map((chip) => chip.textContent), ["Checking back at 3:10 PM", "next 9:00 AM"]);
+  assert.equal(art.container.querySelectorAll("img").length, 0, "the chat is code-drawn");
+  assert.equal(view.queryAllByRole("button").length, 0, "the drawing does not add fake keyboard actions");
+  for (const element of art.container.querySelectorAll<HTMLElement>("[class*='anim']")) {
+    for (const name of element.className.split(/\s+/u).filter((part) => part.includes("anim"))) {
+      assert.match(name, /^oa-anim-[a-z]+$/u);
+    }
+  }
+  art.unmount();
+});
+
+test("the Keep Going Until Done tile shows a round's card in the chat and the goal bar over the composer", () => {
+  const { container, unmount } = render(<OnboardingFeatureGallery features={onboardingFeatures} platform="darwin" />);
+  const tile = container.querySelector<HTMLElement>('[data-onboarding-feature="keepGoing"]');
+  assert.ok(tile, "keep-going goals are part of the tour");
+  assert.match(tile.getAttribute("aria-label") ?? "", /^Keep Going Until Done\. Give a chat a goal with \/goal.*only your Start begins one\./u);
+  assert.equal(tile.tabIndex, 0, "the tile is reachable by keyboard");
+  unmount();
+  cleanup();
+
+  const art = render(<KeepGoingArt />);
+  const view = within(art.container);
+  const chat = view.getByRole("group", { name: "A chat working toward its goal" });
+  assert.ok(within(within(chat).getByRole("group", { name: "Round card" })).getByText("Keep going · round 3 of 50"));
+  const bar = view.getByRole("group", { name: "Goal bar" });
+  assert.ok(within(bar).getByText("Working · round 3 of 50"));
+  assert.ok(within(bar).getByText("Pause"));
   assert.equal(art.container.querySelectorAll("img").length, 0, "the chat is code-drawn");
   assert.equal(view.queryAllByRole("button").length, 0, "the drawing does not add fake keyboard actions");
   for (const element of art.container.querySelectorAll<HTMLElement>("[class*='anim']")) {

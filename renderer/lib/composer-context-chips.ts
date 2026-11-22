@@ -35,7 +35,7 @@ export interface ComposerContextChipsInput {
     /** The branch has work that a PR could open (see `branchCanOpenPullRequest`). */
     branchCanOpen: boolean;
   };
-  /** Background jobs run, a pull request is followed, or a done-when check is set. */
+  /** Background jobs run, a pull request is followed, or a check-back is pending. */
   followThrough?: boolean;
   /** Enabled scheduled tasks post into this chat. */
   postingTasks?: boolean;
@@ -50,7 +50,7 @@ export interface ComposerContextChips {
   /** Uncommitted-change count shown on the branch chip; 0 shows nothing. */
   changesBadge: number;
   pullRequest: boolean;
-  /** Background job, followed pull request and done-when chips. */
+  /** Background job, followed pull request and check-back chips. */
   followThrough: boolean;
   /** The chip for scheduled tasks that post into this chat. */
   tasks: boolean;

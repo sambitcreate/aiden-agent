@@ -51,14 +51,16 @@ const approvalRun = (chatId: string): PeerRunState => ({ chatId, runId: `run-${c
 const count = (localInput: InboxBadgeLocal, peers: InboxBadgePeer[] = []) =>
   inboxBadgeCount({ now: NOW, local: localInput, peers });
 
-test("counts this Mac's approvals, questions, detached waits, unseen failures and Bots that need you", () => {
+test("counts this Mac's approvals, questions, detached waits, goals at Needs you, unseen failures and Bots that need you", () => {
   const detached: ChatPendingAttention = { chatId: "detached", kind: "detached", summary: "npm test", count: 1 };
+  const goal: ChatPendingAttention = { chatId: "goal", kind: "goal", summary: "Needs an API key", since: NOW - HOUR, count: 1 };
   const result = count(
     local({
       chats: [
         chat("approval"),
         chat("question"),
         chat("detached"),
+        chat("goal"),
         chat("failed", { lastAssistantFailed: true }),
         chat("working"),
         chat("quiet"),
@@ -66,11 +68,11 @@ test("counts this Mac's approvals, questions, detached waits, unseen failures an
         chat("read-failure", { lastAssistantFailed: true, lastAssistantAt: NOW - 11 * HOUR }),
       ],
       activity: { activeChatIds: ["approval", "question", "working"], approvalChatIds: ["approval"], inputChatIds: ["question"] },
-      pending: new Map([["detached", detached]]),
+      pending: new Map([["detached", detached], ["goal", goal]]),
       botsNeedingYou: ["bot-a"],
     }),
   );
-  assert.equal(result, 5);
+  assert.equal(result, 6);
 });
 
 test("a chat reported twice counts once, and a working run's pending entry adds nothing", () => {

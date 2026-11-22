@@ -12,7 +12,7 @@ import {
   type KeepAwakeStatus,
 } from "../../../renderer/shared/keep-awake.js";
 import { configStore } from "../config-store.js";
-import { backgroundJobs, checkBacks, doneWhen } from "../follow-through/follow-through-main.js";
+import { backgroundJobs, checkBacks, goalChecks } from "../follow-through/follow-through-main.js";
 import { hostPlatformCapabilities } from "../host-platform-capabilities.js";
 import { hostRunRegistry } from "../host-runs-main.js";
 import { usageLimits } from "../usage-limit-main.js";
@@ -135,7 +135,7 @@ export async function startKeepAwake(): Promise<void> {
   created.addInput(hostRunKeepAwakeInput({ runs: () => hostRunRegistry.list(), waits }));
   created.addInput(usageLimitKeepAwakeInput(waits));
   created.addInput(backgroundJobKeepAwakeInput(() => backgroundJobs.listAll()));
-  created.addInput(doneWhenKeepAwakeInput(() => doneWhen.list()));
+  created.addInput(doneWhenKeepAwakeInput(() => goalChecks.list()));
   created.addInput(
     dueSoonKeepAwakeInput({
       checkBacks: () => checkBacks.pendingAll(),

@@ -6,12 +6,10 @@ import { chatPullRequestService } from "../services/chat-pull-request-service-ma
 import {
   cancelCheckBackForPerson,
   chatFollowThrough,
-  clearDoneWhenCheck,
   followChatPullRequest,
   pullRequestFollows,
   readJobOutput,
   resolvePullRequestTarget,
-  setDoneWhenCheck,
   stopJobForPerson,
 } from "../services/follow-through/follow-through-main.js";
 
@@ -74,18 +72,6 @@ export function registerFollowThroughHandlers(): void {
       return;
     }
     pullRequestFollows.nudge(chatId(value.chatId), "action");
-  });
-
-  ipcMain.handle("chats:followThroughSetCheck", async (event, input: unknown) => {
-    activeDocument(event);
-    const value = record(input);
-    if (typeof value.command !== "string") throw new Error("Name the check to run.");
-    await setDoneWhenCheck(chatId(value.chatId), value.command);
-  });
-
-  ipcMain.handle("chats:followThroughClearCheck", (event, input: unknown) => {
-    activeDocument(event);
-    return clearDoneWhenCheck(chatId(record(input).chatId));
   });
 
   ipcMain.handle("chats:followThroughCancelCheckBack", (event, input: unknown) => {

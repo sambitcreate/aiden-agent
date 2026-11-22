@@ -80,6 +80,9 @@ import { registerStorageHandlers } from "./storage.js";
 import { hostPlatformCapabilities } from "../services/host-platform-capabilities.js";
 import { registerBtwHandlers } from "./btw.js";
 import { registerFollowThroughHandlers } from "./follow-through.js";
+import { registerGoalHandlers } from "./goals.js";
+import { declineGoalWindowRound, goalLoop, goalProposals, reportGoalWindowView, startGoalWindowRound } from "../services/goal/goal-main.js";
+import { chatGenerationOwner } from "../services/chat-generation-owner.js";
 import { registerChildChatsHandlers } from "./child-chats.js";
 import { registerTtsHandlers } from "./tts.js";
 import { registerDeviceHandlers } from "./devices.js";
@@ -232,6 +235,32 @@ export function registerHandlers(isMainWindow: (event: IpcMainInvokeEvent) => bo
   if (hostPlatformCapabilities().bots) registerBotHandlers();
   registerBtwHandlers();
   registerFollowThroughHandlers();
+  registerGoalHandlers({
+    handle: (channel, handler) => ipcMain.handle(channel, handler),
+    loop: goalLoop,
+    proposals: goalProposals,
+    activeDocument: (event) => {
+      rendererDocumentOwner(event as IpcMainInvokeEvent, () => new Error("Goal changes require the active application document."));
+    },
+    windowRounds: {
+      report: (event, view) => {
+        const owner = rendererDocumentOwner(event as IpcMainInvokeEvent, () => new Error("Only the active application document can show a chat."));
+        reportGoalWindowView(
+          {
+            documentId: owner.documentId,
+            send: (request) => owner.send("chats:goal-window-round", request),
+            onGone: (listener) => owner.onInvalidated(listener),
+          },
+          view,
+        );
+      },
+      start: (event, token, streamId) => startGoalWindowRound(chatGenerationOwner(event as IpcMainInvokeEvent), token, streamId),
+      decline: (event, token) => {
+        const owner = rendererDocumentOwner(event as IpcMainInvokeEvent, () => new Error("Only the active application document can decline a round."));
+        declineGoalWindowRound(owner.documentId, token);
+      },
+    },
+  });
   registerChildChatsHandlers();
   registerTtsHandlers();
   registerStorageHandlers();

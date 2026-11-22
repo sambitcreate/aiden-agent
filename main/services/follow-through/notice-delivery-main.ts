@@ -8,6 +8,7 @@ import type { NotificationChannel } from "../../../renderer/preload-channels.js"
 import { chatStore } from "../chat-store.js";
 import { configStore } from "../config-store.js";
 import type { ChatGenerationOwner } from "../chat-generation-owner.js";
+import { goalTurnHooks } from "../goal/goal-turn-hooks.js";
 import { llmClient } from "../llm-client.js";
 import type { Chat } from "../types.js";
 import {
@@ -151,6 +152,7 @@ async function append(post: AgentNoticePost): Promise<AppendResult> {
 export const noticeDelivery = new NoticeDelivery({
   queueIntoRun,
   startTurn,
+  startGoalRound: (chatId, post) => goalTurnHooks().noticeRound(chatId, post ? { text: post.text, notice: post.notice } : undefined),
   append,
   waitForIdle: async (chatId) => {
     await llmClient.waitForChatIdle(chatId);

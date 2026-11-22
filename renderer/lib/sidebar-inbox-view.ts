@@ -108,7 +108,7 @@ export function localInboxEntries(input: LocalInboxInput): InboxEntry[] {
     const project = localInboxProject(chat, input.workspaces);
     if (project === null) return [];
     const pending = input.pending.get(chat.id);
-    const attention = pending?.kind === "detached" || pending?.kind === "interrupted" ? pending.kind : undefined;
+    const attention = pending?.kind === "detached" || pending?.kind === "interrupted" || pending?.kind === "goal" ? pending.kind : undefined;
     return [
       {
         key: projectOrderKey(LOCAL_SIDEBAR_HOST_ID, chat.id),
@@ -415,6 +415,7 @@ export function inboxNeedsYouKind(entry: InboxEntry, now: number): InboxNeedsYou
     case INBOX_TIERS.failed:
       return "failed";
     default:
+      if (entry.signals.attention === "goal") return "needs_you";
       return entry.signals.attention === "interrupted" ? "interrupted" : "unavailable";
   }
 }
@@ -491,6 +492,8 @@ export function inboxRowDescription(entry: InboxEntry, status: InboxRowStatus): 
       return summary ? `Interrupted — open to resume: ${summary}` : "Interrupted — open to resume";
     case "unavailable":
       return summary ? `${INBOX_UNAVAILABLE_DESCRIPTION}: ${summary}` : INBOX_UNAVAILABLE_DESCRIPTION;
+    case "needs_you":
+      return summary ? `Keep-going goal: ${summary}` : "The keep-going goal needs you";
   }
 }
 

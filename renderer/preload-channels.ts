@@ -143,6 +143,10 @@ export const NOTIFICATION_CHANNEL_VALUES = [
    * `transcript: true` means a follow-up notice was also saved into its messages.
    */
   "chats:follow-through-changed",
+  /** A chat's keep-going goal changed: `{chatId, goal}` (the goal's view, or null once cleared). */
+  "chats:goal-changed",
+  "chats:goal-window-round",
+  "chats:goal-proposal-changed",
   /** A lead chat's started chats changed (Phase 5): `{leadChatId}`. */
   "chats:child-chats-changed",
   "chats:settled",

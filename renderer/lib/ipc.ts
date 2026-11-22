@@ -280,6 +280,7 @@ import type {
 } from "../shared/chat-pull-requests";
 import { parseBtwEvent, type BtwEventV1, type BtwStartReceiptV1 } from "../shared/btw";
 import { parseChatFollowThrough, type ChatFollowThroughV1 } from "../shared/follow-through";
+import { parseGoalProposal, parseGoalView, type GoalProposalView, type GoalView } from "../shared/goal";
 import type { BackgroundJobOutput } from "../shared/background-jobs";
 import {
   parseDeviceHostCheck,
@@ -1725,7 +1726,7 @@ export const chatsApi = {
   btwCancel: (chatId: string, requestId: string) =>
     invoke<boolean>("chats:btwCancel", { chatId, requestId }),
   btwClear: (chatId: string) => invoke<void>("chats:btwClear", { chatId }),
-  // Follow-through: background jobs, followed pull requests and the done-when check.
+  // Follow-through: background jobs, followed pull requests and check-backs.
   followThrough: async (chatId: string): Promise<ChatFollowThroughV1> => {
     const value = parseChatFollowThrough(await invoke<unknown>("chats:followThrough", chatId));
     if (!value || value.chatId !== chatId) throw new Error("The follow-through response was invalid.");
@@ -1741,10 +1742,67 @@ export const chatsApi = {
   /** Read this chat's followed pull requests soon, or every chat's when `chatId` is omitted. */
   nudgeFollowedPullRequests: (chatId?: string) =>
     invoke<void>("chats:followThroughNudgePullRequests", chatId === undefined ? {} : { chatId }),
-  setDoneWhenCheck: (chatId: string, command: string) =>
-    invoke<void>("chats:followThroughSetCheck", { chatId, command }),
-  clearDoneWhenCheck: (chatId: string) => invoke<void>("chats:followThroughClearCheck", { chatId }),
   cancelCheckBack: (chatId: string, id: string) => invoke<void>("chats:followThroughCancelCheckBack", { chatId, id }),
+  // Keep-going goals: one per chat; `chats:goal-changed` carries every change.
+  goal: async (chatId: string): Promise<GoalView | null> => {
+    const value = await invoke<unknown>("chats:goal:get", chatId);
+    if (value === null) return null;
+    const goal = parseGoalView(value);
+    if (!goal || goal.chatId !== chatId) throw new Error("The goal response was invalid.");
+    return goal;
+  },
+  /** Sets the chat's goal (replacing any earlier one); send the objective as the next message after it. */
+  setGoal: async (chatId: string, objective: string, source: "slash" | "menu" | "proposal"): Promise<GoalView> => {
+    const goal = parseGoalView(await invoke<unknown>("chats:goal:set", { chatId, objective, source }));
+    if (!goal) throw new Error("The goal response was invalid.");
+    return goal;
+  },
+  /** `/until <command>`: a goal that is done when the command exits 0, checked after each answer, 5 checks at most. */
+  setGoalCheck: async (chatId: string, command: string): Promise<GoalView> => {
+    const goal = parseGoalView(await invoke<unknown>("chats:goal:set", { chatId, source: "until", check: command }));
+    if (!goal) throw new Error("The goal response was invalid.");
+    return goal;
+  },
+  pauseGoal: async (chatId: string): Promise<GoalView | null> => parseGoalView(await invoke<unknown>("chats:goal:pause", { chatId })),
+  /** Resume, or Keep going: round 1 again, and a round starts now if the chat is idle. */
+  resumeGoal: async (chatId: string): Promise<GoalView | null> => parseGoalView(await invoke<unknown>("chats:goal:resume", { chatId })),
+  clearGoal: (chatId: string) => invoke<void>("chats:goal:clear", { chatId }),
+  onGoalChanged: (handler: (chatId: string, goal: GoalView | null) => void) =>
+    onNotification<unknown>("chats:goal-changed", (payload) => {
+      const update = payload && typeof payload === "object" ? (payload as { chatId?: unknown; goal?: unknown }) : {};
+      if (typeof update.chatId !== "string" || !update.chatId) return;
+      const goal = update.goal === null ? null : parseGoalView(update.goal);
+      if (update.goal !== null && !goal) return;
+      handler(update.chatId, goal);
+    }),
+  /** The goal the agent suggested in this chat (`propose_goal`), waiting for Start or Not now. */
+  goalProposal: async (chatId: string): Promise<GoalProposalView | null> => {
+    const value = await invoke<unknown>("chats:goal:proposal", chatId);
+    if (value === null) return null;
+    const proposal = parseGoalProposal(value);
+    if (!proposal || proposal.chatId !== chatId) throw new Error("The goal suggestion response was invalid.");
+    return proposal;
+  },
+  /** Not now: the suggestion goes. */
+  dismissGoalProposal: (chatId: string) => invoke<void>("chats:goal:dismissProposal", { chatId }),
+  onGoalProposalChanged: (handler: (chatId: string, proposal: GoalProposalView | null) => void) =>
+    onNotification<unknown>("chats:goal-proposal-changed", (payload) => {
+      const update = payload && typeof payload === "object" ? (payload as { chatId?: unknown; proposal?: unknown }) : {};
+      if (typeof update.chatId !== "string" || !update.chatId) return;
+      const proposal = update.proposal === null ? null : parseGoalProposal(update.proposal);
+      if (update.proposal !== null && !proposal) return;
+      handler(update.chatId, proposal);
+    }),
+  /** This window's pane shows `chatId` (or no chat), with or without focus: where a due goal round can start. */
+  reportGoalView: (chatId: string | null, focused: boolean) => invoke<void>("chats:goal:view", { chatId, focused }),
+  /** A goal round main offered this window is due: start it here, or decline it so it runs without the window. */
+  onGoalWindowRound: (handler: (request: { chatId: string; token: string }) => void) =>
+    onNotification<unknown>("chats:goal-window-round", (payload) => {
+      const request = payload && typeof payload === "object" ? (payload as { chatId?: unknown; token?: unknown }) : {};
+      if (typeof request.chatId !== "string" || !request.chatId || typeof request.token !== "string" || !request.token) return;
+      handler({ chatId: request.chatId, token: request.token });
+    }),
+  declineGoalWindowRound: (token: string) => invoke<void>("chats:goal:declineWindowRound", { token }),
   // Chats a lead chat started (Phase 5).
   startedChats: async (leadChatId: string): Promise<StartedChatView[]> =>
     parseStartedChatViews(await invoke<unknown>("chats:childChats", leadChatId)),
@@ -2349,10 +2407,28 @@ export function createChatTurnId(): string {
  * (filtered by a client-generated streamId) BEFORE kicking off the backend, so
  * no opening tokens are missed. Auto-unsubscribes on done/error.
  */
+/** What main answers a request to start a generation (`chat:start`, or a goal round's start). */
+interface GenerationStartReply {
+  streamId: string;
+  accepted: boolean;
+  started: boolean;
+  error?: string;
+}
+
+/**
+ * Starts a goal round main offered this window (`token`), as this window's
+ * own run, instead of answering a message the person sent.
+ */
+export function goalRoundStart(token: string): (streamId: string) => Promise<GenerationStartReply> {
+  return (streamId) => invoke<GenerationStartReply>("chats:goal:startWindowRound", { token, streamId });
+}
+
 export function startGeneration(
   params: ChatStartParams,
   callbacks: StreamCallbacks,
   messageTurnId: string,
+  /** Starts the run another way than `chat:start` (a goal round in this window). */
+  start?: (streamId: string) => Promise<GenerationStartReply>,
 ): GenerationHandle {
   const streamId = messageTurnId;
   rememberOwnGenerationStream(streamId);
@@ -2363,12 +2439,9 @@ export function startGeneration(
   );
   const dispose = stream.dispose;
 
-  const started: Promise<GenerationStartResult> = invoke<{
-    streamId: string;
-    accepted: boolean;
-    started: boolean;
-    error?: string;
-  }>("chat:start", streamId, params, messageTurnId).then(
+  const started: Promise<GenerationStartResult> = (
+    start ? start(streamId) : invoke<GenerationStartReply>("chat:start", streamId, params, messageTurnId)
+  ).then(
     (result) => {
       if (result.accepted) {
         if (result.error) {

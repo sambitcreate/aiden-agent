@@ -17,7 +17,7 @@ import {
   type BackgroundJobEnded,
 } from "./background-jobs.js";
 import { ChatSettlement } from "./chat-settlement.js";
-import { DoneWhenChecks, type DoneWhenNotice } from "./done-when.js";
+import { GoalCheckRunner } from "./done-when.js";
 import { runBoundedShellCommand } from "../bounded-shell-command.js";
 
 const skip = process.platform === "win32" ? "background jobs run on macOS and Linux" : false;
@@ -764,25 +764,22 @@ test("a straggler that exits right after the command is not listed as a job", { 
 
 function checkHarness(dir: string, jobs: BackgroundJobs) {
   let group = 0;
-  const notices: DoneWhenNotice[] = [];
-  const checks = new DoneWhenChecks({
-    now: Date.now,
-    persist: () => {},
-    post: (notice) => notices.push(notice),
-    run: async (record, signal) => {
+  const checks = new GoalCheckRunner({
+    run: async (input, signal) => {
       const id = newBackgroundJobId();
       const result = await runBoundedShellCommand({
-        command: record.command, signal, cwd: dir, env: { ...process.env, AIDEN_BACKGROUND_JOB: id },
+        command: input.command, signal, cwd: dir, env: { ...process.env, AIDEN_BACKGROUND_JOB: id },
         timeoutMs: 10_000, maxOutputBytes: 1024,
         recordGroup: (pid) => {
           group = pid;
-          return jobs.recordCheckGroup(id, pid, record.workspaceId, record.chatId);
+          return jobs.recordCheckGroup(id, pid, input.workspaceId, input.chatId);
         },
       });
       return { ...result, output: result.stdout };
     },
   });
-  return { checks, notices, get group() { return group; } };
+  const check = (command: string) => checks.run({ command, workspaceId: "ws-1", chatId: "chat-1" }, new AbortController().signal);
+  return { checks, check, get group() { return group; } };
 }
 
 test("a check whose recovery record cannot be saved waits without running or waking the agent", { skip }, async (t) => {
@@ -793,23 +790,18 @@ test("a check whose recovery record cannot be saved waits without running or wak
   const run = checkHarness(dir, jobs);
   // A file at the ledger directory path forces the actual persistence step to fail.
   await fs.writeFile(logDir, "original");
-  run.checks.set({ command: "touch executed", workspaceId: "ws-1", chatId: "chat-1", runNow: true });
-  await eventually(() => run.notices.length > 0, "the admission outcome");
-  assert.equal(run.checks.get("chat-1")?.checksRun, 0);
-  assert.equal(run.checks.get("chat-1")?.state, "waiting");
-  assert.equal(run.notices[0]?.wake, false);
-  assert.equal(run.notices[0]?.notice.tone, "info");
-  assert.doesNotMatch(run.notices[0]!.text, /EEXIST|mkdir/u);
+  const refused = await run.check("touch executed");
+  // Stopped, not failed: the goal pauses with the reason instead of starting a round.
+  assert.equal(refused.kind, "stopped");
+  assert.doesNotMatch(refused.summary, /EEXIST|mkdir/u);
   assert.ok(run.group > 1 && !alive(run.group), "the gated shell exited");
   await assert.rejects(fs.access(path.join(dir, "executed")), { code: "ENOENT" });
   assert.equal(await fs.readFile(logDir, "utf8"), "original");
   await jobs.stopWorkspace("ws-1", "access-changed");
 
   await fs.unlink(logDir);
-  assert.equal(run.checks.answerFinished("chat-1"), true);
-  await eventually(() => run.notices.length === 2, "the retried command");
-  assert.equal(run.checks.get("chat-1")?.checksRun, 1);
-  assert.equal(run.checks.get("chat-1")?.state, "passed");
+  const retried = await run.check("touch executed");
+  assert.equal(retried.kind === "finished" && retried.passed, true);
   await fs.access(path.join(dir, "executed"));
   assert.deepEqual(JSON.parse(await fs.readFile(path.join(logDir, "running.json"), "utf8")).jobs, []);
 });
@@ -822,11 +814,8 @@ test("a release write failure after verified exit preserves the command result a
   const run = checkHarness(dir, jobs);
   // The admitted command moves its ledger aside and leaves a regular file
   // in its place. The last committed ledger remains available for relaunch.
-  run.checks.set({ command: "mv logs saved-ledger && touch logs", workspaceId: "ws-1", chatId: "chat-1", runNow: true });
-  await eventually(() => run.notices.length > 0, "the completed command");
-  assert.equal(run.checks.get("chat-1")?.state, "passed");
-  assert.equal(run.checks.get("chat-1")?.checksRun, 1);
-  assert.equal(run.notices[0]?.wake, false);
+  const completed = await run.check("mv logs saved-ledger && touch logs");
+  assert.equal(completed.kind === "finished" && completed.passed, true);
   assert.ok(errors.some((error) => (error as NodeJS.ErrnoException)?.code === "EEXIST"));
   const previous = JSON.parse(await fs.readFile(path.join(dir, "saved-ledger", "running.json"), "utf8"));
   assert.equal(previous.jobs[0]?.pid, run.group);
@@ -856,14 +845,9 @@ test("a denied check-group stop retains recovery ownership and blocks only its w
     try { if (run.group) kill(-run.group, "SIGKILL"); } catch { /* Already gone. */ }
     await cleanUp(jobs, dir);
   });
-  const { checks, notices } = run;
-  checks.set({ command: "sleep 60 </dev/null >/dev/null 2>&1 & echo $! > child", workspaceId: "ws-1", chatId: "chat-1", runNow: true });
-  await eventually(() => notices.length > 0, "the cleanup outcome");
-  assert.equal(checks.get("chat-1")?.state, "waiting");
-  assert.equal(checks.get("chat-1")?.checksRun, 0);
-  assert.equal(notices[0]?.wake, false);
-  assert.equal(notices[0]?.notice.tone, "info");
-  assert.match(notices[0]!.text, /confirm.*check stopped/u);
+  const outcome = await run.check("sleep 60 </dev/null >/dev/null 2>&1 & echo $! > child");
+  assert.equal(outcome.kind, "stopped");
+  assert.match(outcome.summary, /confirm.*check stopped/u);
   const group = run.group;
   const child = Number(await fs.readFile(path.join(dir, "child"), "utf8"));
   assert.ok(alive(child));

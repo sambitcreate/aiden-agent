@@ -5,7 +5,7 @@
 // disclosure shows exactly what the agent was told, output included.
 
 import * as React from "react";
-import { AlarmClock, CalendarClock, ChevronDown, GitPullRequest, ListChecks, MessagesSquare, TerminalSquare } from "lucide-react";
+import { AlarmClock, CalendarClock, ChevronDown, GitPullRequest, ListChecks, MessagesSquare, Repeat, TerminalSquare } from "lucide-react";
 import type { AgentNoticeV1 } from "../shared/agent-notices";
 import { Markdown } from "./markdown";
 import { Button, Text } from "./ui";
@@ -17,6 +17,7 @@ const SOURCE_ICONS = {
   check: ListChecks,
   check_back: AlarmClock,
   schedule: CalendarClock,
+  goal: Repeat,
   chat: MessagesSquare,
 } as const;
 
@@ -26,6 +27,7 @@ const SOURCE_LABELS = {
   check: "Done-when check",
   check_back: "Check-back",
   schedule: "Scheduled task",
+  goal: "Keep going",
   chat: "Started chat",
 } as const;
 

@@ -184,6 +184,7 @@ test("the final step is a complete grouped bento gallery with hover descriptions
     "Meet your Bots",
     "Bot computers",
     "Scheduled Automations",
+    "Keep Going Until Done",
     "Voice & Dictation",
     "Command Palette",
     "Private Usage Profile",

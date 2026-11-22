@@ -76,9 +76,7 @@ test("the composer shows chips only while something is still going on", () => {
   const follow = { host: "github.com", repository: "acme/app", number: 1, url: "https://github.com/acme/app/pull/1", startedAt: 1, startedBy: "agent" as const, noticesSent: 0 };
   assert.equal(hasActiveFollowThrough({ ...empty, pullRequests: [{ ...follow, state: "ended" }] }), false);
   assert.equal(hasActiveFollowThrough({ ...empty, pullRequests: [{ ...follow, state: "following" }] }), true);
-  for (const [state, active] of [["waiting", true], ["running", true], ["passed", false], ["gave-up", false]] as const) {
-    assert.equal(hasActiveFollowThrough({ ...empty, check: { command: "npm test", state, checksRun: 1, setAt: 1 } }), active, state);
-  }
+  assert.equal(hasActiveFollowThrough({ ...empty, checkBacks: [{ id: "cb_1", fireAt: 2, note: "Look again", setAt: 1 }] }), true);
   assert.equal(hasActiveFollowThrough(null), false);
 });
 
@@ -86,11 +84,9 @@ test("the follow-through answer is checked for shape and drops malformed rows", 
   const value: ChatFollowThroughV1 = {
     ...emptyChatFollowThrough("c"),
     jobs: [job("running"), { nope: true } as unknown as BackgroundJobView],
-    check: { command: "npm test", state: "waiting", checksRun: 0, setAt: 1 },
   };
   const parsed = parseChatFollowThrough(value);
   assert.equal(parsed?.jobs.length, 1);
-  assert.equal(parsed?.check?.command, "npm test");
   assert.equal(parseChatFollowThrough({ ...value, version: 2 }), null);
   assert.equal(parseChatFollowThrough({ ...value, jobs: "x" }), null);
   assert.equal(parseChatFollowThrough(null), null);

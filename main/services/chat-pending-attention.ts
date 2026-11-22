@@ -183,16 +183,22 @@ function isLive(run: HostRunSummary | undefined): run is HostRunSummary {
   return run !== undefined && (run.state === "working" || run.state === "needs_approval" || run.state === "needs_input");
 }
 
+/** A keep-going goal that stopped at Needs you: when, and its reason. */
+export interface GoalNeedsYou {
+  since: number;
+  reason: string;
+}
+
 /**
  * One chat's attention, most pressing first: a live approval, a live question,
- * a detached prompt (its run may still be working), an interrupted wait, then
- * a run with nothing to answer. An interrupted wait from a run older than the
+ * a detached prompt (its run may still be working), an interrupted wait, a
+ * goal that needs the person, then a run with nothing to answer. An interrupted wait from a run older than the
  * live one is moot: the chat is working again.
  * Undefined when the chat is waiting on nothing.
  */
 export function pendingAttentionForChat(
   chatId: string,
-  sources: { runs: PendingAttentionRuns; detached: DetachedPromptLog; interrupted?: InterruptedRunWaits },
+  sources: { runs: PendingAttentionRuns; detached: DetachedPromptLog; interrupted?: InterruptedRunWaits; goal?: GoalNeedsYou },
 ): ChatPendingAttention | undefined {
   const run = sources.runs.currentRunForChat(chatId);
   const live = isLive(run) ? run : undefined;
@@ -246,6 +252,10 @@ export function pendingAttentionForChat(
       runStartedAt: interrupted?.runStartedAt,
       count: waits.length,
     };
+  }
+
+  if (sources.goal && !live) {
+    return { chatId, kind: "goal", summary: clipPendingAttentionSummary(sources.goal.reason), since: sources.goal.since, count: 1 };
   }
 
   if (live) return { chatId, kind: "working", summary: "", runStartedAt, count: 0 };

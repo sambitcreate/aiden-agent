@@ -25,9 +25,11 @@ import { CHECK_BACK_TOOL_NAME } from "../../renderer/shared/check-backs.js";
 import { CHILD_CHATS_TOOL_NAME } from "../../renderer/shared/child-chats.js";
 import { WORKSPACE_ARTIFACT_TOOL_NAME } from "../../renderer/shared/workspace-artifacts.js";
 import { COMPUTER_USE_TOOL_NAME } from "./computer-use/tool.js";
+import { approvalAllowableAwayFromOwner } from "./chat-owed-turn-prompts.js";
 import { generativeUiUnavailableReason } from "./generative-ui-extension.js";
 import { HOOKS_TOOL_NAME, hooksToolUnavailableReason, offersHooksTool, type HooksToolSurface } from "./hooks-tool.js";
 import { TODO_TOOL_NAME } from "./rpiv-todo/contract.js";
+import { PROPOSE_GOAL_TOOL_NAME } from "../../renderer/shared/goal.js";
 
 const FORM_FILL_TOOL_NAME = "form_fill";
 const SUBAGENT_TOOL_NAME = "subagent";
@@ -199,6 +201,18 @@ export function firstTurnToolRefusal(refusals: readonly TurnToolRefusal[]): Turn
   };
 }
 
+/**
+ * Whether a windowless turn refuses `name` because only the chat's own window
+ * can run or approve it: the browser, Computer Use and the other window tools,
+ * or (in a goal round) an approval only the window can give. A goal round that
+ * hits one offers Continue here, so a round on screen can do it.
+ */
+export function refusedForWantOfWindow(turn: ChatTurnAudience, name: string): boolean {
+  if (turn.windowless !== true) return false;
+  if (WINDOW_TOOL_NAMES.has(name) || turn.windowOnlyToolNames?.has(name) === true) return true;
+  return turn.goalRound === true && !approvalAllowableAwayFromOwner(name);
+}
+
 /** Declarations that depend on the chat alone, never on the turn's audience. */
 export function chatToolOffers(surface: ChatToolSurface): { hooks: boolean } {
   return { hooks: offersHooksTool({ ...surface, unattended: false, remoteAudience: false }) };
@@ -226,7 +240,10 @@ export function chatTurnToolRefusal(
     if (turn.questionPromptsUnavailable === true && name === ASK_USER_QUESTION_TOOL_NAME) {
       return `${ASK_USER_QUESTION_TOOL_NAME} is not available in this turn: the paired device that sent it cannot show question prompts. Ask your question in your reply instead.`;
     }
-    if (turn.windowless === true && (WINDOW_TOOL_NAMES.has(name) || turn.windowOnlyToolNames?.has(name) === true)) {
+    if (refusedForWantOfWindow(turn, name)) {
+      if (turn.goalRound === true) {
+        return `${name} is not available in this round: the chat isn't open on screen, and this tool needs the chat's own window. Say in your reply what you would do with it; the next round can use it once the person opens the chat and presses Continue here.`;
+      }
       return `${name} is not available in this turn: Aiden started this turn itself and no window owns it, and this tool needs the chat's own window. Say in your reply what you would do with it.`;
     }
     if (turn.remoteAudience && name === WORKSPACE_ARTIFACT_TOOL_NAME) {
@@ -266,7 +283,51 @@ export function aidenStartedTurn(turn: ChatTurnAudience): boolean {
   return turn.unattended || (turn.windowless === true && turn.answersPerson !== true) || turn.goalRound === true;
 }
 
+/** Subagent roles that only read: everything but the implementer. */
+const READ_ONLY_SUBAGENT_ROLES: ReadonlySet<string> = new Set(["scout", "planner", "reviewer"]);
+
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  return typeof value === "object" && value !== null && !Array.isArray(value) ? (value as Record<string, unknown>) : undefined;
+}
+
+/** Capabilities that change something or start more helpers: writes, shell, mutating connectors, nesting. */
+function capabilitiesWrite(value: unknown): boolean {
+  const capabilities = asRecord(value);
+  if (!capabilities) return false;
+  const mutations = capabilities.mcpMutations;
+  return (
+    capabilities.workspaceWrite === true ||
+    capabilities.shell === true ||
+    capabilities.delegate === true ||
+    (Array.isArray(mutations) && mutations.length > 0)
+  );
+}
+
+/**
+ * A `subagent` run that may change something: any task in a role other than
+ * scout, planner or reviewer, or a batch or task asking for writes, shell,
+ * mutating connectors or nesting. `list` launches nothing.
+ */
+export function subagentCallMayWrite(args: Record<string, unknown>): boolean {
+  if (args.action === "list") return false;
+  if (capabilitiesWrite(args.capabilities)) return true;
+  const tasks = Array.isArray(args.tasks) ? args.tasks : [];
+  return tasks.some((entry) => {
+    const task = asRecord(entry);
+    if (!task) return false;
+    return typeof task.role !== "string" || !READ_ONLY_SUBAGENT_ROLES.has(task.role) || capabilitiesWrite(task.capabilities);
+  });
+}
+
 export const TURN_ARGS_REFUSAL_RULES: readonly TurnArgsRefusalRule[] = [
+  {
+    tool: PROPOSE_GOAL_TOOL_NAME,
+    turns: (turn) => aidenStartedTurn(turn) || turn.remoteAudience,
+    args: () => true,
+    reason:
+      `${PROPOSE_GOAL_TOOL_NAME} is not available in this turn: Aiden started it (a keep-going round or a follow-up), or a paired device sent it, and a goal is suggested only to the person at this computer. ` +
+      "Carry on with the work; say in your reply if you think a goal would help.",
+  },
   {
     tool: CHECK_BACK_TOOL_NAME,
     turns: aidenStartedTurn,
@@ -274,6 +335,14 @@ export const TURN_ARGS_REFUSAL_RULES: readonly TurnArgsRefusalRule[] = [
     reason:
       `${CHECK_BACK_TOOL_NAME} cannot set a check-back in this turn: Aiden started it, not the person, and a check-back set here could chain into another. ` +
       "Finish what you can now, or say in your reply what is still left to check. list and cancel still work.",
+  },
+  {
+    tool: SUBAGENT_TOOL_NAME,
+    turns: (turn) => turn.goalRound === true,
+    args: subagentCallMayWrite,
+    reason:
+      `${SUBAGENT_TOOL_NAME} can only run read-only helpers in a keep-going round: scout, planner or reviewer, without workspace writes, shell, mutating connectors or nesting. ` +
+      "Make the change yourself in this round, or delegate only the reading.",
   },
   {
     tool: CHILD_CHATS_TOOL_NAME,

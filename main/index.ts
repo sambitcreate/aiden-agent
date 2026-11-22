@@ -218,6 +218,7 @@ import {
   shutdownFollowThrough,
   startFollowThrough,
 } from "./services/follow-through/follow-through-main.js";
+import { shutdownGoalLoop, startGoalLoop } from "./services/goal/goal-main.js";
 import { startKeepAwake, stopKeepAwake } from "./services/keep-awake/keep-awake-main.js";
 import { reconcileChatScopedStores } from "./services/startup-chat-reconciliation.js";
 import { removeWorkspaceArtifacts } from "./services/workspace-artifacts/main.js";
@@ -577,6 +578,8 @@ async function runShutdownAndQuit(settingsPrepared: boolean): Promise<void> {
   const disarmShutdownCeiling = armShutdownCeiling();
   // Quitting ends Aiden's work, so nothing is left to keep the computer awake for.
   stopKeepAwake();
+  // No goal reviews or rounds start while generations stop: the quit's aborts aren't the person's Stop.
+  shutdownGoalLoop();
   // First, so no further chat or worktree is deleted while the rest of the app stops.
   await settleShutdownStep("main", "Storage cleanup", SHUTDOWN_BUDGET_MS.storageCleanup, () => storageUsageService.shutdown());
   await settleShutdownStep("voice", "Gemini Live", SHUTDOWN_BUDGET_MS.geminiLive, () => geminiLiveService.shutdown());
@@ -594,8 +597,8 @@ async function runShutdownAndQuit(settingsPrepared: boolean): Promise<void> {
       "Parent generation did not settle before the shutdown deadline; forcing application shutdown.",
     );
   }
-  // Background jobs and done-when checks stop with the app; follows and
-  // checks are saved for the next launch. Bounded so a stuck job never holds quit.
+  // Background jobs and goal checks stop with the app; follows and
+  // goals are saved for the next launch. Bounded so a stuck job never holds quit.
   await settleShutdownStep("follow-through", "Background jobs", SHUTDOWN_BUDGET_MS.backgroundJobs, () => shutdownFollowThrough());
   // Settled generations have recorded their last pace samples; persist the
   // debounced remainder. Never fatal: it is a regenerable measurement cache.
@@ -2825,6 +2828,14 @@ if (!ownsSingleInstanceLock) {
       await startFollowThrough().catch((error: unknown) => {
         logger.warn("follow-through", "Could not finish restoring checks and pull request follows.", error);
       });
+      // Goals live in follow-through's saved state; ones active at quit come back paused.
+      if (!shutdownHasBegun()) {
+        try {
+          startGoalLoop();
+        } catch (error) {
+          logger.warn("goal", "Could not restore keep-going goals.", error);
+        }
+      }
       // Watches runs, jobs and checks to keep the computer awake while Aiden works.
       if (!shutdownHasBegun()) {
         await startKeepAwake().catch((error: unknown) => {
