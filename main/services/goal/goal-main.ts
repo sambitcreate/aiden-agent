@@ -273,6 +273,7 @@ export function startGoalLoop(): void {
   installGoalTurnHooks({
     kickoff: (chatId) => goalLoop.kickoff(chatId),
     reminder: (chatId) => goalLoop.reminder(chatId),
+    objective: (chatId) => goalLoop.get(chatId)?.objective,
     runSettled: (event) => {
       goalWindowRounds.settled(event.streamId);
       goalLoop.runSettled(event);

@@ -4831,10 +4831,18 @@ export const llmClient = {
           ...runTaintHistoryOfMessages(generationChat.messages),
         ],
         isConnectorTool: (name) => claimCheckOptions.isConnectorTool(name),
+        // In a started chat, the lead's notice of this run's ending will quote outside content.
+        onOutside: () => {
+          void import("./chat-orchestration/links-main.js")
+            .then(({ chatLinks }) => chatLinks.markChildTainted(params.chatId))
+            .catch((error: unknown) => logger.warn("chat-orchestration", "Could not record that a started chat read outside content.", error));
+        },
       });
       if (leadTaintedRun) runTaint.markOutside();
       leadRunTaint.tainted = () => runTaint?.tainted === true;
-      approvalRequestText = ownerRequestText(generationChat.messages, currentUser);
+      // A goal round works toward the objective the person set.
+      const goalObjective = options.goalRound === true ? goalTurnHooks().objective(params.chatId) : undefined;
+      approvalRequestText = ownerRequestText(generationChat.messages, currentUser, goalObjective ? { goalObjective } : {});
       // A design turn's first request carries the canvas counts, journaled
       // after the history they follow (see `withJournaledCanvasStatusNote`).
       const canvasStatusLine = await enteredCanvasTools.initialStatusLine();

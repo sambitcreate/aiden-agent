@@ -33,6 +33,12 @@ export interface ChatLink {
    * lead's word (Phase 5 review).
    */
   leadTainted?: true;
+  /**
+   * A run in this chat held outside content, so its replies and results may
+   * quote it: the lead's notice of its ending carries `outside` and taints
+   * the lead's run. Sticky, as a chat's later runs inherit the taint.
+   */
+  childTainted?: true;
   /** The person typed in this chat after the lead's last message. */
   tookOverAt?: number;
   /** The run the lead started most recently in this chat. */
@@ -118,6 +124,7 @@ export function parseChatLink(value: unknown): ChatLink | undefined {
   const leadSentAt = time(record.leadSentAt);
   if (leadSentAt !== undefined) link.leadSentAt = leadSentAt;
   if (record.leadTainted === true) link.leadTainted = true;
+  if (record.childTainted === true) link.childTainted = true;
   const tookOverAt = time(record.tookOverAt);
   if (tookOverAt !== undefined) link.tookOverAt = tookOverAt;
   if (typeof record.runId === "string" && KEY.test(record.runId)) link.runId = record.runId;
@@ -267,6 +274,18 @@ export class ChatLinkStore {
       delete kept.result;
     }
     return this.persist().then(() => structuredClone(parsed));
+  }
+
+  /**
+   * A run in this started chat held outside content (`childTainted`). Saves
+   * only the first time; any other chat has no link and is left alone.
+   */
+  async markChildTainted(childChatId: string): Promise<void> {
+    await this.restore();
+    if (this.links.get(childChatId)?.childTainted !== undefined) return;
+    await this.update(childChatId, (link) => {
+      link.childTainted = true;
+    });
   }
 
   /**

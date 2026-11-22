@@ -20,6 +20,12 @@ export interface AgentNoticeV1 {
   title: string;
   /** One plain line under the heading, e.g. "npm run dev · exit code 1". */
   summary: string;
+  /**
+   * The notice quotes a run that held outside content (a started chat that
+   * read a web page or a connector's data), so the chat reading it does too.
+   * Approval taint reads it; the card ignores it.
+   */
+  outside?: true;
 }
 
 export const MAX_AGENT_NOTICE_TITLE_CHARS = 80;
@@ -45,13 +51,15 @@ export function agentNotice(input: Omit<AgentNoticeV1, "version">): AgentNoticeV
     tone: input.tone,
     title,
     summary: noticeLine(input.summary, MAX_AGENT_NOTICE_SUMMARY_CHARS),
+    ...(input.outside === true ? { outside: true as const } : {}),
   };
 }
 
 export function parseAgentNoticeV1(value: unknown): AgentNoticeV1 | undefined {
   if (!isRecord(value) || value.version !== 1) return undefined;
   const keys = Object.keys(value);
-  if (keys.some((key) => !["version", "source", "tone", "title", "summary"].includes(key))) return undefined;
+  if (keys.some((key) => !["version", "source", "tone", "title", "summary", "outside"].includes(key))) return undefined;
+  if (value.outside !== undefined && value.outside !== true) return undefined;
   if (!AGENT_NOTICE_SOURCES.includes(value.source as AgentNoticeSource)) return undefined;
   if (value.tone !== "success" && value.tone !== "failure" && value.tone !== "info") return undefined;
   if (typeof value.title !== "string" || typeof value.summary !== "string") return undefined;
@@ -61,6 +69,7 @@ export function parseAgentNoticeV1(value: unknown): AgentNoticeV1 | undefined {
       tone: value.tone,
       title: value.title,
       summary: value.summary,
+      ...(value.outside === true ? { outside: true as const } : {}),
     });
   } catch {
     return undefined;
