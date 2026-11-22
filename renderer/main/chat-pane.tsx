@@ -2100,7 +2100,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
       text: string,
       attachments: Attachment[],
       skillInvocation?: SkillInvocationV1,
-      options?: { visualize?: boolean; btw?: boolean; goal?: string; inputSource?: ChatInputSourceV1 },
+      options?: { visualize?: boolean; btw?: boolean; goal?: string; goalSource?: "slash" | "proposal"; inputSource?: ChatInputSourceV1 },
     ) => {
       // Only Aiden Live's chat tools set this; the message shows "By voice".
       const inputSource = options?.inputSource;
@@ -2335,7 +2335,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
         if (options?.goal) {
           // The chat exists now (a draft was just saved): set its goal before the answer
           // starts, so the kickoff note rides on it. A refusal leaves an ordinary answer.
-          await chatsApi.setGoal(updated.id, options.goal, "slash").catch((error: unknown) => {
+          await chatsApi.setGoal(updated.id, options.goal, options.goalSource ?? "slash").catch((error: unknown) => {
             toast.error(error instanceof Error ? error.message : "The goal could not be set.");
           });
         }
@@ -2487,6 +2487,15 @@ export function ChatPane({ chatId }: { chatId: string }) {
   React.useLayoutEffect(() => {
     visualPromptBusyRef.current = visualPromptBusy;
   }, [visualPromptBusy]);
+
+  /** Start on the agent's suggested goal: the objective goes as the person's message, with the goal, as `/goal` does. */
+  const startProposedGoal = React.useCallback(
+    async (objective: string) => {
+      if (visualPromptBusyRef.current) throw new Error("Wait for the answer to finish, then press Start.");
+      await handleSend(objective, [], undefined, { goal: objective, goalSource: "proposal" });
+    },
+    [handleSend],
+  );
 
   // Keep-going rounds on screen: main starts a due round in a focused window
   // showing its chat, so the round can use the browser and Computer Use. Tell
@@ -4020,7 +4029,13 @@ export function ChatPane({ chatId }: { chatId: string }) {
                 />
               ) : null}
             </ComposerFloatingRow>
-            {draft ? null : <ChatGoalBar chatId={chatId} className="aiden-dock-inset chat-content-column pb-2" />}
+            {draft ? null : (
+              <ChatGoalBar
+                chatId={chatId}
+                className="aiden-dock-inset chat-content-column pb-2"
+                onStartProposal={startProposedGoal}
+              />
+            )}
             {spending.status ? (
               <SpendingLimitNotice
                 status={spending.status}

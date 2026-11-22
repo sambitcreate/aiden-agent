@@ -28,6 +28,7 @@ import { approvalAllowableAwayFromOwner } from "./chat-owed-turn-prompts.js";
 import { generativeUiUnavailableReason } from "./generative-ui-extension.js";
 import { HOOKS_TOOL_NAME, hooksToolUnavailableReason, offersHooksTool, type HooksToolSurface } from "./hooks-tool.js";
 import { TODO_TOOL_NAME } from "./rpiv-todo/contract.js";
+import { PROPOSE_GOAL_TOOL_NAME } from "../../renderer/shared/goal.js";
 
 const FORM_FILL_TOOL_NAME = "form_fill";
 const SUBAGENT_TOOL_NAME = "subagent";
@@ -304,6 +305,14 @@ export function subagentCallMayWrite(args: Record<string, unknown>): boolean {
 }
 
 export const TURN_ARGS_REFUSAL_RULES: readonly TurnArgsRefusalRule[] = [
+  {
+    tool: PROPOSE_GOAL_TOOL_NAME,
+    turns: (turn) => aidenStartedTurn(turn) || turn.remoteAudience,
+    args: () => true,
+    reason:
+      `${PROPOSE_GOAL_TOOL_NAME} is not available in this turn: Aiden started it (a keep-going round or a follow-up), or a paired device sent it, and a goal is suggested only to the person at this computer. ` +
+      "Carry on with the work; say in your reply if you think a goal would help.",
+  },
   {
     tool: CHECK_BACK_TOOL_NAME,
     turns: aidenStartedTurn,

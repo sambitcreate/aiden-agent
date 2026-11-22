@@ -10,12 +10,15 @@ import {
   GOAL_PAUSE_CHANNEL,
   GOAL_RESUME_CHANNEL,
   GOAL_DECLINE_WINDOW_ROUND_CHANNEL,
+  GOAL_DISMISS_PROPOSAL_CHANNEL,
+  GOAL_PROPOSAL_CHANNEL,
   GOAL_SET_CHANNEL,
   GOAL_START_WINDOW_ROUND_CHANNEL,
   GOAL_VIEW_CHANNEL,
   registerGoalHandlers,
 } from "./goals.js";
 import { GoalWindowRounds } from "../services/goal/goal-window-rounds.js";
+import { GoalProposals } from "../services/goal/goal-proposals.js";
 
 function setup() {
   const rounds: string[] = [];
@@ -50,9 +53,11 @@ function setup() {
   });
   const handlers = new Map<string, (event: unknown, ...args: unknown[]) => unknown>();
   const inactive = { inactive: true };
+  const proposals = new GoalProposals({ now: () => 7, onChange: () => {}, refusal: async () => undefined });
   registerGoalHandlers({
     handle: (channel, handler) => handlers.set(channel, handler),
     loop,
+    proposals,
     activeDocument: (event) => {
       if (event === inactive) throw new Error("Goal changes require the active application document.");
     },
@@ -60,7 +65,7 @@ function setup() {
   const invoke = (channel: string, ...args: unknown[]) => Promise.resolve().then(() => handlers.get(channel)!({}, ...args));
   const invokeFrom = (event: unknown, channel: string, ...args: unknown[]) =>
     Promise.resolve().then(() => handlers.get(channel)!(event, ...args));
-  return { invoke, invokeFrom, inactive, rounds, checks };
+  return { invoke, invokeFrom, inactive, rounds, checks, proposals };
 }
 
 test("set, get, pause, resume and clear drive the chat's goal", async () => {
@@ -158,4 +163,19 @@ test("a window reports its chat, takes the round it is offered on its own stream
   assert.equal(await next, "no-window");
   await invoke("doc-a", GOAL_VIEW_CHANNEL, { chatId: null, focused: true });
   assert.equal(await rounds.offer("chat-1", { round: 4 }), "no-window", "a window showing no chat is not asked");
+});
+
+test("a suggested goal is read and dismissed with Not now, and Start (a goal set from it) answers it", async () => {
+  const { invoke, invokeFrom, inactive, proposals } = setup();
+  assert.equal(await invoke(GOAL_PROPOSAL_CHANNEL, "chat-1"), null);
+  await proposals.propose("chat-1", "Finish the migration");
+  assert.deepEqual(await invoke(GOAL_PROPOSAL_CHANNEL, "chat-1"), { chatId: "chat-1", objective: "Finish the migration", proposedAt: 7 });
+  await assert.rejects(invokeFrom(inactive, GOAL_DISMISS_PROPOSAL_CHANNEL, { chatId: "chat-1" }), /active application document/u);
+  await invoke(GOAL_DISMISS_PROPOSAL_CHANNEL, { chatId: "chat-1" });
+  assert.equal(await invoke(GOAL_PROPOSAL_CHANNEL, "chat-1"), null);
+
+  await proposals.propose("chat-1", "Finish the migration");
+  const set = (await invoke(GOAL_SET_CHANNEL, { chatId: "chat-1", objective: "Finish the migration", source: "proposal" })) as { source: string };
+  assert.equal(set.source, "proposal");
+  assert.equal(await invoke(GOAL_PROPOSAL_CHANNEL, "chat-1"), null);
 });

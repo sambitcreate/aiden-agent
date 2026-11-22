@@ -19,6 +19,7 @@ import {
   PanelRightOpen,
   PictureInPicture2,
   Play,
+  Repeat,
   Search,
   Send,
   Settings,
@@ -298,6 +299,42 @@ export function ScheduledAutomationsArt() {
           <span role="listitem">
             <ArtChip icon={CalendarClock}>next 9:00 AM</ArtChip>
           </span>
+        </div>
+        <ArtComposer style={{ position: "relative" }} />
+      </div>
+    </ArtWindow>
+  );
+}
+
+/** A chat with a keep-going goal: a round's card in the transcript and the goal bar over the composer. */
+export function KeepGoingArt() {
+  return (
+    <ArtWindow className="oa-goal" style={{ left: 10, top: 10, width: 176, height: "calc(100% + 20px)", minHeight: 220 }}>
+      <div className="oa-goal-chat" role="group" aria-label="A chat working toward its goal">
+        <div className="oa-goal-reply">
+          <Bar width="92%" tone="ink" />
+          <Bar width="70%" />
+        </div>
+        <div className="oa-goal-card oa-anim-pop" role="group" aria-label="Round card" style={{ animationDelay: "0.3s" }}>
+          <ArtIcon icon={Repeat} />
+          <span className="oa-strong">Keep going · round 3 of 50</span>
+        </div>
+        <div className="oa-goal-reply">
+          <Bar width="96%" tone="ink" className="oa-anim-type" style={{ animationDelay: "0.8s" }} />
+          <Bar width="100%" className="oa-anim-type" style={{ animationDelay: "0.98s" }} />
+          <Bar width="54%" className="oa-anim-type" style={{ animationDelay: "1.16s" }} />
+        </div>
+      </div>
+      <div className="oa-goal-foot">
+        <div className="oa-goal-bar" role="group" aria-label="Goal bar">
+          <span className="oa-goal-badge">
+            <ArtIcon icon={Repeat} />
+          </span>
+          <span className="oa-goal-bar-text">
+            <span className="oa-strong">Working · round 3 of 50</span>
+            <Bar width="80%" />
+          </span>
+          <ArtButton variant="ghost">Pause</ArtButton>
         </div>
         <ArtComposer style={{ position: "relative" }} />
       </div>

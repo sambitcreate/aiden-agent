@@ -82,6 +82,8 @@ import { geminiLiveEnabled } from "./gemini-live/feature-flag.js";
 import { webSearchService } from "./web-search-main.js";
 import { WEB_FETCH_TOOL_NAME } from "../../renderer/shared/web-extract.js";
 import { CHECK_BACK_TOOL_NAME } from "../../renderer/shared/check-backs.js";
+import { goalLoopEnabled, PROPOSE_GOAL_TOOL_NAME } from "../../renderer/shared/goal.js";
+import { createProposeGoalTool } from "./goal/propose-goal-tool.js";
 import { webFetchService } from "./web-fetch-main.js";
 import { createVisionAnalysisTool, INSPECT_IMAGE_TOOL_NAME } from "./vision-analysis-tool.js";
 import {
@@ -2291,6 +2293,27 @@ async function prepareGeneration(
         chatId: params.chatId,
         turnId: options.turnId ?? streamId,
         refusal: (args) => turnArgsRefusal(CHECK_BACK_TOOL_NAME, args),
+      }),
+    );
+  }
+  // Suggesting a keep-going goal: declared in every turn of an ordinary chat
+  // on this computer; turns Aiden started and a paired device's turns refuse it
+  // (`turnArgsRefusal`). Only the person's Start on the card sets the goal.
+  if (
+    !botContext &&
+    !assistantMode &&
+    params.chatId &&
+    options.usageSource === "chat" &&
+    options.interactionSurface !== "telegram" &&
+    !isAcpHarnessProvider(runtime.provider.id) &&
+    goalLoopEnabled() &&
+    !options.excludeToolNames?.has(PROPOSE_GOAL_TOOL_NAME)
+  ) {
+    const chatId = params.chatId;
+    tools.push(
+      createProposeGoalTool({
+        chatId,
+        proposals: { propose: (id, objective) => goalTurnHooks().proposeGoal(id, objective) },
       }),
     );
   }

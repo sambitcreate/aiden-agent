@@ -279,7 +279,7 @@ import type {
 } from "../shared/chat-pull-requests";
 import { parseBtwEvent, type BtwEventV1, type BtwStartReceiptV1 } from "../shared/btw";
 import { parseChatFollowThrough, type ChatFollowThroughV1 } from "../shared/follow-through";
-import { parseGoalView, type GoalView } from "../shared/goal";
+import { parseGoalProposal, parseGoalView, type GoalProposalView, type GoalView } from "../shared/goal";
 import type { BackgroundJobOutput } from "../shared/background-jobs";
 import {
   parseDeviceHostCheck,
@@ -1742,7 +1742,7 @@ export const chatsApi = {
     return goal;
   },
   /** Sets the chat's goal (replacing any earlier one); send the objective as the next message after it. */
-  setGoal: async (chatId: string, objective: string, source: "slash" | "menu"): Promise<GoalView> => {
+  setGoal: async (chatId: string, objective: string, source: "slash" | "menu" | "proposal"): Promise<GoalView> => {
     const goal = parseGoalView(await invoke<unknown>("chats:goal:set", { chatId, objective, source }));
     if (!goal) throw new Error("The goal response was invalid.");
     return goal;
@@ -1764,6 +1764,24 @@ export const chatsApi = {
       const goal = update.goal === null ? null : parseGoalView(update.goal);
       if (update.goal !== null && !goal) return;
       handler(update.chatId, goal);
+    }),
+  /** The goal the agent suggested in this chat (`propose_goal`), waiting for Start or Not now. */
+  goalProposal: async (chatId: string): Promise<GoalProposalView | null> => {
+    const value = await invoke<unknown>("chats:goal:proposal", chatId);
+    if (value === null) return null;
+    const proposal = parseGoalProposal(value);
+    if (!proposal || proposal.chatId !== chatId) throw new Error("The goal suggestion response was invalid.");
+    return proposal;
+  },
+  /** Not now: the suggestion goes. */
+  dismissGoalProposal: (chatId: string) => invoke<void>("chats:goal:dismissProposal", { chatId }),
+  onGoalProposalChanged: (handler: (chatId: string, proposal: GoalProposalView | null) => void) =>
+    onNotification<unknown>("chats:goal-proposal-changed", (payload) => {
+      const update = payload && typeof payload === "object" ? (payload as { chatId?: unknown; proposal?: unknown }) : {};
+      if (typeof update.chatId !== "string" || !update.chatId) return;
+      const proposal = update.proposal === null ? null : parseGoalProposal(update.proposal);
+      if (update.proposal !== null && !proposal) return;
+      handler(update.chatId, proposal);
     }),
   /** This window's pane shows `chatId` (or no chat), with or without focus: where a due goal round can start. */
   reportGoalView: (chatId: string | null, focused: boolean) => invoke<void>("chats:goal:view", { chatId, focused }),

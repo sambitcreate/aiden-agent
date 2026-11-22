@@ -20,6 +20,12 @@ Other commands:
 | `/goal resume` | Starts it again from round 1. |
 | `/goal clear` | Removes it. |
 
+## Aiden can suggest a goal
+
+When a request in a chat you're typing in looks like longer work, Aiden can suggest a goal instead of setting one. A card above the composer shows "Keep going until:" and the objective, with **Start** and **Not now**. Nothing starts until you press Start: Start sends the objective as your message and sets the goal, as if you had typed `/goal`, and Not now removes the card. Setting any goal, or deleting the chat, removes it too, and a chat shows one suggestion at a time.
+
+Aiden can only suggest a goal in a turn you started in a chat that can have one and has no goal at work. It can't suggest one in a goal round, a follow-up or check-back answer, a task, a phone turn, a Bot or the Assistant. Suggestions are kept in memory only, so a restart clears them. The suggestion shows in the answer's activity as **Suggest a goal**.
+
 ## The goal bar
 
 While a chat has a goal, a bar above the composer shows it:
@@ -81,4 +87,4 @@ The objective and the reviewer's reasons stay on your device. Anonymous usage da
 
 ## Not yet
 
-Phones show the round cards but can't set or change goals.
+Phones show the round cards but can't set or change goals, and don't show suggested goals.

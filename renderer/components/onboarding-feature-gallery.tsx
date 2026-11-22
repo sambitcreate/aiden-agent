@@ -4,6 +4,7 @@ import {
   Blocks,
   Bot,
   CalendarClock,
+  Repeat,
   ChartBar,
   ChartColumn,
   ChartScatter,
@@ -317,6 +318,15 @@ export const onboardingFeatures: OnboardingFeature[] = [
       "Ask Aiden in any chat to schedule recurring work, review its unattended access, then run, change, or pause it anytime. A task made in a chat posts each result there, and Aiden can check back in a chat later.",
     icon: CalendarClock,
     size: "tall",
+  },
+  {
+    id: "keepGoing",
+    group: "control",
+    title: "Keep Going Until Done",
+    description:
+      "Give a chat a goal with /goal, or /until npm test, and Aiden keeps working in new rounds until it is done or needs you, with a bar to pause or clear it. Aiden can suggest a goal too; only your Start begins one.",
+    icon: Repeat,
+    size: "standard",
   },
   {
     id: "voice",

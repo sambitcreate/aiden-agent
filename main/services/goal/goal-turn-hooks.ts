@@ -7,6 +7,7 @@
 import type { AgentNoticeV1 } from "../../../renderer/shared/agent-notices.js";
 import type { OwedTurnContext } from "../chat-owed-turn-start.js";
 import type { StartTurnResult } from "../follow-through/notice-delivery.js";
+import type { GoalProposalView } from "../../../renderer/shared/goal.js";
 
 export interface GoalRunSettled {
   chatId: string;
@@ -40,6 +41,8 @@ export interface GoalTurnHooks {
   noticeRound(chatId: string, notice?: { text: string; notice: AgentNoticeV1 }): Promise<StartTurnResult | undefined>;
   /** A goal round without a window refused a call that needs the chat on screen. */
   windowToolRefused(chatId: string): void;
+  /** `propose_goal`: shows the person a Start / Not now card. Throws why it can't. */
+  proposeGoal(chatId: string, objective: string): Promise<GoalProposalView>;
 }
 
 const none: GoalTurnHooks = {
@@ -51,6 +54,9 @@ const none: GoalTurnHooks = {
   moveRefusal: () => undefined,
   noticeRound: async () => undefined,
   windowToolRefused: () => undefined,
+  proposeGoal: async () => {
+    throw new Error("Keep-going goals aren't available yet.");
+  },
 };
 
 let current: GoalTurnHooks = none;

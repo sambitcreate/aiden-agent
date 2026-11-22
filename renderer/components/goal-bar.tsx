@@ -11,9 +11,9 @@ import { useQueryClient } from "@tanstack/react-query";
 import { CircleAlert, CircleCheck, Pause, Repeat } from "lucide-react";
 import { Button, Text, toast } from "./ui";
 import { chatsApi } from "../lib/ipc";
-import { queryKeys, useChatGoal } from "../lib/queries";
+import { queryKeys, useChatGoal, useChatGoalProposal } from "../lib/queries";
 import { cn } from "../lib/ui-utils";
-import { goalRoundLabel, type GoalView } from "../shared/goal";
+import { goalRoundLabel, type GoalProposalView, type GoalView } from "../shared/goal";
 
 export type GoalBarAction = "pause" | "resume" | "keep-going" | "continue-here" | "clear";
 
@@ -155,11 +155,102 @@ export function optimisticGoal(goal: GoalView, action: GoalBarAction, now: numbe
   return { ...rest, status: "active", rounds: 1, stalls: 0, updatedAt: now };
 }
 
-/** The bar for one chat, read from the cache and kept current by `chats:goal-changed`. */
-export function ChatGoalBar({ chatId, className }: { chatId: string; className?: string }) {
+/**
+ * A goal the agent suggested (`propose_goal`): "Keep going until: …" with
+ * Start and Not now. Nothing starts until the person presses Start.
+ */
+export function GoalProposalCard({
+  proposal,
+  pending,
+  onStart,
+  onDismiss,
+  className,
+}: {
+  proposal: GoalProposalView;
+  /** A tap on its way; both buttons wait it out. */
+  pending?: boolean;
+  onStart(): void;
+  onDismiss(): void;
+  className?: string;
+}) {
+  return (
+    <div className={className}>
+      <section
+        role="group"
+        aria-label={`Suggested goal: ${proposal.objective}`}
+        data-goal-proposal=""
+        className="flex min-w-0 items-center gap-2.5 rounded-card bg-well px-3 py-2"
+      >
+        <span aria-hidden="true" className={cn("grid size-7 shrink-0 place-items-center rounded-full [&_svg]:size-3.5", TONE_CLASS.neutral)}>
+          <Repeat />
+        </span>
+        <div className="min-w-0 flex-1">
+          <Text as="p" variant="small-strong" className="truncate">
+            Keep going until:
+          </Text>
+          <Text as="p" variant="small" color="secondary" className="truncate" title={proposal.objective}>
+            {proposal.objective}
+          </Text>
+        </div>
+        <div className="flex shrink-0 items-center gap-1">
+          <Button variant="filled" size="small" disabled={pending} onClick={onStart}>
+            Start
+          </Button>
+          <Button variant="transparent" size="small" disabled={pending} onClick={onDismiss}>
+            Not now
+          </Button>
+        </div>
+      </section>
+    </div>
+  );
+}
+
+/**
+ * The bar for one chat, read from the cache and kept current by
+ * `chats:goal-changed`; with no goal at work, the agent's suggestion instead.
+ * `onStartProposal` sends the objective as the person's message with the goal,
+ * as `/goal` does.
+ */
+export function ChatGoalBar({
+  chatId,
+  className,
+  onStartProposal,
+}: {
+  chatId: string;
+  className?: string;
+  onStartProposal?(objective: string): Promise<void>;
+}) {
   const queryClient = useQueryClient();
   const { data: goal } = useChatGoal(chatId);
+  const { data: proposal } = useChatGoalProposal(chatId, Boolean(onStartProposal));
   const [pending, setPending] = React.useState<GoalBarAction>();
+  const [proposalPending, setProposalPending] = React.useState(false);
+
+  if (proposal && onStartProposal && goal?.status !== "active") {
+    const answer = async (start: boolean) => {
+      const key = queryKeys.chatGoalProposal(chatId);
+      queryClient.setQueryData(key, null);
+      setProposalPending(true);
+      try {
+        if (start) await onStartProposal(proposal.objective);
+        else await chatsApi.dismissGoalProposal(chatId);
+      } catch (error) {
+        queryClient.setQueryData(key, proposal);
+        toast.error(error instanceof Error ? error.message : "The suggestion could not be answered.");
+      } finally {
+        setProposalPending(false);
+      }
+    };
+    return (
+      <GoalProposalCard
+        proposal={proposal}
+        pending={proposalPending}
+        onStart={() => void answer(true)}
+        onDismiss={() => void answer(false)}
+        className={className}
+      />
+    );
+  }
   if (!goal) return null;
 
   const act = async (action: GoalBarAction) => {

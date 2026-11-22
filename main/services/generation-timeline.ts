@@ -28,6 +28,7 @@ import {
 import { WEB_FETCH_TOOL_NAME, parseWebExtractRecap } from "../../renderer/shared/web-extract.js";
 import { BROWSER_RECORDING_STOP_TOOL_NAME, parseBrowserRecordingRecap } from "../../renderer/shared/browser-recording.js";
 import { CHECK_BACK_TOOL_NAME, checkBackWhen } from "../../renderer/shared/check-backs.js";
+import { PROPOSE_GOAL_TOOL_NAME } from "../../renderer/shared/goal.js";
 
 const MAX_TOOL_NAME_LENGTH = 80;
 const MAX_TARGET_LENGTH = 240;
@@ -324,6 +325,8 @@ export function safeToolDescriptor(toolName: string, args: unknown): SafeToolDes
               ? "List followed pull requests"
               : "Follow pull request",
       };
+    case PROPOSE_GOAL_TOOL_NAME:
+      return { label: "Suggest a goal", detail: safeDetail(values.objective) };
     // The note stays out of the feed; a set row names its time once it settles.
     case CHECK_BACK_TOOL_NAME:
       return {

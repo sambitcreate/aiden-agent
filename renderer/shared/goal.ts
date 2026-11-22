@@ -247,3 +247,21 @@ export function parseGoalRecords(value: unknown): GoalRecordV1[] {
     ];
   });
 }
+
+/** The agent's tool that suggests a goal: a card with Start and Not now; only the person's Start sets it. */
+export const PROPOSE_GOAL_TOOL_NAME = "propose_goal";
+
+/** A goal the agent suggested in the chat, waiting for the person's Start or Not now. */
+export interface GoalProposalView {
+  chatId: string;
+  objective: string;
+  proposedAt: number;
+}
+
+/** Reads a proposal from IPC, or null for none; anything malformed is null too. */
+export function parseGoalProposal(value: unknown): GoalProposalView | null {
+  if (!isRecord(value)) return null;
+  const { chatId, objective, proposedAt } = value;
+  if (typeof chatId !== "string" || !chatId || typeof objective !== "string" || !objective || !count(proposedAt)) return null;
+  return { chatId, objective, proposedAt };
+}

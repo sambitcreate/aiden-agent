@@ -81,7 +81,7 @@ import { hostPlatformCapabilities } from "../services/host-platform-capabilities
 import { registerBtwHandlers } from "./btw.js";
 import { registerFollowThroughHandlers } from "./follow-through.js";
 import { registerGoalHandlers } from "./goals.js";
-import { declineGoalWindowRound, goalLoop, reportGoalWindowView, startGoalWindowRound } from "../services/goal/goal-main.js";
+import { declineGoalWindowRound, goalLoop, goalProposals, reportGoalWindowView, startGoalWindowRound } from "../services/goal/goal-main.js";
 import { chatGenerationOwner } from "../services/chat-generation-owner.js";
 import { registerTtsHandlers } from "./tts.js";
 import { registerDeviceHandlers } from "./devices.js";
@@ -237,6 +237,7 @@ export function registerHandlers(isMainWindow: (event: IpcMainInvokeEvent) => bo
   registerGoalHandlers({
     handle: (channel, handler) => ipcMain.handle(channel, handler),
     loop: goalLoop,
+    proposals: goalProposals,
     activeDocument: (event) => {
       rendererDocumentOwner(event as IpcMainInvokeEvent, () => new Error("Goal changes require the active application document."));
     },

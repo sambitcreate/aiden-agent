@@ -96,6 +96,7 @@
         "main/services/goal/goal-prompts.test.ts",
         "main/services/goal/goal-loop.test.ts",
         "main/services/goal/goal-window-rounds.test.ts",
+        "main/services/goal/goal-proposals.test.ts",
         "main/services/goal/goal-round-start.test.ts",
         "main/handlers/goals.test.ts",
         "renderer/components/goal-bar.test.tsx",

@@ -20,11 +20,18 @@
 //   `chats:goal:startWindowRound({token, streamId})`, which starts the round on
 //   the stream it subscribed to, or `chats:goal:declineWindowRound({token})`.
 //
+// The agent's suggestions (`propose_goal`):
+// - `chats:goal:proposal(chatId)`: the suggested goal waiting for the person, or null.
+// - `chats:goal:dismissProposal({chatId})`: Not now. Setting a goal (Start
+//   sends the objective with `source: "proposal"`) dismisses it too.
+// Changes broadcast on `chats:goal-proposal-changed`.
+//
 // Changes come from the active application document only; every change is
 // broadcast on `chats:goal-changed`.
 
 import type { GoalLoop } from "../services/goal/goal-loop.js";
-import type { GoalSource, GoalView } from "../../renderer/shared/goal.js";
+import type { GoalProposalView, GoalSource, GoalView } from "../../renderer/shared/goal.js";
+import type { GoalProposals } from "../services/goal/goal-proposals.js";
 import type { StartTurnResult } from "../services/follow-through/notice-delivery.js";
 import type { GoalWindowView } from "../services/goal/goal-window-rounds.js";
 import { isSafeSubagentIdentifier } from "../../renderer/shared/subagent-runs.js";
@@ -38,6 +45,8 @@ export const GOAL_CLEAR_CHANNEL = "chats:goal:clear";
 export const GOAL_VIEW_CHANNEL = "chats:goal:view";
 export const GOAL_START_WINDOW_ROUND_CHANNEL = "chats:goal:startWindowRound";
 export const GOAL_DECLINE_WINDOW_ROUND_CHANNEL = "chats:goal:declineWindowRound";
+export const GOAL_PROPOSAL_CHANNEL = "chats:goal:proposal";
+export const GOAL_DISMISS_PROPOSAL_CHANNEL = "chats:goal:dismissProposal";
 
 /** The sources a desktop window may claim; phone goals arrive by another route. */
 const DESKTOP_SOURCES: readonly GoalSource[] = ["slash", "menu", "proposal", "until"];
@@ -47,6 +56,8 @@ export interface GoalHandlerDependencies {
   loop: Pick<GoalLoop, "get" | "set" | "pause" | "resume" | "clear">;
   /** Throws unless the request comes from the active application document. */
   activeDocument(event: unknown): void;
+  /** The agent's suggested goals; without it, proposals aren't served. */
+  proposals?: Pick<GoalProposals, "get" | "dismiss">;
   /** Rounds in a window; each throws for a request from an inactive document. */
   windowRounds?: {
     report(event: unknown, view: GoalWindowView): void;
@@ -79,14 +90,21 @@ function token(value: unknown): string {
 }
 
 export function registerGoalHandlers(dependencies: GoalHandlerDependencies): void {
-  const { handle, loop, activeDocument, windowRounds } = dependencies;
+  const { handle, loop, activeDocument, windowRounds, proposals } = dependencies;
 
   handle(GOAL_GET_CHANNEL, (_event, id): GoalView | null => loop.get(chatId(id)));
 
-  handle(GOAL_SET_CHANNEL, (event, input): Promise<GoalView> => {
+  handle(GOAL_SET_CHANNEL, async (event, input): Promise<GoalView> => {
     activeDocument(event);
     const value = record(input);
     const id = chatId(value.chatId);
+    const view = await setGoal(id, value);
+    // A goal is set: a suggestion waiting in the chat is answered.
+    proposals?.dismiss(id);
+    return view;
+  });
+
+  const setGoal = (id: string, value: Record<string, unknown>): Promise<GoalView> => {
     const source = value.source as GoalSource;
     if (!DESKTOP_SOURCES.includes(source)) throw new Error("Invalid goal source.");
     if (source === "until") {
@@ -96,7 +114,15 @@ export function registerGoalHandlers(dependencies: GoalHandlerDependencies): voi
     }
     if (typeof value.objective !== "string") throw new Error("Say what the goal is.");
     return loop.set(id, { objective: value.objective, source });
-  });
+  };
+
+  if (proposals) {
+    handle(GOAL_PROPOSAL_CHANNEL, (_event, id): GoalProposalView | null => proposals.get(chatId(id)));
+    handle(GOAL_DISMISS_PROPOSAL_CHANNEL, (event, input): void => {
+      activeDocument(event);
+      proposals.dismiss(chatId(record(input).chatId));
+    });
+  }
 
   handle(GOAL_PAUSE_CHANNEL, (event, input): GoalView | null => {
     activeDocument(event);

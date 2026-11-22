@@ -116,3 +116,45 @@ test("a round due while the chat is on screen starts in its window, where it can
   await expect(page.getByText("The outline is drafted.").first()).toBeVisible({ timeout: 15_000 });
   await expect(bar).toHaveAttribute("data-goal-status", "done", { timeout: 30_000 });
 });
+
+test("Aiden suggests a goal: Not now dismisses it, and Start sends the objective as your message and sets the goal", async ({ aiden }) => {
+  test.setTimeout(120_000);
+  const { lmStudio, page } = aiden;
+  await finishLmStudioOnboarding(page);
+  lmStudio.answerToolFreeCompletions!(REVIEW_PROMPT, '{"verdict": "done", "reason": "The settings store is migrated."}');
+  lmStudio.enqueueToolScenario!({
+    prompt: "Tidy the docs folder",
+    calls: [{ name: "propose_goal", arguments: { objective: "Tidy every page in the docs folder" } }],
+    finalText: "I suggested a goal for this.",
+  });
+  lmStudio.enqueueToolScenario!({
+    prompt: "Migrate the settings store",
+    calls: [{ name: "propose_goal", arguments: { objective: "Finish the settings migration" } }],
+    finalText: "I suggested a goal for this.",
+  });
+  const composer = page.locator("textarea");
+  const idle = () => expect(page.getByRole("button", { name: "Stop generating" })).toBeHidden({ timeout: 30_000 });
+
+  await composer.fill("Tidy the docs folder");
+  await composer.press("Enter");
+  const declined = page.getByRole("group", { name: "Suggested goal: Tidy every page in the docs folder" });
+  await expect(declined).toBeVisible({ timeout: 30_000 });
+  await idle();
+  await declined.getByRole("button", { name: "Not now" }).click();
+  await expect(declined).toHaveCount(0);
+  await expect(page.getByRole("group", { name: /^Goal: / })).toHaveCount(0);
+
+  await composer.fill("Migrate the settings store");
+  await composer.press("Enter");
+  const card = page.getByRole("group", { name: "Suggested goal: Finish the settings migration" });
+  await expect(card).toBeVisible({ timeout: 30_000 });
+  await idle();
+  await expect(card).toContainText("Keep going until:");
+  await card.screenshot({ path: test.info().outputPath("goal-proposal-card.png") });
+  await card.getByRole("button", { name: "Start" }).click();
+  await expect(card).toHaveCount(0);
+  await expect(page.locator("[data-user-message-bubble]").filter({ hasText: "Finish the settings migration" })).toBeVisible({ timeout: 15_000 });
+  const bar = page.getByRole("group", { name: "Goal: Finish the settings migration" });
+  await expect(bar).toBeVisible({ timeout: 15_000 });
+  await expect(bar).toHaveAttribute("data-goal-status", "done", { timeout: 45_000 });
+});

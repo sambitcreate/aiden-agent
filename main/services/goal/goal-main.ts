@@ -40,6 +40,7 @@ import { goalRoundStartRequest } from "./goal-round-start.js";
 import { reviewGoal } from "./goal-reviewer.js";
 import { installGoalTurnHooks } from "./goal-turn-hooks.js";
 import { GoalWindowRounds, type GoalWindowDocument, type GoalWindowView } from "./goal-window-rounds.js";
+import { GoalProposals } from "./goal-proposals.js";
 
 const BOOT = randomUUID();
 
@@ -285,6 +286,17 @@ export const goalLoop = new GoalLoop({
   log: (message, error) => logger.warn("goal", message, error),
 });
 
+/** Goals the agent suggested with `propose_goal`, waiting for Start or Not now. */
+export const goalProposals = new GoalProposals({
+  now: Date.now,
+  onChange: (chatId, proposal) => ipcMain.broadcast("chats:goal-proposal-changed", { chatId, proposal }),
+  refusal: async (chatId) => {
+    const refusal = await eligibility(chatId);
+    if (refusal) return refusal;
+    return goalLoop.get(chatId)?.status === "active" ? "This chat already has a goal at work." : undefined;
+  },
+});
+
 let started = false;
 
 /** After follow-through loaded its state: restore goals (active ones come back paused) and hook into chats. */
@@ -299,11 +311,15 @@ export function startGoalLoop(): void {
       goalWindowRounds.settled(event.streamId);
       goalLoop.runSettled(event);
     },
-    chatDeleted: (chatId) => goalLoop.deleteChat(chatId),
+    chatDeleted: (chatId) => {
+      goalProposals.dismiss(chatId);
+      goalLoop.deleteChat(chatId);
+    },
     accessChanged: (chatIds) => goalLoop.accessChanged(chatIds),
     moveRefusal: (chatId) => goalLoop.moveRefusal(chatId),
     noticeRound: (chatId, notice) => goalLoop.noticeRound(chatId, notice),
     windowToolRefused: (chatId) => goalLoop.windowWanted(chatId),
+    proposeGoal: (chatId, objective) => goalProposals.propose(chatId, objective),
   });
 }
 

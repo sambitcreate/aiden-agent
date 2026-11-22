@@ -3,7 +3,7 @@ import test from "node:test";
 import { renderToStaticMarkup } from "react-dom/server";
 import { Window } from "happy-dom";
 import type { GoalView } from "../shared/goal";
-import { GoalBar, optimisticGoal, type GoalBarAction } from "./goal-bar";
+import { GoalBar, GoalProposalCard, optimisticGoal, type GoalBarAction } from "./goal-bar";
 
 const active: GoalView = {
   id: "goal-1",
@@ -106,4 +106,17 @@ test("after a round off screen needed the window, Needs you and Aiden's pause of
   assert.deepEqual(render({ ...active, windowWanted: true }).actions, ["Pause", "Clear"]);
   // Continue here starts the next round as Keep going does.
   assert.equal(optimisticGoal({ ...active, status: "needs-you", windowWanted: true }, "continue-here", 9)?.status, "active");
+});
+
+test("a suggested goal shows its objective with Start and Not now, and both wait out a tap on its way", () => {
+  const { document } = new Window();
+  const proposal = { chatId: "chat-1", objective: "Finish the migration", proposedAt: 1 };
+  document.body.innerHTML = renderToStaticMarkup(<GoalProposalCard proposal={proposal} onStart={() => {}} onDismiss={() => {}} />);
+  const group = document.querySelector("[role=group]");
+  assert.equal(group?.getAttribute("aria-label"), "Suggested goal: Finish the migration");
+  assert.match(group?.textContent ?? "", /Keep going until:.*Finish the migration/su);
+  assert.deepEqual([...document.querySelectorAll("button")].map((button) => button.textContent), ["Start", "Not now"]);
+
+  document.body.innerHTML = renderToStaticMarkup(<GoalProposalCard proposal={proposal} pending onStart={() => {}} onDismiss={() => {}} />);
+  assert.ok([...document.querySelectorAll("button")].every((button) => button.hasAttribute("disabled")));
 });

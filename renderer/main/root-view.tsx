@@ -490,6 +490,11 @@ function RootContent() {
       }
     });
   }, [navigate, queryClient]);
+  // A goal the agent suggested, or the suggestion answered: the card updates without a re-read.
+  React.useEffect(
+    () => chatsApi.onGoalProposalChanged((chatId, proposal) => queryClient.setQueryData(queryKeys.chatGoalProposal(chatId), proposal)),
+    [queryClient],
+  );
 
   React.useEffect(() => {
     return onNotification("chats:pull-requests-changed", (payload: unknown) => {

@@ -234,3 +234,19 @@ test("a windowless goal round refuses window tools and approvals only the chat's
     assert.equal(refusedForWantOfWindow(onScreenAudience, name), false, name);
   }
 });
+
+test("propose_goal runs only in a turn the person started on this computer", () => {
+  const refusal = (options: Parameters<typeof chatTurnAudienceFor>[0]) =>
+    chatTurnArgsToolRefusal(chatTurnAudienceFor(options, {}))("propose_goal", { objective: "Ship the release" });
+  assert.equal(refusal({}), undefined, "the person's own message");
+  assert.equal(refusal({ windowless: true, answersPerson: true }), undefined, "the owed turn answering the person's queued message");
+  for (const [label, options] of [
+    ["a keep-going round", { goalRound: true }],
+    ["a keep-going round off screen", { goalRound: true, windowless: true }],
+    ["an unattended follow-up", { unattended: true }],
+    ["a turn answering a notice", { windowless: true }],
+    ["a paired device's turn", { visualAudience: "remote" as const }],
+  ] as const) {
+    assert.match(refusal(options) ?? "", /^propose_goal is not available in this turn/u, label);
+  }
+});
