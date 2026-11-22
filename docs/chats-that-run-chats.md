@@ -91,7 +91,7 @@ for approval.
   approval model judge it, Never ask runs it. `send`, `wait`, `read`, `list`
   and `stop` on your own started chats never ask.
 - A turn Aiden started (a woken lead, an owed turn with no window, a goal
-  round) can list, read, wait, send and stop, but `start` is refused: starting
+  round, or a scheduled task's run, including a trigger's and Run now) can list, read, wait, send and stop, but `start` is refused: starting
   chats needs the person here.
 - A turn the lead sends into a started chat counts as Aiden-started too: the
   started chat can't set a check-back or suggest a goal in it.

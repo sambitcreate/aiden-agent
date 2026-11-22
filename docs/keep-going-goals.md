@@ -24,7 +24,7 @@ Other commands:
 
 When a request in a chat you're typing in looks like longer work, Aiden can suggest a goal instead of setting one. A card above the composer shows "Keep going until:" and the objective, with **Start** and **Not now**. A suggested objective is one line of up to 300 characters with no invisible characters (such as right-to-left overrides or zero-width spaces), and the card shows all of it, so you see everything Start would send. Nothing starts until you press Start: Start sends the objective as your message and sets the goal, as if you had typed `/goal`, and Not now removes the card. Setting any goal, or deleting the chat, removes it too, and a chat shows one suggestion at a time.
 
-Aiden can only suggest a goal in a turn you started in a chat that can have one and has no goal at work. It can't suggest one in a goal round, a follow-up or check-back answer, a task, a phone turn, a Bot or the Assistant. Suggestions are kept in memory only, so a restart clears them. The suggestion shows in the answer's activity as **Suggest a goal**.
+Aiden can only suggest a goal in a turn you started in a chat that can have one and has no goal at work. It can't suggest one in a goal round, a follow-up or check-back answer, a scheduled task's run (including a trigger's and Run now), a phone turn, a Bot or the Assistant. Suggestions are kept in memory only, so a restart clears them. The suggestion shows in the answer's activity as **Suggest a goal**.
 
 ## The goal bar
 
