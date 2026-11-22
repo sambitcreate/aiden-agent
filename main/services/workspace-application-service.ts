@@ -58,7 +58,7 @@ export interface WorkspaceApplicationDependencies {
   browserService?: { closeForWorkspace(workspaceId: string): void };
   /** Closes the workspace's Git metadata watcher; a later display read re-observes. */
   gitWatcher?: { close(workspaceId: string): void };
-  /** Stops background jobs and done-when checks that run in the workspace folder. */
+  /** Stops background jobs and goal checks that run in the workspace folder. */
   followThrough?: { closeForWorkspace(workspaceId: string): Promise<FinishWorkspaceFollowThrough | void> };
   /** Drops the workspace's artifacts once its record is gone. */
   workspaceArtifacts?: { removeWorkspace(workspaceId: string): Promise<void> };

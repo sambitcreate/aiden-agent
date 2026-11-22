@@ -94,7 +94,7 @@ export function useComposerContextChips({
       current: Boolean(currentView),
       branchCanOpen: branchCanOpenPullRequest(gitStatus),
     },
-    followThrough: hasActiveFollowThrough(followThrough.data) || Boolean(followThrough.data?.check),
+    followThrough: hasActiveFollowThrough(followThrough.data),
     postingTasks: postingTasks.length > 0,
     startedChats: startedChats.length > 0,
   });

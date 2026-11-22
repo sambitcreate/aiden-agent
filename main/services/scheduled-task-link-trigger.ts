@@ -35,16 +35,20 @@ function readBatch(payload: string): LinkBatch {
 }
 
 /**
- * The held payload once another call arrives inside the gap: up to 20 calls,
- * the oldest dropped beyond that, the whole batch kept under `maxChars` by
- * shortening the longest calls.
+ * Two held payloads as one batch, older calls first: up to 20 calls, the
+ * oldest dropped beyond that, the whole batch kept under `maxChars` by
+ * shortening the longest calls. A call arriving inside the gap merges this
+ * way, and so does a batch whose run was skipped (a busy chat) with what
+ * arrived since.
  */
-export function mergeLinkBatch(held: string, incoming: string, maxChars: number): string {
-  const batch = readBatch(held);
-  const calls = [...batch.calls, incoming];
+export function mergeLinkBatches(older: string, newer: string, maxChars: number): string {
+  const first = readBatch(older);
+  const second = readBatch(newer);
+  const calls = [...first.calls, ...second.calls];
   const over = Math.max(0, calls.length - SCHEDULED_TASK_LINK_LIMITS.batch);
   const kept = calls.slice(over);
-  const encode = () => `${BATCH_MARK}${JSON.stringify({ calls: kept, dropped: batch.dropped + over })}`;
+  const dropped = first.dropped + second.dropped + over;
+  const encode = () => `${BATCH_MARK}${JSON.stringify({ calls: kept, dropped })}`;
   let encoded = encode();
   while (encoded.length > maxChars) {
     let longest = 0;

@@ -131,6 +131,8 @@ export const queryKeys = {
     ["chat-follow-through", chatId ?? "none"] as const,
   chatCurrentPullRequest: (chatId: string | undefined) =>
     ["chat-current-pull-request", chatId ?? "none"] as const,
+  chatGoal: (chatId: string | undefined) => ["chat-goal", chatId ?? "none"] as const,
+  chatGoalProposal: (chatId: string | undefined) => ["chat-goal-proposal", chatId ?? "none"] as const,
   chatPullRequestsSidebar: (chatIds: readonly string[]) =>
     ["chat-pull-requests-sidebar", ...chatIds] as const,
   chatPullRequestCandidates: (chatId: string | undefined) =>
@@ -616,6 +618,26 @@ export function useChatFollowThrough(chatId: string | undefined, enabled = true)
   return useQuery({
     queryKey: queryKeys.chatFollowThrough(chatId),
     queryFn: () => chatsApi.followThrough(chatId as string),
+    enabled: Boolean(chatId) && enabled,
+    staleTime: 30_000,
+  });
+}
+
+/** A chat's keep-going goal, or null; `chats:goal-changed` writes it in place. */
+export function useChatGoal(chatId: string | undefined, enabled = true) {
+  return useQuery({
+    queryKey: queryKeys.chatGoal(chatId),
+    queryFn: () => chatsApi.goal(chatId as string),
+    enabled: Boolean(chatId) && enabled,
+    staleTime: 30_000,
+  });
+}
+
+/** A goal the agent suggested in the chat, or null; `chats:goal-proposal-changed` writes it in place. */
+export function useChatGoalProposal(chatId: string | undefined, enabled = true) {
+  return useQuery({
+    queryKey: queryKeys.chatGoalProposal(chatId),
+    queryFn: () => chatsApi.goalProposal(chatId as string),
     enabled: Boolean(chatId) && enabled,
     staleTime: 30_000,
   });

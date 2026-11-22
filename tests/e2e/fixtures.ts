@@ -164,6 +164,14 @@ export type LmStudioEndpoint = {
    * dropped connection, or normally. Deterministic model only.
    */
   cutOffCompletions?: (prompt: string, parts: readonly CutOffCompletionPart[]) => void;
+  /**
+   * Answers every tool-free completion whose latest user message contains
+   * `prompt` with `text`: a side call such as a goal review, which a model
+   * without a prompt cache sends as an isolated request. With `times`, the
+   * answer is used that many times and then the next one for the prompt
+   * applies. Deterministic model only.
+   */
+  answerToolFreeCompletions?: (prompt: string, text: string, options?: { times?: number }) => void;
 };
 
 export type CutOffCompletionPart = { text: string; end: "length" | "drop" | "stop" };
@@ -343,6 +351,7 @@ function flushStreamedReply(reply: StreamedReply): void {
 async function startMockLmStudio(): Promise<MockLmStudio> {
   const requests: CapturedLmStudioRequest[] = [];
   const streamedReplies: StreamedReply[] = [];
+  const toolFreeAnswers: Array<{ prompt: string; text: string; remaining?: number }> = [];
   const enqueueStreamedReply = (prompt: string): StreamedReplyController => {
     if (!prompt.trim() || streamedReplies.some((reply) => reply.prompt === prompt)) {
       throw new Error("A streamed reply needs a unique, non-empty prompt.");
@@ -439,6 +448,12 @@ async function startMockLmStudio(): Promise<MockLmStudio> {
         const userText = typeof latestUser?.content === "string"
           ? latestUser.content
           : JSON.stringify(latestUser?.content ?? "");
+        const toolFree = completion?.tools?.length ? undefined : toolFreeAnswers.find((answer) => userText.includes(answer.prompt));
+        if (toolFree) {
+          if (toolFree.remaining !== undefined && --toolFree.remaining <= 0) toolFreeAnswers.splice(toolFreeAnswers.indexOf(toolFree), 1);
+          sendCompletion({ text: toolFree.text });
+          return;
+        }
         const rateLimit = completion?.tools?.length
           ? rateLimits.find((limit) => limit.remaining > 0 && userText.includes(limit.prompt))
           : undefined;
@@ -566,6 +581,11 @@ async function startMockLmStudio(): Promise<MockLmStudio> {
     },
     enqueueToolScenario,
     enqueueStreamedReply,
+    answerToolFreeCompletions: (prompt: string, text: string, options?: { times?: number }) => {
+      if (!prompt.trim()) throw new Error("A tool-free answer needs a prompt to match.");
+      if (options?.times !== undefined && (!Number.isInteger(options.times) || options.times < 1)) throw new Error("times must be a positive count.");
+      toolFreeAnswers.push({ prompt, text, ...(options?.times !== undefined ? { remaining: options.times } : {}) });
+    },
     rateLimitCompletions: (prompt, count, headers) => {
       if (!prompt.trim() || !Number.isInteger(count) || count < 1) throw new Error("A rate limit needs a prompt and a positive count.");
       rateLimits.push({ prompt, remaining: count, headers: { ...headers } });

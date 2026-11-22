@@ -83,6 +83,8 @@ import { geminiLiveEnabled } from "./gemini-live/feature-flag.js";
 import { webSearchService } from "./web-search-main.js";
 import { WEB_FETCH_TOOL_NAME } from "../../renderer/shared/web-extract.js";
 import { CHECK_BACK_TOOL_NAME } from "../../renderer/shared/check-backs.js";
+import { goalLoopEnabled, PROPOSE_GOAL_TOOL_NAME } from "../../renderer/shared/goal.js";
+import { createProposeGoalTool } from "./goal/propose-goal-tool.js";
 import { CHILD_CHATS_TOOL_NAME, SUBMIT_RESULT_TOOL_NAME, childChatsEnabled } from "../../renderer/shared/child-chats.js";
 import { webFetchService } from "./web-fetch-main.js";
 import { createVisionAnalysisTool, INSPECT_IMAGE_TOOL_NAME } from "./vision-analysis-tool.js";
@@ -433,7 +435,8 @@ import {
 } from "./chat-run-input-admission.js";
 import { createChatOwedTurns, type OwedTurnPlan } from "./chat-owed-turns.js";
 import { owedTurnStartRequest, type OwedTurnContext } from "./chat-owed-turn-start.js";
-import { createOwedTurnPrompts } from "./chat-owed-turn-prompts.js";
+import { goalTurnHooks } from "./goal/goal-turn-hooks.js";
+import { createOwedTurnPrompts, type OwedTurnPromptLifetime } from "./chat-owed-turn-prompts.js";
 import { persistedChatWorkspaceId } from "../../renderer/shared/chat-workspace.js";
 import { btwOperationRegistry, btwService } from "./rpiv-btw/service.js";
 import { createPiCodemodeTool } from "./pi-codemode.js";
@@ -529,7 +532,7 @@ import {
   createVisualizeGuideTool,
   VISUALIZE_GUIDE_TOOL_NAME,
 } from "./generative-ui-extension.js";
-import { aidenStartedTurn, chatToolOffers, offersChildChats, chatTurnArgsToolRefusal, chatTurnAudienceFor, chatTurnToolRefusal, screenedPromptAnswersPerson, declaresAppTools, declaresWindowTools, firstTurnToolRefusal, windowlessChatTurn, type ChatToolSurface, type TurnToolRefusal } from "./chat-turn-tool-policy.js";
+import { aidenStartedTurn, chatToolOffers, offersChildChats, chatTurnArgsToolRefusal, chatTurnAudienceFor, chatTurnToolRefusal, screenedPromptAnswersPerson, declaresAppTools, declaresWindowTools, firstTurnToolRefusal, refusedForWantOfWindow, windowlessChatTurn, type ChatToolSurface, type TurnToolRefusal } from "./chat-turn-tool-policy.js";
 import { createGenerativeUiDraftSession } from "./generative-ui-draft.js";
 import { createUiDraftSession } from "./aiden-ui-draft.js";
 import { withoutVisualSnapshots } from "../../renderer/shared/visual-snapshots.js";
@@ -725,6 +728,12 @@ export interface GenerationExecutionOptions {
    */
   screenedPrompt?: { messageId: string; context?: string };
   /**
+   * Main-owned: a round of a keep-going goal the person set. Attended (its
+   * approvals and questions wait for the person), but Aiden began it, so it
+   * may not set check-backs (`TURN_ARGS_REFUSAL_RULES`).
+   */
+  goalRound?: boolean;
+  /**
    * Main-owned: this turn answers on another model than the chat's own (a
    * scheduled task running in the chat it was made in). Its saved messages
    * never change the chat's stored model.
@@ -885,6 +894,19 @@ function startOwedTurn(plan: OwedTurnPlan<OwedTurnContext, GenerationCancellatio
       logger.warn("pi", `The chat's owed turn after stream ${plan.settledStreamId} failed to start.`, error);
     },
   );
+}
+
+/** What a run that can owe its chat a turn ran with: an owed turn or a goal round starts with the same. */
+function owedTurnContextOf(params: ChatStartParams, options: GenerationExecutionOptions): OwedTurnContext {
+  return {
+    ...(params.workspaceId !== undefined ? { workspaceId: params.workspaceId } : {}),
+    providerId: params.providerId,
+    model: params.model,
+    ...(params.thinkingLevel !== undefined ? { thinkingLevel: params.thinkingLevel } : {}),
+    ...(params.inlineVisuals !== undefined ? { inlineVisuals: params.inlineVisuals } : {}),
+    ...(options.visualAudience !== undefined ? { visualAudience: options.visualAudience } : {}),
+    ...(options.excludeToolNames !== undefined ? { excludeToolNames: options.excludeToolNames } : {}),
+  };
 }
 
 /**
@@ -1237,7 +1259,7 @@ const questionnaires = new AskUserQuestionCoordinator(
  * read them like a phone turn's card, and phones answer them through their
  * run controls; the coordinators' one-shot settlement lets the first answer
  * win. A card nobody answers is denied, or its question closed, after five
- * minutes, the same as a phone turn's.
+ * minutes, the same as a phone turn's; a goal round's cards wait 30 minutes.
  */
 const owedTurnPrompts = createOwedTurnPrompts({
   now: Date.now,
@@ -2322,6 +2344,27 @@ async function prepareGeneration(
       }),
     );
   }
+  // Suggesting a keep-going goal: declared in every turn of an ordinary chat
+  // on this computer; turns Aiden started and a paired device's turns refuse it
+  // (`turnArgsRefusal`). Only the person's Start on the card sets the goal.
+  if (
+    !botContext &&
+    !assistantMode &&
+    params.chatId &&
+    options.usageSource === "chat" &&
+    options.interactionSurface !== "telegram" &&
+    !isAcpHarnessProvider(runtime.provider.id) &&
+    goalLoopEnabled() &&
+    !options.excludeToolNames?.has(PROPOSE_GOAL_TOOL_NAME)
+  ) {
+    const chatId = params.chatId;
+    tools.push(
+      createProposeGoalTool({
+        chatId,
+        proposals: { propose: (id, objective) => goalTurnHooks().proposeGoal(id, objective) },
+      }),
+    );
+  }
   // Whether this run holds outside content, read by `child_chats` when it
   // starts or sends; the run sets it once its taint exists.
   const leadRunTaint = { tainted: (): boolean => false };
@@ -2798,7 +2841,18 @@ async function prepareGeneration(
    * the reason names the condition, and the call is refused before it runs.
    */
   const turnToolRefusals: TurnToolRefusal[] = [];
-  turnToolRefusals.push(chatTurnToolRefusal(chatToolSurface, turnAudience), turnArgsRefusal);
+  const audienceRefusal = chatTurnToolRefusal(chatToolSurface, turnAudience);
+  turnToolRefusals.push(
+    turnAudience.goalRound === true && windowless
+      ? (name) => {
+          // A goal round off screen that needs the window: the goal bar offers Continue here.
+          const reason = audienceRefusal(name);
+          if (reason && refusedForWantOfWindow(turnAudience, name)) goalTurnHooks().windowToolRefused(params.chatId);
+          return reason;
+        }
+      : audienceRefusal,
+    turnArgsRefusal,
+  );
   if (declaresAppTools(ownerScope, { attendedAssistant, schedulingAllowed })) {
     // A windowless turn declares them with no live state and no navigation,
     // and refuses every call (`chatTurnToolRefusal`).
@@ -4489,7 +4543,9 @@ export const llmClient = {
         deferredTools,
         // Every request drops removed memory facts and, after a compaction
         // inside the turn, states the current state again.
-        prepareMessages: chatStateRequestMessages(chatStatePlan.head, currentChatState),
+        // While a goal is active, its byte-stable reminder sits right after a
+        // compaction summary.
+        prepareMessages: chatStateRequestMessages(chatStatePlan.head, currentChatState, goalTurnHooks().reminder(params.chatId)),
       };
       assertGenerationContextCapacity(generationContextOptions);
       const onCompactionEvent = (event: PiCompactionEvent) => {
@@ -4709,11 +4765,16 @@ export const llmClient = {
             contentOverrides.get(currentUser.id),
           )
         : undefined;
+      // A keep-going goal the person just set: its kickoff note follows their
+      // objective, once. A notice (a round's continuation) never carries it.
+      const goalKickoffNote = currentPromptMessage && currentUser?.notice === undefined
+        ? goalTurnHooks().kickoff(params.chatId) ?? ""
+        : "";
       turnFollowingMessages = currentPromptMessage
         ? [
             ...(hookTurnContext ? [hookContextMessage(hookTurnContext, currentPromptMessage.timestamp)] : []),
             ...(chatStatePlan.update ? [chatStatePlan.update(currentPromptMessage.timestamp)] : []),
-            ...[turnNoteMessage([generativeUiTurnNote, advisorTurnNote, formFillNote, mcpServersSection.turnNote], currentPromptMessage.timestamp)].filter(
+            ...[turnNoteMessage([goalKickoffNote, generativeUiTurnNote, advisorTurnNote, formFillNote, mcpServersSection.turnNote], currentPromptMessage.timestamp)].filter(
               (note): note is AgentMessage => note !== undefined,
             ),
           ]
@@ -6343,6 +6404,8 @@ export const llmClient = {
       generationChat.owner === undefined;
     // The outcome the run records (a Stop, or not), once it has one.
     let owedRunRecordedStop: boolean | undefined;
+    // The run ended in an error, for a keep-going goal's pre-checks.
+    let goalRunFailed = false;
     // Only a turn that ended normally counts a design-system offer as made.
     let designSystemOfferDelivered = false;
     // Ends the run's ownership, then settles its owed turn even when a
@@ -6359,20 +6422,27 @@ export const llmClient = {
           recordedStop,
         },
       );
+      // A keep-going goal looks at the chat once it is idle again; a round
+      // starts with what this run ran with, as an owed turn does.
+      if (owesItsChatTurns) {
+        try {
+          goalTurnHooks().runSettled({
+            chatId: params.chatId,
+            streamId,
+            context: owedTurnContextOf(params, options),
+            stopped: recordedStop,
+            failed: goalRunFailed && !recordedStop,
+          });
+        } catch (error) {
+          logger.warn("goal", "The keep-going goal could not observe a settled run.", error);
+        }
+      }
     };
     if (owesItsChatTurns) {
       owedTurns.open(streamId, {
         chatId: params.chatId,
         ownerDocumentId: owner.documentId,
-        context: {
-          ...(params.workspaceId !== undefined ? { workspaceId: params.workspaceId } : {}),
-          providerId: params.providerId,
-          model: params.model,
-          ...(params.thinkingLevel !== undefined ? { thinkingLevel: params.thinkingLevel } : {}),
-          ...(params.inlineVisuals !== undefined ? { inlineVisuals: params.inlineVisuals } : {}),
-          ...(options.visualAudience !== undefined ? { visualAudience: options.visualAudience } : {}),
-          ...(options.excludeToolNames !== undefined ? { excludeToolNames: options.excludeToolNames } : {}),
-        },
+        context: owedTurnContextOf(params, options),
       });
       activeGeneration.owedTurn = { hold: () => owedTurns.hold(streamId) };
     }
@@ -6407,6 +6477,7 @@ export const llmClient = {
       return promotedRunAbandoned;
     };
     escape.settle = async () => {
+      goalRunFailed = !activeGeneration.cancelRequested;
       try {
         await abandonPromotedRun(activeGeneration.cancelRequested ? "cancelled" : "failed");
       } finally {
@@ -6711,6 +6782,7 @@ export const llmClient = {
         collectUndeliveredGuidance();
         // A failed run records a failure, never a Stop, so the input it owes still runs.
         owedRunRecordedStop = false;
+        goalRunFailed = true;
         logger.error("pi", `Generation failed for stream ${streamId}`, error);
         const finalTimeline = attachClaimCheck(timeline.finish("failed"), full, claimCheckOptions);
         const persisted = await persistAssistant(full, reasoning, finalTimeline);
@@ -6797,6 +6869,28 @@ export const llmClient = {
   },
 
   /** The open approval of this chat's owed turn, for the desktop's host card. */
+  /**
+   * The owner of a turn main starts for an attended chat with no window behind
+   * it (a goal round): approvals and questions go where an owed turn's do, to
+   * a desktop window showing the chat or a paired phone, whichever answers.
+   * `lifetime` sets how long its cards wait (an owed turn's five minutes by
+   * default) and who hears when one expires unanswered.
+   */
+  attendedTurnOwner(chatId: string, documentId: string, lifetime?: OwedTurnPromptLifetime): ChatGenerationOwner {
+    return {
+      id: 0,
+      documentId,
+      isDestroyed: () => false,
+      send: (channel, payload) => owedTurnPrompts.publish(chatId, channel, payload, lifetime),
+      onInvalidated: () => () => undefined,
+    };
+  },
+
+  /** The chat has a helper (subagent) still running. */
+  chatHasLiveHelpers(chatId: string): boolean {
+    return subagentRuntimeRegistry.hasLiveChatChildren(chatId);
+  },
+
   pendingOwedTurnApproval(chatId: string) {
     return owedTurnPrompts.approvalForChat(chatId);
   },

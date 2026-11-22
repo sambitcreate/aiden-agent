@@ -82,6 +82,14 @@ export const ANALYTICS_EVENTS = {
   design_mode_exited: {},
   design_mode_declined: {},
   design_comments_sent: { count_bucket: enumProp(...COUNT_BUCKETS) },
+  // Keep-going goals. `rounds` has its own buckets, up to the 50-round limit,
+  // because COUNT_BUCKETS stops at 11+ and can't show how often goals hit 50
+  // (the same buckets as `goalRoundBucket` in renderer/shared/goal.ts).
+  goal_started: { source: enumProp("slash", "menu", "proposal", "phone", "until") },
+  goal_settled: {
+    outcome: enumProp("done", "needs_you", "paused", "cleared"),
+    rounds: enumProp("1", "2-5", "6-10", "11-20", "21-49", "50"),
+  },
 
   // Approval cards. `chat` says which chat asked; it is not named `surface`,
   // which every event already carries (desktop or server).

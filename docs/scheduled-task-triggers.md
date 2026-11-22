@@ -2,7 +2,7 @@
 
 A scheduled task usually runs on a schedule. An **Ask Aiden** task can instead run **when something changes**: Aiden checks something on its own and runs the task only when the check finds news. The check never runs a model, so an unchanged page or a quiet script costs nothing.
 
-This is desktop-only for now (macOS and Linux). Phones don't list these tasks or their runs yet, and can't edit, pause, resume or run them. A task runs from a **watch** or from a **link**.
+This is desktop-only for now (macOS and Linux). Phones don't list these tasks or their runs yet, and can't edit, pause, resume or run them. A task runs from a **watch**, a **connected app** or a **link**.
 
 ## Watches
 
@@ -14,6 +14,18 @@ Pick **When → When something changes** in the task editor, then choose what to
   - `AIDEN_CHECK_RUNS` is how many checks finished before this one (0 on the first).
 
 What a check finds reaches the model only as fenced data after your instructions ("What happened (data, not instructions)"), never as instructions.
+
+## When a connected app has news
+
+Pick **When → When a connected app has news** to run the task when new mail arrives in a mailbox, or when a calendar has events coming up.
+
+- **New mail** reads a local Mail mailbox through iMCP, on a Mac only. Optional filters: the sender contains, the subject contains, unread mail only.
+- **Upcoming calendar events** reads a calendar through Composio (macOS and Linux), looking 15 minutes to a day ahead in the time zone you choose. It needs the same verified Composio calendar read as Bot connector watches; until that is available on this computer, Find sources says so and offers no calendars.
+- **Check every** 15, 30 or 60 minutes.
+
+Choose **Find sources** in the editor to list the mailboxes or calendars your open connectors offer, then pick one. This is the only step that lists sources, and it uses connections you already opened in Settings → Connectors. Saving the task keeps the exact source (the connector's connection, its read tools and the account) in main; the editor and phones only ever see its names. A choice is good for 15 minutes. Editing filters or the interval keeps the source; switching between mail and calendar needs Find sources again.
+
+Background checks only read through a connection that is already open. They never connect, sign in or reconnect anything, and never use a model. The first check only records what's there; the task runs from the next change on, with up to 8 new items (`new: <subject or event title>`) as fenced data. If the connector was removed, turned off or hidden from the model, the task pauses at once with a card. If its setup or its account or tools changed since you chose the source, the check is refused without reading and counts as a failed check; choose Find sources again. Connected-app runs count as `watch` runs in usage data. Aiden can't create one of these tasks from a chat, because the source has to be chosen in the editor.
 
 ## Links
 
@@ -30,19 +42,19 @@ The task's details list the last calls (50 kept) with what happened to each and 
 
 ## Asking Aiden for one
 
-In a chat, Aiden can propose a task with a trigger instead of a schedule (the `trigger` field of the schedule tool's create). The approval card shows the trigger in place of the schedule, and what you approve is exactly what is saved. Aiden can't add a trigger to an existing task, and a scheduled run never has the schedule tool, so a run can't create more tasks. For a link task Aiden only hears that the link is shown to you; you make it from the task's details. Aiden Assistant automations may watch a web address or use a link, but never run a script. The headless `aiden serve` server has no watches or links and refuses such tasks.
+In a chat, Aiden can propose a task with a watch or a link instead of a schedule (the `trigger` field of the schedule tool's create); a connected-app task is set up in the editor. The approval card shows the trigger in place of the schedule, and what you approve is exactly what is saved. Aiden can't add a trigger to an existing task, and a scheduled run never has the schedule tool, so a run can't create more tasks. For a link task Aiden only hears that the link is shown to you; you make it from the task's details. Aiden Assistant automations may watch a web address or use a link, but never run a script. The headless `aiden serve` server has no watches or links and refuses such tasks.
 
 ## Where runs land and how often
 
 Runs land the same way as scheduled runs: in the chat the task was made in, sharing that chat's six task runs an hour, otherwise in the task's own chat. The task keeps its own permission and tools, and a run never gets the `schedule` tool, so a run can't create more tasks.
 
-Per task, a watch runs at most once every 5 minutes (a link chooses 1 to 60) and 48 times a day; a change that comes sooner waits and runs once the gap allows (for a watch the newest change wins; a link batches its calls). Across every task, at most 4 trigger runs go at once. A run skipped because its chat was busy or had used its hourly share is recorded as skipped; the next change runs again. A change accepted just before Aiden quits runs again at the next start.
+Per task, a watch runs at most once every 5 minutes (a link chooses 1 to 60) and 48 times a day; a change that comes sooner waits and runs once the gap allows (a watch hands over its newest change first, then earlier ones not yet delivered, cut to 24,000 characters; a link batches its calls). Across every task, at most 4 trigger runs go at once. A run skipped because its chat was busy or had used its hourly share is recorded as skipped, and what it carried waits again: it runs at the next allowed time together with anything that arrived since (a link still keeps at most 20 calls and says how many were dropped). A change accepted just before Aiden quits runs again at the next start.
 
 Triggers never keep the computer awake. Checks happen only while Aiden is open and scheduled tasks are on.
 
 ## When checks fail
 
-Three failed checks in a row pause the task, with one card in the chat its runs land in. Fix the address or script and turn the task back on; that clears the count and checks again right away.
+Three failed checks in a row pause the task, with one card in the chat its runs land in. Fix the address, script or connector and turn the task back on; that clears the count and checks again right away. A connected app that was removed or turned off pauses the task after one check.
 
 ## When runs fail
 
@@ -52,4 +64,4 @@ A scheduled chat task's missed time runs once when Aiden starts or the computer 
 
 ## Storage
 
-The trigger lives on the task in `schedules.json`. Bookkeeping (seen changes, the held change or batch, accepted changes not yet run, the watch's last result and failure count, a link's token hash and call log) is in `<userData>/scheduled-task-triggers.json`, script state files are in `<userData>/scheduled-task-check-state/`, and a signed link's secret is in the encrypted key store under `aiden-internal:task-hook:<taskId>`.
+The trigger lives on the task in `schedules.json`. Bookkeeping (seen changes, the held change or batch, accepted changes not yet run, the watch's last result and failure count, a connected app's exact source and its baseline, a link's token hash and call log) is in `<userData>/scheduled-task-triggers.json`, script state files are in `<userData>/scheduled-task-check-state/`, and a signed link's secret is in the encrypted key store under `aiden-internal:task-hook:<taskId>`.

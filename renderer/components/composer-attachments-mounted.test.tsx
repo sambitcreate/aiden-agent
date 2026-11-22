@@ -43,7 +43,7 @@ async function loadComposer() {
     "../lib/command-system":
       "export const useCommandSystem=()=>({canExecute:()=>false,execute:()=>false,binding:()=>null}); export const useCommandHandler=()=>{};",
     "../lib/ipc":
-      "export const attachmentsApi=globalThis.__composerAttachmentFixture.api; export const browserApi={onEvent: callback => { globalThis.__composerAttachmentFixture.browserEvent=callback; return ()=>{}; }}; export const chatsApi={setDoneWhenCheck: async (...args) => { (globalThis.__composerFollowThrough ??= []).push(['until', ...args]); }, followPullRequest: async (...args) => { (globalThis.__composerFollowThrough ??= []).push(['follow', ...args]); }};",
+      "export const attachmentsApi=globalThis.__composerAttachmentFixture.api; export const browserApi={onEvent: callback => { globalThis.__composerAttachmentFixture.browserEvent=callback; return ()=>{}; }}; export const chatsApi={setGoalCheck: async (...args) => { (globalThis.__composerFollowThrough ??= []).push(['until', ...args]); }, followPullRequest: async (...args) => { (globalThis.__composerFollowThrough ??= []).push(['follow', ...args]); }};",
     "./git-branch-picker": "export const GitBranchPicker=()=>null;",
     "./workspace-picker": "export const WorkspacePicker=()=>null;",
     "./composer-context-bar":
@@ -912,7 +912,7 @@ test("mounted Composer fills in an argument command when picked and runs it from
   }
 });
 
-test("mounted Composer sets a /until check only for a chat with folder access, and clears the command once it is set", async () => {
+test("mounted Composer sets a /until goal only for a chat with folder access, and clears the command once it is set", async () => {
   const mounted = installDom();
   Object.assign(window, { setTimeout, clearTimeout });
   Object.getPrototypeOf(mounted.container).scrollIntoView = () => {};
@@ -993,8 +993,8 @@ test("mounted Composer sets a /until check only for a chat with folder access, a
     await pressEnter();
     assert.deepEqual(calls(), [["until", "until-chat", "npm test"]]);
     assert.deepEqual(sent, []);
-    assert.equal(draft(), "", "the command leaves the composer once the check is set");
-    assert.deepEqual(toasts(), ["Aiden runs npm test after each answer until it passes, 5 checks at most."]);
+    assert.equal(draft(), "", "the command leaves the composer once the goal is set");
+    assert.deepEqual(toasts(), [], "the goal bar shows the check, so no toast repeats it");
   } finally {
     await React.act(async () => root.unmount());
     await loaded.cleanup();

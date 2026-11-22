@@ -214,3 +214,40 @@ test("a deleted chat drops the notice, and a throwing dependency never rejects t
   broken.deps.queueAnswer = undefined;
   assert.equal((await delivery.post(post("y"))).kind, "woke");
 });
+
+test("while the chat has an active goal, waking news starts a goal round that spends no wake budget", async () => {
+  let now = 1_000;
+  const chat = fakeChat({ now: () => now });
+  let goalActive = true;
+  const rounds: string[] = [];
+  chat.deps.startGoalRound = async (chatId, item) => {
+    if (!goalActive) return undefined;
+    rounds.push(item?.text ?? "(saved)");
+    return { kind: "started", streamId: `goal-${chatId}-${rounds.length}`, ...(item ? { messageId: `g${rounds.length}` } : {}) };
+  };
+  const delivery = new NoticeDelivery(chat.deps);
+  for (let index = 0; index < MAX_WAKES_PER_CHAT_PER_HOUR + 2; index += 1) {
+    const outcome = await delivery.post(post(`job ${index} finished`));
+    assert.equal(outcome.kind, "woke", `notice ${index}`);
+    now += 60_000;
+  }
+  assert.equal(rounds.length, MAX_WAKES_PER_CHAT_PER_HOUR + 2, "no hourly limit on rounds the goal owns");
+  assert.equal(delivery.wakesLeft("chat-1"), MAX_WAKES_PER_CHAT_PER_HOUR);
+  assert.ok(!chat.calls.includes("start-with-notice"), "no unattended turn while the goal is active");
+
+  // A notice that needs no answer is only recorded, goal or not.
+  assert.equal((await delivery.post(post("checks passed", false))).kind, "recorded");
+  assert.equal(rounds.length, MAX_WAKES_PER_CHAT_PER_HOUR + 2);
+
+  // A notice saved as a run ended is answered by a goal round too.
+  chat.deps.queueAnswer = () => ({ kind: "saved", messageId: "saved-1" });
+  const saved = await delivery.post(post("dev server crashed"));
+  assert.deepEqual(saved, { kind: "woke", messageId: "saved-1", streamId: `goal-chat-1-${rounds.length}` });
+  assert.equal(rounds[rounds.length - 1], "(saved)");
+  chat.deps.queueAnswer = undefined;
+
+  // Without a goal, the unattended wake and its budget apply again.
+  goalActive = false;
+  assert.equal((await delivery.post(post("after the goal"))).kind, "woke");
+  assert.equal(delivery.wakesLeft("chat-1"), MAX_WAKES_PER_CHAT_PER_HOUR - 1);
+});

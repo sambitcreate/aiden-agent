@@ -71,6 +71,7 @@ export type SlashCommandIcon =
   | "environment"
   | "export"
   | "fork"
+  | "goal"
   | "hotkeys"
   | "mcp"
   | "model"
@@ -100,6 +101,8 @@ export type SlashCommandAction =
     }
   | { kind: "composer-instruction"; instruction: "visualize" | "btw" }
   | { kind: "follow-through"; action: "until" | "follow" }
+  /** `/goal <objective>` sets a keep-going goal; bare `/goal` shows it; `pause`, `resume` and `clear` act on it. */
+  | { kind: "goal" }
   /** Turns the chat's design mode on, or off with "off" after the command. */
   | { kind: "design-mode" };
 
@@ -118,7 +121,9 @@ export type SlashCommandAvailability =
   /** A chat in a workspace with folder access, on the desktop. */
   | "workspace-chat"
   /** A local project or No workspace chat that can use design mode. */
-  | "design-chat";
+  | "design-chat"
+  /** A chat on this computer, new ones included; main refuses the chats a goal can't run in (Bots, agent harnesses). */
+  | "goal-chat";
 
 export interface SlashCommandDefinition {
   name: string;
@@ -562,10 +567,23 @@ export const SLASH_COMMANDS = Object.freeze([
     draftPolicy: "preserve",
   }),
   define({
+    name: "goal",
+    aliases: ["keep-going"],
+    title: "Keep going until done",
+    description: "Aiden keeps working in new rounds until the goal is done, up to 50. Type /goal pause, resume or clear to change it.",
+    keywords: ["goal", "loop", "keep going", "until done", "autonomous", "objective"],
+    icon: "goal",
+    action: { kind: "goal" },
+    behavior: "argument",
+    availability: "goal-chat",
+    argument: "optional-prompt",
+    draftPolicy: "preserve",
+  }),
+  define({
     name: "until",
     aliases: ["done-when"],
     title: "Until a check passes",
-    description: "Run a check, such as your tests, after each answer; the agent keeps fixing until it passes, 5 checks at most.",
+    description: "Keep going until a check, such as your tests, passes: Aiden runs it after each answer and keeps fixing, 5 checks at most.",
     keywords: ["test", "check", "loop", "done when", "ci"],
     icon: "check",
     action: { kind: "follow-through", action: "until" },

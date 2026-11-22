@@ -405,6 +405,21 @@
 .oa-ctl-head .oa-chip { height: 14px; font-size: 7px; }
 .oa-ctl-row { display: flex; align-items: center; gap: 6px; height: 19px; padding: 0 8px; color: var(--text-primary); font-size: 8px; white-space: nowrap; }
 
+/* Keep going until done: a round's card and the goal bar over the composer. */
+.oa-goal { display: flex; flex-direction: column; }
+.oa-goal-chat { display: grid; gap: 8px; padding: 10px 9px 0; }
+.oa-goal-reply { display: grid; gap: 4px; }
+.oa-goal-reply .oa-bar { height: 4.5px; }
+.oa-goal-card { display: flex; align-items: center; gap: 6px; padding: 6px 8px; border-radius: 9px; background: var(--oa-fill); color: var(--text-secondary); font-size: 8px; line-height: 10px; white-space: nowrap; }
+.oa-goal-card > .oa-icon { width: 10px; height: 10px; }
+.oa-goal-foot { display: grid; gap: 5px; padding: 10px 7px 0; }
+.oa-goal-bar { display: flex; align-items: center; gap: 6px; padding: 5px 6px; border-radius: 9px; background: var(--surface-well); }
+.oa-goal-badge { display: grid; place-items: center; width: 16px; height: 16px; flex: none; border-radius: 999px; background: var(--oa-fill); color: var(--text-secondary); }
+.oa-goal-badge .oa-icon { width: 8px; height: 8px; }
+.oa-goal-bar-text { display: grid; gap: 3px; min-width: 0; flex: 1; font-size: 7.5px; line-height: 9px; white-space: nowrap; }
+.oa-goal-bar-text .oa-bar { height: 4px; }
+.oa-goal-foot .oa-composer { height: 46px; }
+
 /* Chats that run chats: the lead chat's started-chats list. */
 .oa-sched-dot[data-chat-state="working"] { background: var(--accent); }
 .oa-sched-dot[data-chat-state="needs"] { background: var(--status-warning); }

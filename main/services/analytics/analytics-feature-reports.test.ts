@@ -11,7 +11,8 @@ import {
 } from "./analytics-feature-reports.js";
 import { analyticsModelId, analyticsProviderId, analyticsRunTrigger, analyticsWorkspaceKind } from "./analytics-ids.js";
 import { analyticsSettled, captureAnalyticsEvents } from "./test-support.js";
-import { setAnalyticsReporter } from "./analytics-report.js";
+import { reportAnalyticsEvent, setAnalyticsReporter } from "./analytics-report.js";
+import { goalRoundBucket } from "../../../renderer/shared/goal.js";
 
 test("a built-in provider and its catalog model are sent, folded to the registry's lowercase", () => {
   assert.equal(analyticsProviderId("anthropic"), "anthropic");
@@ -149,5 +150,23 @@ test("a message carrying design comments reports only how many, from the person'
   assert.deepEqual(events, [
     { event: "design_comments_sent", props: { count_bucket: "2-3" } },
     { event: "design_comments_sent", props: { count_bucket: "1" } },
+  ]);
+});
+
+test("goal events carry only their source, outcome and round bucket", async (t) => {
+  const events = captureAnalyticsEvents(t);
+  reportAnalyticsEvent("goal_started", { source: "menu" });
+  reportAnalyticsEvent("goal_settled", { outcome: "paused", rounds: goalRoundBucket(50) });
+  reportAnalyticsEvent("goal_settled", { outcome: "done", rounds: goalRoundBucket(7) });
+  // An objective or a raw count is never a property the registry keeps.
+  reportAnalyticsEvent("goal_started", { source: "Ship the release" } as never);
+  reportAnalyticsEvent("goal_settled", { outcome: "done", rounds: "37" } as never);
+  await analyticsSettled();
+  assert.deepEqual(events, [
+    { event: "goal_started", props: { source: "menu" } },
+    { event: "goal_settled", props: { outcome: "paused", rounds: "50" } },
+    { event: "goal_settled", props: { outcome: "done", rounds: "6-10" } },
+    { event: "goal_started", props: undefined },
+    { event: "goal_settled", props: undefined },
   ]);
 });

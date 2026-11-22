@@ -4,7 +4,7 @@ Aiden can keep working after an answer ends. Four features keep a coding chat mo
 
 - **Background jobs**: the agent starts a long command (a dev server, a watcher, a long test run), keeps working, and hears when the command ends.
 - **Following a pull request**: Aiden watches a pull request and tells the chat about failed checks, merge conflicts and reviewers' comments until the pull request is merged or closed.
-- **Keep going until a check passes**: the person names a check with `/until npm test`, and Aiden runs it after each answer. While it fails, the agent gets the end of its output and keeps fixing, up to five checks.
+- **Keep going until a check passes**: the person names a check with `/until npm test`. It sets a [keep-going goal](keep-going-goals.md) that Aiden checks by running the command after each answer. While it fails, the agent gets the end of its output and keeps fixing, up to five checks.
 - **Chats that check back**: the agent promises to look again later ("I'll check the deploy in 20 minutes"), and at that minute Aiden posts its note into the chat. See [Checking back later](#checking-back-later).
 
 The first three run on the macOS and Linux desktop, in workspace chats whose folder access is **Full access** or **Ask first**; check-backs also work in **Read only** workspaces. They are not available in Bot chats, the Assistant, Telegram chats, a chat hosted on a paired Mac, or the CLI. Phones show the chat's follow-up messages but cannot start them.
@@ -16,6 +16,7 @@ News reaches the chat as a follow-up message. The transcript shows it as a small
 - If the agent is still answering, the message joins that answer as the next thing it reads.
 - If the chat is idle and the news needs work (a failure, a conflict, a comment), Aiden starts a follow-up answer on its own. A chat can start at most six such answers an hour; after that the message is only saved, and the agent reads it with the person's next message.
 - News that needs nothing (checks passed, a merge) is only saved.
+- If the chat has a working [keep-going goal](keep-going-goals.md), news that needs work starts a goal round instead. A goal round is attended: its approvals wait 30 minutes, and it doesn't count toward the six an hour.
 
 A follow-up answer runs with nobody watching. It cannot ask questions or wait for approvals: in an **Ask first** workspace, anything that would need approval is refused for that answer. It also does not use subagents, Computer Use or Connectors. The agent still sees which connectors the chat uses, with a note that they are not connected for that answer, so it can say what it would check with them.
 
@@ -82,16 +83,19 @@ The composer shows a **Following #N** chip. Its list shows where each pull reque
 
 ## Keep going until a check passes
 
-Type `/until` followed by the check, for example `/until npm test`. The check is one line and runs in the workspace folder with a 10-minute limit.
+Type `/until` followed by the check, for example `/until npm test`. The check is one line and runs in the workspace folder with a 10-minute limit. `/until` sets the chat's [keep-going goal](keep-going-goals.md) with the objective "Keep going until `npm test` passes", so the goal bar above the composer shows it, with Pause and Clear.
 
-- If the chat is idle, the check runs right away; otherwise it runs when the current answer ends.
-- When it fails, the agent gets the exit code and the last 3,000 characters of its output and keeps working. The check runs again when that answer ends.
-- When it passes, Aiden stops running it and tells the chat.
-- After five checks that still fail, Aiden stops and tells the chat, without starting another answer.
+- If the chat is idle, the check runs right away; otherwise it runs when the current answer ends. Setting the goal doesn't start an answer by itself.
+- When it fails, a new round starts with a "Keep going · check 2 of 5" card, and the agent gets the exit code and the last 3,000 characters of its output, fenced as data, and keeps working. The check runs again when that round ends.
+- When it passes, the goal is **Done** with "`npm test` passed".
+- After five checks that still fail, the goal pauses at its limit without starting another answer. **Keep going** on the goal bar grants five more.
+- If a check is stopped before it finishes (you pressed Stop, a managed worktree was removed, Aiden closed), the goal pauses and says so.
 
-A chat has one check at a time; `/until` with a new command replaces it. A replaced check that was running is stopped first, and the new one runs once it has. The composer shows an **Until npm test passes** chip, and **Stop checking** clears it. Changing the workspace's folder access or deleting the chat clears it too. Stop an active check or follow before moving an empty chat to another workspace. Each check verifies that its chat still owns the workspace and that a managed checkout still has its original identity. When the command ends, Aiden stops any remaining processes in its group, including ones that redirected their output.
+A chat has one goal; `/until` with a new command replaces the goal, and a replaced check that was running is stopped first. `/goal clear` or **Clear** on the bar removes it. Changing the workspace's folder access or deleting the chat ends it too. Pause or clear a working goal, and stop an active follow, before moving an empty chat to another workspace. Each check verifies that its chat still owns the workspace and that a managed checkout still has its original identity. When the command ends, Aiden stops any remaining processes in its group, including ones that redirected their output.
 
-Aiden records the check’s process group before running its command. If Aiden cannot save the recovery record, the command stays unstarted and waits for the next answer without using an attempt or waking the agent. Once Aiden verifies the group has exited, a failure to remove the saved entry is logged. The check keeps its command result, and startup can discard the stale entry. If a stop signal fails and a descendant stays alive, Aiden retains the recovery record and blocks changes to that workspace until it can confirm the group has ended. The chat receives a **Check waiting** notice. The interrupted check keeps its attempt count and does not wake the agent. After a crash, startup reaps recorded groups before opening desktop and remote requests. An interrupted check waits for the next answer and keeps its previous attempt count.
+Aiden records the check's process group before running its command. If Aiden cannot save the recovery record, the command stays unstarted. Once Aiden verifies the group has exited, a failure to remove the saved entry is logged, and startup can discard the stale entry. If a stop signal fails and a descendant stays alive, Aiden retains the recovery record and blocks changes to that workspace until it can confirm the group has ended. After a crash, startup reaps recorded groups before opening desktop and remote requests, and the goal comes back paused like any goal after a restart; press **Keep going** to run the check again.
+
+Checks saved by an earlier version of Aiden that were still waiting or running become paused `/until` goals on the first launch after the update, keeping the checks they had used; checks that had passed or given up are dropped.
 
 ## Checking back later
 

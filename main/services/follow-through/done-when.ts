@@ -1,19 +1,21 @@
-// "Done when" checks: the person names a command (`/until npm test`) and it
-// runs after each answer in that chat. While it fails, the agent gets the end
-// of its output and keeps going, up to five checks. A pass, the fifth failure,
-// or the person clearing it ends the loop. A check cut off by a quit is never
-// rerun on launch; it waits for the next answer instead.
+// "Done when" checks, now the check of a keep-going goal: `/until npm test`
+// sets a goal whose check is that command (docs/keep-going-goals.md). The goal
+// loop decides when a check runs (after each round, up to five checks); this
+// file runs one check at a time per chat in the chat's workspace folder, turns
+// its result into what the next round reads, and moves checks saved by older
+// releases into goals.
+//
+// A check cut off by a quit is never rerun on launch: its goal comes back
+// paused like every other goal.
 
-import { agentNotice, fenceAsData, tailText, type AgentNoticeV1 } from "../../../renderer/shared/agent-notices.js";
-import {
-  MAX_DONE_WHEN_CHECKS,
-  MAX_DONE_WHEN_COMMAND_CHARS,
-  type DoneWhenCheckState,
-} from "../../../renderer/shared/follow-through.js";
+import { fenceAsData, tailText } from "../../../renderer/shared/agent-notices.js";
+import { MAX_DONE_WHEN_CHECKS, type DoneWhenCheckState } from "../../../renderer/shared/follow-through.js";
+import { GOAL_VERSION, type GoalRecordV1 } from "../../../renderer/shared/goal.js";
 
 export const DONE_WHEN_TIMEOUT_MS = 10 * 60_000;
 export const DONE_WHEN_OUTPUT_CHARS = 3_000;
 
+/** A check saved by a release before `/until` became a goal. Read once, on launch, to migrate it. */
 export interface DoneWhenRecord {
   version: 1;
   chatId: string;
@@ -42,239 +44,179 @@ export interface DoneWhenRunResult {
   output: string;
 }
 
-export interface DoneWhenNotice {
-  chatId: string;
-  notice: AgentNoticeV1;
-  text: string;
-  wake: boolean;
-}
+/** What one goal check came to, for the goal loop. */
+export type GoalCheckResult =
+  /** The command ran to an end. `summary` is one line; `details` is its fenced output for the next round. */
+  | { kind: "finished"; passed: boolean; summary: string; details: string }
+  /** It was stopped before it ended (the workspace changed, process recovery, access off). */
+  | { kind: "stopped"; summary: string };
 
-export interface DoneWhenDeps {
-  run(record: DoneWhenRecord, signal: AbortSignal): Promise<DoneWhenRunResult>;
-  post(notice: DoneWhenNotice): void;
-  /** Saves every record; called after each change. */
-  persist(records: DoneWhenRecord[]): void;
-  onChange?(chatId: string): void;
-  now(): number;
-}
-
-export function validateDoneWhenCommand(command: string): string {
-  const trimmed = command.trim();
-  if (!trimmed) throw new Error("Name the check to run, for example /until npm test.");
-  if (trimmed.length > MAX_DONE_WHEN_COMMAND_CHARS) throw new Error("The check command is too long.");
-  if (/[\r\n]/u.test(trimmed)) throw new Error("Write the check on one line.");
-  return trimmed;
-}
-
+/** The check's own one line: its exit code, or the 10-minute limit. */
 function outcomeLine(result: DoneWhenRunResult): string {
   if (result.timedOut) return "it ran for 10 minutes without finishing";
   return `exit code ${result.exitCode ?? "unknown"}`;
 }
 
-export class DoneWhenChecks {
+/** A run as the goal reads it: passed or not, one line, and the end of its output fenced as data. */
+export function goalCheckResult(command: string, result: DoneWhenRunResult): GoalCheckResult {
+  if (result.aborted) return { kind: "stopped", summary: `The check \`${command}\` was stopped before it finished` };
+  const passed = result.exitCode === 0 && !result.timedOut;
+  const { text: tail, truncated } = tailText(result.output.trimEnd(), DONE_WHEN_OUTPUT_CHARS);
+  const details = tail.trim()
+    ? fenceAsData(truncated ? "End of the check's output" : "The check's output", tail)
+    : "The check printed nothing.";
+  return {
+    kind: "finished",
+    passed,
+    summary: passed ? `\`${command}\` passed` : `\`${command}\` failed (${outcomeLine(result)})`,
+    details,
+  };
+}
+
+export interface GoalCheckInput {
+  chatId: string;
+  workspaceId: string;
+  command: string;
+}
+
+export interface GoalCheckRunnerDeps {
+  /** Runs the command in the workspace folder; may throw `CheckInterruptedError`. */
+  run(input: GoalCheckInput, signal: AbortSignal): Promise<DoneWhenRunResult>;
+  onChange?(chatId: string): void;
+}
+
+interface RunningCheck {
+  controller: AbortController;
+  workspaceId: string;
+  settled: Promise<void>;
+}
+
+/**
+ * Runs goal checks, one per chat at a time. A new check stops the chat's
+ * running one first. Workspace changes, a deleted chat and quitting stop
+ * running checks; their goals then hear `stopped`.
+ */
+export class GoalCheckRunner {
   private closed = false;
-  private readonly records = new Map<string, DoneWhenRecord>();
-  private readonly running = new Map<string, { controller: AbortController; workspaceId: string; settled: Promise<void> }>();
-  /** Chats whose new check should run as soon as the replaced one has stopped. */
-  private readonly runWhenFree = new Set<string>();
+  private readonly running = new Map<string, RunningCheck>();
 
-  constructor(private readonly deps: DoneWhenDeps) {}
+  constructor(private readonly deps: GoalCheckRunnerDeps) {}
 
-  /** Load saved checks. One that was running when Aiden closed waits for the next answer. */
-  restore(records: readonly DoneWhenRecord[]): void {
-    for (const record of records) {
-      if (record?.version !== 1 || typeof record.chatId !== "string" || typeof record.command !== "string") continue;
-      this.records.set(record.chatId, record.state === "running" ? { ...record, state: "waiting", checksRun: Math.max(0, record.checksRun - 1) } : { ...record });
+  /** Chats whose check command is running now (for keep-awake). */
+  list(): Array<{ chatId: string; state: "running" }> {
+    return [...this.running.keys()].map((chatId) => ({ chatId, state: "running" as const }));
+  }
+
+  isRunning(chatId: string): boolean {
+    return this.running.has(chatId);
+  }
+
+  async run(input: GoalCheckInput, signal: AbortSignal): Promise<GoalCheckResult> {
+    if (this.closed) return { kind: "stopped", summary: "Aiden is closing" };
+    const previous = this.running.get(input.chatId);
+    if (previous) {
+      previous.controller.abort();
+      await previous.settled;
+    }
+    const controller = new AbortController();
+    const forward = () => controller.abort(signal.reason);
+    if (signal.aborted) forward();
+    else signal.addEventListener("abort", forward, { once: true });
+    let resolve!: () => void;
+    const settled = new Promise<void>((done) => {
+      resolve = done;
+    });
+    const entry: RunningCheck = { controller, workspaceId: input.workspaceId, settled };
+    this.running.set(input.chatId, entry);
+    this.deps.onChange?.(input.chatId);
+    try {
+      const result = await this.deps.run(input, controller.signal);
+      return goalCheckResult(input.command, controller.signal.aborted ? { ...result, aborted: true } : result);
+    } catch (error) {
+      if (error instanceof CheckInterruptedError) return { kind: "stopped", summary: error.message };
+      if (controller.signal.aborted) return goalCheckResult(input.command, { exitCode: null, timedOut: false, aborted: true, output: "" });
+      return { kind: "stopped", summary: error instanceof Error ? error.message : String(error) };
+    } finally {
+      signal.removeEventListener("abort", forward);
+      if (this.running.get(input.chatId) === entry) this.running.delete(input.chatId);
+      resolve();
+      this.deps.onChange?.(input.chatId);
     }
   }
 
-  get(chatId: string): DoneWhenRecord | undefined {
-    const record = this.records.get(chatId);
-    return record ? { ...record } : undefined;
+  /** Stops the chat's running check and waits for it. */
+  async stopChat(chatId: string): Promise<void> {
+    const run = this.running.get(chatId);
+    if (!run) return;
+    run.controller.abort();
+    await run.settled;
   }
 
-  list(): DoneWhenRecord[] {
-    return [...this.records.values()].map((record) => ({ ...record }));
-  }
-
-  /** Set (or replace) a chat's check. With `runNow` it runs once right away. */
-  set(input: { chatId: string; workspaceId: string; command: string; runNow: boolean }): DoneWhenRecord {
-    if (this.closed) throw new Error("Aiden is closing.");
-    const command = validateDoneWhenCommand(input.command);
-    this.running.get(input.chatId)?.controller.abort();
-    const record: DoneWhenRecord = {
-      version: 1,
-      chatId: input.chatId,
-      workspaceId: input.workspaceId,
-      command,
-      state: "waiting",
-      checksRun: 0,
-      setAt: this.deps.now(),
-    };
-    this.records.set(input.chatId, record);
-    this.changed(input.chatId);
-    this.runWhenFree.delete(input.chatId);
-    if (input.runNow) {
-      // A replaced run may still be stopping; one check runs at a time.
-      if (this.running.has(input.chatId)) this.runWhenFree.add(input.chatId);
-      else void this.runCheck(input.chatId);
-    }
-    return { ...record };
-  }
-
-  clear(chatId: string): boolean {
-    const had = this.records.delete(chatId);
-    this.runWhenFree.delete(chatId);
-    this.running.get(chatId)?.controller.abort();
-    if (had) this.changed(chatId);
-    return had;
-  }
-
-  isActive(chatId: string): boolean {
-    return this.running.has(chatId) || this.records.get(chatId)?.state === "waiting";
-  }
-
-  async clearAndSettle(chatId: string): Promise<void> {
-    this.clear(chatId);
-    await this.running.get(chatId)?.settled;
-  }
-
+  /** Stops every check running in the workspace folder and waits for them. */
   async interruptWorkspace(workspaceId: string): Promise<void> {
-    const pending = [];
-    for (const [chatId, run] of this.running) {
-      if (run.workspaceId !== workspaceId) continue;
-      this.runWhenFree.delete(chatId);
-      run.controller.abort();
-      pending.push(run.settled);
-    }
-    await Promise.all(pending);
-  }
-
-  async clearWorkspace(workspaceId: string): Promise<void> {
-    for (const record of [...this.records.values()]) {
-      if (record.workspaceId === workspaceId) this.clear(record.chatId);
-    }
-    await Promise.all([...this.running.values()].filter((run) => run.workspaceId === workspaceId).map((run) => run.settled));
-  }
-
-  /** An answer in the chat finished. Runs a waiting check; returns whether it started. */
-  answerFinished(chatId: string): boolean {
-    const record = this.records.get(chatId);
-    if (this.closed || !record || record.state !== "waiting" || this.running.has(chatId)) return false;
-    void this.runCheck(chatId);
-    return true;
-  }
-
-  /** Stop any check that is running, for quit. */
-  async shutdown(): Promise<void> {
-    this.closed = true;
-    this.runWhenFree.clear();
-    const runs = [...this.running.values()];
+    const runs = [...this.running.values()].filter((run) => run.workspaceId === workspaceId);
     for (const run of runs) run.controller.abort();
     await Promise.all(runs.map((run) => run.settled));
   }
 
-  private async runCheck(chatId: string): Promise<void> {
-    const record = this.records.get(chatId);
-    if (!record || this.running.has(chatId)) return;
-    const controller = new AbortController();
-    let resolve!: () => void;
-    const settled = new Promise<void>((done) => { resolve = done; });
-    this.running.set(chatId, { controller, workspaceId: record.workspaceId, settled });
-    const started: DoneWhenRecord = {
-      ...record,
-      state: "running",
-      checksRun: record.checksRun + 1,
-      lastRunAt: this.deps.now(),
-    };
-    this.records.set(chatId, started);
-    this.changed(chatId);
-    let result: DoneWhenRunResult;
-    let interruption: CheckInterruptedError | undefined;
-    try {
-      result = await this.deps.run(started, controller.signal);
-    } catch (error) {
-      if (error instanceof CheckInterruptedError) interruption = error;
-      result = {
-        exitCode: null,
-        timedOut: false,
-        aborted: controller.signal.aborted || interruption !== undefined,
-        output: error instanceof Error ? error.message : String(error),
-      };
-    } finally {
-      resolve();
-      if (this.running.get(chatId)?.controller === controller) this.running.delete(chatId);
-      if (this.runWhenFree.delete(chatId)) void this.runCheck(chatId);
-    }
-    // Cleared or replaced while it ran: that record is no longer this check.
-    if (this.records.get(chatId) !== started) return;
-    if (result.aborted || controller.signal.aborted) {
-      this.records.set(chatId, { ...started, state: "waiting", checksRun: record.checksRun });
-      this.changed(chatId);
-      if (interruption && !controller.signal.aborted) {
-        this.deps.post({
-          chatId,
-          notice: agentNotice({ source: "check", tone: "info", title: "Check waiting", summary: interruption.message }),
-          text: interruption.message,
-          wake: false,
-        });
-      }
-      return;
-    }
-    const passed = result.exitCode === 0 && !result.timedOut;
-    const finished: DoneWhenRecord = {
-      ...started,
-      state: passed ? "passed" : started.checksRun >= MAX_DONE_WHEN_CHECKS ? "gave-up" : "waiting",
-      lastExitCode: result.exitCode,
-      ...(result.timedOut ? { lastTimedOut: true } : {}),
-    };
-    if (!result.timedOut) delete finished.lastTimedOut;
-    this.records.set(chatId, finished);
-    this.changed(chatId);
-    this.deps.post(this.noticeFor(finished, result));
+  /** Stops every running check, for quit. */
+  async shutdown(): Promise<void> {
+    this.closed = true;
+    const runs = [...this.running.values()];
+    for (const run of runs) run.controller.abort();
+    await Promise.all(runs.map((run) => run.settled));
   }
+}
 
-  private noticeFor(record: DoneWhenRecord, result: DoneWhenRunResult): DoneWhenNotice {
-    const count = `${record.checksRun} of ${MAX_DONE_WHEN_CHECKS}`;
-    const { text: tail, truncated } = tailText(result.output.trimEnd(), DONE_WHEN_OUTPUT_CHARS);
-    const output = tail.trim()
-      ? fenceAsData(truncated ? "End of the check's output" : "The check's output", tail)
-      : "The check printed nothing.";
-    if (record.state === "passed") {
-      return {
-        chatId: record.chatId,
-        notice: agentNotice({ source: "check", tone: "success", title: "Check passed", summary: `${record.command} · check ${count}` }),
-        text: `[Aiden follow-up: done-when check]\nThe check the person set passed: \`${record.command}\` (check ${count}). Aiden stopped running it.`,
-        wake: false,
-      };
-    }
-    if (record.state === "gave-up") {
-      return {
-        chatId: record.chatId,
-        notice: agentNotice({ source: "check", tone: "failure", title: "Check still failing", summary: `${record.command} · ${outcomeLine(result)} · stopped after ${MAX_DONE_WHEN_CHECKS} checks` }),
-        text: [
-          "[Aiden follow-up: done-when check]",
-          `The check the person set still fails after ${MAX_DONE_WHEN_CHECKS} checks: \`${record.command}\` (${outcomeLine(result)}). Aiden stopped running it.`,
-          output,
-        ].join("\n\n"),
-        wake: false,
-      };
-    }
-    return {
+/** The objective of a goal set with `/until <command>`. */
+export function untilGoalObjective(command: string): string {
+  return `Keep going until ${command} passes`;
+}
+
+/**
+ * Checks saved by a release before `/until` became a goal, as goals. A check
+ * still waiting or running becomes a paused goal (nothing restarts by itself
+ * after an update), keeping the checks it had used. Passed and given-up
+ * checks are finished and are dropped, as is a check whose chat already has
+ * a goal.
+ */
+export function migrateDoneWhenRecords(
+  records: readonly unknown[],
+  goals: readonly GoalRecordV1[],
+  make: { now: number; newId: () => string },
+): GoalRecordV1[] {
+  const taken = new Set(goals.map((goal) => goal.chatId));
+  const migrated: GoalRecordV1[] = [];
+  for (const entry of records) {
+    const record = entry as Partial<DoneWhenRecord> | null;
+    if (record?.version !== 1 || typeof record.chatId !== "string" || typeof record.command !== "string") continue;
+    if (record.state !== "waiting" && record.state !== "running") continue;
+    const command = record.command.trim();
+    if (!command || taken.has(record.chatId)) continue;
+    taken.add(record.chatId);
+    const used = typeof record.checksRun === "number" && Number.isSafeInteger(record.checksRun) ? record.checksRun : 0;
+    // A check cut off while running had not used its attempt.
+    const checksUsed = Math.max(0, record.state === "running" ? used - 1 : used);
+    const setAt = typeof record.setAt === "number" && Number.isFinite(record.setAt) ? record.setAt : make.now;
+    migrated.push({
+      version: GOAL_VERSION,
+      id: make.newId(),
       chatId: record.chatId,
-      notice: agentNotice({ source: "check", tone: "failure", title: "Check failed", summary: `${record.command} · ${outcomeLine(result)} · check ${count}` }),
-      text: [
-        "[Aiden follow-up: done-when check]",
-        `The person asked you to keep going until this check passes: \`${record.command}\`. It failed (${outcomeLine(result)}); this was check ${count}.`,
-        output,
-        "Find the cause and fix it. Aiden runs the check again when your answer ends.",
-      ].join("\n\n"),
-      wake: true,
-    };
+      objective: untilGoalObjective(command),
+      status: "paused",
+      rounds: Math.min(MAX_DONE_WHEN_CHECKS, checksUsed + 1),
+      maxRounds: MAX_DONE_WHEN_CHECKS,
+      stalls: 0,
+      reason: "Aiden updated; press Keep going to run the check again",
+      cause: "restart",
+      source: "until",
+      setAt,
+      updatedAt: make.now,
+      revision: 1,
+      boot: "migrated",
+      check: { command },
+      unusableReviews: 0,
+    });
   }
-
-  private changed(chatId: string): void {
-    this.deps.persist(this.list());
-    this.deps.onChange?.(chatId);
-  }
+  return migrated;
 }

@@ -341,6 +341,28 @@ export function createEventRoutineDispatcher<R extends EventRoutine>(dependencie
       })());
     },
 
+    /**
+     * A run that went ahead but couldn't deliver (for example its chat was
+     * busy): hold its payload again for the next allowed run. `combine` joins
+     * it (older) with anything already held (newer); the held event keeps its
+     * id, otherwise the payload is held under `eventId`, which must be new.
+     */
+    requeue(ownerKey: string, routineId: string, event: BotRoutineEvent, combine: (older: string, newer: string | undefined) => string): Promise<void> {
+      const armedFor = generation;
+      return admitting((async () => {
+        if (!live(armedFor)) return;
+        const at = await dependencies.store.mutate<number | undefined>(ownerKey, routineId, (routine) => {
+          if (!routine.enabled) return { result: undefined };
+          const payload = [...combine(event.payload, routine.held?.payload).slice(0, payloadChars * 2)].slice(0, payloadChars).join("");
+          const held = routine.held
+            ? { ...routine.held, payload }
+            : { eventId: event.eventId, payload, at: dependencies.now(), ...(event.watchRevision !== undefined ? { watchRevision: event.watchRevision } : {}) };
+          return { next: { ...routine, held }, result: (routine.lastRunAt ?? 0) + limitsOf(routine).minGapMs };
+        });
+        if (at !== undefined) armHeld(ownerKey, routineId, at, armedFor);
+      })());
+    },
+
     dispose(): void {
       disposed = true;
       generation += 1;

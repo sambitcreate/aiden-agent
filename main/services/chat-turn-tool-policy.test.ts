@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
-  argIs, chatToolOffers, offersChildChats, screenedPromptAnswersPerson, chatTurnArgsToolRefusal, chatTurnAudienceFor, chatTurnToolRefusal, declaresAppTools, declaresWindowTools, firstTurnToolRefusal, windowlessChatTurn,
+  argIs, chatToolOffers, offersChildChats, screenedPromptAnswersPerson, chatTurnArgsToolRefusal, chatTurnAudienceFor, chatTurnToolRefusal, declaresAppTools, declaresWindowTools, firstTurnToolRefusal, refusedForWantOfWindow, windowlessChatTurn,
   type ChatToolSurface, type ChatTurnOwnerScope, type ChatTurnAudience, type ChatTurnAudienceOptions, type ChatTurnAudienceParams,
 } from "./chat-turn-tool-policy.js";
 import { UNATTENDED_FOLLOW_UP_GENERATION } from "./follow-through/notice-delivery.js";
@@ -208,6 +208,69 @@ test("an args-aware rule is one row: a tool, which turns, which arguments and a 
     { tool: "subagent", turns: (turn) => turn.goalRound === true, args: argIs("execution", "background"), reason: "x" },
   ]);
   assert.equal(attended("subagent", { execution: "background" }), undefined, "the rule applies only to the turns it names");
+});
+
+test("a goal round may run only read-only helpers; the person's own turns may run any", () => {
+  const round = chatTurnAudienceFor({ goalRound: true, windowless: true }, {});
+  const refuseRound = firstTurnToolRefusal([chatTurnToolRefusal(workspace, round), chatTurnArgsToolRefusal(round)]);
+  const person = chatTurnAudienceFor({}, {});
+  const refusePerson = firstTurnToolRefusal([chatTurnToolRefusal(workspace, person), chatTurnArgsToolRefusal(person)]);
+  const task = (role: string, capabilities?: Record<string, unknown>) => ({ role, label: role, task: "look", ...(capabilities ? { capabilities } : {}) });
+  const cases: Array<[string, Record<string, unknown>, boolean]> = [
+    // label, the call's arguments, refused in a round
+    ["read-only roles", { tasks: [task("scout"), task("planner"), task("reviewer")] }, false],
+    ["read-only with web and read connectors", { tasks: [task("scout", { workspaceRead: true, web: true, mcp: [{ serverId: "s", tools: ["t"] }] })] }, false],
+    ["listing what can be requested", { action: "list" }, false],
+    ["an implementer", { tasks: [task("scout"), task("implementer")] }, true],
+    ["a reviewer asking for writes", { tasks: [task("reviewer", { workspaceRead: true, web: false, mcp: [], workspaceWrite: true })] }, true],
+    ["a batch asking for shell", { capabilities: { workspaceRead: true, web: false, mcp: [], shell: true }, tasks: [task("scout")] }, true],
+    ["a task asking for mutating connectors", { tasks: [task("scout", { workspaceRead: false, web: false, mcp: [], mcpMutations: [{ serverId: "s", tools: ["write"] }] })] }, true],
+    ["a task asking to nest helpers", { tasks: [task("planner", { workspaceRead: true, web: false, mcp: [], delegate: true })] }, true],
+    ["a task with no role", { tasks: [{ label: "x", task: "y" }] }, true],
+  ];
+  for (const [label, args, refused] of cases) {
+    const reason = refuseRound("subagent", args);
+    if (refused) assert.match(reason ?? "", /^subagent can only run read-only helpers in a keep-going round/u, label);
+    else assert.equal(reason, undefined, label);
+    assert.equal(refusePerson("subagent", args), undefined, `${label}: the person's own turn`);
+  }
+});
+
+test("a windowless goal round refuses window tools and approvals only the chat's window can give, pointing at Continue here; a round on screen has them", () => {
+  const audience = { ...chatTurnAudienceFor({ goalRound: true, windowless: true }, {}), windowOnlyToolNames: new Set(["browser_navigate"]) };
+  const round = chatTurnToolRefusal(workspace, audience);
+  for (const name of ["classify", "generate_image", "computer_use", "browser_navigate", "todo"]) {
+    assert.match(round(name) ?? "", new RegExp(`^${name} is not available in this round: the chat isn't open on screen.*Continue here`, "u"), name);
+    assert.equal(refusedForWantOfWindow(audience, name), true, name);
+  }
+  assert.equal(round("bash"), undefined, "an ordinary approval waits for the person");
+  assert.equal(refusedForWantOfWindow(audience, "bash"), false);
+  const owedAudience = chatTurnAudienceFor({ windowless: true }, {});
+  const owed = chatTurnToolRefusal(workspace, owedAudience);
+  assert.equal(owed("generate_image"), undefined, "an owed turn keeps its Deny-only card");
+  assert.match(owed("computer_use") ?? "", /no window owns it/u, "an owed turn has no Continue here");
+  const onScreenAudience = chatTurnAudienceFor({ goalRound: true }, {});
+  const onScreen = chatTurnToolRefusal(workspace, onScreenAudience);
+  for (const name of ["generate_image", "computer_use", "todo"]) {
+    assert.equal(onScreen(name), undefined, `${name}: a round a window owns can use its window`);
+    assert.equal(refusedForWantOfWindow(onScreenAudience, name), false, name);
+  }
+});
+
+test("propose_goal runs only in a turn the person started on this computer", () => {
+  const refusal = (options: Parameters<typeof chatTurnAudienceFor>[0]) =>
+    chatTurnArgsToolRefusal(chatTurnAudienceFor(options, {}))("propose_goal", { objective: "Ship the release" });
+  assert.equal(refusal({}), undefined, "the person's own message");
+  assert.equal(refusal({ windowless: true, answersPerson: true }), undefined, "the owed turn answering the person's queued message");
+  for (const [label, options] of [
+    ["a keep-going round", { goalRound: true }],
+    ["a keep-going round off screen", { goalRound: true, windowless: true }],
+    ["an unattended follow-up", { unattended: true }],
+    ["a turn answering a notice", { windowless: true }],
+    ["a paired device's turn", { visualAudience: "remote" as const }],
+  ] as const) {
+    assert.match(refusal(options) ?? "", /^propose_goal is not available in this turn/u, label);
+  }
 });
 
 test("a queued turn answers the person only when its screened prompt is the person's own message", () => {

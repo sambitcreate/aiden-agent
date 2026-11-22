@@ -19,7 +19,8 @@ import { createEventWatches } from "./bot-routine-events/watch.js";
 import type { BotWatchCheck } from "./bot-routine-events/watch-sources.js";
 import type { ScriptProcessResult } from "./schedule-script.js";
 import type { ScheduledRunTrigger } from "./schedule-service-core.js";
-import { createTaskLinkWebhook, linkEventText, mergeLinkBatch } from "./scheduled-task-link-trigger.js";
+import { createTaskLinkWebhook, linkEventText, mergeLinkBatches } from "./scheduled-task-link-trigger.js";
+import type { TaskConnectorSource, TaskConnectorTriggers } from "./scheduled-task-connector-trigger.js";
 import { TASK_TRIGGER_PAYLOAD_CHARS, type ScheduledTaskTriggerStore, type TaskTriggerRoutine } from "./scheduled-task-triggers-store.js";
 import type { ScheduledRun, ScheduledTask } from "./types.js";
 
@@ -42,10 +43,12 @@ export interface ScheduledTaskTriggersDependencies {
   }): Promise<ScriptProcessResult>;
   /** The folder each task's private check state file lives in. */
   checkStateDir(): Promise<string>;
+  /** Connected-app checks (scheduled-task-connector-trigger.ts); they never connect or sign in. */
+  connector?: Pick<TaskConnectorTriggers, "check">;
   /** A link's signing secret, when it has one. */
   linkSecret(taskId: string): Promise<string | null>;
-  /** Three failed checks turned the trigger off: one card in the task's landing chat. */
-  paused(task: ScheduledTask, error: string): Promise<void>;
+  /** Three failed checks (or one revoked connected app) turned the trigger off: one card in the task's landing chat. */
+  paused(task: ScheduledTask, error: string, afterFailures: boolean): Promise<void>;
   /** A check's result was saved, so the task's row may show something new. */
   changed?(taskId: string): void;
   now(): number;
@@ -86,13 +89,25 @@ function createSlots(size: number) {
   };
 }
 
+/**
+ * Two undelivered payloads as one (a change held inside the gap, or a run
+ * skipped for a busy chat): a link's calls join one batch (20 at most, saying
+ * how many were dropped); a watch's newest change comes first, then the
+ * earlier one, and the end is cut at the payload bound.
+ */
+function combineHeld(link: boolean, older: string, newer: string | undefined): string {
+  if (newer === undefined) return older;
+  if (link) return mergeLinkBatches(older, newer, TASK_TRIGGER_PAYLOAD_CHARS);
+  return `${newer}\n\nAn earlier change that wasn't delivered yet:\n${older}`;
+}
+
 const errorText = (error: unknown) => (error instanceof Error ? error.message : String(error));
 
 export function createScheduledTaskTriggers(deps: ScheduledTaskTriggersDependencies) {
   const slots = createSlots(SCHEDULED_TASK_TRIGGER_LIMITS.runningOverall);
   let stopped = true;
 
-  async function runOnce(routine: TaskTriggerRoutine, event: { eventId: string; payload: string }): Promise<{ settled: boolean }> {
+  async function runOnce(routine: TaskTriggerRoutine, event: { eventId: string; payload: string; watchRevision?: number }): Promise<{ settled: boolean }> {
     const release = await slots.take();
     try {
       if (stopped) return { settled: false };
@@ -101,12 +116,21 @@ export function createScheduledTaskTriggers(deps: ScheduledTaskTriggersDependenc
       if (recorded && recorded.result !== "blocked") return { settled: true };
       try {
         const link = routine.task.trigger.kind === "webhook";
-        await deps.runEvent(routine.id, {
+        const run = await deps.runEvent(routine.id, {
           kind: "event",
           eventId: event.eventId,
           source: link ? "webhook" : "watch",
           payload: link ? linkEventText(event.payload) : event.payload,
         }, runId);
+        // Its chat was busy or out of task runs this hour: what happened waits
+        // for the next allowed run instead of being lost.
+        if (!stopped && run.result === "skipped" && (run.reason === "chat_busy" || run.reason === "chat_budget")) {
+          await dispatcher.requeue(routine.id, routine.id, {
+            eventId: `${event.eventId.slice(0, 120)}~${deps.now().toString(36)}`,
+            payload: event.payload,
+            ...(event.watchRevision !== undefined ? { watchRevision: event.watchRevision } : {}),
+          }, (older, newer) => combineHeld(link, older, newer));
+        }
         // A run cut short by Aiden stopping runs again at the next start.
         return { settled: !stopped };
       } catch (error) {
@@ -131,10 +155,9 @@ export function createScheduledTaskTriggers(deps: ScheduledTaskTriggersDependenc
       perDay: SCHEDULED_TASK_TRIGGER_LIMITS.perDay,
     }),
     payloadChars: TASK_TRIGGER_PAYLOAD_CHARS,
-    // Calls inside a link's gap are batched (20 at most); a watch's newest change wins.
-    mergeHeld: (held, incoming, routine) => routine.task.trigger.kind === "webhook"
-      ? mergeLinkBatch(held.payload, incoming.payload, TASK_TRIGGER_PAYLOAD_CHARS)
-      : incoming.payload,
+    // Calls inside a link's gap are batched (20 at most); a watch keeps its
+    // newest change first, then earlier ones not yet delivered.
+    mergeHeld: (held, incoming, routine) => combineHeld(routine.task.trigger.kind === "webhook", held.payload, incoming.payload),
     now: deps.now,
     timeZone: deps.timeZone,
     setTimer: deps.setTimer,
@@ -159,6 +182,11 @@ export function createScheduledTaskTriggers(deps: ScheduledTaskTriggersDependenc
   }
 
   async function check(routine: TaskTriggerRoutine, signal: AbortSignal): Promise<BotWatchCheck> {
+    if (routine.task.trigger.kind === "connector") {
+      if (!deps.connector) return { ok: false, error: "Connected-app checks aren't available here." };
+      const trigger = routine.task.trigger;
+      return deps.connector.check({ id: routine.id, trigger }, routine.connectorSource, routine.watch?.connectorBaseline, signal);
+    }
     if (routine.task.trigger.kind !== "watch") return { ok: false, error: "This task has no watch." };
     const source = routine.task.trigger.source;
     if (source.type === "url") return deps.fetchUrl(source.url, signal);
@@ -195,7 +223,7 @@ export function createScheduledTaskTriggers(deps: ScheduledTaskTriggersDependenc
     dispatcher,
     isPaused: async () => !deps.isActive(),
     paused: async (routine, error) => {
-      await deps.paused(routine.task, error);
+      await deps.paused(routine.task, error, (routine.watch?.failures ?? 0) >= BOT_WATCH_LIMITS.failuresBeforePause);
       deps.changed?.(routine.id);
     },
     recovered: async () => undefined,
@@ -232,6 +260,12 @@ export function createScheduledTaskTriggers(deps: ScheduledTaskTriggersDependenc
       if (stopped) return;
       await watches.rearm();
       await dispatcher.rearm(deps.store.all());
+    },
+    /** A save after Find sources: bind the task's exact source and check it right away. */
+    async bindConnectorSource(taskId: string, source: TaskConnectorSource): Promise<boolean> {
+      const bound = await deps.store.setConnectorSource(taskId, source);
+      await this.rearm();
+      return bound;
     },
     stop(): void {
       stopped = true;

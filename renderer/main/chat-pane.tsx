@@ -82,6 +82,7 @@ import { useNavigate } from "@tanstack/react-router";
 import { retryUsageLimitNow, useUsageLimitNow, useUsageLimitWait } from "../lib/use-usage-limit-wait";
 import { useSpendingStatus } from "../lib/use-spending-status";
 import { SpendingLimitNotice } from "../components/spending/spending-limit-notice";
+import { ChatGoalBar } from "../components/goal-bar";
 import { spendingNotice } from "../shared/spending";
 import { hookMessagesNotice } from "../shared/hooks-settings";
 import { useMarkChatRead } from "../lib/use-mark-chat-read";
@@ -191,6 +192,7 @@ import {
   chatsApi,
   aidenRemoteApi,
   createChatTurnId,
+  goalRoundStart,
   settingsApi,
   startGeneration,
   gitApi,
@@ -862,6 +864,8 @@ export function ChatPane({ chatId }: { chatId: string }) {
   const generationChatIdRef = React.useRef<string | null>(null);
   const generationIntentRef = React.useRef(0);
   const visualizeTurnRef = React.useRef(false);
+  /** The keep-going round main offered this window, which the next run starts instead of answering a send. */
+  const goalRoundTokenRef = React.useRef<string | null>(null);
   const mountedRef = React.useRef(true);
   const chatIdRef = React.useRef(chatId);
   const todoSnapshotReadFenceRef = React.useRef<TodoSnapshotReadFence | null>(null);
@@ -1691,6 +1695,8 @@ export function ChatPane({ chatId }: { chatId: string }) {
       };
       const visualize = visualizeTurnRef.current === true;
       visualizeTurnRef.current = false;
+      const goalRoundToken = goalRoundTokenRef.current;
+      goalRoundTokenRef.current = null;
       // A chat whose canvas is open says what it shows: the selection and its size on screen.
       const designView = designCanvasViewFor(chatId);
       const handle = startGeneration(
@@ -2055,6 +2061,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
           },
         },
         messageTurnId,
+        goalRoundToken ? goalRoundStart(goalRoundToken) : undefined,
       );
       generationRef.current = handle;
       generationChatIdRef.current = chatId;
@@ -2105,7 +2112,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
       text: string,
       attachments: Attachment[],
       skillInvocation?: SkillInvocationV1,
-      options?: { visualize?: boolean; btw?: boolean; inputSource?: ChatInputSourceV1 },
+      options?: { visualize?: boolean; btw?: boolean; goal?: string; goalSource?: "slash" | "proposal"; inputSource?: ChatInputSourceV1 },
     ) => {
       // Only Aiden Live's chat tools set this; the message shows "By voice".
       const inputSource = options?.inputSource;
@@ -2337,6 +2344,13 @@ export function ChatPane({ chatId }: { chatId: string }) {
         // which this render has not seen yet.
         // A No workspace draft that needed its own folder was saved in a fresh one.
         if (firstDraft) effectiveWorkspaceIdRef.current = updated.workspaceId;
+        if (options?.goal) {
+          // The chat exists now (a draft was just saved): set its goal before the answer
+          // starts, so the kickoff note rides on it. A refusal leaves an ordinary answer.
+          await chatsApi.setGoal(updated.id, options.goal, options.goalSource ?? "slash").catch((error: unknown) => {
+            toast.error(error instanceof Error ? error.message : "The goal could not be set.");
+          });
+        }
         void runGeneration(messageTurnId).then((started) => {
           if (!started.ok && mountedRef.current && chatIdRef.current === chatId) {
             setError(started.error.message);
@@ -2486,6 +2500,46 @@ export function ChatPane({ chatId }: { chatId: string }) {
     visualPromptBusyRef.current = visualPromptBusy;
   }, [visualPromptBusy]);
 
+  /** Start on the agent's suggested goal: the objective goes as the person's message, with the goal, as `/goal` does. */
+  const startProposedGoal = React.useCallback(
+    async (objective: string) => {
+      if (visualPromptBusyRef.current) throw new Error("Wait for the answer to finish, then press Start.");
+      await handleSend(objective, [], undefined, { goal: objective, goalSource: "proposal" });
+    },
+    [handleSend],
+  );
+
+  // Keep-going rounds on screen: main starts a due round in a focused window
+  // showing its chat, so the round can use the browser and Computer Use. Tell
+  // main which chat this pane shows; leaving it (or closing the window) stops
+  // a round this window owns.
+  React.useEffect(() => {
+    if (draft) return;
+    const report = () => void chatsApi.reportGoalView(chatId, document.hasFocus()).catch(() => undefined);
+    report();
+    window.addEventListener("focus", report);
+    window.addEventListener("blur", report);
+    return () => {
+      window.removeEventListener("focus", report);
+      window.removeEventListener("blur", report);
+      void chatsApi.reportGoalView(null, document.hasFocus()).catch(() => undefined);
+    };
+  }, [chatId, draft]);
+  React.useEffect(() => {
+    if (draft) return;
+    return chatsApi.onGoalWindowRound(({ chatId: roundChatId, token }) => {
+      if (roundChatId !== chatId) return;
+      if (visualPromptBusyRef.current || !mountedRef.current) {
+        // Main runs it without this window instead.
+        void chatsApi.declineGoalWindowRound(token).catch(() => undefined);
+        return;
+      }
+      ++generationIntentRef.current;
+      goalRoundTokenRef.current = token;
+      void runGeneration(createChatTurnId());
+    });
+  }, [chatId, draft, runGeneration]);
+
   // Main refuses a fork's sends while its summary is pending or failed, so
   // follow-ups wait in the queue until the summary is ready or skipped.
   const forkSummaryHeld = forkSummaryHoldsSend(forkLineage);
@@ -2498,7 +2552,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
       text: string,
       attachments: Attachment[],
       skillInvocation?: SkillInvocationV1,
-      options?: { visualize?: boolean; btw?: boolean; inputSource?: ChatInputSourceV1 },
+      options?: { visualize?: boolean; btw?: boolean; goal?: string; inputSource?: ChatInputSourceV1 },
     ) => {
       if (stopRequestedRef.current) {
         throw new Error("Aiden is stopping this response. Send your message after it stops.");
@@ -4004,6 +4058,13 @@ export function ChatPane({ chatId }: { chatId: string }) {
                 />
               ) : null}
             </ComposerFloatingRow>
+            {draft ? null : (
+              <ChatGoalBar
+                chatId={chatId}
+                className="aiden-dock-inset chat-content-column pb-2"
+                onStartProposal={startProposedGoal}
+              />
+            )}
             {spending.status ? (
               <SpendingLimitNotice
                 status={spending.status}

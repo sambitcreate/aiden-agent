@@ -167,6 +167,28 @@ test("a turn's requests restate the current state after a compaction inside the 
   assert.deepEqual(chatStateRequestMessages(moved, moved)(given), given, "a head that states the current state needs nothing");
 });
 
+test("an active goal's reminder follows every compaction summary, ahead of any state update", () => {
+  const summary = { role: "compactionSummary", summary: "earlier", tokensBefore: 10, timestamp: 4 } as AgentMessage;
+  const tail = { role: "assistant", content: [], timestamp: 5 } as unknown as AgentMessage;
+  const prompt = { role: "user", content: "next", timestamp: 3 } as AgentMessage;
+  const reminder = "A keep-going goal is active. Objective: ship it";
+  const withGoal = chatStateRequestMessages(base, base, reminder);
+  assert.deepEqual(withGoal([prompt]), [prompt], "without a compaction the kickoff note already carries the goal");
+
+  const after = withGoal([summary, tail]);
+  assert.equal(after.length, 3);
+  assert.equal(after[0], summary);
+  assert.equal(after[1]!.role, "custom");
+  assert.equal(textOf(after[1]!), reminder);
+  assert.equal(after[2], tail);
+
+  const moved = chatStateRequestMessages(base, { ...base, branch: "feature/x" }, reminder)([summary, tail]);
+  assert.equal(moved.length, 4);
+  assert.equal(textOf(moved[1]!), reminder);
+  assert.match(textOf(moved[2]!), /Git branch: `feature\/x`/u);
+  assert.deepEqual(chatStateRequestMessages(base, base)([summary, tail]), [summary, tail], "no goal, no reminder");
+});
+
 test("the head goes in the prompt's append, or alone when there is no prompt", () => {
   const reheaded = planChatTurnState({ journaled: undefined, current: base, prompt: true });
   assert.deepEqual(chatHeadJournaling(reheaded, { journaled: true, prompt: true }).alone, []);

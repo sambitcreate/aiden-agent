@@ -1,9 +1,10 @@
 // Main-process follow-through: background jobs, followed pull requests,
-// "done when" checks and check-backs, wired to the chat. Each one turns its news into a
-// follow-up notice through `noticeDelivery`, which queues it into a running
-// answer, wakes an idle chat, or records it. State that must outlive a quit
-// (follows, checks and check-backs) is saved under userData; jobs stop when
-// Aiden quits.
+// goal checks (`/until`) and check-backs, wired to the chat. Keep-going goals
+// are saved here too (`goal/goal-main.ts` runs them, and their checks run
+// here). Each one turns its news into a follow-up notice through
+// `noticeDelivery`, which queues it into a running answer, wakes an idle chat,
+// or records it. State that must outlive a quit (follows, goals and
+// check-backs) is saved under userData; jobs and checks stop when Aiden quits.
 
 import * as fsp from "node:fs/promises";
 import * as path from "node:path";
@@ -38,7 +39,8 @@ import {
 } from "./background-jobs.js";
 import type { RunCommandLeftovers } from "../coding-tools.js";
 import { ChatSettlement } from "./chat-settlement.js";
-import { DoneWhenChecks, DONE_WHEN_TIMEOUT_MS, type DoneWhenRecord } from "./done-when.js";
+import { randomUUID } from "node:crypto";
+import { CheckInterruptedError, DONE_WHEN_TIMEOUT_MS, GoalCheckRunner, migrateDoneWhenRecords, type GoalCheckResult } from "./done-when.js";
 import { noticeDelivery } from "./notice-delivery-main.js";
 import { commandMayChangePullRequest, type PullRequestFollowRecord } from "./pull-request-follow.js";
 import { PullRequestFollowReader } from "./pull-request-follow-github.js";
@@ -46,6 +48,8 @@ import { PullRequestFollows } from "./pull-request-follows.js";
 import { AnsweringRuns } from "./answering-runs.js";
 import { CheckBacks, type CheckBackRecord } from "./check-backs.js";
 import { systemTimezone } from "../schedule-store-core.js";
+import { parseGoalRecords, type GoalRecordV1 } from "../../../renderer/shared/goal.js";
+import { goalTurnHooks } from "../goal/goal-turn-hooks.js";
 
 const chatConfiguration = new WorkspaceMutationGate();
 const commandHandoffs = new WorkspaceOperationRegistry();
@@ -65,14 +69,20 @@ function changed(chatId: string): void {
 interface SavedState {
   version: 1;
   follows: PullRequestFollowRecord[];
-  checks: DoneWhenRecord[];
+  /**
+   * `/until` checks from releases before they became goals; migrated into
+   * `goals` on launch and always written empty, so older releases still read the file.
+   */
+  checks: unknown[];
   /** Absent in files older releases wrote. */
   checkBacks?: CheckBackRecord[];
+  /** Keep-going goals, one per chat. Absent in files older releases wrote. */
+  goals?: GoalRecordV1[];
 }
 
 let savedFollows: PullRequestFollowRecord[] = [];
-let savedChecks: DoneWhenRecord[] = [];
 let savedCheckBacks: CheckBackRecord[] = [];
+let savedGoals: GoalRecordV1[] = [];
 let saveChain: Promise<void> = Promise.resolve();
 let saveScheduled = false;
 
@@ -82,7 +92,7 @@ function scheduleSave(): void {
   saveChain = saveChain
     .then(async () => {
       saveScheduled = false;
-      const state: SavedState = { version: 1, follows: savedFollows, checks: savedChecks, checkBacks: savedCheckBacks };
+      const state: SavedState = { version: 1, follows: savedFollows, checks: [], checkBacks: savedCheckBacks, goals: savedGoals };
       await fsp.mkdir(followThroughDir(), { recursive: true, mode: 0o700 });
       const target = path.join(followThroughDir(), "state.json");
       const temporary = `${target}.${process.pid}.tmp`;
@@ -137,12 +147,6 @@ function observeRun(summary: HostRunSummary): void {
   if (deletedChats.has(summary.chatId)) return;
   answeringRuns.hostRunChanged(summary, false);
   chatSettlement.hostRunChanged(summary, false);
-  if (summary.state === "done" && doneWhen.get(summary.chatId)?.state === "waiting") {
-    void (async () => {
-      await llmClient.waitForChatIdle(summary.chatId);
-      if (!llmClient.isChatBusy(summary.chatId)) doneWhen.answerFinished(summary.chatId);
-    })().catch((error: unknown) => logger.warn("follow-through", "The done-when check could not start.", error));
-  }
 }
 
 // ── Notices ───────────────────────────────────────────────────────────────
@@ -201,16 +205,18 @@ export const chatSettlement = new ChatSettlement({
   log: (message, error) => logger.warn("background-jobs", message, error),
 });
 
-export const doneWhen: DoneWhenChecks = new DoneWhenChecks({
+/**
+ * Goal checks (`/until`): one command at a time per chat, in the chat's
+ * workspace folder, with the same admission, process-group record and
+ * recovery as a background job.
+ */
+export const goalChecks = new GoalCheckRunner({
   run: async (record, signal) => {
-    // Finish saving the running attempt before its command can take effect.
-    await saveChain;
     const chat = await chatStore.get(record.chatId);
     const workspace = await configStore.getWorkspace(record.workspaceId);
     signal.throwIfAborted();
     if (!chat || chat.workspaceId !== workspace?.id || !workspace?.folderPath || workspace.permission === "none") {
-      doneWhen.clear(record.chatId);
-      return { exitCode: null, timedOut: false, aborted: true, output: "" };
+      throw new CheckInterruptedError("Folder access is off for this chat, so the check can't run.");
     }
     await assertManagedWorktreeAdmission(workspace);
     signal.throwIfAborted();
@@ -234,13 +240,7 @@ export const doneWhen: DoneWhenChecks = new DoneWhenChecks({
       output: [result.stdout, result.stderr].filter(Boolean).join("\n"),
     };
   },
-  post: ({ chatId, notice, text, wake }) => postNotice(chatId, notice, text, wake),
-  persist: (records) => {
-    savedChecks = records;
-    scheduleSave();
-  },
   onChange: changed,
-  now: Date.now,
 });
 
 export const pullRequestFollows = new PullRequestFollows({
@@ -361,10 +361,16 @@ export async function startFollowThrough(): Promise<void> {
   });
   const state = await loadState();
   savedFollows = state.follows;
-  savedChecks = state.checks;
   savedCheckBacks = Array.isArray(state.checkBacks) ? state.checkBacks : [];
+  savedGoals = parseGoalRecords(state.goals);
+  // `/until` checks saved before they became goals come back as paused goals.
+  const migrated = migrateDoneWhenRecords(Array.isArray(state.checks) ? state.checks : [], savedGoals, {
+    now: Date.now(),
+    newId: () => `goal-${randomUUID()}`,
+  });
+  if (migrated.length > 0) savedGoals = [...savedGoals, ...migrated];
+  if (migrated.length > 0 || (Array.isArray(state.checks) && state.checks.length > 0)) scheduleSave();
   pullRequestFollows.restore(state.follows);
-  doneWhen.restore(state.checks);
   checkBacks.restore(savedCheckBacks);
   // Older releases could leave persisted follows behind after access was revoked.
   for (const follow of pullRequestFollows.all()) {
@@ -387,16 +393,28 @@ export async function shutdownFollowThrough(): Promise<void> {
   chatSettlement.shutdown();
   answeringRuns.shutdown();
   pullRequestFollows.shutdown();
-  await doneWhen.shutdown();
+  await goalChecks.shutdown();
   await backgroundJobs.shutdown();
   await saveChain;
 }
 
-/** A deleted chat loses its jobs, follows, check and check-backs. */
+/** The keep-going goals saved with follow-through, as loaded by `startFollowThrough`. */
+export function savedFollowThroughGoals(): readonly GoalRecordV1[] {
+  return savedGoals;
+}
+
+/** Saves the keep-going goals with the rest of follow-through. */
+export function saveFollowThroughGoals(goals: readonly GoalRecordV1[]): void {
+  savedGoals = [...goals];
+  scheduleSave();
+}
+
+/** A deleted chat loses its jobs, follows, check, check-backs and goal. */
 export async function deleteChatFollowThrough(chatId: string): Promise<void> {
   pullRequestFollows.deleteChat(chatId);
+  goalTurnHooks().chatDeleted(chatId);
   checkBacks.deleteChat(chatId);
-  const checkStopped = doneWhen.clearAndSettle(chatId);
+  const checkStopped = goalChecks.stopChat(chatId);
   answeringRuns.deleteChat(chatId);
   chatSettlement.clear(chatId);
   deletedChats.add(chatId);
@@ -414,7 +432,7 @@ export async function closeWorkspaceFollowThrough(workspaceId: string): Promise<
   const chatIds = (await chatStore.list(workspaceId)).map((chat) => chat.id);
   const resumePolls = pullRequestFollows.pauseChats(chatIds);
   try {
-    await Promise.all([doneWhen.interruptWorkspace(workspaceId), commandHandoffs.cancelAndSettle(workspaceId)]);
+    await Promise.all([goalChecks.interruptWorkspace(workspaceId), commandHandoffs.cancelAndSettle(workspaceId)]);
     // Stopping the jobs clears each chat's quiet window through `jobsChanged`.
     await backgroundJobs.stopWorkspace(workspaceId, "access-changed");
   } catch (error) {
@@ -427,7 +445,7 @@ export async function closeWorkspaceFollowThrough(workspaceId: string): Promise<
         for (const chatId of chatIds) {
           for (const follow of pullRequestFollows.list(chatId)) pullRequestFollows.stop(chatId, follow, "access-changed");
         }
-        await doneWhen.clearWorkspace(workspaceId);
+        goalTurnHooks().accessChanged(chatIds);
         await saveChain;
       }
     } finally {
@@ -439,22 +457,10 @@ export async function closeWorkspaceFollowThrough(workspaceId: string): Promise<
 // ── Reads and actions for the renderer and tools ───────────────────────────
 
 export function chatFollowThrough(chatId: string): ChatFollowThroughV1 {
-  const check = doneWhen.get(chatId);
   return {
     ...emptyChatFollowThrough(chatId),
     jobs: backgroundJobs.list(chatId),
     pullRequests: pullRequestFollows.list(chatId),
-    check: check
-      ? {
-          command: check.command,
-          state: check.state,
-          checksRun: check.checksRun,
-          setAt: check.setAt,
-          ...(check.lastRunAt !== undefined ? { lastRunAt: check.lastRunAt } : {}),
-          ...(check.lastExitCode !== undefined ? { lastExitCode: check.lastExitCode } : {}),
-          ...(check.lastTimedOut ? { lastTimedOut: true } : {}),
-        }
-      : null,
     checkBacks: checkBacks.list(chatId),
   };
 }
@@ -513,9 +519,11 @@ async function configureFollowThrough(
  * still belongs to the old workspace, so the person must stop it first. */
 export async function beginFollowThroughMove(chatId: string): Promise<() => void> {
   if (noticeDelivery.hasPending(chatId)) throw new Error("Wait for this chat’s follow-up message before changing workspaces.");
-  if (doneWhen.isActive(chatId) || pullRequestFollows.list(chatId).some((follow) => follow.state === "following")) {
+  if (goalChecks.isRunning(chatId) || pullRequestFollows.list(chatId).some((follow) => follow.state === "following")) {
     throw new Error("Stop this chat’s check or pull request follow before changing workspaces.");
   }
+  const goalRefusal = goalTurnHooks().moveRefusal(chatId);
+  if (goalRefusal) throw new Error(goalRefusal);
   const finish = chatConfiguration.begin(chatId);
   try {
     await backgroundJobs.confirmChatChecksStopped(chatId);
@@ -526,10 +534,16 @@ export async function beginFollowThroughMove(chatId: string): Promise<() => void
   }
 }
 
-export function setDoneWhenCheck(chatId: string, command: string): Promise<void> {
-  return configureFollowThrough(chatId, async (workspaceId) => () => {
-    doneWhen.set({ chatId, workspaceId, command, runNow: !llmClient.isChatBusy(chatId) });
-  });
+/** Throws why this chat can't run a goal check: not a workspace chat on this computer, folder access off, a replaced worktree. */
+export function prepareGoalCheck(chatId: string): Promise<void> {
+  return configureFollowThrough(chatId, async () => () => undefined);
+}
+
+/** Runs a command goal's check in the chat's workspace folder. */
+export async function runGoalCheck(chatId: string, command: string, signal: AbortSignal): Promise<GoalCheckResult> {
+  const chat = await chatStore.get(chatId);
+  if (!chat?.workspaceId) return { kind: "stopped", summary: "This chat has no folder, so the check can't run." };
+  return goalChecks.run({ chatId, workspaceId: chat.workspaceId, command }, signal);
 }
 
 export function followChatPullRequest(chatId: string, resolve: () => Promise<PullRequestTarget>): Promise<void> {
@@ -539,10 +553,6 @@ export function followChatPullRequest(chatId: string, resolve: () => Promise<Pul
   });
 }
 
-export async function clearDoneWhenCheck(chatId: string): Promise<void> {
-  await doneWhen.clearAndSettle(chatId);
-  await backgroundJobs.confirmChatChecksStopped(chatId);
-}
 
 export interface PullRequestTarget {
   host: string;
