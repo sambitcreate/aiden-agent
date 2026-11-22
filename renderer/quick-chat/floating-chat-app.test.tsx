@@ -502,3 +502,45 @@ test("lastWorkspace default persistence reads shared main-process lastWorkspaceI
     }
   }
 });
+
+test("lastWorkspace updates immediately when a delayed settings write lands via settings:controls-changed", async () => {
+  let activeLastWorkspaceId = "ws-project";
+  const { qc } = mountFloatingApp({
+    "settings:get": () => ({
+      lastProviderId: "lmstudio",
+      lastModel: "local-model",
+      quickChatDefaultPersistence: "lastWorkspace",
+      lastWorkspaceId: activeLastWorkspaceId,
+    }),
+    "workspaces:list": () => [
+      ...WORKSPACES,
+      {
+        id: "ws-second",
+        name: "Second Project",
+        folderPath: "/Users/dev/second-project",
+        permission: "ask",
+        createdAt: 2,
+        updatedAt: 30,
+      },
+    ],
+  });
+  try {
+    await waitFor(() => {
+      assert.ok(
+        (screen.getByTestId("quick-chat-target-chip").textContent ?? "").includes("My App"),
+      );
+    });
+    // Simulate main window switching workspace while durable write is in flight and broadcasting change.
+    activeLastWorkspaceId = "ws-second";
+    await act(async () => {
+      emitBotTestNotification("settings:controls-changed", {});
+    });
+    await waitFor(() => {
+      assert.ok(
+        (screen.getByTestId("quick-chat-target-chip").textContent ?? "").includes("Second Project"),
+      );
+    });
+  } finally {
+    qc.clear();
+  }
+});

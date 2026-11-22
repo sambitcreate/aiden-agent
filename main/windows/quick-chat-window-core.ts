@@ -99,3 +99,26 @@ export function shouldHideQuickChatOnBlur(input: {
   if (input.mode === "modal") return !input.keepOpenOnBlur;
   return true;
 }
+
+/**
+ * Tracks an in-flight `lastWorkspaceId` settings write so concurrent
+ * `settings:get` reads from Quick Chat observe the latest active project
+ * workspace immediately before durable persistence settles on disk.
+ */
+export function createPendingLastWorkspaceTracker() {
+  let seq = 0;
+  let pending: string | undefined;
+  return {
+    beginWrite(workspaceId: string): number {
+      seq += 1;
+      pending = workspaceId;
+      return seq;
+    },
+    settleWrite(token: number): void {
+      if (token === seq) pending = undefined;
+    },
+    overlay<T extends { lastWorkspaceId?: string }>(settings: T): T {
+      return pending !== undefined ? { ...settings, lastWorkspaceId: pending } : settings;
+    },
+  };
+}

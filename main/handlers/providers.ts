@@ -1,6 +1,7 @@
 import { parseAidenLiveSettingsPatch } from "../../renderer/shared/aiden-live-settings.js";
 import { parseQuickChatDefaultPersistence } from "../../renderer/shared/quick-chat.js";
 import { syncQuickChatSettings } from "../windows/quick-chat-window.js";
+import { createPendingLastWorkspaceTracker } from "../windows/quick-chat-window-core.js";
 import { customModelThinkingLevels } from "../../renderer/shared/custom-model-options.js";
 import { isCompactionEngine, parseCompactionModelOverrides } from "../../renderer/shared/compaction.js";
 import { parseModelPadPreferencesPatch } from "../../renderer/shared/model-pad-preferences.js";
@@ -268,7 +269,10 @@ export function registerProviderHandlers(): void {
     modelInfo: providerModelInfo,
   });
 
-  ipcMain.handle("settings:get", async () => configStore.getSettings());
+  const pendingLastWorkspace = createPendingLastWorkspaceTracker();
+  ipcMain.handle("settings:get", async () =>
+    pendingLastWorkspace.overlay(await configStore.getSettings()),
+  );
   ipcMain.handle("settings:getAppearance", async () => {
     const settings = await configStore.getSettings();
     return appearancePreview.effective(normalizeAppearanceConfig(settings.appearance));
@@ -484,11 +488,28 @@ export function registerProviderHandlers(): void {
     }
     if (p.appearance !== undefined) next.appearance = parseAppearanceConfig(p.appearance);
     Object.assign(next, parseModelPadPreferencesPatch(p));
-    const saved = process.platform === "linux" && next.dictationHoldToTalk !== undefined
-      ? await linuxHoldSettings.apply(next.dictationHoldToTalk, (isCurrent) => configStore.setSettings(next, isCurrent))
-      : await configStore.setSettings(next);
+    const pendingWorkspaceToken =
+      next.lastWorkspaceId !== undefined
+        ? pendingLastWorkspace.beginWrite(next.lastWorkspaceId)
+        : undefined;
+    if (pendingWorkspaceToken !== undefined) {
+      ipcMain.broadcast("settings:controls-changed", {});
+    }
+    let saved: import("../services/types.js").AppSettings;
+    try {
+      saved = process.platform === "linux" && next.dictationHoldToTalk !== undefined
+        ? await linuxHoldSettings.apply(next.dictationHoldToTalk, (isCurrent) => configStore.setSettings(next, isCurrent))
+        : await configStore.setSettings(next);
+    } finally {
+      if (pendingWorkspaceToken !== undefined) {
+        pendingLastWorkspace.settleWrite(pendingWorkspaceToken);
+      }
+    }
     await applySettingsEffects(saved, next);
     if (next.quickChatKeepOpenOnBlur !== undefined) syncQuickChatSettings(saved);
+    if (next.quickChatDefaultPersistence !== undefined) {
+      ipcMain.broadcast("settings:controls-changed", {});
+    }
     if (approval.approvalMode !== undefined) reportApprovalModeChanged("global", approvalModeBefore, saved.approvalMode);
     if (next.spendingLimits !== undefined) spending.settingsChanged();
     if (next.usageLimitWaitHours !== undefined) void usageLimits.waitSettingChanged();

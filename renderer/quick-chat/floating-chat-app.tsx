@@ -233,10 +233,14 @@ export function FloatingChatApp() {
         );
       },
     );
+    const offControls = onNotification("settings:controls-changed", () => {
+      void qc.invalidateQueries({ queryKey: queryKeys.settings });
+    });
     return () => {
       offOpened();
       offHandoff();
       offMeta();
+      offControls();
     };
   }, [qc, resetToStarter]);
 

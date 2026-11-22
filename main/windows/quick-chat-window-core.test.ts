@@ -5,6 +5,7 @@ import {
   clampBoundsToWorkArea,
   computeQuickChatInitialBounds,
   computeQuickChatTransitionBounds,
+  createPendingLastWorkspaceTracker,
   shouldHideQuickChatOnBlur,
 } from "./quick-chat-window-core.js";
 import { isTrustedQuickChatSender } from "./quick-chat-window-security.js";
@@ -148,4 +149,23 @@ test("quick-chat shared parsers validate modes and expand requests strictly", ()
   assert.throws(() => parseQuickChatExpandRequest({ kind: "draft", workspaceId: "", text: "x" }));
   assert.throws(() => parseQuickChatExpandRequest({ kind: "chat", chatId: "bad\0id" }));
   assert.throws(() => parseQuickChatExpandRequest({ kind: "other" }));
+});
+
+test("createPendingLastWorkspaceTracker surfaces in-flight workspace writes to concurrent settings reads", () => {
+  const tracker = createPendingLastWorkspaceTracker();
+  const persisted = { lastWorkspaceId: "ws-old" };
+  assert.equal(tracker.overlay(persisted).lastWorkspaceId, "ws-old");
+
+  // Main window switches to ws-new while durable disk write is still in flight.
+  const firstToken = tracker.beginWrite("ws-new");
+  assert.equal(tracker.overlay(persisted).lastWorkspaceId, "ws-new");
+
+  // Rapid second switch before first write finishes: settling first must NOT drop second.
+  const secondToken = tracker.beginWrite("ws-latest");
+  tracker.settleWrite(firstToken);
+  assert.equal(tracker.overlay(persisted).lastWorkspaceId, "ws-latest");
+
+  // Settling latest falls back to whatever is now persisted on disk.
+  tracker.settleWrite(secondToken);
+  assert.equal(tracker.overlay({ lastWorkspaceId: "ws-latest" }).lastWorkspaceId, "ws-latest");
 });

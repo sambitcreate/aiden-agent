@@ -31,10 +31,27 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
     localStorage.getItem(STORAGE_KEY),
   );
 
+  const listRef = React.useRef<Workspace[]>(list);
+  listRef.current = list;
+  const lastPersistedWorkspaceIdRef = React.useRef<string | undefined>(undefined);
+  const persistLastWorkspace = React.useCallback((workspace: Workspace | undefined) => {
+    if (!workspace || isNoWorkspace(workspace) || lastPersistedWorkspaceIdRef.current === workspace.id) {
+      return;
+    }
+    const targetId = workspace.id;
+    lastPersistedWorkspaceIdRef.current = targetId;
+    void Promise.resolve(settingsApi.set({ lastWorkspaceId: targetId })).catch(() => {
+      if (lastPersistedWorkspaceIdRef.current === targetId) {
+        lastPersistedWorkspaceIdRef.current = undefined;
+      }
+    });
+  }, []);
+
   const select = React.useCallback((id: string) => {
     setActiveId(id);
     localStorage.setItem(STORAGE_KEY, id);
-  }, []);
+    persistLastWorkspace(listRef.current.find((w) => w.id === id));
+  }, [persistLastWorkspace]);
 
   // Keep the active id pointing at a real workspace as the list loads/changes.
   // Deleting a No workspace chat releases its hidden workspace: the selection
@@ -81,16 +98,11 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
   }, [list, activeId, qc, select]);
 
   const active = list.find((w) => w.id === activeId) ?? list[0];
-  // Mirror the active project workspace into main-process settings so auxiliary
-  // windows (like packaged file:// Quick Chat) read the same lastWorkspaceId.
-  const lastPersistedWorkspaceIdRef = React.useRef<string | undefined>(undefined);
+  // Mirror the active project workspace into main-process settings on load or
+  // when workspace lists refresh so packaged file:// Quick Chat reads it too.
   React.useEffect(() => {
-    if (!active || isNoWorkspace(active) || lastPersistedWorkspaceIdRef.current === active.id) {
-      return;
-    }
-    lastPersistedWorkspaceIdRef.current = active.id;
-    void Promise.resolve(settingsApi.set({ lastWorkspaceId: active.id })).catch(() => undefined);
-  }, [active]);
+    persistLastWorkspace(active);
+  }, [active, persistLastWorkspace]);
   const isLoading = workspaces.isLoading;
   const isReady = workspaces.isSuccess;
   const value = React.useMemo<WorkspaceContextValue>(
