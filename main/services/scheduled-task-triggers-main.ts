@@ -82,7 +82,8 @@ const triggers = createScheduledTaskTriggers({
   },
   needsSource: (task) => markTaskNeedsSource(task.id),
   dropped: async (task, card) => {
-    await scheduleExecution.recordInLandingChat(task, { tone: "info", ...card });
+    // A card that wasn't saved throws, so its drop notice is kept and tried again.
+    await scheduleExecution.recordInLandingChat(task, { tone: "info", ...card }, { mustSave: true });
   },
   changed: (taskId) => ipcMain.broadcast("schedule:updated", { taskId }),
   now: Date.now,

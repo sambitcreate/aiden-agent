@@ -34,6 +34,8 @@ export interface TaskLinkLogEntry {
   preview: string;
   /** Refused calls within a minute share one entry: how many more came after the first. */
   repeats?: number;
+  /** Stored only: a write retried under the same key appends nothing more. Never shown. */
+  key?: string;
 }
 
 /** Drop cards waiting to be shown, per task. */
@@ -235,7 +237,8 @@ function parseBook(value: unknown): TaskTriggerBook | undefined {
       return finite(item.at) && typeof item.outcome === "string" && LOG_OUTCOMES.has(item.outcome as TaskLinkLogEntry["outcome"]) &&
         typeof item.preview === "string"
         ? [{ at: item.at, outcome: item.outcome as TaskLinkLogEntry["outcome"], preview: item.preview.slice(0, SCHEDULED_TASK_LINK_LIMITS.previewBytes),
-          ...(finite(item.repeats) && item.repeats > 0 ? { repeats: item.repeats } : {}) }]
+          ...(finite(item.repeats) && item.repeats > 0 ? { repeats: item.repeats } : {}),
+          ...(typeof item.key === "string" && item.key.length <= 300 ? { key: item.key } : {}) }]
         : [];
     }).slice(-SCHEDULED_TASK_LINK_LIMITS.log)
     : [];
@@ -541,12 +544,19 @@ export function createScheduledTaskTriggerStore(dependencies: ScheduledTaskTrigg
      * as the newest entry within a minute only counts on that entry, so a
      * flood of bad calls can't push real ones out.
      */
-    appendLog(id: string, entry: TaskLinkLogEntry, options: { coalesce?: boolean } = {}): Promise<void> {
+    /**
+     * Adds a line to the link's recent calls. With `key`, a line already
+     * saved under that key (a retry after a write that landed and then
+     * reported failure) adds nothing.
+     */
+    appendLog(id: string, entry: TaskLinkLogEntry, options: { coalesce?: boolean; key?: string } = {}): Promise<void> {
       return serial(async () => {
         await dependencies.persistence.update((draft) => {
           const stored = books(draft);
           const base = parseBook(stored[id]);
           if (!base) return;
+          if (options.key !== undefined && base.log?.some((line) => line.key === options.key)) return;
+          if (options.key !== undefined) entry = { ...entry, key: options.key };
           const log = [...(base.log ?? [])];
           const last = log.length ? log[log.length - 1] : undefined;
           if (options.coalesce && last && last.outcome === entry.outcome && entry.at - last.at < 60_000) {
@@ -568,7 +578,7 @@ export function createScheduledTaskTriggerStore(dependencies: ScheduledTaskTrigg
       if (!task || !isTriggerTask(task)) return undefined;
       const book = parseBook(books(await dependencies.persistence.load())[id]);
       const link = task.trigger.kind === "webhook" && book?.tokenHash !== undefined;
-      return { hasLink: link, needsNewLink: link && book?.needsNewLink === true, log: [...(book?.log ?? [])].reverse() };
+      return { hasLink: link, needsNewLink: link && book?.needsNewLink === true, log: [...(book?.log ?? [])].reverse().map(({ key: _key, ...line }) => line) };
     },
 
     /**

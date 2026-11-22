@@ -519,8 +519,8 @@ export function createScheduleExecution(store: ScheduleStore = scheduleStore) {
       import("./scheduled-bot-routines-main.js").then(({ claimBotRoutineExecution }) => claimBotRoutineExecution(task, trigger)),
     deliverTaskRunToChat,
     /** A record-only card where the task's runs land (a trigger or the task was paused). */
-    recordInLandingChat: (task: ScheduledTask, card: Parameters<typeof chatDelivery.recordInLandingChat>[1]) =>
-      chatDelivery.recordInLandingChat(task, card),
+    recordInLandingChat: (task: ScheduledTask, card: Parameters<typeof chatDelivery.recordInLandingChat>[1], options?: Parameters<typeof chatDelivery.recordInLandingChat>[2]) =>
+      chatDelivery.recordInLandingChat(task, card, options),
     /** The project folder a task's script runs in, after the same checks as a run. */
     async taskWorkspaceFolder(task: ScheduledTask): Promise<string | undefined> {
       return (await assertTaskWorkspaceReady(task))?.folderPath;

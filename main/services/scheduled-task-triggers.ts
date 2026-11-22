@@ -230,7 +230,7 @@ export function createScheduledTaskTriggers(deps: ScheduledTaskTriggersDependenc
     // Calls inside a link's gap are batched (20 at most); a watch keeps its
     // newest change first, then earlier ones not yet delivered.
     mergeHeld: (held, incoming, routine) => combineHeld(routine.task.trigger.kind === "webhook", held.payload, incoming.payload),
-    heldDropped: async (routine, _held, reason, already = []) => {
+    heldDropped: async (routine, held, reason, already = []) => {
       const link = routine.task.trigger.kind === "webhook";
       const what = link ? "the calls" : "the change";
       const were = link ? "were" : "was";
@@ -249,9 +249,11 @@ export function createScheduledTaskTriggers(deps: ScheduledTaskTriggersDependenc
         if (!done.has("card")) await deps.dropped?.(routine.task, card);
         done.add("card");
         if (link && !done.has("log")) {
+          // A retried drop's line is keyed by its notice, so a write that landed and then failed isn't added twice.
           await deps.store.appendLog(routine.id, reason === "daily_limit"
             ? { at: deps.now(), outcome: "daily_limit", preview: "Held calls dropped: today's runs were used up." }
-            : { at: deps.now(), outcome: "dropped", preview: "Held calls dropped: they couldn't be delivered." });
+            : { at: deps.now(), outcome: "dropped", preview: "Held calls dropped: they couldn't be delivered." },
+          reason === "retries" ? { key: `${held.eventId}:retries:log` } : {});
         }
         done.add("log");
       } catch (error) {

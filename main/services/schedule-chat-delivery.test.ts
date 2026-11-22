@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { parseAgentNoticeV1 } from "../../renderer/shared/agent-notices.js";
-import type { AgentNoticePost } from "./follow-through/notice-delivery.js";
+import type { AgentNoticeOutcome, AgentNoticePost } from "./follow-through/notice-delivery.js";
 import {
   MAX_TASK_RUNS_PER_CHAT_PER_HOUR,
   createTaskRunChatDelivery,
@@ -41,6 +41,8 @@ function harness(options: {
   script?: TaskRunExecution | Error;
   /** The task as saved now; defaults to the task handed to the run. */
   saved?: () => ScheduledTask | undefined;
+  /** What posting a notice comes back with; recorded by default. */
+  noticeOutcome?: () => AgentNoticeOutcome;
 } = {}) {
   let clock = 1_800_000_000_000;
   const chats = new Map((options.chats ?? [{ id: "chat-1", workspaceId: "workspace-1" }]).map((chat) => [chat.id, chat]));
@@ -81,7 +83,7 @@ function harness(options: {
     waitForIdle: async (_chatId, timeoutMs) => options.idle?.(timeoutMs, chats) ?? true,
     postNotice: async (post) => {
       notices.push(post);
-      return { kind: "recorded", messageId: `notice-${notices.length}`, reason: "not-waking" };
+      return options.noticeOutcome?.() ?? { kind: "recorded", messageId: `notice-${notices.length}`, reason: "not-waking" };
     },
     inChatOrder: async (_chatId, work) => {
       ordered += 1;
@@ -104,6 +106,7 @@ function harness(options: {
     delivery.deliverTaskRunToChat((lastRun = scheduled), { trigger: automatic, signal: new AbortController().signal, ...extra });
   return {
     run,
+    delivery,
     notices,
     admitted,
     ownChatRuns,
@@ -321,4 +324,17 @@ test("choosing Use its own chat while a run waits sends that run to the task's o
   assert.equal(outcome.kind, "fell_back");
   assert.deepEqual(h.admitted, [], "nothing was posted into the chat it left");
   assert.deepEqual(h.ownChatRuns, ["own-task-1"]);
+});
+
+test("a card that must be saved says so when it wasn't, and a chat that is gone counts as done", async () => {
+  const card = { tone: "info" as const, summary: "Couldn't deliver, dropped", text: "The calls were dropped." };
+  let outcome: AgentNoticeOutcome = { kind: "dropped", reason: "The chat store could not be written." };
+  const h = harness({ noticeOutcome: () => outcome });
+  await assert.rejects(h.delivery.recordInLandingChat(task(), card, { mustSave: true }), /wasn't saved/u, "an unsaved card is a failure the caller can retry");
+  assert.equal(await h.delivery.recordInLandingChat(task(), card), "chat-1", "without mustSave a drop is only logged, as before");
+  outcome = { kind: "dropped", reason: "The chat was deleted.", gone: true };
+  assert.equal(await h.delivery.recordInLandingChat(task(), card, { mustSave: true }), "chat-1", "there is nowhere to post, so it is done");
+  outcome = { kind: "recorded", messageId: "notice-9", reason: "not-waking" };
+  assert.equal(await h.delivery.recordInLandingChat(task(), card, { mustSave: true }), "chat-1");
+  assert.equal(h.notices.length, 4);
 });

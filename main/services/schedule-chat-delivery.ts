@@ -223,10 +223,11 @@ export function createTaskRunChatDelivery(deps: TaskRunChatDeliveryDeps) {
     }
   }
 
-  /** A record-only card in the chat; never wakes it. */
-  async function record(chatId: string, notice: AgentNoticeV1, text: string): Promise<void> {
+  /** A record-only card in the chat; never wakes it. Returns whether it was posted. */
+  async function record(chatId: string, notice: AgentNoticeV1, text: string): Promise<AgentNoticeOutcome> {
     const outcome = await deps.postNotice({ chatId, notice, text, wake: false });
     if (outcome.kind === "dropped") deps.onError?.(new Error(outcome.reason));
+    return outcome;
   }
 
   async function overBudget(task: ScheduledTask, chatId: string): Promise<TaskRunOutcome> {
@@ -345,10 +346,15 @@ export function createTaskRunChatDelivery(deps: TaskRunChatDeliveryDeps) {
   /**
    * A record-only card where the task's runs land: the chat it was made in
    * when that still works, otherwise its own chat. Never wakes the chat.
+   * With `mustSave`, a card that wasn't saved throws, so the caller can try
+   * again; a chat that no longer exists has nowhere to post, so that counts
+   * as done.
    */
-  async function recordInLandingChat(task: ScheduledTask, card: { tone: AgentNoticeTone; summary: string; text: string }): Promise<string> {
+  async function recordInLandingChat(task: ScheduledTask, card: { tone: AgentNoticeTone; summary: string; text: string },
+    options: { mustSave?: boolean } = {}): Promise<string> {
     const chatId = (await originChat(task)) ?? (await deps.ensureOwnChat(task));
-    await record(chatId, taskNotice(task, card.tone, card.summary), card.text);
+    const outcome = await record(chatId, taskNotice(task, card.tone, card.summary), card.text);
+    if (options.mustSave && outcome.kind === "dropped" && !outcome.gone) throw new Error(`The card wasn't saved: ${outcome.reason}`);
     return chatId;
   }
 

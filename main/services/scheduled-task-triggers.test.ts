@@ -1112,6 +1112,39 @@ test("a drop card or log line that fails to show is tried again and shown once",
   }
 });
 
+test("a drop's log line whose write lands and then fails is written once when the notice is tried again", async () => {
+  const busy = Array.from({ length: 10 }, () => ({ result: "skipped" as const, reason: "chat_busy" as const }));
+  const link = linkHarness({ kind: "webhook", gapMinutes: 1 }, busy);
+  await link.setUp();
+  const dropped = (data: unknown) => ((data as { tasks: Record<string, { log?: Array<{ outcome: string }> }> }).tasks["task-1"]?.log ?? [])
+    .filter((entry) => entry.outcome === "dropped").length;
+  // The write that adds the drop's log line is saved, then reported failed.
+  let rejected = 0;
+  const update = link.persistence.update.bind(link.persistence);
+  link.persistence.update = async (mutation) => {
+    const before = dropped(link.persistence.snapshot());
+    const result = await update(mutation);
+    if (rejected === 0 && before === 0 && dropped(link.persistence.snapshot()) === 1) {
+      rejected += 1;
+      throw new Error("EIO: the folder could not be synced");
+    }
+    return result;
+  };
+  assert.equal(await link.call({ n: 0 }), 202);
+  for (let step = 0; step < 12 && link.events.length < 7; step += 1) {
+    link.advance(MINUTE);
+    await link.fireTimers();
+  }
+  assert.equal(rejected, 1, "the log line's write landed and was reported failed");
+  link.advance(MINUTE);
+  await link.fireTimers();
+  const log = (await link.store.linkState("task-1"))?.log ?? [];
+  assert.equal(log.filter((entry) => entry.outcome === "dropped").length, 1, "one line, not two");
+  assert.equal(log.some((entry) => "key" in entry), false, "the retry key is never shown");
+  assert.equal(link.notices.length, 1, "and one card");
+  link.triggers.stop();
+});
+
 test("a held change of emoji up to the event bound survives a reload", async () => {
   const value = harness();
   const payload = "\u{1F600}".repeat(20_000);
