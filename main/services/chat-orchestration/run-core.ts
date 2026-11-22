@@ -121,7 +121,14 @@ export class ChatRunCore {
     return status;
   }
 
-  async snapshot(services: ChatRunCoreServices, owner: string, chatId: string, runId: string): Promise<ChatRunSnapshot> {
+  /** `withReply: false` skips reading the chat's last reply from disk (a status-only list). */
+  async snapshot(
+    services: ChatRunCoreServices,
+    owner: string,
+    chatId: string,
+    runId: string,
+    options: { withReply?: boolean } = {},
+  ): Promise<ChatRunSnapshot> {
     const status = this.status(services, owner, chatId, runId);
     const base = { chatId, runId };
     const answerIn = await this.dependencies.answerIn();
@@ -143,7 +150,7 @@ export class ChatRunCore {
       return { ...base, state: "running" };
     }
     if (status.state === "done" || status.state === "cancelled") {
-      const reply = await lastAssistantMessage(services, chatId).catch(() => undefined);
+      const reply = options.withReply === false ? undefined : await lastAssistantMessage(services, chatId).catch(() => undefined);
       return {
         ...base,
         state: "done",

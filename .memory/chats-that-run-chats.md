@@ -45,3 +45,10 @@ Plan: `docs/plans/proactive-aiden-plan.md` Phase 5 (D1–D7). D1 (run core) land
 - `StartedChatView` + `parseStartedChatViews`/`startedChatsChipLabel`/`startedChatStatus` in `renderer/shared/child-chats.ts`. `StartedChatsChip` (`renderer/components/started-chats-chip.tsx`) mounts in the composer context bar via `composerContextChips().startedChats` (started stage, no folder needed; keeps the summary bar).
 - `AppCapabilities.childChats` (from host capabilities) gates the onboarding tile `chatsRunChats` (art `onboarding-art/chats-that-run-chats-art.tsx`, peach tint).
 - Playwright `tests/e2e/chats-that-run-chats.spec.ts` (Ask mode: allow the start, tests chat wakes the lead, docs chat waits for approval, Open shows lineage, Stop all) mapped in `scripts/ci-e2e-spec-map.json`.
+
+## Phase 5 review fixes (D4–D7)
+- Start keys hash lead + tool-call id (`agent-chat:<sha256 32 hex>:<index>`), so Responses-API ids (`call|item`) and long ids fit the link KEY and Remote's 128-char idempotency format. `ChildChats.create` removes the chat (and `discardWorktree` the worktree) when a step after create fails. The worktree branch is seeded from the title (Remote caps that text at 4,000).
+- `compileResultSchema` refuses `pattern`/`patternProperties`/`propertyNames` (ReDoS on main).
+- `ChildChatCompletions.recoverOwed()` runs at startup (main/index.ts, after follow-through): owed endings post one record-only notice per lead; a dropped post clears `owed`. Submitted results in notices cut at 4,000 chars.
+- `stop()` marks told only after the cancel succeeded. Status lists skip reading replies. `follow` pushes `onChanged` on moves to/from needs-you; the renderer polls every 15 s only while a chat is `running`.
+- Link store coalesces queued saves; only the newest 64 links keep `resultSchema`/`result`.

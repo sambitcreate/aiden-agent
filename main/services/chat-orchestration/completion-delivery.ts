@@ -21,7 +21,7 @@ export const CHILD_COMPLETION_GROUP_MS = 10_000;
 export const CHILD_COMPLETION_REPLY_CHARS = 4_000;
 
 export interface ChildChatCompletionDeps {
-  links: Pick<ChatLinkStore, "restore" | "get" | "update">;
+  links: Pick<ChatLinkStore, "restore" | "get" | "update" | "all">;
   post(post: AgentNoticePost): Promise<AgentNoticeOutcome>;
   /** The started chat's newest assistant reply, if any. */
   lastReply(chatId: string): Promise<string | undefined>;
@@ -81,6 +81,46 @@ export class ChildChatCompletions {
     return this.quiet.has(leadChatId);
   }
 
+  /**
+   * At startup: endings recorded as owed whose notice never went out (Aiden
+   * quit inside the 10-second group, or before an idle lead woke) are posted
+   * now as one notice per lead that records without waking it. Never rejects.
+   */
+  async recoverOwed(): Promise<void> {
+    try {
+      await this.deps.links.restore();
+      const byLead = new Map<string, Array<ChatLink & { owed: NonNullable<ChatLink["owed"]> }>>();
+      for (const link of this.deps.links.all()) {
+        if (!link.owed || link.delivered?.includes(link.owed.runId) || this.groups.has(link.leadChatId)) continue;
+        const owed = byLead.get(link.leadChatId) ?? [];
+        owed.push(link as ChatLink & { owed: NonNullable<ChatLink["owed"]> });
+        byLead.set(link.leadChatId, owed);
+      }
+      for (const [leadChatId, owed] of byLead) {
+        try {
+          const replies = await Promise.all(owed.map((link) => this.deps.lastReply(link.childChatId).catch(() => undefined)));
+          const outcome = await this.deps.post({ chatId: leadChatId, notice: noticeFor(owed), text: noticeText(owed, replies), wake: false });
+          await this.settle(owed, outcome.kind !== "dropped");
+        } catch (error) {
+          this.deps.onError?.(error);
+        }
+      }
+    } catch (error) {
+      this.deps.onError?.(error);
+    }
+  }
+
+  /** Clears the owed endings a post handled; ones it delivered count as told. */
+  private async settle(owed: ReadonlyArray<ChatLink & { owed: NonNullable<ChatLink["owed"]> }>, delivered: boolean): Promise<void> {
+    for (const link of owed) {
+      await this.deps.links.update(link.childChatId, (draft) => {
+        if (delivered && !draft.delivered?.includes(link.owed.runId)) draft.delivered = [...(draft.delivered ?? []), link.owed.runId];
+        // A dropped notice (the lead is gone) is not retried, so it is not owed either.
+        if (draft.owed?.runId === link.owed.runId) delete draft.owed;
+      });
+    }
+  }
+
   /** Posts the lead's grouped notice now. The timer calls this; tests may too. */
   async flush(leadChatId: string): Promise<AgentNoticeOutcome | undefined> {
     const group = this.groups.get(leadChatId);
@@ -102,14 +142,7 @@ export class ChildChatCompletions {
         text: noticeText(owed, replies),
         wake: !this.quiet.has(leadChatId),
       });
-      if (outcome.kind !== "dropped") {
-        for (const link of owed) {
-          await this.deps.links.update(link.childChatId, (draft) => {
-            if (!draft.delivered?.includes(link.owed.runId)) draft.delivered = [...(draft.delivered ?? []), link.owed.runId];
-            if (draft.owed?.runId === link.owed.runId) delete draft.owed;
-          });
-        }
-      }
+      await this.settle(owed, outcome.kind !== "dropped");
       return outcome;
     } catch (error) {
       this.deps.onError?.(error);
@@ -136,7 +169,12 @@ function noticeText(
   const parts = [links.length === 1 ? "A chat this chat started has ended." : "Chats this chat started have ended."];
   links.forEach((link, index) => {
     parts.push(`“${link.title}” (chat_id ${link.childChatId}) ${END_WORDS[link.owed.end]}.`);
-    if (link.result) parts.push(fenceAsData("Its submitted result (JSON)", JSON.stringify(link.result.value, null, 2)));
+    if (link.result) {
+      const json = JSON.stringify(link.result.value, null, 2);
+      const cut = [...json].length > CHILD_COMPLETION_REPLY_CHARS;
+      const text = cut ? [...json].slice(0, CHILD_COMPLETION_REPLY_CHARS).join("") : json;
+      parts.push(fenceAsData(`Its submitted result (JSON${cut ? "; cut, use child_chats wait or read for all of it" : ""})`, text));
+    }
     else if (link.resultSchema) parts.push("It hasn't submitted a result yet.");
     const reply = replies[index];
     if (reply) {

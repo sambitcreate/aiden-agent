@@ -41,6 +41,43 @@ function remoteReference(value: unknown, depth = 0): string | undefined {
   return undefined;
 }
 
+/**
+ * Keywords ajv checks with a native RegExp. A crafted pattern can backtrack for
+ * seconds on a short string and freeze Aiden's main process, so none is allowed.
+ */
+const REGEX_KEYWORDS: ReadonlySet<string> = new Set(["pattern", "patternProperties", "propertyNames"]);
+/** Keywords whose value maps names to subschemas: the names themselves are not keywords. */
+const SCHEMA_MAPS: ReadonlySet<string> = new Set(["properties", "$defs", "definitions", "dependentSchemas", "dependencies"]);
+/** Keywords whose value is data, not schema. */
+const DATA_KEYWORDS: ReadonlySet<string> = new Set(["enum", "const", "default", "examples"]);
+
+/** The first regular-expression keyword anywhere in the schema, if any. */
+function regexKeyword(value: unknown, depth = 0): string | undefined {
+  if (depth > 64) return undefined;
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const found = regexKeyword(item, depth + 1);
+      if (found) return found;
+    }
+    return undefined;
+  }
+  if (!isRecord(value)) return undefined;
+  for (const [key, child] of Object.entries(value)) {
+    if (REGEX_KEYWORDS.has(key)) return key;
+    if (DATA_KEYWORDS.has(key)) continue;
+    if (SCHEMA_MAPS.has(key) && isRecord(child)) {
+      for (const subschema of Object.values(child)) {
+        const found = regexKeyword(subschema, depth + 1);
+        if (found) return found;
+      }
+      continue;
+    }
+    const found = regexKeyword(child, depth + 1);
+    if (found) return found;
+  }
+  return undefined;
+}
+
 /** Compiles a lead's schema, or says in one sentence why it can't be used. */
 export function compileResultSchema(schema: unknown): ResultSchemaCheck {
   if (!isRecord(schema)) return { ok: false, error: "result_schema must be a JSON Schema object." };
@@ -49,6 +86,10 @@ export function compileResultSchema(schema: unknown): ResultSchemaCheck {
   }
   const remote = remoteReference(schema);
   if (remote) return { ok: false, error: `result_schema may only refer inside itself; ${remote} points elsewhere.` };
+  const regex = regexKeyword(schema);
+  if (regex) {
+    return { ok: false, error: `result_schema can't use ${regex}: Aiden doesn't check regular expressions. Use enum, const or plain types instead.` };
+  }
   try {
     const ajv = new Ajv({ strict: false, allErrors: true, validateFormats: false });
     return { ok: true, validate: ajv.compile(schema) };
@@ -82,7 +123,12 @@ export function checkResult(schema: unknown, value: unknown): { ok: true } | { o
 
 /** Whether a stored schema is still usable, for the link parser. */
 export function isStorableResultSchema(value: unknown): value is Record<string, unknown> {
-  return isRecord(value) && byteLength(value) <= RESULT_SCHEMA_MAX_BYTES && remoteReference(value) === undefined;
+  return (
+    isRecord(value) &&
+    byteLength(value) <= RESULT_SCHEMA_MAX_BYTES &&
+    remoteReference(value) === undefined &&
+    regexKeyword(value) === undefined
+  );
 }
 
 export function isStorableResult(value: unknown): boolean {

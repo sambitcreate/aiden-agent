@@ -1,6 +1,5 @@
 // React Query hooks for providers, chats, and settings.
 
-import { startedChatWorking } from "../shared/child-chats";
 import { useCallback, useEffect, useMemo } from "react";
 import {
   keepPreviousData,
@@ -606,8 +605,9 @@ export function useStartedChats(leadChatId: string | undefined, enabled = true) 
     queryFn: () => chatsApi.startedChats(leadChatId as string),
     enabled: Boolean(leadChatId) && enabled,
     staleTime: 15_000,
-    // Starts and endings notify; a turn moving to "needs you" does not, so look again while any is working.
-    refetchInterval: (query) => (query.state.data?.some(startedChatWorking) ? 4_000 : false),
+    // Main notifies on starts, endings and moves to or from "needs you"; a slow look while one
+    // is running only backs that up. A chat waiting on the person needs no polling.
+    refetchInterval: (query) => (query.state.data?.some((view) => view.state === "running") ? 15_000 : false),
   });
 }
 

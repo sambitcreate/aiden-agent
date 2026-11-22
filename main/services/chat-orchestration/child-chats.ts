@@ -11,6 +11,7 @@
 // only the chats it started, and once the person writes in one after the
 // lead's last message, `send` refuses: that chat is theirs now.
 
+import { createHash } from "node:crypto";
 import { fenceAsData } from "../../../renderer/shared/agent-notices.js";
 import { CHILD_CHATS_LIMITS, type ChildChatsSendMode } from "../../../renderer/shared/child-chats.js";
 import type { AidenRemoteChatService } from "../aiden-remote-chats.js";
@@ -24,7 +25,7 @@ import { CHAT_RUN_TERMINAL_STATES, ChatRunCore, projectRunMessage, type ChatRunS
 export interface ChildChatServices {
   chats: Pick<
     AidenRemoteChatService,
-    "create" | "rename" | "startTurn" | "runMutation" | "classify" | "messagesWindow" | "moveToNewWorktree"
+    "create" | "rename" | "remove" | "startTurn" | "runMutation" | "classify" | "messagesWindow" | "moveToNewWorktree"
   >;
   streams: Pick<
     AidenRemoteStreamService,
@@ -49,6 +50,8 @@ export interface ChildChatsDependencies {
   answerIn(): Promise<string>;
   /** A turn the lead started in a chat ended (not an approval or question wait: those never end a turn). */
   onRunEnded?(event: ChildChatRunEnded): void;
+  /** Removes a managed worktree a failed start made, after its chat is gone. */
+  discardWorktree?(workspaceId: string): Promise<void>;
   /** The lead's started chats changed (a start, a new turn, a stop, an end), for the desktop's chip. */
   onChanged?(leadChatId: string): void;
   now?(): number;
@@ -123,9 +126,19 @@ export function personTookOver(link: Pick<ChatLink, "tookOverAt" | "leadSentAt">
   return link.tookOverAt !== undefined && link.tookOverAt > (link.leadSentAt ?? 0);
 }
 
+/**
+ * A short, fixed-alphabet digest of a lead and one of its tool calls. Call ids
+ * come from providers (a Responses-API id is `call_id|item_id`) and lead ids
+ * may be long, so neither goes into a key as is: every key stays well inside
+ * the link store's and Remote's idempotency-key formats (128 printable ASCII).
+ */
+function callDigest(leadChatId: string, callKey: string): string {
+  return createHash("sha256").update(`${leadChatId}\u0000${callKey}`).digest("hex").slice(0, 32);
+}
+
 /** The key a lead's start of one chat uses; a replay of the same call finds the same chat. */
 export function childChatKey(leadChatId: string, callKey: string, index: number): string {
-  return `agent-chat:${leadChatId}:${callKey}:${index}`;
+  return `agent-chat:${callDigest(leadChatId, callKey)}:${index}`;
 }
 
 export class ChildChats {
@@ -163,36 +176,7 @@ export class ChildChats {
       const title = request.title.trim().slice(0, CHILD_CHATS_LIMITS.titleChars) || "Started chat";
       try {
         let link = this.dependencies.links.byKey(leadChatId, key);
-        if (!link) {
-          const created = await services.chats.create(audience, key, {
-            workspaceId: lead.workspaceId,
-            ...(request.model ? { modelId: request.model } : {}),
-          });
-          let revision = created.revision;
-          let branch: string | undefined;
-          if (request.workspace === "new_worktree") {
-            // Keyed like the chat, so a replay finds the worktree instead of making another.
-            const moved = await services.chats.moveToNewWorktree(audience, created.id, revision, `${key}:worktree`, { text: request.task }, {
-              key: `${key}:worktree`,
-              stackOnWorktree: true,
-              ...(request.baseRef ? { baseRef: request.baseRef } : {}),
-              ...(request.branchName ? { branchName: request.branchName } : {}),
-            });
-            revision = moved.chat.revision;
-            branch = moved.branch;
-          }
-          await services.chats.rename(created.id, revision, { title }).catch(() => undefined);
-          link = await this.dependencies.links.add({
-            childChatId: created.id,
-            leadChatId,
-            key,
-            title,
-            createdAt: this.now(),
-            ceiling: lead.ceiling,
-            ...(branch ? { branch } : {}),
-            ...(request.resultSchema ? { resultSchema: request.resultSchema } : {}),
-          });
-        }
+        if (!link) link = await this.create(services, audience, lead, leadChatId, key, title, request);
         const runId =
           link.runId ?? (await this.startTurn(services, link, `${key}:turn`, firstMessage(lead.title, request.task, link.resultSchema)));
         outcomes.push({ chatId: link.childChatId, title: link.title, runId, state: "running", ...(link.branch ? { branch: link.branch } : {}) });
@@ -201,6 +185,60 @@ export class ChildChats {
       }
     }
     return outcomes;
+  }
+
+  /**
+   * Makes one started chat (and its worktree) and links it to the lead. If a
+   * step fails before the link is saved, what was made is removed again, so a
+   * failed start leaves no chat or worktree behind.
+   */
+  private async create(
+    services: ChildChatServices,
+    audience: string,
+    lead: ChildChatLead,
+    leadChatId: string,
+    key: string,
+    title: string,
+    request: ChildChatStartRequest,
+  ): Promise<ChatLink> {
+    const created = await services.chats.create(audience, key, {
+      workspaceId: lead.workspaceId,
+      ...(request.model ? { modelId: request.model } : {}),
+    });
+    let revision = created.revision;
+    let worktreeId: string | undefined;
+    try {
+      let branch: string | undefined;
+      if (request.workspace === "new_worktree") {
+        // Keyed like the chat, so a replay finds the worktree instead of making another.
+        // The branch is named from the title: the task can be far longer than a phone's first message.
+        const moved = await services.chats.moveToNewWorktree(audience, created.id, revision, `${key}:worktree`, { text: title }, {
+          key: `${key}:worktree`,
+          stackOnWorktree: true,
+          ...(request.baseRef ? { baseRef: request.baseRef } : {}),
+          ...(request.branchName ? { branchName: request.branchName } : {}),
+        });
+        revision = moved.chat.revision;
+        worktreeId = moved.chat.workspaceId ?? undefined;
+        branch = moved.branch;
+      }
+      const renamed = await services.chats.rename(created.id, revision, { title }).catch(() => undefined);
+      if (renamed) revision = renamed.revision;
+      return await this.dependencies.links.add({
+        childChatId: created.id,
+        leadChatId,
+        key,
+        title,
+        createdAt: this.now(),
+        ceiling: lead.ceiling,
+        ...(branch ? { branch } : {}),
+        ...(request.resultSchema ? { resultSchema: request.resultSchema } : {}),
+      });
+    } catch (error) {
+      await services.chats.remove(created.id, revision).catch(() => undefined);
+      if (worktreeId && worktreeId !== lead.workspaceId) await this.dependencies.discardWorktree?.(worktreeId).catch(() => undefined);
+      throw error;
+    }
   }
 
   /**
@@ -220,7 +258,7 @@ export class ChildChats {
     }
     const services = await this.dependencies.services();
     const audience = chatAudience(leadChatId);
-    const key = `agent-chat:${leadChatId}:${callKey}:send`;
+    const key = `agent-chat:${callDigest(leadChatId, callKey)}:send`;
     if (link.runId && this.live(services, audience, link.runId)) {
       // A chat owing a structured result finishes its turn first: steering could cut it short.
       const mode = input.mode === "queue" || link.resultSchema ? "queue" : "steer";
@@ -308,11 +346,12 @@ export class ChildChats {
     if (!this.live(services, audience, link.runId)) return { chatId, stopped: false };
     const runId = link.runId;
     const classification = await services.chats.classify(link.childChatId);
-    // The lead stopped it, so its end is no news to the lead.
-    await this.markTold(link.childChatId, runId);
     await services.chats.runMutation(audience, link.childChatId, classification, () =>
       Promise.resolve(services.streams.cancel(audience, runId, `agent-chat-stop:${runId}`)),
     );
+    // The lead stopped it, so its end is no news to the lead. Only once the stop went through:
+    // a failed stop leaves the turn running, and its real end must still be told.
+    await this.markTold(link.childChatId, runId);
     return { chatId, stopped: true };
   }
 
@@ -388,6 +427,7 @@ export class ChildChats {
     const audience = chatAudience(link.leadChatId);
     let detach: (() => void) | undefined;
     let done = false;
+    let waiting: boolean | undefined;
     const look = () => {
       if (done) return;
       let state: string;
@@ -399,7 +439,16 @@ export class ChildChats {
         return;
       }
       const end = childRunEnd(state);
-      if (!end) return;
+      if (!end) {
+        // Moving to or from "needs you" (an approval or a question) changes the desktop's chip.
+        const now =
+          state === "waiting_for_approval" ||
+          Boolean(services.streams.pendingApproval(audience, runId)) ||
+          Boolean(services.streams.pendingQuestion(audience, runId));
+        if (waiting !== undefined && now !== waiting) this.dependencies.onChanged?.(link.leadChatId);
+        waiting = now;
+        return;
+      }
       finish();
       onRunEnded({ leadChatId: link.leadChatId, chatId: link.childChatId, runId, end });
       this.dependencies.onChanged?.(link.leadChatId);
@@ -471,7 +520,7 @@ export class ChildChats {
     if (!link.runId) return { ...base, state: "idle", ...(link.result ? { result: link.result.value } : {}) };
     let snapshot: ChatRunSnapshot;
     try {
-      snapshot = await this.core.snapshot(services, audience, link.childChatId, link.runId);
+      snapshot = await this.core.snapshot(services, audience, link.childChatId, link.runId, { withReply });
     } catch {
       return { ...base, state: "idle" };
     }

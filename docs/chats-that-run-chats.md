@@ -42,10 +42,11 @@ The lead's model gets one tool, `child_chats`, with one action per call:
 `workspace: "new_worktree"` runs a started chat in a new managed worktree, so
 parallel edits don't collide. It goes through the same first-message worktree
 coordinator as a phone's New worktree, keyed by the start
-(`agent-chat:<lead>:<toolCallId>:<index>:worktree`), so a replay finds the
-worktree instead of making another. The base is the repository's default
-branch unless `base_ref` names a local or remote-tracking branch, and the
-branch is named from the task unless `branch_name` gives one. A lead that is
+(`agent-chat:<digest of lead and tool call>:<index>:worktree`), so a replay
+finds the worktree instead of making another. The base is the repository's
+default branch unless `base_ref` names a local or remote-tracking branch, and
+the branch is named from the chat's title unless `branch_name` gives one. If
+a later step of a start fails, the chat (and its worktree) are removed again. A lead that is
 itself in a managed worktree stacks: the new worktree is made from the
 workspace it came from, starting at the lead's branch. Every refusal is a
 fixed sentence (an unknown or invalid branch, no free disk space, the source
@@ -56,14 +57,18 @@ ceiling still comes from the lead.
 
 A start can give each chat a `result_schema`: a JSON Schema of at most 16 KB
 that may only refer inside itself (`$ref` starting with `#`; nothing is ever
-fetched). A schema that is too large, points elsewhere or doesn't compile
-refuses the whole call before any chat is made. The started chat's first
+fetched) and may not use regular expressions (`pattern`, `patternProperties`,
+`propertyNames`), since a crafted one could stall Aiden. A schema that is too
+large, points elsewhere, uses a regular expression or doesn't compile refuses
+the whole call before any chat is made. The started chat's first
 message shows the schema, and it gets a `submit_result` tool. A submitted
 result is checked with ajv; one that doesn't match is refused, naming the
 fields to fix (for example `/filesChanged is required`). The newest accepted
 result (up to 64 KB) replaces any earlier one, is stored on the link, comes
 back from `wait` and `list` as `result`, and is quoted, fenced as data, in the
-lead's completion notice. A send to a chat that owes a result is always
+lead's completion notice (cut at 4,000 characters there). Only the newest 64
+links keep their schema and result; older ones drop them to keep the links
+file small. A send to a chat that owes a result is always
 queued, never steered, so it can finish its turn. `submit_result` never asks
 for approval.
 
@@ -152,5 +157,7 @@ an owed notice and which finished turns the lead has already been told about. De
 started chat drops its link; deleting a lead drops its started chats' links,
 and those chats keep running under the lost-link ceiling.
 
-Nothing resumes after a quit: a notice still waiting in its 10-second group is
-lost, and started chats' interrupted turns show Resume in their own chats.
+After a quit, endings that were still waiting to be told (inside the
+10-second group, or before an idle lead woke) are posted at the next start as
+one notice per lead that is recorded without waking it. Started chats'
+interrupted turns show Resume in their own chats.

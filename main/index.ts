@@ -2825,6 +2825,10 @@ if (!ownsSingleInstanceLock) {
       await startFollowThrough().catch((error: unknown) => {
         logger.warn("follow-through", "Could not finish restoring checks and pull request follows.", error);
       });
+      // Started chats' endings that a quit kept from their lead are posted now, without waking it.
+      if (!shutdownHasBegun()) {
+        void import("./services/chat-orchestration/child-chats-main.js").then(({ childChatCompletions }) => childChatCompletions.recoverOwed());
+      }
       // Watches runs, jobs and checks to keep the computer awake while Aiden works.
       if (!shutdownHasBegun()) {
         await startKeepAwake().catch((error: unknown) => {

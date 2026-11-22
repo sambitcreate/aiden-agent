@@ -1,5 +1,6 @@
 import type { Page } from "@playwright/test";
 import { E2E_WORKSPACE_ID, expect, finishLmStudioOnboarding, test } from "./fixtures";
+import { CHILD_COMPLETION_GROUP_MS } from "../../main/services/chat-orchestration/completion-delivery";
 
 test.use({ workspaceSeed: true });
 
@@ -83,5 +84,7 @@ test("a chat starts two chats: one finishes and wakes it, one waits for you, and
   await expect(after).toContainText("Stopped");
   await expect(after.getByRole("button", { name: "Stop all" })).toHaveCount(0);
   expect(docs.completed).toBe(false);
+  // Past the 10-second window in which endings share a notice: still no new one.
+  await page.waitForTimeout(CHILD_COMPLETION_GROUP_MS + 1_000);
   await expect(page.locator('[data-agent-notice="chat"]')).toHaveCount(notices);
 });

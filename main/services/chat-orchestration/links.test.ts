@@ -3,6 +3,7 @@ import test from "node:test";
 
 import {
   CHAT_LINK_LIMIT,
+  CHAT_LINK_RESULTS_KEPT,
   ChatLinkStore,
   parseChatLinkDocument,
   startedChatCeiling,
@@ -153,4 +154,43 @@ test("a started chat whose link is lost runs as Ask with no Mac grants; an ordin
   assert.equal(startedChatCeiling(store, "chat-1", undefined), undefined);
   await store.add(link("child-1", { ceiling: { mode: "never", macGrants: ["files"], chatOnly: false } }));
   assert.equal(startedChatCeiling(store, "child-1", { chatId: "lead-1" })?.mode, "never");
+});
+
+test("a burst of updates shares one save behind the one in progress, and the file ends with every change", async () => {
+  const memory = memoryStorage();
+  let saves = 0;
+  const save = memory.storage.save;
+  memory.storage.save = async (document) => {
+    saves += 1;
+    await save(document);
+  };
+  const store = new ChatLinkStore(memory.storage, memory.log);
+  await store.restore();
+  await store.add(link("child-1"));
+  saves = 0;
+  await Promise.all(
+    Array.from({ length: 20 }, (_, index) =>
+      store.update("child-1", (draft) => {
+        draft.leadSentAt = 2_000 + index;
+      }),
+    ),
+  );
+  assert.ok(saves <= 2, `20 updates took ${saves} saves`);
+  assert.equal(memory.saved()?.links[0]?.leadSentAt, 2_019);
+});
+
+test("only the newest links keep a result schema and result, so old ones can't grow the file", async () => {
+  const memory = memoryStorage();
+  const store = new ChatLinkStore(memory.storage, memory.log);
+  await store.restore();
+  const schema = { type: "object" };
+  for (let index = 0; index < CHAT_LINK_RESULTS_KEPT + 2; index += 1) {
+    await store.add(link(`child-${index}`, { resultSchema: schema, result: { value: { index }, at: 1_000 } }));
+  }
+  assert.equal(store.get("child-0")?.resultSchema, undefined);
+  assert.equal(store.get("child-1")?.result, undefined);
+  assert.deepEqual(store.get("child-2")?.result?.value, { index: 2 });
+  assert.deepEqual(store.get(`child-${CHAT_LINK_RESULTS_KEPT + 1}`)?.resultSchema, schema);
+  const saved = memory.saved()?.links ?? [];
+  assert.equal(saved.filter((each) => each.result !== undefined).length, CHAT_LINK_RESULTS_KEPT);
 });

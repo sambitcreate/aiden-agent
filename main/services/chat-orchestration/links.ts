@@ -55,6 +55,12 @@ export interface ChatLinkStorage {
 /** Links kept, oldest dropped first; a memory guard, not a limit on started chats. */
 export const CHAT_LINK_LIMIT = 5_000;
 const DELIVERED_LIMIT = 16;
+/**
+ * Only the newest links keep a result schema and a submitted result (up to
+ * 16 KB and 64 KB each): older ones drop them, so the file stays small. The
+ * lead can still read those chats.
+ */
+export const CHAT_LINK_RESULTS_KEPT = 64;
 const TITLE_CHARS = 200;
 const ID = /^[A-Za-z0-9._-]{1,128}$/u;
 const KEY = /^[A-Za-z0-9._:-]{1,300}$/u;
@@ -160,6 +166,8 @@ export class ChatLinkStore {
   private readonly links = new Map<string, ChatLink>();
   private restored: Promise<void> | undefined;
   private writes: Promise<void> = Promise.resolve();
+  /** A save queued behind the current one; later changes ride along with it. */
+  private queued: Promise<void> | undefined;
 
   constructor(
     private readonly storage: ChatLinkStorage,
@@ -195,6 +203,11 @@ export class ChatLinkStore {
     return undefined;
   }
 
+  /** Every link, as copies. */
+  all(): ChatLink[] {
+    return [...this.links.values()].map((link) => structuredClone(link));
+  }
+
   /** The chats this lead started, oldest first. */
   childrenOf(leadChatId: string): ChatLink[] {
     return [...this.links.values()].filter((link) => link.leadChatId === leadChatId).map((link) => structuredClone(link));
@@ -217,6 +230,13 @@ export class ChatLinkStore {
       const oldest = this.links.keys().next().value;
       if (oldest === undefined) break;
       this.links.delete(oldest);
+    }
+    let newer = this.links.size;
+    for (const kept of this.links.values()) {
+      newer -= 1;
+      if (newer < CHAT_LINK_RESULTS_KEPT) break;
+      delete kept.resultSchema;
+      delete kept.result;
     }
     return this.persist().then(() => structuredClone(parsed));
   }
@@ -260,14 +280,22 @@ export class ChatLinkStore {
     return this.writes;
   }
 
+  /**
+   * Saves the whole document. Changes made while a save is already queued
+   * share it, since it reads the links when it starts, so a burst of updates
+   * costs one write after the one in progress.
+   */
   private persist(): Promise<void> {
+    if (this.queued) return this.queued;
     const write = this.writes.then(async () => {
+      this.queued = undefined;
       try {
         await this.storage.save({ version: 1, links: [...this.links.values()].map((link) => structuredClone(link)) });
       } catch (error) {
         this.log("Could not save the started-chat links.", error);
       }
     });
+    this.queued = write;
     this.writes = write;
     return write;
   }
