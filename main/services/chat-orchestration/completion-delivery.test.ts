@@ -5,7 +5,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { parseAgentNoticeV1 } from "../../../renderer/shared/agent-notices.js";
-import { MAX_WAKES_PER_CHAT_PER_HOUR, NoticeDelivery, type AgentNoticePost } from "../follow-through/notice-delivery.js";
+import { MAX_WAKES_PER_CHAT_PER_HOUR, NoticeDelivery, type AgentNoticeOutcome, type AgentNoticePost } from "../follow-through/notice-delivery.js";
 import { CHILD_COMPLETION_GROUP_MS, ChildChatCompletions } from "./completion-delivery.js";
 import { ChatLinkStore, type ChatLink } from "./links.js";
 
@@ -212,20 +212,105 @@ test("an ending a quit kept from the lead is posted at the next start, recorded 
   assert.equal(lead.recorded.length, 1);
 });
 
-test("an ending whose lead is gone is dropped and no longer owed", async () => {
-  const { links } = await setup(false, ["c1"]);
-  const completions = new ChildChatCompletions({
+/** A lead whose deliveries never land: gone, busy for good, or failing. */
+function failingLead(how: "gone" | "busy" | "throws") {
+  return new NoticeDelivery({
+    queueIntoRun: async () => {
+      if (how === "throws") throw new Error("The store could not be read.");
+      return { kind: "no-run" };
+    },
+    startTurn: async () => (how === "busy" ? { kind: "busy" } : { kind: "unavailable", reason: "This chat no longer exists." }),
+    append: async () => (how === "gone" ? { kind: "gone", reason: "This chat no longer exists." } : { kind: "busy" }),
+    waitForIdle: async () => undefined,
+    now: () => 1_000,
+  });
+}
+
+function completionsOver(links: ChatLinkStore, post: (post: AgentNoticePost) => Promise<AgentNoticeOutcome>) {
+  return new ChildChatCompletions({
     links,
-    post: async () => ({ kind: "dropped", reason: "This chat no longer exists." }),
+    post,
     lastReply: async () => undefined,
     setTimer: () => ({}),
     clearTimer: () => undefined,
     now: () => 2_000,
   });
+}
+
+test("an ending whose lead is gone is dropped and no longer owed", async () => {
+  const { links } = await setup(false, ["c1"]);
+  const gone = failingLead("gone");
+  const completions = completionsOver(links, (post) => gone.post(post));
   await completions.runEnded({ leadChatId: LEAD, chatId: "c1", runId: "run-c1", end: "done" });
   assert.equal((await completions.flush(LEAD))?.kind, "dropped");
   assert.equal(links.get("c1")!.owed, undefined);
   assert.equal(links.get("c1")!.delivered, undefined, "never told, so wait still reports it");
   await completions.recoverOwed();
   assert.equal(links.get("c1")!.owed, undefined);
+});
+
+test("a notice dropped while the lead still exists stays owed and reaches it at the next start", async () => {
+  for (const how of ["busy", "throws"] as const) {
+    const { lead, links } = await setup(false, ["c1"]);
+    const failing = failingLead(how);
+    const completions = completionsOver(links, (post) => failing.post(post));
+    await completions.runEnded({ leadChatId: LEAD, chatId: "c1", runId: "run-c1", end: "done" });
+    assert.equal((await completions.flush(LEAD))?.kind, "dropped", how);
+    assert.equal(links.get("c1")!.owed?.runId, "run-c1", `${how}: still owed`);
+
+    const restarted = completionsOver(links, (post) => lead.delivery.post(post));
+    await restarted.recoverOwed();
+    assert.equal(lead.recorded.length, 1, how);
+    assert.equal(links.get("c1")!.owed, undefined, how);
+    assert.deepEqual(links.get("c1")!.delivered, ["run-c1"], how);
+  }
+});
+
+test("recovery skips an ending the lead's wait returned while an earlier lead's notice was posting", async () => {
+  const links = new ChatLinkStore({ load: async () => undefined, save: async () => undefined });
+  await links.restore();
+  for (const [chatId, leadChatId] of [["a1", "lead-a"], ["b1", "lead-b"]] as const) {
+    await links.add({
+      childChatId: chatId,
+      leadChatId,
+      key: `agent-chat:${leadChatId}:call:0`,
+      title: chatId,
+      createdAt: 1,
+      ceiling: { mode: "ask", macGrants: [], chatOnly: false },
+      runId: `run-${chatId}`,
+      owed: { runId: `run-${chatId}`, end: "done", at: 1 },
+    } satisfies ChatLink);
+  }
+  const posted: string[] = [];
+  const completions = completionsOver(links, async (post) => {
+    posted.push(post.chatId);
+    // While the first lead's notice posts, the other lead resumes and its
+    // `wait` returns that lead's ending, marking it told.
+    const other = post.chatId === "lead-a" ? "b1" : "a1";
+    await links.update(other, (draft) => {
+      draft.delivered = [...(draft.delivered ?? []), draft.runId!];
+      delete draft.owed;
+    });
+    return { kind: "recorded", messageId: "m1", reason: "not-waking" };
+  });
+  await completions.recoverOwed();
+  assert.equal(posted.length, 1, `told once, not again: ${posted.join(", ")}`);
+});
+
+test("recovery adds older owed endings to a lead's group that is already waiting", async () => {
+  const { lead, links, completions } = await setup(true);
+  // c1's ending was owed from before the quit; c2 ends now and opens a group.
+  await links.update("c1", (draft) => {
+    draft.owed = { runId: "run-c1", end: "done", at: 1 };
+  });
+  await completions.runEnded({ leadChatId: LEAD, chatId: "c2", runId: "run-c2", end: "done" });
+  await completions.recoverOwed();
+  assert.equal(lead.queued.length + lead.recorded.length, 0, "nothing posts until the group flushes");
+  await completions.flush(LEAD);
+  assert.equal(lead.queued.length, 1);
+  assert.equal(parseAgentNoticeV1(lead.queued[0]!.notice)?.title, "2 started chats finished");
+  for (const chatId of ["c1", "c2"]) {
+    assert.equal(links.get(chatId)!.owed, undefined, chatId);
+    assert.deepEqual(links.get(chatId)!.delivered, [`run-${chatId}`]);
+  }
 });

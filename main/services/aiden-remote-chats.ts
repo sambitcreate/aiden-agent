@@ -1474,6 +1474,12 @@ export class AidenRemoteChatService {
         ): Promise<{ workspaceId: string; branch: string }>;
         /** The branch of the worktree New worktree made for this chat, when the chat is in it. */
         worktreeBranch(chatId: string, workspaceId: string, key?: string): Promise<string | undefined>;
+        /**
+         * Removes a worktree `create` just made when the chat could not move
+         * into it, so a failed request leaves nothing behind. A retry makes
+         * it again. Refuses (and the worktree stays) when it holds work.
+         */
+        discard?(workspaceId: string): Promise<void>;
       };
       idempotency?: AidenIdempotencyLedger;
       persistIdempotency?: (snapshot: AidenIdempotencySnapshot) => Promise<void>;
@@ -2392,8 +2398,12 @@ export class AidenRemoteChatService {
               },
             }) as Chat;
           } catch (error) {
-            if (error instanceof AidenRemoteServiceError) throw error;
             const current = await this.chat(chatId).catch(() => undefined);
+            // The chat stayed out of the worktree made for it: take it away again.
+            if (current?.workspaceId !== created.workspaceId) {
+              await newWorktrees.discard?.(created.workspaceId).catch(() => undefined);
+            }
+            if (error instanceof AidenRemoteServiceError) throw error;
             if (current && current.messages.length > 0) throw notEmpty();
             throw new AidenRemoteServiceError(
               "operation_in_progress",

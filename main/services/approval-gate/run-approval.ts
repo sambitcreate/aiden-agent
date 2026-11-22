@@ -23,6 +23,15 @@ export interface RunApproval {
  * access is exactly "Never ask with shell and files allowed", its old reach;
  * everything else is Ask, so those parts never gain reach from a mode.
  */
+/**
+ * Whether a run's Auto judge may decide a call. An ACP agent's run has no model
+ * Aiden can ask, and a run answering a tainted lead may not pass a call on the
+ * lead's word (Phase 5), so either shows the card instead.
+ */
+export function runJudgeAvailable(input: { harnessProvider: boolean; leadRequestTrusted: boolean }): boolean {
+  return !input.harnessProvider && input.leadRequestTrusted;
+}
+
 export function legacyAccessOf(policy: WorkspaceApprovalPolicy): "full" | "ask" | "none" {
   if (policy.chatOnly) return "none";
   return policy.mode === "never" && policy.macGrants.has("shell") && policy.macGrants.has("files") ? "full" : "ask";

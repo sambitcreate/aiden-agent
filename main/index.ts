@@ -2838,7 +2838,9 @@ if (!ownsSingleInstanceLock) {
       }
       // Started chats' endings that a quit kept from their lead are posted now, without waking it.
       if (!shutdownHasBegun()) {
-        void import("./services/chat-orchestration/child-chats-main.js").then(({ childChatCompletions }) => childChatCompletions.recoverOwed());
+        void import("./services/chat-orchestration/child-chats-main.js")
+          .then(({ childChatCompletions }) => childChatCompletions.recoverOwed())
+          .catch((error: unknown) => logger.warn("chat-orchestration", "Could not post started chats' owed endings.", error));
       }
       // Watches runs, jobs and checks to keep the computer awake while Aiden works.
       if (!shutdownHasBegun()) {

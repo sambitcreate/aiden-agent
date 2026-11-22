@@ -961,6 +961,7 @@ test("ordinary workspace moves always reject Bot chats and preserve managed-home
 
 test("New worktree moves an empty chat into the worktree made for it, once per chat, and leaves a chat with messages alone", async () => {
   const made: string[] = [];
+  const discarded: string[] = [];
   let failure: Error | undefined;
   const newWorktrees = {
     create: async (deviceId: string, sourceWorkspaceId: string, text: string, chatId: string) => {
@@ -968,6 +969,7 @@ test("New worktree moves an empty chat into the worktree made for it, once per c
       made.push(`${deviceId}:${sourceWorkspaceId}:${text}:${chatId}`);
       return { workspaceId: "workspace-worktree", branch: "aiden/fix-the-login-bug" };
     },
+    discard: async (workspaceId: string) => void discarded.push(workspaceId),
     // Only the worktree made for this chat counts as its finished setup.
     worktreeBranch: async (chatId: string, workspaceId: string) =>
       workspaceId === "workspace-worktree" && made.some((entry) => entry.endsWith(`:${chatId}`))
@@ -1007,6 +1009,7 @@ test("New worktree moves an empty chat into the worktree made for it, once per c
   const late = await app.service.moveToNewWorktree("device-1", "chat-1", revision, "new-worktree-0006", { text: "Fix the login bug on Safari" });
   assert.deepEqual(late, moved, "an empty chat already in a worktree answers with it");
   assert.equal(made.length, 1, "and nothing more is made");
+  assert.deepEqual(discarded, [], "a worktree the chat moved into stays");
 
   const busy = fixture(chat({ messages: [{ id: "user-1", role: "user", content: "Hello", createdAt: 1_000 }] }), { newWorktrees });
   // The phone read the chat while it was empty; another device then sent the
@@ -1045,6 +1048,7 @@ test("New worktree moves an empty chat into the worktree made for it, once per c
   release();
   await assert.rejects(pending, (error: unknown) => (error as { code?: string }).code === "revision_conflict");
   assert.equal(racing.current()?.workspaceId, "workspace-2");
+  assert.deepEqual(discarded, ["workspace-worktree"], "the worktree made for nothing is removed again");
 
   // Moved by someone else into a worktree this chat never made: a stale
   // request is refused rather than answered with that worktree.
@@ -1057,6 +1061,32 @@ test("New worktree moves an empty chat into the worktree made for it, once per c
     (error: unknown) => (error as { code?: string }).code === "revision_conflict",
   );
   assert.equal(made.length, 0);
+});
+
+test("a worktree made for a chat that then can't move into it is removed again, and a failed removal still answers", async () => {
+  for (const discardFails of [false, true]) {
+    const discarded: string[] = [];
+    let app!: ReturnType<typeof fixture>;
+    app = fixture(chat({ messages: [] }), {
+      newWorktrees: {
+        // The chat is deleted on another device while its worktree is being made.
+        create: async () => {
+          await app.service.remove("chat-1", projectAidenRemoteChat(app.current()!).revision);
+          return { workspaceId: "workspace-worktree", branch: "aiden/fix" };
+        },
+        worktreeBranch: async () => undefined,
+        discard: async (workspaceId: string) => {
+          discarded.push(workspaceId);
+          if (discardFails) throw new Error("This managed worktree contains ignored files Aiden did not provision.");
+        },
+      },
+    });
+    await assert.rejects(
+      app.service.moveToNewWorktree("device-1", "chat-1", projectAidenRemoteChat(app.current()!).revision, "new-worktree-0010", { text: "Fix" }),
+      (error: unknown) => (error as { code?: string }).code === "operation_in_progress" && !(error as Error).message.includes("ignored files"),
+    );
+    assert.deepEqual(discarded, ["workspace-worktree"], `discard fails: ${discardFails}`);
+  }
 });
 
 test("ordinary chat deletion cannot remove a Bot's persistent chat", async () => {

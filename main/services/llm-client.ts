@@ -23,9 +23,9 @@ import { withUsageLimitWait } from "./usage-limit-stream.js";
 import { spending } from "./spending-main.js";
 import { createSpendingMeter, spendCounts } from "./spending-service.js";
 import { parseApprovalModel, type MacGrantClass } from "../../renderer/shared/approval-mode.js";
-import { currentWorkspaceApproval, generationApprovalPolicy, legacyAccessOf } from "./approval-gate/run-approval.js";
+import { currentWorkspaceApproval, generationApprovalPolicy, legacyAccessOf, runJudgeAvailable } from "./approval-gate/run-approval.js";
 import { CHAT_AUDIENCE_PROMPT_LIFETIME_MS } from "./chat-orchestration/audience.js";
-import { RunTaint, runTaintHistoryOfBranch } from "./approval-gate/run-taint.js";
+import { RunTaint, runTaintHistoryOfBranch, runTaintPersonText } from "./approval-gate/run-taint.js";
 import { declaredReadOnlyHint } from "./approval-gate/tool-classes.js";
 import { approvalJudgeAction, createApprovalJudge, type ApprovalJudge } from "./approval-judge/judge.js";
 import { approvalJudgeComplete } from "./approval-judge/model-complete.js";
@@ -307,7 +307,7 @@ import { isAcpHarnessProvider } from "../../renderer/shared/acp-harness.js";
 import { advisorRuntime } from "./advisor-runtime-main.js";
 import { ADVISOR_NO_CHOOSER_TURN_NOTE, ADVISOR_TOOL_NAME, type AdvisorExtensionInput } from "./advisor-runtime.js";
 import { snapshotAdvisorRuntimeMessages } from "./advisor-context.js";
-import { persistGenerationInitializationTerminal } from "./generation-initialization-terminal.js";
+import { chatStoreInitializationTerminalAppend, persistGenerationInitializationTerminal } from "./generation-initialization-terminal.js";
 import type { GenerationCancellationOrigin } from "../../renderer/shared/generation-timeline.js";
 import {
   assertGenerationContextCapacity,
@@ -3401,11 +3401,7 @@ export const llmClient = {
         isCurrent: () =>
           initializing.get(streamId) === initialization ||
           (active.get(streamId)?.chatId === params.chatId && active.get(streamId)?.owner === owner),
-        append: (message, meta) => chatStore.appendMessage(params.chatId, message, {
-          expectedWorkspaceId: meta.expectedWorkspaceId,
-          isCurrent: meta.isCurrent,
-          ...generationModelMeta(meta, options.keepChatModel),
-        }),
+        append: chatStoreInitializationTerminalAppend(chatStore, params.chatId, options.keepChatModel),
         onUnknownOutcome: (terminalError) =>
           logger.error(
             "pi",
@@ -4813,7 +4809,8 @@ export const llmClient = {
       }
       const journalHistory = runTaintHistoryOfBranch(journalBranch);
       runTaint = new RunTaint({
-        personText: generationChat.messages.filter((message) => message.role === "user").map((message) => message.content),
+        // A tainted lead's own words are not the person naming a site.
+        personText: runTaintPersonText(generationChat.messages, { leadWordsTrusted: judgeTrusted() }),
         history: [
           ...initialMessages.map((message) => ({
             role: message.role,
@@ -5449,9 +5446,9 @@ export const llmClient = {
               ...(runApproval
                 ? {
                     approval: { mode: runApproval.mode, macGrants: runApproval.macGrants },
-                    // An ACP agent's run has no model Aiden can ask (`runApprovalJudge`).
-                    // Nor may a run answering a tainted lead ask it (`leadTaintedRequest`).
-                    ...(harnessProvider || !judgeTrusted() ? {} : { judgeAvailable: true }),
+                    ...(runJudgeAvailable({ harnessProvider, leadRequestTrusted: judgeTrusted() })
+                      ? { judgeAvailable: true }
+                      : {}),
                     ...(calledMcp && !preparedBotContext
                       ? {
                           connector: {

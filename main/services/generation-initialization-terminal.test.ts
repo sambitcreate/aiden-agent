@@ -3,9 +3,9 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { generationModelMeta } from "./chat-model-selection-meta.js";
 import { createChatStore } from "./chat-store-core.js";
 import {
+  chatStoreInitializationTerminalAppend,
   persistGenerationInitializationTerminal,
   type GenerationInitializationTerminalMessage,
   type GenerationInitializationTerminalMeta,
@@ -91,7 +91,7 @@ test("a run that fails while starting saves its outcome in the chat while it sti
   t.after(() => fs.rm(directory, { recursive: true, force: true }));
   const store = createChatStore(async () => directory);
 
-  // Wired as llm-client's generation start wires it: the chat store, with the run's model unless it keeps the chat's.
+  // With the append llm-client's generation start hands it, over a real chat store.
   const persist = async (chatId: string, input: { owns: () => boolean; keepChatModel?: boolean; streamId: string }) =>
     persistGenerationInitializationTerminal({
       state: { attempted: false },
@@ -102,12 +102,7 @@ test("a run that fails while starting saves its outcome in the chat while it sti
       model: "task-model",
       status: "failed",
       isCurrent: input.owns,
-      append: (message, meta) =>
-        store.appendMessage(chatId, message, {
-          expectedWorkspaceId: meta.expectedWorkspaceId,
-          isCurrent: meta.isCurrent,
-          ...generationModelMeta(meta, input.keepChatModel),
-        }),
+      append: chatStoreInitializationTerminalAppend(store, chatId, input.keepChatModel),
       onUnknownOutcome: (error) => assert.fail(String(error)),
     });
 

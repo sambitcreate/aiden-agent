@@ -169,3 +169,21 @@ export class RunTaint {
     if (bringsOutsideContent(call.toolName)) this.outside = true;
   }
 }
+
+/**
+ * The texts that count as the person's words for `RunTaint`: the chat's user
+ * messages. While a started chat still answers a lead whose
+ * own run held outside content (`leadWordsTrusted` false), the lead's task,
+ * sends and steers (`fromLeadChat`) are left out, so a site the lead named,
+ * perhaps on a web page's say-so, is still a new destination (Phase 5
+ * loop-closing review). Once the person takes the chat over, it is theirs.
+ */
+export function runTaintPersonText(
+  messages: readonly { role: string; content: string; fromLeadChat?: true }[],
+  options: { leadWordsTrusted: boolean },
+): string[] {
+  return messages
+    .filter((message) => message.role === "user")
+    .filter((message) => options.leadWordsTrusted || message.fromLeadChat !== true)
+    .map((message) => message.content);
+}

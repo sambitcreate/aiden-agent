@@ -613,14 +613,27 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
           const chats = new AidenRemoteChatService({
             attachments: remoteAttachmentStore,
             // Revision 53: a phone's New worktree, through the desktop's first-message coordinator.
-            newWorktrees: createAidenRemoteNewWorktrees({
-              getWorkspace: (workspaceId) => configStore.getWorkspace(workspaceId),
-              branches: (folderPath) => gitBranches(folderPath),
-              ensure: (request, seed, owner) => firstMessageWorktrees.ensure(request, seed, owner),
-              owner: (deviceId) => workspaceOwners.owner(deviceId),
-              record: (key) => firstMessageWorktrees.record(key),
-              listWorkspaces: () => configStore.listWorkspaces(),
-            }),
+            newWorktrees: {
+              ...createAidenRemoteNewWorktrees({
+                getWorkspace: (workspaceId) => configStore.getWorkspace(workspaceId),
+                branches: (folderPath) => gitBranches(folderPath),
+                ensure: (request, seed, owner) => firstMessageWorktrees.ensure(request, seed, owner),
+                owner: (deviceId) => workspaceOwners.owner(deviceId),
+                record: (key) => firstMessageWorktrees.record(key),
+                listWorkspaces: () => configStore.listWorkspaces(),
+              }),
+              // The chat couldn't move into the worktree just made for it. Main
+              // removes it (no window or device owns this), never by force; the
+              // first-message record then starts over on a retry.
+              discard: async (workspaceId) => {
+                await workspaceWorktreeApplicationService.remove(
+                  { isDestroyed: () => false, onInvalidated: () => () => undefined },
+                  workspaceId,
+                  undefined,
+                  { force: false },
+                );
+              },
+            },
             application: chatApplicationService,
             chatStore,
             generation: {

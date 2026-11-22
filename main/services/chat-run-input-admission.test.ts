@@ -635,9 +635,13 @@ test("a lead chat's message to a chat it started reaches its run before the queu
   assert.deepEqual(order, ["lead input, 0 queued"]);
   assert.equal(app.steered.length, 1);
   assert.deepEqual(wrote, [], "the lead is not the person");
+  // Saved marked as the lead's, so the transcript says who wrote it and the
+  // run's taint never reads it as the person naming a site.
+  assert.equal((app.appended[0]!.message as { fromLeadChat?: true }).fromLeadChat, true);
 
   // The person's own steer is theirs: no lead hook, and it counts as the person writing.
   await app.admission.admit({ streamId: "stream-1", mode: "steer", text: "From the person" });
   assert.deepEqual(order, ["lead input, 0 queued"]);
   assert.deepEqual(wrote, ["chat-1"]);
+  assert.equal((app.appended[1]!.message as { fromLeadChat?: true }).fromLeadChat, undefined);
 });

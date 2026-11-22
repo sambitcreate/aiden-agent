@@ -1,8 +1,9 @@
 // Structured results for started chats (docs/plans/proactive-aiden-plan.md,
 // Phase 5, D6). A lead may give each chat it starts a JSON Schema; the started
 // chat hands its answer back with `submit_result`, checked here with ajv. A
-// schema is at most 16 KB and may only refer inside itself: nothing is ever
-// fetched to resolve it.
+// schema is at most 16 KB, may only refer to its root or its own `$defs` /
+// `definitions` (nothing is ever fetched to resolve it) and may not contain a
+// regular expression anywhere.
 
 import Ajv, { type ErrorObject, type ValidateFunction } from "ajv";
 
@@ -20,40 +21,52 @@ function byteLength(value: unknown): number {
   return Buffer.byteLength(JSON.stringify(value) ?? "", "utf8");
 }
 
-/** The first `$ref`/`$dynamicRef` that points outside the schema, if any. */
-function remoteReference(value: unknown, depth = 0): string | undefined {
-  if (depth > 64) return "(nested too deeply)";
+/**
+ * The only references a schema may make: to its own root, or to a named entry
+ * of its own `$defs` or `definitions`. A JSON pointer into any other keyword
+ * (`#/default`, `#/enum/0`, `#/examples/0`, `#/const`, escaped segments) could
+ * make ajv compile data as schema, so none is allowed.
+ */
+const LOCAL_REFERENCE = /^#(?:\/(?:\$defs|definitions)\/[A-Za-z0-9_.-]{1,128})?$/;
+const REFERENCE_KEYWORDS: ReadonlySet<string> = new Set(["$ref", "$dynamicRef", "$recursiveRef"]);
+const MAX_DEPTH = 64;
+const TOO_DEEP = "(nested too deeply)";
+
+/** The first reference that isn't one of the allowed local forms, if any. */
+function disallowedReference(value: unknown, depth = 0): string | undefined {
+  if (depth > MAX_DEPTH) return TOO_DEEP;
   if (Array.isArray(value)) {
     for (const item of value) {
-      const found = remoteReference(item, depth + 1);
+      const found = disallowedReference(item, depth + 1);
       if (found) return found;
     }
     return undefined;
   }
   if (!isRecord(value)) return undefined;
   for (const [key, child] of Object.entries(value)) {
-    if ((key === "$ref" || key === "$dynamicRef") && (typeof child !== "string" || !child.startsWith("#"))) {
-      return typeof child === "string" ? child : "(not a string)";
+    if (REFERENCE_KEYWORDS.has(key) && (typeof child !== "string" || !LOCAL_REFERENCE.test(child))) {
+      return typeof child === "string" ? child.slice(0, 200) : "(not a string)";
     }
-    const found = remoteReference(child, depth + 1);
+    const found = disallowedReference(child, depth + 1);
     if (found) return found;
   }
   return undefined;
 }
 
 /**
- * Keywords ajv checks with a native RegExp. A crafted pattern can backtrack for
- * seconds on a short string and freeze Aiden's main process, so none is allowed.
+ * Keys ajv turns into a native RegExp. A crafted pattern can backtrack for
+ * seconds on a short string and freeze Aiden's main process. ajv follows
+ * references and keyword maps in ways that are hard to model, so every object
+ * anywhere in the schema is scanned, data keywords and map names included; a
+ * `propertyNames` schema is caught by scanning into it. A property that is
+ * literally named "pattern" is refused too: the price of a check that can't be
+ * talked around.
  */
-const REGEX_KEYWORDS: ReadonlySet<string> = new Set(["pattern", "patternProperties", "propertyNames"]);
-/** Keywords whose value maps names to subschemas: the names themselves are not keywords. */
-const SCHEMA_MAPS: ReadonlySet<string> = new Set(["properties", "$defs", "definitions", "dependentSchemas", "dependencies"]);
-/** Keywords whose value is data, not schema. */
-const DATA_KEYWORDS: ReadonlySet<string> = new Set(["enum", "const", "default", "examples"]);
+const REGEX_KEYS: ReadonlySet<string> = new Set(["pattern", "patternProperties"]);
 
-/** The first regular-expression keyword anywhere in the schema, if any. */
+/** The first regular-expression key anywhere in the schema, if any. */
 function regexKeyword(value: unknown, depth = 0): string | undefined {
-  if (depth > 64) return undefined;
+  if (depth > MAX_DEPTH) return TOO_DEEP;
   if (Array.isArray(value)) {
     for (const item of value) {
       const found = regexKeyword(item, depth + 1);
@@ -63,15 +76,7 @@ function regexKeyword(value: unknown, depth = 0): string | undefined {
   }
   if (!isRecord(value)) return undefined;
   for (const [key, child] of Object.entries(value)) {
-    if (REGEX_KEYWORDS.has(key)) return key;
-    if (DATA_KEYWORDS.has(key)) continue;
-    if (SCHEMA_MAPS.has(key) && isRecord(child)) {
-      for (const subschema of Object.values(child)) {
-        const found = regexKeyword(subschema, depth + 1);
-        if (found) return found;
-      }
-      continue;
-    }
+    if (REGEX_KEYS.has(key)) return key;
     const found = regexKeyword(child, depth + 1);
     if (found) return found;
   }
@@ -84,11 +89,18 @@ export function compileResultSchema(schema: unknown): ResultSchemaCheck {
   if (byteLength(schema) > RESULT_SCHEMA_MAX_BYTES) {
     return { ok: false, error: `result_schema is larger than ${RESULT_SCHEMA_MAX_BYTES / 1024} KB.` };
   }
-  const remote = remoteReference(schema);
-  if (remote) return { ok: false, error: `result_schema may only refer inside itself; ${remote} points elsewhere.` };
+  const reference = disallowedReference(schema);
+  if (reference === TOO_DEEP) return { ok: false, error: `result_schema is nested more than ${MAX_DEPTH} levels deep.` };
+  if (reference) {
+    return { ok: false, error: `result_schema may only refer to "#", "#/$defs/<name>" or "#/definitions/<name>"; ${reference} isn't one of those.` };
+  }
   const regex = regexKeyword(schema);
+  if (regex === TOO_DEEP) return { ok: false, error: `result_schema is nested more than ${MAX_DEPTH} levels deep.` };
   if (regex) {
-    return { ok: false, error: `result_schema can't use ${regex}: Aiden doesn't check regular expressions. Use enum, const or plain types instead.` };
+    return {
+      ok: false,
+      error: `result_schema can't contain the key "${regex}" anywhere, even as a property name or inside enum, const, default or examples: Aiden doesn't check regular expressions. Use enum, const or plain types instead.`,
+    };
   }
   try {
     const ajv = new Ajv({ strict: false, allErrors: true, validateFormats: false });
@@ -126,7 +138,7 @@ export function isStorableResultSchema(value: unknown): value is Record<string, 
   return (
     isRecord(value) &&
     byteLength(value) <= RESULT_SCHEMA_MAX_BYTES &&
-    remoteReference(value) === undefined &&
+    disallowedReference(value) === undefined &&
     regexKeyword(value) === undefined
   );
 }
