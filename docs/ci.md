@@ -201,6 +201,22 @@ paint has finished. Production masking, its documented
 first-observation limitation, timeouts, retries and the flaky-test gate remain
 unchanged.
 
+macOS Electron shard 4 failed the flaky-test gate on the Bot sign-in held-tab
+case on PR #838 (run [44480107376](https://github.com/sambitcreate/aiden-agent/actions/runs/44480107376)),
+PR #875 (run [45012146127](https://github.com/sambitcreate/aiden-agent/actions/runs/45012146127/job/137213169353))
+and PR #876 (run [45013317593](https://github.com/sambitcreate/aiden-agent/actions/runs/45013317593/job/137188222625)):
+after the release the Bot got "This tab's password protection was not ready when
+it was released". The fixture answered **I'm signed in** as soon as the held tab
+reported the callback page loaded, before the browser's own privacy read of that
+page had finished. Releasing a held tab whose current page was never inspected
+is refused on purpose (a later read cannot tell what a shown password field used
+to be), so the fixture raced the product's fail-closed rule rather than finding a
+product bug. It now waits for the held tab's read of the callback page, one that
+began after the page stopped loading, before the person answers, as the
+Bot-browser fixture already does. A person looking at the page answers well after
+that read. The release rule, timeouts, retries and the flaky-test gate are
+unchanged.
+
 On 2026-11-11 the flakes that kept `main` red between 2026-11-05 and 2026-11-10
 were fixed at their causes, without adding a retry or weakening an assertion.
 One wall-clock ceiling was raised; the iOS item says which.
