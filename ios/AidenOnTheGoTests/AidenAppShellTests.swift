@@ -1135,6 +1135,38 @@ final class AidenAppShellTests: XCTestCase {
         XCTAssertEqual(chat.id, "chat_studio_1")
     }
 
+    /// A chat route's screen appears right after its connection handler
+    /// started the first load. The appearance leaves that load alone, so the
+    /// machine is asked for the chat once; a chat that couldn't load still
+    /// tries again when its screen comes back.
+    func testAChatRouteAppearingWhileItLoadsAsksTheMachineOnce() async throws {
+        let responder = AidenDemoResponder()
+        let coordinator = AidenDemoHosts.coordinator(.one, responder: responder)
+        await coordinator.start()
+        let release = responder.hold(instanceId: "studio", path: "/chats/chat_studio_1")
+        let model = AidenChatRouteModel(id: id("chat_studio_1"), cache: temporaryCache())
+        func asked() -> Int {
+            responder.requests(instanceId: "studio").filter { $0 == "GET /chats/chat_studio_1" }.count
+        }
+
+        let first = model.startLoading(coordinator: coordinator)
+        try await waitUntil("the first load asks") { asked() == 1 }
+        XCTAssertNil(model.loadIfIdle(coordinator: coordinator), "The appearance replaced the load under way")
+        release()
+        await first.value
+
+        guard case .ready = model.state else { return XCTFail("\(model.state)") }
+        XCTAssertEqual(asked(), 1)
+        XCTAssertNil(model.loadIfIdle(coordinator: coordinator), "An open chat loaded again")
+
+        let gone = AidenChatRouteModel(id: id("chat_deleted"), cache: temporaryCache())
+        await gone.startLoading(coordinator: coordinator).value
+        guard case .unavailable = gone.state else { return XCTFail("\(gone.state)") }
+        let retry = try XCTUnwrap(gone.loadIfIdle(coordinator: coordinator), "Back to a chat that couldn't load didn't try again")
+        await retry.value
+        XCTAssertEqual(responder.requests(instanceId: "studio").filter { $0 == "GET /chats/chat_deleted" }.count, 2)
+    }
+
     /// A machine whose pin refuses the connection fails the request as
     /// cancelled, though no newer load is coming. The chat says it can't open
     /// rather than spinning.

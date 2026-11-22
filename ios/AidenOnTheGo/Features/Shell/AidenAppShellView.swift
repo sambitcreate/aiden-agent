@@ -682,6 +682,10 @@ final class AidenChatRouteModel {
     @ObservationIgnored private let cache: AidenChatCache
     @ObservationIgnored private let receipt: AidenChat?
     @ObservationIgnored private var loading: Task<Void, Never>?
+    /// Counts loads started, so only the newest one clears `isLoading`.
+    @ObservationIgnored private var loadsStarted = 0
+    /// A load is under way.
+    @ObservationIgnored private(set) var isLoading = false
 
     /// `receipt` is the chat as the machine just created it, when there is one.
     init(id: AidenHostObjectID, cache: AidenChatCache = .shared, receipt: AidenChat? = nil) {
@@ -700,9 +704,27 @@ final class AidenChatRouteModel {
     @discardableResult
     func startLoading(coordinator: AidenRemoteCoordinator) -> Task<Void, Never> {
         loading?.cancel()
-        let load = Task<Void, Never> { [weak self] in await self?.load(coordinator: coordinator) }
+        loadsStarted += 1
+        let started = loadsStarted
+        isLoading = true
+        let load = Task<Void, Never> { [weak self] in
+            await self?.load(coordinator: coordinator)
+            guard let self, self.loadsStarted == started else { return }
+            self.isLoading = false
+        }
         loading = load
         return load
+    }
+
+    /// Loads again only when the chat isn't open and no load is under way: the
+    /// screen appeared. The first appearance comes right after the connection
+    /// handler started the first load, and replacing that load would ask the
+    /// machine for the chat twice. Returns the load it started, for tests.
+    @discardableResult
+    func loadIfIdle(coordinator: AidenRemoteCoordinator) -> Task<Void, Never>? {
+        if case .ready = state { return nil }
+        guard !isLoading else { return nil }
+        return startLoading(coordinator: coordinator)
     }
 
     func load(coordinator: AidenRemoteCoordinator) async {
@@ -877,8 +899,7 @@ private struct AidenChatRouteView: View {
         }
         // Back to a chat that couldn't load tries again.
         .onAppear {
-            if case .ready = model.state { return }
-            model.startLoading(coordinator: coordinator)
+            model.loadIfIdle(coordinator: coordinator)
         }
     }
 }
