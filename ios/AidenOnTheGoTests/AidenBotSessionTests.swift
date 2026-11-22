@@ -6849,6 +6849,42 @@ extension AidenBotSessionTests {
         XCTAssertEqual(shown.id, "chat_bot_scout")
     }
 
+    /// A feed ends by itself once its machine's pairing is gone, and its
+    /// conversation is released. A rebuilt screen then finds nothing running
+    /// to take over, so it opens a new conversation and feed of its own.
+    func testABotChatWhoseFeedEndedOpensAFreshOneOnTheNextBuild() async throws {
+        var live = true
+        let parts = AidenBotSessionScreenParts()
+        let ended = draftModel(drafts: temporaryDrafts(), isOwnerLive: { live })
+        let feed = parts.run(ended, for: "studio|0")
+        XCTAssertTrue(parts.runningModel(for: "studio|0") === ended)
+
+        live = false
+        await feed.value
+
+        XCTAssertNil(parts.runningModel(for: "studio|0"), "A rebuilt screen would take over a released conversation")
+        XCTAssertNil(parts.model)
+        let fresh = draftModel(drafts: temporaryDrafts())
+        let next = parts.run(fresh, for: "studio|0")
+        defer { parts.stop() }
+        XCTAssertTrue(parts.runningModel(for: "studio|0") === fresh)
+        XCTAssertNotNil(next)
+    }
+
+    /// A feed another start replaced finishes after the new one opened. It
+    /// leaves the new feed's conversation running.
+    func testAReplacedBotFeedFinishingLateLeavesTheNewFeedRunning() async throws {
+        let parts = AidenBotSessionScreenParts()
+        let first = parts.run(draftModel(drafts: temporaryDrafts()), for: "studio|0")
+        let second = draftModel(drafts: temporaryDrafts())
+        parts.run(second, for: "studio|1")
+        defer { parts.stop() }
+
+        await first.value
+
+        XCTAssertTrue(parts.runningModel(for: "studio|1") === second)
+    }
+
     /// A machine that revokes this phone while its Bot chat is open keeps its
     /// data until the chat goes, as a chat's machine does: the words being
     /// written aren't purged from under the person.

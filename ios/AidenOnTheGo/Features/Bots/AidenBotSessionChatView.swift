@@ -20,6 +20,9 @@ final class AidenBotSessionScreenParts: AidenTranscriptPlace {
     private var feed: Task<Void, Never>?
     /// Which start the feed is for: the machine and the Try again count.
     private var startKey: String?
+    /// Counts feeds opened, so a feed that ends clears only its own state,
+    /// never a newer feed's.
+    private var feedsOpened = 0
 
     init(composerSession: AidenComposerSession? = nil) {
         self.composerSession = composerSession ?? AidenComposerSession()
@@ -27,7 +30,9 @@ final class AidenBotSessionScreenParts: AidenTranscriptPlace {
     }
 
     /// The conversation a feed is still running for `key`, which a rebuilt
-    /// view takes over instead of starting another.
+    /// view takes over instead of starting another. Once the feed has ended
+    /// (its machine was forgotten, or it was stopped) there is none, and the
+    /// next start opens a new conversation.
     func runningModel(for key: String) -> AidenBotSessionModel? {
         guard key == startKey, feed != nil else { return nil }
         return model
@@ -41,15 +46,27 @@ final class AidenBotSessionScreenParts: AidenTranscriptPlace {
         stop()
         self.model = model
         startKey = key
-        let feed = Task { @MainActor in
+        feedsOpened += 1
+        let opened = feedsOpened
+        let feed = Task { @MainActor [weak self] in
             async let firstLoad: Void = model.load()
             await model.listen()
             // Leaving stops the sending at once; the read still finishing doesn't hold it up.
             model.release()
+            // The listener also returns by itself once its machine's pairing
+            // is gone: a released model is no longer a running conversation.
+            self?.ended(opened)
             _ = await firstLoad
         }
         self.feed = feed
         return feed
+    }
+
+    private func ended(_ opened: Int) {
+        guard opened == feedsOpened else { return }
+        feed = nil
+        model = nil
+        startKey = nil
     }
 
     /// Ends the feed: the screen is hidden, or another start replaces it.
