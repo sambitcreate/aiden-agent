@@ -15,6 +15,7 @@ import type { SavedChatIntent } from "../shared/chat-intent";
 import type { CompactionEngine } from "../shared/compaction";
 import type { WorkspaceFolderPresenceResult } from "../shared/workspace-folder-presence";
 import type { ModelPaceSummary } from "../shared/model-pace";
+import { KEEP_AWAKE_CHANGED_CHANNEL, parseKeepAwakeStatus, type KeepAwakeStatus } from "../shared/keep-awake";
 import { parseWindowControlsState, type WindowControlsState } from "../shared/window-chrome";
 import {
   parseUsageLimitWaits,
@@ -785,6 +786,10 @@ export const scheduleApi = {
   scripts: (workspaceId?: string) => invoke<string[]>("schedule:scripts", workspaceId),
   settings: (patch?: Partial<ScheduledTaskSettings>) =>
     invoke<ScheduledTaskSettings>("schedule:settings", patch),
+  /** What keeps this computer awake right now (Settings → Scheduled tasks → While you're away). */
+  keepAwakeStatus: async () => parseKeepAwakeStatus(await invoke<unknown>("schedule:keepAwakeStatus")),
+  onKeepAwakeChanged: (handler: (status: KeepAwakeStatus) => void) =>
+    onNotification<unknown>(KEEP_AWAKE_CHANGED_CHANNEL, (status) => handler(parseKeepAwakeStatus(status))),
 };
 
 export const profileApi = {

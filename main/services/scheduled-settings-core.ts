@@ -23,6 +23,10 @@ export function scheduledSettingsPatch(
     patch.scheduledDefaultMcpEnabled = input.defaultMcpEnabled;
   }
   if (typeof input.defaultNotify === "boolean") patch.scheduledDefaultNotify = input.defaultNotify;
+  // On is the default, so only `false` is stored; turning it back on clears it.
+  if (typeof input.keepAwakeWhileWorking === "boolean") {
+    patch.keepAwakeWhileWorking = input.keepAwakeWhileWorking ? undefined : false;
+  }
   if (input.defaultTimezone !== undefined) {
     patch.scheduledDefaultTimezone = validateTimezone(
       requiredString(input.defaultTimezone, "defaultTimezone"),

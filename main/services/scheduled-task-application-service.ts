@@ -59,6 +59,7 @@ function settingsValue(
     defaultPermission: input.scheduledDefaultPermission === "full" ? "full" : "read-only",
     defaultMcpEnabled: input.scheduledDefaultMcpEnabled === true,
     defaultNotify: input.scheduledDefaultNotify !== false,
+    keepAwakeWhileWorking: input.keepAwakeWhileWorking !== false,
     defaultTimezone: dependencies.validateTimezone(
       input.scheduledDefaultTimezone ?? dependencies.systemTimezone(),
     ),

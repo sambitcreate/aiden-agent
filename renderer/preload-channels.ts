@@ -170,6 +170,8 @@ export const NOTIFICATION_CHANNEL_VALUES = [
   "remote:peer-discovery",
   "remote:peer-pairing-progress",
   "schedule:updated",
+  /** What keeps the computer awake changed: `KeepAwakeStatus`. */
+  "schedule:keep-awake-changed",
   "settings:appearance-changed",
   "settings:new-chat-model-changed",
   "shortcut:changed",
