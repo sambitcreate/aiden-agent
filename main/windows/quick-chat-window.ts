@@ -23,6 +23,8 @@ import {
   QUICK_CHAT_STAGE_SIZES,
   computeQuickChatInitialBounds,
   computeQuickChatTransitionBounds,
+  resolveNextQuickChatMode,
+  resolveQuickChatModeOnHide,
   shouldHideQuickChatOnBlur,
 } from "./quick-chat-window-core.js";
 import { isTrustedQuickChatSender } from "./quick-chat-window-security.js";
@@ -221,6 +223,11 @@ export function notifyQuickChatOpened(source: QuickChatOpenSource): void {
   quickChatWindow.webContents.send("quickChat:opened", { source });
 }
 
+export function notifyQuickChatHidden(): void {
+  if (!quickChatWindow || quickChatWindow.isDestroyed()) return;
+  quickChatWindow.webContents.send("quickChat:hidden");
+}
+
 export function notifyQuickChatHandoffComplete(payload: QuickChatHandoffCompletePayload): void {
   if (payload.kind === "chat") {
     authorizedQuickChatIds.delete(payload.chatId);
@@ -237,10 +244,14 @@ export async function showQuickChat(source: QuickChatOpenSource = "hotkey"): Pro
   const report = captureAnalyticsReporter();
   const [{ window }] = await Promise.all([ensureQuickChat(), refreshKeepOpenOnBlurSetting()]);
   suppressQuickChatBlurHide(DEFAULT_BLUR_SUPPRESS_MS);
+  currentMode = resolveQuickChatModeOnHide(currentMode);
   if (canPositionFloatingWindow()) {
     const workArea = cursorWorkArea();
     const bounds = computeQuickChatInitialBounds(workArea, currentMode);
     window.setBounds(bounds, false);
+  } else {
+    const size = QUICK_CHAT_STAGE_SIZES[currentMode];
+    window.setSize(size.width, size.height, false);
   }
   window.show();
   window.focus();
@@ -250,8 +261,16 @@ export async function showQuickChat(source: QuickChatOpenSource = "hotkey"): Pro
 
 export function hideQuickChat(): void {
   suppressBlurUntil = 0;
-  if (quickChatWindow && !quickChatWindow.isDestroyed() && quickChatWindow.isVisible()) {
+  const previousMode = currentMode;
+  currentMode = resolveQuickChatModeOnHide(currentMode);
+  const wasVisible = Boolean(
+    quickChatWindow && !quickChatWindow.isDestroyed() && quickChatWindow.isVisible(),
+  );
+  if (wasVisible && quickChatWindow) {
     quickChatWindow.hide();
+  }
+  if (wasVisible || previousMode !== currentMode) {
+    notifyQuickChatHidden();
   }
 }
 
@@ -269,18 +288,23 @@ export async function toggleQuickChat(source: QuickChatOpenSource = "hotkey"): P
  * anchored to the bottom edge so the composer bar does not jump.
  */
 export function setQuickChatMode(mode: QuickChatWindowMode): void {
-  currentMode = mode;
+  const resolution = resolveNextQuickChatMode({
+    currentMode,
+    requestedMode: mode,
+    isVisible: isQuickChatVisible(),
+  });
+  currentMode = resolution.mode;
   void refreshKeepOpenOnBlurSetting();
-  if (!quickChatWindow || quickChatWindow.isDestroyed()) return;
+  if (!resolution.applyResize || !quickChatWindow || quickChatWindow.isDestroyed()) return;
   suppressQuickChatBlurHide(DEFAULT_BLUR_SUPPRESS_MS);
   if (!canPositionFloatingWindow()) {
-    const size = QUICK_CHAT_STAGE_SIZES[mode];
+    const size = QUICK_CHAT_STAGE_SIZES[currentMode];
     quickChatWindow.setSize(size.width, size.height, false);
     return;
   }
   const currentBounds = quickChatWindow.getBounds();
   const workArea = windowWorkArea(quickChatWindow);
-  const nextBounds = computeQuickChatTransitionBounds(currentBounds, workArea, mode);
+  const nextBounds = computeQuickChatTransitionBounds(currentBounds, workArea, currentMode);
   quickChatWindow.setBounds(nextBounds, false);
 }
 

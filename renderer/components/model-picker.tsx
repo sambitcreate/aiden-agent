@@ -82,6 +82,8 @@ interface ModelPickerProps {
   listOnly?: boolean;
   /** Optional async hook awaited before opening the popover (return false to cancel). */
   beforeOpen?: () => Promise<boolean | void>;
+  /** Incrementing signal that closes any open popover and cancels pending beforeOpen calls. */
+  closeSignal?: number;
 }
 
 const BENCHMARK_DATE_FORMATTER = new Intl.DateTimeFormat(undefined, { dateStyle: "medium" });
@@ -551,15 +553,24 @@ function ModelPickerInner({
   onOpenChange,
   listOnly = false,
   beforeOpen,
+  closeSignal,
 }: ModelPickerProps & { openSettings: (section: SettingsSection) => void }) {
   const [open, setOpen] = React.useState(false);
   const [view, setView] = React.useState<"pad" | "list">("list");
   const openRequestRef = React.useRef(0);
+  const prevCloseSignalRef = React.useRef(closeSignal);
+  const [search, setSearch] = React.useState("");
+  const [previewValue, setPreviewValue] = React.useState<string>();
   React.useEffect(() => () => {
     openRequestRef.current += 1;
   }, []);
-  const [search, setSearch] = React.useState("");
-  const [previewValue, setPreviewValue] = React.useState<string>();
+  React.useEffect(() => {
+    if (closeSignal === prevCloseSignalRef.current) return;
+    prevCloseSignalRef.current = closeSignal;
+    openRequestRef.current += 1;
+    setOpen(false);
+    setPreviewValue(undefined);
+  }, [closeSignal]);
   const contentRef = React.useRef<HTMLDivElement | null>(null);
   const searchRef = React.useRef<HTMLInputElement | null>(null);
   const showExternalDetails = useExternalModelDetails();

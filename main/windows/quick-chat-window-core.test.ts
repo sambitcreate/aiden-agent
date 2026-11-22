@@ -6,6 +6,8 @@ import {
   computeQuickChatInitialBounds,
   computeQuickChatTransitionBounds,
   createPendingLastWorkspaceTracker,
+  resolveNextQuickChatMode,
+  resolveQuickChatModeOnHide,
   shouldHideQuickChatOnBlur,
 } from "./quick-chat-window-core.js";
 import { isTrustedQuickChatSender } from "./quick-chat-window-security.js";
@@ -176,4 +178,66 @@ test("createPendingLastWorkspaceTracker surfaces in-flight workspace writes to c
   // Settling latest falls back to whatever is now persisted on disk.
   tracker.settleWrite(secondToken);
   assert.equal(tracker.overlay({ lastWorkspaceId: "ws-latest" }).lastWorkspaceId, "ws-latest");
+});
+
+test("external hide resets starter-popover back to compact starter while preserving modal mode", () => {
+  const workArea = { x: 0, y: 25, width: 1728, height: 1092 };
+
+  // Hiding while a starter picker is open drops starter-popover back to starter
+  // so reopening uses the compact 240px starter stage rather than the 600px popover stage.
+  const modeAfterPopoverHide = resolveQuickChatModeOnHide("starter-popover");
+  assert.equal(modeAfterPopoverHide, "starter");
+  const reopenedStarter = computeQuickChatInitialBounds(workArea, modeAfterPopoverHide);
+  assert.equal(reopenedStarter.height, QUICK_CHAT_STAGE_SIZES.starter.height);
+
+  assert.equal(resolveQuickChatModeOnHide("starter"), "starter");
+
+  // Hiding an active State 2 mini-modal preserves modal mode and bounds on reopen.
+  const modeAfterModalHide = resolveQuickChatModeOnHide("modal");
+  assert.equal(modeAfterModalHide, "modal");
+  const reopenedModal = computeQuickChatInitialBounds(workArea, modeAfterModalHide);
+  assert.equal(reopenedModal.height, QUICK_CHAT_STAGE_SIZES.modal.height);
+
+  // A late in-flight starter-popover IPC arriving after the window is hidden must not stick.
+  assert.deepEqual(
+    resolveNextQuickChatMode({
+      currentMode: "starter",
+      requestedMode: "starter-popover",
+      isVisible: false,
+    }),
+    { mode: "starter", applyResize: false },
+  );
+  assert.deepEqual(
+    resolveNextQuickChatMode({
+      currentMode: "modal",
+      requestedMode: "starter-popover",
+      isVisible: false,
+    }),
+    { mode: "modal", applyResize: false },
+  );
+  // Visible starter-popover requests and hidden modal/starter resets still apply.
+  assert.deepEqual(
+    resolveNextQuickChatMode({
+      currentMode: "starter",
+      requestedMode: "starter-popover",
+      isVisible: true,
+    }),
+    { mode: "starter-popover", applyResize: true },
+  );
+  assert.deepEqual(
+    resolveNextQuickChatMode({
+      currentMode: "starter",
+      requestedMode: "modal",
+      isVisible: false,
+    }),
+    { mode: "modal", applyResize: true },
+  );
+  assert.deepEqual(
+    resolveNextQuickChatMode({
+      currentMode: "modal",
+      requestedMode: "starter",
+      isVisible: false,
+    }),
+    { mode: "starter", applyResize: true },
+  );
 });

@@ -107,6 +107,35 @@ export function shouldHideQuickChatOnBlur(input: {
 }
 
 /**
+ * External hides (blur, global toggle, window close) dismiss transient starter
+ * popovers so the next invocation restores the compact starter bar instead of
+ * an oversized 600px stage, while preserving an active State 2 mini-modal.
+ */
+export function resolveQuickChatModeOnHide(
+  mode: QuickChatWindowMode,
+): QuickChatWindowMode {
+  return mode === "starter-popover" ? "starter" : mode;
+}
+
+/**
+ * Guard mode transitions so a stale in-flight `starter-popover` request cannot
+ * expand a hidden window after blur or the global shortcut already hid it.
+ */
+export function resolveNextQuickChatMode(input: {
+  currentMode: QuickChatWindowMode;
+  requestedMode: QuickChatWindowMode;
+  isVisible: boolean;
+}): { mode: QuickChatWindowMode; applyResize: boolean } {
+  if (input.requestedMode === "starter-popover" && !input.isVisible) {
+    return {
+      mode: resolveQuickChatModeOnHide(input.currentMode),
+      applyResize: false,
+    };
+  }
+  return { mode: input.requestedMode, applyResize: true };
+}
+
+/**
  * Tracks an in-flight `lastWorkspaceId` settings write so concurrent
  * `settings:get` reads from Quick Chat observe the latest active project
  * workspace immediately before durable persistence settles on disk.

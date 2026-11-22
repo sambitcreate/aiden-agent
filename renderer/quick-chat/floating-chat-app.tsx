@@ -170,12 +170,15 @@ export function FloatingChatApp() {
   const [statusMenuOpen, setStatusMenuOpen] = React.useState(false);
   const [promoting, setPromoting] = React.useState(false);
   const [expanding, setExpanding] = React.useState(false);
+  const [starterPopoverResetSeq, setStarterPopoverResetSeq] = React.useState(0);
 
   const generationRef = React.useRef<GenerationHandle | null>(null);
   const generationIntentRef = React.useRef(0);
   const stageRef = React.useRef(stage);
   stageRef.current = stage;
   const popoverOpenGenRef = React.useRef(0);
+  const starterPopoverActiveRef = React.useRef(false);
+  const popoverShrinkTimerRef = React.useRef<number | null>(null);
   const streamedTextRef = React.useRef("");
   const streamedReasoningRef = React.useRef("");
   const queuedMessagesRef = React.useRef<HandoffQueuedMessage[]>([]);
@@ -184,6 +187,28 @@ export function FloatingChatApp() {
   chatRef.current = chat;
 
   const isGenerating = streamingText !== null;
+
+  const clearPopoverShrinkTimer = React.useCallback(() => {
+    if (popoverShrinkTimerRef.current !== null) {
+      window.clearTimeout(popoverShrinkTimerRef.current);
+      popoverShrinkTimerRef.current = null;
+    }
+  }, []);
+
+  const dismissStarterPopovers = React.useCallback(
+    (options: { syncMainMode?: boolean } = {}) => {
+      popoverOpenGenRef.current += 1;
+      clearPopoverShrinkTimer();
+      if (stageRef.current !== "starter") return;
+      const hadActivePopover = starterPopoverActiveRef.current;
+      starterPopoverActiveRef.current = false;
+      setStarterPopoverResetSeq((seq) => seq + 1);
+      if (options.syncMainMode && hadActivePopover) {
+        void quickChatApi.setMode("starter").catch(() => undefined);
+      }
+    },
+    [clearPopoverShrinkTimer],
+  );
 
   const clearStreamingState = React.useCallback(() => {
     generationRef.current = null;
@@ -207,6 +232,7 @@ export function FloatingChatApp() {
       if (options.cancelActive && generationRef.current) {
         generationRef.current.cancel("user_stop");
       }
+      dismissStarterPopovers({ syncMainMode: false });
       clearStreamingState();
       setChat(null);
       setSending(false);
@@ -219,19 +245,22 @@ export function FloatingChatApp() {
       setStage("starter");
       void quickChatApi.setMode("starter").catch(() => undefined);
     },
-    [clearStreamingState],
+    [clearStreamingState, dismissStarterPopovers],
   );
 
-  // Listen for main-process `quickChat:opened` and `quickChat:handoff-complete`.
+  // Listen for main-process `quickChat:opened`, `quickChat:hidden`, and `quickChat:handoff-complete`.
   React.useEffect(() => {
     const offOpened = onNotification("quickChat:opened", () => {
-      popoverOpenGenRef.current += 1;
+      dismissStarterPopovers({ syncMainMode: true });
       void qc.invalidateQueries({ queryKey: queryKeys.workspaces });
       void qc.invalidateQueries({ queryKey: queryKeys.providers });
       void qc.invalidateQueries({ queryKey: queryKeys.settings });
       requestAnimationFrame(() => {
         textareaRef.current?.focus();
       });
+    });
+    const offHidden = onNotification("quickChat:hidden", () => {
+      dismissStarterPopovers({ syncMainMode: false });
     });
     const offHandoff = onNotification("quickChat:handoff-complete", () => {
       // Ownership was ALREADY transferred to mainWindow; reset UI cleanly
@@ -267,11 +296,12 @@ export function FloatingChatApp() {
     });
     return () => {
       offOpened();
+      offHidden();
       offHandoff();
       offMeta();
       offControls();
     };
-  }, [qc, resetToStarter]);
+  }, [dismissStarterPopovers, qc, resetToStarter]);
 
   // Global Escape handler: close popovers/dialogs first, then hide floating window.
   React.useEffect(() => {
@@ -279,7 +309,7 @@ export function FloatingChatApp() {
       if (!isEscapeKey(event) || event.defaultPrevented) return;
       if (attachDialogOpen || hasOpenLayer()) return;
       event.preventDefault();
-      popoverOpenGenRef.current += 1;
+      dismissStarterPopovers({ syncMainMode: false });
       if (stageRef.current === "starter") {
         void quickChatApi.setMode("starter").catch(() => undefined);
       }
@@ -287,7 +317,7 @@ export function FloatingChatApp() {
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [attachDialogOpen]);
+  }, [attachDialogOpen, dismissStarterPopovers]);
 
   const startTurnStream = React.useCallback(
     (
@@ -740,21 +770,15 @@ export function FloatingChatApp() {
     chat && !isGenerating && (chat.ephemeral || isNoWorkspace(activeWorkspace)),
   );
 
-  const popoverShrinkTimerRef = React.useRef<number | null>(null);
-  const clearPopoverShrinkTimer = React.useCallback(() => {
-    if (popoverShrinkTimerRef.current !== null) {
-      window.clearTimeout(popoverShrinkTimerRef.current);
-      popoverShrinkTimerRef.current = null;
-    }
-  }, []);
-
   React.useEffect(() => {
     if (stage !== "starter") {
       popoverOpenGenRef.current += 1;
+      starterPopoverActiveRef.current = false;
       clearPopoverShrinkTimer();
     }
     return () => {
       popoverOpenGenRef.current += 1;
+      starterPopoverActiveRef.current = false;
       clearPopoverShrinkTimer();
     };
   }, [stage, clearPopoverShrinkTimer]);
@@ -763,6 +787,7 @@ export function FloatingChatApp() {
   // viewport is already at full height on frame 1 (zero jump or flip).
   const prepareStarterPopoverOpen = React.useCallback(async (): Promise<boolean> => {
     const gen = ++popoverOpenGenRef.current;
+    starterPopoverActiveRef.current = true;
     clearPopoverShrinkTimer();
     await quickChatApi.setMode("starter-popover").catch(() => undefined);
     await new Promise<void>((resolve) => {
@@ -774,6 +799,7 @@ export function FloatingChatApp() {
   const handleStarterPopoverOpenChange = React.useCallback(
     (open: boolean) => {
       if (open) {
+        starterPopoverActiveRef.current = true;
         clearPopoverShrinkTimer();
         return;
       }
@@ -781,6 +807,7 @@ export function FloatingChatApp() {
       popoverShrinkTimerRef.current = window.setTimeout(() => {
         popoverShrinkTimerRef.current = null;
         if (stageRef.current === "starter") {
+          starterPopoverActiveRef.current = false;
           void quickChatApi.setMode("starter").catch(() => undefined);
         }
       }, 150);
@@ -827,6 +854,7 @@ export function FloatingChatApp() {
             onExpand={() => void handleExpand()}
             onBeforePopoverOpen={prepareStarterPopoverOpen}
             onPopoverOpenChange={handleStarterPopoverOpenChange}
+            popoverResetSeq={starterPopoverResetSeq}
             textareaRef={textareaRef}
           />
         </div>

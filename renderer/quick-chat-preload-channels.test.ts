@@ -76,8 +76,9 @@ test("createQuickChatPreloadApi enforces invoke, notification, and microphone-on
   assert.throws(() => api.ipc.invoke("terminal:create"), /not available/);
 
   api.ipc.onNotification("quickChat:opened", () => {});
+  api.ipc.onNotification("quickChat:hidden", () => {});
   assert.throws(() => api.ipc.onNotification("terminal:data", () => {}), /not available/);
-  assert.deepEqual(subscribed, ["quickChat:opened"]);
+  assert.deepEqual(subscribed, ["quickChat:opened", "quickChat:hidden"]);
 
   await api.systemPreferences.getMediaAccessStatus("microphone");
   await api.systemPreferences.askForMediaAccess("microphone");

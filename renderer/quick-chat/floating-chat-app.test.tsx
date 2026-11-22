@@ -597,3 +597,111 @@ test("auto-title chats:metadata-updated preserves Temporary state until explicit
   assert.equal(promoted.workspaceId, "ws-project");
   assert.equal(promoted.ephemeral, undefined);
 });
+
+test("external hide and reopen close already-open starter pickers and restore starter mode", async () => {
+  const { calls, qc } = mountFloatingApp();
+  try {
+    await screen.findByTestId("quick-chat-input");
+    // Wait for initial model resolution so the model picker trigger is enabled.
+    await waitFor(() => {
+      const modelTrigger = screen.getByRole("button", { name: /Selected model:/i }) as HTMLButtonElement;
+      assert.equal(modelTrigger.disabled, false);
+    });
+
+    // 1. Open the starter target dropdown until it reaches open=true in the DOM.
+    await act(async () => {
+      fireEvent.pointerDown(screen.getByTestId("quick-chat-target-chip"), {
+        button: 0,
+        ctrlKey: false,
+      });
+    });
+    await screen.findByTestId("quick-chat-target-popover");
+    assert.ok(
+      calls.some((c) => c.channel === "quickChat:setMode" && c.args[0] === "starter-popover"),
+      "opening target picker must expand starter-popover stage",
+    );
+
+    // External hide (blur / global toggle) must close the already-open target dropdown immediately.
+    await act(async () => {
+      emitBotTestNotification("quickChat:hidden");
+    });
+    await waitFor(() => {
+      assert.equal(screen.queryByTestId("quick-chat-target-popover"), null);
+    });
+
+    // Reopening keeps the target picker closed and leaves it usable on the next click.
+    await act(async () => {
+      emitBotTestNotification("quickChat:opened", { source: "hotkey" });
+    });
+    assert.equal(screen.queryByTestId("quick-chat-target-popover"), null);
+
+    // 2. Open the starter ModelPicker until its filter input is mounted (open=true).
+    const modelTrigger = screen.getByRole("button", { name: /Selected model:/i });
+    await act(async () => {
+      fireEvent.click(modelTrigger);
+    });
+    await screen.findByLabelText("Filter chat models");
+
+    // Reopening via quickChat:opened (even without a prior quickChat:hidden) must close
+    // the mounted ModelPicker AND sync main back to compact starter mode.
+    const modeCallsBeforeReopen = calls.filter((c) => c.channel === "quickChat:setMode").length;
+    await act(async () => {
+      emitBotTestNotification("quickChat:opened", { source: "hotkey" });
+    });
+    await waitFor(() => {
+      assert.equal(screen.queryByLabelText("Filter chat models"), null);
+    });
+    const modeCallsAfterReopen = calls
+      .filter((c) => c.channel === "quickChat:setMode")
+      .slice(modeCallsBeforeReopen)
+      .map((c) => c.args[0]);
+    assert.deepEqual(modeCallsAfterReopen, ["starter"]);
+
+    // Clicking the ModelPicker trigger after reopen opens cleanly again.
+    await act(async () => {
+      fireEvent.click(modelTrigger);
+    });
+    await screen.findByLabelText("Filter chat models");
+  } finally {
+    qc.clear();
+  }
+});
+
+test("external hide and reopen preserve State 2 mini-modal stage and draft without resetting to starter", async () => {
+  const { calls, qc } = mountFloatingApp();
+  try {
+    const input = await screen.findByTestId("quick-chat-input");
+    await waitFor(() => {
+      fireEvent.change(input, { target: { value: "Keep modal alive across hide" } });
+      assert.equal((screen.getByTestId("quick-chat-send-btn") as HTMLButtonElement).disabled, false);
+    });
+
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("quick-chat-send-btn"));
+    });
+    await waitFor(() => assert.ok(screen.getByTestId("quick-chat-mini-modal")));
+
+    // Type a follow-up draft inside the modal before hiding.
+    const modalInput = screen.getByTestId("quick-chat-input") as HTMLTextAreaElement;
+    fireEvent.change(modalInput, { target: { value: "Unsent follow-up" } });
+
+    const modeCountBeforeHide = calls.filter((c) => c.channel === "quickChat:setMode").length;
+
+    await act(async () => {
+      emitBotTestNotification("quickChat:hidden");
+    });
+    await act(async () => {
+      emitBotTestNotification("quickChat:opened", { source: "hotkey" });
+    });
+
+    assert.ok(screen.getByTestId("quick-chat-mini-modal"));
+    assert.equal(screen.queryByTestId("quick-chat-stage-starter"), null);
+    assert.equal((screen.getByTestId("quick-chat-input") as HTMLTextAreaElement).value, "Unsent follow-up");
+    const modeCallsAfterHide = calls
+      .filter((c) => c.channel === "quickChat:setMode")
+      .slice(modeCountBeforeHide);
+    assert.deepEqual(modeCallsAfterHide, []);
+  } finally {
+    qc.clear();
+  }
+});

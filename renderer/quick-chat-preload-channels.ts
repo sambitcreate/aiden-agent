@@ -69,6 +69,7 @@ export const QUICK_CHAT_INVOKE_CHANNELS = new Set([
 export const QUICK_CHAT_NOTIFICATION_CHANNELS = new Set([
   // Quick chat lifecycle
   "quickChat:opened",
+  "quickChat:hidden",
   "quickChat:handoff-complete",
 
   // Appearance & settings sync

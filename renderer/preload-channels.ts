@@ -160,6 +160,7 @@ export const NOTIFICATION_CHANNEL_VALUES = [
   "providers:auth:status-changed",
   "providers:harness:changed",
   "quickChat:opened",
+  "quickChat:hidden",
   "quickChat:handoff-complete",
   "remote:changed",
   "remote:peers-changed",

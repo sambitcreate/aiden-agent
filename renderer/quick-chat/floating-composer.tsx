@@ -71,6 +71,8 @@ export interface FloatingComposerProps {
   onExpand?: () => void;
   onBeforePopoverOpen?: () => Promise<boolean | void>;
   onPopoverOpenChange?: (open: boolean) => void;
+  /** Incrementing signal that closes any mounted starter popover and cancels pending opens. */
+  popoverResetSeq?: number;
   textareaRef?: React.RefObject<HTMLTextAreaElement | null>;
 }
 
@@ -114,6 +116,7 @@ export function FloatingComposer({
   onExpand,
   onBeforePopoverOpen,
   onPopoverOpenChange,
+  popoverResetSeq,
   textareaRef,
 }: FloatingComposerProps) {
   const internalTextareaRef = React.useRef<HTMLTextAreaElement | null>(null);
@@ -124,10 +127,20 @@ export function FloatingComposer({
   const targetOpenRef = React.useRef(false);
   const modelOpenRef = React.useRef(false);
   const targetOpenReqRef = React.useRef(0);
+  const prevPopoverResetSeqRef = React.useRef(popoverResetSeq);
 
   React.useEffect(() => () => {
     targetOpenReqRef.current += 1;
   }, []);
+
+  React.useEffect(() => {
+    if (popoverResetSeq === prevPopoverResetSeqRef.current) return;
+    prevPopoverResetSeqRef.current = popoverResetSeq;
+    targetOpenReqRef.current += 1;
+    targetOpenRef.current = false;
+    modelOpenRef.current = false;
+    setTargetOpen(false);
+  }, [popoverResetSeq]);
 
   const reportPopover = React.useCallback(
     (nextTarget: boolean, nextModel: boolean) => {
@@ -507,6 +520,7 @@ export function FloatingComposer({
             onOpenSettings={(section) => void quickChatApi.openSettings(section)}
             beforeOpen={onBeforePopoverOpen}
             onOpenChange={handleModelOpenChange}
+            closeSignal={popoverResetSeq}
             listOnly
           />
 
