@@ -983,9 +983,19 @@ enum AidenSplitEmptyState {
 /// they don't (open in portrait), where picking a row puts it away.
 @MainActor @Observable
 final class AidenSplitColumns {
-    var visibility = NavigationSplitViewVisibility.all
-    @ObservationIgnored fileprivate var splitFrame = CGRect.zero
-    @ObservationIgnored fileprivate var detailFrame = CGRect.zero
+    var visibility = NavigationSplitViewVisibility.all {
+        didSet { updateListCoversDetail() }
+    }
+    /// The list lies over the detail and dims it (an iPad or an open iPhone
+    /// Duo in portrait), so the detail can't be read or reached until the
+    /// list goes.
+    private(set) var listCoversDetail = false
+    @ObservationIgnored var splitFrame = CGRect.zero {
+        didSet { updateListCoversDetail() }
+    }
+    @ObservationIgnored var detailFrame = CGRect.zero {
+        didSet { updateListCoversDetail() }
+    }
     /// Whether the window was landscape the last time the split was measured.
     @ObservationIgnored private var wasLandscape: Bool?
 
@@ -1006,6 +1016,12 @@ final class AidenSplitColumns {
     func showListIfNothingChosen(besideList: Bool, hasSelection: Bool) {
         guard besideList, !hasSelection, visibility == .detailOnly else { return }
         visibility = .all
+    }
+
+    private func updateListCoversDetail() {
+        let covers = visibility != .detailOnly
+            && AidenSplitNavigationPath.listIsOverlaid(detailFrame: detailFrame, splitFrame: splitFrame)
+        if covers != listCoversDetail { listCoversDetail = covers }
     }
 
     /// Brings the list back when the device turned. The window's orientation
@@ -1044,7 +1060,6 @@ private struct AidenListTab<List: View>: View {
     /// A route's screen, and whether a conversation there keeps the tabs.
     let screen: (AidenAppRoute, Bool) -> AnyView
 
-    @Environment(\.aidenPalette) private var palette
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
 
     private var path: [AidenAppRoute] { navigation.path(of: tab) }
@@ -1103,6 +1118,13 @@ private struct AidenListTab<List: View>: View {
             columns.hideOverlaidList(besideList: true, hasSelection: selection != nil)
             columns.showListIfNothingChosen(besideList: true, hasSelection: selection != nil)
         }
+        // A screen pushed over the chosen one (Computers from the list's
+        // status item, a chat's Bot) shows in the detail, so a list laid over
+        // it goes too, as for a row.
+        .onChange(of: path) { old, new in
+            guard new.count > old.count else { return }
+            columns.hideOverlaidList(besideList: true, hasSelection: AidenSplitNavigationPath(new).selection != nil)
+        }
         // The system hides the list of a tab first shown in portrait on an
         // iPad (iOS 27.1 simulator), which left "No Bot selected" alone.
         .onChange(of: columns.visibility) {
@@ -1132,11 +1154,31 @@ private struct AidenListTab<List: View>: View {
                         // Another row is another screen, not this one updated.
                         .id(selection)
                 } else {
-                    ContentUnavailableView(empty.title, systemImage: empty.systemImage, description: Text(empty.message))
-                        .background(palette.canvas.ignoresSafeArea())
+                    AidenSplitPlaceholder(empty: empty, columns: columns)
                 }
             }
             .navigationDestination(for: AidenAppRoute.self) { screen($0, true) }
+        }
+    }
+}
+
+/// The detail with nothing chosen. Under the list's dimming (the list laid
+/// over it) the words would be out of reach and too faint to read, and the
+/// list is where to pick one, so only the canvas shows. Dropping them also
+/// keeps VoiceOver in the list: `accessibilityHidden` doesn't hide a
+/// `ContentUnavailableView`'s text (iOS 27.1 simulator).
+private struct AidenSplitPlaceholder: View {
+    let empty: AidenSplitEmptyState
+    let columns: AidenSplitColumns
+
+    @Environment(\.aidenPalette) private var palette
+
+    var body: some View {
+        ZStack {
+            palette.canvas.ignoresSafeArea()
+            if !columns.listCoversDetail {
+                ContentUnavailableView(empty.title, systemImage: empty.systemImage, description: Text(empty.message))
+            }
         }
     }
 }

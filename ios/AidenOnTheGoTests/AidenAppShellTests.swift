@@ -797,6 +797,27 @@ final class AidenAppShellTests: XCTestCase {
         XCTAssertEqual(columns.visibility, .all)
     }
 
+    /// The placeholder under a list laid over it is dimmed and out of reach, so
+    /// it leaves VoiceOver only while the list covers it. Frames measured on an
+    /// iPad mini in portrait and an iPhone Duo open in landscape.
+    func testOnlyAListLaidOverTheDetailCoversIt() {
+        let columns = AidenSplitColumns()
+        XCTAssertFalse(columns.listCoversDetail, "Not measured yet")
+
+        columns.splitFrame = CGRect(x: 0, y: 0, width: 744, height: 1133)
+        columns.detailFrame = CGRect(x: 0, y: 0, width: 744, height: 1133)
+        XCTAssertTrue(columns.listCoversDetail, "Portrait: the list lies over the detail")
+
+        columns.visibility = .detailOnly
+        XCTAssertFalse(columns.listCoversDetail, "The list put away uncovers the detail")
+        columns.visibility = .all
+        XCTAssertTrue(columns.listCoversDetail)
+
+        columns.splitFrame = CGRect(x: 0, y: 0, width: 951, height: 669)
+        columns.detailFrame = CGRect(x: 400, y: 0, width: 551, height: 669)
+        XCTAssertFalse(columns.listCoversDetail, "Tiled: the list sits beside the detail")
+    }
+
     /// The width only changes how the path is drawn, so a restored path, or one
     /// trimmed for a forgotten machine, keeps its selection.
     func testARestoredInboxPathKeepsItsSelection() {
