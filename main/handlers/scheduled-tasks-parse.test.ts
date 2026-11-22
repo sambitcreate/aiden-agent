@@ -91,3 +91,23 @@ test("a task saved with a trigger needs no cron; null drops the trigger and an i
   assert.throws(() => parseScheduledTaskInput({ name: "Status", mode: "llm", trigger: { ...trigger, everyMinutes: 1 } }), /5 to 1440/u);
   assert.throws(() => parseScheduledTaskInput({ name: "Status", mode: "llm", trigger: null }), /cron/u);
 });
+
+test("a connected-app trigger carries only its condition, interval, names and an opaque choice", () => {
+  const trigger = {
+    kind: "connector", everyMinutes: 30,
+    condition: { kind: "email", sender: "billing@", unreadOnly: true },
+    source: { providerLabel: "iMCP Mail", accountLabel: "me@example.test", resourceLabel: "Inbox" },
+    sourceChoiceId: "4C9F5A3E-1D2B-4F6A-9B8C-7D6E5F4A3B2C",
+  };
+  const parsed = parseScheduledTaskInput({ name: "Bills", mode: "llm", prompt: "File new bills.", trigger });
+  assert.deepEqual(parsed.trigger, { ...trigger, sourceChoiceId: trigger.sourceChoiceId.toLowerCase() });
+  assert.throws(() => parseScheduledTaskInput({ name: "Bills", mode: "llm", trigger: { ...trigger, everyMinutes: 5 } }), /15, 30 or 60/u);
+  assert.throws(() => parseScheduledTaskInput({ name: "Bills", mode: "llm", trigger: { ...trigger, sourceChoiceId: "inbox" } }));
+  // The private binding never comes from the renderer.
+  assert.throws(() => parseScheduledTaskInput({ name: "Bills", mode: "llm", trigger: { ...trigger, binding: { serverId: "imcp" } } }));
+  assert.throws(() => parseScheduledTaskInput({ name: "Bills", mode: "llm", trigger: { ...trigger, source: { ...trigger.source, account: "private-id" } } }));
+  assert.throws(() => parseScheduledTaskInput({
+    name: "Soon", mode: "llm",
+    trigger: { ...trigger, condition: { kind: "calendar", lookAheadMinutes: 5, timezone: "UTC" } },
+  }));
+});

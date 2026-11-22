@@ -235,7 +235,9 @@ function ScheduledTaskDetail({
             ? "Automatic runs are paused"
             : task.trigger?.kind === "webhook"
               ? "Runs when its link is called"
-              : task.trigger
+              : task.trigger?.kind === "connector"
+                ? "Runs when a connected app has news"
+                : task.trigger
                 ? "Runs when something changes"
                 : `Next run ${formatNextRun(task.nextRunAt)}`}
         </Text>

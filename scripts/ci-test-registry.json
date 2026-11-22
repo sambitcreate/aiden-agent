@@ -1478,6 +1478,7 @@
         "renderer/components/reasoning-visibility-control.test.tsx",
         "renderer/components/chat-task-chips.test.ts",
         "renderer/components/scheduled-task-editor.test.tsx",
+        "renderer/components/scheduled-task-connector-fields.test.tsx",
         "renderer/components/scheduled-task-editor-models.test.tsx",
         "renderer/components/settings/providers-settings.test.tsx",
         "renderer/components/thinking-control.test.tsx",

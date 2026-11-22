@@ -72,7 +72,7 @@ type ScheduleToolAction = "create" | "update" | "list" | "pause" | "resume" | "r
 const SCHEDULE_TRIGGER_PARAMETER = Type.Unsafe<Record<string, unknown>>({
   type: "object",
   description:
-    "Create only, instead of cron: run when something happens. Watch: {kind:\"watch\", source:{type:\"url\", url} or {type:\"script\", script}, everyMinutes 5-1440}; the task runs only when the page changes or the script prints something. Link: {kind:\"webhook\", gapMinutes 1-60, optional filters [{path, equals}], dedupePath, includeFields, signatureHeader}; the person gets the private link from the task's details and you never see it. What happened reaches the run as data.",
+    "Create only, instead of cron: run when something happens. Watch: {kind:\"watch\", source:{type:\"url\", url} or {type:\"script\", script}, everyMinutes 5-1440}; the task runs only when the page changes or the script prints something. Link: {kind:\"webhook\", gapMinutes 1-60, optional filters [{path, equals}], dedupePath, includeFields, signatureHeader}; the person gets the private link from the task's details and you never see it. A task that runs when a connected app (Mail, Calendar) has news is set up by the person in the task editor, not here. What happened reaches the run as data.",
 });
 
 interface ScheduleToolParams {
@@ -285,6 +285,10 @@ function approvalScheduleLabel(
 function toolTrigger(value: unknown, assistant: boolean): ScheduledTaskTrigger | undefined {
   if (value === undefined) return undefined;
   const trigger = parseScheduledTaskTrigger(value);
+  // A connected app's source is chosen by the person with Find sources in the task editor.
+  if (trigger.kind === "connector") {
+    throw new Error("A task that runs when a connected app has news is set up in the task editor, where you choose its source with Find sources.");
+  }
   if (assistant && trigger.kind === "watch" && trigger.source.type === "script") {
     throw new Error("Aiden Assistant automations can watch a web address or run from a link, not run a script.");
   }

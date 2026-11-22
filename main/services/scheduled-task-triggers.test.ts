@@ -7,6 +7,10 @@ import type { BotWatchCheck } from "./bot-routine-events/watch-sources.js";
 import { runScheduledScript } from "./schedule-script.js";
 import type { ScheduledRunTrigger } from "./schedule-service-core.js";
 import { createScheduledTaskTriggers } from "./scheduled-task-triggers.js";
+import { compareImcpWatch, type ConnectorWatchBaseline, type ConnectorWatchItem } from "./bot-routine-events/connector-watch-imcp.js";
+import type { BotConnectorWatchBinding } from "./bot-routine-events/connector-types.js";
+import { TaskConnectorChoiceError, connectorTriggerForSave, createTaskConnectorTriggers, type TaskConnectorTriggers } from "./scheduled-task-connector-trigger.js";
+import type { ScheduledTaskConnectorTrigger } from "../../renderer/shared/scheduled-task-trigger.js";
 import { createScheduledTaskTriggerStore, hashTaskLinkToken } from "./scheduled-task-triggers-store.js";
 import type { ScheduledRun, ScheduledTask } from "./types.js";
 
@@ -33,12 +37,12 @@ function watchTask(overrides: Partial<ScheduledTask> = {}): ScheduledTask {
   } as ScheduledTask;
 }
 
-function harness(options: { tasks?: ScheduledTask[]; checks?: BotWatchCheck[]; runResult?: ScheduledRun["result"]; stateDir?: string; fireDueTimers?: boolean } = {}) {
+function harness(options: { tasks?: ScheduledTask[]; checks?: BotWatchCheck[]; runResult?: ScheduledRun["result"]; runResults?: Array<Pick<ScheduledRun, "result" | "reason">>; stateDir?: string; fireDueTimers?: boolean; connector?: TaskConnectorTriggers } = {}) {
   let clock = 1_800_000_000_000;
   const tasks = options.tasks ?? [watchTask()];
   const checks = [...(options.checks ?? [])];
   const events: Array<{ taskId: string; event: Extract<ScheduledRunTrigger, { kind: "event" }>; runId: string }> = [];
-  const cards: Array<{ taskId: string; error: string }> = [];
+  const cards: Array<{ taskId: string; error: string; afterFailures: boolean }> = [];
   const runs = new Map<string, ScheduledRun>();
   const persistence = new MemoryPersistence<unknown>({ version: 1, tasks: {} });
   const store = createScheduledTaskTriggerStore({
@@ -55,7 +59,8 @@ function harness(options: { tasks?: ScheduledTask[]; checks?: BotWatchCheck[]; r
     isActive: () => true,
     runEvent: async (taskId, event, runId) => {
       events.push({ taskId, event, runId });
-      const run: ScheduledRun = { id: runId, taskId, startedAt: clock, finishedAt: clock, result: options.runResult ?? "success", output: "" };
+      const outcome = options.runResults?.shift() ?? { result: options.runResult ?? "success" };
+      const run: ScheduledRun = { id: runId, taskId, startedAt: clock, finishedAt: clock, ...outcome, output: "" };
       runs.set(runId, run);
       return run;
     },
@@ -68,7 +73,8 @@ function harness(options: { tasks?: ScheduledTask[]; checks?: BotWatchCheck[]; r
     execScript: (scriptPath, execOptions) => runScheduledScript(scriptPath, execOptions),
     checkStateDir: async () => path.join(options.stateDir ?? os.tmpdir(), "state"),
     linkSecret: async () => null,
-    paused: async (task, error) => { cards.push({ taskId: task.id, error }); },
+    ...(options.connector ? { connector: options.connector } : {}),
+    paused: async (task, error, afterFailures) => { cards.push({ taskId: task.id, error, afterFailures }); },
     now: () => clock,
     timeZone: () => "UTC",
     // Timers that are already due fire on the next tick when asked; later ones wait for the test.
@@ -129,7 +135,7 @@ test("three failed checks pause the task with one card, and the bookkeeping surv
   assert.equal(await value.check(), "paused");
 
   assert.equal(value.tasks[0]!.enabled, false, "the task itself is turned off");
-  assert.deepEqual(value.cards, [{ taskId: "task-1", error: "Aiden couldn't reach example.com." }]);
+  assert.deepEqual(value.cards, [{ taskId: "task-1", error: "Aiden couldn't reach example.com.", afterFailures: true }]);
   assert.equal(value.events.length, 0);
   value.advance(15 * MINUTE);
   assert.equal(await value.check(), "skipped", "a paused task isn't checked");
@@ -257,8 +263,8 @@ test("trigger runs share one cap of four at once across every task", async () =>
   emitted.stop();
 });
 
-function linkHarness(trigger: Record<string, unknown> = { kind: "webhook", gapMinutes: 10 }) {
-  const value = harness({ tasks: [watchTask({ trigger: trigger as ScheduledTask["trigger"] })], fireDueTimers: true });
+function linkHarness(trigger: Record<string, unknown> = { kind: "webhook", gapMinutes: 10 }, runResults?: Array<Pick<ScheduledRun, "result" | "reason">>) {
+  const value = harness({ tasks: [watchTask({ trigger: trigger as ScheduledTask["trigger"] })], fireDueTimers: true, ...(runResults ? { runResults } : {}) });
   const token = "L".repeat(43);
   return {
     ...value,
@@ -337,4 +343,218 @@ test("a task's link stops at once when it is rotated, and a stopped or paused ta
   await link.store.setTokenHash("task-1", hashTaskLinkToken(link.token));
   assert.equal(await link.call({ a: 3 }), 404);
   link.triggers.stop();
+});
+
+/** Moves past the gap and lets the held run go. */
+async function runHeld(value: { advance(ms: number): void; triggers: ReturnType<typeof createScheduledTaskTriggers>; events: unknown[] }, gapMs: number, expected: number) {
+  value.advance(gapMs);
+  await value.triggers.rearm();
+  for (let tick = 0; tick < 20 && value.events.length < expected; tick += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await value.triggers.idle();
+  }
+}
+
+test("a link call whose run was skipped for a busy chat runs with the calls that came after it", async () => {
+  const link = linkHarness({ kind: "webhook", gapMinutes: 10 }, [{ result: "skipped", reason: "chat_busy" }]);
+  await link.setUp();
+  assert.equal(await link.call({ n: 0 }), 202);
+  assert.equal(link.events.length, 1, "the run went ahead and its chat was busy");
+  assert.equal(await link.call({ n: 1 }), 202);
+  assert.equal(await link.call({ n: 2 }), 202);
+
+  await runHeld(link, 10 * MINUTE, 2);
+  const next = link.events[1]?.event;
+  assert.match(next?.payload ?? "", /^3 calls arrived while the task waited\.\n/u);
+  assert.match(next?.payload ?? "", /Call 1:\n\{\n {2}"n": 0\n\}/u, "the skipped call comes first");
+  assert.match(next?.payload ?? "", /Call 3:\n\{\n {2}"n": 2\n\}/u);
+  assert.notEqual(link.events[1]?.runId, link.events[0]?.runId, "it is a new run, not the recorded skip");
+  link.triggers.stop();
+});
+
+test("a skipped link batch stays bounded to 20 calls and says how many were dropped", async () => {
+  const link = linkHarness({ kind: "webhook", gapMinutes: 10 }, [{ result: "success" }, { result: "skipped", reason: "chat_budget" }]);
+  await link.setUp();
+  assert.equal(await link.call({ n: 0 }), 202);
+  for (let n = 1; n <= 15; n += 1) assert.equal(await link.call({ n }), 202);
+  await runHeld(link, 10 * MINUTE, 2);
+  assert.match(link.events[1]?.event.payload ?? "", /^15 calls arrived/u, "this batch was skipped: the chat used its hourly share");
+  for (let n = 16; n <= 25; n += 1) assert.equal(await link.call({ n }), 202);
+
+  await runHeld(link, 10 * MINUTE, 3);
+  const payload = link.events[2]?.event.payload ?? "";
+  assert.match(payload, /^20 calls arrived while the task waited\. 5 more calls were dropped\./u);
+  assert.match(payload, /Call 1:\n\{\n {2}"n": 6\n\}/u, "the oldest calls are the ones dropped");
+  assert.match(payload, /Call 20:\n\{\n {2}"n": 25\n\}/u);
+  link.triggers.stop();
+});
+
+test("a watched change whose run was skipped for a busy chat is delivered in the next allowed run", async () => {
+  const pages = ["Status: all good", "Status: degraded", "Status: down"];
+  const value = harness({ checks: pages.map((page) => ({ ok: true, bytes: new TextEncoder().encode(page) })), runResults: [{ result: "skipped", reason: "chat_busy" }], fireDueTimers: true });
+  await value.triggers.start();
+  assert.equal(await value.check(), "baseline");
+  value.advance(15 * MINUTE);
+  assert.equal(await value.check(), "changed");
+  assert.equal(value.events.length, 1);
+  assert.match(value.events[0]!.event.payload, /degraded/u);
+
+  await runHeld(value, 5 * MINUTE, 2);
+  assert.equal(value.events.length, 2, "the change runs again once the gap allows");
+  assert.match(value.events[1]!.event.payload, /degraded/u);
+
+  // A newer change waiting alongside a skipped one keeps both, newest first.
+  const second = harness({ checks: pages.map((page) => ({ ok: true, bytes: new TextEncoder().encode(page) })), runResults: [{ result: "skipped", reason: "chat_budget" }], fireDueTimers: true });
+  await second.triggers.start();
+  assert.equal(await second.check(), "baseline");
+  second.advance(15 * MINUTE);
+  assert.equal(await second.check(), "changed");
+  second.advance(MINUTE);
+  assert.equal(await second.check(), "changed");
+  await runHeld(second, 5 * MINUTE, 2);
+  const combined = second.events[1]?.event.payload ?? "";
+  assert.match(combined, /down[\s\S]*An earlier change that wasn't delivered yet:[\s\S]*degraded/u);
+  value.triggers.stop();
+  second.triggers.stop();
+});
+
+const MAIL_BINDING: BotConnectorWatchBinding = {
+  adapter: "imcp-mail-v1", serverId: "imcp", mailbox: "V10:12", account: "private-account-id",
+  connection: { sourceId: "imcp", connectionFingerprint: "a".repeat(64), toolsetFingerprint: "b".repeat(64), exactFingerprint: "c".repeat(64), tools: [] },
+  tools: [
+    { name: "mail_mailboxes_list", toolId: "one", effect: "read", inputSchemaFingerprint: "schema-one", outputSchemaFingerprint: "no-schema", effectFingerprint: "read", exactFingerprint: "exact-one" },
+    { name: "mail_messages_search", toolId: "two", effect: "read", inputSchemaFingerprint: "schema-two", outputSchemaFingerprint: "no-schema", effectFingerprint: "read", exactFingerprint: "exact-two" },
+  ],
+  labels: { providerLabel: "iMCP Mail", accountLabel: "person@example.test", resourceLabel: "Inbox" },
+};
+
+function mailTask(): ScheduledTask {
+  const trigger: ScheduledTaskConnectorTrigger = {
+    kind: "connector", everyMinutes: 15, condition: { kind: "email", unreadOnly: false },
+    source: { providerLabel: "Mail", accountLabel: "Account", resourceLabel: "Mailbox" },
+  };
+  return watchTask({ name: "New mail", trigger });
+}
+
+/** A connected app behind fake ports: what Find sources lists, what a read returns, and the connector's configuration. */
+function connectedMail() {
+  const app = {
+    server: { id: "imcp", name: "iMCP", transport: "stdio", command: "/Applications/iMCP.app/Contents/MacOS/imcp-server", presetId: "imcp", enabled: true } as import("./types.js").McpServer | undefined,
+    messages: [{ id: "m1", title: "Project kickoff", signature: "kickoff" }] as ConnectorWatchItem[],
+    discovered: 0,
+    reads: 0,
+    now: 1_800_000_000_000,
+  };
+  const connector = createTaskConnectorTriggers({
+    discover: async () => { app.discovered += 1; return { bindings: [structuredClone(MAIL_BINDING)], unavailableReasons: [] }; },
+    read: async (_taskId, _binding, _condition, baseline) => {
+      app.reads += 1;
+      const items = structuredClone(app.messages);
+      return { items, ...compareImcpWatch("email", baseline as ConnectorWatchBaseline | undefined, items, app.now) };
+    },
+    server: async () => (app.server ? structuredClone(app.server) : undefined),
+    now: () => app.now,
+  });
+  return { app, connector };
+}
+
+async function bindMail(value: ReturnType<typeof harness>, connector: TaskConnectorTriggers) {
+  const found = await connector.findSources(new AbortController().signal);
+  assert.equal(found.choices.length, 1);
+  assert.deepEqual(
+    { provider: found.choices[0]!.providerLabel, account: found.choices[0]!.accountLabel, mailbox: found.choices[0]!.resourceLabel },
+    { provider: "iMCP Mail", account: "person@example.test", mailbox: "Inbox" },
+  );
+  assert.ok(!JSON.stringify(found).includes("private-account-id"), "choices never carry the account or tool identities");
+  const trigger = value.tasks[0]!.trigger as ScheduledTaskConnectorTrigger;
+  const { trigger: saved, source } = connector.takeChoice({ ...trigger, sourceChoiceId: found.choices[0]!.id });
+  assert.equal(saved.sourceChoiceId, undefined);
+  assert.equal(saved.source.resourceLabel, "Inbox", "the saved labels are the source's own");
+  value.tasks[0] = { ...value.tasks[0]!, trigger: saved };
+  assert.equal(await value.triggers.bindConnectorSource("task-1", source), true);
+}
+
+test("a connected-app task waits for its source, records a baseline first, then runs once for new mail without ever connecting", async () => {
+  const { app, connector } = connectedMail();
+  const value = harness({ tasks: [mailTask()], connector });
+  await value.triggers.start();
+  assert.equal(await value.check(), "skipped", "nothing is checked before a source is bound");
+  assert.equal(app.reads, 0);
+
+  await bindMail(value, connector);
+  assert.equal(await value.check(), "baseline");
+  assert.equal(value.events.length, 0, "the first check only records what's there");
+
+  value.advance(15 * MINUTE);
+  app.now += 15 * MINUTE;
+  assert.equal(await value.check(), "no_change");
+  app.messages.push({ id: "m2", title: "Invoice overdue", signature: "invoice" });
+  value.advance(15 * MINUTE);
+  app.now += 15 * MINUTE;
+  assert.equal(await value.check(), "changed");
+  assert.equal(value.events.length, 1);
+  assert.equal(value.events[0]!.event.source, "watch", "connected-app runs count as watch runs");
+  assert.match(value.events[0]!.event.payload, /Invoice overdue/u);
+  assert.doesNotMatch(value.events[0]!.event.payload, /Project kickoff/u);
+
+  assert.equal(app.reads, 3);
+  assert.equal(app.discovered, 1, "only the foreground Find sources lists sources; background checks just read");
+  value.triggers.stop();
+});
+
+test("a connected app whose setup changed is refused without a read; one removed or turned off pauses the task", async () => {
+  const { app, connector } = connectedMail();
+  const value = harness({ tasks: [mailTask()], connector });
+  await value.triggers.start();
+  await bindMail(value, connector);
+  assert.equal(await value.check(), "baseline");
+
+  app.server = { ...app.server!, command: "/tmp/other-imcp" };
+  value.advance(15 * MINUTE);
+  assert.equal(await value.check(), "error");
+  assert.equal(app.reads, 1, "a drifted connector is never read");
+  assert.equal(value.tasks[0]!.enabled, true);
+  const [routine] = await value.store.list("task-1");
+  assert.match(routine!.watch?.lastError ?? "", /setup changed/u);
+
+  app.server = { ...app.server!, enabled: false };
+  value.advance(15 * MINUTE);
+  assert.equal(await value.check(), "paused");
+  assert.equal(value.tasks[0]!.enabled, false, "a revoked connector pauses the task at once");
+  assert.equal(value.cards.length, 1);
+  assert.match(value.cards[0]!.error, /removed or turned off/u);
+  assert.equal(value.cards[0]!.afterFailures, false, "one revoked check pauses the task, not three failures");
+  assert.equal(app.reads, 1);
+  value.triggers.stop();
+});
+
+test("a Find sources choice expires, and one of the wrong kind is refused", async () => {
+  const { app, connector } = connectedMail();
+  const found = await connector.findSources(new AbortController().signal);
+  const calendar: ScheduledTaskConnectorTrigger = {
+    kind: "connector", everyMinutes: 30, condition: { kind: "calendar", lookAheadMinutes: 60, timezone: "UTC" },
+    source: { providerLabel: "Calendar", accountLabel: "Account", resourceLabel: "Work" }, sourceChoiceId: found.choices[0]!.id,
+  };
+  assert.throws(() => connector.takeChoice(calendar), /Choose a calendar/u);
+  app.now += 16 * MINUTE;
+  assert.throws(() => connector.takeChoice({ ...(mailTask().trigger as ScheduledTaskConnectorTrigger), sourceChoiceId: found.choices[0]!.id }), /expired/u);
+});
+
+test("saving a connected-app task needs a fresh choice, unless an edit keeps watching the same kind", async () => {
+  const { connector } = connectedMail();
+  const draft = mailTask().trigger as ScheduledTaskConnectorTrigger;
+  assert.throws(() => connectorTriggerForSave(draft, undefined, connector.takeChoice), TaskConnectorChoiceError, "a new task needs Find sources");
+
+  const saved: ScheduledTaskConnectorTrigger = { ...draft, source: { providerLabel: "iMCP Mail", accountLabel: "person@example.test", resourceLabel: "Inbox" } };
+  const edit = connectorTriggerForSave({ ...draft, condition: { kind: "email", unreadOnly: true }, source: { providerLabel: "Typed", accountLabel: "By", resourceLabel: "Renderer" } }, saved, connector.takeChoice);
+  assert.equal(edit.source, undefined, "the bound source stays as it is");
+  assert.deepEqual(edit.trigger.source, saved.source, "names always come from the saved source, not the renderer");
+  assert.equal(edit.trigger.condition.kind, "email");
+
+  const calendar: ScheduledTaskConnectorTrigger = { ...draft, condition: { kind: "calendar", lookAheadMinutes: 60, timezone: "UTC" } };
+  assert.throws(() => connectorTriggerForSave(calendar, saved, connector.takeChoice), TaskConnectorChoiceError, "switching mail to calendar needs a new source");
+
+  const found = await connector.findSources(new AbortController().signal);
+  const fresh = connectorTriggerForSave({ ...draft, sourceChoiceId: found.choices[0]!.id }, saved, connector.takeChoice);
+  assert.equal(fresh.source?.binding.adapter, "imcp-mail-v1");
 });
