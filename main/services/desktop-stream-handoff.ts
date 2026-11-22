@@ -233,6 +233,7 @@ export interface PendingDraftHandoffTicket {
   attachments: unknown[];
   providerId?: string;
   model?: string;
+  ephemeral?: boolean;
   createdAt: number;
   onClaimed?: () => void;
 }

@@ -53,6 +53,7 @@ export interface ClaimedDraftHandoff {
   attachments: unknown[];
   providerId?: string;
   model?: string;
+  ephemeral?: boolean;
 }
 
 export interface ClaimedChatHandoff {

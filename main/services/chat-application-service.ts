@@ -557,6 +557,16 @@ export function createChatApplicationService(deps: ChatApplicationDependencies) 
         };
         assertAdmitted();
 
+        if (options.fileAction === undefined && oldWorkspace.folderPath) {
+          const liveScratch = await inspectScratchFolderFiles(oldWorkspace.folderPath);
+          assertAdmitted();
+          if (liveScratch.hasFiles) {
+            throw new Error(
+              "Files were found in this chat's temporary folder. Choose whether to copy them to the workspace or discard them before attaching.",
+            );
+          }
+        }
+
         let copiedPaths: string[] = [];
         if (options.fileAction === "copy" && oldWorkspace.folderPath) {
           const copyTx = await copyScratchFilesToWorkspaceWithRollback(

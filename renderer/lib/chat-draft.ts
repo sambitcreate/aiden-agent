@@ -86,7 +86,7 @@ export function createChatDraft(
   workspaceId: string,
   id: string = newChatUuid(() => crypto.randomUUID()),
   initialText?: string,
-  options: { gitMode?: ChatDraftGitMode } = {},
+  options: { gitMode?: ChatDraftGitMode; ephemeral?: boolean } = {},
 ): ChatDraft {
   if (drafts.has(id)) throw new Error("This draft already exists.");
   closedEmptyDrafts.delete(id);
@@ -102,7 +102,15 @@ export function createChatDraft(
   }
   const now = Date.now();
   const draft: ChatDraft = {
-    chat: { id, workspaceId, title: "New agent", messages: [], createdAt: now, updatedAt: now },
+    chat: {
+      id,
+      workspaceId,
+      title: "New agent",
+      messages: [],
+      createdAt: now,
+      updatedAt: now,
+      ...(options.ephemeral ? { ephemeral: true as const } : {}),
+    },
     sending: false,
     hasContent: Boolean(initialText?.trim()),
     ...(initialText ? { initialText } : {}),
@@ -226,6 +234,7 @@ export function findReusableChatDraft(workspaceId: string): ChatDraft | undefine
   for (const [id, draft] of drafts) {
     if (
       draft.chat.workspaceId === workspaceId &&
+      !draft.chat.ephemeral &&
       !draft.sending &&
       !draft.hasContent &&
       owners.has(id)

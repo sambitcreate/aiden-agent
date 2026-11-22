@@ -2227,6 +2227,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
                 draftId: chatId,
                 title: firstDraft.chat.title === "New agent" ? undefined : firstDraft.chat.title,
                 workspaceId: firstDraft.chat.workspaceId!,
+                ...(firstDraft.chat.ephemeral ? { ephemeral: true as const } : {}),
                 providerId,
                 model,
                 turnId: messageTurnId,
@@ -4053,24 +4054,28 @@ export function ChatPane({ chatId }: { chatId: string }) {
                   <Badge color="warning" className="shrink-0 whitespace-nowrap">
                     Temporary
                   </Badge>
-                  <Button
-                    variant="bar"
-                    size="small"
-                    disabled={promotingEphemeral}
-                    onClick={() => void promoteEphemeralChat()}
-                  >
-                    Save
-                  </Button>
-                  <Button
-                    variant="bar"
-                    size="small"
-                    disabled={Boolean(attachWorkspaceBlockedReason)}
-                    aria-label="Attach to workspace"
-                    title={attachWorkspaceBlockedReason ?? "Attach to workspace"}
-                    onClick={() => setAttachDialogOpen(true)}
-                  >
-                    Attach…
-                  </Button>
+                  {!isNewChat ? (
+                    <>
+                      <Button
+                        variant="bar"
+                        size="small"
+                        disabled={promotingEphemeral}
+                        onClick={() => void promoteEphemeralChat()}
+                      >
+                        Save
+                      </Button>
+                      <Button
+                        variant="bar"
+                        size="small"
+                        disabled={Boolean(attachWorkspaceBlockedReason)}
+                        aria-label="Attach to workspace"
+                        title={attachWorkspaceBlockedReason ?? "Attach to workspace"}
+                        onClick={() => setAttachDialogOpen(true)}
+                      >
+                        Attach…
+                      </Button>
+                    </>
+                  ) : null}
                 </div>
               ) : null}
             </div>

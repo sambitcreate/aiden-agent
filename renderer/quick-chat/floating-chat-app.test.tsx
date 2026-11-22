@@ -375,3 +375,126 @@ test("failed expandToMain unlocks Expand button and Stop clears queued follow-up
     qc.clear();
   }
 });
+
+test("State 1 draft Expand preserves ephemeral flag and Stop restores queued attachments", async () => {
+  const sampleAttachment = {
+    id: "att-1",
+    name: "notes.txt",
+    mimeType: "text/plain",
+    size: 12,
+    text: "hello notes",
+  };
+  const { calls, qc } = mountFloatingApp({
+    "attachments:pickAndRead": () => ({ attachments: [sampleAttachment], skipped: [] }),
+    "chats:get": () => null,
+  });
+  try {
+    const input = await screen.findByTestId("quick-chat-input");
+    await waitFor(() => {
+      fireEvent.change(input, { target: { value: "Keep me temporary" } });
+      assert.equal((screen.getByTestId("quick-chat-send-btn") as HTMLButtonElement).disabled, false);
+    });
+
+    // Expanding State 1 Temporary draft must preserve ephemeral: true.
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("quick-chat-expand-starter"));
+    });
+    const draftExpand = calls.find((c) => c.channel === "quickChat:expandToMain");
+    assert.ok(draftExpand);
+    assert.equal((draftExpand.args[0] as { kind: string }).kind, "draft");
+    assert.equal((draftExpand.args[0] as { ephemeral?: boolean }).ephemeral, true);
+
+    // Complete handoff so we're back in State 1, then start a stream and queue an attachment.
+    await act(async () => {
+      emitBotTestNotification("quickChat:handoff-complete", { kind: "draft" });
+    });
+    await waitFor(() => {
+      fireEvent.change(screen.getByTestId("quick-chat-input"), { target: { value: "Start stream" } });
+      assert.equal((screen.getByTestId("quick-chat-send-btn") as HTMLButtonElement).disabled, false);
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("quick-chat-send-btn"));
+    });
+    await waitFor(() => assert.ok(screen.getByTestId("quick-chat-mini-modal")));
+
+    // Attach a file and queue a follow-up while generating.
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("quick-chat-attach-btn"));
+    });
+    await waitFor(() => {
+      assert.ok((document.body.textContent ?? "").includes("notes.txt"));
+    });
+    fireEvent.change(screen.getByTestId("quick-chat-input"), { target: { value: "Follow-up with file" } });
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("quick-chat-send-btn"));
+    });
+    await waitFor(() => {
+      assert.ok((document.body.textContent ?? "").includes("1 follow-up queued"));
+    });
+
+    // Stop must restore both the queued text AND its attachment chip.
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("quick-chat-stop-btn"));
+    });
+    assert.equal(
+      (screen.getByTestId("quick-chat-input") as HTMLTextAreaElement).value,
+      "Follow-up with file",
+    );
+    assert.ok(
+      (document.body.textContent ?? "").includes("notes.txt"),
+      "Stop must restore queued attachments into the composer",
+    );
+  } finally {
+    qc.clear();
+  }
+});
+
+test("lastWorkspace default persistence selects persisted localStorage workspace ID", async () => {
+  const prevStorage = globalThis.localStorage;
+  const store = new Map<string, string>([["aiden-agent.workspaceId", "ws-second"]]);
+  Object.defineProperty(globalThis, "localStorage", {
+    configurable: true,
+    value: {
+      getItem: (key: string) => store.get(key) ?? null,
+      setItem: (key: string, value: string) => {
+        store.set(key, value);
+      },
+      removeItem: (key: string) => {
+        store.delete(key);
+      },
+      clear: () => store.clear(),
+    },
+  });
+  const { qc } = mountFloatingApp({
+    "settings:get": () => ({
+      lastProviderId: "lmstudio",
+      lastModel: "local-model",
+      quickChatDefaultPersistence: "lastWorkspace",
+    }),
+    "workspaces:list": () => [
+      ...WORKSPACES,
+      {
+        id: "ws-second",
+        name: "Second Project",
+        folderPath: "/Users/dev/second-project",
+        permission: "ask",
+        createdAt: 2,
+        updatedAt: 30,
+      },
+    ],
+  });
+  try {
+    await waitFor(() => {
+      assert.ok(
+        (screen.getByTestId("quick-chat-target-chip").textContent ?? "").includes("Second Project"),
+      );
+    });
+  } finally {
+    qc.clear();
+    if (prevStorage) {
+      Object.defineProperty(globalThis, "localStorage", { configurable: true, value: prevStorage });
+    } else {
+      delete (globalThis as { localStorage?: unknown }).localStorage;
+    }
+  }
+});

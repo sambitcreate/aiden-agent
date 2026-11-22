@@ -32,6 +32,7 @@ export type QuickChatExpandRequest =
       attachments: unknown[];
       providerId?: string;
       model?: string;
+      ephemeral?: boolean;
     }
   | {
       kind: "chat";
@@ -130,6 +131,10 @@ export function parseQuickChatExpandRequest(value: unknown): QuickChatExpandRequ
       typeof value.model === "string" && value.model.trim().length > 0 && value.model.length <= 256
         ? value.model.trim()
         : undefined;
+    if (value.ephemeral !== undefined && typeof value.ephemeral !== "boolean") {
+      throw new Error("Invalid quick chat draft ephemeral flag.");
+    }
+    const ephemeral = value.ephemeral === true ? true : undefined;
     return {
       kind: "draft",
       workspaceId,
@@ -137,6 +142,7 @@ export function parseQuickChatExpandRequest(value: unknown): QuickChatExpandRequ
       attachments,
       ...(providerId ? { providerId } : {}),
       ...(model ? { model } : {}),
+      ...(ephemeral ? { ephemeral } : {}),
     };
   }
   if (value.kind === "chat") {

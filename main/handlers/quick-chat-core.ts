@@ -34,6 +34,7 @@ export interface QuickChatHandlerCoreDependencies {
   windowPort: QuickChatWindowControlPort;
   tickets: DesktopHandoffTicketStore;
   resolveDocumentId: (event: IpcMainInvokeEvent) => string;
+  assertChatAccess?: (event: IpcMainInvokeEvent, chatId: string) => void;
   inspectChatExpansionState?: (chatId: string) => Promise<{ duringStream: boolean; wasEphemeral: boolean }>;
   beginExpansionReport?: () => (info: { duringStream: boolean; wasEphemeral: boolean }) => void;
   onWarning?: (message: string, error: unknown) => void;
@@ -108,6 +109,9 @@ export function registerQuickChatHandlersCore(deps: QuickChatHandlerCoreDependen
         return { ok: false };
       }
       const parsed = parseQuickChatExpandRequest(input);
+      if (parsed.kind === "chat") {
+        deps.assertChatAccess?.(event, parsed.chatId);
+      }
       // Capture analytics consent before async metadata lookups and main-window navigation.
       const reportExpanded = deps.beginExpansionReport?.();
       // Keep the floating window alive until the main window claims the ticket
@@ -120,10 +124,11 @@ export function registerQuickChatHandlersCore(deps: QuickChatHandlerCoreDependen
           attachments: parsed.attachments,
           ...(parsed.providerId ? { providerId: parsed.providerId } : {}),
           ...(parsed.model ? { model: parsed.model } : {}),
+          ...(parsed.ephemeral ? { ephemeral: true } : {}),
           onClaimed: () => {
             win.notifyQuickChatHandoffComplete({ kind: "draft" });
             win.hideQuickChat();
-            reportExpanded?.({ duringStream: false, wasEphemeral: false });
+            reportExpanded?.({ duringStream: false, wasEphemeral: parsed.ephemeral === true });
           },
         });
         try {

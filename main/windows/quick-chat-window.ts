@@ -39,6 +39,29 @@ let destroying = false;
 let currentMode: QuickChatWindowMode = "starter";
 let suppressBlurUntil = 0;
 let cachedKeepOpenOnBlur = true;
+/** Chat IDs explicitly created within this Quick Chat session (never unrelated chats). */
+const authorizedQuickChatIds = new Set<string>();
+
+export function authorizeQuickChatConversation(chatId: string): void {
+  if (chatId) authorizedQuickChatIds.add(chatId);
+}
+
+export function revokeQuickChatConversation(chatId: string): void {
+  authorizedQuickChatIds.delete(chatId);
+}
+
+export function isQuickChatAuthorizedConversation(chatId: string): boolean {
+  return authorizedQuickChatIds.has(chatId);
+}
+
+export function assertQuickChatConversationAccess(
+  event: IpcMainInvokeEvent,
+  chatId: string,
+): void {
+  if (isCurrentQuickChatEvent(event) && !authorizedQuickChatIds.has(chatId)) {
+    throw new Error("Unauthorized Quick Chat conversation access.");
+  }
+}
 
 function cursorWorkArea() {
   const display = screen.getDisplayNearestPoint(screen.getCursorScreenPoint());
@@ -96,7 +119,14 @@ async function createQuickChatWindow(): Promise<BrowserWindow> {
   // Never count as an app window: must not keep Linux/Windows running after main closes.
   markAuxiliaryWindow(window);
   // Only receive notifications explicitly allowed for Quick Chat.
-  registerBroadcastReceiver(window, QUICK_CHAT_NOTIFICATION_CHANNELS);
+  registerBroadcastReceiver(window, QUICK_CHAT_NOTIFICATION_CHANNELS, (channel, payload) => {
+    if (channel !== "chats:metadata-updated") return true;
+    const chatId =
+      typeof payload === "object" && payload !== null && "chatId" in payload
+        ? (payload as { chatId?: unknown }).chatId
+        : undefined;
+    return typeof chatId === "string" && authorizedQuickChatIds.has(chatId);
+  });
 
   // CRITICAL on macOS: `skipTransformProcessType: true` prevents Electron from
   // hiding Aiden's Dock icon when showing over full-screen Spaces.
@@ -130,6 +160,7 @@ async function createQuickChatWindow(): Promise<BrowserWindow> {
     if (quickChatWindow === window) quickChatWindow = null;
     if (loadingWindow === window) loadingWindow = null;
     currentMode = "starter";
+    authorizedQuickChatIds.clear();
   });
 
   const loaded = new Promise<BrowserWindow>((resolve, reject) => {
@@ -191,6 +222,9 @@ export function notifyQuickChatOpened(source: QuickChatOpenSource): void {
 }
 
 export function notifyQuickChatHandoffComplete(payload: QuickChatHandoffCompletePayload): void {
+  if (payload.kind === "chat") {
+    authorizedQuickChatIds.delete(payload.chatId);
+  }
   if (!quickChatWindow || quickChatWindow.isDestroyed()) return;
   quickChatWindow.webContents.send("quickChat:handoff-complete", payload);
 }
@@ -253,6 +287,7 @@ export function setQuickChatMode(mode: QuickChatWindowMode): void {
 export function destroyQuickChat(): void {
   destroying = true;
   suppressBlurUntil = 0;
+  authorizedQuickChatIds.clear();
   try {
     if (quickChatWindow && !quickChatWindow.isDestroyed()) quickChatWindow.destroy();
     quickChatWindow = null;

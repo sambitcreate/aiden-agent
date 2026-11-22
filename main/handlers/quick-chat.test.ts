@@ -167,3 +167,85 @@ test("quickChat:expandToMain captures analytics reporter before async lookup and
   claimed?.onClaimed?.();
   assert.deepEqual(reported, [{ duringStream: true, wasEphemeral: true }]);
 });
+
+test("quickChat:expandToMain enforces assertChatAccess before creating a ticket or suppressing blur", async () => {
+  const handlers = new Map<string, (event: unknown, ...args: unknown[]) => unknown>();
+  const tickets = new DesktopHandoffTicketStore();
+  let blurSuppressed = 0;
+  let navigated = 0;
+
+  registerQuickChatHandlersCore({
+    isMainWindow: () => false,
+    navigateMainWindow: async () => {
+      navigated += 1;
+    },
+    handle: (ch, fn) => handlers.set(ch, fn as (event: unknown, ...args: unknown[]) => unknown),
+    windowPort: {
+      isCurrentQuickChatEvent: () => true,
+      toggleQuickChat: async () => true,
+      hideQuickChat: () => undefined,
+      setQuickChatMode: () => undefined,
+      suppressQuickChatBlurHide: () => {
+        blurSuppressed += 1;
+      },
+      resetQuickChatBlurSuppression: () => undefined,
+      notifyQuickChatHandoffComplete: () => undefined,
+    },
+    tickets,
+    resolveDocumentId: () => "doc-qc",
+    assertChatAccess: (_event, chatId) => {
+      if (chatId !== "chat-owned") {
+        throw new Error("Unauthorized Quick Chat conversation access.");
+      }
+    },
+  });
+
+  const expand = handlers.get("quickChat:expandToMain")!;
+  await assert.rejects(
+    () => Promise.resolve(expand({}, { kind: "chat", chatId: "chat-other" })),
+    /Unauthorized Quick Chat conversation access/u,
+  );
+  assert.equal(blurSuppressed, 0);
+  assert.equal(navigated, 0);
+  assert.equal(tickets.claimChat("chat-other"), null);
+});
+
+test("quickChat:expandToMain preserves ephemeral flag on draft handoff and analytics", async () => {
+  const handlers = new Map<string, (event: unknown, ...args: unknown[]) => unknown>();
+  const tickets = new DesktopHandoffTicketStore();
+  const navPaths: string[] = [];
+  const reported: Array<{ duringStream: boolean; wasEphemeral: boolean }> = [];
+
+  registerQuickChatHandlersCore({
+    isMainWindow: () => false,
+    navigateMainWindow: async (navPath) => {
+      navPaths.push(navPath);
+    },
+    handle: (ch, fn) => handlers.set(ch, fn as (event: unknown, ...args: unknown[]) => unknown),
+    windowPort: {
+      isCurrentQuickChatEvent: () => true,
+      toggleQuickChat: async () => true,
+      hideQuickChat: () => undefined,
+      setQuickChatMode: () => undefined,
+      suppressQuickChatBlurHide: () => undefined,
+      resetQuickChatBlurSuppression: () => undefined,
+      notifyQuickChatHandoffComplete: () => undefined,
+    },
+    tickets,
+    resolveDocumentId: () => "doc-qc",
+    beginExpansionReport: () => (info) => reported.push(info),
+  });
+
+  const expand = handlers.get("quickChat:expandToMain")!;
+  const result = await expand(
+    {},
+    { kind: "draft", workspaceId: "default", text: "Quick note", attachments: [], ephemeral: true },
+  );
+  assert.deepEqual(result, { ok: true });
+  const ticketId = navPaths[0]!.replace("/quick-chat-handoff/draft/", "");
+  const claimed = tickets.claimDraft(ticketId);
+  assert.equal(claimed?.ephemeral, true);
+  assert.equal(claimed?.text, "Quick note");
+  claimed?.onClaimed?.();
+  assert.deepEqual(reported, [{ duringStream: false, wasEphemeral: true }]);
+});

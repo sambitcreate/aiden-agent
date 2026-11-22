@@ -8,6 +8,7 @@ import { desktopHandoffTickets } from "../services/desktop-stream-handoff-main.j
 import { llmClient } from "../services/llm-client.js";
 import { rendererDocumentOwner } from "../services/renderer-document-owner.js";
 import {
+  assertQuickChatConversationAccess,
   hideQuickChat,
   isCurrentQuickChatEvent,
   notifyQuickChatHandoffComplete,
@@ -41,6 +42,7 @@ export function registerQuickChatHandlers(deps: QuickChatHandlerDependencies): v
     resolveDocumentId: (event) =>
       rendererDocumentOwner(event, () => new Error("Untrusted quick chat expand sender."))
         .documentId,
+    assertChatAccess: assertQuickChatConversationAccess,
     inspectChatExpansionState: async (chatId) => ({
       duringStream: llmClient.isChatBusy(chatId),
       wasEphemeral: (await chatStore.get(chatId))?.ephemeral === true,

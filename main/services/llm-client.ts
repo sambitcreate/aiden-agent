@@ -2912,8 +2912,8 @@ export const llmClient = {
             initialization.skillInvocation = skillInvocation;
             initialization.releaseSkillReservation = releaseSkillReservation;
             initializing.set(streamId, initialization);
-            desktopLiveAccumulator.begin(streamId, params.chatId, params.workspaceId ?? "default");
             chatActivityRegistry.begin(streamId, params.chatId);
+            desktopLiveAccumulator.begin(streamId, params.chatId, params.workspaceId ?? "default");
             recordRunBegin(hostRunRegistry, streamId, params.chatId, owner);
             pendingAttentionRecorder.runBegan(params.chatId);
             chatProgressEvents.begin(params.chatId, streamId);

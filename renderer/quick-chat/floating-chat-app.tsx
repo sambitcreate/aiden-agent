@@ -34,6 +34,7 @@ import {
 import { queryKeys } from "../lib/queries";
 import { newChatUuid } from "../shared/chat-identity";
 import { isNoWorkspace, noWorkspaceHome, workspaceChoices } from "../lib/no-workspace";
+import { readLastWorkspaceId } from "../lib/workspace-context";
 import { resolveVisibleModelSelection } from "../lib/use-model-selection";
 import { isEscapeKey } from "../lib/dismiss-key";
 import { hasOpenLayer } from "../lib/layer-stack";
@@ -104,7 +105,11 @@ export function FloatingChatApp() {
   React.useEffect(() => {
     if (targetModeTouchedRef.current || !settings) return;
     setTargetMode(
-      resolveDefaultTargetMode(settings.quickChatDefaultPersistence, workspaces, undefined),
+      resolveDefaultTargetMode(
+        settings.quickChatDefaultPersistence,
+        workspaces,
+        readLastWorkspaceId(),
+      ),
     );
   }, [settings, workspaces]);
 
@@ -560,6 +565,13 @@ export function FloatingChatApp() {
       if (!text.trim() && firstQueued?.content) {
         setText(firstQueued.content);
       }
+      if (
+        attachments.length === 0 &&
+        Array.isArray(firstQueued?.attachments) &&
+        firstQueued.attachments.length > 0
+      ) {
+        setAttachments(firstQueued.attachments as Attachment[]);
+      }
     }
     generationRef.current?.cancel("user_stop");
   };
@@ -569,15 +581,25 @@ export function FloatingChatApp() {
     setExpanding(true);
     try {
       if (stage === "starter" || !chat) {
-        const fallbackWorkspaceId =
-          targetMode.kind === "workspace"
-            ? targetMode.workspaceId
-            : noWorkspaceHome(workspaces)?.id ?? workspaceChoices(workspaces)[0]?.id ?? "default";
+        let fallbackWorkspaceId: string;
+        if (targetMode.kind === "workspace") {
+          fallbackWorkspaceId = targetMode.workspaceId;
+        } else {
+          const existingHome = noWorkspaceHome(workspaces);
+          if (existingHome) {
+            fallbackWorkspaceId = existingHome.id;
+          } else {
+            const scratch = await workspacesApi.createNoWorkspace();
+            fallbackWorkspaceId = scratch.id;
+            void qc.invalidateQueries({ queryKey: queryKeys.workspaces });
+          }
+        }
         const result = await quickChatApi.expandToMain({
           kind: "draft",
           workspaceId: fallbackWorkspaceId,
           text,
           attachments,
+          ...(targetMode.kind === "ephemeral" ? { ephemeral: true } : {}),
           ...(selectedModel.providerId && selectedModel.model
             ? { providerId: selectedModel.providerId, model: selectedModel.model }
             : {}),

@@ -268,7 +268,7 @@ function RootContent() {
     async (
       workspaceId: string,
       initialText?: string,
-      options: { gitMode?: ChatDraftGitMode; attachments?: readonly Attachment[] } = {},
+      options: { gitMode?: ChatDraftGitMode; attachments?: readonly Attachment[]; ephemeral?: boolean } = {},
     ): Promise<string | undefined> => {
       if (appendReconciliationRequired) {
         toast.error("Reload Aiden before creating another chat.");
@@ -279,16 +279,17 @@ function RootContent() {
         return undefined;
       }
       const hasAttachments = Boolean(options.attachments && options.attachments.length > 0);
-      const reusable = initialText || hasAttachments ? undefined : findReusableChatDraft(workspaceId);
+      const reusable =
+        initialText || hasAttachments || options.ephemeral
+          ? undefined
+          : findReusableChatDraft(workspaceId);
       if (workspaceId !== activeId && environmentPanel.agentBusy) environmentPanel.cancelAgent?.();
       const chat =
         reusable?.chat ??
-        createChatDraft(
-          workspaceId,
-          undefined,
-          initialText,
-          options.gitMode ? { gitMode: options.gitMode } : {},
-        ).chat;
+        createChatDraft(workspaceId, undefined, initialText, {
+          ...(options.gitMode ? { gitMode: options.gitMode } : {}),
+          ...(options.ephemeral ? { ephemeral: true } : {}),
+        }).chat;
       if (reusable && options.gitMode) setChatDraftGitMode(reusable.chat.id, options.gitMode);
       if (hasAttachments && options.attachments) {
         seedComposerAttachments(chat.id, [...options.attachments]);
@@ -661,6 +662,7 @@ function RootContent() {
             const targetWorkspaceId = claimed.workspaceId || activeId || "default";
             const createdDraftId = await openNewChatIn(targetWorkspaceId, claimed.text, {
               attachments: claimed.attachments as Attachment[],
+              ...(claimed.ephemeral ? { ephemeral: true } : {}),
             });
             if (!createdDraftId) {
               acknowledge("blocked");

@@ -13,6 +13,14 @@ import type { Workspace } from "./types";
 
 const STORAGE_KEY = "aiden-agent.workspaceId";
 
+export function readLastWorkspaceId(): string | undefined {
+  try {
+    return typeof localStorage !== "undefined" ? localStorage.getItem(STORAGE_KEY) ?? undefined : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 interface WorkspaceContextValue {
   workspaces: Workspace[];
   active: Workspace | undefined;

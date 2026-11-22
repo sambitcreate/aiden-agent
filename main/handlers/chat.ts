@@ -22,6 +22,7 @@ import {
   type ClaimedDesktopHandoff,
 } from "../../renderer/shared/chat-handoff.js";
 import { desktopHandoffTickets } from "../services/desktop-stream-handoff-main.js";
+import { assertQuickChatConversationAccess } from "../windows/quick-chat-window.js";
 
 // Re-exported so the IPC contract surface stays queryable from one module.
 export { parseParams };
@@ -45,6 +46,7 @@ export function registerChatGenerationHandlers(): void {
         throw new Error("Invalid chat message turn identifier.");
       }
       const parsed = parseParams(params);
+      assertQuickChatConversationAccess(event, parsed.chatId);
       let accepted = false;
       try {
         const started = await startGenerationAndMaybeTitle(
@@ -225,6 +227,7 @@ export function registerChatGenerationHandlers(): void {
           attachments: draft.attachments,
           ...(draft.providerId ? { providerId: draft.providerId } : {}),
           ...(draft.model ? { model: draft.model } : {}),
+          ...(draft.ephemeral ? { ephemeral: true } : {}),
         };
       }
       if (parsed.chatId) {

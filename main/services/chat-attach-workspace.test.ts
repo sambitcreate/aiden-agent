@@ -286,6 +286,16 @@ test("ephemeral chat stays hidden from listRegular, promotes cleanly, and attach
     assert.equal(inspected.hasFiles, true);
     assert.deepEqual(inspected.entries.map((e) => e.relativePath), ["plan.md"]);
 
+    // Omitting fileAction when scratch files exist must reject without mutating chat or trashing scratch files.
+    await assert.rejects(
+      () => service.attachToWorkspace(chatId, "ws-project", { owner }),
+      /Choose whether to copy them/u,
+    );
+    assert.equal((await chatStore.get(chatId))?.workspaceId, "nows-1");
+    assert.equal((await chatStore.get(chatId))?.ephemeral, true);
+    assert.equal(await fs.readFile(path.join(scratchDir, "plan.md"), "utf8"), "# Plan");
+    assert.deepEqual(releasedWorkspaces, []);
+
     // Attach in-place with owner + fileAction: "copy" (verifies zero self-deadlock on cancelAndSettle).
     const attached = await service.attachToWorkspace(chatId, "ws-project", { fileAction: "copy", owner });
     assert.equal(attached.chat.workspaceId, "ws-project");

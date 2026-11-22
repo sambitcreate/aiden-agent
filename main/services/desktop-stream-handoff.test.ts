@@ -194,6 +194,16 @@ test("DesktopHandoffTicketStore enforces one-shot claims, TTL expiry, and queued
   assert.equal(store.claimChat("chat-42"), null);
 
   // Expiry check (exact boundary TTL expires).
+  const ephemeralDraft = store.putDraft({
+    workspaceId: "default",
+    text: "temporary draft",
+    attachments: [],
+    ephemeral: true,
+  });
+  const claimedEphemeralDraft = store.claimDraft(ephemeralDraft);
+  assert.equal(claimedEphemeralDraft?.ephemeral, true);
+  assert.equal(claimedEphemeralDraft?.text, "temporary draft");
+
   const expiring = store.putDraft({ workspaceId: "ws-1", text: "stale", attachments: [] });
   clock += 5_000;
   assert.equal(store.claimDraft(expiring), null);
