@@ -22,6 +22,7 @@
   - Machine chips show a green dot when the computer is online, and fade at the edge instead of being cut off.
   - The Inbox offline notice can be closed until the app is opened again.
   - The Running accessory's ring stays in place when the tab bar shrinks.
+  - On an iPad in portrait, Bots first opens on its list instead of an empty "No Bot selected" page.
 
 - **2026-11-20 — Shell-first launch and inline pairing.** A fresh install now opens directly into the tab shell instead of a full-screen onboarding gate, with an empty state and **Add Computer** action across tabs when no computer is paired. Adding the first computer asks whether Aiden is already installed on a computer, offers open-and-share download links for Mac (`chatwithaiden.com`), Linux, and Server (`aiden serve`), and then opens a single **Add Computer** sheet with an inline frosted-cutout QR scanner (auto-pairing on scan, with inline fallback when the camera is unavailable), conditional nearby Wi-Fi discovery, and unified Address and Code entry. Adding additional computers skips straight to **Add Computer**, and the legacy onboarding artwork files are removed. No Remote wire or revision change.
 

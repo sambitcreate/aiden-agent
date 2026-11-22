@@ -1097,6 +1097,14 @@ private struct AidenListTab<List: View>: View {
             columns.hideOverlaidList(besideList: true, hasSelection: selection != nil)
             columns.showListIfNothingChosen(besideList: true, hasSelection: selection != nil)
         }
+        // The system hides the list of a tab first shown in portrait on an
+        // iPad (iOS 27.1 simulator), which left "No Bot selected" alone.
+        .onChange(of: columns.visibility) {
+            columns.showListIfNothingChosen(
+                besideList: true,
+                hasSelection: AidenSplitNavigationPath(path).selection != nil
+            )
+        }
     }
 
     /// The detail column: the selected route at the root of its own stack, and

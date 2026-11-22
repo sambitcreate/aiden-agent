@@ -73,12 +73,13 @@ Done (2026-11-22, not yet reviewed):
 
 ### Phase 4: Fold, reading width and polish
 
-Done in this PR: the fold keeps each chat's draft, attachments, voice and reading place, Search, and each list's scroll place (Phase 2 and the review rounds); docs (`ios/DEVELOPMENT.md`, `ios/PROJECT_SPEC.md`, `ios/AGENTS.md`, `ios/CHANGELOG.md`, this plan). Remaining work, not in this PR:
+Done in this PR: the fold keeps each chat's draft, attachments, voice and reading place, Search, and each list's scroll place (Phase 2 and the review rounds); docs (`ios/DEVELOPMENT.md`, `ios/PROJECT_SPEC.md`, `ios/AGENTS.md`, `ios/CHANGELOG.md`, this plan). Merge check (2026-11-22): on an iPad mini in portrait the system hid the Bots list the first time the tab showed, leaving "No Bot selected" alone; the split now brings the list back whenever its visibility changes with nothing chosen. Remaining work, not in this PR:
 
 - Check every pose (closed, half open, open, rotated). Keep the transcript, composer, docks and banners clear of the fold and readable: a bounded reading width in the detail column, and `ReservedRegion` only for custom overlays that a system container doesn't move.
 - Sheets on the inner display use the system's placement.
 - Simulator screenshots of each pose (half open and rotated not yet checked).
 - A swipe left open on a list row stays open across navigation (UIKit `swipeActions` behavior); close it when its row leaves the screen.
+- `testEveryMainScreenPassesTheAudit` on an iPad mini in portrait: the list overlays a dimmed detail, so the placeholder under the scrim fails contrast, and the audit reports Dynamic Type and clipping findings in the overlaid list and on Computers. The test was written for the tab strip with no split; it needs the portrait overlay handled (audit tiled, or allow the scrim) and the list findings triaged.
 - Main's shell-first onboarding (Add Computer empty states and the inline pairing sheet) checked at regular width on the open iPhone Duo, where the empty state sits in the list column.
 
 ## Process
