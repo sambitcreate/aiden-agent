@@ -9,7 +9,8 @@
 // of at most 500 characters. One timer serves the soonest. Records live in the
 // follow-through state file so a promise outlives a quit; nothing fires twice:
 // a check-back is saved as `claimed` before its notice is posted, and one
-// still `claimed` at the next launch becomes a record-only "Missed" card.
+// still `claimed` at the next launch becomes a record-only "Check-back
+// interrupted (due …)" card.
 // Found up to 2 hours late (the computer slept, Aiden was closed), it still
 // wakes the chat and says it is late; older ones leave a record-only card.
 

@@ -39,3 +39,11 @@ test("a round refuses to set a check-back, while the person's own turn may", () 
   const personTurn = chatTurnArgsToolRefusal(chatTurnAudienceFor({}, params));
   assert.equal(personTurn(CHECK_BACK_TOOL_NAME, { action: "set" }), undefined);
 });
+
+test("a round after a phone's message runs for this computer, not the phone: window tools aren't refused as a paired device's", () => {
+  const afterPhone = { ...context, visualAudience: "remote" as const };
+  const { params, options } = goalRoundStartRequest("chat-1", afterPhone, "stream-1");
+  assert.equal(options.visualAudience, undefined);
+  const turn = chatTurnAudienceFor(options, params);
+  assert.equal(turn.remoteAudience, false, "the round's audience is this computer");
+});

@@ -44,6 +44,7 @@ function setup() {
       return "started";
     },
     startNoticeRound: async () => ({ kind: "busy" }),
+    waitForIdle: () => new Promise<void>(() => {}),
     runCheck: async (goal) => {
       checks.push(goal.check!.command);
       return { kind: "finished", passed: true, summary: `\`${goal.check!.command}\` passed`, details: "" };

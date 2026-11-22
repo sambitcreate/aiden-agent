@@ -128,6 +128,19 @@ export function doneWhenKeepAwakeInput(checks: () => readonly KeepAwakeCheck[]):
   };
 }
 
+/**
+ * A keep-going goal the loop is checking between rounds: its review (a model
+ * call that can take minutes), its command check, or its next round starting.
+ * Without it the computer could idle-sleep after one round's grace.
+ */
+export function goalLookKeepAwakeInput(looking: () => readonly string[]): KeepAwakeInput {
+  return {
+    read() {
+      return { reasons: looking().map((chatId) => ({ kind: "goal" as const, id: chatId })) };
+    },
+  };
+}
+
 /** The parts of a pending check-back or Bot wake-up this input reads. */
 export interface KeepAwakeDue {
   id: string;

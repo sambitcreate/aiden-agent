@@ -72,6 +72,11 @@ export interface ChatTurnAudience {
    * may not set promises for later (check-backs) or start work that outlives it.
    */
   goalRound?: boolean;
+  /**
+   * A lead chat sent this turn into a chat it started: the lead's agent, not
+   * the person, began it, so it is Aiden-started like a goal round.
+   */
+  leadChatTurn?: boolean;
 }
 
 /** What a generation's execution options say about who the turn serves. */
@@ -82,6 +87,7 @@ export interface ChatTurnAudienceOptions {
   windowless?: boolean;
   answersPerson?: boolean;
   goalRound?: boolean;
+  leadChatTurn?: boolean;
 }
 
 /** What the turn's own parameters say about inline visuals. */
@@ -117,6 +123,7 @@ export function chatTurnAudienceFor(options: ChatTurnAudienceOptions, params: Ch
       ? { answersPerson: true }
       : {}),
     ...(options.goalRound === true ? { goalRound: true } : {}),
+    ...(options.leadChatTurn === true ? { leadChatTurn: true } : {}),
   };
 }
 
@@ -309,10 +316,16 @@ export function argIs(key: string, ...values: readonly unknown[]): (args: Record
 
 /**
  * A turn nobody started on purpose: an unattended follow-up, a windowless
- * turn that isn't answering the person's own queued message, or a goal round.
+ * turn that isn't answering the person's own queued message, a goal round, or
+ * a lead chat's turn in a chat it started.
  */
 export function aidenStartedTurn(turn: ChatTurnAudience): boolean {
-  return turn.unattended || (turn.windowless === true && turn.answersPerson !== true) || turn.goalRound === true;
+  return (
+    turn.unattended ||
+    (turn.windowless === true && turn.answersPerson !== true) ||
+    turn.goalRound === true ||
+    turn.leadChatTurn === true
+  );
 }
 
 /** Subagent roles that only read: everything but the implementer. */

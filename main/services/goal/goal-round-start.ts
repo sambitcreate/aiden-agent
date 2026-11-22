@@ -4,7 +4,9 @@
  * (`owedTurnStartRequest`): the last run's provider, model, folder, thinking
  * and withheld tools, no access of its own, so the chat's approval mode
  * applies exactly as for the person's own turns. `goalRound` marks it so the
- * turn refuses what a round may not do (setting check-backs).
+ * turn refuses what a round may not do (setting check-backs). A paired
+ * device's audience is not carried over: a round runs on this computer, in
+ * its window or with none, even when the person's last message came from a phone.
  */
 import type { OwedTurnContext, OwedTurnStartRequest } from "../chat-owed-turn-start.js";
 
@@ -25,7 +27,6 @@ export function goalRoundStartRequest(chatId: string, context: OwedTurnContext, 
       allowSubagents: true,
       goalRound: true,
       excludeToolNames: new Set(context.excludeToolNames),
-      ...(context.visualAudience !== undefined ? { visualAudience: context.visualAudience } : {}),
     },
   };
 }
