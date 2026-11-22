@@ -773,6 +773,7 @@ struct AidenAppearanceRoot<Content: View>: View {
 struct AidenAppearanceSettingsView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.aidenPalette) private var palette
+    @Environment(\.colorScheme) private var colorScheme
     @Bindable var appearance: AidenAppearanceStore
     @AppStorage(AidenRemoteLiveActivityManager.responseExcerptPreferenceKey)
     private var showsLiveActivityResponseExcerpts = false
@@ -828,8 +829,14 @@ struct AidenAppearanceSettingsView: View {
         }
     }
 
+    /// Every theme has a light and a dark look and the mode picks which one the app uses,
+    /// so each tile shows the look this theme would have right now (System follows the phone).
+    private var tileScheme: ColorScheme {
+        appearance.mode.colorScheme ?? colorScheme
+    }
+
     private func themeTile(for preset: AidenThemePresetID) -> some View {
-        let preview = AidenThemeCatalog.palette(preset: preset, scheme: preset.tileSignatureScheme)
+        let preview = AidenThemeCatalog.palette(preset: preset, scheme: tileScheme)
         let selected = preset == selectedPreset
         return Button {
             appearance.selectTheme(preset)
@@ -876,16 +883,6 @@ struct AidenAppearanceSettingsView: View {
         .buttonStyle(.plain)
         .accessibilityLabel(preset.title)
         .accessibilityAddTraits(selected ? [.isButton, .isSelected] : [.isButton])
-    }
-}
-
-private extension AidenThemePresetID {
-    /// The scheme that visually defines each preset on its tile.
-    var tileSignatureScheme: ColorScheme {
-        switch self {
-        case .graphite, .dusk, .midnight: .dark
-        default: .light
-        }
     }
 }
 

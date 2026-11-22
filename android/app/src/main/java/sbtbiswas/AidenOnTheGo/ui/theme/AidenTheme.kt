@@ -65,11 +65,7 @@ fun AidenTheme(
     config: AidenAppearanceConfig = AidenAppearanceConfig(),
     content: @Composable () -> Unit
 ) {
-    val isDark = when (config.mode) {
-        AidenAppearanceMode.SYSTEM -> isSystemInDarkTheme()
-        AidenAppearanceMode.LIGHT -> false
-        AidenAppearanceMode.DARK -> true
-    }
+    val isDark = aidenUsesDarkColors(config.mode)
 
     val basePalette = aidenPresetPalette(config.preset, isDark)
     val palette = remember(basePalette, config.contrast) { basePalette.applyingContrast(config.contrast) }
@@ -107,6 +103,14 @@ fun AidenTheme(
             CompositionLocalProvider(LocalContentColor provides palette.foreground, content = content)
         }
     }
+}
+
+/** Whether [mode] shows the dark look right now: System follows the device. */
+@Composable
+fun aidenUsesDarkColors(mode: AidenAppearanceMode): Boolean = when (mode) {
+    AidenAppearanceMode.SYSTEM -> isSystemInDarkTheme()
+    AidenAppearanceMode.LIGHT -> false
+    AidenAppearanceMode.DARK -> true
 }
 
 /**
