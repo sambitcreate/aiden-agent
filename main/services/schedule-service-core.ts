@@ -43,7 +43,7 @@ interface RunningTask {
 type DispatchOptions = { runId?: string; expectedUpdatedAt?: number } & (
   /** `missedAt`: the overdue fire a startup catch-up claims, captured when it was queued. */
   | { automatic: true; isCurrent: () => boolean; missedAt?: number; recovery?: boolean }
-  | { automatic: false; catchUp?: Extract<ScheduledRunTrigger, { kind: "catch_up" }> }
+  | { automatic: false; catchUp?: Extract<ScheduledRunTrigger, { kind: "catch_up" }>; event?: Extract<ScheduledRunTrigger, { kind: "event" }> }
 );
 
 type DispatchResult =
@@ -355,11 +355,17 @@ export function createScheduleServiceCore(
             latest?.id === options.catchUp.missedRunId &&
             latest.result === "skipped" && latest.reason === "bot_paused";
         }
+        const event = options.automatic ? undefined : options.event;
         if (
-          (options.automatic || options.catchUp !== undefined) &&
+          (options.automatic || options.catchUp !== undefined || event !== undefined) &&
           (!started || !globallyEnabled || (!task.enabled && !spentOnceCatchUp && !options.automatic))
         ) {
           throw new Error("This scheduled task is paused.");
+        }
+        // A trigger's event only runs the task that still has a trigger; a
+        // task turned back into a scheduled one ignores what was queued.
+        if (event !== undefined && (!task.trigger || task.botId !== undefined)) {
+          throw new Error("This scheduled task no longer has a trigger.");
         }
         if (options.automatic && !options.recovery && !task.enabled)
           throw new Error("This scheduled task is paused.");
@@ -400,7 +406,7 @@ export function createScheduleServiceCore(
           ? { kind: "retry", requestId: pendingFire.requestId, ...pendingFire.retry, ...(pendingFire.routineTiming ? { routineTiming: pendingFire.routineTiming } : {}), ...(observeOnly && { observeOnly: true }) }
           : options.automatic
           ? { kind: "automatic", fireTime: occurrenceTime!, ...(task.botId ? { routineTiming: pendingFire?.routineTiming ?? { scheduledFor: occurrenceTime!, timezone: claimed.timezone } } : {}) }
-          : options.catchUp ?? { kind: "manual", key: options.runId ?? `${Date.now()}-${++manualRunSequence}` };
+          : options.catchUp ?? options.event ?? { kind: "manual", key: options.runId ?? `${Date.now()}-${++manualRunSequence}` };
         const executionTask = pendingFire
           ? { ...claimed, prompt: pendingFire.prompt, name: pendingFire.name, ...(pendingFire.routineTiming?.timezone ? { timezone: pendingFire.routineTiming.timezone } : {}) }
           : claimed;
@@ -457,6 +463,8 @@ export function createScheduleServiceCore(
     ) {
       return;
     }
+    // A trigger task has no cron: its watch or link starts it (runEvent).
+    if (task.trigger) return;
     const job = new Cron(
       task.cron,
       {
@@ -925,6 +933,30 @@ export function createScheduleServiceCore(
       return operation.finally(() =>
         options.signal?.removeEventListener("abort", cancel),
       );
+    },
+
+    /**
+     * Run a trigger task for one event (a watch saw a change). Honours the
+     * same gates as an automatic run: the scheduler is started, scheduled
+     * tasks are on, and the task is enabled and still has a trigger;
+     * otherwise it throws "paused". A run already going is waited out first,
+     * so events for one task run one at a time.
+     */
+    async runEvent(
+      id: string,
+      event: Extract<ScheduledRunTrigger, { kind: "event" }>,
+      runId: string,
+    ): Promise<ScheduledRun> {
+      for (;;) {
+        const result = dispatch(id, { automatic: false, event, runId });
+        if (result.kind === "dispatched") return result.completion;
+        await runningTasks.get(id)?.promise.catch(() => undefined);
+      }
+    },
+
+    /** True while scheduled tasks are started and switched on. */
+    isActive(): boolean {
+      return started && globallyEnabled;
     },
 
     /**

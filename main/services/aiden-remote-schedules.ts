@@ -293,6 +293,16 @@ export class AidenRemoteScheduleService {
     };
   }
 
+  /**
+   * Until phones learn about triggers (E6), a task that runs when something
+   * happens doesn't exist for them: it has no cron to show or send back.
+   */
+  private async phoneTask(id: string): Promise<ScheduledTask> {
+    const task = await this.options.application.get(id);
+    if (task.trigger) throw new Error(`Scheduled task ${id} not found.`);
+    return task;
+  }
+
   private async mutation(deviceId: string, value: unknown): Promise<ScheduledTaskInput> {
     const record = ownRecord(value);
     if (!record || !exactKeys(record,
@@ -358,11 +368,11 @@ export class AidenRemoteScheduleService {
   }
 
   async list(deviceId: string) {
-    return { tasks: (await this.options.application.list()).map((task) => this.project(deviceId, task)) };
+    return { tasks: (await this.options.application.list()).filter((task) => !task.trigger).map((task) => this.project(deviceId, task)) };
   }
 
   async get(deviceId: string, taskId: string) {
-    try { return this.project(deviceId, await this.options.application.get(safeTaskId(taskId))); }
+    try { return this.project(deviceId, await this.phoneTask(safeTaskId(taskId))); }
     catch (error) { mapError(error); }
   }
 
@@ -380,18 +390,24 @@ export class AidenRemoteScheduleService {
   async update(deviceId: string, taskId: string, revision: string, value: unknown) {
     const id = safeTaskId(taskId);
     const input = { ...(await this.mutation(deviceId, value)), id };
-    try { return this.project(deviceId, await this.options.application.save(input, { expectedRevision: revision })); }
-    catch (error) { mapError(error); }
+    try {
+      await this.phoneTask(id);
+      return this.project(deviceId, await this.options.application.save(input, { expectedRevision: revision }));
+    } catch (error) { mapError(error); }
   }
 
   async remove(taskId: string, revision: string): Promise<void> {
-    try { await this.options.application.remove(safeTaskId(taskId), revision); }
+    try {
+      await this.phoneTask(safeTaskId(taskId));
+      await this.options.application.remove(safeTaskId(taskId), revision);
+    }
     catch (error) { mapError(error); }
   }
 
   async pause(deviceId: string, taskId: string, revision: string, key: string) {
     const id = safeTaskId(taskId);
     try {
+      await this.phoneTask(id);
       return await this.executeIdempotent(
         { deviceId, route: `POST /scheduled-tasks/${id}/pause`, resourceId: id, key },
         { revision },
@@ -403,6 +419,7 @@ export class AidenRemoteScheduleService {
   async resume(deviceId: string, taskId: string, revision: string, key: string) {
     const id = safeTaskId(taskId);
     try {
+      await this.phoneTask(id);
       return await this.executeIdempotent(
         { deviceId, route: `POST /scheduled-tasks/${id}/resume`, resourceId: id, key },
         { revision },
@@ -415,6 +432,7 @@ export class AidenRemoteScheduleService {
     const id = safeTaskId(taskId);
     const runId = `run_${randomBytes(24).toString("base64url")}`;
     try {
+      await this.phoneTask(id);
       return await this.executeIdempotent(
         { deviceId, route: `POST /scheduled-tasks/${id}/run`, resourceId: id, key },
         { revision },
@@ -428,6 +446,7 @@ export class AidenRemoteScheduleService {
 
   async runs(taskId: string) {
     try {
+      await this.phoneTask(safeTaskId(taskId));
       const stored = await this.options.application.runs(safeTaskId(taskId));
       // A corrupt row (non-finite/out-of-range timestamps, finished before it
       // started) must not poison the whole endpoint.
@@ -455,6 +474,7 @@ export class AidenRemoteScheduleService {
     const tasks = await this.options.application.list();
     const notifications: Array<ReturnType<typeof mapRun> & { taskName: string; notify: boolean }> = [];
     for (const task of tasks) {
+      if (task.trigger) continue;
       let taskName: string;
       let runs: ScheduledRun[];
       try {

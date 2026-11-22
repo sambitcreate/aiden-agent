@@ -6,7 +6,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 
 import { scheduledTaskProviderGuardrail } from "../lib/scheduled-task-view.js";
 import type { Provider } from "../lib/types.js";
-import { ScheduledTaskProviderWarning, scheduledTaskMcpServerChoices } from "./scheduled-task-editor.js";
+import { ScheduledTaskProviderWarning, WatchTriggerFields, scheduledTaskMcpServerChoices } from "./scheduled-task-editor.js";
 import { ChatApprovalCard } from "./chat-approval-card";
 import type { ScheduledTaskApprovalDetails } from "../shared/assistant";
 
@@ -156,4 +156,15 @@ test("a selected server switched off for the model is shown as unavailable with 
       ["drive", false, "Off for the model in Settings → Connectors"],
     ],
   );
+});
+
+test("the watch fields flag a bad address and say a script watch needs Full permission", () => {
+  const render = (props: Parameters<typeof WatchTriggerFields>[0]) => renderToStaticMarkup(createElement(WatchTriggerFields, props));
+  const bad = render({ trigger: { kind: "watch", source: { type: "url", url: "http://example.com" }, everyMinutes: 15 }, scripts: [], fullAccess: false, onChange: () => undefined });
+  assert.ok(bad.includes('role="alert"') && bad.includes("Use an https address"));
+  const good = render({ trigger: { kind: "watch", source: { type: "url", url: "https://example.com" }, everyMinutes: 15 }, scripts: [], fullAccess: false, onChange: () => undefined });
+  assert.ok(!good.includes('role="alert"'));
+  const script = render({ trigger: { kind: "watch", source: { type: "script", script: "check.sh" }, everyMinutes: 45 }, scripts: ["check.sh"], fullAccess: false, onChange: () => undefined });
+  assert.ok(script.includes("needs Full permission"));
+  assert.ok(render({ trigger: { kind: "watch", source: { type: "script", script: "check.sh" }, everyMinutes: 45 }, scripts: ["check.sh"], fullAccess: true, onChange: () => undefined }).includes("AIDEN_CHECK_STATE"));
 });

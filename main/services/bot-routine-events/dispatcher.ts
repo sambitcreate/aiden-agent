@@ -55,6 +55,15 @@ export interface EventRoutineDispatcherDependencies<R extends EventRoutine> {
   authorizeRun?(routine: R): Promise<{ signal: AbortSignal; release(): void } | { error: string }>;
   /** A paused owner (a paused Bot) runs nothing and accepts no events. */
   isPaused(ownerKey: string): Promise<boolean>;
+  /** The routine's gap and daily cap; a Bot's routines use the Bot limits (5 minutes, 24 a day). */
+  limits?(routine: R): { minGapMs: number; perDay: number };
+  /** The bound on one event's payload, in characters. Defaults to the Bot bound (4,000). */
+  payloadChars?: number;
+  /**
+   * The payload to hold when an event arrives inside the gap and another is
+   * already held. Without it the newest wins; a link trigger batches them.
+   */
+  mergeHeld?(held: BotEventReceipt, incoming: { eventId: string; payload: string }): string;
   now(): number;
   timeZone(): string;
   setTimer(fn: () => void, ms: number): { cancel(): void };
@@ -77,6 +86,8 @@ export function createBotRoutineEventDispatcher(dependencies: BotRoutineEventDis
 
 export function createEventRoutineDispatcher<R extends EventRoutine>(dependencies: EventRoutineDispatcherDependencies<R>) {
   const ownerOf = (routine: R) => dependencies.ownerKey(routine);
+  const limitsOf = (routine: R) => dependencies.limits?.(routine) ?? BOT_ROUTINE_EVENT_LIMITS;
+  const payloadChars = dependencies.payloadChars ?? BOT_ROUTINE_EVENT_LIMITS.payloadChars;
   const heldTimers = new Map<string, { cancel(): void }>();
   /** Runs started and admissions still deciding, not yet settled in the store, for `idle()`. */
   const pending = new Set<Promise<void>>();
@@ -229,13 +240,13 @@ export function createEventRoutineDispatcher<R extends EventRoutine>(dependencie
       if (!routine.held || !routine.enabled) return { result: undefined };
       // Still inside the 5-minute gap (a newer event ran since this was held),
       // or every receipt slot is busy: wait for whichever ends later.
-      const gapEnds = (routine.lastRunAt ?? -Infinity) + BOT_ROUTINE_EVENT_LIMITS.minGapMs;
+      const gapEnds = (routine.lastRunAt ?? -Infinity) + limitsOf(routine).minGapMs;
       if (full(routine) || now < gapEnds) {
-        retryAt = Math.max(gapEnds, full(routine) ? now + BOT_ROUTINE_EVENT_LIMITS.minGapMs : now);
+        retryAt = Math.max(gapEnds, full(routine) ? now + limitsOf(routine).minGapMs : now);
         return { result: undefined };
       }
       const count = routine.day?.key === today ? routine.day.count : 0;
-      if (count >= BOT_ROUTINE_EVENT_LIMITS.perDay) return { next: { ...routine, held: undefined }, result: undefined };
+      if (count >= limitsOf(routine).perDay) return { next: { ...routine, held: undefined }, result: undefined };
       const event = routine.held;
       const execution = await prepare(routine);
       return {
@@ -252,8 +263,8 @@ export function createEventRoutineDispatcher<R extends EventRoutine>(dependencie
     const now = dependencies.now();
     const today = dayKey(now, dependencies.timeZone());
     // Cut by length first, so a huge payload is never spread into an array.
-    const payload = [...event.payload.slice(0, BOT_ROUTINE_EVENT_LIMITS.payloadChars * 2)]
-      .slice(0, BOT_ROUTINE_EVENT_LIMITS.payloadChars).join("");
+    const payload = [...event.payload.slice(0, payloadChars * 2)]
+      .slice(0, payloadChars).join("");
     type Decision =
       | { kind: "disabled" | "duplicate" | "daily_limit" }
       | { kind: "held"; at: number }
@@ -270,15 +281,19 @@ export function createEventRoutineDispatcher<R extends EventRoutine>(dependencie
       }
       const seenEventIds = [...routine.seenEventIds, event.eventId].slice(-BOT_ROUTINE_EVENT_LIMITS.seenIds);
       const count = routine.day?.key === today ? routine.day.count : 0;
-      if (count >= BOT_ROUTINE_EVENT_LIMITS.perDay) {
+      if (count >= limitsOf(routine).perDay) {
         return { next: { ...routine, seenEventIds }, result: { kind: "daily_limit" as const } };
       }
-      const gapEnds = (routine.lastRunAt ?? -Infinity) + BOT_ROUTINE_EVENT_LIMITS.minGapMs;
-      // Too soon, or every receipt slot is busy: hold it (the newest wins).
-      const nextAllowed = full(routine) ? Math.max(gapEnds, now + BOT_ROUTINE_EVENT_LIMITS.minGapMs) : gapEnds;
+      const gapEnds = (routine.lastRunAt ?? -Infinity) + limitsOf(routine).minGapMs;
+      // Too soon, or every receipt slot is busy: hold it (the newest wins,
+      // unless the owner merges what is already held).
+      const nextAllowed = full(routine) ? Math.max(gapEnds, now + limitsOf(routine).minGapMs) : gapEnds;
       if (now < nextAllowed) {
+        const heldPayload = routine.held && dependencies.mergeHeld
+          ? [...dependencies.mergeHeld(routine.held, { eventId: event.eventId, payload })].slice(0, payloadChars).join("")
+          : payload;
         return {
-          next: { ...routine, seenEventIds, held: { eventId: event.eventId, payload, at: now,
+          next: { ...routine, seenEventIds, held: { eventId: event.eventId, payload: heldPayload, at: now,
             ...(event.watchRevision !== undefined ? { watchRevision: event.watchRevision } : {}) } },
           result: { kind: "held" as const, at: nextAllowed },
         };
@@ -321,7 +336,7 @@ export function createEventRoutineDispatcher<R extends EventRoutine>(dependencie
             track(claimAndStart(routine, event, armedFor));
           }
           if (!routine.held) continue;
-          armHeld(ownerOf(routine), routine.id, (routine.lastRunAt ?? 0) + BOT_ROUTINE_EVENT_LIMITS.minGapMs, armedFor);
+          armHeld(ownerOf(routine), routine.id, (routine.lastRunAt ?? 0) + limitsOf(routine).minGapMs, armedFor);
         }
       })());
     },

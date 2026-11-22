@@ -43,6 +43,7 @@ import {
   type TaskRunOutcome,
 } from "./schedule-chat-delivery.js";
 import { formatScheduledTaskCadence } from "../../renderer/shared/scheduled-task-presentation.js";
+import { formatScheduledTaskTriggerLabel } from "../../renderer/shared/scheduled-task-trigger.js";
 
 function createBackgroundOwner(streamId: string): {
   owner: ChatGenerationOwner;
@@ -324,8 +325,10 @@ export function createScheduleExecution(store: ScheduleStore = scheduleStore) {
     task: ScheduledTask,
     chatId: string,
     signal: AbortSignal,
+    eventText?: string,
   ): Promise<TaskRunExecution> {
-    const prompt = task.prompt?.trim() ?? "";
+    // A trigger's event follows the person's instructions, already fenced as data.
+    const prompt = [task.prompt?.trim() ?? "", ...(eventText ? [eventText] : [])].join("\n\n");
     const prepared = await prepareLlm(task, chatId, prompt);
     if (signal.aborted) {
       prepared.background.destroy();
@@ -479,8 +482,8 @@ export function createScheduleExecution(store: ScheduleStore = scheduleStore) {
       }
     },
     ensureOwnChat: ensureChat,
-    runInOwnChat: (task, chatId, signal) =>
-      task.mode === "script" ? executeScript(task, chatId, signal) : executeLlm(task, chatId, signal),
+    runInOwnChat: (task, chatId, signal, eventText) =>
+      task.mode === "script" ? executeScript(task, chatId, signal) : executeLlm(task, chatId, signal, eventText),
     reportOwnChatFailure: async (task, chatId, message) => {
       if (task.mode === "llm") await llmClient.waitForChatIdle(chatId);
       await appendSerializedChatMessage(chatId, message, scheduledTurnId(task.id, "error"));
@@ -490,7 +493,7 @@ export function createScheduleExecution(store: ScheduleStore = scheduleStore) {
     waitForIdle: (chatId, timeoutMs) => llmClient.waitForChatIdleWithin(chatId, timeoutMs),
     postNotice: (post) => noticeDelivery.post(post),
     inChatOrder: (chatId, work) => noticeDelivery.inOrder(chatId, work),
-    cadence: (task) => formatScheduledTaskCadence(task.cron, task.timezone),
+    cadence: (task) => task.trigger ? formatScheduledTaskTriggerLabel(task.trigger) : formatScheduledTaskCadence(task.cron, task.timezone),
     now: Date.now,
     onError: (error) => logger.warn("schedule", "A scheduled task's chat delivery step failed.", error),
   });
@@ -510,6 +513,13 @@ export function createScheduleExecution(store: ScheduleStore = scheduleStore) {
     claimRoutineExecution: (task: ScheduledTask, trigger: ScheduledRunTrigger) =>
       import("./scheduled-bot-routines-main.js").then(({ claimBotRoutineExecution }) => claimBotRoutineExecution(task, trigger)),
     deliverTaskRunToChat,
+    /** A record-only card where the task's runs land (a trigger or the task was paused). */
+    recordInLandingChat: (task: ScheduledTask, card: Parameters<typeof chatDelivery.recordInLandingChat>[1]) =>
+      chatDelivery.recordInLandingChat(task, card),
+    /** The project folder a task's script runs in, after the same checks as a run. */
+    async taskWorkspaceFolder(task: ScheduledTask): Promise<string | undefined> {
+      return (await assertTaskWorkspaceReady(task))?.folderPath;
+    },
     async run(
       task: ScheduledTask,
       runId?: string,
@@ -539,7 +549,9 @@ export function createScheduleExecution(store: ScheduleStore = scheduleStore) {
       let error: string | undefined;
       try {
         assertAssistantScheduleExecutionBoundary(task);
-        const outcome = await deliverTaskRunToChat(task, { trigger, signal: controller.signal });
+        // A trigger's event reaches the model only as fenced data after the prompt.
+        const eventText = trigger?.kind === "event" ? trigger.payload : undefined;
+        const outcome = await deliverTaskRunToChat(task, { trigger, ...(eventText ? { eventText } : {}), signal: controller.signal });
         chatId = outcome.chatId;
         output = outcome.output;
         if (outcome.kind === "skipped") {

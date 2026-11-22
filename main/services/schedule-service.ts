@@ -12,7 +12,13 @@ export function createScheduleService(
     store,
     execution,
     globallyEnabled: async () => (await configStore.getSettings()).scheduledTasksEnabled !== false,
-    broadcast: (payload) => ipcMain.broadcast("schedule:updated", payload),
+    broadcast: (payload) => {
+      ipcMain.broadcast("schedule:updated", payload);
+      // A saved, removed or switched task may start or stop a trigger's watch.
+      void import("./scheduled-task-triggers-main.js")
+        .then(({ rearmScheduledTaskTriggers }) => rearmScheduledTaskTriggers())
+        .catch((error: unknown) => logger.warn("schedule", "Could not re-arm task triggers.", error));
+    },
     warn: (message) => logger.warn("schedule", message),
     error: (message, cause) => logger.error("schedule", message, cause),
   });

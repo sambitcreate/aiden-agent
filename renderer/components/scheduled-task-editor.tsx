@@ -43,6 +43,12 @@ import type {
 import { isAcpHarnessProvider } from "../shared/acp-harness";
 import { mcpServerOffersTools } from "../shared/mcp-exposure";
 import { isNoWorkspace } from "../lib/no-workspace";
+import {
+  SCHEDULED_TASK_WATCH_INTERVALS,
+  formatScheduledTaskTriggerLabel,
+  type ScheduledTaskTrigger,
+} from "../shared/scheduled-task-trigger";
+import { formatBotWatchInterval, parseBotWatchUrl } from "../shared/bot-routine-trigger";
 
 function upcomingLabel(timestamp: number): string {
   return new Intl.DateTimeFormat(undefined, {
@@ -120,6 +126,89 @@ export function ScheduledTaskProviderWarning({ message }: { message: string | un
     >
       <span>{message}</span>
     </div>
+  );
+}
+
+/** What a "When something changes" task checks, and how often. */
+export function WatchTriggerFields({ trigger, scripts, fullAccess, onChange }: {
+  trigger: ScheduledTaskTrigger;
+  scripts: string[];
+  fullAccess: boolean;
+  onChange: (trigger: ScheduledTaskTrigger) => void;
+}) {
+  const source = trigger.source;
+  const urlInvalid = source.type === "url" && source.url.trim() !== "" && parseBotWatchUrl(source.url) === undefined;
+  const intervals = [...new Set<number>([...SCHEDULED_TASK_WATCH_INTERVALS, trigger.everyMinutes])].sort((a, b) => a - b);
+  return (
+    <>
+      <Field label="Check" description="An address is fetched without your cookies or sign-ins. A script runs from the project's .aiden/scripts folder; it reports something by printing it.">
+        <Select
+          value={source.type}
+          onValueChange={(type) => onChange({
+            ...trigger,
+            source: type === "script" ? { type: "script", script: scripts[0] ?? "" } : { type: "url", url: "" },
+          })}
+        >
+          <SelectTrigger aria-label="What the task checks">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="url">A web address</SelectItem>
+            <SelectItem value="script">A project script</SelectItem>
+          </SelectContent>
+        </Select>
+      </Field>
+      {source.type === "url" ? (
+        <Field label="Address" description="https, or http only on this computer.">
+          <Input
+            value={source.url}
+            onChange={(event) => onChange({ ...trigger, source: { type: "url", url: event.target.value } })}
+            placeholder="https://example.com/status"
+            aria-label="Address to watch"
+            aria-invalid={urlInvalid}
+          />
+        </Field>
+      ) : (
+        <Field
+          label="Script"
+          description={fullAccess
+            ? "It can keep notes between checks in the file named by AIDEN_CHECK_STATE (up to 8 KB)."
+            : "A script watch runs unattended, so the task needs Full permission below."}
+        >
+          <Select
+            value={source.script || undefined}
+            onValueChange={(script) => onChange({ ...trigger, source: { type: "script", script } })}
+          >
+            <SelectTrigger aria-label="Script to run for each check">
+              <SelectValue placeholder={scripts.length ? "Choose a script" : "No scripts found"} />
+            </SelectTrigger>
+            <SelectContent>
+              {scripts.map((script) => (
+                <SelectItem value={script} key={script}>{script}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </Field>
+      )}
+      <Field label="Check every" description="Runs at most once every 5 minutes and 48 times a day.">
+        <Select
+          value={String(trigger.everyMinutes)}
+          onValueChange={(value) => onChange({ ...trigger, everyMinutes: Number(value) })}
+        >
+          <SelectTrigger aria-label="How often to check">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {intervals.map((minutes) => (
+              <SelectItem value={String(minutes)} key={minutes}>{formatBotWatchInterval(minutes)}</SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </Field>
+      {source.type === "url" && urlInvalid ? (
+        <Text role="alert" variant="small" color="red">Use an https address, or http only on this computer.</Text>
+      ) : null}
+    </>
   );
 }
 
@@ -241,7 +330,8 @@ export function ScheduledTaskEditor({
   }, [draft.cron, draft.timezone, open]);
 
   React.useEffect(() => {
-    if (!open || draft.mode !== "script") return;
+    const watchesScript = draft.trigger?.source.type === "script";
+    if (!open || (draft.mode !== "script" && !watchesScript)) return;
     let active = true;
     void scheduleApi
       .scripts(draft.workspaceId)
@@ -254,7 +344,7 @@ export function ScheduledTaskEditor({
     return () => {
       active = false;
     };
-  }, [draft.mode, draft.workspaceId, open]);
+  }, [draft.mode, draft.trigger?.source.type, draft.workspaceId, open]);
 
   const setMode = (mode: ScheduledTaskMode) => {
     setDraft((current) => ({
@@ -262,6 +352,8 @@ export function ScheduledTaskEditor({
       mode,
       permission: mode === "script" ? "full" : current.permission,
       mcpServerIds: mode === "script" ? [] : current.mcpServerIds,
+      // Only "Ask Aiden" tasks run when something changes.
+      ...(mode === "script" && current.trigger ? { trigger: initial.trigger ? null : undefined } : {}),
     }));
   };
   const setPermission = (permission: ScheduledTaskPermission) => {
@@ -289,12 +381,14 @@ export function ScheduledTaskEditor({
       };
     });
   };
+  const trigger = draft.trigger ?? undefined;
+  const triggerValid = !trigger || (draft.mode === "llm" && (trigger.source.type === "url"
+    ? parseBotWatchUrl(trigger.source.url) !== undefined
+    : Boolean(trigger.source.script) && draft.permission === "full"));
   const valid =
     draft.name.trim() &&
-    draft.cron.trim() &&
-    draft.timezone?.trim() &&
+    (trigger ? triggerValid : draft.cron.trim() && draft.timezone?.trim() && !previewError) &&
     (draft.mode === "llm" ? draft.prompt?.trim() : draft.script?.trim()) &&
-    !previewError &&
     selectedMcpIds.length <= 16 &&
     !(draft.workspaceId && selectedMcpIds.length > 0) &&
     (!selectedMcpIds.length || (!mcpServersUnavailable && unavailableMcpIds.length === 0)) &&
@@ -382,7 +476,7 @@ export function ScheduledTaskEditor({
     >
       {reviewing ? (
         <FieldSet title="Review your task">
-          <Field label={draft.name} description={formatSchedule(draft.cron, draft.timezone ?? localTimezone)}>
+          <Field label={draft.name} description={trigger ? formatScheduledTaskTriggerLabel(trigger) : formatSchedule(draft.cron, draft.timezone ?? localTimezone)}>
             <Button variant="transparent" size="small" onClick={() => setReviewing(false)}>Edit choices</Button>
           </Field>
           <Field label="What Aiden will do" orientation="vertical"><Text as="p">{draft.mode === "script" ? draft.script : draft.prompt}</Text></Field>
@@ -473,6 +567,42 @@ export function ScheduledTaskEditor({
         )}
       </FieldSet>
       <FieldSet title="When should it run?">
+        {draft.mode === "llm" ? (
+          <Field
+            label="When"
+            description={trigger
+              ? "Aiden checks on its own and runs the task only when something changed. A check never uses a model."
+              : "Runs at the times you choose."}
+          >
+            <Select
+              disabled={assistantOwned}
+              value={trigger ? "watch" : "schedule"}
+              onValueChange={(value) => setDraft((current) => ({
+                ...current,
+                // Leaving a trigger task's watch sends null so main removes it.
+                trigger: value === "watch"
+                  ? (current.trigger ?? { kind: "watch", source: { type: "url", url: "" }, everyMinutes: 15 })
+                  : initial.trigger ? null : undefined,
+              }))}
+            >
+              <SelectTrigger aria-label="When the task runs">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="schedule">On a schedule</SelectItem>
+                <SelectItem value="watch">When something changes</SelectItem>
+              </SelectContent>
+            </Select>
+          </Field>
+        ) : null}
+        {trigger ? (
+          <WatchTriggerFields
+            trigger={trigger}
+            scripts={scripts}
+            fullAccess={draft.permission === "full"}
+            onChange={(next) => setDraft((current) => ({ ...current, trigger: next }))}
+          />
+        ) : <>
         <Field label="Repeat">
           <Select
             value={scheduleDraft.cadence}
@@ -664,6 +794,7 @@ export function ScheduledTaskEditor({
             />
           </div>
         </details>
+        </>}
       </FieldSet>
       <FieldSet title="Run context">
         {draft.mode === "llm" ? (

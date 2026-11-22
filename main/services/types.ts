@@ -621,6 +621,11 @@ export interface ScheduledTask {
    */
   originChatId?: string;
   /**
+   * What starts this task instead of a cron schedule (a watch). A task with a
+   * trigger has an empty `cron` and no `nextRunAt`. Never on a Bot routine.
+   */
+  trigger?: import("../../renderer/shared/scheduled-task-trigger.js").ScheduledTaskTrigger;
+  /**
    * Main-owned Bot that owns this routine. A Bot routine submits to that Bot's
    * conversation instead of a workspace chat and is hidden from the generic
    * scheduled-task surfaces. Immutable once set.
@@ -685,6 +690,11 @@ export interface ScheduledTaskInput {
   webSearchEnabled?: boolean;
   /** Main-owned: the chat a new task posts into. Only read when creating; saves of an existing task keep its binding. */
   originChatId?: string;
+  /**
+   * What starts the task instead of `cron`. Undefined keeps the saved trigger
+   * (older callers never send one); `null` removes it so the task runs on `cron`.
+   */
+  trigger?: import("../../renderer/shared/scheduled-task-trigger.js").ScheduledTaskTrigger | null;
   /** Main-owned Bot routine owner. Renderer schedule mutations cannot set this field. */
   botId?: string;
   /** Main-owned Bot routine schedule; when set, `cron` is derived from it. */

@@ -56,6 +56,7 @@ import {
   filterScheduledTasks,
   formatNextRun,
   formatSchedule,
+  formatTaskWhen,
   scheduledTaskProviderPin,
   scheduledTaskStatus,
   type ScheduledTaskTab,
@@ -110,6 +111,7 @@ function taskInput(task: ScheduledTask, mcpServers: McpServer[]): ScheduledTaskI
     enabled: task.enabled,
     mode: task.mode,
     cron: task.cron,
+    ...(task.trigger ? { trigger: task.trigger } : {}),
     timezone: task.timezone,
     workspaceId: task.workspaceId,
     providerId: task.providerId,
@@ -209,7 +211,7 @@ function ScheduledTaskDetail({
   onDelete: () => void;
 }) {
   const status = statusPresentation(task);
-  const cadence = formatSchedule(task.cron, task.timezone);
+  const cadence = formatTaskWhen(task);
   return (
     <aside
       className="scheduled-task-detail sticky top-4 min-w-0 self-start overflow-hidden rounded-card bg-well"
@@ -668,7 +670,7 @@ export function ScheduledTasksView() {
                               ) : null}
                             </span>
                             <Text variant="small" color="secondary" truncate className="mt-1 block">
-                              {formatSchedule(task.cron, task.timezone)}
+                              {formatTaskWhen(task)}
                               {task.mode === "script" && task.script ? ` · ${task.script}` : ""}
                               {task.enabled
                                 ? ` · Next run ${formatNextRun(task.nextRunAt)}`

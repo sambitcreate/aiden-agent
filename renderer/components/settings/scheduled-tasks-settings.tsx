@@ -1,4 +1,5 @@
 import * as React from "react";
+import { formatScheduledTaskTriggerLabel } from "../../shared/scheduled-task-trigger";
 import { useNavigate } from "@tanstack/react-router";
 import { useQueryClient } from "@tanstack/react-query";
 import { Clock3, ExternalLink, Trash2 } from "lucide-react";
@@ -287,7 +288,7 @@ export function ScheduledTasksSettings() {
                     {task.name}
                   </Text>
                   <Text variant="small" color="tertiary" truncate className="mt-0.5 block">
-                    {task.enabled ? task.cron : "Paused"}
+                    {task.enabled ? (task.trigger ? formatScheduledTaskTriggerLabel(task.trigger) : task.cron) : "Paused"}
                   </Text>
                 </div>
                 <Button

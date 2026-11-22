@@ -4,6 +4,7 @@ import type {
   ScheduledTaskPermission,
 } from "../services/types.js";
 import { validateScheduledMcpServerIds } from "../services/schedule-guard.js";
+import { parseScheduledTaskTrigger, type ScheduledTaskTrigger } from "../../renderer/shared/scheduled-task-trigger.js";
 
 function requiredString(value: unknown, name: string): string {
   if (typeof value !== "string" || !value.trim()) {
@@ -40,12 +41,19 @@ export function parseScheduledTaskInput(value: unknown): ScheduledTaskInput {
     }
     permission = input.permission;
   }
+  // A trigger replaces the cron: a watch runs the task when something changes.
+  // `null` turns a trigger task back into a scheduled one; omitted keeps it.
+  let trigger: ScheduledTaskTrigger | null | undefined;
+  if ("trigger" in input && input.trigger !== undefined) {
+    trigger = input.trigger === null ? null : parseScheduledTaskTrigger(input.trigger);
+  }
   return {
     id: optionalString(input.id),
     name: requiredString(input.name, "name"),
     enabled: typeof input.enabled === "boolean" ? input.enabled : undefined,
     mode,
-    cron: requiredString(input.cron, "cron"),
+    cron: trigger ? (typeof input.cron === "string" ? input.cron : "") : requiredString(input.cron, "cron"),
+    ...(trigger !== undefined ? { trigger } : {}),
     timezone: optionalString(input.timezone),
     workspaceId: optionalString(input.workspaceId),
     providerId: optionalString(input.providerId),

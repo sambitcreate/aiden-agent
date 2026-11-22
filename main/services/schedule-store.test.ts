@@ -839,3 +839,58 @@ test("Use its own chat and deleting the chat drop the binding, and nothing else"
   assert.equal((await store.get(second.id))?.originChatId, undefined);
   assert.equal((await store.get(other.id))?.originChatId, "chat-2");
 });
+
+test("a task that runs when something changes has no cron, survives a reload and turns on without needing attention", async () => {
+  const tasks = new MemoryPersistence<unknown[]>([]);
+  const runs = new MemoryPersistence<unknown[]>([]);
+  const store = createScheduleStore(tasks, runs, () => 1_800_000_000_000);
+  const created = await store.save({
+    name: "Status page",
+    mode: "llm",
+    cron: "",
+    timezone: "UTC",
+    prompt: "Tell me what changed.",
+    trigger: { kind: "watch", source: { type: "url", url: "https://example.com/status" }, everyMinutes: 15 },
+  });
+  assert.equal(created.cron, "");
+  assert.equal(created.nextRunAt, undefined);
+  assert.deepEqual(created.trigger, { kind: "watch", source: { type: "url", url: "https://example.com/status" }, everyMinutes: 15 });
+
+  await store.setEnabled(created.id, false);
+  const enabled = await store.setEnabled(created.id, true);
+  assert.equal(enabled.enabled, true);
+  assert.equal(enabled.nextRunAt, undefined);
+
+  const reloaded = createScheduleStore(new MemoryPersistence(tasks.snapshot()), runs, () => 1_800_000_000_000);
+  const loaded = await reloaded.get(created.id);
+  assert.equal(loaded?.enabled, true);
+  assert.doesNotMatch(loaded?.lastError ?? "", /Needs attention/u);
+  assert.deepEqual(loaded?.trigger, created.trigger);
+
+  // A save that doesn't mention the trigger keeps it; null puts the task back on a cron.
+  const renamed = await reloaded.save({ id: created.id, name: "Status", mode: "llm", cron: "", timezone: "UTC", prompt: "Tell me what changed." });
+  assert.deepEqual(renamed.trigger, created.trigger);
+  const scheduled = await reloaded.save({ id: created.id, name: "Status", mode: "llm", cron: "0 9 * * *", timezone: "UTC", prompt: "Tell me.", trigger: null });
+  assert.equal(scheduled.trigger, undefined);
+  assert.ok(scheduled.nextRunAt);
+});
+
+test("a task trigger is checked strictly and only asks Aiden", async () => {
+  const store = testStore();
+  const base = { name: "Watch", mode: "llm" as const, cron: "", timezone: "UTC", prompt: "Look." };
+  await assert.rejects(store.save({ ...base, trigger: { kind: "watch", source: { type: "url", url: "ftp://example.com" }, everyMinutes: 15 } }), /https/u);
+  await assert.rejects(store.save({ ...base, trigger: { kind: "watch", source: { type: "url", url: "https://example.com" }, everyMinutes: 2 } }), /5 to 1440/u);
+  await assert.rejects(store.save({ ...base, trigger: { kind: "watch", source: { type: "script", script: "../x.sh" }, everyMinutes: 15 } }), /one script file/u);
+  await assert.rejects(store.save({ ...base, trigger: { kind: "watch", source: { type: "script", script: "check.sh" }, everyMinutes: 15 } }), /Full permission/u);
+  await assert.rejects(
+    store.save({ ...base, trigger: { kind: "watch", source: { type: "url", url: "https://example.com" }, everyMinutes: 15, extra: 1 } as never }),
+    /Invalid task trigger/u,
+  );
+  await assert.rejects(
+    store.save({ name: "Script", mode: "script", cron: "", timezone: "UTC", script: "a.sh", permission: "full",
+      trigger: { kind: "watch", source: { type: "url", url: "https://example.com" }, everyMinutes: 15 } }),
+    /asks Aiden/u,
+  );
+  const script = await store.save({ ...base, permission: "full", trigger: { kind: "watch", source: { type: "script", script: "check.sh" }, everyMinutes: 60 } });
+  assert.equal(script.trigger?.source.type, "script");
+});

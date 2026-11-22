@@ -5,6 +5,7 @@ import {
   filterScheduledTasks,
   formatNextRun,
   formatSchedule,
+  formatTaskWhen,
   scheduleDraftFromCron,
   scheduledTaskProviderGuardrail,
   scheduledTaskProviderModelOptions,
@@ -258,4 +259,19 @@ test("scheduled tasks never pin, or silently fall back to, an agent-backed provi
     scheduledTaskProviderGuardrail("llm", undefined, "antigravity", [{ ...antigravity, label: "Google Antigravity" }]),
     "No provider pinned, and the app default (Google Antigravity) runs only in chats you have open. Pin a provider so this task can run.",
   );
+});
+
+test("a task that runs when something changes reads and searches by what it watches, not a cron", () => {
+  const watched = task({
+    id: "watch", name: "Status", cron: "",
+    trigger: { kind: "watch", source: { type: "url", url: "https://status.example.com/api/health?x=1" }, everyMinutes: 15 },
+  });
+  const script = task({
+    id: "script-watch", name: "Builds", cron: "", permission: "full",
+    trigger: { kind: "watch", source: { type: "script", script: "new-builds.sh" }, everyMinutes: 60 },
+  });
+  assert.equal(formatTaskWhen(watched), "Every 15 min, when status.example.com/api/health changes");
+  assert.equal(formatTaskWhen(script), "Every hour, when new-builds.sh prints something");
+  assert.equal(formatTaskWhen(task({ id: "cron", name: "Daily" })), formatSchedule("0 9 * * 1-5", "UTC"));
+  assert.deepEqual(filterScheduledTasks([watched, script], "status.example", "all").map(({ id }) => id), ["watch"]);
 });
