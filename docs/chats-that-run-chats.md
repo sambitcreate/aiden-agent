@@ -52,6 +52,21 @@ fixed sentence (an unknown or invalid branch, no free disk space, the source
 workspace gone), reported for that chat while the others still start. The
 ceiling still comes from the lead.
 
+## Structured results
+
+A start can give each chat a `result_schema`: a JSON Schema of at most 16 KB
+that may only refer inside itself (`$ref` starting with `#`; nothing is ever
+fetched). A schema that is too large, points elsewhere or doesn't compile
+refuses the whole call before any chat is made. The started chat's first
+message shows the schema, and it gets a `submit_result` tool. A submitted
+result is checked with ajv; one that doesn't match is refused, naming the
+fields to fix (for example `/filesChanged is required`). The newest accepted
+result (up to 64 KB) replaces any earlier one, is stored on the link, comes
+back from `wait` and `list` as `result`, and is quoted, fenced as data, in the
+lead's completion notice. A send to a chat that owes a result is always
+queued, never steered, so it can finish its turn. `submit_result` never asks
+for approval.
+
 ## Approvals
 
 - `start` is Consequential: Ask shows a card before each start, Auto lets the

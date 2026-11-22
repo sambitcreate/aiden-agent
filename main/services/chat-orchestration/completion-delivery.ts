@@ -136,6 +136,8 @@ function noticeText(
   const parts = [links.length === 1 ? "A chat this chat started has ended." : "Chats this chat started have ended."];
   links.forEach((link, index) => {
     parts.push(`“${link.title}” (chat_id ${link.childChatId}) ${END_WORDS[link.owed.end]}.`);
+    if (link.result) parts.push(fenceAsData("Its submitted result (JSON)", JSON.stringify(link.result.value, null, 2)));
+    else if (link.resultSchema) parts.push("It hasn't submitted a result yet.");
     const reply = replies[index];
     if (reply) {
       const cut = [...reply].length > CHILD_COMPLETION_REPLY_CHARS;

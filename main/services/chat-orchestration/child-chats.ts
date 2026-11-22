@@ -18,6 +18,7 @@ import type { AidenRemoteStreamService } from "../aiden-remote-streams.js";
 import type { ApprovalCeiling } from "../approval-gate/run-approval.js";
 import { chatAudience } from "./audience.js";
 import type { ChatLink, ChatLinkRunEnd, ChatLinkStore } from "./links.js";
+import { checkResult, compileResultSchema } from "./result-schema.js";
 import { CHAT_RUN_TERMINAL_STATES, ChatRunCore, projectRunMessage, type ChatRunSnapshot } from "./run-core.js";
 
 export interface ChildChatServices {
@@ -84,6 +85,8 @@ export interface ChildChatStartRequest {
   workspace?: "same" | "new_worktree";
   baseRef?: string;
   branchName?: string;
+  /** A JSON Schema the chat's result must match; the chat hands it back with `submit_result`. */
+  resultSchema?: Record<string, unknown>;
 }
 
 export type ChildChatStartOutcome =
@@ -105,6 +108,8 @@ export type ChildChatView = {
   reason?: "interrupted" | "error";
   /** The chat's last reply, fenced as data. */
   reply?: string;
+  /** The newest result the chat submitted that matched its schema. */
+  result?: unknown;
 };
 
 const ENDED: ReadonlySet<ChatRunSnapshot["state"]> = new Set(["done", "failed"]);
@@ -139,6 +144,12 @@ export class ChildChats {
    */
   async start(leadChatId: string, callKey: string, requests: readonly ChildChatStartRequest[]): Promise<ChildChatStartOutcome[]> {
     await this.dependencies.links.restore();
+    // A schema that can't be used refuses the whole call before anything is made.
+    for (const request of requests) {
+      if (request.resultSchema === undefined) continue;
+      const compiled = compileResultSchema(request.resultSchema);
+      if (!compiled.ok) throw new ChildChatRefusal(`“${request.title}”: ${compiled.error}`);
+    }
     const services = await this.dependencies.services();
     const audience = chatAudience(leadChatId);
     const lead = await this.dependencies.lead(leadChatId);
@@ -175,9 +186,11 @@ export class ChildChats {
             createdAt: this.now(),
             ceiling: lead.ceiling,
             ...(branch ? { branch } : {}),
+            ...(request.resultSchema ? { resultSchema: request.resultSchema } : {}),
           });
         }
-        const runId = link.runId ?? (await this.startTurn(services, link, `${key}:turn`, firstMessage(lead.title, request.task)));
+        const runId =
+          link.runId ?? (await this.startTurn(services, link, `${key}:turn`, firstMessage(lead.title, request.task, link.resultSchema)));
         outcomes.push({ chatId: link.childChatId, title: link.title, runId, state: "running", ...(link.branch ? { branch: link.branch } : {}) });
       } catch (error) {
         outcomes.push({ title, error: errorText(error) });
@@ -205,7 +218,8 @@ export class ChildChats {
     const audience = chatAudience(leadChatId);
     const key = `agent-chat:${leadChatId}:${callKey}:send`;
     if (link.runId && this.live(services, audience, link.runId)) {
-      const mode = input.mode === "queue" ? "queue" : "steer";
+      // A chat owing a structured result finishes its turn first: steering could cut it short.
+      const mode = input.mode === "queue" || link.resultSchema ? "queue" : "steer";
       const admitted = await services.streams.submitInput(audience, link.runId, { mode, text: input.text }, key, (_chatId, action) => action());
       if (admitted.status === "admitted") {
         await this.dependencies.links.update(link.childChatId, (draft) => {
@@ -311,6 +325,22 @@ export class ChildChats {
       if (outcome.stopped) stopped.push(link.childChatId);
     }
     return stopped;
+  }
+
+  /**
+   * A started chat hands back its result. It must match the schema its lead
+   * gave; the newest accepted result replaces any earlier one.
+   */
+  async submitResult(chatId: string, value: unknown): Promise<{ accepted: true }> {
+    await this.dependencies.links.restore();
+    const link = this.dependencies.links.get(chatId);
+    if (!link?.resultSchema) throw new ChildChatRefusal("This chat has no result to submit: the chat that started it didn't ask for one.");
+    const checked = checkResult(link.resultSchema, value);
+    if (!checked.ok) throw new ChildChatRefusal(checked.error);
+    await this.dependencies.links.update(chatId, (draft) => {
+      draft.result = { value: structuredClone(value), at: this.now() };
+    });
+    return { accepted: true };
   }
 
   private async owned(leadChatId: string, chatId: string): Promise<ChatLink> {
@@ -431,7 +461,7 @@ export class ChildChats {
       title: link.title,
       ...(personTookOver(link) ? { tookOver: true as const } : {}),
     };
-    if (!link.runId) return { ...base, state: "idle" };
+    if (!link.runId) return { ...base, state: "idle", ...(link.result ? { result: link.result.value } : {}) };
     let snapshot: ChatRunSnapshot;
     try {
       snapshot = await this.core.snapshot(services, audience, link.childChatId, link.runId);
@@ -449,6 +479,7 @@ export class ChildChats {
       if (withReply && snapshot.reply) view.reply = fenceAsData(`Last reply in “${link.title}”`, snapshot.reply.text);
     }
     if (snapshot.state === "failed") view.reason = snapshot.reason;
+    if (link.result) view.result = link.result.value;
     return view;
   }
 
@@ -462,8 +493,11 @@ export class ChildChats {
   }
 }
 
-function firstMessage(leadTitle: string, task: string): string {
-  return `The chat “${leadTitle}” started this chat and will read your last reply. Do this task, then end with a short summary of the result.\n\n${task}`;
+function firstMessage(leadTitle: string, task: string, resultSchema?: Record<string, unknown>): string {
+  const ask = resultSchema
+    ? `Do this task, then call submit_result with your result as JSON matching this schema (call it again to replace it), and end with a short summary.\n\nSchema:\n\`\`\`json\n${JSON.stringify(resultSchema, null, 2)}\n\`\`\``
+    : "Do this task, then end with a short summary of the result.";
+  return `The chat “${leadTitle}” started this chat and will read your last reply. ${ask}\n\n${task}`;
 }
 
 function errorText(error: unknown): string {

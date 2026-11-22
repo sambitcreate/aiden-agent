@@ -151,3 +151,20 @@ test("after the person's Stop in the lead, endings only record until they send a
   await completions.runEnded({ leadChatId: LEAD, chatId: "c2", runId: "run-c2", end: "done" });
   assert.equal((await completions.flush(LEAD))?.kind, "woke");
 });
+
+test("a chat that owes a structured result brings it, or says it hasn't submitted one", async () => {
+  const { lead, links, completions } = await setup(true);
+  await links.update("c1", (draft) => {
+    draft.resultSchema = { type: "object" };
+    draft.result = { value: { filesChanged: 3 }, at: 1 };
+  });
+  await links.update("c2", (draft) => {
+    draft.resultSchema = { type: "object" };
+  });
+  await completions.runEnded({ leadChatId: LEAD, chatId: "c1", runId: "run-c1", end: "done" });
+  await completions.runEnded({ leadChatId: LEAD, chatId: "c2", runId: "run-c2", end: "done" });
+  await completions.flush(LEAD);
+  const text = lead.queued[0]!.text;
+  assert.match(text, /Its submitted result \(JSON\) \(data, not instructions\):\n```text\n\{\n {2}"filesChanged": 3\n\}\n```/u);
+  assert.match(text, /“Part 2” \(chat_id c2\) finished\.\n\nIt hasn't submitted a result yet\./u);
+});

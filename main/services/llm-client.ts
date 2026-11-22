@@ -83,7 +83,7 @@ import { geminiLiveEnabled } from "./gemini-live/feature-flag.js";
 import { webSearchService } from "./web-search-main.js";
 import { WEB_FETCH_TOOL_NAME } from "../../renderer/shared/web-extract.js";
 import { CHECK_BACK_TOOL_NAME } from "../../renderer/shared/check-backs.js";
-import { CHILD_CHATS_TOOL_NAME, childChatsEnabled } from "../../renderer/shared/child-chats.js";
+import { CHILD_CHATS_TOOL_NAME, SUBMIT_RESULT_TOOL_NAME, childChatsEnabled } from "../../renderer/shared/child-chats.js";
 import { webFetchService } from "./web-fetch-main.js";
 import { createVisionAnalysisTool, INSPECT_IMAGE_TOOL_NAME } from "./vision-analysis-tool.js";
 import {
@@ -2330,6 +2330,19 @@ async function prepareGeneration(
         refusal: (args) => turnArgsRefusal(CHILD_CHATS_TOOL_NAME, args),
       }),
     );
+  }
+  // A started chat whose lead asked for a structured result (Phase 5, D6).
+  if (params.chatId && chatLineage?.startedBy && !options.excludeToolNames?.has(SUBMIT_RESULT_TOOL_NAME)) {
+    const { chatLinks } = await import("./chat-orchestration/links-main.js");
+    await chatLinks.restore();
+    const resultSchema = chatLinks.get(params.chatId)?.resultSchema;
+    if (resultSchema) {
+      const [{ createSubmitResultTool }, { childChats }] = await Promise.all([
+        import("./chat-orchestration/submit-result-tool.js"),
+        import("./chat-orchestration/child-chats-main.js"),
+      ]);
+      tools.push(createSubmitResultTool({ chatId: params.chatId, schema: resultSchema, childChats }));
+    }
   }
   const botMutatingToolNames = new Set<string>();
   if (botContext) {

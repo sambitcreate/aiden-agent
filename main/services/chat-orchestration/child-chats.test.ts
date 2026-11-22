@@ -11,6 +11,7 @@ import { chatTurnArgsToolRefusal, chatTurnAudienceFor } from "../chat-turn-tool-
 import { UNATTENDED_FOLLOW_UP_GENERATION } from "../follow-through/notice-delivery.js";
 import { ChildChats, type ChildChatRunEnded, type ChildChatServices } from "./child-chats.js";
 import { createChildChatsTool } from "./child-chats-tool.js";
+import { createSubmitResultTool } from "./submit-result-tool.js";
 import { ChatLinkStore, type ChatLinkDocument } from "./links.js";
 
 const LEAD = "lead-1";
@@ -396,4 +397,57 @@ test("a worktree that can't be made is reported for that chat, with no turn star
   assert.deepEqual(outcome, { title: "Docs", error: "There isn't enough free disk space on your computer for a new worktree. Free some space, then try again." });
   assert.equal(remote.runs.size, 0);
   assert.deepEqual(await childChats.list(LEAD), []);
+});
+
+const RESULT_SCHEMA = {
+  type: "object",
+  properties: { summary: { type: "string" }, filesChanged: { type: "integer", minimum: 0 } },
+  required: ["summary", "filesChanged"],
+};
+
+test("a started chat's result is checked against its schema, the newest accepted one wins, and wait returns it", async () => {
+  const { remote, childChats } = setup();
+  const [outcome] = (await childChats.start(LEAD, "call-1", [{ title: "Docs", task: "Update the docs", resultSchema: RESULT_SCHEMA }])) as Array<{ chatId: string; runId: string }>;
+  assert.match(remote.chats.get(outcome!.chatId)!.messages[0]!.text, /call submit_result with your result as JSON matching this schema/u);
+  const tool = createSubmitResultTool({ chatId: outcome!.chatId, schema: RESULT_SCHEMA, childChats });
+  const rejected = await tool.execute("t1", { result: { summary: "Done" } }, never());
+  assert.equal(rejected.isError, true);
+  assert.match(JSON.parse((rejected.content[0] as { text: string }).text).error, /\/filesChanged is required/u);
+  await tool.execute("t2", { result: { summary: "First pass", filesChanged: 1 } }, never());
+  await tool.execute("t3", { result: { summary: "Second pass", filesChanged: 3 } }, never());
+  await tool.execute("t4", { result: { summary: 7, filesChanged: -1 } }, never());
+  remote.finish(outcome!.runId, "All done.");
+  const [view] = await childChats.wait(LEAD, { chatIds: [outcome!.chatId], timeoutMs: 1_000, until: "all" }, never());
+  assert.deepEqual(view!.result, { summary: "Second pass", filesChanged: 3 });
+  // A chat started without a schema has nothing to submit.
+  const [plain] = (await childChats.start(LEAD, "call-2", [{ title: "Plain", task: "x" }])) as Array<{ chatId: string }>;
+  await assert.rejects(childChats.submitResult(plain!.chatId, { summary: "x" }), /didn't ask for one/u);
+});
+
+test("a send to a chat owing a result is queued, never steered", async () => {
+  const { remote, childChats } = setup();
+  const [outcome] = (await childChats.start(LEAD, "call-1", [{ title: "Docs", task: "a", resultSchema: RESULT_SCHEMA }])) as Array<{ chatId: string; runId: string }>;
+  const sent = await childChats.send(LEAD, "s1", { chatId: outcome!.chatId, text: "Also the README", mode: "steer" });
+  assert.equal(sent.delivered, "queued");
+  assert.deepEqual(remote.runs.get(outcome!.runId)!.inputs, [{ mode: "queue", text: "Also the README" }]);
+});
+
+test("a schema that won't compile refuses the whole start before any chat is made", async () => {
+  const { remote, childChats } = setup();
+  const tool = createChildChatsTool({ leadChatId: LEAD, childChats });
+  const refused = await tool.execute(
+    "call-1",
+    {
+      action: "start",
+      chats: [
+        { title: "Good", task: "a" },
+        { title: "Bad", task: "b", result_schema: { $ref: "https://example.com/s.json" } },
+      ],
+    },
+    never(),
+  );
+  assert.equal(refused.isError, true);
+  assert.match(JSON.parse((refused.content[0] as { text: string }).text).error, /“Bad”: result_schema may only refer inside itself.*Nothing was started/u);
+  await assert.rejects(childChats.start(LEAD, "call-2", [{ title: "Bad", task: "b", resultSchema: { type: "nope" } }]), /“Bad”: result_schema doesn't compile/u);
+  assert.equal(remote.chats.size, 0);
 });

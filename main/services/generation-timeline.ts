@@ -28,7 +28,7 @@ import {
 import { WEB_FETCH_TOOL_NAME, parseWebExtractRecap } from "../../renderer/shared/web-extract.js";
 import { BROWSER_RECORDING_STOP_TOOL_NAME, parseBrowserRecordingRecap } from "../../renderer/shared/browser-recording.js";
 import { CHECK_BACK_TOOL_NAME, checkBackWhen } from "../../renderer/shared/check-backs.js";
-import { CHILD_CHATS_TOOL_NAME } from "../../renderer/shared/child-chats.js";
+import { CHILD_CHATS_TOOL_NAME, SUBMIT_RESULT_TOOL_NAME } from "../../renderer/shared/child-chats.js";
 
 const MAX_TOOL_NAME_LENGTH = 80;
 const MAX_TARGET_LENGTH = 240;
@@ -349,6 +349,9 @@ export function safeToolDescriptor(toolName: string, args: unknown): SafeToolDes
           return { label: "List started chats" };
       }
     }
+    // The result stays out of the feed.
+    case SUBMIT_RESULT_TOOL_NAME:
+      return { label: "Submit result" };
     case "share_image":
       return { label: "Share image", target: path };
     case "generate_image":

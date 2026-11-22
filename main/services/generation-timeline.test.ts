@@ -1282,7 +1282,9 @@ test("a started-chats row names the action and how many chats, never a task or m
   });
   projector.toolStarted("send", "child_chats", { action: "send", chat_id: "c1", text: "private follow-up" });
   projector.toolStarted("wait", "child_chats", { action: "wait", chat_ids: ["c1"] });
-  const [start, send, wait] = toolSteps(projector.snapshot());
+  projector.toolStarted("result", "submit_result", { result: { summary: "private result" } });
+  const [start, send, wait, result] = toolSteps(projector.snapshot());
+  assert.equal(result!.label, "Submit result");
   assert.equal(start!.label, "Start chats");
   assert.equal(start!.detail, "2 chats");
   assert.equal(send!.label, "Send to a started chat");

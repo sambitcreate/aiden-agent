@@ -3,6 +3,8 @@
 // Settings → Approvals → Advanced (the "Chats can start other chats" switch).
 
 export const CHILD_CHATS_TOOL_NAME = "child_chats";
+/** Offered in a started chat whose lead asked for a structured result. */
+export const SUBMIT_RESULT_TOOL_NAME = "submit_result";
 
 export const CHILD_CHATS_ACTIONS = ["start", "send", "wait", "read", "list", "stop"] as const;
 export type ChildChatsAction = (typeof CHILD_CHATS_ACTIONS)[number];
