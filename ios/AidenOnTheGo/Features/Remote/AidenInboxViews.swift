@@ -158,11 +158,18 @@ struct AidenListRowLayout<Mark: View, Title: View, Summary: View, Trailing: View
     @ViewBuilder let summary: () -> Summary
     @ViewBuilder let trailing: () -> Trailing
 
-    @ScaledMetric(relativeTo: .body) private var markColumn: CGFloat = 28
+    @ScaledMetric(relativeTo: .body) private var scaledMarkColumn: CGFloat = 28
     /// The body style's line height, so the mark centres on the first line.
     @ScaledMetric(relativeTo: .body) private var titleLine: CGFloat = 22
-    @ScaledMetric(relativeTo: .body) private var verticalPadding: CGFloat = 15
-    @ScaledMetric(relativeTo: .subheadline) private var lineGap: CGFloat = 4
+    @ScaledMetric(relativeTo: .body) private var scaledVerticalPadding: CGFloat = 15
+    @ScaledMetric(relativeTo: .subheadline) private var scaledLineGap: CGFloat = 4
+
+    // The whitespace grows with the text up to a point. Past the largest
+    // standard size it would keep growing at the text's rate, and at the
+    // accessibility sizes each row ended in a gap taller than a line of text.
+    private var markColumn: CGFloat { min(scaledMarkColumn, 40) }
+    private var verticalPadding: CGFloat { min(scaledVerticalPadding, 20) }
+    private var lineGap: CGFloat { min(scaledLineGap, 8) }
 
     var body: some View {
         HStack(alignment: markStyle == .glyph ? .top : .center, spacing: 0) {
@@ -501,6 +508,9 @@ struct AidenListSectionHeader<Leading: View>: View {
         .padding(.horizontal, AidenSpacing.xl)
         .padding(.bottom, AidenSpacing.s)
         .frame(maxWidth: .infinity, alignment: .leading)
+        // A plain list pins its headings while it scrolls. The canvas behind
+        // the words keeps the rows passing under them out of the way.
+        .background(palette.canvas)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(count.map { "\(title), \($0)" } ?? title)
         .accessibilityAddTraits(.isHeader)
@@ -520,19 +530,24 @@ extension View {
     /// Puts a list row in its section's card: inset like the Catch Up card,
     /// no separator, the card's fill (with the selected tint), and a context
     /// menu preview clipped to the card's corners.
-    func aidenListCardRow(_ position: AidenListCardPosition?, isSelected: Bool = false) -> some View {
-        modifier(AidenListCardRow(position: position, isSelected: isSelected))
+    /// `hasDisclosure` is for a navigation link: the system draws its chevron
+    /// at the row's trailing inset, so the inset grows by the padding the other
+    /// rows keep inside the card.
+    func aidenListCardRow(_ position: AidenListCardPosition?, isSelected: Bool = false, hasDisclosure: Bool = false) -> some View {
+        modifier(AidenListCardRow(position: position, isSelected: isSelected, hasDisclosure: hasDisclosure))
     }
 }
 
 private struct AidenListCardRow: ViewModifier {
     let position: AidenListCardPosition?
     let isSelected: Bool
+    let hasDisclosure: Bool
     @Environment(\.aidenPalette) private var palette
 
     func body(content: Content) -> some View {
+        let inset = AidenListRowBackground.cardInset
         content
-            .listRowInsets(EdgeInsets(top: 0, leading: AidenListRowBackground.cardInset, bottom: 0, trailing: AidenListRowBackground.cardInset))
+            .listRowInsets(EdgeInsets(top: 0, leading: inset, bottom: 0, trailing: hasDisclosure ? inset + AidenSpacing.l : inset))
             .listRowSeparator(.hidden)
             .listRowBackground(AidenListRowBackground(isSelected: isSelected, palette: palette, card: position))
             .contentShape(.contextMenuPreview, RoundedRectangle(cornerRadius: AidenRadius.control, style: .continuous))
@@ -667,8 +682,15 @@ struct AidenListRowBackground: View {
     /// The card's inset from the list's edges, the Catch Up card's.
     static let cardInset = AidenSpacing.m
 
+    /// The foreground, laid thin over the row's ground. Neutral, so it reads
+    /// the same under an ink accent as a coloured one, and heavier in dark,
+    /// where a thin light veil barely lifts the ground.
     static func selectedFill(_ palette: AidenPalette) -> Color {
-        palette.accent.opacity(0.12)
+        palette.foreground.opacity(selectedFillOpacity(palette))
+    }
+
+    static func selectedFillOpacity(_ palette: AidenPalette) -> Double {
+        Color.relativeLuminance(palette.canvasHex) > 0.5 ? 0.12 : 0.18
     }
 
     var body: some View {

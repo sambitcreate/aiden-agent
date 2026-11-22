@@ -1177,9 +1177,44 @@ private struct AidenListScrollRow: ViewModifier {
     }
 }
 
+/// When a list tab's list goes back to its saved row: once, at its first
+/// layout, whichever of that and its first appearance comes last. A list
+/// reports no content before its first layout, so it waits for that. After
+/// it, nothing brings the list back again: not reappearing on its tab, and
+/// not its rows emptying and filling (a filter to an empty machine and back).
+struct AidenListScrollRestore {
+    private(set) var pending: AnyHashable?
+    private var hasAppeared = false
+    private var isLaidOut = false
+
+    /// The list appeared, with `row` saved. Returns the row to go to now.
+    mutating func appear(returningTo row: AnyHashable?) -> AnyHashable? {
+        defer { hasAppeared = true }
+        guard !hasAppeared else {
+            pending = nil
+            return nil
+        }
+        if isLaidOut { return row }
+        pending = row
+        return nil
+    }
+
+    /// The list's content went from empty to laid out, or back. Returns the
+    /// row to go to now.
+    mutating func layout(hasContent: Bool) -> AnyHashable? {
+        guard hasContent, !isLaidOut else { return nil }
+        isLaidOut = true
+        defer { pending = nil }
+        return pending
+    }
+
+    /// The person took hold of the list, so where they put it wins.
+    mutating func interact() { pending = nil }
+}
+
 /// Records the row across the top of a list tab's list while the person
 /// scrolls it and when it comes to rest, and brings a new list back to that
-/// row once, after its first layout. A list taken down as the display folds
+/// row once (`AidenListScrollRestore`). A list taken down as the display folds
 /// reports its own geometry on the way out from rest, and that isn't where
 /// they left it, so a list at rest records nothing more.
 private struct AidenListScrollKeeper: ViewModifier {
@@ -1187,17 +1222,16 @@ private struct AidenListScrollKeeper: ViewModifier {
     let tab: AidenAppTab
 
     @State private var rowFrames = AidenListRowFrames()
-    /// The row to go back to, until the list's first layout.
-    @State private var pending: AnyHashable?
+    @State private var restore = AidenListScrollRestore()
 
     func body(content: Content) -> some View {
         ScrollViewReader { proxy in
             content
                 .coordinateSpace(.named(AidenListScrollSpace.name))
                 .environment(\.aidenListRowFrames, rowFrames)
-                .onAppear { pending = places.topRow(of: tab) }
+                .onAppear { scroll(proxy, to: restore.appear(returningTo: places.topRow(of: tab))) }
                 .onScrollPhaseChange { old, phase, context in
-                    if phase == .interacting { pending = nil }
+                    if phase == .interacting { restore.interact() }
                     rowFrames.moving = phase.isScrolling
                     // Coming to rest, and each change of phase on the way.
                     if old.isScrolling { record(context.geometry) }
@@ -1208,17 +1242,18 @@ private struct AidenListScrollKeeper: ViewModifier {
                 .onScrollGeometryChange(for: Bool.self) { geometry in
                     geometry.contentSize.height > 0
                 } action: { _, laidOut in
-                    guard laidOut, let row = pending else { return }
-                    pending = nil
-                    // `scrollTo` matches a `ForEach` identity by its own type,
-                    // not wrapped. After this layout pass, which may still set
-                    // the offset itself.
-                    guard let id = row.base as? any Hashable else { return }
-                    Task { @MainActor in
-                        await Task.yield()
-                        proxy.scrollTo(id, anchor: .top)
-                    }
+                    scroll(proxy, to: restore.layout(hasContent: laidOut))
                 }
+        }
+    }
+
+    private func scroll(_ proxy: ScrollViewProxy, to row: AnyHashable?) {
+        // `scrollTo` matches a `ForEach` identity by its own type, not
+        // wrapped. After this layout pass, which may still set the offset itself.
+        guard let row, let id = row.base as? any Hashable else { return }
+        Task { @MainActor in
+            await Task.yield()
+            proxy.scrollTo(id, anchor: .top)
         }
     }
 

@@ -369,24 +369,26 @@ final class AidenSandboxedHTMLTests: XCTestCase {
         const p = document.querySelector('p');
         return [style(document.documentElement).backgroundColor, style(document.body).backgroundColor,
                 style(document.body).color, style(p).color, style(document.body).fontSize,
-                style(document.body).paddingTop, style(document.querySelector('a')).color]
+                style(document.body).paddingTop, style(document.querySelector('a')).color,
+                style(document.querySelector('a')).textDecorationLine]
         """
         let page = "<!doctype html><html><body><p>plain</p><a href=\"#x\">link</a></body></html>"
 
-        // Unstyled: the canvas behind the page, the palette's text, Aiden's body size.
+        // Unstyled: the canvas behind the page, the palette's text, Aiden's body size,
+        // and an underlined link, since the accent alone can sit close to the text.
         let finished = expectation(description: "unstyled page finishes")
         let (plain, _) = try showSandboxed(page, allowsScripts: false, themeCSS: css, onFinish: { finished.fulfill() })
         await fulfillment(of: [finished], timeout: Self.pageLoadTimeout)
         let plainStyles = try await plain.callAsyncJavaScript(probe, contentWorld: .defaultClient) as? [String]
         XCTAssertEqual(plainStyles, [
             "rgb(246, 247, 249)", "rgba(0, 0, 0, 0)", "rgb(61, 63, 65)", "rgb(61, 63, 65)",
-            "16px", "16px", "rgb(31, 34, 40)",
+            "16px", "16px", "rgb(31, 34, 40)", "underline",
         ])
 
         // The page's own rules, even bare element selectors, beat the theme.
         let styled = """
         <!doctype html><html><head><style>html{background:rgb(9, 9, 9)}\
-        body{background:rgb(1, 2, 3);padding:0;font-size:10px}p{color:rgb(4, 5, 6)}a{color:rgb(7, 8, 9)}</style>\
+        body{background:rgb(1, 2, 3);padding:0;font-size:10px}p{color:rgb(4, 5, 6)}a{color:rgb(7, 8, 9);text-decoration:none}</style>\
         </head><body><p>plain</p><a href="#x">link</a></body></html>
         """
         let styledFinished = expectation(description: "styled page finishes")
@@ -395,7 +397,7 @@ final class AidenSandboxedHTMLTests: XCTestCase {
         let ownStyles = try await own.callAsyncJavaScript(probe, contentWorld: .defaultClient) as? [String]
         XCTAssertEqual(ownStyles, [
             "rgb(9, 9, 9)", "rgb(1, 2, 3)", "rgb(61, 63, 65)", "rgb(4, 5, 6)",
-            "10px", "0px", "rgb(7, 8, 9)",
+            "10px", "0px", "rgb(7, 8, 9)", "none",
         ])
     }
 

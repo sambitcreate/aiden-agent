@@ -828,28 +828,46 @@ struct AidenAppearanceSettingsView: View {
         }
     }
 
+    /// One half of a theme's tile: its sidebar down the leading edge, its
+    /// canvas, a raised card with the type, and the accent. Showing both
+    /// schemes side by side tells apart presets whose light canvases are all
+    /// near white (Aiden's cool grey, Graphite's neutral, Monochrome's pure white).
+    private func themeTileHalf(_ p: AidenPalette) -> some View {
+        HStack(spacing: 0) {
+            p.sidebar.frame(width: 9)
+            p.canvas
+                .overlay {
+                    RoundedRectangle(cornerRadius: 5, style: .continuous)
+                        .fill(p.raised)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 9)
+                        .overlay {
+                            Text("Aa")
+                                .font(.system(size: 17, weight: .medium))
+                                .foregroundStyle(p.foreground)
+                        }
+                }
+                .overlay(alignment: .bottomTrailing) {
+                    Circle()
+                        .fill(p.accent)
+                        .frame(width: 8, height: 8)
+                        .padding(4)
+                }
+        }
+    }
+
     private func themeTile(for preset: AidenThemePresetID) -> some View {
-        let preview = AidenThemeCatalog.palette(preset: preset, scheme: preset.tileSignatureScheme)
         let selected = preset == selectedPreset
         return Button {
             appearance.selectTheme(preset)
         } label: {
             VStack(spacing: 7) {
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .fill(preview.canvas)
+                HStack(spacing: 0) {
+                    themeTileHalf(AidenThemeCatalog.palette(preset: preset, scheme: .light))
+                    themeTileHalf(AidenThemeCatalog.palette(preset: preset, scheme: .dark))
+                }
                     .aspectRatio(1.52, contentMode: .fit)
-                    .overlay {
-                        Text("Aa")
-                            .font(.system(size: 30, weight: .medium))
-                            .foregroundStyle(preview.foreground)
-                    }
-                    .overlay(alignment: .bottomTrailing) {
-                        Circle()
-                            .fill(preview.accent)
-                            .overlay(Circle().stroke(.white.opacity(0.55), lineWidth: 1))
-                            .frame(width: 11, height: 11)
-                            .padding(8)
-                    }
+                    .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
                     .overlay(alignment: .topTrailing) {
                         if selected {
                             Image(systemName: "checkmark")
@@ -876,16 +894,6 @@ struct AidenAppearanceSettingsView: View {
         .buttonStyle(.plain)
         .accessibilityLabel(preset.title)
         .accessibilityAddTraits(selected ? [.isButton, .isSelected] : [.isButton])
-    }
-}
-
-private extension AidenThemePresetID {
-    /// The scheme that visually defines each preset on its tile.
-    var tileSignatureScheme: ColorScheme {
-        switch self {
-        case .graphite, .dusk, .midnight: .dark
-        default: .light
-        }
     }
 }
 

@@ -4,6 +4,12 @@
 
 - **2026-11-22 — Quieter lists and an ink accent.** No Remote wire or revision change.
   - The default Aiden theme's accent is muted ink instead of blue. Status colours stay coloured.
+  - Links in replies and HTML previews are underlined and take the theme's accent in every theme.
+  - The row open beside the list has a neutral fill that shows in light and dark.
+  - Computers' note about hiding a computer is plain text on the page, with no band or line behind it, and its rows leave room before the chevron.
+  - A list's heading stays readable while rows scroll under it.
+  - At the largest text sizes, list rows no longer end in a tall empty gap.
+  - Settings → Appearance shows each theme's light and dark look side by side, with its sidebar and cards.
   - The Inbox, Running chats, Search, Bots, Workspaces, a workspace's chats and Computers group their rows into rounded cards, with no lines between rows and small headings above each card.
   - A row shows its state in a leading mark: a spinner while running, a dot when unread.
   - Bot rows on Bots drop the purpose bubble.

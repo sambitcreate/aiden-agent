@@ -593,12 +593,14 @@ struct AidenInboxBotRowView: View {
 private struct AidenBotAvatarSymbol: View {
     let name: String
     let palette: AidenPalette
+    /// Grows with the initial inside it, so the letter never outgrows its circle.
+    @ScaledMetric(relativeTo: .caption) private var size: CGFloat = 24
 
     var body: some View {
         Text(name.prefix(1).uppercased())
             .font(.caption.weight(.bold))
             .foregroundStyle(palette.accent)
-            .frame(width: 24, height: 24)
+            .frame(width: size, height: size)
             .background(palette.accent.opacity(0.14), in: Circle())
             .accessibilityHidden(true)
     }

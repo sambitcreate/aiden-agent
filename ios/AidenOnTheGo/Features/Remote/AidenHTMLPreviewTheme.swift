@@ -36,7 +36,7 @@ enum AidenHTMLPreviewTheme {
             + "color:var(--text-primary);font-family:var(--font-ui-family);font-size:\(size);"
             + "-webkit-text-size-adjust:100%}"
             + ":where(body){margin:0;padding:16px}"
-            + ":where(a){color:var(--accent)}"
+            + ":where(a){color:var(--accent);text-decoration:underline}"
             + ":where(code,kbd,pre,samp){font-family:var(--font-code-family)}"
     }
 

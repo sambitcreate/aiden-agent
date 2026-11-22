@@ -320,7 +320,7 @@ struct AidenMachinesView: View {
                 Section {
                     ForEach(model.rows) { row in
                         link(to: row)
-                        .aidenListCardRow(positions[row.id])
+                        .aidenListCardRow(positions[row.id], hasDisclosure: true)
                         // Label and value only: hiding the children from a link drops its activation.
                         .accessibilityLabel(row.accessibilityLabel)
                         .accessibilityValue(row.accessibilityValue)
@@ -336,12 +336,18 @@ struct AidenMachinesView: View {
                             }
                         }
                     }
-                } footer: {
+                    // A row, not the section's footer: a plain list draws a
+                    // footer on its own band with a hairline. This one is quiet
+                    // text on the canvas, like the headings above the cards.
                     Text("Hiding a computer keeps it paired. It only leaves the Inbox, and you can still open it here.")
                         .font(.footnote)
                         .foregroundStyle(palette.secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(.horizontal, AidenSpacing.xl)
                         .padding(.top, AidenSpacing.s)
+                        .listRowInsets(EdgeInsets())
+                        .listRowSeparator(.hidden)
+                        .listRowBackground(palette.canvas)
                 }
             }
 

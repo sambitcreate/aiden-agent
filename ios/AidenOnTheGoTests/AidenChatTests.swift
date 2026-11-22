@@ -1,6 +1,7 @@
 import ActivityKit
 import AVFoundation
 import Foundation
+import MarkdownUI
 import Photos
 import SwiftUI
 import UIKit
@@ -8973,6 +8974,25 @@ final class AidenChatTests: XCTestCase {
             AidenMarkdownRenderingPolicy.fallbackReason(for: allowedLines + "\u{2028}overflow"),
             .tooManyLines
         )
+    }
+
+    /// A transcript link is underlined in every theme, so it reads as a link even
+    /// where the accent sits close to the body text. Body text isn't underlined.
+    func testATranscriptLinkIsUnderlinedInEveryThemeAndBodyTextIsNot() {
+        for preset in AidenThemePresetID.allCases {
+            for scheme in [ColorScheme.light, .dark] {
+                let theme = MarkdownUI.Theme.aidenChat(
+                    colorScheme: scheme,
+                    palette: AidenThemeCatalog.palette(preset: preset, scheme: scheme)
+                )
+                var link = AttributeContainer()
+                theme.link._collectAttributes(in: &link)
+                XCTAssertEqual(link.underlineStyle, .single, "\(preset) \(scheme)")
+                var body = AttributeContainer()
+                theme.text._collectAttributes(in: &body)
+                XCTAssertNil(body.underlineStyle, "\(preset) \(scheme)")
+            }
+        }
     }
 
     @MainActor

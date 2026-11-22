@@ -337,6 +337,30 @@ final class AidenAppShellTests: XCTestCase {
         XCTAssertNil(places.topRow(of: .workspaces), "Back at the top keeps no row, so the rows above any row show")
     }
 
+    /// A new list goes back to its saved row once, at its first layout, whether
+    /// it appears before that layout or after it. Then it stays where it is:
+    /// emptying and filling again, or reappearing on its tab, never jumps.
+    func testAListGoesBackToItsRowOnceWhicheverOfAppearingAndLayoutComesLast() {
+        var appearsFirst = AidenListScrollRestore()
+        XCTAssertNil(appearsFirst.appear(returningTo: "row-7"), "Nothing to scroll before a layout")
+        XCTAssertNil(appearsFirst.layout(hasContent: false), "A list reports no content before its first layout")
+        XCTAssertEqual(appearsFirst.layout(hasContent: true), "row-7")
+        XCTAssertNil(appearsFirst.layout(hasContent: false))
+        XCTAssertNil(appearsFirst.layout(hasContent: true), "A filter to an empty machine and back jumped")
+
+        var laysOutFirst = AidenListScrollRestore()
+        XCTAssertNil(laysOutFirst.layout(hasContent: true))
+        XCTAssertEqual(laysOutFirst.appear(returningTo: "row-7"), "row-7", "Appearing after the layout went nowhere")
+        XCTAssertNil(laysOutFirst.layout(hasContent: false))
+        XCTAssertNil(laysOutFirst.layout(hasContent: true))
+        XCTAssertNil(laysOutFirst.appear(returningTo: "row-7"), "Coming back to the tab moved a list that kept its place")
+
+        var heldFirst = AidenListScrollRestore()
+        _ = heldFirst.appear(returningTo: "row-7")
+        heldFirst.interact()
+        XCTAssertNil(heldFirst.layout(hasContent: true), "The person's own scroll lost to the saved row")
+    }
+
     /// Closing the display, the split hears the compact width an update before
     /// the shell moves `besideList`, and collapsing pops its detail. That
     /// write comes from a split whose own width is no longer regular, so it's

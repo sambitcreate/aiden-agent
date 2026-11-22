@@ -11,6 +11,21 @@ final class AidenDesignTokenTests: XCTestCase {
         }
     }
 
+    /// The row the detail beside a list shows stands out from its card and
+    /// from the canvas in every theme, the ink accent's included.
+    func testTheSelectedRowFillStandsOutOnItsCardAndOnTheCanvas() {
+        for (name, p) in allPalettes() {
+            let opacity = AidenListRowBackground.selectedFillOpacity(p)
+            for ground in [p.raisedHex, p.canvasHex] {
+                let selected = Color.mixHex(ground, p.foregroundHex, fraction: opacity)
+                XCTAssertGreaterThanOrEqual(
+                    Color.contrastRatio(selected, ground), 1.2,
+                    "\(name): selected \(selected) on \(ground)"
+                )
+            }
+        }
+    }
+
     /// The Inbox section headers and their counts are footnote text in
     /// `secondary`, on the canvas in both widths, and secondary text also sits on
     /// raised rows. Weight doesn't change contrast, so the colour has to pass.
