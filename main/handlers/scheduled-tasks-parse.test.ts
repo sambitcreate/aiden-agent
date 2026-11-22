@@ -78,3 +78,16 @@ test("a desktop save can't choose the chat a task posts into", () => {
   );
   assert.equal("originChatId" in parseScheduledTaskInput(valid), false);
 });
+
+test("a task saved with a trigger needs no cron; null drops the trigger and an invalid one is refused", () => {
+  const trigger = { kind: "watch", source: { type: "url", url: "https://example.com/status" }, everyMinutes: 15 };
+  const parsed = parseScheduledTaskInput({ name: "Status", mode: "llm", prompt: "What changed?", trigger });
+  assert.equal(parsed.cron, "");
+  assert.deepEqual(parsed.trigger, trigger);
+  const cleared = parseScheduledTaskInput({ name: "Status", mode: "llm", prompt: "What changed?", cron: "0 9 * * *", trigger: null });
+  assert.equal(cleared.trigger, null);
+  assert.equal(cleared.cron, "0 9 * * *");
+  assert.equal("trigger" in parseScheduledTaskInput({ name: "Status", mode: "llm", cron: "0 9 * * *" }), false);
+  assert.throws(() => parseScheduledTaskInput({ name: "Status", mode: "llm", trigger: { ...trigger, everyMinutes: 1 } }), /5 to 1440/u);
+  assert.throws(() => parseScheduledTaskInput({ name: "Status", mode: "llm", trigger: null }), /cron/u);
+});

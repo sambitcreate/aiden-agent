@@ -15,6 +15,8 @@ export interface AppCapabilities {
   hooks: boolean;
   /** Aiden's own MCP server for outside apps such as Claude Code and Codex. */
   mcpServer: boolean;
+  /** Chats can start other chats (macOS and Linux). */
+  childChats: boolean;
   dockIcon: boolean;
   /** A Needs you count on the app icon (Dock on macOS, launcher on Linux). */
   badgeCount: boolean;
@@ -43,6 +45,7 @@ export const DISABLED_APP_CAPABILITIES: AppCapabilities = Object.freeze({
   botComputers: false,
   hooks: false,
   mcpServer: false,
+  childChats: false,
   dockIcon: false,
   badgeCount: false,
   accessibilityPaste: false,
@@ -74,6 +77,7 @@ export function parseAppCapabilities(value: unknown): AppCapabilities {
     botComputers: record.botComputers === true,
     hooks: record.hooks === true,
     mcpServer: record.mcpServer === true,
+    childChats: record.childChats === true,
     dockIcon: record.dockIcon === true,
     badgeCount: record.badgeCount === true,
     accessibilityPaste: record.accessibilityPaste === true,

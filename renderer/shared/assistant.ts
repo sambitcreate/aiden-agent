@@ -45,6 +45,8 @@ export interface AssistantAutomationApprovalDetails {
   name: string;
   prompt: string;
   cron: string;
+  /** A trigger task: "When its link is called (…)"; then `cron` is empty and `nextRunAt` 0. */
+  whenLabel?: string;
   timezone: string;
   nextRunAt: number;
   notify: boolean;
@@ -72,6 +74,8 @@ export interface ScheduledTaskApprovalDetails {
   prompt: string | null;
   script: string | null;
   cron: string;
+  /** A trigger task: "Every 15 min, when … changes"; then `cron` is empty and `nextRunAt` 0. */
+  whenLabel?: string;
   timezone: string;
   nextRunAt: number;
   notify: boolean;
@@ -610,6 +614,12 @@ export function isSubagentWorkspaceWriteApprovalDetails(
 }
 
 /** Fail-closed renderer boundary for attended Assistant automation approvals. */
+/** A cron, or for a trigger task an empty cron with the trigger's label and no next run. */
+function scheduleWhenIsValid(details: Record<string, unknown>): boolean {
+  if (details.whenLabel === undefined) return safeApprovalText(details.cron, ASSISTANT_AUTOMATION_CRON_LIMIT);
+  return details.cron === "" && details.nextRunAt === 0 && safeApprovalText(details.whenLabel, ASSISTANT_AUTOMATION_CRON_LIMIT);
+}
+
 export function isAssistantAutomationApprovalDetails(
   value: unknown,
 ): value is AssistantAutomationApprovalDetails {
@@ -642,7 +652,7 @@ export function isAssistantAutomationApprovalDetails(
     actionIsValid &&
     safeApprovalText(details.name, ASSISTANT_AUTOMATION_NAME_LIMIT) &&
     safeApprovalText(details.prompt, ASSISTANT_AUTOMATION_PROMPT_LIMIT, true) &&
-    safeApprovalText(details.cron, ASSISTANT_AUTOMATION_CRON_LIMIT) &&
+    scheduleWhenIsValid(details) &&
     safeApprovalText(details.timezone, ASSISTANT_AUTOMATION_TIMEZONE_LIMIT) &&
     typeof details.nextRunAt === "number" &&
     Number.isFinite(details.nextRunAt) &&
@@ -713,7 +723,7 @@ export function isScheduledTaskApprovalDetails(
     typeof details.enabled === "boolean" &&
     safeApprovalText(details.name, ASSISTANT_AUTOMATION_NAME_LIMIT) &&
     contentIsValid &&
-    safeApprovalText(details.cron, ASSISTANT_AUTOMATION_CRON_LIMIT) &&
+    scheduleWhenIsValid(details) &&
     safeApprovalText(details.timezone, ASSISTANT_AUTOMATION_TIMEZONE_LIMIT) &&
     typeof details.nextRunAt === "number" &&
     Number.isFinite(details.nextRunAt) &&

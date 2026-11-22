@@ -10,6 +10,7 @@ import { workspaceHasOwnSettings } from "../lib/workspace-settings-view";
 import { useNewChatActions } from "../lib/new-chat-actions";
 import { HistoryNavButtons } from "./history-nav";
 import { forkedFromLabel } from "../lib/chat-copy-view";
+import { startedByChatLabel } from "../lib/chat-lineage";
 // Unified workspace/chat sidebar with workspace-grouped, recent, and
 // Inbox (Beta) views, route-driven selection, and workspace/chat actions.
 
@@ -1660,6 +1661,7 @@ function WorkspaceChatSidebar({
     const forkedFrom = chat.forkedFrom
       ? forkedFromLabel(chatTitlesById.get(chat.forkedFrom.chatId))
       : undefined;
+    const startedByChat = chat.startedBy ? startedByChatLabel(chatTitlesById.get(chat.startedBy.chatId)) : undefined;
     const titleContent =
       titleReveal?.chatId === chat.id ? (
         <GeneratedTitleReveal
@@ -1760,6 +1762,7 @@ function WorkspaceChatSidebar({
         }
         busy={renamingWithAppleId === chat.id}
         forkedFrom={forkedFrom}
+        startedByChat={startedByChat}
         context={
           // Only rows in a group the user expanded (not one search opened)
           // read live branch PRs, as the old group indicator did, and only

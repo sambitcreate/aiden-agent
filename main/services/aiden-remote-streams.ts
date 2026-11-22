@@ -1,4 +1,5 @@
 import type { ServerResponse } from "node:http";
+import { CHAT_AUDIENCE_PROMPT_LIFETIME_MS, isChatAudience } from "./chat-orchestration/audience.js";
 import { approvalCardAllows, buildApprovalCard, type ApprovalCard } from "../../renderer/shared/approval-card-model.js";
 import type { NotificationChannel } from "../../renderer/preload-channels.js";
 import type { ToolApprovalDetails } from "../../renderer/shared/assistant.js";
@@ -77,6 +78,15 @@ const IMMEDIATE_PERSIST_EVENT_TYPES: ReadonlySet<string> = new Set([
 ]);
 const APPROVAL_LIFETIME_MS = 5 * 60 * 1_000;
 const QUESTION_LIFETIME_MS = 5 * 60 * 1_000;
+
+/**
+ * How long an approval or question stays open for this audience: 5 minutes
+ * for a phone, a paired computer or an outside app, 30 minutes for a lead
+ * chat's started chat (answer 22a), which nobody is watching from a device.
+ */
+function promptLifetimeMs(deviceId: string, deviceLifetimeMs: number): number {
+  return isChatAudience(deviceId) ? CHAT_AUDIENCE_PROMPT_LIFETIME_MS : deviceLifetimeMs;
+}
 const MAX_ACTIVITY_PROJECTION_CHATS = 200;
 export const MAX_AIDEN_REMOTE_STREAM_SNAPSHOT_BYTES = 16 * 1_024 * 1_024;
 
@@ -1293,12 +1303,13 @@ export class AidenRemoteStreamService {
       const details = projectApprovalDetails(payload.details);
       const claimsStructuredDetails = ownRecord(payload.details)?.kind !== undefined;
       const scopes = offeredScopes(payload.scopes);
-      const expiresAt = this.options.now() + APPROVAL_LIFETIME_MS;
+      const approvalLifetimeMs = promptLifetimeMs(stream.deviceId, APPROVAL_LIFETIME_MS);
+      const expiresAt = this.options.now() + approvalLifetimeMs;
       const expiry = setTimeout(() => {
         const current = this.approvals.get(approvalId);
         if (!current || current.expiresAt !== expiresAt) return;
         this.resolveApproval(approvalId, "deny");
-      }, APPROVAL_LIFETIME_MS);
+      }, approvalLifetimeMs);
       expiry.unref?.();
       this.approvals.set(approvalId, {
         streamId: stream.streamId,
@@ -1354,9 +1365,10 @@ export class AidenRemoteStreamService {
       const now = this.options.now();
       const agentDeadline =
         typeof payload.expiresAt === "string" ? Date.parse(payload.expiresAt) : Number.NaN;
+      const questionLifetimeMs = promptLifetimeMs(stream.deviceId, QUESTION_LIFETIME_MS);
       const expiresAt = Number.isFinite(agentDeadline)
-        ? Math.min(Math.max(agentDeadline, now), now + QUESTION_LIFETIME_MS)
-        : now + QUESTION_LIFETIME_MS;
+        ? Math.min(Math.max(agentDeadline, now), now + questionLifetimeMs)
+        : now + questionLifetimeMs;
       const expiry = setTimeout(() => {
         const current = this.questions.get(promptId);
         if (!current || current.expiresAt !== expiresAt) return;

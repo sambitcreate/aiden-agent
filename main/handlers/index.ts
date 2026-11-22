@@ -83,6 +83,7 @@ import { registerFollowThroughHandlers } from "./follow-through.js";
 import { registerGoalHandlers } from "./goals.js";
 import { declineGoalWindowRound, goalLoop, goalProposals, reportGoalWindowView, startGoalWindowRound } from "../services/goal/goal-main.js";
 import { chatGenerationOwner } from "../services/chat-generation-owner.js";
+import { registerChildChatsHandlers } from "./child-chats.js";
 import { registerTtsHandlers } from "./tts.js";
 import { registerDeviceHandlers } from "./devices.js";
 import { registerCreateImagesIpc } from "./create-images/index.js";
@@ -260,6 +261,7 @@ export function registerHandlers(isMainWindow: (event: IpcMainInvokeEvent) => bo
       },
     },
   });
+  registerChildChatsHandlers();
   registerTtsHandlers();
   registerStorageHandlers();
   registerDeviceHandlers();

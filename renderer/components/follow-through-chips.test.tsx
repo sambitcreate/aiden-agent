@@ -261,3 +261,14 @@ test("a check-back notice card reads as the agent checking back", () => {
   const card = screen.getByRole("note", { name: "Check-back: Checking back" });
   assert.ok(within(card).getByText("See whether the deploy finished"));
 });
+
+test("a started chat's notice card names it as a started chat", () => {
+  render(
+    <AgentNoticeCard
+      notice={agentNotice({ source: "chat", tone: "failure", title: "2 started chats ended", summary: "Docs: finished · Tests: stopped with an error" })}
+      content="Chats this chat started have ended."
+    />,
+  );
+  const card = screen.getByRole("note", { name: "Started chat: 2 started chats ended" });
+  assert.ok(within(card).getByText("Docs: finished · Tests: stopped with an error"));
+});

@@ -2855,3 +2855,31 @@ test("blocked synthetic gap snapshot drains retained tail in order or disconnect
   assert.equal(stalled.response.destroyed, true);
   assert.equal(stalled.response.listenerCount("drain"), 0);
 });
+
+test("a lead chat's started chat keeps approvals and questions open 30 minutes; a phone keeps 5", () => {
+  const now = Date.parse("2026-11-22T10:00:00.000Z");
+  const denied: string[] = [];
+  const service = new AidenRemoteStreamService({
+    now: () => now,
+    cancel: () => true,
+    approve: (approvalId, decision) => {
+      denied.push(`${approvalId}:${decision}`);
+      return true;
+    },
+    respondQuestion: () => true,
+  });
+  const child = service.create("chat:lead-1", "stream-child", "child-1", "turn-1");
+  child.owner.send("chat:approval", { approvalId: "approval-child", summary: "Run tests", toolCallId: "call-1", toolName: "run_command" });
+  assert.equal(service.pendingApproval("chat:lead-1", "stream-child")?.expiresAt, "2026-11-22T10:30:00.000Z");
+  const phone = service.create("device-1", "stream-phone", "chat-2", "turn-2");
+  phone.owner.send("chat:approval", { approvalId: "approval-phone", summary: "Run tests", toolCallId: "call-2", toolName: "run_command" });
+  assert.equal(service.pendingApproval("device-1", "stream-phone")?.expiresAt, "2026-11-22T10:05:00.000Z");
+
+  const childQuestion = service.create("chat:lead-1", "stream-child-2", "child-2", "turn-3");
+  childQuestion.owner.send("chat:questionnaire", { ...QUESTION_PROMPT, promptId: "q-child", streamId: "stream-child-2" });
+  assert.equal(service.pendingQuestion("chat:lead-1", "stream-child-2")?.expiresAt, "2026-11-22T10:30:00.000Z");
+  assert.deepEqual(denied, []);
+  for (const owner of [child, phone, childQuestion]) {
+    owner.owner.send("chat:done", { chat: { messages: [{ id: "a-1", role: "assistant" }] } });
+  }
+});

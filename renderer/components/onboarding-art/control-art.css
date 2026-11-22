@@ -419,3 +419,8 @@
 .oa-goal-bar-text { display: grid; gap: 3px; min-width: 0; flex: 1; font-size: 7.5px; line-height: 9px; white-space: nowrap; }
 .oa-goal-bar-text .oa-bar { height: 4px; }
 .oa-goal-foot .oa-composer { height: 46px; }
+
+/* Chats that run chats: the lead chat's started-chats list. */
+.oa-sched-dot[data-chat-state="working"] { background: var(--accent); }
+.oa-sched-dot[data-chat-state="needs"] { background: var(--status-warning); }
+.oa-sched-dot[data-chat-state="done"] { background: var(--status-green); }

@@ -78,6 +78,8 @@ export function createCliScheduler(agentDir: string) {
   });
   async function saveInput(input: ScheduledTaskInput, options?: { expectedUpdatedAt?: number; signal?: AbortSignal }) {
     input = structuredClone(input);
+    // The server has no watch or link runner, so a task that would run from one never starts here.
+    if (input.trigger) throw new Error("Tasks that run when something changes or from a link run in the desktop app only.");
     if (input.botId) return service.save(input, options);
         if (input.mode === "script" && input.permission !== "full") throw new Error("Script schedules require explicit full permission.");
         const servers = await storeFor(agentDir).load();

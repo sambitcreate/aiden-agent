@@ -27,8 +27,10 @@ import {
   scheduleToolRequiresApproval,
   SCHEDULE_TOOL_NAME,
   summarizeScheduleToolCall,
+  canonicalizeAssistantScheduleToolArguments,
   type ScheduleToolDependencies,
 } from "./schedule-tool.js";
+import { isAssistantAutomationApprovalDetails, isScheduledTaskApprovalDetails } from "../../renderer/shared/assistant.js";
 import { createHash } from "node:crypto";
 import { mcpRuntimeConnectionSnapshot } from "./mcp-credential-cleanup-core.js";
 import {
@@ -85,6 +87,7 @@ function scheduledTask(input: ScheduledTaskInput, id: string): ScheduledTask {
       : {}),
     executionProfile: input.executionProfile,
     ...(input.originChatId ? { originChatId: input.originChatId } : {}),
+    ...(input.trigger ? { trigger: structuredClone(input.trigger) } : {}),
     notify: input.notify !== false,
     createdAt: 1,
     updatedAt: 1,
@@ -853,9 +856,10 @@ test("attended Assistant scheduling exposes separate list, create, and edit tool
     "permission",
     "prompt",
     "timezone",
+    "trigger",
     "workspaceId",
   ]);
-  assert.deepEqual(schema.required?.slice().sort(), ["action", "cron", "name", "prompt"]);
+  assert.deepEqual(schema.required?.slice().sort(), ["action", "name", "prompt"]);
   assert.equal(schema.additionalProperties, false);
   assert.doesNotMatch(JSON.stringify(schema), /run_now|pause|resume|remove/u);
 
@@ -1712,4 +1716,49 @@ test("post_in_chat only applies when creating", async () => {
     /applies only when creating/u,
   );
   assert.equal(fake.tasks[0]?.originChatId, "chat-1");
+});
+
+
+test("a trigger Aiden proposes survives approval unchanged, shows its label on the card and keeps the link from the agent", async () => {
+  const fake = fakeDependencies();
+  const trigger = { kind: "webhook", gapMinutes: 10, filters: [{ path: "action", equals: "opened" }] };
+  const args = { action: "create", name: "New PRs", prompt: "Review the new pull request.", trigger };
+  assert.equal(summarizeScheduleToolCall(args), 'Create scheduled task "New PRs" (When its link is called, when it matches (at most every 10 min)) with read-only access');
+  const approval = await prepareStandardScheduleApproval(args, ASSISTANT_MODEL_SELECTION, fake.dependencies);
+  assert.ok(isScheduledTaskApprovalDetails(approval.details), "the card accepts a trigger task's details");
+  assert.equal(approval.details.whenLabel, "When its link is called, when it matches (at most every 10 min)");
+  assert.equal(approval.details.nextRunAt, 0);
+  assert.match(approval.summary, /When its link is called/u);
+
+  const tool = createScheduleTaskTool({ kind: "standard", modelSelection: ASSISTANT_MODEL_SELECTION }, fake.dependencies);
+  const created = jsonResult(await tool.execute("create-trigger", args));
+  assert.deepEqual(fake.tasks[0]?.trigger, trigger, "exactly what was approved is saved");
+  assert.equal(fake.tasks[0]?.cron, "");
+  assert.equal(created.link, "shown_to_person");
+  assert.equal((created.task as Record<string, unknown>).trigger, approval.details.whenLabel);
+  assert.doesNotMatch(JSON.stringify(created), /hooks\/tasks/u, "no link reaches the agent");
+
+  await assert.rejects(
+    tool.execute("update-trigger", { action: "update", id: fake.tasks[0]!.id, taskName: "New PRs", expectedUpdatedAt: 1, trigger }),
+    /only when creating/u,
+  );
+  assert.equal(summarizeScheduleToolCall({ ...args, trigger: { kind: "webhook", gapMinutes: 0 } }).includes("an invalid trigger"), true);
+});
+
+test("an Aiden Assistant automation may watch an address or run from a link, never run a script", () => {
+  const base = { action: "create", name: "Status", prompt: "Tell me what changed on the status page." };
+  const watch = { kind: "watch", source: { type: "url", url: "https://status.example.com/" }, everyMinutes: 30 };
+  const canonical = canonicalizeAssistantScheduleToolArguments({ ...base, trigger: watch });
+  assert.deepEqual(canonical.trigger, watch);
+  assert.equal(canonical.cron, undefined);
+  const proposal = prepareAssistantScheduleProposal({ ...base, trigger: { kind: "webhook", gapMinutes: 5 } });
+  assert.equal(proposal.input.cron, "");
+  assert.equal(proposal.details.whenLabel, "When its link is called (at most every 5 min)");
+  assert.ok(isAssistantAutomationApprovalDetails({
+    ...proposal.details, workspaceName: null, mcpServerNames: [], providerId: "p", providerName: "P", model: "m", modelName: "M", schedulerEnabled: true,
+  }));
+  assert.throws(
+    () => canonicalizeAssistantScheduleToolArguments({ ...base, trigger: { kind: "watch", source: { type: "script", script: "check.sh" }, everyMinutes: 30 } }),
+    /not run a script/u,
+  );
 });

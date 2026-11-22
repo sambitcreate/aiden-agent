@@ -26,6 +26,7 @@ import {
 } from "../../renderer/shared/bot-routine-schedule.js";
 import { isPathSafeBotCapabilityId } from "../../renderer/shared/bot-capabilities.js";
 import { BOT_LIMITS } from "../../renderer/shared/bots.js";
+import { parseScheduledTaskTrigger, type ScheduledTaskTrigger } from "../../renderer/shared/scheduled-task-trigger.js";
 
 const RUNS_PER_TASK = 50;
 const STORED_OUTPUT_LIMIT = 64 * 1024;
@@ -109,6 +110,22 @@ export function nextScheduledRuns(
     return job.nextRuns(requested, from).map((date) => date.getTime());
   } finally {
     job.stop();
+  }
+}
+
+/**
+ * The trigger a task carries: watches only start "Ask Aiden" tasks of the
+ * person's own, never a Bot routine, and a script watch runs a script
+ * unattended, so it needs Full access like a script task.
+ */
+function assertTriggerShape(
+  trigger: ScheduledTaskTrigger,
+  task: { botId?: string; mode: string; permission: string },
+): void {
+  if (task.botId !== undefined) throw new Error("A Bot routine can't have a task trigger.");
+  if (task.mode !== "llm") throw new Error("A task that runs when something changes asks Aiden. Use a script watch to check with a script.");
+  if (trigger.kind === "watch" && trigger.source.type === "script" && task.permission !== "full") {
+    throw new Error("A script watch runs a script unattended, so the task needs Full permission.");
   }
 }
 
@@ -224,7 +241,15 @@ function normalizeInput(
     botId === undefined
       ? undefined
       : parseBotRoutineSchedule(input.routineSchedule ?? existing?.routineSchedule);
-  const cron = routineSchedule ? botRoutineCron(routineSchedule) : input.cron.trim();
+  // Undefined keeps the saved trigger (callers that don't know triggers never
+  // drop one); null removes it, so the task runs on its cron again.
+  const trigger =
+    input.trigger === null
+      ? undefined
+      : input.trigger !== undefined
+        ? parseScheduledTaskTrigger(input.trigger)
+        : existing?.trigger;
+  const cron = trigger ? "" : routineSchedule ? botRoutineCron(routineSchedule) : input.cron.trim();
   const enabled = input.enabled ?? existing?.enabled ?? true;
   const prompt = input.mode === "llm" ? cleanOptional(input.prompt, 32 * 1024) : undefined;
   const script = input.mode === "script" ? validateScriptName(input.script ?? "") : undefined;
@@ -314,7 +339,10 @@ function normalizeInput(
       routineSchedule,
     });
   }
-  const nextRunAt = enabled ? nextScheduledRun(cron, timezone, new Date(now)) : undefined;
+  const permissionForTrigger = input.mode === "script" ? "full" : permission;
+  if (trigger) assertTriggerShape(trigger, { botId, mode: input.mode, permission: permissionForTrigger });
+  // A trigger task has no cron: it runs when its trigger sees a change.
+  const nextRunAt = enabled && !trigger ? nextScheduledRun(cron, timezone, new Date(now)) : undefined;
   if (
     routineSchedule?.kind === "once" &&
     nextRunAt !== undefined &&
@@ -331,7 +359,9 @@ function normalizeInput(
       : existing
         ? workspaceId === existing.workspaceId ? existing.originChatId : undefined
         : cleanOptional(input.originChatId, 200);
-  if (originChatId) assertChatTaskCadence(cron, timezone, new Date(now));
+  // Triggers don't use the cron floor: the chat's hourly task-run share and
+  // the trigger's own gap bound how often they post.
+  if (originChatId && !trigger) assertChatTaskCadence(cron, timezone, new Date(now));
   const retiredRetries = existing && (!enabled || !existing.enabled || existing.prompt !== prompt ||
     existing.cron !== cron || existing.timezone !== timezone);
   const pending = retiredRetries ? observeQueuedRetries(existing.pendingRoutineFires) : existing?.pendingRoutineFires;
@@ -358,6 +388,7 @@ function normalizeInput(
     webSearchEnabled,
     chatId: workspaceId === existing?.workspaceId ? existing?.chatId : undefined,
     ...(originChatId ? { originChatId } : {}),
+    ...(trigger ? { trigger } : {}),
     ...(botId !== undefined ? { botId, routineSchedule } : {}),
     ...(botId !== undefined && (existing && !existing.enabled && enabled ? now : existing?.enabledAt) !== undefined
       ? { enabledAt: existing && !existing.enabled && enabled ? now : existing!.enabledAt }
@@ -373,6 +404,7 @@ function normalizeInput(
     notify: input.notify ?? existing?.notify ?? true,
     lastResult: existing?.lastResult,
     lastError: existing?.lastError,
+    ...(botId === undefined && existing?.failurePausedAt !== undefined ? { failurePausedAt: existing.failurePausedAt } : {}),
     createdAt: existing?.createdAt ?? now,
     updatedAt: nextTaskRevision(now, existing?.updatedAt),
   };
@@ -394,7 +426,8 @@ function isSkipReason(value: unknown): value is ScheduledRunSkipReason {
     value === "duplicate" ||
     value === "paused_by_person" ||
     value === "chat_busy" ||
-    value === "chat_budget"
+    value === "chat_budget" ||
+    value === "too_late"
   );
 }
 
@@ -477,7 +510,12 @@ function normalizeStoredTask(value: unknown): ScheduledTask | null {
   }
   const botId = typeof task.botId === "string" ? task.botId : undefined;
   let routineSchedule: BotRoutineSchedule | undefined;
+  let trigger: ScheduledTaskTrigger | undefined;
   try {
+    if (task.trigger !== undefined) {
+      trigger = parseScheduledTaskTrigger(task.trigger);
+      assertTriggerShape(trigger, { botId, mode: task.mode, permission: task.permission });
+    }
     if (botId !== undefined) {
       routineSchedule = parseBotRoutineSchedule(task.routineSchedule);
       assertBotRoutineShape({
@@ -499,7 +537,8 @@ function normalizeStoredTask(value: unknown): ScheduledTask | null {
     }
     mcpServerIds = validateScheduledMcpServerIds(task.mcpServerIds);
     mcpServerBindings = validateScheduledMcpServerBindings(task.mcpServerBindings);
-    nextScheduledRun(task.cron, task.timezone);
+    // A trigger task has no cron to check.
+    if (!trigger) nextScheduledRun(task.cron, task.timezone);
     if (task.mode === "llm") {
       if (!prompt?.trim()) {
         throw new Error("LLM tasks require a prompt.");
@@ -540,7 +579,7 @@ function normalizeStoredTask(value: unknown): ScheduledTask | null {
     mode: task.mode,
     cron: task.cron,
     timezone: task.timezone,
-    nextRunAt: scheduleError ? undefined : finiteTimestamp(task.nextRunAt),
+    nextRunAt: scheduleError || trigger ? undefined : finiteTimestamp(task.nextRunAt),
     ...(botId !== undefined ? { pendingRoutineFires: storedRoutineFires(task.pendingRoutineFires, task.id) } : {}),
     lastRunAt: finiteTimestamp(task.lastRunAt),
     workspaceId,
@@ -561,6 +600,9 @@ function normalizeStoredTask(value: unknown): ScheduledTask | null {
     ...(botId === undefined && typeof task.originChatId === "string" && task.originChatId
       ? { originChatId: task.originChatId }
       : {}),
+    // An unreadable trigger is dropped: the task stays off ("Needs attention")
+    // until the person picks a schedule or a new trigger in the editor.
+    ...(trigger ? { trigger } : {}),
     ...(botId !== undefined ? { botId, ...(routineSchedule ? { routineSchedule } : {}) } : {}),
     ...(botId !== undefined && typeof task.enabledAt === "number" && Number.isFinite(task.enabledAt) ? { enabledAt: task.enabledAt } : {}),
     ...(botId !== undefined && typeof task.sourceProposalId === "string" && /^[0-9a-f-]{36}$/u.test(task.sourceProposalId)
@@ -578,6 +620,9 @@ function normalizeStoredTask(value: unknown): ScheduledTask | null {
       : typeof task.lastError === "string"
         ? task.lastError
         : undefined,
+    ...(botId === undefined && typeof task.failurePausedAt === "number" && Number.isFinite(task.failurePausedAt)
+      ? { failurePausedAt: task.failurePausedAt }
+      : {}),
     createdAt: task.createdAt,
     updatedAt: task.updatedAt,
   };
@@ -706,7 +751,7 @@ export function createScheduleStore(
     patch: Partial<
       Pick<
         ScheduledTask,
-        "nextRunAt" | "lastRunAt" | "lastResult" | "lastError" | "chatId" | "enabled"
+        "nextRunAt" | "lastRunAt" | "lastResult" | "lastError" | "chatId" | "enabled" | "failurePausedAt"
       >
     >,
     isCurrent: () => boolean = () => true,
@@ -784,7 +829,7 @@ export function createScheduleStore(
           pendingRoutineFires: existing.pendingRoutineFires?.filter((fire) =>
             !fire.retry || fire.requestId === options.clearRoutineRetriesExcept),
         }),
-        nextRunAt: enabled
+        nextRunAt: enabled && !existing.trigger
           ? nextScheduledRun(existing.cron, existing.timezone, new Date(timestamp))
           : undefined,
         updatedAt: nextTaskRevision(timestamp, existing.updatedAt),

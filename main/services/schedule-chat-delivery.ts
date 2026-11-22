@@ -65,12 +65,15 @@ export interface TaskRunChat {
 
 export interface TaskRunChatDeliveryDeps {
   getChat(chatId: string): Promise<TaskRunChat | undefined>;
+  /** The task as saved now: the person may have chosen "Use its own chat" while the run waited. */
+  currentTask(taskId: string): Promise<ScheduledTask | undefined>;
   /** The chat it posted into is gone or can no longer take it: later runs use the task's own chat. */
   releaseOriginChat(taskId: string, chatId: string): Promise<void>;
   /** The task's own chat, created on first use. */
   ensureOwnChat(task: ScheduledTask): Promise<string>;
   /** Today's run in the task's own chat. Throws when the run could not happen. */
-  runInOwnChat(task: ScheduledTask, chatId: string, signal: AbortSignal): Promise<TaskRunExecution>;
+  /** `eventText`: what a trigger saw, already fenced as data, added after the task's prompt. */
+  runInOwnChat(task: ScheduledTask, chatId: string, signal: AbortSignal, eventText?: string): Promise<TaskRunExecution>;
   /** Say in the task's own chat that the run failed. */
   reportOwnChatFailure(task: ScheduledTask, chatId: string, message: string): Promise<void>;
   /** Run the task's script without holding any chat; `output` is what it printed. Throws when it could not start. */
@@ -190,10 +193,11 @@ export function createTaskRunChatDelivery(deps: TaskRunChatDeliveryDeps) {
     return undefined;
   }
 
-  async function inOwnChat(task: ScheduledTask, signal: AbortSignal): Promise<TaskRunOutcome> {
+  async function inOwnChat(task: ScheduledTask, signal: AbortSignal, eventText?: string): Promise<TaskRunOutcome> {
     const chatId = await deps.ensureOwnChat(task);
+    const fenced = eventText?.trim() ? fenceAsData("What happened", tailText(eventText, EVENT_TEXT_CHARS).text) : undefined;
     try {
-      return { kind: "fell_back", chatId, ...(await deps.runInOwnChat(task, chatId, signal)) };
+      return { kind: "fell_back", chatId, ...(await deps.runInOwnChat(task, chatId, signal, fenced)) };
     } catch (cause) {
       const error = errorText(cause);
       await deps
@@ -272,8 +276,10 @@ export function createTaskRunChatDelivery(deps: TaskRunChatDeliveryDeps) {
       if (signal.aborted) throw new Error("Scheduled task was cancelled.");
       if (!idle) return chatBusy(task, chatId);
       const admission = await deps.inChatOrder(chatId, async () => {
-        // The chat may have been deleted or moved while the run waited.
-        if ((await originChat(task)) !== chatId) return { kind: "moved" as const };
+        // The chat may have been deleted or moved, or the person may have
+        // chosen "Use its own chat", while the run waited.
+        const saved = await deps.currentTask(task.id);
+        if (!saved || (await originChat(saved)) !== chatId) return { kind: "moved" as const };
         if (countsAgainstBudget && budget.left(chatId) <= 0) return { kind: "budget" as const };
         const admitted = await deps.admitTurn(task, chatId, post, signal);
         if (admitted.kind === "admitted" && countsAgainstBudget) budget.take(chatId);
@@ -298,7 +304,7 @@ export function createTaskRunChatDelivery(deps: TaskRunChatDeliveryDeps) {
    */
   async function deliverTaskRunToChat(task: ScheduledTask, options: TaskRunDeliveryOptions): Promise<TaskRunOutcome> {
     const chatId = await originChat(task);
-    if (!chatId) return inOwnChat(task, options.signal);
+    if (!chatId) return inOwnChat(task, options.signal, options.eventText);
     const countsAgainstBudget = options.trigger?.kind !== "manual";
     if (countsAgainstBudget && budget.left(chatId) <= 0) return overBudget(task, chatId);
     let outcome: TaskRunOutcome | { kind: "moved" };
@@ -317,10 +323,20 @@ export function createTaskRunChatDelivery(deps: TaskRunChatDeliveryDeps) {
       ).catch((recordError: unknown) => deps.onError?.(recordError));
       return { kind: "ran", chatId, result: options.signal.aborted ? "blocked" : "error", output: "", error };
     }
-    return outcome.kind === "moved" ? inOwnChat(task, options.signal) : outcome;
+    return outcome.kind === "moved" ? inOwnChat(task, options.signal, options.eventText) : outcome;
   }
 
-  return { deliverTaskRunToChat, budget };
+  /**
+   * A record-only card where the task's runs land: the chat it was made in
+   * when that still works, otherwise its own chat. Never wakes the chat.
+   */
+  async function recordInLandingChat(task: ScheduledTask, card: { tone: AgentNoticeTone; summary: string; text: string }): Promise<string> {
+    const chatId = (await originChat(task)) ?? (await deps.ensureOwnChat(task));
+    await record(chatId, taskNotice(task, card.tone, card.summary), card.text);
+    return chatId;
+  }
+
+  return { deliverTaskRunToChat, recordInLandingChat, budget };
 }
 
 export type TaskRunChatDelivery = ReturnType<typeof createTaskRunChatDelivery>;

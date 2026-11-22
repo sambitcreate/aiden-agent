@@ -22,6 +22,7 @@
 import type { InlineVisualsMode } from "../../renderer/shared/appearance.js";
 import { ASK_USER_QUESTION_TOOL_NAME } from "../../renderer/shared/ask-user-question.js";
 import { CHECK_BACK_TOOL_NAME } from "../../renderer/shared/check-backs.js";
+import { CHILD_CHATS_TOOL_NAME } from "../../renderer/shared/child-chats.js";
 import { WORKSPACE_ARTIFACT_TOOL_NAME } from "../../renderer/shared/workspace-artifacts.js";
 import { COMPUTER_USE_TOOL_NAME } from "./computer-use/tool.js";
 import { approvalAllowableAwayFromOwner } from "./chat-owed-turn-prompts.js";
@@ -87,6 +88,20 @@ export interface ChatTurnAudienceOptions {
 export interface ChatTurnAudienceParams {
   inlineVisuals?: InlineVisualsMode;
   visualize?: boolean;
+}
+
+/**
+ * A windowless turn answers the person when the screened prompt it answers is
+ * a message the person wrote (queued while the chat's previous run went). A
+ * turn answering a notice (a finished job, a check-back) is not the person's,
+ * so it can't set check-backs of its own.
+ */
+export function screenedPromptAnswersPerson(
+  messages: readonly { id: string; role: string; notice?: unknown }[],
+  screenedPrompt: { messageId: string } | undefined,
+): boolean {
+  if (screenedPrompt === undefined) return false;
+  return messages.some((message) => message.id === screenedPrompt.messageId && message.role === "user" && !message.notice);
 }
 
 /** The turn's audience, from the generation's options and parameters. */
@@ -328,6 +343,14 @@ export const TURN_ARGS_REFUSAL_RULES: readonly TurnArgsRefusalRule[] = [
     reason:
       `${SUBAGENT_TOOL_NAME} can only run read-only helpers in a keep-going round: scout, planner or reviewer, without workspace writes, shell, mutating connectors or nesting. ` +
       "Make the change yourself in this round, or delegate only the reading.",
+  },
+  {
+    tool: CHILD_CHATS_TOOL_NAME,
+    turns: aidenStartedTurn,
+    args: argIs("action", "start"),
+    reason:
+      `${CHILD_CHATS_TOOL_NAME} cannot start chats in this turn: starting chats needs the person here, and Aiden started this turn. ` +
+      "list, read, wait, send and stop still work; say in your reply what you would start.",
   },
 ];
 

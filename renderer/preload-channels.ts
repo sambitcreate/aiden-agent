@@ -147,6 +147,8 @@ export const NOTIFICATION_CHANNEL_VALUES = [
   "chats:goal-changed",
   "chats:goal-window-round",
   "chats:goal-proposal-changed",
+  /** A lead chat's started chats changed (Phase 5): `{leadChatId}`. */
+  "chats:child-chats-changed",
   "chats:settled",
   "git:changed",
   "imageWorkflows:run-changed",

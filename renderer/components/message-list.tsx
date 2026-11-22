@@ -91,6 +91,8 @@ import { pauseWhenUnseen } from "../lib/offscreen-pause";
 const EMPTY_CHAT_ARTIFACTS: readonly ChatArtifactV1[] = [];
 interface MessageListProps {
   chatId: string;
+  /** For a chat another chat started: the label under messages that chat sent ("From “Release prep”"). */
+  leadChatLabel?: string;
   messages: ChatMessage[];
   /** Text of the assistant reply currently streaming, or null when idle. */
   streamingText: string | null;
@@ -497,6 +499,8 @@ function settledTurnFooter(message: ChatMessage): React.ReactNode {
 
 interface SettledMessageRowProps {
   imageScope: string;
+  /** "From “<lead>”" for messages the chat that started this one sent. */
+  leadChatLabel?: string;
   workDetails?: WorkDetailsMode;
   retainWorkDetails?: boolean;
   chatId: string;
@@ -535,6 +539,7 @@ interface SettledMessageRowProps {
  */
 const SettledMessageRow = React.memo(function SettledMessageRow({
   imageScope,
+  leadChatLabel,
   workDetails,
   retainWorkDetails,
   chatId,
@@ -650,6 +655,7 @@ const SettledMessageRow = React.memo(function SettledMessageRow({
             attachments={message.attachments}
             skill={message.skill}
             inputSource={message.inputSource}
+            {...(message.role === "user" && message.fromLeadChat && leadChatLabel ? { fromLeadChat: leadChatLabel } : {})}
             fork={fork}
           />
           {message.role === "user" && message.hookBlocked ? <HookBlockedMark reason={message.hookBlocked.reason} /> : null}
@@ -817,6 +823,7 @@ function transcriptRowKey(message: ChatMessage, previous: ChatMessage | undefine
 
 export function MessageList({
   chatId,
+  leadChatLabel,
   messages,
   streamingText,
   replayedTextLength,
@@ -1184,6 +1191,7 @@ export function MessageList({
       <SettledMessageRow
         key={settledRowKeys.get(message.id)}
         imageScope={`${chatId}:${settledRowKeys.get(message.id)}`}
+        leadChatLabel={leadChatLabel}
         workDetails={workDetails}
         retainWorkDetails={collapseTiming === "next-input" && messageIndex >= latestExchangeStart}
         chatId={chatId}

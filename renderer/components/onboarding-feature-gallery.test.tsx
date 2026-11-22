@@ -6,6 +6,7 @@ import { OnboardingFeatureGallery, onboardingFeatures } from "./onboarding-featu
 import { visibleOnboardingFeatures } from "../lib/onboarding-provider.js";
 import { hostPlatformCapabilities } from "../../main/services/host-platform-capabilities.js";
 import { BotsArt, KeepGoingArt, ScheduledAutomationsArt } from "./onboarding-art/control-art.js";
+import { ChatsThatRunChatsArt } from "./onboarding-art/chats-that-run-chats-art.js";
 
 /** A stand-in for the browser's IntersectionObserver that the test scrolls by hand. */
 class FakeIntersectionObserver {
@@ -194,6 +195,36 @@ test("the Keep Going Until Done tile shows a round's card in the chat and the go
   assert.ok(within(bar).getByText("Working · round 3 of 50"));
   assert.ok(within(bar).getByText("Pause"));
   assert.equal(art.container.querySelectorAll("img").length, 0, "the chat is code-drawn");
+  assert.equal(view.queryAllByRole("button").length, 0, "the drawing does not add fake keyboard actions");
+  for (const element of art.container.querySelectorAll<HTMLElement>("[class*='anim']")) {
+    for (const name of element.className.split(/\s+/u).filter((part) => part.includes("anim"))) {
+      assert.match(name, /^oa-anim-[a-z]+$/u);
+    }
+  }
+  art.unmount();
+});
+
+test("Mac and Linux tours show a chat's started chats working, waiting for you and done; other hosts leave the tile out", () => {
+  for (const platform of ["darwin", "linux", "win32"] as const) {
+    const host = hostPlatformCapabilities(platform, "arm64");
+    const shown = visibleOnboardingFeatures(onboardingFeatures, { ...host, designMode: true });
+    const { container, unmount } = render(<OnboardingFeatureGallery features={shown} platform={platform === "linux" ? "linux" : "darwin"} />);
+    const tile = container.querySelector<HTMLElement>('[data-onboarding-feature="chatsRunChats"]');
+    if (platform === "win32") assert.equal(tile, null, "no desktop host there runs started chats");
+    else {
+      assert.ok(tile, `${platform} can run started chats`);
+      assert.match(tile.getAttribute("aria-label") ?? "", /^Chats that run chats\. .*Their approvals still come to you, and Stop all ends every one\./u);
+    }
+    unmount();
+    cleanup();
+  }
+
+  const art = render(<ChatsThatRunChatsArt />);
+  const view = within(art.container);
+  assert.ok(view.getByText("3 chats working"));
+  const rows = within(view.getByRole("list", { name: "Started chats" })).getAllByRole("listitem");
+  assert.deepEqual(rows.map((row) => row.textContent), ["Working", "Needs you", "Done"]);
+  assert.equal(art.container.querySelectorAll("img").length, 0, "the list is code-drawn");
   assert.equal(view.queryAllByRole("button").length, 0, "the drawing does not add fake keyboard actions");
   for (const element of art.container.querySelectorAll<HTMLElement>("[class*='anim']")) {
     for (const name of element.className.split(/\s+/u).filter((part) => part.includes("anim"))) {

@@ -19,6 +19,7 @@ import {
   Lightbulb,
   ListTodo,
   MessageSquare,
+  MessagesSquare,
   Mic2,
   Monitor,
   MousePointer2,
@@ -327,6 +328,15 @@ export const onboardingFeatures: OnboardingFeature[] = [
       "Give a chat a goal with /goal, or /until npm test, and Aiden keeps working in new rounds until it is done or needs you, with a bar to pause or clear it. Aiden can suggest a goal too; only your Start begins one.",
     icon: Repeat,
     size: "standard",
+  },
+  {
+    id: "chatsRunChats",
+    group: "control",
+    title: "Chats that run chats",
+    description:
+      "Ask a chat to split up a job: it starts other chats, in this workspace or their own worktrees, and hears back as each finishes. Their approvals still come to you, and Stop all ends every one.",
+    icon: MessagesSquare,
+    size: "tall",
   },
   {
     id: "voice",

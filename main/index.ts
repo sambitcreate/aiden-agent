@@ -409,6 +409,7 @@ function cleanupApplication(): void {
   formFillRuntime.dispose();
   computerUseStatus.invalidate();
   scheduleService.stop();
+  void import("./services/scheduled-task-triggers-main.js").then(({ stopScheduledTaskTriggers }) => stopScheduledTaskTriggers());
   stopKeepAwake();
   stopChatTriage();
   stopInboxDockBadge();
@@ -2888,6 +2889,11 @@ if (!ownsSingleInstanceLock) {
           scheduleService.reevaluateCatchUp(),
         );
         if (!shutdownHasBegun()) await scheduleService.start();
+        // Chat tasks that run when something happens; never hold keep-awake.
+        if (!shutdownHasBegun()) {
+          const { startScheduledTaskTriggers } = await import("./services/scheduled-task-triggers-main.js");
+          await startScheduledTaskTriggers();
+        }
       } catch (error) {
         logger.error(
           "scheduled-tasks",

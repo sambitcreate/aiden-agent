@@ -497,6 +497,16 @@ function RootContent() {
   );
 
   React.useEffect(() => {
+    return onNotification("chats:child-chats-changed", (payload: unknown) => {
+      const leadChatId =
+        payload && typeof payload === "object" && typeof (payload as { leadChatId?: unknown }).leadChatId === "string"
+          ? (payload as { leadChatId: string }).leadChatId
+          : undefined;
+      void queryClient.invalidateQueries({ queryKey: leadChatId ? queryKeys.startedChats(leadChatId) : ["started-chats"] });
+    });
+  }, [queryClient]);
+
+  React.useEffect(() => {
     return onNotification("chats:pull-requests-changed", (payload: unknown) => {
       const chatId =
         payload && typeof payload === "object" && "chatId" in payload

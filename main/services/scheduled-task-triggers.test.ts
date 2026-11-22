@@ -1,0 +1,340 @@
+import assert from "node:assert/strict";
+import { promises as fs } from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import test from "node:test";
+import type { BotWatchCheck } from "./bot-routine-events/watch-sources.js";
+import { runScheduledScript } from "./schedule-script.js";
+import type { ScheduledRunTrigger } from "./schedule-service-core.js";
+import { createScheduledTaskTriggers } from "./scheduled-task-triggers.js";
+import { createScheduledTaskTriggerStore, hashTaskLinkToken } from "./scheduled-task-triggers-store.js";
+import type { ScheduledRun, ScheduledTask } from "./types.js";
+
+class MemoryPersistence<T> {
+  constructor(private data: T) {}
+  async load(): Promise<T> { return structuredClone(this.data); }
+  async update<R>(mutation: (draft: T) => R | Promise<R>): Promise<R> {
+    const draft = structuredClone(this.data);
+    const result = await mutation(draft);
+    this.data = draft;
+    return result;
+  }
+  snapshot(): T { return structuredClone(this.data); }
+}
+
+const MINUTE = 60_000;
+
+function watchTask(overrides: Partial<ScheduledTask> = {}): ScheduledTask {
+  return {
+    id: "task-1", name: "Status page", enabled: true, mode: "llm", cron: "", timezone: "UTC",
+    prompt: "Tell me what changed.", permission: "read-only", notify: true, webSearchEnabled: false,
+    trigger: { kind: "watch", source: { type: "url", url: "https://example.com/status" }, everyMinutes: 15 },
+    createdAt: 1, updatedAt: 1, ...overrides,
+  } as ScheduledTask;
+}
+
+function harness(options: { tasks?: ScheduledTask[]; checks?: BotWatchCheck[]; runResult?: ScheduledRun["result"]; stateDir?: string; fireDueTimers?: boolean } = {}) {
+  let clock = 1_800_000_000_000;
+  const tasks = options.tasks ?? [watchTask()];
+  const checks = [...(options.checks ?? [])];
+  const events: Array<{ taskId: string; event: Extract<ScheduledRunTrigger, { kind: "event" }>; runId: string }> = [];
+  const cards: Array<{ taskId: string; error: string }> = [];
+  const runs = new Map<string, ScheduledRun>();
+  const persistence = new MemoryPersistence<unknown>({ version: 1, tasks: {} });
+  const store = createScheduledTaskTriggerStore({
+    persistence,
+    tasks: async () => structuredClone(tasks),
+    pauseTask: async (taskId, reason) => {
+      const index = tasks.findIndex((task) => task.id === taskId);
+      tasks[index] = { ...tasks[index]!, enabled: false, lastError: reason, updatedAt: tasks[index]!.updatedAt + 1 };
+    },
+    now: () => clock,
+  });
+  const triggers = createScheduledTaskTriggers({
+    store,
+    isActive: () => true,
+    runEvent: async (taskId, event, runId) => {
+      events.push({ taskId, event, runId });
+      const run: ScheduledRun = { id: runId, taskId, startedAt: clock, finishedAt: clock, result: options.runResult ?? "success", output: "" };
+      runs.set(runId, run);
+      return run;
+    },
+    findRun: async (_taskId, runId) => runs.get(runId),
+    fetchUrl: async () => checks.shift() ?? { ok: false, error: "No more checks." },
+    resolveScript: async (_task, script) => {
+      const dir = options.stateDir!;
+      return { path: path.join(dir, script), cwd: dir };
+    },
+    execScript: (scriptPath, execOptions) => runScheduledScript(scriptPath, execOptions),
+    checkStateDir: async () => path.join(options.stateDir ?? os.tmpdir(), "state"),
+    linkSecret: async () => null,
+    paused: async (task, error) => { cards.push({ taskId: task.id, error }); },
+    now: () => clock,
+    timeZone: () => "UTC",
+    // Timers that are already due fire on the next tick when asked; later ones wait for the test.
+    setTimer: (fn, ms) => {
+      if (!options.fireDueTimers || ms > 0) return { cancel() {} };
+      const handle = setTimeout(fn, 0);
+      return { cancel: () => clearTimeout(handle) };
+    },
+  });
+  const bytes = (text: string): BotWatchCheck => ({ ok: true, bytes: new TextEncoder().encode(text) });
+  return {
+    tasks, store, triggers, events, cards, persistence, bytes,
+    advance: (ms: number) => { clock += ms; },
+    async check(taskId = "task-1") {
+      const outcome = await triggers.checkNow(taskId);
+      await triggers.idle();
+      return outcome;
+    },
+  };
+}
+
+test("a watched page that changes runs the task once with what changed", async () => {
+  const pages = ["Status: all good", "Status: all good", "Status: degraded"];
+  const checks = pages.map((page): BotWatchCheck => ({ ok: true, bytes: new TextEncoder().encode(page) }));
+  const local = harness({ checks });
+  await local.triggers.start();
+
+  assert.equal(await local.check(), "baseline");
+  assert.equal(local.events.length, 0, "the first look only records a baseline");
+  local.advance(15 * MINUTE);
+  assert.equal(await local.check(), "no_change");
+  assert.equal(local.events.length, 0, "an unchanged page runs no model");
+  local.advance(15 * MINUTE);
+  assert.equal(await local.check(), "changed");
+
+  assert.equal(local.events.length, 1);
+  const [{ event, runId, taskId }] = local.events;
+  assert.equal(taskId, "task-1");
+  assert.equal(event.kind, "event");
+  assert.equal(event.source, "watch");
+  assert.match(event.payload, /degraded/u);
+  assert.match(event.payload, /all good/u, "the payload carries the change, not only the new page");
+  assert.equal(runId, `event:task-1:${event.eventId}`);
+  local.triggers.stop();
+});
+
+test("three failed checks pause the task with one card, and the bookkeeping survives without re-running", async () => {
+  const value = harness({ checks: [
+    { ok: false, error: "Aiden couldn't reach example.com." },
+    { ok: false, error: "Aiden couldn't reach example.com." },
+    { ok: false, error: "Aiden couldn't reach example.com." },
+  ] });
+  await value.triggers.start();
+  assert.equal(await value.check(), "error");
+  value.advance(15 * MINUTE);
+  assert.equal(await value.check(), "error");
+  value.advance(15 * MINUTE);
+  assert.equal(await value.check(), "paused");
+
+  assert.equal(value.tasks[0]!.enabled, false, "the task itself is turned off");
+  assert.deepEqual(value.cards, [{ taskId: "task-1", error: "Aiden couldn't reach example.com." }]);
+  assert.equal(value.events.length, 0);
+  value.advance(15 * MINUTE);
+  assert.equal(await value.check(), "skipped", "a paused task isn't checked");
+  assert.equal(value.cards.length, 1);
+
+  // Turning it back on clears the failures and checks again right away.
+  value.tasks[0] = { ...value.tasks[0]!, enabled: true, updatedAt: value.tasks[0]!.updatedAt + 1 };
+  const [routine] = await value.store.list("task-1");
+  assert.equal(routine!.watch?.failures, 0);
+  value.triggers.stop();
+});
+
+test("recording a run doesn't retire a change, but editing the prompt or source does", async () => {
+  const value = harness();
+  const [first] = await value.store.list("task-1");
+  // A recorded run bumps the task's own revision; the trigger's stays.
+  value.tasks[0] = { ...value.tasks[0]!, updatedAt: 99, lastRunAt: 5 };
+  const [afterRun] = await value.store.list("task-1");
+  assert.equal(afterRun!.updatedAt, first!.updatedAt);
+
+  value.advance(MINUTE);
+  value.tasks[0] = { ...value.tasks[0]!, prompt: "Only tell me about outages." };
+  const [edited] = await value.store.list("task-1");
+  assert.ok(edited!.updatedAt > first!.updatedAt);
+
+  value.advance(MINUTE);
+  value.tasks[0] = { ...value.tasks[0]!, trigger: { kind: "watch", source: { type: "url", url: "https://example.com/other" }, everyMinutes: 15 } };
+  const [moved] = await value.store.list("task-1");
+  assert.ok(moved!.updatedAt > edited!.updatedAt);
+  assert.equal(moved!.watch?.hash, undefined, "a new source starts with a new baseline");
+
+  // A task that loses its trigger leaves no bookkeeping behind.
+  value.tasks[0] = { ...value.tasks[0]!, trigger: undefined, cron: "0 9 * * *" };
+  assert.deepEqual(await value.store.list("task-1"), []);
+  assert.deepEqual((value.persistence.snapshot() as { tasks: Record<string, unknown> }).tasks, {});
+});
+
+test("a script watch stays quiet on empty output, reports what it prints, and keeps a capped private state file", async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-task-trigger-"));
+  try {
+    // Prints the run count once AIDEN_CHECK_RUNS reaches 2; always appends to its state.
+    await fs.writeFile(path.join(dir, "check.sh"), [
+      "#!/bin/bash",
+      "printf 'run-%s\\n' \"$AIDEN_CHECK_RUNS\" >> \"$AIDEN_CHECK_STATE\"",
+      "head -c 9000 /dev/zero | tr '\\0' 'x' >> \"$AIDEN_CHECK_STATE\"",
+      "if [ \"$AIDEN_CHECK_RUNS\" -ge 2 ]; then echo \"new build $AIDEN_CHECK_RUNS\"; fi",
+    ].join("\n"), { mode: 0o755 });
+    const task = watchTask({ permission: "full", trigger: { kind: "watch", source: { type: "script", script: "check.sh" }, everyMinutes: 5 } });
+    const value = harness({ tasks: [task], stateDir: dir });
+    await value.triggers.start();
+
+    assert.equal(await value.check(), "no_change");
+    value.advance(5 * MINUTE);
+    assert.equal(await value.check(), "no_change");
+    assert.equal(value.events.length, 0, "a quiet script runs no model");
+    value.advance(5 * MINUTE);
+    assert.equal(await value.check(), "changed");
+    assert.equal(value.events.length, 1);
+    assert.equal(value.events[0]!.event.payload, "new build 2");
+
+    const stateFile = (await fs.readdir(path.join(dir, "state")))[0]!;
+    const state = await fs.readFile(path.join(dir, "state", stateFile), "utf8");
+    assert.equal(Buffer.byteLength(state), 8 * 1024, "the state file is capped at 8 KB");
+    assert.match(state, /^run-0\n/u, "the state file persists between checks and keeps its start");
+    value.triggers.stop();
+  } finally {
+    await fs.rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("trigger runs share one cap of four at once across every task", async () => {
+  // Every task watches its own address; each sees "a" first, then "b".
+  const tasks = Array.from({ length: 6 }, (_, index) => watchTask({
+    id: `task-${index}`,
+    trigger: { kind: "watch", source: { type: "url", url: `https://example.com/${index}` }, everyMinutes: 15 },
+  }));
+  let running = 0;
+  let peak = 0;
+  const releases: Array<() => void> = [];
+  const persistence = new MemoryPersistence<unknown>({ version: 1, tasks: {} });
+  let clock = 1_800_000_000_000;
+  const store = createScheduledTaskTriggerStore({ persistence, tasks: async () => structuredClone(tasks), pauseTask: async () => {}, now: () => clock });
+  const emitted = createScheduledTaskTriggers({
+    store,
+    isActive: () => true,
+    runEvent: async (taskId, _event, runId) => {
+      running += 1;
+      peak = Math.max(peak, running);
+      await new Promise<void>((resolve) => releases.push(resolve));
+      running -= 1;
+      return { id: runId, taskId, startedAt: 0, finishedAt: 0, result: "success", output: "" };
+    },
+    findRun: async () => undefined,
+    fetchUrl: (() => {
+      const seen = new Map<string, number>();
+      return async (url: string) => {
+        const count = seen.get(url) ?? 0;
+        seen.set(url, count + 1);
+        return { ok: true as const, bytes: new TextEncoder().encode(count === 0 ? "a" : "b") };
+      };
+    })(),
+    resolveScript: async () => { throw new Error("unused"); },
+    execScript: async () => { throw new Error("unused"); },
+    checkStateDir: async () => os.tmpdir(),
+    linkSecret: async () => null,
+    paused: async () => {},
+    now: () => clock,
+    timeZone: () => "UTC",
+    setTimer: () => ({ cancel() {} }),
+  });
+  await emitted.start();
+  for (const task of tasks) assert.equal(await emitted.checkNow(task.id), "baseline");
+  clock += 15 * MINUTE;
+  const changes = tasks.map((task) => emitted.checkNow(task.id));
+  for (let tick = 0; tick < 50 && releases.length < 4; tick += 1) await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(running, 4, "four runs start");
+  assert.equal(peak, 4);
+  while (releases.length) {
+    releases.shift()!();
+    for (let tick = 0; tick < 20; tick += 1) await new Promise((resolve) => setImmediate(resolve));
+  }
+  await Promise.all(changes);
+  await emitted.idle();
+  assert.equal(peak, 4, "never more than four at once");
+  emitted.stop();
+});
+
+function linkHarness(trigger: Record<string, unknown> = { kind: "webhook", gapMinutes: 10 }) {
+  const value = harness({ tasks: [watchTask({ trigger: trigger as ScheduledTask["trigger"] })], fireDueTimers: true });
+  const token = "L".repeat(43);
+  return {
+    ...value,
+    token,
+    async setUp() {
+      await value.store.setTokenHash("task-1", hashTaskLinkToken(token));
+      await value.triggers.start();
+    },
+    async call(body: unknown, contentType = "application/json") {
+      const admitted = await value.triggers.webhook.admit({ token, contentType });
+      if ("status" in admitted) return admitted.status;
+      const text = typeof body === "string" ? body : JSON.stringify(body);
+      const answer = await value.triggers.webhook.deliver({ token, contentType, body: new TextEncoder().encode(text) });
+      await value.triggers.idle();
+      return answer.status;
+    },
+  };
+}
+
+test("link calls inside the gap run once together, 20 at most, saying how many were dropped", async () => {
+  const link = linkHarness();
+  await link.setUp();
+  assert.equal(await link.call({ n: 0 }), 202);
+  assert.equal(link.events.length, 1, "the first call runs at once");
+  for (let n = 1; n <= 21; n += 1) assert.equal(await link.call({ n }), 202);
+  assert.equal(link.events.length, 1, "calls inside the 10-minute gap wait");
+  const [routine] = await link.store.list("task-1");
+  assert.ok(routine!.held, "they are held as one batch");
+  link.advance(10 * MINUTE);
+  await link.triggers.rearm();
+  // The held batch runs once the gap ends (the rearm arms its timer, now due).
+  for (let tick = 0; tick < 20 && link.events.length < 2; tick += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await link.triggers.idle();
+  }
+  const batch = link.events[1]?.event;
+  assert.equal(batch?.source, "webhook");
+  assert.match(batch?.payload ?? "", /^20 calls arrived while the task waited\. 1 more call was dropped\./u);
+  assert.match(batch?.payload ?? "", /Call 1:\n\{\n {2}"n": 2\n\}/u, "the oldest call was dropped");
+  assert.match(batch?.payload ?? "", /Call 20:\n\{\n {2}"n": 21\n\}/u);
+  link.triggers.stop();
+});
+
+test("a link withholds credentials, passes only the chosen fields, drops repeats and keeps 50 log entries", async () => {
+  const link = linkHarness({ kind: "webhook", gapMinutes: 1, includeFields: ["pull_request.title", "auth"], dedupePath: "delivery" });
+  await link.setUp();
+  assert.equal(await link.call({ delivery: "d-1", pull_request: { title: "Fix login", body: "secret plan" }, auth: { token: "abc", password: "hunter2" } }), 202);
+  const payload = JSON.parse(link.events[0]!.event.payload) as Record<string, unknown>;
+  assert.deepEqual(payload, { "pull_request.title": "Fix login", auth: { token: "[withheld]", password: "[withheld]" } });
+  link.advance(2 * MINUTE);
+  assert.equal(await link.call({ delivery: "d-1", pull_request: { title: "Again" } }), 202);
+  assert.equal(link.events.length, 1, "the same delivery id is one event");
+
+  const plain = linkHarness({ kind: "webhook", gapMinutes: 1 });
+  await plain.setUp();
+  await plain.call("deploy failed, key sk-live-abcdefghijklmnop0123", "text/plain");
+  assert.doesNotMatch(plain.events[0]!.event.payload, /sk-live-abcdefghijklmnop0123/u);
+  for (let n = 0; n < 60; n += 1) {
+    plain.advance(MINUTE + 1);
+    await plain.call({ n });
+  }
+  const state = await plain.store.linkState("task-1");
+  assert.equal(state?.log.length, 50);
+  assert.match(state!.log[0]!.preview, /"n": 59/u, "newest first");
+  plain.triggers.stop();
+  link.triggers.stop();
+});
+
+test("a task's link stops at once when it is rotated, and a stopped or paused task's link is unknown", async () => {
+  const link = linkHarness();
+  await link.setUp();
+  assert.equal(await link.call({ a: 1 }), 202);
+  await link.store.setTokenHash("task-1", hashTaskLinkToken("N".repeat(43)));
+  assert.equal(await link.call({ a: 2 }), 404);
+  link.tasks[0] = { ...link.tasks[0]!, enabled: false };
+  await link.store.setTokenHash("task-1", hashTaskLinkToken(link.token));
+  assert.equal(await link.call({ a: 3 }), 404);
+  link.triggers.stop();
+});
