@@ -32,7 +32,7 @@ the macOS CI gate). On Linux, follow CI's Linux E2E step: its apt packages,
 `sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0`, `sudo sysctl -w kernel.core_pattern=core`, `ulimit -c 0`, then
 `xvfb-run --auto-servernum npm run test:e2e`.
 
-Hosted CI splits deterministic spec files across four isolated macOS runners (`e2e`)
+Hosted CI splits deterministic spec files across five isolated macOS runners (`e2e`)
 and three Ubuntu runners (`linux-e2e`), each with one Playwright worker. macOS shards reuse the
 `build` job's output; each Ubuntu shard builds the app itself and runs under `xvfb-run`.
 `scripts/ci-e2e-shards.mjs` balances files using recorded hosted durations when

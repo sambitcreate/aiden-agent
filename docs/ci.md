@@ -86,7 +86,7 @@ superseded. Runner capacity can still cause queueing.
 - Browser containment, terminal coverage thresholds, Ruby policy, Rust
   formatting/tests/clippy and native helper production/test builds retain their
   execution modes. Registry validation checks both files and these prerequisites.
-- Electron files run across four isolated macOS runners with one worker each and
+- Electron files run across five isolated macOS runners with one worker each and
   `--fail-on-flaky-tests`, retaining the 20-minute job limit. File-duration weights
   prefer the median of recent hosted Playwright JSON timings (Actions cache plus
   per-shard artifacts, merged on `main` only; CI never pushes timing files).
@@ -216,6 +216,17 @@ began after the page stopped loading, before the person answers, as the
 Bot-browser fixture already does. A person looking at the page answers well after
 that read. The release rule, timeouts, retries and the flaky-test gate are
 unchanged.
+
+On 2026-11-22 the macOS Electron E2E jobs outgrew four shards. On `main`
+(run [45019275411](https://github.com/sambitcreate/aiden-agent/actions/runs/45019275411))
+shards 2 and 4 hit the 20-minute job limit, and on PR #882 shard 1 hit it on both
+attempts (run [45064649034](https://github.com/sambitcreate/aiden-agent/actions/runs/45064649034)),
+each time with no failed test, still running specs when cancelled. The four jobs
+of that PR run took about 70 minutes of runner time together, against 57 minutes
+on `main` run 45004973683 earlier the same day, so even a perfect four-way split
+leaves under two minutes of headroom per job. CI now runs five macOS shards,
+which brings an even split to about 14 minutes per job for one more runner
+setup. The 20-minute job limit, retries and the flaky-test gate are unchanged.
 
 On 2026-11-11 the flakes that kept `main` red between 2026-11-05 and 2026-11-10
 were fixed at their causes, without adding a retry or weakening an assertion.
