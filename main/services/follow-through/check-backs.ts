@@ -10,7 +10,10 @@
 // follow-through state file so a promise outlives a quit; nothing fires twice:
 // a check-back is saved as `claimed` before its notice is posted, and one
 // still `claimed` at the next launch becomes a record-only "Check-back
-// interrupted (due …)" card.
+// interrupted (due …)" card. A notice the chat could not take (the save
+// failed, the chat stayed held) goes back to pending and is tried again a
+// minute later, 3 attempts in all; then it is logged and left as a
+// record-only "Check-back not delivered" card. A deleted chat cancels it.
 // Found up to 2 hours late (the computer slept, Aiden was closed), it still
 // wakes the chat and says it is late; older ones leave a record-only card.
 
@@ -22,6 +25,7 @@ import {
   type CheckBackView,
 } from "../../../renderer/shared/check-backs.js";
 import { resolveWakeUpTime, WAKE_UP_INVALID_TIME_MESSAGE, type WakeUpWhen } from "../wake-up-time.js";
+import type { AgentNoticeOutcome } from "./notice-delivery.js";
 
 export type CheckBackState = "pending" | "claimed" | "fired" | "cancelled";
 
@@ -36,6 +40,10 @@ export interface CheckBackRecord {
   state: CheckBackState;
   /** When it fired or was cancelled; finished records are kept a day, then pruned. */
   endedAt?: number;
+  /** Deliveries the chat did not take (save failed, chat held); retried up to the limit. */
+  attempts?: number;
+  /** After a delivery the chat did not take: not tried again before this. */
+  retryAt?: number;
 }
 
 export type CheckBackFailureCode = "invalid_time" | "invalid_note" | "too_many_pending" | "not_found" | "off";
@@ -57,7 +65,7 @@ export interface CheckBacksDeps {
   /** Resolves once what `persist` was given is on disk. */
   flush?(): Promise<void>;
   /** Deliver a notice in order with the chat's other follow-ups. */
-  post(post: CheckBackPost): Promise<unknown>;
+  post(post: CheckBackPost): Promise<AgentNoticeOutcome>;
   onChange(chatId: string): void;
   /** Settings → Scheduled tasks → "Let chats check back later", read at call time. */
   enabled(): boolean | Promise<boolean>;
@@ -82,12 +90,21 @@ const FINISHED_RETENTION_MS = 24 * 60 * 60_000;
 const MAX_TIMER_MS = 60 * 60_000;
 /** After reading the setting failed, try again this much later rather than at once. */
 const RETRY_AFTER_FAILURE_MS = 60_000;
+/** A delivery the chat did not take is tried again this much later. */
+const RETRY_AFTER_DROP_MS = 60_000;
+/** Deliveries a check-back gets before it is left as a not-delivered card. */
+const MAX_DELIVERY_ATTEMPTS = 3;
 /** Quitting waits at most this long for notices already going out. */
 const SHUTDOWN_DRAIN_MS = 2_000;
 const OFF_MESSAGE = "Check-backs are off in Settings → Scheduled tasks. Do the work now, or tell the person what to look at later.";
 
 function view(record: CheckBackRecord): CheckBackView {
   return { id: record.id, fireAt: record.fireAt, note: record.note, setAt: record.setAt };
+}
+
+/** When a pending check-back is next due: its minute, or later after a dropped delivery. */
+function dueAt(record: CheckBackRecord): number {
+  return Math.max(record.fireAt, record.retryAt ?? 0);
 }
 
 function sentence(note: string): string {
@@ -101,7 +118,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 /** One saved record, or undefined when it is not one this release wrote. */
 export function parseCheckBackRecord(value: unknown): CheckBackRecord | undefined {
   if (!isRecord(value)) return undefined;
-  const { id, chatId, fireAt, note, setAt, setByTurnId, state, endedAt } = value;
+  const { id, chatId, fireAt, note, setAt, setByTurnId, state, endedAt, attempts, retryAt } = value;
   if (typeof id !== "string" || !id || typeof chatId !== "string" || !chatId) return undefined;
   if (typeof fireAt !== "number" || !Number.isFinite(fireAt) || typeof setAt !== "number" || !Number.isFinite(setAt)) return undefined;
   if (typeof note !== "string") return undefined;
@@ -115,6 +132,8 @@ export function parseCheckBackRecord(value: unknown): CheckBackRecord | undefine
     ...(typeof setByTurnId === "string" ? { setByTurnId } : {}),
     state,
     ...(typeof endedAt === "number" && Number.isFinite(endedAt) ? { endedAt } : {}),
+    ...(typeof attempts === "number" && Number.isSafeInteger(attempts) && attempts > 0 ? { attempts } : {}),
+    ...(typeof retryAt === "number" && Number.isFinite(retryAt) ? { retryAt } : {}),
   };
 }
 
@@ -125,6 +144,8 @@ export class CheckBacks {
   private readonly queues = new Map<string, Promise<unknown>>();
   /** Notices being posted right now; quitting waits briefly for them. */
   private readonly inFlight = new Set<Promise<void>>();
+  /** Claimed records whose notice has been handed to `post`; too late to cancel. */
+  private readonly posting = new Set<CheckBackRecord>();
 
   constructor(private readonly deps: CheckBacksDeps) {}
 
@@ -212,12 +233,15 @@ export class CheckBacks {
     });
   }
 
-  /** The person turned check-backs off: every pending one is cancelled. Returns how many. */
+  /**
+   * The person turned check-backs off: every pending one is cancelled, and so
+   * is one claimed whose notice has not gone out yet. Returns how many.
+   */
   cancelAll(): number {
     const chats = new Set<string>();
     let count = 0;
     for (const record of this.records) {
-      if (record.state !== "pending") continue;
+      if (record.state !== "pending" && !(record.state === "claimed" && !this.posting.has(record))) continue;
       this.finish(record, "cancelled");
       chats.add(record.chatId);
       count += 1;
@@ -312,9 +336,9 @@ export class CheckBacks {
   private arm(minDelay = 0): void {
     this.clear();
     if (this.stopped) return;
-    const next = this.records.filter((record) => record.state === "pending").sort((a, b) => a.fireAt - b.fireAt)[0];
+    const next = this.records.filter((record) => record.state === "pending").sort((a, b) => dueAt(a) - dueAt(b))[0];
     if (!next) return;
-    const delay = Math.min(MAX_TIMER_MS, Math.max(minDelay, next.fireAt - this.deps.now()));
+    const delay = Math.min(MAX_TIMER_MS, Math.max(minDelay, dueAt(next) - this.deps.now()));
     const callback = () => {
       this.timer = undefined;
       this.rearm();
@@ -328,14 +352,14 @@ export class CheckBacks {
   }
 
   private async fireDue(): Promise<void> {
-    if (!this.records.some((record) => record.state === "pending" && record.fireAt <= this.deps.now())) {
+    if (!this.records.some((record) => record.state === "pending" && dueAt(record) <= this.deps.now())) {
       this.arm();
       return;
     }
     const enabled = await this.deps.enabled();
     if (this.stopped) return;
     const now = this.deps.now();
-    const due = this.records.filter((record) => record.state === "pending" && record.fireAt <= now).sort((a, b) => a.fireAt - b.fireAt);
+    const due = this.records.filter((record) => record.state === "pending" && dueAt(record) <= now).sort((a, b) => a.fireAt - b.fireAt);
     if (!enabled) {
       // Turned off while Aiden was closed: nothing the agent set fires after the person said no.
       this.cancelAll();
@@ -355,25 +379,69 @@ export class CheckBacks {
     this.save();
     for (const chatId of new Set(due.map((record) => record.chatId))) this.deps.onChange(chatId);
     this.arm();
-    if (deliveries.length) {
-      await this.deps.flush?.().catch((error: unknown) => this.deps.log?.("Check-backs could not be saved before firing.", error));
+    if (deliveries.length === 0) return;
+    await this.deps.flush?.().catch((error: unknown) => this.deps.log?.("Check-backs could not be saved before firing.", error));
+    // The switch may have been turned off, or the record cancelled, while the claim was saving.
+    let stillOn: boolean;
+    try {
+      stillOn = await this.deps.enabled();
+    } catch (error) {
+      // Unsure: hand the claims back to pending and try again shortly.
+      for (const { record } of deliveries) if (record.state === "claimed") record.state = "pending";
+      this.save();
+      throw error;
     }
+    if (!stillOn) {
+      this.cancelAll();
+      return;
+    }
+    const going = deliveries.filter(({ record }) => record.state === "claimed");
+    for (const { record } of going) this.posting.add(record);
     await Promise.all(
-      deliveries.map(({ record, post }) => {
+      going.map(({ record, post }) => {
         const delivery = (async () => {
+          let outcome: AgentNoticeOutcome;
           try {
-            await this.deps.post(post);
+            outcome = await this.deps.post(post);
           } catch (error) {
-            this.deps.log?.("A check-back notice was not delivered.", error);
+            outcome = { kind: "dropped", reason: error instanceof Error ? error.message : String(error) };
+          } finally {
+            this.posting.delete(record);
           }
           if (record.state !== "claimed") return;
-          this.finish(record, "fired");
-          this.save();
+          this.settleDelivery(record, outcome);
         })();
         this.inFlight.add(delivery);
         return delivery.finally(() => this.inFlight.delete(delivery));
       }),
     );
+  }
+
+  /**
+   * What a posted notice became: delivered or recorded is fired; a chat that
+   * is gone cancels it; any other drop goes back to pending for another try a
+   * minute later, until the attempts run out.
+   */
+  private settleDelivery(record: CheckBackRecord, outcome: AgentNoticeOutcome): void {
+    if (outcome.kind !== "dropped") {
+      this.finish(record, "fired");
+    } else if (outcome.gone) {
+      this.finish(record, "cancelled");
+    } else {
+      const attempts = (record.attempts ?? 0) + 1;
+      record.attempts = attempts;
+      if (attempts >= MAX_DELIVERY_ATTEMPTS) {
+        this.deps.log?.(`A check-back notice was not delivered after ${attempts} attempts: ${outcome.reason}`);
+        this.missed(record, "undelivered");
+      } else {
+        this.deps.log?.(`A check-back notice was not delivered and will be tried again: ${outcome.reason}`);
+        record.state = "pending";
+        record.retryAt = this.deps.now() + RETRY_AFTER_DROP_MS;
+      }
+    }
+    this.save();
+    this.deps.onChange(record.chatId);
+    this.arm();
   }
 
   private firePost(record: CheckBackRecord, now: number, late: boolean): CheckBackPost {
@@ -405,10 +473,24 @@ export class CheckBacks {
    * the agent both see it. `interrupted` is one Aiden quit while delivering:
    * its notice may already be in the chat, so the agent checks before redoing.
    */
-  private missed(record: CheckBackRecord, why: "missed" | "interrupted" = "missed"): void {
+  private missed(record: CheckBackRecord, why: "missed" | "interrupted" | "undelivered" = "missed"): void {
     const zone = this.deps.timezone();
     const due = checkBackClock(record.fireAt, zone);
     this.finish(record, "fired");
+    if (why === "undelivered") {
+      void Promise.resolve(
+        this.deps.post({
+          chatId: record.chatId,
+          notice: agentNotice({ source: "check_back", tone: "failure", title: `Check-back not delivered (due ${due})`, summary: record.note }),
+          text: [
+            "[Aiden follow-up: undelivered check-back]",
+            `You said you would check back at ${due} (set at ${checkBackClock(record.setAt, zone)}): ${sentence(record.note)} Aiden tried ${MAX_DELIVERY_ATTEMPTS} times but could not deliver this check-back to the chat, so it did not happen. If it still matters, bring it up when the person next writes.`,
+          ].join("\n\n"),
+          wake: false,
+        }),
+      ).catch((error: unknown) => this.deps.log?.("An undelivered check-back card was not saved.", error));
+      return;
+    }
     if (why === "interrupted") {
       void Promise.resolve(
         this.deps.post({

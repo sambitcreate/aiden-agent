@@ -3,6 +3,7 @@ import test from "node:test";
 import { parseAgentNoticeV1 } from "../../../renderer/shared/agent-notices.js";
 import { createCheckBackTool } from "./check-back-tool.js";
 import { CheckBacks, type CheckBackPost, type CheckBackRecord } from "./check-backs.js";
+import type { AgentNoticeOutcome } from "./notice-delivery.js";
 
 function last<T>(items: readonly T[]): T | undefined {
   return items[items.length - 1];
@@ -12,7 +13,13 @@ const MINUTE = 60_000;
 /** 2026-11-22 14:50:00 UTC. */
 const START = Date.UTC(2026, 10, 22, 14, 50);
 
-function harness(options: { enabled?: boolean; holdPosts?: boolean; enabledRead?: () => boolean | Promise<boolean> } = {}) {
+function harness(options: {
+  enabled?: boolean;
+  holdPosts?: boolean;
+  enabledRead?: () => boolean | Promise<boolean>;
+  flush?: () => Promise<void>;
+  outcome?: (post: CheckBackPost) => AgentNoticeOutcome;
+} = {}) {
   let now = START;
   let enabled = options.enabled ?? true;
   let nextId = 0;
@@ -22,12 +29,16 @@ function harness(options: { enabled?: boolean; holdPosts?: boolean; enabledRead?
   const timers: Array<{ callback: () => void; at: number; live: boolean }> = [];
   let releasePosts: (() => void) | undefined;
   const postsHeld = options.holdPosts ? new Promise<void>((resolve) => (releasePosts = resolve)) : Promise.resolve();
+  const logs: string[] = [];
   const checkBacks = new CheckBacks({
     persist: (records) => saved.push(records),
+    ...(options.flush ? { flush: options.flush } : {}),
     post: async (post) => {
       posts.push(post);
       await postsHeld;
+      return options.outcome?.(post) ?? { kind: "woke", messageId: `m${posts.length}`, streamId: `s${posts.length}` };
     },
+    log: (message) => logs.push(message),
     onChange: (chatId) => changed.push(chatId),
     enabled: () => options.enabledRead?.() ?? enabled,
     timezone: () => "UTC",
@@ -49,6 +60,7 @@ function harness(options: { enabled?: boolean; holdPosts?: boolean; enabledRead?
     checkBacks,
     posts,
     saved,
+    logs,
     changed,
     settle,
     setEnabled: (value: boolean) => (enabled = value),
@@ -340,4 +352,105 @@ test("a restored note is trimmed to the note limit", async () => {
   ]);
   await value.settle();
   assert.equal(value.checkBacks.list("chat-1")[0]?.note.length, 500);
+});
+
+test("turning check-backs off while one is claimed and still saving cancels it before its notice goes out", async () => {
+  let releaseFlush: (() => void) | undefined;
+  let flushing = false;
+  const value = harness({
+    flush: () => {
+      flushing = true;
+      return new Promise<void>((resolve) => (releaseFlush = resolve));
+    },
+  });
+  await value.checkBacks.set("chat-1", { when: { inMinutes: 5 }, note: "Look at the build" });
+  await value.advance(5 * MINUTE);
+  assert.equal(flushing, true, "the claim is being saved");
+  assert.equal(last(value.saved)?.[0]?.state, "claimed");
+
+  // The person turns the switch off in Settings while the claim is saving.
+  value.setEnabled(false);
+  assert.equal(value.checkBacks.cancelAll(), 1, "the claimed check-back counts as cancelled");
+  assert.equal(last(value.saved)?.[0]?.state, "cancelled", "and is saved as cancelled at once");
+  releaseFlush!();
+  await value.settle();
+  assert.equal(value.posts.length, 0, "the chat is not woken after the person said no");
+  assert.equal(last(value.saved)?.[0]?.state, "cancelled");
+});
+
+test("a switch turned off during the claim's save is read again before posting, even without the settings callback", async () => {
+  let releaseFlush: (() => void) | undefined;
+  const value = harness({ flush: () => new Promise<void>((resolve) => (releaseFlush = resolve)) });
+  await value.checkBacks.set("chat-1", { when: { inMinutes: 5 }, note: "Look at the build" });
+  await value.advance(5 * MINUTE);
+  value.setEnabled(false);
+  releaseFlush!();
+  await value.settle();
+  assert.equal(value.posts.length, 0);
+  assert.equal(last(value.saved)?.[0]?.state, "cancelled");
+});
+
+test("a check-back the chat could not take is tried again a minute later, and recorded once it lands", async () => {
+  let attempt = 0;
+  const value = harness({
+    outcome: () => (attempt += 1) === 1
+      ? { kind: "dropped", reason: "The chat stayed busy." }
+      : { kind: "recorded", messageId: "m2", reason: "wake-budget" },
+  });
+  await value.checkBacks.set("chat-1", { when: { inMinutes: 5 }, note: "Look at the build" });
+  await value.advance(5 * MINUTE);
+  assert.equal(value.posts.length, 1);
+  assert.equal(last(value.saved)?.[0]?.state, "pending", "a dropped notice is not marked fired");
+  assert.equal(last(value.saved)?.[0]?.attempts, 1);
+  assert.equal(value.checkBacks.list("chat-1").length, 1, "the promise is still listed");
+
+  await value.advance(30_000);
+  assert.equal(value.posts.length, 1, "not retried in a hot loop");
+  await value.advance(30_000);
+  assert.equal(value.posts.length, 2);
+  assert.equal(value.posts[1]!.notice.title, "Checking back");
+  assert.equal(last(value.saved)?.[0]?.state, "fired");
+  await value.advance(60 * MINUTE);
+  assert.equal(value.posts.length, 2, "it never fires again");
+});
+
+test("a check-back whose chat is gone is cancelled, not retried", async () => {
+  const value = harness({ outcome: () => ({ kind: "dropped", reason: "The chat was deleted.", gone: true }) });
+  await value.checkBacks.set("chat-1", { when: { inMinutes: 5 }, note: "Look at the build" });
+  await value.advance(5 * MINUTE);
+  assert.equal(last(value.saved)?.[0]?.state, "cancelled");
+  await value.advance(10 * MINUTE);
+  assert.equal(value.posts.length, 1);
+});
+
+test("a check-back dropped three times is logged and left as a not-delivered card", async () => {
+  const value = harness({
+    outcome: (post) => post.wake ? { kind: "dropped", reason: "The notice could not be saved." } : { kind: "recorded", messageId: "card", reason: "not-waking" },
+  });
+  await value.checkBacks.set("chat-1", { when: { inMinutes: 5 }, note: "Look at the build" });
+  await value.advance(5 * MINUTE);
+  await value.advance(MINUTE);
+  await value.advance(MINUTE);
+  const wakes = value.posts.filter((post) => post.wake);
+  assert.equal(wakes.length, 3, "three attempts in all");
+  const card = value.posts.find((post) => !post.wake);
+  assert.equal(card?.notice.title, "Check-back not delivered (due 2:55 PM)");
+  assert.equal(last(value.saved)?.[0]?.state, "fired");
+  assert.ok(value.logs.some((line) => /not delivered after 3 attempts/u.test(line)), "the final drop is logged");
+  await value.advance(60 * MINUTE);
+  assert.equal(value.posts.filter((post) => post.wake).length, 3);
+});
+
+test("a check-back waiting to be tried again keeps its attempts across a restart", async () => {
+  const value = harness({ outcome: () => ({ kind: "dropped", reason: "The notice could not be saved." }) });
+  await value.checkBacks.set("chat-1", { when: { inMinutes: 5 }, note: "Look at the build" });
+  await value.advance(5 * MINUTE);
+  await value.advance(MINUTE);
+  const relaunch = harness({ outcome: (post) => post.wake ? { kind: "dropped", reason: "still" } : { kind: "recorded", messageId: "card", reason: "not-waking" } });
+  assert.equal(last(value.saved)?.[0]?.attempts, 2);
+  relaunch.sleep(7 * MINUTE);
+  relaunch.checkBacks.restore(JSON.parse(JSON.stringify(last(value.saved))));
+  await relaunch.settle();
+  assert.equal(relaunch.posts.filter((post) => post.wake).length, 1, "only the third attempt is left");
+  assert.equal(relaunch.posts.find((post) => !post.wake)?.notice.title, "Check-back not delivered (due 2:55 PM)");
 });
