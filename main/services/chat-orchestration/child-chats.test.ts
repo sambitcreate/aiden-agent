@@ -276,7 +276,7 @@ test("send steers or queues into a running turn and starts a new turn in an idle
   assert.equal(remote.runs.get(next.runId)!.state, "running");
 });
 
-test("once the person writes in a started chat, send refuses and Stop all leaves it alone", async () => {
+test("once the person writes in a started chat, send and stop refuse and Stop all leaves it alone", async () => {
   const { remote, links, childChats, clock } = setup();
   const started = await childChats.start(LEAD, "call-1", [
     { title: "Docs", task: "Update the docs" },
@@ -292,6 +292,11 @@ test("once the person writes in a started chat, send refuses and Stop all leaves
     /The person has written in “Docs” since your last message, so it is theirs now/u,
   );
   assert.deepEqual(remote.runs.get(docs!.runId)!.inputs, []);
+  await assert.rejects(
+    childChats.stop(LEAD, docs!.chatId),
+    /The person has written in “Docs” since your last message, so it is theirs now and only they can stop it/u,
+  );
+  assert.deepEqual(remote.cancels, [], "a direct stop does not cancel the turn the person is now part of");
   assert.equal((await childChats.list(LEAD)).find((view) => view.chatId === docs!.chatId)?.tookOver, true);
 
   assert.deepEqual(await childChats.stopAll(LEAD), [tests!.chatId]);

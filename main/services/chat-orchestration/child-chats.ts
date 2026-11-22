@@ -407,9 +407,17 @@ export class ChildChats {
     return [...lines, `Do not start these again: use ${CHILD_CHATS_TOOL_NAME} list or wait to follow them.`].join(" ");
   }
 
-  /** Stops the lead's running turn in a started chat. A turn the person started there is theirs. */
+  /**
+   * Stops the lead's running turn in a started chat. A turn the person started
+   * there is theirs, and so is the whole chat once the person has written in it.
+   */
   async stop(leadChatId: string, chatId: string): Promise<{ chatId: string; stopped: boolean }> {
     const link = await this.owned(leadChatId, chatId);
+    if (personTookOver(link)) {
+      throw new ChildChatRefusal(
+        `The person has written in “${link.title}” since your last message, so it is theirs now and only they can stop it. Read it, or ask the person.`,
+      );
+    }
     if (!link.runId) return { chatId, stopped: false };
     const services = await this.dependencies.services();
     const audience = chatAudience(leadChatId);

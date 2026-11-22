@@ -208,7 +208,7 @@ started chat stops only that chat.
 
 Once you send a message in a started chat after the lead's last message
 (including a steer or queued message into its running turn, from the desktop
-composer or a phone), the chat is yours: the lead's `send` refuses, its Stop leaves the chat alone, and
+composer or a phone), the chat is yours: the lead's `send` and `stop` refuse, its Stop leaves the chat alone, and
 `list` and `wait` mark it `tookOver`. The lead can still read it, and turns you
 start there never notify the lead. A scheduled task's run posting into the
 chat is not you writing, and leaves it the lead's.
