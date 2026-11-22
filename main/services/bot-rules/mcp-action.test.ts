@@ -5,6 +5,7 @@ import type { BotToolFacts } from "../bot-runtime/bot-tool-policy.js";
 import type { SubagentMcpRemoteTool } from "../subagents/subagent-mcp-read.js";
 import { classifyBotAction } from "./classify.js";
 import { describeMcpAction } from "./mcp-action.js";
+import { composioServiceToolDescriptor } from "../composio-service-tool.js";
 
 function grant(name: string, effect: "read" | "mutating" = "mutating"): BotRuntimeMcpToolAuthority {
   return {
@@ -120,4 +121,32 @@ test("a long description and title are bounded before they reach the classifier"
   assert.ok(action?.surface === "mcp");
   assert.ok((action.description?.length ?? 0) <= 2_000);
   assert.ok((action.annotations?.title?.length ?? 0) <= 200);
+});
+
+test("a Composio call is classified by the app actions it runs, and code or raw API calls are never remembered", async () => {
+  const descriptor = composioServiceToolDescriptor();
+  const composio = facts([["composio", grant(descriptor.name)]], new Map([["composio", descriptor]]));
+  const run = (...slugs: string[]) => ({ action: "call", tool: "COMPOSIO_MULTI_EXECUTE_TOOL", arguments: { tools: slugs.map((tool_slug) => ({ tool_slug, arguments: {} })) } });
+  const classesOf = async (args: unknown) => {
+    const action = await describeMcpAction("composio", args, composio);
+    assert.ok(action?.surface === "mcp");
+    return { classes: [...classifyBotAction(action, []).classes].sort(), neverRemembered: action.neverRemembered === true };
+  };
+
+  assert.deepEqual(await classesOf(run("GMAIL_SEND_EMAIL")), { classes: ["communicate"], neverRemembered: false });
+  assert.deepEqual(await classesOf(run("SLACK_CHAT_POST_MESSAGE")), { classes: ["communicate"], neverRemembered: false });
+  assert.deepEqual(await classesOf(run("GMAIL_FETCH_EMAILS", "GOOGLECALENDAR_DELETE_EVENT")), { classes: ["delete"], neverRemembered: false });
+  assert.deepEqual(await classesOf(run("LINKEDIN_CREATE_LINKED_IN_POST")), { classes: ["publish"], neverRemembered: false });
+  assert.deepEqual(await classesOf(run("STRIPE_CREATE_PAYMENT_INTENT")), { classes: ["money"], neverRemembered: false });
+  assert.deepEqual(await classesOf(run("GMAIL_FETCH_EMAILS")), { classes: [], neverRemembered: false });
+  assert.deepEqual(await classesOf({ action: "call", tool: "COMPOSIO_SEARCH_TOOLS", arguments: { queries: [{ use_case: "send an email" }] } }), { classes: [], neverRemembered: false }, "searching for a send action sends nothing");
+
+  for (const tool of ["COMPOSIO_SEARCH_TOOLS", "COMPOSIO_GET_TOOL_SCHEMAS", "COMPOSIO_WAIT_FOR_CONNECTIONS"]) {
+    assert.equal((await classesOf({ action: "call", tool, arguments: {} })).neverRemembered, false, tool);
+  }
+  for (const tool of ["COMPOSIO_REMOTE_WORKBENCH", "COMPOSIO_MANAGE_CONNECTIONS", "COMPOSIO_SOMETHING_NEW"]) {
+    assert.equal((await classesOf({ action: "call", tool, arguments: {} })).neverRemembered, true, `${tool} keeps asking`);
+  }
+  assert.equal((await classesOf(run("GMAIL_FETCH_EMAILS", "COMPOSIO_PROXY_EXECUTE"))).neverRemembered, true);
+  assert.equal((await classesOf({ action: "call", tool: "COMPOSIO_MULTI_EXECUTE_TOOL", arguments: { tools: [{ arguments: {} }] } })).neverRemembered, true, "app actions it can't read");
 });

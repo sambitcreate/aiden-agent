@@ -366,6 +366,24 @@ test("chat width setting resizes the transcript and composer together and persis
   expect(measured.Default).toBeLessThan(measured.Wide);
   expect(measured.Wide).toBeLessThan(measured.Full);
 
+  // In a narrow window the column's side padding gives way before the composer
+  // shrinks: no wide empty lanes beside it, and it stays centred.
+  await chooseWidth("Default");
+  await aiden.app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(900, 900));
+  await expect.poll(() => page.evaluate(() => window.innerWidth)).toBe(900);
+  await expect.poll(() => page.evaluate(() => {
+    const column = document.querySelector('[data-browser-composer-inset="true"]');
+    const card = column?.querySelector('[data-focus-region="composer"]');
+    if (!column || !card) return null;
+    const outer = column.getBoundingClientRect();
+    const inner = card.getBoundingClientRect();
+    const left = Math.round(inner.left - outer.left);
+    const right = Math.round(outer.right - inner.right);
+    return Math.abs(left - right) <= 1 && right <= 24 ? true : { left, right };
+  }), "narrow window composer gutters").toBe(true);
+  await aiden.app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(1800, 900));
+  await expect.poll(() => page.evaluate(() => window.innerWidth)).toBe(1800);
+
   // The preference is durable: a relaunch restores the same column width.
   await chooseWidth("Wide");
   await expect.poll(async () => {

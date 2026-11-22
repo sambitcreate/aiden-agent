@@ -31,6 +31,8 @@ test("Bot wake-up guidance follows the tools offered to this turn", () => {
   assert.match(guidance, /same Bot chat/u);
   assert.match(guidance, /running on an awake computer/u);
   assert.match(guidance, /action revise/u);
+  assert.match(guidance, /saved memory says you can't schedule.*out of date.*remove the note/u);
+  assert.doesNotMatch(unavailable, /out of date/u);
 });
 
 test("the Bot's prompt and its routines tool name the same ways it can be woken", () => {

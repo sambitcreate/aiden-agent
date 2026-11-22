@@ -35,7 +35,7 @@ import { AlertDialog, Button, Callout, EmptyState, ScrollArea, Text, toast } fro
 import { BotNoticeCard } from "../../components/bots/bot-notice-card";
 import { botListLocation } from "../../lib/bot-routes";
 import { settingsLocation } from "../../lib/settings-section";
-import { botAlwaysAllowLabel } from "../../shared/tool-approval-scope";
+import { BOT_APPROVAL_REPEAT_COUNT, botAlwaysAllowLabel } from "../../shared/tool-approval-scope";
 import { botsApi } from "../../lib/ipc";
 import { userFacingErrorMessage } from "../../lib/ipc-error";
 import type { Attachment } from "../../lib/types";
@@ -231,10 +231,12 @@ export function BotApprovalCard({
   const [busy, setBusy] = React.useState(false);
   const inFlight = React.useRef(false);
   const [answerError, setAnswerError] = React.useState<string | null>(null);
-  // Allowed again and again in Ask: Auto is offered beside Always, but only
-  // where main said Auto would hand this call to the judge instead of a card.
-  // Not on a device that may only deny.
-  const autoOffer = useSwitchToAutoOffer(prompt.always !== undefined && prompt.autoWouldJudge === true && allowElsewhere === undefined);
+  // Every eligible card offers Always; a count of 3 or more means it was
+  // allowed again and again in the last 2 weeks. Then, in Ask, Auto is
+  // offered beside Always, but only where main said Auto would hand this
+  // call to the judge instead of a card. Not on a device that may only deny.
+  const repeated = prompt.always !== undefined && prompt.always.count >= BOT_APPROVAL_REPEAT_COUNT;
+  const autoOffer = useSwitchToAutoOffer(repeated && prompt.autoWouldJudge === true && allowElsewhere === undefined);
   const respond = async (decision: "allow" | "deny", scope?: "always") => {
     if (inFlight.current) return;
     inFlight.current = true;
@@ -262,7 +264,7 @@ export function BotApprovalCard({
       onDecide={(decision, options) => void respond(decision, options?.scope === "always" ? "always" : undefined)}
       requester={name}
       alwaysOption={{ label: botAlwaysAllowLabel(name), hint: `${name} won’t ask again for this. Undo in Settings → Approvals.` }}
-      notes={prompt.always ? [`You’ve allowed this ${prompt.always.count} times in the last 2 weeks.`] : []}
+      notes={repeated ? [`You’ve allowed this ${prompt.always!.count} times in the last 2 weeks.`] : []}
       {...(autoOffer ? { suggestion: switchToAutoSuggestion(autoOffer) } : {})}
       {...(allowElsewhere ? { allowElsewhere } : {})}
       error={answerError}
