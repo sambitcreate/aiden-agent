@@ -73,7 +73,7 @@ Done (2026-11-22, not yet reviewed):
 
 ### Phase 4: Fold, reading width and polish
 
-Done in this PR: the fold keeps each chat's draft, attachments, voice and reading place, Search, and each list's scroll place (Phase 2 and the review rounds); docs (`ios/DEVELOPMENT.md`, `ios/PROJECT_SPEC.md`, `ios/AGENTS.md`, `ios/CHANGELOG.md`, this plan). Merge check (2026-11-22): on an iPad mini in portrait the system hid the Bots list the first time the tab showed, leaving "No Bot selected" alone; the split now brings the list back whenever its visibility changes with nothing chosen. Remaining work, not in this PR:
+Done in this PR: the fold keeps each chat's draft, attachments, voice and reading place, Search, and each list's scroll place (Phase 2 and the review rounds); docs (`ios/DEVELOPMENT.md`, `ios/PROJECT_SPEC.md`, `ios/AGENTS.md`, `ios/CHANGELOG.md`, this plan). Merge check (2026-11-22): on an iPad mini in portrait the system hid the Bots list the first time the tab showed, leaving "No Bot selected" alone; the split now brings the list back whenever its visibility changes with nothing chosen. The composer and snapshot unit tests failed on the iPhone Duo, CI's newest simulator. Their 375 and 390 pt test windows took the open screen's 84 pt right safe-area inset. They now draw without safe areas, and the tap-target checks compare whole device pixels. They pass open and closed. Remaining work, not in this PR:
 
 - Check every pose (closed, half open, open, rotated). Keep the transcript, composer, docks and banners clear of the fold and readable: a bounded reading width in the detail column, and `ReservedRegion` only for custom overlays that a system container doesn't move.
 - Sheets on the inner display use the system's placement.
@@ -84,11 +84,11 @@ Done in this PR: the fold keeps each chat's draft, attachments, voice and readin
   - Opening Computers or Settings from the list puts it away.
   - The running row's title wraps at the largest sizes.
   - The test waits for the list to leave before auditing a Bot, a chat or Computers.
+  - The row the window's bottom edge cuts ('1h') and the Bot page's own message (measured growing at every size) have audit rules (`option-a-accessibility.md`).
 
   Still failing there:
-  - The two Form near-pass ceilings ('Connection' in the machine editor, '3 of 4 online' in Settings), which `main` also fails on that simulator.
-  - A row's '1h' that the screen's bottom edge cuts (light and dark).
-  - Dynamic Type "partially unsupported" findings that differ between the light and dark passes on a heavily loaded host (Bots' chips and section titles, Settings' Default computer, the machine editor's name field). The Bot page's first message bubble showed up in both passes.
+  - The two Form near-pass ceilings ('Connection' in the machine editor, '3 of 4 online' in Settings). `main` fails on these too on that simulator; its baseline run found nothing else.
+  - Dynamic Type "partially unsupported" findings that come and go. Run after run they land on different screens and in different passes. Settings audited three times in a row in one launch gave different results, with or without the Default computer picker's `.id`. When one appears, every text on that screen appears with it. It looks like the audit sampling before the screen has laid out again, on a host with a load average of 35 to 75.
 - Main's shell-first onboarding (Add Computer empty states and the inline pairing sheet) checked at regular width on the open iPhone Duo, where the empty state sits in the list column.
 
 ## Process
