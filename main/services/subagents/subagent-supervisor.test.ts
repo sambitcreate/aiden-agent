@@ -22,7 +22,11 @@ import {
   subagentsAllowedForGeneration,
   subagentWorkspaceWriteAllowedForGeneration,
 } from "./eligibility.js";
-import { projectSubagentCompletedSummary, runSubagentChild } from "./subagent-child-runner.js";
+import {
+  projectSubagentCompletedSummary,
+  runSubagentChild,
+  subagentPartialWorkNotes,
+} from "./subagent-child-runner.js";
 import { SubagentRuntimeRegistry, type SubagentRuntimeChild } from "./child-agent-runtime.js";
 import {
   BOT_SUBAGENT_LIMIT_REACHED_RESULT,
@@ -1289,6 +1293,65 @@ test("a queued chat helper still finishes after the first two take 15 minutes", 
   assert.deepEqual(childDeadlines, [24 * 60 * 60_000, 24 * 60 * 60_000, 24 * 60 * 60_000]);
 });
 
+test("a queued Bot helper gets only what is left of the reply, so its report fits inside the limit", async () => {
+  let now = 0;
+  const dispatches: Array<{ label: string; deadlineMs: number | undefined; at: number }> = [];
+  const supervisor = new SubagentSupervisor({
+    generationId: "generation-bot-queue",
+    ...TEST_SUPERVISOR_SCOPE,
+    runtime: runtime(),
+    thinkingLevel: "high",
+    workspaceRoot: "/workspace",
+    permission: "full",
+    inheritedCeiling: SUBAGENT_READ_TOOL_NAMES,
+    now: () => now,
+    policy: { timeLimit: "bot", replyClock: new SubagentReplyClock() },
+    prepareRun: async ({ identity, contextRevision, deadlineMs }) =>
+      phase6Prepared(
+        phase6Authority({ runId: identity.runId, contextRevision, delegate: false, deadlineMs }),
+      ),
+    runChild: async ({ request: task, policy }) => {
+      dispatches.push({ label: task.label, deadlineMs: policy?.deadlineMs, at: now });
+      if (task.label !== "Third") now += 15 * 60_000;
+      return completed(task.label);
+    },
+  });
+
+  const result = await supervisor.execute(request(["First", "Second", "Third"]));
+
+  assert.match(result, /## 3\. Third[\s\S]*Status: completed/u);
+  const third = dispatches.find(({ label }) => label === "Third")!;
+  assert.ok(third.at >= 15 * 60_000, "the third helper waited for a free slot");
+  for (const dispatch of dispatches) {
+    assert.equal(dispatch.at + dispatch.deadlineMs!, 60 * 60_000, dispatch.label);
+  }
+});
+
+test("a Bot helper that finishes as the reply limit passes keeps its completed result", async () => {
+  let now = 0;
+  const supervisor = new SubagentSupervisor({
+    generationId: "generation-bot-finish-at-limit",
+    ...TEST_SUPERVISOR_SCOPE,
+    runtime: runtime(),
+    thinkingLevel: "high",
+    workspaceRoot: "/workspace",
+    permission: "full",
+    inheritedCeiling: SUBAGENT_READ_TOOL_NAMES,
+    now: () => now,
+    policy: { timeLimit: "bot", replyClock: new SubagentReplyClock() },
+    runChild: async ({ request: task }) => {
+      now = 60 * 60_000;
+      return completed(task.label, "Every recipe now has a cooking time.");
+    },
+  });
+
+  const result = await supervisor.execute(request(["Cookbook"]));
+
+  assert.match(result, /## 1\. Cookbook[\s\S]*Status: completed/u);
+  assert.match(result, /Every recipe now has a cooking time\./u);
+  assert.doesNotMatch(result, /partial findings/u);
+});
+
 test("a Bot reply stops its helpers at the limit and refuses every later launch", async () => {
   const replyClock = new SubagentReplyClock();
   let launches = 0;
@@ -1451,9 +1514,23 @@ test("stopping a helper that edited a file hands the parent its last message and
 
   assert.match(result, /## 1\. Cookbook[\s\S]*Status: interrupted/u);
   assert.match(result, /Added the soup section to cookbook\.html; the salad section is next\./u);
-  assert.match(result, /Files it changed: cookbook\.html\./u);
+  assert.match(result, /Files it changed:\n> - cookbook\.html\n/u);
+  // This child never finishes stopping, so a gated write could still land.
+  assert.match(result, /- cookbook\.html\n> The helper had not finished stopping, so this list may be incomplete\./u);
   assert.doesNotMatch(result, /ran commands/u);
   assert.match(result, /incomplete, unverified partial findings/u);
+});
+
+test("changed-file notes keep each path whole even when names contain list separators", () => {
+  const paths = ["notes, drafts.md", "salt and pepper.html", ...Array.from({ length: 21 }, (_v, i) => `page-${i}.html`)];
+  const [files] = subagentPartialWorkNotes(paths, 2, false);
+  const lines = files!.split("\n");
+  assert.equal(lines[0], "Files it changed:");
+  assert.ok(lines.includes("- notes, drafts.md"));
+  assert.ok(lines.includes("- salt and pepper.html"));
+  // 20 listed paths, then the 3 unlisted paths plus 2 untracked ones.
+  assert.equal(lines.filter((line) => line.startsWith("- ") && !line.startsWith("- and ")).length, 20);
+  assert.equal(lines[lines.length - 1], "- and 5 more");
 });
 
 test("Phase 6B runs fresh depth-2 children without exposing delegation to descendants", async () => {
@@ -2052,6 +2129,41 @@ test("guidance settles a running and a capacity-queued V2 child as interrupted",
       { label: "Queued", state: "interrupted" },
     ],
   );
+});
+
+test("guidance that stops a helper with partial work still tells the parent to read the guidance", async () => {
+  const started = deferred();
+  const supervisor = new SubagentSupervisor({
+    generationId: "generation-guidance-partial",
+    ...TEST_SUPERVISOR_SCOPE,
+    runtime: runtime(),
+    thinkingLevel: "high",
+    workspaceRoot: "/workspace",
+    permission: "full",
+    inheritedCeiling: SUBAGENT_READ_TOOL_NAMES,
+    runChild: async ({ request: task, signal }) => {
+      started.resolve();
+      await new Promise<void>((resolve) => signal?.addEventListener("abort", () => resolve(), { once: true }));
+      // The runner hands over settled work under a generic interrupted result.
+      return {
+        role: task.role,
+        label: task.label,
+        status: "interrupted",
+        summary: "Read the soup and salad sections.",
+        warning: "The child was interrupted before completion. These are incomplete, unverified partial findings.",
+      };
+    },
+  });
+
+  const running = supervisor.execute(request(["Cookbook"]));
+  await started.promise;
+  supervisor.stopLiveChildrenForGuidance();
+  const result = await running;
+
+  assert.match(result, /Status: interrupted/u);
+  assert.match(result, /Read the soup and salad sections\./u);
+  assert.match(result, /user sent new guidance\. Read it before relaunching this task\./u);
+  assert.match(result, /incomplete, unverified partial findings/u);
 });
 
 test("parent-first shutdown projects running and queued local children as interrupted", async () => {

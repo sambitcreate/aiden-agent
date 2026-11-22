@@ -1,10 +1,10 @@
-import { DEFAULT_SUBAGENT_CHILD_DEADLINE_MS, MAX_SUBAGENT_CHILD_EVENTS, MAX_SUBAGENT_CHILD_TOOL_CALLS, MAX_SUBAGENT_CHILD_TURNS, MAX_SUBAGENT_CHILD_OUTPUT_CHARS, MAX_SUBAGENT_CHILD_PROTOCOL_CHARS } from "../../../main/services/subagents/subagent-child-policy.js";
+import { SUBAGENT_PARTIAL_WORK_NOTE, DEFAULT_SUBAGENT_CHILD_DEADLINE_MS, MAX_SUBAGENT_CHILD_EVENTS, MAX_SUBAGENT_CHILD_TOOL_CALLS, MAX_SUBAGENT_CHILD_TURNS, MAX_SUBAGENT_CHILD_OUTPUT_CHARS, MAX_SUBAGENT_CHILD_PROTOCOL_CHARS } from "../../../main/services/subagents/subagent-child-policy.js";
 import { captureLiveSubagentContext } from "../../../main/services/subagents/forked-context.js";
 import { fork } from "node:child_process";
 import { dirname, join } from "node:path";
 import type { AgentTool, BeforeToolCallContext } from "@earendil-works/pi-agent-core";
 import { validateToolArguments, type AssistantMessage } from "@earendil-works/pi-ai";
-import type { RunSubagentChildInput } from "../../../main/services/subagents/subagent-child-runner.js";
+import { projectSubagentPartialFindings, type RunSubagentChildInput } from "../../../main/services/subagents/subagent-child-runner.js";
 import { subagentRoleSystemPrompt } from "../../../main/services/subagents/role-catalog.js";
 import { MAX_SUBAGENT_SUMMARY_CHARS } from "../../../main/services/subagents/contracts.js";
 import { recordUsage } from "./usage-ledger.ts";
@@ -96,7 +96,12 @@ export async function runCliSubagent(agentDir: string, input: RunSubagentChildIn
     return { role: input.request.role, label: input.request.label, status: "completed" as const, summary: summary.slice(0, MAX_SUBAGENT_SUMMARY_CHARS), ...(summary.length > MAX_SUBAGENT_SUMMARY_CHARS ? { summaryTruncated: true as const } : {}) };
   } catch (error) {
     diagnostic?.(error instanceof Error ? error : new Error(String(error)));
-    return { role: input.request.role, label: input.request.label, status: input.signal?.aborted ? "interrupted" as const : Date.now() - startedAt >= (limits.deadline) ? "timed_out" as const : "failed" as const, summary: "The subagent did not complete this investigation." };
+    const status = input.signal?.aborted ? "interrupted" as const : Date.now() - startedAt >= (limits.deadline) ? "timed_out" as const : "failed" as const;
+    const base = { role: input.request.role, label: input.request.label, status, summary: "", warning: "The subagent did not complete this investigation." };
+    // A failed child's text is not passed on. A stopped or timed-out one hands
+    // over what it streamed, filtered like desktop partial work and marked unverified.
+    const partial = status === "failed" || !text.trim() ? undefined : projectSubagentPartialFindings([text]);
+    return partial?.summary.trim() ? { ...base, ...partial, warning: `${base.warning} ${SUBAGENT_PARTIAL_WORK_NOTE}` } : base;
   } finally {
     toolAbort.abort(); kill("SIGKILL"); clearTimeout(timer); if (escalation) clearTimeout(escalation); input.signal?.removeEventListener("abort", abort);
     await Promise.allSettled(activeTools);

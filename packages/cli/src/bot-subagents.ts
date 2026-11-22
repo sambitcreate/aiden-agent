@@ -19,11 +19,12 @@ import { runCliSubagent } from "./subagent-process.ts";
 import { acquireLease } from "./state.ts";
 
 /** Bot investigations inherit exact admitted file tools; they cannot expand into host tools. */
-export function createBotSubagentTool(agentDir: string, admission: BotRuntimeAuthorityAdmission, parentTools: AgentTool[], loadChat: () => Promise<Chat | null>) {
+export function createBotSubagentTool(agentDir: string, admission: BotRuntimeAuthorityAdmission, parentTools: AgentTool[], loadChat: () => Promise<Chat | null>,
+  replyClock: SubagentReplyClock = new SubagentReplyClock()) {
   const authority = admission.authority;
   const reads = parentTools.filter((tool) => (SUBAGENT_READ_TOOL_NAMES as readonly string[]).includes(tool.name));
-  // The tool is built for one Bot reply: its helpers share 60 minutes from the first launch.
-  const replyClock = new SubagentReplyClock();
+  // Helpers in one Bot reply share 60 minutes from the first launch. The durable
+  // runtime builds this tool for every call, so it passes the turn's clock in.
   return createSubagentTool({ async execute(params, signal) {
     await admission.revalidateBeforeEffect();
     const combined = signal ? AbortSignal.any([signal, admission.signal]) : admission.signal;

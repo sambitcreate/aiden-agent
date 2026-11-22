@@ -251,7 +251,7 @@ export async function createCliBots(agentDir: string, daemon: ReturnType<typeof 
       }));
     }
     if (authority.otherCapabilities.some((grant) => grant.kind === "subagents")) {
-      selected.push(createBotSubagentTool(agentDir, admission, selected, context?.loadChat ?? (() => daemon.chatStore.get(authority.chatId))));
+      selected.push(createBotSubagentTool(agentDir, admission, selected, context?.loadChat ?? (() => daemon.chatStore.get(authority.chatId)), context?.replyClock));
     }
     await admission.revalidateBeforeEffect();
     return selected.map((tool) => protectAdmittedBotTool(tool, admission));

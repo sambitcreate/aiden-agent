@@ -48,14 +48,15 @@ Mostly behind the scenes
 
    `renderer/shared/subagent-safe-text.ts`
    - `indentedEnvironmentValueEnd`: stop at the line break before the next unindented line instead of moving past it. Today it swallows that line break, so a second pass gives different text and the whole task is hidden.
-   - `redactEnvironmentAssignments`: a bare all-caps word followed by a colon and an indented block, like `JSON:`, `HTML:`, `NOTE:` or `TASK:`, is a label, not a setting. Treat a colon-and-block as a secret only when the name looks like a real setting: it has an underscore or digit (`API_KEY:`, `AWS_SECRET:`) or matches the existing sensitive-name list.
+   - `redactEnvironmentAssignments`: a colon-and-block counts as a label only when its name is on a fixed list of known display labels, like `JSON:`, `HTML:`, `NOTE:` or `TASK:`, and has no secret hint (`key`, `pass`, `pwd`, `jwt`, `cred`, `token`, `secret`, `auth`, `cookie`, `session`, `private`, or a whole-word `pin`) anywhere in it. Every other colon-and-block name still hides in the panel, so `PASSPHRASE:`, `KEY:` and `APITOKEN:` stay hidden.
+   - The text the main chat reads hides every indented line under a colon-and-block whose name carries a secret hint, not only the first one, so a multi-line `PASSWORD:` block and its partial findings stay hidden there too.
    - `sanitizeWithPolicyFacts`: before giving up and swapping the whole text for a marker, run the filter again until the text stops changing (at most 3 passes). Use the "\[REDACTED ENCODED TEXT\]" marker only when encoded data really triggered it.
 2. ### Change the time limits
 
    `main/services/subagents/subagent-child-policy.ts`, `subagent-supervisor-core.ts`, `subagent-child-runner.ts`, `main/services/llm-client.ts`, `main/services/bot-runtime/bot-tool-sources-main.ts`, `packages/cli/src/bot-subagents.ts`
    - Two named limits replace the shared 10 minutes: **chat** (24-hour safety net, from the question above) and **Bot** (60 minutes).
    - Each place that creates helpers passes its limit. Your chats in `llm-client.ts` use chat. A Bot chat there, the Bot runtime in `bot-tool-sources-main.ts`, and the CLI's Bot helpers in `bot-subagents.ts` use Bot. Scheduled tasks can't start helpers today (they need a chat turn), so nothing changes for them.
-   - The reply's clock starts at the first helper launch, not when the main chat starts answering. For Bots that gives the helpers the full 60 minutes.
+   - The reply's clock starts at the first helper launch, not when the main chat starts answering. For Bots that gives the helpers the full 60 minutes. Every helper call in one Bot turn shares that clock, on the desktop and in `aiden serve`. A resumed, interrupted Bot task counts as a new reply: its tools are rebuilt on resume, and carrying the old start across a restart would need it saved with the task.
    - A helper waiting for a free slot (only 2 run at once) no longer loses time while it waits in chats.
    - The "save one last turn for a report" step before the deadline only happens when a real limit applies, which means Bots.
 3. ### Stop the refused-retry loop (Bots)
@@ -66,7 +67,7 @@ Mostly behind the scenes
 
    `subagent-child-runner.ts` (result paths for interrupted, failed and timed-out helpers), `subagent-workspace-write.ts`, `subagent-supervisor-core.ts` (`formatResults`), `subagent-event-projector.ts`
    - The turn-limit path already passes the helper's partial findings to the main chat (`sanitizePartialFindingsForParent`). Use the same path when you stop a helper, when it fails, and at a Bot's 60-minute limit. The result is marked "incomplete, unverified".
-   - Record the relative path of each file the helper changes through Aiden's edit tools. The result lists up to 20 of them: "Files it changed: cookbook.html". If the helper also ran commands, add: "It also ran commands, which may have changed other files."
+   - Record the relative path of each file the helper changes through Aiden's edit tools. The result lists up to 20 of them under "Files it changed:", one path per line, since a name can itself contain a comma or "and". If a write may still have been finishing when the helper stopped, the list says it may be incomplete. If the helper also ran commands, add: "It also ran commands, which may have changed other files."
    - The summary card the panel shows gets the same partial text, using the panel's stricter filter.
 5. ### Remove duplicate and confusing text
 
@@ -264,7 +265,7 @@ Removing the clock doesn't remove every limit, so a confused helper still can't 
 | Showing more text | Today's panel shows little on purpose. The helper chat shows what the helper did. | The main chat's own display filter hides passwords and keys, the same as for the main chat's steps. A dedicated security review comes before PR 2 merges. |
 | Disk use | Many long helpers add up. | 2 MB cap per helper, deleted with the chat, and shown in Settings → Storage. |
 | Overlap with "Make Aiden more proactive" | Its background helpers touch the same code. | That thread knows this plan. Its helper PRs build on these three, which give them a place to show their work. |
-| Privacy filter change | Loosening the label rule could let a real secret through. | Only plain words without underscores or digits count as labels. Real setting names and known sensitive names still hide, and tests cover both. |
+| Privacy filter change | Loosening the label rule could let a real secret through. | Only names on a fixed allow-list of display labels count as labels, and a secret hint anywhere in the name overrides the list. Every other name still hides in the panel, secret-named blocks hide on every line for the main chat, and tests cover both, including `PASSPHRASE:`, `KEY:`, `APITOKEN:` and multi-line `PASSWORD:`. |
 
 ## Order
 

@@ -99,6 +99,8 @@ const COMBINING_MARK = /\p{M}/u;
 const INTERNAL_SECURITY_MARKUP = /(?<=[A-Za-z0-9_])(?:\*{1,2}|__|~~|`{1,3})(?=[A-Za-z0-9_=:])/gu;
 const ENCODED_TEXT_REDACTION = "[REDACTED ENCODED TEXT]";
 const UNSETTLED_TEXT_REDACTION = "[REDACTED TEXT]";
+/** A percent escape or HTML character reference left in text after filtering. */
+const ENCODING_ESCAPE = /%[0-9A-Fa-f]{2}|&(?:#\d+|#x[0-9A-Fa-f]+|[A-Za-z][A-Za-z0-9]*);/iu;
 const CONTROL_SPLIT_REDACTION = "[REDACTED CONTROL-SPLIT TEXT]";
 const MARKDOWN_CONTENT_REDACTION = "[REDACTED MARKDOWN CONTENT]";
 const RENDERED_REDACTION_PLACEHOLDER = /\[?REDACTED(?: [A-Z-]+)*\]?/gu;
@@ -332,7 +334,7 @@ export function redactMultilineCredentialBlocks(value: string): string {
 }
 
 export function sanitizeCredentialText(value: string): string {
-  let sanitized = value;
+  let sanitized = redactSensitiveNextLineBlocks(value);
   if ((value.includes("=") || value.includes(":")) && ASSIGNMENT_SECRET_HINT.test(value)) {
     sanitized = sanitized
       .replace(CONNECTION_STRING_SECRET, "$1[REDACTED]")
@@ -972,15 +974,55 @@ function blockValueStartsOnNextLine(value: string, start: number): boolean {
 }
 
 /**
- * `JSON:`, `HTML:`, `NOTE:` or `TASK:` followed by an indented block is a
- * label, not a setting. A colon-and-block is private only when the name looks
- * like a real setting: it has an underscore or digit, or it is a known
- * sensitive name such as `TOKEN` or `PASSWORD`.
+ * Known display labels such as `JSON:`, `HTML:`, `NOTE:` or `TASK:` followed
+ * by an indented block. Only these names count as labels; every other
+ * colon-and-block name is treated as a setting and its block stays private.
  */
-function colonBlockNameLooksLikeSetting(name: string): boolean {
-  if (/[_0-9]/u.test(name)) return true;
-  const skeleton = name.toLowerCase();
-  return (SENSITIVE_KEY_SKELETONS as readonly string[]).includes(skeleton);
+const DISPLAY_BLOCK_LABELS: ReadonlySet<string> = new Set([
+  "ANSWER", "BLOCKERS", "BODY", "CHANGES", "CODE", "CONSTRAINTS", "CONTEXT",
+  "CSS", "DESCRIPTION", "DETAILS", "DIFF", "ERROR", "ERRORS", "EVIDENCE",
+  "EXAMPLE", "EXAMPLES", "FILES", "FINDINGS", "GOAL", "GOALS", "HTML", "INPUT",
+  "ISSUES", "JSON", "LOG", "LOGS", "MARKDOWN", "NEXT", "NOTE", "NOTES",
+  "OUTPUT", "PLAN", "QUESTION", "REQUEST", "REQUIREMENTS", "RESPONSE",
+  "RESULT", "RESULTS", "SQL", "STATUS", "STEPS", "SUMMARY", "TASK", "TESTS",
+  "TODO", "TOML", "WARNING", "WARNINGS", "XML", "YAML",
+]);
+
+/** Secret hints matched anywhere in a block's name. */
+const BLOCK_NAME_SECRET_HINT =
+  /key|pass|pwd|jwt|cred|token|secret|auth|cookie|session|private|(?:^|[_-])pin(?:[_-]|$)/iu;
+
+function colonBlockNameIsDisplayLabel(name: string): boolean {
+  return DISPLAY_BLOCK_LABELS.has(name) && !BLOCK_NAME_SECRET_HINT.test(name);
+}
+
+const NEXT_LINE_BLOCK_ASSIGNMENT =
+  /((?<![A-Za-z0-9_-])(?:\*{1,2}|_{1,2}|~~)?["'`]?([A-Za-z_][A-Za-z0-9_-]{0,63})["'`]?(?:\*{1,2}|_{1,2}|~~)?[ \t]*:[ \t]*)(?=\r?\n[ \t]+[^\s])/gu;
+
+/**
+ * A secret-named setting whose value is an indented block on the following
+ * lines, such as `PASSWORD:` or `PASSPHRASE:`, hides every line of that block,
+ * not just the first.
+ */
+export function redactSensitiveNextLineBlocks(value: string): string {
+  if (!value.includes(":")) return value;
+  let cursor = 0;
+  let redacted = "";
+  for (const match of value.matchAll(NEXT_LINE_BLOCK_ASSIGNMENT)) {
+    const offset = match.index;
+    if (offset === undefined || offset < cursor) continue;
+    const name = match[2]!;
+    if (!BLOCK_NAME_SECRET_HINT.test(name) || colonBlockNameIsDisplayLabel(name)) continue;
+    const blockStart = offset + match[0].length;
+    const valueEnd = indentedEnvironmentValueEnd(value, blockStart);
+    if (valueEnd <= blockStart) continue;
+    const lineBreak = value[blockStart] === "\r" && value[blockStart + 1] === "\n" ? "\r\n" : value[blockStart]!;
+    let indentEnd = blockStart + lineBreak.length;
+    while (value[indentEnd] === " " || value[indentEnd] === "\t") indentEnd += 1;
+    redacted += `${value.slice(cursor, blockStart)}${value.slice(blockStart, indentEnd)}[REDACTED]`;
+    cursor = valueEnd;
+  }
+  return cursor === 0 ? value : `${redacted}${value.slice(cursor)}`;
 }
 
 function environmentValueEnd(value: string, start: number): number {
@@ -1032,7 +1074,7 @@ function redactEnvironmentAssignments(value: string): string {
     if (
       !isTightEqualsAssignment &&
       blockValueStartsOnNextLine(value, valueStart) &&
-      !colonBlockNameLooksLikeSetting(name)
+      colonBlockNameIsDisplayLabel(name)
     ) {
       continue;
     }
@@ -1319,9 +1361,15 @@ function sanitizeWithPolicyFacts(
   if (nonMarkdownPolicyIsUnsafe(safe, includeEnvironment)) {
     // The encoded-text marker is for credentials hidden by an encoding or a
     // look-alike key. Plain text whose filter output never settles gets the
-    // generic marker instead.
+    // generic marker instead, but only when nothing in it is still encoded:
+    // if renormalizing or percent-decoding changes it, an encoding is why.
     const settled = controlVariants(safe);
+    const stillEncoded =
+      settled.spaced !== safe ||
+      ENCODING_ESCAPE.test(safe) ||
+      decodePercentLayers(safe).value !== safe;
     const unsettledPlainText =
+      !stillEncoded &&
       !containsObfuscatedAssignmentKey(settled.spaced) &&
       sanitizeVariant(settled.spaced, includeEnvironment) !== settled.spaced;
     return {
@@ -1381,7 +1429,7 @@ const LABEL_LINE_BREAK = /(?<![A-Za-z0-9_])([A-Z]{2,64}):[ \t]*(?:\r\n?|\n)[ \t]
 export function collapseSubagentTextToSingleLine(value: string): string {
   return value
     .replace(LABEL_LINE_BREAK, (whole, name: string) =>
-      colonBlockNameLooksLikeSetting(name) ? whole : `${name} — `,
+      colonBlockNameIsDisplayLabel(name) ? `${name} — ` : whole,
     )
     .replace(/\s+/gu, " ");
 }

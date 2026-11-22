@@ -22,6 +22,7 @@ import {
 import {
   DEFAULT_SUBAGENT_CANCELLATION_GRACE_MS,
   MAX_SUBAGENT_CHILD_TURNS,
+  SUBAGENT_PARTIAL_WORK_NOTE,
   SUBAGENT_TIME_LIMIT_MS,
   SUBAGENT_TIME_LIMIT_WARNING,
   type SubagentTimeLimit,
@@ -75,8 +76,6 @@ import type {
 /** The one tool result a Bot reply gets once its helpers' 60 minutes are spent. */
 export const BOT_SUBAGENT_LIMIT_REACHED_RESULT =
   "Helpers can't start again in this reply because the 60-minute limit for Bot replies was reached. Finish the work yourself or tell the person.";
-/** Appended to a stopped, failed or timed-out helper's warning when its partial work is handed over. */
-export const SUBAGENT_PARTIAL_WORK_NOTE = "These are incomplete, unverified partial findings.";
 const MAX_SUBAGENT_IDENTIFIER_ALLOCATION_ATTEMPTS = 128;
 const MAX_SUBAGENT_V2_TREE_TURNS = 512;
 const MAX_SUBAGENT_V2_TREE_NETWORK_OPERATIONS = 512;
@@ -1248,13 +1247,19 @@ export class SubagentSupervisor {
         executionController.abort(reason);
       treeScheduler?.cancel(reason);
       if (settlementTimer) return;
+      // A child drains for up to the same grace before it hands over partial
+      // work, so the seal waits a little longer and does not drop that work.
+      const sealMarginMs = Math.min(
+        1_000,
+        Math.max(50, Math.ceil(this.cancellationGraceMs / 4)),
+      );
       settlementTimer = setTimeout(
         () =>
           resolveSettlementSeal?.({
             kind: "sealed",
             state: cancellationKind ?? kind,
           }),
-        this.cancellationGraceMs,
+        this.cancellationGraceMs + sealMarginMs,
       );
     };
     treeTimer = setTimeout(() => {
@@ -1402,6 +1407,9 @@ export class SubagentSupervisor {
       ): Promise<SubagentTaskResult> => {
         const identity = identities[index]!;
         const preparedRun = preparedRuns.get(identity.runId);
+        // Set when the child's own completed report arrived before any stop
+        // other than user guidance reached it.
+        let completedBeforeStop = false;
         const childOperation = (async (): Promise<{
           kind: "result";
           result: SubagentTaskResult;
@@ -1423,6 +1431,18 @@ export class SubagentSupervisor {
                 "Subagent authority changed before provider dispatch.",
               );
             }
+            // A Bot helper that waited for a free slot gets only what is left
+            // of the reply, so its report reserve lands before the reply limit.
+            const dispatchDeadlineMs =
+              this.timeLimit === "bot"
+                ? Math.max(
+                    1,
+                    Math.min(
+                      deadlineMs,
+                      Math.floor(this.treeDeadlineMs - (this.now() - replyStartedAt)),
+                    ),
+                  )
+                : deadlineMs;
             result = await this.runChild({
               authority: {
                 generationId: this.input.generationId,
@@ -1491,7 +1511,7 @@ export class SubagentSupervisor {
                         parentNode: tree.node,
                         lease: tree.lease,
                         ledger: tree.ledger,
-                        deadlineMs,
+                        deadlineMs: dispatchDeadlineMs,
                         abortTree: (reason) =>
                           abortExecution("interrupted", reason),
                       })
@@ -1508,7 +1528,7 @@ export class SubagentSupervisor {
               request: task,
               signal: childSignals[index],
               policy: {
-                deadlineMs,
+                deadlineMs: dispatchDeadlineMs,
                 timeLimit: this.timeLimit,
                 cancellationGraceMs: this.cancellationGraceMs,
                 maxTurns: Math.min(
@@ -1659,6 +1679,14 @@ export class SubagentSupervisor {
                 },
               },
             });
+            const childStop = childControllers[index]?.signal;
+            completedBeforeStop =
+              result.status === "completed" &&
+              !executionController.signal.aborted &&
+              !signal?.aborted &&
+              !cancellationKind &&
+              (!childStop?.aborted ||
+                childStop.reason instanceof SubagentUserGuidanceStop);
           } catch {
             result =
               cancellationKind === "timed_out"
@@ -1692,16 +1720,17 @@ export class SubagentSupervisor {
             ? outcome.state === "timed_out"
               ? safeTimedOutResult(task, this.timeLimit)
               : safeInterruptedResult(task)
-            : cancellationKind === "timed_out"
-              ? withPartialWork(safeTimedOutResult(task, this.timeLimit), childResult)
-              : signal?.aborted ||
-                  // A child that returned its own result keeps it when user
-                  // guidance stopped it: the work is done, not lost.
-                  (childControllers[index]?.signal.aborted &&
-                    !(childControllers[index]?.signal.reason instanceof SubagentUserGuidanceStop)) ||
-                  cancellationKind === "interrupted"
-                ? withPartialWork(interruptedResult(task, index), childResult)
-                : outcome.result;
+            : // A child that finished before a timeout, budget or parent stop
+              // reached it keeps its result: the work is done, not lost.
+              completedBeforeStop
+              ? childResult!
+              : cancellationKind === "timed_out"
+                ? withPartialWork(safeTimedOutResult(task, this.timeLimit), childResult)
+                : signal?.aborted ||
+                    childControllers[index]?.signal.aborted ||
+                    cancellationKind === "interrupted"
+                  ? withPartialWork(interruptedResult(task, index), childResult)
+                  : childResult!;
         const disposition = await preparedRun?.complete(result);
         if (disposition !== "stopped") this.finishRun(identity.runId, result);
         return result;

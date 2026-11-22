@@ -52,6 +52,7 @@ export { createCliProviderCredentials } from "./provider-credentials.ts";
 export { createReplyMeter, runScheduledInference } from "./scheduled-inference.ts";
 
 export { createBotSubagentTool } from "./bot-subagents.ts";
+export { BOT_SUBAGENT_LIMIT_REACHED_RESULT } from "../../../main/services/subagents/subagent-supervisor-core.js";
 
 export * from "./app-controls.ts";
 export { readAidenHelp } from "../../../main/services/aiden-app-knowledge.js";

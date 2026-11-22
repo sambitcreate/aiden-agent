@@ -12,6 +12,8 @@ export const SUBAGENT_TIME_LIMIT_MS: Readonly<Record<SubagentTimeLimit, number>>
 });
 export const BOT_SUBAGENT_TIME_LIMIT_WARNING = "Stopped at the 60-minute limit for Bot replies.";
 export const CHAT_SUBAGENT_TIME_LIMIT_WARNING = "Stopped at the 24-hour safety limit for helpers.";
+/** Marks a stopped helper's handed-over work for the parent. */
+export const SUBAGENT_PARTIAL_WORK_NOTE = "These are incomplete, unverified partial findings.";
 export const SUBAGENT_TIME_LIMIT_WARNING: Readonly<Record<SubagentTimeLimit, string>> = Object.freeze({
   chat: CHAT_SUBAGENT_TIME_LIMIT_WARNING,
   bot: BOT_SUBAGENT_TIME_LIMIT_WARNING,

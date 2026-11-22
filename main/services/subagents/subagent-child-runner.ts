@@ -41,6 +41,7 @@ import {
 import { normalizeSubagentModelText } from "./model-text.js";
 import {
   containsHighConfidenceSecretIncludingEncodings,
+  redactSensitiveNextLineBlocks,
   sanitizeCredentialText,
 } from "../../../renderer/shared/subagent-safe-text.js";
 import type { SubagentAuthorityV2 } from "./authority-v2.js";
@@ -64,7 +65,7 @@ import type {
 } from "./subagent-mcp-mutation.js";
 import type { SubagentShellGateV2, SubagentShellToolBindingV2 } from "./subagent-shell.js";
 
-import { SUBAGENT_TIME_LIMIT_WARNING, type SubagentTimeLimit, DEFAULT_SUBAGENT_CHILD_DEADLINE_MS, DEFAULT_SUBAGENT_CANCELLATION_GRACE_MS, MAX_SUBAGENT_CHILD_TURNS, MAX_SUBAGENT_CHILD_TOOL_CALLS, MAX_SUBAGENT_CHILD_EVENTS, MAX_SUBAGENT_CHILD_OUTPUT_CHARS, MAX_SUBAGENT_CHILD_PROTOCOL_CHARS } from "./subagent-child-policy.js";
+import { SUBAGENT_PARTIAL_WORK_NOTE, SUBAGENT_TIME_LIMIT_WARNING, type SubagentTimeLimit, DEFAULT_SUBAGENT_CHILD_DEADLINE_MS, DEFAULT_SUBAGENT_CANCELLATION_GRACE_MS, MAX_SUBAGENT_CHILD_TURNS, MAX_SUBAGENT_CHILD_TOOL_CALLS, MAX_SUBAGENT_CHILD_EVENTS, MAX_SUBAGENT_CHILD_OUTPUT_CHARS, MAX_SUBAGENT_CHILD_PROTOCOL_CHARS } from "./subagent-child-policy.js";
 export * from "./subagent-child-policy.js";
 const SAFE_CHILD_PROVIDER_FAILURE = "The child model could not complete this task.";
 const CHILD_TURN_LIMIT_WARNING = "The child reached its turn limit.";
@@ -74,7 +75,9 @@ const MAX_PARTIAL_BOUNDARY_COMPARISONS = 50_000;
 const PARTIAL_SCAN_LIMIT_NOTICE = "[Additional partial findings omitted after safety scan limit.]";
 
 function sanitizePartialFindingsForParent(reports: readonly string[]): string {
-  const rawReports = reports.map((entry) => entry.split(/\r\n|[\n\r\u2028\u2029]/u));
+  // The line scan below cannot see that `PASSWORD:` owns the indented lines
+  // under it, so hide secret-named blocks across lines first.
+  const rawReports = reports.map((entry) => redactSensitiveNextLineBlocks(entry).split(/\r\n|[\n\r\u2028\u2029]/u));
   const safeReports = rawReports.map((lines) => [...lines]);
   const earlierReportTails: Array<{ text: string; reportIndex: number; lineIndex: number }> = [];
   let comparisons = 0;
@@ -270,6 +273,16 @@ export interface RunSubagentChildInput {
   };
 }
 
+/**
+ * A stopped helper's partial findings for the parent: the same cross-line
+ * credential filter as settled partial work, then the summary size cap.
+ */
+export function projectSubagentPartialFindings(
+  reports: readonly string[],
+): Pick<SubagentTaskResult, "summary" | "summaryTruncated"> {
+  return projectSubagentCompletedSummary(sanitizePartialFindingsForParent(reports));
+}
+
 export function projectSubagentCompletedSummary(
   text: string,
 ): Pick<SubagentTaskResult, "summary" | "summaryTruncated"> {
@@ -346,8 +359,9 @@ function throwIfParentAborted(signal: AbortSignal | undefined): void {
 const MAX_PARTIAL_CHANGED_FILES_LISTED = 20;
 /** Distinct changed paths tracked per helper; later paths only count. */
 const MAX_PARTIAL_CHANGED_FILES_TRACKED = 1_000;
-const PARTIAL_WORK_NOTE = "These are incomplete, unverified partial findings.";
 const RAN_COMMANDS_NOTE = "It also ran commands, which may have changed other files.";
+const CHANGED_FILES_MAY_BE_INCOMPLETE_NOTE =
+  "The helper had not finished stopping, so this list may be incomplete.";
 
 /**
  * The parent-facing notes about a stopped helper's side effects: the files it
@@ -357,12 +371,19 @@ export function subagentPartialWorkNotes(
   changedFiles: readonly string[],
   untrackedChangedFiles: number,
   ranCommands: boolean,
+  options: { mayBeIncomplete?: boolean } = {},
 ): string[] {
   const notes: string[] = [];
   if (changedFiles.length > 0) {
     const listed = changedFiles.slice(0, MAX_PARTIAL_CHANGED_FILES_LISTED);
     const more = changedFiles.length - listed.length + untrackedChangedFiles;
-    notes.push(`Files it changed: ${listed.join(", ")}${more > 0 ? ` and ${more} more` : ""}.`);
+    // One path per line: a name can itself contain ", " or " and ".
+    notes.push([
+      "Files it changed:",
+      ...listed.map((path) => `- ${path}`),
+      ...(more > 0 ? [`- and ${more} more`] : []),
+      ...(options.mayBeIncomplete ? [CHANGED_FILES_MAY_BE_INCOMPLETE_NOTE] : []),
+    ].join("\n"));
   }
   if (ranCommands) notes.push(RAN_COMMANDS_NOTE);
   return notes;
@@ -814,19 +835,30 @@ export async function runSubagentChild(input: RunSubagentChildInput): Promise<Su
     const partialReports: string[] = [];
     // Settled partial work for the parent: the helper's settled messages plus
     // the files it changed, through the parent-facing partial-findings filter.
-    const partialWork = (): Pick<SubagentTaskResult, "summary" | "summaryTruncated"> | undefined => {
-      const notes = subagentPartialWorkNotes([...changedFiles], untrackedChangedFiles, ranCommands);
+    type PartialWork = Pick<SubagentTaskResult, "summary" | "summaryTruncated">;
+    // A child whose cancellation did not drain may still commit a gated write
+    // after this snapshot, so its file list is marked as possibly incomplete.
+    let cleanupPending = false;
+    const partialWork = (): PartialWork | undefined => {
+      const notes = subagentPartialWorkNotes(
+        [...changedFiles],
+        untrackedChangedFiles,
+        ranCommands,
+        { mayBeIncomplete: cleanupPending },
+      );
       if (partialReports.length === 0 && notes.length === 0) return undefined;
       const reports = notes.length > 0 ? [...partialReports, notes.join("\n")] : partialReports;
-      return projectSubagentCompletedSummary(sanitizePartialFindingsForParent(reports));
+      return projectSubagentPartialFindings(reports);
     };
-    const withPartial = (base: SubagentTaskResult): SubagentTaskResult => {
-      const partial = partialWork();
+    const withPartial = (
+      base: SubagentTaskResult,
+      partial: PartialWork | undefined = partialWork(),
+    ): SubagentTaskResult => {
       if (!partial) return base;
       return {
         ...base,
         ...partial,
-        warning: `${base.warning ?? ""} ${PARTIAL_WORK_NOTE}`.trim(),
+        warning: `${base.warning ?? ""} ${SUBAGENT_PARTIAL_WORK_NOTE}`.trim(),
       };
     };
     const interruptedResult = (): SubagentTaskResult => ({
@@ -981,24 +1013,30 @@ export async function runSubagentChild(input: RunSubagentChildInput): Promise<Su
           : new Error("Parent generation cancelled."),
       );
       if (!(await boundedDrain(prompt, policy.cancellationGraceMs))) {
+        cleanupPending = true;
         child.markCleanupPending?.();
         reportCleanupFailure(input);
       }
       // A stopped helper hands its settled partial work to the supervisor,
       // which keeps it under the stop or time-limit status it decides.
-      if (partialWork()) return withPartial(interruptedResult());
+      const partial = partialWork();
+      if (partial) return withPartial(interruptedResult(), partial);
       throwIfParentAborted(input.signal);
       throw new Error("Parent generation cancelled.");
     }
     if (outcome.kind === "timed_out" || deadlineElapsed()) {
       child.cancel(new Error("Subagent child deadline exceeded."));
       if (!(await boundedDrain(prompt, policy.cancellationGraceMs))) {
+        cleanupPending = true;
         child.markCleanupPending?.();
         reportCleanupFailure(input);
       }
       return withPartial(timedOutResult(input.request, policy.timeLimit));
     }
-    if (input.signal?.aborted && partialWork()) return withPartial(interruptedResult());
+    if (input.signal?.aborted) {
+      const partial = partialWork();
+      if (partial) return withPartial(interruptedResult(), partial);
+    }
     throwIfParentAborted(input.signal);
     // Every unfinished ending hands over the settled partial work. Source paths
     // stay useful to the parent; the renderer projector applies its stricter

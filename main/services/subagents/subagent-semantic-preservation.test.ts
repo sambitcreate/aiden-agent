@@ -189,6 +189,48 @@ test("a real API_KEY: block stays hidden while the text around it survives", () 
   }
 });
 
+const SECRET_NAMED_BLOCKS = [
+  { name: "PASSPHRASE", text: "Setup:\nPASSPHRASE:\n  correct-horse-battery\nDone.", secrets: ["correct-horse-battery"] },
+  { name: "KEY", text: "Setup:\nKEY:\n  zq81LmPq0xWv\nDone.", secrets: ["zq81LmPq0xWv"] },
+  { name: "APITOKEN", text: "Setup:\nAPITOKEN:\n  tok9vXaa71Rr\nDone.", secrets: ["tok9vXaa71Rr"] },
+  {
+    name: "multi-line PASSWORD",
+    text: "Setup:\nPASSWORD:\n  firstline-hunter2\n  secondline-hunter3\nDone.",
+    secrets: ["firstline-hunter2", "secondline-hunter3"],
+  },
+] as const;
+
+for (const block of SECRET_NAMED_BLOCKS) {
+  test(`a ${block.name}: block is hidden by the parent, snapshot and panel filters`, () => {
+    const projector = new SubagentEventProjector({
+      generationId: "generation-secret-block",
+      chatId: "chat-secret-block",
+      workspaceId: "workspace-secret-block",
+      modelId: "test-model",
+      now: () => 1_000,
+    });
+    projector.begin(
+      { runId: "run-secret-block", groupId: "group-secret-block", childId: "child-secret-block" },
+      { role: "scout", label: "Secret block", task: block.text },
+    );
+    const preview = projector.snapshot()[0]?.taskPreview ?? "";
+    for (const safe of [sanitizeSubagentText(block.text), sanitizeSubagentSnapshotText(block.text)]) {
+      for (const secret of block.secrets) assert.ok(!safe.includes(secret), `${secret} leaked: ${safe}`);
+      assert.match(safe, /^Setup:\n/u);
+      assert.match(safe, /\nDone\.$/u);
+    }
+    // The one-line preview may hide more than the block, never less.
+    for (const secret of block.secrets) assert.ok(!preview.includes(secret), `${secret} leaked: ${preview}`);
+    assert.match(preview, /^Setup: /u);
+  });
+}
+
+test("an unknown block name keeps its value out of the panel even without a secret-like name", () => {
+  const value = "MAPPING:\n  zz-unlisted-value\nDone.";
+  assert.doesNotMatch(sanitizeSubagentSnapshotText(value), /zz-unlisted-value/u);
+  assert.equal(sanitizeSubagentText(value), value, "the parent keeps ordinary prose blocks");
+});
+
 test("filtering already-filtered text changes nothing", () => {
   const samples = [
     ...SAFE_TASK_AND_MODEL_TEXT,

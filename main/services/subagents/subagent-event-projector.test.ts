@@ -477,7 +477,7 @@ test("a stopped helper keeps its partial report as the Result and its warning se
     role: "reviewer",
     label: "Cookbook",
     status: "interrupted",
-    summary: "Added the soup section.\n\nFiles it changed: cookbook.html.",
+    summary: "Added the soup section.\n\nFiles it changed:\n- cookbook.html",
     warning: "The child was interrupted before completion. These are incomplete, unverified partial findings.",
   });
 
@@ -485,7 +485,7 @@ test("a stopped helper keeps its partial report as the Result and its warning se
   assert.ok(parseSubagentRunSnapshotV1(snapshot));
   assert.equal(snapshot.state, "interrupted");
   assert.match(snapshot.terminalMarkdown ?? "", /Added the soup section\./u);
-  assert.match(snapshot.terminalMarkdown ?? "", /Files it changed: cookbook\.html\./u);
+  assert.match(snapshot.terminalMarkdown ?? "", /Files it changed:\n- cookbook\.html/u);
   assert.doesNotMatch(snapshot.terminalMarkdown ?? "", /interrupted before completion/u);
   assert.match(snapshot.warnings[0] ?? "", /incomplete, unverified/u);
 });

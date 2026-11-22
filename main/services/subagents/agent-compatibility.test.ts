@@ -192,6 +192,23 @@ test("a Bot report that runs out of time is handed over as unverified partial wo
   assert.equal(effects, 2);
 });
 
+test("partial findings handed to the parent hide every line of a secret-named block", async () => {
+  const report = [
+    "Partial checks: config read.",
+    "PASSWORD:",
+    "  firstline-hunter2",
+    "  secondline-hunter3",
+    "PASSPHRASE:",
+    "  correct-horse-battery",
+    "Blocker: acceptance checks remain unrun.",
+  ].join("\n");
+  const { result } = await reportBudgetFixture({ report: () => fauxAssistantMessage(report) });
+  assert.equal(result.status, "failed");
+  assert.doesNotMatch(result.summary, /hunter2|hunter3|correct-horse-battery/u);
+  assert.match(result.summary, /Partial checks: config read\./u);
+  assert.match(result.summary, /Blocker: acceptance checks remain unrun\./u);
+});
+
 function semanticCheckpointSummary(label: string): string {
   return `## Goal\n${label}\n\n## Constraints & Preferences\n- none\n\n## Progress\n### Done\n- [x] preserved state\n\n### In Progress\n- [ ] continue\n\n### Blocked\n- none\n\n## Key Decisions\n- preserve continuity\n\n## Next Steps\n1. Continue\n\n## Critical Context\n- ${label}`;
 }

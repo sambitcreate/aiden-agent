@@ -1061,7 +1061,8 @@ test("isolated subagent inference executes only parent-owned tools with immutabl
     const expectedStatus = reason === "length" ? "failed" : "completed";
     const terminal = await api.runCliSubagent(dir, { runtime: { model: runtime.getModel("cli-test", "test") }, workspaceRoot: dir, permission: "ask", thinkingLevel: "off", context: { mode: "fork", revisionHash: "terminal", messages: context }, request: { role: "scout", label: "Terminal probe", task: "Explain the fix" }, policy: { deadlineMs: 15000 } }, [], async () => {});
     assert.equal(terminal.status, expectedStatus, `${reason}: ${JSON.stringify(terminal)}`);
-    assert.equal(terminal.summary, reason === "length" ? "The subagent did not complete this investigation." : "Parent-owned tools succeeded");
+    assert.equal(terminal.summary, reason === "length" ? "" : "Parent-owned tools succeeded");
+    if (reason === "length") assert.equal(terminal.warning, "The subagent did not complete this investigation.");
     assert.equal(requests.length, before + 1, "terminal output must not trigger an automatic retry");
     const report = await botTool.execute(`bot-${reason}`, { tasks: [{ role: "scout", label: "Bot terminal", task: "Explain the fix" }] });
     const reportText = report.content.filter((part) => part.type === "text").map((part) => part.text).join("\n");
@@ -1069,6 +1070,80 @@ test("isolated subagent inference executes only parent-owned tools with immutabl
     if (reason === "length") assert.ok(!reportText.includes("Incomplete finding"), "failed child retains the existing generic summary policy");
     assert.equal(requests.length, before + 2, "Bot child must make exactly one request with no retry");
   }
+});
+
+test("a CLI subagent that runs out of time hands over what it streamed, filtered and marked unverified", async (t) => {
+  const dir = temporary(t), original = process.env.AIDEN_CLI_ENTRY, secret = `ghp_${"a1B2c3D4e5".repeat(4)}`;
+  process.env.AIDEN_CLI_ENTRY = join(pkg, "dist/app/cli.js");
+  t.after(() => { if (original === undefined) delete process.env.AIDEN_CLI_ENTRY; else process.env.AIDEN_CLI_ENTRY = original; });
+  const server = createServer(async (request, response) => {
+    request.resume();
+    await new Promise((resolve) => request.on("end", resolve));
+    response.writeHead(200, { "content-type": "text/event-stream" });
+    // The reply streams a finding and a token, then never finishes.
+    response.write(`data: ${JSON.stringify({ id: "slow", object: "chat.completion.chunk", choices: [{ index: 0, delta: { role: "assistant", content: `Found the bug in parser.ts\ntoken ${secret}\n` }, finish_reason: null }] })}\n\n`);
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => { server.closeAllConnections(); server.close(); });
+  api.atomicJson(join(dir, "models.json"), { providers: { "cli-test": { api: "openai-completions", baseUrl: `http://127.0.0.1:${server.address().port}/v1`, apiKey: "test-only", models: [{ id: "test", name: "Test", reasoning: false, input: ["text"], contextWindow: 32000, maxTokens: 4096, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } }] } } });
+  const runtime = await api.createCliModelRuntime(dir);
+  const result = await api.runCliSubagent(dir, { runtime: { model: runtime.getModel("cli-test", "test") }, workspaceRoot: dir, permission: "ask", thinkingLevel: "off", context: { mode: "fork", revisionHash: "slow", messages: [{ role: "user", content: "Find the bug", timestamp: 1 }] }, request: { role: "scout", label: "Slow scout", task: "Find the bug" }, policy: { deadlineMs: 3000 } }, [], async () => {});
+  assert.equal(result.status, "timed_out", JSON.stringify(result));
+  assert.match(result.summary, /Found the bug in parser\.ts/u);
+  assert.ok(!result.summary.includes(secret), result.summary);
+  assert.match(result.warning, /did not complete/u);
+  assert.match(result.warning, /incomplete, unverified partial findings/u);
+});
+
+test("a durable CLI Bot's helpers share one 60-minute clock across every subagent call in a turn", async (t) => {
+  const dir = temporary(t), daemon = api.createDaemonChats(dir), parentRequests = [], childRequests = [];
+  const original = process.env.AIDEN_CLI_ENTRY, realNow = performance.now;
+  process.env.AIDEN_CLI_ENTRY = join(pkg, "dist/app/cli.js");
+  t.after(() => { performance.now = realNow; if (original === undefined) delete process.env.AIDEN_CLI_ENTRY; else process.env.AIDEN_CLI_ENTRY = original; });
+  const toolResult = (parsed, id) => parsed.messages.find((message) => message.role === "tool" && message.tool_call_id === id);
+  const server = createServer(async (request, response) => {
+    let body = ""; for await (const chunk of request) body += chunk;
+    const parsed = JSON.parse(body);
+    // Children get only the parent's read tools; the Bot itself loads `subagent` on demand.
+    const parent = (parsed.tools ?? []).some((tool) => tool.function.name === "load_tools");
+    (parent ? parentRequests : childRequests).push(parsed);
+    let call;
+    if (parent && !toolResult(parsed, "load")) call = "load";
+    else if (parent && !toolResult(parsed, "helper-1")) call = "helper-1";
+    else if (parent && !toolResult(parsed, "helper-2")) {
+      // 61 minutes pass between the turn's first and second helper call.
+      const offset = 61 * 60_000; performance.now = () => realNow.call(performance) + offset;
+      call = "helper-2";
+    }
+    const invocation = call === "load" ? { name: "load_tools", arguments: { names: ["subagent"] } } : { name: "subagent", arguments: { tasks: [{ role: "scout", label: call, task: "Look around" }] } };
+    const delta = call ? { role: "assistant", tool_calls: [{ index: 0, id: call, type: "function", function: { name: invocation.name, arguments: JSON.stringify(invocation.arguments) } }] }
+      : { role: "assistant", content: parent ? "Bot finished" : "Child finding" };
+    response.writeHead(200, { "content-type": "text/event-stream" });
+    response.write(`data: ${JSON.stringify({ id: "clock", object: "chat.completion.chunk", choices: [{ index: 0, delta, finish_reason: null }] })}\n\n`);
+    response.write(`data: ${JSON.stringify({ id: "clock", object: "chat.completion.chunk", choices: [{ index: 0, delta: {}, finish_reason: call ? "tool_calls" : "stop" }] })}\n\n`);
+    response.end("data: [DONE]\n\n");
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => { server.closeAllConnections(); server.close(); });
+  api.atomicJson(join(dir, "models.json"), { providers: { "cli-test": { api: "openai-completions", baseUrl: `http://127.0.0.1:${server.address().port}/v1`, apiKey: "test-only", models: [{ id: "test", name: "Test", reasoning: false, input: ["text"], contextWindow: 32000, maxTokens: 4096, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } }] } } });
+  let host = await api.createCliBots(dir, daemon);
+  t.after(async () => { await host.stop(); await daemon.stop(); });
+  daemon.setBots(host);
+  const audienceId = "cli:local", notice = await host.application.noticeStatus(audienceId);
+  await host.application.acknowledgeNotice(audienceId, { version: notice.version, decision: "customize_first", confirmedForeground: true });
+  const catalog = await host.application.capabilityCatalog(audienceId), provider = catalog.providers.find((item) => item.label === "cli-test");
+  const subagents = catalog.otherCapabilities.find((item) => item.label === "Subagents"); assert.ok(subagents?.available, JSON.stringify(catalog.otherCapabilities));
+  const bot = await host.application.createBot({ audienceId, bot: { name: "Clocked", instructions: "Delegate", avatar: { version: 1, shape: "wisp", color: "lilac" } }, access: { accessMode: "custom", catalogRevision: catalog.revision, custom: {
+    providerId: provider.id, modelId: provider.models[0].id, fileScopeIds: catalog.fileScopes.filter((item) => item.kind === "bot_home").map((item) => item.id), shellEnabled: false, connectionIds: [], skillIds: [], otherCapabilityIds: [subagents.id] } } });
+  await host.command(["enable-durable"]); await host.stop();
+  host = await api.createCliBots(dir, daemon); daemon.setBots(host);
+  const sent = await host.durable.runtime.send(bot.id, { text: "Use two helpers", requestId: "two-helpers" });
+  assert.equal((await host.durable.runtime.awaitReply(bot.id, sent.submissionId, AbortSignal.timeout(30_000))).kind, "completed");
+  assert.equal(childRequests.length, 1, "only the first helper reaches the model");
+  const content = (message) => typeof message.content === "string" ? message.content : JSON.stringify(message.content);
+  const final = parentRequests.at(-1);
+  assert.match(content(toolResult(final, "helper-1")), /Status: completed/u);
+  assert.ok(content(toolResult(final, "helper-2")).includes(api.BOT_SUBAGENT_LIMIT_REACHED_RESULT), content(toolResult(final, "helper-2")));
 });
 
 test("an Anthropic subagent sends its whole conversation on every model round, never a message thread", async (t) => {
