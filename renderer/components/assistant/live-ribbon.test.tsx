@@ -367,14 +367,28 @@ test("a ribbon dragged to a window edge keeps its captions and approval cards in
 test("the corner Live pill rises above a chat composer it would cover, and stays in the corner otherwise", () => {
   // A 900 px tall window whose composer card runs from y 760 to 880, x 300 to 700.
   const composer = { left: 300, right: 700, top: 760 };
-  const containerBottom = 900;
+  const container = { top: 0, bottom: 900 };
+  const dock = { left: 600, right: 690, height: 32 };
   // Over the composer's Send end: the pill's bottom edge sits above the composer's top edge.
-  const lifted = liveCornerClearance({ composer, dock: { left: 600, right: 690 }, containerBottom });
-  assert.ok(containerBottom - lifted < composer.top, `pill bottom at y ${containerBottom - lifted}`);
-  assert.ok(lifted - (containerBottom - composer.top) <= 16, "and only just above it");
+  const lifted = liveCornerClearance({ composer, dock, container });
+  assert.ok(container.bottom - lifted < composer.top, `pill bottom at y ${container.bottom - lifted}`);
+  assert.ok(lifted - (container.bottom - composer.top) <= 16, "and only just above it");
   // A pill to the right of the composer's card, or no chat on screen, keeps the usual corner.
-  assert.equal(liveCornerClearance({ composer, dock: { left: 720, right: 800 }, containerBottom }), 0);
-  assert.equal(liveCornerClearance({ composer: null, dock: { left: 600, right: 690 }, containerBottom }), 0);
+  assert.equal(liveCornerClearance({ composer, dock: { ...dock, left: 720, right: 800 }, container }), 0);
+  assert.equal(liveCornerClearance({ composer: null, dock, container }), 0);
+  // A floating tools panel over the corner keeps the slot below it, so the pill stays there
+  // rather than rising into the panel.
+  assert.equal(liveCornerClearance({ composer, dock, container, floatingPanel: { left: 560, right: 888 } }), 0);
+});
+
+test("a composer too tall to clear never pushes the corner Live pill out of the window", () => {
+  // A short 400 px window whose composer has grown past its top edge.
+  const container = { top: 0, bottom: 400 };
+  const dock = { left: 600, right: 690, height: 120 }; // the pill with error details above it
+  const clearance = liveCornerClearance({ composer: { left: 300, right: 700, top: -40 }, dock, container });
+  const dockTop = container.bottom - clearance - dock.height;
+  assert.ok(dockTop >= container.top, `dock top at y ${dockTop}`);
+  assert.ok(clearance > 0, "still as high as it fits");
 });
 
 // ---- The Live shortcut while a session runs ----

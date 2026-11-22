@@ -76,18 +76,25 @@ export function measureLiveRibbonAnchor(doc: Document = document, view: Window =
  * The lowest the window's corner Live pill (and the details beside it) may
  * sit, as a distance up from the bottom of its container, so it never covers
  * the chat composer's Send button. It is 0 (the usual corner) when no
- * composer is showing or the pill's column is clear of the composer.
+ * composer is showing, the pill's column is clear of the composer, or a
+ * floating tools panel above the corner already keeps that slot for the pill.
+ * It never lifts the pill past the container's top: with a composer too tall
+ * to clear, the pill goes as high as it fits and stays reachable.
  */
 export function liveCornerClearance(input: {
   composer: { left: number; right: number; top: number } | null;
-  dock: { left: number; right: number };
-  containerBottom: number;
+  dock: { left: number; right: number; height: number };
+  container: { top: number; bottom: number };
+  floatingPanel?: { left: number; right: number } | null;
 }): number {
-  const { composer, dock, containerBottom } = input;
+  const { composer, dock, container, floatingPanel } = input;
   if (!composer) return 0;
-  const overlaps = dock.left < composer.right && dock.right > composer.left;
-  if (!overlaps) return 0;
-  return Math.max(0, Math.ceil(containerBottom - composer.top + GAP_ABOVE_COMPOSER));
+  const crosses = (box: { left: number; right: number }) => dock.left < box.right && dock.right > box.left;
+  if (!crosses(composer)) return 0;
+  if (floatingPanel && crosses(floatingPanel)) return 0;
+  const wanted = Math.ceil(container.bottom - composer.top + GAP_ABOVE_COMPOSER);
+  const highest = Math.floor(container.bottom - container.top - dock.height - EDGE_MARGIN);
+  return Math.max(0, Math.min(wanted, highest));
 }
 
 /**

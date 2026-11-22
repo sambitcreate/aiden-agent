@@ -395,10 +395,14 @@ function useLiveCornerClearance(dockRef: React.RefObject<HTMLDivElement | null>,
       const dock = dockRef.current;
       if (!dock) return;
       const container = dock.offsetParent instanceof HTMLElement ? dock.offsetParent.getBoundingClientRect() : null;
+      // A presented floating tools panel keeps the corner slot below it for the pill.
+      const panel = document.querySelector<HTMLElement>('.environment-panel[data-surface-mode="tools-floating"][data-state="open"]');
+      const panelBox = panel?.getBoundingClientRect();
       const next = liveCornerClearance({
         composer: measureChatComposer(),
         dock: dock.getBoundingClientRect(),
-        containerBottom: container?.bottom ?? window.innerHeight,
+        container: container ?? { top: 0, bottom: window.innerHeight },
+        floatingPanel: panelBox && panelBox.width > 0 ? panelBox : null,
       });
       setClearance((current) => (current === next ? current : next));
     };
