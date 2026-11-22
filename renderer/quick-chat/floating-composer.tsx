@@ -69,6 +69,7 @@ export interface FloatingComposerProps {
   onSend: () => void;
   onStop: () => void;
   onExpand?: () => void;
+  onBeforePopoverOpen?: () => Promise<boolean | void>;
   onPopoverOpenChange?: (open: boolean) => void;
   textareaRef?: React.RefObject<HTMLTextAreaElement | null>;
 }
@@ -111,31 +112,51 @@ export function FloatingComposer({
   onSend,
   onStop,
   onExpand,
+  onBeforePopoverOpen,
   onPopoverOpenChange,
   textareaRef,
 }: FloatingComposerProps) {
   const internalTextareaRef = React.useRef<HTMLTextAreaElement | null>(null);
   const inputRef = textareaRef ?? internalTextareaRef;
   const [targetOpen, setTargetOpen] = React.useState(false);
-  const [modelOpen, setModelOpen] = React.useState(false);
   const [dragActive, setDragActive] = React.useState(false);
   const [pickingFiles, setPickingFiles] = React.useState(false);
+  const targetOpenRef = React.useRef(false);
+  const modelOpenRef = React.useRef(false);
+  const targetOpenReqRef = React.useRef(0);
+
+  React.useEffect(() => () => {
+    targetOpenReqRef.current += 1;
+  }, []);
 
   const reportPopover = React.useCallback(
     (nextTarget: boolean, nextModel: boolean) => {
+      targetOpenRef.current = nextTarget;
+      modelOpenRef.current = nextModel;
       onPopoverOpenChange?.(nextTarget || nextModel);
     },
     [onPopoverOpenChange],
   );
 
   const handleTargetOpenChange = (open: boolean) => {
+    const req = ++targetOpenReqRef.current;
+    if (open && onBeforePopoverOpen) {
+      void onBeforePopoverOpen().then(
+        (proceed) => {
+          if (proceed === false || targetOpenReqRef.current !== req) return;
+          setTargetOpen(true);
+          reportPopover(true, modelOpenRef.current);
+        },
+        () => undefined,
+      );
+      return;
+    }
     setTargetOpen(open);
-    reportPopover(open, modelOpen);
+    reportPopover(open, modelOpenRef.current);
   };
 
   const handleModelOpenChange = (open: boolean) => {
-    setModelOpen(open);
-    reportPopover(targetOpen, open);
+    reportPopover(targetOpenRef.current, open);
   };
 
   const realWorkspaces = React.useMemo(() => workspaceChoices(workspaces), [workspaces]);
@@ -289,8 +310,8 @@ export function FloatingComposer({
       className={cn(
         "composer-shell flex flex-col gap-2 px-3.5 py-3 transition-colors",
         variant === "starter"
-          ? "qc-starter-card rounded-[var(--radius-composer)] bg-popover shadow-modal"
-          : "rounded-[var(--radius-composer)] bg-input",
+          ? "qc-starter-card bg-popover shadow-dialog"
+          : "bg-popover shadow-composer",
         dragActive && "bg-list-hover",
       )}
       onDragOver={(event) => {
@@ -365,8 +386,8 @@ export function FloatingComposer({
       </div>
 
       {/* Bottom action row */}
-      <div className="flex items-center justify-between gap-2">
-        <div className="flex min-w-0 items-center gap-1">
+      <div className="flex min-w-0 items-center justify-between gap-2">
+        <div className="flex min-w-0 shrink items-center gap-1">
           <Button
             variant="transparent"
             size="small"
@@ -391,12 +412,12 @@ export function FloatingComposer({
                 <Button
                   variant="transparent"
                   size="small"
-                  className="max-w-[170px] gap-1.5 px-2 text-xs text-secondary hover:text-primary"
+                  className="min-w-0 max-w-[152px] shrink gap-1.5 px-2 text-xs text-secondary hover:text-primary"
                   aria-label={`Chat mode: ${targetChipLabel(targetMode, workspaces)}`}
                   data-testid="quick-chat-target-chip"
                 >
                   {targetChipIcon(targetMode)}
-                  <span className="truncate">{targetChipLabel(targetMode, workspaces)}</span>
+                  <span className="min-w-0 truncate">{targetChipLabel(targetMode, workspaces)}</span>
                   <ChevronDown className="size-3 shrink-0 opacity-70" aria-hidden="true" />
                 </Button>
               </DropdownMenuTrigger>
@@ -475,7 +496,7 @@ export function FloatingComposer({
           ) : null}
         </div>
 
-        <div className="flex shrink-0 items-center gap-1">
+        <div className="flex min-w-0 flex-1 items-center justify-end gap-1">
           <ModelPicker
             providers={providers}
             providerId={providerId}
@@ -484,7 +505,9 @@ export function FloatingComposer({
             disabled={isGenerating}
             hiddenModelsByProvider={hiddenModelsByProvider}
             onOpenSettings={(section) => void quickChatApi.openSettings(section)}
+            beforeOpen={onBeforePopoverOpen}
             onOpenChange={handleModelOpenChange}
+            listOnly
           />
 
           <Button

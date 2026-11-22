@@ -60,7 +60,7 @@ test("floating starter morphs to mini-modal, stays ephemeral until attached to a
   await input.press("Enter");
 
   await expect(quickPage.getByTestId("quick-chat-mini-modal")).toBeVisible({ timeout: 15_000 });
-  await expect(quickPage.getByTestId("quick-chat-status-strip")).toContainText("Temporary");
+  await expect(quickPage.getByTestId("quick-chat-status-pill")).toContainText("Temporary");
   await expect(
     quickPage.getByText(/Deterministic E2E response/u).first(),
   ).toBeVisible({ timeout: 20_000 });
@@ -89,13 +89,14 @@ test("floating starter morphs to mini-modal, stays ephemeral until attached to a
   await previewAppearance(page, "light");
   await expect(quickPage.locator("html")).toHaveAttribute("data-appearance-scheme", "light");
 
-  // Attach the temporary chat in-place to the seeded project workspace.
+  // Attach the temporary chat in-place to the seeded project workspace via the unified status pill.
+  await quickPage.getByTestId("quick-chat-status-pill").click();
   await quickPage.getByTestId("quick-chat-attach-workspace-btn").click();
   await expect(quickPage.getByRole("dialog", { name: /Attach to workspace/iu })).toBeVisible();
   await quickPage.getByRole("button", { name: /Aiden E2E workspace/u }).click();
 
-  // Temporary status strip disappears, dialog closes, and attached workspace appears in header.
-  await expect(quickPage.getByTestId("quick-chat-status-strip")).toHaveCount(0, {
+  // Status pill disappears, dialog closes, and attached workspace appears in header.
+  await expect(quickPage.getByTestId("quick-chat-status-pill")).toHaveCount(0, {
     timeout: 15_000,
   });
   await expect(

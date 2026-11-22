@@ -44,7 +44,11 @@ function QuickChatRoot() {
       <AppCapabilitiesProvider capabilities={capabilities}>
         <TooltipProvider delayDuration={350}>
           <FloatingChatApp />
-          <Toaster position="top-center" offset={12} />
+          <Toaster
+            position="bottom-center"
+            offset={16}
+            mobileOffset={{ bottom: 16, left: 68, right: 68 }}
+          />
         </TooltipProvider>
       </AppCapabilitiesProvider>
     </QueryClientProvider>

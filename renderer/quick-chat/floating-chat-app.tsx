@@ -7,14 +7,28 @@ import * as React from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Bookmark,
+  ChevronDown,
+  Clock,
   Folder,
   FolderPlus,
   Maximize2,
+  MessageCircle,
   SquarePen,
   Trash2,
   X,
 } from "lucide-react";
-import { Badge, Button, ScrollArea, Text, toast } from "../components/ui";
+import {
+  Button,
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+  ScrollArea,
+  Text,
+  toast,
+} from "../components/ui";
+import { cn } from "../lib/ui-utils";
 import { MessageList } from "../components/message-list";
 import { ChatApprovalCard } from "../components/chat-approval-card";
 import { AskUserQuestionComposer } from "../components/ask-user-question-composer";
@@ -153,11 +167,15 @@ export function FloatingChatApp() {
 
   // Attach-to-workspace & promote state
   const [attachDialogOpen, setAttachDialogOpen] = React.useState(false);
+  const [statusMenuOpen, setStatusMenuOpen] = React.useState(false);
   const [promoting, setPromoting] = React.useState(false);
   const [expanding, setExpanding] = React.useState(false);
 
   const generationRef = React.useRef<GenerationHandle | null>(null);
   const generationIntentRef = React.useRef(0);
+  const stageRef = React.useRef(stage);
+  stageRef.current = stage;
+  const popoverOpenGenRef = React.useRef(0);
   const streamedTextRef = React.useRef("");
   const streamedReasoningRef = React.useRef("");
   const queuedMessagesRef = React.useRef<HandoffQueuedMessage[]>([]);
@@ -197,6 +215,7 @@ export function FloatingChatApp() {
       setQueuedMessages([]);
       setError(null);
       setAttachDialogOpen(false);
+      setStatusMenuOpen(false);
       setStage("starter");
       void quickChatApi.setMode("starter").catch(() => undefined);
     },
@@ -206,6 +225,7 @@ export function FloatingChatApp() {
   // Listen for main-process `quickChat:opened` and `quickChat:handoff-complete`.
   React.useEffect(() => {
     const offOpened = onNotification("quickChat:opened", () => {
+      popoverOpenGenRef.current += 1;
       void qc.invalidateQueries({ queryKey: queryKeys.workspaces });
       void qc.invalidateQueries({ queryKey: queryKeys.providers });
       void qc.invalidateQueries({ queryKey: queryKeys.settings });
@@ -259,6 +279,10 @@ export function FloatingChatApp() {
       if (!isEscapeKey(event) || event.defaultPrevented) return;
       if (attachDialogOpen || hasOpenLayer()) return;
       event.preventDefault();
+      popoverOpenGenRef.current += 1;
+      if (stageRef.current === "starter") {
+        void quickChatApi.setMode("starter").catch(() => undefined);
+      }
       void quickChatApi.hide().catch(() => undefined);
     };
     window.addEventListener("keydown", handleKeyDown);
@@ -483,6 +507,11 @@ export function FloatingChatApp() {
           const scratch = await workspacesApi.createNoWorkspace();
           if (generationIntentRef.current !== sendIntent) return;
           targetWorkspaceId = scratch.id;
+          // Insert optimistically so activeWorkspace resolves immediately without header pill flicker.
+          qc.setQueryData<Workspace[]>(queryKeys.workspaces, (prev) => {
+            if (!prev) return [scratch];
+            return prev.some((ws) => ws.id === scratch.id) ? prev : [...prev, scratch];
+          });
           void qc.invalidateQueries({ queryKey: queryKeys.workspaces });
         }
 
@@ -711,12 +740,60 @@ export function FloatingChatApp() {
     chat && !isGenerating && (chat.ephemeral || isNoWorkspace(activeWorkspace)),
   );
 
+  const popoverShrinkTimerRef = React.useRef<number | null>(null);
+  const clearPopoverShrinkTimer = React.useCallback(() => {
+    if (popoverShrinkTimerRef.current !== null) {
+      window.clearTimeout(popoverShrinkTimerRef.current);
+      popoverShrinkTimerRef.current = null;
+    }
+  }, []);
+
+  React.useEffect(() => {
+    if (stage !== "starter") {
+      popoverOpenGenRef.current += 1;
+      clearPopoverShrinkTimer();
+    }
+    return () => {
+      popoverOpenGenRef.current += 1;
+      clearPopoverShrinkTimer();
+    };
+  }, [stage, clearPopoverShrinkTimer]);
+
+  // Expand the floating window upward BEFORE Radix mounts the popover so the
+  // viewport is already at full height on frame 1 (zero jump or flip).
+  const prepareStarterPopoverOpen = React.useCallback(async (): Promise<boolean> => {
+    const gen = ++popoverOpenGenRef.current;
+    clearPopoverShrinkTimer();
+    await quickChatApi.setMode("starter-popover").catch(() => undefined);
+    await new Promise<void>((resolve) => {
+      requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+    });
+    return popoverOpenGenRef.current === gen && stageRef.current === "starter";
+  }, [clearPopoverShrinkTimer]);
+
+  const handleStarterPopoverOpenChange = React.useCallback(
+    (open: boolean) => {
+      if (open) {
+        clearPopoverShrinkTimer();
+        return;
+      }
+      clearPopoverShrinkTimer();
+      popoverShrinkTimerRef.current = window.setTimeout(() => {
+        popoverShrinkTimerRef.current = null;
+        if (stageRef.current === "starter") {
+          void quickChatApi.setMode("starter").catch(() => undefined);
+        }
+      }, 150);
+    },
+    [clearPopoverShrinkTimer],
+  );
+
   // State 1: Compact floating starter bar anchored to the bottom of the stage
   // so opening popovers expands the window upward without shifting the bar.
   if (stage === "starter") {
     return (
       <div
-        className="flex h-screen w-screen flex-col items-center justify-end bg-transparent p-6"
+        className="flex h-screen w-screen flex-col items-center justify-end bg-transparent px-14 pt-10 pb-[68px]"
         data-testid="quick-chat-stage-starter"
       >
         <div className="w-full max-w-[512px]">
@@ -748,9 +825,8 @@ export function FloatingChatApp() {
             onSend={() => void handleSend()}
             onStop={handleStop}
             onExpand={() => void handleExpand()}
-            onPopoverOpenChange={(open) => {
-              void quickChatApi.setMode(open ? "starter-popover" : "starter").catch(() => undefined);
-            }}
+            onBeforePopoverOpen={prepareStarterPopoverOpen}
+            onPopoverOpenChange={handleStarterPopoverOpenChange}
             textareaRef={textareaRef}
           />
         </div>
@@ -758,23 +834,24 @@ export function FloatingChatApp() {
     );
   }
 
-  // State 2: Floating Mini-Modal with draggable header, status strip, live
+  // State 2: Floating Mini-Modal with one unified draggable header, live
   // transcript, approvals/questions, and docked composer.
   const currentApproval = approvals[0];
+  const hasLifecycleMenu = Boolean(chat && (chat.ephemeral || isNoWorkspace(activeWorkspace)));
 
   return (
     <div
-      className="flex h-screen w-screen flex-col items-center justify-end bg-transparent p-6"
+      className="flex h-screen w-screen flex-col items-center justify-end bg-transparent px-14 pt-10 pb-[68px]"
       data-testid="quick-chat-stage-modal"
     >
       <div
-        className="qc-modal-card flex h-full w-full flex-col overflow-hidden rounded-2xl bg-popover shadow-modal"
+        className="qc-modal-card flex h-full w-full flex-col overflow-hidden rounded-sheet bg-background shadow-dialog"
         role="dialog"
         aria-label="Aiden Quick Chat"
         data-testid="quick-chat-mini-modal"
       >
-        {/* Draggable header bar */}
-        <header className="qc-drag-region flex shrink-0 items-center justify-between gap-2 px-3 py-2.5">
+        {/* Single unified draggable header bar */}
+        <header className="qc-drag-region flex shrink-0 items-center justify-between gap-2 border-b border-separator/60 px-3 py-2.5">
           <div className="qc-no-drag flex items-center gap-1">
             <Button
               variant="transparent"
@@ -790,36 +867,107 @@ export function FloatingChatApp() {
             </Button>
           </div>
 
-          <div className="flex min-w-0 flex-1 flex-col items-center justify-center">
-            <Text variant="small-strong" className="max-w-full truncate text-center">
-              {chat?.title || "Quick Chat"}
-            </Text>
-            {chat && !chat.ephemeral && activeWorkspace && !isNoWorkspace(activeWorkspace) ? (
+          <div className="flex min-w-0 flex-1 items-center justify-center">
+            {hasLifecycleMenu && chat ? (
+              <div className="qc-no-drag">
+                <DropdownMenu open={statusMenuOpen} onOpenChange={setStatusMenuOpen}>
+                  <DropdownMenuTrigger asChild>
+                    <Button
+                      variant="transparent"
+                      size="small"
+                      className={cn(
+                        "h-7 max-w-[190px] gap-1.5 px-2.5 text-xs font-medium",
+                        chat.ephemeral
+                          ? "bg-status-warning-surface text-status-warning hover:brightness-95 dark:hover:brightness-110"
+                          : "bg-control/70 text-secondary hover:bg-control hover:text-primary",
+                      )}
+                      aria-label={
+                        chat.ephemeral
+                          ? "Temporary chat options"
+                          : "Chats options"
+                      }
+                      title={chat.title || (chat.ephemeral ? "Temporary chat" : "Saved to Chats")}
+                      data-testid="quick-chat-status-pill"
+                    >
+                      {chat.ephemeral ? (
+                        <Clock className="size-3.5 shrink-0" aria-hidden="true" />
+                      ) : (
+                        <MessageCircle className="size-3.5 shrink-0" aria-hidden="true" />
+                      )}
+                      <span className="min-w-0 truncate">
+                        {chat.ephemeral ? "Temporary" : "Chats"}
+                      </span>
+                      <ChevronDown className="size-3 shrink-0 opacity-70" aria-hidden="true" />
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent
+                    align="center"
+                    sideOffset={8}
+                    className="w-60"
+                    data-testid="quick-chat-status-menu"
+                  >
+                    <div className="px-2.5 py-1.5">
+                      <Text variant="small-strong" className="block truncate">
+                        {chat.title || "Quick Chat"}
+                      </Text>
+                      <Text variant="small" color="tertiary" className="block text-mini">
+                        {chat.ephemeral
+                          ? "Hidden from sidebar until saved"
+                          : "Saved in Chats · No workspace"}
+                      </Text>
+                    </div>
+                    <DropdownMenuSeparator />
+                    {chat.ephemeral ? (
+                      <DropdownMenuItem
+                        disabled={promoting || sending}
+                        onSelect={() => void handlePromoteEphemeral()}
+                        data-testid="quick-chat-save-btn"
+                      >
+                        <Bookmark className="size-3.5 shrink-0" aria-hidden="true" />
+                        <span>Save to Chats</span>
+                      </DropdownMenuItem>
+                    ) : null}
+                    <DropdownMenuItem
+                      disabled={!canAttachWorkspace || sending}
+                      onSelect={() => setAttachDialogOpen(true)}
+                      data-testid="quick-chat-attach-workspace-btn"
+                    >
+                      <FolderPlus className="size-3.5 shrink-0" aria-hidden="true" />
+                      <span>Attach to workspace…</span>
+                    </DropdownMenuItem>
+                    {chat.ephemeral ? (
+                      <>
+                        <DropdownMenuSeparator />
+                        <DropdownMenuItem
+                          color="status-red"
+                          onSelect={() => void handleDiscard()}
+                          data-testid="quick-chat-discard-btn"
+                        >
+                          <Trash2 className="size-3.5 shrink-0" aria-hidden="true" />
+                          <span>Discard temporary chat</span>
+                        </DropdownMenuItem>
+                      </>
+                    ) : null}
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              </div>
+            ) : chat && !chat.ephemeral && activeWorkspace && !isNoWorkspace(activeWorkspace) ? (
               <span
-                className="inline-flex max-w-full items-center gap-1 truncate text-[11px] text-secondary"
+                className="inline-flex max-w-full items-center gap-1.5 truncate text-xs font-medium text-secondary"
+                title={chat.title || activeWorkspace.name}
                 data-testid="quick-chat-attached-workspace"
               >
-                <Folder className="size-3 shrink-0" aria-hidden="true" />
+                <Folder className="size-3.5 shrink-0" aria-hidden="true" />
                 <span className="truncate">{activeWorkspace.name}</span>
               </span>
-            ) : null}
+            ) : (
+              <Text variant="small-strong" className="max-w-full truncate text-center">
+                {chat?.title || "Quick Chat"}
+              </Text>
+            )}
           </div>
 
           <div className="qc-no-drag flex items-center gap-1">
-            {chat?.ephemeral ? (
-              <Button
-                variant="transparent"
-                size="small"
-                iconOnly
-                className="text-secondary hover:text-primary"
-                aria-label="Discard temporary chat"
-                title="Discard temporary chat"
-                onClick={() => void handleDiscard()}
-                data-testid="quick-chat-discard-btn"
-              >
-                <Trash2 className="size-3.5" />
-              </Button>
-            ) : null}
             <Button
               variant="transparent"
               size="small"
@@ -848,51 +996,9 @@ export function FloatingChatApp() {
           </div>
         </header>
 
-        {/* Subtle status strip for Temporary / No workspace / attached workspace */}
-        {chat && (chat.ephemeral || isNoWorkspace(activeWorkspace)) ? (
-          <div
-            className="flex shrink-0 flex-wrap items-center justify-between gap-2 bg-well px-3.5 py-2"
-            data-testid="quick-chat-status-strip"
-          >
-            <div className="flex items-center gap-1.5">
-              {chat.ephemeral ? (
-                <Badge color="warning">Temporary</Badge>
-              ) : (
-                <Badge>No workspace</Badge>
-              )}
-            </div>
-            <div className="flex items-center gap-1">
-              {chat.ephemeral ? (
-                <Button
-                  variant="transparent"
-                  size="small"
-                  className="h-7 gap-1 px-2 text-xs text-secondary hover:text-primary"
-                  disabled={promoting || sending}
-                  onClick={() => void handlePromoteEphemeral()}
-                  data-testid="quick-chat-save-btn"
-                >
-                  <Bookmark className="size-3" aria-hidden="true" />
-                  <span>Save</span>
-                </Button>
-              ) : null}
-              <Button
-                variant="transparent"
-                size="small"
-                className="h-7 gap-1 px-2 text-xs text-secondary hover:text-primary"
-                disabled={!canAttachWorkspace || sending}
-                onClick={() => setAttachDialogOpen(true)}
-                data-testid="quick-chat-attach-workspace-btn"
-              >
-                <FolderPlus className="size-3" aria-hidden="true" />
-                <span>Attach to workspace…</span>
-              </Button>
-            </div>
-          </div>
-        ) : null}
-
         {/* Transcript scroll area */}
         <ScrollArea
-          className="min-h-0 flex-1"
+          className="min-h-0 flex-1 bg-transparent"
           autoScrollToBottom
           autoScrollDeps={[chat?.messages.length, streamingText, approvals.length, questionnaire?.promptId]}
           streaming={isGenerating}

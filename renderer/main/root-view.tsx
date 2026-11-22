@@ -42,7 +42,7 @@ import { LiveChatToolsHost } from "./live-chat-tools-host";
 import { KeyboardRegions } from "../components/keyboard-regions";
 import { KeyboardShortcutsDialog } from "../components/keyboard-shortcuts-dialog";
 import { WorkspaceSettingsDialog } from "../components/workspace-settings-dialog";
-import { OnboardingFlow } from "../components/onboarding-flow";
+import { OnboardingFlow, waitForOnboardingActiveCheck } from "../components/onboarding-flow";
 import { BotConnectionSetupHost } from "./bots/bot-connection-setup-host";
 import { workspaceCommandVisibility } from "../lib/command-system-core";
 import { useAppCapabilities } from "../lib/app-capabilities";
@@ -615,89 +615,125 @@ function RootContent() {
     });
   }, [queryClient]);
 
+  const mountedRef = React.useRef(true);
+  React.useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
+
+  const latestNavRef = React.useRef({
+    activeId,
+    navigate,
+    navigationBlockedReason,
+    openNewChatIn,
+    queryClient,
+  });
+  latestNavRef.current = {
+    activeId,
+    navigate,
+    navigationBlockedReason,
+    openNewChatIn,
+    queryClient,
+  };
+
   React.useEffect(() => {
     return onNotification<{ path: string; requestId?: string }>("app:navigate", (payload) => {
-      const acknowledge = (status: "opened" | "blocked") => { if (payload.requestId) void appControlsApi.acknowledgeNavigation(payload.requestId, status); };
-      if (!payload?.path) return;
-      if (document.querySelector("[data-onboarding-active='true']")) {
-        toast.info("Finish onboarding before opening another part of Aiden.");
-        acknowledge("blocked");
-        return;
-      }
-      if (navigationBlockedReason) {
-        toast.info(navigationBlockedReason);
-        acknowledge("blocked");
-        return;
-      }
-      const settingsHandoffPrefix = "/quick-chat-handoff/settings/";
-      if (payload.path.startsWith(settingsHandoffPrefix)) {
-        const section = parseSettingsSection(payload.path.slice(settingsHandoffPrefix.length).trim());
-        if (!section) {
-          acknowledge("blocked");
-          return;
-        }
-        void navigate(settingsLocation(section, { pathname: router.state.location.pathname })).then(
-          () => acknowledge("opened"),
-          () => acknowledge("blocked"),
-        );
-        return;
-      }
-      const draftHandoffPrefix = "/quick-chat-handoff/draft/";
-      if (payload.path.startsWith(draftHandoffPrefix)) {
-        const ticketId = payload.path.slice(draftHandoffPrefix.length).trim();
-        if (!ticketId) {
-          acknowledge("blocked");
-          return;
-        }
-        void claimChatHandoff({ ticketId })
-          .then(async (claimed) => {
-            if (!claimed || claimed.kind !== "draft") {
-              acknowledge("blocked");
-              return;
-            }
-            void queryClient.invalidateQueries({ queryKey: queryKeys.workspaces });
-            if (claimed.providerId && claimed.model) {
-              persistModelSelection(claimed.providerId, claimed.model);
-            }
-            const targetWorkspaceId = claimed.workspaceId || activeId || "default";
-            const createdDraftId = await openNewChatIn(targetWorkspaceId, claimed.text, {
-              attachments: claimed.attachments as Attachment[],
-              ...(claimed.ephemeral ? { ephemeral: true } : {}),
-            });
-            if (!createdDraftId) {
-              acknowledge("blocked");
-              return;
-            }
-            acknowledge("opened");
-          })
-          .catch(() => acknowledge("blocked"));
-        return;
-      }
-      const chatHandoffPrefix = "/quick-chat-handoff/chat/";
-      if (payload.path.startsWith(chatHandoffPrefix)) {
-        const targetChatId = payload.path.slice(chatHandoffPrefix.length).trim();
-        if (!targetChatId) {
-          acknowledge("blocked");
-          return;
-        }
-        notifyPendingChatHandoff(targetChatId);
-        void Promise.all([
-          queryClient.invalidateQueries({ queryKey: queryKeys.workspaces }),
-          queryClient.invalidateQueries({ queryKey: queryKeys.chat(targetChatId) }),
-          queryClient.invalidateQueries({ queryKey: queryKeys.chats }),
-        ]);
-        void navigate({ to: "/chat/$chatId", params: { chatId: targetChatId } }).then(
-          () => acknowledge("opened"),
-          () => {
-            consumePendingChatHandoff(targetChatId);
+      void (async () => {
+        const acknowledge = (status: "opened" | "blocked") => { if (payload.requestId) void appControlsApi.acknowledgeNavigation(payload.requestId, status); };
+        if (!payload?.path) return;
+        if (document.querySelector("[data-onboarding-active='true']")) {
+          const blockedByOnboarding = document.querySelector("[data-onboarding-checking='true']")
+            ? await waitForOnboardingActiveCheck()
+            : true;
+          if (!mountedRef.current) {
             acknowledge("blocked");
-          },
-        );
-        return;
-      }
-      void navigate({ to: payload.path }).then(() => acknowledge("opened"), () => acknowledge("blocked"));
+            return;
+          }
+          if (blockedByOnboarding) {
+            toast.info("Finish onboarding before opening another part of Aiden.");
+            acknowledge("blocked");
+            return;
+          }
+        }
+        const current = latestNavRef.current;
+        if (current.navigationBlockedReason) {
+          toast.info(current.navigationBlockedReason);
+          acknowledge("blocked");
+          return;
+        }
+        const settingsHandoffPrefix = "/quick-chat-handoff/settings/";
+        if (payload.path.startsWith(settingsHandoffPrefix)) {
+          const section = parseSettingsSection(payload.path.slice(settingsHandoffPrefix.length).trim());
+          if (!section) {
+            acknowledge("blocked");
+            return;
+          }
+          void current.navigate(settingsLocation(section, { pathname: router.state.location.pathname })).then(
+            () => acknowledge("opened"),
+            () => acknowledge("blocked"),
+          );
+          return;
+        }
+        const draftHandoffPrefix = "/quick-chat-handoff/draft/";
+        if (payload.path.startsWith(draftHandoffPrefix)) {
+          const ticketId = payload.path.slice(draftHandoffPrefix.length).trim();
+          if (!ticketId) {
+            acknowledge("blocked");
+            return;
+          }
+          void claimChatHandoff({ ticketId })
+            .then(async (claimed) => {
+              if (!claimed || claimed.kind !== "draft" || !mountedRef.current) {
+                acknowledge("blocked");
+                return;
+              }
+              const latest = latestNavRef.current;
+              void latest.queryClient.invalidateQueries({ queryKey: queryKeys.workspaces });
+              if (claimed.providerId && claimed.model) {
+                persistModelSelection(claimed.providerId, claimed.model);
+              }
+              const targetWorkspaceId = claimed.workspaceId || latest.activeId || "default";
+              const createdDraftId = await latest.openNewChatIn(targetWorkspaceId, claimed.text, {
+                attachments: claimed.attachments as Attachment[],
+                ...(claimed.ephemeral ? { ephemeral: true } : {}),
+              });
+              if (!createdDraftId) {
+                acknowledge("blocked");
+                return;
+              }
+              acknowledge("opened");
+            })
+            .catch(() => acknowledge("blocked"));
+          return;
+        }
+        const chatHandoffPrefix = "/quick-chat-handoff/chat/";
+        if (payload.path.startsWith(chatHandoffPrefix)) {
+          const targetChatId = payload.path.slice(chatHandoffPrefix.length).trim();
+          if (!targetChatId) {
+            acknowledge("blocked");
+            return;
+          }
+          notifyPendingChatHandoff(targetChatId);
+          void Promise.all([
+            current.queryClient.invalidateQueries({ queryKey: queryKeys.workspaces }),
+            current.queryClient.invalidateQueries({ queryKey: queryKeys.chat(targetChatId) }),
+            current.queryClient.invalidateQueries({ queryKey: queryKeys.chats }),
+          ]);
+          void current.navigate({ to: "/chat/$chatId", params: { chatId: targetChatId } }).then(
+            () => acknowledge("opened"),
+            () => {
+              consumePendingChatHandoff(targetChatId);
+              acknowledge("blocked");
+            },
+          );
+          return;
+        }
+        void current.navigate({ to: payload.path }).then(() => acknowledge("opened"), () => acknowledge("blocked"));
+      })();
     });
-  }, [activeId, navigate, navigationBlockedReason, openNewChatIn, queryClient]);
+  }, []);
 
   React.useEffect(() => {
     const syncFocus = () =>

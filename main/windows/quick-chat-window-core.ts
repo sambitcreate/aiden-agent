@@ -11,16 +11,16 @@ export interface RectBounds {
   height: number;
 }
 
-/** Transparent outer padding around the visible floating card for CSS --elevation-modal shadow. */
-export const QUICK_CHAT_SHADOW_MARGIN = 24;
+/** Transparent outer shadow padding around the visible floating card (`px-14 pt-10 pb-[68px]`). */
+export const QUICK_CHAT_SHADOW_MARGIN = 56;
 
 export const QUICK_CHAT_STAGE_SIZES: Record<QuickChatWindowMode, { width: number; height: number }> = {
-  // 512x132 visible starter bar + 24px shadow margin on each edge.
-  starter: { width: 560, height: 180 },
+  // 512x132 visible starter bar + 56px L/R, 40px top, 68px bottom shadow gutter (zero shadow clip).
+  starter: { width: 624, height: 240 },
   // Expands upward when ModelPicker / WorkspacePicker popover is open so nothing clips.
-  "starter-popover": { width: 560, height: 540 },
-  // 460x592 visible mini-modal + 24px shadow margin on each edge.
-  modal: { width: 508, height: 640 },
+  "starter-popover": { width: 624, height: 600 },
+  // 460x592 visible mini-modal + 56px L/R, 40px top, 68px bottom shadow gutter.
+  modal: { width: 572, height: 700 },
 };
 
 /**
@@ -55,10 +55,16 @@ export function computeQuickChatInitialBounds(
   const width = Math.min(target.width, workArea.width);
   const height = Math.min(target.height, workArea.height);
   const x = workArea.x + (workArea.width - width) / 2;
+  const starterAnchorBottomY =
+    workArea.y +
+    Math.max(
+      workArea.height * 0.72,
+      Math.min(workArea.height, QUICK_CHAT_STAGE_SIZES["starter-popover"].height),
+    );
   const anchorBottomY =
     mode === "modal"
       ? workArea.y + (workArea.height + height) / 2
-      : workArea.y + workArea.height * 0.68;
+      : starterAnchorBottomY;
   const y = anchorBottomY - height;
   return clampBoundsToWorkArea({ x, y, width, height }, workArea);
 }

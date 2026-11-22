@@ -180,9 +180,13 @@ test("State 1 starter defaults to Temporary, omits Share screen, and morphs to S
       });
     });
 
-    // Promote Temporary chat to regular Chats.
+    // Promote Temporary chat to regular Chats via the unified header status pill menu.
     await act(async () => {
-      fireEvent.click(screen.getByTestId("quick-chat-save-btn"));
+      fireEvent.pointerDown(screen.getByTestId("quick-chat-status-pill"), { button: 0, ctrlKey: false });
+    });
+    const saveItem = await screen.findByTestId("quick-chat-save-btn");
+    await act(async () => {
+      fireEvent.click(saveItem);
     });
     assert.ok(calls.some((c) => c.channel === "chats:promoteEphemeral"));
   } finally {
@@ -307,9 +311,13 @@ test("rejected chat:start clears Thinking state and displays error, and Discard 
     });
     assert.equal(screen.queryByTestId("quick-chat-stop-btn"), null);
 
-    // Discard removes the ephemeral chat and resets to State 1.
+    // Discard removes the ephemeral chat and resets to State 1 via the unified header status pill menu.
     await act(async () => {
-      fireEvent.click(screen.getByTestId("quick-chat-discard-btn"));
+      fireEvent.pointerDown(screen.getByTestId("quick-chat-status-pill"), { button: 0, ctrlKey: false });
+    });
+    const discardItem = await screen.findByTestId("quick-chat-discard-btn");
+    await act(async () => {
+      fireEvent.click(discardItem);
     });
     await waitFor(() => assert.ok(screen.getByTestId("quick-chat-stage-starter")));
     assert.ok(calls.some((c) => c.channel === "chats:remove"));

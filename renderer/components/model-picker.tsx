@@ -78,6 +78,10 @@ interface ModelPickerProps {
   onOpenSettings?: (section: SettingsSection) => void;
   /** Optional observer for popover open/close transitions. */
   onOpenChange?: (open: boolean) => void;
+  /** Show only the searchable model list (hides Model Pad tabs, Pad toggles, and hover details). */
+  listOnly?: boolean;
+  /** Optional async hook awaited before opening the popover (return false to cancel). */
+  beforeOpen?: () => Promise<boolean | void>;
 }
 
 const BENCHMARK_DATE_FORMATTER = new Intl.DateTimeFormat(undefined, { dateStyle: "medium" });
@@ -291,6 +295,7 @@ function ModelListRow({
   isActive,
   isPinned,
   isOnPad,
+  showPadToggle = true,
   onChoose,
   onPreview,
   onTogglePin,
@@ -302,6 +307,7 @@ function ModelListRow({
   isActive: boolean;
   isPinned: boolean;
   isOnPad: boolean;
+  showPadToggle?: boolean;
   onChoose: (entry: ModelEntry) => void;
   onPreview: (value: string) => void;
   onTogglePin: (value: string) => unknown;
@@ -312,7 +318,11 @@ function ModelListRow({
     <CommandItem
       value={entry.value}
       aria-describedby={descriptionId}
-      aria-keyshortcuts={[ariaKeyShortcut(PIN_SHORTCUT), ariaKeyShortcut(PAD_SHORTCUT)].join(" ")}
+      aria-keyshortcuts={
+        showPadToggle
+          ? [ariaKeyShortcut(PIN_SHORTCUT), ariaKeyShortcut(PAD_SHORTCUT)].join(" ")
+          : ariaKeyShortcut(PIN_SHORTCUT)
+      }
       onSelect={() => onChoose(entry)}
       onMouseEnter={() => onPreview(entry.value)}
       className="group gap-2"
@@ -338,7 +348,9 @@ function ModelListRow({
       ) : null}
       {/* Read through aria-describedby only, so the option's name stays the model's. */}
       <span id={descriptionId} className="sr-only" aria-hidden="true">
-        {`${describeModel(entry)}. ${rowActionsDescription(isPinned, isOnPad)}.`}
+        {showPadToggle
+          ? `${describeModel(entry)}. ${rowActionsDescription(isPinned, isOnPad)}.`
+          : `${describeModel(entry)}. ${isPinned ? "Pinned" : "Not pinned"}.`}
       </span>
       {isActive ? <Check className="size-4 shrink-0 text-accent-text" /> : null}
       <ModelRowAction
@@ -349,18 +361,20 @@ function ModelListRow({
       >
         <Pin className={cn("size-3.5", isPinned && "fill-current text-accent-text")} />
       </ModelRowAction>
-      <ModelRowAction
-        label={isOnPad ? "Remove from Pad" : "Add to Pad"}
-        shortcut={PAD_SHORTCUT}
-        active={isOnPad}
-        onToggle={() => onTogglePad(entry.value)}
-      >
-        {isOnPad ? (
-          <Grid2x2Check className="size-3.5 text-accent-text" />
-        ) : (
-          <Grid2x2Plus className="size-3.5" />
-        )}
-      </ModelRowAction>
+      {showPadToggle ? (
+        <ModelRowAction
+          label={isOnPad ? "Remove from Pad" : "Add to Pad"}
+          shortcut={PAD_SHORTCUT}
+          active={isOnPad}
+          onToggle={() => onTogglePad(entry.value)}
+        >
+          {isOnPad ? (
+            <Grid2x2Check className="size-3.5 text-accent-text" />
+          ) : (
+            <Grid2x2Plus className="size-3.5" />
+          )}
+        </ModelRowAction>
+      ) : null}
     </CommandItem>
   );
 }
@@ -535,9 +549,15 @@ function ModelPickerInner({
   hiddenModelsByProvider,
   openSettings,
   onOpenChange,
+  listOnly = false,
+  beforeOpen,
 }: ModelPickerProps & { openSettings: (section: SettingsSection) => void }) {
   const [open, setOpen] = React.useState(false);
   const [view, setView] = React.useState<"pad" | "list">("list");
+  const openRequestRef = React.useRef(0);
+  React.useEffect(() => () => {
+    openRequestRef.current += 1;
+  }, []);
   const [search, setSearch] = React.useState("");
   const [previewValue, setPreviewValue] = React.useState<string>();
   const contentRef = React.useRef<HTMLDivElement | null>(null);
@@ -559,7 +579,7 @@ function ModelPickerInner({
   const catalog = useProvidersModelInfo(providers);
   // Device-local measured speed for the detail card; display-only. Read afresh
   // each time the picker opens so new chats show up without a remount.
-  const paceSummaries = useModelPaceSummaries({ enabled: open, staleTime: 0 }).data;
+  const paceSummaries = useModelPaceSummaries({ enabled: open && !listOnly, staleTime: 0 }).data;
   // The composer re-renders on every streamed token. Keep the catalog derivation
   // keyed on its real inputs, and derive list order and detail positions only
   // while the popover is open.
@@ -865,7 +885,8 @@ function ModelPickerInner({
   }, [pinned]);
   const handleRowShortcut = (event: React.KeyboardEvent) => {
     const pin = matchesAccelerator(event, PIN_SHORTCUT);
-    if (!pin && !matchesAccelerator(event, PAD_SHORTCUT)) return;
+    const pad = !listOnly && matchesAccelerator(event, PAD_SHORTCUT);
+    if (!pin && !pad) return;
     event.preventDefault();
     if (event.repeat || isComposingKey(event)) return;
     const entry = listPage.sections.flat().find((row) => row.value === previewValue);
@@ -891,6 +912,7 @@ function ModelPickerInner({
       isActive={entry.value === selectedValue}
       isPinned={pinned.includes(entry.value)}
       isOnPad={Boolean(modelPadPlacements[entry.value])}
+      showPadToggle={!listOnly}
       onChoose={(choice) => commit(choice, true)}
       onPreview={setPreviewValue}
       onTogglePin={togglePin}
@@ -898,7 +920,7 @@ function ModelPickerInner({
     />
   );
 
-  const handleOpenChange = (next: boolean) => {
+  const applyOpenState = (next: boolean) => {
     setOpen(next);
     onOpenChange?.(next);
     if (next) {
@@ -907,11 +929,25 @@ function ModelPickerInner({
       setSearch("");
       if (announceTimerRef.current !== null) window.clearTimeout(announceTimerRef.current);
       setActionAnnouncement("");
-      setView(hasPadModels ? "pad" : "list");
+      setView(listOnly ? "list" : hasPadModels ? "pad" : "list");
       setPreviewValue(selectedValue || positioned[0]?.value);
     } else {
       setPreviewValue(undefined);
     }
+  };
+
+  const handleOpenChange = (next: boolean) => {
+    const requestId = ++openRequestRef.current;
+    if (next && beforeOpen) {
+      void beforeOpen().then(
+        (proceed) => {
+          if (proceed !== false && openRequestRef.current === requestId) applyOpenState(true);
+        },
+        () => undefined,
+      );
+      return;
+    }
+    applyOpenState(next);
   };
 
   const switchView = (next: "pad" | "list", focusPanel = true, seed = "") => {
@@ -1013,7 +1049,7 @@ function ModelPickerInner({
         onOpenAutoFocus={(event) => {
           event.preventDefault();
           requestAnimationFrame(() => {
-            if (!hasPadModels) {
+            if (listOnly || !hasPadModels) {
               searchRef.current?.focus();
               return;
             }
@@ -1022,6 +1058,7 @@ function ModelPickerInner({
         }}
       >
         <div className="relative w-[min(19.75rem,calc(100vw-1.5rem))] overflow-hidden rounded-popover bg-popover shadow-popover">
+        {!listOnly ? (
         <div className="flex items-center gap-1 p-1.5 pb-0">
           <div
             className="grid min-w-0 flex-1 grid-cols-2 rounded-control bg-control/60 p-0.5"
@@ -1088,8 +1125,9 @@ function ModelPickerInner({
             </>
           ) : null}
         </div>
+        ) : null}
 
-        {view === "pad" ? (
+        {!listOnly && view === "pad" ? (
           <section
             id={padPanelId}
             role="tabpanel"
@@ -1136,8 +1174,9 @@ function ModelPickerInner({
         ) : (
           <section
             id={listPanelId}
-            role="tabpanel"
-            aria-labelledby={listTabId}
+            role={listOnly ? undefined : "tabpanel"}
+            aria-labelledby={listOnly ? undefined : listTabId}
+            aria-label={listOnly ? "Models" : undefined}
             className="min-w-0 pt-1"
           >
             <Command
@@ -1199,7 +1238,7 @@ function ModelPickerInner({
           </section>
         )}
 
-        {!(showExternalDetails && (view === "list" || hasPadModels)) && activeAttribution ? (
+        {!listOnly && !(showExternalDetails && (view === "list" || hasPadModels)) && activeAttribution ? (
           <div className="border-t border-separator px-3 py-1.5 text-mini leading-4">
             <a
               href={activeAttribution.url}
@@ -1212,7 +1251,7 @@ function ModelPickerInner({
           </div>
         ) : null}
         </div>
-        {showExternalDetails && (view === "list" || hasPadModels) ? (
+        {!listOnly && showExternalDetails && (view === "list" || hasPadModels) ? (
           <ModelHoverDetails
             model={activePosition}
             alsoVia={

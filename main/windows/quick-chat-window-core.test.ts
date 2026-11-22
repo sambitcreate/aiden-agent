@@ -20,14 +20,14 @@ test("computeQuickChatInitialBounds centers starter on primary and offset second
   const starter = computeQuickChatInitialBounds(primary, "starter");
   assert.equal(starter.width, QUICK_CHAT_STAGE_SIZES.starter.width);
   assert.equal(starter.height, QUICK_CHAT_STAGE_SIZES.starter.height);
-  assert.equal(starter.x, Math.round((1728 - 560) / 2));
+  assert.equal(starter.x, Math.round((1728 - QUICK_CHAT_STAGE_SIZES.starter.width) / 2));
   assert.ok(starter.y >= primary.y);
   assert.ok(starter.y + starter.height <= primary.y + primary.height);
 
   // Offset secondary display to the left of main monitor.
   const secondary = { x: -1920, y: 0, width: 1920, height: 1080 };
   const onSecondary = computeQuickChatInitialBounds(secondary, "starter");
-  assert.equal(onSecondary.x, -1920 + (1920 - 560) / 2);
+  assert.equal(onSecondary.x, -1920 + (1920 - QUICK_CHAT_STAGE_SIZES.starter.width) / 2);
   assert.ok(onSecondary.x >= secondary.x);
   assert.ok(onSecondary.x + onSecondary.width <= secondary.x + secondary.width);
 });
@@ -49,6 +49,14 @@ test("computeQuickChatTransitionBounds anchors bottom edge and horizontal center
   assert.equal(modal.height, QUICK_CHAT_STAGE_SIZES.modal.height);
   assert.equal(modal.x + modal.width / 2, starterCenter);
   assert.equal(modal.y + modal.height, starterBottom);
+
+  // 13" MacBook Air work area: expanding to starter-popover and closing back must not drift downward.
+  const laptopWorkArea = { x: 0, y: 25, width: 1440, height: 800 };
+  const laptopStarter = computeQuickChatInitialBounds(laptopWorkArea, "starter");
+  const laptopPopover = computeQuickChatTransitionBounds(laptopStarter, laptopWorkArea, "starter-popover");
+  assert.equal(laptopPopover.y + laptopPopover.height, laptopStarter.y + laptopStarter.height);
+  const laptopClosed = computeQuickChatTransitionBounds(laptopPopover, laptopWorkArea, "starter");
+  assert.deepEqual(laptopClosed, laptopStarter);
 });
 
 test("clampBoundsToWorkArea shrinks and clamps gracefully on small displays", () => {
