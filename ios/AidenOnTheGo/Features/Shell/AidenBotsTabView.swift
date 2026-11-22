@@ -550,6 +550,7 @@ struct AidenMachineBotMessagingRow: View {
                         get: { value.enabled },
                         set: { enabled in Task { await messaging.set(enabled: enabled) } }
                     ))
+                        .aidenSwitchStyle()
                     .disabled(!messaging.canChange)
                     if let error = messaging.error {
                         Text(error).font(.footnote).foregroundStyle(palette.secondary)

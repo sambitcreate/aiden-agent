@@ -558,6 +558,10 @@ private struct AidenWorkspaceInteractiveRow: View {
 struct AidenWorkspaceRow: View {
     let workspace: AidenWorkspace
     @Environment(\.aidenPalette) private var palette
+    // The folder sits in the mark column the other lists use, at a size that
+    // grows with the text but never outgrows its column.
+    @ScaledMetric(relativeTo: .body) private var scaledMarkSize: CGFloat = 24
+    private var markSize: CGFloat { min(scaledMarkSize, 40) }
 
     private var detail: String {
         [workspace.permission.title, workspace.branchName ?? workspace.git?.branch]
@@ -566,8 +570,13 @@ struct AidenWorkspaceRow: View {
     }
 
     var body: some View {
-        AidenListRowLayout(isStacked: false, hasSummary: true) {
-            AidenListRowGlyph(systemName: workspace.isManagedWorktree ? "hammer" : workspace.hasFolder ? "folder" : "folder.badge.questionmark")
+        AidenListRowLayout(isStacked: false, hasSummary: true, markStyle: .avatar(markSize)) {
+            Image(systemName: workspace.isManagedWorktree ? "hammer" : workspace.hasFolder ? "folder" : "folder.badge.questionmark")
+                .resizable()
+                .scaledToFit()
+                .frame(width: markSize * 0.8, height: markSize * 0.8)
+                .foregroundStyle(palette.secondary)
+                .accessibilityHidden(true)
         } title: {
             Text(workspace.name)
                 .font(.body)

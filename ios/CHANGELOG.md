@@ -10,6 +10,12 @@
   - A list's heading stays readable while rows scroll under it.
   - At the largest text sizes, list rows no longer end in a tall empty gap.
   - Settings → Appearance shows each theme's light and dark look side by side, with its sidebar and cards.
+  - A switch that is on uses the theme's accent, or green where the accent is too close to the white knob to see (Aiden and Monochrome in dark).
+  - A Bot row in the Inbox keeps its avatar beside the name at the largest text sizes.
+  - Reading partway down a long answer on an iPhone Duo, unfolding or folding keeps you at the same spot in it, even at the largest text sizes, instead of jumping to the question above it.
+  - The Jump to latest arrow has a raised, shadowed backing, so it stays visible over a white message bubble.
+  - The Default computer value in Settings follows a switch between light and dark at once.
+  - A workspace's folder sits in its own column, clear of the name, at every text size.
   - The Inbox, Running chats, Search, Bots, Workspaces, a workspace's chats and Computers group their rows into rounded cards, with no lines between rows and small headings above each card.
   - A row shows its state in a leading mark: a spinner while running, a dot when unread.
   - Bot rows on Bots drop the purpose bubble.

@@ -350,6 +350,51 @@ final class AidenMachineChromeTests: XCTestCase {
         XCTAssertFalse(spoken(summary()).contains("Fork"))
     }
 
+    /// At the largest text size a Bot row's avatar stays in its own column:
+    /// every pixel of the accent-tinted avatar sits left of the Bot's name.
+    func testABotRowAvatarNeverCoversTheNameAtTheLargestTextSize() throws {
+        let bot = try AidenRemoteJSONDecoder.decode(AidenBotSummary.self, from: JSONSerialization.data(withJSONObject: [
+            "id": "bot_wren", "name": "Wren", "purpose": "",
+            "avatar": ["semantic": ["version": 1, "shape": "orb", "color": "rose"]],
+            "health": "ready", "sessionState": "idle",
+            "createdAt": "2026-11-05T09:00:00.000Z", "updatedAt": "2026-11-05T09:00:00.000Z", "revision": "r1",
+        ] as [String: Any]))
+        // Berry's accent is a clear pink and its text a neutral grey, so the
+        // two can be told apart pixel by pixel.
+        let palette = AidenThemeCatalog.palette(preset: .berry, scheme: .light)
+        let row = AidenInboxBotRowView(bot: bot, palette: palette)
+            .frame(width: 360)
+            .background(Color.white)
+            .environment(\.dynamicTypeSize, .accessibility5)
+            .environment(\.aidenPalette, palette)
+        let renderer = ImageRenderer(content: row)
+        renderer.scale = 1
+        let image = try XCTUnwrap(renderer.cgImage)
+
+        let width = image.width, height = image.height
+        var pixels = [UInt8](repeating: 0, count: width * height * 4)
+        let context = try XCTUnwrap(CGContext(
+            data: &pixels, width: width, height: height, bitsPerComponent: 8, bytesPerRow: width * 4,
+            space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        ))
+        context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
+
+        var avatarMaxX = -1, nameMinX = Int.max
+        for y in 0..<height {
+            for x in 0..<width {
+                let i = (y * width + x) * 4
+                let r = Int(pixels[i]), g = Int(pixels[i + 1]), b = Int(pixels[i + 2])
+                let isPink = r - g > 12 && r - b > 0
+                let isInk = !isPink && max(r, g, b) < 140
+                if isPink { avatarMaxX = max(avatarMaxX, x) }
+                if isInk { nameMinX = min(nameMinX, x) }
+            }
+        }
+        XCTAssertGreaterThan(avatarMaxX, 0, "No avatar drawn")
+        XCTAssertLessThan(nameMinX, Int.max, "No name drawn")
+        XCTAssertLessThan(avatarMaxX, nameMinX, "The avatar runs into the name")
+    }
+
     func testABotRowSaysItsMachineAndThatItIsOfflineToVoiceOver() throws {
         let bot = try AidenRemoteJSONDecoder.decode(AidenBotSummary.self, from: JSONSerialization.data(withJSONObject: [
             "id": "bot_scout", "name": "Scout", "purpose": "",

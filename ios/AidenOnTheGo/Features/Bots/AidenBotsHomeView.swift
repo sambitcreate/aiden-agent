@@ -588,6 +588,7 @@ struct AidenBotsHomeView: View {
                         }
                     }
                 ))
+                    .aidenSwitchStyle()
                 .disabled(coordinator.botMessaging.isSaving(for: context) || coordinator.connectionState != .connected
                     || coordinator.installationStore.activeInstallation?.canWriteBots != true)
                 if let error = coordinator.botMessaging.error(for: context) {

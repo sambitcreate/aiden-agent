@@ -178,8 +178,11 @@ struct AidenListRowLayout<Mark: View, Title: View, Summary: View, Trailing: View
                 mark()
                     .frame(width: markColumn, height: titleLine)
             case .avatar(let size):
+                // Clipped to its column, so a mark that asks for more room
+                // never paints over the title.
                 mark()
                     .frame(width: size, height: size)
+                    .clipped()
                     .padding(.leading, AidenSpacing.s)
                     .padding(.trailing, AidenSpacing.m)
             }

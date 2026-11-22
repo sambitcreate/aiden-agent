@@ -1127,6 +1127,7 @@ private struct AidenScheduledTaskEditor: View {
                                         draft.setMcpServer(id: server.id, selected: selected)
                                     }
                                 ))
+                                    .aidenSwitchStyle()
                                 .disabled(
                                     !draft.mcpServerIds.contains(server.id)
                                         && draft.mcpServerIds.count >= AidenScheduledTaskDraft.maximumMcpServerCount
@@ -1146,6 +1147,7 @@ private struct AidenScheduledTaskEditor: View {
                                             .foregroundStyle(.secondary)
                                     }
                                 }
+                                    .aidenSwitchStyle()
                             }
                             if model.mcpServers.isEmpty {
                                 Text("No connectors are currently enabled. Saving freezes this task with no connector access.")
@@ -1171,6 +1173,7 @@ private struct AidenScheduledTaskEditor: View {
                         ForEach(AidenScheduledTaskPermission.allCases, id: \.self) { Text($0.title).tag($0) }
                     }
                     Toggle("Notify on the computer", isOn: $draft.notify)
+                        .aidenSwitchStyle()
                     Text("Enabled tasks can run on your computer while this phone is disconnected. Full permission can edit files and run commands without asking.")
                         .font(.footnote).foregroundStyle(.secondary)
                 }
@@ -1308,10 +1311,13 @@ private struct AidenScheduledSettingsView: View {
                     Form {
                         Section("Global") {
                             Toggle("Scheduled tasks enabled", isOn: $enabled)
+                                .aidenSwitchStyle()
                             Picker("Default mode", selection: $mode) { ForEach(AidenScheduledTaskMode.allCases, id: \.self) { Text($0.title).tag($0) } }
                             Picker("Default permission", selection: $permission) { ForEach(AidenScheduledTaskPermission.allCases, id: \.self) { Text($0.title).tag($0) } }
                             Toggle("Enable connectors by default", isOn: $mcpEnabled)
+                                .aidenSwitchStyle()
                             Toggle("Default notifications", isOn: $notify)
+                                .aidenSwitchStyle()
                             TextField("Default timezone", text: $timezone)
                         }
                         Section { Text("Disabling scheduled tasks stops active scheduled work without deleting task definitions.") }

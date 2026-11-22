@@ -26,6 +26,22 @@ final class AidenDesignTokenTests: XCTestCase {
         }
     }
 
+    /// A switch that is on shows it: the white thumb stands out from the
+    /// on-track, and the track stands out from every ground a switch sits on
+    /// (the palette's canvas and raised rows, and a system grouped form's page
+    /// and cells, which some settings screens keep).
+    func testASwitchOnTrackShowsItsThumbAndStandsOutFromItsGround() {
+        for (name, p) in allPalettes() {
+            let track = p.switchOnTrackHex
+            XCTAssertGreaterThanOrEqual(Color.contrastRatio(track, "#FFFFFF"), 1.5, "\(name): thumb on \(track)")
+            let isDark = Color.relativeLuminance(p.canvasHex) <= 0.5
+            let systemGrounds = isDark ? ["#000000", "#1C1C1E"] : ["#F2F2F7", "#FFFFFF"]
+            for ground in [p.canvasHex, p.raisedHex] + systemGrounds {
+                XCTAssertGreaterThanOrEqual(Color.contrastRatio(track, ground), 3, "\(name): \(track) on \(ground)")
+            }
+        }
+    }
+
     /// The Inbox section headers and their counts are footnote text in
     /// `secondary`, on the canvas in both widths, and secondary text also sits on
     /// raised rows. Weight doesn't change contrast, so the colour has to pass.

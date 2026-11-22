@@ -864,6 +864,14 @@ final class AidenShellUITests: XCTestCase {
         compose.tap()
         XCTAssertTrue(machine.waitForExistence(timeout: 5), "Compose on Workspaces has no machine picker")
         XCTAssertTrue((machine.value as? String)?.hasPrefix("Studio Mac") == true, "\(String(describing: machine.value))")
+
+        // The picker's menu lists each machine as a toggle, and choosing one picks it.
+        machine.tap()
+        let menuLaptop = app.collectionViews.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Laptop")).firstMatch
+        XCTAssertTrue(menuLaptop.waitForExistence(timeout: 5), "The machine menu has no Laptop item: \(app.debugDescription)")
+        menuLaptop.tap()
+        let pickedLaptop = expectation(for: NSPredicate(format: "value BEGINSWITH %@", "Laptop"), evaluatedWith: machine)
+        wait(for: [pickedLaptop], timeout: 5)
         AidenStateMatrix.tapOutsidePopover(in: app)
         Thread.sleep(forTimeInterval: 0.5)
 

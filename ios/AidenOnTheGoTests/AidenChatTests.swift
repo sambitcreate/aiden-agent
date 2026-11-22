@@ -15410,6 +15410,54 @@ final class AidenChatScrollFollowTests: XCTestCase {
         parts.setRowFrame(nil, for: "a", from: closed)
         XCTAssertNil(parts.rowFrames["a"], "A row leaving its own screen takes its frame back")
     }
+
+    /// An iPhone Duo unfolding at the largest text size: the answer the
+    /// reader was a third of the way down first measures shorter than the
+    /// view, then settles taller. An anchor worked out from the first height
+    /// puts the question above it at the top, so the settled height asks for
+    /// another return, which lands the same share down the answer.
+    @MainActor
+    func testTheReadingPlacesRowRemeasuringAsksForAnotherReturn() throws {
+        let chat = AidenChat(
+            id: "chat-1",
+            workspaceId: "workspace-1",
+            title: "Aiden chat",
+            providerId: "openai",
+            modelId: "gpt-5.6",
+            messages: [],
+            createdAt: Date(timeIntervalSince1970: 1_787_100_000),
+            updatedAt: Date(timeIntervalSince1970: 1_787_100_001),
+            revision: "revision-1"
+        )
+        let parts = AidenChatScreenParts(model: AidenChatViewModel(readOnlyFixture: chat), botToolsModel: nil)
+        let screen = UUID()
+        parts.screenAppeared(screen)
+        let view: CGFloat = 244
+        let place = AidenReadingPlace(rowID: "answer", fraction: 0.34)
+        parts.readingPlace = place
+        parts.setRowFrame(CGRect(x: 0, y: 20, width: 500, height: 280), for: "question", from: screen)
+
+        XCTAssertTrue(parts.setRowFrame(CGRect(x: 0, y: 310, width: 500, height: 200), for: "answer", from: screen))
+        let early = place.anchor(rowHeight: parts.rowFrames["answer"]?.height, viewHeight: view)
+
+        let settledHeight: CGFloat = 377
+        XCTAssertTrue(parts.setRowFrame(CGRect(x: 0, y: 310, width: 500, height: settledHeight), for: "answer", from: screen))
+        func landing(_ anchor: UnitPoint) -> AidenReadingPlace? {
+            // The answer's top lands `y × (view − row)` below the view's top.
+            let answerTop = anchor.y * (view - settledHeight)
+            return AidenReadingPlace.at(top: 0, rows: [
+                row("question", answerTop - 290, 280),
+                row("answer", answerTop, settledHeight),
+            ])
+        }
+        XCTAssertEqual(landing(early)?.rowID, "question", "The early anchor lands on the row before")
+        let settled = try XCTUnwrap(landing(place.anchor(rowHeight: parts.rowFrames["answer"]?.height, viewHeight: view)))
+        XCTAssertEqual(settled.rowID, "answer")
+        XCTAssertEqual(settled.fraction, place.fraction, accuracy: 0.001)
+
+        XCTAssertFalse(parts.setRowFrame(CGRect(x: 0, y: 310, width: 500, height: settledHeight), for: "answer", from: screen))
+        XCTAssertFalse(parts.setRowFrame(CGRect(x: 0, y: 20, width: 500, height: 300), for: "question", from: screen))
+    }
 #endif
 
     /// The place is the first row reaching below the transcript's top, and

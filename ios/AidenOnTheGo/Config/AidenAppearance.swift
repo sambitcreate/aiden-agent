@@ -383,6 +383,49 @@ struct AidenSolidFill: Equatable, Sendable {
     }
 }
 
+/// A switch's on-track. The accent, unless the accent is so close to the
+/// switch's white thumb that the thumb vanishes into it (the near-white
+/// accents of Aiden and Monochrome in dark); then the success green, as the
+/// system's own switch uses.
+extension AidenPalette {
+    static let switchThumbHex = "#FFFFFF"
+    static let minimumSwitchThumbContrast = 1.5
+
+    var switchOnTrackHex: String {
+        Color.contrastRatio(accentHex, Self.switchThumbHex) >= Self.minimumSwitchThumbContrast ? accentHex : successHex
+    }
+}
+
+/// A switch on its palette's on-track. Applied to each switch with
+/// `aidenSwitchStyle()`, never at the root: a menu takes any custom toggle
+/// style as an opaque view, so a menu of toggles (the machine picker) broke
+/// apart into one item per piece of each toggle's label.
+struct AidenSwitchToggleStyle: ToggleStyle {
+    let onTrack: Color
+
+    func makeBody(configuration: Configuration) -> some View {
+        Toggle(configuration)
+            .toggleStyle(.switch)
+            .tint(onTrack)
+    }
+}
+
+private struct AidenSwitchStyleModifier: ViewModifier {
+    @Environment(\.aidenPalette) private var palette
+
+    func body(content: Content) -> some View {
+        content.toggleStyle(AidenSwitchToggleStyle(onTrack: Color(aidenHex: palette.switchOnTrackHex)))
+    }
+}
+
+extension View {
+    /// Draws the toggles inside as switches on the palette's on-track. For
+    /// switches only; a toggle in a menu keeps the menu's checkmark style.
+    func aidenSwitchStyle() -> some View {
+        modifier(AidenSwitchStyleModifier())
+    }
+}
+
 /// Status colours that are safe for text. The palette's `successHex`,
 /// `warningHex` and `dangerHex` stay as they are for fills, dots and icons.
 /// Text moves each one away from the ground (toward black on a light theme,
@@ -812,6 +855,7 @@ struct AidenAppearanceSettingsView: View {
 
                 Section {
                     Toggle("Show response excerpts on Lock Screen", isOn: $showsLiveActivityResponseExcerpts)
+                        .aidenSwitchStyle()
                 } header: {
                     Text("Privacy")
                 } footer: {

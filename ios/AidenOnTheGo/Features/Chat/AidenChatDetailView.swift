@@ -85,10 +85,15 @@ final class AidenChatScreenParts {
     /// leave, so a leaving row only takes back a frame its own screen gave:
     /// the frames are in the content's space and don't move with scrolling,
     /// so a row the new screen already measured wouldn't report again.
-    func setRowFrame(_ frame: CGRect?, for id: String, from screen: UUID) {
+    /// Returns true when the row the reading place is in took a new height:
+    /// the anchor that brought the reader back was worked out from the old
+    /// one, so it has to be worked out again.
+    @discardableResult
+    func setRowFrame(_ frame: CGRect?, for id: String, from screen: UUID) -> Bool {
         // A screen a newer one replaced is on its way out: whatever its rows
         // report, late, is at the width it had.
-        guard !replacedScreens.contains(screen) else { return }
+        guard !replacedScreens.contains(screen) else { return false }
+        let heldRowHeight = readingPlace?.rowID == id ? rowFrames[id]?.height : nil
         if let frame {
             rowFrames[id] = frame
             rowFrameScreens[id] = screen
@@ -96,6 +101,8 @@ final class AidenChatScreenParts {
             rowFrames[id] = nil
             rowFrameScreens[id] = nil
         }
+        guard readingPlace?.rowID == id, let height = rowFrames[id]?.height else { return false }
+        return heldRowHeight.map { abs($0 - height) > 0.5 } ?? true
     }
 
     /// `screen` appeared, so only its rows' frames count from now on. Its rows
@@ -706,8 +713,10 @@ struct AidenChatDetailView: View {
             // insets), so taking them off again would leave it negative.
             .onScrollGeometryChange(for: CGFloat.self) { geometry in
                 geometry.containerSize.height
-            } action: { [parts] _, height in
+            } action: { _, height in
                 parts.visibleHeight = height
+                // The anchor depends on this height too.
+                if follow.holdsPlace { returnToReadingPlace(proxy) }
             }
             .aidenReportsTranscriptFit(to: follow)
             .aidenKeepsPlaceOnPrepend(anchorID: $keptPlaceID, proxy: proxy)
@@ -806,7 +815,12 @@ struct AidenChatDetailView: View {
                 },
                 browserRecordingsAvailable: model.supportsBrowserRecordings,
                 onRowFrame: { [parts, rowFrameScreen] id, frame in
-                    parts.setRowFrame(frame, for: id, from: rowFrameScreen)
+                    // The place's row measured at a new height after the
+                    // reader was brought back: bring them back again, or an
+                    // anchor worked out for the old height lands elsewhere.
+                    if parts.setRowFrame(frame, for: id, from: rowFrameScreen), follow.holdsPlace {
+                        returnToReadingPlace(proxy)
+                    }
                 }
             )
             .equatable()
@@ -1456,13 +1470,21 @@ private struct AidenChatJumpToLatestGlassModifier: ViewModifier {
     @Environment(\.aidenPalette) private var palette
     let reduceTransparency: Bool
 
+    /// It floats over the transcript, white user bubbles included, so it
+    /// carries the raised fill under its glass and a soft lift: clear glass
+    /// over a white bubble left a bare arrow on top of the bubble's text.
     @ViewBuilder
     func body(content: Content) -> some View {
-        if reduceTransparency {
-            content.background(palette.raised, in: Circle())
-        } else {
-            content.glassEffect(.regular.interactive(), in: Circle())
+        Group {
+            if reduceTransparency {
+                content
+                    .background(palette.raised, in: Circle())
+                    .overlay(Circle().stroke(palette.foreground.opacity(0.14), lineWidth: 0.5))
+            } else {
+                content.glassEffect(.regular.tint(palette.raised.opacity(0.85)).interactive(), in: Circle())
+            }
         }
+        .shadow(color: palette.foreground.opacity(0.16), radius: 8, y: 3)
     }
 }
 

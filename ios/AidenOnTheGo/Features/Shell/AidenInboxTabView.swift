@@ -534,6 +534,10 @@ struct AidenInboxBotRowView: View {
     var isDimmed = false
 
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    /// The avatar grows with the text up to the size Bots home and Computers
+    /// stop at, and takes the row's avatar column, which is always its own width.
+    @ScaledMetric(relativeTo: .body) private var scaledAvatarSize: CGFloat = 24
+    private var avatarSize: CGFloat { min(scaledAvatarSize, 40) }
 
     private var reason: String? { AidenBotAttention.reason(bot) }
 
@@ -552,8 +556,8 @@ struct AidenInboxBotRowView: View {
     var body: some View {
         let needsYou = AidenBotAttention.needsYou(bot)
         let tint = isDimmed ? palette.secondary : needsYou ? palette.warning : palette.secondary
-        AidenListRowLayout(isStacked: dynamicTypeSize.isAccessibilitySize, hasSummary: machine != nil) {
-            AidenBotAvatarSymbol(name: bot.name, palette: palette)
+        AidenListRowLayout(isStacked: dynamicTypeSize.isAccessibilitySize, hasSummary: machine != nil, markStyle: .avatar(avatarSize)) {
+            AidenBotAvatarSymbol(name: bot.name, size: avatarSize, palette: palette)
                 .opacity(isDimmed ? 0.6 : 1)
         } title: {
             Text(bot.name)
@@ -592,13 +596,13 @@ struct AidenInboxBotRowView: View {
 /// The Bot's initial on a tinted circle, so a Bot row reads as a Bot beside chats.
 private struct AidenBotAvatarSymbol: View {
     let name: String
+    let size: CGFloat
     let palette: AidenPalette
-    /// Grows with the initial inside it, so the letter never outgrows its circle.
-    @ScaledMetric(relativeTo: .caption) private var size: CGFloat = 24
 
     var body: some View {
+        // The initial is sized from the circle, so it never outgrows it.
         Text(name.prefix(1).uppercased())
-            .font(.caption.weight(.bold))
+            .font(.system(size: size * 0.5, weight: .bold))
             .foregroundStyle(palette.accent)
             .frame(width: size, height: size)
             .background(palette.accent.opacity(0.14), in: Circle())
