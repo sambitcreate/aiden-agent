@@ -1072,12 +1072,12 @@ export class GitService {
   /**
    * Git-verified repository routing & config signatures keyed by canonical root
    * path. Used to gate the 0-spawn pure-FS `managedWorktreeUsable` fast path so
-   * any external config change (e.g. `core.bare=true`) immediately falls back
-   * to Git discovery and fails closed.
+   * any external config change (including `core.bare=true` or included config
+   * files) immediately falls back to Git discovery and fails closed.
    */
   private readonly verifiedRepoIdentities = new Map<
     string,
-    { commonDir: string; signature: string }
+    { commonDir: string; paths: string[]; signature: string }
   >();
   /**
    * Credential-free remote identity learned by ordinary status reads, keyed by
@@ -1295,6 +1295,76 @@ export class GitService {
     });
   }
 
+  private admissionConfigPaths(identityPaths: readonly string[]): string[] {
+    const env = gitEnvironment(false);
+    const paths = new Set<string>(identityPaths);
+    if (env.GIT_CONFIG_GLOBAL !== undefined) {
+      if (env.GIT_CONFIG_GLOBAL && env.GIT_CONFIG_GLOBAL !== "/dev/null") {
+        paths.add(path.resolve(env.GIT_CONFIG_GLOBAL));
+      }
+    } else {
+      const home = env.HOME || os.homedir();
+      if (home) {
+        paths.add(path.join(home, ".gitconfig"));
+        const xdg = env.XDG_CONFIG_HOME || path.join(home, ".config");
+        paths.add(path.join(xdg, "git", "config"));
+      }
+    }
+    const noSystem = env.GIT_CONFIG_NOSYSTEM === "1" || env.GIT_CONFIG_NOSYSTEM === "true";
+    if (!noSystem) {
+      if (env.GIT_CONFIG_SYSTEM !== undefined) {
+        if (env.GIT_CONFIG_SYSTEM && env.GIT_CONFIG_SYSTEM !== "/dev/null") {
+          paths.add(path.resolve(env.GIT_CONFIG_SYSTEM));
+        }
+      } else {
+        paths.add("/etc/gitconfig");
+        if (process.platform === "darwin") {
+          paths.add("/opt/homebrew/etc/gitconfig");
+          paths.add("/usr/local/etc/gitconfig");
+          paths.add("/Library/Developer/CommandLineTools/usr/etc/gitconfig");
+        }
+      }
+    }
+    return [...paths];
+  }
+
+  /**
+   * Prove that every Git config file in scope (repo-local, global, system) is a
+   * plain bounded file without `[include]` / `[includeIf]` directives, and
+   * return a signature across all routing + config paths. Returns `undefined`
+   * when any include directive or unreadable/symlinked config is present so
+   * pure-FS admission always falls back to Git discovery.
+   */
+  private async pureFsAdmissionProof(
+    canonicalCwd: string,
+  ): Promise<{ commonDir: string; paths: string[]; signature: string } | undefined> {
+    const identity = await this.rootReadIdentity(canonicalCwd);
+    if (!identity) return undefined;
+    const allPaths = this.admissionConfigPaths(identity.paths);
+    const configFiles = allPaths.filter(
+      (filePath) =>
+        filePath.endsWith("/config") ||
+        filePath.endsWith("/.gitconfig") ||
+        filePath.endsWith("/gitconfig") ||
+        filePath.endsWith("/config.worktree"),
+    );
+    const beforeSig = await this.repositorySignature(allPaths);
+    if (!beforeSig) return undefined;
+    for (const filePath of configFiles) {
+      const read = await this.readBoundedNoFollowFile(filePath, 256 * 1024);
+      if (!read.ok) {
+        if (read.code === "ENOENT") continue;
+        return undefined;
+      }
+      if (/^\s*\[\s*include(?:if\b|\s*\])/im.test(read.text)) {
+        return undefined;
+      }
+    }
+    const afterSig = await this.repositorySignature(allPaths);
+    if (!afterSig || afterSig !== beforeSig) return undefined;
+    return { commonDir: identity.commonDir, paths: allPaths, signature: afterSig };
+  }
+
   private async repository(cwd: string, signal?: AbortSignal): Promise<GitRepository | null> {
     if (signal?.aborted) {
       throw new GitServiceError("aborted", "Git operation was cancelled.");
@@ -1305,7 +1375,7 @@ export class GitService {
     } catch {
       return null;
     }
-    const beforeIdentity = await this.rootReadIdentity(canonicalCwd);
+    const beforeProof = await this.pureFsAdmissionProof(canonicalCwd);
     const probe = await this.run(
       canonicalCwd,
       ["rev-parse", "--is-inside-work-tree", "--show-toplevel", "--git-common-dir"],
@@ -1353,21 +1423,20 @@ export class GitService {
       ),
     ]);
     if (
-      beforeIdentity &&
+      beforeProof &&
       canonicalCwd === topLevel &&
-      beforeIdentity.commonDir === commonDir &&
-      (await this.repositorySignature(beforeIdentity.paths)) === beforeIdentity.signature
+      beforeProof.commonDir === commonDir &&
+      (await this.repositorySignature(beforeProof.paths)) === beforeProof.signature
     ) {
       this.verifiedRepoIdentities.delete(canonicalCwd);
-      this.verifiedRepoIdentities.set(canonicalCwd, {
-        commonDir,
-        signature: beforeIdentity.signature,
-      });
+      this.verifiedRepoIdentities.set(canonicalCwd, beforeProof);
       while (this.verifiedRepoIdentities.size > this.cacheEntries) {
         const oldest = this.verifiedRepoIdentities.keys().next().value as string | undefined;
         if (!oldest) break;
         this.verifiedRepoIdentities.delete(oldest);
       }
+    } else {
+      this.verifiedRepoIdentities.delete(canonicalCwd);
     }
     return { cwd: canonicalCwd, topLevel, commonDir };
   }
@@ -4797,20 +4866,18 @@ export class GitService {
       return false;
     }
     // Use the 0-spawn pure-FS fast path only while Git's verified routing &
-    // config proof for `cwd` is still current. Any external config edit (e.g.
-    // `core.bare=true`) or unverified repository falls back to Git discovery.
+    // include-free config proof (repo-local, global, and system) for `cwd` is
+    // still current. Any external config edit or `[include]` / `[includeIf]`
+    // directive falls back to Git discovery and fails closed.
     const canonicalCwd = await fs.realpath(cwd).catch(() => undefined);
-    const cwdIdentity = canonicalCwd ? await this.rootReadIdentity(canonicalCwd) : undefined;
     const verified = canonicalCwd ? this.verifiedRepoIdentities.get(canonicalCwd) : undefined;
     if (
       canonicalCwd &&
-      cwdIdentity &&
       verified &&
-      verified.commonDir === cwdIdentity.commonDir &&
-      verified.signature === cwdIdentity.signature
+      (await this.repositorySignature(verified.paths)) === verified.signature
     ) {
       const commonDir = await this.resolveCommonDirPureFs(canonicalCwd);
-      if (commonDir && commonDir === cwdIdentity.commonDir) {
+      if (commonDir && commonDir === verified.commonDir) {
         const direct = await this.managedWorktreeUsablePureFs(
           commonDir,
           worktreePath,
@@ -4822,7 +4889,7 @@ export class GitService {
         );
         if (
           direct !== "fallback" &&
-          (await this.repositorySignature(cwdIdentity.paths)) === cwdIdentity.signature
+          (await this.repositorySignature(verified.paths)) === verified.signature
         ) {
           return direct;
         }

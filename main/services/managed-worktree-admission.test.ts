@@ -140,6 +140,16 @@ test("fails closed for markerless, unregistered, escaped, and symlink-replaced w
 });
 
 test("GitService.managedWorktreeUsable verifies modern worktrees via 0-spawn pure FS and catches live external drift", async (t) => {
+  const prevGlobalConfig = process.env.GIT_CONFIG_GLOBAL;
+  const prevNoSystem = process.env.GIT_CONFIG_NOSYSTEM;
+  process.env.GIT_CONFIG_GLOBAL = "/dev/null";
+  process.env.GIT_CONFIG_NOSYSTEM = "1";
+  t.after(() => {
+    if (prevGlobalConfig === undefined) delete process.env.GIT_CONFIG_GLOBAL;
+    else process.env.GIT_CONFIG_GLOBAL = prevGlobalConfig;
+    if (prevNoSystem === undefined) delete process.env.GIT_CONFIG_NOSYSTEM;
+    else process.env.GIT_CONFIG_NOSYSTEM = prevNoSystem;
+  });
   const temp = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-usable-fs-"));
   t.after(() => fs.rm(temp, { recursive: true, force: true }));
   const repo = path.join(temp, "repo");
@@ -278,6 +288,42 @@ test("GitService.managedWorktreeUsable verifies modern worktrees via 0-spawn pur
   );
   assert.ok(gitSpawns > 0, "config change must fall back to Git discovery");
   await runGit(repo, ["config", "--unset", "core.bare"]);
+
+  // Pre-existing `[include]` target edited after initial Git-verified admission
+  // must fall back to Git discovery and fail closed even though `.git/config`
+  // itself is unchanged.
+  const includeTarget = path.join(temp, "extra-git.cfg");
+  await fs.writeFile(includeTarget, "# benign include\n");
+  await runGit(repo, ["config", "--add", "include.path", includeTarget]);
+  assert.equal(
+    await service.managedWorktreeUsable(
+      created.repositoryPath,
+      created.path,
+      created.branch,
+      created.worktreeGitDir,
+      created.ownershipToken,
+      created.worktreeDevice,
+      created.worktreeInode,
+    ),
+    true,
+  );
+  await fs.writeFile(includeTarget, "[core\n");
+  gitSpawns = 0;
+  await assert.rejects(
+    service.managedWorktreeUsable(
+      created.repositoryPath,
+      created.path,
+      created.branch,
+      created.worktreeGitDir,
+      created.ownershipToken,
+      created.worktreeDevice,
+      created.worktreeInode,
+    ),
+    /not a Git repository/u,
+  );
+  assert.ok(gitSpawns > 0, "changed include.path target must fall back to Git discovery");
+  await fs.writeFile(includeTarget, "");
+  await runGit(repo, ["config", "--unset-all", "include.path"]);
 
   // Invalidating display cache after a WorktreeSetup hook modifies the checkout
   // ensures git.info observes dirty changes instead of stale uncommitted: 0.
