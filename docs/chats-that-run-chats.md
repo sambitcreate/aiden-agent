@@ -78,7 +78,9 @@ subschema a check could visit, following each ref (each `enum` member and
 one more per 64 bytes), and refuses a schema whose
 `anyOf`, `oneOf` or `allOf` branches multiply past 10,000 that way, one with
 more than 256 refs, and a `uniqueItems` whose items aren't a plain type
-(string, number, integer, boolean or null). A
+(string, number, integer, boolean or null). A number JSON can't write (such
+as `1e400`, which reads as infinity) is refused too, since it would come back
+as null once saved. A
 schema that is too large, refers anywhere else, loops, costs too much,
 contains such a key or doesn't
 compile refuses the whole call before any chat is made, and a stored one that

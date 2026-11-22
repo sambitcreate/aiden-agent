@@ -100,6 +100,20 @@ function regexKeyword(value: unknown, depth = 0): string | undefined {
   return undefined;
 }
 
+/**
+ * Whether the schema holds a number JSON can't carry (Infinity, -Infinity or
+ * NaN, as `1e400` parses to). Saved with the link it would come back as null
+ * and stop compiling after a restart, and it would share a cache key with the
+ * schema that has null there.
+ */
+function hasNonFiniteNumber(value: unknown, depth = 0): boolean {
+  if (depth > MAX_DEPTH) return true;
+  if (typeof value === "number") return !Number.isFinite(value);
+  if (Array.isArray(value)) return value.some((item) => hasNonFiniteNumber(item, depth + 1));
+  if (isRecord(value)) return Object.values(value).some((child) => hasNonFiniteNumber(child, depth + 1));
+  return false;
+}
+
 /** The most work one check of a result may cost, in schema nodes tried (see `schemaCost`). */
 export const RESULT_SCHEMA_MAX_COST = 10_000;
 /** The most references one schema may contain. */
@@ -263,6 +277,9 @@ export function compileResultSchema(schema: unknown): ResultSchemaCheck {
       error: `result_schema can't contain the key "${regex}" anywhere, even as a property name or inside enum, const, default or examples: Aiden doesn't check regular expressions. Use enum, const or plain types instead.`,
     };
   }
+  if (hasNonFiniteNumber(schema)) {
+    return { ok: false, error: "result_schema has a number too large to write as JSON (such as 1e400). Use a smaller one." };
+  }
   const key = schemaKey(schema);
   const cached = compiledSchemas.get(key);
   if (cached) {
@@ -359,6 +376,7 @@ export function isStorableResultSchema(value: unknown): value is Record<string, 
     byteLength(value) <= RESULT_SCHEMA_MAX_BYTES &&
     disallowedReference(value) === undefined &&
     regexKeyword(value) === undefined &&
+    !hasNonFiniteNumber(value) &&
     schemaCost(value).ok
   );
 }
