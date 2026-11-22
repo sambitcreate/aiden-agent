@@ -20,6 +20,7 @@ import type { SubagentMessageReferenceV1 } from "../shared/subagent-runs";
 import type { SkillProvenanceV1 } from "../shared/slash-commands";
 import type { ProviderFailureV1 } from "../shared/provider-failure";
 import type { ChatForkLineageV1 } from "../shared/chat-copy-contract";
+import type { ChatStartedByV1 } from "../shared/chat-started-by";
 import type { ProviderArtwork } from "../shared/provider-artwork";
 import type { WebFetchSettingsV1 } from "../shared/web-fetch-settings";
 import type {
@@ -698,6 +699,8 @@ export interface ChatMeta {
   lastAssistantFailed?: boolean;
   /** Set when this chat was created by Fork. */
   forkedFrom?: ChatForkLineageV1;
+  /** Set when another chat started this one through `child_chats`. */
+  startedBy?: ChatStartedByV1;
   /** Main-owned feature owner; owned chats never appear in chat listings or Remote. */
   owner?: ChatOwnerV1;
   /** This chat opens in design mode (narrow chat beside the canvas); absent when off. */

@@ -59,6 +59,7 @@ import {
   type AidenMcpServerStatus,
 } from "./aiden-mcp-server.js";
 import { AidenMcpToolRunner } from "./aiden-mcp-tools.js";
+import { audienceReportsAnalytics } from "./chat-orchestration/audience.js";
 import {
   AidenMcpProvenanceLog,
   emptyAidenMcpProvenanceDocument,
@@ -709,9 +710,9 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
               const device = (await state.snapshot()).devices.find((candidate) => candidate.id === deviceId);
               return device?.type === "mac" || device?.type === "linux";
             },
-            // An outside MCP app's chats and turns are never product analytics.
+            // An outside MCP app's and a lead chat's started chats are never product analytics.
             deviceReportsAnalytics: async (deviceId) =>
-              (await state.snapshot()).devices.find((candidate) => candidate.id === deviceId)?.type !== "agent",
+              audienceReportsAnalytics(deviceId, (await state.snapshot()).devices),
             noWorkspace: {
               // The desktop's sidebar lists a chat only once it knows the chat's workspace, so a
               // hidden record made or removed here is announced like any other workspace change.

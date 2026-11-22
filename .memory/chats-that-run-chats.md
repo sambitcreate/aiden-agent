@@ -1,0 +1,14 @@
+# Chats that run other chats (Proactive Aiden Phase 5) — 2026-11-22
+
+Plan: `docs/plans/proactive-aiden-plan.md` Phase 5 (D1–D7). D1 (run core) landed from another agent: `main/services/chat-orchestration/run-core.ts` (`ChatRunCore`: snapshot, wait, owned runs, request dedupe; no limits).
+
+## D2 (hidden plumbing)
+- Lineage: `ChatMeta.startedBy {version:1, kind:"chat", chatId, at}` (`renderer/shared/chat-started-by.ts`, strict `parseChatStartedByV1`). `chat-store-core` validates it in index metas, drops a damaged value at read (transcript kept), projects it in metas, accepts it only in `create` (not with botId/owner). Forks/copies don't inherit it.
+- Audience: `chat-orchestration/audience.ts` — `chatAudience(lead)` = `chat:<lead>`, `isChatAudience`, `chatAudienceLead`, `audienceReportsAnalytics` (chat: and MCP `agent` devices → false), `CHAT_AUDIENCE_PROMPT_LIFETIME_MS` 30 min.
+  - `aiden-remote-chats.ts`: create under `chat:` passes `startedBy` + `reportAnalytics:false` to `application.create` (→ `chatStore.create`); turns under `chat:` never report analytics, always allow questions (desktop card), and set surface `leadChatTurn: true` → llm-client option `leadChatTurn` → question timeout cap 30 min (`resolveAskUserQuestionTimeoutMs(..., {maxSeconds})`).
+  - `aiden-remote-streams.ts`: `promptLifetimeMs(deviceId, …)` — approvals and questions 30 min for `chat:` audiences, 5 min otherwise.
+  - `aiden-remote-router.ts` `authenticateCredential`: a device whose id is `chat:*` reads as an unknown credential (401).
+  - `aiden-remote-service-main.ts` `deviceReportsAnalytics` uses `audienceReportsAnalytics`.
+- Links: `chat-orchestration/links.ts` `ChatLinkStore` (in-memory map, lazy `restore()`, serialized saves; save failure logged, memory kept). Link `{childChatId, leadChatId, key, title, createdAt, ceiling, leadSentAt?, tookOverAt?, runId?, owed?, delivered?(≤16)}`; first link per child wins; `deleteChat` drops the child's link and frees the lead's children. `links-main.ts`: `chat-orchestration.json`, DataStore mode 0600, compact, 8 MB cap; `chatLinks`, `startedChatApprovalCeiling(chatId, startedBy)`.
+- Ceiling: `approval-gate/run-approval.ts` `ApprovalCeiling {mode, macGrants[], chatOnly}`, `approvalCeilingOf(policy)`, `withApprovalCeiling` (stricter of Ask < Auto < Never ask, intersected grants, chatOnly OR, legacyFull only if still Never+shell+files). Applied in `generationApprovalPolicy({ceiling})` and `currentWorkspaceApproval(ports, id, ceiling)`; llm-client computes `approvalCeiling` once per generation (link, or lost-link fallback Ask/no grants when `startedBy` survives but the link doesn't) and passes it to both.
+- Tests: `test:chat-orchestration` (links, audience), `approval-gate/run-approval.test.ts` (in `test:approval-gate`), stream lifetime, router 401, chat-store startedBy, Remote chats audience test.

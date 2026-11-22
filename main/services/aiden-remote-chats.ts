@@ -132,6 +132,7 @@ import {
 } from "./skill-invocation-turn.js";
 import type { RegisteredSkill } from "./skill-registry.js";
 import { workspaceMutationGate } from "./workspace-mutation-gate.js";
+import { chatAudienceLead, isChatAudience } from "./chat-orchestration/audience.js";
 
 const SAFE_ID = /^[A-Za-z0-9._:-]{1,128}$/u;
 const IDEMPOTENCY_KEY = /^[\x21-\x7e]{16,128}$/u;
@@ -1417,6 +1418,7 @@ export class AidenRemoteChatService {
             botAudienceId?: string;
             excludeToolNames?: ReadonlySet<string>;
             questionPromptsUnavailable?: true;
+            leadChatTurn?: true;
             onTurnAccepted(): void;
           },
         ): Promise<boolean>;
@@ -2207,7 +2209,11 @@ export class AidenRemoteChatService {
             const workspaceId = assignment?.workspaceId ?? (typeof target === "string" ? target : parsed.workspaceId);
             let uncertain = false;
             try {
-              const reportAnalytics = (await this.options.deviceReportsAnalytics?.(deviceId)) !== false;
+              const reportAnalytics =
+                !isChatAudience(deviceId) && (await this.options.deviceReportsAnalytics?.(deviceId)) !== false;
+              // A chat a lead chat starts records its lead, once, at creation.
+              const lead = chatAudienceLead(deviceId);
+              const startedBy = lead ? { version: 1 as const, kind: "chat" as const, chatId: lead, at: Date.now() } : undefined;
               return await this.options.application.create(
                 {
                   workspaceId,
@@ -2216,7 +2222,9 @@ export class AidenRemoteChatService {
                     : {}),
                 },
                 owner,
-                ...(reportAnalytics ? [] : [{ reportAnalytics: false }] as const),
+                ...(reportAnalytics && !startedBy
+                  ? []
+                  : [{ ...(reportAnalytics ? {} : { reportAnalytics: false }), ...(startedBy ? { startedBy } : {}) }] as const),
               );
             } catch (error) {
               uncertain = isChatCreateReconciliationRequiredError(error);
@@ -2867,9 +2875,11 @@ export class AidenRemoteChatService {
             thinkingLevel: parsed.thinkingLevel,
             ...(authoritative.botId ? { botAudienceId: deviceId } : {}),
             ...(inlineVisuals ? { inlineVisuals } : {}),
-            ...((await this.options.deviceSupportsQuestionPrompts?.(deviceId)) === true
+            // A lead chat's started chat asks on the desktop card, which always reads questions.
+            ...(isChatAudience(deviceId) || (await this.options.deviceSupportsQuestionPrompts?.(deviceId)) === true
               ? {}
               : { questionPromptsUnavailable: true }),
+            ...(isChatAudience(deviceId) ? { leadChatTurn: true } : {}),
             onTurnAccepted: () => {
               accepted = true;
               this.options.streams.markRunning(deviceId, streamId);
@@ -3023,7 +3033,7 @@ export class AidenRemoteChatService {
               surface,
               owner.owner,
             );
-            if (started && (await this.options.deviceReportsAnalytics?.(deviceId)) !== false) {
+            if (started && !isChatAudience(deviceId) && (await this.options.deviceReportsAnalytics?.(deviceId)) !== false) {
               reportChatMessageSent({
                 providerId: selection.providerId,
                 model: selection.modelId,

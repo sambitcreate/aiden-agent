@@ -1,4 +1,5 @@
 import { parseBotRoutineModelDirectory, type BotRoutineModelDirectory } from "../../renderer/shared/bot-routine-model-directory.js";
+import { isChatAudience } from "./chat-orchestration/audience.js";
 import { parseBotExecutionResumeStatus, type BotExecutionResumeStatus } from "../../renderer/shared/bot-execution-resume.js";
 import { parseBotRoutineModelSettings, parseBotRoutineModelCatalog, parseBotRoutineModelResult, parseBotRoutineModelRuns, parseBotRoutineModelSave } from "../../renderer/shared/bot-routine-models.js";
 import { BOT_PEER_LIMITS, parseBotPeerSettings, parseBotPeerCatalog, parseBotPeerMutation, parseBotPeerMutationResult, parseBotPeerExchangeList, parseBotPeerExchangeDetail, parseBotPeerStopMutation, parseBotPeerStopResult, parseBotPeerEvidence } from "../../renderer/shared/bot-peers.js";
@@ -1183,7 +1184,9 @@ async function authenticateCredential(
   // An outside app's credential belongs to the loopback MCP server only. It
   // reads here exactly like an unknown credential, so this API never confirms
   // that an app token exists.
-  if (!device || device.type === "agent") {
+  // A lead chat's internal audience (`chat:<id>`) has no device record and is
+  // never reachable over HTTP; a record claiming one reads as unknown too.
+  if (!device || device.type === "agent" || isChatAudience(device.id)) {
     throw new AidenRemoteServiceError(
       "authentication_required",
       "This device credential is not valid for this Aiden installation.",

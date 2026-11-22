@@ -22,6 +22,7 @@ import type { ChatHtmlArtifactV1, HtmlArtifactPlacementV1, ChatImagePlacementV1 
 import type { ChatUiVisualV1 } from "../../renderer/shared/aiden-ui/types.js";
 import type { VisualSnapshotRefV1 } from "../../renderer/shared/visual-snapshots.js";
 import type { ChatForkLineageV1 } from "../../renderer/shared/chat-copy-contract.js";
+import type { ChatStartedByV1 } from "../../renderer/shared/chat-started-by.js";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import type { ProviderArtwork } from "../../renderer/shared/provider-artwork.js";
 import type { WebSearchSettingsV2 } from "./web-search-provider-registry-core.js";
@@ -522,6 +523,8 @@ export interface ChatMeta {
   lastAssistantFailed?: boolean;
   /** Main-owned provenance for chats created by Fork; absent for ordinary chats and copies. */
   forkedFrom?: ChatForkLineageV1;
+  /** Main-owned: the chat that started this one through `child_chats`; absent otherwise. */
+  startedBy?: ChatStartedByV1;
   /** Main-owned feature owner; owned chats never appear in chat listings or Remote. */
   owner?: ChatOwnerV1;
   /** This chat opens in design mode (narrow chat beside the canvas); absent when off. */

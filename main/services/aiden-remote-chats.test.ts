@@ -107,7 +107,7 @@ function fixture(
 ) {
   let current: Chat | null = structuredClone(initial);
   let creates = 0;
-  const createOptions: Array<{ reportAnalytics?: boolean } | undefined> = [];
+  const createOptions: Array<{ reportAnalytics?: boolean; startedBy?: { chatId: string } } | undefined> = [];
   let appends = 0;
   let notifications = 0;
   let begins = 0;
@@ -3581,6 +3581,24 @@ test("an outside MCP app's new chat and turns send no usage data, and a phone's 
   await app.service.startTurn("device-1", "chat-3", "counted-turn-00000008", { text: "hello" });
   await analyticsSettled();
   assert.deepEqual(sent.map(({ event, props }) => [event, (props as { origin?: unknown } | undefined)?.origin]), [["chat_message_sent", "phone"]]);
+});
+
+test("a lead chat's started chat records its lead, sends no usage data and can ask questions", async (t) => {
+  const sent = captureAnalyticsEvents(t);
+  // No device record backs the chat audience, so the dependency would say "reports".
+  const app = fixture(chat({ workspaceId: "workspace-9" }), { deviceReportsAnalytics: async () => true });
+  await app.service.create("chat:lead-1", "agent-chat:lead-1:k:0", { workspaceId: "workspace-1" });
+  const options = app.createOptions()[0];
+  assert.equal(options?.reportAnalytics, false);
+  assert.equal(options?.startedBy?.chatId, "lead-1");
+  await app.service.create("device-1", "chat-create-key-phone9", { workspaceId: "workspace-1" });
+  assert.equal(app.createOptions()[1]?.startedBy, undefined);
+
+  await app.service.startTurn("chat:lead-1", "chat-3", "agent-turn-0000000001", { text: "Run the tests" });
+  await analyticsSettled();
+  assert.deepEqual(sent, []);
+  assert.equal(app.lastGenerationOptions()?.leadChatTurn, true);
+  assert.equal(app.lastGenerationOptions()?.questionPromptsUnavailable, undefined);
 });
 
 test("a phone's message outside a real workspace is not counted as in one", async (t) => {

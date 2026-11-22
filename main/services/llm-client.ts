@@ -24,6 +24,7 @@ import { spending } from "./spending-main.js";
 import { createSpendingMeter, spendCounts } from "./spending-service.js";
 import { parseApprovalModel, type MacGrantClass } from "../../renderer/shared/approval-mode.js";
 import { currentWorkspaceApproval, generationApprovalPolicy, legacyAccessOf } from "./approval-gate/run-approval.js";
+import { CHAT_AUDIENCE_PROMPT_LIFETIME_MS } from "./chat-orchestration/audience.js";
 import { RunTaint, runTaintHistoryOfBranch } from "./approval-gate/run-taint.js";
 import { declaredReadOnlyHint } from "./approval-gate/tool-classes.js";
 import { approvalJudgeAction, createApprovalJudge, type ApprovalJudge } from "./approval-judge/judge.js";
@@ -710,6 +711,11 @@ export interface GenerationExecutionOptions {
    * The question tool stays declared and its call is refused.
    */
   questionPromptsUnavailable?: boolean;
+  /**
+   * Main-owned: the lead chat that started this chat sent this turn (Phase 5).
+   * Its questions wait 30 minutes for the person, like its approval cards.
+   */
+  leadChatTurn?: boolean;
   /**
    * Main-owned: this turn answers input UserPromptSubmit already accepted
    * while the chat's previous run was going, so the hooks do not screen it
@@ -1415,6 +1421,7 @@ async function prepareGeneration(
               questions,
               timeoutMs: resolveAskUserQuestionTimeoutMs(timeoutSeconds, {
                 unattended: browserOwner.kind === "remote",
+                ...(options.leadChatTurn === true ? { maxSeconds: CHAT_AUDIENCE_PROMPT_LIFETIME_MS / 1_000 } : {}),
               }),
             },
             ownerDocumentId,
@@ -1440,8 +1447,15 @@ async function prepareGeneration(
   // A person's workspace chat follows the global approval mode, or the
   // workspace's own when it is customized (plan §3.1). Internal policies
   // (scheduled runs), Bot-bound turns and the Assistant keep their access.
+  // A chat another chat started never gets more than its lead allowed (Phase 5, D2).
+  const approvalCeiling = workspace && !botBound && params.chatId && params.mode === undefined
+    ? await (await import("./chat-orchestration/links-main.js")).startedChatApprovalCeiling(
+        params.chatId,
+        (await chatStore.getMeta(params.chatId).catch(() => null))?.startedBy,
+      )
+    : undefined;
   const approvalPolicy = await generationApprovalPolicy(
-    { workspace, botBound, mode: params.mode, permission: options.permission },
+    { workspace, botBound, mode: params.mode, permission: options.permission, ceiling: approvalCeiling },
     () => configStore.getSettings(),
   );
   const permission: GenerationPermission =
@@ -3019,6 +3033,7 @@ async function prepareGeneration(
     permission,
     /** The run decides approvals by the mode, read fresh before each call. */
     usesApprovalModes: approvalPolicy !== undefined,
+    approvalCeiling,
     folderPath,
     git,
     tools,
@@ -3462,6 +3477,7 @@ export const llmClient = {
       botMutatingToolNames,
       offerHooksTool,
       usesApprovalModes,
+      approvalCeiling,
       turnToolRefusal,
     } = setup;
     // Claim checks tell connector failures by the tools' real MCP identity.
@@ -4982,7 +4998,7 @@ export const llmClient = {
           // (plan §3.2): a connector's real name and declared hint, and
           // whether it is a new destination after outside content.
           const runApproval = usesApprovalModes && workspaceId
-            ? await currentWorkspaceApproval(configStore, workspaceId).catch((error: unknown) => {
+            ? await currentWorkspaceApproval(configStore, workspaceId, approvalCeiling).catch((error: unknown) => {
                 logger.warn("pi", "Could not read the approval mode; asking as in Ask.", error);
                 return { mode: "ask" as const, macGrants: new Set<MacGrantClass>(), customized: false, chatOnly: false, legacyFull: false };
               })
