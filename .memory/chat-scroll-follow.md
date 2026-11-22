@@ -31,3 +31,10 @@ live edge only while the reader is there.
   activeForm, subject, blockedBy) as a structured list, not a joined string, so
   free text with separators cannot collide; iOS `taskListFollowKey` returns the
   Equatable task array for the same reason.
+
+## Busy turns: no height churn at step hand-offs (2026-11-22)
+Measured with a throwaway Vite page that replayed a turn of thinking, prose and tool steps through the real `ScrollArea` + `MessageList`: follow stayed pinned, but the content height bounced about four times per step. Two causes, both fixed.
+- The bottom status line (`AgentActivityTransition` in `renderer/components/message-list.tsx`) used to unmount whenever a reasoning or tool row owned the phase (`resolveVisibleAgentActivity` returns null) and remount in the gap before the next step, 44px each way. It now renders one fixed-height slot (`data-agent-activity-slot`) for as long as `streamingText` is non-null; only the line inside comes and goes. Do not make the slot conditional on the activity again.
+- `onTimeline` applies at once in `chat-pane.tsx`, while text and reasoning deltas wait for the next animation frame. A thinking step settles with `reasoningEndOffset` at the full length (and a new one opens with `reasoningStartOffset` there) one frame before the renderer shows that reasoning, so `assistantPresentationRows` returned null and the whole live reply flipped to the activity-first layout and back, moving more the longer the reply was. Live callers now use `liveAssistantPresentationRows` (`renderer/lib/assistant-message-presentation.ts`), which pins content and reasoning offsets to what is shown. Stored replies still go through the strict `assistantPresentationRows`.
+- Result in the replay (6 cycles): height shrinks 12 to 0, downward moves of earlier content 16 (883px) to 0. What remains is growth only: a ticker row is 24px, a revealed paragraph its own height.
+- Tests: `renderer/lib/agent-steps.test.ts` ("a live reply keeps its chronological rows while streamed reasoning and text trail the timeline"), `renderer/components/message-list-settle.test.tsx` ("a running reply keeps one status slot as steps hand off").

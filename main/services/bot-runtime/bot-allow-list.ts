@@ -85,7 +85,9 @@ export function createBotAllowList(deps: BotAllowListDeps): BotAllowList {
         if (await deps.rules.matchBot(botId, target)) return undefined;
         const rows = await deps.rules.listBot();
         if (rows.length >= BOT_APPROVAL_RULES_PROFILE_MAX || rows.filter(row => row.botId === botId).length >= BOT_APPROVAL_RULES_PER_BOT_MAX) return undefined;
-        return await deps.tallies.nudge(botId, target);
+        // Every eligible card offers Always allow. The count is the repeat
+        // nudge (3 or more approvals in 14 days, no denial), else 0.
+        return { count: (await deps.tallies.nudge(botId, target))?.count ?? 0 };
       } catch { return undefined; }
     },
     async settle(original, context) {

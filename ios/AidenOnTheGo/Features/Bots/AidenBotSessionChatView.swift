@@ -776,18 +776,9 @@ struct AidenBotSessionChatView: View {
     @ViewBuilder
     private func outgoingBubble(_ message: AidenBotOutgoingMessage, model: AidenBotSessionModel) -> some View {
         switch model.look(of: message) {
-        case .sending:
-            // It looks sent at once; "Sending…" shows only once it has waited a
-            // moment for the Mac (offline, or a slow Mac).
-            AidenBotSendWait(since: message.createdAt) { slow in
-                pendingBubble(message.text, faded: false, attachments: message.attachments) {
-                    if slow {
-                        Text(AidenBotSessionCopy.sending)
-                    }
-                }
-            }
-            .accessibilityElement(children: .combine)
-        case .sent:
+        case .sending, .sent:
+            // It looks sent at once and stays that way while the Mac takes it:
+            // the status line carries the wait, and only a send that fails says so.
             pendingBubble(message.text, faded: false, attachments: message.attachments) { EmptyView() }
         case let .queued(mode):
             queuedLook(message.text, mode: mode, attachments: message.attachments)
@@ -1452,7 +1443,6 @@ extension AidenBotSessionModel {
 }
 
 extension AidenBotSessionCopy {
-    static let sending = "Sending…"
     static let couldNotSend = "Couldn’t send"
     static let tryAgain = "Try again"
     static let connecting = "Connecting…"
@@ -1467,7 +1457,7 @@ func aidenBotBusyMode(_ current: AidenStreamInputMode?, isRunning: Bool) -> Aide
     return current
 }
 
-/// The text of a message still waiting (Sending…, Queued): the palette's quieter
+/// The text of a message still waiting (Queued): the palette's quieter
 /// text colour, nudged toward the main one only if a theme or contrast setting
 /// leaves it under 4.5:1 on the bubble.
 func aidenBotPendingTextHex(_ palette: AidenPalette) -> String {
@@ -2011,24 +2001,6 @@ struct AidenBotAttachmentChips: View {
             }
         }
         .accessibilityElement(children: .combine)
-    }
-}
-
-/// Draws a message still on its way to the Mac: `slow` turns true once it has
-/// waited `AidenBotOutgoingMessage.sendingCaptionDelay` since it was sent, so a
-/// quick send never says "Sending…".
-private struct AidenBotSendWait<Content: View>: View {
-    let since: Date
-    @ViewBuilder let content: (Bool) -> Content
-    @State private var waited = false
-
-    var body: some View {
-        content(waited || AidenBotOutgoingMessage.showsSendingCaption(sentAt: since, now: Date()))
-            .task(id: since) {
-                let remaining = since.addingTimeInterval(AidenBotOutgoingMessage.sendingCaptionDelay).timeIntervalSinceNow
-                if remaining > 0 { try? await Task.sleep(for: .seconds(remaining)) }
-                if !Task.isCancelled { waited = true }
-            }
     }
 }
 

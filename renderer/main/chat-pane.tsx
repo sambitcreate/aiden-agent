@@ -258,7 +258,7 @@ import {
   type ToolActivity,
 } from "../lib/agent-activity";
 import { STREAMING_REVEAL_FALLBACK_MS } from "../lib/streaming-reveal";
-import { assistantPresentationRows } from "../lib/assistant-message-presentation";
+import { liveAssistantPresentationRows } from "../lib/assistant-message-presentation";
 import { isLatestRemoteApprovalRefresh, mergeRemoteApproval } from "../lib/remote-approval";
 import {
   hasActiveThinkingStep,
@@ -3657,7 +3657,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
     agentActivity?.phase !== "waiting" && agentActivity?.phase !== "stopping"
       ? { phase: "visualizing" as const, label: "Visualizing", mark: "scan-grid" as const }
       : agentActivity;
-  const chronologicalLiveRows = assistantPresentationRows(
+  const chronologicalLiveRows = liveAssistantPresentationRows(
     displayedStreamingText ?? "",
     displayedGenerationTimeline,
     displayedStreamingReasoning ?? "",

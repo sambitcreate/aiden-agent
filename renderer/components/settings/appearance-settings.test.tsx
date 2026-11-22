@@ -91,3 +91,45 @@ test("a theme mode the system refuses puts the previous mode back", async () => 
   await waitFor(() => assert.equal(checkedMode(group), "System"));
   assert.equal(radio(group, "Dark").hasAttribute("disabled"), false);
 });
+
+/** Relative luminance (0 black to 1 white) of a CSS hex or rgb() color. */
+function luminance(color: string): number {
+  const hex = /^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/iu.exec(color);
+  const rgb = /^rgba?\((\d+),\s*(\d+),\s*(\d+)/u.exec(color);
+  const channels = (hex ? hex.slice(1).map((part) => Number.parseInt(part, 16)) : rgb?.slice(1).map(Number)) ?? [];
+  assert.equal(channels.length, 3, `unreadable color ${color}`);
+  const [r, g, b] = channels.map((value) => {
+    const unit = value / 255;
+    return unit <= 0.03928 ? unit / 12.92 : ((unit + 0.055) / 1.055) ** 2.4;
+  }) as [number, number, number];
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+}
+
+/** Each theme tile's name and how bright its preview is. */
+function tileBrightness(): Array<{ name: string; luminance: number }> {
+  const themes = screen.getByRole("radiogroup", { name: "Themes" });
+  return within(themes).getAllByRole("radio").map((tile) => ({
+    name: tile.textContent ?? "",
+    luminance: luminance((tile.querySelector(".appearance-tile-swatch") as HTMLElement).style.backgroundColor),
+  }));
+}
+
+test("every theme tile previews the light or dark look the chosen mode gives it", async () => {
+  const { group, held } = await mount();
+  // System on a computer in light mode: every tile, Graphite, Dusk and Midnight included, shows its light look.
+  for (const tile of tileBrightness()) assert.ok(tile.luminance > 0.5, `${tile.name} should preview light`);
+
+  fireEvent.click(radio(group, "Dark"));
+  await waitFor(() => assert.equal(held.length, 1));
+  // The tiles follow the choice at once, before the system confirms it.
+  for (const tile of tileBrightness()) assert.ok(tile.luminance < 0.1, `${tile.name} should preview dark`);
+  await act(async () => held[0]!.finish());
+  await act(async () => new Promise((resolve) => setTimeout(resolve, 0)));
+  for (const tile of tileBrightness()) assert.ok(tile.luminance < 0.1, `${tile.name} should stay dark`);
+
+  fireEvent.click(radio(group, "Light"));
+  await waitFor(() => assert.equal(held.length, 2));
+  await act(async () => held[1]!.finish());
+  await act(async () => new Promise((resolve) => setTimeout(resolve, 0)));
+  for (const tile of tileBrightness()) assert.ok(tile.luminance > 0.5, `${tile.name} should preview light again`);
+});

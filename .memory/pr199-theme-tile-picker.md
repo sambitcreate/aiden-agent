@@ -11,3 +11,9 @@
 - Paper and Calm now use the Untitled warm stone neutral scale while keeping their accent/status hues. Paper is the lighter/crisper pair (light canvas n2/sidebar n3/raised n1; dark canvas n2/sidebar n3/raised n4); Calm is one step deeper (light canvas n3/sidebar n4/raised n2; dark canvas n3/sidebar n2/raised n4).
 - Android gained `AidenPalette.onAccent` (= canvas, matching iOS `onAccent`). Accent-filled controls and `onPrimary` use it instead of hard-coded white, so the white Monochrome dark accent keeps readable labels; dark-mode accents on Android now carry dark labels like iOS/desktop. Danger fills still use white.
 - Android has a fixture-parity unit test against `protocol/aiden-appearance-v1.json` for every preset except its own Aiden palette.
+
+## Tiles follow the mode (2026-11-22, PR #875)
+
+- Every preset has a light and a dark look; the mode picks which one the app uses. The tiles used to draw a fixed "signature" scheme (Graphite, Dusk, Midnight dark; the rest light) whatever the mode, which misled people (Paper looked light in Dark mode).
+- Now desktop, iOS and Android tiles draw each preset in the scheme the app shows right now. Desktop reads `:root[data-appearance-scheme]` (`readAppliedAppearanceScheme`/`subscribeAppliedAppearanceScheme`) and shows a pending Light/Dark choice at once; iOS uses `appearance.mode.colorScheme ?? colorScheme`; Android uses the shared `aidenUsesDarkColors(mode)` that `AidenTheme` also uses.
+- Covered by `appearance-settings.test.tsx` (tile preview brightness per mode). Do not reintroduce a per-preset signature scheme.

@@ -245,6 +245,28 @@ test("the review can only add", async () => {
   }
 });
 
+test("while the Bot has routines, the review can't save a note that it can't schedule", async () => {
+  const script = scripted([
+    () =>
+      fauxAssistantMessage(
+        [fauxToolCall("bot_memory", { target: "memory", operations: [{ action: "add", content: "I cannot self-schedule; suggest a calendar nudge." }] })],
+        { stopReason: "toolUse" },
+      ),
+    nothing,
+  ]);
+  const asked: string[] = [];
+  const { harness, review, personTurns, userFile } = await setup(script.steps, { canSchedule: async (botId) => { asked.push(botId); return true; } });
+  try {
+    await personTurns(10);
+    assert.deepEqual(await review.runNow(BOT), { kind: "reviewed", added: 0, targets: [] });
+    assert.deepEqual(asked, [BOT]);
+    assert.match(JSON.stringify(script.reviewRequests[1]), /routines tool/u, "the refusal is shown to the model");
+    assert.throws(() => readFileSync(path.join(path.dirname(userFile), "MEMORY.md"), "utf8"), /ENOENT/u, "nothing was saved");
+  } finally {
+    await harness.close(ctx);
+  }
+});
+
 test("a failed review still writes a marker, so the next try waits another ten inputs", async () => {
   const script = scripted([
     () => {
