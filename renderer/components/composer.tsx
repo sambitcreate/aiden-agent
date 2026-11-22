@@ -52,6 +52,7 @@ import {
 import { DesignCommentTray } from "../design/design-comment-tray";
 import { useComposerContextChips } from "./use-composer-context-chips";
 import { FollowThroughChips } from "./follow-through-chips";
+import { ChatTaskChip } from "./chat-task-chips";
 import { ChatPullRequestsChip } from "./chat-pull-requests";
 import { GitBranchPicker, type GitBranchPickerDraft } from "./git-branch-picker";
 import { isWorktreeSendCancelled } from "../lib/draft-worktree-send";
@@ -2494,7 +2495,7 @@ export function Composer({
   const WorkspaceChipIcon = noWorkspace ? MessageCircle : Folder;
   const hasUserMessages =
     sessionChat?.messages.some((message) => message.role === "user") ?? hasMessages;
-  const { chips: contextChips, pullRequestAnnouncement } = useComposerContextChips({
+  const { chips: contextChips, pullRequestAnnouncement, postingTasks } = useComposerContextChips({
     chatId,
     started: hasUserMessages,
     workspace,
@@ -2686,6 +2687,11 @@ export function Composer({
               </span>
             ) : null}
             {contextChips.followThrough ? <FollowThroughChips chatId={chatId} /> : null}
+            {contextChips.tasks ? (
+              <span className="composer-context-chip-enter flex shrink-0">
+                <ChatTaskChip tasks={postingTasks} />
+              </span>
+            ) : null}
             {/* Polite, focus-free notice when the PR chip appears mid-chat. */}
             <span role="status" className="sr-only">
               {pullRequestAnnouncement}

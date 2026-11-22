@@ -84,6 +84,7 @@ function scheduledTask(input: ScheduledTaskInput, id: string): ScheduledTask {
       ? { mcpServerBindings: structuredClone(input.mcpServerBindings) }
       : {}),
     executionProfile: input.executionProfile,
+    ...(input.originChatId ? { originChatId: input.originChatId } : {}),
     notify: input.notify !== false,
     createdAt: 1,
     updatedAt: 1,
@@ -1655,4 +1656,60 @@ test("schedule_task cannot choose a server switched off for the model", async ()
     ),
     /off for the model/u,
   );
+});
+
+
+const CHAT_ACCESS = { kind: "standard", defaultWorkspaceId: "workspace-1", originChatId: "chat-1" } as const;
+
+test("a task made in a workspace chat posts into that chat by default, and the card says so", async () => {
+  const fake = fakeDependencies();
+  const args = { action: "create", name: "Daily build check", cron: "0 9 * * *", prompt: "Run the build and report." };
+  const approval = await prepareStandardScheduleApproval(args, undefined, fake.dependencies, "workspace-1", "chat-1");
+  assert.equal(approval.details.postsIn, "this_chat");
+  assert.match(approval.summary, /posts in this chat/u);
+  const tool = createScheduleTaskTool(CHAT_ACCESS, fake.dependencies);
+  const created = jsonResult(await tool.execute("create", args));
+  assert.equal(fake.tasks[0]?.originChatId, "chat-1");
+  assert.equal((created.task as { postsInChat?: boolean }).postsInChat, true);
+});
+
+test("post_in_chat false, or a task outside the chat's workspace, runs in its own chat", async () => {
+  const fake = fakeDependencies();
+  const tool = createScheduleTaskTool(CHAT_ACCESS, fake.dependencies);
+  const optedOut = { action: "create", name: "Own chat", cron: "0 9 * * *", prompt: "Report.", post_in_chat: false };
+  const approval = await prepareStandardScheduleApproval(optedOut, undefined, fake.dependencies, "workspace-1", "chat-1");
+  assert.equal(approval.details.postsIn, "own_chat");
+  await tool.execute("own", optedOut);
+  // No project: the task can't share the chat's workspace, so it gets its own chat.
+  await tool.execute("global", { action: "create", name: "Global", cron: "0 9 * * *", prompt: "Report.", clearWorkspace: true });
+  assert.deepEqual(fake.tasks.map((task) => task.originChatId), [undefined, undefined]);
+  await assert.rejects(
+    tool.execute("refused", { action: "create", name: "Global", cron: "0 9 * * *", prompt: "Report.", clearWorkspace: true, post_in_chat: true }),
+    /only when it runs in this chat's workspace/u,
+  );
+  assert.equal(fake.tasks.length, 2);
+});
+
+test("a task that would post into a chat more often than every 15 minutes is refused with a way out", async () => {
+  const fake = fakeDependencies();
+  const tool = createScheduleTaskTool(CHAT_ACCESS, fake.dependencies);
+  const everyTen = { action: "create", name: "Poller", cron: "*/10 * * * *", prompt: "Check the queue." };
+  await assert.rejects(tool.execute("fast", everyTen), /every 15 minutes[\s\S]*post_in_chat to false/u);
+  // Ten minutes apart only between 9:00 and 9:10 still counts: the next five runs are measured.
+  await assert.rejects(tool.execute("burst", { ...everyTen, cron: "0,10 9 * * *" }), /every 15 minutes/u);
+  assert.equal(fake.tasks.length, 0);
+  await tool.execute("own", { ...everyTen, post_in_chat: false });
+  await tool.execute("slow", { ...everyTen, name: "Quarter hour", cron: "*/15 * * * *" });
+  assert.deepEqual(fake.tasks.map((task) => task.originChatId), [undefined, "chat-1"]);
+});
+
+test("post_in_chat only applies when creating", async () => {
+  const fake = fakeDependencies();
+  const tool = createScheduleTaskTool(CHAT_ACCESS, fake.dependencies);
+  await tool.execute("create", { action: "create", name: "Daily", cron: "0 9 * * *", prompt: "Report." });
+  await assert.rejects(
+    tool.execute("update", { action: "update", id: "task-1", taskName: "Daily", expectedUpdatedAt: 1, post_in_chat: false }),
+    /applies only when creating/u,
+  );
+  assert.equal(fake.tasks[0]?.originChatId, "chat-1");
 });

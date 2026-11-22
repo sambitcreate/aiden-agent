@@ -195,7 +195,7 @@ Forbidden: private run/session/group/generation/child/workspace identifiers, chi
 
 Allowed: task ID/revision, safe name/description, workspace/provider/model IDs, schedule/timezone, mode/permission, selected MCP IDs, notification preference, validated script ID/display name, enabled/running state, next/previous dates, bounded redacted run result.
 
-Forbidden: provider fingerprint, resolved MCP bindings, chat ID, credentials, process environment, raw script path, unredacted stdout/stderr, internal cancellation handles.
+Forbidden: provider fingerprint, resolved MCP bindings, chat ID, credentials, process environment, raw script path, unredacted stdout/stderr, internal cancellation handles. The chat a task made in a desktop chat posts into (`originChatId`) is not projected either: a `PATCH` keeps it, a phone cannot set or change it, and a phone edit that would run such a task more often than every 15 minutes is refused.
 
 ### Speech
 
@@ -392,7 +392,7 @@ The hub's exec route is never relayed and the hub stays bound to loopback. Relay
 - `GET /scheduled-tasks/notifications?since=<epoch-ms>` — completed runs across all tasks, newest first (max 100 per poll). The cursor is inclusive so same-millisecond runs are never skipped; when the window overflows, the oldest runs are returned and the remainder arrives on the next poll rather than being dropped. The response carries `now` (the server's epoch-ms clock) — clients baseline their first-poll cursor to it instead of the device clock, mark the returned ids delivered, and suppress the history so neither clock skew nor a fresh install can replay or permanently skip runs. Per-item `summary` is redacted and bounded (2,000 chars) so the feed stays under the 1 MB response cap.
 - `POST /scheduled-tasks/preview`
 - `GET /scheduled-tasks/scripts?workspaceId=...`
-- `GET|PATCH /scheduled-tasks/settings`
+- `GET|PATCH /scheduled-tasks/settings` — the settings revision covers only the six fields a phone reads, so a desktop-only switch changing (Keep this computer awake, Let chats check back later) never makes a phone's edit fail as changed.
 
 Edits and task actions (`pause`, `resume`, and `run`) use `If-Match`/`expectedUpdatedAt`; settings use an equivalent revision. `run` also requires an idempotency key and returns `202` with a durable `runId`. Older clients that omit `If-Match` fail closed with `400` and must refresh before starting a run. Reusing one run key with a different revision returns `409 idempotency_conflict`, allowing clients to discard the stale key instead of retrying an ambiguous operation. Socket loss does not cancel execution. Status is observed in run history. Cancellation follows existing remove/pause/global-disable/revocation/shutdown policy; v1 adds no bespoke remote cancel action.
 

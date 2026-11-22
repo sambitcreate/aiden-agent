@@ -389,7 +389,8 @@ export async function startFollowThrough(): Promise<void> {
 }
 
 export async function shutdownFollowThrough(): Promise<void> {
-  checkBacks.shutdown();
+  // First, so a check-back notice going out finishes and is saved as fired below.
+  await checkBacks.shutdown();
   chatSettlement.shutdown();
   answeringRuns.shutdown();
   pullRequestFollows.shutdown();

@@ -5,7 +5,7 @@ import { cleanup, render, within } from "@testing-library/react";
 import { OnboardingFeatureGallery, onboardingFeatures } from "./onboarding-feature-gallery.js";
 import { visibleOnboardingFeatures } from "../lib/onboarding-provider.js";
 import { hostPlatformCapabilities } from "../../main/services/host-platform-capabilities.js";
-import { BotsArt } from "./onboarding-art/control-art.js";
+import { BotsArt, ScheduledAutomationsArt } from "./onboarding-art/control-art.js";
 
 /** A stand-in for the browser's IntersectionObserver that the test scrolls by hand. */
 class FakeIntersectionObserver {
@@ -149,4 +149,30 @@ test("Mac and Linux tours introduce Apps using Aiden with its local-only switch 
     visibleOnboardingFeatures(onboardingFeatures, { ...hostPlatformCapabilities("darwin", "arm64"), mcpServer: false }).some((feature) => feature.id === "otherApps"),
     false,
   );
+});
+
+test("the Scheduled Automations tile shows a task's result posted in its chat and the chat's check-back", () => {
+  const { container, unmount } = render(<OnboardingFeatureGallery features={onboardingFeatures} platform="darwin" />);
+  const tile = container.querySelector<HTMLElement>('[data-onboarding-feature="schedules"]');
+  assert.ok(tile);
+  assert.match(tile.getAttribute("aria-label") ?? "", /A task made in a chat posts each result there, and Aiden can check back in a chat later\./u);
+  unmount();
+  cleanup();
+
+  const art = render(<ScheduledAutomationsArt />);
+  const view = within(art.container);
+  const chat = view.getByRole("group", { name: "A scheduled task's run in the chat it was made in" });
+  const card = within(chat).getByRole("group", { name: "Scheduled task card" });
+  assert.ok(within(card).getByText("Scheduled task"));
+  assert.ok(within(card).getByText("Every day at 9:00 AM"));
+  const chips = within(view.getByRole("list", { name: "Chat chips" })).getAllByRole("listitem");
+  assert.deepEqual(chips.map((chip) => chip.textContent), ["Checking back at 3:10 PM", "next 9:00 AM"]);
+  assert.equal(art.container.querySelectorAll("img").length, 0, "the chat is code-drawn");
+  assert.equal(view.queryAllByRole("button").length, 0, "the drawing does not add fake keyboard actions");
+  for (const element of art.container.querySelectorAll<HTMLElement>("[class*='anim']")) {
+    for (const name of element.className.split(/\s+/u).filter((part) => part.includes("anim"))) {
+      assert.match(name, /^oa-anim-[a-z]+$/u);
+    }
+  }
+  art.unmount();
 });

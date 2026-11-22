@@ -27,7 +27,7 @@ The tool is offered only in turns the person started: from the desktop chat, the
 
 A wake-up is saved as a one-time routine named **Wake-up**. It fires through the same claim, recovery, catch-up and delivery path as any other one-time routine, so pause, quiet hours, the daily interruption limit and `[SILENT]` all apply. The Bot receives "You set this wake-up at 3:10 PM: <note>" in the same chat and answers with its current model; the tool cannot pick a model. Once it has fired, the wake-up no longer appears in the list; Aiden keeps its record for the seven-day catch-up window, and the next wake-up the Bot sets after that removes it.
 
-When the computer is plugged in, a wake-up due within the hour keeps it from idle-sleeping, so it is awake when the wake-up fires (Settings → Scheduled tasks → While you're away → **Keep this computer awake while Aiden works**, on by default, macOS and Linux desktop). On battery nothing holds in advance, and recurring routines, event routines and watches never hold.
+When the computer is plugged in, a wake-up due within the hour keeps it from idle-sleeping, so it is awake when the wake-up fires (Settings → Scheduled tasks → While you're away → **Keep this computer awake while Aiden works**, on by default, macOS and Linux desktop). On battery nothing holds in advance, and recurring routines, event routines and watches never hold. This hold stays even after 4 hours with nobody at the computer, when other work lets go.
 
 The chat shows each wake-up as one line, **Wake-up at 3:10 PM · Cancel**, and the Bot's Routines tab lists it among its routines with the note and a **Cancel** button. Cancel deletes the wake-up. The paired phone sees it as an ordinary one-time routine named Wake-up; no Remote contract changed.
 

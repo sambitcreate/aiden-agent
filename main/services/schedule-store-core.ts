@@ -112,6 +112,26 @@ export function nextScheduledRuns(
   }
 }
 
+/** A task that posts into a chat runs at most this often. */
+export const MIN_CHAT_TASK_INTERVAL_MS = 15 * 60 * 1000;
+/** How many upcoming runs the chat cadence floor checks. */
+const CHAT_TASK_CADENCE_RUNS = 5;
+
+/**
+ * Refuse a schedule that would post into a chat more often than every 15
+ * minutes, measured over the gaps before each of the next 5 runs.
+ */
+export function assertChatTaskCadence(cron: string, timezone: string, from = new Date()): void {
+  const runs = nextScheduledRuns(cron, timezone, CHAT_TASK_CADENCE_RUNS + 1, from);
+  for (let index = 1; index < runs.length; index += 1) {
+    if (runs[index]! - runs[index - 1]! < MIN_CHAT_TASK_INTERVAL_MS) {
+      throw new Error(
+        "A task that posts into a chat can run at most every 15 minutes. Choose a slower schedule, or let it run in its own chat.",
+      );
+    }
+  }
+}
+
 export function validateScriptName(value: string): string {
   const script = value.trim();
   if (
@@ -302,6 +322,16 @@ function normalizeInput(
   ) {
     throw new Error("Pick a time in the future for this routine.");
   }
+  // Set once, when the schedule tool creates a task from a chat; every later
+  // save (desktop editor, phone, tool update) keeps it. Bot routines never post into a chat.
+  // A task moved to another project no longer belongs in its old chat.
+  const originChatId =
+    botId !== undefined
+      ? undefined
+      : existing
+        ? workspaceId === existing.workspaceId ? existing.originChatId : undefined
+        : cleanOptional(input.originChatId, 200);
+  if (originChatId) assertChatTaskCadence(cron, timezone, new Date(now));
   const retiredRetries = existing && (!enabled || !existing.enabled || existing.prompt !== prompt ||
     existing.cron !== cron || existing.timezone !== timezone);
   const pending = retiredRetries ? observeQueuedRetries(existing.pendingRoutineFires) : existing?.pendingRoutineFires;
@@ -327,6 +357,7 @@ function normalizeInput(
     executionProfile,
     webSearchEnabled,
     chatId: workspaceId === existing?.workspaceId ? existing?.chatId : undefined,
+    ...(originChatId ? { originChatId } : {}),
     ...(botId !== undefined ? { botId, routineSchedule } : {}),
     ...(botId !== undefined && (existing && !existing.enabled && enabled ? now : existing?.enabledAt) !== undefined
       ? { enabledAt: existing && !existing.enabled && enabled ? now : existing!.enabledAt }
@@ -358,7 +389,13 @@ function isRunResult(value: unknown): value is ScheduledRunResult {
 }
 
 function isSkipReason(value: unknown): value is ScheduledRunSkipReason {
-  return value === "bot_paused" || value === "duplicate" || value === "paused_by_person";
+  return (
+    value === "bot_paused" ||
+    value === "duplicate" ||
+    value === "paused_by_person" ||
+    value === "chat_busy" ||
+    value === "chat_budget"
+  );
 }
 
 /** The request id of a failed fire's delayed retry. */
@@ -521,6 +558,9 @@ function normalizeStoredTask(value: unknown): ScheduledTask | null {
     executionProfile,
     webSearchEnabled,
     chatId: typeof task.chatId === "string" ? task.chatId : undefined,
+    ...(botId === undefined && typeof task.originChatId === "string" && task.originChatId
+      ? { originChatId: task.originChatId }
+      : {}),
     ...(botId !== undefined ? { botId, ...(routineSchedule ? { routineSchedule } : {}) } : {}),
     ...(botId !== undefined && typeof task.enabledAt === "number" && Number.isFinite(task.enabledAt) ? { enabledAt: task.enabledAt } : {}),
     ...(botId !== undefined && typeof task.sourceProposalId === "string" && /^[0-9a-f-]{36}$/u.test(task.sourceProposalId)
@@ -924,6 +964,47 @@ export function createScheduleStore(
           chatId: undefined,
           updatedAt: nextTaskRevision(now(), existing.updatedAt),
         };
+      });
+    },
+
+    /**
+     * "Use its own chat": drop a task's chat binding so its runs go to the
+     * task's own chat. With `expectedChatId`, only that binding is dropped.
+     * Returns the task, or undefined when nothing changed.
+     */
+    async clearOriginChat(
+      id: string,
+      options: { expectedChatId?: string; expectedUpdatedAt?: number } = {},
+    ): Promise<ScheduledTask | undefined> {
+      const { expectedChatId, expectedUpdatedAt } = options;
+      return tasks.update((draft) => {
+        const index = draft.map(normalizeStoredTask).findIndex((task) => task?.id === id);
+        const existing = index >= 0 ? normalizeStoredTask(draft[index]) : null;
+        if (!existing) throw new Error(`Scheduled task ${id} not found.`);
+        if (expectedUpdatedAt !== undefined && existing.updatedAt !== expectedUpdatedAt) {
+          throw new Error("This automation changed. Refresh it before trying again.");
+        }
+        if (!existing.originChatId) return undefined;
+        if (expectedChatId !== undefined && existing.originChatId !== expectedChatId) return undefined;
+        const { originChatId: _dropped, ...rest } = existing;
+        const task: ScheduledTask = { ...rest, updatedAt: nextTaskRevision(now(), existing.updatedAt) };
+        draft[index] = task;
+        return structuredClone(task);
+      });
+    },
+
+    /** A deleted chat: every task that posted into it goes back to its own chat. Returns their ids. */
+    async releaseOriginChat(chatId: string): Promise<string[]> {
+      return tasks.update((draft) => {
+        const released: string[] = [];
+        for (let index = 0; index < draft.length; index += 1) {
+          const existing = normalizeStoredTask(draft[index]);
+          if (!existing || existing.originChatId !== chatId) continue;
+          const { originChatId: _dropped, ...rest } = existing;
+          draft[index] = { ...rest, updatedAt: nextTaskRevision(now(), existing.updatedAt) };
+          released.push(existing.id);
+        }
+        return released;
       });
     },
 

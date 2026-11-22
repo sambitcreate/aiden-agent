@@ -28,6 +28,11 @@ export function parseScheduledTaskInput(value: unknown): ScheduledTaskInput {
         : (() => {
             throw new Error("Invalid scheduled task mode.");
           })();
+  // The chat a task posts into is set by Aiden when a chat makes the task;
+  // a save can only keep it (main preserves it) or drop it with "Use its own chat".
+  if (Object.prototype.hasOwnProperty.call(input, "originChatId")) {
+    throw new Error("The chat a scheduled task posts into can't be set here.");
+  }
   let permission: ScheduledTaskPermission | undefined;
   if ("permission" in input) {
     if (input.permission !== "full" && input.permission !== "read-only") {

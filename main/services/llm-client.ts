@@ -903,15 +903,21 @@ function chatTurnIsHeld(chatId: string): boolean {
  * Wait until `busy()` is false, waking early once the chat's running
  * generations complete. False when the settlement grace ran out first.
  */
-async function waitForChatSettlement(chatId: string, busy: () => boolean): Promise<boolean> {
-  const deadline = Date.now() + CHAT_CANCEL_SETTLEMENT_GRACE_MS;
+async function waitForChatSettlement(
+  chatId: string,
+  busy: () => boolean,
+  graceMs = CHAT_CANCEL_SETTLEMENT_GRACE_MS,
+): Promise<boolean> {
+  const deadline = Date.now() + graceMs;
+  // Long waits (a scheduled task waiting its turn) poll less often.
+  const pollMs = graceMs > CHAT_CANCEL_SETTLEMENT_GRACE_MS ? 250 : 25;
   while (busy()) {
     const remaining = deadline - Date.now();
     if (remaining <= 0) return false;
     const completions = [...active.values()]
       .filter((entry) => entry.chatId === chatId && entry.completion)
       .map((entry) => entry.completion!);
-    const pause = new Promise<void>((resolve) => setTimeout(resolve, Math.min(25, remaining)));
+    const pause = new Promise<void>((resolve) => setTimeout(resolve, Math.min(pollMs, remaining)));
     if (completions.length > 0) {
       await Promise.race([Promise.allSettled(completions), pause]);
     } else {
@@ -1929,8 +1935,15 @@ async function prepareGeneration(
     harnessProvider: isAcpHarnessProvider(runtime.provider.id),
     excludedToolNames: options.excludeToolNames,
   };
+  // The owed turn for the person's queued message is theirs; one answering a notice is not.
+  const answersPerson =
+    windowless &&
+    options.screenedPrompt !== undefined &&
+    chat.messages.some(
+      (message) => message.id === options.screenedPrompt?.messageId && message.role === "user" && !message.notice,
+    );
   const turnAudience = {
-    ...chatTurnAudienceFor({ ...options, windowless }, params),
+    ...chatTurnAudienceFor({ ...options, windowless, answersPerson }, params),
     ...(windowless ? { windowOnlyToolNames } : {}),
   };
   /** Calls this turn refuses because of their arguments (a woken turn setting a check-back). */
@@ -1963,6 +1976,11 @@ async function prepareGeneration(
     !options.excludeToolNames?.has(SCHEDULE_TOOL_NAME) &&
     (!botContext || options.interactionSurface !== "telegram") &&
     (!botContext || botHasOrdinaryCapability(botContext, "schedules"));
+  // An ordinary workspace chat: a task made here posts its runs back into it.
+  const scheduleOriginChatId =
+    schedulingAllowed && !botContext && !assistantMode && !chat.botId && chat.owner === undefined
+      ? params.chatId
+      : undefined;
   const botScheduleToolNames =
     botContext && schedulingAllowed
       ? new Set(
@@ -2168,6 +2186,7 @@ async function prepareGeneration(
       ...(deviceShimDir ? { shellPathPrefix: deviceShimDir } : {}),
       ...(shellLeftovers ? { shellLeftovers } : {}),
       allowScheduling: schedulingAllowed,
+      ...(scheduleOriginChatId ? { scheduleOriginChatId } : {}),
       allowMcpTools: botContext
         ? options.allowMcpTools !== false && botConnectionIds!.length > 0
         : options.allowMcpTools,
@@ -3080,6 +3099,7 @@ async function prepareGeneration(
     botApprovedRoots,
     botMutatingToolNames,
     offerHooksTool,
+    scheduleOriginChatId,
     turnToolRefusal: firstTurnToolRefusal(turnToolRefusals),
   };
 }
@@ -3482,6 +3502,7 @@ export const llmClient = {
       botMutatingToolNames,
       offerHooksTool,
       usesApprovalModes,
+      scheduleOriginChatId,
       turnToolRefusal,
     } = setup;
     // Claim checks tell connector failures by the tools' real MCP identity.
@@ -5400,6 +5421,7 @@ export const llmClient = {
                   approvalModelSelection,
                   undefined,
                   workspaceId,
+                  scheduleOriginChatId,
                 );
                 if (signal?.aborted) throw new Error("Scheduled task action was cancelled.");
                 preparedStandardScheduleSummary = prepared.summary;
@@ -6894,6 +6916,11 @@ export const llmClient = {
    */
   async waitForChatIdle(chatId: string): Promise<boolean> {
     return waitForChatSettlement(chatId, () => chatTurnIsHeld(chatId));
+  },
+
+  /** Like `waitForChatIdle`, with its own bound: false when the chat is still held after `timeoutMs`. */
+  async waitForChatIdleWithin(chatId: string, timeoutMs: number): Promise<boolean> {
+    return waitForChatSettlement(chatId, () => chatTurnIsHeld(chatId), Math.max(0, timeoutMs));
   },
 
   /** Stop and drain foreground work before cross-store chat deletion begins. */
