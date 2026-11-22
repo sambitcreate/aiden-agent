@@ -1934,6 +1934,11 @@ async function prepareGeneration(
   };
   /** Calls this turn refuses because of their arguments (a woken turn setting a check-back). */
   const turnArgsRefusal = chatTurnArgsToolRefusal(turnAudience);
+  // The person sent in a lead chat: its started chats' endings may wake it
+  // again after a Stop (Phase 5, D4).
+  if (params.chatId && chatLineage && !chatLineage.startedBy && !aidenStartedTurn(turnAudience)) {
+    (await import("./chat-orchestration/child-chats-main.js")).leadChatResumed(params.chatId);
+  }
   // The person wrote in a chat another chat started: from now on it is theirs,
   // and the lead's `send` and Stop leave it alone (Phase 5, D3).
   if (params.chatId && chatLineage?.startedBy && options.leadChatTurn !== true && !aidenStartedTurn(turnAudience)) {
@@ -6821,6 +6826,12 @@ export const llmClient = {
     subagentRuntimeRegistry.abortGeneration(streamId);
     approvals.cancelStream(streamId);
     logger.info("pi", `Generation ${streamId} cancellation requested (${origin}).`);
+    // The person's Stop in a lead chat also stops the chats it started (Phase 5, D4).
+    if (origin === "user_stop" && stoppedChatId) {
+      void import("./chat-orchestration/child-chats-main.js")
+        .then(({ leadChatStopped }) => leadChatStopped(stoppedChatId))
+        .catch((error: unknown) => logger.warn("chat-orchestration", "Could not stop a lead chat's started chats.", error));
+    }
     return true;
   },
 

@@ -12,7 +12,7 @@
 import { APPROVAL_MODES, MAC_GRANT_CLASSES, type ApprovalMode, type MacGrantClass } from "../../../renderer/shared/approval-mode.js";
 import type { ApprovalCeiling } from "../approval-gate/run-approval.js";
 
-export type ChatLinkRunEnd = "done" | "failed" | "interrupted";
+export type ChatLinkRunEnd = "done" | "stopped" | "failed" | "interrupted";
 
 export interface ChatLink {
   childChatId: string;
@@ -50,7 +50,7 @@ const DELIVERED_LIMIT = 16;
 const TITLE_CHARS = 200;
 const ID = /^[A-Za-z0-9._-]{1,128}$/u;
 const KEY = /^[A-Za-z0-9._:-]{1,300}$/u;
-const RUN_ENDS: readonly ChatLinkRunEnd[] = ["done", "failed", "interrupted"];
+const RUN_ENDS: readonly ChatLinkRunEnd[] = ["done", "stopped", "failed", "interrupted"];
 
 export function emptyChatLinkDocument(): ChatLinkDocument {
   return { version: 1, links: [] };

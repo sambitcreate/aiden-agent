@@ -3,12 +3,32 @@
 import { configStore } from "../config-store.js";
 import { chatStore } from "../chat-store.js";
 import { approvalCeilingOf, currentWorkspaceApproval } from "../approval-gate/run-approval.js";
+import { logger } from "../../platform.js";
 import { ChildChats } from "./child-chats.js";
+import { ChildChatCompletions } from "./completion-delivery.js";
 import { chatLinks } from "./links-main.js";
 
 async function remote() {
   return import("../aiden-remote-service-main.js");
 }
+
+export const childChatCompletions = new ChildChatCompletions({
+  links: chatLinks,
+  post: async (post) => (await import("../follow-through/notice-delivery-main.js")).noticeDelivery.post(post),
+  lastReply: async (chatId) => {
+    const { chats } = await (await remote()).aidenChatOrchestrationServices();
+    const window = await chats.messagesWindow(chatId, { limit: 5 });
+    return [...window.messages].reverse().find((message) => message.role === "assistant")?.text;
+  },
+  setTimer: (run, ms) => {
+    const timer = setTimeout(run, ms);
+    timer.unref?.();
+    return timer;
+  },
+  clearTimer: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
+  now: () => Date.now(),
+  onError: (error) => logger.warn("chat-orchestration", "Could not tell a lead chat that a started chat ended.", error),
+});
 
 export const childChats = new ChildChats({
   services: async () => (await remote()).aidenChatOrchestrationServices(),
@@ -21,7 +41,25 @@ export const childChats = new ChildChats({
     return { workspaceId: meta.workspaceId, title: meta.title, ceiling: approvalCeilingOf(policy) };
   },
   answerIn: async () => `Aiden on ${await (await remote()).aidenHostDisplayName()}`,
+  onRunEnded: (event) => void childChatCompletions.runEnded(event),
 });
+
+/**
+ * The person pressed Stop in a chat. If it leads started chats, their running
+ * turns stop too (except chats the person took over), and their endings stop
+ * waking it until the person next sends there.
+ */
+export async function leadChatStopped(chatId: string): Promise<void> {
+  await chatLinks.restore();
+  if (chatLinks.childrenOf(chatId).length === 0) return;
+  childChatCompletions.quietLead(chatId);
+  await childChats.stopAll(chatId);
+}
+
+/** The person sent in a chat: endings of the chats it started may wake it again. */
+export function leadChatResumed(chatId: string): void {
+  childChatCompletions.resumeLead(chatId);
+}
 
 /** A deleted chat's links go with it. */
 export async function deleteChatLinks(chatId: string): Promise<void> {

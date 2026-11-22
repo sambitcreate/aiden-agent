@@ -94,6 +94,7 @@
         "main/services/chat-orchestration/links.test.ts",
         "main/services/chat-orchestration/audience.test.ts",
         "main/services/chat-orchestration/child-chats.test.ts",
+        "main/services/chat-orchestration/completion-delivery.test.ts",
         "main/services/follow-through/chat-settlement.test.ts",
         "main/services/follow-through/answering-runs.test.ts",
         "main/services/follow-through/listening-ports.test.ts",

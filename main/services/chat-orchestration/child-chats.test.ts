@@ -9,7 +9,7 @@ import { AidenRemoteServiceError } from "../aiden-remote-errors.js";
 import type { ApprovalCeiling } from "../approval-gate/run-approval.js";
 import { chatTurnArgsToolRefusal, chatTurnAudienceFor } from "../chat-turn-tool-policy.js";
 import { UNATTENDED_FOLLOW_UP_GENERATION } from "../follow-through/notice-delivery.js";
-import { ChildChats, type ChildChatServices } from "./child-chats.js";
+import { ChildChats, type ChildChatRunEnded, type ChildChatServices } from "./child-chats.js";
 import { createChildChatsTool } from "./child-chats-tool.js";
 import { ChatLinkStore, type ChatLinkDocument } from "./links.js";
 
@@ -114,6 +114,10 @@ function fakeRemote() {
     failCreateOnce(error: Error) {
       failNextCreate = error;
     },
+    setState(runId: string, state: AidenRemoteStreamState) {
+      runs.get(runId)!.state = state;
+      notify(runId);
+    },
     finish(runId: string, reply: string, state: AidenRemoteStreamState = "done") {
       const run = runs.get(runId)!;
       chats.get(run.chatId)!.messages.push({ role: "assistant", text: reply });
@@ -136,14 +140,16 @@ function memoryLinks() {
 function setup(clock = { now: 1_000 }) {
   const remote = fakeRemote();
   const links = memoryLinks();
+  const ended: ChildChatRunEnded[] = [];
   const childChats = new ChildChats({
+    onRunEnded: (event) => ended.push(event),
     services: async () => remote.services,
     links,
     lead: async () => ({ workspaceId: "w1", title: "Release prep", ceiling: LEAD_CEILING }),
     answerIn: async () => "Aiden on Studio",
     now: () => clock.now,
   });
-  return { remote, links, childChats, clock };
+  return { remote, links, childChats, clock, ended };
 }
 
 const never = () => new AbortController().signal;
@@ -319,4 +325,27 @@ test("the tool turns a Remote refusal into the model's error, and validates each
     assert.equal(outcome.isError, true);
     assert.match(JSON.parse((outcome.content[0] as { text: string }).text).error, error);
   }
+});
+
+test("a lead-started turn reports its end once; waiting for an approval or an answer is not an end", async () => {
+  const { remote, childChats, ended } = setup();
+  const [outcome] = (await childChats.start(LEAD, "call-1", [{ title: "Docs", task: "a" }])) as Array<{ chatId: string; runId: string }>;
+  remote.setState(outcome!.runId, "waiting_for_approval");
+  remote.setState(outcome!.runId, "running");
+  assert.deepEqual(ended, []);
+  remote.finish(outcome!.runId, "Done.");
+  remote.setState(outcome!.runId, "done");
+  assert.deepEqual(ended, [{ leadChatId: LEAD, chatId: outcome!.chatId, runId: outcome!.runId, end: "done" }]);
+
+  const next = await childChats.send(LEAD, "s1", { chatId: outcome!.chatId, text: "Again", mode: "auto" });
+  remote.setState(next.runId, "error");
+  assert.deepEqual(ended[ended.length - 1], { leadChatId: LEAD, chatId: outcome!.chatId, runId: next.runId, end: "failed" });
+});
+
+test("a turn the lead stopped itself counts as told, so its end is no news", async () => {
+  const { links, childChats, ended } = setup();
+  const [outcome] = (await childChats.start(LEAD, "call-1", [{ title: "Docs", task: "a" }])) as Array<{ chatId: string; runId: string }>;
+  assert.deepEqual(await childChats.stop(LEAD, outcome!.chatId), { chatId: outcome!.chatId, stopped: true });
+  assert.deepEqual(ended.map((event) => event.end), ["stopped"]);
+  assert.deepEqual(links.get(outcome!.chatId)!.delivered, [outcome!.runId]);
 });

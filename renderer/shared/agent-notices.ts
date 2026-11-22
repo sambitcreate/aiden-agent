@@ -1,12 +1,13 @@
 // Follow-up notices: something the agent started (a background job, a pull
-// request it follows, a "done when" check, a check-back it promised) has news
+// request it follows, a "done when" check, a check-back it promised, a chat it
+// started) has news
 // for the chat. A notice is
 // stored as a user-role transcript message so the model reads it as the next
 // thing that happened; `notice` marks it so clients draw a compact card
 // instead of a user bubble. The message content is the model-facing text and
 // fences any command output or GitHub text as data.
 
-export const AGENT_NOTICE_SOURCES = ["background_job", "pull_request", "check", "check_back"] as const;
+export const AGENT_NOTICE_SOURCES = ["background_job", "pull_request", "check", "check_back", "chat"] as const;
 export type AgentNoticeSource = (typeof AGENT_NOTICE_SOURCES)[number];
 
 /** How the card reads at a glance. */

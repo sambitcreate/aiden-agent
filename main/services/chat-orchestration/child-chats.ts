@@ -17,7 +17,7 @@ import type { AidenRemoteChatService } from "../aiden-remote-chats.js";
 import type { AidenRemoteStreamService } from "../aiden-remote-streams.js";
 import type { ApprovalCeiling } from "../approval-gate/run-approval.js";
 import { chatAudience } from "./audience.js";
-import type { ChatLink, ChatLinkStore } from "./links.js";
+import type { ChatLink, ChatLinkRunEnd, ChatLinkStore } from "./links.js";
 import { CHAT_RUN_TERMINAL_STATES, ChatRunCore, projectRunMessage, type ChatRunSnapshot } from "./run-core.js";
 
 export interface ChildChatServices {
@@ -43,7 +43,32 @@ export interface ChildChatsDependencies {
   lead(leadChatId: string): Promise<ChildChatLead>;
   /** Where the person answers a started chat's approval, for example "Aiden on Studio". */
   answerIn(): Promise<string>;
+  /** A turn the lead started in a chat ended (not an approval or question wait: those never end a turn). */
+  onRunEnded?(event: ChildChatRunEnded): void;
   now?(): number;
+}
+
+export interface ChildChatRunEnded {
+  leadChatId: string;
+  chatId: string;
+  runId: string;
+  end: ChatLinkRunEnd;
+}
+
+/** How a finished stream reads to the lead. */
+export function childRunEnd(state: ChatRunSnapshot["state"] | string): ChatLinkRunEnd | undefined {
+  switch (state) {
+    case "done":
+      return "done";
+    case "cancelled":
+      return "stopped";
+    case "error":
+      return "failed";
+    case "interrupted":
+      return "interrupted";
+    default:
+      return undefined;
+  }
 }
 
 export class ChildChatRefusal extends Error {}
@@ -90,6 +115,7 @@ export function childChatKey(leadChatId: string, callKey: string, index: number)
 export class ChildChats {
   private readonly core: ChatRunCore;
   private readonly now: () => number;
+  private readonly followed = new Set<string>();
 
   constructor(private readonly dependencies: ChildChatsDependencies) {
     this.now = dependencies.now ?? Date.now;
@@ -243,6 +269,8 @@ export class ChildChats {
     if (!this.live(services, audience, link.runId)) return { chatId, stopped: false };
     const runId = link.runId;
     const classification = await services.chats.classify(link.childChatId);
+    // The lead stopped it, so its end is no news to the lead.
+    await this.markTold(link.childChatId, runId);
     await services.chats.runMutation(audience, link.childChatId, classification, () =>
       Promise.resolve(services.streams.cancel(audience, runId, `agent-chat-stop:${runId}`)),
     );
@@ -292,7 +320,46 @@ export class ChildChats {
       draft.runId = turn.streamId;
       draft.leadSentAt = this.now();
     });
+    this.follow(services, link, turn.streamId);
     return turn.streamId;
+  }
+
+  /** Tells `onRunEnded` once the run ends. In memory: nothing resumes after a quit. */
+  private follow(services: ChildChatServices, link: ChatLink, runId: string): void {
+    const onRunEnded = this.dependencies.onRunEnded;
+    if (!onRunEnded || this.followed.has(runId)) return;
+    this.followed.add(runId);
+    const audience = chatAudience(link.leadChatId);
+    let detach: (() => void) | undefined;
+    let done = false;
+    const look = () => {
+      if (done) return;
+      let state: string;
+      try {
+        state = services.streams.status(audience, runId).state;
+      } catch {
+        // The stream is gone without an end we saw: nothing to report.
+        finish();
+        return;
+      }
+      const end = childRunEnd(state);
+      if (!end) return;
+      finish();
+      onRunEnded({ leadChatId: link.leadChatId, chatId: link.childChatId, runId, end });
+    };
+    const finish = () => {
+      done = true;
+      this.followed.delete(runId);
+      detach?.();
+    };
+    try {
+      detach = services.streams.watch(audience, runId, { onChange: look, onClose: look });
+    } catch {
+      finish();
+      return;
+    }
+    if (done) detach();
+    look();
   }
 
   /** Resolves once the run has ended, its stream closed, or `signal` aborted. */

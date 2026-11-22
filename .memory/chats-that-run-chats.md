@@ -20,3 +20,10 @@ Plan: `docs/plans/proactive-aiden-plan.md` Phase 5 (D1–D7). D1 (run core) land
 - Gate: `start` Consequential (`childChatsRequiresApproval` in workspace-tool-approval), others Exempt; `child_chats` in the taint set; policy row in `TURN_ARGS_REFUSAL_RULES`.
 - Settings: `AppSettings.childChats` (false-only stored; providers handler + config-store validation; portable keeps only false); Switch "Chats can start other chats" in Approvals → Advanced, hidden when platform is "other"; search keywords on `approvals`.
 - Docs `docs/chats-that-run-chats.md`, README, PRODUCT, settings-design-system, linux.
+
+## D4 (completion wakes, `chat` notice, Stop cascade)
+- `AGENT_NOTICE_SOURCES` gains `"chat"` (card: MessagesSquare, "Started chat"). Phones see notices as one text line, no revision.
+- `ChildChats` takes `onRunEnded`; `startTurn` follows each lead-started run via `streams.watch` until a terminal stream state (`childRunEnd`: done→done, cancelled→stopped, error→failed, interrupted). Approval/question waits are not terminal. `stop` marks the run told first. `ChatLinkRunEnd` gained "stopped".
+- `completion-delivery.ts` `ChildChatCompletions`: `runEnded` (ignores a run that isn't `link.runId`, or already in `delivered`) sets `owed`, groups per lead for 10 s (`CHILD_COMPLETION_GROUP_MS`), `flush` re-checks `delivered` (wait dedupe), posts one `chat` notice (reply fenced, 4,000 chars) through `noticeDelivery`, wake unless the lead is quiet; marks delivered and clears owed unless dropped. `quietLead`/`resumeLead`.
+- Wiring `child-chats-main.ts`: `childChatCompletions`, `leadChatStopped(chatId)` (quiet + `stopAll`, only if it has children), `leadChatResumed`. llm-client `cancel(..., "user_stop")` calls `leadChatStopped` (desktop and phone Stop); a person turn (not Aiden-started) in a chat with no `startedBy` calls `leadChatResumed`.
+- Tests: `completion-delivery.test.ts` (real NoticeDelivery: queued, woke, budget → recorded, grouping, wait dedupe, quiet), child-chats tests for run-end reporting and stop-as-told, notice card/parse tests.

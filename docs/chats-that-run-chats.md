@@ -56,11 +56,35 @@ The lead's model gets one tool, `child_chats`, with one action per call:
   desktop card, Inbox Needs you and paired phones. They wait up to 30 minutes,
   not the usual 5.
 
+## When a started chat finishes
+
+When a turn the lead started in a chat ends (finished, stopped, failed or
+interrupted), the lead gets a **Started chat** notice card with the chat's
+last reply fenced as data (up to 4,000 characters; `child_chats read` has the
+rest). Like other follow-up notices it is queued into a running lead, or wakes
+an idle one within the chat's budget of six unattended follow-up answers an
+hour; past that it is only recorded. Chats that end within 10 seconds of each
+other share one notice ("2 started chats ended").
+
+- A chat waiting for your approval or answer hasn't ended, so it never wakes
+  the lead.
+- A turn the lead already got back from `wait`, or stopped itself, isn't
+  told again.
+- A woken lead can list, read, wait, send and stop, but not start more chats.
+
+## Stop
+
+Stop in the lead (on the desktop or a phone) stops its turn and the running
+turn of every chat it started, except chats you've written in. Until you next
+send in the lead, its started chats' endings are only recorded and don't wake
+it. Stop in a started chat stops only that chat.
+
 ## When you write in a started chat
 
 Once you send a message in a started chat after the lead's last message, the
-chat is yours: the lead's `send` refuses, and `list` and `wait` mark it
-`tookOver`. The lead can still read it.
+chat is yours: the lead's `send` refuses, its Stop leaves the chat alone, and
+`list` and `wait` mark it `tookOver`. The lead can still read it, and turns you
+start there never notify the lead.
 
 ## How it runs
 
@@ -72,8 +96,9 @@ behave as they do for a phone turn.
 
 Links live in `chat-orchestration.json` in Aiden's user data folder (mode
 0600): each started chat's lead, title, ceiling, the person-took-over marker
-and which finished turns the lead has already been told about. Deleting a
+an owed notice and which finished turns the lead has already been told about. Deleting a
 started chat drops its link; deleting a lead drops its started chats' links,
 and those chats keep running under the lost-link ceiling.
 
-Nothing resumes after a quit.
+Nothing resumes after a quit: a notice still waiting in its 10-second group is
+lost, and started chats' interrupted turns show Resume in their own chats.
