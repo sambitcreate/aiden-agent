@@ -39,9 +39,14 @@ function harness(options: {
     jobs: false,
     activity: { toolCalls: 1, newTextChars: 0 } as GoalRoundActivity,
     roundStart: "started" as GoalRoundStart,
+    /** Steps that throw, as a missing provider or a broken chat file would. */
+    throws: { activity: false, context: false, start: false },
+    /** Holds startRound open, as a window's 5-second claim does. */
+    holdStart: undefined as Promise<void> | undefined,
     review: (async (goal) => continueWith(`Next step ${goal.rounds}`)) as Review,
   };
   const rounds: Array<{ text: string; notice: AgentNoticeV1 }> = [];
+  const roundCurrent: Array<() => boolean> = [];
   const noticeRounds: string[] = [];
   const events: GoalAnalyticsEvent[] = [];
   const changes: Array<GoalView | null> = [];
@@ -60,8 +65,14 @@ function harness(options: {
     isChatBusy: () => state.busy,
     helperRunning: () => state.helper,
     jobsRunning: () => state.jobs,
-    roundActivity: async () => state.activity,
-    fallbackContext: async () => CONTEXT,
+    roundActivity: async () => {
+      if (state.throws.activity) throw new Error("The chat file could not be read.");
+      return state.activity;
+    },
+    fallbackContext: async () => {
+      if (state.throws.context) throw new Error("The chat file could not be read.");
+      return CONTEXT;
+    },
     review: (goal, input) => {
       reviewCount += 1;
       return state.review(goal, input);
@@ -74,7 +85,10 @@ function harness(options: {
           },
         }
       : {}),
-    startRound: async (_chatId, _context, round) => {
+    startRound: async (_chatId, _context, round, isCurrent) => {
+      roundCurrent.push(isCurrent);
+      await state.holdStart;
+      if (state.throws.start) throw new Error("No window could take the round.");
       rounds.push(round);
       return state.roundStart;
     },
@@ -91,19 +105,25 @@ function harness(options: {
   }
   /** A run in the chat settles and the loop finishes looking at it. */
   async function runSettles(run: { stopped?: boolean; failed?: boolean } = {}) {
-    loop.runSettled({ chatId: CHAT, streamId: "s", context: CONTEXT, stopped: run.stopped ?? false, failed: run.failed ?? false });
+    settle(run);
     await flush();
+  }
+  /** A run settles; the loop's look starts but isn't waited for. */
+  function settle(run: { stopped?: boolean; failed?: boolean } = {}) {
+    loop.runSettled({ chatId: CHAT, streamId: "s", context: CONTEXT, stopped: run.stopped ?? false, failed: run.failed ?? false });
   }
   return {
     loop,
     state,
     rounds,
+    roundCurrent,
     noticeRounds,
     events,
     changes,
     saved,
     settled,
     runSettles,
+    settle,
     flush,
     reviews: () => reviewCount,
     tick: (ms: number) => (clock += ms),
@@ -111,7 +131,7 @@ function harness(options: {
   };
 }
 
-test("setting a goal reports it, gives the kickoff note once and reminds only while active", async () => {
+test("setting a goal reports it, gives the kickoff note once, and keeps the same reminder until the goal is done or cleared", async () => {
   const h = harness();
   const view = await h.loop.set(CHAT, { objective: "Make the tests pass", source: "slash" });
   assert.equal(view.status, "active");
@@ -124,8 +144,19 @@ test("setting a goal reports it, gives the kickoff note once and reminds only wh
   assert.equal(h.loop.kickoff(CHAT), undefined, "the kickoff is given once");
   assert.match(h.loop.reminder(CHAT) ?? "", /Make the tests pass/);
 
+  const active = h.loop.reminder(CHAT);
   h.loop.pause(CHAT);
-  assert.equal(h.loop.reminder(CHAT), undefined, "no reminder for a paused goal");
+  assert.equal(h.loop.reminder(CHAT), active, "pausing leaves the reminder's bytes as they were");
+  await h.loop.resume(CHAT);
+  assert.equal(h.loop.reminder(CHAT), active, "and so does resuming");
+  h.loop.clear(CHAT);
+  assert.equal(h.loop.reminder(CHAT), undefined, "a cleared goal leaves no reminder");
+
+  await h.loop.set(CHAT, { objective: "Make the tests pass", source: "slash" });
+  h.state.review = async () => ({ kind: "verdict", verdict: { verdict: "done", reason: "All green." }, via: "continuation" });
+  await h.runSettles();
+  assert.equal(h.goal()?.status, "done");
+  assert.equal(h.loop.reminder(CHAT), undefined, "a goal that is done leaves no reminder");
 });
 
 test("set is refused while the loop is off, for an ineligible chat, and for a command goal without a check runner", async () => {
@@ -229,8 +260,20 @@ test("the person's send wins over the loop: a busy chat is neither reviewed nor 
     return continueWith("Keep going on the parser");
   };
   await h.runSettles();
-  assert.equal(h.goal()?.rounds, 2, "the verdict is kept");
+  assert.equal(h.goal()?.reason, "Keep going on the parser", "the verdict is kept");
+  assert.equal(h.goal()?.rounds, 1, "no round started, so none is counted");
   assert.equal(h.rounds.length, 0, "their send is this round's work");
+
+  // The chat turned busy between the check and the start: the round is not counted either.
+  h.state.busy = false;
+  h.state.review = async () => continueWith("Now the docs");
+  h.state.roundStart = "busy";
+  await h.runSettles();
+  assert.equal(h.rounds.length, 1, "a start was tried");
+  assert.equal(h.goal()?.rounds, 1, "and came back busy, so the count stays");
+  h.state.roundStart = "started";
+  await h.runSettles();
+  assert.equal(h.goal()?.rounds, 2, "a round that starts is counted");
 });
 
 test("the person's pause during a review wins over its verdict", async () => {
@@ -475,4 +518,93 @@ test("a round off screen wanting the window shows on the goal until a round star
   await h.loop.resume(CHAT);
   h.loop.windowRoundStarted(CHAT);
   assert.equal(h.goal()?.windowWanted, undefined);
+});
+
+/** A review the test answers when it likes; it ignores its signal, as a slow provider would. */
+function heldReview() {
+  const held: Array<{ goal: GoalRecordV1; answer: (outcome: GoalReviewOutcome) => void }> = [];
+  const review: Review = (goal) => new Promise((resolve) => held.push({ goal, answer: resolve }));
+  return { held, review };
+}
+
+test("a run that settles during a review replaces it: Stop pauses the goal, and the stale verdict starts nothing", async () => {
+  const h = harness();
+  await h.loop.set(CHAT, { objective: "Ship it", source: "slash" });
+  const { held, review } = heldReview();
+  h.state.review = review;
+  await h.runSettles();
+  assert.equal(held.length, 1, "the review is under way");
+
+  await h.runSettles({ stopped: true });
+  assert.equal(h.goal()?.status, "paused");
+  assert.equal(h.goal()?.cause, "stopped", "the person's Stop is applied");
+  held[0]!.answer(continueWith("Keep going"));
+  await h.flush();
+  assert.equal(h.rounds.length, 0, "the earlier review's verdict starts no round");
+  assert.equal(h.goal()?.status, "paused");
+});
+
+test("a run that settles during a review is reviewed again: the earlier review's Done, from before that run, is dropped", async () => {
+  const h = harness();
+  await h.loop.set(CHAT, { objective: "Ship it", source: "slash" });
+  const { held, review } = heldReview();
+  h.state.review = review;
+  await h.runSettles();
+  await h.runSettles(); // the person's message was answered while the first review ran
+  assert.equal(held.length, 2, "the new run gets its own review");
+  held[0]!.answer({ kind: "verdict", verdict: { verdict: "done", reason: "Shipped" }, via: "continuation" });
+  await h.flush();
+  assert.equal(h.goal()?.status, "active", "the review of the older transcript is not applied");
+  held[1]!.answer(continueWith("The changelog is still missing"));
+  await h.flush();
+  assert.equal(h.rounds.length, 1);
+  assert.equal(h.goal()?.reason, "The changelog is still missing");
+});
+
+test("a step that throws pauses the goal and says so, instead of leaving it at work with nothing running", async () => {
+  for (const step of ["activity", "start", "context"] as const) {
+    const h = harness();
+    await h.loop.set(CHAT, { objective: "Ship it", source: "slash" });
+    h.state.throws[step] = true;
+    if (step === "context") {
+      // Resume with no run settled in this process reads the chat for its model.
+      h.loop.pause(CHAT);
+      await h.loop.resume(CHAT);
+    } else await h.runSettles();
+    assert.equal(h.goal()?.status, "paused", step);
+    assert.equal(h.goal()?.cause, "failed", step);
+    assert.equal(h.settled.length, 1, `${step}: the person is told once`);
+    assert.equal(h.rounds.length, 0, step);
+  }
+
+  // A review that throws counts as an unusable answer: two in a row pause it as the reviewer's.
+  const h = harness();
+  await h.loop.set(CHAT, { objective: "Ship it", source: "slash" });
+  h.state.review = async () => {
+    throw new Error("The chat's provider is gone.");
+  };
+  await h.runSettles();
+  assert.equal(h.goal()?.status, "paused");
+  assert.equal(h.goal()?.cause, "reviewer");
+  assert.equal(h.settled.length, 1);
+});
+
+test("a round still starting stops counting as current once the person pauses, clears or replaces the goal", async () => {
+  for (const action of ["pause", "clear", "replace"] as const) {
+    const h = harness();
+    await h.loop.set(CHAT, { objective: "Ship it", source: "slash" });
+    let release!: () => void;
+    h.state.holdStart = new Promise<void>((resolve) => (release = resolve));
+    h.settle();
+    await h.flush();
+    assert.equal(h.roundCurrent.length, 1, "the round's start is waiting on a window");
+    const isCurrent = h.roundCurrent[0]!;
+    assert.equal(isCurrent(), true, "nothing changed yet");
+    if (action === "pause") h.loop.pause(CHAT);
+    else if (action === "clear") h.loop.clear(CHAT);
+    else await h.loop.set(CHAT, { objective: "Something else", source: "slash" });
+    assert.equal(isCurrent(), false, action);
+    release();
+    await h.flush();
+  }
 });

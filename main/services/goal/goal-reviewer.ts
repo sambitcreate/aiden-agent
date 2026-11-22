@@ -145,7 +145,9 @@ export async function reviewGoal(
   };
 
   const prefix = await dependencies.prefix().catch(() => undefined);
-  if (prefix && prefix.modelKey === sideCallModelKey(runtime.model)) {
+  // A chat request that forced a tool call would force one in its continuation
+  // too, and a tool call is never a verdict: such a review starts isolated.
+  if (prefix && prefix.modelKey === sideCallModelKey(runtime.model) && !forcesToolCall(prefix.options.toolChoice)) {
     const continued = await send(
       sideCallContinuation(prefix, [instruction], { ...call, maxTokens: goalReviewMaxTokens(prefix.options, runtime.model) }),
     );
@@ -191,6 +193,11 @@ export function goalReviewMaxTokens(
   const thinking = Math.min(Math.max(0, budgets[named] ?? 0), GOAL_REVIEW_MAX_THINKING_TOKENS);
   const cap = GOAL_REVIEW_MAX_TOKENS + thinking;
   return model.maxTokens > 0 ? Math.min(cap, model.maxTokens) : cap;
+}
+
+/** A tool choice other than leaving it to the model ("auto") or ruling tools out ("none"). */
+function forcesToolCall(toolChoice: unknown): boolean {
+  return toolChoice !== undefined && toolChoice !== "auto" && toolChoice !== "none";
 }
 
 function replyText(message: AssistantMessage): string {

@@ -4502,8 +4502,8 @@ export const llmClient = {
         deferredTools,
         // Every request drops removed memory facts and, after a compaction
         // inside the turn, states the current state again.
-        // While a goal is active, its byte-stable reminder sits right after a
-        // compaction summary.
+        // While the chat has a goal (until it is done or cleared), its
+        // byte-stable reminder sits right after a compaction summary.
         prepareMessages: chatStateRequestMessages(chatStatePlan.head, currentChatState, goalTurnHooks().reminder(params.chatId)),
       };
       assertGenerationContextCapacity(generationContextOptions);

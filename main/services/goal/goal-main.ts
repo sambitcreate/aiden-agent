@@ -82,6 +82,9 @@ const roundPromptLifetime: OwedTurnPromptLifetime = {
   expired: (chatId) => goalLoop.promptExpired(chatId),
 };
 
+/** Whether the goal a round was started for is still the one at work; a round for anything else never begins. */
+type RoundStillCurrent = () => boolean;
+
 /** A window-owned round: the window's document owns it, with the stream the window subscribed to. */
 interface WindowRoundOwner {
   owner: ChatGenerationOwner;
@@ -92,13 +95,16 @@ interface WindowRoundOwner {
  * Starts an attended round in the chat: with `message` saved first (the
  * continuation note, or a notice), or answering the chat's latest saved
  * message. Without a window its cards wait 30 minutes; in a window
- * (`window`) the round is that window's run, with every tool.
+ * (`window`) the round is that window's run, with every tool. A goal round
+ * passes `isCurrent`: it is checked when the round's message is saved and
+ * again just before the turn starts.
  */
 async function startAttendedRound(
   chatId: string,
   context: Parameters<typeof goalRoundStartRequest>[1],
   message: { text: string; notice: AgentNoticeV1 } | undefined,
   window?: WindowRoundOwner,
+  isCurrent: RoundStillCurrent = () => true,
 ): Promise<StartTurnResult> {
   const streamId = window?.streamId ?? `goal-${Date.now().toString(36)}-${randomUUID().slice(0, 8)}`;
   const owner = window?.owner ?? llmClient.attendedTurnOwner(chatId, `goal:${streamId}`, roundPromptLifetime);
@@ -115,13 +121,17 @@ async function startAttendedRound(
           providerId: context.providerId,
           model: context.model,
           ...(context.workspaceId !== undefined ? { expectedWorkspaceId: context.workspaceId } : {}),
-          isCurrent: () => lease.isActive(),
+          isCurrent: () => lease.isActive() && isCurrent(),
         },
       );
       messageId = saved.messages[saved.messages.length - 1]?.id;
       transcriptChanged(chatId);
     }
     lease.settleAsyncWork();
+    if (!isCurrent()) {
+      lease.release();
+      return { kind: "unavailable", reason: "The goal changed before the round began.", ...(messageId ? { messageId } : {}) };
+    }
     const request = goalRoundStartRequest(chatId, context, streamId);
     const started = await llmClient.start(streamId, request.params, owner, request.options);
     if (!started) {
@@ -144,6 +154,7 @@ async function startAttendedRound(
 interface WindowRoundPayload {
   context: Parameters<typeof goalRoundStartRequest>[1];
   round: { text: string; notice: AgentNoticeV1 };
+  isCurrent: RoundStillCurrent;
 }
 
 /** Which window, if any, starts each due round (`goal-window-rounds.ts`). */
@@ -167,10 +178,13 @@ async function startRound(
   chatId: string,
   context: Parameters<typeof goalRoundStartRequest>[1],
   round: { text: string; notice: AgentNoticeV1 },
+  isCurrent: RoundStillCurrent,
 ): Promise<GoalRoundStart> {
-  const inWindow = await goalWindowRounds.offer(chatId, { context, round });
+  const inWindow = await goalWindowRounds.offer(chatId, { context, round, isCurrent });
   if (inWindow !== "no-window") return inWindow;
-  const started = await startAttendedRound(chatId, context, round);
+  // The offer can wait up to 5 seconds for a window: the person may have paused meanwhile.
+  if (!isCurrent()) return "unavailable";
+  const started = await startAttendedRound(chatId, context, round, undefined, isCurrent);
   return started.kind === "started" ? "started" : started.kind === "busy" ? "busy" : "unavailable";
 }
 
@@ -202,7 +216,7 @@ export async function startGoalWindowRound(owner: ChatGenerationOwner, token: st
   if (!claim) throw new Error("This keep-going round is no longer waiting for this window.");
   let result: StartTurnResult = { kind: "unavailable", reason: "The round could not start." };
   try {
-    result = await startAttendedRound(claim.chatId, claim.payload.context, claim.payload.round, { owner, streamId });
+    result = await startAttendedRound(claim.chatId, claim.payload.context, claim.payload.round, { owner, streamId }, claim.payload.isCurrent);
     return result;
   } finally {
     claim.settle(result.kind === "started" ? { kind: "started", streamId } : { kind: result.kind === "busy" ? "busy" : "unavailable" });

@@ -173,6 +173,15 @@ export function goalWindowWanted(goal: GoalRecordV1, wanted: boolean, now: numbe
   return next;
 }
 
+/**
+ * The round a verdict counted didn't start (the chat was busy): the goal goes
+ * back to the round count it had, so a round is counted only once it runs.
+ */
+export function goalRoundNotStarted(goal: GoalRecordV1, rounds: number, now: number): GoalRecordV1 {
+  if (goal.status !== "active" || goal.rounds === rounds) return goal;
+  return write(goal, now, { rounds });
+}
+
 /** On load: a goal left active by another Aiden process comes back paused. */
 export function restoreGoal(goal: GoalRecordV1, input: { now: number; boot: string }): GoalRecordV1 {
   if (goal.status !== "active" || goal.boot === input.boot) return goal;

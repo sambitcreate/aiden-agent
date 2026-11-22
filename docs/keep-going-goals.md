@@ -38,11 +38,11 @@ While a chat has a goal, a bar above the composer shows it:
 | Needs you | "Needs you" and what it needs | Keep going, Clear |
 | Done | "Done" and the reason | Clear |
 
-Resume and Keep going both start again from round 1 with a fresh progress count; the limit stays 50 rounds. Taps take effect at once. If Aiden can't make the change, the bar goes back and says why.
+Resume and Keep going both start again from round 1 with a fresh progress count; the limit stays 50 rounds. A round counts only once it starts: if you send a message while Aiden is checking, your message's answer is that round's work and the count stays. Taps take effect at once. If Aiden can't make the change, the bar goes back and says why.
 
 ## How a round works
 
-1. After an answer in the chat ends, Aiden waits a moment and checks the chat is still idle. If you sent something in the meantime, your message goes first and the check happens after it.
+1. After an answer in the chat ends, Aiden waits a moment and checks the chat is still idle. If you sent something in the meantime, your message goes first and the check happens after it; an answer that ends while the check is running starts the check over.
 2. The chat's own model reads the conversation and judges the goal: **done**, **needs you**, **paused** (your latest message asked to stop), **wait** (background jobs are still running), or **continue**. It judges on evidence in the conversation, such as command output and files read, not on claims. This check reuses the chat's cached prompt and is counted as "goal review" in usage.
 3. On **continue**, a new round starts with a "Keep going · round 4 of 50" card in the chat. Rounds are ordinary answers: your approval mode applies exactly as for your own messages, and a goal never raises access. A round cannot set check-backs.
 
@@ -63,7 +63,8 @@ Resume and Keep going both start again from round 1 with a fresh progress count;
 
 ## When a goal pauses on its own
 
-- You pressed Stop, or the last answer failed.
+- You pressed Stop, or the last answer failed. Stop also ends a check that was still judging the answer before it.
+- Something went wrong between rounds, for example the chat's model is no longer set up ("The goal couldn't continue").
 - Aiden restarted. Goals that were working come back paused; press Keep going to continue.
 - 50 rounds ran.
 - Three rounds in a row made no progress: the same reason as the round before, or a round that ran no tools and wrote little. A round that wrote a long answer without tools still counts as progress, so writing goals keep going.
