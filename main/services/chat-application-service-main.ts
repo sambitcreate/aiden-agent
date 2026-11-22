@@ -16,6 +16,7 @@ import { forgetChatContextProfile } from "./context-pressure.js";
 import { spending } from "./spending-main.js";
 import { remoteAttachmentStore } from "./aiden-remote-attachments-main.js";
 import { toolOutputStore } from "./tool-output-store.js";
+import { scheduleStore } from "./schedule-store.js";
 import { chatPullRequestStore } from "./chat-pull-request-service-main.js";
 import { designCanvasStore, designGrants, designModeConsent, recentWrittenPages } from "./design-canvas/main.js";
 import { EARLIER_PAGES_LIMIT, pagesWrittenInChat, placeWrittenPagesOnCanvas } from "./design-canvas/written-pages.js";
@@ -73,6 +74,12 @@ export const chatApplicationService = createChatApplicationService({
   inboxState: { readMarkers: chatReadMarkers, triage: chatTriage },
   attachments: remoteAttachmentStore,
   afterChatRemoved: (workspaceId) => workspaceApplicationService.releaseNoWorkspaceAfterChat(workspaceId),
+  scheduledTasks: {
+    releaseOriginChat: async (chatId) => {
+      const released = await scheduleStore.releaseOriginChat(chatId);
+      for (const taskId of released) ipcMain.broadcast("schedule:updated", { taskId });
+    },
+  },
   toolOutputStore,
   logError: (area, message, error) => logger.error(area, message, error),
 });

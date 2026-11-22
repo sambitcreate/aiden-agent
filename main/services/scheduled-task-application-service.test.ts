@@ -14,6 +14,15 @@ function fixture(mcpServers: McpServer[] = []) {
       list: async () => [...tasks.values()],
       get: async (id) => tasks.get(id),
       runs: async (id) => runs.get(id) ?? [],
+      clearOriginChat: async (id) => {
+        const existing = tasks.get(id);
+        if (!existing?.originChatId) return undefined;
+        clock += 1;
+        const { originChatId: _dropped, ...rest } = existing;
+        const task: ScheduledTask = { ...rest, updatedAt: clock };
+        tasks.set(id, task);
+        return task;
+      },
     },
     service: {
       save: async (input: ScheduledTaskInput, options = {}) => {

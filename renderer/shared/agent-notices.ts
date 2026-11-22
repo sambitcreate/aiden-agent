@@ -5,7 +5,7 @@
 // instead of a user bubble. The message content is the model-facing text and
 // fences any command output or GitHub text as data.
 
-export const AGENT_NOTICE_SOURCES = ["background_job", "pull_request", "check"] as const;
+export const AGENT_NOTICE_SOURCES = ["background_job", "pull_request", "check", "schedule"] as const;
 export type AgentNoticeSource = (typeof AGENT_NOTICE_SOURCES)[number];
 
 /** How the card reads at a glance. */

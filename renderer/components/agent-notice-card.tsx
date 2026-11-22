@@ -4,7 +4,7 @@
 // disclosure shows exactly what the agent was told, output included.
 
 import * as React from "react";
-import { ChevronDown, GitPullRequest, ListChecks, TerminalSquare } from "lucide-react";
+import { CalendarClock, ChevronDown, GitPullRequest, ListChecks, TerminalSquare } from "lucide-react";
 import type { AgentNoticeV1 } from "../shared/agent-notices";
 import { Markdown } from "./markdown";
 import { Button, Text } from "./ui";
@@ -14,12 +14,14 @@ const SOURCE_ICONS = {
   background_job: TerminalSquare,
   pull_request: GitPullRequest,
   check: ListChecks,
+  schedule: CalendarClock,
 } as const;
 
 const SOURCE_LABELS = {
   background_job: "Background job",
   pull_request: "Pull request",
   check: "Done-when check",
+  schedule: "Scheduled task",
 } as const;
 
 export function AgentNoticeCard({ notice, content, imageScope }: { notice: AgentNoticeV1; content: string; imageScope?: string }) {

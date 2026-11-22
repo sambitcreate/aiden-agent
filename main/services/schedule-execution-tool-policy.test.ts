@@ -18,6 +18,8 @@ import * as scheduleNotification from "./schedule-notification.js";
 import { SCHEDULE_TOOL_NAME } from "./schedule-tool.js";
 import * as scheduledChatCreation from "./scheduled-chat-creation.js";
 import * as scheduledGenerationPolicy from "./scheduled-generation-policy.js";
+import * as scheduleChatDelivery from "./schedule-chat-delivery.js";
+import * as scheduledTaskPresentation from "../../renderer/shared/scheduled-task-presentation.js";
 import type { ScheduledTask } from "./types.js";
 
 // Runs the real scheduled LLM execution path and records what it hands the
@@ -123,6 +125,8 @@ async function executionHarness(
     "../../renderer/shared/model-visibility.js": modelVisibility,
     "../../renderer/shared/gemini-usage-scope.js": geminiUsageScope,
     "../../renderer/shared/acp-harness.js": acpHarness,
+    "./schedule-chat-delivery.js": scheduleChatDelivery,
+    "../../renderer/shared/scheduled-task-presentation.js": scheduledTaskPresentation,
   };
   ports["./analytics/analytics-report.js"] = analyticsReport;
   ports["./analytics/analytics-ids.js"] = analyticsIds;
