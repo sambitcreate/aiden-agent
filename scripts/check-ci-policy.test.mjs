@@ -504,7 +504,7 @@ test("Linux required contexts exist for scoped PRs and fail closed", async () =>
 });
 
 const ISSUE_TEMPLATE_DIR = new URL("../.github/ISSUE_TEMPLATE/", import.meta.url);
-const VALID_ISSUE_FORM_TYPES = new Set(["markdown", "textarea", "input", "dropdown", "checkboxes"]);
+const VALID_ISSUE_FORM_TYPES = new Set(["markdown", "textarea", "input", "dropdown", "checkboxes", "upload"]);
 
 function isPlainObject(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value);
