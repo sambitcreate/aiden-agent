@@ -202,19 +202,6 @@ export function createScheduleExecution(store: ScheduleStore = scheduleStore) {
     return chatId;
   }
 
-  async function assertTaskWorkspaceReady(task: ScheduledTask) {
-    const workspace = task.workspaceId
-      ? await configStore.getWorkspace(task.workspaceId)
-      : undefined;
-    if (task.workspaceId && !workspace) throw new Error("The task workspace no longer exists.");
-    if (workspace?.permission === "none") throw new Error("The task workspace has No Access.");
-    if (workspace) {
-      await assertWorkspaceFolderPresent(workspace);
-      await assertManagedWorktreeAdmission(workspace);
-    }
-    return workspace;
-  }
-
   /** Runs the task's script; `output` is what it printed. Holds no chat. */
   async function runTaskScript(task: ScheduledTask, signal: AbortSignal): Promise<TaskRunExecution> {
     if (task.permission !== "full") {
@@ -331,6 +318,49 @@ export function createScheduleExecution(store: ScheduleStore = scheduleStore) {
   type PreparedLlm = Awaited<ReturnType<typeof prepareLlm>>;
   type SurfaceTurn = NonNullable<ReturnType<typeof llmClient.beginChatTurn>>;
 
+  /** A model run in the task's own chat: the prompt is a plain user message, as it always was. */
+  async function executeLlm(
+    task: ScheduledTask,
+    chatId: string,
+    signal: AbortSignal,
+  ): Promise<TaskRunExecution> {
+    const prompt = task.prompt?.trim() ?? "";
+    const prepared = await prepareLlm(task, chatId, prompt);
+    if (signal.aborted) {
+      prepared.background.destroy();
+      throw new Error("Scheduled task was cancelled.");
+    }
+    const { surface } = prepared;
+    const turn = beginSurfaceGeneration(llmClient.beginChatTurn.bind(llmClient), surface);
+    if (!turn) {
+      prepared.background.destroy();
+      throw new Error("The scheduled task's dedicated chat already has a turn in progress.");
+    }
+    try {
+      await chatStore.appendMessage(
+        chatId,
+        { role: "user", content: prompt },
+        { providerId: prepared.providerId, model: prepared.model },
+      );
+    } catch (error) {
+      turn.release();
+      prepared.background.destroy();
+      throw error;
+    } finally {
+      // Generation still owns the authority lease after this append frame,
+      // but no renderer/scheduler payload remains retained by persistence.
+      turn.settleAsyncWork();
+    }
+    return finishLlm(task, prepared, turn, signal, async () => {
+      await llmClient.waitForChatIdle(chatId);
+      await appendSerializedChatMessage(
+        chatId,
+        "Scheduled task was cancelled.",
+        scheduledTurnId(task.id, "cancelled"),
+      );
+    });
+  }
+
   /** Starts the admitted generation and waits for its answer. Releases the turn. */
   async function finishLlm(
     task: ScheduledTask,
@@ -379,46 +409,17 @@ export function createScheduleExecution(store: ScheduleStore = scheduleStore) {
     }
   }
 
-  /** A model run in the task's own chat: the prompt is a plain user message, as it always was. */
-  async function executeLlm(
-    task: ScheduledTask,
-    chatId: string,
-    signal: AbortSignal,
-  ): Promise<TaskRunExecution> {
-    const prompt = task.prompt?.trim() ?? "";
-    const prepared = await prepareLlm(task, chatId, prompt);
-    if (signal.aborted) {
-      prepared.background.destroy();
-      throw new Error("Scheduled task was cancelled.");
+  async function assertTaskWorkspaceReady(task: ScheduledTask) {
+    const workspace = task.workspaceId
+      ? await configStore.getWorkspace(task.workspaceId)
+      : undefined;
+    if (task.workspaceId && !workspace) throw new Error("The task workspace no longer exists.");
+    if (workspace?.permission === "none") throw new Error("The task workspace has No Access.");
+    if (workspace) {
+      await assertWorkspaceFolderPresent(workspace);
+      await assertManagedWorktreeAdmission(workspace);
     }
-    const turn = beginSurfaceGeneration(llmClient.beginChatTurn.bind(llmClient), prepared.surface);
-    if (!turn) {
-      prepared.background.destroy();
-      throw new Error("The scheduled task's dedicated chat already has a turn in progress.");
-    }
-    try {
-      await chatStore.appendMessage(
-        chatId,
-        { role: "user", content: prompt },
-        { providerId: prepared.providerId, model: prepared.model },
-      );
-    } catch (error) {
-      turn.release();
-      prepared.background.destroy();
-      throw error;
-    } finally {
-      // Generation still owns the authority lease after this append frame,
-      // but no renderer/scheduler payload remains retained by persistence.
-      turn.settleAsyncWork();
-    }
-    return finishLlm(task, prepared, turn, signal, async () => {
-      await llmClient.waitForChatIdle(chatId);
-      await appendSerializedChatMessage(
-        chatId,
-        "Scheduled task was cancelled.",
-        scheduledTurnId(task.id, "cancelled"),
-      );
-    });
+    return workspace;
   }
 
   /**
