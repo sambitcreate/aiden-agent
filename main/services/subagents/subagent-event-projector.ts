@@ -392,15 +392,22 @@ export class SubagentEventProjector {
       : undefined;
     const projectedWarning = warningProjection?.text ?? "";
     const warning = projectedWarning || undefined;
-    const sourceText = result.summary || result.warning || "[No textual result.]";
-    const terminalProjection = boundedProjection(
-      sourceText,
-      MAX_SUBAGENT_TERMINAL_MARKDOWN_CHARS,
-      "\n\n… [report truncated]",
-    );
-    const terminalMarkdown = terminalProjection.text || "[No textual result.]";
+    // A helper that stopped, failed or timed out without a report has no
+    // Result: its warning is shown once, in the warning notice, rather than
+    // being copied into the Result body as well.
+    const hasReport = Boolean(result.summary) || result.status === "completed";
+    const terminalProjection = hasReport
+      ? boundedProjection(
+          result.summary || "[No textual result.]",
+          MAX_SUBAGENT_TERMINAL_MARKDOWN_CHARS,
+          "\n\n… [report truncated]",
+        )
+      : undefined;
+    const terminalMarkdown = terminalProjection
+      ? terminalProjection.text || "[No textual result.]"
+      : undefined;
     const latestProjection = boundedProjection(
-      result.summary || result.warning || "",
+      result.summary || "",
       MAX_SUBAGENT_LATEST_TEXT_CHARS,
     );
     const latestText = latestProjection.text || undefined;
@@ -411,10 +418,10 @@ export class SubagentEventProjector {
     const error = errorProjection.text || "The child could not complete this task.";
     const projectionNotices = mergeProjectionNotices(
       current.projectionNotices,
-      (result.summaryTruncated === true ||
-        terminalProjection.truncated) &&
+      terminalProjection !== undefined &&
+        (result.summaryTruncated === true || terminalProjection.truncated) &&
         "report_truncated",
-      (terminalProjection.displayFiltered ||
+      (terminalProjection?.displayFiltered === true ||
         warningProjection?.displayFiltered === true ||
         (result.status === "failed" && errorProjection.displayFiltered)) &&
         "display_filtered",
@@ -427,7 +434,7 @@ export class SubagentEventProjector {
         activity: undefined,
         finishedAt: now,
         ...(latestText ? { latestText } : {}),
-        terminalMarkdown,
+        ...(terminalMarkdown ? { terminalMarkdown } : {}),
         ...(projectionNotices ? { projectionNotices } : {}),
         ...(result.status === "failed"
           ? {

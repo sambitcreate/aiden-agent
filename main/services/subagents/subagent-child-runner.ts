@@ -53,9 +53,10 @@ import {
 } from "./request-capabilities-v2.js";
 import type { SubagentOutboundToolBindingV2 } from "./outbound-approval-v2.js";
 import type { SubagentOutboundApprovalGateV2 } from "./outbound-approval-v2.js";
-import type {
-  SubagentWorkspaceWriteApprovalGateV2,
-  SubagentWorkspaceWriteToolBindingV2,
+import {
+  subagentWorkspaceWriteTargetPath,
+  type SubagentWorkspaceWriteApprovalGateV2,
+  type SubagentWorkspaceWriteToolBindingV2,
 } from "./subagent-workspace-write.js";
 import type {
   SubagentMcpMutationBindingV2,
@@ -63,7 +64,7 @@ import type {
 } from "./subagent-mcp-mutation.js";
 import type { SubagentShellGateV2, SubagentShellToolBindingV2 } from "./subagent-shell.js";
 
-import { DEFAULT_SUBAGENT_CHILD_DEADLINE_MS, DEFAULT_SUBAGENT_CANCELLATION_GRACE_MS, MAX_SUBAGENT_CHILD_TURNS, MAX_SUBAGENT_CHILD_TOOL_CALLS, MAX_SUBAGENT_CHILD_EVENTS, MAX_SUBAGENT_CHILD_OUTPUT_CHARS, MAX_SUBAGENT_CHILD_PROTOCOL_CHARS } from "./subagent-child-policy.js";
+import { SUBAGENT_TIME_LIMIT_WARNING, type SubagentTimeLimit, DEFAULT_SUBAGENT_CHILD_DEADLINE_MS, DEFAULT_SUBAGENT_CANCELLATION_GRACE_MS, MAX_SUBAGENT_CHILD_TURNS, MAX_SUBAGENT_CHILD_TOOL_CALLS, MAX_SUBAGENT_CHILD_EVENTS, MAX_SUBAGENT_CHILD_OUTPUT_CHARS, MAX_SUBAGENT_CHILD_PROTOCOL_CHARS } from "./subagent-child-policy.js";
 export * from "./subagent-child-policy.js";
 const SAFE_CHILD_PROVIDER_FAILURE = "The child model could not complete this task.";
 const CHILD_TURN_LIMIT_WARNING = "The child reached its turn limit.";
@@ -144,6 +145,12 @@ function sanitizePartialFindingsForParent(reports: readonly string[]): string {
 
 export interface SubagentChildRunnerPolicy {
   deadlineMs?: number;
+  /**
+   * Which named limit the deadline enforces. Only a Bot reply's 60 minutes is
+   * a real limit, so only "bot" saves a last turn for a report before it.
+   * The chat limit is a 24-hour safety net. Defaults to "chat".
+   */
+  timeLimit?: SubagentTimeLimit;
   cancellationGraceMs?: number;
   maxTurns?: number;
   maxToolCalls?: number;
@@ -335,16 +342,43 @@ function throwIfParentAborted(signal: AbortSignal | undefined): void {
   throw signal.reason instanceof Error ? signal.reason : new Error("Parent generation cancelled.");
 }
 
-function timedOutResult(request: SubagentTaskRequest): SubagentTaskResult {
+/** Files a stopped helper lists for the parent, after which "and N more" is shown. */
+const MAX_PARTIAL_CHANGED_FILES_LISTED = 20;
+/** Distinct changed paths tracked per helper; later paths only count. */
+const MAX_PARTIAL_CHANGED_FILES_TRACKED = 1_000;
+const PARTIAL_WORK_NOTE = "These are incomplete, unverified partial findings.";
+const RAN_COMMANDS_NOTE = "It also ran commands, which may have changed other files.";
+
+/**
+ * The parent-facing notes about a stopped helper's side effects: the files it
+ * changed through approved writes, and whether it ran shell commands.
+ */
+export function subagentPartialWorkNotes(
+  changedFiles: readonly string[],
+  untrackedChangedFiles: number,
+  ranCommands: boolean,
+): string[] {
+  const notes: string[] = [];
+  if (changedFiles.length > 0) {
+    const listed = changedFiles.slice(0, MAX_PARTIAL_CHANGED_FILES_LISTED);
+    const more = changedFiles.length - listed.length + untrackedChangedFiles;
+    notes.push(`Files it changed: ${listed.join(", ")}${more > 0 ? ` and ${more} more` : ""}.`);
+  }
+  if (ranCommands) notes.push(RAN_COMMANDS_NOTE);
+  return notes;
+}
+
+function timedOutResult(request: SubagentTaskRequest, timeLimit: SubagentTimeLimit): SubagentTaskResult {
   return {
     role: request.role,
     label: request.label,
     status: "timed_out",
     // A deadline can split a credential or path at any character. Never
     // promote accumulated stream fragments into renderer-visible terminal
-    // state when the child did not complete.
+    // state when the child did not complete. Settled partial work is added
+    // separately, through the parent-facing partial-findings filter.
     summary: "",
-    warning: "The child reached its deadline.",
+    warning: SUBAGENT_TIME_LIMIT_WARNING[timeLimit],
   };
 }
 
@@ -389,6 +423,7 @@ export async function runSubagentChild(input: RunSubagentChildInput): Promise<Su
   const startedAt = now();
   const policy = {
     deadlineMs: input.policy?.deadlineMs ?? DEFAULT_SUBAGENT_CHILD_DEADLINE_MS,
+    timeLimit: input.policy?.timeLimit ?? "chat",
     cancellationGraceMs:
       input.policy?.cancellationGraceMs ?? DEFAULT_SUBAGENT_CANCELLATION_GRACE_MS,
     maxTurns: input.policy?.maxTurns ?? MAX_SUBAGENT_CHILD_TURNS,
@@ -400,6 +435,7 @@ export async function runSubagentChild(input: RunSubagentChildInput): Promise<Su
   if (
     !Number.isFinite(policy.deadlineMs) ||
     policy.deadlineMs <= 0 ||
+    (policy.timeLimit !== "chat" && policy.timeLimit !== "bot") ||
     !Number.isFinite(policy.cancellationGraceMs) ||
     policy.cancellationGraceMs < 0 ||
     policy.cancellationGraceMs > 30_000 ||
@@ -497,7 +533,7 @@ export async function runSubagentChild(input: RunSubagentChildInput): Promise<Su
       ) {
         reportCleanupFailure(input);
       }
-      return timedOutResult(input.request);
+      return timedOutResult(input.request, policy.timeLimit);
     }
     if (constructionOutcome.kind === "failed") throw constructionOutcome.error;
 
@@ -564,17 +600,29 @@ export async function runSubagentChild(input: RunSubagentChildInput): Promise<Su
     ) {
       throw new Error("Subagent approval tool bindings overlap.");
     }
+    // Side effects a stopped helper reports to its parent with its partial work.
+    const changedFiles = new Set<string>();
+    let untrackedChangedFiles = 0;
+    let ranCommands = false;
     const childTools = assembly.tools.map((tool) => {
       if (workspaceWriteToolNames.has(tool.name) && workspaceWriteApproval) {
         return {
           ...tool,
-          execute: (toolCallId: string, args: unknown, signal?: AbortSignal) =>
-            workspaceWriteApproval!.execute({
+          execute: async (toolCallId: string, args: unknown, signal?: AbortSignal) => {
+            const result = await workspaceWriteApproval!.execute({
               toolCallId,
               toolName: tool.name,
               arguments: args,
               signal,
-            }),
+            });
+            // The gate resolves only once the change is committed.
+            const path = subagentWorkspaceWriteTargetPath(tool.name, args);
+            if (path && !changedFiles.has(path)) {
+              if (changedFiles.size < MAX_PARTIAL_CHANGED_FILES_TRACKED) changedFiles.add(path);
+              else untrackedChangedFiles += 1;
+            }
+            return result;
+          },
         };
       }
       if (mutationToolNames.has(tool.name) && mcpMutationApproval) {
@@ -592,13 +640,15 @@ export async function runSubagentChild(input: RunSubagentChildInput): Promise<Su
       if (shellToolNames.has(tool.name) && shellApproval) {
         return {
           ...tool,
-          execute: (toolCallId: string, args: unknown, signal?: AbortSignal) =>
-            shellApproval!.execute({
+          execute: (toolCallId: string, args: unknown, signal?: AbortSignal) => {
+            ranCommands = true;
+            return shellApproval!.execute({
               toolCallId,
               toolName: "run_command",
               arguments: args,
               signal,
-            }),
+            });
+          },
         };
       }
       if (!outboundToolNames.has(tool.name) || !outboundApproval) return tool;
@@ -703,8 +753,11 @@ export async function runSubagentChild(input: RunSubagentChildInput): Promise<Su
         // Reserve one of the already-authorized turns, with at most 30 seconds
         // (10% for shorter runs) of the existing wall clock. An in-flight tool
         // is never interrupted to manufacture a report or given extra time.
+        // Only a Bot reply's limit is a real deadline worth reporting against;
+        // the chat limit is a 24-hour safety net.
         if (turns >= policy.maxTurns - 1 || toolCalls >= policy.maxToolCalls ||
-          now() >= deadlineAt - Math.min(30_000, policy.deadlineMs * 0.1)) {
+          (policy.timeLimit === "bot" &&
+            now() >= deadlineAt - Math.min(30_000, policy.deadlineMs * 0.1))) {
           reportingWarning ??= turns >= policy.maxTurns - 1
             ? CHILD_TURN_LIMIT_WARNING
             : toolCalls >= policy.maxToolCalls
@@ -742,7 +795,7 @@ export async function runSubagentChild(input: RunSubagentChildInput): Promise<Su
     });
     if (deadlineElapsed()) {
       child.cancel(new Error("Subagent child deadline exceeded."));
-      return timedOutResult(input.request);
+      return timedOutResult(input.request, policy.timeLimit);
     }
     if (input.signal?.aborted) {
       child.cancel(
@@ -759,6 +812,30 @@ export async function runSubagentChild(input: RunSubagentChildInput): Promise<Su
     // Keep the complete, output-budget-bounded assistant history so sanitizing
     // the final partial never loses an earlier credential-key prefix.
     const partialReports: string[] = [];
+    // Settled partial work for the parent: the helper's settled messages plus
+    // the files it changed, through the parent-facing partial-findings filter.
+    const partialWork = (): Pick<SubagentTaskResult, "summary" | "summaryTruncated"> | undefined => {
+      const notes = subagentPartialWorkNotes([...changedFiles], untrackedChangedFiles, ranCommands);
+      if (partialReports.length === 0 && notes.length === 0) return undefined;
+      const reports = notes.length > 0 ? [...partialReports, notes.join("\n")] : partialReports;
+      return projectSubagentCompletedSummary(sanitizePartialFindingsForParent(reports));
+    };
+    const withPartial = (base: SubagentTaskResult): SubagentTaskResult => {
+      const partial = partialWork();
+      if (!partial) return base;
+      return {
+        ...base,
+        ...partial,
+        warning: `${base.warning ?? ""} ${PARTIAL_WORK_NOTE}`.trim(),
+      };
+    };
+    const interruptedResult = (): SubagentTaskResult => ({
+      role: input.request.role,
+      label: input.request.label,
+      status: "interrupted",
+      summary: "",
+      warning: "The child was interrupted before completion.",
+    });
     let observedOutputChars = 0;
     let observedProtocolChars = 0;
     let currentTurnTextDeltaChars = 0;
@@ -907,6 +984,9 @@ export async function runSubagentChild(input: RunSubagentChildInput): Promise<Su
         child.markCleanupPending?.();
         reportCleanupFailure(input);
       }
+      // A stopped helper hands its settled partial work to the supervisor,
+      // which keeps it under the stop or time-limit status it decides.
+      if (partialWork()) return withPartial(interruptedResult());
       throwIfParentAborted(input.signal);
       throw new Error("Parent generation cancelled.");
     }
@@ -916,71 +996,43 @@ export async function runSubagentChild(input: RunSubagentChildInput): Promise<Su
         child.markCleanupPending?.();
         reportCleanupFailure(input);
       }
-      return timedOutResult(input.request);
+      return withPartial(timedOutResult(input.request, policy.timeLimit));
     }
+    if (input.signal?.aborted && partialWork()) return withPartial(interruptedResult());
     throwIfParentAborted(input.signal);
-    if (limitWarning) {
-      if (limitWarning !== CHILD_TURN_LIMIT_WARNING || partialReports.length === 0) {
-        return safeFailure(input.request, limitWarning);
-      }
-      // Keep source paths useful to the parent; the renderer projector applies its
-      // stricter snapshot/path policy separately.
-      const modelSafePartial = sanitizePartialFindingsForParent(partialReports);
-      return {
-        role: input.request.role,
-        label: input.request.label,
-        status: "failed",
-        ...projectSubagentCompletedSummary(modelSafePartial),
-        warning: "The child reached its turn limit. These are incomplete, unverified partial findings.",
-      };
-    }
-    if (outcome.kind === "failed") {
-      return safeFailure(input.request);
-    }
+    // Every unfinished ending hands over the settled partial work. Source paths
+    // stay useful to the parent; the renderer projector applies its stricter
+    // snapshot/path policy separately.
+    if (limitWarning) return withPartial(safeFailure(input.request, limitWarning));
+    if (outcome.kind === "failed") return withPartial(safeFailure(input.request));
     if (outcome.runtimeOutcome.kind === "host_failed") {
-      return safeFailure(input.request);
+      return withPartial(safeFailure(input.request));
     }
     if (outcome.runtimeOutcome.kind === "provider_failed") {
-      return safeFailure(
+      return withPartial(safeFailure(
         input.request,
         outcome.runtimeOutcome.reason === "output-limit"
           ? "The child reached its output limit."
           : SAFE_CHILD_PROVIDER_FAILURE,
-      );
+      ));
     }
-    if (outcome.runtimeOutcome.kind === "app_cancelled") {
-      return {
-        role: input.request.role,
-        label: input.request.label,
-        status: "interrupted",
-        summary: "",
-        warning: "The child was interrupted before completion.",
-      };
-    }
-    if (terminalError) return safeFailure(input.request, terminalError);
-    if (terminalAborted) {
-      return {
-        role: input.request.role,
-        label: input.request.label,
-        status: "interrupted",
-        summary: "",
-        warning: "The child was interrupted before completion.",
-      };
-    }
+    if (outcome.runtimeOutcome.kind === "app_cancelled") return withPartial(interruptedResult());
+    if (terminalError) return withPartial(safeFailure(input.request, terminalError));
+    if (terminalAborted) return withPartial(interruptedResult());
     if (reportingWarning) {
       if (!observedTerminalAssistant || !terminalOutput.trim()) {
-        return safeFailure(input.request, `${reportingWarning} The child did not provide a final text report.`);
+        return withPartial(safeFailure(
+          input.request,
+          `${reportingWarning} The child did not provide a final text report.`,
+        ));
       }
-      return {
-        role: input.request.role,
-        label: input.request.label,
-        status: "failed",
-        ...projectSubagentCompletedSummary(sanitizePartialFindingsForParent(partialReports)),
-        warning: `${reportingWarning} These are incomplete, unverified partial findings.`,
-      };
+      return withPartial(safeFailure(input.request, reportingWarning));
     }
     if (!observedTerminalAssistant || !terminalOutput.trim()) {
-      return safeFailure(input.request, "The child completed without a textual assistant result.");
+      return withPartial(safeFailure(
+        input.request,
+        "The child completed without a textual assistant result.",
+      ));
     }
     return {
       role: input.request.role,

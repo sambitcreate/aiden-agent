@@ -52,6 +52,7 @@ import {
 } from "./subagent-live-announcer.js";
 import { groupSubagentRuns, SubagentRoster } from "./subagent-roster.js";
 import { SubagentDetail, subagentProjectionNotices } from "./subagent-detail.js";
+import { SubagentEventProjector } from "../../main/services/subagents/subagent-event-projector.js";
 import { CopyButton } from "./copy-button.js";
 import { SubagentsPanel } from "./subagents-panel.js";
 import { SubagentWorkspaceWriteApproval } from "./subagent-workspace-write-approval.js";
@@ -1395,6 +1396,73 @@ test("presentation-only saving and stale states stay visible without rewriting p
   assert.match(delayedDetail, /data-subagent-presentation="save_delayed"/u);
   assert.match(delayedDetail, /Outcome not yet saved/u);
   assert.match(delayedDetail, /Finished\. This outcome has not appeared/u);
+});
+
+test("a stuck helper offers Stop inside its No recent update notice, once", () => {
+  const stuck = v2Run({ runId: "stuck", label: "Slow scout", updatedAt: 1_000 });
+  const stale = { state: "stale_active", label: "Still working; last update 45s ago" } as const;
+  const detail = renderToStaticMarkup(
+    <SubagentDetail run={stuck} presentation={stale} onStop={async () => undefined} />,
+  );
+  const stopButtons = detail.match(/aria-label="Stop subtree Slow scout"/gu) ?? [];
+  assert.equal(stopButtons.length, 1);
+  const notice = detail.indexOf("No recent update");
+  const stop = detail.indexOf('aria-label="Stop subtree Slow scout"');
+  const task = detail.indexOf("Task preview");
+  assert.ok(notice >= 0 && notice < stop && stop < task);
+
+  // A helper that is updating normally keeps its Stop in the ordinary controls row.
+  const fresh = renderToStaticMarkup(
+    <SubagentDetail
+      run={stuck}
+      presentation={{ state: "active", label: "Working" }}
+      onStop={async () => undefined}
+    />,
+  );
+  assert.equal((fresh.match(/aria-label="Stop subtree Slow scout"/gu) ?? []).length, 1);
+  assert.doesNotMatch(fresh, /No recent update/u);
+});
+
+test("a stopped helper without a report shows its warning once, with no Result or Latest activity", () => {
+  let now = 1_000;
+  const projector = new SubagentEventProjector({
+    generationId: "generation-1",
+    chatId: "chat-1",
+    workspaceId: "workspace-1",
+    modelId: "test-model",
+    now: () => now,
+  });
+  projector.begin(
+    { runId: "stopped", groupId: "generation-1:group-1", childId: "child-stopped" },
+    { role: "scout", label: "Bot scout", task: "Survey the repository." },
+  );
+  now += 1_000;
+  projector.finish("stopped", {
+    role: "scout",
+    label: "Bot scout",
+    status: "timed_out",
+    summary: "",
+    warning: "Stopped at the 60-minute limit for Bot replies.",
+  });
+  const snapshot = projector.snapshot()[0]!;
+
+  const detail = renderToStaticMarkup(<SubagentDetail run={snapshot} />);
+  assert.equal(
+    (detail.match(/Stopped at the 60-minute limit for Bot replies\./gu) ?? []).length,
+    1,
+  );
+  assert.doesNotMatch(detail, />Result</u);
+  assert.doesNotMatch(detail, />Latest activity</u);
+
+  // A stopped helper that did report keeps that report as its Result.
+  const partial = renderToStaticMarkup(
+    <SubagentDetail
+      run={{ ...snapshot, terminalMarkdown: "Surveyed the first two packages." }}
+    />,
+  );
+  assert.match(partial, />Result</u);
+  assert.match(partial, /Surveyed the first two packages\./u);
+  assert.doesNotMatch(partial, />Latest activity</u);
 });
 
 test("terminal-only handoff presentation ages from saving to delayed on the panel clock", () => {

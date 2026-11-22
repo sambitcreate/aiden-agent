@@ -221,6 +221,22 @@ export const SubagentDetail = React.forwardRef<HTMLHeadingElement, SubagentDetai
       followGrowthRef.current = false;
     };
 
+    const staleActive = presentation?.state === "stale_active";
+    const stopButton = canStop ? (
+      <Button
+        variant="muted"
+        size="small"
+        disabled={stopPending}
+        aria-label={stopPending ? `Stopping ${run.label}` : `${stopLabel} ${run.label}`}
+        aria-busy={stopPending ? true : undefined}
+        onClick={() => void invokeControl()}
+        className="motion-reduce:transition-none"
+      >
+        <Square aria-hidden="true" className="size-3" />
+        {stopPending ? "Stopping…" : stopLabel}
+      </Button>
+    ) : null;
+
     return (
       <article className={cn("relative flex h-full min-h-0 flex-col", className)}>
         <div
@@ -317,6 +333,11 @@ export const SubagentDetail = React.forwardRef<HTMLHeadingElement, SubagentDetai
                 <Text as="p" variant="small" color="secondary">
                   {presentation.label}. The child is still active; no newer activity has arrived.
                 </Text>
+                {stopButton ? (
+                  <div className="mt-3 flex min-w-0" data-subagent-controls="true">
+                    {stopButton}
+                  </div>
+                ) : null}
               </Callout>
             ) : null}
 
@@ -343,23 +364,12 @@ export const SubagentDetail = React.forwardRef<HTMLHeadingElement, SubagentDetai
               </Callout>
             ) : null}
 
-            {canStop ? (
+            {stopButton && !staleActive ? (
               <div
                 className="flex min-w-0 flex-wrap items-center gap-2"
                 data-subagent-controls="true"
               >
-                <Button
-                  variant="muted"
-                  size="small"
-                  disabled={stopPending}
-                  aria-label={stopPending ? `Stopping ${run.label}` : `${stopLabel} ${run.label}`}
-                  aria-busy={stopPending ? true : undefined}
-                  onClick={() => void invokeControl()}
-                  className="motion-reduce:transition-none"
-                >
-                  <Square aria-hidden="true" className="size-3" />
-                  {stopPending ? "Stopping…" : stopLabel}
-                </Button>
+                {stopButton}
               </div>
             ) : null}
 
@@ -407,19 +417,21 @@ export const SubagentDetail = React.forwardRef<HTMLHeadingElement, SubagentDetai
               </Callout>
             ) : null}
 
-            <section aria-labelledby={`subagent-activity-${run.runId}`}>
-              <Text
-                as="h3"
-                id={`subagent-activity-${run.runId}`}
-                variant="small-strong"
-                color="tertiary"
-              >
-                {pendingQuestion ? "Waiting on" : "Latest activity"}
-              </Text>
-              <Text as="p" variant="regular" color="secondary" className="mt-1 break-words">
-                {run.activity ?? state}
-              </Text>
-            </section>
+            {active || pendingQuestion ? (
+              <section aria-labelledby={`subagent-activity-${run.runId}`}>
+                <Text
+                  as="h3"
+                  id={`subagent-activity-${run.runId}`}
+                  variant="small-strong"
+                  color="tertiary"
+                >
+                  {pendingQuestion ? "Waiting on" : "Latest activity"}
+                </Text>
+                <Text as="p" variant="regular" color="secondary" className="mt-1 break-words">
+                  {run.activity ?? state}
+                </Text>
+              </section>
+            ) : null}
 
             {effectActivity.length > 0 ? (
               <section

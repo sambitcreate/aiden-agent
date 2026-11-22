@@ -1830,6 +1830,9 @@ async function prepareGeneration(
             : undefined,
           modelOptions: subagentModelOptions,
           healthMetrics: subagentHealthMetrics,
+          // One supervisor per reply: a Bot reply's helpers get 60 minutes from
+          // the first launch; a chat's helpers have only the 24-hour safety net.
+          policy: { timeLimit: botContext ? "bot" : "chat" },
           projector: subagentProjector,
           // SubagentStop for the chats whose own turns run hooks.
           ...(subagentRunsChatHooks

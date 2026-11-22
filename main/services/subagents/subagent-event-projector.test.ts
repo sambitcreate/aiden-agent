@@ -453,8 +453,41 @@ test("multiline provider failures produce valid single-line warnings and errors"
   assert.doesNotMatch(snapshot.error ?? "", /[\r\n]/u);
   assert.doesNotMatch(snapshot.warnings[0] ?? "", /[\r\n]/u);
   assert.match(snapshot.error ?? "", /\[REDACTED/u);
-  assert.match(snapshot.terminalMarkdown ?? "", /\n/u);
-  assert.match(snapshot.terminalMarkdown ?? "", /\[REDACTED/u);
+  assert.match(snapshot.warnings[0] ?? "", /\[REDACTED/u);
+  // With no report, the failure is not copied into a Result as well.
+  assert.equal(snapshot.terminalMarkdown, undefined);
+  assert.equal(snapshot.latestText, undefined);
+});
+
+test("a stopped helper keeps its partial report as the Result and its warning separate", () => {
+  let now = 10;
+  const projector = new SubagentEventProjector({
+    generationId: "generation-partial",
+    chatId: "chat-partial",
+    workspaceId: "workspace-partial",
+    modelId: "model-partial",
+    now: () => now,
+  });
+  projector.begin(
+    { runId: "run-partial", groupId: "generation-partial:group-1", childId: "child-partial" },
+    { role: "reviewer", label: "Cookbook", task: "Write the cookbook." },
+  );
+  now += 1;
+  projector.finish("run-partial", {
+    role: "reviewer",
+    label: "Cookbook",
+    status: "interrupted",
+    summary: "Added the soup section.\n\nFiles it changed: cookbook.html.",
+    warning: "The child was interrupted before completion. These are incomplete, unverified partial findings.",
+  });
+
+  const snapshot = projector.snapshot()[0]!;
+  assert.ok(parseSubagentRunSnapshotV1(snapshot));
+  assert.equal(snapshot.state, "interrupted");
+  assert.match(snapshot.terminalMarkdown ?? "", /Added the soup section\./u);
+  assert.match(snapshot.terminalMarkdown ?? "", /Files it changed: cookbook\.html\./u);
+  assert.doesNotMatch(snapshot.terminalMarkdown ?? "", /interrupted before completion/u);
+  assert.match(snapshot.warnings[0] ?? "", /incomplete, unverified/u);
 });
 
 test("long terminal summaries remain renderer-safe after both display cuts", () => {
@@ -1989,7 +2022,7 @@ test("assistant message reference is bounded, terminal-only, and strictly parsed
     label: "Plan",
     status: "timed_out",
     summary: "",
-    warning: "The child reached its deadline.",
+    warning: "Stopped at the 24-hour safety limit for helpers.",
   });
   const reference = subagentMessageReference("generation-3", projector.snapshot());
   assert.deepEqual(reference, {

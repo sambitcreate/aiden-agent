@@ -21,8 +21,10 @@ import {
 } from "./contracts.js";
 import {
   DEFAULT_SUBAGENT_CANCELLATION_GRACE_MS,
-  DEFAULT_SUBAGENT_CHILD_DEADLINE_MS,
   MAX_SUBAGENT_CHILD_TURNS,
+  SUBAGENT_TIME_LIMIT_MS,
+  SUBAGENT_TIME_LIMIT_WARNING,
+  type SubagentTimeLimit,
 } from "./subagent-child-policy.js";
 import type { RunSubagentChildInput } from "./subagent-child-runner.js";
 import type { SurfaceHooks } from "../agent-surface-hooks.js";
@@ -70,12 +72,52 @@ import type {
   SubagentShellToolBindingV2,
 } from "./subagent-shell.js";
 
-export const DEFAULT_SUBAGENT_TREE_DEADLINE_MS = 10 * 60_000;
+/** The one tool result a Bot reply gets once its helpers' 60 minutes are spent. */
+export const BOT_SUBAGENT_LIMIT_REACHED_RESULT =
+  "Helpers can't start again in this reply because the 60-minute limit for Bot replies was reached. Finish the work yourself or tell the person.";
+/** Appended to a stopped, failed or timed-out helper's warning when its partial work is handed over. */
+export const SUBAGENT_PARTIAL_WORK_NOTE = "These are incomplete, unverified partial findings.";
 const MAX_SUBAGENT_IDENTIFIER_ALLOCATION_ATTEMPTS = 128;
 const MAX_SUBAGENT_V2_TREE_TURNS = 512;
 const MAX_SUBAGENT_V2_TREE_NETWORK_OPERATIONS = 512;
 
+/**
+ * One reply's helper clock. It starts at the reply's first helper launch, not
+ * when the parent starts answering, and once it expires every later launch in
+ * the reply is refused. A host that builds a supervisor per tool call (Bots)
+ * shares one clock across the reply's calls.
+ */
+export class SubagentReplyClock {
+  private started?: number;
+  private elapsed = false;
+
+  /** Starts the clock at the first call and returns the reply's start time. */
+  start(now: number): number {
+    this.started ??= now;
+    return this.started;
+  }
+
+  get startedAt(): number | undefined {
+    return this.started;
+  }
+
+  get expired(): boolean {
+    return this.elapsed;
+  }
+
+  expire(): void {
+    this.elapsed = true;
+  }
+}
+
 export interface SubagentSupervisorPolicy {
+  /**
+   * The named limit for this reply's helpers. "chat" is a 24-hour safety net;
+   * "bot" is the real 60-minute limit for a Bot reply. Defaults to "chat".
+   */
+  timeLimit?: SubagentTimeLimit;
+  /** Shared reply clock, for hosts that build a supervisor per tool call. */
+  replyClock?: SubagentReplyClock;
   childDeadlineMs?: number;
   treeDeadlineMs?: number;
   cancellationGraceMs?: number;
@@ -250,13 +292,37 @@ function safeFailedResult(request: SubagentTaskRequest): SubagentTaskResult {
   };
 }
 
-function safeTimedOutResult(request: SubagentTaskRequest): SubagentTaskResult {
+function safeTimedOutResult(
+  request: SubagentTaskRequest,
+  timeLimit: SubagentTimeLimit,
+): SubagentTaskResult {
   return {
     role: request.role,
     label: request.label,
     status: "timed_out",
     summary: "",
-    warning: "The child tree reached its deadline.",
+    warning: SUBAGENT_TIME_LIMIT_WARNING[timeLimit],
+  };
+}
+
+/**
+ * Keeps a stopped, failed or timed-out helper's settled partial work, already
+ * filtered by the child runner for the parent, under the supervisor's terminal
+ * status, and marks it incomplete and unverified.
+ */
+function withPartialWork(
+  base: SubagentTaskResult,
+  childResult: SubagentTaskResult | undefined,
+): SubagentTaskResult {
+  if (!childResult?.summary || childResult === base) return base;
+  const warning = base.warning ?? "";
+  return {
+    ...base,
+    summary: childResult.summary,
+    ...(childResult.summaryTruncated ? { summaryTruncated: true } : {}),
+    warning: warning.endsWith(SUBAGENT_PARTIAL_WORK_NOTE)
+      ? warning
+      : `${warning} ${SUBAGENT_PARTIAL_WORK_NOTE}`.trim(),
   };
 }
 
@@ -392,9 +458,9 @@ export class SubagentSupervisor {
   private v2NetworkOperationAllowance = 0;
   private v2NetworkOperationsUsed = 0;
   private calls = 0;
-  private treeExpired = false;
   private treeBudgetExhausted = false;
-  private readonly startedAt: number;
+  private readonly clock: SubagentReplyClock;
+  private readonly timeLimit: SubagentTimeLimit;
   private readonly now: () => number;
   private readonly childDeadlineMs: number;
   private readonly treeDeadlineMs: number;
@@ -416,11 +482,12 @@ export class SubagentSupervisor {
     this.input = { ...input, compactionModelOverrides: input.compactionModelOverrides
       ? parseCompactionModelOverrides(input.compactionModelOverrides) : undefined };
     this.now = input.now ?? (() => performance.now());
-    this.startedAt = this.now();
+    this.timeLimit = input.policy?.timeLimit ?? "chat";
+    this.clock = input.policy?.replyClock ?? new SubagentReplyClock();
     this.childDeadlineMs =
-      input.policy?.childDeadlineMs ?? DEFAULT_SUBAGENT_CHILD_DEADLINE_MS;
+      input.policy?.childDeadlineMs ?? SUBAGENT_TIME_LIMIT_MS[this.timeLimit];
     this.treeDeadlineMs =
-      input.policy?.treeDeadlineMs ?? DEFAULT_SUBAGENT_TREE_DEADLINE_MS;
+      input.policy?.treeDeadlineMs ?? SUBAGENT_TIME_LIMIT_MS[this.timeLimit];
     this.cancellationGraceMs =
       input.policy?.cancellationGraceMs ??
       DEFAULT_SUBAGENT_CANCELLATION_GRACE_MS;
@@ -430,6 +497,7 @@ export class SubagentSupervisor {
     if (!input.runChild) throw new Error("A subagent child runner must be injected.");
     this.runChild = input.runChild;
     if (
+      (this.timeLimit !== "chat" && this.timeLimit !== "bot") ||
       !Number.isFinite(this.childDeadlineMs) ||
       this.childDeadlineMs <= 0 ||
       !Number.isFinite(this.treeDeadlineMs) ||
@@ -809,6 +877,7 @@ export class SubagentSupervisor {
                   signal: signals[index],
                   policy: {
                     deadlineMs: dispatchDeadlineMs,
+                    timeLimit: this.timeLimit,
                     cancellationGraceMs: this.cancellationGraceMs,
                     maxTurns: Math.min(task.maxTurns ?? MAX_SUBAGENT_CHILD_TURNS, authority.budgets.maxTurns),
                   },
@@ -1051,7 +1120,10 @@ export class SubagentSupervisor {
       const reason = new SubagentUserGuidanceStop();
       return formatResults(request.tasks.map((task) => safeInterruptedResult(task, reason)));
     }
-    if (this.treeExpired) {
+    if (this.clock.expired) {
+      // A Bot reply's limit is final for the reply. One plain answer stops a
+      // model from retrying a refused launch in a loop, and starts nothing.
+      if (this.timeLimit === "bot") return BOT_SUBAGENT_LIMIT_REACHED_RESULT;
       throw new Error("Subagent tree deadline elapsed.");
     }
     if (this.treeBudgetExhausted) {
@@ -1078,19 +1150,24 @@ export class SubagentSupervisor {
     // fractional. The V2 authority contract persists its deadline budget and
     // correctly accepts only safe integers; normalize at this host-owned
     // boundary so an otherwise valid launch cannot fail before admission.
+    // The reply's clock starts at its first helper launch.
+    const replyStartedAt = this.clock.start(this.now());
     const remainingTreeMs = Math.floor(
-      this.treeDeadlineMs - (this.now() - this.startedAt),
+      this.treeDeadlineMs - (this.now() - replyStartedAt),
     );
     if (remainingTreeMs <= 0) {
+      this.clock.expire();
+      if (this.timeLimit === "bot") return BOT_SUBAGENT_LIMIT_REACHED_RESULT;
       // V2 must never project an unprepared run. Once an authority/projector
       // lifecycle is active, expiry is a pre-admission error with no run.
-      this.treeExpired = true;
       if (this.input.prepareRun || this.input.projector) {
         throw new Error("Subagent tree deadline elapsed before run admission.");
       }
       // Preserve the legacy deterministic timeout result when no run lifecycle
       // exists, while sealing the tree against repeated unbounded calls.
-      const results = request.tasks.map(safeTimedOutResult);
+      const results = request.tasks.map((task) =>
+        safeTimedOutResult(task, this.timeLimit),
+      );
       results.forEach((result, index) =>
         this.finishRun(identities[index]!.runId, result),
       );
@@ -1181,7 +1258,7 @@ export class SubagentSupervisor {
       );
     };
     treeTimer = setTimeout(() => {
-      this.treeExpired = true;
+      this.clock.expire();
       abortExecution("timed_out", new Error("Subagent tree deadline elapsed."));
     }, remainingTreeMs);
     if (signal) {
@@ -1432,6 +1509,7 @@ export class SubagentSupervisor {
               signal: childSignals[index],
               policy: {
                 deadlineMs,
+                timeLimit: this.timeLimit,
                 cancellationGraceMs: this.cancellationGraceMs,
                 maxTurns: Math.min(
                   task.maxTurns ?? MAX_SUBAGENT_CHILD_TURNS,
@@ -1584,7 +1662,7 @@ export class SubagentSupervisor {
           } catch {
             result =
               cancellationKind === "timed_out"
-                ? safeTimedOutResult(task)
+                ? safeTimedOutResult(task, this.timeLimit)
                 : signal?.aborted ||
                     childControllers[index]?.signal.aborted ||
                     cancellationKind === "interrupted"
@@ -1598,28 +1676,31 @@ export class SubagentSupervisor {
         if (outcome.kind === "sealed") recordCleanupFailure(identity.runId);
         if (
           !cancellationKind &&
-          this.now() - this.startedAt >= this.treeDeadlineMs
+          this.now() - replyStartedAt >= this.treeDeadlineMs
         ) {
-          this.treeExpired = true;
+          this.clock.expire();
           abortExecution(
             "timed_out",
             new Error("Subagent tree deadline elapsed."),
           );
         }
+        // A stopped or timed-out child still hands over the partial work its
+        // runner settled (already filtered for the parent), marked unverified.
+        const childResult = outcome.kind === "result" ? outcome.result : undefined;
         const result =
           outcome.kind === "sealed"
             ? outcome.state === "timed_out"
-              ? safeTimedOutResult(task)
+              ? safeTimedOutResult(task, this.timeLimit)
               : safeInterruptedResult(task)
             : cancellationKind === "timed_out"
-              ? safeTimedOutResult(task)
+              ? withPartialWork(safeTimedOutResult(task, this.timeLimit), childResult)
               : signal?.aborted ||
                   // A child that returned its own result keeps it when user
                   // guidance stopped it: the work is done, not lost.
                   (childControllers[index]?.signal.aborted &&
                     !(childControllers[index]?.signal.reason instanceof SubagentUserGuidanceStop)) ||
                   cancellationKind === "interrupted"
-                ? interruptedResult(task, index)
+                ? withPartialWork(interruptedResult(task, index), childResult)
                 : outcome.result;
         const disposition = await preparedRun?.complete(result);
         if (disposition !== "stopped") this.finishRun(identity.runId, result);
@@ -1821,7 +1902,7 @@ export class SubagentSupervisor {
           .map(async ({ identity, task, prepared }) => {
             const result =
               cancellationKind === "timed_out"
-                ? safeTimedOutResult(task)
+                ? safeTimedOutResult(task, this.timeLimit)
                 : cancellationKind === "interrupted" || signal?.aborted
                   ? safeInterruptedResult(task)
                   : safeFailedResult(task);

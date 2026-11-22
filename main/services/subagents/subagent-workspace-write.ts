@@ -233,6 +233,25 @@ function parseArguments(toolName: WorkspaceWriteToolName, value: unknown): Mutat
   throw new SubagentFilePreparationError("invalid_input");
 }
 
+/**
+ * The canonical workspace-relative path a `write_file` or `edit_file` call
+ * names, or undefined for any other tool or malformed arguments. Used to tell
+ * the parent which files a stopped helper changed.
+ */
+export function subagentWorkspaceWriteTargetPath(
+  toolName: string,
+  args: unknown,
+): string | undefined {
+  if (toolName !== SUBAGENT_WRITE_FILE_TOOL_NAME && toolName !== SUBAGENT_EDIT_FILE_TOOL_NAME) {
+    return undefined;
+  }
+  try {
+    return parseArguments(toolName, args).path;
+  } catch {
+    return undefined;
+  }
+}
+
 function argumentDigest(toolName: WorkspaceWriteToolName, args: MutationArguments): string {
   return toolName === SUBAGENT_WRITE_FILE_TOOL_NAME
     ? digestFields(toolName, args.path, (args as WriteArguments).content)

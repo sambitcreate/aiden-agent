@@ -46,7 +46,7 @@ import { skillRegistry } from "../skill-registry-main.js";
 import { inheritedSubagentReadToolCeiling } from "../subagents/capability-profile.js";
 import { subagentsAllowedForGeneration } from "../subagents/eligibility.js";
 import { subagentHealthMetrics } from "../subagents/subagent-health-metrics.js";
-import { SubagentSupervisor } from "../subagents/subagent-supervisor.js";
+import { SubagentReplyClock, SubagentSupervisor } from "../subagents/subagent-supervisor.js";
 import { botSurfaceHooks } from "../agent-surface-hooks.js";
 import { createSubagentTool } from "../subagents/subagent-tool.js";
 import { buildAgentTools } from "../tools.js";
@@ -275,6 +275,9 @@ export function createBotToolSources(deps: BotToolSourceDeps): BotToolSourcesMai
 
   function subagentCandidate(botId: string, admission: BotAdmission, schema: AgentTool): BotToolCandidate {
     const authority = admission.authority;
+    // The tools are rebuilt for each admitted request, so this one clock covers
+    // every helper call in the reply: 60 minutes from the first launch.
+    const replyClock = new SubagentReplyClock();
     return {
       tool: schema,
       replay: "unsafe",
@@ -304,6 +307,7 @@ export function createBotToolSources(deps: BotToolSourceDeps): BotToolSourcesMai
               permission: "full",
               inheritedCeiling: authority.files.botHome ? inheritedSubagentReadToolCeiling(undefined) : [],
               healthMetrics: subagentHealthMetrics,
+              policy: { timeLimit: "bot", replyClock },
               // SubagentStop runs the Bot's hooks, in the Bot's folder.
               stopHooks: botSurfaceHooks(botId, authority.workingDirectory, undefined, {
                 report: (lines) => logger.info("hooks", `Bot ${botId} hook messages.`, lines),

@@ -117,8 +117,9 @@ test("reporting consumes remaining tool and wall-clock budgets without extending
   let clock = 0;
   for (const scenario of [
     { policy: { maxTurns: 5, maxToolCalls: 1 }, warning: /tool-call limit/u },
-    { policy: { maxTurns: 5 }, now: () => clock, onEffect: () => { clock = 9_500; }, warning: /remaining deadline/u },
+    { policy: { maxTurns: 5, timeLimit: "bot" as const }, now: () => clock, onEffect: () => { clock = 9_500; }, warning: /remaining deadline/u },
   ]) {
+    clock = 0;
     const { result, effects, core } = await reportBudgetFixture(scenario);
     assert.equal(effects, 1);
     assert.equal(core.state.callCount, 2);
@@ -126,6 +127,16 @@ test("reporting consumes remaining tool and wall-clock budgets without extending
     assert.match(result.warning ?? "", scenario.warning);
     assert.match(result.summary, /acceptance checks remain unrun/u);
   }
+});
+
+test("a chat helper near its safety net keeps working instead of reserving a report turn", async () => {
+  let clock = 0;
+  const { result, effects } = await reportBudgetFixture({
+    policy: { maxTurns: 5, timeLimit: "chat" }, now: () => clock, onEffect: () => { clock = 9_500; },
+  });
+  assert.equal(effects, 4, "only the turn limit, not the clock, ends a chat helper's tool work");
+  assert.doesNotMatch(result.warning ?? "", /remaining deadline/u);
+  assert.match(result.warning ?? "", /turn limit/u);
 });
 
 test("report-only turn cannot execute stale tool names or start another provider turn", async () => {
@@ -163,17 +174,20 @@ test("aborted reports and parent cancellation never become partial verification 
   }), /Parent stopped during report/u);
 });
 
-test("a reporting turn that runs out of time discards its draft without extending the deadline", async () => {
+test("a Bot report that runs out of time is handed over as unverified partial work without extending the deadline", async () => {
   let clock = 0;
   const { result, core, effects } = await reportBudgetFixture({
+    policy: { maxTurns: 3, deadlineMs: 10_000, timeLimit: "bot" },
     now: () => clock,
     report: () => {
       clock = 10_001;
-      return fauxAssistantMessage("Draft result must stay private");
+      return fauxAssistantMessage("Draft: two fixtures read, acceptance checks unrun.");
     },
   });
   assert.equal(result.status, "timed_out");
-  assert.equal(result.summary, "");
+  assert.match(result.summary, /two fixtures read, acceptance checks unrun/u);
+  assert.match(result.warning ?? "", /60-minute limit for Bot replies/u);
+  assert.match(result.warning ?? "", /incomplete, unverified/u);
   assert.equal(core.state.callCount, 3);
   assert.equal(effects, 2);
 });

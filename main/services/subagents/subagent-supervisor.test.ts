@@ -24,7 +24,12 @@ import {
 } from "./eligibility.js";
 import { projectSubagentCompletedSummary, runSubagentChild } from "./subagent-child-runner.js";
 import { SubagentRuntimeRegistry, type SubagentRuntimeChild } from "./child-agent-runtime.js";
-import { SubagentSupervisor, type PreparedSubagentRun } from "./subagent-supervisor.js";
+import {
+  BOT_SUBAGENT_LIMIT_REACHED_RESULT,
+  SubagentReplyClock,
+  SubagentSupervisor,
+  type PreparedSubagentRun,
+} from "./subagent-supervisor.js";
 import { chatSurfaceHooks } from "../agent-surface-hooks.js";
 import { createForegroundSubagentPersistenceV2 } from "./subagent-foreground-persistence-v2.js";
 import type { ProductionSubagentRunStore } from "./subagent-run-store-production.js";
@@ -447,6 +452,9 @@ test("an expired tree deadline launches no children and returns ordered timeouts
   let now = 0;
   let launches = 0;
   const health = healthProbe();
+  // The reply's first helper launch happened at 0 (a shared reply clock).
+  const replyClock = new SubagentReplyClock();
+  replyClock.start(0);
   const supervisor = new SubagentSupervisor({
     generationId: "tree-deadline",
     ...TEST_SUPERVISOR_SCOPE,
@@ -457,7 +465,7 @@ test("an expired tree deadline launches no children and returns ordered timeouts
     inheritedCeiling: SUBAGENT_READ_TOOL_NAMES,
     healthMetrics: health.sink,
     now: () => now,
-    policy: { treeDeadlineMs: 50 },
+    policy: { treeDeadlineMs: 50, replyClock },
     runChild: async ({ request: task }) => {
       launches += 1;
       return completed(task.label);
@@ -630,8 +638,11 @@ test("V2 web siblings each spend their own network operation, in every batch of 
 test("V2 authority admission floors a high-resolution remaining deadline", async () => {
   let now = 1_000.25;
   const preparedDeadlines: number[] = [];
+  const replyClock = new SubagentReplyClock();
+  replyClock.start(now);
   const supervisor = new SubagentSupervisor({
     generationId: "fractional-deadline",
+    policy: { replyClock },
     ...TEST_SUPERVISOR_SCOPE,
     runtime: runtime(),
     thinkingLevel: "high",
@@ -658,7 +669,7 @@ test("V2 authority admission floors a high-resolution remaining deadline", async
 
   const result = await supervisor.execute(request(["Cat", "Moon"]));
 
-  assert.deepEqual(preparedDeadlines, [599_999, 599_999]);
+  assert.deepEqual(preparedDeadlines, [86_399_999, 86_399_999]);
   assert.match(result, /## 1\. Cat[\s\S]*Status: completed/u);
   assert.match(result, /## 2\. Moon[\s\S]*Status: completed/u);
 });
@@ -1244,6 +1255,205 @@ test("stopping one queued V2 child preserves its running siblings and ordered re
   assert.match(result, /## 1\. First[\s\S]*Status: completed/u);
   assert.match(result, /## 2\. Second[\s\S]*Status: completed/u);
   assert.match(result, /## 3\. Third[\s\S]*Status: interrupted/u);
+});
+
+test("a queued chat helper still finishes after the first two take 15 minutes", async () => {
+  let now = 0;
+  const childDeadlines: Array<number | undefined> = [];
+  const supervisor = new SubagentSupervisor({
+    generationId: "generation-phase6b",
+    ...TEST_SUPERVISOR_SCOPE,
+    runtime: runtime(),
+    thinkingLevel: "high",
+    workspaceRoot: "/workspace",
+    permission: "full",
+    inheritedCeiling: SUBAGENT_READ_TOOL_NAMES,
+    now: () => now,
+    prepareRun: async ({ identity, contextRevision, deadlineMs }) =>
+      phase6Prepared(
+        phase6Authority({ runId: identity.runId, contextRevision, delegate: false, deadlineMs }),
+      ),
+    runChild: async ({ request: task, policy }) => {
+      childDeadlines.push(policy?.deadlineMs);
+      // The first two helpers fill both slots and each takes 15 minutes.
+      if (task.label !== "Third") now += 15 * 60_000;
+      return completed(task.label);
+    },
+  });
+
+  const result = await supervisor.execute(request(["First", "Second", "Third"]));
+
+  assert.match(result, /## 1\. First[\s\S]*Status: completed/u);
+  assert.match(result, /## 2\. Second[\s\S]*Status: completed/u);
+  assert.match(result, /## 3\. Third[\s\S]*Status: completed/u);
+  assert.deepEqual(childDeadlines, [24 * 60 * 60_000, 24 * 60 * 60_000, 24 * 60 * 60_000]);
+});
+
+test("a Bot reply stops its helpers at the limit and refuses every later launch", async () => {
+  const replyClock = new SubagentReplyClock();
+  let launches = 0;
+  let prepared = 0;
+  const botSupervisor = (treeDeadlineMs?: number, now?: () => number) =>
+    new SubagentSupervisor({
+      generationId: "bot-reply",
+      ...TEST_SUPERVISOR_SCOPE,
+      runtime: runtime(),
+      thinkingLevel: "high",
+      workspaceRoot: "/workspace",
+      permission: "full",
+      inheritedCeiling: SUBAGENT_READ_TOOL_NAMES,
+      ...(now ? { now } : {}),
+      policy: { timeLimit: "bot", replyClock, ...(treeDeadlineMs ? { treeDeadlineMs } : {}) },
+      runChild: async ({ request: task, signal }) => {
+        launches += 1;
+        await new Promise<never>((_resolve, reject) => {
+          signal?.addEventListener("abort", () => reject(new Error("Parent generation cancelled.")), { once: true });
+        });
+        return completed(task.label);
+      },
+    });
+
+  // A short limit stands in for the 60 minutes so the real timer fires.
+  const stopped = await botSupervisor(50).execute(request(["Survey"]));
+  assert.equal(launches, 1);
+  assert.match(stopped, /## 1\. Survey[\s\S]*Status: timed_out/u);
+  assert.match(stopped, /Stopped at the 60-minute limit for Bot replies\./u);
+
+  // Each later call in the reply builds its own supervisor on the same clock.
+  for (const labels of [["Retry"], ["Again", "Once more"]]) {
+    const refused = await botSupervisor().execute(request(labels));
+    assert.equal(
+      refused,
+      "Helpers can't start again in this reply because the 60-minute limit for Bot replies was reached. Finish the work yourself or tell the person.",
+    );
+  }
+  assert.equal(launches, 1);
+
+  // The default Bot limit is 60 minutes from the reply's first launch.
+  let now = 0;
+  const lateClock = new SubagentReplyClock();
+  const late = (deadlines: Array<number | undefined>) =>
+    new SubagentSupervisor({
+      generationId: "bot-reply-late",
+      ...TEST_SUPERVISOR_SCOPE,
+      runtime: runtime(),
+      thinkingLevel: "high",
+      workspaceRoot: "/workspace",
+      permission: "full",
+      inheritedCeiling: SUBAGENT_READ_TOOL_NAMES,
+      now: () => now,
+      policy: { timeLimit: "bot", replyClock: lateClock },
+      prepareRun: async () => {
+        prepared += 1;
+        throw new Error("No run may be prepared after the limit.");
+      },
+      runChild: async ({ request: task, policy }) => {
+        deadlines.push(policy?.deadlineMs);
+        return completed(task.label);
+      },
+    });
+  lateClock.start(0);
+  now = 59 * 60_000;
+  const deadlines: Array<number | undefined> = [];
+  const lastMinute = new SubagentSupervisor({
+    generationId: "bot-reply-last-minute",
+    ...TEST_SUPERVISOR_SCOPE,
+    runtime: runtime(),
+    thinkingLevel: "high",
+    workspaceRoot: "/workspace",
+    permission: "full",
+    inheritedCeiling: SUBAGENT_READ_TOOL_NAMES,
+    now: () => now,
+    policy: { timeLimit: "bot", replyClock: lateClock },
+    runChild: async ({ request: task, policy }) => {
+      deadlines.push(policy?.deadlineMs);
+      return completed(task.label);
+    },
+  });
+  assert.match(await lastMinute.execute(request(["Last"])), /Status: completed/u);
+  assert.deepEqual(deadlines, [60_000]);
+  now = 60 * 60_000;
+  assert.equal(await late([]).execute(request(["Late"])), BOT_SUBAGENT_LIMIT_REACHED_RESULT);
+  assert.equal(prepared, 0);
+});
+
+test("stopping a helper that edited a file hands the parent its last message and changed files", async () => {
+  const stops: Array<(reason?: Error) => void> = [];
+  const wrote = deferred<void>();
+  let tools: AgentTool[] = [];
+  const control = fakeChild(async ({ emit }) => {
+    const write = tools.find((tool) => tool.name === "write_file")!;
+    await write.execute("write-1", { path: "cookbook.html", content: "<h1>Soup</h1>" });
+    const message = assistant("Added the soup section to cookbook.html; the salad section is next.");
+    await emit({ type: "message_start", message } as AgentEvent);
+    await emit({ type: "message_end", message: { ...message, stopReason: "toolUse" } } as AgentEvent);
+    wrote.resolve();
+    await new Promise<void>(() => {});
+  });
+  const supervisor = new SubagentSupervisor({
+    generationId: "generation-phase6b",
+    ...TEST_SUPERVISOR_SCOPE,
+    runtime: runtime(),
+    thinkingLevel: "high",
+    workspaceRoot: "/workspace",
+    permission: "full",
+    inheritedCeiling: SUBAGENT_READ_TOOL_NAMES,
+    policy: { cancellationGraceMs: 10 },
+    prepareRun: async ({ identity, contextRevision, stop }) => {
+      stops.push(stop);
+      return phase6Prepared(
+        phase6Authority({ runId: identity.runId, contextRevision, delegate: false }),
+      );
+    },
+    runChild: (input) =>
+      runSubagentChild({
+        ...input,
+        onCleanupFailure: () => {},
+        prepareWorkspaceWriteApproval: () => ({
+          beforeToolCall: async () => undefined,
+          execute: async () => ({
+            content: [{ type: "text", text: "The approved workspace file change was committed." }],
+            details: null,
+          }),
+          shutdown: async () => {},
+        }),
+        dependencies: {
+          buildTools: async () => ({
+            tools: [
+              {
+                name: "write_file",
+                label: "Write File",
+                description: "Attended write.",
+                parameters: { type: "object" },
+                execute: async () => ({ content: [], details: null }),
+              } as unknown as AgentTool,
+            ],
+            outboundApprovalBindings: [],
+            workspaceWriteApprovalBindings: [
+              { toolName: "write_file" as const, operation: "write" as const },
+            ],
+            mcpMutationApprovalBindings: [],
+            shellApprovalBindings: [],
+          }),
+          createChild: (spec) => {
+            tools = spec.tools;
+            return control.child;
+          },
+          recordUsage: async () => {},
+        },
+      }),
+  });
+
+  const execution = supervisor.execute(request(["Cookbook"]));
+  await wrote.promise;
+  stops[0]?.(new Error("The person stopped this helper."));
+  const result = await execution;
+
+  assert.match(result, /## 1\. Cookbook[\s\S]*Status: interrupted/u);
+  assert.match(result, /Added the soup section to cookbook\.html; the salad section is next\./u);
+  assert.match(result, /Files it changed: cookbook\.html\./u);
+  assert.doesNotMatch(result, /ran commands/u);
+  assert.match(result, /incomplete, unverified partial findings/u);
 });
 
 test("Phase 6B runs fresh depth-2 children without exposing delegation to descendants", async () => {
