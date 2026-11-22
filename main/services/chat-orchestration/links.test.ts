@@ -1,12 +1,15 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
+import type { AppSettings, Workspace } from "../types.js";
+import { approvalCeilingOf, currentWorkspaceApproval, generationApprovalPolicy } from "../approval-gate/run-approval.js";
 import {
   CHAT_LINK_LIMIT,
   CHAT_LINK_RESULTS_KEPT,
   ChatLinkStore,
   parseChatLinkDocument,
   startedChatCeiling,
+  startedChatTurnCeiling,
   type ChatLink,
   type ChatLinkDocument,
 } from "./links.js";
@@ -193,4 +196,76 @@ test("only the newest links keep a result schema and result, so old ones can't g
   assert.deepEqual(store.get(`child-${CHAT_LINK_RESULTS_KEPT + 1}`)?.resultSchema, schema);
   const saved = memory.saved()?.links ?? [];
   assert.equal(saved.filter((each) => each.result !== undefined).length, CHAT_LINK_RESULTS_KEPT);
+});
+
+/** A workspace the approval policy reads, in the given mode. */
+function workspaceIn(id: string, approvalMode: "ask" | "auto" | "never"): Workspace {
+  return {
+    id, name: id, folderPath: `/tmp/${id}`, permission: "ask", createdAt: 0, approvalMode,
+    macGrants: { shell: true, files: true },
+  } as unknown as Workspace;
+}
+
+test("a started chat's turn follows its lead's workspace as it is now: tightening the lead to Ask makes a Never-ask worktree chat ask", async () => {
+  const workspaces = new Map<string, Workspace>([
+    ["lead-workspace", workspaceIn("lead-workspace", "never")],
+    ["worktree-1", workspaceIn("worktree-1", "never")],
+  ]);
+  const ports = {
+    getSettings: async (): Promise<Pick<AppSettings, "approvalMode">> => ({ approvalMode: "auto" }),
+    getWorkspace: async (id: string) => workspaces.get(id),
+  };
+  const store = new ChatLinkStore(memoryStorage().storage);
+  await store.restore();
+  // Started while the lead's workspace was Never ask with shell and files allowed.
+  const leadPolicy = await currentWorkspaceApproval(ports, "lead-workspace");
+  await store.add(link("child-1", { ceiling: approvalCeilingOf(leadPolicy!) }));
+  const leadWorkspaceOf: Record<string, string> = { "lead-1": "lead-workspace" };
+  const turnPolicy = async () => {
+    const ceiling = await startedChatTurnCeiling({
+      links: store,
+      chatId: "child-1",
+      startedBy: { chatId: "lead-1" },
+      leadCeiling: async (leadChatId) => {
+        const policy = await currentWorkspaceApproval(ports, leadWorkspaceOf[leadChatId]!);
+        return policy ? approvalCeilingOf(policy) : undefined;
+      },
+    });
+    return generationApprovalPolicy(
+      { workspace: workspaces.get("worktree-1"), botBound: false, mode: undefined, permission: undefined, ceiling },
+      ports.getSettings,
+    );
+  };
+  assert.equal((await turnPolicy())?.mode, "never");
+
+  workspaces.set("lead-workspace", workspaceIn("lead-workspace", "ask"));
+  const tightened = await turnPolicy();
+  assert.equal(tightened?.mode, "ask");
+
+  // A lead whose workspace is gone leaves the stored ceiling alone.
+  workspaces.delete("lead-workspace");
+  assert.equal((await turnPolicy())?.mode, "never");
+});
+
+test("a started chat whose link is lost starts its turn under Ask with no Mac grants, whatever its lead allows", async () => {
+  const store = new ChatLinkStore(memoryStorage().storage);
+  await store.restore();
+  const ceiling = await startedChatTurnCeiling({
+    links: store,
+    chatId: "child-lost",
+    startedBy: { chatId: "lead-1" },
+    leadCeiling: async () => ({ mode: "never", macGrants: ["shell", "files"], chatOnly: false }),
+  });
+  assert.deepEqual(ceiling, { mode: "ask", macGrants: [], chatOnly: false });
+  const policy = await generationApprovalPolicy(
+    { workspace: workspaceIn("w1", "never"), botBound: false, mode: undefined, permission: undefined, ceiling },
+    async () => ({ approvalMode: "never" }),
+  );
+  assert.equal(policy?.mode, "ask");
+  assert.equal(policy?.macGrants.size, 0);
+  // A chat no chat started has no ceiling.
+  assert.equal(
+    await startedChatTurnCeiling({ links: store, chatId: "chat-1", startedBy: undefined, leadCeiling: async () => undefined }),
+    undefined,
+  );
 });

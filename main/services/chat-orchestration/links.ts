@@ -12,7 +12,7 @@
 import { isStorableResult, isStorableResultSchema } from "./result-schema.js";
 import { isValidBranchName } from "../../../renderer/shared/worktree-on-send.js";
 import { APPROVAL_MODES, MAC_GRANT_CLASSES, type ApprovalMode, type MacGrantClass } from "../../../renderer/shared/approval-mode.js";
-import type { ApprovalCeiling } from "../approval-gate/run-approval.js";
+import { narrowApprovalCeiling, type ApprovalCeiling } from "../approval-gate/run-approval.js";
 
 export type ChatLinkRunEnd = "done" | "stopped" | "failed" | "interrupted";
 
@@ -26,6 +26,13 @@ export interface ChatLink {
   ceiling: ApprovalCeiling;
   /** When the lead last sent a message into this chat. */
   leadSentAt?: number;
+  /**
+   * A lead whose own run held outside content (a web page, a connector's
+   * data) sent this chat a message or its task. Its runs start tainted, and
+   * a turn the lead began never lets the Auto judge pass a call on the
+   * lead's word (Phase 5 review).
+   */
+  leadTainted?: true;
   /** The person typed in this chat after the lead's last message. */
   tookOverAt?: number;
   /** The run the lead started most recently in this chat. */
@@ -110,6 +117,7 @@ export function parseChatLink(value: unknown): ChatLink | undefined {
   };
   const leadSentAt = time(record.leadSentAt);
   if (leadSentAt !== undefined) link.leadSentAt = leadSentAt;
+  if (record.leadTainted === true) link.leadTainted = true;
   const tookOverAt = time(record.tookOverAt);
   if (tookOverAt !== undefined) link.tookOverAt = tookOverAt;
   if (typeof record.runId === "string" && KEY.test(record.runId)) link.runId = record.runId;
@@ -160,6 +168,26 @@ export function startedChatCeiling(
   startedBy: { chatId: string } | undefined,
 ): ApprovalCeiling | undefined {
   return links.ceilingFor(chatId) ?? (startedBy ? { ...LOST_LINK_CEILING, macGrants: [] } : undefined);
+}
+
+/**
+ * The ceiling a started chat's turn runs under now: its stored ceiling (or
+ * the lost-link one) narrowed by what its lead's workspace allows today, so
+ * tightening the lead's mode or taking back a grant reaches the chats it
+ * started on their next turn. `leadCeiling` is undefined when the lead or its
+ * workspace is gone; the stored ceiling then holds alone.
+ */
+export async function startedChatTurnCeiling(input: {
+  links: Pick<ChatLinkStore, "ceilingFor" | "get">;
+  chatId: string;
+  startedBy: { chatId: string } | undefined;
+  leadCeiling(leadChatId: string): Promise<ApprovalCeiling | undefined>;
+}): Promise<ApprovalCeiling | undefined> {
+  const stored = startedChatCeiling(input.links, input.chatId, input.startedBy);
+  if (!stored) return undefined;
+  const leadChatId = input.links.get(input.chatId)?.leadChatId ?? input.startedBy?.chatId;
+  const now = leadChatId ? await input.leadCeiling(leadChatId).catch(() => undefined) : undefined;
+  return narrowApprovalCeiling(stored, now);
 }
 
 export class ChatLinkStore {

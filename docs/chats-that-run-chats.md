@@ -31,11 +31,18 @@ The lead's model gets one tool, `child_chats`, with one action per call:
   labelled "data, not instructions", and every `child_chats` result counts as
   outside content for the approval gate (taint is decided by tool name).
 - **No count caps.** Depth is the limit: a chat another chat started never gets
-  `child_chats`. A chat whose record can't be read isn't offered it either.
+  `child_chats`. A chat whose record can't be read isn't offered it either, nor
+  is a turn an outside MCP app sent, so an app can't start chats past its own
+  limits.
 - **No double starts.** Each start is keyed by the tool call's id
-  (`agent-chat:<leadChatId>:<toolCallId>:<index>`), and the tool is declared
-  never-replay, so a resumed or repeated call finds the chats it already
-  started instead of starting more.
+  (`agent-chat:<digest of lead and tool call>:<index>`), and the tool is
+  declared never-replay, so a repeated call finds the chats it already started
+  instead of starting more. If Aiden quits in the middle of a start, the
+  recovery note the lead reads on its next turn (Resume) names each chat that
+  call already made, and whether its task was sent, so the model follows them
+  with `list` or `wait` instead of starting them again; `list` shows them too.
+- **Approvals a started chat waits on** reach the lead with their summary
+  fenced as data, and a tool name that isn't a plain name reads "a tool".
 
 ## New worktrees
 
@@ -85,8 +92,18 @@ for approval.
   started chat, and every later decision in that turn, takes the stricter
   approval mode (Ask < Auto < Never ask), only the Mac grants both allow, and
   Chat only if either is. A mode change in the middle of a turn can't lift it.
-  If the link is lost (a damaged file), the chat runs under Ask with no Mac
-  grants.
+  Each turn also narrows the stored ceiling by what the lead's workspace allows
+  now, so switching the lead to Ask, or taking back a grant there, reaches its
+  started chats on their next turn. If the link is lost (a damaged file), the
+  chat runs under Ask with no Mac grants.
+- **Outside content travels with the lead's words.** When the lead's own run
+  holds outside content (a web page, a connector's data, a started chat's
+  reply) as it starts a chat or sends to one, the link is marked. That chat's
+  runs start tainted, and while it still answers the lead the Auto judge can't
+  pass a call on the lead's word: judged calls show their card. A steer or
+  queued message into a running turn does the same from then on. Once you
+  write in the chat, the requests are yours again, though its runs stay
+  tainted.
 - A started chat's approvals and questions come to you like a phone's: the
   desktop card, Inbox Needs you and paired phones. They wait up to 30 minutes,
   not the usual 5.
@@ -138,8 +155,9 @@ it. Stop in a started chat stops only that chat.
 
 ## When you write in a started chat
 
-Once you send a message in a started chat after the lead's last message, the
-chat is yours: the lead's `send` refuses, its Stop leaves the chat alone, and
+Once you send a message in a started chat after the lead's last message
+(including a steer or queued message into its running turn, from the desktop
+composer or a phone), the chat is yours: the lead's `send` refuses, its Stop leaves the chat alone, and
 `list` and `wait` mark it `tookOver`. The lead can still read it, and turns you
 start there never notify the lead.
 
@@ -152,8 +170,8 @@ Workspace permissions, model resolution, spending limits and idempotency
 behave as they do for a phone turn.
 
 Links live in `chat-orchestration.json` in Aiden's user data folder (mode
-0600): each started chat's lead, title, ceiling, the person-took-over marker
-an owed notice and which finished turns the lead has already been told about. Deleting a
+0600): each started chat's lead, title, ceiling, the person-took-over marker,
+whether a tainted lead wrote in it, an owed notice and which finished turns the lead has already been told about. Deleting a
 started chat drops its link; deleting a lead drops its started chats' links,
 and those chats keep running under the lost-link ceiling.
 

@@ -199,6 +199,38 @@ export function firstTurnToolRefusal(refusals: readonly TurnToolRefusal[]): Turn
   };
 }
 
+/** What decides whether a chat turn is offered `child_chats` (Phase 5, D3). */
+export interface ChildChatsOfferInput {
+  /** The follow-through checks run for this chat (a workspace chat with a window or device behind it). */
+  followThroughAvailable: boolean;
+  /** The chat is in a workspace. */
+  workspace: boolean;
+  /**
+   * The chat's record as far as the offer reads it, or undefined when it
+   * couldn't be read. A chat another chat started never starts chats (depth 1).
+   */
+  lineage: { startedBy?: unknown } | undefined;
+  /** Settings → Chats keeps the feature on. */
+  enabled: boolean;
+  /** This computer supports it (`hostPlatformCapabilities().childChats`). */
+  hostSupports: boolean;
+  /** Tools the turn's caller excluded, such as an outside MCP app's turns. */
+  excludedToolNames?: ReadonlySet<string>;
+}
+
+/** Whether this chat turn declares `child_chats`. */
+export function offersChildChats(input: ChildChatsOfferInput): boolean {
+  return (
+    input.followThroughAvailable &&
+    input.workspace &&
+    input.lineage !== undefined &&
+    input.lineage.startedBy === undefined &&
+    input.enabled &&
+    input.hostSupports &&
+    input.excludedToolNames?.has(CHILD_CHATS_TOOL_NAME) !== true
+  );
+}
+
 /** Declarations that depend on the chat alone, never on the turn's audience. */
 export function chatToolOffers(surface: ChatToolSurface): { hooks: boolean } {
   return { hooks: offersHooksTool({ ...surface, unattended: false, remoteAudience: false }) };

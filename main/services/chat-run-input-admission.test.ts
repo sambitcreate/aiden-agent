@@ -622,3 +622,22 @@ test("input a run still takes is queued normally and never registered as an owed
   assert.deepEqual(owed.registered, []);
   assert.equal(owed.holdsReleased(), 1);
 });
+
+test("a lead chat's message to a chat it started reaches its run before the queue does, and is not the person writing", async () => {
+  const wrote: string[] = [];
+  const app = fixture({ onPersonWrote: (chatId) => void wrote.push(chatId) });
+  const order: string[] = [];
+  app.generation.leadChatInput = async () => {
+    order.push(`lead input, ${app.steered.length} queued`);
+  };
+  const result = await app.admission.admit({ streamId: "stream-1", mode: "steer", text: "From the lead", fromLeadChat: true });
+  assert.equal(result.admitted, true);
+  assert.deepEqual(order, ["lead input, 0 queued"]);
+  assert.equal(app.steered.length, 1);
+  assert.deepEqual(wrote, [], "the lead is not the person");
+
+  // The person's own steer is theirs: no lead hook, and it counts as the person writing.
+  await app.admission.admit({ streamId: "stream-1", mode: "steer", text: "From the person" });
+  assert.deepEqual(order, ["lead input, 0 queued"]);
+  assert.deepEqual(wrote, ["chat-1"]);
+});

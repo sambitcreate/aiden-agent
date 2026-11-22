@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
-  argIs, chatToolOffers, screenedPromptAnswersPerson, chatTurnArgsToolRefusal, chatTurnAudienceFor, chatTurnToolRefusal, declaresAppTools, declaresWindowTools, firstTurnToolRefusal, windowlessChatTurn,
+  argIs, chatToolOffers, offersChildChats, screenedPromptAnswersPerson, chatTurnArgsToolRefusal, chatTurnAudienceFor, chatTurnToolRefusal, declaresAppTools, declaresWindowTools, firstTurnToolRefusal, windowlessChatTurn,
   type ChatToolSurface, type ChatTurnOwnerScope, type ChatTurnAudience, type ChatTurnAudienceOptions, type ChatTurnAudienceParams,
 } from "./chat-turn-tool-policy.js";
 import { UNATTENDED_FOLLOW_UP_GENERATION } from "./follow-through/notice-delivery.js";
@@ -222,4 +222,25 @@ test("a queued turn answers the person only when its screened prompt is the pers
   assert.equal(screenedPromptAnswersPerson(messages, { messageId: "reply" }), false);
   assert.equal(screenedPromptAnswersPerson(messages, { messageId: "gone" }), false);
   assert.equal(screenedPromptAnswersPerson(messages, undefined), false);
+});
+
+test("child_chats is offered to a workspace chat nobody started, never to a started chat, an unreadable one or an outside app's turn", () => {
+  const offer = {
+    followThroughAvailable: true,
+    workspace: true,
+    lineage: {},
+    enabled: true,
+    hostSupports: true,
+  };
+  assert.equal(offersChildChats(offer), true);
+  assert.equal(
+    offersChildChats({ ...offer, lineage: { startedBy: { version: 1, kind: "chat", chatId: "lead-1", at: 1 } } }),
+    false,
+    "a started chat can't start chats",
+  );
+  assert.equal(offersChildChats({ ...offer, lineage: undefined }), false, "a chat whose record can't be read");
+  assert.equal(offersChildChats({ ...offer, excludedToolNames: new Set(["child_chats"]) }), false, "an outside MCP app's turn");
+  assert.equal(offersChildChats({ ...offer, excludedToolNames: new Set(["ask_user_question"]) }), true);
+  assert.equal(offersChildChats({ ...offer, enabled: false }), false);
+  assert.equal(offersChildChats({ ...offer, workspace: false }), false);
 });

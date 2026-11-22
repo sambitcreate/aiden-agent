@@ -44,6 +44,12 @@ export interface ChatRunInputGenerationRef {
    * and becomes the chat's next turn once the run settles.
    */
   owedTurn?: { hold(): ChatOwedInputHold | undefined };
+  /**
+   * The lead chat that started this chat sent the input (Phase 5). Awaited
+   * once the input is saved and before it is queued, so the run takes on
+   * what the lead's message carries (its taint) before the model reads it.
+   */
+  leadChatInput?(): Promise<void>;
   agent: {
     queueAdmissionBlocked(): "not-active" | "cancelled" | "capacity" | undefined;
     queueSteer(message: AgentMessage, options?: PiRuntimeQueueOptions): PiRuntimeQueueReceipt;
@@ -123,6 +129,12 @@ export interface ChatRunInputAdmissionRequest {
   notice?: AgentNoticeV1;
   /** Aiden Live sent this for the person; the message shows "By voice". */
   inputSource?: ChatInputSourceV1;
+  /**
+   * The lead chat that started this chat sent it, not the person: it isn't
+   * the person writing (no `onPersonWrote`), and the run hears of it
+   * (`leadChatInput`).
+   */
+  fromLeadChat?: true;
 }
 
 function rejectionReason(
@@ -270,11 +282,18 @@ export function createChatRunInputAdmission(deps: ChatRunInputAdmissionDeps) {
     if (hookBlocked) {
       return { admitted: false, reason: "invalid", committed: true, messageId };
     }
-    if (!input.notice) {
+    if (!input.notice && !input.fromLeadChat) {
       try {
         deps.onPersonWrote?.(generation.chatId);
       } catch {
         // The input is committed either way; the snooze ends with the next wake.
+      }
+    }
+    if (input.fromLeadChat && generation.leadChatInput) {
+      try {
+        await generation.leadChatInput();
+      } catch {
+        // Committed either way; a link that can't be read leaves the run as it was.
       }
     }
     if (deps.active.get(input.streamId) !== generation) {

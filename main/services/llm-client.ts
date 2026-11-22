@@ -529,7 +529,7 @@ import {
   createVisualizeGuideTool,
   VISUALIZE_GUIDE_TOOL_NAME,
 } from "./generative-ui-extension.js";
-import { aidenStartedTurn, chatToolOffers, chatTurnArgsToolRefusal, chatTurnAudienceFor, chatTurnToolRefusal, screenedPromptAnswersPerson, declaresAppTools, declaresWindowTools, firstTurnToolRefusal, windowlessChatTurn, type ChatToolSurface, type TurnToolRefusal } from "./chat-turn-tool-policy.js";
+import { aidenStartedTurn, chatToolOffers, offersChildChats, chatTurnArgsToolRefusal, chatTurnAudienceFor, chatTurnToolRefusal, screenedPromptAnswersPerson, declaresAppTools, declaresWindowTools, firstTurnToolRefusal, windowlessChatTurn, type ChatToolSurface, type TurnToolRefusal } from "./chat-turn-tool-policy.js";
 import { createGenerativeUiDraftSession } from "./generative-ui-draft.js";
 import { createUiDraftSession } from "./aiden-ui-draft.js";
 import { withoutVisualSnapshots } from "../../renderer/shared/visual-snapshots.js";
@@ -768,6 +768,8 @@ interface ActiveGeneration {
   inputHooks?: ChatRunInputHooks;
   /** Saved input this run's queue no longer takes becomes the chat's next turn. */
   owedTurn?: ChatRunInputGenerationRef["owedTurn"];
+  /** The lead chat that started this chat steered or queued a message into the run. */
+  leadChatInput?: ChatRunInputGenerationRef["leadChatInput"];
 }
 
 const active = new Map<string, ActiveGeneration>();
@@ -802,15 +804,27 @@ const initializing = new Map<string, InitializingGeneration>();
 const computerUseGenerationGate = new ComputerUseGenerationGate();
 const chatDeletionGate = new ChatDeletionGate();
 const chatWorkspaceMutationGate = new ChatWorkspaceMutationGate();
+/** The person steered or queued input into a chat: if another chat started it, it is theirs now. */
+async function personSteeredStartedChat(chatId: string): Promise<void> {
+  const { chatLinks } = await import("./chat-orchestration/links-main.js");
+  await chatLinks.restore();
+  if (!chatLinks.get(chatId)) return;
+  await (await import("./chat-orchestration/child-chats-main.js")).personTookOverStartedChat(chatId);
+}
+
 const runInputAdmission = createChatRunInputAdmission({
   active,
   isChatDeleting: (chatId) => chatDeletionGate.isDeleting(chatId),
   appendMessage: (chatId, message, meta) => chatStore.appendMessage(chatId, message, meta),
   readChat: (chatId) => chatStore.get(chatId),
-  // A steer or follow-up is the person writing in the chat, so it ends a snooze.
+  // A steer or follow-up is the person writing in the chat, so it ends a
+  // snooze, and a chat another chat started is theirs from now on (Phase 5).
   onPersonWrote: (chatId) => {
     void chatTriage.wake(chatId).catch((error: unknown) => {
       logger.warn("inbox", "Could not end the chat's snooze after its steer or follow-up.", error);
+    });
+    void personSteeredStartedChat(chatId).catch((error: unknown) => {
+      logger.warn("chat-orchestration", "Could not record that the person took over a started chat.", error);
     });
   },
 });
@@ -2308,18 +2322,22 @@ async function prepareGeneration(
       }),
     );
   }
+  // Whether this run holds outside content, read by `child_chats` when it
+  // starts or sends; the run sets it once its taint exists.
+  const leadRunTaint = { tainted: (): boolean => false };
   // Chats that run other chats (Phase 5, D3): a workspace chat with the
   // follow-through checks, not itself started by a chat (depth 1). A turn
   // Aiden started refuses `start` (`turnArgsRefusal`).
   if (
-    followThroughAvailable &&
     params.chatId &&
-    workspace &&
-    chatLineage &&
-    !chatLineage.startedBy &&
-    childChatsEnabled(settings) &&
-    hostPlatformCapabilities().childChats &&
-    !options.excludeToolNames?.has(CHILD_CHATS_TOOL_NAME)
+    offersChildChats({
+      followThroughAvailable: Boolean(followThroughAvailable),
+      workspace: Boolean(workspace),
+      lineage: chatLineage,
+      enabled: childChatsEnabled(settings),
+      hostSupports: hostPlatformCapabilities().childChats,
+      excludedToolNames: options.excludeToolNames,
+    })
   ) {
     const [{ createChildChatsTool }, { childChats }] = await Promise.all([
       import("./chat-orchestration/child-chats-tool.js"),
@@ -2330,14 +2348,21 @@ async function prepareGeneration(
         leadChatId: params.chatId,
         childChats,
         refusal: (args) => turnArgsRefusal(CHILD_CHATS_TOOL_NAME, args),
+        leadTainted: () => leadRunTaint.tainted(),
       }),
     );
   }
+  // A started chat's link: its result schema (D6) and whether a tainted lead wrote in it.
+  const startedChatLink = params.chatId && chatLineage?.startedBy
+    ? await (async () => {
+        const { chatLinks } = await import("./chat-orchestration/links-main.js");
+        await chatLinks.restore();
+        return chatLinks.get(params.chatId!);
+      })()
+    : undefined;
   // A started chat whose lead asked for a structured result (Phase 5, D6).
-  if (params.chatId && chatLineage?.startedBy && !options.excludeToolNames?.has(SUBMIT_RESULT_TOOL_NAME)) {
-    const { chatLinks } = await import("./chat-orchestration/links-main.js");
-    await chatLinks.restore();
-    const resultSchema = chatLinks.get(params.chatId)?.resultSchema;
+  if (params.chatId && startedChatLink && !options.excludeToolNames?.has(SUBMIT_RESULT_TOOL_NAME)) {
+    const resultSchema = startedChatLink.resultSchema;
     if (resultSchema) {
       const [{ createSubmitResultTool }, { childChats }] = await Promise.all([
         import("./chat-orchestration/submit-result-tool.js"),
@@ -3154,6 +3179,11 @@ async function prepareGeneration(
     offerHooksTool,
     scheduleOriginChatId,
     turnToolRefusal: firstTurnToolRefusal(turnToolRefusals),
+    leadRunTaint,
+    /** Whether a lead whose run held outside content wrote in this started chat. */
+    startedChatTrust: startedChatLink
+      ? (await import("./chat-orchestration/child-chats.js")).startedChatRunTrust(startedChatLink)
+      : { tainted: false, judgeTrusted: true },
   };
 }
 
@@ -3562,6 +3592,8 @@ export const llmClient = {
       approvalCeiling,
       scheduleOriginChatId,
       turnToolRefusal,
+      leadRunTaint,
+      startedChatTrust,
     } = setup;
     // Claim checks tell connector failures by the tools' real MCP identity.
     const claimCheckOptions = {
@@ -3639,6 +3671,15 @@ export const llmClient = {
     let hookTurnContext: string | undefined;
     /** Outside content in this run, for the gate's new destinations (plan §3.2). */
     let runTaint: RunTaint | undefined;
+    /**
+     * A lead whose own run held outside content wrote in this started chat
+     * (its task, a send or a steer): the run is tainted from the start, and
+     * while the chat still answers the lead the Auto judge can't pass a call
+     * on the lead's word, so judged calls show their card (Phase 5 review).
+     */
+    let leadTaintedRun = startedChatTrust.tainted;
+    let leadTaintedRequest = !startedChatTrust.judgeTrusted;
+    const judgeTrusted = () => !leadTaintedRequest;
     /** What the person asked for in this run, for the Auto judge. */
     let approvalRequestText = "";
     // Mid-flight input's UserPromptSubmit context, on that input's message only.
@@ -4641,7 +4682,14 @@ export const llmClient = {
         params.chatId,
       );
       if (recoveryEffects.length > 0) {
-        await recordPiEffectRecoveryBoundary(promptJournal, recoveryEffects);
+        // A `child_chats` start Aiden quit in the middle of names the chats it
+        // already made, so Resume finds them instead of starting more.
+        await recordPiEffectRecoveryBoundary(promptJournal, recoveryEffects, async (pending) => {
+          const starts = pending.filter((effect) => effect.toolName === CHILD_CHATS_TOOL_NAME).map((effect) => effect.toolCallId);
+          if (starts.length === 0) return undefined;
+          const { childChats } = await import("./chat-orchestration/child-chats-main.js");
+          return childChats.interruptedStarts(params.chatId, starts);
+        });
         if (!piJournalless) {
           for (const effect of recoveryEffects) {
             await piRuntimeEffectStore.markRecoveryRecorded({
@@ -4712,6 +4760,8 @@ export const llmClient = {
         ],
         isConnectorTool: (name) => claimCheckOptions.isConnectorTool(name),
       });
+      if (leadTaintedRun) runTaint.markOutside();
+      leadRunTaint.tainted = () => runTaint?.tainted === true;
       approvalRequestText = currentUser?.content ?? "";
       // A design turn's first request carries the canvas counts, journaled
       // after the history they follow (see `withJournaledCanvasStatusNote`).
@@ -5337,7 +5387,8 @@ export const llmClient = {
                 ? {
                     approval: { mode: runApproval.mode, macGrants: runApproval.macGrants },
                     // An ACP agent's run has no model Aiden can ask (`runApprovalJudge`).
-                    ...(harnessProvider ? {} : { judgeAvailable: true }),
+                    // Nor may a run answering a tainted lead ask it (`leadTaintedRequest`).
+                    ...(harnessProvider || !judgeTrusted() ? {} : { judgeAvailable: true }),
                     ...(calledMcp && !preparedBotContext
                       ? {
                           connector: {
@@ -6225,6 +6276,16 @@ export const llmClient = {
       promptsUnattended: initialization.promptsUnattended,
       computerUse,
       formFill,
+      // The lead steered or queued a message here: if its run held outside
+      // content, so does this one from now on.
+      leadChatInput: async () => {
+        const { chatLinks } = await import("./chat-orchestration/links-main.js");
+        await chatLinks.restore();
+        if (chatLinks.get(params.chatId)?.leadTainted !== true) return;
+        leadTaintedRun = true;
+        leadTaintedRequest = true;
+        runTaint?.markOutside();
+      },
       ...(chatHooks
         ? {
             inputHooks: {
