@@ -264,9 +264,11 @@ action it runs ("Composio · Gmail: Send email") and Always allow covers the
 Composio tool for this Bot. The rules still read each app action the call
 names: sending, posting, deleting, publishing and buying keep asking (or are
 handed off) as the built-in and your own rules say, even after Always allow.
-Calls that can reach anything (Composio's workbench, its shell and raw API
-calls, or a call whose app actions can't be read) never offer Always and are
-never covered by it.
+Only looking up app actions, reading their schemas, waiting on a sign-in and
+running app actions it can read can be covered. Connecting or managing an app
+account, Composio's workbench, its shell and raw API calls, any Composio
+operation Aiden doesn't know yet, and a call whose app actions can't be read
+never offer Always and are never covered by it.
 
 Choosing Always saves that allowance for this Bot. While this Mac is in Ask
 and a model could judge (an agent-runtime provider alone can't), the card

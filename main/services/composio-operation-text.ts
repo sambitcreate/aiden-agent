@@ -12,12 +12,23 @@ const SLUG = /^[A-Za-z0-9][A-Za-z0-9_]{0,127}$/u;
 const MAX_SLUGS = 20;
 const SHOWN_SLUGS = 3;
 
-/** Composio operations that can reach anything (code, raw API calls): never remembered as Always allow. */
-const UNBOUNDED_OPERATIONS: ReadonlySet<string> = new Set([
-  "COMPOSIO_REMOTE_WORKBENCH",
-  "COMPOSIO_REMOTE_BASH_TOOL",
-  "COMPOSIO_PROXY_EXECUTE",
+/**
+ * Composio's own operations an Always allow may cover: looking up actions,
+ * reading their schemas and waiting on a sign-in. Every other Composio
+ * operation (connection management, code, shell and raw API calls, and any
+ * Composio adds later) is never remembered, so it keeps asking.
+ */
+const REMEMBERABLE_META_OPERATIONS: ReadonlySet<string> = new Set([
+  "COMPOSIO_SEARCH_TOOLS",
+  "COMPOSIO_GET_TOOL_SCHEMAS",
+  "COMPOSIO_WAIT_FOR_CONNECTIONS",
 ]);
+const MULTI_EXECUTE = "COMPOSIO_MULTI_EXECUTE_TOOL";
+
+/** An app action a multi-execute call runs: never one of Composio's own operations. */
+function unboundedAppAction(slug: string): boolean {
+  return slug.startsWith("COMPOSIO_");
+}
 
 const META_LABELS: Readonly<Record<string, string>> = {
   COMPOSIO_SEARCH_TOOLS: "Search for the right app action",
@@ -60,7 +71,7 @@ export type ComposioCallShape =
       tool: string;
       /** App actions a multi-execute call runs, when every one of them could be read. */
       slugs: readonly string[];
-      /** Reaches anything, or its app actions could not be read: never remembered. */
+      /** Not a bounded Composio operation (connection management, code, raw API calls, unknown), or its app actions could not be read: never remembered. */
       unbounded: boolean;
     };
 
@@ -75,7 +86,7 @@ export function composioCallShape(args: unknown): ComposioCallShape | undefined 
   if (input.action === "describe") return { kind: "describe" };
   if (input.action !== "call" || typeof input.tool !== "string" || !SLUG.test(input.tool)) return undefined;
   const tool = input.tool.toUpperCase();
-  if (tool !== "COMPOSIO_MULTI_EXECUTE_TOOL") return { kind: "call", tool, slugs: [], unbounded: UNBOUNDED_OPERATIONS.has(tool) };
+  if (tool !== MULTI_EXECUTE) return { kind: "call", tool, slugs: [], unbounded: !REMEMBERABLE_META_OPERATIONS.has(tool) };
   const tools = record(input.arguments)?.tools;
   const slugs: string[] = [];
   let readable = Array.isArray(tools) && tools.length > 0 && tools.length <= MAX_SLUGS;
@@ -89,7 +100,7 @@ export function composioCallShape(args: unknown): ComposioCallShape | undefined 
       slugs.push(slug.toUpperCase());
     }
   }
-  return { kind: "call", tool, slugs: readable ? slugs : [], unbounded: !readable || slugs.some((slug) => UNBOUNDED_OPERATIONS.has(slug)) };
+  return { kind: "call", tool, slugs: readable ? slugs : [], unbounded: !readable || slugs.some(unboundedAppAction) };
 }
 
 /** The names the Bot rules classifier reads for this call: its app actions, or the meta-tool. */
@@ -121,7 +132,7 @@ export function composioApprovalSummary(args: unknown): string {
   const shape = composioCallShape(args);
   if (!shape) return "Composio · An app action";
   if (shape.kind === "describe") return "Composio · See which app actions are available";
-  if (shape.tool === "COMPOSIO_MULTI_EXECUTE_TOOL") {
+  if (shape.tool === MULTI_EXECUTE) {
     if (shape.slugs.length === 0) return "Composio · Run app actions";
     const shown = shape.slugs.slice(0, SHOWN_SLUGS).map(composioActionLabel);
     const more = shape.slugs.length - shown.length;

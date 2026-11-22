@@ -171,7 +171,8 @@ export function createBotMemoryTool(
       if (
         options.canSchedule
         && operations.some((operation) => operation.action !== "remove" && botMemoryClaimsNoReachOut(operation.content, target))
-        && await options.canSchedule().catch(() => false)
+        // Unable to tell whether the Bot has routines: refuse, rather than save a note that may be false.
+        && await options.canSchedule().catch(() => true)
       ) {
         return resultOf({ ok: false, code: "invalid", target, error: BOT_MEMORY_REACH_OUT_CLAIM_ERROR }, { changed: 0, targets: [] }, true);
       }

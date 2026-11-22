@@ -287,6 +287,14 @@ test("while the Bot has routines, a note saying it can't schedule or message fir
   assert.match(readFileSync(memoryFile, "utf8"), /Outlook/u);
 });
 
+test("a note that it can't schedule is refused when Aiden can't tell whether the Bot has routines", async () => {
+  const { memory, memoryFile } = memoryFor();
+  const tool = createBotMemoryTool(BOT, memory, { canSchedule: async () => { throw new Error("access unavailable"); } });
+  const result = await tool.execute("call", { target: "memory", operations: [{ action: "add", content: "I cannot self-schedule." }] }, undefined);
+  assert.equal(result.isError, true);
+  assert.throws(() => readFileSync(memoryFile, "utf8"), /ENOENT/u);
+});
+
 test("a Bot without routines may keep a note that it can't schedule", async () => {
   const { memory, memoryFile } = memoryFor();
   const tool = createBotMemoryTool(BOT, memory, { canSchedule: async () => false });

@@ -141,7 +141,12 @@ test("a Composio call is classified by the app actions it runs, and code or raw 
   assert.deepEqual(await classesOf(run("GMAIL_FETCH_EMAILS")), { classes: [], neverRemembered: false });
   assert.deepEqual(await classesOf({ action: "call", tool: "COMPOSIO_SEARCH_TOOLS", arguments: { queries: [{ use_case: "send an email" }] } }), { classes: [], neverRemembered: false }, "searching for a send action sends nothing");
 
-  assert.equal((await classesOf({ action: "call", tool: "COMPOSIO_REMOTE_WORKBENCH", arguments: {} })).neverRemembered, true);
+  for (const tool of ["COMPOSIO_SEARCH_TOOLS", "COMPOSIO_GET_TOOL_SCHEMAS", "COMPOSIO_WAIT_FOR_CONNECTIONS"]) {
+    assert.equal((await classesOf({ action: "call", tool, arguments: {} })).neverRemembered, false, tool);
+  }
+  for (const tool of ["COMPOSIO_REMOTE_WORKBENCH", "COMPOSIO_MANAGE_CONNECTIONS", "COMPOSIO_SOMETHING_NEW"]) {
+    assert.equal((await classesOf({ action: "call", tool, arguments: {} })).neverRemembered, true, `${tool} keeps asking`);
+  }
   assert.equal((await classesOf(run("GMAIL_FETCH_EMAILS", "COMPOSIO_PROXY_EXECUTE"))).neverRemembered, true);
   assert.equal((await classesOf({ action: "call", tool: "COMPOSIO_MULTI_EXECUTE_TOOL", arguments: { tools: [{ arguments: {} }] } })).neverRemembered, true, "app actions it can't read");
 });
