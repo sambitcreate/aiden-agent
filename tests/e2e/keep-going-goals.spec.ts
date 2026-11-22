@@ -8,14 +8,22 @@ const REVIEW_PROMPT = "You are now checking whether the goal set in this chat is
 /**
  * Types `/goal <objective>` and sends it. A goal is set only in an idle chat,
  * and the first answer may still be settling, so a refused send is tried again.
+ * The command keeps its draft in the composer until it settles, so only a send
+ * that came back refused (an error toast, the draft still there) is pressed
+ * again: pressing while the first is still going would set the goal twice.
  */
 async function setGoal(page: Page, objective: string): Promise<void> {
   const composer = page.locator("textarea");
+  const draft = `/goal ${objective}`;
   const sent = page.getByText(objective, { exact: true }).first();
+  const refused = page.locator("[data-sonner-toast][data-type='error']");
   await expect(page.getByRole("button", { name: "Stop generating" })).toBeHidden({ timeout: 15_000 });
+  await composer.fill(draft);
+  await composer.press("Enter");
   await expect(async () => {
-    if (!(await sent.isVisible())) {
-      await composer.fill(`/goal ${objective}`);
+    if (!(await sent.isVisible()) && (await refused.count()) > 0 && (await composer.inputValue()) === draft) {
+      // Let the refusal clear first, so the next pass doesn't read it as a second one.
+      await expect(refused).toHaveCount(0, { timeout: 10_000 });
       await composer.press("Enter");
     }
     await expect(sent).toBeVisible({ timeout: 2_000 });
