@@ -548,4 +548,86 @@ test("GitService.managedWorktreeUsable discovers alternate Git system config ori
     /not a Git repository/u,
   );
   assert.ok(emptySysSpawns > 0, "empty alternate system config must stay Git-backed and fail closed");
+
+  // Case 4: Rewriting the Git executable wrapper in place from system config A
+  // to system config B must invalidate direct admission and reprobe B (never
+  // republishing a stale cached origin for A).
+  const altSystemConfigB = path.join(temp, "alt-prefix-gitconfig-b");
+  await fs.writeFile(altSystemConfig, "[user]\n\tname = Config A\n");
+  await fs.writeFile(altSystemConfigB, "[user]\n\tname = Config B\n");
+  const rerouteService = new GitService({ gitBinary: gitWrapper, cacheTtlMs: 60_000 });
+  let rerouteSpawns = 0;
+  const rerouteInternals = rerouteService as unknown as {
+    run: (cwd: string, args: string[], options?: unknown) => Promise<unknown>;
+  };
+  const origRerouteRun = rerouteInternals.run.bind(rerouteService);
+  rerouteInternals.run = async (cwd, args, options) => {
+    rerouteSpawns += 1;
+    return origRerouteRun(cwd, args, options);
+  };
+
+  assert.equal(
+    await rerouteService.managedWorktreeUsable(
+      created.repositoryPath,
+      created.path,
+      created.branch,
+      created.worktreeGitDir,
+      created.ownershipToken,
+      created.worktreeDevice,
+      created.worktreeInode,
+    ),
+    true,
+  );
+  rerouteSpawns = 0;
+  assert.equal(
+    await rerouteService.managedWorktreeUsable(
+      created.repositoryPath,
+      created.path,
+      created.branch,
+      created.worktreeGitDir,
+      created.ownershipToken,
+      created.worktreeDevice,
+      created.worktreeInode,
+    ),
+    true,
+  );
+  assert.equal(rerouteSpawns, 0, "initial wrapper pointing at config A admits with 0 spawns");
+
+  // Rewrite wrapper in place to route to config B instead of config A.
+  await fs.writeFile(
+    gitWrapper,
+    `#!/bin/sh\nexport GIT_CONFIG_SYSTEM=${JSON.stringify(altSystemConfigB)}\nexec git "$@"\n`,
+    { encoding: "utf8", mode: 0o700 },
+  );
+  rerouteSpawns = 0;
+  assert.equal(
+    await rerouteService.managedWorktreeUsable(
+      created.repositoryPath,
+      created.path,
+      created.branch,
+      created.worktreeGitDir,
+      created.ownershipToken,
+      created.worktreeDevice,
+      created.worktreeInode,
+    ),
+    true,
+  );
+  assert.ok(rerouteSpawns > 0, "rewritten wrapper must invalidate proof and reprobe config B");
+
+  // Corrupt config B while config A stays valid: must fall back and fail closed.
+  await fs.writeFile(altSystemConfigB, "[core\n");
+  rerouteSpawns = 0;
+  await assert.rejects(
+    rerouteService.managedWorktreeUsable(
+      created.repositoryPath,
+      created.path,
+      created.branch,
+      created.worktreeGitDir,
+      created.ownershipToken,
+      created.worktreeDevice,
+      created.worktreeInode,
+    ),
+    /not a Git repository/u,
+  );
+  assert.ok(rerouteSpawns > 0, "corrupting rerouted config B must force Git discovery");
 });
