@@ -218,6 +218,7 @@ import {
   shutdownFollowThrough,
   startFollowThrough,
 } from "./services/follow-through/follow-through-main.js";
+import { startKeepAwake, stopKeepAwake } from "./services/keep-awake/keep-awake-main.js";
 import { reconcileChatScopedStores } from "./services/startup-chat-reconciliation.js";
 import { removeWorkspaceArtifacts } from "./services/workspace-artifacts/main.js";
 
@@ -407,6 +408,7 @@ function cleanupApplication(): void {
   formFillRuntime.dispose();
   computerUseStatus.invalidate();
   scheduleService.stop();
+  stopKeepAwake();
   stopChatTriage();
   stopInboxDockBadge();
   llmClient.abortAll();
@@ -572,6 +574,8 @@ async function runShutdownAndQuit(settingsPrepared: boolean): Promise<void> {
     }
   }
   const disarmShutdownCeiling = armShutdownCeiling();
+  // Quitting ends Aiden's work, so nothing is left to keep the computer awake for.
+  stopKeepAwake();
   // First, so no further chat or worktree is deleted while the rest of the app stops.
   await settleShutdownStep("main", "Storage cleanup", SHUTDOWN_BUDGET_MS.storageCleanup, () => storageUsageService.shutdown());
   await settleShutdownStep("voice", "Gemini Live", SHUTDOWN_BUDGET_MS.geminiLive, () => geminiLiveService.shutdown());
@@ -2820,6 +2824,12 @@ if (!ownsSingleInstanceLock) {
       await startFollowThrough().catch((error: unknown) => {
         logger.warn("follow-through", "Could not finish restoring checks and pull request follows.", error);
       });
+      // Watches runs, jobs and checks to keep the computer awake while Aiden works.
+      if (!shutdownHasBegun()) {
+        await startKeepAwake().catch((error: unknown) => {
+          logger.warn("keep-awake", "Could not start keeping the computer awake while Aiden works.", error);
+        });
+      }
       // Back in front, awake or unlocked: followed pull requests may have
       // moved while nobody looked. These nudges are debounced and read a
       // follow at most every five minutes, so repeated focus costs nothing extra.

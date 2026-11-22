@@ -389,3 +389,9 @@ test("an empty sidebar search opens each page's first tab", () => {
 test("sidebar search can't open a hidden tab", () => {
   assert.equal(searchSidebar("lume", INTEL_MAC).length, 0);
 });
+
+test("sleep words find the keep-awake row on Scheduled tasks", () => {
+  for (const term of ["awake", "sleep", "caffeinate", "keep awake"]) {
+    assert.deepEqual(searchSidebar(term), [{ page: "scheduledTasks", target: "scheduledTasks" }], term);
+  }
+});

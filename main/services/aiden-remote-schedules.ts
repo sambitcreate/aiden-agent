@@ -56,21 +56,6 @@ export interface AidenRemoteScheduledTaskProjection {
   updatedAt: string;
 }
 
-/**
- * The scheduled-task settings Remote contract knows. Desktop-only switches
- * stored beside them (such as "Let chats check back later") stay off the wire.
- */
-function remoteScheduledSettings(value: ScheduledTaskSettings) {
-  return {
-    enabled: value.enabled,
-    defaultMode: value.defaultMode,
-    defaultPermission: value.defaultPermission,
-    defaultMcpEnabled: value.defaultMcpEnabled,
-    defaultNotify: value.defaultNotify,
-    defaultTimezone: value.defaultTimezone,
-  };
-}
-
 function ownRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object" && !Array.isArray(value)
     ? value as Record<string, unknown>
@@ -142,6 +127,22 @@ function mapRun(run: ScheduledRun, summaryLimit = 20_000) {
     finishedAt: new Date(run.finishedAt).toISOString(),
     ...(summary ? { summary } : {}),
     ...(failed ? { errorCode: run.result === "blocked" ? "blocked" : "execution_failed" } : {}),
+  };
+}
+
+/**
+ * The scheduled-task settings phones know about. Desktop-only rows in the same
+ * store (Keep this computer awake, Let chats check back later) stay off the
+ * wire, so the contract is unchanged.
+ */
+function remoteScheduledSettings(value: ScheduledTaskSettings) {
+  return {
+    enabled: value.enabled,
+    defaultMode: value.defaultMode,
+    defaultPermission: value.defaultPermission,
+    defaultMcpEnabled: value.defaultMcpEnabled,
+    defaultNotify: value.defaultNotify,
+    defaultTimezone: value.defaultTimezone,
   };
 }
 

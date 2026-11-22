@@ -13,7 +13,8 @@ function fixture() {
     revision: "rev_settings",
     value: {
       enabled: true, defaultMode: "llm" as const, defaultPermission: "read-only" as const,
-      defaultMcpEnabled: false, defaultNotify: true, defaultTimezone: "UTC", chatCheckBacks: true,
+      defaultMcpEnabled: false, defaultNotify: true, defaultTimezone: "UTC",
+      keepAwakeWhileWorking: false, chatCheckBacks: true,
     },
   };
   const application = {
@@ -240,7 +241,7 @@ test("phones read and write only the scheduled-task settings the Remote contract
     enabled: true, defaultMode: "llm", defaultPermission: "read-only",
     defaultMcpEnabled: false, defaultNotify: true, defaultTimezone: "UTC",
   };
-  // The desktop-only check-back switch stays off the wire, whose schema allows no other keys.
+  // The desktop-only switches stay off the wire, whose schema allows no other keys.
   assert.deepEqual(await value.service.settings(), { revision: "rev_settings", ...expected });
   assert.deepEqual(
     await value.service.updateSettings("rev_settings", { confirmedForeground: true, defaultNotify: false }),
@@ -250,4 +251,21 @@ test("phones read and write only the scheduled-task settings the Remote contract
     value.service.updateSettings("rev_settings_2", { confirmedForeground: true, chatCheckBacks: false }),
     /foreground confirmation/u,
   );
+});
+
+test("phones never see or change the desktop-only keep-awake setting", async () => {
+  const value = fixture();
+  const read = await value.service.settings();
+  assert.equal("keepAwakeWhileWorking" in read, false);
+  assert.deepEqual(Object.keys(read).sort(), [
+    "defaultMcpEnabled", "defaultMode", "defaultNotify", "defaultPermission", "defaultTimezone", "enabled", "revision",
+  ]);
+  await assert.rejects(
+    value.service.updateSettings(read.revision, { confirmedForeground: true, keepAwakeWhileWorking: true }),
+    /foreground confirmation/u,
+  );
+  const saved = await value.service.updateSettings(read.revision, { confirmedForeground: true, defaultNotify: false });
+  assert.equal(saved.defaultNotify, false);
+  assert.equal("keepAwakeWhileWorking" in saved, false);
+  assert.equal((await value.application.settings()).value.keepAwakeWhileWorking, false, "the desktop's choice is untouched");
 });

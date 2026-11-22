@@ -20,6 +20,7 @@ const stored: ScheduledTaskSettings = {
   defaultMcpEnabled: false,
   defaultNotify: true,
   defaultTimezone: "UTC",
+  keepAwakeWhileWorking: true,
   chatCheckBacks: true,
 };
 
@@ -28,6 +29,7 @@ async function mount(initial: ScheduledTaskSettings = stored) {
   const calls = installBotTestIpc({
     "schedule:list": () => [],
     "mcp:list": () => [],
+    "schedule:keepAwakeStatus": () => ({ supported: true, enabled: true, holding: false, pausedWhileIdle: false, counts: {} }),
     "schedule:settings": (patch?: unknown) => (current = patch ? { ...current, ...(patch as object) } : current),
   });
   await mountWithBotRouter(<ScheduledTasksSettings />, { initialPath: "/settings" });
@@ -46,6 +48,10 @@ test("check-backs sit in a While you're away group after Background execution, o
   assert.ok(background.compareDocumentPosition(away) & Node.DOCUMENT_POSITION_FOLLOWING);
   assert.ok(away.compareDocumentPosition(current) & Node.DOCUMENT_POSITION_FOLLOWING);
   assert.ok(screen.getByText(/Turning this off cancels every pending check-back/u));
+  // One group holds both rows: keep awake first, then check-backs.
+  const keepAwake = await screen.findByRole("switch", { name: "Keep this computer awake while Aiden works" });
+  assert.ok(keepAwake.compareDocumentPosition(toggle) & Node.DOCUMENT_POSITION_FOLLOWING);
+  assert.equal(screen.getAllByText("While you're away").length, 1);
 });
 
 test("turning check-backs off saves false, and on again saves true", async () => {

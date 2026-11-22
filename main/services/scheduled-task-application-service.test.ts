@@ -4,7 +4,11 @@ import { createScheduledTaskApplicationService, scheduledTaskRevision } from "./
 import { scheduledSettingsPatch } from "./scheduled-settings-core.js";
 import type { AppSettings, McpServer, ScheduledRun, ScheduledTask, ScheduledTaskInput } from "./types.js";
 
-function fixture(mcpServers: McpServer[] = []) {
+function fixture(
+  mcpServers: McpServer[] = [],
+  settingsPatch: (input: Record<string, unknown>) => Partial<AppSettings> = (input) =>
+    ({ ...(typeof input.enabled === "boolean" ? { scheduledTasksEnabled: input.enabled } : {}) }),
+) {
   let clock = 10;
   let settings: AppSettings = {};
   const tasks = new Map<string, ScheduledTask>();
@@ -77,13 +81,13 @@ function fixture(mcpServers: McpServer[] = []) {
     nextRuns: (_cron, _timezone, count) => Array.from({ length: count }, (_, index) => index + 1),
     systemTimezone: () => "UTC",
     validateTimezone: (value) => value,
-    settingsPatch: (input) => scheduledSettingsPatch(input, (value) => value),
+    settingsPatch,
     notifyChanged: () => undefined,
     chatCheckBacksChanged: (enabled) => {
       checkBackSwitches.push(enabled);
     },
   });
-  return { service, tasks, savedOptions, checkBackSwitches };
+  return { service, tasks, savedOptions, checkBackSwitches, storedSettings: () => settings };
 }
 
 test("shared scheduled-task service validates inventory and carries revisions into lifecycle commits", async () => {
@@ -162,7 +166,7 @@ test("the schedule server picker (desktop and Remote) lists only servers a sched
 });
 
 test("check-backs are on by default, and only a change of the switch reaches follow-through", async () => {
-  const value = fixture();
+  const value = fixture([], (input) => scheduledSettingsPatch(input, (zone) => zone));
   const initial = await value.service.settings();
   assert.equal(initial.value.chatCheckBacks, true);
   const off = await value.service.updateSettings(initial.revision, { chatCheckBacks: false });
@@ -175,4 +179,20 @@ test("check-backs are on by default, and only a change of the switch reaches fol
   const latest = await value.service.settings();
   await value.service.updateSettings(latest.revision, { chatCheckBacks: true });
   assert.deepEqual(value.checkBackSwitches, [false, true]);
+});
+
+test("keep this computer awake is on by default and only an off choice is stored", async () => {
+  const value = fixture([], (input) => scheduledSettingsPatch(input, (zone) => zone));
+  const initial = await value.service.settings();
+  assert.equal(initial.value.keepAwakeWhileWorking, true);
+
+  const off = await value.service.updateSettings(initial.revision, { keepAwakeWhileWorking: false });
+  assert.equal(off.value.keepAwakeWhileWorking, false);
+  assert.equal(value.storedSettings().keepAwakeWhileWorking, false);
+  assert.notEqual(off.revision, initial.revision);
+
+  const on = await value.service.updateSettings(off.revision, { keepAwakeWhileWorking: true });
+  assert.equal(on.value.keepAwakeWhileWorking, true);
+  // Back to the default: nothing is stored, so a saved file never says `true`.
+  assert.equal(JSON.parse(JSON.stringify(value.storedSettings())).keepAwakeWhileWorking, undefined);
 });

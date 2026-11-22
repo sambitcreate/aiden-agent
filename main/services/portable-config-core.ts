@@ -667,6 +667,7 @@ function normalizeSettingsShape(value: unknown): SettingsShape {
     "scheduledDefaultMcpEnabled",
     "scheduledDefaultNotify",
     "chatCheckBacks",
+    "keepAwakeWhileWorking",
     "telegramDraftPreviews",
     "telegramThreadedMode",
   ] as const) {
