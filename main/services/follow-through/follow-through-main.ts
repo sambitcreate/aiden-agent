@@ -41,6 +41,7 @@ import type { RunCommandLeftovers } from "../coding-tools.js";
 import { ChatSettlement } from "./chat-settlement.js";
 import { randomUUID } from "node:crypto";
 import { CheckInterruptedError, DONE_WHEN_TIMEOUT_MS, GoalCheckRunner, migrateDoneWhenRecords, type GoalCheckResult } from "./done-when.js";
+import { goalChatRefusal } from "../goal/goal-core.js";
 import { noticeDelivery } from "./notice-delivery-main.js";
 import { commandMayChangePullRequest, type PullRequestFollowRecord } from "./pull-request-follow.js";
 import { PullRequestFollowReader } from "./pull-request-follow-github.js";
@@ -363,10 +364,19 @@ export async function startFollowThrough(): Promise<void> {
   savedFollows = state.follows;
   savedCheckBacks = Array.isArray(state.checkBacks) ? state.checkBacks : [];
   savedGoals = parseGoalRecords(state.goals);
-  // `/until` checks saved before they became goals come back as paused goals.
-  const migrated = migrateDoneWhenRecords(Array.isArray(state.checks) ? state.checks : [], savedGoals, {
+  // `/until` checks saved before they became goals come back as paused goals,
+  // in chats that can still have one.
+  const savedChecks: unknown[] = Array.isArray(state.checks) ? state.checks : [];
+  const refusals = new Map<string, string | undefined>();
+  for (const entry of savedChecks) {
+    const chatId = (entry as { chatId?: unknown } | null)?.chatId;
+    if (typeof chatId !== "string" || refusals.has(chatId)) continue;
+    refusals.set(chatId, goalChatRefusal(await chatStore.get(chatId).catch(() => null)));
+  }
+  const migrated = migrateDoneWhenRecords(savedChecks, savedGoals, {
     now: Date.now(),
     newId: () => `goal-${randomUUID()}`,
+    eligible: (chatId) => refusals.has(chatId) && refusals.get(chatId) === undefined,
   });
   if (migrated.length > 0) savedGoals = [...savedGoals, ...migrated];
   if (migrated.length > 0 || (Array.isArray(state.checks) && state.checks.length > 0)) scheduleSave();

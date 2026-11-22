@@ -561,10 +561,11 @@ export function withoutForgottenFactsSession<Metadata extends PiSessionMetadata>
  * away the prompt's update, the update is put back after the summary, so the
  * model still reads the current state while system keeps the head's.
  *
- * `goalReminder`, given while the chat's keep-going goal is active, sits right
- * after the newest compaction summary, so the goal survives the summary. It is
- * never journaled and depends only on the goal's objective, so every request
- * of the goal's life sends the same bytes there.
+ * `goalReminder`, given while the chat has a keep-going goal (until it is done
+ * or cleared), sits right after the newest compaction summary, so the goal
+ * survives the summary. It is never journaled and depends only on the goal's
+ * objective, so every request of the goal's life, paused or not, sends the
+ * same bytes there.
  */
 export function chatStateRequestMessages(
   head: ChatTurnState,

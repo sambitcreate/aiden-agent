@@ -116,7 +116,7 @@ test("a process recovery problem stops the check with its own message", async ()
   assert.deepEqual(await pending, { kind: "stopped", summary: "Aiden couldn't confirm the last check stopped." });
 });
 
-test("checks saved by an older release become paused goals that keep their used checks", () => {
+test("checks saved by an older release become paused goals that keep their used checks; invalid ones are dropped", () => {
   let ids = 0;
   const existing = createGoal({ id: "goal-x", chatId: "chat-goal", objective: "Ship it", source: "slash", boot: "b", now: 1 });
   assert.ok(existing.ok);
@@ -131,9 +131,14 @@ test("checks saved by an older release become paused goals that keep their used 
       { version: 1, chatId: "chat-goal", workspaceId: "ws-1", command: "npm test", state: "waiting", checksRun: 0, setAt: 1 },
       null,
       { version: 2, chatId: "chat-future", command: "npm test", state: "waiting" },
+      // A command a new /until would refuse never reaches a round's prompt.
+      { version: 1, chatId: "chat-newline", workspaceId: "ws-1", command: "npm test\nrm -rf ~", state: "waiting", checksRun: 0, setAt: 1 },
+      { version: 1, chatId: "chat-long", workspaceId: "ws-1", command: "x".repeat(5_000), state: "waiting", checksRun: 0, setAt: 1 },
+      // A chat that can't have a goal (a Bot's, or gone) gets none.
+      { version: 1, chatId: "chat-bot", workspaceId: "ws-1", command: "npm test", state: "waiting", checksRun: 0, setAt: 1 },
     ],
     goals,
-    { now: 10_000, newId: () => `goal-${++ids}` },
+    { now: 10_000, newId: () => `goal-${++ids}`, eligible: (chatId) => chatId !== "chat-bot" },
   );
   assert.deepEqual(
     migrated.map((goal) => [goal.chatId, goal.status, goal.cause, goal.rounds, goal.maxRounds, goal.check?.command, goal.source]),

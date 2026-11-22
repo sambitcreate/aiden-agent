@@ -4,6 +4,7 @@ import type { ToolApprovalScope } from "../../renderer/shared/tool-approval-scop
 import type { AidenRemotePendingQuestion } from "./aiden-remote-protocol.js";
 import type { AidenRemotePendingApproval } from "./aiden-remote-streams.js";
 import type { ToolApprovalPrompt } from "./tool-approval.js";
+import type { ChatGenerationOwner } from "./chat-generation-owner.js";
 
 /** How long a card waits for an answer, the same as a phone turn's card. */
 export const OWED_TURN_PROMPT_LIFETIME_MS = 5 * 60 * 1_000;
@@ -205,3 +206,65 @@ export function createOwedTurnPrompts(deps: OwedTurnPromptsDeps) {
 }
 
 export type OwedTurnPrompts = ReturnType<typeof createOwedTurnPrompts>;
+
+export interface PromptLifetimeDeps {
+  now(): number;
+  setTimer(callback: () => void, ms: number): unknown;
+  clearTimer(handle: unknown): void;
+  /** Denies the approval; false when someone already answered it. */
+  expireApproval(approvalId: string): boolean;
+  /** Closes the question as timed out; false when someone already answered it. */
+  expireQuestion(promptId: string): boolean;
+}
+
+/**
+ * A turn Aiden started in a window that shows the chat (a goal round on
+ * screen): its cards show in that window as usual, but one nobody answers
+ * within `lifetime` is denied or closed, as an owed turn's is, and
+ * `lifetime.expired` hears it. A question whose own deadline is sooner closes
+ * itself; that is the agent's choice, not the person's absence.
+ */
+export function withPromptLifetime(
+  owner: ChatGenerationOwner,
+  chatId: string,
+  lifetime: OwedTurnPromptLifetime,
+  deps: PromptLifetimeDeps,
+): ChatGenerationOwner {
+  const timers = new Map<string, { streamId: string; handle: unknown }>();
+  const clear = (id: string) => {
+    const timer = timers.get(id);
+    if (!timer) return;
+    deps.clearTimer(timer.handle);
+    timers.delete(id);
+  };
+  const arm = (id: string, streamId: string, expire: (id: string) => boolean, kind: "approval" | "question") => {
+    clear(id);
+    const handle = deps.setTimer(() => {
+      timers.delete(id);
+      if (expire(id)) lifetime.expired?.(chatId, kind);
+    }, lifetime.ms);
+    timers.set(id, { streamId, handle });
+  };
+  return {
+    ...(owner.kind ? { kind: owner.kind } : {}),
+    id: owner.id,
+    documentId: owner.documentId,
+    isDestroyed: () => owner.isDestroyed(),
+    onInvalidated: (listener) => owner.onInvalidated(listener),
+    send(channel, payload) {
+      if (channel === "chat:approval") {
+        const prompt = payload as ToolApprovalPrompt;
+        arm(prompt.approvalId, prompt.streamId, deps.expireApproval, "approval");
+      } else if (channel === "chat:questionnaire") {
+        const prompt = payload as AskUserQuestionPromptV1;
+        const agentDeadline = prompt.expiresAt ? Date.parse(prompt.expiresAt) : Number.NaN;
+        const sooner = Number.isFinite(agentDeadline) && agentDeadline - deps.now() < lifetime.ms;
+        if (!sooner) arm(prompt.promptId, prompt.streamId, deps.expireQuestion, "question");
+      } else if (channel === "chat:done" || channel === "chat:error") {
+        const streamId = (payload as { streamId?: unknown } | null)?.streamId;
+        for (const [id, timer] of [...timers]) if (timer.streamId === streamId) clear(id);
+      }
+      owner.send(channel, payload);
+    },
+  };
+}

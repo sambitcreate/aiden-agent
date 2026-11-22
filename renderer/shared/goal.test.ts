@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { goalRoundBucket, goalRoundLabel, goalView, parseGoalCommand, parseGoalRecords, parseGoalView, validateGoalCheck, type GoalRecordV1 } from "./goal.js";
+import { GOAL_CHECK_MAX_ROUNDS, GOAL_MAX_ROUNDS, goalRoundBucket, goalRoundLabel, goalView, parseGoalCommand, parseGoalRecords, parseGoalView, validateGoalCheck, type GoalRecordV1 } from "./goal.js";
 
 test("/goal commands", () => {
   assert.deepEqual(parseGoalCommand("/goal"), { kind: "show" });
@@ -66,4 +66,21 @@ test("the renderer's view of a goal leaves out the loop's bookkeeping", () => {
 
 test("settled rounds are bucketed up to the 50-round limit", () => {
   assert.deepEqual([1, 2, 5, 6, 10, 11, 20, 21, 49, 50].map(goalRoundBucket), ["1", "2-5", "2-5", "6-10", "6-10", "11-20", "11-20", "21-49", "21-49", "50"]);
+});
+
+test("a saved goal is held to the limits a new one gets, and a chat keeps one goal", () => {
+  const read = (entry: Record<string, unknown>) => parseGoalRecords(JSON.parse(JSON.stringify([{ ...saved, ...entry }])))[0];
+  assert.equal(read({ maxRounds: 1_000_000_000 })?.maxRounds, GOAL_MAX_ROUNDS, "a reviewed goal runs at most 50 rounds");
+  assert.equal(read({ maxRounds: 0 })?.maxRounds, 1, "a goal runs at least one round");
+  assert.equal(read({ maxRounds: 40, check: { command: "npm test" } })?.maxRounds, GOAL_CHECK_MAX_ROUNDS, "a command goal runs at most its checks");
+  assert.equal(read({ cause: "stalled", status: "paused" })?.cause, "stalled");
+  assert.equal(read({ cause: "gremlins", status: "paused" }), undefined, "an unknown cause drops the goal");
+  assert.equal(read({ check: { command: "npm test\nrm -rf ~" } }), undefined, "a check with a newline never reaches a prompt");
+  assert.equal(read({ check: { command: "  npm test  " } })?.check?.command, "npm test");
+
+  const older = { ...saved, id: "goal-old", updatedAt: 5 };
+  const newer = { ...saved, id: "goal-new", updatedAt: 30 };
+  const other = { ...saved, id: "goal-other", chatId: "chat-2" };
+  const restored = parseGoalRecords(JSON.parse(JSON.stringify([newer, older, other])));
+  assert.deepEqual(restored.map((goal) => [goal.chatId, goal.id]), [["chat-1", "goal-new"], ["chat-2", "goal-other"]]);
 });

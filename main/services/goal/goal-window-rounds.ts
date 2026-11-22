@@ -156,11 +156,6 @@ export class GoalWindowRounds<P> {
     }
   }
 
-  /** Whether a window-owned round runs in this chat now. */
-  hasWindowRound(chatId: string): boolean {
-    return [...this.active.values()].some((round) => round.chatId === chatId);
-  }
-
   private target(chatId: string): GoalWindowDocument | undefined {
     if (this.deps.screenLocked()) return undefined;
     let best: { document: GoalWindowDocument; at: number } | undefined;

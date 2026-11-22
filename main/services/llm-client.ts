@@ -436,7 +436,7 @@ import {
 import { createChatOwedTurns, type OwedTurnPlan } from "./chat-owed-turns.js";
 import { owedTurnStartRequest, type OwedTurnContext } from "./chat-owed-turn-start.js";
 import { goalTurnHooks } from "./goal/goal-turn-hooks.js";
-import { createOwedTurnPrompts, type OwedTurnPromptLifetime } from "./chat-owed-turn-prompts.js";
+import { createOwedTurnPrompts, withPromptLifetime, type OwedTurnPromptLifetime } from "./chat-owed-turn-prompts.js";
 import { persistedChatWorkspaceId } from "../../renderer/shared/chat-workspace.js";
 import { btwOperationRegistry, btwService } from "./rpiv-btw/service.js";
 import { createPiCodemodeTool } from "./pi-codemode.js";
@@ -2345,7 +2345,9 @@ async function prepareGeneration(
     );
   }
   // Suggesting a keep-going goal: declared in every turn of an ordinary chat
-  // on this computer; turns Aiden started and a paired device's turns refuse it
+  // on this computer, goal rounds and unattended turns included, so the tool
+  // list (and the chat's cached prefix) is the same in every turn; turns Aiden
+  // started and a paired device's turns refuse it when called
   // (`turnArgsRefusal`). Only the person's Start on the card sets the goal.
   if (
     !botContext &&
@@ -4543,8 +4545,8 @@ export const llmClient = {
         deferredTools,
         // Every request drops removed memory facts and, after a compaction
         // inside the turn, states the current state again.
-        // While a goal is active, its byte-stable reminder sits right after a
-        // compaction summary.
+        // While the chat has a goal (until it is done or cleared), its
+        // byte-stable reminder sits right after a compaction summary.
         prepareMessages: chatStateRequestMessages(chatStatePlan.head, currentChatState, goalTurnHooks().reminder(params.chatId)),
       };
       assertGenerationContextCapacity(generationContextOptions);
@@ -6884,6 +6886,26 @@ export const llmClient = {
       send: (channel, payload) => owedTurnPrompts.publish(chatId, channel, payload, lifetime),
       onInvalidated: () => () => undefined,
     };
+  },
+
+  /**
+   * The owner of a turn Aiden started in a window that shows the chat (a goal
+   * round on screen): the window's own owner, except that a card nobody
+   * answers within `lifetime` is denied or closed, as an attended turn's is.
+   */
+  attendedWindowOwner(owner: ChatGenerationOwner, chatId: string, lifetime: OwedTurnPromptLifetime): ChatGenerationOwner {
+    return withPromptLifetime(owner, chatId, lifetime, {
+      now: Date.now,
+      setTimer: (callback, ms) => {
+        const timer = setTimeout(callback, ms);
+        timer.unref?.();
+        return timer;
+      },
+      clearTimer: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
+      expireApproval: (approvalId) => approvals.decideAsHost(approvalId, false, undefined, false),
+      expireQuestion: (promptId) =>
+        questionnaires.respondAsHost(promptId, { version: ASK_USER_QUESTION_VERSION, promptId, cancelled: true, answers: [] }) !== "rejected",
+    });
   },
 
   /** The chat has a helper (subagent) still running. */

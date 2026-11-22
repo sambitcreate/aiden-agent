@@ -184,7 +184,7 @@ Pure state machine (set, pause, resume, clear, settle → verdict, stalls, 50-ro
 
 ### A8. Aiden suggests a goal; onboarding tile
 
-`propose_goal {objective}` shows a card "Keep going until: … \[Start\] \[Not now\]"; only your press starts it. Never offered in goal rounds, unattended turns or Bots. Feature gallery tile with code-drawn art. Tests: tool registration and refusal; onboarding art test. **Screenshots:** yes. **Size:** M. **Waits on:** A4.
+`propose_goal {objective}` shows a card "Keep going until: … \[Start\] \[Not now\]"; only your press starts it. The objective is one line of up to 300 characters, shown whole. In ordinary desktop chats it is declared for cache stability in every turn and refused at call time in goal rounds, unattended and other Aiden-started turns, and paired devices' turns; never declared for Bots, the Assistant or agent-harness chats. Feature gallery tile with code-drawn art. Tests: tool registration and refusal; onboarding art test. **Screenshots:** yes. **Size:** M. **Waits on:** A4.
 
 ## Phase 3: Background helpers (6 PRs)
 

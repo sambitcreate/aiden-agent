@@ -10,7 +10,7 @@
 
 import { fenceAsData, tailText } from "../../../renderer/shared/agent-notices.js";
 import { MAX_DONE_WHEN_CHECKS, type DoneWhenCheckState } from "../../../renderer/shared/follow-through.js";
-import { GOAL_VERSION, type GoalRecordV1 } from "../../../renderer/shared/goal.js";
+import { GOAL_VERSION, validateGoalCheck, type GoalRecordV1 } from "../../../renderer/shared/goal.js";
 
 export const DONE_WHEN_TIMEOUT_MS = 10 * 60_000;
 export const DONE_WHEN_OUTPUT_CHARS = 3_000;
@@ -178,12 +178,13 @@ export function untilGoalObjective(command: string): string {
  * still waiting or running becomes a paused goal (nothing restarts by itself
  * after an update), keeping the checks it had used. Passed and given-up
  * checks are finished and are dropped, as is a check whose chat already has
- * a goal.
+ * a goal, a command a new `/until` would refuse, and a chat that can't have a
+ * goal (`eligible`).
  */
 export function migrateDoneWhenRecords(
   records: readonly unknown[],
   goals: readonly GoalRecordV1[],
-  make: { now: number; newId: () => string },
+  make: { now: number; newId: () => string; eligible: (chatId: string) => boolean },
 ): GoalRecordV1[] {
   const taken = new Set(goals.map((goal) => goal.chatId));
   const migrated: GoalRecordV1[] = [];
@@ -191,8 +192,8 @@ export function migrateDoneWhenRecords(
     const record = entry as Partial<DoneWhenRecord> | null;
     if (record?.version !== 1 || typeof record.chatId !== "string" || typeof record.command !== "string") continue;
     if (record.state !== "waiting" && record.state !== "running") continue;
-    const command = record.command.trim();
-    if (!command || taken.has(record.chatId)) continue;
+    const command = validateGoalCheck(record.command)?.command;
+    if (!command || taken.has(record.chatId) || !make.eligible(record.chatId)) continue;
     taken.add(record.chatId);
     const used = typeof record.checksRun === "number" && Number.isSafeInteger(record.checksRun) ? record.checksRun : 0;
     // A check cut off while running had not used its attempt.

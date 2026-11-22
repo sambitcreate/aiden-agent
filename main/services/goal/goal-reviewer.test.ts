@@ -206,6 +206,24 @@ test("a stale prefix falls back to an isolated, tool-free request", async () => 
   }
 });
 
+test("a chat request that forced a tool call is not continued: the review goes straight to the isolated, tool-free request", async () => {
+  const { harness, ledger } = await chatTurn();
+  for (const toolChoice of ["required", "any", { type: "tool", name: "list_files" }]) {
+    const sent: Sent[] = [];
+    const prefix = async () => {
+      const latest = await ledger.latest(CHAT_ID);
+      return latest && { ...latest, options: { ...latest.options, toolChoice: toolChoice as never } };
+    };
+    const { deps } = dependencies({ model: harness.model, answers: [{ text: DONE }], sent, prefix });
+    const outcome = await reviewGoal(deps, { goal, allowWait: false, signal: open() });
+    assert.equal(outcome.kind, "verdict", JSON.stringify(toolChoice));
+    assert.equal(outcome.kind === "verdict" && outcome.via, "isolated");
+    assert.equal(sent.length, 1, "one request, never the forced continuation");
+    assert.equal(sent[0]!.options?.toolChoice, undefined);
+    assert.deepEqual((sent[0]!.context as { tools?: unknown[] }).tools ?? [], []);
+  }
+});
+
 test("a failed continuation falls back once; a timed-out one does not", async () => {
   const { harness, ledger } = await chatTurn();
   const failedSent: Sent[] = [];

@@ -32,7 +32,9 @@ import {
   compareAndSetGoal,
   createGoal,
   goalAfterSettle,
+  goalNoticeRound,
   goalPromptUnanswered,
+  goalRoundNotStarted,
   goalWaitExpired,
   goalWindowWanted,
   pauseGoal,
@@ -42,7 +44,7 @@ import {
   type GoalRoundActivity,
   type GoalStep,
 } from "./goal-core.js";
-import { goalContinuationNote, goalKickoffNote, goalReminder, goalRoundTitle } from "./goal-prompts.js";
+import { goalContinuationNote, goalKickoffNote, goalReminderFor, goalRoundTitle } from "./goal-prompts.js";
 import type { GoalReviewOutcome } from "./goal-reviewer.js";
 import type { GoalRunSettled } from "./goal-turn-hooks.js";
 import type { StartTurnResult } from "../follow-through/notice-delivery.js";
@@ -53,6 +55,11 @@ export type GoalAnalyticsEvent =
   | { event: "goal_settled"; properties: { outcome: "done" | "needs_you" | "paused" | "cleared"; rounds: GoalRoundBucket } };
 
 export type GoalRoundStart = "started" | "busy" | "unavailable";
+
+/** The goal and revision a look at the chat last saw or wrote: what its system writes compare against. */
+interface LookRef {
+  ref: GoalRef;
+}
 
 export interface GoalLoopDependencies {
   enabled(): boolean;
@@ -81,12 +88,28 @@ export interface GoalLoopDependencies {
   runCheck?(goal: GoalRecordV1, signal: AbortSignal): Promise<GoalCheckResult>;
   /** Throws why this chat can't run a command goal's check (folder access off, a replaced worktree). */
   prepareCheck?(chatId: string): Promise<void>;
-  startRound(chatId: string, context: OwedTurnContext, round: { text: string; notice: AgentNoticeV1 }): Promise<GoalRoundStart>;
+  /**
+   * Starts the next round. `isCurrent` turns false once the goal it was
+   * started for is paused, cleared, replaced or changed: checked again after
+   * any wait (a window's claim) and when the round's message is saved, so a
+   * round never begins for a goal the person stopped.
+   */
+  startRound(
+    chatId: string,
+    context: OwedTurnContext,
+    round: { text: string; notice: AgentNoticeV1 },
+    isCurrent: () => boolean,
+  ): Promise<GoalRoundStart>;
   /**
    * A round that answers a notice (a finished job, a pull request update):
    * with `notice` saved first, or answering the notice already saved.
    */
-  startNoticeRound(chatId: string, context: OwedTurnContext, notice?: { text: string; notice: AgentNoticeV1 }): Promise<StartTurnResult>;
+  startNoticeRound(
+    chatId: string,
+    context: OwedTurnContext,
+    notice: { text: string; notice: AgentNoticeV1 } | undefined,
+    isCurrent: () => boolean,
+  ): Promise<StartTurnResult>;
   report(event: GoalAnalyticsEvent): void;
   /** A goal settled on its own (done, needs you, or paused by the system). */
   settled?(goal: GoalRecordV1): void;
@@ -164,9 +187,9 @@ export class GoalLoop {
     return goalKickoffNote(goal);
   }
 
+  /** What follows a compaction summary: the same bytes from the goal's setting until it is done or cleared. */
   reminder(chatId: string): string | undefined {
-    const goal = this.goals.get(chatId);
-    return goal?.status === "active" ? goalReminder(goal) : undefined;
+    return goalReminderFor(this.goals.get(chatId));
   }
 
   /** The person's Pause. */
@@ -209,6 +232,10 @@ export class GoalLoop {
   runSettled(event: GoalRunSettled): void {
     if (this.stopped) return;
     this.contexts.set(event.chatId, event.context);
+    // A run that settles while the loop still looks at an earlier one is the
+    // newer news (the person's Stop, a failure, a message the review didn't
+    // read): that look is dropped, and this run's settling is looked at instead.
+    this.stopReview(event.chatId);
     this.look(event.chatId, event);
   }
 
@@ -218,8 +245,19 @@ export class GoalLoop {
     if (this.stopped || !goal || goal.status !== "active" || this.reviews.has(chatId)) return;
     const controller = new AbortController();
     this.reviews.set(chatId, controller);
-    void this.afterSettle({ chatId, stopped: event.stopped, failed: event.failed }, controller)
-      .catch((error: unknown) => this.deps.log("The keep-going goal could not continue.", error))
+    const look: LookRef = { ref: { id: goal.id, revision: goal.revision } };
+    void this.afterSettle({ chatId, stopped: event.stopped, failed: event.failed }, controller, look)
+      .catch((error: unknown) => {
+        if (controller.signal.aborted) return;
+        // Whatever failed (the chat's model, the spending check, reading the
+        // chat), the goal must not stay active with nothing running: it pauses,
+        // unless the person changed it in the meantime.
+        this.deps.log("The keep-going goal could not continue.", error);
+        const written = compareAndSetGoal(this.goals.get(chatId), look.ref, (current) =>
+          pauseGoal(current, { now: this.deps.now(), cause: "failed", reason: "The goal couldn't continue" }),
+        );
+        if (written.ok && written.goal.status !== "active") this.settle(written.goal);
+      })
       .finally(() => {
         if (this.reviews.get(chatId) === controller) this.reviews.delete(chatId);
       });
@@ -234,9 +272,34 @@ export class GoalLoop {
     const goal = this.goals.get(chatId);
     if (this.stopped || goal?.status !== "active") return undefined;
     const context = this.contexts.get(chatId) ?? (await this.deps.fallbackContext(chatId));
-    if (this.goals.get(chatId)?.status !== "active") return undefined;
+    const latest = this.goals.get(chatId);
+    if (latest?.status !== "active") return undefined;
     if (!context) return { kind: "unavailable", reason: "The chat has no model yet." };
-    return this.deps.startNoticeRound(chatId, context, notice);
+    // A notice round is a round: it counts toward the limit, and at the limit
+    // the goal pauses and the notice wakes the chat as any notice does.
+    const counted = goalNoticeRound(latest, this.deps.now());
+    if (counted.status !== "active") {
+      this.stopReview(chatId);
+      this.settle(counted);
+      return undefined;
+    }
+    this.write(counted);
+    const isCurrent = () => {
+      const current = this.goals.get(chatId);
+      return !this.stopped && current?.id === counted.id && current.revision === counted.revision && current.status === "active";
+    };
+    let result: StartTurnResult;
+    try {
+      result = await this.deps.startNoticeRound(chatId, context, notice, isCurrent);
+    } catch (error) {
+      this.deps.log("A keep-going notice round could not start.", error);
+      result = { kind: "unavailable", reason: "The round could not start." };
+    }
+    if (result.kind !== "started") {
+      const restored = compareAndSetGoal(this.goals.get(chatId), counted, (current) => goalRoundNotStarted(current, latest.rounds, this.deps.now()));
+      if (restored.ok && restored.goal !== this.goals.get(chatId)) this.write(restored.goal);
+    }
+    return result;
   }
 
   /** A round's approval or question expired unanswered: the goal waits for the person. */
@@ -311,7 +374,11 @@ export class GoalLoop {
 
   // ── The loop ─────────────────────────────────────────────────────────────
 
-  private async afterSettle(event: Pick<GoalRunSettled, "chatId" | "stopped" | "failed">, controller: AbortController): Promise<void> {
+  private async afterSettle(
+    event: Pick<GoalRunSettled, "chatId" | "stopped" | "failed">,
+    controller: AbortController,
+    look: LookRef,
+  ): Promise<void> {
     const { signal } = controller;
     try {
       await this.deps.delay(GOAL_SETTLE_DELAY_MS, signal);
@@ -322,6 +389,7 @@ export class GoalLoop {
     if (signal.aborted || this.deps.isChatBusy(event.chatId)) return;
     const goal = this.goals.get(event.chatId);
     if (!goal) return;
+    look.ref = { id: goal.id, revision: goal.revision };
     const step = goalAfterSettle(goal, {
       now: this.deps.now(),
       boot: this.deps.boot,
@@ -336,6 +404,7 @@ export class GoalLoop {
     }
     if (step.kind === "skip") {
       if (step.goal !== goal) this.write(step.goal);
+      look.ref = { id: step.goal.id, revision: step.goal.revision };
       this.armWatchdog(step.goal);
       return;
     }
@@ -358,7 +427,7 @@ export class GoalLoop {
     } else {
       let current = goal;
       for (let attempt = 0; attempt < 2; attempt += 1) {
-        const outcome = await this.deps.review(current, { allowWait: this.deps.jobsRunning(event.chatId), signal });
+        const outcome = await this.review(current, { allowWait: this.deps.jobsRunning(event.chatId), signal });
         if (outcome.kind === "cancelled" || signal.aborted) return;
         if (outcome.kind === "refused") {
           next = { goal: pauseGoal(current, { now: this.deps.now(), cause: "spending" }), next: "settled" };
@@ -381,32 +450,69 @@ export class GoalLoop {
       return;
     }
     this.write(next.goal);
+    look.ref = { id: next.goal.id, revision: next.goal.revision };
     if (next.next === "wait") this.armWatchdog(next.goal);
     if (next.next === "round") {
       this.cancelWatchdog(event.chatId);
-      // A send from the person during the review is this round's work.
-      if (!this.deps.isChatBusy(event.chatId)) await this.startRound(next.goal, reason, details);
+      // A send from the person during the review is this round's work, so no
+      // round starts; either way a round is counted only once one starts.
+      const started = this.deps.isChatBusy(event.chatId) ? "busy" : await this.startRound(next.goal, reason, details);
+      if (started === "busy") {
+        const restored = compareAndSetGoal(this.goals.get(event.chatId), look.ref, (current) =>
+          goalRoundNotStarted(current, goal.rounds, this.deps.now()),
+        );
+        if (restored.ok && restored.goal !== this.goals.get(event.chatId)) {
+          this.write(restored.goal);
+          look.ref = { id: restored.goal.id, revision: restored.goal.revision };
+        }
+      }
     }
   }
 
-  private async startRound(goal: GoalRecordV1, reason?: string, details?: string): Promise<void> {
-    const context = this.contexts.get(goal.chatId) ?? (await this.deps.fallbackContext(goal.chatId));
-    const current = this.goals.get(goal.chatId);
-    if (this.stopped || current?.id !== goal.id || current.revision !== goal.revision) return;
-    if (!context) {
-      this.settle(pauseGoal(goal, { now: this.deps.now(), cause: "failed", reason: "The next round could not start" }));
-      return;
+  /** The reviewer's answer; a review that throws counts as an unusable answer. */
+  private async review(goal: GoalRecordV1, input: { allowWait: boolean; signal: AbortSignal }): Promise<GoalReviewOutcome> {
+    try {
+      return await this.deps.review(goal, input);
+    } catch (error) {
+      if (input.signal.aborted) return { kind: "cancelled" };
+      this.deps.log("The goal review failed.", error);
+      return { kind: "unusable", why: "failed", via: "isolated" };
     }
-    const started = await this.deps.startRound(goal.chatId, context, {
-      text: goalContinuationNote(goal, reason, details),
-      notice: agentNotice({ source: "goal", tone: "info", title: goalRoundTitle(goal), summary: reason ?? goal.objective }),
-    });
+  }
+
+  private async startRound(goal: GoalRecordV1, reason?: string, details?: string): Promise<GoalRoundStart | "stale"> {
+    const isCurrent = () => {
+      const current = this.goals.get(goal.chatId);
+      return !this.stopped && current?.id === goal.id && current.revision === goal.revision && current.status === "active";
+    };
+    let started: GoalRoundStart;
+    try {
+      const context = this.contexts.get(goal.chatId) ?? (await this.deps.fallbackContext(goal.chatId));
+      if (!isCurrent()) return "stale";
+      if (!context) {
+        this.settle(pauseGoal(goal, { now: this.deps.now(), cause: "failed", reason: "The next round could not start" }));
+        return "unavailable";
+      }
+      started = await this.deps.startRound(
+        goal.chatId,
+        context,
+        {
+          text: goalContinuationNote(goal, reason, details),
+          notice: agentNotice({ source: "goal", tone: "info", title: goalRoundTitle(goal), summary: reason ?? goal.objective }),
+        },
+        isCurrent,
+      );
+    } catch (error) {
+      this.deps.log("The next keep-going round could not start.", error);
+      started = "unavailable";
+    }
     if (started === "unavailable") {
       const latest = this.goals.get(goal.chatId);
       if (latest?.id === goal.id && latest.revision === goal.revision) {
         this.settle(pauseGoal(latest, { now: this.deps.now(), cause: "failed", reason: "The next round could not start" }));
       }
     }
+    return started;
   }
 
   // ── Writes ───────────────────────────────────────────────────────────────

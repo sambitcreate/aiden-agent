@@ -117,6 +117,40 @@ test("a round due while the chat is on screen starts in its window, where it can
   await expect(bar).toHaveAttribute("data-goal-status", "done", { timeout: 30_000 });
 });
 
+test("a round on screen keeps running while its window shows Settings, and goes on to Done", async ({ aiden }) => {
+  test.setTimeout(120_000);
+  const { lmStudio, page } = aiden;
+  await finishLmStudioOnboarding(page);
+  lmStudio.answerToolFreeCompletions!(REVIEW_PROMPT, '{"verdict": "continue", "reason": "The outline style is not chosen yet."}', { times: 1 });
+  lmStudio.answerToolFreeCompletions!(REVIEW_PROMPT, '{"verdict": "done", "reason": "The outline is drafted."}');
+  // Round 2 asks a question, a card only the chat's window can show.
+  const round = lmStudio.enqueueToolScenario!({
+    prompt: "Keep going · round 2 of 50",
+    calls: [{ name: "ask_user_question", arguments: { questions: [{
+      question: "Which outline style?", header: "Style",
+      options: [{ label: "Bullets", description: "Short bullet points." }, { label: "Prose", description: "Full paragraphs." }],
+    }] } }],
+    finalText: "The outline is drafted.",
+  });
+  await setGoal(page, "Draft the outline");
+  const bar = page.getByRole("group", { name: "Goal: Draft the outline" });
+  await expect(page.getByRole("heading", { name: "Which outline style?" })).toBeVisible({ timeout: 45_000 });
+
+  await page.getByRole("button", { name: "Settings", exact: true }).click();
+  await expect(page.getByRole("navigation", { name: "Settings" })).toBeVisible();
+  await page.getByRole("button", { name: "Back to app", exact: true }).click();
+  // Leaving the chat for Settings is not closing it: the round ran on, it wasn't paused as "The chat was closed".
+  await expect.poll(() => round.completed, { timeout: 45_000 }).toBe(true);
+  expect(round.error).toBeUndefined();
+  await expect(bar).toHaveAttribute("data-goal-status", "done", { timeout: 45_000 });
+  await expect(bar).not.toContainText("The chat was closed");
+});
+
+/** A suggestion near the 300-character limit: the card must show all of it. */
+const LONG_OBJECTIVE =
+  "Finish the settings migration: move every remaining preference into the new store, keep reading the old file until the copy is verified, " +
+  "delete the old file only after a successful read, and note anything that could not be moved";
+
 test("Aiden suggests a goal: Not now dismisses it, and Start sends the objective as your message and sets the goal", async ({ aiden }) => {
   test.setTimeout(120_000);
   const { lmStudio, page } = aiden;
@@ -129,7 +163,7 @@ test("Aiden suggests a goal: Not now dismisses it, and Start sends the objective
   });
   lmStudio.enqueueToolScenario!({
     prompt: "Migrate the settings store",
-    calls: [{ name: "propose_goal", arguments: { objective: "Finish the settings migration" } }],
+    calls: [{ name: "propose_goal", arguments: { objective: LONG_OBJECTIVE } }],
     finalText: "I suggested a goal for this.",
   });
   const composer = page.locator("textarea");
@@ -146,15 +180,19 @@ test("Aiden suggests a goal: Not now dismisses it, and Start sends the objective
 
   await composer.fill("Migrate the settings store");
   await composer.press("Enter");
-  const card = page.getByRole("group", { name: "Suggested goal: Finish the settings migration" });
+  const card = page.getByRole("group", { name: `Suggested goal: ${LONG_OBJECTIVE}` });
   await expect(card).toBeVisible({ timeout: 30_000 });
   await idle();
   await expect(card).toContainText("Keep going until:");
+  // Every character Start would send is on screen: the objective wraps, never clips.
+  const objective = card.locator("[data-goal-proposal-objective]");
+  await expect(objective).toHaveText(LONG_OBJECTIVE);
+  expect(await objective.evaluate((element) => element.scrollWidth <= element.clientWidth && element.scrollHeight <= element.clientHeight + 1)).toBe(true);
   await card.screenshot({ path: test.info().outputPath("goal-proposal-card.png") });
   await card.getByRole("button", { name: "Start" }).click();
   await expect(card).toHaveCount(0);
   await expect(page.locator("[data-user-message-bubble]").filter({ hasText: "Finish the settings migration" })).toBeVisible({ timeout: 15_000 });
-  const bar = page.getByRole("group", { name: "Goal: Finish the settings migration" });
+  const bar = page.getByRole("group", { name: `Goal: ${LONG_OBJECTIVE}` });
   await expect(bar).toBeVisible({ timeout: 15_000 });
   await expect(bar).toHaveAttribute("data-goal-status", "done", { timeout: 45_000 });
 });

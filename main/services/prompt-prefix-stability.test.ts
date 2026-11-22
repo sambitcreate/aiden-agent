@@ -35,7 +35,7 @@ import { assembleChatPrompt, buildWorkspaceChatBasePrompt, type ChatPromptAssemb
 import { buildSystemPrompt, type ChatSystemPromptPermission } from "./chat-system-prompt.js";
 import { createMemoryExtension } from "./memory-context.js";
 import { hookContextMessage, hookTurnContextText } from "./workspace-chat-hooks.js";
-import { turnNoteMessage } from "./chat-frozen-state.js";
+import { chatStateRequestMessages, turnNoteMessage, type ChatTurnState } from "./chat-frozen-state.js";
 import { fingerprintPromptPrefix } from "./pi-cache-telemetry.js";
 import type { MemoryFact, MemoryScope, MemoryStore } from "./memory-store.js";
 import { markMcpAgentTool } from "./mcp-tool-identity.js";
@@ -52,8 +52,8 @@ import { remoteGenerationSurface, scheduledGenerationSurface } from "./conversat
 import { UNATTENDED_FOLLOW_UP_GENERATION } from "./follow-through/notice-delivery.js";
 import { owedTurnStartRequest } from "./chat-owed-turn-start.js";
 import { goalRoundStartRequest } from "./goal/goal-round-start.js";
-import { goalKickoffNote } from "./goal/goal-prompts.js";
-import { createGoal } from "./goal/goal-core.js";
+import { goalKickoffNote, goalReminderFor } from "./goal/goal-prompts.js";
+import { applyGoalVerdict, createGoal, goalPromptUnanswered, pauseGoal, resumeGoal } from "./goal/goal-core.js";
 import { assembleAgentTools } from "./agent-tool-assembly.js";
 import { subagentsAllowedForGeneration } from "./subagents/eligibility.js";
 import { createGenerativeUiExtensionRuntime, shouldEnableGenerativeUiExtension } from "./generative-ui-extension.js";
@@ -906,6 +906,28 @@ describe("prompt prefix stability: tool list identical across turns", () => {
     assert.deepEqual(comparePromptRequests(previous, current), {}, "the round declares the chat's tools; nothing before its prompt changes");
     const texts = userTexts(current);
     assert.ok(texts.some((text) => /<turn_note>[\s\S]*<untrusted_objective>[\s\S]*Make the tests pass/u.test(text)), "the kickoff stays in the history");
+  });
+
+  test("in a compacted chat, pausing, Needs you and resuming a goal leave the requests' bytes alone; Done drops the reminder once", () => {
+    const created = createGoal({ id: "goal", chatId: "chat", objective: "Make the tests pass", source: "slash", boot: "boot", now: 1 });
+    assert.ok(created.ok);
+    const state: ChatTurnState = { branch: "main", permission: "ask", memory: "", canvas: "" };
+    const compacted = [
+      { role: "compactionSummary", summary: "Earlier rounds fixed the parser.", tokensBefore: 10, timestamp: 4 },
+      { role: "user", content: "Keep going.", timestamp: 5 },
+    ] as AgentMessage[];
+    const request = (goal: Parameters<typeof goalReminderFor>[0]) =>
+      JSON.stringify(chatStateRequestMessages(state, state, goalReminderFor(goal))(compacted));
+    const active = created.goal;
+    const paused = pauseGoal(active, { now: 2, cause: "person" });
+    const needsYou = goalPromptUnanswered(active, 3);
+    const resumed = resumeGoal(paused, { now: 4, boot: "boot" });
+    const sent = [active, paused, needsYou, resumed].map(request);
+    assert.match(sent[0]!, /Make the tests pass/u, "the goal follows the summary");
+    for (const [index, label] of ["paused", "needs you", "resumed"].entries()) assert.equal(sent[index + 1], sent[0], label);
+    const done = applyGoalVerdict(active, { verdict: "done", reason: "All green." }, { toolCalls: 1, newTextChars: 0 }, 5).goal;
+    assert.equal(done.status, "done");
+    assert.equal(request(done), JSON.stringify(compacted), "a goal that is done leaves the summary as it was");
   });
 
   test("a scheduled run in a chat, then a turn on this computer: the desktop turn keeps the chat's tools", async () => {

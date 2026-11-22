@@ -1,14 +1,19 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import type { GoalRecordV1 } from "../../../renderer/shared/goal.js";
+import { goalView, type GoalRecordV1 } from "../../../renderer/shared/goal.js";
+import { ASSISTANT_WORKSPACE_ID } from "../../../renderer/shared/assistant.js";
+import { GOAL_WINDOW_WANTED_DETAIL, goalBarView } from "../../../renderer/lib/goal-bar-view.js";
 import {
   applyGoalCheck,
   applyGoalVerdict,
   compareAndSetGoal,
   createGoal,
   goalAfterSettle,
+  goalChatRefusal,
+  goalPromptUnanswered,
   goalWaitExpired,
+  goalWindowWanted,
   pauseGoal,
   restoreGoal,
   resumeGoal,
@@ -273,4 +278,46 @@ test("a goal left active by another process comes back paused", () => {
   assert.equal(restored.reason, "Aiden restarted");
   const paused = pauseGoal(active, { now: 1, cause: "person" });
   assert.equal(restoreGoal(paused, { now: 2, boot: "boot-2" }), paused);
+});
+
+test("Continue here is offered only while the stop came from a round that wanted the window", () => {
+  // A round off screen had the browser refused.
+  const wanted = goalWindowWanted(goal(), true, MINUTE);
+  const detail = (record: GoalRecordV1) => goalBarView(goalView(record)).detail;
+
+  const blocked = applyGoalVerdict(wanted, verdict("blocked", "I need the browser to sign in"), busy, 2 * MINUTE).goal;
+  assert.equal(detail(blocked), GOAL_WINDOW_WANTED_DETAIL, "the reviewer's Needs you after that round offers Continue here");
+  const stalled = run(wanted, [[verdict("continue", "same"), quiet], [verdict("continue", "same"), quiet], [verdict("continue", "same"), quiet]]).goal;
+  assert.equal(stalled.cause, "stalled");
+  assert.equal(stalled.windowWanted, undefined, "the next round started, so the earlier round's want is gone");
+
+  // Anything else that stops the goal says its own reason.
+  for (const [label, stopped] of [
+    ["your Pause", pauseGoal(wanted, { now: 2 * MINUTE, cause: "person" })],
+    ["Stop", (goalAfterSettle(wanted, { ...settle, now: 2 * MINUTE, stopped: true }) as { goal: GoalRecordV1 }).goal],
+    ["a failed answer", (goalAfterSettle(wanted, { ...settle, now: 2 * MINUTE, lastRunFailed: true }) as { goal: GoalRecordV1 }).goal],
+    ["an unanswered approval", goalPromptUnanswered(wanted, 2 * MINUTE)],
+    ["the spending limit", pauseGoal(wanted, { now: 2 * MINUTE, cause: "spending" })],
+  ] as const) {
+    assert.notEqual(stopped.status, "active", label);
+    assert.notEqual(detail(stopped), GOAL_WINDOW_WANTED_DETAIL, label);
+    assert.equal(stopped.windowWanted, undefined, label);
+  }
+
+  // Keep going starts fresh, so a later Needs you shows the reviewer's own reason.
+  const resumed = resumeGoal(blocked, { now: 3 * MINUTE, boot: BOOT });
+  assert.equal(resumed.windowWanted, undefined);
+  const later = applyGoalVerdict(resumed, verdict("blocked", "The API key is missing"), busy, 4 * MINUTE).goal;
+  assert.equal(detail(later), "The API key is missing");
+});
+
+test("which chats can have a goal", () => {
+  const chat = { workspaceId: "ws-1", providerId: "anthropic", model: "claude" };
+  assert.equal(goalChatRefusal(chat), undefined, "an ordinary chat with a model");
+  assert.equal(goalChatRefusal({ ...chat, workspaceId: undefined }), undefined, "a chat without a folder");
+  assert.match(goalChatRefusal(null) ?? "", /no longer exists/u);
+  assert.match(goalChatRefusal({ ...chat, botId: "bot-1" }) ?? "", /Bots/u);
+  assert.match(goalChatRefusal({ ...chat, workspaceId: ASSISTANT_WORKSPACE_ID }) ?? "", /Assistant/u);
+  assert.match(goalChatRefusal({ ...chat, model: undefined }) ?? "", /Choose a model/u);
+  assert.match(goalChatRefusal({ ...chat, owner: { kind: "schedule" } as never }) ?? "", /runs its own way/u);
 });
