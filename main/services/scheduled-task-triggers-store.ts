@@ -29,14 +29,14 @@ export const TASK_TRIGGER_PAYLOAD_CHARS = SCHEDULED_TASK_TRIGGER_LIMITS.eventTex
 /** What happened to one call of a task's link (newest last, 50 kept). */
 export interface TaskLinkLogEntry {
   at: number;
-  outcome: "ran" | "batched" | "duplicate" | "daily_limit" | "filtered" | "bad_signature" | "invalid" | "off";
+  outcome: "ran" | "batched" | "duplicate" | "daily_limit" | "dropped" | "filtered" | "bad_signature" | "invalid" | "off";
   /** The body, credentials withheld, cut to 2 KB. */
   preview: string;
   /** Refused calls within a minute share one entry: how many more came after the first. */
   repeats?: number;
 }
 
-const LOG_OUTCOMES = new Set<TaskLinkLogEntry["outcome"]>(["ran", "batched", "duplicate", "daily_limit", "filtered", "bad_signature", "invalid", "off"]);
+const LOG_OUTCOMES = new Set<TaskLinkLogEntry["outcome"]>(["ran", "batched", "duplicate", "daily_limit", "dropped", "filtered", "bad_signature", "invalid", "off"]);
 
 export function hashTaskLinkToken(token: string): string {
   return createHash("sha256").update(token, "utf8").digest("hex");
@@ -135,16 +135,20 @@ function coreTrigger(trigger: ScheduledTaskTrigger, taskId: string): BotRoutineT
 
 const finite = (value: unknown): value is number => typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
 
+/** A held or pending payload within the event bound, counted in code points as the dispatcher cuts it. */
+const payloadFits = (text: string) => text.length <= TASK_TRIGGER_PAYLOAD_CHARS * 2 && [...text].length <= TASK_TRIGGER_PAYLOAD_CHARS;
+
 function parseReceipt(value: unknown): BotEventReceipt | undefined {
   if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
   const row = value as Record<string, unknown>;
   if (typeof row.eventId !== "string" || row.eventId.length > 200 || typeof row.payload !== "string" || !finite(row.at)) return undefined;
-  if (row.payload.length > TASK_TRIGGER_PAYLOAD_CHARS) return undefined;
+  if (!payloadFits(row.payload)) return undefined;
   return {
     eventId: row.eventId,
     payload: row.payload,
     at: row.at,
     ...(finite(row.watchRevision) ? { watchRevision: row.watchRevision } : {}),
+    ...(finite(row.retries) && row.retries > 0 && row.retries <= 100 ? { retries: row.retries } : {}),
   };
 }
 
@@ -156,7 +160,7 @@ function parseWatch(value: unknown): BotWatchState | undefined {
   return {
     failures: finite(row.failures) ? row.failures : 0,
     ...(pending && typeof pending.eventId === "string" && typeof pending.payload === "string" &&
-      pending.payload.length <= TASK_TRIGGER_PAYLOAD_CHARS && finite(pending.revision) && finite(pending.nextAttemptAt)
+      payloadFits(pending.payload) && finite(pending.revision) && finite(pending.nextAttemptAt)
       ? { pending: { eventId: pending.eventId, payload: pending.payload, revision: pending.revision, nextAttemptAt: pending.nextAttemptAt } }
       : {}),
     ...(typeof row.hash === "string" && /^[a-f0-9]{64}$/u.test(row.hash) ? { hash: row.hash } : {}),
@@ -370,6 +374,15 @@ export function createScheduledTaskTriggerStore(dependencies: ScheduledTaskTrigg
     return index;
   };
 
+  async function tokenTask(token: string): Promise<string | undefined> {
+    if (!/^[A-Za-z0-9_-]{20,100}$/u.test(token)) return undefined;
+    const hash = hashTaskLinkToken(token);
+    tokenIndex ??= indexFrom(books(await dependencies.persistence.load()));
+    let id: string | undefined;
+    for (const [known, taskId] of tokenIndex) if (sameHash(known, hash)) id = taskId;
+    return id;
+  }
+
   /** Whether a saved trigger kept something that outlives it: a link secret or a script state file. */
   const leavesSomething = (trigger: ScheduledTaskTrigger | undefined) =>
     trigger?.kind === "webhook" || (trigger?.kind === "watch" && trigger.source.type === "script");
@@ -465,24 +478,27 @@ export function createScheduledTaskTriggerStore(dependencies: ScheduledTaskTrigg
     },
 
     /**
-     * The link task a token opens, compared by hash in constant time; disabled
-     * tasks too. An unknown token reads nothing but the in-memory index (and
-     * the file once, read-only, to build it) and never writes.
+     * The task id a link token belongs to, from the in-memory index only (the
+     * file is read once, read-only, to build it); compared by hash in constant
+     * time. Never reads the tasks, never writes. Stale entries are possible
+     * until the next `load()`, so a hit is checked again by `findByToken`.
+     */
+    tokenTask,
+
+    /**
+     * The link task a token opens, disabled tasks too. Read-only: the routine
+     * is built from the saved task and its book as `load()` would reconcile
+     * it, without writing, so calls to a known link (even a leaked token of a
+     * task that is off) never write the file before the link's own limits.
      */
     async findByToken(token: string): Promise<TaskTriggerRoutine | undefined> {
-      if (!/^[A-Za-z0-9_-]{20,100}$/u.test(token)) return undefined;
-      const hash = hashTaskLinkToken(token);
-      tokenIndex ??= indexFrom(books(await dependencies.persistence.load()));
-      let id: string | undefined;
-      for (const [known, taskId] of tokenIndex) if (sameHash(known, hash)) id = taskId;
+      const id = await tokenTask(token);
       if (id === undefined) return undefined;
-      const taskId = id;
-      return serial(async () => {
-        const routine = (await load()).get(taskId);
-        return routine && routine.task.trigger.kind === "webhook" && routine.tokenHash !== undefined && sameHash(routine.tokenHash, hash)
-          ? routine
-          : undefined;
-      });
+      const hash = hashTaskLinkToken(token);
+      const task = (await dependencies.tasks()).find((candidate) => candidate.id === id);
+      if (!task || !isTriggerTask(task) || task.trigger.kind !== "webhook") return undefined;
+      const book = reconcileTaskTriggerBook(parseBook(books(await dependencies.persistence.load())[id]), task, dependencies.now());
+      return book.tokenHash !== undefined && sameHash(book.tokenHash, hash) ? routineOf(task, book) : undefined;
     },
 
     /** A new link replaces the old one at once; undefined leaves the task with no link. */

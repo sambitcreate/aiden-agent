@@ -7127,6 +7127,7 @@ test("a chat task's link answers 405, 404, 429, 415 and 413 in order, checks its
   } as unknown as import("./scheduled-task-triggers-store.js").TaskTriggerRoutine;
   const core = createTaskLinkWebhook({
     active: () => true,
+    tokenTask: async (candidate) => (candidate === token ? routine.id : undefined),
     findByToken: async (candidate) => (candidate === token ? routine : undefined),
     secret: async () => secret,
     emit: async (taskId, event) => { emitted.push({ taskId, payload: event.payload }); return "queued"; },
@@ -7157,8 +7158,11 @@ test("a chat task's link answers 405, 404, 429, 415 and 413 in order, checks its
     assert.equal((await post(`/hooks/tasks/${token}`, closed, { "x-signature-256": sign(closed) })).status, 202, "a filter miss looks the same to the caller");
     assert.deepEqual(emitted.map((event) => JSON.parse(event.payload).title), ["Fix login"]);
     assert.deepEqual(logged.map((entry) => entry.outcome), ["bad_signature", "ran", "filtered"]);
-    // 60 calls a minute, counted before any body is read.
-    for (let index = logged.length; index < 60; index += 1) await post(`/hooks/tasks/${token}`, "{}", { "content-type": "text/plain" });
+    // 60 calls a minute, counted before any body is read: the 415, the 413 and
+    // the two signed calls used four; the bad signature gave its place back.
+    for (let used = 4; used < 60; used += 1) {
+      assert.equal((await post(`/hooks/tasks/${token}`, closed, { "x-signature-256": sign(closed) })).status, 202);
+    }
     assert.equal((await post(`/hooks/tasks/${token}`, unsigned)).status, 429);
     clock += 61_000;
     assert.equal((await post(`/hooks/tasks/${token}`, unsigned, { "x-signature-256": sign(unsigned) })).status, 202);

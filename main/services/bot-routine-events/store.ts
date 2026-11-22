@@ -32,6 +32,8 @@ export interface BotEventReceipt {
   claimPending?: true;
   /** Original task facts; private and never a grant or a replacement source binding. */
   execution?: BotEventExecutionSnapshot;
+  /** Times this payload was held again after a run that delivered nothing (chat tasks; see `requeue`). */
+  retries?: number;
 }
 
 export interface BotEventExecutionSnapshot {

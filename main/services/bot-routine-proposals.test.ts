@@ -876,6 +876,12 @@ test("a Bot proposes a watch through the routines tool, and Add routine saves it
     assert.equal(refused.ok, false);
     assert.equal(refused.code, "invalid");
   }
+  // Like a task Aiden proposes, a Bot's proposed watch never points at this computer or a private network.
+  for (const url of ["https://192.168.1.4/status", "https://nas.local/", "http://localhost:8080/", "https://[fd00::1]/", "https://router.lan/"]) {
+    const refused = json(await tool.execute("private", watch({ type: "url", url })));
+    assert.equal(refused.ok, false, url);
+    assert.match(String(refused.error), /private network/u, url);
+  }
   assert.equal(cards.length, 0, "a refused watch shows no card");
 
   const proposed = json(await tool.execute("c1", watch({ type: "url", url: "https://example.com/notes" })));
@@ -896,4 +902,12 @@ test("a Bot proposes a watch through the routines tool, and Add routine saves it
   assert.equal(saved?.watch?.hash, undefined, "the first check is still to come");
   assert.equal(saved?.watch?.nextCheckAt, at);
   assert.equal(saved?.watch?.failures, 0);
+
+  // The card shows the whole host, however long the address.
+  const host = "github.com.account-security-check.example.net";
+  const long = json(await tool.execute("c2", watch({ type: "url", url: `https://${host}/${"a".repeat(120)}` })));
+  assert.equal(long.ok, true);
+  const longCard = cards[cards.length - 1]!.data as { label: string };
+  assert.ok(longCard.label.includes(`https://${host}/`), longCard.label);
+  assert.ok(longCard.label.length < 160, "only the path is shortened");
 });

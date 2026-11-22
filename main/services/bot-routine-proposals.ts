@@ -43,6 +43,7 @@ import {
   type BotRoutineTrigger,
 } from "../../renderer/shared/bot-routine-trigger.js";
 import type { BotRoutineSchedule } from "../../renderer/shared/bot-routine-schedule.js";
+import { isPrivateWatchAddress } from "../../renderer/shared/scheduled-task-trigger.js";
 import { botSessionDirectory, createKeyedSerial } from "./bot-routine-notes.js";
 import { writeJsonAtomic } from "./durable-fs.js";
 import { BOT_EVENT_ROUTINES_MAX, type BotEventRoutineStore } from "./bot-routine-events/store.js";
@@ -334,6 +335,11 @@ export function createBotRoutineProposalService(dependencies: BotRoutineProposal
     const name = routineText(input.name, "name");
     const prompt = routineText(input.prompt, "prompt");
     const trigger = parseBotRoutineTrigger(input.trigger);
+    // Like a task Aiden proposes: never this computer or a private network.
+    // The Bot's owner can still set one up in the Bot's profile.
+    if (trigger.kind === "watch" && trigger.source.type === "url" && isPrivateWatchAddress(trigger.source.url)) {
+      throw new Error("A routine a Bot proposes can't watch this computer or a private network address. The person can set that up in the Bot's profile.");
+    }
     if ((await dependencies.eventRoutines.list(botId)).length >= BOT_EVENT_ROUTINES_MAX) {
       throw new Error("This Bot has as many event routines as it can keep. The person can remove one in the Bot's profile.");
     }

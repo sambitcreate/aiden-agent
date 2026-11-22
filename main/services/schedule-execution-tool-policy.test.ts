@@ -318,6 +318,23 @@ test("a run stopped by a permission counts as failed", async (t) => {
   );
 });
 
+test("a scheduled run the person stops with the chat's Stop button is recorded as stopped, not as a failure", async (t) => {
+  const sent = captureAnalyticsEvents(t);
+  const stopped = { content: "Half an answ", timeline: { version: 3, generationId: "g", status: "cancelled", startedAt: 1, finishedAt: 2, steps: [], cancellationOrigin: "user_stop" } };
+  const h = await executionHarness(notReady, ["chat:done", stopped]);
+  const run = await h.runToEnd(task({ permission: "full", mcpServerIds: [] }));
+  assert.equal(run.result, "blocked");
+  assert.equal(run.cancelled, true, "the failure count skips it");
+  assert.equal(run.output, "Half an answ", "the partial answer is kept");
+  await analyticsSettled();
+  assert.deepEqual(sent.filter(({ event }) => event === "scheduled_task_ran"), [], "a stop is neither a success nor a failure");
+
+  const finished = await executionHarness(notReady, ["chat:done", { ...stopped, timeline: { ...stopped.timeline, status: "completed", cancellationOrigin: undefined } }]);
+  const done = await finished.runToEnd(task({ permission: "full", mcpServerIds: [] }));
+  assert.equal(done.result, "success");
+  assert.equal(done.cancelled, undefined);
+});
+
 test("a scheduled run counts its one generated message as coming from the schedule", async (t) => {
   const sent = captureAnalyticsEvents(t);
   const h = await executionHarness(notReady);

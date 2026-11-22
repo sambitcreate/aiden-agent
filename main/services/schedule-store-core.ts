@@ -26,7 +26,7 @@ import {
 } from "../../renderer/shared/bot-routine-schedule.js";
 import { isPathSafeBotCapabilityId } from "../../renderer/shared/bot-capabilities.js";
 import { BOT_LIMITS } from "../../renderer/shared/bots.js";
-import { parseScheduledTaskTrigger, type ScheduledTaskTrigger } from "../../renderer/shared/scheduled-task-trigger.js";
+import { TASK_CONNECTOR_NEEDS_SOURCE, parseScheduledTaskTrigger, type ScheduledTaskTrigger } from "../../renderer/shared/scheduled-task-trigger.js";
 
 const RUNS_PER_TASK = 50;
 const STORED_OUTPUT_LIMIT = 64 * 1024;
@@ -410,7 +410,8 @@ function normalizeInput(
       : {}),
     notify: input.notify ?? existing?.notify ?? true,
     lastResult: existing?.lastResult,
-    lastError: existing?.lastError,
+    // "Needs its source" belongs to a connected-app task; saving it as anything else clears it.
+    lastError: existing?.lastError === TASK_CONNECTOR_NEEDS_SOURCE && trigger?.kind !== "connector" ? undefined : existing?.lastError,
     // Turning a chat task back on starts a new count of failed runs.
     ...(botId === undefined && (existing && !existing.enabled && enabled ? now : existing?.failurePausedAt) !== undefined
       ? { failurePausedAt: existing && !existing.enabled && enabled ? now : existing!.failurePausedAt }

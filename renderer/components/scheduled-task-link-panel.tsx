@@ -10,6 +10,7 @@ const OUTCOME_LABELS: Record<string, string> = {
   batched: "Waiting to run",
   duplicate: "Repeat, ignored",
   daily_limit: "Over today's 48 runs",
+  dropped: "Chat stayed busy, dropped",
   filtered: "Didn't match, ignored",
   bad_signature: "Bad signature, refused",
   invalid: "Not valid JSON, refused",

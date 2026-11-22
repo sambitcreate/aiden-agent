@@ -7,6 +7,7 @@ import {
   validateScriptName,
   validateTimezone,
 } from "./schedule-store.js";
+import { TASK_CONNECTOR_NEEDS_SOURCE, type ScheduledTaskTrigger } from "../../renderer/shared/scheduled-task-trigger.js";
 
 class MemoryPersistence<T> {
   constructor(private data: T) {}
@@ -873,6 +874,25 @@ test("a task that runs when something changes has no cron, survives a reload and
   const scheduled = await reloaded.save({ id: created.id, name: "Status", mode: "llm", cron: "0 9 * * *", timezone: "UTC", prompt: "Tell me.", trigger: null });
   assert.equal(scheduled.trigger, undefined);
   assert.ok(scheduled.nextRunAt);
+});
+
+test("a connected-app task's \"Needs its source\" clears when it is saved as another kind of task, and stays while it still watches a connected app", async () => {
+  const store = testStore();
+  const connector: ScheduledTaskTrigger = {
+    kind: "connector", everyMinutes: 15, condition: { kind: "email", unreadOnly: false },
+    source: { providerLabel: "iMCP Mail", accountLabel: "person@example.test", resourceLabel: "Inbox" },
+  };
+  const base = { name: "New mail", mode: "llm" as const, cron: "", timezone: "UTC", prompt: "Tell me about new mail." };
+  const created = await store.save({ ...base, trigger: connector });
+  await store.updateRuntime(created.id, { lastError: TASK_CONNECTOR_NEEDS_SOURCE });
+  const renamed = await store.save({ ...base, id: created.id, name: "Inbox news" });
+  assert.equal(renamed.lastError, TASK_CONNECTOR_NEEDS_SOURCE, "still a connected-app task without a source");
+  const watch = await store.save({ ...base, id: created.id, trigger: { kind: "watch", source: { type: "url", url: "https://example.com/status" }, everyMinutes: 15 } });
+  assert.equal(watch.lastError, undefined);
+
+  // Any other error stays until the task runs again.
+  await store.updateRuntime(created.id, { lastError: "The page answered 500." });
+  assert.equal((await store.save({ ...base, id: created.id, cron: "0 9 * * *", trigger: null })).lastError, "The page answered 500.");
 });
 
 test("a task trigger is checked strictly and only asks Aiden", async () => {

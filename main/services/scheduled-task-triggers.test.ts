@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHmac } from "node:crypto";
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -7,7 +8,7 @@ import type { BotWatchCheck } from "./bot-routine-events/watch-sources.js";
 import { runScheduledScript } from "./schedule-script.js";
 import type { ScheduledRunTrigger } from "./schedule-service-core.js";
 import { createScheduledTaskTriggers } from "./scheduled-task-triggers.js";
-import { UNKNOWN_LINK_CALLS_PER_MINUTE } from "./scheduled-task-link-trigger.js";
+import { REFUSED_LINK_CALLS_PER_MINUTE, UNKNOWN_LINK_CALLS_PER_MINUTE } from "./scheduled-task-link-trigger.js";
 import { compareImcpWatch, type ConnectorWatchBaseline, type ConnectorWatchItem } from "./bot-routine-events/connector-watch-imcp.js";
 import type { BotConnectorWatchBinding } from "./bot-routine-events/connector-types.js";
 import { TaskConnectorChoiceError, connectorTriggerForSave, createTaskConnectorTriggers, saveConnectorTask, type TaskConnectorTriggers } from "./scheduled-task-connector-trigger.js";
@@ -38,7 +39,7 @@ function watchTask(overrides: Partial<ScheduledTask> = {}): ScheduledTask {
   } as ScheduledTask;
 }
 
-function harness(options: { tasks?: ScheduledTask[]; checks?: BotWatchCheck[]; runResult?: ScheduledRun["result"]; runResults?: Array<Pick<ScheduledRun, "result" | "reason">>; stateDir?: string; fireDueTimers?: boolean; connector?: TaskConnectorTriggers } = {}) {
+function harness(options: { tasks?: ScheduledTask[]; checks?: BotWatchCheck[]; runResult?: ScheduledRun["result"]; runResults?: Array<Pick<ScheduledRun, "result" | "reason">>; stateDir?: string; fireDueTimers?: boolean; connector?: TaskConnectorTriggers; linkSecret?: string } = {}) {
   let clock = 1_800_000_000_000;
   const tasks = options.tasks ?? [watchTask()];
   const checks = [...(options.checks ?? [])];
@@ -48,6 +49,7 @@ function harness(options: { tasks?: ScheduledTask[]; checks?: BotWatchCheck[]; r
   const notices: Array<{ taskId: string; text: string }> = [];
   const released: string[] = [];
   const needsSource: string[] = [];
+  const fetched: Array<{ url: string; publicOnly: boolean }> = [];
   const persistence = new MemoryPersistence<unknown>({ version: 1, tasks: {} });
   const store = createScheduledTaskTriggerStore({
     persistence,
@@ -70,17 +72,20 @@ function harness(options: { tasks?: ScheduledTask[]; checks?: BotWatchCheck[]; r
       return run;
     },
     findRun: async (_taskId, runId) => runs.get(runId),
-    fetchUrl: async () => checks.shift() ?? { ok: false, error: "No more checks." },
+    fetchUrl: async (url, _signal, fetchOptions) => {
+      fetched.push({ url, publicOnly: fetchOptions.publicOnly });
+      return checks.shift() ?? { ok: false, error: "No more checks." };
+    },
     resolveScript: async (_task, script) => {
       const dir = options.stateDir!;
       return { path: path.join(dir, script), cwd: dir };
     },
     execScript: (scriptPath, execOptions) => runScheduledScript(scriptPath, execOptions),
     checkStateDir: async () => path.join(options.stateDir ?? os.tmpdir(), "state"),
-    linkSecret: async () => null,
+    linkSecret: async () => options.linkSecret ?? null,
     ...(options.connector ? { connector: options.connector } : {}),
     paused: async (task, error, afterFailures) => { cards.push({ taskId: task.id, error, afterFailures }); },
-    dailyLimit: async (task, text) => { notices.push({ taskId: task.id, text }); },
+    dropped: async (task, card) => { notices.push({ taskId: task.id, text: card.text }); },
     needsSource: async (task) => { needsSource.push(task.id); },
     now: () => clock,
     timeZone: () => "UTC",
@@ -93,7 +98,7 @@ function harness(options: { tasks?: ScheduledTask[]; checks?: BotWatchCheck[]; r
   });
   const bytes = (text: string): BotWatchCheck => ({ ok: true, bytes: new TextEncoder().encode(text) });
   return {
-    tasks, store, triggers, events, cards, persistence, bytes, runs, notices, released, needsSource,
+    tasks, store, triggers, events, cards, persistence, bytes, runs, notices, released, needsSource, fetched,
     advance: (ms: number) => { clock += ms; },
     async check(taskId = "task-1") {
       const outcome = await triggers.checkNow(taskId);
@@ -102,6 +107,16 @@ function harness(options: { tasks?: ScheduledTask[]; checks?: BotWatchCheck[]; r
     },
   };
 }
+
+test("a watch Aiden proposed checks only public addresses; one the person set up checks as before", async () => {
+  const proposed = watchTask({ id: "task-2", trigger: { kind: "watch", source: { type: "url", url: "https://status.example.com/" }, everyMinutes: 15, agentProposed: true } });
+  const value = harness({ tasks: [watchTask(), proposed], checks: [{ ok: true, bytes: new Uint8Array() }, { ok: true, bytes: new Uint8Array() }] });
+  await value.triggers.start();
+  await value.check("task-1");
+  await value.check("task-2");
+  assert.deepEqual(value.fetched.map((entry) => entry.publicOnly), [false, true]);
+  value.triggers.stop();
+});
 
 test("a watched page that changes runs the task once with what changed", async () => {
   const pages = ["Status: all good", "Status: all good", "Status: degraded"];
@@ -625,7 +640,7 @@ test("a connected-app task saved without its source says it needs one, at the sa
   value.triggers.stop();
 });
 
-test("an unknown link token is refused without reading the tasks or writing the file, and a flood of them is shed", async () => {
+test("an unknown link token is refused without reading the tasks or writing the file, and a flood of them never blocks a real link", async () => {
   const link = linkHarness();
   await link.setUp();
   let writes = 0;
@@ -637,12 +652,56 @@ test("an unknown link token is refused without reading the tasks or writing the 
   }
   assert.equal(writes, 0, "made-up tokens never touch the bookkeeping file");
   assert.deepEqual(await link.triggers.webhook.admit({ token: "unknown-over-the-limit-0000", contentType: "application/json" }), { status: 429 });
-  assert.equal(await link.call({ a: 1 }), 429, "during a flood every call is shed before a lookup");
   await link.store.linkState("task-1");
   assert.equal(writes, 0, "an open link panel only reads");
-  link.advance(MINUTE + 1);
-  assert.equal(await link.call({ a: 1 }), 202, "the real link works once the flood passes");
+  assert.equal(await link.call({ a: 1 }), 202, "the real link keeps working during the flood");
   link.triggers.stop();
+});
+
+test("calls to a known link over its 60 a minute, or to a link whose task is off, never write the file", async () => {
+  const link = linkHarness();
+  await link.setUp();
+  let writes = 0;
+  const update = link.persistence.update.bind(link.persistence);
+  link.persistence.update = (mutation) => { writes += 1; return update(mutation); };
+  for (let n = 0; n < 60; n += 1) assert.equal(await link.call({ n }), 202);
+  const afterAccepted = writes;
+  for (let n = 0; n < 20; n += 1) assert.equal(await link.call({ over: n }), 429);
+  assert.equal(writes, afterAccepted, "a call over the limit is refused before anything is written");
+
+  // A leaked token of a task that is off: 404, counted against the same 60, no writes.
+  link.advance(MINUTE + 1);
+  link.tasks[0] = { ...link.tasks[0]!, enabled: false };
+  const before = writes;
+  for (let n = 0; n < 60; n += 1) assert.equal(await link.call({ n }), 404);
+  assert.equal(await link.call({ n: 60 }), 429, "an off task's link still has a limit");
+  assert.equal(writes, before, "nothing is written for a task that is off");
+  link.triggers.stop();
+});
+
+test("a properly signed sender keeps getting through while bad signatures flood the link, and the flood stops being logged", async () => {
+  const secret = "s".repeat(64);
+  const value = harness({ tasks: [watchTask({ trigger: { kind: "webhook", gapMinutes: 1, signatureHeader: "x-signature-256" } as ScheduledTask["trigger"] })], fireDueTimers: true, linkSecret: secret });
+  const token = "S".repeat(43);
+  await value.store.setTokenHash("task-1", hashTaskLinkToken(token));
+  await value.triggers.start();
+  const send = async (body: string, signature: string) => {
+    const admitted = await value.triggers.webhook.admit({ token, contentType: "application/json" });
+    if ("status" in admitted) return admitted.status;
+    return (await value.triggers.webhook.deliver({ token, contentType: "application/json", signature, body: new TextEncoder().encode(body) })).status;
+  };
+  let writes = 0;
+  const update = value.persistence.update.bind(value.persistence);
+  value.persistence.update = (mutation) => { writes += 1; return update(mutation); };
+  for (let n = 0; n < 100; n += 1) assert.equal(await send(`{"n":${n}}`, `sha256=${"0".repeat(64)}`), 401);
+  assert.ok(writes <= REFUSED_LINK_CALLS_PER_MINUTE, `only the first refusals are logged (${writes} writes)`);
+  const body = '{"action":"opened"}';
+  assert.equal(await send(body, `sha256=${createHmac("sha256", secret).update(body).digest("hex")}`), 202, "the real sender isn't put on 429");
+  await value.triggers.idle();
+  assert.equal(value.events.length, 1);
+  const state = await value.store.linkState("task-1");
+  assert.deepEqual(state?.log.map((entry) => [entry.outcome, entry.repeats ?? 0]), [["ran", 0], ["bad_signature", REFUSED_LINK_CALLS_PER_MINUTE - 1]]);
+  value.triggers.stop();
 });
 
 test("bad calls don't use a link's 60 a minute and share one log entry", async () => {
@@ -689,6 +748,63 @@ test("a skipped run doesn't count toward the day's runs, and held calls dropped 
   assert.match(link.notices[0]!.text, /already ran 48 times today/u);
   assert.equal((await link.store.linkState("task-1"))?.log[0]?.outcome, "daily_limit");
   link.triggers.stop();
+});
+
+test("a busy run's calls are held again in the same write that settles its receipt, so a restart can't deliver them twice", async () => {
+  const link = linkHarness({ kind: "webhook", gapMinutes: 10 }, [{ result: "skipped", reason: "chat_busy" }]);
+  await link.setUp();
+  type Book = { held?: { payload: string }; running?: Array<{ payload: string }>; day?: { count: number } };
+  const saved: Book[] = [];
+  const update = link.persistence.update.bind(link.persistence);
+  link.persistence.update = async (mutation) => {
+    const result = await update(mutation);
+    saved.push(structuredClone((link.persistence.snapshot() as { tasks: Record<string, Book> }).tasks["task-1"]!));
+    return result;
+  };
+  assert.equal(await link.call({ n: 0 }), 202);
+  const heldAt = saved.findIndex((book) => book.held);
+  assert.ok(heldAt >= 0, "the calls were held again");
+  assert.deepEqual(saved[heldAt]!.running ?? [], [], "the write that holds them also drops the run's receipt");
+  assert.equal(saved[heldAt]!.day?.count, 0, "and gives back its place in the day's runs");
+
+  // Aiden stops right there and starts again: only the held copy is left to run.
+  link.triggers.stop();
+  await link.triggers.start();
+  await link.triggers.idle();
+  assert.equal(link.events.length, 1, "nothing is replayed beside the held copy");
+  await runHeld(link, 10 * MINUTE, 2);
+  assert.equal(link.events.length, 2);
+  assert.match(link.events[1]!.event.payload, /"n": 0/u);
+  link.triggers.stop();
+});
+
+test("calls held again after every busy run are dropped with a card after 6 retries", async () => {
+  const busy = Array.from({ length: 10 }, () => ({ result: "skipped" as const, reason: "chat_busy" as const }));
+  const link = linkHarness({ kind: "webhook", gapMinutes: 1 }, busy);
+  await link.setUp();
+  assert.equal(await link.call({ n: 0 }), 202);
+  for (let attempt = 2; attempt <= 8; attempt += 1) await runHeld(link, MINUTE, attempt);
+  assert.equal(link.events.length, 7, "the first run and 6 retries, then no more");
+  const [routine] = await link.store.list("task-1");
+  assert.equal(routine!.held, undefined, "nothing is left holding a run slot");
+  assert.equal(routine!.running, undefined);
+  assert.equal(routine!.day?.count ?? 0, 0, "busy runs never used the day's runs");
+  assert.equal(link.notices.length, 1);
+  assert.match(link.notices[0]!.text, /tried 7 times/u);
+  assert.equal((await link.store.linkState("task-1"))?.log[0]?.outcome, "dropped");
+  link.triggers.stop();
+});
+
+test("a held change of emoji up to the event bound survives a reload", async () => {
+  const value = harness();
+  const payload = "\u{1F600}".repeat(20_000);
+  assert.equal(payload.length, 40_000, "more UTF-16 units than the bound, but 20,000 characters");
+  await value.store.mutate("task-1", "task-1", (current) => ({ next: { ...current, held: { eventId: "change-1", payload, at: 1 } }, result: undefined }));
+  const [routine] = await value.store.list("task-1");
+  assert.equal(routine!.held?.payload, payload);
+  const over = "\u{1F600}".repeat(24_001);
+  await value.store.mutate("task-1", "task-1", (current) => ({ next: { ...current, held: { eventId: "change-2", payload: over, at: 1 } }, result: undefined }));
+  assert.equal((await value.store.list("task-1"))[0]!.held, undefined, "one past the bound is still refused");
 });
 
 test("a skipped run recorded just before Aiden stopped runs again at the next start", async () => {
