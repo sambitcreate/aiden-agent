@@ -19,11 +19,12 @@ import { Value } from "typebox/value";
 import { ASSISTANT_WORKSPACE_ID } from "../../renderer/shared/assistant.js";
 import type { AidenMcpChatProvenance } from "./aiden-mcp-provenance.js";
 import { reportAnalyticsEvent } from "./analytics/analytics-report.js";
-import type { AidenRemoteChatService, AidenRemoteMessageProjection } from "./aiden-remote-chats.js";
+import type { AidenRemoteChatService } from "./aiden-remote-chats.js";
 import { AidenRemoteServiceError } from "./aiden-remote-errors.js";
 import type { AidenRemoteCapability } from "./aiden-remote-protocol.js";
 import type { AidenRemoteStreamService, AidenRemoteStreamState } from "./aiden-remote-streams.js";
 import type { AidenRemoteWorkspaceService } from "./aiden-remote-workspaces.js";
+import { CHAT_RUN_TERMINAL_STATES, ChatRunCore, projectRunMessage } from "./chat-orchestration/run-core.js";
 
 export type AidenMcpToolLevel = "read" | "write";
 
@@ -89,11 +90,7 @@ const READ_DEFAULT_MESSAGES = 20;
 const READ_MAX_MESSAGES = 50;
 const LIST_DEFAULT_CHATS = 20;
 const LIST_MAX_CHATS = 50;
-/** One message's text, as an app reads it; longer text is cut and flagged. */
-const MESSAGE_TEXT_LIMIT = 20_000;
 const TURN_TEXT_LIMIT = 200_000;
-const REQUEST_CACHE_LIMIT = 128;
-const TERMINAL_STATES: ReadonlySet<AidenRemoteStreamState> = new Set(["done", "error", "cancelled", "interrupted"]);
 
 const ID = { pattern: "^[A-Za-z0-9._:-]{1,128}$", maxLength: 128 } as const;
 const CLIENT_REQUEST_ID = Type.String({
@@ -121,7 +118,9 @@ interface ToolDefinition {
 class ToolRefusal extends Error {}
 
 /**
- * Owns the tool catalog and per-app state (rate limit, runs in flight, waits).
+ * Owns the tool catalog and the per-app limits (turn rate, runs at once,
+ * unanswered requests). Following runs (snapshots, waits, owned runs and
+ * request dedupe) is the shared chat-run core's job, keyed by app id.
  * One runner lives as long as the MCP server; each HTTP request uses it.
  */
 export class AidenMcpToolRunner {
@@ -129,15 +128,16 @@ export class AidenMcpToolRunner {
   private readonly limits: AidenMcpLimits;
   private readonly now: () => number;
   private readonly turnTimes = new Map<string, number[]>();
-  private readonly runs = new Map<string, Set<string>>();
-  private readonly waits = new Map<string, Set<AbortController>>();
-  /** In-flight and recent turn requests, so a retry replays instead of counting again. */
-  /** Turn requests by app and clientRequestId; `settled` marks the ones a newer request may evict. */
-  private readonly requests = new Map<string, { promise: Promise<CallToolResult>; settled: boolean }>();
+  private readonly core: ChatRunCore;
 
   constructor(private readonly dependencies: AidenMcpToolDependencies) {
     this.limits = { ...DEFAULT_AIDEN_MCP_LIMITS, ...dependencies.limits };
     this.now = dependencies.now ?? Date.now;
+    this.core = new ChatRunCore({
+      answerIn: async () => `Aiden on ${await dependencies.hostName()}`,
+      untrackedRun: () =>
+        new ToolRefusal("Aiden no longer tracks this run. Read the chat with aiden_chat_read for its result."),
+    });
     this.tools = this.defineTools();
   }
 
@@ -193,13 +193,8 @@ export class AidenMcpToolRunner {
 
   /** Forgets an app's limiter state and ends its waits. Run when the app is revoked. */
   revokeApp(appId: string): void {
-    for (const controller of this.waits.get(appId) ?? []) controller.abort();
-    this.waits.delete(appId);
+    this.core.forget(appId);
     this.turnTimes.delete(appId);
-    this.runs.delete(appId);
-    for (const key of [...this.requests.keys()]) {
-      if (key.startsWith(`${appId}\u0000`)) this.requests.delete(key);
-    }
   }
 
   private defineTools(): ToolDefinition[] {
@@ -374,7 +369,7 @@ export class AidenMcpToolRunner {
       chatId: window.chatId,
       workspaceId: window.workspaceId,
       title: window.title,
-      messages: window.messages.map(projectMessage),
+      messages: window.messages.map(projectRunMessage),
       hasOlder: window.hasOlder,
     });
   }
@@ -385,55 +380,10 @@ export class AidenMcpToolRunner {
     const runId = args.runId as string;
     await requireOrdinaryChat(services, chatId);
     const timeoutMs = ((args.timeoutSeconds as number | undefined) ?? Math.min(WAIT_DEFAULT_SECONDS, this.limits.maxWaitSeconds)) * 1_000;
-    const first = await this.runSnapshot(services, app, chatId, runId);
-    if (first.state !== "running" || signal.aborted) return toolResult(first);
-
-    const controller = new AbortController();
-    const appWaits = this.waits.get(app.id) ?? new Set<AbortController>();
-    appWaits.add(controller);
-    this.waits.set(app.id, appWaits);
-    let detach: (() => void) | undefined;
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    // The first snapshot that showed the run had stopped running. It answers
-    // the wait, so a terminal run evicted afterwards still reads as finished.
-    let observed: Record<string, unknown> | undefined;
-    try {
-      const outcome = await new Promise<"changed" | "timeout" | "closed" | "aborted">((resolve) => {
-        const abort = () => resolve("aborted");
-        signal.addEventListener("abort", abort, { once: true });
-        controller.signal.addEventListener("abort", () => resolve("closed"), { once: true });
-        timer = setTimeout(() => resolve("timeout"), timeoutMs);
-        // Most events (text deltas, tool output) leave the run running; only a
-        // state change answers the wait. The run's status is read before the
-        // snapshot's first await, so it is taken while the event is current.
-        const look = () => {
-          void this.runSnapshot(services, app, chatId, runId)
-            .then((snapshot) => {
-              if (snapshot.state === "running") return;
-              observed ??= snapshot;
-              resolve("changed");
-            })
-            .catch(() => resolve("changed"));
-        };
-        try {
-          detach = services.streams.watch(app.id, runId, { onChange: look, onClose: () => resolve("closed") });
-        } catch {
-          resolve("changed");
-          return;
-        }
-        // The run may have changed after the first snapshot and before the
-        // watch attached; the watch reports only later events, so look again.
-        look();
-      });
-      if (outcome === "closed") throw new ToolRefusal("This app was disconnected from Aiden.");
-      if (outcome === "aborted") return toolError("The wait ended because the request closed.");
-      return toolResult(observed ?? (await this.runSnapshot(services, app, chatId, runId)));
-    } finally {
-      if (timer) clearTimeout(timer);
-      detach?.();
-      appWaits.delete(controller);
-      if (appWaits.size === 0 && this.waits.get(app.id) === appWaits) this.waits.delete(app.id);
-    }
+    const outcome = await this.core.wait(services, app.id, chatId, runId, { timeoutMs, signal });
+    if (outcome.kind === "closed") throw new ToolRefusal("This app was disconnected from Aiden.");
+    if (outcome.kind === "aborted") return toolError("The wait ended because the request closed.");
+    return toolResult(outcome.snapshot);
   }
 
   private async chatStart(app: AidenMcpApp, args: Record<string, unknown>): Promise<CallToolResult> {
@@ -470,7 +420,7 @@ export class AidenMcpToolRunner {
     const turn = await services.chats.runMutation(app.id, chat.id, classification, () =>
       services.chats.startTurn(app.id, chat.id, turnKey, { text: args.text }),
     );
-    this.trackRun(app.id, turn.streamId);
+    this.core.track(app.id, turn.streamId);
     // Counted once, when the chat's first turn starts; a replay of a recorded
     // request was counted the first time. Never the prompt, chat or workspace.
     if (!turnRecorded) {
@@ -488,7 +438,7 @@ export class AidenMcpToolRunner {
     const turn = await services.chats.runMutation(app.id, chatId, classification, () =>
       services.chats.startTurn(app.id, chatId, turnKey, { text: args.text }),
     );
-    this.trackRun(app.id, turn.streamId);
+    this.core.track(app.id, turn.streamId);
     return toolResult({ chatId, turnId: turn.turnId, runId: turn.streamId, state: "running" });
   }
 
@@ -497,8 +447,8 @@ export class AidenMcpToolRunner {
     const chatId = args.chatId as string;
     const runId = args.runId as string;
     const classification = await requireOrdinaryChat(services, chatId);
-    const status = ownedRunStatus(services, app, chatId, runId);
-    if (TERMINAL_STATES.has(status.state)) {
+    const status = this.core.status(services, app.id, chatId, runId);
+    if (CHAT_RUN_TERMINAL_STATES.has(status.state)) {
       return toolResult({ chatId, runId, stopped: false, state: waitState(status.state) });
     }
     await services.chats.runMutation(app.id, chatId, classification, () =>
@@ -516,52 +466,21 @@ export class AidenMcpToolRunner {
     args: Record<string, unknown>,
     run: () => Promise<CallToolResult>,
   ): Promise<CallToolResult> {
-    const key = `${app.id}\u0000${args.clientRequestId as string}`;
-    const existing = this.requests.get(key);
-    if (existing) return existing.promise;
     // A request is cached before it reaches run admission and keeps running when
     // its HTTP client goes away, so unanswered ones are capped here, per app and
     // across every app (a revoked app's stalled work included): stalled work or
     // disconnecting callers cannot make the cache grow without bound.
-    const prefix = `${app.id}\u0000`;
-    let pending = 0;
-    let hostPending = 0;
-    for (const [cached, { settled }] of this.requests) {
-      if (settled) continue;
-      hostPending += 1;
-      if (cached.startsWith(prefix)) pending += 1;
-    }
-    if (pending >= this.limits.pendingRequests) {
-      return Promise.reject(
-        new ToolRefusal(
+    return this.core.request(app.id, args.clientRequestId as string, run, () => {
+      const pending = this.core.pendingRequests(app.id);
+      if (pending.owner >= this.limits.pendingRequests) {
+        throw new ToolRefusal(
           `This app has ${this.limits.pendingRequests} requests Aiden is still answering. Wait for one to finish, then try again.`,
-        ),
-      );
-    }
-    if (hostPending >= this.limits.hostPendingRequests) {
-      return Promise.reject(new ToolRefusal("Aiden is still answering too many requests from apps. Try again in a moment."));
-    }
-    const entry = { promise: undefined as unknown as Promise<CallToolResult>, settled: false };
-    entry.promise = run().then(
-      (result) => {
-        entry.settled = true;
-        return result;
-      },
-      (error: unknown) => {
-        // A refusal or failure is not cached: the app may retry once it clears.
-        if (this.requests.get(key) === entry) this.requests.delete(key);
-        throw error;
-      },
-    );
-    this.requests.set(key, entry);
-    // Only answered requests are forgotten. One still running stays, so a retry
-    // joins it rather than starting (and counting) the same turn a second time;
-    // unanswered ones are bounded by the pending limits above.
-    for (const [cached, { settled }] of this.requests) {
-      if (this.requests.size <= REQUEST_CACHE_LIMIT) break;
-      if (settled) this.requests.delete(cached);
-    }
-    return entry.promise;
+        );
+      }
+      if (pending.total >= this.limits.hostPendingRequests) {
+        throw new ToolRefusal("Aiden is still answering too many requests from apps. Try again in a moment.");
+      }
+    });
   }
 
   /** Refuses a turn over this app's rate or concurrency limit, then counts it. */
@@ -575,7 +494,7 @@ export class AidenMcpToolRunner {
         `This app started ${this.limits.turnsPerMinute} turns in the last minute. Try again in ${retryAfter} seconds.`,
       );
     }
-    const running = this.liveRuns(services, app.id);
+    const running = this.core.liveRuns(services, app.id);
     if (running >= this.limits.concurrentRuns) {
       throw new ToolRefusal(
         `This app already has ${running} runs going in Aiden. Wait for one to finish or stop one first.`,
@@ -583,63 +502,6 @@ export class AidenMcpToolRunner {
     }
     recent.push(now);
     this.turnTimes.set(app.id, recent);
-  }
-
-  private liveRuns(services: AidenMcpServices, appId: string): number {
-    const runs = this.runs.get(appId);
-    if (!runs) return 0;
-    for (const runId of [...runs]) {
-      try {
-        if (TERMINAL_STATES.has(services.streams.status(appId, runId).state)) runs.delete(runId);
-      } catch {
-        runs.delete(runId);
-      }
-    }
-    return runs.size;
-  }
-
-  private trackRun(appId: string, runId: string): void {
-    const runs = this.runs.get(appId) ?? new Set<string>();
-    runs.add(runId);
-    this.runs.set(appId, runs);
-  }
-
-  private async runSnapshot(
-    services: AidenMcpServices,
-    app: AidenMcpApp,
-    chatId: string,
-    runId: string,
-  ): Promise<Record<string, unknown>> {
-    const status = ownedRunStatus(services, app, chatId, runId);
-    const base = { chatId, runId };
-    const approveIn = `Aiden on ${await this.dependencies.hostName()}`;
-    if (!TERMINAL_STATES.has(status.state)) {
-      if (services.streams.pendingQuestion(app.id, runId)) {
-        return { ...base, state: "waiting_for_input", answerIn: approveIn };
-      }
-      const approval = services.streams.pendingApproval(app.id, runId);
-      if (approval || status.state === "waiting_for_approval") {
-        return {
-          ...base,
-          state: "waiting_for_approval",
-          approveIn,
-          ...(approval
-            ? { approval: { toolName: approval.toolName, summary: approval.summary, expiresAt: approval.expiresAt } }
-            : {}),
-        };
-      }
-      return { ...base, state: "running" };
-    }
-    if (status.state === "done" || status.state === "cancelled") {
-      const reply = await lastAssistantMessage(services, chatId).catch(() => undefined);
-      return {
-        ...base,
-        state: "done",
-        outcome: status.state === "cancelled" ? "stopped" : "completed",
-        ...(reply ? { reply } : {}),
-      };
-    }
-    return { ...base, state: "failed", reason: status.state === "interrupted" ? "interrupted" : "error" };
   }
 }
 
@@ -665,41 +527,10 @@ async function requireOrdinaryChat(
   return classification;
 }
 
-function ownedRunStatus(services: AidenMcpServices, app: AidenMcpApp, chatId: string, runId: string) {
-  let status;
-  try {
-    status = services.streams.status(app.id, runId);
-  } catch {
-    throw new ToolRefusal("Aiden no longer tracks this run. Read the chat with aiden_chat_read for its result.");
-  }
-  if (status.chatId !== chatId) {
-    throw new ToolRefusal("Aiden no longer tracks this run. Read the chat with aiden_chat_read for its result.");
-  }
-  return status;
-}
-
 function waitState(state: AidenRemoteStreamState): string {
   if (state === "done" || state === "cancelled") return "done";
-  if (TERMINAL_STATES.has(state)) return "failed";
+  if (CHAT_RUN_TERMINAL_STATES.has(state)) return "failed";
   return state === "waiting_for_approval" ? state : "running";
-}
-
-async function lastAssistantMessage(services: AidenMcpServices, chatId: string) {
-  const window = await services.chats.messagesWindow(chatId, { limit: 5 });
-  const message = [...window.messages].reverse().find((candidate) => candidate.role === "assistant");
-  return message ? projectMessage(message) : undefined;
-}
-
-function projectMessage(message: AidenRemoteMessageProjection) {
-  const text = [...message.text];
-  return {
-    id: message.id,
-    role: message.role,
-    text: text.length > MESSAGE_TEXT_LIMIT ? text.slice(0, MESSAGE_TEXT_LIMIT).join("") : message.text,
-    ...(text.length > MESSAGE_TEXT_LIMIT ? { truncated: true } : {}),
-    createdAt: message.createdAt,
-    ...(message.outcome ? { outcome: message.outcome.status } : {}),
-  };
 }
 
 function toolResult(value: Record<string, unknown>): CallToolResult {
