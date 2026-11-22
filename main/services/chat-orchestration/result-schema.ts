@@ -8,6 +8,7 @@
 // bounded too (64 KB, 10,000 values, 64 levels), and its size times the
 // schema's cost must stay under a fixed budget before ajv checks it.
 
+import { createHash } from "node:crypto";
 import Ajv, { type ErrorObject, type ValidateFunction } from "ajv";
 
 export const RESULT_SCHEMA_MAX_BYTES = 16 * 1024;
@@ -222,6 +223,27 @@ function schemaCost(root: Record<string, unknown>): { ok: true; cost: number } |
   return { ok: true, cost: total };
 }
 
+/**
+ * Compiled schemas, newest last, keyed by a digest of their canonical JSON:
+ * a start compiles a chat's schema once, and every `submit_result` for it
+ * reuses the validator instead of compiling again.
+ */
+const COMPILED_SCHEMAS_KEPT = 32;
+const compiledSchemas = new Map<string, Extract<ResultSchemaCheck, { ok: true }>>();
+
+/** JSON with object keys sorted, so key order doesn't change the digest. Depth is already bounded. */
+function canonicalJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
+  if (isRecord(value)) {
+    return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${canonicalJson(value[key])}`).join(",")}}`;
+  }
+  return JSON.stringify(value) ?? "null";
+}
+
+function schemaKey(schema: Record<string, unknown>): string {
+  return createHash("sha256").update(canonicalJson(schema)).digest("hex");
+}
+
 /** Compiles a lead's schema, or says in one sentence why it can't be used. */
 export function compileResultSchema(schema: unknown): ResultSchemaCheck {
   if (!isRecord(schema)) return { ok: false, error: "result_schema must be a JSON Schema object." };
@@ -241,12 +263,26 @@ export function compileResultSchema(schema: unknown): ResultSchemaCheck {
       error: `result_schema can't contain the key "${regex}" anywhere, even as a property name or inside enum, const, default or examples: Aiden doesn't check regular expressions. Use enum, const or plain types instead.`,
     };
   }
+  const key = schemaKey(schema);
+  const cached = compiledSchemas.get(key);
+  if (cached) {
+    // Most recently used goes last, so the oldest is evicted first.
+    compiledSchemas.delete(key);
+    compiledSchemas.set(key, cached);
+    return cached;
+  }
   const cost = schemaCost(schema);
   if (!cost.ok) return cost;
   try {
-    // The first error is enough to name what failed, and stops each check early.
-    const ajv = new Ajv({ strict: false, validateFormats: false });
-    return { ok: true, validate: ajv.compile(schema), cost: cost.cost };
+    // The first error is enough to name what failed, and stops each check
+    // early. `inlineRefs: false` compiles each `$defs` entry once: inlined,
+    // a ref-free entry is copied into every place that refers to it, and
+    // ajv's generated code (and compile time) grows with every copy.
+    const ajv = new Ajv({ strict: false, validateFormats: false, inlineRefs: false });
+    const compiled: ResultSchemaCheck = { ok: true, validate: ajv.compile(schema), cost: cost.cost };
+    compiledSchemas.set(key, compiled);
+    if (compiledSchemas.size > COMPILED_SCHEMAS_KEPT) compiledSchemas.delete(compiledSchemas.keys().next().value!);
+    return compiled;
   } catch (error) {
     const reason = error instanceof Error ? error.message.split("\n")[0]!.slice(0, 200) : "it is not a valid JSON Schema";
     return { ok: false, error: `result_schema doesn't compile: ${reason}.` };

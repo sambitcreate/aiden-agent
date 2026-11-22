@@ -265,3 +265,45 @@ test("long enum, const and required lists count toward a schema's cost, so branc
   assert.deepEqual(checkResult(labels, Array.from({ length: 100 }, (_, i) => `label-${i}`)), { ok: true });
   assert.match((checkResult(labels, ["label-1", "nope"]) as { error: string }).error, /\/1 must be equal to one of the allowed values/u);
 });
+
+test("a schema whose shared $defs entry is referred to from many branches compiles and checks quickly", () => {
+  // Many keywords in one ref-free entry, referred to 240 times: inlined, ajv
+  // copied it into every branch and took seconds to compile.
+  const keywords = {
+    type: ["number", "string", "object", "array"], minimum: 1, maximum: 2, exclusiveMinimum: 0, exclusiveMaximum: 3, multipleOf: 0.37,
+    minLength: 5, maxLength: 9, minItems: 1, maxItems: 3, minProperties: 1, maxProperties: 4,
+  };
+  const leaf = { properties: Object.fromEntries(Array.from({ length: 38 }, (_, i) => [`p${i}`, keywords])) };
+  for (const [outer, inner] of [[2, 120], [3, 80]] as const) {
+    const schema = {
+      description: `shared entry ${outer}x${inner}`,
+      $defs: { leaf, middle: { anyOf: Array.from({ length: inner }, () => ({ $ref: "#/$defs/leaf" })) } },
+      anyOf: Array.from({ length: outer }, () => ({ $ref: "#/$defs/middle" })),
+    };
+    const started = performance.now();
+    const checked = checkResult(schema, -1);
+    const ms = performance.now() - started;
+    assert.deepEqual(checked, { ok: true }, `${outer}x${inner}`);
+    assert.ok(ms < 100, `${outer}x${inner}: compile and check took ${ms} ms`);
+    assert.equal(checkResult(schema, { p0: 1.5 }).ok, false, "the shared entry still applies its keywords");
+  }
+});
+
+test("a schema is compiled once: the same schema, in any key order, reuses its validator", () => {
+  const schema = { type: "object", properties: { done: { type: "boolean" }, notes: { type: "string" } }, required: ["done"], description: "compiled once" };
+  const first = compileResultSchema(schema);
+  const reordered = compileResultSchema({ description: "compiled once", required: ["done"], properties: { notes: { type: "string" }, done: { type: "boolean" } }, type: "object" });
+  assert.ok(first.ok && reordered.ok);
+  assert.equal(reordered.validate, first.validate);
+  assert.deepEqual(checkResult(structuredClone(schema), { done: true }), { ok: true });
+  const other = compileResultSchema({ ...schema, required: ["notes"] });
+  assert.ok(other.ok);
+  assert.notEqual(other.validate, first.validate, "a different schema gets its own");
+
+  // Only the most recent schemas are kept.
+  for (let i = 0; i < 40; i++) compileResultSchema({ type: "string", description: `filler ${i}` });
+  const again = compileResultSchema(schema);
+  assert.ok(again.ok);
+  assert.notEqual(again.validate, first.validate);
+  assert.deepEqual(checkResult(schema, { done: false }), { ok: true });
+});
