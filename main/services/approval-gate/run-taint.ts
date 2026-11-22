@@ -171,19 +171,23 @@ export class RunTaint {
 }
 
 /**
- * The texts that count as the person's words for `RunTaint`: the chat's user
- * messages. While a started chat still answers a lead whose
- * own run held outside content (`leadWordsTrusted` false), the lead's task,
- * sends and steers (`fromLeadChat`) are left out, so a site the lead named,
- * perhaps on a web page's say-so, is still a new destination (Phase 5
- * loop-closing review). Once the person takes the chat over, it is theirs.
+ * The texts that count as the person's words for `RunTaint`: the user-role
+ * messages the person actually wrote. A notice (a started chat's ending, a
+ * scheduled task, a check or check-back, a goal round, a job or pull request's
+ * news) is Aiden's message in the person's role and can quote outside text,
+ * such as a started chat's reply, so it never names a site. While a started
+ * chat still answers a lead whose own run held outside content
+ * (`leadWordsTrusted` false), the lead's task, sends and steers
+ * (`fromLeadChat`) are left out too, so a site the lead named, perhaps on a
+ * web page's say-so, is still a new destination (Phase 5 loop-closing review).
+ * Once the person takes the chat over, it is theirs.
  */
 export function runTaintPersonText(
-  messages: readonly { role: string; content: string; fromLeadChat?: true }[],
+  messages: readonly { role: string; content: string; notice?: unknown; fromLeadChat?: true }[],
   options: { leadWordsTrusted: boolean },
 ): string[] {
   return messages
-    .filter((message) => message.role === "user")
+    .filter((message) => message.role === "user" && message.notice === undefined)
     .filter((message) => options.leadWordsTrusted || message.fromLeadChat !== true)
     .map((message) => message.content);
 }
