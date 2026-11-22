@@ -431,7 +431,7 @@ import {
 import { createChatOwedTurns, type OwedTurnPlan } from "./chat-owed-turns.js";
 import { owedTurnStartRequest, type OwedTurnContext } from "./chat-owed-turn-start.js";
 import { goalTurnHooks } from "./goal/goal-turn-hooks.js";
-import { createOwedTurnPrompts } from "./chat-owed-turn-prompts.js";
+import { createOwedTurnPrompts, type OwedTurnPromptLifetime } from "./chat-owed-turn-prompts.js";
 import { persistedChatWorkspaceId } from "../../renderer/shared/chat-workspace.js";
 import { btwOperationRegistry, btwService } from "./rpiv-btw/service.js";
 import { createPiCodemodeTool } from "./pi-codemode.js";
@@ -1229,7 +1229,7 @@ const questionnaires = new AskUserQuestionCoordinator(
  * read them like a phone turn's card, and phones answer them through their
  * run controls; the coordinators' one-shot settlement lets the first answer
  * win. A card nobody answers is denied, or its question closed, after five
- * minutes, the same as a phone turn's.
+ * minutes, the same as a phone turn's; a goal round's cards wait 30 minutes.
  */
 const owedTurnPrompts = createOwedTurnPrompts({
   now: Date.now,
@@ -6702,13 +6702,15 @@ export const llmClient = {
    * The owner of a turn main starts for an attended chat with no window behind
    * it (a goal round): approvals and questions go where an owed turn's do, to
    * a desktop window showing the chat or a paired phone, whichever answers.
+   * `lifetime` sets how long its cards wait (an owed turn's five minutes by
+   * default) and who hears when one expires unanswered.
    */
-  attendedTurnOwner(chatId: string, documentId: string): ChatGenerationOwner {
+  attendedTurnOwner(chatId: string, documentId: string, lifetime?: OwedTurnPromptLifetime): ChatGenerationOwner {
     return {
       id: 0,
       documentId,
       isDestroyed: () => false,
-      send: (channel, payload) => owedTurnPrompts.publish(chatId, channel, payload),
+      send: (channel, payload) => owedTurnPrompts.publish(chatId, channel, payload, lifetime),
       onInvalidated: () => () => undefined,
     };
   },

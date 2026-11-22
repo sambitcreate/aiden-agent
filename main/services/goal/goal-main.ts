@@ -11,6 +11,9 @@ import { ASSISTANT_WORKSPACE_ID } from "../../../renderer/shared/assistant.js";
 import { isAcpHarnessProvider } from "../../../renderer/shared/acp-harness.js";
 import { goalLoopEnabled, type GoalView } from "../../../renderer/shared/goal.js";
 import { reportAnalyticsEvent } from "../analytics/analytics-report.js";
+import { ATTENDED_TURN_PROMPT_LIFETIME_MS, type OwedTurnPromptLifetime } from "../chat-owed-turn-prompts.js";
+import { chatActivityRegistry } from "../chat-activity.js";
+import type { GoalNeedsYou } from "../chat-pending-attention.js";
 import { chatStore } from "../chat-store.js";
 import { chatMessageToPiMessage } from "../generation-messages.js";
 import { llmClient } from "../llm-client.js";
@@ -22,7 +25,9 @@ import { isLocalModelProvider } from "../usage-accounting.js";
 import { usageStore } from "../usage-store.js";
 import { backgroundJobs, saveFollowThroughGoals, savedFollowThroughGoals } from "../follow-through/follow-through-main.js";
 import { noticeDelivery } from "../follow-through/notice-delivery-main.js";
+import type { StartTurnResult } from "../follow-through/notice-delivery.js";
 import type { Chat } from "../types.js";
+import type { AgentNoticeV1 } from "../../../renderer/shared/agent-notices.js";
 import { GoalLoop, type GoalRoundStart } from "./goal-loop.js";
 import { goalRoundStartRequest } from "./goal-round-start.js";
 import { reviewGoal } from "./goal-reviewer.js";
@@ -62,42 +67,70 @@ function roundActivity(chat: Chat | null): { toolCalls: number; newTextChars: nu
   return { toolCalls, newTextChars };
 }
 
-async function startRound(
+/** A round's cards wait 30 minutes; one nobody answers moves the goal to Needs you. */
+const roundPromptLifetime: OwedTurnPromptLifetime = {
+  ms: ATTENDED_TURN_PROMPT_LIFETIME_MS,
+  expired: (chatId) => goalLoop.promptExpired(chatId),
+};
+
+/**
+ * Starts an attended round in the chat: with `message` saved first (the
+ * continuation note, or a notice), or answering the chat's latest saved
+ * message. Its cards wait 30 minutes.
+ */
+async function startAttendedRound(
   chatId: string,
   context: Parameters<typeof goalRoundStartRequest>[1],
-  round: { text: string; notice: import("../../../renderer/shared/agent-notices.js").AgentNoticeV1 },
-): Promise<GoalRoundStart> {
+  message: { text: string; notice: AgentNoticeV1 } | undefined,
+): Promise<StartTurnResult> {
   const streamId = `goal-${Date.now().toString(36)}-${randomUUID().slice(0, 8)}`;
-  const owner = llmClient.attendedTurnOwner(chatId, `goal:${streamId}`);
+  const owner = llmClient.attendedTurnOwner(chatId, `goal:${streamId}`, roundPromptLifetime);
   const lease = llmClient.beginChatTurn(chatId, streamId, owner.documentId);
-  if (!lease) return "busy";
+  if (!lease) return { kind: "busy" };
+  let messageId: string | undefined;
   try {
-    lease.reserveAppendPayload(Buffer.byteLength(round.text, "utf8") + 1_024);
-    await chatStore.appendMessage(
-      chatId,
-      { role: "user", content: round.text, notice: round.notice },
-      {
-        providerId: context.providerId,
-        model: context.model,
-        ...(context.workspaceId !== undefined ? { expectedWorkspaceId: context.workspaceId } : {}),
-        isCurrent: () => lease.isActive(),
-      },
-    );
-    transcriptChanged(chatId);
+    if (message) {
+      lease.reserveAppendPayload(Buffer.byteLength(message.text, "utf8") + 1_024);
+      const saved = await chatStore.appendMessage(
+        chatId,
+        { role: "user", content: message.text, notice: message.notice },
+        {
+          providerId: context.providerId,
+          model: context.model,
+          ...(context.workspaceId !== undefined ? { expectedWorkspaceId: context.workspaceId } : {}),
+          isCurrent: () => lease.isActive(),
+        },
+      );
+      messageId = saved.messages[saved.messages.length - 1]?.id;
+      transcriptChanged(chatId);
+    }
     lease.settleAsyncWork();
     const request = goalRoundStartRequest(chatId, context, streamId);
     const started = await llmClient.start(streamId, request.params, owner, request.options);
     if (!started) {
       lease.release();
-      return "unavailable";
+      return { kind: "unavailable", reason: "The round stopped before it began.", ...(messageId ? { messageId } : {}) };
     }
-    return "started";
+    return { kind: "started", streamId, ...(messageId ? { messageId } : {}) };
   } catch (error) {
     lease.release();
     lease.settleAsyncWork();
     logger.warn("goal", "A keep-going round could not start.", error);
-    return "unavailable";
+    return {
+      kind: "unavailable",
+      reason: error instanceof Error ? error.message : "The round could not start.",
+      ...(messageId ? { messageId } : {}),
+    };
   }
+}
+
+async function startRound(
+  chatId: string,
+  context: Parameters<typeof goalRoundStartRequest>[1],
+  round: { text: string; notice: AgentNoticeV1 },
+): Promise<GoalRoundStart> {
+  const started = await startAttendedRound(chatId, context, round);
+  return started.kind === "started" ? "started" : started.kind === "busy" ? "busy" : "unavailable";
 }
 
 export const goalLoop = new GoalLoop({
@@ -119,7 +152,11 @@ export const goalLoop = new GoalLoop({
     return () => clearTimeout(timer);
   },
   persist: saveFollowThroughGoals,
-  onChange: (chatId: string, goal: GoalView | null) => ipcMain.broadcast("chats:goal-changed", { chatId, goal }),
+  onChange: (chatId: string, goal: GoalView | null) => {
+    ipcMain.broadcast("chats:goal-changed", { chatId, goal });
+    // The Inbox and Dock badge recount: a goal at Needs you is a Needs you row.
+    chatActivityRegistry.touch();
+  },
   eligibility,
   isChatBusy: (chatId) => llmClient.isChatBusy(chatId) || noticeDelivery.hasPending(chatId),
   helperRunning: (chatId) => llmClient.chatHasLiveHelpers(chatId),
@@ -157,6 +194,7 @@ export const goalLoop = new GoalLoop({
     return outcome;
   },
   startRound,
+  startNoticeRound: startAttendedRound,
   report: (event) => {
     if (event.event === "goal_started") reportAnalyticsEvent("goal_started", event.properties);
     else reportAnalyticsEvent("goal_settled", event.properties);
@@ -178,7 +216,14 @@ export function startGoalLoop(): void {
     chatDeleted: (chatId) => goalLoop.deleteChat(chatId),
     accessChanged: (chatIds) => goalLoop.accessChanged(chatIds),
     moveRefusal: (chatId) => goalLoop.moveRefusal(chatId),
+    noticeRound: (chatId, notice) => goalLoop.noticeRound(chatId, notice),
   });
+}
+
+/** The chat's goal when it stopped at Needs you, for the Inbox. */
+export function goalNeedsYou(chatId: string): GoalNeedsYou | undefined {
+  const goal = goalLoop.get(chatId);
+  return goal?.status === "needs-you" ? { since: goal.updatedAt, reason: goal.reason ?? "The keep-going goal needs you" } : undefined;
 }
 
 export function shutdownGoalLoop(): void {

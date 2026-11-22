@@ -35,6 +35,7 @@ function setup() {
       rounds.push(chatId);
       return "started";
     },
+    startNoticeRound: async () => ({ kind: "busy" }),
     report: () => {},
     log: () => {},
   });

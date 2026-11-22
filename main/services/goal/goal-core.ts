@@ -102,6 +102,8 @@ export function goalCauseText(cause: GoalCause, goal: Pick<GoalRecordV1, "maxRou
       return "Done";
     case "blocked":
       return "Needs you";
+    case "unanswered":
+      return "An approval waited 30 minutes with no answer";
   }
 }
 
@@ -125,6 +127,16 @@ function stop(
 export function pauseGoal(goal: GoalRecordV1, input: { now: number; cause: GoalCause; reason?: string }): GoalRecordV1 {
   if (goal.status !== "active") return goal;
   return stop(goal, input.now, "paused", input.cause, input.reason);
+}
+
+/**
+ * A round's card (an approval or a question) waited its whole 30 minutes:
+ * the tool was denied and the goal waits for the person. Anything but an
+ * active goal is returned unchanged.
+ */
+export function goalPromptUnanswered(goal: GoalRecordV1, now: number): GoalRecordV1 {
+  if (goal.status !== "active") return goal;
+  return stop(goal, now, "needs-you", "unanswered");
 }
 
 /**

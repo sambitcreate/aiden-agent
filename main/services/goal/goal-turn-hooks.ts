@@ -4,7 +4,9 @@
  * hooks at startup; until then, and in tests that never start it, every hook
  * is a no-op, so a chat without the loop behaves exactly as before.
  */
+import type { AgentNoticeV1 } from "../../../renderer/shared/agent-notices.js";
 import type { OwedTurnContext } from "../chat-owed-turn-start.js";
+import type { StartTurnResult } from "../follow-through/notice-delivery.js";
 
 export interface GoalRunSettled {
   chatId: string;
@@ -30,6 +32,12 @@ export interface GoalTurnHooks {
   accessChanged(chatIds: readonly string[]): void;
   /** Why the chat may not move to another workspace now, if it may not. */
   moveRefusal(chatId: string): string | undefined;
+  /**
+   * A notice would wake the chat. With an active goal it starts a goal round
+   * (with `notice` saved first, or answering the saved one); undefined when
+   * the chat has no active goal.
+   */
+  noticeRound(chatId: string, notice?: { text: string; notice: AgentNoticeV1 }): Promise<StartTurnResult | undefined>;
 }
 
 const none: GoalTurnHooks = {
@@ -39,6 +47,7 @@ const none: GoalTurnHooks = {
   chatDeleted: () => undefined,
   accessChanged: () => undefined,
   moveRefusal: () => undefined,
+  noticeRound: async () => undefined,
 };
 
 let current: GoalTurnHooks = none;

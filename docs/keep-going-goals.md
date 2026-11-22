@@ -38,6 +38,14 @@ Resume and Keep going both start again from round 1 with a fresh progress count;
 2. The chat's own model reads the conversation and judges the goal: **done**, **needs you**, **paused** (your latest message asked to stop), **wait** (background jobs are still running), or **continue**. It judges on evidence in the conversation, such as command output and files read, not on claims. This check reuses the chat's cached prompt and is counted as "goal review" in usage.
 3. On **continue**, a new round starts with a "Keep going · round 4 of 50" card in the chat. Rounds are ordinary answers: your approval mode applies exactly as for your own messages, and a goal never raises access. A round cannot set check-backs.
 
+### Approvals, helpers and notices in rounds
+
+- **Approvals and questions** from a round show in the chat (and on a paired phone) like any other, and wait 30 minutes instead of an owed turn's 5. One nobody answers is denied, the round is told, and the goal moves to **Needs you**.
+- Tools that only the chat's own window can approve (image classification and image generation) are refused in rounds that run without a window; the round is told why.
+- A round may run **read-only helpers** (scout, planner and reviewer, without writes, shell, mutating connectors or nesting). A helper that would change something is refused, and the round does the change itself.
+- While a goal is working, news that would wake the chat (a background job ending, a pull request update) starts a goal round instead of an unattended follow-up. These rounds don't count toward the 6 automatic wake-ups an hour, and the goal's own limits apply.
+- A goal at **Needs you** shows in the Inbox's **Needs you** section with its reason, and counts toward the Dock badge, until you press Keep going or clear it.
+
 ## When a goal pauses on its own
 
 - You pressed Stop, or the last answer failed.
@@ -48,6 +56,8 @@ Resume and Keep going both start again from round 1 with a fresh progress count;
 - It waited 30 minutes for background work or a helper.
 - The chat reached its spending limit. **Allow more** doesn't restart the goal; Keep going does.
 - The chat's folder access changed.
+
+A round's approval or question that waits 30 minutes with no answer moves the goal to **Needs you** instead.
 
 A chat with a working goal can't be moved to another workspace; pause or clear the goal first. Deleting the chat removes its goal, and forks don't copy it.
 

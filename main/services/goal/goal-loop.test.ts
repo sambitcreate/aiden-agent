@@ -4,7 +4,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { GOAL_MAX_ROUNDS, type GoalRecordV1, type GoalView } from "../../../renderer/shared/goal.js";
-import type { AgentNoticeV1 } from "../../../renderer/shared/agent-notices.js";
+import { agentNotice, type AgentNoticeV1 } from "../../../renderer/shared/agent-notices.js";
 import { createGoal, type GoalRoundActivity } from "./goal-core.js";
 import { GoalLoop, type GoalAnalyticsEvent, type GoalRoundStart } from "./goal-loop.js";
 import type { GoalReviewOutcome } from "./goal-reviewer.js";
@@ -36,6 +36,7 @@ function harness(options: { enabled?: boolean; refusal?: string } = {}) {
     review: (async (goal) => continueWith(`Next step ${goal.rounds}`)) as Review,
   };
   const rounds: Array<{ text: string; notice: AgentNoticeV1 }> = [];
+  const noticeRounds: string[] = [];
   const events: GoalAnalyticsEvent[] = [];
   const changes: Array<GoalView | null> = [];
   const saved: GoalRecordV1[][] = [];
@@ -63,6 +64,10 @@ function harness(options: { enabled?: boolean; refusal?: string } = {}) {
       rounds.push(round);
       return state.roundStart;
     },
+    startNoticeRound: async (chatId, _context, notice) => {
+      noticeRounds.push(notice?.text ?? "(saved)");
+      return { kind: "started", streamId: `notice-${chatId}-${noticeRounds.length}` };
+    },
     report: (event) => events.push(event),
     settled: (goal) => settled.push(goal),
     log: () => {},
@@ -79,6 +84,7 @@ function harness(options: { enabled?: boolean; refusal?: string } = {}) {
     loop,
     state,
     rounds,
+    noticeRounds,
     events,
     changes,
     saved,
@@ -328,4 +334,37 @@ test("after shutdown, runs that settle (the quit's own aborts) leave the goal al
   await h.runSettles({ stopped: true });
   assert.equal(h.goal()?.status, "active", "the next launch restores it as paused after a restart");
   assert.equal(h.reviews(), 0);
+});
+
+test("a round's card expiring unanswered moves the goal to Needs you, and the round settling afterwards is not reviewed", async () => {
+  const h = harness();
+  await h.loop.set(CHAT, { objective: "Ship it", source: "slash" });
+  await h.runSettles();
+  assert.equal(h.goal()?.rounds, 2, "round 2 is running");
+  h.loop.promptExpired(CHAT);
+  assert.equal(h.goal()?.status, "needs-you");
+  assert.equal(h.goal()?.cause, "unanswered");
+  assert.match(h.goal()?.reason ?? "", /30 minutes/);
+  assert.deepEqual(last(h.events), { event: "goal_settled", properties: { outcome: "needs_you", rounds: "2-5" } });
+  assert.equal(h.settled.length, 1, "the person is told once");
+  const reviews = h.reviews();
+  await h.runSettles();
+  assert.equal(h.reviews(), reviews);
+  assert.equal(h.rounds.length, 1);
+  // An expiry after the person paused changes nothing.
+  h.loop.promptExpired(CHAT);
+  assert.equal(h.settled.length, 1);
+});
+
+test("a waking notice starts a goal round only while the goal is active", async () => {
+  const h = harness();
+  assert.equal(await h.loop.noticeRound(CHAT, { text: "job ended", notice: agentNotice({ source: "background_job", tone: "success", title: "Done", summary: "x" }) }), undefined, "no goal: the notice wakes as usual");
+  await h.loop.set(CHAT, { objective: "Ship it", source: "slash" });
+  const started = await h.loop.noticeRound(CHAT, { text: "job ended", notice: agentNotice({ source: "background_job", tone: "success", title: "Done", summary: "x" }) });
+  assert.equal(started?.kind, "started");
+  assert.deepEqual(h.noticeRounds, ["job ended"]);
+  assert.equal(h.goal()?.rounds, 1, "answering a notice is part of the current round");
+  h.loop.pause(CHAT);
+  assert.equal(await h.loop.noticeRound(CHAT), undefined, "a paused goal leaves notices to the usual wake");
+  assert.deepEqual(h.noticeRounds, ["job ended"]);
 });

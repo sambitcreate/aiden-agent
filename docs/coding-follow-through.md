@@ -16,6 +16,7 @@ News reaches the chat as a follow-up message. The transcript shows it as a small
 - If the agent is still answering, the message joins that answer as the next thing it reads.
 - If the chat is idle and the news needs work (a failure, a conflict, a comment), Aiden starts a follow-up answer on its own. A chat can start at most six such answers an hour; after that the message is only saved, and the agent reads it with the person's next message.
 - News that needs nothing (checks passed, a merge) is only saved.
+- If the chat has a working [keep-going goal](keep-going-goals.md), news that needs work starts a goal round instead. A goal round is attended: its approvals wait 30 minutes, and it doesn't count toward the six an hour.
 
 A follow-up answer runs with nobody watching. It cannot ask questions or wait for approvals: in an **Ask first** workspace, anything that would need approval is refused for that answer. It also does not use subagents, Computer Use or Connectors. The agent still sees which connectors the chat uses, with a note that they are not connected for that answer, so it can say what it would check with them.
 

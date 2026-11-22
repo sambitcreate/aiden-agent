@@ -24,6 +24,7 @@ import { ASK_USER_QUESTION_TOOL_NAME } from "../../renderer/shared/ask-user-ques
 import { CHECK_BACK_TOOL_NAME } from "../../renderer/shared/check-backs.js";
 import { WORKSPACE_ARTIFACT_TOOL_NAME } from "../../renderer/shared/workspace-artifacts.js";
 import { COMPUTER_USE_TOOL_NAME } from "./computer-use/tool.js";
+import { approvalAllowableAwayFromOwner } from "./chat-owed-turn-prompts.js";
 import { generativeUiUnavailableReason } from "./generative-ui-extension.js";
 import { HOOKS_TOOL_NAME, hooksToolUnavailableReason, offersHooksTool, type HooksToolSurface } from "./hooks-tool.js";
 import { TODO_TOOL_NAME } from "./rpiv-todo/contract.js";
@@ -214,6 +215,9 @@ export function chatTurnToolRefusal(
     if (turn.windowless === true && (WINDOW_TOOL_NAMES.has(name) || turn.windowOnlyToolNames?.has(name) === true)) {
       return `${name} is not available in this turn: Aiden started this turn itself and no window owns it, and this tool needs the chat's own window. Say in your reply what you would do with it.`;
     }
+    if (turn.windowless === true && turn.goalRound === true && !approvalAllowableAwayFromOwner(name)) {
+      return `${name} is not available in this round: only the chat's own window can approve it, and this keep-going round runs without one. Say in your reply what you would do with it; it works when the person sends the request from the chat.`;
+    }
     if (turn.remoteAudience && name === WORKSPACE_ARTIFACT_TOOL_NAME) {
       return `${WORKSPACE_ARTIFACT_TOOL_NAME} is not available in this turn: the request came from a paired device, which cannot show workspace artifacts. Open the chat on this computer to create, refresh or run one.`;
     }
@@ -251,6 +255,42 @@ export function aidenStartedTurn(turn: ChatTurnAudience): boolean {
   return turn.unattended || (turn.windowless === true && turn.answersPerson !== true) || turn.goalRound === true;
 }
 
+/** Subagent roles that only read: everything but the implementer. */
+const READ_ONLY_SUBAGENT_ROLES: ReadonlySet<string> = new Set(["scout", "planner", "reviewer"]);
+
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  return typeof value === "object" && value !== null && !Array.isArray(value) ? (value as Record<string, unknown>) : undefined;
+}
+
+/** Capabilities that change something or start more helpers: writes, shell, mutating connectors, nesting. */
+function capabilitiesWrite(value: unknown): boolean {
+  const capabilities = asRecord(value);
+  if (!capabilities) return false;
+  const mutations = capabilities.mcpMutations;
+  return (
+    capabilities.workspaceWrite === true ||
+    capabilities.shell === true ||
+    capabilities.delegate === true ||
+    (Array.isArray(mutations) && mutations.length > 0)
+  );
+}
+
+/**
+ * A `subagent` run that may change something: any task in a role other than
+ * scout, planner or reviewer, or a batch or task asking for writes, shell,
+ * mutating connectors or nesting. `list` launches nothing.
+ */
+export function subagentCallMayWrite(args: Record<string, unknown>): boolean {
+  if (args.action === "list") return false;
+  if (capabilitiesWrite(args.capabilities)) return true;
+  const tasks = Array.isArray(args.tasks) ? args.tasks : [];
+  return tasks.some((entry) => {
+    const task = asRecord(entry);
+    if (!task) return false;
+    return typeof task.role !== "string" || !READ_ONLY_SUBAGENT_ROLES.has(task.role) || capabilitiesWrite(task.capabilities);
+  });
+}
+
 export const TURN_ARGS_REFUSAL_RULES: readonly TurnArgsRefusalRule[] = [
   {
     tool: CHECK_BACK_TOOL_NAME,
@@ -259,6 +299,14 @@ export const TURN_ARGS_REFUSAL_RULES: readonly TurnArgsRefusalRule[] = [
     reason:
       `${CHECK_BACK_TOOL_NAME} cannot set a check-back in this turn: Aiden started it, not the person, and a check-back set here could chain into another. ` +
       "Finish what you can now, or say in your reply what is still left to check. list and cancel still work.",
+  },
+  {
+    tool: SUBAGENT_TOOL_NAME,
+    turns: (turn) => turn.goalRound === true,
+    args: subagentCallMayWrite,
+    reason:
+      `${SUBAGENT_TOOL_NAME} can only run read-only helpers in a keep-going round: scout, planner or reviewer, without workspace writes, shell, mutating connectors or nesting. ` +
+      "Make the change yourself in this round, or delegate only the reading.",
   },
 ];
 

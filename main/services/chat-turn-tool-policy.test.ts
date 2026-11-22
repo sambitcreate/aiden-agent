@@ -188,3 +188,41 @@ test("an args-aware rule is one row: a tool, which turns, which arguments and a 
   ]);
   assert.equal(attended("subagent", { execution: "background" }), undefined, "the rule applies only to the turns it names");
 });
+
+test("a goal round may run only read-only helpers; the person's own turns may run any", () => {
+  const round = chatTurnAudienceFor({ goalRound: true, windowless: true }, {});
+  const refuseRound = firstTurnToolRefusal([chatTurnToolRefusal(workspace, round), chatTurnArgsToolRefusal(round)]);
+  const person = chatTurnAudienceFor({}, {});
+  const refusePerson = firstTurnToolRefusal([chatTurnToolRefusal(workspace, person), chatTurnArgsToolRefusal(person)]);
+  const task = (role: string, capabilities?: Record<string, unknown>) => ({ role, label: role, task: "look", ...(capabilities ? { capabilities } : {}) });
+  const cases: Array<[string, Record<string, unknown>, boolean]> = [
+    // label, the call's arguments, refused in a round
+    ["read-only roles", { tasks: [task("scout"), task("planner"), task("reviewer")] }, false],
+    ["read-only with web and read connectors", { tasks: [task("scout", { workspaceRead: true, web: true, mcp: [{ serverId: "s", tools: ["t"] }] })] }, false],
+    ["listing what can be requested", { action: "list" }, false],
+    ["an implementer", { tasks: [task("scout"), task("implementer")] }, true],
+    ["a reviewer asking for writes", { tasks: [task("reviewer", { workspaceRead: true, web: false, mcp: [], workspaceWrite: true })] }, true],
+    ["a batch asking for shell", { capabilities: { workspaceRead: true, web: false, mcp: [], shell: true }, tasks: [task("scout")] }, true],
+    ["a task asking for mutating connectors", { tasks: [task("scout", { workspaceRead: false, web: false, mcp: [], mcpMutations: [{ serverId: "s", tools: ["write"] }] })] }, true],
+    ["a task asking to nest helpers", { tasks: [task("planner", { workspaceRead: true, web: false, mcp: [], delegate: true })] }, true],
+    ["a task with no role", { tasks: [{ label: "x", task: "y" }] }, true],
+  ];
+  for (const [label, args, refused] of cases) {
+    const reason = refuseRound("subagent", args);
+    if (refused) assert.match(reason ?? "", /^subagent can only run read-only helpers in a keep-going round/u, label);
+    else assert.equal(reason, undefined, label);
+    assert.equal(refusePerson("subagent", args), undefined, `${label}: the person's own turn`);
+  }
+});
+
+test("a windowless goal round refuses tools only the chat's window can approve, and an owed turn keeps their Deny-only card", () => {
+  const round = chatTurnToolRefusal(workspace, chatTurnAudienceFor({ goalRound: true, windowless: true }, {}));
+  for (const name of ["classify", "generate_image"]) {
+    assert.match(round(name) ?? "", new RegExp(`^${name} is not available in this round: only the chat's own window can approve it`, "u"), name);
+  }
+  assert.equal(round("bash"), undefined, "an ordinary approval waits for the person");
+  const owed = chatTurnToolRefusal(workspace, chatTurnAudienceFor({ windowless: true }, {}));
+  assert.equal(owed("generate_image"), undefined);
+  const onScreen = chatTurnToolRefusal(workspace, chatTurnAudienceFor({ goalRound: true }, {}));
+  assert.equal(onScreen("generate_image"), undefined, "a round a window owns can ask its window");
+});

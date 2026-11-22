@@ -32,6 +32,7 @@ import {
   compareAndSetGoal,
   createGoal,
   goalAfterSettle,
+  goalPromptUnanswered,
   goalWaitExpired,
   pauseGoal,
   restoreGoal,
@@ -43,6 +44,7 @@ import {
 import { goalContinuationNote, goalKickoffNote, goalReminder, goalRoundTitle } from "./goal-prompts.js";
 import type { GoalReviewOutcome } from "./goal-reviewer.js";
 import type { GoalRunSettled } from "./goal-turn-hooks.js";
+import type { StartTurnResult } from "../follow-through/notice-delivery.js";
 
 export type GoalAnalyticsEvent =
   | { event: "goal_started"; properties: { source: GoalSource } }
@@ -76,6 +78,11 @@ export interface GoalLoopDependencies {
   /** A command goal's check; without it, command goals are refused. */
   runCheck?(goal: GoalRecordV1, signal: AbortSignal): Promise<{ passed: boolean; summary: string }>;
   startRound(chatId: string, context: OwedTurnContext, round: { text: string; notice: AgentNoticeV1 }): Promise<GoalRoundStart>;
+  /**
+   * A round that answers a notice (a finished job, a pull request update):
+   * with `notice` saved first, or answering the notice already saved.
+   */
+  startNoticeRound(chatId: string, context: OwedTurnContext, notice?: { text: string; notice: AgentNoticeV1 }): Promise<StartTurnResult>;
   report(event: GoalAnalyticsEvent): void;
   /** A goal settled on its own (done, needs you, or paused by the system). */
   settled?(goal: GoalRecordV1): void;
@@ -202,6 +209,28 @@ export class GoalLoop {
       .finally(() => {
         if (this.reviews.get(event.chatId) === controller) this.reviews.delete(event.chatId);
       });
+  }
+
+  /**
+   * A notice would wake the chat. While the goal is active it is answered by
+   * a goal round, which the person attends and which spends no wake budget;
+   * its settling runs the loop as any round's does. Undefined with no active goal.
+   */
+  async noticeRound(chatId: string, notice?: { text: string; notice: AgentNoticeV1 }): Promise<StartTurnResult | undefined> {
+    const goal = this.goals.get(chatId);
+    if (this.stopped || goal?.status !== "active") return undefined;
+    const context = this.contexts.get(chatId) ?? (await this.deps.fallbackContext(chatId));
+    if (this.goals.get(chatId)?.status !== "active") return undefined;
+    if (!context) return { kind: "unavailable", reason: "The chat has no model yet." };
+    return this.deps.startNoticeRound(chatId, context, notice);
+  }
+
+  /** A round's approval or question expired unanswered: the goal waits for the person. */
+  promptExpired(chatId: string): void {
+    const goal = this.goals.get(chatId);
+    if (goal?.status !== "active") return;
+    this.stopReview(chatId);
+    this.settle(goalPromptUnanswered(goal, this.deps.now()));
   }
 
   deleteChat(chatId: string): void {

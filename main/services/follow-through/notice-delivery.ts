@@ -2,7 +2,9 @@
 // queued follow-up, so the agent reads it before it finishes. An idle chat is
 // woken with a main-owned turn that nobody is watching, within an hourly
 // budget; otherwise the notice is only recorded and the agent reads it with
-// the person's next message. Notices for one chat are delivered in order.
+// the person's next message. While the chat has an active keep-going goal, a
+// waking notice starts a goal round instead, which the person attends and
+// which uses no wake budget. Notices for one chat are delivered in order.
 
 import type { AgentNoticeV1 } from "../../../renderer/shared/agent-notices.js";
 
@@ -48,6 +50,12 @@ export interface NoticeDeliveryDeps {
    * the newest saved message is already the notice to answer.
    */
   startTurn(chatId: string, post?: AgentNoticePost): Promise<StartTurnResult>;
+  /**
+   * While the chat has an active keep-going goal, a notice that would wake it
+   * starts a goal round instead: attended, outside the hourly wake budget.
+   * Undefined when the chat has no active goal, so the notice wakes as usual.
+   */
+  startGoalRound?(chatId: string, post?: AgentNoticePost): Promise<StartTurnResult | undefined>;
   append(post: AgentNoticePost): Promise<AppendResult>;
   waitForIdle(chatId: string): Promise<void>;
   now(): number;
@@ -138,6 +146,16 @@ export class NoticeDelivery {
         await this.deps.waitForIdle(post.chatId);
         continue;
       }
+      const round = post.wake ? await this.deps.startGoalRound?.(post.chatId, post) : undefined;
+      if (round) {
+        if (round.kind === "started") return { kind: "woke", messageId: round.messageId ?? "", streamId: round.streamId };
+        if (round.kind === "busy") {
+          await this.deps.waitForIdle(post.chatId);
+          continue;
+        }
+        if (round.messageId) return { kind: "recorded", messageId: round.messageId, reason: "wake-unavailable" };
+        return this.record(post, "wake-unavailable");
+      }
       if (post.wake && this.wakesLeft(post.chatId) > 0) {
         const started = await this.deps.startTurn(post.chatId, post);
         if (started.kind === "started") {
@@ -157,6 +175,12 @@ export class NoticeDelivery {
   }
 
   private async wakeSaved(post: AgentNoticePost, messageId: string): Promise<AgentNoticeOutcome> {
+    const round = post.wake ? await this.deps.startGoalRound?.(post.chatId) : undefined;
+    if (round) {
+      return round.kind === "started"
+        ? { kind: "woke", messageId, streamId: round.streamId }
+        : { kind: "recorded", messageId, reason: "wake-unavailable" };
+    }
     if (!post.wake || this.wakesLeft(post.chatId) <= 0) {
       return { kind: "recorded", messageId, reason: post.wake ? "wake-budget" : "not-waking" };
     }

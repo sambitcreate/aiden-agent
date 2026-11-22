@@ -55,7 +55,9 @@ export type GoalCause =
   /** The reviewer judged the objective done, or the check command passed. */
   | "done"
   /** The reviewer said the person is needed. */
-  | "blocked";
+  | "blocked"
+  /** A round's approval or question waited 30 minutes with no answer. */
+  | "unanswered";
 
 export interface GoalCheck {
   /** A shell command; exit code 0 means done. No reviewer runs. */

@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { createOwedTurnPrompts, OWED_TURN_PROMPT_LIFETIME_MS } from "./chat-owed-turn-prompts.js";
+import {
+  ATTENDED_TURN_PROMPT_LIFETIME_MS,
+  createOwedTurnPrompts,
+  OWED_TURN_PROMPT_LIFETIME_MS,
+} from "./chat-owed-turn-prompts.js";
 
 /**
  * The owed-turn cards as main wires them, with a hand-driven clock. A card
@@ -112,6 +116,38 @@ test("an approval nobody answers is denied after the phone card lifetime", () =>
   b.advance(1);
   assert.deepEqual(b.expired, ["approval:approval-1"]);
   assert.equal(b.prompts.approvalForChat("chat-1"), null);
+});
+
+test("a goal round's approval waits 30 minutes, then is denied and its turn hears it expired", () => {
+  const b = board();
+  const heard: string[] = [];
+  const lifetime = { ms: ATTENDED_TURN_PROMPT_LIFETIME_MS, expired: (chatId: string, kind: string) => heard.push(`${chatId}:${kind}`) };
+  b.prompts.publish("chat-1", "chat:approval", approval({ streamId: "goal-1" }), lifetime);
+  assert.equal(b.prompts.approvalForChat("chat-1")!.expiresAt, new Date(b.now() + 30 * 60_000).toISOString());
+  b.advance(OWED_TURN_PROMPT_LIFETIME_MS);
+  // Still open past an owed turn's five minutes.
+  assert.deepEqual(b.expired, []);
+  assert.equal(b.prompts.canDecide("chat-1", "approval-1", "allow"), true);
+  b.advance(ATTENDED_TURN_PROMPT_LIFETIME_MS - OWED_TURN_PROMPT_LIFETIME_MS);
+  assert.deepEqual(b.expired, ["approval:approval-1"]);
+  assert.deepEqual(heard, ["chat-1:approval"]);
+});
+
+test("an answered goal-round card never reports expiry, nor does a question closed at the agent's own deadline", () => {
+  const b = board();
+  const heard: string[] = [];
+  const lifetime = { ms: ATTENDED_TURN_PROMPT_LIFETIME_MS, expired: (chatId: string, kind: string) => heard.push(`${chatId}:${kind}`) };
+  b.prompts.publish("chat-1", "chat:approval", approval({ streamId: "goal-1" }), lifetime);
+  b.prompts.settled("approval-1");
+  b.prompts.publish(
+    "chat-1",
+    "chat:questionnaire",
+    question({ streamId: "goal-1", expiresAt: new Date(b.now() + 60_000).toISOString() }),
+    lifetime,
+  );
+  b.advance(ATTENDED_TURN_PROMPT_LIFETIME_MS);
+  assert.deepEqual(b.expired, ["question:question-1"]);
+  assert.deepEqual(heard, []);
 });
 
 test("a question closes at the agent's own deadline, never later than the card lifetime", () => {
