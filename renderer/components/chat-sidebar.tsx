@@ -64,7 +64,14 @@ import {
   sidebarChatNavigationTargets,
 } from "../lib/sidebar-chat-shortcuts";
 import { useHeldModifierReveal } from "../lib/use-held-modifier-reveal";
-import { queryKeys, useAllRegularChats, useFoundationModelsConnection, useSidebarChatPullRequests } from "../lib/queries";
+import {
+  queryKeys,
+  useAllRegularChats,
+  useFoundationModelsConnection,
+  useScheduledTasks,
+  useSidebarChatPullRequests,
+} from "../lib/queries";
+import { chatDeleteTaskNote } from "./chat-task-chips";
 import { MAX_SIDEBAR_PULL_REQUEST_CHATS } from "../shared/chat-pull-requests";
 import type { ChatTriageEntry } from "../shared/chat-triage";
 import { localComputerNoun } from "../shared/computer-noun";
@@ -561,10 +568,15 @@ function WorkspaceChatSidebar({
   const [remoteRenaming, setRemoteRenaming] = React.useState<RemoteRenameTarget | null>(null);
   const [remoteRenameBusy, setRemoteRenameBusy] = React.useState(false);
   const [deleting, setDeleting] = React.useState<ChatMeta | null>(null);
+  const scheduledTasks = useScheduledTasks();
   // The row a Delete from its menu returns focus to; it leaves once the chat
   // is gone and focus recovery moves on to the next row.
   const deleteReturnRef = React.useRef<HTMLElement | null>(null);
   const [bulkDeleting, setBulkDeleting] = React.useState<ChatMeta[] | null>(null);
+  const deleteTaskNote = deleting ? chatDeleteTaskNote(scheduledTasks.data, [deleting.id]) : "";
+  const bulkDeleteTaskNote = bulkDeleting
+    ? chatDeleteTaskNote(scheduledTasks.data, bulkDeleting.map((chat) => chat.id))
+    : "";
   const [bulkDeleteBusy, setBulkDeleteBusy] = React.useState(false);
   const bulkDeleteReturnRef = React.useRef<HTMLElement | null>(null);
   const [removingWorkspace, setRemovingWorkspace] = React.useState<Workspace | null>(null);
@@ -2644,6 +2656,7 @@ function WorkspaceChatSidebar({
           deleting ? (
             <Text variant="small" color="secondary">
               “{deleting.title}” and its messages will be permanently removed.
+              {deleteTaskNote ? ` ${deleteTaskNote}` : null}
             </Text>
           ) : null
         }
@@ -2660,6 +2673,7 @@ function WorkspaceChatSidebar({
         description={
           <Text variant="small" color="secondary">
             These chats and their messages will be permanently removed.
+            {bulkDeleteTaskNote ? ` ${bulkDeleteTaskNote}` : null}
           </Text>
         }
         confirmLabel={bulkDeleteBusy ? "Deleting…" : "Delete"}

@@ -735,7 +735,7 @@ export interface ChatReadResponse {
 export type ScheduledTaskMode = "llm" | "script";
 export type ScheduledTaskPermission = "read-only" | "full";
 export type ScheduledTaskExecutionProfile = "assistant";
-export type ScheduledRunResult = "success" | "error" | "silent" | "blocked";
+export type ScheduledRunResult = "success" | "error" | "silent" | "blocked" | "skipped";
 
 export interface ScheduledTask {
   id: string;
@@ -759,6 +759,8 @@ export interface ScheduledTask {
   /** Explicit Web Search authority; omitted legacy values are closed. */
   webSearchEnabled?: boolean;
   chatId?: string;
+  /** Main-owned, read-only: the chat this task was made in, where its runs post. */
+  originChatId?: string;
   notify: boolean;
   lastResult?: ScheduledRunResult;
   lastError?: string;

@@ -37,6 +37,8 @@ export interface ComposerContextChipsInput {
   };
   /** Background jobs run, a pull request is followed, or a done-when check is set. */
   followThrough?: boolean;
+  /** Enabled scheduled tasks post into this chat. */
+  postingTasks?: boolean;
 }
 
 export interface ComposerContextChips {
@@ -48,6 +50,8 @@ export interface ComposerContextChips {
   pullRequest: boolean;
   /** Background job, followed pull request and done-when chips. */
   followThrough: boolean;
+  /** The chip for scheduled tasks that post into this chat. */
+  tasks: boolean;
   barMode: ComposerContextBarMode;
 }
 
@@ -60,9 +64,10 @@ export function composerContextChips(input: ComposerContextChipsInput): Composer
     input.pullRequestRemote &&
     (linked > 0 || pending > 0 || current || branchCanOpen);
   const followThrough = input.stage === "started" && input.hasFolder && !input.accessOff && input.followThrough === true;
+  const tasks = input.stage === "started" && input.hasFolder && !input.accessOff && input.postingTasks === true;
   // Running work keeps a summary strip even in a folder without Git.
   const barMode: ComposerContextBarMode =
-    input.stage === "draft" || !input.autoHide ? "full" : branch || followThrough ? "summary" : "hidden";
+    input.stage === "draft" || !input.autoHide ? "full" : branch || followThrough || tasks ? "summary" : "hidden";
   const full = barMode === "full";
   return {
     workspace: full,
@@ -71,6 +76,7 @@ export function composerContextChips(input: ComposerContextChipsInput): Composer
     changesBadge: branch && barMode !== "hidden" ? Math.max(0, input.uncommitted) : 0,
     pullRequest: pullRequest && barMode !== "hidden",
     followThrough: followThrough && barMode !== "hidden",
+    tasks: tasks && barMode !== "hidden",
     barMode,
   };
 }

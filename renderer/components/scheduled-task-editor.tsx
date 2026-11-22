@@ -123,6 +123,33 @@ export function ScheduledTaskProviderWarning({ message }: { message: string | un
   );
 }
 
+/** "Posts in <chat>" with Use its own chat: the binding a chat-made task carries. */
+function PostsInField({ chatTitle, onUseOwnChat }: { chatTitle: string; onUseOwnChat: () => Promise<void> }) {
+  const [moving, setMoving] = React.useState(false);
+  const [error, setError] = React.useState<string | null>(null);
+  return (
+    <Field
+      label={`Posts in ${chatTitle}`}
+      description={error ?? "Each run’s prompt and answer land in that chat. Use its own chat to keep runs in a chat of their own."}
+    >
+      <Button
+        variant="filled"
+        size="small"
+        disabled={moving}
+        onClick={() => {
+          setMoving(true);
+          setError(null);
+          void onUseOwnChat()
+            .catch((cause: unknown) => setError(cause instanceof Error ? cause.message : "Couldn’t change where this task posts."))
+            .finally(() => setMoving(false));
+        }}
+      >
+        Use its own chat
+      </Button>
+    </Field>
+  );
+}
+
 export function ScheduledTaskEditor({
   open,
   initial,
@@ -136,6 +163,7 @@ export function ScheduledTaskEditor({
   lastProviderId,
   onOpenChange,
   onSave,
+  postsIn,
 }: {
   open: boolean;
   initial: ScheduledTaskInput;
@@ -149,6 +177,8 @@ export function ScheduledTaskEditor({
   busy: boolean;
   onOpenChange: (open: boolean) => void;
   onSave: (task: ScheduledTaskInput) => Promise<void>;
+  /** The chat this task was made in and posts into; absent when it runs in its own chat. */
+  postsIn?: { chatTitle: string; onUseOwnChat: () => Promise<void> };
 }) {
   const [reviewing, setReviewing] = React.useState(false);
   const [saveError, setSaveError] = React.useState<string | null>(null);
@@ -360,7 +390,7 @@ export function ScheduledTaskEditor({
             <Text as="p">{draft.permission === "full" ? "Full access · Runs without asking you each time." : "Read-only · Can inspect information without making changes."}</Text>
             <Text as="p" color="secondary">{workspaces.find((workspace) => workspace.id === draft.workspaceId)?.name ?? "No selected workspace"} · {selectedMcpIds.length ? selectedMcpIds.map((id) => visibleMcpServers.find((server) => server.id === id)?.name ?? "Unavailable connection").join(", ") : "No connections"} · Web search {draft.webSearchEnabled ? "on" : "off"}</Text>
           </Field>
-          <Field label="Keep this device awake" orientation="vertical"><Text as="p" color="secondary">Aiden must be open on this device for the task to run. Results appear in the task’s chat.</Text></Field>
+          <Field label="Keep this device awake" orientation="vertical"><Text as="p" color="secondary">Aiden must be open on this device for the task to run. {postsIn ? `Results appear in “${postsIn.chatTitle}”.` : "Results appear in the task’s chat."}</Text></Field>
           {saveError ? <Callout color="red" role="alert">{saveError}</Callout> : null}
         </FieldSet>
       ) : <>
@@ -703,6 +733,7 @@ export function ScheduledTaskEditor({
         ) : null}
       </FieldSet>
       <FieldSet title="Access and notifications">
+        {postsIn ? <PostsInField chatTitle={postsIn.chatTitle} onUseOwnChat={postsIn.onUseOwnChat} /> : null}
         <Field
           label="Workspace"
           description="Paths are always re-resolved by Aiden when the task runs."
