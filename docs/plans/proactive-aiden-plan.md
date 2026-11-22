@@ -2,7 +2,7 @@
 
 Written 2026-11-22 against main `c26b7979`.
 
-**Status (2026-11-22):** In progress on one integration branch and one PR, to save CI runs. Phases 1, 2, 4 and 5 are being built; E1 moves into Phase 4. Phase 3 (B1–B6) is blocked: it waits on the subagent panel plan's PR 1 and 2, which have not landed, and on the in-flight subagent upgrade ([subagent-desktop-serve-upgrade-plan.md](subagent-desktop-serve-upgrade-plan.md)), which is activating the same background coordinator. Phase 6 stays later.
+**Status (2026-11-22):** Phases 1, 2, 4 and 5 are built and in review as one PR, to save CI runs; E1 moved into Phase 4. Phase 3 (B1–B6) is blocked: it waits on the subagent panel plan's PR 1 and 2, which have not landed, and on the in-flight subagent upgrade ([subagent-desktop-serve-upgrade-plan.md](subagent-desktop-serve-upgrade-plan.md)), which is activating the same background coordinator. Phase 6 stays later.
 
 All five ideas, with the owner's 23 answers folded in, come to **44 planned pull-request units in 6 phases**. Two reviewers checked every unit against the code, and their 40 findings are fixed below.
 
