@@ -56,6 +56,13 @@ export function registerScheduledTaskHandlers(): void {
       await revisionFor(requiredString(id, "id"), updatedAt),
     ),
   );
+  // A link task's link is shown once, when made or rotated; reads never include it.
+  ipcMain.handle("schedule:trigger-link:rotate", async (_event, id: unknown) =>
+    (await import("../services/scheduled-task-triggers-main.js")).rotateTaskTriggerLink(requiredString(id, "id")),
+  );
+  ipcMain.handle("schedule:trigger-link:state", async (_event, id: unknown) =>
+    (await import("../services/scheduled-task-triggers-main.js")).taskTriggerLinkState(requiredString(id, "id")),
+  );
   ipcMain.handle("schedule:use-own-chat", async (_event, id: unknown, updatedAt: unknown) =>
     scheduledTaskApplicationService.useOwnChat(
       requiredString(id, "id"),

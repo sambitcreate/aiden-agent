@@ -892,5 +892,5 @@ test("a task trigger is checked strictly and only asks Aiden", async () => {
     /asks Aiden/u,
   );
   const script = await store.save({ ...base, permission: "full", trigger: { kind: "watch", source: { type: "script", script: "check.sh" }, everyMinutes: 60 } });
-  assert.equal(script.trigger?.source.type, "script");
+  assert.equal(script.trigger?.kind === "watch" && script.trigger.source.type, "script");
 });

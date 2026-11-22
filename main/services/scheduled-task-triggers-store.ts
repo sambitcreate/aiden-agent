@@ -11,14 +11,38 @@
 // or the on/off state changes, so a run being recorded never retires a
 // change a watch already saw.
 
+import { createHash, timingSafeEqual } from "node:crypto";
 import type { BotRoutineTrigger } from "../../renderer/shared/bot-routine-trigger.js";
 import { BOT_ROUTINE_EVENT_LIMITS } from "../../renderer/shared/bot-routine-trigger.js";
-import type { ScheduledTaskTrigger } from "../../renderer/shared/scheduled-task-trigger.js";
+import { SCHEDULED_TASK_LINK_LIMITS, type ScheduledTaskTrigger } from "../../renderer/shared/scheduled-task-trigger.js";
 import type { EventRoutine, EventRoutineStore } from "./bot-routine-events/dispatcher.js";
 import { BOT_EVENT_RUNNING_MAX, BOT_WATCH_SNAPSHOT_CHARS, type BotEventPublicationGuard, type BotEventReceipt, type BotWatchState } from "./bot-routine-events/store.js";
 import type { ScheduledTask } from "./types.js";
 
 export const SCHEDULED_TASK_TRIGGERS_FILE = "scheduled-task-triggers.json";
+
+/** One event's payload bound: a link batch holds up to 20 calls. */
+export const TASK_TRIGGER_PAYLOAD_CHARS = 24_000;
+
+/** What happened to one call of a task's link (newest last, 50 kept). */
+export interface TaskLinkLogEntry {
+  at: number;
+  outcome: "ran" | "batched" | "duplicate" | "daily_limit" | "filtered" | "bad_signature" | "invalid" | "off";
+  /** The body, credentials withheld, cut to 2 KB. */
+  preview: string;
+}
+
+const LOG_OUTCOMES = new Set<TaskLinkLogEntry["outcome"]>(["ran", "batched", "duplicate", "daily_limit", "filtered", "bad_signature", "invalid", "off"]);
+
+export function hashTaskLinkToken(token: string): string {
+  return createHash("sha256").update(token, "utf8").digest("hex");
+}
+
+function sameHash(a: string, b: string): boolean {
+  const left = Buffer.from(a, "hex");
+  const right = Buffer.from(b, "hex");
+  return left.length === right.length && left.length > 0 && timingSafeEqual(left, right);
+}
 
 /** A trigger task as the shared event core sees it. */
 export interface TaskTriggerRoutine extends EventRoutine {
@@ -39,6 +63,9 @@ interface TaskTriggerBook {
   running?: BotEventReceipt[];
   watch?: BotWatchState;
   checkRuns: number;
+  /** A link task's token, by hash; the token itself is never stored. */
+  tokenHash?: string;
+  log?: TaskLinkLogEntry[];
 }
 
 interface Persistence<T> {
@@ -74,10 +101,12 @@ function parseFingerprint(value: string): { trigger?: ScheduledTaskTrigger; prom
   }
 }
 
-const sourceKey = (trigger: ScheduledTaskTrigger | undefined) => JSON.stringify(trigger ? [trigger.kind, trigger.source] : null);
+const sourceKey = (trigger: ScheduledTaskTrigger | undefined) =>
+  JSON.stringify(trigger ? (trigger.kind === "watch" ? [trigger.kind, trigger.source] : [trigger.kind]) : null);
 
 /** The shared core's trigger shape: a task's watch has the same fields as a Bot watch. */
 function coreTrigger(trigger: ScheduledTaskTrigger): BotRoutineTrigger {
+  if (trigger.kind === "webhook") return { kind: "webhook" } as BotRoutineTrigger;
   return { kind: "watch", source: { ...trigger.source }, everyMinutes: trigger.everyMinutes } as BotRoutineTrigger;
 }
 
@@ -87,7 +116,7 @@ function parseReceipt(value: unknown): BotEventReceipt | undefined {
   if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
   const row = value as Record<string, unknown>;
   if (typeof row.eventId !== "string" || row.eventId.length > 200 || typeof row.payload !== "string" || !finite(row.at)) return undefined;
-  if (row.payload.length > BOT_ROUTINE_EVENT_LIMITS.payloadChars * 2) return undefined;
+  if (row.payload.length > TASK_TRIGGER_PAYLOAD_CHARS) return undefined;
   return {
     eventId: row.eventId,
     payload: row.payload,
@@ -104,7 +133,7 @@ function parseWatch(value: unknown): BotWatchState | undefined {
   return {
     failures: finite(row.failures) ? row.failures : 0,
     ...(pending && typeof pending.eventId === "string" && typeof pending.payload === "string" &&
-      pending.payload.length <= BOT_ROUTINE_EVENT_LIMITS.payloadChars * 2 && finite(pending.revision) && finite(pending.nextAttemptAt)
+      pending.payload.length <= TASK_TRIGGER_PAYLOAD_CHARS && finite(pending.revision) && finite(pending.nextAttemptAt)
       ? { pending: { eventId: pending.eventId, payload: pending.payload, revision: pending.revision, nextAttemptAt: pending.nextAttemptAt } }
       : {}),
     ...(typeof row.hash === "string" && /^[a-f0-9]{64}$/u.test(row.hash) ? { hash: row.hash } : {}),
@@ -128,6 +157,16 @@ function parseBook(value: unknown): TaskTriggerBook | undefined {
     ? row.running.map(parseReceipt).filter((receipt): receipt is BotEventReceipt => receipt !== undefined).slice(-BOT_EVENT_RUNNING_MAX)
     : [];
   const watch = parseWatch(row.watch);
+  const log = Array.isArray(row.log)
+    ? row.log.flatMap((entry): TaskLinkLogEntry[] => {
+      if (!entry || typeof entry !== "object") return [];
+      const item = entry as Record<string, unknown>;
+      return finite(item.at) && typeof item.outcome === "string" && LOG_OUTCOMES.has(item.outcome as TaskLinkLogEntry["outcome"]) &&
+        typeof item.preview === "string"
+        ? [{ at: item.at, outcome: item.outcome as TaskLinkLogEntry["outcome"], preview: item.preview.slice(0, SCHEDULED_TASK_LINK_LIMITS.previewBytes) }]
+        : [];
+    }).slice(-SCHEDULED_TASK_LINK_LIMITS.log)
+    : [];
   return {
     fingerprint: row.fingerprint,
     revision: row.revision,
@@ -140,6 +179,8 @@ function parseBook(value: unknown): TaskTriggerBook | undefined {
     ...(running.length ? { running } : {}),
     ...(watch ? { watch } : {}),
     checkRuns: finite(row.checkRuns) ? row.checkRuns : 0,
+    ...(typeof row.tokenHash === "string" && /^[a-f0-9]{64}$/u.test(row.tokenHash) ? { tokenHash: row.tokenHash } : {}),
+    ...(log.length ? { log } : {}),
   };
 }
 
@@ -172,9 +213,13 @@ export function reconcileTaskTriggerBook(book: TaskTriggerBook | undefined, task
     next.checkRuns = 0;
     delete next.held;
     delete next.running;
+    if (task.trigger.kind !== "webhook") {
+      delete next.tokenHash;
+      delete next.log;
+    }
     return next;
   }
-  if (before.trigger && before.trigger.everyMinutes !== task.trigger.everyMinutes) {
+  if (before.trigger?.kind === "watch" && task.trigger.kind === "watch" && before.trigger.everyMinutes !== task.trigger.everyMinutes) {
     watch = { ...watch, nextCheckAt: (watch.lastCheckAt ?? now) + task.trigger.everyMinutes * 60_000 };
   }
   if (before.enabled === false && task.enabled) watch = { ...watch, failures: 0, nextCheckAt: now };
@@ -209,6 +254,7 @@ function routineOf(task: TriggerTask, book: TaskTriggerBook): TaskTriggerRoutine
     ...(book.held ? { held: structuredClone(book.held) } : {}),
     ...(book.running ? { running: structuredClone(book.running) } : {}),
     ...(book.watch ? { watch: structuredClone(book.watch) } : {}),
+    ...(book.tokenHash ? { tokenHash: book.tokenHash } : {}),
     task,
     checkRuns: book.checkRuns,
   };
@@ -225,6 +271,9 @@ function bookOf(routine: TaskTriggerRoutine, base: TaskTriggerBook): TaskTrigger
     ...(routine.running?.length ? { running: routine.running.slice(-BOT_EVENT_RUNNING_MAX) } : {}),
     ...(routine.watch ? { watch: routine.watch } : {}),
     checkRuns: routine.checkRuns,
+    // The token and the call log change only through their own methods.
+    ...(base.tokenHash ? { tokenHash: base.tokenHash } : {}),
+    ...(base.log ? { log: base.log } : {}),
   };
 }
 
@@ -308,6 +357,49 @@ export function createScheduledTaskTriggerStore(dependencies: ScheduledTaskTrigg
           record.tasks = stored;
         });
         return result;
+      });
+    },
+
+    /** The link task a token opens, compared by hash in constant time; disabled tasks too. */
+    findByToken(token: string): Promise<TaskTriggerRoutine | undefined> {
+      if (!/^[A-Za-z0-9_-]{20,100}$/u.test(token)) return Promise.resolve(undefined);
+      const hash = hashTaskLinkToken(token);
+      return serial(async () => [...(await load()).values()].find((routine) =>
+        routine.task.trigger.kind === "webhook" && routine.tokenHash !== undefined && sameHash(routine.tokenHash, hash)));
+    },
+
+    /** A new link replaces the old one at once; undefined leaves the task with no link. */
+    setTokenHash(id: string, tokenHash: string | undefined): Promise<boolean> {
+      return serial(async () => {
+        const routine = (await load()).get(id);
+        if (!routine || routine.task.trigger.kind !== "webhook") return false;
+        await dependencies.persistence.update((draft) => {
+          const stored = books(draft);
+          const base = parseBook(stored[id]);
+          if (!base) return;
+          const { tokenHash: _old, ...rest } = base;
+          stored[id] = tokenHash ? { ...rest, tokenHash } : rest;
+        });
+        return true;
+      });
+    },
+
+    appendLog(id: string, entry: TaskLinkLogEntry): Promise<void> {
+      return serial(async () => {
+        await dependencies.persistence.update((draft) => {
+          const stored = books(draft);
+          const base = parseBook(stored[id]);
+          if (base) stored[id] = { ...base, log: [...(base.log ?? []), entry].slice(-SCHEDULED_TASK_LINK_LIMITS.log) };
+        });
+      });
+    },
+
+    /** The link's recent calls, newest first, and whether it has a link at all. */
+    linkState(id: string): Promise<{ hasLink: boolean; log: TaskLinkLogEntry[] } | undefined> {
+      return serial(async () => {
+        if (!(await load()).has(id)) return undefined;
+        const book = parseBook(books(await dependencies.persistence.load())[id]);
+        return { hasLink: book?.tokenHash !== undefined, log: [...(book?.log ?? [])].reverse() };
       });
     },
 

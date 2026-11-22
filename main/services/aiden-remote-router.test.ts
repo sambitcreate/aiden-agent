@@ -1,4 +1,6 @@
 import assert from "node:assert/strict";
+import { createHmac } from "node:crypto";
+import { createTaskLinkWebhook } from "./scheduled-task-link-trigger.js";
 import { readFileSync } from "node:fs";
 import { createServer, request as httpRequest, type IncomingHttpHeaders } from "node:http";
 import { gunzipSync, gzipSync } from "node:zlib";
@@ -123,6 +125,7 @@ async function fixture(options: {
   /** Contract revision 42: the Bot service's holder view carries `issueCount`. */
   botIssueCount?: number;
   botRoutineWebhook?: import("./aiden-remote-router.js").AidenRemoteRouterDependencies["botRoutineWebhook"];
+  taskTriggerWebhook?: import("./aiden-remote-router.js").AidenRemoteRouterDependencies["taskTriggerWebhook"];
   /** The host projects context pressure (contract revision 41): this is what the chat service answers. */
   contextPressure?: { chatId: string; pressure: Record<string, unknown> | null };
   /** The host's spending ledger (contract revision 47). */
@@ -1135,6 +1138,7 @@ async function fixture(options: {
         }
       : {}),
     ...(options.botRoutineWebhook ? { botRoutineWebhook: options.botRoutineWebhook } : {}),
+    ...(options.taskTriggerWebhook ? { taskTriggerWebhook: options.taskTriggerWebhook } : {}),
   };
   const handler = createAidenRemoteRequestHandler(dependencies);
   const server = createServer(handler);
@@ -7090,6 +7094,60 @@ test("a Bot routine link needs no device credential, answers with no body, and n
     assert.notEqual(server.status, 200, "a routine token is not a device credential");
     const logged = JSON.stringify(app.logs);
     assert.ok(!logged.includes(token), "the token never reaches the log");
+  } finally {
+    await app.close();
+  }
+});
+
+test("a chat task's link answers 405, 404, 429, 415 and 413 in order, checks its signature, and never reads a body for an unknown link", async () => {
+  const token = "T".repeat(43);
+  const secret = "s".repeat(64);
+  const emitted: Array<{ taskId: string; payload: string }> = [];
+  const logged: Array<{ outcome: string; preview: string }> = [];
+  let delivered = 0;
+  let clock = 1_800_000_000_000;
+  const routine = {
+    id: "task-1", enabled: true,
+    task: { trigger: { kind: "webhook", gapMinutes: 5, signatureHeader: "x-signature-256", filters: [{ path: "action", equals: "opened" }] } },
+  } as unknown as import("./scheduled-task-triggers-store.js").TaskTriggerRoutine;
+  const core = createTaskLinkWebhook({
+    active: () => true,
+    findByToken: async (candidate) => (candidate === token ? routine : undefined),
+    secret: async () => secret,
+    emit: async (taskId, event) => { emitted.push({ taskId, payload: event.payload }); return "queued"; },
+    log: async (_taskId, entry) => { logged.push(entry); },
+    now: () => clock,
+  });
+  const app = await fixture({
+    authenticate: "invalid",
+    taskTriggerWebhook: { admit: core.admit, deliver: async (request) => { delivered += 1; return core.deliver(request); } },
+  });
+  const sign = (body: string) => `sha256=${createHmac("sha256", secret).update(body).digest("hex")}`;
+  const post = (path: string, body: string, headers: Record<string, string> = {}) =>
+    fetch(`${app.base}${path}`, { method: "POST", headers: { "content-type": "application/json", ...headers }, body });
+  try {
+    assert.equal((await fetch(`${app.base}/hooks/tasks/${token}`)).status, 405);
+    const unknown = await post(`/hooks/tasks/${"U".repeat(43)}`, "{}");
+    assert.equal(unknown.status, 404);
+    assert.equal(delivered, 0, "an unknown link never gets its body read");
+    assert.equal((await post(`/hooks/tasks/${token}`, "hi", { "content-type": "text/html" })).status, 415);
+    const big = JSON.stringify({ action: "opened", text: "x".repeat(300 * 1024) });
+    assert.equal((await post(`/hooks/tasks/${token}`, big)).status, 413);
+    const unsigned = JSON.stringify({ action: "opened", title: "Fix login" });
+    assert.equal((await post(`/hooks/tasks/${token}`, unsigned, { "x-signature-256": "sha256=" + "0".repeat(64) })).status, 401);
+    const accepted = await post(`/hooks/tasks/${token}`, unsigned, { "x-signature-256": sign(unsigned) });
+    assert.equal(accepted.status, 202);
+    assert.equal(await accepted.text(), "");
+    const closed = JSON.stringify({ action: "closed", title: "Fix login" });
+    assert.equal((await post(`/hooks/tasks/${token}`, closed, { "x-signature-256": sign(closed) })).status, 202, "a filter miss looks the same to the caller");
+    assert.deepEqual(emitted.map((event) => JSON.parse(event.payload).title), ["Fix login"]);
+    assert.deepEqual(logged.map((entry) => entry.outcome), ["bad_signature", "ran", "filtered"]);
+    // 60 calls a minute, counted before any body is read.
+    for (let index = logged.length; index < 60; index += 1) await post(`/hooks/tasks/${token}`, "{}", { "content-type": "text/plain" });
+    assert.equal((await post(`/hooks/tasks/${token}`, unsigned)).status, 429);
+    clock += 61_000;
+    assert.equal((await post(`/hooks/tasks/${token}`, unsigned, { "x-signature-256": sign(unsigned) })).status, 202);
+    assert.ok(!JSON.stringify(app.logs).includes(token), "the link never reaches the log");
   } finally {
     await app.close();
   }

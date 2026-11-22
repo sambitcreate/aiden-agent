@@ -6,7 +6,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 
 import { scheduledTaskProviderGuardrail } from "../lib/scheduled-task-view.js";
 import type { Provider } from "../lib/types.js";
-import { ScheduledTaskProviderWarning, WatchTriggerFields, scheduledTaskMcpServerChoices } from "./scheduled-task-editor.js";
+import { ScheduledTaskProviderWarning, WatchTriggerFields, parseLinkFilterLines, scheduledTaskMcpServerChoices } from "./scheduled-task-editor.js";
 import { ChatApprovalCard } from "./chat-approval-card";
 import type { ScheduledTaskApprovalDetails } from "../shared/assistant";
 
@@ -167,4 +167,11 @@ test("the watch fields flag a bad address and say a script watch needs Full perm
   const script = render({ trigger: { kind: "watch", source: { type: "script", script: "check.sh" }, everyMinutes: 45 }, scripts: ["check.sh"], fullAccess: false, onChange: () => undefined });
   assert.ok(script.includes("needs Full permission"));
   assert.ok(render({ trigger: { kind: "watch", source: { type: "script", script: "check.sh" }, everyMinutes: 45 }, scripts: ["check.sh"], fullAccess: true, onChange: () => undefined }).includes("AIDEN_CHECK_STATE"));
+});
+
+test("link filters are written one field = value per line; lines without a field are ignored", () => {
+  assert.deepEqual(parseLinkFilterLines("action = opened\n= nope\nnot a filter\npull_request.state=closed = yes"), [
+    { path: "action", equals: "opened" },
+    { path: "pull_request.state", equals: "closed = yes" },
+  ]);
 });

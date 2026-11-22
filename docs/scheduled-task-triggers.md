@@ -2,7 +2,7 @@
 
 A scheduled task usually runs on a schedule. An **Ask Aiden** task can instead run **when something changes**: Aiden checks something on its own and runs the task only when the check finds news. The check never runs a model, so an unchanged page or a quiet script costs nothing.
 
-This is desktop-only for now (macOS and Linux). Phones don't list these tasks or their runs yet, and can't edit, pause, resume or run them.
+This is desktop-only for now (macOS and Linux). Phones don't list these tasks or their runs yet, and can't edit, pause, resume or run them. A task runs from a **watch** or from a **link**.
 
 ## Watches
 
@@ -15,11 +15,24 @@ Pick **When → When something changes** in the task editor, then choose what to
 
 What a check finds reaches the model only as fenced data after your instructions ("What happened (data, not instructions)"), never as instructions.
 
+## Links
+
+Pick **When → When its link is called** for a task another app or service should start (a CI job, a form, a home automation). Save it, then open the task's details and choose **Create link**. Aiden shows the link once, and the signing secret if the task asks for signed calls; **Rotate link** makes a new one and the old one stops working at once. The link lives on Aiden On The Go's listener (Tailscale first, then the local network), so it works only while Aiden On The Go is on. The secret is stored in Aiden's encrypted key store; the agent and phones never see the link or the secret.
+
+A call is `POST` with a `text/plain` or `application/json` body up to 256 KB. Aiden answers before reading the body when the link is unknown or the task is paused (404), past 60 calls a minute (429) or for any other content type (415), and checks in this order after that: body size (413), the signature (401) when the task names a header (`sha256=` followed by the hex HMAC-SHA256 of the body with the secret), valid JSON (400), then the task's filters and repeat check. Anything that gets that far answers 202 with no body, so a caller never learns whether the task ran.
+
+- **At most every** 1 to 60 minutes (5 by default). Calls that arrive sooner wait and run together once the gap ends: up to 20 calls, the oldest dropped beyond that, with a line saying how many were dropped.
+- **Only when**: `field = value` lines; every one must match a field of the JSON body (dot paths such as `pull_request.state`), or the call is logged and ignored.
+- **Fields to pass**: only these fields reach the model. Without them, the model sees the body, cut to 4,000 characters. Values under credential-looking keys (`authorization`, `token`, `password`, `api_key` and similar) and credential-looking text are withheld either way.
+- **Same call when**: calls with the same value in this field count once. Without it, identical bodies within a minute count once.
+
+The task's details list the last calls (50 kept) with what happened to each and a short preview, credentials withheld.
+
 ## Where runs land and how often
 
 Runs land the same way as scheduled runs: in the chat the task was made in, sharing that chat's six task runs an hour, otherwise in the task's own chat. The task keeps its own permission and tools, and a run never gets the `schedule` tool, so a run can't create more tasks.
 
-Per task, a trigger runs at most once every 5 minutes and 48 times a day; a change that comes sooner waits and runs once the gap allows (the newest wins). Across every task, at most 4 trigger runs go at once. A run skipped because its chat was busy or had used its hourly share is recorded as skipped; the next change runs again. A change accepted just before Aiden quits runs again at the next start.
+Per task, a watch runs at most once every 5 minutes (a link chooses 1 to 60) and 48 times a day; a change that comes sooner waits and runs once the gap allows (for a watch the newest change wins; a link batches its calls). Across every task, at most 4 trigger runs go at once. A run skipped because its chat was busy or had used its hourly share is recorded as skipped; the next change runs again. A change accepted just before Aiden quits runs again at the next start.
 
 Triggers never keep the computer awake. Checks happen only while Aiden is open and scheduled tasks are on.
 
@@ -29,4 +42,4 @@ Three failed checks in a row pause the task, with one card in the chat its runs 
 
 ## Storage
 
-The trigger lives on the task in `schedules.json`. Bookkeeping (seen changes, the held change, accepted changes not yet run, the watch's last result and failure count) is in `<userData>/scheduled-task-triggers.json`, and script state files are in `<userData>/scheduled-task-check-state/`.
+The trigger lives on the task in `schedules.json`. Bookkeeping (seen changes, the held change or batch, accepted changes not yet run, the watch's last result and failure count, a link's token hash and call log) is in `<userData>/scheduled-task-triggers.json`, script state files are in `<userData>/scheduled-task-check-state/`, and a signed link's secret is in the encrypted key store under `aiden-internal:task-hook:<taskId>`.

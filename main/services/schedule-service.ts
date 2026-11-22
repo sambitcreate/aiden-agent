@@ -16,7 +16,7 @@ export function createScheduleService(
       ipcMain.broadcast("schedule:updated", payload);
       // A saved, removed or switched task may start or stop a trigger's watch.
       void import("./scheduled-task-triggers-main.js")
-        .then(({ rearmScheduledTaskTriggers }) => rearmScheduledTaskTriggers())
+        .then(({ rearmScheduledTaskTriggers }) => rearmScheduledTaskTriggers(payload))
         .catch((error: unknown) => logger.warn("schedule", "Could not re-arm task triggers.", error));
     },
     warn: (message) => logger.warn("schedule", message),

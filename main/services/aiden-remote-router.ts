@@ -222,6 +222,15 @@ export interface AidenRemoteRouterDependencies {
    * except for the token in the path; absent, the route is `not_found`.
    */
   botRoutineWebhook?(request: { token: string; contentType?: string; body: Uint8Array }): Promise<{ status: number }>;
+  /**
+   * Chat tasks' links (`POST /hooks/tasks/{token}`): `admit` runs before the
+   * body is read (404, 429, 415), `deliver` gets the body and the header the
+   * link's signature comes in.
+   */
+  taskTriggerWebhook?: {
+    admit(request: { token: string; contentType?: string }): Promise<{ status: number } | { accept: true; signatureHeader?: string }>;
+    deliver(request: { token: string; contentType?: string; signature?: string; body: Uint8Array }): Promise<{ status: number }>;
+  };
   instanceId: string;
   displayName(): string;
   appVersion: string;
@@ -572,12 +581,14 @@ export type AidenRemoteRouteLabel =
   | "runQuestionRespond"
   | "runInputs"
   | "botRoutineWebhook"
+  | "taskTriggerWebhook"
   | "unknown";
 
 /** Canonical template(s) for every router route label. */
 export const AIDEN_REMOTE_ROUTE_TEMPLATES: Readonly<Record<AidenRemoteRouteLabel, readonly string[]>> = {
   health: ["/health"],
   botRoutineWebhook: ["/hooks/bot-routines/:token"],
+  taskTriggerWebhook: ["/hooks/tasks/:token"],
   pairingManualBootstrap: ["/pairing/manual-bootstrap"],
   pairingExchange: ["/pairing/exchange"],
   pairingRequests: ["/pairing/requests"],
@@ -970,6 +981,8 @@ function requireEmptyJsonObject(body: unknown): void {
 }
 
 const BOT_ROUTINE_WEBHOOK_MAX_BYTES = 16_384;
+/** A chat task link accepts bodies up to 256 KB (SCHEDULED_TASK_LINK_LIMITS.bodyBytes). */
+const TASK_TRIGGER_WEBHOOK_MAX_BYTES = 256 * 1024;
 
 /** The raw body, or undefined once it passes `maximumBytes`. */
 async function readRawBody(request: IncomingMessage, maximumBytes: number): Promise<Uint8Array | undefined> {
@@ -2539,6 +2552,39 @@ export function createAidenRemoteRequestHandler(
           : await dependencies.botRoutineWebhook({
             token: webhookMatch[1]!,
             ...(typeof request.headers["content-type"] === "string" ? { contentType: request.headers["content-type"] } : {}),
+            body,
+          });
+        response.writeHead(answer.status, { "cache-control": "no-store" }).end();
+        return;
+      }
+      const taskHookMatch = /^\/hooks\/tasks\/([A-Za-z0-9_-]{20,100})$/u.exec(path);
+      if (taskHookMatch) {
+        route = "taskTriggerWebhook";
+        if (!dependencies.taskTriggerWebhook) {
+          response.writeHead(404, { "cache-control": "no-store" }).end();
+          return;
+        }
+        if (request.method !== "POST") {
+          response.writeHead(405, { allow: "POST" }).end();
+          return;
+        }
+        requireNoQuery(query);
+        const token = taskHookMatch[1]!;
+        const contentType = typeof request.headers["content-type"] === "string" ? request.headers["content-type"] : undefined;
+        // An unknown link, too many calls or the wrong type is answered before any body is read.
+        const admitted = await dependencies.taskTriggerWebhook.admit({ token, ...(contentType ? { contentType } : {}) });
+        if ("status" in admitted) {
+          response.writeHead(admitted.status, { "cache-control": "no-store" }).end();
+          return;
+        }
+        const body = await readRawBody(request, TASK_TRIGGER_WEBHOOK_MAX_BYTES);
+        const signatureValue = admitted.signatureHeader ? request.headers[admitted.signatureHeader] : undefined;
+        const answer = body === undefined
+          ? { status: 413 }
+          : await dependencies.taskTriggerWebhook.deliver({
+            token,
+            ...(contentType ? { contentType } : {}),
+            ...(typeof signatureValue === "string" ? { signature: signatureValue } : {}),
             body,
           });
         response.writeHead(answer.status, { "cache-control": "no-store" }).end();

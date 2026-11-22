@@ -784,6 +784,12 @@ export const scheduleApi = {
   /** Later runs post into the task's own chat instead of the chat that made it. */
   useOwnChat: (id: string, expectedUpdatedAt: number) =>
     invoke<ScheduledTask>("schedule:use-own-chat", id, expectedUpdatedAt),
+  /** A new link for a link task (the old one stops working), shown once. */
+  rotateTriggerLink: (id: string) =>
+    invoke<{ url: string; secret?: string }>("schedule:trigger-link:rotate", id),
+  /** Whether the task has a link and its recent calls; never the link itself. */
+  triggerLinkState: (id: string) =>
+    invoke<{ hasLink: boolean; listenerOn: boolean; log: Array<{ at: number; outcome: string; preview: string }> }>("schedule:trigger-link:state", id),
   preview: (cron: string, timezone: string, count = 3) =>
     invoke<number[]>("schedule:preview", cron, timezone, count),
   scripts: (workspaceId?: string) => invoke<string[]>("schedule:scripts", workspaceId),

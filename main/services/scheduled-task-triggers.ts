@@ -19,7 +19,8 @@ import { createEventWatches } from "./bot-routine-events/watch.js";
 import type { BotWatchCheck } from "./bot-routine-events/watch-sources.js";
 import type { ScriptProcessResult } from "./schedule-script.js";
 import type { ScheduledRunTrigger } from "./schedule-service-core.js";
-import type { ScheduledTaskTriggerStore, TaskTriggerRoutine } from "./scheduled-task-triggers-store.js";
+import { createTaskLinkWebhook, linkEventText, mergeLinkBatch } from "./scheduled-task-link-trigger.js";
+import { TASK_TRIGGER_PAYLOAD_CHARS, type ScheduledTaskTriggerStore, type TaskTriggerRoutine } from "./scheduled-task-triggers-store.js";
 import type { ScheduledRun, ScheduledTask } from "./types.js";
 
 type EventTrigger = Extract<ScheduledRunTrigger, { kind: "event" }>;
@@ -41,6 +42,8 @@ export interface ScheduledTaskTriggersDependencies {
   }): Promise<ScriptProcessResult>;
   /** The folder each task's private check state file lives in. */
   checkStateDir(): Promise<string>;
+  /** A link's signing secret, when it has one. */
+  linkSecret(taskId: string): Promise<string | null>;
   /** Three failed checks turned the trigger off: one card in the task's landing chat. */
   paused(task: ScheduledTask, error: string): Promise<void>;
   /** A check's result was saved, so the task's row may show something new. */
@@ -97,7 +100,13 @@ export function createScheduledTaskTriggers(deps: ScheduledTaskTriggersDependenc
       const recorded = await deps.findRun(routine.id, runId);
       if (recorded && recorded.result !== "blocked") return { settled: true };
       try {
-        await deps.runEvent(routine.id, { kind: "event", eventId: event.eventId, source: "watch", payload: event.payload }, runId);
+        const link = routine.task.trigger.kind === "webhook";
+        await deps.runEvent(routine.id, {
+          kind: "event",
+          eventId: event.eventId,
+          source: link ? "webhook" : "watch",
+          payload: link ? linkEventText(event.payload) : event.payload,
+        }, runId);
         // A run cut short by Aiden stopping runs again at the next start.
         return { settled: !stopped };
       } catch (error) {
@@ -116,7 +125,16 @@ export function createScheduledTaskTriggers(deps: ScheduledTaskTriggersDependenc
     store: deps.store,
     run: (routine, event) => runOnce(routine, event),
     isPaused: async () => !deps.isActive(),
-    limits: () => ({ minGapMs: SCHEDULED_TASK_TRIGGER_LIMITS.minGapMs, perDay: SCHEDULED_TASK_TRIGGER_LIMITS.perDay }),
+    // A link chooses its own gap (1–60 minutes); a watch waits 5.
+    limits: (routine) => ({
+      minGapMs: routine.task.trigger.kind === "webhook" ? routine.task.trigger.gapMinutes * 60_000 : SCHEDULED_TASK_TRIGGER_LIMITS.minGapMs,
+      perDay: SCHEDULED_TASK_TRIGGER_LIMITS.perDay,
+    }),
+    payloadChars: TASK_TRIGGER_PAYLOAD_CHARS,
+    // Calls inside a link's gap are batched (20 at most); a watch's newest change wins.
+    mergeHeld: (held, incoming, routine) => routine.task.trigger.kind === "webhook"
+      ? mergeLinkBatch(held.payload, incoming.payload, TASK_TRIGGER_PAYLOAD_CHARS)
+      : incoming.payload,
     now: deps.now,
     timeZone: deps.timeZone,
     setTimer: deps.setTimer,
@@ -141,6 +159,7 @@ export function createScheduledTaskTriggers(deps: ScheduledTaskTriggersDependenc
   }
 
   async function check(routine: TaskTriggerRoutine, signal: AbortSignal): Promise<BotWatchCheck> {
+    if (routine.task.trigger.kind !== "watch") return { ok: false, error: "This task has no watch." };
     const source = routine.task.trigger.source;
     if (source.type === "url") return deps.fetchUrl(source.url, signal);
     let resolved: { path: string; cwd: string };
@@ -180,14 +199,27 @@ export function createScheduledTaskTriggers(deps: ScheduledTaskTriggersDependenc
       deps.changed?.(routine.id);
     },
     recovered: async () => undefined,
-    reportsOutput: (routine) => routine.task.trigger.source.type === "script",
+    reportsOutput: (routine) => routine.task.trigger.kind === "watch" && routine.task.trigger.source.type === "script",
     now: deps.now,
     setTimer: deps.setTimer,
     onError: deps.onError,
     checked: (routine) => deps.changed?.(routine.id),
   });
 
+  const webhook = createTaskLinkWebhook({
+    active: () => !stopped && deps.isActive(),
+    findByToken: (token) => deps.store.findByToken(token),
+    secret: (taskId) => deps.linkSecret(taskId),
+    emit: (taskId, event) => dispatcher.emit(taskId, taskId, event),
+    log: async (taskId, entry) => {
+      await deps.store.appendLog(taskId, entry);
+      deps.changed?.(taskId);
+    },
+    now: deps.now,
+  });
+
   return {
+    webhook,
     /** Arms every enabled watch and replays accepted events after a restart. */
     start(): Promise<void> {
       stopped = false;

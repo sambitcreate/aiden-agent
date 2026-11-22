@@ -124,7 +124,7 @@ function assertTriggerShape(
 ): void {
   if (task.botId !== undefined) throw new Error("A Bot routine can't have a task trigger.");
   if (task.mode !== "llm") throw new Error("A task that runs when something changes asks Aiden. Use a script watch to check with a script.");
-  if (trigger.source.type === "script" && task.permission !== "full") {
+  if (trigger.kind === "watch" && trigger.source.type === "script" && task.permission !== "full") {
     throw new Error("A script watch runs a script unattended, so the task needs Full permission.");
   }
 }

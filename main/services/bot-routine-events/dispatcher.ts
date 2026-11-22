@@ -63,7 +63,7 @@ export interface EventRoutineDispatcherDependencies<R extends EventRoutine> {
    * The payload to hold when an event arrives inside the gap and another is
    * already held. Without it the newest wins; a link trigger batches them.
    */
-  mergeHeld?(held: BotEventReceipt, incoming: { eventId: string; payload: string }): string;
+  mergeHeld?(held: BotEventReceipt, incoming: { eventId: string; payload: string }, routine: R): string;
   now(): number;
   timeZone(): string;
   setTimer(fn: () => void, ms: number): { cancel(): void };
@@ -290,7 +290,7 @@ export function createEventRoutineDispatcher<R extends EventRoutine>(dependencie
       const nextAllowed = full(routine) ? Math.max(gapEnds, now + limitsOf(routine).minGapMs) : gapEnds;
       if (now < nextAllowed) {
         const heldPayload = routine.held && dependencies.mergeHeld
-          ? [...dependencies.mergeHeld(routine.held, { eventId: event.eventId, payload })].slice(0, payloadChars).join("")
+          ? [...dependencies.mergeHeld(routine.held, { eventId: event.eventId, payload }, routine)].slice(0, payloadChars).join("")
           : payload;
         return {
           next: { ...routine, seenEventIds, held: { eventId: event.eventId, payload: heldPayload, at: now,

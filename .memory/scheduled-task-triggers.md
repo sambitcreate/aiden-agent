@@ -13,3 +13,12 @@ Proactive Aiden plan, Phase 4 (docs/plans/proactive-aiden-plan.md). Guide: docs/
 - Phones: `AidenRemoteScheduleService` hides trigger tasks (list/notifications skip, get/update/remove/pause/resume/run/runs say not found) until E6.
 - UI: editor **When** select (On a schedule / When something changes) + `WatchTriggerFields` (Check, Address/Script, Check every); list, detail, settings row and search show `formatTaskWhen` / `formatScheduledTaskTriggerLabel`.
 - Tests: `scheduled-task-triggers.test.ts` (new, test:scheduled), `schedule-store.test.ts`, `aiden-remote-schedules.test.ts`, `schedule-chat-delivery.test.ts`, `scheduled-tasks-parse.test.ts`, `scheduled-task-view.test.ts`, `scheduled-task-editor.test.tsx`.
+
+## E3 link triggers
+
+- `ScheduledTaskLinkTrigger {kind:"webhook", gapMinutes 1–60, signatureHeader?, filters? (≤5 path=equals), dedupePath?, includeFields? (≤10)}`; dot paths, `__proto__` etc. refused.
+- Router `/hooks/tasks/:token` (route label `taskTriggerWebhook`) calls `taskTriggerWebhook.admit` (404/429/415, before reading the body), reads ≤256 KB (413), passes the task's signature header value to `deliver` (401 HMAC, 400 bad JSON, filters → 202 "filtered", dedupe, emit → 202). Core in `scheduled-task-link-trigger.ts`; wired from `aiden-remote-service-main.ts` to `scheduled-task-triggers-main.ts`. The CLI host doesn't wire it (404).
+- Batching: dispatcher `mergeHeld(held, incoming, routine)` (now gets the routine); link batches are a NUL-marked JSON payload (`mergeLinkBatch`, ≤24,000 chars, 20 calls), spelled out by `linkEventText` at run time with "N more calls were dropped". NULs are stripped from call text so a caller can't forge a batch.
+- Token by hash in the bookkeeping (`setTokenHash`, `findByToken`), log of 50 (`appendLog`, `linkState`), secret `aiden-internal:task-hook:<taskId>` (deleted when the task is removed, via the schedule service broadcast payload). IPC `schedule:trigger-link:rotate` (needs Aiden On The Go on; returns url+secret once) and `schedule:trigger-link:state` (never the link).
+- UI: editor **When its link is called** + `LinkTriggerFields`; task details `ScheduledTaskLinkPanel` (Create/Rotate link, Copy once, Recent calls).
+- Tests: router test in `aiden-remote-router.test.ts` (order, signature, filter, 429, no token in logs); batch/redaction/dedupe/log/rotation in `scheduled-task-triggers.test.ts`.

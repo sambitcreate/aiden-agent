@@ -46,7 +46,8 @@ import { isNoWorkspace } from "../lib/no-workspace";
 import {
   SCHEDULED_TASK_WATCH_INTERVALS,
   formatScheduledTaskTriggerLabel,
-  type ScheduledTaskTrigger,
+  type ScheduledTaskLinkTrigger,
+  type ScheduledTaskWatchTrigger,
 } from "../shared/scheduled-task-trigger";
 import { formatBotWatchInterval, parseBotWatchUrl } from "../shared/bot-routine-trigger";
 
@@ -131,10 +132,10 @@ export function ScheduledTaskProviderWarning({ message }: { message: string | un
 
 /** What a "When something changes" task checks, and how often. */
 export function WatchTriggerFields({ trigger, scripts, fullAccess, onChange }: {
-  trigger: ScheduledTaskTrigger;
+  trigger: ScheduledTaskWatchTrigger;
   scripts: string[];
   fullAccess: boolean;
-  onChange: (trigger: ScheduledTaskTrigger) => void;
+  onChange: (trigger: ScheduledTaskWatchTrigger) => void;
 }) {
   const source = trigger.source;
   const urlInvalid = source.type === "url" && source.url.trim() !== "" && parseBotWatchUrl(source.url) === undefined;
@@ -208,6 +209,93 @@ export function WatchTriggerFields({ trigger, scripts, fullAccess, onChange }: {
       {source.type === "url" && urlInvalid ? (
         <Text role="alert" variant="small" color="red">Use an https address, or http only on this computer.</Text>
       ) : null}
+    </>
+  );
+}
+
+const LINK_GAPS = [1, 2, 5, 10, 15, 30, 60] as const;
+
+/** `field = value` per line, for a link's filters. */
+export function parseLinkFilterLines(text: string): Array<{ path: string; equals: string }> {
+  return text.split("\n").flatMap((line) => {
+    const at = line.indexOf("=");
+    if (at < 1) return [];
+    return [{ path: line.slice(0, at).trim(), equals: line.slice(at + 1).trim() }];
+  });
+}
+
+/** How a "When its link is called" task treats calls. The link itself is made after saving. */
+export function LinkTriggerFields({ trigger, onChange }: {
+  trigger: ScheduledTaskLinkTrigger;
+  onChange: (trigger: ScheduledTaskLinkTrigger) => void;
+}) {
+  const [filterText, setFilterText] = React.useState(() =>
+    (trigger.filters ?? []).map((filter) => `${filter.path} = ${filter.equals}`).join("\n"));
+  const [fieldsText, setFieldsText] = React.useState(() => (trigger.includeFields ?? []).join(", "));
+  const set = (patch: Partial<ScheduledTaskLinkTrigger>) => {
+    const next = { ...trigger, ...patch };
+    for (const key of ["signatureHeader", "dedupePath"] as const) if (!next[key]) delete next[key];
+    if (!next.filters?.length) delete next.filters;
+    if (!next.includeFields?.length) delete next.includeFields;
+    onChange(next);
+  };
+  const gaps = [...new Set<number>([...LINK_GAPS, trigger.gapMinutes])].sort((a, b) => a - b);
+  return (
+    <>
+      <Field label="Link" description="After you save, the task's details give you a private link on Aiden On The Go's address to call with a POST. Calls work only while Aiden On The Go is on.">
+        <Text variant="small" color="secondary">Made after saving</Text>
+      </Field>
+      <Field label="At most every" description="Calls that arrive sooner wait and run together, up to 20.">
+        <Select value={String(trigger.gapMinutes)} onValueChange={(value) => set({ gapMinutes: Number(value) })}>
+          <SelectTrigger aria-label="Shortest gap between runs">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {gaps.map((minutes) => (
+              <SelectItem value={String(minutes)} key={minutes}>{formatBotWatchInterval(minutes)}</SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </Field>
+      <Field label="Only when" description="One field = value per line, from the JSON body (like action = opened). Calls that don't match are logged and ignored." orientation="vertical">
+        <Textarea
+          value={filterText}
+          rows={2}
+          onChange={(event) => {
+            setFilterText(event.target.value);
+            set({ filters: parseLinkFilterLines(event.target.value) });
+          }}
+          placeholder="action = opened"
+          aria-label="Filters for calls"
+        />
+      </Field>
+      <Field label="Fields to pass" description="Comma-separated. Only these reach Aiden; empty passes the body, cut to 4,000 characters. Credential-looking values are always withheld.">
+        <Input
+          value={fieldsText}
+          onChange={(event) => {
+            setFieldsText(event.target.value);
+            set({ includeFields: event.target.value.split(",").map((field) => field.trim()).filter(Boolean) });
+          }}
+          placeholder="pull_request.title, sender.login"
+          aria-label="Fields to pass to Aiden"
+        />
+      </Field>
+      <Field label="Same call when" description="Calls with the same value in this field count once.">
+        <Input
+          value={trigger.dedupePath ?? ""}
+          onChange={(event) => set({ dedupePath: event.target.value.trim() })}
+          placeholder="delivery.id"
+          aria-label="Field that identifies a repeated call"
+        />
+      </Field>
+      <Field label="Signature header" description="Optional. Calls must carry sha256=<HMAC of the body> in this header; you get the secret with the link.">
+        <Input
+          value={trigger.signatureHeader ?? ""}
+          onChange={(event) => set({ signatureHeader: event.target.value.trim() })}
+          placeholder="x-signature-256"
+          aria-label="Header that carries the signature"
+        />
+      </Field>
     </>
   );
 }
@@ -330,7 +418,7 @@ export function ScheduledTaskEditor({
   }, [draft.cron, draft.timezone, open]);
 
   React.useEffect(() => {
-    const watchesScript = draft.trigger?.source.type === "script";
+    const watchesScript = draft.trigger?.kind === "watch" && draft.trigger.source.type === "script";
     if (!open || (draft.mode !== "script" && !watchesScript)) return;
     let active = true;
     void scheduleApi
@@ -344,7 +432,7 @@ export function ScheduledTaskEditor({
     return () => {
       active = false;
     };
-  }, [draft.mode, draft.trigger?.source.type, draft.workspaceId, open]);
+  }, [draft.mode, draft.trigger, draft.workspaceId, open]);
 
   const setMode = (mode: ScheduledTaskMode) => {
     setDraft((current) => ({
@@ -382,9 +470,9 @@ export function ScheduledTaskEditor({
     });
   };
   const trigger = draft.trigger ?? undefined;
-  const triggerValid = !trigger || (draft.mode === "llm" && (trigger.source.type === "url"
+  const triggerValid = !trigger || (draft.mode === "llm" && (trigger.kind === "webhook" || (trigger.source.type === "url"
     ? parseBotWatchUrl(trigger.source.url) !== undefined
-    : Boolean(trigger.source.script) && draft.permission === "full"));
+    : Boolean(trigger.source.script) && draft.permission === "full")));
   const valid =
     draft.name.trim() &&
     (trigger ? triggerValid : draft.cron.trim() && draft.timezone?.trim() && !previewError) &&
@@ -570,19 +658,25 @@ export function ScheduledTaskEditor({
         {draft.mode === "llm" ? (
           <Field
             label="When"
-            description={trigger
+            description={trigger?.kind === "watch"
               ? "Aiden checks on its own and runs the task only when something changed. A check never uses a model."
-              : "Runs at the times you choose."}
+              : trigger?.kind === "webhook"
+                ? "Another app or service calls the task's private link, and what it sends reaches Aiden as data."
+                : "Runs at the times you choose."}
           >
             <Select
               disabled={assistantOwned}
-              value={trigger ? "watch" : "schedule"}
+              value={trigger?.kind ?? "schedule"}
               onValueChange={(value) => setDraft((current) => ({
                 ...current,
-                // Leaving a trigger task's watch sends null so main removes it.
+                // Leaving a trigger task's trigger sends null so main removes it.
                 trigger: value === "watch"
-                  ? (current.trigger ?? { kind: "watch", source: { type: "url", url: "" }, everyMinutes: 15 })
-                  : initial.trigger ? null : undefined,
+                  ? (current.trigger?.kind === "watch" ? current.trigger : initial.trigger?.kind === "watch" ? initial.trigger
+                    : { kind: "watch", source: { type: "url", url: "" }, everyMinutes: 15 })
+                  : value === "webhook"
+                    ? (current.trigger?.kind === "webhook" ? current.trigger : initial.trigger?.kind === "webhook" ? initial.trigger
+                      : { kind: "webhook", gapMinutes: 5 })
+                    : initial.trigger ? null : undefined,
               }))}
             >
               <SelectTrigger aria-label="When the task runs">
@@ -591,15 +685,21 @@ export function ScheduledTaskEditor({
               <SelectContent>
                 <SelectItem value="schedule">On a schedule</SelectItem>
                 <SelectItem value="watch">When something changes</SelectItem>
+                <SelectItem value="webhook">When its link is called</SelectItem>
               </SelectContent>
             </Select>
           </Field>
         ) : null}
-        {trigger ? (
+        {trigger?.kind === "watch" ? (
           <WatchTriggerFields
             trigger={trigger}
             scripts={scripts}
             fullAccess={draft.permission === "full"}
+            onChange={(next) => setDraft((current) => ({ ...current, trigger: next }))}
+          />
+        ) : trigger?.kind === "webhook" ? (
+          <LinkTriggerFields
+            trigger={trigger}
             onChange={(next) => setDraft((current) => ({ ...current, trigger: next }))}
           />
         ) : <>
