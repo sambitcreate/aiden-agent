@@ -4,6 +4,8 @@ import android.content.Context
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.graphics.luminance
+import androidx.compose.ui.graphics.toPixelMap
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.state.ToggleableState
@@ -13,6 +15,7 @@ import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsNotSelected
 import androidx.compose.ui.test.assertIsSelected
+import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.hasContentDescription
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createComposeRule
@@ -28,9 +31,12 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
+import sbtbiswas.AidenOnTheGo.config.AidenAppearanceConfig
+import sbtbiswas.AidenOnTheGo.config.AidenAppearanceMode
 import sbtbiswas.AidenOnTheGo.config.AidenThemePresetID
 import sbtbiswas.AidenOnTheGo.config.AidenVoiceInputStore
 import sbtbiswas.AidenOnTheGo.models.AidenMemorySettings
@@ -153,5 +159,32 @@ class AidenSettingsScreenUiTest {
         compose.onNode(hasContentDescription("Aiden") and hasRole(Role.RadioButton)).assertIsNotSelected()
         // The preview's label is part of the tile's name, not a second stop for TalkBack.
         compose.onAllNodesWithText("Berry").assertCountEquals(0)
+    }
+
+    @Test
+    fun themeTilesPreviewTheLookTheModeGivesEveryTheme() {
+        // Every theme has a light and a dark look; its tile shows the one the mode gives it,
+        // so Graphite, Dusk and Midnight read light in Light and the rest read dark in Dark.
+        var mode by mutableStateOf(AidenAppearanceMode.DARK)
+        val presets = AidenThemePresetID.entries.filterNot { it.isDynamic }
+        compose.setContent {
+            AidenTheme(config = AidenAppearanceConfig(mode = mode)) {
+                AidenThemeTileGrid(selected = AidenThemePresetID.PAPER, onSelect = {}, presets = presets)
+            }
+        }
+        fun drawnLuminance(preset: AidenThemePresetID): Float {
+            val image = compose.onNode(hasContentDescription(preset.title) and hasRole(Role.RadioButton)).captureToImage()
+            // Inside the preview's top-left, clear of its rounded corner, the "Aa" and the check badge.
+            return image.toPixelMap()[image.width / 5, image.height / 8].luminance()
+        }
+
+        for (preset in presets) {
+            assertTrue("${preset.title} should preview dark in Dark", drawnLuminance(preset) < 0.1f)
+        }
+        mode = AidenAppearanceMode.LIGHT
+        compose.waitForIdle()
+        for (preset in presets) {
+            assertTrue("${preset.title} should preview light in Light", drawnLuminance(preset) > 0.5f)
+        }
     }
 }
