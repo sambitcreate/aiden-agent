@@ -135,7 +135,14 @@ native subagents and [hooks](hooks.md) use the same contracts as macOS. Linux-sp
 - the Inbox (Beta) sidebar's Needs you count on the app icon through
   `app.setBadgeCount`, shown by launchers that read the Unity launcher API
   (for example Ubuntu's Dock or KDE's task manager) and ignored elsewhere. Settings →
-  Appearance → Sidebar names it **Show Needs you count on the app icon**.
+  Appearance → Sidebar names it **Show Needs you count on the app icon**;
+- keeping the computer awake while Aiden works (Settings → Scheduled tasks →
+  While you're away → **Keep this computer awake while Aiden works**) asks the
+  desktop's inhibit service over D-Bus through Electron's power-save blocker.
+  It is best-effort: GNOME and KDE honour it, while a minimal window manager
+  with no inhibit service can still suspend on its own timer. Check that the
+  hold took effect with `systemd-inhibit --list` while a chat answers. Closing
+  a laptop's lid still follows the desktop's lid setting.
 
 Bots use the same roster, definitions, access controls, conversations, schedules,
 and Telegram bindings as macOS. Their native authority helper requires an

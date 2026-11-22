@@ -83,6 +83,7 @@ export const queryKeys = {
   shortcuts: ["shortcuts"] as const,
   scheduledTasks: ["scheduledTasks"] as const,
   scheduledSettings: ["scheduledSettings"] as const,
+  keepAwakeStatus: ["keepAwakeStatus"] as const,
   computerUseStatus: ["computerUseStatus"] as const,
   formFillStatus: ["formFillStatus"] as const,
   modelInsightsStatus: ["modelInsightsStatus"] as const,
@@ -702,6 +703,21 @@ export function useScheduledTasks() {
 
 export function useScheduledTaskSettings() {
   return useQuery({ queryKey: queryKeys.scheduledSettings, queryFn: () => scheduleApi.settings() });
+}
+
+/** What keeps this computer awake right now: one read, then main's pushes; it never polls. */
+export function useKeepAwakeStatus() {
+  const queryClient = useQueryClient();
+  useEffect(() => {
+    const unsubscribe = scheduleApi.onKeepAwakeChanged((status) =>
+      queryClient.setQueryData(queryKeys.keepAwakeStatus, status));
+    return () => {
+      unsubscribe();
+      // A push sent while nothing listens is lost, so the next mount reads again.
+      void queryClient.invalidateQueries({ queryKey: queryKeys.keepAwakeStatus });
+    };
+  }, [queryClient]);
+  return useQuery({ queryKey: queryKeys.keepAwakeStatus, queryFn: () => scheduleApi.keepAwakeStatus() });
 }
 
 /** Reads device-local Model Pad credential/cache state; never fetches benchmark data. */

@@ -16,6 +16,7 @@ import type {
   ScheduledTaskInput,
   ScheduledTaskMode,
   ScheduledTaskPermission,
+  ScheduledTaskSettings,
 } from "./types.js";
 
 const IDEMPOTENCY_KEY_PATTERN = /^[\x21-\x7e]{16,128}$/u;
@@ -126,6 +127,21 @@ function mapRun(run: ScheduledRun, summaryLimit = 20_000) {
     finishedAt: new Date(run.finishedAt).toISOString(),
     ...(summary ? { summary } : {}),
     ...(failed ? { errorCode: run.result === "blocked" ? "blocked" : "execution_failed" } : {}),
+  };
+}
+
+/**
+ * The scheduled-task settings phones know about. Desktop-only rows in the same
+ * store (Keep this computer awake) stay off the wire, so the contract is unchanged.
+ */
+function remoteScheduledSettings(value: ScheduledTaskSettings) {
+  return {
+    enabled: value.enabled,
+    defaultMode: value.defaultMode,
+    defaultPermission: value.defaultPermission,
+    defaultMcpEnabled: value.defaultMcpEnabled,
+    defaultNotify: value.defaultNotify,
+    defaultTimezone: value.defaultTimezone,
   };
 }
 
@@ -488,7 +504,7 @@ export class AidenRemoteScheduleService {
 
   async settings() {
     const current = await this.options.application.settings();
-    return { revision: current.revision, ...current.value };
+    return { revision: current.revision, ...remoteScheduledSettings(current.value) };
   }
 
   async updateSettings(revision: string, value: unknown) {
@@ -507,7 +523,7 @@ export class AidenRemoteScheduleService {
     const { confirmedForeground: _confirmed, ...patch } = record;
     try {
       const saved = await this.options.application.updateSettings(revision, patch);
-      return { revision: saved.revision, ...saved.value };
+      return { revision: saved.revision, ...remoteScheduledSettings(saved.value) };
     } catch (error) { mapError(error); }
   }
 }

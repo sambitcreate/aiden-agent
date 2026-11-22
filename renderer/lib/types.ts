@@ -804,6 +804,8 @@ export interface ScheduledTaskSettings {
   defaultMcpEnabled: boolean;
   defaultNotify: boolean;
   defaultTimezone: string;
+  /** Keep this computer awake while Aiden works (on by default). Desktop-only; not sent to phones. */
+  keepAwakeWhileWorking: boolean;
 }
 
 export interface ChatMetadataUpdated {
@@ -1040,6 +1042,8 @@ export interface AppSettings extends AidenLiveSettingsFields {
   scheduledDefaultMcpEnabled?: boolean;
   scheduledDefaultNotify?: boolean;
   scheduledDefaultTimezone?: string;
+  /** Settings → Scheduled tasks → While you're away. Omitted means on; only `false` is stored. */
+  keepAwakeWhileWorking?: boolean;
   assistant?: AssistantConfig;
   profileName?: string;
   onboarding?: import("../shared/onboarding.js").OnboardingState;

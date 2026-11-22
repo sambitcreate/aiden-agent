@@ -14,6 +14,7 @@ function fixture() {
     value: {
       enabled: true, defaultMode: "llm" as const, defaultPermission: "read-only" as const,
       defaultMcpEnabled: false, defaultNotify: true, defaultTimezone: "UTC",
+      keepAwakeWhileWorking: false,
     },
   };
   const application = {
@@ -232,4 +233,21 @@ test("scheduled task mutations require foreground confirmation and stale edits f
     }),
     /settings are invalid/u,
   );
+});
+
+test("phones never see or change the desktop-only keep-awake setting", async () => {
+  const value = fixture();
+  const read = await value.service.settings();
+  assert.equal("keepAwakeWhileWorking" in read, false);
+  assert.deepEqual(Object.keys(read).sort(), [
+    "defaultMcpEnabled", "defaultMode", "defaultNotify", "defaultPermission", "defaultTimezone", "enabled", "revision",
+  ]);
+  await assert.rejects(
+    value.service.updateSettings(read.revision, { confirmedForeground: true, keepAwakeWhileWorking: true }),
+    /foreground confirmation/u,
+  );
+  const saved = await value.service.updateSettings(read.revision, { confirmedForeground: true, defaultNotify: false });
+  assert.equal(saved.defaultNotify, false);
+  assert.equal("keepAwakeWhileWorking" in saved, false);
+  assert.equal((await value.application.settings()).value.keepAwakeWhileWorking, false, "the desktop's choice is untouched");
 });

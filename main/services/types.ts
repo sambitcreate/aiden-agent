@@ -693,6 +693,8 @@ export interface ScheduledTaskSettings {
   defaultMcpEnabled: boolean;
   defaultNotify: boolean;
   defaultTimezone: string;
+  /** Keep this computer awake while Aiden works (on by default). Desktop-only; not sent to phones. */
+  keepAwakeWhileWorking: boolean;
 }
 
 export type McpTransport = "stdio" | "http";
@@ -949,6 +951,8 @@ export interface AppSettings extends AidenLiveSettingsFields {
   scheduledDefaultMcpEnabled?: boolean;
   scheduledDefaultNotify?: boolean;
   scheduledDefaultTimezone?: string;
+  /** Settings → Scheduled tasks → While you're away. Omitted means on; only `false` is stored. */
+  keepAwakeWhileWorking?: boolean;
   /** Aiden assistant window, hotkey, and proactivity settings. */
   assistant?: AssistantConfig;
   /** Device-local display name used by the private usage profile. */

@@ -1,6 +1,7 @@
 import { reportAnalyticsEvent } from "./analytics/analytics-report.js";
 import type { FinishWorkspaceFollowThrough } from "./workspace-mutation-gate.js";
 import { workspaceCapabilityFields } from "./workspace-capabilities.js";
+import { parseApprovalMode, parseWorkspaceMacGrants } from "../../renderer/shared/approval-mode.js";
 import { MAX_PROVISIONED_BYTES } from "./managed-worktree-provisioner.js";
 import { randomUUID } from "node:crypto";
 import * as fs from "node:fs/promises";
@@ -243,6 +244,27 @@ function displayName(source: Workspace, branch: string, requested?: string): str
   return [...`${base} · ${branch}`].slice(0, 120).join("");
 }
 
+/**
+ * The workspace's own approval mode and Mac grants, present only when the
+ * person chose Customize. A workspace that follows the global mode copies
+ * nothing, so its worktree follows the global mode too.
+ */
+function workspaceApprovalFields(source: Workspace): Pick<Workspace, "approvalMode" | "macGrants"> {
+  const approvalMode = parseApprovalMode(source.approvalMode);
+  const macGrants = parseWorkspaceMacGrants(source.macGrants);
+  return {
+    ...(approvalMode ? { approvalMode } : {}),
+    ...(macGrants ? { macGrants } : {}),
+  };
+}
+
+function sameApprovalFields(left: Workspace, right: Workspace): boolean {
+  const a = workspaceApprovalFields(left);
+  const b = workspaceApprovalFields(right);
+  const grants = (fields: typeof a) => Object.keys(fields.macGrants ?? {}).sort().join(",");
+  return a.approvalMode === b.approvalMode && grants(a) === grants(b);
+}
+
 async function fileExists(target: string): Promise<boolean> {
   try {
     await fs.lstat(target);
@@ -352,8 +374,10 @@ export function createWorkspaceWorktreeApplicationService(
       name: displayName(resolved.workspace, branch, requestedName),
       folderPath: worktree.workspacePath,
       permission: resolved.workspace.permission,
-      // A worktree starts with its project's skill and connector choices.
+      // A worktree starts with its project's skill and connector choices and
+      // its approval settings, so a worktree of an Ask workspace stays Ask.
       ...workspaceCapabilityFields(resolved.workspace),
+      ...workspaceApprovalFields(resolved.workspace),
       managedWorktree: {
         repositoryPath: worktree.repositoryPath,
         worktreePath: worktree.path,
@@ -376,7 +400,8 @@ export function createWorkspaceWorktreeApplicationService(
             !latest ||
             signal.aborted ||
             latest.folderPath !== resolved.folderPath ||
-            latest.workspace.permission !== resolved.workspace.permission
+            latest.workspace.permission !== resolved.workspace.permission ||
+            !sameApprovalFields(latest.workspace, resolved.workspace)
           ) {
             throw new Error("The source workspace changed while Aiden was creating the worktree.");
           }
@@ -850,6 +875,7 @@ export function createWorkspaceWorktreeApplicationService(
           folderPath: result.worktree.workspacePath,
           permission: resolved.workspace.permission,
           ...workspaceCapabilityFields(resolved.workspace),
+          ...workspaceApprovalFields(resolved.workspace),
           managedWorktree: {
             repositoryPath: result.worktree.repositoryPath,
             worktreePath: result.worktree.path,
