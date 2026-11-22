@@ -79,7 +79,16 @@ Done in this PR: the fold keeps each chat's draft, attachments, voice and readin
 - Sheets on the inner display use the system's placement.
 - Simulator screenshots of each pose (half open and rotated not yet checked).
 - A swipe left open on a list row stays open across navigation (UIKit `swipeActions` behavior); close it when its row leaves the screen.
-- `testEveryMainScreenPassesTheAudit` on an iPad mini in portrait: the list overlays a dimmed detail, so the placeholder under the scrim fails contrast, and the audit reports Dynamic Type and clipping findings in the overlaid list and on Computers. The test was written for the tab strip with no split; it needs the portrait overlay handled (audit tiled, or allow the scrim) and the list findings triaged.
+- `testEveryMainScreenPassesTheAudit` on an iPad mini in portrait (iOS 27.1). Fixed on 2026-11-22:
+  - The empty detail under the list no longer shows its words.
+  - Opening Computers or Settings from the list puts it away.
+  - The running row's title wraps at the largest sizes.
+  - The test waits for the list to leave before auditing a Bot, a chat or Computers.
+
+  Still failing there:
+  - The two Form near-pass ceilings ('Connection' in the machine editor, '3 of 4 online' in Settings), which `main` also fails on that simulator.
+  - A row's '1h' that the screen's bottom edge cuts (light and dark).
+  - Dynamic Type "partially unsupported" findings that differ between the light and dark passes on a heavily loaded host (Bots' chips and section titles, Settings' Default computer, the machine editor's name field). The Bot page's first message bubble showed up in both passes.
 - Main's shell-first onboarding (Add Computer empty states and the inline pairing sheet) checked at regular width on the open iPhone Duo, where the empty state sits in the list column.
 
 ## Process
