@@ -5,6 +5,7 @@ import { act, cleanup, fireEvent, render, screen, within } from "@testing-librar
 import { installBotTestIpc } from "../main/bots/test-dom";
 import { MessageList } from "./message-list";
 import { withCommittedRunInput } from "../lib/chat-message-queue";
+import type { AgentActivity } from "../lib/agent-activity";
 import type { ChatMessage } from "../lib/types";
 import type { ChatArtifactV1 } from "../shared/chat-artifacts";
 import type { AgentToolStep, GenerationTimeline } from "../shared/generation-timeline";
@@ -41,6 +42,7 @@ interface Frame {
   subagentsEnabled?: boolean;
   reasoning?: string | null;
   streamingArtifacts?: readonly ChatArtifactV1[];
+  agentActivity?: AgentActivity | null;
 }
 
 function transcript({
@@ -54,6 +56,7 @@ function transcript({
   subagentsEnabled,
   reasoning,
   streamingArtifacts,
+  agentActivity,
 }: Frame) {
   return (
     <MessageList
@@ -68,7 +71,7 @@ function transcript({
       liveSubagents={liveSubagents ?? []}
       subagentsEnabled={subagentsEnabled ?? false}
       onOpenSubagent={() => undefined}
-      agentActivity={null}
+      agentActivity={agentActivity ?? null}
       error={null}
       onFork={() => undefined}
     />
@@ -865,4 +868,27 @@ test("settled fork actions follow the chat's busy reason as a turn starts and en
   fireEvent.click(forkButton());
   fireEvent.click(editButton());
   assert.deepEqual(forks, [["assistant-1", "after"], ["user-1", "before"]]);
+});
+
+test("a running reply keeps one status slot as steps hand off, and gives it up when the turn ends", () => {
+  document.documentElement.dataset.reduceMotion = "true";
+  const thinking: AgentActivity = { phase: "thinking", label: "Thinking", mark: "tri-step" };
+  const frame = { messages: [prompt], streamingText: "Looking into it." };
+  const view = render(transcript({ ...frame, agentActivity: thinking }));
+  const slotNow = () => view.container.querySelector<HTMLElement>("[data-agent-activity-slot]");
+  const slot = slotNow();
+  assert.ok(slot);
+  assert.equal(within(slot).getByRole("status").textContent, "Thinking");
+
+  // A tool or reasoning row takes over the phase: the line leaves, its place stays.
+  view.rerender(transcript({ ...frame, agentActivity: null }));
+  assert.ok(slotNow() === slot);
+  assert.equal(within(slot).queryAllByRole("status").length, 0);
+
+  view.rerender(transcript({ ...frame, agentActivity: { phase: "responding", label: "Responding…", mark: "compose" } }));
+  assert.ok(slotNow() === slot);
+  assert.equal(within(slot).getByRole("status").textContent, "Responding…");
+
+  view.rerender(transcript({ messages: [prompt], streamingText: null }));
+  assert.ok(slotNow() === null);
 });

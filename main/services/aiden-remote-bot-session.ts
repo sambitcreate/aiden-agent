@@ -1610,10 +1610,19 @@ function accessForAudience(card: AidenRemoteBotAccessRequest | null, allowed: bo
   const { approvalCount: _count, ...legacy } = card; return legacy;
 }
 
+/** Whether the Mac's card offers Always allow: any eligible card except Computer Use. */
+function botApprovalOffersAlways(prompt: { toolName: string; always?: { count: number } }): boolean {
+  return !isComputerUseCapabilityTool(prompt.toolName) && prompt.always !== undefined;
+}
+
 /** A waiting Bot approval as phones see it. */
 function wireApproval(prompt: { waitId: string; toolCallId: string; toolName: string; summary: string; always?: { count: number } }): AidenRemoteBotApproval {
-  const alwaysCount = !isComputerUseCapabilityTool(prompt.toolName) && prompt.always && Number.isInteger(prompt.always.count) && prompt.always.count >= 3 && prompt.always.count <= 20
-    ? prompt.always.count
+  // Always allow is offered on every eligible card. The older `alwaysCount`
+  // field still appears only with a repeat count (3 to 20), so a phone that
+  // reads it alone keeps offering Always from the third approval.
+  const alwaysOffered = botApprovalOffersAlways(prompt);
+  const alwaysCount = alwaysOffered && Number.isInteger(prompt.always!.count) && prompt.always!.count >= 3 && prompt.always!.count <= 20
+    ? prompt.always!.count
     : undefined;
   return {
     waitId: prompt.waitId,
@@ -1628,7 +1637,7 @@ function wireApproval(prompt: { waitId: string; toolCallId: string; toolName: st
       toolName: prompt.toolName,
       summary: wireText(prompt.summary, 2_000) || "Aiden needs approval.",
       canAllow: !isComputerUseCapabilityTool(prompt.toolName),
-      ...(alwaysCount !== undefined ? { scopes: ["always"], alwaysLabel: "Always allow this tool" } : {}),
+      ...(alwaysOffered ? { scopes: ["always"], alwaysLabel: "Always allow this tool" } : {}),
       ...(alwaysCount !== undefined ? { notes: [`You’ve allowed this ${alwaysCount} times in the last 2 weeks.`] } : {}),
     }),
   };
@@ -2285,7 +2294,7 @@ export class AidenRemoteBotSessionService {
         const prompt = approvals.pending().find((candidate) => candidate.waitId === waitId);
         if (!prompt) throw new AidenRemoteServiceError("approval_expired", "This approval is no longer available.", 409);
         await this.options.bots.bot(prompt.botId);
-        if (scope !== undefined && scope !== "once" && (scope !== "always" || decision !== "allow" || options.allowed !== true || !wireApproval(prompt).alwaysCount)) {
+        if (scope !== undefined && scope !== "once" && (scope !== "always" || decision !== "allow" || options.allowed !== true || !botApprovalOffersAlways(prompt))) {
           throw new AidenRemoteServiceError("invalid_request", "This approval cannot be remembered with that scope.", 400);
         }
         if (decision === "allow" && !wireApproval(prompt).canAllow) {

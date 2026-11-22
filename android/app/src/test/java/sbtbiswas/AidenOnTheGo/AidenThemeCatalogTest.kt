@@ -4,11 +4,13 @@ import org.junit.Assert.*
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
+import sbtbiswas.AidenOnTheGo.config.AidenAppearanceMode
 import sbtbiswas.AidenOnTheGo.config.AidenAppearanceStore
 import sbtbiswas.AidenOnTheGo.config.AidenPalette
 import sbtbiswas.AidenOnTheGo.config.AidenThemeCatalog
 import sbtbiswas.AidenOnTheGo.config.AidenThemePresetID
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenUi
+import sbtbiswas.AidenOnTheGo.ui.theme.aidenUsesDarkColors
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.unit.dp
 import java.io.File
@@ -20,6 +22,29 @@ import kotlinx.serialization.json.jsonPrimitive
 class AidenThemeCatalogTest {
     @get:Rule
     val tempFolder = TemporaryFolder()
+
+    @Test
+    fun themeTilesPreviewTheLookTheModeGivesEveryTheme() {
+        // Every theme has a light and a dark look; its Settings tile shows the one the mode
+        // gives it, so Graphite, Dusk and Midnight read light in Light and the rest dark in Dark.
+        val cases = listOf(
+            Triple(AidenAppearanceMode.LIGHT, true, false),
+            Triple(AidenAppearanceMode.DARK, false, true),
+            Triple(AidenAppearanceMode.SYSTEM, false, false),
+            Triple(AidenAppearanceMode.SYSTEM, true, true),
+        )
+        for (preset in AidenThemePresetID.entries.filterNot { it.isDynamic }) {
+            for ((mode, systemDark, expectDark) in cases) {
+                val canvas = AidenThemeCatalog.palette(preset, aidenUsesDarkColors(mode, systemDark)).canvas.luminance()
+                val label = "$preset in $mode on a ${if (systemDark) "dark" else "light"} device"
+                if (expectDark) {
+                    assertTrue("$label should preview dark", canvas < 0.1f)
+                } else {
+                    assertTrue("$label should preview light", canvas > 0.5f)
+                }
+            }
+        }
+    }
 
     @Test
     fun testAllPresetThemePalettesAreDefined() {

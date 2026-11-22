@@ -134,9 +134,9 @@ test("a reply draws native and HTML visuals inline, and both get snapshots for p
   await restoredNative.getByRole("tab", { name: "Team" }).click();
   await expect(restoredNative.getByText("$60.00")).toBeVisible();
 
-  // In design mode the chat column has an asymmetric 16px / dock-gutter inset;
-  // a wide visual must stay flush with the 16px start gutter (never clipped on
-  // the left) and grow into the end gutter in both split and stacked layouts.
+  // In design mode the slim chat column has the same 16px gutter on each side;
+  // a wide visual fills that column, never clipped on either side, in both
+  // split and stacked layouts.
   await reopened.getByRole("button", { name: "Design mode", exact: true }).click();
   await expect(reopened.locator('[data-design-layout="split"]')).toBeVisible();
   const expectDesignWideFrameClear = async () => {
@@ -158,7 +158,7 @@ test("a reply draws native and HTML visuals inline, and both get snapshots for p
             alignedWithStart: Math.abs(box.left - columnContentLeft) <= 2,
             insideStart: box.left >= contentBox.left + 14,
             insideEnd: box.right <= contentBox.right - 14,
-            expandsIntoDockGutter: box.right > columnContentRight + 10,
+            alignedWithEnd: Math.abs(box.right - columnContentRight) <= 2,
             leftHit: document.elementFromPoint(box.left + 8, y) === element,
             rightHit: document.elementFromPoint(box.right - 8, y) === element,
             noHorizontalOverflow: scrollport.scrollWidth <= scrollport.clientWidth + 1,
@@ -169,7 +169,7 @@ test("a reply draws native and HTML visuals inline, and both get snapshots for p
         alignedWithStart: true,
         insideStart: true,
         insideEnd: true,
-        expandsIntoDockGutter: true,
+        alignedWithEnd: true,
         leftHit: true,
         rightHit: true,
         noHorizontalOverflow: true,

@@ -166,7 +166,11 @@ export function serverBrowserArguments(profileDir: string, platform: NodeJS.Plat
     "--disable-crash-reporter",
     "--disable-domain-reliability",
     "--disable-client-side-phishing-detection",
-    "--disable-features=Translate,MediaRouter,OptimizationHints,AutofillServerCommunication,CertificateTransparencyComponentUpdater",
+    // IsolateSandboxedIframes would put the sandboxed guest frame in a process
+    // of its own. Setting the host page then crashes Chrome 158 ("Check failed:
+    // has_site_"), and on slow machines the extra process can cost most of the
+    // 15 s limit. The frame stays sandboxed, offline and fully blocked either way.
+    "--disable-features=Translate,MediaRouter,OptimizationHints,AutofillServerCommunication,CertificateTransparencyComponentUpdater,IsolateSandboxedIframes",
     "--metrics-recording-only",
     "--no-pings",
     "--mute-audio",

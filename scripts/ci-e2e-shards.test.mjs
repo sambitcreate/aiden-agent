@@ -4,7 +4,7 @@ import { spawnSync } from "node:child_process";
 import process from "node:process";
 import test from "node:test";
 import { URL, fileURLToPath } from "node:url";
-import { discoverSpecs, planShards, shardArguments } from "./ci-e2e-shards.mjs";
+import { E2E_SHARD_COUNT, discoverSpecs, planShards, shardArguments } from "./ci-e2e-shards.mjs";
 
 test("every deterministic spec belongs to exactly one shard, including unweighted new files", () => {
   const specs = [...discoverSpecs(), "future/new-flow.spec.ts"];
@@ -28,25 +28,25 @@ test("allocation reduces the slowest runner using an independent completed CI ru
   assert.ok(Math.max(...after) < Math.max(...before) * 0.8, `before ${before}; after ${after}`);
 });
 
-test("four shards retain job-budget headroom across recent slow windows and an independent completed run", () => {
+test("the CI shards retain job-budget headroom across recent slow windows and an independent completed run", () => {
   const fixture = JSON.parse(readFileSync(new URL("./fixtures/ci-e2e-2026-11-04-timings.json", import.meta.url), "utf8"));
   const specs = fixture.previousAllocation.flat();
   const load = (files, windows) => files.reduce((seconds, file) => seconds + windows[file], 0);
   const shards = planShards(specs);
-  assert.equal(shards.length, 4);
+  assert.equal(shards.length, E2E_SHARD_COUNT);
   const cold = shards.map((shard) => load(shard.files, fixture.trainingMaxCompleteWindowSeconds));
   const { jobSeconds, setupAndCleanupReserveSeconds, minimumHeadroomSeconds } = fixture.budget;
   // Even a perfectly balanced three-way split of these independently observed
   // complete windows leaves no room for startup/cleanup inside the same budget.
   const bestPossibleThree = Object.values(fixture.trainingMaxCompleteWindowSeconds).reduce((sum, seconds) => sum + seconds, 0) / 3;
   assert.ok(bestPossibleThree + setupAndCleanupReserveSeconds > jobSeconds);
-  assert.ok(Math.max(...cold) + setupAndCleanupReserveSeconds <= jobSeconds - minimumHeadroomSeconds, `four-shard windows ${cold}`);
+  assert.ok(Math.max(...cold) + setupAndCleanupReserveSeconds <= jobSeconds - minimumHeadroomSeconds, `${E2E_SHARD_COUNT}-shard windows ${cold}`);
   const before = fixture.previousAllocation.map((files) => load(files, fixture.validationWindowsSeconds));
   const after = shards.map((shard) => load(shard.files, fixture.validationWindowsSeconds));
   assert.ok(Math.max(...after) < Math.max(...before) * 0.8, `independent run before ${before}; after ${after}`);
 });
 
-test("actual Playwright collection keeps every deterministic case exactly once across the four CI shards", () => {
+test("actual Playwright collection keeps every deterministic case exactly once across the CI shards", () => {
   const root = fileURLToPath(new URL("../", import.meta.url));
   const cli = fileURLToPath(new URL("../node_modules/@playwright/test/cli.js", import.meta.url));
   const collect = (args) => {
@@ -64,15 +64,16 @@ test("actual Playwright collection keeps every deterministic case exactly once a
     return cases;
   };
   const expected = collect(["test", "--config=playwright.config.ts"]).filter(({ file }) => file !== "diagnostics-production.spec.ts" && !file.endsWith(".live.spec.ts")).map(({ id }) => id);
-  const actual = [1, 2, 3, 4].flatMap((index) => collect(shardArguments(discoverSpecs(), `${index}/4`).args).map(({ id }) => id));
+  const indexes = Array.from({ length: E2E_SHARD_COUNT }, (_, index) => index + 1);
+  const actual = indexes.flatMap((index) => collect(shardArguments(discoverSpecs(), `${index}/${E2E_SHARD_COUNT}`).args).map(({ id }) => id));
   assert.ok(expected.length > 0);
   assert.equal(new Set(actual).size, actual.length, "no case may run in two shards");
   assert.deepEqual(actual.sort(), expected.sort(), "no case may be skipped by the scheduling change");
 });
 
 test("shards preserve one worker, fail on flakes, and select only exact spec paths", () => {
-  for (let index = 1; index <= 4; index++) {
-    const { shard, args } = shardArguments(discoverSpecs(), `${index}/4`);
+  for (let index = 1; index <= E2E_SHARD_COUNT; index++) {
+    const { shard, args } = shardArguments(discoverSpecs(), `${index}/${E2E_SHARD_COUNT}`);
     assert.ok(args.includes("--workers=1"));
     assert.ok(args.includes("--fail-on-flaky-tests"));
     const patterns = args.slice(4).map((pattern) => new RegExp(pattern));

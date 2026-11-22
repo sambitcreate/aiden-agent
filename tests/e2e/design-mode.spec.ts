@@ -278,6 +278,29 @@ async function expectCanvasChrome(page: Page): Promise<void> {
   }
 }
 
+/**
+ * The composer sits in the middle of the design chat column, with the same small gap on
+ * each side, rather than leaving an empty lane on its right.
+ */
+async function expectComposerCentredInColumn(page: Page): Promise<void> {
+  const gaps = await page.locator('[data-design-mode="true"]').first().evaluate((column) => {
+    const card = column.querySelector('[data-browser-composer-inset="true"] [data-focus-region="composer"]');
+    if (!card) return null;
+    const outer = column.getBoundingClientRect();
+    const inner = card.getBoundingClientRect();
+    // Classic scrollbars keep a gutter at the transcript's end, and the composer lines up with the transcript.
+    const viewport = column.querySelector<HTMLElement>(".scroll-edge-mask");
+    const scrollbar = viewport ? viewport.offsetWidth - viewport.clientWidth : 0;
+    return {
+      left: Math.round(inner.left - outer.left),
+      right: Math.round(outer.right - inner.right - scrollbar),
+    };
+  });
+  expect(gaps).not.toBeNull();
+  expect(Math.abs(gaps!.left - gaps!.right), JSON.stringify(gaps)).toBeLessThanOrEqual(2);
+  expect(gaps!.right).toBeLessThanOrEqual(24);
+}
+
 const composerFooter = (page: Page) =>
   page.locator('[data-design-mode="true"] .composer-footer-row').first();
 
@@ -355,6 +378,7 @@ test("design mode puts the chat beside a canvas, stays with its chat and gives t
   await expect(sidebarChat(page, NOTES_CHAT)).toHaveCount(0);
   await expectCanvasChrome(page);
   await expectComposerFooterClear(composerFooter(page));
+  await expectComposerCentredInColumn(page);
   await capture(page, "1440-design-on");
 
   // Expand hides the sidebar so the chat (on the left) and the canvas fill the window,
@@ -552,6 +576,7 @@ test("design mode fits narrow windows: split beside the sidebar, stacked below 6
   // The 320 px canvas keeps its tool rail and zoom controls.
   await expectCanvasChrome(page);
   await expectComposerFooterClear(composerFooter(page));
+  await expectComposerCentredInColumn(page);
   await capture(page, "1000-split-sidebar-open");
   await page.getByRole("button", { name: "Hide sidebar" }).click();
   await expect(
