@@ -603,7 +603,7 @@ test("bot-first sources reuse the one reviewed chat implementation", async () =>
     chat,
     /private func botHeaderPill\([\s\S]*?AidenBotCanonicalAvatarView\([\s\S]*?\.aidenBotHeaderNameGlass\(\)/u,
   );
-  assert.match(chat, /Image\(systemName: AidenChromeSymbols\.overflowMenu\)/u);
+  assert.match(chat, /(?:Image\(systemName:|Label\("More", systemImage:) AidenChromeSymbols\.overflowMenu\)/u);
   assert.match(chat, /buttonBorderShape\(\.circle\)/u);
   assert.ok(chat.includes('"Message Aiden"'));
   assert.match(chat, /padding\(\.horizontal, AidenSpacing\.l\)[\s\S]*?padding\(\.vertical, AidenSpacing\.s\)/u);
