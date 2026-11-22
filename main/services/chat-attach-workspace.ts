@@ -79,10 +79,14 @@ export async function inspectScratchFolderFiles(
         continue;
       }
       if (!stat.isFile()) continue;
+      const relPosix = toPosixRelative(relPath);
+      // Mirror copyScratchFilesToWorkspaceWithRollback so the Attach dialog never
+      // lists protected hook/agent config files that Copy will skip.
+      if (isProtectedDestination(relPosix, fullPath)) continue;
       totalBytes += stat.size;
       if (entries.length < MAX_INSPECT_ENTRIES) {
         entries.push({
-          relativePath: toPosixRelative(relPath),
+          relativePath: relPosix,
           sizeBytes: stat.size,
           isDirectory: false,
         });

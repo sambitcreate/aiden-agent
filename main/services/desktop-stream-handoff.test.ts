@@ -232,6 +232,19 @@ test("DesktopHandoffTicketStore enforces one-shot claims, TTL expiry, and queued
   clock += 5_000;
   assert.equal(store.claimChat("chat-defer-expire"), null);
   assert.equal(expiredCalled, true);
+
+  // abandonChat removes an unclaimed ticket and immediately executes deferred detach callbacks.
+  store.putChat({ chatId: "chat-defer-abandon", fromDocumentId: "floating-doc" });
+  let abandonedDetachCalled = false;
+  assert.equal(
+    store.deferDetachIfPending("chat-defer-abandon", "floating-doc", () => {
+      abandonedDetachCalled = true;
+    }),
+    true,
+  );
+  assert.equal(store.abandonChat("chat-defer-abandon"), true);
+  assert.equal(abandonedDetachCalled, true);
+  assert.equal(store.claimChat("chat-defer-abandon"), null);
   store.clear();
 });
 

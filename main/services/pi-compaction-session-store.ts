@@ -480,7 +480,14 @@ export async function projectVisibleHistoryWithoutSkills<M extends PiSessionMeta
       : [];
   const durableBranch = await session.getBranch();
   const notesAfter = canvasStatusNotesByMessage(durableBranch);
-  const visible: PiSessionEntry[] = [];
+  const visibleMessageIds = new Set(messages.map((message) => message.id));
+  const attachedNotes = workspaceAttachedNotesByMessage(durableBranch, visibleMessageIds);
+  const visible: PiSessionEntry[] = [
+    ...attachedNotes.beforeFirst.map((note): PiSessionEntry => ({
+      ...note,
+      seq: -messages.length * 2 - 1,
+    })),
+  ];
   for (const [index, message] of messages.entries()) {
     const marker: PiSessionEntry = {
       type: "custom", id: `visible-skill-free-marker-${message.id}`, parentId: null,
@@ -500,23 +507,13 @@ export async function projectVisibleHistoryWithoutSkills<M extends PiSessionMeta
         type: "message", id: `visible-skill-free-note-${note.id}`, parentId: null,
         seq: marker.seq, timestamp: note.timestamp, message: note.message,
       })),
+      // Workspace-attached transition notes stay anchored to the turn where
+      // the chat moved folders rather than sliding ahead of newer messages.
+      ...(attachedNotes.afterMessage.get(message.id) ?? []).map((note): PiSessionEntry => ({
+        ...note,
+        seq: marker.seq,
+      })),
     );
-  }
-  // Preserve workspace-attached transition boundaries even when skill-era
-  // entries are projected out, so the model still knows its cwd changed.
-  for (const entry of originalEntries) {
-    if (entry.type !== "custom" || entry.customType !== AIDEN_WORKSPACE_ATTACHED_MARKER) continue;
-    const info = parseWorkspaceAttachedBoundaryData(entry.data);
-    if (!info) continue;
-    const prev = visible[visible.length - 1];
-    visible.push({
-      type: "message",
-      id: `visible-skill-free-workspace-attached-${entry.id}`,
-      parentId: null,
-      seq: prev ? prev.seq : -1,
-      timestamp: entry.timestamp,
-      message: workspaceAttachedBoundaryMessage(info, entry.timestamp),
-    });
   }
   // The on-demand tools the last run declared hold only tool names. Carried
   // forward, the next run declares them in the same place, so its cached tool
@@ -582,6 +579,45 @@ export async function projectVisibleHistoryWithoutSkills<M extends PiSessionMeta
  * only canvas counts, page findings and the one-time design-system offer
  * (colours and fonts reduced to a strict shape), never skill data.
  */
+function workspaceAttachedNotesByMessage(
+  branch: readonly PiSessionEntry[],
+  visibleMessageIds: ReadonlySet<string>,
+): {
+  beforeFirst: Extract<PiSessionEntry, { type: "message" }>[];
+  afterMessage: Map<string, Extract<PiSessionEntry, { type: "message" }>[]>;
+} {
+  const beforeFirst: Extract<PiSessionEntry, { type: "message" }>[] = [];
+  const afterMessage = new Map<string, Extract<PiSessionEntry, { type: "message" }>[]>();
+  let lastVisibleMessageId: string | undefined;
+  for (const entry of branch) {
+    if (entry.type === "custom" && entry.customType === AIDEN_CHAT_MESSAGE_MARKER) {
+      const id = markerId(entry.data);
+      if (id && visibleMessageIds.has(id)) lastVisibleMessageId = id;
+      continue;
+    }
+    if (entry.type !== "custom" || entry.customType !== AIDEN_WORKSPACE_ATTACHED_MARKER) continue;
+    const info = parseWorkspaceAttachedBoundaryData(entry.data);
+    if (!info) continue;
+    const synthetic: Extract<PiSessionEntry, { type: "message" }> = {
+      type: "message",
+      id: `visible-skill-free-workspace-attached-${entry.id}`,
+      parentId: null,
+      seq: -1,
+      timestamp: entry.timestamp,
+      message: workspaceAttachedBoundaryMessage(info, entry.timestamp),
+    };
+    if (lastVisibleMessageId === undefined) {
+      beforeFirst.push(synthetic);
+    } else {
+      afterMessage.set(lastVisibleMessageId, [
+        ...(afterMessage.get(lastVisibleMessageId) ?? []),
+        synthetic,
+      ]);
+    }
+  }
+  return { beforeFirst, afterMessage };
+}
+
 function canvasStatusNotesByMessage(branch: readonly PiSessionEntry[]): Map<string, Extract<PiSessionEntry, { type: "message" }>[]> {
   const notes = new Map<string, Extract<PiSessionEntry, { type: "message" }>[]>();
   let after: string | undefined;

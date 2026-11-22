@@ -1,4 +1,5 @@
 import { analyticsWorkspaceKind } from "./analytics/analytics-ids.js";
+import { filterRemoteVisibleWorkspaces } from "./visible-chat-projection.js";
 import { createAidenRemoteBotAllowList, type AidenRemoteBotAllowList } from "./aiden-remote-bot-allowed.js";
 import { botMessagingEnabled } from "../../renderer/shared/bot-messages.js";
 import { localComputerNoun } from "../../renderer/shared/computer-noun.js";
@@ -1192,15 +1193,11 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
             const wsChats = await chatStore.list(workspace.id);
             return wsChats.length > 0 && wsChats.every((meta) => meta.ephemeral === true);
           };
-          const listRemoteVisibleWorkspaces = async () => {
-            const all = await workspaceApplicationService.list();
-            const visible = [];
-            for (const workspace of all) {
-              if (await isEphemeralOnlyNoWorkspace(workspace)) continue;
-              visible.push(workspace);
-            }
-            return visible;
-          };
+          const listRemoteVisibleWorkspaces = async () =>
+            filterRemoteVisibleWorkspaces(
+              await workspaceApplicationService.list(),
+              () => chatStore.list(),
+            );
           const hostFeed = new AidenRemoteHostFeedService({
             now: Date.now,
             attentionSummary: (runId) => {
@@ -1345,6 +1342,8 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
               notifyChanged: () => ipcMain.broadcast("workspaces:changed", {}),
               approvalMode: async () => effectiveApprovalMode(await configStore.getSettings(), true),
               isWorkspaceHidden: isEphemeralOnlyNoWorkspace,
+              filterVisibleWorkspaces: (workspaces) =>
+                filterRemoteVisibleWorkspaces(workspaces, () => chatStore.list()),
             }),
           };
         },

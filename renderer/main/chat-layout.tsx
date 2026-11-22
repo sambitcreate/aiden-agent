@@ -19,6 +19,7 @@ import { useActiveWorkspace } from "../lib/workspace-context";
 import { TerminalDrawer } from "../components/terminal-drawer";
 import { DesignChatBody, DesignWorkbench, useDesignChatState } from "../design/design-layout";
 import type { Chat, ChatMetadataUpdated, ChatMeta } from "../lib/types";
+import { applyChatMetadataUpdate } from "../shared/chat-metadata-update";
 import { useAppendReconciliationRequired } from "../lib/append-reconciliation";
 import { withForkLineage } from "../lib/chat-copy-view";
 import type { ChatForkSummaryChanged } from "../shared/chat-copy-contract";
@@ -95,15 +96,7 @@ export function ChatLayout() {
         update.title;
       qc.setQueryData<Chat | null>(queryKeys.chat(update.chatId), (current) => {
         if (!current) return current;
-        const next = {
-          ...current,
-          title: update.title,
-          workspaceId: update.workspaceId,
-          updatedAt: update.updatedAt,
-        };
-        // Only non-ephemeral chats broadcast `chats:metadata-updated`.
-        delete next.ephemeral;
-        return next;
+        return applyChatMetadataUpdate(current, update);
       });
       qc.setQueriesData<ChatMeta[]>({ queryKey: queryKeys.chats }, (current) => {
         if (!current) return current;

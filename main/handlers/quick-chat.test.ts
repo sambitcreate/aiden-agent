@@ -80,33 +80,68 @@ test("quickChat handlers enforce sender gates across toggle, hide, setMode, supp
 });
 
 test("quickChat:expandToMain creates tickets, notifies on claim, and cleans up tickets + blur suppression on navigation failure", async () => {
-  let navPaths: string[] = [];
-  const { handlers, tickets, quickEvent, log } = createTestHarness({
+  const navPaths: string[] = [];
+
+  // Draft expand succeeds and hides quick chat + sends handoff-complete ONLY after navigation confirms.
+  let claimedDuringNav = null as ReturnType<DesktopHandoffTicketStore["claimDraft"]>;
+  const draftHarness = createTestHarness({
     navigateMainWindow: async (path) => {
       navPaths.push(path);
+      const id = path.slice("/quick-chat-handoff/draft/".length);
+      claimedDuringNav = draftHarness.tickets.claimDraft(id);
+      assert.equal(
+        draftHarness.log.includes("handoff-complete:draft"),
+        false,
+        "must not clear Quick Chat draft before main window confirms open",
+      );
     },
   });
-
-  // Draft expand succeeds and onClaimed hides quick chat + sends handoff-complete.
-  const draftResult = await handlers.get("quickChat:expandToMain")!(quickEvent, {
-    kind: "draft",
-    workspaceId: "ws-1",
-    text: "hello",
-    attachments: [],
-  });
+  const draftResult = await draftHarness.handlers.get("quickChat:expandToMain")!(
+    draftHarness.quickEvent,
+    {
+      kind: "draft",
+      workspaceId: "ws-1",
+      text: "hello",
+      attachments: [],
+    },
+  );
   assert.deepEqual(draftResult, { ok: true });
   assert.equal(navPaths.length, 1);
   assert.ok(navPaths[0].startsWith("/quick-chat-handoff/draft/"));
-  const ticketId = navPaths[0].slice("/quick-chat-handoff/draft/".length);
-  const claimedDraft = tickets.claimDraft(ticketId);
-  assert.equal(claimedDraft?.text, "hello");
-  claimedDraft?.onClaimed?.();
-  assert.ok(log.includes("handoff-complete:draft"));
-  assert.ok(log.includes("hide"));
+  assert.equal(claimedDuringNav?.text, "hello");
+  assert.ok(draftHarness.log.includes("handoff-complete:draft"));
+  assert.ok(draftHarness.log.includes("hide"));
 
-  // Chat expand cleans up ticket and resets blur suppression if navigateMainWindow throws.
+  // Draft expand that claims ticket and then fails/blocks MUST NOT clear or hide Quick Chat.
+  const failingDraft = createTestHarness({
+    navigateMainWindow: async (path) => {
+      const id = path.slice("/quick-chat-handoff/draft/".length);
+      failingDraft.tickets.claimDraft(id);
+      throw new Error("Main window is busy");
+    },
+  });
+  const failedDraftRes = await failingDraft.handlers.get("quickChat:expandToMain")!(
+    failingDraft.quickEvent,
+    {
+      kind: "draft",
+      workspaceId: "ws-1",
+      text: "keep my typed text",
+      attachments: [],
+    },
+  );
+  assert.deepEqual(failedDraftRes, { ok: false });
+  assert.equal(failingDraft.log.includes("handoff-complete:draft"), false);
+  assert.equal(failingDraft.log.includes("hide"), false);
+  assert.ok(failingDraft.log.includes("reset-suppress"));
+
+  // Chat expand failure runs deferred detach immediately (via abandonChat) so approvals/questions don't hang.
+  let deferredDetachRan = false;
+  let registeredDeferred = false;
   const failing = createTestHarness({
     navigateMainWindow: async () => {
+      registeredDeferred = failing.tickets.deferDetachIfPending("chat-fail", "quick-doc-1", () => {
+        deferredDetachRan = true;
+      });
       throw new Error("Main window unavailable");
     },
   });
@@ -116,6 +151,8 @@ test("quickChat:expandToMain creates tickets, notifies on claim, and cleans up t
     draftText: "unsent",
   });
   assert.deepEqual(failedChat, { ok: false });
+  assert.equal(registeredDeferred, true, "deferred detach must register for pending ticket");
+  assert.equal(deferredDetachRan, true, "failed chat expand must run deferred detach immediately");
   assert.equal(failing.tickets.claimChat("chat-fail"), null, "failed expand must clean up its ticket");
   assert.ok(failing.log.includes("reset-suppress"), "failed expand must reset blur suppression");
 });
@@ -216,10 +253,13 @@ test("quickChat:expandToMain preserves ephemeral flag on draft handoff and analy
   const navPaths: string[] = [];
   const reported: Array<{ duringStream: boolean; wasEphemeral: boolean }> = [];
 
+  let claimed = null as ReturnType<DesktopHandoffTicketStore["claimDraft"]>;
   registerQuickChatHandlersCore({
     isMainWindow: () => false,
     navigateMainWindow: async (navPath) => {
       navPaths.push(navPath);
+      const ticketId = navPath.replace("/quick-chat-handoff/draft/", "");
+      claimed = tickets.claimDraft(ticketId);
     },
     handle: (ch, fn) => handlers.set(ch, fn as (event: unknown, ...args: unknown[]) => unknown),
     windowPort: {
@@ -242,10 +282,7 @@ test("quickChat:expandToMain preserves ephemeral flag on draft handoff and analy
     { kind: "draft", workspaceId: "default", text: "Quick note", attachments: [], ephemeral: true },
   );
   assert.deepEqual(result, { ok: true });
-  const ticketId = navPaths[0]!.replace("/quick-chat-handoff/draft/", "");
-  const claimed = tickets.claimDraft(ticketId);
   assert.equal(claimed?.ephemeral, true);
   assert.equal(claimed?.text, "Quick note");
-  claimed?.onClaimed?.();
   assert.deepEqual(reported, [{ duringStream: false, wasEphemeral: true }]);
 });

@@ -382,6 +382,17 @@ export class DesktopHandoffTicketStore {
     return ticket;
   }
 
+  /**
+   * Abandon a failed chat handoff: remove any unclaimed ticket and immediately
+   * run any deferred detach callbacks so approvals/questionnaires on a source
+   * window that already detached are released right away instead of hanging.
+   */
+  abandonChat(chatId: string): boolean {
+    const existed = this.chats.has(chatId) || this.deferredDetaches.has(chatId);
+    this.expireChatTicket(chatId);
+    return existed;
+  }
+
   clear(): void {
     for (const chatId of [...this.deferredDetaches.keys()]) {
       this.cancelDeferredDetaches(chatId);

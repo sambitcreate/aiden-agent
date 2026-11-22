@@ -33,6 +33,7 @@ import {
 } from "../lib/ipc";
 import { queryKeys } from "../lib/queries";
 import { newChatUuid } from "../shared/chat-identity";
+import { applyChatMetadataUpdate } from "../shared/chat-metadata-update";
 import { isNoWorkspace, noWorkspaceHome, workspaceChoices } from "../lib/no-workspace";
 import { resolveVisibleModelSelection } from "../lib/use-model-selection";
 import { isEscapeKey } from "../lib/dismiss-key";
@@ -218,17 +219,25 @@ export function FloatingChatApp() {
       resetToStarter({ cancelActive: false });
       setExpanding(false);
     });
-    const offMeta = onNotification<{ chatId?: string; title?: string; workspaceId?: string }>(
+    const offMeta = onNotification<{
+      chatId?: string;
+      title?: string;
+      workspaceId?: string;
+      updatedAt?: number;
+      ephemeral?: boolean;
+    }>(
       "chats:metadata-updated",
       (payload) => {
         if (!payload?.chatId || chatRef.current?.id !== payload.chatId) return;
         setChat((prev) =>
           prev && prev.id === payload.chatId
-            ? {
-                ...prev,
-                ...(payload.title ? { title: payload.title } : {}),
-                ...(payload.workspaceId ? { workspaceId: payload.workspaceId } : {}),
-              }
+            ? applyChatMetadataUpdate(prev, {
+                chatId: payload.chatId,
+                title: payload.title ?? prev.title,
+                ...(payload.workspaceId !== undefined ? { workspaceId: payload.workspaceId } : {}),
+                updatedAt: payload.updatedAt ?? prev.updatedAt,
+                ...(payload.ephemeral !== undefined ? { ephemeral: payload.ephemeral } : {}),
+              })
             : prev,
         );
       },

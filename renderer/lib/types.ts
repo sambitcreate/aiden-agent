@@ -813,6 +813,7 @@ export interface ChatMetadataUpdated {
   workspaceId?: string;
   title: string;
   updatedAt: number;
+  ephemeral?: boolean;
 }
 
 /** `chats:design-mode-changed`: one chat's design mode turned on or off. */

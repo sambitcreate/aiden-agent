@@ -532,6 +532,7 @@ export function registerChatHistoryHandlers(): void {
         title: promoted.title,
         workspaceId: persistedChatWorkspaceId(promoted.workspaceId),
         updatedAt: promoted.updatedAt,
+        ephemeral: false,
       });
       ipcMain.broadcast("workspaces:changed", {});
       return promoted;
@@ -574,6 +575,7 @@ export function registerChatHistoryHandlers(): void {
         title: result.chat.title,
         workspaceId: persistedChatWorkspaceId(result.chat.workspaceId),
         updatedAt: result.chat.updatedAt,
+        ephemeral: false,
       });
       ipcMain.broadcast("workspaces:changed", {});
       return result;

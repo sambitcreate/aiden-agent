@@ -20,6 +20,7 @@ import type { PiSessionEntry, PiSessionPort } from "./pi-session-port.js";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { Api, Model } from "@earendil-works/pi-ai";
 import { AidenRemoteWorkspaceService } from "./aiden-remote-workspaces.js";
+import { filterRemoteVisibleWorkspaces } from "./visible-chat-projection.js";
 import { WorkspaceMutationGate } from "./workspace-mutation-gate.js";
 import { WorkspaceOperationRegistry } from "./workspace-operation-registry.js";
 import type { Workspace } from "./types.js";
@@ -386,12 +387,16 @@ test("recordPiWorkspaceAttachedBoundary survives both normal context and skill-f
     withEntryProjectors() { return session; },
   };
 
+  // Chronological placement: attach after u1, then add u2 and u3 -> skill-free keeps note after u1 (NOT after u3).
+  await session.appendCustomEntry("aiden.chat-message.v1", { chatMessageId: "u1" });
   await recordPiWorkspaceAttachedBoundary(session, {
     targetWorkspaceId: "ws-proj",
     targetWorkspaceName: "My Repo",
     targetFolderPath: "/tmp/my-repo",
     copiedPaths: ["notes.md"],
   });
+  await session.appendCustomEntry("aiden.chat-message.v1", { chatMessageId: "u2" });
+  await session.appendCustomEntry("aiden.chat-message.v1", { chatMessageId: "u3" });
 
   const normalContext = await session.buildContext();
   assert.equal(normalContext.messages.length, 1);
@@ -402,14 +407,172 @@ test("recordPiWorkspaceAttachedBoundary survives both normal context and skill-f
   const dummyModel = { id: "m", api: "openai-completions", provider: "openai" } as unknown as Model<Api>;
   const projected = await projectVisibleHistoryWithoutSkills(
     session,
-    [{ id: "u1", role: "user", content: "hi", createdAt: 1 }],
+    [
+      { id: "u1", role: "user", content: "first turn", createdAt: 1 },
+      { id: "u2", role: "user", content: "second turn", createdAt: 2 },
+      { id: "u3", role: "user", content: "third turn", createdAt: 3 },
+    ],
     dummyModel,
   );
   const skillFreeContext = await projected.buildContext();
-  assert.equal(skillFreeContext.messages.length, 2);
+  assert.equal(skillFreeContext.messages.length, 4);
+  assert.match(JSON.stringify(skillFreeContext.messages[0]), /first turn/);
   const boundaryText = JSON.stringify(skillFreeContext.messages[1]);
   assert.match(boundaryText, /My Repo/);
   assert.match(boundaryText, /notes\.md/);
+  assert.match(JSON.stringify(skillFreeContext.messages[2]), /second turn/);
+  assert.match(JSON.stringify(skillFreeContext.messages[3]), /third turn/);
+});
+
+test("inspectScratchFolderFiles skips protected agent-config files identically to copy", async () => {
+  await withTempDir(async (dir) => {
+    const scratch = path.join(dir, "scratch");
+    await fs.mkdir(path.join(scratch, ".claude"), { recursive: true });
+    await fs.mkdir(path.join(scratch, ".codex"), { recursive: true });
+    await fs.writeFile(path.join(scratch, ".claude", "settings.json"), "{}");
+    await fs.writeFile(path.join(scratch, ".codex", "config.toml"), "");
+    await fs.writeFile(path.join(scratch, "visible.md"), "ok");
+
+    const inspected = await inspectScratchFolderFiles(scratch);
+    assert.deepEqual(
+      inspected.entries.map((e) => e.relativePath),
+      ["visible.md"],
+    );
+  });
+});
+
+test("legacy shared No-workspace folder refuses copying sibling chats' files and attaches cleanly without copying", async () => {
+  await withTempDir(async (dir) => {
+    const storeDir = path.join(dir, "chats");
+    const legacyScratchDir = path.join(dir, "legacy-nows");
+    const projectDir = path.join(dir, "project");
+    await fs.mkdir(storeDir, { recursive: true });
+    await fs.mkdir(legacyScratchDir, { recursive: true });
+    await fs.mkdir(projectDir, { recursive: true });
+    await fs.writeFile(path.join(legacyScratchDir, "other-chat.txt"), "belongs to sibling");
+
+    const chatStore = createChatStore(async () => storeDir);
+    const workspaces: Record<string, Workspace> = {
+      "nows-legacy": {
+        id: "nows-legacy",
+        name: "No workspace",
+        folderPath: legacyScratchDir,
+        permission: "ask",
+        noWorkspace: true,
+        createdAt: 1,
+        updatedAt: 1,
+      },
+      "ws-project": {
+        id: "ws-project",
+        name: "Project",
+        folderPath: projectDir,
+        permission: "ask",
+        createdAt: 1,
+        updatedAt: 1,
+      },
+    };
+    const service = createChatApplicationService({
+      chatStore,
+      configStore: { getWorkspace: async (id) => workspaces[id] ?? null },
+      llmClient: {
+        isChatOwnedByInactiveRenderer: () => false,
+        isChatBusy: () => false,
+        waitForChatIdle: async () => true,
+        requiresAppendReconciliation: () => false,
+        markAppendReconciliationRequired: () => undefined,
+        clearAppendReconciliationRequired: () => undefined,
+        beginChatWorkspaceChange: () => () => undefined,
+        beginChatDeletion: () => () => undefined,
+        cancelChat: async () => undefined,
+      },
+      displayImageArtifactStore: {
+        availability: () => ({ available: false, reason: "test" }),
+        hasPending: async () => false,
+        deleteChat: async () => undefined,
+      },
+      generativeUiArtifactStore: {
+        availability: () => ({ available: false, reason: "test" }),
+        hasPending: async () => false,
+        deleteChat: async () => undefined,
+      },
+      workspaceMutationGate: new WorkspaceMutationGate(),
+      workspaceOperationRegistry: new WorkspaceOperationRegistry(),
+      subagentRunStore: {
+        deleteChat: async () => undefined,
+        completeChatDeletion: async () => undefined,
+        pendingChatDeletions: async () => [],
+      },
+      piRuntimeEffectStore: { deleteChat: async () => undefined },
+      piCompactionSessionStore: { deleteChat: async () => undefined },
+      assertManagedWorktreeAdmission: async () => undefined,
+      logError: () => undefined,
+    });
+
+    const chatA = "55555555-5555-4555-8555-555555555555";
+    const chatB = "66666666-6666-4666-8666-666666666666";
+    await chatStore.create({ id: chatA, workspaceId: "nows-legacy" });
+    await chatStore.create({ id: chatB, workspaceId: "nows-legacy" });
+
+    // Must not list sibling chats' files for carry-over or trash.
+    const inspected = await service.inspectAttachFiles(chatA);
+    assert.equal(inspected.hasFiles, false);
+    assert.deepEqual(inspected.entries, []);
+
+    // Explicitly requesting copy on a shared legacy folder is refused.
+    await assert.rejects(
+      () => service.attachToWorkspace(chatA, "ws-project", { fileAction: "copy" }),
+      /shares a legacy No workspace folder/u,
+    );
+
+    // Attaching with omitted fileAction moves only chatA and leaves sibling files untouched.
+    const attached = await service.attachToWorkspace(chatA, "ws-project");
+    assert.equal(attached.chat.workspaceId, "ws-project");
+    assert.deepEqual(attached.copiedPaths, []);
+    await assert.rejects(() => fs.lstat(path.join(projectDir, "other-chat.txt")));
+    assert.equal(
+      await fs.readFile(path.join(legacyScratchDir, "other-chat.txt"), "utf8"),
+      "belongs to sibling",
+    );
+  });
+});
+
+test("filterRemoteVisibleWorkspaces performs at most one chat-store scan across many No-workspace entries", async () => {
+  const workspaces: Workspace[] = [
+    { id: "default", name: "No workspace", folderPath: "/tmp/d", permission: "ask", noWorkspace: true, createdAt: 1, updatedAt: 1 },
+    { id: "ws-real", name: "Real", folderPath: "/tmp/r", permission: "ask", createdAt: 1, updatedAt: 1 },
+  ];
+  const chats: Array<{ workspaceId: string; ephemeral?: true }> = [];
+  for (let i = 0; i < 40; i += 1) {
+    const id = `nows-ephem-${i}`;
+    workspaces.push({ id, name: "No workspace", folderPath: `/tmp/${id}`, permission: "ask", noWorkspace: true, createdAt: 1, updatedAt: 1 });
+    chats.push({ workspaceId: id, ephemeral: true });
+  }
+  for (let i = 0; i < 10; i += 1) {
+    const id = `nows-saved-${i}`;
+    workspaces.push({ id, name: "No workspace", folderPath: `/tmp/${id}`, permission: "ask", noWorkspace: true, createdAt: 1, updatedAt: 1 });
+    chats.push({ workspaceId: id });
+  }
+
+  let listCalls = 0;
+  const visible = await filterRemoteVisibleWorkspaces(workspaces, async () => {
+    listCalls += 1;
+    return chats;
+  });
+  assert.equal(listCalls, 1, "must scan chatStore at most once regardless of No-workspace count");
+  assert.equal(visible.length, 12); // default + ws-real + 10 saved
+  assert.equal(visible.some((w) => w.id.startsWith("nows-ephem-")), false);
+
+  // Zero scans when only regular/default workspaces exist.
+  let zeroCalls = 0;
+  const realOnly = await filterRemoteVisibleWorkspaces(
+    workspaces.slice(0, 2),
+    async () => {
+      zeroCalls += 1;
+      return [];
+    },
+  );
+  assert.equal(zeroCalls, 0);
+  assert.equal(realOnly.length, 2);
 });
 
 test("AidenRemoteWorkspaceService hides ephemeral-only hidden workspaces from list, get, update, and remove", async () => {

@@ -3166,81 +3166,97 @@ export function ChatPane({ chatId }: { chatId: string }) {
           return;
         }
 
-        const generationIntent = (generationIntentRef.current += 1);
-        if (deltaFrameRef.current !== null) {
-          window.cancelAnimationFrame(deltaFrameRef.current);
-          deltaFrameRef.current = null;
-        }
-        pendingDeltaRef.current = "";
-        pendingReasoningDeltaRef.current = "";
-        streamedTextRef.current = live.content;
-        streamedReasoningRef.current = live.reasoning;
-        generationTimelineRef.current = live.timeline;
-        streamingArtifactsRef.current = live.artifacts;
-        streamHandoffRef.current?.();
-        streamHandoffRef.current = null;
+        try {
+          const generationIntent = (generationIntentRef.current += 1);
+          if (deltaFrameRef.current !== null) {
+            window.cancelAnimationFrame(deltaFrameRef.current);
+            deltaFrameRef.current = null;
+          }
+          pendingDeltaRef.current = "";
+          pendingReasoningDeltaRef.current = "";
+          streamedTextRef.current = live.content;
+          streamedReasoningRef.current = live.reasoning;
+          generationTimelineRef.current = live.timeline;
+          streamingArtifactsRef.current = live.artifacts;
+          streamHandoffRef.current?.();
+          streamHandoffRef.current = null;
 
-        setError(null);
-        setHasUnpersistedResponse(false);
-        setIsStoppingGeneration(false);
-        setIsModelLoading(false);
-        setModelCallRetry(null);
-        setStreamComplete(false);
-        setPersistedHandoffMessageId(null);
-        setVisualDrafts(NO_VISUAL_DRAFTS);
-        setUiDrafts(NO_UI_DRAFTS);
-        setStreamingArtifactPlacements(new Map());
-        setStreamingWideVisuals(new Set());
-        setStreamingText(live.content);
-        setStreamingReasoning(live.reasoning.trim() ? live.reasoning : null);
-        setGenerationTimeline(live.timeline);
-        setStreamingArtifacts(live.artifacts);
-        setStreamingUiVisuals(live.uiVisuals);
-        setLiveSubagents(live.subagents);
-        if (live.todoSnapshot) {
-          todoSnapshotReadFence.markLive(live.todoSnapshot.chatId);
-          setTodoSnapshot(live.todoSnapshot);
-        }
-        if (live.contextPressure) setContextPressure(live.contextPressure);
-        setApprovals(
-          live.pendingApprovals.map((prompt) => {
-            const { scopes, ...rest } = prompt;
-            return {
-              ...rest,
-              ...(scopes ? { scopes: [...scopes] } : {}),
-            };
-          }),
-        );
-        setQuestionnaire(live.pendingQuestions[0] ?? null);
-        setQuestionnaireSubmitting(false);
-        setCanStopGeneration(true);
-        if (live.content) markTextStreaming();
+          setError(null);
+          setHasUnpersistedResponse(false);
+          setIsStoppingGeneration(false);
+          setIsModelLoading(false);
+          setModelCallRetry(null);
+          setStreamComplete(false);
+          setPersistedHandoffMessageId(null);
+          setVisualDrafts(NO_VISUAL_DRAFTS);
+          setUiDrafts(NO_UI_DRAFTS);
+          setStreamingArtifactPlacements(new Map());
+          setStreamingWideVisuals(new Set());
+          setStreamingText(live.content);
+          setStreamingReasoning(live.reasoning.trim() ? live.reasoning : null);
+          setGenerationTimeline(live.timeline);
+          setStreamingArtifacts(live.artifacts);
+          setStreamingUiVisuals(live.uiVisuals);
+          setLiveSubagents(live.subagents);
+          if (live.todoSnapshot) {
+            todoSnapshotReadFence.markLive(live.todoSnapshot.chatId);
+            setTodoSnapshot(live.todoSnapshot);
+          }
+          if (live.contextPressure) setContextPressure(live.contextPressure);
+          setApprovals(
+            live.pendingApprovals.map((prompt) => {
+              const { scopes, ...rest } = prompt;
+              return {
+                ...rest,
+                ...(scopes ? { scopes: [...scopes] } : {}),
+              };
+            }),
+          );
+          setQuestionnaire(live.pendingQuestions[0] ?? null);
+          setQuestionnaireSubmitting(false);
+          setCanStopGeneration(true);
+          if (live.content) markTextStreaming();
 
-        const resolvedWorkspaceId = effectiveWorkspaceIdRef.current ?? live.workspaceId;
-        const bufferedNotifications = buffer.drain();
-        attachGenerationStream(
-          live.streamId,
-          { chatId, workspaceId: resolvedWorkspaceId },
-          {
-            content: live.content,
-            reasoning: live.reasoning,
-            timeline: live.timeline,
-            artifacts: live.artifacts,
-            uiVisuals: live.uiVisuals,
-            subagents: live.subagents,
-          },
-          createStreamCallbacks(generationIntent, {
-            providerId: chat.data?.providerId,
-            fallbackWorkspaceId: live.workspaceId,
-          }),
-          bufferedNotifications,
-          (handle) => {
-            // Install handle BEFORE replaying buffered notifications so a
-            // buffered terminal `chat:done`/`chat:error` clears it cleanly.
-            generationRef.current = handle;
-            generationChatIdRef.current = chatId;
-          },
-        );
+          const resolvedWorkspaceId = effectiveWorkspaceIdRef.current ?? live.workspaceId;
+          const bufferedNotifications = buffer.drain();
+          attachGenerationStream(
+            live.streamId,
+            { chatId, workspaceId: resolvedWorkspaceId },
+            {
+              content: live.content,
+              reasoning: live.reasoning,
+              timeline: live.timeline,
+              artifacts: live.artifacts,
+              uiVisuals: live.uiVisuals,
+              subagents: live.subagents,
+            },
+            createStreamCallbacks(generationIntent, {
+              providerId: chat.data?.providerId,
+              fallbackWorkspaceId: live.workspaceId,
+            }),
+            bufferedNotifications,
+            (handle) => {
+              // Install handle BEFORE replaying buffered notifications so a
+              // buffered terminal `chat:done`/`chat:error` clears it cleanly.
+              generationRef.current = handle;
+              generationChatIdRef.current = chatId;
+            },
+          );
+        } catch {
+          buffer.dispose();
+          detachHandoffStream(
+            live.streamId,
+            { chatId, workspaceId: live.workspaceId },
+            {
+              content: live.content,
+              reasoning: live.reasoning,
+              timeline: live.timeline,
+              artifacts: live.artifacts,
+              uiVisuals: live.uiVisuals,
+              subagents: live.subagents,
+            },
+          );
+        }
       })
       .catch(() => {
         buffer.dispose();

@@ -5,6 +5,7 @@ import {
   test,
 } from "./fixtures";
 import { auditAccessibility } from "./axe-gate";
+import { previewAppearance } from "./design-mode-helpers";
 import type { ElectronApplication, Page } from "@playwright/test";
 
 test.use({ workspaceSeed: true });
@@ -38,12 +39,20 @@ test("floating starter morphs to mini-modal, stays ephemeral until attached to a
   await expect(quickPage.getByTestId("quick-chat-target-chip")).toHaveText(/Temporary/u);
   await expect(quickPage.getByText(/Share screen/iu)).toHaveCount(0);
 
-  // Accessibility & squircle checks on State 1 Floating Starter.
+  // Accessibility & squircle checks on State 1 Floating Starter (light + dark).
   await expectSquircleButtons(quickPage);
   expect(await auditAccessibility(quickPage, { surface: "quick-chat-starter" })).toEqual([]);
   await quickPage.screenshot({
     path: test.info().outputPath("pr-quick-chat-state1-starter.png"),
   });
+  await previewAppearance(page, "dark");
+  await expect(quickPage.locator("html")).toHaveAttribute("data-appearance-scheme", "dark");
+  expect(await auditAccessibility(quickPage, { surface: "quick-chat-starter-dark" })).toEqual([]);
+  await quickPage.screenshot({
+    path: test.info().outputPath("pr-quick-chat-state1-starter-dark.png"),
+  });
+  await previewAppearance(page, "light");
+  await expect(quickPage.locator("html")).toHaveAttribute("data-appearance-scheme", "light");
 
   // Send a prompt -> morphs to State 2 Floating Mini-Modal and streams reply.
   const input = quickPage.getByTestId("quick-chat-input");
@@ -65,12 +74,20 @@ test("floating starter morphs to mini-modal, stays ephemeral until attached to a
     page.locator("[data-sidebar]").getByRole("button", { name: /Deterministic E2E response/u }),
   ).toHaveCount(0);
 
-  // Accessibility & squircle checks on State 2 Floating Mini-Modal.
+  // Accessibility & squircle checks on State 2 Floating Mini-Modal (light + dark).
   await expectSquircleButtons(quickPage);
   expect(await auditAccessibility(quickPage, { surface: "quick-chat-modal" })).toEqual([]);
   await quickPage.screenshot({
     path: test.info().outputPath("pr-quick-chat-state2-modal.png"),
   });
+  await previewAppearance(page, "dark");
+  await expect(quickPage.locator("html")).toHaveAttribute("data-appearance-scheme", "dark");
+  expect(await auditAccessibility(quickPage, { surface: "quick-chat-modal-dark" })).toEqual([]);
+  await quickPage.screenshot({
+    path: test.info().outputPath("pr-quick-chat-state2-modal-dark.png"),
+  });
+  await previewAppearance(page, "light");
+  await expect(quickPage.locator("html")).toHaveAttribute("data-appearance-scheme", "light");
 
   // Attach the temporary chat in-place to the seeded project workspace.
   await quickPage.getByTestId("quick-chat-attach-workspace-btn").click();
@@ -90,6 +107,12 @@ test("floating starter morphs to mini-modal, stays ephemeral until attached to a
   await quickPage.screenshot({
     path: test.info().outputPath("pr-quick-chat-attached.png"),
   });
+  await previewAppearance(page, "dark");
+  await expect(quickPage.locator("html")).toHaveAttribute("data-appearance-scheme", "dark");
+  await quickPage.screenshot({
+    path: test.info().outputPath("pr-quick-chat-attached-dark.png"),
+  });
+  await previewAppearance(page, "light");
 });
 
 test("expanding mid-stream hands off live generation seamlessly to the main window without aborting", async ({
@@ -140,4 +163,10 @@ test("expanding mid-stream hands off live generation seamlessly to the main wind
   await page.screenshot({
     path: test.info().outputPath("pr-quick-chat-expanded-main.png"),
   });
+  await previewAppearance(page, "dark");
+  await expect(page.locator("html")).toHaveAttribute("data-appearance-scheme", "dark");
+  await page.screenshot({
+    path: test.info().outputPath("pr-quick-chat-expanded-main-dark.png"),
+  });
+  await previewAppearance(page, "light");
 });

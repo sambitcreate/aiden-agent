@@ -7,6 +7,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { TooltipProvider } from "../components/ui";
 import { AppCapabilitiesProvider, DISABLED_APP_CAPABILITIES } from "../lib/app-capabilities";
 import type { Chat, Provider, Workspace } from "../lib/types";
+import { applyChatMetadataUpdate } from "../shared/chat-metadata-update";
 import { FloatingChatApp } from "./floating-chat-app";
 
 const PROVIDERS: Provider[] = [
@@ -543,4 +544,48 @@ test("lastWorkspace updates immediately when a delayed settings write lands via 
   } finally {
     qc.clear();
   }
+});
+
+test("auto-title chats:metadata-updated preserves Temporary state until explicit ephemeral: false", () => {
+  const tempChat: Chat = {
+    id: "chat-temp-1",
+    workspaceId: "nows-1",
+    ephemeral: true,
+    title: "New chat",
+    messages: [],
+    createdAt: 1,
+    updatedAt: 1,
+  };
+
+  // Auto-title with ephemeral: true keeps Temporary flag.
+  const titledWithFlag = applyChatMetadataUpdate(tempChat, {
+    chatId: "chat-temp-1",
+    workspaceId: "nows-1",
+    title: "Refactor auth flow",
+    updatedAt: 2,
+    ephemeral: true,
+  });
+  assert.equal(titledWithFlag.title, "Refactor auth flow");
+  assert.equal(titledWithFlag.ephemeral, true);
+
+  // Metadata update omitting ephemeral (e.g., rename/legacy emitter) still preserves Temporary flag.
+  const titledOmitted = applyChatMetadataUpdate(titledWithFlag, {
+    chatId: "chat-temp-1",
+    workspaceId: "nows-1",
+    title: "Auth notes",
+    updatedAt: 3,
+  });
+  assert.equal(titledOmitted.title, "Auth notes");
+  assert.equal(titledOmitted.ephemeral, true);
+
+  // Explicit promotion or attach sends ephemeral: false and clears Temporary flag.
+  const promoted = applyChatMetadataUpdate(titledOmitted, {
+    chatId: "chat-temp-1",
+    workspaceId: "ws-project",
+    title: "Auth notes",
+    updatedAt: 4,
+    ephemeral: false,
+  });
+  assert.equal(promoted.workspaceId, "ws-project");
+  assert.equal(promoted.ephemeral, undefined);
 });

@@ -467,6 +467,14 @@ export function createChatApplicationService(deps: ChatApplicationDependencies) 
       if (!oldWorkspace.folderPath) {
         return { hasFiles: false, totalBytes: 0, truncated: false, entries: [] };
       }
+      // On legacy installs where multiple chats share one No workspace folder,
+      // never offer to copy or discard files that belong to sibling chats.
+      const siblingChats = (await deps.chatStore.list(oldWorkspaceId)).some(
+        (meta) => meta.id !== chatId,
+      );
+      if (siblingChats) {
+        return { hasFiles: false, totalBytes: 0, truncated: false, entries: [] };
+      }
       return inspectScratchFolderFiles(oldWorkspace.folderPath);
     },
 
@@ -560,7 +568,17 @@ export function createChatApplicationService(deps: ChatApplicationDependencies) 
         };
         assertAdmitted();
 
-        if (options.fileAction === undefined && oldWorkspace.folderPath) {
+        const sharedLegacyScratch = (await deps.chatStore.list(oldWorkspaceId)).some(
+          (meta) => meta.id !== chatId,
+        );
+        assertAdmitted();
+        if (sharedLegacyScratch && options.fileAction === "copy") {
+          throw new Error(
+            "This chat shares a legacy No workspace folder with other chats, so its files cannot be copied automatically.",
+          );
+        }
+
+        if (!sharedLegacyScratch && options.fileAction === undefined && oldWorkspace.folderPath) {
           const liveScratch = await inspectScratchFolderFiles(oldWorkspace.folderPath);
           assertAdmitted();
           if (liveScratch.hasFiles) {
@@ -571,7 +589,7 @@ export function createChatApplicationService(deps: ChatApplicationDependencies) 
         }
 
         let copiedPaths: string[] = [];
-        if (options.fileAction === "copy" && oldWorkspace.folderPath) {
+        if (!sharedLegacyScratch && options.fileAction === "copy" && oldWorkspace.folderPath) {
           const copyTx = await copyScratchFilesToWorkspaceWithRollback(
             oldWorkspace.folderPath,
             targetWorkspace.folderPath,

@@ -125,14 +125,14 @@ export function registerQuickChatHandlersCore(deps: QuickChatHandlerCoreDependen
           ...(parsed.providerId ? { providerId: parsed.providerId } : {}),
           ...(parsed.model ? { model: parsed.model } : {}),
           ...(parsed.ephemeral ? { ephemeral: true } : {}),
-          onClaimed: () => {
-            win.notifyQuickChatHandoffComplete({ kind: "draft" });
-            win.hideQuickChat();
-            reportExpanded?.({ duringStream: false, wasEphemeral: parsed.ephemeral === true });
-          },
         });
         try {
           await deps.navigateMainWindow(`/quick-chat-handoff/draft/${ticketId}`);
+          // Only clear and hide Quick Chat AFTER the main window confirms the draft opened,
+          // so a blocked or failed main-window navigation never loses the user's typed text.
+          win.notifyQuickChatHandoffComplete({ kind: "draft" });
+          win.hideQuickChat();
+          reportExpanded?.({ duringStream: false, wasEphemeral: parsed.ephemeral === true });
           return { ok: true };
         } catch (error) {
           tickets.claimDraft(ticketId);
@@ -167,7 +167,9 @@ export function registerQuickChatHandlersCore(deps: QuickChatHandlerCoreDependen
         await deps.navigateMainWindow(`/quick-chat-handoff/chat/${parsed.chatId}`);
         return { ok: true };
       } catch (error) {
-        tickets.claimChat(parsed.chatId);
+        // Run any deferred detach callbacks instead of cancelling them, so
+        // pending approvals/questions never hang if Quick Chat already detached.
+        tickets.abandonChat(parsed.chatId);
         win.resetQuickChatBlurSuppression();
         onWarning?.("Could not expand chat into main window.", error);
         return { ok: false };
