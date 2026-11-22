@@ -67,16 +67,23 @@ ceiling still comes from the lead.
 A start can give each chat a `result_schema`: a JSON Schema of at most 16 KB
 whose `$ref`s may only be `#`, `#/$defs/<name>` or `#/definitions/<name>`
 (nothing is ever fetched, and no pointer into `default`, `enum`, `const`,
-`examples` or another keyword), and that may not contain a regular expression
+`examples` or another keyword) and must not loop (a ref to `#` itself, or
+`$defs` that refer back to each other, is refused), and that may not contain a regular expression
 anywhere, since a crafted one could stall Aiden: no key named `pattern` or
 `patternProperties` at any depth, including inside data keywords, `$defs` and
-`propertyNames`, so a property literally named `pattern` is refused too. A
-schema that is too large, refers anywhere else, contains such a key or doesn't
+`propertyNames`, so a property literally named `pattern` is refused too.
+Checking must stay cheap however the result looks: Aiden adds up every
+subschema a check could visit, following each ref, and refuses a schema whose
+`anyOf`, `oneOf` or `allOf` branches multiply past 10,000 that way, one with
+more than 256 refs, and a `uniqueItems` whose items aren't a plain type
+(string, number, integer, boolean or null). A
+schema that is too large, refers anywhere else, loops, costs too much,
+contains such a key or doesn't
 compile refuses the whole call before any chat is made, and a stored one that
 breaks these rules is dropped when the links load. The started chat's first
 message shows the schema, and it gets a `submit_result` tool. A submitted
 result is checked with ajv; one that doesn't match is refused, naming the
-fields to fix (for example `/filesChanged is required`). The newest accepted
+first field to fix (for example `/filesChanged is required`). The newest accepted
 result (up to 64 KB) replaces any earlier one, is stored on the link, comes
 back from `wait` and `list` as `result`, and is quoted, fenced as data, in the
 lead's completion notice (cut at 4,000 characters there). Only the newest 64
@@ -111,6 +118,13 @@ for approval.
   lead named there don't count as sites you named, so a fetch to one is still
   a new destination the gate asks about or judges. Once you write in the chat,
   the requests are yours again, though its runs stay tainted.
+- **A started chat's reply taints the lead.** A **Started chat** notice
+  quotes the started chat's reply, so the lead's run that reads it, and every
+  later run in the lead, holds outside content, and so do chats it starts or
+  sends to from then on. A pull request's news and a trigger's event text
+  count the same way. On a turn a notice woke, the Auto judge reads your last
+  message as the request, never the notice; with none, it judges with no
+  request.
 - **Only your own words name sites.** A notice is never counted as yours, in
   any chat: a **Started chat** notice (which quotes the started chat's reply),
   a scheduled task's, a check or check-back's, a goal round's, or a job or pull

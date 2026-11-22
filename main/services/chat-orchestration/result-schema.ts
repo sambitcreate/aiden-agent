@@ -2,8 +2,9 @@
 // Phase 5, D6). A lead may give each chat it starts a JSON Schema; the started
 // chat hands its answer back with `submit_result`, checked here with ajv. A
 // schema is at most 16 KB, may only refer to its root or its own `$defs` /
-// `definitions` (nothing is ever fetched to resolve it) and may not contain a
-// regular expression anywhere.
+// `definitions` (nothing is ever fetched to resolve it; references must not
+// loop), may not contain a regular expression anywhere, and its worst-case
+// checking work is bounded before ajv compiles it.
 
 import Ajv, { type ErrorObject, type ValidateFunction } from "ajv";
 
@@ -83,6 +84,107 @@ function regexKeyword(value: unknown, depth = 0): string | undefined {
   return undefined;
 }
 
+/** The most work one check of a result may cost, in schema nodes tried (see `schemaCost`). */
+export const RESULT_SCHEMA_MAX_COST = 10_000;
+/** The most references one schema may contain. */
+export const RESULT_SCHEMA_MAX_REFS = 256;
+
+/** Keywords that apply one subschema. */
+const ONE_SCHEMA = ["not", "if", "then", "else", "additionalItems", "additionalProperties", "contains", "propertyNames", "unevaluatedItems", "unevaluatedProperties"];
+/** Keywords that apply a list of subschemas. */
+const SCHEMA_LIST = ["anyOf", "oneOf", "allOf", "prefixItems"];
+/** Keywords that apply a map of subschemas. */
+const SCHEMA_MAP = ["properties", "patternProperties", "dependentSchemas", "dependencies"];
+/** Keys that would change what a reference points at. */
+const RESOURCE_KEYS: ReadonlySet<string> = new Set(["$id", "id", "$anchor", "$dynamicAnchor", "$recursiveAnchor"]);
+const SCALAR_TYPES: ReadonlySet<string> = new Set(["string", "number", "integer", "boolean", "null"]);
+
+/**
+ * The worst-case work of one check, before ajv sees the schema. Each node
+ * costs 1 plus every subschema it applies, with references followed (and
+ * memoized), so `anyOf` chains that branch through `$defs` are counted at
+ * their real, multiplied size. ajv's `anyOf` has to try every branch when
+ * none matches, which is why this is the number that matters. References may
+ * not loop, and `uniqueItems` needs items of a plain type: comparing objects
+ * or arrays pairwise is quadratic in the result's length.
+ */
+function schemaCost(root: Record<string, unknown>): { ok: true; cost: number } | { ok: false; error: string } {
+  const memo = new Map<unknown, number>();
+  const visiting = new Set<unknown>();
+  let references = 0;
+  let problem: string | undefined;
+  const over = RESULT_SCHEMA_MAX_COST + 1;
+
+  const target = (ref: string): unknown => {
+    if (ref === "#") return root;
+    const [, group, name] = ref.split("/") as [string, string, string];
+    const defs = root[group];
+    return isRecord(defs) ? defs[name] : undefined;
+  };
+
+  function cost(node: unknown, top: boolean): number {
+    if (problem) return over;
+    if (typeof node === "boolean") return 1;
+    if (!isRecord(node)) return 1;
+    const known = memo.get(node);
+    if (known !== undefined) return known;
+    if (visiting.has(node)) {
+      problem = "result_schema's references loop back on themselves; refs must not loop.";
+      return over;
+    }
+    visiting.add(node);
+    let total = 1;
+    const add = (child: unknown) => { total = Math.min(over, total + cost(child, false)); };
+    for (const key of Object.keys(node)) {
+      if (!top && RESOURCE_KEYS.has(key)) {
+        problem = `result_schema can't use "${key}" inside the schema.`;
+        return over;
+      }
+    }
+    for (const key of REFERENCE_KEYWORDS) {
+      const ref = node[key];
+      if (typeof ref !== "string") continue;
+      references += 1;
+      if (references > RESULT_SCHEMA_MAX_REFS) {
+        problem = `result_schema has more than ${RESULT_SCHEMA_MAX_REFS} references.`;
+        return over;
+      }
+      const resolved = target(ref);
+      if (resolved === undefined) {
+        problem = `result_schema refers to ${ref.slice(0, 200)}, which it doesn't define.`;
+        return over;
+      }
+      add(resolved);
+    }
+    for (const key of ONE_SCHEMA) if (key in node) add(node[key]);
+    for (const key of SCHEMA_LIST) if (Array.isArray(node[key])) for (const child of node[key] as unknown[]) add(child);
+    for (const key of SCHEMA_MAP) {
+      const map = node[key];
+      if (isRecord(map)) for (const child of Object.values(map)) if (typeof child === "boolean" || isRecord(child)) add(child);
+    }
+    const items = node.items;
+    if (Array.isArray(items)) for (const child of items) add(child);
+    else if (items !== undefined) add(items);
+    if (node.uniqueItems === true) {
+      const types = isRecord(items) ? (Array.isArray(items.type) ? items.type : [items.type]) : [];
+      if (!types.length || !types.every((type) => typeof type === "string" && SCALAR_TYPES.has(type))) {
+        problem = "result_schema's uniqueItems needs items with a plain type (string, number, integer, boolean or null).";
+        return over;
+      }
+    }
+    visiting.delete(node);
+    memo.set(node, total);
+    return total;
+  }
+
+  const total = cost(root, true);
+  if (problem) return { ok: false, error: problem };
+  if (total > RESULT_SCHEMA_MAX_COST) {
+    return { ok: false, error: "result_schema could take too long to check: its anyOf, oneOf or allOf branches multiply through references. Use fewer branches or a flatter shape." };
+  }
+  return { ok: true, cost: total };
+}
+
 /** Compiles a lead's schema, or says in one sentence why it can't be used. */
 export function compileResultSchema(schema: unknown): ResultSchemaCheck {
   if (!isRecord(schema)) return { ok: false, error: "result_schema must be a JSON Schema object." };
@@ -102,8 +204,11 @@ export function compileResultSchema(schema: unknown): ResultSchemaCheck {
       error: `result_schema can't contain the key "${regex}" anywhere, even as a property name or inside enum, const, default or examples: Aiden doesn't check regular expressions. Use enum, const or plain types instead.`,
     };
   }
+  const cost = schemaCost(schema);
+  if (!cost.ok) return cost;
   try {
-    const ajv = new Ajv({ strict: false, allErrors: true, validateFormats: false });
+    // The first error is enough to name what failed, and stops each check early.
+    const ajv = new Ajv({ strict: false, validateFormats: false });
     return { ok: true, validate: ajv.compile(schema) };
   } catch (error) {
     const reason = error instanceof Error ? error.message.split("\n")[0]!.slice(0, 200) : "it is not a valid JSON Schema";
@@ -139,7 +244,8 @@ export function isStorableResultSchema(value: unknown): value is Record<string, 
     isRecord(value) &&
     byteLength(value) <= RESULT_SCHEMA_MAX_BYTES &&
     disallowedReference(value) === undefined &&
-    regexKeyword(value) === undefined
+    regexKeyword(value) === undefined &&
+    schemaCost(value).ok
   );
 }
 

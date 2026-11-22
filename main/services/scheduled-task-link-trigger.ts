@@ -88,13 +88,30 @@ const SECRET_KEY = /^(?:authorization|cookie|set-cookie|password|passwd|secret|c
 
 /** Values under credential-looking keys are withheld, at any depth. */
 function withholdSecrets(value: unknown, depth = 0): unknown {
-  if (depth > 32) return "[withheld]";
+  if (depth > MAX_JSON_DEPTH) return "[withheld]";
   if (Array.isArray(value)) return value.map((item) => withholdSecrets(item, depth + 1));
   if (value && typeof value === "object") {
     return Object.fromEntries(Object.entries(value as Record<string, unknown>).map(([key, item]) =>
       [key, SECRET_KEY.test(key) ? "[withheld]" : withholdSecrets(item, depth + 1)]));
   }
   return typeof value === "string" ? redactCredentialText(value) : value;
+}
+
+/** JSON nested deeper than this is refused: turning it back into text would overflow the stack. */
+const MAX_JSON_DEPTH = 32;
+
+/** Whether parsed JSON nests deeper than `limit`, checked without recursion. */
+function nestsDeeper(value: unknown, limit: number): boolean {
+  const stack: Array<{ value: unknown; depth: number }> = [{ value, depth: 0 }];
+  while (stack.length) {
+    const { value: current, depth } = stack.pop()!;
+    if (current === null || typeof current !== "object") continue;
+    if (depth >= limit) return true;
+    for (const child of Array.isArray(current) ? current : Object.values(current as Record<string, unknown>)) {
+      if (child !== null && typeof child === "object") stack.push({ value: child, depth: depth + 1 });
+    }
+  }
+  return false;
 }
 
 function valueAt(value: unknown, path: string): unknown {
@@ -266,6 +283,7 @@ export function createTaskLinkWebhook(deps: TaskLinkWebhookDependencies) {
       if (type === "application/json") {
         try {
           json = JSON.parse(text) as unknown;
+          if (nestsDeeper(json, MAX_JSON_DEPTH)) throw new Error("Nested too deeply.");
         } catch {
           if (refuse(routine.id, admittedAt)) {
             await deps.log(routine.id, { at: deps.now(), outcome: "invalid", preview: previewOf(cut(redactCredentialText(text), 2_048)) }, { coalesce: true });

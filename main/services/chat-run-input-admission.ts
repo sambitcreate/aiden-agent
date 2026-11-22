@@ -9,6 +9,7 @@ import { AidenOperationUnknownOutcomeError } from "./aiden-remote-operation-cont
 import type { PiRuntimeQueueOptions, PiRuntimeQueueReceipt } from "./pi-agent-runtime-harness.js";
 import type { Chat, ChatMessage } from "./types.js";
 import type { AgentNoticeV1 } from "../../renderer/shared/agent-notices.js";
+import { messageBringsOutsideContent } from "./approval-gate/run-taint.js";
 import type { ChatInputSourceV1 } from "../../renderer/shared/chat-input-source.js";
 import type {
   ChatRunInputAdmissionResult,
@@ -50,6 +51,12 @@ export interface ChatRunInputGenerationRef {
    * what the lead's message carries (its taint) before the model reads it.
    */
   leadChatInput?(): Promise<void>;
+  /**
+   * A notice that quotes outside text (a started chat's reply, a pull
+   * request's news, a trigger's event) was saved into this run, so the run
+   * holds outside content before the model reads it.
+   */
+  outsideInput?(): void;
   agent: {
     queueAdmissionBlocked(): "not-active" | "cancelled" | "capacity" | undefined;
     queueSteer(message: AgentMessage, options?: PiRuntimeQueueOptions): PiRuntimeQueueReceipt;
@@ -291,6 +298,9 @@ export function createChatRunInputAdmission(deps: ChatRunInputAdmissionDeps) {
       } catch {
         // The input is committed either way; the snooze ends with the next wake.
       }
+    }
+    if (generation.outsideInput && messageBringsOutsideContent({ role: "user", content: input.text, notice: input.notice })) {
+      generation.outsideInput();
     }
     if (input.fromLeadChat && generation.leadChatInput) {
       try {

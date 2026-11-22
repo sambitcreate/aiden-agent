@@ -714,6 +714,20 @@ test("bad calls don't use a link's 60 a minute and share one log entry", async (
   link.triggers.stop();
 });
 
+test("a link call nested too deeply to read is refused as invalid instead of failing the request", async () => {
+  const link = linkHarness({ kind: "webhook", gapMinutes: 10, filters: [{ path: "a", equals: "1" }], dedupePath: "a" });
+  await link.setUp();
+  const depth = 100_000;
+  const deep = `{"a":${"[".repeat(depth)}${"]".repeat(depth)}}`;
+  assert.equal(await link.call(deep), 400);
+  assert.equal(await link.call(`{"a":${"[".repeat(33)}${"]".repeat(33)}}`), 400, "just past the 32-level limit");
+  assert.equal(await link.call({ a: "1" }), 202, "the link keeps working");
+  assert.equal(link.events.length, 1);
+  const state = await link.store.linkState("task-1");
+  assert.deepEqual(state?.log.map((entry) => [entry.outcome, entry.repeats ?? 0]), [["ran", 0], ["invalid", 1]]);
+  link.triggers.stop();
+});
+
 test("a long link batch reaches the run with its heading and every call, inside one bound", async () => {
   const link = linkHarness();
   await link.setUp();
