@@ -1789,6 +1789,8 @@ final class AidenShellUITests: XCTestCase {
         /// iPad's floating tab strip at the top of a regular-width window, when it
         /// shows. It is glass too, so it is also one of `bars`.
         let tabStrip: CGRect?
+        /// The app's window, whose bottom edge cuts a row scrolled partly past it.
+        let window: CGRect
 
         /// For contrast: the element touches glass, or on iOS 26 a band the
         /// scroll-edge effect fades. The search field and the connection hint draw
@@ -1931,6 +1933,19 @@ final class AidenShellUITests: XCTestCase {
             }
         ),
         AuditAllowance(
+            // With no bar along the bottom (a regular width), the window's edge
+            // cuts the last row the list scrolls past it, and the audit reads the
+            // cut text as low contrast. Only text the edge runs through counts:
+            // text wholly on the screen must pass.
+            reason: "Text the window's bottom edge cuts, in a list scrolled past it",
+            ceiling: [:],
+            ceilingInRegularWidth: ["inbox": 1],
+            matches: { finding in
+                guard finding.type == .contrast, let frame = finding.frame else { return false }
+                return frame.minY < finding.window.maxY && frame.maxY > finding.window.maxY
+            }
+        ),
+        AuditAllowance(
             // A filter chip is its name beside a coloured symbol tile. The audit
             // measures the whole 44 pt button, tile included, and the tile is a
             // graphic, whose bar is 3:1. The name itself is the foreground colour
@@ -2024,7 +2039,7 @@ final class AidenShellUITests: XCTestCase {
             // real limit on their size would fail there.
             reason: "Transcript and Search result text measured growing at every text size",
             ceiling: [:],
-            ceilingInRegularWidth: ["bot": 4, "chat": 3, "search": 3],
+            ceilingInRegularWidth: ["bot": 5, "chat": 3, "search": 3],
             matches: { finding in
                 finding.type == .dynamicType && finding.elementType == .staticText
                     && AidenShellUITests.textThatGrowsAtEverySize
@@ -2071,10 +2086,10 @@ final class AidenShellUITests: XCTestCase {
     ]
 
     /// Text the regular-width audit calls partially unsupported that grows at
-    /// every size, by screen and the start of its label. The demo's Bot reply, the
-    /// first chat's reply, and Search's Bot result.
+    /// every size, by screen and the start of its label. The demo's Bot reply and
+    /// your message above it, the first chat's reply, and Search's Bot result.
     private static let textThatGrowsAtEverySize: [(screen: String, label: String)] = [
-        ("bot", "Here is a first pass at your week."), ("bot", "Monday: roadmap review"),
+        ("bot", "Plan my week, please."), ("bot", "Here is a first pass at your week."), ("bot", "Monday: roadmap review"),
         ("bot", "Wednesday: design critique"), ("bot", "Friday: release notes"),
         ("chat", "I found the cause."), ("chat", "Advance the clock in the fixture"), ("chat", "Drop the fixed sleep"),
         ("search", "Scout"), ("search", "Flagged the flaky upload test again this week"), ("search", "Bot conversation · "),
@@ -2117,6 +2132,7 @@ final class AidenShellUITests: XCTestCase {
                 let stripContainer = app.descendants(matching: .any)
                     .matching(NSPredicate(format: "label == %@", "Filter by computer")).firstMatch
                 let stripVisible = stripContainer.exists ? stripContainer.frame : nil
+                let window = AidenStateMatrix.window(of: app).frame
                 var excused: [String: Int] = [:]
                 // Every type runs, in two passes. The Dynamic Type checks change the
                 // text size and the screen lays itself out again, and checks that ran
@@ -2137,7 +2153,8 @@ final class AidenShellUITests: XCTestCase {
                             fadedEdges: fadedEdges,
                             strip: strip,
                             stripVisible: stripVisible,
-                            tabStrip: tabStrip
+                            tabStrip: tabStrip,
+                            window: window
                         )
                         let place = element.map { "\($0.elementType.rawValue) '\($0.label)' at \($0.frame)" } ?? "no element"
                         let line = "\(screen) (\(appearance)): \(issue.compactDescription) on \(place)"
