@@ -248,17 +248,17 @@ test("core surfaces pass the WCAG A/AA axe gate and keep their accessible struct
           - radiogroup "Home stop":
             - list "Slider stops, left to right":
               - listitem:
-                - radio "Home stop: Fast"
+                - 'radio "Home stop: Fast"'
                 - textbox "Name of stop 1"
                 - button "Move Fast up"
                 - button "Move Fast down"
                 - button "Remove Fast"
                 - button "Choose a model for Fast"
               - listitem:
-                - radio "Home stop: Balanced" [checked]
+                - 'radio "Home stop: Balanced" [checked]'
                 - textbox "Name of stop 2"
               - listitem:
-                - radio "Home stop: Smart"
+                - 'radio "Home stop: Smart"'
                 - textbox "Name of stop 3"
           - button "Add stop"
       `);
