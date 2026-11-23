@@ -74,6 +74,11 @@ export interface AgentModelPopoverProps {
     thinkingLevel: GenerationThinkingLevel | undefined,
   ) => void;
   disabled?: boolean;
+  /**
+   * True while a stop reassignment saves the slider, until it has moved the
+   * chat; a window can hold Send so the turn runs on the reassigned stop.
+   */
+  onSavingChange?: (saving: boolean) => void;
   settingsBlockedReason?: string;
   hiddenModelsByProvider?: HiddenModelsByProvider;
   /** For windows without TanStack Router (Quick Chat). */
@@ -116,6 +121,7 @@ function AgentModelPopoverInner({
   settingsLoaded,
   seedThinkingLevel,
   onChange,
+  onSavingChange,
   onSelectStop,
   disabled,
   settingsBlockedReason,
@@ -338,6 +344,7 @@ function AgentModelPopoverInner({
       }),
     };
     setSaving(true);
+    onSavingChange?.(true);
     try {
       await saveAgentSlider(next, queryClient);
       recordRecent(entry.value);
@@ -347,6 +354,7 @@ function AgentModelPopoverInner({
       toast.error(error instanceof Error ? error.message : "Couldn’t save the slider stop.");
     } finally {
       setSaving(false);
+      onSavingChange?.(false);
     }
   };
 

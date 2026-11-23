@@ -78,6 +78,9 @@ export interface FloatingComposerProps {
   onWorkspaceCreated?: (workspace: Workspace) => void;
   isGenerating: boolean;
   sending: boolean;
+  /** A stop reassignment is saving; Send waits so the turn runs on that stop. */
+  selectionSaving?: boolean;
+  onSelectionSavingChange?: (saving: boolean) => void;
   onSend: () => void;
   onStop: () => void;
   onExpand?: () => void;
@@ -127,6 +130,8 @@ export function FloatingComposer({
   onWorkspaceCreated,
   isGenerating,
   sending,
+  selectionSaving = false,
+  onSelectionSavingChange,
   onSend,
   onStop,
   onExpand,
@@ -318,6 +323,7 @@ export function FloatingComposer({
 
   const canSend =
     !sending &&
+    !selectionSaving &&
     Boolean(providerId && model) &&
     (text.trim().length > 0 || attachments.length > 0);
 
@@ -536,6 +542,7 @@ export function FloatingComposer({
             onChange={onModelChange}
             onSelectStop={onSelectStop}
             disabled={isGenerating || sending}
+            onSavingChange={onSelectionSavingChange}
             hiddenModelsByProvider={hiddenModelsByProvider}
             onOpenSettings={(section) => void quickChatApi.openSettings(section)}
             beforeOpen={onBeforePopoverOpen}
