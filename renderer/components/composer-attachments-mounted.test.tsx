@@ -53,6 +53,7 @@ async function loadComposer() {
     "./chat-pull-requests": "export const ChatPullRequestsChip=()=>null;",
     "./follow-through-chips": "export const FollowThroughChips=()=>null;",
     "./busy-send-button": "export const BusySendButton=()=>null;",
+    "./grabbed-element-chip": "export const GrabbedElementChips=()=>null;",
     "./provider-icon": "export const ProviderIcon=()=>null;",
     "../lib/design-mode": "export const useDesignModeControls=()=>null;",
     // The tray a design canvas publishes; tests set it on globalThis. The

@@ -12,8 +12,10 @@ import { MessageActions } from "./message-actions";
 import { ForkMessageButton, type MessageForkAction } from "./fork-message-button";
 import type { ReadAloudActionProps } from "./read-aloud-button";
 import type { Attachment, ChatMessage } from "../lib/types";
+import type { GrabbedElementContextV1 } from "../shared/browser-element-grab";
 import type { SkillProvenanceV1 } from "../shared/slash-commands";
 import { CHAT_VOICE_INPUT_LABEL, type ChatInputSourceV1 } from "../shared/chat-input-source";
+import { GrabbedElementChips } from "./grabbed-element-chip";
 import { MessageAttachments } from "./message-attachments";
 import {
   describeRichLink,
@@ -29,6 +31,7 @@ export interface MessageBubbleProps {
   role: ChatMessage["role"];
   content: string;
   attachments?: Attachment[];
+  grabbedElements?: readonly GrabbedElementContextV1[];
   skill?: SkillProvenanceV1;
   /** Aiden Live sent this user message for the person: show "By voice" under it. */
   inputSource?: ChatInputSourceV1;
@@ -67,6 +70,7 @@ export function MessageBubble({
   role,
   content,
   attachments,
+  grabbedElements,
   skill,
   inputSource,
   streaming,
@@ -99,6 +103,13 @@ export function MessageBubble({
               <span className="truncate font-medium text-primary">{skill.name}</span>
               <span className="text-mini capitalize text-tertiary">{skill.source}</span>
             </div>
+          ) : null}
+          {grabbedElements && grabbedElements.length > 0 ? (
+            <GrabbedElementChips
+              elements={grabbedElements}
+              attachments={attachments}
+              mode="transcript"
+            />
           ) : null}
           {attachments && attachments.length > 0 ? (
             <MessageAttachments attachments={attachments} role="user" />
