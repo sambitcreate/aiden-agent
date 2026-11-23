@@ -7,9 +7,9 @@ import type { QueryClient } from "@tanstack/react-query";
 import { seedAgentSlider, type AgentSliderSettings } from "../shared/agent-slider";
 import type { GenerationThinkingLevel } from "../shared/generation-thinking";
 import { composerThinkingLevels } from "./composer-thinking-levels";
-import { modelsApi, settingsApi } from "./ipc";
+import { modelsApi, providersApi, settingsApi } from "./ipc";
 import { queryKeys } from "./queries";
-import type { AppSettings, Provider } from "./types";
+import type { AppSettings } from "./types";
 
 /** Put main's slider into the cached settings, leaving every other field as it is. */
 export function cacheAgentSlider(queryClient: QueryClient, saved: AppSettings): void {
@@ -38,21 +38,27 @@ export async function seedAgentSliderIfAbsent(
 
 /**
  * Seed from a model just chosen outside the composer (onboarding's provider
- * step). Its effort ladder comes from the catalog, read once; without catalog
- * word the model gets the Fast / Balanced / Smart seed.
+ * step). The provider comes from a fresh `providers:list` read, never a cached
+ * snapshot: a connection made a moment ago may not be cached yet, and without
+ * it the one-time seed would miss the model's effort ladder for good. Its
+ * reasoning flag comes from the catalog; without either the model gets the
+ * Fast / Balanced / Smart seed.
  */
 export async function seedAgentSliderForModel(
-  provider: Provider | undefined,
   providerId: string,
   model: string,
   queryClient?: QueryClient,
 ): Promise<AgentSliderSettings | undefined> {
-  let reasoning: boolean | undefined;
-  try {
-    reasoning = (await modelsApi.info(providerId, [model]))[model]?.reasoning;
-  } catch {
-    reasoning = undefined;
-  }
+  const [provider, reasoning] = await Promise.all([
+    providersApi.list().then(
+      (providers) => providers.find((candidate) => candidate.id === providerId),
+      () => undefined,
+    ),
+    modelsApi.info(providerId, [model]).then(
+      (info) => info[model]?.reasoning,
+      () => undefined,
+    ),
+  ]);
   const { levels } = composerThinkingLevels(provider, model, reasoning);
   return seedAgentSliderIfAbsent({ providerId, model }, levels, queryClient);
 }

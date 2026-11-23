@@ -1,5 +1,6 @@
 // Installs happy-dom and the fake IPC bridge; must stay the first import.
 import { emitBotTestNotification, installBotTestIpc } from "../main/bots/test-dom";
+import type { GenerationThinkingLevel } from "../shared/generation-thinking";
 import assert from "node:assert/strict";
 import { afterEach, test } from "node:test";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
@@ -706,8 +707,30 @@ test("external hide and reopen preserve State 2 mini-modal stage and draft witho
   }
 });
 
-test("an Agent Slider stop picked in Quick Chat sends its effort with the first message and the turn", async () => {
+test("an Agent Slider stop picked in Quick Chat sends its effort with the first message, the turn and later picks", async () => {
+  // A save can be held open (a pick just before Send) or refused (main busy).
+  let holdSave: Promise<void> | undefined;
+  let refuseSave = false;
+  const quickChat = (id: unknown, providerId: unknown, model: unknown, level?: unknown): Chat => ({
+    id: String(id),
+    workspaceId: "nows-ephemeral-1",
+    ephemeral: true,
+    title: "Think hard",
+    providerId: String(providerId),
+    model: String(model),
+    ...(typeof level === "string" ? { thinkingLevel: level as GenerationThinkingLevel } : {}),
+    messages: [{ id: "m-user-1", role: "user", content: "Think hard", createdAt: 10 }],
+    createdAt: 10,
+    updatedAt: 11,
+  });
   const { calls, qc } = mountFloatingApp({
+    "chats:setModel": async (id: unknown, providerId: unknown, model: unknown, level?: unknown) => {
+      if (holdSave) await holdSave;
+      if (refuseSave) throw new Error("This chat is busy.");
+      return quickChat(id, providerId, model, level);
+    },
+    // The follow-up runs on the Quick stop the pick just saved (no effort of its own).
+    "chats:appendMessage": (id: unknown) => quickChat(id, "lmstudio", "local-model"),
     "settings:get": () => ({
       lastProviderId: "lmstudio",
       lastModel: "local-model",
@@ -757,6 +780,123 @@ test("an Agent Slider stop picked in Quick Chat sends its effort with the first 
         (arg) => typeof arg === "object" && arg !== null && (arg as { thinkingLevel?: string }).thinkingLevel === "high",
       ),
       "the turn asks for the stop's effort",
+    );
+
+    // Once the chat exists, a stop is saved on the chat itself, so a handoff
+    // or reopen sees it; a stop without a level clears the chat's own level.
+    const chatId = String((create?.args[0] as { draftId: string }).draftId);
+    await act(async () => {
+      emitBotTestNotification("chat:done", { streamId: String(start?.args[0]), fullContent: "Done." });
+    });
+    const modalTrigger = await waitFor(() => {
+      const button = screen.getByRole("button", { name: /Deep on the Agent Slider/u }) as HTMLButtonElement;
+      assert.equal(button.disabled, false);
+      return button;
+    });
+    await act(async () => {
+      fireEvent.click(modalTrigger);
+    });
+    await act(async () => {
+      fireEvent.keyDown(await screen.findByRole("slider", { name: "Agent Slider" }), { key: "ArrowLeft" });
+    });
+    await waitFor(() => {
+      const save = calls.find((call) => call.channel === "chats:setModel");
+      assert.deepEqual(save?.args, [chatId, "lmstudio", "local-model", null]);
+    });
+    await waitFor(() =>
+      assert.match(modalTrigger.getAttribute("aria-label") ?? "", /Quick on the Agent Slider/u),
+    );
+
+    // Main reconciled the chat's level (a clamp): the slider follows what ran.
+    await act(async () => {
+      emitBotTestNotification("chats:metadata-updated", {
+        chatId,
+        title: "Think hard",
+        updatedAt: 20,
+        thinkingLevel: "high",
+      });
+    });
+    await waitFor(() =>
+      assert.match(modalTrigger.getAttribute("aria-label") ?? "", /Deep on the Agent Slider/u),
+    );
+
+    // Send right after a pick waits for the pick to be saved on the chat, so
+    // the turn and the chat's stored stop agree.
+    let releaseSave = () => {};
+    holdSave = new Promise<void>((resolve) => {
+      releaseSave = resolve;
+    });
+    const sliderOpen = async (trigger: HTMLElement) => {
+      if (!screen.queryByRole("slider", { name: "Agent Slider" })) {
+        await act(async () => {
+          fireEvent.click(trigger);
+        });
+      }
+      return screen.findByRole("slider", { name: "Agent Slider" });
+    };
+    const sliderClosed = async (trigger: HTMLElement) => {
+      if (screen.queryByRole("slider", { name: "Agent Slider" })) {
+        await act(async () => {
+          fireEvent.click(trigger);
+        });
+      }
+      await waitFor(() => assert.equal(screen.queryByRole("slider", { name: "Agent Slider" }), null));
+    };
+    const pickedQuick = await sliderOpen(modalTrigger);
+    await act(async () => {
+      fireEvent.keyDown(pickedQuick, { key: "ArrowLeft" });
+    });
+    await sliderClosed(modalTrigger);
+    const followUp = screen.getByTestId("quick-chat-input");
+    await waitFor(() => {
+      fireEvent.change(followUp, { target: { value: "Now quickly" } });
+      assert.equal((screen.getByTestId("quick-chat-send-btn") as HTMLButtonElement).disabled, false);
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("quick-chat-send-btn"));
+    });
+    assert.equal(
+      calls.some((call) => call.channel === "chats:appendMessage"),
+      false,
+      "the turn waits for the pick's save",
+    );
+    await act(async () => {
+      releaseSave();
+      holdSave = undefined;
+    });
+    await waitFor(() => assert.ok(calls.some((call) => call.channel === "chats:appendMessage")));
+    const saves = calls.filter((call) => call.channel === "chats:setModel");
+    assert.deepEqual(saves[saves.length - 1]?.args, [chatId, "lmstudio", "local-model", null]);
+    const turns = calls.filter((call) => call.channel === "chat:start");
+    const lastTurn = turns[turns.length - 1];
+    assert.equal(
+      lastTurn?.args.some(
+        (arg: unknown) => typeof arg === "object" && arg !== null && "thinkingLevel" in (arg as object),
+      ),
+      false,
+      "the follow-up runs on the stop just saved, which has no effort of its own",
+    );
+    await act(async () => {
+      emitBotTestNotification("chat:done", { streamId: String(lastTurn?.args[0]), fullContent: "Done." });
+    });
+
+    // Main refuses a pick: the slider shows the chat's own selection again.
+    refuseSave = true;
+    const quickTrigger = await waitFor(() => {
+      const button = screen.getByRole("button", { name: /on the Agent Slider/u }) as HTMLButtonElement;
+      assert.equal(button.disabled, false);
+      return button;
+    });
+    const refused = await sliderOpen(quickTrigger);
+    await act(async () => {
+      fireEvent.keyDown(refused, { key: "ArrowRight" });
+    });
+    await waitFor(() => {
+      const refusedSave = calls.filter((call) => call.channel === "chats:setModel").pop();
+      assert.deepEqual(refusedSave?.args, [chatId, "lmstudio", "local-model", "high"]);
+    });
+    await waitFor(() =>
+      assert.match(quickTrigger.getAttribute("aria-label") ?? "", /Quick on the Agent Slider/u),
     );
   } finally {
     qc.clear();

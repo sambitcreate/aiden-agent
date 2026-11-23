@@ -2,7 +2,7 @@ import "../main/bots/test-dom";
 import assert from "node:assert/strict";
 import { afterEach, test } from "node:test";
 import * as React from "react";
-import { act, cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { installBotTestIpc } from "../main/bots/test-dom";
 import { mountWithBotRouter } from "../main/bots/test-providers";
 import { useSettings } from "../lib/queries";
@@ -161,7 +161,7 @@ test("on a stop the thumb reads the stop, its model and effort; it always has a 
   assert.equal(slide.getAttribute("aria-valuenow"), "2");
   assert.equal(slide.getAttribute("aria-valuetext"), "Balanced, Mid Model");
   // The trigger shows the stop's name and still says which model runs.
-  const trigger = screen.getByRole("button", { name: /Choose a model/u });
+  const trigger = screen.getByRole("button", { name: /^Selected model:/u });
   assert.match(trigger.getAttribute("aria-label") ?? "", /Mid Model, Balanced on the Agent Slider/u);
   assert.match(trigger.textContent ?? "", /Balanced$/u);
 });
@@ -240,6 +240,22 @@ test("choosing a model for an unavailable stop saves it on the stop and moves th
   // The other stops are untouched.
   assert.deepEqual(saved?.stops.slice(0, 4), slider.stops.slice(0, 4));
   await waitFor(() => assert.equal(screen.queryByRole("slider"), null));
+});
+
+test("each stop that can't run has a keyboard path to choosing its model", async () => {
+  const { stops } = await openPopover({ agentSlider: slider });
+  await screen.findByRole("slider");
+  const fixes = within(screen.getByRole("list", { name: "Stops without a model to run" }));
+  assert.deepEqual(
+    fixes.getAllByRole("button").map((button) => button.textContent),
+    ["Locked · Sign in to Locked Cloud", "Spare · Choose a model"],
+  );
+  const spare = fixes.getByRole("button", { name: /^Spare/u });
+  spare.focus();
+  assert.equal(document.activeElement, spare, "the button takes keyboard focus");
+  fireEvent.click(spare);
+  assert.ok(await screen.findByRole("heading", { name: "Choose a model for Spare" }));
+  assert.equal(stops.length, 0, "opening reassign never moves the chat");
 });
 
 test("reset returns to the home stop and is off while the chat is already there", async () => {

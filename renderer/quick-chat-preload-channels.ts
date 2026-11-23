@@ -38,6 +38,8 @@ export const QUICK_CHAT_INVOKE_CHANNELS = new Set([
   "chats:get",
   "chats:createWithFirstMessage",
   "chats:appendMessage",
+  // An existing chat's model and Agent Slider effort (refused during a reply).
+  "chats:setModel",
   "chats:remove",
   "chats:promoteEphemeral",
   "chats:inspectAttachFiles",

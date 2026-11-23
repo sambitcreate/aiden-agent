@@ -85,6 +85,7 @@ test("core surfaces pass the WCAG A/AA axe gate and keep their accessible struct
       - dialog "Choose agent":
         - button /^Reset to /
         - slider "Agent Slider"
+        - list "Stops without a model to run"
         - separator
         - button /^Other models…/
         - button "Customize slider…"
