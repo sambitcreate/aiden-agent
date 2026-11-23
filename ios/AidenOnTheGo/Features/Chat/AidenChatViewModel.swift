@@ -1110,7 +1110,13 @@ final class AidenChatViewModel {
             clearProgressStateIfCredentialRevoked(error)
             if await coordinator.handleCredentialRevocation(error, context: context) { return }
             guard !isRemoved, coordinator.isLive(context) else { return }
-            if generation == transcriptGeneration, !isStarting, chat.messages.isEmpty { presentedError = error.localizedDescription }
+            // A screen closed mid-read cancels it; that's no failure to show.
+            // Not `aidenIsCancellation`: a rejected pin also surfaces as
+            // `URLError(.cancelled)`, and that one must be shown.
+            let screenClosed = Task.isCancelled || error is CancellationError
+            if generation == transcriptGeneration, !isStarting, chat.messages.isEmpty, !screenClosed {
+                presentedError = error.localizedDescription
+            }
         }
         await catalogRefresh
         await restoration

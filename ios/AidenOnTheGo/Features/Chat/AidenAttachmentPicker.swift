@@ -86,13 +86,16 @@ struct AidenAttachmentPhotoCommit {
     let assets: [PHAsset]
 }
 
+/// A wide landscape window, at regular width (an iPad, an open iPhone Duo),
+/// keeps the picker over a centered column. Decided by size class, not by the
+/// kind of device.
 struct AidenChatReadableLayout {
     static let landscapeWidthFraction: CGFloat = 0.5
 
     static func usesCenteredLandscapeColumn(
         containerSize: CGSize,
         windowSize: CGSize? = nil,
-        isPad: Bool = UIDevice.current.userInterfaceIdiom == .pad
+        widthIsRegular: Bool
     ) -> Bool {
         let referenceSize = if let windowSize,
                                windowSize.width > 0,
@@ -101,19 +104,19 @@ struct AidenChatReadableLayout {
         } else {
             containerSize
         }
-        return isPad && referenceSize.width >= 760 && referenceSize.width > referenceSize.height
+        return widthIsRegular && referenceSize.width >= 760 && referenceSize.width > referenceSize.height
     }
 
     static func contentWidth(
         containerSize: CGSize,
         windowSize: CGSize? = nil,
-        isPad: Bool = UIDevice.current.userInterfaceIdiom == .pad
+        widthIsRegular: Bool
     ) -> CGFloat {
         let width = max(1, containerSize.width)
         guard usesCenteredLandscapeColumn(
             containerSize: containerSize,
             windowSize: windowSize,
-            isPad: isPad
+            widthIsRegular: widthIsRegular
         ) else {
             return width
         }
@@ -130,13 +133,13 @@ struct AidenChatReadableLayout {
     static func horizontalInset(
         containerSize: CGSize,
         windowSize: CGSize? = nil,
-        isPad: Bool = UIDevice.current.userInterfaceIdiom == .pad
+        widthIsRegular: Bool
     ) -> CGFloat {
         (
             max(1, containerSize.width) - contentWidth(
                 containerSize: containerSize,
                 windowSize: windowSize,
-                isPad: isPad
+                widthIsRegular: widthIsRegular
             )
         ) / 2
     }
@@ -207,7 +210,7 @@ struct AidenAttachmentPickerLayout {
         windowSize: CGSize? = nil,
         mode: AidenAttachmentPickerMode,
         attachmentButtonCenter: CGPoint?,
-        isPad: Bool = UIDevice.current.userInterfaceIdiom == .pad
+        widthIsRegular: Bool
     ) -> Self {
         let containerWidth = max(1, containerSize.width)
         let containerHeight = max(1, containerSize.height)
@@ -215,17 +218,17 @@ struct AidenAttachmentPickerLayout {
         let centersLandscapeColumn = AidenChatReadableLayout.usesCenteredLandscapeColumn(
             containerSize: containerSize,
             windowSize: windowSize,
-            isPad: isPad
+            widthIsRegular: widthIsRegular
         )
         let readableWidth = AidenChatReadableLayout.contentWidth(
             containerSize: containerSize,
             windowSize: windowSize,
-            isPad: isPad
+            widthIsRegular: widthIsRegular
         )
         let readableInset = AidenChatReadableLayout.horizontalInset(
             containerSize: containerSize,
             windowSize: windowSize,
-            isPad: isPad
+            widthIsRegular: widthIsRegular
         )
         let usesWidePresentation = expanded && containerWidth >= 700
         let edgePadding: CGFloat = usesWidePresentation ? 28 : 12
@@ -569,6 +572,7 @@ struct AidenAttachmentPickerOverlay: View {
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @Environment(\.aidenPalette) private var palette
     @Environment(\.aidenReduceMotion) private var reduceMotion
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @Bindable var picker: AidenAttachmentPickerState
     @StateObject private var cameraController = AidenAttachmentCameraController()
     @State private var windowSize: CGSize?
@@ -590,7 +594,8 @@ struct AidenAttachmentPickerOverlay: View {
                 containerSize: proxy.size,
                 windowSize: windowSize,
                 mode: picker.mode,
-                attachmentButtonCenter: attachmentButtonCenter
+                attachmentButtonCenter: attachmentButtonCenter,
+                widthIsRegular: horizontalSizeClass == .regular
             )
 
             ZStack(alignment: .bottomLeading) {

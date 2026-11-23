@@ -842,7 +842,7 @@ private enum AidenDemoContent {
     private static let answers = [
         "I found the cause. The upload test waits on a timer that the fixture never advances.\n\n- Advance the clock in the fixture\n- Drop the fixed sleep\n\n```swift\nawait clock.advance(by: .seconds(5))\n```",
         "Here is a first pass.\n\n1. Ship the inbox rework\n2. Cut the old shell\n3. Fold Bots into the same list\n\nThe risky item is step two.",
-        "The review had three themes: spacing, empty states, and the composer. Spacing is mostly done.",
+        "The review had three themes: spacing, empty states, and the composer. Spacing is mostly done: see the [spacing notes](https://example.com/spacing).",
     ]
 
     /// `GET /chats/{id}/read-aloud` for the chat's reply, mid-generation.

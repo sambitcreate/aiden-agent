@@ -11,6 +11,37 @@ final class AidenDesignTokenTests: XCTestCase {
         }
     }
 
+    /// The row the detail beside a list shows stands out from its card and
+    /// from the canvas in every theme, the ink accent's included.
+    func testTheSelectedRowFillStandsOutOnItsCardAndOnTheCanvas() {
+        for (name, p) in allPalettes() {
+            let opacity = AidenListRowBackground.selectedFillOpacity(p)
+            for ground in [p.raisedHex, p.canvasHex] {
+                let selected = Color.mixHex(ground, p.foregroundHex, fraction: opacity)
+                XCTAssertGreaterThanOrEqual(
+                    Color.contrastRatio(selected, ground), 1.2,
+                    "\(name): selected \(selected) on \(ground)"
+                )
+            }
+        }
+    }
+
+    /// A switch that is on shows it: the white thumb stands out from the
+    /// on-track, and the track stands out from every ground a switch sits on
+    /// (the palette's canvas and raised rows, and a system grouped form's page
+    /// and cells, which some settings screens keep).
+    func testASwitchOnTrackShowsItsThumbAndStandsOutFromItsGround() {
+        for (name, p) in allPalettes() {
+            let track = p.switchOnTrackHex
+            XCTAssertGreaterThanOrEqual(Color.contrastRatio(track, "#FFFFFF"), 1.5, "\(name): thumb on \(track)")
+            let isDark = Color.relativeLuminance(p.canvasHex) <= 0.5
+            let systemGrounds = isDark ? ["#000000", "#1C1C1E"] : ["#F2F2F7", "#FFFFFF"]
+            for ground in [p.canvasHex, p.raisedHex] + systemGrounds {
+                XCTAssertGreaterThanOrEqual(Color.contrastRatio(track, ground), 3, "\(name): \(track) on \(ground)")
+            }
+        }
+    }
+
     /// The Inbox section headers and their counts are footnote text in
     /// `secondary`, on the canvas in both widths, and secondary text also sits on
     /// raised rows. Weight doesn't change contrast, so the colour has to pass.
@@ -22,6 +53,57 @@ final class AidenDesignTokenTests: XCTestCase {
                     4.5,
                     "\(name): \(p.secondaryHex) on \(ground)"
                 )
+            }
+        }
+    }
+
+    /// The accent is text too: the machine pill's count, toolbar glyphs, the
+    /// Catch Up icon, unread dots. It reads on every ground a list puts it on.
+    func testAccentMeetsFourPointFiveToOneOnCanvasSidebarAndRaised() {
+        for (name, p) in allPalettes() {
+            for ground in [p.canvasHex, p.sidebarHex, p.raisedHex] {
+                XCTAssertGreaterThanOrEqual(
+                    p.contrastRatio(foregroundHex: p.accentHex, backgroundHex: ground),
+                    4.5,
+                    "\(name): accent \(p.accentHex) on \(ground)"
+                )
+            }
+        }
+    }
+
+    /// A prominent button's label on its solid fill, near-black and near-white
+    /// accents included.
+    func testSolidFillContentMeetsFourPointFiveToOneOnItsFill() {
+        for (name, p) in allPalettes() {
+            for tone in [AidenSolidFillTone.accent, .danger] {
+                let fill = p.solidFill(tone)
+                XCTAssertGreaterThanOrEqual(
+                    p.contrastRatio(foregroundHex: fill.contentHex, backgroundHex: fill.fillHex),
+                    4.5,
+                    "\(name) \(tone): \(fill.contentHex) on \(fill.fillHex)"
+                )
+                XCTAssertNotEqual(fill.pressedHex, fill.fillHex, "\(name) \(tone): a press shows no change")
+            }
+        }
+    }
+
+    /// The default theme's accent is ink, not a hue: dark on light, light on
+    /// dark, and its channels within a few steps of one another. Status
+    /// colours keep their hue.
+    func testTheDefaultAccentIsMutedInkThatFollowsTheScheme() {
+        func channels(_ hex: String) -> [Int] {
+            let digits = Array(hex.dropFirst())
+            return stride(from: 0, to: 6, by: 2).map { Int(String(digits[$0..<$0 + 2]), radix: 16)! }
+        }
+        for scheme in [ColorScheme.light, .dark] {
+            let p = AidenThemeCatalog.palette(preset: .aiden, scheme: scheme)
+            let accent = channels(p.accentHex)
+            XCTAssertLessThanOrEqual(accent.max()! - accent.min()!, 12, "\(scheme): \(p.accentHex) has a hue")
+            let canvasIsLight = Color.relativeLuminance(p.canvasHex) > 0.5
+            XCTAssertEqual(Color.relativeLuminance(p.accentHex) < 0.2, canvasIsLight, "\(scheme): \(p.accentHex) on \(p.canvasHex)")
+            for status in [p.successHex, p.warningHex, p.dangerHex] {
+                let c = channels(status)
+                XCTAssertGreaterThan(c.max()! - c.min()!, 60, "\(scheme): \(status) lost its hue")
             }
         }
     }
