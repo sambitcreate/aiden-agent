@@ -173,6 +173,13 @@ export function FloatingChatApp() {
   // Read synchronously by model picks: once Send starts, a pick can't overtake
   // the selection that send captured.
   const sendingRef = React.useRef(false);
+  // A stop reassignment still saving: Send waits so the turn runs on that stop.
+  const [selectionSaving, setSelectionSavingState] = React.useState(false);
+  const selectionSavingRef = React.useRef(false);
+  const setSelectionSaving = React.useCallback((value: boolean) => {
+    selectionSavingRef.current = value;
+    setSelectionSavingState(value);
+  }, []);
   const setSending = React.useCallback((value: boolean) => {
     sendingRef.current = value;
     setSendingState(value);
@@ -609,7 +616,7 @@ export function FloatingChatApp() {
   // Drain next queued follow-up automatically once idle and without errors.
   const drainingQueueRef = React.useRef(false);
   React.useEffect(() => {
-    if (isGenerating || sending || error || !chat || queuedMessages.length === 0) return;
+    if (isGenerating || sending || selectionSaving || error || !chat || queuedMessages.length === 0) return;
     if (drainingQueueRef.current) return;
     drainingQueueRef.current = true;
     const drainIntent = generationIntentRef.current;
@@ -649,11 +656,12 @@ export function FloatingChatApp() {
       .finally(() => {
         drainingQueueRef.current = false;
       });
-  }, [chat, error, isGenerating, queuedMessages, selectedModel, sending, startTurnStream]);
+  }, [chat, error, isGenerating, queuedMessages, selectedModel, selectionSaving, sending, startTurnStream]);
 
   const handleSend = async () => {
     const content = text.trim();
     if (!content && attachments.length === 0) return;
+    if (selectionSavingRef.current) return;
     if (!selectedModel.providerId || !selectedModel.model) {
       toast.info("Choose a model before sending.");
       return;
@@ -1012,6 +1020,8 @@ export function FloatingChatApp() {
             }}
             isGenerating={false}
             sending={sending}
+            selectionSaving={selectionSaving}
+            onSelectionSavingChange={setSelectionSaving}
             onSend={() => void handleSend()}
             onStop={handleStop}
             onExpand={() => void handleExpand()}
@@ -1276,6 +1286,8 @@ export function FloatingChatApp() {
             targetMode={targetMode}
             isGenerating={isGenerating}
             sending={sending}
+            selectionSaving={selectionSaving}
+            onSelectionSavingChange={setSelectionSaving}
             onSend={() => void handleSend()}
             onStop={handleStop}
             textareaRef={textareaRef}

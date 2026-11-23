@@ -3,7 +3,7 @@ import { emitBotTestNotification, installBotTestIpc } from "../main/bots/test-do
 import type { GenerationThinkingLevel } from "../shared/generation-thinking";
 import assert from "node:assert/strict";
 import { afterEach, test } from "node:test";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { TooltipProvider } from "../components/ui";
 import { AppCapabilitiesProvider, DISABLED_APP_CAPABILITIES } from "../lib/app-capabilities";
@@ -712,6 +712,9 @@ test("an Agent Slider stop picked in Quick Chat sends its effort with the first 
   let holdSave: Promise<void> | undefined;
   let releaseSave = () => {};
   let refuseSave = false;
+  // A stop reassignment's slider save, which can be held open too.
+  let holdSlider: Promise<void> | undefined;
+  let releaseSlider = () => {};
   const quickChat = (id: unknown, providerId: unknown, model: unknown, level?: unknown): Chat => ({
     id: String(id),
     workspaceId: "nows-ephemeral-1",
@@ -732,6 +735,10 @@ test("an Agent Slider stop picked in Quick Chat sends its effort with the first 
     },
     // The follow-up runs on the Quick stop the pick just saved (no effort of its own).
     "chats:appendMessage": (id: unknown) => quickChat(id, "lmstudio", "local-model"),
+    "settings:setAgentSlider": async (next: unknown) => {
+      if (holdSlider) await holdSlider;
+      return { lastProviderId: "lmstudio", lastModel: "local-model", agentSlider: next };
+    },
     "settings:get": () => ({
       lastProviderId: "lmstudio",
       lastModel: "local-model",
@@ -903,7 +910,61 @@ test("an Agent Slider stop picked in Quick Chat sends its effort with the first 
     await waitFor(() =>
       assert.match(quickTrigger.getAttribute("aria-label") ?? "", /Quick on the Agent Slider/u),
     );
+
+    // A stop reassigned just before Send: Send waits until the stop is saved
+    // and the chat has moved onto it, so the turn runs on the reassigned stop.
+    refuseSave = false;
+    holdSlider = new Promise<void>((resolve) => {
+      releaseSlider = resolve;
+    });
+    await sliderOpen(quickTrigger);
+    const fixes = within(await screen.findByRole("list", { name: "Stops without a model to run" }));
+    await act(async () => {
+      fireEvent.click(fixes.getByRole("button", { name: /^Spare/u }));
+    });
+    await screen.findByRole("heading", { name: "Choose a model for Spare" });
+    await act(async () => {
+      fireEvent.click(screen.getAllByRole("option")[0]!);
+    });
+    await waitFor(() => assert.ok(calls.some((call) => call.channel === "settings:setAgentSlider")));
+    const appendCount = () => calls.filter((call) => call.channel === "chats:appendMessage").length;
+    const appendsBefore = appendCount();
+    const savesBeforeReassign = calls.filter((call) => call.channel === "chats:setModel").length;
+    const onSpare = screen.getByTestId("quick-chat-input");
+    fireEvent.change(onSpare, { target: { value: "On the spare stop" } });
+    assert.equal(
+      (screen.getByTestId("quick-chat-send-btn") as HTMLButtonElement).disabled,
+      true,
+      "Send waits for the reassignment",
+    );
+    await act(async () => {
+      fireEvent.keyDown(onSpare, { key: "Enter" });
+    });
+    assert.equal(appendCount(), appendsBefore, "Enter waits too");
+    await act(async () => {
+      releaseSlider();
+      holdSlider = undefined;
+    });
+    await waitFor(() =>
+      assert.equal(calls.filter((call) => call.channel === "chats:setModel").length, savesBeforeReassign + 1),
+    );
+    await waitFor(() =>
+      assert.equal((screen.getByTestId("quick-chat-send-btn") as HTMLButtonElement).disabled, false),
+    );
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("quick-chat-send-btn"));
+    });
+    await waitFor(() => assert.equal(appendCount(), appendsBefore + 1));
+    const lastCall = (channel: string) =>
+      calls.reduce((found, call, index) => (call.channel === channel ? index : found), -1);
+    const reassignSave = lastCall("chats:setModel");
+    assert.deepEqual(calls[reassignSave]?.args, [chatId, "lmstudio", "local-model", null]);
+    assert.ok(
+      reassignSave < lastCall("chats:appendMessage"),
+      "the chat moved onto the reassigned stop before the turn",
+    );
   } finally {
+    releaseSlider();
     releaseSave();
     qc.clear();
   }
