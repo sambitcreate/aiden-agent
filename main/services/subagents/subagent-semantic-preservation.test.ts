@@ -371,3 +371,132 @@ for (const name of ["OTP", "PASSCODE", "CVV", "SEED", "mnemonic", "signature"]) 
     }
   });
 }
+
+// Every value below is a fake. A key split across two lines must hide both
+// halves, while a sentence after a hidden value keeps reading as text.
+const WRAPPED_SECRETS = [
+  {
+    name: "a secret setting",
+    text: "API_SECRET=FAKEabcd0123456789FAKE\nefgh9876543210FAKEtail",
+    halves: ["FAKEabcd0123", "efgh9876543210"],
+  },
+  {
+    name: "a quoted value",
+    text: 'API_SECRET="FAKEabcd0123456789FAKE\nefgh9876543210FAKEtail"',
+    halves: ["FAKEabcd0123", "efgh9876543210"],
+  },
+  {
+    name: "an AWS secret key",
+    text: "aws_secret_access_key=FAKEabcd0123456789FAKE\n0123FAKEfake0123FAKE",
+    halves: ["FAKEabcd0123", "0123FAKEfake"],
+  },
+  {
+    name: "a bearer header",
+    text: "Authorization: Bearer FAKEabcd0123456789FAKE\nFAKEcontinuation0123456789abc",
+    halves: ["FAKEabcd0123", "FAKEcontinuation"],
+  },
+  {
+    name: "a JWT",
+    text: "token=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIi\nOiJGQUtFMDEyMyJ9.FAKEsig0123456789abcdefFAKE",
+    halves: ["eyJhbGciOiJI", "OiJGQUtFMDEy", "FAKEsig0123"],
+  },
+  {
+    name: "a project key cut mid-token",
+    text: `token=FAKEabcd0123456789FAKE ${["sk", "proj", "FAKEFAK"].join("-")}\nEFAKEFAKEFAKEFAKEFAKE0123456789abcdef`,
+    halves: ["FAKEabcd0123", "EFAKEFAKEFAKE"],
+  },
+];
+
+for (const { name, text, halves } of WRAPPED_SECRETS) {
+  test(`both halves of ${name} wrapped over two lines are hidden from the helper's words`, () => {
+    const safe = sanitizeSubagentWorkText(`Found it:\n${text}\nDone.`);
+    for (const half of halves) assert.ok(!safe.includes(half), `${half} leaked: ${safe}`);
+    assert.match(safe, /^Found it:\n/u);
+    assert.match(safe, /\nDone\.$/u);
+  });
+}
+
+test("text after a hidden value keeps reading as text, including a closing code fence", () => {
+  assert.equal(sanitizeSubagentWorkText("API_SECRET=FAKEabcd0123456789FAKE\nDone."), "API_SECRET=[REDACTED]\nDone.");
+  const fenced = sanitizeSubagentWorkText(
+    "```\nAPI_SECRET=FAKEabcd0123456789FAKE\n```\nSee src/config.ts for the loader.",
+  );
+  assert.equal(fenced, "```\nAPI_SECRET=[REDACTED]\n```\nSee src/config.ts for the loader.");
+});
+
+const FAKE_PHRASE = "fake abandon ability able about above absent absorb abstract absurd abuse access";
+
+for (const text of [
+  `Seed phrase: ${FAKE_PHRASE}`,
+  `Recovery phrase: ${FAKE_PHRASE}`,
+  `- Backup phrase: ${FAKE_PHRASE}`,
+  `seed phrase:\n  ${FAKE_PHRASE}`,
+  `Seed: ${FAKE_PHRASE}.`,
+  `recovery_phrase: ${FAKE_PHRASE}`,
+  `Recovery phrase: ${FAKE_PHRASE.split(" ").map((word, index) => `${index + 1}. ${word}`).join(" ")}`,
+]) {
+  test(`a recovery phrase is hidden from the helper's words and the panel: ${JSON.stringify(text.slice(0, 18))}`, () => {
+    for (const safe of [sanitizeSubagentWorkText(`Wallet notes.\n${text}\nDone.`), sanitizeSubagentSnapshotText(`Wallet notes.\n${text}\nDone.`)]) {
+      for (const words of ["abandon ability", "absurd abuse", "access"]) {
+        assert.ok(!safe.includes(words), `${words} leaked: ${safe}`);
+      }
+      assert.match(safe, /^Wallet notes\.\n/u);
+      assert.match(safe, /\nDone\.$/u);
+    }
+  });
+}
+
+test("recovery codes are hidden from the helper's words and the panel", () => {
+  const value = "Recovery codes: FAKE-1a2b3c FAKE-4d5e6f";
+  for (const safe of [sanitizeSubagentWorkText(value), sanitizeSubagentSnapshotText(value)]) {
+    assert.ok(!safe.includes("1a2b3c") && !safe.includes("4d5e6f"), safe);
+    assert.match(safe, /^Recovery codes: /u);
+  }
+});
+
+test("the panel hides the same one-line secret values as the helper's saved words", () => {
+  for (const [value, secret] of [
+    ["private_key: FAKEprivFAKEpriv0123", "FAKEpriv"],
+    ["Signature: FAKEsigDEADBEEF0123", "FAKEsig"],
+    ['"otp": "731905"', "731905"],
+    ['"cvv": "381"', "381"],
+  ] as const) {
+    for (const safe of [sanitizeSubagentWorkText(value), sanitizeSubagentSnapshotText(value)]) {
+      assert.ok(!safe.includes(secret), `${secret} leaked: ${safe}`);
+    }
+  }
+  assert.equal(sanitizeSubagentSnapshotText("Passcode: 482913 then press OK"), "Passcode: [REDACTED] then press OK");
+});
+
+test("short secret names still hide real codes, wherever they sit on the line", () => {
+  for (const [value, expected] of [
+    ["OTP: 731905", "OTP: [REDACTED]"],
+    ["PIN: 4821", "PIN: [REDACTED]"],
+    ["CVV: 123", "CVV: [REDACTED]"],
+    ["Passcode: 482913", "Passcode: [REDACTED]"],
+    ["OTP: 731905 (expires in 5 min)", "OTP: [REDACTED] (expires in 5 min)"],
+    ["The CVV: 123 test card works", "The CVV: [REDACTED] test card works"],
+    ["seed: FAKEabcdef0123456789xyz", "seed: [REDACTED]"],
+  ] as const) {
+    assert.equal(sanitizeSubagentWorkText(value), expected);
+  }
+});
+
+test("prose and config that only mention a short secret name, a random seed or a signature type survive the helper filter", () => {
+  for (const value of [
+    "OTP: sent by SMS",
+    "the OTP flow sends a code. OTP: the user enters it on the next screen.",
+    "CVV: 3 digits on the back",
+    '"seed": 1337',
+    "seed=1234 gives repeatable shuffles",
+    "Seed: 12345",
+    "random_seed: 42",
+    "SEED=42",
+    'signature: "sha256"',
+    "otp: 'string'",
+    "PIN: required for unlock",
+    "Passcode: 6 digits",
+  ]) {
+    assert.equal(sanitizeSubagentWorkText(value), value);
+  }
+});

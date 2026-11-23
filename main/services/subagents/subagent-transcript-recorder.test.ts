@@ -9,7 +9,12 @@ import {
   type SubagentTranscriptV1,
 } from "../../../renderer/shared/subagent-transcript.js";
 import { SubagentTranscriptRecordings } from "./subagent-supervisor-core.js";
-import { SubagentTranscriptRecorder, streamingVisibleText } from "./subagent-transcript-recorder.js";
+import {
+  SUBAGENT_TRANSCRIPT_FINAL_SAVE_ATTEMPTS,
+  SUBAGENT_TRANSCRIPT_RETRIES_BEFORE_PAUSE,
+  SubagentTranscriptRecorder,
+  streamingVisibleText,
+} from "./subagent-transcript-recorder.js";
 
 // Assembled at runtime so no literal key shape sits in the source.
 const FAKE_KEY = ["sk", "proj", "Q7wX2mN9pL4kR8tV1yB6cZ3hJ5gF0dS7aE2uI9oP"].join("-");
@@ -267,7 +272,7 @@ test("a failed save streams nothing, keeps the change and tries again", async ()
   // The retry backs off, so a second failure needs a longer wait.
   clock.advance(1_000);
   await settle();
-  assert.ok(errors.length >= 2, "each failed save is reported");
+  assert.equal(errors.length, 1, "a run of failed saves is reported once");
   assert.equal(published.length, 0, "nothing is streamed past what is saved");
 
   failing = false;
@@ -303,11 +308,90 @@ test("the final save is retried a bounded number of times", async () => {
   });
   recorder.messageStarted();
   recorder.textDelta("Hello.");
-  await recorder.finish("failed");
+  // The retry waits do not hold the process open, so the test holds it.
+  const keepAlive = setInterval(() => {}, 1_000);
+  try {
+    await recorder.finish("failed");
+  } finally {
+    clearInterval(keepAlive);
+  }
   assert.equal(attempts, 3);
   // Finishing again returns the same settlement and does not try again.
   await recorder.finish("failed");
   assert.equal(attempts, 3);
+});
+
+test("a store that keeps failing is reported once and left alone until something changes", async () => {
+  const clock = fakeClock();
+  const errors: unknown[] = [];
+  let attempts = 0;
+  let failing = true;
+  const recorder = new SubagentTranscriptRecorder({
+    runId: "run-1",
+    task: "Task.",
+    sink: {
+      persist: async () => {
+        attempts += 1;
+        if (failing) throw new Error("permission denied");
+      },
+    },
+    onError: (error) => errors.push(error),
+    now: clock.now,
+    setTimer: clock.setTimer,
+    clearTimer: clock.clearTimer,
+  });
+  await settle();
+  recorder.messageStarted();
+  recorder.textDelta("Hello.");
+  // Ten minutes with no new events.
+  for (let minute = 0; minute < 600; minute += 1) {
+    clock.advance(1_000);
+    await settle();
+  }
+  assert.equal(attempts, SUBAGENT_TRANSCRIPT_RETRIES_BEFORE_PAUSE, "retries stop after a few failures");
+  assert.equal(clock.pending(), 0, "no retry stays armed");
+  assert.equal(errors.length, 1, "the failing store is reported once");
+
+  // A new event tries again, and the save that works carries everything.
+  failing = false;
+  recorder.textDelta(" More.");
+  clock.advance(10_000);
+  await settle();
+  assert.equal(attempts, SUBAGENT_TRANSCRIPT_RETRIES_BEFORE_PAUSE + 1);
+  assert.equal(errors.length, 1);
+
+  // A later failure after a success is a new run, so it is reported again.
+  failing = true;
+  recorder.textDelta(" Again.");
+  clock.advance(10_000);
+  await settle();
+  assert.equal(errors.length, 2);
+});
+
+test("the final save's retry wait does not hold the process open", async () => {
+  let unrefs = 0;
+  const recorder = new SubagentTranscriptRecorder({
+    runId: "run-1",
+    task: "Task.",
+    sink: {
+      persist: async (_transcript, final) => {
+        if (final) throw new Error("disk full");
+      },
+    },
+    intervalMs: 1,
+    setTimer: (callback, ms) => {
+      // Counted but kept referenced, so the test itself stays alive.
+      const handle = setTimeout(callback, ms);
+      handle.unref = () => {
+        unrefs += 1;
+        return handle;
+      };
+      return handle;
+    },
+  });
+  recorder.messageStarted();
+  await recorder.finish("failed");
+  assert.equal(unrefs, SUBAGENT_TRANSCRIPT_FINAL_SAVE_ATTEMPTS - 1);
 });
 
 test("a slow save keeps one save in flight and the throttle intact", async () => {

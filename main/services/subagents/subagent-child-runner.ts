@@ -433,6 +433,7 @@ export async function runSubagentChild(input: RunSubagentChildInput): Promise<Su
   const parentAbort = new Promise<{ kind: "parent_aborted" }>((resolve) => {
     if (!input.signal) return;
     const abort = () => {
+      input.transcript?.cancelling();
       constructionCancellation.abort(
         input.signal?.reason ?? new Error("Parent generation cancelled."),
       );
@@ -692,6 +693,7 @@ export async function runSubagentChild(input: RunSubagentChildInput): Promise<Su
       prepareNextTurnWithContext: ({ context }) => {
         throwIfParentAborted(input.signal);
         if (deadlineElapsed()) {
+          input.transcript?.cancelling();
           child!.cancel(new Error("Subagent child deadline exceeded."));
           throw new Error("Subagent child deadline exceeded.");
         }
@@ -730,23 +732,31 @@ export async function runSubagentChild(input: RunSubagentChildInput): Promise<Su
       // one report response, and deny it before any approval or effect dispatch.
       finishTurn: () => reportingWarning ? { action: "end" } : undefined,
       beforeToolCall: async (context, signal) => {
-        if (reportingWarning) return { block: true, terminate: true, reason: "Only a final text report is permitted." };
-        const workspaceResult = await workspaceWriteApproval?.beforeToolCall(context, signal);
-        if (workspaceResult !== undefined) return workspaceResult;
-        const mutationResult = await mcpMutationApproval?.beforeToolCall(context, signal);
-        if (mutationResult !== undefined) return mutationResult;
-        const shellResult = await shellApproval?.beforeToolCall(context, signal);
-        if (shellResult !== undefined) return shellResult;
-        return outboundApproval?.beforeToolCall(context, signal);
+        const decide = async () => {
+          if (reportingWarning) return { block: true, terminate: true, reason: "Only a final text report is permitted." };
+          const workspaceResult = await workspaceWriteApproval?.beforeToolCall(context, signal);
+          if (workspaceResult !== undefined) return workspaceResult;
+          const mutationResult = await mcpMutationApproval?.beforeToolCall(context, signal);
+          if (mutationResult !== undefined) return mutationResult;
+          const shellResult = await shellApproval?.beforeToolCall(context, signal);
+          if (shellResult !== undefined) return shellResult;
+          return outboundApproval?.beforeToolCall(context, signal);
+        };
+        const decision = await decide();
+        // A refused call shows as blocked in the helper's conversation, as in the main chat.
+        if (decision?.block) input.transcript?.toolBlocked(context.toolCall.id);
+        return decision;
       },
       initialMessages: input.context.messages,
       onStarting: () => input.telemetry?.starting(),
     });
     if (deadlineElapsed()) {
+      input.transcript?.cancelling();
       child.cancel(new Error("Subagent child deadline exceeded."));
       return timedOutResult(input.request, policy.timeLimit);
     }
     if (input.signal?.aborted) {
+      input.transcript?.cancelling();
       child.cancel(
         input.signal.reason instanceof Error
           ? input.signal.reason
@@ -810,6 +820,7 @@ export async function runSubagentChild(input: RunSubagentChildInput): Promise<Su
     const stopForLimit = (warning: string) => {
       if (limitWarning) return;
       limitWarning = warning;
+      input.transcript?.cancelling();
       child.cancel(new Error(warning));
     };
     unsubscribe = child.agent.subscribe(async (event) => {
@@ -937,6 +948,7 @@ export async function runSubagentChild(input: RunSubagentChildInput): Promise<Su
       );
     const outcome = await Promise.race([prompt, deadline, parentAbort]);
     if (outcome.kind === "parent_aborted") {
+      input.transcript?.cancelling();
       child.cancel(
         input.signal?.reason instanceof Error
           ? input.signal.reason
@@ -955,6 +967,7 @@ export async function runSubagentChild(input: RunSubagentChildInput): Promise<Su
       throw new Error("Parent generation cancelled.");
     }
     if (outcome.kind === "timed_out" || deadlineElapsed()) {
+      input.transcript?.cancelling();
       child.cancel(new Error("Subagent child deadline exceeded."));
       if (!(await boundedDrain(prompt, policy.cancellationGraceMs))) {
         cleanupPending = true;

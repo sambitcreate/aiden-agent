@@ -127,8 +127,8 @@ Nothing yet. This PR records each helper's task, messages and steps while it run
    new `main/services/subagents/subagent-transcript-recorder.ts`; hooked into `subagent-child-runner.ts` where it already subscribes to the helper's events
    - Feed the helper's events into `GenerationTimelineProjector`, the main chat's step builder, plus a text collector.
    - Send at most about 4 live updates a second, and always send the final state.
-   - Text and every step field (label, target, detail) go through the parent/helper credential filter, the one Phase 1 uses for a stopped helper's partial work: API keys, tokens, private key blocks and secret-named values (`PASSWORD:`, `OTP: 731905`, `PIN=4821`, a `SEED:` phrase) are hidden, and file paths are kept. It does not use the panel's stricter summary filter, because this is the helper's actual work. While a message streams, its unfinished last word and any open `-----BEGIN` block are held back until they settle.
-   - Each revision is saved before it is streamed. A failed save streams nothing and is retried with backoff; the final save is retried a bounded number of times. One save runs at a time.
+   - Text and every step field (label, target, detail) go through the parent/helper credential filter, the one Phase 1 uses for a stopped helper's partial work: API keys, tokens, private key blocks and secret-named values (`PASSWORD:`, `OTP: 731905`, `PIN=4821`, a `SEED:` phrase) are hidden, and file paths are kept. A secret value that wraps onto the next line is hidden there too, and so is a recovery phrase of 12 or more lowercase words under a secret-shaped name. Ordinary prose and settings such as `OTP: sent by SMS`, `seed=1234` or `signature: "sha256"` stay readable. It does not use the panel's stricter summary filter, because this is the helper's actual work. While a message streams, its unfinished last word and any open `-----BEGIN` block are held back until they settle.
+   - Each revision is saved before it is streamed. A failed save streams nothing and is retried with backoff; the final save is retried a bounded number of times. One save runs at a time. A store that keeps failing is reported once, and after 5 failures in a row it is left alone until something changes.
    - Edits show their line counts (+N −M), as in the main chat.
    - Helpers running in the separate model process (`subagent-inference-process`) report through the same event stream, so this covers them too.
 3. ### Keep it with the chat
@@ -141,7 +141,7 @@ Nothing yet. This PR records each helper's task, messages and steps while it run
 4. ### Let the panel read it, live and saved
 
    `main/handlers/subagents.ts`, `main/services/subagents/subagent-history-read-core.ts`, `main/services/llm-client.ts`, `renderer/lib/generation-stream.ts`, `renderer/lib/chat-terminal-sync.ts`, preload
-   - Saved: extend the existing `subagents:get` read to return the transcript alongside the summary, only after it proves ownership: the chat belongs to this window, the run belongs to that chat and workspace, and the chat's history references the run.
+   - Saved: extend the existing `subagents:get` read to return the transcript alongside the summary, only after it proves ownership: the request comes from an active app window, the run belongs to that chat and workspace, and the chat's history references the run. Nothing yet ties a chat to one window, so any open app window can read a chat it names.
    - Live: a new `chat:subagent-transcript` stream message (run, revision, changed entries), sent the same way as `chat:subagents` today.
    - A late joiner, such as someone who opens the panel mid-run, reads the saved copy, then applies newer live revisions.
 5. ### Bots and the Aiden server
@@ -155,11 +155,12 @@ Nothing yet. This PR records each helper's task, messages and steps while it run
 - A key such as `sk-…` in the helper's text is hidden in the transcript, while a file path stays readable.
 - A key in a tool's command or search is hidden in the step; a whole or cut-off private key block never reaches a save or the stream.
 - A run that goes past 2 MB drops its oldest steps and sets the trimmed flag, and what was dropped stays dropped in later saves.
-- A failed save streams nothing and is retried; a slow save keeps one save in flight.
-- A cancelled or timed-out helper marks its unfinished tools cancelled, and the result is handed back without waiting for the final save.
+- A failed save streams nothing and is retried; a slow save keeps one save in flight; a store that keeps failing is reported once and then left alone until something changes.
+- A cancelled or timed-out helper marks its unfinished tools cancelled, and the result is handed back without waiting for the final save, through the real supervisor.
+- A tool the helper was refused shows as blocked, and a tool that ends while the helper is stopping shows as cancelled, as in the main chat.
 - An edit's line counts reach its step, on the desktop and under `aiden serve`.
 - Deleting a chat removes its helpers' transcripts, including after a crash mid-delete.
-- The read refuses another window's chat, another chat's or workspace's run, and a run the chat's history does not reference.
+- The read refuses another chat's or workspace's run, and a run the chat's history does not reference.
 
 Register any new test file in the matching `package.json` test script, as the repo rules require.
 
@@ -253,6 +254,13 @@ Removing the clock doesn't remove every limit, so a confused helper still can't 
 | Helpers at once | 2 (1 on a local model), the rest wait | Same, and waiting costs no time in chats |
 | Helpers per request | Up to 4 | Same |
 | Spending and usage limits | Apply | Same |
+
+A saved helper conversation differs from the main chat in a few small ways:
+
+- MCP tools show their generic label, not the server-specific one.
+- Each message's text is recorded on its own, so its text anchors always start at 0. This matches what the main chat computes for the same message.
+- Thinking text is not saved, so thinking segments are not reconciled at the end of a message.
+- When a chat reply finishes, the main chat waits at most 250 ms for its helpers' final saves. A slower save finishes in the background.
 
 ## Rules for every PR
 

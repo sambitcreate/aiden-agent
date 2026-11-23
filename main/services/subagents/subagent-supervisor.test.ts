@@ -27,7 +27,7 @@ import {
   runSubagentChild,
   subagentPartialWorkNotes,
 } from "./subagent-child-runner.js";
-import { SubagentRuntimeRegistry, type SubagentRuntimeChild } from "./child-agent-runtime.js";
+import { SubagentRuntimeRegistry, type SubagentChildSpec, type SubagentRuntimeChild } from "./child-agent-runtime.js";
 import {
   BOT_SUBAGENT_LIMIT_REACHED_RESULT,
   SubagentReplyClock,
@@ -35,6 +35,8 @@ import {
   type PreparedSubagentRun,
 } from "./subagent-supervisor.js";
 import { chatSurfaceHooks } from "../agent-surface-hooks.js";
+import { SubagentTranscriptRecorder } from "./subagent-transcript-recorder.js";
+import type { SubagentTranscriptMessageEntry, SubagentTranscriptV1 } from "../../../renderer/shared/subagent-transcript.js";
 import { createForegroundSubagentPersistenceV2 } from "./subagent-foreground-persistence-v2.js";
 import type { ProductionSubagentRunStore } from "./subagent-run-store-production.js";
 import { createSubagentTool } from "./subagent-tool.js";
@@ -3792,4 +3794,152 @@ test("each foreground subagent counts once, and a batch over budget counts nothi
   sent.length = 0;
   await assert.rejects(supervisor.execute(request(["3"])), /launch budget exceeded/i);
   assert.deepEqual(sent, []);
+});
+
+function transcriptSaves(finalSaveMs: number) {
+  const saved: Array<{ transcript: SubagentTranscriptV1; final: boolean }> = [];
+  return {
+    saved,
+    finals: () => saved.filter((entry) => entry.final),
+    sink: {
+      async persist(transcript: SubagentTranscriptV1, final: boolean) {
+        if (final) await new Promise((resolve) => setTimeout(resolve, finalSaveMs));
+        saved.push({ transcript, final });
+      },
+    },
+  };
+}
+
+function transcriptMessages(transcript: SubagentTranscriptV1): SubagentTranscriptMessageEntry[] {
+  return transcript.entries.filter((entry): entry is SubagentTranscriptMessageEntry => entry.kind === "message");
+}
+
+function toolStatuses(transcript: SubagentTranscriptV1): Array<[string | undefined, string]> {
+  return transcriptMessages(transcript).flatMap((message) =>
+    message.steps.flatMap((step) => (step.kind === "tool" ? [[step.target, step.status] as [string | undefined, string]] : [])));
+}
+
+for (const hangs of [false, true]) {
+  test(`a timed-out helper's result does not wait for its conversation's slow final save (${hangs ? "runner never returns" : "runner hands over partial work"})`, async () => {
+    const saves = transcriptSaves(500);
+    const supervisor = new SubagentSupervisor({
+      generationId: `transcript-timeout-${hangs ? "hung" : "partial"}`,
+      ...TEST_SUPERVISOR_SCOPE,
+      runtime: runtime(),
+      thinkingLevel: "high",
+      workspaceRoot: "/workspace",
+      permission: "full",
+      inheritedCeiling: SUBAGENT_READ_TOOL_NAMES,
+      policy: { treeDeadlineMs: 100, cancellationGraceMs: 10 },
+      transcripts: ({ runId, task }) => new SubagentTranscriptRecorder({ runId, task, sink: saves.sink }),
+      runChild: async ({ request: task, signal, transcript }) => {
+        const message = assistant("Read the soup section.");
+        transcript?.observe({ type: "message_start", message } as AgentEvent);
+        transcript?.observe({
+          type: "message_update",
+          message,
+          assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: "Read the soup section. ", partial: message },
+        } as AgentEvent);
+        transcript?.observe({ type: "tool_execution_start", toolCallId: "read-1", toolName: "read_file", args: { path: "salad.md" } } as AgentEvent);
+        await new Promise<void>((resolve) => signal?.addEventListener("abort", () => resolve(), { once: true }));
+        // This runner ignores the stop past its grace period and never returns.
+        if (hangs) return await new Promise<SubagentTaskResult>(() => {});
+        return {
+          role: task.role,
+          label: task.label,
+          status: "interrupted",
+          summary: "Read the soup section.",
+          warning: "The child was interrupted before completion.",
+        };
+      },
+    });
+
+    const result = await supervisor.execute(request(["Cookbook"]));
+    assert.match(result, /Status: timed_out/u);
+    if (!hangs) assert.match(result, /Read the soup section\./u, "the partial work is handed over");
+    assert.equal(saves.finals().length, 0, "the result did not wait for the final save");
+
+    // Finishing a chat turn waits only briefly for the conversation.
+    await supervisor.flush({ transcriptWaitMs: 20 });
+    assert.equal(saves.finals().length, 0, "the capped wait returns before the slow save");
+
+    await supervisor.flush();
+    const [final] = saves.finals();
+    assert.ok(final, "a full flush waits for the final save");
+    assert.equal(transcriptMessages(final.transcript)[0]?.text, "Read the soup section.");
+    assert.deepEqual(toolStatuses(final.transcript), [["salad.md", "cancelled"]]);
+  });
+}
+
+test("a helper's refused tool shows as blocked and a tool ending during its stop as cancelled", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-subagent-transcript-"));
+  try {
+    const saves = transcriptSaves(0);
+    const recorder = new SubagentTranscriptRecorder({ runId: "run-refused", task: "Edit the cookbook.", sink: saves.sink });
+    const parent = new AbortController();
+    let spec: SubagentChildSpec | undefined;
+    const control = fakeChild(async ({ emit }) => {
+      const message = assistant("Editing the cookbook.");
+      await emit({ type: "message_start", message } as AgentEvent);
+      await emit({ type: "message_end", message } as AgentEvent);
+      const toolCall = { type: "toolCall" as const, id: "write-1", name: "write_file", arguments: { path: "cookbook.html" } };
+      // Pi asks the child's gate first; a refused call still ends with an error result.
+      const decision = await spec!.beforeToolCall!(
+        { toolCall, args: toolCall.arguments, assistantMessage: message, context: { systemPrompt: "", messages: [], tools: [] } } as never,
+        undefined,
+      );
+      assert.equal(decision?.block, true);
+      await emit({ type: "tool_execution_start", toolCallId: "write-1", toolName: "write_file", args: toolCall.arguments } as AgentEvent);
+      await emit({ type: "tool_execution_end", toolCallId: "write-1", toolName: "write_file", isError: true, result: { content: [] } } as AgentEvent);
+      await emit({ type: "tool_execution_start", toolCallId: "read-1", toolName: "read_file", args: { path: "salad.md" } } as AgentEvent);
+      parent.abort(new Error("The person stopped the chat."));
+      await emit({ type: "tool_execution_end", toolCallId: "read-1", toolName: "read_file", isError: true, result: { content: [] } } as AgentEvent);
+    });
+    await runSubagentChild({
+      authority: TEST_CHILD_AUTHORITY,
+      context: TEST_CHILD_CONTEXT,
+      groupId: "transcript-refused",
+      runtime: runtime(),
+      thinkingLevel: "high",
+      workspaceRoot: root,
+      permission: "ask",
+      inheritedCeiling: SUBAGENT_READ_TOOL_NAMES,
+      request: { role: "scout", label: "Cookbook", task: "Edit the cookbook." },
+      signal: parent.signal,
+      transcript: recorder,
+      onCleanupFailure: () => {},
+      prepareWorkspaceWriteApproval: () => ({
+        beforeToolCall: async () => ({ block: true, reason: "The person declined this change." }),
+        execute: async () => ({ content: [], details: null }),
+        shutdown: async () => {},
+      }),
+      dependencies: {
+        buildTools: async () => ({
+          tools: [
+            {
+              name: "write_file",
+              label: "Write File",
+              description: "Attended write.",
+              parameters: { type: "object" },
+              execute: async () => ({ content: [], details: null }),
+            } as unknown as AgentTool,
+          ],
+          outboundApprovalBindings: [],
+          workspaceWriteApprovalBindings: [{ toolName: "write_file" as const, operation: "write" as const }],
+          mcpMutationApprovalBindings: [],
+          shellApprovalBindings: [],
+        }),
+        createChild: (childSpec) => {
+          spec = childSpec;
+          return control.child;
+        },
+        recordUsage: async () => {},
+      },
+    }).catch(() => undefined);
+    await recorder.finish("cancelled");
+    const final = saves.finals()[0]!.transcript;
+    assert.deepEqual(toolStatuses(final), [["cookbook.html", "blocked"], ["salad.md", "cancelled"]]);
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
 });

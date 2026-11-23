@@ -27,6 +27,11 @@ export const SUBAGENT_TRANSCRIPT_FLUSH_INTERVAL_MS = 250;
 export const SUBAGENT_TRANSCRIPT_FINAL_SAVE_ATTEMPTS = 3;
 /** Repeated failed saves wait up to this many flush intervals between tries. */
 const MAX_FAILURE_BACKOFF_STEPS = 20;
+/**
+ * After this many failed saves in a row the recorder stops retrying on its
+ * own; the next change, or the final save, tries again.
+ */
+export const SUBAGENT_TRANSCRIPT_RETRIES_BEFORE_PAUSE = 5;
 const MAX_CACHED_OFFSETS = 256;
 const MAX_CACHED_STEP_TEXTS = 2_048;
 
@@ -122,6 +127,12 @@ export class SubagentTranscriptRecorder {
   private dirty = true;
   private finished = false;
   private failures = 0;
+  /** Retries paused after repeated failures, until something changes. */
+  private paused = false;
+  /** The run is being stopped: tools that end from now on were cancelled. */
+  private cancelRequested = false;
+  /** Calls a permission or policy check refused before they ran. */
+  private readonly blockedTools = new Set<string>();
   private timer: unknown = null;
   private lastFlushAt = Number.NEGATIVE_INFINITY;
   private flushing: Promise<void> | null = null;
@@ -179,19 +190,33 @@ export class SubagentTranscriptRecorder {
         case "tool_execution_update":
           this.toolRunning(event.toolCallId);
           return;
-        case "tool_execution_end":
+        case "tool_execution_end": {
+          // The main chat's order: a stop wins, then a refusal, then the error flag.
+          const blocked = this.blockedTools.delete(event.toolCallId);
+          const status = this.cancelRequested ? "cancelled" : blocked ? "blocked" : event.isError ? "failed" : "completed";
           this.toolFinished(
             event.toolCallId,
-            event.isError ? "failed" : "completed",
-            event.isError ? safeToolIssueDetails(event.toolName, "failed", event.result) : event.result?.details,
+            status,
+            status === "completed" ? event.result?.details : safeToolIssueDetails(event.toolName, status, event.result),
           );
           return;
+        }
         default:
           return;
       }
     } catch (error) {
       this.onError(error);
     }
+  }
+
+  /** The helper is being stopped; a tool that ends from here on shows as cancelled. */
+  cancelling(): void {
+    this.cancelRequested = true;
+  }
+
+  /** A permission or policy check refused this call; its end shows as blocked. */
+  toolBlocked(toolCallId: string): void {
+    if (!this.finished) this.blockedTools.add(toolCallId);
   }
 
   messageStarted(): void {
@@ -295,8 +320,8 @@ export class SubagentTranscriptRecorder {
     this.changed(message);
   }
 
-  /** `details` is the tool result's own details, or safe issue details for a failure. */
-  toolFinished(toolCallId: string, status: "completed" | "failed", details?: unknown): void {
+  /** `details` is the tool result's own details, or safe issue details for any other outcome. */
+  toolFinished(toolCallId: string, status: "completed" | "failed" | "blocked" | "cancelled", details?: unknown): void {
     const message = this.messageForTool(toolCallId);
     if (!message?.projector) return;
     message.projector.toolFinished(toolCallId, status, details);
@@ -330,7 +355,13 @@ export class SubagentTranscriptRecorder {
   private async finalFlush(): Promise<void> {
     while (this.flushing) await this.flushing;
     for (let attempt = 0; attempt < SUBAGENT_TRANSCRIPT_FINAL_SAVE_ATTEMPTS && this.dirty; attempt += 1) {
-      if (attempt > 0) await new Promise<void>((resolve) => this.setTimer(resolve, this.intervalMs * attempt));
+      if (attempt > 0) {
+        await new Promise<void>((resolve) => {
+          // The wait is bounded by flush(); it never holds the process open.
+          const handle = this.setTimer(resolve, this.intervalMs * attempt) as { unref?: () => void } | null;
+          if (typeof handle?.unref === "function") handle.unref();
+        });
+      }
       await this.runFlush(true);
     }
   }
@@ -363,12 +394,13 @@ export class SubagentTranscriptRecorder {
   private changed(message?: MessageState): void {
     if (message) message.version += 1;
     this.dirty = true;
+    this.paused = false;
     this.schedule();
   }
 
   /** Arm the next flush, unless one is armed, running, or the run finished. */
   private schedule(): void {
-    if (this.finished || this.timer !== null || this.flushing || !this.dirty) return;
+    if (this.finished || this.paused || this.timer !== null || this.flushing || !this.dirty) return;
     const interval = this.intervalMs * Math.min(MAX_FAILURE_BACKOFF_STEPS, 2 ** this.failures);
     const wait = Math.max(0, this.lastFlushAt + interval - this.now());
     this.timer = this.setTimer(() => {
@@ -425,13 +457,17 @@ export class SubagentTranscriptRecorder {
       await this.sink.persist(transcript, final);
     } catch (error) {
       // Nothing is streamed past what is saved: the change stays pending and
-      // the next flush tries again with the same base revision.
+      // the next flush tries again with the same base revision. A run of
+      // failures is reported once, and a store that keeps failing (a full
+      // disk, a denied folder) is left alone until something changes.
       this.failures += 1;
       this.dirty = true;
-      this.onError(error);
+      if (this.failures >= SUBAGENT_TRANSCRIPT_RETRIES_BEFORE_PAUSE) this.paused = true;
+      if (this.failures === 1) this.onError(error);
       return;
     }
     this.failures = 0;
+    this.paused = false;
     const baseRevision = this.revision;
     this.revision = transcript.revision;
     this.publishedJson = json;

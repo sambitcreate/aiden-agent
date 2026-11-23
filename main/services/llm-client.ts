@@ -357,7 +357,7 @@ import { endRunAfterIgnoredToolRecovery } from "./assistant/tool-loop-guard.js";
 import type { ToolApprovalDetails } from "../../renderer/shared/assistant.js";
 import { DEFAULT_SUBAGENT_CANCELLATION_GRACE_MS } from "./subagents/subagent-child-runner.js";
 import { assistantSettingsPages } from "../../renderer/lib/settings-section.js";
-import { SubagentSupervisor } from "./subagents/subagent-supervisor.js";
+import { SUBAGENT_TRANSCRIPT_TURN_END_WAIT_MS, SubagentSupervisor } from "./subagents/subagent-supervisor.js";
 import { chatActivityRegistry } from "./chat-activity.js";
 import { interruptedWaits } from "./interrupted-waits-main.js";
 import { clipInterruptedWaitSummary } from "./interrupted-reply.js";
@@ -3768,8 +3768,9 @@ export const llmClient = {
       }
       try {
         // The inspector store is authoritative. Never announce terminal chat
-        // completion before every accepted child snapshot is durable.
-        await subagentSupervisor?.flush();
+        // completion before every accepted child snapshot is durable. Helper
+        // conversations get a short wait only; their saves finish behind it.
+        await subagentSupervisor?.flush({ transcriptWaitMs: SUBAGENT_TRANSCRIPT_TURN_END_WAIT_MS });
         const chat = await chatStore.appendMessage(
           params.chatId,
           {

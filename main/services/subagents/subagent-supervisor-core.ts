@@ -165,6 +165,12 @@ export type SubagentTranscriptFactory = (input: {
   task: string;
 }) => SubagentTranscriptRecorder | undefined;
 
+/**
+ * How long finishing a chat turn waits for helper conversations' final saves.
+ * A slow disk must not hold the reply; the saves finish in the background.
+ */
+export const SUBAGENT_TRANSCRIPT_TURN_END_WAIT_MS = 250;
+
 /** A stopped or timed-out helper's open steps were cancelled, not failed. */
 export function transcriptStatus(status: SubagentTaskResult["status"]): SubagentTranscriptFinishStatus {
   if (status === "completed") return "completed";
@@ -618,9 +624,28 @@ export class SubagentSupervisor {
     return this.input.projector?.snapshot() ?? [];
   }
 
-  /** Wait for pending run snapshots and every helper conversation's final save. */
-  async flush(): Promise<void> {
-    await Promise.all([this.input.projector?.flush(), this.recordings?.flush()]);
+  /**
+   * Wait for pending run snapshots and every helper conversation's final
+   * save. `transcriptWaitMs` caps the wait for the conversations only: their
+   * saves carry on afterwards, while run snapshots are always awaited.
+   */
+  async flush(options: { transcriptWaitMs?: number } = {}): Promise<void> {
+    await Promise.all([this.input.projector?.flush(), this.flushTranscripts(options.transcriptWaitMs)]);
+  }
+
+  private async flushTranscripts(waitMs: number | undefined): Promise<void> {
+    const saves = this.recordings?.flush();
+    if (!saves || waitMs === undefined) return saves;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const cap = new Promise<void>((resolve) => {
+      timer = setTimeout(resolve, Math.max(0, waitMs));
+      timer.unref?.();
+    });
+    try {
+      await Promise.race([saves, cap]);
+    } finally {
+      clearTimeout(timer);
+    }
   }
 
   /**

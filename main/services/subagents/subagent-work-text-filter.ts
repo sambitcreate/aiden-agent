@@ -12,15 +12,30 @@ const PARTIAL_SCAN_LIMIT_NOTICE = "[Additional partial findings omitted after sa
 const PRIVATE_KEY_BEGIN = /-----BEGIN [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?-----/gu;
 const PRIVATE_KEY_END = /-----END [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?-----/u;
 
+const ENDS_IN_REDACTION = /\[REDACTED(?: [A-Z -]+)?\]["'`]?[,;]?$/u;
+/** One opaque token of credential characters, such as the wrapped tail of a key. */
+const OPAQUE_CONTINUATION = /^(?=[^\s]*\d)(?=[^\s]*[A-Za-z])[A-Za-z0-9+/=._~-]{8,}["'`]?[,;]?$/u;
+
 /**
- * Join lines for the split-key checks. A line that already ends in a
- * redaction marker is a closed value, so the next line starts a new token
- * instead of reading as that value's continuation (`SECRET=[REDACTED]Done.`).
+ * Whether a line reads as text of its own rather than as the rest of a value
+ * wrapped from the line above: it is empty or only punctuation, has a space
+ * inside it, or is one capitalised word ending in punctuation, like `Done.`.
+ */
+function readsAsProse(line: string): boolean {
+  const trimmed = line.trim();
+  return !/[A-Za-z0-9]/u.test(trimmed) || /\s/u.test(trimmed) || /^[A-Z][a-z]+[.!?]$/u.test(trimmed);
+}
+
+/**
+ * Join lines for the split-key checks. A line that ends in a redaction marker
+ * is a closed value only when the next line reads as prose
+ * (`SECRET=[REDACTED]` then `Done.`). Anything else is joined straight on, so
+ * the wrapped rest of the value still reads as part of it.
  */
 function joinForSplitCheck(lines: readonly string[]): string {
   let joined = "";
   for (const line of lines) {
-    joined += /\[REDACTED(?: CREDENTIAL)?\]$/u.test(joined) ? `\n${line}` : line;
+    joined += ENDS_IN_REDACTION.test(joined) && readsAsProse(line) ? `\n${line}` : line;
   }
   return joined;
 }
@@ -97,12 +112,18 @@ export function sanitizePartialFindingsForParent(reports: readonly string[]): st
   }
   const report = safeReports.map((lines) => lines.join("\n")).join("\n\n");
   const lines = report.split(/\r\n|[\n\r\u2028\u2029]/u);
-  const safeLines = lines.map((line) => {
+  const safeLines: string[] = [];
+  for (const line of lines) {
     const directSafe = redactSecretNamedSameLineValues(sanitizeCredentialText(line));
-    return containsHighConfidenceSecretIncludingEncodings(directSafe)
+    const previous = safeLines[safeLines.length - 1];
+    // The opaque rest of a value wrapped from a line that was just hidden,
+    // such as the second half of a key or token, is hidden with it.
+    const wrappedTail = previous !== undefined && ENDS_IN_REDACTION.test(previous) &&
+      OPAQUE_CONTINUATION.test(line.trim());
+    safeLines.push(wrappedTail || containsHighConfidenceSecretIncludingEncodings(directSafe)
       ? REDACTED_CREDENTIAL
-      : directSafe;
-  });
+      : directSafe);
+  }
   // A sensitive assignment key can be split across lines or settled messages.
   // Find the shortest unsafe adjacent span so unrelated source-path lines stay.
   if (containsHighConfidenceSecretIncludingEncodings(joinForSplitCheck(safeLines))) {

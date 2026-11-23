@@ -53,6 +53,7 @@ export async function runCliSubagent(agentDir: string, input: RunSubagentChildIn
       if (++toolCalls > limits.tools) { stop(new Error("Subagent tool budget exhausted.")); return; }
       // The helper's saved conversation shows each tool once it is allowed to run.
       let recorded = false;
+      let refused = false;
       const operation = (async () => {
         try {
           if (typeof event.id !== "string" || event.id.length > 256) throw new Error("Invalid child tool call identity.");
@@ -69,7 +70,7 @@ export async function runCliSubagent(agentDir: string, input: RunSubagentChildIn
             toolAbort.signal.addEventListener("abort", cancelled, { once: true });
             if (toolAbort.signal.aborted) cancelled();
             beforeTool(tool.name, event.id, args, { toolCall, args, assistantMessage, context: { messages, tools } }, toolAbort.signal)
-              .then(resolve, reject).finally(() => toolAbort.signal.removeEventListener("abort", cancelled));
+              .then(resolve, (error: unknown) => { refused = true; reject(error); }).finally(() => toolAbort.signal.removeEventListener("abort", cancelled));
           });
           if (toolAbort.signal.aborted) throw new Error("Subagent cancelled before tool execution.");
           input.telemetry?.toolStarted(tool.name);
@@ -82,7 +83,9 @@ export async function runCliSubagent(agentDir: string, input: RunSubagentChildIn
           if (recorded) record((transcript) => transcript.toolFinished(event.id, "completed", (result as { details?: unknown }).details));
           reply({ type: "tool-result", id: event.id, result });
         } catch (error) {
-          if (recorded) record((transcript) => transcript.toolFinished(event.id, "failed", safeToolIssueDetails(event.name, "failed", { content: [{ type: "text", text: error instanceof Error ? error.message : String(error) }] })));
+          // As in the main chat: a stop wins, then a refusal, then the failure.
+          const status = toolAbort.signal.aborted ? "cancelled" as const : refused ? "blocked" as const : "failed" as const;
+          if (recorded) record((transcript) => transcript.toolFinished(event.id, status, safeToolIssueDetails(event.name, status, { content: [{ type: "text", text: error instanceof Error ? error.message : String(error) }] })));
           reply({ type: "tool-result", id: event.id, error: error instanceof Error ? error.message : String(error) });
         }
       })();

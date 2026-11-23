@@ -979,7 +979,7 @@ function blockValueStartsOnNextLine(value: string, start: number): boolean {
  * these words, so `API_KEY`, `APITOKEN`, `apiToken` and `PASSPHRASE` count.
  */
 const BLOCK_NAME_SECRET_ENDING =
-  /(?:key|token|secret|password|passwd|passphrase|passcode|pwd|jwt|cred|creds|credential|cookie|otp|totp|cvv|seed|mnemonic|private|signature)s?$/u;
+  /(?:key|token|secret|password|passwd|passphrase|passcode|pwd|jwt|cred|creds|credential|cookie|otp|totp|cvv|seed|mnemonic|private|signature|(?:seed|recovery|secret|backup|wallet|mnemonic)phrase|(?:recovery|backup)code)s?$/u;
 /**
  * A plain word, such as a prose heading, is a hint only when it is exactly one
  * of these, so `Password:` and `Credentials:` count but `Keys:`, `Tokens:`,
@@ -1036,12 +1036,51 @@ function labelBlockLooksLikeCredential(block: string): boolean {
     // A base64 body wrapped over several lines, like a key or certificate.
     (lines.length > 1 && lines.every((line) => MULTILINE_BASE64_LINE.test(line))) ||
     // A recovery phrase: twelve or more lowercase words and nothing else.
-    (lines.length >= 1 && RECOVERY_PHRASE.test(lines.join(" ")))
+    (lines.length >= 1 && isRecoveryPhrase(lines.join(" ")))
   );
 }
 
 const MULTILINE_BASE64_LINE = /^[A-Za-z0-9+/]{16,}={0,2}$/u;
-const RECOVERY_PHRASE = /^[a-z]{2,12}(?: [a-z]{2,12}){11,}$/u;
+const RECOVERY_WORD = /^[a-z]{2,12}$/u;
+const RECOVERY_NUMBERING = /^\d{1,2}[.):]?$/u;
+
+/**
+ * A wallet-style recovery phrase: twelve or more lowercase words and nothing
+ * else, allowing commas between them, numbering such as `1. word 2. word`, and
+ * punctuation at the end.
+ */
+function isRecoveryPhrase(text: string): boolean {
+  const words = text.trim().replace(/[.,;:!]+$/u, "").split(/[\s,]+/u)
+    .filter((word) => word && !RECOVERY_NUMBERING.test(word));
+  return words.length >= 12 && words.every((word) => RECOVERY_WORD.test(word));
+}
+
+/**
+ * A two-word secret name whose last word alone is ordinary, such as
+ * `Seed phrase`, `recovery phrase` or `Backup codes`. Returns where the name
+ * starts when the word before `name` (ending at `offset`) completes one.
+ */
+function twoWordSecretNameStart(value: string, offset: number, name: string): number | undefined {
+  const last = name.toLowerCase();
+  const first = /^phrases?$/u.test(last)
+    ? /(?:^|[^A-Za-z0-9_])((?:seed|recovery|secret|backup|wallet|mnemonic)[ \t]+)$/iu
+    : /^codes?$/u.test(last)
+      ? /(?:^|[^A-Za-z0-9_])((?:recovery|backup)[ \t]+)$/iu
+      : undefined;
+  if (!first) return undefined;
+  const match = first.exec(value.slice(Math.max(0, offset - 32), offset));
+  return match ? offset - match[1]!.length : undefined;
+}
+
+/**
+ * Names whose values are often ordinary: a random seed, a signature or OTP
+ * algorithm, a `private` flag. They hide only values that look secret.
+ */
+const WEAK_SECRET_NAME = /(?:seed|signature|otp|totp|cvv|pin|private)s?$/u;
+/** A short lowercase identifier such as `sha256` or `string`. */
+const IDENTIFIER_LIKE_VALUE = /^[a-z][a-z0-9]*(?:[-_][a-z0-9]+)*$/u;
+/** A long opaque token, like a key or a wallet seed in hex or base64. */
+const OPAQUE_SEED_VALUE = /^(?!\d+$)[A-Za-z0-9+/=_.-]{16,}$/u;
 
 /** `NAME: value` or `NAME=value` on one line, where the value starts on that line. */
 const SAME_LINE_NAMED_VALUE =
@@ -1078,12 +1117,17 @@ function secretValueIsShown(value: string): boolean {
 
 /**
  * Hide the value of a secret-named setting written on one line, such as
- * `OTP: 731905`, `PIN=4821` or `"cvv": "123"`. Setting-shaped and quoted
- * names hide the rest of the line, and `=` hides one token. A plain prose
- * word such as `Password:` counts only at the start of a line or list item,
- * and hides a lone value, a value with a digit, or a whole recovery phrase. References (`$VAR`, `process.env.X`, a call), paths,
- * booleans and placeholders stay readable, and so do labels without a secret
- * name, like `NOTE:` or `Design tokens:`.
+ * `OTP: 731905`, `PIN=4821`, `"cvv": "123"` or `Seed phrase: <words>`.
+ * Setting-shaped and quoted names hide the rest of the line, and `=` hides one
+ * token. A plain prose word such as `Password:` counts only at the start of a
+ * line or list item, and hides a lone value, a value with a digit, or a whole
+ * recovery phrase. A short all-caps word such as `OTP` or `CVV` counts
+ * anywhere, but reads as prose when several words without a digit follow
+ * (`OTP: sent by SMS`). A seed hides only a recovery phrase or a long opaque
+ * token, never a number, and weak names such as `signature` keep a short
+ * identifier like `"sha256"`. References (`$VAR`, `process.env.X`, a call),
+ * paths, booleans and placeholders stay readable, and so do labels without a
+ * secret name, like `NOTE:` or `Design tokens:`.
  */
 export function redactSecretNamedSameLineValues(value: string): string {
   if (!value.includes(":") && !value.includes("=")) return value;
@@ -1094,10 +1138,15 @@ export function redactSecretNamedSameLineValues(value: string): string {
     if (offset < cursor) continue;
     const quoted = match[3]!.length > 0;
     const name = match[4]!;
-    if (!blockNameHasSecretHint(name)) continue;
-    const settingShaped = quoted || blockNameIsSettingShaped(name);
+    const twoWordStart = quoted ? undefined : twoWordSecretNameStart(value, offset, name);
+    if (twoWordStart === undefined && !blockNameHasSecretHint(name)) continue;
+    const nameStart = twoWordStart ?? offset;
+    const normalized = name.toLowerCase().replace(/[_-]/gu, "");
+    const shortCaps = !quoted && twoWordStart === undefined && /^[A-Z]{2,4}$/u.test(name);
+    const settingShaped = !shortCaps && twoWordStart === undefined && (quoted || blockNameIsSettingShaped(name));
     const equals = match[2]!.trimEnd().endsWith("=");
-    if (!settingShaped && !equals && !PLAIN_NAME_PREFIX.test(value.slice(Math.max(0, offset - 64), offset))) continue;
+    if (!settingShaped && !shortCaps && !equals &&
+      !PLAIN_NAME_PREFIX.test(value.slice(Math.max(0, nameStart - 64), nameStart))) continue;
     const valueStart = offset + match[2]!.length;
     const quotedValue = /["'`]/u.test(value[valueStart] ?? "");
     // Code such as `const pin = readPin()` stays; a quoted literal still hides.
@@ -1106,13 +1155,22 @@ export function redactSecretNamedSameLineValues(value: string): string {
     while (lineEnd < value.length && !/[\r\n\u2028\u2029]/u.test(value[lineEnd]!)) lineEnd += 1;
     const line = value.slice(0, lineEnd);
     const rest = line.slice(valueStart).trim();
-    const phrase = RECOVERY_PHRASE.test(rest);
-    const valueEnd = secretValueEnd(line, valueStart, (settingShaped && !equals) || phrase);
+    const phrase = isRecoveryPhrase(rest);
+    // A list of recovery or backup codes hides as a whole once one has a digit.
+    const codeList = twoWordStart !== undefined && /^codes?$/iu.test(name) && /\d/u.test(rest.split(/\s/u)[0]!);
+    const valueEnd = secretValueEnd(line, valueStart, (settingShaped && !equals) || phrase || codeList);
     const secret = value.slice(valueStart, valueEnd);
     if (valueEnd <= valueStart || secretValueIsShown(secret)) continue;
+    const unquotedSecret = secret.trim().replace(/^["'`]|["'`]$/gu, "");
+    if (!phrase && twoWordStart === undefined && WEAK_SECRET_NAME.test(normalized)) {
+      // A seed is a secret only as a recovery phrase or a long opaque token.
+      if (/seeds?$/u.test(normalized) && !/mnemonic|phrase/u.test(normalized) &&
+        !OPAQUE_SEED_VALUE.test(unquotedSecret)) continue;
+      if (unquotedSecret.length <= 16 && IDENTIFIER_LIKE_VALUE.test(unquotedSecret)) continue;
+    }
     // After a prose word, a value followed by more words is a sentence, such
     // as `Token: the parser emits it`, unless the word carries a digit.
-    if (!settingShaped && !equals && !phrase && !quotedValue &&
+    if (!settingShaped && !equals && !phrase && !codeList && !quotedValue &&
       secret.trim() !== rest && !/\d/u.test(secret)) continue;
     redacted += `${value.slice(cursor, valueStart)}[REDACTED]`;
     cursor = valueEnd;
@@ -1136,7 +1194,8 @@ export function redactSensitiveNextLineBlocks(value: string): string {
     const offset = match.index;
     if (offset === undefined || offset < cursor) continue;
     const name = match[2]!;
-    if (!blockNameHasSecretHint(name)) continue;
+    const nameOffset = offset + match[0].indexOf(name);
+    if (!blockNameHasSecretHint(name) && twoWordSecretNameStart(value, nameOffset, name) === undefined) continue;
     const blockStart = offset + match[0].length;
     const valueEnd = indentedEnvironmentValueEnd(value, blockStart);
     if (valueEnd <= blockStart) continue;
@@ -1216,8 +1275,12 @@ function sanitizeVariant(value: string, includeEnvironment: boolean): string {
   // Subagent text only: the shared credential filter, which main-chat
   // compaction also uses, leaves prose blocks alone.
   const blockSafe = redactSensitiveNextLineBlocks(value);
+  // Renderer snapshots also hide a secret-named value written on one line,
+  // such as `Passcode: 482913`, as the saved helper conversation does.
   const environmentSafe = includeEnvironment
-    ? redactEnvironmentAssignments(blockSafe).replace(/(\[REDACTED ENVIRONMENT VALUE\])\]+/gu, "$1")
+    ? redactSecretNamedSameLineValues(
+      redactEnvironmentAssignments(blockSafe).replace(/(\[REDACTED ENVIRONMENT VALUE\])\]+/gu, "$1"),
+    )
     : blockSafe;
   return sanitizePaths(sanitizePaths(environmentSafe));
 }
