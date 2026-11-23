@@ -189,7 +189,7 @@ export interface AgentSliderComposerState {
 
 /**
  * Where a composer's chat sits on the slider, without display names: enough
- * to hide the effort control on a stop and to step with ⌥⌘[ / ⌥⌘]. Absent
+ * to hide the effort control on a stop that sets it and to step with ⌥⌘[ / ⌥⌘]. Absent
  * until a slider is saved.
  */
 export function agentSliderComposerState(
@@ -200,6 +200,16 @@ export function agentSliderComposerState(
   if (!slider) return undefined;
   const views = agentSliderStopViews(slider, inventory, NO_LABELS);
   return { views, position: agentSliderPosition(slider, views, selection) };
+}
+
+/**
+ * Whether the chat's stop sets the effort, so the composer's effort control
+ * hides. A stop without a level leaves effort to the model's own setting, and
+ * Custom shows the control as before.
+ */
+export function agentSliderStopSetsEffort(state: AgentSliderComposerState | undefined): boolean {
+  if (!state || state.position.custom) return false;
+  return Boolean(state.views[state.position.stopIndex]?.thinkingLevel);
 }
 
 /** The stop a step shortcut moves to, or undefined when it goes nowhere. */
