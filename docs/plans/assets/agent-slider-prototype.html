@@ -739,7 +739,7 @@ activeStopIndex(slider, chatSelection)      <span class="c">// -1 = Custom</span
     $('pv-model').setAttribute('aria-label', shown >= 0 ? 'Change model for ' + label + ': ' + modelText : 'Choose another model: ' + modelText);
     thumb.setAttribute('aria-valuemin', '1');
     thumb.setAttribute('aria-valuemax', String(n));
-    if (shown >= 0) thumb.setAttribute('aria-valuenow', String(shown + 1)); else thumb.removeAttribute('aria-valuenow');
+    thumb.setAttribute('aria-valuenow', String((shown >= 0 ? shown : homeIndex()) + 1));
     thumb.setAttribute('aria-valuetext', valuetext);
     if (ui.generating) thumb.setAttribute('aria-disabled', 'true'); else thumb.removeAttribute('aria-disabled');
 
@@ -1098,7 +1098,7 @@ activeStopIndex(slider, chatSelection)      <span class="c">// -1 = Custom</span
           '<select id="eff-' + s.id + '" data-field="effort" aria-label="Effort for ' + esc(s.label) + '"' + (m && m.levels.length ? '' : ' disabled') + '>' + effortFor(s) + '</select>' +
         '</div>' +
         '<div class="ed-tail">' +
-          '<label class="home" title="Where ↺ returns and new chats start"><input type="radio" name="home-stop" id="home-' + s.id + '" data-field="home"' + (s.id === state.homeId ? ' checked' : '') + '>Home</label>' +
+          '<label class="home" title="Where ↺ returns"><input type="radio" name="home-stop" id="home-' + s.id + '" data-field="home"' + (s.id === state.homeId ? ' checked' : '') + '>Home</label>' +
           '<button type="button" class="icon-btn" id="rm-' + s.id + '" data-act="remove" aria-label="Remove ' + esc(s.label) + '"' + (n <= MIN ? ' disabled' : '') + '><svg class="i" viewBox="0 0 24 24"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg></button>' +
         '</div>' +
         (status.length ? '<div class="ed-status">' + status.join('') + '</div>' : '') +

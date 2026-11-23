@@ -11,7 +11,8 @@
 - Owner decisions (2026-11-23):
   - Step shortcuts are ⌥⌘[ and ⌥⌘]. Not ⌃T, because ⌃T is transpose in macOS text fields.
   - New chats start on the last model used, together with `lastThinkingLevel`.
-  - The slider travels in the portable config.
+  - The slider travels with the portable `~/.aiden/config.json`, which is its only durable home. `settings.json` never holds it; the renderer reads it through a projected field of the settings read.
+  - When main clamps an unsupported level, it writes the resolved level back to the chat with a compare-and-set, so a newer selection wins.
   - A one-time, delete-only cleanup of the retired benchmark and Artificial Analysis keys and caches.
   - Phones are in scope (PR 5).
   - Quick Chat gets the slider.
