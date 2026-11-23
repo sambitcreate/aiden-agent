@@ -210,6 +210,7 @@ export function GrabbedElementChip({
   const detailsBodyRef = React.useRef<HTMLDivElement | null>(null);
 
   const contentId = React.useId();
+  const titleId = React.useId();
   const detailsId = React.useId();
 
   const collapsible = useCollapsibleBody(!detailsOpen, detailsBodyRef);
@@ -376,6 +377,7 @@ export function GrabbedElementChip({
       <PopoverContent
         ref={contentRef}
         id={contentId}
+        aria-labelledby={titleId}
         side="top"
         align="start"
         sideOffset={8}
@@ -404,7 +406,7 @@ export function GrabbedElementChip({
         <div className="flex items-center justify-between gap-2">
           <div className="flex min-w-0 items-center gap-1.5">
             <MousePointer2 aria-hidden="true" className="size-3.5 shrink-0 text-accent-text" />
-            <Text variant="small-strong" className="truncate">
+            <Text id={titleId} variant="small-strong" className="truncate">
               {mode === "composer" ? "Included with your message" : "Included with message"}
             </Text>
           </div>

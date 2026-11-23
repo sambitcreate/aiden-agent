@@ -376,10 +376,15 @@ test("Edit-in-Fork seeds and cancelled-worktree restore repopulate grabbed chips
     data: ONE_PIXEL_PNG_B64,
   };
   seedComposerAttachments(chatId, [thumb]);
-  seedComposerGrabbedElements(chatId, [element]);
+  seedComposerGrabbedElements(chatId, [element], [thumb]);
+
+  const firstMount = await mountComposer({ chatId });
+  assert.ok(firstMount.container.querySelector('[data-grabbed-element-chip="el-fork"]'), "forked chip mounts");
+  // Simulate switching away to another chat and returning: the seeded grabbed thumbnail persists in memory.
+  firstMount.unmount();
 
   const { container } = await mountComposer({ chatId });
-  assert.ok(container.querySelector('[data-grabbed-element-chip="el-fork"]'), "forked chip mounts");
+  assert.ok(container.querySelector('[data-grabbed-element-chip="el-fork"]'), "forked chip persists after chat switch");
 
   // Restore unsent message (e.g. cancelled worktree send) into mounted composer.
   const restoredEl = makeCapture({ id: "el-worktree", label: "<Footer />", selector: "footer", componentName: "Footer" }).element;
@@ -393,5 +398,15 @@ test("Edit-in-Fork seeds and cancelled-worktree restore repopulate grabbed chips
     restoreUnsentMessage(chatId, "Keep footer sticky", [restoredThumb], [restoredEl]);
   });
   assert.ok(container.querySelector('[data-grabbed-element-chip="el-worktree"]'));
+
+  // Sending confirms both the forked thumbnail (survived chat switch) and restored thumbnail are attached.
+  await act(async () => {
+    fireEvent.click(screen.getByRole("button", { name: "Send message" }));
+  });
+  assert.equal(calls.length, 1);
+  assert.deepEqual(
+    calls[0]!.attachments.map((a) => a.id).sort(),
+    [grabbedElementThumbnailId("el-fork"), grabbedElementThumbnailId("el-worktree")].sort(),
+  );
   discardComposerDraft(chatId);
 });

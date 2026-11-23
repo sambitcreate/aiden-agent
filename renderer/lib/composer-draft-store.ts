@@ -112,13 +112,14 @@ export function loadComposerDraftGrabbedThumbnails(chatId: string): Attachment[]
 export function seedComposerGrabbedElements(
   chatId: string,
   elements: readonly GrabbedElementContextV1[] | undefined,
+  thumbnails?: readonly Attachment[],
 ): void {
   if (!elements || elements.length === 0) {
     grabbedElementDrafts.delete(chatId);
     return;
   }
   const existingThumbnails = grabbedElementDrafts.get(chatId)?.thumbnails ?? [];
-  saveComposerDraftGrabbedElements(chatId, elements, existingThumbnails);
+  saveComposerDraftGrabbedElements(chatId, elements, thumbnails ?? existingThumbnails);
 }
 
 export function setActiveWorktreeGrabbedElements(

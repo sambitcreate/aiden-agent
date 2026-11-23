@@ -650,7 +650,12 @@ export function Composer({
       ...seed,
       ...savedThumbnails.filter((attachment) => !seedIds.has(attachment.id)),
     ];
-    if (merged.length > 0) updateAttachments(merged);
+    if (merged.length > 0) {
+      updateAttachments(merged);
+      if (grabbedElementsRef.current.length > 0) {
+        saveComposerDraftGrabbedElements(chatId, grabbedElementsRef.current, merged);
+      }
+    }
   }, [chatId, updateAttachments]);
   // An unsent message handed back after this composer opened (a cancelled
   // worktree send the user came back to): its text, attachments, and grabbed elements.

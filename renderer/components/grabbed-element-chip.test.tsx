@@ -107,6 +107,9 @@ test("hover previews after 250ms and closes after 140ms grace; clicking pins and
   assert.ok(popover, "popover renders on hover");
   assert.equal(popover.getAttribute("data-slot"), "popover-content", "carries browser occluder slot");
   assert.equal(popover.getAttribute("data-pinned"), "false");
+  const labelledBy = popover.getAttribute("aria-labelledby");
+  assert.ok(labelledBy, "popover has an accessible name via aria-labelledby");
+  assert.equal(document.getElementById(labelledBy)?.textContent, "Included with your message");
   assert.ok(popover.textContent?.includes("Included with your message"));
   assert.ok(popover.textContent?.includes("LandingHeroClient in LandingPage (Server) › Home"));
   assert.ok(popover.querySelector("img"), "cropped thumbnail renders inside popover");

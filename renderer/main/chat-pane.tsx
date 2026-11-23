@@ -1328,7 +1328,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
         saveComposerDraftText(copied.id, prefill.text);
         seedComposerAttachments(copied.id, prefill.attachments);
         if (prefill.grabbedElements?.length) {
-          seedComposerGrabbedElements(copied.id, prefill.grabbedElements);
+          seedComposerGrabbedElements(copied.id, prefill.grabbedElements, prefill.attachments);
         }
       }
       const copiedWorkspaceId = persistedChatWorkspaceId(copied.workspaceId);
@@ -1483,7 +1483,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
       const created = createChatDraft(workspaceId, undefined, prefill.text).chat;
       seedComposerAttachments(created.id, prefill.attachments);
       if (prefill.grabbedElements?.length) {
-        seedComposerGrabbedElements(created.id, prefill.grabbedElements);
+        seedComposerGrabbedElements(created.id, prefill.grabbedElements, prefill.attachments);
       }
       selectWorkspace(workspaceId);
       try {
