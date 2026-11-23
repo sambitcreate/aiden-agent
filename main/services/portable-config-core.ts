@@ -59,6 +59,7 @@ import {
   normalizeRecentModels,
   normalizeModelPadMetric,
 } from "../../renderer/shared/model-pad-preferences.js";
+import { normalizeAgentSlider, type AgentSliderSettings } from "../../renderer/shared/agent-slider.js";
 import { GOOGLE_PROVIDER_ID } from "../../renderer/shared/google-provider.js";
 import { normalizeProviderArtwork } from "../../renderer/shared/provider-artwork.js";
 import { parseOnboardingState } from "../../renderer/shared/onboarding.js";
@@ -79,6 +80,13 @@ export interface PortableConfigShape {
   providerIdAliases: Record<string, string>;
   mcpServers: McpServer[];
   skills: Skill[];
+  /**
+   * The Agent Slider's stops and home stop (`AgentSliderSettings` as written by
+   * Aiden). Its only durable home: it travels with this file. Kept raw so a bad
+   * hand edit is never rewritten; `portableAgentSlider` normalizes it on read
+   * and `getSettings` projects it into `AppSettings.agentSlider`.
+   */
+  agentSlider?: unknown;
 }
 
 export interface SettingsShape {
@@ -610,6 +618,23 @@ function applyModelPadPreferences(
   else delete target.modelPadMetric;
 }
 
+type AgentSliderFields = { agentSlider?: unknown; lastThinkingLevel?: unknown };
+
+/**
+ * The new-chat model's thinking level (anything but a known level removed).
+ * The Agent Slider lives only in the portable config.json, so a stray copy in
+ * settings.json is dropped and can never shadow it.
+ */
+function applyAgentSliderSettings(source: AgentSliderFields, target: AgentSliderFields): void {
+  delete target.agentSlider;
+  if (!isGenerationThinkingLevel(source.lastThinkingLevel)) delete target.lastThinkingLevel;
+}
+
+/** The portable Agent Slider, normalized for reading; a malformed hand edit reads as absent. */
+export function portableAgentSlider(config: { agentSlider?: unknown }): AgentSliderSettings | undefined {
+  return normalizeAgentSlider(config.agentSlider);
+}
+
 function normalizeSettingsShape(value: unknown): SettingsShape {
   const root = isRecord(value) ? structuredClone(value) : {};
   const { settings, ...rest } = root;
@@ -748,6 +773,7 @@ function normalizeSettingsShape(value: unknown): SettingsShape {
   if (hiddenModelsByProvider) normalized.hiddenModelsByProvider = hiddenModelsByProvider;
   else delete normalized.hiddenModelsByProvider;
   applyModelPadPreferences(settings, normalized);
+  applyAgentSliderSettings(settings, normalized);
   return {
     ...rest,
     settings: normalized as AppSettings,
@@ -811,6 +837,7 @@ export function runtimeSettingsFrom(settings: AppSettings): AppSettings {
   if (hiddenModelsByProvider) runtime.hiddenModelsByProvider = hiddenModelsByProvider;
   else delete runtime.hiddenModelsByProvider;
   applyModelPadPreferences(settings, runtime);
+  applyAgentSliderSettings(settings, runtime);
   const retainKnownValue = (key: keyof AppSettings, allowed: readonly string[]): void => {
     const value = settings[key];
     if (value !== undefined && (typeof value !== "string" || !allowed.includes(value))) {
@@ -1171,6 +1198,7 @@ you.
 | \`providerIdAliases\` | Append-only record of provider IDs Aiden has renamed. Leave it alone unless you know why it exists. |
 | \`mcpServers\` | MCP server definitions. Environment and header values, and a custom server's OAuth client secret, are not stored here: each keeps an \`aiden-secret:v1:…\` marker and the value lives in the keychain. A value typed here by hand is moved to encrypted storage when Aiden ingests the file, even while launch is pending. If secure storage is unavailable, the local connector stays blocked. Local commands added by hand run only after explicit review and approval in Settings → Connectors. |
 | \`skills\` | Inline skills: \`name\`, \`description\`, \`instructions\`, \`enabled\`. |
+| \`agentSlider\` | The Agent Slider: \`version\` (1), \`stops\` (3 to 7, left to right, each with an \`id\`, a \`label\` of up to 24 characters, an optional \`providerId\` and \`model\` given together, and an optional \`thinkingLevel\`) and \`homeStopId\`. A stop with no model reads as "Choose a model". If the slider is malformed it is ignored until you fix it or change it in the app. |
 
 Aiden rewrites this file when you change those settings in the UI, so it round
 trips in both directions. Invalid JSON is ignored in favour of the built-in

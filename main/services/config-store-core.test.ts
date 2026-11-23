@@ -448,6 +448,160 @@ test("removing a provider drops its Model Pad placements, pins and recent models
   assert.deepEqual(settings.recentModels, ["openai::gpt", "google::gemini"]);
 });
 
+const sliderStops = (providerId: string) => [
+  { id: "stop_fast", label: "Fast" },
+  { id: "stop_mid", label: "Balanced", providerId, model: "qwen3-8b", thinkingLevel: "medium" as const },
+  { id: "stop_smart", label: "Smart", providerId: "openai", model: "gpt", thinkingLevel: "high" as const },
+];
+const sliderFor = (providerId: string) => ({ version: 1 as const, stops: sliderStops(providerId), homeStopId: "stop_mid" });
+
+test("the Agent Slider lives only in the portable config and reads back through settings", async (t) => {
+  const h = await harness(t);
+  await h.store.saveProvider(provider);
+  await h.store.setSettings({ lastProviderId: provider.id, lastModel: "qwen3-8b", lastThinkingLevel: "high" });
+
+  const returned = await h.store.setAgentSlider(sliderFor(provider.id));
+
+  assert.deepEqual(returned.agentSlider, sliderFor(provider.id));
+  assert.equal(returned.lastThinkingLevel, "high", "the slider write keeps machine-local settings");
+  assert.deepEqual((await readJson<{ agentSlider?: unknown }>(h.portableFile)).agentSlider, sliderFor(provider.id));
+  const local = await readJson<{ settings: Record<string, unknown> }>(h.settingsFile);
+  assert.equal("agentSlider" in local.settings, false, "settings.json never holds the slider");
+  assert.equal(local.settings.lastThinkingLevel, "high", "the new-chat level stays machine-local");
+  assert.equal((await fs.readFile(h.portableFile, "utf-8")).includes("lastThinkingLevel"), false);
+
+  // Copying ~/.aiden to a new machine: a fresh store over a fresh local root reads it.
+  const elsewhere = createConfigStore(
+    createPortableConfigStores(() => path.dirname(h.portableFile), () => path.join(path.dirname(h.settingsFile), "..", "other-machine")),
+    fakeSecrets().port,
+  );
+  assert.deepEqual((await elsewhere.getSettings()).agentSlider, sliderFor(provider.id));
+  assert.equal((await elsewhere.getSettings()).lastThinkingLevel, undefined);
+
+  await h.store.setAgentSlider(null);
+  assert.equal((await h.store.getSettings()).agentSlider, undefined);
+  assert.equal("agentSlider" in (await readJson<Record<string, unknown>>(h.portableFile)), false);
+});
+
+test("the Agent Slider never goes through the settings patch, and bad sliders are refused", async (t) => {
+  const h = await harness(t);
+  await h.store.saveProvider(provider);
+  await assert.rejects(
+    h.store.setSettings({ agentSlider: sliderFor(provider.id) } as never),
+    /its own settings call/u,
+  );
+  await assert.rejects(
+    h.store.setAgentSlider({ ...sliderFor(provider.id), stops: sliderStops(provider.id).slice(0, 2) }),
+    /3 to 7 stops/u,
+  );
+  assert.equal((await h.store.getSettings()).agentSlider, undefined);
+  assert.equal("agentSlider" in (await readJson<Record<string, unknown>>(h.portableFile)), false);
+});
+
+test("an external edit of config.json changes the slider and a stray settings.json copy never shadows it", async (t) => {
+  const h = await harness(t);
+  await h.store.saveProvider(provider);
+  await h.store.setSettings({ lastProviderId: provider.id, lastModel: "qwen3-8b" });
+  await h.store.setAgentSlider(sliderFor(provider.id));
+
+  // A stray slider hand-written into the machine-local file.
+  const local = await readJson<{ settings: Record<string, unknown> }>(h.settingsFile);
+  await fs.writeFile(
+    h.settingsFile,
+    JSON.stringify({ ...local, settings: { ...local.settings, agentSlider: sliderFor("stray") } }),
+    "utf-8",
+  );
+  await h.stores.settings.reload();
+  // The person edits the portable file by hand: a new home stop and label.
+  const portable = await readJson<Record<string, unknown>>(h.portableFile);
+  const edited = { ...sliderFor(provider.id), homeStopId: "stop_smart" };
+  edited.stops[0]!.label = "Quick";
+  await fs.writeFile(h.portableFile, JSON.stringify({ ...portable, agentSlider: edited }, null, 2), "utf-8");
+  assert.equal(await h.stores.portable.reload(), true);
+
+  const settings = await h.store.getSettings();
+  assert.deepEqual(settings.agentSlider, edited);
+  assert.equal(settings.lastModel, "qwen3-8b");
+});
+
+test("a malformed hand-edited slider reads as absent and is never rewritten", async (t) => {
+  const h = await harness(t);
+  await h.store.saveProvider(provider);
+  const portable = await readJson<Record<string, unknown>>(h.portableFile);
+  const broken = { version: 1, stops: [{ id: "only", label: "One" }], homeStopId: "only" };
+  await fs.writeFile(h.portableFile, JSON.stringify({ ...portable, agentSlider: broken }, null, 2), "utf-8");
+  await h.stores.portable.reload();
+  const before = await fs.readFile(h.portableFile, "utf-8");
+
+  assert.equal((await h.store.getSettings()).agentSlider, undefined);
+  assert.equal(await fs.readFile(h.portableFile, "utf-8"), before, "reading does not rewrite the file");
+  await h.store.saveProvider({ ...provider, label: "LM Studio 2" });
+  assert.deepEqual(
+    (await readJson<{ agentSlider?: unknown }>(h.portableFile)).agentSlider,
+    broken,
+    "an unrelated write keeps the hand edit for the person to fix",
+  );
+});
+
+test("removing a provider keeps the slider stops that use it", async (t) => {
+  const h = await harness(t);
+  await h.store.saveProvider(provider);
+  await h.store.setAgentSlider(sliderFor(provider.id));
+
+  await h.store.removeProvider(provider.id);
+
+  assert.deepEqual((await h.store.getSettings()).agentSlider, sliderFor(provider.id));
+});
+
+test("slider stops follow a renamed provider in the same portable write, and a new slider resolves aliases", async (t) => {
+  const releasedId = "custom:onboarding-lmstudio";
+  const h = await harness(t, { workspaces: [], seeded: true, aidenDirMigratedAt: Date.now() });
+  await fs.mkdir(path.dirname(h.portableFile), { recursive: true });
+  const legacySlider = {
+    version: 1,
+    stops: [
+      ...sliderStops(releasedId),
+      { id: "stop_azure", label: "Azure", providerId: "azure-openai-responses", model: "gpt-5" },
+    ],
+    homeStopId: "stop_mid",
+  };
+  await fs.writeFile(h.portableFile, JSON.stringify({
+    providers: [splitStoredProvider({ ...provider, id: releasedId, defaultModel: "qwen3-8b" }).intent],
+    providerIdAliases: {},
+    mcpServers: [],
+    skills: [],
+    agentSlider: legacySlider,
+  }), "utf-8");
+
+  const [listed] = await h.store.listProviders();
+  assert.equal(listed?.id, provider.id);
+  const onDisk = await readJson<{ providers: Array<{ id: string }>; agentSlider: typeof legacySlider }>(h.portableFile);
+  assert.deepEqual(onDisk.providers.map(({ id }) => id), [provider.id]);
+  assert.deepEqual(
+    onDisk.agentSlider.stops.map((stop) => stop.providerId),
+    [undefined, provider.id, "openai", "azure"],
+  );
+  assert.deepEqual((await h.store.getSettings()).agentSlider, onDisk.agentSlider);
+
+  await h.store.setAgentSlider(sliderFor(releasedId));
+  assert.equal((await h.store.getSettings()).agentSlider?.stops[1]?.providerId, provider.id);
+});
+
+test("the new-chat level is cleared when the new-chat model changes without one", async (t) => {
+  const h = await harness(t);
+  await h.store.saveProvider(provider);
+  await h.store.setSettings({ lastProviderId: provider.id, lastModel: "qwen3-8b", lastThinkingLevel: "high" });
+  await h.store.setSettings({ lastProviderId: provider.id, lastModel: "qwen3-8b" });
+  assert.equal((await h.store.getSettings()).lastThinkingLevel, "high", "the same model keeps its level");
+  await h.store.setSettings({ lastModel: "other-model" });
+  assert.equal((await h.store.getSettings()).lastThinkingLevel, undefined, "another model starts without one");
+  await h.store.setSettings({ lastModel: "qwen3-8b", lastThinkingLevel: "low" });
+  assert.equal((await h.store.getSettings()).lastThinkingLevel, "low");
+  await h.store.setSettings({ lastThinkingLevel: undefined });
+  assert.equal((await h.store.getSettings()).lastThinkingLevel, undefined, "an explicit clear");
+  await assert.rejects(h.store.setSettings({ lastThinkingLevel: "turbo" as never }), /Invalid thinking level/u);
+});
+
 test("recent models are machine-local history and never reach the portable config", async (t) => {
   const h = await harness(t);
   await h.store.saveProvider(provider);

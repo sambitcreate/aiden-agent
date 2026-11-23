@@ -5,6 +5,7 @@ import { createPendingLastWorkspaceTracker } from "../windows/quick-chat-window-
 import { customModelThinkingLevels } from "../../renderer/shared/custom-model-options.js";
 import { isCompactionEngine, parseCompactionModelOverrides } from "../../renderer/shared/compaction.js";
 import { parseModelPadPreferencesPatch } from "../../renderer/shared/model-pad-preferences.js";
+import { parseAgentSliderSettingsPatch } from "../../renderer/shared/agent-slider.js";
 // Provider configuration + API key IPC handlers. Thin — logic lives in services.
 
 import { ipcMain } from "../platform.js";
@@ -379,6 +380,11 @@ export function registerProviderHandlers(): void {
     }
     return configStore.setGeminiUsageScope(scopeValue);
   });
+  // The Agent Slider lives in the portable config.json, so it has its own
+  // call rather than straddling both stores inside settings:set.
+  ipcMain.handle("settings:setAgentSlider", async (_event, slider: unknown) =>
+    configStore.setAgentSlider(slider),
+  );
   ipcMain.handle("settings:set", async (_event, patch: unknown) => {
     if (typeof patch !== "object" || patch === null) throw new Error("Invalid settings patch.");
     const p = patch as Record<string, unknown>;
@@ -393,6 +399,7 @@ export function registerProviderHandlers(): void {
     }
     if (typeof p.lastProviderId === "string") next.lastProviderId = p.lastProviderId;
     if (typeof p.lastModel === "string") next.lastModel = p.lastModel;
+    Object.assign(next, parseAgentSliderSettingsPatch(p));
     if (
       typeof p.lastWorkspaceId === "string" &&
       p.lastWorkspaceId.length <= 256 &&

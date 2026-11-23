@@ -1875,9 +1875,20 @@ export const chatsApi = {
   rename: (id: string, title: string) => invoke<void>("chats:rename", id, title),
   renameWithFoundationModels: (id: string) =>
     invoke<ChatTitleRenameResult>("chats:renameWithFoundationModels", id),
-  /** Change the model this chat answers with; other chats and new chats keep theirs. */
-  setModel: (id: string, providerId: string, model: string) =>
-    invoke<Chat | null>("chats:setModel", id, providerId, model),
+  /**
+   * Change the model this chat answers with; other chats and new chats keep
+   * theirs. A level sets the chat's own effort and `null` clears it; leaving it
+   * out keeps the chat's level only while the model stays the same.
+   */
+  setModel: (
+    id: string,
+    providerId: string,
+    model: string,
+    thinkingLevel?: import("../shared/generation-thinking").GenerationThinkingLevel | null,
+  ) =>
+    thinkingLevel === undefined
+      ? invoke<Chat | null>("chats:setModel", id, providerId, model)
+      : invoke<Chat | null>("chats:setModel", id, providerId, model, thinkingLevel),
   /** Turn design mode on or off for this chat; every window hears `chats:design-mode-changed`. */
   setDesignMode: (id: string, enabled: boolean, source?: "toggle" | "shortcut" | "slash" | "card") =>
     invoke<Chat | null>("chats:setDesignMode", id, enabled, source),
