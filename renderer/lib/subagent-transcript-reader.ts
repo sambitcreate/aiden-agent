@@ -2,6 +2,12 @@ import type { SubagentTranscriptV1 } from "../shared/subagent-transcript";
 
 /** The quietest a helper's saved conversation is read again, per run. */
 export const SUBAGENT_TRANSCRIPT_READ_INTERVAL_MS = 1_000;
+/**
+ * Reads of a finished helper's saved conversation before an empty or
+ * unfinished copy is accepted. Its final save lands just after the run
+ * finishes; spaced one, two, three… intervals apart, these cover its tries.
+ */
+export const SUBAGENT_TRANSCRIPT_FINAL_READ_ATTEMPTS = 6;
 
 export interface SubagentTranscriptReadRequest {
   /** Why it is read; each distinct reason is read once until it fails. */
@@ -11,6 +17,12 @@ export interface SubagentTranscriptReadRequest {
    * copy was already read at this revision or later is skipped.
    */
   skipIfLoadedAt?: number;
+  /**
+   * The helper has finished. Only its final saved copy answers: an empty or
+   * unfinished one, saved before the run ended, is read again a few times
+   * while the final save lands.
+   */
+  final?: boolean;
 }
 
 export interface SubagentTranscriptReaderOptions {
@@ -23,6 +35,8 @@ export interface SubagentTranscriptReaderOptions {
    * again, or null when it answered (an empty answer is not a failure).
    */
   onSettled(chatId: string, runId: string, failedReason: string | null): void;
+  /** Whether a saved copy is a finished helper's final one. Defaults to any copy. */
+  isFinal?(transcript: SubagentTranscriptV1): boolean;
   minIntervalMs?: number;
   now?: () => number;
   setTimer?: (callback: () => void, ms: number) => unknown;
@@ -33,7 +47,7 @@ export interface SubagentTranscriptReader {
   /** Reads once per reason, at most one read in flight per run. */
   request(chatId: string, runId: string, request: SubagentTranscriptReadRequest): void;
   /** Reads again for a reason that failed, skipping the de-duplication. */
-  retry(chatId: string, runId: string, reason: string): void;
+  retry(chatId: string, runId: string, reason: string, options?: { final?: boolean }): void;
   /** Records a saved copy read elsewhere at this run revision. */
   noteLoaded(chatId: string, runId: string, runRevision: number): void;
   /** The run finished: forget its reasons once its reads settle. */
@@ -51,6 +65,9 @@ interface PendingRead {
   reason: string;
   skipIfLoadedAt?: number;
   forced: boolean;
+  final: boolean;
+  /** Earlier reads of this finished helper that found no final copy. */
+  attempt: number;
 }
 
 interface RunReads {
@@ -73,7 +90,13 @@ function mergePendingReads(older: PendingRead, newer: PendingRead): PendingRead 
     older.skipIfLoadedAt === undefined || newer.skipIfLoadedAt === undefined
       ? undefined
       : Math.max(older.skipIfLoadedAt, newer.skipIfLoadedAt);
-  return { reason: newer.reason, skipIfLoadedAt, forced: older.forced || newer.forced };
+  return {
+    reason: newer.reason,
+    skipIfLoadedAt,
+    forced: older.forced || newer.forced,
+    final: older.final || newer.final,
+    attempt: Math.max(older.attempt, newer.attempt),
+  };
 }
 
 /**
@@ -87,6 +110,7 @@ export function createSubagentTranscriptReader(
   options: SubagentTranscriptReaderOptions,
 ): SubagentTranscriptReader {
   const minIntervalMs = options.minIntervalMs ?? SUBAGENT_TRANSCRIPT_READ_INTERVAL_MS;
+  const isFinal = options.isFinal ?? (() => true);
   const now = options.now ?? Date.now;
   const setTimer = options.setTimer ?? ((callback, ms) => setTimeout(callback, ms));
   const clearTimer =
@@ -145,12 +169,26 @@ export function createSubagentTranscriptReader(
         (transcript) => {
           if (!current()) return;
           run.inFlight = false;
+          let readAgain: PendingRead | null = null;
           if (seq > run.answeredSeq) {
             run.answeredSeq = seq;
-            if (loadedAt !== undefined) run.loadedAt = Math.max(run.loadedAt, loadedAt);
-            if (transcript?.runId === runId) options.onTranscript(startedChat, transcript);
+            const copy = transcript?.runId === runId ? transcript : null;
+            // A finished helper's copy saved before it ended does not answer
+            // yet; its final save is on its way.
+            const waitingForFinal =
+              read.final &&
+              (!copy || !isFinal(copy)) &&
+              read.attempt + 1 < SUBAGENT_TRANSCRIPT_FINAL_READ_ATTEMPTS;
+            if (waitingForFinal) readAgain = { ...read, forced: true, attempt: read.attempt + 1 };
+            else if (loadedAt !== undefined) run.loadedAt = Math.max(run.loadedAt, loadedAt);
+            if (copy) options.onTranscript(startedChat, copy);
             options.onSettled(startedChat, runId, null);
           }
+          if (readAgain && !run.pending && run.timer === null) {
+            readLater(runId, run, readAgain, minIntervalMs * readAgain.attempt);
+            return;
+          }
+          if (readAgain && run.pending) run.pending = mergePendingReads(readAgain, run.pending);
           drain(runId, run);
         },
         () => {
@@ -182,6 +220,10 @@ export function createSubagentTranscriptReader(
       start(runId, run, read);
       return;
     }
+    readLater(runId, run, read, wait);
+  };
+
+  const readLater = (runId: string, run: RunReads, read: PendingRead, wait: number) => {
     run.pending = read;
     const scheduledGeneration = generation;
     run.timer = setTimer(() => {
@@ -216,13 +258,19 @@ export function createSubagentTranscriptReader(
       const run = runFor(runId);
       if (run.lastReason === request.reason) return;
       run.lastReason = request.reason;
-      schedule(runId, run, { ...request, forced: false });
+      schedule(runId, run, {
+        reason: request.reason,
+        ...(request.skipIfLoadedAt === undefined ? {} : { skipIfLoadedAt: request.skipIfLoadedAt }),
+        forced: false,
+        final: request.final === true,
+        attempt: 0,
+      });
     },
-    retry(nextChatId, runId, reason) {
+    retry(nextChatId, runId, reason, retryOptions) {
       forChat(nextChatId);
       const run = runFor(runId);
       run.lastReason = reason;
-      schedule(runId, run, { reason, forced: true });
+      schedule(runId, run, { reason, forced: true, final: retryOptions?.final === true, attempt: 0 });
     },
     noteLoaded(nextChatId, runId, runRevision) {
       forChat(nextChatId);

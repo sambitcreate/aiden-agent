@@ -432,6 +432,9 @@ export const SUBAGENT_TRANSCRIPT_REFRESH_ERROR = "Couldn't load this helper's co
  * - `join:<revision>`: the same with no updates streaming to this window, so
  *   the read repeats as the run moves until a saved copy exists. A queued or
  *   starting helper has nothing saved yet, and that is not a failure.
+ * - `final:<revision>`: a finished helper with nothing in this window and no
+ *   updates streaming here. Its final save lands just after it finishes, so
+ *   the read waits for that copy (see `subagentHelperRefetchAwaitsFinal`).
  * - `run:<state>:<revision>`: no updates stream to this window (another
  *   window runs the chat), so the saved copy is read again whenever the run's
  *   state or revision moves, including when it finishes.
@@ -443,7 +446,7 @@ export function subagentHelperTranscriptRefetchReason(
 ): string | null {
   if (!merged.complete) return `gap:${merged.transcript?.revision ?? 0}`;
   if (!merged.transcript) {
-    if (!subagentHelperIsActive(run.state)) return null;
+    if (!subagentHelperIsActive(run.state)) return streamingHere ? null : `final:${run.revision}`;
     return streamingHere ? "join" : `join:${run.revision}`;
   }
   if (streamingHere) return null;
@@ -456,8 +459,36 @@ export function subagentHelperTranscriptRefetchReason(
  * updates stream here, always reads.
  */
 export function subagentHelperRefetchSkipRevision(reason: string): number | undefined {
-  const match = /^(?:run:[a-z_]+|join):(\d+)$/u.exec(reason);
+  const match = /^(?:run:[a-z_]+|join|final):(\d+)$/u.exec(reason);
   return match ? Number(match[1]) : undefined;
+}
+
+/**
+ * Whether a read for this reason is of a finished helper, so an empty or
+ * unfinished saved copy (written before it ended) is read again until its
+ * final copy lands.
+ */
+export function subagentHelperRefetchAwaitsFinal(reason: string): boolean {
+  if (reason.startsWith("final:")) return true;
+  const match = /^run:([a-z_]+):\d+$/u.exec(reason);
+  return match !== null && !subagentHelperIsActive(match[1] as SubagentRunSnapshot["state"]);
+}
+
+/**
+ * Whether a saved copy is a finished helper's final one: its last message
+ * is closed and no step is still waiting or running.
+ */
+export function subagentTranscriptIsFinal(transcript: SubagentTranscriptV1): boolean {
+  return transcript.entries.every(
+    (entry) =>
+      entry.kind !== "message" ||
+      (entry.finishedAt !== undefined &&
+        entry.steps.every(
+          (step) =>
+            !("status" in step) ||
+            (step.status !== "pending" && step.status !== "awaiting_approval" && step.status !== "running"),
+        )),
+  );
 }
 
 /** A timeline for one helper message, so the main chat's step rows can draw it. */

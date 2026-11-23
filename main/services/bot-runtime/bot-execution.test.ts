@@ -11,7 +11,7 @@ import { createAssistantMessageEventStream, createModels, fauxAssistantMessage, 
 import { Type } from "typebox";
 import { AgentDoc, CompactionTask, Harness, createRegistry, defineExtension, defineTool, hook, type HarnessSettings } from "@earendil-works/pi-durable";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
-import { botExecutionScope, createBotBackgroundExecutionModels, createBotExecutionRegistry, reconcileBotExecutionResponses, type BotExecutionPort } from "./bot-execution.js";
+import { botExecutionScope, createBotBackgroundExecutionModels, createBotExecutionRegistry, reconcileBotExecutionResponses, withBotExecutionAdmission, type BotExecutionPort } from "./bot-execution.js";
 import { BotRoutineModelUnavailableError, type BotExecutionClaim, type BotProviderResponseFacts } from "../bot-routine-models.js";
 import { waitFor } from "./test-support/faux.js";
 import { createBotSessionService, type BotSessionRuntime } from "./bot-session-service.js";
@@ -520,6 +520,21 @@ test("helper calls in one Bot reply share its 60 minutes, and the next input get
   assert.equal((await service.awaitReply("bot:one", b.submissionId, new AbortController().signal)).kind, "completed");
   assert.deepEqual(launched, ["First", "Next"]); assert.notEqual(results[2], BOT_SUBAGENT_LIMIT_REACHED_RESULT);
   await waitFor(() => clocks.size === 0, { what: "the next reply's clock to be released" });
+});
+
+test("a running reply keeps its helper clock however many other replies hold one", async () => {
+  const clocks = createBotSubagentReplyClocks();
+  const port = { resolve: async () => ({ release() {} }) } as unknown as BotExecutionPort;
+  const clockIn = (botId: string, claimId: string) =>
+    withBotExecutionAdmission(botId, { id: claimId, requestId: claimId } as unknown as BotExecutionClaim, port, async () => clocks.clockFor(botId));
+  const first = await clockIn("bot:one", "claim-first");
+  first.start(1_000_000);
+  for (let index = 0; index < 400; index += 1) await clockIn(`bot:${index}`, `claim-${index}`);
+  // The first reply has not ended, so its next helper call still counts from its first launch.
+  const again = await clockIn("bot:one", "claim-first");
+  assert.equal(again.startedAt, 1_000_000);
+  clocks.release("bot:one", "claim-first");
+  assert.equal((await clockIn("bot:one", "claim-first")).startedAt, undefined);
 });
 
 test("a reply that ends while the next message waits still releases its helper clock", async (t) => {

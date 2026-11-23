@@ -1,17 +1,27 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { SubagentTranscriptV1 } from "../shared/subagent-transcript";
-import { createSubagentTranscriptReader } from "./subagent-transcript-reader";
+import {
+  createSubagentTranscriptReader,
+  SUBAGENT_TRANSCRIPT_FINAL_READ_ATTEMPTS,
+} from "./subagent-transcript-reader";
 
-function transcript(runId: string, revision: number): SubagentTranscriptV1 {
+function transcript(runId: string, revision: number, open = false): SubagentTranscriptV1 {
   return {
     version: 1,
     runId,
     revision,
     trimmed: false,
-    entries: [{ kind: "task", text: "Find the parser." }],
+    entries: [
+      { kind: "task", text: "Find the parser." },
+      ...(open ? [{ kind: "message" as const, text: "Still writ", steps: [], startedAt: 1_000 }] : []),
+    ],
   };
 }
+
+// The tests' stand-in for a final copy: every message is closed.
+const isFinal = (value: SubagentTranscriptV1) =>
+  value.entries.every((entry) => entry.kind !== "message" || entry.finishedAt !== undefined);
 
 function last<T>(items: readonly T[]): T | undefined {
   return items[items.length - 1];
@@ -36,6 +46,7 @@ function harness() {
       new Promise((resolve, reject) => reads.push({ chatId, runId, resolve, reject })),
     onTranscript: (chatId, value) => transcripts.push({ chatId, transcript: value }),
     onSettled: (chatId, runId, failedReason) => settled.push({ chatId, runId, failedReason }),
+    isFinal,
     minIntervalMs: 1_000,
     now: () => clock,
     setTimer: (callback, ms) => {
@@ -227,4 +238,62 @@ test("a failure clears once a newer request finds its copy already read", async 
   h.reader.request("chat-1", "run-a", { reason: "run:running:41", skipIfLoadedAt: 41 });
   assert.equal(h.reads.length, 1, "nothing new to read");
   assert.deepEqual(last(h.settled), { chatId: "chat-1", runId: "run-a", failedReason: null });
+});
+
+test("a finished helper with nothing saved yet is read again until its final copy lands", async () => {
+  const h = harness();
+  h.reader.request("chat-1", "run-a", { reason: "final:7", skipIfLoadedAt: 7, final: true });
+  h.reader.finish("run-a");
+  h.reads[0]!.resolve(null);
+  await h.flush();
+  assert.deepEqual(last(h.settled), { chatId: "chat-1", runId: "run-a", failedReason: null }, "not a failure");
+
+  // The run's own record asks again at the same revision: an empty answer did not count as read.
+  h.reader.request("chat-1", "run-a", { reason: "run:completed:7", skipIfLoadedAt: 7, final: true });
+  await h.advance(1_000);
+  assert.equal(h.reads.length, 2);
+  h.reads[1]!.resolve(transcript("run-a", 4, true));
+  await h.flush();
+  assert.equal(last(h.transcripts)?.transcript.revision, 4, "the unfinished copy still shows meanwhile");
+
+  await h.advance(1_999);
+  assert.equal(h.reads.length, 2, "each read waits longer than the one before");
+  await h.advance(1);
+  assert.equal(h.reads.length, 3);
+  h.reads[2]!.resolve(transcript("run-a", 5));
+  await h.flush();
+  assert.equal(last(h.transcripts)?.transcript.revision, 5);
+
+  // The final copy answers: nothing more is read, and asking again for that revision is skipped.
+  await h.advance(60_000);
+  h.reader.request("chat-1", "run-a", { reason: "final:7", skipIfLoadedAt: 7, final: true });
+  await h.advance(60_000);
+  assert.equal(h.reads.length, 3);
+});
+
+test("a finished helper whose final copy never lands is read a bounded number of times", async () => {
+  const h = harness();
+  h.reader.request("chat-1", "run-a", { reason: "final:3", skipIfLoadedAt: 3, final: true });
+  for (let index = 0; index < SUBAGENT_TRANSCRIPT_FINAL_READ_ATTEMPTS; index += 1) {
+    assert.equal(h.reads.length, index + 1);
+    h.reads[index]!.resolve(transcript("run-a", 2, true));
+    await h.flush();
+    await h.advance(60_000);
+  }
+  assert.equal(h.reads.length, SUBAGENT_TRANSCRIPT_FINAL_READ_ATTEMPTS, "the last copy is accepted");
+  assert.equal(h.settled.every((entry) => entry.failedReason === null), true);
+
+  // Accepted at that revision, so the same ask is not read again.
+  h.reader.request("chat-1", "run-a", { reason: "run:completed:3", skipIfLoadedAt: 3, final: true });
+  await h.advance(60_000);
+  assert.equal(h.reads.length, SUBAGENT_TRANSCRIPT_FINAL_READ_ATTEMPTS);
+});
+
+test("a running helper's unfinished copy answers its read", async () => {
+  const h = harness();
+  h.reader.request("chat-1", "run-a", { reason: "run:running:3", skipIfLoadedAt: 3 });
+  h.reads[0]!.resolve(transcript("run-a", 2, true));
+  await h.flush();
+  await h.advance(60_000);
+  assert.equal(h.reads.length, 1);
 });

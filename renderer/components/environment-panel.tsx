@@ -66,7 +66,10 @@ import {
 import {
   subagentHelperApprovalFor,
   subagentHelperHasActiveHelpers,
+  subagentHelperIsActive,
+  subagentHelperRefetchAwaitsFinal,
   subagentHelperRefetchSkipRevision,
+  subagentTranscriptIsFinal,
   withSubagentApprovalWaitViews,
 } from "../lib/subagent-helper-chat-state";
 import { createSubagentTranscriptReader } from "../lib/subagent-transcript-reader";
@@ -956,6 +959,7 @@ export function EnvironmentPanelProvider({ children }: React.PropsWithChildren) 
       onSettled: (chatId, runId, failedReason) => {
         if (subagentChatIdRef.current === chatId) settleTranscriptRead(chatId, runId, failedReason);
       },
+      isFinal: subagentTranscriptIsFinal,
     }),
   );
   const refetchSubagentTranscript = React.useCallback(
@@ -966,6 +970,7 @@ export function EnvironmentPanelProvider({ children }: React.PropsWithChildren) 
       transcriptReader.request(chatId, runId, {
         reason,
         ...(skipIfLoadedAt === undefined ? {} : { skipIfLoadedAt }),
+        final: subagentHelperRefetchAwaitsFinal(reason),
       });
     },
     [subagentsEnabled, transcriptReader],
@@ -976,7 +981,9 @@ export function EnvironmentPanelProvider({ children }: React.PropsWithChildren) 
       const chatId = subagentChatIdRef.current;
       if (!subagentsEnabled || !chatId || transcriptRefetchFailures.chatId !== chatId) return;
       const reason = transcriptRefetchFailures.byRunId[runId];
-      if (reason) transcriptReader.retry(chatId, runId, reason);
+      if (reason) {
+        transcriptReader.retry(chatId, runId, reason, { final: subagentHelperRefetchAwaitsFinal(reason) });
+      }
     },
     [subagentsEnabled, transcriptReader, transcriptRefetchFailures],
   );
@@ -1222,7 +1229,11 @@ export function EnvironmentPanelProvider({ children }: React.PropsWithChildren) 
         }
         if (detail?.transcript) {
           helperChatStore.rememberSaved(chatId, detail.transcript);
-          transcriptReader.noteLoaded(chatId, runId, safeSnapshot.revision);
+          // A finished helper's copy saved before it ended does not count as
+          // read: its final save is still on its way.
+          if (subagentHelperIsActive(safeSnapshot.state) || subagentTranscriptIsFinal(detail.transcript)) {
+            transcriptReader.noteLoaded(chatId, runId, safeSnapshot.revision);
+          }
         }
         setSubagentEffectDetail({
           ownerKey: subagentPanelOwnerKey(chatId, workspaceId),

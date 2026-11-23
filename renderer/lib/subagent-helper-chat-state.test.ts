@@ -18,8 +18,10 @@ import {
   subagentHelperHasActiveHelpers,
   subagentHelperProblem,
   subagentHelperTimeline,
+  subagentHelperRefetchAwaitsFinal,
   subagentHelperRefetchSkipRevision,
   subagentHelperTranscriptRefetchReason,
+  subagentTranscriptIsFinal,
   subagentHelperWorkSummary,
   withSubagentApprovalWaitSnapshots,
   withSubagentApprovalWaitViews,
@@ -473,10 +475,15 @@ test("a window reads a helper's saved conversation again only for a new reason",
   assert.equal(gap.complete, false);
   assert.ok(subagentHelperTranscriptRefetchReason(running, gap, true));
 
-  // Nothing here yet: a running helper reads once; one that ended has nothing more to read.
+  // Nothing here yet: a running helper reads once. One that ended with its
+  // updates streaming here has them all; in another window it reads for the
+  // final copy that is saved just after it ends.
   const empty = mergeSubagentTranscript(null, null);
   assert.ok(subagentHelperTranscriptRefetchReason(running, empty, true));
-  assert.equal(subagentHelperTranscriptRefetchReason({ state: "completed", revision: 2 }, empty, false), null);
+  assert.equal(subagentHelperTranscriptRefetchReason({ state: "completed", revision: 2 }, empty, true), null);
+  const endedElsewhere = subagentHelperTranscriptRefetchReason({ state: "completed", revision: 2 }, empty, false);
+  assert.ok(endedElsewhere);
+  assert.equal(subagentHelperRefetchAwaitsFinal(endedElsewhere), true);
 
   // With no updates streaming here, a queued helper with nothing saved yet is
   // read again as it moves, so its first saved copy is picked up.
@@ -512,4 +519,39 @@ test("a read that follows the run can be skipped once its revision was read", ()
     changes: [],
   });
   assert.equal(subagentHelperRefetchSkipRevision(reasonFor(finished, gap, true)), undefined);
+});
+
+test("only a finished helper's reads wait for its final saved copy", () => {
+  const empty = mergeSubagentTranscript(null, null);
+  const saved = mergeSubagentTranscript(transcript("run-1", 3, [{ text: "Looking." }]), null);
+  const awaits = (run: Parameters<typeof subagentHelperTranscriptRefetchReason>[0], merged = saved) => {
+    const reason = subagentHelperTranscriptRefetchReason(run, merged, false);
+    assert.ok(reason);
+    return subagentHelperRefetchAwaitsFinal(reason);
+  };
+  for (const state of ["completed", "failed", "timed_out", "interrupted", "stopped"] as const) {
+    assert.equal(awaits(snapshot("run-1", { state, revision: 9 })), true, state);
+    assert.equal(awaits(snapshot("run-1", { state, revision: 9 }), empty), true, state);
+  }
+  for (const state of ["queued", "starting", "running", "needs_attention"] as const) {
+    assert.equal(awaits(snapshot("run-1", { state, revision: 9 })), false, state);
+  }
+});
+
+test("a saved copy is final once its last message is closed and no step is still going", () => {
+  assert.equal(subagentTranscriptIsFinal(transcript("run-1", 1)), true, "a helper that wrote nothing");
+  assert.equal(subagentTranscriptIsFinal(transcript("run-1", 4, [{ text: "Done.", finishedAt: 2_000 }])), true);
+  assert.equal(
+    subagentTranscriptIsFinal(transcript("run-1", 4, [{ text: "Done.", finishedAt: 2_000 }, { text: "Still writ" }])),
+    false,
+    "the last message is open",
+  );
+  for (const status of ["pending", "awaiting_approval", "running"] as const) {
+    const copy = transcript("run-1", 4, [{ text: "", finishedAt: 2_000, steps: [toolStep("s1", { status })] }]);
+    assert.equal(subagentTranscriptIsFinal(copy), false, status);
+  }
+  for (const status of ["completed", "failed", "blocked", "cancelled"] as const) {
+    const copy = transcript("run-1", 4, [{ text: "", finishedAt: 2_000, steps: [toolStep("s1", { status })] }]);
+    assert.equal(subagentTranscriptIsFinal(copy), true, status);
+  }
 });

@@ -6,12 +6,14 @@
 // the claim, and are dropped when the claim's reply ends, is dismissed or is
 // resumed by a person. A quiet automatic retry keeps the clock. A new input gets a new claim, so it starts a new reply with a fresh
 // 60 minutes, and a person's Resume starts the interrupted reply's clock again.
+//
+// There is no size cap: dropping a clock whose reply is still running would
+// hand that reply a fresh 60 minutes. A clock is a few bytes, every claim ends
+// in one of the release signals or with its Bot's removal, and the map starts
+// empty with each launch of the app.
 
 import { SubagentReplyClock } from "../subagents/subagent-supervisor-core.js";
 import { botExecutionScope, type BotExecutionPort } from "./bot-execution.js";
-
-/** Bounds memory if an end signal is ever missed; the oldest claim goes first. */
-const MAX_CLAIM_CLOCKS = 256;
 
 export interface BotSubagentReplyClocks {
   /** The clock for the running claim; a lone call outside any claim gets its own. */
@@ -39,7 +41,6 @@ export function createBotSubagentReplyClocks(): BotSubagentReplyClocks {
       if (held) return held.clock;
       const clock = new SubagentReplyClock();
       clocks.set(key, { botId, clock });
-      if (clocks.size > MAX_CLAIM_CLOCKS) clocks.delete(clocks.keys().next().value!);
       return clock;
     },
     release,
