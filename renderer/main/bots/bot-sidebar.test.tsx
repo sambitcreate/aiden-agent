@@ -672,7 +672,7 @@ test("on a Bots page, a paired Mac's Bots keep up with what that Mac sends", asy
   assert.ok(within(waiting).getByText("Waiting for you"));
 });
 
-test("while one paired Mac's Bot chat opens, picking another opens that one instead", async () => {
+async function mountLegacyHostWithSlowBot() {
   const queryClient = createBotTestQueryClient();
   // An older host: opening a Bot asks it to create the Bot's chat.
   queryClient.setQueryData(hostQueryKeys.list(), [
@@ -694,7 +694,7 @@ test("while one paired Mac's Bot chat opens, picking another opens that one inst
     ],
     runs: [],
   });
-  let releaseSlow: (value: unknown) => void = () => undefined;
+  const slow: { release: () => void } = { release: () => undefined };
   sidebarIpc([], {}, {
     "bots:list": () => [],
     "remote:peerHostStatuses": () => [
@@ -704,19 +704,37 @@ test("while one paired Mac's Bot chat opens, picking another opens that one inst
       const operation = raw as { operation: string; resourceId?: string };
       if (operation.operation !== "createBotChat") return { ok: false, error: { code: "not_found", message: "Not in this test." } };
       const created = { ok: true, value: { id: `chat-${operation.resourceId}`, workspaceId: "w1", botId: operation.resourceId } };
-      return operation.resourceId === "slow" ? new Promise((resolve) => (releaseSlow = () => resolve(created))) : created;
+      return operation.resourceId === "slow" ? new Promise((resolve) => (slow.release = () => resolve(created))) : created;
     },
   });
   const { router } = await mountSidebar("/bots", queryClient);
+  return { router, releaseSlow: () => slow.release() };
+}
+
+test("while one paired Mac's Bot chat opens, picking another opens that one instead", async () => {
+  const { router, releaseSlow } = await mountLegacyHostWithSlowBot();
   fireEvent.click(await screen.findByRole("button", { name: "Slow, on Studio" }));
   await waitFor(() => assert.equal(screen.getByRole("button", { name: "Slow, on Studio" }).getAttribute("aria-busy"), "true"));
   fireEvent.click(screen.getByRole("button", { name: "Quick, on Studio" }));
   await waitFor(() => assert.equal(router.state.location.pathname, "/host/host-b/chat/chat-quick"));
   await act(async () => {
-    releaseSlow(undefined);
+    releaseSlow();
     await new Promise((resolve) => setTimeout(resolve, 20));
   });
   assert.equal(router.state.location.pathname, "/host/host-b/chat/chat-quick", "the earlier open does not take over");
+});
+
+test("picking a paired Mac's Bot again while its chat opens still opens it", async () => {
+  const { router, releaseSlow } = await mountLegacyHostWithSlowBot();
+  const row = () => screen.getByRole("button", { name: "Slow, on Studio" });
+  fireEvent.click(await screen.findByRole("button", { name: "Slow, on Studio" }));
+  await waitFor(() => assert.equal(row().getAttribute("aria-busy"), "true"));
+  fireEvent.click(row());
+  await act(async () => {
+    releaseSlow();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  });
+  await waitFor(() => assert.equal(router.state.location.pathname, "/host/host-b/chat/chat-slow"));
 });
 
 test("Cancel in a row's Delete puts focus back on that row", async () => {

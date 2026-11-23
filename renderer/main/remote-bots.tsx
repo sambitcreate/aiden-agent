@@ -83,14 +83,16 @@ export function useRemoteBots(): {
   const open = async (hostId: string, botId: string) => {
     const view = views.find((entry) => entry.id === hostId);
     if (!view) return;
-    const request = ++latestOpen.current;
     const key = `${hostId}/${botId}`;
     if (hostSharesBotSessions(view)) {
+      latestOpen.current += 1;
       setOpening(null);
       await navigate({ to: "/host/$hostId/bots/$botId/chat", params: { hostId, botId } });
       return;
     }
+    // Picking the Bot already opening leaves that open in charge.
     if (opening === key) return;
+    const request = ++latestOpen.current;
     setOpening(key);
     try {
       const control = await controlFor(view);
