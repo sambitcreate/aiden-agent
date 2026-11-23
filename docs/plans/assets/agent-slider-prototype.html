@@ -505,7 +505,7 @@ activeStopIndex(slider, chatSelection)      <span class="c">// -1 = Custom</span
       <ol class="flow">
         <li><b>You move the thumb.</b> The renderer calls <code>chats:setModel(chatId, providerId, model, thinkingLevel)</code>. <code>setChatModelSelection</code> now compares the level as well. Bot chats and changes during a reply are still refused.</li>
         <li><b>You send.</b> <code>chat-pane</code> passes the chat's own <code>thinkingLevel</code>, replacing the four-way per-provider ternary at <code>chat-pane.tsx:2088–2107</code>.</li>
-        <li><b>Main has the final say.</b> <code>resolveGenerationThinkingLevel(params.thinkingLevel ?? saved)</code> at <code>llm-client.ts:1638</code> clamps any level the model no longer supports. If the turn began with a level stored on the chat and main lowered it, main writes the lowered level back to the chat, unless you picked something newer in the meantime. A Custom chat with no stored level stays that way.</li>
+        <li><b>Main has the final say.</b> <code>resolveGenerationThinkingLevel(params.thinkingLevel ?? saved)</code> at <code>llm-client.ts:1638</code> clamps any level the model no longer supports. If the turn began with a level stored on the chat and main resolved it to a different level, main writes the resolved level back to the chat, unless you picked something newer in the meantime. A Custom chat with no stored level stays that way.</li>
         <li><b>You reopen the chat.</b> The thumb is placed again from the chat's stored provider, model and effort, so it lands where you left it.</li>
       </ol>
     </div>
