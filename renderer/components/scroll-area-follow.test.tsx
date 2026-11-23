@@ -2,7 +2,10 @@ import "../main/bots/test-dom";
 import assert from "node:assert/strict";
 import { afterEach, test } from "node:test";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import type React from "react";
 import {
+  AlertDialog,
+  Dialog,
   DismissHoverSurfaces,
   HoverCard,
   HoverCardContent,
@@ -611,26 +614,46 @@ test("hover cards and tooltips in a covered transcript stay closed, and the repl
   assert.ok(screen.getAllByText("Back to main chat (Esc)").length > 0, "the replacement's tooltip still shows");
 });
 
-test("a popover opened from a covered transcript is a surface of its own, and its tooltips show", () => {
-  const view = render(
-    <TooltipProvider delayDuration={0}>
-      <ScrollArea bodyReplacement={<button type="button">Back to main chat</button>}>
-        <Popover open>
-          <PopoverTrigger asChild>
-            <button type="button">More</button>
-          </PopoverTrigger>
-          <PopoverContent>
-            <Tooltip content="Copies the reply">
-              <button type="button">Copy reply</button>
-            </Tooltip>
-          </PopoverContent>
-        </Popover>
-      </ScrollArea>
-    </TooltipProvider>,
-  );
-  fireEvent.focus(view.getByRole("button", { name: "Copy reply" }));
-  assert.ok(screen.getAllByText("Copies the reply").length > 0);
-});
+const copyReply = (
+  <Tooltip content="Copies the reply">
+    <button type="button">Copy reply</button>
+  </Tooltip>
+);
+const surfacesOpenedFromTheTranscript: Array<[string, React.ReactNode]> = [
+  [
+    "a popover",
+    <Popover open key="popover">
+      <PopoverTrigger asChild>
+        <button type="button">More</button>
+      </PopoverTrigger>
+      <PopoverContent>{copyReply}</PopoverContent>
+    </Popover>,
+  ],
+  [
+    "a dialog",
+    <Dialog open onOpenChange={() => undefined} title="Reply details" key="dialog">
+      {copyReply}
+    </Dialog>,
+  ],
+  [
+    "an alert dialog",
+    <AlertDialog open onOpenChange={() => undefined} title="Delete reply?" confirmLabel="Delete" key="alert">
+      {copyReply}
+    </AlertDialog>,
+  ],
+];
+
+for (const [name, surface] of surfacesOpenedFromTheTranscript) {
+  test(`${name} opened from a covered transcript is a surface of its own, and its tooltips show`, () => {
+    render(
+      <TooltipProvider delayDuration={0}>
+        <ScrollArea bodyReplacement={<button type="button">Back to main chat</button>}>{surface}</ScrollArea>
+      </TooltipProvider>,
+    );
+    fireEvent.focus(screen.getByRole("button", { name: "Copy reply" }));
+    assert.ok(screen.getAllByText("Copies the reply").length > 0);
+  });
+}
 
 test("a side panel floating over the conversation closes its open cards once, and the visible strip shows them again", () => {
   const transcript = (floating: boolean) => (

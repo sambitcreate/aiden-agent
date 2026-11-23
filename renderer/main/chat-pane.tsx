@@ -4023,7 +4023,6 @@ export function ChatPane({ chatId }: { chatId: string }) {
             >
               {pending ? (
                 <ChatApprovalCard
-                  key={pending.approvalId}
                   pending={pending}
                   deciding={decidingApprovalId === pending.approvalId}
                   onDecide={(decision, options) => void decideApproval(pending, decision, options)}

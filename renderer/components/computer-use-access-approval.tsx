@@ -10,7 +10,6 @@ import { cn } from "../lib/ui-utils";
 import type { ComputerUseStatus } from "../lib/types";
 import type { ChatApprovalDecisionOptions } from "./chat-approval-card";
 import { ApprovalActions, ApprovalIconTile } from "./approval-card-parts";
-import { LiveGuard } from "./live-guard";
 
 export const COMPUTER_USE_ALWAYS_ALLOW_HINT =
   "Allow Computer Use in every chat. Turn this off under Computer Use in Settings.";
@@ -172,7 +171,8 @@ export function ComputerUsePermissionChecklist({
  * The once-per-chat Computer Use access request. The answer covers this chat or
  * every chat, so there is no "Allow once". On this Mac, allowing waits until
  * macOS permissions are in place; a remote viewer cannot check them, so the host
- * re-checks readiness when the decision arrives.
+ * re-checks readiness when the decision arrives. `ChatApprovalCard` renders
+ * it, with the status line a screen reader announces.
  */
 export function ComputerUseAccessApproval({
   pending,
@@ -216,79 +216,72 @@ export function ComputerUseAccessApproval({
     .join(" ");
 
   return (
-    <LiveGuard guard="you">
-      <div className="flex min-h-0 flex-col">
-        <p className="sr-only" role="status">
-          {`Approval needed for Computer Use${pendingCount > 1 ? `, 1 of ${pendingCount}` : ""}`}
-        </p>
-        <section
-          ref={cardRef}
-          tabIndex={-1}
-          aria-labelledby={titleId}
-          aria-describedby={summaryId}
-          className="approval-shell composer-shell min-h-0 overflow-y-auto overscroll-contain bg-popover p-4 shadow-composer outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
-          data-computer-use-access="true"
-        >
-          <div className="flex shrink-0 flex-col items-center text-center">
-            <ApprovalIconTile icon={MousePointer2} />
-            <Text variant="strong" as="p" id={titleId} className="mt-2.5 text-balance">
-              Use your Mac with Computer Use?
-              {pendingCount > 1 ? <span className="ml-1.5 font-normal text-tertiary">1 of {pendingCount}</span> : null}
-            </Text>
-            <Text variant="small" color="secondary" as="p" id={summaryId} className="mt-1.5 text-pretty">
-              Screenshots and accessibility text from your apps go to the selected model. If you allow it, Aiden can
-              click and type in any app in this chat without asking again.
-            </Text>
-          </div>
-          {local ? (
-            showChecklist ? (
-              <ComputerUsePermissionChecklist
-                id={checklistId}
-                status={status.data}
-                checkError={status.isError ? status.error : undefined}
-                checking={status.isFetching}
-                onCheckAgain={() => void status.refetch()}
-              />
-            ) : null
-          ) : (
-            <Text variant="small" color="secondary" as="p" role="note" className="mt-2.5 text-center">
-              Finish any Computer Use setup on that Mac.
-            </Text>
-          )}
-          {disabledReason ? (
-            <Text variant="small" color="secondary" as="p" role="note" className="mt-2.5 text-center">
-              {disabledReason}
-            </Text>
-          ) : null}
-          {allowBlockedReason ? (
-            <span id={allowBlockedId} className="sr-only">
-              {allowBlockedReason}
-            </span>
-          ) : null}
-          <ApprovalActions
-            denyRef={denyRef}
-            onDeny={() => onDecide("deny")}
-            {...(canAllow
-              ? {
-                  allowLabel: deciding ? "Sending…" : "Allow in this chat",
-                  onAllow: () => onDecide("allow", { scope: "chat" }),
-                  allowDisabled: allowBlockedReason !== undefined,
-                  ...(allowDescription ? { allowDescribedBy: allowDescription } : {}),
-                  rememberOptions: [
-                    {
-                      key: "always",
-                      label: "Always allow",
-                      hint: COMPUTER_USE_ALWAYS_ALLOW_HINT,
-                      onSelect: () => onDecide("allow", { scope: "always" }),
-                    },
-                  ],
-                }
-              : {})}
-            disabled={disabled}
-          />
-        </section>
+    <section
+      ref={cardRef}
+      tabIndex={-1}
+      aria-labelledby={titleId}
+      aria-describedby={summaryId}
+      className="approval-shell composer-shell min-h-0 overflow-y-auto overscroll-contain bg-popover p-4 shadow-composer outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+      data-computer-use-access="true"
+    >
+      <div className="flex shrink-0 flex-col items-center text-center">
+        <ApprovalIconTile icon={MousePointer2} />
+        <Text variant="strong" as="p" id={titleId} className="mt-2.5 text-balance">
+          Use your Mac with Computer Use?
+          {pendingCount > 1 ? <span className="ml-1.5 font-normal text-tertiary">1 of {pendingCount}</span> : null}
+        </Text>
+        <Text variant="small" color="secondary" as="p" id={summaryId} className="mt-1.5 text-pretty">
+          Screenshots and accessibility text from your apps go to the selected model. If you allow it, Aiden can
+          click and type in any app in this chat without asking again.
+        </Text>
       </div>
-    </LiveGuard>
+      {local ? (
+        showChecklist ? (
+          <ComputerUsePermissionChecklist
+            id={checklistId}
+            status={status.data}
+            checkError={status.isError ? status.error : undefined}
+            checking={status.isFetching}
+            onCheckAgain={() => void status.refetch()}
+          />
+        ) : null
+      ) : (
+        <Text variant="small" color="secondary" as="p" role="note" className="mt-2.5 text-center">
+          Finish any Computer Use setup on that Mac.
+        </Text>
+      )}
+      {disabledReason ? (
+        <Text variant="small" color="secondary" as="p" role="note" className="mt-2.5 text-center">
+          {disabledReason}
+        </Text>
+      ) : null}
+      {allowBlockedReason ? (
+        <span id={allowBlockedId} className="sr-only">
+          {allowBlockedReason}
+        </span>
+      ) : null}
+      <ApprovalActions
+        denyRef={denyRef}
+        onDeny={() => onDecide("deny")}
+        {...(canAllow
+          ? {
+              allowLabel: deciding ? "Sending…" : "Allow in this chat",
+              onAllow: () => onDecide("allow", { scope: "chat" }),
+              allowDisabled: allowBlockedReason !== undefined,
+              ...(allowDescription ? { allowDescribedBy: allowDescription } : {}),
+              rememberOptions: [
+                {
+                  key: "always",
+                  label: "Always allow",
+                  hint: COMPUTER_USE_ALWAYS_ALLOW_HINT,
+                  onSelect: () => onDecide("allow", { scope: "always" }),
+                },
+              ],
+            }
+          : {})}
+        disabled={disabled}
+      />
+    </section>
   );
 }
 

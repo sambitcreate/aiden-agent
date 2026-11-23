@@ -807,3 +807,46 @@ test("arriving at the card from Go to approval scrolls it into view, focuses it 
     delete root.dataset.reduceMotion;
   }
 });
+
+test("the next approval updates the same status line and starts with fresh choices", () => {
+  const formFill = (approvalId: string): ApprovalPrompt => ({
+    approvalId,
+    toolCallId: `call-${approvalId}`,
+    toolName: "form_fill",
+    summary: "Fill the registration form",
+    details: {
+      kind: "form-fill-batch",
+      planId: `plan-${approvalId}`,
+      sourceDocument: "patient.txt",
+      sourceHashPrefix: "4f43b442e79b",
+      targetApp: "Safari",
+      targetTitle: "Registration",
+      rows: [
+        { order: 0, elementIndex: 3, label: "First name", value: "Ada", sourceLabel: "First name", sourceLine: 1 },
+        { order: 1, elementIndex: 4, label: "Last name", value: "Lovelace", sourceLabel: "Last name", sourceLine: 2 },
+      ],
+      skippedRows: [],
+      fillCount: 2,
+      reviewCount: 0,
+      submitExcluded: true,
+    },
+  });
+  const card = (pending: ApprovalPrompt, pendingCount: number) => (
+    <TooltipProvider>
+      <ChatApprovalCard pending={pending} pendingCount={pendingCount} deciding={false} onDecide={() => undefined} />
+    </TooltipProvider>
+  );
+  const view = render(card(formFill("approval-a"), 2));
+  const status = screen.getByRole("status");
+  assert.match(status.textContent ?? "", /, 1 of 2$/u);
+  fireEvent.click(screen.getAllByRole("checkbox")[0]!);
+  assert.ok(screen.getByRole("button", { name: "Fill 1 field" }));
+
+  view.rerender(card(formFill("approval-b"), 1));
+  // A live region inserted with its text already in place may go unannounced,
+  // so the next approval changes the text of the one already on screen.
+  assert.equal(screen.getByRole("status"), status);
+  assert.doesNotMatch(status.textContent ?? "", /1 of/u);
+  assert.ok(screen.getAllByRole("checkbox").every((box) => (box as HTMLInputElement).checked), "no field carries over unticked");
+  assert.ok(screen.getByRole("button", { name: "Fill 2 fields" }));
+});

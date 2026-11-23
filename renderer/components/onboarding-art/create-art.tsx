@@ -376,8 +376,9 @@ export function NativeSubagentsArt() {
     </ArtWindow>
     {/*
       The selected helper's own chat: its task, its steps, and its reply.
-      In narrow tiles it drops below the selected row and runs off the right
-      edge (create-art.css), so the list it opens from stays readable.
+      Below the one-column width it opens under the selected row, across the
+      list, and runs off the right edge (create-art.css), so the row it opens
+      from stays readable and no list words are left cut off beside it.
     */}
     <ArtWindow raised className="oa-sub-chat">
       <div role="group" aria-label="Implementer's chat" className="oa-stack" style={{ gap: 5, padding: "6px 7px" }}>
@@ -385,7 +386,7 @@ export function NativeSubagentsArt() {
           <i className="oa-sub-live-dot" />
           <span className="oa-strong">Implementer</span>
           <span className="oa-grow" />
-          <span className="oa-sub-twisty">
+          <span className="oa-sub-twisty oa-sub-more">
             <ArtIcon icon={MoreHorizontal} />
           </span>
         </div>

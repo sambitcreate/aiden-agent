@@ -769,7 +769,6 @@ export function RemoteChatPane({
             <div className="aiden-dock-inset chat-content-column flex flex-col gap-2 pb-2 empty:hidden">
               {openApproval ? (
                 <ChatApprovalCard
-                  key={openApproval.approvalId}
                   pending={openApproval}
                   deciding={state?.decidingApprovalId === openApproval.approvalId}
                   onDecide={(decision, options) => decide(openApproval, decision, options)}
