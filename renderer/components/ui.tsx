@@ -1104,7 +1104,8 @@ export function ScrollArea({
   scrollRestorationId,
   focusRegion,
   overlay,
-  bodyHidden = false,
+  bodyHidden: bodyHiddenProp = false,
+  bodyReplacement,
   className,
   children,
 }: React.PropsWithChildren<{
@@ -1114,6 +1115,13 @@ export function ScrollArea({
    * stacked layout showing the canvas in the chat's place.
    */
   bodyHidden?: boolean;
+  /**
+   * Shown below the toolbar in place of the body and footer, such as a
+   * helper's chat filling the main pane. The body and footer stay mounted but
+   * hidden from sight, focus and assistive tech, so closing it returns to the
+   * same scroll position and composer draft.
+   */
+  bodyReplacement?: React.ReactNode;
   /**
    * Marks the scrollport as the conversation F6 moves to, so arrow keys and
    * Page Up/Down scroll it once it has focus.
@@ -1156,6 +1164,8 @@ export function ScrollArea({
   scrollContentBottomOffset?: number;
   className?: string;
 }>) {
+  const replaced = bodyReplacement !== undefined && bodyReplacement !== null && bodyReplacement !== false;
+  const bodyHidden = bodyHiddenProp || replaced;
   const viewport = React.useRef<HTMLDivElement>(null);
   const content = React.useRef<HTMLDivElement>(null);
   const toolbarRef = React.useRef<HTMLDivElement>(null);
@@ -1564,7 +1574,7 @@ export function ScrollArea({
           // The conversation's keyboard focus ring, drawn below the overlaid toolbar.
           <div aria-hidden className="conversation-focus-ring pointer-events-none absolute inset-x-0 bottom-0 z-20" style={{ top: toolbarHeight }} />
         ) : null}
-        {overlay ? (
+        {overlay && !replaced ? (
           <div
             className="pointer-events-none absolute inset-x-0 z-30 flex justify-end px-4"
             style={{ top: toolbarHeight + 8 }}
@@ -1572,7 +1582,16 @@ export function ScrollArea({
             <div className="pointer-events-auto">{overlay}</div>
           </div>
         ) : null}
-        {showScrollToBottomButton && offerJump ? (
+        {replaced ? (
+          <div
+            data-scroll-area-replacement=""
+            className="absolute inset-x-0 bottom-0 z-20 flex min-h-0 flex-col"
+            style={{ top: toolbarHeight }}
+          >
+            {bodyReplacement}
+          </div>
+        ) : null}
+        {showScrollToBottomButton && offerJump && !replaced ? (
           // The button floats over the scrollport like the footer, but is centred
           // on the same chat column as the composer, so it follows the column
           // when Quick View insets it (and through that transition) and when a
@@ -1603,7 +1622,12 @@ export function ScrollArea({
           // composer's input and actions at the bottom in view.
           <div
             ref={footerRef}
-            className="absolute inset-x-0 bottom-0 z-10 flex flex-col justify-end"
+            className={cn(
+              "absolute inset-x-0 bottom-0 z-10 flex flex-col justify-end",
+              replaced && "invisible",
+            )}
+            inert={replaced}
+            aria-hidden={replaced || undefined}
             style={{
               maxHeight: `calc(100% - ${toolbarHeight}px)`,
               ...(alignFooterToScrollContent ? { insetInlineEnd: scrollbarGutter } : undefined),

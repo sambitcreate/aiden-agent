@@ -539,17 +539,22 @@ export function resolveSubagentSelection(
     : unique[0]?.runId;
 }
 
+/**
+ * The six status words a person sees for a helper everywhere: the chat card,
+ * the Subagents list and the helper chat. Rarer outcomes fold into the closest
+ * word; the helper chat's problem box explains the specific reason.
+ */
 const STATUS_LABELS: Record<SubagentRunViewState, string> = {
   queued: "Queued",
-  starting: "Starting",
-  running: "Working",
+  starting: "Queued",
+  running: "Running",
   completed: "Done",
   failed: "Failed",
-  timed_out: "Timed out",
-  interrupted: "Interrupted",
-  needs_attention: "Needs attention",
+  timed_out: "Failed",
+  interrupted: "Stopped",
+  needs_attention: "Waiting on you",
   stopped: "Stopped",
-  unknown: "Outcome unknown",
+  unknown: "Stopped",
 };
 
 // Keep an adversarially large injected clock from producing unbounded status

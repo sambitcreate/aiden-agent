@@ -8,6 +8,7 @@ import {
   longestSubagentElapsedLabel,
   subagentRoleLabel,
   subagentSnapshotElapsedMilliseconds,
+  subagentStatusLabel as subagentViewStatusLabel,
   type SubagentRunViewRole,
   type SubagentRunViewState,
 } from "../lib/subagent-view-state";
@@ -51,17 +52,7 @@ function isActiveState(state: SubagentRunViewState | "finished"): boolean {
 export function subagentStateLabel(
   state: SubagentRunViewState | "finished",
 ): string {
-  if (state === "queued") return "Queued";
-  if (state === "starting") return "Starting";
-  if (state === "running") return "Working";
-  if (state === "completed") return "Finished";
-  if (state === "failed") return "Failed";
-  if (state === "timed_out") return "Timed out";
-  if (state === "interrupted") return "Interrupted";
-  if (state === "needs_attention") return "Needs attention";
-  if (state === "stopped") return "Stopped";
-  if (state === "unknown") return "Outcome unknown";
-  return "Finished";
+  return state === "finished" ? "Done" : subagentViewStatusLabel(state);
 }
 
 export function subagentStatusLabel(

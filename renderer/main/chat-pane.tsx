@@ -283,6 +283,17 @@ import {
 import type { SubagentRunSnapshot } from "../shared/subagent-runs";
 import type { SkillInvocationV1 } from "../shared/slash-commands";
 import { mergeSubagentSnapshots } from "../lib/subagent-view-state";
+import {
+  foldLiveSubagentTranscript,
+  type LiveSubagentTranscripts,
+  type SubagentTranscriptUpdateV1,
+} from "../shared/subagent-transcript";
+import {
+  combineLiveSubagentTranscripts,
+  useSubagentHelperChatState,
+  useSubagentHelperChatStore,
+} from "../lib/subagent-helper-chat-store";
+import { ExpandedSubagentHelperChat } from "../components/subagent-helper-chat-expanded";
 import { visibleSubagentReferences } from "../lib/subagent-feature-gate";
 import { persistedChatWorkspaceId } from "../shared/chat-workspace";
 import {
@@ -333,6 +344,7 @@ const TEXT_STREAMING_IDLE_MS = 2_000;
 /** Stable so idle frames don't rebuild the transcript artifact plan. */
 const NO_STREAMING_ARTIFACTS: ChatArtifactV1[] = [];
 const NO_UI_VISUALS: readonly ChatUiVisualV1[] = [];
+const NO_LIVE_SUBAGENT_TRANSCRIPTS: LiveSubagentTranscripts = new Map();
 const NO_UI_DRAFTS: UiDrafts = new Map();
 const NO_VISUAL_DRAFTS: VisualDrafts = new Map();
 // AGENTS.md size notices are shown once per chat until the file changes.
@@ -829,6 +841,8 @@ export function ChatPane({ chatId }: { chatId: string }) {
     null,
   );
   const [liveSubagents, setLiveSubagents] = React.useState<SubagentRunSnapshot[]>([]);
+  const [liveSubagentTranscripts, setLiveSubagentTranscripts] =
+    React.useState<LiveSubagentTranscripts>(NO_LIVE_SUBAGENT_TRANSCRIPTS);
   const [error, setError] = React.useState<string | null>(null);
   const [approvals, setApprovals] = React.useState<ApprovalPrompt[]>([]);
   // After a Deny, the composer invites the user to say what to do instead,
@@ -1037,6 +1051,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
     setGenerationTimeline(null);
     generationTimelineRef.current = null;
     setLiveSubagents([]);
+    setLiveSubagentTranscripts(NO_LIVE_SUBAGENT_TRANSCRIPTS);
     setError(null);
     setApprovals([]);
     setQuestionnaire(null);
@@ -1126,6 +1141,14 @@ export function ChatPane({ chatId }: { chatId: string }) {
         workspaceId: effectiveWorkspaceId,
       }),
     [chatId, effectiveWorkspaceId, liveSubagents, visibleDetachedProjection?.subagents],
+  );
+  const displayedLiveSubagentTranscripts = React.useMemo(
+    () =>
+      combineLiveSubagentTranscripts(
+        liveSubagentTranscripts,
+        visibleDetachedProjection?.subagentTranscripts,
+      ),
+    [liveSubagentTranscripts, visibleDetachedProjection?.subagentTranscripts],
   );
   const latestAssistantResponse = React.useMemo(
     () =>
@@ -1654,6 +1677,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
       setGenerationTimeline(null);
       generationTimelineRef.current = null;
       setLiveSubagents([]);
+      setLiveSubagentTranscripts(NO_LIVE_SUBAGENT_TRANSCRIPTS);
       setApprovals([]);
       setQuestionnaire(null);
       setQuestionnaireSubmitting(false);
@@ -1856,6 +1880,16 @@ export function ChatPane({ chatId }: { chatId: string }) {
                     }),
                   );
                 },
+                onSubagentTranscript: (update: SubagentTranscriptUpdateV1) => {
+                  if (
+                    !mountedRef.current ||
+                    generationIntentRef.current !== generationIntent ||
+                    chatIdRef.current !== chatId
+                  ) {
+                    return;
+                  }
+                  setLiveSubagentTranscripts((current) => foldLiveSubagentTranscript(current, update));
+                },
               }
             : {}),
           onTimeline: (next) => {
@@ -1923,6 +1957,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
             if (generationIntentRef.current !== generationIntent) return;
             if (mountedRef.current) {
               setLiveSubagents([]);
+              setLiveSubagentTranscripts(NO_LIVE_SUBAGENT_TRANSCRIPTS);
               setStreamingText(null);
               setStreamingReasoning(null);
               setStreamingArtifacts([]);
@@ -1996,7 +2031,10 @@ export function ChatPane({ chatId }: { chatId: string }) {
                 if (generationIntentRef.current !== generationIntent) return;
               }
               if (mountedRef.current) {
-                if (updatedChat || !partial) setLiveSubagents([]);
+                if (updatedChat || !partial) {
+                  setLiveSubagents([]);
+                  setLiveSubagentTranscripts(NO_LIVE_SUBAGENT_TRANSCRIPTS);
+                }
                 if (!partial || updatedChat) {
                   setStreamingText(null);
                   setStreamingReasoning(null);
@@ -2688,6 +2726,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
     setGenerationTimeline(null);
     generationTimelineRef.current = null;
     setLiveSubagents([]);
+    setLiveSubagentTranscripts(NO_LIVE_SUBAGENT_TRANSCRIPTS);
     setApprovals([]);
     setQuestionnaire(null);
     setQuestionnaireSubmitting(false);
@@ -2762,6 +2801,25 @@ export function ChatPane({ chatId }: { chatId: string }) {
   );
   // Aiden Live answers the first approval by voice through this same decide.
   usePublishLiveChatApprovals(chatId, approvals, decideApproval);
+
+  // The helper chats read this chat's live helper updates and its approvals.
+  const helperChatStore = useSubagentHelperChatStore();
+  const helperChatState = useSubagentHelperChatState();
+  React.useLayoutEffect(() => {
+    helperChatStore?.syncLive(chatId, displayedLiveSubagentTranscripts);
+  }, [chatId, displayedLiveSubagentTranscripts, helperChatStore]);
+  React.useLayoutEffect(() => {
+    helperChatStore?.syncApprovals(chatId, approvals, decidingApprovalId, decideApproval);
+  }, [approvals, chatId, decideApproval, decidingApprovalId, helperChatStore]);
+  React.useLayoutEffect(() => {
+    if (!helperChatStore) return;
+    // Leaving the chat closes its expanded helper chat.
+    return () => {
+      if (helperChatStore.getState().chatId === chatId) helperChatStore.collapse({ restoreFocus: false });
+    };
+  }, [chatId, helperChatStore]);
+  const helperChatExpanded =
+    helperChatState.chatId === chatId && helperChatState.expandedRunId !== null;
 
   React.useEffect(() => {
     if (!questionnaire) return;
@@ -3779,6 +3837,9 @@ export function ChatPane({ chatId }: { chatId: string }) {
       <ScrollArea
         focusRegion="chat"
         bodyHidden={designChatBodyHidden}
+        bodyReplacement={
+          helperChatExpanded ? <ExpandedSubagentHelperChat chatId={chatId} /> : undefined
+        }
         overlay={findBar}
         toolbarAccessory={<DesignModeBannerSlot />}
         className="h-full min-h-0"
@@ -3922,7 +3983,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
                   cardRef={approvalCardRef}
                   denyRef={approvalDenyRef}
                   pendingCount={approvals.length}
-                  keyboardShortcuts
+                  keyboardShortcuts={!helperChatExpanded}
                   liveVoice={pendingLiveVoice}
                   {...repeatNudge}
                 />

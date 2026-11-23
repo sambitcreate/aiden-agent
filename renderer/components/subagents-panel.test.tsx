@@ -51,7 +51,7 @@ import {
   type SubagentDetailAnnouncementRequest,
 } from "./subagent-live-announcer.js";
 import { groupSubagentRuns, SubagentRoster } from "./subagent-roster.js";
-import { SubagentDetail, subagentProjectionNotices } from "./subagent-detail.js";
+import { SubagentDetail } from "./subagent-detail.js";
 import { SubagentEventProjector } from "../../main/services/subagents/subagent-event-projector.js";
 import { CopyButton } from "./copy-button.js";
 import { SubagentsPanel } from "./subagents-panel.js";
@@ -482,13 +482,13 @@ test("subagent chips are accessible buttons with live or frozen activity marks",
 
   assert.equal((markup.match(/data-subagent-chip-run-id=/gu) ?? []).length, 2);
   assert.match(markup, /aria-label="Open Active scout\. Status: Reading component boundaries\."/u);
-  assert.match(markup, /aria-label="Open Finished reviewer\. Status: Finished\."/u);
+  assert.match(markup, /aria-label="Open Finished reviewer\. Status: Done\."/u);
   assert.match(markup, /data-subagent-chip-run-id="active"/u);
   assert.match(markup, /data-subagent-chip-run-id="done"/u);
   assert.match(markup, /data-subagent-mark-state="active"/u);
   assert.match(markup, /data-subagent-mark-state="terminal"/u);
   assert.match(markup, />Reading component boundaries</u);
-  assert.match(markup, />Finished</u);
+  assert.match(markup, />Done</u);
   assert.doesNotMatch(markup, /role="status"/u);
   assert.doesNotMatch(markup, /aria-live=/u);
   assert.doesNotMatch(
@@ -555,10 +555,10 @@ test("a waiting child shows its pending question in chips, roster, detail, and l
   );
   assert.match(
     chips,
-    /aria-label="Open Fixture cleaner\. Status: Needs attention: Should I delete the generated fixtures in tests\/tmp\?\."/u,
+    /aria-label="Open Fixture cleaner\. Status: Waiting on you: Should I delete the generated fixtures in tests\/tmp\?\."/u,
   );
-  assert.match(chips, />Needs attention: Should I delete the generated fixtures in tests\/tmp\?</u);
-  assert.match(chips, /aria-label="Open Silent scout\. Status: Needs attention\."/u);
+  assert.match(chips, />Waiting on you: Should I delete the generated fixtures in tests\/tmp\?</u);
+  assert.match(chips, /aria-label="Open Silent scout\. Status: Waiting on you\."/u);
   assert.doesNotMatch(chips, /Needs attention\.</u);
 
   const roster = renderToStaticMarkup(
@@ -570,12 +570,12 @@ test("a waiting child shows its pending question in chips, roster, detail, and l
   );
   assert.match(
     roster,
-    /aria-label="Fixture cleaner, scout, Needs attention: Should I delete the generated fixtures in tests\/tmp\?"/u,
+    /aria-label="Fixture cleaner, scout, Waiting on you: Should I delete the generated fixtures in tests\/tmp\?"/u,
   );
   assert.match(roster, /data-subagent-pending-question="true"[^>]*>Should I delete the generated fixtures/u);
   assert.equal((roster.match(/data-subagent-pending-question/gu) ?? []).length, 1);
   // Without a question the row keeps its task preview instead of generic copy.
-  assert.match(roster, /aria-label="Silent scout, scout, Needs attention"/u);
+  assert.match(roster, /aria-label="Silent scout, scout, Waiting on you"/u);
   assert.match(roster, />Review the renderer integration</u);
 
   const detail = renderToStaticMarkup(<SubagentDetail run={asking} />);
@@ -586,7 +586,7 @@ test("a waiting child shows its pending question in chips, roster, detail, and l
 
   assert.match(
     subagentSnapshotLiveSummary([{ ...asking, updatedAt: 9_000 }, generic]),
-    /^2 active subagents: 2 needs attention; 0 finished\. Latest active update: Fixture cleaner, Needs attention: Should I delete the generated fixtures in tests\/tmp\?\.$/u,
+    /^2 active subagents: 2 needs attention; 0 finished\. Latest active update: Fixture cleaner, Waiting on you: Should I delete the generated fixtures in tests\/tmp\?\.$/u,
   );
 });
 
@@ -626,11 +626,11 @@ test("chips, roster, and detail show each child's recorded model and effort only
       onSelect={() => undefined}
     />,
   );
-  assert.match(roster, /aria-label="Cheap scout, scout, Working, Model anthropic\/claude-haiku, effort extra high"/u);
+  assert.match(roster, /aria-label="Cheap scout, scout, Running, Model anthropic\/claude-haiku, effort extra high"/u);
   assert.match(roster, /data-subagent-model="chosen"[^>]*>anthropic\/claude-haiku · Extra high</u);
   // Inherited and legacy rows keep their compact layout; only a child-specific choice adds a line.
   assert.equal((roster.match(/data-subagent-model=/gu) ?? []).length, 1);
-  assert.match(roster, /aria-label="Older scout, scout, Working"/u);
+  assert.match(roster, /aria-label="Older scout, scout, Running"/u);
 
   const chosenDetail = renderToStaticMarkup(<SubagentDetail run={chosen} />);
   assert.match(chosenDetail, /Model: anthropic\/claude-haiku · Effort Extra high · Chosen by the agent/u);
@@ -639,10 +639,9 @@ test("chips, roster, and detail show each child's recorded model and effort only
   assert.doesNotMatch(legacyDetail, /Effort/u);
 });
 
-test("V2 detail exposes context but gates controls on production callbacks", () => {
+test("V2 detail gates controls on production callbacks", () => {
   const fresh = v2Run();
   const unavailable = renderToStaticMarkup(<SubagentDetail run={fresh} />);
-  assert.match(unavailable, /Context: task only \(fresh session\)/u);
   assert.doesNotMatch(unavailable, /data-subagent-controls/u);
 
   const stoppable = renderToStaticMarkup(<SubagentDetail run={fresh} onStop={() => undefined} />);
@@ -658,13 +657,11 @@ test("V2 detail exposes context but gates controls on production callbacks", () 
     terminalMarkdown: "Done.",
   });
   const retryable = renderToStaticMarkup(<SubagentDetail run={forked} />);
-  assert.match(retryable, /Context: bounded visible conversation text copied at launch/u);
   assert.doesNotMatch(retryable, /aria-label="Retry Code scout"/u);
 
   const legacy = renderToStaticMarkup(
     <SubagentDetail run={run("legacy")} onStop={() => undefined} />,
   );
-  assert.doesNotMatch(legacy, /data-subagent-context/u);
   assert.doesNotMatch(legacy, /data-subagent-controls/u);
 });
 
@@ -691,7 +688,7 @@ test("detail renders bounded effect kind, state, and explicit unknown guidance",
   assert.doesNotMatch(html, /terminalDigest|authorityDigest|argumentDigest/u);
 });
 
-test("detail names bounded previews, exposes exact copy controls, and explains projection markers", () => {
+test("fallback shows the saved task and result with copy controls and no saved-view notice", () => {
   const projected = v2Run({
     taskPreview: "Inspect encoded-looking text ... [task preview truncated]",
     state: "completed",
@@ -700,29 +697,13 @@ test("detail names bounded previews, exposes exact copy controls, and explains p
     terminalMarkdown: "Result with [REDACTED ENCODED TEXT]\n\n… [report truncated]",
     projectionNotices: ["task_truncated", "report_truncated", "display_filtered"],
   });
-  assert.deepEqual(subagentProjectionNotices(projected), [
-    "This saved task preview was shortened.",
-    "This saved result was shortened.",
-    "Some text was replaced by a privacy marker in this saved inspector. This display filter does not rewrite the child's task or its report to the main thread.",
-  ]);
   const html = renderToStaticMarkup(<SubagentDetail run={projected} />);
-  assert.match(html, />Task preview</u);
-  assert.match(html, /aria-label="Copy task preview for Code scout"/u);
+  assert.match(html, />What it was asked</u);
+  assert.match(html, /Inspect encoded-looking text/u);
+  assert.match(html, /aria-label="Copy what Code scout was asked"/u);
   assert.match(html, /aria-label="Copy result from Code scout"/u);
-  assert.match(html, /data-subagent-projection-notice="true"/u);
-  assert.match(html, /Saved view notice/u);
-  assert.match(html, /overflow-wrap:anywhere/u);
-
-  const literalMarkers = v2Run({
-    taskPreview: "Document ... [task preview truncated] literally.",
-    state: "completed",
-    activity: undefined,
-    finishedAt: 3_000,
-    terminalMarkdown: "Explain [REDACTED ENCODED TEXT] and ... [report truncated] literally.",
-  });
-  assert.deepEqual(subagentProjectionNotices(literalMarkers), []);
-  const literalHtml = renderToStaticMarkup(<SubagentDetail run={literalMarkers} />);
-  assert.doesNotMatch(literalHtml, /data-subagent-projection-notice/u);
+  assert.doesNotMatch(html, /Saved view notice/u);
+  assert.doesNotMatch(html, /privacy marker/u);
 });
 
 test("detail renders and copies one terminal result when live and terminal text coexist", () => {
@@ -1284,8 +1265,8 @@ test("the roster separates active and terminal runs without color-only status", 
   );
   assert.match(markup, />Active · 1</u);
   assert.match(markup, />Done · 1</u);
-  assert.match(markup, /aria-label="Code scout, scout, Working"/u);
-  assert.match(markup, /aria-label="Final reviewer, reviewer, Finished"/u);
+  assert.match(markup, /aria-label="Code scout, scout, Running"/u);
+  assert.match(markup, /aria-label="Final reviewer, reviewer, Done"/u);
   assert.match(markup, /aria-selected="true"/u);
   assert.equal((markup.match(/aria-selected="true"/gu) ?? []).length, 1);
   assert.equal((markup.match(/aria-selected="false"/gu) ?? []).length, 1);
@@ -1323,11 +1304,11 @@ test("live context readings show only on active roster rows and the running deta
   );
   assert.match(
     roster,
-    /aria-label="Code scout, scout, Working, context 42 percent, 84K of 200K tokens"/u,
+    /aria-label="Code scout, scout, Running, context 42 percent, 84K of 200K tokens"/u,
   );
   assert.match(roster, /title="Context window: 84K \/ 200K tokens \(42%\)"/u);
   assert.match(roster, /title="Context window: 170K \/ 200K tokens \(85%\)"/u);
-  assert.match(roster, /aria-label="Final reviewer, scout, Finished"/u);
+  assert.match(roster, /aria-label="Final reviewer, scout, Done"/u);
   assert.doesNotMatch(roster, /data-subagent-context-usage="done"/u);
   assert.doesNotMatch(roster, /95%/u);
 
@@ -1382,7 +1363,7 @@ test("presentation-only saving and stale states stay visible without rewriting p
   );
   assert.match(savingDetail, /data-subagent-presentation="saving"/u);
   assert.match(savingDetail, /Recording subagent outcome/u);
-  assert.match(savingDetail, /Finished\. Aiden is waiting for this outcome/u);
+  assert.match(savingDetail, /Done\. Aiden is waiting for this outcome/u);
 
   const delayedDetail = renderToStaticMarkup(
     <SubagentDetail
@@ -1395,7 +1376,7 @@ test("presentation-only saving and stale states stay visible without rewriting p
   );
   assert.match(delayedDetail, /data-subagent-presentation="save_delayed"/u);
   assert.match(delayedDetail, /Outcome not yet saved/u);
-  assert.match(delayedDetail, /Finished\. This outcome has not appeared/u);
+  assert.match(delayedDetail, /Done\. This outcome has not appeared/u);
 });
 
 test("a stuck helper offers Stop inside its No recent update notice, once", () => {
@@ -1408,7 +1389,7 @@ test("a stuck helper offers Stop inside its No recent update notice, once", () =
   assert.equal(stopButtons.length, 1);
   const notice = detail.indexOf("No recent update");
   const stop = detail.indexOf('aria-label="Stop subtree Slow scout"');
-  const task = detail.indexOf("Task preview");
+  const task = detail.indexOf("What it was asked");
   assert.ok(notice >= 0 && notice < stop && stop < task);
 
   // A helper that is updating normally keeps its Stop in the ordinary controls row.
@@ -1671,8 +1652,8 @@ test("the roster renders strict V2 nesting as an expanded semantic tree with rov
   assert.match(markup, /role="treeitem" aria-level="2"[^>]*data-subagent-treeitem="nested"/u);
   assert.match(markup, /aria-expanded="true"/u);
   assert.match(markup, /role="group" aria-label="Children of Parent planner"/u);
-  assert.match(markup, /Parent planner, planner, Finished, 1 active descendant/u);
-  assert.match(markup, />1 active · Finished</u);
+  assert.match(markup, /Parent planner, planner, Done, 1 active descendant/u);
+  assert.match(markup, />1 active · Done</u);
   assert.match(markup, /data-subagent-run-id="nested" tabindex="0"/u);
   assert.match(markup, /data-subagent-run-id="parent" tabindex="-1"/u);
 });
@@ -2570,7 +2551,7 @@ test("mounted SubagentsPanel preserves narrow content and controls across exact 
       assert.ok(buttonWithText("Retry refresh"), `${width}px retains refresh retry`);
       assert.ok(
         Array.from(mounted.container.getElementsByTagName("button")).some((button) =>
-          button.getAttribute("aria-label")?.startsWith("Copy task preview for"),
+          button.getAttribute("aria-label")?.startsWith("Copy what "),
         ),
       );
       assert.ok(
@@ -2897,8 +2878,6 @@ test("detail and panel preserve bounded rendering and navigation contracts", () 
   const detailSource = readFileSync(new URL("./subagent-detail.tsx", import.meta.url), "utf8");
   const panelSource = readFileSync(new URL("./subagents-panel.tsx", import.meta.url), "utf8");
 
-  assert.match(detailSource, /<details className=/u);
-  assert.doesNotMatch(detailSource, /<details[^>]*\bopen=/u);
   assert.match(detailSource, /<ErrorBoundary/u);
   assert.match(detailSource, /<Markdown content=\{resultText\}/u);
   assert.match(detailSource, /\{awayFromLatest \? \(/u);
@@ -2907,14 +2886,9 @@ test("detail and panel preserve bounded rendering and navigation contracts", () 
   assert.doesNotMatch(detailSource, /event\.target === event\.currentTarget/u);
   assert.match(detailSource, /dataset\.reduceMotion === "true"/u);
   assert.match(detailSource, /data-subagent-detail-heading="true"/u);
-  assert.match(detailSource, /subagentMilestoneAggregate\(run\)/u);
   assert.match(detailSource, /run\.milestones\.map/u);
   assert.match(detailSource, /Model:/u);
-  assert.match(detailSource, /Copy task preview for/u);
   assert.match(detailSource, /Copy result from/u);
-  assert.match(detailSource, /data-subagent-projection-notice="true"/u);
-  assert.match(detailSource, /Saved details omit raw tool payloads, commands,/u);
-  assert.match(detailSource, /Children can read ordinary source and docs as written/u);
   assert.match(detailSource, /<Callout color="red" role="note">/u);
 
   assert.match(panelSource, /chatId: string \| null/u);

@@ -1,5 +1,5 @@
 import * as React from "react";
-import { ArrowDownToLine, ChevronRight, Square } from "lucide-react";
+import { ArrowDownToLine, Square } from "lucide-react";
 import { cn } from "../lib/ui-utils";
 import {
   subagentDetailGrowthAction,
@@ -23,17 +23,6 @@ import { SubagentMark, subagentStateLabel } from "./subagent-chips";
 import { Button, Callout, ErrorBoundary, Text } from "./ui";
 import { CopyButton } from "./copy-button";
 
-export function subagentProjectionNotices(run: SubagentRunSnapshot): string[] {
-  const notices = new Set(run.projectionNotices);
-  return [
-    notices.has("task_truncated") ? "This saved task preview was shortened." : null,
-    notices.has("report_truncated") ? "This saved result was shortened." : null,
-    notices.has("display_filtered")
-      ? "Some text was replaced by a privacy marker in this saved inspector. This display filter does not rewrite the child's task or its report to the main thread."
-      : null,
-  ].filter((notice): notice is string => notice !== null);
-}
-
 export function formatSubagentElapsed(startedAt: number, endedAt: number): string {
   const totalSeconds = Math.max(0, Math.floor((endedAt - startedAt) / 1_000));
   if (totalSeconds < 60) return `${totalSeconds}s`;
@@ -52,21 +41,16 @@ export function subagentToolAggregate(run: SubagentRunSnapshot): string {
 }
 
 const SUBAGENT_MILESTONE_LABELS: Record<SubagentMilestoneKind, string> = {
-  reading: "Read a workspace file",
-  listing: "Listed a workspace directory",
-  matching: "Matched workspace file names",
-  searching: "Searched workspace text",
-  inspecting: "Tool activity",
-  composing: "Composed the bounded report",
+  reading: "Read a file",
+  listing: "Looked in a folder",
+  matching: "Found files by name",
+  searching: "Searched the files",
+  inspecting: "Used a tool",
+  composing: "Wrote its report",
 };
 
 export function subagentMilestoneLabel(milestone: SubagentMilestoneKind): string {
   return SUBAGENT_MILESTONE_LABELS[milestone];
-}
-
-export function subagentMilestoneAggregate(run: SubagentRunSnapshot): string {
-  const count = run.milestones?.length ?? 0;
-  return `${count} activity milestone${count === 1 ? "" : "s"}`;
 }
 
 function UnrenderableSubagentUpdate({ content }: { content: string }) {
@@ -131,7 +115,6 @@ export const SubagentDetail = React.forwardRef<HTMLHeadingElement, SubagentDetai
     const modelDisplay = subagentModelDisplay(run);
     const pendingQuestion = subagentPendingQuestion(run);
     const resultText = run.terminalMarkdown ?? run.latestText;
-    const projectionNotices = subagentProjectionNotices(run);
     const active =
       run.state === "queued" ||
       run.state === "starting" ||
@@ -297,19 +280,6 @@ export const SubagentDetail = React.forwardRef<HTMLHeadingElement, SubagentDetai
                     {subagentContextSummary(contextUsage)}
                   </Text>
                 ) : null}
-                {run.version === 2 ? (
-                  <Text
-                    as="p"
-                    variant="small"
-                    color="tertiary"
-                    className="mt-0.5 break-words"
-                    data-subagent-context={run.context}
-                  >
-                    {run.context === "fresh"
-                      ? "Context: task only (fresh session)"
-                      : "Context: bounded visible conversation text copied at launch"}
-                  </Text>
-                ) : null}
               </span>
             </header>
 
@@ -393,11 +363,11 @@ export const SubagentDetail = React.forwardRef<HTMLHeadingElement, SubagentDetai
                   color="tertiary"
                   className="min-w-0 flex-1"
                 >
-                  Task preview
+                  What it was asked
                 </Text>
                 <CopyButton
                   text={run.taskPreview}
-                  label={`Copy task preview for ${run.label}`}
+                  label={`Copy what ${run.label} was asked`}
                   className="shrink-0"
                 />
               </div>
@@ -405,17 +375,6 @@ export const SubagentDetail = React.forwardRef<HTMLHeadingElement, SubagentDetai
                 {run.taskPreview}
               </Text>
             </section>
-
-            {projectionNotices.length > 0 ? (
-              <Callout role="note" data-subagent-projection-notice="true">
-                <Text variant="small-strong">Saved view notice</Text>
-                <ul className="list-disc space-y-1 pl-4 text-small text-secondary">
-                  {projectionNotices.map((notice) => (
-                    <li key={notice}>{notice}</li>
-                  ))}
-                </ul>
-              </Callout>
-            ) : null}
 
             {active || pendingQuestion ? (
               <section aria-labelledby={`subagent-activity-${run.runId}`}>
@@ -467,35 +426,26 @@ export const SubagentDetail = React.forwardRef<HTMLHeadingElement, SubagentDetai
               </section>
             ) : null}
 
-            <details className="group/milestones rounded-card bg-well">
-              <summary className="flex cursor-default list-none items-center gap-2 rounded-card px-3 py-2 outline-none transition-colors hover:bg-list-hover focus-visible:bg-list-selection focus-visible:outline-none motion-reduce:transition-none">
-                <ChevronRight
-                  aria-hidden="true"
-                  className="size-3.5 shrink-0 text-tertiary transition-transform duration-150 group-open/milestones:rotate-90 motion-reduce:transition-none"
-                />
-                <Text variant="small-strong">
-                  {subagentToolAggregate(run)} · {subagentMilestoneAggregate(run)}
-                </Text>
-              </summary>
-              <div className="space-y-2 border-t border-separator px-3 py-2">
-                {run.milestones?.length ? (
-                  <ol className="list-decimal space-y-1 pl-5 text-small text-secondary">
-                    {run.milestones.map((milestone, index) => (
-                      <li key={`${index}:${milestone}`}>{subagentMilestoneLabel(milestone)}</li>
-                    ))}
-                  </ol>
-                ) : (
-                  <Text as="p" variant="small" color="secondary">
-                    No saved activity milestones.
-                  </Text>
-                )}
-                <Text as="p" variant="small" color="secondary">
-                  {run.tokens} tokens recorded. Saved details omit raw tool payloads, commands, and
-                  absolute paths. Children can read ordinary source and docs as written; protected
-                  credential and private-key paths are unavailable.
-                </Text>
-              </div>
-            </details>
+            <section aria-labelledby={`subagent-did-${run.runId}`} data-subagent-did="true">
+              <Text
+                as="h3"
+                id={`subagent-did-${run.runId}`}
+                variant="small-strong"
+                color="tertiary"
+              >
+                What it did
+              </Text>
+              {run.milestones?.length ? (
+                <ol className="mt-1 list-decimal space-y-1 pl-5 text-small text-secondary">
+                  {run.milestones.map((milestone, index) => (
+                    <li key={`${index}:${milestone}`}>{subagentMilestoneLabel(milestone)}</li>
+                  ))}
+                </ol>
+              ) : null}
+              <Text as="p" variant="small" color="tertiary" className="mt-1 tabular-nums">
+                {subagentToolAggregate(run)} · {run.tokens} tokens
+              </Text>
+            </section>
 
             {run.error ? (
               <Callout color="red" role="note">

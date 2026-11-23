@@ -97,7 +97,7 @@ test("a working batch reads as kicked off and a settled one as ran, with the lon
   // The running run has worked for over two minutes; the finished one for five seconds.
   assert.match(toggle.textContent ?? "", /2m \d+s/u);
 
-  fireEvent.click(within(group).getByRole("button", { name: /^Open Run b\. Status: Finished\./u }));
+  fireEvent.click(within(group).getByRole("button", { name: /^Open Run b\. Status: Done\./u }));
   assert.deepEqual(opened, ["b"]);
 
   rerender(

@@ -31,6 +31,8 @@ import {
 import type { SubagentEffectActivityV1, SubagentRunSnapshot } from "../shared/subagent-runs";
 import { SubagentMark, subagentStateLabel } from "./subagent-chips";
 import { SubagentDetail } from "./subagent-detail";
+import { SubagentHelperChat, type SubagentHelperChatApproval } from "./subagent-helper-chat";
+import type { MergedSubagentTranscript } from "../shared/subagent-transcript";
 import {
   SubagentOwnerFocusBoundary,
   useSubagentSelectionRestoreRunRepair,
@@ -43,6 +45,21 @@ export function resolveSubagentSelection(
   requestedRunId: string | null | undefined,
 ): string | null {
   return resolveRunViewSelection(requestedRunId ?? undefined, runs) ?? null;
+}
+
+/** What the panel needs to show a helper's own conversation. */
+export interface SubagentsPanelHelperChat {
+  /** The saved conversation merged with what has streamed since. */
+  transcriptFor: (runId: string) => MergedSubagentTranscript;
+  approvalFor?: (run: SubagentRunSnapshot) => SubagentHelperChatApproval | null;
+  onAskRetry?: (text: string) => void;
+  onExpand?: (runId: string, opener: HTMLElement) => void;
+  onBack?: () => void;
+  /**
+   * The live updates start after the saved copy. `savedRevision` is the saved
+   * copy's revision, so the owner can read it again once per gap.
+   */
+  onTranscriptIncomplete?: (runId: string, savedRevision: number) => void;
 }
 
 export interface SubagentsPanelProps {
@@ -71,6 +88,8 @@ export interface SubagentsPanelProps {
    */
   contextUsageByRunId?: SubagentContextUsageByRunId;
   ownerReplacementFallbackFocusTarget?: () => HTMLElement | null;
+  /** Show a helper's conversation when one is saved or streaming; otherwise the summary. */
+  helperChat?: SubagentsPanelHelperChat;
   className?: string;
 }
 
@@ -171,6 +190,7 @@ function OwnedSubagentsPanel({
   active = true,
   compact = false,
   contextUsageByRunId,
+  helperChat,
   className,
 }: SubagentsPanelProps) {
   const ownerKey = subagentPanelOwnerKey(chatId, workspaceId);
@@ -372,6 +392,23 @@ function OwnedSubagentsPanel({
     });
   };
 
+  const helperTranscript =
+    helperChat && detailSnapshot ? helperChat.transcriptFor(detailSnapshot.runId) : null;
+  const helperTranscriptGap =
+    helperTranscript && !helperTranscript.complete && detailSnapshot
+      ? { runId: detailSnapshot.runId, savedRevision: helperTranscript.transcript?.revision ?? 0 }
+      : null;
+  const onTranscriptIncomplete = helperChat?.onTranscriptIncomplete;
+  React.useEffect(() => {
+    if (!active || !helperTranscriptGap) return;
+    onTranscriptIncomplete?.(helperTranscriptGap.runId, helperTranscriptGap.savedRevision);
+  }, [
+    active,
+    helperTranscriptGap?.runId,
+    helperTranscriptGap?.savedRevision,
+    onTranscriptIncomplete,
+  ]);
+
   const detailRegion = selectedRun ? (
     <div
       className="min-h-0 min-w-0 flex-1"
@@ -385,7 +422,27 @@ function OwnedSubagentsPanel({
           nextTarget instanceof Node && event.currentTarget.contains(nextTarget);
       }}
     >
-      {detailSnapshot ? (
+      {detailSnapshot && helperChat && helperTranscript?.transcript ? (
+        <SubagentHelperChat
+          key={detailSnapshot.runId}
+          ref={detailHeadingRef}
+          run={detailSnapshot}
+          transcript={helperTranscript.transcript}
+          presentation={selectedPresentation}
+          approval={helperChat.approvalFor?.(detailSnapshot) ?? null}
+          onStop={onStopRun}
+          stopPending={selectedStopPending}
+          stopError={selectedStopError}
+          onAskRetry={helperChat.onAskRetry}
+          onExpand={
+            helperChat.onExpand
+              ? (opener) => helperChat.onExpand?.(detailSnapshot.runId, opener)
+              : undefined
+          }
+          onBack={helperChat.onBack}
+          now={now}
+        />
+      ) : detailSnapshot ? (
         <SubagentDetail
           key={detailSnapshot.runId}
           ref={detailHeadingRef}

@@ -266,10 +266,16 @@ function RunFeed({
           variant="muted"
           size="small"
           onClick={(event) => onOpen(run.runId, event.currentTarget)}
-          aria-label={`${run.state === "needs_attention" ? "Review" : active ? "Open" : "View result of"} ${run.label} in the side panel`}
+          aria-label={
+            run.state === "needs_attention"
+              ? `Review ${run.label} in the side panel`
+              : active
+                ? `Open helper chat for ${run.label}`
+                : `View result of ${run.label} in the side panel`
+          }
         >
           <PanelRight aria-hidden="true" className="size-3.5" />
-          {run.state === "needs_attention" ? "Review" : active ? "Open in side panel" : "View result"}
+          {run.state === "needs_attention" ? "Review" : active ? "Open helper chat" : "View result"}
         </Button>
         {stoppable ? (
           <Button

@@ -227,10 +227,10 @@ test("the tray lists the batch, opens the headline run's live feed, and closes w
   assert.deepEqual(
     within(feed).getAllByRole("listitem").map((item) => item.textContent),
     [
-      "Listed a workspace directory",
-      "Matched workspace file names",
-      "Searched workspace text",
-      "Read a workspace file",
+      "Looked in a folder",
+      "Found files by name",
+      "Searched the files",
+      "Read a file",
       "Searching workspace text",
     ],
   );
@@ -277,7 +277,7 @@ test("tray actions open runs and the panel, reveal the transcript, and stop fore
   );
 
   await act(async () => {
-    fireEvent.click(within(tray).getByRole("button", { name: "Open Run a in the side panel" }));
+    fireEvent.click(within(tray).getByRole("button", { name: "Open helper chat for Run a" }));
   });
   assert.deepEqual(calls.opened, ["a"]);
   // The tray row is gone, so the panel hands focus back to the pill.

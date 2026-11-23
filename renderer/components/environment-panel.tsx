@@ -53,7 +53,16 @@ import {
 import { contextPressurePercent, type ChatContextPressureV1 } from "../shared/context-pressure";
 import type { Workspace } from "../lib/types";
 import { ReviewPanel } from "./review-panel";
-import { SubagentsPanel } from "./subagents-panel";
+import { SubagentsPanel, type SubagentsPanelHelperChat } from "./subagents-panel";
+import {
+  askMainChatToRetrySubagent,
+  createSubagentHelperChatStore,
+  subagentHelperChatApproval,
+  subagentHelperChatTranscript,
+  SubagentHelperChatStoreContext,
+  useSubagentHelperChatState,
+  useSubagentHelperChatStore,
+} from "../lib/subagent-helper-chat-store";
 import {
   resolveEnvironmentPanelLayout,
   resolveChatCardInset,
@@ -239,6 +248,11 @@ export interface EnvironmentPanelContextValue {
   openSubagent: (runId: string, returnTarget?: HTMLElement | null) => void;
   selectSubagent: (runId: string | null) => void;
   retrySubagentDetail: () => void;
+  /**
+   * Read the selected helper's saved conversation again, once per gap between
+   * the saved copy (`savedRevision`) and what has streamed since.
+   */
+  refetchSubagentTranscript?: (runId: string, savedRevision: number) => void;
   stopSubagent: (run: SubagentRunSnapshot) => Promise<void>;
   editorState: FilesEditorState;
   agentBusy: boolean;
@@ -403,6 +417,8 @@ export function EnvironmentPanelProvider({ children }: React.PropsWithChildren) 
     effects: SubagentEffectActivityV1[];
   } | null>(null);
   const [subagentDetailRequestVersion, setSubagentDetailRequestVersion] = React.useState(0);
+  const [helperChatStore] = React.useState(createSubagentHelperChatStore);
+  const transcriptRefetchKeysRef = React.useRef(new Set<string>());
   const [subagentDetailAnnouncement, setSubagentDetailAnnouncement] =
     React.useState<SubagentDetailAnnouncementRequest | null>(null);
   const [gitOperationBusy, setGitOperationBusyState] = React.useState(false);
@@ -814,6 +830,23 @@ export function EnvironmentPanelProvider({ children }: React.PropsWithChildren) 
     [subagentViews, subagentsEnabled],
   );
 
+  const refetchSubagentTranscript = React.useCallback(
+    (runId: string, savedRevision: number) => {
+      if (
+        !subagentsEnabled ||
+        runId !== selectedSubagentRunId ||
+        !selectedSubagentReferenceMessageId
+      ) {
+        return;
+      }
+      const key = `${subagentChatIdRef.current ?? ""}:${runId}:${savedRevision}`;
+      if (transcriptRefetchKeysRef.current.has(key)) return;
+      transcriptRefetchKeysRef.current.add(key);
+      setSubagentDetailRequestVersion((version) => version + 1);
+    },
+    [selectedSubagentReferenceMessageId, selectedSubagentRunId, subagentsEnabled],
+  );
+
   const retrySubagentDetail = React.useCallback(() => {
     if (!subagentsEnabled || !selectedSubagentRunId || !selectedSubagentReferenceMessageId) return;
     subagentDetailRequestRef.current = undefined;
@@ -1019,6 +1052,7 @@ export function EnvironmentPanelProvider({ children }: React.PropsWithChildren) 
           setSubagentDetailError("Aiden could not refresh this saved subagent.");
           return;
         }
+        if (detail?.transcript) helperChatStore.rememberSaved(chatId, detail.transcript);
         setSubagentEffectDetail({
           ownerKey: subagentPanelOwnerKey(chatId, workspaceId),
           runId,
@@ -1056,6 +1090,7 @@ export function EnvironmentPanelProvider({ children }: React.PropsWithChildren) 
     subagentDetailRequestVersion,
     subagentsEnabled,
     commitSubagents,
+    helperChatStore,
   ]);
 
   React.useEffect(() => {
@@ -1222,6 +1257,7 @@ export function EnvironmentPanelProvider({ children }: React.PropsWithChildren) 
       openSubagent,
       selectSubagent,
       retrySubagentDetail,
+      refetchSubagentTranscript,
       stopSubagent,
       editorState: activeEditorState,
       agentBusy,
@@ -1259,6 +1295,7 @@ export function EnvironmentPanelProvider({ children }: React.PropsWithChildren) 
       releaseSubagents,
       reviewMode,
       retrySubagentDetail,
+      refetchSubagentTranscript,
       reportSurfaceLayout,
       reportDesignDockInset,
       stopSubagent,
@@ -1298,20 +1335,22 @@ export function EnvironmentPanelProvider({ children }: React.PropsWithChildren) 
   );
   return (
     <EnvironmentPanelContext.Provider value={value}>
-      <LinkOpenerProvider
-        workspaceId={activeId ?? null}
-        workspaceFolder={activeWorkspace?.folderPath ?? null}
-        onOpenWorkspaceFile={openFile}
-      >
-        {subagentsEnabled ? (
-          <SubagentLiveAnnouncer
-            ownerKey={subagentPanelOwnerKey(subagents.chatId, subagents.workspaceId)}
-            runs={subagents.liveSnapshots}
-            detailRequest={subagentDetailAnnouncement}
-          />
-        ) : null}
-        {children}
-      </LinkOpenerProvider>
+      <SubagentHelperChatStoreContext.Provider value={helperChatStore}>
+        <LinkOpenerProvider
+          workspaceId={activeId ?? null}
+          workspaceFolder={activeWorkspace?.folderPath ?? null}
+          onOpenWorkspaceFile={openFile}
+        >
+          {subagentsEnabled ? (
+            <SubagentLiveAnnouncer
+              ownerKey={subagentPanelOwnerKey(subagents.chatId, subagents.workspaceId)}
+              runs={subagents.liveSnapshots}
+              detailRequest={subagentDetailAnnouncement}
+            />
+          ) : null}
+          {children}
+        </LinkOpenerProvider>
+      </SubagentHelperChatStoreContext.Provider>
     </EnvironmentPanelContext.Provider>
   );
 }
@@ -1346,6 +1385,39 @@ function EnvironmentPanelSurface({
   const panel = useEnvironmentPanel();
   const { active } = useActiveWorkspace();
   const fullOpen = panel.toolsOpen;
+  const helperChatStore = useSubagentHelperChatStore();
+  const helperChatState = useSubagentHelperChatState();
+  const helperChatId = panel.subagents.chatId;
+  const helperActiveRuns = React.useMemo(
+    () => panel.subagentViews.filter((run) => !run.terminal),
+    [panel.subagentViews],
+  );
+  const helperChat = React.useMemo<SubagentsPanelHelperChat | undefined>(() => {
+    if (!helperChatStore || !helperChatId || helperChatState.chatId !== helperChatId) {
+      return undefined;
+    }
+    return {
+      transcriptFor: (runId) => subagentHelperChatTranscript(helperChatState, runId),
+      approvalFor: (run) =>
+        subagentHelperChatApproval(helperChatStore, helperChatState, run, helperActiveRuns),
+      onAskRetry: (text) => askMainChatToRetrySubagent(helperChatStore, helperChatId, text),
+      onExpand: (runId, opener) => helperChatStore.expand(runId, opener),
+      onBack: () => {
+        helperChatStore.collapse({ restoreFocus: false });
+        panel.closeTools();
+      },
+      ...(panel.refetchSubagentTranscript
+        ? { onTranscriptIncomplete: panel.refetchSubagentTranscript }
+        : {}),
+    };
+  }, [
+    helperActiveRuns,
+    helperChatId,
+    helperChatState,
+    helperChatStore,
+    panel.closeTools,
+    panel.refetchSubagentTranscript,
+  ]);
   const terminal = useWorkspaceTerminal();
   const [browserState, setBrowserState] = React.useState<BrowserState | null>(null);
   const browserStateRef = React.useRef<BrowserState | null>(null);
@@ -1567,6 +1639,7 @@ function EnvironmentPanelSurface({
         compact={width < 620}
         active={presented && panel.tab === "subagents"}
         ownerReplacementFallbackFocusTarget={() => activeTabRef.current}
+        helperChat={helperChat}
       />
     ),
     files: () => (

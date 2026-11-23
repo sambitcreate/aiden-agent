@@ -2,6 +2,7 @@ import {
   isSubagentRunViewStateActive,
   resolveSubagentSelection,
   splitSubagentRunViews,
+  subagentStatusLabel,
   type SubagentRunView,
 } from "./subagent-view-state";
 import { subagentPendingQuestion, type SubagentRunSnapshot } from "../shared/subagent-runs";
@@ -143,18 +144,9 @@ export function subagentRunProgressLabel(
   if (state === "running" && activity) return activity;
   if (state === "needs_attention") {
     const question = subagentPendingQuestion({ state, activity });
-    return question ? `Needs attention: ${question}` : "Needs attention";
+    return question ? `Waiting on you: ${question}` : "Waiting on you";
   }
-  if (state === "queued") return "Queued";
-  if (state === "starting") return "Starting";
-  if (state === "running") return "Working";
-  if (state === "completed") return "Finished";
-  if (state === "failed") return "Failed";
-  if (state === "timed_out") return "Timed out";
-  if (state === "interrupted") return "Interrupted";
-  if (state === "stopped") return "Stopped";
-  if (state === "unknown") return "Outcome unknown";
-  return "Finished";
+  return state === "finished" ? "Done" : subagentStatusLabel(state);
 }
 
 export function subagentLiveSummary(runs: readonly SubagentRunView[]): string {
