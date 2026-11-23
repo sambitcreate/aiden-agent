@@ -11,7 +11,7 @@ import {
 } from "./repository-identity.js";
 import { createProcessGroupTerminator, decodeCappedUtf8 } from "../shared/process-group.js";
 import { redactUrlCredentials } from "../shared/redaction.js";
-import { spawn, type ChildProcess } from "child_process";
+import { execFile, spawn, type ChildProcess } from "child_process";
 import { createHash, randomUUID } from "crypto";
 import { constants as fsConstants, type BigIntStats, type Stats } from "fs";
 import * as fs from "fs/promises";
@@ -1035,30 +1035,120 @@ interface VerifiedRepoIdentityProof {
   signature: string;
 }
 
+const MAX_DIRECT_GIT_BINARY_HASH_BYTES = 64 * 1024 * 1024;
+const APPLE_CODESIGN_GIT_REQUIREMENT = '=anchor apple and identifier "com.apple.git"';
+
 /**
- * Only standard OS and package-manager Git installation paths are eligible for
- * the 0-spawn pure-FS admission proof. Any arbitrary executable path (including
- * shims or compiled wrappers in temporary or tool-manager directories that
- * might spoof `--exec-path`) fails closed to Git-backed admission.
+ * Only OS-managed Git installation paths are eligible for the 0-spawn pure-FS
+ * admission proof:
+ * - macOS: Apple CLT or Xcode `git` (additionally verified cryptographically
+ *   against Apple Root CA with identifier `com.apple.git` via `/usr/bin/codesign`).
+ * - Linux: root-owned, non-group/world-writable `/usr/bin/git` (with root-owned
+ *   ancestors).
+ * User-writable package-manager paths, tool-manager shims, scripts, and
+ * arbitrary executables fail closed to Git-backed admission.
  */
 function isTrustedDirectGitInstallPath(realPath: string): boolean {
   if (process.platform === "darwin") {
     return (
       realPath === "/Library/Developer/CommandLineTools/usr/bin/git" ||
-      /^\/Applications\/Xcode[^/]*\.app\/Contents\/Developer\/usr\/bin\/git$/u.test(realPath) ||
-      /^\/opt\/homebrew\/Cellar\/git\/[^/]+\/bin\/git$/u.test(realPath) ||
-      /^\/usr\/local\/Cellar\/git\/[^/]+\/bin\/git$/u.test(realPath) ||
-      realPath === "/opt/local/bin/git"
+      /^\/Applications\/Xcode[^/]*\.app\/Contents\/Developer\/usr\/bin\/git$/u.test(realPath)
     );
   }
   if (process.platform === "linux") {
-    return (
-      realPath === "/usr/bin/git" ||
-      realPath === "/usr/local/bin/git" ||
-      /^\/home\/linuxbrew\/\.linuxbrew\/Cellar\/git\/[^/]+\/bin\/git$/u.test(realPath)
-    );
+    return realPath === "/usr/bin/git";
   }
   return false;
+}
+
+/**
+ * Verifies every path component from `targetPath` up to `/` is a non-symlink
+ * owned by root (`uid === 0`) and neither group- nor world-writable.
+ */
+async function isRootOwnedNonWritableChain(targetPath: string): Promise<boolean> {
+  if (!path.isAbsolute(targetPath)) return false;
+  let current = targetPath;
+  for (;;) {
+    try {
+      const st = await fs.lstat(current, { bigint: true });
+      if (st.isSymbolicLink()) return false;
+      if (st.uid !== 0n || (st.mode & 0o022n) !== 0n) return false;
+    } catch {
+      return false;
+    }
+    const parent = path.dirname(current);
+    if (parent === current) return true;
+    current = parent;
+  }
+}
+
+/**
+ * Cryptographically verifies that `realPath` on macOS is an unmodified Apple
+ * `com.apple.git` binary signed by Apple Root CA (excluding `/usr/bin/git`
+ * xcrun shims and any user-compiled or modified executable).
+ */
+async function verifyAppleSignedGitBinary(
+  realPath: string,
+  signal?: AbortSignal,
+): Promise<boolean> {
+  if (process.platform !== "darwin") return false;
+  if (signal?.aborted) {
+    throw new GitServiceError("aborted", "Git operation was cancelled.");
+  }
+  return new Promise<boolean>((resolve, reject) => {
+    execFile(
+      "/usr/bin/codesign",
+      ["--verify", "--strict", "-R", APPLE_CODESIGN_GIT_REQUIREMENT, "--", realPath],
+      {
+        env: { PATH: "/usr/bin:/bin", LANG: "C", LC_ALL: "C" },
+        signal,
+        timeout: 2_000,
+        maxBuffer: 16_384,
+      },
+      (error) => {
+        if (signal?.aborted) {
+          reject(new GitServiceError("aborted", "Git operation was cancelled."));
+          return;
+        }
+        resolve(!error);
+      },
+    );
+  });
+}
+
+async function sha256BoundedNoFollowFile(
+  filePath: string,
+  maxBytes: number,
+): Promise<string | undefined> {
+  const flags =
+    fsConstants.O_RDONLY |
+    (fsConstants.O_NOFOLLOW ?? 0) |
+    (fsConstants.O_NONBLOCK ?? 0);
+  let handle: fs.FileHandle | undefined;
+  try {
+    handle = await fs.open(filePath, flags);
+    const stat = await handle.stat();
+    if (!stat.isFile() || stat.size <= 0 || stat.size > maxBytes) {
+      return undefined;
+    }
+    const hash = createHash("sha256");
+    const chunk = Buffer.allocUnsafe(64 * 1024);
+    let totalRead = 0;
+    while (totalRead < stat.size) {
+      const { bytesRead } = await handle.read(chunk, 0, chunk.length, totalRead);
+      if (bytesRead === 0) return undefined;
+      totalRead += bytesRead;
+      if (totalRead > stat.size) return undefined;
+      hash.update(chunk.subarray(0, bytesRead));
+    }
+    const { bytesRead: trailing } = await handle.read(chunk, 0, 1, totalRead);
+    if (trailing !== 0) return undefined;
+    return hash.digest("hex");
+  } catch {
+    return undefined;
+  } finally {
+    await handle?.close().catch(() => undefined);
+  }
 }
 
 /**
@@ -1596,10 +1686,27 @@ export class GitService {
       const execGitReal = await fs.realpath(path.join(execPathReal, "git"));
       const execGitStat = await fs.stat(execGitReal, { bigint: true });
       if (!execGitStat.isFile()) return false;
-      return (
+      if (process.platform === "linux") {
+        const [execDirTrusted, execGitTrusted] = await Promise.all([
+          isRootOwnedNonWritableChain(execPathReal),
+          isRootOwnedNonWritableChain(execGitReal),
+        ]);
+        if (!execDirTrusted || !execGitTrusted) return false;
+      }
+      if (
         execGitReal === resolvedRealPath ||
         (execGitStat.dev === resolvedRealStat.dev && execGitStat.ino === resolvedRealStat.ino)
-      );
+      ) {
+        return true;
+      }
+      // Stock Debian/Ubuntu installs `/usr/lib/git-core/git` as a distinct-inode
+      // byte-identical copy of `/usr/bin/git`. Verify identical size and SHA-256.
+      if (execGitStat.size !== resolvedRealStat.size) return false;
+      const [resolvedHash, execGitHash] = await Promise.all([
+        sha256BoundedNoFollowFile(resolvedRealPath, MAX_DIRECT_GIT_BINARY_HASH_BYTES),
+        sha256BoundedNoFollowFile(execGitReal, MAX_DIRECT_GIT_BINARY_HASH_BYTES),
+      ]);
+      return Boolean(resolvedHash && resolvedHash === execGitHash);
     } catch {
       return false;
     }
@@ -1776,12 +1883,18 @@ export class GitService {
     if (!(await isNativeExecutableBinary(execBefore.real))) {
       return undefined;
     }
+    if (process.platform === "linux" && !(await isRootOwnedNonWritableChain(execBefore.real))) {
+      return undefined;
+    }
 
-    const [directGitBinary, systemConfigPaths] = await Promise.all([
+    const [binaryProven, directGitBinary, systemConfigPaths] = await Promise.all([
+      process.platform === "darwin"
+        ? verifyAppleSignedGitBinary(execBefore.real, signal)
+        : Promise.resolve(true),
       this.verifyDirectGitExecPath(canonicalCwd, execBefore.real, execBefore.realStat, signal),
       this.resolveSystemConfigPaths(canonicalCwd, env, signal),
     ]);
-    if (!directGitBinary || !systemConfigPaths) return undefined;
+    if (!binaryProven || !directGitBinary || !systemConfigPaths) return undefined;
 
     const { allPaths, configFiles } = this.admissionConfigPaths(
       canonicalCwd,
