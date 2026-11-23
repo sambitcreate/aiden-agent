@@ -19,6 +19,10 @@ export const BOT_MCP_DISCOVERY_DEADLINE_MS = 10_000;
 export const BOT_MCP_SCOPE_TTL_MS = 60_000;
 /** How long a verified scope survives a transient failure or timeout of the same connection. */
 export const BOT_MCP_SCOPE_GRACE_MS = 5 * 60_000;
+/** First wait before a failed connection is inspected again; doubles per failure. */
+export const BOT_MCP_FAILURE_BACKOFF_MS = 30_000;
+/** Longest wait between background retries of a connection that keeps failing. */
+export const BOT_MCP_FAILURE_BACKOFF_MAX_MS = 5 * 60_000;
 
 export type BotMcpInspectionFailure = "timed_out" | "failed";
 
@@ -111,6 +115,26 @@ export class BotMcpInspectionTimeoutError extends Error {
   }
 }
 
+/**
+ * The connection failed recently and is retried in the background. A Bot turn
+ * does not wait for it; the failure was already reported once.
+ */
+export class BotMcpInspectionBackoffError extends Error {
+  readonly name = "BotMcpInspectionBackoffError";
+
+  constructor(readonly kind: BotMcpInspectionFailure) {
+    super("Bot MCP server is unavailable; it is retried in the background.");
+  }
+}
+
+interface FailureRecord {
+  readonly connectionFingerprint: string;
+  readonly generation: number;
+  readonly kind: BotMcpInspectionFailure;
+  readonly attempts: number;
+  readonly retryAt: number;
+}
+
 interface ScopeCacheEntry {
   readonly connectionFingerprint: string;
   readonly generation: number;
@@ -130,10 +154,26 @@ export interface BotMcpScopeCacheOptions {
    * inspection even when the connection fingerprint happens to match.
    */
   generation?: () => number;
+  /** First retry delay after a failure; doubles per consecutive failure. */
+  failureBackoffMs?: number;
+  /** Cap for the retry delay. */
+  failureBackoffMaxMs?: number;
+  /**
+   * Failures of background inspections (stale refreshes and retries), which no
+   * caller awaits. Each failed attempt is reported once. Never throws into the cache.
+   */
+  reportFailure?(report: BotMcpInspectionFailureReport): void;
 }
 
 export interface BotMcpScopeCache {
-  /** Verified tools for this exact connection: cached within the TTL, otherwise one shared inspection. */
+  /**
+   * Verified tools for this exact connection. Within the TTL the cached tools
+   * are returned; past it but within the grace window they are still returned
+   * while one background inspection refreshes them. A connection that failed
+   * recently rejects at once with {@link BotMcpInspectionBackoffError} and is
+   * retried in the background on a backoff. Only a connection with neither
+   * waits for an inspection.
+   */
   inspect(
     server: McpServer,
     connectionFingerprint: string,
@@ -187,10 +227,40 @@ export function createBotMcpScopeCache(options: BotMcpScopeCacheOptions = {}): B
   const ttlMs = options.ttlMs ?? BOT_MCP_SCOPE_TTL_MS;
   const graceMs = options.graceMs ?? BOT_MCP_SCOPE_GRACE_MS;
   const inspectionDeadlineMs = options.inspectionDeadlineMs ?? BOT_MCP_DISCOVERY_DEADLINE_MS;
+  const backoffMs = options.failureBackoffMs ?? BOT_MCP_FAILURE_BACKOFF_MS;
+  const backoffMaxMs = options.failureBackoffMaxMs ?? BOT_MCP_FAILURE_BACKOFF_MAX_MS;
   const now = options.now ?? Date.now;
   const generation = options.generation ?? (() => 0);
   const entries = new Map<string, ScopeCacheEntry>();
+  const failures = new Map<string, FailureRecord>();
   const inflight = new Map<string, Promise<BotMcpScopeTools>>();
+
+  const lastGood = (serverId: string, connectionFingerprint: string) => {
+    const entry = entries.get(serverId);
+    if (!entry || entry.connectionFingerprint !== connectionFingerprint) return undefined;
+    return now() - entry.verifiedAt < graceMs ? entry.tools : undefined;
+  };
+
+  const recordFailure = (
+    server: McpServer,
+    connectionFingerprint: string,
+    currentGeneration: number,
+    error: unknown,
+  ): FailureRecord => {
+    const previous = failures.get(server.id);
+    const attempts =
+      previous && previous.connectionFingerprint === connectionFingerprint ? previous.attempts + 1 : 1;
+    const delay = Math.min(backoffMaxMs, backoffMs * 2 ** Math.min(attempts - 1, 30));
+    const record: FailureRecord = {
+      connectionFingerprint,
+      generation: currentGeneration,
+      kind: error instanceof BotMcpInspectionTimeoutError ? "timed_out" : "failed",
+      attempts,
+      retryAt: now() + delay,
+    };
+    failures.set(server.id, record);
+    return record;
+  };
 
   const flight = (
     server: McpServer,
@@ -198,12 +268,12 @@ export function createBotMcpScopeCache(options: BotMcpScopeCacheOptions = {}): B
     currentGeneration: number,
     connectorScope: string | undefined,
     inspect: (server: McpServer, signal: AbortSignal) => Promise<readonly SubagentMcpRemoteTool[]>,
-  ): Promise<BotMcpScopeTools> => {
+  ): { pending: Promise<BotMcpScopeTools>; started: boolean } => {
     // An unattended watch must never inherit an in-progress foreground
     // inspection that may be creating a fresh authenticated transport.
     const key = JSON.stringify([server.id, connectionFingerprint, currentGeneration, connectorScope ?? null]);
     const existing = inflight.get(key);
-    if (existing) return existing;
+    if (existing) return { pending: existing, started: false };
     const controller = new AbortController();
     const timeout = setTimeout(
       () => controller.abort(new BotMcpInspectionTimeoutError()),
@@ -213,23 +283,55 @@ export function createBotMcpScopeCache(options: BotMcpScopeCacheOptions = {}): B
       Promise.resolve().then(() => inspect(server, controller.signal)),
       controller.signal,
     )
-      .then((remote) => {
-        const tools = projectScopeTools(projectComposioServiceInventory(server, remote));
-        entries.set(server.id, {
-          connectionFingerprint,
-          generation: currentGeneration,
-          verifiedAt: now(),
-          tools,
-        });
-        return tools;
-      })
+      .then(
+        (remote) => {
+          const tools = projectScopeTools(projectComposioServiceInventory(server, remote));
+          entries.set(server.id, {
+            connectionFingerprint,
+            generation: currentGeneration,
+            verifiedAt: now(),
+            tools,
+          });
+          const failure = failures.get(server.id);
+          if (failure?.connectionFingerprint === connectionFingerprint) failures.delete(server.id);
+          return tools;
+        },
+        (error: unknown) => {
+          recordFailure(server, connectionFingerprint, currentGeneration, error);
+          throw error;
+        },
+      )
       .finally(() => {
         clearTimeout(timeout);
         controller.abort(new Error("Bot MCP server inspection completed."));
         inflight.delete(key);
       });
     inflight.set(key, pending);
-    return pending;
+    return { pending, started: true };
+  };
+
+  /** Start (or join) an inspection nobody awaits; report its failure once. */
+  const refreshInBackground = (
+    server: McpServer,
+    connectionFingerprint: string,
+    currentGeneration: number,
+    connectorScope: string | undefined,
+    inspect: (server: McpServer, signal: AbortSignal) => Promise<readonly SubagentMcpRemoteTool[]>,
+  ) => {
+    const { pending, started } = flight(server, connectionFingerprint, currentGeneration, connectorScope, inspect);
+    pending.catch((error: unknown) => {
+      if (!started) return;
+      try {
+        options.reportFailure?.({
+          server,
+          kind: error instanceof BotMcpInspectionTimeoutError ? "timed_out" : "failed",
+          error,
+          keptLastGood: Boolean(lastGood(server.id, connectionFingerprint)?.length),
+        });
+      } catch {
+        // Diagnostics never change authority.
+      }
+    });
   };
 
   return {
@@ -237,25 +339,40 @@ export function createBotMcpScopeCache(options: BotMcpScopeCacheOptions = {}): B
       if (signal.aborted) throw abortReason(signal);
       const currentGeneration = generation();
       const entry = entries.get(server.id);
+      const selected = botConnectorInventoryServer();
+      const failure = failures.get(server.id);
+      const failed = failure?.connectionFingerprint === connectionFingerprint ? failure : undefined;
+      // A recent failure of this connection holds back retries until its backoff
+      // ends; a configuration fence since then makes a retry due at once.
+      const retryDue = !failed || failed.generation !== currentGeneration || now() >= failed.retryAt;
       if (
         entry &&
         entry.connectionFingerprint === connectionFingerprint &&
-        entry.generation === currentGeneration &&
-        now() - entry.verifiedAt < ttlMs
+        entry.generation === currentGeneration
       ) {
-        return entry.tools;
+        const age = now() - entry.verifiedAt;
+        if (age < ttlMs) return entry.tools;
+        // Stale but inside the grace window: answer now and refresh behind the turn.
+        if (age < graceMs) {
+          if (selected && selected !== server.id) throw new Error("Unattended watch admission cannot discover another connector.");
+          if (retryDue) refreshInBackground(server, connectionFingerprint, currentGeneration, selected, inspect);
+          return entry.tools;
+        }
       }
-      const selected = botConnectorInventoryServer();
       if (selected && selected !== server.id) throw new Error("Unattended watch admission cannot discover another connector.");
-      return raceAbort(flight(server, connectionFingerprint, currentGeneration, selected, inspect), signal);
+      if (failed) {
+        if (retryDue) refreshInBackground(server, connectionFingerprint, currentGeneration, selected, inspect);
+        throw new BotMcpInspectionBackoffError(failed.kind);
+      }
+      return raceAbort(
+        flight(server, connectionFingerprint, currentGeneration, selected, inspect).pending,
+        signal,
+      );
     },
-    lastGood(serverId, connectionFingerprint) {
-      const entry = entries.get(serverId);
-      if (!entry || entry.connectionFingerprint !== connectionFingerprint) return undefined;
-      return now() - entry.verifiedAt < graceMs ? entry.tools : undefined;
-    },
+    lastGood,
     clear() {
       entries.clear();
+      failures.clear();
     },
   };
 }
@@ -266,7 +383,10 @@ export function createBotMcpScopeCache(options: BotMcpScopeCacheOptions = {}): B
  *
  * Each server stands alone: one that fails or misses the deadline drops only
  * its own scope (or keeps its last verified scope for the same connection
- * during the grace window), never the scopes of servers that finished.
+ * during the grace window), never the scopes of servers that finished. With a
+ * shared scope cache, a server that failed recently is skipped without waiting
+ * and retried in the background, so one unreachable server cannot hold every
+ * Bot turn to the deadline.
  */
 export async function resolveBotMcpInventory(
   parentSignal: AbortSignal,
@@ -333,6 +453,8 @@ export async function resolveBotMcpInventory(
             // A deadline abort is reported once below, with the other stragglers.
             if (controller.signal.aborted) return;
             failed.add(server.id);
+            // Already reported when the attempt that started the backoff failed.
+            if (error instanceof BotMcpInspectionBackoffError) return;
             const kept = cache.lastGood(server.id, identity.connectionFingerprint);
             report({
               server,
