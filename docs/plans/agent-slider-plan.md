@@ -19,13 +19,14 @@ This plan came from three independent research plans (data and runtime, UX and d
 
   Below a separator, **Other models…** (⇧⌘M) opens today's searchable list as a sub-view. **Customize slider…** opens Settings.
 - **Settings → Models & Context → Agent Slider** replaces the Model Pad page. It holds a live preview, a row per stop, Add stop (disabled at 7), Remove (disabled at 3), reorder, a home stop, and templates (an effort ladder for one model, local to cloud). Edits autosave with Undo.
+- **Accessibility:** the thumb is `role="slider"` with a valid `aria-valuenow` in every state. In Custom it keeps the home stop's position, where the hollow thumb rests, and announces "Custom: <model>" through `aria-valuetext`.
 - **The slider is the composer's model-and-effort control.** While a chat sits on a stop, `ThinkingControl` is hidden. When a chat's model and effort match no stop, the chat is **Custom**: the thumb goes hollow, the fill disappears, and `ThinkingControl` comes back.
 
 ## Owner decisions (2026-11-23)
 
 1. **Step shortcuts:** `agentSlider.next` and `agentSlider.previous`, default ⌥⌘] and ⌥⌘[ (`Command+Alt+]` and `Command+Alt+[`), rebindable through `renderer/shared/keybindings.ts`. Nothing else uses them; `Command+[`, `Command+]`, `Command+Shift+[` and `Command+Shift+]` are taken. ⌃T is not used because it transposes characters in macOS text fields. The "Effort ⌃T" slider in the owner's reference screenshot is not in 0.69.0.
 2. **New chats start on the last model used,** keeping today's `lastProviderId` and `lastModel` behavior, extended with the last thinking level so a new chat lands on the same stop. The home stop is only what ↺ returns to.
-3. **The slider travels in the portable config export.**
+3. **The slider travels with the portable `~/.aiden/config.json`,** which is its only durable home (see Storage below).
 4. **A one-time, delete-only cleanup** removes the retired OpenRouter benchmark credential (`aiden-internal:model-pad-openrouter-benchmarks-v1`), `openrouter-benchmark-cache.json`, the Artificial Analysis credential and cache, and `model-pace.json`. It runs at startup and on onboarding reset. It makes no network calls, can run any number of times, and tolerates failure.
 5. **List price stays** as plain text in the model hover card. Nothing orders, seeds or routes by price.
 6. **Phones get the slider** in PR 5.
@@ -42,8 +43,8 @@ This plan came from three independent research plans (data and runtime, UX and d
 | Unavailable stop | Stays in place, which keeps the 3-stop minimum. It shows a hollow dot and the reason ("Sign in to Anthropic", "Choose a model"). Arrow keys skip it. Clicking it opens reassign without committing. If every stop is unavailable, the popover shows Custom. Never silently substituted. |
 | First run | The slider is seeded once and saved, so the thumb never moves under the person. If the current model has 3 or more thinking levels, the seed is that model's own effort ladder with the home stop in the middle. Otherwise it is 3 stops: the current model in the middle and two "Choose a model" stops. Seeding happens at onboarding provider confirmation, or the first time the picker opens without a slider. |
 | Scores | Delete OpenRouter benchmarks, the Artificial Analysis leftovers, measured pace and the lattice. Keep the models.dev facts (context, capabilities, cutoff) and list price as plain text. |
-| Storage | `AppSettings.agentSlider` in `settings.json`, also carried by the portable config. Old `modelPadPlacements` and `modelPadMetric` keys are ignored, not migrated (pre-1.0 rule). |
-| Remote | No wire change until PR 5. `POST /chats/{id}/turns` already accepts `thinkingLevel`. |
+| Storage | One authority: `agentSlider` lives only in the portable `~/.aiden/config.json` (`PortableConfigShape`), beside the providers its stops name, so it travels with that file and the existing watcher picks up hand edits. `settings.json` never stores it. The renderer reads it as a projected field of the settings read and writes it through a validated patch that updates only the portable store. A provider remap rewrites the stops in the same portable update that rewrites providers and aliases. `lastThinkingLevel` stays machine-local in `settings.json` beside `lastModel`. Old `modelPadPlacements` and `modelPadMetric` keys are ignored, not migrated (pre-1.0 rule). |
+| Remote | No wire change until PR 5. Today `POST /chats/{id}/turns` takes `thinkingLevel` as turn input only and does not persist it; PR 5 makes a phone's choice durable and visible. |
 
 ## Data model
 
@@ -66,7 +67,7 @@ export interface AgentSliderSettings {
   homeStopId: string;                       // where ↺ returns
 }
 
-// AppSettings.agentSlider?: AgentSliderSettings
+// PortableConfigShape.agentSlider?: AgentSliderSettings  (the only durable copy; projected into the renderer's settings read as AppSettings.agentSlider)
 // AppSettings.lastThinkingLevel?: GenerationThinkingLevel  (beside lastProviderId / lastModel)
 // ChatMeta.thinkingLevel?: GenerationThinkingLevel
 
@@ -78,14 +79,14 @@ activeStopIndex(slider, selection)                           // -1 = Custom
 seedAgentSlider(selection, thinkingLevels)                   // first-run seed
 ```
 
-Pins and recents move out of `renderer/shared/model-pad-preferences.ts` into `renderer/shared/model-preferences.ts` unchanged.
+Pins and recents move out of `renderer/shared/model-pad-preferences.ts` into `renderer/shared/model-preferences.ts` unchanged in PR 3, when the Pad's own fields are deleted. PR 1 stays additive.
 
 ## How a turn picks its model
 
 1. **Moving the thumb** calls `chats:setModel(chatId, providerId, model, thinkingLevel)`. `setChatModelSelection` (`main/services/chat-store-core.ts`) compares the level as well as the provider and model; today it returns early when only the provider and model are unchanged. It still refuses Bot chats and changes during a reply.
 2. **A manual change in `ThinkingControl`** (Custom state) clears `ChatMeta.thinkingLevel`, so the per-model map applies as it does today.
 3. **On send**, `chat-pane` sends the chat's own `thinkingLevel` when it is set, and otherwise the per-model map value. This replaces the four-way provider ternary.
-4. **Main has the final say.** `resolveGenerationThinkingLevel(params.thinkingLevel ?? saved)` in `main/services/llm-client.ts` clamps any level the model no longer supports. The UI shows the clamped level.
+4. **Main has the final say.** `resolveGenerationThinkingLevel(params.thinkingLevel ?? saved)` in `main/services/llm-client.ts` clamps any level the model no longer supports. Write-back applies only when the turn started with a defined `ChatMeta.thinkingLevel` and main resolved it to a different level (up or down). Main then writes the resolved level back with a compare-and-set, and only if the stored level is still the one the turn started with, so a newer selection always wins. A chat with no stored level (Custom, which sends the per-model map value) keeps `ChatMeta.thinkingLevel` absent, even when main normalizes that fallback. It emits the usual chat update, so the running turn, `ChatMeta`, the slider and a reopened chat all agree.
 5. **Reopening the chat** derives the thumb again from the stored provider, model and level.
 6. **A new chat** seeds from `lastProviderId`, `lastModel` and `lastThinkingLevel`.
 
@@ -96,11 +97,11 @@ Each PR targets the branch below it. Merge bottom-up with merge commits, and onl
 | PR | Branch | Contents | Local checks |
 |---|---|---|---|
 | 0 | `feature/model-pad-agent-slider-32cf16` | This plan, the prototype, the plans index row, `.memory/agent-slider.md` | None (docs only) |
-| 1 | `feature/agent-slider-1-data` | `agent-slider.ts`, the settings fields and their normalization, provider remap and removal, portable config, `ChatMeta.thinkingLevel`, `setModel` with a level, the send path, `lastThinkingLevel`, and moving pins and recents to `model-preferences.ts`. No UI. | The touched `tsx --test` files, `test:main-shared`, `tsc --noEmit`, eslint, CLI type-check and bundle test |
+| 1 | `feature/agent-slider-1-data` | `agent-slider.ts`, the settings fields and their normalization, provider remap and removal, portable config, `ChatMeta.thinkingLevel`, `setModel` with a level, the send path, `lastThinkingLevel`, and the clamp write-back. No UI, and no change in behavior until PR 2 uses it. | The touched `tsx --test` files, `test:main-shared`, `tsc --noEmit`, eslint, CLI type-check and bundle test |
 | 2 | `feature/agent-slider-2-slider` | The `AgentSlider` component, the `ModelListPanel` extraction, the popover swap (composer and Quick Chat), the first-run seed, the step shortcuts, hiding `ThinkingControl` on a stop | `test:agent-slider`, the picker and composer tests, `test:preflight`, `check:aiden-rules`, E2E in a Cua Space |
-| 3 | `feature/agent-slider-3-editor` | The Settings editor, deleting the Pad UI, CSS and `modelPad*` fields, the token rename, the onboarding tile and art (Thinking tile merged), README, PRODUCT, `docs/keyboard.md` and `docs/settings-design-system.md` | `test:settings-design`, `test:onboarding`, the axe pass, E2E |
+| 3 | `feature/agent-slider-3-editor` | The Settings editor, deleting the Pad UI, CSS and `modelPad*` fields, moving pins and recents to `model-preferences.ts`, the token rename, the onboarding tile and art (Thinking tile merged), README, PRODUCT, `docs/keyboard.md` and `docs/settings-design-system.md` | `test:settings-design`, `test:onboarding`, the axe pass, E2E |
 | 4 | `feature/agent-slider-4-retire-scoring` | Delete benchmarks, Artificial Analysis, pace, the `modelInsights:*` and `modelPace:*` IPC, and CLI `aiden insights`. Add the cleanup and the bounded analytics (`slider_stop` 1–7 or custom, `slider_stop_count` 3–7). Edit AGENTS.md (the models.dev, OpenRouter benchmark and CLI rules). Retire the Model Insights plan. | Trimmed `test:model-insights`, `test:model-catalog`, the IPC contract, onboarding reset, CLI parity and bundle tests, `test:analytics`, full `npm test` |
-| 5 | `feature/agent-slider-5-mobile` | A capability-gated `agentSlider` in `GET /models`, at the next Remote revision claimed at merge time. Native sliders on iOS and Android with haptic ticks. Fixtures. | iOS and Android suites, contract fixtures, CLI bundle test |
+| 5 | `feature/agent-slider-5-mobile` | Capability-gated at the next Remote revision, claimed at merge time: `agentSlider` in `GET /models`; a phone's accepted provider, model and level persisted atomically as the chat's selection through `setChatModelSelection`, with the existing revision and concurrency checks; `thinkingLevel` in the chat and messages-window metadata projections; both strict native decoders updated; native sliders with haptic ticks; fixtures. | iOS and Android suites, contract fixtures, CLI bundle test |
 
 PRs 2–4 ship in the same release, so `main` never releases a slider without its editor or with dead scoring code.
 
@@ -115,7 +116,8 @@ The new tests are behavioral only. There are no source greps and no `className` 
   - `resolveAgentSliderStop` gives each failure reason;
   - `activeStopIndex` handles the same model at two efforts, Custom, and unassigned stops;
   - `seedAgentSlider` with ladder and non-ladder models.
-- **Portable config:** a round trip, and leftover `modelPad*` keys are dropped.
+- **Portable config:** a round trip; an external `config.json` edit after local settings exist wins, and nothing in `settings.json` shadows it; leftover `modelPad*` keys are dropped.
+- **Clamp write-back:** a stored level that becomes unsupported before send leaves the generation level, `ChatMeta` and a re-read in agreement, a newer selection made during the turn is not overwritten, and an unset Custom chat stays unset after a send whose fallback level was clamped.
 - **`config-store-core`:** remap rewrites stops; removal keeps them.
 - **Chat mutations:** the register-and-invoke test for `chats:setModel` with a level. A level-only change persists. Bot chats are refused.
 - **Testing Library on the slider:**
@@ -130,7 +132,7 @@ The new tests are behavioral only. There are no source greps and no `className` 
 ## Risks
 
 - **Two sources of effort.** Mitigation: `ThinkingControl` appears only in Custom, and a manual change clears the chat's level.
-- **A clamped level makes the label lie** unless the UI reads back what main resolved.
+- **A clamped level could make the label lie.** Mitigation: the compare-and-set write-back in step 4.
 - **Provider remap in `config-store-core` is subtle.** Tests cover remap and removal.
 - **The mobile decoders are strict,** so PR 5 is capability-gated.
 - **The large deletion diff conflicts** in the root `package.json` test chain and `scripts/ci-test-registry.json`. Resolve those by taking both sides.

@@ -460,7 +460,7 @@ pre .c { color: var(--text-tertiary); }
             <tr><td>Unavailable stop</td><td>The stop stays in place, so the 3-stop minimum holds, and shows a hollow dot with "Sign in to …". Arrow keys skip it, clicking it opens reassign, and if every stop is unavailable the chat drops to Custom. A stop is never swapped for another model without telling you.<span class="who">Reconciles B (focusable) with A and C (skip).</span></td></tr>
             <tr><td>Scores</td><td>Delete the benchmarks, the Artificial Analysis leftovers, measured pace and the lattice. Keep models.dev facts (context, capabilities) and list price as plain text in the hover card. Nothing orders or seeds stops by price.<span class="who">A withdrew "keep pace". B withdrew "Cheap → Best". AGENTS.md:40 bars models.dev from routing anyway.</span></td></tr>
             <tr><td>First run</td><td><b>Seeded once and saved</b>, never recomputed, so the thumb can't move under you. If the current model has 3 or more effort levels, the seed is that model's own effort ladder with home in the middle. Otherwise it is 3 stops with the current model in the middle and two "Choose a model" stops.<span class="who">My call. A wanted it saved, B wanted it visible on day one, and C's derived default would drift as pins and recents change.</span></td></tr>
-            <tr><td>Storage</td><td><code>AppSettings.agentSlider</code> in the machine-local <code>settings.json</code>. Old <code>modelPad*</code> keys are ignored, not migrated (pre-1.0 rule).<span class="who">Unanimous.</span></td></tr>
+            <tr><td>Storage</td><td>One home: the portable <code>~/.aiden/config.json</code>, next to the providers its stops point at. That way it travels with the file, and hand edits get picked up. <code>settings.json</code> never stores it. Old <code>modelPad*</code> keys are ignored, not migrated (pre-1.0 rule).<span class="who">Settled after review on PR #888, following your "travel with portable config" decision.</span></td></tr>
             <tr><td>Bots, routines, subagents</td><td>Unchanged. Bots and routines keep their own model choice, and the slider is hidden in Bot chats.<span class="who">Unanimous.</span></td></tr>
             <tr><td>Phones</td><td>No wire change until the mobile PR. That PR adds a capability-gated slider to <code>GET /models</code>, plus native iOS and Android sliders.<span class="who">Unanimous. You asked for phones to be included.</span></td></tr>
           </tbody>
@@ -488,7 +488,9 @@ export interface AgentSliderSettings {
   homeStopId: string;                       <span class="c">// where ↺ returns</span>
 }
 
-<span class="c">// AppSettings.agentSlider?: AgentSliderSettings
+<span class="c">// PortableConfigShape.agentSlider?: AgentSliderSettings  (only durable copy, in ~/.aiden/config.json;
+//   the renderer reads it as AppSettings.agentSlider)
+// AppSettings.lastThinkingLevel?: GenerationThinkingLevel (machine-local, beside lastModel)
 // ChatMeta.thinkingLevel?: GenerationThinkingLevel        (new)</span>
 
 normalizeAgentSlider(value)                 <span class="c">// fail-closed, drops bad stops</span>
@@ -503,7 +505,7 @@ activeStopIndex(slider, chatSelection)      <span class="c">// -1 = Custom</span
       <ol class="flow">
         <li><b>You move the thumb.</b> The renderer calls <code>chats:setModel(chatId, providerId, model, thinkingLevel)</code>. <code>setChatModelSelection</code> now compares the level as well. Bot chats and changes during a reply are still refused.</li>
         <li><b>You send.</b> <code>chat-pane</code> passes the chat's own <code>thinkingLevel</code>, replacing the four-way per-provider ternary at <code>chat-pane.tsx:2088–2107</code>.</li>
-        <li><b>Main has the final say.</b> <code>resolveGenerationThinkingLevel(params.thinkingLevel ?? saved)</code> at <code>llm-client.ts:1638</code> clamps any level the model no longer supports, and the UI shows the clamped level.</li>
+        <li><b>Main has the final say.</b> <code>resolveGenerationThinkingLevel(params.thinkingLevel ?? saved)</code> at <code>llm-client.ts:1638</code> clamps any level the model no longer supports. If the turn began with a level stored on the chat and main resolved it to a different level, main writes the resolved level back to the chat, unless you picked something newer in the meantime. A Custom chat with no stored level stays that way.</li>
         <li><b>You reopen the chat.</b> The thumb is placed again from the chat's stored provider, model and effort, so it lands where you left it.</li>
       </ol>
     </div>
@@ -739,7 +741,7 @@ activeStopIndex(slider, chatSelection)      <span class="c">// -1 = Custom</span
     $('pv-model').setAttribute('aria-label', shown >= 0 ? 'Change model for ' + label + ': ' + modelText : 'Choose another model: ' + modelText);
     thumb.setAttribute('aria-valuemin', '1');
     thumb.setAttribute('aria-valuemax', String(n));
-    if (shown >= 0) thumb.setAttribute('aria-valuenow', String(shown + 1)); else thumb.removeAttribute('aria-valuenow');
+    thumb.setAttribute('aria-valuenow', String((shown >= 0 ? shown : homeIndex()) + 1));
     thumb.setAttribute('aria-valuetext', valuetext);
     if (ui.generating) thumb.setAttribute('aria-disabled', 'true'); else thumb.removeAttribute('aria-disabled');
 
@@ -1098,7 +1100,7 @@ activeStopIndex(slider, chatSelection)      <span class="c">// -1 = Custom</span
           '<select id="eff-' + s.id + '" data-field="effort" aria-label="Effort for ' + esc(s.label) + '"' + (m && m.levels.length ? '' : ' disabled') + '>' + effortFor(s) + '</select>' +
         '</div>' +
         '<div class="ed-tail">' +
-          '<label class="home" title="Where ↺ returns and new chats start"><input type="radio" name="home-stop" id="home-' + s.id + '" data-field="home"' + (s.id === state.homeId ? ' checked' : '') + '>Home</label>' +
+          '<label class="home" title="Where ↺ returns"><input type="radio" name="home-stop" id="home-' + s.id + '" data-field="home"' + (s.id === state.homeId ? ' checked' : '') + '>Home</label>' +
           '<button type="button" class="icon-btn" id="rm-' + s.id + '" data-act="remove" aria-label="Remove ' + esc(s.label) + '"' + (n <= MIN ? ' disabled' : '') + '><svg class="i" viewBox="0 0 24 24"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg></button>' +
         '</div>' +
         (status.length ? '<div class="ed-status">' + status.join('') + '</div>' : '') +
