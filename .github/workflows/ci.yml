@@ -117,7 +117,7 @@ jobs:
           retention-days: 1
 
   e2e:
-    name: Electron E2E (${{ matrix.shard }}/4)
+    name: Electron E2E (${{ matrix.shard }}/5)
     needs: [changes, build]
     if: ${{ needs.changes.outputs.desktop == 'true' }}
     runs-on: macos-26
@@ -125,7 +125,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3, 4]
+        shard: [1, 2, 3, 4, 5]
     steps:
       - name: Check out source
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
@@ -154,7 +154,7 @@ jobs:
           AIDEN_E2E_TIMINGS_PLATFORM: darwin
           AIDEN_CI_TEST_SELECTION: ${{ runner.temp }}/ci-test-selection/ci-test-selection.json
         run: |
-          node scripts/ci-e2e-shards.mjs ${{ matrix.shard }}/4 --list > "$RUNNER_TEMP/e2e-shard.json"
+          node scripts/ci-e2e-shards.mjs ${{ matrix.shard }}/5 --list > "$RUNNER_TEMP/e2e-shard.json"
           node -e 'const fs=require("fs"); const s=JSON.parse(fs.readFileSync(process.argv[1],"utf8")); fs.appendFileSync(process.env.GITHUB_OUTPUT, `empty=${s.files.length===0}\n`);' "$RUNNER_TEMP/e2e-shard.json"
       - name: Install locked dependencies
         if: ${{ steps.plan.outputs.empty != 'true' }}
@@ -175,7 +175,7 @@ jobs:
           AIDEN_E2E_TIMINGS: test-results/e2e-spec-timings.json
           AIDEN_E2E_TIMINGS_PLATFORM: darwin
           AIDEN_CI_TEST_SELECTION: ${{ runner.temp }}/ci-test-selection/ci-test-selection.json
-        run: node scripts/ci-e2e-shards.mjs ${{ matrix.shard }}/4
+        run: node scripts/ci-e2e-shards.mjs ${{ matrix.shard }}/5
       - name: Build sanitized E2E failure receipt
         if: ${{ failure() }}
         run: npm run diagnostics:failure-receipt -- test-results/e2e-safe-receipt.json electron-e2e test-failed test-results/safe-test-details.json
