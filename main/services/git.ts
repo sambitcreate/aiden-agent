@@ -1036,6 +1036,32 @@ interface VerifiedRepoIdentityProof {
 }
 
 /**
+ * Only standard OS and package-manager Git installation paths are eligible for
+ * the 0-spawn pure-FS admission proof. Any arbitrary executable path (including
+ * shims or compiled wrappers in temporary or tool-manager directories that
+ * might spoof `--exec-path`) fails closed to Git-backed admission.
+ */
+function isTrustedDirectGitInstallPath(realPath: string): boolean {
+  if (process.platform === "darwin") {
+    return (
+      realPath === "/Library/Developer/CommandLineTools/usr/bin/git" ||
+      /^\/Applications\/Xcode[^/]*\.app\/Contents\/Developer\/usr\/bin\/git$/u.test(realPath) ||
+      /^\/opt\/homebrew\/Cellar\/git\/[^/]+\/bin\/git$/u.test(realPath) ||
+      /^\/usr\/local\/Cellar\/git\/[^/]+\/bin\/git$/u.test(realPath) ||
+      realPath === "/opt/local/bin/git"
+    );
+  }
+  if (process.platform === "linux") {
+    return (
+      realPath === "/usr/bin/git" ||
+      realPath === "/usr/local/bin/git" ||
+      /^\/home\/linuxbrew\/\.linuxbrew\/Cellar\/git\/[^/]+\/bin\/git$/u.test(realPath)
+    );
+  }
+  return false;
+}
+
+/**
  * Verifies that `realPath` is a native Mach-O (macOS) or ELF (Linux) regular
  * executable file rather than a shebang/interpreted script or text wrapper.
  * Unsupported platforms fail closed so pure-FS admission falls back to Git.
@@ -1471,7 +1497,7 @@ export class GitService {
     if (process.platform !== "darwin" && process.platform !== "linux") {
       return undefined;
     }
-    if (process.platform === "darwin" && expectedResolved === "/usr/bin/git") {
+    if (!isTrustedDirectGitInstallPath(expectedResolved)) {
       return undefined;
     }
     const candidates = this.gitBinary.includes("/")
@@ -1559,7 +1585,15 @@ export class GitService {
       return false;
     }
     try {
-      const execGitReal = await fs.realpath(path.join(execPath, "git"));
+      const execPathReal = await fs.realpath(execPath);
+      const installPrefix = path.dirname(path.dirname(resolvedRealPath));
+      if (
+        execPathReal !== installPrefix &&
+        !execPathReal.startsWith(`${installPrefix}${path.sep}`)
+      ) {
+        return false;
+      }
+      const execGitReal = await fs.realpath(path.join(execPathReal, "git"));
       const execGitStat = await fs.stat(execGitReal, { bigint: true });
       if (!execGitStat.isFile()) return false;
       return (

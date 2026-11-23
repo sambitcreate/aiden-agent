@@ -871,5 +871,77 @@ test("GitService.managedWorktreeUsable fails closed for unchanged wrapper script
       /not a Git repository/u,
     );
     assert.ok(shimSpawns.count > 0, "unchanged native shim swapping delegated target to corrupt config B must fail closed");
+
+    // Case 4: Even a compiled native shim that special-cases `--exec-path` to
+    // report a directory containing a hard link to itself while delegating
+    // ordinary Git commands through a mutable route must fail closed.
+    await fs.writeFile(configB, "[user]\n\tname = Config B\n");
+    await fs.rm(nestedLink);
+    await fs.symlink(nestedA, nestedLink);
+
+    const fakeExecPathDir = path.join(temp, "fake-exec-path");
+    await fs.mkdir(fakeExecPathDir);
+    const spoofShimSource = path.join(temp, "git-spoof-shim.c");
+    const spoofShimBinary = path.join(temp, "git-spoof-shim");
+    await fs.writeFile(
+      spoofShimSource,
+      `#include <stdio.h>\n#include <string.h>\n#include <unistd.h>\nint main(int argc, char **argv) {\n  if (argc == 2 && strcmp(argv[1], "--exec-path") == 0) {\n    puts(${JSON.stringify(fakeExecPathDir)});\n    return 0;\n  }\n  execv(${JSON.stringify(nestedLink)}, argv);\n  return 127;\n}\n`,
+      "utf8",
+    );
+    await execFileAsync("cc", [spoofShimSource, "-o", spoofShimBinary]);
+    await fs.link(spoofShimBinary, path.join(fakeExecPathDir, "git"));
+    const spoofStatBefore = await fs.lstat(spoofShimBinary, { bigint: true });
+
+    const spoofService = new GitService({ gitBinary: spoofShimBinary, cacheTtlMs: 60_000 });
+    const spoofSpawns = countSpawns(spoofService);
+    assert.equal(
+      await spoofService.managedWorktreeUsable(
+        created.repositoryPath,
+        created.path,
+        created.branch,
+        created.worktreeGitDir,
+        created.ownershipToken,
+        created.worktreeDevice,
+        created.worktreeInode,
+      ),
+      true,
+    );
+    spoofSpawns.count = 0;
+    assert.equal(
+      await spoofService.managedWorktreeUsable(
+        created.repositoryPath,
+        created.path,
+        created.branch,
+        created.worktreeGitDir,
+        created.ownershipToken,
+        created.worktreeDevice,
+        created.worktreeInode,
+      ),
+      true,
+    );
+    assert.ok(spoofSpawns.count > 0, "native shim spoofing --exec-path must not publish a 0-spawn proof");
+
+    await fs.writeFile(configB, "[core\n");
+    await fs.rm(nestedLink);
+    await fs.symlink(nestedB, nestedLink);
+    const spoofStatAfter = await fs.lstat(spoofShimBinary, { bigint: true });
+    assert.equal(spoofStatAfter.ino, spoofStatBefore.ino);
+    assert.equal(spoofStatAfter.mtimeNs, spoofStatBefore.mtimeNs);
+    assert.equal(spoofStatAfter.ctimeNs, spoofStatBefore.ctimeNs);
+
+    spoofSpawns.count = 0;
+    await assert.rejects(
+      spoofService.managedWorktreeUsable(
+        created.repositoryPath,
+        created.path,
+        created.branch,
+        created.worktreeGitDir,
+        created.ownershipToken,
+        created.worktreeDevice,
+        created.worktreeInode,
+      ),
+      /not a Git repository/u,
+    );
+    assert.ok(spoofSpawns.count > 0, "unchanged native shim spoofing --exec-path must fail closed when delegated target breaks");
   }
 });
