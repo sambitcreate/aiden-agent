@@ -25,8 +25,6 @@ export const QUICK_CHAT_INVOKE_CHANNELS = new Set([
   // Providers & models (read-only for ModelPicker + runtime)
   "providers:list",
   "models:info",
-  "modelPace:summaries",
-  "modelInsights:status",
 
   // Workspaces (list, isolated scratch folder, folder presence, attach / open folder)
   "workspaces:list",

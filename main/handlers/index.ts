@@ -37,9 +37,7 @@ import { registerUsageHandlers } from "./usage.js";
 import { registerProfileHandlers } from "./profile.js";
 import { registerComputerUseHandlers } from "./computer-use.js";
 import { registerFormFillHandlers } from "./form-fill.js";
-import { registerModelInsightsHandlers } from "./model-insights.js";
 import { registerImageGenerationHandlers } from "./image-generation.js";
-import { registerModelPaceHandlers } from "./model-pace.js";
 import { registerUsageLimitHandlers } from "./usage-limits.js";
 import { registerSpendingHandlers } from "./spending.js";
 import { registerHookHandlers } from "./hooks.js";
@@ -91,7 +89,6 @@ import { registerCreateImagesIpc } from "./create-images/index.js";
 import { registerDesignCanvasIpc } from "./design-canvas-main.js";
 import { initializeAdvisorRuntime } from "../services/advisor-runtime-main.js";
 import { initializeForkSummaries } from "../services/fork-summary-service-main.js";
-import { modelPaceRecorder } from "../services/model-pace-runtime.js";
 import { usageLimits } from "../services/usage-limit-main.js";
 import { spending } from "../services/spending-main.js";
 
@@ -163,12 +160,7 @@ export function registerHandlers(
   registerProfileHandlers();
   registerComputerUseHandlers();
   registerFormFillHandlers();
-  registerModelInsightsHandlers();
   registerImageGenerationHandlers();
-  registerModelPaceHandlers({
-    handle: (channel, handler) => ipcMain.handle(channel, handler),
-    recorder: modelPaceRecorder,
-  });
   registerUsageLimitHandlers({
     handle: (channel, handler) => ipcMain.handle(channel, handler),
     limits: usageLimits,

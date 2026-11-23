@@ -66,8 +66,6 @@ function mountFloatingApp(overrides: Record<string, (...args: unknown[]) => unkn
       updatedAt: 2,
     }),
     "models:info": () => ({}),
-    "modelPace:summaries": () => ({}),
-    "modelInsights:status": () => ({ connected: false }),
     "quickChat:setMode": () => true,
     "quickChat:hide": () => true,
     "quickChat:suppressBlur": () => true,

@@ -35,7 +35,6 @@ import type { ChatPendingAttention } from "../shared/chat-pending-attention";
 import type { SavedChatIntent } from "../shared/chat-intent";
 import type { CompactionEngine } from "../shared/compaction";
 import type { WorkspaceFolderPresenceResult } from "../shared/workspace-folder-presence";
-import type { ModelPaceSummary } from "../shared/model-pace";
 import { KEEP_AWAKE_CHANGED_CHANNEL, parseKeepAwakeStatus, type KeepAwakeStatus } from "../shared/keep-awake";
 import { parseWindowControlsState, type WindowControlsState } from "../shared/window-chrome";
 import {
@@ -138,8 +137,6 @@ import type {
   McpPendingLaunchApproval,
   McpMacAppStatus,
   ModelInfo,
-  ModelInsightsActionResult,
-  ModelInsightsStatus,
   FoundationModelsConnectionStatus,
   Profile,
   Provider,
@@ -624,13 +621,6 @@ export const assistantLiveApi = {
     onNotification<AssistantLiveRendererEvent>("assistant-live:event", handler),
 };
 
-export const modelInsightsApi = {
-  status: () => invoke<ModelInsightsStatus>("modelInsights:status"),
-  connect: (apiKey: string) => invoke<ModelInsightsActionResult>("modelInsights:connect", apiKey),
-  refresh: () => invoke<ModelInsightsActionResult>("modelInsights:refresh"),
-  disconnect: () => invoke<ModelInsightsActionResult>("modelInsights:disconnect"),
-};
-
 /** Settings → Image Generation. Keys go in only; state is redacted. */
 export const imageGenerationApi = {
   state: () => invoke<ImageGenerationState>("imageGeneration:state"),
@@ -652,12 +642,6 @@ export const imageGenerationApi = {
   /** User-initiated only: the one network path on this page. */
   fetchModels: (provider: ImageGenerationProviderId) =>
     invoke<ImageGenerationActionResult>("imageGeneration:fetchModels", { provider }),
-};
-
-/** Device-local measured pace; reads never touch the network. */
-export const modelPaceApi = {
-  summaries: () => invoke<Record<string, ModelPaceSummary>>("modelPace:summaries"),
-  clear: () => invoke<void>("modelPace:clear"),
 };
 
 /** Replies waiting for a provider usage limit to clear, on this Mac. */

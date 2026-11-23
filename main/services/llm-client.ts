@@ -16,8 +16,6 @@ import type { AppControlPanel } from "../../renderer/shared/app-controls.js";
 import { canUseProviderAuthenticatedMcp } from "./mcp-provider-auth-core.js";
 import { providerRegistry } from "./provider-registry.js";
 import { adoptChatCacheWarmer, canWarmForegroundChat, PiCacheWarmer, settleReplyCacheWarmer, stopAllPiCacheWarmers, withPiCacheWarming } from "./pi-cache-warming.js";
-import { createModelPaceMeasurement } from "./model-pace-core.js";
-import { modelPaceRecorder } from "./model-pace-runtime.js";
 import { usageLimits } from "./usage-limit-main.js";
 import { withUsageLimitWait } from "./usage-limit-stream.js";
 import { spending } from "./spending-main.js";
@@ -5058,22 +5056,12 @@ export const llmClient = {
           })
         : measuredStream;
       const warmedStream = cacheWarmer ? withPiCacheWarming(prefixedStream, cacheWarmer) : prefixedStream;
-      // Device-local pace: Pi calls the stream function once per model
-      // response, right before the provider request, so the wrapper marks
-      // each response's request start (see ModelPaceTimer for what TTFT covers).
-      const pace = createModelPaceMeasurement({
-        providerId: runtime.provider.id,
-        agentHarness: harnessProvider,
-        record: (key, sample) => modelPaceRecorder.record(key, sample),
-        onError: (error) =>
-          logger.debug("model-pace", `Could not measure pace for stream ${streamId}.`, error),
-      });
       // A retry can wait while the chat's balance or limit changes. Check it
       // again at dispatch, after waiting and before starting the provider call.
       const observedStream: typeof realStream = harnessProvider
-        ? pace.wrap(warmedStream)
+        ? warmedStream
         : spendingMeter.wrap(
-            withUsageLimitWait(pace.wrap(warmedStream), {
+            withUsageLimitWait(warmedStream, {
               ...usageLimits.streamOptions({ kind: "chat", id: params.chatId }, runtime.provider.label),
               beforeSendRefusal: async () => {
                 await spendingMeter.settled();
@@ -5980,7 +5968,6 @@ export const llmClient = {
       });
 
       candidate.subscribe(async (event) => {
-        pace.observe(event);
         switch (event.type) {
           case "agent_end":
             // The warmer settles or ends once the reply is saved (the run's finally).

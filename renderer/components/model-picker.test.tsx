@@ -6,7 +6,6 @@ import { installBotTestIpc } from "../main/bots/test-dom";
 import { mountWithBotRouter } from "../main/bots/test-providers";
 import { detectedKeyboardPlatform } from "../shared/keybindings";
 import type { AppSettings, Provider } from "../lib/types";
-import type { ModelPaceSummary } from "../shared/model-pace";
 import { ModelPicker } from "./model-picker";
 import { Toaster } from "./ui";
 
@@ -26,10 +25,9 @@ const provider: Provider = {
 
 function settingsServer(
   initial: AppSettings,
-  options: { failWrites?: boolean; pace?: Record<string, ModelPaceSummary> } = {},
+  options: { failWrites?: boolean } = {},
 ) {
   let current = structuredClone(initial);
-  let pace = options.pace ?? {};
   const calls = installBotTestIpc({
     "settings:get": () => structuredClone(current),
     "settings:set": (patch: unknown) => {
@@ -38,14 +36,10 @@ function settingsServer(
       return structuredClone(current);
     },
     "models:info": () => ({}),
-    "modelPace:summaries": () => structuredClone(pace),
   });
   return {
     calls,
     current: () => current,
-    setPace: (next: Record<string, ModelPaceSummary>) => {
-      pace = next;
-    },
   };
 }
 
@@ -100,41 +94,6 @@ test("the side card names the other providers that serve the same model", async 
   const card = await screen.findByRole("complementary");
   assert.match(card.textContent ?? "", /Current Model/u);
   assert.match(card.textContent ?? "", /Also via Relay Hub/u);
-});
-
-test("the side card shows the speed measured from the user's own chats", async () => {
-  const server = settingsServer({}, {
-    pace: {
-      "acme::current-model": {
-        medianTtftMs: 1_250,
-        medianTokensPerSecond: 48,
-        sampleCount: 7,
-        lastSampledAt: 1,
-      },
-    },
-  });
-  await openList(server);
-
-  const card = await screen.findByRole("complementary");
-  await within(card).findByText("1.3 s first token · 48 tok/s (7 runs)");
-  within(card).getByText("Your speed");
-
-  // A chat finished while the picker was closed: reopening shows the new speed.
-  const trigger = screen.getByRole("button", { name: /Choose a model/u });
-  fireEvent.click(trigger);
-  await waitFor(() => assert.ok(!screen.queryByRole("complementary")));
-  server.setPace({
-    "acme::current-model": {
-      medianTtftMs: 800,
-      medianTokensPerSecond: 90,
-      sampleCount: 8,
-      lastSampledAt: 2,
-    },
-  });
-  fireEvent.click(trigger);
-  await within(await screen.findByRole("complementary")).findByText(
-    "0.8 s first token · 90 tok/s (8 runs)",
-  );
 });
 
 function modelOption(label: string): HTMLElement {

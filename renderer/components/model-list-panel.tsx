@@ -21,14 +21,7 @@ import {
   recentModelsForList,
   type ModelEntry,
 } from "../lib/model-picker-data";
-import {
-  BENCHMARK_STALE_DAYS,
-  formatListPrice,
-  isOlderThanDays,
-  showsListPrice,
-} from "../lib/model-details";
-import { formatModelPace } from "../lib/model-pace-format";
-import type { ModelPaceSummary } from "../shared/model-pace";
+import { formatListPrice, showsListPrice } from "../lib/model-details";
 import { useModelPreferences } from "../lib/model-preferences";
 import { recordRecentModel } from "../shared/model-preferences";
 import type { ModelInfo } from "../lib/types";
@@ -43,8 +36,6 @@ import { ariaKeyShortcut, matchesAccelerator, prettyAccelerator } from "../share
 import { isComposingKey } from "../lib/dismiss-key";
 import { revealInList } from "../lib/reveal-in-list";
 
-const BENCHMARK_DATE_FORMATTER = new Intl.DateTimeFormat(undefined, { dateStyle: "medium" });
-
 function formatTokens(value: number | undefined): string | null {
   if (!value || !Number.isFinite(value)) return null;
   if (value >= 1_000_000) {
@@ -56,12 +47,6 @@ function formatTokens(value: number | undefined): string | null {
     return `${Number.isInteger(thousands) ? thousands : thousands.toFixed(1)}K`;
   }
   return String(value);
-}
-
-function formatBenchmarkDate(value: string | undefined): string | null {
-  if (!value) return null;
-  const date = new Date(value);
-  return Number.isFinite(date.getTime()) ? BENCHMARK_DATE_FORMATTER.format(date) : null;
 }
 
 function formatInputs(info: ModelInfo | undefined): string {
@@ -107,7 +92,6 @@ function describeModel(entry: ModelEntry): string {
   const output = formatTokens(entry.info?.outputLimit);
   if (context) details.push(`Context ${context} tokens`);
   if (output) details.push(`Maximum output ${output} tokens`);
-  if (entry.info?.benchmark) details.push(`Benchmark ${entry.info.benchmark.sourceLabel}`);
   details.push(`Model ID ${entry.model}`);
   return details.join(". ");
 }
@@ -256,14 +240,11 @@ function ModelListRow({
 export function ModelHoverDetails({
   model,
   alsoVia,
-  pace,
   metadataLoading,
 }: {
   model: ModelEntry | undefined;
   /** Other providers serving the same model, such as "Also via OpenRouter". */
   alsoVia?: string;
-  /** Device-local speed measured from this model's chat responses. */
-  pace?: ModelPaceSummary;
   metadataLoading: boolean;
 }) {
   if (!model) return null;
@@ -273,16 +254,6 @@ export function ModelHoverDetails({
   const output = formatTokens(info?.outputLimit);
   const inputs = formatInputs(info);
   const listPrice = showsListPrice(model) ? formatListPrice(info?.cost) : undefined;
-  const speed =
-    pace && pace.sampleCount >= 1
-      ? `${formatModelPace(pace)} (${pace.sampleCount} run${pace.sampleCount === 1 ? "" : "s"})`
-      : undefined;
-  const benchmarkDate = formatBenchmarkDate(info?.benchmark?.asOf);
-  const benchmarkAsOf =
-    benchmarkDate && isOlderThanDays(info?.benchmark?.asOf, BENCHMARK_STALE_DAYS)
-      ? `${benchmarkDate} (over ${BENCHMARK_STALE_DAYS} days old)`
-      : benchmarkDate;
-  const benchmark = info?.benchmark;
   const capabilities = [
     info?.vision ? "Vision" : null,
     info?.toolCall ? "Tools" : null,
@@ -295,15 +266,8 @@ export function ModelHoverDetails({
     context ? ["Context", context] : null,
     output ? ["Max output", output] : null,
     listPrice ? ["List price", listPrice] : null,
-    speed ? ["Your speed", speed] : null,
     info?.releaseDate ? ["Released", info.releaseDate] : null,
     info?.knowledge ? ["Knowledge", info.knowledge] : null,
-    info?.benchmark?.intelligence !== undefined
-      ? ["Intelligence", info.benchmark.intelligence.toFixed(1)]
-      : null,
-    info?.benchmark?.coding !== undefined ? ["Coding", info.benchmark.coding.toFixed(1)] : null,
-    info?.benchmark?.agentic !== undefined ? ["Agentic", info.benchmark.agentic.toFixed(1)] : null,
-    benchmarkAsOf ? ["Benchmark as of", benchmarkAsOf] : null,
   ].filter((row): row is [string, string] => Boolean(row));
 
   return (
@@ -347,7 +311,7 @@ export function ModelHoverDetails({
                 <div key={label} className="flex items-baseline justify-between gap-3">
                   <dt className="shrink-0 text-tertiary">{label}</dt>
                   {/* Values wrap rather than truncate: the tail of a long value
-                      (run count, staleness) is the part that matters. */}
+                      (such as a list price) is the part that matters. */}
                   <dd className="min-w-0 break-words text-right text-secondary tabular-nums">
                     {value}
                   </dd>
@@ -374,16 +338,6 @@ export function ModelHoverDetails({
         >
           {model.model}
         </div>
-        {benchmark ? (
-          <a
-            href={benchmark.sourceUrl}
-            target="_blank"
-            rel="noreferrer"
-            className="mt-1 inline-block text-mini leading-4 text-tertiary underline decoration-separator underline-offset-2 hover:text-secondary"
-          >
-            {`${benchmark.sourceLabel} · ${benchmark.license}`}
-          </a>
-        ) : null}
       </div>
       </div>
     </aside>

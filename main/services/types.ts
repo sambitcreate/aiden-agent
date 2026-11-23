@@ -403,23 +403,6 @@ export interface ChatMessage {
   subagents?: SubagentMessageReferenceV1;
 }
 
-/** One of the benchmark scores (General, Coding, Agentic). */
-export type ModelBenchmarkMetric = "intelligence" | "coding" | "agentic";
-
-/** Optional, display-only benchmark evidence. It never controls runtime limits or availability. */
-export interface ModelBenchmarkScores {
-  source: "openrouter";
-  datasetSource: "artificial-analysis";
-  sourceLabel: "Artificial Analysis via OpenRouter";
-  sourceUrl: string;
-  citation: string;
-  asOf: string;
-  license: "CC BY 4.0";
-  intelligence?: number;
-  coding?: number;
-  agentic?: number;
-}
-
 /** models.dev list price in USD per 1M tokens; only finite, non-negative fields are kept. */
 export interface ModelCost {
   input?: number;
@@ -459,7 +442,6 @@ export interface ModelInfo {
   /** Training knowledge cutoff (e.g. "2025-05"). */
   knowledge?: string;
   releaseDate?: string;
-  benchmark?: ModelBenchmarkScores;
   /** models.dev list price in USD per 1M tokens. Display-only; never affects limits or routing. */
   cost?: ModelCost;
   /** models.dev canonical model id for the matched row. Display-only. */
@@ -468,31 +450,6 @@ export interface ModelInfo {
   /** True when any trusted metadata source identified the model. */
   matched: boolean;
 }
-
-export interface ModelInsightsStatus {
-  hasKey: boolean;
-  ready: boolean;
-  cachedModelCount: number;
-  /** Benchmark rows the last fetch dropped because they shared a permaslug. */
-  skippedAmbiguousCount: number;
-  fetchedAt?: string;
-  asOf?: string;
-  citation?: string;
-  license?: "CC BY 4.0";
-}
-
-export type ModelInsightsActionErrorCode =
-  | "not_connected"
-  | "invalid_key"
-  | "rate_limited"
-  | "service_unavailable"
-  | "network_error"
-  | "invalid_response"
-  | "local_error";
-
-export type ModelInsightsActionResult =
-  | { ok: true; status: ModelInsightsStatus }
-  | { ok: false; code: ModelInsightsActionErrorCode; message: string };
 
 export interface ChatMeta {
   id: string;

@@ -224,7 +224,7 @@ Audit row: Backend #11. Research (OpenRouter list-benchmarks reference): no offs
 
 Requirements:
 - Change the fixed query to `/api/v1/benchmarks?source=artificial-analysis&max_results=500` and the local row limit to 500. Keep the response size limit at 2 MB unless a 500-row fixture shows it is too small.
-- Update the policy text in `AGENTS.md` (Release model metadata section) and `docs/plans/model-insights-plan.md` to the new fixed endpoint. If `packages/cli` references the old constant or URL, keep it consistent.
+- Update the policy text in `AGENTS.md` (Release model metadata section) and `docs/plans/completed/model-insights-plan.md` to the new fixed endpoint. If `packages/cli` references the old constant or URL, keep it consistent.
 
 Tests: the parser accepts 101–500 rows and rejects 501; the request URL matches the new fixed endpoint (via the injected fetch in the runtime-core tests).
 
@@ -259,7 +259,7 @@ Tests: pure sibling helper (canonical vs leaf fallback, no self-links); render s
 
 ### Task 21: Measure pace from real chat turns
 
-Audit row: Backend #1. Closes the "device-local pace signal" item in `docs/plans/model-insights-plan.md`.
+Audit row: Backend #1. Closes the "device-local pace signal" item in `docs/plans/completed/model-insights-plan.md`.
 
 Requirements:
 - In `main/services/llm-client.ts` streaming, per model response (not per whole turn): request start, first text or thinking delta, end, and output tokens from usage. Record a sample only for successful completions with ≥16 output tokens and ≥250 ms of generation: `ttftMs` and `tokensPerSecond = outputTokens / generationSeconds`.

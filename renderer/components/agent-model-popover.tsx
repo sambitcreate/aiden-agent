@@ -28,7 +28,7 @@ import {
   visibleModelEntries,
   type ModelEntry,
 } from "../lib/model-picker-data";
-import { useModelPaceSummaries, useProvidersModelInfo } from "../lib/queries";
+import { useProvidersModelInfo } from "../lib/queries";
 import {
   agentSliderPosition,
   agentSliderStopViews,
@@ -361,10 +361,6 @@ function AgentModelPopoverInner({
   };
 
   const listView = view.kind !== "slider";
-  const paceSummaries = useModelPaceSummaries({
-    enabled: open && listView && showDetails,
-    staleTime: 0,
-  }).data;
   const siblingsByValue = React.useMemo(
     () => (open && listView ? modelSiblings(entries) : new Map<string, ModelEntry[]>()),
     [open, listView, entries],
@@ -585,7 +581,6 @@ function AgentModelPopoverInner({
           <ModelHoverDetails
             model={detailEntry}
             alsoVia={detailEntry ? alsoViaLabel(siblingsByValue.get(detailEntry.value)) : undefined}
-            pace={detailEntry ? paceSummaries?.[detailEntry.value] : undefined}
             metadataLoading={catalog.isLoading}
           />
         ) : null}

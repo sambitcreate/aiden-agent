@@ -26,8 +26,6 @@ export const INVOKE_PREFIXES = [
   "imageWorkflows:",
   "localModels:",
   "localVoice:",
-  "modelInsights:",
-  "modelPace:",
   "mcp:",
   "models:",
   "providers:",

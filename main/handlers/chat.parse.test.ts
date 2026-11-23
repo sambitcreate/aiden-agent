@@ -60,7 +60,25 @@ test("registered chat:start forwards foreground delegation and the appended turn
     "../services/llm-client.js": { llmClient: { start } },
     "../services/chat-generation-owner.js": { chatGenerationOwner: (received: unknown) => { assert.equal(received, event); return owner; } },
     "../services/chat-title.js": { chatTitleService: { startForFirstTurn: () => { titles++; } } },
-    "../services/config-store.js": { configStore: { setSettings: async () => {}, getWorkspace: async () => ({}) } },
+    "../services/config-store.js": {
+      configStore: {
+        setSettings: async () => {},
+        getWorkspace: async () => ({}),
+        // The chat sits on the slider's second stop (the same model, no level).
+        getSettings: async () => ({
+          agentSlider: {
+            version: 1,
+            stops: [
+              { id: "stop_00000001", label: "Other", providerId: "p", model: "other" },
+              { id: "stop_00000002", label: "This one", providerId: "p", model: "m" },
+              { id: "stop_00000003", label: "Empty" },
+            ],
+            homeStopId: "stop_00000002",
+          },
+        }),
+      },
+    },
+    "../services/chat-store.js": { chatStore: { getMeta: async (id: string) => ({ id, title: "Chat" }) } },
     "../services/gemini-live/service-main.js": { geminiLiveService: {} },
     "../services/tool-approval-rules-main.js": { toolApprovalRules: {} },
     "../services/analytics/analytics-feature-reports.js": analyticsFeatureReports,
@@ -98,7 +116,10 @@ test("registered chat:start forwards foreground delegation and the appended turn
     await analyticsSettled();
     assert.deepEqual(sent, [{
       event: "chat_message_sent",
-      props: { provider_id: "custom", model_id: "custom", in_workspace: true, thinking: "other", origin: "desktop" },
+      props: {
+        provider_id: "custom", model_id: "custom", in_workspace: true, thinking: "other", origin: "desktop",
+        slider_stop: "2", slider_stop_count: 3,
+      },
     }]);
   } finally {
     lease.release();

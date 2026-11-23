@@ -91,7 +91,6 @@ function mount(settings: Partial<AppSettings>, settleSave?: SettleSave) {
     },
     "providers:list": () => [acme, lab],
     "models:info": (providerId: unknown) => MODEL_INFO[providerId as string] ?? {},
-    "modelPace:summaries": () => ({}),
   });
   const queryClient = createBotTestQueryClient();
   render(

@@ -569,10 +569,11 @@ script can check and prints `file:line rule message` for each hit:
   Checkbox, radio and other non-text inputs keep their rings.
 - `no-dialog-dom-sniff`: no selector strings that look for an open dialog, menu
   or popover in the DOM; ask the layer stack instead.
-- `network-allowlist`: the models.dev, PostHog ingestion, fal, Replicate,
-  OpenRouter models/benchmarks and Artificial Analysis endpoints appear only in
-  the modules that own them (AGENTS.md "Release model metadata" and "Product
-  analytics"). Tests, docs and `.memory` are not checked.
+- `network-allowlist`: the models.dev, PostHog ingestion, fal, Replicate and
+  OpenRouter models endpoints appear only in the modules that own them
+  (AGENTS.md "Release model metadata" and "Product analytics"). The retired
+  OpenRouter benchmarks and Artificial Analysis endpoints have no owner, so
+  they may not appear at all. Tests, docs and `.memory` are not checked.
 - `no-source-grep-test`: a test may not read a production `.ts`, `.tsx` or `.css`
   file and `match`, `doesNotMatch` or `includes` against it.
 - `literal-motion`: no literal `cubic-bezier(` in renderer CSS or code outside a

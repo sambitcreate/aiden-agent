@@ -5,6 +5,7 @@ import { ipcMain, logger } from "../platform.js";
 import { reportChatMessageSent, reportDesignCommentsSent } from "../services/analytics/analytics-feature-reports.js";
 import { analyticsWorkspaceKind } from "../services/analytics/analytics-ids.js";
 import { configStore } from "../services/config-store.js";
+import { chatStore } from "../services/chat-store.js";
 import { desktopChatExecutionOptions, startGenerationAndMaybeTitle } from "../services/chat-generation-start.js";
 import { isExplicitUserStop, parseChatCancelOrigin } from "../services/chat-cancel.js";
 import { chatTitleService } from "../services/chat-title.js";
@@ -59,7 +60,7 @@ export function registerChatGenerationHandlers(): void {
                 desktopChatExecutionOptions(messageTurnId, () => { accepted = true; }),
               ),
             startTitle: (input) => chatTitleService.startForFirstTurn(input),
-            onStarted: ({ providerId, model, thinkingLevel, workspaceId }) => {
+            onStarted: ({ chatId, providerId, model, thinkingLevel, workspaceId }) => {
               reportChatMessageSent({
                 providerId,
                 model,
@@ -68,6 +69,12 @@ export function registerChatGenerationHandlers(): void {
                 inWorkspace: async () =>
                   Boolean(workspaceId) &&
                   analyticsWorkspaceKind(await configStore.getWorkspace(workspaceId!)) !== "none",
+                // A Bot's chat has no slider; every other desktop chat sits on a stop or is custom.
+                agentSlider: async () => {
+                  const meta = await chatStore.getMeta(chatId);
+                  if (!meta || meta.botId) return undefined;
+                  return { slider: (await configStore.getSettings()).agentSlider, chatThinkingLevel: meta.thinkingLevel };
+                },
               });
               reportDesignCommentsSent(parsed.messages);
             },

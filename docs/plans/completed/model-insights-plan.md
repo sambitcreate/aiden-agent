@@ -1,6 +1,8 @@
 # Model Insights
 
-Status: Partial
+Status: Retired (2026-11-23) by the [Agent Slider](../agent-slider-plan.md), PR 4 (`feature/agent-slider-4-retire-scoring`). The owner dropped the Model Pad's scores, so nothing was left to show benchmark evidence or measured pace. The OpenRouter benchmark and Artificial Analysis backends, measured pace, the `modelInsights:*` and `modelPace:*` IPC and `aiden insights` were deleted, and a delete-only cleanup removes their keys and caches. models.dev facts and list price stay. The plan below is kept as history.
+
+Previous status: Partial
 
 ## Goal
 
