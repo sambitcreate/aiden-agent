@@ -3464,6 +3464,10 @@ struct AidenPendingApproval: Identifiable, Equatable, Sendable {
     /// Contract revision 61 (`approval:cards`): the typed card. With it, the
     /// buttons are the card's and only what they offer is ever sent.
     var card: AidenApprovalCardModel? = nil
+
+    /// Whether a run alert may offer Approve. Its Approve sends a one-time
+    /// allow, so a card must offer Allow once; without a card it always may.
+    var alertCanAllow: Bool { canAllow && (card?.offers(.allow, scope: .once) ?? true) }
 }
 
 enum AidenApprovalKind: Equatable, Sendable {

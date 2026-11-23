@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- **2026-11-23 — Run alerts settle in more cases.** An answer to a run that already finished, or that the Mac no longer has, counts as done instead of opening the chat. A Mac that revoked this phone drops the answer instead of bringing the notification back. Approve is left off an alert whose approval can't be allowed just once. A run that reconnects keeps its row on the summary card instead of going back to "Starting". After a Reply lands, the Live Activity reads "Answered" instead of "Has a question for you". No Remote wire or revision change.
+
 - **2026-11-22 — A finishing run still alerts after you leave the app.** When the app goes to the background while a run is going, it asks iOS for a little more time (usually about half a minute) and gives it back once the runs end or you return. A run that finishes in that window still posts its alert and its Live Activity reads Done instead of freezing. No Remote wire or revision change.
 
 - **2026-11-22 — One summary Live Activity per Mac.** When a second run starts on the same Mac, the per-run cards merge into one summary Live Activity: a headline ("4 runs on MacBook Pro", "1 needs you"), up to three chats with a plain status, most urgent first, and "+N more". The compact Dynamic Island shows the run count and how many need you. A tap opens the most urgent chat. Runs on different Macs keep separate cards, and the summary ends a few minutes after its last run finishes. Once the app stops updating it, the summary says "Latest status shown" and how long ago, like a single card. No Remote wire or revision change.

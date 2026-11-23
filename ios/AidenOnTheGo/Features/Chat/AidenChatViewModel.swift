@@ -3559,7 +3559,7 @@ final class AidenChatViewModel {
                     ? .approval(
                         target: AgentRunApprovalTarget(approvalID: approval.id, runID: nil),
                         summary: approval.summary,
-                        canAllow: approval.canAllow
+                        canAllow: approval.alertCanAllow
                     )
                     : nil
             )

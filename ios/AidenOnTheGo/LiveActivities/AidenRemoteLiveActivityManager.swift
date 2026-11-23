@@ -254,6 +254,30 @@ final class AidenRemoteLiveActivityManager {
         }
     }
 
+    /// A reply sent from a notification: every card for that chat still
+    /// asking stops asking. `landed` is false when the question was already
+    /// answered or gone, so the card says it no longer waits.
+    func questionAnswered(instanceID: String, chatID: String, landed: Bool) async {
+        func next(_ state: ContentState) -> ContentState {
+            landed
+                ? AgentRunActivityStateReducer.replied(state: state)
+                : AgentRunActivityStateReducer.answered(decision: nil, state: state)
+        }
+        for activity in systemActivities where isLive(activity) && activity.attributes.instanceID == instanceID
+            && activity.attributes.sessionID == chatID && !mergingActivityIDs.contains(activity.id) {
+            let current = state(for: activity)
+            guard current.status == .waitingForAnswer else { continue }
+            let updated = next(current)
+            stateByActivityID[activity.id] = updated
+            currentActivity = activity
+            await throttle(for: activity).submitUrgent(updated)
+        }
+        for (streamID, run) in summaryRuns[instanceID] ?? [:]
+        where run.chatID == chatID && run.state.status == .waitingForAnswer {
+            await updateSummaryRun(instanceID: instanceID, streamID: streamID, urgency: .immediate, transform: next)
+        }
+    }
+
     func questionRequired(instanceID: String, streamID: String) async {
         await update(instanceID: instanceID, streamID: streamID, urgency: .immediate) {
             AgentRunActivityStateReducer.waitingForAnswer(state: $0)
@@ -460,7 +484,9 @@ final class AidenRemoteLiveActivityManager {
                 state: state(for: other)
             )
         }
-        runs[new.streamID] = new.run
+        // A run already on the summary is reattaching: its row keeps what it
+        // last showed, and the status that follows brings it up to date.
+        if runs[new.streamID] == nil { runs[new.streamID] = new.run }
         summaryRuns[instanceID] = runs
         let summaryState = summaryState(for: instanceID)
 

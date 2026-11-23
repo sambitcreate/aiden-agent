@@ -801,6 +801,43 @@ final class AidenNativeIntegrationTests: XCTestCase {
         XCTAssertEqual(outcome, .dropped)
     }
 
+    /// A run that already finished, or that the Mac no longer has, has nothing
+    /// left to answer: the action counts as settled instead of coming back.
+    @MainActor
+    func testResponderTreatsAFinishedOrGoneRunAsNoLongerWaiting() async throws {
+        for (status, code) in [(409, "operation_stale"), (404, "run_gone")] {
+            let fake = FakeAlertTransport(failure: try alertServerError(status, code: code))
+            let responder = AidenAlertActionResponder(lookup: { _ in .client(fake) })
+            let deny = await responder.run(.deny(instanceID: "mac", chatID: "c", target: .init(approvalID: "ap", runID: "r1")))
+            XCTAssertEqual(deny, .alreadyResolved(winner: nil), code)
+            let reply = await responder.run(.reply(instanceID: "mac", chatID: "c", promptID: "q", runID: "r1", text: "Yes"))
+            XCTAssertEqual(reply, .alreadyResolved(winner: nil), code)
+        }
+    }
+
+    /// A Mac that revoked this phone will never take the answer, so trying
+    /// again later is pointless: the action is dropped, not re-posted.
+    @MainActor
+    func testResponderDropsAnAnswerTheMacRefusesAsRevoked() async throws {
+        let fake = FakeAlertTransport(failure: try alertServerError(401, code: "credential_revoked"))
+        let outcome = await AidenAlertActionResponder(lookup: { _ in .client(fake) })
+            .run(.approve(instanceID: "mac", chatID: "c", target: .init(approvalID: "ap", runID: nil)))
+        XCTAssertEqual(outcome, .dropped)
+    }
+
+    @MainActor
+    func testTheAppDropsAnAnswerForAMacKnownToBeRevoked() async throws {
+        let coordinator = AidenDemoHosts.coordinator(.four, responder: AidenDemoResponder())
+        await coordinator.start()
+        coordinator.hosts.connection(for: "mini")?.markRevoked()
+        let perform = AidenBackgroundActionBroker.perform(
+            coordinator: coordinator,
+            liveActivities: AidenRemoteLiveActivityManager(preferences: { AidenNotificationPreferences() })
+        )
+        let outcome = await perform(.deny(instanceID: "mini", chatID: "c", target: .init(approvalID: "ap", runID: nil)))
+        XCTAssertEqual(outcome, .dropped)
+    }
+
     @MainActor
     func testResponderRepliesAsTheFirstQuestionsCustomAnswer() async {
         let fake = FakeAlertTransport()
@@ -1141,6 +1178,61 @@ final class AidenNativeIntegrationTests: XCTestCase {
         let ended = await eventually("the summary to end") { summaries().isEmpty }
         XCTAssertTrue(ended)
         XCTAssertEqual(summary.content.state.rows.filter(\.isFinal).count, 2)
+    }
+
+    /// A run already on the summary that reattaches (the app comes back, the
+    /// stream restores) keeps its row; it doesn't go back to "Starting".
+    @MainActor
+    func testARunReattachingInsideASummaryKeepsItsRow() async throws {
+        guard ActivityAuthorizationInfo().areActivitiesEnabled else {
+            throw XCTSkip("Live Activities are disabled on this device.")
+        }
+        let mac = "summary-reattach-\(UUID().uuidString)"
+        let manager = AidenRemoteLiveActivityManager(preferences: { AidenNotificationPreferences() })
+        defer { Task { @MainActor in await manager.endAll(forInstanceID: mac) } }
+        await manager.start(instanceID: mac, chatID: "c1", title: "Fix login", streamID: "s1", machineName: "Mac")
+        await manager.start(instanceID: mac, chatID: "c2", title: "Write docs", streamID: "s2", machineName: "Mac")
+        let summary = try XCTUnwrap(Activity<AidenRunsSummaryActivityAttributes>.activities.first {
+            $0.attributes.instanceID == mac
+        })
+        await manager.approvalRequired(instanceID: mac, streamID: "s1", target: nil)
+        let waiting = await eventually("s1 to read Needs approval") {
+            summary.content.state.rows.first { $0.streamID == "s1" }?.status == .waitingForApproval
+        }
+        XCTAssertTrue(waiting)
+
+        await manager.start(instanceID: mac, chatID: "c1", title: "Fix login", streamID: "s1", machineName: "Mac")
+        await manager.toolFinished(instanceID: mac, streamID: "s2")
+        let settled = await eventually("the summary to take the later update") {
+            summary.content.state.rows.first { $0.streamID == "s2" }?.status == .responding
+        }
+        XCTAssertTrue(settled)
+        XCTAssertEqual(summary.content.state.rows.first { $0.streamID == "s1" }?.status, .waitingForApproval)
+        XCTAssertEqual(summary.content.state.rows.count, 2)
+    }
+
+    /// Once a Reply lands, the card stops saying the run has a question.
+    @MainActor
+    func testAReplyThatLandsTakesTheQuestionOffTheCard() async throws {
+        guard ActivityAuthorizationInfo().areActivitiesEnabled else {
+            throw XCTSkip("Live Activities are disabled on this device.")
+        }
+        let mac = "reply-\(UUID().uuidString)"
+        let manager = AidenRemoteLiveActivityManager(preferences: { AidenNotificationPreferences() })
+        defer { Task { @MainActor in await manager.endAll(forInstanceID: mac) } }
+        await manager.start(instanceID: mac, chatID: "c1", title: "Fix login", streamID: "s1")
+        await manager.questionRequired(instanceID: mac, streamID: "s1")
+        let activity = try XCTUnwrap(Activity<AgentRunActivityAttributes>.activities.first {
+            $0.attributes.instanceID == mac && $0.attributes.streamID == "s1"
+        })
+        let asking = await deliveredContent(of: activity, expecting: "the question", where: { $0.status == .waitingForAnswer })
+        XCTAssertNotNil(asking)
+
+        let perform = AidenBackgroundActionBroker.perform(lookup: { _ in .client(FakeAlertTransport()) }, liveActivities: manager)
+        let outcome = await perform(.reply(instanceID: mac, chatID: "c1", promptID: "q1", runID: nil, text: "Yes"))
+        XCTAssertEqual(outcome, .done)
+        let shown = await deliveredContent(of: activity, expecting: "the answered state", where: { $0.status != .waitingForAnswer })
+        XCTAssertEqual(shown?.currentActivity, "Answered")
     }
 
     @MainActor

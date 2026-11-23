@@ -39,7 +39,7 @@ struct AidenAlertActionResponder {
         case client(any AidenAlertActionTransport)
         /// Paired, but no client right now (offline, credentials missing).
         case unreachable
-        /// No longer paired with this phone.
+        /// No longer paired with this phone, or the Mac revoked it.
         case forgotten
     }
 
@@ -50,6 +50,9 @@ struct AidenAlertActionResponder {
         "approval_expired",
         "question_already_resolved",
         "question_expired",
+        // The run already finished (409) or the Mac no longer has it (404).
+        "operation_stale",
+        "run_gone",
     ]
 
     let lookup: @MainActor (String) -> ClientLookup
@@ -91,8 +94,11 @@ struct AidenAlertActionResponder {
             }
             return .done
         } catch let AidenRemoteClientError.server(statusCode, body)
-            where statusCode == 409 && Self.resolvedCodes.contains(body.code.rawValue) {
+            where [404, 409].contains(statusCode) && Self.resolvedCodes.contains(body.code.rawValue) {
             return .alreadyResolved(winner: Self.winner(body.details?.decision))
+        } catch let error as AidenRemoteClientError where error.isCredentialRevoked {
+            // The Mac will never take it; posting the alert again can't help.
+            return .dropped
         } catch {
             return .openApp(chatURL)
         }
@@ -142,7 +148,8 @@ extension AidenBackgroundActionBroker {
         let perform = perform(
             lookup: { [weak coordinator] instanceID in
                 guard let coordinator else { return .unreachable }
-                guard coordinator.hosts.connection(for: instanceID) != nil else { return .forgotten }
+                guard let connection = coordinator.hosts.connection(for: instanceID),
+                      !connection.isRevoked else { return .forgotten }
                 guard let context = try? coordinator.ownerContext(for: instanceID),
                       let client = try? coordinator.remoteClient(for: context) else { return .unreachable }
                 return .client(client)
@@ -157,7 +164,8 @@ extension AidenBackgroundActionBroker {
 
     /// The card shows the answer that counts: the phone's own when the Mac
     /// took it, the Mac's winning one when someone answered first, and a
-    /// neutral line when the Mac doesn't say who won.
+    /// neutral line when the Mac doesn't say who won. A reply that lands takes
+    /// the question off the card.
     static func perform(
         lookup: @escaping @MainActor (String) -> AidenAlertActionResponder.ClientLookup,
         liveActivities: AidenRemoteLiveActivityManager
@@ -171,7 +179,15 @@ extension AidenBackgroundActionBroker {
                 (target, asked) = (approval, .allow)
             case let .deny(_, _, approval):
                 (target, asked) = (approval, .deny)
-            case .reply:
+            case let .reply(instanceID, chatID, _, _, _):
+                switch outcome {
+                case .done:
+                    await liveActivities.questionAnswered(instanceID: instanceID, chatID: chatID, landed: true)
+                case .alreadyResolved:
+                    await liveActivities.questionAnswered(instanceID: instanceID, chatID: chatID, landed: false)
+                case .openApp, .dropped:
+                    break
+                }
                 return outcome
             }
             switch outcome {

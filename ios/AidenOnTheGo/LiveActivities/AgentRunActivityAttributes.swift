@@ -664,6 +664,15 @@ enum AgentRunActivityStateReducer {
         blocked(.waitingForAnswer, state: state, now: now)
     }
 
+    /// The person replied from a notification and the Mac took it: the run
+    /// goes back to work.
+    static func replied(
+        state: AgentRunActivityAttributes.ContentState,
+        now: Date = Date()
+    ) -> AgentRunActivityAttributes.ContentState {
+        statusState(.thinking, activity: String(localized: "Answered"), state: state, now: now)
+    }
+
     /// Server status refresh for a `waiting_for_approval` snapshot: keeps the
     /// approval-vs-question distinction and does not claim new progress.
     static func refreshedWaiting(
