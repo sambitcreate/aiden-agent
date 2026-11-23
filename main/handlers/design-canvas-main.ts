@@ -21,7 +21,7 @@ import { rendererDocumentOwner } from "../services/renderer-document-owner.js";
 import { designModeEnabled } from "../services/studio/feature-flags.js";
 import { registerDesignCanvasHandlers } from "./design-canvas.js";
 
-/** Windows whose destruction already unmounts every canvas view. */
+/** Windows whose reload, crash or destruction already unmounts every canvas view. */
 const watchedSenders = new WeakSet<Electron.WebContents>();
 
 export function registerDesignCanvasIpc(): void {
@@ -53,10 +53,14 @@ export function registerDesignCanvasIpc(): void {
     getChat: (chatId) => chatStore.getMeta(chatId),
     grants: designGrants,
     views: designCanvasViews,
-    whenSenderGone: (event, gone) => {
-      if (watchedSenders.has(event.sender)) return;
-      watchedSenders.add(event.sender);
-      event.sender.once("destroyed", gone);
+    whenSenderResets: (event, reset) => {
+      const sender = event.sender;
+      if (watchedSenders.has(sender)) return;
+      watchedSenders.add(sender);
+      // A main-frame navigation is a reload: every canvas in the window is gone.
+      sender.on("did-navigate", reset);
+      sender.on("render-process-gone", reset);
+      sender.once("destroyed", reset);
     },
     workspaceRoot: async (chat) =>
       (await configStore.getWorkspace(persistedChatWorkspaceId(chat.workspaceId)))?.folderPath ??

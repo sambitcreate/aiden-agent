@@ -76,7 +76,7 @@ async function fixture(
   });
   const grants = new DesignGrantRegistry();
   const views = new DesignCanvasViews();
-  const senderWatches: Array<{ event: unknown; gone: () => void }> = [];
+  const senderWatches: Array<{ event: unknown; reset: () => void }> = [];
   const issued: string[] = [];
   const issuedGrants: string[] = [];
   const issue = grants.issue.bind(grants);
@@ -104,7 +104,7 @@ async function fixture(
     getChat: async (chatId) => chats[chatId] ?? null,
     grants,
     views,
-    whenSenderGone: (event, gone) => senderWatches.push({ event, gone }),
+    whenSenderResets: (event, reset) => senderWatches.push({ event, reset }),
     workspaceRoot:
       options.workspaceRoot ?? (async (chat) => roots[chat.workspaceId ?? ""] ?? null),
     windowFor: options.windowFor ?? (() => null),
@@ -227,23 +227,46 @@ test("a save that names another workspace than the chat's is answered moved, and
 
 test("designCanvas:view stores a parsed view and refuses a malformed one", async (t) => {
   const { invoke, views } = await fixture(t);
-  await invoke("designCanvas:view", "chat-1", { pageId: "p2", viewport: { x: 10, y: 20, zoom: 9 }, size: { w: 800, h: 600 } }, 0);
-  assert.deepEqual(views.get("chat-1"), { pageId: "p2", viewport: { x: 10, y: 20, zoom: 4 }, size: { w: 800, h: 600 } });
+  const report = (view: unknown, focusId: unknown = 0, workspaceId: unknown = "workspace-1") => ({ workspaceId, view, focusId });
+  await invoke("designCanvas:view", "chat-1", report({ pageId: "p2", viewport: { x: 10, y: 20, zoom: 9 }, size: { w: 800, h: 600 } }));
+  assert.deepEqual(await views.get("chat-1", "workspace-1"), { pageId: "p2", viewport: { x: 10, y: 20, zoom: 4 }, size: { w: 800, h: 600 } });
   assert.equal(views.mounted("workspace-1"), 1);
-  for (const bad of [{ pageId: "p2" }, { pageId: "", viewport: { x: 0, y: 0, zoom: 1 } }, "p2", 42]) {
+  const good = { pageId: "p2", viewport: { x: 0, y: 0, zoom: 1 } };
+  for (const bad of [
+    report({ pageId: "p2" }),
+    report({ pageId: "", viewport: { x: 0, y: 0, zoom: 1 } }),
+    report(good, -1),
+    report(good, 1.5),
+    report(good, "1"),
+    report(good, 0, "../ws"),
+    { view: good, focusId: 0 },
+    { mounted: true },
+    "p2",
+    null,
+  ]) {
     await assert.rejects(invoke("designCanvas:view", "chat-1", bad), /Invalid canvas view/u, JSON.stringify(bad));
   }
-  for (const focusId of [-1, 1.5, "1", Number.NaN]) {
-    await assert.rejects(invoke("designCanvas:view", "chat-1", { pageId: "p2", viewport: { x: 0, y: 0, zoom: 1 } }, focusId), /Invalid canvas view/u);
-  }
-  assert.equal(views.get("chat-1")?.viewport.x, 10, "a refused report changes nothing");
+  assert.equal((await views.get("chat-1", "workspace-1"))?.viewport.x, 10, "a refused report changes nothing");
   // The canvas reads the kept view back when it mounts.
-  await invoke("designCanvas:view", "chat-1", null);
+  await invoke("designCanvas:view", "chat-1", { mounted: false });
   assert.equal(views.mounted("workspace-1"), 0);
-  assert.deepEqual(await invoke("designCanvas:view:get", "chat-1"), {
-    view: { pageId: "p2", viewport: { x: 10, y: 20, zoom: 4 }, size: { w: 800, h: 600 } },
-    focusId: 0,
-  });
+  assert.deepEqual(await invoke("designCanvas:view:get", "chat-1"), { pageId: "p2", viewport: { x: 10, y: 20, zoom: 4 }, focusId: 0 });
+});
+
+test("designCanvas:view:get answers null for a chat with no kept view", async (t) => {
+  const { invoke } = await fixture(t);
+  assert.equal(await invoke("designCanvas:view:get", "chat-1"), null);
+});
+
+test("a view report naming the chat's old workspace is dropped", async (t) => {
+  const { invoke, views, chats } = await fixture(t);
+  await invoke("designCanvas:view", "chat-1", { workspaceId: "workspace-1", view: { pageId: "p1", viewport: { x: 0, y: 0, zoom: 1 } }, focusId: 0 });
+  chats["chat-1"]!.workspaceId = "workspace-2";
+  await invoke("designCanvas:view", "chat-1", { workspaceId: "workspace-2", view: { pageId: "w2-page", viewport: { x: 7, y: 0, zoom: 1 } }, focusId: 0 });
+  // A canvas still showing W1 reports late; W2's view stays as it was.
+  await invoke("designCanvas:view", "chat-1", { workspaceId: "workspace-1", view: { pageId: "p1", viewport: { x: 99, y: 0, zoom: 1 } }, focusId: 0 });
+  assert.deepEqual(await views.get("chat-1", "workspace-2"), { pageId: "w2-page", viewport: { x: 7, y: 0, zoom: 1 } });
+  assert.equal((await views.get("chat-1", "workspace-1"))?.viewport.x, 0);
 });
 
 test("designCanvas:view refuses a Bot chat, but an unmount needs only a well-formed chat id", async (t) => {
@@ -253,27 +276,28 @@ test("designCanvas:view refuses a Bot chat, but an unmount needs only a well-for
       bot: { id: "bot", workspaceId: "workspace-1", botId: "b1" },
     },
   });
-  const view = { pageId: "page-1", viewport: { x: 0, y: 0, zoom: 1 } };
-  await assert.rejects(invoke("designCanvas:view", "bot", view), /not available/u);
+  const report = { workspaceId: "workspace-1", view: { pageId: "page-1", viewport: { x: 0, y: 0, zoom: 1 } }, focusId: 0 };
+  await assert.rejects(invoke("designCanvas:view", "bot", report), /not available/u);
   await assert.rejects(invoke("designCanvas:view:get", "bot"), /not available/u);
-  await assert.rejects(invoke("designCanvas:view", "missing", view), /no longer available/u);
-  assert.equal(views.get("bot"), undefined);
+  await assert.rejects(invoke("designCanvas:view", "missing", report), /no longer available/u);
+  assert.equal(await views.get("bot", "workspace-1"), undefined);
   // The chat is deleted while its canvas is open; the unmount that follows still lands.
-  await invoke("designCanvas:view", "chat-1", view);
+  await invoke("designCanvas:view", "chat-1", report);
   delete chats["chat-1"];
-  await invoke("designCanvas:view", "chat-1", null);
+  await invoke("designCanvas:view", "chat-1", { mounted: false });
   assert.equal(views.mounted("workspace-1"), 0);
-  await assert.rejects(invoke("designCanvas:view", "../x", null), /Invalid chat id/u);
+  await assert.rejects(invoke("designCanvas:view", "../x", { mounted: false }), /Invalid chat id/u);
 });
 
-test("when the window that reports views goes away, every canvas counts as closed", async (t) => {
+test("when the window that reports views reloads, crashes or goes away, every canvas counts as closed", async (t) => {
   const { invokeFrom, views, senderWatches } = await fixture(t);
   const sender = { id: "window" };
-  await invokeFrom(sender, "designCanvas:view", "chat-1", { pageId: "page-1", viewport: { x: 0, y: 0, zoom: 1 } });
+  const report = { workspaceId: "workspace-1", view: { pageId: "page-1", viewport: { x: 0, y: 0, zoom: 1 } }, focusId: 0 };
+  await invokeFrom(sender, "designCanvas:view", "chat-1", report);
   assert.equal(views.mounted("workspace-1"), 1);
-  senderWatches.find((watch) => watch.event === sender)!.gone();
+  senderWatches.find((watch) => watch.event === sender)!.reset();
   assert.equal(views.mounted("workspace-1"), 0);
-  assert.equal(views.get("chat-1")?.pageId, "page-1", "the page is kept");
+  assert.equal((await views.get("chat-1", "workspace-1"))?.pageId, "page-1", "the page is kept");
 });
 
 test("a page a save takes off is remembered as removed, unless the save says the person's undo took it off", async (t) => {

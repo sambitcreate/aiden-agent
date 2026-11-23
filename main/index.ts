@@ -170,7 +170,7 @@ import { EmptyChatMigrationSnapshotError } from "./services/empty-chat-migration
 import { migrateLegacyEmptyWorkspaceChats } from "./services/empty-chat-migration-main.js";
 import { ensureUserDataDir } from "./services/data-store.js";
 import { piCompactionSessionStore } from "./services/pi-compaction-session-store.js";
-import { designCanvasStore } from "./services/design-canvas/main.js";
+import { designCanvasStore, designCanvasViews } from "./services/design-canvas/main.js";
 import {
   reconcileExternalProviderCredentialChanges,
   reconcilePendingProviderCredentialRotation,
@@ -450,6 +450,7 @@ const SHUTDOWN_BUDGET_MS = {
   parentGenerations: 7_000,
   backgroundJobs: 6_000,
   modelPace: 1_000,
+  designViews: 1_000,
   subagentRuntime: 7_000,
   spending: 1_000,
   // analyticsService().shutdown() caps its own send at 1.5 s.
@@ -616,6 +617,8 @@ async function runShutdownAndQuit(settingsPrepared: boolean): Promise<void> {
   // Settled generations have recorded their last pace samples; persist the
   // debounced remainder. Never fatal: it is a regenerable measurement cache.
   await settleShutdownStep("main", "Model pace samples", SHUTDOWN_BUDGET_MS.modelPace, () => modelPaceRecorder.flush());
+  // Each chat's canvas page and viewports, written at most once a second while running.
+  await settleShutdownStep("design", "Design canvas views", SHUTDOWN_BUDGET_MS.designViews, () => designCanvasViews.flush());
   const subagentShutdown = await settleShutdownStep("main", "Subagent runtime", SHUTDOWN_BUDGET_MS.subagentRuntime, () =>
     subagentRuntimeRegistry.shutdown(),
   );

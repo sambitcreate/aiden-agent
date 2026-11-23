@@ -41,8 +41,15 @@ export function broadcastDesignCanvasUpdate(update: DesignCanvasUpdated): void {
   }
 }
 
-/** Each chat's canvas view (page, viewport, size), as its canvas reports it. Memory only. */
-export const designCanvasViews = new DesignCanvasViews();
+/**
+ * Each chat's canvas view (page, viewports, the latest Aiden page change), as
+ * its canvas reports it and Aiden's tools change it. Persisted per workspace
+ * under `userData/design-canvas-views/`; whether a canvas is open is memory only.
+ */
+export const designCanvasViews = new DesignCanvasViews({
+  root: () => path.join(app.getPath("userData"), "design-canvas-views"),
+  onError: (error) => logger.warn("design", "Could not read or save design canvas views.", error),
+});
 
 /** Live `aiden-design://` grants. Memory only: a restart ends every grant. */
 export const designGrants = new DesignGrantRegistry();
