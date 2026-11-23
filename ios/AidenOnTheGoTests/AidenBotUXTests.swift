@@ -345,6 +345,21 @@ extension AidenBotUXTests {
         XCTAssertEqual(model.errorMessage, "No.")
     }
 
+    func testBotApprovalCardOffersAlwaysOnTheFirstCardWithoutACount() async throws {
+        // The Mac offers Always on every eligible card; only a repeat brings the count.
+        let approval = botApprovalObject(card: try card("botAlways"))
+        let (model, transport) = try await loadedModel(approval: approval)
+        let current = try XCTUnwrap(model.approval?.card)
+        let always = try XCTUnwrap(current.buttons.last)
+        let waiting = try XCTUnwrap(model.approval)
+        XCTAssertNil(waiting.alwaysCount)
+        XCTAssertFalse(model.sendableScopes(for: waiting).contains(.always), "Always still needs bot:allowed")
+        model.allowedSupported = true
+        XCTAssertTrue(current.allowButtons(sendable: model.sendableScopes(for: waiting)).contains(always))
+        await model.answerApproval(button: always)
+        XCTAssertEqual(transport.approvals.map(\.scope), [.always])
+    }
+
     func testBotApprovalButtonSendsItsScopeShowsTheAnsweredLineAndRollsBack() async throws {
         let approval = botApprovalObject(card: try card("botAlways"), alwaysCount: 4)
         let (model, transport) = try await loadedModel(approval: approval)

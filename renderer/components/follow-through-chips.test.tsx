@@ -176,9 +176,9 @@ test("the follow chip names the pull request, opens it, and stops following", as
   fireEvent.click(screen.getByRole("button", { name: "Following pull request 42" }));
   const dialog = await screen.findByRole("dialog", { name: "Followed pull requests" });
   assert.deepEqual(nudges().slice(-1)[0], [{ chatId: "chat-1" }], "opening the list asks this chat's follows to look again");
-  assert.ok(within(dialog).getByText("1 check failing · 1 of 10 updates sent"));
+  assert.ok(within(dialog).getByText("1 check failing · 1 update sent"));
   assert.ok(within(dialog).getByText("Merged"));
-  assert.ok(within(dialog).getByText(/Only comments from people who can write to the repository reach the agent/u));
+  assert.ok(within(dialog).getByText(/Only comments from people who can write to the repository and from review bots reach the agent/u));
   fireEvent.click(within(dialog).getByRole("button", { name: "Open pull request 42" }));
   assert.deepEqual(opened, ["https://github.com/acme/app/pull/42"]);
   assert.equal(within(dialog).getAllByRole("button", { name: "Stop" }).length, 1);

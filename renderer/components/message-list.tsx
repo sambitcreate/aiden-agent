@@ -32,7 +32,7 @@ import {
   isExtractionStep,
   isRecordingStep,
   isQuestionnaireStep,
-  clampLiveTimelineToContent,
+  liveAssistantPresentationRows,
 } from "../lib/assistant-message-presentation";
 import { AskUserQuestionRecap } from "./ask-user-question-recap";
 import { WebExtractRecap } from "./web-extract-recap";
@@ -276,11 +276,9 @@ function AssistantResponse({
         : (attachments ?? []),
     [attachments, imageGeneration.hiddenAttachmentIds],
   );
-  const rows = assistantPresentationRows(
-    content,
-    streaming ? clampLiveTimelineToContent(timeline, content.length) : timeline,
-    reasoning ?? "",
-  );
+  const rows = streaming
+    ? liveAssistantPresentationRows(content, timeline, reasoning ?? "")
+    : assistantPresentationRows(content, timeline, reasoning ?? "");
   // Images and generate_image placeholders sit at their producing call's row.
   const imageSlots = imageGenerationRowSlots(
     timeline ? rows : null,
@@ -1236,7 +1234,13 @@ export function MessageList({
           >
             {transcriptRows}
 
-            <AgentActivityTransition activity={agentActivity} onRetryUsageLimit={onRetryUsageLimit} />
+            <AgentActivityTransition
+              activity={agentActivity}
+              // A reply still arriving keeps the line's place while a tool or reasoning row
+              // owns the phase, so each hand-off between steps leaves the transcript's height alone.
+              reserve={streamingText !== null}
+              onRetryUsageLimit={onRetryUsageLimit}
+            />
 
             <EventPresence present={Boolean(error)}>
               {error ? (
@@ -1259,9 +1263,12 @@ export function MessageList({
 
 function AgentActivityTransition({
   activity,
+  reserve,
   onRetryUsageLimit,
 }: {
   activity: AgentActivity | null;
+  /** Hold the line's height while there is nothing to say. */
+  reserve: boolean;
   onRetryUsageLimit?: () => void;
 }) {
   const [current, setCurrent] = React.useState(activity);
@@ -1284,46 +1291,41 @@ function AgentActivityTransition({
     return () => window.clearTimeout(timer);
   }, [activity?.phase, activity?.label, activity?.mark, activity?.canRetryNow, current]);
 
-  if (!current) return null;
-  const retry = current.phase === "limited" && current.canRetryNow && onRetryUsageLimit;
+  if (!current && !reserve) return null;
+  const retry = current?.phase === "limited" && current.canRetryNow && onRetryUsageLimit;
+  const shimmer =
+    current?.phase === "thinking" || current?.phase === "loading" || current?.phase === "visualizing";
   return (
+    // One fixed-height slot: the label swaps on presentation timers, and a
+    // wrapping label, or a line that came and went with each step, would move
+    // the bottom edge the transcript follows.
     <div
-      role="status"
-      aria-live="polite"
-      // One fixed-height line: the label swaps on presentation timers, and a
-      // wrapping label would move the bottom edge the transcript follows.
-      className={cn(
-        "agent-activity-layer agent-event-in flex w-fit max-w-full items-center gap-2",
-        current.phase === "limited" ? "h-7" : "h-6",
-      )}
-      data-agent-activity={current.phase}
+      className={cn("flex items-center", current?.phase === "limited" ? "h-7" : "h-6")}
+      data-agent-activity-slot=""
     >
-      <AidenActivityMark mark={current.mark} size={20} className="shrink-0 text-primary" />
-      <Text
-        variant="small"
-        color="secondary"
-        title={current.label}
-        ref={
-          current.phase === "thinking" ||
-          current.phase === "loading" ||
-          current.phase === "visualizing"
-            ? pauseWhenUnseen
-            : undefined
-        }
-        className={
-          current.phase === "thinking" ||
-          current.phase === "loading" ||
-          current.phase === "visualizing"
-            ? "agent-thinking-shimmer min-w-0 truncate"
-            : "min-w-0 truncate"
-        }
-      >
-        {current.label}
-      </Text>
-      {retry ? (
-        <Button variant="transparent" size="small" className="-my-0.5 shrink-0" onClick={onRetryUsageLimit}>
-          Retry now
-        </Button>
+      {current ? (
+        <div
+          role="status"
+          aria-live="polite"
+          className="agent-activity-layer agent-event-in flex w-fit max-w-full items-center gap-2"
+          data-agent-activity={current.phase}
+        >
+          <AidenActivityMark mark={current.mark} size={20} className="shrink-0 text-primary" />
+          <Text
+            variant="small"
+            color="secondary"
+            title={current.label}
+            ref={shimmer ? pauseWhenUnseen : undefined}
+            className={shimmer ? "agent-thinking-shimmer min-w-0 truncate" : "min-w-0 truncate"}
+          >
+            {current.label}
+          </Text>
+          {retry ? (
+            <Button variant="transparent" size="small" className="-my-0.5 shrink-0" onClick={onRetryUsageLimit}>
+              Retry now
+            </Button>
+          ) : null}
+        </div>
       ) : null}
     </div>
   );

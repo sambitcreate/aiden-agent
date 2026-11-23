@@ -19,6 +19,7 @@ import {
   checksNeedingLogs,
   evaluateFollow,
   followKey,
+  followMayAskForChanges,
   followMayProbe,
   followReadFailed,
   followStayedQuiet,
@@ -331,9 +332,10 @@ export class PullRequestFollows {
   }
 
   private async poll(id: string, record: PullRequestFollowRecord, signal: AbortSignal): Promise<void> {
-    // While a check fails, every read must be a full one (the failure clock
-    // decides, not a change), so skip the probe and its requests entirely.
-    const probe = record.failingSince === undefined
+    // While a check fails and a failure card may still be due, every read must
+    // be a full one (the failure clock decides, not a change), so skip the
+    // probe and its requests entirely. After the still-failing card, probe.
+    const probe = followMayAskForChanges(record)
       ? { ...(record.etags ? { etags: record.etags } : {}), skipIfUnchanged: followMayProbe(record, this.deps.now()) }
       : undefined;
     const read: FollowReadResult = await this.deps.reader.read(record, signal, probe);

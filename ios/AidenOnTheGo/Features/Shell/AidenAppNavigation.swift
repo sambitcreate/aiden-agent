@@ -264,8 +264,9 @@ final class AidenAppNavigation {
     var workspacesPath: [AidenAppRoute]
     private var savedPaths: [String: [AidenAppRoute]]
 
-    /// Not saved: a relaunch must not open the microphone.
+    /// Not saved: a relaunch must not open the microphone or camera.
     private(set) var chatStartingVoice: AidenHostObjectID?
+    private(set) var chatStartingCamera: AidenHostObjectID?
     /// The Catch Up under way, while its chat is on top of the Inbox. Not saved:
     /// a relaunch restores the chat, as an ordinary chat.
     private(set) var catchUp: AidenCatchUpRun?
@@ -321,16 +322,41 @@ final class AidenAppNavigation {
     }
 
     /// Selects the route's tab and shows the route there, or goes back to it
-    /// wherever it's already open. `startsVoice` is a voice shortcut's: the chat starts listening when it opens.
-    func open(_ route: AidenAppRoute, startsVoice: Bool = false) {
+    /// wherever it's already open. `startsVoice` and `startsCamera` belong to
+    /// foreground shortcuts and widget buttons: the chat starts listening or
+    /// opens its camera picker when it opens.
+    func open(_ route: AidenAppRoute, startsVoice: Bool = false, startsCamera: Bool = false) {
         open(route, on: route.tab)
-        if startsVoice, case .chat(let id) = route {
-            chatStartingVoice = id
+        if case .chat(let id) = route {
+            if startsVoice {
+                chatStartingVoice = id
+            } else if startsCamera {
+                chatStartingCamera = id
+            }
         }
     }
 
     func finishStartingVoice(_ id: AidenHostObjectID) {
         if chatStartingVoice == id { chatStartingVoice = nil }
+    }
+
+    func finishStartingCamera(_ id: AidenHostObjectID) {
+        if chatStartingCamera == id { chatStartingCamera = nil }
+    }
+
+    /// Switches to `tab` at its root screen, used by Home Screen Quick Actions
+    /// and widget buttons. Other tabs keep their stacks, so a Catch Up left
+    /// on the Inbox is still there to go back to; emptying the Inbox ends it.
+    func selectTabRoot(_ tab: AidenAppTab) {
+        chatStartingVoice = nil
+        chatStartingCamera = nil
+        self.tab = tab
+        switch tab {
+        case .inbox: inboxPath = []
+        case .bots: botsPath = []
+        case .workspaces: workspacesPath = []
+        case .search: break
+        }
     }
 
     /// Shows the route on `tab`, which needn't be its own: a chat started from the
@@ -339,6 +365,7 @@ final class AidenAppNavigation {
     /// two screens.
     func open(_ route: AidenAppRoute, on tab: AidenAppTab) {
         chatStartingVoice = nil
+        chatStartingCamera = nil
         let holders = AidenAppTab.allCases.filter { path(of: $0).contains(route) }
         let tab = holders.contains(tab) ? tab : holders.first ?? tab
         self.tab = tab
@@ -417,6 +444,7 @@ final class AidenAppNavigation {
     /// A Catch Up step stays on the Inbox, Bot or not, so Back leads to the Inbox.
     private func openInInbox(_ route: AidenAppRoute) {
         chatStartingVoice = nil
+        chatStartingCamera = nil
         tab = .inbox
         Self.show(route, on: &inboxPath)
     }

@@ -89,13 +89,56 @@ function relayAbort(parent: AbortSignal, child: AbortController): () => void {
   return () => parent.removeEventListener("abort", relay);
 }
 
+/**
+ * How long one runtime snapshot may answer later runtime reads while the
+ * inventory revision stays the same. Every hooked inventory mutation (settings,
+ * provider and MCP configuration or credentials, skills, Bot computers) moves
+ * the revision and so misses at once; the bound only caps how long unhooked
+ * drift, such as a server's tool list changing on its own, can go unseen.
+ */
+export interface BotRuntimeSnapshotReuse {
+  /** The inventory revision a snapshot is read at (`botRuntimeInventoryLeases.revision()`). */
+  revision(): number;
+  ttlMs: number;
+  /** Milliseconds on a monotonic clock; defaults to `performance.now()` so a wall-clock change never stretches the TTL. */
+  now?(): number;
+}
+
+interface RuntimeSnapshotEntry {
+  revision: number;
+  expiresAt: number;
+  snapshot: Promise<BotCapabilityCatalogSnapshot>;
+}
+
+/** Distinct runtime reads kept at once (Bots × retained choices); the oldest goes first. */
+const RUNTIME_SNAPSHOT_ENTRY_LIMIT = 32;
+
+function abortable<T>(value: Promise<T>, signal: AbortSignal | undefined): Promise<T> {
+  if (!signal) return value;
+  if (signal.aborted) return Promise.reject(abortReason(signal));
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = () => reject(abortReason(signal));
+    signal.addEventListener("abort", onAbort, { once: true });
+    value.then(
+      (result) => { signal.removeEventListener("abort", onAbort); resolve(result); },
+      (error: unknown) => { signal.removeEventListener("abort", onAbort); reject(error); },
+    );
+  });
+}
+
 export class BotCapabilityCatalogMainService {
   private keyPromise?: Promise<Uint8Array>;
+  private readonly runtimeSnapshots = new Map<string, RuntimeSnapshotEntry>();
 
   constructor(
     private readonly ports: BotCapabilityInventoryPorts,
     private readonly hooks: {
       onRuntimeSnapshot?(botId: string | undefined, snapshot: BotCapabilityCatalogSnapshot): void;
+      /**
+       * Share runtime snapshots between the admissions and pre-effect checks of
+       * one turn. Without it every runtime read inspects the whole inventory.
+       */
+      runtimeReuse?: BotRuntimeSnapshotReuse;
     } = {},
   ) {}
 
@@ -266,18 +309,50 @@ export class BotCapabilityCatalogMainService {
       botId?: string;
     } = {},
   ): Promise<BotCapabilityCatalogSnapshot> {
-    const snapshot = await this.buildSnapshot({
-      notice: {
-        version: BOT_FULL_ACCESS_NOTICE_VERSION,
-        requiresAcknowledgement: true,
-      },
-      retainedBindings: input.retainedBindings,
-      retainedProviders: input.retainedProviders,
-      signal: input.signal,
-      botId: input.botId,
-    });
-    this.hooks.onRuntimeSnapshot?.(input.botId, snapshot);
-    return snapshot;
+    const reuse = this.hooks.runtimeReuse;
+    // A snapshot reads only each retained provider's identity. Callers pass
+    // richer authority objects (with fingerprints) or the bare pair; both
+    // must read, and share, the same inspection.
+    const retainedProviders = input.retainedProviders?.map(({ sourceProviderId, sourceModelId }) => ({ sourceProviderId, sourceModelId }));
+    const build = async (signal: AbortSignal | undefined) => {
+      const snapshot = await this.buildSnapshot({
+        notice: {
+          version: BOT_FULL_ACCESS_NOTICE_VERSION,
+          requiresAcknowledgement: true,
+        },
+        retainedBindings: input.retainedBindings,
+        retainedProviders,
+        signal,
+        botId: input.botId,
+      });
+      this.hooks.onRuntimeSnapshot?.(input.botId, snapshot);
+      return snapshot;
+    };
+    if (reuse === undefined) return build(input.signal);
+    if (input.signal?.aborted) throw abortReason(input.signal);
+    // One turn admits and re-checks its authority many times before a single
+    // model request. While nothing changed, those reads share one inspection
+    // instead of each reading every provider, connection and skill again.
+    const key = JSON.stringify([input.botId ?? null, input.retainedBindings ?? [], retainedProviders ?? []]);
+    const revision = reuse.revision();
+    const now = reuse.now?.() ?? performance.now();
+    let entry = this.runtimeSnapshots.get(key);
+    if (entry === undefined || entry.revision !== revision || entry.expiresAt <= now) {
+      // Shared by every caller, so no one caller's cancellation stops it.
+      const fresh: RuntimeSnapshotEntry = { revision, expiresAt: now + reuse.ttlMs, snapshot: build(undefined) };
+      entry = fresh;
+      this.runtimeSnapshots.delete(key);
+      this.runtimeSnapshots.set(key, fresh);
+      while (this.runtimeSnapshots.size > RUNTIME_SNAPSHOT_ENTRY_LIMIT) {
+        this.runtimeSnapshots.delete(this.runtimeSnapshots.keys().next().value!);
+      }
+      // A failed read is never reused.
+      fresh.snapshot.catch(() => {
+        if (this.runtimeSnapshots.get(key) === fresh) this.runtimeSnapshots.delete(key);
+      });
+    }
+    // Each caller gets its own copy, so one caller's edits never reach another.
+    return structuredClone(await abortable(entry.snapshot, input.signal));
   }
 
   /** Bind against a caller-leased snapshot, or re-read inventory when none is supplied. */
@@ -384,6 +459,7 @@ export function createBotCapabilityCatalogMainService(
   ports: BotCapabilityInventoryPorts,
   hooks: {
     onRuntimeSnapshot?(botId: string | undefined, snapshot: BotCapabilityCatalogSnapshot): void;
+    runtimeReuse?: BotRuntimeSnapshotReuse;
   } = {},
 ): BotCapabilityCatalogMainService {
   return new BotCapabilityCatalogMainService(ports, hooks);

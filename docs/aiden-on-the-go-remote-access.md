@@ -270,9 +270,12 @@ already granted. Use the in-app microphone button to dictate. No recognized text
 is sent automatically. Existing-chat notification and widget links still open
 their paired conversation.
 
-iOS App Intents deliver a short-lived, one-use action inside the foreground app
-process. The intentional **New Chat with Voice** shortcut retains dictation using
-the selected mode and ordinary OS permission checks. URL parameters and Android
-Intent extras cannot claim internal-action authority. A cancelled, expired,
-revoked or stale creation approval is discarded, and creation is never retried
-automatically after an uncertain result.
+iOS App Intents, the **Ask Aiden** Home Screen widget (small and medium), and
+Home Screen Quick Actions (**New Chat**, **Start Voice**, **Workspaces**, and
+**Bots**) deliver a short-lived, one-use action inside the foreground app
+process. Intentional **New Chat with Voice** / **Start Voice** and widget camera
+actions retain dictation or in-app camera launch using ordinary OS permission
+checks, 60-second foreground freshness, and one-shot consumption. URL parameters
+and Android Intent extras cannot claim internal-action authority. A cancelled,
+expired, revoked or stale creation approval is discarded, and creation is never
+retried automatically after an uncertain result.
