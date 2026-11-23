@@ -540,3 +540,22 @@ test("a content-height clamp after an embedded visual shrinks keeps live follow 
   view.rerender(<Transcript chunks={3} />);
   assert.equal(port.top(), port.bottom());
 });
+
+test("a body replacement stays reachable while the transcript and footer behind it are hidden", () => {
+  render(
+    <ScrollArea
+      footer={<button type="button">Send message</button>}
+      bodyReplacement={<button type="button">Back to main chat</button>}
+    >
+      <p>chunk 0</p>
+    </ScrollArea>,
+  );
+  const hiddenAncestor = (element: Element) => element.closest("[inert], [aria-hidden='true']");
+  const back = screen.getByRole("button", { name: "Back to main chat" });
+  assert.equal(hiddenAncestor(back), null, "the replacement is not inside a hidden or inert subtree");
+  back.focus();
+  assert.equal(document.activeElement, back);
+
+  assert.ok(hiddenAncestor(screen.getByText("chunk 0")), "the transcript is hidden");
+  assert.equal(screen.queryByRole("button", { name: "Send message" }), null, "the footer is hidden");
+});

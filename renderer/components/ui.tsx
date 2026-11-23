@@ -1582,15 +1582,6 @@ export function ScrollArea({
             <div className="pointer-events-auto">{overlay}</div>
           </div>
         ) : null}
-        {replaced ? (
-          <div
-            data-scroll-area-replacement=""
-            className="absolute inset-x-0 bottom-0 z-20 flex min-h-0 flex-col"
-            style={{ top: toolbarHeight }}
-          >
-            {bodyReplacement}
-          </div>
-        ) : null}
         {showScrollToBottomButton && offerJump && !replaced ? (
           // The button floats over the scrollport like the footer, but is centred
           // on the same chat column as the composer, so it follows the column
@@ -1622,12 +1613,7 @@ export function ScrollArea({
           // composer's input and actions at the bottom in view.
           <div
             ref={footerRef}
-            className={cn(
-              "absolute inset-x-0 bottom-0 z-10 flex flex-col justify-end",
-              replaced && "invisible",
-            )}
-            inert={replaced}
-            aria-hidden={replaced || undefined}
+            className="absolute inset-x-0 bottom-0 z-10 flex flex-col justify-end"
             style={{
               maxHeight: `calc(100% - ${toolbarHeight}px)`,
               ...(alignFooterToScrollContent ? { insetInlineEnd: scrollbarGutter } : undefined),
@@ -1637,6 +1623,16 @@ export function ScrollArea({
           </div>
         ) : null}
       </div>
+      {replaced ? (
+        // Outside the hidden body, so the replacement stays visible and focusable.
+        <div
+          data-scroll-area-replacement=""
+          className="absolute inset-x-0 bottom-0 z-20 flex min-h-0 flex-col"
+          style={{ top: toolbarHeight }}
+        >
+          {bodyReplacement}
+        </div>
+      ) : null}
     </div>
   );
 }
