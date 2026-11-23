@@ -1,12 +1,15 @@
 // Production wiring for the design canvas. No logic here: the store and the
 // handlers are tested directly. Constructing the store does no I/O, so
 // workspace cleanup can remove a canvas even while the design-mode flag is off.
+import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { persistedChatWorkspaceId } from "../../../renderer/shared/chat-workspace.js";
 import { app, ipcMain, logger } from "../../platform.js";
 import { chatStore } from "../chat-store.js";
 import { configStore } from "../config-store.js";
 import { DesignCanvasSnapshots } from "./canvas-snapshots.js";
+import { createDesignCanvasCarry } from "./carry.js";
+import { createDesignChatCleanup, createDesignWorkspaceCleanup } from "./cleanup.js";
 import { DesignModeConsent } from "./design-mode-tool.js";
 import { DesignSystemOffers } from "./design-system-offers.js";
 import { DesignGrantRegistry } from "./grants.js";
@@ -51,6 +54,27 @@ export function broadcastDesignCanvasUpdate(update: DesignCanvasUpdated): void {
 export const designCanvasViews = new DesignCanvasViews({
   root: () => path.join(app.getPath("userData"), "design-canvas-views"),
   onError: (error) => logger.warn("design", "Could not read or save design canvas views.", error),
+});
+
+/** What a deleted chat leaves on its workspace's canvas: its comments and its view go, the canvas stays. */
+export const designCanvasChatCleanup = createDesignChatCleanup({
+  store: designWorkspaceCanvasStore,
+  views: designCanvasViews,
+  broadcast: broadcastDesignCanvasUpdate,
+});
+
+/** A No workspace chat attached with its files copied brings its canvas pages along. */
+export const designCanvasCarry = createDesignCanvasCarry({
+  store: designWorkspaceCanvasStore,
+  views: designCanvasViews,
+  broadcast: broadcastDesignCanvasUpdate,
+  newId: randomUUID,
+});
+
+/** A removed workspace's canvas, its corrupt copies and its chats' views of it. */
+export const designCanvasWorkspaceCleanup = createDesignWorkspaceCleanup({
+  store: designWorkspaceCanvasStore,
+  views: designCanvasViews,
 });
 
 /** Live `aiden-design://` grants. Memory only: a restart ends every grant. */

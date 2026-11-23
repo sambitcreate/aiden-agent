@@ -411,17 +411,17 @@ Round 3 (a review of the round-2 changes against the built code) found that most
   - `docs/plans/README.md` row, `.memory/design-mode.md`.
 - Test: `main/handlers/design-canvas.test.ts`, `main/services/chat-application-service*.test.ts`
 
-- [ ] **Step 1: Write failing tests**
+- [x] **Step 1: Write failing tests**
   - `artifact preview through another chat of the same workspace works, and of another workspace is refused`;
   - `deleting a chat leaves the workspace canvas file in place` (chat application service, with a fake store recording calls: `delete` is never called).
-- [ ] **Step 2:** Run them. Expected: FAIL.
-- [ ] **Step 3:** Implement.
+- [x] **Step 2:** Run them. Expected: FAIL.
+- [x] **Step 3:** Implement.
 - [ ] **Step 4: Verify the whole phase**
   - Run `npm run test`. Expected: PASS.
   - Run `npm run test:e2e:space -- tests/e2e/design-canvas.spec.ts tests/e2e/design-mode.spec.ts`. Expected: PASS.
   - Run `npm run lint`, if the repo has it. Expected: clean.
   - Take screenshots of the canvas with two pages, for the PR body.
-- [ ] **Step 5: Docs**
+- [x] **Step 5: Docs**
   - `PRODUCT.md`: "Design mode keeps one canvas per workspace, shared by its chats; each chat remembers its own page and view. Canvases from earlier versions are cleared on first start; files under `design/` are untouched."
   - The same sentence in the release notes when the version is cut.
   - Commit `feat(design): shared workspace canvas with per-chat artifacts; docs`.

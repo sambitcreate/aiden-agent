@@ -93,6 +93,7 @@ async function fixture(
   const saveDialogs: DesignCanvasSaveOptions[] = [];
   const renders: DesignFrameRenderRequest[] = [];
   const artifactExports: string[] = [];
+  const artifactReads: string[] = [];
   const artifactThemes: unknown[] = [];
   registerDesignCanvasHandlers({
     enabled: () => enabled,
@@ -131,12 +132,16 @@ async function fixture(
       renders.push(request);
       return options.renderFrame ? options.renderFrame(request) : new TextEncoder().encode(`${request.format}:${request.url}`);
     },
-    artifactPreview: async (_chatId, mediaId, theme) => {
+    artifactPreview: async (chatId, mediaId, theme) => {
+      artifactReads.push(`preview ${chatId}/${mediaId}`);
       artifactThemes.push(theme);
       const src = options.artifacts?.[mediaId];
       return src ? { src } : undefined;
     },
-    artifactHtml: async (_chatId, mediaId) => options.artifactHtml?.[mediaId],
+    artifactHtml: async (chatId, mediaId) => {
+      artifactReads.push(`html ${chatId}/${mediaId}`);
+      return options.artifactHtml?.[mediaId];
+    },
     artifactTitle: async (_chatId, mediaId) => options.artifactTitles?.[mediaId],
     newId: (() => {
       let next = 0;
@@ -173,6 +178,7 @@ async function fixture(
     saveDialogs,
     renders,
     artifactExports,
+    artifactReads,
     artifactThemes,
     disable: () => (enabled = false),
   };
@@ -923,6 +929,47 @@ test("only a frame the stored canvas holds exports, and only in the formats its 
   chats["chat-1"] = { id: "chat-1", workspaceId: "workspace-1" };
   assert.deepEqual(await invoke("designCanvas:export", "chat-1", "page", "source"), { error: "unavailable" });
   assert.deepEqual(saveDialogs, []);
+});
+
+test("another chat's visual on the shared canvas previews, exports and shows its code through that chat, while it shares the workspace", async (t) => {
+  let destination = "";
+  const harness = await exportCanvas(t, {
+    chats: {
+      "chat-1": { id: "chat-1", workspaceId: "workspace-1", designMode: true },
+      "chat-a": { id: "chat-a", workspaceId: "workspace-1" },
+      "chat-x": { id: "chat-x", workspaceId: "workspace-2" },
+    },
+    saveFile: () => destination,
+    artifacts: { "media-1": "aiden-genui://preview/abc" },
+    artifactHtml: { "media-1": "<svg>chart</svg>" },
+  });
+  const { invoke, out, store, artifactReads, artifactExports } = harness;
+  destination = path.join(out, "chart.png");
+  const box = { x: 0, y: 0, w: 640, h: 436, pageId: "page-1", createdBy: "aiden" as const, kind: "artifact" as const, mediaId: "media-1" };
+  await store.update("chat-1", (doc) => ({
+    ...doc,
+    frames: [
+      ...doc.frames,
+      { ...box, id: "a-chart", title: "A's chart", chatId: "chat-a" },
+      { ...box, id: "x-chart", title: "Moved chat's chart", chatId: "chat-x" },
+      { ...box, id: "gone-chart", title: "Deleted chat's chart", chatId: "chat-deleted" },
+    ],
+  }));
+
+  assert.deepEqual(await invoke("designCanvas:export", "chat-1", "a-chart", "png"), { saved: true });
+  assert.deepEqual(await invoke("designCanvas:export", "chat-1", "a-chart", "source"), { saved: true });
+  assert.deepEqual(await invoke("designCanvas:source", "chat-1", "a-chart"), { text: "<svg>chart</svg>", truncated: false });
+  assert.deepEqual(artifactReads, ["preview chat-a/media-1", "html chat-a/media-1"]);
+  assert.deepEqual(artifactExports, ["chat-a/media-1"]);
+
+  // A chat now in another workspace, or deleted, no longer lends its visuals to this canvas.
+  for (const frameId of ["x-chart", "gone-chart"]) {
+    assert.deepEqual(await invoke("designCanvas:export", "chat-1", frameId, "png"), { error: "unavailable" });
+    assert.deepEqual(await invoke("designCanvas:export", "chat-1", frameId, "source"), { error: "unavailable" });
+    assert.deepEqual(await invoke("designCanvas:source", "chat-1", frameId), { error: "unavailable" });
+  }
+  assert.equal(artifactReads.length, 2, "nothing was read for them");
+  assert.equal(artifactExports.length, 1);
 });
 
 test("the Code tab reads a page's file or an artifact's HTML, cut at 512 KiB, and nothing else", async (t) => {

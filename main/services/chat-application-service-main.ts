@@ -18,7 +18,15 @@ import { remoteAttachmentStore } from "./aiden-remote-attachments-main.js";
 import { toolOutputStore } from "./tool-output-store.js";
 import { scheduleStore } from "./schedule-store.js";
 import { chatPullRequestStore } from "./chat-pull-request-service-main.js";
-import { designCanvasStore, designCanvasViews, designGrants, designModeConsent, recentWrittenPages } from "./design-canvas/main.js";
+import {
+  designCanvasCarry,
+  designCanvasChatCleanup,
+  designCanvasStore,
+  designCanvasViews,
+  designGrants,
+  designModeConsent,
+  recentWrittenPages,
+} from "./design-canvas/main.js";
 import { designTurnPages } from "./design-canvas/views.js";
 import { EARLIER_PAGES_LIMIT, pagesWrittenInChat, placeWrittenPagesOnCanvas } from "./design-canvas/written-pages.js";
 import { DESIGN_CANVAS_UPDATED_CHANNEL } from "../handlers/design-canvas.js";
@@ -43,7 +51,8 @@ export const chatApplicationService = createChatApplicationService({
   piRuntimeEffectStore,
   piCompactionSessionStore,
   chatPullRequestStore,
-  designCanvasStore,
+  designCanvasCleanup: designCanvasChatCleanup,
+  designCanvasCarry,
   designGrants,
   designModeConsent,
   designPagesOnEntry: async (chat, workspaceRoot) => {

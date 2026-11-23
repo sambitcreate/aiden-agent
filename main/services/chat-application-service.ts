@@ -17,7 +17,8 @@ import type { ChatPullRequestStore } from "./chat-pull-request-store.js";
 import type { configStore } from "./config-store.js";
 import type { displayImageArtifactStore } from "./display-image-artifact-store.js";
 import type { generativeUiArtifactStore } from "./generative-ui-artifact-store.js";
-import type { DesignCanvasStore } from "./design-canvas/store.js";
+import type { DesignCanvasCarry } from "./design-canvas/carry.js";
+import type { DesignChatCleanup } from "./design-canvas/cleanup.js";
 import type { ToolOutputStore } from "./tool-output-store.js";
 import {
   ChatStoreError,
@@ -118,8 +119,17 @@ export interface ChatApplicationDependencies {
   piCompactionSessionStore: Pick<typeof piCompactionSessionStore, "deleteChat"> &
     Partial<Pick<typeof piCompactionSessionStore, "recordWorkspaceAttached">>;
   chatPullRequestStore?: Pick<ChatPullRequestStore, "deleteChat">;
-  /** The chat's design canvas document goes with it; forks never copy it. */
-  designCanvasStore?: Pick<DesignCanvasStore, "delete">;
+  /**
+   * A deleted chat's comments and view leave its workspace's canvas; the
+   * canvas itself is the workspace's and stays.
+   */
+  designCanvasCleanup?: Pick<DesignChatCleanup, "forgetChat">;
+  /**
+   * A No workspace chat attached with its files copied brings its canvas
+   * along: its pages join the project's canvas. Attaching without copying
+   * leaves the canvas behind with the hidden workspace.
+   */
+  designCanvasCarry?: DesignCanvasCarry;
   /** aiden-design grants: a chat's ends when design mode turns off, it moves or it is deleted. */
   designGrants?: { revokeChat(chatId: string): void };
   /** Forgets the person's "Not now" on Aiden's design mode card once they open design mode themselves. */
@@ -600,12 +610,14 @@ export function createChatApplicationService(deps: ChatApplicationDependencies) 
         }
 
         let copiedPaths: string[] = [];
+        let copied: Array<{ from: string; to: string }> = [];
         if (!sharedLegacyScratch && options.fileAction === "copy" && oldWorkspace.folderPath) {
           const copyTx = await copyScratchFilesToWorkspaceWithRollback(
             oldWorkspace.folderPath,
             targetWorkspace.folderPath,
           );
           copiedPaths = copyTx.copiedPaths;
+          copied = copyTx.copied;
           rollbackCopiedFiles = copyTx.rollback;
           assertAdmitted();
         }
@@ -658,6 +670,26 @@ export function createChatApplicationService(deps: ChatApplicationDependencies) 
           deps.logError("memory", "Could not clear old workspace memory index after attach.", error);
         });
 
+        // The canvas follows the copied files while the hidden workspace, and so
+        // its canvas, still exists. The chat has already moved, so a canvas that
+        // cannot come along is reported rather than undoing the attach.
+        let canvasCarried: boolean | undefined;
+        if (!sharedLegacyScratch && options.fileAction === "copy" && deps.designCanvasCarry) {
+          const outcome = await deps.designCanvasCarry
+            .carry({
+              chatId,
+              label: updated.title,
+              fromWorkspaceId: oldWorkspaceId,
+              toWorkspaceId: targetWorkspaceId,
+              copied,
+            })
+            .catch((error: unknown) => {
+              deps.logError("design", "Could not bring this chat's canvas along after attach.", error);
+              return "failed" as const;
+            });
+          if (outcome === "too-large" || outcome === "failed") canvasCarried = false;
+        }
+
         // Release workspace operation admissions BEFORE releasing the old hidden
         // workspace, otherwise `workspaceOperationRegistry.cancelAndSettle(oldWorkspaceId)`
         // would wait on this exact operation and deadlock.
@@ -670,6 +702,7 @@ export function createChatApplicationService(deps: ChatApplicationDependencies) 
           chat: chatForRenderer(updated)!,
           copiedPaths,
           oldWorkspaceId,
+          ...(canvasCarried === false ? { canvasCarried } : {}),
         };
       } catch (error) {
         if (rollbackCopiedFiles) {
@@ -791,11 +824,13 @@ export function createChatApplicationService(deps: ChatApplicationDependencies) 
           throw new Error("Aiden could not delete this chat's pull request links.");
         }
         deps.designGrants?.revokeChat(chatId);
+        // The workspace the chat was in, read before the delete: its canvas keeps no trace of the chat.
+        const canvasWorkspaceId = persistedChatWorkspaceId(current.workspaceId);
         try {
-          await deps.designCanvasStore?.delete(chatId);
+          await deps.designCanvasCleanup?.forgetChat(chatId, canvasWorkspaceId);
         } catch (error) {
-          deps.logError("design", "Could not delete the chat's design canvas.", error);
-          throw new Error("Aiden could not delete this chat's design canvas.");
+          deps.logError("design", "Could not remove the chat's comments from its design canvas.", error);
+          throw new Error("Aiden could not remove this chat's comments from its design canvas.");
         }
         await deps.chatStore.remove(chatId, async (chat) => {
           if (!chat) throw new Error(`Chat ${chatId} not found`);
@@ -809,8 +844,8 @@ export function createChatApplicationService(deps: ChatApplicationDependencies) 
         // A canvas save or grant that passed its chat check before the remove
         // committed may have landed since the first cleanup; repeat it.
         deps.designGrants?.revokeChat(chatId);
-        await deps.designCanvasStore?.delete(chatId).catch((error: unknown) => {
-          deps.logError("design", "Could not delete the deleted chat's design canvas.", error);
+        await deps.designCanvasCleanup?.forgetChat(chatId, canvasWorkspaceId).catch((error: unknown) => {
+          deps.logError("design", "Could not remove the deleted chat's comments from its design canvas.", error);
         });
         void forgetChatInboxState(deps.inboxState, chatId, deps.logError);
         await deps.scheduledTasks?.releaseOriginChat(chatId).catch((error: unknown) => {

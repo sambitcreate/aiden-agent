@@ -440,6 +440,17 @@ export function registerDesignCanvasHandlers<Event>(deps: {
     return outcome;
   });
 
+  // A visual on the shared canvas belongs to the chat that made it (a frame
+  // from before chats shared canvases, to the chat asking). It is read
+  // through that chat, and only while it still exists and shares the asking
+  // chat's workspace; otherwise null.
+  const artifactOwner = async (chat: DesignCanvasChat, frame: { chatId?: string }): Promise<string | null> => {
+    const ownerId = frame.chatId ?? chat.id;
+    if (ownerId === chat.id) return chat.id;
+    const owner = await deps.getChat(ownerId);
+    return owner && designCanvasWorkspaceOf(owner) === designCanvasWorkspaceOf(chat) ? owner.id : null;
+  };
+
   // Only an attended desktop chat in design mode may frame its own workspace
   // folder; Bot and routine chats never get a grant.
   const canFrame = (chat: DesignCanvasChat | null): chat is DesignCanvasChat =>
@@ -523,17 +534,18 @@ export function registerDesignCanvasHandlers<Event>(deps: {
       let url: string;
       let source: string | null = null;
       if (frame.kind === "artifact") {
-        if (!frame.mediaId) return { error: "unavailable" };
+        const owner = await artifactOwner(chat, frame);
+        if (!frame.mediaId || owner === null) return { error: "unavailable" };
         if (kind === "source") {
           try {
-            const result = await deps.exportArtifactSource(event, chat.id, frame.mediaId);
+            const result = await deps.exportArtifactSource(event, owner, frame.mediaId);
             return result.saved ? { saved: true } : { canceled: true };
           } catch {
             return { error: "failed" };
           }
         }
         // The theme is the renderer's and untrusted; the preview reads only what it knows, and only for a dark frame.
-        const preview = await deps.artifactPreview(chat.id, frame.mediaId, frame.dark ? theme : undefined);
+        const preview = await deps.artifactPreview(owner, frame.mediaId, frame.dark ? theme : undefined);
         if (!preview) return { error: "missing" };
         url = preview.src;
       } else {
@@ -590,7 +602,9 @@ export function registerDesignCanvasHandlers<Event>(deps: {
     const { doc } = await deps.store.get(chat.id, { workspaceId: designCanvasWorkspaceOf(chat) });
     const frame = doc.frames.find((entry) => entry.id === frameId);
     if (frame?.kind === "artifact" && frame.mediaId) {
-      const html = await deps.artifactHtml(chat.id, frame.mediaId).catch(() => undefined);
+      const owner = await artifactOwner(chat, frame);
+      if (owner === null) return { error: "unavailable" };
+      const html = await deps.artifactHtml(owner, frame.mediaId).catch(() => undefined);
       if (html === undefined) return { error: "missing" };
       const bytes = Buffer.from(html, "utf8");
       const truncated = bytes.length > DESIGN_SOURCE_MAX_BYTES;

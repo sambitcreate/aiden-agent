@@ -353,6 +353,7 @@
         "main/windows/design-window-core.test.ts",
         "main/services/design-canvas/store.test.ts",
         "main/services/design-canvas/views.test.ts",
+        "main/services/design-canvas/carry.test.ts",
         "main/handlers/design-canvas.test.ts",
         "main/services/design-canvas/resolve-core.test.ts",
         "main/services/design-canvas/grants.test.ts",

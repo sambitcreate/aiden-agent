@@ -146,6 +146,8 @@ async function ensureDirTrackingCreated(
 
 export interface ScratchCopyTransaction {
   copiedPaths: string[];
+  /** Each copied file's path in the scratch folder and in the workspace, both relative and POSIX. */
+  copied: Array<{ from: string; to: string }>;
   /** Best-effort undo of files and empty directories created by this copy. */
   rollback(): Promise<void>;
 }
@@ -163,9 +165,9 @@ export async function copyScratchFilesToWorkspaceWithRollback(
     if (error.code === "ENOENT") return null;
     throw error;
   });
-  if (!canonicalSource) return { copiedPaths: [], rollback: async () => undefined };
+  if (!canonicalSource) return { copiedPaths: [], copied: [], rollback: async () => undefined };
   const canonicalTarget = await fs.realpath(targetWorkspaceRoot);
-  if (canonicalSource === canonicalTarget) return { copiedPaths: [], rollback: async () => undefined };
+  if (canonicalSource === canonicalTarget) return { copiedPaths: [], copied: [], rollback: async () => undefined };
 
   const collected: Array<{ sourceFull: string; relPath: string; size: number }> = [];
   let totalBytes = 0;
@@ -203,7 +205,7 @@ export async function copyScratchFilesToWorkspaceWithRollback(
   };
 
   await collect(canonicalSource, "", 0);
-  if (collected.length === 0) return { copiedPaths: [], rollback: async () => undefined };
+  if (collected.length === 0) return { copiedPaths: [], copied: [], rollback: async () => undefined };
 
   // Check if any top-level segment already exists in targetWorkspaceRoot.
   const topSegments = new Set(collected.map((item) => item.relPath.split(path.sep)[0]!));
@@ -218,6 +220,7 @@ export async function copyScratchFilesToWorkspaceWithRollback(
 
   const prefix = needsSubfolder ? await pickScratchSubfolder(canonicalTarget) : "";
   const copiedPaths: string[] = [];
+  const copied: Array<{ from: string; to: string }> = [];
   const createdFiles: string[] = [];
   const createdDirs: string[] = [];
 
@@ -242,13 +245,14 @@ export async function copyScratchFilesToWorkspaceWithRollback(
       await fs.copyFile(item.sourceFull, destFull, fs.constants.COPYFILE_EXCL);
       createdFiles.push(destFull);
       copiedPaths.push(destPosix);
+      copied.push({ from: toPosixRelative(item.relPath), to: destPosix });
     }
   } catch (error) {
     await rollback();
     throw error;
   }
 
-  return { copiedPaths, rollback };
+  return { copiedPaths, copied, rollback };
 }
 
 /**

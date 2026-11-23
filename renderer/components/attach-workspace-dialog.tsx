@@ -98,6 +98,7 @@ export function AttachWorkspaceDialog({
         });
         await onAttached(result, target);
         onOpenChange(false);
+        if (result.canvasCarried === false) toast("The canvas was too large to bring along.");
       } catch (error) {
         const message = error instanceof Error ? error.message : "Could not attach this chat to the workspace.";
         setErrorText(message);

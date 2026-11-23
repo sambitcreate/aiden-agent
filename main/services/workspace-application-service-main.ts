@@ -11,7 +11,7 @@ import { terminalService } from "./terminal.js";
 import { browserService } from "./browser/service.js";
 import { workspaceGitWatcher } from "./workspace-git-watcher-main.js";
 import { workspaceArtifactStore } from "./workspace-artifacts/main.js";
-import { designGrants } from "./design-canvas/main.js";
+import { designCanvasWorkspaceCleanup, designGrants } from "./design-canvas/main.js";
 import { closeWorkspaceFollowThrough } from "./follow-through/follow-through-main.js";
 import { workspaceMutationGate } from "./workspace-mutation-gate.js";
 import { workspaceOperationRegistry } from "./workspace-operation-registry.js";
@@ -36,6 +36,7 @@ export const workspaceApplicationService = createWorkspaceApplicationService({
     },
   },
   designGrants,
+  designCanvas: designCanvasWorkspaceCleanup,
   followThrough: { closeForWorkspace: closeWorkspaceFollowThrough },
   workspaceMutationGate,
   workspaceOperationRegistry,

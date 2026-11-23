@@ -416,6 +416,20 @@ test("a visual Aiden draws again under the same title replaces the one in its fr
   );
 });
 
+test("a visual another chat of the workspace made loads through that chat", async () => {
+  const chart: DesignFrame = { id: "a1", kind: "artifact", title: "Chart", x: 0, y: 0, w: 640, h: 480, mediaId: "m1", chatId: "chat-a", pageId: "page-1", createdBy: "aiden" };
+  const { calls } = setup(canvasWith(chart), {
+    "chats:htmlArtifactSrcdoc": (input) => ({ title: "Chart", src: `aiden-genui://preview/${(input as { mediaId: string }).mediaId}` }),
+  });
+  await mount();
+  fireEvent.doubleClick(screen.getByRole("group", { name: "Chart" }));
+  await waitFor(() => assert.equal(document.querySelector("iframe")?.getAttribute("src"), "aiden-genui://preview/m1"), SAVE_WAIT);
+  assert.deepEqual(
+    calls.filter((call) => call.channel === "chats:htmlArtifactSrcdoc").map((call) => (call.args[0] as { chatId: string }).chatId),
+    ["chat-a"],
+  );
+});
+
 test("Aiden's snapshot request is answered with a picture of the canvas region, and only for this chat", async () => {
   measureCanvasAt1000x800();
   const { calls } = setup(canvasWith(), {

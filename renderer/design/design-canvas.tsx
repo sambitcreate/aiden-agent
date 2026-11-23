@@ -138,7 +138,7 @@ const EXPORT_ERRORS = {
 const PICK_ERRORS = {
   "outside-workspace": "Choose a file inside this chat's workspace.",
   unsupported: "That file can't be shown on the canvas.",
-  unavailable: "Files can't be added to this chat's canvas.",
+  unavailable: "Files can't be added to this canvas.",
 } as const;
 
 /** Aiden's canvas_focus waits this long after the person last touched the canvas. */

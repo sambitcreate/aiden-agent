@@ -45,11 +45,13 @@ export function ArtifactNode({ id, data, selected }: NodeProps<DesignNode>) {
   // A new reader when the switch changes, so the live visual is themed again in place.
   const readTheme = React.useCallback(() => readDesignArtifactTheme(dark), [dark]);
 
+  // A visual belongs to the chat that made it, which may be another chat of this workspace.
+  const ownerChatId = frame.chatId ?? canvas.chatId;
   React.useEffect(() => {
     if (!wanted || src !== null || !frame.mediaId) return;
     const mediaId = frame.mediaId;
     let cancelled = false;
-    void chatsApi.htmlArtifactSrcdoc(canvas.chatId, mediaId, readDesignArtifactTheme(darkRef.current)).then(
+    void chatsApi.htmlArtifactSrcdoc(ownerChatId, mediaId, readDesignArtifactTheme(darkRef.current)).then(
       (preview) => {
         if (!cancelled && preview) setLoaded({ mediaId, src: preview.src });
       },
@@ -58,7 +60,7 @@ export function ArtifactNode({ id, data, selected }: NodeProps<DesignNode>) {
     return () => {
       cancelled = true;
     };
-  }, [wanted, src, canvas.chatId, frame.mediaId]);
+  }, [wanted, src, ownerChatId, frame.mediaId]);
 
   let body: React.ReactNode;
   if (wanted && src) {

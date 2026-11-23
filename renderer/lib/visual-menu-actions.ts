@@ -47,7 +47,7 @@ export async function keepVisualInArtifacts(chatId: string, messageId: string, v
   }
 }
 
-/** Puts an HTML visual on the chat's canvas, turning design mode on so the person sees it there. */
+/** Puts an HTML visual on the workspace canvas, on the chat's page, turning design mode on so the person sees it there. */
 export async function sendVisualToCanvas(controls: DesignModeControls, mediaId: string): Promise<void> {
   let result: PlaceResult;
   try {

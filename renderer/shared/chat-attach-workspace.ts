@@ -27,6 +27,11 @@ export interface AttachToWorkspaceResult<ChatRecord = unknown> {
   chat: ChatRecord;
   copiedPaths: string[];
   oldWorkspaceId: string;
+  /**
+   * False when the chat's design canvas was too large to bring along with its
+   * copied files, so its pages stayed behind. Absent otherwise.
+   */
+  canvasCarried?: boolean;
 }
 
 const ATTACH_KEYS = new Set(["chatId", "targetWorkspaceId", "fileAction"]);
