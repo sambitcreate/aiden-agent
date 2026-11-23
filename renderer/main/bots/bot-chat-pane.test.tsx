@@ -2518,7 +2518,7 @@ test("the first approval card already offers Always allow, without a repeat note
     "settings:get": () => ({ approvalMode: "ask" }), "providers:list": () => USABLE,
   });
   act(() => emitBotTestNotification("bots:approval", { botId: "bot-1", waitId: "first-1", toolCallId: "call-a", toolName: "composio", summary: "Composio · Gmail: Send email", always: { key: "k", count: 0 }, autoWouldJudge: true }));
-  const card = await screen.findByRole("region", { name: /^Review before/u });
+  const card = await screen.findByRole("region", { name: /^Request from Planner: Review before /u });
   within(card).getByText("Composio · Gmail: Send email");
   await act(async () => { await new Promise((resolve) => setTimeout(resolve, 20)); });
   assert.equal(within(card).queryByText(/You’ve allowed this/u), null);
