@@ -393,10 +393,10 @@ Round 3 (a review of the round-2 changes against the built code) found that most
   - `design-canvas.test.tsx`:
     - `shows the first page when the stored page no longer exists`;
     - `switching pages does not create an undo step`.
-- [ ] **Step 2:** Run `npx tsx --test renderer/design/canvas-view-store.test.ts renderer/design/use-design-canvas.test.tsx renderer/design/design-canvas.test.tsx`. Expected: FAIL.
-- [ ] **Step 3:** Implement. Register the new test file (CI registry and `package.json`).
-- [ ] **Step 4:** Rerun, then `npx tsc --noEmit -p renderer` and `-p main`. Expected: PASS, with no type errors left from Task 1.
-- [ ] **Step 5:** Commit `feat(design): each chat keeps its own page and view`.
+- [x] **Step 2:** Run `npx tsx --test renderer/design/canvas-view-store.test.ts renderer/design/use-design-canvas.test.tsx renderer/design/design-canvas.test.tsx`. Expected: FAIL.
+- [x] **Step 3:** Implement. Register the new test file (CI registry and `package.json`).
+- [x] **Step 4:** Rerun, then `npx tsc --noEmit -p renderer` and `-p main`. Expected: PASS, with no type errors left from Task 1.
+- [x] **Step 5:** Commit `feat(design): each chat keeps its own page and view`.
 
 ### Task 8: Artifact ownership, chat delete, E2E and docs
 
