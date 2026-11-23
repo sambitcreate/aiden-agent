@@ -86,7 +86,7 @@ Pins and recents move out of `renderer/shared/model-pad-preferences.ts` into `re
 1. **Moving the thumb** calls `chats:setModel(chatId, providerId, model, thinkingLevel)`. `setChatModelSelection` (`main/services/chat-store-core.ts`) compares the level as well as the provider and model; today it returns early when only the provider and model are unchanged. It still refuses Bot chats and changes during a reply.
 2. **A manual change in `ThinkingControl`** (Custom state) clears `ChatMeta.thinkingLevel`, so the per-model map applies as it does today.
 3. **On send**, `chat-pane` sends the chat's own `thinkingLevel` when it is set, and otherwise the per-model map value. This replaces the four-way provider ternary.
-4. **Main has the final say.** `resolveGenerationThinkingLevel(params.thinkingLevel ?? saved)` in `main/services/llm-client.ts` clamps any level the model no longer supports. When the resolved level differs from the chat's stored `thinkingLevel`, main writes the resolved level back to the chat with a compare-and-set: only if the stored level is still the one the turn started with, so a newer selection always wins. It emits the usual chat update, so the running turn, `ChatMeta`, the slider and a reopened chat all agree.
+4. **Main has the final say.** `resolveGenerationThinkingLevel(params.thinkingLevel ?? saved)` in `main/services/llm-client.ts` clamps any level the model no longer supports. Write-back applies only when the turn started with a defined `ChatMeta.thinkingLevel` and main clamped it to a different level. Main then writes the resolved level back with a compare-and-set, and only if the stored level is still the one the turn started with, so a newer selection always wins. A chat with no stored level (Custom, which sends the per-model map value) keeps `ChatMeta.thinkingLevel` absent, even when main normalizes that fallback. It emits the usual chat update, so the running turn, `ChatMeta`, the slider and a reopened chat all agree.
 5. **Reopening the chat** derives the thumb again from the stored provider, model and level.
 6. **A new chat** seeds from `lastProviderId`, `lastModel` and `lastThinkingLevel`.
 
@@ -117,7 +117,7 @@ The new tests are behavioral only. There are no source greps and no `className` 
   - `activeStopIndex` handles the same model at two efforts, Custom, and unassigned stops;
   - `seedAgentSlider` with ladder and non-ladder models.
 - **Portable config:** a round trip; an external `config.json` edit after local settings exist wins, and nothing in `settings.json` shadows it; leftover `modelPad*` keys are dropped.
-- **Clamp write-back:** a stored level that becomes unsupported before send leaves the generation level, `ChatMeta` and a re-read in agreement, and a newer selection made during the turn is not overwritten.
+- **Clamp write-back:** a stored level that becomes unsupported before send leaves the generation level, `ChatMeta` and a re-read in agreement, a newer selection made during the turn is not overwritten, and an unset Custom chat stays unset after a send whose fallback level was clamped.
 - **`config-store-core`:** remap rewrites stops; removal keeps them.
 - **Chat mutations:** the register-and-invoke test for `chats:setModel` with a level. A level-only change persists. Bot chats are refused.
 - **Testing Library on the slider:**
