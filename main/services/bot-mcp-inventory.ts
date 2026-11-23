@@ -147,6 +147,10 @@ export interface BotMcpScopeCacheOptions {
   graceMs?: number;
   /** Upper bound for one shared inspection, independent of any caller's deadline. */
   inspectionDeadlineMs?: number;
+  /**
+   * Monotonic millisecond clock for cache ages and retry deadlines. Defaults to
+   * `performance.now()` so a wall-clock correction cannot stretch a backoff.
+   */
   now?: () => number;
   /**
    * Configuration fence. A cached scope is reused only while this value is
@@ -229,7 +233,7 @@ export function createBotMcpScopeCache(options: BotMcpScopeCacheOptions = {}): B
   const inspectionDeadlineMs = options.inspectionDeadlineMs ?? BOT_MCP_DISCOVERY_DEADLINE_MS;
   const backoffMs = options.failureBackoffMs ?? BOT_MCP_FAILURE_BACKOFF_MS;
   const backoffMaxMs = options.failureBackoffMaxMs ?? BOT_MCP_FAILURE_BACKOFF_MAX_MS;
-  const now = options.now ?? Date.now;
+  const now = options.now ?? (() => performance.now());
   const generation = options.generation ?? (() => 0);
   const entries = new Map<string, ScopeCacheEntry>();
   const failures = new Map<string, FailureRecord>();
@@ -286,6 +290,9 @@ export function createBotMcpScopeCache(options: BotMcpScopeCacheOptions = {}): B
       .then(
         (remote) => {
           const tools = projectScopeTools(projectComposioServiceInventory(server, remote));
+          // A flight that outlived a configuration fence answers its own caller
+          // but never overwrites (or clears) state from a newer generation.
+          if (generation() !== currentGeneration) return tools;
           entries.set(server.id, {
             connectionFingerprint,
             generation: currentGeneration,
@@ -297,7 +304,9 @@ export function createBotMcpScopeCache(options: BotMcpScopeCacheOptions = {}): B
           return tools;
         },
         (error: unknown) => {
-          recordFailure(server, connectionFingerprint, currentGeneration, error);
+          if (generation() === currentGeneration) {
+            recordFailure(server, connectionFingerprint, currentGeneration, error);
+          }
           throw error;
         },
       )

@@ -11,6 +11,7 @@ import {
 import { createBotCapabilityIncarnationStore } from "./bot-capability-incarnation-store.js";
 import { createBotCapabilityStore } from "./bot-capability-store.js";
 import {
+  BotMcpInspectionBackoffError,
   createBotMcpScopeCache,
   resolveBotMcpConnectionIdentities,
   resolveBotMcpInventory,
@@ -519,6 +520,57 @@ test("a stale Bot MCP scope answers at once and is refreshed behind the turn", a
   await settle();
   assert.deepEqual(names(await snapshot()), ["v2_read"]);
   assert.equal(inspections, 2);
+});
+
+test("an inspection from before a configuration fence never replaces the newer generation's result", async () => {
+  let generation = 1;
+  const cache = createBotMcpScopeCache({ generation: () => generation, inspectionDeadlineMs: 1_000 });
+  const server = stdioServer("notes");
+  const fingerprint = hash("connection");
+  const held: Array<{ resolve: (tools: SubagentMcpRemoteTool[]) => void; reject: (error: Error) => void }> = [];
+  let inspections = 0;
+  const inspect = () => {
+    inspections++;
+    return new Promise<SubagentMcpRemoteTool[]>((resolve, reject) => held.push({ resolve, reject }));
+  };
+  const names = (tools: Awaited<ReturnType<typeof cache.inspect>>) => tools.map((tool) => tool.toolName);
+  const signal = new AbortController().signal;
+
+  // Generation 1 and generation 2 inspections overlap; the newer one finishes first.
+  const older = cache.inspect(server, fingerprint, signal, inspect);
+  await Promise.resolve();
+  generation = 2;
+  const newer = cache.inspect(server, fingerprint, signal, inspect);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(held.length, 2);
+  held[1]!.resolve([readTool("v2_read")]);
+  assert.deepEqual(names(await newer), ["v2_read"]);
+  held[0]!.resolve([readTool("v1_read")]);
+  assert.deepEqual(names(await older), ["v1_read"], "the older caller still gets its own answer");
+
+  // The cached scope is still generation 2's: reused without another inspection.
+  assert.deepEqual(names(await cache.inspect(server, fingerprint, signal, inspect)), ["v2_read"]);
+  assert.equal(inspections, 2);
+
+  // Likewise a late success from an obsolete generation does not clear a newer failure.
+  cache.clear();
+  held.length = 0;
+  const stale = cache.inspect(server, fingerprint, signal, inspect);
+  await Promise.resolve();
+  generation = 3;
+  const current = cache.inspect(server, fingerprint, signal, inspect);
+  await new Promise((resolve) => setImmediate(resolve));
+  held[1]!.reject(new Error("connect ECONNREFUSED"));
+  await assert.rejects(current, /ECONNREFUSED/);
+  held[0]!.resolve([readTool("v2_read")]);
+  await stale;
+  const before = inspections;
+  await assert.rejects(
+    cache.inspect(server, fingerprint, signal, inspect),
+    BotMcpInspectionBackoffError,
+    "the server stays in backoff instead of blocking on a fresh foreground inspection",
+  );
+  assert.equal(inspections, before);
 });
 
 test("Bot MCP grant identity ignores display fields but not connection settings", async () => {
