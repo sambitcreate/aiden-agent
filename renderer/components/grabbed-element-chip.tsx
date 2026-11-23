@@ -379,7 +379,7 @@ export function GrabbedElementChip({
         id={contentId}
         aria-labelledby={titleId}
         side="top"
-        align="start"
+        align={mode === "transcript" ? "end" : "start"}
         sideOffset={8}
         collisionPadding={8}
         data-grabbed-element-popover={element.id}
