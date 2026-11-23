@@ -90,20 +90,34 @@ test("a slider sent for saving is refused when it has 2 or 8 stops, repeated ids
 });
 
 test("remapping a provider re-homes only its stops and leaves the original slider alone", () => {
-  const original = parseAgentSliderPatch(
-    slider([
-      stop("a", { providerId: "custom:old", model: "qwen" }),
-      stop("b", { providerId: "openai", model: "gpt", thinkingLevel: "low" }),
-      stop("c"),
-    ]),
-  );
-  const remapped = remapAgentSliderProvider(original, "custom:old", "custom:new");
+  const original = slider([
+    stop("a", { providerId: "custom:old", model: "qwen" }),
+    stop("b", { providerId: "openai", model: "gpt", thinkingLevel: "low" }),
+    stop("c"),
+  ]) as { stops: Array<{ providerId?: string; thinkingLevel?: string }> };
+  const remapped = remapAgentSliderProvider(original, "custom:old", "custom:new") as typeof original;
   assert.deepEqual(
     remapped.stops.map((entry) => entry.providerId),
     ["custom:new", "openai", undefined],
   );
   assert.equal(remapped.stops[1]?.thinkingLevel, "low");
   assert.equal(original.stops[0]?.providerId, "custom:old");
+  assert.equal(remapAgentSliderProvider(original, "nobody", "custom:new"), original, "no match keeps the same value");
+});
+
+test("remapping a provider keeps a hand edit the slider cannot read exactly as written", () => {
+  const eight = Array.from({ length: 8 }, (_, index) =>
+    stop(`s${index}`, index === 7 ? { providerId: "custom:old", model: "qwen", note: "mine" } : {}),
+  );
+  const stored = { version: 2, stops: [...eight, "not a stop", null], homeStopId: "s0", future: { keep: true } };
+  const remapped = remapAgentSliderProvider(stored, "custom:old", "custom:new");
+  assert.deepEqual(remapped, {
+    ...stored,
+    stops: [...eight.slice(0, 7), { ...eight[7], providerId: "custom:new" }, "not a stop", null],
+  });
+  for (const value of [undefined, "slider", { stops: "none" }]) {
+    assert.equal(remapAgentSliderProvider(value, "custom:old", "custom:new"), value);
+  }
 });
 
 test("a stop resolves only when its provider is signed in and its model is present and shown", () => {

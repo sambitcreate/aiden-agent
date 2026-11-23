@@ -587,6 +587,32 @@ test("slider stops follow a renamed provider in the same portable write, and a n
   assert.equal((await h.store.getSettings()).agentSlider?.stops[1]?.providerId, provider.id);
 });
 
+test("a provider rename moves only the provider IDs of a slider this build cannot read", async (t) => {
+  const releasedId = "custom:onboarding-lmstudio";
+  const h = await harness(t, { workspaces: [], seeded: true, aidenDirMigratedAt: Date.now() });
+  await fs.mkdir(path.dirname(h.portableFile), { recursive: true });
+  const eight = Array.from({ length: 8 }, (_, index) => ({ id: `stop_${index}`, label: ` Stop ${index} ` }));
+  const handEdited = {
+    version: 1,
+    stops: [...eight, { id: "stop_lm", label: "LM", providerId: releasedId, model: "qwen3-8b", pinned: true }],
+    homeStopId: "stop_0",
+    note: "kept for later",
+  };
+  await fs.writeFile(h.portableFile, JSON.stringify({
+    providers: [splitStoredProvider({ ...provider, id: releasedId, defaultModel: "qwen3-8b" }).intent],
+    providerIdAliases: {},
+    mcpServers: [],
+    skills: [],
+    agentSlider: handEdited,
+  }), "utf-8");
+
+  await h.store.listProviders();
+  assert.deepEqual((await readJson<{ agentSlider: unknown }>(h.portableFile)).agentSlider, {
+    ...handEdited,
+    stops: [...eight, { ...handEdited.stops[8], providerId: provider.id }],
+  });
+});
+
 test("the new-chat level is cleared when the new-chat model changes without one", async (t) => {
   const h = await harness(t);
   await h.store.saveProvider(provider);

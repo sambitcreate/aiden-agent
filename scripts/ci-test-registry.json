@@ -1494,6 +1494,7 @@
         "renderer/lib/model-pad-pace.test.ts",
         "renderer/shared/model-pad-preferences.test.ts",
         "renderer/shared/agent-slider.test.ts",
+        "renderer/shared/chat-metadata-update.test.ts",
         "renderer/lib/turn-thinking-level.test.ts",
         "renderer/lib/model-pad-preferences.test.tsx",
         "renderer/lib/reduced-motion.test.ts",

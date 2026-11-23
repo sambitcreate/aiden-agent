@@ -609,15 +609,13 @@ export function createConfigStore(
         const preferenceRoutes = new Map(cacheAliasEntries);
         if (!preferenceRoutes.has("azure-openai-responses")) preferenceRoutes.set("azure-openai-responses", "azure");
         // The Agent Slider shares this file with the providers, so its stops
-        // move in the same write that renames them. A malformed hand edit is
-        // left as written; it reads as absent.
-        const sliderBefore = portableAgentSlider(config);
-        if (sliderBefore) {
-          let slider = sliderBefore;
+        // move in the same write that renames them. Only the matching
+        // `providerId` values change; everything else, including a malformed
+        // or newer hand edit, stays as written.
+        if (config.agentSlider !== undefined) {
           for (const [legacyId, targetId] of preferenceRoutes) {
-            slider = remapAgentSliderProvider(slider, legacyId, targetId);
+            config.agentSlider = remapAgentSliderProvider(config.agentSlider, legacyId, targetId);
           }
-          if (JSON.stringify(slider) !== JSON.stringify(sliderBefore)) config.agentSlider = slider;
         }
 
         if (JSON.stringify(config) !== JSON.stringify(before)) {

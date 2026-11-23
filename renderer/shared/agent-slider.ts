@@ -194,18 +194,24 @@ export function parseAgentSliderSettingsPatch(
   return result;
 }
 
-/** Re-home every stop on a renamed provider. Other stops are untouched. */
+/**
+ * Re-home every stop on a renamed provider in the slider as stored. Works on
+ * the raw value, so a malformed or newer document keeps every other field and
+ * stop exactly as written. Returns the same value when nothing matched.
+ */
 export function remapAgentSliderProvider(
-  slider: AgentSliderSettings,
+  stored: unknown,
   fromProviderId: string,
   toProviderId: string,
-): AgentSliderSettings {
-  return {
-    ...slider,
-    stops: slider.stops.map((stop) =>
-      stop.providerId === fromProviderId ? { ...stop, providerId: toProviderId } : { ...stop },
-    ),
-  };
+): unknown {
+  if (!isRecord(stored) || !Array.isArray(stored.stops)) return stored;
+  let changed = false;
+  const stops = stored.stops.map((stop: unknown) => {
+    if (!isRecord(stop) || stop.providerId !== fromProviderId) return stop;
+    changed = true;
+    return { ...stop, providerId: toProviderId };
+  });
+  return changed ? { ...stored, stops } : stored;
 }
 
 /**

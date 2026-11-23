@@ -23,6 +23,14 @@ export interface ChatMetadataUpdatedPatch {
   thinkingLevel?: GenerationThinkingLevel | null;
 }
 
+function applyThinkingLevel(
+  target: { thinkingLevel?: GenerationThinkingLevel },
+  update: Pick<ChatMetadataUpdatedPatch, "thinkingLevel">,
+): void {
+  if (update.thinkingLevel === null) delete target.thinkingLevel;
+  else if (update.thinkingLevel !== undefined) target.thinkingLevel = update.thinkingLevel;
+}
+
 export function applyChatMetadataUpdate<
   T extends {
     title: string;
@@ -38,12 +46,35 @@ export function applyChatMetadataUpdate<
     ...(update.workspaceId !== undefined ? { workspaceId: update.workspaceId } : {}),
     updatedAt: update.updatedAt,
   };
-  if (update.thinkingLevel === null) delete next.thinkingLevel;
-  else if (update.thinkingLevel !== undefined) next.thinkingLevel = update.thinkingLevel;
+  applyThinkingLevel(next, update);
   if (update.ephemeral === false) {
     delete next.ephemeral;
   } else if (update.ephemeral === true) {
     next.ephemeral = true;
   }
   return next;
+}
+
+/**
+ * The same notification applied to a cached chat list: the matching row takes
+ * the new title, workspace, time and thinking level, and the list stays newest
+ * first. Other rows are returned as they were.
+ */
+export function applyChatMetaListUpdate<
+  T extends {
+    id: string;
+    title: string;
+    workspaceId?: string;
+    updatedAt: number;
+    thinkingLevel?: GenerationThinkingLevel;
+  },
+>(rows: readonly T[], update: ChatMetadataUpdatedPatch): T[] {
+  return rows
+    .map((row) => {
+      if (row.id !== update.chatId) return row;
+      const next: T = { ...row, title: update.title, workspaceId: update.workspaceId, updatedAt: update.updatedAt };
+      applyThinkingLevel(next, update);
+      return next;
+    })
+    .sort((a, b) => b.updatedAt - a.updatedAt);
 }
