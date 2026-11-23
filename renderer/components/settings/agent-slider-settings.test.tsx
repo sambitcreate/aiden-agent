@@ -11,6 +11,8 @@ import type { AgentSliderSettings as Slider } from "../../shared/agent-slider";
 import { queryKeys } from "../../lib/queries";
 import type { AppSettings, Provider } from "../../lib/types";
 
+const SAVE_ERROR = "Aiden couldn’t save the Agent Slider.";
+
 afterEach(cleanup);
 beforeEach(() => {
   localStorage.clear();
@@ -61,14 +63,19 @@ function threeStops(): Slider {
   };
 }
 
-function mount(settings: Partial<AppSettings>) {
+/** Decides each slider save in turn: true keeps it, false makes main refuse it. */
+type SettleSave = (index: number) => boolean | Promise<boolean>;
+
+function mount(settings: Partial<AppSettings>, settleSave?: SettleSave) {
   let current = structuredClone(settings) as AppSettings;
   const saves: Slider[] = [];
   const seeds: Slider[] = [];
   const calls = installBotTestIpc({
     "settings:get": () => structuredClone(current),
-    "settings:setAgentSlider": (next: unknown) => {
+    "settings:setAgentSlider": async (next: unknown) => {
+      const index = saves.length;
       saves.push(structuredClone(next as Slider));
+      if (settleSave && !(await settleSave(index))) throw new Error("The disk is full.");
       const { agentSliderUnreadable: _cleared, ...rest } = current;
       current = { ...rest, agentSlider: next as Slider };
       return structuredClone(current);
@@ -93,8 +100,26 @@ function mount(settings: Partial<AppSettings>) {
       <Toaster />
     </QueryClientProvider>,
   );
-  return { calls, saves, seeds, queryClient, lastSaved: () => saves[saves.length - 1] };
+  return {
+    calls,
+    saves,
+    seeds,
+    queryClient,
+    lastSaved: () => saves[saves.length - 1],
+    persisted: () => current,
+  };
 }
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((done) => {
+    resolve = done;
+  });
+  return { promise, resolve };
+}
+
+const isHome = (label: string) =>
+  screen.getByRole("radio", { name: `Home stop: ${label}` }).getAttribute("aria-checked") === "true";
 
 async function stopNames(): Promise<string[]> {
   const inputs = await screen.findAllByRole("textbox", { name: /^Name of stop/u });
@@ -336,4 +361,38 @@ test("an unreadable slider is explained and replaced only after confirming", asy
   const home = saves[0]!.stops.find((stop) => stop.id === saves[0]!.homeStopId);
   assert.equal(home?.model, "mid-model");
   assert.ok(await screen.findByRole("slider", { name: "Agent Slider" }));
+});
+
+test("an older save that fails while a newer one is queued neither reports nor undoes the newer edit", async () => {
+  const first = deferred<boolean>();
+  const { saves, persisted } = mount({ agentSlider: threeStops() }, (index) => (index === 0 ? first.promise : true));
+  fireEvent.click(await screen.findByRole("radio", { name: "Home stop: Smart" }));
+  await waitFor(() => assert.equal(saves.length, 1));
+  fireEvent.click(screen.getByRole("radio", { name: "Home stop: Fast" }));
+  await act(async () => {
+    first.resolve(false);
+  });
+  await waitFor(() => assert.equal(saves.length, 2));
+  await waitFor(() => assert.equal(persisted().agentSlider?.homeStopId, "fast"));
+  // Let any refetch the failure might have started land before looking.
+  await act(async () => new Promise((resolve) => setTimeout(resolve, 50)));
+  assert.ok(isHome("Fast"), "the newer edit stays on screen");
+  assert.equal(screen.queryByText(SAVE_ERROR), null, "a superseded failure isn't reported");
+});
+
+test("when the newest save fails, the editor reports it and shows what main kept", async () => {
+  const first = deferred<boolean>();
+  const { saves, persisted } = mount({ agentSlider: threeStops() }, (index) =>
+    index === 0 ? first.promise : false,
+  );
+  fireEvent.click(await screen.findByRole("radio", { name: "Home stop: Smart" }));
+  await waitFor(() => assert.equal(saves.length, 1));
+  fireEvent.click(screen.getByRole("radio", { name: "Home stop: Fast" }));
+  await waitFor(() => assert.ok(isHome("Fast"), "the edit shows before main answers"));
+  await act(async () => {
+    first.resolve(true);
+  });
+  await screen.findByText(SAVE_ERROR);
+  assert.equal(persisted().agentSlider?.homeStopId, "smart");
+  await waitFor(() => assert.ok(isHome("Smart"), "the editor settles on the slider main kept"));
 });

@@ -338,7 +338,8 @@ function SliderEditor({ slider, providers, allEntries, entries, hidden }: Slider
   // Bumped by every action and Undo; an older action's Undo is stale.
   const generationRef = React.useRef(0);
   const writeChainRef = React.useRef<Promise<void>>(Promise.resolve());
-  const writesInFlightRef = React.useRef(0);
+  // The newest queued write; only it settles the cache or reports a failure.
+  const latestWriteRef = React.useRef(0);
   const mountedRef = React.useRef(false);
   const [announcement, setAnnouncement] = React.useState("");
   const [chooserStopId, setChooserStopId] = React.useState<string>();
@@ -359,13 +360,19 @@ function SliderEditor({ slider, providers, allEntries, entries, hidden }: Slider
     [queryClient],
   );
 
-  /** Save in order; the query shows the slider at once and settles on main's copy. */
+  /**
+   * Save in order; the query shows the slider at once and settles on main's
+   * copy. Each write carries the whole slider, so an older write that fails
+   * while a newer one is queued is simply superseded: only the newest write
+   * refetches and reports a failure, and an older one never repaints over it.
+   */
   const write = React.useCallback(
     (next: Slider): Promise<void> => {
       queryClient.setQueryData<AppSettings>(queryKeys.settings, (settings) =>
         settings ? { ...settings, agentSlider: next } : settings,
       );
-      writesInFlightRef.current += 1;
+      const writeId = ++latestWriteRef.current;
+      const isLatest = () => writeId === latestWriteRef.current;
       const run = writeChainRef.current.then(() => settingsApi.setAgentSlider(next));
       writeChainRef.current = run.then(
         () => undefined,
@@ -373,11 +380,13 @@ function SliderEditor({ slider, providers, allEntries, entries, hidden }: Slider
       );
       return run.then(
         (saved) => {
-          writesInFlightRef.current -= 1;
-          if (writesInFlightRef.current === 0) cacheAgentSlider(queryClient, saved);
+          if (!isLatest()) return;
+          // A refetch from an earlier failure must not land after main's copy.
+          void queryClient.cancelQueries({ queryKey: queryKeys.settings });
+          cacheAgentSlider(queryClient, saved);
         },
         (error: unknown) => {
-          writesInFlightRef.current -= 1;
+          if (!isLatest()) return;
           void queryClient.invalidateQueries({ queryKey: queryKeys.settings });
           throw error;
         },
