@@ -1,7 +1,7 @@
 import * as React from "react";
 import { createPortal } from "react-dom";
 import { ArrowLeft, ArrowRight, ExternalLink, Globe, History, Link2, Loader2, MessageCirclePlus, MoreVertical, MousePointer2, PictureInPicture2, Plus, RadioTower, RotateCw, Square, Unlink2, Volume2, VolumeX, X } from "lucide-react";
-import type { BrowserAnnotation, BrowserCommand, BrowserCommandResult, BrowserImage, BrowserSnapshot, BrowserState, BrowserStylePreview, BrowserTab, BrowserViewport } from "../shared/browser";
+import type { BrowserAnnotation, BrowserCommand, BrowserCommandResult, BrowserGrabSource, BrowserImage, BrowserSnapshot, BrowserState, BrowserStylePreview, BrowserTab, BrowserViewport } from "../shared/browser";
 import { resolveGrabAccent, type GrabbedElementAccent } from "../shared/browser-element-grab";
 import { browserApi } from "../lib/ipc";
 import { acceptBrowserState, BROWSER_DEVICE_PRESETS, browserBoundsFromRect, enqueueBrowserPresentation, resizeBrowserViewport, savedBrowserScreenshotPath, validBrowserViewport, visibleBrowserNativeOccluders, browserNativeViewObstructed, browserOcclusionMutated, browserOcclusionScrolled } from "../lib/browser-ui-state";
@@ -270,7 +270,7 @@ export function BrowserPanel({ workspaceId, active, onDock, integratedTabs = fal
       }
     }
   }, [run, tab]);
-  const toggleGrab = React.useCallback(async () => {
+  const toggleGrab = React.useCallback(async (source: BrowserGrabSource = "toolbar") => {
     if (bot || !tab || !ready) return;
     if (grabActive) {
       await run({ action: "grab", tabId: tab.id, enabled: false });
@@ -283,6 +283,7 @@ export function BrowserPanel({ workspaceId, active, onDock, integratedTabs = fal
       tabId: tab.id,
       enabled: true,
       accent: readActiveThemeGrabAccent(),
+      source,
     });
   }, [bot, tab, ready, grabActive, annotation, pickerActive, cancelAnnotation, run]);
 
@@ -335,7 +336,7 @@ export function BrowserPanel({ workspaceId, active, onDock, integratedTabs = fal
     return browserApi.onEvent((event) => {
       if (event.type !== "shortcut" || event.workspaceId !== workspaceId || event.tabId !== tab?.id) return;
       if (event.shortcut === "annotate") { if (!bot) void annotate(); }
-      else if (event.shortcut === "grab") { if (!bot) void toggleGrab(); }
+      else if (event.shortcut === "grab") { if (!bot) void toggleGrab("shortcut"); }
       else if (event.shortcut === "focus_address") { addressRef.current?.focus(); addressRef.current?.select(); }
       else void run({ action: "reload", tabId: event.tabId, ignoreCache: event.shortcut === "hard_reload" });
     });
@@ -349,7 +350,7 @@ export function BrowserPanel({ workspaceId, active, onDock, integratedTabs = fal
       // ⌘. marks up the page only from inside the browser; elsewhere it stops a reply.
       // Window capture runs before the app's command keys, so focus here wins.
       if (key === "." && !bot && panelRef.current?.contains(document.activeElement)) { event.preventDefault(); event.stopPropagation(); void annotate(); }
-      else if (key === "g" && event.shiftKey && !bot && panelRef.current?.contains(document.activeElement)) { event.preventDefault(); event.stopPropagation(); void toggleGrab(); }
+      else if (key === "g" && event.shiftKey && !bot && panelRef.current?.contains(document.activeElement)) { event.preventDefault(); event.stopPropagation(); if (!event.repeat) void toggleGrab("shortcut"); }
       else if (key === "l" && panelRef.current?.contains(document.activeElement)) { event.preventDefault(); addressRef.current?.focus(); }
       else if (key === "r" && panelRef.current?.contains(document.activeElement) && tab) { event.preventDefault(); void run({ action: "reload", tabId: tab.id, ignoreCache: event.shiftKey }); }
     };
@@ -358,7 +359,7 @@ export function BrowserPanel({ workspaceId, active, onDock, integratedTabs = fal
       if (!(event.metaKey || event.ctrlKey) || !event.shiftKey || event.altKey) return;
       if (event.key.toLowerCase() === "g") {
         event.preventDefault();
-        void toggleGrab();
+        if (!event.repeat) void toggleGrab("shortcut");
       }
     };
     window.addEventListener("keydown", keyboard, true);
@@ -431,7 +432,7 @@ export function BrowserPanel({ workspaceId, active, onDock, integratedTabs = fal
               aria-pressed={grabActive}
               aria-keyshortcuts={grabAriaShortcut}
               disabled={!ready}
-              onClick={() => void toggleGrab()}
+              onClick={() => void toggleGrab("toolbar")}
             >
               <MousePointer2 className="size-4" fill={grabActive ? "currentColor" : "none"} />
             </Button>

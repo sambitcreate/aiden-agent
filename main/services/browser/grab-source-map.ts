@@ -157,6 +157,40 @@ export function lookupOriginalPosition(
   };
 }
 
+const ALLOWED_LOCAL_FILE_EXTENSIONS = /\.(?:js|mjs|cjs|map)$/iu;
+
+/**
+ * Validates that a `file://` URL points to an allowed script/source-map extension
+ * (`.js`, `.mjs`, `.cjs`, `.map`) and, when `workspaceRoot` is provided, resolves
+ * strictly inside `workspaceRoot`.
+ */
+export function allowedLocalSourceMapFilePath(
+  rawUrl: string,
+  workspaceRoot?: string,
+): string | null {
+  let parsed: URL;
+  try {
+    parsed = new URL(rawUrl);
+  } catch {
+    return null;
+  }
+  if (parsed.protocol !== "file:") return null;
+  let filePath: string;
+  try {
+    filePath = fileURLToPath(parsed);
+  } catch {
+    return null;
+  }
+  if (!ALLOWED_LOCAL_FILE_EXTENSIONS.test(filePath)) return null;
+  const resolvedFile = path.resolve(filePath);
+  if (workspaceRoot) {
+    const resolvedRoot = path.resolve(workspaceRoot);
+    const rel = path.relative(resolvedRoot, resolvedFile);
+    if (!rel || rel.startsWith("..") || path.isAbsolute(rel)) return null;
+  }
+  return resolvedFile;
+}
+
 /**
  * Strict loopback-or-file-only URL guard. Never permits remote or LAN source-map fetches.
  */
@@ -356,12 +390,13 @@ export class LocalGrabSourceMapResolver {
     }
   }
 
-  private async fetchLocalText(url: string): Promise<string | null> {
+  private async fetchLocalText(url: string, workspaceRoot?: string): Promise<string | null> {
     if (!isAllowedSourceMapUrl(url)) return null;
     try {
       const parsed = new URL(url);
       if (parsed.protocol === "file:") {
-        const filePath = fileURLToPath(parsed);
+        const filePath = allowedLocalSourceMapFilePath(url, workspaceRoot);
+        if (!filePath) return null;
         const buf = await this.readFileImpl(filePath);
         if (buf.byteLength > MAX_SOURCE_MAP_BYTES) return null;
         return buf.toString("utf8");
@@ -377,15 +412,22 @@ export class LocalGrabSourceMapResolver {
     }
   }
 
-  private async loadSourceMapForBundle(bundleUrl: string): Promise<IndexedSourceMap | null> {
-    const cached = this.cacheGet(bundleUrl);
-    if (cached !== undefined) return cached;
+  private async loadSourceMapForBundle(
+    bundleUrl: string,
+    workspaceRoot?: string,
+  ): Promise<IndexedSourceMap | null> {
     if (!isAllowedSourceMapUrl(bundleUrl)) {
       return null;
     }
+    if (bundleUrl.startsWith("file:") && !allowedLocalSourceMapFilePath(bundleUrl, workspaceRoot)) {
+      return null;
+    }
+    const cacheKey = bundleUrl.startsWith("file:") ? `${workspaceRoot ?? ""}::${bundleUrl}` : bundleUrl;
+    const cached = this.cacheGet(cacheKey);
+    if (cached !== undefined) return cached;
 
     let parsedMap: ParsedSourceMapV3 | null = null;
-    const jsText = await this.fetchLocalText(bundleUrl);
+    const jsText = await this.fetchLocalText(bundleUrl, workspaceRoot);
     if (jsText) {
       const mappingRef = extractSourceMappingUrl(jsText);
       if (mappingRef) {
@@ -394,7 +436,7 @@ export class LocalGrabSourceMapResolver {
         } else {
           try {
             const mapUrl = new URL(mappingRef, bundleUrl).href;
-            const mapText = await this.fetchLocalText(mapUrl);
+            const mapText = await this.fetchLocalText(mapUrl, workspaceRoot);
             if (mapText) {
               const json = JSON.parse(mapText) as Partial<ParsedSourceMapV3>;
               if (json.version === 3 && Array.isArray(json.sources) && typeof json.mappings === "string") {
@@ -412,7 +454,7 @@ export class LocalGrabSourceMapResolver {
       // Fallback: try <bundleUrl>.map directly if still allowed.
       try {
         const directMapUrl = `${bundleUrl.split(/[?#]/u)[0]}.map`;
-        const mapText = await this.fetchLocalText(directMapUrl);
+        const mapText = await this.fetchLocalText(directMapUrl, workspaceRoot);
         if (mapText) {
           const json = JSON.parse(mapText) as Partial<ParsedSourceMapV3>;
           if (json.version === 3 && Array.isArray(json.sources) && typeof json.mappings === "string") {
@@ -425,15 +467,17 @@ export class LocalGrabSourceMapResolver {
     }
 
     const indexed = parsedMap ? decodeSourceMapMappings(parsedMap) : null;
-    this.cacheSet(bundleUrl, indexed);
+    this.cacheSet(cacheKey, indexed);
     return indexed;
   }
 
   async resolveSourceHint(
     hint: RawGrabSourceHint | undefined,
     workspaceRoot?: string,
+    options?: { allowLocalFetch?: boolean },
   ): Promise<GrabbedElementSourceLocation | undefined> {
     if (!hint) return undefined;
+    const allowLocalFetch = options?.allowLocalFetch !== false;
 
     if (hint.fileName) {
       const normalized = normalizeBundlerSourcePath(hint.fileName, workspaceRoot);
@@ -450,8 +494,8 @@ export class LocalGrabSourceMapResolver {
     if (hint.debugStack) {
       const frames = parseDebugStackFrames(hint.debugStack);
       for (const frame of frames.slice(0, 4)) {
-        if (isAllowedSourceMapUrl(frame.url)) {
-          const map = await this.loadSourceMapForBundle(frame.url);
+        if (allowLocalFetch && isAllowedSourceMapUrl(frame.url)) {
+          const map = await this.loadSourceMapForBundle(frame.url, workspaceRoot);
           if (map) {
             const original = lookupOriginalPosition(map, frame.line, frame.column);
             if (original) {

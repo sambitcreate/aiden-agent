@@ -194,6 +194,8 @@ export interface BrowserAnnotation {
   image?: BrowserImage;
 }
 
+export type BrowserGrabSource = "toolbar" | "shortcut";
+
 export type BrowserCommand =
   | { action: "agent_access"; access: BrowserAgentAccessOverride }
   | { action: "open_link"; url: string }
@@ -303,7 +305,13 @@ export type BrowserCommand =
       timeoutMs?: number;
     }
   | { action: "annotate"; tabId: string; enabled: boolean }
-  | { action: "grab"; tabId: string; enabled: boolean; accent?: GrabbedElementAccent }
+  | {
+      action: "grab";
+      tabId: string;
+      enabled: boolean;
+      accent?: GrabbedElementAccent;
+      source?: BrowserGrabSource;
+    }
   | { action: "annotation_preview"; tabId: string; changes: BrowserStylePreview[] }
   | { action: "annotation_reset"; tabId: string }
   | {

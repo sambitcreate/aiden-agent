@@ -191,6 +191,7 @@ test("Grab toolbar button toggles element grab, shows active status bar, deliver
   const grabStart = commands.find((cmd) => cmd.action === "grab" && cmd.enabled);
   assert.ok(grabStart && grabStart.action === "grab");
   assert.ok(grabStart.accent?.bg && grabStart.accent?.fg);
+  assert.equal(grabStart.source, "toolbar");
   assert.ok(screen.getByText(/Click an element to grab for chat/u));
 
   // Deliver a grabbed capture through browserElementGrabDelivery when composer is registered.
@@ -249,5 +250,22 @@ test("Grab toolbar button toggles element grab, shows active status bar, deliver
   await waitFor(() => {
     assert.ok(commands.some((cmd) => cmd.action === "grab" && !cmd.enabled));
     assert.equal(screen.getByRole("button", { name: "Grab element" }).getAttribute("aria-pressed"), "false");
+  });
+
+  // Shift+Cmd+G shortcut activates grab with source="shortcut" and ignores key auto-repeat.
+  const countBeforeShortcut = commands.filter((cmd) => cmd.action === "grab").length;
+  await act(async () => {
+    fireEvent.keyDown(window, { key: "G", metaKey: true, shiftKey: true, repeat: true });
+  });
+  assert.equal(commands.filter((cmd) => cmd.action === "grab").length, countBeforeShortcut);
+
+  await act(async () => {
+    fireEvent.keyDown(window, { key: "G", metaKey: true, shiftKey: true, repeat: false });
+  });
+  await waitFor(() => {
+    const enabledGrabs = commands.filter((cmd) => cmd.action === "grab" && cmd.enabled);
+    const shortcutGrab = enabledGrabs[enabledGrabs.length - 1];
+    assert.ok(shortcutGrab && shortcutGrab.action === "grab");
+    assert.equal(shortcutGrab.source, "shortcut");
   });
 });

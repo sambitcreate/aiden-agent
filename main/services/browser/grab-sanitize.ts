@@ -12,6 +12,7 @@ import type { CssRect } from "./credential-fields.js";
 import type { RawGrabComponentFrame, RawGrabSourceHint } from "./grab-runtime/inspect-react.js";
 import {
   defaultGrabSourceMapResolver,
+  isAllowedSourceMapUrl,
   type LocalGrabSourceMapResolver,
 } from "./grab-source-map.js";
 
@@ -196,6 +197,9 @@ export async function sanitizeRawGrabPayload(
   }
   const rec = raw as Record<string, unknown>;
   const resolver = options.sourceMapResolver ?? defaultGrabSourceMapResolver;
+  // Only allow local source-map fetch/readFile when the authoritative page URL itself is local/loopback.
+  const pageUrl = stripUrlCredentials(options.pageUrl);
+  const allowLocalFetch = isAllowedSourceMapUrl(pageUrl);
 
   const rawTag = typeof rec.tagName === "string" ? rec.tagName.trim().toLowerCase() : "div";
   const tagName = TAG_NAME_PATTERN.test(rawTag) ? rawTag : "div";
@@ -220,7 +224,7 @@ export async function sanitizeRawGrabPayload(
       // Symbolicate up to the top 5 component frames to stay fast.
       const source =
         index < 5 && hint
-          ? await resolver.resolveSourceHint(hint, options.workspaceRoot)
+          ? await resolver.resolveSourceHint(hint, options.workspaceRoot, { allowLocalFetch })
           : undefined;
       const cleanFrame: GrabbedElementComponentFrame = { name };
       if (env === "client" || env === "server") cleanFrame.environment = env;
@@ -233,8 +237,9 @@ export async function sanitizeRawGrabPayload(
 
   const topSourceHint = sanitizeSourceHint(rec.source);
   const resolvedTopSource =
-    (topSourceHint ? await resolver.resolveSourceHint(topSourceHint, options.workspaceRoot) : undefined) ??
-    componentStack.find((frame) => !frame.minified && frame.source)?.source;
+    (topSourceHint
+      ? await resolver.resolveSourceHint(topSourceHint, options.workspaceRoot, { allowLocalFetch })
+      : undefined) ?? componentStack.find((frame) => !frame.minified && frame.source)?.source;
 
   const rawComponentName = cleanString(rec.componentName, 160);
   const primaryNonMinified = componentStack.find((frame) => !frame.minified)?.name;
@@ -260,7 +265,6 @@ export async function sanitizeRawGrabPayload(
       : undefined;
 
   const id = (options.id ?? randomUUID().replace(/-/gu, "")).slice(0, 64);
-  const pageUrl = stripUrlCredentials(options.pageUrl);
   const pageTitle = cleanString(options.pageTitle, 256);
 
   const candidate: GrabbedElementContextV1 = {

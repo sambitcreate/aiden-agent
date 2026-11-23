@@ -28,6 +28,7 @@ import type {
   BrowserElement,
   BrowserEvent,
   BrowserGrabEndReason,
+  BrowserGrabSource,
   BrowserImage,
   BrowserProfile,
   BrowserRecording,
@@ -214,7 +215,7 @@ interface LiveTab {
   closing: boolean;
   expectedInputs: Array<{ type: string; key?: string; button?: string; modifiers?: number; expires: number }>;
   picking?: boolean;
-  grab?: { token: symbol; accent: GrabbedElementAccent };
+  grab?: { token: symbol; accent: GrabbedElementAccent; source: BrowserGrabSource };
   crashTimes: number[];
   crashTimer?: ReturnType<typeof setTimeout>;
   pendingNavigationUrl?: string;
@@ -1045,7 +1046,7 @@ export class BrowserService {
         }
         if ((input.meta || input.control) && input.shift && !input.alt && input.key.toLowerCase() === "g") {
           event.preventDefault();
-          void this.stopGrab(tab, "cancelled");
+          if (!input.isAutoRepeat) void this.stopGrab(tab, "cancelled");
           return;
         }
       }
@@ -1060,7 +1061,9 @@ export class BrowserService {
         key === "."
           ? "annotate"
           : key === "g" && input.shift
-            ? "grab"
+            ? input.isAutoRepeat
+              ? null
+              : "grab"
             : key === "l"
               ? "focus_address"
               : key === "r"
@@ -2421,7 +2424,11 @@ export class BrowserService {
       this.emit(tab.state.workspaceId);
     }
   }
-  private async startGrab(tab: LiveTab, accent?: GrabbedElementAccent): Promise<void> {
+  private async startGrab(
+    tab: LiveTab,
+    accent?: GrabbedElementAccent,
+    source: BrowserGrabSource = "toolbar",
+  ): Promise<void> {
     const wc = tab.view.webContents;
     if (tab.closing || wc.isDestroyed()) return;
     // Mutual exclusion with Annotate picker on this tab.
@@ -2436,7 +2443,8 @@ export class BrowserService {
     }
     const resolvedAccent = resolveGrabAccent(accent);
     const token = Symbol("browser-grab");
-    tab.grab = { token, accent: resolvedAccent };
+    const grabSource: BrowserGrabSource = source === "shortcut" ? "shortcut" : "toolbar";
+    tab.grab = { token, accent: resolvedAccent, source: grabSource };
     tab.state.grabbing = true;
     this.emit(tab.state.workspaceId);
 
@@ -2467,6 +2475,15 @@ export class BrowserService {
     const wc = tab.view.webContents;
     if (!tab.closing && !wc.isDestroyed()) {
       void wc.executeJavaScript("globalThis.__aidenGrabStop?.()", true).catch(() => {});
+      if ((reason === "picked" || reason === "escape") && wc.isFocused()) {
+        const owner = this.workspaces.get(tab.state.workspaceId)?.owner;
+        if (owner && !owner.isDestroyed()) {
+          const hostWindow = BrowserWindow.getAllWindows().find(
+            (w) => !w.isDestroyed() && w.webContents.id === owner.id,
+          );
+          hostWindow?.webContents.focus();
+        }
+      }
     }
     this.emit(tab.state.workspaceId);
     this.emit(tab.state.workspaceId, {
@@ -2559,6 +2576,11 @@ export class BrowserService {
           sanitized.sensitiveRects,
         ).catch(() => undefined);
         if (tab.grab?.token !== token) return;
+
+        // Analytics hook point (wired with `browser_element_grabbed` once analytics-events merges):
+        // kind: sanitized.element.framework === "dom" ? "dom" : "react", source: grabSource
+        const grabSource = tab.grab.source;
+        void grabSource;
 
         this.emit(tab.state.workspaceId, {
           type: "grab",
@@ -2984,7 +3006,7 @@ export class BrowserService {
           break;
         }
         if (command.action === "grab") {
-          if (command.enabled) await this.startGrab(tab, command.accent);
+          if (command.enabled) await this.startGrab(tab, command.accent, command.source);
           else await this.stopGrab(tab, "cancelled");
           break;
         }

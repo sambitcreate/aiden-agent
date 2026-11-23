@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  allowedLocalSourceMapFilePath,
   decodeSourceMapMappings,
   isAllowedSourceMapUrl,
   LocalGrabSourceMapResolver,
@@ -149,4 +150,53 @@ test("parseDebugStackFrames skips react-dom and node_modules frames", () => {
   assert.deepEqual(parseDebugStackFrames(stack), [
     { url: "http://localhost:3000/src/MyCard.tsx", line: 24, column: 11 },
   ]);
+});
+
+test("LocalGrabSourceMapResolver restricts file:// reads to script/map extensions inside workspaceRoot", async () => {
+  const readPaths: string[] = [];
+  const sourceMapJson = JSON.stringify({
+    version: 3,
+    sources: ["src/Widget.tsx"],
+    mappings: "AAUI",
+  });
+  const resolver = new LocalGrabSourceMapResolver({
+    readFileImpl: async (filePath: string) => {
+      readPaths.push(filePath);
+      if (filePath.endsWith(".map")) return Buffer.from(sourceMapJson, "utf8");
+      return Buffer.from("//# sourceMappingURL=bundle.js.map\n", "utf8");
+    },
+  });
+
+  // Non-script/map file extension is rejected before reading disk.
+  assert.equal(allowedLocalSourceMapFilePath("file:///etc/passwd", "/Users/dev/app"), null);
+  await resolver.resolveSourceHint(
+    { debugStack: "Error\n    at Evil (file:///etc/passwd:1:1)" },
+    "/Users/dev/app",
+  );
+  assert.deepEqual(readPaths, []);
+
+  // Out-of-workspace script is rejected before reading disk.
+  assert.equal(allowedLocalSourceMapFilePath("file:///Users/other/secret.js", "/Users/dev/app"), null);
+  assert.equal(
+    allowedLocalSourceMapFilePath("file:///Users/dev/app/../other/secret.js", "/Users/dev/app"),
+    null,
+  );
+  await resolver.resolveSourceHint(
+    { debugStack: "Error\n    at Evil (file:///Users/other/secret.js:1:1)" },
+    "/Users/dev/app",
+  );
+  assert.deepEqual(readPaths, []);
+
+  // In-workspace .js + .map succeeds.
+  const resolved = await resolver.resolveSourceHint(
+    { debugStack: "Error\n    at Widget (file:///Users/dev/app/dist/bundle.js:1:1)" },
+    "/Users/dev/app",
+  );
+  assert.deepEqual(resolved, {
+    filePath: "src/Widget.tsx",
+    line: 11,
+    column: 5,
+    symbolicated: true,
+  });
+  assert.equal(readPaths.length, 2);
 });

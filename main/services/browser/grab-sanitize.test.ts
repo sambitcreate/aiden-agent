@@ -240,3 +240,66 @@ test("sanitizeRawGrabPayload enforces authoritative URL/title, strips credential
   assert.equal(sanitized.element.textPreview, "[redacted]");
   assert.equal(sanitized.element.viewport?.zoomFactor, 1.25);
 });
+
+test("sanitizeRawGrabPayload prevents remote pages from triggering local fetch or file reads via forged _debugStack", async () => {
+  let fetchCalls = 0;
+  let readCalls = 0;
+  const resolver = new LocalGrabSourceMapResolver({
+    fetchImpl: (async () => {
+      fetchCalls += 1;
+      return new Response("", { status: 200 });
+    }) as typeof fetch,
+    readFileImpl: async () => {
+      readCalls += 1;
+      return Buffer.from("");
+    },
+  });
+
+  const remote = await sanitizeRawGrabPayload(
+    {
+      framework: "react",
+      componentName: "SpoofedCard",
+      componentStack: [
+        {
+          name: "SpoofedCard",
+          source: {
+            debugStack:
+              "Error\n    at SpoofedCard (http://127.0.0.1:3000/secret.js:1:1)\n    at Leak (file:///etc/passwd:1:1)",
+          },
+        },
+        {
+          name: "StaticSourceFrame",
+          source: {
+            fileName: "webpack-internal:///(app-pages-browser)/./src/StaticCard.tsx",
+            lineNumber: 7,
+          },
+        },
+      ],
+      source: {
+        debugStack: "Error\n    at SpoofedCard (file:///Users/dev/app/dist/bundle.js:1:1)",
+      },
+      tagName: "div",
+      selector: "div.card",
+      htmlSnippet: '<div class="card">Hi</div>',
+      boundingBox: { x: 0, y: 0, width: 100, height: 50 },
+      viewport: { width: 1280, height: 720, devicePixelRatio: 1 },
+    },
+    {
+      pageUrl: "https://evil.example/landing",
+      workspaceRoot: "/Users/dev/app",
+      id: "remote_guard_1",
+      capturedAt: 1000,
+      sourceMapResolver: resolver,
+    },
+  );
+
+  assert.equal(fetchCalls, 0, "remote page must never trigger loopback fetch");
+  assert.equal(readCalls, 0, "remote page must never trigger local file read");
+  assert.equal(remote.element.source?.symbolicated, false);
+  // Offline static _debugSource.fileName normalization still works cleanly.
+  assert.deepEqual(remote.element.componentStack?.[1]?.source, {
+    filePath: "src/StaticCard.tsx",
+    line: 7,
+    symbolicated: false,
+  });
+});
