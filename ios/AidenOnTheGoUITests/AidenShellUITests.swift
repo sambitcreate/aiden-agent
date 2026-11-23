@@ -692,6 +692,48 @@ final class AidenShellUITests: XCTestCase {
         }
     }
 
+    func testUnpairedSearchOffersPairingAndExplainsInvalidManualInput() {
+        let app = XCUIApplication()
+        app.launchArguments = [
+            "-aiden.product-navigation.v1", "reset",
+            "-aiden.product-navigation.v2", "reset",
+            "-AppleLanguages", "(en)",
+            "-AppleLocale", "en_US",
+        ]
+        app.launch()
+
+        XCTAssertTrue(app.navigationBars["Inbox"].waitForExistence(timeout: 10))
+        AidenStateMatrix.openArea("Search", in: app)
+        let addComputer = app.buttons["Add Computer"].firstMatch
+        XCTAssertTrue(addComputer.waitForExistence(timeout: 10))
+        XCTAssertFalse(app.searchFields.firstMatch.exists, "Search requires a paired computer")
+        addComputer.tap()
+
+        let installed = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Yes")).firstMatch
+        XCTAssertTrue(installed.waitForExistence(timeout: 10))
+        installed.tap()
+
+        let navigation = app.navigationBars["Add Computer"]
+        XCTAssertTrue(navigation.waitForExistence(timeout: 10))
+        let address = app.textFields["Computer address"]
+        address.tap()
+        address.typeText("http://mac.local")
+        let code = app.textFields["Setup code or pairing payload"]
+        code.tap()
+        code.typeText("SHORT")
+        code.typeText("\n")
+        let addressError = app.staticTexts["Use an HTTPS address. Copy the address shown on your computer."]
+        XCTAssertTrue(addressError.waitForExistence(timeout: 5))
+
+        address.tap()
+        address.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: "http://mac.local".count))
+        address.typeText("mac.local:49220")
+        XCTAssertFalse(addressError.exists)
+        navigation.buttons["Add Computer"].tap()
+        XCTAssertTrue(app.staticTexts["Enter the 20-character setup code shown on your computer."].waitForExistence(timeout: 5))
+        app.terminate()
+    }
+
     /// Every step is a route: the tab's stack holds nothing else.
     func testAMachineOpensFromSettingsAndBackRetracesTheWay() {
         let app = AidenStateMatrix.launch(scenario: .four)

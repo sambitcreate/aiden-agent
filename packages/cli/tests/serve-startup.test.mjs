@@ -384,6 +384,7 @@ test("a Tailscale pairing code fits an 80-column terminal as a black-on-white QR
   assert.match(text, /^Pair over Tailscale$/m);
   assert.match(text, new RegExp(`^Private address:\\n${endpoint.replace(/[.]/gu, "\\.")}$`, "m"));
   assert.match(text, /^Setup code:\nFF18-6D5S-23KW-ZHPS-CAF3$/m);
+  assert.match(text, /On iPhone or iPad, choose Add Computer\. Scan the QR code if shown, or enter the private address and setup code\./);
 });
 
 test("a pairing code too wide for the terminal is left out instead of wrapping into an unscannable code", async () => {
@@ -394,6 +395,8 @@ test("a pairing code too wide for the terminal is left out instead of wrapping i
   assert.match(text, /needs a window at least \d+ characters wide, and this one is 80\. Widen the window and run `aiden remote pair lan`/);
   assert.ok(!text.includes("▀") && !text.includes(`${ESC}[48;5;`), "no QR cells in the output");
   assert.match(text, /^Nearby address:\nhttps:\/\/bitcreate1\.local:49320\/api\/aiden\/v1$/m);
+  assert.match(text, /On iPhone or iPad, choose Add Computer\. Scan the QR code if shown, or enter the nearby address and setup code\./);
+  assert.match(text, /Your phone must be on the same network as this computer\./);
   assert.match(await api.renderPairingTerminal(pairing, { columns: 200 }), /▀/u, "a wide window shows the code");
 });
 
