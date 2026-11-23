@@ -1107,19 +1107,23 @@ final class AidenNewWorkTargetTests: XCTestCase {
 
     // MARK: The Settings row
 
-    private func settingsLabels() throws -> [String] {
+    /// Settings' labels, once one `waitingFor` matches shows. Its rows don't
+    /// all show in the same pass: on a cold start the Default computer menu
+    /// can come after Appearance.
+    private func settingsLabels(waitingFor label: (String) -> Bool) throws -> [String] {
         Self.setAccessibilityAutomation(true)
         defer { Self.setAccessibilityAutomation(false) }
         let window = try showSynchronously(NavigationStack {
             AidenAppSettingsView(coordinator: coordinator, appearance: AidenAppearanceStore())
         })
         defer { close(window) }
-        _ = runMainLoop(until: { accessibleElements(in: window).contains { $0.accessibilityLabel?.contains("Appearance") == true } })
+        _ = runMainLoop(until: { accessibleElements(in: window).contains { $0.accessibilityLabel.map(label) == true } })
         return accessibleElements(in: window).compactMap(\.accessibilityLabel)
     }
 
     func testSettingsHasADefaultMachineRow() throws {
-        XCTAssertTrue(try settingsLabels().contains { $0.hasPrefix("Default computer") })
+        let isDefaultRow: (String) -> Bool = { $0.hasPrefix("Default computer") }
+        XCTAssertTrue(try settingsLabels(waitingFor: isDefaultRow).contains(where: isDefaultRow))
     }
 
     func testTheDefaultRowOffersOfflineMachinesAndKeepsAHiddenDefault() async throws {

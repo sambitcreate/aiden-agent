@@ -569,3 +569,30 @@ test("a forced full read that found what the probe said, nothing new, keeps back
   await h.follows.kick();
   assert.equal(nextCheckIn(h), 10 * MINUTE);
 });
+
+test("a pull request still failing after its hour card goes back to cheap probes", async () => {
+  const h = harness();
+  const etags = { [PR_PATH]: 'W/"pr-1"' };
+  h.setAnswer(() => ({ kind: "ok", observation: open(), etags }));
+  h.follows.follow(input());
+  await h.follows.kick();
+  // Full reads, with no probe, until the hour is up and its card goes out.
+  while (!h.posted.some((post) => post.notice.notice.title === "Still failing after an hour")) {
+    h.advance(nextCheckIn(h));
+    await h.follows.kick();
+    assert.equal(h.reads[h.reads.length - 1]!.probe, undefined, "the failure clock still needs full reads");
+    assert.ok(h.now() - T0 <= 2 * 60 * MINUTE, "the hour card came");
+  }
+  // The next look sends probes again and keeps the tags GitHub hands back.
+  h.advance(nextCheckIn(h));
+  await h.follows.kick();
+  assert.ok(h.reads[h.reads.length - 1]!.probe, "probes go out again");
+  // From then on an unchanged pull request costs only the probe.
+  h.setAnswer(() => ({ kind: "unchanged" }));
+  const posted = h.posted.length;
+  h.advance(nextCheckIn(h));
+  await h.follows.kick();
+  assert.deepEqual(h.reads[h.reads.length - 1]!.probe, { etags, skipIfUnchanged: true });
+  assert.equal(h.posted.length, posted);
+  assert.equal(h.follows.list("chat-1")[0]!.state, "following");
+});

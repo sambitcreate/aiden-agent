@@ -161,6 +161,7 @@ struct AidenBotWatchEditorView: View {
                     .autocorrectionDisabled()
                 TextField("Subject contains (optional)", text: binding(\.subject, default: ""))
                 Toggle("Unread only", isOn: binding(\.unreadOnly, default: false))
+                    .aidenSwitchStyle()
             }
             .disabled(!model.canEditDraft)
         } else {

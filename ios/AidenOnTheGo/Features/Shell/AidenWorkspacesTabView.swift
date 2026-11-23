@@ -7,6 +7,12 @@ struct AidenWorkspacesTabChrome {
     let newWork: AidenNewWorkChatFlow
     /// Set with more than one machine shown: every shown machine's workspaces.
     var machines: AidenWorkspacesTabMachines? = nil
+    /// The list is beside the workspace it opened rather than under it.
+    var besideList = false
+    /// The route open beside the list, whose row is highlighted. Nil on a stack.
+    var selection: AidenAppRoute? = nil
+    /// Opens a row's route on the tab.
+    var onOpen: (AidenAppRoute) -> Void = { _ in }
 
     /// Where compose starts: the machine the strip is filtered to, else the default.
     var composeMachine: String? {
@@ -30,7 +36,10 @@ struct AidenWorkspacesTabView: View {
     @Bindable var coordinator: AidenRemoteCoordinator
     let store: AidenUnifiedInboxStore
     let newWork: AidenNewWorkChatFlow
+    var besideList = false
+    var selection: AidenAppRoute? = nil
     var onAddComputer: (() -> Void)? = nil
+    var onOpen: (AidenAppRoute) -> Void = { _ in }
 
     /// A row of the single-machine list, which shows only the default machine's
     /// workspaces (`coordinator.workspaces`). Grouped rows carry their own id.
@@ -69,7 +78,14 @@ struct AidenWorkspacesTabView: View {
             AidenWorkspacesDirectoryView(
                 coordinator: coordinator,
                 archiveStore: coordinator.workspaceArchiveStore,
-                tabChrome: AidenWorkspacesTabChrome(route: route, newWork: newWork, machines: machines)
+                tabChrome: AidenWorkspacesTabChrome(
+                    route: route,
+                    newWork: newWork,
+                    machines: machines,
+                    besideList: besideList,
+                    selection: selection,
+                    onOpen: onOpen
+                )
             )
             .safeAreaInset(edge: .top, spacing: 0) {
                 // Grouped, each machine says its own state under its name.
@@ -148,7 +164,8 @@ struct AidenWorkspaceRouteView: View {
     let onRemoved: () -> Void
     let onChatUpdated: @MainActor (AidenChat) -> Void
     let onChatRemoved: @MainActor (String) -> Void
-    let onChatActivityChanged: @MainActor (String, AidenChatSummaryActivity) -> Void
+    /// Opens a chat the workspace just made, over the workspace.
+    let onOpenChat: @MainActor (AidenHostObjectID) -> Void
 
     @Environment(\.aidenPalette) private var palette
 
@@ -178,7 +195,7 @@ struct AidenWorkspaceRouteView: View {
                 onRemoved: onRemoved,
                 onChatUpdated: onChatUpdated,
                 onChatRemoved: onChatRemoved,
-                onChatActivityChanged: onChatActivityChanged
+                onOpenChat: onOpenChat
             )
             .id(workspace.revision)
         } else if isLoadingWorkspaces {

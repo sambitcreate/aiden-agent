@@ -2,6 +2,82 @@ import Photos
 import SwiftUI
 import UniformTypeIdentifiers
 
+/// What a durable Bot chat keeps across a rebuild of its views, as a
+/// workspace chat's screen does (`AidenChatScreenParts`): the composer with
+/// its draft, attachments and voice, the attachment picker, the reader's
+/// place, and the conversation with its feed. The feed runs here rather than
+/// in a view's task, so opening or closing an iPhone Duo, which builds the
+/// views again, doesn't end it.
+@MainActor
+final class AidenBotSessionScreenParts: AidenTranscriptPlace {
+    let composerSession: AidenComposerSession
+    let follow = AidenTranscriptFollowController()
+    let attachmentPicker = AidenAttachmentPickerState()
+    /// The conversation whose feed is running, while one is.
+    private(set) var model: AidenBotSessionModel?
+    /// The grants its feed opened with (`aidenBotSessionFeedGrants`).
+    var feedOpenedWith: Set<AidenRemoteCapability> = []
+    private var feed: Task<Void, Never>?
+    /// Which start the feed is for: the machine and the Try again count.
+    private var startKey: String?
+    /// Counts feeds opened, so a feed that ends clears only its own state,
+    /// never a newer feed's.
+    private var feedsOpened = 0
+
+    init(composerSession: AidenComposerSession? = nil) {
+        self.composerSession = composerSession ?? AidenComposerSession()
+        super.init()
+    }
+
+    /// The conversation a feed is still running for `key`, which a rebuilt
+    /// view takes over instead of starting another. Once the feed has ended
+    /// (its machine was forgotten, or it was stopped) there is none, and the
+    /// next start opens a new conversation.
+    func runningModel(for key: String) -> AidenBotSessionModel? {
+        guard key == startKey, feed != nil else { return nil }
+        return model
+    }
+
+    /// Opens `model`'s feed, in place of any feed running: its first
+    /// snapshot and its stream, with the outbox it sends. Returns the feed,
+    /// for tests.
+    @discardableResult
+    func run(_ model: AidenBotSessionModel, for key: String) -> Task<Void, Never> {
+        stop()
+        self.model = model
+        startKey = key
+        feedsOpened += 1
+        let opened = feedsOpened
+        let feed = Task { @MainActor [weak self] in
+            async let firstLoad: Void = model.load()
+            await model.listen()
+            // Leaving stops the sending at once; the read still finishing doesn't hold it up.
+            model.release()
+            // The listener also returns by itself once its machine's pairing
+            // is gone: a released model is no longer a running conversation.
+            self?.ended(opened)
+            _ = await firstLoad
+        }
+        self.feed = feed
+        return feed
+    }
+
+    private func ended(_ opened: Int) {
+        guard opened == feedsOpened else { return }
+        feed = nil
+        model = nil
+        startKey = nil
+    }
+
+    /// Ends the feed: the screen is hidden, or another start replaces it.
+    func stop() {
+        feed?.cancel()
+        feed = nil
+        model = nil
+        startKey = nil
+    }
+}
+
 /// The Bot chat on a host that advertises `bot-durable-session-v1`: one
 /// durable conversation per Bot, loaded from `GET /bots/{id}/session` and kept
 /// live by its event stream.
@@ -44,13 +120,13 @@ struct AidenBotSessionChatView: View {
     /// The grants this chat's feed opened with (`aidenBotSessionFeedGrants`).
     @State private var feedOpenedWith: Set<AidenRemoteCapability> = []
     /// Content growth must not be mistaken for the reader scrolling away.
-    @State private var follow = AidenTranscriptFollowController()
+    @State private var follow: AidenTranscriptFollowController
     /// Bumped by the person's own send: the transcript scrolls to it wherever it was.
     @State private var ownSendScroll = 0
     @State private var spending = AidenSpendingNoticeModel()
     @Environment(\.aidenReduceMotion) private var reduceMotion
     /// The workspace chat's + picker (Files, Camera, Photos), reused as is (revision 33).
-    @State private var attachmentPicker = AidenAttachmentPickerState()
+    @State private var attachmentPicker: AidenAttachmentPickerState
     @State private var isFileImporterPresented = false
     @State private var attachButtonCenter: CGPoint?
     @Namespace private var attachmentMotionNamespace
@@ -58,17 +134,33 @@ struct AidenBotSessionChatView: View {
     /// Runs once the sheet has closed, so what it opens has the screen to itself.
     @State private var pendingSessionAction: AidenSessionAction?
 
+    /// The shell's hold on this chat's screen, when it keeps one.
+    private let screen: AidenChatScreen?
+    /// Everything that outlives these views, and the reader's place.
+    @State private var parts: AidenBotSessionScreenParts
+    /// This screen's rows, as against those of the screen a fold replaces.
+    @State private var rowFrameScreen = UUID()
+
+    /// `screen` and `parts` are the shell's, when it keeps this chat's
+    /// screen across a rebuild of its views.
     init(
         coordinator: AidenRemoteCoordinator,
         botID: String,
         initialSummary: AidenBotSummary? = nil,
         composerSession: AidenComposerSession? = nil,
-        machine: String
+        machine: String,
+        screen: AidenChatScreen? = nil,
+        parts: AidenBotSessionScreenParts? = nil
     ) {
         self.coordinator = coordinator
         self.botID = botID
         self.initialSummary = initialSummary
-        _composerSession = State(initialValue: composerSession ?? AidenComposerSession())
+        self.screen = screen
+        let parts = parts ?? AidenBotSessionScreenParts(composerSession: composerSession)
+        _parts = State(initialValue: parts)
+        _composerSession = State(initialValue: parts.composerSession)
+        _follow = State(initialValue: parts.follow)
+        _attachmentPicker = State(initialValue: parts.attachmentPicker)
         // A Bot chat stays on the machine it opened on, whatever the default does.
         _openedOn = State(initialValue: machine)
     }
@@ -197,28 +289,45 @@ struct AidenBotSessionChatView: View {
             composerSession.stopVoice()
         }
         .onAppear {
+            screen?.appeared()
+            parts.screenAppeared(rowFrameScreen)
             coordinator.setOnScreen(true, view: onScreen, instanceId: openedOn)
             isChatVisible = true
             model?.setResumeForegroundVisit(active: resumeVisitIsActive)
         }
         .onDisappear {
             isChatVisible = false
-            model?.setResumeForegroundVisit(active: false)
-            attachmentPicker.reset()
-            composerSession.stopVoice()
-            composerSession.discardAttachments()
             coordinator.setOnScreen(false, view: onScreen, instanceId: openedOn)
+            let hidden = { [parts, attachmentPicker, composerSession] in
+                parts.model?.setResumeForegroundVisit(active: false)
+                parts.stop()
+                attachmentPicker.reset()
+                composerSession.stopVoice()
+                composerSession.discardAttachments()
+            }
+            // A screen the shell keeps knows whether this is its containers
+            // being swapped or the reader leaving (`AidenChatScreen`). A swap
+            // keeps the feed, the draft, the attachments and a recording.
+            if let screen {
+                screen.disappeared(hidden: hidden, left: {})
+            } else {
+                hidden()
+            }
         }
         .onChange(of: resumeVisitIsActive) { _, active in
             // The feed remains alive for background hand-offs (G24).
             model?.setResumeForegroundVisit(active: active)
         }
         .background(palette.canvas.ignoresSafeArea())
+        // The header takes the title's place in a bar along the top. A side
+        // rail can't hold it, so the title says whose chat this is there.
+        .navigationTitle(bot?.name ?? String(localized: "Bot"))
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .principal) { header }
             ToolbarItem(placement: .topBarTrailing) { moreMenu }
         }
+        .aidenPrefersToolbarItems()
         .aidenBotDeleteConfirmation(
             isPresented: $isConfirmingDelete,
             botName: bot?.name ?? "this Bot",
@@ -336,6 +445,7 @@ struct AidenBotSessionChatView: View {
         .onChange(of: aidenBotSessionFeedGrants(ownerConnection?.installation)) { _, grants in
             guard let model, grants != feedOpenedWith else { return }
             feedOpenedWith = grants
+            parts.feedOpenedWith = grants
             model.allowedSupported = grants.contains(.botAllowed)
             model.plansSupported = grants.contains(.botPlans)
             model.reopenFeed()
@@ -376,7 +486,8 @@ struct AidenBotSessionChatView: View {
         Button {
             showsSessionSheet = true
         } label: {
-            Image(systemName: "ellipsis")
+            // A title as well as the symbol, for the side rail's overflow.
+            Label("More", systemImage: AidenChromeSymbols.overflowMenu)
         }
         .disabled(bot == nil)
         .accessibilityLabel("More for \(bot?.name ?? "this Bot")")
@@ -489,6 +600,12 @@ struct AidenBotSessionChatView: View {
                         ForEach(AidenBotTranscriptRow.rows(for: model.entries)) { row in
                             rowView(row, model: model)
                                 .id(row.id)
+                                .onGeometryChange(for: CGRect.self) {
+                                    $0.frame(in: .named(AidenTranscriptRowSpace.name))
+                                } action: { frame in
+                                    rowFrameChanged(frame, for: row.id, proxy: proxy)
+                                }
+                                .onDisappear { rowFrameChanged(nil, for: row.id, proxy: proxy) }
                         }
                         AidenBotSessionPartialRow(model: model) { partial in
                             assistantBubble(partial, interrupted: false, isStreaming: true)
@@ -520,6 +637,7 @@ struct AidenBotSessionChatView: View {
                     }
                     .padding(.horizontal, 16)
                     .padding(.vertical, 12)
+                    .coordinateSpace(.named(AidenTranscriptRowSpace.name))
                     .background {
                         AidenChatScrollObserver(
                             onFollowEvent: { follow.handle($0) },
@@ -528,6 +646,34 @@ struct AidenBotSessionChatView: View {
                     }
                 }
                 .defaultScrollAnchor(.bottom, for: .initialOffset)
+                .onScrollPhaseChange { _, phase, context in
+                    // Only the reader moves the reading place, not a layout pass
+                    // on the way back to it.
+                    guard phase == .idle, !follow.holdsPlace else { return }
+                    parts.readingPlace = follow.isFollowing
+                        ? nil
+                        : place(in: context.geometry, model: model) ?? parts.readingPlace
+                }
+                .onChange(of: follow.isFollowing) { _, following in
+                    if following { parts.readingPlace = nil }
+                }
+                // A rebuilt screen (an iPhone Duo opening or closing) starts at
+                // the latest; the reader goes back to their place, and again as
+                // the rows measure, until they scroll or ask for the latest.
+                .onAppear { startReturningToReadingPlace(proxy, model: model) }
+                .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { _ in
+                    startReturningToReadingPlace(proxy, model: model)
+                }
+                .onScrollGeometryChange(for: CGSize.self) { $0.contentSize } action: { _, _ in
+                    guard follow.holdsPlace else { return }
+                    returnToReadingPlace(proxy, model: model)
+                }
+                .onScrollGeometryChange(for: CGFloat.self) { geometry in
+                    geometry.containerSize.height
+                } action: { _, height in
+                    parts.visibleHeight = height
+                    if follow.holdsPlace { returnToReadingPlace(proxy, model: model) }
+                }
                 .defaultScrollAnchor(
                     AidenChatScrollPolicy.sizeChangeAnchor(shouldFollowLatest: follow.isFollowing),
                     for: .sizeChanges
@@ -569,6 +715,42 @@ struct AidenBotSessionChatView: View {
                     .padding(.vertical, 12)
             }
             .scrollDisabled(true)
+        }
+    }
+
+    private func rowFrameChanged(_ frame: CGRect?, for id: String, proxy: ScrollViewProxy) {
+        // The place's row measured at a new height after the reader was
+        // brought back: bring them back again.
+        guard parts.setRowFrame(frame, for: id, from: rowFrameScreen), follow.holdsPlace, let model else { return }
+        returnToReadingPlace(proxy, model: model)
+    }
+
+    /// Where the reader is now: the first row across the visible top.
+    private func place(in geometry: ScrollGeometry, model: AidenBotSessionModel) -> AidenReadingPlace? {
+        let rows = AidenBotTranscriptRow.rows(for: model.entries)
+            .compactMap { row in parts.rowFrames[row.id].map { (id: row.id, frame: $0) } }
+        return AidenReadingPlace.at(top: geometry.contentOffset.y + geometry.contentInsets.top, rows: rows)
+    }
+
+    private func startReturningToReadingPlace(_ proxy: ScrollViewProxy, model: AidenBotSessionModel) {
+        guard parts.readingPlace != nil else { return }
+        follow.handle(.holdPlace)
+        returnToReadingPlace(proxy, model: model)
+    }
+
+    private func returnToReadingPlace(_ proxy: ScrollViewProxy, model: AidenBotSessionModel) {
+        guard let place = parts.readingPlace, !follow.isFollowing else { return }
+        Task { @MainActor in
+            await Task.yield()
+            guard parts.readingPlace == place, !follow.isFollowing else { return }
+            // The place's row is gone: nothing to go back to.
+            guard AidenBotTranscriptRow.rows(for: model.entries).contains(where: { $0.id == place.rowID }) else {
+                parts.readingPlace = nil
+                follow.handle(.releasePlace)
+                return
+            }
+            let anchor = place.anchor(rowHeight: parts.rowFrames[place.rowID]?.height, viewHeight: parts.visibleHeight)
+            proxy.scrollTo(place.rowID, anchor: anchor)
         }
     }
 
@@ -1292,6 +1474,17 @@ struct AidenBotSessionChatView: View {
 
     @MainActor
     private func start() async {
+        let startKey = "\(machineID)|\(startAttempt)"
+        if let running = parts.runningModel(for: startKey) {
+            // A rebuilt screen (an iPhone Duo opening or closing) takes over
+            // the conversation its last view left running.
+            startFailed = false
+            model = running
+            feedOpenedWith = parts.feedOpenedWith
+            running.setResumeForegroundVisit(active: resumeVisitIsActive)
+            await loadSummary()
+            return
+        }
         guard let context = try? coordinator.ownerContext(for: machineID),
               let client = try? coordinator.remoteClient(for: context) else {
             // No way to reach the Mac yet: say so, with Try again, instead of an endless skeleton.
@@ -1317,8 +1510,10 @@ struct AidenBotSessionChatView: View {
             coordinator.botServer(on: context.instanceId)?.supportsBotRoutineModels == true
         }
         model.resumeModel = AidenBotResumeModel(botID: botID, transport: client,
+            // The model's own foreground visit (`canResumeExecution`), not this
+            // view's: a rebuilt screen's new view takes the model over.
             mayResume: { [weak model] in
-                resumeVisitIsActive && UIApplication.shared.applicationState == .active
+                UIApplication.shared.applicationState == .active
                     && coordinator.isLive(context) && coordinator.botServer(on: context.instanceId)?.supportsBotRoutineModels == true
                     && coordinator.botConnectionState(on: context.instanceId) == .connected
                     && coordinator.botInstallation(on: context.instanceId)?.canWriteBots == true
@@ -1356,14 +1551,11 @@ struct AidenBotSessionChatView: View {
         self.model = model
         composerSession.draftOwner = model
         composerSession.attachmentOwner = model
-        // Nothing waits on another: the first snapshot, the Bot's detail and the
-        // stream (with the outbox it sends) start together.
-        async let summaryLoad: Void = loadSummary()
-        async let firstLoad: Void = model.load()
-        await model.listen()
-        // Leaving stops the sending at once; the reads still finishing don't hold it up.
-        model.release()
-        _ = await (summaryLoad, firstLoad)
+        parts.feedOpenedWith = feedOpenedWith
+        // Nothing waits on another: the first snapshot, the stream (with the
+        // outbox it sends) and the Bot's detail start together.
+        parts.run(model, for: startKey)
+        await loadSummary()
     }
 
     @MainActor

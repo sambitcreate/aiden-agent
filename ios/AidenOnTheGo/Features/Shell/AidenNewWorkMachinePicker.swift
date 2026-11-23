@@ -372,6 +372,7 @@ struct AidenDefaultMachineRow: View {
     let coordinator: AidenRemoteCoordinator
 
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    @Environment(\.aidenPalette) private var palette
 
     private var selection: Binding<String> {
         Binding(
@@ -399,6 +400,10 @@ struct AidenDefaultMachineRow: View {
                 }
             }
             .accessibilityHint("New work starts here. You can pick another computer each time.")
+            // The menu button behind the value keeps the tint it was built
+            // with, so a switch between light and dark left the value in the
+            // old scheme's ink. A new accent builds a new button.
+            .id(palette.accentHex)
         }
     }
 }

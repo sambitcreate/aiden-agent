@@ -83,6 +83,15 @@ enum AidenChatScrollPolicy {
             movedAwayFromBottom: Bool = false,
             wasNearBottom: Bool = true
         )
+        /// A rebuilt or resized transcript is going back to the reader's
+        /// place (an iPhone Duo opening or closing). A rebuilt scroll view
+        /// starts at the bottom, so until the reader scrolls or asks for the
+        /// latest, landing there never turns follow on.
+        case holdPlace
+        /// The place's row is gone (its message was deleted or isn't loaded),
+        /// so there's nowhere to go back to: landing at the bottom may turn
+        /// follow on again.
+        case releasePlace
     }
 
     /// The scroll geometry one metrics report is derived from.
@@ -122,6 +131,8 @@ enum AidenChatScrollPolicy {
         /// momentum that predates the explicit action and must not switch
         /// follow off.
         var ignoresCoastingGesture = false
+        /// Set by `.holdPlace`, until the reader scrolls or asks for the latest.
+        var holdsPlace = false
     }
 
     /// Reduces one event onto the current latch state.
@@ -131,22 +142,32 @@ enum AidenChatScrollPolicy {
         case .reset:
             latch.isFollowing = true
             latch.ignoresCoastingGesture = true
+            latch.holdsPlace = false
         case .userScrollBegin:
             latch.isFollowing = false
             latch.ignoresCoastingGesture = false
+            latch.holdsPlace = false
         case .userScrollEnd(let isAtBottom):
             latch.isFollowing = isAtBottom || current.isFollowing
             latch.ignoresCoastingGesture = false
+            latch.holdsPlace = false
         case .contentScrolled(let isAtBottom, let isUserScrolling, let movedAwayFromBottom, let wasNearBottom):
             if isUserScrolling {
                 if !current.ignoresCoastingGesture {
                     latch.isFollowing = false
+                    latch.holdsPlace = false
                 }
             } else if movedAwayFromBottom {
                 latch.isFollowing = false
-            } else if isAtBottom, wasNearBottom {
+            } else if isAtBottom, wasNearBottom, !current.holdsPlace {
                 latch.isFollowing = true
             }
+        case .holdPlace:
+            latch.isFollowing = false
+            latch.ignoresCoastingGesture = false
+            latch.holdsPlace = true
+        case .releasePlace:
+            latch.holdsPlace = false
         }
         return latch
     }
@@ -197,6 +218,36 @@ enum AidenChatScrollPolicy {
 
     static func taskListAnchorID<Task: Identifiable>(_ tasks: [Task]) -> Task.ID? {
         tasks.last?.id
+    }
+}
+
+/// Where a reader scrolled away from the latest is: the row at the top of
+/// the transcript, and how far down that row the top edge falls, as a share
+/// of the row's height. A share rather than points, so the place holds when
+/// the rows reflow at another width (an iPhone Duo opening or closing).
+struct AidenReadingPlace: Equatable {
+    let rowID: String
+    let fraction: CGFloat
+
+    /// The place in rows laid out at `rows` (frames in the transcript
+    /// content's space, in transcript order) with the transcript's top edge at `top`:
+    /// the first row that reaches below it. Nil when no row does.
+    static func at(top: CGFloat, rows: [(id: String, frame: CGRect)]) -> AidenReadingPlace? {
+        guard let row = rows.first(where: { $0.frame.maxY > top }) else { return nil }
+        let fraction = (top - row.frame.minY) / max(row.frame.height, 1)
+        return AidenReadingPlace(rowID: row.id, fraction: min(max(fraction, 0), 1))
+    }
+
+    /// The anchor that brings this place to the top of a transcript
+    /// `viewHeight` tall once its row is `rowHeight` tall. Scrolling to an
+    /// anchor lines its point in the row up with the same point in the view,
+    /// so the row's top lands `y × (viewHeight − rowHeight)` below the
+    /// view's. Solving for the place's depth in the row gives `y`, which
+    /// falls outside 0...1 for a row shorter than the view. A row not
+    /// measured yet, or exactly as tall as the view, starts at the top.
+    func anchor(rowHeight: CGFloat?, viewHeight: CGFloat) -> UnitPoint {
+        guard let rowHeight, abs(rowHeight - viewHeight) > 0.5 else { return .top }
+        return UnitPoint(x: 0.5, y: fraction * rowHeight / (rowHeight - viewHeight))
     }
 }
 
@@ -256,6 +307,8 @@ final class AidenTranscriptFollowController {
     }
 
     var isFollowing: Bool { latch.isFollowing }
+    /// The transcript is going back to the reader's place (`.holdPlace`).
+    var holdsPlace: Bool { latch.holdsPlace }
 
     /// What the reader's place looked like when something started waiting.
     struct PlaceTicket {
