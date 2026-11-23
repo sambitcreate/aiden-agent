@@ -82,6 +82,9 @@ export const ANALYTICS_EVENTS = {
   design_mode_exited: {},
   design_mode_declined: {},
   design_comments_sent: { count_bucket: enumProp(...COUNT_BUCKETS) },
+  floating_chat_opened: { source: enumProp("hotkey", "command") },
+  floating_chat_expanded: { during_stream: bool, was_ephemeral: bool },
+  floating_chat_promoted: { target: enumProp("chats", "workspace") },
 
   // Approval cards. `chat` says which chat asked; it is not named `surface`,
   // which every event already carries (desktop or server).

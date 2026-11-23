@@ -13,6 +13,10 @@ import {
   NOTIFICATION_CHANNELS,
 } from "../../renderer/preload-channels.js";
 import {
+  QUICK_CHAT_INVOKE_CHANNELS,
+  QUICK_CHAT_NOTIFICATION_CHANNELS,
+} from "../../renderer/quick-chat-preload-channels.js";
+import {
   createAttachmentPreloadBridge,
   PRELOAD_MAX_ATTACHMENT_BYTES,
   PRELOAD_MAX_ATTACHMENT_PATHS,
@@ -419,6 +423,22 @@ test("live notification sites exactly match the preload notification allowlist",
     sorted(inventory.notifications),
     sorted(NOTIFICATION_CHANNELS),
     "main notification sites and preload NOTIFICATION_CHANNELS drifted",
+  );
+});
+
+test("every Quick Chat preload invoke and notification channel exists in live main inventory", () => {
+  const missingHandlers = [...QUICK_CHAT_INVOKE_CHANNELS].filter(
+    (channel) => !inventory.handlers.has(channel),
+  );
+  assert.deepEqual(missingHandlers, [], "Quick Chat invoke channels missing from main handlers");
+
+  const missingNotifications = [...QUICK_CHAT_NOTIFICATION_CHANNELS].filter(
+    (channel) => !inventory.notifications.has(channel),
+  );
+  assert.deepEqual(
+    missingNotifications,
+    [],
+    "Quick Chat notification channels missing from main notification sites",
   );
 });
 

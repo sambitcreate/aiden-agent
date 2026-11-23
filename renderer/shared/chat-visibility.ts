@@ -10,12 +10,13 @@ export interface ChatOwnerV1 {
   projectId: string;
 }
 
-export type ChatSurface = "regular" | "assistant" | "bot" | "feature";
+export type ChatSurface = "regular" | "assistant" | "bot" | "feature" | "ephemeral";
 
 export interface ChatSurfaceInput {
   workspaceId?: string;
   botId?: string;
   owner?: ChatOwnerV1;
+  ephemeral?: boolean;
 }
 
 const OWNER_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u;
@@ -38,6 +39,7 @@ export function chatSurface(chat: ChatSurfaceInput): ChatSurface {
   if (chat.owner !== undefined) return "feature";
   if (chat.botId !== undefined) return "bot";
   if (persistedChatWorkspaceId(chat.workspaceId) === ASSISTANT_WORKSPACE_ID) return "assistant";
+  if (chat.ephemeral === true) return "ephemeral";
   return "regular";
 }
 

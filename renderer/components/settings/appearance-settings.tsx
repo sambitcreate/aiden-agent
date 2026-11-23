@@ -1,6 +1,7 @@
 import { handleRadioNavigation } from "./radio-navigation";
 import { InboxDockBadgeSetting, SidebarViewPicker } from "./sidebar-view-picker";
 import { LinksSettings } from "./links-settings";
+import { QuickChatSettings } from "./quick-chat-settings";
 import * as React from "react";
 import {
   Check,
@@ -613,6 +614,7 @@ export function AppearanceSettings() {
           </Select>
         </Field>
       </FieldSet>
+      <QuickChatSettings />
       {capabilities.platform === "linux" ? (
         <FieldSet title="Window">
           <Field

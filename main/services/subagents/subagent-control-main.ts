@@ -155,6 +155,28 @@ export class SubagentControlMainV2 {
     return removed;
   }
 
+  /**
+   * Reassign registered subagent control bindings for a chat when desktop
+   * stream ownership transfers between windows.
+   */
+  rebindChatOwner(chatId: string, fromDocumentId: string, toDocumentId: string): number {
+    const count = this.registry.rebindChatOwner(chatId, fromDocumentId, toDocumentId);
+    for (const binding of this.bindings.values()) {
+      if (binding.chatId === chatId && binding.ownerDocumentId === fromDocumentId) {
+        binding.ownerDocumentId = toDocumentId;
+      }
+    }
+    for (const pending of this.pendingRetrySettlements.values()) {
+      if (pending.ownerDocumentId === fromDocumentId) {
+        const binding = this.bindings.get(pending.runId);
+        if (!binding || binding.chatId === chatId) {
+          pending.ownerDocumentId = toDocumentId;
+        }
+      }
+    }
+    return count;
+  }
+
   stateForRun(runId: string, ownerDocumentId: string): SubagentRunStateV2 | undefined {
     const binding = this.bindings.get(runId);
     if (!binding || binding.ownerDocumentId !== ownerDocumentId) return undefined;

@@ -35,7 +35,7 @@ test("Advisor receives authoritative surface, mode, executor, and tool inventory
   assert.match(hook, /executorTools: toolsBeforeAdvisor/u);
   assert.match(hook, /requestQuestionnaire:/u);
   assert.match(hook, /questionnaires\.request/u);
-  assert.match(hook, /owner\.documentId/u);
+  assert.match(hook, /(?:owner\.documentId|currentOwnerDocumentId\(\))/u);
 });
 
 test("Advisor no-replay recovery initializes at app handler startup without settings IPC", () => {

@@ -616,3 +616,29 @@ test("explicit replacement disables the previous owner atomically", () => {
   assert.equal(effectiveBinding("terminal.toggle", replaced), "Command+N");
   assert.equal(effectiveBinding("chat.new", replaced), null);
 });
+
+test("quickChat.toggle defaults to Command+Shift+Space but yields to legacy global bindings and V1 custom overrides", () => {
+  assert.equal(effectiveBinding("quickChat.toggle", undefined), "Command+Shift+Space");
+
+  // Legacy dictation / assistant chords claiming Command+Shift+Space must win over newly introduced quickChat.toggle.
+  const migratedDictation = migrateLegacyKeybindings(undefined, {
+    dictationEnabled: true,
+    dictationAccelerator: "Command+Shift+Space",
+  });
+  assert.equal(effectiveBinding("dictation.toggle", migratedDictation), "Command+Shift+Space");
+  assert.equal(effectiveBinding("quickChat.toggle", migratedDictation), null);
+
+  const migratedAssistant = migrateLegacyKeybindings(undefined, {
+    assistant: { hotkeyEnabled: true, hotkeyAccelerator: "Command+Shift+Space" },
+  });
+  assert.equal(effectiveBinding("assistant.open", migratedAssistant), "Command+Shift+Space");
+  assert.equal(effectiveBinding("quickChat.toggle", migratedAssistant), null);
+
+  // Saved V1 override using Command+Shift+Space also wins over quickChat.toggle.
+  const repairedV1 = repairKeybindingOverrides({
+    version: 1,
+    commands: { "chat.search": { binding: "Command+Shift+Space" } },
+  });
+  assert.equal(effectiveBinding("chat.search", repairedV1), "Command+Shift+Space");
+  assert.equal(effectiveBinding("quickChat.toggle", repairedV1), null);
+});

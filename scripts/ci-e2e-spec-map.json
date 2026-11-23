@@ -262,6 +262,21 @@
       "renderer/components/environment",
       "main/services/devices"
     ],
+    "floating-chat.spec.ts": [
+      "quick-chat.html",
+      "renderer/quick-chat/",
+      "renderer/preload-quick-chat.ts",
+      "renderer/quick-chat-preload",
+      "renderer/shared/quick-chat.ts",
+      "renderer/shared/chat-attach-workspace.ts",
+      "renderer/shared/chat-handoff.ts",
+      "renderer/components/attach-workspace-dialog",
+      "renderer/components/settings/quick-chat-settings",
+      "main/handlers/quick-chat",
+      "main/windows/quick-chat",
+      "main/services/desktop-stream-handoff",
+      "main/services/chat-attach-workspace"
+    ],
     "follow-through-lifecycle.spec.ts": [
       "renderer/components/follow",
       "main/services/follow-through",
