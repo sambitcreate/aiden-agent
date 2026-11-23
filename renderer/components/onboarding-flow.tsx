@@ -31,6 +31,7 @@ import { LocalProviderDialog } from "./local-provider-dialog";
 import { availableChatModel } from "../lib/provider-chat-readiness";
 import { queryKeys, useCodexProviderStatus, useProviders, useSettings } from "../lib/queries";
 import { persistModelSelection } from "../lib/use-model-selection";
+import { seedAgentSliderForModel } from "../lib/agent-slider-seed";
 import type { Provider, GeminiUsageScope } from "../lib/types";
 import {
   onboardingStepIndex,
@@ -368,6 +369,15 @@ export function OnboardingFlow({
         onboardingSnapshotRef.current = await appApi.setOnboardingProgress("provider", connected.id);
         readyProviderIdRef.current = connected.id;
         persistModelSelection(connected.id, connected.model);
+        // First run: build the Agent Slider around the model just connected.
+        // It writes only while no slider exists; a failure leaves the composer
+        // to seed it when its popover first opens.
+        void seedAgentSliderForModel(
+          providers.data?.find((provider) => provider.id === connected.id),
+          connected.id,
+          connected.model,
+          queryClient,
+        ).catch(() => undefined);
         setIndex(2);
       } catch (cause) {
         setProviderError(cause instanceof Error ? cause.message : "Couldn’t save the connection. Choose it again to retry.");

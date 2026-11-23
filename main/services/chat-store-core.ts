@@ -1573,6 +1573,8 @@ export function createChatStore(
       ephemeral?: true;
       providerId?: string;
       model?: string;
+      /** The chat's own effort, saved only with a model. */
+      thinkingLevel?: GenerationThinkingLevel;
       turnId: string;
       fingerprint: string;
       message: Pick<ChatMessage, "id" | "content" | "attachments" | "skill" | "model" | "inputSource">;
@@ -1624,6 +1626,9 @@ export function createChatStore(
           ...(input.ephemeral === true ? { ephemeral: true as const } : {}),
           providerId: await resolveProviderId(input.providerId),
           model: input.model,
+          ...(input.model && isGenerationThinkingLevel(input.thinkingLevel)
+            ? { thinkingLevel: input.thinkingLevel }
+            : {}),
           title: input.title?.trim() || deriveChatTitleSeed(message),
           createdAt: now,
           updatedAt: now,

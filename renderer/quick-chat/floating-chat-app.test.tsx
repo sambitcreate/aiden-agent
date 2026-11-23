@@ -640,16 +640,16 @@ test("external hide and reopen close already-open starter pickers and restore st
     await act(async () => {
       fireEvent.click(modelTrigger);
     });
-    await screen.findByLabelText("Filter chat models");
+    await screen.findByRole("dialog", { name: "Choose agent" });
 
     // Reopening via quickChat:opened (even without a prior quickChat:hidden) must close
-    // the mounted ModelPicker AND sync main back to compact starter mode.
+    // the mounted model popover AND sync main back to compact starter mode.
     const modeCallsBeforeReopen = calls.filter((c) => c.channel === "quickChat:setMode").length;
     await act(async () => {
       emitBotTestNotification("quickChat:opened", { source: "hotkey" });
     });
     await waitFor(() => {
-      assert.equal(screen.queryByLabelText("Filter chat models"), null);
+      assert.equal(screen.queryByRole("dialog", { name: "Choose agent" }), null);
     });
     const modeCallsAfterReopen = calls
       .filter((c) => c.channel === "quickChat:setMode")
@@ -657,11 +657,11 @@ test("external hide and reopen close already-open starter pickers and restore st
       .map((c) => c.args[0]);
     assert.deepEqual(modeCallsAfterReopen, ["starter"]);
 
-    // Clicking the ModelPicker trigger after reopen opens cleanly again.
+    // Clicking the model trigger after reopen opens cleanly again.
     await act(async () => {
       fireEvent.click(modelTrigger);
     });
-    await screen.findByLabelText("Filter chat models");
+    await screen.findByRole("dialog", { name: "Choose agent" });
   } finally {
     qc.clear();
   }
@@ -701,6 +701,63 @@ test("external hide and reopen preserve State 2 mini-modal stage and draft witho
       .filter((c) => c.channel === "quickChat:setMode")
       .slice(modeCountBeforeHide);
     assert.deepEqual(modeCallsAfterHide, []);
+  } finally {
+    qc.clear();
+  }
+});
+
+test("an Agent Slider stop picked in Quick Chat sends its effort with the first message and the turn", async () => {
+  const { calls, qc } = mountFloatingApp({
+    "settings:get": () => ({
+      lastProviderId: "lmstudio",
+      lastModel: "local-model",
+      agentSlider: {
+        version: 1,
+        homeStopId: "quick",
+        stops: [
+          { id: "quick", label: "Quick", providerId: "lmstudio", model: "local-model" },
+          { id: "deep", label: "Deep", providerId: "lmstudio", model: "local-model", thinkingLevel: "high" },
+          { id: "spare", label: "Spare" },
+        ],
+      },
+    }),
+  });
+  try {
+    const input = await screen.findByTestId("quick-chat-input");
+    const trigger = await waitFor(() => {
+      const button = screen.getByRole("button", { name: /Quick on the Agent Slider/u }) as HTMLButtonElement;
+      assert.equal(button.disabled, false);
+      return button;
+    });
+    await act(async () => {
+      fireEvent.click(trigger);
+    });
+    const slider = await screen.findByRole("slider", { name: "Agent Slider" });
+    await act(async () => {
+      fireEvent.keyDown(slider, { key: "ArrowRight" });
+    });
+    await waitFor(() =>
+      assert.match(trigger.getAttribute("aria-label") ?? "", /Deep on the Agent Slider/u),
+    );
+
+    await waitFor(() => {
+      fireEvent.change(input, { target: { value: "Think hard" } });
+      assert.equal((screen.getByTestId("quick-chat-send-btn") as HTMLButtonElement).disabled, false);
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("quick-chat-send-btn"));
+    });
+    await waitFor(() => assert.ok(calls.some((call) => call.channel === "chat:start")));
+
+    const create = calls.find((call) => call.channel === "chats:createWithFirstMessage");
+    assert.equal((create?.args[0] as { thinkingLevel?: string }).thinkingLevel, "high");
+    const start = calls.find((call) => call.channel === "chat:start");
+    assert.ok(
+      start?.args.some(
+        (arg) => typeof arg === "object" && arg !== null && (arg as { thinkingLevel?: string }).thinkingLevel === "high",
+      ),
+      "the turn asks for the stop's effort",
+    );
   } finally {
     qc.clear();
   }

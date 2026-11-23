@@ -73,12 +73,23 @@ test("core surfaces pass the WCAG A/AA axe gate and keep their accessible struct
 
   await test.step("model picker popover", async () => {
     await page.getByRole("button", { name: /^Selected model:/u }).click();
-    await page.getByRole("tab", { name: "List" }).click();
-    const picker = page
-      .getByRole("dialog")
-      .filter({
-        has: page.getByRole("tablist", { name: "Model picker view" }),
-      });
+    const picker = page.getByRole("dialog", { name: "Choose agent" });
+    await expect(picker.getByRole("slider", { name: "Agent Slider" })).toBeFocused();
+    problems.push(
+      ...(await auditAccessibility(page, {
+        surface: "agent slider",
+        include: "[data-radix-popper-content-wrapper]",
+      })),
+    );
+    await expect(picker).toMatchAriaSnapshot(`
+      - dialog "Choose agent":
+        - button /^Reset to /
+        - slider "Agent Slider"
+        - separator
+        - button /^Other models…/
+        - button "Customize slider…"
+    `);
+    await picker.getByRole("button", { name: /^Other models…/u }).click();
     await expect(
       picker.getByRole("combobox", { name: "Chat model" }),
     ).toBeFocused();
@@ -89,15 +100,17 @@ test("core surfaces pass the WCAG A/AA axe gate and keep their accessible struct
       })),
     );
     await expect(picker).toMatchAriaSnapshot(`
-      - dialog:
-        - tablist "Model picker view":
-          - tab "List" [selected]
-          - tab "Personal Model Pad"
-        - tabpanel "List":
+      - dialog "Choose agent":
+        - button "Back to slider"
+        - heading "Other models" [level=3]
+        - region "Other models":
           - combobox "Chat model" [expanded]
           - listbox "Suggestions":
             - option [selected]
     `);
+    // Escape returns to the slider first, then closes the popover.
+    await page.keyboard.press("Escape");
+    await expect(picker.getByRole("slider", { name: "Agent Slider" })).toBeFocused();
     await page.keyboard.press("Escape");
     await expect(picker).toBeHidden();
   });

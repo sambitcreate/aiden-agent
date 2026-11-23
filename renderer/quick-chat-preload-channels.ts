@@ -16,6 +16,10 @@ export const QUICK_CHAT_INVOKE_CHANNELS = new Set([
   "app:getInfo",
   "settings:get",
   "settings:getAppearance",
+  // The Agent Slider in the composer popover: the first-run seed and a
+  // stop's reassignment (portable config.json only, never settings:set).
+  "settings:setAgentSlider",
+  "settings:seedAgentSlider",
   "shortcut:get",
 
   // Providers & models (read-only for ModelPicker + runtime)
@@ -75,6 +79,8 @@ export const QUICK_CHAT_NOTIFICATION_CHANNELS = new Set([
   // Appearance & settings sync
   "settings:appearance-changed",
   "settings:controls-changed",
+  // ~/.aiden/config.json changed outside the app: the Agent Slider may have.
+  "app:config-externally-changed",
   "aiden:theme:changed",
 
   // Active generation stream notifications

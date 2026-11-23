@@ -152,6 +152,8 @@ import {
 } from "../components/subagent-composer-pill";
 import { BtwCard, reduceBtwView, type BtwLiveView } from "../components/btw-card";
 import { ModelPicker } from "../components/model-picker";
+import { AgentModelPopover } from "../components/agent-model-popover";
+import { agentSliderComposerState, agentSliderStepTarget } from "../lib/agent-slider-view";
 import { RemoteMachinePicker } from "../components/remote-new-chat-pickers";
 import { useNewChatMachines } from "../lib/hosts/use-new-chat-machines";
 import {
@@ -536,10 +538,13 @@ export function ChatPane({ chatId }: { chatId: string }) {
   const selectAppModel = appModel.select;
   // The latest pick per chat, so an older pick's answer never replaces a newer one.
   const chatModelPicksRef = React.useRef(new Map<string, number>());
+  // `level`: an Agent Slider stop's effort (null or a stop without one clears
+  // the chat's own level); left out, a list pick keeps the level only while
+  // the model stays the same.
   const select = React.useCallback(
-    (nextProviderId: string, nextModel: string) => {
+    (nextProviderId: string, nextModel: string, level?: GenerationThinkingLevel | null) => {
       if (!chatOwnsModel) {
-        selectAppModel(nextProviderId, nextModel);
+        selectAppModel(nextProviderId, nextModel, level ?? undefined);
         return;
       }
       const key = queryKeys.chat(chatId);
@@ -570,11 +575,12 @@ export function ChatPane({ chatId }: { chatId: string }) {
           withModel({
             providerId: nextProviderId,
             model: nextModel,
-            thinkingLevel: sameModel ? current?.thinkingLevel : undefined,
+            thinkingLevel:
+              level === undefined ? (sameModel ? current?.thinkingLevel : undefined) : (level ?? undefined),
           }),
         );
         try {
-          const saved = await chatsApi.setModel(chatId, nextProviderId, nextModel);
+          const saved = await chatsApi.setModel(chatId, nextProviderId, nextModel, level);
           // A read that overlapped the save may still carry the old model.
           if (saved && isLatestPick()) qc.setQueryData<Chat | null>(key, withModel(saved));
           void qc.invalidateQueries({ queryKey: queryKeys.chats });
@@ -612,6 +618,19 @@ export function ChatPane({ chatId }: { chatId: string }) {
           : (providers.data ?? []),
     [agentBlockedSurface, providers.data, settings.data],
   );
+  // On an Agent Slider stop the stop sets the effort, so the effort control
+  // hides; Custom (no stop matches) shows it as before.
+  const agentSlider = settings.data?.agentSlider;
+  const agentSliderState = React.useMemo(
+    () =>
+      agentSliderComposerState(
+        agentSlider,
+        { providers: pickerProviders, hiddenModelsByProvider: settings.data?.hiddenModelsByProvider },
+        { providerId, model, thinkingLevel: selectionThinkingLevel },
+      ),
+    [agentSlider, pickerProviders, settings.data?.hiddenModelsByProvider, providerId, model, selectionThinkingLevel],
+  );
+  const onAgentSliderStop = agentSliderState ? !agentSliderState.position.custom : false;
   const modelReadinessMessage = React.useMemo(() => {
     if (providers.isLoading) return "Loading chat models…";
     if (!selectedProvider) {
@@ -1265,6 +1284,22 @@ export function ChatPane({ chatId }: { chatId: string }) {
     effectiveWorkspaceId,
     activeChatIds.has(chatId),
   );
+  const modelChangeBlocked = isGenerating || isStartingGeneration || thinkingSaving;
+  // In Custom a chat can still carry its own level; the effort control shows
+  // it while the model's family offers it, since that is what the turn sends.
+  const ownLevelIn = <Level extends GenerationThinkingLevel>(levels: readonly Level[]): Level | undefined =>
+    selectionThinkingLevel && (levels as readonly GenerationThinkingLevel[]).includes(selectionThinkingLevel)
+      ? (selectionThinkingLevel as Level)
+      : undefined;
+  const stepAgentSlider = (direction: 1 | -1) => {
+    if (chat.data?.botId || modelChangeBlocked || getChatDraft(chatId)?.sending) return;
+    const target = agentSliderStepTarget(agentSliderState, direction);
+    if (target?.providerId && target.model) {
+      select(target.providerId, target.model, target.thinkingLevel ?? null);
+    }
+  };
+  useCommandHandler("agentSlider.next", () => stepAgentSlider(1), !chat.data?.botId);
+  useCommandHandler("agentSlider.previous", () => stepAgentSlider(-1), !chat.data?.botId);
   const thinkingDisabledReason =
     isStartingGeneration || isGenerating
       ? "Available after this response"
@@ -2304,6 +2339,9 @@ export function ChatPane({ chatId }: { chatId: string }) {
                 ...(firstDraft.chat.ephemeral ? { ephemeral: true as const } : {}),
                 providerId,
                 model,
+                // The new-chat pick's stop effort becomes the chat's own level,
+                // so later turns keep it instead of the per-model setting.
+                ...(selectionThinkingLevel ? { thinkingLevel: selectionThinkingLevel } : {}),
                 turnId: messageTurnId,
                 message: {
                   role: "user" as const,
@@ -2510,6 +2548,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
       imageArtifactRecoveryUnavailable,
       providerId,
       model,
+      selectionThinkingLevel,
       qc,
       runGeneration,
       selectWorkspace,
@@ -3104,6 +3143,13 @@ export function ChatPane({ chatId }: { chatId: string }) {
     ],
   );
 
+  // The composer's effort control saves the model's level. A level the chat
+  // carries itself (from a slider stop, or the new-chat pick) would override
+  // it, so changing the effort in Custom drops that level too.
+  const clearOwnThinkingLevel = React.useCallback(() => {
+    if (selectionThinkingLevel && providerId && model) select(providerId, model, null);
+  }, [model, providerId, select, selectionThinkingLevel]);
+
   const changeGoogleThinking = React.useCallback(
     async (level: GoogleThinkingLevel) => {
       if (
@@ -3119,6 +3165,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
       try {
         const updated = await settingsApi.setGoogleThinking(model, level);
         qc.setQueryData(queryKeys.settings, updated);
+        clearOwnThinkingLevel();
       } catch (changeError) {
         toast.error(
           changeError instanceof Error
@@ -3129,7 +3176,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
         setThinkingSaving(false);
       }
     },
-    [googleThinkingSupported, isGenerating, isStartingGeneration, model, qc, thinkingSaving],
+    [clearOwnThinkingLevel, googleThinkingSupported, isGenerating, isStartingGeneration, model, qc, thinkingSaving],
   );
 
   const changeCodexThinking = React.useCallback(
@@ -3147,6 +3194,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
       try {
         const updated = await settingsApi.setCodexThinking(model, level);
         qc.setQueryData(queryKeys.settings, updated);
+        clearOwnThinkingLevel();
       } catch (changeError) {
         toast.error(
           changeError instanceof Error
@@ -3157,7 +3205,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
         setThinkingSaving(false);
       }
     },
-    [codexThinkingSupported, isGenerating, isStartingGeneration, model, qc, thinkingSaving],
+    [clearOwnThinkingLevel, codexThinkingSupported, isGenerating, isStartingGeneration, model, qc, thinkingSaving],
   );
 
   const changeAnthropicThinking = React.useCallback(
@@ -3175,6 +3223,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
       try {
         const updated = await settingsApi.setAnthropicThinking(model, level);
         qc.setQueryData(queryKeys.settings, updated);
+        clearOwnThinkingLevel();
       } catch (changeError) {
         toast.error(
           changeError instanceof Error
@@ -3185,7 +3234,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
         setThinkingSaving(false);
       }
     },
-    [anthropicThinkingSupported, isGenerating, isStartingGeneration, model, qc, thinkingSaving],
+    [anthropicThinkingSupported, clearOwnThinkingLevel, isGenerating, isStartingGeneration, model, qc, thinkingSaving],
   );
 
   const changeProviderThinking = React.useCallback(
@@ -3202,6 +3251,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
       try {
         const updated = await settingsApi.setProviderThinking(providerId, model, level);
         qc.setQueryData(queryKeys.settings, updated);
+        clearOwnThinkingLevel();
       } catch (changeError) {
         toast.error(
           changeError instanceof Error
@@ -3213,6 +3263,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
       }
     },
     [
+      clearOwnThinkingLevel,
       isGenerating,
       isStartingGeneration,
       model,
@@ -4716,9 +4767,15 @@ export function ChatPane({ chatId }: { chatId: string }) {
                 onCancelCompact={draft ? undefined : () => chatsApi.cancelCompact(chatId)}
                 onLogoutProvider={logoutProvider}
                 thinkingControl={
-                  googleThinkingSupported ? (
+                  onAgentSliderStop && !localReasoningVisibilitySupported ? undefined : onAgentSliderStop ? (
+                    <ReasoningVisibilityControl
+                      visible={showLocalModelReasoning}
+                      disabled={thinkingSaving || isStartingGeneration || isGenerating}
+                      onChange={(visible) => void changeLocalReasoningVisibility(visible)}
+                    />
+                  ) : googleThinkingSupported ? (
                     <ThinkingControl
-                      level={googleThinkingLevel}
+                      level={ownLevelIn(googleThinkingLevels) ?? googleThinkingLevel}
                       levels={googleThinkingLevels}
                       canDisable={thinkingMetadata?.thinkingCanDisable !== false}
                       disabled={thinkingSaving || isStartingGeneration || isGenerating}
@@ -4728,7 +4785,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
                   ) : codexThinkingSupported ? (
                     <ThinkingControl
                       providerLabel="Codex"
-                      level={codexThinkingLevel}
+                      level={ownLevelIn(codexThinkingLevels) ?? codexThinkingLevel}
                       levels={codexThinkingLevels}
                       disabled={thinkingSaving || isStartingGeneration || isGenerating}
                       disabledReason={thinkingDisabledReason}
@@ -4737,7 +4794,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
                   ) : anthropicThinkingSupported ? (
                     <ThinkingControl
                       providerLabel="Claude"
-                      level={anthropicThinkingLevel}
+                      level={ownLevelIn(anthropicThinkingLevels) ?? anthropicThinkingLevel}
                       levels={anthropicThinkingLevels}
                       canDisable={thinkingMetadata?.thinkingCanDisable !== false}
                       disabled={thinkingSaving || isStartingGeneration || isGenerating}
@@ -4747,7 +4804,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
                   ) : providerThinkingSupported ? (
                     <ThinkingControl
                       providerLabel={selectedProvider?.label ?? "Model"}
-                      level={providerThinkingLevel}
+                      level={ownLevelIn(providerThinkingLevels) ?? providerThinkingLevel}
                       levels={providerThinkingLevels}
                       canDisable={selectedProvider?.kind === "openai" && customModelThinkingLevels(thinkingMetadata?.overrides)
                         ? providerThinkingLevels.includes("off") : thinkingMetadata?.thinkingCanDisable !== false}
@@ -4786,17 +4843,44 @@ export function ChatPane({ chatId }: { chatId: string }) {
                   draft ? undefined : contextHistory.chatId === chatId ? contextHistory.pressure : null
                 }
                 modelPicker={
-                  <ModelPicker
-                    providers={pickerProviders}
-                    providerId={providerId}
-                    model={model}
-                    onChange={(nextProviderId, nextModel) => {
-                      if (!getChatDraft(chatId)?.sending) select(nextProviderId, nextModel);
-                    }}
-                    disabled={isGenerating || isStartingGeneration || thinkingSaving}
-                    settingsBlockedReason={settingsBlockedReason}
-                    hiddenModelsByProvider={settings.data?.hiddenModelsByProvider}
-                  />
+                  chat.data?.botId ? (
+                    // A Bot's chat keeps the plain list: its model is the Bot's, not a slider stop.
+                    <ModelPicker
+                      providers={pickerProviders}
+                      providerId={providerId}
+                      model={model}
+                      onChange={(nextProviderId, nextModel) => {
+                        if (!getChatDraft(chatId)?.sending) select(nextProviderId, nextModel);
+                      }}
+                      disabled={modelChangeBlocked}
+                      settingsBlockedReason={settingsBlockedReason}
+                      hiddenModelsByProvider={settings.data?.hiddenModelsByProvider}
+                    />
+                  ) : (
+                    <AgentModelPopover
+                      providers={pickerProviders}
+                      providerId={providerId}
+                      model={model}
+                      thinkingLevel={selectionThinkingLevel}
+                      slider={agentSlider}
+                      settingsLoaded={settings.data !== undefined}
+                      seedThinkingLevel={turnThinkingLevel(selectionThinkingLevel, {
+                        google: { supported: googleThinkingSupported, level: googleThinkingLevel },
+                        codex: { supported: codexThinkingSupported, level: codexThinkingLevel },
+                        anthropic: { supported: anthropicThinkingSupported, level: anthropicThinkingLevel },
+                        provider: { supported: providerThinkingSupported, level: providerThinkingLevel },
+                      })}
+                      onChange={(nextProviderId, nextModel) => {
+                        if (!getChatDraft(chatId)?.sending) select(nextProviderId, nextModel);
+                      }}
+                      onSelectStop={(nextProviderId, nextModel, level) => {
+                        if (!getChatDraft(chatId)?.sending) select(nextProviderId, nextModel, level ?? null);
+                      }}
+                      disabled={modelChangeBlocked}
+                      settingsBlockedReason={settingsBlockedReason}
+                      hiddenModelsByProvider={settings.data?.hiddenModelsByProvider}
+                    />
+                  )
                 }
               />
             )}

@@ -40,6 +40,7 @@ import {
   providersApi,
   quickChatApi,
   settingsApi,
+  shortcutApi,
   startGeneration,
   workspacesApi,
   type ApprovalPrompt,
@@ -51,7 +52,9 @@ import { applyChatMetadataUpdate } from "../shared/chat-metadata-update";
 import type { GenerationThinkingLevel } from "../shared/generation-thinking";
 import { isNoWorkspace, noWorkspaceHome, workspaceChoices } from "../lib/no-workspace";
 import { resolveVisibleModelSelection } from "../lib/use-model-selection";
-import { isEscapeKey } from "../lib/dismiss-key";
+import { isComposingKey, isEscapeKey } from "../lib/dismiss-key";
+import { agentSliderComposerState, agentSliderStepTarget } from "../lib/agent-slider-view";
+import { matchesAccelerator, type KeybindingSnapshot } from "../shared/keybindings";
 import { hasOpenLayer } from "../lib/layer-stack";
 import { reduceVisualDrafts, type VisualDrafts } from "../lib/html-artifact-transcript";
 import { reduceUiDrafts, reduceUiVisuals, type UiDrafts } from "../lib/ui-visual-transcript";
@@ -110,7 +113,13 @@ export function FloatingChatApp() {
   const [targetMode, setTargetMode] = React.useState<QuickChatTargetMode>({ kind: "ephemeral" });
   const targetModeTouchedRef = React.useRef(false);
 
-  const [selectedModel, setSelectedModel] = React.useState<{ providerId: string; model: string }>({
+  // `thinkingLevel` is set only by an Agent Slider stop (or the main window's
+  // new-chat pick); a model from the list runs at its saved level.
+  const [selectedModel, setSelectedModel] = React.useState<{
+    providerId: string;
+    model: string;
+    thinkingLevel?: GenerationThinkingLevel;
+  }>({
     providerId: "",
     model: "",
   });
@@ -141,7 +150,15 @@ export function FloatingChatApp() {
       settings?.hiddenModelsByProvider,
     );
     if (resolved?.providerId && resolved.model) {
-      setSelectedModel(resolved);
+      const level =
+        resolved.providerId === saved.providerId && resolved.model === saved.model
+          ? settings?.lastThinkingLevel
+          : undefined;
+      setSelectedModel({
+        providerId: resolved.providerId,
+        model: resolved.model,
+        ...(level ? { thinkingLevel: level } : {}),
+      });
     }
   }, [providers, settings]);
 
@@ -297,14 +314,74 @@ export function FloatingChatApp() {
     const offControls = onNotification("settings:controls-changed", () => {
       void qc.invalidateQueries({ queryKey: queryKeys.settings });
     });
+    // A hand edit of config.json (the Agent Slider among it) reaches this window too.
+    const offConfig = onNotification("app:config-externally-changed", () => {
+      void qc.invalidateQueries({ queryKey: queryKeys.settings });
+    });
     return () => {
       offOpened();
       offHidden();
       offHandoff();
       offMeta();
       offControls();
+      offConfig();
     };
   }, [dismissStarterPopovers, qc, resetToStarter]);
+
+  // The Agent Slider step shortcuts (⌥⌘[ / ⌥⌘] unless rebound). Quick Chat has
+  // no command system, so it reads the bindings when the window opens.
+  const [shortcutBindings, setShortcutBindings] = React.useState<KeybindingSnapshot["effective"] | null>(null);
+  React.useEffect(() => {
+    let live = true;
+    const load = () =>
+      void shortcutApi.get().then(
+        (snapshot) => {
+          if (live) setShortcutBindings(snapshot.effective);
+        },
+        () => undefined,
+      );
+    load();
+    const offOpened = onNotification("quickChat:opened", load);
+    return () => {
+      live = false;
+      offOpened();
+    };
+  }, []);
+  const agentSliderState = React.useMemo(
+    () =>
+      agentSliderComposerState(
+        settings?.agentSlider,
+        { providers, hiddenModelsByProvider: settings?.hiddenModelsByProvider },
+        selectedModel,
+      ),
+    [settings?.agentSlider, settings?.hiddenModelsByProvider, providers, selectedModel],
+  );
+  const selectAgentSliderStop = React.useCallback(
+    (providerId: string, model: string, thinkingLevel: GenerationThinkingLevel | undefined) => {
+      modelTouchedRef.current = true;
+      setSelectedModel({ providerId, model, ...(thinkingLevel ? { thinkingLevel } : {}) });
+    },
+    [],
+  );
+  React.useEffect(() => {
+    if (!shortcutBindings) return;
+    const next = shortcutBindings["agentSlider.next"];
+    const previous = shortcutBindings["agentSlider.previous"];
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.defaultPrevented || event.repeat || isComposingKey(event)) return;
+      const direction =
+        next && matchesAccelerator(event, next) ? 1 : previous && matchesAccelerator(event, previous) ? -1 : 0;
+      if (direction === 0) return;
+      event.preventDefault();
+      if (isGenerating || sending) return;
+      const target = agentSliderStepTarget(agentSliderState, direction);
+      if (target?.providerId && target.model) {
+        selectAgentSliderStop(target.providerId, target.model, target.thinkingLevel);
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown, true);
+    return () => window.removeEventListener("keydown", handleKeyDown, true);
+  }, [agentSliderState, isGenerating, selectAgentSliderStop, sending, shortcutBindings]);
 
   // Global Escape handler: close popovers/dialogs first, then hide floating window.
   React.useEffect(() => {
@@ -326,7 +403,7 @@ export function FloatingChatApp() {
     (
       activeChat: Chat,
       turnId: string,
-      modelChoice: { providerId: string; model: string },
+      modelChoice: { providerId: string; model: string; thinkingLevel?: GenerationThinkingLevel },
     ) => {
       const intent = (generationIntentRef.current += 1);
       streamedTextRef.current = "";
@@ -349,6 +426,7 @@ export function FloatingChatApp() {
           providerId: modelChoice.providerId,
           model: modelChoice.model,
           inlineVisuals: "automatic",
+          ...(modelChoice.thinkingLevel ? { thinkingLevel: modelChoice.thinkingLevel } : {}),
         },
         {
           onDelta: (delta) => {
@@ -557,6 +635,7 @@ export function FloatingChatApp() {
           title: content.slice(0, 48) || "Quick Chat",
           providerId: selectedModel.providerId,
           model: selectedModel.model,
+          ...(selectedModel.thinkingLevel ? { thinkingLevel: selectedModel.thinkingLevel } : {}),
           messages: [
             {
               id: `optimistic-${turnId}`,
@@ -577,6 +656,7 @@ export function FloatingChatApp() {
           ...(targetMode.kind === "ephemeral" ? { ephemeral: true as const } : {}),
           providerId: selectedModel.providerId,
           model: selectedModel.model,
+          ...(selectedModel.thinkingLevel ? { thinkingLevel: selectedModel.thinkingLevel } : {}),
           turnId,
           message: {
             role: "user",
@@ -840,6 +920,10 @@ export function FloatingChatApp() {
               modelTouchedRef.current = true;
               setSelectedModel({ providerId, model });
             }}
+            thinkingLevel={selectedModel.thinkingLevel}
+            agentSlider={settings?.agentSlider}
+            settingsLoaded={settings !== undefined}
+            onSelectStop={selectAgentSliderStop}
             hiddenModelsByProvider={settings?.hiddenModelsByProvider}
             workspaces={workspaces}
             targetMode={targetMode}
@@ -1110,6 +1194,10 @@ export function FloatingChatApp() {
               modelTouchedRef.current = true;
               setSelectedModel({ providerId, model });
             }}
+            thinkingLevel={selectedModel.thinkingLevel}
+            agentSlider={settings?.agentSlider}
+            settingsLoaded={settings !== undefined}
+            onSelectStop={selectAgentSliderStop}
             hiddenModelsByProvider={settings?.hiddenModelsByProvider}
             workspaces={workspaces}
             targetMode={targetMode}

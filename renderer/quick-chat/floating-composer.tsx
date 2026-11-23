@@ -1,7 +1,7 @@
 // Floating composer shared between State 1 (compact starter bar) and State 2
 // (docked mini-modal composer). Supports + file/image attach, clipboard image
 // paste, drag-and-drop, inline target mode selector (Temporary / No workspace /
-// workspace), ModelPicker, and voice mic (useVoiceRecorder).
+// workspace), the Agent Slider model popover, and voice mic (useVoiceRecorder).
 
 import * as React from "react";
 import {
@@ -31,7 +31,9 @@ import {
   Text,
   toast,
 } from "../components/ui";
-import { ModelPicker } from "../components/model-picker";
+import { AgentModelPopover } from "../components/agent-model-popover";
+import type { AgentSliderSettings } from "../shared/agent-slider";
+import type { GenerationThinkingLevel } from "../shared/generation-thinking";
 import { cn } from "../lib/ui-utils";
 import { attachmentsApi, quickChatApi, workspacesApi } from "../lib/ipc";
 import { useVoiceRecorder } from "../lib/use-voice-recorder";
@@ -59,6 +61,16 @@ export interface FloatingComposerProps {
   providerId: string;
   model: string;
   onModelChange: (providerId: string, model: string) => void;
+  /** The pick's own effort, from an Agent Slider stop. */
+  thinkingLevel?: GenerationThinkingLevel;
+  agentSlider?: AgentSliderSettings;
+  settingsLoaded: boolean;
+  /** An Agent Slider stop: its model and effort. */
+  onSelectStop: (
+    providerId: string,
+    model: string,
+    thinkingLevel: GenerationThinkingLevel | undefined,
+  ) => void;
   hiddenModelsByProvider?: HiddenModelsByProvider;
   workspaces: Workspace[];
   targetMode: QuickChatTargetMode;
@@ -104,6 +116,10 @@ export function FloatingComposer({
   providerId,
   model,
   onModelChange,
+  thinkingLevel,
+  agentSlider,
+  settingsLoaded,
+  onSelectStop,
   hiddenModelsByProvider,
   workspaces,
   targetMode,
@@ -510,18 +526,22 @@ export function FloatingComposer({
         </div>
 
         <div className="flex min-w-0 flex-1 items-center justify-end gap-1">
-          <ModelPicker
+          <AgentModelPopover
             providers={providers}
             providerId={providerId}
             model={model}
+            thinkingLevel={thinkingLevel}
+            slider={agentSlider}
+            settingsLoaded={settingsLoaded}
             onChange={onModelChange}
+            onSelectStop={onSelectStop}
             disabled={isGenerating}
             hiddenModelsByProvider={hiddenModelsByProvider}
             onOpenSettings={(section) => void quickChatApi.openSettings(section)}
             beforeOpen={onBeforePopoverOpen}
             onOpenChange={handleModelOpenChange}
             closeSignal={popoverResetSeq}
-            listOnly
+            showDetails={false}
           />
 
           <Button

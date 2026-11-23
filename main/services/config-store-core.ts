@@ -1315,6 +1315,27 @@ export function createConfigStore(
     },
 
     /**
+     * Save a first-run slider only while config.json holds none at all. The
+     * check runs inside the same portable update as the write, so two windows
+     * seeding at once leave one slider, and a malformed hand edit (which
+     * reads back as no slider) is never overwritten. Returns the current
+     * settings either way.
+     */
+    async seedAgentSlider(
+      value: unknown,
+      isCurrent: () => boolean = () => true,
+    ): Promise<AppSettings> {
+      const slider = parseAgentSliderPatch(value);
+      await mutatePortable((config) => {
+        if (config.agentSlider !== undefined) return;
+        const resolveId = (id: string): string =>
+          resolveProviderAlias(config.providerIdAliases, id) ?? migrateLegacyPiProviderId(id) ?? id;
+        config.agentSlider = withResolvedStopProviders(slider, resolveId);
+      }, isCurrent);
+      return publicSettings((await settingsStore.load()).settings);
+    },
+
+    /**
      * Commit Gemini's purpose and Voice selection together. The visibility
      * sentinel hides future Google chat models too, without making a model
      * pinned by an existing chat unexecutable.

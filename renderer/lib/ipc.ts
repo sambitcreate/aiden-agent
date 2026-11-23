@@ -1844,6 +1844,8 @@ export const chatsApi = {
     ephemeral?: true;
     providerId?: string;
     model?: string;
+    /** The new-chat pick's effort (an Agent Slider stop), saved on the chat with its model. */
+    thinkingLevel?: import("../shared/generation-thinking").GenerationThinkingLevel;
     turnId: string;
     message: { role: "user"; content: string; attachments?: Attachment[] };
     skillInvocation?: SkillInvocationV1;
@@ -1863,6 +1865,7 @@ export const chatsApi = {
     workspaceId: string;
     providerId?: string;
     model?: string;
+    thinkingLevel?: import("../shared/generation-thinking").GenerationThinkingLevel;
     turnId: string;
     message: { role: "user"; content: string; attachments?: Attachment[] };
     skillInvocation?: SkillInvocationV1;
