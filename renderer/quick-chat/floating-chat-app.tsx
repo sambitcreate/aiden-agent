@@ -169,7 +169,14 @@ export function FloatingChatApp() {
   const [text, setText] = React.useState("");
   const [attachments, setAttachments] = React.useState<Attachment[]>([]);
   const [chat, setChat] = React.useState<Chat | null>(null);
-  const [sending, setSending] = React.useState(false);
+  const [sending, setSendingState] = React.useState(false);
+  // Read synchronously by model picks: once Send starts, a pick can't overtake
+  // the selection that send captured.
+  const sendingRef = React.useRef(false);
+  const setSending = React.useCallback((value: boolean) => {
+    sendingRef.current = value;
+    setSendingState(value);
+  }, []);
   const [queuedMessages, setQueuedMessages] = React.useState<HandoffQueuedMessage[]>([]);
 
   // Live streaming state
@@ -382,6 +389,9 @@ export function FloatingChatApp() {
   const pendingSelectionRef = React.useRef<Promise<QuickChatSelection> | null>(null);
   const applySelection = React.useCallback(
     (providerId: string, model: string, level?: GenerationThinkingLevel | null) => {
+      // A send in flight already captured its selection; a pick now would let
+      // the turn and the chat's saved model and effort disagree.
+      if (sendingRef.current) return;
       modelTouchedRef.current = true;
       const picked: QuickChatSelection = { providerId, model, ...(level ? { thinkingLevel: level } : {}) };
       setSelectedModel(picked);
