@@ -96,24 +96,54 @@ function textRow(
 }
 
 /**
- * Main stamps a new step at the full streamed length before the renderer's
- * frame-buffered text delta lands, so a live step can briefly point past the
- * visible text. Pin such offsets to the visible end so the chronological
- * layout (and any visual mounted in it) holds still until the text catches up.
+ * Main stamps a step at the full streamed length before the renderer's
+ * frame-buffered text or reasoning delta lands, so a live step can briefly
+ * point past what is shown. Pin such offsets to the shown end so the
+ * chronological layout (and any visual mounted in it) holds still until the
+ * deltas catch up, instead of falling back to the activity-first layout for a
+ * frame.
  */
 export function clampLiveTimelineToContent(
   timeline: GenerationTimeline | null | undefined,
   contentLength: number,
+  reasoningLength = Number.POSITIVE_INFINITY,
 ): GenerationTimeline | null | undefined {
-  if (!timeline?.steps.some((step) => (step.contentOffset ?? 0) > contentLength)) return timeline;
+  const ahead = (offset: number | undefined, length: number) => offset !== undefined && offset > length;
+  const reasoningAhead = (step: AgentStep) =>
+    !isToolStep(step) && (ahead(step.reasoningStartOffset, reasoningLength) || ahead(step.reasoningEndOffset, reasoningLength));
+  if (!timeline?.steps.some((step) => ahead(step.contentOffset, contentLength) || reasoningAhead(step))) return timeline;
   return {
     ...timeline,
-    steps: timeline.steps.map((step) =>
-      step.contentOffset !== undefined && step.contentOffset > contentLength
-        ? { ...step, contentOffset: contentLength }
-        : step,
-    ),
+    steps: timeline.steps.map((step) => {
+      const contentOffset = ahead(step.contentOffset, contentLength) ? contentLength : step.contentOffset;
+      if (isToolStep(step) || !reasoningAhead(step)) {
+        return contentOffset === step.contentOffset ? step : { ...step, contentOffset };
+      }
+      return {
+        ...step,
+        ...(contentOffset === undefined ? {} : { contentOffset }),
+        ...(step.reasoningStartOffset === undefined
+          ? {}
+          : { reasoningStartOffset: Math.min(step.reasoningStartOffset, reasoningLength) }),
+        ...(step.reasoningEndOffset === undefined
+          ? {}
+          : { reasoningEndOffset: Math.min(step.reasoningEndOffset, reasoningLength) }),
+      };
+    }),
   };
+}
+
+/** The rows of a reply that is still streaming, tolerant of deltas a frame behind its timeline. */
+export function liveAssistantPresentationRows(
+  content: string,
+  timeline: GenerationTimeline | null | undefined,
+  reasoning = "",
+): AssistantPresentationRow[] | null {
+  return assistantPresentationRows(
+    content,
+    clampLiveTimelineToContent(timeline, content.length, reasoning.length),
+    reasoning,
+  );
 }
 
 /**

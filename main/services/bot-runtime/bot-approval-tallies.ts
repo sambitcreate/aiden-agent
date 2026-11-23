@@ -2,13 +2,13 @@
 // Receipts are never collected until the host can prove their tasks settled.
 import * as fs from "node:fs/promises";
 import path from "node:path";
-import { botApprovalRuleKey, type BotApprovalRuleTarget } from "../../../renderer/shared/tool-approval-scope.js";
+import { BOT_APPROVAL_REPEAT_COUNT, botApprovalRuleKey, type BotApprovalRuleTarget } from "../../../renderer/shared/tool-approval-scope.js";
 import { botSessionDirectory, createKeyedSerial } from "../bot-routine-notes.js";
 import { syncDirectory, writeJsonAtomic } from "../durable-fs.js";
 import { readRegularUtf8File } from "../regular-file-read.js";
 
 export const BOT_APPROVAL_TALLIES_FILE = "approval-tallies.json";
-export const BOT_APPROVAL_NUDGE_THRESHOLD = 3;
+export const BOT_APPROVAL_NUDGE_THRESHOLD = BOT_APPROVAL_REPEAT_COUNT;
 export const BOT_APPROVAL_NUDGE_WINDOW_MS = 14 * 24 * 60 * 60 * 1000;
 export const BOT_APPROVAL_HINT_COOLDOWN_MS = 7 * 24 * 60 * 60 * 1000;
 

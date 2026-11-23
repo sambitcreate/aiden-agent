@@ -43,6 +43,8 @@ const iosAssetCatalogDirectory = fileURLToPath(
 const appSourcePaths = [
   "AidenOnTheGo/AidenOnTheGoApp.swift",
   "AidenOnTheGo/AppIntents/AidenAppIntents.swift",
+  "AidenOnTheGo/AppIntents/AidenHomeActionIntent.swift",
+  "AidenOnTheGo/AppIntents/AidenQuickActions.swift",
   "AidenOnTheGo/Auth/KeychainStore.swift",
   "AidenOnTheGo/Config/AidenAppearance.swift",
   "AidenOnTheGo/Config/AidenChromeGlass.swift",
@@ -327,6 +329,7 @@ const testSources = [
   "AidenComposerSurfaceTests.swift",
   "AidenInboxTests.swift",
   "AidenNativeIntegrationTests.swift",
+  "AidenHomeActionsTests.swift",
   "AidenNetworkPathTests.swift",
   "AidenAppShellTests+Bots.swift",
   "AidenRemoteClientTests.swift",
@@ -360,6 +363,8 @@ const widgetSources = [
   "AidenRunsSummaryActivityAttributes.swift",
   "AidenDeepLink.swift",
   "AidenApprovalIntents.swift",
+  "AidenHomeActionIntent.swift",
+  "AidenQuickActionsWidget.swift",
   "AgentRunLiveActivityWidget.swift",
   "AidenRunsSummaryLiveActivityWidget.swift",
 ];

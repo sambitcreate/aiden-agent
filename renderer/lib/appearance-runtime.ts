@@ -200,6 +200,21 @@ export function effectiveAppearanceScheme(
   return nativeUsesDarkColors ? "dark" : "light";
 }
 
+/** The scheme this window is drawn in right now, from `:root[data-appearance-scheme]`; the system's before any appearance is applied. */
+export function readAppliedAppearanceScheme(): AppearanceScheme {
+  const applied = typeof document === "undefined" ? undefined : document.documentElement.dataset.appearanceScheme;
+  if (applied === "light" || applied === "dark") return applied;
+  return systemUsesDarkColors() ? "dark" : "light";
+}
+
+/** Calls `onChange` whenever the window's applied light or dark scheme attribute changes. */
+export function subscribeAppliedAppearanceScheme(onChange: () => void): () => void {
+  if (typeof document === "undefined" || typeof MutationObserver === "undefined") return () => undefined;
+  const observer = new MutationObserver(onChange);
+  observer.observe(document.documentElement, { attributes: true, attributeFilter: ["data-appearance-scheme"] });
+  return () => observer.disconnect();
+}
+
 export function readCachedAppearance(): AppearanceConfig | null {
   if (typeof localStorage === "undefined") return null;
   try {

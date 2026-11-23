@@ -266,6 +266,7 @@ struct AidenForkableChatDetailView: View {
     /// The machine the chat belongs to.
     let owner: AidenRemoteRequestContext
     var autoStartVoice = false
+    var autoStartCamera = false
     var onChatUpdated: @MainActor (AidenChat) -> Void = { _ in }
     var onChatActivityChanged: @MainActor (String, AidenChatSummaryActivity) -> Void = { _, _ in }
     /// List bookkeeping for a fork that just opened; navigation happens here.
@@ -279,6 +280,7 @@ struct AidenForkableChatDetailView: View {
             chat: chat,
             owner: owner,
             autoStartVoice: autoStartVoice,
+            autoStartCamera: autoStartCamera,
             trail: $trail,
             onChatUpdated: onChatUpdated,
             onChatActivityChanged: onChatActivityChanged,
@@ -297,6 +299,7 @@ private struct AidenChatForkLevel: View {
     let chat: AidenChat
     let owner: AidenRemoteRequestContext
     let autoStartVoice: Bool
+    let autoStartCamera: Bool
     @Binding var trail: AidenChatForkTrail
     let onChatUpdated: @MainActor (AidenChat) -> Void
     let onChatActivityChanged: @MainActor (String, AidenChatSummaryActivity) -> Void
@@ -308,6 +311,7 @@ private struct AidenChatForkLevel: View {
             chat: chat,
             owner: owner,
             autoStartVoice: autoStartVoice,
+            autoStartCamera: autoStartCamera,
             onChatUpdated: { updated in
                 if trail.forks.contains(where: { $0.id == updated.id }) { trail.accept(updated) }
                 onChatUpdated(updated)
@@ -330,6 +334,7 @@ private struct AidenChatForkLevel: View {
                     chat: fork,
                     owner: owner,
                     autoStartVoice: false,
+                    autoStartCamera: false,
                     trail: $trail,
                     onChatUpdated: onChatUpdated,
                     onChatActivityChanged: onChatActivityChanged,

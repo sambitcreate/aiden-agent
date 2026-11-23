@@ -518,6 +518,13 @@ private struct AidenSolidFillButtonBody<Label: View, S: Shape>: View {
 }
 
 enum AidenThemeCatalog {
+    /// The palette a theme tile in Settings shows. Every theme has a light and a dark look
+    /// and the mode picks which one the app uses, so the tile shows the look this theme
+    /// would have right now: System follows the phone's scheme.
+    static func tilePreview(preset: AidenThemePresetID, mode: AidenAppearanceMode, systemScheme: ColorScheme) -> AidenPalette {
+        palette(preset: preset, scheme: mode.colorScheme ?? systemScheme)
+    }
+
     static func palette(preset: AidenThemePresetID, scheme: ColorScheme) -> AidenPalette {
         palettes[preset]![scheme == .dark ? 1 : 0]
     }
@@ -819,38 +826,12 @@ struct AidenAppearanceSettingsView: View {
     }
 
     private func themeTile(for preset: AidenThemePresetID) -> some View {
-        let preview = AidenThemeCatalog.palette(preset: preset, scheme: preset.tileSignatureScheme)
         let selected = preset == selectedPreset
         return Button {
             appearance.selectTheme(preset)
         } label: {
             VStack(spacing: 7) {
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .fill(preview.canvas)
-                    .aspectRatio(1.52, contentMode: .fit)
-                    .overlay {
-                        Text("Aa")
-                            .font(.system(size: 30, weight: .medium))
-                            .foregroundStyle(preview.foreground)
-                    }
-                    .overlay(alignment: .bottomTrailing) {
-                        Circle()
-                            .fill(preview.accent)
-                            .overlay(Circle().stroke(.white.opacity(0.55), lineWidth: 1))
-                            .frame(width: 11, height: 11)
-                            .padding(8)
-                    }
-                    .overlay(alignment: .topTrailing) {
-                        if selected {
-                            Image(systemName: "checkmark")
-                                .font(.system(size: 10, weight: .bold))
-                                .foregroundStyle(palette.accent)
-                                .frame(width: 21, height: 21)
-                                .background(palette.raised, in: Circle())
-                                .overlay(Circle().stroke(palette.foreground.opacity(0.18), lineWidth: 0.5))
-                                .offset(x: 7, y: -7)
-                        }
-                    }
+                AidenThemeTileSwatch(preset: preset, mode: appearance.mode, selected: selected)
                     .accessibilityHidden(true)
                 Text(preset.title)
                     .font(.caption.weight(.medium))
@@ -869,13 +850,44 @@ struct AidenAppearanceSettingsView: View {
     }
 }
 
-private extension AidenThemePresetID {
-    /// The scheme that visually defines each preset on its tile.
-    var tileSignatureScheme: ColorScheme {
-        switch self {
-        case .graphite, .dusk, .midnight: .dark
-        default: .light
-        }
+/// A theme tile's preview. Every theme has a light and a dark look and the mode picks
+/// which one the app uses, so the tile draws the look this theme would have right now:
+/// System follows the phone's scheme.
+struct AidenThemeTileSwatch: View {
+    let preset: AidenThemePresetID
+    let mode: AidenAppearanceMode
+    let selected: Bool
+    @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.aidenPalette) private var palette
+
+    var body: some View {
+        let preview = AidenThemeCatalog.tilePreview(preset: preset, mode: mode, systemScheme: colorScheme)
+        RoundedRectangle(cornerRadius: 10, style: .continuous)
+            .fill(preview.canvas)
+            .aspectRatio(1.52, contentMode: .fit)
+            .overlay {
+                Text("Aa")
+                    .font(.system(size: 30, weight: .medium))
+                    .foregroundStyle(preview.foreground)
+            }
+            .overlay(alignment: .bottomTrailing) {
+                Circle()
+                    .fill(preview.accent)
+                    .overlay(Circle().stroke(.white.opacity(0.55), lineWidth: 1))
+                    .frame(width: 11, height: 11)
+                    .padding(8)
+            }
+            .overlay(alignment: .topTrailing) {
+                if selected {
+                    Image(systemName: "checkmark")
+                        .font(.system(size: 10, weight: .bold))
+                        .foregroundStyle(palette.accent)
+                        .frame(width: 21, height: 21)
+                        .background(palette.raised, in: Circle())
+                        .overlay(Circle().stroke(palette.foreground.opacity(0.18), lineWidth: 0.5))
+                        .offset(x: 7, y: -7)
+                }
+            }
     }
 }
 

@@ -5,6 +5,7 @@ import WidgetKit
 @main
 struct AidenLiveActivityWidgetBundle: WidgetBundle {
     var body: some Widget {
+        AidenQuickActionsWidget()
         AgentRunLiveActivityWidget()
         AidenRunsSummaryLiveActivityWidget()
     }
