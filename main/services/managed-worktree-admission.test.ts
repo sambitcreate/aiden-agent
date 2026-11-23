@@ -11,6 +11,10 @@ import { assertManagedWorktreeAdmission } from "./managed-worktree-admission.js"
 import type { Workspace } from "./types.js";
 
 const execFileAsync = promisify(execFile);
+// On macOS, select Apple's OS-managed `/usr/bin/git` (resolved via xcode-select
+// to Apple-signed CLT/Xcode Git) so zero-spawn tests exercise the signed OS
+// fast path even on hosts where Homebrew `git` precedes `/usr/bin` on PATH.
+const TRUSTED_NATIVE_GIT = process.platform === "darwin" ? "/usr/bin/git" : "git";
 
 async function runGit(cwd: string, args: string[]): Promise<string> {
   const { stdout } = await execFileAsync("git", args, { cwd });
@@ -163,7 +167,7 @@ test("GitService.managedWorktreeUsable verifies modern worktrees via 0-spawn pur
   await runGit(repo, ["add", "README.md"]);
   await runGit(repo, ["commit", "-m", "initial"]);
 
-  const service = new GitService({ cacheTtlMs: 60_000 });
+  const service = new GitService({ gitBinary: TRUSTED_NATIVE_GIT, cacheTtlMs: 60_000 });
   await service.info(repo);
   const created = await service.createWorktree(repo, worktreesRoot, "aiden/pure-fs");
 
@@ -422,7 +426,7 @@ test("GitService.managedWorktreeUsable tracks native Git system config origins, 
   const altSystemConfig = path.join(temp, "alt-prefix-gitconfig");
   await fs.writeFile(altSystemConfig, "[user]\n\tname = Alt Prefix\n");
   process.env.GIT_CONFIG_SYSTEM = altSystemConfig;
-  const service = new GitService({ cacheTtlMs: 60_000 });
+  const service = new GitService({ gitBinary: TRUSTED_NATIVE_GIT, cacheTtlMs: 60_000 });
   const created = await service.createWorktree(repo, worktreesRoot, "aiden/native-sys");
   const spawns = countSpawns(service);
 
@@ -458,7 +462,7 @@ test("GitService.managedWorktreeUsable tracks native Git system config origins, 
 
   // Case 2: System config starts missing, admits with 0 spawns, then is created to revoke.
   await fs.rm(altSystemConfig, { force: true });
-  const missingSysService = new GitService({ cacheTtlMs: 60_000 });
+  const missingSysService = new GitService({ gitBinary: TRUSTED_NATIVE_GIT, cacheTtlMs: 60_000 });
   const missingSpawns = countSpawns(missingSysService);
   assert.equal(
     await missingSysService.managedWorktreeUsable(
@@ -505,7 +509,7 @@ test("GitService.managedWorktreeUsable tracks native Git system config origins, 
 
   // Case 3: Existing empty system config fails closed (never caches pure-FS proof).
   await fs.writeFile(altSystemConfig, "");
-  const emptySysService = new GitService({ cacheTtlMs: 60_000 });
+  const emptySysService = new GitService({ gitBinary: TRUSTED_NATIVE_GIT, cacheTtlMs: 60_000 });
   const emptySpawns = countSpawns(emptySysService);
   assert.equal(
     await emptySysService.managedWorktreeUsable(
@@ -539,7 +543,7 @@ test("GitService.managedWorktreeUsable tracks native Git system config origins, 
   // 0-spawn admission, and repointing an intermediate symlink hop to a wrapper
   // immediately invalidates the proof and fails closed.
   await fs.writeFile(altSystemConfig, "[user]\n\tname = Valid\n");
-  const realGit = await resolveGitExecutable("git", repo, process.env);
+  const realGit = await resolveGitExecutable(TRUSTED_NATIVE_GIT, repo, process.env);
   const midLink = path.join(temp, "git-mid-link");
   const outerLink = path.join(temp, "git-outer-link");
   await fs.symlink(realGit, midLink);
@@ -602,7 +606,7 @@ test("GitService.managedWorktreeUsable tracks native Git system config origins, 
   // Case 5: Setting GIT_EXEC_PATH fails closed to Git-backed admission.
   const execPathOut = await runGit(repo, ["--exec-path"]);
   process.env.GIT_EXEC_PATH = execPathOut;
-  const execPathService = new GitService({ cacheTtlMs: 60_000 });
+  const execPathService = new GitService({ gitBinary: TRUSTED_NATIVE_GIT, cacheTtlMs: 60_000 });
   const execPathSpawns = countSpawns(execPathService);
   assert.equal(
     await execPathService.managedWorktreeUsable(
@@ -660,8 +664,8 @@ test("GitService.managedWorktreeUsable fails closed for unchanged wrapper script
   await runGit(repo, ["add", "README.md"]);
   await runGit(repo, ["commit", "-m", "initial"]);
 
-  const realGit = await resolveGitExecutable("git", repo, process.env);
-  const baseService = new GitService({ cacheTtlMs: 60_000 });
+  const realGit = await resolveGitExecutable(TRUSTED_NATIVE_GIT, repo, process.env);
+  const baseService = new GitService({ gitBinary: TRUSTED_NATIVE_GIT, cacheTtlMs: 60_000 });
   const created = await baseService.createWorktree(repo, worktreesRoot, "aiden/shim-test");
 
   const configA = path.join(temp, "config-a");
