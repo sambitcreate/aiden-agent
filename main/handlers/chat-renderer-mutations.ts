@@ -28,6 +28,7 @@ import {
   requireSkillInvocationWorkspace,
 } from "../services/skill-invocation-turn.js";
 import { reportAnalyticsEvent } from "../services/analytics/analytics-report.js";
+import { countBucket } from "../services/analytics/analytics-sanitize.js";
 import { chatForRenderer } from "../services/visible-chat-projection.js";
 import type { WorkspaceMutationGate } from "../services/workspace-mutation-gate.js";
 import { parseChatAppend } from "./chat-append-params.js";
@@ -179,6 +180,7 @@ export function createRendererChatMutationHandlers(deps: RendererChatMutationDep
         content,
         messageModel,
         attachments,
+        grabbedElements,
         providerId,
         metaModel,
         autoTitle,
@@ -274,6 +276,7 @@ export function createRendererChatMutationHandlers(deps: RendererChatMutationDep
                     content,
                     model: messageModel,
                     attachments,
+                    ...(grabbedElements ? { grabbedElements } : {}),
                     skill: skill?.provenance,
                     ...(inputSource ? { inputSource } : {}),
                     // Reasoning and generation timelines are persisted by the trusted
@@ -300,6 +303,7 @@ export function createRendererChatMutationHandlers(deps: RendererChatMutationDep
                   role,
                   content,
                   attachments,
+                  grabbedElements,
                   workspaceId: skillWorkspaceId!,
                   userMessageId,
                 },
@@ -317,6 +321,12 @@ export function createRendererChatMutationHandlers(deps: RendererChatMutationDep
               )
             : await append();
           appended = true;
+          if (grabbedElements?.length) {
+            reportAnalyticsEvent("browser_grab_sent", {
+              count_bucket: countBucket(grabbedElements.length),
+              with_screenshot: grabbedElements.some((element) => Boolean(element.thumbnailAttachmentId)),
+            });
+          }
           // The person wrote in it, so a snoozed chat is back. Never blocks
           // or fails the send; Pin and Done are left alone.
           if (role === "user") void chatTriage?.wake(chatId).catch(() => undefined);

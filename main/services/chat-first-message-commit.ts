@@ -3,6 +3,7 @@ import { createHash, randomUUID } from "node:crypto";
 import type { ParsedChatFirstMessage } from "../handlers/chat-first-message-params.js";
 import { analyticsWorkspaceKind } from "./analytics/analytics-ids.js";
 import { reportAnalyticsEvent } from "./analytics/analytics-report.js";
+import { countBucket } from "./analytics/analytics-sanitize.js";
 import type { Chat, Workspace } from "./types.js";
 import type { ChatTurnLease } from "./chat-turn-admission.js";
 import type { RendererDocumentOwner } from "./renderer-document-owner.js";
@@ -144,6 +145,7 @@ export function createFirstMessageCommitter(deps: Dependencies) {
             content: input.content,
             model: input.messageModel,
             attachments: input.attachments,
+            ...(input.grabbedElements ? { grabbedElements: input.grabbedElements } : {}),
             skill: prepared?.provenance,
             ...(input.inputSource ? { inputSource: input.inputSource } : {}),
           },
@@ -155,6 +157,7 @@ export function createFirstMessageCommitter(deps: Dependencies) {
               role: "user",
               content: input.content,
               attachments: input.attachments,
+              grabbedElements: input.grabbedElements,
               workspaceId,
               userMessageId,
             }, {
@@ -169,6 +172,12 @@ export function createFirstMessageCommitter(deps: Dependencies) {
           : await append();
         committed = true;
         reportAnalyticsEvent("chat_created", { workspace_kind: analyticsWorkspaceKind(target) });
+        if (input.grabbedElements?.length) {
+          reportAnalyticsEvent("browser_grab_sent", {
+            count_bucket: countBucket(input.grabbedElements.length),
+            with_screenshot: input.grabbedElements.some((element) => Boolean(element.thumbnailAttachmentId)),
+          });
+        }
         return chat;
       } catch (error) {
         if (isChatCreateReconciliationRequiredError(error)) {
@@ -264,7 +273,7 @@ export function createWorktreeFirstMessageCommitter(deps: WorktreeCommitDependen
     }
     let worktree: FirstMessageWorktreeInfo;
     try {
-      worktree = await deps.ensureWorktree(request, input.content || input.title || "", owner, onProgress);
+      worktree = await deps.ensureWorktree(request, input.content || input.title || input.grabbedElements?.[0]?.label || "", owner, onProgress);
     } catch (error) {
       return worktreeFailure(error);
     }

@@ -82,6 +82,14 @@ export const ANALYTICS_EVENTS = {
   design_mode_exited: {},
   design_mode_declined: {},
   design_comments_sent: { count_bucket: enumProp(...COUNT_BUCKETS) },
+  browser_element_grabbed: {
+    kind: enumProp("react", "dom"),
+    source: enumProp("toolbar", "shortcut"),
+  },
+  browser_grab_sent: {
+    count_bucket: enumProp(...COUNT_BUCKETS),
+    with_screenshot: bool,
+  },
 
   // Approval cards. `chat` says which chat asked; it is not named `surface`,
   // which every event already carries (desktop or server).
