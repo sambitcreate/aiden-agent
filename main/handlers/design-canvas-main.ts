@@ -5,6 +5,7 @@ import { persistedChatWorkspaceId } from "../../renderer/shared/chat-workspace.j
 import { chatStore } from "../services/chat-store.js";
 import { configStore } from "../services/config-store.js";
 import {
+  broadcastDesignCanvasUpdate,
   designCanvasStore,
   designFileWatcher,
   designGrants,
@@ -17,7 +18,7 @@ import { exportStoredHtmlArtifact, wrapStoredHtmlArtifact } from "../services/gu
 import { generativeUiArtifactStore } from "../services/generative-ui-artifact-store.js";
 import { rendererDocumentOwner } from "../services/renderer-document-owner.js";
 import { designModeEnabled } from "../services/studio/feature-flags.js";
-import { DESIGN_CANVAS_UPDATED_CHANNEL, registerDesignCanvasHandlers } from "./design-canvas.js";
+import { registerDesignCanvasHandlers } from "./design-canvas.js";
 
 export function registerDesignCanvasIpc(): void {
   // The canvas picture Aiden asked for with canvas_read {snapshot: true}.
@@ -43,7 +44,7 @@ export function registerDesignCanvasIpc(): void {
     enabled: () => designModeEnabled(),
     handle: (channel, handler) => ipcMain.handle(channel, handler),
     store: designCanvasStore,
-    broadcast: (update) => ipcMain.broadcast(DESIGN_CANVAS_UPDATED_CHANNEL, update),
+    broadcast: broadcastDesignCanvasUpdate,
     // Index metadata only: these checks never need the transcript.
     getChat: (chatId) => chatStore.getMeta(chatId),
     grants: designGrants,

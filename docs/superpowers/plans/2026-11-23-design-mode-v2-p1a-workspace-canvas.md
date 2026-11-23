@@ -194,7 +194,7 @@ An adversarial review of this plan against the code found the problems below, ea
   - `DesignCanvasUpdated = { workspaceId: string; revision: number; aidenTurn?: string; step?: string }`.
   - Callers keep calling `broadcast({chatId, revision, aidenTurn?, step?})`. A new `broadcastDesignCanvasUpdate(update)` in `main.ts` resolves the workspace through `designCanvasStore.workspaceIdOf` and sends the workspace payload. Its failures are logged and never thrown.
 
-- [ ] **Step 1: Write failing tests**
+- [x] **Step 1: Write failing tests**
   - `store.test.ts`:
     - `two chats of one workspace read and write the same document`, through `DesignChatCanvases` with a fake `workspaceIdOf`;
     - `chats of different workspaces get different documents`;
@@ -202,10 +202,10 @@ An adversarial review of this plan against the code found the problems below, ea
     - `a v2 document at a workspace path is set aside as corrupt`;
     - `refuses workspace ids that fail isWorkspaceArtifactWorkspaceId`.
   - `design-canvas.test.ts` (handler): `a save broadcasts the chat's workspace id`. With a registered fake whose broadcast records payloads, saving through chat A yields `{workspaceId: "ws-1", revision: 1}`.
-- [ ] **Step 2:** Run `npx tsx --test main/services/design-canvas/store.test.ts main/handlers/design-canvas.test.ts`. Expected: FAIL.
-- [ ] **Step 3:** Implement. Rename the store's internal `chatId` parameters to `workspaceId`. Update the file header comment.
-- [ ] **Step 4:** Rerun. Expected: PASS.
-- [ ] **Step 5:** Commit `feat(design): one canvas file per workspace`.
+- [x] **Step 2:** Run `npx tsx --test main/services/design-canvas/store.test.ts main/handlers/design-canvas.test.ts`. Expected: FAIL.
+- [x] **Step 3:** Implement. Rename the store's internal `chatId` parameters to `workspaceId`. Update the file header comment.
+- [x] **Step 4:** Rerun. Expected: PASS.
+- [x] **Step 5:** Commit `feat(design): one canvas file per workspace`.
 
 ### Task 4: Main view registry and `designCanvas:view`
 

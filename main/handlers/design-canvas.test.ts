@@ -8,7 +8,8 @@ import {
   type DesignCanvas,
 } from "../../renderer/shared/design-canvas/schema.js";
 import { DesignGrantRegistry } from "../services/design-canvas/grants.js";
-import { DesignCanvasStore } from "../services/design-canvas/store.js";
+import { DesignCanvasStore, DesignChatCanvases } from "../services/design-canvas/store.js";
+import { persistedChatWorkspaceId } from "../../renderer/shared/chat-workspace.js";
 import {
   DESIGN_CAPTURE_MAX_SIDE,
   DESIGN_SOURCE_MAX_BYTES,
@@ -64,10 +65,14 @@ async function fixture(
   let enabled = options.enabled ?? true;
   const handlers = new Map<string, Handler>();
   const broadcasts: DesignCanvasUpdated[] = [];
-  const store = new DesignCanvasStore({ root: () => root });
   const chats = options.chats ?? {
     "chat-1": { id: "chat-1", workspaceId: "workspace-1", designMode: true },
   };
+  const workspaceStore = new DesignCanvasStore({ root: () => root });
+  const store = new DesignChatCanvases({
+    store: workspaceStore,
+    workspaceIdOf: async (chatId) => (chats[chatId] ? persistedChatWorkspaceId(chats[chatId].workspaceId) : null),
+  });
   const grants = new DesignGrantRegistry();
   const issued: string[] = [];
   const issuedGrants: string[] = [];
@@ -144,6 +149,7 @@ async function fixture(
   return {
     root,
     store,
+    workspaceStore,
     grants,
     issued,
     issuedGrants,
@@ -174,12 +180,49 @@ test("a successful save broadcasts the new revision and get reads it back", asyn
   const { invoke, broadcasts } = await fixture(t);
   assert.equal(((await invoke("designCanvas:get", "chat-1")) as DesignCanvas).revision, 0);
   assert.deepEqual(await invoke("designCanvas:save", "chat-1", note, 0), { ok: true, revision: 1 });
-  assert.deepEqual(broadcasts, [{ chatId: "chat-1", revision: 1 }]);
+  assert.deepEqual(broadcasts, [{ workspaceId: "workspace-1", chatId: "chat-1", revision: 1 }]);
   const stored = (await invoke("designCanvas:get", "chat-1")) as DesignCanvas;
   assert.deepEqual(
     stored.frames.map((frame) => frame.id),
     ["n"],
   );
+});
+
+test("a save broadcasts the chat's workspace id", async (t) => {
+  const { invoke, broadcasts } = await fixture(t, {
+    chats: {
+      "chat-a": { id: "chat-a", workspaceId: "ws-1", designMode: true },
+      "chat-b": { id: "chat-b", workspaceId: "ws-1", designMode: true },
+      legacy: { id: "legacy", designMode: true },
+    },
+  });
+  await invoke("designCanvas:save", "chat-a", note, 0);
+  assert.deepEqual(broadcasts, [{ workspaceId: "ws-1", chatId: "chat-a", revision: 1 }]);
+  // Chat B is on the same workspace, so it reads chat A's save.
+  assert.deepEqual(((await invoke("designCanvas:get", "chat-b")) as DesignCanvas).frames.map((frame) => frame.id), ["n"]);
+  // A chat from before workspaces were explicit is on the default workspace.
+  await invoke("designCanvas:save", "legacy", note, 0, { workspaceId: "default" });
+  assert.deepEqual(broadcasts[1], { workspaceId: "default", chatId: "legacy", revision: 1 });
+});
+
+test("a save that names another workspace than the chat's is a conflict, and writes nothing", async (t) => {
+  const { invoke, broadcasts, workspaceStore } = await fixture(t, {
+    chats: { "chat-1": { id: "chat-1", workspaceId: "ws-2", designMode: true } },
+  });
+  await workspaceStore.save("ws-2", { ...note, frames: [] }, 0);
+  // The canvas was opened while the chat was in ws-1; the chat has since moved to ws-2.
+  const result = (await invoke("designCanvas:save", "chat-1", note, 1, { workspaceId: "ws-1" })) as {
+    ok: boolean;
+    reason?: string;
+    doc?: DesignCanvas;
+  };
+  assert.equal(result.ok, false);
+  assert.equal(result.reason, "conflict");
+  assert.equal(result.doc?.revision, 1, "the canvas gets the chat's current workspace document");
+  assert.equal((await workspaceStore.get("ws-2")).revision, 1, "ws-2 is unchanged");
+  assert.deepEqual((await workspaceStore.get("ws-1")).revision, 0, "ws-1 is untouched too");
+  assert.deepEqual(broadcasts, []);
+  await assert.rejects(invoke("designCanvas:save", "chat-1", note, 1, { workspaceId: "../ws" }), /save options/u);
 });
 
 test("a page a save takes off is remembered as removed, unless the save says the person's undo took it off", async (t) => {
