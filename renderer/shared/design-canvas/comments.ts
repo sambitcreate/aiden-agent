@@ -86,7 +86,7 @@ export function addComment(
     note: string;
     createdAt: string;
     pageId: string;
-    chatId?: string;
+    chatId: string;
     queued?: boolean;
     marks?: DesignComment["marks"];
   },
@@ -108,7 +108,7 @@ export function addComment(
   };
   if (frame) comment.frameId = frame.id;
   if (frame && place.frameId !== undefined && place.anchor) comment.anchor = { ...place.anchor, commentId: input.id };
-  if (input.chatId !== undefined && isDesignChatId(input.chatId)) comment.chatId = input.chatId;
+  if (isDesignChatId(input.chatId)) comment.chatId = input.chatId;
   if (input.queued) comment.queued = true;
   if (input.marks && input.marks.length > 0) comment.marks = input.marks;
   return { ...doc, comments: [...doc.comments, comment] };

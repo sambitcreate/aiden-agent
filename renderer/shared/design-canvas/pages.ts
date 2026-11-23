@@ -136,34 +136,51 @@ export function moveFramesToPage(doc: DesignCanvas, ids: readonly string[], page
 
 /**
  * `source`'s pages appended to `target`, for a chat that brings its canvas
- * along when it joins a workspace. Each source page with a frame on it
- * becomes a new page named "<label> · <page name>"; its frames get new ids,
- * and groups, arrows and comments keep pointing at the copies. Comments keep
- * their ids (a page's `data-aiden-comment` marks name them) unless the target
- * already uses one. `chatPages` is not copied. All or nothing: null when the
- * result would pass the page, frame or comment limit; `target` itself when
- * the source has nothing on it.
+ * along when it joins a workspace and its files are copied with it. Each
+ * source page with a frame left on it becomes a new page named
+ * "<label> · <page name>". Page, frame and comment ids are kept, so the
+ * chat's earlier tool calls still name them, and are only given new ones
+ * where the target already uses them, with groups, arrows and comments
+ * following. A page or image frame's path goes through `pathMap` (old path to
+ * new); one whose file was not copied is dropped. `chatPages` is not copied.
+ * All or nothing: null when the result would pass the page, frame or comment
+ * limit. `pageIds` are the new pages, in order (none when nothing came over).
  */
 export function appendCanvasPages(
   target: DesignCanvas,
   source: DesignCanvas,
-  newId: () => string,
-  label: string,
-): DesignCanvas | null {
-  const pages = source.pages.filter((page) => source.frames.some((frame) => frame.pageId === page.id));
-  if (pages.length === 0) return target;
-  const pageIds = new Map(pages.map((page) => [page.id, newId()]));
-  const frames = source.frames.filter((frame) => pageIds.has(frame.pageId));
-  const comments = source.comments.filter((comment) => pageIds.has(comment.pageId));
+  options: { label: string; pathMap: ReadonlyMap<string, string>; newId: () => string },
+): { doc: DesignCanvas; pageIds: string[] } | null {
+  const kept = source.frames.flatMap((frame): DesignFrame[] => {
+    if (frame.kind !== "file" && frame.kind !== "image") return [frame];
+    const moved = frame.path === undefined ? undefined : options.pathMap.get(frame.path);
+    return moved === undefined ? [] : [{ ...frame, path: moved }];
+  });
+  const pages = source.pages.filter((page) => kept.some((frame) => frame.pageId === page.id));
+  if (pages.length === 0) return { doc: target, pageIds: [] };
+  const keptIds = new Set(kept.map((frame) => frame.id));
+  const comments = source.comments.filter(
+    (comment) => pages.some((page) => page.id === comment.pageId) && (comment.frameId === undefined || keptIds.has(comment.frameId)),
+  );
   if (
     target.pages.length + pages.length > DESIGN_CANVAS_LIMITS.pages ||
-    target.frames.length + frames.length > DESIGN_CANVAS_LIMITS.frames ||
+    target.frames.length + kept.length > DESIGN_CANVAS_LIMITS.frames ||
     target.comments.length + comments.length > DESIGN_CANVAS_LIMITS.comments
   ) {
     return null;
   }
-  const frameIds = new Map(frames.map((frame) => [frame.id, newId()]));
-  const copies = frames.map((frame): DesignFrame => {
+  /** The id itself when `taken` lacks it, else a new one; either way it is taken afterwards. */
+  const claim = (id: string, taken: Set<string>): string => {
+    let next = id;
+    while (taken.has(next)) next = options.newId();
+    taken.add(next);
+    return next;
+  };
+  const takenPages = new Set(target.pages.map((page) => page.id));
+  const pageIds = new Map(pages.map((page) => [page.id, claim(page.id, takenPages)]));
+  const takenFrames = new Set(target.frames.map((frame) => frame.id));
+  const frameIds = new Map(kept.map((frame) => [frame.id, claim(frame.id, takenFrames)]));
+  const copies = kept.map((frame): DesignFrame => {
     const groupId = frame.groupId ? frameIds.get(frame.groupId) : undefined;
     const { groupId: _groupId, ...rest } = frame;
     const ends = frame.ends?.map((end): DesignConnectorEnd => {
@@ -178,10 +195,9 @@ export function appendCanvasPages(
       ...(ends ? { ends } : {}),
     };
   });
-  const taken = new Set(target.comments.map((comment) => comment.id));
+  const takenComments = new Set(target.comments.map((comment) => comment.id));
   const commentCopies = comments.map((comment): DesignComment => {
-    const id = taken.has(comment.id) ? newId() : comment.id;
-    taken.add(id);
+    const id = claim(comment.id, takenComments);
     const frameId = comment.frameId !== undefined ? frameIds.get(comment.frameId) : undefined;
     const { frameId: _frameId, ...rest } = comment;
     return {
@@ -192,13 +208,16 @@ export function appendCanvasPages(
       ...(comment.anchor && frameId ? { anchor: { ...comment.anchor, commentId: id } } : {}),
     };
   });
-  const added = pages.map((page): DesignPage => ({ id: pageIds.get(page.id)!, name: cleanName(`${label} · ${page.name}`) }));
-  return syncConnectors({
-    ...target,
-    pages: [...target.pages, ...added],
-    frames: [...target.frames, ...copies],
-    comments: [...target.comments, ...commentCopies],
-  });
+  const added = pages.map((page): DesignPage => ({ id: pageIds.get(page.id)!, name: cleanName(`${options.label} · ${page.name}`) }));
+  return {
+    doc: syncConnectors({
+      ...target,
+      pages: [...target.pages, ...added],
+      frames: [...target.frames, ...copies],
+      comments: [...target.comments, ...commentCopies],
+    }),
+    pageIds: added.map((page) => page.id),
+  };
 }
 
 function cleanName(name: string | undefined): string {

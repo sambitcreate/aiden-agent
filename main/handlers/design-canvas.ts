@@ -297,12 +297,11 @@ export function registerDesignCanvasHandlers<Event>(deps: {
     const chat = await requireChat(chatId);
     // One workspace for the whole save: the one this chat is in now.
     const workspaceId = designCanvasWorkspaceOf(chat);
-    // The canvas the renderer is saving belongs to another workspace (the chat
-    // moved while its edits were waiting): nothing is written, and the canvas
-    // gets the document it is on now.
+    // The canvas the renderer is saving belongs to a workspace the chat has
+    // since left: nothing is written, and the renderer drops those edits and
+    // opens the canvas of the workspace the chat is in now.
     if (expected !== undefined && expected !== workspaceId) {
-      const { doc: current } = await deps.store.get(chat.id, { workspaceId });
-      return { ok: false, reason: "conflict", doc: current } satisfies DesignCanvasSaveResult;
+      return { ok: false, reason: "moved" } satisfies DesignCanvasSaveResult;
     }
     const { result } = await deps.store.save(chat.id, doc as DesignCanvas, baseRevision, { undone, workspaceId });
     if (result.ok) deps.broadcast({ workspaceId, chatId: chat.id, revision: result.revision });

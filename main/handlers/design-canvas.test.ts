@@ -205,20 +205,13 @@ test("a save broadcasts the chat's workspace id", async (t) => {
   assert.deepEqual(broadcasts[1], { workspaceId: "default", chatId: "legacy", revision: 1 });
 });
 
-test("a save that names another workspace than the chat's is a conflict, and writes nothing", async (t) => {
+test("a save that names another workspace than the chat's is answered moved, and writes nothing", async (t) => {
   const { invoke, broadcasts, workspaceStore } = await fixture(t, {
     chats: { "chat-1": { id: "chat-1", workspaceId: "ws-2", designMode: true } },
   });
   await workspaceStore.save("ws-2", { ...note, frames: [] }, 0);
   // The canvas was opened while the chat was in ws-1; the chat has since moved to ws-2.
-  const result = (await invoke("designCanvas:save", "chat-1", note, 1, { workspaceId: "ws-1" })) as {
-    ok: boolean;
-    reason?: string;
-    doc?: DesignCanvas;
-  };
-  assert.equal(result.ok, false);
-  assert.equal(result.reason, "conflict");
-  assert.equal(result.doc?.revision, 1, "the canvas gets the chat's current workspace document");
+  assert.deepEqual(await invoke("designCanvas:save", "chat-1", note, 1, { workspaceId: "ws-1" }), { ok: false, reason: "moved" });
   assert.equal((await workspaceStore.get("ws-2")).revision, 1, "ws-2 is unchanged");
   assert.deepEqual((await workspaceStore.get("ws-1")).revision, 0, "ws-1 is untouched too");
   assert.deepEqual(broadcasts, []);

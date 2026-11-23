@@ -111,8 +111,6 @@ test("addComment stamps chatId", () => {
   // Read back after a save, the stamp stays.
   const reparsed = parseDesignCanvas(JSON.parse(JSON.stringify(doc)));
   assert.equal(reparsed.ok && reparsed.doc.comments[0]!.chatId, "chat-7");
-  const unstamped = addComment(canvas(), { pageId: "page-1", id: "c", place: { x: 0, y: 0 }, note: "Hi", createdAt: AT })!;
-  assert.equal("chatId" in unstamped.comments[0]!, false);
 });
 
 test("two chats each queue comments, and each tray and send shows only its own", () => {

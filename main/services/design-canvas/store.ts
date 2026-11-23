@@ -46,9 +46,14 @@ export type DesignCanvasUpdated = {
 /** Written once the folder holds only v3 workspace canvases. */
 export const DESIGN_CANVAS_LAYOUT_MARKER = ".layout-v3";
 
+/**
+ * A save's answer. `moved` means the canvas being saved belongs to a workspace
+ * the chat has left: nothing was written, and the edits are not to be retried.
+ */
 export type DesignCanvasSaveResult =
   | { ok: true; revision: number }
   | { ok: false; reason: "conflict"; doc: DesignCanvas }
+  | { ok: false; reason: "moved" }
   | { ok: false; reason: "invalid"; issues: string[] };
 
 /** A canvas holds at most 4 000 frames and 2 000 comments; anything past 16 MiB is not ours. */
