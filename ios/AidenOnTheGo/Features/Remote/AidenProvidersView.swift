@@ -96,10 +96,13 @@ private struct AidenProviderCreationView: View {
                         Picker("API format", selection: $kind) { Text("OpenAI-compatible").tag("openai"); Text("Anthropic-compatible").tag("anthropic") }
                         Picker("Deployment", selection: $deployment) { Text("Hosted").tag("hosted"); Text("Local to the computer").tag("local") }
                         Toggle("Requires API key", isOn: $needsKey)
+                            .aidenSwitchStyle()
                     }
                     DisclosureGroup("Model capabilities") {
                         Toggle("Vision", isOn: $vision)
+                            .aidenSwitchStyle()
                         Toggle("Reasoning", isOn: $reasoning)
+                            .aidenSwitchStyle()
                         Text("Enable only features your server supports. These settings apply to every model entered above.").font(.footnote).foregroundStyle(.secondary)
                     }
                 }

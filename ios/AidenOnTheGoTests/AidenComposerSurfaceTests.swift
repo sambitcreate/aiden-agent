@@ -415,8 +415,12 @@ final class AidenComposerSurfaceTests: XCTestCase {
             let element = try XCTUnwrap(elements.first { $0.accessibilityLabel == label }, "No \(label): \(context)")
             let frame = element.accessibilityFrame
             XCTAssertTrue(surface.insetBy(dx: -0.5, dy: -0.5).contains(frame), "\(label) \(frame) leaves \(surface): \(context)")
-            XCTAssertGreaterThanOrEqual(frame.height, 44, "\(label) is too short to tap: \(context)")
-            XCTAssertGreaterThanOrEqual(frame.width, 44, "\(label) is too narrow to tap: \(context)")
+            // In whole device pixels, as the screen draws it: a control on a
+            // third-of-a-point origin comes back as 43.99999999999994 pt, a
+            // conversion's floating-point error, not a smaller target.
+            let scale = window.screen.scale
+            XCTAssertGreaterThanOrEqual((frame.height * scale).rounded(), 44 * scale, "\(label) is too short to tap: \(context)")
+            XCTAssertGreaterThanOrEqual((frame.width * scale).rounded(), 44 * scale, "\(label) is too narrow to tap: \(context)")
             for other in frames {
                 XCTAssertFalse(other.insetBy(dx: 1, dy: 1).intersects(frame), "\(label) overlaps a control: \(context)")
             }
@@ -707,7 +711,12 @@ final class AidenComposerSurfaceTests: XCTestCase {
         let scene = try XCTUnwrap(connectedScene())
         let window = UIWindow(windowScene: scene)
         window.frame = CGRect(x: 0, y: 0, width: width, height: 800)
-        window.rootViewController = UIHostingController(rootView: view.environment(AidenHapticCenter()))
+        let host = UIHostingController(rootView: view.environment(AidenHapticCenter()))
+        // The composer is measured at `width`. A window narrower than the screen
+        // still takes the screen's insets: an open iPhone Duo puts 84 pt on the
+        // right, which left the controls 84 pt less room than the width under test.
+        host.safeAreaRegions = []
+        window.rootViewController = host
         window.makeKeyAndVisible()
         return window
     }

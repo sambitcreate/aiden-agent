@@ -45,8 +45,13 @@ struct AidenInboxTabView: View {
     var onReconnect: (String) -> Void = { _ in }
     var onCatchUp: () -> Void = {}
     var onShowRunning: () -> Void = {}
+    /// The route the detail beside the list shows, so its row reads as chosen.
+    /// Nil on a stack, where the list is never beside a chat.
+    var selection: AidenAppRoute? = nil
 
     @Environment(\.aidenPalette) private var palette
+    @Environment(\.aidenReduceMotion) private var reduceMotion
+    @Environment(\.aidenOfflineNotices) private var offlineNotices
     @State private var snoozeCandidate: AidenHostObjectID?
     @State private var deleteCandidate: AidenHostObjectID?
 
@@ -72,6 +77,8 @@ struct AidenInboxTabView: View {
             if moreChats != .none { moreChatsRow }
         }
         .listStyle(.plain)
+        .listSectionSpacing(AidenSpacing.l)
+        .aidenKeepsListScroll()
         .scrollContentBackground(.hidden)
         .background(palette.canvas.ignoresSafeArea())
         .overlay { emptyState }
@@ -115,9 +122,12 @@ struct AidenInboxTabView: View {
         @ViewBuilder footer: () -> some View = { EmptyView() }
     ) -> some View {
         if !rows.isEmpty {
+            // Each section is one card. The row keeps its own identity, which
+            // is what scroll restore scrolls to.
+            let positions = AidenListCardPosition.positions(rows.map(\.id))
             Section {
                 ForEach(rows) { row in
-                    listRow(row, in: section)
+                    listRow(row, in: section, card: positions[row.id] ?? .middle)
                 }
                 footer()
             } header: {
@@ -129,7 +139,7 @@ struct AidenInboxTabView: View {
     }
 
     @ViewBuilder
-    private func listRow(_ row: AidenUnifiedInboxRow, in section: AidenInboxSection) -> some View {
+    private func listRow(_ row: AidenUnifiedInboxRow, in section: AidenInboxSection, card: AidenListCardPosition) -> some View {
         switch row.content {
         case .chat(let summary, let placement):
             let actions = AidenInboxRowActions(
@@ -146,6 +156,9 @@ struct AidenInboxTabView: View {
                 isPinned: row.isPinned,
                 machine: roster.rowChip(for: row.id.instanceId, filter: filter.wrappedValue),
                 isDimmed: roster.isOffline(row.id.instanceId),
+                isSelected: selection?.screen == row.route,
+                scrollRow: row.id,
+                card: card,
                 open: { onOpen(row.route) }
             )
             .contextMenu { contextMenu(for: row, actions: actions) }
@@ -163,11 +176,11 @@ struct AidenInboxTabView: View {
                     machine: roster.rowChip(for: row.id.instanceId, filter: filter.wrappedValue),
                     isDimmed: roster.isOffline(row.id.instanceId)
                 )
+                .aidenListScrollRow(row.id)
             }
             .buttonStyle(.plain)
-            .listRowInsets(EdgeInsets(top: 0, leading: 12, bottom: 0, trailing: 12))
-            .listRowSeparator(.hidden)
-            .listRowBackground(palette.canvas)
+            .accessibilityAddTraits(selection?.screen == row.route ? .isSelected : [])
+            .aidenListCardRow(card, isSelected: selection?.screen == row.route)
         }
     }
 
@@ -194,8 +207,14 @@ struct AidenInboxTabView: View {
     }
 
     private var runningRow: some View {
-        AidenRunningAccessory(rows: inbox.running, onOpen: onOpen, onShowAll: onShowRunning)
-            .background(palette.raised, in: RoundedRectangle(cornerRadius: AidenRadius.control))
+        // Its chat, or one of them, is the one beside the list.
+        let holdsSelection = inbox.running.contains { $0.route == selection }
+        return AidenRunningAccessory(rows: inbox.running, onOpen: onOpen, onShowAll: onShowRunning)
+            .background(
+                holdsSelection ? AidenListRowBackground.selectedFill(palette) : palette.raised,
+                in: RoundedRectangle(cornerRadius: AidenRadius.control)
+            )
+            .accessibilityAddTraits(holdsSelection ? .isSelected : [])
             .listRowInsets(EdgeInsets(top: AidenSpacing.s, leading: AidenSpacing.m, bottom: AidenSpacing.xs, trailing: AidenSpacing.m))
             .listRowSeparator(.hidden)
             .listRowBackground(palette.canvas)
@@ -239,17 +258,25 @@ struct AidenInboxTabView: View {
     @ViewBuilder
     private var machineRows: some View {
         if roster.showsStrip {
-            AidenMachineStrip(labels: roster.visible, filter: filter)
+            AidenMachineStrip(labels: roster.visible, offline: roster.offlineIDs, filter: filter)
                 .listRowInsets(EdgeInsets(top: AidenSpacing.xs, leading: 0, bottom: AidenSpacing.xs, trailing: 0))
                 .listRowSeparator(.hidden)
                 .listRowBackground(palette.canvas)
         }
-        ForEach(roster.offlineRows(under: filter.wrappedValue)) { machine in
+        let offline = roster.offlineRows(under: filter.wrappedValue)
+        ForEach(offlineNotices?.shown(offline) ?? offline) { machine in
             AidenMachineOfflineRow(
                 label: machine.label,
                 lastSeen: machine.lastSeen,
                 isReconnecting: machine.isReconnecting,
-                onReconnect: { onReconnect(machine.id) }
+                onReconnect: { onReconnect(machine.id) },
+                onDismiss: offlineNotices.map { notices in
+                    {
+                        withAnimation(reduceMotion ? nil : .smooth(duration: 0.24, extraBounce: 0)) {
+                            notices.dismiss(machine.id)
+                        }
+                    }
+                }
             )
             .listRowInsets(EdgeInsets(top: AidenSpacing.xs, leading: AidenSpacing.l, bottom: AidenSpacing.xs, trailing: AidenSpacing.l))
             .listRowSeparator(.hidden)
@@ -397,6 +424,9 @@ struct AidenInboxTabRootView: View {
     var onOpenMachines: () -> Void = {}
     var onCatchUp: () -> Void = {}
     var onShowRunning: () -> Void = {}
+    var selection: AidenAppRoute? = nil
+    /// The machine count in the toolbar.
+    var showsMachineStatus = true
 
     @Environment(\.accessibilityVoiceOverEnabled) private var voiceOverEnabled
     @Environment(\.aidenPalette) private var palette
@@ -426,12 +456,15 @@ struct AidenInboxTabRootView: View {
             onDelete: onDelete,
             onReconnect: { store.reconnect($0) },
             onCatchUp: onCatchUp,
-            onShowRunning: onShowRunning
+            onShowRunning: onShowRunning,
+            selection: selection
         )
         .navigationTitle("Inbox")
         .toolbar {
-            ToolbarItem(placement: .topBarLeading) {
-                AidenHostStatusItem(online: store.roster.online, total: store.roster.total, onOpen: onOpenMachines)
+            if showsMachineStatus {
+                ToolbarItem(placement: .topBarLeading) {
+                    AidenHostStatusItem(online: store.roster.online, total: store.roster.total, onOpen: onOpenMachines)
+                }
             }
         }
         .overlay(alignment: .top) { noticeBanner }
@@ -510,6 +543,12 @@ struct AidenInboxBotRowView: View {
     /// The Bot's machine is offline: the row stays, in secondary colours.
     var isDimmed = false
 
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    /// The avatar grows with the text up to the size Bots home and Computers
+    /// stop at, and takes the row's avatar column, which is always its own width.
+    @ScaledMetric(relativeTo: .body) private var scaledAvatarSize: CGFloat = 24
+    private var avatarSize: CGFloat { min(scaledAvatarSize, 40) }
+
     private var reason: String? { AidenBotAttention.reason(bot) }
 
     /// "Bot Scout, On Laptop, Offline, 1 thing needs you", like a chat row.
@@ -527,17 +566,17 @@ struct AidenInboxBotRowView: View {
     var body: some View {
         let needsYou = AidenBotAttention.needsYou(bot)
         let tint = isDimmed ? palette.secondary : needsYou ? palette.warning : palette.secondary
-        HStack(alignment: .center, spacing: 10) {
-            AidenBotAvatarSymbol(name: bot.name, palette: palette)
+        AidenListRowLayout(isStacked: dynamicTypeSize.isAccessibilitySize, hasSummary: machine != nil, markStyle: .avatar(avatarSize)) {
+            AidenBotAvatarSymbol(name: bot.name, size: avatarSize, palette: palette)
                 .opacity(isDimmed ? 0.6 : 1)
-            VStack(alignment: .leading, spacing: 1) {
-                Text(bot.name)
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(isDimmed ? palette.secondary : palette.foreground)
-                    .lineLimit(1)
-                if let machine { AidenMachineChip(label: machine, namesItselfWithoutColor: true) }
-            }
-            Spacer(minLength: 8)
+        } title: {
+            Text(bot.name)
+                .font(.body)
+                .foregroundStyle(isDimmed ? palette.secondary : palette.foreground)
+                .lineLimit(dynamicTypeSize.isAccessibilitySize ? 3 : 1)
+        } summary: {
+            if let machine { AidenInboxRowMachineLine(machine: machine, detail: nil) }
+        } trailing: {
             if AidenBotAttention.isRunning(bot), !needsYou, !isDimmed {
                 AidenWorkingIndicator(size: 12)
             }
@@ -558,10 +597,6 @@ struct AidenInboxBotRowView: View {
                 }
             }
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 6)
-        .frame(minHeight: 44)
-        .contentShape(Rectangle())
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(accessibilityName)
         .accessibilityHint("Opens the Bot")
@@ -571,13 +606,15 @@ struct AidenInboxBotRowView: View {
 /// The Bot's initial on a tinted circle, so a Bot row reads as a Bot beside chats.
 private struct AidenBotAvatarSymbol: View {
     let name: String
+    let size: CGFloat
     let palette: AidenPalette
 
     var body: some View {
+        // The initial is sized from the circle, so it never outgrows it.
         Text(name.prefix(1).uppercased())
-            .font(.caption.weight(.bold))
+            .font(.system(size: size * 0.5, weight: .bold))
             .foregroundStyle(palette.accent)
-            .frame(width: 24, height: 24)
+            .frame(width: size, height: size)
             .background(palette.accent.opacity(0.14), in: Circle())
             .accessibilityHidden(true)
     }

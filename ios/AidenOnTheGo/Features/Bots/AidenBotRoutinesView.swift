@@ -234,6 +234,7 @@ struct AidenBotRoutinesSection: View {
                     Task { await setEnabled(routine, enabled) }
                 }
             ))
+                .aidenSwitchStyle()
             .labelsHidden()
             .disabled(!canWrite || pendingEnabled[routine.id] != nil)
         }

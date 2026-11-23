@@ -232,6 +232,59 @@ final class AidenMachineChromeTests: XCTestCase {
         XCTAssertEqual(filter, .machine("laptop"))
     }
 
+    func testAnOfflineMachinesChipSaysSoWithoutColour() throws {
+        let window = try show(AidenMachineStrip(
+            labels: [label("Studio Mac"), label("Laptop", id: "laptop", color: .teal)],
+            offline: ["laptop"],
+            filter: .constant(.all)
+        ))
+        defer { close(window) }
+
+        let elements = accessibleElements(in: window)
+        XCTAssertEqual(elements.compactMap(\.accessibilityLabel), ["All computers", "Studio Mac", "Laptop"])
+        XCTAssertEqual(elements[2].accessibilityValue, "Offline", "The status dot isn't the only signal")
+        XCTAssertNotEqual(elements[1].accessibilityValue, "Offline")
+    }
+
+    func testTheStripFadesOnlyAnEdgeWithChipsPastIt() {
+        typealias Fades = AidenMachineStrip.Fades
+        // 500 points of chips in a 300-point column, with 16-point margins.
+        func fades(at offset: CGFloat, content: CGFloat = 500) -> Fades {
+            Fades(offset: offset, contentWidth: content, containerWidth: 300, leadingInset: 16, trailingInset: 16)
+        }
+
+        let start = fades(at: -16)
+        XCTAssertFalse(start.leading, "Nothing is scrolled past the leading edge yet")
+        XCTAssertTrue(start.trailing)
+
+        let middle = fades(at: 100)
+        XCTAssertTrue(middle.leading)
+        XCTAssertTrue(middle.trailing)
+
+        let end = fades(at: 216)
+        XCTAssertTrue(end.leading)
+        XCTAssertFalse(end.trailing, "The last chip is in full view")
+
+        let fits = fades(at: -16, content: 200)
+        XCTAssertFalse(fits.leading)
+        XCTAssertFalse(fits.trailing, "Chips that fit aren't faded")
+    }
+
+    func testACardRoundsItsOuterRowsOnly() {
+        let positions = AidenListCardPosition.positions(["a", "b", "c"])
+        XCTAssertEqual(positions["a"], .first)
+        XCTAssertEqual(positions["b"], .middle)
+        XCTAssertEqual(positions["c"], .last)
+        XCTAssertTrue(positions["a"]!.roundsTop)
+        XCTAssertFalse(positions["a"]!.roundsBottom)
+        XCTAssertFalse(positions["b"]!.roundsTop || positions["b"]!.roundsBottom)
+        XCTAssertTrue(positions["c"]!.roundsBottom)
+
+        let alone = AidenListCardPosition.positions(["only"])["only"]
+        XCTAssertEqual(alone, .only)
+        XCTAssertTrue(alone!.roundsTop && alone!.roundsBottom)
+    }
+
     func testAStripWithOneMachineDrawsNothing() throws {
         let window = try show(AidenMachineStrip(labels: [label("Studio Mac")], filter: .constant(.all)))
         defer { close(window) }
@@ -295,6 +348,51 @@ final class AidenMachineChromeTests: XCTestCase {
 
         XCTAssertTrue(spoken(summary(forkedFrom: lineage)).hasPrefix("Fork, Deploy the pricing page"))
         XCTAssertFalse(spoken(summary()).contains("Fork"))
+    }
+
+    /// At the largest text size a Bot row's avatar stays in its own column:
+    /// every pixel of the accent-tinted avatar sits left of the Bot's name.
+    func testABotRowAvatarNeverCoversTheNameAtTheLargestTextSize() throws {
+        let bot = try AidenRemoteJSONDecoder.decode(AidenBotSummary.self, from: JSONSerialization.data(withJSONObject: [
+            "id": "bot_wren", "name": "Wren", "purpose": "",
+            "avatar": ["semantic": ["version": 1, "shape": "orb", "color": "rose"]],
+            "health": "ready", "sessionState": "idle",
+            "createdAt": "2026-11-05T09:00:00.000Z", "updatedAt": "2026-11-05T09:00:00.000Z", "revision": "r1",
+        ] as [String: Any]))
+        // Berry's accent is a clear pink and its text a neutral grey, so the
+        // two can be told apart pixel by pixel.
+        let palette = AidenThemeCatalog.palette(preset: .berry, scheme: .light)
+        let row = AidenInboxBotRowView(bot: bot, palette: palette)
+            .frame(width: 360)
+            .background(Color.white)
+            .environment(\.dynamicTypeSize, .accessibility5)
+            .environment(\.aidenPalette, palette)
+        let renderer = ImageRenderer(content: row)
+        renderer.scale = 1
+        let image = try XCTUnwrap(renderer.cgImage)
+
+        let width = image.width, height = image.height
+        var pixels = [UInt8](repeating: 0, count: width * height * 4)
+        let context = try XCTUnwrap(CGContext(
+            data: &pixels, width: width, height: height, bitsPerComponent: 8, bytesPerRow: width * 4,
+            space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        ))
+        context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
+
+        var avatarMaxX = -1, nameMinX = Int.max
+        for y in 0..<height {
+            for x in 0..<width {
+                let i = (y * width + x) * 4
+                let r = Int(pixels[i]), g = Int(pixels[i + 1]), b = Int(pixels[i + 2])
+                let isPink = r - g > 12 && r - b > 0
+                let isInk = !isPink && max(r, g, b) < 140
+                if isPink { avatarMaxX = max(avatarMaxX, x) }
+                if isInk { nameMinX = min(nameMinX, x) }
+            }
+        }
+        XCTAssertGreaterThan(avatarMaxX, 0, "No avatar drawn")
+        XCTAssertLessThan(nameMinX, Int.max, "No name drawn")
+        XCTAssertLessThan(avatarMaxX, nameMinX, "The avatar runs into the name")
     }
 
     func testABotRowSaysItsMachineAndThatItIsOfflineToVoiceOver() throws {
@@ -581,6 +679,43 @@ final class AidenMachineChromeTests: XCTestCase {
             .compactMap(\.accessibilityLabel)
 
         XCTAssertEqual(buttons, ["Reconnect Laptop", "Reconnect Build Box"], "A rotor of buttons can't tell identical names apart")
+    }
+
+    func testAClosableOfflineRowSaysWhoseNoticeItHides() throws {
+        var dismissals = 0
+        var reconnects = 0
+        let window = try show(AidenMachineOfflineRow(
+            label: label("Laptop", id: "laptop"),
+            lastSeen: nil,
+            onReconnect: { reconnects += 1 },
+            onDismiss: { dismissals += 1 }
+        ))
+        defer { close(window) }
+
+        let buttons = accessibleElements(in: window).filter { $0.accessibilityTraits.contains(.button) }
+        XCTAssertEqual(buttons.compactMap(\.accessibilityLabel), ["Reconnect Laptop", "Hide Laptop offline notice"])
+        XCTAssertTrue(try XCTUnwrap(buttons.last).accessibilityActivate())
+        XCTAssertEqual(dismissals, 1)
+        XCTAssertEqual(reconnects, 0, "Closing the notice tried the machine")
+        XCTAssertGreaterThanOrEqual(try XCTUnwrap(buttons.last).accessibilityFrame.height, 44)
+    }
+
+    func testAClosedOfflineNoticeStaysClosedForTheSessionAndOnlyForItsMachine() {
+        let laptop = AidenMachineRoster.OfflineMachine(label: label("Laptop", id: "laptop"), lastSeen: nil, isReconnecting: false)
+        let mini = AidenMachineRoster.OfflineMachine(label: label("Home Mini", id: "mini"), lastSeen: nil, isReconnecting: false)
+        let notices = AidenOfflineNoticeDismissals()
+        XCTAssertEqual(notices.shown([laptop, mini]).map(\.id), ["laptop", "mini"])
+
+        notices.dismiss("laptop")
+        XCTAssertEqual(notices.shown([laptop, mini]).map(\.id), ["mini"])
+
+        // Laptop comes back, then drops off again, retrying as it goes.
+        XCTAssertEqual(notices.shown([mini]).map(\.id), ["mini"])
+        let retrying = AidenMachineRoster.OfflineMachine(label: label("Laptop", id: "laptop"), lastSeen: Date(), isReconnecting: true)
+        XCTAssertEqual(notices.shown([retrying, mini]).map(\.id), ["mini"])
+
+        // The next launch starts with every notice showing.
+        XCTAssertEqual(AidenOfflineNoticeDismissals().shown([laptop, mini]).map(\.id), ["laptop", "mini"])
     }
 
     func testAnOfflineRowIsDimmedAndKeepsItsChip() throws {

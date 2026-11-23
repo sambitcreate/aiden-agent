@@ -263,10 +263,15 @@ struct AidenBotsHomeView: View {
     /// With more than one machine shown: every machine's Bots,
     /// listed in place of the selected machine's.
     var machines: AidenBotsHomeMachines? = nil
+    /// The Bot open beside this list, whose row is highlighted. Nil on a stack.
+    var selectedBot: AidenHostObjectID? = nil
 
     @Environment(\.aidenPalette) private var palette
     @Environment(\.aidenReduceMotion) private var reduceMotion
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    @ScaledMetric(relativeTo: .body) private var scaledAvatarSize: CGFloat = 40
+    /// Past this the avatar would crowd the name for no gain.
+    private var avatarSize: CGFloat { min(scaledAvatarSize, 64) }
     @State private var snapshot: AidenBotCacheSnapshot?
     @State private var snapshotScope: AidenBotsHomeScope?
     @State private var query = ""
@@ -504,6 +509,7 @@ struct AidenBotsHomeView: View {
 
     private var home: some View {
         homeScroll
+            .aidenKeepsListScroll()
             .navigationTitle("Bots")
             .searchable(text: $query, prompt: "Search Bots")
             .searchToolbarBehavior(.minimize)
@@ -582,6 +588,7 @@ struct AidenBotsHomeView: View {
                         }
                     }
                 ))
+                    .aidenSwitchStyle()
                 .disabled(coordinator.botMessaging.isSaving(for: context) || coordinator.connectionState != .connected
                     || coordinator.installationStore.activeInstallation?.canWriteBots != true)
                 if let error = coordinator.botMessaging.error(for: context) {
@@ -643,11 +650,18 @@ struct AidenBotsHomeView: View {
             ContentUnavailableView.search(text: normalizedQuery)
                 .padding(.top, 54)
         case .content:
+            let positions = AidenListCardPosition.positions(rows.map(\.id))
+            Color.clear.frame(height: AidenSpacing.s)
             ForEach(rows) { row in
                 Button {
                     openChat(for: row.bot)
                 } label: {
-                    botRow(row)
+                    botRow(
+                        row,
+                        isSelected: selectedBot != nil && selectedBot == defaultMachineBotID(row.bot.id),
+                        card: positions[row.id]
+                    )
+                    .aidenListScrollRow(row.id)
                 }
                 .buttonStyle(.plain)
                 .contextMenu { botContextMenu(row.bot) }
@@ -656,12 +670,24 @@ struct AidenBotsHomeView: View {
         }
     }
 
+    /// A Bot on the selected machine as its route names it, device included,
+    /// so the highlight matches the route open beside the list exactly.
+    private func defaultMachineBotID(_ botID: String) -> AidenHostObjectID? {
+        guard let installation = coordinator.installationStore.activeInstallation else { return nil }
+        return AidenHostObjectID(instanceId: installation.id, deviceId: installation.deviceId, objectId: botID)
+    }
+
     /// Every shown machine's Bots: the strip, then each machine's under its name
     /// when the strip says All. A row opens the Bot on its own machine.
     @ViewBuilder
     private func machinesContent(_ machines: AidenBotsHomeMachines) -> some View {
-        AidenMachineStrip(labels: machines.roster.tabMachines, filter: machines.filter)
+        AidenMachineStrip(labels: machines.roster.tabMachines, offline: machines.roster.offlineIDs, filter: machines.filter)
             .padding(.vertical, AidenSpacing.xs)
+            // A horizontal scroll view runs on into the safe area, under the
+            // side rail of a closed iPhone Duo and out past it. A list row
+            // stops it at the content's edge on Inbox and Workspaces; here
+            // the strip stops itself.
+            .clipped()
         if let shown = shownPendingCreate {
             AidenBotPendingCreateRow(pending: shown.pending, machine: shown.machine)
         }
@@ -681,20 +707,21 @@ struct AidenBotsHomeView: View {
         }
         ForEach(sections) { section in
             if machines.filter.wrappedValue == .all, !section.rows.isEmpty {
-                Text(machines.roster.labels[section.instanceId]?.name ?? "")
-                    .font(.footnote.weight(.semibold))
-                    .foregroundStyle(palette.secondary)
-                    .padding(.horizontal, 20)
-                    .padding(.top, AidenSpacing.m)
-                    .accessibilityAddTraits(.isHeader)
+                AidenListSectionHeader(title: machines.roster.labels[section.instanceId]?.name ?? "")
+                    .padding(.top, AidenSpacing.xl)
             }
             AidenMachineSectionStatus(coordinator: coordinator, instanceId: section.instanceId, savedListName: String(localized: "Bots"))
                 .padding(.horizontal, 20)
+            let positions = AidenListCardPosition.positions(section.rows.map(\.id))
             ForEach(section.rows) { row in
                 Button {
                     machines.onOpen(row)
                 } label: {
-                    botRow(AidenBotHomeRow(bot: row.bot, conversation: nil), machine: row.id.instanceId)
+                    botRow(
+                        AidenBotHomeRow(bot: row.bot, conversation: nil), machine: row.id.instanceId,
+                        isSelected: selectedBot == row.id, card: positions[row.id]
+                    )
+                        .aidenListScrollRow(row.id)
                 }
                 .buttonStyle(.plain)
             }
@@ -709,66 +736,55 @@ struct AidenBotsHomeView: View {
             || row.bot.purpose.localizedCaseInsensitiveContains(normalizedQuery)
     }
 
-    private func botRow(_ row: AidenBotHomeRow, machine: String? = nil) -> some View {
-        HStack(alignment: .top, spacing: 14) {
+    /// A Bot: its avatar, its name, and one line of its last message or a
+    /// greeting, with the time on that line. Its purpose stays on its profile.
+    private func botRow(
+        _ row: AidenBotHomeRow, machine: String? = nil, isSelected: Bool = false, card: AidenListCardPosition? = nil
+    ) -> some View {
+        let stacked = dynamicTypeSize.isAccessibilitySize
+        return AidenListRowLayout(isStacked: stacked, hasSummary: true, markStyle: .avatar(avatarSize)) {
             AidenBotCanonicalAvatarView(
                 coordinator: coordinator,
                 machine: machine,
                 botID: row.bot.id,
                 avatar: row.bot.avatar,
                 name: row.bot.name,
-                size: 52,
+                size: avatarSize,
                 working: row.isWorking
             )
-            VStack(alignment: .leading, spacing: 4) {
-                // At the accessibility sizes the purpose and time go under the
-                // name, so none of the three has to squeeze into a third of a row.
-                let stacked = dynamicTypeSize.isAccessibilitySize
-                let header = stacked
-                    ? AnyLayout(VStackLayout(alignment: .leading, spacing: 4))
-                    : AnyLayout(HStackLayout(spacing: 8))
-                header {
-                    Text(row.bot.name)
-                        .font(.headline)
-                        .foregroundStyle(palette.foreground)
-                        .lineLimit(1)
-                        .layoutPriority(1)
-                    if !row.bot.purpose.isEmpty {
-                        Text(row.bot.purpose)
-                            .font(.subheadline)
-                            .foregroundStyle(palette.secondary)
-                            // Two lines below the accessibility sizes: on one, the audit finds
-                            // a purpose such as "Finds the signal in a busy week" cut short
-                            // at the larger standard sizes (task-34 fix round 1).
-                            .lineLimit(stacked ? nil : 2)
-                            .padding(.horizontal, 8)
-                            .padding(.vertical, 2)
-                            .background(palette.raised, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-                    }
-                    if !stacked { Spacer(minLength: 4) }
-                    if let conversation = row.conversation {
-                        AidenRelativeTimestampView(date: conversation.updatedAt)
-                            .font(.subheadline)
-                            .foregroundStyle(palette.secondary)
-                    }
-                }
-                Text(row.preview)
-                    .font(.body)
+        } title: {
+            Text(row.bot.name)
+                .font(.body)
+                .foregroundStyle(palette.foreground)
+                .lineLimit(stacked ? 3 : 1)
+        } summary: {
+            Text(row.preview)
+                .font(.subheadline)
+                .foregroundStyle(palette.secondary)
+                .lineLimit(1)
+        } trailing: {
+            if let conversation = row.conversation {
+                AidenRelativeTimestampView(date: conversation.updatedAt)
+                    .font(.footnote)
                     .foregroundStyle(palette.secondary)
-                    .lineLimit(1)
             }
         }
-        .padding(.horizontal, 20)
-        .padding(.vertical, 12)
+        .padding(.horizontal, AidenListRowBackground.cardInset)
+        .background {
+            if card != nil || isSelected {
+                AidenListRowBackground(isSelected: isSelected, palette: palette, card: card)
+            }
+        }
         .contentShape(Rectangle())
+        .contentShape(.contextMenuPreview, RoundedRectangle(cornerRadius: AidenRadius.control, style: .continuous))
         .accessibilityElement(children: .combine)
         .accessibilityLabel(rowAccessibilityLabel(row))
         .accessibilityHint("Opens the chat")
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
     }
 
     private func rowAccessibilityLabel(_ row: AidenBotHomeRow) -> String {
         var parts = [row.bot.name]
-        if !row.bot.purpose.isEmpty { parts.append(row.bot.purpose) }
         if row.isWorking { parts.append("Working") }
         parts.append(row.preview)
         return parts.joined(separator: ", ")
