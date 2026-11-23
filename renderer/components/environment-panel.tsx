@@ -440,8 +440,17 @@ export function EnvironmentPanelProvider({ children }: React.PropsWithChildren) 
     byRunId: Readonly<Record<string, string>>;
   }>(EMPTY_TRANSCRIPT_REFETCH_FAILURES);
   // Whether a refresh failure may be recorded: set as soon as one is, so the
-  // store subscription below never misses one that is not yet committed.
+  // store subscription below never misses one that is not yet committed, and
+  // otherwise taken from each update's result (`withFailureFlag`), never from
+  // an effect that could run after a newer failure.
   const transcriptRefetchMayHaveFailedRef = React.useRef(false);
+  const withFailureFlag = React.useCallback(
+    (next: { chatId: string | null; byRunId: Readonly<Record<string, string>> }) => {
+      transcriptRefetchMayHaveFailedRef.current = Object.keys(next.byRunId).length > 0;
+      return next;
+    },
+    [],
+  );
   const [subagentDetailAnnouncement, setSubagentDetailAnnouncement] =
     React.useState<SubagentDetailAnnouncementRequest | null>(null);
   const [gitOperationBusy, setGitOperationBusyState] = React.useState(false);
@@ -865,18 +874,18 @@ export function EnvironmentPanelProvider({ children }: React.PropsWithChildren) 
       if (failedReason !== null) transcriptRefetchMayHaveFailedRef.current = true;
       setTranscriptRefetchFailures((current) => {
         if (current.chatId !== chatId) {
-          return failedReason ? { chatId, byRunId: { [runId]: failedReason } } : current;
+          return withFailureFlag(failedReason ? { chatId, byRunId: { [runId]: failedReason } } : current);
         }
         if (failedReason === null) {
-          if (!(runId in current.byRunId)) return current;
+          if (!(runId in current.byRunId)) return withFailureFlag(current);
           const { [runId]: _cleared, ...rest } = current.byRunId;
-          return { chatId, byRunId: rest };
+          return withFailureFlag({ chatId, byRunId: rest });
         }
-        if (current.byRunId[runId] === failedReason) return current;
-        return { chatId, byRunId: { ...current.byRunId, [runId]: failedReason } };
+        if (current.byRunId[runId] === failedReason) return withFailureFlag(current);
+        return withFailureFlag({ chatId, byRunId: { ...current.byRunId, [runId]: failedReason } });
       });
     },
-    [],
+    [withFailureFlag],
   );
   const [transcriptReader] = React.useState(() =>
     createSubagentTranscriptReader({
@@ -916,9 +925,9 @@ export function EnvironmentPanelProvider({ children }: React.PropsWithChildren) 
   // chat in this commit is kept; unmounting drops any read still waiting.
   React.useEffect(() => {
     transcriptReader.switchChat(subagents.chatId);
-    setTranscriptRefetchFailures(EMPTY_TRANSCRIPT_REFETCH_FAILURES);
+    setTranscriptRefetchFailures(() => withFailureFlag(EMPTY_TRANSCRIPT_REFETCH_FAILURES));
     return () => transcriptReader.reset(null);
-  }, [subagents.chatId, transcriptReader]);
+  }, [subagents.chatId, transcriptReader, withFailureFlag]);
 
   // A finished helper's reasons are forgotten once its reads settle.
   React.useEffect(() => {
@@ -929,9 +938,6 @@ export function EnvironmentPanelProvider({ children }: React.PropsWithChildren) 
   // the live stream, or the saved run's own detail read. With no failure to
   // clear, a store change (every streamed token) leaves this state alone.
   React.useEffect(() => {
-    transcriptRefetchMayHaveFailedRef.current = Object.keys(transcriptRefetchFailures.byRunId).length > 0;
-  }, [transcriptRefetchFailures]);
-  React.useEffect(() => {
     let previous = helperChatStore.getState();
     return helperChatStore.subscribe(() => {
       const next = helperChatStore.getState();
@@ -939,15 +945,15 @@ export function EnvironmentPanelProvider({ children }: React.PropsWithChildren) 
       previous = next;
       if (!transcriptRefetchMayHaveFailedRef.current) return;
       setTranscriptRefetchFailures((current) => {
-        if (current.chatId !== next.chatId) return current;
+        if (current.chatId !== next.chatId) return withFailureFlag(current);
         const recovered = subagentHelperTranscriptsRecovered(before, next, Object.keys(current.byRunId));
-        if (recovered.length === 0) return current;
+        if (recovered.length === 0) return withFailureFlag(current);
         const byRunId = { ...current.byRunId };
         for (const runId of recovered) delete byRunId[runId];
-        return { chatId: current.chatId, byRunId };
+        return withFailureFlag({ chatId: current.chatId, byRunId });
       });
     });
-  }, [helperChatStore]);
+  }, [helperChatStore, withFailureFlag]);
 
   const retrySubagentDetail = React.useCallback(() => {
     if (!subagentsEnabled || !selectedSubagentRunId || !selectedSubagentReferenceMessageId) return;

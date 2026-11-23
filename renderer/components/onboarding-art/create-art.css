@@ -140,7 +140,14 @@
 .oa-cu-badge .oa-icon { width: 9px; height: 9px; }
 
 /* Native Subagents */
+.oa-sub-stage { position: absolute; inset: 0; container: oa-sub / inline-size; }
 .oa-sub-window { padding: 2px 5px; }
+.oa-sub-chat { right: 10px; top: 10px; width: 136px; height: 130px; }
+/* Narrow tiles: the chat sits under the selected Implementer row and bleeds
+   off the right edge, like the other tiles' cropped windows. */
+@container oa-sub (max-width: 199px) {
+  .oa-sub-chat { top: 56px; right: -12px; }
+}
 .oa-sub-heading { padding: 7px 5px 3px; color: var(--text-tertiary); font-size: 7.5px; font-weight: 600; }
 .oa-sub-row { display: flex; align-items: center; gap: 5px; height: 28px; padding: 0 6px 0 2px; border-radius: 7px; }
 .oa-sub-row[data-level="2"] { margin-left: 12px; }
@@ -153,6 +160,11 @@
 .oa-sub-text { display: grid; gap: 3px; flex: 1; min-width: 0; font-size: 7.5px; line-height: 8px; color: var(--text-secondary); }
 .oa-sub-text .oa-bar { height: 4px; }
 .oa-sub-state { flex: none; color: var(--text-tertiary); font-size: 7.5px; margin-right: 10px; }
+/* The narrowest tiles (about 140 px) would clip the status word, so the rows
+   keep only the name there. */
+@container oa-sub (max-width: 149px) {
+  .oa-sub-state { display: none; }
+}
 .oa-sub-live-dot { width: 5px; height: 5px; flex: none; border-radius: 50%; background: var(--status-accent); }
 
 /* Browser & Annotations */

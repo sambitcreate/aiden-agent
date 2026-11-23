@@ -685,20 +685,23 @@ body {
 }
 
 /* Go to approval: a brief accent tint that fades back, so a pointer user (no
-   focus ring) sees where they landed. Reduce Motion skips it; the card still
-   scrolls into view and takes focus. */
+   focus ring) sees where they landed. Under Reduce Motion the same tint holds
+   still for as long, then goes, with no fade. `revealApprovalCard` removes the
+   attribute after 1.2 s. */
 @keyframes approval-arrival {
   from {
-    background-color: color-mix(in srgb, var(--surface-popover) 88%, var(--status-accent));
+    background-color: var(--approval-arrival-tint);
   }
 }
 
 [data-approval-arrival] {
-  animation: approval-arrival 1200ms ease-out;
+  --approval-arrival-tint: color-mix(in srgb, var(--surface-popover) 88%, var(--status-accent));
+  animation: approval-arrival 1200ms var(--motion-decelerate-easing);
 }
 
 :root[data-reduce-motion="true"] [data-approval-arrival] {
   animation: none;
+  background-color: var(--approval-arrival-tint);
 }
 
 .ask-user-question-shell {

@@ -1,7 +1,7 @@
 import "../main/bots/test-dom";
 import * as React from "react";
 import assert from "node:assert/strict";
-import { afterEach, test } from "node:test";
+import { afterEach, mock, test } from "node:test";
 import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { ApprovalStatusLine, ChatApprovalCard, revealApprovalCard, type ApprovalStatus, type ChatApprovalDecisionOptions } from "./chat-approval-card";
 import { TooltipProvider } from "./ui";
@@ -775,27 +775,35 @@ test("a malformed hook proposal is blocked instead of shown", () => {
   }
 });
 
-test("arriving at the card from Go to approval scrolls it into view, focuses it without deciding, and tints it unless motion is reduced", () => {
+test("arriving at the card from Go to approval scrolls it into view, focuses it without deciding, and tints it for a moment", () => {
   const { card, decisions } = mount({ toolName: "run_command", summary: "Run command: npm test", scopes: ["once"] });
   const scrolls: ScrollIntoViewOptions[] = [];
   card.scrollIntoView = (options?: boolean | ScrollIntoViewOptions) => {
     if (typeof options === "object") scrolls.push(options);
   };
   const root = document.documentElement;
+  mock.timers.enable({ apis: ["setTimeout"] });
   try {
     root.dataset.reduceMotion = "false";
     revealApprovalCard(card);
     assert.equal(document.activeElement, card);
     assert.deepEqual(scrolls, [{ block: "nearest", behavior: "smooth" }]);
     assert.ok(card.hasAttribute("data-approval-arrival"), "a pointer user sees where focus landed");
+    mock.timers.tick(1_200);
+    assert.equal(card.hasAttribute("data-approval-arrival"), false, "the tint goes after a moment");
 
     root.dataset.reduceMotion = "true";
     revealApprovalCard(card);
     assert.equal(document.activeElement, card);
     assert.deepEqual(scrolls[1], { block: "nearest", behavior: "auto" }, "Reduce Motion still scrolls, at once");
-    assert.equal(card.hasAttribute("data-approval-arrival"), false, "and plays no tint");
+    assert.ok(card.hasAttribute("data-approval-arrival"), "and still shows where focus landed, held still");
+    mock.timers.tick(1_199);
+    assert.ok(card.hasAttribute("data-approval-arrival"));
+    mock.timers.tick(1);
+    assert.equal(card.hasAttribute("data-approval-arrival"), false);
     assert.deepEqual(decisions, []);
   } finally {
+    mock.timers.reset();
     delete root.dataset.reduceMotion;
   }
 });

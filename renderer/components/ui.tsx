@@ -1772,7 +1772,7 @@ export function Dialog({
         if (nextOpen || !dismissBlocked) onOpenChange(nextOpen);
       }}
     >
-      <UncoveredDialogPortal>
+      <DialogPrimitive.Portal>
         <DialogPrimitive.Overlay
           data-slot="dialog-overlay"
           className={cn("fixed inset-0 bg-transparent", layer === "onboarding" ? "z-[70]" : "z-50")}
@@ -1821,28 +1821,18 @@ export function Dialog({
             size === "full" && "h-[94vh] max-h-[94vh] w-[96vw]",
           )}
         >
-          <DialogPrimitive.Title className="shrink-0 text-heading2 font-semibold">
-            {title}
-          </DialogPrimitive.Title>
-          {description ? (
-            <DialogPrimitive.Description asChild>
-              <div className="mt-1.5 shrink-0 text-regular text-secondary">{description}</div>
-            </DialogPrimitive.Description>
-          ) : null}
-          <div className={cn("mt-4 min-h-0 overflow-y-auto px-0.5", size === "full" && "flex-1")}>{children}</div>
-          <div className="mt-5 flex shrink-0 justify-end gap-2">
-            {cancelKeepsOpen ? (
-              <Button
-                ref={cancelRef}
-                variant="filled"
-                className={actionClassName}
-                disabled={dismissBlocked}
-                onClick={() => void onCancel?.()}
-              >
-                {cancelLabel ?? (confirmHidden ? "Close" : "Cancel")}
-              </Button>
-            ) : (
-              <DialogPrimitive.Close asChild>
+          <UncoveredSurface>
+            <DialogPrimitive.Title className="shrink-0 text-heading2 font-semibold">
+              {title}
+            </DialogPrimitive.Title>
+            {description ? (
+              <DialogPrimitive.Description asChild>
+                <div className="mt-1.5 shrink-0 text-regular text-secondary">{description}</div>
+              </DialogPrimitive.Description>
+            ) : null}
+            <div className={cn("mt-4 min-h-0 overflow-y-auto px-0.5", size === "full" && "flex-1")}>{children}</div>
+            <div className="mt-5 flex shrink-0 justify-end gap-2">
+              {cancelKeepsOpen ? (
                 <Button
                   ref={cancelRef}
                   variant="filled"
@@ -1852,22 +1842,34 @@ export function Dialog({
                 >
                   {cancelLabel ?? (confirmHidden ? "Close" : "Cancel")}
                 </Button>
-              </DialogPrimitive.Close>
-            )}
-            {confirmHidden ? null : (
-              <Button
-                variant="accent"
-                className={actionClassName}
-                disabled={confirmDisabled || busy}
-                aria-describedby={confirmDescribedBy}
-                onClick={() => void onConfirm?.()}
-              >
-                {confirmLabel}
-              </Button>
-            )}
-          </div>
+              ) : (
+                <DialogPrimitive.Close asChild>
+                  <Button
+                    ref={cancelRef}
+                    variant="filled"
+                    className={actionClassName}
+                    disabled={dismissBlocked}
+                    onClick={() => void onCancel?.()}
+                  >
+                    {cancelLabel ?? (confirmHidden ? "Close" : "Cancel")}
+                  </Button>
+                </DialogPrimitive.Close>
+              )}
+              {confirmHidden ? null : (
+                <Button
+                  variant="accent"
+                  className={actionClassName}
+                  disabled={confirmDisabled || busy}
+                  aria-describedby={confirmDescribedBy}
+                  onClick={() => void onConfirm?.()}
+                >
+                  {confirmLabel}
+                </Button>
+              )}
+            </div>
+          </UncoveredSurface>
         </DialogPrimitive.Content>
-      </UncoveredDialogPortal>
+      </DialogPrimitive.Portal>
     </DialogPrimitive.Root>
   );
 }
@@ -1920,7 +1922,7 @@ export function AlertDialog({
         if (!busy) onOpenChange(nextOpen);
       }}
     >
-      <UncoveredAlertDialogPortal>
+      <AlertDialogPrimitive.Portal>
         <AlertDialogPrimitive.Overlay
           data-slot="dialog-overlay"
           className={cn("fixed inset-0 bg-transparent", layer === "onboarding" ? "z-[70]" : "z-50")}
@@ -1940,31 +1942,33 @@ export function AlertDialog({
             layer === "onboarding" ? "z-[70] shadow-onboarding" : "z-50 shadow-modal",
           )}
         >
-          <AlertDialogPrimitive.Title className="text-heading2 font-semibold">
-            {title}
-          </AlertDialogPrimitive.Title>
-          {description ? (
-            <AlertDialogPrimitive.Description asChild>
-              <div className="mt-2 text-regular text-secondary">{description}</div>
-            </AlertDialogPrimitive.Description>
-          ) : null}
-          {children ? (
-            <div className="mt-3 max-h-[46vh] min-h-0 overflow-y-auto text-small text-primary">{children}</div>
-          ) : null}
-          <div className="mt-5 flex justify-end gap-2">
-            <AlertDialogPrimitive.Cancel asChild>
-              <Button variant="filled" disabled={busy}>
-                Cancel
-              </Button>
-            </AlertDialogPrimitive.Cancel>
-            {keepOpenOnConfirm ? (
-              confirm
-            ) : (
-              <AlertDialogPrimitive.Action asChild>{confirm}</AlertDialogPrimitive.Action>
-            )}
-          </div>
+          <UncoveredSurface>
+            <AlertDialogPrimitive.Title className="text-heading2 font-semibold">
+              {title}
+            </AlertDialogPrimitive.Title>
+            {description ? (
+              <AlertDialogPrimitive.Description asChild>
+                <div className="mt-2 text-regular text-secondary">{description}</div>
+              </AlertDialogPrimitive.Description>
+            ) : null}
+            {children ? (
+              <div className="mt-3 max-h-[46vh] min-h-0 overflow-y-auto text-small text-primary">{children}</div>
+            ) : null}
+            <div className="mt-5 flex justify-end gap-2">
+              <AlertDialogPrimitive.Cancel asChild>
+                <Button variant="filled" disabled={busy}>
+                  Cancel
+                </Button>
+              </AlertDialogPrimitive.Cancel>
+              {keepOpenOnConfirm ? (
+                confirm
+              ) : (
+                <AlertDialogPrimitive.Action asChild>{confirm}</AlertDialogPrimitive.Action>
+              )}
+            </div>
+          </UncoveredSurface>
         </AlertDialogPrimitive.Content>
-      </UncoveredAlertDialogPortal>
+      </AlertDialogPrimitive.Portal>
     </AlertDialogPrimitive.Root>
   );
 }
@@ -2188,22 +2192,6 @@ export function SurfaceCovered({ covered, children }: { covered: boolean; childr
 /** Starts a new, uncovered surface: dialog and popover content. */
 function UncoveredSurface({ children }: { children: React.ReactNode }) {
   return <SurfaceCoveredContext.Provider value={false}>{children}</SurfaceCoveredContext.Provider>;
-}
-
-function UncoveredDialogPortal({ children }: { children: React.ReactNode }) {
-  return (
-    <DialogPrimitive.Portal>
-      <UncoveredSurface>{children}</UncoveredSurface>
-    </DialogPrimitive.Portal>
-  );
-}
-
-function UncoveredAlertDialogPortal({ children }: { children: React.ReactNode }) {
-  return (
-    <AlertDialogPrimitive.Portal>
-      <UncoveredSurface>{children}</UncoveredSurface>
-    </AlertDialogPrimitive.Portal>
-  );
 }
 
 /** Whether this content sits in a covered surface (see `SurfaceCovered`). */

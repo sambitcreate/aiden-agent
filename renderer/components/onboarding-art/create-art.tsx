@@ -316,7 +316,7 @@ export function ComputerUseArt() {
 
 export function NativeSubagentsArt() {
   return (
-    <>
+    <div className="oa-sub-stage">
     <ArtWindow className="oa-sub-window" style={{ left: 10, top: 10, width: 150, height: 250 }}>
       <div className="oa-sub-heading">Active · 2</div>
       <div className="oa-sub-row oa-selected">
@@ -376,10 +376,10 @@ export function NativeSubagentsArt() {
     </ArtWindow>
     {/*
       The selected helper's own chat: its task, its steps, and its reply.
-      Anchored to the right edge and narrowed in small tiles so the window
-      and its live dot stay inside the art at every gallery width.
+      In narrow tiles it drops below the selected row and runs off the right
+      edge (create-art.css), so the list it opens from stays readable.
     */}
-    <ArtWindow raised style={{ right: 10, top: 10, width: "min(136px, calc(100% - 28px))", height: 130 }}>
+    <ArtWindow raised className="oa-sub-chat">
       <div role="group" aria-label="Implementer's chat" className="oa-stack" style={{ gap: 5, padding: "6px 7px" }}>
         <div className="oa-row" style={{ gap: 4, height: 10 }}>
           <i className="oa-sub-live-dot" />
@@ -413,7 +413,7 @@ export function NativeSubagentsArt() {
         </div>
       </div>
     </ArtWindow>
-    </>
+    </div>
   );
 }
 

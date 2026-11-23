@@ -222,14 +222,14 @@ function claimsKind(details: unknown, kind: string): boolean {
 }
 
 const approvalArrivalTimers = new WeakMap<HTMLElement, ReturnType<typeof setTimeout>>();
-/** Long enough for the tint in styles.css (`[data-approval-arrival]`) to fade. */
-const APPROVAL_ARRIVAL_MS = 1_400;
+/** How long the tint in styles.css (`[data-approval-arrival]`) fades, or holds under Reduce Motion. */
+const APPROVAL_ARRIVAL_MS = 1_200;
 
 /**
  * Go to approval lands on the card as a whole: it scrolls into view, takes
  * focus without pressing anything, and briefly tints so a pointer user, who
  * gets no focus ring, sees where they arrived. Under Reduce Motion it scrolls
- * at once and the tint does not play.
+ * at once and the tint holds still instead of fading.
  */
 export function revealApprovalCard(card: HTMLElement): void {
   card.focus({ preventScroll: true });
@@ -238,10 +238,6 @@ export function revealApprovalCard(card: HTMLElement): void {
   const previous = approvalArrivalTimers.get(card);
   if (previous !== undefined) clearTimeout(previous);
   delete card.dataset.approvalArrival;
-  if (reduceMotion) {
-    approvalArrivalTimers.delete(card);
-    return;
-  }
   // Reading layout restarts the tint when Go to approval is pressed again.
   void card.offsetWidth;
   card.dataset.approvalArrival = "";
