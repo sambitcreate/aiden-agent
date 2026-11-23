@@ -223,9 +223,10 @@ export function ComputerUseAccessApproval({
         </p>
         <section
           ref={cardRef}
+          tabIndex={-1}
           aria-labelledby={titleId}
           aria-describedby={summaryId}
-          className="approval-shell composer-shell min-h-0 overflow-y-auto overscroll-contain bg-popover p-4 shadow-composer"
+          className="approval-shell composer-shell min-h-0 overflow-y-auto overscroll-contain bg-popover p-4 shadow-composer outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
           data-computer-use-access="true"
         >
           <div className="flex shrink-0 flex-col items-center text-center">

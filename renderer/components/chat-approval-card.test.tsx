@@ -1,4 +1,5 @@
 import "../main/bots/test-dom";
+import * as React from "react";
 import assert from "node:assert/strict";
 import { afterEach, test } from "node:test";
 import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
@@ -187,7 +188,7 @@ test("a Bot's card names the Bot, keeps its own Always, and notes how often it w
       />
     </TooltipProvider>,
   );
-  const card = screen.getByRole("region", { name: "Review before Calendar create event" });
+  const card = screen.getByRole("region", { name: "Request from Ada: Review before Calendar create event" });
   assert.ok(within(card).getByText("Ada is paused until you choose."));
   assert.ok(within(card).getByText("You’ve allowed this 3 times in the last 2 weeks."));
   assert.equal(screen.getByRole("status").textContent, "Ada needs approval for Calendar create event");
@@ -196,6 +197,47 @@ test("a Bot's card names the Bot, keeps its own Always, and notes how often it w
   assert.deepEqual(items.map((item) => item.textContent), ["Always allow for AdaAda won’t ask again for this."]);
   fireEvent.click(items[0]!);
   assert.deepEqual(decisions, [["allow", { scope: "always" }]]);
+});
+
+test("a helper's card is named for the helper and takes focus itself, so moving to it answers nothing", () => {
+  const cardRef = React.createRef<HTMLElement>();
+  const decisions: string[] = [];
+  render(
+    <TooltipProvider>
+      <ChatApprovalCard
+        pending={{
+          approvalId: "grant-1",
+          toolCallId: "call-1",
+          toolName: "subagent",
+          summary: "Allow writes for Code scout",
+          canAllow: true,
+          details: {
+            kind: "subagent-run-grant",
+            lane: "write",
+            runId: "run-1",
+            childLabel: "Code scout",
+            workspaceLabel: "Docs",
+            worktreeLabel: null,
+            isManagedWorktree: false,
+            workspaceRevisionPrefix: "0123456789ab",
+            fullHostAccess: false,
+            noRollback: false,
+          },
+        }}
+        deciding={false}
+        onDecide={(decision) => decisions.push(decision)}
+        cardRef={cardRef}
+      />
+    </TooltipProvider>,
+  );
+  const card = screen.getByRole("region", { name: /^Request from Code scout: / });
+  assert.equal(cardRef.current, card);
+  cardRef.current?.focus();
+  assert.equal(document.activeElement, card);
+  // Enter or Space on the focused card is not a decision.
+  fireEvent.keyDown(card, { key: "Enter" });
+  fireEvent.keyDown(card, { key: " " });
+  assert.deepEqual(decisions, []);
 });
 
 test("a card that may only be allowed on another device shows its request and only Deny", () => {

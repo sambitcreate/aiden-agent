@@ -98,7 +98,7 @@ import {
   workspaceFolderCheckApplies,
 } from "../shared/workspace-folder-presence";
 import { useOptionalNewChatActions } from "../lib/new-chat-actions";
-import { Button, EmptyState, ScrollArea, ScrollAreaFooterStack, Text, toast } from "../components/ui";
+import { Button, EmptyState, ScrollArea, ScrollAreaFooterStack, SurfaceCovered, Text, toast } from "../components/ui";
 import {
   agentsInstructionNoticeMessage,
   createAgentsInstructionNoticeLog,
@@ -502,6 +502,8 @@ export function ChatPane({ chatId }: { chatId: string }) {
   const git = useGitInfo(effectiveWorkspace?.id);
   const environmentPanel = useEnvironmentPanel();
   const designChatBodyHidden = useDesignChatBodyHidden();
+  const transcriptUnderFloatingPanel =
+    environmentPanel.surfaceMode === "tools-floating" && environmentPanel.toolsPresented;
   const settingsBlockedReason = environmentPanel.gitOperationBusy
     ? "Wait for the current Git operation to finish"
     : environmentPanel.editorState.saving
@@ -1167,14 +1169,20 @@ export function ChatPane({ chatId }: { chatId: string }) {
     () => visibleSubagentReferences(messages, environmentPanel.subagentsEnabled),
     [environmentPanel.subagentsEnabled, messages],
   );
-  // A helper that waits on one of your approvals reads "Waiting on you" in the
-  // chat's helper rows and the tray, as its own chat does. Display only.
-  const shownLiveSubagents = React.useMemo(
-    () => withSubagentApprovalWaitSnapshots(displayedLiveSubagents, approvals),
-    [approvals, displayedLiveSubagents],
-  );
   const chatSubagentViews =
     environmentPanel.subagents.chatId === chatId ? environmentPanel.subagentViews : null;
+  // A helper that waits on one of your approvals reads "Waiting on you" in the
+  // chat's helper rows and the tray, as its own chat does. Display only. Shared
+  // labels are judged against every helper in the chat, as the side panel does.
+  const shownLiveSubagents = React.useMemo(
+    () =>
+      withSubagentApprovalWaitSnapshots(
+        displayedLiveSubagents,
+        approvals,
+        chatSubagentViews ?? displayedLiveSubagents,
+      ),
+    [approvals, chatSubagentViews, displayedLiveSubagents],
+  );
   const shownSubagentViews = React.useMemo(
     () => (chatSubagentViews ? withSubagentApprovalWaitViews(chatSubagentViews, approvals) : null),
     [approvals, chatSubagentViews],
@@ -3732,7 +3740,8 @@ export function ChatPane({ chatId }: { chatId: string }) {
   // box's focus area then.
   const focusMainWaiting = React.useCallback((kind: MainChatWaitingKind) => {
     if (kind === "approval") {
-      const target = approvalDenyRef.current ?? approvalCardRef.current;
+      // The card itself, never a decision button: arriving here answers nothing.
+      const target = approvalCardRef.current;
       if (target?.isConnected) {
         target.focus({ preventScroll: false });
         return;
@@ -4473,64 +4482,69 @@ export function ChatPane({ chatId }: { chatId: string }) {
           </div>
         ) : (
           <KeepVisualChatContext.Provider value={keepVisualChatId}>
-            <MessageList
-              key={chatId}
-              chatId={chatId}
-              messages={messages}
-              streamingText={displayedStreamingText}
-              streamingReasoning={displayedStreamingReasoning}
-              streamingArtifacts={displayedStreamingArtifacts}
-              streamingArtifactPlacements={streamingArtifactPlacements}
-              streamingWideVisuals={streamingWideVisuals}
-              onVisualPrompt={handleVisualPrompt}
-              visualFollowUpBusy={visualPromptBusy}
-              streamingVisualDrafts={visualDrafts}
-              streamingUiVisuals={displayedStreamingUiVisuals}
-              streamingUiDrafts={uiDrafts}
-              streamComplete={streamComplete || detachedProjectionStreamComplete(visibleDetachedProjection)}
-              persistedHandoffMessageId={persistedHandoffMessageId}
-              onStreamHandoffComplete={() => streamHandoffRef.current?.()}
-              timeline={displayedGenerationTimeline}
-              liveSubagents={shownLiveSubagents}
-              subagentsEnabled={environmentPanel.subagentsEnabled}
-              onOpenSubagent={environmentPanel.openSubagent}
-              agentActivity={visibleAgentActivity}
-              onRetryUsageLimit={() => void retryUsageLimitNow("chat", chatId)}
-              readAloudMessageId={readAloudCandidateId}
-              failureActions={failureActions}
-              interruptedReply={interruptedReply}
-              readAloud={readAloudProps}
-              onFork={forkFromTranscript}
-              forkDisabledReason={forkDisabledReason}
-              onForkWithSummary={(messageId, position) =>
-                setForkSummaryRequest({ messageId, position })
-              }
-              forkSummary={
-                forkSummary
-                  ? {
-                      afterMessageId: forkSummary.afterMessageId,
-                      node: (
-                        <ForkSummaryCard
-                          key={`${forkSummary.state}:${forkSummary.afterMessageId}`}
-                          summary={forkSummary}
-                          busy={forkSummaryBusy}
-                          onCancel={() => void runForkSummaryAction("cancel")}
-                          onRetry={() => void runForkSummaryAction("retry")}
-                          onSkip={() => void runForkSummaryAction("skip")}
-                        />
-                      ),
-                    }
-                  : undefined
-              }
-              error={
-                error ??
-                (imageArtifactRecoveryUnavailable
-                  ? "Visual artifact staging is unavailable. Open Settings → About → Diagnostics and choose Reveal to locate the staging file that needs repair."
-                  : imageArtifactRecoveryPending
-                    ? "A visual artifact could not be recovered. Delete this chat to discard it before continuing."
-                    : null)
-              }
-            />
+            {/* A floating side panel covers most of the conversation: a link
+                preview or helper card opened from the strip left uncovered
+                would draw over the panel. */}
+            <SurfaceCovered covered={transcriptUnderFloatingPanel}>
+              <MessageList
+                key={chatId}
+                chatId={chatId}
+                messages={messages}
+                streamingText={displayedStreamingText}
+                streamingReasoning={displayedStreamingReasoning}
+                streamingArtifacts={displayedStreamingArtifacts}
+                streamingArtifactPlacements={streamingArtifactPlacements}
+                streamingWideVisuals={streamingWideVisuals}
+                onVisualPrompt={handleVisualPrompt}
+                visualFollowUpBusy={visualPromptBusy}
+                streamingVisualDrafts={visualDrafts}
+                streamingUiVisuals={displayedStreamingUiVisuals}
+                streamingUiDrafts={uiDrafts}
+                streamComplete={streamComplete || detachedProjectionStreamComplete(visibleDetachedProjection)}
+                persistedHandoffMessageId={persistedHandoffMessageId}
+                onStreamHandoffComplete={() => streamHandoffRef.current?.()}
+                timeline={displayedGenerationTimeline}
+                liveSubagents={shownLiveSubagents}
+                subagentsEnabled={environmentPanel.subagentsEnabled}
+                onOpenSubagent={environmentPanel.openSubagent}
+                agentActivity={visibleAgentActivity}
+                onRetryUsageLimit={() => void retryUsageLimitNow("chat", chatId)}
+                readAloudMessageId={readAloudCandidateId}
+                failureActions={failureActions}
+                interruptedReply={interruptedReply}
+                readAloud={readAloudProps}
+                onFork={forkFromTranscript}
+                forkDisabledReason={forkDisabledReason}
+                onForkWithSummary={(messageId, position) =>
+                  setForkSummaryRequest({ messageId, position })
+                }
+                forkSummary={
+                  forkSummary
+                    ? {
+                        afterMessageId: forkSummary.afterMessageId,
+                        node: (
+                          <ForkSummaryCard
+                            key={`${forkSummary.state}:${forkSummary.afterMessageId}`}
+                            summary={forkSummary}
+                            busy={forkSummaryBusy}
+                            onCancel={() => void runForkSummaryAction("cancel")}
+                            onRetry={() => void runForkSummaryAction("retry")}
+                            onSkip={() => void runForkSummaryAction("skip")}
+                          />
+                        ),
+                      }
+                    : undefined
+                }
+                error={
+                  error ??
+                  (imageArtifactRecoveryUnavailable
+                    ? "Visual artifact staging is unavailable. Open Settings → About → Diagnostics and choose Reveal to locate the staging file that needs repair."
+                    : imageArtifactRecoveryPending
+                      ? "A visual artifact could not be recovered. Delete this chat to discard it before continuing."
+                      : null)
+                }
+              />
+            </SurfaceCovered>
           </KeepVisualChatContext.Provider>
         )}
       </ScrollArea>

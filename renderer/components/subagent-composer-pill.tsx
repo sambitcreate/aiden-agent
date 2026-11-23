@@ -207,6 +207,7 @@ function allCompletedSummary(model: SubagentPillModel): string | null {
 function RunFeed({
   run,
   elapsed,
+  statusShownAbove,
   stopPending,
   stopError,
   onOpen,
@@ -214,6 +215,8 @@ function RunFeed({
 }: {
   run: SubagentRunView;
   elapsed: string | undefined;
+  /** The row above already reads the live status, so the feed doesn't repeat it. */
+  statusShownAbove: boolean;
   stopPending: boolean;
   stopError: string | undefined;
   onOpen: (runId: string, trigger: HTMLElement) => void;
@@ -225,7 +228,7 @@ function RunFeed({
   const activity = snapshot?.activity?.trim();
   const status = active ? subagentStatusLabel(run.state, activity) : null;
   // The newest step and the live status can say the same thing ("Writing its
-  // report"); it is said once.
+  // report"); it is said once, by the row's status line when it shows one.
   const milestoneLabels = (snapshot?.milestones ?? []).map((milestone, index, all) =>
     subagentMilestoneLabel(milestone, { inProgress: active && index === all.length - 1 }),
   );
@@ -252,7 +255,7 @@ function RunFeed({
             <span className="min-w-0">{label}</span>
           </li>
         ))}
-        {status ? (
+        {status && !statusShownAbove ? (
           <li className="flex items-start gap-2 font-medium text-primary">
             <span aria-hidden="true" className="mt-[0.4rem] size-1.5 shrink-0 rounded-full bg-status-accent" />
             <span className="min-w-0">{status}</span>
@@ -381,7 +384,7 @@ function TrayRun({
       </button>
       {expanded ? (
         <div id={feedId}>
-          <RunFeed run={run} elapsed={elapsed} {...feed} />
+          <RunFeed run={run} elapsed={elapsed} statusShownAbove={!error} {...feed} />
         </div>
       ) : null}
     </li>

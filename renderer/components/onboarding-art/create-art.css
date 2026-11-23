@@ -153,6 +153,7 @@
 .oa-sub-text { display: grid; gap: 3px; flex: 1; min-width: 0; font-size: 7.5px; line-height: 8px; color: var(--text-secondary); }
 .oa-sub-text .oa-bar { height: 4px; }
 .oa-sub-state { flex: none; color: var(--text-tertiary); font-size: 7.5px; margin-right: 10px; }
+.oa-sub-live-dot { width: 5px; height: 5px; flex: none; border-radius: 50%; background: var(--status-accent); }
 
 /* Browser & Annotations */
 .oa-br-tabs { display: flex; align-items: center; gap: 3px; height: 21px; padding: 0 5px; color: var(--text-tertiary); }

@@ -223,16 +223,11 @@ test("the tray lists the batch, opens the headline run's live feed, and closes w
   const runA = within(tray).getByRole("button", { name: /^Run a/u });
   assert.equal(runA.getAttribute("aria-expanded"), "true");
   const feed = within(tray).getByRole("list", { name: "Run a activity" });
-  // The last four milestones, then the live step.
+  // The last four milestones. The live step is read once, by the row above.
+  assert.match(runA.textContent ?? "", /Searching workspace text/u);
   assert.deepEqual(
     within(feed).getAllByRole("listitem").map((item) => item.textContent),
-    [
-      "Looked in a folder",
-      "Found files by name",
-      "Searched the files",
-      "Read a file",
-      "Searching workspace text",
-    ],
+    ["Looked in a folder", "Found files by name", "Searched the files", "Read a file"],
   );
   assert.match(tray.textContent ?? "", /The parser lives in renderer\/lib\./u);
 
@@ -268,6 +263,18 @@ test("a run's feed names its model the way people see it, skips a zero tool coun
       .getAllByRole("listitem")
       .map((item) => item.textContent);
   assert.deepEqual(steps().slice(0, 2), ["Read a file", "Writing its report"]);
+
+  // Once the live status is the same step, the expanded row says it once.
+  rerender([
+    runView("a", "running", {
+      modelId: "custom:lmstudio/aiden-e2e-vision",
+      tools: 0,
+      milestones: ["reading", "composing"],
+      activity: "Writing its report",
+    }),
+  ]);
+  const tray2 = screen.getByRole("dialog", { name: "Subagents" });
+  assert.equal((tray2.textContent ?? "").split("Writing its report").length - 1, 1);
 
   rerender([
     runView("a", "completed", {

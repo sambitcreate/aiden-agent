@@ -11,6 +11,7 @@ import {
   createSubagentHelperChatStore,
   mainChatWaitingFor,
   subagentHelperChatTranscript,
+  subagentHelperTranscriptsRecovered,
 } from "./subagent-helper-chat-store";
 
 function saved(runId: string, revision: number, texts: string[]): SubagentTranscriptV1 {
@@ -76,6 +77,41 @@ test("a gap between the saved copy and the live updates keeps the saved copy and
   const closed = subagentHelperChatTranscript(store.getState(), "run-1");
   assert.equal(closed.complete, true);
   assert.deepEqual(messageTexts(closed.transcript), ["First look.", "Much later."]);
+});
+
+test("a failed read stops mattering once the helper's whole conversation arrives another way", () => {
+  const store = createSubagentHelperChatStore();
+  store.reset("chat-1");
+  const failed = ["run-1", "run-2"];
+  let before = store.getState();
+
+  // A live update that starts beyond anything here is still a gap: the failure stands.
+  store.syncLive("chat-1", live(update("run-1", 4, 5, 1, "Later.")));
+  assert.deepEqual(subagentHelperTranscriptsRecovered(before, store.getState(), failed), []);
+
+  // The first update of a helper that just started streams here whole.
+  before = store.getState();
+  const firstUpdate: SubagentTranscriptUpdateV1 = {
+    version: 1,
+    runId: "run-2",
+    baseRevision: 0,
+    revision: 1,
+    trimmed: false,
+    entryCount: 1,
+    changes: [{ index: 0, entry: { kind: "task", text: "Read the notes." } }],
+  };
+  store.syncLive("chat-1", live(update("run-1", 4, 5, 1, "Later."), firstUpdate));
+  assert.deepEqual(subagentHelperTranscriptsRecovered(before, store.getState(), failed), ["run-2"]);
+
+  // A saved copy read by the saved run's own detail closes the gap.
+  before = store.getState();
+  store.rememberSaved("chat-1", saved("run-1", 4, ["Earlier.", "Midway.", "More."]));
+  assert.deepEqual(subagentHelperTranscriptsRecovered(before, store.getState(), failed), ["run-1"]);
+
+  // Nothing changed for either run: nothing recovers.
+  before = store.getState();
+  store.syncApprovals("chat-1", [], null, () => undefined);
+  assert.deepEqual(subagentHelperTranscriptsRecovered(before, store.getState(), failed), []);
 });
 
 test("the conversation stays after the turn ends and its live updates are dropped", () => {
@@ -223,43 +259,70 @@ test("returning to what waits in the main chat closes the expanded chat, then fo
   }
 });
 
-test("closing the expanded chat focuses the side panel's new Expand button when the old one is gone", () => {
-  const globals = globalThis as { window?: unknown; document?: unknown };
-  const had = { window: "window" in globals, document: "document" in globals };
-  const previous = { window: globals.window, document: globals.document };
+test("closing the expanded chat focuses the side panel's new Expand button for the same helper, or else the message box", () => {
+  const globals = globalThis as { window?: unknown; document?: unknown; Node?: unknown };
+  const had = { window: "window" in globals, document: "document" in globals, Node: "Node" in globals };
+  const previous = { window: globals.window, document: globals.document, Node: globals.Node };
   const frames: Array<() => void> = [];
   const focused: string[] = [];
-  const button = (name: string, isConnected: boolean) =>
+  const element = (name: string, attributes: Record<string, string>, isConnected = true) =>
     ({
       isConnected,
-      hasAttribute: (attribute: string) => attribute === "data-subagent-helper-expand",
+      closest: () => null,
+      hasAttribute: (attribute: string) => attribute in attributes,
+      getAttribute: (attribute: string) => attributes[attribute] ?? null,
       focus: () => focused.push(name),
     }) as unknown as HTMLElement;
+  const expandFor = (runId: string, name: string, isConnected = true) =>
+    element(name, { "data-subagent-helper-expand": runId }, isConnected);
+  const composer = element("composer", { "data-focus-region": "composer", "data-focus-region-entry": "" });
+  // The side panel's Expand buttons on screen after the expanded chat closes.
+  let panelButtons: HTMLElement[] = [];
   globals.window = { requestAnimationFrame: (callback: () => void) => frames.push(callback) };
+  globals.Node = { DOCUMENT_NODE: 9 };
   globals.document = {
-    querySelector: (selector: string) =>
-      selector === "[data-subagent-helper-expand]" ? button("new Expand", true) : null,
+    nodeType: 9,
+    get activeElement() {
+      return null;
+    },
+    querySelectorAll: (selector: string) =>
+      selector === "[data-subagent-helper-expand]"
+        ? panelButtons
+        : selector === '[data-focus-region="composer"]'
+          ? [composer]
+          : [],
+  };
+  const runFrames = () => {
+    for (const frame of frames.splice(0)) frame();
   };
   try {
     const store = createSubagentHelperChatStore();
     store.rememberSaved("chat-1", saved("run-1", 2, ["Hi"]));
 
     // The opener is still on screen: it gets focus straight away.
-    store.expand("run-1", button("old Expand", true));
+    store.expand("run-1", expandFor("run-1", "old Expand"));
     store.collapse();
     assert.deepEqual(focused, ["old Expand"]);
 
-    // The placeholder replaced the opener: focus waits for the panel to render its new button.
-    store.expand("run-1", button("old Expand", false));
+    // The placeholder replaced the opener: focus waits for the panel to render this helper's new button.
+    panelButtons = [expandFor("run-2", "other helper's Expand"), expandFor("run-1", "new Expand")];
+    store.expand("run-1", expandFor("run-1", "old Expand", false));
     store.collapse();
     assert.equal(store.getState().expandedRunId, null);
     assert.deepEqual(focused, ["old Expand"]);
-    for (const frame of frames) frame();
+    runFrames();
     assert.deepEqual(focused, ["old Expand", "new Expand"]);
+
+    // The panel moved on to another helper: its Expand button is not where focus came from.
+    panelButtons = [expandFor("run-2", "other helper's Expand")];
+    store.expand("run-1", expandFor("run-1", "old Expand", false));
+    store.collapse();
+    runFrames();
+    assert.deepEqual(focused, ["old Expand", "new Expand", "composer"]);
   } finally {
-    if (had.window) globals.window = previous.window;
-    else delete globals.window;
-    if (had.document) globals.document = previous.document;
-    else delete globals.document;
+    for (const key of ["window", "document", "Node"] as const) {
+      if (had[key]) globals[key] = previous[key];
+      else delete globals[key];
+    }
   }
 });

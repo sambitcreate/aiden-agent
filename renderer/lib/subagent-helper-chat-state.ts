@@ -59,7 +59,7 @@ export const SUBAGENT_HELPER_TONE_DOT: Record<SubagentHelperTone, string> = {
   stopped: "bg-tertiary",
 };
 
-export function subagentHelperIsActive(state: SubagentRunSnapshot["state"]): boolean {
+export function subagentHelperIsActive(state: SubagentRunSnapshot["state"] | "unknown"): boolean {
   return (
     state === "queued" || state === "starting" || state === "running" || state === "needs_attention"
   );
@@ -146,32 +146,88 @@ const GENERIC_FAILURES = new Set([
 /**
  * The runner writes its reasons for the main chat's model, which calls the
  * helper "the child". People read these plain sentences instead; the model
- * still gets the original text.
+ * still gets the original text. Each entry's first sentence is the runner's
+ * whole text, so a reason cut short upstream still maps by its start.
  */
-const RUNNER_REASONS: ReadonlyArray<readonly [RegExp, string]> = [
-  [/the child reached its turn limit\./giu, "It ran out of turns before finishing."],
-  [/the child reached its tool-call limit\./giu, "It used all of its allowed steps before finishing."],
+const RUNNER_REASONS: ReadonlyArray<readonly [string, RegExp, string]> = [
+  ["The child reached its turn limit.", /the child reached its turn limit\./giu, "It ran out of turns."],
   [
+    "The child reached its tool-call limit.",
+    /the child reached its tool-call limit\./giu,
+    "It used all of its allowed steps.",
+  ],
+  [
+    "The child reserved its remaining deadline for reporting.",
     /the child reserved its remaining deadline for reporting\./giu,
     "It ran short of time and stopped to write its report.",
   ],
-  [/the child reached its output limit\./giu, "Its reply grew too long."],
-  [/the child reached its event limit\./giu, "It did more work than one helper is allowed."],
-  [/the child reached its protocol limit\./giu, "It sent more than one helper is allowed."],
-  [/the child did not provide a final text report\./giu, "It stopped without writing a report."],
+  ["The child reached its output limit.", /the child reached its output limit\./giu, "Its reply grew too long."],
   [
+    "The child reached its event limit.",
+    /the child reached its event limit\./giu,
+    "It did more work than one helper is allowed.",
+  ],
+  [
+    "The child reached its protocol limit.",
+    /the child reached its protocol limit\./giu,
+    "It sent more than one helper is allowed.",
+  ],
+  [
+    "The child did not provide a final text report.",
+    /the child did not provide a final text report\./giu,
+    "It stopped without writing a report.",
+  ],
+  [
+    "The child completed without a textual assistant result.",
     /the child completed without a textual assistant result\./giu,
     "It stopped without writing a report.",
   ],
-  [/the child was interrupted before completion\./giu, "It was interrupted before it finished."],
   [
+    "The child model returned no successful final answer.",
+    /the child model returned no successful final answer\./giu,
+    "Its model stopped without a final answer.",
+  ],
+  [
+    "The child tool result exceeds its transport budget.",
+    /the child tool result exceeds its transport budget\./giu,
+    "One of its tools returned more than a helper can pass on.",
+  ],
+  [
+    "The child was interrupted before completion.",
+    /the child was interrupted before completion\./giu,
+    "It was interrupted before it finished.",
+  ],
+  [
+    "The child was stopped because the user sent new guidance. Read it before relaunching this task.",
     /the child was stopped because the user sent new guidance\.(?: read it before relaunching this task\.)?/giu,
     "It was stopped because you sent new guidance.",
   ],
-  [/these are incomplete, unverified partial findings\./giu, "Its findings so far may be incomplete."],
-  [/the child (?:model )?could not complete this task\./giu, ""],
-  [/this helper couldn't finish\./giu, ""],
+  [
+    "These are incomplete, unverified partial findings.",
+    /these are incomplete, unverified partial findings\./giu,
+    "Its findings so far may be incomplete.",
+  ],
+  ["The child could not complete this task.", /the child (?:model )?could not complete this task\./giu, ""],
+  ["This helper couldn't finish.", /this helper couldn't finish\./giu, ""],
 ];
+
+/** The shortest cut-off runner text still matched by its start. */
+const MIN_RUNNER_PREFIX = 16;
+
+// Upstream limits can cut the last reason mid-sentence, with or without an
+// ellipsis. A long enough start of one runner sentence still reads plainly.
+function plainTruncatedRunnerReason(text: string): string {
+  const match = /(^|[.!?]\s+)([^.!?]*?)(?:\u2026|\.\.\.)?\s*$/u.exec(text);
+  if (!match) return text;
+  const fragment = (match[2] ?? "").trim().toLocaleLowerCase();
+  if (fragment.length < MIN_RUNNER_PREFIX) return text;
+  for (const [sentence, , plain] of RUNNER_REASONS) {
+    if (sentence.toLocaleLowerCase().startsWith(fragment)) {
+      return `${text.slice(0, match.index)}${match[1] ?? ""} ${plain} `;
+    }
+  }
+  return text;
+}
 
 /**
  * A failed helper's reason in plain words, or null when it only says the
@@ -180,7 +236,8 @@ const RUNNER_REASONS: ReadonlyArray<readonly [RegExp, string]> = [
 export function subagentFailureReason(error: string | undefined): string | null {
   let text = error?.trim().replace(/\s+/gu, " ");
   if (!text || GENERIC_FAILURES.has(text.toLocaleLowerCase())) return null;
-  for (const [pattern, plain] of RUNNER_REASONS) text = text.replace(pattern, ` ${plain} `);
+  for (const [, pattern, plain] of RUNNER_REASONS) text = text.replace(pattern, ` ${plain} `);
+  text = plainTruncatedRunnerReason(text.trim());
   // Sentences the replacements produced twice read once.
   const seen = new Set<string>();
   text = text
@@ -199,7 +256,7 @@ export function subagentFailureReason(error: string | undefined): string | null 
 export interface SubagentHelperProblem {
   tone: "stopped" | "failed";
   text: string;
-  /** The ready-made message Ask main chat to retry puts in the composer. */
+  /** The ready-made message Ask the main chat to retry puts in the composer. */
   retryText: string;
 }
 
@@ -252,28 +309,35 @@ export function subagentHelperProblem(
   };
 }
 
+/** A helper in this chat, as far as matching an approval to it needs. */
+export type SubagentHelperPeer = Pick<SubagentRunSnapshot, "runId" | "label"> & {
+  state: SubagentRunSnapshot["state"] | "unknown";
+};
+
 /**
  * The pending approval that belongs to this helper. A run grant names its
  * run; the other kinds name only the helper's label, so they match only when
- * no other active helper shares it.
+ * no other active helper in `helpers` shares it. Every surface passes all of
+ * the chat's helpers and this one rule decides which count.
  */
 export function subagentHelperApprovalFor(
   run: Pick<SubagentRunSnapshot, "runId" | "label">,
   approvals: readonly ApprovalPrompt[],
-  activeRuns: ReadonlyArray<Pick<SubagentRunSnapshot, "runId" | "label">>,
+  helpers: readonly SubagentHelperPeer[],
 ): ApprovalPrompt | null {
-  return subagentHelperApprovalsFor(run, approvals, activeRuns)[0] ?? null;
+  return subagentHelperApprovalsFor(run, approvals, helpers)[0] ?? null;
 }
 
 /** Every pending approval that belongs to this helper, in queue order. */
 export function subagentHelperApprovalsFor(
   run: Pick<SubagentRunSnapshot, "runId" | "label">,
   approvals: readonly ApprovalPrompt[],
-  activeRuns: ReadonlyArray<Pick<SubagentRunSnapshot, "runId" | "label">>,
+  helpers: readonly SubagentHelperPeer[],
 ): ApprovalPrompt[] {
-  const labelUnique =
-    activeRuns.filter((other) => other.label === run.label && other.runId !== run.runId).length ===
-    0;
+  const labelUnique = !helpers.some(
+    (other) =>
+      other.runId !== run.runId && other.label === run.label && subagentHelperIsActive(other.state),
+  );
   const owned: ApprovalPrompt[] = [];
   for (const approval of approvals) {
     const details = approval.details;
@@ -297,18 +361,21 @@ export function subagentHelperApprovalsFor(
 /**
  * Show running helpers that wait on one of your approvals as waiting on you.
  * The server still calls them running, so this is a display-only overlay.
- * Returns the same array when nothing changes.
+ * Only running helpers ask: every helper approval, a run grant included,
+ * comes from one of its tool calls, which start once it runs. `helpers` is
+ * every helper in the chat, for telling apart helpers that share a label; it
+ * defaults to `runs`. Returns the same array when nothing changes.
  */
 export function withSubagentApprovalWaitSnapshots(
   runs: readonly SubagentRunSnapshot[],
   approvals: readonly ApprovalPrompt[],
+  helpers: readonly SubagentHelperPeer[] = runs,
 ): readonly SubagentRunSnapshot[] {
   if (approvals.length === 0) return runs;
-  const active = runs.filter((run) => subagentHelperIsActive(run.state));
   let changed = false;
   const next = runs.map((run) => {
     if (run.state !== "running" || run.version !== 2) return run;
-    if (subagentHelperApprovalsFor(run, approvals, active).length === 0) return run;
+    if (subagentHelperApprovalsFor(run, approvals, helpers).length === 0) return run;
     changed = true;
     return {
       ...run,
@@ -358,7 +425,10 @@ export const SUBAGENT_TRANSCRIPT_REFRESH_ERROR = "Couldn't load this helper's co
  *
  * - `gap:<revision>`: the streamed updates start after the saved copy.
  * - `join`: a running helper with nothing in this window yet (it started
- *   before the window opened).
+ *   before the window opened); its updates will follow.
+ * - `join:<revision>`: the same with no updates streaming to this window, so
+ *   the read repeats as the run moves until a saved copy exists. A queued or
+ *   starting helper has nothing saved yet, and that is not a failure.
  * - `run:<state>:<revision>`: no updates stream to this window (another
  *   window runs the chat), so the saved copy is read again whenever the run's
  *   state or revision moves, including when it finishes.
@@ -369,9 +439,22 @@ export function subagentHelperTranscriptRefetchReason(
   streamingHere: boolean,
 ): string | null {
   if (!merged.complete) return `gap:${merged.transcript?.revision ?? 0}`;
-  if (!merged.transcript) return subagentHelperIsActive(run.state) ? "join" : null;
+  if (!merged.transcript) {
+    if (!subagentHelperIsActive(run.state)) return null;
+    return streamingHere ? "join" : `join:${run.revision}`;
+  }
   if (streamingHere) return null;
   return `run:${run.state}:${run.revision}`;
+}
+
+/**
+ * The run revision a read for this reason may be skipped at: a saved copy
+ * already read at that revision or later answers it. A gap, or a join whose
+ * updates stream here, always reads.
+ */
+export function subagentHelperRefetchSkipRevision(reason: string): number | undefined {
+  const match = /^(?:run:[a-z_]+|join):(\d+)$/u.exec(reason);
+  return match ? Number(match[1]) : undefined;
 }
 
 /** A timeline for one helper message, so the main chat's step rows can draw it. */

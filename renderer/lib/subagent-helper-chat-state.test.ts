@@ -18,6 +18,7 @@ import {
   subagentHelperHasActiveHelpers,
   subagentHelperProblem,
   subagentHelperTimeline,
+  subagentHelperRefetchSkipRevision,
   subagentHelperTranscriptRefetchReason,
   subagentHelperWorkSummary,
   withSubagentApprovalWaitSnapshots,
@@ -218,9 +219,9 @@ const grantDetails = (runId: string, childLabel: string): SubagentRunGrantApprov
 });
 
 test("a helper chat shows only the approval that belongs to its helper", () => {
-  const scout = { runId: "run-1", label: "Scout" };
-  const twin = { runId: "run-2", label: "Scout" };
-  const fixer = { runId: "run-3", label: "Fixer" };
+  const scout = { runId: "run-1", label: "Scout", state: "running" as const };
+  const twin = { runId: "run-2", label: "Scout", state: "running" as const };
+  const fixer = { runId: "run-3", label: "Fixer", state: "running" as const };
   const grant = approval("grant", grantDetails("run-1", "Scout"));
   const write = approval("write", writeDetails("Scout"));
   const plain = approval("plain", undefined);
@@ -285,12 +286,28 @@ test("consecutive tool-only messages read as one block of steps, and a written m
 test("the runner's reasons for a failed helper read as plain sentences, and other text passes through", () => {
   assert.equal(
     subagentFailureReason("The child reached its turn limit. These are incomplete, unverified partial findings."),
-    "It ran out of turns before finishing. Its findings so far may be incomplete.",
+    "It ran out of turns. Its findings so far may be incomplete.",
   );
   assert.equal(
     subagentFailureReason("The child reached its tool-call limit."),
-    "It used all of its allowed steps before finishing.",
+    "It used all of its allowed steps.",
   );
+  assert.equal(
+    subagentFailureReason("The child model returned no successful final answer."),
+    "Its model stopped without a final answer.",
+  );
+  assert.equal(
+    subagentFailureReason("The child tool result exceeds its transport budget."),
+    "One of its tools returned more than a helper can pass on.",
+  );
+  // A reason cut short upstream still reads plainly from its start.
+  assert.equal(
+    subagentFailureReason("The child reached its turn limit. These are incomplete, unverified par\u2026"),
+    "It ran out of turns. Its findings so far may be incomplete.",
+  );
+  assert.equal(subagentFailureReason("The child reached its tool-ca"), "It used all of its allowed steps.");
+  // A short fragment is not guessed at.
+  assert.equal(subagentFailureReason("The child reac..."), "The child reac...");
   // Two runner phrases that mean the same thing are said once.
   assert.equal(
     subagentFailureReason(
@@ -309,14 +326,14 @@ test("the runner's reasons for a failed helper read as plain sentences, and othe
   );
   assert.equal(
     problem?.text,
-    "This helper couldn't finish. It ran out of turns before finishing. It didn't change any files.",
+    "This helper couldn't finish. It ran out of turns. It didn't change any files.",
   );
   assert.doesNotMatch(problem?.text ?? "", /child/iu);
 });
 
 test("every approval a helper is waiting on belongs to it, in queue order", () => {
-  const scout = { runId: "run-1", label: "Scout" };
-  const fixer = { runId: "run-3", label: "Fixer" };
+  const scout = { runId: "run-1", label: "Scout", state: "running" as const };
+  const fixer = { runId: "run-3", label: "Fixer", state: "running" as const };
   const first = approval("first", grantDetails("run-1", "Scout"));
   const other = approval("other", grantDetails("run-3", "Fixer"));
   const second = approval("second", writeDetails("Scout"));
@@ -326,6 +343,20 @@ test("every approval a helper is waiting on belongs to it, in queue order", () =
     ["first", "second"],
   );
   assert.equal(subagentHelperApprovalFor(scout, [other, second, first], [scout, fixer])?.approvalId, "second");
+});
+
+test("a write that names a label is the helper's only while no other active helper has that label", () => {
+  const scout = { runId: "run-1", label: "Scout", state: "running" as const };
+  const write = approval("write", writeDetails("Scout"));
+  const grant = approval("grant", grantDetails("run-1", "Scout"));
+  const twin = (state: "queued" | "completed" | "failed" | "unknown") => ({ runId: "run-2", label: "Scout", state });
+  // A finished helper of the same name can't be asking, so the write is this one's.
+  for (const state of ["completed", "failed", "unknown"] as const) {
+    assert.equal(subagentHelperApprovalFor(scout, [write], [scout, twin(state)])?.approvalId, "write", state);
+  }
+  // Another active one could be, so neither claims it; a run grant still names its run.
+  assert.equal(subagentHelperApprovalFor(scout, [write], [scout, twin("queued")]), null);
+  assert.equal(subagentHelperApprovalFor(scout, [write, grant], [scout, twin("queued")])?.approvalId, "grant");
 });
 
 function snapshot(runId: string, extra: Partial<SubagentRunSnapshotV2> = {}): SubagentRunSnapshotV2 {
@@ -385,6 +416,17 @@ test("a running helper with a pending approval shows as waiting on you, and noth
   assert.equal(withSubagentApprovalWaitViews(views, [doneGrant]), views);
 });
 
+test("the chat's helper rows judge a shared label against every helper in the chat, not just this turn's", () => {
+  const current = snapshot("run-1", { label: "Scout" });
+  const write = approval("write", writeDetails("Scout"));
+  // Only this turn's helper is in the rows: on its own, the write is its.
+  assert.equal(withSubagentApprovalWaitSnapshots([current], [write])[0]?.state, "needs_attention");
+  // An earlier turn's helper of the same name still works in the background: it could be asking.
+  const background = { runId: "run-0", label: "Scout", state: "running" as const };
+  const rows = [current];
+  assert.equal(withSubagentApprovalWaitSnapshots(rows, [write], [background, current]), rows);
+});
+
 test("Stop says it stops everything only while a helper under this one is still working", () => {
   const parent = snapshot("run-1");
   const child = snapshot("run-2", { parentRunId: "run-1", depth: 2 });
@@ -430,4 +472,39 @@ test("a window reads a helper's saved conversation again only for a new reason",
   const empty = mergeSubagentTranscript(null, null);
   assert.ok(subagentHelperTranscriptRefetchReason(running, empty, true));
   assert.equal(subagentHelperTranscriptRefetchReason({ state: "completed", revision: 2 }, empty, false), null);
+
+  // With no updates streaming here, a queued helper with nothing saved yet is
+  // read again as it moves, so its first saved copy is picked up.
+  const queued = snapshot("run-1", { state: "queued", revision: 1 });
+  const joinFirst = subagentHelperTranscriptRefetchReason(queued, empty, false);
+  const joinLater = subagentHelperTranscriptRefetchReason({ ...queued, state: "running", revision: 2 }, empty, false);
+  assert.ok(joinFirst && joinLater);
+  assert.notEqual(joinFirst, joinLater);
+});
+
+test("a read that follows the run can be skipped once its revision was read", () => {
+  const empty = mergeSubagentTranscript(null, null);
+  const saved = mergeSubagentTranscript(transcript("run-1", 3, [{ text: "Done." }]), null);
+  const finished = snapshot("run-1", { state: "completed", revision: 9 });
+  const queued = snapshot("run-1", { state: "queued", revision: 2 });
+  const reasonFor = (...args: Parameters<typeof subagentHelperTranscriptRefetchReason>) => {
+    const reason = subagentHelperTranscriptRefetchReason(...args);
+    assert.ok(reason);
+    return reason;
+  };
+
+  assert.equal(subagentHelperRefetchSkipRevision(reasonFor(finished, saved, false)), 9);
+  assert.equal(subagentHelperRefetchSkipRevision(reasonFor(queued, empty, false)), 2);
+  // A join whose updates stream here, and a gap, always read.
+  assert.equal(subagentHelperRefetchSkipRevision(reasonFor(queued, empty, true)), undefined);
+  const gap = mergeSubagentTranscript(null, {
+    version: 1,
+    runId: "run-1",
+    baseRevision: 4,
+    revision: 5,
+    trimmed: false,
+    entryCount: 1,
+    changes: [],
+  });
+  assert.equal(subagentHelperRefetchSkipRevision(reasonFor(finished, gap, true)), undefined);
 });

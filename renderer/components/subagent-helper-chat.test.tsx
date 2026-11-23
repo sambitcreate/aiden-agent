@@ -17,6 +17,7 @@ import { EnvironmentPanelContext, type EnvironmentPanelContextValue } from "./en
 import { SubagentHelperChat } from "./subagent-helper-chat";
 import { ExpandedSubagentHelperChat } from "./subagent-helper-chat-expanded";
 import { SubagentsPanel } from "./subagents-panel";
+import { TooltipProvider } from "./ui";
 
 afterEach(cleanup);
 
@@ -190,9 +191,28 @@ test("in the side panel, a helper's approval is a compact row that points at the
   assert.equal(within(chat).queryByRole("button", { name: /Deny|Don.t allow/u }), null);
   const row = chat.querySelector<HTMLElement>("[data-subagent-helper-approval]");
   assert.ok(row);
-  assert.match(row.textContent ?? "", /Waiting on your approval in the main chat/u);
+  assert.equal(row.textContent, "Waiting on your approval in the main chat.Go to approval");
   fireEvent.click(within(row).getByRole("button", { name: "Go to approval" }));
   assert.deepEqual(focused, ["main card"]);
+});
+
+test("a helper's approval queued behind others says how many the main chat shows first", () => {
+  const rowText = (ahead: number) => {
+    cleanup();
+    render(
+      <SubagentHelperChat
+        run={helper({ activity: "Preparing a workspace update" })}
+        transcript={conversation(2, [{ text: "I'll write the plan." }])}
+        approval={{ ...writeApproval(() => undefined), ahead }}
+        onFocusMainApproval={() => undefined}
+        now={4_000}
+      />,
+    );
+    return screen.getByRole("article", { name: "Code scout" }).querySelector("[data-subagent-helper-approval]")
+      ?.querySelector("p")?.textContent;
+  };
+  assert.equal(rowText(1), "Waiting on your approval in the main chat, after 1 other request.");
+  assert.equal(rowText(3), "Waiting on your approval in the main chat, after 3 other requests.");
 });
 
 test("a running helper that asks to write says it is waiting on you, and the answer goes back", () => {
@@ -230,6 +250,7 @@ test("a running helper that asks to write says it is waiting on you, and the ans
       }}
       now={4_000}
     />,
+    { wrapper: TooltipProvider },
   );
   const chat = screen.getByRole("article", { name: "Code scout" });
   assert.match(chat.textContent ?? "", /Scout · Waiting on you · /u);
@@ -251,10 +272,10 @@ test("a stopped helper explains what happened and offers no Stop", () => {
   );
   const problem = screen.getByRole("note");
   assert.equal(
-    problem.textContent?.replace("Ask main chat to retry", ""),
+    problem.textContent?.replace("Ask the main chat to retry", ""),
     "You stopped this helper after 1 step. It didn't change any files.",
   );
-  within(problem).getByRole("button", { name: "Ask main chat to retry" });
+  within(problem).getByRole("button", { name: "Ask the main chat to retry" });
   assert.match(screen.getByRole("article").textContent ?? "", /Scout · Stopped · /u);
   assert.equal(screen.queryByRole("button", { name: /^Stop / }), null);
   assert.equal(document.querySelector("[data-subagent-helper-working]"), null);
@@ -294,7 +315,7 @@ test("a helper without a saved conversation falls back to its summary", () => {
   assert.equal(screen.queryByText(/Saved view notice/u), null);
 });
 
-test("Ask main chat to retry puts the request in the message box once, without sending it", () => {
+test("Ask the main chat to retry puts the request in the message box once, without sending it", () => {
   const chatId = `chat-retry-${Date.now()}`;
   const store = createSubagentHelperChatStore();
   store.reset(chatId);
@@ -308,10 +329,10 @@ test("Ask main chat to retry puts the request in the message box once, without s
   );
   const problem = screen.getByRole("note");
   assert.equal(
-    problem.textContent?.replace("Ask main chat to retry", ""),
+    problem.textContent?.replace("Ask the main chat to retry", ""),
     "This helper couldn't finish. Disk full. It didn't change any files.",
   );
-  const retry = within(problem).getByRole("button", { name: "Ask main chat to retry" });
+  const retry = within(problem).getByRole("button", { name: "Ask the main chat to retry" });
   fireEvent.click(retry);
   fireEvent.click(retry);
 
@@ -415,14 +436,16 @@ function ExpandedHarness({
     refetchSubagentTranscript: refetch,
   } as unknown as EnvironmentPanelContextValue;
   return (
-    <SubagentHelperChatStoreContext.Provider value={store}>
-      <EnvironmentPanelContext.Provider value={panel}>
-        <button type="button" onClick={(event) => store.expand(snapshot.runId, event.currentTarget)}>
-          Open Code scout
-        </button>
-        <ExpandedSubagentHelperChat chatId="chat-1" />
-      </EnvironmentPanelContext.Provider>
-    </SubagentHelperChatStoreContext.Provider>
+    <TooltipProvider>
+      <SubagentHelperChatStoreContext.Provider value={store}>
+        <EnvironmentPanelContext.Provider value={panel}>
+          <button type="button" onClick={(event) => store.expand(snapshot.runId, event.currentTarget)}>
+            Open Code scout
+          </button>
+          <ExpandedSubagentHelperChat chatId="chat-1" />
+        </EnvironmentPanelContext.Provider>
+      </SubagentHelperChatStoreContext.Provider>
+    </TooltipProvider>
   );
 }
 

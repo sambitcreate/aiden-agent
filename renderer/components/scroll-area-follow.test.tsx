@@ -2,7 +2,8 @@ import "../main/bots/test-dom";
 import assert from "node:assert/strict";
 import { afterEach, test } from "node:test";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { ScrollArea } from "./ui";
+import { HoverCard, HoverCardContent, HoverCardTrigger, ScrollArea, TooltipProvider } from "./ui";
+import { Tooltip } from "./ui-primitives";
 
 afterEach(() => cleanup());
 
@@ -558,4 +559,44 @@ test("a body replacement stays reachable while the transcript and footer behind 
 
   assert.ok(hiddenAncestor(screen.getByText("chunk 0")), "the transcript is hidden");
   assert.equal(screen.queryByRole("button", { name: "Send message" }), null, "the footer is hidden");
+});
+
+test("hover cards and tooltips in a covered transcript stay closed, and the replacement's own still open", () => {
+  // A link preview pinned open and a tooltip trigger, as the conversation renders them.
+  const transcript = (
+    <>
+      <HoverCard open>
+        <HoverCardTrigger asChild>
+          <a href="https://example.com">example.com</a>
+        </HoverCardTrigger>
+        <HoverCardContent>Link preview</HoverCardContent>
+      </HoverCard>
+      <Tooltip content="Copy reply">
+        <button type="button">Copy</button>
+      </Tooltip>
+    </>
+  );
+  const back = (
+    <Tooltip content="Back to main chat (Esc)">
+      <button type="button">Back to main chat</button>
+    </Tooltip>
+  );
+  const view = render(
+    <TooltipProvider delayDuration={0}>
+      <ScrollArea>{transcript}</ScrollArea>
+    </TooltipProvider>,
+  );
+  assert.ok(screen.getByText("Link preview"), "uncovered, the preview shows");
+  fireEvent.focus(screen.getByRole("button", { name: "Copy" }));
+  assert.ok(screen.getAllByText("Copy reply").length > 0, "uncovered, the tooltip shows");
+
+  view.rerender(
+    <TooltipProvider delayDuration={0}>
+      <ScrollArea bodyReplacement={back}>{transcript}</ScrollArea>
+    </TooltipProvider>,
+  );
+  assert.equal(screen.queryByText("Link preview"), null, "the preview no longer floats over the replacement");
+  assert.equal(screen.queryByText("Copy reply"), null, "nor does the tooltip");
+  fireEvent.focus(screen.getByRole("button", { name: "Back to main chat" }));
+  assert.ok(screen.getAllByText("Back to main chat (Esc)").length > 0, "the replacement's tooltip still shows");
 });

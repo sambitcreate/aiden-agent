@@ -11,7 +11,7 @@ import {
 } from "radix-ui";
 import { isRestoringFocus } from "../lib/focus-return";
 import { cn } from "../lib/ui-utils";
-import { Button } from "./ui";
+import { Button, useSurfaceCovered } from "./ui";
 
 /**
  * Shared selection, progress, and data primitives. The app and Aiden UI
@@ -225,8 +225,12 @@ export function Progress({
   );
 }
 
-/** A hover and focus hint. Needs the app's TooltipProvider (mounted at the root). */
+/**
+ * A hover and focus hint. Needs the app's TooltipProvider (mounted at the root).
+ * Shows nothing while its surface is covered (see `SurfaceCovered`).
+ */
 export function Tooltip({ content, children }: { content: React.ReactNode; children: React.ReactElement }) {
+  const covered = useSurfaceCovered();
   return (
     <TooltipPrimitive.Root>
       <TooltipPrimitive.Trigger
@@ -239,14 +243,16 @@ export function Tooltip({ content, children }: { content: React.ReactNode; child
       >
         {children}
       </TooltipPrimitive.Trigger>
-      <TooltipPrimitive.Portal>
-        <TooltipPrimitive.Content
-          sideOffset={6}
-          className="z-50 max-w-64 rounded-menu bg-popover px-2.5 py-1.5 text-small text-primary shadow-popover"
-        >
-          {content}
-        </TooltipPrimitive.Content>
-      </TooltipPrimitive.Portal>
+      {covered ? null : (
+        <TooltipPrimitive.Portal>
+          <TooltipPrimitive.Content
+            sideOffset={6}
+            className="z-50 max-w-64 rounded-menu bg-popover px-2.5 py-1.5 text-small text-primary shadow-popover"
+          >
+            {content}
+          </TooltipPrimitive.Content>
+        </TooltipPrimitive.Portal>
+      )}
     </TooltipPrimitive.Root>
   );
 }

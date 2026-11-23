@@ -15,7 +15,6 @@ import {
   type SubagentStatusWord,
   type SubagentRunViewState,
 } from "../lib/subagent-view-state";
-import { useSubagentHelperChatSelector } from "../lib/subagent-helper-chat-store";
 import { cn } from "../lib/ui-utils";
 import { useCollapsibleBody } from "../lib/use-collapsible-body";
 import { useNow } from "../lib/use-now";
@@ -418,10 +417,6 @@ function SubagentGroupRow({
   const model = run ? subagentModelDisplay(run) : undefined;
   const catalog = useSubagentModelCatalog();
   const modelName = run ? subagentModelName(run, catalog) : undefined;
-  // An expanded helper chat covers this row. A model card left open on a hidden
-  // row can never finish closing, and an open card takes every Esc, so the card
-  // is not rendered while the main pane shows a helper.
-  const coveredByHelperChat = useSubagentHelperChatSelector((state) => state.expandedRunId !== null);
   // Older snapshots never recorded a model choice; their label stays unchanged.
   const spokenModel =
     run && run.modelSelection !== undefined ? `Model ${subagentModelLine(run, catalog)}` : undefined;
@@ -461,36 +456,34 @@ function SubagentGroupRow({
     <li>
       <HoverCard openDelay={200} closeDelay={100}>
         <HoverCardTrigger asChild>{row}</HoverCardTrigger>
-        {coveredByHelperChat ? null : (
-          <HoverCardContent
-            side="top"
-            align="start"
-            className="w-[min(18rem,calc(100vw-2rem))]"
-            data-subagent-model-card={runId}
-          >
-            <p className="truncate text-small font-medium text-primary">{label}</p>
-            <dl className="mt-1.5 grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1 text-mini">
-              <dt className="text-tertiary">Model</dt>
-              <dd className="break-words text-secondary [overflow-wrap:anywhere]" title={model.model}>
-                {modelName}
-              </dd>
-              {model.effort && run?.thinkingLevel !== "off" ? (
-                <>
-                  <dt className="text-tertiary">Effort</dt>
-                  <dd className="text-secondary">{model.effort}</dd>
-                </>
-              ) : null}
-              {model.selection ? (
-                <>
-                  <dt className="text-tertiary">Model choice</dt>
-                  <dd className="text-secondary">{model.selection}</dd>
-                </>
-              ) : null}
-              <dt className="text-tertiary">Status</dt>
-              <dd className="break-words text-secondary">{status}</dd>
-            </dl>
-          </HoverCardContent>
-        )}
+        <HoverCardContent
+          side="top"
+          align="start"
+          className="w-[min(18rem,calc(100vw-2rem))]"
+          data-subagent-model-card={runId}
+        >
+          <p className="truncate text-small font-medium text-primary">{label}</p>
+          <dl className="mt-1.5 grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1 text-mini">
+            <dt className="text-tertiary">Model</dt>
+            <dd className="break-words text-secondary [overflow-wrap:anywhere]" title={model.model}>
+              {modelName}
+            </dd>
+            {model.effort && run?.thinkingLevel !== "off" ? (
+              <>
+                <dt className="text-tertiary">Effort</dt>
+                <dd className="text-secondary">{model.effort}</dd>
+              </>
+            ) : null}
+            {model.selection ? (
+              <>
+                <dt className="text-tertiary">Model choice</dt>
+                <dd className="text-secondary">{model.selection}</dd>
+              </>
+            ) : null}
+            <dt className="text-tertiary">Status</dt>
+            <dd className="break-words text-secondary">{status}</dd>
+          </dl>
+        </HoverCardContent>
       </HoverCard>
     </li>
   );

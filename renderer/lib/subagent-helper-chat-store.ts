@@ -1,10 +1,8 @@
 import * as React from "react";
 import type { ApprovalPrompt } from "./ipc";
 import type { ChatApprovalDecisionOptions } from "../components/chat-approval-card";
-import type { SubagentHelperChatApproval } from "../components/subagent-helper-chat";
 import { stageComposerText } from "./composer-draft-store";
 import { focusRegion } from "./focus-regions";
-import type { SubagentRunSnapshot } from "../shared/subagent-runs";
 import {
   mergeSubagentTranscript,
   type LiveSubagentTranscripts,
@@ -13,7 +11,6 @@ import {
 import type { SubagentTranscriptV1 } from "../shared/subagent-transcript";
 import {
   rememberSubagentHelperTranscript,
-  subagentHelperApprovalFor,
   type SavedSubagentHelperTranscripts,
 } from "./subagent-helper-chat-state";
 
@@ -36,7 +33,7 @@ export interface SubagentHelperChatState {
   questionPending: boolean;
 }
 
-/** Marks the side panel helper chat's Expand button, the usual opener of the expanded chat. */
+/** Marks the side panel helper chat's Expand button, the usual opener of the expanded chat; its value is the helper's runId. */
 export const HELPER_EXPAND_ATTRIBUTE = "data-subagent-helper-expand";
 
 const NO_SAVED: SavedSubagentHelperTranscripts = new Map();
@@ -80,19 +77,25 @@ export function subagentHelperChatTranscript(
 }
 
 /** The pending approval this helper waits on, answered from inside its chat. */
-export function subagentHelperChatApproval(
-  store: SubagentHelperChatStore,
-  state: SubagentHelperChatState,
-  run: Pick<SubagentRunSnapshot, "runId" | "label">,
-  activeRuns: ReadonlyArray<Pick<SubagentRunSnapshot, "runId" | "label">>,
-): SubagentHelperChatApproval | null {
-  const prompt = subagentHelperApprovalFor(run, state.approvals, activeRuns);
-  if (!prompt) return null;
-  return {
-    prompt,
-    deciding: state.decidingApprovalId === prompt.approvalId,
-    onDecide: (decision, options) => store.decide(prompt, decision, options),
-  };
+/**
+ * Of these runs, the ones whose conversation just arrived whole: their saved
+ * copy or live updates changed and now merge into a complete transcript.
+ * A failed read for such a run no longer matters.
+ */
+export function subagentHelperTranscriptsRecovered(
+  previous: SubagentHelperChatState,
+  next: SubagentHelperChatState,
+  runIds: readonly string[],
+): string[] {
+  if (previous.chatId !== next.chatId) return [];
+  return runIds.filter((runId) => {
+    const changed =
+      previous.saved.get(runId) !== next.saved.get(runId) ||
+      previous.live.get(runId) !== next.live.get(runId);
+    if (!changed) return false;
+    const merged = subagentHelperChatTranscript(next, runId);
+    return merged.complete && merged.transcript !== null;
+  });
 }
 
 /** What the main chat waits on that this helper's chat cannot answer. */
@@ -116,7 +119,7 @@ export function mainChatWaitingFor(
 }
 
 /**
- * Ask main chat to retry: return to the main chat and put the request in its
+ * Ask the main chat to retry: return to the main chat and put the request in its
  * message box, without sending it. A request already in the box is not added again.
  */
 export function askMainChatToRetrySubagent(
@@ -255,8 +258,9 @@ export function createSubagentHelperChatStore(): SubagentHelperChatStore {
     },
     collapse(options) {
       const target = opener;
+      const runId = state.expandedRunId;
       opener = null;
-      if (state.expandedRunId !== null) commit({ ...state, expandedRunId: null });
+      if (runId !== null) commit({ ...state, expandedRunId: null });
       if (options?.restoreFocus === false || !target) return;
       if (target.isConnected) {
         target.focus({ preventScroll: true });
@@ -264,13 +268,16 @@ export function createSubagentHelperChatStore(): SubagentHelperChatStore {
       }
       // The side panel swaps its helper chat for a placeholder while expanded, so
       // its Expand button is a new element after collapse. Focus that one once it
-      // renders, or the message box if the opener has no replacement.
+      // renders, but only if it is the same helper's: the side panel may show
+      // another helper by then. Otherwise the message box takes focus.
       if (typeof window === "undefined" || typeof document === "undefined") return;
-      const replaceable = target.hasAttribute(HELPER_EXPAND_ATTRIBUTE);
+      const replaceable = runId !== null && target.getAttribute(HELPER_EXPAND_ATTRIBUTE) === runId;
       window.requestAnimationFrame(() => {
         const replacement = replaceable
-          ? document.querySelector<HTMLElement>(`[${HELPER_EXPAND_ATTRIBUTE}]`)
-          : null;
+          ? Array.from(document.querySelectorAll<HTMLElement>(`[${HELPER_EXPAND_ATTRIBUTE}]`)).find(
+              (element) => element.getAttribute(HELPER_EXPAND_ATTRIBUTE) === runId,
+            )
+          : undefined;
         if (replacement) replacement.focus({ preventScroll: true });
         else focusRegion("composer");
       });

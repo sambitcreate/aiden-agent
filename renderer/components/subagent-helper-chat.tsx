@@ -1,5 +1,5 @@
 import * as React from "react";
-import { ArrowDownToLine, ArrowLeft, ArrowUpRight, Maximize2, MoreHorizontal, Square, X } from "lucide-react";
+import { ArrowDownToLine, ArrowLeft, Maximize2, MoreHorizontal, Square, X } from "lucide-react";
 import { cn } from "../lib/ui-utils";
 import type { ApprovalPrompt } from "../lib/ipc";
 import { prefersReducedMotion } from "../lib/appearance-runtime";
@@ -53,6 +53,7 @@ import { formatSubagentElapsed } from "./subagent-detail";
 import { subagentActivityMark, subagentStateLabel } from "./subagent-chips";
 import { WebExtractRecap } from "./web-extract-recap";
 import { Button, Callout, Text } from "./ui";
+import { Tooltip } from "./ui-primitives";
 
 /** The main chat column's insets, so the expanded chat lines up with the composer. */
 const EXPANDED_COLUMN = "aiden-dock-inset chat-content-column";
@@ -67,6 +68,8 @@ export interface SubagentHelperChatApproval {
   prompt: ApprovalPrompt;
   deciding: boolean;
   onDecide: (decision: "allow" | "deny", options?: ChatApprovalDecisionOptions) => void;
+  /** Requests the main chat shows before this one; its card shows one at a time. */
+  ahead?: number;
 }
 
 export interface SubagentHelperChatProps {
@@ -128,6 +131,12 @@ export const MAIN_CHAT_WAITING_TEXT: Record<MainChatWaitingKind, string> = {
   approval: "The main chat needs your approval.",
   question: "The main chat has a question for you.",
 };
+
+/** The side panel's approval row; the main card shows queued requests one at a time. */
+function subagentHelperCompactApprovalText(ahead: number): string {
+  if (ahead <= 0) return "Waiting on your approval in the main chat.";
+  return `Waiting on your approval in the main chat, after ${ahead} other ${ahead === 1 ? "request" : "requests"}.`;
+}
 
 interface HelperMessageProps {
   runId: string;
@@ -440,14 +449,14 @@ export const SubagentHelperChat = React.forwardRef<HTMLHeadingElement, SubagentH
               className="flex-row items-center justify-between gap-3 bg-status-warning-surface px-3 py-2"
               data-subagent-helper-main-waiting={waitingOnMain}
             >
-              <Text as="p" variant="small" className="min-w-0 text-support-warning">
+              <Text as="p" variant="small" className="min-w-0 text-status-warning">
                 {MAIN_CHAT_WAITING_TEXT[waitingOnMain]}
               </Text>
               <Button
                 variant="transparent"
                 size="small"
                 onClick={onReturnToMain}
-                className="shrink-0 motion-reduce:transition-none"
+                className="shrink-0 text-small-strong motion-reduce:transition-none"
               >
                 {waitingOnMain === "approval" ? "Go to approval" : "Answer question"}
               </Button>
@@ -616,17 +625,16 @@ export const SubagentHelperChat = React.forwardRef<HTMLHeadingElement, SubagentH
                   className="flex min-w-0 items-center justify-between gap-3 rounded-card bg-status-warning-surface px-3 py-2"
                   data-subagent-helper-approval="compact"
                 >
-                  <Text as="p" variant="small" className="min-w-0 text-support-warning">
-                    Waiting on your approval in the main chat
+                  <Text as="p" variant="small" className="min-w-0 text-status-warning">
+                    {subagentHelperCompactApprovalText(approval.ahead ?? 0)}
                   </Text>
                   {onFocusMainApproval ? (
                     <Button
                       variant="transparent"
                       size="small"
                       onClick={onFocusMainApproval}
-                      className="shrink-0 motion-reduce:transition-none"
+                      className="shrink-0 text-small-strong motion-reduce:transition-none"
                     >
-                      <ArrowUpRight aria-hidden="true" className="size-3.5" />
                       Go to approval
                     </Button>
                   ) : null}
@@ -644,12 +652,12 @@ export const SubagentHelperChat = React.forwardRef<HTMLHeadingElement, SubagentH
                   </Text>
                   {onAskRetry ? (
                     <Button
-                      variant="transparent"
+                      variant="muted"
                       size="small"
                       onClick={() => onAskRetry(problem.retryText)}
                       className="mt-2 w-fit self-start motion-reduce:transition-none"
                     >
-                      Ask main chat to retry
+                      Ask the main chat to retry
                     </Button>
                   ) : null}
                 </Callout>
@@ -711,23 +719,27 @@ export const SubagentHelperChat = React.forwardRef<HTMLHeadingElement, SubagentH
                 size="small"
                 onClick={(event) => onExpand(event.currentTarget)}
                 className="shrink-0 motion-reduce:transition-none"
-                data-subagent-helper-expand="true"
+                data-subagent-helper-expand={run.runId}
               >
                 <Maximize2 aria-hidden="true" className="size-3.5" />
                 Expand
               </Button>
             ) : null}
             {expanded && onBack ? (
-              <Button
-                variant="transparent"
-                size="small"
-                onClick={onBack}
-                className="shrink-0 motion-reduce:transition-none"
-                data-subagent-helper-back="true"
-              >
-                <ArrowLeft aria-hidden="true" className="size-3.5" />
-                Back to main chat
-              </Button>
+              // Esc also goes back; the hint says so, since this sits far from where Back usually is.
+              <Tooltip content="Back to main chat (Esc)">
+                <Button
+                  variant="transparent"
+                  size="small"
+                  onClick={onBack}
+                  aria-keyshortcuts="Escape"
+                  className="shrink-0 motion-reduce:transition-none"
+                  data-subagent-helper-back="true"
+                >
+                  <ArrowLeft aria-hidden="true" className="size-3.5" />
+                  Back to main chat
+                </Button>
+              </Tooltip>
             ) : null}
             {!expanded && onClose ? (
               <Button

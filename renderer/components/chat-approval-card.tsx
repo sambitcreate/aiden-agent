@@ -337,6 +337,15 @@ export function ChatApprovalCard({
     );
   }
   const summaryId = `approval-summary-${pending.approvalId}`;
+  // A helper's or a Bot's card is named for who asked, so it reads as theirs
+  // when Go to approval moves focus onto it; Aiden's own keeps its question.
+  const requestedBy =
+    pendingRunGrant?.childLabel ??
+    pendingWorkspaceWrite?.childLabel ??
+    pendingMcpMutation?.childLabel ??
+    pendingShell?.childLabel ??
+    (requester === "Aiden" ? undefined : requester);
+  const requestedById = `approval-requester-${pending.approvalId}`;
   // A card that can't be allowed here still shows its request when the reason
   // is only where it may be allowed.
   const reviewable = pendingCanAllow || (allowElsewhere !== undefined && !invalidPendingPrivilegedApproval && pending.canAllow !== false);
@@ -365,15 +374,25 @@ export function ChatApprovalCard({
       </p>
       <section
         ref={cardRef}
-        aria-labelledby={`approval-title-${pending.approvalId}`}
+        // Focusable as a whole, so moving here never lands on Allow or Deny.
+        tabIndex={-1}
+        aria-labelledby={
+          requestedBy ? `${requestedById} approval-title-${pending.approvalId}` : `approval-title-${pending.approvalId}`
+        }
         aria-describedby={summaryId}
         className={cn(
           // The chat's footer gives the card only the room the composer leaves. A
           // schedule review shrinks first; past that, the card scrolls from its question.
           "approval-shell composer-shell min-h-0 overflow-y-auto overscroll-contain bg-popover p-4 shadow-composer",
+          "outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring",
           schedule && pendingCanAllow && "flex flex-col",
         )}
       >
+        {requestedBy ? (
+          <span id={requestedById} className="sr-only">
+            {`Request from ${requestedBy}:`}
+          </span>
+        ) : null}
         <div className="flex shrink-0 flex-col items-center text-center">
           <ApprovalIcon
             preview={plainPreview}

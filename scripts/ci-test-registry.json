@@ -1090,6 +1090,7 @@
         "renderer/components/subagent-helper-chat.test.tsx",
         "renderer/lib/subagent-helper-chat-state.test.ts",
         "renderer/lib/subagent-helper-chat-store.test.ts",
+        "renderer/lib/subagent-transcript-reader.test.ts",
         "renderer/components/terminal-drawer.test.tsx",
         "renderer/components/scroll-area-follow.test.tsx",
         "renderer/components/message-list-settle.test.tsx",

@@ -62,7 +62,6 @@ function ExpandedHelperChatView({ chatId, runId }: { chatId: string; runId: stri
     () => views?.find((view) => view.runId === runId)?.snapshot,
     [runId, views],
   );
-  const activeRuns = React.useMemo(() => views?.filter((view) => !view.terminal) ?? [], [views]);
   const merged = React.useMemo(() => mergeSubagentTranscript(saved, live), [live, saved]);
   const transcript = merged.transcript;
   const now = useNow(Boolean(run && subagentHelperIsActive(run.state)));
@@ -97,8 +96,8 @@ function ExpandedHelperChatView({ chatId, runId }: { chatId: string; runId: stri
   }, [available]);
 
   const ownPrompts = React.useMemo(
-    () => (run ? subagentHelperApprovalsFor(run, approvals, activeRuns) : []),
-    [activeRuns, approvals, run],
+    () => (run ? subagentHelperApprovalsFor(run, approvals, views ?? []) : []),
+    [approvals, run, views],
   );
   const prompt = ownPrompts[0] ?? null;
   const approval = React.useMemo<SubagentHelperChatApproval | null>(

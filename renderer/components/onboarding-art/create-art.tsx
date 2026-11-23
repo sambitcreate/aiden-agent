@@ -375,10 +375,10 @@ export function NativeSubagentsArt() {
       </div>
     </ArtWindow>
     {/* The selected helper's own chat: its task, its steps, and its reply. */}
-    <ArtWindow raised style={{ left: 148, top: 10, width: 142, height: 130 }}>
+    <ArtWindow raised style={{ left: 154, top: 10, width: 136, height: 130 }}>
       <div role="group" aria-label="Implementer's chat" className="oa-stack" style={{ gap: 5, padding: "6px 7px" }}>
         <div className="oa-row" style={{ gap: 4, height: 10 }}>
-          <i style={{ width: 5, height: 5, flex: "none", borderRadius: "50%", background: "var(--status-accent)" }} />
+          <i className="oa-sub-live-dot" />
           <span className="oa-strong">Implementer</span>
           <span className="oa-grow" />
           <span className="oa-sub-twisty">
