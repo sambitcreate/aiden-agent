@@ -2,7 +2,9 @@
 
 Requirements: current Xcode, iOS 26 or newer, and access to this repository's configured Apple development team for signed hardware runs.
 
-Build and test the `AidenOnTheGo` scheme from `AidenOnTheGo.xcodeproj`. Use an explicit physical-device destination for acceptance evidence. Do not place credentials, pairing payloads, LAN addresses, certificates, or generated test-run files in source control.
+Build and test the `AidenOnTheGo` scheme from `AidenOnTheGo.xcodeproj`. Use an explicit physical-device destination for acceptance evidence.
+
+iPhone Duo needs Xcode 27.1 (`/Applications/Xcode.app`, the Xcode CI and TestFlight builds use). Built with the Xcode 27.0 beta, the app runs on the Duo's inner display in a compatibility window with horizontal bars and a bottom tab bar; built with 27.1, the system moves the toolbar and tab bar to the trailing rail. If `xcode-select` points at the beta, run Duo builds with `DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer`. The project must still build with 27.0: 27.1-only API (such as `toolbarVerticalCompressionBehavior`) stays behind an SDK check. Do not place credentials, pairing payloads, LAN addresses, certificates, or generated test-run files in source control.
 
 The mobile client implements only `/api/aiden/v1`. When a wire shape changes, update the OpenAPI contract, shared fixture, desktop parser/tests, Swift parser/tests, and protocol documentation together.
 

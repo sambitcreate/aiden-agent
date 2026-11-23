@@ -17,9 +17,14 @@ struct AidenBotsTabView: View {
     let store: AidenUnifiedInboxStore
     let navigation: AidenAppNavigation
     let availability: AidenBotsAvailability
+    /// The route the detail beside the list shows, whose row is highlighted.
+    /// Nil on a stack.
+    var selection: AidenAppRoute? = nil
     var onAddComputer: (() -> Void)? = nil
     /// A Bot the home already knows, so its chat opens with a title at once.
     let onOpenBot: (AidenHostObjectID, AidenBotSummary) -> Void
+    /// A Bot was opened from the list.
+    var onOpened: () -> Void = {}
 
     @Environment(\.aidenPalette) private var palette
     @State private var chatStarter = AidenBotChatStarter()
@@ -39,7 +44,7 @@ struct AidenBotsTabView: View {
             sections: store.botSections(),
             onOpen: { row in
                 onOpenBot(row.id, row.bot)
-                navigation.open(.bot(row.id))
+                open(row.id)
             }
         )
     }
@@ -62,15 +67,16 @@ struct AidenBotsTabView: View {
                 coordinator: coordinator,
                 availability: availability,
                 onOpenConversation: { conversation in
-                    if let id = route(botID: conversation.botId) { navigation.open(.bot(id)) }
+                    if let id = route(botID: conversation.botId) { open(id) }
                 },
                 onCreateConversation: createConversation,
                 onOpenBotSession: { bot in
                     guard let id = route(botID: bot.id) else { return }
                     onOpenBot(id, bot)
-                    navigation.open(.bot(id))
+                    open(id)
                 },
-                machines: machines
+                machines: machines,
+                selectedBot: selectedBot
             )
             .onChange(of: coordinator.defaultInstanceId) { _, _ in
                 chatStarter.forgetAttempt()
@@ -90,7 +96,17 @@ struct AidenBotsTabView: View {
         guard availability.canWrite,
               await chatStarter.start(botID: bot.id, coordinator: coordinator),
               let id = route(botID: bot.id) else { return }
-        navigation.open(.bot(id))
+        open(id)
+    }
+
+    private func open(_ id: AidenHostObjectID) {
+        navigation.pick(.bot(id), fromListOf: .bots)
+        onOpened()
+    }
+
+    private var selectedBot: AidenHostObjectID? {
+        guard case .bot(let id)? = selection else { return nil }
+        return id
     }
 }
 
@@ -351,20 +367,23 @@ struct AidenBotRouteView: View {
     let onNext: (() -> Void)?
 
     @Environment(\.aidenPalette) private var palette
-    @State private var model: AidenBotRouteModel
+    /// The shell's, so a rebuilt screen finds the Bot it already loaded, and
+    /// its chat keeps its draft, attachments, voice and place.
+    let screen: AidenChatScreens.BotScreen
+    private var model: AidenBotRouteModel { screen.route }
     @State private var holdsAttachments = false
     @State private var isConfirmingNext = false
 
     init(
         coordinator: AidenRemoteCoordinator,
-        id: AidenHostObjectID,
+        screen: AidenChatScreens.BotScreen,
         initialSummary: AidenBotSummary?,
         onNext: (() -> Void)? = nil
     ) {
         self.coordinator = coordinator
+        self.screen = screen
         self.initialSummary = initialSummary
         self.onNext = onNext
-        _model = State(initialValue: AidenBotRouteModel(id: id))
     }
 
     private var connection: AidenHostConnection? {
@@ -389,7 +408,9 @@ struct AidenBotRouteView: View {
                     coordinator: coordinator,
                     botID: model.id.objectId,
                     initialSummary: initialSummary,
-                    machine: model.id.instanceId
+                    machine: model.id.instanceId,
+                    screen: screen.chat,
+                    parts: screen.session
                 )
                 .id("\(model.id.instanceId)-\(model.id.objectId)")
             case .chat(let chat, let allowsMutations):
@@ -401,7 +422,8 @@ struct AidenBotRouteView: View {
                         chat: chat,
                         owner: owner,
                         allowsMutations: allowsMutations,
-                        onChatUpdated: { model.accept($0) }
+                        onChatUpdated: { model.accept($0) },
+                        screen: screen.chat
                     )
                     .id("\(model.id.instanceId)-\(chat.id)")
                 } else {
@@ -439,7 +461,7 @@ struct AidenBotRouteView: View {
                 .background(palette.canvas.ignoresSafeArea())
             }
         }
-        .toolbar(.hidden, for: .tabBar)
+        .aidenConversationTabBar()
         .toolbar {
             if let onNext {
                 ToolbarItem(placement: .topBarTrailing) {
@@ -538,6 +560,7 @@ struct AidenMachineBotMessagingRow: View {
                         get: { value.enabled },
                         set: { enabled in Task { await messaging.set(enabled: enabled) } }
                     ))
+                        .aidenSwitchStyle()
                     .disabled(!messaging.canChange)
                     if let error = messaging.error {
                         Text(error).font(.footnote).foregroundStyle(palette.secondary)

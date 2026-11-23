@@ -1,12 +1,13 @@
 // The `follow_pull_request` tool: after the agent opens or updates a pull
 // request it can follow it, and the chat hears about failed checks (with the
-// end of each log), merge conflicts, and comments from people who can write
-// to the repository, until the pull request is merged or closed.
+// end of each log), merge conflicts, comments from people who can write to
+// the repository and from review bots, and checks passing, until the pull
+// request is merged or closed.
 
 import { Type } from "typebox";
 import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
 import {
-  MAX_PULL_REQUEST_FOLLOW_NOTICES,
+  MAX_COMMENT_ONLY_FOLLOW_UPDATES,
   type PullRequestFollowView,
 } from "../../../renderer/shared/follow-through.js";
 import { declarePiRuntimeReplay } from "../pi-runtime-tool.js";
@@ -32,7 +33,7 @@ function textResult(text: string): AgentToolResult<null> {
 function describe(follow: PullRequestFollowView): string {
   const state =
     follow.state === "following"
-      ? `following${follow.status ? ` · ${follow.status}` : ""} · ${follow.noticesSent} of ${MAX_PULL_REQUEST_FOLLOW_NOTICES} updates sent`
+      ? `following${follow.status ? ` · ${follow.status}` : ""} · ${follow.noticesSent} ${follow.noticesSent === 1 ? "update" : "updates"} sent`
       : `stopped${follow.endedReason ? ` (${follow.endedReason})` : ""}`;
   return `#${follow.number} in ${follow.repository} · ${state} · ${follow.url}`;
 }
@@ -43,8 +44,9 @@ export function createPullRequestFollowTool(options: PullRequestFollowToolOption
     label: "Follow Pull Request",
     description:
       "Follow a GitHub pull request after you open or update it, so you hear about it without checking. " +
-      "This chat then gets a message when checks fail (with the end of each failed log), when the branch has a merge conflict, and when someone who can write to the repository comments or reviews; it also notes when every check passes and when the pull request is merged or closed. " +
-      `At most ${MAX_PULL_REQUEST_FOLLOW_NOTICES} updates per pull request; following ends when it is merged or closed, after two weeks with nothing new, or when checks keep failing for an hour with no new commit. ` +
+      "This chat then gets a message when checks fail (with the end of each failed log), when the branch has a merge conflict, when someone who can write to the repository or a review bot comments or reviews, and once when every check passes; it also notes when the pull request is merged or closed. " +
+      `Following ends when it is merged or closed, after two weeks with nothing new, or after ${MAX_COMMENT_ONLY_FOLLOW_UPDATES} updates in a row that bring only comments. ` +
+      "When you are seeing work through: follow the pull request after you open or push to it, then end your answer. On each update, check every finding against the code, fix the real ones and push to the same branch, explain the wrong ones instead of changing code for them, and stay brief when nothing is new. You are done once checks pass on the latest commit and no finding is left open; never merge in an answer the person is not watching. " +
       'action "follow" starts (url optional: the chat\'s current pull request), "stop" ends it, "list" shows what this chat follows. Do not poll GitHub yourself while following.',
     parameters: Type.Object({
       action: Type.Union([Type.Literal("follow"), Type.Literal("stop"), Type.Literal("list")]),

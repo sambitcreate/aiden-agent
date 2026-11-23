@@ -383,6 +383,49 @@ struct AidenSolidFill: Equatable, Sendable {
     }
 }
 
+/// A switch's on-track. The accent, unless the accent is so close to the
+/// switch's white thumb that the thumb vanishes into it (the near-white
+/// accents of Aiden and Monochrome in dark); then the success green, as the
+/// system's own switch uses.
+extension AidenPalette {
+    static let switchThumbHex = "#FFFFFF"
+    static let minimumSwitchThumbContrast = 1.5
+
+    var switchOnTrackHex: String {
+        Color.contrastRatio(accentHex, Self.switchThumbHex) >= Self.minimumSwitchThumbContrast ? accentHex : successHex
+    }
+}
+
+/// A switch on its palette's on-track. Applied to each switch with
+/// `aidenSwitchStyle()`, never at the root: a menu takes any custom toggle
+/// style as an opaque view, so a menu of toggles (the machine picker) broke
+/// apart into one item per piece of each toggle's label.
+struct AidenSwitchToggleStyle: ToggleStyle {
+    let onTrack: Color
+
+    func makeBody(configuration: Configuration) -> some View {
+        Toggle(configuration)
+            .toggleStyle(.switch)
+            .tint(onTrack)
+    }
+}
+
+private struct AidenSwitchStyleModifier: ViewModifier {
+    @Environment(\.aidenPalette) private var palette
+
+    func body(content: Content) -> some View {
+        content.toggleStyle(AidenSwitchToggleStyle(onTrack: Color(aidenHex: palette.switchOnTrackHex)))
+    }
+}
+
+extension View {
+    /// Draws the toggles inside as switches on the palette's on-track. For
+    /// switches only; a toggle in a menu keeps the menu's checkmark style.
+    func aidenSwitchStyle() -> some View {
+        modifier(AidenSwitchStyleModifier())
+    }
+}
+
 /// Status colours that are safe for text. The palette's `successHex`,
 /// `warningHex` and `dangerHex` stay as they are for fills, dots and icons.
 /// Text moves each one away from the ground (toward black on a light theme,
@@ -531,8 +574,8 @@ enum AidenThemeCatalog {
 
     static let palettes: [AidenThemePresetID: [AidenPalette]] = [
         .aiden: [
-            .init(canvasHex: "#F6F7F9", sidebarHex: "#EEF0F3", raisedHex: "#FFFFFF", foregroundHex: "#3D3F41", secondaryHex: "#6B7280", accentHex: "#006AD6", successHex: "#30D158", warningHex: "#FF9F0A", dangerHex: "#FF453A"),
-            .init(canvasHex: "#181B21", sidebarHex: "#20242C", raisedHex: "#292E37", foregroundHex: "#D1D4DA", secondaryHex: "#9AA3AE", accentHex: "#3E97F6", successHex: "#32D17A", warningHex: "#FFB020", dangerHex: "#FF5E57"),
+            .init(canvasHex: "#F6F7F9", sidebarHex: "#EEF0F3", raisedHex: "#FFFFFF", foregroundHex: "#3D3F41", secondaryHex: "#6B7280", accentHex: "#1F2228", successHex: "#30D158", warningHex: "#FF9F0A", dangerHex: "#FF453A"),
+            .init(canvasHex: "#181B21", sidebarHex: "#20242C", raisedHex: "#292E37", foregroundHex: "#D1D4DA", secondaryHex: "#9AA3AE", accentHex: "#E4E7EC", successHex: "#32D17A", warningHex: "#FFB020", dangerHex: "#FF5E57"),
         ],
         .slate: [
             .init(canvasHex: "#F2F5F9", sidebarHex: "#E6EBF2", raisedHex: "#FFFFFF", foregroundHex: "#3A434E", secondaryHex: "#637083", accentHex: "#087581", successHex: "#2DB67D", warningHex: "#E0A72E", dangerHex: "#E24D5B"),
@@ -819,6 +862,7 @@ struct AidenAppearanceSettingsView: View {
 
                 Section {
                     Toggle("Show response excerpts on Lock Screen", isOn: $showsLiveActivityResponseExcerpts)
+                        .aidenSwitchStyle()
                 } header: {
                     Text("Privacy")
                 } footer: {
@@ -862,7 +906,9 @@ struct AidenAppearanceSettingsView: View {
 
 /// A theme tile's preview. Every theme has a light and a dark look and the mode picks
 /// which one the app uses, so the tile draws the look this theme would have right now:
-/// System follows the phone's scheme.
+/// System follows the phone's scheme. It shows the theme's sidebar down the leading
+/// edge, its canvas, a raised card with the type, and the accent, which tells apart
+/// presets whose canvases are all near white or near black (Aiden, Graphite, Monochrome).
 struct AidenThemeTileSwatch: View {
     let preset: AidenThemePresetID
     let mode: AidenAppearanceMode
@@ -872,32 +918,41 @@ struct AidenThemeTileSwatch: View {
 
     var body: some View {
         let preview = AidenThemeCatalog.tilePreview(preset: preset, mode: mode, systemScheme: colorScheme)
-        RoundedRectangle(cornerRadius: 10, style: .continuous)
-            .fill(preview.canvas)
-            .aspectRatio(1.52, contentMode: .fit)
-            .overlay {
-                Text("Aa")
-                    .font(.system(size: 30, weight: .medium))
-                    .foregroundStyle(preview.foreground)
-            }
-            .overlay(alignment: .bottomTrailing) {
-                Circle()
-                    .fill(preview.accent)
-                    .overlay(Circle().stroke(.white.opacity(0.55), lineWidth: 1))
-                    .frame(width: 11, height: 11)
-                    .padding(8)
-            }
-            .overlay(alignment: .topTrailing) {
-                if selected {
-                    Image(systemName: "checkmark")
-                        .font(.system(size: 10, weight: .bold))
-                        .foregroundStyle(palette.accent)
-                        .frame(width: 21, height: 21)
-                        .background(palette.raised, in: Circle())
-                        .overlay(Circle().stroke(palette.foreground.opacity(0.18), lineWidth: 0.5))
-                        .offset(x: 7, y: -7)
+        HStack(spacing: 0) {
+            preview.sidebar.frame(width: 12)
+            preview.canvas
+                .overlay {
+                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        .fill(preview.raised)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 14)
+                        .overlay {
+                            Text("Aa")
+                                .font(.system(size: 22, weight: .medium))
+                                .foregroundStyle(preview.foreground)
+                        }
                 }
+                .overlay(alignment: .bottomTrailing) {
+                    Circle()
+                        .fill(preview.accent)
+                        .overlay(Circle().stroke(.white.opacity(0.55), lineWidth: 1))
+                        .frame(width: 11, height: 11)
+                        .padding(6)
+                }
+        }
+        .aspectRatio(1.52, contentMode: .fit)
+        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .overlay(alignment: .topTrailing) {
+            if selected {
+                Image(systemName: "checkmark")
+                    .font(.system(size: 10, weight: .bold))
+                    .foregroundStyle(palette.accent)
+                    .frame(width: 21, height: 21)
+                    .background(palette.raised, in: Circle())
+                    .overlay(Circle().stroke(palette.foreground.opacity(0.18), lineWidth: 0.5))
+                    .offset(x: 7, y: -7)
             }
+        }
     }
 }
 

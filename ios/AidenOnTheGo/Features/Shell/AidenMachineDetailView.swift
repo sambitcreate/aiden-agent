@@ -270,6 +270,7 @@ struct AidenMachineDetailView: View {
                     get: { row.isHidden },
                     set: { model.setHidden(instanceId, $0) }
                 ))
+                    .aidenSwitchStyle()
             } footer: {
                 Text("A hidden computer stays paired. Its chats leave the Inbox, and you can still open the computer from Computers.")
             }

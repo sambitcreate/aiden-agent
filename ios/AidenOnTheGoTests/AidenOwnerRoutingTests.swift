@@ -280,6 +280,53 @@ final class AidenOwnerRoutingTests: XCTestCase {
         XCTAssertFalse(requests("studio").contains("GET /chats"))
     }
 
+    /// A workspace page's task can be cancelled and started again while its
+    /// chats are on the way, as a push does. That is not an error, and the
+    /// list still arrives, read once.
+    func testAScreenThatRestartsItsLoadWhileTheListIsOnItsWayStillGetsTheList() async throws {
+        serveDefaultWorkspaces()
+        let release = responder.hold(instanceId: "laptop", path: "/chats")
+        let model = AidenWorkspaceChatsModel(
+            coordinator: coordinator,
+            owner: try coordinator.ownerContext(for: "laptop"),
+            workspaceId: "default",
+            cache: cache
+        )
+
+        let first = Task { await model.load() }
+        try await waitUntil("the chats request to be parked") { self.requests("laptop").contains("GET /chats") }
+        first.cancel()
+        let second = Task { await model.load() }
+        release()
+        await first.value
+        await second.value
+
+        XCTAssertEqual(model.chats.map(\.id), ["laptop-chat"])
+        XCTAssertNil(model.presentedError)
+        XCTAssertFalse(model.isLoading)
+        XCTAssertEqual(requests("laptop").filter { $0 == "GET /chats" }.count, 1)
+    }
+
+    /// No screen cancels the shared read, so a request the session itself
+    /// called off, as it does when a certificate pin is rejected, is a failure
+    /// to show rather than an empty list.
+    func testAChatsRequestTheSessionCalledOffIsShownAsAFailure() async throws {
+        serveDefaultWorkspaces()
+        responder.fail(instanceId: "laptop", path: "/chats", code: .cancelled)
+        let model = AidenWorkspaceChatsModel(
+            coordinator: coordinator,
+            owner: try coordinator.ownerContext(for: "laptop"),
+            workspaceId: "default",
+            cache: cache
+        )
+
+        await model.load()
+
+        XCTAssertTrue(model.chats.isEmpty)
+        XCTAssertNotNil(model.presentedError)
+        XCTAssertFalse(model.isLoading)
+    }
+
     // MARK: Workspace Settings
 
     /// Both machines list a "default" workspace; this is the laptop's, as it read it.

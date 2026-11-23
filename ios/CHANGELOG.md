@@ -5,6 +5,31 @@
 - **2026-11-22 — Pairing feedback and QR framing.** Add Computer scans for QR codes inside the visible viewfinder. Manual pairing shows what to correct below the address or setup code field. Search keeps Add Computer available until a computer is paired.
 
 - **2026-11-22 — No "Sending…" in Bot chats.** A message you send to a Bot looks sent from the moment you press Send and never gains a "Sending…" caption, however long the Mac takes to take it. The status line ("Getting ready", then "Thinking" once the model starts) shows the wait; Queued and "Couldn’t send · Try again" are unchanged. Paired Macs on the next Aiden release also start a Bot's reply much sooner, because a turn no longer re-reads every provider, connector and skill a dozen times before asking the model. No Remote wire or revision change.
+- **2026-11-22 — Quieter lists and an ink accent.** No Remote wire or revision change.
+  - The default Aiden theme's accent is muted ink instead of blue. Status colours stay coloured.
+  - Links in replies and HTML previews are underlined and take the theme's accent in every theme.
+  - The row open beside the list has a neutral fill that shows in light and dark.
+  - Computers' note about hiding a computer is plain text on the page, with no band or line behind it, and its rows leave room before the chevron.
+  - A list's heading stays readable while rows scroll under it.
+  - At the largest text sizes, list rows no longer end in a tall empty gap.
+  - Settings → Appearance tiles draw each theme with its sidebar and a raised card, in the look the chosen mode gives it, so Aiden and Monochrome no longer read alike.
+  - A switch that is on uses the theme's accent, or green where the accent is too close to the white knob to see (Aiden and Monochrome in dark).
+  - A Bot row in the Inbox keeps its avatar beside the name at the largest text sizes.
+  - Reading partway down a long answer on an iPhone Duo, unfolding or folding keeps you at the same spot in it, even at the largest text sizes, instead of jumping to the question above it.
+  - The Jump to latest arrow has a raised, shadowed backing, so it stays visible over a white message bubble.
+  - The Default computer value in Settings follows a switch between light and dark at once.
+  - A workspace's folder sits in its own column, clear of the name, at every text size.
+  - The Inbox, Running chats, Search, Bots, Workspaces, a workspace's chats and Computers group their rows into rounded cards, with no lines between rows and small headings above each card.
+  - A row shows its state in a leading mark: a spinner while running, a dot when unread.
+  - Bot rows on Bots drop the purpose bubble.
+  - Machine chips show a green dot when the computer is online, and fade at the edge instead of being cut off.
+  - The Inbox offline notice can be closed until the app is opened again.
+  - The Running accessory's ring stays in place when the tab bar shrinks.
+  - On an iPad in portrait, Bots first opens on its list instead of an empty "No Bot selected" page.
+  - On an iPad in portrait, the list laid over an empty detail no longer shows faint "No … selected" words behind it, and VoiceOver stays in the list.
+  - On an iPad in portrait, opening Computers or Settings from the list puts the list away, as picking a row does, instead of leaving the page dimmed behind it.
+  - As the Inbox's first row (iPad, or iOS 26.0), the running chat's title wraps at the largest text sizes like the rows below it.
+  - Unfolding or folding an iPhone Duo in a Bot chat keeps its draft, attachments, a recording under way, the conversation's live connection and your place in it, as a workspace chat does.
 
 - **2026-11-20 — Shell-first launch and inline pairing.** A fresh install now opens directly into the tab shell instead of a full-screen onboarding gate, with an empty state and **Add Computer** action across tabs when no computer is paired. Adding the first computer asks whether Aiden is already installed on a computer, offers open-and-share download links for Mac (`chatwithaiden.com`), Linux, and Server (`aiden serve`), and then opens a single **Add Computer** sheet with an inline frosted-cutout QR scanner (auto-pairing on scan, with inline fallback when the camera is unavailable), conditional nearby Wi-Fi discovery, and unified Address and Code entry. Adding additional computers skips straight to **Add Computer**, and the legacy onboarding artwork files are removed. No Remote wire or revision change.
 

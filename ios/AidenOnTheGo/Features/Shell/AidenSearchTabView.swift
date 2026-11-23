@@ -3,12 +3,14 @@ import SwiftUI
 /// The Search tab: loaded chats, matched on the phone, and Bot conversations,
 /// which each connected machine matches itself. Rows are plain list rows.
 struct AidenSearchTabView: View {
+    /// The shell's, so the query and what it found outlive a fold, which
+    /// builds this view again.
+    @Bindable var model: AidenSearchModel
     let inboxStore: AidenUnifiedInboxStore
     let hasNoComputers: Bool
     let onAddComputer: () -> Void
     let onOpen: (AidenAppRoute) -> Void
 
-    @State private var model: AidenSearchModel
     @FocusState private var searchIsFocused: Bool
     /// What the last row needs below it so the search field, which grows with the
     /// text size, never sits on it.
@@ -20,23 +22,6 @@ struct AidenSearchTabView: View {
     /// picked, so there the field sits under the title, always up.
     private var fieldPlacement: SearchFieldPlacement {
         horizontalSizeClass == .regular ? .navigationBarDrawer(displayMode: .always) : .automatic
-    }
-
-    init(
-        coordinator: AidenRemoteCoordinator,
-        inboxStore: AidenUnifiedInboxStore,
-        hasNoComputers: Bool,
-        onAddComputer: @escaping () -> Void,
-        onOpen: @escaping (AidenAppRoute) -> Void
-    ) {
-        self.inboxStore = inboxStore
-        self.hasNoComputers = hasNoComputers
-        self.onAddComputer = onAddComputer
-        self.onOpen = onOpen
-        _model = State(initialValue: AidenSearchModel(
-            chatInput: { AidenSearchChatInput(store: inboxStore) },
-            machines: { AidenSearchMachine.machines(in: coordinator) }
-        ))
     }
 
     var body: some View {
@@ -103,7 +88,8 @@ struct AidenSearchTabView: View {
         let roster = inboxStore.roster
         return List {
             if !chats.isEmpty {
-                Section("Chats") {
+                let positions = AidenListCardPosition.positions(chats.map(\.id))
+                Section {
                     ForEach(chats) { row in
                         Button { open(row.route) } label: {
                             AidenSearchChatRowView(
@@ -113,12 +99,16 @@ struct AidenSearchTabView: View {
                                 chip: roster.searchChip(for: row.id.instanceId)
                             )
                         }
-                        .listRowBackground(palette.canvas)
+                        .buttonStyle(.plain)
+                        .aidenListCardRow(positions[row.id])
                     }
+                } header: {
+                    AidenListSectionHeader(title: String(localized: "Chats"))
                 }
             }
             if !bots.isEmpty {
-                Section("Bots") {
+                let positions = AidenListCardPosition.positions(bots.map(\.id))
+                Section {
                     ForEach(bots) { hit in
                         Button { open(hit.route) } label: {
                             AidenSearchBotRowView(
@@ -127,8 +117,11 @@ struct AidenSearchTabView: View {
                                 chip: roster.searchChip(for: hit.id.instanceId)
                             )
                         }
-                            .listRowBackground(palette.canvas)
+                        .buttonStyle(.plain)
+                        .aidenListCardRow(positions[hit.id])
                     }
+                } header: {
+                    AidenListSectionHeader(title: String(localized: "Bots"))
                 }
             }
             if model.isSearchingBots || note != nil {
@@ -147,10 +140,12 @@ struct AidenSearchTabView: View {
                             .foregroundStyle(palette.secondary)
                     }
                 }
+                .listRowSeparator(.hidden)
                 .listRowBackground(palette.canvas)
             }
         }
         .listStyle(.plain)
+        .listSectionSpacing(AidenSpacing.l)
         .contentMargins(.bottom, fieldClearance, for: .scrollContent)
         .scrollContentBackground(.hidden)
         .putsKeyboardAwayOnDrag(searchIsFocused: $searchIsFocused)
@@ -219,28 +214,24 @@ private struct AidenSearchChatRowView: View {
     }
 
     var body: some View {
-        HStack(alignment: .firstTextBaseline, spacing: AidenSpacing.m) {
-            Image(systemName: "bubble.left")
-                .foregroundStyle(palette.secondary)
-                .accessibilityHidden(true)
-            VStack(alignment: .leading, spacing: AidenSpacing.xs) {
-                Text(title)
-                    .font(.body)
-                    .foregroundStyle(palette.foreground)
-                    .multilineTextAlignment(.leading)
-                HStack(spacing: AidenSpacing.xs) {
-                    if let chip { AidenMachineChip(label: chip) }
-                    Text(subtitle)
-                        .font(.footnote)
-                        .foregroundStyle(palette.secondary)
-                        .multilineTextAlignment(.leading)
-                }
+        AidenListRowLayout(isStacked: false, hasSummary: true) {
+            AidenListRowGlyph(systemName: "bubble.left")
+        } title: {
+            Text(title)
+                .font(.body)
+                .foregroundStyle(palette.foreground)
+                .multilineTextAlignment(.leading)
+        } summary: {
+            HStack(spacing: AidenSpacing.xs) {
+                if let chip { AidenMachineChip(label: chip) }
+                Text(subtitle)
+                    .font(.subheadline)
+                    .foregroundStyle(palette.secondary)
+                    .lineLimit(1)
             }
-            Spacer(minLength: 0)
+        } trailing: {
+            EmptyView()
         }
-        .padding(.vertical, AidenSpacing.xs)
-        .frame(minHeight: 44)
-        .contentShape(Rectangle())
         .accessibilityElement(children: .ignore)
         .accessibilityAddTraits(.isButton)
         .accessibilityLabel(
@@ -260,15 +251,15 @@ private struct AidenSearchBotRowView: View {
     @Environment(\.aidenPalette) private var palette
 
     var body: some View {
-        HStack(alignment: .firstTextBaseline, spacing: AidenSpacing.m) {
-            Image(systemName: AidenChromeSymbols.bots)
-                .foregroundStyle(palette.secondary)
-                .accessibilityHidden(true)
+        AidenListRowLayout(isStacked: false, hasSummary: true) {
+            AidenListRowGlyph(systemName: AidenChromeSymbols.bots)
+        } title: {
+            Text(hit.title)
+                .font(.body)
+                .foregroundStyle(palette.foreground)
+                .multilineTextAlignment(.leading)
+        } summary: {
             VStack(alignment: .leading, spacing: AidenSpacing.xs) {
-                Text(hit.title)
-                    .font(.body)
-                    .foregroundStyle(palette.foreground)
-                    .multilineTextAlignment(.leading)
                 if let preview = hit.preview {
                     Text(preview)
                         .font(.subheadline)
@@ -279,16 +270,14 @@ private struct AidenSearchBotRowView: View {
                 HStack(spacing: AidenSpacing.xs) {
                     if let chip { AidenMachineChip(label: chip) }
                     Text("Bot conversation · \(machineName)")
-                        .font(.footnote)
+                        .font(.subheadline)
                         .foregroundStyle(palette.secondary)
-                        .multilineTextAlignment(.leading)
+                        .lineLimit(1)
                 }
             }
-            Spacer(minLength: 0)
+        } trailing: {
+            EmptyView()
         }
-        .padding(.vertical, AidenSpacing.xs)
-        .frame(minHeight: 44)
-        .contentShape(Rectangle())
         .accessibilityElement(children: .ignore)
         .accessibilityAddTraits(.isButton)
         .accessibilityLabel(String(localized: "\(hit.title), Bot conversation on \(machineName)"))
