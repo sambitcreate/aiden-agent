@@ -30,9 +30,9 @@ function parentOf(frame: DesignFrame, byId: ReadonlyMap<string, DesignFrame>): s
   return parent && parent.id !== frame.id && isDesignContainer(parent.kind) ? parent.id : null;
 }
 
-/** The layer tree of the page on screen, front-most first. */
-export function designLayers(doc: DesignCanvas): DesignLayer[] {
-  const frames = onPage(doc, doc.activePageId);
+/** The layer tree of one page, front-most first. */
+export function designLayers(doc: DesignCanvas, pageId: string): DesignLayer[] {
+  const frames = onPage(doc, pageId);
   const byId = new Map(frames.map((frame) => [frame.id, frame]));
   const front = drawOrder(frames).reverse();
   const childrenOf = (parent: string | null, seen: ReadonlySet<string>): DesignLayer[] =>

@@ -16,7 +16,7 @@ afterEach(() => {
 });
 
 function note(id: string): DesignFrame {
-  const page = emptyDesignCanvas().activePageId;
+  const page = emptyDesignCanvas().pages[0]!.id;
   return { id, kind: "note", title: id, x: 0, y: 0, w: 200, h: 120, text: id, pageId: page, createdBy: "person" };
 }
 

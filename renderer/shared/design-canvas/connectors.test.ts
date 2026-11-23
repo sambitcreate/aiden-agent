@@ -118,7 +118,7 @@ test("an arrow moved to another page without its boxes lets go of them", () => {
       ]),
     ),
   };
-  const twoPages = { ...doc, pages: [...doc.pages, { id: "page-2", name: "Page 2", viewport: { x: 0, y: 0, zoom: 1 } }] };
+  const twoPages = { ...doc, pages: [...doc.pages, { id: "page-2", name: "Page 2" }] };
   const moved = moveFramesToPage(twoPages, ["ab"], "page-2");
   assert.deepEqual(
     frameOf(moved, "ab").ends,
@@ -138,7 +138,7 @@ test("an end dropped on the canvas joins the topmost box there, never a line or 
       { x: 300, y: 300 },
     ]),
   );
-  const page = doc.activePageId;
+  const page = doc.pages[0]!.id;
   assert.equal(attachTargetAt(doc, page, { x: 120, y: 120 })?.id, "card");
   assert.equal(attachTargetAt(doc, page, { x: 600, y: 600 })?.id, "board", "the artboard is a target where nothing is above it");
   assert.equal(attachTargetAt(doc, page, { x: 5000, y: 5000 }), undefined);
@@ -147,13 +147,13 @@ test("an end dropped on the canvas joins the topmost box there, never a line or 
 
 test("reading a document lets go of an end on a frame that is not there, another page's, or another arrow", () => {
   const result = parseDesignCanvas({
-    version: 2,
+    version: 3,
     revision: 1,
     pages: [
-      { id: "p1", name: "One", viewport: { x: 0, y: 0, zoom: 1 } },
-      { id: "p2", name: "Two", viewport: { x: 0, y: 0, zoom: 1 } },
+      { id: "p1", name: "One" },
+      { id: "p2", name: "Two" },
     ],
-    activePageId: "p1",
+    chatPages: {},
     frames: [
       { ...box("here", 0, 0), pageId: "p1" },
       { ...box("there", 0, 0), pageId: "p2" },

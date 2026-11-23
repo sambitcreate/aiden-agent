@@ -1,6 +1,8 @@
-// Page edits on the design canvas: add, rename, duplicate, delete, move and
-// show. Pure and shared, so the page picker and Aiden's tools agree on what
-// each edit does. Every function returns `doc` itself when it changes nothing.
+// Page edits on the design canvas: add, rename, duplicate, delete and move.
+// Pure and shared, so the page picker and Aiden's tools agree on what each
+// edit does. Every function returns `doc` itself when it changes nothing.
+// Showing a page is not an edit: it is the chat's view (`view.ts`), so none
+// of these change which page anyone looks at.
 
 import { syncConnectors } from "./connectors.js";
 import { clampCoord } from "./placement.js";
@@ -8,12 +10,11 @@ import {
   DESIGN_CANVAS_LIMITS,
   isDesignContainer,
   type DesignCanvas,
+  type DesignComment,
   type DesignConnectorEnd,
   type DesignFrame,
   type DesignPage,
 } from "./schema.js";
-
-const FRESH_VIEWPORT = { x: 0, y: 0, zoom: 1 } as const;
 
 /** "Page N" for the lowest N no page is called yet. */
 export function nextPageName(doc: DesignCanvas): string {
@@ -28,12 +29,13 @@ export function canAddPage(doc: DesignCanvas): boolean {
   return doc.pages.length < DESIGN_CANVAS_LIMITS.pages;
 }
 
-/** Adds an empty page after the one on screen and shows it. */
-export function addPage(doc: DesignCanvas, id: string, name?: string): DesignCanvas {
+/** Adds an empty page right after the page `after` (at the end when it is left out or gone). */
+export function addPage(doc: DesignCanvas, id: string, name?: string, after?: string): DesignCanvas {
   if (!canAddPage(doc) || doc.pages.some((page) => page.id === id)) return doc;
-  const page: DesignPage = { id, name: cleanName(name) || nextPageName(doc), viewport: { ...FRESH_VIEWPORT } };
-  const at = doc.pages.findIndex((entry) => entry.id === doc.activePageId) + 1;
-  return { ...doc, pages: [...doc.pages.slice(0, at), page, ...doc.pages.slice(at)], activePageId: id };
+  const page: DesignPage = { id, name: cleanName(name) || nextPageName(doc) };
+  const found = after === undefined ? -1 : doc.pages.findIndex((entry) => entry.id === after);
+  const at = found < 0 ? doc.pages.length : found + 1;
+  return { ...doc, pages: [...doc.pages.slice(0, at), page, ...doc.pages.slice(at)] };
 }
 
 /** Renames a page. An empty name is refused. */
@@ -44,16 +46,10 @@ export function renamePage(doc: DesignCanvas, id: string, name: string): DesignC
   return { ...doc, pages: doc.pages.map((entry) => (entry.id === id ? { ...entry, name: clean } : entry)) };
 }
 
-/** Shows a page. */
-export function showPage(doc: DesignCanvas, id: string): DesignCanvas {
-  if (doc.activePageId === id || !doc.pages.some((page) => page.id === id)) return doc;
-  return { ...doc, activePageId: id };
-}
-
 /**
  * Copies a page and everything on it (groups keep their members) right after
- * it, named "<name> copy", and shows the copy. All or nothing: a copy that
- * would pass the page or frame limit returns `doc`.
+ * it, named "<name> copy". All or nothing: a copy that would pass the page or
+ * frame limit returns `doc`.
  */
 export function duplicatePage(doc: DesignCanvas, id: string, pageId: string, newFrameId: () => string): DesignCanvas {
   const source = doc.pages.find((page) => page.id === id);
@@ -71,34 +67,29 @@ export function duplicatePage(doc: DesignCanvas, id: string, pageId: string, new
     }) as DesignFrame["ends"];
     return { ...rest, id: ids.get(frame.id)!, pageId, ...(groupId ? { groupId } : {}), ...(ends ? { ends } : {}) };
   });
-  const page: DesignPage = {
-    id: pageId,
-    name: cleanName(`${source.name} copy`),
-    viewport: { ...source.viewport },
-  };
+  const page: DesignPage = { id: pageId, name: cleanName(`${source.name} copy`) };
   const at = doc.pages.indexOf(source) + 1;
   return {
     ...doc,
     pages: [...doc.pages.slice(0, at), page, ...doc.pages.slice(at)],
-    activePageId: pageId,
     frames: [...doc.frames, ...copies],
   };
 }
 
 /**
- * Deletes a page with its frames and comments. The last page cannot be
- * deleted. If it was on screen, the page before it (or the new first page)
- * is shown instead.
+ * Deletes a page with its frames and comments, and forgets it as any chat's
+ * page. The last page cannot be deleted. A chat looking at it sees the first
+ * page instead (`viewPageId`).
  */
 export function deletePage(doc: DesignCanvas, id: string): DesignCanvas {
   const at = doc.pages.findIndex((page) => page.id === id);
   if (at < 0 || doc.pages.length <= 1) return doc;
   const pages = doc.pages.filter((page) => page.id !== id);
-  const activePageId = doc.activePageId === id ? pages[Math.max(0, at - 1)]!.id : doc.activePageId;
+  const chatPages = Object.fromEntries(Object.entries(doc.chatPages).filter(([, pageId]) => pageId !== id));
   return {
     ...doc,
     pages,
-    activePageId,
+    chatPages,
     frames: doc.frames.filter((frame) => frame.pageId !== id),
     comments: doc.comments.filter((comment) => comment.pageId !== id),
   };
@@ -141,6 +132,73 @@ export function moveFramesToPage(doc: DesignCanvas, ids: readonly string[], page
   );
   // An arrow left behind lets go of the frames that moved away, and one that moved lets go of those left.
   return syncConnectors({ ...doc, frames, comments });
+}
+
+/**
+ * `source`'s pages appended to `target`, for a chat that brings its canvas
+ * along when it joins a workspace. Each source page with a frame on it
+ * becomes a new page named "<label> · <page name>"; its frames get new ids,
+ * and groups, arrows and comments keep pointing at the copies. Comments keep
+ * their ids (a page's `data-aiden-comment` marks name them) unless the target
+ * already uses one. `chatPages` is not copied. All or nothing: null when the
+ * result would pass the page, frame or comment limit; `target` itself when
+ * the source has nothing on it.
+ */
+export function appendCanvasPages(
+  target: DesignCanvas,
+  source: DesignCanvas,
+  newId: () => string,
+  label: string,
+): DesignCanvas | null {
+  const pages = source.pages.filter((page) => source.frames.some((frame) => frame.pageId === page.id));
+  if (pages.length === 0) return target;
+  const pageIds = new Map(pages.map((page) => [page.id, newId()]));
+  const frames = source.frames.filter((frame) => pageIds.has(frame.pageId));
+  const comments = source.comments.filter((comment) => pageIds.has(comment.pageId));
+  if (
+    target.pages.length + pages.length > DESIGN_CANVAS_LIMITS.pages ||
+    target.frames.length + frames.length > DESIGN_CANVAS_LIMITS.frames ||
+    target.comments.length + comments.length > DESIGN_CANVAS_LIMITS.comments
+  ) {
+    return null;
+  }
+  const frameIds = new Map(frames.map((frame) => [frame.id, newId()]));
+  const copies = frames.map((frame): DesignFrame => {
+    const groupId = frame.groupId ? frameIds.get(frame.groupId) : undefined;
+    const { groupId: _groupId, ...rest } = frame;
+    const ends = frame.ends?.map((end): DesignConnectorEnd => {
+      const joined = end.frameId !== undefined ? frameIds.get(end.frameId) : undefined;
+      return joined ? { ...end, frameId: joined } : { x: end.x, y: end.y };
+    }) as DesignFrame["ends"];
+    return {
+      ...rest,
+      id: frameIds.get(frame.id)!,
+      pageId: pageIds.get(frame.pageId)!,
+      ...(groupId ? { groupId } : {}),
+      ...(ends ? { ends } : {}),
+    };
+  });
+  const taken = new Set(target.comments.map((comment) => comment.id));
+  const commentCopies = comments.map((comment): DesignComment => {
+    const id = taken.has(comment.id) ? newId() : comment.id;
+    taken.add(id);
+    const frameId = comment.frameId !== undefined ? frameIds.get(comment.frameId) : undefined;
+    const { frameId: _frameId, ...rest } = comment;
+    return {
+      ...rest,
+      id,
+      pageId: pageIds.get(comment.pageId)!,
+      ...(frameId ? { frameId } : {}),
+      ...(comment.anchor && frameId ? { anchor: { ...comment.anchor, commentId: id } } : {}),
+    };
+  });
+  const added = pages.map((page): DesignPage => ({ id: pageIds.get(page.id)!, name: cleanName(`${label} · ${page.name}`) }));
+  return syncConnectors({
+    ...target,
+    pages: [...target.pages, ...added],
+    frames: [...target.frames, ...copies],
+    comments: [...target.comments, ...commentCopies],
+  });
 }
 
 function cleanName(name: string | undefined): string {

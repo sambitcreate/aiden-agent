@@ -157,7 +157,7 @@ An adversarial review of this plan against the code found the problems below, ea
   - `adaptCanvas(doc, pageId, ...)` in `canvas-adapter-core.ts`.
   - `changesBetween` in `canvas-history-core.ts`: stops tracking `activePageId` and viewports. It still takes page names and order whole when they changed.
 
-- [ ] **Step 1: Write failing tests**
+- [x] **Step 1: Write failing tests**
   - `pages.test.ts`:
     - `addPage inserts after the given page and leaves chatPages alone`;
     - `deletePage drops chatPages entries for the deleted page`.
@@ -166,10 +166,10 @@ An adversarial review of this plan against the code found the problems below, ea
     - `canvasPromptLine marks the chat's view page as on screen`.
   - `canvas-history-core.test.ts`: `undo after another chat switched pages does not change any page` (a doc with two pages: undoing a frame move must leave `pages` deep-equal).
   - `placement.test.ts` / `comments.test.ts`: `placeFrame puts the frame on the given page`; `addComment stamps chatId`.
-- [ ] **Step 2:** Run each test file. Expected: FAIL.
-- [ ] **Step 3:** Implement. Delete the tests that only covered `showPage` or active-page tracking, and replace them with the cases above.
-- [ ] **Step 4:** Run `npx tsx --test renderer/shared/design-canvas/*.test.ts renderer/design/canvas-*-core.test.ts`. Expected: PASS.
-- [ ] **Step 5:** Commit `refactor(design): canvas helpers take the page explicitly`.
+- [x] **Step 2:** Run each test file. Expected: FAIL.
+- [x] **Step 3:** Implement. Delete the tests that only covered `showPage` or active-page tracking, and replace them with the cases above.
+- [x] **Step 4:** Run `npx tsx --test renderer/shared/design-canvas/*.test.ts renderer/design/canvas-*-core.test.ts`. Expected: PASS.
+- [x] **Step 5:** Commit `refactor(design): canvas helpers take the page explicitly`.
 
 ### Task 3: Workspace-keyed store, chat adapter, workspace broadcast
 

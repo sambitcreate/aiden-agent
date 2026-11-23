@@ -5,6 +5,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   addPage,
+  appendCanvasPages,
   canAddPage,
   deletePage,
   duplicatePage,
@@ -12,31 +13,35 @@ import {
   moveFramesToPage,
   nextPageName,
   renamePage,
-  showPage,
 } from "./pages.js";
-import { DESIGN_CANVAS_LIMITS, emptyDesignCanvas, type DesignCanvas, type DesignFrame } from "./schema.js";
+import { DESIGN_CANVAS_LIMITS, emptyDesignCanvas, parseDesignCanvas, type DesignCanvas, type DesignFrame } from "./schema.js";
 
 function frame(id: string, pageId: string, extra: Partial<DesignFrame> = {}): DesignFrame {
   return { id, kind: "note", title: id, x: 10, y: 20, w: 200, h: 120, text: id, pageId, createdBy: "person", ...extra };
 }
 
 function twoPages(): DesignCanvas {
-  const doc = addPage(emptyDesignCanvas(), "p2");
-  return showPage(doc, "page-1");
+  return addPage(emptyDesignCanvas(), "p2");
 }
 
 const names = (doc: DesignCanvas) => doc.pages.map((page) => page.name);
 
-test("a new page goes after the one on screen, takes the next free name and is shown", () => {
+test("a new page goes at the end and takes the next free name", () => {
   let doc = addPage(emptyDesignCanvas(), "p2");
   assert.deepEqual(names(doc), ["Page 1", "Page 2"]);
-  assert.equal(doc.activePageId, "p2");
-  assert.deepEqual(doc.pages[1]!.viewport, { x: 0, y: 0, zoom: 1 });
-  doc = addPage(showPage(doc, "page-1"), "p3", "  Pricing   options ");
-  assert.deepEqual(names(doc), ["Page 1", "Pricing options", "Page 2"]);
+  assert.deepEqual(doc.pages[1], { id: "p2", name: "Page 2" });
+  doc = addPage(doc, "p3", "Later", "missing");
+  assert.deepEqual(names(doc), ["Page 1", "Page 2", "Later"], "an unknown page to add after means the end");
   doc = renamePage(doc, "p2", "page 4");
   assert.equal(nextPageName(doc), "Page 5", "a name in any case is taken");
   assert.equal(addPage(doc, "p2"), doc, "an id already used changes nothing");
+});
+
+test("addPage inserts after the given page and leaves chatPages alone", () => {
+  const base: DesignCanvas = { ...twoPages(), chatPages: { "chat-1": "p2", "chat-2": "page-1" } };
+  const doc = addPage(base, "p3", "  Pricing   options ", "page-1");
+  assert.deepEqual(names(doc), ["Page 1", "Pricing options", "Page 2"]);
+  assert.equal(doc.chatPages, base.chatPages);
 });
 
 test("pages stop at the limit", () => {
@@ -65,7 +70,7 @@ test("duplicating copies the page's frames with new ids and keeps groups togethe
   let next = 0;
   const copy = duplicatePage(doc, "page-1", "copy", () => `new-${next++}`);
   assert.deepEqual(names(copy), ["Page 1", "Page 1 copy", "Page 2"]);
-  assert.equal(copy.activePageId, "copy");
+  assert.deepEqual(copy.pages[1], { id: "copy", name: "Page 1 copy" });
   const copied = copy.frames.filter((entry) => entry.pageId === "copy");
   assert.equal(copied.length, 2);
   const group = copied.find((entry) => entry.kind === "group")!;
@@ -82,32 +87,32 @@ test("a duplicate that would pass the frame limit changes nothing", () => {
   assert.equal(duplicatePage(doc, "page-1", "copy", () => crypto.randomUUID()), doc);
 });
 
-test("deleting a page removes its frames and comments and shows the page before it", () => {
+test("deleting a page removes its frames and comments", () => {
   const base = addPage(twoPages(), "p3");
   const doc: DesignCanvas = {
     ...base,
     frames: [frame("a", "page-1"), frame("b", "p3")],
     comments: [{ id: "c", pageId: "p3", frameId: "b", x: 0, y: 0, note: "", state: "open", anchorState: "anchored", createdAt: "t" }],
   };
-  assert.equal(doc.activePageId, "p3");
   const after = deletePage(doc, "p3");
   assert.deepEqual(after.pages.map((page) => page.id), ["page-1", "p2"]);
-  assert.equal(after.activePageId, "page-1", "the page before the deleted one is shown");
   assert.deepEqual(after.frames.map((entry) => entry.id), ["a"]);
   assert.deepEqual(after.comments, []);
-  const first = deletePage(showPage(doc, "page-1"), "page-1");
-  assert.equal(first.activePageId, "p3", "deleting the first page shows the new first page");
   const single = emptyDesignCanvas();
   assert.equal(deletePage(single, "page-1"), single, "the last page stays");
 });
 
+test("deletePage drops chatPages entries for the deleted page", () => {
+  const doc: DesignCanvas = { ...addPage(twoPages(), "p3"), chatPages: { "chat-1": "p3", "chat-2": "p2", "chat-3": "p3" } };
+  assert.deepEqual(deletePage(doc, "p3").chatPages, { "chat-2": "p2" });
+});
+
 test("pages move one place at a time and stop at the ends", () => {
-  const doc = addPage(twoPages(), "p3");
-  // Order is Page 1, then p3 (added after the page on screen), then p2.
+  const doc = addPage(twoPages(), "p3", undefined, "page-1");
+  // Order is Page 1, then p3 (added after Page 1), then p2.
   assert.deepEqual(doc.pages.map((page) => page.id), ["page-1", "p3", "p2"]);
   assert.deepEqual(movePage(doc, "p2", -1).pages.map((page) => page.id), ["page-1", "p2", "p3"]);
   assert.deepEqual(movePage(doc, "page-1", 1).pages.map((page) => page.id), ["p3", "page-1", "p2"]);
-  assert.equal(movePage(doc, "p3", -1).activePageId, doc.activePageId, "moving does not change the page on screen");
   assert.equal(movePage(doc, "page-1", -1), doc);
   assert.equal(movePage(doc, "p2", 1), doc);
 });
@@ -163,4 +168,86 @@ test("a copied page's arrows join the copies of their boxes", () => {
     { x: 100, y: 30, frameId: "copy-1" },
     { x: 400, y: 30 },
   ]);
+});
+
+test("appendCanvasPages: pages with frames merge after the target's, with groups, arrows and comments still joined", () => {
+  const target: DesignCanvas = { ...emptyDesignCanvas(), revision: 9, frames: [frame("a", "page-1")], chatPages: { "chat-t": "page-1" } };
+  const source: DesignCanvas = {
+    ...emptyDesignCanvas(),
+    pages: [{ id: "page-1", name: "Page 1" }, { id: "empty", name: "Nothing" }, { id: "p3", name: "Ideas" }],
+    chatPages: { "chat-s": "p3" },
+    frames: [
+      frame("a", "page-1"),
+      frame("g", "p3", { kind: "group" }),
+      frame("in", "p3", { groupId: "g" }),
+      {
+        ...frame("arrow", "p3", { kind: "connector", w: 1, h: 1 }),
+        ends: [{ x: 0, y: 0, frameId: "in" }, { x: 50, y: 50 }],
+      },
+    ],
+    comments: [
+      { id: "c1", pageId: "p3", frameId: "in", x: 1, y: 2, note: "Tighter", state: "open", anchorState: "anchored", createdAt: "t", chatId: "chat-s", queued: true },
+      { id: "c2", pageId: "page-1", x: 0, y: 0, note: "Free", state: "open", anchorState: "anchored", createdAt: "t" },
+    ],
+  };
+  let next = 0;
+  const merged = appendCanvasPages(target, source, () => `n${++next}`, "Sketches");
+  assert.ok(merged);
+  assert.equal(merged.revision, 9, "the target keeps its revision; the store bumps it on save");
+  assert.deepEqual(merged.chatPages, { "chat-t": "page-1" }, "the source's chat pages are not copied");
+  assert.deepEqual(
+    merged.pages.map((page) => page.name),
+    ["Page 1", "Sketches · Page 1", "Sketches · Ideas"],
+    "a page with nothing on it is left behind",
+  );
+  const [, first, ideas] = merged.pages;
+  const ids = new Set(merged.frames.map((entry) => entry.id));
+  assert.equal(ids.size, merged.frames.length, "every frame id is unique");
+  assert.equal(merged.frames.filter((entry) => entry.pageId === first!.id).length, 1);
+  const onIdeas = merged.frames.filter((entry) => entry.pageId === ideas!.id);
+  const group = onIdeas.find((entry) => entry.kind === "group")!;
+  const member = onIdeas.find((entry) => entry.title === "in")!;
+  const arrow = onIdeas.find((entry) => entry.kind === "connector")!;
+  assert.equal(member.groupId, group.id);
+  assert.equal(arrow.ends![0].frameId, member.id);
+  const comment = merged.comments.find((entry) => entry.note === "Tighter")!;
+  assert.equal(comment.frameId, member.id);
+  assert.equal(comment.pageId, ideas!.id);
+  assert.equal(comment.chatId, "chat-s");
+  const free = merged.comments.find((entry) => entry.note === "Free")!;
+  assert.equal(free.pageId, first!.id);
+  // The merged document is one the parser accepts as it is.
+  const reparsed = parseDesignCanvas(JSON.parse(JSON.stringify(merged)));
+  assert.ok(reparsed.ok);
+  assert.equal(reparsed.dropped, 0);
+});
+
+test("appendCanvasPages: a source with nothing on it changes nothing, and one past any limit is refused whole", () => {
+  const target = emptyDesignCanvas();
+  assert.equal(appendCanvasPages(target, emptyDesignCanvas(), () => "x", "Empty"), target);
+  const source: DesignCanvas = { ...emptyDesignCanvas(), frames: [frame("s", "page-1")] };
+  let next = 0;
+  const newId = () => `n${++next}`;
+  const fullPages: DesignCanvas = {
+    ...target,
+    pages: Array.from({ length: DESIGN_CANVAS_LIMITS.pages }, (_, index) => ({ id: `p${index}`, name: `P${index}` })),
+  };
+  assert.equal(appendCanvasPages(fullPages, source, newId, "Chat"), null);
+  const fullFrames: DesignCanvas = {
+    ...target,
+    pages: Array.from({ length: 10 }, (_, index) => ({ id: `p${index}`, name: `P${index}` })),
+    frames: Array.from({ length: DESIGN_CANVAS_LIMITS.frames }, (_, index) => frame(`f${index}`, `p${index % 10}`)),
+  };
+  assert.equal(appendCanvasPages(fullFrames, source, newId, "Chat"), null);
+  const fullComments: DesignCanvas = {
+    ...target,
+    comments: Array.from({ length: DESIGN_CANVAS_LIMITS.comments }, (_, index) => ({
+      id: `c${index}`, pageId: "page-1", x: 0, y: 0, note: "", state: "open" as const, anchorState: "anchored" as const, createdAt: "t",
+    })),
+  };
+  const withComment: DesignCanvas = {
+    ...source,
+    comments: [{ id: "one", pageId: "page-1", x: 0, y: 0, note: "", state: "open", anchorState: "anchored", createdAt: "t" }],
+  };
+  assert.equal(appendCanvasPages(fullComments, withComment, newId, "Chat"), null);
 });
