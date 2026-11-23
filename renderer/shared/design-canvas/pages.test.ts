@@ -242,6 +242,34 @@ test("appendCanvasPages: page and image paths follow the copied files, and a fra
   assert.deepEqual(none?.pageIds, []);
 });
 
+test("appendCanvasPages: a carried comment's source stamp follows its copied file, and one whose file stayed behind is dropped", () => {
+  const anchor = (sourcePath: string) => ({ commentId: "old", selector: "h1", text: "Hi", tag: "h1", sourcePath });
+  const source: DesignCanvas = {
+    ...emptyDesignCanvas(),
+    frames: [frame("home", "page-1", { kind: "file", path: "design/index.html", text: undefined })],
+    comments: [
+      { id: "c1", pageId: "page-1", frameId: "home", x: 0, y: 0, note: "Bigger", state: "open", anchorState: "anchored", createdAt: "t", chatId: "chat-s", anchor: anchor("design/index.html:12") },
+      { id: "c2", pageId: "page-1", frameId: "home", x: 0, y: 0, note: "Partial", state: "open", anchorState: "anchored", createdAt: "t", chatId: "chat-s", anchor: anchor("design/part.html") },
+    ],
+  };
+  const pathMap = new Map([["design/index.html", "aiden-scratch/design/index.html"]]);
+  // The target already has c1, so the first carried comment gets a new id.
+  const target: DesignCanvas = {
+    ...emptyDesignCanvas(),
+    comments: [{ id: "c1", pageId: "page-1", x: 0, y: 0, note: "Mine", state: "open", anchorState: "anchored", createdAt: "t", chatId: "chat-t" }],
+  };
+  const merged = appendCanvasPages(target, source, { label: "Chat", pathMap, newId: () => "fresh" });
+  assert.ok(merged);
+  const carried = merged.doc.comments.filter((entry) => entry.chatId === "chat-s");
+  const first = carried.find((entry) => entry.note === "Bigger")!;
+  assert.equal(first.id, "fresh");
+  assert.equal(first.anchor?.commentId, "fresh", "the anchor names the comment's new id");
+  assert.equal(first.anchor?.sourcePath, "aiden-scratch/design/index.html:12", "the stamp points at the copy, never the workspace's own design/index.html");
+  const second = carried.find((entry) => entry.note === "Partial")!;
+  assert.equal(second.anchor?.sourcePath, undefined, "a stamp whose file was not copied is dropped");
+  assert.equal(second.anchor?.selector, "h1", "the rest of the anchor is kept");
+});
+
 test("appendCanvasPages: one past any limit is refused whole", () => {
   const target = emptyDesignCanvas();
   const source: DesignCanvas = { ...emptyDesignCanvas(), frames: [frame("s", "page-1")] };

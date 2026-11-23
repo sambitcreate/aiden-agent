@@ -661,3 +661,60 @@ test("a chat with a view of its own enters onto its page, even when that page ha
   assert.equal(placed.pageId, "page-1");
   assert.equal(placed.focusId, undefined, "the page on screen does not change");
 });
+
+test("whether the chat had a view is read before its files, so a canvas opening meanwhile cannot send its pages onto another chat's page", async (t) => {
+  const { workspaceRoot, canvases } = await workspaceWith(t, ["b-home.html"]);
+  await canvases.store.update("chat-1", (doc) => ({ ...doc, frames: [fileFrame("a-home", "design/a-home.html", "page-1")] }));
+  // The canvas this entry opens reports a view of page 1 while the files are being read.
+  let reported = false;
+  const via = canvases.via("chat-2");
+  const placed = await placeWrittenPagesOnCanvas({
+    ...via,
+    pages: {
+      ...via.pages,
+      resolver: async (workspaceId: string) => {
+        reported = true;
+        return via.pages.resolver(workspaceId);
+      },
+    },
+    workspaceRoot,
+    paths: ["design/b-home.html"],
+    broadcast: () => undefined,
+    newId: ids(),
+    entry: { pageName: "Brand refresh", hasView: async () => reported },
+  });
+  const doc = await canvases.workspaceStore.get("ws-1");
+  const page = doc.pages.find((entry) => entry.name === "Brand refresh");
+  assert.ok(page, "chat B still gets a page of its own");
+  assert.equal(placed.pageId, page.id);
+  assert.deepEqual(doc.frames.filter((frame) => frame.pageId === "page-1").map((frame) => frame.id), ["a-home"]);
+});
+
+test("leaving design mode while entry's file is being written takes back the page it added as well as its frames", async (t) => {
+  const { workspaceRoot, canvases } = await workspaceWith(t, ["b-home.html"]);
+  await canvases.store.update("chat-1", (doc) => ({ ...doc, frames: [fileFrame("a-home", "design/a-home.html", "page-1")] }));
+  let designMode = true;
+  let calls = 0;
+  const via = canvases.via("chat-2");
+  await placeWrittenPagesOnCanvas({
+    ...via,
+    store: {
+      workspaceIdOf: (id) => canvases.store.workspaceIdOf(id),
+      update: async (id, mutate, options) => {
+        calls += 1;
+        const saved = await canvases.store.update(id, mutate, options);
+        if (calls === 1) designMode = false;
+        return saved;
+      },
+    },
+    shouldSave: () => designMode,
+    workspaceRoot,
+    paths: ["design/b-home.html"],
+    broadcast: () => undefined,
+    newId: ids(),
+    entry: { pageName: "Brand refresh", hasView: async () => false },
+  });
+  const doc = await canvases.workspaceStore.get("ws-1");
+  assert.deepEqual(doc.pages.map((page) => page.name), ["Page 1"], "no empty page is left on the shared canvas");
+  assert.deepEqual(doc.frames.map((frame) => frame.id), ["a-home"]);
+});

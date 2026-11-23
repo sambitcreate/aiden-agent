@@ -157,7 +157,21 @@ async function fixture(
     if (!handler) throw new Error(`${channel} is not registered`);
     return handler(event, ...args);
   };
-  const invoke = (channel: string, ...args: unknown[]) => invokeFrom({}, channel, ...args);
+  // A save names the workspace whose canvas the renderer is on. Tests that
+  // save from the chat's current workspace leave it out and it is filled in
+  // here; `invokeFrom` sends exactly what it is given.
+  const invoke = (channel: string, ...args: unknown[]) => {
+    const [chatId, , , saveOptions] = args;
+    if (
+      channel === "designCanvas:save" &&
+      typeof chatId === "string" &&
+      chats[chatId] &&
+      (saveOptions === undefined || (typeof saveOptions === "object" && saveOptions !== null && !("workspaceId" in saveOptions)))
+    ) {
+      args[3] = { ...(saveOptions as object | undefined), workspaceId: persistedChatWorkspaceId(chats[chatId]!.workspaceId) };
+    }
+    return invokeFrom({}, channel, ...args);
+  };
   return {
     root,
     store,
@@ -222,7 +236,7 @@ test("a save broadcasts the chat's workspace id", async (t) => {
 });
 
 test("a save that names another workspace than the chat's is answered moved, and writes nothing", async (t) => {
-  const { invoke, broadcasts, workspaceStore } = await fixture(t, {
+  const { invoke, invokeFrom, broadcasts, workspaceStore } = await fixture(t, {
     chats: { "chat-1": { id: "chat-1", workspaceId: "ws-2", designMode: true } },
   });
   await workspaceStore.save("ws-2", { ...note, frames: [] }, 0);
@@ -236,6 +250,9 @@ test("a save that names another workspace than the chat's is answered moved, and
   assert.deepEqual((await workspaceStore.get("ws-1")).revision, 0, "ws-1 is untouched too");
   assert.deepEqual(broadcasts, []);
   await assert.rejects(invoke("designCanvas:save", "chat-1", note, 1, { workspaceId: "../ws" }), /save options/u);
+  // A save that does not say which workspace's canvas it is cannot replace any.
+  await assert.rejects(invokeFrom({}, "designCanvas:save", "chat-1", note, 1), /save options/u);
+  await assert.rejects(invokeFrom({}, "designCanvas:save", "chat-1", note, 1, { undone: [] }), /save options/u);
 });
 
 test("designCanvas:view stores a parsed view and refuses a malformed one", async (t) => {
@@ -373,7 +390,7 @@ test("malformed parameters are rejected before the store is used", async (t) => 
 test("a chat that does not exist has no canvas to read or write", async (t) => {
   const { invoke, root } = await fixture(t);
   await assert.rejects(invoke("designCanvas:get", "missing"), /no longer available/u);
-  await assert.rejects(invoke("designCanvas:save", "missing", note, 0), /no longer available/u);
+  await assert.rejects(invoke("designCanvas:save", "missing", note, 0, { workspaceId: "workspace-1" }), /no longer available/u);
   assert.deepEqual(await fs.readdir(root), []);
 });
 
@@ -938,6 +955,7 @@ test("another chat's visual on the shared canvas previews, exports and shows its
       "chat-1": { id: "chat-1", workspaceId: "workspace-1", designMode: true },
       "chat-a": { id: "chat-a", workspaceId: "workspace-1" },
       "chat-x": { id: "chat-x", workspaceId: "workspace-2" },
+      routine: { id: "routine", workspaceId: "workspace-1", owner: { kind: "routine", id: "r1" } as never },
     },
     saveFile: () => destination,
     artifacts: { "media-1": "aiden-genui://preview/abc" },
@@ -953,6 +971,7 @@ test("another chat's visual on the shared canvas previews, exports and shows its
       { ...box, id: "a-chart", title: "A's chart", chatId: "chat-a" },
       { ...box, id: "x-chart", title: "Moved chat's chart", chatId: "chat-x" },
       { ...box, id: "gone-chart", title: "Deleted chat's chart", chatId: "chat-deleted" },
+      { ...box, id: "routine-chart", title: "A routine's chart", chatId: "routine" },
     ],
   }));
 
@@ -962,8 +981,9 @@ test("another chat's visual on the shared canvas previews, exports and shows its
   assert.deepEqual(artifactReads, ["preview chat-a/media-1", "html chat-a/media-1"]);
   assert.deepEqual(artifactExports, ["chat-a/media-1"]);
 
-  // A chat now in another workspace, or deleted, no longer lends its visuals to this canvas.
-  for (const frameId of ["x-chart", "gone-chart"]) {
+  // A chat now in another workspace, or deleted, no longer lends its visuals to this canvas,
+  // and a routine's never does, even in the same workspace.
+  for (const frameId of ["x-chart", "gone-chart", "routine-chart"]) {
     assert.deepEqual(await invoke("designCanvas:export", "chat-1", frameId, "png"), { error: "unavailable" });
     assert.deepEqual(await invoke("designCanvas:export", "chat-1", frameId, "source"), { error: "unavailable" });
     assert.deepEqual(await invoke("designCanvas:source", "chat-1", frameId), { error: "unavailable" });

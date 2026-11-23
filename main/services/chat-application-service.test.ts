@@ -740,6 +740,20 @@ test("a chat's design grant ends when design mode turns off, the chat moves or t
   assert.equal(designGrants.resolve(bystander), null);
 });
 
+test("moving an empty chat clears its view and comments on the old workspace's canvas, and a failure there does not stop the move", async () => {
+  const forgotten: Array<[string, string]> = [];
+  const { service } = fixture({
+    designCanvasCleanup: { forgetChat: async (chatId: string, workspaceId: string) => { forgotten.push([chatId, workspaceId]); } },
+  });
+  await service.moveEmptyToWorkspace("chat-2", "workspace-1");
+  // The fixture's chats start in workspace-1; what is cleared is the workspace the chat was in.
+  assert.deepEqual(forgotten, [["chat-2", "workspace-1"]]);
+
+  const failing = fixture({ designCanvasCleanup: { forgetChat: async () => { throw new Error("disk failed"); } } });
+  const moved = await failing.service.moveEmptyToWorkspace("chat-2", "workspace-1");
+  assert.equal(moved?.id, "chat-2");
+});
+
 test("after a Not now, Aiden may ask about design mode again only once the person has opened it themselves", async () => {
   const designModeConsent = new DesignModeConsent();
   const { service } = fixture({ designModeConsent });

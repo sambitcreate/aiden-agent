@@ -444,6 +444,12 @@ export function createChatApplicationService(deps: ChatApplicationDependencies) 
         );
         // A grant names the old workspace root; the canvas asks again for the new one.
         deps.designGrants?.revokeChat(chatId);
+        // The chat's view and comments on the old workspace's canvas are no one's now.
+        await deps.designCanvasCleanup
+          ?.forgetChat(chatId, persistedChatWorkspaceId(current.workspaceId))
+          .catch((error: unknown) => {
+            deps.logError("design", "Could not clear the chat's view of its old workspace's canvas.", error);
+          });
         return chatForRenderer(moved);
       } finally {
         finishFollowThroughMove?.();
@@ -670,11 +676,15 @@ export function createChatApplicationService(deps: ChatApplicationDependencies) 
           deps.logError("memory", "Could not clear old workspace memory index after attach.", error);
         });
 
-        // The canvas follows the copied files while the hidden workspace, and so
-        // its canvas, still exists. The chat has already moved, so a canvas that
-        // cannot come along is reported rather than undoing the attach.
+        // The canvas comes along while the hidden workspace, and so its canvas,
+        // still exists. Page and image frames follow the files that were copied;
+        // with none copied (trash, or nothing to copy) only those frames stay
+        // behind, and notes, shapes, visuals and comments still come. The chat
+        // has already moved, so a canvas that cannot come is reported rather
+        // than undoing the attach. A legacy folder shared with other chats keeps
+        // its canvas for them.
         let canvasCarried: boolean | undefined;
-        if (!sharedLegacyScratch && options.fileAction === "copy" && deps.designCanvasCarry) {
+        if (!sharedLegacyScratch && deps.designCanvasCarry) {
           const outcome = await deps.designCanvasCarry
             .carry({
               chatId,

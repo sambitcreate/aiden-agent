@@ -170,7 +170,7 @@ import { EmptyChatMigrationSnapshotError } from "./services/empty-chat-migration
 import { migrateLegacyEmptyWorkspaceChats } from "./services/empty-chat-migration-main.js";
 import { ensureUserDataDir } from "./services/data-store.js";
 import { piCompactionSessionStore } from "./services/pi-compaction-session-store.js";
-import { designCanvasChatCleanup, designCanvasViews } from "./services/design-canvas/main.js";
+import { designCanvasChatCleanup, designCanvasViews, removeDesignCanvasWorkspace } from "./services/design-canvas/main.js";
 import { persistedChatWorkspaceId } from "../renderer/shared/chat-workspace.js";
 import {
   reconcileExternalProviderCredentialChanges,
@@ -2748,6 +2748,7 @@ if (!ownsSingleInstanceLock) {
         removeWorkspaceRecord: async (workspaceId) => {
           await configStore.removeWorkspace(workspaceId);
           await removeWorkspaceArtifacts(workspaceId);
+          await removeDesignCanvasWorkspace(workspaceId);
         },
         finalizeDeletion: async (workspace) => {
           const managed = workspace.managedWorktree!;

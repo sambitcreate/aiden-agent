@@ -15,7 +15,7 @@ import * as path from "node:path";
 import { canvasView } from "../../../renderer/shared/design-canvas/canvas-summary.js";
 import { placeFrame } from "../../../renderer/shared/design-canvas/placement.js";
 import { parseProducedFile } from "../../../renderer/shared/produced-file.js";
-import { addPage, canAddPage } from "../../../renderer/shared/design-canvas/pages.js";
+import { addPage, canAddPage, deletePage } from "../../../renderer/shared/design-canvas/pages.js";
 import {
   DESIGN_CANVAS_LIMITS,
   DESIGN_DEFAULT_FILE_WIDTH,
@@ -245,8 +245,8 @@ function basename(relativePath: string): string {
 }
 
 /**
- * Puts each page that is not on the canvas yet (on any page of it) beside the
- * frames in view on the page the person is looking at, at the design width
+ * Puts each page that is not on the chat's page yet beside the frames in view
+ * there (a frame of it on another page is that page's own), at the design width
  * its source asked for (`widths`, 1280 otherwise) and that width's box. A page
  * the person took off the canvas (`removedPagePaths`) is not put back: it is
  * listed in `removed`, and comes back only when Aiden places it with
@@ -427,6 +427,13 @@ export async function placeWrittenPagesOnCanvas(input: {
   onRemoved?: (paths: readonly string[]) => void;
 }): Promise<{ frameIds: string[]; pageId?: string; focusId?: number }> {
   if (input.limit !== undefined && input.limit <= 0) return { frameIds: [] };
+  // A chat deleted meanwhile has no canvas to put them on.
+  const workspaceId = await input.store.workspaceIdOf(input.chatId);
+  if (workspaceId === null) return { frameIds: [] };
+  // Whether the chat had a view is read before the files are, so the canvas
+  // this entry is opening cannot report one first and send these pages onto
+  // another chat's page.
+  const entryHasView = input.entry ? await input.entry.hasView(workspaceId) : undefined;
   const newestFirst: string[] = [];
   const widths = new Map<string, DesignWidth>();
   const seen = new Set<string>();
@@ -447,11 +454,8 @@ export async function placeWrittenPagesOnCanvas(input: {
   }
   const showable = newestFirst.reverse();
   if (showable.length === 0) return { frameIds: [] };
-  // A chat deleted meanwhile has no canvas to put them on.
-  const workspaceId = await input.store.workspaceIdOf(input.chatId);
-  if (workspaceId === null) return { frameIds: [] };
   const viewOf = await input.pages.resolver(workspaceId);
-  const entry = input.entry ? { pageName: input.entry.pageName, hasView: await input.entry.hasView(workspaceId) } : undefined;
+  const entry = input.entry ? { pageName: input.entry.pageName, hasView: entryHasView! } : undefined;
   const shouldSave = input.shouldSave;
   let placedIds: string[] = [];
   let removed: string[] = [];
@@ -459,6 +463,8 @@ export async function placeWrittenPagesOnCanvas(input: {
   // The page entry makes the chat's, shown once the canvas is settled.
   let claimed: string | undefined;
   let addedPage = false;
+  // The page entry added in the save that landed, so taking the frames back also takes it.
+  let addedPageId: string | undefined;
   // Reported whether or not anything was saved, once the canvas has been read.
   const reportRemoved = () => {
     if (removed.length > 0) input.onRemoved?.(removed);
@@ -480,6 +486,7 @@ export async function placeWrittenPagesOnCanvas(input: {
           // A page added for them exists only if the save lands, so it is claimed only then.
           if (placement.claim) claimed = view.pageId;
           addedPage = placement.doc !== doc;
+          addedPageId = addedPage ? view.pageId : undefined;
         }
         pageId = view.pageId;
         const placed = placeWrittenPageFrames(base, paths, input.newId, widths, view);
@@ -508,7 +515,7 @@ export async function placeWrittenPagesOnCanvas(input: {
     // frames are taken back off, unless the person changed the canvas since
     // or design mode is on again by the time that runs.
     if (shouldSave && !(await shouldSave())) {
-      await retractPlacedFrames(input, workspaceId, saved.revision, placedIds, shouldSave);
+      await retractPlacedFrames(input, workspaceId, saved.revision, placedIds, shouldSave, addedPageId);
       return { frameIds: [] };
     }
     input.broadcast({ workspaceId, chatId: input.chatId, revision: saved.revision });
@@ -532,6 +539,8 @@ async function retractPlacedFrames(
   savedRevision: number,
   placedIds: readonly string[],
   shouldSave: () => Promise<boolean> | boolean,
+  /** A page the same save added; it goes too once nothing is left on it. */
+  addedPageId?: string,
 ): Promise<void> {
   const placed = new Set(placedIds);
   try {
@@ -539,7 +548,12 @@ async function retractPlacedFrames(
       input.chatId,
       (doc) => {
         if (doc.revision !== savedRevision) throw UNCHANGED;
-        return { ...doc, frames: doc.frames.filter((frame) => !placed.has(frame.id)) };
+        const frames = doc.frames.filter((frame) => !placed.has(frame.id));
+        const dropPage =
+          addedPageId !== undefined && doc.pages.length > 1 && !frames.some((frame) => frame.pageId === addedPageId);
+        return dropPage
+          ? deletePage({ ...doc, frames }, addedPageId)
+          : { ...doc, frames };
       },
       {
         workspaceId,

@@ -77,6 +77,17 @@ export const designCanvasWorkspaceCleanup = createDesignWorkspaceCleanup({
   views: designCanvasViews,
 });
 
+/**
+ * Removes a workspace's canvas files for paths that drop a workspace record
+ * outside the workspace service (managed-worktree delete, and its recovery at
+ * startup). The record is already gone, so a failure only leaves clutter.
+ */
+export async function removeDesignCanvasWorkspace(workspaceId: string): Promise<void> {
+  await designCanvasWorkspaceCleanup.removeWorkspace(workspaceId).catch((error: unknown) => {
+    logger.warn("design", "Could not remove the workspace's design canvas.", error);
+  });
+}
+
 /** Live `aiden-design://` grants. Memory only: a restart ends every grant. */
 export const designGrants = new DesignGrantRegistry();
 

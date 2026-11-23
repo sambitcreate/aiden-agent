@@ -203,9 +203,10 @@ const UNAVAILABLE = "Design mode is not available.";
  * A save's options: the pages it says the person's undo took off, and the
  * workspace whose canvas the renderer is saving. Anything malformed is refused.
  */
-function saveOptions(options: unknown): { undone: string[]; workspaceId?: string } {
-  if (options === undefined || options === null) return { undone: [] };
-  if (typeof options !== "object" || Array.isArray(options)) throw new Error("Invalid canvas save options.");
+function saveOptions(options: unknown): { undone: string[]; workspaceId: string } {
+  // The workspace is required: without it a stale canvas from a workspace the
+  // chat has left could replace the new one whenever their revisions match.
+  if (typeof options !== "object" || options === null || Array.isArray(options)) throw new Error("Invalid canvas save options.");
   const { undone, workspaceId } = options as { undone?: unknown; workspaceId?: unknown };
   if (
     undone !== undefined &&
@@ -215,10 +216,10 @@ function saveOptions(options: unknown): { undone: string[]; workspaceId?: string
   ) {
     throw new Error("Invalid canvas save options.");
   }
-  if (workspaceId !== undefined && !isWorkspaceArtifactWorkspaceId(workspaceId)) {
+  if (!isWorkspaceArtifactWorkspaceId(workspaceId)) {
     throw new Error("Invalid canvas save options.");
   }
-  return { undone: (undone as string[] | undefined) ?? [], ...(workspaceId !== undefined ? { workspaceId } : {}) };
+  return { undone: (undone as string[] | undefined) ?? [], workspaceId };
 }
 
 /** The workspace whose canvas a chat works on. */
@@ -353,7 +354,7 @@ export function registerDesignCanvasHandlers<Event>(deps: {
     // The canvas the renderer is saving belongs to a workspace the chat has
     // since left: nothing is written, and the renderer drops those edits and
     // opens the canvas of the workspace the chat is in now.
-    if (expected !== undefined && expected !== workspaceId) {
+    if (expected !== workspaceId) {
       return { ok: false, reason: "moved", workspaceId } satisfies DesignCanvasSaveResult;
     }
     const { result } = await deps.store.save(chat.id, doc as DesignCanvas, baseRevision, { undone, workspaceId });
@@ -448,7 +449,8 @@ export function registerDesignCanvasHandlers<Event>(deps: {
     const ownerId = frame.chatId ?? chat.id;
     if (ownerId === chat.id) return chat.id;
     const owner = await deps.getChat(ownerId);
-    return owner && designCanvasWorkspaceOf(owner) === designCanvasWorkspaceOf(chat) ? owner.id : null;
+    // Only an attended chat's visuals: a Bot or routine chat's never show on a canvas.
+    return owner && attended(owner) && designCanvasWorkspaceOf(owner) === designCanvasWorkspaceOf(chat) ? owner.id : null;
   };
 
   // Only an attended desktop chat in design mode may frame its own workspace

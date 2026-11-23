@@ -11,6 +11,7 @@ import {
   isDesignContainer,
   type DesignCanvas,
   type DesignComment,
+  type DesignCommentAnchor,
   type DesignConnectorEnd,
   type DesignFrame,
   type DesignPage,
@@ -199,13 +200,14 @@ export function appendCanvasPages(
   const commentCopies = comments.map((comment): DesignComment => {
     const id = claim(comment.id, takenComments);
     const frameId = comment.frameId !== undefined ? frameIds.get(comment.frameId) : undefined;
-    const { frameId: _frameId, ...rest } = comment;
+    const { frameId: _frameId, anchor: _anchor, ...rest } = comment;
+    const anchor = comment.anchor ? movedAnchor(comment.anchor, id, options.pathMap) : undefined;
     return {
       ...rest,
       id,
       pageId: pageIds.get(comment.pageId)!,
       ...(frameId ? { frameId } : {}),
-      ...(comment.anchor && frameId ? { anchor: { ...comment.anchor, commentId: id } } : {}),
+      ...(anchor ? { anchor } : {}),
     };
   });
   const added = pages.map((page): DesignPage => ({ id: pageIds.get(page.id)!, name: cleanName(`${options.label} · ${page.name}`) }));
@@ -218,6 +220,21 @@ export function appendCanvasPages(
     }),
     pageIds: added.map((page) => page.id),
   };
+}
+
+/**
+ * A carried comment's anchor: it names the comment's new id, and its source
+ * stamp (`file` or `file:line`) follows the file to where it was copied. A
+ * stamp whose file was not copied is dropped, so Aiden is never pointed at
+ * the workspace's own file of the same name.
+ */
+function movedAnchor(anchor: DesignCommentAnchor, commentId: string, pathMap: ReadonlyMap<string, string>): DesignCommentAnchor {
+  const { sourcePath, ...rest } = anchor;
+  const moved = { ...rest, commentId };
+  if (sourcePath === undefined) return moved;
+  const match = /^(.*?)(?::(\d{1,7}))?$/u.exec(sourcePath);
+  const to = match ? pathMap.get(match[1]!) : undefined;
+  return to === undefined ? moved : { ...moved, sourcePath: match![2] ? `${to}:${match![2]}` : to };
 }
 
 function cleanName(name: string | undefined): string {
