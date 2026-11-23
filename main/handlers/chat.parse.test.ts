@@ -9,6 +9,14 @@ import { fileURLToPath } from "node:url";
 import { build } from "esbuild";
 import { parseParams } from "./chat-params.js";
 import { parseChatCreate } from "./chat-create-params.js";
+import { parseChatAppend } from "./chat-append-params.js";
+import { parseChatFirstMessage } from "./chat-first-message-params.js";
+import {
+  GRABBED_ELEMENT_SCHEMA_VERSION,
+  grabbedElementThumbnailId,
+  grabbedElementsRepresentationBytes,
+  type GrabbedElementContextV1,
+} from "../../renderer/shared/browser-element-grab.js";
 import { parseChatCancelOrigin } from "../services/chat-cancel.js";
 import { ChatTurnAdmission } from "../services/chat-turn-admission.js";
 import { subagentsAllowedForGeneration } from "../services/subagents/eligibility.js";
@@ -323,4 +331,137 @@ test("parseParams keeps bounded generation selectors and creates empty authorita
     assert.equal(parsed.designView, undefined);
     assert.equal(parsed.chatId, base.chatId);
   }
+});
+
+const TINY_PNG_BASE64 =
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScL2aQAAAABJRU5ErkJggg==";
+const TINY_PNG_BYTES = Buffer.byteLength(TINY_PNG_BASE64, "base64");
+
+function validGrabbedElement(overrides: Partial<GrabbedElementContextV1> = {}): GrabbedElementContextV1 {
+  const id = overrides.id ?? "grab_1";
+  const base: GrabbedElementContextV1 = {
+    version: GRABBED_ELEMENT_SCHEMA_VERSION,
+    id,
+    label: "<HeroBanner />",
+    framework: "react",
+    componentName: "HeroBanner",
+    tagName: "section",
+    selector: "main > section.hero",
+    htmlSnippet: '<section class="hero"></section>',
+    boundingBox: { x: 0, y: 0, width: 320, height: 120 },
+    pageUrl: "http://localhost:3000/",
+    thumbnailAttachmentId: grabbedElementThumbnailId(id),
+    capturedAt: 1_700_000_000_000,
+    ...overrides,
+  };
+  if (base.thumbnailAttachmentId === undefined) delete base.thumbnailAttachmentId;
+  return base;
+}
+
+test("parseChatAppend validates grabbedElements strictly, clears dangling thumbnails, and counts retained bytes", () => {
+  const element = validGrabbedElement();
+  const thumbAttachment = {
+    id: grabbedElementThumbnailId(element.id),
+    name: "HeroBanner.png",
+    mimeType: "image/png",
+    kind: "image" as const,
+    size: TINY_PNG_BYTES,
+    data: TINY_PNG_BASE64,
+  };
+
+  const withThumb = parseChatAppend(
+    "chat-1",
+    { role: "user", content: "", attachments: [thumbAttachment], grabbedElements: [element] },
+    { turnId: "turn-1" },
+  );
+  assert.deepEqual(withThumb.grabbedElements, [element]);
+
+  const withoutGrab = parseChatAppend(
+    "chat-1",
+    { role: "user", content: "", attachments: [thumbAttachment] },
+    { turnId: "turn-1" },
+  );
+  assert.equal(
+    withThumb.retainedBytes - withoutGrab.retainedBytes,
+    grabbedElementsRepresentationBytes([element]),
+  );
+
+  // Dangling thumbnailAttachmentId (no matching image attachment) is cleared cleanly.
+  const dangling = parseChatAppend(
+    "chat-1",
+    { role: "user", content: "Explain this", grabbedElements: [element] },
+    { turnId: "turn-2" },
+  );
+  assert.equal(dangling.grabbedElements?.length, 1);
+  assert.equal(dangling.grabbedElements?.[0]?.thumbnailAttachmentId, undefined);
+
+  // Strict append mode rejects extra keys, wrong thumbnail id, duplicates, and >10 items.
+  assert.throws(
+    () =>
+      parseChatAppend(
+        "chat-1",
+        { role: "user", content: "hi", grabbedElements: [{ ...element, extraKey: true }] },
+        { turnId: "turn-3" },
+      ),
+    /Invalid grabbed element field/u,
+  );
+  assert.throws(
+    () =>
+      parseChatAppend(
+        "chat-1",
+        {
+          role: "user",
+          content: "hi",
+          grabbedElements: [{ ...element, thumbnailAttachmentId: "grab-thumb_other" }],
+        },
+        { turnId: "turn-4" },
+      ),
+    /thumbnailAttachmentId/u,
+  );
+  assert.throws(
+    () =>
+      parseChatAppend(
+        "chat-1",
+        { role: "user", content: "hi", grabbedElements: [element, element] },
+        { turnId: "turn-5" },
+      ),
+    /Duplicate grabbed element id/u,
+  );
+  assert.throws(
+    () =>
+      parseChatAppend(
+        "chat-1",
+        {
+          role: "user",
+          content: "hi",
+          grabbedElements: Array.from({ length: 11 }, (_, i) =>
+            validGrabbedElement({ id: `el_${i}`, thumbnailAttachmentId: undefined }),
+          ),
+        },
+        { turnId: "turn-6" },
+      ),
+    /Too many grabbed elements/u,
+  );
+});
+
+test("parseChatFirstMessage allows empty content when grabbedElements are attached", () => {
+  const element = validGrabbedElement({ thumbnailAttachmentId: undefined });
+  const parsed = parseChatFirstMessage({
+    draftId: "11111111-1111-4111-8111-111111111111",
+    workspaceId: "workspace-1",
+    turnId: "turn-grab-1",
+    message: { role: "user", content: "   ", grabbedElements: [element] },
+  });
+  assert.deepEqual(parsed.grabbedElements, [element]);
+
+  assert.throws(
+    () =>
+      parseChatFirstMessage({
+        draftId: "11111111-1111-4111-8111-111111111111",
+        workspaceId: "workspace-1",
+        turnId: "turn-grab-2",
+        message: { role: "user", content: "   ", grabbedElements: [] },
+      }),
+    /Add a message or attachment/u,
+  );
 });

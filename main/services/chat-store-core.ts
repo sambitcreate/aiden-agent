@@ -46,6 +46,7 @@ import { imagePixelSize } from "../../renderer/shared/image-dimensions.js";
 import { parseChatHtmlArtifacts, parseChatImagePlacements, parseHtmlArtifactPlacements } from "../../renderer/shared/chat-artifacts.js";
 import { parseChatUiVisualV1, parseChatUiVisuals } from "../../renderer/shared/aiden-ui/visual.js";
 import { isVisualSnapshotAttachmentId, parseVisualSnapshots } from "../../renderer/shared/visual-snapshots.js";
+import { parseGrabbedElements } from "../../renderer/shared/browser-element-grab.js";
 import { MAX_ATTACHMENT_INLINE_BYTES, MAX_ATTACHMENTS_PER_MESSAGE } from "../../renderer/shared/attachment-contract.js";
 import { remappedHtmlArtifactMediaId } from "./generative-ui-artifact-store.js";
 import { parseStoredPiAssistantMessage } from "./pi-message-storage.js";
@@ -924,6 +925,10 @@ export function createChatStore(
           privacyMigrationRequired = true;
         }
       }
+      const grabbedElements =
+        message.role === "user"
+          ? parseGrabbedElements(message.grabbedElements, "stored")
+          : undefined;
       return {
         id: message.id,
         role: message.role,
@@ -931,6 +936,7 @@ export function createChatStore(
         createdAt: message.createdAt,
         model: message.model,
         attachments: safeStoredAttachments(message.attachments),
+        ...(grabbedElements ? { grabbedElements } : {}),
         appPanels: assistant ? parseAppControlPanels(message.appPanels) : undefined,
         htmlArtifacts: assistant
           ? parseChatHtmlArtifacts(message.htmlArtifacts)
@@ -1531,7 +1537,7 @@ export function createChatStore(
       model?: string;
       turnId: string;
       fingerprint: string;
-      message: Pick<ChatMessage, "id" | "content" | "attachments" | "skill" | "model" | "inputSource">;
+      message: Pick<ChatMessage, "id" | "content" | "attachments" | "grabbedElements" | "skill" | "model" | "inputSource">;
       assertCurrent: () => void;
     }): Promise<Chat> {
       return withImageData(await shared([input.id], true, async () => {
@@ -1560,7 +1566,8 @@ export function createChatStore(
         if (await hasQuarantinedPayload(input.id)) {
           throw new Error("This draft identifier belongs to an unreadable existing chat.");
         }
-        if (!input.message.content.trim() && !input.message.attachments?.length) {
+        const grabbedElements = parseGrabbedElements(input.message.grabbedElements, "stored");
+        if (!input.message.content.trim() && !input.message.attachments?.length && !grabbedElements?.length) {
           throw new Error("Add a message or attachment before sending.");
         }
         const now = Date.now();
@@ -1570,6 +1577,7 @@ export function createChatStore(
           content: input.message.content,
           model: input.message.model,
           attachments: safeStoredAttachments(input.message.attachments),
+          ...(grabbedElements ? { grabbedElements } : {}),
           skill: parseSkillProvenanceV1(input.message.skill),
           inputSource: parseChatInputSource(input.message.inputSource),
           createdAt: now,
@@ -1795,9 +1803,17 @@ export function createChatStore(
             charge(artifact.mediaId);
           }
           for (const visual of message.uiVisuals ?? []) charge(JSON.stringify(visual));
+          for (const element of message.grabbedElements ?? []) {
+            chargedBytes += 256;
+            charge(JSON.stringify(element));
+          }
           if (chargedBytes > MAX_VISIBLE_COPY_BYTES) {
             throw new ChatForkError("too_large", "This chat is too large to copy safely.");
           }
+          const copiedGrabbedElements =
+            message.role === "user"
+              ? parseGrabbedElements(message.grabbedElements, "stored")
+              : undefined;
           sourceMessageIds.push(message.id);
           copiedMessages.push({
             id: randomUUID(),
@@ -1806,6 +1822,7 @@ export function createChatStore(
             createdAt: message.createdAt,
             model: message.model,
             attachments: safeStoredAttachments(message.attachments),
+            ...(copiedGrabbedElements ? { grabbedElements: copiedGrabbedElements } : {}),
             htmlArtifacts:
               message.role === "assistant"
                 ? (message.htmlArtifacts ?? []).map((artifact) => {
@@ -2280,6 +2297,10 @@ export function createChatStore(
         if (message.role === "user" && forkSummaryHoldsSend(chat.forkedFrom)) {
           throw new Error(FORK_SUMMARY_HOLD_MESSAGE);
         }
+        const grabbedElements =
+          message.role === "user"
+            ? parseGrabbedElements(message.grabbedElements, "stored")
+            : undefined;
         const full: ChatMessage = {
           id: message.id ?? newId(),
           role: message.role,
@@ -2300,6 +2321,7 @@ export function createChatStore(
               ? parseProviderFailureV1(message.providerFailure)
               : undefined,
           attachments: safeStoredAttachments(message.attachments),
+          ...(grabbedElements ? { grabbedElements } : {}),
           appPanels: message.role === "assistant" ? parseAppControlPanels(message.appPanels) : undefined,
           htmlArtifacts:
             message.role === "assistant"
