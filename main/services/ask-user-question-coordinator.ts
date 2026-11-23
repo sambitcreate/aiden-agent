@@ -117,6 +117,7 @@ export class AskUserQuestionCoordinator {
           // Withdrawal is advisory row-state bookkeeping; the prompt still settles.
         }
       };
+      let entry!: PendingQuestionnaire;
       const finish = (response: AskUserQuestionResponseV1, by: AskUserQuestionSettledBy = "host") => {
         if (phase === "settled") return;
         const priorPhase = phase;
@@ -124,17 +125,18 @@ export class AskUserQuestionCoordinator {
         if (timer) clearTimeout(timer);
         this.pending.delete(prompt.promptId);
         signal?.removeEventListener("abort", aborted);
-        if (response.timedOut) this.rememberExpired(prompt.promptId, ownerDocumentId);
+        if (response.timedOut) this.rememberExpired(prompt.promptId, entry.ownerDocumentId);
         if (priorPhase === "published") withdrawPrompt(response, by);
         if (priorPhase === "publishing") settledWhilePublishing = { response, by };
         resolve(response);
       };
-      this.pending.set(prompt.promptId, {
+      entry = {
         prompt,
         ownerDocumentId,
         ...(deadline !== undefined ? { deadline } : {}),
         settle: finish,
-      });
+      };
+      this.pending.set(prompt.promptId, entry);
       signal?.addEventListener("abort", aborted, { once: true });
       if (signal?.aborted) {
         aborted();
@@ -224,6 +226,26 @@ export class AskUserQuestionCoordinator {
   detachStream(streamId: string): void {
     this.detachedStreams.add(streamId);
     this.cancelStream(streamId);
+  }
+
+  /**
+   * Atomically transfer ownership of pending questions for `streamId` from one
+   * desktop renderer document to another, returning the active prompts so the
+   * new owner can display and answer them cleanly.
+   */
+  rebindStreamOwner(
+    streamId: string,
+    fromDocumentId: string,
+    toDocumentId: string,
+  ): AskUserQuestionPromptV1[] {
+    if (this.stopped || this.detachedStreams.has(streamId)) return [];
+    const rebound: AskUserQuestionPromptV1[] = [];
+    for (const entry of this.pending.values()) {
+      if (entry.prompt.streamId !== streamId || entry.ownerDocumentId !== fromDocumentId) continue;
+      entry.ownerDocumentId = toDocumentId;
+      rebound.push(entry.prompt);
+    }
+    return rebound;
   }
 
   releaseStream(streamId: string): void {

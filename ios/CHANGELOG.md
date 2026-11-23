@@ -14,6 +14,8 @@
 
 - **2026-11-22 — Plain-text Live Activity.** The Live Activity and Dynamic Island now show plain text on a clean system background: the chat title, one status line in words ("Needs your approval", "Running npm test", "Done"), and the elapsed time as secondary text. A finished run adds its reply excerpt when excerpts are on. The status dot, progress rail, timer pill, tool-count and freshness chips, tints and keyline colors are gone. A stale run says "Latest status shown" and how long ago it last updated. Apple Watch and CarPlay show the title and status, and Always-On hides the time and excerpt. No Remote wire or revision change.
 
+- **2026-11-22 — Pairing feedback and QR framing.** Add Computer scans for QR codes inside the visible viewfinder. Manual pairing shows what to correct below the address or setup code field. Search keeps Add Computer available until a computer is paired.
+
 - **2026-11-22 — No "Sending…" in Bot chats.** A message you send to a Bot looks sent from the moment you press Send and never gains a "Sending…" caption, however long the Mac takes to take it. The status line ("Getting ready", then "Thinking" once the model starts) shows the wait; Queued and "Couldn’t send · Try again" are unchanged. Paired Macs on the next Aiden release also start a Bot's reply much sooner, because a turn no longer re-reads every provider, connector and skill a dozen times before asking the model. No Remote wire or revision change.
 - **2026-11-22 — Quieter lists and an ink accent.** No Remote wire or revision change.
   - The default Aiden theme's accent is muted ink instead of blue. Status colours stay coloured.

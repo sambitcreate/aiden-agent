@@ -7,8 +7,8 @@ struct AidenSearchTabView: View {
     /// builds this view again.
     @Bindable var model: AidenSearchModel
     let inboxStore: AidenUnifiedInboxStore
-    var hasNoComputers = false
-    var onAddComputer: (() -> Void)? = nil
+    let hasNoComputers: Bool
+    let onAddComputer: () -> Void
     let onOpen: (AidenAppRoute) -> Void
 
     @FocusState private var searchIsFocused: Bool
@@ -25,6 +25,15 @@ struct AidenSearchTabView: View {
     }
 
     var body: some View {
+        if hasNoComputers {
+            AidenNoComputersEmptyView(surface: .search, onAddComputer: onAddComputer)
+                .navigationTitle("Search")
+        } else {
+            searchableContent
+        }
+    }
+
+    private var searchableContent: some View {
         content
             .background(palette.canvas.ignoresSafeArea())
             .navigationTitle("Search")
@@ -39,9 +48,7 @@ struct AidenSearchTabView: View {
 
     @ViewBuilder
     private var content: some View {
-        if hasNoComputers, let onAddComputer, !model.hasQuery {
-            AidenNoComputersEmptyView(surface: .search, onAddComputer: onAddComputer)
-        } else if !model.hasQuery {
+        if !model.hasQuery {
             scrolling {
                 ContentUnavailableView(
                     "Search",

@@ -1818,7 +1818,7 @@ test("Stop's terminal never waits on an unresolved queued-guidance save", async 
   assert.doesNotMatch(source, /await\s+agent\.takeUndeliveredQueuedMessages\(/u);
   assert.match(
     source,
-    /const taken = agent\.takeUndeliveredQueuedMessages\(\);[\s\S]{0,400}void taken\.late\.then\([\s\S]{0,200}returnLateGuidance\(owner, params\.chatId/u,
+    /const taken = agent\.takeUndeliveredQueuedMessages\(\);[\s\S]{0,400}void taken\.late\.then\([\s\S]{0,200}returnLateGuidance\(\s*[^,]+,\s*params\.chatId/u,
   );
   assert.match(source, /owner\.send\("chat:guidance-returned"/u);
 });

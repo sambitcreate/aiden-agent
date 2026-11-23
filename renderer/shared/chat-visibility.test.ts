@@ -76,6 +76,18 @@ test("ordinary, Assistant, Bot and legacy chats may run", () => {
   assert.equal(chatRunRefusal({}), null);
   assert.equal(chatRunRefusal({ workspaceId: "assistant" }), null);
   assert.equal(chatRunRefusal({ workspaceId: "workspace-1", botId: "bot-1" }), null);
+  assert.equal(chatRunRefusal({ workspaceId: "workspace-1", ephemeral: true }), null);
+});
+
+test("ephemeral chats stay hidden from user-visible listings while allowing ordinary runs", () => {
+  assert.equal(chatSurface({ workspaceId: "workspace-1", ephemeral: true }), "ephemeral");
+  assert.equal(isUserVisibleChat({ workspaceId: "workspace-1", ephemeral: true }), false);
+  assert.equal(chatSurface({ workspaceId: "workspace-1", ephemeral: false }), "regular");
+  assert.equal(isUserVisibleChat({ workspaceId: "workspace-1", ephemeral: false }), true);
+  // Higher-precedence identities still win over ephemeral.
+  assert.equal(chatSurface({ workspaceId: "workspace-1", owner, ephemeral: true }), "feature");
+  assert.equal(chatSurface({ workspaceId: "workspace-1", botId: "bot-1", ephemeral: true }), "bot");
+  assert.equal(chatSurface({ workspaceId: "assistant", ephemeral: true }), "assistant");
 });
 
 test("a malformed owner the parser rejects still refuses the run: fail closed", () => {

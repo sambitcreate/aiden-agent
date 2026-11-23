@@ -81,9 +81,10 @@ export async function renderPairingTerminal(pairing: AidenRemoteDesktopPairing, 
   if (pairing.bootstrap.serverSpkiSha256) {
     lines.push(`Verification: ${pairing.bootstrap.serverSpkiSha256.slice(-9, -1).toUpperCase()}`);
   }
-  const how = tailscale
-    ? "Scan the code with Aiden on your phone, or open the Tailscale tab in Aiden and paste the address and setup code."
-    : "Scan the code with Aiden on your phone, or enter the address and setup code on the Nearby tab in Aiden. Your phone must be on the same network as this computer.";
+  const connection = tailscale ? "private address" : "nearby address";
+  const how = "Open pairing in Aiden On The Go. On iPhone or iPad, choose Add Computer. "
+    + `Scan the QR code if shown, or enter the ${connection} and setup code.`
+    + (tailscale ? "" : " Your phone must be on the same network as this computer.");
   const expiresAt = Date.parse(pairing.bootstrap.expiresAt);
   if (Number.isFinite(expiresAt)) {
     const seconds = Math.max(0, Math.ceil((expiresAt - (options.now ?? Date.now())) / 1000));

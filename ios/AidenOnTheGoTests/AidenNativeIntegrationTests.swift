@@ -1847,21 +1847,46 @@ final class AidenNativeIntegrationTests: XCTestCase {
         )
         XCTAssertEqual(
             manual,
-            .manual(
+            .success(.manual(
                 endpoint: URL(string: "https://mac.local:49220/api/aiden/v1")!,
                 code: "K7M2-9P4X-V8Q3-4R1N-T6B8"
-            )
+            ))
         )
         XCTAssertEqual(
             AidenPairingInputParser.submission(address: "", code: jsonPayload),
-            .payload(jsonPayload)
+            .success(.payload(jsonPayload))
         )
         XCTAssertEqual(
             AidenPairingInputParser.submission(address: jsonPayload, code: ""),
-            .payload(jsonPayload)
+            .success(.payload(jsonPayload))
         )
-        XCTAssertNil(AidenPairingInputParser.submission(address: "mac.local:49220", code: "SHORT"))
-        XCTAssertNil(AidenPairingInputParser.submission(address: "", code: "K7M2-9P4X-V8Q3-4R1N-T6B8"))
+    }
+
+    func testManualPairingReportsWhatNeedsCorrectingBeforeNetworking() {
+        let validCode = "K7M2-9P4X-V8Q3-4R1N-T6B8"
+        XCTAssertEqual(
+            AidenPairingInputParser.submission(address: " HTTP://mac.local:49220 ", code: validCode),
+            .failure(.insecureAddress)
+        )
+        XCTAssertEqual(
+            AidenPairingInputParser.submission(address: "mac.local:not-a-port", code: validCode),
+            .failure(.invalidAddress)
+        )
+        XCTAssertEqual(AidenPairingInputParser.submission(address: "", code: validCode), .failure(.missingAddress))
+        XCTAssertEqual(AidenPairingInputParser.submission(address: "mac.local", code: ""), .failure(.missingCode))
+        XCTAssertEqual(AidenPairingInputParser.submission(address: "mac.local", code: "SHORT"), .failure(.invalidCode))
+    }
+
+    @MainActor
+    func testPairingScanWindowRejectsCodesOutsideTheVisibleCutout() {
+        let portrait = CGRect(x: 0, y: 0, width: 360, height: 244)
+        let wider = CGRect(x: 0, y: 0, width: 560, height: 244)
+        XCTAssertTrue(AidenPairingScanWindow.containsCode(center: CGPoint(x: 180, y: 105), in: portrait))
+        XCTAssertFalse(AidenPairingScanWindow.containsCode(center: CGPoint(x: 280, y: 105), in: portrait))
+        XCTAssertFalse(AidenPairingScanWindow.containsCode(center: CGPoint(x: 180, y: 195), in: portrait))
+        XCTAssertFalse(AidenPairingScanWindow.containsCode(center: CGPoint(x: 110, y: 36), in: portrait))
+        XCTAssertTrue(AidenPairingScanWindow.containsCode(center: CGPoint(x: 280, y: 105), in: wider))
+        XCTAssertFalse(AidenPairingScanWindow.containsCode(center: CGPoint(x: 180, y: 105), in: wider))
     }
 
     func testDesktopDownloadLinksPointToWebsiteForMacAndGitHubForLinuxAndServer() {

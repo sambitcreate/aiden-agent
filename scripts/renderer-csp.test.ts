@@ -11,7 +11,7 @@ import { productionRendererCsp } from "./renderer-csp.js";
 // @ts-expect-error The release script has no declaration file.
 import { assertProductionRendererCsp, verifyPackagedRendererCsp, verifyRendererBuildCsp } from "./verify-renderer-csp.mjs";
 
-const pages = ["main-window.html", "pill.html", "visual-snapshot.html"];
+const pages = ["main-window.html", "pill.html", "quick-chat.html", "visual-snapshot.html"];
 const devPolicy = "default-src 'self'; script-src 'self' 'wasm-unsafe-eval' http://localhost:* http://127.0.0.1:*; style-src 'self' 'unsafe-inline' http://localhost:* http://127.0.0.1:*; connect-src 'self' blob: https: http://localhost:* http://127.0.0.1:* ws://localhost:* ws://127.0.0.1:*";
 const html = (policy = devPolicy) => `<!doctype html><html><head><meta http-equiv="Content-Security-Policy" content="${policy}"></head><body><script type="module" src="/entry.js"></script></body></html>`;
 const csp = (document: string): Map<string, string[]> => new Map((/content="([^"]+)"/u.exec(document)?.[1] ?? "").split(";").map(directive => {

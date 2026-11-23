@@ -69,7 +69,13 @@ export const chatApplicationService = createChatApplicationService({
     void interruptedWaits.forgetChat(chatId).catch(() => undefined);
     detachedPromptLog.clearChat(chatId);
   },
+  invalidateChatWorkspaceContext: (chatId) => {
+    forgetChatContextProfile(chatId);
+    recentWrittenPages.forget(chatId);
+    detachedPromptLog.clearChat(chatId);
+  },
   forgetDeletedChat: (chatId) => llmClient.forgetDeletedChat(chatId),
+  resetChatWorkspaceSession: (chatId) => llmClient.resetChatWorkspaceSession(chatId),
   inboxState: { readMarkers: chatReadMarkers, triage: chatTriage },
   attachments: remoteAttachmentStore,
   afterChatRemoved: (workspaceId) => workspaceApplicationService.releaseNoWorkspaceAfterChat(workspaceId),
