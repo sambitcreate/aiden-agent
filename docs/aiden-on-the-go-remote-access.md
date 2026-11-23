@@ -176,6 +176,10 @@ The Mac processes that recording locally. Aiden does not persist the recording o
 
 If the selected local speech model is not installed, the mobile settings can ask the paired Mac to set it up. Aiden downloads only that model's fixed, hash-pinned file: a release archive from the k2-fsa GitHub release host, or, for Parakeet on Metal on an Apple silicon Mac, one GGUF file from a fixed Hugging Face revision. It caps the download at 800 MiB, verifies its exact size and SHA-256, unpacks or moves it into staging, validates the required model files, and stores it in Aiden Agent's device-local model directory. The phone cannot provide a model URL or Mac destination. Model setup requires Aiden Agent to remain running and online.
 
+## Links for chat tasks
+
+A scheduled task set to **When its link is called** gets a private link on this listener: `/hooks/tasks/<token>` at the Tailscale address first, otherwise the local network one. Make or rotate it in the task's details; Aiden shows it (and a signed link's secret) once. Calls work only while Aiden On The Go is on and scheduled tasks are running; phones don't list these tasks yet. See [tasks that run when something happens](scheduled-task-triggers.md).
+
 ## Troubleshooting
 
 - **Remote Access says Off:** enable it locally in Aiden Settings. No listener or Bonjour advertisement exists while it is off.

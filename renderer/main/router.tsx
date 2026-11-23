@@ -117,6 +117,9 @@ const profileRoute = createRoute({
 const scheduledRoute = createRoute({
   getParentRoute: () => chatLayoutRoute,
   path: "/scheduled",
+  // `?task=<id>` opens that task's details (the composer's task chip links here).
+  validateSearch: (search: Record<string, unknown>): { task?: string } =>
+    typeof search.task === "string" && search.task ? { task: search.task.slice(0, 200) } : {},
   component: ScheduledTasksView,
   staticData: { title: "Scheduled tasks" },
 });

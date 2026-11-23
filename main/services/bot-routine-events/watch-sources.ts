@@ -22,6 +22,9 @@ export type BotWatchCheck = { ok: true; publication?:BotWatchPublication; bytes:
 
 type FetchLike = (url: string, init: RequestInit) => Promise<Response>;
 
+/** A fetch that refused an address for a reason the person should read (for example a private network). */
+export class WatchAddressRefused extends Error {}
+
 function failed(error: string): BotWatchCheck {
   return { ok: false, error };
 }
@@ -54,7 +57,8 @@ export async function fetchBotWatchUrl(
         headers: { accept: "*/*" },
         signal: options.signal ? AbortSignal.any([controller.signal, options.signal]) : controller.signal,
       });
-    } catch {
+    } catch (error) {
+      if (error instanceof WatchAddressRefused) return failed(error.message);
       return failed(timedOut ? "The check timed out after 30 seconds." : `Aiden couldn't reach ${host}.`);
     }
     if (response.type === "opaqueredirect" || (response.status >= 300 && response.status < 400)) {

@@ -1,4 +1,5 @@
 import { Type } from "typebox";
+import { formatScheduledTaskTriggerLabel, isPrivateWatchAddress, parseScheduledTaskTrigger, type ScheduledTaskTrigger } from "../../renderer/shared/scheduled-task-trigger.js";
 import { localComputerNoun } from "../../renderer/shared/computer-noun.js";
 import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
 import { mcpServerOffersTools } from "../../renderer/shared/mcp-exposure.js";
@@ -8,7 +9,12 @@ import {
   recommendedScheduledPermission,
   validateScheduledMcpServerIds,
 } from "./schedule-guard.js";
-import { nextScheduledRun, systemTimezone, validateTimezone } from "./schedule-store.js";
+import {
+  assertChatTaskCadence,
+  nextScheduledRun,
+  systemTimezone,
+  validateTimezone,
+} from "./schedule-store.js";
 import type {
   AppSettings,
   McpServer,
@@ -62,6 +68,13 @@ export const LIST_SCHEDULED_TASKS_TOOL_NAME = "list_scheduled_tasks";
 
 type ScheduleToolAction = "create" | "update" | "list" | "pause" | "resume" | "remove" | "run_now";
 
+/** The `trigger` a create may carry instead of a cron (docs/scheduled-task-triggers.md). */
+const SCHEDULE_TRIGGER_PARAMETER = Type.Unsafe<Record<string, unknown>>({
+  type: "object",
+  description:
+    "Create only, instead of cron: run when something happens. Watch: {kind:\"watch\", source:{type:\"url\", url} or {type:\"script\", script}, everyMinutes 5-1440}; the task runs only when the page changes or the script prints something. Link: {kind:\"webhook\", gapMinutes 1-60, optional filters [{path, equals}], dedupePath, includeFields, signatureHeader}; the person creates the private link later from the task's details and you never see it, so tell them to do that. A task that runs when a connected app (Mail, Calendar) has news is set up by the person in the task editor, not here. What happened reaches the run as data.",
+});
+
 interface ScheduleToolParams {
   action: ScheduleToolAction;
   id?: string;
@@ -78,6 +91,10 @@ interface ScheduleToolParams {
   permission?: "read-only" | "full";
   mcpServerIds?: string[];
   notify?: boolean;
+  /** Create only: post each run into the chat that made the task. */
+  post_in_chat?: boolean;
+  /** Create only: run when a watch sees a change or a link is called, instead of on a cron. */
+  trigger?: unknown;
 }
 
 interface EditAutomationToolParams {
@@ -107,6 +124,11 @@ export type ScheduleToolAccess =
       kind: "standard";
       defaultWorkspaceId?: string;
       modelSelection?: AssistantScheduleModelSelection;
+      /**
+       * The ordinary workspace chat the tool runs in. A task created here
+       * posts its runs into this chat unless `post_in_chat` is false.
+       */
+      originChatId?: string;
     }
   | {
       kind: "assistant-attended";
@@ -256,11 +278,45 @@ function approvalScheduleLabel(
   return cadence === "Custom schedule" ? `custom schedule in ${resolvedTimezone}` : cadence;
 }
 
+/**
+ * The trigger a create asks for, checked strictly. Aiden Assistant tasks may
+ * watch an address or run from a link, never run a script unattended.
+ */
+function toolTrigger(value: unknown, assistant: boolean): ScheduledTaskTrigger | undefined {
+  if (value === undefined) return undefined;
+  const trigger = parseScheduledTaskTrigger(value);
+  // A connected app's source is chosen by the person with Find sources in the task editor.
+  if (trigger.kind === "connector") {
+    throw new Error("A task that runs when a connected app has news is set up in the task editor, where you choose its source with Find sources.");
+  }
+  if (assistant && trigger.kind === "watch" && trigger.source.type === "script") {
+    throw new Error("Aiden Assistant automations can watch a web address or run from a link, not run a script.");
+  }
+  // A proposed watch never points at this computer or a private network; the person can set one up in the editor.
+  if (trigger.kind === "watch" && trigger.source.type === "url") {
+    if (isPrivateWatchAddress(trigger.source.url)) {
+      throw new Error("A task Aiden proposes can't watch this computer or a private network address. The person can set that up in the task editor.");
+    }
+    // Its checks connect only to public addresses, wherever the name resolves.
+    return { ...trigger, agentProposed: true };
+  }
+  return trigger;
+}
+
+function triggerLabelForSummary(value: unknown): string | undefined {
+  if (value === undefined) return undefined;
+  try {
+    return formatScheduledTaskTriggerLabel(parseScheduledTaskTrigger(value));
+  } catch {
+    return "an invalid trigger";
+  }
+}
+
 export function summarizeScheduleToolCall(value: unknown): string {
   const params = scheduleToolParams(value);
   switch (params.action) {
     case "create":
-      return `Create scheduled task "${approvalDisplayValue(params.name, ASSISTANT_AUTOMATION_NAME_LIMIT, "Untitled")}" (${approvalScheduleLabel(params.cron, params.timezone)}) with ${params.mode === "script" ? "Full" : params.permission === "full" || (params.mcpServerIds?.length ?? 0) > 0 ? "Full" : "read-only"} access${(params.mcpServerIds?.length ?? 0) > 0 ? " and MCP tools" : ""}`;
+      return `Create scheduled task "${approvalDisplayValue(params.name, ASSISTANT_AUTOMATION_NAME_LIMIT, "Untitled")}" (${triggerLabelForSummary(params.trigger) ?? approvalScheduleLabel(params.cron, params.timezone)}) with ${params.mode === "script" ? "Full" : params.permission === "full" || (params.mcpServerIds?.length ?? 0) > 0 ? "Full" : "read-only"} access${(params.mcpServerIds?.length ?? 0) > 0 ? " and MCP tools" : ""}`;
     case "update": {
       const changes = [
         params.name !== undefined ? "name" : undefined,
@@ -421,6 +477,7 @@ function bounded(value: string, label: string, limit: number): string {
 const ASSISTANT_CREATE_KEYS = new Set([
   "action",
   "name",
+  "trigger",
   "cron",
   "timezone",
   "prompt",
@@ -506,7 +563,8 @@ export function prepareAssistantScheduleProposal(
     "prompt",
     ASSISTANT_AUTOMATION_PROMPT_LIMIT,
   );
-  const cron = bounded(
+  const trigger = toolTrigger(record.trigger, true);
+  const cron = trigger ? "" : bounded(
     required(typeof record.cron === "string" ? record.cron : undefined, "cron"),
     "cron",
     ASSISTANT_AUTOMATION_CRON_LIMIT,
@@ -519,7 +577,7 @@ export function prepareAssistantScheduleProposal(
   const timezone = validateTimezone(requestedTimezone);
   assertSafeDisplayText(name, "Task name");
   assertSafeDisplayText(prompt, "Task prompt", true);
-  assertSafeDisplayText(cron, "Cron schedule");
+  if (!trigger) assertSafeDisplayText(cron, "Cron schedule");
   assertSafeDisplayText(timezone, "Timezone");
   assertSafeScheduledPrompt(prompt);
   const workspaceId =
@@ -551,11 +609,13 @@ export function prepareAssistantScheduleProposal(
     );
   }
   const notify = record.notify !== false;
-  const nextRunAt = nextScheduledRun(cron, timezone, from);
+  // A trigger task has no next run: it runs when its watch or link fires.
+  const nextRunAt = trigger ? 0 : nextScheduledRun(cron, timezone, from);
   return {
     input: {
       name,
       cron,
+      ...(trigger ? { trigger } : {}),
       timezone,
       mode: "llm",
       prompt,
@@ -572,6 +632,7 @@ export function prepareAssistantScheduleProposal(
       name,
       prompt,
       cron,
+      ...(trigger ? { whenLabel: formatScheduledTaskTriggerLabel(trigger) } : {}),
       timezone,
       nextRunAt,
       notify,
@@ -596,7 +657,7 @@ export function canonicalizeAssistantScheduleToolArguments(
   return {
     action: "create",
     name: proposal.input.name,
-    cron: proposal.input.cron,
+    ...(proposal.input.trigger ? { trigger: proposal.input.trigger } : { cron: proposal.input.cron }),
     timezone: proposal.input.timezone,
     prompt: proposal.input.prompt,
     ...(proposal.input.workspaceId ? { workspaceId: proposal.input.workspaceId } : {}),
@@ -634,7 +695,7 @@ export async function repairAssistantScheduleMcpTarget(
     {
       action: "create",
       name: proposal.input.name,
-      cron: proposal.input.cron,
+      ...(proposal.input.trigger ? { trigger: proposal.input.trigger } : { cron: proposal.input.cron }),
       timezone: proposal.input.timezone,
       prompt: proposal.input.prompt,
       permission: "full",
@@ -812,6 +873,8 @@ function taskSummary(task: ScheduledTask) {
     lastRunAt: task.lastRunAt,
     lastResult: task.lastResult,
     updatedAt: task.updatedAt,
+    postsInChat: Boolean(task.originChatId),
+    ...(task.trigger ? { trigger: formatScheduledTaskTriggerLabel(task.trigger) } : {}),
   };
 }
 
@@ -829,6 +892,7 @@ function assistantTaskSummary(task: ScheduledTask) {
     notify: task.notify,
     updatedAt: task.updatedAt,
     editable: task.mode === "llm" && task.executionProfile === ASSISTANT_SCHEDULE_EXECUTION_PROFILE,
+    ...(task.trigger ? { trigger: formatScheduledTaskTriggerLabel(task.trigger) } : {}),
     nextRunAt: task.nextRunAt,
     lastRunAt: task.lastRunAt,
     lastResult: task.lastResult,
@@ -1073,7 +1137,7 @@ function standardApprovalSummary(details: ScheduledTaskApprovalDetails): string 
             : details.action === "remove"
               ? "Delete"
               : "Run now";
-  const cadence = approvalScheduleLabel(details.cron, details.timezone);
+  const cadence = details.whenLabel ?? approvalScheduleLabel(details.cron, details.timezone);
   const scope = details.workspaceName
     ? `project ${approvalDisplayValue(details.workspaceName, ASSISTANT_AUTOMATION_WORKSPACE_NAME_LIMIT, "unknown")} (${approvalDisplayValue(details.workspaceId, ASSISTANT_AUTOMATION_WORKSPACE_ID_LIMIT, "unknown")})`
     : details.mcpServerNames.length > 0
@@ -1091,7 +1155,45 @@ function standardApprovalSummary(details: ScheduledTaskApprovalDetails): string 
       ? `script ${approvalDisplayValue(details.script, ASSISTANT_AUTOMATION_PROMPT_LIMIT, "unknown")}`
       : `${approvalDisplayValue(details.providerName, ASSISTANT_AUTOMATION_PROVIDER_NAME_LIMIT, "unknown")} / ${approvalDisplayValue(details.modelName, ASSISTANT_AUTOMATION_MODEL_NAME_LIMIT, "unknown")}`;
   const legacy = details.legacyGlobalMcp ? " · freezes legacy inherited MCP access" : "";
-  return `${verb} scheduled task "${approvalDisplayValue(details.name, ASSISTANT_AUTOMATION_NAME_LIMIT, "Untitled")}" · ${cadence} · ${details.permission === "full" ? "Full" : "Read-only"} access · ${scope} · ${runtime}${legacy}`;
+  const postsIn =
+    details.postsIn === "this_chat" ? " · posts in this chat" : details.postsIn === "own_chat" ? " · runs in its own chat" : "";
+  return `${verb} scheduled task "${approvalDisplayValue(details.name, ASSISTANT_AUTOMATION_NAME_LIMIT, "Untitled")}" · ${cadence} · ${details.permission === "full" ? "Full" : "Read-only"} access · ${scope} · ${runtime}${legacy}${postsIn}`;
+}
+
+/**
+ * The card's "Posts in" row: a new task, or an existing one bound to this
+ * chat or to none. A task bound to another chat shows no row from here.
+ */
+function postsInForApproval(
+  action: PreparedStandardScheduleApproval["action"],
+  input: ScheduledTaskInput,
+  existing: ScheduledTask | undefined,
+  originChatId: string | undefined,
+): ScheduledTaskApprovalDetails["postsIn"] {
+  if (action === "create") return input.originChatId ? "this_chat" : "own_chat";
+  if (!existing?.originChatId) return "own_chat";
+  return existing.originChatId === originChatId ? "this_chat" : undefined;
+}
+
+/** Where a created task's runs post: the chat that made it, when that chat shares the task's workspace. */
+function chatBindingForCreate(
+  params: Partial<ScheduleToolParams>,
+  workspaceId: string | undefined,
+  originChatId: string | undefined,
+  chatWorkspaceId: string | undefined,
+): string | undefined {
+  if (params.post_in_chat !== undefined && typeof params.post_in_chat !== "boolean") {
+    throw new Error("post_in_chat must be true or false.");
+  }
+  const sameWorkspace = Boolean(originChatId) && workspaceId !== undefined && workspaceId === chatWorkspaceId;
+  if (params.post_in_chat === true && !sameWorkspace) {
+    throw new Error(
+      originChatId
+        ? "A task can post into this chat only when it runs in this chat's workspace. Leave post_in_chat unset to run it in its own chat."
+        : "This conversation can't receive scheduled task results. Leave post_in_chat unset to run the task in its own chat.",
+    );
+  }
+  return params.post_in_chat !== false && sameWorkspace ? originChatId : undefined;
 }
 
 async function resolveStandardScheduleApproval(
@@ -1099,6 +1201,7 @@ async function resolveStandardScheduleApproval(
   selection: AssistantScheduleModelSelection | undefined,
   dependencies: ScheduleToolDependencies,
   defaultWorkspaceId?: string,
+  originChatId?: string,
   from = new Date(),
 ): Promise<PreparedStandardScheduleApproval> {
   const params = scheduleToolParams(value);
@@ -1131,6 +1234,14 @@ async function resolveStandardScheduleApproval(
     return defaultModelPromise;
   };
 
+  if (action !== "create" && params.trigger !== undefined) {
+    throw new Error("trigger applies only when creating a task. Change when a task runs in its settings.");
+  }
+  if (action !== "create" && params.post_in_chat !== undefined) {
+    throw new Error(
+      "post_in_chat applies only when creating a task. To stop a task posting into a chat, choose Use its own chat in its settings.",
+    );
+  }
   let input: ScheduledTaskInput;
   if (action === "create" || action === "update") {
     if (params.workspaceId?.trim() && params.clearWorkspace) {
@@ -1212,6 +1323,8 @@ async function resolveStandardScheduleApproval(
       }
     }
     const selected = await standardSelection(existing, selection, defaultModel);
+    const trigger = action === "create" ? toolTrigger(params.trigger, false) : undefined;
+    if (trigger && mode !== "llm") throw new Error("A task that runs from a trigger asks Aiden; use mode llm.");
     input = {
       id: existing?.id,
       name: bounded(
@@ -1221,11 +1334,12 @@ async function resolveStandardScheduleApproval(
       ),
       enabled: existing?.enabled ?? true,
       mode,
-      cron: bounded(
+      cron: trigger ? "" : bounded(
         required(params.cron ?? existing?.cron, "cron"),
         "cron",
         ASSISTANT_AUTOMATION_CRON_LIMIT,
       ),
+      ...(trigger ? { trigger } : {}),
       timezone: validateTimezone(params.timezone ?? existing?.timezone ?? systemTimezone()),
       workspaceId,
       providerId: existing?.providerId ?? (selection ? selected.providerId : undefined),
@@ -1240,8 +1354,22 @@ async function resolveStandardScheduleApproval(
       notify: params.notify ?? existing?.notify,
       executionProfile: existing?.executionProfile,
     };
+    if (action === "create") {
+      const bound = chatBindingForCreate(params, workspaceId, originChatId, defaultWorkspaceId);
+      if (bound) {
+        try {
+          // A trigger has no cron floor: the chat's hourly share and the trigger's gap bound it.
+          if (!trigger) assertChatTaskCadence(input.cron, input.timezone ?? systemTimezone(), from);
+        } catch {
+          throw new Error(
+            "This task would run more often than every 15 minutes, so it can't post into this chat. Choose a slower schedule, or set post_in_chat to false so it runs in its own chat.",
+          );
+        }
+        input.originChatId = bound;
+      }
+    }
     assertSafeDisplayText(input.name, "Task name");
-    assertSafeDisplayText(input.cron, "Cron schedule");
+    if (!trigger) assertSafeDisplayText(input.cron, "Cron schedule");
   } else {
     input = { ...existing! };
     if (
@@ -1270,7 +1398,8 @@ async function resolveStandardScheduleApproval(
   }
   const selected = await standardSelection(existing, selection, defaultModel);
   const schedulerEnabled = await dependencies.isSchedulingEnabled();
-  const cron = required(input.cron, "cron");
+  const savedTrigger = input.trigger ?? undefined;
+  const cron = savedTrigger ? "" : required(input.cron, "cron");
   const timezone = validateTimezone(input.timezone ?? systemTimezone());
   const details: ScheduledTaskApprovalDetails = {
     kind: "scheduled-task",
@@ -1282,8 +1411,9 @@ async function resolveStandardScheduleApproval(
     prompt: input.mode === "llm" ? required(input.prompt, "prompt") : null,
     script: input.mode === "script" ? required(input.script, "script") : null,
     cron,
+    ...(savedTrigger ? { whenLabel: formatScheduledTaskTriggerLabel(savedTrigger) } : {}),
     timezone,
-    nextRunAt: nextScheduledRun(cron, timezone, from),
+    nextRunAt: savedTrigger ? 0 : nextScheduledRun(cron, timezone, from),
     notify: input.notify !== false,
     mode: input.mode,
     permission: input.mode === "script" ? "full" : (input.permission ?? "read-only"),
@@ -1298,6 +1428,8 @@ async function resolveStandardScheduleApproval(
     legacyGlobalMcp,
     schedulerEnabled,
   };
+  const postsIn = postsInForApproval(action, input, existing, originChatId);
+  if (postsIn) details.postsIn = postsIn;
   const summary = standardApprovalSummary(details);
   if (summary.length > 1_900) {
     throw new Error(
@@ -1313,12 +1445,14 @@ export async function prepareStandardScheduleApproval(
   selection?: AssistantScheduleModelSelection,
   dependencies: ScheduleToolDependencies = defaultDependencies,
   defaultWorkspaceId?: string,
+  originChatId?: string,
 ): Promise<Pick<PreparedStandardScheduleApproval, "summary" | "details">> {
   const prepared = await resolveStandardScheduleApproval(
     value,
     selection,
     dependencies,
     defaultWorkspaceId,
+    originChatId,
   );
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw new Error("Scheduled task arguments are invalid.");
@@ -1332,13 +1466,14 @@ async function standardScheduleApprovalForExecution(
   selection: AssistantScheduleModelSelection | undefined,
   dependencies: ScheduleToolDependencies,
   defaultWorkspaceId?: string,
+  originChatId?: string,
 ): Promise<PreparedStandardScheduleApproval> {
   const attached =
     value && typeof value === "object" && !Array.isArray(value)
       ? preparedStandardByArguments.get(value)
       : undefined;
   if (attached) return structuredClone(attached);
-  return resolveStandardScheduleApproval(value, selection, dependencies, defaultWorkspaceId);
+  return resolveStandardScheduleApproval(value, selection, dependencies, defaultWorkspaceId, originChatId);
 }
 
 export function createAssistantScheduleListTool(
@@ -1494,15 +1629,15 @@ export function createScheduleTaskTool(
       name: SCHEDULE_TOOL_NAME,
       label: "Scheduled Tasks",
       description:
-        "Propose one new LLM automation. action, name, cron, and prompt are required. Creation always pauses for explicit confirmation. Full access requires an exact project ID from list_projects or exact enabled server IDs from list_mcp_servers. MCP-enabled automations run with Full access. Listing, scripts, run-now, pause, resume, and delete are unavailable.",
+        "Propose one new LLM automation. action, name, prompt and either cron or trigger (a URL watch or a link; never a script) are required. Creation always pauses for explicit confirmation. Full access requires an exact project ID from list_projects or exact enabled server IDs from list_mcp_servers. MCP-enabled automations run with Full access. Listing, scripts, run-now, pause, resume, and delete are unavailable.",
       parameters: Type.Object(
         {
           action: Type.Literal("create"),
           name: Type.String({ description: "Required task name." }),
-          cron: Type.String({
+          cron: Type.Optional(Type.String({
             description:
-              'Required five- or six-part cron expression. For every day at 9 AM use "0 9 * * *". The field name is cron, not schedule.',
-          }),
+              'Five- or six-part cron expression, required unless trigger is set. For every day at 9 AM use "0 9 * * *". The field name is cron, not schedule.',
+          })),
           prompt: Type.String({
             description: "Required automation instruction.",
           }),
@@ -1541,11 +1676,12 @@ export function createScheduleTaskTool(
               description: "Show a desktop notification after non-silent runs.",
             }),
           ),
+          trigger: Type.Optional(SCHEDULE_TRIGGER_PARAMETER),
         },
         {
           additionalProperties: false,
           description:
-            "Propose one approval-gated automation. action, name, cron, and prompt are all required.",
+            "Propose one approval-gated automation. action, name, prompt and either cron or trigger are required.",
         },
       ),
       prepareArguments: (rawParams) => canonicalizeAssistantScheduleToolArguments(rawParams),
@@ -1583,6 +1719,7 @@ export function createScheduleTaskTool(
             : task.enabled
               ? "saved"
               : "saved_but_inactive",
+          ...(task.trigger?.kind === "webhook" ? { link: "person_creates_in_task_details" } : {}),
         });
       },
     };
@@ -1592,7 +1729,7 @@ export function createScheduleTaskTool(
     name: SCHEDULE_TOOL_NAME,
     label: "Scheduled Tasks",
     description:
-      "Manage Aiden scheduled tasks. Actions: create, update, list, pause, resume, remove, run_now. List tasks immediately before any existing-task action, then pass its exact id, taskName, and updatedAt revision so stale changes and runs fail closed. Create requires name and cron plus prompt for llm mode or script for script mode. Tasks default to read-only; use full only when the task clearly needs unattended writes or commands. Scheduled runs cannot call this tool.",
+      "Manage Aiden scheduled tasks. Actions: create, update, list, pause, resume, remove, run_now. List tasks immediately before any existing-task action, then pass its exact id, taskName, and updatedAt revision so stale changes and runs fail closed. Create requires name and cron plus prompt for llm mode or script for script mode; an llm task can instead take a trigger (a URL or script watch, or a link) to run when something happens. Tasks default to read-only; use full only when the task clearly needs unattended writes or commands. Scheduled runs cannot call this tool.",
     parameters: Type.Object({
       action: Type.Union([
         Type.Literal("create"),
@@ -1624,7 +1761,7 @@ export function createScheduleTaskTool(
       name: Type.Optional(Type.String({ description: "Task name. Required for create." })),
       cron: Type.Optional(
         Type.String({
-          description: "Five- or six-part cron expression. Required for create.",
+          description: "Five- or six-part cron expression. Required for create unless trigger is set.",
         }),
       ),
       timezone: Type.Optional(
@@ -1673,6 +1810,13 @@ export function createScheduleTaskTool(
           description: "Show a desktop notification after non-silent runs.",
         }),
       ),
+      trigger: Type.Optional(SCHEDULE_TRIGGER_PARAMETER),
+      post_in_chat: Type.Optional(
+        Type.Boolean({
+          description:
+            "Create only. Post each run into the chat you are in (the default when the task uses this chat's workspace); such a task can run at most every 15 minutes. Set false to run it in its own chat.",
+        }),
+      ),
     }),
     execute: async (_toolCallId, rawParams, signal): Promise<AgentToolResult<null>> => {
       const params = rawParams as ScheduleToolParams;
@@ -1687,6 +1831,7 @@ export function createScheduleTaskTool(
           access.modelSelection,
           dependencies,
           access.defaultWorkspaceId,
+          access.originChatId,
         );
         throwIfScheduleToolAborted(signal);
         // Revalidate mutable inventories after approval. Persistence performs
@@ -1707,6 +1852,8 @@ export function createScheduleTaskTool(
         );
         return result({
           task: taskSummary(task),
+          // A link task's link goes to the person from the task's details; the agent never sees it.
+          ...(task.trigger?.kind === "webhook" ? { status: "saved", link: "person_creates_in_task_details" } : {}),
           permissionRecommendation:
             params.action === "create" &&
             prepared.input.mode === "llm" &&
@@ -1991,6 +2138,8 @@ export function createBotRoutinesTool(botId: string, routines: BotRoutinesToolDe
 
 export function scheduleTaskToolsForContext(context: {
   workspaceId?: string;
+  /** The ordinary workspace chat the tools run in; tasks created here post into it. */
+  originChatId?: string;
   allowScheduling?: boolean;
   mode?: "standard" | "assistant-attended";
   assistantModelSelection?: AssistantScheduleModelSelection;
@@ -2015,6 +2164,7 @@ export function scheduleTaskToolsForContext(context: {
       kind: "standard",
       defaultWorkspaceId: context.workspaceId,
       modelSelection: context.assistantModelSelection,
+      ...(context.originChatId ? { originChatId: context.originChatId } : {}),
     }),
   ];
 }

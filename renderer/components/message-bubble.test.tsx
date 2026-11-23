@@ -9,6 +9,7 @@ import {
   partitionMessageAttachments,
   resolveAttachmentPreviewTrigger,
 } from "./message-attachments.js";
+import { fromLeadChatLabel } from "../lib/chat-lineage.js";
 import type { AgentToolStep, GenerationTimeline } from "../shared/generation-timeline.js";
 
 const ONE_PIXEL_PNG = Buffer.from(
@@ -60,6 +61,29 @@ test("a message Aiden Live sent shows By voice under it in the transcript; typed
   const label = markup.indexOf("By voice");
   const typed = markup.indexOf("And the login page.");
   assert.ok(voice < label && label < typed, "the label sits with the voice message, not the typed one");
+});
+
+test("in a chat another chat started, messages that chat sent say where they came from; the person's do not", () => {
+  const messages = [
+    { id: "lead-1", role: "user" as const, content: "Run the test suite and report.", fromLeadChat: true as const, createdAt: 1 },
+    { id: "typed-1", role: "user" as const, content: "Also check lint.", createdAt: 2 },
+  ];
+  const list = (leadChatLabel?: string) =>
+    renderToStaticMarkup(
+      <MessageList chatId="chat-1" {...(leadChatLabel ? { leadChatLabel } : {})} messages={messages} streamingText={null} streamingReasoning={null} timeline={null}
+        liveSubagents={[]} subagentsEnabled={false} onOpenSubagent={() => undefined}
+        agentActivity={null} error={null} />,
+    );
+  const markup = list(fromLeadChatLabel("Release prep"));
+  assert.equal(markup.match(/From “Release prep”/gu)?.length, 1);
+  const sent = markup.indexOf("Run the test suite and report.");
+  const label = markup.indexOf("From “Release prep”");
+  const typed = markup.indexOf("Also check lint.");
+  assert.ok(sent < label && label < typed, "the label sits with the lead's message, not the person's");
+  // A lead chat that was deleted is still named as the chat that started this one.
+  assert.match(list(fromLeadChatLabel(undefined)), /From the chat that started this one/u);
+  // Without lineage (an ordinary chat), nothing is labelled.
+  assert.doesNotMatch(list(), /From /u);
 });
 
 test("a long prompt folds behind a chevron but keeps its whole text and one full copy", () => {

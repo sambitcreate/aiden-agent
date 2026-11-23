@@ -16,6 +16,7 @@ import { forgetChatContextProfile } from "./context-pressure.js";
 import { spending } from "./spending-main.js";
 import { remoteAttachmentStore } from "./aiden-remote-attachments-main.js";
 import { toolOutputStore } from "./tool-output-store.js";
+import { scheduleStore } from "./schedule-store.js";
 import { chatPullRequestStore } from "./chat-pull-request-service-main.js";
 import { designCanvasStore, designGrants, designModeConsent, recentWrittenPages } from "./design-canvas/main.js";
 import { EARLIER_PAGES_LIMIT, pagesWrittenInChat, placeWrittenPagesOnCanvas } from "./design-canvas/written-pages.js";
@@ -23,6 +24,7 @@ import { DESIGN_CANVAS_UPDATED_CHANNEL } from "../handlers/design-canvas.js";
 import { cancelVisualSnapshots } from "./visual-snapshot-service.js";
 import { beginFollowThroughMove, deleteChatFollowThrough, restoreChatFollowThrough } from "./follow-through/follow-through-main.js";
 import { interruptedWaits } from "./interrupted-waits-main.js";
+import { deleteChatLinks } from "./chat-orchestration/child-chats-main.js";
 import { detachedPromptLog } from "./chat-pending-attention-main.js";
 import { workspaceApplicationService } from "./workspace-application-service-main.js";
 import { chatReadMarkers } from "./chat-read-markers-main.js";
@@ -63,6 +65,8 @@ export const chatApplicationService = createChatApplicationService({
   followThrough: { beginMove: beginFollowThroughMove, deleteChat: deleteChatFollowThrough, restoreChat: restoreChatFollowThrough },
   memoryStore,
   releaseChatContext: (chatId) => {
+    // After the delete's durable boundary, so a rolled-back delete keeps its started chats linked.
+    void deleteChatLinks(chatId).catch((error: unknown) => logger.warn("chat-orchestration", "Could not forget a deleted chat's links.", error));
     forgetChatContextProfile(chatId);
     recentWrittenPages.forget(chatId);
     void spending.forgetChat(chatId).catch(() => undefined);
@@ -79,6 +83,12 @@ export const chatApplicationService = createChatApplicationService({
   inboxState: { readMarkers: chatReadMarkers, triage: chatTriage },
   attachments: remoteAttachmentStore,
   afterChatRemoved: (workspaceId) => workspaceApplicationService.releaseNoWorkspaceAfterChat(workspaceId),
+  scheduledTasks: {
+    releaseOriginChat: async (chatId) => {
+      const released = await scheduleStore.releaseOriginChat(chatId);
+      for (const taskId of released) ipcMain.broadcast("schedule:updated", { taskId });
+    },
+  },
   toolOutputStore,
   logError: (area, message, error) => logger.error(area, message, error),
 });

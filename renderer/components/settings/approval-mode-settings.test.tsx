@@ -146,6 +146,24 @@ test("Bot messaging is one switch under Advanced: on unless turned off, and it s
   await waitFor(() => assert.equal(off.getAttribute("aria-checked"), "false"));
 });
 
+test("Chats can start other chats is on by default under Advanced, saves childChats, and is absent where the desktop can't run it", async () => {
+  const { saves } = mount({ approvalMode: "ask" });
+  const toggle = await screen.findByRole("switch", { name: "Chats can start other chats" });
+  await waitFor(() => assert.equal(toggle.hasAttribute("disabled"), false));
+  assert.equal(toggle.getAttribute("aria-checked"), "true");
+  fireEvent.click(toggle);
+  await waitFor(() => assert.deepEqual(saves(), [{ childChats: false }]));
+  await waitFor(() => assert.equal(toggle.getAttribute("aria-checked"), "false"));
+  cleanup();
+  mount({ approvalMode: "ask", childChats: false }, [MODEL], { platform: "linux" });
+  const off = await screen.findByRole("switch", { name: "Chats can start other chats" });
+  await waitFor(() => assert.equal(off.getAttribute("aria-checked"), "false"));
+  cleanup();
+  mount({ approvalMode: "ask" }, [MODEL], { platform: "other" });
+  await screen.findByRole("switch", { name: "Bot messaging" });
+  assert.equal(screen.queryByRole("switch", { name: "Chats can start other chats" }), null);
+});
+
 test("a failed Bot messaging save puts the switch back", async () => {
   const { saves } = mount({ approvalMode: "ask" }, [MODEL], { failSave: true });
   const toggle = await screen.findByRole("switch", { name: "Bot messaging" });

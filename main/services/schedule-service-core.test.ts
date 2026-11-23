@@ -550,7 +550,7 @@ test("disabling schedules during startup overrides the pending settings read", a
   const testbed = harness(() => settings.promise);
   t.after(() => testbed.service.stop());
   const task = await addTask(testbed.store);
-  const overdue = await testbed.store.updateRuntime(task.id, { nextRunAt: 1 });
+  const overdue = await testbed.store.updateRuntime(task.id, { nextRunAt: Date.now() - 60_000 });
 
   const starting = testbed.service.start();
   await testbed.service.setGlobalEnabled(false);
@@ -574,7 +574,7 @@ test("stopping during startup task lookup preserves the missed run for the next 
   const testbed = harness();
   t.after(() => testbed.service.stop());
   const task = await addTask(testbed.store);
-  const overdue = await testbed.store.updateRuntime(task.id, { nextRunAt: 1 });
+  const overdue = await testbed.store.updateRuntime(task.id, { nextRunAt: Date.now() - 60_000 });
   const entered = deferred<void>();
   const release = deferred<void>();
   const originalGet = testbed.store.get.bind(testbed.store);
@@ -744,7 +744,7 @@ test("stopping while startup stages a missed-run claim preserves its due time", 
   const testbed = harness();
   t.after(() => testbed.service.stop());
   const task = await addTask(testbed.store);
-  const overdue = await testbed.store.updateRuntime(task.id, { nextRunAt: 1 });
+  const overdue = await testbed.store.updateRuntime(task.id, { nextRunAt: Date.now() - 60_000 });
   const entered = deferred<void>();
   const release = deferred<void>();
   testbed.taskPersistence.beforeCommit = async () => {
@@ -868,7 +868,7 @@ for (const boundary of ["lookup", "claim publication"] as const) {
     const testbed = harness();
     t.after(() => testbed.service.stop());
     const task = await addTask(testbed.store);
-    const overdue = await testbed.store.updateRuntime(task.id, { nextRunAt: 1 });
+    const overdue = await testbed.store.updateRuntime(task.id, { nextRunAt: Date.now() - 60_000 });
     const entered = deferred<void>();
     const release = deferred<void>();
     let held = false;
@@ -909,7 +909,7 @@ test("cancelling a catch-up claim leaves the durable missed-run timestamp unchan
   const testbed = harness();
   t.after(() => testbed.service.stop());
   const task = await addTask(testbed.store);
-  const overdue = await testbed.store.updateRuntime(task.id, { nextRunAt: 1 });
+  const overdue = await testbed.store.updateRuntime(task.id, { nextRunAt: Date.now() - 60_000 });
   const entered = deferred<void>();
   const release = deferred<void>();
   testbed.taskPersistence.beforeCommit = async () => {
@@ -1148,7 +1148,7 @@ for (const automaticSource of ["Cron", "startup catch-up"] as const) {
     t.after(() => testbed.service.stop());
     const task = await addTask(testbed.store);
     if (automaticSource === "Cron") await testbed.service.start();
-    else await testbed.store.updateRuntime(task.id, { nextRunAt: 1 });
+    else await testbed.store.updateRuntime(task.id, { nextRunAt: Date.now() - 60_000 });
     const manual = testbed.service.runNow(task.id);
     await new Promise((resolve) => setImmediate(resolve));
     assert.equal(testbed.hasPending(task.id), true);
@@ -1186,7 +1186,7 @@ for (const automaticSource of ["Cron", "startup catch-up"] as const) {
       const job = scheduledJobs.find((entry) => entry.name === `scheduled:${task.id}`)!;
       await fireWhenDue(t, job);
     } else {
-      await testbed.store.updateRuntime(task.id, { nextRunAt: 1 });
+      await testbed.store.updateRuntime(task.id, { nextRunAt: Date.now() - 60_000 });
       await testbed.service.start();
     }
     await new Promise((resolve) => setImmediate(resolve));
@@ -1313,4 +1313,223 @@ test("a deferred startup catch-up does not re-run a fire the Cron already claime
   assert.equal((await store.get(task.id))!.nextRunAt, next);
   assert.deepEqual(await store.runs(task.id), []);
   assert.deepEqual(errors, []);
+});
+
+const HOUR = 60 * 60_000;
+
+/** A service on a mocked clock whose runs record themselves the way the real execution does. */
+function lateHarness(t: TestContext, now: number, results: Array<ScheduledRun["result"] | "cancelled"> = []) {
+  t.mock.timers.enable({ apis: ["setTimeout", "Date"], now });
+  const store = createScheduleStore(
+    new MemoryPersistence<unknown[]>([]),
+    new MemoryPersistence<unknown[]>([]),
+  );
+  const ran: Array<ScheduledRunTrigger | undefined> = [];
+  const cards: Array<{ taskId: string; error: string }> = [];
+  const errors: string[] = [];
+  const service = createScheduleServiceCore({
+    store,
+    execution: {
+      run: async (task, runId, trigger) => {
+        ran.push(trigger);
+        const planned = results.shift() ?? "success";
+        const result = planned === "cancelled" ? "blocked" : planned;
+        return store.recordRun({
+          ...(runId ? { id: runId } : {}),
+          taskId: task.id,
+          startedAt: Date.now(),
+          finishedAt: Date.now(),
+          result,
+          output: "",
+          ...(result === "error" || result === "blocked" ? { error: "The provider refused the key." } : {}),
+          // As schedule-execution records them: a run started by hand, a stopped run.
+          ...(trigger?.kind === "manual" ? { byHand: true as const } : {}),
+          ...(planned === "cancelled" ? { cancelled: true as const } : {}),
+        });
+      },
+      cancel: () => false,
+      cancelAll: () => undefined,
+    },
+    globallyEnabled: async () => true,
+    broadcast: () => undefined,
+    warn: () => undefined,
+    error: (message) => void errors.push(message),
+    pausedAfterFailures: async (task, error) => void cards.push({ taskId: task.id, error }),
+  });
+  t.after(() => service.stop());
+  const settle = async () => {
+    for (let index = 0; index < 20; index += 1) await new Promise((resolve) => setImmediate(resolve));
+  };
+  const job = (taskId: string) => {
+    const jobs = scheduledJobs.filter((entry) => entry.name === `scheduled:${taskId}`);
+    return jobs[jobs.length - 1]!;
+  };
+  return { store, service, ran, cards, errors, settle, job };
+}
+
+const JAN_5_9AM = Date.UTC(2026, 0, 5, 9, 0);
+
+for (const [label, missedAt] of [
+  ["six hours late", JAN_5_9AM],
+  ["missed for days, with its latest time six hours ago", Date.UTC(2026, 0, 2, 9, 0)],
+] as const) {
+  test(`a chat task ${label} runs once at startup and moves on to its next time`, async (t) => {
+    const late = lateHarness(t, JAN_5_9AM + 6 * HOUR);
+    const task = await addTask(late.store);
+    await late.store.updateRuntime(task.id, { nextRunAt: missedAt });
+    await late.service.start();
+    await late.settle();
+
+    assert.deepEqual(late.ran, [{ kind: "automatic", fireTime: missedAt }]);
+    assert.equal((await late.store.get(task.id))?.nextRunAt, JAN_5_9AM + 24 * HOUR);
+    assert.deepEqual((await late.store.runs(task.id)).map((run) => run.result), ["success"]);
+    assert.deepEqual(late.errors, []);
+  });
+}
+
+test("a chat task more than 12 hours late at startup records a skip and waits for its next time", async (t) => {
+  const late = lateHarness(t, JAN_5_9AM + 14 * HOUR);
+  const task = await addTask(late.store);
+  await late.store.updateRuntime(task.id, { nextRunAt: JAN_5_9AM });
+  await late.service.start();
+  await late.settle();
+
+  assert.deepEqual(late.ran, [], "nothing runs");
+  const [skip, ...rest] = await late.store.runs(task.id);
+  assert.equal(rest.length, 0);
+  assert.equal(skip?.result, "skipped");
+  assert.equal(skip?.reason, "too_late");
+  assert.match(skip?.output ?? "", /more than 12 hours late/u);
+  const current = await late.store.get(task.id);
+  assert.equal(current?.enabled, true);
+  assert.equal(current?.nextRunAt, JAN_5_9AM + 24 * HOUR);
+
+  // Its next time runs as usual.
+  t.mock.timers.setTime(JAN_5_9AM + 24 * HOUR);
+  await late.job(task.id).trigger();
+  await late.settle();
+  assert.deepEqual(late.ran, [{ kind: "automatic", fireTime: JAN_5_9AM + 24 * HOUR }]);
+});
+
+for (const [hoursAsleep, runs] of [[4, true], [13, false]] as const) {
+  test(`a chat task's timer waking ${hoursAsleep} hours after its time ${runs ? "still runs" : "records a skip"}`, async (t) => {
+    const late = lateHarness(t, JAN_5_9AM - 60_000);
+    const task = await addTask(late.store);
+    assert.equal(task.nextRunAt, JAN_5_9AM);
+    await late.service.start();
+    await late.settle();
+
+    // The computer slept through 09:00; the timer fires when it wakes.
+    t.mock.timers.setTime(JAN_5_9AM + hoursAsleep * HOUR);
+    await late.job(task.id).trigger();
+    await late.settle();
+
+    assert.deepEqual(late.ran, runs ? [{ kind: "automatic", fireTime: JAN_5_9AM }] : []);
+    const [latest] = await late.store.runs(task.id);
+    assert.equal(latest?.result, runs ? "success" : "skipped");
+    assert.equal(latest?.reason, runs ? undefined : "too_late");
+    assert.equal((await late.store.get(task.id))?.nextRunAt, JAN_5_9AM + 24 * HOUR);
+  });
+}
+
+test("a Bot routine still catches up a fire days late at startup", async (t) => {
+  const late = lateHarness(t, JAN_5_9AM + 14 * HOUR);
+  const task = await late.store.save({
+    botId: "bot-chef", name: "Daily check", mode: "llm", cron: "0 9 * * *", timezone: "UTC",
+    routineSchedule: { kind: "daily", time: "09:00" }, prompt: "Check the inbox.",
+  });
+  await late.store.updateRuntime(task.id, { nextRunAt: JAN_5_9AM - 3 * 24 * HOUR });
+  await late.service.start();
+  await late.settle();
+
+  assert.equal(late.ran.length, 1, "the routine runs once instead of skipping");
+  assert.equal(late.ran[0]?.kind, "automatic");
+  assert.ok(!(await late.store.runs(task.id)).some((run) => run.reason === "too_late"));
+});
+
+test("three failed scheduled runs in a row pause a chat task with one card; turning it back on starts a new count", async (t) => {
+  const late = lateHarness(t, JAN_5_9AM - 60_000, ["error", "error", "success", "error", "error", "error", "error"]);
+  const task = await addTask(late.store);
+  await late.service.start();
+  const fireNext = async () => {
+    t.mock.timers.setTime((await late.store.get(task.id))!.nextRunAt!);
+    await late.job(task.id).trigger();
+    await late.settle();
+  };
+
+  // A success in between breaks the run of failures.
+  for (let index = 0; index < 5; index += 1) await fireNext();
+  assert.equal((await late.store.get(task.id))?.enabled, true);
+  assert.deepEqual(late.cards, []);
+
+  await fireNext();
+  const paused = await late.store.get(task.id);
+  assert.equal(paused?.enabled, false);
+  assert.equal(paused?.nextRunAt, undefined);
+  assert.equal(paused?.lastError, "Paused after 3 failed runs in a row: The provider refused the key.");
+  assert.deepEqual(late.cards, [{ taskId: task.id, error: "The provider refused the key." }]);
+
+  // Back on: one more failure is the first of a new count.
+  t.mock.timers.setTime(Date.now() + 60_000);
+  await late.service.resume(task.id);
+  await fireNext();
+  assert.equal((await late.store.get(task.id))?.enabled, true);
+  assert.equal(late.cards.length, 1);
+  assert.deepEqual(late.errors, []);
+});
+
+test("runs you start by hand never pause a chat task", async (t) => {
+  const late = lateHarness(t, JAN_5_9AM - 60_000, ["error", "error", "error"]);
+  const task = await addTask(late.store);
+  await late.service.start();
+  for (let index = 0; index < 3; index += 1) {
+    t.mock.timers.setTime(Date.now() + 1_000);
+    assert.equal((await late.service.runNow(task.id)).result, "error");
+  }
+  assert.equal((await late.store.get(task.id))?.enabled, true);
+  assert.deepEqual(late.cards, []);
+});
+
+test("failed runs you started by hand don't add to the count, but a refused run does and a stopped one doesn't", async (t) => {
+  const late = lateHarness(t, JAN_5_9AM - 60_000, ["error", "error", "error", "cancelled", "blocked", "blocked"]);
+  const task = await addTask(late.store);
+  await late.service.start();
+  const fireNext = async () => {
+    t.mock.timers.setTime((await late.store.get(task.id))!.nextRunAt!);
+    await late.job(task.id).trigger();
+    await late.settle();
+  };
+  for (let index = 0; index < 2; index += 1) {
+    t.mock.timers.setTime(Date.now() + 1_000);
+    assert.equal((await late.service.runNow(task.id)).result, "error");
+  }
+  await fireNext();
+  assert.equal((await late.store.get(task.id))?.enabled, true, "two failures by hand and one scheduled failure stay on");
+
+  await fireNext(); // stopped: neither a failure nor a break
+  await fireNext(); // refused
+  assert.equal((await late.store.get(task.id))?.enabled, true);
+  await fireNext(); // refused again: the third unattended failure
+  assert.equal((await late.store.get(task.id))?.enabled, false, "refusals count toward the pause");
+  assert.equal(late.cards.length, 1);
+});
+
+test("turning a chat task off and on by hand starts a new count of failed runs", async (t) => {
+  const late = lateHarness(t, JAN_5_9AM - 60_000, ["error", "error", "error"]);
+  const task = await addTask(late.store);
+  await late.service.start();
+  const fireNext = async () => {
+    t.mock.timers.setTime((await late.store.get(task.id))!.nextRunAt!);
+    await late.job(task.id).trigger();
+    await late.settle();
+  };
+  await fireNext();
+  await fireNext();
+  t.mock.timers.setTime(Date.now() + 1_000);
+  await late.service.pause(task.id);
+  t.mock.timers.setTime(Date.now() + 1_000);
+  await late.service.resume(task.id);
+  await fireNext();
+  assert.equal((await late.store.get(task.id))?.enabled, true, "the failure after turning it back on is the first of a new count");
+  assert.deepEqual(late.cards, []);
 });

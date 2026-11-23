@@ -669,6 +669,8 @@ function normalizeSettingsShape(value: unknown): SettingsShape {
     "scheduledTasksEnabled",
     "scheduledDefaultMcpEnabled",
     "scheduledDefaultNotify",
+    "chatCheckBacks",
+    "keepAwakeWhileWorking",
     "telegramDraftPreviews",
     "telegramThreadedMode",
   ] as const) {
@@ -741,6 +743,7 @@ function normalizeSettingsShape(value: unknown): SettingsShape {
     if (settings[key] !== undefined && !isRecord(settings[key])) delete normalized[key];
   }
   if (settings.botMessaging !== false) delete normalized.botMessaging;
+  if (settings.childChats !== false) delete normalized.childChats;
   const hiddenModelsByProvider = normalizedSettingsVisibility(settings);
   if (hiddenModelsByProvider) normalized.hiddenModelsByProvider = hiddenModelsByProvider;
   else delete normalized.hiddenModelsByProvider;
@@ -755,6 +758,7 @@ function normalizeSettingsShape(value: unknown): SettingsShape {
 export function runtimeSettingsFrom(settings: AppSettings): AppSettings {
   const runtime = structuredClone(settings);
   if (settings.botMessaging !== false) delete runtime.botMessaging;
+  if (settings.childChats !== false) delete runtime.childChats;
   runtime.compactionEngine = compactionEngineFrom(settings.compactionEngine);
   if (settings.cacheWarmingEnabled !== undefined) runtime.cacheWarmingEnabled = settings.cacheWarmingEnabled === true;
   // Only a literal true pays for hour-long caches; anything hand-edited reads as off.

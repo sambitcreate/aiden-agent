@@ -1,16 +1,5 @@
 import * as React from "react";
-import {
-  BellDot,
-  Check,
-  CheckCheck,
-  CircleAlert,
-  GitFork,
-  Loader2,
-  MessageCircleQuestion,
-  ShieldAlert,
-  Unplug,
-  type LucideIcon,
-} from "lucide-react";
+import { BellDot, Check, CheckCheck, CircleAlert, GitFork, Loader2, MessageCircleQuestion, MessagesSquare, ShieldAlert, Unplug, type LucideIcon } from "lucide-react";
 import {
   Button,
   ContextMenu,
@@ -132,6 +121,8 @@ export interface ChatRowProps {
   busy?: boolean;
   /** The source chat's label when this chat is a fork. */
   forkedFrom?: string;
+  /** "Started by “Release prep”" for a chat another chat started. */
+  startedByChat?: string;
   /** The chat lives on a paired host: shows its marker and mutes last-known rows. */
   remote?: { hostLabel: string; stale: boolean };
   /** Context glyphs (workspace, pull requests) shown before the status. */
@@ -171,6 +162,7 @@ export function ChatRow({
   icon,
   busy = false,
   forkedFrom,
+  startedByChat,
   remote,
   context,
   shortcutHint,
@@ -225,10 +217,16 @@ export function ChatRow({
       )}
       icon={icon}
       aria-busy={busy || status.state === "working"}
-      aria-description={[forkedFrom, inSelection ? "Selected" : undefined].filter(Boolean).join(". ") || undefined}
+      aria-description={[startedByChat, forkedFrom, inSelection ? "Selected" : undefined].filter(Boolean).join(". ") || undefined}
       data-forked={forkedFrom ? "true" : undefined}
+      data-started-by-chat={startedByChat ? "true" : undefined}
       title={
-        forkedFrom ? (
+        startedByChat ? (
+          <span className="flex min-w-0 items-center gap-1.5" title={startedByChat}>
+            <MessagesSquare aria-hidden="true" className="size-3.5 shrink-0 text-tertiary" />
+            <span className="min-w-0 truncate">{displayedTitle}</span>
+          </span>
+        ) : forkedFrom ? (
           <span className="flex min-w-0 items-center gap-1.5" title={forkedFrom}>
             <GitFork aria-hidden="true" className="size-3.5 shrink-0 text-tertiary" />
             <span className="min-w-0 truncate">{displayedTitle}</span>

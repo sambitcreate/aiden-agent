@@ -14,14 +14,22 @@
 // is the same whoever started the turn, and refuses every call that needs the
 // window: Computer Use, hooks, questions, the to-do list, the advisor, the
 // browser, simulators, Aiden's settings tools and the design canvas.
+//
+// Some refusals depend on a call's arguments, not just the tool's name: a
+// woken turn may list and cancel check-backs but not set one. Those are rows
+// in `TURN_ARGS_REFUSAL_RULES`, read by `chatTurnArgsToolRefusal`.
 
 import type { InlineVisualsMode } from "../../renderer/shared/appearance.js";
 import { ASK_USER_QUESTION_TOOL_NAME } from "../../renderer/shared/ask-user-question.js";
+import { CHECK_BACK_TOOL_NAME } from "../../renderer/shared/check-backs.js";
+import { CHILD_CHATS_TOOL_NAME } from "../../renderer/shared/child-chats.js";
 import { WORKSPACE_ARTIFACT_TOOL_NAME } from "../../renderer/shared/workspace-artifacts.js";
 import { COMPUTER_USE_TOOL_NAME } from "./computer-use/tool.js";
+import { approvalAllowableAwayFromOwner } from "./chat-owed-turn-prompts.js";
 import { generativeUiUnavailableReason } from "./generative-ui-extension.js";
 import { HOOKS_TOOL_NAME, hooksToolUnavailableReason, offersHooksTool, type HooksToolSurface } from "./hooks-tool.js";
 import { TODO_TOOL_NAME } from "./rpiv-todo/contract.js";
+import { PROPOSE_GOAL_TOOL_NAME } from "../../renderer/shared/goal.js";
 
 const FORM_FILL_TOOL_NAME = "form_fill";
 const SUBAGENT_TOOL_NAME = "subagent";
@@ -48,11 +56,32 @@ export interface ChatTurnAudience {
    */
   windowless?: boolean;
   /**
+   * A windowless turn that answers the person's own queued message (the turn
+   * a settled run owed the chat): the person started it, so it may set a
+   * check-back. A turn answering a notice never is.
+   */
+  answersPerson?: boolean;
+  /**
    * Window-dependent tools this turn declared from its runtime sources (the
    * browser, simulators, Aiden's settings tools, the design canvas). Read on
    * each call, so names added after the refusal is built count.
    */
   windowOnlyToolNames?: ReadonlySet<string>;
+  /**
+   * A round of a goal the person started: attended, but Aiden began it. It
+   * may not set promises for later (check-backs) or start work that outlives it.
+   */
+  goalRound?: boolean;
+  /**
+   * A lead chat sent this turn into a chat it started: the lead's agent, not
+   * the person, began it, so it is Aiden-started like a goal round.
+   */
+  leadChatTurn?: boolean;
+  /**
+   * A scheduled task's run (on its schedule, from a trigger, or Run now),
+   * whatever its usage source: Aiden started it, not the person.
+   */
+  scheduledRun?: boolean;
 }
 
 /** What a generation's execution options say about who the turn serves. */
@@ -61,12 +90,30 @@ export interface ChatTurnAudienceOptions {
   visualAudience?: "remote";
   questionPromptsUnavailable?: boolean;
   windowless?: boolean;
+  answersPerson?: boolean;
+  goalRound?: boolean;
+  leadChatTurn?: boolean;
+  scheduledRun?: boolean;
 }
 
 /** What the turn's own parameters say about inline visuals. */
 export interface ChatTurnAudienceParams {
   inlineVisuals?: InlineVisualsMode;
   visualize?: boolean;
+}
+
+/**
+ * A windowless turn answers the person when the screened prompt it answers is
+ * a message the person wrote (queued while the chat's previous run went). A
+ * turn answering a notice (a finished job, a check-back) is not the person's,
+ * so it can't set check-backs of its own.
+ */
+export function screenedPromptAnswersPerson(
+  messages: readonly { id: string; role: string; notice?: unknown }[],
+  screenedPrompt: { messageId: string } | undefined,
+): boolean {
+  if (screenedPrompt === undefined) return false;
+  return messages.some((message) => message.id === screenedPrompt.messageId && message.role === "user" && !message.notice);
 }
 
 /** The turn's audience, from the generation's options and parameters. */
@@ -78,6 +125,12 @@ export function chatTurnAudienceFor(options: ChatTurnAudienceOptions, params: Ch
     ...(params.inlineVisuals ? { inlineVisuals: params.inlineVisuals } : {}),
     visualize: params.visualize === true,
     ...(options.windowless === true ? { windowless: true } : {}),
+    ...(options.windowless === true && options.answersPerson === true && options.unattended !== true
+      ? { answersPerson: true }
+      : {}),
+    ...(options.goalRound === true ? { goalRound: true } : {}),
+    ...(options.leadChatTurn === true ? { leadChatTurn: true } : {}),
+    ...(options.scheduledRun === true ? { scheduledRun: true } : {}),
   };
 }
 
@@ -162,6 +215,57 @@ export function firstTurnToolRefusal(refusals: readonly TurnToolRefusal[]): Turn
   };
 }
 
+/** What decides whether a chat turn is offered `child_chats` (Phase 5, D3). */
+export interface ChildChatsOfferInput {
+  /** The follow-through checks run for this chat (a workspace chat with a window or device behind it). */
+  followThroughAvailable: boolean;
+  /**
+   * A Temporary chat (Floating Quick Chat, not yet saved or attached): its
+   * window can't show started chats, and an unsaved one is deleted at the next
+   * launch while its started chats would live on.
+   */
+  temporary: boolean;
+  /** The chat is in a workspace. */
+  workspace: boolean;
+  /**
+   * The chat's record as far as the offer reads it, or undefined when it
+   * couldn't be read. A chat another chat started never starts chats (depth 1).
+   */
+  lineage: { startedBy?: unknown } | undefined;
+  /** Settings → Chats keeps the feature on. */
+  enabled: boolean;
+  /** This computer supports it (`hostPlatformCapabilities().childChats`). */
+  hostSupports: boolean;
+  /** Tools the turn's caller excluded, such as an outside MCP app's turns. */
+  excludedToolNames?: ReadonlySet<string>;
+}
+
+/** Whether this chat turn declares `child_chats`. */
+export function offersChildChats(input: ChildChatsOfferInput): boolean {
+  return (
+    input.followThroughAvailable &&
+    !input.temporary &&
+    input.workspace &&
+    input.lineage !== undefined &&
+    input.lineage.startedBy === undefined &&
+    input.enabled &&
+    input.hostSupports &&
+    input.excludedToolNames?.has(CHILD_CHATS_TOOL_NAME) !== true
+  );
+}
+
+/**
+ * Whether a windowless turn refuses `name` because only the chat's own window
+ * can run or approve it: the browser, Computer Use and the other window tools,
+ * or (in a goal round) an approval only the window can give. A goal round that
+ * hits one offers Continue here, so a round on screen can do it.
+ */
+export function refusedForWantOfWindow(turn: ChatTurnAudience, name: string): boolean {
+  if (turn.windowless !== true) return false;
+  if (WINDOW_TOOL_NAMES.has(name) || turn.windowOnlyToolNames?.has(name) === true) return true;
+  return turn.goalRound === true && !approvalAllowableAwayFromOwner(name);
+}
+
 /** Declarations that depend on the chat alone, never on the turn's audience. */
 export function chatToolOffers(surface: ChatToolSurface): { hooks: boolean } {
   return { hooks: offersHooksTool({ ...surface, unattended: false, remoteAudience: false }) };
@@ -189,12 +293,152 @@ export function chatTurnToolRefusal(
     if (turn.questionPromptsUnavailable === true && name === ASK_USER_QUESTION_TOOL_NAME) {
       return `${ASK_USER_QUESTION_TOOL_NAME} is not available in this turn: the paired device that sent it cannot show question prompts. Ask your question in your reply instead.`;
     }
-    if (turn.windowless === true && (WINDOW_TOOL_NAMES.has(name) || turn.windowOnlyToolNames?.has(name) === true)) {
+    if (refusedForWantOfWindow(turn, name)) {
+      if (turn.goalRound === true) {
+        return `${name} is not available in this round: the chat isn't open on screen, and this tool needs the chat's own window. Say in your reply what you would do with it; the next round can use it once the person opens the chat and presses Continue here.`;
+      }
       return `${name} is not available in this turn: Aiden started this turn itself and no window owns it, and this tool needs the chat's own window. Say in your reply what you would do with it.`;
     }
     if (turn.remoteAudience && name === WORKSPACE_ARTIFACT_TOOL_NAME) {
       return `${WORKSPACE_ARTIFACT_TOOL_NAME} is not available in this turn: the request came from a paired device, which cannot show workspace artifacts. Open the chat on this computer to create, refresh or run one.`;
     }
     return generativeUiUnavailableReason(name, visuals);
+  };
+}
+
+// ── Refusals that read a call's arguments ──────────────────────────────────
+
+/**
+ * One (tool, arguments) refusal: in turns `turns` matches, a call to `tool`
+ * whose arguments `args` matches is refused with `reason`. Adding a rule is
+ * one row in `TURN_ARGS_REFUSAL_RULES`.
+ */
+export interface TurnArgsRefusalRule {
+  tool: string;
+  /** Which turns the rule applies to. */
+  turns: (turn: ChatTurnAudience) => boolean;
+  /** Which calls of `tool` it refuses. */
+  args: (args: Record<string, unknown>) => boolean;
+  /** What the model reads; it names the condition and what to do instead. */
+  reason: string;
+}
+
+/** Matches a call whose `key` argument is one of `values`, e.g. `argIs("action", "set")`. */
+export function argIs(key: string, ...values: readonly unknown[]): (args: Record<string, unknown>) => boolean {
+  return (args) => values.includes(args[key]);
+}
+
+/**
+ * A turn nobody started on purpose: an unattended follow-up, a windowless
+ * turn that isn't answering the person's own queued message, a goal round,
+ * a lead chat's turn in a chat it started, or a scheduled task's run (Run now
+ * included).
+ */
+export function aidenStartedTurn(turn: ChatTurnAudience): boolean {
+  return (
+    turn.unattended ||
+    (turn.windowless === true && turn.answersPerson !== true) ||
+    turn.goalRound === true ||
+    turn.leadChatTurn === true ||
+    turn.scheduledRun === true
+  );
+}
+
+/**
+ * A workspace chat turn the person wrote: neither one Aiden started nor a run
+ * another feature owns (a scheduled task, Telegram, a side run), which keeps
+ * its own audience even when it posts into a chat. Desktop and paired-device
+ * turns leave `usageSource` unset; it means "chat".
+ */
+export function personWroteChatTurn(usageSource: string | undefined, turn: ChatTurnAudience): boolean {
+  return (usageSource === undefined || usageSource === "chat") && !aidenStartedTurn(turn);
+}
+
+/** Subagent roles that only read: everything but the implementer. */
+const READ_ONLY_SUBAGENT_ROLES: ReadonlySet<string> = new Set(["scout", "planner", "reviewer"]);
+
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  return typeof value === "object" && value !== null && !Array.isArray(value) ? (value as Record<string, unknown>) : undefined;
+}
+
+/** Capabilities that change something or start more helpers: writes, shell, mutating connectors, nesting. */
+function capabilitiesWrite(value: unknown): boolean {
+  const capabilities = asRecord(value);
+  if (!capabilities) return false;
+  const mutations = capabilities.mcpMutations;
+  return (
+    capabilities.workspaceWrite === true ||
+    capabilities.shell === true ||
+    capabilities.delegate === true ||
+    (Array.isArray(mutations) && mutations.length > 0)
+  );
+}
+
+/**
+ * A `subagent` run that may change something: any task in a role other than
+ * scout, planner or reviewer, or a batch or task asking for writes, shell,
+ * mutating connectors or nesting. `list` launches nothing.
+ */
+export function subagentCallMayWrite(args: Record<string, unknown>): boolean {
+  if (args.action === "list") return false;
+  if (capabilitiesWrite(args.capabilities)) return true;
+  const tasks = Array.isArray(args.tasks) ? args.tasks : [];
+  return tasks.some((entry) => {
+    const task = asRecord(entry);
+    if (!task) return false;
+    return typeof task.role !== "string" || !READ_ONLY_SUBAGENT_ROLES.has(task.role) || capabilitiesWrite(task.capabilities);
+  });
+}
+
+export const TURN_ARGS_REFUSAL_RULES: readonly TurnArgsRefusalRule[] = [
+  {
+    tool: PROPOSE_GOAL_TOOL_NAME,
+    turns: (turn) => aidenStartedTurn(turn) || turn.remoteAudience,
+    args: () => true,
+    reason:
+      `${PROPOSE_GOAL_TOOL_NAME} is not available in this turn: Aiden started it (a keep-going round or a follow-up), or a paired device sent it, and a goal is suggested only to the person at this computer. ` +
+      "Carry on with the work; say in your reply if you think a goal would help.",
+  },
+  {
+    tool: CHECK_BACK_TOOL_NAME,
+    turns: aidenStartedTurn,
+    args: argIs("action", "set"),
+    reason:
+      `${CHECK_BACK_TOOL_NAME} cannot set a check-back in this turn: Aiden started it, not the person, and a check-back set here could chain into another. ` +
+      "Finish what you can now, or say in your reply what is still left to check. list and cancel still work.",
+  },
+  {
+    tool: SUBAGENT_TOOL_NAME,
+    turns: (turn) => turn.goalRound === true,
+    args: subagentCallMayWrite,
+    reason:
+      `${SUBAGENT_TOOL_NAME} can only run read-only helpers in a keep-going round: scout, planner or reviewer, without workspace writes, shell, mutating connectors or nesting. ` +
+      "Make the change yourself in this round, or delegate only the reading.",
+  },
+  {
+    tool: CHILD_CHATS_TOOL_NAME,
+    turns: aidenStartedTurn,
+    args: argIs("action", "start"),
+    reason:
+      `${CHILD_CHATS_TOOL_NAME} cannot start chats in this turn: starting chats needs the person here, and Aiden started this turn. ` +
+      "list, read, wait, send and stop still work; say in your reply what you would start.",
+  },
+];
+
+/**
+ * A call this turn refuses because of its arguments, with the reason the
+ * model reads, or undefined. Runs with the name-only refusals through
+ * `firstTurnToolRefusal`.
+ */
+export function chatTurnArgsToolRefusal(
+  turn: ChatTurnAudience,
+  rules: readonly TurnArgsRefusalRule[] = TURN_ARGS_REFUSAL_RULES,
+): TurnToolRefusal {
+  return (name, args) => {
+    const values = typeof args === "object" && args !== null && !Array.isArray(args) ? (args as Record<string, unknown>) : {};
+    for (const rule of rules) {
+      if (rule.tool === name && rule.turns(turn) && rule.args(values)) return rule.reason;
+    }
+    return undefined;
   };
 }

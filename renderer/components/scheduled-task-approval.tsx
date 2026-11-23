@@ -8,6 +8,8 @@ import {
   Earth,
   FolderOpen,
   Folder,
+  MessageSquare,
+  MessagesSquare,
   Plug,
   ShieldAlert,
   ShieldCheck,
@@ -110,7 +112,7 @@ export function ScheduledTaskApproval({
   now?: number;
 }) {
   const { platform } = useAppCapabilities();
-  const cadence = formatScheduledTaskCadence(details.cron, details.timezone, new Date(now));
+  const cadence = details.whenLabel ?? formatScheduledTaskCadence(details.cron, details.timezone, new Date(now));
   const script = details.kind === "scheduled-task" && details.mode === "script" ? details.script : null;
   const body = script ?? details.prompt;
   const full = details.permission === "full";
@@ -120,6 +122,7 @@ export function ScheduledTaskApproval({
     !scheduledTaskEnabledAfterApproval(details) && !removing && !(details.kind === "scheduled-task" && details.action === "pause");
   const connectors = details.mcpServerIds.map((id, index) => ({ id, name: details.mcpServerNames[index] ?? id }));
   const legacyGlobalMcp = details.kind === "scheduled-task" && details.legacyGlobalMcp;
+  const postsIn = details.kind === "scheduled-task" ? details.postsIn : undefined;
 
   return (
     <div id={descriptionId} className="mt-3 flex min-h-[min(7rem,12dvh)] flex-col gap-2 text-left" data-scheduled-task-approval="true">
@@ -200,6 +203,11 @@ export function ScheduledTaskApproval({
               <Fact icon={Earth} label="Time zone">
                 {details.timezone}
               </Fact>
+              {postsIn ? (
+                <Fact icon={postsIn === "this_chat" ? MessageSquare : MessagesSquare} label="Posts in">
+                  {postsIn === "this_chat" ? "This chat" : "Its own chat"}
+                </Fact>
+              ) : null}
             </dl>
           </div>
         </div>

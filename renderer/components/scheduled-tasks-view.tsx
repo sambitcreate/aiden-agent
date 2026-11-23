@@ -1,6 +1,7 @@
 import * as React from "react";
+import { ScheduledTaskLinkPanel } from "./scheduled-task-link-panel";
 import { LiveGuard } from "./live-guard";
-import { useNavigate } from "@tanstack/react-router";
+import { useNavigate, useSearch } from "@tanstack/react-router";
 import { useQueryClient } from "@tanstack/react-query";
 import {
   Bell,
@@ -43,6 +44,7 @@ import { requestAssistantAutomationComposer } from "../lib/assistant-dock";
 import { scheduleApi } from "../lib/ipc";
 import {
   queryKeys,
+  useChats,
   useMcpServers,
   useProviders,
   useScheduledTasks,
@@ -53,6 +55,7 @@ import {
   filterScheduledTasks,
   formatNextRun,
   formatSchedule,
+  formatTaskWhen,
   scheduledTaskProviderPin,
   scheduledTaskStatus,
   type ScheduledTaskTab,
@@ -107,6 +110,7 @@ function taskInput(task: ScheduledTask, mcpServers: McpServer[]): ScheduledTaskI
     enabled: task.enabled,
     mode: task.mode,
     cron: task.cron,
+    ...(task.trigger ? { trigger: task.trigger } : {}),
     timezone: task.timezone,
     workspaceId: task.workspaceId,
     providerId: task.providerId,
@@ -206,7 +210,7 @@ function ScheduledTaskDetail({
   onDelete: () => void;
 }) {
   const status = statusPresentation(task);
-  const cadence = formatSchedule(task.cron, task.timezone);
+  const cadence = formatTaskWhen(task);
   return (
     <aside
       className="scheduled-task-detail sticky top-4 min-w-0 self-start overflow-hidden rounded-card bg-well"
@@ -225,7 +229,15 @@ function ScheduledTaskDetail({
           {task.name}
         </Text>
         <Text as="p" variant="small" color="secondary" className="mt-1">
-          {task.enabled ? `Next run ${formatNextRun(task.nextRunAt)}` : "Automatic runs are paused"}
+          {!task.enabled
+            ? "Automatic runs are paused"
+            : task.trigger?.kind === "webhook"
+              ? "Runs when its link is called"
+              : task.trigger?.kind === "connector"
+                ? "Runs when a connected app has news"
+                : task.trigger
+                ? "Runs when something changes"
+                : `Next run ${formatNextRun(task.nextRunAt)}`}
         </Text>
 
         <div className="mt-4 rounded-control bg-background px-3 py-2.5">
@@ -241,7 +253,7 @@ function ScheduledTaskDetail({
           <div className="flex items-start gap-3 py-3">
             <Clock3 className="mt-0.5 size-4 shrink-0 text-secondary" aria-hidden="true" />
             <div className="min-w-0 flex-1">
-              <dt className="text-small text-tertiary">Schedule</dt>
+              <dt className="text-small text-tertiary">{task.trigger ? "When" : "Schedule"}</dt>
               <dd className="mt-0.5 text-small text-primary">{cadence}</dd>
             </div>
           </div>
@@ -276,6 +288,8 @@ function ScheduledTaskDetail({
             </div>
           </div>
         </dl>
+
+        {task.trigger?.kind === "webhook" ? <ScheduledTaskLinkPanel taskId={task.id} busy={busy} /> : null}
 
         {task.lastError ? (
           <Callout className="mb-3" color="red">
@@ -332,7 +346,13 @@ export function ScheduledTasksView() {
   const [query, setQuery] = React.useState("");
   const searchInputRef = React.useRef<HTMLInputElement>(null);
   const [tab, setTab] = React.useState<ScheduledTaskTab>("all");
-  const [selectedTaskId, setSelectedTaskId] = React.useState<string | null>(null);
+  const requestedTaskId = (useSearch({ strict: false }) as { task?: unknown }).task;
+  const [selectedTaskId, setSelectedTaskId] = React.useState<string | null>(
+    typeof requestedTaskId === "string" ? requestedTaskId : null,
+  );
+  React.useEffect(() => {
+    if (typeof requestedTaskId === "string") setSelectedTaskId(requestedTaskId);
+  }, [requestedTaskId]);
   const [editing, setEditing] = React.useState<ScheduledTaskInput | null>(null);
   const [editingUpdatedAt, setEditingUpdatedAt] = React.useState<number | undefined>();
   const [removing, setRemoving] = React.useState<ScheduledTask | null>(null);
@@ -384,6 +404,7 @@ export function ScheduledTasksView() {
       await refresh();
       if (run.result === "success") toast.success(`${task.name} finished.`);
       else if (run.result === "silent") toast.info(`${task.name} finished with no output.`);
+      else if (run.result === "skipped") toast.info(run.output || `${task.name} was skipped.`);
       else toast.error(run.error ?? `${task.name} did not complete.`);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Couldn't run this task.");
@@ -393,11 +414,27 @@ export function ScheduledTasksView() {
   };
 
   const openChat = (task: ScheduledTask) => {
-    if (!task.chatId) {
+    // A task made in a chat posts there, so that is the chat to open.
+    const chatId = task.originChatId ?? task.chatId;
+    if (!chatId) {
       toast.info("Run this task once to create its dedicated chat.");
       return;
     }
-    void navigate({ to: "/chat/$chatId", params: { chatId: task.chatId } });
+    void navigate({ to: "/chat/$chatId", params: { chatId } });
+  };
+
+  const editingTask = editing?.id ? tasks.data?.find((task) => task.id === editing.id) : undefined;
+  const originChats = useChats(editingTask?.originChatId ? editingTask.workspaceId : undefined);
+  const editingOriginChatTitle = editingTask?.originChatId
+    ? (originChats.data?.find((chat) => chat.id === editingTask.originChatId)?.title ?? "the chat it was made in")
+    : undefined;
+  const moveToOwnChat = async () => {
+    if (!editingTask) return;
+    const saved = await scheduleApi.useOwnChat(editingTask.id, editingTask.updatedAt);
+    // The draft's revision moves with the change, so saving the editor afterwards still works.
+    setEditingUpdatedAt(saved.updatedAt);
+    await refresh();
+    toast.success(`${editingTask.name} will run in its own chat.`);
   };
 
   const globallyEnabled = settings.data?.enabled;
@@ -636,7 +673,7 @@ export function ScheduledTasksView() {
                               ) : null}
                             </span>
                             <Text variant="small" color="secondary" truncate className="mt-1 block">
-                              {formatSchedule(task.cron, task.timezone)}
+                              {formatTaskWhen(task)}
                               {task.mode === "script" && task.script ? ` · ${task.script}` : ""}
                               {task.enabled
                                 ? ` · Next run ${formatNextRun(task.nextRunAt)}`
@@ -804,6 +841,11 @@ export function ScheduledTasksView() {
             ),
           )}
           busy={saving}
+          postsIn={
+            editingOriginChatTitle !== undefined
+              ? { chatTitle: editingOriginChatTitle, onUseOwnChat: moveToOwnChat }
+              : undefined
+          }
           onOpenChange={(open) => {
             if (!open && !saving) {
               setEditing(null);

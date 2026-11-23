@@ -8,6 +8,7 @@
 // carry a path or Git's own output.
 
 import {
+  isValidBranchName,
   resolveWorktreeDefaults,
   type FirstMessageWorktreeInfo,
   type FirstMessageWorktreeRequest,
@@ -33,6 +34,26 @@ export interface AidenRemoteNewWorktreeDependencies {
   owner(deviceId: string): WorkspaceOperationDocumentOwner;
   /** The coordinator's record for a key. */
   record(key: string): Promise<FirstMessageWorktreeRecord | undefined>;
+  /** Every saved workspace, to find the one a managed worktree came from (`stackOnWorktree`). */
+  listWorkspaces?(): Promise<Workspace[]>;
+}
+
+/**
+ * What a chat another chat started asks of its worktree (Phase 5, D5). A
+ * phone's New worktree passes none of these.
+ */
+export interface AidenRemoteNewWorktreeOptions {
+  /** The coordinator key; the phone's is `phone-chat:<chatId>`. */
+  key?: string;
+  /** A local or remote-tracking branch to start from instead of the default. */
+  baseRef?: string;
+  /** An explicit branch name instead of one named from the message. */
+  branchName?: string;
+  /**
+   * When the chat's workspace is itself a managed worktree, make the new one
+   * from the workspace it came from, starting at its branch, instead of refusing.
+   */
+  stackOnWorktree?: boolean;
 }
 
 /** The coordinator key for a phone chat's worktree; one worktree per chat. */
@@ -68,8 +89,8 @@ export function createAidenRemoteNewWorktrees(dependencies: AidenRemoteNewWorktr
      * last ledger write can fail after the save). Any other worktree, even a
      * managed one, is not this chat's setup.
      */
-    async worktreeBranch(chatId: string, workspaceId: string): Promise<string | undefined> {
-      const record = await dependencies.record(phoneChatWorktreeKey(chatId));
+    async worktreeBranch(chatId: string, workspaceId: string, key = phoneChatWorktreeKey(chatId)): Promise<string | undefined> {
+      const record = await dependencies.record(key);
       if (!record || record.state === "failed" || record.workspaceId !== workspaceId) return undefined;
       const managed = (await dependencies.getWorkspace(workspaceId))?.managedWorktree;
       return managed && managed.branch === record.branch && managed.ownershipToken === record.ownershipToken
@@ -78,11 +99,30 @@ export function createAidenRemoteNewWorktrees(dependencies: AidenRemoteNewWorktr
     },
     async create(
       deviceId: string,
-      sourceWorkspaceId: string,
+      sourceWorkspaceIdInput: string,
       text: string,
       chatId: string,
+      options: AidenRemoteNewWorktreeOptions = {},
     ): Promise<{ workspaceId: string; branch: string }> {
-      const workspace = await dependencies.getWorkspace(sourceWorkspaceId);
+      let sourceWorkspaceId = sourceWorkspaceIdInput;
+      let workspace = await dependencies.getWorkspace(sourceWorkspaceId);
+      let stackedBase: string | undefined;
+      if (workspace?.managedWorktree && options.stackOnWorktree) {
+        // A worktree stacks from the workspace it came from, starting at its own branch.
+        const managed = workspace.managedWorktree;
+        const source = (await dependencies.listWorkspaces?.())?.find(
+          (candidate) => !candidate.managedWorktree && candidate.folderPath === managed.repositoryPath,
+        );
+        if (!source) {
+          throw refusal("Aiden couldn't find the workspace this worktree came from, so it can't make another worktree from it.", "workspace_unavailable");
+        }
+        if (workspace.permission === "none") {
+          throw refusal("This workspace has no folder access, so Aiden can't make a worktree in it.", "workspace_unavailable");
+        }
+        workspace = source;
+        sourceWorkspaceId = source.id;
+        stackedBase = managed.branch;
+      }
       if (!workspace?.folderPath || workspace.scratch) {
         throw refusal("This chat's workspace has no folder, so it can't have a worktree.", "workspace_unavailable");
       }
@@ -99,14 +139,29 @@ export function createAidenRemoteNewWorktrees(dependencies: AidenRemoteNewWorktr
         throw refusal("Aiden couldn't read this workspace's Git branches on your computer. Try again.");
       }
       if (!branches.isRepo) throw refusal("This workspace isn't a Git repository, so it can't have a worktree.");
-      const base = resolveWorktreeDefaults(branches);
+      const asked = options.baseRef ?? stackedBase;
+      if (options.branchName !== undefined && !isValidBranchName(options.branchName)) {
+        throw refusal("That branch name isn't valid in Git. Choose another, or leave it out.");
+      }
+      if (asked !== undefined && !isValidBranchName(asked)) {
+        throw refusal("That base branch name isn't valid in Git. Choose another, or leave it out.");
+      }
+      // A stacked worktree starts at the local branch as it is: nothing to fetch.
+      const base = resolveWorktreeDefaults(
+        branches,
+        asked === undefined ? {} : { baseRef: asked, fromOrigin: options.baseRef !== undefined },
+      );
       if (!base) throw refusal("This repository has no commits yet, so it can't have a worktree.");
+      if (asked !== undefined && base.baseRef !== asked) {
+        throw refusal(`Aiden couldn't find the branch ${asked} in this repository. Choose an existing branch, or leave it out.`);
+      }
       const owner = dependencies.owner(deviceId);
       const request: FirstMessageWorktreeRequest = {
         sourceWorkspaceId,
         baseRef: base.baseRef,
         fromOrigin: base.fromOrigin,
-        idempotencyKey: phoneChatWorktreeKey(chatId),
+        ...(options.branchName === undefined ? {} : { branchName: options.branchName }),
+        idempotencyKey: options.key ?? phoneChatWorktreeKey(chatId),
       };
       let info: FirstMessageWorktreeInfo;
       try {

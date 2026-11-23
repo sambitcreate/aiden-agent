@@ -7,6 +7,7 @@ import {
   validateScriptName,
   validateTimezone,
 } from "./schedule-store.js";
+import { TASK_CONNECTOR_NEEDS_SOURCE, type ScheduledTaskTrigger } from "../../renderer/shared/scheduled-task-trigger.js";
 
 class MemoryPersistence<T> {
   constructor(private data: T) {}
@@ -772,4 +773,144 @@ test("loads legacy Azure scheduled tasks through the renamed native provider", a
     new MemoryPersistence<unknown[]>([]),
   );
   assert.equal((await store.list())[0]?.providerId, "azure");
+});
+
+function chatTaskInput(patch: Record<string, unknown> = {}) {
+  return {
+    name: "Daily build check",
+    mode: "llm" as const,
+    cron: "0 9 * * *",
+    timezone: "UTC",
+    workspaceId: "workspace-a",
+    prompt: "Run the build and report.",
+    ...patch,
+  };
+}
+
+test("the chat a task posts into is set once at creation and every later save keeps it", async () => {
+  const persistence = new MemoryPersistence<unknown[]>([]);
+  const store = createScheduleStore(persistence, new MemoryPersistence<unknown[]>([]), () => 1_800_000_000_000);
+  const created = await store.save(chatTaskInput({ originChatId: "chat-1" }));
+  assert.equal(created.originChatId, "chat-1");
+  // An editor or phone save carries no binding: it is kept, not cleared.
+  const edited = await store.save({ ...chatTaskInput({ name: "Build check" }), id: created.id });
+  assert.equal(edited.originChatId, "chat-1");
+  // Nor can a save move it to another chat.
+  const moved = await store.save({ ...chatTaskInput({ originChatId: "chat-2" }), id: created.id });
+  assert.equal(moved.originChatId, "chat-1");
+  // Moving the task to another project drops the binding: that chat is in the old project.
+  const otherProject = await store.save({ ...chatTaskInput({ workspaceId: "workspace-b" }), id: created.id });
+  assert.equal(otherProject.originChatId, undefined);
+  const rebound = await store.save(chatTaskInput({ originChatId: "chat-1" }));
+  // It survives a reload from disk.
+  const reloaded = createScheduleStore(persistence, new MemoryPersistence<unknown[]>([]));
+  assert.equal((await reloaded.get(rebound.id))?.originChatId, "chat-1");
+  assert.equal((await reloaded.get(created.id))?.originChatId, undefined);
+});
+
+test("a task bound to a chat can't be edited to run more often than every 15 minutes", async () => {
+  const store = testStore();
+  const bound = await store.save(chatTaskInput({ originChatId: "chat-1" }));
+  await assert.rejects(
+    store.save({ ...chatTaskInput({ cron: "*/5 * * * *" }), id: bound.id }),
+    /at most every 15 minutes/u,
+  );
+  assert.equal((await store.get(bound.id))?.cron, "0 9 * * *");
+  await assert.rejects(store.save(chatTaskInput({ originChatId: "chat-1", cron: "*/14 * * * *" })), /15 minutes/u);
+  // Its own chat has no floor.
+  const own = await store.save(chatTaskInput({ cron: "*/5 * * * *" }));
+  assert.equal(own.cron, "*/5 * * * *");
+});
+
+test("Use its own chat and deleting the chat drop the binding, and nothing else", async () => {
+  const store = testStore();
+  const first = await store.save(chatTaskInput({ originChatId: "chat-1" }));
+  const second = await store.save(chatTaskInput({ name: "Second", originChatId: "chat-1" }));
+  const other = await store.save(chatTaskInput({ name: "Other", originChatId: "chat-2" }));
+  assert.equal(await store.clearOriginChat(first.id, { expectedChatId: "chat-9" }), undefined);
+  // Use its own chat is checked against the revision the person saw.
+  await assert.rejects(store.clearOriginChat(first.id, { expectedUpdatedAt: first.updatedAt - 1 }), /changed/u);
+  assert.equal((await store.get(first.id))?.originChatId, "chat-1");
+  const moved = await store.clearOriginChat(first.id, { expectedUpdatedAt: first.updatedAt });
+  assert.equal(moved?.originChatId, undefined);
+  assert.ok((moved?.updatedAt ?? 0) > first.updatedAt, "the change is a new revision");
+  assert.equal(moved?.prompt, first.prompt);
+  assert.equal(await store.clearOriginChat(first.id), undefined, "nothing left to clear");
+  assert.deepEqual(await store.releaseOriginChat("chat-1"), [second.id]);
+  assert.equal((await store.get(second.id))?.originChatId, undefined);
+  assert.equal((await store.get(other.id))?.originChatId, "chat-2");
+});
+
+test("a task that runs when something changes has no cron, survives a reload and turns on without needing attention", async () => {
+  const tasks = new MemoryPersistence<unknown[]>([]);
+  const runs = new MemoryPersistence<unknown[]>([]);
+  const store = createScheduleStore(tasks, runs, () => 1_800_000_000_000);
+  const created = await store.save({
+    name: "Status page",
+    mode: "llm",
+    cron: "",
+    timezone: "UTC",
+    prompt: "Tell me what changed.",
+    trigger: { kind: "watch", source: { type: "url", url: "https://example.com/status" }, everyMinutes: 15 },
+  });
+  assert.equal(created.cron, "");
+  assert.equal(created.nextRunAt, undefined);
+  assert.deepEqual(created.trigger, { kind: "watch", source: { type: "url", url: "https://example.com/status" }, everyMinutes: 15 });
+
+  await store.setEnabled(created.id, false);
+  const enabled = await store.setEnabled(created.id, true);
+  assert.equal(enabled.enabled, true);
+  assert.equal(enabled.nextRunAt, undefined);
+
+  const reloaded = createScheduleStore(new MemoryPersistence(tasks.snapshot()), runs, () => 1_800_000_000_000);
+  const loaded = await reloaded.get(created.id);
+  assert.equal(loaded?.enabled, true);
+  assert.doesNotMatch(loaded?.lastError ?? "", /Needs attention/u);
+  assert.deepEqual(loaded?.trigger, created.trigger);
+
+  // A save that doesn't mention the trigger keeps it; null puts the task back on a cron.
+  const renamed = await reloaded.save({ id: created.id, name: "Status", mode: "llm", cron: "", timezone: "UTC", prompt: "Tell me what changed." });
+  assert.deepEqual(renamed.trigger, created.trigger);
+  const scheduled = await reloaded.save({ id: created.id, name: "Status", mode: "llm", cron: "0 9 * * *", timezone: "UTC", prompt: "Tell me.", trigger: null });
+  assert.equal(scheduled.trigger, undefined);
+  assert.ok(scheduled.nextRunAt);
+});
+
+test("a connected-app task's \"Needs its source\" clears when it is saved as another kind of task, and stays while it still watches a connected app", async () => {
+  const store = testStore();
+  const connector: ScheduledTaskTrigger = {
+    kind: "connector", everyMinutes: 15, condition: { kind: "email", unreadOnly: false },
+    source: { providerLabel: "iMCP Mail", accountLabel: "person@example.test", resourceLabel: "Inbox" },
+  };
+  const base = { name: "New mail", mode: "llm" as const, cron: "", timezone: "UTC", prompt: "Tell me about new mail." };
+  const created = await store.save({ ...base, trigger: connector });
+  await store.updateRuntime(created.id, { lastError: TASK_CONNECTOR_NEEDS_SOURCE });
+  const renamed = await store.save({ ...base, id: created.id, name: "Inbox news" });
+  assert.equal(renamed.lastError, TASK_CONNECTOR_NEEDS_SOURCE, "still a connected-app task without a source");
+  const watch = await store.save({ ...base, id: created.id, trigger: { kind: "watch", source: { type: "url", url: "https://example.com/status" }, everyMinutes: 15 } });
+  assert.equal(watch.lastError, undefined);
+
+  // Any other error stays until the task runs again.
+  await store.updateRuntime(created.id, { lastError: "The page answered 500." });
+  assert.equal((await store.save({ ...base, id: created.id, cron: "0 9 * * *", trigger: null })).lastError, "The page answered 500.");
+});
+
+test("a task trigger is checked strictly and only asks Aiden", async () => {
+  const store = testStore();
+  const base = { name: "Watch", mode: "llm" as const, cron: "", timezone: "UTC", prompt: "Look." };
+  await assert.rejects(store.save({ ...base, trigger: { kind: "watch", source: { type: "url", url: "ftp://example.com" }, everyMinutes: 15 } }), /https/u);
+  await assert.rejects(store.save({ ...base, trigger: { kind: "watch", source: { type: "url", url: "https://example.com" }, everyMinutes: 2 } }), /5 to 1440/u);
+  await assert.rejects(store.save({ ...base, trigger: { kind: "watch", source: { type: "script", script: "../x.sh" }, everyMinutes: 15 } }), /one script file/u);
+  await assert.rejects(store.save({ ...base, trigger: { kind: "watch", source: { type: "script", script: "check.sh" }, everyMinutes: 15 } }), /Full permission/u);
+  await assert.rejects(
+    store.save({ ...base, trigger: { kind: "watch", source: { type: "url", url: "https://example.com" }, everyMinutes: 15, extra: 1 } as never }),
+    /Invalid task trigger/u,
+  );
+  await assert.rejects(
+    store.save({ name: "Script", mode: "script", cron: "", timezone: "UTC", script: "a.sh", permission: "full",
+      trigger: { kind: "watch", source: { type: "url", url: "https://example.com" }, everyMinutes: 15 } }),
+    /asks Aiden/u,
+  );
+  const script = await store.save({ ...base, permission: "full", trigger: { kind: "watch", source: { type: "script", script: "check.sh" }, everyMinutes: 60 } });
+  assert.equal(script.trigger?.kind === "watch" && script.trigger.source.type, "script");
 });

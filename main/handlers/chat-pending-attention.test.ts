@@ -42,6 +42,7 @@ type Handler = (event: unknown, ...args: unknown[]) => unknown;
 function harness(options: {
   chats: readonly string[];
   interrupted?: (chatIds: readonly string[]) => Promise<ReadonlyMap<string, InterruptedRunWaits>>;
+  goals?: ReadonlyMap<string, { since: number; reason: string }>;
 }) {
   const clock = { now: T0 };
   const registry = new HostRunRegistry({ now: () => clock.now });
@@ -66,6 +67,7 @@ function harness(options: {
     detached: log,
     knownChatIds: async (ids) => new Set(ids.filter((id) => options.chats.includes(id))),
     interruptedWaits: options.interrupted ?? (async () => new Map()),
+    goalNeedsYou: (chatId) => options.goals?.get(chatId),
     onChange: () => {
       dismissals.count += 1;
     },
@@ -428,4 +430,16 @@ test("a paired device reads a live run's start and oldest waiting ask, never thi
 
   registry.publish("run-a", "chat:done", {});
   assert.equal(liveRunAttention("chat-a", registry), undefined);
+});
+
+test("a goal at Needs you is a wait of its own, with its reason, until a round runs again", async () => {
+  const goals = new Map([["chat-a", { since: T0 - 60_000, reason: "Needs an API key to deploy" }]]);
+  const { registry, pending } = harness({ chats: ["chat-a", "chat-b"], goals });
+  assert.deepEqual(await pending(["chat-a", "chat-b"]), [
+    { chatId: "chat-a", kind: "goal", summary: "Needs an API key to deploy", since: T0 - 60_000, count: 1 },
+  ]);
+  // A live approval in the chat outranks the goal's row.
+  registry.begin({ runId: "run-a", chatId: "chat-a", origin: "headless" });
+  registry.publish("run-a", "chat:approval", approval("approval-1"));
+  assert.equal((await pending(["chat-a"]))[0]?.kind, "approval");
 });

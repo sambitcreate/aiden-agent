@@ -43,6 +43,16 @@ import type {
 import { isAcpHarnessProvider } from "../shared/acp-harness";
 import { mcpServerOffersTools } from "../shared/mcp-exposure";
 import { isNoWorkspace } from "../lib/no-workspace";
+import {
+  SCHEDULED_TASK_CONNECTOR_INTERVALS,
+  SCHEDULED_TASK_WATCH_INTERVALS,
+  formatScheduledTaskTriggerLabel,
+  type ScheduledTaskConnectorTrigger,
+  type ScheduledTaskLinkTrigger,
+  type ScheduledTaskWatchTrigger,
+} from "../shared/scheduled-task-trigger";
+import { BOT_CONNECTOR_WATCH_LIMITS, type BotConnectorWatchCondition, type BotConnectorWatchSourceList } from "../shared/bot-connector-watches";
+import { formatBotWatchInterval, parseBotWatchUrl } from "../shared/bot-routine-trigger";
 
 function upcomingLabel(timestamp: number): string {
   return new Intl.DateTimeFormat(undefined, {
@@ -123,6 +133,371 @@ export function ScheduledTaskProviderWarning({ message }: { message: string | un
   );
 }
 
+/** What a "When something changes" task checks, and how often. */
+export function WatchTriggerFields({ trigger, scripts, fullAccess, onChange }: {
+  trigger: ScheduledTaskWatchTrigger;
+  scripts: string[];
+  fullAccess: boolean;
+  onChange: (trigger: ScheduledTaskWatchTrigger) => void;
+}) {
+  const source = trigger.source;
+  const urlInvalid = source.type === "url" && source.url.trim() !== "" && parseBotWatchUrl(source.url) === undefined;
+  const intervals = [...new Set<number>([...SCHEDULED_TASK_WATCH_INTERVALS, trigger.everyMinutes])].sort((a, b) => a - b);
+  return (
+    <>
+      <Field label="Check" description="An address is fetched without your cookies or sign-ins. A script runs from the project's .aiden/scripts folder; it reports something by printing it.">
+        <Select
+          value={source.type}
+          onValueChange={(type) => onChange({
+            ...trigger,
+            source: type === "script" ? { type: "script", script: scripts[0] ?? "" } : { type: "url", url: "" },
+          })}
+        >
+          <SelectTrigger aria-label="What the task checks">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="url">A web address</SelectItem>
+            <SelectItem value="script">A project script</SelectItem>
+          </SelectContent>
+        </Select>
+      </Field>
+      {source.type === "url" ? (
+        <Field label="Address" description="https, or http only on this computer.">
+          <Input
+            value={source.url}
+            onChange={(event) => onChange({ ...trigger, source: { type: "url", url: event.target.value } })}
+            placeholder="https://example.com/status"
+            aria-label="Address to watch"
+            aria-invalid={urlInvalid}
+          />
+        </Field>
+      ) : (
+        <Field
+          label="Script"
+          description={fullAccess
+            ? "It can keep notes between checks in the file named by AIDEN_CHECK_STATE (up to 8 KB)."
+            : "A script watch runs unattended, so the task needs Full permission below."}
+        >
+          <Select
+            value={source.script || undefined}
+            onValueChange={(script) => onChange({ ...trigger, source: { type: "script", script } })}
+          >
+            <SelectTrigger aria-label="Script to run for each check">
+              <SelectValue placeholder={scripts.length ? "Choose a script" : "No scripts found"} />
+            </SelectTrigger>
+            <SelectContent>
+              {scripts.map((script) => (
+                <SelectItem value={script} key={script}>{script}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </Field>
+      )}
+      <Field label="Check every" description="Runs at most once every 5 minutes and 48 times a day.">
+        <Select
+          value={String(trigger.everyMinutes)}
+          onValueChange={(value) => onChange({ ...trigger, everyMinutes: Number(value) })}
+        >
+          <SelectTrigger aria-label="How often to check">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {intervals.map((minutes) => (
+              <SelectItem value={String(minutes)} key={minutes}>{formatBotWatchInterval(minutes)}</SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </Field>
+      {source.type === "url" && urlInvalid ? (
+        <Text role="alert" variant="small" color="red">Use an https address, or http only on this computer.</Text>
+      ) : null}
+    </>
+  );
+}
+
+/** Names shown for a connected-app task until Find sources picks its source; main replaces them on save. */
+const UNCHOSEN_SOURCE = { providerLabel: "Connected app", accountLabel: "Not chosen", resourceLabel: "Not chosen" };
+
+export function newConnectorTrigger(kind: BotConnectorWatchCondition["kind"] = "email"): ScheduledTaskConnectorTrigger {
+  return {
+    kind: "connector",
+    everyMinutes: 15,
+    condition: kind === "email"
+      ? { kind: "email", unreadOnly: false }
+      : { kind: "calendar", lookAheadMinutes: 60, timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC" },
+    source: { ...UNCHOSEN_SOURCE },
+  };
+}
+
+/**
+ * What a "When a connected app has news" task watches. Its source is chosen
+ * with Find sources, which lists sources through connections already open in
+ * Settings → Connectors; main keeps the exact source and never shows it here.
+ */
+export function ConnectorTriggerFields({ trigger, savedKind, onChange, findSources = scheduleApi.findTriggerConnectorSources }: {
+  trigger: ScheduledTaskConnectorTrigger;
+  /** What the saved task already has a source for, if it watches a connected app. */
+  savedKind?: BotConnectorWatchCondition["kind"];
+  onChange: (trigger: ScheduledTaskConnectorTrigger) => void;
+  findSources?: () => Promise<BotConnectorWatchSourceList>;
+}) {
+  const [sources, setSources] = React.useState<BotConnectorWatchSourceList | null>(null);
+  const [finding, setFinding] = React.useState(false);
+  const [error, setError] = React.useState<string | null>(null);
+  const condition = trigger.condition;
+  const templateId = condition.kind === "email" ? "mail_messages" : "calendar_upcoming";
+  const choices = sources?.choices.filter((choice) => choice.templateId === templateId && choice.available) ?? [];
+  const keepsSaved = !trigger.sourceChoiceId && savedKind === condition.kind;
+  const limits = BOT_CONNECTOR_WATCH_LIMITS;
+  const find = async () => {
+    setFinding(true);
+    setError(null);
+    try {
+      setSources(await findSources());
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Aiden couldn't list sources.");
+    } finally {
+      setFinding(false);
+    }
+  };
+  const setEmail = (patch: Partial<Extract<BotConnectorWatchCondition, { kind: "email" }>>) => {
+    if (condition.kind !== "email") return;
+    const next = { ...condition, ...patch };
+    if (!next.sender) delete next.sender;
+    if (!next.subject) delete next.subject;
+    onChange({ ...trigger, condition: next });
+  };
+  const setCalendar = (patch: Partial<Extract<BotConnectorWatchCondition, { kind: "calendar" }>>) => {
+    if (condition.kind === "calendar") onChange({ ...trigger, condition: { ...condition, ...patch } });
+  };
+  return (
+    <>
+      <Field label="Watch" description="Mail reads a mailbox through iMCP on a Mac. Calendar reads a calendar through Composio. Checks use only connections you already opened in Settings → Connectors and never sign in.">
+        <Select
+          value={condition.kind}
+          onValueChange={(kind) => {
+            if (kind === condition.kind) return;
+            const next = newConnectorTrigger(kind as BotConnectorWatchCondition["kind"]);
+            onChange({ ...next, everyMinutes: trigger.everyMinutes });
+          }}
+        >
+          <SelectTrigger aria-label="What the task watches">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="email">New mail</SelectItem>
+            <SelectItem value="calendar">Upcoming calendar events</SelectItem>
+          </SelectContent>
+        </Select>
+      </Field>
+      <Field
+        label="Source"
+        description={trigger.sourceChoiceId || keepsSaved
+          ? `${trigger.source.providerLabel} · ${trigger.source.accountLabel} · ${trigger.source.resourceLabel}`
+          : "Not chosen yet."}
+      >
+        <Button size="small" variant="filled" disabled={finding} onClick={() => void find()}>
+          {finding ? "Finding…" : keepsSaved || trigger.sourceChoiceId ? "Find a different source" : "Find sources"}
+        </Button>
+      </Field>
+      {sources ? (
+        <Field label="Connected source" orientation="vertical">
+          {choices.length ? (
+            <Select
+              value={trigger.sourceChoiceId ?? ""}
+              onValueChange={(id) => {
+                const choice = choices.find((item) => item.id === id);
+                if (choice) onChange({ ...trigger, sourceChoiceId: id, source: { providerLabel: choice.providerLabel, accountLabel: choice.accountLabel, resourceLabel: choice.resourceLabel } });
+              }}
+            >
+              <SelectTrigger aria-label="Connected source">
+                <SelectValue placeholder="Choose a source" />
+              </SelectTrigger>
+              <SelectContent>
+                {choices.map((choice) => (
+                  <SelectItem value={choice.id} key={choice.id}>{choice.providerLabel} · {choice.accountLabel} · {choice.resourceLabel}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          ) : (
+            <Text variant="small" color="tertiary">No {condition.kind === "email" ? "mailboxes" : "calendars"} found. Open the connector in Settings → Connectors, then try again.</Text>
+          )}
+          {sources.unavailableReasons.map((reason, index) => (
+            <Text key={index} variant="small" color="tertiary">{reason}</Text>
+          ))}
+        </Field>
+      ) : null}
+      {error ? <Text role="alert" variant="small" color="red">{error}</Text> : null}
+      {condition.kind === "email" ? (
+        <>
+          <Field label="From" description="Optional. Only mail whose sender contains this.">
+            <Input value={condition.sender ?? ""} maxLength={limits.filterChars} onChange={(event) => setEmail({ sender: event.target.value })} placeholder="Anyone" aria-label="Sender contains" />
+          </Field>
+          <Field label="Subject contains" description="Optional.">
+            <Input value={condition.subject ?? ""} maxLength={limits.filterChars} onChange={(event) => setEmail({ subject: event.target.value })} placeholder="Any subject" aria-label="Subject contains" />
+          </Field>
+          <Field label="Unread mail only">
+            <Switch aria-label="Unread mail only" checked={condition.unreadOnly} onCheckedChange={(unreadOnly) => setEmail({ unreadOnly })} />
+          </Field>
+        </>
+      ) : (
+        <>
+          <Field label="Look ahead" description={`Minutes, from ${limits.lookAheadMinMinutes} to ${limits.lookAheadMaxMinutes}.`}>
+            <Input
+              type="number"
+              min={limits.lookAheadMinMinutes}
+              max={limits.lookAheadMaxMinutes}
+              value={condition.lookAheadMinutes}
+              onChange={(event) => setCalendar({ lookAheadMinutes: Number(event.target.value) })}
+              aria-label="Minutes to look ahead"
+            />
+          </Field>
+          <Field label="Time zone">
+            <Input value={condition.timezone} maxLength={limits.timezoneChars} onChange={(event) => setCalendar({ timezone: event.target.value })} aria-label="Calendar time zone" />
+          </Field>
+        </>
+      )}
+      <Field label="Check every" description="The first check only records what's there. The task runs from the next change on.">
+        <Select value={String(trigger.everyMinutes)} onValueChange={(value) => onChange({ ...trigger, everyMinutes: Number(value) as ScheduledTaskConnectorTrigger["everyMinutes"] })}>
+          <SelectTrigger aria-label="How often to check the connected app">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {SCHEDULED_TASK_CONNECTOR_INTERVALS.map((minutes) => (
+              <SelectItem value={String(minutes)} key={minutes}>{formatBotWatchInterval(minutes)}</SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </Field>
+    </>
+  );
+}
+
+/** Whether a connected-app trigger can be saved: it has a fresh choice, or keeps the saved task's source. */
+export function connectorTriggerReady(trigger: ScheduledTaskConnectorTrigger, saved: ScheduledTaskInput["trigger"]): boolean {
+  const condition = trigger.condition;
+  const filtersFit = condition.kind === "email"
+    ? (condition.sender ?? "").length <= BOT_CONNECTOR_WATCH_LIMITS.filterChars && (condition.subject ?? "").length <= BOT_CONNECTOR_WATCH_LIMITS.filterChars
+    : Number.isSafeInteger(condition.lookAheadMinutes) && condition.lookAheadMinutes >= BOT_CONNECTOR_WATCH_LIMITS.lookAheadMinMinutes &&
+      condition.lookAheadMinutes <= BOT_CONNECTOR_WATCH_LIMITS.lookAheadMaxMinutes && condition.timezone.trim() !== "";
+  return filtersFit && (Boolean(trigger.sourceChoiceId) || (saved?.kind === "connector" && saved.condition.kind === condition.kind));
+}
+
+const LINK_GAPS = [1, 2, 5, 10, 15, 30, 60] as const;
+
+/** `field = value` per line, for a link's filters. */
+export function parseLinkFilterLines(text: string): Array<{ path: string; equals: string }> {
+  return text.split("\n").flatMap((line) => {
+    const at = line.indexOf("=");
+    if (at < 1) return [];
+    return [{ path: line.slice(0, at).trim(), equals: line.slice(at + 1).trim() }];
+  });
+}
+
+/** How a "When its link is called" task treats calls. The link itself is made after saving. */
+export function LinkTriggerFields({ trigger, onChange }: {
+  trigger: ScheduledTaskLinkTrigger;
+  onChange: (trigger: ScheduledTaskLinkTrigger) => void;
+}) {
+  const [filterText, setFilterText] = React.useState(() =>
+    (trigger.filters ?? []).map((filter) => `${filter.path} = ${filter.equals}`).join("\n"));
+  const [fieldsText, setFieldsText] = React.useState(() => (trigger.includeFields ?? []).join(", "));
+  const set = (patch: Partial<ScheduledTaskLinkTrigger>) => {
+    const next = { ...trigger, ...patch };
+    for (const key of ["signatureHeader", "dedupePath"] as const) if (!next[key]) delete next[key];
+    if (!next.filters?.length) delete next.filters;
+    if (!next.includeFields?.length) delete next.includeFields;
+    onChange(next);
+  };
+  const gaps = [...new Set<number>([...LINK_GAPS, trigger.gapMinutes])].sort((a, b) => a - b);
+  return (
+    <>
+      <Field label="Link" description="After you save, the task's details give you a private link on Aiden On The Go's address to call with a POST. Calls work only while Aiden On The Go is on.">
+        <Text variant="small" color="secondary">Made after saving</Text>
+      </Field>
+      <Field label="At most every" description="Calls that arrive sooner wait and run together, up to 20.">
+        <Select value={String(trigger.gapMinutes)} onValueChange={(value) => set({ gapMinutes: Number(value) })}>
+          <SelectTrigger aria-label="Shortest gap between runs">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {gaps.map((minutes) => (
+              <SelectItem value={String(minutes)} key={minutes}>{formatBotWatchInterval(minutes)}</SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </Field>
+      <Field label="Only when" description="One field = value per line, from the JSON body (like action = opened). Calls that don't match are logged and ignored." orientation="vertical">
+        <Textarea
+          value={filterText}
+          rows={2}
+          onChange={(event) => {
+            setFilterText(event.target.value);
+            set({ filters: parseLinkFilterLines(event.target.value) });
+          }}
+          placeholder="action = opened"
+          aria-label="Filters for calls"
+        />
+      </Field>
+      <Field label="Fields to pass" description="Comma-separated. Only these reach Aiden; empty passes the body, cut to 4,000 characters. Credential-looking values are always withheld.">
+        <Input
+          value={fieldsText}
+          onChange={(event) => {
+            setFieldsText(event.target.value);
+            set({ includeFields: event.target.value.split(",").map((field) => field.trim()).filter(Boolean) });
+          }}
+          placeholder="pull_request.title, sender.login"
+          aria-label="Fields to pass to Aiden"
+        />
+      </Field>
+      <Field label="Same call when" description="Calls with the same value in this field count once.">
+        <Input
+          value={trigger.dedupePath ?? ""}
+          onChange={(event) => set({ dedupePath: event.target.value.trim() })}
+          placeholder="delivery.id"
+          aria-label="Field that identifies a repeated call"
+        />
+      </Field>
+      <Field label="Signature header" description="Optional. Calls must carry sha256=<HMAC of the body> in this header; you get the secret with the link.">
+        <Input
+          value={trigger.signatureHeader ?? ""}
+          onChange={(event) => set({ signatureHeader: event.target.value.trim() })}
+          placeholder="x-signature-256"
+          aria-label="Header that carries the signature"
+        />
+      </Field>
+    </>
+  );
+}
+
+/** "Posts in <chat>" with Use its own chat: the binding a chat-made task carries. */
+function PostsInField({ chatTitle, onUseOwnChat }: { chatTitle: string; onUseOwnChat: () => Promise<void> }) {
+  const [moving, setMoving] = React.useState(false);
+  const [error, setError] = React.useState<string | null>(null);
+  return (
+    <Field
+      label={`Posts in ${chatTitle}`}
+      description={error ?? "Each run’s prompt and answer land in that chat. Use its own chat to keep runs in a chat of their own."}
+    >
+      <Button
+        variant="filled"
+        size="small"
+        disabled={moving}
+        onClick={() => {
+          setMoving(true);
+          setError(null);
+          void onUseOwnChat()
+            .catch((cause: unknown) => setError(cause instanceof Error ? cause.message : "Couldn’t change where this task posts."))
+            .finally(() => setMoving(false));
+        }}
+      >
+        Use its own chat
+      </Button>
+    </Field>
+  );
+}
+
 export function ScheduledTaskEditor({
   open,
   initial,
@@ -136,6 +511,7 @@ export function ScheduledTaskEditor({
   lastProviderId,
   onOpenChange,
   onSave,
+  postsIn,
 }: {
   open: boolean;
   initial: ScheduledTaskInput;
@@ -149,6 +525,8 @@ export function ScheduledTaskEditor({
   busy: boolean;
   onOpenChange: (open: boolean) => void;
   onSave: (task: ScheduledTaskInput) => Promise<void>;
+  /** The chat this task was made in and posts into; absent when it runs in its own chat. */
+  postsIn?: { chatTitle: string; onUseOwnChat: () => Promise<void> };
 }) {
   const [reviewing, setReviewing] = React.useState(false);
   const [saveError, setSaveError] = React.useState<string | null>(null);
@@ -211,7 +589,8 @@ export function ScheduledTaskEditor({
   }, [draft.cron, draft.timezone, open]);
 
   React.useEffect(() => {
-    if (!open || draft.mode !== "script") return;
+    const watchesScript = draft.trigger?.kind === "watch" && draft.trigger.source.type === "script";
+    if (!open || (draft.mode !== "script" && !watchesScript)) return;
     let active = true;
     void scheduleApi
       .scripts(draft.workspaceId)
@@ -224,7 +603,7 @@ export function ScheduledTaskEditor({
     return () => {
       active = false;
     };
-  }, [draft.mode, draft.workspaceId, open]);
+  }, [draft.mode, draft.trigger, draft.workspaceId, open]);
 
   const setMode = (mode: ScheduledTaskMode) => {
     setDraft((current) => ({
@@ -232,6 +611,8 @@ export function ScheduledTaskEditor({
       mode,
       permission: mode === "script" ? "full" : current.permission,
       mcpServerIds: mode === "script" ? [] : current.mcpServerIds,
+      // Only "Ask Aiden" tasks run when something changes.
+      ...(mode === "script" && current.trigger ? { trigger: initial.trigger ? null : undefined } : {}),
     }));
   };
   const setPermission = (permission: ScheduledTaskPermission) => {
@@ -259,12 +640,17 @@ export function ScheduledTaskEditor({
       };
     });
   };
+  const trigger = draft.trigger ?? undefined;
+  const triggerValid = !trigger || (draft.mode === "llm" && (
+    trigger.kind === "webhook" ||
+    (trigger.kind === "connector" && connectorTriggerReady(trigger, initial.trigger)) ||
+    (trigger.kind === "watch" && (trigger.source.type === "url"
+      ? parseBotWatchUrl(trigger.source.url) !== undefined
+      : Boolean(trigger.source.script) && draft.permission === "full"))));
   const valid =
     draft.name.trim() &&
-    draft.cron.trim() &&
-    draft.timezone?.trim() &&
+    (trigger ? triggerValid : draft.cron.trim() && draft.timezone?.trim() && !previewError) &&
     (draft.mode === "llm" ? draft.prompt?.trim() : draft.script?.trim()) &&
-    !previewError &&
     selectedMcpIds.length <= 16 &&
     !(draft.workspaceId && selectedMcpIds.length > 0) &&
     (!selectedMcpIds.length || (!mcpServersUnavailable && unavailableMcpIds.length === 0)) &&
@@ -352,7 +738,7 @@ export function ScheduledTaskEditor({
     >
       {reviewing ? (
         <FieldSet title="Review your task">
-          <Field label={draft.name} description={formatSchedule(draft.cron, draft.timezone ?? localTimezone)}>
+          <Field label={draft.name} description={trigger ? formatScheduledTaskTriggerLabel(trigger) : formatSchedule(draft.cron, draft.timezone ?? localTimezone)}>
             <Button variant="transparent" size="small" onClick={() => setReviewing(false)}>Edit choices</Button>
           </Field>
           <Field label="What Aiden will do" orientation="vertical"><Text as="p">{draft.mode === "script" ? draft.script : draft.prompt}</Text></Field>
@@ -360,7 +746,7 @@ export function ScheduledTaskEditor({
             <Text as="p">{draft.permission === "full" ? "Full access · Runs without asking you each time." : "Read-only · Can inspect information without making changes."}</Text>
             <Text as="p" color="secondary">{workspaces.find((workspace) => workspace.id === draft.workspaceId)?.name ?? "No selected workspace"} · {selectedMcpIds.length ? selectedMcpIds.map((id) => visibleMcpServers.find((server) => server.id === id)?.name ?? "Unavailable connection").join(", ") : "No connections"} · Web search {draft.webSearchEnabled ? "on" : "off"}</Text>
           </Field>
-          <Field label="Keep this device awake" orientation="vertical"><Text as="p" color="secondary">Aiden must be open on this device for the task to run. Results appear in the task’s chat.</Text></Field>
+          <Field label="Keep this device awake" orientation="vertical"><Text as="p" color="secondary">Aiden must be open on this device for the task to run. {postsIn ? `Results appear in “${postsIn.chatTitle}”.` : "Results appear in the task’s chat."}</Text></Field>
           {saveError ? <Callout color="red" role="alert">{saveError}</Callout> : null}
         </FieldSet>
       ) : <>
@@ -443,6 +829,66 @@ export function ScheduledTaskEditor({
         )}
       </FieldSet>
       <FieldSet title="When should it run?">
+        {draft.mode === "llm" ? (
+          <Field
+            label="When"
+            description={trigger?.kind === "watch"
+              ? "Aiden checks on its own and runs the task only when something changed. A check never uses a model."
+              : trigger?.kind === "webhook"
+                ? "Another app or service calls the task's private link, and what it sends reaches Aiden as data."
+                : trigger?.kind === "connector"
+                  ? "Aiden checks a mailbox or calendar on its own and runs the task when something new arrives. A check never uses a model."
+                  : "Runs at the times you choose."}
+          >
+            <Select
+              disabled={assistantOwned}
+              value={trigger?.kind ?? "schedule"}
+              onValueChange={(value) => setDraft((current) => ({
+                ...current,
+                // Leaving a trigger task's trigger sends null so main removes it.
+                trigger: value === "watch"
+                  ? (current.trigger?.kind === "watch" ? current.trigger : initial.trigger?.kind === "watch" ? initial.trigger
+                    : { kind: "watch", source: { type: "url", url: "" }, everyMinutes: 15 })
+                  : value === "webhook"
+                    ? (current.trigger?.kind === "webhook" ? current.trigger : initial.trigger?.kind === "webhook" ? initial.trigger
+                      : { kind: "webhook", gapMinutes: 5 })
+                    : value === "connector"
+                      ? (current.trigger?.kind === "connector" ? current.trigger : initial.trigger?.kind === "connector" ? initial.trigger
+                        : newConnectorTrigger())
+                      : initial.trigger ? null : undefined,
+              }))}
+            >
+              <SelectTrigger aria-label="When the task runs">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="schedule">On a schedule</SelectItem>
+                <SelectItem value="watch">When something changes</SelectItem>
+                <SelectItem value="webhook">When its link is called</SelectItem>
+                <SelectItem value="connector">When a connected app has news</SelectItem>
+              </SelectContent>
+            </Select>
+          </Field>
+        ) : null}
+        {trigger?.kind === "watch" ? (
+          <WatchTriggerFields
+            trigger={trigger}
+            scripts={scripts}
+            fullAccess={draft.permission === "full"}
+            onChange={(next) => setDraft((current) => ({ ...current, trigger: next }))}
+          />
+        ) : trigger?.kind === "webhook" ? (
+          <LinkTriggerFields
+            trigger={trigger}
+            onChange={(next) => setDraft((current) => ({ ...current, trigger: next }))}
+          />
+        ) : trigger?.kind === "connector" ? (
+          <ConnectorTriggerFields
+            trigger={trigger}
+            savedKind={initial.trigger?.kind === "connector" ? initial.trigger.condition.kind : undefined}
+            onChange={(next) => setDraft((current) => ({ ...current, trigger: next }))}
+          />
+        ) : <>
         <Field label="Repeat">
           <Select
             value={scheduleDraft.cadence}
@@ -634,6 +1080,7 @@ export function ScheduledTaskEditor({
             />
           </div>
         </details>
+        </>}
       </FieldSet>
       <FieldSet title="Run context">
         {draft.mode === "llm" ? (
@@ -703,6 +1150,7 @@ export function ScheduledTaskEditor({
         ) : null}
       </FieldSet>
       <FieldSet title="Access and notifications">
+        {postsIn ? <PostsInField chatTitle={postsIn.chatTitle} onUseOwnChat={postsIn.onUseOwnChat} /> : null}
         <Field
           label="Workspace"
           description="Paths are always re-resolved by Aiden when the task runs."

@@ -1,4 +1,5 @@
 import * as React from "react";
+import { formatScheduledTaskTriggerLabel } from "../../shared/scheduled-task-trigger";
 import { useNavigate } from "@tanstack/react-router";
 import { useQueryClient } from "@tanstack/react-query";
 import { Clock3, ExternalLink, Trash2 } from "lucide-react";
@@ -22,11 +23,13 @@ import {
 import { scheduleApi } from "../../lib/ipc";
 import {
   queryKeys,
+  useKeepAwakeStatus,
   useMcpServers,
   useScheduledTasks,
   useScheduledTaskSettings,
 } from "../../lib/queries";
 import type { ScheduledTask, ScheduledTaskSettings } from "../../lib/types";
+import { keepAwakeStatusLine } from "../../shared/keep-awake";
 
 export function ScheduledTasksSettings() {
   const navigate = useNavigate();
@@ -34,6 +37,7 @@ export function ScheduledTasksSettings() {
   const settings = useScheduledTaskSettings();
   const tasks = useScheduledTasks();
   const mcpServers = useMcpServers();
+  const keepAwake = useKeepAwakeStatus();
   const [saving, setSaving] = React.useState(false);
   const [removing, setRemoving] = React.useState<ScheduledTask | null>(null);
   const [timezone, setTimezone] = React.useState("");
@@ -60,6 +64,9 @@ export function ScheduledTasksSettings() {
   const value = settings.data;
   const enabledMcpCount = (mcpServers.data ?? []).filter((server) => server.enabled).length;
   const authoritativeError = settings.isError || tasks.isError;
+  // The host says whether it can keep itself awake (macOS and Linux).
+  const showKeepAwake = keepAwake.data?.supported !== false;
+  const keepAwakeLine = keepAwake.data ? keepAwakeStatusLine(keepAwake.data) : null;
   return (
     <>
       {authoritativeError ? (
@@ -202,6 +209,51 @@ export function ScheduledTasksSettings() {
         </Field>
       </FieldSet>
 
+      <FieldSet title="While you're away">
+        {showKeepAwake ? (
+          <Field
+            label="Keep this computer awake while Aiden works"
+            description={
+              <>
+                <span className="block">
+                  Stops idle sleep while a chat answers or a build, test or check runs, and, when plugged in,
+                  for the hour before a check-back or Bot wake-up is due. After 4 hours with nobody at the computer
+                  it lets go, except for a check-back or wake-up that is due. The display can still sleep, and
+                  closing a laptop&apos;s lid still puts it to sleep.
+                </span>
+                {keepAwakeLine ? (
+                  <span className="mt-1 block text-tertiary" aria-live="polite">
+                    {keepAwakeLine}
+                  </span>
+                ) : null}
+              </>
+            }
+          >
+            <div className="flex justify-end">
+              <Switch
+                checked={value?.keepAwakeWhileWorking ?? true}
+                onCheckedChange={(keepAwakeWhileWorking) => void save({ keepAwakeWhileWorking })}
+                disabled={settings.isLoading || saving || authoritativeError}
+                aria-label="Keep this computer awake while Aiden works"
+              />
+            </div>
+          </Field>
+        ) : null}
+        <Field
+          label="Let chats check back later"
+          description="Aiden can promise to look again later in a chat, such as checking a deploy in 20 minutes, and posts its note there at that time. Turning this off cancels every pending check-back."
+        >
+          <div className="flex justify-end">
+            <Switch
+              checked={value?.chatCheckBacks ?? true}
+              onCheckedChange={(chatCheckBacks) => void save({ chatCheckBacks })}
+              disabled={settings.isLoading || saving || authoritativeError}
+              aria-label="Let chats check back later"
+            />
+          </div>
+        </Field>
+      </FieldSet>
+
       <FieldSet title="Current tasks">
         {tasks.isError ? (
           <div className="p-4">
@@ -236,7 +288,7 @@ export function ScheduledTasksSettings() {
                     {task.name}
                   </Text>
                   <Text variant="small" color="tertiary" truncate className="mt-0.5 block">
-                    {task.enabled ? task.cron : "Paused"}
+                    {task.enabled ? (task.trigger ? formatScheduledTaskTriggerLabel(task.trigger) : task.cron) : "Paused"}
                   </Text>
                 </div>
                 <Button

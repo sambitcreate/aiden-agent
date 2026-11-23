@@ -32,7 +32,30 @@ export interface BotEventReceipt {
   claimPending?: true;
   /** Original task facts; private and never a grant or a replacement source binding. */
   execution?: BotEventExecutionSnapshot;
+  /** Times this payload was held again after a run that delivered nothing (chat tasks; see `requeue`). */
+  retries?: number;
 }
+
+/**
+ * A payload dropped after its last retry whose card isn't shown yet. Saved in
+ * the same write that drops the payload, so the card survives a write that
+ * lands and then reports failure; cleared once shown (see `requeue`).
+ */
+export interface BotEventDropNotice {
+  id: string;
+  reason: "retries";
+  held: BotEventReceipt;
+  /** The parts already shown, so a retry doesn't show them twice. */
+  done?: BotEventDropPart[];
+  /** Showing it failed this many times; it is given up after `BOT_EVENT_DROP_NOTICE_TRIES`. */
+  failures?: number;
+}
+
+/** What showing a drop takes: the card where the runs land, and a line in a link's recent calls. */
+export type BotEventDropPart = "card" | "log";
+
+/** Tries to show a drop notice before it is given up (and logged). */
+export const BOT_EVENT_DROP_NOTICE_TRIES = 6;
 
 export interface BotEventExecutionSnapshot {
   name: string;
@@ -77,6 +100,8 @@ export interface BotEventRoutine {
   held?: BotEventReceipt;
   /** Accepted events whose run isn't recorded yet; replayed after a restart. */
   running?: BotEventReceipt[];
+  /** Drops still to be shown (`requeue` with `maxRetries`). Only scheduled tasks retry, so the Bot store doesn't keep these. */
+  dropNotices?: BotEventDropNotice[];
   /** Private connector binding/receipts, never part of event-routine views. */
   connector?: BotConnectorWatchPrivate;
   /** Watch routines only: what the last checks found. */

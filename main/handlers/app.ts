@@ -47,6 +47,7 @@ export const appHandlers = {
         botComputers: host.botComputers,
         hooks: host.hooks,
         mcpServer: host.mcpServer,
+        childChats: host.childChats,
         dockIcon: host.dockIcon,
         badgeCount: host.badgeCount,
         accessibilityPaste: host.accessibilityPaste,

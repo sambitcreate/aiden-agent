@@ -39,6 +39,7 @@ The chat's header chip reads **No workspace**; its menu can still show the folde
 
 Chats started from the Floating Quick Chat starter (`⌘⇧Space` on macOS, `Ctrl+Shift+Space` on Linux) default to **Temporary**. A Temporary chat runs in its own hidden private folder like a No workspace chat, but stays out of the sidebar, Inbox, durable Memory, and paired-device lists and is cleaned up automatically if discarded or left unsaved across restarts.
 
+- Until it's saved or attached, a Temporary chat keeps nothing that outlives its reply: it can't have a keep-going goal (`/goal`, `/until` or one the agent suggests), the agent isn't offered check-backs or starting other chats, and a task scheduled in it runs in its own chat instead of posting into this one. Once you save or attach it, its next turn has them.
 - Choose **Save** to promote a Temporary chat into **Chats** as a durable No workspace chat.
 - Choose **Attach to workspace…** on any Temporary or No workspace chat (from the Quick Chat mini-modal or the main window's top bar) to move the conversation in-place into a project workspace folder. If files were created in the private scratch folder, Aiden prompts whether to copy them into the workspace (or leave them behind) before continuing with a clean workspace context boundary.
 

@@ -43,14 +43,13 @@ export interface AskUserQuestionExtensionScope {
  */
 export function resolveAskUserQuestionTimeoutMs(
   requestedSeconds: number | undefined,
-  owner: { unattended: boolean },
+  /** `maxSeconds`: a longer wait an unattended owner allows (a lead chat's started chat waits 30 minutes). */
+  owner: { unattended: boolean; maxSeconds?: number },
 ): number | undefined {
   const requested = normalizeAskUserTimeoutSeconds(requestedSeconds);
   if (!owner.unattended) return requested === undefined ? undefined : requested * 1_000;
-  return (
-    Math.min(requested ?? ASK_USER_UNATTENDED_TIMEOUT_SECONDS, ASK_USER_UNATTENDED_TIMEOUT_SECONDS) *
-    1_000
-  );
+  const longest = owner.maxSeconds ?? ASK_USER_UNATTENDED_TIMEOUT_SECONDS;
+  return Math.min(requested ?? longest, longest) * 1_000;
 }
 
 /**

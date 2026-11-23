@@ -33,6 +33,7 @@ import {
   type ChatForkPosition,
   type ChatForkSummaryV1,
 } from "../../renderer/shared/chat-copy-contract.js";
+import { parseChatStartedByV1, type ChatStartedByV1 } from "../../renderer/shared/chat-started-by.js";
 import { parseGenerationTimeline } from "../../renderer/shared/generation-timeline.js";
 import { parseSubagentMessageReferenceV1 } from "../../renderer/shared/subagent-runs.js";
 import { migrateLegacyPiProviderId } from "../../renderer/shared/google-provider.js";
@@ -464,6 +465,7 @@ export function createChatStore(
           meta.lastAssistantAt >= 0)) &&
       (meta.lastAssistantFailed === undefined || meta.lastAssistantFailed === true) &&
       (meta.forkedFrom === undefined || parseChatForkLineageV1(meta.forkedFrom) !== undefined) &&
+      (meta.startedBy === undefined || parseChatStartedByV1(meta.startedBy) !== undefined) &&
       (meta.ephemeral === undefined || meta.ephemeral === true) &&
       (meta.designMode === undefined || meta.designMode === true)
     );
@@ -865,6 +867,18 @@ export function createChatStore(
       parsed !== null &&
       typeof parsed === "object" &&
       !Array.isArray(parsed) &&
+      Object.prototype.hasOwnProperty.call(parsed, "startedBy")
+    ) {
+      // Like fork lineage: a damaged "started by" is dropped, never the transcript.
+      const record = parsed as Record<string, unknown>;
+      const startedBy = parseChatStartedByV1(record.startedBy);
+      if (startedBy) record.startedBy = startedBy;
+      else delete record.startedBy;
+    }
+    if (
+      parsed !== null &&
+      typeof parsed === "object" &&
+      !Array.isArray(parsed) &&
       Object.prototype.hasOwnProperty.call(parsed, "ephemeral") &&
       (parsed as Record<string, unknown>).ephemeral !== true
     ) {
@@ -983,6 +997,7 @@ export function createChatStore(
           message.role === "user"
             ? parseChatInputSource(message.inputSource)
             : undefined,
+        fromLeadChat: message.role === "user" && message.fromLeadChat === true && !message.notice ? true : undefined,
         // Only a blocked prompt carries the key, so unmarked messages keep their old shape.
         ...hookBlockedField(message),
       };
@@ -1280,6 +1295,7 @@ export function createChatStore(
       ...(lastAssistantAt !== undefined ? { lastAssistantAt, lastAssistantSequence, lastAssistantMessageId: lastAssistant.id } : {}),
       ...(lastAssistant && isFailedAssistantTurn(lastAssistant) ? { lastAssistantFailed: true } : {}),
       ...(chat.forkedFrom ? { forkedFrom: indexedForkLineage(chat.forkedFrom) } : {}),
+      ...(chat.startedBy ? { startedBy: chat.startedBy } : {}),
       ...(chat.ephemeral === true ? { ephemeral: true as const } : {}),
       ...(chat.designMode === true ? { designMode: true as const } : {}),
       createdAt: chat.createdAt,
@@ -1608,6 +1624,8 @@ export function createChatStore(
       workspaceId?: string;
       botId?: string;
       owner?: ChatOwnerV1;
+      /** Main-owned: the lead chat when another chat starts this one. */
+      startedBy?: ChatStartedByV1;
       ephemeral?: true;
       providerId?: string;
       model?: string;
@@ -1620,6 +1638,10 @@ export function createChatStore(
         if (input.owner !== undefined && (owner === undefined || input.botId !== undefined)) {
           throw new Error("Invalid chat owner.");
         }
+        const startedBy = input.startedBy === undefined ? undefined : parseChatStartedByV1(input.startedBy);
+        if (input.startedBy !== undefined && (startedBy === undefined || input.botId !== undefined || owner !== undefined)) {
+          throw new Error("Invalid chat lineage.");
+        }
         const now = Date.now();
         const chat: Chat = {
           id,
@@ -1627,6 +1649,7 @@ export function createChatStore(
           workspaceId: input.workspaceId ?? DEFAULT_WORKSPACE_ID,
           ...(input.botId ? { botId: input.botId } : {}),
           ...(owner ? { owner } : {}),
+          ...(startedBy ? { startedBy } : {}),
           ...(input.ephemeral === true ? { ephemeral: true as const } : {}),
           providerId: await resolveProviderId(input.providerId),
           model: input.model,
@@ -2381,6 +2404,7 @@ export function createChatStore(
             message.role === "user"
               ? parseChatInputSource(message.inputSource)
               : undefined,
+          fromLeadChat: message.role === "user" && message.fromLeadChat === true && !message.notice ? true : undefined,
           timeline:
             message.role === "assistant"
               ? parseGenerationTimeline(message.timeline, message.content.length)

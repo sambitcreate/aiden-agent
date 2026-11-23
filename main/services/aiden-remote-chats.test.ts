@@ -83,6 +83,7 @@ function fixture(
     imageArtifactRecoveryPending?: boolean;
     imageArtifactRecoveryUnavailable?: boolean;
     deviceSupportsQuestionPrompts?: (deviceId: string) => Promise<boolean>;
+    deviceIsOutsideApp?: (deviceId: string) => Promise<boolean>;
     deviceSupportsSkillInvocation?: (deviceId: string) => Promise<boolean>;
     skillCatalog?: (workspaceId: string) => Promise<readonly SkillCatalogEntry[]>;
     botSkillCatalog?: (
@@ -107,7 +108,7 @@ function fixture(
 ) {
   let current: Chat | null = structuredClone(initial);
   let creates = 0;
-  const createOptions: Array<{ reportAnalytics?: boolean } | undefined> = [];
+  const createOptions: Array<{ reportAnalytics?: boolean; startedBy?: { chatId: string } } | undefined> = [];
   let appends = 0;
   let notifications = 0;
   let begins = 0;
@@ -191,6 +192,7 @@ function fixture(
           createdAt: 3_000,
           ...(message.attachments ? { attachments: structuredClone(message.attachments) } : {}),
           ...(message.skill ? { skill: structuredClone(message.skill) } : {}),
+          ...(message.fromLeadChat ? { fromLeadChat: message.fromLeadChat } : {}),
         };
         current.messages.push(stored);
         current.providerId = meta.providerId;
@@ -319,6 +321,7 @@ function fixture(
     ...(fixtureOptions.deviceSupportsQuestionPrompts
       ? { deviceSupportsQuestionPrompts: fixtureOptions.deviceSupportsQuestionPrompts }
       : {}),
+    ...(fixtureOptions.deviceIsOutsideApp ? { deviceIsOutsideApp: fixtureOptions.deviceIsOutsideApp } : {}),
     ...(fixtureOptions.deviceSupportsSkillInvocation
       ? { deviceSupportsSkillInvocation: fixtureOptions.deviceSupportsSkillInvocation }
       : {}),
@@ -958,6 +961,7 @@ test("ordinary workspace moves always reject Bot chats and preserve managed-home
 
 test("New worktree moves an empty chat into the worktree made for it, once per chat, and leaves a chat with messages alone", async () => {
   const made: string[] = [];
+  const discarded: string[] = [];
   let failure: Error | undefined;
   const newWorktrees = {
     create: async (deviceId: string, sourceWorkspaceId: string, text: string, chatId: string) => {
@@ -965,6 +969,7 @@ test("New worktree moves an empty chat into the worktree made for it, once per c
       made.push(`${deviceId}:${sourceWorkspaceId}:${text}:${chatId}`);
       return { workspaceId: "workspace-worktree", branch: "aiden/fix-the-login-bug" };
     },
+    discard: async (workspaceId: string) => void discarded.push(workspaceId),
     // Only the worktree made for this chat counts as its finished setup.
     worktreeBranch: async (chatId: string, workspaceId: string) =>
       workspaceId === "workspace-worktree" && made.some((entry) => entry.endsWith(`:${chatId}`))
@@ -1004,6 +1009,7 @@ test("New worktree moves an empty chat into the worktree made for it, once per c
   const late = await app.service.moveToNewWorktree("device-1", "chat-1", revision, "new-worktree-0006", { text: "Fix the login bug on Safari" });
   assert.deepEqual(late, moved, "an empty chat already in a worktree answers with it");
   assert.equal(made.length, 1, "and nothing more is made");
+  assert.deepEqual(discarded, [], "a worktree the chat moved into stays");
 
   const busy = fixture(chat({ messages: [{ id: "user-1", role: "user", content: "Hello", createdAt: 1_000 }] }), { newWorktrees });
   // The phone read the chat while it was empty; another device then sent the
@@ -1042,6 +1048,7 @@ test("New worktree moves an empty chat into the worktree made for it, once per c
   release();
   await assert.rejects(pending, (error: unknown) => (error as { code?: string }).code === "revision_conflict");
   assert.equal(racing.current()?.workspaceId, "workspace-2");
+  assert.deepEqual(discarded, ["workspace-worktree"], "the worktree made for nothing is removed again");
 
   // Moved by someone else into a worktree this chat never made: a stale
   // request is refused rather than answered with that worktree.
@@ -1054,6 +1061,32 @@ test("New worktree moves an empty chat into the worktree made for it, once per c
     (error: unknown) => (error as { code?: string }).code === "revision_conflict",
   );
   assert.equal(made.length, 0);
+});
+
+test("a worktree made for a chat that then can't move into it is removed again, and a failed removal still answers", async () => {
+  for (const discardFails of [false, true]) {
+    const discarded: string[] = [];
+    let app!: ReturnType<typeof fixture>;
+    app = fixture(chat({ messages: [] }), {
+      newWorktrees: {
+        // The chat is deleted on another device while its worktree is being made.
+        create: async () => {
+          await app.service.remove("chat-1", projectAidenRemoteChat(app.current()!).revision);
+          return { workspaceId: "workspace-worktree", branch: "aiden/fix" };
+        },
+        worktreeBranch: async () => undefined,
+        discard: async (workspaceId: string) => {
+          discarded.push(workspaceId);
+          if (discardFails) throw new Error("This managed worktree contains ignored files Aiden did not provision.");
+        },
+      },
+    });
+    await assert.rejects(
+      app.service.moveToNewWorktree("device-1", "chat-1", projectAidenRemoteChat(app.current()!).revision, "new-worktree-0010", { text: "Fix" }),
+      (error: unknown) => (error as { code?: string }).code === "operation_in_progress" && !(error as Error).message.includes("ignored files"),
+    );
+    assert.deepEqual(discarded, ["workspace-worktree"], `discard fails: ${discardFails}`);
+  }
 });
 
 test("ordinary chat deletion cannot remove a Bot's persistent chat", async () => {
@@ -2493,6 +2526,18 @@ test("a device without question prompts keeps the question tool declared and has
   );
 });
 
+test("an outside MCP app's turns are never offered child_chats; a phone's are", async () => {
+  const apps = new Set(["mcp-app-1"]);
+  const remote = fixture(chat(), { deviceIsOutsideApp: async (deviceId) => apps.has(deviceId) });
+  await remote.service.startTurn("mcp-app-1", "chat-1", "outside-app-turn-001", { text: "start some chats" });
+  assert.equal(remote.lastGenerationOptions()?.excludeToolNames instanceof Set, true);
+  assert.equal((remote.lastGenerationOptions()?.excludeToolNames as Set<string>).has("child_chats"), true);
+
+  const phone = fixture(chat(), { deviceIsOutsideApp: async (deviceId) => apps.has(deviceId) });
+  await phone.service.startTurn("device-1", "chat-1", "phone-turn-00001", { text: "start some chats" });
+  assert.equal(phone.lastGenerationOptions()?.excludeToolNames, undefined);
+});
+
 test("chat skill catalog revalidates the workspace projection and narrows Bot chats", async () => {
   const entries = [
     {
@@ -3581,6 +3626,33 @@ test("an outside MCP app's new chat and turns send no usage data, and a phone's 
   await app.service.startTurn("device-1", "chat-3", "counted-turn-00000008", { text: "hello" });
   await analyticsSettled();
   assert.deepEqual(sent.map(({ event, props }) => [event, (props as { origin?: unknown } | undefined)?.origin]), [["chat_message_sent", "phone"]]);
+});
+
+test("a lead chat's started chat records its lead, sends no usage data and can ask questions", async (t) => {
+  const sent = captureAnalyticsEvents(t);
+  // No device record backs the chat audience, so the dependency would say "reports".
+  const app = fixture(chat({ workspaceId: "workspace-9" }), { deviceReportsAnalytics: async () => true });
+  await app.service.create("chat:lead-1", "agent-chat:lead-1:k:0", { workspaceId: "workspace-1" });
+  const options = app.createOptions()[0];
+  assert.equal(options?.reportAnalytics, false);
+  assert.equal(options?.startedBy?.chatId, "lead-1");
+  await app.service.create("device-1", "chat-create-key-phone9", { workspaceId: "workspace-1" });
+  assert.equal(app.createOptions()[1]?.startedBy, undefined);
+
+  await app.service.startTurn("chat:lead-1", "chat-3", "agent-turn-0000000001", { text: "Run the tests" });
+  await analyticsSettled();
+  assert.deepEqual(sent, []);
+  assert.equal(app.lastGenerationOptions()?.leadChatTurn, true);
+  assert.equal(app.lastGenerationOptions()?.questionPromptsUnavailable, undefined);
+  // The desktop labels the lead's message "From “<lead>”"; a phone's message carries no such mark.
+  const lastUserMessage = () => app.current()?.messages.filter((message) => message.role === "user").pop();
+  const leadMessage = lastUserMessage();
+  assert.equal(leadMessage?.content, "Run the tests");
+  assert.equal(leadMessage?.fromLeadChat, true);
+  await app.service.startTurn("device-1", "chat-3", "agent-turn-0000000002", { text: "From the phone" });
+  const phoneMessage = lastUserMessage();
+  assert.equal(phoneMessage?.content, "From the phone");
+  assert.equal(phoneMessage?.fromLeadChat, undefined);
 });
 
 test("a phone's message outside a real workspace is not counted as in one", async (t) => {
