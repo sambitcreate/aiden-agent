@@ -13,6 +13,10 @@ import type { WorkspacePermission } from "./types.js";
 
 export type ChatSystemPromptPermission = WorkspacePermission | "read-only";
 
+/** When the agent should follow a pull request on its own, without the person typing /follow. */
+export const FOLLOW_PULL_REQUEST_GUIDANCE =
+  " When the user asks you to finish, see through or merge work that lives in a pull request, load and call follow_pull_request after you open or push to it, then end your answer: Aiden tells you about failed checks, conflicts, review comments and passing checks, so do not poll GitHub or wait in a loop.";
+
 export async function buildSystemPrompt(
   ...args: Parameters<typeof buildSystemPromptWithSections>
 ): Promise<string> {
@@ -66,6 +70,8 @@ export async function buildSystemPromptWithSections(
     permission === "read-only"
       ? "All file paths are relative to this folder. If the request requires a mutation, explain that this scheduled run is read-only."
       : "All file paths are relative to this folder. Prefer editing existing files over creating new ones, read a file before editing it, and keep changes surgical. ";
+  const followThrough =
+    permission !== "read-only" && availableToolNames?.has("follow_pull_request") ? FOLLOW_PULL_REQUEST_GUIDANCE : "";
   const delegation = subagentsAvailable
     ? ` Use the subagent tool for independent bounded investigation, comparison, planning, or fresh review—not trivial work—and always reconcile its ordered results yourself. ${SUBAGENT_PARENT_SECURITY_GUIDANCE}`
     : "";
@@ -82,6 +88,7 @@ export async function buildSystemPromptWithSections(
       : permission === "full"
         ? "You may make changes and run commands directly."
         : "") +
+    followThrough +
     delegation +
     skillsSuffix +
     browserSuffix +

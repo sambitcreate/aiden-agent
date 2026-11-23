@@ -235,6 +235,43 @@ final class AidenCatchUpQueueTests: XCTestCase {
         XCTAssertEqual(navigation.catchUp?.current, oldest)
     }
 
+    /// Beside the list, a run replaces the chosen chat and every Next moves the
+    /// selection, so the highlighted row is always the chat on screen.
+    func testCatchUpBesideTheListMovesTheSelection() {
+        let navigation = AidenAppNavigation()
+        navigation.besideList = true
+        let other = F.id("other", on: "studio")
+        navigation.openInboxRow(.chat(other))
+        navigation.open(.settings)
+
+        XCTAssertEqual(navigation.startCatchUp(in: queue()), oldest)
+        XCTAssertEqual(navigation.inboxPath, [.chat(oldest)])
+        XCTAssertEqual(navigation.catchUp?.current, oldest)
+
+        XCTAssertEqual(navigation.advanceCatchUp(in: queue()), middle)
+        XCTAssertEqual(AidenSplitNavigationPath(navigation.inboxPath).selection, .chat(middle))
+        XCTAssertEqual(AidenSplitNavigationPath(navigation.inboxPath).detailPath, [])
+        XCTAssertEqual(navigation.catchUp?.current, middle)
+
+        XCTAssertNil(navigation.advanceCatchUp(in: queue(studio: ["oldest"], laptop: ["middle"])))
+        XCTAssertEqual(
+            AidenSplitNavigationPath(navigation.inboxPath).selection,
+            .catchUpFinished(AidenCatchUpEnding(walked: true, unreached: 0))
+        )
+    }
+
+    /// Choosing another row mid-run is leaving the run.
+    func testChoosingAnotherRowEndsTheRun() {
+        let navigation = AidenAppNavigation()
+        navigation.besideList = true
+        XCTAssertEqual(navigation.startCatchUp(in: queue()), oldest)
+
+        navigation.openInboxRow(.chat(newest))
+
+        XCTAssertNil(navigation.catchUp)
+        XCTAssertEqual(navigation.inboxPath, [.chat(newest)])
+    }
+
     func testNextReplacesTheChatSoBackReturnsToTheInbox() {
         let navigation = openedRun()
 
@@ -243,6 +280,53 @@ final class AidenCatchUpQueueTests: XCTestCase {
         XCTAssertEqual(navigation.inboxPath, [.chat(middle)])
         XCTAssertEqual(navigation.openChat, middle)
         XCTAssertEqual(navigation.catchUp?.current, middle)
+    }
+
+    /// A fork opened from the run's chat goes over it without ending the run,
+    /// so Back from the fork returns to the chat with Next still there, and
+    /// Next takes the fork away with the chat, on a stack and beside the list.
+    func testAForkOverTheRunsChatKeepsTheRun() {
+        let fork = F.id("fork", on: "studio")
+        for besideList in [false, true] {
+            let navigation = AidenAppNavigation()
+            navigation.besideList = besideList
+            XCTAssertEqual(navigation.startCatchUp(in: queue()), oldest)
+
+            navigation.push(.fork(fork, source: oldest), over: .chat(oldest))
+            XCTAssertEqual(navigation.catchUp?.current, oldest, "besideList: \(besideList)")
+            XCTAssertEqual(navigation.openChat, fork)
+
+            navigation.inboxPath.removeLast()
+            XCTAssertEqual(navigation.catchUp?.current, oldest, "Back from the fork, besideList: \(besideList)")
+
+            navigation.push(.fork(fork, source: oldest), over: .chat(oldest))
+            XCTAssertEqual(navigation.advanceCatchUp(in: queue()), middle)
+            XCTAssertEqual(navigation.inboxPath, [.chat(middle)], "besideList: \(besideList)")
+            XCTAssertEqual(navigation.catchUp?.current, middle)
+        }
+    }
+
+    /// The run's chat can already be open as a fork of another chat. Catch
+    /// Up goes back to it there, the run holds it as its chat, and Next takes
+    /// it away.
+    func testARunsChatOpenAsAForkKeepsTheRun() {
+        let source = F.id("source", on: "studio")
+        let asFork = AidenAppRoute.fork(oldest, source: source)
+        let navigation = AidenAppNavigation()
+        navigation.openInboxRow(.chat(source))
+        navigation.push(asFork, over: .chat(source))
+
+        XCTAssertEqual(navigation.startCatchUp(in: queue()), oldest)
+        XCTAssertEqual(navigation.openChat, oldest)
+        XCTAssertEqual(navigation.catchUp?.current, oldest)
+
+        navigation.push(.settings, over: asFork)
+        navigation.inboxPath.removeLast()
+        XCTAssertEqual(navigation.catchUp?.current, oldest, "Back from a page over it")
+
+        XCTAssertEqual(navigation.advanceCatchUp(in: queue()), middle)
+        XCTAssertFalse(navigation.inboxPath.contains(asFork))
+        XCTAssertEqual(navigation.openChat, middle)
     }
 
     func testAnEmptiedQueueEndsOnTheFinishedScreen() {
@@ -343,11 +427,16 @@ final class AidenCatchUpQueueTests: XCTestCase {
         XCTAssertNil(navigation.catchUp)
     }
 
-    func testOpeningAnotherChatEndsTheRun() {
+    /// On a stack a chat from a link goes over the run's chat, which Back
+    /// returns to, so the run lasts. It ends once its chat leaves the path.
+    func testAChatOpenedOverTheRunsChatEndsTheRunOnlyWhenItsChatGoes() {
         let navigation = openedRun()
 
         navigation.open(.chat(F.id("from-a-link", on: "laptop")))
+        XCTAssertEqual(navigation.catchUp?.current, oldest)
+        XCTAssertEqual(navigation.openChat, F.id("from-a-link", on: "laptop"))
 
+        navigation.inboxPath = [.chat(F.id("from-a-link", on: "laptop"))]
         XCTAssertNil(navigation.catchUp)
     }
 

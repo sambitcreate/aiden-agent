@@ -48,9 +48,13 @@ struct AidenNotificationSettingsView: View {
 
             Section {
                 Toggle("Needs my approval or answer", isOn: binding(\.needsAnswer))
+                    .aidenSwitchStyle()
                 Toggle("A response is ready", isOn: binding(\.responseReady))
+                    .aidenSwitchStyle()
                 Toggle("A response fails", isOn: binding(\.runFailed))
+                    .aidenSwitchStyle()
                 Toggle("A Bot hands me a step", isOn: binding(\.botNeedsMe))
+                    .aidenSwitchStyle()
             } header: {
                 Text("Tell me when")
             } footer: {
@@ -59,8 +63,11 @@ struct AidenNotificationSettingsView: View {
 
             Section {
                 Toggle("Show message text in alerts", isOn: binding(\.showMessageText))
+                    .aidenSwitchStyle()
                 Toggle("Show reply text on Lock Screen", isOn: binding(\.replyTextOnLockScreen))
+                    .aidenSwitchStyle()
                 Toggle("Quiet for the open chat", isOn: binding(\.quietInOpenChat))
+                    .aidenSwitchStyle()
             } header: {
                 Text("Privacy")
             } footer: {

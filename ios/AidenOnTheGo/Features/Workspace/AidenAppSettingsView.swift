@@ -132,6 +132,7 @@ struct AidenAppSettingsView: View {
             if offersBotUX {
                 Section {
                     Toggle("Show tool activity", isOn: $showToolActivity)
+                        .aidenSwitchStyle()
                 } header: {
                     Text("Chat")
                 } footer: {
@@ -147,6 +148,7 @@ struct AidenAppSettingsView: View {
                         set: { updateMemory($0) }
                     )
                 )
+                    .aidenSwitchStyle()
                 .disabled(memorySettings == nil || isSavingMemory)
                 if let memoryError {
                     Text(memoryError).foregroundStyle(palette.dangerText)
@@ -194,6 +196,7 @@ struct AidenAppSettingsView: View {
                     get: { haptics.isEnabled },
                     set: { haptics.isEnabled = $0 }
                 ))
+                    .aidenSwitchStyle()
                 .disabled(!haptics.supportsHaptics)
             } header: {
                 Text("Feedback")

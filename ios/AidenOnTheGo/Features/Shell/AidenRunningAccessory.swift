@@ -58,6 +58,7 @@ struct AidenRunningAccessory: View {
 
     @Environment(\.aidenPalette) private var palette
     @Environment(\.tabViewBottomAccessoryPlacement) private var placement
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     init(
         rows: [AidenUnifiedInboxRow],
@@ -71,15 +72,28 @@ struct AidenRunningAccessory: View {
 
     private var isCompact: Bool { placement == .inline }
 
+    /// A bar keeps its height, so there the title stays on one line and a held
+    /// press shows it large. As the Inbox's first row (a sidebar, or iOS 26.0)
+    /// it grows with the text as the rows below it do.
+    private var titleLineLimit: Int {
+        placement == nil && dynamicTypeSize.isAccessibilitySize ? 3 : 1
+    }
+
     var body: some View {
         if let title = summary.title {
             Button(action: tap) {
                 HStack(spacing: AidenSpacing.s) {
+                    // A ring per placement: the bar swaps the accessory between
+                    // its inline and expanded places in an animation, and one
+                    // ring carried across slid from the old place to the new
+                    // while it turned, so it wandered. A new ring fades in
+                    // where it belongs, as the title does.
                     AidenWorkingIndicator(size: isCompact ? 12 : 16)
+                        .id(isCompact)
                     Text(title)
                         .font(isCompact ? .footnote.weight(.medium) : .subheadline.weight(.medium))
                         .foregroundStyle(palette.foreground)
-                        .lineLimit(1)
+                        .lineLimit(titleLineLimit)
                     Spacer(minLength: 0)
                     if summary.othersCount > 0 {
                         // On glass the quieter colour falls under 4.5:1 over light content.
@@ -144,8 +158,9 @@ struct AidenRunningChatsSheet: View {
 
     var body: some View {
         NavigationStack {
+            let positions = AidenListCardPosition.positions(rows.map(\.id))
             List(rows) { row in
-                listRow(row)
+                listRow(row, card: positions[row.id] ?? .middle)
             }
             .listStyle(.plain)
             .scrollContentBackground(.hidden)
@@ -166,7 +181,7 @@ struct AidenRunningChatsSheet: View {
         .presentationDetents([.medium, .large])
     }
 
-    private func listRow(_ row: AidenUnifiedInboxRow) -> some View {
+    private func listRow(_ row: AidenUnifiedInboxRow, card: AidenListCardPosition) -> some View {
         Button {
             onOpen(row.route)
         } label: {
@@ -190,9 +205,7 @@ struct AidenRunningChatsSheet: View {
             }
         }
         .buttonStyle(.plain)
-        .listRowInsets(EdgeInsets(top: 0, leading: AidenSpacing.m, bottom: 0, trailing: AidenSpacing.m))
-        .listRowSeparator(.hidden)
-        .listRowBackground(palette.canvas)
+        .aidenListCardRow(card)
     }
 }
 

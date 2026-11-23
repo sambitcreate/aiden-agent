@@ -1477,7 +1477,8 @@ struct AidenWorkspaceGitView: View {
                 Section("Commit message") {
                     TextField("Describe the change", text: $commitMessage, axis: .vertical)
                 }
-                Section { Toggle("Staged changes only", isOn: $stagedOnly) }
+                Section { Toggle("Staged changes only", isOn: $stagedOnly)
+                .aidenSwitchStyle() }
             }
             .navigationTitle("Commit Changes")
             .toolbar {
