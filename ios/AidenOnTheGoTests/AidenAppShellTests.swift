@@ -438,6 +438,28 @@ final class AidenAppShellTests: XCTestCase {
         XCTAssertEqual(stack.inboxPath, [.chat(id("c1")), .chat(id("c2"))])
     }
 
+    /// A camera shortcut's chat that is left before its screen appears (another
+    /// row picked beside the list, or a chat pushed over a workspace) must not
+    /// open the camera when it's opened again later.
+    func testLeavingACameraShortcutsChatEndsItsCameraStart() {
+        let picked = besideList()
+        picked.open(.chat(id("c1")), startsCamera: true)
+        XCTAssertEqual(picked.chatStartingCamera, id("c1"))
+        picked.pick(.chat(id("c2")), fromListOf: .inbox)
+        XCTAssertEqual(picked.openChat, id("c2"))
+        XCTAssertNil(picked.chatStartingCamera, "A row picked beside the list kept the camera start")
+        picked.open(.chat(id("c1")))
+        XCTAssertNil(picked.chatStartingCamera)
+
+        let pushed = besideList()
+        pushed.pick(.workspace(id("w1")), fromListOf: .workspaces)
+        pushed.open(.chat(id("c3")), startsCamera: true)
+        XCTAssertEqual(pushed.chatStartingCamera, id("c3"))
+        pushed.push(.chat(id("c4")), over: .workspace(id("w1")))
+        XCTAssertEqual(pushed.workspacesPath.last, .chat(id("c4")))
+        XCTAssertNil(pushed.chatStartingCamera, "A chat pushed over a workspace kept the camera start")
+    }
+
     /// A new chat from Compose, a Search result, a link or a Shortcut opens on
     /// the Inbox without going through the list. Beside the list it still
     /// becomes the selection, so the highlight follows it and it has no Back to

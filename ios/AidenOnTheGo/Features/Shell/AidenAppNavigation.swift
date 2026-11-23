@@ -573,6 +573,7 @@ final class AidenAppNavigation {
     func pick(_ route: AidenAppRoute, fromListOf tab: AidenAppTab) {
         guard besideList, tab.listsRow(for: route) else { return open(route) }
         chatStartingVoice = nil
+        chatStartingCamera = nil
         for other in AidenAppTab.listTabs where other != tab {
             var updated = path(of: other)
             Self.remove(route, from: &updated)
@@ -592,6 +593,7 @@ final class AidenAppNavigation {
         guard let holder = holders.contains(tab) ? tab : holders.first,
               let index = path(of: holder).firstIndex(of: parent) else { return open(route) }
         chatStartingVoice = nil
+        chatStartingCamera = nil
         tab = holder
         let updated = Array(path(of: holder)[...index]) + [route]
         if updated != self.path(of: holder) { setPath(updated, of: holder) }
