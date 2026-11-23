@@ -11,7 +11,9 @@ Plan: [Phase 5 of the proactive Aiden plan](plans/proactive-aiden-plan.md#phase-
 **Chats can start other chats** in Settings → Approvals → Advanced is on by
 default. Only an off choice is stored (`AppSettings.childChats: false`), and a
 portable config keeps only that. Off, no chat is offered the tool; chats
-already started keep running as ordinary chats.
+already started keep running as ordinary chats. A Temporary Quick Chat isn't
+offered the tool until it is saved or attached to a workspace: its window can't
+show started chats, and an unsaved one is deleted at the next launch.
 
 ## The `child_chats` tool
 

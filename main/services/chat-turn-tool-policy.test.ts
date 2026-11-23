@@ -317,6 +317,7 @@ test("a queued turn answers the person only when its screened prompt is the pers
 test("child_chats is offered to a workspace chat nobody started, never to a started chat, an unreadable one or an outside app's turn", () => {
   const offer = {
     followThroughAvailable: true,
+    temporary: false,
     workspace: true,
     lineage: {},
     enabled: true,
@@ -333,6 +334,7 @@ test("child_chats is offered to a workspace chat nobody started, never to a star
   assert.equal(offersChildChats({ ...offer, excludedToolNames: new Set(["ask_user_question"]) }), true);
   assert.equal(offersChildChats({ ...offer, enabled: false }), false);
   assert.equal(offersChildChats({ ...offer, workspace: false }), false);
+  assert.equal(offersChildChats({ ...offer, temporary: true }), false, "a Temporary Quick Chat until it's saved or attached");
 });
 
 test("a scheduled task's run (on its schedule, from a trigger, or Run now) can't set a check-back, suggest a goal or start chats", () => {

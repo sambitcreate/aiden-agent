@@ -219,6 +219,12 @@ export function firstTurnToolRefusal(refusals: readonly TurnToolRefusal[]): Turn
 export interface ChildChatsOfferInput {
   /** The follow-through checks run for this chat (a workspace chat with a window or device behind it). */
   followThroughAvailable: boolean;
+  /**
+   * A Temporary chat (Floating Quick Chat, not yet saved or attached): its
+   * window can't show started chats, and an unsaved one is deleted at the next
+   * launch while its started chats would live on.
+   */
+  temporary: boolean;
   /** The chat is in a workspace. */
   workspace: boolean;
   /**
@@ -238,6 +244,7 @@ export interface ChildChatsOfferInput {
 export function offersChildChats(input: ChildChatsOfferInput): boolean {
   return (
     input.followThroughAvailable &&
+    !input.temporary &&
     input.workspace &&
     input.lineage !== undefined &&
     input.lineage.startedBy === undefined &&

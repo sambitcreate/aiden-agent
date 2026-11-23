@@ -34,11 +34,14 @@ import type { Chat } from "../types.js";
 
 /** Why this chat cannot have a goal: Bots, the Assistant, agent harnesses and chats another feature owns. */
 export function goalChatRefusal(
-  chat: Pick<Chat, "botId" | "owner" | "workspaceId" | "providerId" | "model"> | null | undefined,
+  chat: Pick<Chat, "botId" | "owner" | "workspaceId" | "providerId" | "model" | "ephemeral"> | null | undefined,
 ): string | undefined {
   if (!chat) return "This chat no longer exists.";
   if (chat.botId) return "Bots can't have a keep-going goal.";
   if (chat.owner !== undefined) return "This chat runs its own way, so it can't have a goal.";
+  // A Temporary chat's window shows only the live reply, and an unsaved one is
+  // deleted at the next launch, so it gets a goal once it's saved or attached.
+  if (chat.ephemeral === true) return "Save this Temporary chat or attach it to a workspace first, then give it a goal.";
   if (chat.workspaceId === ASSISTANT_WORKSPACE_ID) return "The Assistant can't have a keep-going goal.";
   if (!chat.providerId || !chat.model) return "Choose a model for this chat first.";
   if (isAcpHarnessProvider(chat.providerId)) return "Chats with an agent harness can't have a keep-going goal.";

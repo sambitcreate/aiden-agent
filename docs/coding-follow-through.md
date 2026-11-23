@@ -7,7 +7,7 @@ Aiden can keep working after an answer ends. Four features keep a coding chat mo
 - **Keep going until a check passes**: the person names a check with `/until npm test`. It sets a [keep-going goal](keep-going-goals.md) that Aiden checks by running the command after each answer. While it fails, the agent gets the end of its output and keeps fixing, up to five checks.
 - **Chats that check back**: the agent promises to look again later ("I'll check the deploy in 20 minutes"), and at that minute Aiden posts its note into the chat. See [Checking back later](#checking-back-later).
 
-The first three run on the macOS and Linux desktop, in workspace chats whose folder access is **Full access** or **Ask first**; check-backs also work in **Read only** workspaces. They are not available in Bot chats, the Assistant, Telegram chats, a chat hosted on a paired Mac, or the CLI. Phones show the chat's follow-up messages but cannot start them.
+The first three run on the macOS and Linux desktop, in workspace chats whose folder access is **Full access** or **Ask first**; check-backs also work in **Read only** workspaces. They are not available in Bot chats, the Assistant, Telegram chats, a chat hosted on a paired Mac, or the CLI. A Temporary Quick Chat isn't offered check-backs until it is saved or attached to a workspace. Phones show the chat's follow-up messages but cannot start them.
 
 ## Follow-up messages
 

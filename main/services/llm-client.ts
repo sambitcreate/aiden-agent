@@ -2083,9 +2083,15 @@ async function prepareGeneration(
     !options.excludeToolNames?.has(SCHEDULE_TOOL_NAME) &&
     (!botContext || options.interactionSurface !== "telegram") &&
     (!botContext || botHasOrdinaryCapability(botContext, "schedules"));
+  // A Temporary chat (Floating Quick Chat, not yet saved or attached) keeps no
+  // lasting state of its own: its window shows only the live reply and an
+  // unsaved one is deleted at the next launch. Check-backs, goal proposals and
+  // started chats wait until it's saved or attached, and a task made in it gets
+  // its own chat instead of posting into this one.
+  const temporaryChat = chat.ephemeral === true;
   // An ordinary workspace chat: a task made here posts its runs back into it.
   const scheduleOriginChatId =
-    schedulingAllowed && !botContext && !assistantMode && !chat.botId && chat.owner === undefined
+    schedulingAllowed && !botContext && !assistantMode && !chat.botId && chat.owner === undefined && !temporaryChat
       ? params.chatId
       : undefined;
   const botScheduleToolNames =
@@ -2386,6 +2392,7 @@ async function prepareGeneration(
   if (
     !botContext &&
     !assistantMode &&
+    !temporaryChat &&
     params.chatId &&
     workspace?.folderPath &&
     options.usageSource === "chat" &&
@@ -2410,6 +2417,7 @@ async function prepareGeneration(
   if (
     !botContext &&
     !assistantMode &&
+    !temporaryChat &&
     params.chatId &&
     options.usageSource === "chat" &&
     options.interactionSurface !== "telegram" &&
@@ -2435,6 +2443,7 @@ async function prepareGeneration(
     params.chatId &&
     offersChildChats({
       followThroughAvailable: Boolean(followThroughAvailable),
+      temporary: temporaryChat,
       workspace: Boolean(workspace),
       lineage: chatLineage,
       enabled: childChatsEnabled(settings),

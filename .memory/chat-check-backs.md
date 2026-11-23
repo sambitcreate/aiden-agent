@@ -21,3 +21,5 @@ Plan: `docs/plans/proactive-aiden-plan.md` Phase 1, C2. Guide: `docs/coding-foll
 
 ## Not done here
 - C3 (done): `dueSoonKeepAwakeInput` in `keep-awake/keep-awake-inputs.ts` holds for check-backs (`checkBacks.pendingAll()`) and Bot wake-ups (enabled `wakeUp` tasks with `nextRunAt`, cached in `keep-awake-main.ts` and refreshed on `bots:changed` / `schedule:updated` / resume) due within 60 min, only when `!powerMonitor.isOnBatteryPower()`. Reason kinds `check-back` / `wake-up`; >1 h overdue stops holding; while anything is due it rechecks every 5 min (Linux has no on-ac/on-battery events). Goal-round turns (A3) must set `goalRound` in the audience options. Phones list/cancel later (C7).
+
+2026-11-23: a Temporary Quick Chat (`chat.ephemeral`) is not offered this until saved or attached; details in `chat-posting-tasks.md` (Temporary Quick Chats).

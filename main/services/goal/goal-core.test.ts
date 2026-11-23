@@ -320,4 +320,6 @@ test("which chats can have a goal", () => {
   assert.match(goalChatRefusal({ ...chat, workspaceId: ASSISTANT_WORKSPACE_ID }) ?? "", /Assistant/u);
   assert.match(goalChatRefusal({ ...chat, model: undefined }) ?? "", /Choose a model/u);
   assert.match(goalChatRefusal({ ...chat, owner: { kind: "schedule" } as never }) ?? "", /runs its own way/u);
+  assert.match(goalChatRefusal({ ...chat, ephemeral: true }) ?? "", /Save this Temporary chat or attach it/u, "a Temporary Quick Chat");
+  assert.equal(goalChatRefusal({ ...chat, workspaceId: undefined, ephemeral: undefined }), undefined, "the same chat once saved");
 });

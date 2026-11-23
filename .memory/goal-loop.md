@@ -35,3 +35,5 @@
 When the chat pane unmounts (Bot pane, Settings), the renderer sends `chat:cancel` with origin `lifecycle`. That detaches the window-owned round and cancels its pending question or approval, and the run then asks the model again. The deterministic E2E model answers at once, so the round could settle (and `GoalWindowRounds.settled` drop it) before the Bot pane reported `null`. Then no `closedMidRound` fired, the loop reviewed the round, and two default (unusable) replies paused it as "Couldn't tell whether the goal is done". The spec now holds completions (`lmStudio.holdCompletions`) once the question shows, to model a real model's latency.
 
 The same race exists in principle with a very fast real model. It was not changed in the product. Leaving for Settings also cancels the round's question: the round "runs on" only in the sense that it finishes without an answer.
+
+2026-11-23: a Temporary Quick Chat (`chat.ephemeral`) is not offered this until saved or attached; details in `chat-posting-tasks.md` (Temporary Quick Chats).
