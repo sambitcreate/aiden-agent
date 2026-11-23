@@ -596,7 +596,12 @@ const SettledMessageRow = React.memo(function SettledMessageRow({
     [messageAttachments, messageTimeline, storedImagePlacements],
   );
   const contained =
-    deferOffscreenLayout && !visuals?.length && !uiVisuals?.length && !message?.attachments?.length && !message?.appPanels?.length;
+    deferOffscreenLayout &&
+    !visuals?.length &&
+    !uiVisuals?.length &&
+    !message?.attachments?.length &&
+    !message?.grabbedElements?.length &&
+    !message?.appPanels?.length;
   const row = (
     // Hovering anywhere on a reply reveals the action row at its end.
     <div
@@ -648,6 +653,7 @@ const SettledMessageRow = React.memo(function SettledMessageRow({
             role={message.role}
             content={message.content}
             attachments={message.attachments}
+            grabbedElements={message.grabbedElements}
             skill={message.skill}
             inputSource={message.inputSource}
             fork={fork}

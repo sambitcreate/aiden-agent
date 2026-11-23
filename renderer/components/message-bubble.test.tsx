@@ -1039,3 +1039,43 @@ test("a fork's summary card sits after its last copied message", () => {
   assert.ok(card < markup.indexOf("New question in the fork"));
   assert.equal((markup.match(/data-testid="fork-summary"/gu) ?? []).length, 1);
 });
+
+test("user messages render read-only grabbed element chips and filter linked grab thumbnails from MessageAttachments", () => {
+  const thumb = imageAttachment("grab-thumb_el-hero");
+  const photo = imageAttachment("user-photo-1");
+  const element = {
+    version: 1 as const,
+    id: "el-hero",
+    label: "<LandingHeroClient />",
+    framework: "react" as const,
+    componentName: "LandingHeroClient",
+    tagName: "section",
+    selector: "main > section.hero",
+    htmlSnippet: "<section></section>",
+    boundingBox: { x: 0, y: 0, width: 640, height: 240 },
+    pageUrl: "http://localhost:3000/",
+    thumbnailAttachmentId: "grab-thumb_el-hero",
+    capturedAt: 1,
+  };
+
+  const partitioned = partitionMessageAttachments([thumb, photo]);
+  assert.deepEqual(
+    partitioned.images.map((item) => item.attachment.id),
+    ["user-photo-1"],
+    "grab-thumb_* is omitted from generic image attachment partitioning",
+  );
+
+  const markup = renderToStaticMarkup(
+    <MessageBubble
+      role="user"
+      content="Tighten the spacing here."
+      attachments={[thumb, photo]}
+      grabbedElements={[element]}
+    />,
+  );
+  assert.match(markup, /data-grabbed-element-chip="el-hero"/u);
+  assert.match(markup, /&lt;LandingHeroClient \/&gt;/u);
+  assert.doesNotMatch(markup, /data-grabbed-element-remove/u, "transcript chip is read-only");
+  assert.doesNotMatch(markup, /data-attachment-preview-id="grab-thumb_el-hero"/u, "linked thumbnail does not duplicate as photo card");
+  assert.match(markup, /data-attachment-preview-id="user-photo-1"/u, "ordinary user photo stays visible");
+});

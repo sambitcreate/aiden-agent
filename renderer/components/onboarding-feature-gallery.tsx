@@ -99,7 +99,7 @@ export const onboardingFeatures: OnboardingFeature[] = [
     group: "create",
     title: "Browser & Annotations",
     description:
-      "Browse beside your chat, select page elements as context, and let Aiden use the same tabs. Browser profiles keep their own local sign-ins; Incognito is temporary. Manage agent access in Browser settings.",
+      "Browse beside your chat, grab React or DOM components directly into the composer as inspectable context chips, annotate pages, and let Aiden use the same tabs. Browser profiles keep their own local sign-ins; Incognito is temporary. Manage agent access in Browser settings.",
     icon: Globe2,
     size: "standard",
   },

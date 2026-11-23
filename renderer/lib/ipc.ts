@@ -1741,7 +1741,12 @@ export const chatsApi = {
     providerId?: string;
     model?: string;
     turnId: string;
-    message: { role: "user"; content: string; attachments?: Attachment[] };
+    message: {
+      role: "user";
+      content: string;
+      attachments?: Attachment[];
+      grabbedElements?: import("../shared/browser-element-grab").GrabbedElementContextV1[];
+    };
     skillInvocation?: SkillInvocationV1;
     /** Aiden Live sent this first message for the person ("By voice"). */
     inputSource?: ChatInputSourceV1;
@@ -1760,7 +1765,12 @@ export const chatsApi = {
     providerId?: string;
     model?: string;
     turnId: string;
-    message: { role: "user"; content: string; attachments?: Attachment[] };
+    message: {
+      role: "user";
+      content: string;
+      attachments?: Attachment[];
+      grabbedElements?: import("../shared/browser-element-grab").GrabbedElementContextV1[];
+    };
     skillInvocation?: SkillInvocationV1;
     inputSource?: ChatInputSourceV1;
     worktree: FirstMessageWorktreeRequest;
@@ -1860,6 +1870,7 @@ export const chatsApi = {
       content: string;
       model?: string;
       attachments?: Attachment[];
+      grabbedElements?: import("../shared/browser-element-grab").GrabbedElementContextV1[];
     },
     meta: {
       providerId?: string;
