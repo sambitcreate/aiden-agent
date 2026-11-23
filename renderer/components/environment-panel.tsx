@@ -255,6 +255,104 @@ export interface EnvironmentPanelContextValue {
 
 /** Exported so component tests can render a single surface against a stub panel. */
 export const EnvironmentPanelContext = React.createContext<EnvironmentPanelContextValue | null>(null);
+
+interface EnvironmentArtifactsContextValue {
+  artifacts: WorkspaceArtifactsState;
+  artifactsOffered: boolean;
+  selectedArtifactId: string | null;
+  selectArtifact: (artifactId: string | null) => void;
+}
+
+const EnvironmentArtifactsContext = React.createContext<EnvironmentArtifactsContextValue | null>(null);
+const EMPTY_ARTIFACTS_STATE: WorkspaceArtifactsState = {
+  workspaceId: null,
+  views: [],
+  loaded: false,
+  error: null,
+  reload: () => undefined,
+  rememberState: () => undefined,
+};
+const NOOP_SELECT_ARTIFACT = () => undefined;
+
+function EnvironmentArtifactsProvider({
+  activeId,
+  activeChat,
+  artifactsTabOpen,
+  showTools,
+  closeArtifactsTab,
+  children,
+}: {
+  activeId: string | undefined;
+  activeChat: EnvironmentActiveChat;
+  artifactsTabOpen: boolean;
+  showTools: (tab?: EnvironmentPanelTab, returnTarget?: HTMLElement | null) => void;
+  closeArtifactsTab: () => void;
+  children: React.ReactNode;
+}) {
+  const [selectedArtifactId, setSelectedArtifactId] = React.useState<string | null>(null);
+  const showToolsRef = React.useRef(showTools);
+  const activeChatRef = React.useRef(activeChat);
+  const activeWorkspaceRef = React.useRef(activeId);
+  React.useLayoutEffect(() => {
+    showToolsRef.current = showTools;
+    activeChatRef.current = activeChat;
+    activeWorkspaceRef.current = activeId;
+  }, [activeChat, activeId, showTools]);
+  const onArtifactsChanged = React.useCallback((event: WorkspaceArtifactsChangedEvent) => {
+    // The chat that made a page shows it; every other window just updates its list.
+    if (event.workspaceId !== activeWorkspaceRef.current) return;
+    if (!revealsWorkspaceArtifact(event, activeChatRef.current)) return;
+    setSelectedArtifactId(event.artifactId);
+    showToolsRef.current("artifacts");
+  }, []);
+  const artifacts = useWorkspaceArtifacts(activeId ?? null, onArtifactsChanged);
+  // The launcher and ⌘K offer the tab once this workspace's list has loaded, pages or not.
+  const artifactsOffered = artifacts.loaded && artifacts.workspaceId !== null && artifacts.workspaceId === activeId;
+  const artifactsSeenRef = React.useRef<{ workspaceId: string | null; count: number } | null>(null);
+  React.useEffect(() => {
+    // Wait for a workspace and a list that actually loaded: a restored tab must
+    // survive startup, and a failed read is not an empty workspace.
+    if (artifacts.workspaceId === null || artifacts.workspaceId !== activeId) return;
+    if (!artifacts.loaded) return;
+    const previous = artifactsSeenRef.current;
+    if (artifacts.error) {
+      // Remember the workspace, so a tab opened on the failure isn't taken as
+      // a workspace switch when Try again then finds no pages.
+      const sameWorkspace = previous?.workspaceId === artifacts.workspaceId;
+      artifactsSeenRef.current = { workspaceId: artifacts.workspaceId, count: sameWorkspace ? previous.count : 0 };
+      return;
+    }
+    const count = artifacts.views.length;
+    artifactsSeenRef.current = { workspaceId: artifacts.workspaceId, count };
+    // The tab closes when the last page is deleted, or on a workspace that has
+    // none. Opened from the launcher on an empty workspace, it stays to show
+    // how to start a page.
+    const emptied = previous?.workspaceId !== artifacts.workspaceId || previous.count > 0;
+    if (count === 0 && emptied && artifactsTabOpen) closeArtifactsTab();
+  }, [
+    activeId,
+    artifacts.error,
+    artifacts.loaded,
+    artifacts.views.length,
+    artifacts.workspaceId,
+    artifactsTabOpen,
+    closeArtifactsTab,
+  ]);
+  const value = React.useMemo<EnvironmentArtifactsContextValue>(
+    () => ({
+      artifacts,
+      artifactsOffered,
+      selectedArtifactId,
+      selectArtifact: setSelectedArtifactId,
+    }),
+    [artifacts, artifactsOffered, selectedArtifactId],
+  );
+  return (
+    <EnvironmentArtifactsContext.Provider value={value}>
+      {children}
+    </EnvironmentArtifactsContext.Provider>
+  );
+}
 const TABS_STORAGE_KEY = "aiden-agent.environment.open-tabs-v1";
 const OPEN_STORAGE_KEY = "aiden-agent.environment.open";
 const QUICK_VIEW_OPEN_STORAGE_KEY = "aiden-agent.quick-view.open";
@@ -649,48 +747,10 @@ export function EnvironmentPanelProvider({ children }: React.PropsWithChildren) 
     });
   }, [devicesEnabled, revealChatId, showTools]);
 
-  const [selectedArtifactId, setSelectedArtifactId] = React.useState<string | null>(null);
-  const showToolsRef = React.useRef(showTools);
-  const activeChatRef = React.useRef(activeChat);
-  const activeWorkspaceRef = React.useRef(activeId);
-  React.useLayoutEffect(() => {
-    showToolsRef.current = showTools;
-    activeChatRef.current = activeChat;
-    activeWorkspaceRef.current = activeId;
-  }, [activeChat, activeId, showTools]);
-  const onArtifactsChanged = React.useCallback((event: WorkspaceArtifactsChangedEvent) => {
-    // The chat that made a page shows it; every other window just updates its list.
-    if (event.workspaceId !== activeWorkspaceRef.current) return;
-    if (!revealsWorkspaceArtifact(event, activeChatRef.current)) return;
-    setSelectedArtifactId(event.artifactId);
-    showToolsRef.current("artifacts");
-  }, []);
-  const artifacts = useWorkspaceArtifacts(activeId ?? null, onArtifactsChanged);
-  // The launcher and ⌘K offer the tab once this workspace's list has loaded, pages or not.
-  const artifactsOffered = artifacts.loaded && artifacts.workspaceId !== null && artifacts.workspaceId === activeId;
-  const artifactsSeenRef = React.useRef<{ workspaceId: string | null; count: number } | null>(null);
   const artifactsTabOpen = (surfaceState.openTabs ?? [surfaceState.toolsTab]).includes("artifacts");
-  React.useEffect(() => {
-    // Wait for a workspace and a list that actually loaded: a restored tab must
-    // survive startup, and a failed read is not an empty workspace.
-    if (artifacts.workspaceId === null || artifacts.workspaceId !== activeId) return;
-    if (!artifacts.loaded) return;
-    const previous = artifactsSeenRef.current;
-    if (artifacts.error) {
-      // Remember the workspace, so a tab opened on the failure isn't taken as
-      // a workspace switch when Try again then finds no pages.
-      const sameWorkspace = previous?.workspaceId === artifacts.workspaceId;
-      artifactsSeenRef.current = { workspaceId: artifacts.workspaceId, count: sameWorkspace ? previous.count : 0 };
-      return;
-    }
-    const count = artifacts.views.length;
-    artifactsSeenRef.current = { workspaceId: artifacts.workspaceId, count };
-    // The tab closes when the last page is deleted, or on a workspace that has
-    // none. Opened from the launcher on an empty workspace, it stays to show
-    // how to start a page.
-    const emptied = previous?.workspaceId !== artifacts.workspaceId || previous.count > 0;
-    if (count === 0 && emptied && artifactsTabOpen) dispatchSurface({ type: "close-tab", tab: "artifacts" });
-  }, [activeId, artifacts.error, artifacts.loaded, artifacts.views.length, artifacts.workspaceId, artifactsTabOpen]);
+  const closeArtifactsTab = React.useCallback(() => {
+    dispatchSurface({ type: "close-tab", tab: "artifacts" });
+  }, []);
 
   const openReview = React.useCallback(
     (mode: EnvironmentReviewMode) => {
@@ -1173,10 +1233,10 @@ export function EnvironmentPanelProvider({ children }: React.PropsWithChildren) 
       tab,
       subagentsEnabled,
       devicesEnabled,
-      artifacts,
-      artifactsOffered,
-      selectedArtifactId,
-      selectArtifact: setSelectedArtifactId,
+      artifacts: EMPTY_ARTIFACTS_STATE,
+      artifactsOffered: false,
+      selectedArtifactId: null,
+      selectArtifact: NOOP_SELECT_ARTIFACT,
       reviewMode,
       fileRequest,
       closeAll,
@@ -1282,9 +1342,6 @@ export function EnvironmentPanelProvider({ children }: React.PropsWithChildren) 
       subagentViews,
       subagentsEnabled,
       devicesEnabled,
-      artifacts,
-      artifactsOffered,
-      selectedArtifactId,
       surfaceMode,
       surfaceState.frontSurface,
       surfaceState.quickViewOpen,
@@ -1310,17 +1367,42 @@ export function EnvironmentPanelProvider({ children }: React.PropsWithChildren) 
             detailRequest={subagentDetailAnnouncement}
           />
         ) : null}
-        {children}
+        <EnvironmentArtifactsProvider
+          activeId={activeId}
+          activeChat={activeChat}
+          artifactsTabOpen={artifactsTabOpen}
+          showTools={showTools}
+          closeArtifactsTab={closeArtifactsTab}
+        >
+          {children}
+        </EnvironmentArtifactsProvider>
       </LinkOpenerProvider>
     </EnvironmentPanelContext.Provider>
   );
 }
 
-export function useEnvironmentPanel(): EnvironmentPanelContextValue {
+/**
+ * Environment panel state without subscribing to volatile workspace artifact
+ * loads. Use in layout/chat surfaces that do not read `artifacts`,
+ * `artifactsOffered`, or `selectedArtifactId` so switching workspaces does not
+ * re-render them twice when `workspaceArtifacts:list` settles.
+ */
+export function useEnvironmentPanelCore(): EnvironmentPanelContextValue {
   const context = React.useContext(EnvironmentPanelContext);
   if (!context)
-    throw new Error("useEnvironmentPanel must be used inside EnvironmentPanelProvider.");
+    throw new Error("useEnvironmentPanelCore must be used inside EnvironmentPanelProvider.");
   return context;
+}
+
+export function useEnvironmentPanel(): EnvironmentPanelContextValue {
+  const context = React.useContext(EnvironmentPanelContext);
+  const artifactsContext = React.useContext(EnvironmentArtifactsContext);
+  if (!context)
+    throw new Error("useEnvironmentPanel must be used inside EnvironmentPanelProvider.");
+  return React.useMemo(
+    () => (artifactsContext ? { ...context, ...artifactsContext } : context),
+    [context, artifactsContext],
+  );
 }
 
 function EnvironmentPanelSurface({

@@ -1786,7 +1786,7 @@ export const chatsApi = {
     skillInvocation?: SkillInvocationV1;
     inputSource?: ChatInputSourceV1;
     worktree: FirstMessageWorktreeRequest;
-  }) => invokeChatMutation<FirstMessageWorktreeResult<Chat>>("chats:createWithFirstMessage", input),
+  }) => invokeChatMutation<FirstMessageWorktreeResult<Chat, Workspace>>("chats:createWithFirstMessage", input),
   /** Progress of the caller's own first-send worktree (fetching → creating → ready). */
   onFirstMessageWorktreeProgress: (handler: (progress: FirstMessageWorktreeProgress) => void) =>
     onNotification<FirstMessageWorktreeProgress>("chats:first-message-worktree-progress", handler),

@@ -5,6 +5,7 @@ import { ensureUserDataDir } from "./data-store.js";
 import {
   gitApplyManagedWorktreeSnapshot,
   gitCaptureManagedWorktreeSnapshot,
+  gitCheckIgnoredPaths,
   gitCreateWorktree,
   gitDeleteManagedWorktree,
   gitDeleteManagedWorktreeSnapshotRef,
@@ -24,6 +25,7 @@ import {
   gitRollbackWorktree,
   gitExpandManagedWorktreeIgnored,
   gitFetchWorktreeBase,
+  gitInvalidateWorktreeDisplayCache,
   gitLocalBranchNames,
   gitResolveWorktreeBase,
   gitRollbackOwnedWorktree,
@@ -100,7 +102,10 @@ export const workspaceWorktreeApplicationService = createWorkspaceWorktreeApplic
     await checkSnapshotCapacity(root, estimatedBytes);
   },
   provisionIncludedFiles: (options) =>
-    provisionWorktreeIncludedFiles({ listFiles: gitListFiles }, options),
+    provisionWorktreeIncludedFiles(
+      { listFiles: gitListFiles, checkIgnored: gitCheckIgnoredPaths },
+      options,
+    ),
   repositoryPaths: gitRepositoryPaths,
   dirtyState: gitManagedWorktreeDirtyState,
   expandIgnoredPaths: gitExpandManagedWorktreeIgnored,
@@ -151,12 +156,16 @@ export const workspaceWorktreeApplicationService = createWorkspaceWorktreeApplic
   resumeWorkspaceSchedules: (workspaceId) => scheduleService.resumeWorkspace(workspaceId),
   createWorkspaceId: defaultWorkspaceId,
   now: Date.now,
-  notifyChanged: () => ipcMain.broadcast("workspaces:changed", {}),
+  notifyChanged: (createdWorkspace) =>
+    ipcMain.broadcast(
+      "workspaces:changed",
+      createdWorkspace ? { kind: "created", workspace: createdWorkspace } : {},
+    ),
   logError: (area, message, error) => logger.error(area, message, error),
   // WorktreeSetup hooks: the source workspace's, run in the new worktree.
   onWorktreeCreated: async (event) => {
-    const { runWorktreeSetupHooks } = await import("./agent-surface-hooks.js");
-    const notices = await runWorktreeSetupHooks({
+    const { runWorktreeSetupHooksWithResult } = await import("./agent-surface-hooks.js");
+    const { notices, ranHooks } = await runWorktreeSetupHooksWithResult({
       sourceFolderPath: event.sourceFolderPath,
       sourceRoot: event.sourceRoot,
       worktreePath: event.worktreePath,
@@ -164,6 +173,9 @@ export const workspaceWorktreeApplicationService = createWorkspaceWorktreeApplic
       workspaceId: event.workspace.id,
       branch: event.branch,
     });
+    if (ranHooks.length > 0) {
+      await gitInvalidateWorktreeDisplayCache(event.worktreePath);
+    }
     for (const notice of notices) logger.warn("hooks", notice);
   },
 });

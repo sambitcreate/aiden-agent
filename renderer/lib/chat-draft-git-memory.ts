@@ -98,3 +98,32 @@ export function resolveDraftWorktreeDefaults(
 ): { baseRef: string; fromOrigin: boolean } | undefined {
   return resolveWorktreeDefaults(repository, memory);
 }
+
+/**
+ * Seed a New worktree draft's base immediately from cached `GitInfo` so the
+ * composer can send on frame 1 without waiting for `git:branches`. When
+ * `git:branches` arrives, `useDraftWorktreeDefaults` still verifies or repairs
+ * any remembered branch that was deleted.
+ */
+export function seedDraftWorktreeFromGitInfo(
+  memory: ChatDraftGitMemory,
+  git:
+    | {
+        isRepo: boolean;
+        branch?: string;
+        detached?: boolean;
+        unborn?: boolean;
+        defaultBranch?: string;
+        hasRemote?: boolean;
+      }
+    | undefined,
+): { baseRef: string; fromOrigin: boolean } | undefined {
+  if (!git?.isRepo || git.unborn) return undefined;
+  const baseRef =
+    memory.baseRef ?? git.defaultBranch ?? (!git.detached && git.branch ? git.branch : undefined);
+  if (!baseRef) return undefined;
+  return {
+    baseRef,
+    fromOrigin: Boolean(git.hasRemote) && (memory.fromOrigin ?? true),
+  };
+}

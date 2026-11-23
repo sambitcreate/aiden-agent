@@ -7,6 +7,7 @@ import {
   discardChatDraft,
   finishChatDraftSend,
   getChatDraft,
+  requestChatDraftComposerFocus,
   retainChatDraft,
   chatDraftWorktreeRequest,
   setChatDraftGitMode,
@@ -18,7 +19,11 @@ import {
 } from "../lib/chat-draft";
 import { registerChatPromptTarget } from "../lib/chat-prompt-bridge";
 import { resolveModelDisplay } from "../lib/model-display";
-import { readChatDraftGitMemory, resolveDraftWorktreeDefaults } from "../lib/chat-draft-git-memory";
+import {
+  readChatDraftGitMemory,
+  resolveDraftWorktreeDefaults,
+  seedDraftWorktreeFromGitInfo,
+} from "../lib/chat-draft-git-memory";
 import {
   draftWorkInOptions,
   draftWorktreeHint,
@@ -37,7 +42,6 @@ import {
 } from "../lib/draft-worktree-send";
 import { isValidBranchName, type FirstMessageWorktreeRequest } from "../shared/worktree-on-send";
 import { localComputerNoun } from "../shared/computer-noun";
-import { DraftWorktreeSendView } from "../components/draft-worktree-send-view";
 import type { GitBranchPickerDraft } from "../components/git-branch-picker";
 import { QueuedMessages } from "../components/queued-messages";
 import { NewChatHeadline } from "../components/new-chat-headline";
@@ -96,6 +100,7 @@ import {
   MANAGED_WORKTREE_MISSING_SEND_REFUSAL,
   WORKSPACE_FOLDER_MISSING_SEND_REFUSAL,
   workspaceFolderCheckApplies,
+  type WorkspaceFolderPresenceResult,
 } from "../shared/workspace-folder-presence";
 import { useOptionalNewChatActions } from "../lib/new-chat-actions";
 import { Badge, Button, EmptyState, ScrollArea, ScrollAreaFooterStack, Text, toast } from "../components/ui";
@@ -210,7 +215,9 @@ import {
   queryKeys,
   installAppendedChatSnapshot,
   logoutBuiltinProvider,
+  markChatRecentlyPromoted,
   refreshCodexProviderState,
+  upsertCreatedWorkspaceInCache,
   useAllRegularChats,
   useChat,
   useGitInfo,
@@ -232,7 +239,7 @@ import {
   EnvironmentPanelToggle,
   QuickViewIcon,
   QuickViewToggle,
-  useEnvironmentPanel,
+  useEnvironmentPanelCore,
 } from "../components/environment-panel";
 import { EventPresence } from "../components/event-presence";
 import {
@@ -241,6 +248,7 @@ import {
   type Chat,
   type ChatMeta,
   type GitBranches,
+  type GitInfo,
   type Workspace,
 } from "../lib/types";
 import { COMPUTER_USE_CONTINUE_PROMPT } from "../shared/computer-use-access";
@@ -492,7 +500,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
   const steerableDetachedProjection = observedRunVisible ? null : visibleDetachedProjection;
   const terminal = useWorkspaceTerminal();
   const git = useGitInfo(effectiveWorkspace?.id);
-  const environmentPanel = useEnvironmentPanel();
+  const environmentPanel = useEnvironmentPanelCore();
   const designChatBodyHidden = useDesignChatBodyHidden();
   const settingsBlockedReason = environmentPanel.gitOperationBusy
     ? "Wait for the current Git operation to finish"
@@ -788,7 +796,9 @@ export function ChatPane({ chatId }: { chatId: string }) {
 
   React.useEffect(() => {
     if (chat.data && effectiveWorkspaceId && effectiveWorkspaceId !== activeId) {
-      selectWorkspace(effectiveWorkspaceId);
+      React.startTransition(() => {
+        selectWorkspace(effectiveWorkspaceId);
+      });
     }
   }, [activeId, chat.data, effectiveWorkspaceId, selectWorkspace]);
 
@@ -2190,27 +2200,6 @@ export function ChatPane({ chatId }: { chatId: string }) {
       if (getChatDraft(chatId) && draftGitPendingRef.current) {
         throw new Error("Reading Git status… Send again in a moment.");
       }
-      const folderWorkspace = folderWorkspaceRef.current;
-      if (folderWorkspace) {
-        const folderCheckVisit = chatVisitRef.current;
-        // A failed check is no reason to refuse; main checks again at start.
-        const presence = await qc
-          .fetchQuery({
-            queryKey: queryKeys.workspaceFolderPresence(folderWorkspace.id),
-            queryFn: () => workspacesApi.folderPresence(folderWorkspace.id),
-            staleTime: 0,
-          })
-          .catch(() => undefined);
-        // The user left this chat during the check: send nothing from a pane
-        // that now shows another chat. The composer's saved draft keeps the text.
-        if (!(mountedRef.current && chatVisitRef.current === folderCheckVisit)) {
-          throw new WorktreeSendCancelledError();
-        }
-        // The notice above the composer names the folder; the toast stays short.
-        if (presence?.presence === "missing") {
-          throw new Error(presence.worktree ? MANAGED_WORKTREE_MISSING_SEND_REFUSAL : WORKSPACE_FOLDER_MISSING_SEND_REFUSAL);
-        }
-      }
       let worktreeRequest: FirstMessageWorktreeRequest | undefined;
       try {
         worktreeRequest =
@@ -2221,7 +2210,40 @@ export function ChatPane({ chatId }: { chatId: string }) {
         // The base branch isn't resolved yet; the composer keeps the text.
         throw new Error("Reading Git status… Send again in a moment.");
       }
-      let worktreeSend: WorktreeFirstSend<Chat> | undefined;
+      const folderWorkspace = folderWorkspaceRef.current;
+      if (folderWorkspace) {
+        const cachedPresence = worktreeRequest
+          ? qc.getQueryData<WorkspaceFolderPresenceResult>(
+              queryKeys.workspaceFolderPresence(folderWorkspace.id),
+            )
+          : undefined;
+        // Worktree-on-send validates the source folder live in main before
+        // touching disk; skip the blocking pre-send IPC when the cached
+        // presence is not missing so the user's bubble and progress row paint
+        // on frame 1. If the cached presence says "missing", fall through to a
+        // live check so a folder restored on disk is never blocked by stale cache.
+        if (!worktreeRequest || cachedPresence?.presence === "missing") {
+          const folderCheckVisit = chatVisitRef.current;
+          // A failed check is no reason to refuse; main checks again at start.
+          const presence = await qc
+            .fetchQuery({
+              queryKey: queryKeys.workspaceFolderPresence(folderWorkspace.id),
+              queryFn: () => workspacesApi.folderPresence(folderWorkspace.id),
+              staleTime: 0,
+            })
+            .catch(() => undefined);
+          // The user left this chat during the check: send nothing from a pane
+          // that now shows another chat. The composer's saved draft keeps the text.
+          if (!(mountedRef.current && chatVisitRef.current === folderCheckVisit)) {
+            throw new WorktreeSendCancelledError();
+          }
+          // The notice above the composer names the folder; the toast stays short.
+          if (presence?.presence === "missing") {
+            throw new Error(presence.worktree ? MANAGED_WORKTREE_MISSING_SEND_REFUSAL : WORKSPACE_FOLDER_MISSING_SEND_REFUSAL);
+          }
+        }
+      }
+      let worktreeSend: WorktreeFirstSend<Chat, Workspace> | undefined;
       /** The user answered a failed worktree send, possibly from a later view of this draft. */
       let continuedByUser = false;
       const firstDraft = getChatDraft(chatId) ? beginChatDraftSend(chatId) : undefined;
@@ -2252,6 +2274,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
             : undefined;
           if (firstMessageInput && worktreeRequest) {
             const visit = chatVisitRef.current;
+            performance.mark?.("aiden:worktree-send:start");
             worktreeSend = startWorktreeFirstSend({
               api: {
                 createInWorktree: chatsApi.createWithFirstMessageInWorktree,
@@ -2261,15 +2284,51 @@ export function ChatPane({ chatId }: { chatId: string }) {
               input: firstMessageInput,
               worktree: worktreeRequest,
               message: { text, attachments, ...(inputSource ? { inputSource } : {}) },
+              onView: (view) => {
+                if (view.status === "failed" && folderWorkspace) {
+                  void qc.invalidateQueries({
+                    queryKey: queryKeys.workspaceFolderPresence(folderWorkspace.id),
+                  });
+                }
+              },
             });
             // The progress view holds the message now; a composer that opens
             // on this draft meanwhile starts empty instead of repeating it.
             discardComposerDraft(chatId);
             try {
               const outcome = await worktreeSend.result;
+              performance.mark?.("aiden:worktree-send:done");
+              try {
+                performance.measure?.(
+                  "aiden:worktree-send",
+                  "aiden:worktree-send:start",
+                  "aiden:worktree-send:done",
+                );
+              } catch {
+                // Ignore missing marks if the performance buffer was cleared.
+              }
               if (outcome.worktree) {
-                // List the new worktree workspace before the chat moves into it.
-                await qc.invalidateQueries({ queryKey: queryKeys.workspaces });
+                if (outcome.workspace) {
+                  const createdWorkspace = outcome.workspace;
+                  upsertCreatedWorkspaceInCache(qc, createdWorkspace);
+                  // Seed folder-presence for a brand-new worktree; leave Git
+                  // status to main's `infoCache` (0-spawn when clean, or live
+                  // post-hook status if WorktreeSetup modified the checkout).
+                  if (!outcome.worktree.reused && createdWorkspace.folderPath) {
+                    qc.setQueryData<WorkspaceFolderPresenceResult>(
+                      queryKeys.workspaceFolderPresence(createdWorkspace.id),
+                      { presence: "present" },
+                    );
+                  }
+                  if (mountedRef.current && chatIdRef.current === chatId) {
+                    React.startTransition(() => {
+                      selectWorkspace(createdWorkspace.id);
+                    });
+                  }
+                } else {
+                  // Fallback when main omitted the workspace record.
+                  await qc.invalidateQueries({ queryKey: queryKeys.workspaces });
+                }
                 const note = worktreeBaseNote(outcome.worktree);
                 if (note) toast.info(note);
               }
@@ -2282,6 +2341,13 @@ export function ChatPane({ chatId }: { chatId: string }) {
               updated = outcome.chat;
               continuedByUser = outcome.answered;
             } catch (error) {
+              // Refresh folder presence if worktree creation failed (for
+              // example, when the source folder was deleted just before send).
+              if (folderWorkspace) {
+                void qc.invalidateQueries({
+                  queryKey: queryKeys.workspaceFolderPresence(folderWorkspace.id),
+                });
+              }
               // The composer that sent this restores its own text; any other
               // (the user left and came back) gets the text and attachments back.
               if (
@@ -2320,7 +2386,19 @@ export function ChatPane({ chatId }: { chatId: string }) {
           throw appendError;
         }
         await installAppendedChatSnapshot(qc, chatId, updated);
-        if (firstDraft) finishChatDraftSend(chatId, true);
+        if (firstDraft) {
+          // Only suppress the immediate mount `chats:get` when this pane is
+          // still actively showing the promoted chat; leaving before commit
+          // abandons the turn and must re-read on revisit.
+          if (
+            generationIntentRef.current === generationIntent &&
+            mountedRef.current &&
+            chatIdRef.current === chatId
+          ) {
+            markChatRecentlyPromoted(chatId);
+          }
+          finishChatDraftSend(chatId, true);
+        }
         void qc.invalidateQueries({ queryKey: queryKeys.chats });
         if (
           generationIntentRef.current !== generationIntent ||
@@ -2385,6 +2463,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
       model,
       qc,
       runGeneration,
+      selectWorkspace,
     ],
   );
 
@@ -3452,12 +3531,27 @@ export function ChatPane({ chatId }: { chatId: string }) {
         throw new Error("Wait for the open file to finish saving before changing Git workspaces.");
       if (environmentPanel.editorState.dirty)
         throw new Error("Save or discard the open file's edits before changing Git workspaces.");
+      performance.mark?.("aiden:worktree-create:start");
       const workspace = await gitApi.createWorktree(effectiveWorkspace.id, branchName);
-      qc.setQueryData<Workspace[]>(queryKeys.workspaces, (current) => [
-        workspace,
-        ...(current ?? []).filter((entry) => entry.id !== workspace.id),
-      ]);
-      void qc.invalidateQueries({ queryKey: queryKeys.workspaces });
+      performance.mark?.("aiden:worktree-create:done");
+      try {
+        performance.measure?.(
+          "aiden:worktree-create",
+          "aiden:worktree-create:start",
+          "aiden:worktree-create:done",
+        );
+      } catch {
+        // Ignore missing marks if the performance buffer was cleared.
+      }
+      upsertCreatedWorkspaceInCache(qc, workspace);
+      // Seed folder-presence for the new worktree; leave Git status to main's
+      // `infoCache` so synchronous WorktreeSetup hook edits are never hidden.
+      if (workspace.folderPath) {
+        qc.setQueryData<WorkspaceFolderPresenceResult>(
+          queryKeys.workspaceFolderPresence(workspace.id),
+          { presence: "present" },
+        );
+      }
       if (!mountedRef.current || chatIdRef.current !== sourceChatId) return;
       if (isNewChat) {
         try {
@@ -3475,7 +3569,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
       selectWorkspace(workspace.id);
       try {
         await navigate({ to: "/chat/$chatId", params: { chatId: created.id } });
-        requestAnimationFrame(() => composerRef.current?.focus({ preventScroll: true }));
+        requestChatDraftComposerFocus(created.id);
       } catch {
         discardChatDraft(created.id);
         selectWorkspace(effectiveWorkspace.id);
@@ -3548,11 +3642,28 @@ export function ChatPane({ chatId }: { chatId: string }) {
       }
       await moveDraftToRepositoryCheckout();
       setChatDraftGitMode(chatId, "worktree");
-      if (!name) return;
       const current = getChatDraft(chatId);
       const workspaceId = current?.chat.workspaceId;
       if (!current || !workspaceId) return;
       let baseRef = current.worktree?.baseRef;
+      let fromOrigin = current.worktree?.fromOrigin;
+      if (!baseRef) {
+        const targetGit =
+          workspaceId === effectiveWorkspaceId
+            ? git.data
+            : qc.getQueryData<GitInfo>(queryKeys.git(workspaceId));
+        const seeded = seedDraftWorktreeFromGitInfo(readChatDraftGitMemory(workspaceId), targetGit);
+        if (seeded) {
+          baseRef = seeded.baseRef;
+          fromOrigin = seeded.fromOrigin;
+        }
+      }
+      if (!name) {
+        if (baseRef && !current.worktree?.baseRef) {
+          updateChatDraftWorktree(chatId, { baseRef, fromOrigin: fromOrigin ?? false });
+        }
+        return;
+      }
       if (!baseRef) {
         // `/worktree <name>` before the menu has read the branches: resolve
         // the base the menu would pick (a local Git read, no network).
@@ -3564,11 +3675,15 @@ export function ChatPane({ chatId }: { chatId: string }) {
         const defaults = resolveDraftWorktreeDefaults(readChatDraftGitMemory(workspaceId), branches);
         if (!defaults) throw new Error("Create the first commit before starting a new worktree.");
         baseRef = defaults.baseRef;
-        updateChatDraftWorktree(chatId, defaults);
+        fromOrigin = defaults.fromOrigin;
       }
-      updateChatDraftWorktree(chatId, { baseRef, branchName: name });
+      updateChatDraftWorktree(chatId, {
+        baseRef,
+        ...(fromOrigin !== undefined ? { fromOrigin } : {}),
+        branchName: name,
+      });
     },
-    [chatId, draftWorkIn, git.data?.unborn, moveDraftToRepositoryCheckout, qc],
+    [chatId, draftWorkIn, effectiveWorkspaceId, git.data, moveDraftToRepositoryCheckout, qc],
   );
 
   const selectDraftWorktree = React.useCallback(
@@ -4176,6 +4291,8 @@ export function ChatPane({ chatId }: { chatId: string }) {
           displayedStreamingReasoning,
           displayedGenerationTimeline,
           agentActivity?.phase,
+          worktreeSend?.view.status,
+          worktreeSend?.view.progress.phase,
           approvals.length,
           questionnaire?.promptId,
           displayedStreamingArtifacts.length,
@@ -4609,15 +4726,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
               }
             />
           </div>
-        ) : messages.length === 0 && displayedStreamingText === null && worktreeSend ? (
-          <DraftWorktreeSendView
-            text={worktreeSend.text}
-            attachments={worktreeSend.attachments}
-            inputSource={worktreeSend.inputSource}
-            view={worktreeSend.view}
-            onDecide={worktreeSend.decide}
-          />
-        ) : messages.length === 0 && displayedStreamingText === null ? (
+        ) : messages.length === 0 && displayedStreamingText === null && !worktreeSend ? (
           <div className="flex min-h-full items-center justify-center">
             {(providers.data ?? []).some(
               (p) => p.models.length > 0 && (p.hasKey || !p.needsKey),
@@ -4654,6 +4763,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
               key={chatId}
               chatId={chatId}
               messages={messages}
+              draftWorktreeSend={worktreeSend}
               streamingText={displayedStreamingText}
               streamingReasoning={displayedStreamingReasoning}
               streamingArtifacts={displayedStreamingArtifacts}

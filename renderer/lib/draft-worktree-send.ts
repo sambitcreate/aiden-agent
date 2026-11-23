@@ -59,17 +59,20 @@ export type WorktreeSendView =
 
 export type WorktreeSendDecision = "retry" | "use-existing" | "checkout" | "cancel";
 
-export interface WorktreeSendApi<Input, C> {
-  createInWorktree(input: Input & { worktree: FirstMessageWorktreeRequest }): Promise<FirstMessageWorktreeResult<C>>;
+export interface WorktreeSendApi<Input, C, W = unknown> {
+  createInWorktree(
+    input: Input & { worktree: FirstMessageWorktreeRequest },
+  ): Promise<FirstMessageWorktreeResult<C, W>>;
   createInCheckout(input: Input): Promise<C>;
   onProgress(handler: (progress: FirstMessageWorktreeProgress) => void): () => void;
 }
 
-export type WorktreeFirstSendResult<C> = (
-  | { chat: C; worktree: FirstMessageWorktreeInfo; keptWorktreeBranch?: undefined }
+export type WorktreeFirstSendResult<C, W = unknown> = (
+  | { chat: C; worktree: FirstMessageWorktreeInfo; workspace?: W; keptWorktreeBranch?: undefined }
   | {
       chat: C;
       worktree?: undefined;
+      workspace?: undefined;
       /** Run in this checkout after a worktree was already created: it is kept, not deleted. */
       keptWorktreeBranch?: string;
     }
@@ -81,8 +84,8 @@ export type WorktreeFirstSendResult<C> = (
   answered: boolean;
 };
 
-export interface WorktreeFirstSend<C> {
-  result: Promise<WorktreeFirstSendResult<C>>;
+export interface WorktreeFirstSend<C, W = unknown> {
+  result: Promise<WorktreeFirstSendResult<C, W>>;
   /** Answer a failure. Ignored unless the send is waiting for one. */
   decide(decision: WorktreeSendDecision): void;
   /**
@@ -155,8 +158,8 @@ export function activeWorktreeSend(draftId: string): ActiveWorktreeSend | undefi
  * published as the draft's active send (and to `onView`) until `release`.
  * An IPC rejection rejects `result` as an ordinary send failure.
  */
-export function startWorktreeFirstSend<Input, C>(options: {
-  api: WorktreeSendApi<Input, C>;
+export function startWorktreeFirstSend<Input, C, W = unknown>(options: {
+  api: WorktreeSendApi<Input, C, W>;
   input: Input;
   worktree: FirstMessageWorktreeRequest;
   /** What the progress view shows as the user's message. */
@@ -166,7 +169,7 @@ export function startWorktreeFirstSend<Input, C>(options: {
     inputSource?: import("../shared/chat-input-source").ChatInputSourceV1;
   };
   onView?: (view: WorktreeSendView) => void;
-}): WorktreeFirstSend<C> {
+}): WorktreeFirstSend<C, W> {
   const { api, input, onView, message } = options;
   const draftId = options.worktree.idempotencyKey;
   let request = options.worktree;
@@ -194,12 +197,19 @@ export function startWorktreeFirstSend<Input, C>(options: {
     if (!waiting) show({ status: "running", request, progress });
   });
 
-  const run = async (): Promise<WorktreeFirstSendResult<C>> => {
+  const run = async (): Promise<WorktreeFirstSendResult<C, W>> => {
     for (;;) {
       progress = {};
       show({ status: "running", request, progress });
       const result = await api.createInWorktree({ ...input, worktree: request });
-      if (result.ok) return { chat: result.chat, worktree: result.worktree, answered };
+      if (result.ok) {
+        return {
+          chat: result.chat,
+          worktree: result.worktree,
+          ...(result.workspace !== undefined ? { workspace: result.workspace } : {}),
+          answered,
+        };
+      }
       const existing = existingWorktreeOf(result);
       // A worktree that reported ready before the chat failed to save is kept.
       const created = existing?.branch ?? (progress.phase === "ready" ? progress.branch : undefined);

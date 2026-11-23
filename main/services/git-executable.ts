@@ -126,15 +126,25 @@ export function createGitExecutableResolver(
   return async (binary, cwd, env, signal) => {
     signal?.throwIfAborted();
     if (deps.platform === "win32") return binary;
+    const directPath = binary.includes("/") ? path.resolve(cwd, binary) : undefined;
     const key = JSON.stringify([
-      binary.includes("/") ? path.resolve(cwd, binary) : binary,
+      directPath ?? binary,
       env.PATH ?? null,
       env.DEVELOPER_DIR ?? null,
     ]);
     const cached = resolved.get(key);
     if (cached && now() - cached.at < ttlMs) {
-      const current = await abortable(deps.executablePath(cached.executable), signal);
-      if (current === cached.executable) return cached.executable;
+      if (directPath) {
+        const directCurrent = await abortable(deps.executablePath(directPath), signal);
+        if (directCurrent === cached.executable) return cached.executable;
+        if (deps.platform === "darwin" && directCurrent === "/usr/bin/git") {
+          const targetCurrent = await abortable(deps.executablePath(cached.executable), signal);
+          if (targetCurrent === cached.executable) return cached.executable;
+        }
+      } else {
+        const current = await abortable(deps.executablePath(cached.executable), signal);
+        if (current === cached.executable) return cached.executable;
+      }
     }
     if (resolved.get(key) === cached) resolved.delete(key);
     let resolution = pending.get(key);
