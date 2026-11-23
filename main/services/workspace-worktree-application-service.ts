@@ -48,7 +48,11 @@ export interface WorkspaceWorktreeApplicationDependencies {
     root: string,
     branch: string,
     signal?: AbortSignal,
-    options?: { startPoint?: string; ownershipToken?: string },
+    options?: {
+      startPoint?: string;
+      ownershipToken?: string;
+      additionalAllocationBytes?: number;
+    },
   ): Promise<GitCreatedWorktree>;
   /** Validate a chosen base branch. Required only by `createFromBase`. */
   resolveWorktreeBase?(folderPath: string, baseRef: string, signal?: AbortSignal): Promise<GitWorktreeBase>;
@@ -165,7 +169,7 @@ export interface WorkspaceWorktreeApplicationDependencies {
   resumeWorkspaceSchedules(workspaceId: string): Promise<void>;
   createWorkspaceId(): string;
   now(): number;
-  notifyChanged(): void;
+  notifyChanged(createdWorkspace?: Workspace): void;
   logError(area: string, message: string, error: unknown): void;
   /**
    * Runs once a new managed worktree is saved (the `WorktreeSetup` hook).
@@ -302,30 +306,26 @@ export function createWorkspaceWorktreeApplicationService(
     identity?: { workspaceId: string; ownershipToken: string },
   ): Promise<Workspace> => {
     const worktreeRoot = await dependencies.ensureWorktreeRoot();
-    // Admit checkout allocation before creating its directory or Git branch.
-    // ensureWorktreeRoot may already have created the empty managed root.
-    const estimatedBytes = await dependencies.checkoutBytes(resolved.folderPath, start?.commit);
-    // Reserve room for the `.worktreeinclude` copies too.
+    // Reserve room for `.worktreeinclude` copies too; `createWorktree` enforces
+    // the combined checkout + reserve allocation atomically inside the
+    // repository's mutation queue before creating directories or Git refs.
     const provisionedReserve = provisionedFilesReserve();
-    const repository = await dependencies.repositoryPaths(resolved.folderPath);
-    await dependencies.checkWorktreeAllocation(worktreeRoot, repository.commonDir, estimatedBytes + provisionedReserve);
+    const createOptions = {
+      ...(start ? { startPoint: start.point } : {}),
+      ...(identity ? { ownershipToken: identity.ownershipToken } : {}),
+      ...(provisionedReserve > 0 ? { additionalAllocationBytes: provisionedReserve } : {}),
+    };
     const worktree = await dependencies.createWorktree(
       resolved.folderPath,
       worktreeRoot,
       branch,
       signal,
-      ...(start || identity
-        ? [{
-            ...(start ? { startPoint: start.point } : {}),
-            ...(identity ? { ownershipToken: identity.ownershipToken } : {}),
-          }]
-        : []),
+      ...(Object.keys(createOptions).length > 0 ? [createOptions] : []),
     );
     const provisionedFiles: string[] = [];
-    let sourceRoot = repository.topLevel;
+    const sourceRoot = worktree.repositoryPath;
     try {
       await dependencies.checkCreateCapacity(worktree.path, provisionedReserve);
-      sourceRoot = (await dependencies.repositoryPaths(resolved.folderPath)).topLevel;
       await dependencies.provisionIncludedFiles({
         sourceRoot,
         worktreePath: worktree.path,
@@ -396,7 +396,7 @@ export function createWorkspaceWorktreeApplicationService(
             provisionedIgnored: provisionedFiles,
           }),
       });
-      dependencies.notifyChanged();
+      dependencies.notifyChanged(saved);
       await announceCreated({
         workspace: saved,
         workspacePath: worktree.workspacePath,
@@ -445,54 +445,89 @@ export function createWorkspaceWorktreeApplicationService(
       throw new Error("Choose a branch name for the new worktree.");
     }
     return dependencies.environment.run(owner, sourceWorkspaceId, async (resolved, signal) => {
-      const base = await resolveWorktreeBase(resolved.folderPath, request.baseRef, signal);
-      // Start at the resolved commit itself, so what is recorded before
-      // creation is exactly what the worktree starts at.
-      let start = { point: base.commit, commit: base.commit };
-      let startPoint = base.name;
-      let baseSource: FirstMessageWorktreeBaseSource = "local";
+      const finalizeFromBase = async (
+        start: { point: string; commit: string },
+        startPoint: string,
+        baseSource: FirstMessageWorktreeBaseSource,
+        existing: string[],
+      ): Promise<WorktreeFromBaseResult> => {
+        let branch = request.branchName;
+        if (branch === undefined) {
+          branch = uniqueBranchName(autoWorktreeBranchName(request.autoName!.seed), existing);
+          if (!branch) throw new Error("Aiden could not find a free branch name for the new worktree.");
+        } else if (uniqueBranchName(branch, existing, 1) !== branch) {
+          // Refuse before anything is recorded, so a caller never associates an
+          // existing branch (or another worktree on it) with this attempt.
+          throw new Error(`Branch “${branch}” already exists.`);
+        }
+        if (signal.aborted) throw new Error("The worktree was cancelled before it was created.");
+        const identity = { workspaceId: dependencies.createWorkspaceId(), ownershipToken: randomUUID() };
+        await request.onBranchResolved?.({ branch, ...identity, baseCommit: start.commit, startPoint, baseSource });
+        request.onProgress?.({ phase: "creating", branch, startPoint });
+        const workspace = await createIn(
+          resolved,
+          signal,
+          sourceWorkspaceId,
+          branch,
+          request.requestedName,
+          start,
+          identity,
+        );
+        return {
+          workspace,
+          branch,
+          startPoint,
+          baseCommit: workspace.managedWorktree?.createdFromHead ?? start.commit,
+          baseSource,
+        };
+      };
+
+      const runPaired = async <A, B>(
+        first: (pairedSignal: AbortSignal) => Promise<A>,
+        second: (pairedSignal: AbortSignal) => Promise<B>,
+      ): Promise<[A, B]> => {
+        const controller = new AbortController();
+        const forwardAbort = () => controller.abort();
+        if (signal.aborted) controller.abort();
+        else signal.addEventListener("abort", forwardAbort, { once: true });
+        try {
+          const firstPromise = Promise.resolve().then(() => first(controller.signal));
+          const secondPromise = Promise.resolve().then(() => second(controller.signal));
+          void firstPromise.catch(() => controller.abort());
+          void secondPromise.catch(() => controller.abort());
+          const [firstOutcome, secondOutcome] = await Promise.allSettled([
+            firstPromise,
+            secondPromise,
+          ]);
+          if (firstOutcome.status === "rejected") throw firstOutcome.reason;
+          if (secondOutcome.status === "rejected") throw secondOutcome.reason;
+          return [firstOutcome.value, secondOutcome.value];
+        } finally {
+          signal.removeEventListener("abort", forwardAbort);
+        }
+      };
+
       if (request.fromOrigin) {
+        const base = await resolveWorktreeBase(resolved.folderPath, request.baseRef, signal);
+        // Start at the resolved commit itself, so what is recorded before
+        // creation is exactly what the worktree starts at.
         if (base.upstream) {
           const remoteName = `${base.upstream.remote}/${base.upstream.branch}`;
           request.onProgress?.({ phase: "fetching", startPoint: remoteName });
-          const commit = await fetchWorktreeBase(resolved.folderPath, base.upstream, signal);
-          start = { point: commit, commit };
-          startPoint = remoteName;
-          baseSource = "fetched";
-        } else {
-          baseSource = "no-upstream";
+          const [commit, existing] = await runPaired(
+            (pairedSignal) => fetchWorktreeBase(resolved.folderPath, base.upstream!, pairedSignal),
+            (pairedSignal) => localBranchNames(resolved.folderPath, pairedSignal),
+          );
+          return await finalizeFromBase({ point: commit, commit }, remoteName, "fetched", existing);
         }
+        const existing = await localBranchNames(resolved.folderPath, signal);
+        return await finalizeFromBase({ point: base.commit, commit: base.commit }, base.name, "no-upstream", existing);
       }
-      const existing = await localBranchNames(resolved.folderPath, signal);
-      let branch = request.branchName;
-      if (branch === undefined) {
-        branch = uniqueBranchName(autoWorktreeBranchName(request.autoName!.seed), existing);
-        if (!branch) throw new Error("Aiden could not find a free branch name for the new worktree.");
-      } else if (uniqueBranchName(branch, existing, 1) !== branch) {
-        // Refuse before anything is recorded, so a caller never associates an
-        // existing branch (or another worktree on it) with this attempt.
-        throw new Error(`Branch “${branch}” already exists.`);
-      }
-      if (signal.aborted) throw new Error("The worktree was cancelled before it was created.");
-      const identity = { workspaceId: dependencies.createWorkspaceId(), ownershipToken: randomUUID() };
-      await request.onBranchResolved?.({ branch, ...identity, baseCommit: start.commit, startPoint, baseSource });
-      request.onProgress?.({ phase: "creating", branch, startPoint });
-      const workspace = await createIn(
-        resolved,
-        signal,
-        sourceWorkspaceId,
-        branch,
-        request.requestedName,
-        start,
-        identity,
+      const [base, existing] = await runPaired(
+        (pairedSignal) => resolveWorktreeBase(resolved.folderPath, request.baseRef, pairedSignal),
+        (pairedSignal) => localBranchNames(resolved.folderPath, pairedSignal),
       );
-      return {
-        workspace,
-        branch,
-        startPoint,
-        baseCommit: workspace.managedWorktree?.createdFromHead ?? start.commit,
-        baseSource,
-      };
+      return await finalizeFromBase({ point: base.commit, commit: base.commit }, base.name, "local", existing);
     });
   };
 

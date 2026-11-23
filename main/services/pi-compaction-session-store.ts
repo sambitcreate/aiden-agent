@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import { constants as fsConstants } from "node:fs";
-import { chmod, lstat, open, readFile, readdir, rename, stat, unlink } from "node:fs/promises";
+import { chmod, lstat, open, readFile, readdir, rename, unlink } from "node:fs/promises";
 import path from "node:path";
 import {
   type AgentMessage,
@@ -331,15 +331,64 @@ async function isDisposablePi084Backup(backupPath: string, chatId: string, root:
 
 async function fileExists(filePath: string): Promise<boolean> {
   try {
-    return (await stat(filePath)).isFile();
+    const metadata = await lstat(filePath);
+    return metadata.isFile() && !metadata.isSymbolicLink();
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
     throw error;
   }
 }
 
-async function findMigrationJournals(root: string, chatId: string): Promise<string[]> {
+/**
+ * Lightweight directory-tree signature for `root`: catches any created,
+ * renamed, deleted, or in-place-modified journal/migration/backup file across
+ * `root` and its subdirectories via `readdir` + `lstat` without opening `.jsonl`
+ * files, and fails closed if any symbolic link is encountered.
+ */
+async function computePiJournalDirSignature(root: string): Promise<string> {
+  const parts: string[] = [];
+  const directories: Array<{ abs: string; rel: string }> = [{ abs: root, rel: "" }];
+  while (directories.length > 0) {
+    const current = directories.pop()!;
+    const dirStat = await lstat(current.abs);
+    if (!dirStat.isDirectory() || dirStat.isSymbolicLink()) {
+      throw new Error("Pi journal storage root must be a directory.");
+    }
+    const entries = await readdir(current.abs, { withFileTypes: true });
+    entries.sort((left, right) => (left.name < right.name ? -1 : left.name > right.name ? 1 : 0));
+    parts.push(`d:${current.rel}:${dirStat.dev}:${dirStat.ino}:${dirStat.mtimeMs}:${dirStat.ctimeMs}:${entries.length}`);
+    const fileEntries: Array<{ abs: string; rel: string }> = [];
+    for (const entry of entries) {
+      if (entry.isSymbolicLink()) {
+        throw new Error("Pi journal storage contains an uninspectable symbolic link.");
+      }
+      const rel = current.rel ? `${current.rel}/${entry.name}` : entry.name;
+      if (entry.isDirectory()) {
+        directories.push({ abs: path.join(current.abs, entry.name), rel });
+      } else if (entry.name.includes(".jsonl")) {
+        fileEntries.push({ abs: path.join(current.abs, entry.name), rel });
+      }
+    }
+    if (fileEntries.length > 0) {
+      const fileStats = await Promise.all(fileEntries.map((item) => lstat(item.abs)));
+      for (let i = 0; i < fileEntries.length; i++) {
+        const st = fileStats[i]!;
+        if (st.isSymbolicLink()) {
+          throw new Error("Pi journal storage contains an uninspectable symbolic link.");
+        }
+        parts.push(`f:${fileEntries[i]!.rel}:${st.dev}:${st.ino}:${st.mode}:${st.size}:${st.mtimeMs}:${st.ctimeMs}`);
+      }
+    }
+  }
+  return parts.join("\n");
+}
+
+async function scanMigrationJournalIds(root: string, chatId: string): Promise<{
+  matches: string[];
+  allLegacyChatIds: Set<string>;
+}> {
   const matches: string[] = [];
+  const allLegacyChatIds = new Set<string>();
   const directories = [root];
   while (directories.length > 0) {
     const directory = directories.pop()!;
@@ -349,18 +398,37 @@ async function findMigrationJournals(root: string, chatId: string): Promise<stri
         directories.push(candidate);
       } else if (entry.name.endsWith(".jsonl")) {
         const prefix = await readJournalPrefix(candidate).catch(() => "");
-        if (
-          journalHeaderOwnsChat(prefix, chatId) ||
-          (currentJournalHeaderOwnsChat(prefix, chatId) &&
-            ((await fileExists(`${candidate}.v3-backup`)) ||
-              (await fileExists(`${candidate}.migration-v1.json`))))
-        ) {
+        if (!prefix) continue;
+        const firstLine = prefix.split("\n", 1)[0] ?? "";
+        const isLegacyForChat = journalHeaderOwnsChat(prefix, chatId);
+        const hasPendingBackup =
+          (await fileExists(`${candidate}.v3-backup`)) ||
+          (await fileExists(`${candidate}.migration-v1.json`));
+        if (isLegacyForChat || (currentJournalHeaderOwnsChat(prefix, chatId) && hasPendingBackup)) {
           matches.push(candidate);
+        }
+        // Record any chat ID that owns a legacy or mid-migration journal so the
+        // brand-new chat fast path never skips an existing migration candidate.
+        try {
+          const parsed = JSON.parse(firstLine) as { id?: unknown; metadata?: { chatId?: unknown } } | null;
+          if (parsed && typeof parsed === "object") {
+            const ownerId =
+              typeof parsed.metadata?.chatId === "string"
+                ? parsed.metadata.chatId
+                : typeof parsed.id === "string"
+                  ? parsed.id
+                  : undefined;
+            if (ownerId && (hasPendingBackup || journalHeaderOwnsChat(prefix, ownerId))) {
+              allLegacyChatIds.add(ownerId);
+            }
+          }
+        } catch {
+          // Malformed header is handled by normal open/quarantine paths.
         }
       }
     }
   }
-  return matches;
+  return { matches, allLegacyChatIds };
 }
 
 /** Preserve a valid durable prefix when only the final JSONL write was torn. */
@@ -1064,6 +1132,15 @@ export class PiCompactionSessionStore {
   private readonly opening = new Map<string, Promise<PiOpenChatIfEligibleResult>>();
   private readonly quarantined = new Map<string, Promise<void>>();
   private indexMutation: Promise<void> = Promise.resolve();
+  /** Monotonic counter incremented on every store disk mutation to fence `dirIndex`. */
+  private dirMutationVersion = 0;
+  /** Directory-signature-validated set of chat IDs already present on disk. */
+  private dirIndex?: {
+    root: string;
+    signature: string;
+    knownChatIds: Set<string>;
+    legacyChatIds: Set<string>;
+  };
 
   constructor(private readonly options: PiCompactionSessionStoreOptions) {}
 
@@ -1160,6 +1237,8 @@ export class PiCompactionSessionStore {
   }
 
   private async quarantine(root: string, chatId: string, filePath: string): Promise<void> {
+    this.dirMutationVersion += 1;
+    this.dirIndex = undefined;
     const quarantined = `${filePath}.corrupt-${Date.now()}-${randomUUID()}`;
     await rename(filePath, quarantined);
     await this.rememberPath(root, chatId, quarantined);
@@ -1253,7 +1332,24 @@ export class PiCompactionSessionStore {
     };
     const migrationFailures: Array<{ path: string; error: unknown }> = [];
     const deferredMigrations: string[] = [];
-    const migrationPaths = await findMigrationJournals(root, chatId);
+    const scanStartVersion = this.dirMutationVersion;
+    const beforeSignature = await computePiJournalDirSignature(root).catch(() => undefined);
+    const knownBrandNew =
+      beforeSignature !== undefined &&
+      this.dirIndex !== undefined &&
+      this.dirIndex.root === root &&
+      this.dirIndex.signature === beforeSignature &&
+      !this.dirIndex.knownChatIds.has(chatId) &&
+      !this.dirIndex.legacyChatIds.has(chatId);
+    let migrationPaths: string[];
+    let scannedLegacyChatIds: Set<string> | undefined;
+    if (knownBrandNew) {
+      migrationPaths = [];
+    } else {
+      const scan = await scanMigrationJournalIds(root, chatId);
+      migrationPaths = scan.matches;
+      scannedLegacyChatIds = scan.allLegacyChatIds;
+    }
     for (const migrationPath of migrationPaths) {
       try {
         if (rollout && rolloutOptions) {
@@ -1267,6 +1363,8 @@ export class PiCompactionSessionStore {
             continue;
           }
         }
+        this.dirMutationVersion += 1;
+        this.dirIndex = undefined;
         const migration = await migratePiSessionJournal(migrationPath, chatId);
         await this.rememberPath(root, chatId, migration.receipt.backupPath);
         await this.rememberPath(root, chatId, migration.receiptPath);
@@ -1275,12 +1373,38 @@ export class PiCompactionSessionStore {
       }
     }
     const failedPaths = new Set(migrationFailures.map((failure) => path.resolve(failure.path)));
-    const matches = (await repo.list()).filter(
-      (metadata) =>
-        metadata.id === chatId &&
-        metadata.metadata?.kind === SESSION_METADATA_KIND &&
-        !failedPaths.has(path.resolve(metadata.path)),
-    );
+    let matches: Awaited<ReturnType<PiSessionRepositoryPort["list"]>>;
+    if (knownBrandNew) {
+      matches = [];
+    } else {
+      const listed = await repo.list();
+      matches = listed.filter(
+        (metadata) =>
+          metadata.id === chatId &&
+          metadata.metadata?.kind === SESSION_METADATA_KIND &&
+          !failedPaths.has(path.resolve(metadata.path)),
+      );
+      if (
+        beforeSignature !== undefined &&
+        migrationPaths.length === 0 &&
+        this.dirMutationVersion === scanStartVersion &&
+        this.opening.size <= 1
+      ) {
+        const afterScanSignature = await computePiJournalDirSignature(root).catch(() => undefined);
+        if (afterScanSignature === beforeSignature && this.dirMutationVersion === scanStartVersion) {
+          const knownChatIds = new Set<string>();
+          for (const metadata of listed) {
+            if (metadata.metadata?.kind === SESSION_METADATA_KIND) knownChatIds.add(metadata.id);
+          }
+          this.dirIndex = {
+            root,
+            signature: afterScanSignature,
+            knownChatIds,
+            legacyChatIds: scannedLegacyChatIds ?? new Set<string>(),
+          };
+        }
+      }
+    }
     // Pi lists newest sessions first. Validate the whole body and quarantine
     // a malformed duplicate before falling back to the next valid journal.
     let session: PiSessionPort<PiPersistentSessionMetadata> | undefined;
@@ -1320,6 +1444,8 @@ export class PiCompactionSessionStore {
     ) {
       return { session: undefined, reason: "v4_creation_rollout" };
     }
+    const createdNewSession = !session;
+    const createVersion = createdNewSession ? ++this.dirMutationVersion : this.dirMutationVersion;
     session ??= await repo.create({
       id: chatId,
       cwd: root,
@@ -1330,6 +1456,45 @@ export class PiCompactionSessionStore {
     await chmod(path.dirname(persisted.path), 0o700);
     await chmod(persisted.path, 0o600);
     await this.rememberPath(root, chatId, persisted.path);
+    if (createdNewSession) {
+      // Only advance `dirIndex` in place when no concurrent opener or external
+      // file could have appeared alongside `persisted.path`.
+      if (
+        this.dirIndex &&
+        this.dirIndex.root === root &&
+        this.opening.size <= 1 &&
+        this.dirMutationVersion === createVersion &&
+        beforeSignature !== undefined
+      ) {
+        const updatedSignature = await computePiJournalDirSignature(root).catch(() => undefined);
+        const beforeFiles = new Set(
+          beforeSignature.split("\n").filter((line) => line.startsWith("f:")).map((line) => line.split(":", 2)[1]),
+        );
+        const expectedRel = path.relative(root, persisted.path).split(path.sep).join("/");
+        const addedUnexpected =
+          updatedSignature === undefined ||
+          updatedSignature
+            .split("\n")
+            .filter((line) => line.startsWith("f:"))
+            .some((line) => {
+              const rel = line.split(":", 2)[1];
+              return rel !== expectedRel && !beforeFiles.has(rel);
+            });
+        if (
+          updatedSignature !== undefined &&
+          !addedUnexpected &&
+          this.opening.size <= 1 &&
+          this.dirMutationVersion === createVersion
+        ) {
+          this.dirIndex.knownChatIds.add(chatId);
+          this.dirIndex.signature = updatedSignature;
+        } else {
+          this.dirIndex = undefined;
+        }
+      } else {
+        this.dirIndex = undefined;
+      }
+    }
     this.sessions.set(chatId, session);
     return { session };
   }
@@ -1471,6 +1636,8 @@ export class PiCompactionSessionStore {
     });
 
     const { repo, root } = await this.repository();
+    this.dirMutationVersion += 1;
+    this.dirIndex = undefined;
     const session = await repo.create({
       id: targetChatId,
       cwd: root,
@@ -1481,6 +1648,7 @@ export class PiCompactionSessionStore {
       await chmod(path.dirname(persisted.path), 0o700);
       await chmod(persisted.path, 0o600);
       await this.rememberPath(root, targetChatId, persisted.path);
+      this.dirIndex = undefined;
       await session.importBranch(prefix);
     } catch (error) {
       await this.deleteChat(targetChatId).catch(() => undefined);
@@ -1564,6 +1732,8 @@ export class PiCompactionSessionStore {
         }
       }
     }
+    this.dirMutationVersion += 1;
+    this.dirIndex = undefined;
     await this.mutateIndex(root, (next) => {
       delete next.chats[chatId];
     });
