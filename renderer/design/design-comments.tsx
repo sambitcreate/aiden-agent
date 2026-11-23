@@ -532,7 +532,7 @@ export function useDesignComments({ chatId, doc, pageId, showPage, change, flush
     const frame = comment?.frameId ? docRef.current.frames.find((entry) => entry.id === comment.frameId) : undefined;
     const marks = marksFromCanvas(frame, strokes);
     setDrawing(false);
-    change((latest) => setCommentQueued(editComment(latest, id, { note, marks }), id, queued));
+    change((latest) => setCommentQueued(editComment(latest, id, { note, marks }), id, queued, chatId));
     // The picture is taken with the marks still on screen and the box hidden.
     if (comment && queued) await captureSpot(id, comment);
     openComment(null);

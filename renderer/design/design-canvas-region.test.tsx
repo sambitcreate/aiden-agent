@@ -64,3 +64,31 @@ test("a save answered moved reopens the canvas on the chat's new workspace befor
   await waitFor(() => assert.deepEqual(saves.map((save) => save.workspaceId), ["workspace-1", "workspace-2"]), { timeout: 3000 });
   assert.equal(revision, 1, "the edit on the new workspace's canvas is saved");
 });
+
+test("a moved answer for one chat does not send another chat of the same workspace to the new workspace", async () => {
+  const saves: Array<{ chatId: string; workspaceId?: string }> = [];
+  let revision = 0;
+  installBotTestIpc({
+    "designCanvas:get": () => ({ ...emptyDesignCanvas(), revision }),
+    "designCanvas:save": (chatId, _doc, _base, options) => {
+      const named = (options as { workspaceId?: string } | undefined) ?? {};
+      saves.push({ chatId: chatId as string, ...named });
+      if (chatId === "chat-1" && named.workspaceId === "workspace-1") return { ok: false, reason: "moved", workspaceId: "workspace-2" };
+      revision += 1;
+      return { ok: true, revision };
+    },
+    "designCanvas:grant": () => ({ error: "unavailable" }),
+    "designCanvas:watch": () => undefined,
+    "designCanvas:view:get": () => null,
+    "designCanvas:view": () => undefined,
+  });
+  const { rerender } = render(<DesignCanvasRegion chatId="chat-1" workspaceId="workspace-1" width={800} placement="split" hidden={false} />);
+  fireEvent.click(await screen.findByRole("button", { name: "Note" }));
+  await waitFor(() => assert.equal(saves.length, 1), { timeout: 3000 });
+
+  // The person switches to chat-2, which still lives in workspace-1.
+  rerender(<DesignCanvasRegion chatId="chat-2" workspaceId="workspace-1" width={800} placement="split" hidden={false} />);
+  fireEvent.click(await screen.findByRole("button", { name: "Note" }));
+  await waitFor(() => assert.equal(saves.length, 2), { timeout: 3000 });
+  assert.deepEqual(saves[1], { chatId: "chat-2", workspaceId: "workspace-1" });
+});

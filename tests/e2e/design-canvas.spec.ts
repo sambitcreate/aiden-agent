@@ -956,6 +956,8 @@ test("a page downloads as a PNG, a PDF and its own file, and Present walks the p
   // Present fills the window and walks the page in reading order, then gives the canvas back.
   const firstPage = (await savedCanvases(userDataDir))[0]!.pages[0]!.id;
   const viewOf = async () => (await savedViews(userDataDir))[0]?.viewports[firstPage];
+  // The view is reported 250 ms after the last move; wait until main has written it.
+  await expect.poll(viewOf).toBeDefined();
   const before = await viewOf();
   await canvas.getByRole("button", { name: "Present this page" }).click();
   const bar = canvas.getByRole("toolbar", { name: "Presentation" });

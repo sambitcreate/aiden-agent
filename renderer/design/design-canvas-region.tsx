@@ -31,12 +31,14 @@ export function DesignCanvasRegion({
   // A save can find the chat moved to another workspace before the chat's
   // metadata says so. The canvas then opens on that workspace at once, until
   // the metadata names a workspace of its own, which is newer.
-  const [moved, setMoved] = React.useState<{ from: string; to: string } | null>(null);
-  if (moved && moved.from !== workspaceId) setMoved(null);
-  const shownWorkspace = moved && moved.from === workspaceId ? moved.to : workspaceId;
+  // It belongs to the chat it was found for: another chat of the same workspace opens on its own.
+  const [moved, setMoved] = React.useState<{ chatId: string; from: string; to: string } | null>(null);
+  const current = moved && moved.chatId === chatId && moved.from === workspaceId ? moved : null;
+  if (moved && !current) setMoved(null);
+  const shownWorkspace = current ? current.to : workspaceId;
   const onMoved = React.useCallback(
-    (to: string) => setMoved(to === workspaceId ? null : { from: workspaceId, to }),
-    [workspaceId],
+    (to: string) => setMoved(to === workspaceId ? null : { chatId, from: workspaceId, to }),
+    [chatId, workspaceId],
   );
   return (
     <section

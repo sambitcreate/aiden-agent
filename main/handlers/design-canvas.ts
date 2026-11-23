@@ -317,18 +317,32 @@ export function registerDesignCanvasHandlers<Event>(deps: {
   // canvas unmounted; that needs only a well-formed chat id, so an unmount
   // after the chat is deleted still lands. A report naming a workspace the
   // chat has left is dropped: it comes from a canvas about to remount.
+  // A chat's reports are handled in the order they were sent, so the unmount
+  // that follows a last report is never overtaken by it (which would leave the
+  // canvas counted as open).
+  const viewQueues = new Map<string, Promise<void>>();
+  const inViewOrder = (chatId: string, run: () => Promise<void>): Promise<void> => {
+    const next = (viewQueues.get(chatId) ?? Promise.resolve()).then(run, run);
+    const tail = next.catch(() => undefined);
+    viewQueues.set(chatId, tail);
+    void tail.then(() => {
+      if (viewQueues.get(chatId) === tail) viewQueues.delete(chatId);
+    });
+    return next;
+  };
   deps.handle("designCanvas:view", async (event, chatId, report) => {
     if (!deps.enabled()) throw new Error(UNAVAILABLE);
     assertDesignCanvasChatId(chatId);
     const parsed = parseViewReport(report);
     if (parsed === "unmounted") {
-      deps.views.unmount(chatId);
-      return;
+      return inViewOrder(chatId, async () => deps.views.unmount(chatId));
     }
-    const chat = await requireChat(chatId);
-    deps.whenSenderResets?.(event, () => deps.views.unmountAll());
-    if (parsed.workspaceId !== designCanvasWorkspaceOf(chat)) return;
-    await deps.views.report(chat.id, parsed.workspaceId, parsed.view, parsed.focusId);
+    return inViewOrder(chatId, async () => {
+      const chat = await requireChat(chatId);
+      deps.whenSenderResets?.(event, () => deps.views.unmountAll());
+      if (parsed.workspaceId !== designCanvasWorkspaceOf(chat)) return;
+      await deps.views.report(chat.id, parsed.workspaceId, parsed.view, parsed.focusId);
+    });
   });
 
   // The view main kept for the chat, for a canvas that is mounting: its page,

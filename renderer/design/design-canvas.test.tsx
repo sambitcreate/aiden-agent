@@ -13,6 +13,7 @@ import { emptyDesignCanvas, type DesignCanvas, type DesignFrame } from "../share
 import { DesignCanvasRegion } from "./design-canvas-region";
 import { designFrameSnapshots } from "./frame-snapshots";
 import { designCommentTray, type DesignCommentSend } from "./comment-tray-store";
+import { useCanvasFocusRequests } from "./canvas-focus-requests";
 import { DESIGN_CANVAS_SAVE_DELAY_MS } from "./use-design-canvas";
 
 // The canvas imports React Flow's CSS, which Node cannot load; tests get an empty module.
@@ -430,6 +431,19 @@ test("a visual another chat of the workspace made loads through that chat", asyn
   );
 });
 
+test("a visual whose chat no longer has it says so and can be removed", async () => {
+  const chart: DesignFrame = { id: "a1", kind: "artifact", title: "Chart", x: 0, y: 0, w: 640, h: 480, mediaId: "m1", chatId: "chat-gone", pageId: "page-1", createdBy: "aiden" };
+  const { calls } = setup(canvasWith(chart), {
+    "chats:htmlArtifactSrcdoc": () => undefined,
+  });
+  await mount();
+  fireEvent.doubleClick(screen.getByRole("group", { name: "Chart" }));
+  await waitFor(() => assert.ok(screen.getByText("Visual no longer available")), SAVE_WAIT);
+  fireEvent.click(screen.getByRole("button", { name: "Remove frame" }));
+  await waitFor(() => assert.equal(screen.queryByRole("group", { name: "Chart" }), null), SAVE_WAIT);
+  assert.equal(calls.filter((call) => call.channel === "chats:htmlArtifactSrcdoc").length, 1, "it does not keep asking");
+});
+
 test("Aiden's snapshot request is answered with a picture of the canvas region, and only for this chat", async () => {
   measureCanvasAt1000x800();
   const { calls } = setup(canvasWith(), {
@@ -533,6 +547,72 @@ test("Aiden's page change applies even when the person just moved the canvas and
   await waitFor(() => assert.equal(lastViewReport(calls)?.focusId, 5), SAVE_WAIT);
 });
 
+test("a page change Aiden sent before the canvas loaded still shows its page, even once too old to fit its frames", async () => {
+  const { calls } = setup(twoPageCanvas());
+  // The chat area keeps focus requests while the canvas is still loading.
+  function ChatArea() {
+    useCanvasFocusRequests(true);
+    return null;
+  }
+  render(<ChatArea />);
+  const now = Date.now;
+  Date.now = () => now() - 60_000;
+  try {
+    act(() => emitBotTestNotification("designCanvas:focus", { chatId: "chat-1", pageId: "p2", frameIds: ["n2"], focusId: 7 }));
+  } finally {
+    Date.now = now;
+  }
+  await mount();
+  assert.ok(await screen.findByRole("button", { name: "Page: Pricing" }));
+  await waitFor(() => assert.equal(lastViewReport(calls)?.focusId, 7), SAVE_WAIT);
+  assert.equal(lastViewReport(calls)?.view?.pageId, "p2");
+});
+
+test("each chat of the workspace keeps its own page: A shows Pricing, B opens on Home, and A comes back to Pricing", async () => {
+  const kept = new Map<string, { pageId: string; viewport: { x: number; y: number; zoom: number } }>();
+  setup(twoPageCanvas(), {
+    "designCanvas:view": (chatId, report) => {
+      const { view } = report as { view?: { pageId: string; viewport: { x: number; y: number; zoom: number } } };
+      if (view) kept.set(chatId as string, view);
+    },
+    "designCanvas:view:get": (chatId) => {
+      const view = kept.get(chatId as string);
+      return view ? { ...view, focusId: 0, viewports: { [view.pageId]: view.viewport } } : null;
+    },
+  });
+  const region = (chatId: string) => (
+    <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+      <DesignCanvasRegion chatId={chatId} workspaceId="workspace-1" width={1000} placement="split" hidden={false} />
+    </QueryClientProvider>
+  );
+  const shown = render(region("chat-a"));
+  assert.ok(await screen.findByRole("button", { name: "Page: Home" }));
+  await choosePageItem("Pricing", "menuitemradio");
+  assert.ok(await screen.findByRole("group", { name: "On pricing" }));
+
+  // Switching chats sends A's last change before B's canvas reads its own view.
+  shown.rerender(region("chat-b"));
+  await waitFor(() => assert.equal(kept.get("chat-a")?.pageId, "p2"), SAVE_WAIT);
+  assert.ok(await screen.findByRole("group", { name: "On home" }), "B opens on the first page");
+
+  shown.rerender(region("chat-a"));
+  assert.ok(await screen.findByRole("group", { name: "On pricing" }), "A is back on its page");
+  assert.ok(screen.getByRole("button", { name: "Page: Pricing" }));
+});
+
+test("when another chat deletes the page on screen, the canvas goes back to the page it showed before", async () => {
+  let doc = twoPageCanvas();
+  setup(doc, { "designCanvas:get": () => doc });
+  await mount();
+  await choosePageItem("Pricing", "menuitemradio");
+  assert.ok(await screen.findByRole("group", { name: "On pricing" }));
+
+  doc = { ...doc, revision: doc.revision + 1, pages: doc.pages.filter((page) => page.id !== "p2"), frames: doc.frames.filter((frame) => frame.pageId !== "p2") };
+  act(() => emitBotTestNotification("designCanvas:updated", { workspaceId: "workspace-1", chatId: "chat-2", revision: doc.revision }));
+  assert.ok(await screen.findByRole("group", { name: "On home" }, SAVE_WAIT));
+  assert.ok(screen.getByRole("button", { name: "Page: Home" }));
+});
+
 test("a new page starts empty and is shown; deleting it can be undone from the toast", async () => {
   const { saved } = setup(canvasWith(sticky("n1", "On home")));
   render(<Toaster />);
@@ -549,6 +629,19 @@ test("a new page starts empty and is shown; deleting it can be undone from the t
   fireEvent.click(await screen.findByRole("button", { name: "Undo" }));
   assert.ok(await screen.findByRole("group", { name: "On home" }), "the page and its note are back");
   assert.ok(screen.getByRole("button", { name: "Page: Page 1" }));
+});
+
+test("undoing a new page goes back to the page it was added from, not the first", async () => {
+  setup(twoPageCanvas());
+  const region = await mount();
+  await choosePageItem("Pricing", "menuitemradio");
+  assert.ok(await screen.findByRole("group", { name: "On pricing" }));
+  await choosePageItem("New page");
+  assert.ok(await screen.findByRole("button", { name: "Page: Page 3" }));
+  region.focus();
+  fireEvent.keyDown(region, { key: "z", code: "KeyZ", ...commandKey });
+  assert.ok(await screen.findByRole("button", { name: "Page: Pricing" }));
+  assert.ok(screen.getByRole("group", { name: "On pricing" }));
 });
 
 test("Rename page… names the page on screen", async () => {

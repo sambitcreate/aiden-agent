@@ -154,13 +154,19 @@ export function deleteComment(doc: DesignCanvas, id: string): DesignCanvas {
     : doc;
 }
 
-/** Puts an open comment in the tray for Aiden, or takes it out. */
-export function setCommentQueued(doc: DesignCanvas, id: string, queued: boolean): DesignCanvas {
+/**
+ * Puts an open comment in the tray for Aiden, or takes it out. Each chat has
+ * its own tray, so a comment queued from `chatId` becomes that chat's, even
+ * when another chat of the workspace left it.
+ */
+export function setCommentQueued(doc: DesignCanvas, id: string, queued: boolean, chatId?: string): DesignCanvas {
   return updateOne(doc, id, (comment) => {
-    if (comment.state !== "open" || Boolean(comment.queued) === queued) return comment;
+    const moves = queued && chatId !== undefined && comment.chatId !== chatId;
+    if (comment.state !== "open" || (Boolean(comment.queued) === queued && !moves)) return comment;
     const next = { ...comment };
     if (queued) next.queued = true;
     else delete next.queued;
+    if (moves) next.chatId = chatId;
     return next;
   });
 }

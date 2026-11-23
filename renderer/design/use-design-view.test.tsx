@@ -125,13 +125,12 @@ test("leaving within 250 ms sends the last change first, then says the canvas cl
   ]);
 });
 
-test("Aiden's page change is applied even before the kept view arrives, and its focusId is echoed; an older one is ignored", async () => {
-  // Main answered the read before Aiden showed p3 (focusId 4).
+test("Aiden's page change is applied and its focusId echoed; an older one is ignored", async () => {
   kept = { pageId: "p2", viewport: { x: 0, y: 0, zoom: 1 }, focusId: 3, viewports: {} };
   render(<Probe />);
-  await act(async () => view.applyFocus({ pageId: "p3", focusId: 4 }));
   await settle();
-  assert.equal(view.pageId, "p3", "the newer page change wins over the kept view");
+  await act(async () => view.applyFocus({ pageId: "p3", focusId: 4 }));
+  assert.equal(view.pageId, "p3");
   await tick(DESIGN_VIEW_REPORT_DELAY_MS);
   assert.deepEqual(lastReport(), ["chat-1", { workspaceId: "ws-1", view: { pageId: "p3", viewport: { x: 0, y: 0, zoom: 1 } }, focusId: 4 }]);
 
@@ -144,12 +143,22 @@ test("Aiden's page change is applied even before the kept view arrives, and its 
   assert.equal((lastReport()?.[1] as { focusId: number }).focusId, 4);
 });
 
-test("a kept view newer than a focus that arrived first wins", async () => {
-  kept = { pageId: "p2", viewport: { x: 0, y: 0, zoom: 1 }, focusId: 6, viewports: {} };
-  render(<Probe />);
-  await act(async () => view.applyFocus({ pageId: "p3", focusId: 5 }));
+test("when the page on screen goes (an added page undone), the chat goes back to the page it showed before, not the first", async () => {
+  kept = { pageId: "p2", viewport: { x: 40, y: 0, zoom: 2 }, focusId: 0, viewports: { p2: { x: 40, y: 0, zoom: 2 } } };
+  const added: DesignCanvas = { ...doc, pages: [...doc.pages, { id: "new", name: "Page 4" }] };
+  const shown = render(<Probe canvas={added} />);
   await settle();
+  await act(async () => view.showPage("p3"));
+  await act(async () => view.showPage("new"));
+  assert.equal(view.pageId, "new");
+
+  // Undo takes the new page away; the person is back on the page they added it from.
+  shown.rerender(<Probe canvas={doc} />);
+  assert.equal(view.pageId, "p3");
+  // With that page gone too, the one before it.
+  shown.rerender(<Probe canvas={{ ...doc, pages: doc.pages.filter((page) => page.id !== "p3") }} />);
   assert.equal(view.pageId, "p2");
+  assert.deepEqual(view.viewport, { x: 40, y: 0, zoom: 2 }, "where it was left");
   await tick(DESIGN_VIEW_REPORT_DELAY_MS);
-  assert.equal((lastReport()?.[1] as { focusId: number }).focusId, 6);
+  assert.equal((lastReport()?.[1] as { view: { pageId: string } }).view.pageId, "p2");
 });

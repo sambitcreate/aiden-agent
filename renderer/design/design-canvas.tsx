@@ -349,6 +349,9 @@ function LoadedDesignCanvas({
   // being deleted): go to where the chat left that page, with nothing
   // selected or entered.
   const shownPage = React.useRef(pageId);
+  // The page a pan or zoom began on. One that ends after Aiden showed another
+  // page belongs to neither, so it is not kept.
+  const pageAtMoveStart = React.useRef<string | null>(null);
   const pageViewport = view.viewport;
   React.useEffect(() => {
     if (shownPage.current === pageId) return;
@@ -1266,10 +1269,16 @@ function LoadedDesignCanvas({
                 setViewport(latestViewport.current);
               });
             }}
+            onMoveStart={() => {
+              pageAtMoveStart.current = shownPage.current;
+            }}
             onMoveEnd={(_event, next) => {
               latestViewport.current = next;
+              const startedOn = pageAtMoveStart.current;
+              pageAtMoveStart.current = null;
               // Present moves the view for itself; the page keeps where the person left it.
               if (presentingRef.current) return;
+              if (startedOn !== null && startedOn !== shownPage.current) return;
               // A pan or zoom is the chat's view, never a change to the shared canvas.
               view.moved({ x: next.x, y: next.y, zoom: next.zoom });
             }}

@@ -150,6 +150,15 @@ test("the tray lists open comments with a note, oldest first, and taking one out
   assert.equal(setCommentQueued(doc, "c1", false), doc, "no change returns the same document");
 });
 
+test("queuing another chat's comment puts it in the queuing chat's tray, and that chat sends it", () => {
+  let doc = addComment(withHeadingComment(), { pageId: "page-1", chatId: "chat-other", id: "theirs", place: { x: 0, y: 0 }, note: "Tighter", createdAt: AT })!;
+  doc = setCommentQueued(doc, "theirs", true, CHAT);
+  assert.deepEqual(queuedComments(doc, CHAT).map((comment) => comment.id), ["c1", "theirs"]);
+  assert.deepEqual(queuedComments(doc, "chat-other"), [], "it is not waiting in the chat that left it");
+  doc = markCommentsSent(doc, ["theirs"], LATER, CHAT);
+  assert.equal(doc.comments.find((comment) => comment.id === "theirs")!.state, "sent");
+});
+
 test("sending moves comments out of the tray; resolving and reopening follow", () => {
   let doc = withHeadingComment();
   doc = markCommentsSent(doc, ["c1"], LATER, CHAT);

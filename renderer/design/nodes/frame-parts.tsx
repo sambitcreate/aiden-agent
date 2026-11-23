@@ -43,10 +43,18 @@ export function FrameSkeleton({ title }: { title: string }) {
   );
 }
 
-export function MissingFrame({ path, onRemove }: { path: string | undefined; onRemove(): void }) {
+export function MissingFrame({
+  path,
+  onRemove,
+  label = "File not found",
+}: {
+  path: string | undefined;
+  onRemove(): void;
+  label?: string;
+}) {
   return (
     <div className="flex h-full w-full flex-col items-center justify-center gap-2 p-4 text-center">
-      <span className="text-strong text-primary">File not found</span>
+      <span className="text-strong text-primary">{label}</span>
       {path ? <span className="max-w-full truncate text-secondary">{path}</span> : null}
       <Button variant="muted" size="small" className="nodrag" onClick={onRemove}>
         Remove frame

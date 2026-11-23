@@ -288,6 +288,15 @@ test("designCanvas:view stores a parsed view and refuses a malformed one", async
   });
 });
 
+test("a canvas's last report and its unmount, sent back to back, leave it counted as closed", async (t) => {
+  const { invoke, views } = await fixture(t);
+  const last = invoke("designCanvas:view", "chat-1", { workspaceId: "workspace-1", view: { pageId: "p2", viewport: { x: 3, y: 0, zoom: 1 } }, focusId: 0 });
+  const closed = invoke("designCanvas:view", "chat-1", { mounted: false });
+  await Promise.all([last, closed]);
+  assert.equal(views.mounted("workspace-1"), 0);
+  assert.equal((await views.get("chat-1", "workspace-1"))?.viewport.x, 3, "the last report still counts");
+});
+
 test("designCanvas:view:get answers null for a chat with no kept view", async (t) => {
   const { invoke } = await fixture(t);
   assert.equal(await invoke("designCanvas:view:get", "chat-1"), null);

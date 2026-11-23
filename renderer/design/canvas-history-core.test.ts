@@ -61,15 +61,10 @@ test("undoing a page delete brings the page and its frames back, and keeps a fra
   assert.deepEqual(restored.frames.map((frame) => frame.id).sort(), ["aiden", "kept", "on-p2"]);
 });
 
-test("undo after another chat switched pages does not change any page", () => {
-  // Two pages; this chat moves a frame on Page 1 while another chat looks at Pricing.
+test("undoing a frame move keeps a page rename another chat made meanwhile", () => {
+  // Two pages; this chat moves a frame on Page 1 while another chat renames Pricing.
   const two = addPage(state("a"), "p2", "Pricing");
   const moved: DesignCanvas = { ...two, frames: [{ ...two.frames[0]!, x: 300 }] };
-  // Meanwhile the other chat renamed nothing and only switched pages, which is
-  // not in the document at all: the document it saved is `moved` exactly.
-  const undone = changesBetween(moved, two)({ ...moved });
-  assert.deepEqual(undone, two, "the undo gives back exactly the document before the move, with no view state in it");
-  // A page change made by someone else meanwhile is kept by an undo that did not touch pages.
   const renamedElsewhere = renamePage(moved, "p2", "Plans");
   const kept = changesBetween(moved, two)(renamedElsewhere);
   assert.deepEqual(kept, { ...renamedElsewhere, frames: two.frames });

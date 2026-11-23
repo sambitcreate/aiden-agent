@@ -43,10 +43,27 @@ export interface DesignViewHandle {
 type State = {
   loaded: boolean;
   pageId: string | undefined;
+  /** Pages shown before this one, newest first, so undoing a page's creation goes back to where the person was. */
+  earlier: readonly string[];
   viewports: Readonly<Record<string, DesignViewport>>;
 };
 
-const EMPTY: State = { loaded: false, pageId: undefined, viewports: {} };
+const EMPTY: State = { loaded: false, pageId: undefined, earlier: [], viewports: {} };
+const MAX_EARLIER = 16;
+
+/** `state` showing `pageId`, the page it showed before kept as the first to go back to. */
+function showing(state: State, pageId: string): State {
+  if (state.pageId === pageId) return state;
+  const earlier = state.pageId === undefined ? state.earlier : [state.pageId, ...state.earlier.filter((id) => id !== state.pageId)];
+  return { ...state, pageId, earlier: earlier.filter((id) => id !== pageId).slice(0, MAX_EARLIER) };
+}
+
+/** The page on screen: the view's own while it exists, else the newest earlier page that does, else the first. */
+function shownPageId(doc: DesignCanvas, state: State): string {
+  if (state.pageId !== undefined && doc.pages.some((page) => page.id === state.pageId)) return state.pageId;
+  const back = state.earlier.find((id) => doc.pages.some((page) => page.id === id));
+  return viewPageId(doc, back === undefined ? state : { pageId: back });
+}
 
 export function useDesignView(workspaceId: string, chatId: string, doc: DesignCanvas | undefined): DesignViewHandle {
   const [state, setState] = React.useState<State>(EMPTY);
@@ -64,7 +81,7 @@ export function useDesignView(workspaceId: string, chatId: string, doc: DesignCa
     const current = stateRef.current;
     const shown = docRef.current;
     if (!current.loaded || !shown) return;
-    const pageId = viewPageId(shown, current);
+    const pageId = shownPageId(shown, current);
     const view = {
       pageId,
       viewport: current.viewports[pageId] ?? DESIGN_FRESH_VIEWPORT,
@@ -96,7 +113,8 @@ export function useDesignView(workspaceId: string, chatId: string, doc: DesignCa
           const viewports = { ...(kept?.viewports ?? {}), ...current.viewports };
           const keptWins = kept !== null && (current.pageId === undefined || kept.focusId > applied);
           if (kept && keptWins && viewports[kept.pageId] === undefined) viewports[kept.pageId] = kept.viewport;
-          return { loaded: true, pageId: keptWins ? kept.pageId : current.pageId, viewports };
+          const next = { ...current, loaded: true, viewports };
+          return keptWins ? showing(next, kept.pageId) : next;
         });
       },
       () => {
@@ -124,7 +142,7 @@ export function useDesignView(workspaceId: string, chatId: string, doc: DesignCa
 
   const showPage = React.useCallback(
     (pageId: string) => {
-      setState((current) => (current.pageId === pageId ? current : { ...current, pageId }));
+      setState((current) => showing(current, pageId));
       schedule();
     },
     [schedule],
@@ -134,7 +152,7 @@ export function useDesignView(workspaceId: string, chatId: string, doc: DesignCa
       const shown = docRef.current;
       if (!shown) return;
       setState((current) => {
-        const pageId = viewPageId(shown, current);
+        const pageId = shownPageId(shown, current);
         const before = current.viewports[pageId];
         if (before && before.x === viewport.x && before.y === viewport.y && before.zoom === viewport.zoom) return current;
         return { ...current, viewports: { ...current.viewports, [pageId]: { x: viewport.x, y: viewport.y, zoom: viewport.zoom } } };
@@ -158,14 +176,14 @@ export function useDesignView(workspaceId: string, chatId: string, doc: DesignCa
         focusId.current = focus.focusId;
       }
       const pageId = focus.pageId;
-      if (pageId !== undefined) setState((current) => (current.pageId === pageId ? current : { ...current, pageId }));
+      if (pageId !== undefined) setState((current) => showing(current, pageId));
       // Main already holds Aiden's page; the report says this canvas applied it.
       schedule();
     },
     [schedule],
   );
 
-  const pageId = doc ? viewPageId(doc, state) : (state.pageId ?? "");
+  const pageId = doc ? shownPageId(doc, state) : (state.pageId ?? "");
   return {
     loaded: state.loaded,
     pageId,
