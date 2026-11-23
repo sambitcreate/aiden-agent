@@ -1549,7 +1549,13 @@ export class GitService {
       return false;
     }
     const execPath = probe.stdout.replace(/\r?\n$/u, "");
-    if (!execPath || /[\r\n\u0000]/u.test(execPath) || !path.isAbsolute(execPath)) {
+    if (
+      !execPath ||
+      execPath.includes("\r") ||
+      execPath.includes("\n") ||
+      execPath.includes("\u0000") ||
+      !path.isAbsolute(execPath)
+    ) {
       return false;
     }
     try {
