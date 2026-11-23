@@ -461,6 +461,29 @@ function AgentModelPopoverInner({
                   thumbRef={thumbRef}
                 />
               ) : null}
+              {slider && views.some((stop) => !stop.available) ? (
+                // The track's own stop targets are pointer-only; these give every
+                // stop that can't run a keyboard path to the same reassign view.
+                <ul aria-label="Stops without a model to run" className="mt-1.5 flex flex-col px-1.5">
+                  {views.map((stop) =>
+                    stop.available ? null : (
+                      <li key={stop.id}>
+                        <Button
+                          variant="transparent"
+                          size="small"
+                          className="w-full justify-start gap-1.5 px-2.5 font-normal"
+                          onClick={() => showList({ kind: "reassign", stopId: stop.id })}
+                        >
+                          <span className="min-w-0 shrink-0 truncate text-primary">{stop.label}</span>{" "}
+                          <span className="min-w-0 flex-1 truncate text-left text-tertiary">
+                            · {stop.reasonText}
+                          </span>
+                        </Button>
+                      </li>
+                    ),
+                  )}
+                </ul>
+              ) : null}
               {slider ? <div role="separator" className="mx-2 mt-2.5 mb-1 h-px bg-separator" /> : null}
               <div className="flex flex-col px-1.5">
                 <Button

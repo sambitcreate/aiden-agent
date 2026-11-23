@@ -297,6 +297,17 @@ export function FloatingChatApp() {
       "chats:metadata-updated",
       (payload) => {
         if (!payload?.chatId || chatRef.current?.id !== payload.chatId) return;
+        // Main reconciled the chat's own level (a clamp): the slider follows the
+        // level that actually ran while this window still has the chat's model.
+        const reconciled = payload.thinkingLevel;
+        if (reconciled !== undefined) {
+          const owned = chatRef.current;
+          setSelectedModel((prev) => {
+            if (!owned || prev.providerId !== owned.providerId || prev.model !== owned.model) return prev;
+            const { thinkingLevel: _previous, ...rest } = prev;
+            return reconciled ? { ...rest, thinkingLevel: reconciled } : rest;
+          });
+        }
         setChat((prev) =>
           prev && prev.id === payload.chatId
             ? applyChatMetadataUpdate(prev, {
@@ -356,12 +367,42 @@ export function FloatingChatApp() {
       ),
     [settings?.agentSlider, settings?.hiddenModelsByProvider, providers, selectedModel],
   );
-  const selectAgentSliderStop = React.useCallback(
-    (providerId: string, model: string, thinkingLevel: GenerationThinkingLevel | undefined) => {
+  // Before the first send the pick is local and goes with the first message.
+  // Once the chat exists, main holds its selection (`chats:setModel`), so a
+  // handoff, a reopen and the clamp write-back all see the stop chosen here.
+  // `level`: a stop's effort, or null for a stop without one; left out, a list
+  // pick keeps the chat's level only while the model stays the same.
+  const selectionPickRef = React.useRef(0);
+  const applySelection = React.useCallback(
+    (providerId: string, model: string, level?: GenerationThinkingLevel | null) => {
       modelTouchedRef.current = true;
-      setSelectedModel({ providerId, model, ...(thinkingLevel ? { thinkingLevel } : {}) });
+      setSelectedModel({ providerId, model, ...(level ? { thinkingLevel: level } : {}) });
+      const owned = chatRef.current;
+      if (!owned) return;
+      const pick = ++selectionPickRef.current;
+      void chatsApi.setModel(owned.id, providerId, model, level).then(
+        (saved) => {
+          if (!saved || pick !== selectionPickRef.current || chatRef.current?.id !== saved.id) return;
+          setChat(saved);
+          if (!saved.providerId || !saved.model) return;
+          setSelectedModel({
+            providerId: saved.providerId,
+            model: saved.model,
+            ...(saved.thinkingLevel ? { thinkingLevel: saved.thinkingLevel } : {}),
+          });
+        },
+        (error: unknown) => {
+          toast.error(error instanceof Error ? error.message : "Couldn’t change this chat’s model.");
+        },
+      );
     },
     [],
+  );
+  const selectAgentSliderStop = React.useCallback(
+    (providerId: string, model: string, thinkingLevel: GenerationThinkingLevel | undefined) => {
+      applySelection(providerId, model, thinkingLevel ?? null);
+    },
+    [applySelection],
   );
   React.useEffect(() => {
     if (!shortcutBindings) return;
@@ -916,10 +957,7 @@ export function FloatingChatApp() {
             providers={providers}
             providerId={selectedModel.providerId}
             model={selectedModel.model}
-            onModelChange={(providerId, model) => {
-              modelTouchedRef.current = true;
-              setSelectedModel({ providerId, model });
-            }}
+            onModelChange={(providerId, model) => applySelection(providerId, model)}
             thinkingLevel={selectedModel.thinkingLevel}
             agentSlider={settings?.agentSlider}
             settingsLoaded={settings !== undefined}
@@ -1190,10 +1228,7 @@ export function FloatingChatApp() {
             providers={providers}
             providerId={selectedModel.providerId}
             model={selectedModel.model}
-            onModelChange={(providerId, model) => {
-              modelTouchedRef.current = true;
-              setSelectedModel({ providerId, model });
-            }}
+            onModelChange={(providerId, model) => applySelection(providerId, model)}
             thinkingLevel={selectedModel.thinkingLevel}
             agentSlider={settings?.agentSlider}
             settingsLoaded={settings !== undefined}

@@ -706,8 +706,19 @@ test("external hide and reopen preserve State 2 mini-modal stage and draft witho
   }
 });
 
-test("an Agent Slider stop picked in Quick Chat sends its effort with the first message and the turn", async () => {
+test("an Agent Slider stop picked in Quick Chat sends its effort with the first message, the turn and later picks", async () => {
   const { calls, qc } = mountFloatingApp({
+    "chats:setModel": (id: unknown, providerId: unknown, model: unknown) => ({
+      id: String(id),
+      workspaceId: "nows-ephemeral-1",
+      ephemeral: true,
+      title: "Think hard",
+      providerId: String(providerId),
+      model: String(model),
+      messages: [{ id: "m-user-1", role: "user", content: "Think hard", createdAt: 10 }],
+      createdAt: 10,
+      updatedAt: 11,
+    }),
     "settings:get": () => ({
       lastProviderId: "lmstudio",
       lastModel: "local-model",
@@ -757,6 +768,44 @@ test("an Agent Slider stop picked in Quick Chat sends its effort with the first 
         (arg) => typeof arg === "object" && arg !== null && (arg as { thinkingLevel?: string }).thinkingLevel === "high",
       ),
       "the turn asks for the stop's effort",
+    );
+
+    // Once the chat exists, a stop is saved on the chat itself, so a handoff
+    // or reopen sees it; a stop without a level clears the chat's own level.
+    const chatId = String((create?.args[0] as { draftId: string }).draftId);
+    await act(async () => {
+      emitBotTestNotification("chat:done", { streamId: String(start?.args[0]), fullContent: "Done." });
+    });
+    const modalTrigger = await waitFor(() => {
+      const button = screen.getByRole("button", { name: /Deep on the Agent Slider/u }) as HTMLButtonElement;
+      assert.equal(button.disabled, false);
+      return button;
+    });
+    await act(async () => {
+      fireEvent.click(modalTrigger);
+    });
+    await act(async () => {
+      fireEvent.keyDown(await screen.findByRole("slider", { name: "Agent Slider" }), { key: "ArrowLeft" });
+    });
+    await waitFor(() => {
+      const save = calls.find((call) => call.channel === "chats:setModel");
+      assert.deepEqual(save?.args, [chatId, "lmstudio", "local-model", null]);
+    });
+    await waitFor(() =>
+      assert.match(modalTrigger.getAttribute("aria-label") ?? "", /Quick on the Agent Slider/u),
+    );
+
+    // Main reconciled the chat's level (a clamp): the slider follows what ran.
+    await act(async () => {
+      emitBotTestNotification("chats:metadata-updated", {
+        chatId,
+        title: "Think hard",
+        updatedAt: 20,
+        thinkingLevel: "high",
+      });
+    });
+    await waitFor(() =>
+      assert.match(modalTrigger.getAttribute("aria-label") ?? "", /Deep on the Agent Slider/u),
     );
   } finally {
     qc.clear();

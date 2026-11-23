@@ -372,12 +372,7 @@ export function OnboardingFlow({
         // First run: build the Agent Slider around the model just connected.
         // It writes only while no slider exists; a failure leaves the composer
         // to seed it when its popover first opens.
-        void seedAgentSliderForModel(
-          providers.data?.find((provider) => provider.id === connected.id),
-          connected.id,
-          connected.model,
-          queryClient,
-        ).catch(() => undefined);
+        void seedAgentSliderForModel(connected.id, connected.model, queryClient).catch(() => undefined);
         setIndex(2);
       } catch (cause) {
         setProviderError(cause instanceof Error ? cause.message : "Couldn’t save the connection. Choose it again to retry.");
