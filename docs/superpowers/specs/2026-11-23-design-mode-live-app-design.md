@@ -1,6 +1,6 @@
 # Design mode v2: the live app canvas
 
-Status: approved by the owner, 2026-11-23. No code yet. Builds on [Design mode v1](2026-10-31-design-mode-design.md) (P0–P5 shipped, on by default). Project memory: `.memory/design-mode.md`.
+Status: approved by the owner, 2026-11-23. Pre-build checks recorded in §11, and the PR split revised in §8. Phase 1a is in progress; its plan is [`2026-11-23-design-mode-v2-p1a-workspace-canvas.md`](../plans/2026-11-23-design-mode-v2-p1a-workspace-canvas.md). Builds on [Design mode v1](2026-10-31-design-mode-design.md) (P0–P5 shipped, on by default). Project memory: `.memory/design-mode.md`.
 
 ## 1. Intent
 
@@ -17,11 +17,11 @@ Why now: v1 draws HTML mockups under `design/`. People building real React apps 
 3. App-frame network is **localhost only** for now.
 4. **Aiden can start and control everything** in design mode (dev server start, stop, restart, install and config) without per-call approval.
 5. A workspace with no web app: Aiden **asks before scaffolding** a small React app into the repo (§6.8).
+6. **Comment stays on C, exactly as today.** Inspect is a separate tool with its own key, X (§6.4.1).
+7. The dev server **starts by itself when the person turns design mode on** (toggle, ⇧⌘L, `/design`, or Enter on Aiden's card). It never starts just because Aiden relaunched (§6.2.3).
 8. **Monorepos:** Aiden asks which apps to start and work in (§6.2.1).
 9. **Live frames are for web apps only.** For a React project that isn't a web app (Electron, for example), Aiden makes React mocks in a mock app to iterate on (§6.8).
 10. **Design mode uses the [DESIGN.md](https://github.com/google-labs-code/design.md) standard** for the app's design system (§6.9).
-6. **Comment stays on C, exactly as today.** Inspect is a separate tool with its own key, X (§6.4.1).
-7. The dev server **starts by itself when the person turns design mode on** (toggle, ⇧⌘L, `/design`, or Enter on Aiden's card). It never starts just because Aiden relaunched (§6.2.3).
 
 Standing preferences that apply: pre-1.0 means no migrations (delete old shapes), autonomous phase-by-phase execution, and Opus implementers with reviews in the main session.
 
@@ -439,7 +439,7 @@ Aiden follows the tokens as normative values and the prose as guidance.
 - References inside it resolve from its own folder, as the spec requires.
 
 **Reading and checking** (`main/services/design-canvas/design-md/`)
-- Bundle `@google/design.md` **pinned exactly** (an alpha format, so it is upgraded only deliberately). Use its programmatic `lint()` in main: no `npx` and no network.
+- Bundle `@google/design.md` **pinned exactly** at `0.4.0` (an alpha format, so it is upgraded only deliberately). Import only the `@google/design.md/linter` entry point and call its `lint(content)` in main: never the CLI, no `npx` and no network. The library reads its own bundled `spec-config.yaml` beside its code at load time, so the packaged-build smoke check runs `lint()` once from inside the asar (§11).
 - The parsed design system and the findings are cached per file version and re-linted when the watcher sees the file change.
 - Findings go to the Styles frame, `canvas_read` (a one-line summary) and the `design_system` tool.
 
@@ -468,7 +468,7 @@ Aiden follows the tokens as normative values and the prose as guidance.
 
 ### 6.10 Analytics
 
-Registry additions, each with a docs row and a test. No paths, routes, URLs or names.
+Registry additions, each with a docs row and a test. No paths, routes, URLs or names. Each event lands in the PR of the phase that introduces its feature, not in Phase 7.
 - `design_app_started {framework, manager, outcome: running|crashed|failed}`
 - `design_app_frame_added {source: person|aiden, device_bucket}`
 - `design_point_used {action: inspect|ask|comment}`
@@ -477,6 +477,8 @@ Registry additions, each with a docs row and a test. No paths, routes, URLs or n
 - `design_md_drafted {source: app|mock}` and `design_md_linted {errors_bucket, warnings_bucket}`
 
 ### 6.11 Docs and onboarding
+
+Each phase's PR updates the docs its own change makes stale (AGENTS.md). Phase 7 is left with the onboarding art and the final pass over the user guide.
 
 - Update the README feature line, `PRODUCT.md`, `docs/keyboard.md` (X Inspect, ⌥ and ⌥S measure, ⌘F, ⌃⌥T, ⇧⌘C and ⌘D on app frames) and `docs/plans/README.md`.
 - Add a new `docs/design-mode.md` user guide covering `.aiden/canvas.json` and the localhost-only rule.
@@ -499,9 +501,9 @@ Registry additions, each with a docs row and a test. No paths, routes, URLs or n
   - canvas-tools per-chat page semantics, including two chats on one canvas.
 - Bridge: run the real script in happy-dom (as v1 does) for inspect, measure, the source walk on a fake fiber, error capture and the once-guard.
 - E2E (Cua Space, plus the host for darwin paths):
-  - A fixture Vite + React app in `tests/fixtures/design-live-app/` (dependencies vendored or installed in CI with an offline cache) is started by `design_app` through the fake model.
+  - A fixture Vite + React app in `tests/fixtures/design-live-app/` is started by `design_app` through the fake model. It has no dependencies of its own: the E2E setup symlinks its `node_modules` to the repo root's, which already carries `vite`, `@vitejs/plugin-react` and React 19. Detection then sees `node_modules` and skips the install, so E2E never touches the network. The install path is covered by unit tests against a fake `backgroundJobs`.
   - Two routes appear live. An edit to a component updates both frames and shows the toast.
-  - The Point inspector shows the right values.
+  - The Inspect popover shows the right values.
   - A frame fetching `https://example.com` gets cancelled and shows "1 blocked".
   - A thrown error shows Fix with Aiden.
   - Two chats on one workspace keep separate pages, with no page jumps.
@@ -509,19 +511,26 @@ Registry additions, each with a docs row and a test. No paths, routes, URLs or n
 
 ## 8. Phases
 
-Each phase is one PR, or a short stack, that leaves main shippable. Plans are written before each phase.
+Each row is one PR that leaves main shippable. A plan is written before each PR's build, and each PR runs the review loop: two Opus reviewers, a fix pass, then CI watched to green on the exact head. Analytics events and doc updates ship with the PR whose feature they describe (§6.10, §6.11).
 
-| # | Phase | Contents | Size |
-|---|---|---|---|
-| 1 | Workspace canvas | §6.1: v3 schema, workspace store, view state out of the document, chat pages, `canvas_page use`, comment and artifact chat ownership, lifecycle, tests and E2E moved | L |
-| 2 | App server | §6.2: node-toolchain lift, detection, `DesignAppServers` on `backgroundJobs`, `design_app` tool, status chip and logs, stop rules | L |
-| 3 | Live app frames | §6.3: `app` kind, iframe and CSP, bridge injection and v2 bridge, network dispatcher and navigation guard, routes and `.aiden/canvas.json`, route-aware placement, viewports and devices, page actions, export partition, skill and prompt rewrite, the §6.8 scaffold and mock apps, DESIGN.md read/lint/`design_system` tool and drafting (§6.9) | XL (split 3a frames and filter, 3b routes and placement and skill, 3c viewports and actions and export) |
-| 4 | See and point | §6.4: inspector, measure, element chips, change toasts, error frames, find, minimap, tidy, copy image, `design_inspect` | L |
-| 5 | Explore and consistency | §6.6: directions and Adopt, DESIGN.md-based drift and code-drift check, Styles frame as the live DESIGN.md view | L |
-| 6 | Component cards | §6.7: spike, spec, build | XL |
-| 7 | Launch | Analytics, docs guide, onboarding tile and art, keyboard docs | M |
+| PR | Phase | Contents | Depends on | Size |
+|---|---|---|---|---|
+| 1a | Workspace canvas: document | §6.1: v3 schema (with `chatPages` parsed and the optional `chatId` on artifact frames and comments), workspace-keyed store, old per-chat files deleted, view state out of the document (renderer view store, main `DesignCanvasViews`, `designCanvas:view`), every `activePageId` reader moved to the chat's view, focus by IPC with a `pageId` instead of document writes, `designCanvas:updated {workspaceId, revision}`, artifact frames loaded through their owning chat, chat delete no longer deletes the shared file, design E2E moved to the v3 file key | — | L |
+| 1b | Workspace canvas: chat pages | §6.1: `chatPages` written (page claim on entry, renamed with the chat), `canvas_page use`, delete reassignment and `force`, comments tray filter, lifecycle (chat delete prunes its entry, queued comments and artifact frames; workspace remove and worktree delete or rollback delete the file), the two-chats E2E | 1a | M |
+| 2a | App server: detection | §6.2.1–6.2.2: `node-toolchain.ts` lifted out of `device-toolchain.ts`, `detectWebApp` and lockfile detection (pure) | 1b | M |
+| 2b | App server: process | §6.2.3–6.2.4: `DesignAppServers` on `backgroundJobs`, install, URL discovery, `design_app` tool and its reviewed approval exception, `design_app_started` event | 2a | L |
+| 2c | App server: UI | §6.2.3, §6.2.5: status chip and menu, read-only logs drawer, presence and the 60 s stop rule, Connect running server, the browser-panel listing | 2b | M |
+| 3a | Live frames | §6.3.1–6.3.5, §6.3.10: `app` kind, iframe and CSP, bridge injection and v2 bridge, default-session request dispatcher and loopback filter, navigation guard, blocked notice, export partition, the fixture app and live-frame E2E, the React 19 source-mapping check (§11) | 2c | XL |
+| 3b | Routes and skill | §6.3.6–6.3.7, §6.5: `discoverRoutes`, `.aiden/canvas.json`, Add ▸ Page from app, route-aware placement, the tool changes, skill and prompt rewrite, v1 mockup offers removed (`design-system.ts`, `design-system-offers.ts`), `design_app_frame_added` event | 3a | L |
+| 3c | Viewports and actions | §6.3.8–6.3.9: edge-drag reflow and breakpoint ticks, device menu, Add view at width, ⌘D variant, delete page to Trash | 3a | M |
+| 3d | Mock apps | §6.8: `resources/design-app-template/`, the two ask-first flows, stubs and aliases for `react-nonweb`, Node-missing and install-failed states | 3b | L |
+| DM | DESIGN.md | §6.9: pinned `@google/design.md/linter`, lookup and `apps[].designMd`, cached lint, `design_system` tool, prompt line, Draft DESIGN.md flow, the starter file in the mock template, `design_md_*` events | 2a (can run beside 3) | L |
+| 4 | See and point | §6.4: Inspect (X), measure, element chips, change toasts, error frames with Fix with Aiden, ⌘F, minimap, Tidy up, Copy as image, `design_inspect`, `design_point_used` event | 3a (can run beside 3b) | L |
+| 5 | Explore and consistency | §6.6: directions and Adopt, token sources and drift, code drift against DESIGN.md, consistency check, Styles frame, `design_drift_checked` and `design_direction_adopted` events | 3b, DM, 4 | L |
+| 7 | Launch | §6.11: onboarding tile and `DesignModeArt` redraw, final pass over `docs/design-mode.md` and `docs/keyboard.md` | 5 | M |
+| 6 | Component cards | §6.7: spike, own spec, build | independent, last | XL |
 
-Phase 1 is the foundation and lands first. Phases 2 and 3 are sequential. Phase 4 can start in parallel with 3b, because the inspector also works on `file` frames.
+1a and 1b are the foundation and land first. The 2 PRs and 3a are sequential. After 3a, 3b, 3c, 4 and DM can run in parallel, as long as no more than three or four agents are working at once.
 
 ## 9. Risks and open questions
 
@@ -541,3 +550,20 @@ These are left to the builder:
 - device preset list details;
 - toast copy beyond the strings given;
 - whether the monorepo search goes deeper than one level.
+
+## 11. Resolved before build (2026-11-23)
+
+These were checked against the code and the registry before Phase 1 started.
+
+1. **`@google/design.md` is usable.** Version 0.4.0 is the latest release (0.1.0–0.4.0, last published 2026-07-27), Apache-2.0, ESM like Aiden. The `/linter` entry point exports `lint(content: string)`, which returns findings, the resolved tokens, the section list and a Tailwind config. It also exports the DTCG, CSS-variable and Tailwind v4 emitters and `fixSectionOrder`. The linter has no `fetch`, HTTP or `child_process`. Its one file read is its own bundled `spec-config.yaml`. The linter bundle is about 680 KB. Its dependencies mostly overlap Aiden's (`unified` 11, `remark-parse` 11, `yaml`, `zod`); the new ones are `remark-mdx`, `remark-frontmatter` and `citty`. Decision: exact pin, `/linter` only, plus a packaged-build `lint()` check (DM PR).
+2. **No conflict with v1's design-system module.** `main/services/design-canvas/design-system.ts` and `design-system-offers.ts` (the `tokens.css` and `specimen.html` offers) are used only by `design-canvas/main.ts` and their own tests. Decision: delete both, their tests and their registry entries in 3b. New code lives under `design-canvas/design-md/`.
+3. **E2E fixture without network.** Decision: the fixture app symlinks its `node_modules` to the repo root's (§7).
+4. **Default-session `webRequest`.** Nothing registers on the default session today. The existing listeners are on named partitions: the browser panel and Bot sessions (`browser/service.ts`) and the design offline partition (`offline-session.ts`). Decision: 3a adds a single `default-session-web-request.ts` dispatcher that owns `onBeforeRequest` on the default session, with a test that a second registration throws. The `aiden-design-live` export partition follows the `offline-session.ts` pattern.
+5. **React 19 source mapping** is checked first in 3a, against the fixture app: does the `_debugStack` walk plus Vite's source maps give `file:line`? If not, ship component name plus owner chain and have Aiden search for it. `data-aiden-src` stamps come only from a Vite plugin in mock apps. The Inspect UI is the same either way.
+6. **v1 canvases are cleared.** Covered by the no-migrations rule. 1a's PR adds a release-notes line and updates `PRODUCT.md`: canvases are now shared per workspace, and boards from earlier versions are cleared. Files under `design/` are untouched and can be placed again as `file` frames.
+7. **3a security review.** One of 3a's two reviewers is briefed only on the §3 anti-goals. The network filter test is a table of requests, each marked allowed or cancelled:
+   - allowed: `localhost`, `127.0.0.1`, `[::1]`, `data:`, `blob:`, `aiden-design:`;
+   - cancelled: `https://example.com`, `http://192.168.1.10`, `http://localhost.evil.com`, a request with no frame from an app origin;
+   - never touched: any main-window request.
+
+   The E2E checks the "1 blocked" label.
