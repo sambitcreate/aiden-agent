@@ -360,6 +360,7 @@ import type {
   WorkspaceArtifactView,
 } from "../shared/workspace-artifacts";
 import type { DesignCanvas } from "../shared/design-canvas/schema";
+import type { DesignChatView } from "../shared/design-canvas/view";
 import { invoke, onNotification } from "./ipc-bridge";
 import {
   APPROVAL_RULE_CHANNELS,
@@ -2729,9 +2730,16 @@ export const ttsApi = {
 export type DesignCanvasSaveResult =
   | { ok: true; revision: number }
   | { ok: false; reason: "conflict"; doc: DesignCanvas }
+  | { ok: false; reason: "moved" }
   | { ok: false; reason: "invalid"; issues: string[] };
 
-/** The per-chat design canvas. Available only while design mode's flag is on. */
+/** `designCanvas:updated`: a workspace's canvas changed, through `chatId`'s action. */
+export type DesignCanvasUpdate = { workspaceId: string; chatId: string; revision: number; aidenTurn?: string; step?: string };
+
+/** `designCanvas:focus`: Aiden shows a page or frames to one chat. `focusId` orders Aiden's page changes. */
+export type DesignCanvasFocusRequest = { chatId: string; frameIds: string[]; pageId?: string; focusId?: number };
+
+/** The workspace design canvas, through one of its chats. Available only while design mode's flag is on. */
 export const designCanvasApi = {
   getDesignCanvas: (chatId: string) => invoke<DesignCanvas>("designCanvas:get", chatId),
   /** A page's file or an artifact's HTML, for the side panel's Code and Tweaks tabs. */
@@ -2764,12 +2772,31 @@ export const designCanvasApi = {
       format,
       theme,
     ),
-  /** Compare-and-swap: lands only if `baseRevision` is still the stored revision. */
-  /** `undone` names pages the person's undo took off, which are not remembered as removed. */
-  saveDesignCanvas: (chatId: string, doc: DesignCanvas, baseRevision: number, options?: { undone?: string[] }) =>
+  /**
+   * Compare-and-swap: lands only if `baseRevision` is still the stored revision.
+   * `undone` names pages the person's undo took off, which are not remembered
+   * as removed. `workspaceId` is the workspace whose canvas this is; when the
+   * chat has left it, the answer is `moved` and nothing is written.
+   */
+  saveDesignCanvas: (
+    chatId: string,
+    doc: DesignCanvas,
+    baseRevision: number,
+    options?: { undone?: string[]; workspaceId?: string },
+  ) =>
     options === undefined
       ? invoke<DesignCanvasSaveResult>("designCanvas:save", chatId, doc, baseRevision)
       : invoke<DesignCanvasSaveResult>("designCanvas:save", chatId, doc, baseRevision, options),
+  /**
+   * Tells main what this chat's canvas shows, so Aiden's tools read the same
+   * page; `null` when the canvas unmounts. `focusId` is the last Aiden page
+   * change the canvas applied.
+   */
+  reportDesignCanvasView: (chatId: string, view: DesignChatView | null, focusId?: number) =>
+    invoke<void>("designCanvas:view", chatId, view, ...(focusId === undefined ? [] : [focusId])),
+  /** The view main kept for the chat, if any: where Aiden or the person last left it. */
+  getDesignCanvasView: (chatId: string) =>
+    invoke<{ view: DesignChatView; focusId: number } | null>("designCanvas:view:get", chatId),
   /**
    * Send to canvas: puts one of the chat's HTML visuals on the page on screen,
    * placed for a canvas of `viewSize` when known. A visual already there on
@@ -2785,8 +2812,8 @@ export const designCanvasApi = {
    * `aidenTurn` names the reply that made the change, when Aiden made it;
    * `step` marks the person's own change made through main (Send to canvas).
    */
-  onDesignCanvasUpdated: (handler: (update: { chatId: string; revision: number; aidenTurn?: string; step?: string }) => void) =>
-    onNotification<{ chatId: string; revision: number; aidenTurn?: string; step?: string }>("designCanvas:updated", handler),
+  onDesignCanvasUpdated: (handler: (update: DesignCanvasUpdate) => void) =>
+    onNotification<DesignCanvasUpdate>("designCanvas:updated", handler),
   /** The chat's `aiden-design://<grant>/` host for framing its workspace files. */
   getDesignCanvasGrant: (chatId: string) =>
     invoke<{ grant: string } | { error: "unavailable" }>("designCanvas:grant", chatId),
@@ -2814,9 +2841,9 @@ export const designCanvasApi = {
   /** The person's answer. Enter turns design mode on in main before Aiden hears it. False when the card expired. */
   answerDesignModeConsent: (requestId: string, answer: "enter" | "decline") =>
     invoke<boolean>("designCanvas:consentAnswer", requestId, answer),
-  /** Aiden asks the canvas to fit these frames (all when empty). */
-  onDesignCanvasFocus: (handler: (request: { chatId: string; frameIds: string[] }) => void) =>
-    onNotification<{ chatId: string; frameIds: string[] }>("designCanvas:focus", handler),
+  /** Aiden asks the canvas to show a page and fit these frames (all when empty). */
+  onDesignCanvasFocus: (handler: (request: DesignCanvasFocusRequest) => void) =>
+    onNotification<DesignCanvasFocusRequest>("designCanvas:focus", handler),
   /** Aiden asks for a picture of the canvas; answer with `answerDesignCanvasSnapshot`. */
   onDesignCanvasSnapshot: (handler: (request: { requestId: string; chatId: string }) => void) =>
     onNotification<{ requestId: string; chatId: string }>("designCanvas:snapshot", handler),

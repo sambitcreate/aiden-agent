@@ -253,13 +253,13 @@ Round 2 (a fresh adversarial review of the amended plan and spec) revised A1, A4
     - `null` clears it.
   - Renderer `designCanvasApi.reportDesignCanvasView(chatId, view | null): Promise<void>`.
 
-- [ ] **Step 1: Write failing tests**
+- [x] **Step 1: Write failing tests**
   - `views.test.ts`: `mounted counts only chats with a view on that workspace`; `set null marks the view unmounted but keeps its page; forget drops the chat`.
   - Handler: `designCanvas:view stores a parsed view and refuses a malformed one`; `designCanvas:view refuses a Bot chat`.
-- [ ] **Step 2:** Run them. Expected: FAIL.
-- [ ] **Step 3:** Implement. When the main window is destroyed, mark every view unmounted (A5).
-- [ ] **Step 4:** Rerun. Expected: PASS. Register `views.test.ts` in `scripts/ci-test-registry.json` and the `package.json` script that holds the other `design-canvas/*.test.ts` files, then run `npm run test:ci-policy`.
-- [ ] **Step 5:** Commit `feat(design): main keeps each chat's canvas view`.
+- [x] **Step 2:** Run them. Expected: FAIL.
+- [x] **Step 3:** Implement. When the main window is destroyed, mark every view unmounted (A5).
+- [x] **Step 4:** Rerun. Expected: PASS. Register `views.test.ts` in `scripts/ci-test-registry.json` and the `package.json` script that holds the other `design-canvas/*.test.ts` files, then run `npm run test:ci-policy`.
+- [x] **Step 5:** Commit `feat(design): main keeps each chat's canvas view`.
 
 ### Task 5: Canvas tools and prompt read the chat's view; focus carries the page
 

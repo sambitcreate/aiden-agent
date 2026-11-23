@@ -35,12 +35,13 @@ import {
   type DesignTextChange,
 } from "../../renderer/shared/design-canvas/text-edit.js";
 import { canvasView, parseDesignViewState } from "../../renderer/shared/design-canvas/canvas-summary.js";
-import { viewPageId } from "../../renderer/shared/design-canvas/view.js";
+import { parseDesignChatView, viewPageId } from "../../renderer/shared/design-canvas/view.js";
 import { placeFrame } from "../../renderer/shared/design-canvas/placement.js";
 import { isHtmlArtifactMediaId } from "../../renderer/shared/generative-ui.js";
 import { isWorkspaceArtifactWorkspaceId } from "../../renderer/shared/workspace-artifacts.js";
 import { ARTIFACT_FRAME_BOX } from "../services/design-canvas/artifact-frames.js";
 import type { DesignGrantRegistry } from "../services/design-canvas/grants.js";
+import type { DesignCanvasViews } from "../services/design-canvas/views.js";
 import { validateGenerativeUiHtml } from "../services/generative-ui-html.js";
 import { replaceWorkspaceText } from "../services/design-canvas/text-write.js";
 import { resolveDesignFile } from "../services/design-canvas/resolve-core.js";
@@ -232,6 +233,10 @@ export function registerDesignCanvasHandlers<Event>(deps: {
   broadcast(update: DesignCanvasUpdated): void;
   getChat(chatId: string): Promise<DesignCanvasChat | null>;
   grants: Pick<DesignGrantRegistry, "issue" | "revokeChat">;
+  /** Each chat's view of its canvas, as the renderer reports it. */
+  views: Pick<DesignCanvasViews, "set" | "kept" | "unmountAll">;
+  /** Calls `gone` once the window that sent `event` is destroyed; called for every view report. */
+  whenSenderGone?(event: Event, gone: () => void): void;
   /** The chat's workspace folder, or null when the chat has no folder to frame. */
   workspaceRoot(chat: DesignCanvasChat): Promise<string | null>;
   /** The window that sent `event`, or null when it has none (or it is gone). */
@@ -283,6 +288,34 @@ export function registerDesignCanvasHandlers<Event>(deps: {
   deps.handle("designCanvas:get", async (_event, chatId) => {
     const chat = await requireChat(chatId);
     return (await deps.store.get(chat.id, { workspaceId: designCanvasWorkspaceOf(chat) })).doc;
+  });
+
+  // The canvas's view as the person moves around it: the page on screen, where
+  // it looks and how big it is, with the last Aiden page change it applied
+  // (`focusId`). `null` says the canvas unmounted; that needs only a
+  // well-formed chat id, so an unmount after the chat is deleted still lands.
+  deps.handle("designCanvas:view", async (event, chatId, view, focusId) => {
+    if (!deps.enabled()) throw new Error(UNAVAILABLE);
+    assertDesignCanvasChatId(chatId);
+    if (focusId !== undefined && (typeof focusId !== "number" || !Number.isSafeInteger(focusId) || focusId < 0)) {
+      throw new Error("Invalid canvas view.");
+    }
+    if (view === null) {
+      deps.views.set(chatId, null, null);
+      return;
+    }
+    const parsed = parseDesignChatView(view);
+    if (!parsed) throw new Error("Invalid canvas view.");
+    const chat = await requireChat(chatId);
+    deps.views.set(chat.id, designCanvasWorkspaceOf(chat), parsed, focusId ?? 0);
+    deps.whenSenderGone?.(event, () => deps.views.unmountAll());
+  });
+
+  // The view main kept for the chat, for a canvas that is mounting: newer
+  // than `localStorage` when Aiden changed the page while it was closed.
+  deps.handle("designCanvas:view:get", async (_event, chatId) => {
+    const chat = await requireChat(chatId);
+    return deps.views.kept(chat.id) ?? null;
   });
 
   deps.handle("designCanvas:save", async (_event, chatId, doc, baseRevision, options) => {

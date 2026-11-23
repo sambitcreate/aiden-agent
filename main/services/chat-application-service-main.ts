@@ -18,7 +18,7 @@ import { remoteAttachmentStore } from "./aiden-remote-attachments-main.js";
 import { toolOutputStore } from "./tool-output-store.js";
 import { scheduleStore } from "./schedule-store.js";
 import { chatPullRequestStore } from "./chat-pull-request-service-main.js";
-import { designCanvasStore, designGrants, designModeConsent, recentWrittenPages } from "./design-canvas/main.js";
+import { designCanvasStore, designCanvasViews, designGrants, designModeConsent, recentWrittenPages } from "./design-canvas/main.js";
 import { EARLIER_PAGES_LIMIT, pagesWrittenInChat, placeWrittenPagesOnCanvas } from "./design-canvas/written-pages.js";
 import { DESIGN_CANVAS_UPDATED_CHANNEL } from "../handlers/design-canvas.js";
 import { cancelVisualSnapshots } from "./visual-snapshot-service.js";
@@ -69,6 +69,7 @@ export const chatApplicationService = createChatApplicationService({
     void deleteChatLinks(chatId).catch((error: unknown) => logger.warn("chat-orchestration", "Could not forget a deleted chat's links.", error));
     forgetChatContextProfile(chatId);
     recentWrittenPages.forget(chatId);
+    designCanvasViews.forget(chatId);
     void spending.forgetChat(chatId).catch(() => undefined);
     void interruptedWaits.forgetChat(chatId).catch(() => undefined);
     detachedPromptLog.clearChat(chatId);

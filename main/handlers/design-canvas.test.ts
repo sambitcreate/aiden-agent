@@ -9,6 +9,7 @@ import {
 } from "../../renderer/shared/design-canvas/schema.js";
 import { DesignGrantRegistry } from "../services/design-canvas/grants.js";
 import { DesignCanvasStore, DesignChatCanvases } from "../services/design-canvas/store.js";
+import { DesignCanvasViews } from "../services/design-canvas/views.js";
 import { persistedChatWorkspaceId } from "../../renderer/shared/chat-workspace.js";
 import {
   DESIGN_CAPTURE_MAX_SIDE,
@@ -74,6 +75,8 @@ async function fixture(
     workspaceIdOf: async (chatId) => (chats[chatId] ? persistedChatWorkspaceId(chats[chatId].workspaceId) : null),
   });
   const grants = new DesignGrantRegistry();
+  const views = new DesignCanvasViews();
+  const senderWatches: Array<{ event: unknown; gone: () => void }> = [];
   const issued: string[] = [];
   const issuedGrants: string[] = [];
   const issue = grants.issue.bind(grants);
@@ -100,6 +103,8 @@ async function fixture(
     broadcast: (update) => broadcasts.push(update),
     getChat: async (chatId) => chats[chatId] ?? null,
     grants,
+    views,
+    whenSenderGone: (event, gone) => senderWatches.push({ event, gone }),
     workspaceRoot:
       options.workspaceRoot ?? (async (chat) => roots[chat.workspaceId ?? ""] ?? null),
     windowFor: options.windowFor ?? (() => null),
@@ -150,6 +155,8 @@ async function fixture(
     root,
     store,
     workspaceStore,
+    views,
+    senderWatches,
     grants,
     issued,
     issuedGrants,
@@ -216,6 +223,57 @@ test("a save that names another workspace than the chat's is answered moved, and
   assert.deepEqual((await workspaceStore.get("ws-1")).revision, 0, "ws-1 is untouched too");
   assert.deepEqual(broadcasts, []);
   await assert.rejects(invoke("designCanvas:save", "chat-1", note, 1, { workspaceId: "../ws" }), /save options/u);
+});
+
+test("designCanvas:view stores a parsed view and refuses a malformed one", async (t) => {
+  const { invoke, views } = await fixture(t);
+  await invoke("designCanvas:view", "chat-1", { pageId: "p2", viewport: { x: 10, y: 20, zoom: 9 }, size: { w: 800, h: 600 } }, 0);
+  assert.deepEqual(views.get("chat-1"), { pageId: "p2", viewport: { x: 10, y: 20, zoom: 4 }, size: { w: 800, h: 600 } });
+  assert.equal(views.mounted("workspace-1"), 1);
+  for (const bad of [{ pageId: "p2" }, { pageId: "", viewport: { x: 0, y: 0, zoom: 1 } }, "p2", 42]) {
+    await assert.rejects(invoke("designCanvas:view", "chat-1", bad), /Invalid canvas view/u, JSON.stringify(bad));
+  }
+  for (const focusId of [-1, 1.5, "1", Number.NaN]) {
+    await assert.rejects(invoke("designCanvas:view", "chat-1", { pageId: "p2", viewport: { x: 0, y: 0, zoom: 1 } }, focusId), /Invalid canvas view/u);
+  }
+  assert.equal(views.get("chat-1")?.viewport.x, 10, "a refused report changes nothing");
+  // The canvas reads the kept view back when it mounts.
+  await invoke("designCanvas:view", "chat-1", null);
+  assert.equal(views.mounted("workspace-1"), 0);
+  assert.deepEqual(await invoke("designCanvas:view:get", "chat-1"), {
+    view: { pageId: "p2", viewport: { x: 10, y: 20, zoom: 4 }, size: { w: 800, h: 600 } },
+    focusId: 0,
+  });
+});
+
+test("designCanvas:view refuses a Bot chat, but an unmount needs only a well-formed chat id", async (t) => {
+  const { invoke, views, chats } = await fixture(t, {
+    chats: {
+      "chat-1": { id: "chat-1", workspaceId: "workspace-1", designMode: true },
+      bot: { id: "bot", workspaceId: "workspace-1", botId: "b1" },
+    },
+  });
+  const view = { pageId: "page-1", viewport: { x: 0, y: 0, zoom: 1 } };
+  await assert.rejects(invoke("designCanvas:view", "bot", view), /not available/u);
+  await assert.rejects(invoke("designCanvas:view:get", "bot"), /not available/u);
+  await assert.rejects(invoke("designCanvas:view", "missing", view), /no longer available/u);
+  assert.equal(views.get("bot"), undefined);
+  // The chat is deleted while its canvas is open; the unmount that follows still lands.
+  await invoke("designCanvas:view", "chat-1", view);
+  delete chats["chat-1"];
+  await invoke("designCanvas:view", "chat-1", null);
+  assert.equal(views.mounted("workspace-1"), 0);
+  await assert.rejects(invoke("designCanvas:view", "../x", null), /Invalid chat id/u);
+});
+
+test("when the window that reports views goes away, every canvas counts as closed", async (t) => {
+  const { invokeFrom, views, senderWatches } = await fixture(t);
+  const sender = { id: "window" };
+  await invokeFrom(sender, "designCanvas:view", "chat-1", { pageId: "page-1", viewport: { x: 0, y: 0, zoom: 1 } });
+  assert.equal(views.mounted("workspace-1"), 1);
+  senderWatches.find((watch) => watch.event === sender)!.gone();
+  assert.equal(views.mounted("workspace-1"), 0);
+  assert.equal(views.get("chat-1")?.pageId, "page-1", "the page is kept");
 });
 
 test("a page a save takes off is remembered as removed, unless the save says the person's undo took it off", async (t) => {

@@ -10,6 +10,7 @@ import { DesignModeConsent } from "./design-mode-tool.js";
 import { DesignSystemOffers } from "./design-system-offers.js";
 import { DesignGrantRegistry } from "./grants.js";
 import { DESIGN_CANVAS_UPDATED_CHANNEL, DesignCanvasStore, DesignChatCanvases, type DesignCanvasUpdated } from "./store.js";
+import { DesignCanvasViews } from "./views.js";
 import { DESIGN_FILES_CHANGED_CHANNEL, DesignFileWatcher } from "./watch.js";
 import { RecentWrittenPages } from "./written-pages.js";
 
@@ -39,6 +40,9 @@ export function broadcastDesignCanvasUpdate(update: DesignCanvasUpdated): void {
     logger.warn("design", "Could not announce a canvas change.", error);
   }
 }
+
+/** Each chat's canvas view (page, viewport, size), as its canvas reports it. Memory only. */
+export const designCanvasViews = new DesignCanvasViews();
 
 /** Live `aiden-design://` grants. Memory only: a restart ends every grant. */
 export const designGrants = new DesignGrantRegistry();

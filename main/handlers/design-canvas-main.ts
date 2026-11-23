@@ -7,6 +7,7 @@ import { configStore } from "../services/config-store.js";
 import {
   broadcastDesignCanvasUpdate,
   designCanvasStore,
+  designCanvasViews,
   designFileWatcher,
   designGrants,
   designCanvasSnapshots,
@@ -19,6 +20,9 @@ import { generativeUiArtifactStore } from "../services/generative-ui-artifact-st
 import { rendererDocumentOwner } from "../services/renderer-document-owner.js";
 import { designModeEnabled } from "../services/studio/feature-flags.js";
 import { registerDesignCanvasHandlers } from "./design-canvas.js";
+
+/** Windows whose destruction already unmounts every canvas view. */
+const watchedSenders = new WeakSet<Electron.WebContents>();
 
 export function registerDesignCanvasIpc(): void {
   // The canvas picture Aiden asked for with canvas_read {snapshot: true}.
@@ -48,6 +52,12 @@ export function registerDesignCanvasIpc(): void {
     // Index metadata only: these checks never need the transcript.
     getChat: (chatId) => chatStore.getMeta(chatId),
     grants: designGrants,
+    views: designCanvasViews,
+    whenSenderGone: (event, gone) => {
+      if (watchedSenders.has(event.sender)) return;
+      watchedSenders.add(event.sender);
+      event.sender.once("destroyed", gone);
+    },
     workspaceRoot: async (chat) =>
       (await configStore.getWorkspace(persistedChatWorkspaceId(chat.workspaceId)))?.folderPath ??
       null,
