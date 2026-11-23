@@ -90,6 +90,9 @@ export const ANALYTICS_EVENTS = {
     outcome: enumProp("done", "needs_you", "paused", "cleared"),
     rounds: enumProp("1", "2-5", "6-10", "11-20", "21-49", "50"),
   },
+  floating_chat_opened: { source: enumProp("hotkey", "command") },
+  floating_chat_expanded: { during_stream: bool, was_ephemeral: bool },
+  floating_chat_promoted: { target: enumProp("chats", "workspace") },
 
   // Approval cards. `chat` says which chat asked; it is not named `surface`,
   // which every event already carries (desktop or server).

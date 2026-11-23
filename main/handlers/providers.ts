@@ -1,4 +1,7 @@
 import { parseAidenLiveSettingsPatch } from "../../renderer/shared/aiden-live-settings.js";
+import { parseQuickChatDefaultPersistence } from "../../renderer/shared/quick-chat.js";
+import { syncQuickChatSettings } from "../windows/quick-chat-window.js";
+import { createPendingLastWorkspaceTracker } from "../windows/quick-chat-window-core.js";
 import { customModelThinkingLevels } from "../../renderer/shared/custom-model-options.js";
 import { isCompactionEngine, parseCompactionModelOverrides } from "../../renderer/shared/compaction.js";
 import { parseModelPadPreferencesPatch } from "../../renderer/shared/model-pad-preferences.js";
@@ -266,7 +269,10 @@ export function registerProviderHandlers(): void {
     modelInfo: providerModelInfo,
   });
 
-  ipcMain.handle("settings:get", async () => configStore.getSettings());
+  const pendingLastWorkspace = createPendingLastWorkspaceTracker();
+  ipcMain.handle("settings:get", async () =>
+    pendingLastWorkspace.overlay(await configStore.getSettings()),
+  );
   ipcMain.handle("settings:getAppearance", async () => {
     const settings = await configStore.getSettings();
     return appearancePreview.effective(normalizeAppearanceConfig(settings.appearance));
@@ -387,6 +393,13 @@ export function registerProviderHandlers(): void {
     }
     if (typeof p.lastProviderId === "string") next.lastProviderId = p.lastProviderId;
     if (typeof p.lastModel === "string") next.lastModel = p.lastModel;
+    if (
+      typeof p.lastWorkspaceId === "string" &&
+      p.lastWorkspaceId.length <= 256 &&
+      !p.lastWorkspaceId.includes("\0")
+    ) {
+      next.lastWorkspaceId = p.lastWorkspaceId;
+    }
     if (typeof p.exaEnabled === "boolean") next.exaEnabled = p.exaEnabled;
     Object.assign(next, parseVoiceProviderPatch(p));
     if (typeof p.voiceModel === "string") next.voiceModel = p.voiceModel;
@@ -452,6 +465,17 @@ export function registerProviderHandlers(): void {
       if (typeof p[key] !== "boolean") throw new Error("Invalid Aiden Live setting.");
       next[key] = p[key];
     }
+    if (p.quickChatDefaultPersistence !== undefined) {
+      const parsed = parseQuickChatDefaultPersistence(p.quickChatDefaultPersistence);
+      if (!parsed) throw new Error("Invalid Quick Chat default mode.");
+      next.quickChatDefaultPersistence = parsed;
+    }
+    if (p.quickChatKeepOpenOnBlur !== undefined) {
+      if (typeof p.quickChatKeepOpenOnBlur !== "boolean") {
+        throw new Error("Invalid Quick Chat blur setting.");
+      }
+      next.quickChatKeepOpenOnBlur = p.quickChatKeepOpenOnBlur;
+    }
     Object.assign(next, parseAidenLiveSettingsPatch(p as Record<string, unknown>));
     if (p.skillsEnabled !== undefined) {
       if (typeof p.skillsEnabled !== "boolean") throw new Error("Invalid skills enabled setting.");
@@ -468,10 +492,28 @@ export function registerProviderHandlers(): void {
     }
     if (p.appearance !== undefined) next.appearance = parseAppearanceConfig(p.appearance);
     Object.assign(next, parseModelPadPreferencesPatch(p));
-    const saved = process.platform === "linux" && next.dictationHoldToTalk !== undefined
-      ? await linuxHoldSettings.apply(next.dictationHoldToTalk, (isCurrent) => configStore.setSettings(next, isCurrent))
-      : await configStore.setSettings(next);
+    const pendingWorkspaceToken =
+      next.lastWorkspaceId !== undefined
+        ? pendingLastWorkspace.beginWrite(next.lastWorkspaceId)
+        : undefined;
+    if (pendingWorkspaceToken !== undefined) {
+      ipcMain.broadcast("settings:controls-changed", {});
+    }
+    let saved: import("../services/types.js").AppSettings;
+    try {
+      saved = process.platform === "linux" && next.dictationHoldToTalk !== undefined
+        ? await linuxHoldSettings.apply(next.dictationHoldToTalk, (isCurrent) => configStore.setSettings(next, isCurrent))
+        : await configStore.setSettings(next);
+    } finally {
+      if (pendingWorkspaceToken !== undefined) {
+        pendingLastWorkspace.settleWrite(pendingWorkspaceToken);
+      }
+    }
     await applySettingsEffects(saved, next);
+    if (next.quickChatKeepOpenOnBlur !== undefined) syncQuickChatSettings(saved);
+    if (next.quickChatDefaultPersistence !== undefined) {
+      ipcMain.broadcast("settings:controls-changed", {});
+    }
     if (approval.approvalMode !== undefined) reportApprovalModeChanged("global", approvalModeBefore, saved.approvalMode);
     if (next.spendingLimits !== undefined) spending.settingsChanged();
     if (next.usageLimitWaitHours !== undefined) void usageLimits.waitSettingChanged();

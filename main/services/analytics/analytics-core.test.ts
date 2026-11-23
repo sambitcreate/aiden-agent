@@ -279,3 +279,26 @@ test("the outgoing guard rejects events outside the registry", () => {
   assert.equal(validateOutgoingEvent({ event: "$pageview", properties: {} }), null);
   assert.equal(validateOutgoingEvent({ event: "$exception", properties: { source: "main", level: "error" } }), null);
 });
+
+test("floating Quick Chat events accept allowlisted enums/booleans and drop invalid payloads", () => {
+  const { core, sent } = harness();
+  assert.equal(core.track("floating_chat_opened", { source: "hotkey" }), true);
+  assert.equal(core.track("floating_chat_expanded", { during_stream: true, was_ephemeral: true }), true);
+  assert.equal(core.track("floating_chat_promoted", { target: "workspace" }), true);
+  assert.equal(sent.length, 3);
+  assert.equal(sent[0]!.properties.source, "hotkey");
+  assert.equal(sent[1]!.properties.during_stream, true);
+  assert.equal(sent[1]!.properties.was_ephemeral, true);
+  assert.equal(sent[2]!.properties.target, "workspace");
+
+  // Unknown enum values and extra free-text fields must be dropped or stripped.
+  assert.equal(
+    core.track("floating_chat_opened", { source: "secret" } as unknown as { source: "hotkey" }),
+    false,
+  );
+  assert.equal(
+    core.track("floating_chat_promoted", { target: "/Users/dev/secret" } as unknown as { target: "chats" }),
+    false,
+  );
+  assert.equal(sent.length, 3);
+});

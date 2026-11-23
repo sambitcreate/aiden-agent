@@ -4,9 +4,9 @@ Branch: `feature/studio-chat-visibility`. Binding spec: `docs/plans/studio-found
 
 ## Classifier
 `renderer/shared/chat-visibility.ts` (Electron-free; bundled by the CLI) exports
-`chatSurface(chat)` and `isUserVisibleChat(chat)`. Four surfaces: `regular`, `assistant`,
-`bot`, `feature`. Precedence: any present `owner` -> `feature` (even a malformed one: fail
-closed), then `botId` -> `bot`, then persisted Assistant workspace -> `assistant`, else `regular`.
+`chatSurface(chat)` and `isUserVisibleChat(chat)`. Five surfaces: `regular`, `assistant`,
+`bot`, `feature`, `ephemeral`. Precedence: any present `owner` -> `feature` (even a malformed one: fail
+closed), then `botId` -> `bot`, then persisted Assistant workspace -> `assistant`, then `ephemeral === true` -> `ephemeral`, else `regular`.
 `ChatOwnerV1 = { kind: "design-project"; projectId }`, parsed strictly by `parseChatOwnerV1`.
 Sites admit surfaces by allow-list, so any future owner kind is hidden everywhere by default.
 Only main-internal callers can set `owner`; public parsers and Remote create cannot.

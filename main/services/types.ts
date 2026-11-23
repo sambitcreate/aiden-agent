@@ -529,6 +529,8 @@ export interface ChatMeta {
   startedBy?: ChatStartedByV1;
   /** Main-owned feature owner; owned chats never appear in chat listings or Remote. */
   owner?: ChatOwnerV1;
+  /** Temporary floating chat hidden from sidebar, Inbox, Memory, and Remote until saved or attached. */
+  ephemeral?: true;
   /** This chat opens in design mode (narrow chat beside the canvas); absent when off. */
   designMode?: true;
   createdAt: number;
@@ -908,6 +910,8 @@ export interface AppSettings extends AidenLiveSettingsFields {
   spendingLimits?: import("../../renderer/shared/spending.js").SpendingLimitsSettings;
   lastProviderId?: string;
   lastModel?: string;
+  /** Most recently selected real project workspace ID in the main window (shared with Quick Chat). */
+  lastWorkspaceId?: string;
   /** Presentation-only chat models hidden from Mac and paired mobile selection UI. */
   hiddenModelsByProvider?: HiddenModelsByProvider;
   /** Presentation-only Model Pad positions keyed `provider::model` (at most 2,000). */
@@ -988,6 +992,10 @@ export interface AppSettings extends AidenLiveSettingsFields {
   aidenLiveEnabled?: boolean;
   /** Show the idle Live button in the window corner. Omitted means shown; active sessions always show it. */
   aidenLiveButtonVisible?: boolean;
+  /** Default persistence mode for new chats started from the floating Quick Chat starter. Omitted means "ephemeral". */
+  quickChatDefaultPersistence?: import("../../renderer/shared/quick-chat.js").QuickChatDefaultPersistence;
+  /** Keep the floating Quick Chat mini-modal open when clicking outside. Omitted means true (stays pinned). */
+  quickChatKeepOpenOnBlur?: boolean;
   /** On-device Form Fill Specialist; gated on Computer Use plus a verified local model package. Default off. */
   formFillSpecialistEnabled?: boolean;
   /** Global scheduler gate. Turning it off pauses jobs without deleting them. */

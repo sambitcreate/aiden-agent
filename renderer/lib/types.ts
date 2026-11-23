@@ -706,6 +706,8 @@ export interface ChatMeta {
   startedBy?: ChatStartedByV1;
   /** Main-owned feature owner; owned chats never appear in chat listings or Remote. */
   owner?: ChatOwnerV1;
+  /** Temporary floating chat hidden from sidebar, Inbox, Memory, and Remote until saved or attached. */
+  ephemeral?: true;
   /** This chat opens in design mode (narrow chat beside the canvas); absent when off. */
   designMode?: true;
   createdAt: number;
@@ -827,6 +829,7 @@ export interface ChatMetadataUpdated {
   workspaceId?: string;
   title: string;
   updatedAt: number;
+  ephemeral?: boolean;
 }
 
 /** `chats:design-mode-changed`: one chat's design mode turned on or off. */
@@ -992,6 +995,8 @@ export interface AppSettings extends AidenLiveSettingsFields {
   spendingLimits?: import("../shared/spending").SpendingLimitsSettings;
   lastProviderId?: string;
   lastModel?: string;
+  /** Most recently selected real project workspace ID in the main window (shared with Quick Chat). */
+  lastWorkspaceId?: string;
   hiddenModelsByProvider?: HiddenModelsByProvider;
   /** Presentation-only Model Pad positions keyed `provider::model` (at most 2,000). */
   modelPadPlacements?: ModelPadPlacements;
@@ -1046,6 +1051,10 @@ export interface AppSettings extends AidenLiveSettingsFields {
   aidenLiveEnabled?: boolean;
   /** Show the idle Live button. Omitted means shown; active sessions always show it. */
   aidenLiveButtonVisible?: boolean;
+  /** Default persistence mode for new floating Quick Chat sessions. Omitted means "ephemeral". */
+  quickChatDefaultPersistence?: import("../shared/quick-chat").QuickChatDefaultPersistence;
+  /** Keep the floating Quick Chat mini-modal open when clicking outside. Omitted means true. */
+  quickChatKeepOpenOnBlur?: boolean;
   /** On-device form fill specialist. Default off; requires macOS + downloaded model. */
   formFillSpecialistEnabled?: boolean;
   /** Omitted in older configs; memory is enabled unless explicitly disabled. */

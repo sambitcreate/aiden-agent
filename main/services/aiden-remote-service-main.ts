@@ -1,4 +1,5 @@
 import { analyticsWorkspaceKind } from "./analytics/analytics-ids.js";
+import { filterRemoteVisibleWorkspaces } from "./visible-chat-projection.js";
 import { createAidenRemoteBotAllowList, type AidenRemoteBotAllowList } from "./aiden-remote-bot-allowed.js";
 import { botMessagingEnabled } from "../../renderer/shared/bot-messages.js";
 import { localComputerNoun } from "../../renderer/shared/computer-noun.js";
@@ -1211,6 +1212,16 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
           activeHostRuns = hostRuns;
           detachHostFeed?.();
           activeHostFeed?.close();
+          const isEphemeralOnlyNoWorkspace = async (workspace: { id: string; noWorkspace?: boolean }): Promise<boolean> => {
+            if (workspace.noWorkspace !== true || workspace.id === "default") return false;
+            const wsChats = await chatStore.list(workspace.id);
+            return wsChats.length > 0 && wsChats.every((meta) => meta.ephemeral === true);
+          };
+          const listRemoteVisibleWorkspaces = async () =>
+            filterRemoteVisibleWorkspaces(
+              await workspaceApplicationService.list(),
+              () => chatStore.list(),
+            );
           const hostFeed = new AidenRemoteHostFeedService({
             now: Date.now,
             attentionSummary: (runId) => {
@@ -1220,7 +1231,7 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
             liveRuns: () => hostRunRegistry.list(),
             source: createAidenRemoteHostFeedSource({
               chats,
-              listWorkspaces: () => workspaceApplicationService.list(),
+              listWorkspaces: listRemoteVisibleWorkspaces,
               approvalMode: async () => effectiveApprovalMode(await configStore.getSettings(), true),
               repositoryIdentity: gitCachedRepositoryIdentity,
               ...(bots ? { listBots: () => bots.list() } : {}),
@@ -1354,6 +1365,9 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
               persistIdempotency: (snapshot) => operationStore.save(snapshot),
               notifyChanged: () => ipcMain.broadcast("workspaces:changed", {}),
               approvalMode: async () => effectiveApprovalMode(await configStore.getSettings(), true),
+              isWorkspaceHidden: isEphemeralOnlyNoWorkspace,
+              filterVisibleWorkspaces: (workspaces) =>
+                filterRemoteVisibleWorkspaces(workspaces, () => chatStore.list()),
             }),
           };
         },

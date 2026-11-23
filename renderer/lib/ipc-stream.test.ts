@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  attachGenerationStream,
+  claimChatHandoff,
+  createGenerationStreamBuffer,
+  detachHandoffStream,
   startGeneration,
   stopDetachedGeneration,
   subagentsApi,
@@ -910,6 +914,76 @@ test("approval prompts keep the allow scopes main offered, and drop unknown ones
       { approvalId: "a-2", toolCallId: "call-2", toolName: "edit_file", summary: "Edit", details: undefined },
     ]);
     generation.cancel("lifecycle");
+  } finally {
+    restore();
+  }
+});
+
+test("createGenerationStreamBuffer + attachGenerationStream replays gap events and preserves projection", async () => {
+  const { bridge, restore } = installFakeBridge();
+  const deltas: string[] = [];
+  const approvals: string[] = [];
+  try {
+    const buffer = createGenerationStreamBuffer();
+    // Simulate main emitting a delta + approval in the IPC gap before attachGenerationStream runs.
+    for (const handler of bridge.listeners.get("chat:delta") ?? []) {
+      handler({ streamId: "stream-handoff", delta: " gap" });
+    }
+    for (const handler of bridge.listeners.get("chat:approval") ?? []) {
+      handler({
+        streamId: "stream-handoff",
+        approvalId: "a-gap",
+        toolCallId: "tc-gap",
+        toolName: "run_command",
+        summary: "ls",
+      });
+    }
+    const handle = attachGenerationStream(
+      "stream-handoff",
+      { chatId: "chat-handoff", workspaceId: "ws-project" },
+      { content: "Hello" },
+      {
+        ...callbacks(),
+        onDelta: (delta) => deltas.push(delta),
+        onApproval: (prompt) => approvals.push(prompt.approvalId),
+      },
+      buffer.drain(),
+    );
+    // Live delta after attach also arrives without duplication.
+    for (const handler of bridge.listeners.get("chat:delta") ?? []) {
+      handler({ streamId: "stream-handoff", delta: "!" });
+    }
+    assert.deepEqual(deltas, [" gap", "!"]);
+    assert.deepEqual(approvals, ["a-gap"]);
+
+    handle.cancel("lifecycle");
+    const detached = detachedLifecycleChatProjection("chat-handoff", "ws-project");
+    assert.equal(detached?.content, "Hello gap!");
+    assert.deepEqual(bridge.invokes, [
+      { channel: "chat:cancel", args: ["stream-handoff", "lifecycle"] },
+    ]);
+  } finally {
+    restore();
+  }
+});
+
+test("detachHandoffStream and claimChatHandoff forward the expected IPC payloads", async () => {
+  const { bridge, restore } = installFakeBridge();
+  try {
+    await claimChatHandoff({ chatId: "chat-claim-1" });
+    detachHandoffStream(
+      "stream-unmounted",
+      { chatId: "chat-unmounted", workspaceId: "ws-2" },
+      { content: "partial" },
+    );
+    assert.deepEqual(bridge.invokes, [
+      { channel: "chat:claimHandoff", args: [{ chatId: "chat-claim-1" }] },
+      { channel: "chat:cancel", args: ["stream-unmounted", "lifecycle"] },
+    ]);
+    assert.equal(
+      detachedLifecycleChatProjection("chat-unmounted", "ws-2")?.content,
+      "partial",
+    );
   } finally {
     restore();
   }

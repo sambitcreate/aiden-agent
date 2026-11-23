@@ -88,12 +88,16 @@ const broadcastReceivers = createBroadcastReceivers<BrowserWindow>();
 export function registerBroadcastReceiver(
   window: BrowserWindow,
   channels: ReadonlySet<string> | null = null,
+  filter?: (channel: NotificationChannel, payload: unknown) => boolean,
 ): void {
   broadcastReceivers.register(
     window,
     {
       isDestroyed: () => window.isDestroyed() || window.webContents.isDestroyed(),
-      send: (channel, payload) => window.webContents.send(channel, payload),
+      send: (channel, payload) => {
+        if (filter && !filter(channel as NotificationChannel, payload)) return;
+        window.webContents.send(channel, payload);
+      },
     },
     channels,
   );

@@ -203,3 +203,6 @@ export function startPillAppearanceSync(
   };
   return { ready, stop };
 }
+
+/** Alias for secondary Electron windows (dictation pill, floating quick chat) that share appearance sync. */
+export const startSecondaryWindowAppearanceSync = startPillAppearanceSync;

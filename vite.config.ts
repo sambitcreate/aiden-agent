@@ -32,6 +32,7 @@ export default defineConfig(({ command }) => {
         input: {
           "main-window": resolve(import.meta.dirname, "main-window.html"),
           pill: resolve(import.meta.dirname, "pill.html"),
+          "quick-chat": resolve(import.meta.dirname, "quick-chat.html"),
           "visual-snapshot": resolve(import.meta.dirname, "visual-snapshot.html"),
         },
       },

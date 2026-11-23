@@ -162,6 +162,14 @@ export function createChatOwedTurns<Context, Origin extends string>(
       }
     },
 
+    /** Update the owning desktop document id after a cross-window handoff. */
+    rebindOwner(streamId: string, fromDocumentId: string, toDocumentId: string): void {
+      const entry = entries.get(streamId);
+      if (entry && entry.ownerDocumentId === fromDocumentId) {
+        entry.ownerDocumentId = toDocumentId;
+      }
+    },
+
     /** The app is quitting: no owed turn starts again in this process. */
     shutDown(): void {
       shuttingDown = true;

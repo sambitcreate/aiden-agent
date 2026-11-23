@@ -76,7 +76,7 @@ test("generation initialization persists terminal outcomes before releasing owne
   // it keeps the chat's) is checked by behaviour in
   // generation-initialization-terminal.test.ts.
   assert.match(startSource, /initializing\.get\(streamId\) === initialization/u);
-  assert.match(startSource, /active\.get\(streamId\)\?\.owner === owner/u);
+  assert.match(startSource, /active\.get\(streamId\)\?\.owner === (?:owner|currentOwner\(\))/u);
 
   const cancellationPersists = startSource.match(
     /await persistInitializationTerminal\(\s*"cancelled",\s*(?:initialization|activeGeneration)\.cancellationOrigin,?\s*\)/gu,

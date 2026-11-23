@@ -10,6 +10,7 @@ import { llmClient } from "../services/llm-client.js";
 import { releaseChatCacheWarmer } from "../services/pi-cache-warming.js";
 import { rendererDocumentOwner } from "../services/renderer-document-owner.js";
 import { persistedChatWorkspaceId } from "../../renderer/shared/chat-workspace.js";
+import { parseAttachToWorkspaceRequest } from "../../renderer/shared/chat-attach-workspace.js";
 import { isSafeSubagentIdentifier } from "../../renderer/shared/subagent-runs.js";
 import {
   artifactRecoveryMessage,
@@ -74,6 +75,12 @@ import {
 } from "../services/context-pressure.js";
 import { todoSnapshotDiagnostic } from "../services/rpiv-todo/diagnostics.js";
 import { writeDiagnosticEvent } from "../services/diagnostic-journal.js";
+import {
+  assertQuickChatConversationAccess,
+  authorizeQuickChatConversation,
+  isCurrentQuickChatEvent,
+  revokeQuickChatConversation,
+} from "../windows/quick-chat-window.js";
 
 export function registerChatHistoryHandlers(): void {
   const rendererChats = createRendererChatMutationHandlers({
@@ -94,6 +101,10 @@ export function registerChatHistoryHandlers(): void {
     skillRegistry,
     designModeEnabled: () => designModeEnabled(),
     broadcastDesignModeChanged: (change) => ipcMain.broadcast("chats:design-mode-changed", change),
+    assertChatAccess: assertQuickChatConversationAccess,
+    onChatRemoved: (event, chatId) => {
+      if (isCurrentQuickChatEvent(event)) revokeQuickChatConversation(chatId);
+    },
   });
   const commitFirstMessage = createFirstMessageCommitter({
     store: chatStore,
@@ -144,6 +155,7 @@ export function registerChatHistoryHandlers(): void {
     resolveSkill: (workspaceId, invocationId) => skillRegistry.resolveFresh(workspaceId, invocationId),
   });
   const announceFirstMessage = (chat: Chat) => {
+    if (chat.ephemeral === true) return;
     ipcMain.broadcast("chats:metadata-updated", {
       chatId: chat.id,
       title: chat.title,
@@ -154,6 +166,7 @@ export function registerChatHistoryHandlers(): void {
   ipcMain.handle("chats:createWithFirstMessage", (event, input: unknown) => {
     const parsed = parseChatFirstMessage(input);
     const owner = rendererDocumentOwner(event, () => new Error("Chats require the active application document."));
+    const fromQuickChat = isCurrentQuickChatEvent(event);
     if (parsed.worktree) {
       // New worktree: the result is a FirstMessageWorktreeResult, and progress
       // goes only to this document.
@@ -161,11 +174,13 @@ export function registerChatHistoryHandlers(): void {
         if (!owner.isDestroyed()) owner.send("chats:first-message-worktree-progress", progress);
       }).then((result) => {
         if (!result.ok) return result;
+        if (fromQuickChat) authorizeQuickChatConversation(result.chat.id);
         announceFirstMessage(result.chat);
         return { ...result, chat: chatForRenderer(result.chat) };
       });
     }
     return commitFirstMessage(parsed, owner).then((chat) => {
+      if (fromQuickChat) authorizeQuickChatConversation(chat.id);
       announceFirstMessage(chat);
       return chatForRenderer(chat);
     });
@@ -196,9 +211,11 @@ export function registerChatHistoryHandlers(): void {
     ),
   );
 
-  ipcMain.handle("chats:get", async (_event, id: unknown) =>
-    chatApplicationService.get(asString(id, "id")),
-  );
+  ipcMain.handle("chats:get", async (event, id: unknown) => {
+    const chatId = asString(id, "id");
+    assertQuickChatConversationAccess(event, chatId);
+    return chatApplicationService.get(chatId);
+  });
 
   // True when the chat's last reply was cut short by a quit or crash.
   ipcMain.handle("chats:replyInterrupted", async (_event, id: unknown) => {
@@ -495,6 +512,73 @@ export function registerChatHistoryHandlers(): void {
         asString(id, "id"),
         asString(workspaceId, "workspaceId"),
       );
+    },
+  );
+
+  ipcMain.handle(
+    "chats:promoteEphemeral",
+    async (event, id: unknown) => {
+      rendererDocumentOwner(
+        event,
+        () => new Error("Saving temporary chats requires the active application document."),
+      );
+      const chatId = asString(id, "id");
+      assertQuickChatConversationAccess(event, chatId);
+      const promoted = await chatApplicationService.promoteEphemeral(chatId, {
+        rejectFeatureOwned: true,
+      });
+      ipcMain.broadcast("chats:metadata-updated", {
+        chatId: promoted.id,
+        title: promoted.title,
+        workspaceId: persistedChatWorkspaceId(promoted.workspaceId),
+        updatedAt: promoted.updatedAt,
+        ephemeral: false,
+      });
+      ipcMain.broadcast("workspaces:changed", {});
+      return promoted;
+    },
+  );
+
+  ipcMain.handle(
+    "chats:inspectAttachFiles",
+    async (event, id: unknown) => {
+      rendererDocumentOwner(
+        event,
+        () => new Error("Inspecting chat files requires the active application document."),
+      );
+      const chatId = asString(id, "id");
+      assertQuickChatConversationAccess(event, chatId);
+      return chatApplicationService.inspectAttachFiles(chatId);
+    },
+  );
+
+  ipcMain.handle(
+    "chats:attachToWorkspace",
+    async (event, input: unknown) => {
+      const owner = rendererDocumentOwner(
+        event,
+        () => new Error("Attaching a chat to a workspace requires the active application document."),
+      );
+      const parsed = parseAttachToWorkspaceRequest(input);
+      assertQuickChatConversationAccess(event, parsed.chatId);
+      const result = await chatApplicationService.attachToWorkspace(
+        parsed.chatId,
+        parsed.targetWorkspaceId,
+        {
+          fileAction: parsed.fileAction,
+          owner,
+          rejectFeatureOwned: true,
+        },
+      );
+      ipcMain.broadcast("chats:metadata-updated", {
+        chatId: result.chat.id,
+        title: result.chat.title,
+        workspaceId: persistedChatWorkspaceId(result.chat.workspaceId),
+        updatedAt: result.chat.updatedAt,
+        ephemeral: false,
+      });
+      ipcMain.broadcast("workspaces:changed", {});
+      return result;
     },
   );
 

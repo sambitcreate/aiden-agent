@@ -188,7 +188,12 @@ AppImages retain toggle dictation. Setup is explicit for each app session; start
 dialog. The desktop may assign a different trigger, which Aiden displays. If
 the session ends, or shortcuts are edited, Aiden returns to toggle behavior.
 Desktops without this portal keep toggle dictation. Wayland compositors own final
-placement of the dictation pill, so exact bottom-center positioning may vary.
+placement of floating auxiliary windows (the dictation pill and the Floating Quick
+Chat window), so exact screen coordinates may vary under Wayland. Floating Quick
+Chat (`Ctrl+Shift+Space` by default) registers through Aiden's standard global
+shortcut mechanism (`globalShortcut`, like toggle dictation — not the
+hold-to-dictate Global Shortcuts portal) and can be rebound or disabled in
+Settings → Keyboard shortcuts.
 
 Provider inventories may refresh only from the provider services the user has
 configured. Descriptive model metadata uses the bundled release snapshot or a validated
