@@ -284,8 +284,8 @@ test("Bots on paired Macs are grouped by Mac, and a Mac that cannot open them sa
     );
   const view = render({});
   assert.match(view.text, /On Studio/u);
-  assert.match(view.text, /Reviews pull requests/u);
-  assert.match(view.text, /A Bot on Studio\./u);
+  // The description is the Bot's instructions in its own words, not a line to show.
+  assert.doesNotMatch(view.text, /Reviews pull requests/u);
   assert.match(view.text, /On Laptop/u);
   assert.match(view.text, /Laptop is offline\./u);
   assert.equal(view.button(/^Reviewer, on Studio$/u)?.hasAttribute("disabled"), false);
@@ -293,12 +293,13 @@ test("Bots on paired Macs are grouped by Mac, and a Mac that cannot open them sa
 
   const opening = render({ opening: "host-b/bot-1" });
   assert.equal(opening.button(/^Reviewer, on Studio$/u)?.getAttribute("aria-busy"), "true");
-  assert.equal(opening.button(/^Scribe, on Studio$/u)?.hasAttribute("disabled"), true, "one Bot chat opens at a time");
+  assert.equal(opening.button(/^Reviewer, on Studio$/u)?.hasAttribute("disabled"), false, "the opening row keeps its focus");
+  assert.equal(opening.button(/^Scribe, on Studio$/u)?.hasAttribute("disabled"), false, "the other rows stay reachable");
 
   assert.equal(renderToStaticMarkup(<RemoteBotsSection groups={[]} opening={null} onOpen={noop} />), "");
 });
 
-test("a paired Mac's paused or interrupted Bot says so in place of its purpose", () => {
+test("a paired Mac's paused, interrupted or model-less Bot says so, never its purpose", () => {
   const view = dom(
     renderToStaticMarkup(
       <RemoteBotsSection
@@ -309,6 +310,7 @@ test("a paired Mac's paused or interrupted Bot says so in place of its purpose",
               { id: "bot-1", name: "Reviewer", purpose: "Reviews pull requests", status: "paused" },
               { id: "bot-2", name: "Scribe", purpose: "Takes notes", status: "interrupted" },
               { id: "bot-3", name: "Planner", purpose: "Plans the week", working: true },
+              { id: "bot-4", name: "Drafter", purpose: "Drafts replies", status: "needs_model" },
             ],
           },
         ]}
@@ -319,8 +321,9 @@ test("a paired Mac's paused or interrupted Bot says so in place of its purpose",
   );
   assert.equal(view.button(/^Reviewer, on Studio, paused$/u)?.textContent?.includes("Paused"), true);
   assert.equal(view.button(/^Scribe, on Studio, interrupted$/u)?.textContent?.includes("Interrupted — tap to resume"), true);
-  assert.equal(view.button(/^Planner, on Studio, working$/u)?.textContent?.includes("Working…"), true);
-  assert.doesNotMatch(view.text, /Reviews pull requests|Takes notes|Plans the week/u);
+  assert.equal(view.button(/^Planner, on Studio, working$/u)?.textContent?.includes("Thinking…"), true);
+  assert.equal(view.button(/^Drafter, on Studio, needs an AI model$/u)?.textContent?.includes("Needs an AI model"), true);
+  assert.doesNotMatch(view.text, /Reviews pull requests|Takes notes|Plans the week|Drafts replies/u);
   assert.equal(view.button(/^Reviewer, on Studio, paused$/u)?.hasAttribute("disabled"), false, "a paused Bot's chat still opens");
 });
 

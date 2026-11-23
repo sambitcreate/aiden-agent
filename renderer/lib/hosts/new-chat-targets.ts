@@ -3,6 +3,8 @@ import { sidebarHosts, type SidebarHost } from "../sidebar-remote-groups";
 import type { HostChatCapability } from "./host-chat-adapter";
 import { hostControlRefusal, remoteHostCapabilities } from "./remote-host-adapter";
 import { localComputerNoun } from "../../shared/computer-noun";
+import { isBotAvatarAppearance, type BotAvatar } from "../../shared/bots";
+import { peerFeedBotAttention } from "../../shared/peer-feed-inbox";
 
 /**
  * Where new work can start: this Mac or a paired host, the projects each host
@@ -122,15 +124,20 @@ export function reduceCreatedProjects(state: CreatedProjects, event: CreatedProj
 export interface RemoteBotChoice {
   id: string;
   name: string;
+  /** The Bot's description. Searchable, but not shown as the row's line. */
   purpose?: string;
-  /** The host says a turn is running. */
+  /** The Bot's avatar shape and colour as its host sends them; absent when the row has none or a malformed one. */
+  avatar?: BotAvatar;
+  /** The host says a turn is running, and the host is online now. */
   working?: true;
+  /** An approval, a question, a hand-off or an open issue waits on the person (revision 50). Outranks `working`. */
+  needsYou?: true;
   /**
    * The person paused the Bot (only a host that sends this Mac the
-   * `bot:handoffs` rows says so), or a turn stopped part-way and waits to be
-   * resumed.
+   * `bot:handoffs` rows says so), a turn stopped part-way and waits to be
+   * resumed, or the Bot's AI model cannot be used.
    */
-  status?: "paused" | "interrupted";
+  status?: "paused" | "interrupted" | "needs_model";
 }
 
 export interface RemoteBotGroup {
@@ -152,16 +159,23 @@ export function remoteBotGroups(
   const byId = new Map(views.map((view) => [view.id, view]));
   const groups: RemoteBotGroup[] = [];
   for (const host of sidebarHosts(views, statuses)) {
-    const bots = (feeds.get(host.id)?.bots ?? [])
-      .map((row) => {
+    const feed = feeds.get(host.id);
+    // A run the host reported before it went offline may have ended since.
+    const hostOnline = host.availability === "online" && feed?.stale !== true;
+    const bots = (feed?.bots ?? [])
+      .map((row): RemoteBotChoice => {
         const purpose = text(row, "purpose");
+        const semantic = (row.avatar as { semantic?: unknown } | null | undefined)?.semantic;
+        const { needsYou } = peerFeedBotAttention(row);
         return {
           id: row.id,
           name: text(row, "name") ?? "Untitled Bot",
           ...(purpose ? { purpose } : {}),
-          ...(row.sessionState === "running" ? { working: true as const } : {}),
-          ...(row.sessionState === "paused" || row.sessionState === "interrupted"
-            ? { status: row.sessionState as "paused" | "interrupted" }
+          ...(isBotAvatarAppearance(semantic) ? { avatar: semantic } : {}),
+          ...(hostOnline && row.sessionState === "running" ? { working: true as const } : {}),
+          ...(needsYou ? { needsYou: true as const } : {}),
+          ...(row.sessionState === "paused" || row.sessionState === "interrupted" || row.sessionState === "needs_model"
+            ? { status: row.sessionState as "paused" | "interrupted" | "needs_model" }
             : {}),
         };
       });

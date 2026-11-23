@@ -1,11 +1,38 @@
 import { Bot, Loader2 } from "lucide-react";
-import type { RemoteBotGroup } from "../lib/hosts/new-chat-targets";
+import type { RemoteBotChoice, RemoteBotGroup } from "../lib/hosts/new-chat-targets";
 import { matchesSearch } from "../lib/search-fold";
 import { RemoteHostMarker } from "./sidebar-remote";
 import { cn } from "../lib/ui-utils";
-import { BOT_INTERRUPTED_ROW_LABEL, BOT_PAUSED_ROW_LABEL } from "../main/bots/bot-session-state";
+import {
+  BOT_INTERRUPTED_ROW_LABEL,
+  BOT_NEEDS_MODEL_LABEL,
+  BOT_PAUSED_ROW_LABEL,
+} from "../main/bots/bot-session-state";
+import { BOT_WAITING_LINE, BOT_WORKING_LINE } from "../main/bots/bot-sidebar-rows";
 import { Text } from "./ui";
 import { pauseWhenUnseen } from "../lib/offscreen-pause";
+import { BotAvatar } from "./bot-avatar";
+import { BotNeedsYouBadge } from "./bot-needs-you-badge";
+
+type RemoteBotLine = { kind: "waiting" | "working" | "status"; text: string; spoken: string };
+
+const STATUS_LINES = {
+  paused: { text: BOT_PAUSED_ROW_LABEL, spoken: "paused" },
+  interrupted: { text: BOT_INTERRUPTED_ROW_LABEL, spoken: "interrupted" },
+  needs_model: { text: BOT_NEEDS_MODEL_LABEL, spoken: "needs an AI model" },
+} as const;
+
+/**
+ * A paired Mac's Bot's one line, in the order this Mac's own Bot rows use:
+ * waiting on the person, then a running turn, then why it stopped. The Bot's
+ * description is never the line; it is searchable and read as the row's description.
+ */
+export function remoteBotLine(bot: RemoteBotChoice): RemoteBotLine | null {
+  if (bot.needsYou) return { kind: "waiting", text: BOT_WAITING_LINE, spoken: "needs you" };
+  if (bot.working) return { kind: "working", text: BOT_WORKING_LINE, spoken: "working" };
+  if (bot.status) return { kind: "status", ...STATUS_LINES[bot.status] };
+  return null;
+}
 
 /** The paired Macs' Bots that match the sidebar's search; a Mac with none is left out. */
 export function remoteBotGroupsMatching(groups: readonly RemoteBotGroup[], query: string): RemoteBotGroup[] {
@@ -27,7 +54,7 @@ export function RemoteBotsSection({
   onOpen,
 }: {
   groups: readonly RemoteBotGroup[];
-  /** `hostId/botId` of the Bot whose chat is being opened. */
+  /** `hostId/botId` of the Bot whose chat is being opened; a click on any row waits for it. */
   opening: string | null;
   /** `hostId/botId` of the Bot whose chat is open. */
   selected?: string | null;
@@ -51,41 +78,55 @@ export function RemoteBotsSection({
           ) : null}
           <ul className="flex flex-col gap-0.5">
             {bots.map((bot) => {
-              const status = bot.working
-                ? { label: "Working…", spoken: ", working" }
-                : bot.status === "paused"
-                  ? { label: BOT_PAUSED_ROW_LABEL, spoken: ", paused" }
-                  : bot.status === "interrupted"
-                    ? { label: BOT_INTERRUPTED_ROW_LABEL, spoken: ", interrupted" }
-                    : null;
-              const busy = opening === `${host.id}/${bot.id}`;
-              const current = selected === `${host.id}/${bot.id}`;
+              const line = remoteBotLine(bot);
+              const key = `${host.id}/${bot.id}`;
+              const busy = opening === key;
+              const current = selected === key;
+              const unavailable = Boolean(host.disabledReason);
               return (
                 <li key={bot.id}>
                   <button
                     type="button"
                     data-roving-item
-                    disabled={Boolean(host.disabledReason) || opening !== null}
+                    data-remote-bot-row={key}
+                    // Only the opening row waits; the others stay reachable by click and arrow keys.
+                    disabled={unavailable}
+                    aria-disabled={busy || undefined}
                     aria-busy={busy || undefined}
                     aria-current={current ? "page" : undefined}
-                    aria-label={`${bot.name}, on ${host.label}${status?.spoken ?? ""}`}
+                    aria-label={`${bot.name}, on ${host.label}${line ? `, ${line.spoken}` : ""}`}
+                    aria-description={bot.purpose}
                     className={cn(
                       "flex w-full min-w-0 items-center gap-2.5 rounded-control px-2 py-1.5 text-left outline-none transition-[background-color] duration-(--motion-duration) ease-standard hover:bg-list-hover focus-visible:bg-list-selection focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-focus-ring disabled:cursor-default disabled:opacity-60 disabled:hover:bg-transparent motion-reduce:transition-none",
                       current && "bg-list-selection hover:bg-list-selection",
                     )}
                     onClick={() => onOpen(host.id, bot.id)}
                   >
-                    <span className="grid size-9 shrink-0 place-items-center rounded-card bg-control text-secondary" aria-hidden="true">
-                      {busy ? <Loader2 className="size-4 motion-safe:animate-spin" /> : <Bot className="size-4" />}
-                    </span>
+                    {busy || !bot.avatar ? (
+                      <span className="grid size-9 shrink-0 place-items-center rounded-card bg-control text-secondary" aria-hidden="true">
+                        {busy ? <Loader2 className="size-4 motion-safe:animate-spin" /> : <Bot className="size-4" />}
+                      </span>
+                    ) : (
+                      <span aria-hidden="true" className="shrink-0">
+                        <BotAvatar avatar={bot.avatar} name={bot.name} size="medium" working={Boolean(bot.working) && !bot.needsYou} />
+                      </span>
+                    )}
                     <span className="min-w-0 flex-1">
                       <span className="block truncate text-regular font-medium text-primary">{bot.name}</span>
-                      <span
-                        ref={bot.working ? pauseWhenUnseen : undefined}
-                        className={cn("mt-0.5 block truncate text-small text-secondary", bot.working && "agent-thinking-shimmer")}
-                      >
-                        {status?.label ?? bot.purpose ?? `A Bot on ${host.label}.`}
-                      </span>
+                      {line ? (
+                        <span className="mt-0.5 flex min-w-0 items-center gap-1.5" aria-hidden="true">
+                          {line.kind === "waiting" ? <BotNeedsYouBadge /> : null}
+                          <span
+                            ref={line.kind === "working" ? pauseWhenUnseen : undefined}
+                            className={cn(
+                              "block min-w-0 truncate text-small text-secondary",
+                              line.kind === "working" && "agent-thinking-shimmer",
+                            )}
+                          >
+                            {line.text}
+                          </span>
+                        </span>
+                      ) : null}
                     </span>
                   </button>
                 </li>

@@ -228,6 +228,27 @@ test("Try again after the stream could not be joined joins it again", async () =
   assert.deepEqual(fake.unsubscribed, ["sub_2"]);
 });
 
+test("Try again after the host ended the stream as gone joins a new stream", async () => {
+  const fake = fakeTransport([session()]);
+  let joins = 0;
+  fake.transport.subscribe = async () => {
+    joins += 1;
+    return { subscriptionId: `sub_${joins}`, state: "streaming" };
+  };
+  const follower = new RemoteBotSessionFollower(fake.transport, "host_a", "bot_1");
+  follower.start();
+  await settle();
+  fake.state("gone");
+  assert.equal(follower.getState().gone, true);
+  follower.reload();
+  await settle();
+  assert.equal(joins, 2, "the ended stream is not counted as joined");
+  assert.equal(follower.getState().gone, false);
+  fake.state("streaming");
+  fake.push(event(5, { type: "partial", payload: { text: "live again" } }));
+  assert.equal(follower.getState().view?.snapshot.partial, "live again");
+});
+
 test("only hosts that serve durable Bot sessions to this Mac get the Bot conversation", () => {
   const grants = ["bot:read", "bot:write", "chat:read", "chat:write"];
   assert.equal(hostSharesBotSessions({ features: ["bot-durable-session-v1"], capabilities: grants }), true);

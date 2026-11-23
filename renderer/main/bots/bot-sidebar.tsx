@@ -7,9 +7,9 @@ import * as React from "react";
 import { useNavigate, useRouter, useRouterState } from "@tanstack/react-router";
 import { ChevronLeft, Plug, RotateCcw, Search, Star, UserRound, X } from "lucide-react";
 import { BotAvatar } from "../../components/bot-avatar";
+import { BotNeedsYouBadge } from "../../components/bot-needs-you-badge";
 import { HistoryNavButtons } from "../../components/history-nav";
 import {
-  Badge,
   Button,
   EmptyState,
   Input,
@@ -109,11 +109,6 @@ function ShortcutHint({ binding, className }: { binding: string; className: stri
   );
 }
 
-const NeedsYouBadge = () => (
-  <Badge color="warning" className="h-5 shrink-0 px-1.5 text-mini">
-    Needs you
-  </Badge>
-);
 
 const BotRow = React.memo(function BotRow({
   row,
@@ -169,7 +164,7 @@ const BotRow = React.memo(function BotRow({
             </span>
             {line || row.needsYou ? (
               <span className="mt-0.5 flex min-w-0 items-center gap-1.5">
-                {row.needsYou ? <NeedsYouBadge /> : null}
+                {row.needsYou ? <BotNeedsYouBadge /> : null}
                 {row.needsYou && unread ? <span className="sr-only">Unread</span> : null}
                 {line ? (
                   // Read as the row's description, so its name stays the Bot's name and status.
@@ -250,7 +245,7 @@ const PinnedBot = React.memo(function PinnedBot({
           </span>
           <span className="flex max-w-full min-w-0 items-center gap-1.5">
             <span className="truncate text-strong font-medium text-primary">{row.bot.name}</span>
-            {row.needsYou ? <NeedsYouBadge /> : unread ? <UnreadDot /> : null}
+            {row.needsYou ? <BotNeedsYouBadge /> : unread ? <UnreadDot /> : null}
             {row.needsYou && unread ? <span className="sr-only">Unread</span> : null}
           </span>
           {description ? (

@@ -8,6 +8,7 @@ import { useReportGoalView } from "../lib/use-report-goal-view";
 import { skipToken, useQuery } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import { Ellipsis, Pause, Play, Square } from "lucide-react";
+import { BotAvatar as BotAvatarMark } from "../components/bot-avatar";
 import { AskUserQuestionComposer } from "../components/ask-user-question-composer";
 import { HandoffCard, handoffNoNoteComposerText } from "../components/bots/handoff-card";
 import { handoffTakenKey, useHandoffTaken } from "../components/bots/handoff-taken";
@@ -67,7 +68,7 @@ function botName(feed: PeerHostFeedSnapshot | null | undefined, botId: string): 
   return name || null;
 }
 
-/** The Bot's character as the host's list draws it, for the hand-off card's tile. */
+/** The Bot's character as the host's list draws it, for the header and the hand-off card's tile. */
 function botAvatar(feed: PeerHostFeedSnapshot | null | undefined, botId: string): BotAvatar {
   const avatar = feed?.bots.find((bot) => bot.id === botId)?.avatar;
   const semantic = avatar && typeof avatar === "object" ? (avatar as { semantic?: unknown }).semantic : undefined;
@@ -214,7 +215,10 @@ export function RemoteBotChatView({ hostId, botId }: { hostId: string; botId: st
       className="h-full min-h-0"
       alignFooterToScrollContent
       title={
-        <span className="flex min-w-0 items-baseline gap-2">
+        <span className="flex min-w-0 items-center gap-2">
+          <span aria-hidden="true" className="shrink-0">
+            <BotAvatarMark avatar={avatar} name={name} size="small" working={running} />
+          </span>
           <span className="truncate">{name}</span>
           <Text as="span" variant="small" color="tertiary" className="truncate">
             on {hostName}
@@ -389,6 +393,8 @@ export function RemoteBotChatView({ hostId, botId }: { hostId: string; botId: st
     }
     try {
       await call({ operation: "botSend", resourceId: botId, idempotencyKey: key, body }, `Aiden couldn’t send to ${name}.`);
+      // While the stream reconnects, read the session so the sent message shows now, as Pause does.
+      if (live.stream !== "streaming") live.reload();
     } catch (error) {
       if ((error as { code?: unknown }).code === "outcome_unknown") {
         unsettledSend.current = { text: fullText, photos: identity, key, body };
