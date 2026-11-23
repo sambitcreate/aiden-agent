@@ -7,7 +7,7 @@ import { readGenerativeUiHostLibrary } from "../generative-ui-host-libraries.js"
 import { LOAD_TOOLS_TOOL_NAME, ON_DEMAND_TOOL_NAMES } from "../on-demand-tools.js";
 import { createDesignCanvasTools, DESIGN_MODE_PROMPT_SECTION } from "./canvas-tools.js";
 import { AIDEN_DESIGN_SKILL } from "./skill.js";
-import { DesignCanvasStore } from "./store.js";
+import { DesignCanvasStore, DesignChatCanvases } from "./store.js";
 
 test("every canvas tool the design skill and prompt name is a tool Aiden actually gets", async (t) => {
   const base = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-design-skill-"));
@@ -15,7 +15,7 @@ test("every canvas tool the design skill and prompt name is a tool Aiden actuall
   const tools = createDesignCanvasTools({
     chatId: "chat-1",
     workspaceRoot: base,
-    store: new DesignCanvasStore({ root: () => base }),
+    store: new DesignChatCanvases({ store: new DesignCanvasStore({ root: () => base }), workspaceIdOf: async () => "ws-1" }),
     broadcast: () => undefined,
   });
   const offered = new Set(tools.map((tool) => tool.name));

@@ -223,29 +223,29 @@ test("comments on removed frames and resolved comments do not count against a fr
 });
 
 test("the prompt line names frames, pages and open comments in plain words", () => {
-  assert.equal(canvasPromptLine(canvas([])), "The canvas is empty.");
-  assert.equal(canvasPromptLine(canvas([note("a", 0, 0)])), "The canvas has 1 frame, 0 open comments.");
+  assert.equal(canvasPromptLine(canvas([]), undefined), "The canvas is empty.");
+  assert.equal(canvasPromptLine(canvas([note("a", 0, 0)]), undefined), "The canvas has 1 frame, 0 open comments.");
   const page: DesignFrame = { id: "p", kind: "file", title: "Home", path: "design/home.html", x: 0, y: 0, w: 640, h: 436, designWidth: 1280, pageId: "page-1", createdBy: "aiden" };
   const doc = canvas([page, note("a", 0, 0)], {
     comments: [{ id: "c1", frameId: "p", x: 1, y: 1, note: "one", state: "open", pageId: "page-1", anchorState: "anchored", createdAt: "2026-11-05T00:00:00Z" }],
   });
-  assert.equal(canvasPromptLine(doc), "The canvas has 2 frames, 1 HTML file, 1 open comment.");
+  assert.equal(canvasPromptLine(doc, undefined), "The canvas has 2 frames, 1 HTML file, 1 open comment.");
 });
 
 test("the canvas status goes to the conversation only on turns where it changed", () => {
   const start: { messages: unknown[] } = { messages: [{ role: "user", content: "make a landing page" }] };
-  const first = withCanvasStatusNote(start, canvasPromptLine(canvas([])), 1);
+  const first = withCanvasStatusNote(start, canvasPromptLine(canvas([]), undefined), 1);
   assert.equal(first.messages.length, 2, "the first design turn tells Aiden what the canvas holds");
   assert.deepEqual(first.messages[1], { role: "system", content: "", sections: { [CANVAS_STATUS_SECTION]: "Design canvas when this was noted: The canvas is empty." }, timestamp: 1 });
 
   const sameCounts = { messages: [...first.messages, { role: "assistant", content: "done" }, { role: "user", content: "again" }] };
-  assert.equal(withCanvasStatusNote(sameCounts, canvasPromptLine(canvas([])), 2), sameCounts, "unchanged counts add nothing");
+  assert.equal(withCanvasStatusNote(sameCounts, canvasPromptLine(canvas([]), undefined), 2), sameCounts, "unchanged counts add nothing");
 
-  const changed = withCanvasStatusNote(sameCounts, canvasPromptLine(canvas([note("a", 0, 0)])), 3);
+  const changed = withCanvasStatusNote(sameCounts, canvasPromptLine(canvas([note("a", 0, 0)]), undefined), 3);
   assert.equal(changed.messages.length, sameCounts.messages.length + 1);
   assert.deepEqual((changed.messages[changed.messages.length - 1] as { sections: unknown }).sections, { [CANVAS_STATUS_SECTION]: "Design canvas when this was noted: The canvas has 1 frame, 0 open comments." });
   // The latest note is what counts: going back to an empty canvas is a change again.
-  assert.equal(withCanvasStatusNote(changed, canvasPromptLine(canvas([])), 4).messages.length, changed.messages.length + 1);
+  assert.equal(withCanvasStatusNote(changed, canvasPromptLine(canvas([]), undefined), 4).messages.length, changed.messages.length + 1);
 });
 
 test("a canvas with pages describes one page at a time and lists them all", () => {

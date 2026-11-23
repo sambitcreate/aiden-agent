@@ -136,10 +136,10 @@ export class DesignCanvasViews {
     };
   }
 
-  /** Where the chat last looked at `pageId`, or undefined when it never has. */
-  async viewportOf(chatId: string, workspaceId: string, pageId: string): Promise<DesignViewport | undefined> {
-    const viewport = (await this.workspace(workspaceId)).entries.get(chatId)?.viewports.get(pageId);
-    return viewport ? { ...viewport } : undefined;
+  /** Where the chat last looked at each page it has looked at. */
+  async viewports(chatId: string, workspaceId: string): Promise<Map<string, DesignViewport>> {
+    const entry = (await this.workspace(workspaceId)).entries.get(chatId);
+    return new Map([...(entry?.viewports ?? [])].map(([pageId, viewport]) => [pageId, { ...viewport }]));
   }
 
   /** The kept view and the latest `focusId`, for a canvas that is mounting. */
@@ -268,6 +268,12 @@ export class DesignCanvasViews {
  * the page exists. Background and entry placements use it without a message.
  */
 export type DesignTurnPages = {
+  /**
+   * Reads what main keeps for the chat in `workspaceId` once, and answers the
+   * turn's view for any version of the document without waiting, so a store
+   * update's mutate can use it on the latest document.
+   */
+  resolver(workspaceId: string): Promise<(doc: Pick<DesignCanvas, "pages">) => DesignChatView>;
   /** The chat's view for this turn, on a page that exists in `doc`. */
   view(doc: Pick<DesignCanvas, "pages">, workspaceId: string): Promise<DesignChatView>;
   /** Aiden shows `pageId`: later calls in the turn work on it. The change's `focusId`, when main keeps views. */
@@ -275,20 +281,30 @@ export type DesignTurnPages = {
 };
 
 export function designTurnPages(options: {
-  views?: Pick<DesignCanvasViews, "get" | "viewportOf" | "showPage">;
+  views?: Pick<DesignCanvasViews, "get" | "viewports" | "showPage">;
   chatId: string;
   message?: DesignViewState;
 }): DesignTurnPages {
   let shown: string | undefined;
-  return {
-    async view(doc, workspaceId) {
-      const kept = await options.views?.get(options.chatId, workspaceId);
+  const resolver: DesignTurnPages["resolver"] = async (workspaceId) => {
+    const kept = await options.views?.get(options.chatId, workspaceId);
+    const viewports = (await options.views?.viewports(options.chatId, workspaceId)) ?? new Map<string, DesignViewport>();
+    return (doc) => {
       const exists = (pageId: string | undefined): pageId is string =>
         pageId !== undefined && doc.pages.some((page) => page.id === pageId);
       const pageId = [shown, options.message?.pageId, kept?.pageId].find(exists) ?? doc.pages[0]!.id;
-      const viewport = (await options.views?.viewportOf(options.chatId, workspaceId, pageId)) ?? DESIGN_FRESH_VIEWPORT;
       const size = options.message?.viewSize ?? kept?.size;
-      return { pageId, viewport: { ...viewport }, ...(size ? { size: { ...size } } : {}) };
+      return {
+        pageId,
+        viewport: { ...(viewports.get(pageId) ?? DESIGN_FRESH_VIEWPORT) },
+        ...(size ? { size: { ...size } } : {}),
+      };
+    };
+  };
+  return {
+    resolver,
+    async view(doc, workspaceId) {
+      return (await resolver(workspaceId))(doc);
     },
     async show(workspaceId, pageId) {
       shown = pageId;

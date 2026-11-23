@@ -14,11 +14,46 @@ import {
   canvasReadPageKey,
   formatCanvasReadCursor,
 } from "../../../renderer/shared/design-canvas/canvas-summary.js";
-import { addPage, deletePage, showPage } from "../../../renderer/shared/design-canvas/pages.js";
-import { reopenComment } from "../../../renderer/shared/design-canvas/comments.js";
-import { DesignCanvasStore } from "./store.js";
+import { addPage, deletePage, movePage } from "../../../renderer/shared/design-canvas/pages.js";
+import { addComment, markCommentsSent, reopenComment } from "../../../renderer/shared/design-canvas/comments.js";
+import type { DesignCanvas } from "../../../renderer/shared/design-canvas/schema.js";
+import { DesignCanvasStore, DesignChatCanvases, type DesignCanvasUpdated } from "./store.js";
+import { DesignCanvasViews, designTurnPages } from "./views.js";
 
-async function setup(t: test.TestContext, extra: Partial<Parameters<typeof createDesignCanvasTools>[0]> = {}) {
+type ToolDeps = Parameters<typeof createDesignCanvasTools>[0];
+type FocusRequest = Parameters<NonNullable<ToolDeps["focus"]>>[0];
+
+/**
+ * One workspace canvas ("ws-1") shared by chat-1 and chat-2, main's view
+ * registry, and a way to start a chat's turn. `store` reads and changes the
+ * canvas by chat id, the way a person's saves reach it.
+ */
+async function canvasFixture(root: string) {
+  const workspaceStore = new DesignCanvasStore({ root: () => path.join(root, "canvases") });
+  const workspaces: Record<string, string> = { "chat-1": "ws-1", "chat-2": "ws-1" };
+  const canvases = new DesignChatCanvases({ store: workspaceStore, workspaceIdOf: async (chatId) => workspaces[chatId] ?? null });
+  const views = new DesignCanvasViews();
+  const store = {
+    get: async (chatId: string): Promise<DesignCanvas> => (await canvases.get(chatId)).doc,
+    update: async (chatId: string, mutate: (doc: DesignCanvas) => DesignCanvas): Promise<DesignCanvas> =>
+      (await canvases.update(chatId, mutate)).doc,
+  };
+  /** The person switches the chat's canvas to `pageId` (a view report that applied every Aiden change). */
+  const personShows = async (pageId: string, chatId = "chat-1", x = 0) =>
+    views.report(chatId, workspaces[chatId]!, { pageId, viewport: { x, y: 0, zoom: 1 } }, (await views.kept(chatId, workspaces[chatId]!))?.focusId ?? 0);
+  /** A turn's tools for the chat: the page resolver reads main's views and the message's view state. */
+  const turn = (chatId: string, deps: Partial<ToolDeps> & Pick<ToolDeps, "workspaceRoot">) =>
+    createDesignCanvasTools({
+      chatId,
+      store: canvases,
+      broadcast: () => undefined,
+      pages: designTurnPages({ views, chatId, ...(deps.viewState ? { message: deps.viewState } : {}) }),
+      ...deps,
+    });
+  return { workspaceStore, canvases, views, store, personShows, turn };
+}
+
+async function setup(t: test.TestContext, extra: Partial<ToolDeps> = {}) {
   const base = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-canvas-tools-"));
   t.after(() => fs.rm(base, { recursive: true, force: true }));
   const workspace = path.join(base, "workspace");
@@ -26,22 +61,13 @@ async function setup(t: test.TestContext, extra: Partial<Parameters<typeof creat
   await fs.writeFile(path.join(workspace, "design", "home.html"), "<!doctype html><title>Home</title>");
   await fs.writeFile(path.join(workspace, "design", "hero.png"), Buffer.from([0x89, 0x50, 0x4e, 0x47]));
   await fs.writeFile(path.join(base, "outside.html"), "<p>secret</p>");
-  const store = new DesignCanvasStore({ root: () => path.join(base, "canvases") });
-  const broadcasts: { chatId: string; revision: number }[] = [];
+  const fixture = await canvasFixture(base);
+  const broadcasts: DesignCanvasUpdated[] = [];
   let available = true;
   let next = 0;
   const focused: string[][] = [];
-  const tools = createDesignCanvasTools({
-    chatId: "chat-1",
-    workspaceRoot: workspace,
-    store,
-    broadcast: (update) => broadcasts.push(update),
-    stillAvailable: async () => available,
-    newId: () => `frame-${++next}`,
-    focus: (ids) => focused.push(ids),
-    ...extra,
-  });
-  const call = async (name: string, args: Record<string, unknown> = {}) => {
+  const focusRequests: FocusRequest[] = [];
+  const callerFor = (tools: ReturnType<typeof createDesignCanvasTools>) => async (name: string, args: Record<string, unknown> = {}) => {
     const tool = tools.find((entry) => entry.name === name);
     assert.ok(tool, `${name} exists`);
     const output = await tool.execute(`call-${name}`, args as never);
@@ -49,7 +75,34 @@ async function setup(t: test.TestContext, extra: Partial<Parameters<typeof creat
     assert.ok(first && first.type === "text");
     return JSON.parse(first.text) as Record<string, any>;
   };
-  return { base, workspace, store, broadcasts, focused, call, setAvailable: (value: boolean) => (available = value) };
+  /** A new turn of a chat on the same canvas, with the same ids, broadcasts and focus record. */
+  const newTurn = (chatId = "chat-1", more: Partial<ToolDeps> = {}) =>
+    callerFor(
+      fixture.turn(chatId, {
+        workspaceRoot: workspace,
+        broadcast: (update) => broadcasts.push(update),
+        stillAvailable: async () => available,
+        newId: () => `frame-${++next}`,
+        focus: (request) => {
+          focused.push(request.frameIds);
+          focusRequests.push(request);
+        },
+        ...extra,
+        ...more,
+      }),
+    );
+  const call = newTurn();
+  return {
+    ...fixture,
+    base,
+    workspace,
+    broadcasts,
+    focused,
+    focusRequests,
+    call,
+    newTurn,
+    setAvailable: (value: boolean) => (available = value),
+  };
 }
 
 test("Aiden places a workspace page, a note and a group, and an open canvas hears about each", async (t) => {
@@ -80,7 +133,7 @@ test("placing a page that already landed on the canvas by itself moves that fram
   await store.update("chat-1", (doc) => ({
     ...doc,
     frames: [
-      { id: "auto", kind: "file", title: "home.html", path: "design/home.html", x: 0, y: 0, w: 640, h: 436, designWidth: 1280, pageId: doc.activePageId, createdBy: "aiden", dark: true },
+      { id: "auto", kind: "file", title: "home.html", path: "design/home.html", x: 0, y: 0, w: 640, h: 436, designWidth: 1280, pageId: "page-1", createdBy: "aiden", dark: true },
     ],
   }));
   const retitled = await call("canvas_place_frame", { kind: "file", title: "Home", path: "design/home.html" });
@@ -127,7 +180,7 @@ test("placing a page the person put on the canvas reuses their frame, and a lock
   await store.update("chat-1", (doc) => ({
     ...doc,
     frames: [
-      { id: "theirs", kind: "file", title: "Mine", path: "design/home.html", x: 50, y: 60, w: 640, h: 436, designWidth: 1280, pageId: doc.activePageId, createdBy: "person" },
+      { id: "theirs", kind: "file", title: "Mine", path: "design/home.html", x: 50, y: 60, w: 640, h: 436, designWidth: 1280, pageId: "page-1", createdBy: "person" },
     ],
   }));
   const reused = await call("canvas_place_frame", { kind: "file", title: "Home", path: "design/home.html" });
@@ -157,8 +210,8 @@ test("reusing a page's frame inside a locked group moves it as asked but leaves 
   await store.update("chat-1", (doc) => ({
     ...doc,
     frames: [
-      { id: "g", kind: "group", title: "Locked", x: 0, y: 0, w: 800, h: 600, pageId: doc.activePageId, createdBy: "person", locked: true },
-      { id: "theirs", kind: "file", title: "Mine", path: "design/home.html", x: 20, y: 40, w: 640, h: 436, designWidth: 1280, pageId: doc.activePageId, createdBy: "person", groupId: "g" },
+      { id: "g", kind: "group", title: "Locked", x: 0, y: 0, w: 800, h: 600, pageId: "page-1", createdBy: "person", locked: true },
+      { id: "theirs", kind: "file", title: "Mine", path: "design/home.html", x: 20, y: 40, w: 640, h: 436, designWidth: 1280, pageId: "page-1", createdBy: "person", groupId: "g" },
     ],
   }));
   const moved = await call("canvas_place_frame", { kind: "file", title: "Home", path: "design/home.html", x: 3000, y: 3000 });
@@ -194,7 +247,7 @@ test("resizing a page that landed by itself keeps an arrow on it attached to its
   await store.update("chat-1", (doc) => ({
     ...doc,
     frames: [
-      { id: "auto", kind: "file", title: "home.html", path: "design/home.html", x: 0, y: 0, w: 640, h: 436, designWidth: 1280, pageId: doc.activePageId, createdBy: "aiden" },
+      { id: "auto", kind: "file", title: "home.html", path: "design/home.html", x: 0, y: 0, w: 640, h: 436, designWidth: 1280, pageId: "page-1", createdBy: "aiden" },
     ],
   }));
   const note = await call("canvas_place_frame", { kind: "note", title: "Next", text: "Library", x: 1200, y: 100 });
@@ -246,7 +299,7 @@ test("frames may only show files that exist inside the workspace", async (t) => 
 test("a frame the person added is removed only with confirm, and removing a group keeps its frames", async (t) => {
   const { store, call } = await setup(t);
   const commentOn = (id: string, frameId: string) => ({
-    id, frameId, x: 10, y: 10, note: id, state: "open" as const, anchorState: "anchored" as const, pageId: "page-1", createdAt: "2026-11-05T00:00:00Z",
+    id, frameId, x: 10, y: 10, note: id, state: "open" as const, anchorState: "anchored" as const, chatId: "chat-1", pageId: "page-1", createdAt: "2026-11-05T00:00:00Z",
   });
   await store.update("chat-1", (doc) => ({
     ...doc,
@@ -302,11 +355,11 @@ test("canvas_read lists what is in view, the page's waiting comments, and counts
     ],
     comments: [
       {
-        id: "c1", frameId: "page", x: 10, y: 10, note: "Bigger", state: "open", pageId: "page-1", anchorState: "anchored", createdAt: "2026-11-05T00:00:00Z",
+        id: "c1", frameId: "page", x: 10, y: 10, note: "Bigger", state: "open", chatId: "chat-1", pageId: "page-1", anchorState: "anchored", createdAt: "2026-11-05T00:00:00Z",
         anchor: { commentId: "c1", selector: "main > h1", text: "Welcome", tag: "h1", sourcePath: "design/home.html:4" },
       },
-      { id: "c2", frameId: "page", x: 10, y: 10, note: "Done", state: "resolved", pageId: "page-1", anchorState: "anchored", createdAt: "2026-11-05T00:00:00Z" },
-      { id: "c3", x: 5, y: 5, note: "A footer", state: "sent", pageId: "page-1", anchorState: "anchored", createdAt: "2026-11-05T01:00:00Z", sentAt: "2026-11-05T01:00:00Z" },
+      { id: "c2", frameId: "page", x: 10, y: 10, note: "Done", state: "resolved", chatId: "chat-1", pageId: "page-1", anchorState: "anchored", createdAt: "2026-11-05T00:00:00Z" },
+      { id: "c3", x: 5, y: 5, note: "A footer", state: "sent", chatId: "chat-1", pageId: "page-1", anchorState: "anchored", createdAt: "2026-11-05T01:00:00Z", sentAt: "2026-11-05T01:00:00Z" },
     ],
   }));
   const answer = await call("canvas_read");
@@ -360,8 +413,8 @@ test("canvas_comment replies on a comment, resolves it, or both, and tells open 
   await store.update("chat-1", (doc) => ({
     ...doc,
     comments: [
-      { id: "c1", x: 5, y: 5, note: "A footer", state: "sent", pageId: "page-1", anchorState: "anchored", createdAt: "2026-11-05T01:00:00Z", sentAt: "2026-11-05T01:00:00Z" },
-      { id: "draft", x: 9, y: 9, note: "Maybe a darker", state: "open", queued: true, pageId: "page-1", anchorState: "anchored", createdAt: "2026-11-05T01:30:00Z" },
+      { id: "c1", x: 5, y: 5, note: "A footer", state: "sent", chatId: "chat-1", pageId: "page-1", anchorState: "anchored", createdAt: "2026-11-05T01:00:00Z", sentAt: "2026-11-05T01:00:00Z" },
+      { id: "draft", x: 9, y: 9, note: "Maybe a darker", state: "open", queued: true, chatId: "chat-1", pageId: "page-1", anchorState: "anchored", createdAt: "2026-11-05T01:30:00Z" },
     ],
   }));
   // A draft still in the person's tray is theirs until they send it.
@@ -453,51 +506,23 @@ test("only an attended desktop chat with design mode on and a folder gets the ca
 });
 
 test("canvas_focus asks the canvas to show frames that exist, and refuses ones that do not", async (t) => {
-  const base = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-canvas-focus-"));
-  t.after(() => fs.rm(base, { recursive: true, force: true }));
-  const store = new DesignCanvasStore({ root: () => base });
-  const focused: string[][] = [];
-  const tools = createDesignCanvasTools({
-    chatId: "chat-1",
-    workspaceRoot: base,
-    store,
-    broadcast: () => undefined,
-    focus: (ids) => focused.push(ids),
-  });
-  const call = async (name: string, args: Record<string, unknown>) => {
-    const output = await tools.find((tool) => tool.name === name)!.execute("c", args as never);
-    const first = output.content[0];
-    assert.ok(first && first.type === "text");
-    return JSON.parse(first.text) as Record<string, any>;
-  };
+  const { focused, focusRequests, call } = await setup(t);
   assert.equal((await call("canvas_focus", {})).status, "error", "an empty canvas has nothing to show");
   const note = await call("canvas_place_frame", { kind: "note", title: "Idea" });
   assert.equal((await call("canvas_focus", { ids: ["missing"] })).status, "error");
   assert.deepEqual(await call("canvas_focus", { ids: [note.frame.id, note.frame.id] }), { status: "requested", frames: 1 });
   assert.deepEqual(await call("canvas_focus", {}), { status: "requested", frames: 1 });
   assert.deepEqual(focused, [[note.frame.id], []]);
+  assert.deepEqual(
+    focusRequests.map((request) => [request.pageId, request.focusId]),
+    [["page-1", 1], ["page-1", 2]],
+    "each focus names the page and a new focusId",
+  );
 });
 
 test("Aiden reads and places on a page it names, and focusing a frame on another page brings that page on screen", async (t) => {
-  const base = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-canvas-pages-"));
-  t.after(() => fs.rm(base, { recursive: true, force: true }));
-  const store = new DesignCanvasStore({ root: () => base });
-  const focused: string[][] = [];
-  const tools = createDesignCanvasTools({
-    chatId: "chat-1",
-    workspaceRoot: base,
-    store,
-    broadcast: () => undefined,
-    focus: (ids) => focused.push(ids),
-  });
-  const call = async (name: string, args: Record<string, unknown> = {}) => {
-    const output = await tools.find((tool) => tool.name === name)!.execute("c", args as never);
-    const first = output.content[0];
-    assert.ok(first && first.type === "text");
-    return JSON.parse(first.text) as Record<string, any>;
-  };
+  const { store, views, focused, focusRequests, personShows, call, newTurn } = await setup(t);
   await store.update("chat-1", (doc) => addPage(addPage(doc, "p2", "Pricing"), "p3", "Empty"));
-  await store.update("chat-1", (doc) => showPage(doc, "page-1"));
 
   const placed = await call("canvas_place_frame", { kind: "note", title: "Tiers", page: "pricing" });
   assert.equal(placed.status, "placed");
@@ -512,24 +537,20 @@ test("Aiden reads and places on a page it names, and focusing a frame on another
   assert.equal(unknown.status, "error");
   assert.match(unknown.message, /"Pricing"/u, "the error names the pages there are");
 
+  const revision = (await store.get("chat-1")).revision;
   assert.deepEqual(await call("canvas_focus", { ids: [placed.frame.id] }), { status: "requested", frames: 1 });
-  assert.equal((await store.get("chat-1")).activePageId, "p2");
+  assert.equal((await views.get("chat-1", "ws-1"))?.pageId, "p2", "the chat's view is on that page at once");
+  assert.equal((await store.get("chat-1")).revision, revision, "showing a page is not a change to the shared canvas");
   assert.deepEqual(focused, [[placed.frame.id]]);
-  await store.update("chat-1", (doc) => showPage(doc, "p3"));
-  assert.equal((await call("canvas_focus", {})).status, "error", "an empty page has nothing to show");
+  assert.deepEqual(focusRequests[0], { pageId: "p2", frameIds: [placed.frame.id], focusId: 1 });
+  // The person then goes to the empty page, and Aiden's next turn starts from there.
+  await personShows("p3");
+  assert.equal((await newTurn()("canvas_focus", {})).status, "error", "an empty page has nothing to show");
 });
 
 test("a canvas_read cursor reads on its own page, whichever page is on screen", async (t) => {
-  const base = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-canvas-cursor-"));
-  t.after(() => fs.rm(base, { recursive: true, force: true }));
-  const store = new DesignCanvasStore({ root: () => base });
-  const tools = createDesignCanvasTools({ chatId: "chat-1", workspaceRoot: base, store, broadcast: () => undefined });
-  const call = async (args: Record<string, unknown>) => {
-    const output = await tools.find((tool) => tool.name === "canvas_read")!.execute("c", args as never);
-    const first = output.content[0];
-    assert.ok(first && first.type === "text");
-    return JSON.parse(first.text) as Record<string, any>;
-  };
+  const { store, call: callTool } = await setup(t);
+  const call = (args: Record<string, unknown>) => callTool("canvas_read", args);
   const count = CANVAS_READ_FRAME_LIMIT + 3;
   await store.update("chat-1", (doc) => {
     const paged = addPage(addPage(doc, "p2", "Pricing"), "p3", "Empty");
@@ -538,7 +559,6 @@ test("a canvas_read cursor reads on its own page, whichever page is on screen", 
     }));
     return { ...paged, frames: [...paged.frames, ...notes] };
   });
-  await store.update("chat-1", (doc) => showPage(doc, "page-1"));
 
   const first = await call({ page: "Pricing" });
   assert.ok(first.nextCursor, "a page with more frames than one answer holds gives a cursor");
@@ -581,13 +601,10 @@ test("canvas_read with snapshot shows Aiden the canvas picture, or says why ther
   t.after(() => fs.rm(base, { recursive: true, force: true }));
   let picture: { data: string; mimeType: string } | null = { data: "iVBORw0KGgo=", mimeType: "image/png" };
   let asked = 0;
-  const store = new DesignCanvasStore({ root: () => base });
+  const { store, turn } = await canvasFixture(base);
   const toolsFor = (seesImages?: boolean) =>
-    createDesignCanvasTools({
-      chatId: "chat-1",
+    turn("chat-1", {
       workspaceRoot: base,
-      store,
-      broadcast: () => undefined,
       snapshot: async () => {
         asked += 1;
         return picture;
@@ -613,7 +630,6 @@ test("canvas_read with snapshot shows Aiden the canvas picture, or says why ther
 
 
   await store.update("chat-1", (doc) => addPage(doc, "p2", "Pricing"));
-  await store.update("chat-1", (doc) => showPage(doc, doc.pages[0]!.id));
   const before = asked;
   const otherPage = await reason(read, { snapshot: true, page: "Pricing" });
   assert.match(otherPage, /"Page 1"/u, "names the page on screen");
@@ -632,26 +648,23 @@ test("canvas_read with snapshot shows Aiden the canvas picture, or says why ther
 test("canvas_inspect draws the page a frame shows and hands Aiden the report, with the picture when there is one", async (t) => {
   const base = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-canvas-inspect-"));
   t.after(() => fs.rm(base, { recursive: true, force: true }));
-  const store = new DesignCanvasStore({ root: () => base });
+  const { store, turn } = await canvasFixture(base);
   await store.update("chat-1", (doc) => {
     const withOther = addPage(doc, "p2", "Other");
     return {
-      ...showPage(withOther, doc.activePageId),
+      ...withOther,
       frames: [
         { id: "elsewhere", kind: "file", title: "Home", path: "design/home.html", x: 0, y: 0, w: 640, h: 436, pageId: "p2", createdBy: "aiden" },
         { id: "settings", kind: "file", title: "Settings", path: "design/settings.html", x: 700, y: 0, w: 640, h: 436, pageId: "p2", createdBy: "aiden" },
-        { id: "home", kind: "file", title: "Home", path: "design/home.html", x: 0, y: 0, w: 640, h: 436, pageId: doc.activePageId, createdBy: "aiden" },
-        { id: "idea", kind: "note", title: "Idea", text: "Warmer", x: 700, y: 0, w: 240, h: 160, pageId: doc.activePageId, createdBy: "aiden" },
+        { id: "home", kind: "file", title: "Home", path: "design/home.html", x: 0, y: 0, w: 640, h: 436, pageId: "page-1", createdBy: "aiden" },
+        { id: "idea", kind: "note", title: "Idea", text: "Warmer", x: 700, y: 0, w: 240, h: 160, pageId: "page-1", createdBy: "aiden" },
       ],
     };
   });
   const asked: { frameId: string; top: number; picture: boolean }[] = [];
   let image: { data: string; mimeType: string } | undefined = { data: "anBlZw==", mimeType: "image/jpeg" };
-  const inspect = createDesignCanvasTools({
-    chatId: "chat-1",
+  const inspect = turn("chat-1", {
     workspaceRoot: base,
-    store,
-    broadcast: () => undefined,
     inspect: async (frame, options) => {
       asked.push({ frameId: frame.id, ...options });
       return { text: "Inspected design/home.html at 1280px wide: the page is 900px tall.\nInspect: no problems found.", ...(image ? { image } : {}) };
@@ -790,7 +803,7 @@ test("a page's frame is sized for its design width, adopting the auto-placed fra
   await store.update("chat-1", (doc) => ({
     ...doc,
     frames: [
-      { id: "auto", kind: "file", title: "home.html", path: "design/home.html", x: 100, y: 50, w: 640, h: 436, designWidth: 1280, pageId: doc.activePageId, createdBy: "aiden" },
+      { id: "auto", kind: "file", title: "home.html", path: "design/home.html", x: 100, y: 50, w: 640, h: 436, designWidth: 1280, pageId: "page-1", createdBy: "aiden" },
     ],
   }));
   const phone = await call("canvas_place_frame", { kind: "file", title: "Home phone", path: "design/home.html", designWidth: 390 });
@@ -931,7 +944,7 @@ test("canvas_update_frame and canvas_place_frame set every look the side panel c
 });
 
 test("canvas_update_frame hides, moves to another page and reorders layers", async (t) => {
-  const { store, call } = await setup(t);
+  const { views, store, call } = await setup(t);
   const a = await call("canvas_place_frame", { kind: "note", title: "A", x: 0, y: 0 });
   const b = await call("canvas_place_frame", { kind: "note", title: "B", x: 50, y: 50 });
   const c = await call("canvas_place_frame", { kind: "note", title: "C", x: 100, y: 100 });
@@ -955,7 +968,7 @@ test("canvas_update_frame hides, moves to another page and reorders layers", asy
   const doc = await store.get("chat-1");
   assert.equal(doc.pages.find((page) => page.id === doc.frames.find((frame) => frame.id === c.frame.id)!.pageId)!.name, "Archive");
   assert.equal(moved.status, "updated");
-  assert.equal(doc.activePageId, "page-1", "moving a frame does not change the page on screen");
+  assert.equal((await views.get("chat-1", "ws-1"))?.pageId ?? "page-1", "page-1", "moving a frame does not change the page on screen");
 });
 
 test("a group fits itself to its members as Aiden adds, moves, resizes and removes them", async (t) => {
@@ -988,7 +1001,7 @@ test("a group the person drew grows to hold what Aiden puts in it but keeps the 
   const { store, call } = await setup(t);
   await store.update("chat-1", (doc) => ({
     ...doc,
-    frames: [{ id: "room", kind: "group", title: "Room", x: 0, y: 0, w: 2000, h: 1200, pageId: doc.activePageId, createdBy: "person" }],
+    frames: [{ id: "room", kind: "group", title: "Room", x: 0, y: 0, w: 2000, h: 1200, pageId: "page-1", createdBy: "person" }],
   }));
   const boxOf = async () => {
     const frame = (await store.get("chat-1")).frames.find((entry) => entry.id === "room")!;
@@ -1178,11 +1191,11 @@ test("canvas_arrange with no frame list keeps the order frames read in on the ca
 });
 
 test("a page's workspace path names its frame wherever a frame id goes, preferring the frame on the page on screen", async (t) => {
-  const { store, focused, call } = await setup(t);
+  const { store, focused, personShows, newTurn, call: firstTurn } = await setup(t);
+  let call = firstTurn;
   await store.update("chat-1", (doc) => addPage(doc, "p2", "Mobile"));
   await store.update("chat-1", (doc) => ({
     ...doc,
-    activePageId: "page-1",
     frames: [
       { id: "home-mobile", kind: "file", title: "Home", path: "design/home.html", x: 0, y: 0, w: 390, h: 844, designWidth: 390, pageId: "p2", createdBy: "aiden" },
       { id: "home-desktop", kind: "file", title: "Home", path: "design/home.html", x: 0, y: 0, w: 640, h: 436, designWidth: 1280, pageId: "page-1", createdBy: "aiden" },
@@ -1199,8 +1212,9 @@ test("a page's workspace path names its frame wherever a frame id goes, preferri
   assert.deepEqual(focused[focused.length - 1], ["home-desktop"], "a path and the id of the frame it names show that frame once");
 
   // With no frame for it on the page on screen, the first page that shows it answers.
-  await store.update("chat-1", (doc) => showPage(doc, "p2"));
-  await store.update("chat-1", (doc) => showPage(addPage(doc, "p3", "Empty"), "p3"));
+  await store.update("chat-1", (doc) => addPage(doc, "p3", "Empty"));
+  await personShows("p3");
+  call = newTurn();
   assert.equal((await call("canvas_update_frame", { id: "design/home.html", title: "Home (phone)" })).frame.id, "home-mobile");
 
   const missing = await call("canvas_update_frame", { id: "design/pricing.html", x: 0 });
@@ -1211,7 +1225,8 @@ test("a page's workspace path names its frame wherever a frame id goes, preferri
   assert.deepEqual((await store.get("chat-1")).frames.map((frame) => frame.id).sort(), ["home-desktop", "label", arrow.frame.id].sort());
 
   // Two frames on the page on screen show it: the path could mean either, so it names neither.
-  await store.update("chat-1", (doc) => showPage(doc, "page-1"));
+  await personShows("page-1");
+  call = newTurn();
   const copy = await call("canvas_place_frame", { kind: "file", title: "Home dark", path: "design/home.html", duplicate: true });
   const unclear = await call("canvas_update_frame", { id: "design/home.html", x: 5000 });
   assert.equal(unclear.status, "error");
@@ -1375,11 +1390,11 @@ test("canvas_duplicate copies a frame beside it, and a group with its members an
   await store.update("chat-1", (doc) => ({
     ...doc,
     frames: [
-      { id: "page", kind: "file", title: "Home", path: "design/home.html", x: 0, y: 0, w: 640, h: 436, designWidth: 1280, pageId: doc.activePageId, createdBy: "person", locked: true },
-      { id: "g", kind: "group", title: "Flow", x: 0, y: 1000, w: 600, h: 300, pageId: doc.activePageId, createdBy: "person" },
-      { id: "a", kind: "shape", shape: "rect", title: "A", x: 32, y: 1048, w: 160, h: 100, groupId: "g", pageId: doc.activePageId, createdBy: "person" },
-      { id: "b", kind: "shape", shape: "rect", title: "B", x: 400, y: 1048, w: 160, h: 100, groupId: "g", pageId: doc.activePageId, createdBy: "person" },
-      { id: "ab", kind: "connector", title: "A to B", x: 192, y: 1098, w: 1, h: 1, ends: [{ x: 192, y: 1098, frameId: "a" }, { x: 400, y: 1098, frameId: "b" }], pageId: doc.activePageId, createdBy: "person" },
+      { id: "page", kind: "file", title: "Home", path: "design/home.html", x: 0, y: 0, w: 640, h: 436, designWidth: 1280, pageId: "page-1", createdBy: "person", locked: true },
+      { id: "g", kind: "group", title: "Flow", x: 0, y: 1000, w: 600, h: 300, pageId: "page-1", createdBy: "person" },
+      { id: "a", kind: "shape", shape: "rect", title: "A", x: 32, y: 1048, w: 160, h: 100, groupId: "g", pageId: "page-1", createdBy: "person" },
+      { id: "b", kind: "shape", shape: "rect", title: "B", x: 400, y: 1048, w: 160, h: 100, groupId: "g", pageId: "page-1", createdBy: "person" },
+      { id: "ab", kind: "connector", title: "A to B", x: 192, y: 1098, w: 1, h: 1, ends: [{ x: 192, y: 1098, frameId: "a" }, { x: 400, y: 1098, frameId: "b" }], pageId: "page-1", createdBy: "person" },
     ],
   }));
   const copy = await call("canvas_duplicate", { id: "design/home.html" });
@@ -1493,11 +1508,11 @@ test("canvas_duplicate makes a page's variants in one call, side by side in one 
 });
 
 test("canvas_page adds, renames, duplicates, reorders, shows and deletes pages, never the last one", async (t) => {
-  const { store, call } = await setup(t);
+  const { store, views, call } = await setup(t);
   await call("canvas_place_frame", { kind: "note", title: "Mine", x: 0, y: 0 });
   const added = await call("canvas_page", { action: "add", name: "Mobile" });
   assert.equal(added.page.name, "Mobile");
-  assert.equal((await store.get("chat-1")).activePageId, added.page.id, "a new page comes on screen");
+  assert.equal((await views.get("chat-1", "ws-1"))?.pageId, added.page.id, "a new page comes on screen");
   assert.equal((await call("canvas_page", { action: "rename", page: "Mobile", name: "Phone" })).page.name, "Phone");
   const copy = await call("canvas_page", { action: "duplicate", page: "Page 1", name: "Page 1 v2" });
   assert.equal(copy.page.name, "Page 1 v2");
@@ -1505,7 +1520,7 @@ test("canvas_page adds, renames, duplicates, reorders, shows and deletes pages, 
   const moved = await call("canvas_page", { action: "move", page: "Phone", step: 1 });
   assert.deepEqual(moved.pages.map((page: { name: string }) => page.name), ["Page 1", "Page 1 v2", "Phone"]);
   await call("canvas_page", { action: "show", page: "Page 1" });
-  assert.equal((await store.get("chat-1")).activePageId, "page-1");
+  assert.equal((await views.get("chat-1", "ws-1"))?.pageId, "page-1");
   assert.equal((await call("canvas_page", { action: "delete", page: "Phone" })).status, "deleted");
   assert.equal((await call("canvas_page", { action: "delete", page: "Page 1 v2" })).status, "deleted", "Aiden's own frames go with its page");
   const last = await call("canvas_page", { action: "delete", page: "Page 1" });
@@ -1527,19 +1542,20 @@ test("deleting a page that holds the person's frames needs force", async (t) => 
 });
 
 test("canvas_focus with a page brings that page on screen", async (t) => {
-  const { store, focused, call } = await setup(t);
+  const { store, views, focused, call } = await setup(t);
   const added = await call("canvas_page", { action: "add", name: "Flows" });
   const note = await call("canvas_place_frame", { kind: "note", title: "On flows", x: 0, y: 0 });
+  assert.equal((await store.get("chat-1")).frames.find((frame) => frame.id === note.frame.id)?.pageId, added.page.id, "the new page Aiden showed is where an unnamed placement goes");
   await call("canvas_page", { action: "show", page: "Page 1" });
   assert.deepEqual(await call("canvas_focus", { page: "Flows" }), { status: "requested", frames: 1 });
-  assert.equal((await store.get("chat-1")).activePageId, added.page.id);
+  assert.equal((await views.get("chat-1", "ws-1"))?.pageId, added.page.id);
   assert.deepEqual(focused[focused.length - 1], []);
   assert.equal((await call("canvas_focus", { ids: [note.frame.id], page: "Page 1" })).status, "error");
   assert.deepEqual(await call("canvas_focus", { page: "Page 1" }), { status: "shown", page: "page-1", frames: 0 });
 });
 
 test("adversarial edge cases: partial size with designWidth, cross-page regrouping, locked group members and cross-page fitGroupIds", async (t) => {
-  const { store, focused, call } = await setup(t);
+  const { store, views, focused, call } = await setup(t);
 
   // 1. Changing designWidth while overriding only h updates w to the new designWidth's default width.
   const screen = await call("canvas_place_frame", { kind: "file", title: "Home", path: "design/home.html" });
@@ -1580,7 +1596,7 @@ test("adversarial edge cases: partial size with designWidth, cross-page regroupi
   const fittedOtherPage = await call("canvas_arrange", { fitGroupIds: [archiveGroup.frame.id] });
   assert.equal(fittedOtherPage.status, "arranged");
   assert.equal(fittedOtherPage.page, archive.page.id);
-  assert.equal((await store.get("chat-1")).activePageId, archive.page.id);
+  assert.equal((await views.get("chat-1", "ws-1"))?.pageId, archive.page.id);
   assert.deepEqual(focused[focused.length - 1], [archiveGroup.frame.id]);
 
   const ungrouped = await call("canvas_arrange", { frameIds: [screen.frame.id], groupId: "", focus: false });
@@ -1652,4 +1668,116 @@ test("a locked group or artboard keeps its box: nothing can be placed, moved or 
   assert.equal(out.status, "arranged");
   assert.equal(out.frames[0].groupId, undefined);
   assert.deepEqual(await boxes(), before);
+});
+
+test("canvas_read lists the chat's view page as on screen", async (t) => {
+  const { store, personShows, call } = await setup(t);
+  await store.update("chat-1", (doc) => addPage(doc, "p2", "Pricing"));
+  await personShows("p2");
+  const read = await call("canvas_read");
+  assert.deepEqual(read.page, { id: "p2", name: "Pricing" });
+  assert.deepEqual(
+    read.pages.map((page: { id: string; onScreen: boolean }) => [page.id, page.onScreen]),
+    [["page-1", false], ["p2", true]],
+  );
+});
+
+test("canvas_page show sends focus with the page and leaves the document unchanged", async (t) => {
+  const { store, views, broadcasts, focusRequests, call } = await setup(t);
+  await store.update("chat-1", (doc) => addPage(doc, "p2", "Pricing"));
+  const before = await store.get("chat-1");
+  const shown = await call("canvas_page", { action: "show", page: "Pricing" });
+  assert.equal(shown.status, "done");
+  assert.deepEqual(
+    shown.pages.map((page: { id: string; onScreen: boolean }) => [page.id, page.onScreen]),
+    [["page-1", false], ["p2", true]],
+    "the answer says the shown page is on screen now",
+  );
+  assert.deepEqual(await store.get("chat-1"), before, "the shared document is untouched");
+  assert.equal(broadcasts.length, 0, "nothing changed for other chats to hear about");
+  assert.deepEqual(focusRequests, [{ pageId: "p2", frameIds: [], focusId: 1 }]);
+  assert.equal((await views.get("chat-1", "ws-1"))?.pageId, "p2");
+});
+
+test("with no view the tools use the first page", async (t) => {
+  const { store, call } = await setup(t);
+  // "Pricing" moved before "Page 1": the first page is not page-1.
+  await store.update("chat-1", (doc) => movePage(addPage(doc, "p2", "Pricing"), "p2", -1));
+  const placed = await call("canvas_place_frame", { kind: "note", title: "Idea" });
+  assert.equal((await store.get("chat-1")).frames.find((frame) => frame.id === placed.frame.id)?.pageId, "p2");
+  assert.deepEqual((await call("canvas_read")).page, { id: "p2", name: "Pricing" });
+});
+
+test("two chats with different views read different on-screen pages from one document", async (t) => {
+  const { store, personShows, broadcasts, newTurn } = await setup(t);
+  await store.update("chat-1", (doc) => addPage(doc, "p2", "Pricing"));
+  await personShows("p2", "chat-1");
+  await personShows("page-1", "chat-2");
+  assert.equal((await newTurn("chat-1")("canvas_read")).page.id, "p2");
+  assert.equal((await newTurn("chat-2")("canvas_read")).page.id, "page-1");
+  // Each chat's placement lands on its own page and names its own chat in the broadcast.
+  const fromA = await newTurn("chat-1")("canvas_place_frame", { kind: "note", title: "A" });
+  const fromB = await newTurn("chat-2")("canvas_place_frame", { kind: "note", title: "B" });
+  const doc = await store.get("chat-1");
+  assert.equal(doc.frames.find((frame) => frame.id === fromA.frame.id)?.pageId, "p2");
+  assert.equal(doc.frames.find((frame) => frame.id === fromB.frame.id)?.pageId, "page-1");
+  assert.deepEqual(
+    broadcasts.map((update) => [update.workspaceId, update.chatId]),
+    [["ws-1", "chat-1"], ["ws-1", "chat-2"]],
+  );
+});
+
+test("canvas_page add with show, then a placement without a page, lands on the new page with or without a window", async (t) => {
+  const { store, newTurn } = await setup(t);
+  const variants: Array<[string, Partial<ToolDeps>]> = [
+    ["a window and main's views", {}],
+    ["no window", { focus: undefined }],
+    ["no window and no views", { focus: undefined, pages: undefined }],
+  ];
+  for (const [label, deps] of variants) {
+    const call = newTurn("chat-1", deps);
+    const added = await call("canvas_page", { action: "add", name: label });
+    const placed = await call("canvas_place_frame", { kind: "note", title: label });
+    assert.equal((await store.get("chat-1")).frames.find((frame) => frame.id === placed.frame.id)?.pageId, added.page.id, label);
+  }
+});
+
+test("a page Aiden shows is measured from where the chat last looked at it", async (t) => {
+  const { store, personShows, call } = await setup(t);
+  await store.update("chat-1", (doc) => addPage(doc, "p2", "Pricing"));
+  // The person looked far to the right on Pricing, then went back to Page 1.
+  await personShows("p2", "chat-1", -5000);
+  await personShows("page-1");
+  await call("canvas_page", { action: "show", page: "Pricing" });
+  const placed = await call("canvas_place_frame", { kind: "note", title: "In view" });
+  assert.equal((await store.get("chat-1")).frames.find((frame) => frame.id === placed.frame.id)?.pageId, "p2");
+  assert.ok(placed.frame.box.x >= 5000, `placed in Pricing's view, at x ${placed.frame.box.x}`);
+});
+
+test("the page the person's message was sent from beats the chat's kept page", async (t) => {
+  const { store, personShows, newTurn } = await setup(t);
+  await store.update("chat-1", (doc) => addPage(doc, "p2", "Pricing"));
+  await personShows("p2");
+  const call = newTurn("chat-1", { viewState: { selection: [], pageId: "page-1" } });
+  const placed = await call("canvas_place_frame", { kind: "note", title: "Idea" });
+  assert.equal((await store.get("chat-1")).frames.find((frame) => frame.id === placed.frame.id)?.pageId, "page-1");
+  assert.equal((await call("canvas_read")).page.id, "page-1");
+});
+
+test("comments for Aiden are per chat: another chat's sent comment is not listed and cannot be answered", async (t) => {
+  const { store, newTurn } = await setup(t);
+  await store.update("chat-1", (doc) => {
+    let next = addComment(doc, { id: "from-a", place: { x: 5, y: 5 }, note: "A's note", createdAt: "2026-11-23T00:00:00Z", pageId: "page-1", chatId: "chat-1" })!;
+    next = addComment(next, { id: "from-b", place: { x: 9, y: 9 }, note: "B's note", createdAt: "2026-11-23T00:01:00Z", pageId: "page-1", chatId: "chat-2" })!;
+    next = markCommentsSent(next, ["from-a"], "2026-11-23T00:02:00Z", "chat-1");
+    return markCommentsSent(next, ["from-b"], "2026-11-23T00:02:00Z", "chat-2");
+  });
+  const b = newTurn("chat-2");
+  const read = await b("canvas_read");
+  assert.deepEqual(read.comments.map((comment: { commentId: string }) => comment.commentId), ["from-b"]);
+  const refused = await b("canvas_comment", { commentId: "from-a", reply: "Done." });
+  assert.equal(refused.status, "error");
+  assert.equal(refused.message, "That comment belongs to another chat.");
+  assert.equal((await store.get("chat-1")).comments.find((comment) => comment.id === "from-a")?.reply, undefined);
+  assert.equal((await b("canvas_comment", { commentId: "from-b", reply: "On it." })).status, "ok");
 });

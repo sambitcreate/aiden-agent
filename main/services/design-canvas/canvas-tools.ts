@@ -77,7 +77,6 @@ import {
   moveFramesToPage,
   movePage,
   renamePage,
-  showPage,
 } from "../../../renderer/shared/design-canvas/pages.js";
 import {
   DESIGN_TWEAK_LIMITS,
@@ -87,7 +86,9 @@ import {
 } from "../../../renderer/shared/design-canvas/tweaks.js";
 import { designPageTweakNames } from "./inspect.js";
 import { resolveDesignFile } from "./resolve-core.js";
-import type { DesignCanvasStore } from "./store.js";
+import type { DesignCanvasUpdated, DesignChatCanvases } from "./store.js";
+import { viewPageId, type DesignChatView } from "../../../renderer/shared/design-canvas/view.js";
+import { designTurnPages, type DesignTurnPages } from "./views.js";
 
 /**
  * Canvas tool calls one turn may make; past it each call returns
@@ -216,13 +217,25 @@ export type DesignCanvasToolDeps = {
   chatId: string;
   /** The chat's workspace folder. Frames may name only files inside it. */
   workspaceRoot: string;
-  store: Pick<DesignCanvasStore, "get" | "update">;
-  broadcast(update: { chatId: string; revision: number }): void;
+  /** The chat's workspace canvas, shared with the workspace's other chats. */
+  store: Pick<DesignChatCanvases, "get" | "update" | "workspaceIdOf">;
+  /** Tells open canvases the workspace's canvas changed; `chatId` is this chat. */
+  broadcast(update: DesignCanvasUpdated): void;
+  /**
+   * The page this turn works on (`designTurnPages`): a page Aiden showed this
+   * turn, the page the message came from, the chat's kept page, then the
+   * first page. Built from `viewState` alone when absent.
+   */
+  pages?: DesignTurnPages;
   /** False once the chat left design mode or was deleted. Checked on every call. */
   stillAvailable?(): Promise<boolean>;
   newId?(): string;
-  /** Asks the window showing the canvas to fit these frames (all of them when empty). */
-  focus?(frameIds: string[]): void;
+  /**
+   * Asks the window showing the chat's canvas to show `pageId` and fit these
+   * frames (the whole page when empty). `focusId` is main's count for the page
+   * change, which the canvas echoes back in its view reports.
+   */
+  focus?(request: { pageId: string; frameIds: string[]; focusId?: number }): void;
   /** A downscaled PNG of the canvas as the person sees it, or null when it is not on screen. */
   snapshot?(signal?: AbortSignal): Promise<{ data: string; mimeType: string } | null>;
   /** False when the turn's model can't see pictures: canvas_read then takes no snapshot and says why. Defaults to true. */
@@ -240,10 +253,10 @@ export type DesignCanvasToolDeps = {
   now?(): Date;
   /**
    * What the person's canvas showed when they sent this turn's message: the
-   * frames selected, which canvas_read lists, and the canvas region's size,
-   * which sets the view canvas_read and new frames go by. Absent for a
-   * message from a phone: the view is then the stored viewport over a
-   * typical canvas region.
+   * frames selected, which canvas_read lists, the canvas region's size and
+   * the page on screen, which set the view canvas_read and new frames go by.
+   * Absent for a message from a phone: the view is then the chat's kept view
+   * over a typical canvas region.
    */
   viewState?: DesignViewState;
 };
@@ -501,8 +514,8 @@ function applyStyle(frame: DesignFrame, patch: StylePatch): DesignFrame {
  * that shows it (another canvas page's copy is not the one meant), so a tool
  * never changes whichever of two came first.
  */
-function frameByRef(doc: DesignCanvas, value: unknown): DesignFrame | undefined {
-  const frame = designFrameByIdOrPath(doc, value);
+function frameByRef(doc: DesignCanvas, value: unknown, onScreen: string): DesignFrame | undefined {
+  const frame = designFrameByIdOrPath(doc, value, onScreen);
   if (!frame || frame.id === value) return frame;
   const meant = doc.frames.filter((entry) => entry.kind === "file" && entry.path === frame.path && entry.pageId === frame.pageId);
   if (meant.length > 1) {
@@ -520,7 +533,7 @@ function endOf(doc: DesignCanvas, value: unknown, field: string, pageId: string,
   }
   const raw = value as Record<string, unknown>;
   if (raw.frameId !== undefined && raw.frameId !== null && raw.frameId !== "") {
-    const frame = frameByRef(doc, raw.frameId);
+    const frame = frameByRef(doc, raw.frameId, pageId);
     if (!frame || frame.pageId !== pageId || frame.id === self || !canAttachTo(frame)) {
       throw new CanvasToolError(
         `${field}.frameId must be the id of a frame on the same page that is not an arrow, line or drawing, or the path of a page that frame shows.`,
@@ -591,8 +604,9 @@ function variantsOf(value: unknown): Variant[] | undefined {
 }
 
 /** A page named by its id or its name (case-insensitive); the page on screen when left out. */
-function pageOf(doc: DesignCanvas, value: unknown): string {
-  if (value === undefined || value === null || value === "") return doc.activePageId;
+/** The page a tool call names, by id or name; the turn's page (`onScreen`) when it names none. */
+function pageOf(doc: DesignCanvas, value: unknown, onScreen: string): string {
+  if (value === undefined || value === null || value === "") return onScreen;
   const wanted = typeof value === "string" ? value.trim().toLocaleLowerCase() : "";
   const page = doc.pages.find((entry) => entry.id === value) ??
     doc.pages.find((entry) => entry.name.toLocaleLowerCase() === wanted);
@@ -829,36 +843,79 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
     for (const frame of frames) seen.set(frame.id, boxKey(frame));
   };
 
+  // The page this turn works on. Without main's views (tests), the turn
+  // follows its own page changes over the message's page and the first page.
+  const pages = deps.pages ?? designTurnPages({ chatId: deps.chatId, ...(deps.viewState ? { message: deps.viewState } : {}) });
+
+  /**
+   * The chat's workspace, found once per call so every store call, broadcast
+   * and focus in it names the same one, and the turn's view resolver for it.
+   */
+  const turnFor = async (): Promise<{ workspaceId: string; viewOf: (doc: DesignCanvas) => DesignChatView }> => {
+    const workspaceId = await deps.store.workspaceIdOf(deps.chatId);
+    if (workspaceId === null) throw new Error("This chat is no longer available.");
+    return { workspaceId, viewOf: await pages.resolver(workspaceId) };
+  };
+
+  /** The canvas as it is now, with the turn's view of it. */
+  const read = async (): Promise<{ doc: DesignCanvas; view: DesignChatView; workspaceId: string }> => {
+    const { workspaceId, viewOf } = await turnFor();
+    const { doc } = await deps.store.get(deps.chatId, { workspaceId });
+    return { doc, view: viewOf(doc), workspaceId };
+  };
+
+  /**
+   * Aiden shows a page to the chat: main's view of the chat moves there at
+   * once (later calls in the turn work on it), and an open canvas shows it,
+   * fitting `frameIds` (the whole page when empty).
+   */
+  const showOnCanvas = async (workspaceId: string, pageId: string, frameIds: string[]): Promise<void> => {
+    const focusId = await pages.show(workspaceId, pageId);
+    deps.focus?.({ pageId, frameIds, ...(focusId !== undefined ? { focusId } : {}) });
+  };
+
   /**
    * Applies a change and tells open canvases about it. `change` throws to
-   * refuse. A frame the person moved since Aiden last saw it keeps the
-   * person's box, and the answer says so with its box now.
+   * refuse, and gets the turn's view of the document it changes. A frame the
+   * person moved since Aiden last saw it keeps the person's box, and the
+   * answer says so with its box now. `show` brings a page on screen after
+   * the change has landed.
    */
-  const edit = async <T>(change: (doc: DesignCanvas) => { doc: DesignCanvas; value: T }): Promise<T> => {
+  const edit = async <T>(
+    change: (doc: DesignCanvas, view: DesignChatView) => { doc: DesignCanvas; value: T; show?: { pageId: string; frameIds: string[] } },
+  ): Promise<T> => {
     let value: T | undefined;
+    let show: { pageId: string; frameIds: string[] } | undefined;
     let report: ReturnType<typeof keepPersonsMoves> | undefined;
     let touched = new Set<string>();
-    const saved = await deps.store.update(deps.chatId, (doc) => {
-      const next = change(doc);
-      report = keepPersonsMoves(doc, next.doc, seen);
-      const earlier = new Map(doc.frames.map((frame) => [frame.id, JSON.stringify(frame)]));
-      touched = new Set(
-        report.doc.frames.filter((frame) => earlier.get(frame.id) !== JSON.stringify(frame)).map((frame) => frame.id),
-      );
-      value = next.value;
-      return report.doc;
-    });
-    deps.broadcast({ chatId: deps.chatId, revision: saved.revision });
+    const { workspaceId, viewOf } = await turnFor();
+    const { doc: saved } = await deps.store.update(
+      deps.chatId,
+      (doc) => {
+        const next = change(doc, viewOf(doc));
+        report = keepPersonsMoves(doc, next.doc, seen);
+        const earlier = new Map(doc.frames.map((frame) => [frame.id, JSON.stringify(frame)]));
+        touched = new Set(
+          report.doc.frames.filter((frame) => earlier.get(frame.id) !== JSON.stringify(frame)).map((frame) => frame.id),
+        );
+        value = next.value;
+        show = next.show;
+        return report.doc;
+      },
+      { workspaceId },
+    );
+    deps.broadcast({ workspaceId, chatId: deps.chatId, revision: saved.revision });
     remember(saved.frames.filter((frame) => touched.has(frame.id)));
     for (const entry of report?.changed ?? []) {
       const now = saved.frames.find((frame) => frame.id === entry.id);
       if (now) seen.set(entry.id, boxKey(now));
     }
+    if (show) await showOnCanvas(workspaceId, show.pageId, show.frameIds);
     return withCoEditReport(value as T, report, saved);
   };
 
-  const frameIn = (doc: DesignCanvas, id: unknown): DesignFrame => {
-    const frame = frameByRef(doc, id);
+  const frameIn = (doc: DesignCanvas, id: unknown, onScreen: string): DesignFrame => {
+    const frame = frameByRef(doc, id, onScreen);
     if (!frame) {
       throw new CanvasToolError(
         "No frame on this canvas has that id or shows that page. Call canvas_read for the current frames, or canvas_place_frame to put the page on the canvas.",
@@ -868,19 +925,25 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
   };
 
   /** A frame something goes beside: any frame but a connector, which has no side to go on. */
-  const besideFrame = (doc: DesignCanvas, id: unknown): DesignFrame => {
-    const frame = frameIn(doc, id);
+  const besideFrame = (doc: DesignCanvas, id: unknown, onScreen: string): DesignFrame => {
+    const frame = frameIn(doc, id, onScreen);
     if (frame.kind === "connector") throw new CanvasToolError("nextTo must name a frame, not a connector.");
     return frame;
   };
 
-  const pagesAnswer = (doc: DesignCanvas) =>
+  const pagesAnswer = (doc: DesignCanvas, onScreen: string) =>
     doc.pages.map((entry) => ({
       id: entry.id,
       name: entry.name,
       frames: doc.frames.filter((frame) => frame.pageId === entry.id).length,
-      onScreen: entry.id === doc.activePageId,
+      onScreen: entry.id === onScreen,
     }));
+
+  /** The canvas as this chat may see it: the comments its own messages sent, none of another chat's. */
+  const ownComments = (doc: DesignCanvas): DesignCanvas => ({
+    ...doc,
+    comments: doc.comments.filter((comment) => comment.chatId === deps.chatId),
+  });
 
   return [
     declarePiRuntimeReplay(
@@ -900,19 +963,25 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
             if (p.offset !== undefined) {
               throw new CanvasToolError("canvas_read no longer takes offset. To read the frames after an answer, pass its nextCursor as cursor.");
             }
-            const doc = await deps.store.get(deps.chatId);
+            const { doc: shared, view } = await read();
+            const doc = ownComments(shared);
             const cursor = p.cursor === undefined ? undefined : typeof p.cursor === "string" ? parseCanvasReadCursor(p.cursor) : null;
             if (cursor === null) {
               throw new CanvasToolError("cursor must be the nextCursor an earlier canvas_read answer gave, copied as it is.");
             }
-            const named = p.page === undefined || p.page === null || p.page === "" ? undefined : pageOf(doc, p.page);
-            let pageId = named ?? doc.activePageId;
+            const named = p.page === undefined || p.page === null || p.page === "" ? undefined : pageOf(doc, p.page, view.pageId);
+            let pageId = named ?? view.pageId;
             if (cursor) {
               const read = canvasReadCursorPage(doc, cursor, named);
               if ("error" in read) throw new CanvasToolError(read.error);
               pageId = read.pageId;
             }
-            const answer = describeCanvas(doc, { pageId, ...(cursor ? { cursor } : {}), ...(deps.viewState ? { viewState: deps.viewState } : {}) });
+            const answer = describeCanvas(doc, {
+              pageId,
+              chatView: view,
+              ...(cursor ? { cursor } : {}),
+              ...(deps.viewState ? { viewState: deps.viewState } : {}),
+            });
             const listed = new Set([...answer.inView, ...answer.outsideFrames].map((frame) => frame.id));
             remember(doc.frames.filter((frame) => listed.has(frame.id)));
             if (p.snapshot !== true) return answer;
@@ -923,8 +992,8 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
               );
             }
             // The snapshot shows the screen, so it only pictures the page on screen.
-            if (answer.page.id !== doc.activePageId) {
-              const onScreen = doc.pages.find((entry) => entry.id === doc.activePageId)?.name ?? "another page";
+            if (answer.page.id !== view.pageId) {
+              const onScreen = doc.pages.find((entry) => entry.id === view.pageId)?.name ?? "another page";
               return unavailable(
                 `A snapshot shows only the page on screen, which is "${onScreen}", not "${answer.page.name}". Call canvas_focus with page "${answer.page.name}" to bring it on screen first, or canvas_inspect for a picture of one of its page frames.`,
               );
@@ -991,10 +1060,10 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
             const side = nextTo ? besideOf(nextTo.side, "nextTo.side") : undefined;
             const declared = kind === "file" && path && hasTweakValues(p.tweaks) ? { path, names: await designPageTweakNames(deps.workspaceRoot, path) } : undefined;
             const id = newId();
-            return edit<Record<string, unknown>>((doc) => {
+            return edit<Record<string, unknown>>((doc, view) => {
               // Beside a frame, on its page unless another is named.
-              const anchor = nextTo ? besideFrame(doc, nextTo.frameId) : undefined;
-              const pageId = anchor && (p.page === undefined || p.page === null || p.page === "") ? anchor.pageId : pageOf(doc, p.page);
+              const anchor = nextTo ? besideFrame(doc, nextTo.frameId, view.pageId) : undefined;
+              const pageId = anchor && (p.page === undefined || p.page === null || p.page === "") ? anchor.pageId : pageOf(doc, p.page, view.pageId);
               if (anchor && anchor.pageId !== pageId) {
                 throw new CanvasToolError("nextTo must name a frame on the page it goes on.");
               }
@@ -1096,7 +1165,7 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
                 const placed = placeFrame(
                   base,
                   { ...input, w: nextW, h: nextH, ...(keptGroup ? { groupId: keptGroup } : {}) },
-                  canvasView(base, deps.viewState?.viewSize, pageId),
+                  canvasView(base, view, undefined, pageId),
                   () => adopted.id,
                 );
                 if ("error" in placed) {
@@ -1118,7 +1187,7 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
                 const frame = placedDoc.frames.find((entry) => entry.id === adopted.id)!;
                 return { doc: placedDoc, value: { ...reused, frame: summarizeFrame(frame) } };
               }
-              const placed = placeFrame(doc, input, canvasView(doc, deps.viewState?.viewSize, pageId), () => id);
+              const placed = placeFrame(doc, input, canvasView(doc, view, undefined, pageId), () => id);
               if ("error" in placed) {
                 throw new CanvasToolError(
                   `The canvas is full (${DESIGN_CANVAS_LIMITS.frames} frames, ${DESIGN_CANVAS_LIMITS.framesPerPage} on a page). Remove a frame first.`,
@@ -1205,11 +1274,12 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
             // A page's own tweak names, read before the edit (a frame's file never changes).
             let declared: { path: string; names: readonly string[] | null } | undefined;
             if (hasTweakValues(p.tweaks)) {
-              const before = designFrameByIdOrPath(await deps.store.get(deps.chatId), p.id);
+              const { doc: current, view } = await read();
+              const before = designFrameByIdOrPath(current, p.id, view.pageId);
               if (before?.kind === "file" && before.path) declared = { path: before.path, names: await designPageTweakNames(deps.workspaceRoot, before.path) };
             }
-            return edit((doc) => {
-              const frame = frameIn(doc, p.id);
+            return edit((doc, view) => {
+              const frame = frameIn(doc, p.id, view.pageId);
               if (frame.locked && locked !== false) throw new CanvasToolError(LOCKED_MESSAGE);
               const worded = frame.kind === "note" || frame.kind === "text" || frame.kind === "shape";
               if (p.text !== undefined && !worded) throw new CanvasToolError("Only a note, a text item or a shape has text.");
@@ -1232,7 +1302,7 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
               }
               const style = stylePatch(frame.kind, frame.shape, p, frame.tweaks, declared);
               const targetPage =
-                p.page !== undefined && p.page !== null && p.page !== "" ? pageOf(doc, p.page) : frame.pageId;
+                p.page !== undefined && p.page !== null && p.page !== "" ? pageOf(doc, p.page, view.pageId) : frame.pageId;
               const movingPage = targetPage !== frame.pageId;
               const containerMembers = isDesignContainer(frame.kind)
                 ? doc.frames.filter((entry) => entry.groupId === frame.id && entry.pageId === frame.pageId)
@@ -1317,7 +1387,7 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
               if (layerOptions.length === 1) {
                 const sibling = p.aboveFrameId ?? p.belowFrameId;
                 if (typeof sibling === "string" && sibling) {
-                  const target = frameIn(updatedDoc, sibling);
+                  const target = frameIn(updatedDoc, sibling, view.pageId);
                   const current = updatedDoc.frames.find((entry) => entry.id === frame.id)!;
                   if (
                     target.id === current.id ||
@@ -1355,8 +1425,8 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
         execute: async (_id, raw) =>
           run(async () => {
             const p = raw as Record<string, unknown>;
-            return edit((doc) => {
-              const frame = frameIn(doc, p.id);
+            return edit((doc, view) => {
+              const frame = frameIn(doc, p.id, view.pageId);
               if (frame.locked) {
                 throw new CanvasToolError("That frame is locked, so it cannot be removed. The person can unlock it first.");
               }
@@ -1396,26 +1466,25 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
         }),
         execute: async (_id, raw) =>
           run(async () => {
-            if (!deps.focus) return { status: "unavailable", reason: "No window is showing this canvas." };
             const p = (raw ?? {}) as { ids?: unknown; page?: unknown };
             const ids = Array.isArray(p.ids) ? [...new Set(p.ids)] : [];
-            const doc = await deps.store.get(deps.chatId);
-            const shown = [...new Set(ids.map((id) => frameIn(doc, id).id))];
-            const pages = new Set(shown.map((id) => doc.frames.find((entry) => entry.id === id)!.pageId));
-            if (pages.size > 1) throw new CanvasToolError("Those frames are on different pages; show one page's frames at a time.");
-            const named = p.page !== undefined && p.page !== null && p.page !== "" ? pageOf(doc, p.page) : undefined;
-            if (named && pages.size === 1 && !pages.has(named)) {
+            const { doc, view, workspaceId } = await read();
+            const shown = [...new Set(ids.map((id) => frameIn(doc, id, view.pageId).id))];
+            const framePages = new Set(shown.map((id) => doc.frames.find((entry) => entry.id === id)!.pageId));
+            if (framePages.size > 1) throw new CanvasToolError("Those frames are on different pages; show one page's frames at a time.");
+            const named = p.page !== undefined && p.page !== null && p.page !== "" ? pageOf(doc, p.page, view.pageId) : undefined;
+            if (named && framePages.size === 1 && !framePages.has(named)) {
               throw new CanvasToolError("Those frames are not on that page. Leave page out to show the page they are on.");
             }
-            const [pageId = named ?? doc.activePageId] = pages;
+            const [pageId = named ?? view.pageId] = framePages;
             const onPage = framesOnPage(doc, pageId).length;
-            // Frames on another page: that page comes on screen first.
-            if (pageId !== doc.activePageId) await edit((latest) => ({ doc: showPage(latest, pageId), value: null }));
-            if (onPage === 0) {
-              if (named) return { status: "shown", page: pageId, frames: 0 };
-              throw new CanvasToolError("This page of the canvas is empty.");
+            if (onPage === 0 && !named) throw new CanvasToolError("This page of the canvas is empty.");
+            // The chat's view moves to the page at once, with or without a window showing it.
+            await showOnCanvas(workspaceId, pageId, shown);
+            if (onPage === 0) return { status: "shown", page: pageId, frames: 0 };
+            if (!deps.focus) {
+              return { status: "unavailable", reason: "No window is showing this canvas; it will open on this page.", page: pageId };
             }
-            deps.focus(shown);
             return { status: "requested", frames: shown.length || onPage };
           }),
       },
@@ -1462,7 +1531,7 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
             const fitIds = Array.isArray(p.fitGroupIds) ? [...new Set(p.fitGroupIds as unknown[])] : [];
             const ungroup = p.groupId === null || p.groupId === "";
             const intoGroup = typeof p.groupId === "string" && p.groupId !== "" ? p.groupId : undefined;
-            const answer = await edit((doc) => {
+            const answer = await edit((doc, view) => {
               // The page: the frames', the group's, or the named one.
               let pageId: string;
               let chosen: DesignFrame[];
@@ -1471,7 +1540,7 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
                 isDesignContainer(container.kind) &&
                 doc.frames.some((entry) => entry.groupId === container.id && entry.pageId === container.pageId && entry.locked);
               if (requested && requested.length > 0) {
-                chosen = [...new Map(requested.map((id) => frameIn(doc, id)).map((frame) => [frame.id, frame] as const)).values()];
+                chosen = [...new Map(requested.map((id) => frameIn(doc, id, view.pageId)).map((frame) => [frame.id, frame] as const)).values()];
                 const pages = new Set(chosen.map((frame) => frame.pageId));
                 if (pages.size > 1) throw new CanvasToolError("Arrange frames of one page at a time.");
                 pageId = chosen[0]!.pageId;
@@ -1483,12 +1552,12 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
                   throw new CanvasToolError("Connectors follow their frames; leave them out of frameIds.");
                 }
               } else {
-                const group = intoGroup ? frameIn(doc, intoGroup) : undefined;
+                const group = intoGroup ? frameIn(doc, intoGroup, view.pageId) : undefined;
                 const firstFit =
                   !group && (p.page === undefined || p.page === null || p.page === "") && fitIds.length > 0
-                    ? frameIn(doc, fitIds[0])
+                    ? frameIn(doc, fitIds[0], view.pageId)
                     : undefined;
-                pageId = group ? group.pageId : firstFit ? firstFit.pageId : pageOf(doc, p.page);
+                pageId = group ? group.pageId : firstFit ? firstFit.pageId : pageOf(doc, p.page, view.pageId);
                 const arrangeNothing = !intoGroup && fitIds.length > 0 && layoutValue === undefined;
                 chosen = arrangeNothing
                   ? []
@@ -1506,7 +1575,7 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
                 throw new CanvasToolError("A group or frame (artboard) cannot be put inside another.");
               }
               const fitTargets = fitIds.map((id) => {
-                const group = frameIn(doc, id);
+                const group = frameIn(doc, id, view.pageId);
                 if (!isDesignContainer(group.kind)) throw new CanvasToolError("fitGroupIds must name groups or artboards.");
                 if (group.pageId !== pageId) throw new CanvasToolError("Arrange frames of one page at a time.");
                 if (group.locked) throw new CanvasToolError(`${JSON.stringify(group.title || group.id)} is locked.`);
@@ -1559,10 +1628,12 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
               const fitted = [...new Set([...affected, ...fitTargets.map((group) => group.id)])]
                 .map((id) => next.frames.find((entry) => entry.id === id))
                 .filter((entry): entry is DesignFrame => entry !== undefined && (entry.kind === "group" || fitIds.includes(entry.id)));
-              if (focus && pageId !== next.activePageId) next = showPage(next, pageId);
               const arranged = chosen.map((frame) => next.frames.find((entry) => entry.id === frame.id)!);
+              const focusIds = [...arranged.map((frame) => frame.id), ...fitted.map((frame) => frame.id)];
               return {
                 doc: next,
+                // The arranged frames come on screen, their page first when it is another.
+                ...(focus && (focusIds.length > 0 || pageId !== view.pageId) ? { show: { pageId, frameIds: focusIds } } : {}),
                 value: {
                   status: "arranged",
                   units: "canvas",
@@ -1571,13 +1642,10 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
                   frames: arranged.map((frame) => ({ id: frame.id, title: frame.title, box: { x: frame.x, y: frame.y, w: frame.w, h: frame.h }, ...(frame.groupId ? { groupId: frame.groupId } : {}) })),
                   ...(fitted.length > 0 ? { groups: fitted.map((frame) => ({ id: frame.id, title: frame.title, box: { x: frame.x, y: frame.y, w: frame.w, h: frame.h } })) } : {}),
                   ...(skippedLocked.length > 0 ? { skippedLocked } : {}),
-                  focusIds: [...arranged.map((frame) => frame.id), ...fitted.map((frame) => frame.id)],
                 },
               };
             });
-            const { focusIds, ...value } = answer as { focusIds: string[] } & Record<string, unknown>;
-            if (focus && deps.focus && focusIds.length > 0) deps.focus(focusIds);
-            return value;
+            return answer;
           }),
       },
       "never",
@@ -1606,37 +1674,53 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
                 throw new CanvasToolError(`The ${String(action)} action needs page.`);
               }
             };
-            return edit((doc) => {
+            // Showing a page changes only this chat's view, never the shared canvas.
+            if (action === "show") {
+              pageNeeded();
+              const { doc, view, workspaceId } = await read();
+              const pageId = pageOf(doc, p.page, view.pageId);
+              await showOnCanvas(workspaceId, pageId, []);
+              return {
+                status: "done",
+                action,
+                page: { id: pageId, name: doc.pages.find((entry) => entry.id === pageId)?.name },
+                pages: pagesAnswer(doc, pageId),
+              };
+            }
+            return edit((doc, view) => {
               let next = doc;
               let pageId: string;
+              // The page that comes on screen after the change, when it changes.
+              let shown: string | undefined;
               switch (action) {
                 case "add": {
                   if (!canAddPage(doc)) throw new CanvasToolError(`The canvas has its most pages (${DESIGN_CANVAS_LIMITS.pages}).`);
                   pageId = newId();
-                  next = addPage(doc, pageId, name);
-                  if (optionalBoolean(p.show, "show") === false) next = { ...next, activePageId: doc.activePageId };
+                  next = addPage(doc, pageId, name, view.pageId);
+                  if (optionalBoolean(p.show, "show") !== false) shown = pageId;
                   break;
                 }
                 case "rename": {
                   pageNeeded();
-                  pageId = pageOf(doc, p.page);
+                  pageId = pageOf(doc, p.page, view.pageId);
                   if (!name) throw new CanvasToolError("rename needs a non-empty name.");
                   next = renamePage(doc, pageId, name);
                   break;
                 }
                 case "duplicate": {
                   pageNeeded();
-                  const source = pageOf(doc, p.page);
+                  const source = pageOf(doc, p.page, view.pageId);
                   if (!canAddPage(doc)) throw new CanvasToolError(`The canvas has its most pages (${DESIGN_CANVAS_LIMITS.pages}).`);
                   pageId = newId();
                   next = duplicatePage(doc, source, pageId, newId);
                   if (next === doc) throw new CanvasToolError(`A copy would pass the canvas's ${DESIGN_CANVAS_LIMITS.frames} frames.`);
                   if (name) next = renamePage(next, pageId, name);
+                  shown = pageId;
                   break;
                 }
                 case "delete": {
                   pageNeeded();
-                  pageId = pageOf(doc, p.page);
+                  pageId = pageOf(doc, p.page, view.pageId);
                   if (doc.pages.length <= 1) throw new CanvasToolError("The canvas keeps at least one page, so its only page cannot be deleted.");
                   const kept = doc.frames.filter((frame) => frame.pageId === pageId && (frame.createdBy === "person" || frame.locked));
                   if (kept.length > 0 && p.force !== true) {
@@ -1645,19 +1729,18 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
                     );
                   }
                   next = deletePage(doc, pageId);
+                  // Deleting the page on screen brings the one before it on screen.
+                  if (pageId === view.pageId) {
+                    const at = doc.pages.findIndex((entry) => entry.id === pageId);
+                    shown = next.pages[Math.max(0, at - 1)]!.id;
+                  }
                   break;
                 }
                 case "move": {
                   pageNeeded();
-                  pageId = pageOf(doc, p.page);
+                  pageId = pageOf(doc, p.page, view.pageId);
                   if (p.step !== -1 && p.step !== 1) throw new CanvasToolError("move needs step -1 (earlier) or 1 (later).");
                   next = movePage(doc, pageId, p.step);
-                  break;
-                }
-                case "show": {
-                  pageNeeded();
-                  pageId = pageOf(doc, p.page);
-                  next = showPage(doc, pageId);
                   break;
                 }
                 default:
@@ -1665,11 +1748,12 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
               }
               return {
                 doc: next,
+                ...(shown ? { show: { pageId: shown, frameIds: [] } } : {}),
                 value: {
                   status: action === "delete" ? "deleted" : "done",
                   action,
                   ...(action !== "delete" ? { page: { id: pageId, name: next.pages.find((entry) => entry.id === pageId)?.name } } : { page: { id: pageId } }),
-                  pages: pagesAnswer(next),
+                  pages: pagesAnswer(next, shown ?? viewPageId(next, view)),
                 },
               };
             });
@@ -1693,13 +1777,13 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
           run(async () => {
             const p = (raw ?? {}) as { frameId?: unknown; path?: unknown; top?: unknown; picture?: unknown };
             if (!deps.inspect) throw new CanvasToolError("Pages can't be inspected here.");
-            const doc = await deps.store.get(deps.chatId);
+            const { doc, view } = await read();
             let frame: DesignFrame | undefined;
             if (p.frameId !== undefined) {
-              frame = frameIn(doc, p.frameId);
+              frame = frameIn(doc, p.frameId, view.pageId);
             } else if (typeof p.path === "string" && p.path.trim()) {
               const wanted = designPagePath(p.path);
-              frame = frameShowingDesignPage(doc, wanted);
+              frame = frameShowingDesignPage(doc, wanted, view.pageId);
               if (!frame) throw new CanvasToolError(`${wanted} is not on the canvas. Place it with canvas_place_frame first, or name a frameId.`);
             } else {
               throw new CanvasToolError("Name the page to inspect by frameId or path.");
@@ -1743,6 +1827,8 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
               if (!comment) {
                 throw new CanvasToolError("No comment on this canvas has that id. Call canvas_read for the page's open comments.");
               }
+              // The canvas is shared by the workspace's chats; each answers only what its own messages sent.
+              if (comment.chatId !== deps.chatId) throw new CanvasToolError("That comment belongs to another chat.");
               if (comment.state === "open") {
                 // A draft may still be in the person's tray; answering it would take it out before they send it.
                 throw new CanvasToolError(
@@ -1794,13 +1880,14 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
             // A tweak a variant sets must be one the page declares.
             let declared: { path: string; names: readonly string[] | null } | undefined;
             if (variants?.some((variant) => hasTweakValues(variant.tweaks))) {
-              const current = designFrameByIdOrPath(await deps.store.get(deps.chatId), p.id);
+              const { doc: now, view } = await read();
+              const current = designFrameByIdOrPath(now, p.id, view.pageId);
               if (current?.kind === "file" && current.path) {
                 declared = { path: current.path, names: await designPageTweakNames(deps.workspaceRoot, current.path) };
               }
             }
-            return edit<Record<string, unknown>>((doc) => {
-              const source = frameIn(doc, p.id);
+            return edit<Record<string, unknown>>((doc, view) => {
+              const source = frameIn(doc, p.id, view.pageId);
               if (isDesignLine(source.kind)) {
                 throw new CanvasToolError("An arrow, line or drawing is copied with the frames it joins: duplicate the group they are in.");
               }
@@ -2082,9 +2169,10 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
               }
             }
 
-            return edit<Record<string, unknown>>((doc) => {
-              const anchor = nextTo ? besideFrame(doc, nextTo.frameId) : undefined;
-              const pageId = anchor && (p.page === undefined || p.page === null || p.page === "") ? anchor.pageId : pageOf(doc, p.page);
+            return edit<Record<string, unknown>>((doc, view) => {
+              // Beside a frame, on its page unless another is named.
+              const anchor = nextTo ? besideFrame(doc, nextTo.frameId, view.pageId) : undefined;
+              const pageId = anchor && (p.page === undefined || p.page === null || p.page === "") ? anchor.pageId : pageOf(doc, p.page, view.pageId);
               if (anchor && anchor.pageId !== pageId) throw new CanvasToolError("nextTo must name a frame on the page it goes on.");
               const added = boxes.length + lines.length + (groupTitle !== undefined ? 1 : 0);
               if (
@@ -2118,7 +2206,7 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
                   const probe = placeFrame(
                     doc,
                     { kind: "shape", title: "", pageId, w: padded.w, h: padded.h, createdBy: "aiden", ...(groupId ? { groupId } : {}) },
-                    canvasView(doc, deps.viewState?.viewSize, pageId),
+                    canvasView(doc, view, undefined, pageId),
                     () => "probe",
                   );
                   if ("error" in probe) throw new CanvasToolError("The canvas is full. Remove a frame first.");
@@ -2150,7 +2238,7 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
               const made: string[] = [];
               const place = (input: PlaceFrameInput, ref: string | undefined) => {
                 const id = newId();
-                const placed = placeFrame(next, input, canvasView(next, deps.viewState?.viewSize, pageId), () => id);
+                const placed = placeFrame(next, input, canvasView(next, view, undefined, pageId), () => id);
                 if ("error" in placed) throw new CanvasToolError("The canvas is full. Remove a frame first.");
                 next = placed.doc;
                 made.push(id);
