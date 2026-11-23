@@ -357,6 +357,11 @@ test("a write that names a label is the helper's only while no other active help
   // Another active one could be, so neither claims it; a run grant still names its run.
   assert.equal(subagentHelperApprovalFor(scout, [write], [scout, twin("queued")]), null);
   assert.equal(subagentHelperApprovalFor(scout, [write, grant], [scout, twin("queued")])?.approvalId, "grant");
+
+  // A finished helper can't be asking either, even with the label to itself.
+  const finished = { ...scout, state: "completed" as const };
+  assert.equal(subagentHelperApprovalFor(finished, [write], [finished]), null);
+  assert.equal(subagentHelperApprovalFor(finished, [write, grant], [finished])?.approvalId, "grant");
 });
 
 function snapshot(runId: string, extra: Partial<SubagentRunSnapshotV2> = {}): SubagentRunSnapshotV2 {

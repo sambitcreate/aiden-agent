@@ -98,7 +98,7 @@ import {
   workspaceFolderCheckApplies,
 } from "../shared/workspace-folder-presence";
 import { useOptionalNewChatActions } from "../lib/new-chat-actions";
-import { Button, EmptyState, ScrollArea, ScrollAreaFooterStack, SurfaceCovered, Text, toast } from "../components/ui";
+import { Button, DismissHoverSurfaces, EmptyState, ScrollArea, ScrollAreaFooterStack, Text, toast } from "../components/ui";
 import {
   agentsInstructionNoticeMessage,
   createAgentsInstructionNoticeLog,
@@ -170,7 +170,7 @@ import { ContextMeter } from "../components/context-meter";
 import { ContextPressureFeed } from "../lib/context-pressure-feed";
 import type { ChatContextPressureV1 } from "../shared/context-pressure";
 import { ReasoningVisibilityControl } from "../components/reasoning-visibility-control";
-import { ApprovalStatusLine, ChatApprovalCard } from "../components/chat-approval-card";
+import { ApprovalStatusLine, ChatApprovalCard, revealApprovalCard } from "../components/chat-approval-card";
 import { noteWorkspaceAllow, repeatableApproval, useWorkspaceRepeatNudge } from "../lib/switch-to-auto";
 import { useApprovalStatusLine } from "../lib/use-approval-status-line";
 import { isComputerUseAccessApprovalDetails } from "../shared/computer-use-access";
@@ -3743,7 +3743,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
       // The card itself, never a decision button: arriving here answers nothing.
       const target = approvalCardRef.current;
       if (target?.isConnected) {
-        target.focus({ preventScroll: false });
+        revealApprovalCard(target);
         return;
       }
     }
@@ -4482,10 +4482,10 @@ export function ChatPane({ chatId }: { chatId: string }) {
           </div>
         ) : (
           <KeepVisualChatContext.Provider value={keepVisualChatId}>
-            {/* A floating side panel covers most of the conversation: a link
-                preview or helper card opened from the strip left uncovered
-                would draw over the panel. */}
-            <SurfaceCovered covered={transcriptUnderFloatingPanel}>
+            {/* A side panel floating over the conversation closes any link
+                preview, helper card or tooltip left open there, so none draws
+                over the panel. The strip it leaves visible still shows them. */}
+            <DismissHoverSurfaces when={transcriptUnderFloatingPanel}>
               <MessageList
                 key={chatId}
                 chatId={chatId}
@@ -4544,7 +4544,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
                       : null)
                 }
               />
-            </SurfaceCovered>
+            </DismissHoverSurfaces>
           </KeepVisualChatContext.Provider>
         )}
       </ScrollArea>

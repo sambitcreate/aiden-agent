@@ -6,6 +6,7 @@ import { Button, Text } from "./ui";
 import { ApprovalActions, ApprovalIconTile, type ApprovalRememberOption } from "./approval-card-parts";
 import { CopyButton } from "./copy-button";
 import { cn } from "../lib/ui-utils";
+import { prefersReducedMotion } from "../lib/appearance-runtime";
 import { useApprovalShortcuts } from "../lib/approval-shortcuts";
 import { SubagentWorkspaceWriteApproval } from "./subagent-workspace-write-approval";
 import {
@@ -218,6 +219,36 @@ function claimsKind(details: unknown, kind: string): boolean {
     !Array.isArray(details) &&
     (details as Record<string, unknown>).kind === kind
   );
+}
+
+const approvalArrivalTimers = new WeakMap<HTMLElement, ReturnType<typeof setTimeout>>();
+/** Long enough for the tint in styles.css (`[data-approval-arrival]`) to fade. */
+const APPROVAL_ARRIVAL_MS = 1_400;
+
+/**
+ * Go to approval lands on the card as a whole: it scrolls into view, takes
+ * focus without pressing anything, and briefly tints so a pointer user, who
+ * gets no focus ring, sees where they arrived. Under Reduce Motion it scrolls
+ * at once and the tint does not play.
+ */
+export function revealApprovalCard(card: HTMLElement): void {
+  card.focus({ preventScroll: true });
+  const reduceMotion = prefersReducedMotion();
+  card.scrollIntoView?.({ block: "nearest", behavior: reduceMotion ? "auto" : "smooth" });
+  const previous = approvalArrivalTimers.get(card);
+  if (previous !== undefined) clearTimeout(previous);
+  delete card.dataset.approvalArrival;
+  if (reduceMotion) {
+    approvalArrivalTimers.delete(card);
+    return;
+  }
+  // Reading layout restarts the tint when Go to approval is pressed again.
+  void card.offsetWidth;
+  card.dataset.approvalArrival = "";
+  approvalArrivalTimers.set(card, setTimeout(() => {
+    approvalArrivalTimers.delete(card);
+    delete card.dataset.approvalArrival;
+  }, APPROVAL_ARRIVAL_MS));
 }
 
 /**

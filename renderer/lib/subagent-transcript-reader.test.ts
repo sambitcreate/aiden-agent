@@ -182,7 +182,7 @@ test("Try again reads a failed reason even though it was asked before", async ()
 test("a chat switch drops answers still on their way and forgets every reason", async () => {
   const h = harness();
   h.reader.request("chat-1", "run-a", { reason: "join" });
-  h.reader.reset("chat-2");
+  h.reader.switchChat("chat-2");
   h.reads[0]!.resolve(transcript("run-a", 3));
   await h.flush();
   assert.deepEqual(h.transcripts, []);
@@ -192,4 +192,39 @@ test("a chat switch drops answers still on their way and forgets every reason", 
   h.reader.request("chat-1", "run-a", { reason: "join" });
   assert.equal(h.reads.length, 2);
   assert.equal(h.reads[1]!.chatId, "chat-1");
+});
+
+test("staying on the same chat keeps the reads already started for it", async () => {
+  const h = harness();
+  h.reader.request("chat-1", "run-a", { reason: "join" });
+  h.reader.switchChat("chat-1");
+  h.reads[0]!.resolve(transcript("run-a", 3));
+  await h.flush();
+  assert.equal(last(h.transcripts)?.transcript.revision, 3);
+  h.reader.request("chat-1", "run-a", { reason: "join" });
+  assert.equal(h.reads.length, 1, "the reason it already read is not read again");
+});
+
+test("a read that fails after the copy arrived another way is not a failure", async () => {
+  const h = harness();
+  h.reader.request("chat-1", "run-a", { reason: "run:completed:12", skipIfLoadedAt: 12 });
+  // The saved run's own detail read lands first, then the reader's read is rejected.
+  h.reader.noteLoaded("chat-1", "run-a", 12);
+  h.reads[0]!.reject(new Error("IPC closed"));
+  await h.flush();
+  assert.deepEqual(h.settled, [{ chatId: "chat-1", runId: "run-a", failedReason: null }]);
+});
+
+test("a failure clears once a newer request finds its copy already read", async () => {
+  const h = harness();
+  h.reader.request("chat-1", "run-a", { reason: "run:running:40", skipIfLoadedAt: 40 });
+  h.reads[0]!.reject(new Error("busy"));
+  await h.flush();
+  assert.deepEqual(last(h.settled), { chatId: "chat-1", runId: "run-a", failedReason: "run:running:40" });
+
+  h.reader.noteLoaded("chat-1", "run-a", 41);
+  await h.advance(1_000);
+  h.reader.request("chat-1", "run-a", { reason: "run:running:41", skipIfLoadedAt: 41 });
+  assert.equal(h.reads.length, 1, "nothing new to read");
+  assert.deepEqual(last(h.settled), { chatId: "chat-1", runId: "run-a", failedReason: null });
 });

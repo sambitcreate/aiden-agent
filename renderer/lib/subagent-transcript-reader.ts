@@ -38,7 +38,12 @@ export interface SubagentTranscriptReader {
   noteLoaded(chatId: string, runId: string, runRevision: number): void;
   /** The run finished: forget its reasons once its reads settle. */
   finish(runId: string): void;
-  /** A chat switch: drop every run, and ignore answers still on their way. */
+  /**
+   * Moves to this chat. A different chat drops every run and ignores answers
+   * still on their way; the chat already read leaves its reads alone.
+   */
+  switchChat(chatId: string | null): void;
+  /** Drops every run, and ignores answers still on their way. */
   reset(chatId: string | null): void;
 }
 
@@ -90,7 +95,7 @@ export function createSubagentTranscriptReader(
   let generation = 0;
   let runs = new Map<string, RunReads>();
 
-  const forChat = (nextChatId: string) => {
+  const forChat = (nextChatId: string | null) => {
     if (chatId !== nextChatId) reset(nextChatId);
   };
   const runFor = (runId: string): RunReads => {
@@ -111,6 +116,8 @@ export function createSubagentTranscriptReader(
     }
     return run;
   };
+  const coveredByLoad = (run: RunReads, read: PendingRead) =>
+    read.skipIfLoadedAt !== undefined && run.loadedAt >= read.skipIfLoadedAt;
   // A finished run keeps only the revision it was read at, so a repeated
   // request for its last state is skipped rather than read again.
   const settleIdle = (run: RunReads) => {
@@ -118,7 +125,9 @@ export function createSubagentTranscriptReader(
   };
 
   const start = (runId: string, run: RunReads, read: PendingRead) => {
-    if (!read.forced && read.skipIfLoadedAt !== undefined && run.loadedAt >= read.skipIfLoadedAt) {
+    if (!read.forced && coveredByLoad(run, read)) {
+      // A copy at least this new was already read, so an earlier failure is moot.
+      if (chatId !== null) options.onSettled(chatId, runId, null);
       settleIdle(run);
       return;
     }
@@ -147,9 +156,17 @@ export function createSubagentTranscriptReader(
         () => {
           if (!current()) return;
           run.inFlight = false;
-          // The same reason may be asked again; a newer answer stands.
-          if (run.lastReason === read.reason) run.lastReason = null;
-          if (seq > run.answeredSeq) options.onSettled(startedChat, runId, read.reason);
+          if (coveredByLoad(run, read)) {
+            // A copy this new arrived another way while it was in flight.
+            if (seq > run.answeredSeq) {
+              run.answeredSeq = seq;
+              options.onSettled(startedChat, runId, null);
+            }
+          } else {
+            // The same reason may be asked again; a newer answer stands.
+            if (run.lastReason === read.reason) run.lastReason = null;
+            if (seq > run.answeredSeq) options.onSettled(startedChat, runId, read.reason);
+          }
           drain(runId, run);
         },
       );
@@ -212,6 +229,7 @@ export function createSubagentTranscriptReader(
       const run = runFor(runId);
       run.loadedAt = Math.max(run.loadedAt, runRevision);
     },
+    switchChat: forChat,
     finish(runId) {
       const run = runs.get(runId);
       if (!run) return;

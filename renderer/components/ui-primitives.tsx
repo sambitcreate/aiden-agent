@@ -11,7 +11,7 @@ import {
 } from "radix-ui";
 import { isRestoringFocus } from "../lib/focus-return";
 import { cn } from "../lib/ui-utils";
-import { Button, useSurfaceCovered } from "./ui";
+import { Button, useDismissibleHoverOpen, useSurfaceCovered } from "./ui";
 
 /**
  * Shared selection, progress, and data primitives. The app and Aiden UI
@@ -227,12 +227,14 @@ export function Progress({
 
 /**
  * A hover and focus hint. Needs the app's TooltipProvider (mounted at the root).
- * Shows nothing while its surface is covered (see `SurfaceCovered`).
+ * Shows nothing while its surface is covered (see `SurfaceCovered`), and
+ * closes when an enclosing `DismissHoverSurfaces` fires.
  */
 export function Tooltip({ content, children }: { content: React.ReactNode; children: React.ReactElement }) {
   const covered = useSurfaceCovered();
+  const [open, onOpenChange] = useDismissibleHoverOpen({});
   return (
-    <TooltipPrimitive.Root>
+    <TooltipPrimitive.Root open={open} onOpenChange={onOpenChange}>
       <TooltipPrimitive.Trigger
         asChild
         onFocus={(event) => {

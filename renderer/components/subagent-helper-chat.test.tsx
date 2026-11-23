@@ -191,28 +191,35 @@ test("in the side panel, a helper's approval is a compact row that points at the
   assert.equal(within(chat).queryByRole("button", { name: /Deny|Don.t allow/u }), null);
   const row = chat.querySelector<HTMLElement>("[data-subagent-helper-approval]");
   assert.ok(row);
-  assert.equal(row.textContent, "Waiting on your approval in the main chat.Go to approval");
+  assert.equal(row.textContent, "Needs your approval in the main chat.Go to approval");
   fireEvent.click(within(row).getByRole("button", { name: "Go to approval" }));
   assert.deepEqual(focused, ["main card"]);
 });
 
-test("a helper's approval queued behind others says how many the main chat shows first", () => {
-  const rowText = (ahead: number) => {
+test("a helper's approval queued behind others says how many the main chat shows first, and goes to the main chat", () => {
+  const focused: number[] = [];
+  const row = (ahead: number) => {
     cleanup();
     render(
       <SubagentHelperChat
         run={helper({ activity: "Preparing a workspace update" })}
         transcript={conversation(2, [{ text: "I'll write the plan." }])}
         approval={{ ...writeApproval(() => undefined), ahead }}
-        onFocusMainApproval={() => undefined}
+        onFocusMainApproval={() => focused.push(ahead)}
         now={4_000}
       />,
     );
-    return screen.getByRole("article", { name: "Code scout" }).querySelector("[data-subagent-helper-approval]")
-      ?.querySelector("p")?.textContent;
+    const found = screen.getByRole("article", { name: "Code scout" }).querySelector<HTMLElement>("[data-subagent-helper-approval]");
+    assert.ok(found);
+    return found;
   };
-  assert.equal(rowText(1), "Waiting on your approval in the main chat, after 1 other request.");
-  assert.equal(rowText(3), "Waiting on your approval in the main chat, after 3 other requests.");
+  assert.equal(row(1).querySelector("p")?.textContent, "Needs your approval in the main chat, after 1 other request.");
+  const queued = row(3);
+  assert.equal(queued.querySelector("p")?.textContent, "Needs your approval in the main chat, after 3 other requests.");
+  // The main chat shows someone else's request first, so the button does not promise this one.
+  assert.equal(within(queued).queryByRole("button", { name: "Go to approval" }), null);
+  fireEvent.click(within(queued).getByRole("button", { name: "Go to main chat" }));
+  assert.deepEqual(focused, [3]);
 });
 
 test("a running helper that asks to write says it is waiting on you, and the answer goes back", () => {

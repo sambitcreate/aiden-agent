@@ -316,12 +316,12 @@ export type SubagentHelperPeer = Pick<SubagentRunSnapshot, "runId" | "label"> & 
 
 /**
  * The pending approval that belongs to this helper. A run grant names its
- * run; the other kinds name only the helper's label, so they match only when
- * no other active helper in `helpers` shares it. Every surface passes all of
+ * run; the other kinds name only the helper's label, so they match only while
+ * this helper is active and no other active helper in `helpers` shares it. Every surface passes all of
  * the chat's helpers and this one rule decides which count.
  */
 export function subagentHelperApprovalFor(
-  run: Pick<SubagentRunSnapshot, "runId" | "label">,
+  run: SubagentHelperPeer,
   approvals: readonly ApprovalPrompt[],
   helpers: readonly SubagentHelperPeer[],
 ): ApprovalPrompt | null {
@@ -330,14 +330,17 @@ export function subagentHelperApprovalFor(
 
 /** Every pending approval that belongs to this helper, in queue order. */
 export function subagentHelperApprovalsFor(
-  run: Pick<SubagentRunSnapshot, "runId" | "label">,
+  run: SubagentHelperPeer,
   approvals: readonly ApprovalPrompt[],
   helpers: readonly SubagentHelperPeer[],
 ): ApprovalPrompt[] {
-  const labelUnique = !helpers.some(
+  // A finished helper can't be asking; only its own run grant still names it.
+  const labelOwned =
+    subagentHelperIsActive(run.state) &&
+    !helpers.some(
     (other) =>
       other.runId !== run.runId && other.label === run.label && subagentHelperIsActive(other.state),
-  );
+    );
   const owned: ApprovalPrompt[] = [];
   for (const approval of approvals) {
     const details = approval.details;
@@ -349,7 +352,7 @@ export function subagentHelperApprovalsFor(
       (isSubagentWorkspaceWriteApprovalDetails(details) ||
         isSubagentShellApprovalDetails(details) ||
         isSubagentMcpMutationApprovalDetails(details)) &&
-      labelUnique &&
+      labelOwned &&
       details.childLabel === run.label
     ) {
       owned.push(approval);

@@ -132,10 +132,13 @@ export const MAIN_CHAT_WAITING_TEXT: Record<MainChatWaitingKind, string> = {
   question: "The main chat has a question for you.",
 };
 
-/** The side panel's approval row; the main card shows queued requests one at a time. */
+/**
+ * The side panel's approval row; the main card shows queued requests one at a
+ * time. The header already says the helper is waiting on you.
+ */
 function subagentHelperCompactApprovalText(ahead: number): string {
-  if (ahead <= 0) return "Waiting on your approval in the main chat.";
-  return `Waiting on your approval in the main chat, after ${ahead} other ${ahead === 1 ? "request" : "requests"}.`;
+  if (ahead <= 0) return "Needs your approval in the main chat.";
+  return `Needs your approval in the main chat, after ${ahead} other ${ahead === 1 ? "request" : "requests"}.`;
 }
 
 interface HelperMessageProps {
@@ -446,7 +449,7 @@ export const SubagentHelperChat = React.forwardRef<HTMLHeadingElement, SubagentH
           <div className={cn("pb-2", column)}>
             <Callout
               role="note"
-              className="flex-row items-center justify-between gap-3 bg-status-warning-surface px-3 py-2"
+              className="flex-row items-center justify-between gap-3 bg-status-warning-surface px-3 py-2 text-small"
               data-subagent-helper-main-waiting={waitingOnMain}
             >
               <Text as="p" variant="small" className="min-w-0 text-status-warning">
@@ -456,7 +459,7 @@ export const SubagentHelperChat = React.forwardRef<HTMLHeadingElement, SubagentH
                 variant="transparent"
                 size="small"
                 onClick={onReturnToMain}
-                className="shrink-0 text-small-strong motion-reduce:transition-none"
+                className="shrink-0 motion-reduce:transition-none"
               >
                 {waitingOnMain === "approval" ? "Go to approval" : "Answer question"}
               </Button>
@@ -622,7 +625,7 @@ export const SubagentHelperChat = React.forwardRef<HTMLHeadingElement, SubagentH
                 </div>
               ) : approval ? (
                 <div
-                  className="flex min-w-0 items-center justify-between gap-3 rounded-card bg-status-warning-surface px-3 py-2"
+                  className="flex min-w-0 items-center justify-between gap-3 rounded-card bg-status-warning-surface px-3 py-2 text-small"
                   data-subagent-helper-approval="compact"
                 >
                   <Text as="p" variant="small" className="min-w-0 text-status-warning">
@@ -633,9 +636,10 @@ export const SubagentHelperChat = React.forwardRef<HTMLHeadingElement, SubagentH
                       variant="transparent"
                       size="small"
                       onClick={onFocusMainApproval}
-                      className="shrink-0 text-small-strong motion-reduce:transition-none"
+                      className="shrink-0 motion-reduce:transition-none"
                     >
-                      Go to approval
+                      {/* Queued behind others, the main chat shows someone else's request first. */}
+                      {(approval.ahead ?? 0) > 0 ? "Go to main chat" : "Go to approval"}
                     </Button>
                   ) : null}
                 </div>
@@ -645,6 +649,7 @@ export const SubagentHelperChat = React.forwardRef<HTMLHeadingElement, SubagentH
                 <Callout
                   role="note"
                   color={problem.tone === "failed" ? "red" : undefined}
+                  className="text-small"
                   data-subagent-helper-problem={problem.tone}
                 >
                   <Text as="p" variant="small" color="secondary" className="break-words">

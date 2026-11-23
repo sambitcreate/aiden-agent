@@ -1772,7 +1772,7 @@ export function Dialog({
         if (nextOpen || !dismissBlocked) onOpenChange(nextOpen);
       }}
     >
-      <DialogPrimitive.Portal>
+      <UncoveredDialogPortal>
         <DialogPrimitive.Overlay
           data-slot="dialog-overlay"
           className={cn("fixed inset-0 bg-transparent", layer === "onboarding" ? "z-[70]" : "z-50")}
@@ -1867,7 +1867,7 @@ export function Dialog({
             )}
           </div>
         </DialogPrimitive.Content>
-      </DialogPrimitive.Portal>
+      </UncoveredDialogPortal>
     </DialogPrimitive.Root>
   );
 }
@@ -1920,7 +1920,7 @@ export function AlertDialog({
         if (!busy) onOpenChange(nextOpen);
       }}
     >
-      <AlertDialogPrimitive.Portal>
+      <UncoveredAlertDialogPortal>
         <AlertDialogPrimitive.Overlay
           data-slot="dialog-overlay"
           className={cn("fixed inset-0 bg-transparent", layer === "onboarding" ? "z-[70]" : "z-50")}
@@ -1964,7 +1964,7 @@ export function AlertDialog({
             )}
           </div>
         </AlertDialogPrimitive.Content>
-      </AlertDialogPrimitive.Portal>
+      </UncoveredAlertDialogPortal>
     </AlertDialogPrimitive.Root>
   );
 }
@@ -2147,7 +2147,7 @@ export const PopoverTrigger = PopoverPrimitive.Trigger;
 export const PopoverContent = React.forwardRef<
   React.ElementRef<typeof PopoverPrimitive.Content>,
   React.ComponentPropsWithoutRef<typeof PopoverPrimitive.Content>
->(function PopoverContent({ className, sideOffset = 6, onEscapeKeyDown, ...props }, ref) {
+>(function PopoverContent({ className, sideOffset = 6, onEscapeKeyDown, children, ...props }, ref) {
   const liveGuard = useLiveGuardAttributes(props);
   return (
     <PopoverPrimitive.Portal>
@@ -2163,7 +2163,9 @@ export const PopoverContent = React.forwardRef<
         {...props}
         {...liveGuard}
         onEscapeKeyDown={keepOpenWhileComposing(onEscapeKeyDown)}
-      />
+      >
+        <UncoveredSurface>{children}</UncoveredSurface>
+      </PopoverPrimitive.Content>
     </PopoverPrimitive.Portal>
   );
 });
@@ -2172,14 +2174,36 @@ const SurfaceCoveredContext = React.createContext(false);
 
 /**
  * Marks content that is covered: hidden behind something that replaced it (an
- * expanded helper chat over the conversation) or under a floating surface.
- * Hover cards and tooltips anchored inside render nothing there, since one
- * left open on a hidden anchor would float over what covers it and take the
- * first Esc. A covered surface stays covered inside a nested one.
+ * expanded helper chat over the conversation). Hover cards and tooltips
+ * anchored inside render nothing there, since one left open on a hidden anchor
+ * would float over what covers it and take the first Esc. A covered surface
+ * stays covered inside a nested one, but not inside a dialog or popover opened
+ * from it, which is a new surface of its own.
  */
 export function SurfaceCovered({ covered, children }: { covered: boolean; children: React.ReactNode }) {
   const parent = React.useContext(SurfaceCoveredContext);
   return <SurfaceCoveredContext.Provider value={parent || covered}>{children}</SurfaceCoveredContext.Provider>;
+}
+
+/** Starts a new, uncovered surface: dialog and popover content. */
+function UncoveredSurface({ children }: { children: React.ReactNode }) {
+  return <SurfaceCoveredContext.Provider value={false}>{children}</SurfaceCoveredContext.Provider>;
+}
+
+function UncoveredDialogPortal({ children }: { children: React.ReactNode }) {
+  return (
+    <DialogPrimitive.Portal>
+      <UncoveredSurface>{children}</UncoveredSurface>
+    </DialogPrimitive.Portal>
+  );
+}
+
+function UncoveredAlertDialogPortal({ children }: { children: React.ReactNode }) {
+  return (
+    <AlertDialogPrimitive.Portal>
+      <UncoveredSurface>{children}</UncoveredSurface>
+    </AlertDialogPrimitive.Portal>
+  );
 }
 
 /** Whether this content sits in a covered surface (see `SurfaceCovered`). */
@@ -2187,7 +2211,67 @@ export function useSurfaceCovered(): boolean {
   return React.useContext(SurfaceCoveredContext);
 }
 
-export const HoverCard = HoverCardPrimitive.Root;
+const HoverSurfaceDismissalContext = React.createContext(0);
+
+/**
+ * Closes the hover cards and tooltips open inside, once, each time `when`
+ * turns true: a side panel floating over the conversation would otherwise
+ * leave a card open over it. They open again as usual afterwards.
+ */
+export function DismissHoverSurfaces({ when, children }: { when: boolean; children: React.ReactNode }) {
+  const parent = React.useContext(HoverSurfaceDismissalContext);
+  const [state, setState] = React.useState({ when, count: 0 });
+  let count = state.count;
+  if (state.when !== when) {
+    count = when ? state.count + 1 : state.count;
+    setState({ when, count });
+  }
+  return (
+    <HoverSurfaceDismissalContext.Provider value={parent + count}>{children}</HoverSurfaceDismissalContext.Provider>
+  );
+}
+
+/**
+ * Open state for a hover card or tooltip root that closes when an enclosing
+ * `DismissHoverSurfaces` fires. Works for controlled and uncontrolled roots.
+ */
+export function useDismissibleHoverOpen({
+  open,
+  defaultOpen,
+  onOpenChange,
+}: {
+  open?: boolean;
+  defaultOpen?: boolean;
+  onOpenChange?: (open: boolean) => void;
+}): [boolean, (open: boolean) => void] {
+  const dismissal = React.useContext(HoverSurfaceDismissalContext);
+  const [ownOpen, setOwnOpen] = React.useState(defaultOpen ?? false);
+  const shown = open ?? ownOpen;
+  const change = React.useCallback(
+    (next: boolean) => {
+      if (open === undefined) setOwnOpen(next);
+      onOpenChange?.(next);
+    },
+    [open, onOpenChange],
+  );
+  const seenDismissalRef = React.useRef(dismissal);
+  React.useEffect(() => {
+    if (seenDismissalRef.current === dismissal) return;
+    seenDismissalRef.current = dismissal;
+    if (shown) change(false);
+  }, [dismissal, shown, change]);
+  return [shown, change];
+}
+
+export function HoverCard({
+  open,
+  defaultOpen,
+  onOpenChange,
+  ...props
+}: React.ComponentProps<typeof HoverCardPrimitive.Root>) {
+  const [shown, change] = useDismissibleHoverOpen({ open, defaultOpen, onOpenChange });
+  return <HoverCardPrimitive.Root {...props} open={shown} onOpenChange={change} />;
+}
 export const HoverCardTrigger = HoverCardPrimitive.Trigger;
 export const HoverCardContent = React.forwardRef<
   React.ElementRef<typeof HoverCardPrimitive.Content>,

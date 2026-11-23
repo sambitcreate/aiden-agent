@@ -3,7 +3,7 @@ import * as React from "react";
 import assert from "node:assert/strict";
 import { afterEach, test } from "node:test";
 import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
-import { ApprovalStatusLine, ChatApprovalCard, type ApprovalStatus, type ChatApprovalDecisionOptions } from "./chat-approval-card";
+import { ApprovalStatusLine, ChatApprovalCard, revealApprovalCard, type ApprovalStatus, type ChatApprovalDecisionOptions } from "./chat-approval-card";
 import { TooltipProvider } from "./ui";
 import { openLayer } from "../lib/layer-stack";
 import type { ApprovalPrompt } from "../lib/ipc";
@@ -772,5 +772,30 @@ test("a malformed hook proposal is blocked instead of shown", () => {
     assert.equal(within(card).queryByRole("button", { name: "Apply" }), null);
     assert.equal(within(card).queryByRole("group", { name: "Complete command" }), null);
     cleanup();
+  }
+});
+
+test("arriving at the card from Go to approval scrolls it into view, focuses it without deciding, and tints it unless motion is reduced", () => {
+  const { card, decisions } = mount({ toolName: "run_command", summary: "Run command: npm test", scopes: ["once"] });
+  const scrolls: ScrollIntoViewOptions[] = [];
+  card.scrollIntoView = (options?: boolean | ScrollIntoViewOptions) => {
+    if (typeof options === "object") scrolls.push(options);
+  };
+  const root = document.documentElement;
+  try {
+    root.dataset.reduceMotion = "false";
+    revealApprovalCard(card);
+    assert.equal(document.activeElement, card);
+    assert.deepEqual(scrolls, [{ block: "nearest", behavior: "smooth" }]);
+    assert.ok(card.hasAttribute("data-approval-arrival"), "a pointer user sees where focus landed");
+
+    root.dataset.reduceMotion = "true";
+    revealApprovalCard(card);
+    assert.equal(document.activeElement, card);
+    assert.deepEqual(scrolls[1], { block: "nearest", behavior: "auto" }, "Reduce Motion still scrolls, at once");
+    assert.equal(card.hasAttribute("data-approval-arrival"), false, "and plays no tint");
+    assert.deepEqual(decisions, []);
+  } finally {
+    delete root.dataset.reduceMotion;
   }
 });

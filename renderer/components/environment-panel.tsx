@@ -439,6 +439,9 @@ export function EnvironmentPanelProvider({ children }: React.PropsWithChildren) 
     chatId: string | null;
     byRunId: Readonly<Record<string, string>>;
   }>(EMPTY_TRANSCRIPT_REFETCH_FAILURES);
+  // Whether a refresh failure may be recorded: set as soon as one is, so the
+  // store subscription below never misses one that is not yet committed.
+  const transcriptRefetchMayHaveFailedRef = React.useRef(false);
   const [subagentDetailAnnouncement, setSubagentDetailAnnouncement] =
     React.useState<SubagentDetailAnnouncementRequest | null>(null);
   const [gitOperationBusy, setGitOperationBusyState] = React.useState(false);
@@ -859,6 +862,7 @@ export function EnvironmentPanelProvider({ children }: React.PropsWithChildren) 
   // again; an empty answer means nothing is saved yet.
   const settleTranscriptRead = React.useCallback(
     (chatId: string, runId: string, failedReason: string | null) => {
+      if (failedReason !== null) transcriptRefetchMayHaveFailedRef.current = true;
       setTranscriptRefetchFailures((current) => {
         if (current.chatId !== chatId) {
           return failedReason ? { chatId, byRunId: { [runId]: failedReason } } : current;
@@ -908,10 +912,12 @@ export function EnvironmentPanelProvider({ children }: React.PropsWithChildren) 
     [subagentsEnabled, transcriptReader, transcriptRefetchFailures],
   );
 
-  // Reads and failures belong to one chat.
+  // Reads and failures belong to one chat. A read already started for the new
+  // chat in this commit is kept; unmounting drops any read still waiting.
   React.useEffect(() => {
-    transcriptReader.reset(subagents.chatId);
+    transcriptReader.switchChat(subagents.chatId);
     setTranscriptRefetchFailures(EMPTY_TRANSCRIPT_REFETCH_FAILURES);
+    return () => transcriptReader.reset(null);
   }, [subagents.chatId, transcriptReader]);
 
   // A finished helper's reasons are forgotten once its reads settle.
@@ -920,13 +926,18 @@ export function EnvironmentPanelProvider({ children }: React.PropsWithChildren) 
   }, [subagentViews, transcriptReader]);
 
   // A failure clears once the helper's conversation arrives by another way:
-  // the live stream, or the saved run's own detail read.
+  // the live stream, or the saved run's own detail read. With no failure to
+  // clear, a store change (every streamed token) leaves this state alone.
+  React.useEffect(() => {
+    transcriptRefetchMayHaveFailedRef.current = Object.keys(transcriptRefetchFailures.byRunId).length > 0;
+  }, [transcriptRefetchFailures]);
   React.useEffect(() => {
     let previous = helperChatStore.getState();
     return helperChatStore.subscribe(() => {
       const next = helperChatStore.getState();
       const before = previous;
       previous = next;
+      if (!transcriptRefetchMayHaveFailedRef.current) return;
       setTranscriptRefetchFailures((current) => {
         if (current.chatId !== next.chatId) return current;
         const recovered = subagentHelperTranscriptsRecovered(before, next, Object.keys(current.byRunId));

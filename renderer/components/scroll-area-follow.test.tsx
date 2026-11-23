@@ -2,7 +2,17 @@ import "../main/bots/test-dom";
 import assert from "node:assert/strict";
 import { afterEach, test } from "node:test";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { HoverCard, HoverCardContent, HoverCardTrigger, ScrollArea, TooltipProvider } from "./ui";
+import {
+  DismissHoverSurfaces,
+  HoverCard,
+  HoverCardContent,
+  HoverCardTrigger,
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+  ScrollArea,
+  TooltipProvider,
+} from "./ui";
 import { Tooltip } from "./ui-primitives";
 
 afterEach(() => cleanup());
@@ -599,4 +609,56 @@ test("hover cards and tooltips in a covered transcript stay closed, and the repl
   assert.equal(screen.queryByText("Copy reply"), null, "nor does the tooltip");
   fireEvent.focus(screen.getByRole("button", { name: "Back to main chat" }));
   assert.ok(screen.getAllByText("Back to main chat (Esc)").length > 0, "the replacement's tooltip still shows");
+});
+
+test("a popover opened from a covered transcript is a surface of its own, and its tooltips show", () => {
+  const view = render(
+    <TooltipProvider delayDuration={0}>
+      <ScrollArea bodyReplacement={<button type="button">Back to main chat</button>}>
+        <Popover open>
+          <PopoverTrigger asChild>
+            <button type="button">More</button>
+          </PopoverTrigger>
+          <PopoverContent>
+            <Tooltip content="Copies the reply">
+              <button type="button">Copy reply</button>
+            </Tooltip>
+          </PopoverContent>
+        </Popover>
+      </ScrollArea>
+    </TooltipProvider>,
+  );
+  fireEvent.focus(view.getByRole("button", { name: "Copy reply" }));
+  assert.ok(screen.getAllByText("Copies the reply").length > 0);
+});
+
+test("a side panel floating over the conversation closes its open cards once, and the visible strip shows them again", () => {
+  const transcript = (floating: boolean) => (
+    <TooltipProvider delayDuration={0}>
+      <DismissHoverSurfaces when={floating}>
+        <HoverCard defaultOpen>
+          <HoverCardTrigger asChild>
+            <a href="https://example.com">example.com</a>
+          </HoverCardTrigger>
+          <HoverCardContent>Link preview</HoverCardContent>
+        </HoverCard>
+        <Tooltip content="Copy reply">
+          <button type="button">Copy</button>
+        </Tooltip>
+      </DismissHoverSurfaces>
+    </TooltipProvider>
+  );
+  const view = render(transcript(false));
+  const copy = screen.getByRole("button", { name: "Copy" });
+  fireEvent.focus(copy);
+  assert.ok(screen.getByText("Link preview"), "before the panel floats, the preview is open");
+  assert.ok(screen.getAllByText("Copy reply").length > 0, "and so is the tooltip");
+
+  view.rerender(transcript(true));
+  assert.equal(screen.queryByText("Link preview"), null, "the panel floating in closes the preview");
+  assert.equal(screen.queryByText("Copy reply"), null, "and the tooltip");
+
+  fireEvent.blur(copy);
+  fireEvent.focus(copy);
+  assert.ok(screen.getAllByText("Copy reply").length > 0, "with the panel still floating, the strip's tooltip opens again");
 });

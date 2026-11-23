@@ -684,6 +684,23 @@ body {
   background-color: color-mix(in srgb, var(--surface-popover) 98%, var(--text-primary));
 }
 
+/* Go to approval: a brief accent tint that fades back, so a pointer user (no
+   focus ring) sees where they landed. Reduce Motion skips it; the card still
+   scrolls into view and takes focus. */
+@keyframes approval-arrival {
+  from {
+    background-color: color-mix(in srgb, var(--surface-popover) 88%, var(--status-accent));
+  }
+}
+
+[data-approval-arrival] {
+  animation: approval-arrival 1200ms ease-out;
+}
+
+:root[data-reduce-motion="true"] [data-approval-arrival] {
+  animation: none;
+}
+
 .ask-user-question-shell {
   animation: ask-user-question-in var(--motion-duration) var(--motion-easing) both;
 }
