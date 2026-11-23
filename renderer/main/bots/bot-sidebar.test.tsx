@@ -672,6 +672,53 @@ test("on a Bots page, a paired Mac's Bots keep up with what that Mac sends", asy
   assert.ok(within(waiting).getByText("Waiting for you"));
 });
 
+test("while one paired Mac's Bot chat opens, picking another opens that one instead", async () => {
+  const queryClient = createBotTestQueryClient();
+  // An older host: opening a Bot asks it to create the Bot's chat.
+  queryClient.setQueryData(hostQueryKeys.list(), [
+    { id: "host-b", name: "Studio", enabled: true, state: "connected", features: [], capabilities: ["chat:read", "chat:write", "bot:read", "bot:write"] },
+  ]);
+  queryClient.setQueryData(hostQueryKeys.statuses(), [
+    { hostId: "host-b", generation: 1, state: { kind: "connected", since: 1 }, feed: "live", stale: false },
+  ]);
+  queryClient.setQueryData(hostQueryKeys.feed("host-b"), {
+    hostId: "host-b",
+    epoch: "e1",
+    sequence: 1,
+    stale: false,
+    summaries: [],
+    workspaces: [],
+    bots: [
+      { id: "slow", name: "Slow", sessionState: "idle" },
+      { id: "quick", name: "Quick", sessionState: "idle" },
+    ],
+    runs: [],
+  });
+  let releaseSlow: (value: unknown) => void = () => undefined;
+  sidebarIpc([], {}, {
+    "bots:list": () => [],
+    "remote:peerHostStatuses": () => [
+      { hostId: "host-b", generation: 1, state: { kind: "connected", since: 1 }, feed: "live", stale: false },
+    ],
+    "remote:peerCall": (_hostId, raw) => {
+      const operation = raw as { operation: string; resourceId?: string };
+      if (operation.operation !== "createBotChat") return { ok: false, error: { code: "not_found", message: "Not in this test." } };
+      const created = { ok: true, value: { id: `chat-${operation.resourceId}`, workspaceId: "w1", botId: operation.resourceId } };
+      return operation.resourceId === "slow" ? new Promise((resolve) => (releaseSlow = () => resolve(created))) : created;
+    },
+  });
+  const { router } = await mountSidebar("/bots", queryClient);
+  fireEvent.click(await screen.findByRole("button", { name: "Slow, on Studio" }));
+  await waitFor(() => assert.equal(screen.getByRole("button", { name: "Slow, on Studio" }).getAttribute("aria-busy"), "true"));
+  fireEvent.click(screen.getByRole("button", { name: "Quick, on Studio" }));
+  await waitFor(() => assert.equal(router.state.location.pathname, "/host/host-b/chat/chat-quick"));
+  await act(async () => {
+    releaseSlow(undefined);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  });
+  assert.equal(router.state.location.pathname, "/host/host-b/chat/chat-quick", "the earlier open does not take over");
+});
+
 test("Cancel in a row's Delete puts focus back on that row", async () => {
   sidebarIpc([PLANNER, INBOX, SCOUT]);
   await mountSidebar();
