@@ -1415,7 +1415,13 @@ function redactEnvironmentAssignments(value: string): string {
   return changed ? `${redacted}${value.slice(cursor)}` : value;
 }
 
-const ENDS_IN_REDACTION = /\[REDACTED(?: [A-Z -]+)?\]["'`]?[,;]?$/u;
+/**
+ * A line that ends in a hidden value, which may wrap onto the next line. Only
+ * markers that stand for a value count: a hidden path, Markdown block or
+ * unsettled text is not a secret, so the line after it stays readable.
+ */
+const ENDS_IN_HIDDEN_VALUE =
+  /\[REDACTED(?: CREDENTIAL| MCP CREDENTIAL| ENVIRONMENT VALUE| PRIVATE KEY| TOKEN| AUTHORIZATION)?\]["'`]?[,;]?$/u;
 /**
  * One opaque token of credential characters, such as the wrapped tail of a
  * key: eight or more with a letter and a digit, or sixteen or more with at
@@ -1444,7 +1450,7 @@ export function lineIsPathOrVersion(line: string): boolean {
  * an opaque token; a path, file name or version is not one.
  */
 export function isWrappedSecretTail(previousSafeLine: string | undefined, line: string): boolean {
-  if (previousSafeLine === undefined || !ENDS_IN_REDACTION.test(previousSafeLine)) return false;
+  if (previousSafeLine === undefined || !ENDS_IN_HIDDEN_VALUE.test(previousSafeLine)) return false;
   const trimmed = line.trim();
   if (!trimmed || lineIsPathOrVersion(trimmed)) return false;
   return OPAQUE_CONTINUATION_TOKEN.test(trimmed.split(/\s+/u)[0]!);

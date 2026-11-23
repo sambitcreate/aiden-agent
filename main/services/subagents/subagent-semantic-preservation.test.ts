@@ -433,6 +433,25 @@ test("a value wrapped over three lines, or with a space or no digit in its tail,
   }
 });
 
+test("lines after a hidden path stay on the panel, while a wrapped key after a hidden credential still hides", () => {
+  for (const value of [
+    "Updated /Users/sam/projects/app/src/config.ts\n3f9a0c1d2 fix tests\n7b8c9d0e1 add docs\n1a2b3c4d5 bump deps",
+    "Repo at /Users/sam/projects/app\n550e8400-e29b-41d4-a716-446655440000 created",
+    "Saved to /Users/sam/out.txt\nbuild2024 finished in 3s",
+  ]) {
+    const panel = sanitizeSubagentSnapshotText(value);
+    assert.ok(!panel.includes("/Users/sam"), `the panel hides the path: ${panel}`);
+    for (const safe of [panel, sanitizeSubagentWorkText(value)]) {
+      assert.deepEqual(safe.split("\n").slice(1), value.split("\n").slice(1), safe);
+    }
+  }
+  const wrapped = "Repo at /Users/sam/projects/app\nAPI_SECRET=FAKEabcd0123456789FAKE\nefgh9876543210FAKEtail\nDone.";
+  for (const safe of [sanitizeSubagentSnapshotText(wrapped), sanitizeSubagentWorkText(wrapped)]) {
+    assert.ok(!safe.includes("FAKEabcd0123") && !safe.includes("efgh9876"), safe);
+    assert.match(safe, /\nDone\.$/u);
+  }
+});
+
 test("a file path, file name or version after a hidden value stays readable in the helper's words", () => {
   for (const [text, shown] of [
     ["API_SECRET=FAKEabcd0123456789FAKE\nsrc/config/env.ts\nDone.", "src/config/env.ts"],

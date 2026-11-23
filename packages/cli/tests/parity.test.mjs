@@ -1275,6 +1275,25 @@ test("a subagent that hits its deadline during an unanswered approval settles an
   // The saved conversation shows the stopped call as cancelled, not refused.
   const steps = saved.at(-1).transcript.entries.flatMap((entry) => entry.steps ?? []).filter((step) => step.kind === "tool");
   assert.deepEqual(steps.map((step) => step.status), ["cancelled"]);
+
+  // An allowed call still running at the deadline shows as cancelled even when
+  // it then succeeds, as in the main chat.
+  const runningSaved = [];
+  const runningRecorder = new api.SubagentTranscriptRecorder({ runId: "run-running", task: "Read the note", sink: { persist: async (transcript, final) => { runningSaved.push({ transcript, final }); } } });
+  let finishedAfterStop = false;
+  const running = await api.runCliSubagent(dir, { runtime: { model: runtime.getModel("cli-test", "test") }, workspaceRoot: dir, permission: "ask", thinkingLevel: "off", context: { mode: "fresh", revisionHash: "running", messages: [] }, request: { role: "scout", label: "Running", task: "Read the note" }, policy: { deadlineMs: 1500 }, transcript: runningRecorder }, [{
+    name: "read_file", description: "Read the note", parameters: { type: "object", properties: { path: { type: "string" } }, required: ["path"] },
+    execute: async (_id, _args, signal) => {
+      await new Promise((resolve) => signal?.addEventListener("abort", resolve, { once: true }));
+      finishedAfterStop = true;
+      return { content: [{ type: "text", text: "Apricot" }], details: {} };
+    },
+  }], async () => {});
+  assert.equal(running.status, "timed_out");
+  assert.equal(finishedAfterStop, true);
+  await runningRecorder.finish("cancelled");
+  const runningSteps = runningSaved.at(-1).transcript.entries.flatMap((entry) => entry.steps ?? []).filter((step) => step.kind === "tool");
+  assert.deepEqual(runningSteps.map((step) => step.status), ["cancelled"]);
 });
 
 test("shared auth coordinator commits a returned credential once and suppresses a cancelled login", async () => {
