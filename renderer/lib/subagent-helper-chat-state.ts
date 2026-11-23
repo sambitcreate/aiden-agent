@@ -1,9 +1,5 @@
 import type { ApprovalPrompt } from "./ipc";
-import {
-  isExtractionStep,
-  isQuestionnaireStep,
-  isRecordingStep,
-} from "./assistant-message-presentation";
+import { isExtractionStep, isQuestionnaireStep, isRecordingStep } from "./assistant-message-presentation";
 import {
   isSubagentMcpMutationApprovalDetails,
   isSubagentRunGrantApprovalDetails,
@@ -29,12 +25,9 @@ import {
 } from "../shared/subagent-transcript";
 
 /** The status dot's colour family. */
-export type SubagentHelperTone =
-  "queued" | "running" | "waiting" | "done" | "failed" | "stopped";
+export type SubagentHelperTone = "queued" | "running" | "waiting" | "done" | "failed" | "stopped";
 
-export function subagentHelperTone(
-  state: SubagentRunSnapshot["state"],
-): SubagentHelperTone {
+export function subagentHelperTone(state: SubagentRunSnapshot["state"]): SubagentHelperTone {
   switch (state) {
     case "queued":
     case "starting":
@@ -66,24 +59,16 @@ export const SUBAGENT_HELPER_TONE_DOT: Record<SubagentHelperTone, string> = {
   stopped: "bg-tertiary",
 };
 
-export function subagentHelperIsActive(
-  state: SubagentRunSnapshot["state"] | "unknown",
-): boolean {
+export function subagentHelperIsActive(state: SubagentRunSnapshot["state"] | "unknown"): boolean {
   return (
-    state === "queued" ||
-    state === "starting" ||
-    state === "running" ||
-    state === "needs_attention"
+    state === "queued" || state === "starting" || state === "running" || state === "needs_attention"
   );
 }
 
 /** A window keeps the saved transcripts it has read for at most this many helpers. */
 export const MAX_SAVED_SUBAGENT_HELPER_TRANSCRIPTS = 32;
 
-export type SavedSubagentHelperTranscripts = ReadonlyMap<
-  string,
-  SubagentTranscriptV1
->;
+export type SavedSubagentHelperTranscripts = ReadonlyMap<string, SubagentTranscriptV1>;
 
 /**
  * Keep the newest copy of a saved transcript. Returns the same map when the
@@ -165,11 +150,7 @@ const GENERIC_FAILURES = new Set([
  * whole text, so a reason cut short upstream still maps by its start.
  */
 const RUNNER_REASONS: ReadonlyArray<readonly [string, RegExp, string]> = [
-  [
-    "The child reached its turn limit.",
-    /the child reached its turn limit\./giu,
-    "It ran out of turns.",
-  ],
+  ["The child reached its turn limit.", /the child reached its turn limit\./giu, "It ran out of turns."],
   [
     "The child reached its tool-call limit.",
     /the child reached its tool-call limit\./giu,
@@ -180,11 +161,7 @@ const RUNNER_REASONS: ReadonlyArray<readonly [string, RegExp, string]> = [
     /the child reserved its remaining deadline for reporting\./giu,
     "It ran short of time and stopped to write its report.",
   ],
-  [
-    "The child reached its output limit.",
-    /the child reached its output limit\./giu,
-    "Its reply grew too long.",
-  ],
+  ["The child reached its output limit.", /the child reached its output limit\./giu, "Its reply grew too long."],
   [
     "The child reached its event limit.",
     /the child reached its event limit\./giu,
@@ -230,11 +207,7 @@ const RUNNER_REASONS: ReadonlyArray<readonly [string, RegExp, string]> = [
     /these are incomplete, unverified partial findings\./giu,
     "Its findings so far may be incomplete.",
   ],
-  [
-    "The child could not complete this task.",
-    /the child (?:model )?could not complete this task\./giu,
-    "",
-  ],
+  ["The child could not complete this task.", /the child (?:model )?could not complete this task\./giu, ""],
   ["This helper couldn't finish.", /this helper couldn't finish\./giu, ""],
 ];
 
@@ -260,13 +233,10 @@ function plainTruncatedRunnerReason(text: string): string {
  * A failed helper's reason in plain words, or null when it only says the
  * helper did not finish. Text the runner did not write passes through.
  */
-export function subagentFailureReason(
-  error: string | undefined,
-): string | null {
+export function subagentFailureReason(error: string | undefined): string | null {
   let text = error?.trim().replace(/\s+/gu, " ");
   if (!text || GENERIC_FAILURES.has(text.toLocaleLowerCase())) return null;
-  for (const [, pattern, plain] of RUNNER_REASONS)
-    text = text.replace(pattern, ` ${plain} `);
+  for (const [, pattern, plain] of RUNNER_REASONS) text = text.replace(pattern, ` ${plain} `);
   text = plainTruncatedRunnerReason(text.trim());
   // Sentences the replacements produced twice read once.
   const seen = new Set<string>();
@@ -326,9 +296,7 @@ export function subagentHelperProblem(
     outcome = "It timed out";
   } else if (tone === "failed") {
     const reason = subagentFailureReason(run.error);
-    text = reason
-      ? `This helper couldn't finish. ${reason}`
-      : "This helper couldn't finish.";
+    text = reason ? `This helper couldn't finish. ${reason}` : "This helper couldn't finish.";
     outcome = "It failed";
   } else {
     text = `This helper stopped early${after}.`;
@@ -342,10 +310,7 @@ export function subagentHelperProblem(
 }
 
 /** A helper in this chat, as far as matching an approval to it needs. */
-export type SubagentHelperPeer = Pick<
-  SubagentRunSnapshot,
-  "runId" | "label"
-> & {
+export type SubagentHelperPeer = Pick<SubagentRunSnapshot, "runId" | "label"> & {
   state: SubagentRunSnapshot["state"] | "unknown";
 };
 
@@ -373,10 +338,8 @@ export function subagentHelperApprovalsFor(
   const labelOwned =
     subagentHelperIsActive(run.state) &&
     !helpers.some(
-      (other) =>
-        other.runId !== run.runId &&
-        other.label === run.label &&
-        subagentHelperIsActive(other.state),
+    (other) =>
+      other.runId !== run.runId && other.label === run.label && subagentHelperIsActive(other.state),
     );
   const owned: ApprovalPrompt[] = [];
   for (const approval of approvals) {
@@ -415,8 +378,7 @@ export function withSubagentApprovalWaitSnapshots(
   let changed = false;
   const next = runs.map((run) => {
     if (run.state !== "running" || run.version !== 2) return run;
-    if (subagentHelperApprovalsFor(run, approvals, helpers).length === 0)
-      return run;
+    if (subagentHelperApprovalsFor(run, approvals, helpers).length === 0) return run;
     changed = true;
     return {
       ...run,
@@ -429,15 +391,10 @@ export function withSubagentApprovalWaitSnapshots(
 
 /** The same overlay for run views that carry a snapshot. */
 export function withSubagentApprovalWaitViews<
-  T extends {
-    state: SubagentRunSnapshot["state"];
-    snapshot?: SubagentRunSnapshot;
-  },
+  T extends { state: SubagentRunSnapshot["state"]; snapshot?: SubagentRunSnapshot },
 >(views: readonly T[], approvals: readonly ApprovalPrompt[]): readonly T[] {
   if (approvals.length === 0) return views;
-  const snapshots = views.flatMap((view) =>
-    view.snapshot ? [view.snapshot] : [],
-  );
+  const snapshots = views.flatMap((view) => (view.snapshot ? [view.snapshot] : []));
   const overlaid = withSubagentApprovalWaitSnapshots(snapshots, approvals);
   if (overlaid === snapshots) return views;
   const byRun = new Map(overlaid.map((run) => [run.runId, run]));
@@ -458,15 +415,12 @@ export function subagentHelperHasActiveHelpers(
 ): boolean {
   return views.some(
     (view) =>
-      !view.terminal &&
-      view.snapshot?.version === 2 &&
-      view.snapshot.parentRunId === runId,
+      !view.terminal && view.snapshot?.version === 2 && view.snapshot.parentRunId === runId,
   );
 }
 
 /** Shown when a helper's saved conversation could not be read. */
-export const SUBAGENT_TRANSCRIPT_REFRESH_ERROR =
-  "Couldn't load this helper's conversation.";
+export const SUBAGENT_TRANSCRIPT_REFRESH_ERROR = "Couldn't load this helper's conversation.";
 
 /**
  * Why this window should read a helper's saved conversation again, or null.
@@ -492,8 +446,7 @@ export function subagentHelperTranscriptRefetchReason(
 ): string | null {
   if (!merged.complete) return `gap:${merged.transcript?.revision ?? 0}`;
   if (!merged.transcript) {
-    if (!subagentHelperIsActive(run.state))
-      return streamingHere ? null : `final:${run.revision}`;
+    if (!subagentHelperIsActive(run.state)) return streamingHere ? null : `final:${run.revision}`;
     return streamingHere ? "join" : `join:${run.revision}`;
   }
   if (streamingHere) return null;
@@ -505,9 +458,7 @@ export function subagentHelperTranscriptRefetchReason(
  * already read at that revision or later answers it. A gap, or a join whose
  * updates stream here, always reads.
  */
-export function subagentHelperRefetchSkipRevision(
-  reason: string,
-): number | undefined {
+export function subagentHelperRefetchSkipRevision(reason: string): number | undefined {
   const match = /^(?:run:[a-z_]+|join|final):(\d+)$/u.exec(reason);
   return match ? Number(match[1]) : undefined;
 }
@@ -520,10 +471,7 @@ export function subagentHelperRefetchSkipRevision(
 export function subagentHelperRefetchAwaitsFinal(reason: string): boolean {
   if (reason.startsWith("final:")) return true;
   const match = /^run:([a-z_]+):\d+$/u.exec(reason);
-  return (
-    match !== null &&
-    !subagentHelperIsActive(match[1] as SubagentRunSnapshot["state"])
-  );
+  return match !== null && !subagentHelperIsActive(match[1] as SubagentRunSnapshot["state"]);
 }
 
 /**
@@ -533,23 +481,17 @@ export function subagentHelperRefetchAwaitsFinal(reason: string): boolean {
  * a helper that really wrote nothing settles once the reader's bounded
  * re-reads run out.
  */
-export function subagentTranscriptIsFinal(
-  transcript: SubagentTranscriptV1,
-): boolean {
-  return (
-    transcript.entries.some((entry) => entry.kind === "message") &&
-    transcript.entries.every(
-      (entry) =>
-        entry.kind !== "message" ||
-        (entry.finishedAt !== undefined &&
-          entry.steps.every(
-            (step) =>
-              !("status" in step) ||
-              (step.status !== "pending" &&
-                step.status !== "awaiting_approval" &&
-                step.status !== "running"),
-          )),
-    )
+export function subagentTranscriptIsFinal(transcript: SubagentTranscriptV1): boolean {
+  if (!transcript.entries.some((entry) => entry.kind === "message")) return false;
+  return transcript.entries.every(
+    (entry) =>
+      entry.kind !== "message" ||
+      (entry.finishedAt !== undefined &&
+        entry.steps.every(
+          (step) =>
+            !("status" in step) ||
+            (step.status !== "pending" && step.status !== "awaiting_approval" && step.status !== "running"),
+        )),
   );
 }
 
@@ -561,17 +503,11 @@ export function subagentHelperTimeline(
   runState: SubagentRunSnapshot["state"],
 ): GenerationTimeline {
   let status: GenerationTimelineStatus;
-  if (entry.finishedAt === undefined && subagentHelperIsActive(runState))
-    status = "running";
+  if (entry.finishedAt === undefined && subagentHelperIsActive(runState)) status = "running";
   else if (entry.finishedAt !== undefined) status = "completed";
   else {
     const tone = subagentHelperTone(runState);
-    status =
-      tone === "failed"
-        ? "failed"
-        : tone === "stopped"
-          ? "cancelled"
-          : "completed";
+    status = tone === "failed" ? "failed" : tone === "stopped" ? "cancelled" : "completed";
   }
   return {
     version: GENERATION_TIMELINE_VERSION,
@@ -599,12 +535,7 @@ function isToolOnlyMessage(entry: SubagentTranscriptMessageEntry): boolean {
   const tools = entry.steps.filter(isToolStep);
   return (
     tools.length > 0 &&
-    !tools.some(
-      (step) =>
-        isExtractionStep(step) ||
-        isRecordingStep(step) ||
-        isQuestionnaireStep(step),
-    )
+    !tools.some((step) => isExtractionStep(step) || isRecordingStep(step) || isQuestionnaireStep(step))
   );
 }
 
@@ -613,12 +544,9 @@ function isToolOnlyMessage(entry: SubagentTranscriptMessageEntry): boolean {
  * become one message, so their steps read as one feed instead of a stack of
  * single-step feeds.
  */
-export function subagentHelperBlocks(
-  transcript: SubagentTranscriptV1,
-): SubagentHelperBlock[] {
+export function subagentHelperBlocks(transcript: SubagentTranscriptV1): SubagentHelperBlock[] {
   const blocks: SubagentHelperBlock[] = [];
-  let group: { index: number; parts: SubagentTranscriptMessageEntry[] } | null =
-    null;
+  let group: { index: number; parts: SubagentTranscriptMessageEntry[] } | null = null;
   const flush = () => {
     if (!group) return;
     const first = group.parts[0]!;
@@ -631,16 +559,9 @@ export function subagentHelperBlocks(
             text: "",
             steps: group.parts.flatMap((part) => part.steps),
             startedAt: first.startedAt,
-            ...(last.finishedAt === undefined
-              ? {}
-              : { finishedAt: last.finishedAt }),
+            ...(last.finishedAt === undefined ? {} : { finishedAt: last.finishedAt }),
           };
-    blocks.push({
-      kind: "message",
-      key: `message-${group.index}`,
-      index: group.index,
-      entry,
-    });
+    blocks.push({ kind: "message", key: `message-${group.index}`, index: group.index, entry });
     group = null;
   };
   transcript.entries.forEach((entry, index) => {
