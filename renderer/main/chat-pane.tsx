@@ -153,7 +153,7 @@ import {
 import { BtwCard, reduceBtwView, type BtwLiveView } from "../components/btw-card";
 import { ModelPicker } from "../components/model-picker";
 import { AgentModelPopover } from "../components/agent-model-popover";
-import { agentSliderComposerState, agentSliderStepTarget } from "../lib/agent-slider-view";
+import { agentSliderComposerState, agentSliderStepTarget, agentSliderStopSetsEffort } from "../lib/agent-slider-view";
 import { RemoteMachinePicker } from "../components/remote-new-chat-pickers";
 import { useNewChatMachines } from "../lib/hosts/use-new-chat-machines";
 import {
@@ -618,8 +618,8 @@ export function ChatPane({ chatId }: { chatId: string }) {
           : (providers.data ?? []),
     [agentBlockedSurface, providers.data, settings.data],
   );
-  // On an Agent Slider stop the stop sets the effort, so the effort control
-  // hides; Custom (no stop matches) shows it as before.
+  // On an Agent Slider stop with its own effort the stop sets it, so the
+  // effort control hides; a stop without one, and Custom, show it as before.
   const agentSlider = settings.data?.agentSlider;
   const agentSliderState = React.useMemo(
     () =>
@@ -630,7 +630,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
       ),
     [agentSlider, pickerProviders, settings.data?.hiddenModelsByProvider, providerId, model, selectionThinkingLevel],
   );
-  const onAgentSliderStop = agentSliderState ? !agentSliderState.position.custom : false;
+  const stopSetsEffort = agentSliderStopSetsEffort(agentSliderState);
   const modelReadinessMessage = React.useMemo(() => {
     if (providers.isLoading) return "Loading chat models…";
     if (!selectedProvider) {
@@ -4767,7 +4767,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
                 onCancelCompact={draft ? undefined : () => chatsApi.cancelCompact(chatId)}
                 onLogoutProvider={logoutProvider}
                 thinkingControl={
-                  onAgentSliderStop && !localReasoningVisibilitySupported ? undefined : onAgentSliderStop ? (
+                  stopSetsEffort && !localReasoningVisibilitySupported ? undefined : stopSetsEffort ? (
                     <ReasoningVisibilityControl
                       visible={showLocalModelReasoning}
                       disabled={thinkingSaving || isStartingGeneration || isGenerating}
