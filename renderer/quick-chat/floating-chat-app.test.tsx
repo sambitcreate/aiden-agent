@@ -710,6 +710,7 @@ test("external hide and reopen preserve State 2 mini-modal stage and draft witho
 test("an Agent Slider stop picked in Quick Chat sends its effort with the first message, the turn and later picks", async () => {
   // A save can be held open (a pick just before Send) or refused (main busy).
   let holdSave: Promise<void> | undefined;
+  let releaseSave = () => {};
   let refuseSave = false;
   const quickChat = (id: unknown, providerId: unknown, model: unknown, level?: unknown): Chat => ({
     id: String(id),
@@ -822,7 +823,6 @@ test("an Agent Slider stop picked in Quick Chat sends its effort with the first 
 
     // Send right after a pick waits for the pick to be saved on the chat, so
     // the turn and the chat's stored stop agree.
-    let releaseSave = () => {};
     holdSave = new Promise<void>((resolve) => {
       releaseSave = resolve;
     });
@@ -834,19 +834,11 @@ test("an Agent Slider stop picked in Quick Chat sends its effort with the first 
       }
       return screen.findByRole("slider", { name: "Agent Slider" });
     };
-    const sliderClosed = async (trigger: HTMLElement) => {
-      if (screen.queryByRole("slider", { name: "Agent Slider" })) {
-        await act(async () => {
-          fireEvent.click(trigger);
-        });
-      }
-      await waitFor(() => assert.equal(screen.queryByRole("slider", { name: "Agent Slider" }), null));
-    };
     const pickedQuick = await sliderOpen(modalTrigger);
     await act(async () => {
       fireEvent.keyDown(pickedQuick, { key: "ArrowLeft" });
     });
-    await sliderClosed(modalTrigger);
+    // The popover stays open across Send, as it would under the pointer.
     const followUp = screen.getByTestId("quick-chat-input");
     await waitFor(() => {
       fireEvent.change(followUp, { target: { value: "Now quickly" } });
@@ -860,6 +852,19 @@ test("an Agent Slider stop picked in Quick Chat sends its effort with the first 
       false,
       "the turn waits for the pick's save",
     );
+    // A second pick while that send is in flight can't overtake it.
+    const savesBeforeLatePick = calls.filter((call) => call.channel === "chats:setModel").length;
+    await act(async () => {
+      fireEvent.keyDown(pickedQuick, { key: "ArrowRight" });
+    });
+    assert.equal(calls.filter((call) => call.channel === "chats:setModel").length, savesBeforeLatePick);
+    assert.match(modalTrigger.getAttribute("aria-label") ?? "", /Quick on the Agent Slider/u);
+    // The trigger is off while sending; Escape still closes the open popover.
+    assert.equal((modalTrigger as HTMLButtonElement).disabled, true);
+    await act(async () => {
+      fireEvent.keyDown(pickedQuick, { key: "Escape" });
+    });
+    await waitFor(() => assert.equal(screen.queryByRole("slider", { name: "Agent Slider" }), null));
     await act(async () => {
       releaseSave();
       holdSave = undefined;
@@ -899,6 +904,7 @@ test("an Agent Slider stop picked in Quick Chat sends its effort with the first 
       assert.match(quickTrigger.getAttribute("aria-label") ?? "", /Quick on the Agent Slider/u),
     );
   } finally {
+    releaseSave();
     qc.clear();
   }
 });

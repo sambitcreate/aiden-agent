@@ -297,7 +297,13 @@ function AgentModelPopoverInner({
     onSelectStop(stop.providerId, stop.model, stop.thinkingLevel);
   };
 
+  const busyReason = "You can change the agent after this response finishes";
   const chooseFromList = (entry: ModelEntry) => {
+    // A list opened before a send or reply began stays open; picks wait.
+    if (disabled) {
+      toast.info(busyReason);
+      return;
+    }
     if (entry.value !== selectedValue) onChange(entry.providerId, entry.model);
     recordRecent(entry.value);
     closePopover();
@@ -307,6 +313,10 @@ function AgentModelPopoverInner({
   const reassignView = reassignStop ? views.find((stop) => stop.id === reassignStop.id) : undefined;
   const reassign = async (entry: ModelEntry) => {
     if (!slider || !reassignStop || saving) return;
+    if (disabled) {
+      toast.info(busyReason);
+      return;
+    }
     const provider = providers.find((candidate) => candidate.id === entry.providerId);
     const { levels, defaultLevel } = composerThinkingLevels(provider, entry.model, entry.info?.reasoning);
     const level = levels.length ? defaultLevel : undefined;
@@ -447,7 +457,7 @@ function AgentModelPopoverInner({
                   homeIndex={homeIndex}
                   customDetail={customDetail}
                   disabled={disabled}
-                  disabledReason={disabled ? "You can change the agent after this response finishes" : undefined}
+                  disabledReason={disabled ? busyReason : undefined}
                   onSelectStop={selectStop}
                   onUnavailableStop={(index) => {
                     const stop = views[index];

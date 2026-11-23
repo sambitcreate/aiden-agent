@@ -535,7 +535,7 @@ export function FloatingComposer({
             settingsLoaded={settingsLoaded}
             onChange={onModelChange}
             onSelectStop={onSelectStop}
-            disabled={isGenerating}
+            disabled={isGenerating || sending}
             hiddenModelsByProvider={hiddenModelsByProvider}
             onOpenSettings={(section) => void quickChatApi.openSettings(section)}
             beforeOpen={onBeforePopoverOpen}
