@@ -90,6 +90,15 @@ The owner still felt a delay after pressing Send in a Bot chat. The message did 
 
 The owner still saw "Sending…" under a desktop Bot message when the Mac took more than 2 s to admit it, and asked that the message simply read as sent. The desktop echo no longer has a slow label: it looks sent from the press, and the "Getting ready" line below the transcript is the only sign of a slow start. A failed send still drops the echo and shows its error. The phones keep their 2 s "Sending…" (offline is a real state there); the Mac's admission time is unchanged.
 
+## Follow-up: no "Sending…" on the phones, and a shorter "Getting ready" (2026-11-22)
+
+The owner found every Bot message sat on "Getting ready" for 10 s or more, on the Mac and over Tailscale from the phone, and asked that the phone stop saying "Sending…" too.
+
+- Cause: since the Bot execution layer (2026-11-03) every model step re-checks the Bot's authority before its provider request: admission, revalidation, the request-phase registry refresh and its tool and system-section admissions. Each check took a full capability catalog snapshot, which reads every provider's credentials and auth, Mac files, shell, MCP connections and skills. A clean profile took 17 snapshots between Send and the provider request; the owner's Mac, with many providers, connectors and skills, showed 9–19 s between a generation starting and its model request in the COS Bot's `session.sqlite`. Turns before the execution layer showed about 10 ms.
+- Fix: `BotCapabilityCatalogMainService.snapshotForRuntime` shares one snapshot between reads with the same Bot, retained bindings and providers while the runtime inventory revision (`botRuntimeInventoryLeases.revision()`) is unchanged, for at most 3 s. Every hooked settings, provider, MCP, skill or Bot computer change moves the revision and is read at once; unhooked drift is read within 3 s. Concurrent reads share one inspection, each caller gets its own copy, a failed inspection is never reused, and one caller's cancel leaves the others. The same clean-profile turn now takes one snapshot. `aiden serve` (`packages/cli/src/bots.ts`) gets the same reuse, keyed to its own inventory revision, which its config-file watcher moves.
+- iOS and Android: a message on its way has no "Sending…" caption at any wait. It is drawn as sent from the press; the status line ("Getting ready", then "Thinking" once the model starts) carries the wait. Queued, Steer and "Couldn't send · Try again" are unchanged.
+- Not changed: the request phase still refreshes the Bot's registry a second time per step, and the capability store keeps writing its Keychain rollback anchor on each commit. Both are measurable follow-ups if "Getting ready" is still slow on the owner's Mac.
+
 ## Out of scope for this pass
 
 Desktop read snapshots that survive a relaunch (cache-first plan D1, D3), the model catalog disk caches on both phones, Files/Git caches (I7, A5), and the paired-Mac remote Bot open on old hosts. These stay on the cache-first plan.

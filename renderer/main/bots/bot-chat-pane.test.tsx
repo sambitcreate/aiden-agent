@@ -2510,6 +2510,23 @@ test("a repeated approval requests Always truthfully, preserves the draft and Ma
   await waitFor(() => assert.equal(router.state.location.href, "/settings?section=approvals"));
 });
 
+test("the first approval card already offers Always allow, without a repeat note or Auto", async () => {
+  const USABLE = [{ id: "openai", models: ["fast"], hasKey: true, needsKey: true }];
+  const calls = await mountChat({
+    "bots:live:subscribe": () => snapshot(), "bots:pendingApprovals": () => [],
+    "bots:approve": () => ({ decided: true }), "bots:allowed:list": () => [],
+    "settings:get": () => ({ approvalMode: "ask" }), "providers:list": () => USABLE,
+  });
+  act(() => emitBotTestNotification("bots:approval", { botId: "bot-1", waitId: "first-1", toolCallId: "call-a", toolName: "composio", summary: "Composio · Gmail: Send email", always: { key: "k", count: 0 }, autoWouldJudge: true }));
+  const card = await screen.findByRole("region", { name: /^Review before/u });
+  within(card).getByText("Composio · Gmail: Send email");
+  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 20)); });
+  assert.equal(within(card).queryByText(/You’ve allowed this/u), null);
+  assert.equal(within(card).queryByRole("button", { name: "Switch to Auto" }), null);
+  await chooseBotAlways(card);
+  await waitFor(() => assert.deepEqual(calls.filter((call) => call.channel === "bots:approve").map((call) => call.args), [[{ waitId: "first-1", decision: "allow", scope: "always" }]]));
+});
+
 test("in Ask, a repeated approval also offers Auto, which saves the Mac's mode through settings", async () => {
   const USABLE = [{ id: "openai", models: ["fast"], hasKey: true, needsKey: true }];
   let saved: unknown;

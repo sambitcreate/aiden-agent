@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import { constants as fsConstants } from "node:fs";
-import { chmod, lstat, open, readFile, readdir, rename, stat, unlink } from "node:fs/promises";
+import { chmod, lstat, open, readFile, readdir, rename, unlink } from "node:fs/promises";
 import path from "node:path";
 import {
   type AgentMessage,
@@ -331,15 +331,64 @@ async function isDisposablePi084Backup(backupPath: string, chatId: string, root:
 
 async function fileExists(filePath: string): Promise<boolean> {
   try {
-    return (await stat(filePath)).isFile();
+    const metadata = await lstat(filePath);
+    return metadata.isFile() && !metadata.isSymbolicLink();
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
     throw error;
   }
 }
 
-async function findMigrationJournals(root: string, chatId: string): Promise<string[]> {
+/**
+ * Lightweight directory-tree signature for `root`: catches any created,
+ * renamed, deleted, or in-place-modified journal/migration/backup file across
+ * `root` and its subdirectories via `readdir` + `lstat` without opening `.jsonl`
+ * files, and fails closed if any symbolic link is encountered.
+ */
+async function computePiJournalDirSignature(root: string): Promise<string> {
+  const parts: string[] = [];
+  const directories: Array<{ abs: string; rel: string }> = [{ abs: root, rel: "" }];
+  while (directories.length > 0) {
+    const current = directories.pop()!;
+    const dirStat = await lstat(current.abs);
+    if (!dirStat.isDirectory() || dirStat.isSymbolicLink()) {
+      throw new Error("Pi journal storage root must be a directory.");
+    }
+    const entries = await readdir(current.abs, { withFileTypes: true });
+    entries.sort((left, right) => (left.name < right.name ? -1 : left.name > right.name ? 1 : 0));
+    parts.push(`d:${current.rel}:${dirStat.dev}:${dirStat.ino}:${dirStat.mtimeMs}:${dirStat.ctimeMs}:${entries.length}`);
+    const fileEntries: Array<{ abs: string; rel: string }> = [];
+    for (const entry of entries) {
+      if (entry.isSymbolicLink()) {
+        throw new Error("Pi journal storage contains an uninspectable symbolic link.");
+      }
+      const rel = current.rel ? `${current.rel}/${entry.name}` : entry.name;
+      if (entry.isDirectory()) {
+        directories.push({ abs: path.join(current.abs, entry.name), rel });
+      } else if (entry.name.includes(".jsonl")) {
+        fileEntries.push({ abs: path.join(current.abs, entry.name), rel });
+      }
+    }
+    if (fileEntries.length > 0) {
+      const fileStats = await Promise.all(fileEntries.map((item) => lstat(item.abs)));
+      for (let i = 0; i < fileEntries.length; i++) {
+        const st = fileStats[i]!;
+        if (st.isSymbolicLink()) {
+          throw new Error("Pi journal storage contains an uninspectable symbolic link.");
+        }
+        parts.push(`f:${fileEntries[i]!.rel}:${st.dev}:${st.ino}:${st.mode}:${st.size}:${st.mtimeMs}:${st.ctimeMs}`);
+      }
+    }
+  }
+  return parts.join("\n");
+}
+
+async function scanMigrationJournalIds(root: string, chatId: string): Promise<{
+  matches: string[];
+  allLegacyChatIds: Set<string>;
+}> {
   const matches: string[] = [];
+  const allLegacyChatIds = new Set<string>();
   const directories = [root];
   while (directories.length > 0) {
     const directory = directories.pop()!;
@@ -349,18 +398,37 @@ async function findMigrationJournals(root: string, chatId: string): Promise<stri
         directories.push(candidate);
       } else if (entry.name.endsWith(".jsonl")) {
         const prefix = await readJournalPrefix(candidate).catch(() => "");
-        if (
-          journalHeaderOwnsChat(prefix, chatId) ||
-          (currentJournalHeaderOwnsChat(prefix, chatId) &&
-            ((await fileExists(`${candidate}.v3-backup`)) ||
-              (await fileExists(`${candidate}.migration-v1.json`))))
-        ) {
+        if (!prefix) continue;
+        const firstLine = prefix.split("\n", 1)[0] ?? "";
+        const isLegacyForChat = journalHeaderOwnsChat(prefix, chatId);
+        const hasPendingBackup =
+          (await fileExists(`${candidate}.v3-backup`)) ||
+          (await fileExists(`${candidate}.migration-v1.json`));
+        if (isLegacyForChat || (currentJournalHeaderOwnsChat(prefix, chatId) && hasPendingBackup)) {
           matches.push(candidate);
+        }
+        // Record any chat ID that owns a legacy or mid-migration journal so the
+        // brand-new chat fast path never skips an existing migration candidate.
+        try {
+          const parsed = JSON.parse(firstLine) as { id?: unknown; metadata?: { chatId?: unknown } } | null;
+          if (parsed && typeof parsed === "object") {
+            const ownerId =
+              typeof parsed.metadata?.chatId === "string"
+                ? parsed.metadata.chatId
+                : typeof parsed.id === "string"
+                  ? parsed.id
+                  : undefined;
+            if (ownerId && (hasPendingBackup || journalHeaderOwnsChat(prefix, ownerId))) {
+              allLegacyChatIds.add(ownerId);
+            }
+          }
+        } catch {
+          // Malformed header is handled by normal open/quarantine paths.
         }
       }
     }
   }
-  return matches;
+  return { matches, allLegacyChatIds };
 }
 
 /** Preserve a valid durable prefix when only the final JSONL write was torn. */
@@ -480,7 +548,14 @@ export async function projectVisibleHistoryWithoutSkills<M extends PiSessionMeta
       : [];
   const durableBranch = await session.getBranch();
   const notesAfter = canvasStatusNotesByMessage(durableBranch);
-  const visible: PiSessionEntry[] = [];
+  const visibleMessageIds = new Set(messages.map((message) => message.id));
+  const attachedNotes = workspaceAttachedNotesByMessage(durableBranch, visibleMessageIds);
+  const visible: PiSessionEntry[] = [
+    ...attachedNotes.beforeFirst.map((note): PiSessionEntry => ({
+      ...note,
+      seq: -messages.length * 2 - 1,
+    })),
+  ];
   for (const [index, message] of messages.entries()) {
     const marker: PiSessionEntry = {
       type: "custom", id: `visible-skill-free-marker-${message.id}`, parentId: null,
@@ -499,6 +574,12 @@ export async function projectVisibleHistoryWithoutSkills<M extends PiSessionMeta
       ...(notesAfter.get(message.id) ?? []).map((note): PiSessionEntry => ({
         type: "message", id: `visible-skill-free-note-${note.id}`, parentId: null,
         seq: marker.seq, timestamp: note.timestamp, message: note.message,
+      })),
+      // Workspace-attached transition notes stay anchored to the turn where
+      // the chat moved folders rather than sliding ahead of newer messages.
+      ...(attachedNotes.afterMessage.get(message.id) ?? []).map((note): PiSessionEntry => ({
+        ...note,
+        seq: marker.seq,
       })),
     );
   }
@@ -566,6 +647,45 @@ export async function projectVisibleHistoryWithoutSkills<M extends PiSessionMeta
  * only canvas counts, page findings and the one-time design-system offer
  * (colours and fonts reduced to a strict shape), never skill data.
  */
+function workspaceAttachedNotesByMessage(
+  branch: readonly PiSessionEntry[],
+  visibleMessageIds: ReadonlySet<string>,
+): {
+  beforeFirst: Extract<PiSessionEntry, { type: "message" }>[];
+  afterMessage: Map<string, Extract<PiSessionEntry, { type: "message" }>[]>;
+} {
+  const beforeFirst: Extract<PiSessionEntry, { type: "message" }>[] = [];
+  const afterMessage = new Map<string, Extract<PiSessionEntry, { type: "message" }>[]>();
+  let lastVisibleMessageId: string | undefined;
+  for (const entry of branch) {
+    if (entry.type === "custom" && entry.customType === AIDEN_CHAT_MESSAGE_MARKER) {
+      const id = markerId(entry.data);
+      if (id && visibleMessageIds.has(id)) lastVisibleMessageId = id;
+      continue;
+    }
+    if (entry.type !== "custom" || entry.customType !== AIDEN_WORKSPACE_ATTACHED_MARKER) continue;
+    const info = parseWorkspaceAttachedBoundaryData(entry.data);
+    if (!info) continue;
+    const synthetic: Extract<PiSessionEntry, { type: "message" }> = {
+      type: "message",
+      id: `visible-skill-free-workspace-attached-${entry.id}`,
+      parentId: null,
+      seq: -1,
+      timestamp: entry.timestamp,
+      message: workspaceAttachedBoundaryMessage(info, entry.timestamp),
+    };
+    if (lastVisibleMessageId === undefined) {
+      beforeFirst.push(synthetic);
+    } else {
+      afterMessage.set(lastVisibleMessageId, [
+        ...(afterMessage.get(lastVisibleMessageId) ?? []),
+        synthetic,
+      ]);
+    }
+  }
+  return { beforeFirst, afterMessage };
+}
+
 function canvasStatusNotesByMessage(branch: readonly PiSessionEntry[]): Map<string, Extract<PiSessionEntry, { type: "message" }>[]> {
   const notes = new Map<string, Extract<PiSessionEntry, { type: "message" }>[]>();
   let after: string | undefined;
@@ -782,6 +902,96 @@ export async function recordPiEffectRecoveryBoundary(
   });
 }
 
+const AIDEN_WORKSPACE_ATTACHED_MARKER = "aiden.workspace-attached.v1";
+
+export interface PiWorkspaceAttachedBoundaryInfo {
+  targetWorkspaceId: string;
+  targetWorkspaceName: string;
+  targetFolderPath: string;
+  copiedPaths?: readonly string[];
+}
+
+function parseWorkspaceAttachedBoundaryData(data: unknown): PiWorkspaceAttachedBoundaryInfo | null {
+  if (!data || typeof data !== "object" || Array.isArray(data)) return null;
+  const record = data as Record<string, unknown>;
+  if (
+    typeof record.targetWorkspaceId !== "string" ||
+    typeof record.targetFolderPath !== "string"
+  ) {
+    return null;
+  }
+  const targetWorkspaceName =
+    typeof record.targetWorkspaceName === "string" && record.targetWorkspaceName.trim()
+      ? record.targetWorkspaceName
+      : path.basename(record.targetFolderPath) || record.targetWorkspaceId;
+  const copiedPaths = Array.isArray(record.copiedPaths)
+    ? record.copiedPaths.filter((item): item is string => typeof item === "string").slice(0, 40)
+    : [];
+  return {
+    targetWorkspaceId: record.targetWorkspaceId,
+    targetWorkspaceName,
+    targetFolderPath: record.targetFolderPath,
+    copiedPaths,
+  };
+}
+
+function workspaceAttachedBoundaryMessage(
+  info: PiWorkspaceAttachedBoundaryInfo,
+  timestamp = Date.now(),
+): AgentMessage {
+  const copied = (info.copiedPaths ?? []).slice(0, 40);
+  const copiedSuffix = copied.length > 0
+    ? ` Copied scratch files now in this workspace: ${copied.join(", ")}.`
+    : "";
+  return {
+    role: "assistant",
+    content: [
+      {
+        type: "text",
+        text:
+          `Aiden workspace boundary: this conversation was attached from its temporary private folder to workspace "${info.targetWorkspaceName}" (${info.targetFolderPath}).` +
+          " Earlier file paths or tool outputs in this history came from the previous folder. Inspect the current workspace before assuming earlier files or commands apply here." +
+          copiedSuffix,
+      },
+    ],
+    api: "openai-completions",
+    provider: "aiden",
+    model: "workspace-attached",
+    usage: {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 0,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    },
+    stopReason: "stop",
+    timestamp,
+  };
+}
+
+/**
+ * Append a workspace-transition boundary into an existing Pi journal so the
+ * model knows earlier paths/tool outputs came from the chat's private scratch
+ * folder and later turns now run inside the attached project workspace.
+ */
+export async function recordPiWorkspaceAttachedBoundary(
+  session: PiSessionPort,
+  info: PiWorkspaceAttachedBoundaryInfo,
+): Promise<void> {
+  const copied = (info.copiedPaths ?? []).slice(0, 40);
+  const message = workspaceAttachedBoundaryMessage(info);
+  await appendPiTransaction(session, async () => {
+    await session.appendMessage(message);
+    await session.appendCustomEntry(AIDEN_WORKSPACE_ATTACHED_MARKER, {
+      targetWorkspaceId: info.targetWorkspaceId,
+      targetWorkspaceName: info.targetWorkspaceName,
+      targetFolderPath: info.targetFolderPath,
+      copiedPaths: copied,
+    });
+  });
+}
+
 const FORK_SUMMARY_ENTRY_PREFIX = "aiden-fork-summary-";
 
 function forkSummaryFileSection(tag: string, paths: readonly string[]): string {
@@ -922,6 +1132,15 @@ export class PiCompactionSessionStore {
   private readonly opening = new Map<string, Promise<PiOpenChatIfEligibleResult>>();
   private readonly quarantined = new Map<string, Promise<void>>();
   private indexMutation: Promise<void> = Promise.resolve();
+  /** Monotonic counter incremented on every store disk mutation to fence `dirIndex`. */
+  private dirMutationVersion = 0;
+  /** Directory-signature-validated set of chat IDs already present on disk. */
+  private dirIndex?: {
+    root: string;
+    signature: string;
+    knownChatIds: Set<string>;
+    legacyChatIds: Set<string>;
+  };
 
   constructor(private readonly options: PiCompactionSessionStoreOptions) {}
 
@@ -1018,6 +1237,8 @@ export class PiCompactionSessionStore {
   }
 
   private async quarantine(root: string, chatId: string, filePath: string): Promise<void> {
+    this.dirMutationVersion += 1;
+    this.dirIndex = undefined;
     const quarantined = `${filePath}.corrupt-${Date.now()}-${randomUUID()}`;
     await rename(filePath, quarantined);
     await this.rememberPath(root, chatId, quarantined);
@@ -1111,7 +1332,24 @@ export class PiCompactionSessionStore {
     };
     const migrationFailures: Array<{ path: string; error: unknown }> = [];
     const deferredMigrations: string[] = [];
-    const migrationPaths = await findMigrationJournals(root, chatId);
+    const scanStartVersion = this.dirMutationVersion;
+    const beforeSignature = await computePiJournalDirSignature(root).catch(() => undefined);
+    const knownBrandNew =
+      beforeSignature !== undefined &&
+      this.dirIndex !== undefined &&
+      this.dirIndex.root === root &&
+      this.dirIndex.signature === beforeSignature &&
+      !this.dirIndex.knownChatIds.has(chatId) &&
+      !this.dirIndex.legacyChatIds.has(chatId);
+    let migrationPaths: string[];
+    let scannedLegacyChatIds: Set<string> | undefined;
+    if (knownBrandNew) {
+      migrationPaths = [];
+    } else {
+      const scan = await scanMigrationJournalIds(root, chatId);
+      migrationPaths = scan.matches;
+      scannedLegacyChatIds = scan.allLegacyChatIds;
+    }
     for (const migrationPath of migrationPaths) {
       try {
         if (rollout && rolloutOptions) {
@@ -1125,6 +1363,8 @@ export class PiCompactionSessionStore {
             continue;
           }
         }
+        this.dirMutationVersion += 1;
+        this.dirIndex = undefined;
         const migration = await migratePiSessionJournal(migrationPath, chatId);
         await this.rememberPath(root, chatId, migration.receipt.backupPath);
         await this.rememberPath(root, chatId, migration.receiptPath);
@@ -1133,12 +1373,38 @@ export class PiCompactionSessionStore {
       }
     }
     const failedPaths = new Set(migrationFailures.map((failure) => path.resolve(failure.path)));
-    const matches = (await repo.list()).filter(
-      (metadata) =>
-        metadata.id === chatId &&
-        metadata.metadata?.kind === SESSION_METADATA_KIND &&
-        !failedPaths.has(path.resolve(metadata.path)),
-    );
+    let matches: Awaited<ReturnType<PiSessionRepositoryPort["list"]>>;
+    if (knownBrandNew) {
+      matches = [];
+    } else {
+      const listed = await repo.list();
+      matches = listed.filter(
+        (metadata) =>
+          metadata.id === chatId &&
+          metadata.metadata?.kind === SESSION_METADATA_KIND &&
+          !failedPaths.has(path.resolve(metadata.path)),
+      );
+      if (
+        beforeSignature !== undefined &&
+        migrationPaths.length === 0 &&
+        this.dirMutationVersion === scanStartVersion &&
+        this.opening.size <= 1
+      ) {
+        const afterScanSignature = await computePiJournalDirSignature(root).catch(() => undefined);
+        if (afterScanSignature === beforeSignature && this.dirMutationVersion === scanStartVersion) {
+          const knownChatIds = new Set<string>();
+          for (const metadata of listed) {
+            if (metadata.metadata?.kind === SESSION_METADATA_KIND) knownChatIds.add(metadata.id);
+          }
+          this.dirIndex = {
+            root,
+            signature: afterScanSignature,
+            knownChatIds,
+            legacyChatIds: scannedLegacyChatIds ?? new Set<string>(),
+          };
+        }
+      }
+    }
     // Pi lists newest sessions first. Validate the whole body and quarantine
     // a malformed duplicate before falling back to the next valid journal.
     let session: PiSessionPort<PiPersistentSessionMetadata> | undefined;
@@ -1178,6 +1444,8 @@ export class PiCompactionSessionStore {
     ) {
       return { session: undefined, reason: "v4_creation_rollout" };
     }
+    const createdNewSession = !session;
+    const createVersion = createdNewSession ? ++this.dirMutationVersion : this.dirMutationVersion;
     session ??= await repo.create({
       id: chatId,
       cwd: root,
@@ -1188,6 +1456,45 @@ export class PiCompactionSessionStore {
     await chmod(path.dirname(persisted.path), 0o700);
     await chmod(persisted.path, 0o600);
     await this.rememberPath(root, chatId, persisted.path);
+    if (createdNewSession) {
+      // Only advance `dirIndex` in place when no concurrent opener or external
+      // file could have appeared alongside `persisted.path`.
+      if (
+        this.dirIndex &&
+        this.dirIndex.root === root &&
+        this.opening.size <= 1 &&
+        this.dirMutationVersion === createVersion &&
+        beforeSignature !== undefined
+      ) {
+        const updatedSignature = await computePiJournalDirSignature(root).catch(() => undefined);
+        const beforeFiles = new Set(
+          beforeSignature.split("\n").filter((line) => line.startsWith("f:")).map((line) => line.split(":", 2)[1]),
+        );
+        const expectedRel = path.relative(root, persisted.path).split(path.sep).join("/");
+        const addedUnexpected =
+          updatedSignature === undefined ||
+          updatedSignature
+            .split("\n")
+            .filter((line) => line.startsWith("f:"))
+            .some((line) => {
+              const rel = line.split(":", 2)[1];
+              return rel !== expectedRel && !beforeFiles.has(rel);
+            });
+        if (
+          updatedSignature !== undefined &&
+          !addedUnexpected &&
+          this.opening.size <= 1 &&
+          this.dirMutationVersion === createVersion
+        ) {
+          this.dirIndex.knownChatIds.add(chatId);
+          this.dirIndex.signature = updatedSignature;
+        } else {
+          this.dirIndex = undefined;
+        }
+      } else {
+        this.dirIndex = undefined;
+      }
+    }
     this.sessions.set(chatId, session);
     return { session };
   }
@@ -1329,6 +1636,8 @@ export class PiCompactionSessionStore {
     });
 
     const { repo, root } = await this.repository();
+    this.dirMutationVersion += 1;
+    this.dirIndex = undefined;
     const session = await repo.create({
       id: targetChatId,
       cwd: root,
@@ -1339,6 +1648,7 @@ export class PiCompactionSessionStore {
       await chmod(path.dirname(persisted.path), 0o700);
       await chmod(persisted.path, 0o600);
       await this.rememberPath(root, targetChatId, persisted.path);
+      this.dirIndex = undefined;
       await session.importBranch(prefix);
     } catch (error) {
       await this.deleteChat(targetChatId).catch(() => undefined);
@@ -1360,6 +1670,22 @@ export class PiCompactionSessionStore {
     const branch = await opened.session.getBranch();
     const prefix = piJournalForkPrefix(branch, [{ sourceId: messageId, id: messageId }]);
     return prefix ? branch.slice(prefix.length) : undefined;
+  }
+
+  /**
+   * Record a workspace-transition boundary only when the chat already has a
+   * Pi journal. Never creates a journal for a chat without history.
+   */
+  async recordWorkspaceAttached(
+    chatId: string,
+    info: PiWorkspaceAttachedBoundaryInfo,
+  ): Promise<boolean> {
+    if (!SAFE_SESSION_ID.test(chatId)) return false;
+    if (!(await this.hasChatHistory(chatId))) return false;
+    const opened = await this.openChatIfEligible(chatId);
+    if (!opened.session) return false;
+    await recordPiWorkspaceAttachedBoundary(opened.session, info);
+    return true;
   }
 
   async deleteChat(chatId: string): Promise<void> {
@@ -1406,6 +1732,8 @@ export class PiCompactionSessionStore {
         }
       }
     }
+    this.dirMutationVersion += 1;
+    this.dirIndex = undefined;
     await this.mutateIndex(root, (next) => {
       delete next.chats[chatId];
     });

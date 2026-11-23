@@ -11,8 +11,10 @@ PRs compare the merge base and PR head using complete, NUL-delimited Git output.
 Rename detection is disabled so both the removed and added paths select work.
 `scripts/ci-changes.mjs` maps each path to seven areas: `desktop`, `apple`, `ios`,
 `android`, `cli`, `linux` and `catalog`. Only explicit prose documentation paths
-select nothing; contributor-instruction files such as `AGENTS.md` and the design
-guide are not treated as prose. Android-only and iOS-only PRs select their own
+(including root community docs such as `README.md`, `CONTRIBUTING.md`, `SECURITY.md`,
+and `CODE_OF_CONDUCT.md`, plus `.github/ISSUE_TEMPLATE/`—validated by the always-run
+policy job—and pull request templates) select nothing; contributor-instruction files
+such as `AGENTS.md` and the design guide are not treated as prose. Android-only and iOS-only PRs select their own
 platform checks, renderer-only PRs select desktop checks, and CLI-only PRs select
 the CLI jobs plus static checks. Desktop changes always imply `catalog`.
 `renderer/shared/` selects `desktop`, `cli` and `linux`; the files native clients
@@ -86,7 +88,7 @@ superseded. Runner capacity can still cause queueing.
 - Browser containment, terminal coverage thresholds, Ruby policy, Rust
   formatting/tests/clippy and native helper production/test builds retain their
   execution modes. Registry validation checks both files and these prerequisites.
-- Electron files run across four isolated macOS runners with one worker each and
+- Electron files run across five isolated macOS runners with one worker each and
   `--fail-on-flaky-tests`, retaining the 20-minute job limit. File-duration weights
   prefer the median of recent hosted Playwright JSON timings (Actions cache plus
   per-shard artifacts, merged on `main` only; CI never pushes timing files).
@@ -200,6 +202,33 @@ frames after the person's page action rather than assuming load/click means
 paint has finished. Production masking, its documented
 first-observation limitation, timeouts, retries and the flaky-test gate remain
 unchanged.
+
+macOS Electron shard 4 failed the flaky-test gate on the Bot sign-in held-tab
+case on PR #838 (run [44480107376](https://github.com/sambitcreate/aiden-agent/actions/runs/44480107376)),
+PR #875 (run [45012146127](https://github.com/sambitcreate/aiden-agent/actions/runs/45012146127/job/137213169353))
+and PR #876 (run [45013317593](https://github.com/sambitcreate/aiden-agent/actions/runs/45013317593/job/137188222625)):
+after the release the Bot got "This tab's password protection was not ready when
+it was released". The fixture answered **I'm signed in** as soon as the held tab
+reported the callback page loaded, before the browser's own privacy read of that
+page had finished. Releasing a held tab whose current page was never inspected
+is refused on purpose (a later read cannot tell what a shown password field used
+to be), so the fixture raced the product's fail-closed rule rather than finding a
+product bug. It now waits for the held tab's read of the callback page, one that
+began after the page stopped loading, before the person answers, as the
+Bot-browser fixture already does. A person looking at the page answers well after
+that read. The release rule, timeouts, retries and the flaky-test gate are
+unchanged.
+
+On 2026-11-22 the macOS Electron E2E jobs outgrew four shards. On `main`
+(run [45019275411](https://github.com/sambitcreate/aiden-agent/actions/runs/45019275411))
+shards 2 and 4 hit the 20-minute job limit, and on PR #882 shard 1 hit it on both
+attempts (run [45064649034](https://github.com/sambitcreate/aiden-agent/actions/runs/45064649034)),
+each time with no failed test, still running specs when cancelled. The four jobs
+of that PR run took about 70 minutes of runner time together, against 57 minutes
+on `main` run 45004973683 earlier the same day, so even a perfect four-way split
+leaves under two minutes of headroom per job. CI now runs five macOS shards,
+which brings an even split to about 14 minutes per job for one more runner
+setup. The 20-minute job limit, retries and the flaky-test gate are unchanged.
 
 On 2026-11-11 the flakes that kept `main` red between 2026-11-05 and 2026-11-10
 were fixed at their causes, without adding a retry or weakening an assertion.

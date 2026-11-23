@@ -259,6 +259,7 @@ final class AidenChatViewModel {
     @ObservationIgnored private var draftGeneration: UInt64 = 0
     @ObservationIgnored private var composerGeneration: UInt64 = 0
     @ObservationIgnored private var didConsumeVoiceLaunch = false
+    @ObservationIgnored private var didConsumeCameraLaunch = false
     @ObservationIgnored private var uploadTask: Task<Int, Never>?
     @ObservationIgnored var ownedUploadReferences: [String: (AidenAttachmentReference, AidenRemoteRequestContext, AidenRemoteClient)] = [:]
     @ObservationIgnored private var attachmentCleanupTasks: [String: Task<Void, Never>] = [:]
@@ -1109,7 +1110,13 @@ final class AidenChatViewModel {
             clearProgressStateIfCredentialRevoked(error)
             if await coordinator.handleCredentialRevocation(error, context: context) { return }
             guard !isRemoved, coordinator.isLive(context) else { return }
-            if generation == transcriptGeneration, !isStarting, chat.messages.isEmpty { presentedError = error.localizedDescription }
+            // A screen closed mid-read cancels it; that's no failure to show.
+            // Not `aidenIsCancellation`: a rejected pin also surfaces as
+            // `URLError(.cancelled)`, and that one must be shown.
+            let screenClosed = Task.isCancelled || error is CancellationError
+            if generation == transcriptGeneration, !isStarting, chat.messages.isEmpty, !screenClosed {
+                presentedError = error.localizedDescription
+            }
         }
         await catalogRefresh
         await restoration
@@ -2442,6 +2449,17 @@ final class AidenChatViewModel {
         guard !isReadOnlyPresentation, !isRemoved, isConnected, !isStreaming, pendingQuestion == nil,
               liveOwner != nil, !Task.isCancelled else { return }
         await start()
+    }
+
+    /// One-shot launch admission for opening the in-app camera picker from a
+    /// Home Screen widget or Shortcut. Consumed before opening so remounts never
+    /// reopen the camera.
+    func startCameraForLaunch(if requested: Bool, start: () -> Void) {
+        guard requested, !didConsumeCameraLaunch else { return }
+        didConsumeCameraLaunch = true
+        guard !isReadOnlyPresentation, !isRemoved, isConnected, !isStreaming, pendingQuestion == nil,
+              liveOwner != nil, acceptsImageAttachments else { return }
+        start()
     }
 
     @discardableResult

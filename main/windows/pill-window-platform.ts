@@ -1,6 +1,8 @@
-export function shouldPositionDictationPill(
+export function canPositionFloatingWindow(
   platform: NodeJS.Platform = process.platform,
   sessionType: string | undefined = process.env.XDG_SESSION_TYPE,
 ): boolean {
   return !(platform === "linux" && sessionType?.toLocaleLowerCase("en-US") === "wayland");
 }
+
+export const shouldPositionDictationPill = canPositionFloatingWindow;

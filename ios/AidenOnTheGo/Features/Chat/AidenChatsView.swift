@@ -8,12 +8,16 @@ struct AidenWorkspaceChatsView: View {
     let owner: AidenRemoteRequestContext
     let onChatUpdated: @MainActor (AidenChat) -> Void
     let onChatRemoved: @MainActor (String) -> Void
-    let onChatActivityChanged: @MainActor (String, AidenChatSummaryActivity) -> Void
+    /// Opens a chat this list just made, over the workspace. A row opens
+    /// its chat as a route on the stack, the same way.
+    let onOpenChat: @MainActor (AidenHostObjectID) -> Void
     @State private var model: AidenWorkspaceChatsModel
-    @State private var createdChat: AidenChat?
     @State private var renameChat: AidenChat?
     @State private var renameTitle = ""
     @State private var deleteChat: AidenChat?
+    /// Set once the list has been on screen, so coming back to it reads the
+    /// chats again: a chat opened from here may have been renamed or forked.
+    @State private var hasAppeared = false
 
     init(
         coordinator: AidenRemoteCoordinator,
@@ -21,14 +25,14 @@ struct AidenWorkspaceChatsView: View {
         owner: AidenRemoteRequestContext,
         onChatUpdated: @escaping @MainActor (AidenChat) -> Void = { _ in },
         onChatRemoved: @escaping @MainActor (String) -> Void = { _ in },
-        onChatActivityChanged: @escaping @MainActor (String, AidenChatSummaryActivity) -> Void = { _, _ in }
+        onOpenChat: @escaping @MainActor (AidenHostObjectID) -> Void
     ) {
         self.coordinator = coordinator
         self.workspace = workspace
         self.owner = owner
         self.onChatUpdated = onChatUpdated
         self.onChatRemoved = onChatRemoved
-        self.onChatActivityChanged = onChatActivityChanged
+        self.onOpenChat = onOpenChat
         _model = State(initialValue: AidenWorkspaceChatsModel(
             coordinator: coordinator,
             owner: owner,
@@ -48,9 +52,13 @@ struct AidenWorkspaceChatsView: View {
                         .foregroundStyle(.secondary)
                 }
                 .padding(.vertical, 8)
+                .padding(.horizontal, AidenSpacing.xl)
+                .listRowInsets(EdgeInsets())
+                .listRowSeparator(.hidden)
+                .listRowBackground(palette.canvas)
             }
 
-            Section("Chats") {
+            Section {
                 if model.chats.isEmpty, !model.isLoading {
                     ContentUnavailableView(
                         "No Chats",
@@ -59,27 +67,29 @@ struct AidenWorkspaceChatsView: View {
                     )
                     .listRowBackground(Color.clear)
                 } else {
+                    let positions = AidenListCardPosition.positions(model.chats.map(\.id))
                     ForEach(model.chats) { chat in
-                        NavigationLink {
-                            AidenForkableChatDetailView(
-                                coordinator: coordinator,
-                                chat: chat,
-                                owner: owner,
-                                onChatUpdated: {
-                                    model.accept($0)
-                                    onChatUpdated($0)
-                                },
-                                onChatActivityChanged: onChatActivityChanged,
-                                onForkOpened: acceptOpenedFork
-                            )
-                        } label: {
-                            VStack(alignment: .leading, spacing: 4) {
+                        // Opened by the shell rather than a value link: a chat
+                        // another tab holds leaves it first, and doing that
+                        // while the stack writes its own path collapsed the
+                        // split to its list on a closed iPhone Duo.
+                        Button { onOpenChat(chatID(chat.id)) } label: {
+                            AidenListRowLayout(isStacked: false, hasSummary: true) {
+                                AidenListRowGlyph(systemName: "bubble.left")
+                            } title: {
                                 AidenForkableChatTitle(title: chat.displayTitle, isFork: chat.forkedFrom != nil)
+                                    .font(.body)
+                                    .foregroundStyle(palette.foreground)
+                            } summary: {
                                 AidenRelativeTimestampView(date: chat.updatedAt)
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
+                                    .font(.subheadline)
+                                    .foregroundStyle(palette.secondary)
+                            } trailing: {
+                                EmptyView()
                             }
                         }
+                        .buttonStyle(.plain)
+                        .aidenListCardRow(positions[chat.id])
                         .swipeActions(edge: .trailing) {
                             Button(role: .destructive) { deleteChat = chat } label: {
                                 Label("Delete", systemImage: "trash")
@@ -95,37 +105,25 @@ struct AidenWorkspaceChatsView: View {
                         }
                     }
                 }
+            } header: {
+                AidenListSectionHeader(title: String(localized: "Chats"))
             }
         }
+        .listStyle(.plain)
+        .listSectionSpacing(AidenSpacing.l)
         .scrollContentBackground(.hidden)
         .background(palette.canvas)
         .overlay { if model.isLoading && model.chats.isEmpty { ProgressView() } }
         .refreshable { await model.load() }
         // An owned workspace's chats don't follow the selection.
         .task(id: owner.instanceId) { await model.load() }
-        .navigationDestination(isPresented: Binding(
-            get: { createdChat != nil },
-            set: { if !$0 { createdChat = nil } }
-        )) {
-            if let createdChat {
-                AidenForkableChatDetailView(
-                    coordinator: coordinator,
-                    chat: createdChat,
-                    owner: owner,
-                    onChatUpdated: {
-                        model.accept($0)
-                        onChatUpdated($0)
-                    },
-                    onChatActivityChanged: onChatActivityChanged,
-                    onForkOpened: acceptOpenedFork
-                )
-                .id(createdChat.id)
-            }
-        }
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
                 Button {
-                    Task { createdChat = await model.create() }
+                    Task {
+                        guard let created = await model.create() else { return }
+                        onOpenChat(chatID(created.id))
+                    }
                 } label: {
                     Image(systemName: "square.and.pencil")
                 }
@@ -166,18 +164,21 @@ struct AidenWorkspaceChatsView: View {
         } message: {
             Text(model.presentedError ?? "The operation could not be completed.")
         }
-        .onAppear { model.setHapticsActive(true) }
+        .onAppear {
+            model.setHapticsActive(true)
+            if hasAppeared { Task { await model.load() } }
+            hasAppeared = true
+        }
         .onDisappear { model.setHapticsActive(false) }
+    }
+
+    /// One of this workspace's chats, on its machine.
+    private func chatID(_ chatId: String) -> AidenHostObjectID {
+        AidenHostObjectID(instanceId: owner.instanceId, deviceId: owner.deviceId, objectId: chatId)
     }
 
     private func beginRename(_ chat: AidenChat) {
         renameTitle = chat.displayTitle
         renameChat = chat
-    }
-
-    /// Lists the fork; the detail pushes it over its source.
-    private func acceptOpenedFork(_ chat: AidenChat) {
-        model.accept(chat)
-        onChatUpdated(chat)
     }
 }

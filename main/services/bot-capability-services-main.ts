@@ -188,6 +188,9 @@ export const botCapabilityMigrationSeal = createBotCapabilityMigrationSeal({
 
 const botProviderCredentialSignature = createBotProviderCredentialSignature();
 
+/** How long a runtime capability snapshot answers later reads at the same inventory revision. */
+const BOT_RUNTIME_SNAPSHOT_REUSE_MS = 3_000;
+
 // Shared across catalog snapshots so admission and per-effect revalidation do
 // not re-open every MCP server. Any Bot inventory fence (MCP configuration or
 // credential mutation, observed drift) forces fresh inspections.
@@ -287,6 +290,13 @@ export const botCapabilityCatalog = createBotCapabilityCatalogMainService(
         botId === undefined ? "global" : `bot:${botId}`,
         snapshot.catalog.revision,
       );
+    },
+    // A Bot turn reads its authority more than a dozen times before one model
+    // request; reading the whole inventory each time made every message wait
+    // seconds. Any hooked change moves the revision and is seen at once.
+    runtimeReuse: {
+      revision: () => botRuntimeInventoryLeases.revision(),
+      ttlMs: BOT_RUNTIME_SNAPSHOT_REUSE_MS,
     },
   },
 );

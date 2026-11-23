@@ -19,6 +19,7 @@ import { useActiveWorkspace } from "../lib/workspace-context";
 import { TerminalDrawer } from "../components/terminal-drawer";
 import { DesignChatBody, DesignWorkbench, useDesignChatState } from "../design/design-layout";
 import type { Chat, ChatMetadataUpdated, ChatMeta } from "../lib/types";
+import { applyChatMetadataUpdate } from "../shared/chat-metadata-update";
 import { useAppendReconciliationRequired } from "../lib/append-reconciliation";
 import { withForkLineage } from "../lib/chat-copy-view";
 import type { ChatForkSummaryChanged } from "../shared/chat-copy-contract";
@@ -93,28 +94,31 @@ export function ChatLayout() {
           .flatMap(([, chats]) => chats ?? [])
           .find((chat) => chat.id === update.chatId)?.title ??
         update.title;
-      qc.setQueryData<Chat | null>(queryKeys.chat(update.chatId), (current) =>
-        current ? { ...current, title: update.title, updatedAt: update.updatedAt } : current,
-      );
+      qc.setQueryData<Chat | null>(queryKeys.chat(update.chatId), (current) => {
+        if (!current) return current;
+        return applyChatMetadataUpdate(current, update);
+      });
       qc.setQueriesData<ChatMeta[]>({ queryKey: queryKeys.chats }, (current) => {
         if (!current) return current;
         return current
           .map((chat) =>
             chat.id === update.chatId
-              ? { ...chat, title: update.title, updatedAt: update.updatedAt }
+              ? { ...chat, title: update.title, workspaceId: update.workspaceId, updatedAt: update.updatedAt }
               : chat,
           )
           .sort((a, b) => b.updatedAt - a.updatedAt);
       });
-      const reveal = { chatId: update.chatId, version: update.updatedAt, previousTitle };
-      setTitleReveal(reveal);
-      clearTimeout(clearReveal);
-      clearReveal = setTimeout(
-        () => {
-          setTitleReveal((current) => (current?.version === reveal.version ? null : current));
-        },
-        CHAT_TITLE_FADE_OUT_MS + CHAT_TITLE_REVEAL_DURATION_MS + 50,
-      );
+      if (update.title !== previousTitle) {
+        const reveal = { chatId: update.chatId, version: update.updatedAt, previousTitle };
+        setTitleReveal(reveal);
+        clearTimeout(clearReveal);
+        clearReveal = setTimeout(
+          () => {
+            setTitleReveal((current) => (current?.version === reveal.version ? null : current));
+          },
+          CHAT_TITLE_FADE_OUT_MS + CHAT_TITLE_REVEAL_DURATION_MS + 50,
+        );
+      }
     });
 
     return () => {

@@ -193,7 +193,9 @@ export async function createCliDurableBots(profileDir: string, ports: CliDurable
             bind: (call: BotToolCall) => bindTool(bot.id, tool, call, replyClock),
             replay: "unsafe" as const, ...(mcpAgentToolDescriptor(tool) ? { mcp: true } : {}),
           })),
-          botMemoryToolEntry(bot.id, memory), botRecallToolEntry(),
+          botMemoryToolEntry(bot.id, memory, {
+            canSchedule: () => admitted(bot.id, async (lease) => lease.authority.otherCapabilities.some((grant) => grant.kind === "schedules")),
+          }), botRecallToolEntry(),
           ...(messageBot ? [{ ...messageBot, replay: "safe" as const }] : []),
         ];
       },

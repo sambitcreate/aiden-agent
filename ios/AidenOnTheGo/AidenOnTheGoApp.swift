@@ -77,6 +77,7 @@ final class AidenMetricDiagnosticSubscriber: NSObject, MXMetricManagerSubscriber
 
 @main
 struct AidenOnTheGoApp: App {
+    @UIApplicationDelegateAdaptor(AidenAppDelegate.self) private var appDelegate
     @State private var haptics: AidenHapticCenter
     @State private var remoteCoordinator: AidenRemoteCoordinator
     /// Built here because an app's `init` runs once.
@@ -84,6 +85,9 @@ struct AidenOnTheGoApp: App {
     @State private var appearance = AidenAppearanceStore()
 
     init() {
+        AidenHomeActionDispatch.install { action in
+            AidenForegroundIntentRouter.shared.submit(homeAction: action)
+        }
         AidenBotWatchDraftStore.shared.prepareExistingStorage()
         AidenBotOpenWorkDraftStore.shared.prepareExistingStorage()
         AidenBotRoutineControlStore.shared.prepareExistingStorage()

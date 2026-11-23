@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { subscribeGenerationStream } from "./generation-stream.js";
+import { createGenerationStreamBuffer, subscribeGenerationStream } from "./generation-stream.js";
 
 function installFakeBridge() {
   const descriptor = Object.getOwnPropertyDescriptor(globalThis, "window");
@@ -143,6 +143,62 @@ test("a helper's live conversation reaches only its own stream and folds into th
     bridge.emit("chat:subagent-transcript", { streamId: "generation-1", update: { ...second, changes: "junk" } });
     bridge.emit("chat:subagent-transcript", { streamId: "generation-1", update: second });
     assert.deepEqual(received, [1, 2]);
+    const live = stream.projection().subagentTranscripts?.get("run-1");
+    assert.equal(live?.revision, 2);
+    assert.deepEqual(live?.changes.map((change) => change.entry.text), ["Look.", "Found it."]);
+    stream.dispose();
+  } finally {
+    bridge.restore();
+  }
+});
+
+test("a handed-over helper conversation resumes from its seed and catches up on updates sent during the handoff", () => {
+  const bridge = installFakeBridge();
+  try {
+    const first = {
+      version: 1,
+      runId: "run-1",
+      baseRevision: 0,
+      revision: 1,
+      trimmed: false,
+      entryCount: 1,
+      changes: [{ index: 0, entry: { kind: "task", text: "Look." } }],
+    };
+    const second = {
+      ...first,
+      baseRevision: 1,
+      revision: 2,
+      entryCount: 2,
+      changes: [{ index: 1, entry: { kind: "message", text: "Found it.", steps: [], startedAt: 1_000 } }],
+    };
+    // The previous view folded the first update before it let go of the run.
+    const previous = subscribeGenerationStream("generation-1", { chatId: "chat-1", workspaceId: "workspace-1" }, {
+      onDelta: () => undefined,
+      onDone: () => undefined,
+      onError: (message) => assert.fail(message),
+      onSubagentTranscript: () => undefined,
+    });
+    bridge.emit("chat:subagent-transcript", { streamId: "generation-1", update: first });
+    const seed = previous.projection();
+    previous.dispose();
+
+    // The second update arrives in the gap before the next view subscribes.
+    const buffer = createGenerationStreamBuffer();
+    bridge.emit("chat:subagent-transcript", { streamId: "generation-1", update: second });
+    const received: number[] = [];
+    const stream = subscribeGenerationStream(
+      "generation-1",
+      { chatId: "chat-1", workspaceId: "workspace-1" },
+      {
+        onDelta: () => undefined,
+        onDone: () => undefined,
+        onError: (message) => assert.fail(message),
+        onSubagentTranscript: (update) => received.push(update.revision),
+      },
+      seed,
+      buffer.drain(),
+    );
+    assert.deepEqual(received, [2]);
     const live = stream.projection().subagentTranscripts?.get("run-1");
     assert.equal(live?.revision, 2);
     assert.deepEqual(live?.changes.map((change) => change.entry.text), ["Look.", "Found it."]);

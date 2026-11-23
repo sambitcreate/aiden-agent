@@ -286,3 +286,48 @@ test("a follow without tags yet probes plainly, and one without a head commit pr
   await new PullRequestFollowReader(headless.api).read(follow, undefined, { skipIfUnchanged: true });
   assert.deepEqual(headless.restCalls.map((call) => call.path), [PATHS[0]]);
 });
+
+test("review bots count as reviewers without a permission check; deploy and coverage bots do not", async () => {
+  const bot = (id: string, login: string, at: string) => ({
+    id,
+    body: `${login} says`,
+    author: { __typename: "Bot", login },
+    authorAssociation: "NONE",
+    createdAt: at,
+  });
+  const { api, restCalls } = fakeApi({
+    graphql: () => ({
+      kind: "ok",
+      status: 200,
+      data: {
+        viewer: { login: "sambit" },
+        repository: {
+          nameWithOwner: "acme/app",
+          owner: { login: "acme" },
+          pullRequest: pullRequestNode({
+            comments: {
+              nodes: [
+                bot("b-review", "pullfrog", "2026-10-26T12:01:00Z"),
+                bot("b-vercel", "vercel", "2026-10-26T12:02:00Z"),
+                bot("b-actions", "github-actions[bot]", "2026-10-26T12:03:00Z"),
+                { id: "c-lookalike", body: "I am not a bot", author: { __typename: "User", login: "pullfrog-fan" }, authorAssociation: "NONE", createdAt: "2026-10-26T12:04:00Z" },
+              ],
+            },
+            reviews: { nodes: [] },
+          }),
+        },
+      },
+    }),
+  });
+  const result = await new PullRequestFollowReader(api, () => T0).read(follow);
+  assert.equal(result.kind, "ok");
+  if (result.kind !== "ok") return;
+  const byId = new Map(result.observation.comments.map((comment) => [comment.id, comment]));
+  assert.equal(byId.get("b-review")?.trusted, true, "a review bot");
+  assert.equal(byId.get("b-review")?.bot, true);
+  assert.equal(byId.get("b-vercel")?.trusted, false, "a deploy bot is skipped");
+  assert.equal(byId.get("b-actions")?.trusted, false, "the skip list ignores the [bot] suffix");
+  assert.equal(byId.get("c-lookalike")?.trusted, false, "a person's account is not a bot");
+  assert.equal(byId.get("c-lookalike")?.bot, undefined);
+  assert.equal(restCalls.some((call) => call.path.includes("/collaborators/")), false, "bots and outsiders need no permission check");
+});

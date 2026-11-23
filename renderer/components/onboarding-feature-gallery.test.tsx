@@ -172,3 +172,29 @@ test("Mac and Linux tours introduce Apps using Aiden with its local-only switch 
     false,
   );
 });
+
+test("the Floating Quick Chat tile is code-drawn, platform-aware, and uses only oa-anim-* classes", () => {
+  for (const [platform, expectedHotkey] of [
+    ["darwin", "⌘⇧Space"],
+    ["linux", "Ctrl+Shift+Space"],
+  ] as const) {
+    const { container, unmount } = render(
+      <OnboardingFeatureGallery features={onboardingFeatures} platform={platform} />,
+    );
+    const tile = container.querySelector<HTMLElement>('[data-onboarding-feature="quickChat"]');
+    assert.ok(tile, `${platform} includes the Floating Quick Chat tile`);
+    assert.match(tile.getAttribute("aria-label") ?? "", /^Floating Quick Chat\./u);
+    assert.ok(within(tile).getByText("Temporary"));
+    assert.ok(within(tile).getByText("Attach…"));
+    assert.ok(within(tile).getByText(expectedHotkey));
+    assert.equal(tile.querySelectorAll("img").length, 0, "Quick Chat art is code-drawn");
+    assert.equal(within(tile).queryAllByRole("button").length, 0, "art has no fake buttons");
+    for (const element of tile.querySelectorAll<HTMLElement>("[class*='anim']")) {
+      for (const name of element.className.split(/\s+/u).filter((part) => part.includes("anim"))) {
+        assert.match(name, /^oa-anim-[a-z]+$/u);
+      }
+    }
+    unmount();
+    cleanup();
+  }
+});

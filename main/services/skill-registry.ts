@@ -45,6 +45,8 @@ export interface SkillRegistryDependencies {
   isEnabled(): Promise<boolean>;
   listConfigured(): Promise<Skill[]>;
   discover(workspaceRoot?: string): Promise<DiscoveredSkill[]>;
+  /** Optional discovery helper that caches global roots while scanning `workspaceRoot` fresh. */
+  discoverWithCachedGlobals?: (workspaceRoot?: string) => Promise<DiscoveredSkill[]>;
   now(): number;
   invocationKey: Uint8Array;
   cacheTtlMs: number;
@@ -242,7 +244,7 @@ export class SkillRegistry {
     if (!workspace || workspace.id !== workspaceId) {
       throw new SkillInvocationError("workspace_changed", "Skill workspace is unavailable.");
     }
-    return this.#resolveFromSnapshot(await this.#load(workspace), invocationId);
+    return this.#resolveFromSnapshot(await this.#load(workspace, true), invocationId);
   }
 
   #resolveFromSnapshot(snapshot: SkillRegistrySnapshot, invocationId: string): RegisteredSkill {
@@ -272,13 +274,18 @@ export class SkillRegistry {
 
   async #load(
     workspace: RegistryWorkspace,
+    fresh = false,
   ): Promise<SkillRegistrySnapshot> {
     if (!(await this.#dependencies.isEnabled())) return this.#project(workspace, []);
+    const discover =
+      fresh || !this.#dependencies.discoverWithCachedGlobals
+        ? this.#dependencies.discover
+        : this.#dependencies.discoverWithCachedGlobals;
     const [configured, discovered, builtin] = await Promise.all([
       this.#dependencies.listConfigured(),
       // No Access is also a discovery boundary: do not read workspace skill
       // files merely to mark them unavailable in a renderer catalog.
-      this.#dependencies.discover(
+      discover(
         workspace.permission === "none" ? undefined : workspace.folderPath,
       ),
       this.#dependencies.listBuiltin(),

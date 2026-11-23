@@ -224,6 +224,11 @@ export async function admitBotShellWork(botId: string): Promise<{ signal: AbortS
   return { signal: admission.signal, release: () => admission.release() };
 }
 
+/** Whether the Bot has routines now (Schedules in its access), for the memory guard. */
+async function botCanSchedule(botId: string): Promise<boolean> {
+  return withAdmission(botId, async ({ authority }) => authority.otherCapabilities.some((grant) => grant.kind === "schedules"));
+}
+
 /** Admit the Bot's current authority for one step and release it right away. */
 async function withAdmission<T>(botId: string, action: (admission: BotRuntimeAuthorityAdmission) => Promise<T>): Promise<T> {
   const admission = await admit(botId);
@@ -431,6 +436,7 @@ const memoryReview = createBotMemoryReview({
     const howTo = howToReviewExtras(botId);
     return { tools: [...followUps.tools, ...howTo.tools], instructions: [...followUps.instructions, ...howTo.instructions] };
   },
+  canSchedule: botCanSchedule,
   reserve: (botId) => botLearningBudget.reserve(botId, "review", 3_072),
   snapshot: (botId) => memorySnapshotText(botId),
   recordChange: (botId, before, result) =>
@@ -722,7 +728,7 @@ const extension: BotExtensionDeps = {
   memorySection: async (botId, offer) => renderBotMemorySection(await memory.snapshot(botId), offer),
   currentTools: async (bot, turn) => [
     ...(await tools.currentTools(bot.id, turn)),
-    botMemoryToolEntry(bot.id, memory),
+    botMemoryToolEntry(bot.id, memory, { canSchedule: () => botCanSchedule(bot.id) }),
     botRecallToolEntry(),
   ],
   // `bot_memory` writes only this Bot's own memory and `bot_recall` reads only

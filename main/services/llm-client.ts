@@ -569,6 +569,9 @@ import { todoSnapshotDiagnostic } from "./rpiv-todo/diagnostics.js";
 import { todoSnapshotForRenderer } from "../../renderer/shared/todo.js";
 import { chatProgressEvents } from "./chat-progress-events.js";
 import { GenerationDeltaCoalescer } from "./generation-delta-coalescer.js";
+import { DesktopLiveStreamAccumulator } from "./desktop-stream-handoff.js";
+import { desktopHandoffTickets } from "./desktop-stream-handoff-main.js";
+import type { DesktopHandoffLiveStreamSnapshot } from "../../renderer/shared/chat-handoff.js";
 import { randomUUID } from "node:crypto";
 import { designModeEnabled } from "./studio/feature-flags.js";
 import { designCanvasSnapshots, designCanvasStore, designGrants, designModeConsent, designSystemOffers, recentWrittenPages } from "./design-canvas/main.js";
@@ -734,6 +737,7 @@ interface ActiveGeneration {
   chatId: string;
   owner: ChatGenerationOwner;
   removeOwnerInvalidation: () => void;
+  ownerInvalidationListeners?: Set<() => void>;
   stopCacheWarming?: () => void;
   workspaceId?: string;
   cancelRequested: boolean;
@@ -769,6 +773,7 @@ interface InitializingGeneration {
   chatId: string;
   owner: ChatGenerationOwner;
   removeOwnerInvalidation: () => void;
+  ownerInvalidationListeners?: Set<() => void>;
   stopCacheWarming?: () => void;
   workspaceId?: string;
   cancelRequested: boolean;
@@ -1020,6 +1025,39 @@ function ownerForStream(streamId: string): ChatGenerationOwner | undefined {
 }
 
 const deltaCoalescer = new GenerationDeltaCoalescer();
+const desktopLiveAccumulator = new DesktopLiveStreamAccumulator();
+
+function subscribeStreamOwnerInvalidation(streamId: string, listener: () => void): () => void {
+  const entry = active.get(streamId) ?? initializing.get(streamId);
+  if (!entry || entry.rendererDetached || entry.owner.isDestroyed()) {
+    queueMicrotask(() => {
+      try {
+        listener();
+      } catch {
+        // Invalidation callbacks are advisory.
+      }
+    });
+    return () => {};
+  }
+  const listeners = (entry.ownerInvalidationListeners ??= new Set());
+  listeners.add(listener);
+  return () => {
+    listeners.delete(listener);
+  };
+}
+
+function notifyStreamOwnerInvalidated(entry: ActiveGeneration | InitializingGeneration): void {
+  const listeners = entry.ownerInvalidationListeners;
+  if (!listeners || listeners.size === 0) return;
+  entry.ownerInvalidationListeners = undefined;
+  for (const listener of [...listeners]) {
+    try {
+      listener();
+    } catch {
+      // Invalidation callbacks are advisory.
+    }
+  }
+}
 
 /** End this entry's ownership. Repeat calls for the same entry do nothing. */
 function settleGeneration<Entry extends GenerationOwnershipEntry>(
@@ -1028,6 +1066,10 @@ function settleGeneration<Entry extends GenerationOwnershipEntry>(
   entry: Entry,
   owners: Map<string, Entry>,
 ): void {
+  desktopLiveAccumulator.delete(streamId);
+  if ("ownerInvalidationListeners" in entry && entry.ownerInvalidationListeners instanceof Set) {
+    entry.ownerInvalidationListeners.clear();
+  }
   settleGenerationOwnership(streamId, entry, owners, {
     forgetApprovedArtifacts: () => approvedWorkspaceArtifactCalls.delete(streamId),
     releaseApprovals: () => {
@@ -1059,7 +1101,9 @@ function sendSubagentTranscript(streamId: string, update: SubagentTranscriptUpda
 }
 
 function sendGeneration(streamId: string, channel: NotificationChannel, payload: unknown): boolean {
-  const chatId = active.get(streamId)?.chatId ?? initializing.get(streamId)?.chatId;
+  const entry = active.get(streamId) ?? initializing.get(streamId);
+  const chatId = entry?.chatId;
+  desktopLiveAccumulator.record(streamId, chatId, channel, payload, entry?.workspaceId);
   if (chatId && channel === "chat:todo") {
     const snapshot = (
       payload as { snapshot?: import("../../renderer/shared/todo.js").TodoSnapshotViewV1 }
@@ -1320,11 +1364,11 @@ async function prepareGeneration(
   signal: AbortSignal,
   computerUseGateSnapshot: number,
   ownComputerUse: (controller: ComputerUseController) => void,
-  ownerDocumentId: string,
-  rendererOwner: boolean,
-  browserOwner: ChatGenerationOwner,
+  getOwner: () => ChatGenerationOwner,
   options: GenerationExecutionOptions,
 ) {
+  const initialOwner = getOwner();
+  const rendererOwner = initialOwner.id !== 0;
   const sharedImages: Attachment[] = [];
   const displayedImages: Attachment[] = [];
   const displayedImageIds = new Set<string>();
@@ -1403,7 +1447,7 @@ async function prepareGeneration(
   // the chat's tool list does not change with who started the turn.
   const ownerScope = {
     window: rendererOwner,
-    remote: browserOwner.kind === "remote",
+    remote: initialOwner.kind === "remote",
     usageSource: options.usageSource,
     interactionSurface: options.interactionSurface,
     assistantMode,
@@ -1420,25 +1464,27 @@ async function prepareGeneration(
       assistantMode,
       botBound,
       rendererOwner: declaresWindow,
-      remoteOwner: browserOwner.kind === "remote",
+      remoteOwner: initialOwner.kind === "remote",
       excluded: options.excludeToolNames?.has(ASK_USER_QUESTION_TOOL_NAME) ?? false,
     })
   ) {
     generationExtensions.push(
       createAskUserQuestionExtension({
-        request: (toolCallId, questions, requestSignal, timeoutSeconds) =>
-          questionnaires.request(
+        request: (toolCallId, questions, requestSignal, timeoutSeconds) => {
+          const liveOwner = getOwner();
+          return questionnaires.request(
             {
               streamId,
               toolCallId,
               questions,
               timeoutMs: resolveAskUserQuestionTimeoutMs(timeoutSeconds, {
-                unattended: browserOwner.kind === "remote",
+                unattended: liveOwner.kind === "remote",
               }),
             },
-            ownerDocumentId,
+            liveOwner.documentId,
             requestSignal,
-          ),
+          );
+        },
       }),
     );
   }
@@ -1571,7 +1617,7 @@ async function prepareGeneration(
         controller: computerUse,
         scorer: formFillRuntime,
         attachmentResolver: () => sourceAttachments,
-        owner: { chatId: chat.id, generationId: streamId, documentId: ownerDocumentId },
+        owner: { chatId: chat.id, generationId: streamId, documentId: getOwner().documentId },
       });
     }
   }
@@ -1691,7 +1737,8 @@ async function prepareGeneration(
           workspace,
           runtime: { ...runtime, model },
           thinkingLevel,
-          ownerDocumentId,
+          ownerDocumentId: getOwner().documentId,
+          getOwnerDocumentId: () => getOwner().documentId,
           permission: workspace.permission,
           generationPermission: permission,
           writeEnabled: subagentWriteEnabled,
@@ -1889,7 +1936,7 @@ async function prepareGeneration(
   // Design mode: the canvas tools and the aiden-design skill go together.
   const designTurn = {
     flagEnabled: designModeEnabled(),
-    localRenderer: declaresWindow && browserOwner?.kind !== "remote",
+    localRenderer: declaresWindow && initialOwner.kind !== "remote",
     ...(botContext ? { botId: botContext.admission.authority.botId } : {}),
     assistant: assistantMode,
     telegram: options.interactionSurface === "telegram",
@@ -2035,6 +2082,7 @@ async function prepareGeneration(
                     )
                 : undefined;
               beforeEffect?.();
+              const liveBrowserOwner = getOwner();
               return browserService.command(workspace.id, command, {
                 source: "agent",
                 signal: browserSignal,
@@ -2043,7 +2091,7 @@ async function prepareGeneration(
                 ...(callId && browserFileApprovals.has(callId)
                   ? { preparedFile: browserFileApprovals.get(callId)! }
                   : {}),
-                ...(browserOwner.id !== 0 ? { owner: browserOwner } : {}),
+                ...(liveBrowserOwner.id !== 0 ? { owner: liveBrowserOwner } : {}),
               });
             },
           },
@@ -2154,10 +2202,10 @@ async function prepareGeneration(
       mcpDeferral,
       mcpProviderScope: {
         signal,
-        onInvalidated: (listener) => browserOwner.onInvalidated(listener),
+        onInvalidated: (listener) => subscribeStreamOwnerInvalidation(streamId, listener),
         isCurrent: () => {
           const generation = active.get(streamId) ?? initializing.get(streamId);
-          return !signal.aborted && !!generation && generation.owner === browserOwner && !generation.cancelRequested && !generation.rendererDetached && !generation.owner.isDestroyed();
+          return !signal.aborted && !!generation && !generation.cancelRequested && !generation.rendererDetached && !generation.owner.isDestroyed();
         },
       },
       allowMcpProviderAuth: canUseProviderAuthenticatedMcp({ rendererOwner, permission, workspace: Boolean(workspace?.folderPath), assistant: assistantMode, bot: Boolean(botContext), usageSource: options.usageSource, interactionSurface: options.interactionSurface }),
@@ -2490,8 +2538,9 @@ async function prepareGeneration(
                       newId: randomUUID,
                     });
                     if (frameIds === null) return null;
-                    if (frameIds.length > 0 && !browserOwner.isDestroyed()) {
-                      browserOwner.send("designCanvas:focus", { chatId: params.chatId, frameIds });
+                    const liveOwner = getOwner();
+                    if (frameIds.length > 0 && !liveOwner.isDestroyed()) {
+                      liveOwner.send("designCanvas:focus", { chatId: params.chatId, frameIds });
                     }
                     return { frameIds };
                   },
@@ -2688,15 +2737,15 @@ async function prepareGeneration(
   if (declaresAppTools(ownerScope, { attendedAssistant, schedulingAllowed })) {
     // A windowless turn declares them with no live state and no navigation,
     // and refuses every call (`chatTurnToolRefusal`).
-    const onThisComputer = browserOwner?.kind !== "remote" && !windowless;
+    const onThisComputer = initialOwner.kind !== "remote" && !windowless;
     const appToolTurn = { liveState: onThisComputer, canOpen: onThisComputer };
     turnToolRefusals.push((name, args) => aidenAppToolUnavailableReason(name, args, appToolTurn));
     const appTools = createAidenAppTools({
       service: appControlsService, liveState: onThisComputer,
       runtime: { interaction: "attended-workspace", workspacePermission: permission, providerId: params.providerId, modelId: params.model, availableTools: tools.map((tool) => tool.name) },
-      open: onThisComputer ? (destination, toolSignal) => aidenAppNavigation.open(destination, browserOwner, toolSignal) : undefined,
-      context: { actor: `agent:${params.chatId}`, target: browserOwner?.kind === "remote" ? "Paired computer" : thisComputerLabel(process.platform), workspaceId: workspace?.id,
-        humanGesture: false, isCurrent: () => !signal.aborted && !browserOwner?.isDestroyed() },
+      open: onThisComputer ? (destination, toolSignal) => aidenAppNavigation.open(destination, getOwner(), toolSignal) : undefined,
+      context: { actor: `agent:${params.chatId}`, target: initialOwner.kind === "remote" ? "Paired computer" : thisComputerLabel(process.platform), workspaceId: workspace?.id,
+        humanGesture: false, isCurrent: () => !signal.aborted && !getOwner().isDestroyed() },
       present: (panel) => {
         if (appPanels.length >= 4) throw new Error("This response already has four settings panels.");
         appPanels.push(panel);
@@ -2734,11 +2783,12 @@ async function prepareGeneration(
       store: designCanvasStore,
       broadcast: announceCanvasChange,
       focus: (frameIds) => {
-        if (!browserOwner.isDestroyed()) browserOwner.send("designCanvas:focus", { chatId: params.chatId, frameIds });
+        const liveOwner = getOwner();
+        if (!liveOwner.isDestroyed()) liveOwner.send("designCanvas:focus", { chatId: params.chatId, frameIds });
       },
       snapshot: async (toolSignal) =>
         supportsImages
-          ? designCanvasSnapshots.request({ chatId: params.chatId, owner: browserOwner, signal: toolSignal ?? signal })
+          ? designCanvasSnapshots.request({ chatId: params.chatId, owner: getOwner(), signal: toolSignal ?? signal })
           : null,
       seesImages: supportsImages,
       ...(params.designView ? { viewState: params.designView } : {}),
@@ -2782,7 +2832,7 @@ async function prepareGeneration(
               const answer = await designModeConsent.request({
                 chatId: params.chatId,
                 reason,
-                owner: browserOwner,
+                owner: getOwner(),
                 signal: toolSignal ?? signal,
               });
               if (answer === "entered") enteredDesignModeThisTurn = true;
@@ -2879,8 +2929,9 @@ async function prepareGeneration(
             leftOff = true;
           },
         });
-        if (placedIds.length > 0 && !browserOwner.isDestroyed()) {
-          browserOwner.send("designCanvas:focus", { chatId: params.chatId, frameIds: placedIds });
+        const liveCanvasOwner = getOwner();
+        if (placedIds.length > 0 && !liveCanvasOwner.isDestroyed()) {
+          liveCanvasOwner.send("designCanvas:focus", { chatId: params.chatId, frameIds: placedIds });
         }
         if (leftOff) inspector.removed(relativePath);
         else inspector.written(relativePath);
@@ -3144,6 +3195,7 @@ export const llmClient = {
             initialization.releaseSkillReservation = releaseSkillReservation;
             initializing.set(streamId, initialization);
             chatActivityRegistry.begin(streamId, params.chatId);
+            desktopLiveAccumulator.begin(streamId, params.chatId, params.workspaceId ?? "default");
             recordRunBegin(hostRunRegistry, streamId, params.chatId, owner);
             pendingAttentionRecorder.runBegan(params.chatId);
             chatProgressEvents.begin(params.chatId, streamId);
@@ -3192,6 +3244,8 @@ export const llmClient = {
     escape: GenerationEscape,
   ): Promise<boolean> {
     options.onTurnAccepted?.();
+    const currentOwner = () => ownerForStream(streamId) ?? owner;
+    const currentOwnerDocumentId = () => currentOwner().documentId;
     if (options.unattended) {
       // Nobody is there to answer: every approval or question this turn would
       // raise settles at once as unavailable, and the model is told so.
@@ -3223,7 +3277,7 @@ export const llmClient = {
         cancellationOrigin,
         isCurrent: () =>
           initializing.get(streamId) === initialization ||
-          (active.get(streamId)?.chatId === params.chatId && active.get(streamId)?.owner === owner),
+          (active.get(streamId)?.chatId === params.chatId && active.get(streamId)?.owner === currentOwner()),
         append: (message, meta) => chatStore.appendMessage(params.chatId, message, meta),
         onUnknownOutcome: (terminalError) =>
           logger.error(
@@ -3335,6 +3389,7 @@ export const llmClient = {
         params.workspaceId,
       );
       initialization.workspaceId = authoritativeWorkspaceId;
+      desktopLiveAccumulator.setWorkspaceId(streamId, authoritativeWorkspaceId);
       const preparedSkillInvocation = initialization.skillInvocation;
       if (preparedSkillInvocation) {
         const currentUser = [...authoritativeChat.messages]
@@ -3392,9 +3447,7 @@ export const llmClient = {
         (computerUse) => {
           initialization.computerUse = computerUse;
         },
-        owner.documentId,
-        owner.id !== 0,
-        owner,
+        currentOwner,
         options,
       );
     } catch (error) {
@@ -3410,6 +3463,12 @@ export const llmClient = {
         return false;
       }
       await persistInitializationTerminal("failed");
+      if (currentOwnerDocumentId() !== owner.documentId) {
+        sendGeneration(streamId, "chat:error", {
+          streamId,
+          message: error instanceof Error ? error.message : String(error),
+        });
+      }
       settleGeneration(streamId, params, initialization, initializing);
       throw error;
     }
@@ -3528,7 +3587,7 @@ export const llmClient = {
                     details: card.details,
                   },
                   approvalSignal,
-                  owner.documentId,
+                  currentOwnerDocumentId(),
                 );
               } finally {
                 timeline.toolRunning(toolCallId);
@@ -3651,7 +3710,7 @@ export const llmClient = {
                 scopes: COMPUTER_USE_ACCESS_SCOPES,
               },
               approvalSignal,
-              owner.documentId,
+              currentOwnerDocumentId(),
             );
             const scope =
               outcome === "allowed"
@@ -3942,9 +4001,9 @@ export const llmClient = {
         tools: [createVccRecallTool(async () => piSession!)],
       };
       let memoryExtension: PiAgentRuntimeExtension | undefined;
-      // Bots keep their own memory files (`bot-memory/`) and never use the
-      // workspace store.
-      if (!generationChat.botId) {
+      // Bots keep their own memory files (`bot-memory/`), and ephemeral
+      // floating chats stay off the workspace memory store until promoted.
+      if (!generationChat.botId && generationChat.ephemeral !== true) {
         try {
           const memoryEligible = piUpgradeMemoryEligible(piUpgradePolicy, generationChat, {
             development: !isPackagedRuntime(),
@@ -4127,7 +4186,7 @@ export const llmClient = {
                     unattended: owner.kind === "remote",
                   }),
                 },
-                owner.documentId,
+                currentOwnerDocumentId(),
                 requestSignal,
               ),
           }
@@ -4398,8 +4457,9 @@ export const llmClient = {
       // is open. Cache warming and background summaries run only then.
       const generationAttended = () => {
         const generation = active.get(streamId) ?? initializing.get(streamId);
-        return !!generation && generation.owner === owner && !generation.cancelRequested &&
-          !generation.rendererDetached && !owner.isDestroyed();
+        const liveOwner = currentOwner();
+        return !!generation && generation.owner === liveOwner && !generation.cancelRequested &&
+          !generation.rendererDetached && !liveOwner.isDestroyed();
       };
       const approvedChatMemoryFacts = async () =>
         memoryExtension && (await memoryEnabledForChat(configStore, generationChat))
@@ -5114,7 +5174,7 @@ export const llmClient = {
                   })(),
                 },
                 signal,
-                owner.documentId,
+                currentOwnerDocumentId(),
               );
               if (hookOutcome !== "allowed") {
                 return blockComputerUse(toolApprovalBlockReason(hookOutcome, false));
@@ -5412,7 +5472,7 @@ export const llmClient = {
                     details: approvalDetails,
                   },
                   approvalSignal,
-                  owner.documentId,
+                  currentOwnerDocumentId(),
                 );
               };
               const memoryDecision =
@@ -5563,7 +5623,7 @@ export const llmClient = {
               };
             })(),
             signal,
-            owner.documentId,
+            currentOwnerDocumentId(),
           );
           const allowed = approvalOutcome === "allowed";
           if (allowed && context.toolCall.name === WORKSPACE_ARTIFACT_TOOL_NAME && artifactApprovalDigest) {
@@ -5941,6 +6001,12 @@ export const llmClient = {
         return false;
       }
       await persistInitializationTerminal("failed");
+      if (currentOwnerDocumentId() !== owner.documentId) {
+        sendGeneration(streamId, "chat:error", {
+          streamId,
+          message: error instanceof Error ? error.message : String(error),
+        });
+      }
       settleGeneration(streamId, params, initialization, initializing);
       throw error;
     }
@@ -5948,6 +6014,12 @@ export const llmClient = {
     if (!agent || !piSession) {
       await persistInitializationTerminal("failed");
       endLoadMonitor(initialization, streamId, false);
+      if (currentOwnerDocumentId() !== owner.documentId) {
+        sendGeneration(streamId, "chat:error", {
+          streamId,
+          message: "Could not initialize the generation agent.",
+        });
+      }
       settleGeneration(streamId, params, initialization, initializing);
       throw new Error("Could not initialize the generation agent.");
     }
@@ -6120,8 +6192,11 @@ export const llmClient = {
     const activeGeneration: ActiveGeneration = {
       agent,
       chatId: params.chatId,
-      owner,
+      owner: initialization.owner,
       removeOwnerInvalidation: initialization.removeOwnerInvalidation,
+      ...(initialization.ownerInvalidationListeners
+        ? { ownerInvalidationListeners: initialization.ownerInvalidationListeners }
+        : {}),
       stopCacheWarming: initialization.stopCacheWarming,
       workspaceId: initialization.workspaceId,
       cancelRequested: initialization.cancelRequested,
@@ -6207,7 +6282,7 @@ export const llmClient = {
     if (owesItsChatTurns) {
       owedTurns.open(streamId, {
         chatId: params.chatId,
-        ownerDocumentId: owner.documentId,
+        ownerDocumentId: currentOwnerDocumentId(),
         context: {
           ...(params.workspaceId !== undefined ? { workspaceId: params.workspaceId } : {}),
           providerId: params.providerId,
@@ -6296,10 +6371,15 @@ export const llmClient = {
         undeliveredGuidance = queuedGuidanceText(taken.messages);
         owedCommittedIds = taken.committed ?? [];
         if (taken.late) {
-          const owner = ownerForStream(streamId);
+          const fallbackOwner = ownerForStream(streamId);
           void taken.late.then(
             (messages) =>
-              returnLateGuidance(owner, params.chatId, streamId, queuedGuidanceText(messages)),
+              returnLateGuidance(
+                ownerForStream(streamId) ?? fallbackOwner,
+                params.chatId,
+                streamId,
+                queuedGuidanceText(messages),
+              ),
             (error: unknown) => {
               logger.warn("pi", `Could not settle late guidance for stream ${streamId}.`, error);
             },
@@ -6341,11 +6421,11 @@ export const llmClient = {
               permission: () => permission,
               timeline,
               stoppedByUser: generationStoppedByUser,
-              requestApproval: (prompt, approvalSignal) => approvals.request(prompt, approvalSignal, owner.documentId),
+              requestApproval: (prompt, approvalSignal) => approvals.request(prompt, approvalSignal, currentOwnerDocumentId()),
               takeApprovalScope: (approvalStreamId, toolCallId) =>
                 approvals.takeDecisionPayload(approvalStreamId, toolCallId)?.scope,
               requestQuestion: (toolCallId, questions, questionSignal) =>
-                questionnaires.request({ streamId, toolCallId, questions }, owner.documentId, questionSignal),
+                questionnaires.request({ streamId, toolCallId, questions }, currentOwnerDocumentId(), questionSignal),
               onFileWrite: (producedFile) => {
                 const toolName = producedFile.operation === "written" ? "write_file" : "edit_file";
                 notifyWorkspaceFilesTouched(workspaceId, toolName);
@@ -6684,6 +6764,80 @@ export const llmClient = {
     return questionnaires.respondWithOutcome(promptId, response, ownerDocumentId);
   },
 
+  /** Return the active or initializing streamId owned by a desktop renderer for `chatId`, if any. */
+  activeStreamForChat(chatId: string): { streamId: string; ownerDocumentId: string } | null {
+    for (const [streamId, entry] of active) {
+      if (entry.chatId === chatId && !entry.rendererDetached) {
+        return { streamId, ownerDocumentId: entry.owner.documentId };
+      }
+    }
+    for (const [streamId, entry] of initializing) {
+      if (entry.chatId === chatId && !entry.rendererDetached) {
+        return { streamId, ownerDocumentId: entry.owner.documentId };
+      }
+    }
+    return null;
+  },
+
+  /**
+   * Atomically hand off an active or initializing desktop generation (plus all
+   * pending approvals, questionnaires, and owed turns) from one desktop window
+   * to another without detaching or cancelling approvals.
+   */
+  transferGenerationOwner(
+    chatId: string,
+    fromDocumentId: string,
+    newOwner: ChatGenerationOwner,
+  ): DesktopHandoffLiveStreamSnapshot | null {
+    if (newOwner.isDestroyed() || newOwner.kind === "remote") return null;
+    let streamId: string | null = null;
+    let entry: ActiveGeneration | InitializingGeneration | null = null;
+    for (const [id, candidate] of active) {
+      if (candidate.chatId === chatId && candidate.owner.documentId === fromDocumentId && !candidate.rendererDetached) {
+        streamId = id;
+        entry = candidate;
+        break;
+      }
+    }
+    if (!entry) {
+      for (const [id, candidate] of initializing) {
+        if (candidate.chatId === chatId && candidate.owner.documentId === fromDocumentId && !candidate.rendererDetached) {
+          streamId = id;
+          entry = candidate;
+          break;
+        }
+      }
+    }
+    if (!streamId || !entry) return null;
+
+    // All deltas have already been recorded synchronously into `desktopLiveAccumulator`
+    // before coalescing; discard pending coalesced batches for the old window so
+    // no stale delta lands after transfer.
+    deltaCoalescer.discard(streamId);
+
+    const prevRemove = entry.removeOwnerInvalidation;
+    entry.owner = newOwner;
+    prevRemove();
+    const targetStreamId = streamId;
+    entry.removeOwnerInvalidation = newOwner.onInvalidated(() => {
+      this.detachRenderer(targetStreamId, newOwner.documentId);
+    });
+
+    const pendingApprovals = approvals.rebindStreamOwner(streamId, fromDocumentId, newOwner.documentId);
+    const pendingQuestions = questionnaires.rebindStreamOwner(streamId, fromDocumentId, newOwner.documentId);
+    owedTurns.rebindOwner(streamId, fromDocumentId, newOwner.documentId);
+    subagentControlMainV2.rebindChatOwner(chatId, fromDocumentId, newOwner.documentId);
+
+    const snapshot = desktopLiveAccumulator.snapshot(
+      streamId,
+      pendingApprovals,
+      pendingQuestions,
+      entry.workspaceId,
+    );
+    logger.info("pi", `Transferred generation ${streamId} ownership from ${fromDocumentId} to ${newOwner.documentId}.`);
+    return snapshot;
+  },
+
   /**
    * Release renderer-owned interaction surfaces without stopping the
    * main-owned model operation. Terminal chat state is reconciled by the
@@ -6699,10 +6853,22 @@ export const llmClient = {
     if (initialization?.rendererDetached || generation?.rendererDetached) {
       return false;
     }
-    if (initialization) initialization.rendererDetached = true;
-    if (generation) generation.rendererDetached = true;
     const runtimeOwner = generation ?? initialization;
     if (!runtimeOwner) return false;
+    if (
+      desktopHandoffTickets.deferDetachIfPending(
+        runtimeOwner.chatId,
+        owner.documentId,
+        () => {
+          this.detachRenderer(streamId, owner.documentId);
+        },
+      )
+    ) {
+      return false;
+    }
+    if (initialization) initialization.rendererDetached = true;
+    if (generation) generation.rendererDetached = true;
+    notifyStreamOwnerInvalidated(runtimeOwner);
     runtimeOwner.stopCacheWarming?.();
     endLoadMonitor(runtimeOwner, streamId, false);
     runtimeOwner.formFill?.revoke();
@@ -6867,6 +7033,14 @@ export const llmClient = {
     // SessionEnd for a chat whose hooks ran in this process; never awaited.
     endWorkspaceChatSession(chatId, undefined, {
       onMessages: (lines) => logger.warn("hooks", `SessionEnd hooks for a deleted chat: ${lines.join("\n")}`),
+    });
+    return acpScratch.forget(chatId);
+  },
+
+  /** Reset workspace-bound hook/ACP scratch state after attaching a chat to a new workspace. */
+  resetChatWorkspaceSession(chatId: string): Promise<void> {
+    endWorkspaceChatSession(chatId, undefined, {
+      onMessages: (lines) => logger.warn("hooks", `SessionEnd hooks for a reattached chat: ${lines.join("\n")}`),
     });
     return acpScratch.forget(chatId);
   },

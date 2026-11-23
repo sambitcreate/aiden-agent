@@ -64,6 +64,7 @@ import { limitRows, showMoreLabel, useListLimit } from "../lib/list-limit";
 import { ariaKeyShortcut, matchesAccelerator, prettyAccelerator } from "../shared/keybindings";
 import { isComposingKey } from "../lib/dismiss-key";
 import { revealInList } from "../lib/reveal-in-list";
+import type { SettingsSection } from "../shared/settings-section";
 
 interface ModelPickerProps {
   providers: Provider[];
@@ -73,6 +74,16 @@ interface ModelPickerProps {
   disabled?: boolean;
   settingsBlockedReason?: string;
   hiddenModelsByProvider?: HiddenModelsByProvider;
+  /** Optional override for windows without TanStack Router (e.g. Quick Chat). */
+  onOpenSettings?: (section: SettingsSection) => void;
+  /** Optional observer for popover open/close transitions. */
+  onOpenChange?: (open: boolean) => void;
+  /** Show only the searchable model list (hides Model Pad tabs, Pad toggles, and hover details). */
+  listOnly?: boolean;
+  /** Optional async hook awaited before opening the popover (return false to cancel). */
+  beforeOpen?: () => Promise<boolean | void>;
+  /** Incrementing signal that closes any open popover and cancels pending beforeOpen calls. */
+  closeSignal?: number;
 }
 
 const BENCHMARK_DATE_FORMATTER = new Intl.DateTimeFormat(undefined, { dateStyle: "medium" });
@@ -286,6 +297,7 @@ function ModelListRow({
   isActive,
   isPinned,
   isOnPad,
+  showPadToggle = true,
   onChoose,
   onPreview,
   onTogglePin,
@@ -297,6 +309,7 @@ function ModelListRow({
   isActive: boolean;
   isPinned: boolean;
   isOnPad: boolean;
+  showPadToggle?: boolean;
   onChoose: (entry: ModelEntry) => void;
   onPreview: (value: string) => void;
   onTogglePin: (value: string) => unknown;
@@ -307,7 +320,11 @@ function ModelListRow({
     <CommandItem
       value={entry.value}
       aria-describedby={descriptionId}
-      aria-keyshortcuts={[ariaKeyShortcut(PIN_SHORTCUT), ariaKeyShortcut(PAD_SHORTCUT)].join(" ")}
+      aria-keyshortcuts={
+        showPadToggle
+          ? [ariaKeyShortcut(PIN_SHORTCUT), ariaKeyShortcut(PAD_SHORTCUT)].join(" ")
+          : ariaKeyShortcut(PIN_SHORTCUT)
+      }
       onSelect={() => onChoose(entry)}
       onMouseEnter={() => onPreview(entry.value)}
       className="group gap-2"
@@ -333,7 +350,9 @@ function ModelListRow({
       ) : null}
       {/* Read through aria-describedby only, so the option's name stays the model's. */}
       <span id={descriptionId} className="sr-only" aria-hidden="true">
-        {`${describeModel(entry)}. ${rowActionsDescription(isPinned, isOnPad)}.`}
+        {showPadToggle
+          ? `${describeModel(entry)}. ${rowActionsDescription(isPinned, isOnPad)}.`
+          : `${describeModel(entry)}. ${isPinned ? "Pinned" : "Not pinned"}.`}
       </span>
       {isActive ? <Check className="size-4 shrink-0 text-accent-text" /> : null}
       <ModelRowAction
@@ -344,18 +363,20 @@ function ModelListRow({
       >
         <Pin className={cn("size-3.5", isPinned && "fill-current text-accent-text")} />
       </ModelRowAction>
-      <ModelRowAction
-        label={isOnPad ? "Remove from Pad" : "Add to Pad"}
-        shortcut={PAD_SHORTCUT}
-        active={isOnPad}
-        onToggle={() => onTogglePad(entry.value)}
-      >
-        {isOnPad ? (
-          <Grid2x2Check className="size-3.5 text-accent-text" />
-        ) : (
-          <Grid2x2Plus className="size-3.5" />
-        )}
-      </ModelRowAction>
+      {showPadToggle ? (
+        <ModelRowAction
+          label={isOnPad ? "Remove from Pad" : "Add to Pad"}
+          shortcut={PAD_SHORTCUT}
+          active={isOnPad}
+          onToggle={() => onTogglePad(entry.value)}
+        >
+          {isOnPad ? (
+            <Grid2x2Check className="size-3.5 text-accent-text" />
+          ) : (
+            <Grid2x2Plus className="size-3.5" />
+          )}
+        </ModelRowAction>
+      ) : null}
     </CommandItem>
   );
 }
@@ -502,7 +523,25 @@ const PAD_COMMIT_CLOSE_DELAY_MS = 200;
 /** One toast for list-row removals, so only the latest removal offers Undo. */
 const REMOVE_FROM_PAD_TOAST_ID = "model-picker-remove-from-pad";
 
-export function ModelPicker({
+export function ModelPicker(props: ModelPickerProps) {
+  if (props.onOpenSettings) {
+    return <ModelPickerInner {...props} openSettings={props.onOpenSettings} />;
+  }
+  return <ModelPickerWithRouter {...props} />;
+}
+
+function ModelPickerWithRouter(props: ModelPickerProps) {
+  const navigate = useNavigate();
+  const openSettings = React.useCallback(
+    (section: SettingsSection) => {
+      void navigate({ to: "/settings", search: { section } });
+    },
+    [navigate],
+  );
+  return <ModelPickerInner {...props} openSettings={openSettings} />;
+}
+
+function ModelPickerInner({
   providers,
   providerId,
   model,
@@ -510,12 +549,28 @@ export function ModelPicker({
   disabled,
   settingsBlockedReason,
   hiddenModelsByProvider,
-}: ModelPickerProps) {
-  const navigate = useNavigate();
+  openSettings,
+  onOpenChange,
+  listOnly = false,
+  beforeOpen,
+  closeSignal,
+}: ModelPickerProps & { openSettings: (section: SettingsSection) => void }) {
   const [open, setOpen] = React.useState(false);
   const [view, setView] = React.useState<"pad" | "list">("list");
+  const openRequestRef = React.useRef(0);
+  const prevCloseSignalRef = React.useRef(closeSignal);
   const [search, setSearch] = React.useState("");
   const [previewValue, setPreviewValue] = React.useState<string>();
+  React.useEffect(() => () => {
+    openRequestRef.current += 1;
+  }, []);
+  React.useEffect(() => {
+    if (closeSignal === prevCloseSignalRef.current) return;
+    prevCloseSignalRef.current = closeSignal;
+    openRequestRef.current += 1;
+    setOpen(false);
+    setPreviewValue(undefined);
+  }, [closeSignal]);
   const contentRef = React.useRef<HTMLDivElement | null>(null);
   const searchRef = React.useRef<HTMLInputElement | null>(null);
   const showExternalDetails = useExternalModelDetails();
@@ -535,7 +590,7 @@ export function ModelPicker({
   const catalog = useProvidersModelInfo(providers);
   // Device-local measured speed for the detail card; display-only. Read afresh
   // each time the picker opens so new chats show up without a remount.
-  const paceSummaries = useModelPaceSummaries({ enabled: open, staleTime: 0 }).data;
+  const paceSummaries = useModelPaceSummaries({ enabled: open && !listOnly, staleTime: 0 }).data;
   // The composer re-renders on every streamed token. Keep the catalog derivation
   // keyed on its real inputs, and derive list order and detail positions only
   // while the popover is open.
@@ -748,11 +803,17 @@ export function ModelPicker({
     focusPad();
   }, [selectedPosition, focusPad]);
 
+  const closePicker = React.useCallback(() => {
+    setOpen(false);
+    onOpenChange?.(false);
+    setPreviewValue(undefined);
+  }, [onOpenChange]);
+
   const commit = React.useCallback(
     (entry: ModelEntry, close = false) => {
       if (entry.value !== selectedValue) onChange(entry.providerId, entry.model);
       setPreviewValue(entry.value);
-      if (close) setOpen(false);
+      if (close) closePicker();
       // Recents are history: the choice already happened, so a failed write is
       // not worth interrupting anyone for.
       void saveModelPadPreferences(({ recentModels: recent }) => {
@@ -765,7 +826,7 @@ export function ModelPicker({
         console.warn("Couldn’t record the recent model.", error);
       });
     },
-    [onChange, selectedValue, saveModelPadPreferences],
+    [closePicker, onChange, selectedValue, saveModelPadPreferences],
   );
 
   // Choosing on the Pad closes the picker once the knob's confirm pulse has shown,
@@ -784,7 +845,7 @@ export function ModelPicker({
     padCloseTimerRef.current = window.setTimeout(
       () => {
         padCloseTimerRef.current = null;
-        setOpen(false);
+        closePicker();
       },
       prefersReducedMotion() ? 0 : PAD_COMMIT_CLOSE_DELAY_MS,
     );
@@ -835,7 +896,8 @@ export function ModelPicker({
   }, [pinned]);
   const handleRowShortcut = (event: React.KeyboardEvent) => {
     const pin = matchesAccelerator(event, PIN_SHORTCUT);
-    if (!pin && !matchesAccelerator(event, PAD_SHORTCUT)) return;
+    const pad = !listOnly && matchesAccelerator(event, PAD_SHORTCUT);
+    if (!pin && !pad) return;
     event.preventDefault();
     if (event.repeat || isComposingKey(event)) return;
     const entry = listPage.sections.flat().find((row) => row.value === previewValue);
@@ -861,6 +923,7 @@ export function ModelPicker({
       isActive={entry.value === selectedValue}
       isPinned={pinned.includes(entry.value)}
       isOnPad={Boolean(modelPadPlacements[entry.value])}
+      showPadToggle={!listOnly}
       onChoose={(choice) => commit(choice, true)}
       onPreview={setPreviewValue}
       onTogglePin={togglePin}
@@ -868,19 +931,34 @@ export function ModelPicker({
     />
   );
 
-  const handleOpenChange = (next: boolean) => {
+  const applyOpenState = (next: boolean) => {
     setOpen(next);
+    onOpenChange?.(next);
     if (next) {
       // Cleared on open rather than close, so the list keeps its filter while the
       // popover animates out.
       setSearch("");
       if (announceTimerRef.current !== null) window.clearTimeout(announceTimerRef.current);
       setActionAnnouncement("");
-      setView(hasPadModels ? "pad" : "list");
+      setView(listOnly ? "list" : hasPadModels ? "pad" : "list");
       setPreviewValue(selectedValue || positioned[0]?.value);
     } else {
       setPreviewValue(undefined);
     }
+  };
+
+  const handleOpenChange = (next: boolean) => {
+    const requestId = ++openRequestRef.current;
+    if (next && beforeOpen) {
+      void beforeOpen().then(
+        (proceed) => {
+          if (proceed !== false && openRequestRef.current === requestId) applyOpenState(true);
+        },
+        () => undefined,
+      );
+      return;
+    }
+    applyOpenState(next);
   };
 
   const switchView = (next: "pad" | "list", focusPanel = true, seed = "") => {
@@ -905,8 +983,8 @@ export function ModelPicker({
   const customizeBlockedReasonId = `${pickerId}-customize-blocked`;
   const openModelDataSettings = () => {
     if (settingsBlockedReason) return;
-    setOpen(false);
-    void navigate({ to: "/settings", search: { section: "modelData" } });
+    handleOpenChange(false);
+    openSettings("modelData");
   };
 
   const handleViewTabKeyDown = (event: React.KeyboardEvent<HTMLButtonElement>) => {
@@ -982,7 +1060,7 @@ export function ModelPicker({
         onOpenAutoFocus={(event) => {
           event.preventDefault();
           requestAnimationFrame(() => {
-            if (!hasPadModels) {
+            if (listOnly || !hasPadModels) {
               searchRef.current?.focus();
               return;
             }
@@ -991,6 +1069,7 @@ export function ModelPicker({
         }}
       >
         <div className="relative w-[min(19.75rem,calc(100vw-1.5rem))] overflow-hidden rounded-popover bg-popover shadow-popover">
+        {!listOnly ? (
         <div className="flex items-center gap-1 p-1.5 pb-0">
           <div
             className="grid min-w-0 flex-1 grid-cols-2 rounded-control bg-control/60 p-0.5"
@@ -1057,8 +1136,9 @@ export function ModelPicker({
             </>
           ) : null}
         </div>
+        ) : null}
 
-        {view === "pad" ? (
+        {!listOnly && view === "pad" ? (
           <section
             id={padPanelId}
             role="tabpanel"
@@ -1105,8 +1185,9 @@ export function ModelPicker({
         ) : (
           <section
             id={listPanelId}
-            role="tabpanel"
-            aria-labelledby={listTabId}
+            role={listOnly ? undefined : "tabpanel"}
+            aria-labelledby={listOnly ? undefined : listTabId}
+            aria-label={listOnly ? "Models" : undefined}
             className="min-w-0 pt-1"
           >
             <Command
@@ -1168,7 +1249,7 @@ export function ModelPicker({
           </section>
         )}
 
-        {!(showExternalDetails && (view === "list" || hasPadModels)) && activeAttribution ? (
+        {!listOnly && !(showExternalDetails && (view === "list" || hasPadModels)) && activeAttribution ? (
           <div className="border-t border-separator px-3 py-1.5 text-mini leading-4">
             <a
               href={activeAttribution.url}
@@ -1181,7 +1262,7 @@ export function ModelPicker({
           </div>
         ) : null}
         </div>
-        {showExternalDetails && (view === "list" || hasPadModels) ? (
+        {!listOnly && showExternalDetails && (view === "list" || hasPadModels) ? (
           <ModelHoverDetails
             model={activePosition}
             alsoVia={

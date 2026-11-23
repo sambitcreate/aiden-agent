@@ -7,6 +7,7 @@ import {
   discardChatDraft,
   finishChatDraftSend,
   getChatDraft,
+  requestChatDraftComposerFocus,
   retainChatDraft,
   chatDraftWorktreeRequest,
   setChatDraftGitMode,
@@ -18,7 +19,11 @@ import {
 } from "../lib/chat-draft";
 import { registerChatPromptTarget } from "../lib/chat-prompt-bridge";
 import { resolveModelDisplay } from "../lib/model-display";
-import { readChatDraftGitMemory, resolveDraftWorktreeDefaults } from "../lib/chat-draft-git-memory";
+import {
+  readChatDraftGitMemory,
+  resolveDraftWorktreeDefaults,
+  seedDraftWorktreeFromGitInfo,
+} from "../lib/chat-draft-git-memory";
 import {
   draftWorkInOptions,
   draftWorktreeHint,
@@ -37,7 +42,6 @@ import {
 } from "../lib/draft-worktree-send";
 import { isValidBranchName, type FirstMessageWorktreeRequest } from "../shared/worktree-on-send";
 import { localComputerNoun } from "../shared/computer-noun";
-import { DraftWorktreeSendView } from "../components/draft-worktree-send-view";
 import type { GitBranchPickerDraft } from "../components/git-branch-picker";
 import { QueuedMessages } from "../components/queued-messages";
 import { NewChatHeadline } from "../components/new-chat-headline";
@@ -96,9 +100,19 @@ import {
   MANAGED_WORKTREE_MISSING_SEND_REFUSAL,
   WORKSPACE_FOLDER_MISSING_SEND_REFUSAL,
   workspaceFolderCheckApplies,
+  type WorkspaceFolderPresenceResult,
 } from "../shared/workspace-folder-presence";
 import { useOptionalNewChatActions } from "../lib/new-chat-actions";
-import { Button, DismissHoverSurfaces, EmptyState, ScrollArea, ScrollAreaFooterStack, Text, toast } from "../components/ui";
+import {
+  Badge,
+  Button,
+  DismissHoverSurfaces,
+  EmptyState,
+  ScrollArea,
+  ScrollAreaFooterStack,
+  Text,
+  toast,
+} from "../components/ui";
 import {
   agentsInstructionNoticeMessage,
   createAgentsInstructionNoticeLog,
@@ -150,6 +164,7 @@ import {
   WorkspaceChip,
   WorkspaceToolButtons,
 } from "../components/chat-top-bar";
+import { AttachWorkspaceDialog } from "../components/attach-workspace-dialog";
 import { OpenInEditorPicker } from "../components/open-in-editor-picker";
 import { DesignModeBannerSlot, useDesignChatBodyHidden } from "../design/design-layout";
 import { useCommandHandler, useCommandSystem, useShortcutBinding, useShortcutLabel } from "../lib/command-system";
@@ -183,16 +198,25 @@ import { liveChatReachable, stopForLive, useLiveChatController } from "./live-ch
 import type { ChatInputSourceV1 } from "../shared/chat-input-source";
 import { ComputerUseContinueCallout } from "../components/computer-use-access-approval";
 import {
+  attachGenerationStream,
   chatsApi,
   aidenRemoteApi,
+  claimChatHandoff,
   createChatTurnId,
+  createGenerationStreamBuffer,
+  detachHandoffStream,
   settingsApi,
   startGeneration,
   gitApi,
   workspacesApi,
   type ApprovalPrompt,
   type GenerationHandle,
+  type StreamCallbacks,
 } from "../lib/ipc";
+import {
+  consumePendingChatHandoff,
+  subscribePendingChatHandoff,
+} from "../lib/chat-handoff-bridge";
 import { isNoWorkspace, noWorkspaceHome } from "../lib/no-workspace";
 import { continueInWorkspaceChoices } from "../lib/new-chat-workspaces";
 import { noWorkspaceFolderForFirstSend } from "../lib/no-workspace-send";
@@ -200,7 +224,9 @@ import {
   queryKeys,
   installAppendedChatSnapshot,
   logoutBuiltinProvider,
+  markChatRecentlyPromoted,
   refreshCodexProviderState,
+  upsertCreatedWorkspaceInCache,
   useAllRegularChats,
   useChat,
   useGitInfo,
@@ -222,7 +248,7 @@ import {
   EnvironmentPanelToggle,
   QuickViewIcon,
   QuickViewToggle,
-  useEnvironmentPanel,
+  useEnvironmentPanelCore,
 } from "../components/environment-panel";
 import { EventPresence } from "../components/event-presence";
 import {
@@ -231,6 +257,7 @@ import {
   type Chat,
   type ChatMeta,
   type GitBranches,
+  type GitInfo,
   type Workspace,
 } from "../lib/types";
 import { COMPUTER_USE_CONTINUE_PROMPT } from "../shared/computer-use-access";
@@ -248,7 +275,7 @@ import {
   type ToolActivity,
 } from "../lib/agent-activity";
 import { STREAMING_REVEAL_FALLBACK_MS } from "../lib/streaming-reveal";
-import { assistantPresentationRows } from "../lib/assistant-message-presentation";
+import { liveAssistantPresentationRows } from "../lib/assistant-message-presentation";
 import { isLatestRemoteApprovalRefresh, mergeRemoteApproval } from "../lib/remote-approval";
 import {
   hasActiveThinkingStep,
@@ -500,7 +527,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
   const steerableDetachedProjection = observedRunVisible ? null : visibleDetachedProjection;
   const terminal = useWorkspaceTerminal();
   const git = useGitInfo(effectiveWorkspace?.id);
-  const environmentPanel = useEnvironmentPanel();
+  const environmentPanel = useEnvironmentPanelCore();
   const designChatBodyHidden = useDesignChatBodyHidden();
   const transcriptUnderFloatingPanel =
     environmentPanel.surfaceMode === "tools-floating" && environmentPanel.toolsPresented;
@@ -798,7 +825,9 @@ export function ChatPane({ chatId }: { chatId: string }) {
 
   React.useEffect(() => {
     if (chat.data && effectiveWorkspaceId && effectiveWorkspaceId !== activeId) {
-      selectWorkspace(effectiveWorkspaceId);
+      React.startTransition(() => {
+        selectWorkspace(effectiveWorkspaceId);
+      });
     }
   }, [activeId, chat.data, effectiveWorkspaceId, selectWorkspace]);
 
@@ -1675,6 +1704,405 @@ export function ChatPane({ chatId }: { chatId: string }) {
     });
   }, []);
 
+  const createStreamCallbacks = React.useCallback(
+    (
+      generationIntent: number,
+      options: { providerId?: string; fallbackWorkspaceId?: string } = {},
+    ): StreamCallbacks => {
+      const scheduleStreamFlush = () => {
+        if (deltaFrameRef.current !== null) return;
+        deltaFrameRef.current = window.requestAnimationFrame(() => {
+          deltaFrameRef.current = null;
+          const pendingDelta = pendingDeltaRef.current;
+          const pendingReasoningDelta = pendingReasoningDeltaRef.current;
+          pendingDeltaRef.current = "";
+          pendingReasoningDeltaRef.current = "";
+          if (!mountedRef.current || generationIntentRef.current !== generationIntent) return;
+          if (pendingDelta) {
+            streamedTextRef.current += pendingDelta;
+            setStreamingText(streamedTextRef.current);
+            markTextStreaming();
+          }
+          if (pendingReasoningDelta) {
+            streamedReasoningRef.current += pendingReasoningDelta;
+            setStreamingReasoning(streamedReasoningRef.current);
+          }
+        });
+      };
+      return {
+        onDelta: (delta) => {
+          if (mountedRef.current && generationIntentRef.current === generationIntent) {
+            setIsModelLoading(false);
+            setModelCallRetry(null);
+            pendingDeltaRef.current += delta;
+            scheduleStreamFlush();
+          }
+        },
+        onReset: () => {
+          if (!mountedRef.current || generationIntentRef.current !== generationIntent) return;
+          if (deltaFrameRef.current !== null) {
+            window.cancelAnimationFrame(deltaFrameRef.current);
+          }
+          deltaFrameRef.current = null;
+          pendingDeltaRef.current = "";
+          pendingReasoningDeltaRef.current = "";
+          streamedTextRef.current = "";
+          streamedReasoningRef.current = "";
+          setStreamingText("");
+          setStreamingReasoning(null);
+          clearTextStreaming();
+          setStreamComplete(false);
+        },
+        onArtifactEvent: (event) => {
+          if (!mountedRef.current || generationIntentRef.current !== generationIntent) return;
+          setVisualDrafts((current) => reduceVisualDrafts(current, event));
+          setUiDrafts((current) => reduceUiDrafts(current, event));
+          setStreamingUiVisuals((current) => reduceUiVisuals(current, event));
+          if (event.operation === "draft" || event.operation === "draft_end") return;
+          if (event.operation === "ui" || event.operation === "ui_draft") {
+            if (event.operation === "ui") setIsModelLoading(false);
+            return;
+          }
+          if (event.operation === "reset") {
+            setStreamingArtifacts([]);
+            streamingArtifactsRef.current = [];
+            return;
+          }
+          const { artifact } = event;
+          setIsModelLoading(false);
+          setModelCallRetry(null);
+          // Seed main's ready preview before the frame mounts so the final
+          // visual replaces its draft without a loading placeholder.
+          if (artifact.kind === "html" && event.src) primeInlineVisualPreview(chatId, artifact, event.src);
+          if (event.toolCallId) {
+            const toolCallId = event.toolCallId;
+            // Visuals key by mediaId, images by attachment id. Both
+            // are unique per generation, so this map only grows; entries for
+            // artifacts no longer shown are never looked up.
+            const key = artifact.kind === "html" ? artifact.mediaId : artifact.attachment.id;
+            setStreamingArtifactPlacements((current) =>
+              current.get(key) === toolCallId ? current : new Map(current).set(key, toolCallId),
+            );
+          }
+          if (artifact.kind === "html") {
+            // The latest presentation wins, so a revision can widen or narrow.
+            const wide = event.layout === "wide";
+            setStreamingWideVisuals((current) => {
+              if (current.has(artifact.mediaId) === wide) return current;
+              const next = new Set(current);
+              if (wide) next.add(artifact.mediaId);
+              else next.delete(artifact.mediaId);
+              return next;
+            });
+            const index = streamingArtifactsRef.current.findIndex(
+              (candidate) => candidate.kind === "html" && candidate.mediaId === artifact.mediaId,
+            );
+            if (index >= 0) {
+              streamingArtifactsRef.current = streamingArtifactsRef.current.map((candidate, i) =>
+                i === index ? artifact : candidate,
+              );
+            } else {
+              streamingArtifactsRef.current = [...streamingArtifactsRef.current, artifact];
+            }
+            setStreamingArtifacts(streamingArtifactsRef.current);
+            return;
+          }
+          if (
+            streamingArtifactsRef.current.some(
+              (candidate) =>
+                candidate.kind === "image" && candidate.attachment.id === artifact.attachment.id,
+            )
+          ) {
+            return;
+          }
+          streamingArtifactsRef.current = [...streamingArtifactsRef.current, artifact];
+          setStreamingArtifacts(streamingArtifactsRef.current);
+        },
+        onReasoningDelta: (delta) => {
+          if (mountedRef.current && generationIntentRef.current === generationIntent) {
+            setIsModelLoading(false);
+            setModelCallRetry(null);
+            pendingReasoningDeltaRef.current += delta;
+            scheduleStreamFlush();
+          }
+        },
+        onStatus: (phase) => {
+          if (!mountedRef.current || generationIntentRef.current !== generationIntent) return;
+          if (phase === "model_loading") setIsModelLoading(true);
+          else if (phase === "model_ready") setIsModelLoading(false);
+        },
+        onRetrying: (retry) => {
+          if (!mountedRef.current || generationIntentRef.current !== generationIntent) return;
+          setModelCallRetryNow(Date.now());
+          setModelCallRetry(retry);
+        },
+        onAgentsInstructionNotices: (notices) => {
+          if (!mountedRef.current || generationIntentRef.current !== generationIntent) return;
+          for (const notice of agentsInstructionNotices.update(chatId, notices)) {
+            toast.info(agentsInstructionNoticeMessage(notice));
+          }
+        },
+        onHookMessages: (messages) => {
+          if (!mountedRef.current || generationIntentRef.current !== generationIntent) return;
+          const notice = hookMessagesNotice(messages);
+          if (!notice) return;
+          const description =
+            notice.lines.length || notice.more ? (
+              <span className="flex flex-col">
+                {notice.lines.map((line, index) => (
+                  <span key={index}>{line}</span>
+                ))}
+                {notice.more ? <span>{`and ${notice.more} more`}</span> : null}
+              </span>
+            ) : undefined;
+          toast.info(notice.title, description ? { description } : undefined);
+        },
+        onContextPressure: (pressure) => {
+          if (mountedRef.current && generationIntentRef.current === generationIntent) {
+            setContextPressure(pressure);
+          }
+        },
+        ...(environmentPanel.subagentsEnabled
+          ? {
+              onSubagents: (snapshot: SubagentRunSnapshot) => {
+                const targetWorkspaceId =
+                  effectiveWorkspaceIdRef.current ?? options.fallbackWorkspaceId;
+                if (
+                  !mountedRef.current ||
+                  generationIntentRef.current !== generationIntent ||
+                  chatIdRef.current !== chatId ||
+                  snapshot.chatId !== chatId ||
+                  // Read at event time: a New worktree draft's first turn
+                  // starts while the chat moves into its new workspace.
+                  (targetWorkspaceId !== undefined && snapshot.workspaceId !== targetWorkspaceId)
+                ) {
+                  return;
+                }
+                setLiveSubagents((current) =>
+                  mergeSubagentSnapshots(current, [snapshot], {
+                    chatId,
+                    workspaceId: targetWorkspaceId ?? snapshot.workspaceId,
+                  }),
+                );
+              },
+              onSubagentTranscript: (update: SubagentTranscriptUpdateV1) => {
+                if (
+                  !mountedRef.current ||
+                  generationIntentRef.current !== generationIntent ||
+                  chatIdRef.current !== chatId
+                ) {
+                  return;
+                }
+                setLiveSubagentTranscripts((current) => foldLiveSubagentTranscript(current, update));
+              },
+            }
+          : {}),
+        onTimeline: (next) => {
+          if (mountedRef.current && generationIntentRef.current === generationIntent) {
+            // Each update carries every step; keeping the unchanged ones
+            // lets their memoized rows skip rendering.
+            const timeline = replaceEqualDeep(generationTimelineRef.current, next);
+            generationTimelineRef.current = timeline;
+            setGenerationTimeline(timeline);
+            // A tool starting means the retried request answered.
+            if (latestActiveAgentStep(timeline)) setModelCallRetry(null);
+          }
+        },
+        onApproval: (prompt) => {
+          if (mountedRef.current && generationIntentRef.current === generationIntent) {
+            setApprovals((prev) =>
+              prev.some((existing) => existing.approvalId === prompt.approvalId)
+                ? prev
+                : [...prev, prompt],
+            );
+          }
+        },
+        onQuestionnaire: (prompt) => {
+          if (mountedRef.current && generationIntentRef.current === generationIntent) {
+            setQuestionnaireSubmitting(false);
+            setQuestionnaire(prompt);
+          }
+        },
+        onTodo: (snapshot) => {
+          if (
+            mountedRef.current &&
+            generationIntentRef.current === generationIntent &&
+            snapshot.chatId === chatId
+          ) {
+            todoSnapshotReadFence.markLive(snapshot.chatId);
+            setTodoSnapshot(snapshot);
+          }
+        },
+        onDone: async (full, finalTimeline, updatedChat, finalReasoning) => {
+          if (generationIntentRef.current !== generationIntent) return;
+          generationRef.current = null;
+          generationChatIdRef.current = null;
+          setCanStopGeneration(false);
+          if (deltaFrameRef.current !== null) window.cancelAnimationFrame(deltaFrameRef.current);
+          deltaFrameRef.current = null;
+          pendingDeltaRef.current = "";
+          pendingReasoningDeltaRef.current = "";
+          streamedTextRef.current = full;
+          streamedReasoningRef.current = finalReasoning ?? "";
+          setStreamingText(full);
+          setStreamingReasoning(finalReasoning?.trim() ? finalReasoning : null);
+          const persistedAssistant = updatedChat?.messages[updatedChat.messages.length - 1];
+          setPersistedHandoffMessageId(
+            persistedAssistant?.role === "assistant" && persistedAssistant.content === full
+              ? persistedAssistant.id
+              : null,
+          );
+          clearTextStreaming();
+          setStreamComplete(true);
+          if (finalTimeline) {
+            generationTimelineRef.current = finalTimeline;
+            setGenerationTimeline(finalTimeline);
+          }
+          if (updatedChat) {
+            await qc.cancelQueries({ queryKey: queryKeys.chat(chatId), exact: true });
+            qc.setQueryData(queryKeys.chat(chatId), updatedChat);
+            void qc.invalidateQueries({ queryKey: queryKeys.chats });
+          }
+          await waitForStreamHandoff(Boolean(full.trim()));
+          if (generationIntentRef.current !== generationIntent) return;
+          if (mountedRef.current) {
+            setLiveSubagents([]);
+            setLiveSubagentTranscripts(NO_LIVE_SUBAGENT_TRANSCRIPTS);
+            setStreamingText(null);
+            setStreamingReasoning(null);
+            setStreamingArtifacts([]);
+            setVisualDrafts(NO_VISUAL_DRAFTS);
+            setStreamingUiVisuals(NO_UI_VISUALS);
+            setUiDrafts(NO_UI_DRAFTS);
+            streamingArtifactsRef.current = [];
+            streamedTextRef.current = "";
+            streamedReasoningRef.current = "";
+            setStreamComplete(false);
+            setPersistedHandoffMessageId(null);
+            setIsStoppingGeneration(false);
+            setIsModelLoading(false);
+            setModelCallRetry(null);
+            setGenerationTimeline(null);
+            generationTimelineRef.current = null;
+            setApprovals([]);
+            // Timed-out prompts remain answerable after the agent continues with its default.
+            setQuestionnaire((current) =>
+              retainExpiredAskUserQuestionForLateAnswer(current),
+            );
+            setQuestionnaireSubmitting(false);
+          }
+        },
+        onError: (message, partialContent, finalTimeline, updatedChat, finalReasoning) => {
+          chatMessageQueue(chatId).pause();
+          void (async () => {
+            if (generationIntentRef.current !== generationIntent) return;
+            generationRef.current = null;
+            generationChatIdRef.current = null;
+            setCanStopGeneration(false);
+            if (deltaFrameRef.current !== null) {
+              window.cancelAnimationFrame(deltaFrameRef.current);
+            }
+            deltaFrameRef.current = null;
+            const bufferedPartial = streamedTextRef.current + pendingDeltaRef.current;
+            const bufferedReasoning =
+              streamedReasoningRef.current + pendingReasoningDeltaRef.current;
+            pendingDeltaRef.current = "";
+            pendingReasoningDeltaRef.current = "";
+            const resolvedPartialContent = partialContent ?? bufferedPartial;
+            const resolvedReasoning = finalReasoning ?? bufferedReasoning;
+            streamedTextRef.current = resolvedPartialContent;
+            streamedReasoningRef.current = resolvedReasoning;
+            setStreamingReasoning(resolvedReasoning.trim() ? resolvedReasoning : null);
+            const persistedAssistant = updatedChat?.messages[updatedChat.messages.length - 1];
+            setPersistedHandoffMessageId(
+              persistedAssistant?.role === "assistant" &&
+                persistedAssistant.content === resolvedPartialContent
+                ? persistedAssistant.id
+                : null,
+            );
+            clearTextStreaming();
+            setStreamComplete(true);
+            if (finalTimeline) {
+              generationTimelineRef.current = finalTimeline;
+              setGenerationTimeline(finalTimeline);
+            }
+            const resolvedProviderId = options.providerId ?? updatedChat?.providerId;
+            if (resolvedProviderId === OPENAI_CODEX_PROVIDER_ID) {
+              void refreshCodexProviderState(qc);
+            }
+            const partial = resolvedPartialContent.trim();
+            if (updatedChat) {
+              await qc.cancelQueries({ queryKey: queryKeys.chat(chatId), exact: true });
+              qc.setQueryData(queryKeys.chat(chatId), updatedChat);
+              void qc.invalidateQueries({ queryKey: queryKeys.chats });
+            }
+            if (partial) {
+              setStreamingText(resolvedPartialContent);
+              setStreamComplete(true);
+              await waitForStreamHandoff(true);
+              if (generationIntentRef.current !== generationIntent) return;
+            }
+            if (mountedRef.current) {
+              if (updatedChat || !partial) {
+                setLiveSubagents([]);
+                setLiveSubagentTranscripts(NO_LIVE_SUBAGENT_TRANSCRIPTS);
+              }
+              if (!partial || updatedChat) {
+                setStreamingText(null);
+                setStreamingReasoning(null);
+                streamedTextRef.current = "";
+                streamedReasoningRef.current = "";
+                setStreamComplete(false);
+                setPersistedHandoffMessageId(null);
+              }
+              const hasUnpersistedArtifact = streamingArtifactsRef.current.length > 0;
+              setHasUnpersistedResponse(
+                Boolean((partial || hasUnpersistedArtifact) && !updatedChat),
+              );
+              if (updatedChat) {
+                setStreamingArtifacts([]);
+                setVisualDrafts(NO_VISUAL_DRAFTS);
+                setStreamingUiVisuals(NO_UI_VISUALS);
+                setUiDrafts(NO_UI_DRAFTS);
+                streamingArtifactsRef.current = [];
+              }
+              setIsStoppingGeneration(false);
+              setIsModelLoading(false);
+              setModelCallRetry(null);
+              if (!partial || updatedChat) {
+                setGenerationTimeline(null);
+                generationTimelineRef.current = null;
+              }
+              setApprovals([]);
+              setQuestionnaire((current) =>
+                retainExpiredAskUserQuestionForLateAnswer(current),
+              );
+              setQuestionnaireSubmitting(false);
+              const persistedFailure =
+                updatedChat?.messages[updatedChat.messages.length - 1]?.role === "assistant" &&
+                updatedChat.messages[updatedChat.messages.length - 1]?.providerFailure;
+              setError(
+                persistedFailure
+                  ? null
+                  : partial
+                    ? `Generation stopped after a partial response: ${message}`
+                    : message,
+              );
+            }
+          })();
+        },
+      };
+    },
+    [
+      chatId,
+      clearTextStreaming,
+      environmentPanel.subagentsEnabled,
+      markTextStreaming,
+      qc,
+      waitForStreamHandoff,
+    ],
+  );
+
   const runGeneration = React.useCallback(
     (messageTurnId: string) => {
       const generationIntent = generationIntentRef.current;
@@ -1707,26 +2135,6 @@ export function ChatPane({ chatId }: { chatId: string }) {
       setApprovals([]);
       setQuestionnaire(null);
       setQuestionnaireSubmitting(false);
-      const scheduleStreamFlush = () => {
-        if (deltaFrameRef.current !== null) return;
-        deltaFrameRef.current = window.requestAnimationFrame(() => {
-          deltaFrameRef.current = null;
-          const pendingDelta = pendingDeltaRef.current;
-          const pendingReasoningDelta = pendingReasoningDeltaRef.current;
-          pendingDeltaRef.current = "";
-          pendingReasoningDeltaRef.current = "";
-          if (!mountedRef.current || generationIntentRef.current !== generationIntent) return;
-          if (pendingDelta) {
-            streamedTextRef.current += pendingDelta;
-            setStreamingText(streamedTextRef.current);
-            markTextStreaming();
-          }
-          if (pendingReasoningDelta) {
-            streamedReasoningRef.current += pendingReasoningDelta;
-            setStreamingReasoning(streamedReasoningRef.current);
-          }
-        });
-      };
       const visualize = visualizeTurnRef.current === true;
       visualizeTurnRef.current = false;
       // A chat whose canvas is open says what it shows: the selection and its size on screen.
@@ -1752,360 +2160,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
                   ? providerThinkingLevel
                   : undefined,
         },
-        {
-          onDelta: (delta) => {
-            if (mountedRef.current && generationIntentRef.current === generationIntent) {
-              setIsModelLoading(false);
-              setModelCallRetry(null);
-              pendingDeltaRef.current += delta;
-              scheduleStreamFlush();
-            }
-          },
-          onReset: () => {
-            if (!mountedRef.current || generationIntentRef.current !== generationIntent) return;
-            if (deltaFrameRef.current !== null) {
-              window.cancelAnimationFrame(deltaFrameRef.current);
-            }
-            deltaFrameRef.current = null;
-            pendingDeltaRef.current = "";
-            pendingReasoningDeltaRef.current = "";
-            streamedTextRef.current = "";
-            streamedReasoningRef.current = "";
-            setStreamingText("");
-            setStreamingReasoning(null);
-            clearTextStreaming();
-            setStreamComplete(false);
-          },
-          onArtifactEvent: (event) => {
-            if (!mountedRef.current || generationIntentRef.current !== generationIntent) return;
-            setVisualDrafts((current) => reduceVisualDrafts(current, event));
-            setUiDrafts((current) => reduceUiDrafts(current, event));
-            setStreamingUiVisuals((current) => reduceUiVisuals(current, event));
-            if (event.operation === "draft" || event.operation === "draft_end") return;
-            if (event.operation === "ui" || event.operation === "ui_draft") {
-              if (event.operation === "ui") setIsModelLoading(false);
-              return;
-            }
-            if (event.operation === "reset") {
-              setStreamingArtifacts([]);
-              streamingArtifactsRef.current = [];
-              return;
-            }
-            const { artifact } = event;
-            setIsModelLoading(false);
-            setModelCallRetry(null);
-            // Seed main's ready preview before the frame mounts so the final
-            // visual replaces its draft without a loading placeholder.
-            if (artifact.kind === "html" && event.src) primeInlineVisualPreview(chatId, artifact, event.src);
-            if (event.toolCallId) {
-              const toolCallId = event.toolCallId;
-              // Visuals key by mediaId, images by attachment id. Both
-              // are unique per generation, so this map only grows; entries for
-              // artifacts no longer shown are never looked up.
-              const key = artifact.kind === "html" ? artifact.mediaId : artifact.attachment.id;
-              setStreamingArtifactPlacements((current) =>
-                current.get(key) === toolCallId ? current : new Map(current).set(key, toolCallId),
-              );
-            }
-            if (artifact.kind === "html") {
-              // The latest presentation wins, so a revision can widen or narrow.
-              const wide = event.layout === "wide";
-              setStreamingWideVisuals((current) => {
-                if (current.has(artifact.mediaId) === wide) return current;
-                const next = new Set(current);
-                if (wide) next.add(artifact.mediaId);
-                else next.delete(artifact.mediaId);
-                return next;
-              });
-              const index = streamingArtifactsRef.current.findIndex(
-                (candidate) => candidate.kind === "html" && candidate.mediaId === artifact.mediaId,
-              );
-              if (index >= 0) {
-                streamingArtifactsRef.current = streamingArtifactsRef.current.map((candidate, i) =>
-                  i === index ? artifact : candidate,
-                );
-              } else {
-                streamingArtifactsRef.current = [...streamingArtifactsRef.current, artifact];
-              }
-              setStreamingArtifacts(streamingArtifactsRef.current);
-              return;
-            }
-            if (
-              streamingArtifactsRef.current.some(
-                (candidate) =>
-                  candidate.kind === "image" && candidate.attachment.id === artifact.attachment.id,
-              )
-            ) {
-              return;
-            }
-            streamingArtifactsRef.current = [...streamingArtifactsRef.current, artifact];
-            setStreamingArtifacts(streamingArtifactsRef.current);
-          },
-          onReasoningDelta: (delta) => {
-            if (mountedRef.current && generationIntentRef.current === generationIntent) {
-              setIsModelLoading(false);
-              setModelCallRetry(null);
-              pendingReasoningDeltaRef.current += delta;
-              scheduleStreamFlush();
-            }
-          },
-          onStatus: (phase) => {
-            if (!mountedRef.current || generationIntentRef.current !== generationIntent) return;
-            if (phase === "model_loading") setIsModelLoading(true);
-            else if (phase === "model_ready") setIsModelLoading(false);
-          },
-          onRetrying: (retry) => {
-            if (!mountedRef.current || generationIntentRef.current !== generationIntent) return;
-            setModelCallRetryNow(Date.now());
-            setModelCallRetry(retry);
-          },
-          onAgentsInstructionNotices: (notices) => {
-            if (!mountedRef.current || generationIntentRef.current !== generationIntent) return;
-            for (const notice of agentsInstructionNotices.update(chatId, notices)) {
-              toast.info(agentsInstructionNoticeMessage(notice));
-            }
-          },
-          onHookMessages: (messages) => {
-            if (!mountedRef.current || generationIntentRef.current !== generationIntent) return;
-            const notice = hookMessagesNotice(messages);
-            if (!notice) return;
-            const description =
-              notice.lines.length || notice.more ? (
-                <span className="flex flex-col">
-                  {notice.lines.map((line, index) => (
-                    <span key={index}>{line}</span>
-                  ))}
-                  {notice.more ? <span>{`and ${notice.more} more`}</span> : null}
-                </span>
-              ) : undefined;
-            toast.info(notice.title, description ? { description } : undefined);
-          },
-          onContextPressure: (pressure) => {
-            if (mountedRef.current && generationIntentRef.current === generationIntent) {
-              setContextPressure(pressure);
-            }
-          },
-          ...(environmentPanel.subagentsEnabled
-            ? {
-                onSubagents: (snapshot: SubagentRunSnapshot) => {
-                  if (
-                    !mountedRef.current ||
-                    generationIntentRef.current !== generationIntent ||
-                    chatIdRef.current !== chatId ||
-                    snapshot.chatId !== chatId ||
-                    // Read at event time: a New worktree draft's first turn
-                    // starts while the chat moves into its new workspace.
-                    snapshot.workspaceId !== effectiveWorkspaceIdRef.current
-                  ) {
-                    return;
-                  }
-                  setLiveSubagents((current) =>
-                    mergeSubagentSnapshots(current, [snapshot], {
-                      chatId,
-                      workspaceId: effectiveWorkspaceIdRef.current,
-                    }),
-                  );
-                },
-                onSubagentTranscript: (update: SubagentTranscriptUpdateV1) => {
-                  if (
-                    !mountedRef.current ||
-                    generationIntentRef.current !== generationIntent ||
-                    chatIdRef.current !== chatId
-                  ) {
-                    return;
-                  }
-                  setLiveSubagentTranscripts((current) => foldLiveSubagentTranscript(current, update));
-                },
-              }
-            : {}),
-          onTimeline: (next) => {
-            if (mountedRef.current && generationIntentRef.current === generationIntent) {
-              // Each update carries every step; keeping the unchanged ones
-              // lets their memoized rows skip rendering.
-              const timeline = replaceEqualDeep(generationTimelineRef.current, next);
-              generationTimelineRef.current = timeline;
-              setGenerationTimeline(timeline);
-              // A tool starting means the retried request answered.
-              if (latestActiveAgentStep(timeline)) setModelCallRetry(null);
-            }
-          },
-          onApproval: (prompt) => {
-            if (mountedRef.current && generationIntentRef.current === generationIntent) {
-              setApprovals((prev) => [...prev, prompt]);
-            }
-          },
-          onQuestionnaire: (prompt) => {
-            if (mountedRef.current && generationIntentRef.current === generationIntent) {
-              setQuestionnaireSubmitting(false);
-              setQuestionnaire(prompt);
-            }
-          },
-          onTodo: (snapshot) => {
-            if (
-              mountedRef.current &&
-              generationIntentRef.current === generationIntent &&
-              snapshot.chatId === chatId
-            ) {
-              todoSnapshotReadFence.markLive(snapshot.chatId);
-              setTodoSnapshot(snapshot);
-            }
-          },
-          onDone: async (full, finalTimeline, updatedChat, finalReasoning) => {
-            if (generationIntentRef.current !== generationIntent) return;
-            generationRef.current = null;
-            generationChatIdRef.current = null;
-            setCanStopGeneration(false);
-            if (deltaFrameRef.current !== null) window.cancelAnimationFrame(deltaFrameRef.current);
-            deltaFrameRef.current = null;
-            pendingDeltaRef.current = "";
-            pendingReasoningDeltaRef.current = "";
-            streamedTextRef.current = full;
-            streamedReasoningRef.current = finalReasoning ?? "";
-            setStreamingText(full);
-            setStreamingReasoning(finalReasoning?.trim() ? finalReasoning : null);
-            const persistedAssistant = updatedChat?.messages[updatedChat.messages.length - 1];
-            setPersistedHandoffMessageId(
-              persistedAssistant?.role === "assistant" && persistedAssistant.content === full
-                ? persistedAssistant.id
-                : null,
-            );
-            clearTextStreaming();
-            setStreamComplete(true);
-            if (finalTimeline) {
-              generationTimelineRef.current = finalTimeline;
-              setGenerationTimeline(finalTimeline);
-            }
-            if (updatedChat) {
-              qc.setQueryData(queryKeys.chat(chatId), updatedChat);
-              void qc.invalidateQueries({ queryKey: queryKeys.chats });
-            }
-            await waitForStreamHandoff(Boolean(full.trim()));
-            if (generationIntentRef.current !== generationIntent) return;
-            if (mountedRef.current) {
-              setLiveSubagents([]);
-              setLiveSubagentTranscripts(NO_LIVE_SUBAGENT_TRANSCRIPTS);
-              setStreamingText(null);
-              setStreamingReasoning(null);
-              setStreamingArtifacts([]);
-              setVisualDrafts(NO_VISUAL_DRAFTS);
-              setStreamingUiVisuals(NO_UI_VISUALS);
-              setUiDrafts(NO_UI_DRAFTS);
-              streamingArtifactsRef.current = [];
-              streamedTextRef.current = "";
-              streamedReasoningRef.current = "";
-              setStreamComplete(false);
-              setPersistedHandoffMessageId(null);
-              setIsStoppingGeneration(false);
-              setIsModelLoading(false);
-              setModelCallRetry(null);
-              setGenerationTimeline(null);
-              generationTimelineRef.current = null;
-              setApprovals([]);
-              // Timed-out prompts remain answerable after the agent continues with its default.
-              setQuestionnaire((current) =>
-                retainExpiredAskUserQuestionForLateAnswer(current),
-              );
-              setQuestionnaireSubmitting(false);
-            }
-          },
-          onError: (message, partialContent, finalTimeline, updatedChat, finalReasoning) => {
-            chatMessageQueue(chatId).pause();
-            void (async () => {
-              if (generationIntentRef.current !== generationIntent) return;
-              generationRef.current = null;
-              generationChatIdRef.current = null;
-              setCanStopGeneration(false);
-              if (deltaFrameRef.current !== null) {
-                window.cancelAnimationFrame(deltaFrameRef.current);
-              }
-              deltaFrameRef.current = null;
-              const bufferedPartial = streamedTextRef.current + pendingDeltaRef.current;
-              const bufferedReasoning =
-                streamedReasoningRef.current + pendingReasoningDeltaRef.current;
-              pendingDeltaRef.current = "";
-              pendingReasoningDeltaRef.current = "";
-              const resolvedPartialContent = partialContent ?? bufferedPartial;
-              const resolvedReasoning = finalReasoning ?? bufferedReasoning;
-              streamedTextRef.current = resolvedPartialContent;
-              streamedReasoningRef.current = resolvedReasoning;
-              setStreamingReasoning(resolvedReasoning.trim() ? resolvedReasoning : null);
-              const persistedAssistant = updatedChat?.messages[updatedChat.messages.length - 1];
-              setPersistedHandoffMessageId(
-                persistedAssistant?.role === "assistant" &&
-                  persistedAssistant.content === resolvedPartialContent
-                  ? persistedAssistant.id
-                  : null,
-              );
-              clearTextStreaming();
-              setStreamComplete(true);
-              if (finalTimeline) {
-                generationTimelineRef.current = finalTimeline;
-                setGenerationTimeline(finalTimeline);
-              }
-              if (providerId === OPENAI_CODEX_PROVIDER_ID) {
-                void refreshCodexProviderState(qc);
-              }
-              const partial = resolvedPartialContent.trim();
-              if (updatedChat) {
-                qc.setQueryData(queryKeys.chat(chatId), updatedChat);
-                void qc.invalidateQueries({ queryKey: queryKeys.chats });
-              }
-              if (partial) {
-                setStreamingText(resolvedPartialContent);
-                setStreamComplete(true);
-                await waitForStreamHandoff(true);
-                if (generationIntentRef.current !== generationIntent) return;
-              }
-              if (mountedRef.current) {
-                if (updatedChat || !partial) {
-                  setLiveSubagents([]);
-                  setLiveSubagentTranscripts(NO_LIVE_SUBAGENT_TRANSCRIPTS);
-                }
-                if (!partial || updatedChat) {
-                  setStreamingText(null);
-                  setStreamingReasoning(null);
-                  streamedTextRef.current = "";
-                  streamedReasoningRef.current = "";
-                  setStreamComplete(false);
-                  setPersistedHandoffMessageId(null);
-                }
-                const hasUnpersistedArtifact = streamingArtifactsRef.current.length > 0;
-                setHasUnpersistedResponse(
-                  Boolean((partial || hasUnpersistedArtifact) && !updatedChat),
-                );
-                if (updatedChat) {
-                  setStreamingArtifacts([]);
-                  setVisualDrafts(NO_VISUAL_DRAFTS);
-                  setStreamingUiVisuals(NO_UI_VISUALS);
-                  setUiDrafts(NO_UI_DRAFTS);
-                  streamingArtifactsRef.current = [];
-                }
-                setIsStoppingGeneration(false);
-                setIsModelLoading(false);
-                setModelCallRetry(null);
-                if (!partial || updatedChat) {
-                  setGenerationTimeline(null);
-                  generationTimelineRef.current = null;
-                }
-                setApprovals([]);
-                setQuestionnaire((current) =>
-                  retainExpiredAskUserQuestionForLateAnswer(current),
-                );
-                setQuestionnaireSubmitting(false);
-                const persistedFailure =
-                  updatedChat?.messages[updatedChat.messages.length - 1]?.role === "assistant" &&
-                  updatedChat.messages[updatedChat.messages.length - 1]?.providerFailure;
-                setError(
-                  persistedFailure
-                    ? null
-                    : partial
-                      ? `Generation stopped after a partial response: ${message}`
-                      : message,
-                );
-              }
-            })();
-          },
-        },
+        createStreamCallbacks(generationIntent, { providerId }),
         messageTurnId,
       );
       generationRef.current = handle;
@@ -2119,17 +2174,13 @@ export function ChatPane({ chatId }: { chatId: string }) {
       clearTextStreaming,
       codexThinkingLevel,
       codexThinkingSupported,
-      effectiveWorkspaceId,
-      environmentPanel.subagentsEnabled,
+      createStreamCallbacks,
       googleThinkingLevel,
       googleThinkingSupported,
-      markTextStreaming,
       providerId,
       providerThinkingLevel,
       providerThinkingSupported,
       model,
-      qc,
-      waitForStreamHandoff,
     ],
   );
 
@@ -2222,27 +2273,6 @@ export function ChatPane({ chatId }: { chatId: string }) {
       if (getChatDraft(chatId) && draftGitPendingRef.current) {
         throw new Error("Reading Git status… Send again in a moment.");
       }
-      const folderWorkspace = folderWorkspaceRef.current;
-      if (folderWorkspace) {
-        const folderCheckVisit = chatVisitRef.current;
-        // A failed check is no reason to refuse; main checks again at start.
-        const presence = await qc
-          .fetchQuery({
-            queryKey: queryKeys.workspaceFolderPresence(folderWorkspace.id),
-            queryFn: () => workspacesApi.folderPresence(folderWorkspace.id),
-            staleTime: 0,
-          })
-          .catch(() => undefined);
-        // The user left this chat during the check: send nothing from a pane
-        // that now shows another chat. The composer's saved draft keeps the text.
-        if (!(mountedRef.current && chatVisitRef.current === folderCheckVisit)) {
-          throw new WorktreeSendCancelledError();
-        }
-        // The notice above the composer names the folder; the toast stays short.
-        if (presence?.presence === "missing") {
-          throw new Error(presence.worktree ? MANAGED_WORKTREE_MISSING_SEND_REFUSAL : WORKSPACE_FOLDER_MISSING_SEND_REFUSAL);
-        }
-      }
       let worktreeRequest: FirstMessageWorktreeRequest | undefined;
       try {
         worktreeRequest =
@@ -2253,7 +2283,40 @@ export function ChatPane({ chatId }: { chatId: string }) {
         // The base branch isn't resolved yet; the composer keeps the text.
         throw new Error("Reading Git status… Send again in a moment.");
       }
-      let worktreeSend: WorktreeFirstSend<Chat> | undefined;
+      const folderWorkspace = folderWorkspaceRef.current;
+      if (folderWorkspace) {
+        const cachedPresence = worktreeRequest
+          ? qc.getQueryData<WorkspaceFolderPresenceResult>(
+              queryKeys.workspaceFolderPresence(folderWorkspace.id),
+            )
+          : undefined;
+        // Worktree-on-send validates the source folder live in main before
+        // touching disk; skip the blocking pre-send IPC when the cached
+        // presence is not missing so the user's bubble and progress row paint
+        // on frame 1. If the cached presence says "missing", fall through to a
+        // live check so a folder restored on disk is never blocked by stale cache.
+        if (!worktreeRequest || cachedPresence?.presence === "missing") {
+          const folderCheckVisit = chatVisitRef.current;
+          // A failed check is no reason to refuse; main checks again at start.
+          const presence = await qc
+            .fetchQuery({
+              queryKey: queryKeys.workspaceFolderPresence(folderWorkspace.id),
+              queryFn: () => workspacesApi.folderPresence(folderWorkspace.id),
+              staleTime: 0,
+            })
+            .catch(() => undefined);
+          // The user left this chat during the check: send nothing from a pane
+          // that now shows another chat. The composer's saved draft keeps the text.
+          if (!(mountedRef.current && chatVisitRef.current === folderCheckVisit)) {
+            throw new WorktreeSendCancelledError();
+          }
+          // The notice above the composer names the folder; the toast stays short.
+          if (presence?.presence === "missing") {
+            throw new Error(presence.worktree ? MANAGED_WORKTREE_MISSING_SEND_REFUSAL : WORKSPACE_FOLDER_MISSING_SEND_REFUSAL);
+          }
+        }
+      }
+      let worktreeSend: WorktreeFirstSend<Chat, Workspace> | undefined;
       /** The user answered a failed worktree send, possibly from a later view of this draft. */
       let continuedByUser = false;
       const firstDraft = getChatDraft(chatId) ? beginChatDraftSend(chatId) : undefined;
@@ -2269,6 +2332,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
                 draftId: chatId,
                 title: firstDraft.chat.title === "New agent" ? undefined : firstDraft.chat.title,
                 workspaceId: firstDraft.chat.workspaceId!,
+                ...(firstDraft.chat.ephemeral ? { ephemeral: true as const } : {}),
                 providerId,
                 model,
                 turnId: messageTurnId,
@@ -2283,6 +2347,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
             : undefined;
           if (firstMessageInput && worktreeRequest) {
             const visit = chatVisitRef.current;
+            performance.mark?.("aiden:worktree-send:start");
             worktreeSend = startWorktreeFirstSend({
               api: {
                 createInWorktree: chatsApi.createWithFirstMessageInWorktree,
@@ -2292,15 +2357,51 @@ export function ChatPane({ chatId }: { chatId: string }) {
               input: firstMessageInput,
               worktree: worktreeRequest,
               message: { text, attachments, ...(inputSource ? { inputSource } : {}) },
+              onView: (view) => {
+                if (view.status === "failed" && folderWorkspace) {
+                  void qc.invalidateQueries({
+                    queryKey: queryKeys.workspaceFolderPresence(folderWorkspace.id),
+                  });
+                }
+              },
             });
             // The progress view holds the message now; a composer that opens
             // on this draft meanwhile starts empty instead of repeating it.
             discardComposerDraft(chatId);
             try {
               const outcome = await worktreeSend.result;
+              performance.mark?.("aiden:worktree-send:done");
+              try {
+                performance.measure?.(
+                  "aiden:worktree-send",
+                  "aiden:worktree-send:start",
+                  "aiden:worktree-send:done",
+                );
+              } catch {
+                // Ignore missing marks if the performance buffer was cleared.
+              }
               if (outcome.worktree) {
-                // List the new worktree workspace before the chat moves into it.
-                await qc.invalidateQueries({ queryKey: queryKeys.workspaces });
+                if (outcome.workspace) {
+                  const createdWorkspace = outcome.workspace;
+                  upsertCreatedWorkspaceInCache(qc, createdWorkspace);
+                  // Seed folder-presence for a brand-new worktree; leave Git
+                  // status to main's `infoCache` (0-spawn when clean, or live
+                  // post-hook status if WorktreeSetup modified the checkout).
+                  if (!outcome.worktree.reused && createdWorkspace.folderPath) {
+                    qc.setQueryData<WorkspaceFolderPresenceResult>(
+                      queryKeys.workspaceFolderPresence(createdWorkspace.id),
+                      { presence: "present" },
+                    );
+                  }
+                  if (mountedRef.current && chatIdRef.current === chatId) {
+                    React.startTransition(() => {
+                      selectWorkspace(createdWorkspace.id);
+                    });
+                  }
+                } else {
+                  // Fallback when main omitted the workspace record.
+                  await qc.invalidateQueries({ queryKey: queryKeys.workspaces });
+                }
                 const note = worktreeBaseNote(outcome.worktree);
                 if (note) toast.info(note);
               }
@@ -2313,6 +2414,13 @@ export function ChatPane({ chatId }: { chatId: string }) {
               updated = outcome.chat;
               continuedByUser = outcome.answered;
             } catch (error) {
+              // Refresh folder presence if worktree creation failed (for
+              // example, when the source folder was deleted just before send).
+              if (folderWorkspace) {
+                void qc.invalidateQueries({
+                  queryKey: queryKeys.workspaceFolderPresence(folderWorkspace.id),
+                });
+              }
               // The composer that sent this restores its own text; any other
               // (the user left and came back) gets the text and attachments back.
               if (
@@ -2351,7 +2459,19 @@ export function ChatPane({ chatId }: { chatId: string }) {
           throw appendError;
         }
         await installAppendedChatSnapshot(qc, chatId, updated);
-        if (firstDraft) finishChatDraftSend(chatId, true);
+        if (firstDraft) {
+          // Only suppress the immediate mount `chats:get` when this pane is
+          // still actively showing the promoted chat; leaving before commit
+          // abandons the turn and must re-read on revisit.
+          if (
+            generationIntentRef.current === generationIntent &&
+            mountedRef.current &&
+            chatIdRef.current === chatId
+          ) {
+            markChatRecentlyPromoted(chatId);
+          }
+          finishChatDraftSend(chatId, true);
+        }
         void qc.invalidateQueries({ queryKey: queryKeys.chats });
         if (
           generationIntentRef.current !== generationIntent ||
@@ -2416,6 +2536,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
       model,
       qc,
       runGeneration,
+      selectWorkspace,
     ],
   );
 
@@ -3156,6 +3277,211 @@ export function ChatPane({ chatId }: { chatId: string }) {
     generating: isGenerating || isStartingGeneration,
     gitBusy: environmentPanel.gitOperationBusy,
   });
+
+  // Claim a cross-window handoff (e.g. expanding from the Floating Mini-Modal)
+  // so an in-flight stream, pending approvals/questions, queued messages, and
+  // unsent follow-up drafts transfer seamlessly into this ChatPane.
+  const claimPendingHandoffRef = React.useRef<() => void>(() => undefined);
+  claimPendingHandoffRef.current = () => {
+    const buffer = createGenerationStreamBuffer();
+    void claimChatHandoff({ chatId })
+      .then((claimed) => {
+        if (!claimed || claimed.kind !== "chat") {
+          buffer.dispose();
+          return;
+        }
+        const live = claimed.liveStream;
+        if (!mountedRef.current || chatIdRef.current !== chatId) {
+          buffer.dispose();
+          if (live) {
+            detachHandoffStream(
+              live.streamId,
+              { chatId, workspaceId: live.workspaceId },
+              {
+                content: live.content,
+                reasoning: live.reasoning,
+                timeline: live.timeline,
+                artifacts: live.artifacts,
+                uiVisuals: live.uiVisuals,
+                subagents: live.subagents,
+              },
+            );
+          }
+          return;
+        }
+        if (claimed.draftText || (claimed.draftAttachments && claimed.draftAttachments.length > 0)) {
+          restoreUnsentMessage(
+            chatId,
+            claimed.draftText ?? "",
+            (claimed.draftAttachments ?? []) as Attachment[],
+          );
+        }
+        if (claimed.queuedMessages && claimed.queuedMessages.length > 0) {
+          const queue = chatMessageQueue(chatId);
+          // If the handed-off run already settled before claim, keep queued items
+          // paused so we never auto-send blindly into a failed or finished chat.
+          if (!live) queue.pause();
+          for (const item of claimed.queuedMessages) {
+            try {
+              queue.add({
+                id: createChatTurnId(),
+                text: item.content,
+                attachments: (item.attachments ?? []) as Attachment[],
+              });
+            } catch {
+              // Bounded queue full or empty item; best-effort handoff.
+            }
+          }
+        }
+        if (!live) {
+          buffer.dispose();
+          void qc.invalidateQueries({ queryKey: queryKeys.chat(chatId) });
+          return;
+        }
+
+        try {
+          const generationIntent = (generationIntentRef.current += 1);
+          if (deltaFrameRef.current !== null) {
+            window.cancelAnimationFrame(deltaFrameRef.current);
+            deltaFrameRef.current = null;
+          }
+          pendingDeltaRef.current = "";
+          pendingReasoningDeltaRef.current = "";
+          streamedTextRef.current = live.content;
+          streamedReasoningRef.current = live.reasoning;
+          generationTimelineRef.current = live.timeline;
+          streamingArtifactsRef.current = live.artifacts;
+          streamHandoffRef.current?.();
+          streamHandoffRef.current = null;
+
+          setError(null);
+          setHasUnpersistedResponse(false);
+          setIsStoppingGeneration(false);
+          setIsModelLoading(false);
+          setModelCallRetry(null);
+          setStreamComplete(false);
+          setPersistedHandoffMessageId(null);
+          setVisualDrafts(NO_VISUAL_DRAFTS);
+          setUiDrafts(NO_UI_DRAFTS);
+          setStreamingArtifactPlacements(new Map());
+          setStreamingWideVisuals(new Set());
+          setStreamingText(live.content);
+          setStreamingReasoning(live.reasoning.trim() ? live.reasoning : null);
+          setGenerationTimeline(live.timeline);
+          setStreamingArtifacts(live.artifacts);
+          setStreamingUiVisuals(live.uiVisuals);
+          setLiveSubagents(live.subagents);
+          if (live.todoSnapshot) {
+            todoSnapshotReadFence.markLive(live.todoSnapshot.chatId);
+            setTodoSnapshot(live.todoSnapshot);
+          }
+          if (live.contextPressure) setContextPressure(live.contextPressure);
+          setApprovals(
+            live.pendingApprovals.map((prompt) => {
+              const { scopes, ...rest } = prompt;
+              return {
+                ...rest,
+                ...(scopes ? { scopes: [...scopes] } : {}),
+              };
+            }),
+          );
+          setQuestionnaire(live.pendingQuestions[0] ?? null);
+          setQuestionnaireSubmitting(false);
+          setCanStopGeneration(true);
+          if (live.content) markTextStreaming();
+
+          const resolvedWorkspaceId = effectiveWorkspaceIdRef.current ?? live.workspaceId;
+          const bufferedNotifications = buffer.drain();
+          attachGenerationStream(
+            live.streamId,
+            { chatId, workspaceId: resolvedWorkspaceId },
+            {
+              content: live.content,
+              reasoning: live.reasoning,
+              timeline: live.timeline,
+              artifacts: live.artifacts,
+              uiVisuals: live.uiVisuals,
+              subagents: live.subagents,
+            },
+            createStreamCallbacks(generationIntent, {
+              providerId: chat.data?.providerId,
+              fallbackWorkspaceId: live.workspaceId,
+            }),
+            bufferedNotifications,
+            (handle) => {
+              // Install handle BEFORE replaying buffered notifications so a
+              // buffered terminal `chat:done`/`chat:error` clears it cleanly.
+              generationRef.current = handle;
+              generationChatIdRef.current = chatId;
+            },
+          );
+        } catch {
+          buffer.dispose();
+          detachHandoffStream(
+            live.streamId,
+            { chatId, workspaceId: live.workspaceId },
+            {
+              content: live.content,
+              reasoning: live.reasoning,
+              timeline: live.timeline,
+              artifacts: live.artifacts,
+              uiVisuals: live.uiVisuals,
+              subagents: live.subagents,
+            },
+          );
+        }
+      })
+      .catch(() => {
+        buffer.dispose();
+      });
+  };
+
+  React.useEffect(() => {
+    const run = () => {
+      if (consumePendingChatHandoff(chatId)) {
+        claimPendingHandoffRef.current();
+      }
+    };
+    run();
+    return subscribePendingChatHandoff(chatId, run);
+  }, [chatId]);
+  const [attachDialogOpen, setAttachDialogOpen] = React.useState(false);
+  const [promotingEphemeral, setPromotingEphemeral] = React.useState(false);
+  const attachWorkspaceBlockedReason = React.useMemo(() => {
+    if (documentAppendReconciliationRequired) {
+      return "Reload Aiden before attaching to a workspace.";
+    }
+    if (workspaceChangeBusy) return workspaceChangeBusy;
+    if (environmentPanel.editorState.saving) {
+      return "Wait for the open file to finish saving before attaching to a workspace.";
+    }
+    if (environmentPanel.editorState.dirty) {
+      return "Save or discard the open file's edits before attaching to a workspace.";
+    }
+    return null;
+  }, [
+    documentAppendReconciliationRequired,
+    environmentPanel.editorState.dirty,
+    environmentPanel.editorState.saving,
+    workspaceChangeBusy,
+  ]);
+  const canAttachChatToWorkspace =
+    !isNewChat && Boolean(chat.data) && effectiveWorkspace?.noWorkspace === true;
+  const promoteEphemeralChat = React.useCallback(async () => {
+    if (promotingEphemeral) return;
+    setPromotingEphemeral(true);
+    try {
+      await qc.cancelQueries({ queryKey: queryKeys.chat(chatId), exact: true });
+      const promoted = await chatsApi.promoteEphemeral(chatId);
+      qc.setQueryData(queryKeys.chat(chatId), promoted);
+      await qc.invalidateQueries({ queryKey: queryKeys.chats });
+      toast.success("Saved to Chats");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Could not save this temporary chat.");
+    } finally {
+      setPromotingEphemeral(false);
+    }
+  }, [chatId, promotingEphemeral, qc]);
   const moveNewChatToWorkspace = React.useCallback(
     async (workspaceId: string) => {
       if (documentAppendReconciliationRequired) {
@@ -3299,12 +3625,27 @@ export function ChatPane({ chatId }: { chatId: string }) {
         throw new Error("Wait for the open file to finish saving before changing Git workspaces.");
       if (environmentPanel.editorState.dirty)
         throw new Error("Save or discard the open file's edits before changing Git workspaces.");
+      performance.mark?.("aiden:worktree-create:start");
       const workspace = await gitApi.createWorktree(effectiveWorkspace.id, branchName);
-      qc.setQueryData<Workspace[]>(queryKeys.workspaces, (current) => [
-        workspace,
-        ...(current ?? []).filter((entry) => entry.id !== workspace.id),
-      ]);
-      void qc.invalidateQueries({ queryKey: queryKeys.workspaces });
+      performance.mark?.("aiden:worktree-create:done");
+      try {
+        performance.measure?.(
+          "aiden:worktree-create",
+          "aiden:worktree-create:start",
+          "aiden:worktree-create:done",
+        );
+      } catch {
+        // Ignore missing marks if the performance buffer was cleared.
+      }
+      upsertCreatedWorkspaceInCache(qc, workspace);
+      // Seed folder-presence for the new worktree; leave Git status to main's
+      // `infoCache` so synchronous WorktreeSetup hook edits are never hidden.
+      if (workspace.folderPath) {
+        qc.setQueryData<WorkspaceFolderPresenceResult>(
+          queryKeys.workspaceFolderPresence(workspace.id),
+          { presence: "present" },
+        );
+      }
       if (!mountedRef.current || chatIdRef.current !== sourceChatId) return;
       if (isNewChat) {
         try {
@@ -3322,7 +3663,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
       selectWorkspace(workspace.id);
       try {
         await navigate({ to: "/chat/$chatId", params: { chatId: created.id } });
-        requestAnimationFrame(() => composerRef.current?.focus({ preventScroll: true }));
+        requestChatDraftComposerFocus(created.id);
       } catch {
         discardChatDraft(created.id);
         selectWorkspace(effectiveWorkspace.id);
@@ -3395,11 +3736,28 @@ export function ChatPane({ chatId }: { chatId: string }) {
       }
       await moveDraftToRepositoryCheckout();
       setChatDraftGitMode(chatId, "worktree");
-      if (!name) return;
       const current = getChatDraft(chatId);
       const workspaceId = current?.chat.workspaceId;
       if (!current || !workspaceId) return;
       let baseRef = current.worktree?.baseRef;
+      let fromOrigin = current.worktree?.fromOrigin;
+      if (!baseRef) {
+        const targetGit =
+          workspaceId === effectiveWorkspaceId
+            ? git.data
+            : qc.getQueryData<GitInfo>(queryKeys.git(workspaceId));
+        const seeded = seedDraftWorktreeFromGitInfo(readChatDraftGitMemory(workspaceId), targetGit);
+        if (seeded) {
+          baseRef = seeded.baseRef;
+          fromOrigin = seeded.fromOrigin;
+        }
+      }
+      if (!name) {
+        if (baseRef && !current.worktree?.baseRef) {
+          updateChatDraftWorktree(chatId, { baseRef, fromOrigin: fromOrigin ?? false });
+        }
+        return;
+      }
       if (!baseRef) {
         // `/worktree <name>` before the menu has read the branches: resolve
         // the base the menu would pick (a local Git read, no network).
@@ -3411,11 +3769,15 @@ export function ChatPane({ chatId }: { chatId: string }) {
         const defaults = resolveDraftWorktreeDefaults(readChatDraftGitMemory(workspaceId), branches);
         if (!defaults) throw new Error("Create the first commit before starting a new worktree.");
         baseRef = defaults.baseRef;
-        updateChatDraftWorktree(chatId, defaults);
+        fromOrigin = defaults.fromOrigin;
       }
-      updateChatDraftWorktree(chatId, { baseRef, branchName: name });
+      updateChatDraftWorktree(chatId, {
+        baseRef,
+        ...(fromOrigin !== undefined ? { fromOrigin } : {}),
+        branchName: name,
+      });
     },
-    [chatId, draftWorkIn, git.data?.unborn, moveDraftToRepositoryCheckout, qc],
+    [chatId, draftWorkIn, effectiveWorkspaceId, git.data, moveDraftToRepositoryCheckout, qc],
   );
 
   const selectDraftWorktree = React.useCallback(
@@ -3504,7 +3866,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
     agentActivity?.phase !== "waiting" && agentActivity?.phase !== "stopping"
       ? { phase: "visualizing" as const, label: "Visualizing", mark: "scan-grid" as const }
       : agentActivity;
-  const chronologicalLiveRows = assistantPresentationRows(
+  const chronologicalLiveRows = liveAssistantPresentationRows(
     displayedStreamingText ?? "",
     displayedGenerationTimeline,
     displayedStreamingReasoning ?? "",
@@ -3928,15 +4290,52 @@ export function ChatPane({ chatId }: { chatId: string }) {
           )
         }
         titleAccessory={
-          effectiveWorkspace ? (
-            <WorkspaceChip
-              workspace={effectiveWorkspace}
-              git={effectiveWorkspace.folderPath ? git.data : undefined}
-              canOpenTerminal={Boolean(effectiveWorkspace.folderPath && terminal.canOpen)}
-              onOpenTerminal={() => {
-                if (!terminal.open) terminal.toggle();
-              }}
-            />
+          effectiveWorkspace || chat.data?.ephemeral === true ? (
+            <div className="no-drag flex min-w-0 items-center gap-1.5">
+              {effectiveWorkspace && !(chat.data?.ephemeral === true && isNoWorkspace(effectiveWorkspace)) ? (
+                <WorkspaceChip
+                  workspace={effectiveWorkspace}
+                  git={effectiveWorkspace.folderPath ? git.data : undefined}
+                  canOpenTerminal={Boolean(effectiveWorkspace.folderPath && terminal.canOpen)}
+                  onOpenTerminal={() => {
+                    if (!terminal.open) terminal.toggle();
+                  }}
+                  onAttachToWorkspace={
+                    canAttachChatToWorkspace ? () => setAttachDialogOpen(true) : undefined
+                  }
+                  attachDisabledReason={attachWorkspaceBlockedReason}
+                />
+              ) : null}
+              {chat.data?.ephemeral === true ? (
+                <div className="workspace-chip flex min-w-0 shrink items-center gap-1 overflow-hidden">
+                  <Badge color="warning" className="shrink-0 whitespace-nowrap">
+                    Temporary
+                  </Badge>
+                  {!isNewChat ? (
+                    <>
+                      <Button
+                        variant="bar"
+                        size="small"
+                        disabled={promotingEphemeral}
+                        onClick={() => void promoteEphemeralChat()}
+                      >
+                        Save
+                      </Button>
+                      <Button
+                        variant="bar"
+                        size="small"
+                        disabled={Boolean(attachWorkspaceBlockedReason)}
+                        aria-label="Attach to workspace"
+                        title={attachWorkspaceBlockedReason ?? "Attach to workspace"}
+                        onClick={() => setAttachDialogOpen(true)}
+                      >
+                        Attach…
+                      </Button>
+                    </>
+                  ) : null}
+                </div>
+              ) : null}
+            </div>
           ) : null
         }
         actions={
@@ -4008,6 +4407,8 @@ export function ChatPane({ chatId }: { chatId: string }) {
           displayedStreamingReasoning,
           displayedGenerationTimeline,
           agentActivity?.phase,
+          worktreeSend?.view.status,
+          worktreeSend?.view.progress.phase,
           approvals.length,
           questionnaire?.promptId,
           displayedStreamingArtifacts.length,
@@ -4441,15 +4842,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
               }
             />
           </div>
-        ) : messages.length === 0 && displayedStreamingText === null && worktreeSend ? (
-          <DraftWorktreeSendView
-            text={worktreeSend.text}
-            attachments={worktreeSend.attachments}
-            inputSource={worktreeSend.inputSource}
-            view={worktreeSend.view}
-            onDecide={worktreeSend.decide}
-          />
-        ) : messages.length === 0 && displayedStreamingText === null ? (
+        ) : messages.length === 0 && displayedStreamingText === null && !worktreeSend ? (
           <div className="flex min-h-full items-center justify-center">
             {(providers.data ?? []).some(
               (p) => p.models.length > 0 && (p.hasKey || !p.needsKey),
@@ -4490,6 +4883,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
                 key={chatId}
                 chatId={chatId}
                 messages={messages}
+                draftWorktreeSend={worktreeSend}
                 streamingText={displayedStreamingText}
                 streamingReasoning={displayedStreamingReasoning}
                 streamingArtifacts={displayedStreamingArtifacts}
@@ -4566,6 +4960,43 @@ export function ChatPane({ chatId }: { chatId: string }) {
           if (!open) setForkSummaryRequest(null);
         }}
         onConfirm={forkWithSummary}
+      />
+      <AttachWorkspaceDialog
+        open={attachDialogOpen}
+        onOpenChange={setAttachDialogOpen}
+        chatId={chatId}
+        workspaces={workspaces}
+        beforeAttach={() => {
+          if (attachWorkspaceBlockedReason) throw new Error(attachWorkspaceBlockedReason);
+        }}
+        onWorkspaceCreated={(created) => {
+          qc.setQueryData<Workspace[]>(queryKeys.workspaces, (current) => {
+            const list = current ?? [];
+            return list.some((item) => item.id === created.id) ? list : [...list, created];
+          });
+        }}
+        onAttached={async (result, targetWorkspace) => {
+          effectiveWorkspaceIdRef.current = targetWorkspace.id;
+          await qc.cancelQueries({ queryKey: queryKeys.chat(chatId), exact: true });
+          qc.setQueryData(queryKeys.chat(chatId), result.chat);
+          selectWorkspace(targetWorkspace.id);
+          await Promise.all([
+            qc.invalidateQueries({ queryKey: queryKeys.chats }),
+            qc.invalidateQueries({ queryKey: queryKeys.workspaces }),
+            qc.invalidateQueries({ queryKey: queryKeys.git(targetWorkspace.id) }),
+            qc.invalidateQueries({ queryKey: queryKeys.gitReview(targetWorkspace.id) }),
+            qc.invalidateQueries({ queryKey: queryKeys.gitBranches(targetWorkspace.id) }),
+            qc.invalidateQueries({ queryKey: queryKeys.gitPushCapability(targetWorkspace.id) }),
+            qc.invalidateQueries({ queryKey: queryKeys.skillCatalog(targetWorkspace.id) }),
+            qc.invalidateQueries({ queryKey: queryKeys.workspaceFileIndex(targetWorkspace.id) }),
+            qc.invalidateQueries({ queryKey: queryKeys.workspaceFolderPresence(targetWorkspace.id) }),
+          ]);
+          const suffix =
+            result.copiedPaths.length > 0
+              ? ` (${result.copiedPaths.length} file${result.copiedPaths.length === 1 ? "" : "s"} copied)`
+              : "";
+          toast.success(`Attached to ${targetWorkspace.name}${suffix}`);
+        }}
       />
     </>
   );

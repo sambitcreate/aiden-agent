@@ -6,6 +6,7 @@ import { compactionEngineFrom, parseCompactionModelOverrides } from "../../rende
 import { parseDictationDictionary } from "../../renderer/shared/dictation-dictionary.js";
 import { isLocalVoiceIdleUnloadMinutes } from "../../renderer/shared/dictation-preferences.js";
 import { normalizeLanguageIntent } from "../../renderer/shared/voice-language.js";
+import { parseQuickChatDefaultPersistence } from "../../renderer/shared/quick-chat.js";
 // Splits Aiden's persisted configuration into a portable half and a
 // machine-local half, and migrates existing installs into that layout once.
 //
@@ -624,6 +625,7 @@ function normalizeSettingsShape(value: unknown): SettingsShape {
   for (const key of [
     "lastProviderId",
     "lastModel",
+    "lastWorkspaceId",
     "voiceModel",
     "localVoiceModel",
     "voiceLanguage",
@@ -659,6 +661,7 @@ function normalizeSettingsShape(value: unknown): SettingsShape {
     "computerUseAlwaysAllow",
     "aidenLiveEnabled",
     "aidenLiveButtonVisible",
+    "quickChatKeepOpenOnBlur",
     "aidenLiveChatAccess",
     "aidenLiveChatAccessNoticeShown",
     "aidenLiveVoiceApprovals",
@@ -673,6 +676,14 @@ function normalizeSettingsShape(value: unknown): SettingsShape {
   }
   if (!Number.isSafeInteger(settings.telegramAllowedUserId))
     delete normalized.telegramAllowedUserId;
+  const quickChatDefaultPersistence = parseQuickChatDefaultPersistence(
+    settings.quickChatDefaultPersistence,
+  );
+  if (quickChatDefaultPersistence) {
+    normalized.quickChatDefaultPersistence = quickChatDefaultPersistence;
+  } else {
+    delete normalized.quickChatDefaultPersistence;
+  }
   if (!isGenerationThinkingLevel(settings.telegramThinkingLevel))
     delete normalized.telegramThinkingLevel;
   if (!["quiet", "thinking", "tools", "verbose"].includes(String(settings.telegramActivity)))
@@ -766,6 +777,17 @@ export function runtimeSettingsFrom(settings: AppSettings): AppSettings {
   const onboarding = parseOnboardingState(settings.onboarding);
   if (onboarding) runtime.onboarding = onboarding;
   else delete runtime.onboarding;
+  if (settings.quickChatDefaultPersistence !== undefined) {
+    const parsedQuickChatMode = parseQuickChatDefaultPersistence(settings.quickChatDefaultPersistence);
+    if (parsedQuickChatMode) runtime.quickChatDefaultPersistence = parsedQuickChatMode;
+    else delete runtime.quickChatDefaultPersistence;
+  }
+  if (
+    settings.quickChatKeepOpenOnBlur !== undefined &&
+    typeof settings.quickChatKeepOpenOnBlur !== "boolean"
+  ) {
+    delete runtime.quickChatKeepOpenOnBlur;
+  }
   if (settings.webSearch !== undefined) {
     const webSearch = parseWebSearchSettings(settings.webSearch);
     if (webSearch) runtime.webSearch = webSearch;
@@ -1276,11 +1298,16 @@ export function createPortableConfigStores(
   } = {},
 ) {
   const archivePublicationPaths = new Set<string>();
-  async function protectConfigDirectory(root: string, portableDirectory: boolean, ownedPublicationPaths: readonly string[] = []): Promise<void> {
+  async function protectConfigDirectory(
+    root: string,
+    portableDirectory: boolean,
+    ownedPublicationPaths: readonly string[] = [],
+  ): Promise<string[]> {
     const ownedPaths = [...ownedPublicationPaths, ...archivePublicationPaths];
     ensurePrivateDirectory(root);
     const file = path.join(root, PORTABLE_CONFIG_FILENAME);
     hardenPrivateFile(file, ownedPaths);
+    const protectedSecondary: string[] = [];
     for (const entry of await fs.readdir(root)) {
       const archive = `${LOCAL_CONFIG_FILENAME}${LEGACY_CONFIG_ARCHIVE_SUFFIX}`;
       const isArchive = !portableDirectory && (entry === archive ||
@@ -1289,11 +1316,132 @@ export function createPortableConfigStores(
       const isConflict = /^config\.json\.conflict-[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/u.test(entry);
       if (isArchive && (await fs.lstat(path.join(root, entry))).isDirectory()) continue;
       const isStaged = /^\.config\.json(?:\.pre-aiden-dir(?:\.recovery-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z-[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12})?)?\.[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}\.tmp$/u.test(entry);
-      if (isArchive || isCorrupt || isConflict || isStaged || isDataStoreRecoveryFile(entry, file)) hardenPrivateFile(path.join(root, entry), ownedPaths);
+      if (isArchive || isCorrupt || isConflict || isStaged || isDataStoreRecoveryFile(entry, file)) {
+        const secondaryPath = path.join(root, entry);
+        hardenPrivateFile(secondaryPath, ownedPaths);
+        protectedSecondary.push(secondaryPath);
+      }
     }
+    return protectedSecondary;
   }
-  const protectPortable = (ownedPaths: readonly string[] = []) => protectConfigDirectory(portableRoot(), true, ownedPaths);
-  const protectLocal = async (ownedPaths: readonly string[] = []) => protectConfigDirectory(localRoot ? localRoot() : (await import("../platform.js")).app.getPath("userData"), false, ownedPaths);
+  const protectPortable = async (ownedPaths: readonly string[] = []): Promise<void> => {
+    await protectConfigDirectory(portableRoot(), true, ownedPaths);
+  };
+  let lastLocalProtectSignature:
+    | {
+        root: string;
+        dirDev: bigint;
+        dirIno: bigint;
+        dirMtimeNs: bigint;
+        dirCtimeNs: bigint;
+        fileDev: bigint;
+        fileIno: bigint;
+        fileMtimeNs: bigint;
+        fileCtimeNs: bigint;
+        secondaryPaths: readonly string[];
+      }
+    | undefined;
+  const protectLocal = async (ownedPaths: readonly string[] = []): Promise<void> => {
+    const root = localRoot ? localRoot() : (await import("../platform.js")).app.getPath("userData");
+    const uid = typeof process.getuid === "function" ? process.getuid() : undefined;
+    const configPath = path.join(root, LOCAL_CONFIG_FILENAME);
+    if (
+      process.platform !== "win32" &&
+      uid !== undefined &&
+      ownedPaths.length === 0 &&
+      archivePublicationPaths.size === 0 &&
+      lastLocalProtectSignature &&
+      lastLocalProtectSignature.root === root
+    ) {
+      // Keep full ancestor/alias verification on every call; skip only the
+      // `readdir(userData)` scan and redundant `open`/`fchmod` hardening when
+      // `root`, `config.json`, and every known secondary file are untouched.
+      ensurePrivateDirectory(root);
+      try {
+        const [dirStat, fileStat, ...secondaryStats] = await Promise.all([
+          fs.lstat(root, { bigint: true }),
+          fs.lstat(configPath, { bigint: true }),
+          ...lastLocalProtectSignature.secondaryPaths.map((secondary) =>
+            fs.lstat(secondary, { bigint: true }),
+          ),
+        ]);
+        const secondaryClean = secondaryStats.every(
+          (st) =>
+            st.isFile() &&
+            !st.isSymbolicLink() &&
+            Number(st.uid) === uid &&
+            (Number(st.mode) & 0o777) === 0o600 &&
+            st.nlink === 1n,
+        );
+        if (
+          secondaryClean &&
+          dirStat.isDirectory() &&
+          !dirStat.isSymbolicLink() &&
+          Number(dirStat.uid) === uid &&
+          (Number(dirStat.mode) & 0o777) === 0o700 &&
+          dirStat.dev === lastLocalProtectSignature.dirDev &&
+          dirStat.ino === lastLocalProtectSignature.dirIno &&
+          dirStat.mtimeNs === lastLocalProtectSignature.dirMtimeNs &&
+          dirStat.ctimeNs === lastLocalProtectSignature.dirCtimeNs &&
+          fileStat.isFile() &&
+          !fileStat.isSymbolicLink() &&
+          Number(fileStat.uid) === uid &&
+          (Number(fileStat.mode) & 0o777) === 0o600 &&
+          fileStat.nlink === 1n &&
+          fileStat.dev === lastLocalProtectSignature.fileDev &&
+          fileStat.ino === lastLocalProtectSignature.fileIno &&
+          fileStat.mtimeNs === lastLocalProtectSignature.fileMtimeNs &&
+          fileStat.ctimeNs === lastLocalProtectSignature.fileCtimeNs
+        ) {
+          return;
+        }
+      } catch {
+        // Fall through to full directory & file hardening on any stat change/error.
+      }
+    }
+    const secondaryPaths = await protectConfigDirectory(root, false, ownedPaths);
+    if (
+      process.platform !== "win32" &&
+      uid !== undefined &&
+      ownedPaths.length === 0 &&
+      archivePublicationPaths.size === 0
+    ) {
+      try {
+        const [dirStat, fileStat] = await Promise.all([
+          fs.lstat(root, { bigint: true }),
+          fs.lstat(configPath, { bigint: true }),
+        ]);
+        if (
+          dirStat.isDirectory() &&
+          !dirStat.isSymbolicLink() &&
+          Number(dirStat.uid) === uid &&
+          (Number(dirStat.mode) & 0o777) === 0o700 &&
+          fileStat.isFile() &&
+          !fileStat.isSymbolicLink() &&
+          Number(fileStat.uid) === uid &&
+          (Number(fileStat.mode) & 0o777) === 0o600 &&
+          fileStat.nlink === 1n
+        ) {
+          lastLocalProtectSignature = {
+            root,
+            dirDev: dirStat.dev,
+            dirIno: dirStat.ino,
+            dirMtimeNs: dirStat.mtimeNs,
+            dirCtimeNs: dirStat.ctimeNs,
+            fileDev: fileStat.dev,
+            fileIno: fileStat.ino,
+            fileMtimeNs: fileStat.mtimeNs,
+            fileCtimeNs: fileStat.ctimeNs,
+            secondaryPaths,
+          };
+          return;
+        }
+      } catch {
+        // Uncached until config.json exists and passes hardening.
+      }
+    }
+    lastLocalProtectSignature = undefined;
+  };
   const portable = new DataStore<PortableConfigShape>(
     PORTABLE_CONFIG_FILENAME,
     emptyPortableConfig(),

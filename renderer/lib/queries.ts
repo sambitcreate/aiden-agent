@@ -51,6 +51,7 @@ import type {
   GitHubPullRequestStatus,
   McpLiveStatus,
   UsageDateRange,
+  Workspace,
 } from "./types";
 
 export const queryKeys = {
@@ -155,6 +156,30 @@ export async function installAppendedChatSnapshot(
   const chatKey = queryKeys.chat(chatId);
   await queryClient.cancelQueries({ queryKey: chatKey, exact: true });
   queryClient.setQueryData(chatKey, updated);
+}
+
+/**
+ * Patch a newly created workspace into the cached workspace list when the list
+ * is already hydrated and idle; otherwise invalidate `queryKeys.workspaces` so
+ * an unhydrated cache is never overwritten with a single-element list and an
+ * in-flight `workspaces:list` cannot clobber the new workspace.
+ */
+export function upsertCreatedWorkspaceInCache(
+  queryClient: QueryClient,
+  created: Workspace,
+): void {
+  const current = queryClient.getQueryData<Workspace[]>(queryKeys.workspaces);
+  const fetching = queryClient.isFetching({ queryKey: queryKeys.workspaces, exact: true }) > 0;
+  if (current && !fetching) {
+    const existing = current.find((entry) => entry.id === created.id);
+    if (existing && existing.updatedAt === created.updatedAt) return;
+    queryClient.setQueryData<Workspace[]>(queryKeys.workspaces, [
+      created,
+      ...current.filter((entry) => entry.id !== created.id),
+    ]);
+    return;
+  }
+  void queryClient.invalidateQueries({ queryKey: queryKeys.workspaces });
 }
 
 async function cancelModelInsightsReads(queryClient: QueryClient): Promise<void> {
@@ -677,14 +702,62 @@ export function useWorkspaceSkillChoices(workspaceId: string | undefined) {
   });
 }
 
+const recentlyPromotedChats = new Map<string, number>();
+const promotedChatSubscribers = new Map<string, number>();
+const RECENTLY_PROMOTED_CHAT_TTL_MS = 5_000;
+
+/**
+ * Mark a draft chat whose first message just committed and seeded the query
+ * cache, so the immediate draft -> live `useChat` activation reuses the seeded
+ * snapshot instead of issuing a redundant `chats:get` IPC. Leaving and
+ * revisiting the chat clears the marker and re-reads from main as usual.
+ */
+export function markChatRecentlyPromoted(chatId: string): void {
+  const now = Date.now();
+  for (const [id, expiresAt] of recentlyPromotedChats) {
+    if (expiresAt < now) recentlyPromotedChats.delete(id);
+  }
+  recentlyPromotedChats.set(chatId, now + RECENTLY_PROMOTED_CHAT_TTL_MS);
+}
+
+function isChatRecentlyPromoted(chatId: string | undefined): boolean {
+  if (!chatId) return false;
+  const expiresAt = recentlyPromotedChats.get(chatId);
+  if (expiresAt === undefined) return false;
+  if (expiresAt < Date.now()) {
+    recentlyPromotedChats.delete(chatId);
+    return false;
+  }
+  return true;
+}
+
 export function useChat(id: string | undefined) {
+  useEffect(() => {
+    if (!id) return undefined;
+    promotedChatSubscribers.set(id, (promotedChatSubscribers.get(id) ?? 0) + 1);
+    return () => {
+      const remaining = (promotedChatSubscribers.get(id) ?? 1) - 1;
+      if (remaining > 0) promotedChatSubscribers.set(id, remaining);
+      else promotedChatSubscribers.delete(id);
+      // Defer one microtask so React StrictMode's simulated unmount -> remount
+      // cycle (and secondary `useChat` callers like `useDesignMode`) does not
+      // wipe the marker before the real mount observes it.
+      queueMicrotask(() => {
+        if (!promotedChatSubscribers.has(id)) recentlyPromotedChats.delete(id);
+      });
+    };
+  }, [id]);
+  const promotedFresh = isChatRecentlyPromoted(id);
   return useQuery({
     queryKey: id ? queryKeys.chat(id) : ["chat", "none"],
     queryFn: () => (id ? chatsApi.get(id) : Promise.resolve(null)),
     enabled: Boolean(id),
     // Revisiting a chat re-reads it (the streaming and settlement paths keep
-    // the open chat current; focus no longer resends it).
-    staleTime: 0,
+    // the open chat current; focus no longer resends it). Only the immediate
+    // draft -> live handoff treats the just-seeded snapshot as fresh so
+    // switching `useChat(undefined)` -> `useChat(chatId)` avoids a redundant
+    // `chats:get` IPC. Leaving the chat clears the marker so revisiting re-reads.
+    staleTime: promotedFresh ? RECENTLY_PROMOTED_CHAT_TTL_MS : 0,
   });
 }
 

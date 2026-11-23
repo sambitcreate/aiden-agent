@@ -254,13 +254,14 @@ export interface WorktreeSetupHookInput {
 
 /**
  * Runs WorktreeSetup hooks in the new worktree and waits for them (each is
- * bounded by its own timeout). Returns the lines the person should see; a
- * failing hook never throws here, so the worktree is never undone.
+ * bounded by its own timeout). Returns both user-facing notices and the names
+ * of hooks that actually executed so callers can invalidate any pre-hook clean
+ * Git snapshot when setup modified the checkout.
  */
-export async function runWorktreeSetupHooks(
+export async function runWorktreeSetupHooksWithResult(
   input: WorktreeSetupHookInput,
   dispatcher?: () => HookDispatcher,
-): Promise<string[]> {
+): Promise<{ notices: string[]; ranHooks: string[] }> {
   const hooks = createSurfaceHooks(
     { scopes: hookScopesFor({ workspaceRoot: input.sourceFolderPath }), cwd: input.workspacePath, sessionId: input.workspaceId },
     dispatcher,
@@ -270,5 +271,17 @@ export async function runWorktreeSetupHooks(
     { worktree_path: input.worktreePath, branch: input.branch, source_root: input.sourceRoot },
     { idempotencyKey: `WorktreeSetup:${input.workspaceId}` },
   );
-  return hookNoticeLines(outcome);
+  return { notices: hookNoticeLines(outcome), ranHooks: outcome?.ranHooks ?? [] };
+}
+
+/**
+ * Runs WorktreeSetup hooks in the new worktree and waits for them (each is
+ * bounded by its own timeout). Returns the lines the person should see; a
+ * failing hook never throws here, so the worktree is never undone.
+ */
+export async function runWorktreeSetupHooks(
+  input: WorktreeSetupHookInput,
+  dispatcher?: () => HookDispatcher,
+): Promise<string[]> {
+  return (await runWorktreeSetupHooksWithResult(input, dispatcher)).notices;
 }
