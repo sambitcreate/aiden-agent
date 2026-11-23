@@ -8,8 +8,10 @@ import {
   longestSubagentElapsedLabel,
   subagentRoleLabel,
   subagentSnapshotElapsedMilliseconds,
+  subagentStatusCounts,
   subagentStatusLabel as subagentViewStatusLabel,
   type SubagentRunViewRole,
+  type SubagentStatusWord,
   type SubagentRunViewState,
 } from "../lib/subagent-view-state";
 import { cn } from "../lib/ui-utils";
@@ -188,32 +190,16 @@ export interface SubagentChipsProps {
   className?: string;
 }
 
-const SUMMARY_ORDER: ReadonlyArray<readonly [SubagentRunViewState | "finished", string]> = [
-  ["needs_attention", "needs attention"],
-  ["running", "working"],
-  ["starting", "starting"],
-  ["queued", "queued"],
-  ["failed", "failed"],
-  ["timed_out", "timed out"],
-  ["interrupted", "interrupted"],
-  ["unknown", "outcome unknown"],
-  ["stopped", "stopped"],
-  ["completed", "completed"],
-  ["finished", "finished"],
-];
-
 function subagentGroupSummaryParts(
   states: readonly (SubagentRunViewState | "finished")[],
-): { state: SubagentRunViewState | "finished"; text: string }[] {
-  const counts = new Map<SubagentRunViewState | "finished", number>();
-  for (const state of states) counts.set(state, (counts.get(state) ?? 0) + 1);
-  return SUMMARY_ORDER.filter(([state]) => counts.has(state)).map(([state, text]) => ({
-    state,
-    text: `${counts.get(state)} ${text}`,
+): { word: SubagentStatusWord; text: string }[] {
+  return subagentStatusCounts(states).map(({ word, count }) => ({
+    word,
+    text: `${count} ${word.toLowerCase()}`,
   }));
 }
 
-/** "1 needs attention · 2 working · 1 completed", most urgent first. */
+/** "1 waiting on you · 2 running · 1 done", most urgent first. */
 export function subagentGroupSummary(states: readonly (SubagentRunViewState | "finished")[]): string {
   return subagentGroupSummaryParts(states)
     .map((part) => part.text)
@@ -358,13 +344,12 @@ export function SubagentChips({
             )}
           >
             {summaryParts.map((part, index) => (
-              <React.Fragment key={part.state}>
+              <React.Fragment key={part.word}>
                 {index > 0 ? " · " : null}
                 {/* Once settled, only the failures stand out. */}
                 <span
                   className={cn(
-                    !active && part.state === "failed" && "text-red",
-                    !active && part.state === "timed_out" && "text-support-warning",
+                    !active && part.word === "Failed" && "text-red",
                   )}
                 >
                   {part.text}

@@ -120,7 +120,7 @@ The interactive gallery that the set was chosen from is `docs/aiden-thinking-ani
 | Preparing / queued / model loading / stopping | `bounce` |
 | Waiting for approval or an answer | `glance` |
 | Subagent: queued or starting | `bounce` |
-| Subagent: needs attention | `glance` |
+| Subagent: waiting on you | `glance` |
 | Subagent: running | from its activity: searching → `scan-grid`, reviewing context → `tri-step`, writing a report → `compose`, otherwise by role (scout `scan-grid`, planner `tri-step`, others `quad-shuffle`) |
-| Subagent: finished, failed or stopped | same mark, frozen |
+| Subagent: done, failed or stopped | same mark, frozen |
 | Live | Helix family as tabled above; approval uses `glance` |

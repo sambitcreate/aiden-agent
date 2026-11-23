@@ -196,10 +196,10 @@ function plural(count: number, noun: string): string {
   return `${count} ${noun}${count === 1 ? "" : "s"}`;
 }
 
-/** "3 finished" for a batch that all completed; otherwise the card's own summary is used. */
+/** "3 done" for a batch that all completed; otherwise the card's own summary is used. */
 function allCompletedSummary(model: SubagentPillModel): string | null {
   if (model.activeCount > 0 || !model.runs.every((run) => run.state === "completed")) return null;
-  return `${model.runs.length} finished`;
+  return `${model.runs.length} done`;
 }
 
 /** The live feed for one run: saved milestones, then the current activity and latest text. */

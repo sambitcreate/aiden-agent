@@ -1,6 +1,6 @@
 # Subagent helper chat (give every helper its own chat, with no time limit)
 
-Written 2026-11-22 from main at `1afb737c`. Built as one PR in three reviewed phases (the "PR 1/2/3" sections below are those phases). Phases 1 and 2 are implemented on `claude/subagent-helper-chat`; Phase 3 is next.
+Written 2026-11-22 from main at `1afb737c`. Built as one PR in three reviewed phases (the "PR 1/2/3" sections below are those phases). All three phases are implemented on `claude/subagent-helper-chat` (Phase 3, the helper chat, on 2026-11-22); the screenshots await approval.
 
 **Decision on the 24-hour question:** option (a). "No limit" in attended chats is a 24-hour safety net; the safety grant keeps its 24-hour ceiling. Bots get 60 minutes per reply.
 

@@ -34,3 +34,25 @@ Plan: `docs/plans/subagent-helper-chat-plan.md` (PR 2 section). Branch `claude/s
 The panel label rule is not an allow-list. `colonBlockNameIsLabel` accepts a bare all-capital word of letters with no secret hint; `blockNameHasSecretHint` applies the secret-ending match only to setting-shaped names (all caps, `_`/`-`, or camelCase) and otherwise needs an exact secret word, plus a few whole names and a whole-segment `PIN`. The plan's Risks row now says this.
 
 Tests: `renderer/shared/subagent-transcript.test.ts`, `main/services/subagents/subagent-transcript-recorder.test.ts`, `main/services/subagents/subagent-transcript-store.test.ts`, `subagent-semantic-preservation.test.ts` (key blocks, same-line secret names, labels that survive), the CLI recording test in `packages/cli/tests/parity.test.mjs`, plus extensions to `subagent-history-read-core.test.ts`, `subagent-workspace-write.test.ts` and `renderer/lib/generation-stream.test.ts`.
+
+# The helper chat — 2026-11-22 (helper chat plan, Phase 3)
+
+Plan section "## The helper chat". Same branch; all three phases ship as one PR.
+
+## Where it lives
+
+- `renderer/components/subagent-helper-chat.tsx`: the read-only chat for one helper (header with status dot, name and "Role · Status · elapsed"; the task as the first bubble; each message drawn with the main chat's step rows via `subagentHelperTimeline`; problem box with **Ask main chat to retry**; bottom bar with Stop, Expand, Technical details). `subagent-helper-chat-expanded.tsx` fills the main pane (composer hidden; Back or Esc returns focus to the opener).
+- `renderer/lib/subagent-helper-chat-state.ts`: pure helpers (tone, active, work summary, problem text and retry request, `subagentHelperApprovalFor`, timeline). `renderer/lib/subagent-helper-chat-store.ts`: per-chat store (saved copies, live updates merged with `mergeSubagentTranscript`, refetch on a revision gap, approvals routed to the main chat's handler, expanded run and opener). `chat-pane.tsx` and `environment-panel.tsx` wire it; `subagents-panel.tsx` and `subagent-detail.tsx` show it in the side panel, and the old summary view only as the fallback for helpers with no saved conversation (what it was asked, what it did, result; the context line moved into Technical details).
+- `ui.tsx` ScrollArea gained a `bodyReplacement` path so the expanded chat stays visible (covered in `scroll-area-follow.test.tsx`).
+
+## Status words
+
+- One set everywhere: Queued, Running, Waiting on you, Done, Failed, Stopped (`STATUS_LABELS` in `subagent-view-state.ts`; starting→Queued, timed_out→Failed, interrupted/unknown→Stopped). `subagentStatusCounts` builds every count summary (card header, pill, overview, live announcement) in the order Waiting on you, Running, Queued, Failed, Stopped, Done. Status groups: Running, Waiting on you, Failed, Stopped, Done (unknown is Stopped). Stale leads: "Still running", "Still queued".
+- A helper asking for a run grant stays `running` in its record ("Preparing a workspace update"). The helper chat shows "Waiting on you" (and the waiting tone) while it holds a matched approval; the card row and list still say Running. Known gap.
+- The pill's narrow fallback and aria label still say "N finished" for a settled batch (a batch word, not a status word).
+
+## Known limits
+
+Non-helper approvals are hidden while a helper chat is expanded, and their shortcuts are off; the side-panel copy of an approval has no shortcuts; a running helper that missed early updates shows the fallback until its next save; the side panel keeps showing the same helper while it is expanded; the timed_out warning colour folded into red.
+
+Tests: `subagent-helper-chat.test.tsx`, `subagent-helper-chat-state.test.ts`, `subagent-helper-chat-store.test.ts`, `scroll-area-follow.test.tsx`, E2E `tests/e2e/subagent-helper-chat.spec.ts`.

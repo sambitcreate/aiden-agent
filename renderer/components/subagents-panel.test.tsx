@@ -586,7 +586,7 @@ test("a waiting child shows its pending question in chips, roster, detail, and l
 
   assert.match(
     subagentSnapshotLiveSummary([{ ...asking, updatedAt: 9_000 }, generic]),
-    /^2 active subagents: 2 needs attention; 0 finished\. Latest active update: Fixture cleaner, Waiting on you: Should I delete the generated fixtures in tests\/tmp\?\.$/u,
+    /^2 active subagents: 2 waiting on you; 0 done\. Latest active update: Fixture cleaner, Waiting on you: Should I delete the generated fixtures in tests\/tmp\?\.$/u,
   );
 });
 
@@ -1331,7 +1331,7 @@ test("presentation-only saving and stale states stay visible without rewriting p
     }),
   );
   const presentations = new Map([
-    [active.runId, { state: "stale_active", label: "Still working; last update 45s ago" } as const],
+    [active.runId, { state: "stale_active", label: "Still running; last update 45s ago" } as const],
     [
       done.runId,
       { state: "saving", label: "Saving subagent result · child outcome: Done" } as const,
@@ -1347,7 +1347,7 @@ test("presentation-only saving and stale states stay visible without rewriting p
   );
   assert.match(roster, /data-subagent-presentation="stale_active"/u);
   assert.match(roster, /data-subagent-presentation="saving"/u);
-  assert.match(roster, /Still working; last update 45s ago/u);
+  assert.match(roster, /Still running; last update 45s ago/u);
   assert.match(roster, /Saving subagent result/u);
   assert.equal(active.state, "running");
   assert.equal(done.state, "completed");
@@ -1381,7 +1381,7 @@ test("presentation-only saving and stale states stay visible without rewriting p
 
 test("a stuck helper offers Stop inside its No recent update notice, once", () => {
   const stuck = v2Run({ runId: "stuck", label: "Slow scout", updatedAt: 1_000 });
-  const stale = { state: "stale_active", label: "Still working; last update 45s ago" } as const;
+  const stale = { state: "stale_active", label: "Still running; last update 45s ago" } as const;
   const detail = renderToStaticMarkup(
     <SubagentDetail run={stuck} presentation={stale} onStop={async () => undefined} />,
   );
@@ -2045,11 +2045,11 @@ test("activity labels and the single live summary announce meaningful progress",
   assert.equal(subagentStatusLabel("queued", queued.snapshot?.activity), "Queued");
   assert.equal(
     subagentLiveSummary([reading, queued]),
-    "2 active subagents: 1 queued, 1 working; 0 finished. Latest active update: Queued review, Queued.",
+    "2 active subagents: 1 running, 1 queued; 0 done. Latest active update: Queued review, Queued.",
   );
   assert.equal(
     subagentSnapshotLiveSummary([reading.snapshot!, queued.snapshot!]),
-    "2 active subagents: 1 queued, 1 working; 0 finished. Latest active update: Queued review, Queued.",
+    "2 active subagents: 1 running, 1 queued; 0 done. Latest active update: Queued review, Queued.",
   );
   assert.equal(
     subagentSnapshotLiveSummary([queued.snapshot!, reading.snapshot!]),
@@ -2123,13 +2123,13 @@ test("overview and terminal summaries preserve attention and exact outcomes", ()
 
   assert.equal(
     subagentSnapshotLiveSummary([completed]),
-    "0 active subagents; 1 completed successfully.",
+    "0 active subagents; 1 done.",
   );
   assert.equal(subagentSnapshotLiveSummary([failed]), "0 active subagents; 1 failed.");
-  assert.equal(subagentSnapshotLiveSummary([timedOut]), "0 active subagents; 1 timed out.");
-  assert.equal(subagentSnapshotLiveSummary([interrupted]), "0 active subagents; 1 interrupted.");
+  assert.equal(subagentSnapshotLiveSummary([timedOut]), "0 active subagents; 1 failed.");
+  assert.equal(subagentSnapshotLiveSummary([interrupted]), "0 active subagents; 1 stopped.");
   assert.equal(subagentSnapshotLiveSummary([stopped]), "0 active subagents; 1 stopped.");
-  assert.equal(subagentSnapshotLiveSummary([unknown]), "0 active subagents; 1 outcome unknown.");
+  assert.equal(subagentSnapshotLiveSummary([unknown]), "0 active subagents; 1 stopped.");
   const mixed = subagentSnapshotLiveSummary([
     completed,
     failed,
@@ -2140,7 +2140,7 @@ test("overview and terminal summaries preserve attention and exact outcomes", ()
   ]);
   assert.equal(
     mixed,
-    "0 active subagents; 1 completed successfully; 1 failed; 1 timed out; 1 interrupted; 1 stopped; 1 outcome unknown.",
+    "0 active subagents; 2 failed; 3 stopped; 1 done.",
   );
   assert.equal(subagentLiveSummary([view(failed)]), "0 active subagents; 1 failed.");
   const needsAttention = view(
@@ -2152,9 +2152,9 @@ test("overview and terminal summaries preserve attention and exact outcomes", ()
     }),
   );
   assert.deepEqual(subagentOverviewSummary([needsAttention, view(failed), view(completed)]), {
-    primary: "1 needs attention",
-    secondary: "1 failed · 1 completed",
-    ariaLabel: "1 needs attention, 1 failed, 1 completed",
+    primary: "1 waiting on you",
+    secondary: "1 failed · 1 done",
+    ariaLabel: "1 waiting on you, 1 failed, 1 done",
   });
   const activeWithNewerTerminal = run("older-active", {
     updatedAt: 2_000,
@@ -2178,7 +2178,8 @@ test("overview and terminal summaries preserve attention and exact outcomes", ()
     ]),
     true,
   );
-  assert.doesNotMatch(mixed, /\bdone\b/u);
+  // Only a helper that completed counts as done; failures and stops never do.
+  assert.doesNotMatch(subagentSnapshotLiveSummary([failed, timedOut, interrupted, stopped, unknown]), /\bdone\b/u);
   assert.doesNotMatch(mixed, /Private|error|Users/u);
 });
 
@@ -2195,7 +2196,7 @@ test("terminal activity flushes when the same owner clears before the live debou
     },
     (timer) => tasks.delete(timer as number),
   );
-  const terminalSummary = "0 active subagents; 1 completed successfully.";
+  const terminalSummary = "0 active subagents; 1 done.";
 
   coordinator.update("chat-1", terminalSummary, true);
   assert.deepEqual(published, []);
@@ -2220,7 +2221,7 @@ test("owner changes suppress pending terminal activity and debounce only the new
     },
     (timer) => tasks.delete(timer as number),
   );
-  const staleTerminalSummary = "0 active subagents; 1 completed successfully.";
+  const staleTerminalSummary = "0 active subagents; 1 done.";
   const newOwnerSummary = "1 active subagent; 0 done. New scout: Working.";
 
   coordinator.update("chat-1", staleTerminalSummary, true);
@@ -2713,7 +2714,7 @@ test("mounted live announcer stays singular and active in floating and pinned su
   try {
     renderHarness(true, null);
     let regions = await waitForAnnouncement((message) =>
-      /0 active subagents; 1 completed successfully\./u.test(message),
+      /0 active subagents; 1 done\./u.test(message),
     );
     assert.equal(regions.length, 1);
     const originalRegion = regions[0];
@@ -2726,7 +2727,7 @@ test("mounted live announcer stays singular and active in floating and pinned su
       ancestor = ancestor.parentNode instanceof HTMLElement ? ancestor.parentNode : null;
     }
     assert.equal(host.getAttribute("data-surface-mode"), "tools-floating");
-    assert.match(regions[0].textContent ?? "", /0 active subagents; 1 completed successfully\./u);
+    assert.match(regions[0].textContent ?? "", /0 active subagents; 1 done\./u);
 
     host.setAttribute("inert", "");
     host.setAttribute("aria-hidden", "true");

@@ -773,7 +773,7 @@ test("stale-active presentation is clock-injected, bounded, and terminal-safe", 
   const stale = deriveSubagentRunPresentation(active, [], 6_000, 5_000);
   assert.deepEqual(stale, {
     state: "stale_active",
-    label: "Still working; last update 5s ago",
+    label: "Still running; last update 5s ago",
   });
   assert.ok(stale.label.length < 96);
   assert.deepEqual(active.snapshot, before);
@@ -792,7 +792,7 @@ test("stale-active presentation is clock-injected, bounded, and terminal-safe", 
   const bounded = deriveSubagentRunPresentation(active, [], Number.MAX_VALUE, 0);
   assert.equal(bounded.state, "stale_active");
   assert.ok(bounded.label.length < 96);
-  assert.match(bounded.label, /^Still working; last update \d+d \d+h \d+m ago$/u);
+  assert.match(bounded.label, /^Still running; last update \d+d \d+h \d+m ago$/u);
 });
 
 test("detail results are rejected after request, chat, or selection ownership changes", () => {

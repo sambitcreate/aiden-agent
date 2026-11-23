@@ -71,7 +71,7 @@ function header(): HTMLElement {
 test("the group summary counts states most urgent first", () => {
   assert.equal(
     subagentGroupSummary(["completed", "running", "needs_attention", "running", "failed"]),
-    "1 needs attention · 2 working · 1 failed · 1 completed",
+    "1 waiting on you · 2 running · 1 failed · 1 done",
   );
   assert.equal(subagentGroupSummary([]), "");
 });
@@ -89,11 +89,11 @@ test("a working batch reads as kicked off and a settled one as ran, with the lon
   );
   const group = screen.getByRole("group", { name: "2 scouts" });
   // The name leaves out the elapsed time, so a focused header is not re-read every second.
-  const toggle = screen.getByRole("button", { name: "Kicked off 2 scouts. 1 working · 1 completed." });
+  const toggle = screen.getByRole("button", { name: "Kicked off 2 scouts. 1 running · 1 done." });
   assert.equal(toggle === header(), true);
   assert.equal(toggle.getAttribute("aria-expanded"), "true");
   assert.match(toggle.textContent ?? "", /Kicked off 2 scouts/u);
-  assert.match(toggle.textContent ?? "", /1 working · 1 completed/u);
+  assert.match(toggle.textContent ?? "", /1 running · 1 done/u);
   // The running run has worked for over two minutes; the finished one for five seconds.
   assert.match(toggle.textContent ?? "", /2m \d+s/u);
 
@@ -110,7 +110,7 @@ test("a working batch reads as kicked off and a settled one as ran, with the lon
     />,
   );
   assert.match(header().textContent ?? "", /Ran 2 scouts/u);
-  assert.match(header().textContent ?? "", /1 failed · 1 completed/u);
+  assert.match(header().textContent ?? "", /1 failed · 1 done/u);
   assert.match(header().textContent ?? "", /1m 5s/u);
 });
 

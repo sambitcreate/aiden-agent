@@ -87,8 +87,19 @@ export interface SubagentHelperChatProps {
   className?: string;
 }
 
-function statusWord(run: SubagentRunSnapshot, presentation: SubagentRunPresentation | undefined) {
-  return presentation?.state === "stopping" ? presentation.label : subagentStateLabel(run.state);
+/**
+ * A helper asking to write stays running in its record; while that question is
+ * shown inside this chat, the chat says what the helper is waiting on.
+ */
+function shownState(run: SubagentRunSnapshot, waitingOnApproval: boolean): SubagentRunSnapshot["state"] {
+  return waitingOnApproval && subagentHelperIsActive(run.state) ? "needs_attention" : run.state;
+}
+
+function statusWord(
+  state: SubagentRunSnapshot["state"],
+  presentation: SubagentRunPresentation | undefined,
+) {
+  return presentation?.state === "stopping" ? presentation.label : subagentStateLabel(state);
 }
 
 function HelperMessage({
@@ -203,9 +214,10 @@ export const SubagentHelperChat = React.forwardRef<HTMLHeadingElement, SubagentH
     const [awayFromLatest, setAwayFromLatest] = React.useState(false);
     const [detailsOpen, setDetailsOpen] = React.useState(false);
     const [announcement, setAnnouncement] = React.useState("");
-    const tone = subagentHelperTone(run.state);
+    const state = shownState(run, approval !== null);
+    const tone = subagentHelperTone(state);
     const active = subagentHelperIsActive(run.state);
-    const status = statusWord(run, presentation);
+    const status = statusWord(state, presentation);
     const role = subagentRoleLabel(run.role);
     const endedAt = run.finishedAt ?? now;
     const modelDisplay = subagentModelDisplay(run);

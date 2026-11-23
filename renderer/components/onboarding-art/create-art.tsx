@@ -327,7 +327,7 @@ export function NativeSubagentsArt() {
           <Bar width="70%" tone="ink" />
           <span>Implementer</span>
         </span>
-        <span className="oa-sub-state">Working</span>
+        <span className="oa-sub-state">Running</span>
       </div>
       <div className="oa-sub-row" data-level="2" data-dim="">
         <span className="oa-sub-twisty" />
@@ -348,7 +348,7 @@ export function NativeSubagentsArt() {
           <Bar width="64%" tone="ink" />
           <span>Reviewer</span>
         </span>
-        <span className="oa-sub-state">Finished</span>
+        <span className="oa-sub-state">Done</span>
       </div>
       <div className="oa-sub-row">
         <span className="oa-sub-twisty" />
@@ -359,7 +359,7 @@ export function NativeSubagentsArt() {
           <Bar width="52%" tone="ink" />
           <span>Planner</span>
         </span>
-        <span className="oa-sub-state">Finished</span>
+        <span className="oa-sub-state">Done</span>
       </div>
       <div className="oa-sub-row">
         <span className="oa-sub-twisty" />
@@ -370,7 +370,7 @@ export function NativeSubagentsArt() {
           <Bar width="46%" tone="ink" />
           <span>Scout</span>
         </span>
-        <span className="oa-sub-state">Finished</span>
+        <span className="oa-sub-state">Done</span>
       </div>
     </ArtWindow>
   );

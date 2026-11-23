@@ -127,6 +127,49 @@ test("a running helper shows what it was asked, its steps, and a Stop that stops
   assert.deepEqual(stopped, ["run-1"]);
 });
 
+test("a running helper that asks to write says it is waiting on you, and the answer goes back", () => {
+  const decisions: string[] = [];
+  render(
+    <SubagentHelperChat
+      run={helper({ activity: "Preparing a workspace update" })}
+      transcript={conversation(2, [{ text: "I'll write the plan." }])}
+      approval={{
+        prompt: {
+          approvalId: "approval-1",
+          toolCallId: "call-1",
+          toolName: "subagent",
+          summary: "Allow writes for Code scout",
+          canAllow: true,
+          details: {
+            kind: "subagent-run-grant",
+            lane: "write",
+            runId: "run-1",
+            childLabel: "Code scout",
+            workspaceLabel: "Docs",
+            worktreeLabel: null,
+            isManagedWorktree: false,
+            workspaceRevisionPrefix: "0123456789ab",
+            fullHostAccess: false,
+            noRollback: false,
+          },
+        },
+        deciding: false,
+        onDecide: (decision) => {
+          decisions.push(decision);
+        },
+      }}
+      now={4_000}
+    />,
+  );
+  const chat = screen.getByRole("article", { name: "Helper chat: Code scout" });
+  assert.match(chat.textContent ?? "", /Scout · Waiting on you · /u);
+  const question = chat.querySelector<HTMLElement>("[data-subagent-helper-approval]");
+  assert.ok(question, "the question is shown inside the helper chat");
+  assert.match(question.textContent ?? "", /Allow writes for Code scout/u);
+  fireEvent.click(within(question).getByRole("button", { name: /Deny|Don.t allow/u }));
+  assert.deepEqual(decisions, ["deny"]);
+});
+
 test("a stopped helper explains what happened and offers no Stop", () => {
   render(
     <SubagentHelperChat
