@@ -1,21 +1,23 @@
 import * as React from "react";
-import { ArrowDownToLine, ArrowLeft, Maximize2, MoreHorizontal, Square } from "lucide-react";
+import { ArrowDownToLine, ArrowLeft, Maximize2, MoreHorizontal, Square, X } from "lucide-react";
 import { cn } from "../lib/ui-utils";
 import type { ApprovalPrompt } from "../lib/ipc";
-import { resolveModelDisplay } from "../lib/model-display";
+import { prefersReducedMotion } from "../lib/appearance-runtime";
 import {
   subagentDetailGrowthAction,
   subagentDetailIsAwayFromLatest,
   subagentModelDisplay,
 } from "../lib/subagent-panel-state";
 import {
+  SUBAGENT_HELPER_TONE_DOT,
+  subagentHelperBlocks,
   subagentHelperIsActive,
   subagentHelperProblem,
   subagentHelperTimeline,
   subagentHelperTone,
   subagentHelperWorkSummary,
-  type SubagentHelperTone,
 } from "../lib/subagent-helper-chat-state";
+import { subagentModelLine, useSubagentModelCatalog } from "../lib/subagent-model-name";
 import { subagentRoleLabel, type SubagentRunPresentation } from "../lib/subagent-view-state";
 import {
   activityTimelineFragment,
@@ -25,6 +27,11 @@ import {
   isRecordingStep,
 } from "../lib/assistant-message-presentation";
 import type { SubagentRunSnapshot } from "../shared/subagent-runs";
+import {
+  subagentContextIsApproachingLimit,
+  subagentContextUsageLabels,
+  type SubagentContextUsageV1,
+} from "../shared/subagent-context-usage";
 import type {
   SubagentTranscriptMessageEntry,
   SubagentTranscriptV1,
@@ -38,24 +45,10 @@ import { SafeMessageBubble } from "./message-bubble";
 import { formatSubagentElapsed } from "./subagent-detail";
 import { subagentStateLabel } from "./subagent-chips";
 import { WebExtractRecap } from "./web-extract-recap";
-import {
-  Button,
-  Callout,
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-  Text,
-} from "./ui";
+import { Button, Callout, Text } from "./ui";
 
-const TONE_DOT: Record<SubagentHelperTone, string> = {
-  queued: "bg-separator",
-  running: "bg-status-accent motion-safe:animate-pulse",
-  waiting: "bg-status-warning",
-  done: "bg-status-green",
-  failed: "bg-status-red",
-  stopped: "bg-separator",
-};
+/** The main chat column's insets, so the expanded chat lines up with the composer. */
+const EXPANDED_COLUMN = "aiden-dock-inset chat-content-column";
 
 export interface SubagentHelperChatApproval {
   prompt: ApprovalPrompt;
@@ -77,12 +70,18 @@ export interface SubagentHelperChatProps {
   /** The chat fills the main pane in place of the main chat's messages. */
   expanded?: boolean;
   onExpand?: (opener: HTMLElement) => void;
+  /** Expanded only: return to the main chat. */
   onBack?: () => void;
-  /**
-   * Speak status changes from this view. The side panel speaks for its own
-   * detail region, so only a view outside it (expanded) sets this.
-   */
-  announceStatus?: boolean;
+  /** Side panel only: close the panel. */
+  onClose?: () => void;
+  /** The main chat waits on the person for something this chat cannot answer. */
+  waitingOnMain?: boolean;
+  onReturnToMain?: () => void;
+  /** The saved copy could not be refreshed; what is shown may be out of date. */
+  refreshError?: string | null;
+  onRetryRefresh?: () => void;
+  /** Live context reading; supplied only while the run is active. */
+  contextUsage?: SubagentContextUsageV1;
   now?: number;
   className?: string;
 }
@@ -102,17 +101,14 @@ function statusWord(
   return presentation?.state === "stopping" ? presentation.label : subagentStateLabel(state);
 }
 
-function HelperMessage({
-  runId,
-  index,
-  entry,
-  runState,
-}: {
+interface HelperMessageProps {
   runId: string;
   index: number;
   entry: SubagentTranscriptMessageEntry;
   runState: SubagentRunSnapshot["state"];
-}) {
+}
+
+function HelperMessageView({ runId, index, entry, runState }: HelperMessageProps) {
   const timeline = subagentHelperTimeline(runId, index, entry, runState);
   const running = timeline.status === "running";
   const rows = assistantPresentationRows(entry.text, timeline);
@@ -184,6 +180,27 @@ function HelperMessage({
 }
 
 /**
+ * A finished message never changes, so a streamed token in the newest message
+ * does not redraw the ones before it.
+ */
+function sameHelperMessage(previous: HelperMessageProps, next: HelperMessageProps): boolean {
+  if (previous.runId !== next.runId || previous.index !== next.index) return false;
+  const before = previous.entry;
+  const after = next.entry;
+  if (
+    before.finishedAt !== undefined &&
+    before.finishedAt === after.finishedAt &&
+    before.text === after.text &&
+    before.steps.length === after.steps.length
+  ) {
+    return true;
+  }
+  return before === after && previous.runState === next.runState;
+}
+
+const HelperMessage = React.memo(HelperMessageView, sameHelperMessage);
+
+/**
  * One helper's own conversation: what it was asked, what it said and the
  * steps it took, in the main chat's message style.
  */
@@ -201,19 +218,26 @@ export const SubagentHelperChat = React.forwardRef<HTMLHeadingElement, SubagentH
       expanded = false,
       onExpand,
       onBack,
-      announceStatus = false,
+      onClose,
+      waitingOnMain = false,
+      onReturnToMain,
+      refreshError = null,
+      onRetryRefresh,
+      contextUsage,
       now = Date.now(),
       className,
     },
     headingRef,
   ) {
+    const headingId = React.useId();
+    const detailsId = React.useId();
     const scrollRef = React.useRef<HTMLDivElement | null>(null);
+    const detailsRef = React.useRef<HTMLElement | null>(null);
     const userNavigatedRef = React.useRef(false);
     const followGrowthRef = React.useRef(false);
     const previousRef = React.useRef<{ runId: string; revision: number } | null>(null);
     const [awayFromLatest, setAwayFromLatest] = React.useState(false);
     const [detailsOpen, setDetailsOpen] = React.useState(false);
-    const [announcement, setAnnouncement] = React.useState("");
     const state = shownState(run, approval !== null);
     const tone = subagentHelperTone(state);
     const active = subagentHelperIsActive(run.state);
@@ -221,19 +245,14 @@ export const SubagentHelperChat = React.forwardRef<HTMLHeadingElement, SubagentH
     const role = subagentRoleLabel(run.role);
     const endedAt = run.finishedAt ?? now;
     const modelDisplay = subagentModelDisplay(run);
-    const modelLabel = resolveModelDisplay(run.modelId).label;
+    const modelLine = subagentModelLine(run, useSubagentModelCatalog());
     const summary = React.useMemo(() => subagentHelperWorkSummary(transcript), [transcript]);
-    const problem = subagentHelperProblem(run, summary);
+    const blocks = React.useMemo(() => subagentHelperBlocks(transcript), [transcript]);
+    const problem = subagentHelperProblem(run, summary, { trimmed: transcript.trimmed });
     const canStop = run.version === 2 && run.execution === "foreground" && active && onStop;
-    const stopLabel = run.version === 2 && run.depth === 1 ? "Stop subtree" : "Stop helper";
+    const stopText = run.version === 2 && run.depth === 1 ? "Stop all" : "Stop";
+    const working = !approval && (run.state === "running" || run.state === "queued" || run.state === "starting");
     const growthRevision = transcript.revision * 1_000_000 + run.revision;
-
-    const previousToneRef = React.useRef(tone);
-    React.useEffect(() => {
-      const previous = previousToneRef.current;
-      previousToneRef.current = tone;
-      if (announceStatus && previous !== tone) setAnnouncement(`${run.label}: ${status}`);
-    }, [announceStatus, run.label, status, tone]);
 
     const invokeStop = async () => {
       if (stopPending || !onStop) return;
@@ -299,22 +318,39 @@ export const SubagentHelperChat = React.forwardRef<HTMLHeadingElement, SubagentH
       return () => observer.disconnect();
     }, [updateScrollPosition]);
 
-    const jumpToLatest = () => {
-      const element = scrollRef.current;
-      if (!element) return;
-      const reduceMotion = document.documentElement.dataset.reduceMotion === "true";
-      element.scrollTo({ top: element.scrollHeight, behavior: reduceMotion ? "auto" : "smooth" });
-      userNavigatedRef.current = false;
-      followGrowthRef.current = true;
-      setAwayFromLatest(false);
-    };
-
     const markUserNavigation = () => {
       userNavigatedRef.current = true;
       followGrowthRef.current = false;
     };
 
-    const modelLine = [modelLabel, modelDisplay.effort].filter(Boolean).join(" · ");
+    const jumpToLatest = () => {
+      const element = scrollRef.current;
+      if (!element) return;
+      element.scrollTo({
+        top: element.scrollHeight,
+        behavior: prefersReducedMotion() ? "auto" : "smooth",
+      });
+      userNavigatedRef.current = false;
+      followGrowthRef.current = true;
+      setAwayFromLatest(false);
+    };
+
+    // Opened details sit at the top of the conversation: bring them into view
+    // and move focus there, so opening them visibly does something.
+    React.useEffect(() => {
+      if (!detailsOpen) return;
+      const section = detailsRef.current;
+      if (!section) return;
+      section.scrollIntoView?.({ block: "nearest", behavior: prefersReducedMotion() ? "auto" : "smooth" });
+      section.focus({ preventScroll: true });
+    }, [detailsOpen]);
+
+    const toggleDetails = () => {
+      if (!detailsOpen) markUserNavigation();
+      setDetailsOpen((open) => !open);
+    };
+
+    const column = expanded ? EXPANDED_COLUMN : "px-4";
 
     return (
       <article
@@ -322,20 +358,21 @@ export const SubagentHelperChat = React.forwardRef<HTMLHeadingElement, SubagentH
         data-subagent-helper-chat="true"
         data-subagent-helper-state={tone}
         data-subagent-helper-expanded={expanded ? "true" : undefined}
-        aria-label={`Helper chat: ${run.label}`}
+        aria-labelledby={headingId}
       >
-        <header className="flex min-w-0 shrink-0 items-start gap-2.5 px-4 pb-2 pt-3">
+        <header className={cn("flex min-w-0 shrink-0 items-start gap-2.5 pb-2 pt-3", column)}>
           <span
             aria-hidden="true"
-            className={cn("mt-2 size-2 shrink-0 rounded-full", TONE_DOT[tone])}
+            className={cn("mt-2 size-2 shrink-0 rounded-full", SUBAGENT_HELPER_TONE_DOT[tone])}
             data-subagent-helper-dot={tone}
           />
           <span className="min-w-0 flex-1">
             <h2
               ref={headingRef}
+              id={headingId}
               tabIndex={-1}
               data-subagent-detail-heading="true"
-              className="break-words text-strong font-medium text-primary outline-none"
+              className="break-words rounded-sm text-strong font-medium text-primary outline-none focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
             >
               {run.label}
             </h2>
@@ -345,217 +382,290 @@ export const SubagentHelperChat = React.forwardRef<HTMLHeadingElement, SubagentH
               <span className="tabular-nums">{formatSubagentElapsed(run.startedAt, endedAt)}</span>
             </Text>
           </span>
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
+          <Button
+            variant="transparent"
+            size="small"
+            iconOnly
+            aria-label="Technical details"
+            aria-expanded={detailsOpen}
+            aria-controls={detailsOpen ? detailsId : undefined}
+            onClick={toggleDetails}
+            className="shrink-0 motion-reduce:transition-none"
+            data-subagent-helper-details-toggle="true"
+          >
+            <MoreHorizontal aria-hidden="true" />
+          </Button>
+        </header>
+
+        {waitingOnMain && onReturnToMain ? (
+          <div className={cn("shrink-0 pb-2", column)}>
+            <Callout
+              role="note"
+              className="flex-row items-center justify-between gap-3 px-3 py-2"
+              data-subagent-helper-main-waiting="true"
+            >
+              <Text as="p" variant="small" color="secondary" className="min-w-0">
+                Main chat is waiting on you
+              </Text>
+              <Button
+                variant="muted"
+                size="small"
+                onClick={onReturnToMain}
+                className="shrink-0 motion-reduce:transition-none"
+              >
+                <ArrowLeft aria-hidden="true" className="size-3.5" />
+                Back to main chat
+              </Button>
+            </Callout>
+          </div>
+        ) : null}
+
+        <div className="relative flex min-h-0 flex-1 flex-col">
+          <div
+            ref={scrollRef}
+            onScroll={updateScrollPosition}
+            onWheel={markUserNavigation}
+            onPointerDownCapture={markUserNavigation}
+            onKeyDown={markUserNavigation}
+            className="min-h-0 flex-1 overflow-y-auto pb-6 pt-2"
+            data-subagent-scroll-region="true"
+          >
+            <div className={cn("flex w-full flex-col gap-4", expanded ? EXPANDED_COLUMN : "mx-auto max-w-2xl px-4")}>
+              {detailsOpen ? (
+                <section
+                  ref={detailsRef}
+                  id={detailsId}
+                  tabIndex={-1}
+                  aria-label="Technical details"
+                  className="rounded-card bg-well px-3 py-2.5 outline-none focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                  data-subagent-helper-details="true"
+                >
+                  <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-small">
+                    <dt className="text-tertiary">Context</dt>
+                    <dd className="text-secondary">
+                      {run.version === 2 && run.context === "fork"
+                        ? "Started with this chat's context"
+                        : "Started fresh"}
+                    </dd>
+                    {contextUsage ? (
+                      <>
+                        <dt className="text-tertiary">Context window</dt>
+                        <dd
+                          className={cn(
+                            "tabular-nums text-secondary",
+                            subagentContextIsApproachingLimit(contextUsage) && "text-support-warning",
+                          )}
+                          data-subagent-helper-context-usage="true"
+                        >
+                          {(() => {
+                            const labels = subagentContextUsageLabels(contextUsage);
+                            return `${labels.amount} (${labels.percent})`;
+                          })()}
+                        </dd>
+                      </>
+                    ) : null}
+                    <dt className="text-tertiary">Turns</dt>
+                    <dd className="tabular-nums text-secondary">{run.turns}</dd>
+                    <dt className="text-tertiary">Tokens</dt>
+                    <dd className="tabular-nums text-secondary">{run.tokens}</dd>
+                    <dt className="text-tertiary">Model</dt>
+                    <dd className="break-words text-secondary [overflow-wrap:anywhere]">
+                      {[modelDisplay.model, modelDisplay.selection].filter(Boolean).join(" · ")}
+                    </dd>
+                    <dt className="text-tertiary">Run ID</dt>
+                    <dd className="flex min-w-0 items-center gap-1">
+                      <span className="min-w-0 truncate font-mono text-secondary">{run.runId}</span>
+                      <CopyButton text={run.runId} label="Copy run ID" className="shrink-0" />
+                    </dd>
+                  </dl>
+                </section>
+              ) : null}
+
+              {refreshError ? (
+                <Callout role="note" data-subagent-helper-refresh-error="true">
+                  <Text as="p" variant="small" color="secondary">
+                    Couldn't load the latest steps. What's shown may be out of date.
+                  </Text>
+                  {onRetryRefresh ? (
+                    <Button
+                      variant="muted"
+                      size="small"
+                      onClick={onRetryRefresh}
+                      className="mt-2 w-fit self-start motion-reduce:transition-none"
+                    >
+                      Try again
+                    </Button>
+                  ) : null}
+                </Callout>
+              ) : null}
+
+              {transcript.trimmed ? (
+                <Text
+                  as="p"
+                  variant="small"
+                  color="tertiary"
+                  className="text-center"
+                  data-subagent-helper-trimmed="true"
+                >
+                  Earlier steps aren't shown to save space.
+                </Text>
+              ) : null}
+
+              {blocks.map((block) =>
+                block.kind === "task" ? (
+                  <div key={block.key} data-subagent-helper-task="true">
+                    <SafeMessageBubble imageScope={run.runId} role="user" content={block.text} />
+                  </div>
+                ) : (
+                  <div
+                    key={block.key}
+                    className="flex min-w-0 flex-col gap-2"
+                    data-subagent-helper-message="true"
+                  >
+                    <HelperMessage
+                      runId={run.runId}
+                      index={block.index}
+                      entry={block.entry}
+                      runState={run.state}
+                    />
+                  </div>
+                ),
+              )}
+
+              {working ? (
+                <p
+                  className="flex items-center gap-2 text-small text-secondary"
+                  data-subagent-helper-working="true"
+                >
+                  <span
+                    aria-hidden="true"
+                    className="size-1.5 shrink-0 rounded-full bg-status-accent motion-safe:animate-pulse"
+                  />
+                  {run.state === "running" ? "Working…" : "Starting…"}
+                </p>
+              ) : null}
+
+              {approval ? (
+                <div data-subagent-helper-approval="true">
+                  <ChatApprovalCard
+                    pending={approval.prompt}
+                    deciding={approval.deciding}
+                    onDecide={approval.onDecide}
+                    keyboardShortcuts={expanded}
+                  />
+                </div>
+              ) : null}
+
+              {problem ? (
+                <Callout
+                  role="note"
+                  color={problem.tone === "failed" ? "red" : undefined}
+                  data-subagent-helper-problem={problem.tone}
+                >
+                  <Text as="p" variant="small" color="secondary" className="break-words">
+                    {problem.text}
+                  </Text>
+                  {onAskRetry ? (
+                    <Button
+                      variant="muted"
+                      size="small"
+                      onClick={() => onAskRetry(problem.retryText)}
+                      className="mt-2 w-fit self-start motion-reduce:transition-none"
+                    >
+                      Ask main chat to retry
+                    </Button>
+                  ) : null}
+                </Callout>
+              ) : null}
+
+              {stopError ? (
+                <Callout color="red" role="note" data-subagent-control-error="true">
+                  <Text as="p" variant="small" color="secondary">
+                    Couldn't stop this helper. {stopError} Try again if it's still running.
+                  </Text>
+                </Callout>
+              ) : null}
+            </div>
+          </div>
+
+          {awayFromLatest ? (
+            <Button
+              variant="glass"
+              size="small"
+              className="absolute bottom-3 right-3 motion-reduce:transition-none"
+              onClick={jumpToLatest}
+              data-subagent-jump-latest="true"
+            >
+              <ArrowDownToLine aria-hidden="true" className="size-3.5" />
+              Jump to latest
+            </Button>
+          ) : null}
+        </div>
+
+        <footer className="shrink-0 border-t border-separator" data-subagent-helper-bar="true">
+          <div className={cn("flex min-w-0 items-center gap-2 py-2", expanded ? EXPANDED_COLUMN : "px-3")}>
+            <Text
+              as="p"
+              variant="small"
+              color="secondary"
+              className="min-w-0 flex-1 truncate"
+              title={modelLine}
+              data-subagent-helper-model="true"
+            >
+              {modelLine}
+            </Text>
+            {canStop ? (
+              <Button
+                variant="muted"
+                size="small"
+                disabled={stopPending}
+                aria-label={stopPending ? `Stopping ${run.label}` : `${stopText} ${run.label}`}
+                aria-busy={stopPending ? true : undefined}
+                onClick={() => void invokeStop()}
+                className="shrink-0 motion-reduce:transition-none"
+              >
+                <Square aria-hidden="true" className="size-3" />
+                {stopPending ? "Stopping…" : stopText}
+              </Button>
+            ) : null}
+            {!expanded && onExpand ? (
               <Button
                 variant="transparent"
                 size="small"
-                iconOnly
-                aria-label={`More for ${run.label}`}
+                onClick={(event) => onExpand(event.currentTarget)}
                 className="shrink-0 motion-reduce:transition-none"
+                data-subagent-helper-expand="true"
               >
-                <MoreHorizontal aria-hidden="true" />
+                <Maximize2 aria-hidden="true" className="size-3.5" />
+                Expand
               </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="w-56">
-              <DropdownMenuItem onSelect={() => setDetailsOpen((open) => !open)}>
-                {detailsOpen ? "Hide technical details" : "Technical details"}
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
-        </header>
-
-        <div
-          ref={scrollRef}
-          onScroll={updateScrollPosition}
-          onWheel={markUserNavigation}
-          onPointerDownCapture={markUserNavigation}
-          onKeyDown={markUserNavigation}
-          className="min-h-0 flex-1 overflow-y-auto px-4 pb-6 pt-2"
-          data-subagent-scroll-region="true"
-        >
-          <div className="mx-auto flex w-full max-w-2xl flex-col gap-4">
-            {detailsOpen ? (
-              <section
-                aria-label="Technical details"
-                className="rounded-card bg-well px-3 py-2.5"
-                data-subagent-helper-details="true"
+            ) : null}
+            {expanded && onBack ? (
+              <Button
+                variant="transparent"
+                size="small"
+                onClick={onBack}
+                className="shrink-0 motion-reduce:transition-none"
+                data-subagent-helper-back="true"
               >
-                <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-small">
-                  <dt className="text-tertiary">Context</dt>
-                  <dd className="text-secondary">
-                    {run.version === 2 && run.context === "fork" ? "Copied from the chat" : "Fresh start"}
-                  </dd>
-                  <dt className="text-tertiary">Turns</dt>
-                  <dd className="tabular-nums text-secondary">{run.turns}</dd>
-                  <dt className="text-tertiary">Tokens</dt>
-                  <dd className="tabular-nums text-secondary">{run.tokens}</dd>
-                  <dt className="text-tertiary">Model</dt>
-                  <dd className="break-words text-secondary [overflow-wrap:anywhere]">
-                    {[modelDisplay.model, modelDisplay.selection].filter(Boolean).join(" · ")}
-                  </dd>
-                  <dt className="text-tertiary">Run ID</dt>
-                  <dd className="flex min-w-0 items-center gap-1">
-                    <span className="min-w-0 truncate font-mono text-secondary">{run.runId}</span>
-                    <CopyButton text={run.runId} label="Copy run ID" className="shrink-0" />
-                  </dd>
-                </dl>
-              </section>
+                <ArrowLeft aria-hidden="true" className="size-3.5" />
+                Back to main chat
+              </Button>
             ) : null}
-
-            {transcript.trimmed ? (
-              <Text
-                as="p"
-                variant="small"
-                color="tertiary"
-                className="text-center"
-                data-subagent-helper-trimmed="true"
+            {!expanded && onClose ? (
+              <Button
+                variant="transparent"
+                size="small"
+                onClick={onClose}
+                className="shrink-0 motion-reduce:transition-none"
+                data-subagent-helper-close="true"
               >
-                Older steps were removed to save space.
-              </Text>
-            ) : null}
-
-            {transcript.entries.map((entry, index) =>
-              entry.kind === "task" ? (
-                <div key={`task-${index}`} data-subagent-helper-task="true">
-                  <SafeMessageBubble imageScope={run.runId} role="user" content={entry.text} />
-                </div>
-              ) : (
-                <div
-                  key={`message-${index}`}
-                  className="flex min-w-0 flex-col gap-2"
-                  data-subagent-helper-message="true"
-                >
-                  <HelperMessage
-                    runId={run.runId}
-                    index={index}
-                    entry={entry}
-                    runState={run.state}
-                  />
-                </div>
-              ),
-            )}
-
-            {approval ? (
-              <div data-subagent-helper-approval="true">
-                <ChatApprovalCard
-                  pending={approval.prompt}
-                  deciding={approval.deciding}
-                  onDecide={approval.onDecide}
-                />
-              </div>
-            ) : null}
-
-            {problem ? (
-              <Callout
-                role="note"
-                color={problem.tone === "failed" ? "red" : undefined}
-                data-subagent-helper-problem={problem.tone}
-              >
-                <Text variant="small-strong" color={problem.tone === "failed" ? "red" : undefined}>
-                  {problem.title}
-                </Text>
-                <Text as="p" variant="small" color="secondary" className="break-words">
-                  {problem.text}
-                </Text>
-                {onAskRetry ? (
-                  <Button
-                    variant="muted"
-                    size="small"
-                    onClick={() => onAskRetry(problem.retryText)}
-                    className="mt-3 motion-reduce:transition-none"
-                  >
-                    Ask main chat to retry
-                  </Button>
-                ) : null}
-              </Callout>
-            ) : null}
-
-            {stopError ? (
-              <Callout color="red" role="note" data-subagent-control-error="true">
-                <Text variant="small-strong" color="red">
-                  Could not stop the helper
-                </Text>
-                <Text as="p" variant="small" color="secondary">
-                  {stopError} Try again if it is still running.
-                </Text>
-              </Callout>
+                <X aria-hidden="true" className="size-3.5" />
+                Close
+              </Button>
             ) : null}
           </div>
-        </div>
-
-        {awayFromLatest ? (
-          <Button
-            variant="glass"
-            size="small"
-            className="absolute bottom-16 right-3 motion-reduce:transition-none"
-            onClick={jumpToLatest}
-            data-subagent-jump-latest="true"
-          >
-            <ArrowDownToLine aria-hidden="true" className="size-3.5" />
-            Jump to latest
-          </Button>
-        ) : null}
-
-        <footer
-          className="flex min-w-0 shrink-0 flex-wrap items-center gap-2 border-t border-separator px-3 py-2"
-          data-subagent-helper-bar="true"
-        >
-          <Text
-            as="p"
-            variant="small"
-            color="secondary"
-            className="min-w-0 flex-1 truncate"
-            title={modelLine}
-            data-subagent-helper-model="true"
-          >
-            {modelLine}
-          </Text>
-          {canStop ? (
-            <Button
-              variant="muted"
-              size="small"
-              disabled={stopPending}
-              aria-label={stopPending ? `Stopping ${run.label}` : `${stopLabel} ${run.label}`}
-              aria-busy={stopPending ? true : undefined}
-              onClick={() => void invokeStop()}
-              className="motion-reduce:transition-none"
-            >
-              <Square aria-hidden="true" className="size-3" />
-              {stopPending ? "Stopping…" : "Stop"}
-            </Button>
-          ) : null}
-          {!expanded && onExpand ? (
-            <Button
-              variant="transparent"
-              size="small"
-              onClick={(event) => onExpand(event.currentTarget)}
-              className="motion-reduce:transition-none"
-              data-subagent-helper-expand="true"
-            >
-              <Maximize2 aria-hidden="true" className="size-3.5" />
-              Expand
-            </Button>
-          ) : null}
-          {onBack ? (
-            <Button
-              variant="transparent"
-              size="small"
-              onClick={onBack}
-              className="motion-reduce:transition-none"
-              data-subagent-helper-back="true"
-            >
-              <ArrowLeft aria-hidden="true" className="size-3.5" />
-              Back to main chat
-            </Button>
-          ) : null}
         </footer>
-
-        {announceStatus ? (
-          <div className="sr-only" role="status" aria-live="polite" aria-atomic="true">
-            {announcement}
-          </div>
-        ) : null}
       </article>
     );
   },

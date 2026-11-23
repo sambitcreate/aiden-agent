@@ -39,11 +39,19 @@ export async function readSubagentHistoryDetailForOwner<
      * belong to this chat, and always with the owning chat's id.
      */
     getTranscript?(runId: string, chatId: string): Promise<SubagentTranscriptV1 | null>;
+    /**
+     * The main-owned scope of a run a turn is tracking right now, before the
+     * chat history references it. Absent, or `null` for the run, means only
+     * runs the saved chat already references can be read.
+     */
+    getTrackedRun?(runId: string): Promise<TrackedSubagentRun | null> | TrackedSubagentRun | null;
   },
 ): Promise<SubagentHistoryDetailWithTranscriptV1 | null> {
   const removeOwnerInvalidation = owner.onInvalidated(() => undefined);
   try {
-    const snapshot = await readSubagentHistoryForOwner(owner, chatId, runId, dependencies);
+    const snapshot =
+      (await readSubagentHistoryForOwner(owner, chatId, runId, dependencies)) ??
+      (await readTrackedSubagentRunForOwner(owner, chatId, runId, dependencies));
     requireActiveOwner(owner);
     if (!snapshot) return null;
     const effects = await dependencies.getEffectActivity(runId, chatId);
@@ -59,6 +67,47 @@ export async function readSubagentHistoryDetailForOwner<
   } finally {
     removeOwnerInvalidation();
   }
+}
+
+/** Where a run the supervisor is tracking right now belongs. */
+export interface TrackedSubagentRun {
+  chatId: string;
+  workspaceId: string;
+  generationId: string;
+}
+
+/**
+ * Late join: a window that opens a chat mid-turn reads a helper the running
+ * turn is still tracking. The tracker, the saved chat and the run's own
+ * snapshot must all agree on the chat, its workspace and the generation, so
+ * a run tracked under another chat, or one nobody tracks, stays refused.
+ */
+async function readTrackedSubagentRunForOwner<Snapshot extends SubagentRunSnapshot>(
+  owner: RendererDocumentOwner,
+  chatId: string,
+  runId: string,
+  dependencies: SubagentHistoryReadDependencies<Snapshot> & {
+    getTrackedRun?(runId: string): Promise<TrackedSubagentRun | null> | TrackedSubagentRun | null;
+  },
+): Promise<Snapshot | null> {
+  if (!dependencies.getTrackedRun) return null;
+  const tracked = await dependencies.getTrackedRun(runId);
+  requireActiveOwner(owner);
+  if (!tracked || tracked.chatId !== chatId) return null;
+  const chat = await dependencies.getChat(chatId);
+  requireActiveOwner(owner);
+  if (!chat || chat.id !== chatId) return null;
+  const workspaceId = persistedChatWorkspaceId(chat.workspaceId);
+  if (tracked.workspaceId !== workspaceId) return null;
+  const snapshot = await dependencies.getSnapshot(runId);
+  requireActiveOwner(owner);
+  return snapshot &&
+    snapshot.runId === runId &&
+    snapshot.chatId === chat.id &&
+    snapshot.workspaceId === workspaceId &&
+    snapshot.generationId === tracked.generationId
+    ? snapshot
+    : null;
 }
 
 export interface SubagentHistoryReadDependencies<

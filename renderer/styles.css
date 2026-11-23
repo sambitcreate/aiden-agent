@@ -1078,6 +1078,15 @@ textarea {
   --transcript-sticky-state: var(--color-list-selection);
 }
 
+/* The side panel's helper chat sits on the popover surface, so its stuck step
+   headers use that base instead of the main pane's background. */
+[data-subagent-helper-chat]:not([data-subagent-helper-expanded]) .transcript-sticky-header {
+  background:
+    linear-gradient(var(--transcript-sticky-state), var(--transcript-sticky-state)),
+    linear-gradient(var(--transcript-sticky-surface), var(--transcript-sticky-surface)),
+    var(--color-popover);
+}
+
 /* A collapse from a stuck header brings its section back into view below the
    toolbar instead of leaving the reader stranded mid-transcript. */
 .transcript-settled-contained {

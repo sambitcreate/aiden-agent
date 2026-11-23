@@ -21,7 +21,7 @@ Plan: `docs/plans/subagent-helper-chat-plan.md` (PR 2 section). Branch `claude/s
 
 - `subagent-transcript-store.ts`: `<root>/transcripts/<sha256(chatId)>/<runId>.json`, mode 0600, `writeFileAtomic`, 512 per chat (oldest by mtime pruned; stale `*.tmp` files older than 60 s from a crashed save are removed first). Reads: O_NOFOLLOW, size cap, strict parser, runId must match. An in-memory deleted fence refuses late writes after a chat delete.
 - Desktop root `userData/subagent-runs-v2`. `subagentRunStore.deleteChat` removes transcripts early (best effort); `completeChatDeletion` removes them first and rethrows, so the tombstone stays for `reconcilePendingChatDeletions` on the next start.
-- `subagents:get` returns `transcript` only after ownership is proven (the request comes from an active app window, the run belongs to that chat and workspace, and the chat's history references the run), asked with the owning chat id. No window-to-chat binding exists, so any live app window can read a chat it names.
+- `subagents:get` returns `transcript` only after ownership is proven (the request comes from an active app window, the run belongs to that chat and workspace, and the chat's history references the run), asked with the owning chat id. A run the current turn still tracks under the same chat, workspace and generation can also be read (late join, before the history references it). No window-to-chat binding exists, so any live app window can read a chat it names.
 - Live stream `chat:subagent-transcript`, sent only to the owning window, not journaled.
 
 ## Bots and the CLI

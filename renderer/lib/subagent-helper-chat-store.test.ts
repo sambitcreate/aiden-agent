@@ -9,6 +9,7 @@ import type {
 import {
   combineLiveSubagentTranscripts,
   createSubagentHelperChatStore,
+  mainChatWaitingBeyondHelper,
   subagentHelperChatTranscript,
 } from "./subagent-helper-chat-store";
 
@@ -142,4 +143,67 @@ test("the chat stream and a detached run's projection combine by newest revision
   assert.equal(combined.get("run-1")?.revision, 3);
   assert.equal(combined.get("run-2")?.revision, 5);
   assert.equal(combineLiveSubagentTranscripts(fromStream, undefined), fromStream);
+});
+
+test("a late saved copy for a chat that is no longer presented is dropped", () => {
+  const store = createSubagentHelperChatStore();
+  store.reset("chat-2");
+  store.rememberSaved("chat-1", saved("run-1", 2, ["From the old chat."]));
+  assert.equal(store.getState().chatId, "chat-2");
+  assert.equal(subagentHelperChatTranscript(store.getState(), "run-1").transcript, null);
+});
+
+test("on a chat switch the old chat's live updates and approvals are not taken as the new chat's", () => {
+  const store = createSubagentHelperChatStore();
+  const oldLive = live(update("run-1", 0, 1, 1, "Old chat's helper."));
+  const oldApprovals: ApprovalPrompt[] = [
+    { approvalId: "approval-old", toolCallId: "call-1", toolName: "edit", summary: "Edit" },
+  ];
+  store.syncLive("chat-1", oldLive);
+  store.syncApprovals("chat-1", oldApprovals, null, null);
+
+  // The new chat's first render still carries the old chat's maps.
+  store.syncLive("chat-2", oldLive);
+  store.syncApprovals("chat-2", oldApprovals, null, null);
+  assert.equal(store.getState().chatId, "chat-2");
+  assert.equal(store.getState().live.size, 0);
+  assert.equal(store.getState().approvals.length, 0);
+  assert.equal(subagentHelperChatTranscript(store.getState(), "run-1").transcript, null);
+});
+
+test("the main chat waits beyond a helper for a question or another approval, not the helper's own", () => {
+  const own: ApprovalPrompt = { approvalId: "own", toolCallId: "c1", toolName: "edit", summary: "Edit" };
+  const other: ApprovalPrompt = { approvalId: "other", toolCallId: "c2", toolName: "bash", summary: "Run" };
+  assert.equal(mainChatWaitingBeyondHelper({ approvals: [own], questionPending: false }, "own"), false);
+  assert.equal(mainChatWaitingBeyondHelper({ approvals: [own, other], questionPending: false }, "own"), true);
+  assert.equal(mainChatWaitingBeyondHelper({ approvals: [other], questionPending: false }, null), true);
+  assert.equal(mainChatWaitingBeyondHelper({ approvals: [], questionPending: true }, null), true);
+  assert.equal(mainChatWaitingBeyondHelper({ approvals: [], questionPending: false }, null), false);
+});
+
+test("returning to what waits in the main chat closes the expanded chat, then focuses the waiting item", () => {
+  const globals = globalThis as { window?: unknown };
+  const hadWindow = "window" in globals;
+  const previous = globals.window;
+  const frames: Array<() => void> = [];
+  globals.window = { requestAnimationFrame: (callback: () => void) => frames.push(callback) };
+  try {
+    const store = createSubagentHelperChatStore();
+    const focused: string[] = [];
+    store.rememberSaved("chat-1", saved("run-1", 2, ["Hi"]));
+    store.syncMainWaiting("chat-1", true, () => {
+      focused.push(store.getState().expandedRunId ?? "main");
+    });
+    store.expand("run-1", null);
+    assert.equal(store.getState().questionPending, true);
+
+    store.returnToMainWaiting();
+    assert.equal(store.getState().expandedRunId, null);
+    assert.deepEqual(focused, [], "focus waits for the main chat to render");
+    for (const frame of frames) frame();
+    assert.deepEqual(focused, ["main"]);
+  } finally {
+    if (hadWindow) globals.window = previous;
+    else delete globals.window;
+  }
 });

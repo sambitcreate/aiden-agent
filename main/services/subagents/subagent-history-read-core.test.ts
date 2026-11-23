@@ -340,3 +340,124 @@ test("history detail adds the saved conversation only for a run proven to belong
   await assert.rejects(reading, /renderer document is no longer active/u);
   assert.equal(closing.removed(), true);
 });
+
+test("a window that joins mid-turn reads a helper the turn is tracking in the same chat", async () => {
+  const running: SubagentRunSnapshotV1 = {
+    ...snapshot(),
+    state: "running",
+    finishedAt: undefined,
+  };
+  const saved = {
+    version: 1 as const,
+    runId: "run-1",
+    revision: 2,
+    trimmed: false,
+    entries: [{ kind: "task" as const, text: "Review the workspace." }],
+  };
+  // The turn is still running, so the saved chat does not reference the run yet.
+  const midTurnChat = { ...chat, messages: [{ role: "user" }] };
+  const asked: Array<[string, string]> = [];
+  const dependencies = {
+    getChat: async () => midTurnChat,
+    getSnapshot: async () => running,
+    getEffectActivity: async () => [],
+    getTranscript: async (runId: string, chatId: string) => {
+      asked.push([runId, chatId]);
+      return saved;
+    },
+  };
+
+  const owner = fakeOwner();
+  const joined = await readSubagentHistoryDetailForOwner(owner.owner, "chat-1", "run-1", {
+    ...dependencies,
+    getTrackedRun: () => ({
+      chatId: "chat-1",
+      workspaceId: "workspace-1",
+      generationId: "generation-1",
+    }),
+  });
+  assert.equal(joined?.snapshot.state, "running");
+  assert.deepEqual(joined?.transcript, saved);
+  assert.deepEqual(asked, [["run-1", "chat-1"]]);
+  assert.equal(owner.removed(), true);
+
+  // Without a tracker the same run is refused, exactly as before late join.
+  asked.length = 0;
+  assert.equal(
+    await readSubagentHistoryDetailForOwner(fakeOwner().owner, "chat-1", "run-1", dependencies),
+    null,
+  );
+  assert.deepEqual(asked, []);
+});
+
+test("late join refuses a run tracked for another chat, workspace or generation, or not tracked at all", async () => {
+  const midTurnChat = { ...chat, messages: [] };
+  const asked: string[] = [];
+  const tracked = { chatId: "chat-1", workspaceId: "workspace-1", generationId: "generation-1" };
+  const cases: Array<{
+    name: string;
+    getTrackedRun: () => typeof tracked | null;
+    getSnapshot?: () => Promise<SubagentRunSnapshotV1>;
+    requestedChatId?: string;
+  }> = [
+    { name: "untracked", getTrackedRun: () => null },
+    { name: "tracked under another chat", getTrackedRun: () => ({ ...tracked, chatId: "chat-2" }) },
+    {
+      name: "requested from another chat",
+      getTrackedRun: () => tracked,
+      requestedChatId: "chat-2",
+    },
+    {
+      name: "tracked in another workspace",
+      getTrackedRun: () => ({ ...tracked, workspaceId: "workspace-2" }),
+    },
+    {
+      name: "snapshot from another generation",
+      getTrackedRun: () => ({ ...tracked, generationId: "generation-2" }),
+    },
+    {
+      name: "snapshot saved under another chat",
+      getTrackedRun: () => tracked,
+      getSnapshot: async () => ({ ...snapshot(), chatId: "chat-2" }),
+    },
+  ];
+  for (const testCase of cases) {
+    asked.length = 0;
+    const requestedChatId = testCase.requestedChatId ?? "chat-1";
+    const refused = await readSubagentHistoryDetailForOwner(
+      fakeOwner().owner,
+      requestedChatId,
+      "run-1",
+      {
+        getChat: async (id: string) => ({ ...midTurnChat, id }),
+        getSnapshot: testCase.getSnapshot ?? (async () => snapshot()),
+        getEffectActivity: async () => {
+          asked.push("effects");
+          return [];
+        },
+        getTranscript: async () => {
+          asked.push("transcript");
+          return null;
+        },
+        getTrackedRun: testCase.getTrackedRun,
+      },
+    );
+    assert.equal(refused, null, testCase.name);
+    assert.deepEqual(asked, [], testCase.name);
+  }
+
+  // A window that closes while the tracker answers gets nothing.
+  const closing = fakeOwner();
+  const trackerAnswer = deferred<typeof tracked>();
+  const reading = readSubagentHistoryDetailForOwner(closing.owner, "chat-1", "run-1", {
+    getChat: async () => midTurnChat,
+    getSnapshot: async () => snapshot(),
+    getEffectActivity: async () => [],
+    getTrackedRun: () => trackerAnswer.promise,
+  });
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  closing.invalidate();
+  trackerAnswer.resolve(tracked);
+  await assert.rejects(reading, /renderer document is no longer active/u);
+  assert.equal(closing.removed(), true);
+});

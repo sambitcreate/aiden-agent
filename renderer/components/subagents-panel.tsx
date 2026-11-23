@@ -38,6 +38,7 @@ import {
   useSubagentSelectionRestoreRunRepair,
 } from "./subagent-owner-focus-boundary";
 import { SubagentRoster } from "./subagent-roster";
+import { subagentHelperIsActive } from "../lib/subagent-helper-chat-state";
 import { Button, Callout, Text } from "./ui";
 
 export function resolveSubagentSelection(
@@ -54,7 +55,12 @@ export interface SubagentsPanelHelperChat {
   approvalFor?: (run: SubagentRunSnapshot) => SubagentHelperChatApproval | null;
   onAskRetry?: (text: string) => void;
   onExpand?: (runId: string, opener: HTMLElement) => void;
-  onBack?: () => void;
+  /** Close the side panel. */
+  onClose?: () => void;
+  /** The helper whose chat fills the main pane; the panel shows a placeholder for it. */
+  expandedRunId?: string | null;
+  /** Return the expanded helper chat to this panel. */
+  onCollapse?: () => void;
   /**
    * The live updates start after the saved copy. `savedRevision` is the saved
    * copy's revision, so the owner can read it again once per gap.
@@ -394,10 +400,23 @@ function OwnedSubagentsPanel({
 
   const helperTranscript =
     helperChat && detailSnapshot ? helperChat.transcriptFor(detailSnapshot.runId) : null;
+  // A gap in the streamed updates, or a running helper opened before anything
+  // reached this window (it started before the window opened), is read once.
   const helperTranscriptGap =
-    helperTranscript && !helperTranscript.complete && detailSnapshot
-      ? { runId: detailSnapshot.runId, savedRevision: helperTranscript.transcript?.revision ?? 0 }
+    helperTranscript && detailSnapshot
+      ? !helperTranscript.complete
+        ? { runId: detailSnapshot.runId, savedRevision: helperTranscript.transcript?.revision ?? 0 }
+        : !helperTranscript.transcript && subagentHelperIsActive(detailSnapshot.state)
+          ? { runId: detailSnapshot.runId, savedRevision: 0 }
+          : null
       : null;
+  const helperExpandedHere =
+    Boolean(helperChat?.expandedRunId) && helperChat?.expandedRunId === detailSnapshot?.runId;
+  const returnFromExpanded = () => {
+    helperChat?.onCollapse?.();
+    if (typeof window === "undefined") return;
+    window.requestAnimationFrame(() => detailHeadingRef.current?.focus({ preventScroll: true }));
+  };
   const onTranscriptIncomplete = helperChat?.onTranscriptIncomplete;
   React.useEffect(() => {
     if (!active || !helperTranscriptGap) return;
@@ -422,7 +441,30 @@ function OwnedSubagentsPanel({
           nextTarget instanceof Node && event.currentTarget.contains(nextTarget);
       }}
     >
-      {detailSnapshot && helperChat && helperTranscript?.transcript ? (
+      {detailSnapshot && helperExpandedHere ? (
+        <section
+          key={`${detailSnapshot.runId}:expanded`}
+          className="flex h-full min-h-0 flex-col items-center justify-center gap-3 px-6 py-10 text-center"
+          data-subagent-helper-expanded-placeholder="true"
+        >
+          <h2
+            ref={detailHeadingRef}
+            tabIndex={-1}
+            data-subagent-detail-heading="true"
+            className="rounded-sm text-strong font-medium text-primary outline-none focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+          >
+            Showing in the main chat
+          </h2>
+          <Text as="p" variant="small" color="secondary" className="max-w-sm break-words">
+            {detailSnapshot.label} is open in the main chat.
+          </Text>
+          {helperChat?.onCollapse ? (
+            <Button type="button" variant="muted" size="small" onClick={returnFromExpanded}>
+              Back to main chat
+            </Button>
+          ) : null}
+        </section>
+      ) : detailSnapshot && helperChat && helperTranscript?.transcript ? (
         <SubagentHelperChat
           key={detailSnapshot.runId}
           ref={detailHeadingRef}
@@ -439,7 +481,10 @@ function OwnedSubagentsPanel({
               ? (opener) => helperChat.onExpand?.(detailSnapshot.runId, opener)
               : undefined
           }
-          onBack={helperChat.onBack}
+          onClose={helperChat.onClose}
+          refreshError={savedDetailRefreshError}
+          onRetryRefresh={onRetryDetail ? () => onRetryDetail(selectedRun.runId) : undefined}
+          contextUsage={activeContextUsage.get(detailSnapshot.runId)}
           now={now}
         />
       ) : detailSnapshot ? (

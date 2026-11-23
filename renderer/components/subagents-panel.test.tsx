@@ -632,11 +632,13 @@ test("chips, roster, and detail show each child's recorded model and effort only
   assert.equal((roster.match(/data-subagent-model=/gu) ?? []).length, 1);
   assert.match(roster, /aria-label="Older scout, scout, Running"/u);
 
+  // The fallback detail names the model as people see it, with effort only when it is on.
   const chosenDetail = renderToStaticMarkup(<SubagentDetail run={chosen} />);
-  assert.match(chosenDetail, /Model: anthropic\/claude-haiku · Effort Extra high · Chosen by the agent/u);
+  assert.match(chosenDetail, />Claude Haiku · Extra high</u);
+  assert.doesNotMatch(chosenDetail, /anthropic\/claude-haiku|Chosen by the agent|Model:/u);
   const legacyDetail = renderToStaticMarkup(<SubagentDetail run={legacy} />);
-  assert.match(legacyDetail, /Model: legacy-model</u);
-  assert.doesNotMatch(legacyDetail, /Effort/u);
+  assert.match(legacyDetail, />Legacy Model</u);
+  assert.doesNotMatch(legacyDetail, /Effort|· Off/u);
 });
 
 test("V2 detail gates controls on production callbacks", () => {
@@ -704,6 +706,34 @@ test("fallback shows the saved task and result with copy controls and no saved-v
   assert.match(html, /aria-label="Copy result from Code scout"/u);
   assert.doesNotMatch(html, /Saved view notice/u);
   assert.doesNotMatch(html, /privacy marker/u);
+});
+
+test("fallback names the role in words, leaves out raw counts, and words the report step by state", () => {
+  const writing = v2Run({ milestones: ["reading", "composing"], activity: "Writing a bounded report" });
+  const writingHtml = renderToStaticMarkup(<SubagentDetail run={writing} now={4_000} />);
+  assert.match(writingHtml, />Scout · Running · /u);
+  assert.doesNotMatch(writingHtml, /\bscout ·/u);
+  assert.doesNotMatch(writingHtml, /tool uses?|\bturns?\b|120 tokens/u);
+  assert.match(writingHtml, /<li>Read a file<\/li><li>Writing its report<\/li>/u);
+  assert.doesNotMatch(writingHtml, /Wrote its report/u);
+
+  const done = renderToStaticMarkup(
+    <SubagentDetail
+      run={v2Run({
+        milestones: ["reading", "composing"],
+        state: "completed",
+        activity: undefined,
+        finishedAt: 3_000,
+        terminalMarkdown: "Report.",
+      })}
+    />,
+  );
+  assert.match(done, /<li>Read a file<\/li><li>Wrote its report<\/li>/u);
+  assert.doesNotMatch(done, /Writing its report/u);
+
+  // With no steps saved there is no empty "What it did" heading left behind.
+  const bare = renderToStaticMarkup(<SubagentDetail run={v2Run({ milestones: [] })} />);
+  assert.doesNotMatch(bare, />What it did</u);
 });
 
 test("detail renders and copies one terminal result when live and terminal text coexist", () => {
@@ -2537,7 +2567,7 @@ test("mounted SubagentsPanel preserves narrow content and controls across exact 
       )[0]!;
       assert.match(detailRegion.getAttribute("class") ?? "", /min-w-0/u);
       const modelText = Array.from(mounted.container.getElementsByTagName("p")).find((element) =>
-        element.textContent?.startsWith("Model: provider/model-"),
+        element.hasAttribute("data-subagent-detail-model"),
       ) as HTMLElement;
       assert.match(modelText.getAttribute("class") ?? "", /overflow-wrap:anywhere/u);
       const taskText = elementWithExactText("p", longTask)!;
@@ -2887,8 +2917,6 @@ test("detail and panel preserve bounded rendering and navigation contracts", () 
   assert.doesNotMatch(detailSource, /event\.target === event\.currentTarget/u);
   assert.match(detailSource, /dataset\.reduceMotion === "true"/u);
   assert.match(detailSource, /data-subagent-detail-heading="true"/u);
-  assert.match(detailSource, /run\.milestones\.map/u);
-  assert.match(detailSource, /Model:/u);
   assert.match(detailSource, /Copy result from/u);
   assert.match(detailSource, /<Callout color="red" role="note">/u);
 

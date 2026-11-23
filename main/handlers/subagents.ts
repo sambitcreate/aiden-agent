@@ -1,5 +1,6 @@
 import { ipcMain, logger } from "../platform.js";
 import { chatStore } from "../services/chat-store.js";
+import { llmClient } from "../services/llm-client.js";
 import { rendererDocumentOwner } from "../services/renderer-document-owner.js";
 import {
   parseSubagentHistoryRequestIds,
@@ -33,6 +34,18 @@ export function registerSubagentHandlers(): void {
         getEffectActivity: (id, owningChatId) =>
           subagentRunStore.listEffectActivityForRun(id, owningChatId),
         getTranscript: (id, owningChatId) => subagentTranscriptStore.read(owningChatId, id),
+        // A helper still running, or one that finished while its turn runs on,
+        // so a reloaded or second window can catch up before the turn ends.
+        getTrackedRun: (id) => {
+          const tracked = subagentControlMainV2.trackedRun(id);
+          if (!tracked) return null;
+          if (tracked.terminal && !llmClient.isGenerationLive(tracked.generationId)) return null;
+          return {
+            chatId: tracked.chatId,
+            workspaceId: tracked.workspaceId,
+            generationId: tracked.generationId,
+          };
+        },
       });
     } catch (error) {
       if (owner.isDestroyed()) throw new Error("The renderer document is no longer active.");

@@ -32,6 +32,8 @@ export interface SubagentHelperChatState {
   decidingApprovalId: string | null;
   /** The helper whose chat fills the main pane, or null. */
   expandedRunId: string | null;
+  /** The main chat has a question waiting for the person. */
+  questionPending: boolean;
 }
 
 const NO_SAVED: SavedSubagentHelperTranscripts = new Map();
@@ -45,6 +47,7 @@ export const EMPTY_SUBAGENT_HELPER_CHAT_STATE: SubagentHelperChatState = {
   approvals: NO_APPROVALS,
   decidingApprovalId: null,
   expandedRunId: null,
+  questionPending: false,
 };
 
 /**
@@ -90,8 +93,22 @@ export function subagentHelperChatApproval(
 }
 
 /**
+ * True when the main chat waits on the person for something this helper's chat
+ * cannot answer: a question, or an approval that is not this helper's.
+ */
+export function mainChatWaitingBeyondHelper(
+  state: Pick<SubagentHelperChatState, "approvals" | "questionPending">,
+  helperApprovalId: string | null,
+): boolean {
+  return (
+    state.questionPending ||
+    state.approvals.some((prompt) => prompt.approvalId !== helperApprovalId)
+  );
+}
+
+/**
  * Ask main chat to retry: return to the main chat and put the request in its
- * message box, without sending it.
+ * message box, without sending it. A request already in the box is not added again.
  */
 export function askMainChatToRetrySubagent(
   store: SubagentHelperChatStore,
@@ -99,7 +116,7 @@ export function askMainChatToRetrySubagent(
   text: string,
 ): void {
   store.collapse({ restoreFocus: false });
-  stageComposerText(chatId, text, { notice: null });
+  stageComposerText(chatId, text, { notice: null, once: true });
   if (typeof window === "undefined") return;
   window.requestAnimationFrame(() => focusRegion("composer"));
 }
@@ -122,12 +139,17 @@ export interface SubagentHelperChatStore {
   expand(runId: string, opener: HTMLElement | null): void;
   /** Return to the main chat; focus goes back to whatever opened the expanded chat. */
   collapse(options?: { restoreFocus?: boolean }): void;
+  /** The main chat says whether a question is waiting and how to bring focus to what waits. */
+  syncMainWaiting(chatId: string, questionPending: boolean, focusWaiting: (() => void) | null): void;
+  /** Return to the main chat and put focus on the approval or question waiting there. */
+  returnToMainWaiting(): void;
 }
 
 export function createSubagentHelperChatStore(): SubagentHelperChatStore {
   let state = EMPTY_SUBAGENT_HELPER_CHAT_STATE;
   let decideHandler: SubagentHelperApprovalDecide | null = null;
   let opener: HTMLElement | null = null;
+  let focusWaitingHandler: (() => void) | null = null;
   const listeners = new Set<() => void>();
 
   const commit = (next: SubagentHelperChatState) => {
@@ -135,10 +157,21 @@ export function createSubagentHelperChatStore(): SubagentHelperChatStore {
     state = next;
     for (const listener of [...listeners]) listener();
   };
+  // On a chat switch, the old chat's maps can arrive once more (from whichever
+  // sync runs second) before the new chat's own replace them; they are never
+  // the new chat's.
+  let staleLive: LiveSubagentTranscripts | null = null;
+  let staleApprovals: readonly ApprovalPrompt[] | null = null;
+  const forgetChat = () => {
+    staleLive = state.live === NO_LIVE ? null : state.live;
+    staleApprovals = state.approvals === NO_APPROVALS ? null : state.approvals;
+    decideHandler = null;
+    focusWaitingHandler = null;
+    opener = null;
+  };
   const scoped = (chatId: string): SubagentHelperChatState => {
     if (state.chatId === chatId) return state;
-    decideHandler = null;
-    opener = null;
+    forgetChat();
     return { ...EMPTY_SUBAGENT_HELPER_CHAT_STATE, chatId };
   };
   // Each complete merge is kept as the saved copy, so the conversation stays
@@ -165,24 +198,27 @@ export function createSubagentHelperChatStore(): SubagentHelperChatStore {
     },
     reset(chatId) {
       if (state.chatId === chatId) return;
-      decideHandler = null;
-      opener = null;
+      forgetChat();
       commit({ ...EMPTY_SUBAGENT_HELPER_CHAT_STATE, chatId });
     },
     rememberSaved(chatId, transcript) {
+      // A late answer for a chat that is no longer presented is dropped.
+      if (state.chatId !== null && state.chatId !== chatId) return;
       const base = scoped(chatId);
       const saved = rememberSubagentHelperTranscript(base.saved, transcript);
       if (base === state && saved === base.saved) return;
       commit({ ...base, saved });
     },
-    syncLive(chatId, live) {
+    syncLive(chatId, nextLive) {
       const base = scoped(chatId);
+      const live = nextLive === staleLive ? NO_LIVE : nextLive;
       const saved = absorb(base.saved, live);
       if (base === state && saved === base.saved && live === base.live) return;
       commit({ ...base, saved, live });
     },
-    syncApprovals(chatId, approvals, decidingApprovalId, decide) {
+    syncApprovals(chatId, nextApprovals, decidingApprovalId, decide) {
       const base = scoped(chatId);
+      const approvals = nextApprovals === staleApprovals ? NO_APPROVALS : nextApprovals;
       decideHandler = decide;
       if (
         base === state &&
@@ -210,6 +246,18 @@ export function createSubagentHelperChatStore(): SubagentHelperChatStore {
         target.focus({ preventScroll: true });
       }
     },
+    syncMainWaiting(chatId, questionPending, focusWaiting) {
+      const base = scoped(chatId);
+      focusWaitingHandler = focusWaiting;
+      if (base === state && questionPending === base.questionPending) return;
+      commit({ ...base, questionPending });
+    },
+    returnToMainWaiting() {
+      const focusWaiting = focusWaitingHandler;
+      this.collapse({ restoreFocus: false });
+      if (typeof window === "undefined") return;
+      window.requestAnimationFrame(() => focusWaiting?.());
+    },
   };
 }
 
@@ -224,14 +272,22 @@ export function useSubagentHelperChatStore(): SubagentHelperChatStore | null {
 
 /** Subscribe to the helper chat state; the empty state when there is no store. */
 export function useSubagentHelperChatState(): SubagentHelperChatState {
+  return useSubagentHelperChatSelector(selectWholeState);
+}
+
+const selectWholeState = (state: SubagentHelperChatState) => state;
+
+/**
+ * Subscribe to one slice of the helper chat state. The component re-renders only
+ * when the slice changes, so a streamed token does not redraw what ignores it.
+ * `select` should return a primitive or a value the state already holds.
+ */
+export function useSubagentHelperChatSelector<T>(select: (state: SubagentHelperChatState) => T): T {
   const store = useSubagentHelperChatStore();
   const subscribe = React.useCallback(
     (listener: () => void) => store?.subscribe(listener) ?? (() => undefined),
     [store],
   );
-  const getState = React.useCallback(
-    () => store?.getState() ?? EMPTY_SUBAGENT_HELPER_CHAT_STATE,
-    [store],
-  );
-  return React.useSyncExternalStore(subscribe, getState, getState);
+  const getSlice = () => select(store?.getState() ?? EMPTY_SUBAGENT_HELPER_CHAT_STATE);
+  return React.useSyncExternalStore(subscribe, getSlice, getSlice);
 }

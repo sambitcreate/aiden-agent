@@ -90,7 +90,7 @@ export const onboardingFeatures: OnboardingFeature[] = [
     group: "create",
     title: "Native Subagents",
     description:
-      "Delegate research, plans, reviews, or coding to a child agent. Implementer writes and commands follow your workspace permission.",
+      "Delegate research, plans, reviews, or coding to a helper, and open any helper to follow its chat. Helper edits and commands follow your workspace permission.",
     icon: UsersRound,
     size: "standard",
   },

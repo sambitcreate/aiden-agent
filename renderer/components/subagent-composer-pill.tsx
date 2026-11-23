@@ -5,7 +5,7 @@
 
 import * as React from "react";
 import { ArrowDownToLine, ChevronRight, ChevronUp, PanelRight, Square, X } from "lucide-react";
-import { subagentModelDisplay } from "../lib/subagent-panel-state";
+import { subagentModelName, useSubagentModelCatalog } from "../lib/subagent-model-name";
 import {
   formatSubagentElapsed,
   isSubagentRunViewStateActive,
@@ -225,11 +225,12 @@ function RunFeed({
   const activity = snapshot?.activity?.trim();
   const latestText = snapshot?.latestText?.trim();
   const error = snapshot?.error?.trim();
-  const model = snapshot ? subagentModelDisplay(snapshot) : undefined;
+  const catalog = useSubagentModelCatalog();
+  const model = snapshot ? subagentModelName(snapshot, catalog) : null;
   const meta = [
     elapsed ? `${active ? "Working for" : "Ran for"} ${elapsed}` : null,
-    snapshot ? plural(snapshot.tools, "tool call") : null,
-    model?.model ?? null,
+    snapshot && snapshot.tools > 0 ? plural(snapshot.tools, "tool call") : null,
+    model,
   ].filter((part): part is string => part !== null);
 
   return (
@@ -239,7 +240,9 @@ function RunFeed({
         {milestones.map((milestone, index) => (
           <li key={`${index}:${milestone}`} className="flex items-start gap-2">
             <span aria-hidden="true" className="mt-[0.45rem] size-1 shrink-0 rounded-full bg-tertiary" />
-            <span className="min-w-0">{subagentMilestoneLabel(milestone)}</span>
+            <span className="min-w-0">
+              {subagentMilestoneLabel(milestone, { inProgress: active && index === milestones.length - 1 })}
+            </span>
           </li>
         ))}
         {active ? (
@@ -477,13 +480,13 @@ export function SubagentComposerPill({
     void Promise.resolve(onStop(snapshot)).catch(() => undefined);
   };
   // Kept free of live activity so a focused trigger is not re-read on every step.
-  const triggerLabel = `${active ? `${countText} running` : `${countText} finished`}.${model.attention ? ` ${model.attention.label} needs your attention.` : ""} ${open ? "Hide" : "Show"} subagent details.`;
+  const triggerLabel = `${active ? `${countText} running` : `${countText} done`}.${model.attention ? ` ${model.attention.label} needs your attention.` : ""} ${open ? "Hide" : "Show"} subagent details.`;
 
   return (
     <Popover open={open} onOpenChange={onOpenChange}>
       <div
         ref={pillRef}
-        data-subagent-pill={active ? (model.attention ? "attention" : "active") : "finished"}
+        data-subagent-pill={active ? (model.attention ? "attention" : "active") : "done"}
         className={cn(
           // Shrinks ahead of the task chip so both stay legible when they share the row, but
           // never below its marks and count: the headline is the only part that gives way.
@@ -525,7 +528,7 @@ export function SubagentComposerPill({
                 allCompleted ? "text-status-green" : "text-primary",
               )}
             >
-              {active ? `${model.activeCount} running` : `${model.runs.length} finished`}
+              {active ? `${model.activeCount} running` : `${model.runs.length} done`}
             </span>
             {elapsed ? (
               <span className="shrink-0 text-mini text-tertiary tabular-nums @max-[30rem]:hidden">{elapsed}</span>
@@ -545,7 +548,7 @@ export function SubagentComposerPill({
             size="small"
             iconOnly
             className="mr-0.5 text-tertiary hover:text-primary"
-            aria-label={active ? "Hide background subagents" : "Dismiss finished subagents"}
+            aria-label={active ? "Hide background subagents" : "Dismiss done subagents"}
             onClick={onDismiss}
           >
             <X aria-hidden="true" className="size-3.5" />

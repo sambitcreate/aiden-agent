@@ -4,9 +4,10 @@ import { cn } from "../lib/ui-utils";
 import {
   subagentDetailGrowthAction,
   subagentDetailIsAwayFromLatest,
-  subagentModelDisplay,
 } from "../lib/subagent-panel-state";
-import type { SubagentRunPresentation } from "../lib/subagent-view-state";
+import { SUBAGENT_HELPER_TONE_DOT, subagentHelperTone } from "../lib/subagent-helper-chat-state";
+import { subagentModelLine, useSubagentModelCatalog } from "../lib/subagent-model-name";
+import { subagentRoleLabel, type SubagentRunPresentation } from "../lib/subagent-view-state";
 import {
   subagentPendingQuestion,
   type SubagentEffectActivityV1,
@@ -19,7 +20,7 @@ import {
   type SubagentContextUsageV1,
 } from "../shared/subagent-context-usage";
 import { Markdown } from "./markdown";
-import { SubagentMark, subagentStateLabel } from "./subagent-chips";
+import { subagentStateLabel } from "./subagent-chips";
 import { Button, Callout, ErrorBoundary, Text } from "./ui";
 import { CopyButton } from "./copy-button";
 
@@ -34,12 +35,6 @@ export function formatSubagentElapsed(startedAt: number, endedAt: number): strin
   return `${hours}h ${minutes}m`;
 }
 
-export function subagentToolAggregate(run: SubagentRunSnapshot): string {
-  const toolLabel = run.tools === 1 ? "tool use" : "tool uses";
-  const turnLabel = run.turns === 1 ? "turn" : "turns";
-  return `${run.tools} ${toolLabel} · ${run.turns} ${turnLabel}`;
-}
-
 const SUBAGENT_MILESTONE_LABELS: Record<SubagentMilestoneKind, string> = {
   reading: "Read a file",
   listing: "Looked in a folder",
@@ -49,7 +44,15 @@ const SUBAGENT_MILESTONE_LABELS: Record<SubagentMilestoneKind, string> = {
   composing: "Wrote its report",
 };
 
-export function subagentMilestoneLabel(milestone: SubagentMilestoneKind): string {
+/**
+ * What a step says in a helper's list of what it did. `inProgress` marks the
+ * newest step of a helper that is still working: its report is still being written.
+ */
+export function subagentMilestoneLabel(
+  milestone: SubagentMilestoneKind,
+  options: { inProgress?: boolean } = {},
+): string {
+  if (milestone === "composing" && options.inProgress) return "Writing its report";
   return SUBAGENT_MILESTONE_LABELS[milestone];
 }
 
@@ -112,9 +115,12 @@ export const SubagentDetail = React.forwardRef<HTMLHeadingElement, SubagentDetai
     const [awayFromLatest, setAwayFromLatest] = React.useState(false);
     const endedAt = run.finishedAt ?? now;
     const state = subagentStateLabel(run.state);
-    const modelDisplay = subagentModelDisplay(run);
+    const modelLine = subagentModelLine(run, useSubagentModelCatalog());
+    const role = subagentRoleLabel(run.role);
+    const tone = subagentHelperTone(run.state);
     const pendingQuestion = subagentPendingQuestion(run);
     const resultText = run.terminalMarkdown ?? run.latestText;
+    const milestones = run.milestones ?? [];
     const active =
       run.state === "queued" ||
       run.state === "starting" ||
@@ -233,11 +239,9 @@ export const SubagentDetail = React.forwardRef<HTMLHeadingElement, SubagentDetai
         >
           <div className="mx-auto flex w-full max-w-2xl flex-col gap-4">
             <header className="flex min-w-0 items-start gap-2.5">
-              <SubagentMark
-                role={run.role}
-                state={run.state}
-                activity={run.activity}
-                className="mt-0.5"
+              <span
+                aria-hidden="true"
+                className={cn("mt-2 size-2 shrink-0 rounded-full", SUBAGENT_HELPER_TONE_DOT[tone])}
               />
               <span className="min-w-0 flex-1">
                 <h2
@@ -249,7 +253,8 @@ export const SubagentDetail = React.forwardRef<HTMLHeadingElement, SubagentDetai
                   {run.label}
                 </h2>
                 <Text as="p" variant="small" color="secondary" className="mt-0.5">
-                  {run.role} · {presentation?.label ?? state} ·{" "}
+                  {role ? `${role} · ` : ""}
+                  {presentation?.label ?? state} ·{" "}
                   <span className="tabular-nums">{formatSubagentElapsed(run.startedAt, endedAt)}</span>
                 </Text>
                 <Text
@@ -257,14 +262,9 @@ export const SubagentDetail = React.forwardRef<HTMLHeadingElement, SubagentDetai
                   variant="small"
                   color="tertiary"
                   className="mt-0.5 break-words [overflow-wrap:anywhere]"
+                  data-subagent-detail-model="true"
                 >
-                  {[
-                    `Model: ${modelDisplay.model}`,
-                    modelDisplay.effort && `Effort ${modelDisplay.effort}`,
-                    modelDisplay.selection,
-                  ]
-                    .filter(Boolean)
-                    .join(" · ")}
+                  {modelLine}
                 </Text>
                 {contextUsage ? (
                   <Text
@@ -426,26 +426,27 @@ export const SubagentDetail = React.forwardRef<HTMLHeadingElement, SubagentDetai
               </section>
             ) : null}
 
-            <section aria-labelledby={`subagent-did-${run.runId}`} data-subagent-did="true">
-              <Text
-                as="h3"
-                id={`subagent-did-${run.runId}`}
-                variant="small-strong"
-                color="tertiary"
-              >
-                What it did
-              </Text>
-              {run.milestones?.length ? (
+            {milestones.length ? (
+              <section aria-labelledby={`subagent-did-${run.runId}`} data-subagent-did="true">
+                <Text
+                  as="h3"
+                  id={`subagent-did-${run.runId}`}
+                  variant="small-strong"
+                  color="tertiary"
+                >
+                  What it did
+                </Text>
                 <ol className="mt-1 list-decimal space-y-1 pl-5 text-small text-secondary">
-                  {run.milestones.map((milestone, index) => (
-                    <li key={`${index}:${milestone}`}>{subagentMilestoneLabel(milestone)}</li>
+                  {milestones.map((milestone, index) => (
+                    <li key={`${index}:${milestone}`}>
+                      {subagentMilestoneLabel(milestone, {
+                        inProgress: active && index === milestones.length - 1,
+                      })}
+                    </li>
                   ))}
                 </ol>
-              ) : null}
-              <Text as="p" variant="small" color="tertiary" className="mt-1 tabular-nums">
-                {subagentToolAggregate(run)} · {run.tokens} tokens
-              </Text>
-            </section>
+              </section>
+            ) : null}
 
             {run.error ? (
               <Callout color="red" role="note">

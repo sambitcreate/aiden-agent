@@ -404,7 +404,7 @@ function safeFailedResult(request: SubagentTaskRequest): SubagentTaskResult {
     label: request.label,
     status: "failed",
     summary: "",
-    warning: "The child could not complete this task.",
+    warning: "This helper couldn't finish.",
   };
 }
 

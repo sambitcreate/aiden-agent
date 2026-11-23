@@ -64,19 +64,22 @@ import { useInboxDockBadgeSync } from "../lib/use-sidebar-view";
 import { subscribeLateReturnedGuidance } from "../lib/composer-draft-store";
 import { onAssistantAutomationComposerRequested } from "../lib/assistant-dock";
 import { WindowControls } from "../components/window-controls";
+import { SubagentModelCatalogProvider } from "../lib/subagent-model-name";
 
 export function RootView() {
   useTheme();
   return (
     <WorkspaceProvider>
       <WorkspaceTerminalProvider>
-        <EnvironmentPanelProvider>
-          <RoutedBotPanelProvider>
-            <CommandSystemProvider>
-              <RootContent />
-            </CommandSystemProvider>
-          </RoutedBotPanelProvider>
-        </EnvironmentPanelProvider>
+        <SubagentModelCatalogProvider>
+          <EnvironmentPanelProvider>
+            <RoutedBotPanelProvider>
+              <CommandSystemProvider>
+                <RootContent />
+              </CommandSystemProvider>
+            </RoutedBotPanelProvider>
+          </EnvironmentPanelProvider>
+        </SubagentModelCatalogProvider>
       </WorkspaceTerminalProvider>
     </WorkspaceProvider>
   );

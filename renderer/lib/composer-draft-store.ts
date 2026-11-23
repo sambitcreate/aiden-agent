@@ -135,6 +135,14 @@ export interface StageComposerTextOptions {
    * that already moves them to the message box.
    */
   notice?: string | null;
+  /** Leave the draft alone when it already holds this text, so a repeated action adds it once. */
+  once?: boolean;
+}
+
+/** The draft with staged text added after it, or unchanged when `once` finds it already there. */
+export function mergeStagedComposerText(current: string, staged: string, once = false): string {
+  if (once && current.includes(staged.trim())) return current;
+  return mergeRestoredGuidance(current, [staged]);
 }
 
 type StagedTextListener = (text: string, options: StageComposerTextOptions) => void;
@@ -155,7 +163,7 @@ export function stageComposerText(chatId: string, text: string, options: StageCo
   }
   const record = read(chatId);
   const current = record.text || record.unresolvedText || "";
-  write(chatId, { ...record, text: mergeRestoredGuidance(current, [text]) });
+  write(chatId, { ...record, text: mergeStagedComposerText(current, text, options.once) });
 }
 
 export function subscribeStagedComposerText(

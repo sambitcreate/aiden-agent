@@ -103,7 +103,7 @@ export async function runCliSubagent(agentDir: string, input: RunSubagentChildIn
     }
     else if (event.type === "assistant") { messages.push(event.message); input.telemetry?.usage(event.message); record((transcript) => transcript.messageEnded(terminalAssistantText(event.message ?? {}), terminalAssistantActivityAnchors(event.message ?? {}) ?? undefined)); }
     else if (event.type === "done") done = true;
-    else if (event.type === "failure") stop(new Error(typeof event.message === "string" ? event.message : "The child model could not complete this task."));
+    else if (event.type === "failure") stop(new Error(typeof event.message === "string" ? event.message : "The model provider returned an error."));
   });
   try {
     input.telemetry?.starting();

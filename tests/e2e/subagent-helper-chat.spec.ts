@@ -31,7 +31,7 @@ test("a helper row in the chat card opens that helper's chat in the side panel",
   await row.click();
 
   const panel = page.locator("#environment-subagents-panel");
-  const helperChat = panel.getByRole("article", { name: "Helper chat: Read the notes" });
+  const helperChat = panel.getByRole("article", { name: "Read the notes" });
   await expect(helperChat).toBeVisible();
   await expect(helperChat).toContainText("E2E helper chat child task");
   // Streaming text shows as it arrives; the newest word may wait for the next chunk.
@@ -43,6 +43,8 @@ test("a helper row in the chat card opens that helper's chat in the side panel",
   const expanded = page.locator('[data-subagent-helper-chat][data-subagent-helper-expanded="true"]');
   await expect(expanded).toBeVisible();
   await expect(page.getByRole("button", { name: "Send message" })).toHaveCount(0);
+  // While the main pane shows the helper, the side panel says where it went.
+  await expect(panel.getByRole("heading", { name: "Showing in the main chat" })).toBeVisible();
   await page.keyboard.press("Escape");
   await expect(expanded).toHaveCount(0);
   await expect(composer).toBeVisible();

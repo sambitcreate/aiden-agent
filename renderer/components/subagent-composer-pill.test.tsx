@@ -188,7 +188,7 @@ test("the pill sums up the running batch in the same words as its transcript car
   assert.equal(trigger.getAttribute("aria-label"), "2 subagents running. Show subagent details.");
   assert.match(trigger.getAttribute("aria-keyshortcuts") ?? "", /^(?:Meta|Control)\+Shift\+S$/u);
   // A batch still working has nothing to dismiss.
-  assert.equal(screen.queryByRole("button", { name: "Dismiss finished subagents" }), null);
+  assert.equal(screen.queryByRole("button", { name: "Dismiss done subagents" }), null);
 });
 
 test("a run waiting on the person leads the summary and names itself to assistive tech", () => {
@@ -247,6 +247,37 @@ test("the tray lists the batch, opens the headline run's live feed, and closes w
     fireEvent.keyDown(tray, { key: "Escape" });
   });
   assert.equal(screen.queryByRole("dialog", { name: "Subagents" }), null);
+});
+
+test("a run's feed names its model the way people see it, skips a zero tool count, and words its report by state", async () => {
+  const running = runView("a", "running", {
+    modelId: "custom:lmstudio/aiden-e2e-vision",
+    tools: 0,
+    milestones: ["reading", "composing"],
+  });
+  const { rerender } = mount([running]);
+  await act(async () => {
+    fireEvent.click(pillTrigger());
+  });
+  const tray = await screen.findByRole("dialog", { name: "Subagents" });
+  assert.match(tray.textContent ?? "", /Aiden E2e Vision/u);
+  assert.doesNotMatch(tray.textContent ?? "", /custom:lmstudio|aiden-e2e-vision/u);
+  assert.doesNotMatch(tray.textContent ?? "", /tool call/u);
+  const steps = () =>
+    within(screen.getByRole("list", { name: "Run a activity" }))
+      .getAllByRole("listitem")
+      .map((item) => item.textContent);
+  assert.deepEqual(steps().slice(0, 2), ["Read a file", "Writing its report"]);
+
+  rerender([
+    runView("a", "completed", {
+      modelId: "custom:lmstudio/aiden-e2e-vision",
+      tools: 2,
+      milestones: ["reading", "composing"],
+    }),
+  ]);
+  assert.deepEqual(steps(), ["Read a file", "Wrote its report"]);
+  assert.match(screen.getByRole("dialog", { name: "Subagents" }).textContent ?? "", /2 tool calls/u);
 });
 
 test("tray actions open runs and the panel, reveal the transcript, and stop foreground runs", async () => {
@@ -323,9 +354,12 @@ test("a settled batch stays as a finished summary until dismissed, and the next 
   rerender([runView("a", "completed"), runView("b", "failed", { error: "Provider refused" })]);
   const trigger = pillTrigger();
   assert.match(trigger.textContent ?? "", /^1 failed · 1 done/u);
-  assert.match(trigger.getAttribute("aria-label") ?? "", /^2 subagents finished\./u);
+  assert.match(trigger.getAttribute("aria-label") ?? "", /^2 subagents done\./u);
+  // Narrow windows show the bare count in the summary's word, never a second one.
+  assert.match(trigger.textContent ?? "", /2 done/u);
+  assert.doesNotMatch(trigger.textContent ?? "", /finished/u);
 
-  fireEvent.click(screen.getByRole("button", { name: "Dismiss finished subagents" }));
+  fireEvent.click(screen.getByRole("button", { name: "Dismiss done subagents" }));
   assert.equal(screen.queryByRole("button", { name: /subagent details/u }), null);
 
   // Old settled runs do not return; a run started later in the same turn brings the pill back.
@@ -460,7 +494,7 @@ test("dismissing the pill from the keyboard hands focus to the composer", async 
   calls.returnFocus = composer;
   try {
     rerender([runView("a", "completed")]);
-    const dismiss = screen.getByRole("button", { name: "Dismiss finished subagents" });
+    const dismiss = screen.getByRole("button", { name: "Dismiss done subagents" });
     dismiss.focus();
     await act(async () => {
       fireEvent.click(dismiss);

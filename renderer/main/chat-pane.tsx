@@ -290,10 +290,11 @@ import {
 } from "../shared/subagent-transcript";
 import {
   combineLiveSubagentTranscripts,
-  useSubagentHelperChatState,
+  useSubagentHelperChatSelector,
   useSubagentHelperChatStore,
 } from "../lib/subagent-helper-chat-store";
 import { ExpandedSubagentHelperChat } from "../components/subagent-helper-chat-expanded";
+import { focusRegion } from "../lib/focus-regions";
 import { visibleSubagentReferences } from "../lib/subagent-feature-gate";
 import { persistedChatWorkspaceId } from "../shared/chat-workspace";
 import {
@@ -2804,7 +2805,6 @@ export function ChatPane({ chatId }: { chatId: string }) {
 
   // The helper chats read this chat's live helper updates and its approvals.
   const helperChatStore = useSubagentHelperChatStore();
-  const helperChatState = useSubagentHelperChatState();
   React.useLayoutEffect(() => {
     helperChatStore?.syncLive(chatId, displayedLiveSubagentTranscripts);
   }, [chatId, displayedLiveSubagentTranscripts, helperChatStore]);
@@ -2818,8 +2818,10 @@ export function ChatPane({ chatId }: { chatId: string }) {
       if (helperChatStore.getState().chatId === chatId) helperChatStore.collapse({ restoreFocus: false });
     };
   }, [chatId, helperChatStore]);
-  const helperChatExpanded =
-    helperChatState.chatId === chatId && helperChatState.expandedRunId !== null;
+  // Only whether this chat's helper chat is expanded; streamed helper tokens do not redraw the pane.
+  const helperChatExpanded = useSubagentHelperChatSelector(
+    (state) => state.chatId === chatId && state.expandedRunId !== null,
+  );
 
   React.useEffect(() => {
     if (!questionnaire) return;
@@ -3706,6 +3708,17 @@ export function ChatPane({ chatId }: { chatId: string }) {
         }
       : undefined;
   }, [interruptedWaits, questionnaire]);
+  // An expanded helper chat says when the main chat waits on a question, and
+  // its Back to main chat lands on the approval or question waiting here.
+  const mainQuestionPending = Boolean(questionnaire || recoveredQuestion);
+  const focusMainWaiting = React.useCallback(() => {
+    const target = approvalDenyRef.current ?? approvalCardRef.current;
+    if (target?.isConnected) target.focus({ preventScroll: false });
+    else focusRegion("composer");
+  }, []);
+  React.useLayoutEffect(() => {
+    helperChatStore?.syncMainWaiting(chatId, mainQuestionPending, focusMainWaiting);
+  }, [chatId, focusMainWaiting, helperChatStore, mainQuestionPending]);
   // Like Resume, sending a recovered answer is busy only in its own chat.
   const recoveredAnswerTokenRef = React.useRef(0);
   const [recoveredAnswerOwners, setRecoveredAnswerOwners] = React.useState<Readonly<Record<string, number>>>({});

@@ -412,10 +412,10 @@ export class SubagentEventProjector {
     );
     const latestText = latestProjection.text || undefined;
     const errorProjection = boundedSingleLineProjection(
-      result.warning || "The child could not complete this task.",
+      result.warning || "This helper couldn't finish.",
       MAX_SUBAGENT_ERROR_CHARS,
     );
-    const error = errorProjection.text || "The child could not complete this task.";
+    const error = errorProjection.text || "This helper couldn't finish.";
     const projectionNotices = mergeProjectionNotices(
       current.projectionNotices,
       terminalProjection !== undefined &&

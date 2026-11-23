@@ -64,7 +64,7 @@ import type { SubagentShellGateV2, SubagentShellToolBindingV2 } from "./subagent
 
 import { SUBAGENT_PARTIAL_WORK_NOTE, SUBAGENT_TIME_LIMIT_WARNING, type SubagentTimeLimit, DEFAULT_SUBAGENT_CHILD_DEADLINE_MS, DEFAULT_SUBAGENT_CANCELLATION_GRACE_MS, MAX_SUBAGENT_CHILD_TURNS, MAX_SUBAGENT_CHILD_TOOL_CALLS, MAX_SUBAGENT_CHILD_EVENTS, MAX_SUBAGENT_CHILD_OUTPUT_CHARS, MAX_SUBAGENT_CHILD_PROTOCOL_CHARS } from "./subagent-child-policy.js";
 export * from "./subagent-child-policy.js";
-const SAFE_CHILD_PROVIDER_FAILURE = "The child model could not complete this task.";
+const SAFE_CHILD_PROVIDER_FAILURE = "The model provider returned an error.";
 const CHILD_TURN_LIMIT_WARNING = "The child reached its turn limit.";
 const CHILD_REPORT_INSTRUCTION = "Your remaining allowance is for one text-only final report. No tools or further actions are available. Report only what the settled history supports: partial findings, checks actually run and their observed results, remaining checks and blockers. Work is incomplete and unverified; do not claim task acceptance or that interrupted/unknown effects succeeded. Keep the report concise.";
 
@@ -231,7 +231,7 @@ export function projectSubagentCompletedSummary(
 
 function safeFailure(
   request: SubagentTaskRequest,
-  warning = "The child could not complete this task.",
+  warning = "This helper couldn't finish.",
 ): SubagentTaskResult {
   return {
     role: request.role,

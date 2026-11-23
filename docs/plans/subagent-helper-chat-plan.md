@@ -141,7 +141,7 @@ Nothing yet. This PR records each helper's task, messages and steps while it run
 4. ### Let the panel read it, live and saved
 
    `main/handlers/subagents.ts`, `main/services/subagents/subagent-history-read-core.ts`, `main/services/llm-client.ts`, `renderer/lib/generation-stream.ts`, `renderer/lib/chat-terminal-sync.ts`, preload
-   - Saved: extend the existing `subagents:get` read to return the transcript alongside the summary, only after it proves ownership: the request comes from an active app window, the run belongs to that chat and workspace, and the chat's history references the run. Nothing yet ties a chat to one window, so any open app window can read a chat it names.
+   - Saved: extend the existing `subagents:get` read to return the transcript alongside the summary, only after it proves ownership: the request comes from an active app window, the run belongs to that chat and workspace, and the chat's history references the run, or the running turn still tracks it under the same chat, workspace and generation. Nothing yet ties a chat to one window, so any open app window can read a chat it names.
    - Live: a new `chat:subagent-transcript` stream message (run, revision, changed entries), sent the same way as `chat:subagents` today.
    - A late joiner, such as someone who opens the panel mid-run, reads the saved copy, then applies newer live revisions.
 5. ### Bots and the Aiden server
@@ -179,9 +179,9 @@ What you seeAfter PR 2
 
 #### What you'll notice
 
-- Clicking a helper anywhere opens its chat in the side panel. That works from a row in the chat card, from Open helper chat in the pill's tray, or from the Subagents list.
+- Clicking a helper anywhere opens its chat in the side panel. That works from a row in the chat card, from the open action in the pill's tray (Open helper chat while it runs, Review when it waits on you, View result once it has ended), or from the Subagents list.
 - The chat starts with the task, then shows every step, then the answer. It updates live while the helper runs.
-- A bar at the bottom has the model, Stop, Expand and Back to main chat. Expand shows the helper's chat full size in place of the main chat.
+- A bar at the bottom has the model, Stop, Expand and Close (Back when expanded). Expand shows the helper's chat full size in place of the main chat.
 - When something goes wrong, one plain box explains it and offers Ask main chat to retry.
 
 #### Build steps
@@ -198,7 +198,7 @@ What you seeAfter PR 2
    - **⋯ menu, Technical details:** fresh start or copied chat, turns, tokens, where the model choice came from, and a copy button for the run ID.
    - Keeps scroll position, has a Jump to latest button, and announces status changes through the existing `SubagentLiveAnnouncer`. It respects Reduce Motion.
 2. ### Bottom bar
-   - Shows the model and effort, for example "GLM 5.3 Flash · Max", then Stop (only while running), Expand, and Back to main chat.
+   - Shows the model and effort, for example "GLM 5.3 Flash · Max", then Stop (only while running), Expand, and Close (Back to main chat when expanded; the effort is left out when it is off).
    - Stop uses the existing helper control (`subagents:manage`), the same as the Stop button today.
 3. ### Expand to full size
 
@@ -214,7 +214,7 @@ What you seeAfter PR 2
 
    `renderer/components/subagents-panel.tsx`, `subagent-composer-pill.tsx`, `subagent-chips.tsx`
    - The Subagents panel shows the helper chat when a run has a transcript, and the fallback when it doesn't. The chat card rows and the tray already call `openSubagent`, so they need no new wiring.
-   - The tray button is renamed from "Open in side panel" to "Open helper chat". The list rows use the same status words as the card.
+   - The tray button "Open in side panel" is replaced by a state-worded open action: "Open helper chat" while the helper runs, "Review" when it waits on you, and "View result" once it has ended. The list rows use the same status words as the card.
 6. ### Design rules
    - Follow `GUI.md`, `docs/design-guide.md` and the ChatGPT reference files the repo requires before new UI.
    - Use Aiden's tokens only. Status shows in soft fills, never in coloured borders. Keyboard focus rings stay visible.

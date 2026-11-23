@@ -27,3 +27,14 @@ test("a mounted composer receives staged text instead of storage", () => {
   assert.equal(loadComposerDraft("chat-b").text, "After unmount");
   assert.equal(loadComposerDraft("chat-other").text, "Elsewhere");
 });
+
+test("staging the same request once adds it a single time, while plain staging appends again", () => {
+  const request = "Please retry the helper.";
+  stageComposerText("chat-once", request, { once: true });
+  stageComposerText("chat-once", request, { once: true });
+  assert.equal(loadComposerDraft("chat-once").text, request);
+
+  stageComposerText("chat-twice", request);
+  stageComposerText("chat-twice", request);
+  assert.equal(loadComposerDraft("chat-twice").text, `${request}\n\n${request}`);
+});

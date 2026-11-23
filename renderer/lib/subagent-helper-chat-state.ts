@@ -1,4 +1,5 @@
 import type { ApprovalPrompt } from "./ipc";
+import { isExtractionStep, isQuestionnaireStep, isRecordingStep } from "./assistant-message-presentation";
 import {
   isSubagentMcpMutationApprovalDetails,
   isSubagentRunGrantApprovalDetails,
@@ -41,6 +42,19 @@ export function subagentHelperTone(state: SubagentRunSnapshot["state"]): Subagen
       return "stopped";
   }
 }
+
+/**
+ * The status dot for each tone. Queued is a hollow neutral ring and stopped a
+ * solid tertiary dot, so the two read apart without relying on colour.
+ */
+export const SUBAGENT_HELPER_TONE_DOT: Record<SubagentHelperTone, string> = {
+  queued: "bg-transparent ring-[1.5px] ring-inset ring-secondary",
+  running: "bg-status-accent motion-safe:animate-pulse",
+  waiting: "bg-status-warning",
+  done: "bg-status-green",
+  failed: "bg-status-red",
+  stopped: "bg-tertiary",
+};
 
 export function subagentHelperIsActive(state: SubagentRunSnapshot["state"]): boolean {
   return (
@@ -110,54 +124,81 @@ function stepCount(steps: number): string {
   return `${steps} ${steps === 1 ? "step" : "steps"}`;
 }
 
-function changedText(files: readonly string[]): string {
-  if (files.length === 0) return "nothing";
+function fileList(files: readonly string[]): string {
   if (files.length === 1) return files[0]!;
   if (files.length === 2) return `${files[0]} and ${files[1]}`;
   return `${files[0]}, ${files[1]} and ${files.length - 2} more`;
 }
 
+/**
+ * Host fallbacks that only restate that the helper did not finish. They add
+ * nothing after "This helper couldn't finish.", so they are not shown.
+ */
+const GENERIC_FAILURES = new Set([
+  "this helper couldn't finish.",
+  "the child could not complete this task.",
+  "the child model could not complete this task.",
+]);
+
+function failureReason(error: string | undefined): string | null {
+  const text = error?.trim().replace(/\s+/gu, " ");
+  if (!text || GENERIC_FAILURES.has(text.toLocaleLowerCase())) return null;
+  return /[.!?]$/u.test(text) ? text : `${text}.`;
+}
+
 export interface SubagentHelperProblem {
   tone: "stopped" | "failed";
-  title: string;
   text: string;
   /** The ready-made message Ask main chat to retry puts in the composer. */
   retryText: string;
 }
 
-/** One plain explanation for a helper that ended without finishing, or null. */
+/**
+ * One plain explanation for a helper that ended without finishing, or null.
+ * A trimmed transcript has lost its oldest steps, so the step count comes from
+ * the run record and nothing is claimed about files it no longer shows.
+ */
 export function subagentHelperProblem(
-  run: Pick<SubagentRunSnapshot, "state" | "label" | "error">,
+  run: Pick<SubagentRunSnapshot, "state" | "label" | "error" | "tools">,
   summary: SubagentHelperWorkSummary,
+  options: { trimmed?: boolean } = {},
 ): SubagentHelperProblem | null {
   const tone = subagentHelperTone(run.state);
   if (tone !== "stopped" && tone !== "failed") return null;
-  const after = `after ${stepCount(summary.steps)}`;
-  const changed = changedText(summary.changedFiles);
-  const changedSentence = `It changed ${changed}.`;
-  const error = run.error?.trim();
-  let title: string;
+  const trimmed = options.trimmed === true;
+  const steps = trimmed ? Math.max(summary.steps, run.tools) : summary.steps;
+  const after = steps > 0 ? ` after ${stepCount(steps)}` : "";
+  const files = summary.changedFiles;
+  const changedSentence = files.length
+    ? ` It changed ${fileList(files)}.`
+    : trimmed
+      ? ""
+      : " It didn't change any files.";
+  const changedClause = files.length
+    ? ` and changed ${fileList(files)}`
+    : trimmed
+      ? ""
+      : " and didn't change any files";
   let text: string;
+  let outcome: string;
   if (run.state === "stopped") {
-    title = "Stopped";
-    text = `You stopped this helper ${after}. ${changedSentence}`;
+    text = `You stopped this helper${after}.`;
+    outcome = "It was stopped";
   } else if (run.state === "timed_out") {
-    title = "Ran out of time";
-    text = `This helper ran out of time ${after}. ${changedSentence}`;
+    text = `This helper ran out of time${after}.`;
+    outcome = "It timed out";
   } else if (tone === "failed") {
-    title = "Failed";
-    text = error
-      ? `${error.replace(/\s+$/u, "").replace(/([^.!?])$/u, "$1.")} ${changedSentence}`
-      : `This helper failed ${after}. ${changedSentence}`;
+    const reason = failureReason(run.error);
+    text = reason ? `This helper couldn't finish. ${reason}` : "This helper couldn't finish.";
+    outcome = "It failed";
   } else {
-    title = "Stopped";
-    text = `This helper stopped early ${after}. ${changedSentence}`;
+    text = `This helper stopped early${after}.`;
+    outcome = "It was stopped";
   }
   return {
     tone,
-    title,
-    text,
-    retryText: `Please retry the helper '${run.label}'. It stopped ${after} and changed ${changed}.`,
+    text: `${text}${changedSentence}`,
+    retryText: `Please retry the helper \u201c${run.label}\u201d. ${outcome}${after}${changedClause}.`,
   };
 }
 
@@ -215,4 +256,67 @@ export function subagentHelperTimeline(
     ...(entry.finishedAt === undefined ? {} : { finishedAt: entry.finishedAt }),
     steps: entry.steps.filter(isToolStep),
   };
+}
+
+/** One row of a helper chat: the task, or a message that may stand for several. */
+export type SubagentHelperBlock =
+  | { kind: "task"; key: string; text: string }
+  | {
+      kind: "message";
+      key: string;
+      /** The first transcript entry this block stands for. */
+      index: number;
+      entry: SubagentTranscriptMessageEntry;
+    };
+
+function isToolOnlyMessage(entry: SubagentTranscriptMessageEntry): boolean {
+  if (entry.text.trim()) return false;
+  const tools = entry.steps.filter(isToolStep);
+  return (
+    tools.length > 0 &&
+    !tools.some((step) => isExtractionStep(step) || isRecordingStep(step) || isQuestionnaireStep(step))
+  );
+}
+
+/**
+ * The rows a helper chat draws. Back-to-back messages that only ran tools
+ * become one message, so their steps read as one feed instead of a stack of
+ * single-step feeds.
+ */
+export function subagentHelperBlocks(transcript: SubagentTranscriptV1): SubagentHelperBlock[] {
+  const blocks: SubagentHelperBlock[] = [];
+  let group: { index: number; parts: SubagentTranscriptMessageEntry[] } | null = null;
+  const flush = () => {
+    if (!group) return;
+    const first = group.parts[0]!;
+    const last = group.parts[group.parts.length - 1]!;
+    const entry: SubagentTranscriptMessageEntry =
+      group.parts.length === 1
+        ? first
+        : {
+            kind: "message",
+            text: "",
+            steps: group.parts.flatMap((part) => part.steps),
+            startedAt: first.startedAt,
+            ...(last.finishedAt === undefined ? {} : { finishedAt: last.finishedAt }),
+          };
+    blocks.push({ kind: "message", key: `message-${group.index}`, index: group.index, entry });
+    group = null;
+  };
+  transcript.entries.forEach((entry, index) => {
+    if (entry.kind === "task") {
+      flush();
+      blocks.push({ kind: "task", key: `task-${index}`, text: entry.text });
+      return;
+    }
+    if (isToolOnlyMessage(entry)) {
+      if (group) group.parts.push(entry);
+      else group = { index, parts: [entry] };
+      return;
+    }
+    flush();
+    blocks.push({ kind: "message", key: `message-${index}`, index, entry });
+  });
+  flush();
+  return blocks;
 }
