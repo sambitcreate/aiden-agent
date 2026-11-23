@@ -70,7 +70,7 @@ cross-chat activity coordination (`chat-activity-core.ts`, `chat-deletion-gate.t
 
 Apple Foundation Models provider; on-device Parakeet dictation UX (global hotkey, pill, paste);
 Gemini Live voice mode; computer-use (TCC + Rust broker + GUI session); Bot Face Studio
-(nativeImage raster); Model Pad canvas (benchmark key already ports via `/insights`); command
+(nativeImage raster); Agent Slider editor (the slider itself is `config.json` data); command
 palette, sidebar browser, workspace picker popover, environment/review panels, terminal drawer;
 assistant dock; usage heatmap/share-card visuals; legacy keychain migration; provider artwork;
 update-install flow. (Terminal/serve equivalents noted in the plan where they exist.)

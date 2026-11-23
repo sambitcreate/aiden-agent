@@ -46,12 +46,8 @@ import { ariaKeyShortcut, matchesAccelerator, prettyAccelerator } from "../share
 import { isComposingKey } from "../lib/dismiss-key";
 import type { Provider } from "../lib/types";
 
-/**
- * Where "Customize slider…" goes. PR 3 of the Agent Slider stack replaces the
- * Model Pad page in this section with the slider editor; retarget it then if
- * the editor gets its own section.
- */
-export const AGENT_SLIDER_SETTINGS_SECTION: SettingsSection = "modelData";
+/** Where "Customize slider…" goes: Settings → Agent Slider, the slider editor. */
+export const AGENT_SLIDER_SETTINGS_SECTION: SettingsSection = "agentSlider";
 
 export interface AgentModelPopoverProps {
   providers: Provider[];

@@ -4853,7 +4853,6 @@ export function ChatPane({ chatId }: { chatId: string }) {
                         if (!getChatDraft(chatId)?.sending) select(nextProviderId, nextModel);
                       }}
                       disabled={modelChangeBlocked}
-                      settingsBlockedReason={settingsBlockedReason}
                       hiddenModelsByProvider={settings.data?.hiddenModelsByProvider}
                     />
                   ) : (

@@ -282,7 +282,7 @@ test("Back from the list returns to the slider", async () => {
 test("Customize slider… opens the slider's Settings section", async () => {
   const { sections } = await openPopover({ agentSlider: slider });
   fireEvent.click(await screen.findByRole("button", { name: /Customize slider/u }));
-  assert.deepEqual(sections, ["modelData"]);
+  assert.deepEqual(sections, ["agentSlider"]);
 });
 
 test("with no saved slider, opening the popover seeds one around the model in use, once", async () => {

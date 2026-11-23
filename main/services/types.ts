@@ -28,7 +28,6 @@ import type { ProviderArtwork } from "../../renderer/shared/provider-artwork.js"
 import type { WebSearchSettingsV2 } from "./web-search-provider-registry-core.js";
 import type { WebFetchSettingsV1 } from "../../renderer/shared/web-fetch-settings.js";
 import type { HiddenModelsByProvider } from "../../renderer/shared/model-visibility.js";
-import type { ModelPadMetric, ModelPadPlacements } from "../../renderer/shared/model-pad-preferences.js";
 
 export type ProviderKind = "openai" | "anthropic";
 
@@ -404,8 +403,8 @@ export interface ChatMessage {
   subagents?: SubagentMessageReferenceV1;
 }
 
-/** One of the benchmark scores (defined with the Pad preferences that persist it). */
-export type ModelBenchmarkMetric = ModelPadMetric;
+/** One of the benchmark scores (General, Coding, Agentic). */
+export type ModelBenchmarkMetric = "intelligence" | "coding" | "agentic";
 
 /** Optional, display-only benchmark evidence. It never controls runtime limits or availability. */
 export interface ModelBenchmarkScores {
@@ -928,12 +927,16 @@ export interface AppSettings extends AidenLiveSettingsFields {
    * it. Absent until first seeded. Written only by `setAgentSlider`.
    */
   agentSlider?: import("../../renderer/shared/agent-slider.js").AgentSliderSettings;
+  /**
+   * Read-only: config.json holds an `agentSlider` that does not read as a
+   * slider (a malformed hand edit), so `agentSlider` is absent and the
+   * first-run seed refuses to replace it. Only `setAgentSlider` does.
+   */
+  agentSliderUnreadable?: true;
   /** Most recently selected real project workspace ID in the main window (shared with Quick Chat). */
   lastWorkspaceId?: string;
   /** Presentation-only chat models hidden from Mac and paired mobile selection UI. */
   hiddenModelsByProvider?: HiddenModelsByProvider;
-  /** Presentation-only Model Pad positions keyed `provider::model` (at most 2,000). */
-  modelPadPlacements?: ModelPadPlacements;
   /** Presentation-only model-picker pins as distinct `provider::model` values (at most 200). */
   pinnedModels?: string[];
   /**
@@ -941,8 +944,6 @@ export interface AppSettings extends AidenLiveSettingsFields {
    * first (at most 5). Machine-local; never part of the portable config.
    */
   recentModels?: string[];
-  /** Benchmark score that sets Model Pad suggestion height; absent means "coding". */
-  modelPadMetric?: ModelBenchmarkMetric;
   exaEnabled?: boolean;
   /** Versioned Web Search routing/preferences; credentials stay main-owned. */
   webSearch?: WebSearchSettingsV2;

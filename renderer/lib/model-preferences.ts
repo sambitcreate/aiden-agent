@@ -1,45 +1,35 @@
-// The single renderer read/save path for Model Pad preferences (layout, picker
-// pins, recent models and the benchmark metric). They live in main-process AppSettings; reads come from the
-// shared settings query, so every surface (and window) stays in step with it.
+// The single renderer read/save path for model-list pins and recent models.
+// They live in main-process AppSettings; reads come from the shared settings
+// query, so every surface (and window) stays in step with it.
 
 import * as React from "react";
 import { useQueryClient, type QueryClient } from "@tanstack/react-query";
 import { settingsApi } from "./ipc";
 import { queryKeys, useSettings } from "./queries";
-import { parseModelPadLayout, type ModelPadLayout } from "./model-pad-layout";
 import {
-  DEFAULT_MODEL_PAD_METRIC,
-  normalizeModelPadMetric,
   normalizePinnedModels,
   normalizeRecentModels,
-  type ModelPadMetric,
-  type ModelPadPlacements,
-  type ModelPadPreferencesPatch,
-} from "../shared/model-pad-preferences";
+  type ModelPreferencesPatch,
+} from "../shared/model-preferences";
 import type { AppSettings } from "./types";
 
-export type { ModelPadPreferencesPatch } from "../shared/model-pad-preferences";
+export type { ModelPreferencesPatch } from "../shared/model-preferences";
 
-/** The persisted Pad preferences, normalized fail-closed. */
-export interface ModelPadPreferences {
-  placements: ModelPadPlacements;
+/** The persisted pins and recent models, normalized fail-closed. */
+export interface ModelPreferences {
   pinnedModels: string[];
   /** Newest first. */
   recentModels: string[];
-  /** The benchmark score that sets suggestion height ("coding" when unset). */
-  metric: ModelPadMetric;
 }
 
-export type ModelPadPreferencesUpdate =
-  | ModelPadPreferencesPatch
-  | ((current: ModelPadPreferences) => ModelPadPreferencesPatch);
+export type ModelPreferencesUpdate =
+  | ModelPreferencesPatch
+  | ((current: ModelPreferences) => ModelPreferencesPatch);
 
-export function modelPadPreferencesFrom(settings: AppSettings | undefined): ModelPadPreferences {
+export function modelPreferencesFrom(settings: AppSettings | undefined): ModelPreferences {
   return {
-    placements: parseModelPadLayout({ placements: settings?.modelPadPlacements }).placements,
     pinnedModels: normalizePinnedModels(settings?.pinnedModels) ?? [],
     recentModels: normalizeRecentModels(settings?.recentModels) ?? [],
-    metric: normalizeModelPadMetric(settings?.modelPadMetric) ?? DEFAULT_MODEL_PAD_METRIC,
   };
 }
 
@@ -53,7 +43,7 @@ interface SaveQueue {
 const saveQueues = new WeakMap<QueryClient, SaveQueue>();
 
 /**
- * Persist Pad fields through `settings:set`.
+ * Persist pins and recent models through `settings:set`.
  *
  * - The settings cache is updated optimistically, after cancelling any
  *   in-flight settings refetch so it cannot clobber the optimistic value.
@@ -66,9 +56,9 @@ const saveQueues = new WeakMap<QueryClient, SaveQueue>();
  * Each field in the patch replaces the stored value; omitted fields are untouched.
  * An empty patch writes nothing and resolves with the current settings.
  */
-export async function saveModelPadPreferences(
+export async function saveModelPreferences(
   queryClient: QueryClient,
-  update: ModelPadPreferencesUpdate,
+  update: ModelPreferencesUpdate,
 ): Promise<AppSettings> {
   let queue = saveQueues.get(queryClient);
   if (!queue) {
@@ -77,14 +67,14 @@ export async function saveModelPadPreferences(
   }
   await queryClient.cancelQueries({ queryKey: queryKeys.settings });
   // An updater must never compose onto an unloaded (empty) view, or it would
-  // overwrite the persisted pins/layout with only the new change.
+  // overwrite the persisted pins with only the new change.
   if (typeof update === "function") {
     await queryClient.ensureQueryData({ queryKey: queryKeys.settings, queryFn: settingsApi.get });
   }
   // From here to queueing the write is synchronous, so the read, the
   // optimistic write and the ticket cannot interleave with another save.
   const previous = queryClient.getQueryData<AppSettings>(queryKeys.settings);
-  const patch = typeof update === "function" ? update(modelPadPreferencesFrom(previous)) : update;
+  const patch = typeof update === "function" ? update(modelPreferencesFrom(previous)) : update;
   // Nothing to store: skip the disk write (and any error it could raise).
   if (Object.keys(patch).length === 0) {
     return (
@@ -108,37 +98,23 @@ export async function saveModelPadPreferences(
   }
 }
 
-/** Read the Pad preferences and get the one save function every Pad surface uses. */
-export function useModelPadPreferences(): ModelPadPreferences & {
+/** Read the pins and recent models and get the one save function every model list uses. */
+export function useModelPreferences(): ModelPreferences & {
   /** False until the settings query has resolved at least once. */
   ready: boolean;
-  save: (update: ModelPadPreferencesUpdate) => Promise<AppSettings>;
+  save: (update: ModelPreferencesUpdate) => Promise<AppSettings>;
 } {
   const queryClient = useQueryClient();
   const settings = useSettings();
-  const placements = settings.data?.modelPadPlacements;
   const pins = settings.data?.pinnedModels;
   const recents = settings.data?.recentModels;
-  const metric = settings.data?.modelPadMetric;
   const preferences = React.useMemo(
-    () =>
-      modelPadPreferencesFrom({
-        modelPadPlacements: placements,
-        pinnedModels: pins,
-        recentModels: recents,
-        modelPadMetric: metric,
-      }),
-    [placements, pins, recents, metric],
+    () => modelPreferencesFrom({ pinnedModels: pins, recentModels: recents }),
+    [pins, recents],
   );
   const save = React.useCallback(
-    (update: ModelPadPreferencesUpdate) => saveModelPadPreferences(queryClient, update),
+    (update: ModelPreferencesUpdate) => saveModelPreferences(queryClient, update),
     [queryClient],
   );
   return { ...preferences, ready: settings.data !== undefined, save };
-}
-
-/** The saved Pad layout from settings. */
-export function useModelPadLayout(): ModelPadLayout {
-  const { placements } = useModelPadPreferences();
-  return React.useMemo(() => ({ placements }), [placements]);
 }
