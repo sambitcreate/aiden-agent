@@ -539,7 +539,7 @@ test("only a finished helper's reads wait for its final saved copy", () => {
 });
 
 test("a saved copy is final once its last message is closed and no step is still going", () => {
-  assert.equal(subagentTranscriptIsFinal(transcript("run-1", 1)), true, "a helper that wrote nothing");
+  assert.equal(subagentTranscriptIsFinal(transcript("run-1", 1)), false, "the copy saved at the start holds only the task");
   assert.equal(subagentTranscriptIsFinal(transcript("run-1", 4, [{ text: "Done.", finishedAt: 2_000 }])), true);
   assert.equal(
     subagentTranscriptIsFinal(transcript("run-1", 4, [{ text: "Done.", finishedAt: 2_000 }, { text: "Still writ" }])),
