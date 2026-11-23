@@ -35,13 +35,13 @@ import {
   type DesignTextChange,
 } from "../../renderer/shared/design-canvas/text-edit.js";
 import { canvasView, parseDesignViewState } from "../../renderer/shared/design-canvas/canvas-summary.js";
-import { parseDesignChatView, viewPageId, type DesignChatView } from "../../renderer/shared/design-canvas/view.js";
+import { parseDesignChatView, type DesignChatView } from "../../renderer/shared/design-canvas/view.js";
 import { placeFrame } from "../../renderer/shared/design-canvas/placement.js";
 import { isHtmlArtifactMediaId } from "../../renderer/shared/generative-ui.js";
 import { isWorkspaceArtifactWorkspaceId } from "../../renderer/shared/workspace-artifacts.js";
 import { ARTIFACT_FRAME_BOX } from "../services/design-canvas/artifact-frames.js";
 import type { DesignGrantRegistry } from "../services/design-canvas/grants.js";
-import type { DesignCanvasViews } from "../services/design-canvas/views.js";
+import { designTurnPages, type DesignCanvasViews } from "../services/design-canvas/views.js";
 import { validateGenerativeUiHtml } from "../services/generative-ui-html.js";
 import { replaceWorkspaceText } from "../services/design-canvas/text-write.js";
 import { resolveDesignFile } from "../services/design-canvas/resolve-core.js";
@@ -249,12 +249,14 @@ export function registerDesignCanvasHandlers<Event>(deps: {
   getChat(chatId: string): Promise<DesignCanvasChat | null>;
   grants: Pick<DesignGrantRegistry, "issue" | "revokeChat">;
   /** Each chat's view of its canvas, as the renderer reports it. */
-  views: Pick<DesignCanvasViews, "report" | "unmount" | "kept" | "unmountAll">;
+  views: Pick<DesignCanvasViews, "report" | "unmount" | "kept" | "unmountAll" | "get" | "viewports" | "showPage">;
   /**
    * Calls `reset` whenever the window that sent `event` reloads, crashes or is
    * destroyed, since every canvas in it is then gone; called for every view report.
    */
   whenSenderResets?(event: Event, reset: () => void): void;
+  /** Sends `designCanvas:focus` to the window that sent `event`, if it is still there. */
+  sendFocus?(event: Event, request: { chatId: string; pageId: string; frameIds: string[]; focusId: number }): void;
   /** The chat's workspace folder, or null when the chat has no folder to frame. */
   workspaceRoot(chat: DesignCanvasChat): Promise<string | null>;
   /** The window that sent `event`, or null when it has none (or it is gone). */
@@ -360,13 +362,13 @@ export function registerDesignCanvasHandlers<Event>(deps: {
   });
 
   // The person's Send to canvas on a visual in the chat: puts that visual on
-  // the page on screen as a frame of their own, beside the frames in view, the
+  // the chat's page as a frame of their own, beside the frames in view, the
   // way Add would. It needs no design mode (the renderer turns it on after),
   // only an attended chat that still holds the visual and HTML that still
   // passes the visual checks. `options.viewSize` is the canvas's size on
   // screen, when the renderer knows it; a size that does not parse is ignored.
   const UNCHANGED = Symbol("unchanged");
-  deps.handle("designCanvas:placeArtifact", async (_event, chatId, mediaId, options): Promise<DesignCanvasPlaceArtifactResult> => {
+  deps.handle("designCanvas:placeArtifact", async (event, chatId, mediaId, options): Promise<DesignCanvasPlaceArtifactResult> => {
     const chat = await requireChat(chatId);
     if (!isHtmlArtifactMediaId(mediaId)) throw new Error("Invalid visual.");
     const viewSize =
@@ -386,24 +388,32 @@ export function registerDesignCanvasHandlers<Event>(deps: {
     const frameTitle = title.trim().slice(0, DESIGN_CANVAS_LIMITS.titleChars) || "Visual";
     let outcome: DesignCanvasPlaceArtifactResult = { error: "full" };
     const workspaceId = designCanvasWorkspaceOf(chat);
-    const view = undefined;
+    const pages = designTurnPages({
+      views: deps.views,
+      chatId: chat.id,
+      ...(viewSize ? { message: { selection: [], viewSize } } : {}),
+    });
+    const viewOf = await pages.resolver(workspaceId);
+    // A visual already placed on another page: that page is shown instead.
+    let elsewhere: { pageId: string; frameId: string } | undefined;
     try {
       const saved = await deps.store.update(
         chat.id,
         (doc) => {
-          const pageId = viewPageId(doc, view);
+          const view = viewOf(doc);
           const existing = doc.frames.find(
             (frame) => frame.kind === "artifact" && frame.mediaId === mediaId && (frame.chatId ?? chat.id) === chat.id,
           );
           if (existing) {
-            const page = existing.pageId === pageId ? undefined : doc.pages.find((entry) => entry.id === existing.pageId)?.name;
+            const page = existing.pageId === view.pageId ? undefined : doc.pages.find((entry) => entry.id === existing.pageId)?.name;
             outcome = { status: "already", frameId: existing.id, ...(page ? { page } : {}) };
+            if (page) elsewhere = { pageId: existing.pageId, frameId: existing.id };
             throw UNCHANGED;
           }
           const placed = placeFrame(
             doc,
-            { kind: "artifact", title: frameTitle, mediaId, chatId: chat.id, pageId, createdBy: "person", ...ARTIFACT_FRAME_BOX },
-            canvasView(doc, view, viewSize, pageId),
+            { kind: "artifact", title: frameTitle, mediaId, chatId: chat.id, pageId: view.pageId, createdBy: "person", ...ARTIFACT_FRAME_BOX },
+            canvasView(doc, view),
             deps.newId ?? randomUUID,
           );
           if ("error" in placed) {
@@ -419,6 +429,13 @@ export function registerDesignCanvasHandlers<Event>(deps: {
       deps.broadcast({ workspaceId, chatId: chat.id, revision: saved.doc.revision, step: `send-to-canvas:${saved.doc.revision}` });
     } catch (error) {
       if (error !== UNCHANGED) throw error;
+    }
+    if (elsewhere) {
+      // Only this chat's view moves; the shared document is unchanged.
+      const focusId = await pages.show(workspaceId, elsewhere.pageId);
+      if (focusId !== undefined) {
+        deps.sendFocus?.(event, { chatId: chat.id, pageId: elsewhere.pageId, frameIds: [elsewhere.frameId], focusId });
+      }
     }
     return outcome;
   });

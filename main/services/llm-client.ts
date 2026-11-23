@@ -2731,21 +2731,18 @@ async function prepareGeneration(
                   placeImages: async (images: readonly { path: string; width: number; height: number }[]) => {
                     const allowed = async () => (await designModeOn()) && (await imageWorkspaceUnchanged());
                     if (!(await allowed())) return null;
-                    const frameIds = await placeImagesOnCanvas({
+                    const placed = await placeImagesOnCanvas({
                       chatId: params.chatId,
                       images,
-                      ...(params.designView?.viewSize ? { viewSize: params.designView.viewSize } : {}),
                       shouldSave: allowed,
                       store: designCanvasStore,
+                      pages: designPages,
                       broadcast: announceCanvasChange,
                       newId: randomUUID,
                     });
-                    if (frameIds === null) return null;
-                    const liveOwner = getOwner();
-                    if (frameIds.length > 0 && !liveOwner.isDestroyed()) {
-                      liveOwner.send("designCanvas:focus", { chatId: params.chatId, frameIds });
-                    }
-                    return { frameIds };
+                    if (placed === null) return null;
+                    if (placed.frameIds.length > 0) focusDesignCanvas(placed);
+                    return { frameIds: placed.frameIds };
                   },
                 }
               : {}),
@@ -3028,8 +3025,8 @@ async function prepareGeneration(
         await placeArtifactsOnCanvas({
           chatId: params.chatId,
           artifacts,
-          ...(params.designView?.viewSize ? { viewSize: params.designView.viewSize } : {}),
           store: designCanvasStore,
+          pages: designPages,
           broadcast: announceCanvasChange,
           newId: randomUUID,
         });
@@ -3128,22 +3125,21 @@ async function prepareGeneration(
         // and the chat's workspace folder are checked as they are now.
         if (!(await canSaveWrittenPage())) return;
         let leftOff = false;
-        const placedIds = await placeWrittenPagesOnCanvas({
+        const placed = await placeWrittenPagesOnCanvas({
           chatId: params.chatId,
           workspaceRoot: pageRoot,
           paths: [relativePath],
-          ...(params.designView?.viewSize ? { viewSize: params.designView.viewSize } : {}),
           shouldSave: canSaveWrittenPage,
           store: designCanvasStore,
+          pages: designPages,
           broadcast: announceCanvasChange,
           newId: randomUUID,
           onRemoved: () => {
             leftOff = true;
           },
         });
-        const liveCanvasOwner = getOwner();
-        if (placedIds.length > 0 && !liveCanvasOwner.isDestroyed()) {
-          liveCanvasOwner.send("designCanvas:focus", { chatId: params.chatId, frameIds: placedIds });
+        if (placed.frameIds.length > 0 && placed.pageId) {
+          focusDesignCanvas({ pageId: placed.pageId, frameIds: placed.frameIds });
         }
         if (leftOff) inspector.removed(relativePath);
         else inspector.written(relativePath);

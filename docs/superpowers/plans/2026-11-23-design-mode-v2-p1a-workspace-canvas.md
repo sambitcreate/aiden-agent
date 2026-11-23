@@ -347,14 +347,14 @@ Round 3 (a review of the round-2 changes against the built code) found that most
 - Artifact frames are stamped with `chatId`.
 - `placeArtifact`'s "already on another page" no longer calls `showPage`. It returns `{status: "already", frameId, page}`, and the handler sends `designCanvas:focus {chatId, pageId, frameIds: [frameId]}` to the asking window.
 
-- [ ] **Step 1: Write failing tests**
+- [x] **Step 1: Write failing tests**
   - `artifact frame lands on the chat's view page and carries chatId`;
   - `written page dedupes only against the chat's view page`;
   - `placeArtifact on another page focuses that page without changing the document`.
-- [ ] **Step 2:** Run them. Expected: FAIL.
-- [ ] **Step 3:** Implement.
-- [ ] **Step 4:** Rerun. Expected: PASS.
-- [ ] **Step 5:** Commit `feat(design): placements land on the acting chat's page`.
+- [x] **Step 2:** Run them. Expected: FAIL.
+- [x] **Step 3:** Implement.
+- [x] **Step 4:** Rerun. Expected: PASS.
+- [x] **Step 5:** Commit `feat(design): placements land on the acting chat's page`.
 
 ### Task 7: Renderer view store, canvas and sync
 

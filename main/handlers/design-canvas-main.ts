@@ -62,6 +62,9 @@ export function registerDesignCanvasIpc(): void {
       sender.on("render-process-gone", reset);
       sender.once("destroyed", reset);
     },
+    sendFocus: (event, request) => {
+      if (!event.sender.isDestroyed()) event.sender.send("designCanvas:focus", request);
+    },
     workspaceRoot: async (chat) =>
       (await configStore.getWorkspace(persistedChatWorkspaceId(chat.workspaceId)))?.folderPath ??
       null,
