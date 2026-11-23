@@ -6,6 +6,49 @@ enum AidenChromeSymbols {
     static let bots = "person.2.fill"
 }
 
+extension ToolbarContent {
+    /// The item the bar gives up last when it runs out of room, as a closed
+    /// iPhone Duo's side rail does: compose. Before iOS 27 the system decides.
+    /// `visibilityPriority` is in the iOS 27.0 SDK (SwiftUI 8.0); the SDK
+    /// check lets the iOS 26 SDK (Xcode 26.6, CI) build without it.
+    @ToolbarContentBuilder
+    func aidenKeptLongestInBar() -> some ToolbarContent {
+        #if canImport(SwiftUI, _version: 8.0)
+        if #available(iOS 27.0, *) {
+            visibilityPriority(.high)
+        } else {
+            self
+        }
+        #else
+        self
+        #endif
+    }
+}
+
+extension View {
+    /// For a task view, such as a conversation: where the bars run short of
+    /// height, as in a closed iPhone Duo's side rail, the system keeps the
+    /// screen's own actions and shrinks the tab bar first. The API arrived in
+    /// the iOS 27.1 SDK (UIKit 9127.0.85), so Xcode 27.0 builds without it.
+    func aidenPrefersToolbarItems() -> some View {
+        modifier(AidenPrefersToolbarItems())
+    }
+}
+
+private struct AidenPrefersToolbarItems: ViewModifier {
+    func body(content: Content) -> some View {
+        #if canImport(UIKit, _version: 9127.0.85)
+        if #available(iOS 27.1, *) {
+            content.toolbarVerticalCompressionBehavior(.prefersToolbarItems)
+        } else {
+            content
+        }
+        #else
+        content
+        #endif
+    }
+}
+
 enum AidenBotsAvailability: Equatable, Sendable {
     case available(canWrite: Bool)
     case mobileDisabled
@@ -68,6 +111,10 @@ final class AidenAppShellParts {
     struct Built {
         let navigation: AidenAppNavigation
         let newWork: AidenNewWorkChatFlow
+        let chatScreens: AidenChatScreens
+        let search: AidenSearchModel
+        let listScroll: AidenListScrollPlaces
+        let offlineNotices: AidenOfflineNoticeDismissals
     }
 
     private var made: Built?
@@ -98,9 +145,7 @@ struct AidenAppShellView: View {
 
     @Environment(AidenAppearanceStore.self) private var appearance
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
-    /// The navigation and compose flow, made on the shell's first draw. `init`
-    /// runs on every ContentView render and `State` keeps only its first value,
-    /// so building them there read and decoded the saved navigation each time.
+    @Environment(\.aidenPalette) private var palette
     private enum ShellSheet: Identifiable {
         case runningChats
         case pairing(showsDesktopCheck: Bool)
@@ -113,10 +158,22 @@ struct AidenAppShellView: View {
         }
     }
 
+    /// The navigation and compose flow, made on the shell's first draw. `init`
+    /// runs on every ContentView render and `State` keeps only its first value,
+    /// so building them there read and decoded the saved navigation each time.
     @State private var parts = AidenAppShellParts()
     @State private var botSummaries: [AidenHostObjectID: AidenBotSummary] = [:]
     @State private var searchText = ""
     @State private var activeSheet: ShellSheet?
+    /// Each list tab's split columns.
+    @State private var inboxColumns = AidenSplitColumns()
+    @State private var botsColumns = AidenSplitColumns()
+    @State private var workspacesColumns = AidenSplitColumns()
+    /// Whether the system puts its bars in a rail beside the content, as on a
+    /// closed iPhone Duo.
+    @State private var showsVerticalBar = false
+    /// The shell's own window, for its orientation.
+    @State private var window = AidenWindowReader.Window()
 
     init(
         coordinator: AidenRemoteCoordinator,
@@ -142,8 +199,11 @@ struct AidenAppShellView: View {
     /// picks. A chat started from Workspaces stays there; anywhere else it's the Inbox's.
     private var newWork: AidenNewWorkChatFlow { built.newWork }
 
+    /// Each open chat's screen state, kept while its chat is on a tab.
+    private var chatScreens: AidenChatScreens { built.chatScreens }
+
     private var built: AidenAppShellParts.Built {
-        parts.built { [coordinator, inboxStore, navigationStore] in
+        parts.built { [coordinator, inboxStore, navigationStore, horizontalSizeClass] in
             let navigation = AidenAppNavigation(
                 restoring: navigationStore.load(
                     installations: coordinator.installationStore.installations,
@@ -151,6 +211,8 @@ struct AidenAppShellView: View {
                 ),
                 installations: coordinator.installationStore.installations
             )
+            // Set before any link or request opens a route, which reads it.
+            navigation.besideList = horizontalSizeClass == .regular
             let newWork = AidenNewWorkChatFlow(coordinator: coordinator) { [weak navigation] chat, id in
                 let home = inboxStore.homeModel(for: id.instanceId)
                 home?.accept(chat)
@@ -158,7 +220,22 @@ struct AidenAppShellView: View {
                 guard let navigation else { return }
                 navigation.open(.chat(id), on: navigation.tab == .workspaces ? .workspaces : .inbox)
             }
-            return AidenAppShellParts.Built(navigation: navigation, newWork: newWork)
+            let chatScreens = AidenChatScreens(
+                isOpen: { [weak navigation] id in navigation?.holdsConversation(id) ?? false },
+                isBotOpen: { [weak navigation] id in navigation?.holdsBot(id) ?? false }
+            )
+            let search = AidenSearchModel(
+                chatInput: { AidenSearchChatInput(store: inboxStore) },
+                machines: { AidenSearchMachine.machines(in: coordinator) }
+            )
+            return AidenAppShellParts.Built(
+                navigation: navigation,
+                newWork: newWork,
+                chatScreens: chatScreens,
+                search: search,
+                listScroll: AidenListScrollPlaces(),
+                offlineNotices: AidenOfflineNoticeDismissals()
+            )
         }
     }
 
@@ -204,90 +281,72 @@ struct AidenAppShellView: View {
     }
 
     var body: some View {
-        ZStack {
-            TabView(selection: Bindable(navigation).tab) {
-                Tab("Inbox", systemImage: "tray", value: AidenAppTab.inbox) {
-                    NavigationStack(path: Bindable(navigation).inboxPath) {
-                        AidenInboxTabRootView(
-                            store: inboxStore,
-                            runningHome: runningHome,
-                            hasNoComputers: hasNoComputers,
-                            onAddComputer: openAddComputer,
-                            onOpen: openRow,
-                            onDelete: deleteChat,
-                            onOpenMachines: { navigation.open(.machines) },
-                            onCatchUp: { markViewed(navigation.startCatchUp(in: catchUpQueue)) },
-                            onShowRunning: { activeSheet = .runningChats }
-                        )
-                        .safeAreaInset(edge: .top, spacing: 0) {
-                            AidenConnectionNotice(coordinator: coordinator)
-                        }
-                        .toolbar { inboxToolbar }
-                        .navigationDestination(for: AidenAppRoute.self, destination: destination)
-                    }
-                }
-                .badge(inboxStore.needsYouCount)
-                // An iPad's tab strip draws the badge without saying it.
-                .accessibilityValue(
-                    Text(inboxStore.needsYouCount == 1 ? "1 chat needs you" : "\(inboxStore.needsYouCount) chats need you"),
-                    isEnabled: inboxStore.needsYouCount > 0
-                )
-
-                Tab("Bots", systemImage: AidenChromeSymbols.bots, value: AidenAppTab.bots) {
-                    NavigationStack(path: Bindable(navigation).botsPath) {
-                        AidenBotsTabView(
-                            coordinator: coordinator,
-                            store: inboxStore,
-                            navigation: navigation,
-                            availability: botsAvailability,
-                            onAddComputer: openAddComputer,
-                            onOpenBot: { id, bot in botSummaries[id] = bot }
-                        )
-                        .navigationDestination(for: AidenAppRoute.self, destination: destination)
-                    }
-                }
-
-                Tab("Workspaces", systemImage: "folder", value: AidenAppTab.workspaces) {
-                    NavigationStack(path: Bindable(navigation).workspacesPath) {
-                        AidenWorkspacesTabView(
-                            coordinator: coordinator,
-                            store: inboxStore,
-                            newWork: newWork,
-                            onAddComputer: openAddComputer
-                        )
-                            .navigationDestination(for: AidenAppRoute.self, destination: destination)
-                    }
-                }
-
-                Tab(value: AidenAppTab.search, role: .search) {
-                    // The field is on this stack's root view: on the `TabView` it would
-                    // sit on every tab.
-                    NavigationStack {
-                        AidenSearchTabView(
-                            coordinator: coordinator,
-                            inboxStore: inboxStore,
-                            hasNoComputers: hasNoComputers,
-                            onAddComputer: openAddComputer
-                        ) { navigation.open($0) }
-                    }
+        TabView(selection: Bindable(navigation).tab) {
+            Tab("Inbox", systemImage: "tray", value: AidenAppTab.inbox) {
+                splitTab(.inbox, columns: inboxColumns, empty: .inbox) { selection in
+                    inboxList(selection: selection)
                 }
             }
-            // The system's own placement: an iPad opens on the tab strip, and the
-            // sidebar is a tap away. Asking for the sidebar by default
-            // (`defaultAdaptableTabBarPlacement(.sidebar)`) made SwiftUI write its
-            // sidebar state while drawing the first frame, which it reports as
-            // "Modifying state during view update".
-            .tabViewStyle(.sidebarAdaptable)
-            .tabBarMinimizeBehavior(horizontalSizeClass == .compact ? .onScrollDown : .automatic)
-            .tabViewSearchActivation(.searchTabSelection)
-            .aidenNewWorkPresentation(newWork, coordinator: coordinator)
-            // Hiding the tab bar leaves the accessory up, under the composer.
-            .aidenRunningAccessory(
-                isEnabled: runningHome == .accessory && inboxStore.hasRunningChats && !navigation.showsConversation
-            ) {
-                AidenRunningAccessoryHost(store: inboxStore, onOpen: openRow) { activeSheet = .runningChats }
+            .badge(inboxStore.needsYouCount)
+            // An iPad's tab strip draws the badge without saying it.
+            .accessibilityValue(
+                Text(inboxStore.needsYouCount == 1 ? "1 chat needs you" : "\(inboxStore.needsYouCount) chats need you"),
+                isEnabled: inboxStore.needsYouCount > 0
+            )
+
+            Tab("Bots", systemImage: AidenChromeSymbols.bots, value: AidenAppTab.bots) {
+                splitTab(.bots, columns: botsColumns, empty: .bots) { selection in
+                    botsList(selection: selection)
+                }
+            }
+
+            Tab("Workspaces", systemImage: "folder", value: AidenAppTab.workspaces) {
+                splitTab(.workspaces, columns: workspacesColumns, empty: .workspaces) { selection in
+                    workspacesList(selection: selection)
+                }
+            }
+
+            Tab(value: AidenAppTab.search, role: .search) {
+                // The field is on this stack's root view: on the `TabView` it would
+                // sit on every tab.
+                NavigationStack {
+                    AidenSearchTabView(
+                        model: built.search,
+                        inboxStore: inboxStore,
+                        hasNoComputers: hasNoComputers,
+                        onAddComputer: openAddComputer
+                    ) { navigation.open($0) }
+                }
             }
         }
+        // The system's own placement: an iPad opens on the tab strip, and the
+        // sidebar is a tap away. Asking for the sidebar by default
+        // (`defaultAdaptableTabBarPlacement(.sidebar)`) made SwiftUI write its
+        // sidebar state while drawing the first frame, which it reports as
+        // "Modifying state during view update".
+        .tabViewStyle(.sidebarAdaptable)
+        .background {
+            AidenWindowReader(window: window) { showsVerticalBar = $0 }
+        }
+        // Above every tab's stack, so pushed screens read them too.
+        .environment(\.aidenTabsInSideRail, showsVerticalBar)
+        .environment(\.aidenOfflineNotices, built.offlineNotices)
+        .tabBarMinimizeBehavior(horizontalSizeClass == .compact ? .onScrollDown : .automatic)
+        .tabViewSearchActivation(.searchTabSelection)
+        // Hiding the tab bar leaves the accessory up, under the composer.
+        .aidenRunningAccessory(
+            isEnabled: runningHome == .accessory && inboxStore.hasRunningChats && !navigation.showsConversation
+        ) {
+            AidenRunningAccessoryHost(store: inboxStore, onOpen: openRow) { activeSheet = .runningChats }
+        }
+        // A new tab view each time the display opens or closes, as at launch.
+        // A closed iPhone Duo's side rail reads the showing tab's Back and
+        // More when it's built, and a list tab swapping its container under
+        // the same tab view left it reading none, along with the running
+        // accessory over a chat (iOS 27.1 simulator). The paths and chats
+        // are the shell's, so the new one opens where the old one was.
+        .id(navigation.besideList)
+        .aidenNewWorkPresentation(newWork, coordinator: coordinator)
         .sheet(item: $activeSheet) { sheet in
             switch sheet {
             case .runningChats:
@@ -320,11 +379,23 @@ struct AidenAppShellView: View {
         }
         .onChange(of: navigation.snapshot) { _, snapshot in
             navigationStore.save(snapshot)
+            chatScreens.pathsChanged()
         }
         .onChange(of: navigation.tab == .inbox, initial: true) { _, isOnScreen in
             inboxStore.setInboxVisible(isOnScreen)
         }
-        .onChange(of: navigation.openChat, initial: true) { _, chat in
+        // Opening or closing an iPhone Duo swaps each list tab's container
+        // (`AidenListTab`). The chat screens hear first, so the views the
+        // swap takes away don't count as the reader leaving; the containers
+        // follow `besideList`, so its new value is set before either goes.
+        .onChange(of: horizontalSizeClass) { _, sizeClass in
+            let besideList = sizeClass == .regular
+            guard besideList != navigation.besideList else { return }
+            for columns in [inboxColumns, botsColumns, workspacesColumns] { columns.visibility = .all }
+            chatScreens.rebuilding()
+            navigation.besideList = besideList
+        }
+        .onChange(of: navigation.inboxOpenChat, initial: true) { _, chat in
             inboxStore.openChat = chat
             inboxStore.setFocusedMachine(chat?.instanceId)
         }
@@ -370,6 +441,100 @@ struct AidenAppShellView: View {
         }
     }
 
+    private func columns(for tab: AidenAppTab) -> AidenSplitColumns {
+        switch tab {
+        case .bots: botsColumns
+        case .workspaces: workspacesColumns
+        case .inbox, .search: inboxColumns
+        }
+    }
+
+    /// A list tab: its list, and what the list opened beside it or pushed
+    /// over it. `list` gets the row to highlight.
+    private func splitTab<Sidebar: View>(
+        _ tab: AidenAppTab,
+        columns: AidenSplitColumns,
+        empty: AidenSplitEmptyState,
+        @ViewBuilder list: @escaping (AidenAppRoute?) -> Sidebar
+    ) -> some View {
+        AidenListTab(
+            tab: tab,
+            navigation: navigation,
+            scrollPlaces: built.listScroll,
+            columns: columns,
+            window: window,
+            empty: empty,
+            list: list,
+            screen: { route, keepsTabs in AnyView(screen(for: route, keepsTabs: keepsTabs)) }
+        )
+    }
+
+    /// Puts the tab's list away when it's laid over the detail
+    /// (`AidenSplitColumns.hideOverlaidList`).
+    private func hideOverlaidList(on tab: AidenAppTab) {
+        columns(for: tab).hideOverlaidList(
+            besideList: navigation.besideList,
+            hasSelection: AidenSplitNavigationPath(navigation.path(of: tab)).selection != nil
+        )
+    }
+
+    /// The Inbox list with its banner and toolbar. `selection` is the row the
+    /// detail beside it shows.
+    private func inboxList(selection: AidenAppRoute?) -> some View {
+        AidenInboxTabRootView(
+            store: inboxStore,
+            runningHome: runningHome,
+            hasNoComputers: hasNoComputers,
+            onAddComputer: openAddComputer,
+            onOpen: openRow,
+            onDelete: deleteChat,
+            onOpenMachines: { navigation.open(.machines) },
+            onCatchUp: {
+                markViewed(navigation.startCatchUp(in: catchUpQueue))
+                hideOverlaidList(on: .inbox)
+            },
+            onShowRunning: { activeSheet = .runningChats },
+            selection: selection,
+            // In a side rail the system lays the outgoing chip over the
+            // incoming chat while it pushes, so it goes with the list.
+            showsMachineStatus: !showsVerticalBar || navigation.besideList || navigation.inboxPath.isEmpty
+        )
+        .safeAreaInset(edge: .top, spacing: 0) {
+            AidenConnectionNotice(coordinator: coordinator)
+        }
+        .toolbar { inboxToolbar }
+    }
+
+    /// The Bots list. Its own function, as the Inbox's is, so the tab view
+    /// type-checks in reasonable time.
+    private func botsList(selection: AidenAppRoute?) -> some View {
+        AidenBotsTabView(
+            coordinator: coordinator,
+            store: inboxStore,
+            navigation: navigation,
+            availability: botsAvailability,
+            selection: selection,
+            onAddComputer: openAddComputer,
+            onOpenBot: { id, bot in botSummaries[id] = bot },
+            onOpened: { hideOverlaidList(on: .bots) }
+        )
+    }
+
+    /// The Workspaces list.
+    private func workspacesList(selection: AidenAppRoute?) -> some View {
+        AidenWorkspacesTabView(
+            coordinator: coordinator,
+            store: inboxStore,
+            newWork: newWork,
+            besideList: navigation.besideList,
+            selection: selection,
+            onAddComputer: openAddComputer
+        ) { route in
+            navigation.pick(route, fromListOf: .workspaces)
+            hideOverlaidList(on: .workspaces)
+        }
+    }
+
     private func deleteChat(_ id: AidenHostObjectID) {
         navigation.leave(.chat(id))
         Task {
@@ -406,16 +571,26 @@ struct AidenAppShellView: View {
                 AidenNewWorkComposeButton(flow: newWork)
             }
         }
+        .aidenKeptLongestInBar()
+    }
+
+    /// A conversation hides the tabs on a stack, where the composer owns the
+    /// bottom edge; beside the list it keeps them. Set on each screen, root
+    /// and pushed, because a screen pushed by a stack doesn't read what's set
+    /// on that stack's root. Where the bars sit in a side rail the tabs stay
+    /// whatever this says (`aidenTabsInSideRail`).
+    private func screen(for route: AidenAppRoute, keepsTabs: Bool) -> some View {
+        routeScreen(for: route)
+            .environment(\.aidenConversationTabBar, keepsTabs ? .automatic : .hidden)
     }
 
     @ViewBuilder
-    private func destination(for route: AidenAppRoute) -> some View {
+    private func routeScreen(for route: AidenAppRoute) -> some View {
         switch route {
-        case .chat(let id):
+        case .chat(let id), .fork(let id, _):
             AidenChatRouteView(
                 coordinator: coordinator,
-                id: id,
-                receipt: newWork.receipt(for: id),
+                screen: chatScreens.screen(for: id, receipt: newWork.receipt(for: id)),
                 autoStartVoice: navigation.chatStartingVoice == id,
                 autoStartCamera: navigation.chatStartingCamera == id,
                 onNext: navigation.catchUp?.current == id ? nextInCatchUp : nil,
@@ -429,6 +604,9 @@ struct AidenAppShellView: View {
                     let home = inboxStore.homeModel(for: id.instanceId)
                     home?.accept(fork)
                     home?.markViewed(chatID: fork.id)
+                    // Over the chat it came from, so Back returns there.
+                    let forkID = AidenHostObjectID(instanceId: id.instanceId, deviceId: id.deviceId, objectId: fork.id)
+                    navigation.push(.fork(forkID, source: id), over: route)
                 },
                 onBotChat: { bot in navigation.replace(route, with: .bot(bot)) }
             )
@@ -444,7 +622,7 @@ struct AidenAppShellView: View {
         case .bot(let id):
             AidenBotRouteView(
                 coordinator: coordinator,
-                id: id,
+                screen: chatScreens.botScreen(for: id),
                 initialSummary: botSummaries[id],
                 onNext: navigation.catchUp?.current == id ? nextInCatchUp : nil
             )
@@ -458,9 +636,7 @@ struct AidenAppShellView: View {
                 onRemoved: { navigation.leave(route) },
                 onChatUpdated: { inboxStore.homeModel(for: id.instanceId)?.accept($0) },
                 onChatRemoved: { inboxStore.homeModel(for: id.instanceId)?.removeChat(id: $0) },
-                onChatActivityChanged: { chatID, activity in
-                    inboxStore.homeModel(for: id.instanceId)?.setActivity(activity, forChatID: chatID)
-                }
+                onOpenChat: { chatID in navigation.push(.chat(chatID), over: route) }
             )
         case .machines:
             AidenMachinesRouteView(coordinator: coordinator)
@@ -481,6 +657,7 @@ struct AidenAppShellView: View {
     private func openRow(_ route: AidenAppRoute) {
         if case .chat(let id) = route { markViewed(id) }
         navigation.openInboxRow(route)
+        hideOverlaidList(on: .inbox)
     }
 
     private func nextInCatchUp() {
@@ -522,12 +699,50 @@ final class AidenChatRouteModel {
     private(set) var state = State.loading
     @ObservationIgnored private let cache: AidenChatCache
     @ObservationIgnored private let receipt: AidenChat?
+    @ObservationIgnored private var loading: Task<Void, Never>?
+    /// Counts loads started, so only the newest one clears `isLoading`.
+    @ObservationIgnored private var loadsStarted = 0
+    /// A load is under way.
+    @ObservationIgnored private(set) var isLoading = false
 
     /// `receipt` is the chat as the machine just created it, when there is one.
     init(id: AidenHostObjectID, cache: AidenChatCache = .shared, receipt: AidenChat? = nil) {
         self.id = id
         self.cache = cache
         self.receipt = receipt
+    }
+
+    /// Loads again, in place of any load under way: the screen appeared, or
+    /// its machine's connection changed. The load is the model's, not the
+    /// view's, so it isn't cancelled when SwiftUI reports the screen gone. A
+    /// chat a link chose on a tab that wasn't showing appeared and disappeared
+    /// in one update as the tab came forward, and never appeared again, so a
+    /// view task's load was cancelled and the chat spun for good. Returns
+    /// the load, for tests.
+    @discardableResult
+    func startLoading(coordinator: AidenRemoteCoordinator) -> Task<Void, Never> {
+        loading?.cancel()
+        loadsStarted += 1
+        let started = loadsStarted
+        isLoading = true
+        let load = Task<Void, Never> { [weak self] in
+            await self?.load(coordinator: coordinator)
+            guard let self, self.loadsStarted == started else { return }
+            self.isLoading = false
+        }
+        loading = load
+        return load
+    }
+
+    /// Loads again only when the chat isn't open and no load is under way: the
+    /// screen appeared. The first appearance comes right after the connection
+    /// handler started the first load, and replacing that load would ask the
+    /// machine for the chat twice. Returns the load it started, for tests.
+    @discardableResult
+    func loadIfIdle(coordinator: AidenRemoteCoordinator) -> Task<Void, Never>? {
+        if case .ready = state { return nil }
+        guard !isLoading else { return nil }
+        return startLoading(coordinator: coordinator)
     }
 
     func load(coordinator: AidenRemoteCoordinator) async {
@@ -548,7 +763,10 @@ final class AidenChatRouteModel {
         do {
             let chat = try await coordinator.remoteClient(for: owner).chat(id: id.objectId)
             await present(chat, owner: owner, coordinator: coordinator)
-        } catch where aidenIsCancellation(error) {
+        } catch where Task.isCancelled || error is CancellationError {
+            // A newer load is under way. A request the machine's pin refused
+            // also reports itself cancelled (URLError.cancelled), but nothing
+            // loads again after that, so it says so below.
             return
         } catch {
             if await coordinator.handleCredentialRevocation(error, context: owner) {
@@ -578,7 +796,7 @@ final class AidenChatRouteModel {
             state = .unavailable(refusal)
             return
         }
-        // Cancelled: the view is loading again, and that load decides.
+        // Cancelled: a newer load is under way, and that load decides.
         guard !Task.isCancelled else { return }
         state = coordinator.isLive(owner)
             ? .ready(chat, owner: owner)
@@ -618,14 +836,15 @@ private struct AidenChatRouteView: View {
     let onChatActivityChanged: @MainActor (String, AidenChatSummaryActivity) -> Void
     let onForkOpened: @MainActor (AidenChat) -> Void
     let onBotChat: @MainActor (AidenHostObjectID) -> Void
-    @State private var model: AidenChatRouteModel
+    /// The shell's, so a rebuilt screen finds the chat it already loaded.
+    let screen: AidenChatScreens.Screen
+    private var model: AidenChatRouteModel { screen.route }
     @State private var holdsAttachments = false
     @State private var isConfirmingNext = false
 
     init(
         coordinator: AidenRemoteCoordinator,
-        id: AidenHostObjectID,
-        receipt: AidenChat?,
+        screen: AidenChatScreens.Screen,
         autoStartVoice: Bool,
         autoStartCamera: Bool,
         onNext: (() -> Void)?,
@@ -642,7 +861,7 @@ private struct AidenChatRouteView: View {
         self.onChatActivityChanged = onChatActivityChanged
         self.onForkOpened = onForkOpened
         self.onBotChat = onBotChat
-        _model = State(initialValue: AidenChatRouteModel(id: id, receipt: receipt))
+        self.screen = screen
     }
 
     var body: some View {
@@ -651,7 +870,7 @@ private struct AidenChatRouteView: View {
             case .loading:
                 ProgressView()
             case .ready(let chat, let owner):
-                AidenForkableChatDetailView(
+                AidenChatDetailView(
                     coordinator: coordinator,
                     chat: chat,
                     owner: owner,
@@ -659,7 +878,8 @@ private struct AidenChatRouteView: View {
                     autoStartCamera: autoStartCamera,
                     onChatUpdated: onChatUpdated,
                     onChatActivityChanged: onChatActivityChanged,
-                    onForkOpened: onForkOpened
+                    onOpenChat: onForkOpened,
+                    screen: screen.chat
                 )
             case .botChat(let bot):
                 ProgressView()
@@ -672,7 +892,7 @@ private struct AidenChatRouteView: View {
                 )
             }
         }
-        .toolbar(.hidden, for: .tabBar)
+        .aidenConversationTabBar()
         .toolbar {
             if let onNext {
                 ToolbarItem(placement: .topBarTrailing) {
@@ -696,8 +916,637 @@ private struct AidenChatRouteView: View {
         .onPreferenceChange(AidenChatHoldsAttachmentsKey.self) { holds in
             holdsAttachments = holds
         }
-        .task(id: coordinator.hosts.connection(for: model.id.instanceId)?.connectionState) {
-            await model.load(coordinator: coordinator)
+        .onChange(of: coordinator.hosts.connection(for: model.id.instanceId)?.connectionState, initial: true) {
+            model.startLoading(coordinator: coordinator)
+        }
+        // Back to a chat that couldn't load tries again.
+        .onAppear {
+            model.loadIfIdle(coordinator: coordinator)
         }
     }
 }
+
+/// The shell's chat screens: each chat's and each Bot's route model and
+/// screen state, kept while a tab's path holds the chat or the Bot, so opening
+/// or closing an iPhone Duo, which builds the screen's views again, loses
+/// nothing. A screen goes once its route has left every tab and nobody sees
+/// it (`AidenChatScreen`).
+@MainActor
+final class AidenChatScreens {
+    final class Screen {
+        let route: AidenChatRouteModel
+        let chat: AidenChatScreen
+
+        init(route: AidenChatRouteModel, chat: AidenChatScreen) {
+            self.route = route
+            self.chat = chat
+        }
+    }
+
+    /// A Bot's screen: its route model, and what its chat keeps, the durable
+    /// conversation's (`session`) or a legacy chat's (`chat`'s parts).
+    final class BotScreen {
+        let route: AidenBotRouteModel
+        let chat: AidenChatScreen
+        let session: AidenBotSessionScreenParts
+
+        init(route: AidenBotRouteModel, chat: AidenChatScreen, session: AidenBotSessionScreenParts) {
+            self.route = route
+            self.chat = chat
+            self.session = session
+        }
+    }
+
+    private var screens: [AidenHostObjectID: Screen] = [:]
+    private var botScreens: [AidenHostObjectID: BotScreen] = [:]
+    private let isOpen: @MainActor (AidenHostObjectID) -> Bool
+    private let isBotOpen: @MainActor (AidenHostObjectID) -> Bool
+    private let pause: @MainActor (Duration) async -> Void
+
+    init(
+        pause: @escaping @MainActor (Duration) async -> Void = { try? await Task.sleep(for: $0) },
+        isOpen: @escaping @MainActor (AidenHostObjectID) -> Bool,
+        isBotOpen: @escaping @MainActor (AidenHostObjectID) -> Bool = { _ in false }
+    ) {
+        self.pause = pause
+        self.isOpen = isOpen
+        self.isBotOpen = isBotOpen
+    }
+
+    /// The chats with a screen kept, for tests.
+    var kept: Set<AidenHostObjectID> { Set(screens.keys) }
+
+    /// The Bots with a screen kept, for tests.
+    var keptBots: Set<AidenHostObjectID> { Set(botScreens.keys) }
+
+    /// The Bot's screen, made the first time it's asked for.
+    func botScreen(for id: AidenHostObjectID) -> BotScreen {
+        if let screen = botScreens[id] { return screen }
+        let screen = BotScreen(
+            route: AidenBotRouteModel(id: id),
+            chat: AidenChatScreen(
+                isOpen: { [weak self] in self?.isBotOpen(id) ?? false },
+                onLeft: { [weak self] in self?.forgetBot(id) },
+                pause: pause
+            ),
+            session: AidenBotSessionScreenParts()
+        )
+        botScreens[id] = screen
+        return screen
+    }
+
+    /// The chat's screen, made the first time it's asked for. `receipt` is
+    /// the chat as its machine just created it, when there is one.
+    func screen(for id: AidenHostObjectID, receipt: AidenChat? = nil) -> Screen {
+        if let screen = screens[id] { return screen }
+        let screen = Screen(
+            route: AidenChatRouteModel(id: id, receipt: receipt),
+            chat: AidenChatScreen(
+                isOpen: { [weak self] in self?.isOpen(id) ?? false },
+                onLeft: { [weak self] in self?.forget(id) },
+                pause: pause
+            )
+        )
+        screens[id] = screen
+        return screen
+    }
+
+    /// The shell is about to swap its containers: the screens on screen now
+    /// get new views (`AidenChatScreen.rebuilding()`).
+    func rebuilding() {
+        for screen in screens.values { screen.chat.rebuilding() }
+        for screen in botScreens.values { screen.chat.rebuilding() }
+    }
+
+    /// A tab's path changed. Screens whose chat is on no tab and that nobody
+    /// sees go; one a view is still leaving goes when it has left.
+    func pathsChanged() {
+        for screen in Array(screens.values) { screen.chat.leaveIfClosed() }
+        for screen in Array(botScreens.values) { screen.chat.leaveIfClosed() }
+    }
+
+    private func forget(_ id: AidenHostObjectID) {
+        guard let screen = screens[id], !screen.chat.isShowing, !isOpen(id) else { return }
+        screens[id] = nil
+    }
+
+    private func forgetBot(_ id: AidenHostObjectID) {
+        guard let screen = botScreens[id], !screen.chat.isShowing, !isBotOpen(id) else { return }
+        botScreens[id] = nil
+    }
+}
+
+/// What a list tab's detail says with nothing selected.
+enum AidenSplitEmptyState {
+    case inbox, bots, workspaces
+
+    var title: LocalizedStringKey {
+        switch self {
+        case .inbox: "No chat selected"
+        case .bots: "No Bot selected"
+        case .workspaces: "No workspace selected"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .inbox: "bubble.left.and.bubble.right"
+        case .bots: AidenChromeSymbols.bots
+        case .workspaces: "folder"
+        }
+    }
+
+    var message: LocalizedStringKey {
+        switch self {
+        case .inbox: "Pick a chat from the Inbox."
+        case .bots: "Pick a Bot from the list."
+        case .workspaces: "Pick a workspace from the list."
+        }
+    }
+}
+
+/// A list tab's split view: which columns it shows, and where they were last
+/// measured. Both columns are asked for: the system tiles them when they fit
+/// (an iPhone Duo open in landscape) and lays the list over the detail when
+/// they don't (open in portrait), where picking a row puts it away.
+@MainActor @Observable
+final class AidenSplitColumns {
+    var visibility = NavigationSplitViewVisibility.all {
+        didSet { updateListCoversDetail() }
+    }
+    /// The list lies over the detail and dims it (an iPad or an open iPhone
+    /// Duo in portrait), so the detail can't be read or reached until the
+    /// list goes.
+    private(set) var listCoversDetail = false
+    @ObservationIgnored var splitFrame = CGRect.zero {
+        didSet { updateListCoversDetail() }
+    }
+    @ObservationIgnored var detailFrame = CGRect.zero {
+        didSet { updateListCoversDetail() }
+    }
+    /// Whether the window was landscape the last time the split was measured.
+    @ObservationIgnored private var wasLandscape: Bool?
+
+    /// Picking a row while the list is an overlay over the detail (a narrow
+    /// regular width, such as an iPhone Duo open in portrait) puts the overlay
+    /// away, so the chosen screen is in view, including a row tapped again
+    /// while already selected. Tiled columns are left as they are.
+    func hideOverlaidList(besideList: Bool, hasSelection: Bool) {
+        guard besideList, visibility != .detailOnly, hasSelection,
+              AidenSplitNavigationPath.listIsOverlaid(detailFrame: detailFrame, splitFrame: splitFrame)
+        else { return }
+        visibility = .detailOnly
+    }
+
+    /// With nothing chosen the detail is only a placeholder, so a hidden list
+    /// comes back rather than leaving "No … selected" on its own, as on a tab
+    /// first shown in portrait on an open iPhone Duo.
+    func showListIfNothingChosen(besideList: Bool, hasSelection: Bool) {
+        guard besideList, !hasSelection, visibility == .detailOnly else { return }
+        visibility = .all
+    }
+
+    private func updateListCoversDetail() {
+        let covers = visibility != .detailOnly
+            && AidenSplitNavigationPath.listIsOverlaid(detailFrame: detailFrame, splitFrame: splitFrame)
+        if covers != listCoversDetail { listCoversDetail = covers }
+    }
+
+    /// Brings the list back when the device turned. The window's orientation
+    /// decides, not the split's shape: the keyboard shortens the split in
+    /// portrait until it's wider than tall, and a turn resizes it in two steps
+    /// that pass through a square.
+    fileprivate func showListIfTurned(landscape: Bool) {
+        defer { wasLandscape = landscape }
+        guard let wasLandscape, wasLandscape != landscape else { return }
+        visibility = .all
+    }
+}
+
+/// A list tab. Compact, it's one stack: the list at its root and the tab's
+/// path pushed over it, as on any iPhone. Regular, it's a split: the list
+/// beside a stack rooted at the selected row. Opening or closing an iPhone
+/// Duo swaps one for the other. A split that collapses to one stack itself
+/// left the closed iPhone Duo's side rail without a working Back (iOS 27.1
+/// simulator); a stack built while closed always has one.
+///
+/// The tab's path is the one source of truth (`AidenAppNavigation`), so the
+/// new container shows the same screens, and a chat's state is the shell's
+/// (`AidenChatScreens`), so they're as they were. The container going away
+/// can still write its path as it's taken down (a stack popping to nothing),
+/// so each container's writes count only while the navigation is in its
+/// layout: `AidenAppNavigation.besideList` changes first, then the container
+/// follows it.
+private struct AidenListTab<List: View>: View {
+    let tab: AidenAppTab
+    let navigation: AidenAppNavigation
+    let scrollPlaces: AidenListScrollPlaces
+    let columns: AidenSplitColumns
+    let window: AidenWindowReader.Window
+    let empty: AidenSplitEmptyState
+    let list: (AidenAppRoute?) -> List
+    /// A route's screen, and whether a conversation there keeps the tabs.
+    let screen: (AidenAppRoute, Bool) -> AnyView
+
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+
+    private var path: [AidenAppRoute] { navigation.path(of: tab) }
+
+    var body: some View {
+        if navigation.besideList { split } else { stack }
+    }
+
+    private func write(_ path: [AidenAppRoute], besideList: Bool) {
+        navigation.setPath(
+            path,
+            of: tab,
+            laidOutBesideList: besideList,
+            widthIsRegular: horizontalSizeClass.map { $0 == .regular }
+        )
+    }
+
+    // MARK: Compact
+
+    private var stack: some View {
+        NavigationStack(path: Binding(
+            get: { path },
+            set: { write($0, besideList: false) }
+        )) {
+            list(nil)
+                .environment(\.aidenListScroll, AidenListScrollKeeping(places: scrollPlaces, tab: tab))
+                .navigationDestination(for: AidenAppRoute.self) { screen($0, false) }
+        }
+    }
+
+    // MARK: Regular
+
+    private var split: some View {
+        @Bindable var columns = columns
+        return NavigationSplitView(columnVisibility: $columns.visibility) {
+            list(AidenSplitNavigationPath(path).selection)
+                .environment(\.aidenListScroll, AidenListScrollKeeping(places: scrollPlaces, tab: tab))
+                // One width for every list tab and every launch, wide enough
+                // for a machine's status line, a row's title and the bar's
+                // title with its buttons on an iPhone Duo's inner display.
+                // The system's own choice varied between launches.
+                .navigationSplitViewColumnWidth(min: 320, ideal: 400, max: 420)
+        } detail: {
+            detail
+                .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { columns.detailFrame = $0 }
+        }
+        .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { columns.splitFrame = $0 }
+        // Turning the device brings the list back. Other resizes leave the
+        // columns as the person set them; opening or closing an iPhone Duo
+        // changes the size class, which the shell handles.
+        .onGeometryChange(for: CGSize.self) { $0.size } action: { size in
+            columns.showListIfTurned(landscape: window.isLandscape ?? (size.width > size.height))
+        }
+        // A row chosen any other way: a link, a Search result, Catch Up's Next.
+        .onChange(of: AidenSplitNavigationPath(path).selection, initial: true) { _, selection in
+            columns.hideOverlaidList(besideList: true, hasSelection: selection != nil)
+            columns.showListIfNothingChosen(besideList: true, hasSelection: selection != nil)
+        }
+        // A screen pushed over the chosen one (Computers from the list's
+        // status item, a chat's Bot) shows in the detail, so a list laid over
+        // it goes too, as for a row.
+        .onChange(of: path) { old, new in
+            guard new.count > old.count else { return }
+            columns.hideOverlaidList(besideList: true, hasSelection: AidenSplitNavigationPath(new).selection != nil)
+        }
+        // The system hides the list of a tab first shown in portrait on an
+        // iPad (iOS 27.1 simulator), which left "No Bot selected" alone.
+        .onChange(of: columns.visibility) {
+            columns.showListIfNothingChosen(
+                besideList: true,
+                hasSelection: AidenSplitNavigationPath(path).selection != nil
+            )
+        }
+    }
+
+    /// The detail column: the selected route at the root of its own stack, and
+    /// the rest of the path pushed over it. A conversation here keeps the
+    /// tabs up, as the list beside it does.
+    private var detail: some View {
+        let selection = AidenSplitNavigationPath(path).selection
+        return NavigationStack(path: Binding(
+            get: { AidenSplitNavigationPath(path).detailPath },
+            set: { detailPath in
+                var split = AidenSplitNavigationPath(path)
+                split.setDetailPath(detailPath)
+                write(split.path, besideList: true)
+            }
+        )) {
+            Group {
+                if let selection {
+                    screen(selection, true)
+                        // Another row is another screen, not this one updated.
+                        .id(selection)
+                } else {
+                    AidenSplitPlaceholder(empty: empty, columns: columns)
+                }
+            }
+            .navigationDestination(for: AidenAppRoute.self) { screen($0, true) }
+        }
+    }
+}
+
+/// The detail with nothing chosen. Under the list's dimming (the list laid
+/// over it) the words would be out of reach and too faint to read, and the
+/// list is where to pick one, so only the canvas shows. Dropping them also
+/// keeps VoiceOver in the list: `accessibilityHidden` doesn't hide a
+/// `ContentUnavailableView`'s text (iOS 27.1 simulator).
+private struct AidenSplitPlaceholder: View {
+    let empty: AidenSplitEmptyState
+    let columns: AidenSplitColumns
+
+    @Environment(\.aidenPalette) private var palette
+
+    var body: some View {
+        ZStack {
+            palette.canvas.ignoresSafeArea()
+            if !columns.listCoversDetail {
+                ContentUnavailableView(empty.title, systemImage: empty.systemImage, description: Text(empty.message))
+            }
+        }
+    }
+}
+
+/// Where each list tab's list was scrolled to, kept by the shell so a fold,
+/// which builds the list again in the other container, keeps it. A place is
+/// the row across the top of the list, so it holds through a reflow at the
+/// new width and through rows or banners that arrive above it.
+@MainActor
+final class AidenListScrollPlaces {
+    /// The row across the top of each tab's list, or none at the very top.
+    private var topRows: [AidenAppTab: AnyHashable] = [:]
+
+    func topRow(of tab: AidenAppTab) -> AnyHashable? { topRows[tab] }
+
+    func record(_ row: AnyHashable?, of tab: AidenAppTab) {
+        topRows[tab] = row
+    }
+
+    /// The row across the top of the visible part: the highest row whose
+    /// bottom reaches below `visibleTop`. Frames and `visibleTop` are in the
+    /// same space, the list's own.
+    static func topRow(frames: [AnyHashable: CGRect], visibleTop: CGFloat) -> AnyHashable? {
+        frames
+            .filter { $0.value.maxY > visibleTop + 1 }
+            .min { $0.value.minY < $1.value.minY }?
+            .key
+    }
+}
+
+/// Which tab's list scroll to keep, for the list a list tab shows
+/// (`View.aidenKeepsListScroll()`).
+struct AidenListScrollKeeping {
+    let places: AidenListScrollPlaces
+    let tab: AidenAppTab
+}
+
+/// The frames of one list's rows as they're laid out, in the list's own space.
+/// Not observed: only the person's scroll reads them.
+@MainActor
+final class AidenListRowFrames {
+    fileprivate var frames: [AnyHashable: CGRect] = [:]
+    /// Whether the person's scroll is moving the list.
+    fileprivate var moving = false
+
+    fileprivate func set(_ frame: CGRect?, for id: AnyHashable) {
+        frames[id] = frame
+    }
+}
+
+extension EnvironmentValues {
+    @Entry var aidenListScroll: AidenListScrollKeeping?
+    @Entry var aidenListRowFrames: AidenListRowFrames?
+}
+
+private enum AidenListScrollSpace {
+    static let name = "aiden.list.scroll"
+}
+
+extension View {
+    /// On a list tab's own scrolling list: keeps where it's scrolled to when
+    /// a fold builds it again. Placed on the scroll view itself, as a row
+    /// strip that scrolls sideways inside it would take a position meant for
+    /// the list. Its rows say who they are with `aidenListScrollRow(_:)`.
+    func aidenKeepsListScroll() -> some View {
+        modifier(AidenListScrollKeeperReader())
+    }
+
+    /// A row the list's place can be: the list comes back with this row at
+    /// its top. `id` is the row's identity in its `ForEach`, which is what
+    /// `ScrollViewReader` scrolls to; nil marks nothing.
+    ///
+    /// Goes on the row's content (a button's label), never on the row
+    /// itself: on the view a `ForEach` hands the list, the geometry reading
+    /// hides the row's own list insets, background and swipe actions.
+    func aidenListScrollRow(_ id: AnyHashable?) -> some View {
+        modifier(AidenListScrollRow(id: id))
+    }
+}
+
+private struct AidenListScrollKeeperReader: ViewModifier {
+    @Environment(\.aidenListScroll) private var keeping
+
+    func body(content: Content) -> some View {
+        if let keeping {
+            content.modifier(AidenListScrollKeeper(places: keeping.places, tab: keeping.tab))
+        } else {
+            content
+        }
+    }
+}
+
+private struct AidenListScrollRow: ViewModifier {
+    let id: AnyHashable?
+
+    @Environment(\.aidenListRowFrames) private var rowFrames
+
+    func body(content: Content) -> some View {
+        content
+            .onGeometryChange(for: CGRect.self) { proxy in
+                proxy.frame(in: .named(AidenListScrollSpace.name))
+            } action: { frame in
+                if let id { rowFrames?.set(frame, for: id) }
+            }
+            .onDisappear {
+                if let id { rowFrames?.set(nil, for: id) }
+            }
+    }
+}
+
+/// When a list tab's list goes back to its saved row: once, at its first
+/// layout, whichever of that and its first appearance comes last. A list
+/// reports no content before its first layout, so it waits for that. After
+/// it, nothing brings the list back again: not reappearing on its tab, and
+/// not its rows emptying and filling (a filter to an empty machine and back).
+struct AidenListScrollRestore {
+    private(set) var pending: AnyHashable?
+    private var hasAppeared = false
+    private var isLaidOut = false
+
+    /// The list appeared, with `row` saved. Returns the row to go to now.
+    mutating func appear(returningTo row: AnyHashable?) -> AnyHashable? {
+        defer { hasAppeared = true }
+        guard !hasAppeared else {
+            pending = nil
+            return nil
+        }
+        if isLaidOut { return row }
+        pending = row
+        return nil
+    }
+
+    /// The list's content went from empty to laid out, or back. Returns the
+    /// row to go to now.
+    mutating func layout(hasContent: Bool) -> AnyHashable? {
+        guard hasContent, !isLaidOut else { return nil }
+        isLaidOut = true
+        defer { pending = nil }
+        return pending
+    }
+
+    /// The person took hold of the list, so where they put it wins.
+    mutating func interact() { pending = nil }
+}
+
+/// Records the row across the top of a list tab's list while the person
+/// scrolls it and when it comes to rest, and brings a new list back to that
+/// row once (`AidenListScrollRestore`). A list taken down as the display folds
+/// reports its own geometry on the way out from rest, and that isn't where
+/// they left it, so a list at rest records nothing more.
+private struct AidenListScrollKeeper: ViewModifier {
+    let places: AidenListScrollPlaces
+    let tab: AidenAppTab
+
+    @State private var rowFrames = AidenListRowFrames()
+    @State private var restore = AidenListScrollRestore()
+
+    func body(content: Content) -> some View {
+        ScrollViewReader { proxy in
+            content
+                .coordinateSpace(.named(AidenListScrollSpace.name))
+                .environment(\.aidenListRowFrames, rowFrames)
+                .onAppear { scroll(proxy, to: restore.appear(returningTo: places.topRow(of: tab))) }
+                .onScrollPhaseChange { old, phase, context in
+                    if phase == .interacting { restore.interact() }
+                    rowFrames.moving = phase.isScrolling
+                    // Coming to rest, and each change of phase on the way.
+                    if old.isScrolling { record(context.geometry) }
+                }
+                .onScrollGeometryChange(for: ScrollGeometry.self) { $0 } action: { _, geometry in
+                    if rowFrames.moving { record(geometry) }
+                }
+                .onScrollGeometryChange(for: Bool.self) { geometry in
+                    geometry.contentSize.height > 0
+                } action: { _, laidOut in
+                    scroll(proxy, to: restore.layout(hasContent: laidOut))
+                }
+        }
+    }
+
+    private func scroll(_ proxy: ScrollViewProxy, to row: AnyHashable?) {
+        // `scrollTo` matches a `ForEach` identity by its own type, not
+        // wrapped. After this layout pass, which may still set the offset itself.
+        guard let row, let id = row.base as? any Hashable else { return }
+        Task { @MainActor in
+            await Task.yield()
+            proxy.scrollTo(id, anchor: .top)
+        }
+    }
+
+    private func record(_ geometry: ScrollGeometry) {
+        let atTop = geometry.contentOffset.y + geometry.contentInsets.top <= 1
+        // The list's own space starts where it shows, under the bar: its
+        // scrolling runs on under the bar, its frame doesn't (iOS 27.1,
+        // iPhone Duo).
+        let row = atTop ? nil : AidenListScrollPlaces.topRow(frames: rowFrames.frames, visibleTop: 0)
+        places.record(row, of: tab)
+    }
+}
+
+/// Reads the shell's own window: its scene, for the orientation, and whether
+/// the system puts its bars in a vertical rail beside the content, as on a
+/// closed iPhone Duo's outer display. SwiftUI has no environment value for
+/// either.
+private struct AidenWindowReader: UIViewRepresentable {
+    /// The shell's window scene, held weakly and read when needed rather
+    /// than drawn from.
+    @MainActor
+    final class Window {
+        fileprivate weak var scene: UIWindowScene?
+
+        /// The window's orientation, or nil before there is one.
+        var isLandscape: Bool? {
+            guard let orientation = scene?.effectiveGeometry.interfaceOrientation,
+                  orientation != .unknown else { return nil }
+            return orientation.isLandscape
+        }
+    }
+
+    let window: Window
+    let onVerticalBarChange: @MainActor (Bool) -> Void
+
+    func makeUIView(context: Context) -> TraitView {
+        let view = TraitView()
+        updateUIView(view, context: context)
+        return view
+    }
+
+    func updateUIView(_ view: TraitView, context: Context) {
+        view.shellWindow = window
+        view.onChange = onVerticalBarChange
+    }
+
+    final class TraitView: UIView {
+        var shellWindow: Window?
+        var onChange: (@MainActor (Bool) -> Void)?
+        private var reported: Bool?
+
+        override init(frame: CGRect) {
+            super.init(frame: frame)
+            isUserInteractionEnabled = false
+            #if canImport(UIKit, _version: 9127.0.85)
+            if #available(iOS 27.1, *) {
+                registerForTraitChanges(UITraitCollection.systemTraitsAffectingVerticalBarEdge) { (view: TraitView, _) in
+                    view.report()
+                }
+            }
+            #endif
+        }
+
+        required init?(coder: NSCoder) {
+            super.init(coder: coder)
+        }
+
+        override func didMoveToWindow() {
+            super.didMoveToWindow()
+            shellWindow?.scene = window?.windowScene
+            report()
+        }
+
+        private func report() {
+            guard window != nil else { return }
+            let showsVerticalBar = Self.showsVerticalBar(traitCollection)
+            guard showsVerticalBar != reported else { return }
+            reported = showsVerticalBar
+            // After the current update: the change sets SwiftUI state.
+            Task { @MainActor [onChange] in onChange?(showsVerticalBar) }
+        }
+
+        /// The vertical bar arrived in iOS 27.1. The SDK check (UIKit 9127.0.85
+        /// is the iOS 27.1 SDK's) lets Xcode 27.0, whose UIKit lacks the API,
+        /// still build; there, and before iOS 27.1, it's never shown.
+        private static func showsVerticalBar(_ traits: UITraitCollection) -> Bool {
+            #if canImport(UIKit, _version: 9127.0.85)
+            if #available(iOS 27.1, *) {
+                return traits.verticalBarEdge != .unspecified
+            }
+            #endif
+            return false
+        }
+    }
+}
+

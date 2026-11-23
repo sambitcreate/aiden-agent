@@ -68,6 +68,11 @@ export function initDictationShortcut(trigger: () => void): void {
   handlers.set("dictation.toggle", trigger);
 }
 
+/** Called once at startup with the callback that toggles the floating Quick Chat window. */
+export function initQuickChatShortcut(trigger: () => void): void {
+  handlers.set("quickChat.toggle", trigger);
+}
+
 /** Called once at startup with the callback that opens the in-window Aiden dock. */
 export function initAssistantShortcut(trigger: () => void): void {
   handlers.set("assistant.open", trigger);
@@ -83,6 +88,11 @@ export function initShortcutBindingsChanged(
 /** Whether a global dictation shortcut (or the Linux portal hold shortcut) is live. */
 export function isDictationShortcutActive(): boolean {
   return registered.has("dictation.toggle") || activeLinuxDictationHoldShortcut();
+}
+
+/** Whether the global Quick Chat toggle shortcut is currently registered. */
+export function isQuickChatShortcutActive(): boolean {
+  return registered.has("quickChat.toggle");
 }
 
 function canonicalKeybindings(settings: AppSettings) {

@@ -41,6 +41,7 @@ export interface ChatTitleRenameResult {
   workspaceId?: string;
   title: string;
   updatedAt: number;
+  ephemeral?: true;
   changed: boolean;
 }
 
@@ -49,12 +50,14 @@ function titleUpdate(chat: {
   workspaceId?: string;
   title: string;
   updatedAt: number;
+  ephemeral?: true;
 }): Omit<ChatTitleRenameResult, "changed"> {
   return {
     chatId: chat.id,
     workspaceId: chat.workspaceId,
     title: chat.title,
     updatedAt: chat.updatedAt,
+    ...(chat.ephemeral ? { ephemeral: true as const } : {}),
   };
 }
 
@@ -63,6 +66,7 @@ function publishTitleUpdate(chat: {
   workspaceId?: string;
   title: string;
   updatedAt: number;
+  ephemeral?: true;
 }): Omit<ChatTitleRenameResult, "changed"> {
   const update = titleUpdate(chat);
   ipcMain.broadcast("chats:metadata-updated", update);

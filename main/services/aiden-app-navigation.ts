@@ -25,6 +25,18 @@ export class AidenAppNavigation {
     if (!AIDEN_APP_DESTINATIONS.includes(destination as Destination))
       throw new Error("Unknown Aiden destination.");
     const target = destination as Destination;
+    const status = await this.openPath(
+      `/settings?section=${target === "web-search" ? "websearch" : target}`,
+      owner,
+      signal,
+    );
+    return { status, destination: target };
+  }
+  async openPath(
+    path: string,
+    owner?: ChatGenerationOwner,
+    signal?: AbortSignal,
+  ): Promise<Result["status"]> {
     if (
       !owner ||
       owner.kind === "remote" ||
@@ -32,17 +44,17 @@ export class AidenAppNavigation {
       owner.isDestroyed() ||
       signal?.aborted
     )
-      return { status: "unavailable", destination: target };
+      return "unavailable";
     if (this.pending.size >= 16) throw new Error("Too many pending navigation requests.");
     const id = randomUUID();
-    return new Promise<Result>((resolve) => {
+    return new Promise<Result["status"]>((resolve) => {
       let unsubscribe = () => {};
       const finish = (status: Result["status"]) => {
         this.pending.delete(id);
         clearTimeout(timeout);
         unsubscribe();
         signal?.removeEventListener("abort", abort);
-        resolve({ status, destination: target });
+        resolve(status);
       };
       const abort = () => finish("unavailable");
       const timeout = setTimeout(abort, 5000);
@@ -54,10 +66,7 @@ export class AidenAppNavigation {
         return;
       }
       try {
-        owner.send("app:navigate", {
-          path: `/settings?section=${target === "web-search" ? "websearch" : target}`,
-          requestId: id,
-        });
+        owner.send("app:navigate", { path, requestId: id });
       } catch {
         abort();
       }

@@ -69,6 +69,7 @@ struct AidenWorkspaceSettingsView: View {
 
                 Section {
                     Toggle("Use memory", isOn: $memoryEnabled)
+                        .aidenSwitchStyle()
                 } header: {
                     Text("Memory")
                 } footer: {

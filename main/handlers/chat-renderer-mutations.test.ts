@@ -55,6 +55,8 @@ async function fixture(
     busyChats?: ReadonlySet<string>;
     workspaces?: Record<string, Partial<Workspace>>;
     designModeEnabled?: boolean;
+    assertChatAccess?: (event: IpcMainInvokeEvent, chatId: string) => void;
+    onChatRemoved?: (event: IpcMainInvokeEvent, chatId: string) => void;
   } = {},
 ) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-renderer-chat-mutations-"));
@@ -149,6 +151,8 @@ async function fixture(
     skillRegistry: { resolveFresh: async () => assert.fail("no skill is invoked here") },
     designModeEnabled: () => options.designModeEnabled ?? true,
     broadcastDesignModeChanged: (change) => broadcasts.push(change),
+    ...(options.assertChatAccess ? { assertChatAccess: options.assertChatAccess } : {}),
+    ...(options.onChatRemoved ? { onChatRemoved: options.onChatRemoved } : {}),
   });
   const handlers = new Map<string, Handler>([
     ["chats:rename", rendererChats.rename as Handler],
@@ -390,4 +394,36 @@ test("a rename and a design mode change racing on one chat both land", async (t)
   const stored = await f.chatStore.get("regular-chat");
   assert.deepEqual([stored?.title, stored?.designMode], ["Pricing page", true]);
   assert.deepEqual(f.broadcasts, [{ chatId: "regular-chat", designMode: true }], "the change carries no title to undo the rename");
+});
+
+test("assertChatAccess blocks unauthorized remove and appendMessage and onChatRemoved fires on authorized delete", async (t) => {
+  const allowed = new Set(["owned-chat"]);
+  const removed: string[] = [];
+  const f = await fixture(t, {
+    assertChatAccess: (_event, chatId) => {
+      if (!allowed.has(chatId)) {
+        throw new Error("Unauthorized Quick Chat conversation access.");
+      }
+    },
+    onChatRemoved: (_event, chatId) => {
+      removed.push(chatId);
+    },
+  });
+  await f.chatStore.create({ id: "owned-chat", title: "Owned" });
+
+  await assert.rejects(
+    f.invoke("chats:remove", "regular-chat"),
+    /Unauthorized Quick Chat conversation access/u,
+  );
+  assert.ok(await f.chatStore.get("regular-chat"), "unauthorized remove must leave chat untouched");
+
+  await assert.rejects(
+    f.invoke("chats:appendMessage", "regular-chat", { role: "user", content: "hi" }, { turnId: "t-1" }),
+    /Unauthorized Quick Chat conversation access/u,
+  );
+  assert.equal((await f.chatStore.get("regular-chat"))?.messages.length, 0);
+
+  await f.invoke("chats:remove", "owned-chat");
+  assert.equal(await f.chatStore.get("owned-chat"), null);
+  assert.deepEqual(removed, ["owned-chat"]);
 });

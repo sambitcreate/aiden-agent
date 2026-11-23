@@ -1,0 +1,72 @@
+/* Floating Chat Starter (Quick Chat) surface styles.
+ * Uses only Aiden semantic design tokens and shared motion variables.
+ */
+
+html,
+body,
+#root {
+  background: transparent;
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+}
+
+.qc-drag-region {
+  -webkit-app-region: drag;
+}
+
+.qc-no-drag {
+  -webkit-app-region: no-drag;
+}
+
+@keyframes qc-starter-enter {
+  from {
+    opacity: 0;
+    transform: translateY(6px) scale(0.985);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes qc-modal-enter {
+  from {
+    opacity: 0.72;
+    transform: translateY(10px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.qc-starter-card {
+  animation: qc-starter-enter var(--motion-duration) var(--motion-easing) both;
+}
+
+.qc-modal-card {
+  animation: qc-modal-enter var(--motion-large-duration) var(--motion-large-easing) both;
+}
+
+:root[data-reduce-motion="true"] .qc-starter-card,
+:root[data-reduce-motion="true"] .qc-modal-card {
+  animation: none;
+}
+
+/* Textarea inside the floating composer keeps resting borders with zero accent rings. */
+.qc-textarea {
+  resize: none;
+  border: 0;
+  outline: none;
+  box-shadow: none;
+  background: transparent;
+}
+
+.qc-textarea:focus,
+.qc-textarea:focus-visible {
+  outline: none;
+  box-shadow: none;
+}

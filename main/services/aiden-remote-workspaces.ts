@@ -249,6 +249,10 @@ export class AidenRemoteWorkspaceService {
       clone?: WorkspaceIntakeService["clone"];
       /** The global approval mode the projected access tier reads under; Ask when absent. */
       approvalMode?: () => ApprovalMode | Promise<ApprovalMode>;
+      /** Optional predicate hiding local-only workspaces on single-item lookups (e.g., an ephemeral floating chat's private folder). */
+      isWorkspaceHidden?: (workspace: Workspace) => boolean | Promise<boolean>;
+      /** Optional batch visibility filter for `list()` so callers avoid N+1 per-workspace lookups. */
+      filterVisibleWorkspaces?: (workspaces: readonly Workspace[]) => Workspace[] | Promise<Workspace[]>;
     },
   ) {
     this.idempotency = options.idempotency ?? new AidenIdempotencyLedger();
@@ -280,12 +284,24 @@ export class AidenRemoteWorkspaceService {
 
   async list(): Promise<{ workspaces: AidenRemoteWorkspaceProjection[] }> {
     const [workspaces, mode] = await Promise.all([this.options.application.list(), this.globalMode()]);
-    return { workspaces: workspaces.map((workspace) => projectAidenRemoteWorkspace(workspace, mode)) };
+    let visible: Workspace[];
+    if (this.options.filterVisibleWorkspaces) {
+      visible = await this.options.filterVisibleWorkspaces(workspaces);
+    } else if (this.options.isWorkspaceHidden) {
+      visible = [];
+      for (const workspace of workspaces) {
+        if (await this.options.isWorkspaceHidden(workspace)) continue;
+        visible.push(workspace);
+      }
+    } else {
+      visible = workspaces;
+    }
+    return { workspaces: visible.map((workspace) => projectAidenRemoteWorkspace(workspace, mode)) };
   }
 
   async get(workspaceId: string): Promise<AidenRemoteWorkspaceProjection> {
     const workspace = await this.options.application.get(safeWorkspaceId(workspaceId));
-    if (!workspace) {
+    if (!workspace || (this.options.isWorkspaceHidden && (await this.options.isWorkspaceHidden(workspace)))) {
       throw new AidenRemoteServiceError("not_found", "This Aiden workspace no longer exists.", 404);
     }
     return projectAidenRemoteWorkspace(workspace, await this.globalMode());
@@ -433,7 +449,7 @@ export class AidenRemoteWorkspaceService {
   ): Promise<AidenRemoteWorkspaceProjection> {
     const id = safeWorkspaceId(workspaceId);
     const current = await this.options.application.get(id);
-    if (!current) {
+    if (!current || (this.options.isWorkspaceHidden && (await this.options.isWorkspaceHidden(current)))) {
       throw new AidenRemoteServiceError("not_found", "This Aiden workspace no longer exists.", 404);
     }
     requireWorkspaceRevision(expectedRevision, current);
@@ -448,7 +464,7 @@ export class AidenRemoteWorkspaceService {
   async remove(workspaceId: string, expectedRevision: string): Promise<void> {
     const id = safeWorkspaceId(workspaceId);
     const current = await this.options.application.get(id);
-    if (!current) {
+    if (!current || (this.options.isWorkspaceHidden && (await this.options.isWorkspaceHidden(current)))) {
       throw new AidenRemoteServiceError("not_found", "This Aiden workspace no longer exists.", 404);
     }
     requireWorkspaceRevision(expectedRevision, current);

@@ -61,6 +61,13 @@ struct AidenSettledMessageRows: View, Equatable {
     var onVisualPrompt: ((String) -> Void)? = nil
     /// The Mac announces `chat-browser-recordings-v1` (revision 46).
     var browserRecordingsAvailable = false
+    /// Hears where each row is, by row ID, in the content's space
+    /// (`AidenTranscriptRowSpace`), and
+    /// nil when it leaves, so the chat can keep the reader's place
+    /// (`AidenReadingPlace`). Each row reports for itself: the rows sit inside
+    /// this equatable view, which a scroll view's own target tracking doesn't
+    /// see into. Excluded from equality.
+    var onRowFrame: ((String, CGRect?) -> Void)? = nil
 
     static func == (lhs: Self, rhs: Self) -> Bool {
         (lhs.onAskAbout == nil) == (rhs.onAskAbout == nil) &&
@@ -93,6 +100,10 @@ struct AidenSettledMessageRows: View, Equatable {
             let index = row.index
             let message = chat.messages[index]
             messageRow(message, at: index, forkActions: forkActions[message.id] ?? [])
+                .onGeometryChange(for: CGRect.self) { $0.frame(in: .named(AidenTranscriptRowSpace.name)) } action: {
+                    onRowFrame?(row.id, $0)
+                }
+                .onDisappear { onRowFrame?(row.id, nil) }
             // The summary sits in model context right after the last copied message.
             if let forkSummary, forkSummary.afterMessageId == message.id {
                 forkSummaryCard(forkSummary)
@@ -634,4 +645,11 @@ struct AidenVoiceInputLabel: View {
             .accessibilityElement(children: .ignore)
             .accessibilityLabel(Text("Sent by voice"))
     }
+}
+
+/// The transcript's content, top to bottom, unmoved by scrolling: rows report
+/// their frames in it, so a frame changes only when layout does, and the
+/// reading place is read against the scroll offset when a scroll settles.
+enum AidenTranscriptRowSpace {
+    static let name = "aiden.transcript.rows"
 }

@@ -84,6 +84,7 @@ enum AidenMarkdownDocument {
 /// so a finished reply keeps its exact position when it settles.
 struct AidenMarkdownView: View {
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.aidenPalette) private var palette
     @Environment(\.aidenReduceMotion) private var reduceMotion
     @Environment(\.aidenLowPowerMode) private var lowPowerMode
     let content: String
@@ -120,7 +121,7 @@ struct AidenMarkdownView: View {
                             .equatable()
                     }
                 }
-                    .markdownTheme(.aidenChat(colorScheme: colorScheme))
+                    .markdownTheme(.aidenChat(colorScheme: colorScheme, palette: palette))
                     .markdownImageProvider(AidenMarkdownNoNetworkImageProvider())
                     .markdownTextStyle {
                         ForegroundColor(.primary)
@@ -201,16 +202,23 @@ private struct AidenMarkdownNoNetworkImageProvider: ImageProvider {
     }
 }
 
-private extension MarkdownUI.Theme {
+extension MarkdownUI.Theme {
     /// The text size stays 16 here on purpose. MarkdownUI scales whatever size the
     /// theme gives it with the reader's text size (a `@ScaledMetric` relative to
     /// `.body`), so handing it an already scaled size would scale it twice.
-    static func aidenChat(colorScheme: ColorScheme) -> MarkdownUI.Theme {
+    ///
+    /// A link is the theme's accent and always underlined: an ink accent sits
+    /// close to the body text, so colour alone can't mark a link (WCAG 1.4.1).
+    static func aidenChat(colorScheme: ColorScheme, palette: AidenPalette) -> MarkdownUI.Theme {
         MarkdownUI.Theme.gitHub
             .text {
                 ForegroundColor(.primary)
                 BackgroundColor(nil)
                 FontSize(AidenMarkdownMetrics.baseBodySize)
+            }
+            .link {
+                ForegroundColor(palette.accent)
+                UnderlineStyle(.single)
             }
             .code {
                 FontFamilyVariant(.monospaced)

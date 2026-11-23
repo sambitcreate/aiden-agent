@@ -436,8 +436,10 @@ struct AidenBotAdvancedView: View {
                 Toggle(isOn: optionBinding(id: option.id, available: option.available, keyPath: \.fileScopeIDs)) {
                     Text(optionTitle(option.label, available: option.available))
                 }
+                    .aidenSwitchStyle()
             }
             Toggle("Run commands", isOn: shellBinding(catalog))
+                .aidenSwitchStyle()
                 .disabled(!catalog.shellAvailable && !(draft?.customAccess.shellEnabled ?? false))
         } header: {
             Text("Files and commands")
@@ -458,6 +460,7 @@ struct AidenBotAdvancedView: View {
                     Toggle(isOn: optionBinding(id: option.id, available: option.available, keyPath: keyPath)) {
                         Text(aidenBotCapabilityOptionTitle(option, isSelected: selected.contains(option.id)))
                     }
+                        .aidenSwitchStyle()
                 }
             } header: {
                 Text(title)
@@ -1550,13 +1553,16 @@ struct AidenBotMessagingSection: View {
                     Toggle("Can message other Bots", isOn: Binding(
                         get: { aidenBotMessagingSingleSwitch(value) }, set: { save(receive: $0, send: $0) }
                     ))
+                        .aidenSwitchStyle()
                 } else {
                     Toggle("Other Bots can message \(bot.name)", isOn: Binding(
                         get: { value.receive }, set: { save(receive: $0) }
                     ))
+                        .aidenSwitchStyle()
                     Toggle("\(bot.name) can message other Bots", isOn: Binding(
                         get: { value.send }, set: { save(send: $0) }
                     ))
+                        .aidenSwitchStyle()
                 }
             }
             if let saveError { Text(saveError).foregroundStyle(.secondary) }

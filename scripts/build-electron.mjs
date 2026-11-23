@@ -82,6 +82,13 @@ export function electronBuildOptions({ production = false, analytics } = {}) {
       format: "cjs",
       external: ["electron"],
     },
+    {
+      ...common,
+      entryPoints: ["renderer/preload-quick-chat.ts"],
+      outfile: "build/preload/preload-quick-chat.cjs",
+      format: "cjs",
+      external: ["electron"],
+    },
   ];
 }
 

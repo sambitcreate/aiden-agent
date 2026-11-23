@@ -364,6 +364,13 @@ async function cancellationHost() {
     "./ask-user-question-coordinator.js": { AskUserQuestionCoordinator: UnusedService },
     "./workspace-files-touched.js": { createWorkspaceFilesTouchedNotifier: () => () => {} },
     "./acp/scratch-directory.js": { createAcpScratchDirectories: () => ({ directoryFor: async () => "", forget: async () => {} }) },
+    "./desktop-stream-handoff.js": {
+      DesktopLiveStreamAccumulator: class {
+        begin() {}
+        finish() {}
+        snapshotForChat() { return null; }
+      },
+    },
   };
   const bundle = await build({
     entryPoints: [fileURLToPath(new URL("./llm-client.ts", import.meta.url))],
