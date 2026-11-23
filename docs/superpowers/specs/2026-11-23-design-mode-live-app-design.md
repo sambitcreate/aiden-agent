@@ -118,8 +118,8 @@ Without Node, design mode still opens. Notes, shapes, flows, images and existing
   - The 16 MiB file cap stays.
 
 **View state leaves the document**
-- **Renderer:** each chat's current page and per-page viewport live in a per-chat view store (`localStorage` key `aiden.design.view.<workspaceId>.<chatId>`). Panning, zooming and switching pages never call `change()`, so they never save or cause conflicts. Undo stops tracking the active page.
-- **Main:** keeps an in-memory `DesignCanvasViews` map from chatId to `{pageId, viewport, size}`. The renderer feeds it through a debounced `designCanvas:view` IPC.
+- **Owner:** main owns each chat's current page and per-page viewports, and persists them per workspace in `userData/design-canvas-views/<workspaceId>.json`, separate from the canvas document. *(Revised 2026-11-23 after review: an earlier draft kept them in renderer `localStorage` as well, and the two copies raced on mount, chat switch, restart and attach.)* Panning, zooming and switching pages never call `change()`, so they never save or cause conflicts. Undo stops tracking the active page.
+- **Main:** `DesignCanvasViews` holds, per chat, `{pageId, viewports, focusId, mounted, size}`. The renderer reads it on mount (`designCanvas:view:get`) and feeds it through a debounced `designCanvas:view` IPC.
 - Tools read the view from that map:
   - `pageOf` defaults to the chat's view page, then `chatPages[chatId]`, then the first page.
   - `canvasView`, `canvasPromptLine` and the `onScreen` check use the map.
@@ -577,6 +577,7 @@ An adversarial review checked this spec against the code and Electron 43's typin
   - **Consent:** before the first start for each workspace + app root, the person sees one consent card naming the resolved command and the script's text. Aiden stores a hash of the text and asks again whenever it changes. After that, starts, stops and restarts need no per-call approval (decision 4).
   - **Script:** `design_app` may only use the script the person confirmed. `choose` changes it only through the same card.
   - **Permission:** every start, the person's toggle included, is refused when the workspace permission is `none` (workspace permissions are `full | ask | none`, `main/services/types.ts`). *(Round 2.)*
+  - **Round 3:** the fingerprint also covers the `pre<script>` and `post<script>` text and the app root's `.npmrc`, `.yarnrc.yml` and `bunfig.toml`. The consent card says plainly that it approves the launch command and that the dev server then runs the app's own code: the consent does not cover what that code does.
   - **What the consent covers** *(round 2)*: the fingerprint is a hash of the script text plus the app root's framework config files (`vite.config.*`, `next.config.*`, `astro.config.*`, `react-router.config.*`, `remix.config.*`) and its lockfile, in the style of the MCP stdio launch fingerprints (`mcp-stdio-approvals.ts`). Any change asks again.
   - **Recorded exception:** `workspace-tool-approval.ts` records it as "per-call approval skipped after workspace consent".
 - **S3. Null-frame requests fail closed (3a; blocker).** Electron's `OnBeforeRequestListenerDetails` has no initiator, and `frame` is null after a frame navigates or is destroyed (keepalive fetch from a removed iframe, beacon on pagehide, service-worker fetch). On the default session, every non-loopback request with a null `frame` is cancelled. The only exceptions are on an audited allowlist of Aiden's own frameless traffic, with tests. Test rows: service-worker fetch, pagehide beacon, keepalive fetch after removing the iframe, WebSocket.
