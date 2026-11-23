@@ -4511,16 +4511,10 @@ test("GitService managed creation suppresses post-checkout hooks and still prese
     wrapper,
     `#!/usr/bin/env node
 import { spawnSync } from "node:child_process";
-import { existsSync, unlinkSync, writeFileSync } from "node:fs";
+import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 const args = process.argv.slice(2);
-const state = ${JSON.stringify(path.join(root, "fail-next-rev-parse"))};
-if (existsSync(state) && args[0] === "rev-parse" && args.includes("--git-dir")) {
-  unlinkSync(state);
-  process.stderr.write("simulated post-add setup failure\\n");
-  process.exit(1);
-}
 const result = spawnSync("/usr/bin/git", args, {
   cwd: process.cwd(),
   encoding: "utf8",
@@ -4534,7 +4528,6 @@ if (args[0] === "worktree" && args[1] === "add" && result.status === 0) {
   const target = args[separator + 1];
   writeFileSync(${JSON.stringify(lateTargetRecord)}, target);
   writeFileSync(join(target, "late-sentinel.txt"), "late data must survive\\n");
-  writeFileSync(state, "fail next worktree rev-parse\\n");
 }
 process.exit(result.status ?? 1);
 `,
@@ -4552,6 +4545,11 @@ printf 'hook data must survive\\n' > "$checkout/hook-sentinel.txt"
   );
   await git(repository, ["config", "core.hooksPath", hooks]);
   const service = new GitService({ cacheTtlMs: 0, gitBinary: wrapper });
+  // Simulate a post-add setup failure so rollback must inspect the new checkout.
+  (service as unknown as { persistWorktreeOwnership: () => Promise<void> }).persistWorktreeOwnership =
+    async () => {
+      throw new GitServiceError("command_failed", "simulated post-add setup failure");
+    };
 
   await assert.rejects(
     service.createWorktree(repository, root, "codex/hook-sentinel"),
@@ -4798,11 +4796,11 @@ test("GitService shares cold consumers and validates discovery without warm subp
   const { commands } = observeGitCommands(service);
   const results = await Promise.all(Array.from({ length: 10 }, () => service.info(repository)));
   assert.ok(results.every(info => info.branch === "main" && info.uncommitted === 0));
-  assert.equal(commands.length, 6, "one discovery and status flight for all consumers");
+  assert.equal(commands.length, 4, "one discovery and status flight for all consumers");
   commands.length = 0;
   for (let i = 0; i < 10; i++) assert.equal((await service.info(repository)).branch, "main");
   assert.equal(commands.length, 0, "warm reads validate filesystem identity without Git processes");
-  t.diagnostic("10 concurrent cold info reads: 6 commands; 10 sequential warm info reads: 0 commands (baseline warm: 30)");
+  t.diagnostic("10 concurrent cold info reads: 4 commands; 10 sequential warm info reads: 0 commands (baseline warm: 30)");
 });
 
 test("GitService shares info with branches but keeps external status freshness", async (t) => {
@@ -4815,7 +4813,7 @@ test("GitService shares info with branches but keeps external status freshness",
   commands.length = 0;
   await fs.writeFile(path.join(repository, "external.txt"), "external edit\n");
   assert.equal((await service.info(repository)).uncommitted, 1);
-  assert.equal(commands.filter(args => args[0] === "rev-parse").length, 3);
+  assert.equal(commands.filter(args => args[0] === "rev-parse").length, 1);
   assert.equal(commands.filter(args => args[0] === "status").length, 1);
   await git(repository, ["switch", "-c", "external-ref"]);
   assert.equal((await service.info(repository)).branch, "external-ref");
@@ -5048,7 +5046,7 @@ test("GitService keeps the default freshness deadline and invalidates linked con
   now += 1001;
   await fs.writeFile(path.join(repository, "external-freshness.txt"), "changed\n");
   assert.equal((await service.info(repository)).uncommitted, 1);
-  assert.equal(commands.length, 6, "the existing one-second TTL still expires discovery and status");
+  assert.equal(commands.length, 4, "the existing one-second TTL still expires discovery and status");
   await service.createBranch(repository, "fresh-mutation");
   assert.ok((await service.branches(linked)).branches.includes("fresh-mutation"), "common-directory mutation invalidates a linked consumer immediately");
 });
@@ -5062,7 +5060,7 @@ test("GitService retries config and linked common-directory changes during disco
   let moved = false;
   runner.run = async (cwd, args, options) => {
     const result = await original(cwd, args, options);
-    if (args[0] === "rev-parse" && args[1] === "--show-toplevel" && !moved) {
+    if (args[0] === "rev-parse" && args.includes("--show-toplevel") && !moved) {
       moved = true;
       await git(repository, ["config", "core.worktree", other]);
     }
@@ -5082,15 +5080,10 @@ test("GitService retries config and linked common-directory changes during disco
   const linkedService = new GitService({ cacheTtlMs: 60_000 });
   const linkedObserver = observeGitCommands(linkedService);
   const linkedRun = linkedObserver.runner.run;
-  const initialTopLevel = gitReadGate();
   let switched = false;
   linkedObserver.runner.run = async (cwd, args, options) => {
     const result = await linkedRun(cwd, args, options);
-    if (args[0] === "rev-parse" && args[1] === "--show-toplevel") initialTopLevel.resolve();
-    if (args[0] === "rev-parse" && args[1] === "--git-common-dir" && !switched) {
-      // Complete the sibling discovery command before deliberately removing
-      // its pointer, so exactly one controlled failure drives the retry.
-      await initialTopLevel.promise;
+    if (args[0] === "rev-parse" && args.includes("--git-common-dir") && !switched) {
       switched = true;
       const pointer = path.join(admin, "commondir");
       await fs.rename(pointer, `${pointer}-old`);
@@ -5147,7 +5140,7 @@ test("GitService rejects late cache publications from a replaced root across ali
         if (kind === "branches") await oldInfoFinished.promise;
         held.resolve();
         await releaseOldRead.promise;
-      } else if (readingNewRoot && args[0] === "rev-parse" && args[1] === "--git-common-dir") {
+      } else if (readingNewRoot && args[0] === "rev-parse" && args.includes("--git-common-dir")) {
         releaseOldRead.resolve();
         await oldProofBlocked.promise;
       }

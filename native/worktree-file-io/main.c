@@ -5,13 +5,16 @@
 #include <dirent.h>
 #include <fcntl.h>
 #include <inttypes.h>
+#include <signal.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/clonefile.h>
 #include <sys/file.h>
 #include <sys/stat.h>
 #include <sys/types.h>
+#include <sys/xattr.h>
 #include <unistd.h>
 
 #ifndef O_CLOEXEC
@@ -630,7 +633,368 @@ static int save_file(int argc, char **argv) {
   return ferror(stdout) ? fail("io_failed") : 0;
 }
 
+#define MAX_PROVISION_PATHS 4096U
+#define MAX_PROVISION_STDIN_BYTES (MAX_PROVISION_PATHS * (MAX_RELATIVE_PATH + 1U))
+#define MAX_PROVISION_SYNC_DIRS 64U
+
+static volatile sig_atomic_t provision_interrupted = 0;
+
+static void handle_provision_sigterm(int sig) {
+  (void)sig;
+  provision_interrupted = 1;
+}
+
+static int same_provision_source(const struct stat *before, const struct stat *after) {
+  return same_source(before, after) &&
+         before->st_mode == after->st_mode &&
+         before->st_flags == after->st_flags &&
+         before->st_ctimespec.tv_sec == after->st_ctimespec.tv_sec &&
+         before->st_ctimespec.tv_nsec == after->st_ctimespec.tv_nsec;
+}
+
+typedef struct {
+  dev_t dev;
+  ino_t ino;
+  int fd;
+} ProvisionSyncDir;
+
+static int provision_try_clone(int source, const struct stat *before,
+                               int target_parent, const struct stat *parent_stat,
+                               const char *target_leaf, mode_t mode,
+                               const char **error_out) {
+  /* Clone only when source is a plain regular file on the same APFS volume
+   * with no special mode bits, BSD flags, or extended attributes, and is
+   * owner-readable (so reopening the CLONE_NOOWNERCOPY temp fd succeeds). */
+  if (before->st_flags != 0 ||
+      (before->st_mode & 07000) != 0 ||
+      (before->st_mode & 0400) == 0 ||
+      before->st_dev != parent_stat->st_dev ||
+      flistxattr(source, NULL, 0, 0) != 0) {
+    return 0; /* fall back to read/write */
+  }
+  unsigned char nonce[16];
+  arc4random_buf(nonce, sizeof(nonce));
+  char suffix[sizeof(nonce) * 2 + 1];
+  for (size_t i = 0; i < sizeof(nonce); i++) snprintf(suffix + i * 2, 3, "%02x", nonce[i]);
+  char temporary[64];
+  snprintf(temporary, sizeof(temporary), ".aiden-prov-%s.tmp", suffix);
+
+  if (fclonefileat(source, target_parent, temporary,
+                   CLONE_NOFOLLOW | CLONE_NOOWNERCOPY) != 0) {
+    int err = errno;
+    if (err == EXDEV || err == ENOTSUP || err == EOPNOTSUPP ||
+        err == EINVAL || err == ENOSYS || err == EACCES || err == EPERM) {
+      return 0; /* fall back to read/write */
+    }
+    *error_out = "io_failed";
+    return -1;
+  }
+
+  int cloned = openat(target_parent, temporary,
+                      O_RDONLY | O_NONBLOCK | O_NOFOLLOW | O_CLOEXEC);
+  struct stat dst_stat, after;
+  /* Clear BSD flags BEFORE fchmod/unlink so a concurrent chflags uchg race on
+   * source never strands an immutable temp file inside the worktree. Also check
+   * flistxattr on cloned to catch concurrent setxattr between check and clone. */
+  int good = cloned >= 0 &&
+             fchflags(cloned, 0) == 0 &&
+             fstat(cloned, &dst_stat) == 0 &&
+             S_ISREG(dst_stat.st_mode) &&
+             dst_stat.st_nlink == 1 &&
+             dst_stat.st_size == before->st_size &&
+             flistxattr(cloned, NULL, 0, 0) == 0 &&
+             fchmod(cloned, mode) == 0 &&
+             fsync(cloned) == 0 &&
+             fstat(source, &after) == 0 &&
+             same_provision_source(before, &after);
+  if (cloned >= 0) close(cloned);
+  if (provision_interrupted) {
+    (void)unlinkat(target_parent, temporary, 0);
+    *error_out = "io_failed";
+    return -1;
+  }
+  if (!good) {
+    (void)unlinkat(target_parent, temporary, 0);
+    *error_out = "source_changed";
+    return -1;
+  }
+  if (renameatx_np(target_parent, temporary, target_parent, target_leaf,
+                   RENAME_EXCL) != 0) {
+    int err = errno;
+    (void)unlinkat(target_parent, temporary, 0);
+    *error_out = err == EEXIST ? "destination_exists" : "unsafe_destination";
+    return -1;
+  }
+  return 1;
+}
+
+/* provision <srcRoot> <srcDev> <srcIno> <dstRoot> <dstDev> <dstIno> <totalByteLimit>
+ * Batch-copy NUL-delimited relative paths read from stdin into a freshly
+ * created managed worktree. Preserves descriptor-relative no-follow traversal,
+ * regular-file checks, cumulative byte limits, source-change checks, and
+ * exclusive destination creation, while avoiding per-file process spawns,
+ * SHA-256 hashing, and per-file fsync barriers (using APFS CoW clones when
+ * eligible and syncing each unique destination parent directory once). */
+static int provision_files(int argc, char **argv) {
+  uint64_t source_device, source_inode, target_device, target_inode, total_limit;
+  if (argc != 9 ||
+      !decimal(argv[3], &source_device) || !decimal(argv[4], &source_inode) ||
+      !decimal(argv[6], &target_device) || !decimal(argv[7], &target_inode) ||
+      !decimal(argv[8], &total_limit) || total_limit > MAX_FILE_BYTES) {
+    return fail("invalid_input");
+  }
+  if (source_device == target_device && source_inode == target_inode) {
+    return fail("unsafe_source");
+  }
+
+  /* Catch SIGTERM gracefully so an aborted batch unlinks any partial temp/leaf
+   * and always emits `p` for every file already installed on disk. */
+  struct sigaction sa;
+  memset(&sa, 0, sizeof(sa));
+  sa.sa_handler = handle_provision_sigterm;
+  sigemptyset(&sa.sa_mask);
+  sa.sa_flags = 0;
+  (void)sigaction(SIGTERM, &sa, NULL);
+
+  /* Read NUL-delimited relative paths from stdin with strict size/count bounds.
+   * Allow reading 1 byte past MAX_PROVISION_STDIN_BYTES so exact-limit input
+   * cleanly observes EOF instead of rejecting on buffer full. */
+  const size_t max_read_cap = (size_t)MAX_PROVISION_STDIN_BYTES + 1U;
+  size_t capacity = 4096;
+  size_t length = 0;
+  char *stdin_buf = malloc(capacity);
+  if (stdin_buf == NULL) return fail("io_failed");
+  for (;;) {
+    if (provision_interrupted) { free(stdin_buf); return fail("io_failed"); }
+    if (length == capacity) {
+      if (capacity >= max_read_cap) {
+        free(stdin_buf);
+        return fail("invalid_input");
+      }
+      size_t next_cap = capacity * 2;
+      if (next_cap > max_read_cap) next_cap = max_read_cap;
+      char *grown = realloc(stdin_buf, next_cap);
+      if (grown == NULL) { free(stdin_buf); return fail("io_failed"); }
+      stdin_buf = grown;
+      capacity = next_cap;
+    }
+    ssize_t got = read(STDIN_FILENO, stdin_buf + length, capacity - length);
+    if (got < 0 && errno == EINTR) continue;
+    if (got < 0) { free(stdin_buf); return fail("io_failed"); }
+    if (got == 0) break;
+    length += (size_t)got;
+    if (length > MAX_PROVISION_STDIN_BYTES) {
+      free(stdin_buf);
+      return fail("invalid_input");
+    }
+  }
+
+  const char **paths = NULL;
+  size_t path_count = 0;
+  if (length > 0) {
+    if (stdin_buf[length - 1] != '\0') {
+      free(stdin_buf);
+      return fail("invalid_input");
+    }
+    paths = malloc(MAX_PROVISION_PATHS * sizeof(const char *));
+    if (paths == NULL) { free(stdin_buf); return fail("io_failed"); }
+    size_t cursor = 0;
+    while (cursor < length) {
+      if (path_count >= MAX_PROVISION_PATHS) {
+        free(paths); free(stdin_buf);
+        return fail("invalid_input");
+      }
+      const char *entry = stdin_buf + cursor;
+      size_t entry_len = strlen(entry);
+      if (!valid_relative(entry)) {
+        free(paths); free(stdin_buf);
+        return fail("invalid_input");
+      }
+      paths[path_count++] = entry;
+      cursor += entry_len + 1;
+    }
+  }
+
+  int source_root = open_root(argv[2], source_device, source_inode);
+  if (source_root < 0) {
+    free(paths); free(stdin_buf);
+    return fail("unsafe_source");
+  }
+  int target_root = open_root(argv[5], target_device, target_inode);
+  if (target_root < 0) {
+    close(source_root); free(paths); free(stdin_buf);
+    return fail("unsafe_destination");
+  }
+
+  ProvisionSyncDir sync_dirs[MAX_PROVISION_SYNC_DIRS];
+  size_t sync_dir_count = 0;
+  uint64_t total_bytes = 0;
+  const char *error_reason = NULL;
+  unsigned char buffer[BUFFER_BYTES];
+
+  for (size_t i = 0; i < path_count; i++) {
+    if (provision_interrupted) { error_reason = "io_failed"; goto cleanup; }
+    const char *relative = paths[i];
+    char source_leaf[MAX_RELATIVE_PATH + 1];
+    int source_parent = parent_at(source_root, relative, 0, source_leaf);
+    if (source_parent < 0) { error_reason = "unsafe_source"; goto cleanup; }
+    if (test_checkpoint('S') != 0) {
+      close(source_parent); error_reason = "io_failed"; goto cleanup;
+    }
+    int source = openat(source_parent, source_leaf,
+                        O_RDONLY | O_NONBLOCK | O_NOFOLLOW | O_CLOEXEC);
+    close(source_parent);
+    struct stat before, after;
+    if (source < 0 || fstat(source, &before) != 0 || !S_ISREG(before.st_mode) ||
+        before.st_size < 0) {
+      if (source >= 0) close(source);
+      error_reason = "unsafe_source";
+      goto cleanup;
+    }
+    uint64_t remaining = total_limit - total_bytes;
+    if ((uint64_t)before.st_size > remaining) {
+      close(source);
+      error_reason = "too_many_bytes";
+      goto cleanup;
+    }
+
+    char target_leaf[MAX_RELATIVE_PATH + 1];
+    int target_parent = parent_at(target_root, relative, 1, target_leaf);
+    if (target_parent < 0) { close(source); error_reason = "unsafe_destination"; goto cleanup; }
+    if (test_checkpoint('D') != 0) {
+      close(source); close(target_parent); error_reason = "io_failed"; goto cleanup;
+    }
+    struct stat parent_stat;
+    if (fstat(target_parent, &parent_stat) != 0 || !S_ISDIR(parent_stat.st_mode)) {
+      close(source); close(target_parent); error_reason = "unsafe_destination"; goto cleanup;
+    }
+
+    struct stat existing;
+    if (fstatat(target_parent, target_leaf, &existing, AT_SYMLINK_NOFOLLOW) == 0) {
+      close(source); close(target_parent); error_reason = "destination_exists"; goto cleanup;
+    }
+    if (errno != ENOENT) {
+      close(source); close(target_parent); error_reason = "unsafe_destination"; goto cleanup;
+    }
+    if (provision_interrupted) {
+      close(source); close(target_parent); error_reason = "io_failed"; goto cleanup;
+    }
+
+    mode_t mode = before.st_mode & 0777;
+    uint64_t copied = 0;
+    const char *clone_err = NULL;
+    int cloned = provision_try_clone(source, &before, target_parent, &parent_stat,
+                                     target_leaf, mode, &clone_err);
+    if (cloned < 0) {
+      close(source); close(target_parent); error_reason = clone_err ? clone_err : "io_failed"; goto cleanup;
+    }
+    if (cloned == 1) {
+      copied = (uint64_t)before.st_size;
+      close(source);
+    } else {
+      int target = openat(target_parent, target_leaf,
+                          O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0600);
+      if (target < 0) {
+        int err = errno;
+        close(source); close(target_parent);
+        error_reason = err == EEXIST ? "destination_exists" : "unsafe_destination";
+        goto cleanup;
+      }
+      int io_err = 0;
+      int src_err = 0;
+      while (copied < (uint64_t)before.st_size) {
+        if (provision_interrupted) { io_err = 1; break; }
+        size_t amount = (uint64_t)before.st_size - copied < BUFFER_BYTES
+            ? (size_t)((uint64_t)before.st_size - copied) : BUFFER_BYTES;
+        ssize_t received = read(source, buffer, amount);
+        if (received < 0 && errno == EINTR) continue;
+        if (received <= 0) { src_err = 1; break; }
+        size_t written = 0;
+        while (written < (size_t)received) {
+          if (provision_interrupted) { io_err = 1; break; }
+          ssize_t count = write(target, buffer + written, (size_t)received - written);
+          if (count < 0 && errno == EINTR) continue;
+          if (count <= 0) { io_err = 1; break; }
+          written += (size_t)count;
+        }
+        if (io_err) break;
+        copied += (uint64_t)received;
+      }
+      if (!io_err && !src_err &&
+          (fstat(source, &after) != 0 || !same_provision_source(&before, &after) ||
+           copied != (uint64_t)before.st_size)) {
+        src_err = 1;
+      }
+      if (!io_err && !src_err && (fchmod(target, mode) != 0 || fsync(target) != 0)) io_err = 1;
+      if (!io_err && !src_err && provision_interrupted) io_err = 1;
+      close(target);
+      close(source);
+      if (io_err || src_err) {
+        (void)unlinkat(target_parent, target_leaf, 0);
+        close(target_parent);
+        error_reason = io_err ? "io_failed" : "source_changed";
+        goto cleanup;
+      }
+    }
+
+    total_bytes += copied;
+    /* Report each installed file immediately (even if SIGTERM just arrived) so
+     * the caller's rollback set matches every file installed on disk 1:1. */
+    fprintf(stdout, "p %zu %" PRIu64 "\n", i, copied);
+    if (fflush(stdout) != 0 || ferror(stdout)) {
+      close(target_parent);
+      error_reason = "io_failed";
+      goto cleanup;
+    }
+
+    /* Deduplicate parent directory fsyncs across the batch while bounding open FDs. */
+    int tracked = 0;
+    for (size_t d = 0; d < sync_dir_count; d++) {
+      if (sync_dirs[d].dev == parent_stat.st_dev && sync_dirs[d].ino == parent_stat.st_ino) {
+        tracked = 1;
+        break;
+      }
+    }
+    if (tracked) {
+      close(target_parent);
+    } else if (sync_dir_count < MAX_PROVISION_SYNC_DIRS) {
+      sync_dirs[sync_dir_count].dev = parent_stat.st_dev;
+      sync_dirs[sync_dir_count].ino = parent_stat.st_ino;
+      sync_dirs[sync_dir_count].fd = target_parent;
+      sync_dir_count++;
+    } else {
+      int synced = fsync(target_parent) == 0;
+      close(target_parent);
+      if (!synced) { error_reason = "io_failed"; goto cleanup; }
+    }
+    if (provision_interrupted) { error_reason = "io_failed"; goto cleanup; }
+  }
+
+  for (size_t d = 0; d < sync_dir_count; d++) {
+    int synced = fsync(sync_dirs[d].fd) == 0;
+    close(sync_dirs[d].fd);
+    sync_dirs[d].fd = -1;
+    if (!synced && error_reason == NULL) error_reason = "io_failed";
+  }
+  sync_dir_count = 0;
+  if (error_reason != NULL) goto cleanup;
+
+  fprintf(stdout, "done\n");
+  if (fflush(stdout) != 0 || ferror(stdout)) error_reason = "io_failed";
+
+cleanup:
+  for (size_t d = 0; d < sync_dir_count; d++) {
+    if (sync_dirs[d].fd >= 0) close(sync_dirs[d].fd);
+  }
+  close(target_root);
+  close(source_root);
+  free(paths);
+  free(stdin_buf);
+  return error_reason ? fail(error_reason) : 0;
+}
+
 int main(int argc, char **argv) {
+  if (argc >= 2 && strcmp(argv[1], "provision") == 0) return provision_files(argc, argv);
   if (argc >= 2 && strcmp(argv[1], "save") == 0) return save_file(argc, argv);
   if (argc >= 2 && strcmp(argv[1], "list") == 0) return list_directory(argc, argv);
   if (argc >= 2 && strcmp(argv[1], "read") == 0) return editor_file(argc, argv, 0);

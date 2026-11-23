@@ -4,8 +4,12 @@ import {
   findReusableChatDraft,
   requestChatDraftComposerFocus,
   setChatDraftGitMode,
+  updateChatDraftWorktree,
   type ChatDraftGitMode,
+  type ChatDraftWorktree,
 } from "../lib/chat-draft";
+import { readChatDraftGitMemory, seedDraftWorktreeFromGitInfo } from "../lib/chat-draft-git-memory";
+import type { Workspace } from "../lib/types";
 import { Outlet, useNavigate, useRouter, useRouterState } from "@tanstack/react-router";
 import { historyNavigationAvailability } from "../lib/history-navigation";
 import { PairingRequestSheet } from "../components/remote-pairing-request-sheet";
@@ -21,13 +25,13 @@ import { mirrorNewChatModelToHost, persistModelSelection, subscribeHostNewChatMo
 import { useTheme } from "../lib/use-theme";
 import { useActiveWorkspace, WorkspaceProvider } from "../lib/workspace-context";
 import { WorkspaceTerminalProvider, useWorkspaceTerminal } from "../components/terminal-drawer";
-import { EnvironmentPanelProvider, useEnvironmentPanel } from "../components/environment-panel";
+import { EnvironmentPanelProvider, useEnvironmentPanelCore } from "../components/environment-panel";
 import { toast } from "../components/ui";
 import { RoutedBotPanelProvider, useBotPanelActions } from "./bots/bot-panel-context";
 import { botListLocation, environmentToggleTarget, isBotsPath } from "../lib/bot-routes";
 import { AssistantDock } from "../components/assistant/assistant-dock";
 import { LiveAppControlLayer } from "../components/assistant/live-app-control-layer";
-import { queryKeys } from "../lib/queries";
+import { queryKeys, upsertCreatedWorkspaceInCache } from "../lib/queries";
 import { goalSettleNotification, windowShowsChat } from "../lib/goal-notification";
 import type { GoalView } from "../shared/goal";
 import { subscribeGitQuerySync } from "../lib/git-query-sync";
@@ -92,7 +96,7 @@ function RootContent() {
   const navigate = useNavigate();
   const router = useRouter();
   const queryClient = useQueryClient();
-  const environmentPanel = useEnvironmentPanel();
+  const environmentPanel = useEnvironmentPanelCore();
   const botPanel = useBotPanelActions();
   const terminal = useWorkspaceTerminal();
   const capabilities = useAppCapabilities();
@@ -270,7 +274,12 @@ function RootContent() {
     async (
       workspaceId: string,
       initialText?: string,
-      options: { gitMode?: ChatDraftGitMode; attachments?: readonly Attachment[]; ephemeral?: boolean } = {},
+      options: {
+        gitMode?: ChatDraftGitMode;
+        worktree?: ChatDraftWorktree;
+        attachments?: readonly Attachment[];
+        ephemeral?: boolean;
+      } = {},
     ): Promise<string | undefined> => {
       if (appendReconciliationRequired) {
         toast.error("Reload Aiden before creating another chat.");
@@ -290,9 +299,15 @@ function RootContent() {
         reusable?.chat ??
         createChatDraft(workspaceId, undefined, initialText, {
           ...(options.gitMode ? { gitMode: options.gitMode } : {}),
+          ...(options.worktree ? { worktree: options.worktree } : {}),
           ...(options.ephemeral ? { ephemeral: true } : {}),
         }).chat;
-      if (reusable && options.gitMode) setChatDraftGitMode(reusable.chat.id, options.gitMode);
+      if (reusable && options.gitMode) {
+        setChatDraftGitMode(reusable.chat.id, options.gitMode);
+        if (options.worktree && !reusable.worktree?.baseRef) {
+          updateChatDraftWorktree(reusable.chat.id, options.worktree);
+        }
+      }
       if (hasAttachments && options.attachments) {
         seedComposerAttachments(chat.id, [...options.attachments]);
       }
@@ -364,6 +379,7 @@ function RootContent() {
     () => ({
       openNewChatIn: async (workspaceId, options) => {
         let gitMode: ChatDraftGitMode | undefined = options?.gitMode;
+        let worktree: ChatDraftWorktree | undefined;
         if (options?.newWorktree) {
           // ⌥↵: only a repository with a commit can start a new worktree.
           // A local status read; nothing is created until the first send.
@@ -374,10 +390,19 @@ function RootContent() {
               staleTime: 5_000,
             })
             .catch(() => undefined);
-          if (git?.isRepo && !git.unborn) gitMode = "worktree";
+          if (git?.isRepo && !git.unborn) {
+            gitMode = "worktree";
+            worktree = seedDraftWorktreeFromGitInfo(readChatDraftGitMemory(workspaceId), git);
+          }
         }
         // The draft's id, or undefined when nothing opened (navigation blocked).
-        return openNewChatIn(workspaceId, options?.initialText || undefined, gitMode ? { gitMode } : {});
+        return openNewChatIn(
+          workspaceId,
+          options?.initialText || undefined,
+          gitMode || worktree
+            ? { ...(gitMode ? { gitMode } : {}), ...(worktree ? { worktree } : {}) }
+            : {},
+        );
       },
       openFolderForNewChat,
       cloneRepositoryForNewChat,
@@ -447,7 +472,15 @@ function RootContent() {
   }, [queryClient]);
 
   React.useEffect(() => {
-    return onNotification("workspaces:changed", () => {
+    return onNotification("workspaces:changed", (payload: unknown) => {
+      const update =
+        payload && typeof payload === "object"
+          ? (payload as { kind?: unknown; workspace?: Workspace })
+          : undefined;
+      if (update?.kind === "created" && update.workspace && typeof update.workspace.id === "string") {
+        upsertCreatedWorkspaceInCache(queryClient, update.workspace);
+        return;
+      }
       void Promise.all([
         queryClient.invalidateQueries({ queryKey: queryKeys.workspaces }),
         queryClient.invalidateQueries({ queryKey: queryKeys.chats }),

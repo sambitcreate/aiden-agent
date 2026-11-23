@@ -53,8 +53,8 @@ export interface FirstMessageWorktreeInfo {
   reused: boolean;
 }
 
-export type FirstMessageWorktreeResult<C> =
-  | { ok: true; chat: C; worktree: FirstMessageWorktreeInfo }
+export type FirstMessageWorktreeResult<C, W = unknown> =
+  | { ok: true; chat: C; worktree: FirstMessageWorktreeInfo; workspace?: W }
   | {
       ok: false;
       /** The chat was not saved; the draft can Retry or run in this checkout instead. */

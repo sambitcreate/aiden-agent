@@ -430,9 +430,8 @@ jobs:
           -skip-testing:AidenOnTheGoUITests
           CODE_SIGNING_ALLOWED=NO
 
-      # One smoke test: the real shell launches against every demo scenario. The
-      # screenshot matrix and accessibility audit stay a local tool.
-      - name: Run Aiden On The Go shell UI smoke test on the simulator
+      # Cover the demo launch matrix and pairing through the unpaired shell.
+      - name: Run Aiden On The Go shell UI smoke tests on the simulator
         run: >-
           xcodebuild test-without-building -quiet
           -project ios/AidenOnTheGo.xcodeproj
@@ -443,6 +442,7 @@ jobs:
           -clonedSourcePackagesDirPath '${{ runner.temp }}/AidenOnTheGoSourcePackages'
           -resultBundlePath '${{ runner.temp }}/AidenOnTheGoShellUI.xcresult'
           -only-testing:AidenOnTheGoUITests/AidenShellUITests/testShellLaunchesForEveryScenario
+          -only-testing:AidenOnTheGoUITests/AidenShellUITests/testUnpairedSearchOffersPairingAndExplainsInvalidManualInput
           CODE_SIGNING_ALLOWED=NO
 
       - name: Print failed iOS simulator test messages
@@ -552,9 +552,8 @@ jobs:
           -skip-testing:AidenOnTheGoUITests
           CODE_SIGNING_ALLOWED=NO
 
-      # One smoke test: the real shell launches against every demo scenario. The
-      # screenshot matrix and accessibility audit stay a local tool.
-      - name: Run Aiden On The Go shell UI smoke test on the simulator
+      # Cover the demo launch matrix and pairing through the unpaired shell.
+      - name: Run Aiden On The Go shell UI smoke tests on the simulator
         run: >-
           xcodebuild test-without-building -quiet
           -project ios/AidenOnTheGo.xcodeproj
@@ -565,6 +564,7 @@ jobs:
           -clonedSourcePackagesDirPath '${{ runner.temp }}/AidenOnTheGoSourcePackages'
           -resultBundlePath '${{ runner.temp }}/AidenOnTheGoShellUI.xcresult'
           -only-testing:AidenOnTheGoUITests/AidenShellUITests/testShellLaunchesForEveryScenario
+          -only-testing:AidenOnTheGoUITests/AidenShellUITests/testUnpairedSearchOffersPairingAndExplainsInvalidManualInput
           CODE_SIGNING_ALLOWED=NO
 
       - name: Print failed iOS simulator test messages

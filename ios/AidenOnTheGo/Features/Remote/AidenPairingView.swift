@@ -24,6 +24,31 @@ enum AidenPairingSubmission: Equatable {
     case manual(endpoint: URL, code: String)
 }
 
+enum AidenPairingInputError: Error, Equatable {
+    case missingAddress
+    case insecureAddress
+    case invalidAddress
+    case missingCode
+    case invalidCode
+
+    var isAddressError: Bool {
+        switch self {
+        case .missingAddress, .insecureAddress, .invalidAddress: true
+        case .missingCode, .invalidCode: false
+        }
+    }
+
+    var message: String {
+        switch self {
+        case .missingAddress: String(localized: "Enter the address shown on your computer.")
+        case .insecureAddress: String(localized: "Use an HTTPS address. Copy the address shown on your computer.")
+        case .invalidAddress: String(localized: "Enter a valid computer address, including the port if one is shown.")
+        case .missingCode: String(localized: "Enter the setup code shown on your computer.")
+        case .invalidCode: String(localized: "Enter the 20-character setup code shown on your computer.")
+        }
+    }
+}
+
 enum AidenPairingInputParser {
     private static let allowedCodeScalars = Set("0123456789ABCDEFGHJKMNPQRSTVWXYZ")
 
@@ -102,15 +127,18 @@ enum AidenPairingInputParser {
 
     /// Resolves whether the current Address + Code fields can be submitted as a
     /// full pasted payload or as a manual endpoint + setup code pair.
-    static func submission(address: String, code: String) -> AidenPairingSubmission? {
+    static func submission(address: String, code: String) -> Result<AidenPairingSubmission, AidenPairingInputError> {
         if let payload = fullPayload(from: code) ?? fullPayload(from: address) {
-            return .payload(payload)
+            return .success(.payload(payload))
         }
-        guard let endpoint = normalizedEndpointURL(from: address),
-              (try? AidenRemoteClient.normalizeManualPairingCode(code)) != nil else {
-            return nil
-        }
-        return .manual(endpoint: endpoint, code: code)
+        let address = address.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !address.isEmpty else { return .failure(.missingAddress) }
+        guard !address.lowercased().hasPrefix("http://") else { return .failure(.insecureAddress) }
+        guard let endpoint = normalizedEndpointURL(from: address) else { return .failure(.invalidAddress) }
+
+        guard !code.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return .failure(.missingCode) }
+        guard (try? AidenRemoteClient.normalizeManualPairingCode(code)) != nil else { return .failure(.invalidCode) }
+        return .success(.manual(endpoint: endpoint, code: code))
     }
 
     /// Compact display form for a Bonjour-resolved endpoint (`host:port`).
@@ -318,6 +346,7 @@ struct AidenPairingView: View {
     @State private var codeInput = ""
     @State private var selectedAgentID: String?
     @State private var inlineError: String?
+    @State private var inputError: AidenPairingInputError?
     @State private var isCameraActive = false
     @State private var scanComplete = false
     @State private var showsCameraPermissionAlert = false
@@ -335,11 +364,6 @@ struct AidenPairingView: View {
         self.showsDesktopCheck = showsDesktopCheck
         self.onClose = onClose
         self.onPaired = onPaired
-    }
-
-    private var submission: AidenPairingSubmission? {
-        guard !coordinator.isMutating else { return nil }
-        return AidenPairingInputParser.submission(address: addressInput, code: codeInput)
     }
 
     var body: some View {
@@ -375,6 +399,7 @@ struct AidenPairingView: View {
             codeInput = ""
             selectedAgentID = nil
             inlineError = nil
+            inputError = nil
         }
         .alert("Camera access needed", isPresented: $showsCameraPermissionAlert) {
             Button("Cancel", role: .cancel) {}
@@ -683,7 +708,7 @@ struct AidenPairingView: View {
                         Image(systemName: "checkmark")
                     }
                 }
-                .disabled(submission == nil)
+                .disabled(coordinator.isMutating || (addressInput.isEmpty && codeInput.isEmpty))
                 .accessibilityLabel(coordinator.isMutating ? "Connecting" : "Add Computer")
             }
         }
@@ -732,9 +757,6 @@ struct AidenPairingView: View {
                         }
                     )
                     AidenFrostedCutoutView(
-                        cutoutTop: 34,
-                        cutoutSize: 144,
-                        cutoutRadius: 28,
                         isDark: isDark,
                         reduceTransparency: reduceTransparency,
                         fallbackFill: UIColor(palette.canvas)
@@ -744,14 +766,14 @@ struct AidenPairingView: View {
 
                 VStack(spacing: 14) {
                     ZStack {
-                        RoundedRectangle(cornerRadius: 28, style: .continuous)
+                        RoundedRectangle(cornerRadius: AidenPairingScanWindow.cornerRadius, style: .circular)
                             .stroke(
                                 active
                                     ? Color.white.opacity(0.88)
                                     : (isDark ? Color.white.opacity(0.75) : palette.foreground.opacity(0.68)),
                                 lineWidth: 2.8
                             )
-                            .frame(width: 144, height: 144)
+                            .frame(width: AidenPairingScanWindow.size, height: AidenPairingScanWindow.size)
 
                         if coordinator.isMutating {
                             VStack(spacing: AidenSpacing.s) {
@@ -787,7 +809,7 @@ struct AidenPairingView: View {
                     .multilineTextAlignment(.center)
                     .padding(.horizontal, AidenSpacing.l)
                 }
-                .padding(.top, 34)
+                .padding(.top, AidenPairingScanWindow.top)
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
             }
             .frame(height: 244)
@@ -898,6 +920,7 @@ struct AidenPairingView: View {
                         .accessibilityLabel("Computer address")
                         .onChange(of: addressInput) { _, value in
                             inlineError = nil
+                            if inputError?.isAddressError == true { inputError = nil }
                             if let selectedAgentID {
                                 let selectedEndpoint = discovery.agents.first { $0.id == selectedAgentID }?.endpoint
                                 if selectedEndpoint != value { self.selectedAgentID = nil }
@@ -906,6 +929,10 @@ struct AidenPairingView: View {
                 }
                 .padding(.horizontal, AidenSpacing.l)
                 .frame(minHeight: 52)
+
+                if let inputError, inputError.isAddressError {
+                    fieldError(inputError)
+                }
 
                 Divider().padding(.leading, AidenSpacing.l)
 
@@ -927,6 +954,7 @@ struct AidenPairingView: View {
                         .accessibilityLabel("Setup code or pairing payload")
                         .onChange(of: codeInput) { _, value in
                             inlineError = nil
+                            if inputError?.isAddressError == false { inputError = nil }
                             let formatted = AidenPairingInputParser.formattedManualCodeInput(value)
                             if formatted != value {
                                 codeInput = formatted
@@ -935,13 +963,12 @@ struct AidenPairingView: View {
                 }
                 .padding(.horizontal, AidenSpacing.l)
                 .frame(minHeight: 52)
-            }
-            .background(palette.raised, in: cardShape)
-            .overlay {
-                if inlineError != nil {
-                    cardShape.stroke(palette.danger, lineWidth: 1)
+
+                if let inputError, !inputError.isAddressError {
+                    fieldError(inputError)
                 }
             }
+            .background(palette.raised, in: cardShape)
 
             Text(
                 inlineError
@@ -952,6 +979,16 @@ struct AidenPairingView: View {
             .fixedSize(horizontal: false, vertical: true)
             .padding(.horizontal, AidenSpacing.m)
         }
+    }
+
+    private func fieldError(_ error: AidenPairingInputError) -> some View {
+        Text(error.message)
+            .font(.footnote)
+            .foregroundStyle(palette.dangerText)
+            .fixedSize(horizontal: false, vertical: true)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, AidenSpacing.l)
+            .padding(.bottom, AidenSpacing.s)
     }
 
     // MARK: - Actions
@@ -989,15 +1026,23 @@ struct AidenPairingView: View {
     }
 
     private func submitManual() {
-        guard let submission else { return }
-        focusedField = nil
+        guard !coordinator.isMutating, pairingTask == nil else { return }
         inlineError = nil
+        let submission = AidenPairingInputParser.submission(address: addressInput, code: codeInput)
         switch submission {
-        case .payload(let payload):
+        case .failure(let error):
+            inputError = error
+            focusedField = error.isAddressError ? .address : .code
+            AccessibilityNotification.Announcement(error.message).post()
+        case .success(.payload(let payload)):
+            inputError = nil
+            focusedField = nil
             startPairing {
                 await coordinator.pair(qrPayload: payload)
             }
-        case .manual(let endpoint, let code):
+        case .success(.manual(let endpoint, let code)):
+            inputError = nil
+            focusedField = nil
             startPairing {
                 await coordinator.pair(manualCode: code, endpoint: endpoint)
             }
@@ -1043,13 +1088,28 @@ struct AidenPairingView: View {
 
 // MARK: - Frosted Cutout & Inline QR Camera
 
+enum AidenPairingScanWindow {
+    static let top: CGFloat = 34
+    static let size: CGFloat = 144
+    static let cornerRadius: CGFloat = 28
+
+    static func rect(in bounds: CGRect) -> CGRect {
+        CGRect(x: bounds.midX - size / 2, y: bounds.minY + top, width: size, height: size)
+    }
+
+    static func path(in bounds: CGRect) -> UIBezierPath {
+        UIBezierPath(roundedRect: rect(in: bounds), cornerRadius: cornerRadius)
+    }
+
+    static func containsCode(center: CGPoint, in bounds: CGRect) -> Bool {
+        bounds.contains(center) && path(in: bounds).contains(center)
+    }
+}
+
 /// One continuous blur with a rounded-rect hole, horizontally centered, avoiding
 /// seams from tiling separate blur views. Falls back to an opaque mask under
 /// Reduce Transparency.
 private struct AidenFrostedCutoutView: UIViewRepresentable {
-    let cutoutTop: CGFloat
-    let cutoutSize: CGFloat
-    let cutoutRadius: CGFloat
     let isDark: Bool
     let reduceTransparency: Bool
     let fallbackFill: UIColor
@@ -1060,9 +1120,6 @@ private struct AidenFrostedCutoutView: UIViewRepresentable {
 
     func updateUIView(_ uiView: FrostedCutoutUIView, context: Context) {
         uiView.configure(
-            cutoutTop: cutoutTop,
-            cutoutSize: cutoutSize,
-            cutoutRadius: cutoutRadius,
             isDark: isDark,
             reduceTransparency: reduceTransparency,
             fallbackFill: fallbackFill
@@ -1070,13 +1127,6 @@ private struct AidenFrostedCutoutView: UIViewRepresentable {
     }
 
     final class FrostedCutoutUIView: UIView {
-        private var cutoutTop: CGFloat = 0
-        private var cutoutSize: CGFloat = 0
-        private var cutoutRadius: CGFloat = 0
-        private var isDark = false
-        private var reduceTransparency = false
-        private var fallbackFill: UIColor = .systemBackground
-
         private let effectView = UIVisualEffectView(effect: UIBlurEffect(style: .systemThinMaterialDark))
         private let opaqueOverlayView = UIView()
         private let maskHostView = UIView()
@@ -1099,20 +1149,10 @@ private struct AidenFrostedCutoutView: UIViewRepresentable {
         }
 
         func configure(
-            cutoutTop: CGFloat,
-            cutoutSize: CGFloat,
-            cutoutRadius: CGFloat,
             isDark: Bool,
             reduceTransparency: Bool,
             fallbackFill: UIColor
         ) {
-            self.cutoutTop = cutoutTop
-            self.cutoutSize = cutoutSize
-            self.cutoutRadius = cutoutRadius
-            self.isDark = isDark
-            self.reduceTransparency = reduceTransparency
-            self.fallbackFill = fallbackFill
-
             effectView.effect = UIBlurEffect(
                 style: isDark ? .systemThinMaterialDark : .systemThinMaterialLight
             )
@@ -1138,15 +1178,7 @@ private struct AidenFrostedCutoutView: UIViewRepresentable {
             maskLayer.frame = bounds
 
             let path = UIBezierPath(rect: bounds)
-            if cutoutSize > 0 {
-                let hole = CGRect(
-                    x: (bounds.width - cutoutSize) / 2,
-                    y: cutoutTop,
-                    width: cutoutSize,
-                    height: cutoutSize
-                )
-                path.append(UIBezierPath(roundedRect: hole, cornerRadius: cutoutRadius))
-            }
+            path.append(AidenPairingScanWindow.path(in: bounds))
             maskLayer.path = path.cgPath
         }
     }
@@ -1178,6 +1210,12 @@ private struct AidenInlineQRScannerView: UIViewRepresentable {
     final class PreviewUIView: UIView {
         override class var layerClass: AnyClass { AVCaptureVideoPreviewLayer.self }
         var previewLayer: AVCaptureVideoPreviewLayer { layer as! AVCaptureVideoPreviewLayer }
+        var onLayout: ((PreviewUIView) -> Void)?
+
+        override func layoutSubviews() {
+            super.layoutSubviews()
+            onLayout?(self)
+        }
     }
 
     final class Coordinator: NSObject, AVCaptureMetadataOutputObjectsDelegate {
@@ -1185,8 +1223,10 @@ private struct AidenInlineQRScannerView: UIViewRepresentable {
         var onUnavailable: () -> Void
         private let session = AVCaptureSession()
         private let queue = DispatchQueue(label: "aiden.inline-qr-scanner")
-        private var configured = false
+        // Capture output is owned by the session queue. Preview geometry lives on the main queue.
+        private var scanOutput: AVCaptureMetadataOutput?
         private var sessionStopped = false
+        private weak var preview: PreviewUIView?
         private var delivered = false
         private var isDismantled = false
 
@@ -1196,23 +1236,35 @@ private struct AidenInlineQRScannerView: UIViewRepresentable {
         }
 
         func start(in view: PreviewUIView) {
+            preview = view
             view.previewLayer.session = session
             view.previewLayer.videoGravity = .resizeAspectFill
+            view.onLayout = { [weak self] in self?.updateScanRegion(in: $0) }
             queue.async { [weak self] in
                 guard let self, !self.sessionStopped else { return }
-                if !self.configured {
-                    guard self.configureSession() else {
-                        DispatchQueue.main.async { [weak self] in
-                            guard let self, !self.isDismantled else { return }
-                            self.onUnavailable()
-                        }
-                        return
+                guard let output = self.configureSession() else {
+                    DispatchQueue.main.async { [weak self] in
+                        guard let self, !self.isDismantled else { return }
+                        self.onUnavailable()
                     }
-                    self.configured = true
+                    return
                 }
-                if !self.session.isRunning {
-                    self.session.startRunning()
+                self.scanOutput = output
+                self.session.startRunning()
+                DispatchQueue.main.async { [weak self] in
+                    guard let self, let preview = self.preview else { return }
+                    self.updateScanRegion(in: preview)
                 }
+            }
+        }
+
+        private func updateScanRegion(in view: PreviewUIView) {
+            guard !isDismantled, view.previewLayer.connection != nil, !view.bounds.isEmpty else { return }
+            let window = AidenPairingScanWindow.rect(in: view.bounds).intersection(view.bounds)
+            let region = view.previewLayer.metadataOutputRectConverted(fromLayerRect: window)
+            queue.async { [weak self] in
+                guard let self, !self.sessionStopped else { return }
+                self.scanOutput?.rectOfInterest = region
             }
         }
 
@@ -1227,15 +1279,15 @@ private struct AidenInlineQRScannerView: UIViewRepresentable {
             }
         }
 
-        private func configureSession() -> Bool {
+        private func configureSession() -> AVCaptureMetadataOutput? {
             guard let camera = AVCaptureDevice.default(for: .video),
                   let input = try? AVCaptureDeviceInput(device: camera) else {
-                return false
+                return nil
             }
             session.beginConfiguration()
             guard session.canAddInput(input) else {
                 session.commitConfiguration()
-                return false
+                return nil
             }
             session.addInput(input)
 
@@ -1243,7 +1295,7 @@ private struct AidenInlineQRScannerView: UIViewRepresentable {
             guard session.canAddOutput(output) else {
                 session.removeInput(input)
                 session.commitConfiguration()
-                return false
+                return nil
             }
             session.addOutput(output)
             session.commitConfiguration()
@@ -1253,11 +1305,13 @@ private struct AidenInlineQRScannerView: UIViewRepresentable {
                 session.removeOutput(output)
                 session.removeInput(input)
                 session.commitConfiguration()
-                return false
+                return nil
             }
+            // Wait for the live preview to supply the region before accepting any QR codes.
+            output.rectOfInterest = .zero
             output.setMetadataObjectsDelegate(self, queue: .main)
             output.metadataObjectTypes = [.qr]
-            return true
+            return output
         }
 
         func metadataOutput(
@@ -1265,13 +1319,20 @@ private struct AidenInlineQRScannerView: UIViewRepresentable {
             didOutput metadataObjects: [AVMetadataObject],
             from connection: AVCaptureConnection
         ) {
-            guard !delivered, !isDismantled,
-                  let object = metadataObjects.first as? AVMetadataMachineReadableCodeObject,
-                  object.type == .qr,
-                  let value = object.stringValue else { return }
-            delivered = true
-            stop()
-            onCode(value)
+            guard !delivered, !isDismantled, let preview else { return }
+            for case let object as AVMetadataMachineReadableCodeObject in metadataObjects where object.type == .qr {
+                // A queued frame can arrive after layout changes. Check against the current cutout.
+                guard let value = object.stringValue,
+                      let transformed = preview.previewLayer.transformedMetadataObject(for: object),
+                      AidenPairingScanWindow.containsCode(
+                          center: CGPoint(x: transformed.bounds.midX, y: transformed.bounds.midY),
+                          in: preview.bounds
+                      ) else { continue }
+                delivered = true
+                stop()
+                onCode(value)
+                return
+            }
         }
     }
 }

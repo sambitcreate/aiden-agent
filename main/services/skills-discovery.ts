@@ -386,15 +386,34 @@ const AIDEN_SEARCHES = [
   { base: "skills", maxDepth: SKILL_DISCOVERY_LIMITS.relativeDepth },
 ];
 
-/**
- * Discover skills from global and workspace skill directories.
- * Roots scan in precedence order so workspace skills override global ones and,
- * within a source, `.aiden` overrides `.claude`, which overrides `.agents`.
- */
-async function scanAllSkillCandidates(
-  workspaceRoot: string | undefined,
+async function scanScopedRoots(
+  roots: ScanConfig[],
+  source: DiscoveredSkill["source"],
+  testHooks: SkillDiscoveryTestHooks = {},
+): Promise<DiscoveredSkill[]> {
+  if (roots.length === 0) return [];
+  roots.sort(
+    (left, right) =>
+      left.priority - right.priority ||
+      (left.root < right.root ? -1 : left.root > right.root ? 1 : 0),
+  );
+  // Independent source budgets prevent a hostile workspace from starving
+  // global skills. Their two fixed 16 MiB byte ceilings preserve a 32 MiB
+  // aggregate process bound.
+  const budget: DiscoveryBudget = { candidates: 0, traversedEntries: 0, aggregateBytes: 0 };
+  const results: DiscoveredSkill[][] = [];
+  for (const config of roots) {
+    if (config.source !== source) continue;
+    if (discoveryBudgetExhausted(budget)) continue;
+    results.push(await scanPatterns(config, budget, testHooks));
+  }
+  return results.flat();
+}
+
+async function scanGlobalSkillCandidates(
   home: string,
   aidenDir: string,
+  globalPluginConfigs: readonly ScanConfig[],
   testHooks: SkillDiscoveryTestHooks = {},
 ): Promise<DiscoveredSkill[]> {
   const roots: ScanConfig[] = [
@@ -411,54 +430,95 @@ async function scanAllSkillCandidates(
       priority: 10,
     },
     { root: aidenDir, searches: AIDEN_SEARCHES, source: "global", priority: 0 },
+    ...globalPluginConfigs,
   ];
+  return scanScopedRoots(roots, "global", testHooks);
+}
 
-  if (workspaceRoot) {
-    roots.push(
-      {
-        root: path.join(workspaceRoot, ".agents"),
-        searches: AGENTS_SEARCHES,
-        source: "workspace",
-        priority: 20,
-      },
-      {
-        root: path.join(workspaceRoot, ".claude"),
-        searches: CLAUDE_SEARCHES,
-        source: "workspace",
-        priority: 10,
-      },
-      {
-        root: path.join(workspaceRoot, AIDEN_DIR_NAME),
-        searches: AIDEN_SEARCHES,
-        source: "workspace",
-        priority: 0,
-      },
-    );
+async function scanWorkspaceSkillCandidates(
+  workspaceRoot: string,
+  workspacePluginConfigs: readonly ScanConfig[],
+  testHooks: SkillDiscoveryTestHooks = {},
+): Promise<DiscoveredSkill[]> {
+  const roots: ScanConfig[] = [
+    {
+      root: path.join(workspaceRoot, ".agents"),
+      searches: AGENTS_SEARCHES,
+      source: "workspace",
+      priority: 20,
+    },
+    {
+      root: path.join(workspaceRoot, ".claude"),
+      searches: CLAUDE_SEARCHES,
+      source: "workspace",
+      priority: 10,
+    },
+    {
+      root: path.join(workspaceRoot, AIDEN_DIR_NAME),
+      searches: AIDEN_SEARCHES,
+      source: "workspace",
+      priority: 0,
+    },
+    ...workspacePluginConfigs,
+  ];
+  return scanScopedRoots(roots, "workspace", testHooks);
+}
+
+const GLOBAL_CANDIDATES_CACHE_LIMIT = 10;
+const globalCandidatesCache = new Map<
+  string,
+  { expires: number; result: Promise<DiscoveredSkill[]> }
+>();
+
+function cachedGlobalSkillCandidates(
+  home: string,
+  aidenDir: string,
+  globalPluginConfigs: readonly ScanConfig[],
+): Promise<DiscoveredSkill[]> {
+  const key = JSON.stringify([home, aidenDir, globalPluginConfigs]);
+  const now = Date.now();
+  const cached = globalCandidatesCache.get(key);
+  if (cached && cached.expires > now) return cached.result;
+  if (!cached && globalCandidatesCache.size >= GLOBAL_CANDIDATES_CACHE_LIMIT) {
+    const oldest = globalCandidatesCache.keys().next().value as string | undefined;
+    if (oldest !== undefined) globalCandidatesCache.delete(oldest);
   }
-
-  roots.push(...(await pluginScanConfigs(home, workspaceRoot)));
-
-  try {
-    roots.sort(
-      (left, right) =>
-        (left.source === "workspace" ? 0 : 1) - (right.source === "workspace" ? 0 : 1) ||
-        left.priority - right.priority ||
-        (left.root < right.root ? -1 : left.root > right.root ? 1 : 0),
-    );
-    // Independent source budgets prevent a hostile workspace from starving
-    // global skills. Their two fixed 16 MiB byte ceilings preserve a 32 MiB
-    // aggregate process bound.
-    const budgets: Record<DiscoveredSkill["source"], DiscoveryBudget> = {
-      workspace: { candidates: 0, traversedEntries: 0, aggregateBytes: 0 },
-      global: { candidates: 0, traversedEntries: 0, aggregateBytes: 0 },
-    };
-    const results: DiscoveredSkill[][] = [];
-    for (const config of roots) {
-      const budget = budgets[config.source];
-      if (discoveryBudgetExhausted(budget)) continue;
-      results.push(await scanPatterns(config, budget, testHooks));
+  const result = scanGlobalSkillCandidates(home, aidenDir, globalPluginConfigs).catch((error) => {
+    if (globalCandidatesCache.get(key)?.result === result) {
+      globalCandidatesCache.delete(key);
     }
-    return results.flat();
+    throw error;
+  });
+  globalCandidatesCache.set(key, { expires: now + DISCOVERY_CACHE_TTL_MS, result });
+  return result;
+}
+
+/**
+ * Discover skills from global and workspace skill directories.
+ * Roots scan in precedence order so workspace skills override global ones and,
+ * within a source, `.aiden` overrides `.claude`, which overrides `.agents`.
+ */
+async function scanAllSkillCandidates(
+  workspaceRoot: string | undefined,
+  home: string,
+  aidenDir: string,
+  testHooks: SkillDiscoveryTestHooks = {},
+  useCachedGlobals = false,
+): Promise<DiscoveredSkill[]> {
+  try {
+    const pluginConfigs = await pluginScanConfigs(home, workspaceRoot);
+    const workspacePluginConfigs = pluginConfigs.filter((config) => config.source === "workspace");
+    const globalPluginConfigs = pluginConfigs.filter((config) => config.source === "global");
+    const useCache = useCachedGlobals && Object.keys(testHooks).length === 0;
+    const [workspaceSkills, globalSkills] = await Promise.all([
+      workspaceRoot
+        ? scanWorkspaceSkillCandidates(workspaceRoot, workspacePluginConfigs, testHooks)
+        : Promise.resolve([] as DiscoveredSkill[]),
+      useCache
+        ? cachedGlobalSkillCandidates(home, aidenDir, globalPluginConfigs)
+        : scanGlobalSkillCandidates(home, aidenDir, globalPluginConfigs, testHooks),
+    ]);
+    return [...workspaceSkills, ...globalSkills];
   } catch (error) {
     const projected = projectDiagnosticError(error);
     writeDiagnosticEvent({
@@ -499,11 +559,26 @@ export function discoverSkillCandidates(
 ): Promise<DiscoveredSkill[]> {
   const home = homeDir ?? os.homedir();
   const aidenDir = homeDir === undefined ? aidenConfigDir() : path.join(home, AIDEN_DIR_NAME);
-  return scanAllSkillCandidates(workspaceRoot, home, aidenDir, testHooks);
+  return scanAllSkillCandidates(workspaceRoot, home, aidenDir, testHooks, false);
+}
+
+/**
+ * Discover skill candidates reusing a short-TTL cache for global roots/plugins
+ * while still scanning the requested workspace root fresh. Used by
+ * `SkillRegistry.snapshot` so opening a new worktree avoids rescanning global skills.
+ */
+export function discoverSkillCandidatesWithCachedGlobals(
+  workspaceRoot?: string,
+  homeDir?: string,
+): Promise<DiscoveredSkill[]> {
+  const home = homeDir ?? os.homedir();
+  const aidenDir = homeDir === undefined ? aidenConfigDir() : path.join(home, AIDEN_DIR_NAME);
+  return scanAllSkillCandidates(workspaceRoot, home, aidenDir, {}, true);
 }
 
 export function invalidateSkillDiscoveryCache(): void {
   discoveryCache.clear();
+  globalCandidatesCache.clear();
 }
 
 /**

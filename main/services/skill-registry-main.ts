@@ -1,5 +1,9 @@
 import { configStore } from "./config-store.js";
-import { discoverSkillCandidates, invalidateSkillDiscoveryCache } from "./skills-discovery.js";
+import {
+  discoverSkillCandidates,
+  discoverSkillCandidatesWithCachedGlobals,
+  invalidateSkillDiscoveryCache,
+} from "./skills-discovery.js";
 import { SkillRegistry } from "./skill-registry.js";
 import { AIDEN_APP_SKILL } from "./aiden-app-knowledge.js";
 import { AIDEN_ARTIFACTS_SKILL, AIDEN_ARTIFACTS_SKILL_ID } from "./workspace-artifacts/skill.js";
@@ -22,5 +26,6 @@ export const skillRegistry = new SkillRegistry({
   getWorkspace: (id) => configStore.getWorkspace(id),
   listConfigured: () => configStore.listSkills(),
   discover: (workspaceRoot) => discoverSkillCandidates(workspaceRoot),
+  discoverWithCachedGlobals: (workspaceRoot) => discoverSkillCandidatesWithCachedGlobals(workspaceRoot),
   onInvalidate: invalidateSkillDiscoveryCache,
 });

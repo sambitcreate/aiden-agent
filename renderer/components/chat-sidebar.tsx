@@ -77,7 +77,7 @@ import { MAX_SIDEBAR_PULL_REQUEST_CHATS } from "../shared/chat-pull-requests";
 import type { ChatTriageEntry } from "../shared/chat-triage";
 import { localComputerNoun } from "../shared/computer-noun";
 import { useActiveWorkspace } from "../lib/workspace-context";
-import { useEnvironmentPanel } from "./environment-panel";
+import { useEnvironmentPanelCore } from "./environment-panel";
 import type { ChatMeta, Workspace } from "../lib/types";
 import { useCommandHandler, useCommandSystem } from "../lib/command-system";
 import type { CommandId } from "../shared/keybindings";
@@ -490,7 +490,7 @@ function WorkspaceChatSidebar({
   const pathname = useRouterState({ select: (state) => state.location.pathname });
   const qc = useQueryClient();
   const { workspaces, activeId, select, isReady: workspaceRegistryReady } = useActiveWorkspace();
-  const environmentPanel = useEnvironmentPanel();
+  const environmentPanel = useEnvironmentPanelCore();
   const chatActivity = useChatActivityState();
   const readMarkers = useChatReadMarkers();
   const appendReconciliationRequired = useAppendReconciliationRequired();

@@ -20,6 +20,7 @@ test("shared managed-worktree workflow preserves creation rollback gates and des
   let failProvisioning = false;
   const events: string[] = [];
   const createAdmissions: Array<[string, number]> = [];
+  const createReserves: Array<number | undefined> = [];
   const allocations: Array<[string, string, number]> = [];
   const source: Workspace = {
     id: "workspace-source",
@@ -87,8 +88,9 @@ test("shared managed-worktree workflow preserves creation rollback gates and des
       throw new Error("unexpected resume");
     },
     applyWorktreeSnapshot: async () => undefined,
-    createWorktree: async (folderPath, root, branch) => {
+    createWorktree: async (folderPath, root, branch, _signal, options) => {
       events.push(`create:${folderPath}:${root}:${branch}`);
+      createReserves.push(options?.additionalAllocationBytes);
       return {
         path: "/aiden/worktrees/mobile",
         workspacePath: "/aiden/worktrees/mobile",
@@ -194,8 +196,10 @@ test("shared managed-worktree workflow preserves creation rollback gates and des
   ]);
   assert.equal(designGrants.resolve(worktreeGrant), null, "deleting the worktree ends its design grants");
   assert.notEqual(designGrants.resolve(sourceGrant), null);
-  assert.deepEqual(allocations, [["/aiden/worktrees", "/canonical/source/.git", 1024 + MAX_PROVISIONED_BYTES]]);
-  assert.deepEqual(createAdmissions, [["/aiden/worktrees/mobile", MAX_PROVISIONED_BYTES]]);
+  const expectedReserve = process.platform === "darwin" ? MAX_PROVISIONED_BYTES : 0;
+  assert.deepEqual(allocations, [], "create delegates combined allocation admission to createWorktree");
+  assert.deepEqual(createReserves, [expectedReserve > 0 ? expectedReserve : undefined]);
+  assert.deepEqual(createAdmissions, [["/aiden/worktrees/mobile", expectedReserve]]);
 
   // A deletion that fails still closes the watcher; the next read re-observes.
   const again = await service.create(owner, source.id, "feature/retry", "Retry Workspace");

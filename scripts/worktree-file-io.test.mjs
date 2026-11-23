@@ -1,9 +1,9 @@
 /* global Buffer, process */
 
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdtemp, mkdir, link, readFile, readdir, realpath, rename, rm, stat, symlink, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, mkdir, link, readFile, readdir, realpath, rename, rm, stat, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -410,4 +410,156 @@ test("private file creation uses mode 0600 and refuses an existing environment f
   const existing = await runEditor(["create-private", ...rootId, ".env", "3"], Buffer.from("new"));
   assert.notEqual(existing.code, 0);
   assert.equal(await readFile(path.join(folder, ".env"), "utf8"), input.toString());
+});
+
+test("provision batch copies nested files, preserves rwx modes, strips setuid/sticky and BSD uchg flags", async (t) => {
+  if (process.platform !== "darwin") return;
+  const source = await directory(t);
+  const destination = await directory(t);
+  await mkdir(path.join(source, "config", "nested"), { recursive: true });
+  await writeFile(path.join(source, ".env"), "SECRET=1\n");
+  await chmod(path.join(source, ".env"), 0o600);
+  await writeFile(path.join(source, "config", "nested", "run.sh"), "#!/bin/sh\necho ok\n");
+  await chmod(path.join(source, "config", "nested", "run.sh"), 0o4755);
+  await writeFile(path.join(source, "locked.txt"), "immutable-source\n");
+  execFileSync("/usr/bin/chflags", ["uchg", path.join(source, "locked.txt")]);
+  try {
+    const payload = Buffer.from(".env\0config/nested/run.sh\0locked.txt\0", "utf8");
+    const result = await runEditor(
+      ["provision", ...await identity(source), ...await identity(destination), String(1024 * 1024)],
+      payload,
+    );
+    assert.equal(result.code, 0, result.stderr);
+    assert.equal(result.stdout.toString(), "p 0 9\np 1 18\np 2 17\ndone\n");
+    assert.equal(await readFile(path.join(destination, ".env"), "utf8"), "SECRET=1\n");
+    assert.equal((await stat(path.join(destination, ".env"))).mode & 0o7777, 0o600);
+    const scriptStat = await stat(path.join(destination, "config", "nested", "run.sh"));
+    assert.equal(scriptStat.mode & 0o7777, 0o755, "setuid bit must be stripped");
+    assert.equal(await readFile(path.join(destination, "locked.txt"), "utf8"), "immutable-source\n");
+    // Destination copy must NOT inherit UF_IMMUTABLE — verify it can be removed cleanly.
+    await rm(path.join(destination, "locked.txt"));
+  } finally {
+    try { execFileSync("/usr/bin/chflags", ["nouchg", path.join(source, "locked.txt")]); } catch { /* ignore */ }
+  }
+});
+
+test("provision enforces cumulative byte limits and emits progress for files installed before failure", async (t) => {
+  if (process.platform !== "darwin") return;
+  const source = await directory(t);
+  const destination = await directory(t);
+  await writeFile(path.join(source, "a.txt"), "12345");
+  await writeFile(path.join(source, "b.txt"), "12345");
+  await writeFile(path.join(source, "c.txt"), "12345");
+
+  const payload = Buffer.from("a.txt\0b.txt\0c.txt\0", "utf8");
+  const result = await runEditor(
+    ["provision", ...await identity(source), ...await identity(destination), "10"],
+    payload,
+  );
+  assert.notEqual(result.code, 0);
+  assert.equal(result.stderr.trim(), "too_many_bytes");
+  assert.equal(result.stdout.toString(), "p 0 5\np 1 5\n");
+  assert.equal(await readFile(path.join(destination, "a.txt"), "utf8"), "12345");
+  assert.equal(await readFile(path.join(destination, "b.txt"), "utf8"), "12345");
+  await assert.rejects(() => stat(path.join(destination, "c.txt")));
+});
+
+test("provision stays on held descriptors through source and destination symlink swaps", async (t) => {
+  if (process.platform !== "darwin") return;
+  const source = await directory(t);
+  const destination = await directory(t);
+  const outside = await directory(t);
+  await mkdir(path.join(source, "sub"));
+  await mkdir(path.join(destination, "sub"));
+  await writeFile(path.join(source, "sub", "a.txt"), "inside-source");
+  await writeFile(path.join(outside, "a.txt"), "outside-secret");
+
+  const result = await runEditor(
+    ["provision", ...await identity(source), ...await identity(destination), "4096"],
+    Buffer.from("sub/a.txt\0", "utf8"),
+    async (marker) => {
+      if (marker === "S") {
+        await rename(path.join(source, "sub"), path.join(source, "moved-src"));
+        await symlink(outside, path.join(source, "sub"));
+      } else if (marker === "D") {
+        await rename(path.join(destination, "sub"), path.join(destination, "moved-dst"));
+        await symlink(outside, path.join(destination, "sub"));
+      }
+    },
+  );
+  assert.equal(result.code, 0, result.stderr);
+  assert.equal(await readFile(path.join(destination, "moved-dst", "a.txt"), "utf8"), "inside-source");
+  assert.equal(await readFile(path.join(outside, "a.txt"), "utf8"), "outside-secret");
+});
+
+test("provision refuses existing destination, symlinks, self-copy, and malformed stdin", async (t) => {
+  if (process.platform !== "darwin") return;
+  const source = await directory(t);
+  const destination = await directory(t);
+  await writeFile(path.join(source, "a.txt"), "aaa");
+  await writeFile(path.join(destination, "a.txt"), "existing");
+  await symlink(path.join(source, "a.txt"), path.join(source, "link.txt"));
+
+  const existsRes = await runEditor(
+    ["provision", ...await identity(source), ...await identity(destination), "4096"],
+    Buffer.from("a.txt\0", "utf8"),
+  );
+  assert.notEqual(existsRes.code, 0);
+  assert.equal(existsRes.stderr.trim(), "destination_exists");
+  assert.equal(await readFile(path.join(destination, "a.txt"), "utf8"), "existing");
+
+  const symlinkRes = await runEditor(
+    ["provision", ...await identity(source), ...await identity(destination), "4096"],
+    Buffer.from("link.txt\0", "utf8"),
+  );
+  assert.notEqual(symlinkRes.code, 0);
+  assert.equal(symlinkRes.stderr.trim(), "unsafe_source");
+
+  const selfRes = await runEditor(
+    ["provision", ...await identity(source), ...await identity(source), "4096"],
+    Buffer.from("a.txt\0", "utf8"),
+  );
+  assert.notEqual(selfRes.code, 0);
+  assert.equal(selfRes.stderr.trim(), "unsafe_source");
+
+  const unterminatedRes = await runEditor(
+    ["provision", ...await identity(source), ...await identity(destination), "4096"],
+    Buffer.from("a.txt", "utf8"),
+  );
+  assert.notEqual(unterminatedRes.code, 0);
+  assert.equal(unterminatedRes.stderr.trim(), "invalid_input");
+
+  const escapeRes = await runEditor(
+    ["provision", ...await identity(source), ...await identity(destination), "4096"],
+    Buffer.from("../a.txt\0", "utf8"),
+  );
+  assert.notEqual(escapeRes.code, 0);
+  assert.equal(escapeRes.stderr.trim(), "invalid_input");
+
+  const emptyEntryRes = await runEditor(
+    ["provision", ...await identity(source), ...await identity(destination), "4096"],
+    Buffer.from("a.txt\0\0a.txt\0", "utf8"),
+  );
+  assert.notEqual(emptyEntryRes.code, 0);
+  assert.equal(emptyEntryRes.stderr.trim(), "invalid_input");
+});
+
+test("provision handles >64 unique parent directories without leaking FDs", async (t) => {
+  if (process.platform !== "darwin") return;
+  const source = await directory(t);
+  const destination = await directory(t);
+  const paths = [];
+  for (let i = 0; i < 70; i += 1) {
+    const dir = `d${String(i).padStart(2, "0")}`;
+    await mkdir(path.join(source, dir));
+    await writeFile(path.join(source, dir, "f.txt"), `v${i}`);
+    paths.push(`${dir}/f.txt`);
+  }
+  const result = await runEditor(
+    ["provision", ...await identity(source), ...await identity(destination), String(1024 * 1024)],
+    Buffer.from(`${paths.join("\0")}\0`, "utf8"),
+  );
+  assert.equal(result.code, 0, result.stderr);
+  assert.equal(await readFile(path.join(destination, "d00", "f.txt"), "utf8"), "v0");
+  assert.equal(await readFile(path.join(destination, "d69", "f.txt"), "utf8"), "v69");
 });
