@@ -623,7 +623,7 @@ test("external hide and reopen close already-open starter pickers and restore st
 
     // External hide (blur / global toggle) must close the already-open target dropdown immediately.
     await act(async () => {
-      emitBotTestNotification("quickChat:hidden");
+      emitBotTestNotification("quickChat:hidden", undefined);
     });
     await waitFor(() => {
       assert.equal(screen.queryByTestId("quick-chat-target-popover"), null);
@@ -688,7 +688,7 @@ test("external hide and reopen preserve State 2 mini-modal stage and draft witho
     const modeCountBeforeHide = calls.filter((c) => c.channel === "quickChat:setMode").length;
 
     await act(async () => {
-      emitBotTestNotification("quickChat:hidden");
+      emitBotTestNotification("quickChat:hidden", undefined);
     });
     await act(async () => {
       emitBotTestNotification("quickChat:opened", { source: "hotkey" });
