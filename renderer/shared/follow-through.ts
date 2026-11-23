@@ -1,9 +1,11 @@
 // Follow-through contract shared by main and the renderer: what a chat has
 // going on after a reply ends. Background jobs keep running, a pull request is
 // followed until its checks pass, and a "done when" check reruns after each
-// answer. Main owns all three; the renderer lists them and can stop each one.
+// answer, and a check-back the agent promised waits for its minute. Main owns
+// all four; the renderer lists them and can stop or cancel each one.
 
 import type { BackgroundJobView } from "./background-jobs.js";
+import { parseCheckBackView, type CheckBackView } from "./check-backs.js";
 
 export const FOLLOW_THROUGH_VERSION = 1;
 
@@ -55,6 +57,7 @@ export interface PullRequestFollowView {
   problem?: string;
 }
 
+/** The states of a `/until` check saved by releases before it became a goal (read only to migrate it). */
 export type DoneWhenCheckState =
   /** Runs after the next answer. */
   | "waiting"
@@ -63,36 +66,26 @@ export type DoneWhenCheckState =
   /** Still failing after the last allowed check. */
   | "gave-up";
 
-export interface DoneWhenCheckView {
-  command: string;
-  state: DoneWhenCheckState;
-  checksRun: number;
-  setAt: number;
-  lastRunAt?: number;
-  lastExitCode?: number | null;
-  /** The last run hit its 10-minute limit. */
-  lastTimedOut?: boolean;
-}
-
 export interface ChatFollowThroughV1 {
   version: 1;
   chatId: string;
   jobs: BackgroundJobView[];
   pullRequests: PullRequestFollowView[];
-  check: DoneWhenCheckView | null;
+  /** Check-backs still waiting for their minute, soonest first. */
+  checkBacks: CheckBackView[];
 }
 
 export function emptyChatFollowThrough(chatId: string): ChatFollowThroughV1 {
-  return { version: 1, chatId, jobs: [], pullRequests: [], check: null };
+  return { version: 1, chatId, jobs: [], pullRequests: [], checkBacks: [] };
 }
 
-/** True when anything is running, followed or checked, so the composer shows chips. */
+/** True when anything is running, followed or due to check back, so the composer shows chips. */
 export function hasActiveFollowThrough(state: ChatFollowThroughV1 | null | undefined): boolean {
   if (!state) return false;
   return (
     state.jobs.some((job) => job.state === "running") ||
     state.pullRequests.some((follow) => follow.state === "following") ||
-    Boolean(state.check && (state.check.state === "waiting" || state.check.state === "running"))
+    state.checkBacks.length > 0
   );
 }
 
@@ -116,11 +109,10 @@ export function parseChatFollowThrough(value: unknown): ChatFollowThroughV1 | nu
       typeof follow.url === "string" &&
       (follow.state === "following" || follow.state === "ended"),
   );
-  const check =
-    isRecord(value.check) && typeof value.check.command === "string" && typeof value.check.state === "string"
-      ? (value.check as unknown as DoneWhenCheckView)
-      : null;
-  return { version: 1, chatId: value.chatId, jobs, pullRequests, check };
+  const checkBacks = Array.isArray(value.checkBacks)
+    ? value.checkBacks.flatMap((entry) => parseCheckBackView(entry) ?? [])
+    : [];
+  return { version: 1, chatId: value.chatId, jobs, pullRequests, checkBacks };
 }
 
 /** The "done when" command from `/until <command>`; empty when none was given. */

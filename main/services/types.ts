@@ -22,6 +22,7 @@ import type { ChatHtmlArtifactV1, HtmlArtifactPlacementV1, ChatImagePlacementV1 
 import type { ChatUiVisualV1 } from "../../renderer/shared/aiden-ui/types.js";
 import type { VisualSnapshotRefV1 } from "../../renderer/shared/visual-snapshots.js";
 import type { ChatForkLineageV1 } from "../../renderer/shared/chat-copy-contract.js";
+import type { ChatStartedByV1 } from "../../renderer/shared/chat-started-by.js";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import type { ProviderArtwork } from "../../renderer/shared/provider-artwork.js";
 import type { WebSearchSettingsV2 } from "./web-search-provider-registry-core.js";
@@ -391,6 +392,8 @@ export interface ChatMessage {
   notice?: import("../../renderer/shared/agent-notices.js").AgentNoticeV1;
   /** User messages Aiden Live sent for the person ("By voice"); display-only. */
   inputSource?: import("../../renderer/shared/chat-input-source.js").ChatInputSourceV1;
+  /** A user message the chat that started this one sent (Phase 5, D7); display-only, desktop only. */
+  fromLeadChat?: true;
   /** Set when a UserPromptSubmit hook blocked this user message; it never reaches a model. */
   hookBlocked?: import("./hook-blocked-prompt.js").HookBlockedPromptV1;
   /** Renderer-safe tool milestones associated with this assistant response. */
@@ -522,6 +525,8 @@ export interface ChatMeta {
   lastAssistantFailed?: boolean;
   /** Main-owned provenance for chats created by Fork; absent for ordinary chats and copies. */
   forkedFrom?: ChatForkLineageV1;
+  /** Main-owned: the chat that started this one through `child_chats`; absent otherwise. */
+  startedBy?: ChatStartedByV1;
   /** Main-owned feature owner; owned chats never appear in chat listings or Remote. */
   owner?: ChatOwnerV1;
   /** Temporary floating chat hidden from sidebar, Inbox, Memory, and Remote until saved or attached. */
@@ -552,8 +557,17 @@ export type ScheduledTaskMode = "llm" | "script";
 export type ScheduledTaskPermission = "read-only" | "full";
 export type ScheduledTaskExecutionProfile = "assistant";
 export type ScheduledRunResult = "success" | "error" | "silent" | "blocked" | "skipped";
-/** Why a run was recorded without doing work. Only Bot routines skip today. */
-export type ScheduledRunSkipReason = "bot_paused" | "duplicate" | "paused_by_person";
+/** Why a run was recorded without doing work. */
+export type ScheduledRunSkipReason =
+  | "bot_paused"
+  | "duplicate"
+  | "paused_by_person"
+  /** The task posts into a chat that stayed busy past the bounded wait. */
+  | "chat_busy"
+  /** The task posts into a chat that already ran its hourly share of task runs. */
+  | "chat_budget"
+  /** A chat task's automatic fire more than 12 hours late (asleep or closed); it waits for its next time. */
+  | "too_late";
 
 export interface ScheduledMcpServerBinding {
   id: string;
@@ -609,6 +623,18 @@ export interface ScheduledTask {
   webSearchEnabled?: boolean;
   chatId?: string;
   /**
+   * Main-owned: the chat this task was made in, where its runs post. Set once
+   * at creation by the `schedule_task` tool; renderer and phone saves keep it
+   * and cannot set it. Cleared only by "Use its own chat" or by deleting that
+   * chat, after which runs go to the task's own chat (`chatId`).
+   */
+  originChatId?: string;
+  /**
+   * What starts this task instead of a cron schedule (a watch). A task with a
+   * trigger has an empty `cron` and no `nextRunAt`. Never on a Bot routine.
+   */
+  trigger?: import("../../renderer/shared/scheduled-task-trigger.js").ScheduledTaskTrigger;
+  /**
    * Main-owned Bot that owns this routine. A Bot routine submits to that Bot's
    * conversation instead of a workspace chat and is hidden from the generic
    * scheduled-task surfaces. Immutable once set.
@@ -623,6 +649,11 @@ export interface ScheduledTask {
   notify: boolean;
   lastResult?: ScheduledRunResult;
   lastError?: string;
+  /**
+   * Main-owned: when repeated failed runs last paused this chat task. Only
+   * failures after it count toward the next pause. Never on a Bot routine.
+   */
+  failurePausedAt?: number;
   createdAt: number;
   updatedAt: number;
 }
@@ -645,6 +676,10 @@ export interface ScheduledRun {
   claimCheck?: { stepIds: string[]; toolNames: string[] };
   /** The Bot's behavior fingerprint when the run was sent (spec §4.4). */
   fingerprint?: string;
+  /** The person started it (Run now). Its failure never counts toward pausing the task. */
+  byHand?: true;
+  /** A `blocked` run that was stopped (cancelled or Aiden quitting), not refused. */
+  cancelled?: true;
   chatId?: string;
 }
 
@@ -671,6 +706,13 @@ export interface ScheduledTaskInput {
   executionProfile?: ScheduledTaskExecutionProfile;
   /** Explicit Web Search authority. New tasks default to false. */
   webSearchEnabled?: boolean;
+  /** Main-owned: the chat a new task posts into. Only read when creating; saves of an existing task keep its binding. */
+  originChatId?: string;
+  /**
+   * What starts the task instead of `cron`. Undefined keeps the saved trigger
+   * (older callers never send one); `null` removes it so the task runs on `cron`.
+   */
+  trigger?: import("../../renderer/shared/scheduled-task-trigger.js").ScheduledTaskTrigger | null;
   /** Main-owned Bot routine owner. Renderer schedule mutations cannot set this field. */
   botId?: string;
   /** Main-owned Bot routine schedule; when set, `cron` is derived from it. */
@@ -695,6 +737,10 @@ export interface ScheduledTaskSettings {
   defaultMcpEnabled: boolean;
   defaultNotify: boolean;
   defaultTimezone: string;
+  /** "Let chats check back later": a workspace chat's agent may set check-backs. */
+  chatCheckBacks: boolean;
+  /** Keep this computer awake while Aiden works (on by default). Desktop-only; not sent to phones. */
+  keepAwakeWhileWorking: boolean;
 }
 
 export type McpTransport = "stdio" | "http";
@@ -858,6 +904,8 @@ export interface AppSettings extends AidenLiveSettingsFields {
   /** Advanced: the model the Auto judge uses. Absent: the chat's own model. */
   approvalModel?: { providerId: string; model: string };
   botMessaging?: boolean;
+  /** Approvals → Advanced: "Chats can start other chats". On unless false; only false is stored. */
+  childChats?: boolean;
   /** Settings → Context & Limits: dollar limits per chat, Bot month and routine run. Absent amounts: no limit. */
   spendingLimits?: import("../../renderer/shared/spending.js").SpendingLimitsSettings;
   lastProviderId?: string;
@@ -957,6 +1005,10 @@ export interface AppSettings extends AidenLiveSettingsFields {
   scheduledDefaultMcpEnabled?: boolean;
   scheduledDefaultNotify?: boolean;
   scheduledDefaultTimezone?: string;
+  /** Workspace chats may promise to check back later (`check_back`). Omitted means on. */
+  chatCheckBacks?: boolean;
+  /** Settings → Scheduled tasks → While you're away. Omitted means on; only `false` is stored. */
+  keepAwakeWhileWorking?: boolean;
   /** Aiden assistant window, hotkey, and proactivity settings. */
   assistant?: AssistantConfig;
   /** Device-local display name used by the private usage profile. */

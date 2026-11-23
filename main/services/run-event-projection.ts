@@ -91,14 +91,14 @@ export function ownRecord(value: unknown): Record<string, unknown> | null {
 const ASSISTANT_AUTOMATION_DETAIL_KEYS = [
   "kind", "action", "taskId", "enabled", "name", "prompt", "cron", "timezone", "nextRunAt",
   "notify", "mode", "permission", "workspaceId", "workspaceName", "mcpServerIds",
-  "mcpServerNames", "providerId", "providerName", "model", "modelName", "schedulerEnabled",
+  "mcpServerNames", "providerId", "providerName", "model", "modelName", "schedulerEnabled", "whenLabel",
 ] as const;
 
 const SCHEDULED_TASK_DETAIL_KEYS = [
   "kind", "action", "taskId", "expectedUpdatedAt", "enabled", "name", "prompt", "script",
   "cron", "timezone", "nextRunAt", "notify", "mode", "permission", "workspaceId",
   "workspaceName", "mcpServerIds", "mcpServerNames", "providerId", "providerName", "model",
-  "modelName", "legacyGlobalMcp", "schedulerEnabled",
+  "modelName", "legacyGlobalMcp", "schedulerEnabled", "postsIn", "whenLabel",
 ] as const;
 
 function pickDeclared(

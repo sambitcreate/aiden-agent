@@ -4,9 +4,25 @@ import type { ToolApprovalScope } from "../../renderer/shared/tool-approval-scop
 import type { AidenRemotePendingQuestion } from "./aiden-remote-protocol.js";
 import type { AidenRemotePendingApproval } from "./aiden-remote-streams.js";
 import type { ToolApprovalPrompt } from "./tool-approval.js";
+import type { ChatGenerationOwner } from "./chat-generation-owner.js";
 
 /** How long a card waits for an answer, the same as a phone turn's card. */
 export const OWED_TURN_PROMPT_LIFETIME_MS = 5 * 60 * 1_000;
+
+/**
+ * How long a card of a turn Aiden started for an attended chat (a goal
+ * round) waits: the person started the goal but may be away for a while.
+ */
+export const ATTENDED_TURN_PROMPT_LIFETIME_MS = 30 * 60 * 1_000;
+
+/** How long one turn's cards wait, and who hears when one expires unanswered. */
+export interface OwedTurnPromptLifetime {
+  ms: number;
+  /** A card of this turn waited its whole lifetime and was denied or closed. */
+  expired?(chatId: string, kind: "approval" | "question"): void;
+}
+
+const OWED_TURN_LIFETIME: OwedTurnPromptLifetime = { ms: OWED_TURN_PROMPT_LIFETIME_MS };
 
 /**
  * Model operations whose approval needs the full payload on the window that
@@ -77,14 +93,21 @@ export function createOwedTurnPrompts(deps: OwedTurnPromptsDeps) {
 
   return {
     /** What the owed turn sends its owner. Only cards are kept; the rest reaches desktops as host-run frames. */
-    publish(chatId: string, channel: NotificationChannel, payload: unknown): void {
+    publish(
+      chatId: string,
+      channel: NotificationChannel,
+      payload: unknown,
+      lifetime: OwedTurnPromptLifetime = OWED_TURN_LIFETIME,
+    ): void {
       if (channel === "chat:approval") {
         const prompt = payload as ToolApprovalPrompt;
         drop(prompt.approvalId);
-        const expiresAt = deps.now() + OWED_TURN_PROMPT_LIFETIME_MS;
+        const expiresAt = deps.now() + lifetime.ms;
         const timer = deps.setTimer(() => {
-          if (approvals.get(prompt.approvalId)?.expiresAt === expiresAt) deps.expireApproval(prompt.approvalId);
-        }, OWED_TURN_PROMPT_LIFETIME_MS);
+          if (approvals.get(prompt.approvalId)?.expiresAt !== expiresAt) return;
+          deps.expireApproval(prompt.approvalId);
+          lifetime.expired?.(chatId, "approval");
+        }, lifetime.ms);
         approvals.set(prompt.approvalId, { chatId, streamId: prompt.streamId, prompt, expiresAt, timer });
         deps.notifyChanged(chatId);
         return;
@@ -93,13 +116,17 @@ export function createOwedTurnPrompts(deps: OwedTurnPromptsDeps) {
         const prompt = payload as AskUserQuestionPromptV1;
         drop(prompt.promptId);
         const now = deps.now();
-        // The agent's own deadline when it has one, never past a phone card's.
+        // The agent's own deadline when it has one, never past this turn's card lifetime.
         const agentDeadline = prompt.expiresAt ? Date.parse(prompt.expiresAt) : Number.NaN;
         const expiresAt = Number.isFinite(agentDeadline)
-          ? Math.min(Math.max(agentDeadline, now), now + OWED_TURN_PROMPT_LIFETIME_MS)
-          : now + OWED_TURN_PROMPT_LIFETIME_MS;
+          ? Math.min(Math.max(agentDeadline, now), now + lifetime.ms)
+          : now + lifetime.ms;
+        // Closing at the agent's own earlier deadline is its choice, not the person's absence.
+        const fullLifetime = expiresAt === now + lifetime.ms;
         const timer = deps.setTimer(() => {
-          if (questions.get(prompt.promptId)?.expiresAt === expiresAt) deps.expireQuestion(prompt.promptId);
+          if (questions.get(prompt.promptId)?.expiresAt !== expiresAt) return;
+          deps.expireQuestion(prompt.promptId);
+          if (fullLifetime) lifetime.expired?.(chatId, "question");
         }, expiresAt - now);
         questions.set(prompt.promptId, {
           chatId,
@@ -179,3 +206,65 @@ export function createOwedTurnPrompts(deps: OwedTurnPromptsDeps) {
 }
 
 export type OwedTurnPrompts = ReturnType<typeof createOwedTurnPrompts>;
+
+export interface PromptLifetimeDeps {
+  now(): number;
+  setTimer(callback: () => void, ms: number): unknown;
+  clearTimer(handle: unknown): void;
+  /** Denies the approval; false when someone already answered it. */
+  expireApproval(approvalId: string): boolean;
+  /** Closes the question as timed out; false when someone already answered it. */
+  expireQuestion(promptId: string): boolean;
+}
+
+/**
+ * A turn Aiden started in a window that shows the chat (a goal round on
+ * screen): its cards show in that window as usual, but one nobody answers
+ * within `lifetime` is denied or closed, as an owed turn's is, and
+ * `lifetime.expired` hears it. A question whose own deadline is sooner closes
+ * itself; that is the agent's choice, not the person's absence.
+ */
+export function withPromptLifetime(
+  owner: ChatGenerationOwner,
+  chatId: string,
+  lifetime: OwedTurnPromptLifetime,
+  deps: PromptLifetimeDeps,
+): ChatGenerationOwner {
+  const timers = new Map<string, { streamId: string; handle: unknown }>();
+  const clear = (id: string) => {
+    const timer = timers.get(id);
+    if (!timer) return;
+    deps.clearTimer(timer.handle);
+    timers.delete(id);
+  };
+  const arm = (id: string, streamId: string, expire: (id: string) => boolean, kind: "approval" | "question") => {
+    clear(id);
+    const handle = deps.setTimer(() => {
+      timers.delete(id);
+      if (expire(id)) lifetime.expired?.(chatId, kind);
+    }, lifetime.ms);
+    timers.set(id, { streamId, handle });
+  };
+  return {
+    ...(owner.kind ? { kind: owner.kind } : {}),
+    id: owner.id,
+    documentId: owner.documentId,
+    isDestroyed: () => owner.isDestroyed(),
+    onInvalidated: (listener) => owner.onInvalidated(listener),
+    send(channel, payload) {
+      if (channel === "chat:approval") {
+        const prompt = payload as ToolApprovalPrompt;
+        arm(prompt.approvalId, prompt.streamId, deps.expireApproval, "approval");
+      } else if (channel === "chat:questionnaire") {
+        const prompt = payload as AskUserQuestionPromptV1;
+        const agentDeadline = prompt.expiresAt ? Date.parse(prompt.expiresAt) : Number.NaN;
+        const sooner = Number.isFinite(agentDeadline) && agentDeadline - deps.now() < lifetime.ms;
+        if (!sooner) arm(prompt.promptId, prompt.streamId, deps.expireQuestion, "question");
+      } else if (channel === "chat:done" || channel === "chat:error") {
+        const streamId = (payload as { streamId?: unknown } | null)?.streamId;
+        for (const [id, timer] of [...timers]) if (timer.streamId === streamId) clear(id);
+      }
+      owner.send(channel, payload);
+    },
+  };
+}

@@ -166,6 +166,22 @@ test("search matches title, project and host, and the machine filter narrows to 
   assert.deepEqual(titles(filterInboxEntries(entries, { search: "chat", machineFilter: "host:studio" })), ["Chat b"]);
 });
 
+test("a local chat whose keep-going goal needs the person is a Needs you row with the goal's reason", () => {
+  const [row] = localInboxEntries({
+    platform: "darwin",
+    chats: [chat("a")],
+    workspaces,
+    rowState: () => "idle",
+    unread: () => false,
+    pending: new Map([["a", { chatId: "a", kind: "goal", summary: "Needs an API key to deploy", since: NOW - 7 * MINUTE, count: 1 }]]),
+  });
+  assert.equal(inboxState(row!.signals, NOW).shelf, "needs_you");
+  const status = inboxRowStatus(row!, "needs_you", NOW);
+  assert.deepEqual([status.label, status.wait, status.tone, status.needsYou], ["Needs you", "7m", "warning", "needs_you"]);
+  assert.equal(inboxRowDescription(row!, status), "Keep-going goal: Needs an API key to deploy");
+  assert.equal(inboxRowAction(row!, "needs_you", status, true), null, "the person answers it in the chat");
+});
+
 test("Needs you statuses name the wait, and only Failed uses the danger tone", () => {
   const cases: [Partial<InboxSignals>, string, string][] = [
     [{ rowState: "needs_approval", attentionSince: NOW - 3 * MINUTE }, "Approval", "warning"],

@@ -560,8 +560,44 @@ export function withoutForgottenFactsSession<Metadata extends PiSessionMetadata>
  * (`withoutForgottenFacts`), and when a compaction inside the turn summarized
  * away the prompt's update, the update is put back after the summary, so the
  * model still reads the current state while system keeps the head's.
+ *
+ * `goalReminder`, given while the chat has a keep-going goal (until it is done
+ * or cleared), sits right after the newest compaction summary, so the goal
+ * survives the summary. It is never journaled and depends only on the goal's
+ * objective, so every request of the goal's life, paused or not, sends the
+ * same bytes there.
  */
 export function chatStateRequestMessages(
+  head: ChatTurnState,
+  current: ChatTurnState,
+  goalReminder?: string,
+): (messages: readonly AgentMessage[]) => AgentMessage[] {
+  const stated = chatStateMessages(head, current);
+  return (messages) => withGoalReminder(stated(messages), goalReminder);
+}
+
+/** The hidden host message that keeps an active goal after a compaction summary. */
+export const GOAL_REMINDER_CUSTOM_TYPE = "aiden-goal-reminder";
+
+function withGoalReminder(messages: AgentMessage[], reminder: string | undefined): AgentMessage[] {
+  if (!reminder) return messages;
+  let summary = -1;
+  messages.forEach((message, index) => {
+    if (message.role === "compactionSummary") summary = index;
+  });
+  if (summary < 0) return messages;
+  const timestamp = (messages[summary] as { timestamp?: unknown }).timestamp;
+  const note: AgentMessage = {
+    role: "custom",
+    customType: GOAL_REMINDER_CUSTOM_TYPE,
+    content: reminder,
+    display: false,
+    timestamp: typeof timestamp === "number" ? timestamp : 0,
+  };
+  return [...messages.slice(0, summary + 1), note, ...messages.slice(summary + 1)];
+}
+
+function chatStateMessages(
   head: ChatTurnState,
   current: ChatTurnState,
 ): (messages: readonly AgentMessage[]) => AgentMessage[] {

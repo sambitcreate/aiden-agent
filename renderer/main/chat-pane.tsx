@@ -86,6 +86,7 @@ import { useNavigate } from "@tanstack/react-router";
 import { retryUsageLimitNow, useUsageLimitNow, useUsageLimitWait } from "../lib/use-usage-limit-wait";
 import { useSpendingStatus } from "../lib/use-spending-status";
 import { SpendingLimitNotice } from "../components/spending/spending-limit-notice";
+import { ChatGoalBar } from "../components/goal-bar";
 import { spendingNotice } from "../shared/spending";
 import { hookMessagesNotice } from "../shared/hooks-settings";
 import { useMarkChatRead } from "../lib/use-mark-chat-read";
@@ -113,7 +114,12 @@ import {
   chatReadinessMessage as chatReadinessMessageFor,
   DENIED_APPROVAL_COMPOSER_PLACEHOLDER,
 } from "../lib/composer-placeholder";
-import { AppWindow, GitFork, TerminalSquare } from "lucide-react";
+import {
+  AppWindow,
+  GitFork,
+  TerminalSquare,
+  MessagesSquare,
+} from "lucide-react";
 import { MessageList } from "../components/message-list";
 import { KeepVisualChatContext } from "../lib/visual-menu-actions";
 import { useReadAloud } from "../lib/tts-client";
@@ -186,6 +192,7 @@ import {
   usePublishLiveChatApprovals,
 } from "../components/assistant/use-live-chat-voice-approvals";
 import { liveChatReachable, stopForLive, useLiveChatController } from "./live-chat-controller";
+import { useReportGoalView } from "../lib/use-report-goal-view";
 import type { ChatInputSourceV1 } from "../shared/chat-input-source";
 import { ComputerUseContinueCallout } from "../components/computer-use-access-approval";
 import {
@@ -194,6 +201,7 @@ import {
   aidenRemoteApi,
   claimChatHandoff,
   createChatTurnId,
+  goalRoundStart,
   createGenerationStreamBuffer,
   detachHandoffStream,
   settingsApi,
@@ -226,6 +234,7 @@ import {
   useSettings,
 } from "../lib/queries";
 import { forkedFromLabel, withForkLineage } from "../lib/chat-copy-view";
+import { fromLeadChatLabel, startedByChatLabel } from "../lib/chat-lineage";
 import {
   chatModelSelection,
   isModelSelectionReadyForNewWork,
@@ -876,6 +885,8 @@ export function ChatPane({ chatId }: { chatId: string }) {
   const generationChatIdRef = React.useRef<string | null>(null);
   const generationIntentRef = React.useRef(0);
   const visualizeTurnRef = React.useRef(false);
+  /** The keep-going round main offered this window, which the next run starts instead of answering a send. */
+  const goalRoundTokenRef = React.useRef<string | null>(null);
   const mountedRef = React.useRef(true);
   const chatIdRef = React.useRef(chatId);
   const todoSnapshotReadFenceRef = React.useRef<TodoSnapshotReadFence | null>(null);
@@ -1410,7 +1421,13 @@ export function ChatPane({ chatId }: { chatId: string }) {
   );
 
   const forkLineage = chat.data?.forkedFrom;
-  const allChats = useAllRegularChats(Boolean(forkLineage));
+  // A chat another chat started (Phase 5, D7). It wins over an outside app's provenance.
+  const chatLineage = chat.data?.startedBy;
+  const allChats = useAllRegularChats(Boolean(forkLineage) || Boolean(chatLineage));
+  const leadChat = chatLineage ? allChats.data?.find((candidate) => candidate.id === chatLineage.chatId) : undefined;
+  const leadChatLoading = Boolean(chatLineage) && allChats.isPending;
+  const startedByChat = chatLineage ? (leadChatLoading ? "Started by another chat" : startedByChatLabel(leadChat?.title)) : undefined;
+  const leadChatMessageLabel = chatLineage && !leadChatLoading ? fromLeadChatLabel(leadChat?.title) : undefined;
   const forkSource = forkLineage
     ? allChats.data?.find((candidate) => candidate.id === forkLineage.chatId)
     : undefined;
@@ -1423,7 +1440,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
     chatId,
     capabilities.mcpServer && !draft && Boolean(persistedChat.data),
   );
-  const startedByLabel = startedBy ? `Started by ${startedBy.name}` : undefined;
+  const startedByLabel = startedBy && !chatLineage ? `Started by ${startedBy.name}` : undefined;
 
   const forkDisabledReason =
     isGenerating || isStartingGeneration || approvals.length > 0
@@ -2064,6 +2081,8 @@ export function ChatPane({ chatId }: { chatId: string }) {
       setQuestionnaireSubmitting(false);
       const visualize = visualizeTurnRef.current === true;
       visualizeTurnRef.current = false;
+      const goalRoundToken = goalRoundTokenRef.current;
+      goalRoundTokenRef.current = null;
       // A chat whose canvas is open says what it shows: the selection and its size on screen.
       const designView = designCanvasViewFor(chatId);
       const handle = startGeneration(
@@ -2089,6 +2108,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
         },
         createStreamCallbacks(generationIntent, { providerId }),
         messageTurnId,
+        goalRoundToken ? goalRoundStart(goalRoundToken) : undefined,
       );
       generationRef.current = handle;
       generationChatIdRef.current = chatId;
@@ -2135,7 +2155,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
       text: string,
       attachments: Attachment[],
       skillInvocation?: SkillInvocationV1,
-      options?: { visualize?: boolean; btw?: boolean; inputSource?: ChatInputSourceV1 },
+      options?: { visualize?: boolean; btw?: boolean; goal?: string; goalSource?: "slash" | "proposal"; inputSource?: ChatInputSourceV1 },
     ) => {
       // Only Aiden Live's chat tools set this; the message shows "By voice".
       const inputSource = options?.inputSource;
@@ -2436,6 +2456,13 @@ export function ChatPane({ chatId }: { chatId: string }) {
         // which this render has not seen yet.
         // A No workspace draft that needed its own folder was saved in a fresh one.
         if (firstDraft) effectiveWorkspaceIdRef.current = updated.workspaceId;
+        if (options?.goal) {
+          // The chat exists now (a draft was just saved): set its goal before the answer
+          // starts, so the kickoff note rides on it. A refusal leaves an ordinary answer.
+          await chatsApi.setGoal(updated.id, options.goal, options.goalSource ?? "slash").catch((error: unknown) => {
+            toast.error(error instanceof Error ? error.message : "The goal could not be set.");
+          });
+        }
         void runGeneration(messageTurnId).then((started) => {
           if (!started.ok && mountedRef.current && chatIdRef.current === chatId) {
             setError(started.error.message);
@@ -2586,6 +2613,33 @@ export function ChatPane({ chatId }: { chatId: string }) {
     visualPromptBusyRef.current = visualPromptBusy;
   }, [visualPromptBusy]);
 
+  /** Start on the agent's suggested goal: the objective goes as the person's message, with the goal, as `/goal` does. */
+  const startProposedGoal = React.useCallback(
+    async (objective: string) => {
+      if (visualPromptBusyRef.current) throw new Error("Wait for the answer to finish, then press Start.");
+      await handleSend(objective, [], undefined, { goal: objective, goalSource: "proposal" });
+    },
+    [handleSend],
+  );
+
+  // Keep-going rounds on screen: tell main which chat this pane shows (a new
+  // chat counts as another chat), so a round this window owns elsewhere stops.
+  useReportGoalView(draft ? null : chatId);
+  React.useEffect(() => {
+    if (draft) return;
+    return chatsApi.onGoalWindowRound(({ chatId: roundChatId, token }) => {
+      if (roundChatId !== chatId) return;
+      if (visualPromptBusyRef.current || !mountedRef.current) {
+        // Main runs it without this window instead.
+        void chatsApi.declineGoalWindowRound(token).catch(() => undefined);
+        return;
+      }
+      ++generationIntentRef.current;
+      goalRoundTokenRef.current = token;
+      void runGeneration(createChatTurnId());
+    });
+  }, [chatId, draft, runGeneration]);
+
   // Main refuses a fork's sends while its summary is pending or failed, so
   // follow-ups wait in the queue until the summary is ready or skipped.
   const forkSummaryHeld = forkSummaryHoldsSend(forkLineage);
@@ -2598,7 +2652,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
       text: string,
       attachments: Attachment[],
       skillInvocation?: SkillInvocationV1,
-      options?: { visualize?: boolean; btw?: boolean; inputSource?: ChatInputSourceV1 },
+      options?: { visualize?: boolean; btw?: boolean; goal?: string; inputSource?: ChatInputSourceV1 },
     ) => {
       if (stopRequestedRef.current) {
         throw new Error("Aiden is stopping this response. Send your message after it stops.");
@@ -4137,13 +4191,30 @@ export function ChatPane({ chatId }: { chatId: string }) {
         className="h-full min-h-0"
         alignFooterToScrollContent
         title={
-          forkSourceLabel || startedByLabel ? (
+          forkSourceLabel || startedByLabel || startedByChat ? (
             <span
               className="block min-w-0"
               data-chat-fork-lineage={forkSourceLabel ? true : undefined}
               data-chat-started-by={startedByLabel ? true : undefined}
+              data-chat-started-by-chat={startedByChat ? true : undefined}
             >
               {chatTitleMenu}
+              {startedByChat ? (
+                <span className="flex min-w-0 items-center gap-1 text-small font-normal text-secondary">
+                  <MessagesSquare aria-hidden="true" className="size-3 shrink-0" />
+                  {leadChat ? (
+                    <button
+                      type="button"
+                      className="min-w-0 truncate rounded-control text-left outline-none hover:text-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                      onClick={() => void navigate({ to: "/chat/$chatId", params: { chatId: leadChat.id } })}
+                    >
+                      {startedByChat}
+                    </button>
+                  ) : (
+                    <span className="min-w-0 truncate">{startedByChat}</span>
+                  )}
+                </span>
+              ) : null}
               {forkSourceLabel ? (
                 <span className="flex min-w-0 items-center gap-1 text-small font-normal text-secondary">
                   <GitFork aria-hidden="true" className="size-3 shrink-0" />
@@ -4367,6 +4438,13 @@ export function ChatPane({ chatId }: { chatId: string }) {
                 />
               ) : null}
             </ComposerFloatingRow>
+            {draft ? null : (
+              <ChatGoalBar
+                chatId={chatId}
+                className="aiden-dock-inset chat-content-column pb-2"
+                onStartProposal={startProposedGoal}
+              />
+            )}
             {spending.status ? (
               <SpendingLimitNotice
                 status={spending.status}
@@ -4762,6 +4840,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
             <MessageList
               key={chatId}
               chatId={chatId}
+              {...(leadChatMessageLabel ? { leadChatLabel: leadChatMessageLabel } : {})}
               messages={messages}
               draftWorktreeSend={worktreeSend}
               streamingText={displayedStreamingText}

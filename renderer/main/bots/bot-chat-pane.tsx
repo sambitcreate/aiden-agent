@@ -37,6 +37,7 @@ import { botListLocation } from "../../lib/bot-routes";
 import { settingsLocation } from "../../lib/settings-section";
 import { BOT_APPROVAL_REPEAT_COUNT, botAlwaysAllowLabel } from "../../shared/tool-approval-scope";
 import { botsApi } from "../../lib/ipc";
+import { useReportGoalView } from "../../lib/use-report-goal-view";
 import { userFacingErrorMessage } from "../../lib/ipc-error";
 import type { Attachment } from "../../lib/types";
 import { botChatActivityOnDevice, showsBotToolActivity, type BotChatActivityLevel } from "../../shared/bots";
@@ -1020,6 +1021,8 @@ function BotChatSkeleton() {
 }
 
 export function BotChatPane({ botId }: { botId: string }) {
+  // A Bot is not a local workspace chat: a keep-going round this window owns stops.
+  useReportGoalView(null);
   const navigate = useNavigate();
   const qc = useQueryClient();
   const bot = useBot(botId);

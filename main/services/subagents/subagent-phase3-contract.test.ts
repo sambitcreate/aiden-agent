@@ -294,7 +294,7 @@ test("renderer message appends serialize against detached terminal persistence",
   );
   assert.equal(
     (schedule.match(/turn\.settleAsyncWork\(\)/gu) ?? []).length,
-    3,
+    4,
     "every scheduled turn path must settle its claimed append frame",
   );
   assert.match(

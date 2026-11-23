@@ -34,6 +34,7 @@ function harness(options: {
   branches?: GitBranches | Error;
   ensure?: (request: FirstMessageWorktreeRequest, seed: string) => Promise<{ workspaceId: string; branch: string }>;
   records?: Record<string, { state: "pending" | "failed" | "ready"; workspaceId: string }>;
+  workspaces?: Workspace[];
 } = {}) {
   const requests: Array<{ request: FirstMessageWorktreeRequest; seed: string }> = [];
   const owners: string[] = [];
@@ -60,6 +61,7 @@ function harness(options: {
       owners.push(deviceId);
       return owner;
     },
+    listWorkspaces: async () => options.workspaces ?? [site],
     record: async (key) => {
       const entry = options.records?.[key];
       return entry && {
@@ -219,4 +221,63 @@ test("when the default branch moved since an earlier attempt, the chat's existin
     requests.map(({ request }) => [request.baseRef, request.idempotencyKey]),
     [["main", "phone-chat:chat-1"], ["develop", "phone-chat:chat-1"]],
   );
+});
+
+const siteWorktree: Workspace = {
+  ...site,
+  id: "site-wt",
+  folderPath: "/Users/sam/.aiden/worktrees/site-1",
+  managedWorktree: { repositoryPath: "/Users/sam/projects/site", worktreePath: "/Users/sam/.aiden/worktrees/site-1", branch: "aiden/release-prep", createdFromHead: "abc" },
+};
+
+test("a started chat's worktree uses the key, base and branch name its lead asked for", async () => {
+  const { service, requests } = harness();
+  await service.create("chat:lead-1", "site", "Update the docs", "chat-9", {
+    key: "agent-chat:lead-1:call-1:0:worktree",
+    baseRef: "feature/login",
+    branchName: "docs/update",
+  });
+  assert.deepEqual(requests[0]!.request, {
+    sourceWorkspaceId: "site",
+    baseRef: "feature/login",
+    fromOrigin: true,
+    branchName: "docs/update",
+    idempotencyKey: "agent-chat:lead-1:call-1:0:worktree",
+  });
+  // A remote-tracking base is honoured too.
+  const remote = harness();
+  await remote.service.create("chat:lead-1", "site", "x", "chat-9", { baseRef: "origin/main" });
+  assert.equal(remote.requests[0]!.request.baseRef, "origin/main");
+});
+
+test("a lead in a worktree stacks its started chat's worktree on its own branch, from the workspace it came from", async () => {
+  const { service, requests } = harness({
+    workspace: siteWorktree,
+    workspaces: [site, siteWorktree],
+    // The worktree's branch lives in the same repository.
+    branches: { ...repository, branches: [...repository.branches, "aiden/release-prep"] },
+  });
+  await service.create("chat:lead-1", "site-wt", "Split the tests", "chat-9", { key: "k", stackOnWorktree: true });
+  assert.deepEqual(requests[0]!.request, {
+    sourceWorkspaceId: "site",
+    baseRef: "aiden/release-prep",
+    fromOrigin: false,
+    idempotencyKey: "k",
+  });
+  // Without the stacking option (a phone's New worktree) it is still refused.
+  await assert.rejects(service.create("phone-1", "site-wt", "x", "chat-1"), refusedWith("git_capability_denied", /already in a worktree/u));
+});
+
+test("a started chat's worktree request that can't be met is refused with a fixed sentence before anything is made", async () => {
+  const cases: Array<[string, Parameters<typeof harness>[0], Parameters<ReturnType<typeof harness>["service"]["create"]>[4], string, RegExp]> = [
+    ["unknown base", {}, { baseRef: "release/9" }, "git_capability_denied", /couldn't find the branch release\/9/u],
+    ["invalid base", {}, { baseRef: "bad..name" }, "git_capability_denied", /base branch name isn't valid/u],
+    ["invalid branch name", {}, { branchName: "has space" }, "git_capability_denied", /branch name isn't valid/u],
+    ["worktree with no source", { workspace: siteWorktree, workspaces: [siteWorktree] }, { stackOnWorktree: true }, "workspace_unavailable", /couldn't find the workspace this worktree came from/u],
+  ];
+  for (const [name, options, request, code, pattern] of cases) {
+    const { service, requests } = harness(options);
+    await assert.rejects(service.create("chat:lead-1", "site", "Fix", "chat-1", request), refusedWith(code, pattern), name);
+    assert.equal(requests.length, 0, name);
+  }
 });

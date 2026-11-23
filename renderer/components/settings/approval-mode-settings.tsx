@@ -26,6 +26,7 @@ import { prefersReducedMotion } from "../../lib/appearance-runtime";
 import { glideIntoView } from "../../lib/scroll-into-view";
 import { botMessagingEnabled } from "../../shared/bot-messages";
 import { botRoutinesGoAhead } from "../../shared/bot-rules";
+import { childChatsEnabled } from "../../shared/child-chats";
 import { useAppCapabilities } from "../../lib/app-capabilities";
 import { localComputerNoun } from "../../shared/computer-noun";
 import {
@@ -85,7 +86,10 @@ export function ApprovalModeSettings({ children }: { /** The rules page, under t
   const usable = (providers.data ?? []).filter(isUsable);
   const usableModel = usable.length > 0;
   const mode = effectiveApprovalMode(settings.data, usableModel);
-  const computer = localComputerNoun(useAppCapabilities().platform);
+  const platform = useAppCapabilities().platform;
+  const computer = localComputerNoun(platform);
+  // Matches `childChats` in host-platform-capabilities: the Mac and Linux desktop.
+  const offersChildChats = platform !== "other";
   const modes = APPROVAL_MODES.filter((value) => value !== "auto" || usableModel);
   const showChanges = settings.data?.approvalModeOrigin === "upgrade" && settings.data.approvalChangesSeen !== true;
   const legacyRoutines = botRoutinesGoAhead(settings.data);
@@ -219,6 +223,19 @@ export function ApprovalModeSettings({ children }: { /** The rules page, under t
             />
           </div>
         </Field>
+        {offersChildChats ? (
+          <Field
+            label="Chats can start other chats"
+            description="A chat can hand parts of a task to new chats in its workspace and follow them. Started chats can't do more than the chat that started them, and their approvals still come to you."
+          >
+            <Switch
+              aria-label="Chats can start other chats"
+              checked={childChatsEnabled(settings.data)}
+              disabled={settings.isLoading || saving}
+              onCheckedChange={(next) => void save({ childChats: next }, "Couldn't change whether chats can start other chats.")}
+            />
+          </Field>
+        ) : null}
         {legacyRoutines ? (
           <Field
             label="Routines go ahead without asking"

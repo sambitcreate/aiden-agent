@@ -1,10 +1,12 @@
 import { execFileSync, spawn } from "node:child_process";
 import { once } from "node:events";
+import { readFileSync } from "node:fs";
 import { mkdir, readFile, rename, rmdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { Page } from "@playwright/test";
-import { E2E_WORKSPACE_ID, expect, test } from "./fixtures";
+import { E2E_MODEL_ID, E2E_WORKSPACE_ID, LM_STUDIO_PROVIDER_ID, expect, test } from "./fixtures";
 import type { ChatFollowThroughV1 } from "../../renderer/shared/follow-through";
+import type { GoalView } from "../../renderer/shared/goal";
 
 function invoke<T>(page: Page, channel: string, ...args: unknown[]): Promise<T> {
   return page.evaluate(({ channel, args }) => {
@@ -18,26 +20,47 @@ function invoke<T>(page: Page, channel: string, ...args: unknown[]): Promise<T> 
 function alive(pid: number): boolean {
   try {
     process.kill(pid, 0);
-    return true;
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ESRCH") return false;
     throw error;
   }
+  // On Linux a killed orphan can linger as a zombie until its new parent
+  // waits for it; it has ended, so it does not count as alive.
+  if (process.platform === "linux") {
+    try {
+      return !/^\d+ \(.*\) Z /su.test(readFileSync(`/proc/${pid}/stat`, "utf8"));
+    } catch {
+      return false;
+    }
+  }
+  return true;
+}
+
+/** `/until <command>`: a keep-going goal checked by the command. */
+function setCheck(page: Page, chatId: string, command: string): Promise<GoalView> {
+  return invoke<GoalView>(page, "chats:goal:set", { chatId, source: "until", check: command });
+}
+
+function goal(page: Page, chatId: string): Promise<GoalView | null> {
+  return invoke<GoalView | null>(page, "chats:goal:get", chatId);
 }
 
 test.use({ workspaceSeed: true });
 
-test("a crashed check is reaped before new work, and its chat keeps the interrupted check waiting", async ({ aiden }) => {
+test("a crashed check is reaped before new work, and its goal comes back paused", async ({ aiden }) => {
   test.setTimeout(90_000);
   let page = aiden.page;
-  const { id } = await invoke<{ id: string }>(page, "chats:create", { workspaceId: E2E_WORKSPACE_ID });
+  // A goal needs a chat with a model; its check never asks the model anything here.
+  const { id } = await invoke<{ id: string }>(page, "chats:create", {
+    workspaceId: E2E_WORKSPACE_ID, providerId: LM_STUDIO_PROVIDER_ID, model: E2E_MODEL_ID,
+  });
   const destination = await invoke<{ id: string }>(page, "workspaces:create", { name: "Another workspace" });
   const pidFile = path.join(aiden.workspaceDir, "check.pid");
-  await invoke(page, "chats:followThroughSetCheck", { chatId: id, command: "trap '' TERM; echo $$ >>check.pid && exec sleep 60" });
+  await setCheck(page, id, "trap '' TERM; echo $$ >>check.pid && exec sleep 60");
   await expect.poll(() => readFile(pidFile, "utf8").catch(() => "")).toMatch(/^\d+\n$/);
   const pid = Number(await readFile(pidFile, "utf8"));
   expect(alive(pid)).toBe(true);
-  await expect(invoke(page, "chats:moveEmptyToWorkspace", id, destination.id)).rejects.toThrow(/stop this chat.s check/i);
+  await expect(invoke(page, "chats:moveEmptyToWorkspace", id, destination.id)).rejects.toThrow(/stop this chat.s check|pause or clear this chat.s goal/i);
 
   aiden.app.process().kill("SIGKILL");
   page = await aiden.relaunch(async () => {
@@ -47,17 +70,16 @@ test("a crashed check is reaped before new work, and its chat keeps the interrup
     record.jobs.unshift(null);
     await writeFile(ledger, JSON.stringify(record));
   });
-  const restored = await invoke<ChatFollowThroughV1>(page, "chats:followThrough", id);
+  const restored = await goal(page, id);
   expect(alive(pid)).toBe(false);
-  expect(restored.check).toMatchObject({ state: "waiting", checksRun: 0 });
+  // Nothing restarts by itself after a crash: the goal waits for Keep going.
+  expect(restored).toMatchObject({ status: "paused", cause: "restart", rounds: 1, check: { command: "trap '' TERM; echo $$ >>check.pid && exec sleep 60" } });
   expect(await readFile(pidFile, "utf8")).toBe(`${pid}\n`);
 
   // The first new command after recovery owns its own group. Even a child
   // that closed both output pipes cannot outlive the completed check.
-  await invoke(page, "chats:followThroughSetCheck", {
-    chatId: id, command: "sleep 60 >/dev/null 2>&1 & echo $! >leftover.pid",
-  });
-  await expect.poll(async () => (await invoke<ChatFollowThroughV1>(page, "chats:followThrough", id)).check?.state).toBe("passed");
+  await setCheck(page, id, "sleep 60 >/dev/null 2>&1 & echo $! >leftover.pid");
+  await expect.poll(async () => (await goal(page, id))?.status).toBe("done");
   expect(alive(Number(await readFile(path.join(aiden.workspaceDir, "leftover.pid"), "utf8")))).toBe(false);
 });
 
@@ -67,34 +89,34 @@ test("checks refuse a replaced worktree and drain before its original checkout i
   git("init", "-b", "main");
   git("-c", "user.name=E2E", "-c", "user.email=e2e@example.invalid", "commit", "--allow-empty", "-m", "fixture");
   const worktree = await invoke<{ id: string; folderPath: string }>(aiden.page, "git:createWorktree", E2E_WORKSPACE_ID, "check-cleanup");
-  const chat = await invoke<{ id: string }>(aiden.page, "chats:create", { workspaceId: worktree.id });
+  const chat = await invoke<{ id: string }>(aiden.page, "chats:create", {
+    workspaceId: worktree.id, providerId: LM_STUDIO_PROVIDER_ID, model: E2E_MODEL_ID,
+  });
   const original = worktree.folderPath + "-original";
   await rename(worktree.folderPath, original);
   await mkdir(worktree.folderPath);
   try {
-    await expect(invoke(aiden.page, "chats:followThroughSetCheck", { chatId: chat.id, command: "touch unexpected" }))
-      .rejects.toThrow(/managed worktree/i);
+    await expect(setCheck(aiden.page, chat.id, "touch unexpected")).rejects.toThrow(/managed worktree/i);
     await expect(readFile(path.join(worktree.folderPath, "unexpected"))).rejects.toMatchObject({ code: "ENOENT" });
   } finally {
     await rmdir(worktree.folderPath);
     await rename(original, worktree.folderPath);
   }
 
-  await invoke(aiden.page, "chats:followThroughSetCheck", { chatId: chat.id, command: "echo $$ >check.pid && exec sleep 60" });
+  await setCheck(aiden.page, chat.id, "echo $$ >check.pid && exec sleep 60");
   const pidFile = path.join(worktree.folderPath, "check.pid");
   await expect.poll(() => readFile(pidFile, "utf8").catch(() => "")).toMatch(/^\d+\n$/);
   const pid = Number(await readFile(pidFile, "utf8"));
   // An unprovisioned ignored file makes ordinary removal refuse before Git
-  // mutates the checkout. The process stops, but its check stays configured.
+  // mutates the checkout. The process stops, and its goal pauses with why.
   await writeFile(path.join(worktree.folderPath, ".gitignore"), "keep.local\n");
   await writeFile(path.join(worktree.folderPath, "keep.local"), "keep me");
   await expect(invoke(aiden.page, "git:deleteManagedWorktree", worktree.id)).rejects.toThrow(/ignored files/i);
   expect(alive(pid)).toBe(false);
-  const retained = (await invoke<ChatFollowThroughV1>(aiden.page, "chats:followThrough", chat.id)).check;
-  expect(retained).toMatchObject({ state: "waiting", checksRun: 0 });
+  await expect.poll(async () => (await goal(aiden.page, chat.id))?.status).toBe("paused");
+  expect((await goal(aiden.page, chat.id))?.reason).toMatch(/stopped before it finished/i);
   await invoke(aiden.page, "git:deleteManagedWorktree", worktree.id, { force: true });
   expect(alive(pid)).toBe(false);
-  expect((await invoke<ChatFollowThroughV1>(aiden.page, "chats:followThrough", chat.id)).check).toBeNull();
 });
 
 test("revoking folder access ends a restored pull request follow across relaunch", async ({ aiden }) => {

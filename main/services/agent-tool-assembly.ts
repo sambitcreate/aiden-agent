@@ -51,6 +51,8 @@ export interface ToolContext {
   shellLeftovers?: RunCommandLeftovers;
   /** Background scheduled runs disable this to prevent recursive task creation. */
   allowScheduling?: boolean;
+  /** The ordinary workspace chat this generation runs in; tasks created here post into it. */
+  scheduleOriginChatId?: string;
   /** Read-only background runs withhold MCP tools because their mutation semantics are unknown. */
   allowMcpTools?: boolean;
   /** Explicit host admission for attended desktop workspace provider credentials. */
@@ -115,11 +117,12 @@ export interface AgentToolSources {
 export function buildSchedulingTools(
   context: Pick<
     ToolContext,
-    "workspaceId" | "allowScheduling" | "mode" | "assistantModelSelection"
+    "workspaceId" | "allowScheduling" | "mode" | "assistantModelSelection" | "scheduleOriginChatId"
   >,
 ): AgentTool[] {
   return scheduleTaskToolsForContext({
     workspaceId: context.workspaceId,
+    ...(context.scheduleOriginChatId ? { originChatId: context.scheduleOriginChatId } : {}),
     allowScheduling: context.allowScheduling,
     mode: context.mode === "assistant" ? "assistant-attended" : "standard",
     assistantModelSelection: context.assistantModelSelection,

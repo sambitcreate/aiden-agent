@@ -27,8 +27,10 @@ import {
   scheduleToolRequiresApproval,
   SCHEDULE_TOOL_NAME,
   summarizeScheduleToolCall,
+  canonicalizeAssistantScheduleToolArguments,
   type ScheduleToolDependencies,
 } from "./schedule-tool.js";
+import { isAssistantAutomationApprovalDetails, isScheduledTaskApprovalDetails } from "../../renderer/shared/assistant.js";
 import { createHash } from "node:crypto";
 import { mcpRuntimeConnectionSnapshot } from "./mcp-credential-cleanup-core.js";
 import {
@@ -84,6 +86,8 @@ function scheduledTask(input: ScheduledTaskInput, id: string): ScheduledTask {
       ? { mcpServerBindings: structuredClone(input.mcpServerBindings) }
       : {}),
     executionProfile: input.executionProfile,
+    ...(input.originChatId ? { originChatId: input.originChatId } : {}),
+    ...(input.trigger ? { trigger: structuredClone(input.trigger) } : {}),
     notify: input.notify !== false,
     createdAt: 1,
     updatedAt: 1,
@@ -852,9 +856,10 @@ test("attended Assistant scheduling exposes separate list, create, and edit tool
     "permission",
     "prompt",
     "timezone",
+    "trigger",
     "workspaceId",
   ]);
-  assert.deepEqual(schema.required?.slice().sort(), ["action", "cron", "name", "prompt"]);
+  assert.deepEqual(schema.required?.slice().sort(), ["action", "name", "prompt"]);
   assert.equal(schema.additionalProperties, false);
   assert.doesNotMatch(JSON.stringify(schema), /run_now|pause|resume|remove/u);
 
@@ -1655,4 +1660,142 @@ test("schedule_task cannot choose a server switched off for the model", async ()
     ),
     /off for the model/u,
   );
+});
+
+
+const CHAT_ACCESS = { kind: "standard", defaultWorkspaceId: "workspace-1", originChatId: "chat-1" } as const;
+
+test("a task made in a workspace chat posts into that chat by default, and the card says so", async () => {
+  const fake = fakeDependencies();
+  const args = { action: "create", name: "Daily build check", cron: "0 9 * * *", prompt: "Run the build and report." };
+  const approval = await prepareStandardScheduleApproval(args, undefined, fake.dependencies, "workspace-1", "chat-1");
+  assert.equal(approval.details.postsIn, "this_chat");
+  assert.match(approval.summary, /posts in this chat/u);
+  const tool = createScheduleTaskTool(CHAT_ACCESS, fake.dependencies);
+  const created = jsonResult(await tool.execute("create", args));
+  assert.equal(fake.tasks[0]?.originChatId, "chat-1");
+  assert.equal((created.task as { postsInChat?: boolean }).postsInChat, true);
+});
+
+test("post_in_chat false, or a task outside the chat's workspace, runs in its own chat", async () => {
+  const fake = fakeDependencies();
+  const tool = createScheduleTaskTool(CHAT_ACCESS, fake.dependencies);
+  const optedOut = { action: "create", name: "Own chat", cron: "0 9 * * *", prompt: "Report.", post_in_chat: false };
+  const approval = await prepareStandardScheduleApproval(optedOut, undefined, fake.dependencies, "workspace-1", "chat-1");
+  assert.equal(approval.details.postsIn, "own_chat");
+  await tool.execute("own", optedOut);
+  // No project: the task can't share the chat's workspace, so it gets its own chat.
+  await tool.execute("global", { action: "create", name: "Global", cron: "0 9 * * *", prompt: "Report.", clearWorkspace: true });
+  assert.deepEqual(fake.tasks.map((task) => task.originChatId), [undefined, undefined]);
+  await assert.rejects(
+    tool.execute("refused", { action: "create", name: "Global", cron: "0 9 * * *", prompt: "Report.", clearWorkspace: true, post_in_chat: true }),
+    /only when it runs in this chat's workspace/u,
+  );
+  assert.equal(fake.tasks.length, 2);
+});
+
+test("a task that would post into a chat more often than every 15 minutes is refused with a way out", async () => {
+  const fake = fakeDependencies();
+  const tool = createScheduleTaskTool(CHAT_ACCESS, fake.dependencies);
+  const everyTen = { action: "create", name: "Poller", cron: "*/10 * * * *", prompt: "Check the queue." };
+  await assert.rejects(tool.execute("fast", everyTen), /every 15 minutes[\s\S]*post_in_chat to false/u);
+  // Ten minutes apart only between 9:00 and 9:10 still counts: the next five runs are measured.
+  await assert.rejects(tool.execute("burst", { ...everyTen, cron: "0,10 9 * * *" }), /every 15 minutes/u);
+  assert.equal(fake.tasks.length, 0);
+  await tool.execute("own", { ...everyTen, post_in_chat: false });
+  await tool.execute("slow", { ...everyTen, name: "Quarter hour", cron: "*/15 * * * *" });
+  assert.deepEqual(fake.tasks.map((task) => task.originChatId), [undefined, "chat-1"]);
+});
+
+test("post_in_chat only applies when creating", async () => {
+  const fake = fakeDependencies();
+  const tool = createScheduleTaskTool(CHAT_ACCESS, fake.dependencies);
+  await tool.execute("create", { action: "create", name: "Daily", cron: "0 9 * * *", prompt: "Report." });
+  await assert.rejects(
+    tool.execute("update", { action: "update", id: "task-1", taskName: "Daily", expectedUpdatedAt: 1, post_in_chat: false }),
+    /applies only when creating/u,
+  );
+  assert.equal(fake.tasks[0]?.originChatId, "chat-1");
+});
+
+
+test("a trigger Aiden proposes survives approval unchanged, shows its label on the card and keeps the link from the agent", async () => {
+  const fake = fakeDependencies();
+  const trigger = { kind: "webhook", gapMinutes: 10, filters: [{ path: "action", equals: "opened" }] };
+  const args = { action: "create", name: "New PRs", prompt: "Review the new pull request.", trigger };
+  assert.equal(summarizeScheduleToolCall(args), 'Create scheduled task "New PRs" (When its link is called, when it matches (at most every 10 min)) with read-only access');
+  const approval = await prepareStandardScheduleApproval(args, ASSISTANT_MODEL_SELECTION, fake.dependencies);
+  assert.ok(isScheduledTaskApprovalDetails(approval.details), "the card accepts a trigger task's details");
+  assert.equal(approval.details.whenLabel, "When its link is called, when it matches (at most every 10 min)");
+  assert.equal(approval.details.nextRunAt, 0);
+  assert.match(approval.summary, /When its link is called/u);
+
+  const tool = createScheduleTaskTool({ kind: "standard", modelSelection: ASSISTANT_MODEL_SELECTION }, fake.dependencies);
+  const created = jsonResult(await tool.execute("create-trigger", args));
+  assert.deepEqual(fake.tasks[0]?.trigger, trigger, "exactly what was approved is saved");
+  assert.equal(fake.tasks[0]?.cron, "");
+  assert.equal(created.link, "person_creates_in_task_details");
+  assert.equal((created.task as Record<string, unknown>).trigger, approval.details.whenLabel);
+  assert.doesNotMatch(JSON.stringify(created), /hooks\/tasks/u, "no link reaches the agent");
+
+  await assert.rejects(
+    tool.execute("update-trigger", { action: "update", id: fake.tasks[0]!.id, taskName: "New PRs", expectedUpdatedAt: 1, trigger }),
+    /only when creating/u,
+  );
+  assert.equal(summarizeScheduleToolCall({ ...args, trigger: { kind: "webhook", gapMinutes: 0 } }).includes("an invalid trigger"), true);
+});
+
+test("an Aiden Assistant automation may watch an address or run from a link, never run a script", () => {
+  const base = { action: "create", name: "Status", prompt: "Tell me what changed on the status page." };
+  const watch = { kind: "watch", source: { type: "url", url: "https://status.example.com/" }, everyMinutes: 30 };
+  const canonical = canonicalizeAssistantScheduleToolArguments({ ...base, trigger: watch });
+  assert.deepEqual(canonical.trigger, { ...watch, agentProposed: true }, "saved as an address Aiden proposed");
+  assert.equal(canonical.cron, undefined);
+  const proposal = prepareAssistantScheduleProposal({ ...base, trigger: { kind: "webhook", gapMinutes: 5 } });
+  assert.equal(proposal.input.cron, "");
+  assert.equal(proposal.details.whenLabel, "When its link is called (at most every 5 min)");
+  assert.ok(isAssistantAutomationApprovalDetails({
+    ...proposal.details, workspaceName: null, mcpServerNames: [], providerId: "p", providerName: "P", model: "m", modelName: "M", schedulerEnabled: true,
+  }));
+  assert.throws(
+    () => canonicalizeAssistantScheduleToolArguments({ ...base, trigger: { kind: "watch", source: { type: "script", script: "check.sh" }, everyMinutes: 30 } }),
+    /not run a script/u,
+  );
+});
+
+test("Aiden can't create a task that runs when a connected app has news; the person sets it up with Find sources", async () => {
+  const fake = fakeDependencies();
+  const trigger = {
+    kind: "connector", everyMinutes: 15, condition: { kind: "email", unreadOnly: false },
+    source: { providerLabel: "iMCP Mail", accountLabel: "me@example.test", resourceLabel: "Inbox" },
+  };
+  const args = { action: "create", name: "New mail", prompt: "Sort new mail.", trigger };
+  const tool = createScheduleTaskTool({ kind: "standard", modelSelection: ASSISTANT_MODEL_SELECTION }, fake.dependencies);
+  await assert.rejects(tool.execute("create-connector", args), /Find sources/u);
+  assert.equal(fake.tasks.length, 0, "nothing is saved");
+  assert.throws(() => canonicalizeAssistantScheduleToolArguments({ action: "create", name: "New mail", prompt: "Sort new mail.", trigger }), /Find sources/u);
+});
+
+test("a watch Aiden proposes can't point at this computer or a private network, and its card shows the whole host", async () => {
+  const base = { action: "create", name: "Status", prompt: "Tell me what changed." };
+  const watch = (url: string) => ({ kind: "watch", source: { type: "url", url }, everyMinutes: 30 });
+  for (const url of ["https://192.168.1.10/status", "https://10.0.0.2/", "https://169.254.169.254/latest", "https://printer.local/", "https://build.internal/", "https://[::1]/", "https://[fd00::1]/", "http://localhost:8080/",
+    "https://[::7f00:1]/", "https://[64:ff9b::a00:1]/", "https://[fec0::1]/", "https://198.18.0.5/", "https://192.0.0.8/", "https://239.0.0.1/",
+    "https://255.255.255.255/", "https://nas.home.arpa/", "https://router.lan/", "https://nas/", "https://2130706433/"]) {
+    assert.throws(() => canonicalizeAssistantScheduleToolArguments({ ...base, trigger: watch(url) }), /private network/u, url);
+    const fake = fakeDependencies();
+    const tool = createScheduleTaskTool({ kind: "standard", modelSelection: ASSISTANT_MODEL_SELECTION }, fake.dependencies);
+    await assert.rejects(tool.execute("create-private", { ...base, trigger: watch(url) }), /private network/u, url);
+    assert.equal(fake.tasks.length, 0);
+  }
+  const host = "github.com.account-security-check.example.net";
+  const proposal = prepareAssistantScheduleProposal({ ...base, trigger: watch(`https://${host}/${"a".repeat(120)}`) });
+  assert.ok(proposal.details.whenLabel?.includes(host), "the full host is on the card");
+  assert.ok((proposal.details.whenLabel?.length ?? 0) < 160, "only the path is shortened");
+
+  // A public address is saved marked as Aiden's, so each check connects only to public addresses.
+  const fake = fakeDependencies();
+  const tool = createScheduleTaskTool({ kind: "standard", modelSelection: ASSISTANT_MODEL_SELECTION }, fake.dependencies);
+  await tool.execute("create-public", { ...base, trigger: watch("https://status.example.com/api") });
+  assert.deepEqual(fake.tasks[0]?.trigger, { ...watch("https://status.example.com/api"), agentProposed: true });
 });

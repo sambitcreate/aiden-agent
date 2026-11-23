@@ -5,6 +5,7 @@ import test from "node:test";
 import { DesignGrantRegistry } from "./design-canvas/grants.js";
 import { captureAnalyticsEvents } from "./analytics/test-support.js";
 import type { Workspace } from "./types.js";
+import { workspaceApprovalPolicy } from "../../renderer/shared/approval-mode.js";
 import { createWorkspaceWorktreeApplicationService, type WorkspaceWorktreeApplicationDependencies } from "./workspace-worktree-application-service.js";
 import { runWorktreeSetupHooks } from "./agent-surface-hooks.js";
 import type { HookDispatcher, HookPayload, HookScope } from "./hooks/hook-types.js";
@@ -575,6 +576,8 @@ test("restore through the real environment settles, serializes same-snapshot res
     name: "Source",
     folderPath: repositoryPath,
     permission: "ask",
+    approvalMode: "ask",
+    macGrants: { shell: true },
     createdAt: 1,
     updatedAt: 1,
   };
@@ -691,6 +694,8 @@ test("restore through the real environment settles, serializes same-snapshot res
   assert.equal(restored.id, "workspace-restored");
   assert.equal(restored.folderPath, checkouts[0]);
   assert.equal(restored.managedWorktree?.branch, "codex/restored");
+  assert.equal(restored.approvalMode, "ask", "a restored worktree keeps its workspace's approval mode");
+  assert.deepEqual(restored.macGrants, { shell: true });
   assert.equal(converged.id, restored.id);
   assert.equal(converged.folderPath, restored.folderPath);
   assert.equal(checkouts.length, 1);
@@ -785,6 +790,44 @@ const hookSource: Workspace = {
   createdAt: 1,
   updatedAt: 2,
 };
+
+test("a new worktree keeps its workspace's approval settings, and an uncustomized one follows the global mode", async () => {
+  const askSource: Workspace = { ...hookSource, approvalMode: "ask", macGrants: { shell: true, "computer-use": true } };
+  const created = await createWorkspaceWorktreeApplicationService(creationOnlyDeps(askSource, [], {}))
+    .create(owner, askSource.id, "feature/ask", "Ask Workspace");
+  assert.equal(created.approvalMode, "ask");
+  assert.deepEqual(created.macGrants, { shell: true, "computer-use": true });
+  // On a Mac set to Never ask, the worktree of an Ask workspace still asks.
+  const policy = workspaceApprovalPolicy(created, "never");
+  assert.equal(policy.mode, "ask");
+  assert.equal(policy.customized, true);
+  assert.deepEqual([...policy.macGrants].sort(), ["computer-use", "shell"]);
+
+  const plain = await createWorkspaceWorktreeApplicationService(creationOnlyDeps(hookSource, [], {}))
+    .create(owner, hookSource.id, "feature/plain", "Plain Workspace");
+  assert.equal("approvalMode" in plain, false);
+  assert.equal("macGrants" in plain, false);
+  assert.equal(workspaceApprovalPolicy(plain, "never").mode, "never");
+  assert.equal(workspaceApprovalPolicy(plain, "auto").mode, "auto");
+});
+
+test("a source workspace whose approval mode changes mid-create rolls the worktree back", async () => {
+  const events: string[] = [];
+  const askSource: Workspace = { ...hookSource, approvalMode: "ask" };
+  const deps = creationOnlyDeps(askSource, events, {});
+  const service = createWorkspaceWorktreeApplicationService({
+    ...deps,
+    environment: {
+      ...deps.environment,
+      // The re-read just before saving sees the person switch to Never ask.
+      resolve: async (id) => id === askSource.id
+        ? { folderPath: askSource.folderPath!, workspace: { ...askSource, approvalMode: "never" } }
+        : undefined,
+    },
+  });
+  await assert.rejects(service.create(owner, askSource.id, "feature/raced"), /source workspace changed/u);
+  assert.equal(events.includes("save"), false, "the stale approval settings are never saved");
+});
 
 test("a new managed worktree runs the source workspace's WorktreeSetup hooks inside the new checkout", async () => {
   const events: string[] = [];

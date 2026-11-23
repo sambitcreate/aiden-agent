@@ -84,6 +84,7 @@ export const queryKeys = {
   shortcuts: ["shortcuts"] as const,
   scheduledTasks: ["scheduledTasks"] as const,
   scheduledSettings: ["scheduledSettings"] as const,
+  keepAwakeStatus: ["keepAwakeStatus"] as const,
   computerUseStatus: ["computerUseStatus"] as const,
   formFillStatus: ["formFillStatus"] as const,
   modelInsightsStatus: ["modelInsightsStatus"] as const,
@@ -126,10 +127,13 @@ export const queryKeys = {
     ["workspace-repository-identity", workspaceId ?? "none"] as const,
   chatPullRequests: (chatId: string | undefined) =>
     ["chat-pull-requests", chatId ?? "none"] as const,
+  startedChats: (leadChatId: string | undefined) => ["started-chats", leadChatId ?? ""] as const,
   chatFollowThrough: (chatId: string | undefined) =>
     ["chat-follow-through", chatId ?? "none"] as const,
   chatCurrentPullRequest: (chatId: string | undefined) =>
     ["chat-current-pull-request", chatId ?? "none"] as const,
+  chatGoal: (chatId: string | undefined) => ["chat-goal", chatId ?? "none"] as const,
+  chatGoalProposal: (chatId: string | undefined) => ["chat-goal-proposal", chatId ?? "none"] as const,
   chatPullRequestsSidebar: (chatIds: readonly string[]) =>
     ["chat-pull-requests-sidebar", ...chatIds] as const,
   chatPullRequestCandidates: (chatId: string | undefined) =>
@@ -621,11 +625,44 @@ export function useChatPullRequests(chatId: string | undefined, enabled = true) 
   });
 }
 
+/** The chats a lead chat started; `chats:child-chats-changed` invalidates it. */
+export function useStartedChats(leadChatId: string | undefined, enabled = true) {
+  return useQuery({
+    queryKey: queryKeys.startedChats(leadChatId),
+    queryFn: () => chatsApi.startedChats(leadChatId as string),
+    enabled: Boolean(leadChatId) && enabled,
+    staleTime: 15_000,
+    // Main notifies on starts, endings and moves to or from "needs you"; a slow look while one
+    // is running only backs that up. A chat waiting on the person needs no polling.
+    refetchInterval: (query) => (query.state.data?.some((view) => view.state === "running") ? 15_000 : false),
+  });
+}
+
 /** A chat's background jobs, followed pull requests and check; `chats:follow-through-changed` invalidates it. */
 export function useChatFollowThrough(chatId: string | undefined, enabled = true) {
   return useQuery({
     queryKey: queryKeys.chatFollowThrough(chatId),
     queryFn: () => chatsApi.followThrough(chatId as string),
+    enabled: Boolean(chatId) && enabled,
+    staleTime: 30_000,
+  });
+}
+
+/** A chat's keep-going goal, or null; `chats:goal-changed` writes it in place. */
+export function useChatGoal(chatId: string | undefined, enabled = true) {
+  return useQuery({
+    queryKey: queryKeys.chatGoal(chatId),
+    queryFn: () => chatsApi.goal(chatId as string),
+    enabled: Boolean(chatId) && enabled,
+    staleTime: 30_000,
+  });
+}
+
+/** A goal the agent suggested in the chat, or null; `chats:goal-proposal-changed` writes it in place. */
+export function useChatGoalProposal(chatId: string | undefined, enabled = true) {
+  return useQuery({
+    queryKey: queryKeys.chatGoalProposal(chatId),
+    queryFn: () => chatsApi.goalProposal(chatId as string),
     enabled: Boolean(chatId) && enabled,
     staleTime: 30_000,
   });
@@ -775,6 +812,21 @@ export function useScheduledTasks() {
 
 export function useScheduledTaskSettings() {
   return useQuery({ queryKey: queryKeys.scheduledSettings, queryFn: () => scheduleApi.settings() });
+}
+
+/** What keeps this computer awake right now: one read, then main's pushes; it never polls. */
+export function useKeepAwakeStatus() {
+  const queryClient = useQueryClient();
+  useEffect(() => {
+    const unsubscribe = scheduleApi.onKeepAwakeChanged((status) =>
+      queryClient.setQueryData(queryKeys.keepAwakeStatus, status));
+    return () => {
+      unsubscribe();
+      // A push sent while nothing listens is lost, so the next mount reads again.
+      void queryClient.invalidateQueries({ queryKey: queryKeys.keepAwakeStatus });
+    };
+  }, [queryClient]);
+  return useQuery({ queryKey: queryKeys.keepAwakeStatus, queryFn: () => scheduleApi.keepAwakeStatus() });
 }
 
 /** Reads device-local Model Pad credential/cache state; never fetches benchmark data. */

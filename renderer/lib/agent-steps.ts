@@ -68,6 +68,14 @@ const VERBS: Record<string, VerbPair> = {
   agent_context_rebuilt: { active: "Starting a fresh agent session", complete: "Started a fresh agent session" },
 };
 
+/**
+ * Verbs for one action of a tool whose actions read differently, keyed by
+ * `<tool>:<label>`: a settled check-back row reads "Will check back at 3:10 PM".
+ */
+const ACTION_VERBS: Record<string, VerbPair> = {
+  "check_back:Set check-back": { active: "Setting a check-back", complete: "Will check back" },
+};
+
 function plural(count: number, singular: string, pluralForm = `${singular}s`): string {
   return `${count} ${count === 1 ? singular : pluralForm}`;
 }
@@ -150,7 +158,7 @@ export function activityLine(
   }
 
   const object = stepObject(step);
-  const verbs = VERBS[step.toolName];
+  const verbs = ACTION_VERBS[`${step.toolName}:${step.label}`] ?? VERBS[step.toolName];
   switch (step.status) {
     case "pending":
       // The model is still writing this call's arguments (or execution has not
