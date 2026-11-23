@@ -9,6 +9,7 @@ import { AidenOperationUnknownOutcomeError } from "./aiden-remote-operation-cont
 import type { PiRuntimeQueueOptions, PiRuntimeQueueReceipt } from "./pi-agent-runtime-harness.js";
 import type { Chat, ChatMessage } from "./types.js";
 import type { AgentNoticeV1 } from "../../renderer/shared/agent-notices.js";
+import { messageBringsOutsideContent } from "./approval-gate/run-taint.js";
 import type { ChatInputSourceV1 } from "../../renderer/shared/chat-input-source.js";
 import type {
   ChatRunInputAdmissionResult,
@@ -44,6 +45,19 @@ export interface ChatRunInputGenerationRef {
    * and becomes the chat's next turn once the run settles.
    */
   owedTurn?: { hold(): ChatOwedInputHold | undefined };
+  /**
+   * The lead chat that started this chat sent the input (Phase 5). Awaited
+   * once the input is saved and before it is queued, so the run takes on
+   * what the lead's message carries (its taint) before the model reads it.
+   */
+  leadChatInput?(): Promise<void>;
+  /**
+   * A notice that quotes outside text (the reply of a started chat whose run
+   * held outside content, a pull request's news, a trigger's event; the same
+   * rule as run taint's `messageBringsOutsideContent`) was saved into this run,
+   * so the run holds outside content before the model reads it.
+   */
+  outsideInput?(): void;
   agent: {
     queueAdmissionBlocked(): "not-active" | "cancelled" | "capacity" | undefined;
     queueSteer(message: AgentMessage, options?: PiRuntimeQueueOptions): PiRuntimeQueueReceipt;
@@ -123,6 +137,12 @@ export interface ChatRunInputAdmissionRequest {
   notice?: AgentNoticeV1;
   /** Aiden Live sent this for the person; the message shows "By voice". */
   inputSource?: ChatInputSourceV1;
+  /**
+   * The lead chat that started this chat sent it, not the person: it isn't
+   * the person writing (no `onPersonWrote`), and the run hears of it
+   * (`leadChatInput`).
+   */
+  fromLeadChat?: true;
 }
 
 function rejectionReason(
@@ -246,6 +266,9 @@ export function createChatRunInputAdmission(deps: ChatRunInputAdmissionDeps) {
               content: input.text,
               ...(input.notice ? { notice: input.notice } : {}),
               ...(input.inputSource && !input.notice ? { inputSource: input.inputSource } : {}),
+              // A lead chat's steer or queued message is marked like its task,
+              // so it shows "From “<lead>”" and never counts as the person's words.
+              ...(input.fromLeadChat && !input.notice ? { fromLeadChat: true as const } : {}),
             },
             {
               isCurrent: () =>
@@ -270,11 +293,21 @@ export function createChatRunInputAdmission(deps: ChatRunInputAdmissionDeps) {
     if (hookBlocked) {
       return { admitted: false, reason: "invalid", committed: true, messageId };
     }
-    if (!input.notice) {
+    if (!input.notice && !input.fromLeadChat) {
       try {
         deps.onPersonWrote?.(generation.chatId);
       } catch {
         // The input is committed either way; the snooze ends with the next wake.
+      }
+    }
+    if (generation.outsideInput && messageBringsOutsideContent({ role: "user", content: input.text, notice: input.notice })) {
+      generation.outsideInput();
+    }
+    if (input.fromLeadChat && generation.leadChatInput) {
+      try {
+        await generation.leadChatInput();
+      } catch {
+        // Committed either way; a link that can't be read leaves the run as it was.
       }
     }
     if (deps.active.get(input.streamId) !== generation) {

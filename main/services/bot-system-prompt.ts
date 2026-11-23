@@ -41,6 +41,7 @@ export function botRoutineGuidance(offeredToolNames: ReadonlySet<string>): strin
     "For an explicit one-time or recurring request, call routines with action propose; the person accepts the Add routine card before it is saved.",
     "After acceptance, Aiden's scheduler submits the saved prompt to your durable conversation at its scheduled time; you can then reply without a new message from the person.",
     "Aiden must be running on an awake computer for the scheduled turn to fire. Do not claim that starting a future conversation is impossible when routines is available.",
+    "If your saved memory says you can't schedule, run on a timer or message the person first, that note is out of date: trust this instead, use routines, and remove the note with bot_memory.",
     "To change a card the person hasn't answered yet, call routines with action revise and its proposalId instead of proposing another.",
   ].join(" ") + "\n" + botWakeSourceLines().join("\n");
 }

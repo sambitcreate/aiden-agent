@@ -9,13 +9,14 @@ import {
   type AidenIdempotencySnapshot,
 } from "./aiden-remote-operation-contract.js";
 import type { ScheduledTaskApplicationService } from "./scheduled-task-application-service.js";
-import { scheduledTaskRevision } from "./scheduled-task-application-service.js";
+import { scheduledSettingsRevision, scheduledTaskRevision } from "./scheduled-task-application-service.js";
 import type {
   ScheduledRun,
   ScheduledTask,
   ScheduledTaskInput,
   ScheduledTaskMode,
   ScheduledTaskPermission,
+  ScheduledTaskSettings,
 } from "./types.js";
 
 const IDEMPOTENCY_KEY_PATTERN = /^[\x21-\x7e]{16,128}$/u;
@@ -127,6 +128,27 @@ function mapRun(run: ScheduledRun, summaryLimit = 20_000) {
     ...(summary ? { summary } : {}),
     ...(failed ? { errorCode: run.result === "blocked" ? "blocked" : "execution_failed" } : {}),
   };
+}
+
+/**
+ * The scheduled-task settings phones know about. Desktop-only rows in the same
+ * store (Keep this computer awake, Let chats check back later) stay off the
+ * wire, so the contract is unchanged.
+ */
+function remoteScheduledSettings(value: ScheduledTaskSettings) {
+  return {
+    enabled: value.enabled,
+    defaultMode: value.defaultMode,
+    defaultPermission: value.defaultPermission,
+    defaultMcpEnabled: value.defaultMcpEnabled,
+    defaultNotify: value.defaultNotify,
+    defaultTimezone: value.defaultTimezone,
+  };
+}
+
+/** The revision a phone sees: of the fields it knows, so a desktop-only toggle doesn't invalidate its edit. */
+export function remoteScheduledSettingsRevision(value: ScheduledTaskSettings): string {
+  return scheduledSettingsRevision(remoteScheduledSettings(value));
 }
 
 function mapError(error: unknown): never {
@@ -271,6 +293,16 @@ export class AidenRemoteScheduleService {
     };
   }
 
+  /**
+   * Until phones learn about triggers (E6), a task that runs when something
+   * happens doesn't exist for them: it has no cron to show or send back.
+   */
+  private async phoneTask(id: string): Promise<ScheduledTask> {
+    const task = await this.options.application.get(id);
+    if (task.trigger) throw new Error(`Scheduled task ${id} not found.`);
+    return task;
+  }
+
   private async mutation(deviceId: string, value: unknown): Promise<ScheduledTaskInput> {
     const record = ownRecord(value);
     if (!record || !exactKeys(record,
@@ -336,11 +368,11 @@ export class AidenRemoteScheduleService {
   }
 
   async list(deviceId: string) {
-    return { tasks: (await this.options.application.list()).map((task) => this.project(deviceId, task)) };
+    return { tasks: (await this.options.application.list()).filter((task) => !task.trigger).map((task) => this.project(deviceId, task)) };
   }
 
   async get(deviceId: string, taskId: string) {
-    try { return this.project(deviceId, await this.options.application.get(safeTaskId(taskId))); }
+    try { return this.project(deviceId, await this.phoneTask(safeTaskId(taskId))); }
     catch (error) { mapError(error); }
   }
 
@@ -358,18 +390,24 @@ export class AidenRemoteScheduleService {
   async update(deviceId: string, taskId: string, revision: string, value: unknown) {
     const id = safeTaskId(taskId);
     const input = { ...(await this.mutation(deviceId, value)), id };
-    try { return this.project(deviceId, await this.options.application.save(input, { expectedRevision: revision })); }
-    catch (error) { mapError(error); }
+    try {
+      await this.phoneTask(id);
+      return this.project(deviceId, await this.options.application.save(input, { expectedRevision: revision }));
+    } catch (error) { mapError(error); }
   }
 
   async remove(taskId: string, revision: string): Promise<void> {
-    try { await this.options.application.remove(safeTaskId(taskId), revision); }
+    try {
+      await this.phoneTask(safeTaskId(taskId));
+      await this.options.application.remove(safeTaskId(taskId), revision);
+    }
     catch (error) { mapError(error); }
   }
 
   async pause(deviceId: string, taskId: string, revision: string, key: string) {
     const id = safeTaskId(taskId);
     try {
+      await this.phoneTask(id);
       return await this.executeIdempotent(
         { deviceId, route: `POST /scheduled-tasks/${id}/pause`, resourceId: id, key },
         { revision },
@@ -381,6 +419,7 @@ export class AidenRemoteScheduleService {
   async resume(deviceId: string, taskId: string, revision: string, key: string) {
     const id = safeTaskId(taskId);
     try {
+      await this.phoneTask(id);
       return await this.executeIdempotent(
         { deviceId, route: `POST /scheduled-tasks/${id}/resume`, resourceId: id, key },
         { revision },
@@ -393,6 +432,7 @@ export class AidenRemoteScheduleService {
     const id = safeTaskId(taskId);
     const runId = `run_${randomBytes(24).toString("base64url")}`;
     try {
+      await this.phoneTask(id);
       return await this.executeIdempotent(
         { deviceId, route: `POST /scheduled-tasks/${id}/run`, resourceId: id, key },
         { revision },
@@ -406,6 +446,7 @@ export class AidenRemoteScheduleService {
 
   async runs(taskId: string) {
     try {
+      await this.phoneTask(safeTaskId(taskId));
       const stored = await this.options.application.runs(safeTaskId(taskId));
       // A corrupt row (non-finite/out-of-range timestamps, finished before it
       // started) must not poison the whole endpoint.
@@ -433,6 +474,7 @@ export class AidenRemoteScheduleService {
     const tasks = await this.options.application.list();
     const notifications: Array<ReturnType<typeof mapRun> & { taskName: string; notify: boolean }> = [];
     for (const task of tasks) {
+      if (task.trigger) continue;
       let taskName: string;
       let runs: ScheduledRun[];
       try {
@@ -444,7 +486,9 @@ export class AidenRemoteScheduleService {
       }
       for (const run of runs) {
         if (since !== undefined && run.finishedAt < since) continue;
-        if (run.result === "silent") continue;
+        // Quiet and skipped runs (a busy chat, a chat's hourly share) never notify,
+        // as on the desktop.
+        if (run.result === "silent" || run.result === "skipped") continue;
         // A corrupt stored row must not poison the whole feed.
         if (!isWellFormedRun(run)) continue;
         notifications.push({ ...mapRun(run, 2_000), taskName, notify: task.notify });
@@ -488,7 +532,7 @@ export class AidenRemoteScheduleService {
 
   async settings() {
     const current = await this.options.application.settings();
-    return { revision: current.revision, ...current.value };
+    return { revision: remoteScheduledSettingsRevision(current.value), ...remoteScheduledSettings(current.value) };
   }
 
   async updateSettings(revision: string, value: unknown) {
@@ -506,8 +550,10 @@ export class AidenRemoteScheduleService {
     }
     const { confirmedForeground: _confirmed, ...patch } = record;
     try {
-      const saved = await this.options.application.updateSettings(revision, patch);
-      return { revision: saved.revision, ...saved.value };
+      const saved = await this.options.application.updateSettings(revision, patch, {
+        revisionOf: remoteScheduledSettingsRevision,
+      });
+      return { revision: remoteScheduledSettingsRevision(saved.value), ...remoteScheduledSettings(saved.value) };
     } catch (error) { mapError(error); }
   }
 }

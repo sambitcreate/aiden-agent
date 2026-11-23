@@ -30,6 +30,7 @@ import {
   BotCapabilityCatalogMainService,
   type BotCapabilityInventoryPorts,
 } from "./bot-capability-catalog-main.js";
+import type { BotRetainedProvider } from "./bot-capability-retained-provider.js";
 import { COMPOSIO_SERVICE_ACCESS_IDENTITY } from "./bot-connection-capability-identity.js";
 
 function digest(value: string): string {
@@ -785,4 +786,119 @@ test("main catalog service isolates notice state by paired audience", async () =
     /valid paired-device audience/u,
   );
   assert.deepEqual(state.noticeLoads, ["device_a", "device_b"]);
+});
+
+function countingPorts(state: { inventory: BotCapabilityInventory; keyLoads: number; noticeLoads: string[] }) {
+  const reads = { providers: 0, fail: false };
+  const ports = mainPorts(state);
+  return {
+    reads,
+    ports: {
+      ...ports,
+      async listProviders(signal: AbortSignal, retained?: readonly { sourceProviderId: string; sourceModelId: string }[]) {
+        reads.providers += 1;
+        await new Promise((resolve) => setTimeout(resolve, 5));
+        if (reads.fail) throw new Error("provider list unavailable");
+        return ports.listProviders(signal, retained);
+      },
+    } satisfies BotCapabilityInventoryPorts,
+  };
+}
+
+test("runtime reads at one inventory revision share one inspection, and a moved revision reads the change at once", async () => {
+  const state = { inventory: inventory(), keyLoads: 0, noticeLoads: [] as string[] };
+  const { reads, ports } = countingPorts(state);
+  let revision = 1;
+  const service = new BotCapabilityCatalogMainService(ports, { runtimeReuse: { revision: () => revision, ttlMs: 60_000 } });
+
+  // One turn's admissions and pre-effect checks, some at the same moment.
+  const [first, second] = await Promise.all([
+    service.snapshotForRuntime({ botId: "bot:one" }),
+    service.snapshotForRuntime({ botId: "bot:one" }),
+  ]);
+  const third = await service.snapshotForRuntime({ botId: "bot:one" });
+  assert.equal(reads.providers, 1);
+  assert.equal(second.catalog.revision, first.catalog.revision);
+  assert.equal(third.catalog.revision, first.catalog.revision);
+
+  // Each caller owns its copy.
+  first.catalog.providers.length = 0;
+  assert.equal((await service.snapshotForRuntime({ botId: "bot:one" })).catalog.providers.length, 1);
+
+  // Another Bot's read is its own.
+  await service.snapshotForRuntime({ botId: "bot:two" });
+  assert.equal(reads.providers, 2);
+
+  // A settings, credential or configuration change moves the revision.
+  state.inventory = inventory();
+  state.inventory.providers[0]!.label = "Renamed provider";
+  revision += 1;
+  const changed = await service.snapshotForRuntime({ botId: "bot:one" });
+  assert.equal(reads.providers, 3);
+  assert.notEqual(changed.catalog.revision, first.catalog.revision);
+});
+
+test("a turn's bare provider choice and its full provider authority share one runtime inspection", async () => {
+  const state = { inventory: inventory(), keyLoads: 0, noticeLoads: [] as string[] };
+  const { reads, ports } = countingPorts(state);
+  const service = new BotCapabilityCatalogMainService(ports, { runtimeReuse: { revision: () => 1, ttlMs: 60_000 } });
+  const providerId = state.inventory.providers[0]!.sourceId;
+  const modelId = state.inventory.providers[0]!.models[0]!.sourceId;
+  // Admission and revalidation retain the bare pair; tool assembly passes the
+  // admitted authority, which also carries its fingerprints.
+  const bare: BotRetainedProvider = { sourceProviderId: providerId, sourceModelId: modelId };
+  const authority = { ...bare, connectionFingerprint: "c", providerExactFingerprint: "p", modelFingerprint: "m", modelExactFingerprint: "x" };
+
+  const fromAdmission = await service.snapshotForRuntime({ botId: "bot:one", retainedProviders: [bare] });
+  const fromTools = await service.snapshotForRuntime({ botId: "bot:one", retainedProviders: [authority] });
+  assert.equal(reads.providers, 1);
+  assert.deepEqual(fromTools, fromAdmission);
+
+  // A different retained model is a different read.
+  await service.snapshotForRuntime({ botId: "bot:one", retainedProviders: [{ ...bare, sourceModelId: `${modelId}-other` }] });
+  assert.equal(reads.providers, 2);
+});
+
+test("an expired runtime read inspects again, a failed one is never reused, and one caller's cancel leaves the others", async () => {
+  const state = { inventory: inventory(), keyLoads: 0, noticeLoads: [] as string[] };
+  const { reads, ports } = countingPorts(state);
+  let now = 1_000;
+  const service = new BotCapabilityCatalogMainService(ports, { runtimeReuse: { revision: () => 1, ttlMs: 3_000, now: () => now } });
+
+  const original = await service.snapshotForRuntime({ botId: "bot:one" });
+  // Unhooked drift, such as a server changing its tools on its own, shows within the bound.
+  state.inventory.providers[0]!.label = "Renamed provider";
+  now += 2_999;
+  assert.equal((await service.snapshotForRuntime({ botId: "bot:one" })).catalog.revision, original.catalog.revision);
+  assert.equal(reads.providers, 1);
+  now += 1;
+  const drifted = await service.snapshotForRuntime({ botId: "bot:one" });
+  assert.equal(reads.providers, 2);
+  assert.notEqual(drifted.catalog.revision, original.catalog.revision);
+
+  reads.fail = true;
+  now += 3_000;
+  await assert.rejects(service.snapshotForRuntime({ botId: "bot:one" }), /provider list unavailable/u);
+  reads.fail = false;
+  const recovered = await service.snapshotForRuntime({ botId: "bot:one" });
+  assert.equal(reads.providers, 4);
+  assert.equal(recovered.catalog.revision, drifted.catalog.revision);
+
+  now += 3_000;
+  const leaving = new AbortController();
+  const cancelled = service.snapshotForRuntime({ botId: "bot:one", signal: leaving.signal });
+  const staying = service.snapshotForRuntime({ botId: "bot:one" });
+  leaving.abort(new Error("left the chat"));
+  await assert.rejects(cancelled, /left the chat/u);
+  assert.equal((await staying).catalog.revision, drifted.catalog.revision);
+  assert.equal(reads.providers, 5);
+});
+
+test("without reuse every runtime read inspects the inventory", async () => {
+  const state = { inventory: inventory(), keyLoads: 0, noticeLoads: [] as string[] };
+  const { reads, ports } = countingPorts(state);
+  const service = new BotCapabilityCatalogMainService(ports);
+  await service.snapshotForRuntime({ botId: "bot:one" });
+  await service.snapshotForRuntime({ botId: "bot:one" });
+  assert.equal(reads.providers, 2);
 });

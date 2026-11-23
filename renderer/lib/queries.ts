@@ -51,6 +51,7 @@ import type {
   GitHubPullRequestStatus,
   McpLiveStatus,
   UsageDateRange,
+  Workspace,
 } from "./types";
 
 export const queryKeys = {
@@ -83,6 +84,7 @@ export const queryKeys = {
   shortcuts: ["shortcuts"] as const,
   scheduledTasks: ["scheduledTasks"] as const,
   scheduledSettings: ["scheduledSettings"] as const,
+  keepAwakeStatus: ["keepAwakeStatus"] as const,
   computerUseStatus: ["computerUseStatus"] as const,
   formFillStatus: ["formFillStatus"] as const,
   modelInsightsStatus: ["modelInsightsStatus"] as const,
@@ -125,10 +127,13 @@ export const queryKeys = {
     ["workspace-repository-identity", workspaceId ?? "none"] as const,
   chatPullRequests: (chatId: string | undefined) =>
     ["chat-pull-requests", chatId ?? "none"] as const,
+  startedChats: (leadChatId: string | undefined) => ["started-chats", leadChatId ?? ""] as const,
   chatFollowThrough: (chatId: string | undefined) =>
     ["chat-follow-through", chatId ?? "none"] as const,
   chatCurrentPullRequest: (chatId: string | undefined) =>
     ["chat-current-pull-request", chatId ?? "none"] as const,
+  chatGoal: (chatId: string | undefined) => ["chat-goal", chatId ?? "none"] as const,
+  chatGoalProposal: (chatId: string | undefined) => ["chat-goal-proposal", chatId ?? "none"] as const,
   chatPullRequestsSidebar: (chatIds: readonly string[]) =>
     ["chat-pull-requests-sidebar", ...chatIds] as const,
   chatPullRequestCandidates: (chatId: string | undefined) =>
@@ -155,6 +160,30 @@ export async function installAppendedChatSnapshot(
   const chatKey = queryKeys.chat(chatId);
   await queryClient.cancelQueries({ queryKey: chatKey, exact: true });
   queryClient.setQueryData(chatKey, updated);
+}
+
+/**
+ * Patch a newly created workspace into the cached workspace list when the list
+ * is already hydrated and idle; otherwise invalidate `queryKeys.workspaces` so
+ * an unhydrated cache is never overwritten with a single-element list and an
+ * in-flight `workspaces:list` cannot clobber the new workspace.
+ */
+export function upsertCreatedWorkspaceInCache(
+  queryClient: QueryClient,
+  created: Workspace,
+): void {
+  const current = queryClient.getQueryData<Workspace[]>(queryKeys.workspaces);
+  const fetching = queryClient.isFetching({ queryKey: queryKeys.workspaces, exact: true }) > 0;
+  if (current && !fetching) {
+    const existing = current.find((entry) => entry.id === created.id);
+    if (existing && existing.updatedAt === created.updatedAt) return;
+    queryClient.setQueryData<Workspace[]>(queryKeys.workspaces, [
+      created,
+      ...current.filter((entry) => entry.id !== created.id),
+    ]);
+    return;
+  }
+  void queryClient.invalidateQueries({ queryKey: queryKeys.workspaces });
 }
 
 async function cancelModelInsightsReads(queryClient: QueryClient): Promise<void> {
@@ -596,11 +625,44 @@ export function useChatPullRequests(chatId: string | undefined, enabled = true) 
   });
 }
 
+/** The chats a lead chat started; `chats:child-chats-changed` invalidates it. */
+export function useStartedChats(leadChatId: string | undefined, enabled = true) {
+  return useQuery({
+    queryKey: queryKeys.startedChats(leadChatId),
+    queryFn: () => chatsApi.startedChats(leadChatId as string),
+    enabled: Boolean(leadChatId) && enabled,
+    staleTime: 15_000,
+    // Main notifies on starts, endings and moves to or from "needs you"; a slow look while one
+    // is running only backs that up. A chat waiting on the person needs no polling.
+    refetchInterval: (query) => (query.state.data?.some((view) => view.state === "running") ? 15_000 : false),
+  });
+}
+
 /** A chat's background jobs, followed pull requests and check; `chats:follow-through-changed` invalidates it. */
 export function useChatFollowThrough(chatId: string | undefined, enabled = true) {
   return useQuery({
     queryKey: queryKeys.chatFollowThrough(chatId),
     queryFn: () => chatsApi.followThrough(chatId as string),
+    enabled: Boolean(chatId) && enabled,
+    staleTime: 30_000,
+  });
+}
+
+/** A chat's keep-going goal, or null; `chats:goal-changed` writes it in place. */
+export function useChatGoal(chatId: string | undefined, enabled = true) {
+  return useQuery({
+    queryKey: queryKeys.chatGoal(chatId),
+    queryFn: () => chatsApi.goal(chatId as string),
+    enabled: Boolean(chatId) && enabled,
+    staleTime: 30_000,
+  });
+}
+
+/** A goal the agent suggested in the chat, or null; `chats:goal-proposal-changed` writes it in place. */
+export function useChatGoalProposal(chatId: string | undefined, enabled = true) {
+  return useQuery({
+    queryKey: queryKeys.chatGoalProposal(chatId),
+    queryFn: () => chatsApi.goalProposal(chatId as string),
     enabled: Boolean(chatId) && enabled,
     staleTime: 30_000,
   });
@@ -677,14 +739,62 @@ export function useWorkspaceSkillChoices(workspaceId: string | undefined) {
   });
 }
 
+const recentlyPromotedChats = new Map<string, number>();
+const promotedChatSubscribers = new Map<string, number>();
+const RECENTLY_PROMOTED_CHAT_TTL_MS = 5_000;
+
+/**
+ * Mark a draft chat whose first message just committed and seeded the query
+ * cache, so the immediate draft -> live `useChat` activation reuses the seeded
+ * snapshot instead of issuing a redundant `chats:get` IPC. Leaving and
+ * revisiting the chat clears the marker and re-reads from main as usual.
+ */
+export function markChatRecentlyPromoted(chatId: string): void {
+  const now = Date.now();
+  for (const [id, expiresAt] of recentlyPromotedChats) {
+    if (expiresAt < now) recentlyPromotedChats.delete(id);
+  }
+  recentlyPromotedChats.set(chatId, now + RECENTLY_PROMOTED_CHAT_TTL_MS);
+}
+
+function isChatRecentlyPromoted(chatId: string | undefined): boolean {
+  if (!chatId) return false;
+  const expiresAt = recentlyPromotedChats.get(chatId);
+  if (expiresAt === undefined) return false;
+  if (expiresAt < Date.now()) {
+    recentlyPromotedChats.delete(chatId);
+    return false;
+  }
+  return true;
+}
+
 export function useChat(id: string | undefined) {
+  useEffect(() => {
+    if (!id) return undefined;
+    promotedChatSubscribers.set(id, (promotedChatSubscribers.get(id) ?? 0) + 1);
+    return () => {
+      const remaining = (promotedChatSubscribers.get(id) ?? 1) - 1;
+      if (remaining > 0) promotedChatSubscribers.set(id, remaining);
+      else promotedChatSubscribers.delete(id);
+      // Defer one microtask so React StrictMode's simulated unmount -> remount
+      // cycle (and secondary `useChat` callers like `useDesignMode`) does not
+      // wipe the marker before the real mount observes it.
+      queueMicrotask(() => {
+        if (!promotedChatSubscribers.has(id)) recentlyPromotedChats.delete(id);
+      });
+    };
+  }, [id]);
+  const promotedFresh = isChatRecentlyPromoted(id);
   return useQuery({
     queryKey: id ? queryKeys.chat(id) : ["chat", "none"],
     queryFn: () => (id ? chatsApi.get(id) : Promise.resolve(null)),
     enabled: Boolean(id),
     // Revisiting a chat re-reads it (the streaming and settlement paths keep
-    // the open chat current; focus no longer resends it).
-    staleTime: 0,
+    // the open chat current; focus no longer resends it). Only the immediate
+    // draft -> live handoff treats the just-seeded snapshot as fresh so
+    // switching `useChat(undefined)` -> `useChat(chatId)` avoids a redundant
+    // `chats:get` IPC. Leaving the chat clears the marker so revisiting re-reads.
+    staleTime: promotedFresh ? RECENTLY_PROMOTED_CHAT_TTL_MS : 0,
   });
 }
 
@@ -702,6 +812,21 @@ export function useScheduledTasks() {
 
 export function useScheduledTaskSettings() {
   return useQuery({ queryKey: queryKeys.scheduledSettings, queryFn: () => scheduleApi.settings() });
+}
+
+/** What keeps this computer awake right now: one read, then main's pushes; it never polls. */
+export function useKeepAwakeStatus() {
+  const queryClient = useQueryClient();
+  useEffect(() => {
+    const unsubscribe = scheduleApi.onKeepAwakeChanged((status) =>
+      queryClient.setQueryData(queryKeys.keepAwakeStatus, status));
+    return () => {
+      unsubscribe();
+      // A push sent while nothing listens is lost, so the next mount reads again.
+      void queryClient.invalidateQueries({ queryKey: queryKeys.keepAwakeStatus });
+    };
+  }, [queryClient]);
+  return useQuery({ queryKey: queryKeys.keepAwakeStatus, queryFn: () => scheduleApi.keepAwakeStatus() });
 }
 
 /** Reads device-local Model Pad credential/cache state; never fetches benchmark data. */

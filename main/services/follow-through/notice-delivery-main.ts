@@ -8,6 +8,7 @@ import type { NotificationChannel } from "../../../renderer/preload-channels.js"
 import { chatStore } from "../chat-store.js";
 import { configStore } from "../config-store.js";
 import type { ChatGenerationOwner } from "../chat-generation-owner.js";
+import { goalTurnHooks } from "../goal/goal-turn-hooks.js";
 import { llmClient } from "../llm-client.js";
 import type { Chat } from "../types.js";
 import {
@@ -18,6 +19,11 @@ import {
   type StartTurnResult,
   UNATTENDED_FOLLOW_UP_GENERATION,
 } from "./notice-delivery.js";
+
+/** How long a notice waits for a scheduled task's run in its chat before trying again. */
+const OTHER_RUN_WAIT_MS = 30 * 60 * 1000;
+/** A run still holding the chat after that: runs have no time limit, so a day at most. */
+const LONG_RUN_WAIT_MS = 24 * 60 * 60 * 1000;
 
 /** A headless owner for a turn nobody is watching; the Mac's run journal still mirrors it. */
 function createUnattendedOwner(streamId: string): ChatGenerationOwner {
@@ -62,6 +68,7 @@ async function followUpChat(chatId: string): Promise<FollowUpChat | { unavailabl
 async function queueIntoRun(post: AgentNoticePost): Promise<QueueIntoRunResult> {
   const result = await llmClient.admitAgentNotice(post.chatId, { text: post.text, notice: post.notice });
   if (!result) return { kind: "no-run" };
+  if ("busyWith" in result) return { kind: "busy", holder: result.busyWith };
   if (result.committed) transcriptChanged(post.chatId);
   if (result.admitted && result.messageId) return { kind: "queued", messageId: result.messageId };
   if (result.committed && result.messageId) return { kind: "saved", messageId: result.messageId };
@@ -141,7 +148,10 @@ async function append(post: AgentNoticePost): Promise<AppendResult> {
     transcriptChanged(post.chatId);
     return { kind: "appended", messageId: lastMessageId(saved) };
   } catch (error) {
-    return { kind: "gone", reason: error instanceof Error ? error.message : "The notice could not be saved." };
+    const reason = error instanceof Error ? error.message : "The notice could not be saved.";
+    if (!(await chatStore.get(post.chatId).catch(() => undefined))) return { kind: "gone", reason };
+    logger.warn("follow-through", "A follow-up notice could not be saved.", error);
+    return { kind: "failed", reason };
   } finally {
     lease.release();
     lease.settleAsyncWork();
@@ -151,10 +161,15 @@ async function append(post: AgentNoticePost): Promise<AppendResult> {
 export const noticeDelivery = new NoticeDelivery({
   queueIntoRun,
   startTurn,
+  startGoalRound: (chatId, post) => goalTurnHooks().noticeRound(chatId, post ? { text: post.text, notice: post.notice } : undefined),
   append,
   waitForIdle: async (chatId) => {
     await llmClient.waitForChatIdle(chatId);
   },
+  waitForRunToSettle: async (chatId) => {
+    await llmClient.waitForChatIdleWithin(chatId, OTHER_RUN_WAIT_MS);
+  },
+  waitForRunToEnd: (chatId) => llmClient.waitForChatIdleWithin(chatId, LONG_RUN_WAIT_MS),
   now: Date.now,
   onError: (error) => logger.warn("follow-through", "A follow-up notice was not delivered.", error),
 });

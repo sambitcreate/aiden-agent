@@ -1,6 +1,7 @@
 import ActivityKit
 import AVFoundation
 import Foundation
+import MarkdownUI
 import Photos
 import SwiftUI
 import UIKit
@@ -1971,6 +1972,42 @@ final class AidenChatTests: XCTestCase {
         XCTAssertGreaterThan(chatReads.count, readsBeforeReload)
     }
 
+    /// A chat screen that closes while its first transcript read is in flight
+    /// cancels that read. A new chat has no messages to show yet, but the
+    /// cancelled read isn't a failure to put in front of anyone.
+    @MainActor
+    func testAScreenClosedDuringTheFirstReadShowsNoError() async throws {
+        defer { AidenChatProgressLifecycleURLProtocol.reset() }
+        let model = try await makeProgressLifecycleModel(mode: .denied)
+        let arrived = expectation(description: "first transcript read held")
+        AidenChatProgressLifecycleURLProtocol.holdNextRequest(endingIn: "/chats/chat-progress-lifecycle") { arrived.fulfill() }
+        let load = Task { await model.load(observeProgress: false) }
+        await fulfillment(of: [arrived], timeout: 5)
+
+        load.cancel()
+        await load.value
+
+        XCTAssertTrue(model.chat.messages.isEmpty)
+        XCTAssertNil(model.presentedError)
+    }
+
+    /// A rejected certificate pin fails the read as `URLError(.cancelled)`
+    /// while the screen is still open. That is a failure to show, unlike a
+    /// screen closing mid-read.
+    @MainActor
+    func testARejectedReadOnAnOpenScreenStillShowsAnError() async throws {
+        defer { AidenChatProgressLifecycleURLProtocol.reset() }
+        let model = try await makeProgressLifecycleModel(mode: .denied, responseOverride: { request in
+            guard request.url?.path == "/api/aiden/v1/chats/chat-progress-lifecycle" else { return nil }
+            return (AidenChatProgressLifecycleURLProtocol.urlCancelledStatus, "", Data())
+        })
+
+        await model.load(observeProgress: false)
+
+        XCTAssertTrue(model.chat.messages.isEmpty)
+        XCTAssertNotNil(model.presentedError)
+    }
+
     @MainActor
     func testFallbackDoesNotCoalesceWithPreResponseApprovalState() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
@@ -2970,71 +3007,6 @@ final class AidenChatTests: XCTestCase {
         XCTAssertEqual(mac.ifMatchRevisions, ["revision-7", "revision-7"], "The source revision is unchanged.")
         XCTAssertEqual(mac.keys.count, 2)
         XCTAssertNotEqual(mac.keys.first, mac.keys.last, "A rejected key is never reused.")
-    }
-
-    func testForkTrailPushesEachForkOverItsSourceAndBackReturnsOneLevel() throws {
-        let source = try forkTrailChat(id: "chat-source")
-        let fork1 = try forkTrailChat(id: "chat-fork-1")
-        let fork2 = try forkTrailChat(id: "chat-fork-2")
-        var trail = AidenChatForkTrail()
-        XCTAssertEqual(trail.visibleChatID(root: source.id), source.id)
-        XCTAssertFalse(trail.presentsFork(over: 0))
-
-        // Each fork opens from the chat on top and becomes a new level.
-        trail.open(fork1, fromDepth: 0)
-        trail.open(fork2, fromDepth: 1)
-        XCTAssertEqual(trail.visibleChatID(root: source.id), fork2.id)
-        XCTAssertEqual(trail.fork(atDepth: 1)?.id, fork1.id)
-        XCTAssertEqual(trail.fork(atDepth: 2)?.id, fork2.id)
-        XCTAssertTrue(trail.presentsFork(over: 0))
-        XCTAssertTrue(trail.presentsFork(over: 1))
-        XCTAssertFalse(trail.presentsFork(over: 2))
-
-        // Back from fork 2 shows fork 1; Back again shows the source.
-        trail.dismissFork(over: 1)
-        XCTAssertEqual(trail.visibleChatID(root: source.id), fork1.id)
-        trail.dismissFork(over: 0)
-        XCTAssertEqual(trail.visibleChatID(root: source.id), source.id)
-        XCTAssertNil(trail.fork(atDepth: 1))
-
-        // A second fork of the source pushes over the source, not over an
-        // earlier fork, and Back still lands on the source.
-        trail.open(fork1, fromDepth: 0)
-        trail.dismissFork(over: 0)
-        trail.open(fork2, fromDepth: 0)
-        XCTAssertEqual(trail.forks.map(\.id), [fork2.id])
-        trail.dismissFork(over: 0)
-        XCTAssertEqual(trail.visibleChatID(root: source.id), source.id)
-    }
-
-    func testForkTrailReplacesLevelsAboveTheForkingChatAndKeepsForksCurrent() throws {
-        let fork1 = try forkTrailChat(id: "chat-fork-1")
-        let fork2 = try forkTrailChat(id: "chat-fork-2")
-        let fork3 = try forkTrailChat(id: "chat-fork-3")
-        var trail = AidenChatForkTrail()
-        trail.open(fork1, fromDepth: 0)
-        trail.open(fork2, fromDepth: 1)
-
-        // Forking fork 1 again while fork 2 is above it replaces fork 2.
-        trail.open(fork3, fromDepth: 1)
-        XCTAssertEqual(trail.forks.map(\.id), [fork1.id, fork3.id])
-
-        // A depth the trail never reached changes nothing.
-        trail.open(fork2, fromDepth: 5)
-        trail.dismissFork(over: 7)
-        XCTAssertEqual(trail.forks.map(\.id), [fork1.id, fork3.id])
-
-        let renamed = try forkTrailChat(id: "chat-fork-1", title: "Renamed fork")
-        trail.accept(renamed)
-        XCTAssertEqual(trail.fork(atDepth: 1)?.title, "Renamed fork")
-        let unrelated = try forkTrailChat(id: "chat-elsewhere")
-        trail.accept(unrelated)
-        XCTAssertEqual(trail.forks.map(\.id), [fork1.id, fork3.id])
-    }
-
-    private func forkTrailChat(id: String, title: String = "Chat") throws -> AidenChat {
-        let json = #"{"id":"\#(id)","workspaceId":"workspace-1","title":"\#(title)","messages":[],"createdAt":"2026-09-14T12:00:00Z","updatedAt":"2026-09-14T12:00:00Z","revision":"revision-1"}"#
-        return try AidenRemoteJSONDecoder.decode(AidenChat.self, from: Data(json.utf8))
     }
 
     @MainActor
@@ -9004,6 +8976,25 @@ final class AidenChatTests: XCTestCase {
         )
     }
 
+    /// A transcript link is underlined in every theme, so it reads as a link even
+    /// where the accent sits close to the body text. Body text isn't underlined.
+    func testATranscriptLinkIsUnderlinedInEveryThemeAndBodyTextIsNot() {
+        for preset in AidenThemePresetID.allCases {
+            for scheme in [ColorScheme.light, .dark] {
+                let theme = MarkdownUI.Theme.aidenChat(
+                    colorScheme: scheme,
+                    palette: AidenThemeCatalog.palette(preset: preset, scheme: scheme)
+                )
+                var link = AttributeContainer()
+                theme.link._collectAttributes(in: &link)
+                XCTAssertEqual(link.underlineStyle, .single, "\(preset) \(scheme)")
+                var body = AttributeContainer()
+                theme.text._collectAttributes(in: &body)
+                XCTAssertNil(body.underlineStyle, "\(preset) \(scheme)")
+            }
+        }
+    }
+
     @MainActor
     func testMarkdownViewRendersBlockContentAtTheFullProposedWidth() throws {
         let renderer = ImageRenderer(content: AidenMarkdownView(content: """
@@ -9046,25 +9037,38 @@ final class AidenChatTests: XCTestCase {
         ).frame(width: 320, alignment: .leading))
         renderer.scale = 3
 
-        let image = try XCTUnwrap(renderer.cgImage)
-        let width = image.width
-        let height = image.height
-        var pixels = [UInt8](repeating: 0, count: width * height * 4)
-        let context = try XCTUnwrap(CGContext(
-            data: &pixels,
-            width: width,
-            height: height,
-            bitsPerComponent: 8,
-            bytesPerRow: width * 4,
-            space: CGColorSpaceCreateDeviceRGB(),
-            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
-        ))
-        context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
-
-        let firstPaintedColumn = (0..<width).first { x in
-            (0..<height).contains { y in pixels[((y * width + x) * 4) + 3] > 8 }
+        /// The leftmost column with any paint in a fresh render, or nil when
+        /// the render came out blank.
+        func firstPaintedColumn() throws -> Int? {
+            let image = try XCTUnwrap(renderer.cgImage)
+            let width = image.width
+            let height = image.height
+            var pixels = [UInt8](repeating: 0, count: width * height * 4)
+            let context = try XCTUnwrap(CGContext(
+                data: &pixels,
+                width: width,
+                height: height,
+                bitsPerComponent: 8,
+                bytesPerRow: width * 4,
+                space: CGColorSpaceCreateDeviceRGB(),
+                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+            ))
+            context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
+            return (0..<width).first { x in
+                (0..<height).contains { y in pixels[((y * width + x) * 4) + 3] > 8 }
+            }
         }
-        XCTAssertGreaterThan(try XCTUnwrap(firstPaintedColumn), 0)
+
+        // A render can come out blank while the text system is still
+        // getting ready (seen on CI's iPhone Duo under load): render again
+        // until the text is drawn, then check where it starts.
+        var column = try firstPaintedColumn()
+        let deadline = Date().addingTimeInterval(2)
+        while column == nil, Date() < deadline {
+            RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+            column = try firstPaintedColumn()
+        }
+        XCTAssertGreaterThan(try XCTUnwrap(column, "The reply never rendered"), 0)
     }
 
     func testSSEParserAcceptsCanonicalFrameAndRejectsIdentityMismatches() throws {
@@ -11790,6 +11794,9 @@ private final class AidenChatProgressLifecycleURLProtocol: URLProtocol, @uncheck
     /// An override status that answers 200 with the given body and keeps the
     /// response open, so the test can push further frames with `pushEvent`.
     static let openEventStreamStatus = -2
+    /// An override status that fails the request with `URLError(.cancelled)`,
+    /// as a rejected certificate pin does, while the caller's task runs on.
+    static let urlCancelledStatus = -3
     nonisolated(unsafe) private static var responseOverride: Override?
     static func setResponseOverride(_ handler: @escaping Override) {
         lock.withLock { responseOverride = handler }
@@ -12001,6 +12008,10 @@ private final class AidenChatProgressLifecycleURLProtocol: URLProtocol, @uncheck
         if let custom = handlers?(request) {
             if custom.0 == Self.connectionLostStatus {
                 failCurrentRequest(URLError(.networkConnectionLost))
+                return
+            }
+            if custom.0 == Self.urlCancelledStatus {
+                failCurrentRequest(URLError(.cancelled))
                 return
             }
             if custom.0 == Self.openEventStreamStatus {
@@ -12928,7 +12939,7 @@ final class AidenAppearanceTests: XCTestCase {
         let raised: String
         let foreground: String
         let secondary: String
-        let accent: String
+        var accent: String
         let success: String
         let warning: String
         let danger: String
@@ -12956,8 +12967,18 @@ final class AidenAppearanceTests: XCTestCase {
         for entry in fixture.presets {
             let preset = try XCTUnwrap(AidenThemePresetID(rawValue: entry.id))
             XCTAssertEqual(entry.label, preset.title)
-            XCTAssertEqual(entry.light, Palette(AidenThemeCatalog.palette(preset: preset, scheme: .light)))
-            XCTAssertEqual(entry.dark, Palette(AidenThemeCatalog.palette(preset: preset, scheme: .dark)))
+            var light = Palette(AidenThemeCatalog.palette(preset: preset, scheme: .light))
+            var dark = Palette(AidenThemeCatalog.palette(preset: preset, scheme: .dark))
+            if preset == .aiden {
+                // The phone's Aiden accent is muted ink while the desktop's stays
+                // blue; `testTheDefaultAccentIsMutedInkThatFollowsTheScheme` holds it.
+                // Every other token still matches the desktop.
+                XCTAssertNotEqual(light.accent, entry.light.accent)
+                light.accent = entry.light.accent
+                dark.accent = entry.dark.accent
+            }
+            XCTAssertEqual(entry.light, light)
+            XCTAssertEqual(entry.dark, dark)
         }
     }
 
@@ -12994,7 +13015,8 @@ final class AidenAppearanceTests: XCTestCase {
         for preset in AidenThemePresetID.allCases {
             let palette = AidenThemeCatalog.palette(preset: preset, scheme: .dark)
             var fills = [("danger", palette.dangerHex, palette.dangerSolidFill)]
-            if preset != .monochrome {
+            // Monochrome's and Aiden's accents are ink, not a hue.
+            if preset != .monochrome, preset != .aiden {
                 fills.append(("accent", palette.accentHex, palette.accentSolidFill))
             }
             for (tone, rawHex, fill) in fills {
@@ -13011,14 +13033,15 @@ final class AidenAppearanceTests: XCTestCase {
 
     func testDarkFillsMatchTheDesktopResolver() {
         // Values produced by the desktop `solidFill()` in renderer/shared/appearance.ts.
-        let expected: [(AidenThemePresetID, accent: String, danger: String)] = [
-            (.aiden, "#3177C2", "#CC4B46"),
+        // Aiden's accent is ink on the phone, so only its danger fill is shared.
+        let expected: [(AidenThemePresetID, accent: String?, danger: String)] = [
+            (.aiden, nil, "#CC4B46"),
             (.berry, "#BE5082", "#B9575E"),
             (.paper, "#897354", "#BC5656"),
         ]
         for (preset, accent, danger) in expected {
             let palette = AidenThemeCatalog.palette(preset: preset, scheme: .dark)
-            XCTAssertEqual(palette.accentSolidFill.fillHex, accent, "\(preset)")
+            if let accent { XCTAssertEqual(palette.accentSolidFill.fillHex, accent, "\(preset)") }
             XCTAssertEqual(palette.dangerSolidFill.fillHex, danger, "\(preset)")
         }
         XCTAssertEqual(AidenThemeCatalog.palette(preset: .monochrome, scheme: .dark).dangerSolidFill.fillHex, "#D4404E")
@@ -13148,6 +13171,49 @@ final class AidenAppearanceTests: XCTestCase {
         let restored = AidenAppearanceStore(defaults: defaults)
         XCTAssertEqual(restored.lightPreset, .dusk)
         XCTAssertEqual(restored.darkPreset, .dusk)
+    }
+
+    /// Every theme has a light and a dark look; its tile shows the one the mode gives it,
+    /// so Graphite, Dusk and Midnight read light in Light mode and the rest read dark in Dark.
+    @MainActor
+    func testThemeTilesPreviewTheLookTheModeGivesEveryTheme() throws {
+        /// WCAG relative luminance of the drawn tile, sampled inside its top-left, clear of
+        /// the rounded corner, the "Aa" and the selection badge.
+        func drawnLuminance(_ preset: AidenThemePresetID, mode: AidenAppearanceMode, phone: ColorScheme) throws -> Double {
+            let swatch = AidenThemeTileSwatch(preset: preset, mode: mode, selected: false)
+                .frame(width: 120)
+                .environment(\.colorScheme, phone)
+            let renderer = ImageRenderer(content: swatch)
+            renderer.scale = 1
+            let image = try XCTUnwrap(renderer.cgImage, "\(preset) drew nothing")
+            var pixel = [UInt8](repeating: 0, count: 4)
+            let context = try XCTUnwrap(CGContext(
+                data: &pixel, width: 1, height: 1, bitsPerComponent: 8, bytesPerRow: 4,
+                space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+            ))
+            let (x, y) = (image.width / 5, image.height / 6)
+            context.draw(image, in: CGRect(x: -x, y: y - image.height + 1, width: image.width, height: image.height))
+            func channel(_ value: UInt8) -> Double {
+                let unit = Double(value) / 255
+                return unit <= 0.03928 ? unit / 12.92 : pow((unit + 0.055) / 1.055, 2.4)
+            }
+            XCTAssertEqual(pixel[3], 255, "\(preset) left its preview transparent")
+            return 0.2126 * channel(pixel[0]) + 0.7152 * channel(pixel[1]) + 0.0722 * channel(pixel[2])
+        }
+        let cases: [(AidenAppearanceMode, ColorScheme, Bool)] = [
+            (.light, .dark, false), (.dark, .light, true), (.system, .light, false), (.system, .dark, true),
+        ]
+        for preset in AidenThemePresetID.allCases {
+            for (mode, phone, dark) in cases {
+                let luminance = try drawnLuminance(preset, mode: mode, phone: phone)
+                if dark {
+                    XCTAssertLessThan(luminance, 0.1, "\(preset) in \(mode) on a \(phone) phone should preview dark")
+                } else {
+                    XCTAssertGreaterThan(luminance, 0.5, "\(preset) in \(mode) on a \(phone) phone should preview light")
+                }
+            }
+        }
     }
 
     /// A v1 snapshot from an older build carries keys this build dropped
@@ -13370,12 +13436,12 @@ final class AidenAppearanceTests: XCTestCase {
         ))
     }
 
-    func testAttachmentPickerLayoutStaysBoundedAcrossIPadWindowSizes() {
+    func testAttachmentPickerLayoutStaysBoundedAcrossRegularWidthWindowSizes() {
         let fullSize = AidenAttachmentPickerLayout.resolve(
             containerSize: CGSize(width: 1_024, height: 1_260),
             mode: .photos,
             attachmentButtonCenter: CGPoint(x: 50, y: 1_224),
-            isPad: true
+            widthIsRegular: true
         )
         XCTAssertEqual(fullSize.panelSize.width, 620, accuracy: 0.001)
         XCTAssertEqual(fullSize.panelSize.height, 700, accuracy: 0.001)
@@ -13385,7 +13451,7 @@ final class AidenAppearanceTests: XCTestCase {
             containerSize: CGSize(width: 540, height: 720),
             mode: .camera,
             attachmentButtonCenter: CGPoint(x: 50, y: 684),
-            isPad: true
+            widthIsRegular: true
         )
         XCTAssertEqual(splitView.panelSize.width, 516, accuracy: 0.001)
         XCTAssertLessThanOrEqual(splitView.panelSize.height + splitView.bottomPadding, 720)
@@ -13396,7 +13462,7 @@ final class AidenAppearanceTests: XCTestCase {
             windowSize: CGSize(width: 1_024, height: 768),
             mode: .photos,
             attachmentButtonCenter: CGPoint(x: 50, y: 684),
-            isPad: true
+            widthIsRegular: true
         )
         XCTAssertEqual(narrowDetailInLandscapeWindow.panelSize.width, 488, accuracy: 0.001)
         XCTAssertEqual(narrowDetailInLandscapeWindow.leadingPadding, 26, accuracy: 0.001)
@@ -13404,7 +13470,7 @@ final class AidenAppearanceTests: XCTestCase {
         let unknownWindow = AidenChatReadableLayout.contentWidth(
             containerSize: CGSize(width: 1_024, height: 768),
             windowSize: .zero,
-            isPad: true
+            widthIsRegular: true
         )
         XCTAssertEqual(unknownWindow, 512, accuracy: 0.001)
     }
@@ -13414,7 +13480,7 @@ final class AidenAppearanceTests: XCTestCase {
             containerSize: CGSize(width: 1_366, height: 900),
             mode: .photos,
             attachmentButtonCenter: CGPoint(x: 50, y: 864),
-            isPad: true
+            widthIsRegular: true
         )
         XCTAssertEqual(landscape.panelSize.width, 620, accuracy: 0.001)
         XCTAssertEqual(landscape.panelSize.height, 594, accuracy: 0.001)
@@ -13423,7 +13489,7 @@ final class AidenAppearanceTests: XCTestCase {
             containerSize: CGSize(width: 375, height: 300),
             mode: .camera,
             attachmentButtonCenter: CGPoint(x: 50, y: 264),
-            isPad: false
+            widthIsRegular: false
         )
         XCTAssertEqual(compactHeight.panelSize.width, 351, accuracy: 0.001)
         XCTAssertEqual(compactHeight.panelSize.height, 280, accuracy: 0.001)
@@ -15304,6 +15370,193 @@ final class AidenChatScrollFollowTests: XCTestCase {
         XCTAssertFalse(follow(false, .contentScrolled(isAtBottom: true, isUserScrolling: false, wasNearBottom: false)))
     }
 
+    /// A rebuilt transcript (an iPhone Duo opening or closing) starts at the
+    /// bottom on its way back to the reader's place. Landing there, however
+    /// near it was, doesn't turn follow on.
+    func testHoldingThePlaceKeepsALandingAtTheBottomFromReArming() {
+        let latch = reduce(
+            Latch(isFollowing: false), .holdPlace,
+            .contentScrolled(isAtBottom: true, isUserScrolling: false, wasNearBottom: true),
+            .contentScrolled(isAtBottom: true, isUserScrolling: false, wasNearBottom: true)
+        )
+        XCTAssertFalse(latch.isFollowing)
+        XCTAssertTrue(latch.holdsPlace)
+    }
+
+    /// The reader takes over again by scrolling or asking for the latest.
+    func testTheReaderEndsHoldingThePlace() {
+        let held = reduce(Latch(isFollowing: false), .holdPlace)
+        XCTAssertFalse(reduce(held, .userScrollBegin).holdsPlace)
+        XCTAssertFalse(reduce(held, .contentScrolled(isAtBottom: false, isUserScrolling: true)).holdsPlace)
+
+        let settledAtBottom = reduce(held, .userScrollEnd(isAtBottom: true))
+        XCTAssertFalse(settledAtBottom.holdsPlace)
+        XCTAssertTrue(settledAtBottom.isFollowing)
+
+        let latest = reduce(held, .reset)
+        XCTAssertFalse(latest.holdsPlace)
+        XCTAssertTrue(latest.isFollowing)
+
+        let afterScroll = reduce(held, .userScrollBegin, .userScrollEnd(isAtBottom: false))
+        XCTAssertTrue(
+            reduce(afterScroll, .contentScrolled(isAtBottom: true, isUserScrolling: false, wasNearBottom: true)).isFollowing,
+            "Landing at the bottom re-arms once the reader has scrolled"
+        )
+    }
+
+    /// The place's row is gone, so there's nothing to hold: the next landing
+    /// at the bottom turns follow on, as it would for any reader.
+    func testReleasingThePlaceLetsALandingAtTheBottomReArm() {
+        let released = reduce(Latch(isFollowing: false), .holdPlace, .releasePlace)
+        XCTAssertFalse(released.holdsPlace)
+        XCTAssertFalse(released.isFollowing, "Releasing alone doesn't jump to the latest")
+        XCTAssertTrue(
+            reduce(released, .contentScrolled(isAtBottom: true, isUserScrolling: false, wasNearBottom: true)).isFollowing
+        )
+        XCTAssertTrue(
+            reduce(Latch(isFollowing: true), .releasePlace).isFollowing,
+            "A reader following the latest keeps following"
+        )
+    }
+
+    // MARK: Reading place
+
+    private func row(_ id: String, _ minY: CGFloat, _ height: CGFloat) -> (id: String, frame: CGRect) {
+        (id: id, frame: CGRect(x: 0, y: minY, width: 300, height: height))
+    }
+
+#if DEBUG
+    /// A fold builds the new screen's rows before the old screen's leave.
+    /// The old rows leaving must not take away what the new rows measured,
+    /// or the next settled scroll finds no row across the top.
+    @MainActor
+    func testRowsLeavingAFoldedScreenKeepTheNewScreensFrames() {
+        let chat = AidenChat(
+            id: "chat-1",
+            workspaceId: "workspace-1",
+            title: "Aiden chat",
+            providerId: "openai",
+            modelId: "gpt-5.6",
+            messages: [],
+            createdAt: Date(timeIntervalSince1970: 1_787_100_000),
+            updatedAt: Date(timeIntervalSince1970: 1_787_100_001),
+            revision: "revision-1"
+        )
+        let parts = AidenChatScreenParts(model: AidenChatViewModel(readOnlyFixture: chat), botToolsModel: nil)
+        let open = UUID()
+        let closed = UUID()
+        parts.screenAppeared(open)
+        parts.setRowFrame(CGRect(x: 0, y: 20, width: 600, height: 250), for: "a", from: open)
+        parts.setRowFrame(CGRect(x: 0, y: 270, width: 600, height: 250), for: "b", from: open)
+        // The new screen's rows report before it appears.
+        parts.setRowFrame(CGRect(x: 0, y: 20, width: 380, height: 400), for: "a", from: closed)
+        parts.screenAppeared(closed)
+        XCTAssertNil(parts.rowFrames["b"], "A row only the replaced screen measured kept its old width")
+
+        // The old screen, on its way out, reports late and then leaves.
+        parts.setRowFrame(CGRect(x: 0, y: 20, width: 600, height: 250), for: "a", from: open)
+        parts.setRowFrame(nil, for: "a", from: open)
+
+        XCTAssertEqual(parts.rowFrames["a"]?.height, 400)
+        XCTAssertEqual(
+            AidenReadingPlace.at(top: 120, rows: parts.rowFrames.map { (id: $0.key, frame: $0.value) })?.rowID,
+            "a"
+        )
+
+        parts.setRowFrame(nil, for: "a", from: closed)
+        XCTAssertNil(parts.rowFrames["a"], "A row leaving its own screen takes its frame back")
+    }
+
+    /// An iPhone Duo unfolding at the largest text size: the answer the
+    /// reader was a third of the way down first measures shorter than the
+    /// view, then settles taller. An anchor worked out from the first height
+    /// puts the question above it at the top, so the settled height asks for
+    /// another return, which lands the same share down the answer.
+    @MainActor
+    func testTheReadingPlacesRowRemeasuringAsksForAnotherReturn() throws {
+        let chat = AidenChat(
+            id: "chat-1",
+            workspaceId: "workspace-1",
+            title: "Aiden chat",
+            providerId: "openai",
+            modelId: "gpt-5.6",
+            messages: [],
+            createdAt: Date(timeIntervalSince1970: 1_787_100_000),
+            updatedAt: Date(timeIntervalSince1970: 1_787_100_001),
+            revision: "revision-1"
+        )
+        let parts = AidenChatScreenParts(model: AidenChatViewModel(readOnlyFixture: chat), botToolsModel: nil)
+        let screen = UUID()
+        parts.screenAppeared(screen)
+        let view: CGFloat = 244
+        let place = AidenReadingPlace(rowID: "answer", fraction: 0.34)
+        parts.readingPlace = place
+        parts.setRowFrame(CGRect(x: 0, y: 20, width: 500, height: 280), for: "question", from: screen)
+
+        XCTAssertTrue(parts.setRowFrame(CGRect(x: 0, y: 310, width: 500, height: 200), for: "answer", from: screen))
+        let early = place.anchor(rowHeight: parts.rowFrames["answer"]?.height, viewHeight: view)
+
+        let settledHeight: CGFloat = 377
+        XCTAssertTrue(parts.setRowFrame(CGRect(x: 0, y: 310, width: 500, height: settledHeight), for: "answer", from: screen))
+        func landing(_ anchor: UnitPoint) -> AidenReadingPlace? {
+            // The answer's top lands `y × (view − row)` below the view's top.
+            let answerTop = anchor.y * (view - settledHeight)
+            return AidenReadingPlace.at(top: 0, rows: [
+                row("question", answerTop - 290, 280),
+                row("answer", answerTop, settledHeight),
+            ])
+        }
+        XCTAssertEqual(landing(early)?.rowID, "question", "The early anchor lands on the row before")
+        let settled = try XCTUnwrap(landing(place.anchor(rowHeight: parts.rowFrames["answer"]?.height, viewHeight: view)))
+        XCTAssertEqual(settled.rowID, "answer")
+        XCTAssertEqual(settled.fraction, place.fraction, accuracy: 0.001)
+
+        XCTAssertFalse(parts.setRowFrame(CGRect(x: 0, y: 310, width: 500, height: settledHeight), for: "answer", from: screen))
+        XCTAssertFalse(parts.setRowFrame(CGRect(x: 0, y: 20, width: 500, height: 300), for: "question", from: screen))
+    }
+#endif
+
+    /// The place is the first row reaching below the transcript's top, and
+    /// how far down it that top falls.
+    func testTheReadingPlaceIsTheRowAcrossTheTop() {
+        let rows = [row("a", -300, 200), row("b", -100, 400), row("c", 300, 50)]
+
+        XCTAssertEqual(AidenReadingPlace.at(top: 0, rows: rows), AidenReadingPlace(rowID: "b", fraction: 0.25))
+        XCTAssertEqual(AidenReadingPlace.at(top: 0, rows: [row("c", 20, 50)])?.fraction, 0, "A row below the top")
+        XCTAssertNil(AidenReadingPlace.at(top: 0, rows: [row("a", -300, 200)]))
+    }
+
+    /// Scrolling to an anchor lines its point in the row up with the same
+    /// point in the view, so the row's top lands `y × (view − row)` below the
+    /// view's. The anchor puts the top of the view the same share down the
+    /// row, at the row's new height, whether it's taller or shorter than the
+    /// view.
+    func testTheReadingPlacesAnchorPutsTheSameShareOfTheRowAtTheTop() {
+        let view: CGFloat = 600
+        for (fraction, rowHeight) in [(0.25, 1600.0), (0.6, 900), (0.3, 120), (0.9, 40)] as [(CGFloat, CGFloat)] {
+            let place = AidenReadingPlace(rowID: "b", fraction: fraction)
+            let anchor = place.anchor(rowHeight: rowHeight, viewHeight: view)
+            let rowTop = anchor.y * (view - rowHeight)
+            XCTAssertEqual(rowTop, -fraction * rowHeight, accuracy: 0.001, "fraction \(fraction) row \(rowHeight)")
+        }
+        XCTAssertEqual(AidenReadingPlace(rowID: "b", fraction: 0.5).anchor(rowHeight: nil, viewHeight: view), .top)
+    }
+
+    /// Measured at one width and brought back at another, where the row has
+    /// reflowed: the reader is the same share of the way down it.
+    func testTheReadingPlaceHoldsAcrossAReflow() throws {
+        let wide = [row("a", -500, 300), row("b", -200, 500)]
+        let place = try XCTUnwrap(AidenReadingPlace.at(top: 0, rows: wide))
+        XCTAssertEqual(place.rowID, "b")
+
+        let narrowHeight: CGFloat = 900
+        let anchor = place.anchor(rowHeight: narrowHeight, viewHeight: 678)
+        let rowTop = anchor.y * (678 - narrowHeight)
+        let back = try XCTUnwrap(AidenReadingPlace.at(top: 0, rows: [row("b", rowTop, narrowHeight)]))
+        XCTAssertEqual(back.rowID, "b")
+        XCTAssertEqual(back.fraction, place.fraction, accuracy: 0.001)
+    }
+
     func testScrollAwayWithoutGestureTurnsFollowOff() {
         XCTAssertFalse(follow(true, .contentScrolled(isAtBottom: false, isUserScrolling: false, movedAwayFromBottom: true)))
     }
@@ -16413,6 +16666,9 @@ final class AidenMessageVisualSnapshotLayoutTests: XCTestCase {
         }
         .environment(AidenHapticCenter())
         let host = UIHostingController(rootView: view)
+        // Drawn at `width` whatever the screen's insets, which a window narrower
+        // than the screen still takes (84 pt on the right of an open iPhone Duo).
+        host.safeAreaRegions = []
         // Host in the app's scene. A window that belongs to no scene can take a
         // layout pass whose thumbnail loads never reach the screen, leaving the
         // spinners in place however long the test waits.

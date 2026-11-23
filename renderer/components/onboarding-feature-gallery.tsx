@@ -4,6 +4,7 @@ import {
   Blocks,
   Bot,
   CalendarClock,
+  Repeat,
   ChartBar,
   ChartColumn,
   ChartScatter,
@@ -18,6 +19,8 @@ import {
   Lightbulb,
   ListTodo,
   MessageSquare,
+  MessagesSquare,
+  MessageSquarePlus,
   Mic2,
   Monitor,
   MousePointer2,
@@ -314,8 +317,26 @@ export const onboardingFeatures: OnboardingFeature[] = [
     group: "control",
     title: "Scheduled Automations",
     description:
-      "Ask Aiden in any chat to schedule recurring work, review its unattended access, then run, change, or pause it anytime.",
+      "Ask Aiden in any chat to schedule recurring work, review its unattended access, then run, change, or pause it anytime. A task made in a chat posts each result there, and Aiden can check back in a chat later.",
     icon: CalendarClock,
+    size: "tall",
+  },
+  {
+    id: "keepGoing",
+    group: "control",
+    title: "Keep Going Until Done",
+    description:
+      "Give a chat a goal with /goal, or /until npm test, and Aiden keeps working in new rounds until it is done or needs you, with a bar to pause or clear it. Aiden can suggest a goal too; only your Start begins one.",
+    icon: Repeat,
+    size: "standard",
+  },
+  {
+    id: "chatsRunChats",
+    group: "control",
+    title: "Chats that run chats",
+    description:
+      "Ask a chat to split up a job: it starts other chats, in this workspace or their own worktrees, and hears back as each finishes. Their approvals still come to you, and Stop all ends the ones you haven't taken over.",
+    icon: MessagesSquare,
     size: "tall",
   },
   {
@@ -325,6 +346,15 @@ export const onboardingFeatures: OnboardingFeature[] = [
     description: (computer) =>
       `Speak in the composer or dictate system-wide. Tap, hold, or both, and teach Aiden your names and terms in Voice & Speech settings. On-device models keep audio on this ${computer}, and on Apple silicon your words appear as you speak. Or explicitly connect cloud transcription and review what it can access.`,
     icon: Mic2,
+    size: "standard",
+  },
+  {
+    id: "quickChat",
+    group: "control",
+    title: "Floating Quick Chat",
+    description:
+      "Summon Aiden from any app with a global hotkey. Start in a Temporary chat, read the reply in a floating mini-modal, attach it to a workspace later, or expand straight into Aiden without interrupting a live stream.",
+    icon: MessageSquarePlus,
     size: "standard",
   },
   {

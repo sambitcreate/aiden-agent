@@ -96,6 +96,8 @@ export interface RendererChatMutationDeps {
   artifactRecoveryMessage(unresolved: string, recoveredMessage: string): string;
   workspaceMutationGate: Pick<WorkspaceMutationGate, "admit">;
   skillRegistry: { resolveFresh: Parameters<typeof commitSkillInvocationForAppend>[1]["resolveFresh"] };
+  assertChatAccess?: (event: IpcMainInvokeEvent, chatId: string) => void;
+  onChatRemoved?: (event: IpcMainInvokeEvent, chatId: string) => void;
 }
 
 export function createRendererChatMutationHandlers(deps: RendererChatMutationDeps) {
@@ -158,8 +160,9 @@ export function createRendererChatMutationHandlers(deps: RendererChatMutationDep
     dismissComputerUseContinue: async (_event: IpcMainInvokeEvent, id: unknown) =>
       chatForRenderer(await chatStore.setComputerUsePendingContinue(asString(id, "id"), false)),
 
-    remove: async (_event: IpcMainInvokeEvent, id: unknown) => {
+    remove: async (event: IpcMainInvokeEvent, id: unknown) => {
       const chatId = asString(id, "id");
+      deps.assertChatAccess?.(event, chatId);
       const chat = await chatStore.get(chatId);
       const result = chat?.botId && hostPlatformCapabilities().bots
         ? await botApplicationService.deleteChat({ botId: chat.botId, chatId })
@@ -167,6 +170,7 @@ export function createRendererChatMutationHandlers(deps: RendererChatMutationDep
       // The chat's read marker and triage entry go in the deletion itself
       // (chatApplicationService.remove), shared with Remote and Bot deletes.
       closeDeviceSessionsForChat(chatId);
+      deps.onChatRemoved?.(event, chatId);
       return result;
     },
 
@@ -189,6 +193,7 @@ export function createRendererChatMutationHandlers(deps: RendererChatMutationDep
         inputSource,
         retainedBytes,
       } = parsed;
+      deps.assertChatAccess?.(event, chatId);
       const owner = rendererDocumentOwner(
         event,
         () =>

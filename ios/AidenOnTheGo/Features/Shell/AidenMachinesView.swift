@@ -287,6 +287,7 @@ struct AidenMachinesView: View {
     /// Starts pairing another machine.
     let addMachine: () -> Void
 
+    @Environment(\.aidenPalette) private var palette
     @State private var model: AidenMachinesModel
     @State private var machineToForget: String?
     @State private var forgetFailure: String?
@@ -315,9 +316,11 @@ struct AidenMachinesView: View {
                     .listRowBackground(Color.clear)
                 }
             } else {
+                let positions = AidenListCardPosition.positions(model.rows.map(\.id))
                 Section {
                     ForEach(model.rows) { row in
                         link(to: row)
+                        .aidenListCardRow(positions[row.id], hasDisclosure: true)
                         // Label and value only: hiding the children from a link drops its activation.
                         .accessibilityLabel(row.accessibilityLabel)
                         .accessibilityValue(row.accessibilityValue)
@@ -329,21 +332,47 @@ struct AidenMachinesView: View {
                             if row.offersReconnect, row.status != .online {
                                 Button("Reconnect") { Task { await model.reconnect(row.id) } }
                                     .disabled(!row.canReconnect)
-                                    .tint(.accentColor)
+                                    .aidenSolidFillTint()
                             }
                         }
                     }
-                } footer: {
+                    // A row, not the section's footer: a plain list draws a
+                    // footer on its own band with a hairline. This one is quiet
+                    // text on the canvas, like the headings above the cards.
                     Text("Hiding a computer keeps it paired. It only leaves the Inbox, and you can still open it here.")
+                        .font(.footnote)
+                        .foregroundStyle(palette.secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, AidenSpacing.xl)
+                        .padding(.top, AidenSpacing.s)
+                        .listRowInsets(EdgeInsets())
+                        .listRowSeparator(.hidden)
+                        .listRowBackground(palette.canvas)
                 }
             }
 
             Section {
                 Button(action: addMachine) {
-                    Label("Pair a computer", systemImage: "plus")
+                    AidenListRowLayout(isStacked: false, hasSummary: false) {
+                        AidenListRowGlyph(systemName: "plus", tint: palette.foreground)
+                    } title: {
+                        Text("Pair a computer")
+                            .font(.body)
+                            .foregroundStyle(palette.foreground)
+                    } summary: {
+                        EmptyView()
+                    } trailing: {
+                        EmptyView()
+                    }
                 }
+                .buttonStyle(.plain)
+                .aidenListCardRow(.only)
             }
         }
+        .listStyle(.plain)
+        .listSectionSpacing(AidenSpacing.l)
+        .scrollContentBackground(.hidden)
+        .background { palette.canvas.ignoresSafeArea() }
         .navigationTitle("Computers")
         .navigationBarTitleDisplayMode(.inline)
         .task(id: model.machineIDs) { model.register() }
@@ -433,24 +462,23 @@ struct AidenMachinesRouteView: View {
 /// One machine on the page: symbol, name, state, and what hiding it means.
 private struct AidenMachineRowView: View {
     let row: AidenMachineRow
+    @Environment(\.aidenPalette) private var palette
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @ScaledMetric(relativeTo: .body) private var scaledChipSize: CGFloat = 40
     private var chipSize: CGFloat { min(scaledChipSize, 56) }
 
     var body: some View {
-        // At the largest text sizes the symbol sits above the words, so they keep the full width.
         let stacked = dynamicTypeSize.isAccessibilitySize
-        let layout = stacked
-            ? AnyLayout(VStackLayout(alignment: .leading, spacing: AidenSpacing.s))
-            : AnyLayout(HStackLayout(alignment: .center, spacing: AidenSpacing.m))
-        layout {
+        AidenListRowLayout(isStacked: stacked, hasSummary: true, markStyle: .avatar(chipSize)) {
             AidenMachineChipImage(symbol: row.symbol, color: row.color, size: chipSize)
+        } title: {
+            Text(row.name)
+                .font(.body)
+                .foregroundStyle(palette.foreground)
+                .lineLimit(stacked ? 4 : 2)
+                .truncationMode(.tail)
+        } summary: {
             VStack(alignment: .leading, spacing: AidenSpacing.xs) {
-                Text(row.name)
-                    .font(.body)
-                    .foregroundStyle(.primary)
-                    .lineLimit(stacked ? 4 : 2)
-                    .truncationMode(.tail)
                 HStack(alignment: .firstTextBaseline, spacing: AidenSpacing.xs) {
                     Image(systemName: row.status.systemImage)
                         .imageScale(.small)
@@ -458,38 +486,34 @@ private struct AidenMachineRowView: View {
                     Text("\(row.status.title) · \(row.transport)")
                 }
                 .font(.subheadline)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(palette.secondary)
                 if row.status != .online {
                     Text(AidenInstallationPresentation.lastConnection(row.lastConnectedAt))
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .font(.footnote)
+                        .foregroundStyle(palette.secondary)
                 }
                 if row.isHidden {
                     Text("Hidden from Inbox · still paired")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .font(.footnote)
+                        .foregroundStyle(palette.secondary)
                 }
                 if let suffix = row.identitySuffix {
                     Text("Identity \(suffix)")
-                        .font(.caption.monospaced())
-                        .foregroundStyle(.secondary)
+                        .font(.footnote.monospaced())
+                        .foregroundStyle(palette.secondary)
                 }
                 if stacked, row.isSelected {
                     Text("Default computer")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .font(.footnote)
+                        .foregroundStyle(palette.secondary)
                 }
             }
-            if !stacked {
-                Spacer(minLength: 0)
-                if row.isSelected {
-                    Image(systemName: "checkmark")
-                        .foregroundStyle(.secondary)
-                        .accessibilityHidden(true)
-                }
+        } trailing: {
+            if !stacked, row.isSelected {
+                Image(systemName: "checkmark")
+                    .foregroundStyle(palette.secondary)
+                    .accessibilityHidden(true)
             }
         }
-        .frame(minHeight: 44)
-        .padding(.vertical, AidenSpacing.xs)
     }
 }

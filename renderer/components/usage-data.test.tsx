@@ -7,7 +7,7 @@ import { analyticsRegistryView } from "../../main/handlers/analytics";
 import { installBotTestIpc } from "../main/bots/test-dom";
 import type { AnalyticsStatusView } from "../shared/analytics";
 import type { OnboardingSnapshot } from "../shared/onboarding";
-import { OnboardingFlow } from "./onboarding-flow";
+import { OnboardingFlow, waitForOnboardingActiveCheck } from "./onboarding-flow";
 import { Toaster } from "./ui";
 import { UsageDataNotice, UsageDataOnboardingRow, UsageDataSettings } from "./usage-data";
 
@@ -250,3 +250,35 @@ for (const [label, read, displayed] of [
     assert.deepEqual(channelCalls(calls, "analytics:markNoticeShown"), displayed ? [["ok"]] : []);
   });
 }
+
+test("waitForOnboardingActiveCheck waits for the initial main-process check before unblocking navigation", async () => {
+  let resolveState!: (snapshot: OnboardingSnapshot) => void;
+  installBotTestIpc({
+    "app:getOnboardingState": () => new Promise<OnboardingSnapshot>((resolve) => { resolveState = resolve; }),
+    "profile:get": () => ({ name: "Ada" }),
+    "analytics:status": () => status(),
+  });
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: Infinity } } });
+  render(
+    <QueryClientProvider client={client}>
+      <OnboardingFlow />
+    </QueryClientProvider>,
+  );
+
+  // While the check is in flight, the DOM marks onboarding as checking.
+  assert.ok(document.querySelector("[data-onboarding-active='true'][data-onboarding-checking='true']"));
+  let settled: boolean | null = null;
+  const checkPromise = waitForOnboardingActiveCheck(2000).then((value) => {
+    settled = value;
+    return value;
+  });
+  await flush();
+  assert.equal(settled, null);
+
+  await act(async () => {
+    resolveState(onboardingSnapshot("completed"));
+  });
+  assert.equal(await checkPromise, false);
+  await flush();
+  assert.equal(document.querySelector("[data-onboarding-active='true']"), null);
+});

@@ -14,6 +14,8 @@ import { Menu, nativeImage, nativeTheme, type IpcMainInvokeEvent } from "electro
 import path from "node:path";
 
 import { registerHandlers } from "./handlers/index.js";
+import { aidenAppNavigation } from "./services/aiden-app-navigation.js";
+import { windowDocumentOwner } from "./services/renderer-document-owner.js";
 import { prepareLocalSpeechStorage } from "./services/local-speech-models.js";
 import { storageUsageService } from "./services/storage-usage-main.js";
 import { chatTriage, startChatTriage, stopChatTriage } from "./services/chat-triage-main.js";
@@ -44,11 +46,13 @@ import { resolveWindowChrome } from "../renderer/shared/window-chrome.js";
 import {
   initShortcut,
   initDictationShortcut,
+  initQuickChatShortcut,
   initAssistantShortcut,
   applyShortcutFromSettings,
   disposeShortcut,
   initShortcutBindingsChanged,
   isDictationShortcutActive,
+  isQuickChatShortcutActive,
 } from "./services/shortcut.js";
 import { mcpManager, prewarmMcpServers } from "./services/mcp.js";
 import { sealPlaintextMcpServerFields } from "./services/mcp-server-save.js";
@@ -97,6 +101,7 @@ import { projectDiagnosticError } from "./services/diagnostics-contract.js";
 import { flushDiagnosticHealth } from "./services/diagnostic-health.js";
 import { pruneExpiredDiagnosticCrashDumps } from "./services/diagnostic-support.js";
 import { scheduleService } from "./services/schedule-service.js";
+import { startScheduledTaskTriggers, stopScheduledTaskTriggers } from "./services/scheduled-task-triggers-main.js";
 import { analyticsService, installAnalyticsCrashCapture } from "./services/analytics/analytics-main.js";
 import { initializeHookService } from "./services/hooks/hook-service-main.js";
 import { telegramService } from "./services/telegram/telegram-service.js";
@@ -160,6 +165,7 @@ import {
 import { reconcilePendingManagedWorktreeDeletions } from "./services/managed-worktree-deletion-recovery.js";
 import { reconcilePendingChatDeletions } from "./services/chat-deletion-reconciliation.js";
 import { workspaceApplicationService } from "./services/workspace-application-service-main.js";
+import { chatApplicationService } from "./services/chat-application-service-main.js";
 import { EmptyChatMigrationSnapshotError } from "./services/empty-chat-migration.js";
 import { migrateLegacyEmptyWorkspaceChats } from "./services/empty-chat-migration-main.js";
 import { ensureUserDataDir } from "./services/data-store.js";
@@ -208,15 +214,23 @@ import {
 } from "./application-lifecycle-core.js";
 import { isAuxiliaryWindow } from "./windows/auxiliary-windows.js";
 import { destroyPill } from "./windows/pill-window.js";
+import {
+  destroyQuickChat,
+  prepareQuickChat,
+  toggleQuickChat,
+} from "./windows/quick-chat-window.js";
 import { hostPlatformCapabilities } from "./services/host-platform-capabilities.js";
 import { installElectronConnectorWatchTransport } from "./services/bot-routine-events/connector-watch-startup.js";
 import {
   backgroundJobs,
+  checkBacks,
   pullRequestFollows,
   reapFollowThroughProcesses,
   shutdownFollowThrough,
   startFollowThrough,
 } from "./services/follow-through/follow-through-main.js";
+import { shutdownGoalLoop, startGoalLoop } from "./services/goal/goal-main.js";
+import { startKeepAwake, stopKeepAwake } from "./services/keep-awake/keep-awake-main.js";
 import { reconcileChatScopedStores } from "./services/startup-chat-reconciliation.js";
 import { removeWorkspaceArtifacts } from "./services/workspace-artifacts/main.js";
 
@@ -401,11 +415,15 @@ function cleanupApplication(): void {
   appUpdateService.dispose();
   disposeShortcut();
   disposeDictation();
+  destroyQuickChat();
   disposeLocalSpeech();
   disposeFoundationModelsConnection();
   formFillRuntime.dispose();
   computerUseStatus.invalidate();
   scheduleService.stop();
+  // Synchronously, so no trigger timer fires once cleanup has begun.
+  stopScheduledTaskTriggers();
+  stopKeepAwake();
   stopChatTriage();
   stopInboxDockBadge();
   llmClient.abortAll();
@@ -571,6 +589,10 @@ async function runShutdownAndQuit(settingsPrepared: boolean): Promise<void> {
     }
   }
   const disarmShutdownCeiling = armShutdownCeiling();
+  // Quitting ends Aiden's work, so nothing is left to keep the computer awake for.
+  stopKeepAwake();
+  // No goal reviews or rounds start while generations stop: the quit's aborts aren't the person's Stop.
+  shutdownGoalLoop();
   // First, so no further chat or worktree is deleted while the rest of the app stops.
   await settleShutdownStep("main", "Storage cleanup", SHUTDOWN_BUDGET_MS.storageCleanup, () => storageUsageService.shutdown());
   await settleShutdownStep("voice", "Gemini Live", SHUTDOWN_BUDGET_MS.geminiLive, () => geminiLiveService.shutdown());
@@ -588,8 +610,8 @@ async function runShutdownAndQuit(settingsPrepared: boolean): Promise<void> {
       "Parent generation did not settle before the shutdown deadline; forcing application shutdown.",
     );
   }
-  // Background jobs and done-when checks stop with the app; follows and
-  // checks are saved for the next launch. Bounded so a stuck job never holds quit.
+  // Background jobs and goal checks stop with the app; follows and
+  // goals are saved for the next launch. Bounded so a stuck job never holds quit.
   await settleShutdownStep("follow-through", "Background jobs", SHUTDOWN_BUDGET_MS.backgroundJobs, () => shutdownFollowThrough());
   // Settled generations have recorded their last pace samples; persist the
   // debounced remainder. Never fatal: it is a regenerable measurement cache.
@@ -1987,6 +2009,27 @@ async function deliverMainWindowNotification(
   }
 }
 
+async function navigateMainWindowAndWait(path: string): Promise<void> {
+  await createMainWindow();
+  if (!(await waitForRendererReady())) {
+    throw new Error("The main window did not become ready in time.");
+  }
+  if (!mainWindow || mainWindow.isDestroyed()) {
+    throw new Error("The main window is not available.");
+  }
+  if (mainWindow.isMinimized()) mainWindow.restore();
+  mainWindow.show();
+  mainWindow.focus();
+  const owner = windowDocumentOwner(mainWindow.webContents);
+  const status = await aidenAppNavigation.openPath(path, owner);
+  if (status === "blocked") {
+    throw new Error("Finish the current task in Aiden before expanding.");
+  }
+  if (status !== "opened") {
+    throw new Error("Aiden's main window could not open this view.");
+  }
+}
+
 function deliverMainWindowNotificationSafely(
   channel: NotificationChannel,
   payload: Record<string, unknown>,
@@ -2208,7 +2251,12 @@ if (!ownsSingleInstanceLock) {
   // First, so a crash in the startup below is covered.
   installAnalyticsCrashCapture();
   registerNativeHandlers();
-  registerHandlers((event) => !!mainWindow && !mainWindow.isDestroyed() && event.sender === mainWindow.webContents);
+  registerHandlers(
+    (event) => !!mainWindow && !mainWindow.isDestroyed() && event.sender === mainWindow.webContents,
+    {
+      navigateMainWindow: (path) => navigateMainWindowAndWait(path),
+    },
+  );
   registerBrowserHandlers();
   terminalService.setOutputObserver((workspaceId, data) => browserService.observeTerminalOutput(workspaceId, data));
 
@@ -2240,6 +2288,7 @@ if (!ownsSingleInstanceLock) {
       if (shouldReleaseAuxiliaryWindows(process.platform, aidenRemoteServiceKeepsApplicationAlive(), remaining)) {
         disposeVisualSnapshots();
         destroyPill();
+        destroyQuickChat();
       }
     });
   });
@@ -2556,7 +2605,11 @@ if (!ownsSingleInstanceLock) {
           logger.warn(area, message, error),
         );
       });
-      // After deletions settle and before any renderer draft exists.
+      // Sweep any temporary floating chats left over from a prior crash, then
+      // prepare No workspace folders before any renderer draft exists.
+      await chatApplicationService.sweepOrphanedEphemeralChats().catch((error: unknown) => {
+        logger.warn("chats", "Could not sweep orphaned temporary chats at startup.", error);
+      });
       await workspaceApplicationService.prepareNoWorkspaceChats().catch((error: unknown) => {
         logger.warn("workspace", "No workspace chats could not be prepared; they keep their current folders.", error);
       });
@@ -2772,6 +2825,15 @@ if (!ownsSingleInstanceLock) {
       initDictationShortcut(() => {
         toggleDictation();
       });
+      initQuickChatShortcut(() => {
+        void toggleQuickChat("hotkey").catch((error: unknown) => {
+          logger.warn(
+            "quick-chat",
+            "Could not toggle Quick Chat from the global shortcut",
+            error,
+          );
+        });
+      });
       initAssistantShortcut(() => {
         void deliverMainWindowNotification("app:command", {
           commandId: "assistant.open",
@@ -2798,6 +2860,11 @@ if (!ownsSingleInstanceLock) {
       setTimeout(() => {
         if (shutdownHasBegun()) return;
         if (isDictationShortcutActive()) void prepareDictationPill();
+        if (isQuickChatShortcutActive()) {
+          void prepareQuickChat().catch((error: unknown) => {
+            logger.warn("quick-chat", "Could not pre-warm Quick Chat window", error);
+          });
+        }
         void import("./services/local-voice-preload.js").then(({ preloadLocalVoice }) => preloadLocalVoice());
       }, 3_000).unref();
       resolveShortcutInitialization?.();
@@ -2821,6 +2888,26 @@ if (!ownsSingleInstanceLock) {
       await startFollowThrough().catch((error: unknown) => {
         logger.warn("follow-through", "Could not finish restoring checks and pull request follows.", error);
       });
+      // Goals live in follow-through's saved state; ones active at quit come back paused.
+      if (!shutdownHasBegun()) {
+        try {
+          startGoalLoop();
+        } catch (error) {
+          logger.warn("goal", "Could not restore keep-going goals.", error);
+        }
+      }
+      // Started chats' endings that a quit kept from their lead are posted now, without waking it.
+      if (!shutdownHasBegun()) {
+        void import("./services/chat-orchestration/child-chats-main.js")
+          .then(({ childChatCompletions }) => childChatCompletions.recoverOwed())
+          .catch((error: unknown) => logger.warn("chat-orchestration", "Could not post started chats' owed endings.", error));
+      }
+      // Watches runs, jobs and checks to keep the computer awake while Aiden works.
+      if (!shutdownHasBegun()) {
+        await startKeepAwake().catch((error: unknown) => {
+          logger.warn("keep-awake", "Could not start keeping the computer awake while Aiden works.", error);
+        });
+      }
       // Back in front, awake or unlocked: followed pull requests may have
       // moved while nobody looked. These nudges are debounced and read a
       // follow at most every five minutes, so repeated focus costs nothing extra.
@@ -2828,6 +2915,10 @@ if (!ownsSingleInstanceLock) {
       app.on("browser-window-focus", nudgeFollows);
       powerMonitor.on("resume", nudgeFollows);
       powerMonitor.on("unlock-screen", nudgeFollows);
+      // A check-back due while the computer slept fires now (or leaves a
+      // "Missed" card when it is over 2 hours late); the timer re-arms.
+      powerMonitor.on("resume", () => checkBacks.rearm());
+      powerMonitor.on("unlock-screen", () => checkBacks.rearm());
       try {
         if (!shutdownHasBegun()) await initializeAidenRemoteService();
       } catch (error) {
@@ -2864,6 +2955,10 @@ if (!ownsSingleInstanceLock) {
           scheduleService.reevaluateCatchUp(),
         );
         if (!shutdownHasBegun()) await scheduleService.start();
+        // Chat tasks that run when something happens; never hold keep-awake.
+        if (!shutdownHasBegun()) {
+          await startScheduledTaskTriggers();
+        }
       } catch (error) {
         logger.error(
           "scheduled-tasks",

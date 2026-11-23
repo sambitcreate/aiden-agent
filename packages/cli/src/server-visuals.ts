@@ -158,6 +158,10 @@ export function serverBrowserArguments(profileDir: string, platform: NodeJS.Plat
     "--no-first-run",
     "--no-default-browser-check",
     "--disable-background-networking",
+    "--disable-background-timer-throttling",
+    "--disable-backgrounding-occluded-windows",
+    "--disable-renderer-backgrounding",
+    "--disable-gpu",
     "--disable-component-update",
     "--disable-sync",
     "--disable-extensions",
@@ -166,7 +170,11 @@ export function serverBrowserArguments(profileDir: string, platform: NodeJS.Plat
     "--disable-crash-reporter",
     "--disable-domain-reliability",
     "--disable-client-side-phishing-detection",
-    "--disable-features=Translate,MediaRouter,OptimizationHints,AutofillServerCommunication,CertificateTransparencyComponentUpdater",
+    // IsolateSandboxedIframes would put the sandboxed guest frame in a process
+    // of its own. Setting the host page then crashes Chrome 158 ("Check failed:
+    // has_site_"), and on slow machines the extra process can cost most of the
+    // 15 s limit. The frame stays sandboxed, offline and fully blocked either way.
+    "--disable-features=Translate,MediaRouter,OptimizationHints,AutofillServerCommunication,CertificateTransparencyComponentUpdater,IsolateSandboxedIframes",
     "--metrics-recording-only",
     "--no-pings",
     "--mute-audio",
@@ -183,7 +191,13 @@ export function serverBrowserArguments(profileDir: string, platform: NodeJS.Plat
 
 /** Only what a browser needs to start; none of the server's secrets. */
 function browserEnvironment(profileDir: string): NodeJS.ProcessEnv {
-  const env: NodeJS.ProcessEnv = { HOME: profileDir, TMPDIR: tmpdir(), XDG_CONFIG_HOME: join(profileDir, "config"), XDG_CACHE_HOME: join(profileDir, "cache") };
+  const env: NodeJS.ProcessEnv = {
+    HOME: profileDir,
+    TMPDIR: tmpdir(),
+    XDG_CONFIG_HOME: join(profileDir, "config"),
+    XDG_CACHE_HOME: join(profileDir, "cache"),
+    NO_AT_BRIDGE: "1",
+  };
   for (const name of ["PATH", "LANG", "LC_ALL", "TZ"]) if (process.env[name]) env[name] = process.env[name];
   return env;
 }
@@ -330,6 +344,7 @@ async function renderNow(options: RenderServerVisualOptions): Promise<CapturedIm
     };
     const { targetId } = await call("Target.createTarget", { url: "about:blank" });
     const { sessionId } = await call("Target.attachToTarget", { targetId, flatten: true }) as { sessionId: string };
+    await call("Page.bringToFront", {}, sessionId);
     await call("Fetch.enable", { patterns: [{ urlPattern: "*" }] }, sessionId);
     await call("Target.setAutoAttach", { autoAttach: true, waitForDebuggerOnStart: true, flatten: true }, sessionId);
     await call("Network.enable", {}, sessionId);

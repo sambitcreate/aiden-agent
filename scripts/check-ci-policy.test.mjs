@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
+import { readdir, readFile } from "node:fs/promises";
 import test from "node:test";
 import { URL } from "node:url";
 import { parse } from "yaml";
@@ -199,7 +199,7 @@ test("Linux GUI smokes force teardown without masking startup failures", async (
 
 test("desktop E2E and unit work are sharded with independent Apple and iOS checks", async () => {
   const { jobs } = parse(await readFile(workflowUrl, "utf8"));
-  assert.deepEqual(jobs.e2e.strategy.matrix.shard, [1, 2, 3, 4]);
+  assert.deepEqual(jobs.e2e.strategy.matrix.shard, [1, 2, 3, 4, 5]);
   assert.equal(jobs.e2e["timeout-minutes"], 20);
   assert.equal(jobs.e2e.strategy["fail-fast"], false);
   assert.equal(jobs.unit.strategy["fail-fast"], false);
@@ -235,7 +235,7 @@ test("desktop E2E and unit work are sharded with independent Apple and iOS check
     });
     assert.equal(result.status, 0, `${lane}: ${result.stderr}`);
   }
-  assert.ok(jobs.e2e.steps.some((step) => step.run === "node scripts/ci-e2e-shards.mjs ${{ matrix.shard }}/4"));
+  assert.ok(jobs.e2e.steps.some((step) => step.run === "node scripts/ci-e2e-shards.mjs ${{ matrix.shard }}/5"));
   const receipt = jobs.e2e.steps.find((step) => step.uses?.startsWith("actions/upload-artifact@"));
   assert.ok(receipt.with.name.includes("${{ matrix.shard }}"));
   assert.ok(jobs.apple.steps.some((step) => step.run === "npm run test:native"));
@@ -502,3 +502,99 @@ test("Linux required contexts exist for scoped PRs and fail closed", async () =>
     assert.equal(run.status, expected, `${detection}/${selected}/${result}/${e2e}: ${run.stdout}${run.stderr}`);
   }
 });
+
+const ISSUE_TEMPLATE_DIR = new URL("../.github/ISSUE_TEMPLATE/", import.meta.url);
+const VALID_ISSUE_FORM_TYPES = new Set(["markdown", "textarea", "input", "dropdown", "checkboxes", "upload"]);
+
+function isPlainObject(value) {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function isNonEmptyString(value) {
+  return typeof value === "string" && value.trim().length > 0;
+}
+
+test("GitHub issue forms and chooser config are valid YAML matching GitHub's required schema", async () => {
+  const entries = (await readdir(ISSUE_TEMPLATE_DIR)).filter((name) => /\.ya?ml$/u.test(name)).sort();
+  assert.ok(entries.length > 0, "expected at least one YAML file in .github/ISSUE_TEMPLATE/");
+
+  for (const name of entries) {
+    const raw = await readFile(new URL(name, ISSUE_TEMPLATE_DIR), "utf8");
+    const doc = parse(raw);
+    assert.ok(isPlainObject(doc), `${name}: root YAML value must be a mapping`);
+
+    if (name === "config.yml" || name === "config.yaml") {
+      if (doc.blank_issues_enabled !== undefined) {
+        assert.equal(typeof doc.blank_issues_enabled, "boolean", `${name}: blank_issues_enabled must be boolean`);
+      }
+      if (doc.contact_links !== undefined) {
+        assert.ok(Array.isArray(doc.contact_links), `${name}: contact_links must be an array`);
+        for (const [index, link] of doc.contact_links.entries()) {
+          assert.ok(isPlainObject(link), `${name}: contact_links[${index}] must be a mapping`);
+          assert.ok(isNonEmptyString(link.name), `${name}: contact_links[${index}].name is required`);
+          assert.ok(isNonEmptyString(link.about), `${name}: contact_links[${index}].about is required`);
+          assert.ok(isNonEmptyString(link.url) && /^https:\/\//u.test(link.url), `${name}: contact_links[${index}].url must be https://`);
+        }
+      }
+      continue;
+    }
+
+    assert.ok(isNonEmptyString(doc.name), `${name}: missing required string 'name'`);
+    assert.ok(isNonEmptyString(doc.description), `${name}: missing required string 'description'`);
+    if (doc.title !== undefined) {
+      assert.equal(typeof doc.title, "string", `${name}: 'title' must be a string`);
+    }
+    if (doc.labels !== undefined) {
+      const validLabels =
+        isNonEmptyString(doc.labels) ||
+        (Array.isArray(doc.labels) && doc.labels.every((label) => isNonEmptyString(label)));
+      assert.ok(validLabels, `${name}: 'labels' must be a non-empty string or array of non-empty strings`);
+    }
+    assert.ok(Array.isArray(doc.body) && doc.body.length > 0, `${name}: missing required non-empty 'body' array`);
+
+    const seenIds = new Set();
+    let inputCount = 0;
+    for (const [index, item] of doc.body.entries()) {
+      assert.ok(isPlainObject(item), `${name}: body[${index}] must be a mapping`);
+      assert.ok(VALID_ISSUE_FORM_TYPES.has(item.type), `${name}: body[${index}].type '${item.type}' is not a valid GitHub issue form type`);
+      assert.ok(isPlainObject(item.attributes), `${name}: body[${index}].attributes must be a mapping`);
+
+      if (item.id !== undefined) {
+        assert.ok(isNonEmptyString(item.id), `${name}: body[${index}].id must be a non-empty string`);
+        assert.equal(seenIds.has(item.id), false, `${name}: duplicate field id '${item.id}'`);
+        seenIds.add(item.id);
+      }
+
+      if (item.type === "markdown") {
+        assert.ok(isNonEmptyString(item.attributes.value), `${name}: body[${index}] markdown requires attributes.value`);
+      } else {
+        inputCount += 1;
+        assert.ok(isNonEmptyString(item.attributes.label), `${name}: body[${index}] (${item.type}) requires attributes.label`);
+        if (item.type === "dropdown") {
+          assert.ok(
+            Array.isArray(item.attributes.options) &&
+              item.attributes.options.length > 0 &&
+              item.attributes.options.every((option) => isNonEmptyString(option)),
+            `${name}: body[${index}] dropdown requires non-empty string options`,
+          );
+        }
+        if (item.type === "checkboxes") {
+          assert.ok(
+            Array.isArray(item.attributes.options) &&
+              item.attributes.options.length > 0 &&
+              item.attributes.options.every((option) => isPlainObject(option) && isNonEmptyString(option.label)),
+            `${name}: body[${index}] checkboxes require options with non-empty label`,
+          );
+        }
+        if (item.validations !== undefined) {
+          assert.ok(isPlainObject(item.validations), `${name}: body[${index}].validations must be a mapping`);
+          if (item.validations.required !== undefined) {
+            assert.equal(typeof item.validations.required, "boolean", `${name}: body[${index}].validations.required must be boolean`);
+          }
+        }
+      }
+    }
+    assert.ok(inputCount > 0, `${name}: issue form must contain at least one non-markdown input`);
+  }
+});
+

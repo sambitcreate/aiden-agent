@@ -151,7 +151,14 @@ more careful about where things go next. Outside content is a web page or
 search result, anything from the browser (except resizing it or changing its
 appearance), a simulator screenshot, a subagent's report, a pull request's
 comments, codemode, or any connector's result (a connector's result still
-counts after that connector is removed or renamed), and it counts for the rest
+counts after that connector is removed or renamed). A notice Aiden posts that
+quotes outside text counts too: a followed pull request's news, a
+**Started chat** notice or a `child_chats` result that returns the words of a
+started chat that read outside content, and a trigger's event
+(a link call's body, a watched page's change, a connector's new mail), in a
+scheduled task's notice or in its own chat's prompt. A job's, check's or task
+script's output is your own commands' and doesn't count. Outside content
+counts for the rest
 of the chat, earlier turns included, even after the chat is compacted. Files
 in the workspace, and in a Bot's home or selected folders, are not outside
 content. A summary
@@ -161,7 +168,8 @@ to a site you didn't name in the chat and before the first use of each
 connector, even one that only reads; **Auto** has the approval model judge
 those; **Never ask** runs them. A consequential step in a chat that has
 read outside content is still judged in **Auto**, against what you wrote in
-the chat; a Bot shows its card instead. Expect a few more cards in Ask after a chat has
+the chat (on a turn a notice woke, against the last message you wrote, never
+the notice; sites inside a trigger's event text never count as named by you); a Bot shows its card instead. Expect a few more cards in Ask after a chat has
 used the browser or a subagent: that is by design, since text you didn't write
 could be steering the model.
 
@@ -247,14 +255,28 @@ page's own rules live in `approval-rules.json`, which it ignores.
 
 ## Allowed without asking (from cards)
 
-After you approve the same app action or website action three times in 14 days,
-with no denial in that period, the next eligible card offers **Always allow
-for <Bot>**. A class is one exact connected app tool, or one website host and
+Every eligible card offers **Always allow for <Bot>**, the first one
+included. After you approve the same app action or website action three times
+in 14 days, with no denial in that period, the card also notes how often you
+allowed it ("You’ve allowed this 3 times in the last 2 weeks"). A class is one exact connected app tool, or one website host and
 action such as click, type or press. Website names ignore letter case and a
 leading `www.`; other subdomains and actions remain separate. The row appears
 in Always allow on the rules page, and Remove there stops it on the next call.
 Paired iOS and Android clients still show the Bot's list when the host grants
-`bot:allowed`.
+`bot:allowed`. Phones that read the typed approval card offer Always on the
+first card too; an older phone that reads only the repeat count offers it
+from the third approval.
+
+Composio is one tool that runs many app actions, so a Composio card names the
+action it runs ("Composio · Gmail: Send email") and Always allow covers the
+Composio tool for this Bot. The rules still read each app action the call
+names: sending, posting, deleting, publishing and buying keep asking (or are
+handed off) as the built-in and your own rules say, even after Always allow.
+Only looking up app actions, reading their schemas, waiting on a sign-in and
+running app actions it can read can be covered. Connecting or managing an app
+account, Composio's workbench, its shell and raw API calls, any Composio
+operation Aiden doesn't know yet, and a call whose app actions can't be read
+never offer Always and are never covered by it.
 
 Choosing Always saves that allowance for this Bot. While this Mac is in Ask
 and a model could judge (an agent-runtime provider alone can't), the card
@@ -269,8 +291,8 @@ Switching doesn't answer the card on screen; it still needs your answer. Allow o
 one short sentence, at most once a week for that class. Decisions on a
 Bot-message turn still count, but do not send or consume that hint because the
 reply goes to another Bot. Expiry and automatic
-answers do not count as your approvals or denials. A denial withholds an
-offer for 14 days. Transport retries and recovery do not count a choice twice.
+answers do not count as your approvals or denials. A denial withholds the
+repeat note, Switch to Auto and the hint for 14 days; Always allow stays on the card. Transport retries and recovery do not count a choice twice.
 
 Remembered entries follow current access, rules, routine behavior and approved
 plan coverage. They apply to eligible calls on every turn kind, but never

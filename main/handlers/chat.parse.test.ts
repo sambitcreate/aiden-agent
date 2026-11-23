@@ -74,6 +74,7 @@ test("registered chat:start forwards foreground delegation and the appended turn
     "../services/tool-approval-rules-main.js": { toolApprovalRules: {} },
     "../services/analytics/analytics-feature-reports.js": analyticsFeatureReports,
     "../services/analytics/analytics-ids.js": analyticsIds,
+    "../windows/quick-chat-window.js": { assertQuickChatConversationAccess: () => undefined },
   };
   // Bundle the real handler and pure helpers; replace only Electron/service ports.
   // No source rewriting, network, profile reads, or model calls are involved.

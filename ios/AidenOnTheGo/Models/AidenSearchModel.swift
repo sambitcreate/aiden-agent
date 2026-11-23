@@ -62,6 +62,16 @@ final class AidenSearchModel {
     /// Each `run()` takes a number. Only the newest one may change what's shown.
     @ObservationIgnored private var generation = 0
     @ObservationIgnored private var inFlight: Task<Void, Never>?
+    /// The query whose search finished with every machine answering, the
+    /// machines it asked, and when. The view runs a search each time it
+    /// appears, and a fold builds a new one; the same query to the same
+    /// machines soon after keeps what's shown. A machine that failed is asked
+    /// again, and an answer older than `answerLifetime` is asked again, so a
+    /// Bot's new conversations show.
+    @ObservationIgnored private var answered: (query: String, machines: Set<String>, at: Date)?
+
+    /// How long a finished search stands for the same query.
+    static let answerLifetime: TimeInterval = 30
 
     init(
         chatInput: @escaping @MainActor () -> AidenSearchChatInput,
@@ -153,6 +163,12 @@ final class AidenSearchModel {
         inFlight = nil
         let text = trimmedQuery
         let all = machines()
+        if !text.isEmpty, let answered, answered.query == text,
+           answered.machines == Self.askable(in: all),
+           now().timeIntervalSince(answered.at) < Self.answerLifetime {
+            return
+        }
+        answered = nil
         hitsByMachine = [:]
         failedMachines = []
         skippedMachines = []
@@ -164,7 +180,10 @@ final class AidenSearchModel {
         isSearching = true
         skippedMachines = Self.skipped(in: all)
         isSearchingBots = all.contains(where: \.canBeAsked)
-        guard isSearchingBots else { return }
+        guard isSearchingBots else {
+            answered = (text, [], now())
+            return
+        }
 
         let work = Task { await self.askMachines(about: text, generation: mine) }
         inFlight = work
@@ -219,6 +238,15 @@ final class AidenSearchModel {
         }
         guard mine == generation else { return }
         isSearchingBots = false
+        // A search stopped part way may have missed a machine's reply, and a
+        // machine that failed should be asked again.
+        if !Task.isCancelled, failedMachines.isEmpty {
+            answered = (text, Set(askable.map(\.instanceId)), now())
+        }
+    }
+
+    private static func askable(in machines: [AidenSearchMachine]) -> Set<String> {
+        Set(machines.filter(\.canBeAsked).map(\.instanceId))
     }
 
     /// Machines with Bots that weren't connected when the search began.

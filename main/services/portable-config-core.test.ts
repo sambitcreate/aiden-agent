@@ -1616,3 +1616,19 @@ test('runtime settings export botMessaging only when off',()=>{
  assert.equal(runtimeSettingsFrom({botMessaging:true} as never).botMessaging,undefined);
  assert.equal(runtimeSettingsFrom({botMessaging:'no'} as never).botMessaging,undefined);
 });
+
+test("runtime settings preserve valid Quick Chat preferences and drop invalid values", () => {
+  const valid = runtimeSettingsFrom({
+    quickChatDefaultPersistence: "lastWorkspace",
+    quickChatKeepOpenOnBlur: false,
+  } as never);
+  assert.equal(valid.quickChatDefaultPersistence, "lastWorkspace");
+  assert.equal(valid.quickChatKeepOpenOnBlur, false);
+
+  const invalid = runtimeSettingsFrom({
+    quickChatDefaultPersistence: "workspace:/etc/passwd",
+    quickChatKeepOpenOnBlur: "yes",
+  } as never);
+  assert.equal(invalid.quickChatDefaultPersistence, undefined);
+  assert.equal(invalid.quickChatKeepOpenOnBlur, undefined);
+});

@@ -6,6 +6,7 @@ import {
 } from "../shared/model-visibility";
 import type { Provider, ScheduledTask, ScheduledTaskMode } from "./types";
 import { formatScheduledTaskCadence } from "../shared/scheduled-task-presentation";
+import { formatScheduledTaskTriggerLabel } from "../shared/scheduled-task-trigger";
 import { isAcpHarnessProvider } from "../shared/acp-harness";
 import { formatRelativeTime } from "./relative-time";
 
@@ -142,6 +143,11 @@ export function cronFromScheduleDraft(draft: ScheduledTaskScheduleDraft): string
 
 export const formatSchedule = formatScheduledTaskCadence;
 
+/** When a task runs: its trigger ("Every 15 min, when … changes") or its schedule. */
+export function formatTaskWhen(task: Pick<ScheduledTask, "cron" | "timezone" | "trigger">): string {
+  return task.trigger ? formatScheduledTaskTriggerLabel(task.trigger) : formatScheduledTaskCadence(task.cron, task.timezone);
+}
+
 export function filterScheduledTasks(
   tasks: ScheduledTask[],
   query: string,
@@ -152,7 +158,7 @@ export function filterScheduledTasks(
     if (tab === "active" && !task.enabled) return false;
     if (tab === "paused" && task.enabled) return false;
     if (!normalized) return true;
-    return `${task.name} ${task.cron} ${task.prompt ?? ""} ${task.script ?? ""}`
+    return `${task.name} ${task.trigger ? formatTaskWhen(task) : task.cron} ${task.prompt ?? ""} ${task.script ?? ""}`
       .toLocaleLowerCase()
       .includes(normalized);
   });

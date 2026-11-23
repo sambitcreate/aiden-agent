@@ -26,6 +26,7 @@ import {
 } from "../../renderer/shared/bot-routine-schedule.js";
 import { isPathSafeBotCapabilityId } from "../../renderer/shared/bot-capabilities.js";
 import { BOT_LIMITS } from "../../renderer/shared/bots.js";
+import { TASK_CONNECTOR_NEEDS_SOURCE, parseScheduledTaskTrigger, type ScheduledTaskTrigger } from "../../renderer/shared/scheduled-task-trigger.js";
 
 const RUNS_PER_TASK = 50;
 const STORED_OUTPUT_LIMIT = 64 * 1024;
@@ -109,6 +110,49 @@ export function nextScheduledRuns(
     return job.nextRuns(requested, from).map((date) => date.getTime());
   } finally {
     job.stop();
+  }
+}
+
+/**
+ * The trigger a task carries: watches only start "Ask Aiden" tasks of the
+ * person's own, never a Bot routine, and a script watch runs a script
+ * unattended, so it needs Full access like a script task.
+ */
+function assertTriggerShape(
+  trigger: ScheduledTaskTrigger,
+  task: { botId?: string; mode: string; permission: string },
+): void {
+  if (task.botId !== undefined) throw new Error("A Bot routine can't have a task trigger.");
+  if (task.mode !== "llm") throw new Error("A task that runs when something changes asks Aiden. Use a script watch to check with a script.");
+  if (trigger.kind === "watch" && trigger.source.type === "script" && task.permission !== "full") {
+    throw new Error("A script watch runs a script unattended, so the task needs Full permission.");
+  }
+}
+
+/** A Find sources choice is only ever swapped for a binding in main; it is never stored. */
+function storedTrigger(trigger: ScheduledTaskTrigger): ScheduledTaskTrigger {
+  if (trigger.kind !== "connector" || trigger.sourceChoiceId === undefined) return trigger;
+  const { sourceChoiceId: _choice, ...rest } = trigger;
+  return rest;
+}
+
+/** A task that posts into a chat runs at most this often. */
+export const MIN_CHAT_TASK_INTERVAL_MS = 15 * 60 * 1000;
+/** How many upcoming runs the chat cadence floor checks. */
+const CHAT_TASK_CADENCE_RUNS = 5;
+
+/**
+ * Refuse a schedule that would post into a chat more often than every 15
+ * minutes, measured over the gaps before each of the next 5 runs.
+ */
+export function assertChatTaskCadence(cron: string, timezone: string, from = new Date()): void {
+  const runs = nextScheduledRuns(cron, timezone, CHAT_TASK_CADENCE_RUNS + 1, from);
+  for (let index = 1; index < runs.length; index += 1) {
+    if (runs[index]! - runs[index - 1]! < MIN_CHAT_TASK_INTERVAL_MS) {
+      throw new Error(
+        "A task that posts into a chat can run at most every 15 minutes. Choose a slower schedule, or let it run in its own chat.",
+      );
+    }
   }
 }
 
@@ -204,7 +248,15 @@ function normalizeInput(
     botId === undefined
       ? undefined
       : parseBotRoutineSchedule(input.routineSchedule ?? existing?.routineSchedule);
-  const cron = routineSchedule ? botRoutineCron(routineSchedule) : input.cron.trim();
+  // Undefined keeps the saved trigger (callers that don't know triggers never
+  // drop one); null removes it, so the task runs on its cron again.
+  const trigger =
+    input.trigger === null
+      ? undefined
+      : input.trigger !== undefined
+        ? storedTrigger(parseScheduledTaskTrigger(input.trigger))
+        : existing?.trigger;
+  const cron = trigger ? "" : routineSchedule ? botRoutineCron(routineSchedule) : input.cron.trim();
   const enabled = input.enabled ?? existing?.enabled ?? true;
   const prompt = input.mode === "llm" ? cleanOptional(input.prompt, 32 * 1024) : undefined;
   const script = input.mode === "script" ? validateScriptName(input.script ?? "") : undefined;
@@ -294,7 +346,10 @@ function normalizeInput(
       routineSchedule,
     });
   }
-  const nextRunAt = enabled ? nextScheduledRun(cron, timezone, new Date(now)) : undefined;
+  const permissionForTrigger = input.mode === "script" ? "full" : permission;
+  if (trigger) assertTriggerShape(trigger, { botId, mode: input.mode, permission: permissionForTrigger });
+  // A trigger task has no cron: it runs when its trigger sees a change.
+  const nextRunAt = enabled && !trigger ? nextScheduledRun(cron, timezone, new Date(now)) : undefined;
   if (
     routineSchedule?.kind === "once" &&
     nextRunAt !== undefined &&
@@ -302,6 +357,18 @@ function normalizeInput(
   ) {
     throw new Error("Pick a time in the future for this routine.");
   }
+  // Set once, when the schedule tool creates a task from a chat; every later
+  // save (desktop editor, phone, tool update) keeps it. Bot routines never post into a chat.
+  // A task moved to another project no longer belongs in its old chat.
+  const originChatId =
+    botId !== undefined
+      ? undefined
+      : existing
+        ? workspaceId === existing.workspaceId ? existing.originChatId : undefined
+        : cleanOptional(input.originChatId, 200);
+  // Triggers don't use the cron floor: the chat's hourly task-run share and
+  // the trigger's own gap bound how often they post.
+  if (originChatId && !trigger) assertChatTaskCadence(cron, timezone, new Date(now));
   const retiredRetries = existing && (!enabled || !existing.enabled || existing.prompt !== prompt ||
     existing.cron !== cron || existing.timezone !== timezone);
   const pending = retiredRetries ? observeQueuedRetries(existing.pendingRoutineFires) : existing?.pendingRoutineFires;
@@ -327,6 +394,8 @@ function normalizeInput(
     executionProfile,
     webSearchEnabled,
     chatId: workspaceId === existing?.workspaceId ? existing?.chatId : undefined,
+    ...(originChatId ? { originChatId } : {}),
+    ...(trigger ? { trigger } : {}),
     ...(botId !== undefined ? { botId, routineSchedule } : {}),
     ...(botId !== undefined && (existing && !existing.enabled && enabled ? now : existing?.enabledAt) !== undefined
       ? { enabledAt: existing && !existing.enabled && enabled ? now : existing!.enabledAt }
@@ -341,7 +410,12 @@ function normalizeInput(
       : {}),
     notify: input.notify ?? existing?.notify ?? true,
     lastResult: existing?.lastResult,
-    lastError: existing?.lastError,
+    // "Needs its source" belongs to a connected-app task; saving it as anything else clears it.
+    lastError: existing?.lastError === TASK_CONNECTOR_NEEDS_SOURCE && trigger?.kind !== "connector" ? undefined : existing?.lastError,
+    // Turning a chat task back on starts a new count of failed runs.
+    ...(botId === undefined && (existing && !existing.enabled && enabled ? now : existing?.failurePausedAt) !== undefined
+      ? { failurePausedAt: existing && !existing.enabled && enabled ? now : existing!.failurePausedAt }
+      : {}),
     createdAt: existing?.createdAt ?? now,
     updatedAt: nextTaskRevision(now, existing?.updatedAt),
   };
@@ -358,7 +432,14 @@ function isRunResult(value: unknown): value is ScheduledRunResult {
 }
 
 function isSkipReason(value: unknown): value is ScheduledRunSkipReason {
-  return value === "bot_paused" || value === "duplicate" || value === "paused_by_person";
+  return (
+    value === "bot_paused" ||
+    value === "duplicate" ||
+    value === "paused_by_person" ||
+    value === "chat_busy" ||
+    value === "chat_budget" ||
+    value === "too_late"
+  );
 }
 
 /** The request id of a failed fire's delayed retry. */
@@ -440,7 +521,12 @@ function normalizeStoredTask(value: unknown): ScheduledTask | null {
   }
   const botId = typeof task.botId === "string" ? task.botId : undefined;
   let routineSchedule: BotRoutineSchedule | undefined;
+  let trigger: ScheduledTaskTrigger | undefined;
   try {
+    if (task.trigger !== undefined) {
+      trigger = storedTrigger(parseScheduledTaskTrigger(task.trigger));
+      assertTriggerShape(trigger, { botId, mode: task.mode, permission: task.permission });
+    }
     if (botId !== undefined) {
       routineSchedule = parseBotRoutineSchedule(task.routineSchedule);
       assertBotRoutineShape({
@@ -462,7 +548,8 @@ function normalizeStoredTask(value: unknown): ScheduledTask | null {
     }
     mcpServerIds = validateScheduledMcpServerIds(task.mcpServerIds);
     mcpServerBindings = validateScheduledMcpServerBindings(task.mcpServerBindings);
-    nextScheduledRun(task.cron, task.timezone);
+    // A trigger task has no cron to check.
+    if (!trigger) nextScheduledRun(task.cron, task.timezone);
     if (task.mode === "llm") {
       if (!prompt?.trim()) {
         throw new Error("LLM tasks require a prompt.");
@@ -503,7 +590,7 @@ function normalizeStoredTask(value: unknown): ScheduledTask | null {
     mode: task.mode,
     cron: task.cron,
     timezone: task.timezone,
-    nextRunAt: scheduleError ? undefined : finiteTimestamp(task.nextRunAt),
+    nextRunAt: scheduleError || trigger ? undefined : finiteTimestamp(task.nextRunAt),
     ...(botId !== undefined ? { pendingRoutineFires: storedRoutineFires(task.pendingRoutineFires, task.id) } : {}),
     lastRunAt: finiteTimestamp(task.lastRunAt),
     workspaceId,
@@ -521,6 +608,12 @@ function normalizeStoredTask(value: unknown): ScheduledTask | null {
     executionProfile,
     webSearchEnabled,
     chatId: typeof task.chatId === "string" ? task.chatId : undefined,
+    ...(botId === undefined && typeof task.originChatId === "string" && task.originChatId
+      ? { originChatId: task.originChatId }
+      : {}),
+    // An unreadable trigger is dropped: the task stays off ("Needs attention")
+    // until the person picks a schedule or a new trigger in the editor.
+    ...(trigger ? { trigger } : {}),
     ...(botId !== undefined ? { botId, ...(routineSchedule ? { routineSchedule } : {}) } : {}),
     ...(botId !== undefined && typeof task.enabledAt === "number" && Number.isFinite(task.enabledAt) ? { enabledAt: task.enabledAt } : {}),
     ...(botId !== undefined && typeof task.sourceProposalId === "string" && /^[0-9a-f-]{36}$/u.test(task.sourceProposalId)
@@ -538,6 +631,9 @@ function normalizeStoredTask(value: unknown): ScheduledTask | null {
       : typeof task.lastError === "string"
         ? task.lastError
         : undefined,
+    ...(botId === undefined && typeof task.failurePausedAt === "number" && Number.isFinite(task.failurePausedAt)
+      ? { failurePausedAt: task.failurePausedAt }
+      : {}),
     createdAt: task.createdAt,
     updatedAt: task.updatedAt,
   };
@@ -572,6 +668,8 @@ function normalizeStoredRun(value: unknown): ScheduledRun | null {
     ...(failure ? { failure } : {}),
     ...(claimCheck ? { claimCheck } : {}),
     ...(typeof run.fingerprint === "string" && /^[a-f0-9]{64}$/u.test(run.fingerprint) ? { fingerprint: run.fingerprint } : {}),
+    ...(run.byHand === true ? { byHand: true as const } : {}),
+    ...(run.cancelled === true && run.result === "blocked" ? { cancelled: true as const } : {}),
     chatId: typeof run.chatId === "string" ? run.chatId : undefined,
   };
 }
@@ -666,7 +764,7 @@ export function createScheduleStore(
     patch: Partial<
       Pick<
         ScheduledTask,
-        "nextRunAt" | "lastRunAt" | "lastResult" | "lastError" | "chatId" | "enabled"
+        "nextRunAt" | "lastRunAt" | "lastResult" | "lastError" | "chatId" | "enabled" | "failurePausedAt"
       >
     >,
     isCurrent: () => boolean = () => true,
@@ -744,9 +842,11 @@ export function createScheduleStore(
           pendingRoutineFires: existing.pendingRoutineFires?.filter((fire) =>
             !fire.retry || fire.requestId === options.clearRoutineRetriesExcept),
         }),
-        nextRunAt: enabled
+        nextRunAt: enabled && !existing.trigger
           ? nextScheduledRun(existing.cron, existing.timezone, new Date(timestamp))
           : undefined,
+        // Turning a chat task back on starts a new count of failed runs.
+        ...(existing.botId === undefined && enabled && !existing.enabled ? { failurePausedAt: timestamp } : {}),
         updatedAt: nextTaskRevision(timestamp, existing.updatedAt),
       };
       draft[index] = task;
@@ -924,6 +1024,47 @@ export function createScheduleStore(
           chatId: undefined,
           updatedAt: nextTaskRevision(now(), existing.updatedAt),
         };
+      });
+    },
+
+    /**
+     * "Use its own chat": drop a task's chat binding so its runs go to the
+     * task's own chat. With `expectedChatId`, only that binding is dropped.
+     * Returns the task, or undefined when nothing changed.
+     */
+    async clearOriginChat(
+      id: string,
+      options: { expectedChatId?: string; expectedUpdatedAt?: number } = {},
+    ): Promise<ScheduledTask | undefined> {
+      const { expectedChatId, expectedUpdatedAt } = options;
+      return tasks.update((draft) => {
+        const index = draft.map(normalizeStoredTask).findIndex((task) => task?.id === id);
+        const existing = index >= 0 ? normalizeStoredTask(draft[index]) : null;
+        if (!existing) throw new Error(`Scheduled task ${id} not found.`);
+        if (expectedUpdatedAt !== undefined && existing.updatedAt !== expectedUpdatedAt) {
+          throw new Error("This automation changed. Refresh it before trying again.");
+        }
+        if (!existing.originChatId) return undefined;
+        if (expectedChatId !== undefined && existing.originChatId !== expectedChatId) return undefined;
+        const { originChatId: _dropped, ...rest } = existing;
+        const task: ScheduledTask = { ...rest, updatedAt: nextTaskRevision(now(), existing.updatedAt) };
+        draft[index] = task;
+        return structuredClone(task);
+      });
+    },
+
+    /** A deleted chat: every task that posted into it goes back to its own chat. Returns their ids. */
+    async releaseOriginChat(chatId: string): Promise<string[]> {
+      return tasks.update((draft) => {
+        const released: string[] = [];
+        for (let index = 0; index < draft.length; index += 1) {
+          const existing = normalizeStoredTask(draft[index]);
+          if (!existing || existing.originChatId !== chatId) continue;
+          const { originChatId: _dropped, ...rest } = existing;
+          draft[index] = { ...rest, updatedAt: nextTaskRevision(now(), existing.updatedAt) };
+          released.push(existing.id);
+        }
+        return released;
       });
     },
 

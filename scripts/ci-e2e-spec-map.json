@@ -175,6 +175,13 @@
       "renderer/components/scroll-area-follow",
       "renderer/lib/sticky-section.ts"
     ],
+    "chats-that-run-chats.spec.ts": [
+      "renderer/components/started-chats-chip",
+      "renderer/lib/chat-lineage.ts",
+      "renderer/shared/child-chats.ts",
+      "main/services/chat-orchestration",
+      "main/handlers/child-chats.ts"
+    ],
     "chat-fork.spec.ts": [
       "renderer/components/chat",
       "main/services/chat-fork"
@@ -270,10 +277,36 @@
       "renderer/components/environment",
       "main/services/devices"
     ],
+    "floating-chat.spec.ts": [
+      "quick-chat.html",
+      "renderer/quick-chat/",
+      "renderer/preload-quick-chat.ts",
+      "renderer/quick-chat-preload",
+      "renderer/shared/quick-chat.ts",
+      "renderer/shared/chat-attach-workspace.ts",
+      "renderer/shared/chat-handoff.ts",
+      "renderer/components/attach-workspace-dialog",
+      "renderer/components/settings/quick-chat-settings",
+      "main/handlers/quick-chat",
+      "main/windows/quick-chat",
+      "main/services/desktop-stream-handoff",
+      "main/services/chat-attach-workspace"
+    ],
     "follow-through-lifecycle.spec.ts": [
       "renderer/components/follow",
       "main/services/follow-through",
       "main/services/durable-jobs/"
+    ],
+    "keep-going-goals.spec.ts": [
+      "renderer/components/goal-bar",
+      "renderer/lib/goal-notification",
+      "renderer/shared/goal.ts",
+      "main/services/goal/",
+      "main/handlers/goals.ts"
+    ],
+    "keep-going-goals-computer-use.spec.ts": [
+      "main/services/goal/",
+      "main/services/computer-use/"
     ],
     "guided-setup.spec.ts": [
       "renderer/components/onboarding",

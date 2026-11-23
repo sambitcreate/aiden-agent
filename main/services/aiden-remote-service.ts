@@ -167,6 +167,8 @@ export interface AidenRemoteServiceOptions {
   hostPlatform?: import("./aiden-remote-protocol.js").AidenRemoteHostPlatform;
   /** Bot event routines' links (`POST /hooks/bot-routines/{token}`). */
   botRoutineWebhook?: AidenRemoteRouterDependencies["botRoutineWebhook"];
+  /** Chat tasks' links (`POST /hooks/tasks/{token}`). */
+  taskTriggerWebhook?: AidenRemoteRouterDependencies["taskTriggerWebhook"];
   workspaceApi?: (
     instanceId: string,
   ) =>
@@ -644,6 +646,7 @@ export class AidenRemoteService {
         ...(this.options.simulators ? { simulators: this.options.simulators } : {}),
         ...(this.options.hostPlatform ? { platform: this.options.hostPlatform } : {}),
         ...(this.options.botRoutineWebhook ? { botRoutineWebhook: this.options.botRoutineWebhook } : {}),
+        ...(this.options.taskTriggerWebhook ? { taskTriggerWebhook: this.options.taskTriggerWebhook } : {}),
         connectionMode: () => this.activeState?.connectionMode ?? state.connectionMode,
         peerRoutes: async () => {
           const current = await this.options.state.snapshot();

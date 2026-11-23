@@ -560,6 +560,25 @@ final class AidenWorkspaceEnvironmentTests: XCTestCase {
         }
     }
 
+    /// Waits until the laptop has received `count` file-tree requests, so a test
+    /// acts once a held request is actually parked instead of after a guess.
+    @MainActor
+    private func waitForFilesRequests(
+        _ responder: AidenDemoResponder,
+        count: Int,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) async throws {
+        func received() -> Int {
+            responder.requests(instanceId: "laptop").filter { $0 == "GET /workspaces/ws-1/files" }.count
+        }
+        let deadline = ContinuousClock.now + .seconds(10)
+        while received() < count, ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        XCTAssertGreaterThanOrEqual(received(), count, "file-tree requests never arrived", file: file, line: line)
+    }
+
     @MainActor
     func testConcurrentStalePagesRefreshRootOnceAndRespectOwnershipFence() async throws {
         let directory = FileManager.default.temporaryDirectory
@@ -619,7 +638,9 @@ final class AidenWorkspaceEnvironmentTests: XCTestCase {
 
         async let expandA: Void = model.toggle(dirA, coordinator: coordinator)
         async let expandB: Void = model.toggle(dirB, coordinator: coordinator)
-        try await Task.sleep(for: .milliseconds(20))
+        // Release only once dirB's page and the root refresh are parked; the
+        // responder logs a request in the same step that parks it.
+        try await waitForFilesRequests(responder, count: filesBefore + 3)
         releaseB()
         releaseRoot()
         _ = await (expandA, expandB)
@@ -632,7 +653,9 @@ final class AidenWorkspaceEnvironmentTests: XCTestCase {
         let releaseRemovedRoot = responder.hold(instanceId: "laptop", path: "/workspaces/ws-1/files", query: "tree=1")
         let freshA = try XCTUnwrap(model.index?.entries.first)
         let task = Task { await model.toggle(freshA, coordinator: coordinator) }
-        try await Task.sleep(for: .milliseconds(20))
+        // Remove the installation only once the stale page's root refresh is
+        // parked, so the removal lands mid-recovery rather than before it.
+        try await waitForFilesRequests(responder, count: filesBefore + 5)
         await coordinator.removeInstallation("laptop")
         releaseRemovedRoot()
         await task.value

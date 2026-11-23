@@ -214,6 +214,19 @@ test("memoized resolver leaves Windows binaries to the OS lookup", async () => {
   assert.deepEqual(f.inspected, []);
 });
 
+test("memoized resolver notices when a direct symlink binary is repointed", async () => {
+  const paths: Record<string, string> = {
+    "/custom/git-link": "/opt/git-a/bin/git",
+    "/opt/git-a/bin/git": "/opt/git-a/bin/git",
+    "/opt/git-b/bin/git": "/opt/git-b/bin/git",
+  };
+  const f = memoFixture(paths);
+  const resolve = createGitExecutableResolver(f.deps);
+  assert.equal(await resolve("/custom/git-link", "/w", {}), "/opt/git-a/bin/git");
+  paths["/custom/git-link"] = "/opt/git-b/bin/git";
+  assert.equal(await resolve("/custom/git-link", "/w", {}), "/opt/git-b/bin/git");
+});
+
 test("memoized resolver on Linux skips a workspace-relative PATH entry", async () => {
   const f = memoFixture({ "/w/git": "/w/git", "/usr/bin/git": "/usr/bin/git" });
   const resolve = createGitExecutableResolver({ ...f.deps, platform: "linux" });

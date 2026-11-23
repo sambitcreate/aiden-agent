@@ -1,4 +1,5 @@
 import { parseBotRoutineModelDirectory, type BotRoutineModelDirectory } from "../../renderer/shared/bot-routine-model-directory.js";
+import { isChatAudience } from "./chat-orchestration/audience.js";
 import { parseBotExecutionResumeStatus, type BotExecutionResumeStatus } from "../../renderer/shared/bot-execution-resume.js";
 import { parseBotRoutineModelSettings, parseBotRoutineModelCatalog, parseBotRoutineModelResult, parseBotRoutineModelRuns, parseBotRoutineModelSave } from "../../renderer/shared/bot-routine-models.js";
 import { BOT_PEER_LIMITS, parseBotPeerSettings, parseBotPeerCatalog, parseBotPeerMutation, parseBotPeerMutationResult, parseBotPeerExchangeList, parseBotPeerExchangeDetail, parseBotPeerStopMutation, parseBotPeerStopResult, parseBotPeerEvidence } from "../../renderer/shared/bot-peers.js";
@@ -222,6 +223,17 @@ export interface AidenRemoteRouterDependencies {
    * except for the token in the path; absent, the route is `not_found`.
    */
   botRoutineWebhook?(request: { token: string; contentType?: string; body: Uint8Array }): Promise<{ status: number }>;
+  /**
+   * Chat tasks' links (`POST /hooks/tasks/{token}`): `admit` runs before the
+   * body is read (404, 429, 415), `deliver` gets the body and the header the
+   * link's signature comes in, and `tooLarge` answers a body over the limit
+   * (413) so the call does not keep its place in the link's capacity.
+   */
+  taskTriggerWebhook?: {
+    admit(request: { token: string; contentType?: string }): Promise<{ status: number } | { accept: true; admission?: string; signatureHeader?: string }>;
+    tooLarge(request: { token: string; admission?: string }): Promise<{ status: number }>;
+    deliver(request: { token: string; admission?: string; contentType?: string; signature?: string; body: Uint8Array }): Promise<{ status: number }>;
+  };
   instanceId: string;
   displayName(): string;
   appVersion: string;
@@ -572,12 +584,14 @@ export type AidenRemoteRouteLabel =
   | "runQuestionRespond"
   | "runInputs"
   | "botRoutineWebhook"
+  | "taskTriggerWebhook"
   | "unknown";
 
 /** Canonical template(s) for every router route label. */
 export const AIDEN_REMOTE_ROUTE_TEMPLATES: Readonly<Record<AidenRemoteRouteLabel, readonly string[]>> = {
   health: ["/health"],
   botRoutineWebhook: ["/hooks/bot-routines/:token"],
+  taskTriggerWebhook: ["/hooks/tasks/:token"],
   pairingManualBootstrap: ["/pairing/manual-bootstrap"],
   pairingExchange: ["/pairing/exchange"],
   pairingRequests: ["/pairing/requests"],
@@ -970,6 +984,8 @@ function requireEmptyJsonObject(body: unknown): void {
 }
 
 const BOT_ROUTINE_WEBHOOK_MAX_BYTES = 16_384;
+/** A chat task link accepts bodies up to 256 KB (SCHEDULED_TASK_LINK_LIMITS.bodyBytes). */
+const TASK_TRIGGER_WEBHOOK_MAX_BYTES = 256 * 1024;
 
 /** The raw body, or undefined once it passes `maximumBytes`. */
 async function readRawBody(request: IncomingMessage, maximumBytes: number): Promise<Uint8Array | undefined> {
@@ -1183,7 +1199,9 @@ async function authenticateCredential(
   // An outside app's credential belongs to the loopback MCP server only. It
   // reads here exactly like an unknown credential, so this API never confirms
   // that an app token exists.
-  if (!device || device.type === "agent") {
+  // A lead chat's internal audience (`chat:<id>`) has no device record and is
+  // never reachable over HTTP; a record claiming one reads as unknown too.
+  if (!device || device.type === "agent" || isChatAudience(device.id)) {
     throw new AidenRemoteServiceError(
       "authentication_required",
       "This device credential is not valid for this Aiden installation.",
@@ -2539,6 +2557,40 @@ export function createAidenRemoteRequestHandler(
           : await dependencies.botRoutineWebhook({
             token: webhookMatch[1]!,
             ...(typeof request.headers["content-type"] === "string" ? { contentType: request.headers["content-type"] } : {}),
+            body,
+          });
+        response.writeHead(answer.status, { "cache-control": "no-store" }).end();
+        return;
+      }
+      const taskHookMatch = /^\/hooks\/tasks\/([A-Za-z0-9_-]{20,100})$/u.exec(path);
+      if (taskHookMatch) {
+        route = "taskTriggerWebhook";
+        if (!dependencies.taskTriggerWebhook) {
+          response.writeHead(404, { "cache-control": "no-store" }).end();
+          return;
+        }
+        if (request.method !== "POST") {
+          response.writeHead(405, { allow: "POST" }).end();
+          return;
+        }
+        requireNoQuery(query);
+        const token = taskHookMatch[1]!;
+        const contentType = typeof request.headers["content-type"] === "string" ? request.headers["content-type"] : undefined;
+        // An unknown link, too many calls or the wrong type is answered before any body is read.
+        const admitted = await dependencies.taskTriggerWebhook.admit({ token, ...(contentType ? { contentType } : {}) });
+        if ("status" in admitted) {
+          response.writeHead(admitted.status, { "cache-control": "no-store" }).end();
+          return;
+        }
+        const body = await readRawBody(request, TASK_TRIGGER_WEBHOOK_MAX_BYTES);
+        const signatureValue = admitted.signatureHeader ? request.headers[admitted.signatureHeader] : undefined;
+        const answer = body === undefined
+          ? await dependencies.taskTriggerWebhook.tooLarge({ token, ...(admitted.admission ? { admission: admitted.admission } : {}) })
+          : await dependencies.taskTriggerWebhook.deliver({
+            token,
+            ...(admitted.admission ? { admission: admitted.admission } : {}),
+            ...(contentType ? { contentType } : {}),
+            ...(typeof signatureValue === "string" ? { signature: signatureValue } : {}),
             body,
           });
         response.writeHead(answer.status, { "cache-control": "no-store" }).end();

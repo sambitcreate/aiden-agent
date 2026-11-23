@@ -19,7 +19,7 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 // Preserve larger historical weights; partial cancelled windows never lower them.
 // Independent completed run 41778188548 validates the allocation and budget reserve.
 // Weights affect scheduling only; newly discovered specs always run.
-export const E2E_SHARD_COUNT = 4;
+export const E2E_SHARD_COUNT = 5;
 export const FILE_SECONDS = Object.freeze({
   "accessibility.spec.ts": 15,
   "app-controls.spec.ts": 59,
@@ -62,6 +62,8 @@ export const FILE_SECONDS = Object.freeze({
   "guided-setup.spec.ts": 94,
   "inbox-sidebar.spec.ts": 59,
   "inline-visuals.spec.ts": 56,
+  "keep-going-goals.spec.ts": 90,
+  "keep-going-goals-computer-use.spec.ts": 5,
   "interrupted-question-resume.spec.ts": 75,
   "interrupted-reply-resume.spec.ts": 64,
   "linux-window-controls.spec.ts": 1,

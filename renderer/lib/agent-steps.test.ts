@@ -24,6 +24,7 @@ import {
 import {
   activityTimelineFragment,
   assistantPresentationRows,
+  liveAssistantPresentationRows,
 } from "./assistant-message-presentation.js";
 
 function step(
@@ -345,6 +346,32 @@ test("assistant presentation fails closed for legacy or invalid offsets", () => 
     }),
     null,
   );
+});
+
+test("a live reply keeps its chronological rows while streamed reasoning and text trail the timeline", () => {
+  const settled = { ...thinking("think-1", 0, 500), contentOffset: 0, reasoningStartOffset: 0, reasoningEndOffset: 11 };
+  const tool = positionedTool(1, 7);
+  const next = { ...thinking("think-2", 2), contentOffset: 7, reasoningStartOffset: 13 };
+  const kinds = (rows: ReturnType<typeof liveAssistantPresentationRows>) =>
+    rows?.map((row) => [row.kind, "content" in row ? row.content : null]);
+
+  // The step settled at the full reasoning length one frame before its last delta is shown.
+  assert.deepEqual(
+    kinds(liveAssistantPresentationRows("", timeline("running", [settled]), "First")),
+    [["reasoning", "First"]],
+  );
+  // A later step opened past the shown reasoning and the shown text.
+  assert.deepEqual(
+    kinds(liveAssistantPresentationRows("Bef", timeline("running", [settled, tool, next]), "First")),
+    [["reasoning", "First"], ["text", "Bef"], ["activity", null], ["reasoning", ""]],
+  );
+  // Once the deltas land, each row holds its own span.
+  assert.deepEqual(
+    kinds(liveAssistantPresentationRows("Before.", timeline("running", [settled, tool, next]), "First think\n\nSecond")),
+    [["reasoning", "First think"], ["text", "Before."], ["activity", null], ["reasoning", "Second"]],
+  );
+  // A stored reply is never repaired: offsets past its reasoning stay malformed.
+  assert.equal(assistantPresentationRows("", timeline("completed", [settled]), "First"), null);
 });
 
 test("the active prose segment keeps a stable key while streaming grows", () => {

@@ -9,6 +9,7 @@ import { chatReadMarkers } from "./chat-read-markers-main.js";
 import { chatStore } from "./chat-store.js";
 import { chatTriage } from "./chat-triage-main.js";
 import { configStore } from "./config-store.js";
+import { goalNeedsYou } from "./goal/goal-main.js";
 import { hostPlatformCapabilities } from "./host-platform-capabilities.js";
 import { hostRunRegistry } from "./host-runs-main.js";
 import {
@@ -108,6 +109,7 @@ async function readLocal(): Promise<InboxBadgeLocal> {
       runs: hostRunRegistry,
       detached: detachedPromptLog,
       interrupted: interrupted.get(chat.id),
+      goal: goalNeedsYou(chat.id),
     });
     if (attention) pending.set(chat.id, attention);
   }

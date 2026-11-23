@@ -5,9 +5,10 @@
  * - `approval` / `question`: a live prompt, answerable in the chat.
  * - `detached`: a prompt settled because its window left the chat ("Unavailable").
  * - `interrupted`: a prompt saved when a quit or crash cut the reply short.
+ * - `goal`: the chat's keep-going goal stopped at Needs you; `summary` is its reason.
  * - `working`: a live run with nothing to answer; only `runStartedAt` matters.
  */
-export const CHAT_PENDING_ATTENTION_KINDS = ["approval", "question", "detached", "interrupted", "working"] as const;
+export const CHAT_PENDING_ATTENTION_KINDS = ["approval", "question", "detached", "interrupted", "goal", "working"] as const;
 export type ChatPendingAttentionKind = (typeof CHAT_PENDING_ATTENTION_KINDS)[number];
 
 export interface ChatPendingAttention {

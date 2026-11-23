@@ -34,6 +34,16 @@ import {
 import { acpHarnessUnavailableReason, isAcpHarnessProvider } from "../../renderer/shared/acp-harness.js";
 import { createBotRoutineExecutor, type BotRoutineExecutor } from "./scheduled-bot-routines.js";
 import type { ScheduledRunTrigger } from "./schedule-service-core.js";
+import type { AgentNoticePost } from "./follow-through/notice-delivery.js";
+import { noticeDelivery } from "./follow-through/notice-delivery-main.js";
+import {
+  createTaskRunChatDelivery,
+  type AdmittedTaskTurn,
+  type TaskRunExecution,
+  type TaskRunOutcome,
+} from "./schedule-chat-delivery.js";
+import { formatScheduledTaskCadence } from "../../renderer/shared/scheduled-task-presentation.js";
+import { formatScheduledTaskTriggerLabel } from "../../renderer/shared/scheduled-task-trigger.js";
 
 function createBackgroundOwner(streamId: string): {
   owner: ChatGenerationOwner;
@@ -193,94 +203,72 @@ export function createScheduleExecution(store: ScheduleStore = scheduleStore) {
     return chatId;
   }
 
-  async function executeScript(
-    task: ScheduledTask,
-    chatId: string,
-    signal: AbortSignal,
-  ): Promise<{
-    result: ScheduledRun["result"];
-    output: string;
-    error?: string;
-  }> {
+  /** Runs the task's script; `output` is what it printed. Holds no chat. */
+  async function runTaskScript(task: ScheduledTask, signal: AbortSignal): Promise<TaskRunExecution> {
     if (task.permission !== "full") {
       throw new Error(
         "Script tasks require Full permission because scripts can change the system.",
       );
     }
-    const workspace = task.workspaceId
-      ? await configStore.getWorkspace(task.workspaceId)
-      : undefined;
-    if (task.workspaceId && !workspace) throw new Error("The task workspace no longer exists.");
-    if (workspace?.permission === "none") throw new Error("The task workspace has No Access.");
-    if (workspace) {
-      await assertWorkspaceFolderPresent(workspace);
-      await assertManagedWorktreeAdmission(workspace);
-    }
+    const workspace = await assertTaskWorkspaceReady(task);
     const script = await resolveScheduledScript({
       script: task.script ?? "",
       workspaceRoot: workspace?.folderPath,
     });
+    const processResult = await runScheduledScript(script, {
+      cwd: workspace?.folderPath ?? path.dirname(script),
+      signal,
+    });
+    if (processResult.aborted) {
+      return { result: "blocked", output: processResult.stdout, error: "Scheduled task was cancelled." };
+    }
+    if (processResult.timedOut) {
+      return { result: "error", output: processResult.stdout, error: "Script timed out after 60 seconds." };
+    }
+    if (processResult.outputLimitExceeded) {
+      return { result: "error", output: processResult.stdout, error: "Script exceeded the 1 MB output limit." };
+    }
+    if (processResult.exitCode !== 0) {
+      const detail =
+        processResult.stderr.trim() ||
+        `Process exited with code ${String(processResult.exitCode)}.`;
+      return { result: "error", output: processResult.stdout, error: detail.slice(0, 4_096) };
+    }
+    if (!processResult.stdout.trim()) return { result: "silent", output: "" };
+    return { result: "success", output: processResult.stdout };
+  }
+
+  /** A script run in the task's own chat: the chat is held while it runs, then says what happened. */
+  async function executeScript(
+    task: ScheduledTask,
+    chatId: string,
+    signal: AbortSignal,
+  ): Promise<TaskRunExecution> {
     const turnId = scheduledTurnId(task.id, "script");
     const turn = llmClient.beginChatTurn(chatId, turnId, `scheduled-script:${task.id}`);
     if (!turn) {
       throw new Error("The scheduled task's dedicated chat already has a turn in progress.");
     }
     try {
-      const processResult = await runScheduledScript(script, {
-        cwd: workspace?.folderPath ?? path.dirname(script),
-        signal,
-      });
-      if (processResult.aborted) {
-        const error = "Scheduled task was cancelled.";
-        await appendClaimedChatMessage(chatId, error);
-        return { result: "blocked", output: processResult.stdout, error };
+      const execution = await runTaskScript(task, signal);
+      if (execution.result === "blocked") {
+        await appendClaimedChatMessage(chatId, execution.error ?? "Scheduled task was cancelled.");
+      } else if (execution.result === "error") {
+        await appendClaimedChatMessage(chatId, `Scheduled task failed: ${execution.error ?? "unknown error"}`);
+      } else if (execution.result === "success") {
+        await appendClaimedChatMessage(chatId, execution.output);
       }
-      if (processResult.timedOut) {
-        const error = "Script timed out after 60 seconds.";
-        await appendClaimedChatMessage(chatId, `Scheduled task failed: ${error}`);
-        return { result: "error", output: processResult.stdout, error };
-      }
-      if (processResult.outputLimitExceeded) {
-        const error = "Script exceeded the 1 MB output limit.";
-        await appendClaimedChatMessage(chatId, `Scheduled task failed: ${error}`);
-        return { result: "error", output: processResult.stdout, error };
-      }
-      if (processResult.exitCode !== 0) {
-        const detail =
-          processResult.stderr.trim() ||
-          `Process exited with code ${String(processResult.exitCode)}.`;
-        const error = detail.slice(0, 4_096);
-        await appendClaimedChatMessage(chatId, `Scheduled task failed: ${error}`);
-        return { result: "error", output: processResult.stdout, error };
-      }
-      if (!processResult.stdout.trim()) return { result: "silent", output: "" };
-      await appendClaimedChatMessage(chatId, processResult.stdout);
-      return { result: "success", output: processResult.stdout };
+      return execution;
     } finally {
       turn.release();
       turn.settleAsyncWork();
     }
   }
 
-  async function executeLlm(
-    task: ScheduledTask,
-    chatId: string,
-    signal: AbortSignal,
-  ): Promise<{
-    result: ScheduledRun["result"];
-    output: string;
-    error?: string;
-  }> {
+  /** Everything a model run needs, checked before it takes the chat. */
+  async function prepareLlm(task: ScheduledTask, chatId: string, prompt: string, keepChatModel = false) {
     assertAssistantScheduleExecutionBoundary(task);
-    const workspace = task.workspaceId
-      ? await configStore.getWorkspace(task.workspaceId)
-      : undefined;
-    if (task.workspaceId && !workspace) throw new Error("The task workspace no longer exists.");
-    if (workspace?.permission === "none") throw new Error("The task workspace has No Access.");
-    if (workspace) {
-      await assertWorkspaceFolderPresent(workspace);
-      await assertManagedWorktreeAdmission(workspace);
-    }
+    await assertTaskWorkspaceReady(task);
     const settings = await configStore.getSettings();
     if (!task.providerId && isAcpHarnessProvider(settings.lastProviderId ?? "")) {
       throw new Error(
@@ -307,9 +295,7 @@ export function createScheduleExecution(store: ScheduleStore = scheduleStore) {
         provider.defaultModel,
       ]);
     if (!model) throw new Error("Choose a model before running this scheduled task.");
-    const prompt = task.prompt?.trim();
-    if (!prompt) throw new Error("The scheduled task prompt is empty.");
-    if (signal.aborted) throw new Error("Scheduled task was cancelled.");
+    if (!task.prompt?.trim()) throw new Error("The scheduled task prompt is empty.");
     const toolPolicy = await scheduledGenerationToolPolicy(task, () =>
       webSearchService.availability(),
     );
@@ -326,24 +312,70 @@ export function createScheduleExecution(store: ScheduleStore = scheduleStore) {
       prompt,
       permission: task.permission,
       ...toolPolicy,
+      ...(keepChatModel ? { keepChatModel: true } : {}),
     });
+    return { providerId, model, surface, background, streamId };
+  }
+
+  type PreparedLlm = Awaited<ReturnType<typeof prepareLlm>>;
+  type SurfaceTurn = NonNullable<ReturnType<typeof llmClient.beginChatTurn>>;
+
+  /** A model run in the task's own chat: the prompt is a plain user message, as it always was. */
+  async function executeLlm(
+    task: ScheduledTask,
+    chatId: string,
+    signal: AbortSignal,
+    eventText?: string,
+  ): Promise<TaskRunExecution> {
+    // A trigger's event follows the person's instructions, already fenced as data.
+    const prompt = [task.prompt?.trim() ?? "", ...(eventText ? [eventText] : [])].join("\n\n");
+    const prepared = await prepareLlm(task, chatId, prompt);
+    if (signal.aborted) {
+      prepared.background.destroy();
+      throw new Error("Scheduled task was cancelled.");
+    }
+    const { surface } = prepared;
     const turn = beginSurfaceGeneration(llmClient.beginChatTurn.bind(llmClient), surface);
     if (!turn) {
+      prepared.background.destroy();
       throw new Error("The scheduled task's dedicated chat already has a turn in progress.");
     }
+    try {
+      await chatStore.appendMessage(
+        chatId,
+        { role: "user", content: prompt },
+        { providerId: prepared.providerId, model: prepared.model },
+      );
+    } catch (error) {
+      turn.release();
+      prepared.background.destroy();
+      throw error;
+    } finally {
+      // Generation still owns the authority lease after this append frame,
+      // but no renderer/scheduler payload remains retained by persistence.
+      turn.settleAsyncWork();
+    }
+    return finishLlm(task, prepared, turn, signal, async () => {
+      await llmClient.waitForChatIdle(chatId);
+      await appendSerializedChatMessage(
+        chatId,
+        "Scheduled task was cancelled.",
+        scheduledTurnId(task.id, "cancelled"),
+      );
+    });
+  }
+
+  /** Starts the admitted generation and waits for its answer. Releases the turn. */
+  async function finishLlm(
+    task: ScheduledTask,
+    prepared: PreparedLlm,
+    turn: SurfaceTurn,
+    signal: AbortSignal,
+    onCancelled: () => Promise<void>,
+  ): Promise<TaskRunExecution> {
+    const { surface, background, streamId } = prepared;
     activeStreams.set(task.id, streamId);
     try {
-      try {
-        await chatStore.appendMessage(
-          chatId,
-          { role: "user", content: prompt },
-          { providerId, model },
-        );
-      } finally {
-        // Generation still owns the authority lease after this append frame,
-        // but no renderer/scheduler payload remains retained by persistence.
-        turn.settleAsyncWork();
-      }
       if (signal.aborted) throw new Error("Scheduled task was cancelled.");
       const started = await startSurfaceGeneration(
         llmClient.start.bind(llmClient),
@@ -359,10 +391,13 @@ export function createScheduleExecution(store: ScheduleStore = scheduleStore) {
       });
       const terminal = await background.terminal;
       if (signal.aborted) {
-        const error = "Scheduled task was cancelled.";
-        await llmClient.waitForChatIdle(chatId);
-        await appendSerializedChatMessage(chatId, error, scheduledTurnId(task.id, "cancelled"));
-        return { result: "blocked", output: "", error };
+        await onCancelled();
+        return { result: "blocked", output: "", error: "Scheduled task was cancelled." };
+      }
+      // The person pressed Stop in the chat: the partial answer stays there,
+      // and the run counts as stopped, never as a success or a failure.
+      if (!("message" in terminal) && terminal.timeline?.status === "cancelled") {
+        return { result: "blocked", output: terminal.content, error: "Stopped before it finished.", cancelled: true };
       }
       if ("message" in terminal) {
         const error = terminal.message;
@@ -383,9 +418,113 @@ export function createScheduleExecution(store: ScheduleStore = scheduleStore) {
     }
   }
 
+  async function assertTaskWorkspaceReady(task: ScheduledTask) {
+    const workspace = task.workspaceId
+      ? await configStore.getWorkspace(task.workspaceId)
+      : undefined;
+    if (task.workspaceId && !workspace) throw new Error("The task workspace no longer exists.");
+    if (workspace?.permission === "none") throw new Error("The task workspace has No Access.");
+    if (workspace) {
+      await assertWorkspaceFolderPresent(workspace);
+      await assertManagedWorktreeAdmission(workspace);
+    }
+    return workspace;
+  }
+
+  /**
+   * A model run in the chat the task was made in: the prompt is saved as a
+   * "Scheduled task" notice and the answer follows in the conversation.
+   */
+  async function admitTurnInChat(
+    task: ScheduledTask,
+    chatId: string,
+    post: AgentNoticePost,
+    signal: AbortSignal,
+  ): Promise<AdmittedTaskTurn> {
+    // The task may answer on another model than the chat's own; the chat
+    // keeps its choice, so nothing this run saves changes the chat's model.
+    const prepared = await prepareLlm(task, chatId, post.text, true);
+    if (signal.aborted) {
+      prepared.background.destroy();
+      throw new Error("Scheduled task was cancelled.");
+    }
+    const turn = beginSurfaceGeneration(llmClient.beginChatTurn.bind(llmClient), prepared.surface);
+    if (!turn) {
+      prepared.background.destroy();
+      return { kind: "busy" };
+    }
+    try {
+      turn.reserveAppendPayload(Buffer.byteLength(post.text, "utf8") + 1_024);
+      await chatStore.appendMessage(
+        chatId,
+        { role: "user", content: post.text, notice: post.notice },
+        {
+          expectedWorkspaceId: task.workspaceId,
+          isCurrent: () => turn.isActive(),
+        },
+      );
+      ipcMain.broadcast("chats:changed", {});
+      ipcMain.broadcast("chats:follow-through-changed", { chatId, transcript: true });
+    } catch (error) {
+      turn.release();
+      prepared.background.destroy();
+      throw error;
+    } finally {
+      turn.settleAsyncWork();
+    }
+    return {
+      kind: "admitted",
+      finish: () => finishLlm(task, prepared, turn, signal, async () => undefined),
+    };
+  }
+
+  const chatDelivery = createTaskRunChatDelivery({
+    getChat: async (chatId) => (await chatStore.get(chatId)) ?? undefined,
+    currentTask: (taskId) => store.get(taskId),
+    releaseOriginChat: async (taskId, chatId) => {
+      if (await store.clearOriginChat(taskId, { expectedChatId: chatId })) {
+        ipcMain.broadcast("schedule:updated", { taskId });
+      }
+    },
+    ensureOwnChat: ensureChat,
+    runInOwnChat: (task, chatId, signal, eventText) =>
+      task.mode === "script" ? executeScript(task, chatId, signal) : executeLlm(task, chatId, signal, eventText),
+    reportOwnChatFailure: async (task, chatId, message) => {
+      if (task.mode === "llm") await llmClient.waitForChatIdle(chatId);
+      await appendSerializedChatMessage(chatId, message, scheduledTurnId(task.id, "error"));
+    },
+    runScript: runTaskScript,
+    admitTurn: admitTurnInChat,
+    waitForIdle: (chatId, timeoutMs) => llmClient.waitForChatIdleWithin(chatId, timeoutMs),
+    postNotice: (post) => noticeDelivery.post(post),
+    inChatOrder: (chatId, work) => noticeDelivery.inOrder(chatId, work),
+    cadence: (task) => task.trigger ? formatScheduledTaskTriggerLabel(task.trigger) : formatScheduledTaskCadence(task.cron, task.timezone),
+    now: Date.now,
+    onError: (error) => logger.warn("schedule", "A scheduled task's chat delivery step failed.", error),
+  });
+
+  /**
+   * Every task run, whatever started it, lands through here: in the chat the
+   * task was made in when it has one, otherwise in the task's own chat.
+   */
+  function deliverTaskRunToChat(
+    task: ScheduledTask,
+    options: { trigger?: ScheduledRunTrigger; eventText?: string; signal: AbortSignal },
+  ): Promise<TaskRunOutcome> {
+    return chatDelivery.deliverTaskRunToChat(task, options);
+  }
+
   return {
     claimRoutineExecution: (task: ScheduledTask, trigger: ScheduledRunTrigger) =>
       import("./scheduled-bot-routines-main.js").then(({ claimBotRoutineExecution }) => claimBotRoutineExecution(task, trigger)),
+    deliverTaskRunToChat,
+    /** A record-only card where the task's runs land (a trigger or the task was paused). */
+    recordInLandingChat: (task: ScheduledTask, card: Parameters<typeof chatDelivery.recordInLandingChat>[1], options?: Parameters<typeof chatDelivery.recordInLandingChat>[2]) =>
+      chatDelivery.recordInLandingChat(task, card, options),
+    /** The project folder a task's script runs in, after the same checks as a run. */
+    async taskWorkspaceFolder(task: ScheduledTask): Promise<string | undefined> {
+      return (await assertTaskWorkspaceReady(task))?.folderPath;
+    },
     async run(
       task: ScheduledTask,
       runId?: string,
@@ -410,36 +549,31 @@ export function createScheduleExecution(store: ScheduleStore = scheduleStore) {
       const startedAt = Date.now();
       let chatId: string | undefined;
       let result: ScheduledRun["result"] = "error";
+      let reason: ScheduledRun["reason"];
       let output = "";
       let error: string | undefined;
+      let stopped = false;
       try {
         assertAssistantScheduleExecutionBoundary(task);
-        chatId = await ensureChat(task);
-        const execution =
-          task.mode === "script"
-            ? await executeScript(task, chatId, controller.signal)
-            : await executeLlm(task, chatId, controller.signal);
-        result = execution.result;
-        output = execution.output;
-        error = execution.error;
+        // A trigger's event reaches the model only as fenced data after the prompt.
+        const eventText = trigger?.kind === "event" ? trigger.payload : undefined;
+        const outcome = await deliverTaskRunToChat(task, { trigger, ...(eventText ? { eventText } : {}), signal: controller.signal });
+        chatId = outcome.chatId;
+        output = outcome.output;
+        if (outcome.kind === "skipped") {
+          result = "skipped";
+          reason = outcome.reason;
+        } else {
+          result = outcome.result;
+          error = outcome.error;
+          stopped = outcome.cancelled === true;
+        }
       } catch (cause) {
         error = resultError(cause).slice(0, 4_096);
         if (controller.signal.aborted) result = "blocked";
-        if (chatId) {
-          if (task.mode === "llm") await llmClient.waitForChatIdle(chatId);
-          await appendSerializedChatMessage(
-            chatId,
-            `Scheduled task failed: ${error}`,
-            scheduledTurnId(task.id, "error"),
-          ).catch((appendError) => {
-            logger.warn(
-              "schedule",
-              "Could not append a scheduled task error to its chat.",
-              appendError,
-            );
-          });
-        }
       }
+      // Stopped from the task list (the scheduler's cancel) or with the chat's Stop button.
+      const cancelled = controller.signal.aborted || stopped;
       try {
         const run = await store.recordRun({
           id: runId,
@@ -447,12 +581,15 @@ export function createScheduleExecution(store: ScheduleStore = scheduleStore) {
           startedAt,
           finishedAt: Date.now(),
           result,
+          ...(reason ? { reason } : {}),
           output,
           error,
           chatId,
+          ...(trigger?.kind === "manual" ? { byHand: true as const } : {}),
+          ...(result === "blocked" && cancelled ? { cancelled: true as const } : {}),
         });
-        reportScheduledTaskRan(result, trigger, controller.signal.aborted);
-        if (result !== "silent") notify(task, error ?? output, chatId);
+        reportScheduledTaskRan(result, trigger, cancelled);
+        if (result !== "silent" && result !== "skipped" && !cancelled) notify(task, error ?? output, chatId);
         ipcMain.broadcast("schedule:updated", { taskId: task.id, run });
         return run;
       } finally {

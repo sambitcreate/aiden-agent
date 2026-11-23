@@ -2,7 +2,7 @@ import * as React from "react";
 import { DesignModeBanner } from "../components/design-mode-banner";
 import {
   EnvironmentWorkbench,
-  useEnvironmentPanel,
+  useEnvironmentPanelCore,
   type WorkbenchDesignState,
 } from "../components/environment-panel";
 import { useSplitViewSidebar } from "../components/ui";
@@ -251,7 +251,7 @@ export function DesignLayout({
       : pane === "canvas"
         ? Math.max(0, containerWidth - STACKED_DOCK_LANE)
         : null;
-  const { reportDesignDockInset } = useEnvironmentPanel();
+  const { reportDesignDockInset } = useEnvironmentPanelCore();
   React.useLayoutEffect(() => reportDesignDockInset(dockInset), [dockInset, reportDesignDockInset]);
   React.useLayoutEffect(() => () => reportDesignDockInset(null), [reportDesignDockInset]);
 

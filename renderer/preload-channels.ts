@@ -33,6 +33,7 @@ export const INVOKE_PREFIXES = [
   "providers:",
   "profile:",
   "pullRequests:",
+  "quickChat:",
   "remote:",
   "runs:",
   "schedule:",
@@ -143,6 +144,12 @@ export const NOTIFICATION_CHANNEL_VALUES = [
    * `transcript: true` means a follow-up notice was also saved into its messages.
    */
   "chats:follow-through-changed",
+  /** A chat's keep-going goal changed: `{chatId, goal}` (the goal's view, or null once cleared). */
+  "chats:goal-changed",
+  "chats:goal-window-round",
+  "chats:goal-proposal-changed",
+  /** A lead chat's started chats changed (Phase 5): `{leadChatId}`. */
+  "chats:child-chats-changed",
   "chats:settled",
   "git:changed",
   "imageWorkflows:run-changed",
@@ -158,6 +165,9 @@ export const NOTIFICATION_CHANNEL_VALUES = [
   "providers:auth:prompt",
   "providers:auth:status-changed",
   "providers:harness:changed",
+  "quickChat:opened",
+  "quickChat:hidden",
+  "quickChat:handoff-complete",
   "remote:changed",
   "remote:peers-changed",
   "remote:approval-changed",
@@ -170,6 +180,8 @@ export const NOTIFICATION_CHANNEL_VALUES = [
   "remote:peer-discovery",
   "remote:peer-pairing-progress",
   "schedule:updated",
+  /** What keeps the computer awake changed: `KeepAwakeStatus`. */
+  "schedule:keep-awake-changed",
   "settings:appearance-changed",
   "settings:new-chat-model-changed",
   "shortcut:changed",

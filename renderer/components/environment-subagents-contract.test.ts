@@ -302,7 +302,7 @@ test("live snapshots are owner-checked, revisioned, and released across route tr
   );
   assert.match(pane, /selectWorkspace\(effectiveWorkspaceId\)/u);
   assert.match(pane, /snapshot\.chatId !== chatId/u);
-  assert.match(pane, /snapshot\.workspaceId !== effectiveWorkspaceId/u);
+  assert.match(pane, /snapshot\.workspaceId !== (?:effectiveWorkspaceId|targetWorkspaceId)/u);
   assert.match(pane, /mergeSubagentSnapshots\(current, \[snapshot\]/u);
   assert.match(
     pane,

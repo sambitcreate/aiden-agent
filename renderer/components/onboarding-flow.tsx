@@ -48,7 +48,46 @@ const visibleSteps = ["profile", "provider", "tour"] as const;
 const stepLabels = { profile: "Your name", provider: "Connect AI", tour: "Finish setup" };
 const APP_ICON_URL = new URL("../../resources/app-icon.png", import.meta.url).href;
 
-function OnboardingDialogShell({ children }: React.PropsWithChildren) {
+let onboardingCheckDone = false;
+let onboardingActive = true;
+const onboardingCheckWaiters = new Set<(active: boolean) => void>();
+
+function markOnboardingCheckPending(): void {
+  onboardingCheckDone = false;
+  onboardingActive = true;
+}
+
+function settleOnboardingCheck(active: boolean): void {
+  onboardingCheckDone = true;
+  onboardingActive = active;
+  for (const resolve of onboardingCheckWaiters) resolve(active);
+  onboardingCheckWaiters.clear();
+}
+
+/**
+ * Resolves whether onboarding is actually active once the initial authoritative
+ * main-process check finishes, preventing early navigation handoffs from
+ * mistaking the fail-closed loading gate for an active onboarding flow.
+ */
+export function waitForOnboardingActiveCheck(timeoutMs = 3000): Promise<boolean> {
+  if (onboardingCheckDone) return Promise.resolve(onboardingActive);
+  return new Promise<boolean>((resolve) => {
+    const finish = (active: boolean) => {
+      clearTimeout(timer);
+      resolve(active);
+    };
+    const timer = setTimeout(() => {
+      onboardingCheckWaiters.delete(finish);
+      resolve(onboardingActive);
+    }, timeoutMs);
+    onboardingCheckWaiters.add(finish);
+  });
+}
+
+function OnboardingDialogShell({
+  children,
+  checking = false,
+}: React.PropsWithChildren<{ checking?: boolean }>) {
   useLayer(true, "modal");
   return (
     <DialogPrimitive.Root open>
@@ -57,6 +96,7 @@ function OnboardingDialogShell({ children }: React.PropsWithChildren) {
         <DialogPrimitive.Content
           data-slot="dialog-content"
           data-onboarding-active="true"
+          data-onboarding-checking={checking ? "true" : undefined}
           onEscapeKeyDown={(event) => event.preventDefault()}
           onPointerDownOutside={(event) => event.preventDefault()}
           className="fixed inset-0 z-60 grid place-items-center bg-background px-4 pb-4 pt-11 outline-none max-[520px]:px-3 max-[520px]:pb-3"
@@ -88,9 +128,10 @@ export function OnboardingFlow({
         computerUse: capabilities.computerUse,
         designMode: capabilities.designMode,
         mcpServer: capabilities.mcpServer,
+        childChats: capabilities.childChats,
         platform: capabilities.platform,
       }),
-    [capabilities.bots, capabilities.botComputers, capabilities.computerUse, capabilities.designMode, capabilities.mcpServer, capabilities.platform],
+    [capabilities.bots, capabilities.botComputers, capabilities.computerUse, capabilities.designMode, capabilities.mcpServer, capabilities.childChats, capabilities.platform],
   );
   const providers = useProviders();
   const settings = useSettings();
@@ -134,6 +175,7 @@ export function OnboardingFlow({
     async (reopen = false) => {
       const generation = loadGenerationRef.current + 1;
       loadGenerationRef.current = generation;
+      markOnboardingCheckPending();
       setStateReady(false);
       setOnboardingLoadError(null);
       try {
@@ -163,8 +205,10 @@ export function OnboardingFlow({
         setCustomProvider(null);
         setProviderError(null);
         startedBotIdRef.current = null;
-        setOpen(shouldOpenOnboarding(snapshot.outcome));
-        setUsageNoticeEligible(!reopen && !shouldOpenOnboarding(snapshot.outcome));
+        const nextOpen = shouldOpenOnboarding(snapshot.outcome);
+        setOpen(nextOpen);
+        settleOnboardingCheck(nextOpen);
+        setUsageNoticeEligible(!reopen && !nextOpen);
         if (snapshot.profileReady && !profileInitializedRef.current) {
           const current = await profileApi.get();
           profileInitializedRef.current = true;
@@ -179,6 +223,7 @@ export function OnboardingFlow({
           error instanceof Error ? error.message : "Aiden couldn't load onboarding progress.",
         );
         setOpen(true);
+        settleOnboardingCheck(true);
       }
     },
     [queryClient],
@@ -188,7 +233,10 @@ export function OnboardingFlow({
     void loadOnboarding();
     const reopen = () => void loadOnboarding(true);
     window.addEventListener("aiden:show-onboarding", reopen);
-    return () => window.removeEventListener("aiden:show-onboarding", reopen);
+    return () => {
+      loadGenerationRef.current += 1;
+      window.removeEventListener("aiden:show-onboarding", reopen);
+    };
   }, [loadOnboarding]);
 
   React.useEffect(() => {
@@ -344,6 +392,7 @@ export function OnboardingFlow({
       onboardingSnapshotRef.current = snapshot;
       markOnboardingComplete();
       setOpen(false);
+      settleOnboardingCheck(false);
       const startedBotId = startedBotIdRef.current;
       const firstBotAccess = firstBotAccessRef.current;
       startedBotIdRef.current = null;
@@ -368,7 +417,7 @@ export function OnboardingFlow({
   };
 
   return (
-    <OnboardingDialogShell>
+    <OnboardingDialogShell checking={!stateReady && !onboardingLoadError}>
       <section
         aria-busy={saving || undefined}
         aria-label="Set up Aiden"

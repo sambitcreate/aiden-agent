@@ -221,6 +221,12 @@ test("settings search matches every term in any order across title and keywords"
   assert.equal(searchIds("phone zzqx").length, 0);
 });
 
+test("settings search finds the check-back switch by what it does", () => {
+  for (const term of ["check back", "come back later", "check-backs"]) {
+    assert.ok(searchIds(term).includes("scheduledTasks"), term);
+  }
+});
+
 test("settings search finds About by update, diagnostics, logs, and reset terms", () => {
   for (const term of ["update", "diagnostics", "logs", "reset onboarding"]) {
     assert.ok(searchIds(term).includes("about"), term);
@@ -382,4 +388,10 @@ test("an empty sidebar search opens each page's first tab", () => {
 
 test("sidebar search can't open a hidden tab", () => {
   assert.equal(searchSidebar("lume", INTEL_MAC).length, 0);
+});
+
+test("sleep words find the keep-awake row on Scheduled tasks", () => {
+  for (const term of ["awake", "sleep", "caffeinate", "keep awake"]) {
+    assert.deepEqual(searchSidebar(term), [{ page: "scheduledTasks", target: "scheduledTasks" }], term);
+  }
 });

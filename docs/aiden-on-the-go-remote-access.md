@@ -7,7 +7,7 @@ Aiden Agent can expose a small authenticated API to Aiden On The Go on phones an
 1. Open **Settings → Connections → Control this device** in Aiden Agent.
 2. Choose **On the same Wi-Fi**, then **Connect a device**.
 3. Review what Aiden will enable and choose **Enable and show code**.
-4. Scan the code in Aiden On The Go. If the camera is unavailable, use the setup code instead.
+4. On iPhone or iPad, choose **Add Computer** in Aiden On The Go and center the QR in the viewfinder. If you're pairing by hand, enter the computer's address and setup code. The app shows input errors below the field that needs attention. On Android, open pairing to scan or enter the address and code.
 
 After choosing the method, setup takes two desktop actions. Scanning and any phone permissions are additional steps. Existing ready connections can add a device directly. Under **Workspace access**, approve any additional folders the phone may browse; existing workspace access is unchanged. Approving the whole home folder requires a separate confirmation.
 
@@ -20,7 +20,7 @@ Tailscale supplies reachability and network encryption, but Aiden still requires
 1. Install Tailscale on the Mac and phone, sign in to the intended network, and make sure HTTPS is authorized for the Mac’s Tailscale name.
 2. Open **Settings → Connections → Control this device** and choose **Away from home**.
 3. Choose **Connect a device → Enable and show code**. Aiden turns on access, sets up its private connection, checks it, and shows the one-time code.
-4. Scan the code on your phone.
+4. Open pairing on your phone and scan the QR, or enter the private address and setup code. On iPhone or iPad, use **Add Computer**.
 
 Aiden checks installation, sign-in, HTTPS availability, and route ownership before setup. Missing prerequisites remain user actions. Conflicts and uncertain changes direct you to the advanced **Connection** controls; setup never silently replaces another route. If setup fails, Aiden removes only access introduced by that attempt where the outcome is known. An uncertain external change remains available for explicit verification.
 
@@ -176,6 +176,10 @@ The Mac processes that recording locally. Aiden does not persist the recording o
 
 If the selected local speech model is not installed, the mobile settings can ask the paired Mac to set it up. Aiden downloads only that model's fixed, hash-pinned file: a release archive from the k2-fsa GitHub release host, or, for Parakeet on Metal on an Apple silicon Mac, one GGUF file from a fixed Hugging Face revision. It caps the download at 800 MiB, verifies its exact size and SHA-256, unpacks or moves it into staging, validates the required model files, and stores it in Aiden Agent's device-local model directory. The phone cannot provide a model URL or Mac destination. Model setup requires Aiden Agent to remain running and online.
 
+## Links for chat tasks
+
+A scheduled task set to **When its link is called** gets a private link on this listener: `/hooks/tasks/<token>` at the Tailscale address first, otherwise the local network one. Make or rotate it in the task's details; Aiden shows it (and a signed link's secret) once. Calls work only while Aiden On The Go is on and scheduled tasks are running; phones don't list these tasks yet. See [tasks that run when something happens](scheduled-task-triggers.md).
+
 ## Troubleshooting
 
 - **Remote Access says Off:** enable it locally in Aiden Settings. No listener or Bonjour advertisement exists while it is off.
@@ -266,9 +270,12 @@ already granted. Use the in-app microphone button to dictate. No recognized text
 is sent automatically. Existing-chat notification and widget links still open
 their paired conversation.
 
-iOS App Intents deliver a short-lived, one-use action inside the foreground app
-process. The intentional **New Chat with Voice** shortcut retains dictation using
-the selected mode and ordinary OS permission checks. URL parameters and Android
-Intent extras cannot claim internal-action authority. A cancelled, expired,
-revoked or stale creation approval is discarded, and creation is never retried
-automatically after an uncertain result.
+iOS App Intents, the **Ask Aiden** Home Screen widget (small and medium), and
+Home Screen Quick Actions (**New Chat**, **Start Voice**, **Workspaces**, and
+**Bots**) deliver a short-lived, one-use action inside the foreground app
+process. Intentional **New Chat with Voice** / **Start Voice** and widget camera
+actions retain dictation or in-app camera launch using ordinary OS permission
+checks, 60-second foreground freshness, and one-shot consumption. URL parameters
+and Android Intent extras cannot claim internal-action authority. A cancelled,
+expired, revoked or stale creation approval is discarded, and creation is never
+retried automatically after an uncertain result.

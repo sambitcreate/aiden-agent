@@ -4,26 +4,36 @@ import {
   findReusableChatDraft,
   requestChatDraftComposerFocus,
   setChatDraftGitMode,
+  updateChatDraftWorktree,
   type ChatDraftGitMode,
+  type ChatDraftWorktree,
 } from "../lib/chat-draft";
+import { readChatDraftGitMemory, seedDraftWorktreeFromGitInfo } from "../lib/chat-draft-git-memory";
+import type { Workspace } from "../lib/types";
 import { Outlet, useNavigate, useRouter, useRouterState } from "@tanstack/react-router";
 import { historyNavigationAvailability } from "../lib/history-navigation";
 import { PairingRequestSheet } from "../components/remote-pairing-request-sheet";
 import { useQueryClient } from "@tanstack/react-query";
 import { appControlsApi } from "../lib/ipc";
 import * as React from "react";
-import { appApi, chatsApi, localRunsApi, onNotification, settingsApi, workspacesApi } from "../lib/ipc";
-import { mirrorNewChatModelToHost, subscribeHostNewChatModel } from "../lib/use-model-selection";
+import { appApi, chatsApi, claimChatHandoff, localRunsApi, onNotification, quickChatApi, settingsApi, workspacesApi } from "../lib/ipc";
+import { parseSettingsSection, settingsLocation } from "../lib/settings-section";
+import { consumePendingChatHandoff, notifyPendingChatHandoff } from "../lib/chat-handoff-bridge";
+import { seedComposerAttachments } from "../lib/composer-draft-store";
+import type { Attachment } from "../lib/types";
+import { mirrorNewChatModelToHost, persistModelSelection, subscribeHostNewChatModel } from "../lib/use-model-selection";
 import { useTheme } from "../lib/use-theme";
 import { useActiveWorkspace, WorkspaceProvider } from "../lib/workspace-context";
 import { WorkspaceTerminalProvider, useWorkspaceTerminal } from "../components/terminal-drawer";
-import { EnvironmentPanelProvider, useEnvironmentPanel } from "../components/environment-panel";
+import { EnvironmentPanelProvider, useEnvironmentPanelCore } from "../components/environment-panel";
 import { toast } from "../components/ui";
 import { RoutedBotPanelProvider, useBotPanelActions } from "./bots/bot-panel-context";
 import { botListLocation, environmentToggleTarget, isBotsPath } from "../lib/bot-routes";
 import { AssistantDock } from "../components/assistant/assistant-dock";
 import { LiveAppControlLayer } from "../components/assistant/live-app-control-layer";
-import { queryKeys } from "../lib/queries";
+import { queryKeys, upsertCreatedWorkspaceInCache } from "../lib/queries";
+import { goalSettleNotification, windowShowsChat } from "../lib/goal-notification";
+import type { GoalView } from "../shared/goal";
 import { subscribeGitQuerySync } from "../lib/git-query-sync";
 import { subscribeWorkspaceFilesSync } from "../lib/workspace-files-sync";
 import {
@@ -38,7 +48,7 @@ import { LiveChatToolsHost } from "./live-chat-tools-host";
 import { KeyboardRegions } from "../components/keyboard-regions";
 import { KeyboardShortcutsDialog } from "../components/keyboard-shortcuts-dialog";
 import { WorkspaceSettingsDialog } from "../components/workspace-settings-dialog";
-import { OnboardingFlow } from "../components/onboarding-flow";
+import { OnboardingFlow, waitForOnboardingActiveCheck } from "../components/onboarding-flow";
 import { BotConnectionSetupHost } from "./bots/bot-connection-setup-host";
 import { workspaceCommandVisibility } from "../lib/command-system-core";
 import { useAppCapabilities } from "../lib/app-capabilities";
@@ -86,7 +96,7 @@ function RootContent() {
   const navigate = useNavigate();
   const router = useRouter();
   const queryClient = useQueryClient();
-  const environmentPanel = useEnvironmentPanel();
+  const environmentPanel = useEnvironmentPanelCore();
   const botPanel = useBotPanelActions();
   const terminal = useWorkspaceTerminal();
   const capabilities = useAppCapabilities();
@@ -234,6 +244,9 @@ function RootContent() {
   useCommandHandler("bots.open", () => goTo("/bots"), capabilities.bots);
   useCommandHandler("scheduled.open", () => goTo("/scheduled"));
   useCommandHandler("profile.open", () => goTo("/profile"));
+  useCommandHandler("quickChat.toggle", () => {
+    void quickChatApi.toggle();
+  });
   // ⌘[ and ⌘] walk the same in-app history as the title bar's arrows.
   const historyEntryIndex = useRouterState({
     select: (state) => (state.location.state as { __TSR_index?: number }).__TSR_index,
@@ -261,7 +274,12 @@ function RootContent() {
     async (
       workspaceId: string,
       initialText?: string,
-      options: { gitMode?: ChatDraftGitMode } = {},
+      options: {
+        gitMode?: ChatDraftGitMode;
+        worktree?: ChatDraftWorktree;
+        attachments?: readonly Attachment[];
+        ephemeral?: boolean;
+      } = {},
     ): Promise<string | undefined> => {
       if (appendReconciliationRequired) {
         toast.error("Reload Aiden before creating another chat.");
@@ -271,17 +289,28 @@ function RootContent() {
         toast.info(navigationBlockedReason);
         return undefined;
       }
-      const reusable = initialText ? undefined : findReusableChatDraft(workspaceId);
+      const hasAttachments = Boolean(options.attachments && options.attachments.length > 0);
+      const reusable =
+        initialText || hasAttachments || options.ephemeral
+          ? undefined
+          : findReusableChatDraft(workspaceId);
       if (workspaceId !== activeId && environmentPanel.agentBusy) environmentPanel.cancelAgent?.();
       const chat =
         reusable?.chat ??
-        createChatDraft(
-          workspaceId,
-          undefined,
-          initialText,
-          options.gitMode ? { gitMode: options.gitMode } : {},
-        ).chat;
-      if (reusable && options.gitMode) setChatDraftGitMode(reusable.chat.id, options.gitMode);
+        createChatDraft(workspaceId, undefined, initialText, {
+          ...(options.gitMode ? { gitMode: options.gitMode } : {}),
+          ...(options.worktree ? { worktree: options.worktree } : {}),
+          ...(options.ephemeral ? { ephemeral: true } : {}),
+        }).chat;
+      if (reusable && options.gitMode) {
+        setChatDraftGitMode(reusable.chat.id, options.gitMode);
+        if (options.worktree && !reusable.worktree?.baseRef) {
+          updateChatDraftWorktree(reusable.chat.id, options.worktree);
+        }
+      }
+      if (hasAttachments && options.attachments) {
+        seedComposerAttachments(chat.id, [...options.attachments]);
+      }
       const previousWorkspaceId = activeId;
       selectWorkspace(workspaceId);
       try {
@@ -350,6 +379,7 @@ function RootContent() {
     () => ({
       openNewChatIn: async (workspaceId, options) => {
         let gitMode: ChatDraftGitMode | undefined = options?.gitMode;
+        let worktree: ChatDraftWorktree | undefined;
         if (options?.newWorktree) {
           // ⌥↵: only a repository with a commit can start a new worktree.
           // A local status read; nothing is created until the first send.
@@ -360,10 +390,19 @@ function RootContent() {
               staleTime: 5_000,
             })
             .catch(() => undefined);
-          if (git?.isRepo && !git.unborn) gitMode = "worktree";
+          if (git?.isRepo && !git.unborn) {
+            gitMode = "worktree";
+            worktree = seedDraftWorktreeFromGitInfo(readChatDraftGitMemory(workspaceId), git);
+          }
         }
         // The draft's id, or undefined when nothing opened (navigation blocked).
-        return openNewChatIn(workspaceId, options?.initialText || undefined, gitMode ? { gitMode } : {});
+        return openNewChatIn(
+          workspaceId,
+          options?.initialText || undefined,
+          gitMode || worktree
+            ? { ...(gitMode ? { gitMode } : {}), ...(worktree ? { worktree } : {}) }
+            : {},
+        );
       },
       openFolderForNewChat,
       cloneRepositoryForNewChat,
@@ -433,7 +472,15 @@ function RootContent() {
   }, [queryClient]);
 
   React.useEffect(() => {
-    return onNotification("workspaces:changed", () => {
+    return onNotification("workspaces:changed", (payload: unknown) => {
+      const update =
+        payload && typeof payload === "object"
+          ? (payload as { kind?: unknown; workspace?: Workspace })
+          : undefined;
+      if (update?.kind === "created" && update.workspace && typeof update.workspace.id === "string") {
+        upsertCreatedWorkspaceInCache(queryClient, update.workspace);
+        return;
+      }
       void Promise.all([
         queryClient.invalidateQueries({ queryKey: queryKeys.workspaces }),
         queryClient.invalidateQueries({ queryKey: queryKeys.chats }),
@@ -464,6 +511,43 @@ function RootContent() {
       void queryClient.invalidateQueries({ queryKey: ["chat-follow-through", ...(chatId ? [chatId] : [])] });
       // A follow-up notice was saved without a turn to stream it: re-read the transcript.
       if (chatId && update.transcript === true) void queryClient.invalidateQueries({ queryKey: queryKeys.chat(chatId) });
+    });
+  }, [queryClient]);
+
+  const goalPathnameRef = React.useRef(pathname);
+  goalPathnameRef.current = pathname;
+  React.useEffect(() => {
+    // The change carries the goal's view, so the bar updates without a re-read.
+    return chatsApi.onGoalChanged((chatId, goal) => {
+      const key = queryKeys.chatGoal(chatId);
+      const notice = goalSettleNotification(queryClient.getQueryData<GoalView | null>(key), goal);
+      queryClient.setQueryData(key, goal);
+      if (!notice || windowShowsChat({ focused: document.hasFocus(), pathname: goalPathnameRef.current }, chatId)) return;
+      try {
+        if (typeof Notification === "undefined") return;
+        const notification = new Notification(notice.title, { body: notice.body });
+        notification.onclick = () => {
+          window.focus();
+          void navigate({ to: "/chat/$chatId", params: { chatId } });
+        };
+      } catch {
+        // A notification the system refuses is not worth a second message.
+      }
+    });
+  }, [navigate, queryClient]);
+  // A goal the agent suggested, or the suggestion answered: the card updates without a re-read.
+  React.useEffect(
+    () => chatsApi.onGoalProposalChanged((chatId, proposal) => queryClient.setQueryData(queryKeys.chatGoalProposal(chatId), proposal)),
+    [queryClient],
+  );
+
+  React.useEffect(() => {
+    return onNotification("chats:child-chats-changed", (payload: unknown) => {
+      const leadChatId =
+        payload && typeof payload === "object" && typeof (payload as { leadChatId?: unknown }).leadChatId === "string"
+          ? (payload as { leadChatId: string }).leadChatId
+          : undefined;
+      void queryClient.invalidateQueries({ queryKey: leadChatId ? queryKeys.startedChats(leadChatId) : ["started-chats"] });
     });
   }, [queryClient]);
 
@@ -603,23 +687,125 @@ function RootContent() {
     });
   }, [queryClient]);
 
+  const mountedRef = React.useRef(true);
+  React.useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
+
+  const latestNavRef = React.useRef({
+    activeId,
+    navigate,
+    navigationBlockedReason,
+    openNewChatIn,
+    queryClient,
+  });
+  latestNavRef.current = {
+    activeId,
+    navigate,
+    navigationBlockedReason,
+    openNewChatIn,
+    queryClient,
+  };
+
   React.useEffect(() => {
     return onNotification<{ path: string; requestId?: string }>("app:navigate", (payload) => {
-      const acknowledge = (status: "opened" | "blocked") => { if (payload.requestId) void appControlsApi.acknowledgeNavigation(payload.requestId, status); };
-      if (!payload?.path) return;
-      if (document.querySelector("[data-onboarding-active='true']")) {
-        toast.info("Finish onboarding before opening another part of Aiden.");
-        acknowledge("blocked");
-        return;
-      }
-      if (navigationBlockedReason) {
-        toast.info(navigationBlockedReason);
-        acknowledge("blocked");
-        return;
-      }
-      void navigate({ to: payload.path }).then(() => acknowledge("opened"), () => acknowledge("blocked"));
+      void (async () => {
+        const acknowledge = (status: "opened" | "blocked") => { if (payload.requestId) void appControlsApi.acknowledgeNavigation(payload.requestId, status); };
+        if (!payload?.path) return;
+        if (document.querySelector("[data-onboarding-active='true']")) {
+          const blockedByOnboarding = document.querySelector("[data-onboarding-checking='true']")
+            ? await waitForOnboardingActiveCheck()
+            : true;
+          if (!mountedRef.current) {
+            acknowledge("blocked");
+            return;
+          }
+          if (blockedByOnboarding) {
+            toast.info("Finish onboarding before opening another part of Aiden.");
+            acknowledge("blocked");
+            return;
+          }
+        }
+        const current = latestNavRef.current;
+        if (current.navigationBlockedReason) {
+          toast.info(current.navigationBlockedReason);
+          acknowledge("blocked");
+          return;
+        }
+        const settingsHandoffPrefix = "/quick-chat-handoff/settings/";
+        if (payload.path.startsWith(settingsHandoffPrefix)) {
+          const section = parseSettingsSection(payload.path.slice(settingsHandoffPrefix.length).trim());
+          if (!section) {
+            acknowledge("blocked");
+            return;
+          }
+          void current.navigate(settingsLocation(section, { pathname: router.state.location.pathname })).then(
+            () => acknowledge("opened"),
+            () => acknowledge("blocked"),
+          );
+          return;
+        }
+        const draftHandoffPrefix = "/quick-chat-handoff/draft/";
+        if (payload.path.startsWith(draftHandoffPrefix)) {
+          const ticketId = payload.path.slice(draftHandoffPrefix.length).trim();
+          if (!ticketId) {
+            acknowledge("blocked");
+            return;
+          }
+          void claimChatHandoff({ ticketId })
+            .then(async (claimed) => {
+              if (!claimed || claimed.kind !== "draft" || !mountedRef.current) {
+                acknowledge("blocked");
+                return;
+              }
+              const latest = latestNavRef.current;
+              void latest.queryClient.invalidateQueries({ queryKey: queryKeys.workspaces });
+              if (claimed.providerId && claimed.model) {
+                persistModelSelection(claimed.providerId, claimed.model);
+              }
+              const targetWorkspaceId = claimed.workspaceId || latest.activeId || "default";
+              const createdDraftId = await latest.openNewChatIn(targetWorkspaceId, claimed.text, {
+                attachments: claimed.attachments as Attachment[],
+                ...(claimed.ephemeral ? { ephemeral: true } : {}),
+              });
+              if (!createdDraftId) {
+                acknowledge("blocked");
+                return;
+              }
+              acknowledge("opened");
+            })
+            .catch(() => acknowledge("blocked"));
+          return;
+        }
+        const chatHandoffPrefix = "/quick-chat-handoff/chat/";
+        if (payload.path.startsWith(chatHandoffPrefix)) {
+          const targetChatId = payload.path.slice(chatHandoffPrefix.length).trim();
+          if (!targetChatId) {
+            acknowledge("blocked");
+            return;
+          }
+          notifyPendingChatHandoff(targetChatId);
+          void Promise.all([
+            current.queryClient.invalidateQueries({ queryKey: queryKeys.workspaces }),
+            current.queryClient.invalidateQueries({ queryKey: queryKeys.chat(targetChatId) }),
+            current.queryClient.invalidateQueries({ queryKey: queryKeys.chats }),
+          ]);
+          void current.navigate({ to: "/chat/$chatId", params: { chatId: targetChatId } }).then(
+            () => acknowledge("opened"),
+            () => {
+              consumePendingChatHandoff(targetChatId);
+              acknowledge("blocked");
+            },
+          );
+          return;
+        }
+        void current.navigate({ to: payload.path }).then(() => acknowledge("opened"), () => acknowledge("blocked"));
+      })();
     });
-  }, [navigate, navigationBlockedReason]);
+  }, []);
 
   React.useEffect(() => {
     const syncFocus = () =>

@@ -9,12 +9,14 @@ import {
 
 const KEYS = new Set([
   "draftId", "workspaceId", "providerId", "model", "title",
-  "turnId", "message", "skillInvocation", "worktree", "inputSource",
+  "turnId", "message", "skillInvocation", "worktree", "inputSource", "ephemeral",
 ]);
 
 export interface ParsedChatFirstMessage extends ParsedChatAppend {
   title?: string;
   workspaceId: string;
+  /** Temporary floating chat hidden until promoted or attached to a workspace. */
+  ephemeral?: true;
   /** Create a managed worktree from the draft's workspace and save the chat there. */
   worktree?: FirstMessageWorktreeRequest;
   /**
@@ -59,8 +61,18 @@ export function parseChatFirstMessage(input: unknown): ParsedChatFirstMessage {
   if (!append.content.trim() && !append.attachments?.length && !append.grabbedElements?.length) {
     throw new Error("Add a message or attachment before sending.");
   }
+  let ephemeral: true | undefined;
+  if (record.ephemeral !== undefined) {
+    if (typeof record.ephemeral !== "boolean") {
+      throw new Error('Expected a boolean for "ephemeral".');
+    }
+    if (record.ephemeral) ephemeral = true;
+  }
   let worktree: FirstMessageWorktreeRequest | undefined;
   if (record.worktree !== undefined) {
+    if (ephemeral) {
+      throw new Error("Temporary chats cannot create a worktree.");
+    }
     worktree = parseFirstMessageWorktreeRequest(record.worktree);
     if (worktree.sourceWorkspaceId !== create.workspaceId) {
       throw new Error("A new worktree must start from the draft's workspace.");
@@ -73,6 +85,7 @@ export function parseChatFirstMessage(input: unknown): ParsedChatFirstMessage {
     ...append,
     title: create.title,
     workspaceId: create.workspaceId,
+    ...(ephemeral ? { ephemeral } : {}),
     ...(worktree ? { worktree } : {}),
     // The small, bounded worktree request is left out so the chat commit that
     // follows it fingerprints the same message whatever base was chosen.

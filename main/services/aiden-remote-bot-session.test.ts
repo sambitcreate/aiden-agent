@@ -4667,6 +4667,25 @@ test("D Always counts are holder-only in snapshots/SSE and an offered scoped ans
   } finally { approvals.decide("allowed-wait-57", "deny"); await holder.close(); await legacy.close(); await service.close(); }
 });
 
+test("the first Bot approval card offers Always to carded phones without a repeat count, and an Always answer is accepted", async () => {
+  const approvals = createBotApprovals({ publish() {} });
+  const service = new AidenRemoteBotSessionService({ bots: botService(), runtime: async () => fakeRuntime({ kind: "running", submissionId: "sub_1" }).runtime, approvals });
+  const wait = approvals.request({ botId: BOT_ID, waitId: "first-wait", toolCallId: "call-first", toolName: "composio", summary: "Composio · Gmail: Send email", signal: undefined, authorizationFingerprint: "private", always: { key: '["connection","composio","composio"]', count: 0 } });
+  try {
+    await waitFor(() => approvals.pending(BOT_ID).length === 1);
+    const plain = (await service.session(BOT_ID, { allowed: true })).approval!;
+    assert.equal(plain.alwaysCount, undefined, "a phone that reads only the count keeps its old behaviour");
+    const carded = (await service.session(BOT_ID, { allowed: true, approvalCards: true })).approval!;
+    assert.ok(carded.card!.buttons.some((button) => button.decision === "allow" && button.scope === "always"), "the card has an Always button");
+    assert.equal(carded.card?.notes, undefined, "no \"You've allowed this N times\" note on a first card");
+    const session = await service.session(BOT_ID, { allowed: true, approvalCards: true });
+    assert.deepEqual(parseAidenRemoteBotSession(session), session);
+    assert.equal((await service.session(BOT_ID, { approvalCards: true })).approval!.card!.buttons.some((button) => button.scope === "always"), false, "only a bot:allowed holder sees Always");
+    await service.respondApproval(DEVICE_ID, "first-wait", "allow", "first-always-key-001", "always", { allowed: true });
+    assert.equal((await wait).answer, "allow_always");
+  } finally { approvals.decide("first-wait", "deny"); await service.close(); }
+});
+
 test("D Always refuses unoffered and Computer Use scopes without consuming the waiting card", async () => {
   for (const toolName of ["send_note", "computer_use"]) {
     const approvals = createBotApprovals({ publish() {} });

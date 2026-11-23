@@ -1,4 +1,6 @@
 import assert from "node:assert/strict";
+import { createHmac } from "node:crypto";
+import { createTaskLinkWebhook } from "./scheduled-task-link-trigger.js";
 import { readFileSync } from "node:fs";
 import { createServer, request as httpRequest, type IncomingHttpHeaders } from "node:http";
 import { gunzipSync, gzipSync } from "node:zlib";
@@ -102,6 +104,8 @@ async function fixture(options: {
   skillsAvailable?: boolean;
   agentInterruptAvailable?: boolean;
   deviceType?: "iphone" | "ipad" | "android" | "mac" | "linux" | "agent";
+  /** The id the registry answers for the credential; a normal device id when absent. */
+  deviceId?: string;
   simulators?: AidenRemoteSimulatorRelay;
   /** `true` installs a recording fake; an object installs that feed service. */
   hostFeed?: boolean | NonNullable<Parameters<typeof createAidenRemoteRequestHandler>[0]["hostFeed"]>;
@@ -123,6 +127,7 @@ async function fixture(options: {
   /** Contract revision 42: the Bot service's holder view carries `issueCount`. */
   botIssueCount?: number;
   botRoutineWebhook?: import("./aiden-remote-router.js").AidenRemoteRouterDependencies["botRoutineWebhook"];
+  taskTriggerWebhook?: import("./aiden-remote-router.js").AidenRemoteRouterDependencies["taskTriggerWebhook"];
   /** The host projects context pressure (contract revision 41): this is what the chat service answers. */
   contextPressure?: { chatId: string; pressure: Record<string, unknown> | null };
   /** The host's spending ledger (contract revision 47). */
@@ -249,7 +254,7 @@ async function fixture(options: {
           return null;
         }
         return {
-          id: "device-authorized-12345678",
+          id: options.deviceId ?? "device-authorized-12345678",
           name: "iPhone",
           revoked: options.authenticate === "revoked",
           acceptsBotCapabilities: options.acceptsBotCapabilities === true,
@@ -1135,6 +1140,7 @@ async function fixture(options: {
         }
       : {}),
     ...(options.botRoutineWebhook ? { botRoutineWebhook: options.botRoutineWebhook } : {}),
+    ...(options.taskTriggerWebhook ? { taskTriggerWebhook: options.taskTriggerWebhook } : {}),
   };
   const handler = createAidenRemoteRequestHandler(dependencies);
   const server = createServer(handler);
@@ -4043,6 +4049,19 @@ test("revoked and capability-limited credentials fail with stable classification
     } finally {
       await app.close();
     }
+  }
+});
+
+test("a lead chat's internal chat audience is never reachable over HTTP", async () => {
+  const app = await fixture({ deviceId: "chat:lead-1", capabilities: ["server:read", "chat:read", "chat:write"] });
+  try {
+    const response = await fetch(`${app.base}/server`, {
+      headers: { authorization: `Bearer ${"a".repeat(43)}`, "aiden-protocol-version": "1" },
+    });
+    assert.equal(response.status, 401);
+    assert.equal((await response.json()).error.code, "authentication_required");
+  } finally {
+    await app.close();
   }
 });
 
@@ -7093,6 +7112,159 @@ test("a Bot routine link needs no device credential, answers with no body, and n
   } finally {
     await app.close();
   }
+});
+
+test("a chat task's link answers 405, 404, 429, 415 and 413 in order, checks its signature, and never reads a body for an unknown link", async () => {
+  const token = "T".repeat(43);
+  const secret = "s".repeat(64);
+  const emitted: Array<{ taskId: string; payload: string }> = [];
+  const logged: Array<{ outcome: string; preview: string }> = [];
+  let delivered = 0;
+  let clock = 1_800_000_000_000;
+  const routine = {
+    id: "task-1", enabled: true,
+    task: { trigger: { kind: "webhook", gapMinutes: 5, signatureHeader: "x-signature-256", filters: [{ path: "action", equals: "opened" }] } },
+  } as unknown as import("./scheduled-task-triggers-store.js").TaskTriggerRoutine;
+  const core = createTaskLinkWebhook({
+    active: () => true,
+    tokenTask: async (candidate) => (candidate === token ? routine.id : undefined),
+    findByToken: async (candidate) => (candidate === token ? routine : undefined),
+    secret: async () => secret,
+    emit: async (taskId, event) => { emitted.push({ taskId, payload: event.payload }); return "queued"; },
+    log: async (_taskId, entry) => { logged.push(entry); },
+    now: () => clock,
+  });
+  const app = await fixture({
+    authenticate: "invalid",
+    taskTriggerWebhook: { admit: core.admit, tooLarge: core.tooLarge, deliver: async (request) => { delivered += 1; return core.deliver(request); } },
+  });
+  const sign = (body: string) => `sha256=${createHmac("sha256", secret).update(body).digest("hex")}`;
+  const post = (path: string, body: string, headers: Record<string, string> = {}) =>
+    fetch(`${app.base}${path}`, { method: "POST", headers: { "content-type": "application/json", ...headers }, body });
+  try {
+    assert.equal((await fetch(`${app.base}/hooks/tasks/${token}`)).status, 405);
+    const unknown = await post(`/hooks/tasks/${"U".repeat(43)}`, "{}");
+    assert.equal(unknown.status, 404);
+    assert.equal(delivered, 0, "an unknown link never gets its body read");
+    assert.equal((await post(`/hooks/tasks/${token}`, "hi", { "content-type": "text/html" })).status, 415);
+    const big = JSON.stringify({ action: "opened", text: "x".repeat(300 * 1024) });
+    assert.equal((await post(`/hooks/tasks/${token}`, big)).status, 413);
+    const unsigned = JSON.stringify({ action: "opened", title: "Fix login" });
+    assert.equal((await post(`/hooks/tasks/${token}`, unsigned, { "x-signature-256": "sha256=" + "0".repeat(64) })).status, 401);
+    const accepted = await post(`/hooks/tasks/${token}`, unsigned, { "x-signature-256": sign(unsigned) });
+    assert.equal(accepted.status, 202);
+    assert.equal(await accepted.text(), "");
+    const closed = JSON.stringify({ action: "closed", title: "Fix login" });
+    assert.equal((await post(`/hooks/tasks/${token}`, closed, { "x-signature-256": sign(closed) })).status, 202, "a filter miss looks the same to the caller");
+    assert.deepEqual(emitted.map((event) => JSON.parse(event.payload).title), ["Fix login"]);
+    assert.deepEqual(logged.map((entry) => entry.outcome), ["bad_signature", "ran", "filtered"]);
+    // 60 calls a minute, counted before any body is read: the two signed calls
+    // used two; the 415, the 413 and the bad signature gave their places back.
+    for (let used = 2; used < 60; used += 1) {
+      assert.equal((await post(`/hooks/tasks/${token}`, closed, { "x-signature-256": sign(closed) })).status, 202);
+    }
+    assert.equal((await post(`/hooks/tasks/${token}`, unsigned)).status, 429);
+    clock += 61_000;
+    assert.equal((await post(`/hooks/tasks/${token}`, unsigned, { "x-signature-256": sign(unsigned) })).status, 202);
+    assert.ok(!JSON.stringify(app.logs).includes(token), "the link never reaches the log");
+  } finally {
+    await app.close();
+  }
+});
+
+test("a flood of wrong-type and oversized calls to a chat task's link never blocks its signed sender", async () => {
+  const token = "F".repeat(43);
+  const secret = "s".repeat(64);
+  const emitted: string[] = [];
+  let reads = 0;
+  const routine = {
+    id: "task-1", enabled: true,
+    task: { trigger: { kind: "webhook", gapMinutes: 5, signatureHeader: "x-signature-256" } },
+  } as unknown as import("./scheduled-task-triggers-store.js").TaskTriggerRoutine;
+  const core = createTaskLinkWebhook({
+    active: () => true,
+    tokenTask: async (candidate) => (candidate === token ? routine.id : undefined),
+    findByToken: async (candidate) => { reads += 1; return candidate === token ? routine : undefined; },
+    secret: async () => secret,
+    emit: async (_taskId, event) => { emitted.push(event.payload); return "queued"; },
+    log: async () => undefined,
+    now: () => 1_800_000_000_000,
+  });
+  const app = await fixture({ authenticate: "invalid", taskTriggerWebhook: { admit: core.admit, tooLarge: core.tooLarge, deliver: core.deliver } });
+  const post = (body: string, headers: Record<string, string>) =>
+    fetch(`${app.base}/hooks/tasks/${token}`, { method: "POST", headers, body });
+  try {
+    for (let call = 0; call < 70; call += 1) {
+      assert.equal((await post("hi", { "content-type": "text/html" })).status, 415);
+    }
+    assert.ok(reads <= 31, `a wrong-type flood stops reading the task once a minute's refusals are reached (read ${reads} times)`);
+    const big = JSON.stringify({ text: "x".repeat(300 * 1024) });
+    for (let call = 0; call < 70; call += 1) {
+      assert.equal((await post(big, { "content-type": "application/json" })).status, 413);
+    }
+    const body = JSON.stringify({ action: "opened" });
+    const signed = await post(body, {
+      "content-type": "application/json",
+      "x-signature-256": `sha256=${createHmac("sha256", secret).update(body).digest("hex")}`,
+    });
+    assert.equal(signed.status, 202, "the signed sender still has its 60 calls");
+    assert.equal(emitted.length, 1);
+  } finally {
+    await app.close();
+  }
+});
+
+test("a refused link call gives back only its own place, so valid calls never pass 60 in any rolling minute", async () => {
+  const token = "R".repeat(43);
+  let clock = 1_800_000_000_000;
+  const routine = {
+    id: "task-1", enabled: true,
+    task: { trigger: { kind: "webhook", gapMinutes: 1 } },
+  } as unknown as import("./scheduled-task-triggers-store.js").TaskTriggerRoutine;
+  const core = createTaskLinkWebhook({
+    active: () => true,
+    tokenTask: async (candidate) => (candidate === token ? routine.id : undefined),
+    findByToken: async (candidate) => (candidate === token ? routine : undefined),
+    secret: async () => null,
+    emit: async () => "queued",
+    log: async () => undefined,
+    now: () => clock,
+  });
+  // When each valid call was accepted, counted here rather than read from the limiter.
+  const accepted: number[] = [];
+  const valid = async (n: number) => {
+    const admitted = await core.admit({ token, contentType: "application/json" });
+    if ("status" in admitted) return admitted.status;
+    const answer = await core.deliver({ token, admission: admitted.admission, contentType: "application/json", body: new TextEncoder().encode(JSON.stringify({ n })) });
+    if (answer.status === 202) accepted.push(clock);
+    return answer.status;
+  };
+  const admitOversized = async () => {
+    const admitted = await core.admit({ token, contentType: "application/json" });
+    assert.ok(!("status" in admitted), "an oversized call is admitted before its body is read");
+    return admitted.admission;
+  };
+  const busiestMinute = () => Math.max(0, ...accepted.map((start) => accepted.filter((at) => at >= start && at < start + 60_000).length));
+
+  // Inside one minute: 30 oversized calls are admitted, then 30 valid ones; the
+  // oversized ones finish last and give back exactly their own 30 places.
+  const early = await Promise.all(Array.from({ length: 30 }, admitOversized));
+  clock += 10_000;
+  for (let n = 0; n < 30; n += 1) assert.equal(await valid(n), 202);
+  for (const admission of early) assert.equal((await core.tooLarge({ token, admission })).status, 413);
+  for (let n = 30; n < 60; n += 1) assert.equal(await valid(n), 202);
+  assert.equal(await valid(60), 429, "the 61st valid call in the minute waits");
+
+  // Across a minute boundary: 60 oversized calls held until they age out, a
+  // new minute of valid calls, then the old bodies finish. Their refunds find
+  // nothing of theirs left and free none of the new calls' places.
+  clock += 61_000;
+  const held = await Promise.all(Array.from({ length: 60 }, admitOversized));
+  clock += 60_001;
+  for (let n = 0; n < 60; n += 1) assert.equal(await valid(100 + n), 202);
+  for (const admission of held) assert.equal((await core.tooLarge({ token, admission })).status, 413);
+  assert.equal(await valid(200), 429, "the late refunds did not open more room");
+  assert.ok(busiestMinute() <= 60, `at most 60 valid calls in any rolling minute (saw ${busiestMinute()})`);
 });
 
 test("context pressure is a desktop chat read gated by its feature, chat:read and the Bot-chat rule", async () => {

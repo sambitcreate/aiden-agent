@@ -4,7 +4,7 @@
 
 import { useRouter, useRouterState } from "@tanstack/react-router";
 import { ArrowLeft, ArrowRight } from "lucide-react";
-import { useEnvironmentPanel } from "./environment-panel";
+import { useEnvironmentPanelCore } from "./environment-panel";
 import { Button, toast } from "./ui";
 import { historyNavigationAvailability } from "../lib/history-navigation";
 import { useShortcutBinding } from "../lib/command-system";
@@ -20,7 +20,7 @@ const UNAVAILABLE = "no-drag aria-disabled:opacity-45 aria-disabled:hover:bg-tra
 
 export function HistoryNavButtons() {
   const router = useRouter();
-  const environmentPanel = useEnvironmentPanel();
+  const environmentPanel = useEnvironmentPanelCore();
   // The same protections as opening another chat or Settings from the sidebar:
   // the Files editor keeps unsaved text only while it is mounted, and leaving
   // mid-Git-operation would hide its outcome. These are action checks, not

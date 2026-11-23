@@ -143,7 +143,7 @@ export const SETTINGS_DESTINATIONS: ReadonlyArray<{
   {
     id: "scheduledTasks",
     title: "Scheduled tasks",
-    keywords: ["automation", "cron", "recurring", "background", "scripts", "notifications", "do this every day", "run later"],
+    keywords: ["automation", "cron", "recurring", "background", "scripts", "notifications", "do this every day", "run later", "awake", "sleep", "caffeinate", "keep awake", "check back", "check-backs", "come back later", "while you're away"],
   },
   {
     id: "geminiLive",
@@ -177,6 +177,9 @@ export const SETTINGS_DESTINATIONS: ReadonlyArray<{
       "revoke",
       "commands",
       "stop asking me",
+      "chats can start other chats",
+      "started chats",
+      "child chats",
     ],
   },
   {
@@ -241,7 +244,19 @@ export const SETTINGS_DESTINATIONS: ReadonlyArray<{
   {
     id: "appearance",
     title: "Appearance",
-    keywords: ["theme", "light", "dark", "mode", "system", "chat width", "layout", "wide", "narrow"],
+    keywords: [
+      "theme",
+      "light",
+      "dark",
+      "mode",
+      "system",
+      "chat width",
+      "layout",
+      "wide",
+      "narrow",
+      "quick chat",
+      "floating",
+    ],
   },
   {
     id: "storage",

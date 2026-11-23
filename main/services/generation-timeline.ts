@@ -27,6 +27,9 @@ import {
 } from "../../renderer/shared/ask-user-question.js";
 import { WEB_FETCH_TOOL_NAME, parseWebExtractRecap } from "../../renderer/shared/web-extract.js";
 import { BROWSER_RECORDING_STOP_TOOL_NAME, parseBrowserRecordingRecap } from "../../renderer/shared/browser-recording.js";
+import { CHECK_BACK_TOOL_NAME, checkBackWhen } from "../../renderer/shared/check-backs.js";
+import { PROPOSE_GOAL_TOOL_NAME } from "../../renderer/shared/goal.js";
+import { CHILD_CHATS_TOOL_NAME, SUBMIT_RESULT_TOOL_NAME } from "../../renderer/shared/child-chats.js";
 
 const MAX_TOOL_NAME_LENGTH = 80;
 const MAX_TARGET_LENGTH = 240;
@@ -323,6 +326,35 @@ export function safeToolDescriptor(toolName: string, args: unknown): SafeToolDes
               ? "List followed pull requests"
               : "Follow pull request",
       };
+    case PROPOSE_GOAL_TOOL_NAME:
+      return { label: "Suggest a goal", detail: safeDetail(values.objective) };
+    // The note stays out of the feed; a set row names its time once it settles.
+    case CHECK_BACK_TOOL_NAME:
+      return {
+        label:
+          values.action === "list" ? "List check-backs" : values.action === "cancel" ? "Cancel check-back" : "Set check-back",
+      };
+    // Only the action and how many chats: tasks and messages stay out of the feed.
+    case CHILD_CHATS_TOOL_NAME: {
+      const count = Array.isArray(values.chats) ? values.chats.length : 0;
+      switch (values.action) {
+        case "start":
+          return { label: count === 1 ? "Start a chat" : "Start chats", ...(count > 1 ? { detail: `${count} chats` } : {}) };
+        case "send":
+          return { label: "Send to a started chat" };
+        case "wait":
+          return { label: "Wait for started chats" };
+        case "read":
+          return { label: "Read a started chat" };
+        case "stop":
+          return { label: "Stop a started chat" };
+        default:
+          return { label: "List started chats" };
+      }
+    }
+    // The result stays out of the feed.
+    case SUBMIT_RESULT_TOOL_NAME:
+      return { label: "Submit result" };
     case "share_image":
       return { label: "Share image", target: path };
     case "generate_image":
@@ -860,6 +892,10 @@ export class GenerationTimelineProjector {
         if (step.toolName === WEB_FETCH_TOOL_NAME) {
           const extraction = parseWebExtractRecap(resultDetails);
           if (extraction) step.extraction = extraction;
+        }
+        if (step.toolName === CHECK_BACK_TOOL_NAME) {
+          const fireAt = record(record(resultDetails).checkBack).fireAt;
+          if (typeof fireAt === "number" && Number.isFinite(fireAt)) step.detail = checkBackWhen(fireAt, timestamp);
         }
         if (step.toolName === BROWSER_RECORDING_STOP_TOOL_NAME) {
           const recording = parseBrowserRecordingRecap(record(resultDetails).recording);

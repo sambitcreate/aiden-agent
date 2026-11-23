@@ -1,4 +1,5 @@
 import { parseAppControlPanels } from "../../renderer/shared/app-controls.js";
+import { persistedChatWorkspaceId } from "../../renderer/shared/chat-workspace.js";
 import type { Attachment, Chat } from "./types.js";
 import type { SkillProvenanceV1 } from "../../renderer/shared/slash-commands.js";
 import { safeStoredAttachments } from "./attachment-contract.js";
@@ -241,4 +242,38 @@ export function projectVisibleChatMessage(value: unknown): VisibleChatMessage | 
         ? parseProviderFailureV1(message.providerFailure)
         : undefined,
   };
+}
+
+/**
+ * Filter hidden ephemeral-only No workspace entries out of the Remote/phone
+ * workspace list using at most one chat-store scan (avoiding N+1 disk reads
+ * when a user has hundreds of No workspace chats).
+ */
+export async function filterRemoteVisibleWorkspaces<
+  W extends { id: string; noWorkspace?: boolean },
+>(
+  workspaces: readonly W[],
+  listAllChats: () => Promise<readonly { workspaceId?: string; ephemeral?: true }[]>,
+): Promise<W[]> {
+  const hasCandidateNoWorkspace = workspaces.some(
+    (workspace) => workspace.noWorkspace === true && workspace.id !== "default",
+  );
+  if (!hasCandidateNoWorkspace) return [...workspaces];
+  const allChats = await listAllChats();
+  const hasAnyChat = new Set<string>();
+  const hasNonEphemeralChat = new Set<string>();
+  for (const meta of allChats) {
+    const wsId = persistedChatWorkspaceId(meta.workspaceId);
+    hasAnyChat.add(wsId);
+    if (meta.ephemeral !== true) {
+      hasNonEphemeralChat.add(wsId);
+    }
+  }
+  return workspaces.filter(
+    (workspace) =>
+      workspace.noWorkspace !== true ||
+      workspace.id === "default" ||
+      !hasAnyChat.has(workspace.id) ||
+      hasNonEphemeralChat.has(workspace.id),
+  );
 }

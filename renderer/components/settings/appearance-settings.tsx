@@ -1,6 +1,7 @@
 import { handleRadioNavigation } from "./radio-navigation";
 import { InboxDockBadgeSetting, SidebarViewPicker } from "./sidebar-view-picker";
 import { LinksSettings } from "./links-settings";
+import { QuickChatSettings } from "./quick-chat-settings";
 import * as React from "react";
 import {
   Check,
@@ -29,10 +30,12 @@ import {
   createNativeAppearanceRevisionTracker,
   readCachedAppearance,
   readAppearanceIntentRevision,
+  readAppliedAppearanceScheme,
   reconcileNativeThemeChange,
   reconcileRuntimeAppearanceEvent,
   rebaseAppearanceIntentAfterFailure,
   runAppearanceIntent,
+  subscribeAppliedAppearanceScheme,
   type AppliedAppearance,
 } from "../../lib/appearance-runtime";
 import {
@@ -178,34 +181,24 @@ function previewStyle(variant: ThemeVariantConfig, scheme: AppearanceScheme): Cs
 
 type ThemePreset = (typeof THEME_PRESETS)[number];
 
-/** The scheme that visually defines each preset on its tile. */
-const TILE_SIGNATURE_SCHEME: Record<ThemePresetId, AppearanceScheme> = {
-  aiden: "light",
-  slate: "light",
-  berry: "light",
-  moss: "light",
-  paper: "light",
-  calm: "light",
-  graphite: "dark",
-  dusk: "dark",
-  midnight: "dark",
-  monochrome: "light",
-};
-
 function ThemeTile({
   preset,
+  scheme,
   index,
   selected,
   tabbable,
   onChange,
 }: {
   preset: ThemePreset;
+  scheme: AppearanceScheme;
   index: number;
   selected: boolean;
   tabbable: boolean;
   onChange: (preset: ThemePresetId) => void;
 }) {
-  const palette = preset[TILE_SIGNATURE_SCHEME[preset.id]];
+  // Every theme has a light and a dark look, and the mode above picks which one Aiden uses,
+  // so each tile shows the look this theme would have right now.
+  const palette = preset[scheme];
   return (
     <button
       type="button"
@@ -226,6 +219,7 @@ function ThemeTile({
       <span
         className="appearance-tile-swatch"
         aria-hidden="true"
+        data-preview-scheme={scheme}
         style={{ backgroundColor: palette.canvas, color: palette.foreground }}
       >
         Aa
@@ -241,9 +235,11 @@ function ThemeTile({
 
 function ThemeTileGrid({
   value,
+  scheme,
   onChange,
 }: {
   value: ThemePresetId | null;
+  scheme: AppearanceScheme;
   onChange: (preset: ThemePresetId) => void;
 }) {
   const selectedIndex = THEME_PRESETS.findIndex((preset) => preset.id === value);
@@ -254,6 +250,7 @@ function ThemeTileGrid({
         <ThemeTile
           key={preset.id}
           preset={preset}
+          scheme={scheme}
           index={index}
           selected={preset.id === value}
           tabbable={index === focusIndex}
@@ -291,6 +288,12 @@ export function AppearanceSettings() {
   // The mode just chosen, shown at once while the native change runs. The radios never disable for it: that would
   // drop keyboard focus mid-arrow. A newer choice supersedes an older one still in flight (latest wins).
   const [requestedMode, setRequestedMode] = React.useState<AppearanceMode | null>(null);
+  // The look this window shows now (System resolves to the computer's), so the theme tiles match it.
+  const appliedScheme = React.useSyncExternalStore(
+    subscribeAppliedAppearanceScheme,
+    readAppliedAppearanceScheme,
+    () => "light" as const,
+  );
   const requestedModeRef = React.useRef<{ mode: AppearanceMode; revision: number } | null>(null);
   const configRef = React.useRef(config);
   const nativeInfoRef = React.useRef<NativeThemeInfo | null>(null);
@@ -521,6 +524,8 @@ export function AppearanceSettings() {
     config.light.preset !== "custom" && config.light.preset === config.dark.preset
       ? config.light.preset
       : null;
+  // A Light or Dark choice still on its way to the system already shows on the tiles.
+  const tileScheme: AppearanceScheme = requestedMode === "light" || requestedMode === "dark" ? requestedMode : appliedScheme;
   const currentThemeLabel = selectedPreset
     ? (THEME_PRESETS.find((preset) => preset.id === selectedPreset)?.label ?? "Custom")
     : "Custom";
@@ -553,7 +558,7 @@ export function AppearanceSettings() {
       <section className="appearance-theme-section" aria-labelledby="appearance-theme-title">
         <h2 id="appearance-theme-title">Theme</h2>
         <ThemeModePicker config={config} value={requestedMode ?? config.mode} disabled={hasSafetyIssues} onChange={changeMode} />
-        <ThemeTileGrid value={selectedPreset} onChange={changeTheme} />
+        <ThemeTileGrid value={selectedPreset} scheme={tileScheme} onChange={changeTheme} />
         <p className="appearance-current-theme">Current theme: {currentThemeLabel}</p>
       </section>
 
@@ -609,6 +614,7 @@ export function AppearanceSettings() {
           </Select>
         </Field>
       </FieldSet>
+      <QuickChatSettings />
       {capabilities.platform === "linux" ? (
         <FieldSet title="Window">
           <Field

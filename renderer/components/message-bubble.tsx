@@ -2,7 +2,7 @@
 // messages render markdown full-width, native-transcript style.
 
 import * as React from "react";
-import { ChevronDown, Mic } from "lucide-react";
+import { ChevronDown, MessagesSquare, Mic } from "lucide-react";
 import { Button, Callout, ErrorBoundary, Text } from "./ui";
 import { AidenIcon } from "./aiden-icon";
 import { Markdown } from "./markdown";
@@ -35,6 +35,8 @@ export interface MessageBubbleProps {
   skill?: SkillProvenanceV1;
   /** Aiden Live sent this user message for the person: show "By voice" under it. */
   inputSource?: ChatInputSourceV1;
+  /** The chat that started this one sent it: "From “Release prep”" under it. */
+  fromLeadChat?: string;
   /** Render the assistant reply through the stable streaming reveal path. */
   streaming?: boolean;
   streamComplete?: boolean;
@@ -73,6 +75,7 @@ export function MessageBubble({
   grabbedElements,
   skill,
   inputSource,
+  fromLeadChat,
   streaming,
   streamComplete,
   replayedTextLength,
@@ -116,6 +119,7 @@ export function MessageBubble({
           ) : null}
           {content ? <UserMessageBody content={content} showCopy={showCopy} /> : null}
           {inputSource === "voice" ? <VoiceInputLabel /> : null}
+          {fromLeadChat ? <LeadChatLabel label={fromLeadChat} /> : null}
           {fork ? (
             <div className="flex items-center gap-0.5">
               <ForkMessageButton
@@ -165,6 +169,16 @@ export function MessageBubble({
         </div>
       </div>
     </RichLinkBudget>
+  );
+}
+
+/** A small, quiet mark under a message the chat that started this one sent. */
+function LeadChatLabel({ label }: { label: string }) {
+  return (
+    <div data-message-from-lead-chat className="-mt-1 flex min-w-0 max-w-full items-center gap-1 px-1 text-mini text-tertiary">
+      <MessagesSquare aria-hidden="true" className="size-3 shrink-0" />
+      <span className="min-w-0 truncate">{label}</span>
+    </div>
   );
 }
 

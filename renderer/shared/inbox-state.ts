@@ -30,8 +30,11 @@ export interface InboxSignals {
   unread: boolean;
   /** The newest run failed (`lastAssistantFailed` / `lastRunFailed`). */
   failed: boolean;
-  /** Local only, from `chats:pendingAttention`. */
-  attention?: "detached" | "interrupted";
+  /**
+   * Local only, from `chats:pendingAttention`: a prompt that can no longer be
+   * answered where it was raised, or a keep-going goal at Needs you.
+   */
+  attention?: "detached" | "interrupted" | "goal";
   /** The chat shown in the main pane. It never counts as unread. */
   isOpen: boolean;
   /** Always true for local chats. */
@@ -93,7 +96,7 @@ export function inboxState(
   if (signals.rowState === "needs_input") return needsYou(INBOX_TIERS.input);
   // 2. Unseen output from a failed run (an idle chat; `inboxRowStatus` reads it as Failed).
   if (signals.rowState === "idle" && signals.failed && unread) return needsYou(INBOX_TIERS.failed);
-  // 3. A local prompt that can no longer be answered where it was raised.
+  // 3. A local prompt that can no longer be answered where it was raised, or a goal that needs the person.
   if (signals.attention) return needsYou(INBOX_TIERS.unavailable);
   // 4. Running.
   if (signals.rowState === "working") {

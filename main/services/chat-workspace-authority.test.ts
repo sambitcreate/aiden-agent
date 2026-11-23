@@ -70,14 +70,13 @@ test("generation initialization persists terminal outcomes before releasing owne
     "const initializationTerminalState = { attempted: false }",
   );
   assert.ok(helperStart >= 0, "terminal persistence helper must be part of generation start");
-  assert.match(llmClientSource, /import \{ persistGenerationInitializationTerminal \}/u);
+  assert.match(llmClientSource, /import \{[^}]*\bpersistGenerationInitializationTerminal\b[^}]*\}/u);
   assert.match(startSource, /await persistGenerationInitializationTerminal\(\{/u);
-  assert.match(
-    startSource,
-    /append: \(message, meta\) => chatStore\.appendMessage\(params\.chatId, message, meta\)/u,
-  );
+  // Where the outcome is written (the chat store, with the run's model unless
+  // it keeps the chat's) is checked by behaviour in
+  // generation-initialization-terminal.test.ts.
   assert.match(startSource, /initializing\.get\(streamId\) === initialization/u);
-  assert.match(startSource, /active\.get\(streamId\)\?\.owner === owner/u);
+  assert.match(startSource, /active\.get\(streamId\)\?\.owner === (?:owner|currentOwner\(\))/u);
 
   const cancellationPersists = startSource.match(
     /await persistInitializationTerminal\(\s*"cancelled",\s*(?:initialization|activeGeneration)\.cancellationOrigin,?\s*\)/gu,

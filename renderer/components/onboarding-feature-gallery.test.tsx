@@ -5,7 +5,8 @@ import { cleanup, render, within } from "@testing-library/react";
 import { OnboardingFeatureGallery, onboardingFeatures } from "./onboarding-feature-gallery.js";
 import { visibleOnboardingFeatures } from "../lib/onboarding-provider.js";
 import { hostPlatformCapabilities } from "../../main/services/host-platform-capabilities.js";
-import { BotsArt } from "./onboarding-art/control-art.js";
+import { BotsArt, KeepGoingArt, ScheduledAutomationsArt } from "./onboarding-art/control-art.js";
+import { ChatsThatRunChatsArt } from "./onboarding-art/chats-that-run-chats-art.js";
 
 /** A stand-in for the browser's IntersectionObserver that the test scrolls by hand. */
 class FakeIntersectionObserver {
@@ -165,4 +166,113 @@ test("the Browser & Annotations tile introduces React/DOM element grabbing with 
     }
   }
   unmount();
+  cleanup();
+});
+
+test("the Scheduled Automations tile shows a task's result posted in its chat and the chat's check-back", () => {
+  const { container, unmount } = render(<OnboardingFeatureGallery features={onboardingFeatures} platform="darwin" />);
+  const tile = container.querySelector<HTMLElement>('[data-onboarding-feature="schedules"]');
+  assert.ok(tile);
+  assert.match(tile.getAttribute("aria-label") ?? "", /A task made in a chat posts each result there, and Aiden can check back in a chat later\./u);
+  unmount();
+  cleanup();
+
+  const art = render(<ScheduledAutomationsArt />);
+  const view = within(art.container);
+  const chat = view.getByRole("group", { name: "A scheduled task's run in the chat it was made in" });
+  const card = within(chat).getByRole("group", { name: "Scheduled task card" });
+  assert.ok(within(card).getByText("Scheduled task"));
+  assert.ok(within(card).getByText("Every day at 9:00 AM"));
+  const chips = within(view.getByRole("list", { name: "Chat chips" })).getAllByRole("listitem");
+  assert.deepEqual(chips.map((chip) => chip.textContent), ["Checking back at 3:10 PM", "next 9:00 AM"]);
+  assert.equal(art.container.querySelectorAll("img").length, 0, "the chat is code-drawn");
+  assert.equal(view.queryAllByRole("button").length, 0, "the drawing does not add fake keyboard actions");
+  for (const element of art.container.querySelectorAll<HTMLElement>("[class*='anim']")) {
+    for (const name of element.className.split(/\s+/u).filter((part) => part.includes("anim"))) {
+      assert.match(name, /^oa-anim-[a-z]+$/u);
+    }
+  }
+  art.unmount();
+});
+
+test("the Keep Going Until Done tile shows a round's card in the chat and the goal bar over the composer", () => {
+  const { container, unmount } = render(<OnboardingFeatureGallery features={onboardingFeatures} platform="darwin" />);
+  const tile = container.querySelector<HTMLElement>('[data-onboarding-feature="keepGoing"]');
+  assert.ok(tile, "keep-going goals are part of the tour");
+  assert.match(tile.getAttribute("aria-label") ?? "", /^Keep Going Until Done\. Give a chat a goal with \/goal.*only your Start begins one\./u);
+  assert.equal(tile.tabIndex, 0, "the tile is reachable by keyboard");
+  unmount();
+  cleanup();
+
+  const art = render(<KeepGoingArt />);
+  const view = within(art.container);
+  const chat = view.getByRole("group", { name: "A chat working toward its goal" });
+  assert.ok(within(within(chat).getByRole("group", { name: "Round card" })).getByText("Keep going · round 3 of 50"));
+  const bar = view.getByRole("group", { name: "Goal bar" });
+  assert.ok(within(bar).getByText("Working · round 3 of 50"));
+  assert.ok(within(bar).getByText("Pause"));
+  assert.equal(art.container.querySelectorAll("img").length, 0, "the chat is code-drawn");
+  assert.equal(view.queryAllByRole("button").length, 0, "the drawing does not add fake keyboard actions");
+  for (const element of art.container.querySelectorAll<HTMLElement>("[class*='anim']")) {
+    for (const name of element.className.split(/\s+/u).filter((part) => part.includes("anim"))) {
+      assert.match(name, /^oa-anim-[a-z]+$/u);
+    }
+  }
+  art.unmount();
+});
+
+test("Mac and Linux tours show a chat's started chats working, waiting for you and done; other hosts leave the tile out", () => {
+  for (const platform of ["darwin", "linux", "win32"] as const) {
+    const host = hostPlatformCapabilities(platform, "arm64");
+    const shown = visibleOnboardingFeatures(onboardingFeatures, { ...host, designMode: true });
+    const { container, unmount } = render(<OnboardingFeatureGallery features={shown} platform={platform === "linux" ? "linux" : "darwin"} />);
+    const tile = container.querySelector<HTMLElement>('[data-onboarding-feature="chatsRunChats"]');
+    if (platform === "win32") assert.equal(tile, null, "no desktop host there runs started chats");
+    else {
+      assert.ok(tile, `${platform} can run started chats`);
+      assert.match(tile.getAttribute("aria-label") ?? "", /^Chats that run chats\. .*Their approvals still come to you, and Stop all ends the ones you haven't taken over\./u);
+    }
+    unmount();
+    cleanup();
+  }
+
+  const art = render(<ChatsThatRunChatsArt />);
+  const view = within(art.container);
+  assert.ok(view.getByText("3 chats working"));
+  const rows = within(view.getByRole("list", { name: "Started chats" })).getAllByRole("listitem");
+  assert.deepEqual(rows.map((row) => row.textContent), ["Working", "Needs you", "Done"]);
+  assert.equal(art.container.querySelectorAll("img").length, 0, "the list is code-drawn");
+  assert.equal(view.queryAllByRole("button").length, 0, "the drawing does not add fake keyboard actions");
+  for (const element of art.container.querySelectorAll<HTMLElement>("[class*='anim']")) {
+    for (const name of element.className.split(/\s+/u).filter((part) => part.includes("anim"))) {
+      assert.match(name, /^oa-anim-[a-z]+$/u);
+    }
+  }
+  art.unmount();
+});
+
+test("the Floating Quick Chat tile is code-drawn, platform-aware, and uses only oa-anim-* classes", () => {
+  for (const [platform, expectedHotkey] of [
+    ["darwin", "⌘⇧Space"],
+    ["linux", "Ctrl+Shift+Space"],
+  ] as const) {
+    const { container, unmount } = render(
+      <OnboardingFeatureGallery features={onboardingFeatures} platform={platform} />,
+    );
+    const tile = container.querySelector<HTMLElement>('[data-onboarding-feature="quickChat"]');
+    assert.ok(tile, `${platform} includes the Floating Quick Chat tile`);
+    assert.match(tile.getAttribute("aria-label") ?? "", /^Floating Quick Chat\./u);
+    assert.ok(within(tile).getByText("Temporary"));
+    assert.ok(within(tile).getByText("Attach…"));
+    assert.ok(within(tile).getByText(expectedHotkey));
+    assert.equal(tile.querySelectorAll("img").length, 0, "Quick Chat art is code-drawn");
+    assert.equal(within(tile).queryAllByRole("button").length, 0, "art has no fake buttons");
+    for (const element of tile.querySelectorAll<HTMLElement>("[class*='anim']")) {
+      for (const name of element.className.split(/\s+/u).filter((part) => part.includes("anim"))) {
+        assert.match(name, /^oa-anim-[a-z]+$/u);
+      }
+    }
+    unmount();
+    cleanup();
+  }
 });

@@ -294,7 +294,7 @@ test("renderer message appends serialize against detached terminal persistence",
   );
   assert.equal(
     (schedule.match(/turn\.settleAsyncWork\(\)/gu) ?? []).length,
-    3,
+    4,
     "every scheduled turn path must settle its claimed append frame",
   );
   assert.match(
@@ -343,7 +343,7 @@ test("replacement chat reads mark bounded wait timeouts for retained renderer re
     source("main/services/llm-client.ts"),
   ]);
   const getHandler = ipcHandlerStart(handler, "chats:get");
-  assert.match(handler.slice(getHandler), /chatApplicationService\.get\(asString\(id, "id"\)\)/u);
+  assert.match(handler.slice(getHandler), /chatApplicationService\.get\((?:asString\(id, "id"\)|chatId)\)/u);
   const inactiveCheck = applicationService.indexOf(
     "deps.llmClient.isChatOwnedByInactiveRenderer(chatId)",
   );

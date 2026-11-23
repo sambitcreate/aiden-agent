@@ -11,7 +11,7 @@
 import assert from "node:assert/strict";
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { app, BrowserWindow, session } from "electron";
+import { app, BrowserWindow, session, webContents, type WebContents } from "electron";
 import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
 import type { BrowserCommand, BrowserEvent, BrowserState } from "../../renderer/shared/browser";
 
@@ -50,6 +50,38 @@ function serve(request: Request): Response {
 
 const textOf = (result: AgentToolResult<unknown>) =>
   result.content.map((part) => (part.type === "text" ? part.text : "")).join("");
+
+/**
+ * Resolves once the held tab's own privacy read of `url` has finished: a read
+ * of that page that began after it stopped loading, which is the read the
+ * browser keeps as the page's inspection. The browser deliberately keeps a
+ * tab released before that read unavailable to the Bot, so the person answers
+ * only once the page is ready, as someone looking at it would.
+ */
+function heldPageInspected(contents: WebContents, url: string) {
+  const port = contents.debugger;
+  const send = port.sendCommand.bind(port);
+  let stopped = false, inspected = false, finish!: () => void;
+  const read = new Promise<void>((resolve) => { finish = resolve; });
+  const onStop = () => { stopped = contents.getURL() === url; };
+  contents.on("did-stop-loading", onStop);
+  port.sendCommand = async (...args: Parameters<typeof send>) => {
+    const afterLoad = stopped;
+    const value = await send(...args);
+    if (args[0] === "DOM.getDocument" && afterLoad && value?.root?.documentURL === url) inspected = true;
+    // The read remembers what it found before it disables DOM.
+    if (args[0] === "DOM.disable" && inspected) finish();
+    return value;
+  };
+  return {
+    // Let the read record its inspection after its final CDP cleanup.
+    ready: read.then(() => new Promise<void>((resolve) => setImmediate(resolve))),
+    restore() {
+      contents.removeListener("did-stop-loading", onStop);
+      port.sendCommand = send;
+    },
+  };
+}
 
 async function until<T>(read: () => T | undefined, what: string): Promise<T> {
   const started = Date.now();
@@ -189,10 +221,22 @@ void app.whenReady().then(async () => {
   const heldStatus = await botStatus(heldTab.id);
   const heldSnapshot = await outcome(call("browser_snapshot", { tabId: heldTab.id }));
   const heldNavigate = await outcome(call("browser_navigate", { tabId: heldTab.id, url: `https://${SITE}/whoami` }));
-  await user(BOT_WORKSPACE, { action: "navigate", tabId: heldTab.id, url: `https://${SITE}/callback?code=${ONE_TIME_CODE}`, readiness: "load" });
-  await loaded(heldTab.id, "/callback");
-  const statusAfterCallback = await botStatus(heldTab.id);
-  const gatewayWhileHeld = await call("browser");
+  const callbackUrl = `https://${SITE}/callback?code=${ONE_TIME_CODE}`;
+  const heldContents = webContents.getAllWebContents().filter((contents) =>
+    contents.session === session.fromPartition(botBrowserPartition(BOT)) && contents.getURL() === `https://${SITE}/`);
+  assert.equal(heldContents.length, 1);
+  const callbackInspection = heldPageInspected(heldContents[0]!, callbackUrl);
+  let statusAfterCallback: Awaited<ReturnType<typeof botStatus>>, gatewayWhileHeld: string;
+  try {
+    await user(BOT_WORKSPACE, { action: "navigate", tabId: heldTab.id, url: callbackUrl, readiness: "load" });
+    await loaded(heldTab.id, "/callback");
+    statusAfterCallback = await botStatus(heldTab.id);
+    gatewayWhileHeld = await call("browser");
+    // The person sees the callback page before answering.
+    await callbackInspection.ready;
+  } finally {
+    callbackInspection.restore();
+  }
 
   // 4. I'm signed in: the Bot gets its answer and its tab back.
   handoffs.answer(BOT, card.waitId, { outcome: "done" });

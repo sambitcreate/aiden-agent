@@ -303,3 +303,23 @@ test("the draft list is a stable snapshot between changes", () => {
   assert.equal(listChatDrafts(), second);
   discardChatDraft(chat.id);
 });
+
+test("closing and reopening an empty temporary draft via Back preserves ephemeral mode and excludes reuse", async () => {
+  const draft = createChatDraft("default", undefined, undefined, { ephemeral: true });
+  assert.equal(draft.chat.ephemeral, true);
+  const release = retainChatDraft(draft.chat.id);
+  assert.equal(
+    findReusableChatDraft("default"),
+    undefined,
+    "temporary drafts must never be reused by regular new-chat activations",
+  );
+  release();
+  await flush();
+  assert.equal(getChatDraft(draft.chat.id), undefined);
+
+  const reopened = reopenClosedChatDraft(draft.chat.id);
+  assert.ok(reopened, "Back navigation should reopen the closed empty draft");
+  assert.equal(reopened.chat.workspaceId, "default");
+  assert.equal(reopened.chat.ephemeral, true, "reopened temporary draft must retain ephemeral flag");
+  discardChatDraft(reopened.chat.id);
+});

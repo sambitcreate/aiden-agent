@@ -7,6 +7,7 @@ import {
 import {
   pendingAttentionForChat,
   type DetachedPromptLog,
+  type GoalNeedsYou,
   type InterruptedRunWaits,
   type PendingAttentionRuns,
 } from "../services/chat-pending-attention.js";
@@ -19,6 +20,8 @@ export interface ChatPendingAttentionHandlerDependencies<Event> {
   knownChatIds(ids: readonly string[]): Promise<ReadonlySet<string>>;
   /** Saved waits from each chat's interrupted run; chats with none are absent. Never throws. */
   interruptedWaits(chatIds: readonly string[]): Promise<ReadonlyMap<string, InterruptedRunWaits>>;
+  /** The chat's keep-going goal, when it stopped at Needs you. */
+  goalNeedsYou?(chatId: string): GoalNeedsYou | undefined;
   /**
    * A dismissal removed a wait. Nothing else reports it, so this tells the
    * Dock badge and the renderer's Inbox to recount.
@@ -57,6 +60,7 @@ export function registerChatPendingAttentionHandlers<Event>(
         runs: dependencies.runs,
         detached: dependencies.detached,
         interrupted: interrupted.get(chatId),
+        goal: dependencies.goalNeedsYou?.(chatId),
       });
       return attention ? [attention] : [];
     });

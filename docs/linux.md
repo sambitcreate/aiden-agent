@@ -107,8 +107,8 @@ Tailscale refuses it.
 The workspace agent, providers, local models, MCP, skills, Web Search,
 web page reading with extract mode,
 schedules, terminal, Git, file editor, generative UI artifacts, workspace
-artifacts, coding follow-through (background jobs, followed pull requests and
-`/until` checks), diagnostics,
+artifacts, coding follow-through (background jobs, followed pull requests,
+`/until` checks and check-backs), [chats that run other chats](chats-that-run-chats.md), diagnostics,
 Gemini voice transcription, remote access, notifications, profile, themes, and
 native subagents and [hooks](hooks.md) use the same contracts as macOS. Linux-specific integrations include:
 
@@ -135,7 +135,17 @@ native subagents and [hooks](hooks.md) use the same contracts as macOS. Linux-sp
 - the Inbox (Beta) sidebar's Needs you count on the app icon through
   `app.setBadgeCount`, shown by launchers that read the Unity launcher API
   (for example Ubuntu's Dock or KDE's task manager) and ignored elsewhere. Settings →
-  Appearance → Sidebar names it **Show Needs you count on the app icon**.
+  Appearance → Sidebar names it **Show Needs you count on the app icon**;
+- keeping the computer awake while Aiden works (Settings → Scheduled tasks →
+  While you're away → **Keep this computer awake while Aiden works**) asks the
+  desktop's inhibit service over D-Bus through Electron's power-save blocker.
+  It is best-effort: GNOME and KDE honour it, while a minimal window manager
+  with no inhibit service can still suspend on its own timer. Check that the
+  hold took effect with `systemd-inhibit --list` while a chat answers. Closing
+  a laptop's lid still follows the desktop's lid setting. A check-back or Bot
+  wake-up due within the hour holds only on AC power; Linux sends Electron no
+  plug or unplug events, so while one is due Aiden reads the power source
+  again every 5 minutes.
 
 Bots use the same roster, definitions, access controls, conversations, schedules,
 and Telegram bindings as macOS. Their native authority helper requires an
@@ -178,7 +188,12 @@ AppImages retain toggle dictation. Setup is explicit for each app session; start
 dialog. The desktop may assign a different trigger, which Aiden displays. If
 the session ends, or shortcuts are edited, Aiden returns to toggle behavior.
 Desktops without this portal keep toggle dictation. Wayland compositors own final
-placement of the dictation pill, so exact bottom-center positioning may vary.
+placement of floating auxiliary windows (the dictation pill and the Floating Quick
+Chat window), so exact screen coordinates may vary under Wayland. Floating Quick
+Chat (`Ctrl+Shift+Space` by default) registers through Aiden's standard global
+shortcut mechanism (`globalShortcut`, like toggle dictation — not the
+hold-to-dictate Global Shortcuts portal) and can be rebound or disabled in
+Settings → Keyboard shortcuts.
 
 Provider inventories may refresh only from the provider services the user has
 configured. Descriptive model metadata uses the bundled release snapshot or a validated

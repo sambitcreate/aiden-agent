@@ -126,6 +126,9 @@ export function createFirstMessageCommitter(deps: Dependencies) {
         if (!target) {
           throw new Error("The selected workspace is no longer available.");
         }
+        if (input.ephemeral === true && target.noWorkspace !== true) {
+          throw new Error("Temporary chats can only start in No workspace.");
+        }
         assertCurrent();
         assignment = await deps.prepareWorkspace?.(input.workspaceId);
         workspaceId = assignment?.workspaceId ?? input.workspaceId;
@@ -136,6 +139,7 @@ export function createFirstMessageCommitter(deps: Dependencies) {
           id: input.chatId,
           title: input.title,
           workspaceId,
+          ...(input.ephemeral === true ? { ephemeral: true as const } : {}),
           providerId: input.providerId,
           model: input.metaModel,
           turnId: input.turnId,

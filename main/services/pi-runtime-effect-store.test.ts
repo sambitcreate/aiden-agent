@@ -1021,3 +1021,40 @@ test("legacy printable runtime identities remain usable with private receipt ide
     assert.equal(JSON.stringify(receipts).includes("run.valid"), false);
   });
 });
+
+test("a recovery boundary carries what the caller knows a cut-off call already did, once", async () => {
+  await withTempDirectory(async (directory) => {
+    const effectRoot = path.join(directory, "effects");
+    const piRoot = path.join(directory, "pi");
+    await mkdir(piRoot, { recursive: true });
+    const first = makeStore(effectRoot);
+    await first.initialize();
+    const startOperation = operation("operation-start", "chat-lead");
+    await first.startOperation(startOperation);
+    const startEffect = effect(startOperation, "effect-start", { toolName: "child_chats", replay: "never" });
+    await first.prepareEffect(startEffect);
+    await first.markEffectDispatchStarted(effectOwner(startEffect));
+
+    const restarted = makeStore(effectRoot, 2_000);
+    await restarted.initialize();
+    const pending = await restarted.listEffectsNeedingRecoveryByChat("chat-lead");
+    const session = await new PiCompactionSessionStore({ root: async () => piRoot }).openChat("chat-lead");
+    await session.appendMessage({ role: "user", content: "start two chats", timestamp: 1 });
+    const described: string[][] = [];
+    const describe = async (effects: readonly { toolCallId: string }[]) => {
+      described.push(effects.map(({ toolCallId }) => toolCallId));
+      return `Your start call ${effects[0]!.toolCallId} had already started "Docs" (chat_id chat-9).`;
+    };
+    await recordPiEffectRecoveryBoundary(session, pending, describe);
+    // Recorded once: a second pass finds the marker and adds nothing.
+    await recordPiEffectRecoveryBoundary(session, pending, describe);
+
+    const context = await session.buildContext();
+    const boundaries = context.messages.filter((message) => message.role === "assistant");
+    assert.equal(boundaries.length, 1);
+    const text = JSON.stringify(boundaries[0]);
+    assert.match(text, /Do not repeat these operations automatically/u);
+    assert.match(text, /Your start call call-effect-start had already started \\"Docs\\" \(chat_id chat-9\)\./u);
+    assert.deepEqual(described, [["call-effect-start"]]);
+  });
+});

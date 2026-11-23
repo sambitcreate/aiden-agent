@@ -1,9 +1,10 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
-  chatToolOffers, chatTurnAudienceFor, chatTurnToolRefusal, declaresAppTools, declaresWindowTools, firstTurnToolRefusal, windowlessChatTurn,
+  argIs, chatToolOffers, offersChildChats, screenedPromptAnswersPerson, chatTurnArgsToolRefusal, chatTurnAudienceFor, chatTurnToolRefusal, declaresAppTools, declaresWindowTools, firstTurnToolRefusal, personWroteChatTurn, refusedForWantOfWindow, windowlessChatTurn,
   type ChatToolSurface, type ChatTurnOwnerScope, type ChatTurnAudience, type ChatTurnAudienceOptions, type ChatTurnAudienceParams,
 } from "./chat-turn-tool-policy.js";
+import { scheduledGenerationSurface } from "./conversation-surface-generation.js";
 import { UNATTENDED_FOLLOW_UP_GENERATION } from "./follow-through/notice-delivery.js";
 
 const workspace: ChatToolSurface = { usageSource: "chat", bot: false, assistant: false, harnessProvider: false };
@@ -145,4 +146,231 @@ test("Aiden's settings and scheduling tools are declared only for a turn a perso
     ["an attended Assistant turn", { ...owed, window: true, assistantMode: true }, { ...may, attendedAssistant: true }, true],
   ];
   for (const [label, scope, turn, declares] of cases) assert.equal(declaresAppTools(scope, turn), declares, label);
+});
+
+test("a check-back is set only in a turn the person started; list and cancel work in every turn", () => {
+  const cases: Array<[string, ChatTurnAudienceOptions, boolean]> = [
+    // label, the turn's options, may set
+    ["a turn in the chat's window", {}, true],
+    ["a phone- or paired-Mac-sent turn", { visualAudience: "remote" }, true],
+    ["an unattended follow-up (a check-back firing)", { ...UNATTENDED_FOLLOW_UP_GENERATION }, false],
+    ["an owed turn answering a notice, with no window", { windowless: true }, false],
+    ["an owed turn answering the person's queued message", { windowless: true, answersPerson: true }, true],
+    ["an unattended follow-up never counts as the person's", { ...UNATTENDED_FOLLOW_UP_GENERATION, windowless: true, answersPerson: true }, false],
+    ["a goal round", { goalRound: true }, false],
+    // A lead chat's agent sent it into a chat it started: not the person.
+    ["a lead chat's turn in a chat it started", { leadChatTurn: true, visualAudience: "remote" }, false],
+  ];
+  for (const [label, options, maySet] of cases) {
+    // Run the way a turn runs them: the name-only refusal first, then the args-aware one.
+    const turn = chatTurnAudienceFor(options, {});
+    const refuse = firstTurnToolRefusal([chatTurnToolRefusal(workspace, turn), chatTurnArgsToolRefusal(turn)]);
+    const reason = refuse("check_back", { action: "set", in_minutes: 10, note: "look again" });
+    if (maySet) assert.equal(reason, undefined, label);
+    else assert.match(reason ?? "", /^check_back cannot set a check-back in this turn: Aiden started it/u, label);
+    assert.equal(refuse("check_back", { action: "list" }), undefined, label);
+    assert.equal(refuse("check_back", { action: "cancel", id: "cb_1" }), undefined, label);
+    // The same arguments on another tool are not this rule's business.
+    assert.equal(refuse("wake_up", { action: "set" }), undefined, label);
+  }
+  // Arguments the model sent malformed are left for the tool's own validation.
+  const woken = chatTurnArgsToolRefusal(chatTurnAudienceFor({ unattended: true }, {}));
+  assert.equal(woken("check_back", null), undefined);
+  assert.equal(woken("check_back", ["set"]), undefined);
+});
+
+test("child_chats starts chats only in a turn the person started; its other actions work in every turn", () => {
+  const cases: Array<[string, ChatTurnAudienceOptions, boolean]> = [
+    // label, the turn's options, may start
+    ["a turn in the chat's window", {}, true],
+    ["a phone- or paired-Mac-sent turn", { visualAudience: "remote" }, true],
+    ["an unattended follow-up (a woken lead)", { ...UNATTENDED_FOLLOW_UP_GENERATION }, false],
+    ["an owed turn with no window", { windowless: true }, false],
+    ["a goal round", { goalRound: true }, false],
+    ["a lead chat's turn in a chat it started", { leadChatTurn: true, visualAudience: "remote" }, false],
+  ];
+  for (const [label, options, mayStart] of cases) {
+    const turn = chatTurnAudienceFor(options, {});
+    const refuse = firstTurnToolRefusal([chatTurnToolRefusal(workspace, turn), chatTurnArgsToolRefusal(turn)]);
+    const reason = refuse("child_chats", { action: "start", chats: [{ title: "Docs", task: "Update the docs" }] });
+    if (mayStart) assert.equal(reason, undefined, label);
+    else assert.match(reason ?? "", /^child_chats cannot start chats in this turn: starting chats needs the person here/u, label);
+    for (const action of ["list", "read", "wait", "send", "stop"]) {
+      assert.equal(refuse("child_chats", { action, chat_id: "c1", chat_ids: ["c1"], text: "go on" }), undefined, `${label}: ${action}`);
+    }
+  }
+});
+
+test("only a chat turn the person wrote counts as theirs; a scheduled run posting into the chat does not", () => {
+  // The options a scheduled task's run starts with, as its surface builds them.
+  const scheduled = scheduledGenerationSurface({
+    chatId: "c1", streamId: "s1", ownerId: "o1", providerId: "p", model: "m", mode: undefined,
+    prompt: "Check the build", permission: "full", excludeToolNames: new Set(), allowMcpTools: false, keepChatModel: true,
+  }).options;
+  const cases: Array<[string, string | undefined, ChatTurnAudienceOptions, boolean]> = [
+    // label, the run's usage source, the turn's options, the person wrote it
+    ["a turn in the chat's window", undefined, {}, true],
+    ["a phone- or paired-Mac-sent turn", undefined, { visualAudience: "remote" }, true],
+    ["an owed turn answering the person's queued message", "chat", { windowless: true, answersPerson: true }, true],
+    ["a scheduled task's run in the chat", scheduled.usageSource, scheduled as ChatTurnAudienceOptions, false],
+    ["an unattended follow-up", UNATTENDED_FOLLOW_UP_GENERATION.usageSource, { ...UNATTENDED_FOLLOW_UP_GENERATION }, false],
+    ["an owed turn answering a notice", "chat", { windowless: true }, false],
+    ["a goal round", "chat", { goalRound: true }, false],
+    ["a Telegram turn", "telegram", {}, false],
+  ];
+  for (const [label, usageSource, options, personWrote] of cases) {
+    assert.equal(personWroteChatTurn(usageSource, chatTurnAudienceFor(options, {})), personWrote, label);
+  }
+});
+
+test("an args-aware rule is one row: a tool, which turns, which arguments and a reason", () => {
+  const refuse = chatTurnArgsToolRefusal(chatTurnAudienceFor({ goalRound: true }, {}), [
+    { tool: "subagent", turns: (turn) => turn.goalRound === true, args: argIs("execution", "background"), reason: "no background helpers in a goal round" },
+  ]);
+  assert.equal(refuse("subagent", { execution: "background" }), "no background helpers in a goal round");
+  assert.equal(refuse("subagent", { execution: "foreground" }), undefined);
+  assert.equal(refuse("subagent", {}), undefined);
+  const attended = chatTurnArgsToolRefusal(chatTurnAudienceFor({}, {}), [
+    { tool: "subagent", turns: (turn) => turn.goalRound === true, args: argIs("execution", "background"), reason: "x" },
+  ]);
+  assert.equal(attended("subagent", { execution: "background" }), undefined, "the rule applies only to the turns it names");
+});
+
+test("a goal round may run only read-only helpers; the person's own turns may run any", () => {
+  const round = chatTurnAudienceFor({ goalRound: true, windowless: true }, {});
+  const refuseRound = firstTurnToolRefusal([chatTurnToolRefusal(workspace, round), chatTurnArgsToolRefusal(round)]);
+  const person = chatTurnAudienceFor({}, {});
+  const refusePerson = firstTurnToolRefusal([chatTurnToolRefusal(workspace, person), chatTurnArgsToolRefusal(person)]);
+  const task = (role: string, capabilities?: Record<string, unknown>) => ({ role, label: role, task: "look", ...(capabilities ? { capabilities } : {}) });
+  const cases: Array<[string, Record<string, unknown>, boolean]> = [
+    // label, the call's arguments, refused in a round
+    ["read-only roles", { tasks: [task("scout"), task("planner"), task("reviewer")] }, false],
+    ["read-only with web and read connectors", { tasks: [task("scout", { workspaceRead: true, web: true, mcp: [{ serverId: "s", tools: ["t"] }] })] }, false],
+    ["listing what can be requested", { action: "list" }, false],
+    ["an implementer", { tasks: [task("scout"), task("implementer")] }, true],
+    ["a reviewer asking for writes", { tasks: [task("reviewer", { workspaceRead: true, web: false, mcp: [], workspaceWrite: true })] }, true],
+    ["a batch asking for shell", { capabilities: { workspaceRead: true, web: false, mcp: [], shell: true }, tasks: [task("scout")] }, true],
+    ["a task asking for mutating connectors", { tasks: [task("scout", { workspaceRead: false, web: false, mcp: [], mcpMutations: [{ serverId: "s", tools: ["write"] }] })] }, true],
+    ["a task asking to nest helpers", { tasks: [task("planner", { workspaceRead: true, web: false, mcp: [], delegate: true })] }, true],
+    ["a task with no role", { tasks: [{ label: "x", task: "y" }] }, true],
+  ];
+  for (const [label, args, refused] of cases) {
+    const reason = refuseRound("subagent", args);
+    if (refused) assert.match(reason ?? "", /^subagent can only run read-only helpers in a keep-going round/u, label);
+    else assert.equal(reason, undefined, label);
+    assert.equal(refusePerson("subagent", args), undefined, `${label}: the person's own turn`);
+  }
+});
+
+test("a windowless goal round refuses window tools and approvals only the chat's window can give, pointing at Continue here; a round on screen has them", () => {
+  const audience = { ...chatTurnAudienceFor({ goalRound: true, windowless: true }, {}), windowOnlyToolNames: new Set(["browser_navigate"]) };
+  const round = chatTurnToolRefusal(workspace, audience);
+  for (const name of ["classify", "generate_image", "computer_use", "browser_navigate", "todo"]) {
+    assert.match(round(name) ?? "", new RegExp(`^${name} is not available in this round: the chat isn't open on screen.*Continue here`, "u"), name);
+    assert.equal(refusedForWantOfWindow(audience, name), true, name);
+  }
+  assert.equal(round("bash"), undefined, "an ordinary approval waits for the person");
+  assert.equal(refusedForWantOfWindow(audience, "bash"), false);
+  const owedAudience = chatTurnAudienceFor({ windowless: true }, {});
+  const owed = chatTurnToolRefusal(workspace, owedAudience);
+  assert.equal(owed("generate_image"), undefined, "an owed turn keeps its Deny-only card");
+  assert.match(owed("computer_use") ?? "", /no window owns it/u, "an owed turn has no Continue here");
+  const onScreenAudience = chatTurnAudienceFor({ goalRound: true }, {});
+  const onScreen = chatTurnToolRefusal(workspace, onScreenAudience);
+  for (const name of ["generate_image", "computer_use", "todo"]) {
+    assert.equal(onScreen(name), undefined, `${name}: a round a window owns can use its window`);
+    assert.equal(refusedForWantOfWindow(onScreenAudience, name), false, name);
+  }
+});
+
+test("propose_goal runs only in a turn the person started on this computer", () => {
+  const refusal = (options: Parameters<typeof chatTurnAudienceFor>[0]) =>
+    chatTurnArgsToolRefusal(chatTurnAudienceFor(options, {}))("propose_goal", { objective: "Ship the release" });
+  assert.equal(refusal({}), undefined, "the person's own message");
+  assert.equal(refusal({ windowless: true, answersPerson: true }), undefined, "the owed turn answering the person's queued message");
+  for (const [label, options] of [
+    ["a keep-going round", { goalRound: true }],
+    ["a keep-going round off screen", { goalRound: true, windowless: true }],
+    ["an unattended follow-up", { unattended: true }],
+    ["a turn answering a notice", { windowless: true }],
+    ["a paired device's turn", { visualAudience: "remote" as const }],
+    ["a lead chat's turn in a chat it started", { leadChatTurn: true }],
+  ] as const) {
+    assert.match(refusal(options) ?? "", /^propose_goal is not available in this turn/u, label);
+  }
+});
+
+test("a queued turn answers the person only when its screened prompt is the person's own message", () => {
+  const messages = [
+    { id: "person", role: "user" },
+    { id: "notice", role: "user", notice: { version: 1, source: "check_back", tone: "info", title: "Check-back", summary: "Now" } },
+    { id: "reply", role: "assistant" },
+  ];
+  assert.equal(screenedPromptAnswersPerson(messages, { messageId: "person" }), true);
+  // A notice wakes the chat; it is not the person asking.
+  assert.equal(screenedPromptAnswersPerson(messages, { messageId: "notice" }), false);
+  assert.equal(screenedPromptAnswersPerson(messages, { messageId: "reply" }), false);
+  assert.equal(screenedPromptAnswersPerson(messages, { messageId: "gone" }), false);
+  assert.equal(screenedPromptAnswersPerson(messages, undefined), false);
+});
+
+test("child_chats is offered to a workspace chat nobody started, never to a started chat, an unreadable one or an outside app's turn", () => {
+  const offer = {
+    followThroughAvailable: true,
+    temporary: false,
+    workspace: true,
+    lineage: {},
+    enabled: true,
+    hostSupports: true,
+  };
+  assert.equal(offersChildChats(offer), true);
+  assert.equal(
+    offersChildChats({ ...offer, lineage: { startedBy: { version: 1, kind: "chat", chatId: "lead-1", at: 1 } } }),
+    false,
+    "a started chat can't start chats",
+  );
+  assert.equal(offersChildChats({ ...offer, lineage: undefined }), false, "a chat whose record can't be read");
+  assert.equal(offersChildChats({ ...offer, excludedToolNames: new Set(["child_chats"]) }), false, "an outside MCP app's turn");
+  assert.equal(offersChildChats({ ...offer, excludedToolNames: new Set(["ask_user_question"]) }), true);
+  assert.equal(offersChildChats({ ...offer, enabled: false }), false);
+  assert.equal(offersChildChats({ ...offer, workspace: false }), false);
+  assert.equal(offersChildChats({ ...offer, temporary: true }), false, "a Temporary Quick Chat until it's saved or attached");
+});
+
+test("a scheduled task's run (on its schedule, from a trigger, or Run now) can't set a check-back, suggest a goal or start chats", () => {
+  const surface = (input: { prompt: string; keepChatModel?: boolean }) =>
+    scheduledGenerationSurface({
+      chatId: "chat-1",
+      streamId: "scheduled-task-1-abc",
+      ownerId: "background-scheduled-task-1-abc",
+      workspaceId: "ws-1",
+      providerId: "anthropic",
+      model: "claude",
+      mode: undefined,
+      permission: "read-only",
+      excludeToolNames: new Set<string>(),
+      allowMcpTools: false,
+      ...input,
+    });
+  const runs = [
+    // The task's own chat, on its schedule or Run now (the same run).
+    ["a run in the task's own chat", surface({ prompt: "Summarize the open pull requests" })],
+    // A trigger's event follows the person's instructions as data.
+    ["a trigger run", surface({ prompt: "Summarize the change\n\n<event>diff</event>" })],
+    // Posting into the chat the task was made in, which keeps its own model.
+    ["a run posting into the chat it was made in", surface({ prompt: "Check the deploy", keepChatModel: true })],
+  ] as const;
+  for (const [label, run] of runs) {
+    for (const options of [run.options, { ...run.options, usageSource: "chat" as const }]) {
+      const turn = chatTurnAudienceFor(options, {});
+      const refuse = firstTurnToolRefusal([chatTurnToolRefusal(workspace, turn), chatTurnArgsToolRefusal(turn)]);
+      const as = `${label} (${options.usageSource})`;
+      assert.match(refuse("check_back", { action: "set", in_minutes: 10, note: "look again" }) ?? "", /^check_back cannot set a check-back in this turn/u, as);
+      assert.match(refuse("propose_goal", { objective: "Ship the release" }) ?? "", /^propose_goal is not available in this turn/u, as);
+      assert.match(refuse("child_chats", { action: "start", chats: [{ title: "Docs", task: "Update the docs" }] }) ?? "", /^child_chats cannot start chats in this turn/u, as);
+      // Reading and tidying up still work.
+      assert.equal(refuse("check_back", { action: "list" }), undefined, as);
+      assert.equal(refuse("child_chats", { action: "list" }), undefined, as);
+    }
+  }
 });

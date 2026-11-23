@@ -752,6 +752,7 @@ struct AidenNativeAppControlPanel: View {
                             }.disabled(pending || row.disabledReason != nil || snapshot.policy == "disabled")
                         } else if case .boolean(let flag) = row.value {
                             Toggle(row.label, isOn: Binding(get: { flag }, set: { propose(row, .boolean($0)) }))
+                                .aidenSwitchStyle()
                                 .disabled(pending || row.disabledReason != nil || snapshot.policy == "disabled")
                         }
                         Text(row.description).font(.caption).foregroundStyle(palette.secondary)

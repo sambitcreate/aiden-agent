@@ -73,6 +73,19 @@ test("the Composio allowance never starts connection setup on unattended or mixe
   assert.ok(await botToolApprovalSummary("composio", connect, facts), "the normal mutating action approval remains required");
 });
 
+test("a Composio approval card names the app actions the call runs", async () => {
+  const descriptor = composioServiceToolDescriptor();
+  const facts = { ...bareFacts(), mcpTools: async () => new Map([["composio", botMcpLiveToolGrantFacts(descriptor)!]]), mcpToolDescriptor: async () => descriptor };
+  const run = (...slugs: string[]) => ({ action: "call", tool: "COMPOSIO_MULTI_EXECUTE_TOOL", arguments: { tools: slugs.map((tool_slug) => ({ tool_slug, arguments: {} })) } });
+  assert.equal(await botToolApprovalSummary("composio", run("GMAIL_SEND_EMAIL"), facts), "Composio · Gmail: Send email");
+  assert.equal(
+    await botToolApprovalSummary("composio", run("GOOGLECALENDAR_EVENTS_LIST", "SLACK_SEND_MESSAGE", "NOTION_CREATE_PAGE", "GMAIL_FETCH_EMAILS"), facts),
+    "Composio · Google Calendar: Events list, Slack: Send message, Notion: Create page, and 1 more",
+  );
+  assert.equal(await botToolApprovalSummary("composio", { action: "call", tool: "COMPOSIO_MANAGE_CONNECTIONS", arguments: {} }, facts), "Composio · Connect or manage an app account");
+  assert.equal(await botToolApprovalSummary("composio", run("not a slug!"), facts), "Composio · Run app actions");
+});
+
 /** [request ids of the run's inputs, whether a person is there to answer a card]. */
 const RUNS: Array<[string, readonly (string | undefined)[], boolean]> = [
   ["a message from the Mac", [DESK], true],
