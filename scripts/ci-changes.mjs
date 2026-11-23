@@ -20,7 +20,9 @@ export const AREA_NAMES = Object.freeze(["desktop", "apple", "ios", "android", "
 export const MODEL_CATALOG_PATHS = Object.freeze(["resources/model-capabilities.json"]);
 
 const SAFE_ROOT_DOCUMENT =
-  /^(?:README|CHANGELOG|AGENTS|CLAUDE|PRODUCT|LICENSE|THIRD_PARTY_NOTICES)\.(?:md|markdown)$/u;
+  /^(?:README|CHANGELOG|CONTRIBUTING|SECURITY|CODE_OF_CONDUCT|AGENTS|CLAUDE|PRODUCT|LICENSE|THIRD_PARTY_NOTICES)\.(?:md|markdown)$/u;
+const SAFE_GITHUB_TEMPLATE =
+  /^\.github\/(?:ISSUE_TEMPLATE\/[^/]+\.(?:ya?ml|md)|(?:pull_request_template|PULL_REQUEST_TEMPLATE)\.(?:md|markdown)|PULL_REQUEST_TEMPLATE\/[^/]+\.(?:md|markdown))$/u;
 const SAFE_PAPERCUT_DOCUMENT = /^\.papercuts\/.+\.md$/u;
 const SAFE_MEMORY_DOCUMENT = /^\.memory\/.+\.md$/u;
 // Documents that tests or packaging read. Editing them must run their readers.
@@ -159,6 +161,7 @@ export function isSafeDocumentationPath(path) {
     !PACKAGED_DOCUMENTS.has(path) &&
     ((path.startsWith("docs/") && /\.(?:md|markdown)$/u.test(path)) ||
       SAFE_ROOT_DOCUMENT.test(path) ||
+      SAFE_GITHUB_TEMPLATE.test(path) ||
       SAFE_PAPERCUT_DOCUMENT.test(path) ||
       SAFE_MEMORY_DOCUMENT.test(path))
   );

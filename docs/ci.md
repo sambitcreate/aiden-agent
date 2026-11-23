@@ -11,8 +11,10 @@ PRs compare the merge base and PR head using complete, NUL-delimited Git output.
 Rename detection is disabled so both the removed and added paths select work.
 `scripts/ci-changes.mjs` maps each path to seven areas: `desktop`, `apple`, `ios`,
 `android`, `cli`, `linux` and `catalog`. Only explicit prose documentation paths
-select nothing; contributor-instruction files such as `AGENTS.md` and the design
-guide are not treated as prose. Android-only and iOS-only PRs select their own
+(including root community docs such as `README.md`, `CONTRIBUTING.md`, `SECURITY.md`,
+and `CODE_OF_CONDUCT.md`, plus `.github/ISSUE_TEMPLATE/`—validated by the always-run
+policy job—and pull request templates) select nothing; contributor-instruction files
+such as `AGENTS.md` and the design guide are not treated as prose. Android-only and iOS-only PRs select their own
 platform checks, renderer-only PRs select desktop checks, and CLI-only PRs select
 the CLI jobs plus static checks. Desktop changes always imply `catalog`.
 `renderer/shared/` selects `desktop`, `cli` and `linux`; the files native clients

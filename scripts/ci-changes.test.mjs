@@ -172,9 +172,19 @@ test("host-only shared helpers still avoid unrelated native and Apple jobs", () 
 test("documentation-only decisions are restricted to the explicit safe paths", () => {
   assert.equal(isSafeDocumentationPath("docs/reference.txt"), false);
   assert.equal(isSafeDocumentationPath("README.md"), true);
+  assert.equal(isSafeDocumentationPath("CONTRIBUTING.md"), true);
+  assert.equal(isSafeDocumentationPath("SECURITY.md"), true);
+  assert.equal(isSafeDocumentationPath("CODE_OF_CONDUCT.md"), true);
   assert.equal(isSafeDocumentationPath("CLAUDE.md"), true);
   assert.equal(isSafeDocumentationPath("PRODUCT.md"), true);
   assert.equal(isSafeDocumentationPath("LICENSE.md"), true);
+  assert.equal(isSafeDocumentationPath(".github/ISSUE_TEMPLATE/config.yml"), true);
+  assert.equal(isSafeDocumentationPath(".github/ISSUE_TEMPLATE/bug_report.yml"), true);
+  assert.equal(isSafeDocumentationPath(".github/ISSUE_TEMPLATE/feature_request.yaml"), true);
+  assert.equal(isSafeDocumentationPath(".github/ISSUE_TEMPLATE/legacy.md"), true);
+  assert.equal(isSafeDocumentationPath(".github/pull_request_template.md"), true);
+  assert.equal(isSafeDocumentationPath(".github/PULL_REQUEST_TEMPLATE.md"), true);
+  assert.equal(isSafeDocumentationPath(".github/PULL_REQUEST_TEMPLATE/default.md"), true);
   // Tests or packaging read these documents.
   assert.equal(isSafeDocumentationPath("AGENTS.md"), false);
   assert.equal(isSafeDocumentationPath("docs/design-guide.md"), false);
@@ -186,18 +196,32 @@ test("documentation-only decisions are restricted to the explicit safe paths", (
   assert.equal(isSafeDocumentationPath(".memory/../main/notes.md"), false);
   assert.equal(isSafeDocumentationPath("android/README.md"), false);
   assert.equal(isSafeDocumentationPath(".github/README.md"), false);
+  assert.equal(isSafeDocumentationPath(".github/ISSUE_TEMPLATE/script.sh"), false);
+  assert.equal(isSafeDocumentationPath(".github/workflows/ci.yml"), false);
+  assert.equal(isSafeDocumentationPath(".github/CODEOWNERS"), false);
   assert.equal(isSafeDocumentationPath("renderer/AGENTS.md"), false);
   assert.equal(isSafeDocumentationPath("docs/../main/service.ts"), false);
 
   assert.deepEqual(decideChangedAreas(["docs/guide.md", "android/app/build.gradle"]), select("android"));
   assert.deepEqual(decideChangedAreas(["README.md", "unknown/new-file.bin"]), allTrue);
-  assert.deepEqual(analyzeChangedPaths(["docs/guide.md", "README.md", ".memory/ci.md"]), {
-    ...allFalse,
-    areas: allFalse,
-    changedCount: 3,
-    safeDocsOnly: true,
-    reason: "documentation-only",
-  });
+  assert.deepEqual(
+    analyzeChangedPaths([
+      "docs/guide.md",
+      "README.md",
+      "CONTRIBUTING.md",
+      "SECURITY.md",
+      ".github/ISSUE_TEMPLATE/bug_report.yml",
+      ".github/pull_request_template.md",
+      ".memory/ci.md",
+    ]),
+    {
+      ...allFalse,
+      areas: allFalse,
+      changedCount: 7,
+      safeDocsOnly: true,
+      reason: "documentation-only",
+    },
+  );
   assert.deepEqual(analyzeChangedPaths(["CLAUDE.md", "renderer/components/chat.tsx"]), {
     ...desktopOnly,
     areas: desktopOnly,
