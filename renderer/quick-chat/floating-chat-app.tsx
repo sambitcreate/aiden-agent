@@ -88,6 +88,13 @@ function resolveDefaultTargetMode(
   return { kind: "ephemeral" };
 }
 
+/** The model a Quick Chat turn runs on, with an Agent Slider stop's effort. */
+interface QuickChatSelection {
+  providerId: string;
+  model: string;
+  thinkingLevel?: GenerationThinkingLevel;
+}
+
 export function FloatingChatApp() {
   const qc = useQueryClient();
   const textareaRef = React.useRef<HTMLTextAreaElement | null>(null);
@@ -115,11 +122,7 @@ export function FloatingChatApp() {
 
   // `thinkingLevel` is set only by an Agent Slider stop (or the main window's
   // new-chat pick); a model from the list runs at its saved level.
-  const [selectedModel, setSelectedModel] = React.useState<{
-    providerId: string;
-    model: string;
-    thinkingLevel?: GenerationThinkingLevel;
-  }>({
+  const [selectedModel, setSelectedModel] = React.useState<QuickChatSelection>({
     providerId: "",
     model: "",
   });
@@ -373,28 +376,48 @@ export function FloatingChatApp() {
   // `level`: a stop's effort, or null for a stop without one; left out, a list
   // pick keeps the chat's level only while the model stays the same.
   const selectionPickRef = React.useRef(0);
+  // The latest pick's save, resolving to the selection main now holds (the
+  // saved pick, or the chat's own selection again if main refused it). Send
+  // waits on it, so a turn never overtakes the pick it was meant to run on.
+  const pendingSelectionRef = React.useRef<Promise<QuickChatSelection> | null>(null);
   const applySelection = React.useCallback(
     (providerId: string, model: string, level?: GenerationThinkingLevel | null) => {
       modelTouchedRef.current = true;
-      setSelectedModel({ providerId, model, ...(level ? { thinkingLevel: level } : {}) });
+      const picked: QuickChatSelection = { providerId, model, ...(level ? { thinkingLevel: level } : {}) };
+      setSelectedModel(picked);
       const owned = chatRef.current;
       if (!owned) return;
       const pick = ++selectionPickRef.current;
-      void chatsApi.setModel(owned.id, providerId, model, level).then(
+      const isLatest = () => pick === selectionPickRef.current && chatRef.current?.id === owned.id;
+      const authoritative = (chat: Chat): QuickChatSelection | undefined =>
+        chat.providerId && chat.model
+          ? {
+              providerId: chat.providerId,
+              model: chat.model,
+              ...(chat.thinkingLevel ? { thinkingLevel: chat.thinkingLevel } : {}),
+            }
+          : undefined;
+      const save = chatsApi.setModel(owned.id, providerId, model, level).then(
         (saved) => {
-          if (!saved || pick !== selectionPickRef.current || chatRef.current?.id !== saved.id) return;
-          setChat(saved);
-          if (!saved.providerId || !saved.model) return;
-          setSelectedModel({
-            providerId: saved.providerId,
-            model: saved.model,
-            ...(saved.thinkingLevel ? { thinkingLevel: saved.thinkingLevel } : {}),
-          });
+          const selection = saved ? authoritative(saved) : undefined;
+          if (saved && isLatest()) {
+            setChat(saved);
+            if (selection) setSelectedModel(selection);
+          }
+          return selection ?? picked;
         },
         (error: unknown) => {
           toast.error(error instanceof Error ? error.message : "Couldn’t change this chat’s model.");
+          // Main kept the chat's own selection: show that again, not the refused pick.
+          const kept = authoritative(chatRef.current ?? owned) ?? picked;
+          if (isLatest()) setSelectedModel(kept);
+          return kept;
         },
       );
+      pendingSelectionRef.current = save;
+      void save.finally(() => {
+        if (pendingSelectionRef.current === save) pendingSelectionRef.current = null;
+      });
     },
     [],
   );
@@ -715,6 +738,11 @@ export function FloatingChatApp() {
         startTurnStream(created, turnId, selectedModel);
       } else {
         const activeChatId = chat.id;
+        // A pick made just before Send is saved on the chat first, so the turn
+        // and the chat's stored model and effort agree.
+        const pendingSelection = pendingSelectionRef.current;
+        const choice = pendingSelection ? await pendingSelection : selectedModel;
+        if (generationIntentRef.current !== sendIntent || chatRef.current?.id !== activeChatId) return;
         const turnId = createChatTurnId();
         const updated = await chatsApi.appendMessage(
           activeChatId,
@@ -724,8 +752,8 @@ export function FloatingChatApp() {
             ...(outgoingAttachments.length > 0 ? { attachments: outgoingAttachments } : {}),
           },
           {
-            providerId: selectedModel.providerId,
-            model: selectedModel.model,
+            providerId: choice.providerId,
+            model: choice.model,
             turnId,
           },
         );
@@ -733,7 +761,7 @@ export function FloatingChatApp() {
           return;
         }
         setChat(updated);
-        startTurnStream(updated, turnId, selectedModel);
+        startTurnStream(updated, turnId, choice);
       }
     } catch (err) {
       if (generationIntentRef.current !== sendIntent) return;
