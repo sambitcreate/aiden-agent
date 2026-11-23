@@ -260,7 +260,9 @@ A saved helper conversation differs from the main chat in a few small ways:
 - MCP tools show their generic label, not the server-specific one.
 - Each message's text is recorded on its own, so its text anchors always start at 0. This matches what the main chat computes for the same message.
 - Thinking text is not saved, so thinking segments are not reconciled at the end of a message.
-- When a chat reply finishes, the main chat waits at most 250 ms for its helpers' final saves. A slower save finishes in the background.
+- When a chat reply finishes, the main chat waits at most 250 ms for its helpers' final saves. A slower save finishes in the background. Quitting Aiden waits up to 1 second more for any save still in progress.
+- The filter that hides credentials in a helper's words is a best-effort heuristic, as it is for a stopped helper's handed-back work. It hides private keys, secret-named values, recovery phrases and codes (on one line, indented or not, numbered, or split across lines), and the wrapped rest of a hidden value. It can't catch every layout. For example, a secret wrapped onto a line that reads as a capitalised word, like `Done.`, is kept, so that ordinary text after a hidden value stays readable.
+- Filtering is per message, so a secret split across two messages is not caught.
 
 ## Rules for every PR
 

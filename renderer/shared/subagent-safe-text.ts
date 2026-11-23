@@ -1042,17 +1042,31 @@ function labelBlockLooksLikeCredential(block: string): boolean {
 
 const MULTILINE_BASE64_LINE = /^[A-Za-z0-9+/]{16,}={0,2}$/u;
 const RECOVERY_WORD = /^[a-z]{2,12}$/u;
-const RECOVERY_NUMBERING = /^\d{1,2}[.):]?$/u;
+const RECOVERY_NUMBERING = /^\d{1,2}[.):-]?$/u;
+/** A list number written onto its word, as in `1.word` or `1-word`. */
+const RECOVERY_NUMBER_PREFIX = /^\d{1,2}[.):-](?=[A-Za-z])/u;
+
+/** The words of a possible recovery phrase, without list numbers. */
+function recoveryPhraseWords(text: string): string[] {
+  return text.trim().replace(/[.,;:!]+$/u, "").split(/[\s,]+/u)
+    .map((word) => word.replace(RECOVERY_NUMBER_PREFIX, ""))
+    .filter((word) => word && !RECOVERY_NUMBERING.test(word));
+}
 
 /**
- * A wallet-style recovery phrase: twelve or more lowercase words and nothing
- * else, allowing commas between them, numbering such as `1. word 2. word`, and
- * punctuation at the end.
+ * A wallet-style recovery phrase: twelve or more words and nothing else, all
+ * in lowercase, all in capitals or all in Title Case. Commas between them,
+ * numbering such as `1. word`, `1.word` or `1-word`, and punctuation at the
+ * end are allowed. A sentence, which capitalises only its first word, is not
+ * one.
  */
 function isRecoveryPhrase(text: string): boolean {
-  const words = text.trim().replace(/[.,;:!]+$/u, "").split(/[\s,]+/u)
-    .filter((word) => word && !RECOVERY_NUMBERING.test(word));
-  return words.length >= 12 && words.every((word) => RECOVERY_WORD.test(word));
+  const words = recoveryPhraseWords(text);
+  if (words.length < 12) return false;
+  const oneCase = words.every((word) => /^[a-z]+$/u.test(word)) ||
+    words.every((word) => /^[A-Z]+$/u.test(word)) ||
+    words.every((word) => /^[A-Z][a-z]+$/u.test(word));
+  return oneCase && words.every((word) => RECOVERY_WORD.test(word.toLowerCase()));
 }
 
 /**
@@ -1062,11 +1076,13 @@ function isRecoveryPhrase(text: string): boolean {
  */
 function twoWordSecretNameStart(value: string, offset: number, name: string): number | undefined {
   const last = name.toLowerCase();
-  const first = /^phrases?$/u.test(last)
+  const first = /^(?:phrases?|words)$/u.test(last)
     ? /(?:^|[^A-Za-z0-9_])((?:seed|recovery|secret|backup|wallet|mnemonic)[ \t]+)$/iu
     : /^codes?$/u.test(last)
-      ? /(?:^|[^A-Za-z0-9_])((?:recovery|backup)[ \t]+)$/iu
-      : undefined;
+      ? /(?:^|[^A-Za-z0-9_])((?:recovery|backup|pin)[ \t]+)$/iu
+      : last === "number"
+        ? /(?:^|[^A-Za-z0-9_])(pin[ \t]+)$/iu
+        : undefined;
   if (!first) return undefined;
   const match = first.exec(value.slice(Math.max(0, offset - 32), offset));
   return match ? offset - match[1]!.length : undefined;
@@ -1074,11 +1090,28 @@ function twoWordSecretNameStart(value: string, offset: number, name: string): nu
 
 /**
  * Names whose values are often ordinary: a random seed, a signature or OTP
- * algorithm, a `private` flag. They hide only values that look secret.
+ * algorithm, a `private` flag. They hide only values that look secret. A TOTP
+ * value is the shared secret itself, so `totp` is not one of them.
  */
-const WEAK_SECRET_NAME = /(?:seed|signature|otp|totp|cvv|pin|private)s?$/u;
-/** A short lowercase identifier such as `sha256` or `string`. */
-const IDENTIFIER_LIKE_VALUE = /^[a-z][a-z0-9]*(?:[-_][a-z0-9]+)*$/u;
+const WEAK_SECRET_NAME = /(?:seed|signature|otp|cvv|pin|private)s?$/u;
+/**
+ * Ordinary words a weak name's value can be, such as an algorithm, a type or
+ * a delivery method (`signature: "sha256"`, `otp: string`, `otp: sms`),
+ * compared without `-` and `_`.
+ */
+const PLAIN_WEAK_VALUE: ReadonlySet<string> = new Set([
+  "sha1", "sha224", "sha256", "sha384", "sha512", "sha3", "md5", "hmac", "hmacsha1", "hmacsha256",
+  "hmacsha512", "hs256", "hs384", "hs512", "rs256", "rs384", "rs512", "es256", "es384", "es512",
+  "ps256", "eddsa", "ed25519", "ecdsa", "rsa", "rsasha256", "dsa", "pss", "pkcs1", "pkcs8",
+  "base64", "base64url", "hex", "utf8", "string", "str", "number", "boolean", "bool", "int",
+  "integer", "float", "bytes", "buffer", "object", "array", "any", "unknown", "text", "sms",
+  "email", "voice", "app", "authenticator", "totp", "hotp", "push", "random", "auto", "default",
+  "fixed", "static", "disabled", "enabled", "pending", "unset", "empty", "hidden", "masked",
+  "public", "internal", "protected", "readonly",
+]);
+/** A count of tokens, such as `max_tokens` or `inputTokens`, not a credential. */
+const TOKEN_COUNT_NAME = /(?:tokens|^(?:max|min|num|total|input|output|prompt|completion|cached|reasoning)token)$/u;
+const PLAIN_INTEGER = /^\d{1,3}(?:[,_]\d{3})+[,;]?$|^\d+[,;]?$/u;
 /** A long opaque token, like a key or a wallet seed in hex or base64. */
 const OPAQUE_SEED_VALUE = /^(?!\d+$)[A-Za-z0-9+/=_.-]{16,}$/u;
 
@@ -1141,23 +1174,30 @@ export function redactSecretNamedSameLineValues(value: string): string {
     const twoWordStart = quoted ? undefined : twoWordSecretNameStart(value, offset, name);
     if (twoWordStart === undefined && !blockNameHasSecretHint(name)) continue;
     const nameStart = twoWordStart ?? offset;
+    const firstWord = twoWordStart === undefined ? "" : value.slice(twoWordStart, offset).trim().toLowerCase();
     const normalized = name.toLowerCase().replace(/[_-]/gu, "");
-    const shortCaps = !quoted && twoWordStart === undefined && /^[A-Z]{2,4}$/u.test(name);
+    // `PIN code` and `PIN number` count anywhere, like `PIN`.
+    const shortCaps = !quoted && (twoWordStart === undefined ? /^[A-Z]{2,4}$/u.test(name) : firstWord === "pin");
     const settingShaped = !shortCaps && twoWordStart === undefined && (quoted || blockNameIsSettingShaped(name));
     const equals = match[2]!.trimEnd().endsWith("=");
-    if (!settingShaped && !shortCaps && !equals &&
-      !PLAIN_NAME_PREFIX.test(value.slice(Math.max(0, nameStart - 64), nameStart))) continue;
     const valueStart = offset + match[2]!.length;
     const quotedValue = /["'`]/u.test(value[valueStart] ?? "");
-    // Code such as `const pin = readPin()` stays; a quoted literal still hides.
-    if (!quotedValue && sourceCodeAssignmentContext(value, offset)) continue;
     let lineEnd = valueStart;
     while (lineEnd < value.length && !/[\r\n\u2028\u2029]/u.test(value[lineEnd]!)) lineEnd += 1;
     const line = value.slice(0, lineEnd);
     const rest = line.slice(valueStart).trim();
     const phrase = isRecoveryPhrase(rest);
+    // A whole recovery phrase under a secret name is never prose, so it hides
+    // after a leading word too (`Secret recovery phrase:`, `My seed phrase:`).
+    if (!settingShaped && !shortCaps && !equals && !phrase &&
+      !PLAIN_NAME_PREFIX.test(value.slice(Math.max(0, nameStart - 64), nameStart))) continue;
+    // Code such as `const pin = readPin()` stays; a quoted literal still hides.
+    if (!quotedValue && sourceCodeAssignmentContext(value, offset)) continue;
+    // A token count such as `max_tokens: 4096` is a number, not a credential.
+    if (TOKEN_COUNT_NAME.test(normalized) && PLAIN_INTEGER.test(rest.replace(/^["'`]|["'`]$/gu, "").split(/\s/u)[0]!.replace(/["'`]/gu, ""))) continue;
     // A list of recovery or backup codes hides as a whole once one has a digit.
-    const codeList = twoWordStart !== undefined && /^codes?$/iu.test(name) && /\d/u.test(rest.split(/\s/u)[0]!);
+    const codeList = (firstWord === "recovery" || firstWord === "backup") && /^codes?$/iu.test(name) &&
+      /\d/u.test(rest.split(/\s/u)[0]!);
     const valueEnd = secretValueEnd(line, valueStart, (settingShaped && !equals) || phrase || codeList);
     const secret = value.slice(valueStart, valueEnd);
     if (valueEnd <= valueStart || secretValueIsShown(secret)) continue;
@@ -1166,7 +1206,7 @@ export function redactSecretNamedSameLineValues(value: string): string {
       // A seed is a secret only as a recovery phrase or a long opaque token.
       if (/seeds?$/u.test(normalized) && !/mnemonic|phrase/u.test(normalized) &&
         !OPAQUE_SEED_VALUE.test(unquotedSecret)) continue;
-      if (unquotedSecret.length <= 16 && IDENTIFIER_LIKE_VALUE.test(unquotedSecret)) continue;
+      if (PLAIN_WEAK_VALUE.has(unquotedSecret.toLowerCase().replace(/[-_]/gu, ""))) continue;
     }
     // After a prose word, a value followed by more words is a sentence, such
     // as `Token: the parser emits it`, unless the word carries a digit.
@@ -1181,12 +1221,116 @@ export function redactSecretNamedSameLineValues(value: string): string {
 const NEXT_LINE_BLOCK_ASSIGNMENT =
   /((?<![A-Za-z0-9_-])(?:\*{1,2}|_{1,2}|~~)?["'`]?([A-Za-z_][A-Za-z0-9_-]{0,63})["'`]?(?:\*{1,2}|_{1,2}|~~)?[ \t]*:[ \t]*)(?=\r?\n[ \t]+[^\s])/gu;
 
+/** A name followed by `:` or `=`, where a phrase or code list may start. */
+const PHRASE_OR_CODE_LABEL =
+  /((?<![A-Za-z0-9_-])(?:\*{1,2}|_{1,2}|~~)?["'`]?([A-Za-z_][A-Za-z0-9_-]{0,63})["'`]?(?:\*{1,2}|_{1,2}|~~)?[ \t]*[:=][ \t]*)/gu;
+const PHRASE_NAME =
+  /(?:^(?:seed|mnemonic)s?|(?:seed|recovery|secret|backup|wallet|mnemonic)phrases?|(?:seed|recovery|mnemonic)words)$/u;
+const CODE_NAME = /(?:recovery|backup)codes?$/u;
+/** One recovery or backup code, such as `1234-5678` or `ab12cd34`. */
+const RECOVERY_CODE = /^(?=[^\s]*\d)[A-Za-z0-9]{3,}(?:-[A-Za-z0-9]{3,})*[,;]?$/u;
+
+/** Whether a name owns a recovery phrase or a list of recovery codes. */
+function phraseOrCodeName(value: string, nameOffset: number, name: string): "phrase" | "code" | undefined {
+  const twoWordStart = twoWordSecretNameStart(value, nameOffset, name);
+  if (twoWordStart !== undefined) {
+    const first = value.slice(twoWordStart, nameOffset).trim().toLowerCase();
+    if (/^(?:phrases?|words)$/iu.test(name)) return "phrase";
+    return first === "recovery" || first === "backup" ? "code" : undefined;
+  }
+  const normalized = name.toLowerCase().replace(/[_-]/gu, "");
+  if (PHRASE_NAME.test(normalized)) return "phrase";
+  return CODE_NAME.test(normalized) ? "code" : undefined;
+}
+
+/** A line of words, possibly numbered, that may be part of a recovery phrase. */
+function isPhraseWordLine(line: string): boolean {
+  const words = recoveryPhraseWords(line);
+  return words.length > 0 && words.every((word) => /^[A-Za-z]{2,12}$/u.test(word));
+}
+
+/** A line of recovery codes, possibly numbered. */
+function isCodeLine(line: string): boolean {
+  const codes = line.trim().split(/\s+/u).filter((token) => !RECOVERY_CODE_NUMBERING.test(token));
+  return codes.length > 0 && codes.every((code) => RECOVERY_CODE.test(code));
+}
+const RECOVERY_CODE_NUMBERING = /^\d{1,2}[.)]$/u;
+const STANDARD_PHRASE_LENGTHS: ReadonlySet<number> = new Set([12, 15, 18, 21, 24]);
+
+/**
+ * A recovery phrase or code list under its name that runs on over unindented
+ * lines: one numbered word per line, a phrase split over two lines, or half
+ * of it on the name's line and the rest below. The lines that belong to it
+ * are hidden; a blank line or a line of other text ends it.
+ */
+function redactUnindentedPhraseBlocks(value: string): string {
+  let cursor = 0;
+  let redacted = "";
+  for (const match of value.matchAll(PHRASE_OR_CODE_LABEL)) {
+    const offset = match.index;
+    if (offset === undefined || offset < cursor) continue;
+    const name = match[2]!;
+    const kind = phraseOrCodeName(value, offset + match[0].indexOf(name), name);
+    if (!kind) continue;
+    const valueStart = offset + match[0].length;
+    const lineTest = kind === "phrase" ? isPhraseWordLine : isCodeLine;
+    let lineEnd = valueStart;
+    while (lineEnd < value.length && value[lineEnd] !== "\r" && value[lineEnd] !== "\n") lineEnd += 1;
+    const sameLine = value.slice(valueStart, lineEnd);
+    if (sameLine.trim() && !lineTest(sameLine)) continue;
+    const parts = sameLine.trim() ? [sameLine] : [];
+    const ends: number[] = sameLine.trim() ? [lineEnd] : [];
+    let next = lineEnd;
+    while (value[next] === "\r" || value[next] === "\n") {
+      let start = next + 1;
+      if (value[next] === "\r" && value[start] === "\n") start += 1;
+      let end = start;
+      while (end < value.length && value[end] !== "\r" && value[end] !== "\n") end += 1;
+      const line = value.slice(start, end);
+      if (!line.trim() || !lineTest(line)) break;
+      parts.push(line);
+      ends.push(end);
+      next = end;
+    }
+    // The name's own line is left to the one-line rules.
+    if (ends.length === 0 || ends[ends.length - 1] === lineEnd) continue;
+    let valueEnd: number | undefined;
+    if (kind === "code") {
+      valueEnd = ends[ends.length - 1];
+    } else {
+      // The longest run of lines that reads as one phrase of a standard
+      // length (12, 15, 18, 21 or 24 words), so a lowercase line of prose
+      // after the phrase stays shown; failing that, the longest phrase.
+      let longest: number | undefined;
+      for (let count = parts.length; count > 0 && valueEnd === undefined; count -= 1) {
+        const run = parts.slice(0, count).join(" ");
+        if (!isRecoveryPhrase(run)) continue;
+        longest ??= ends[count - 1];
+        if (STANDARD_PHRASE_LENGTHS.has(recoveryPhraseWords(run).length)) valueEnd = ends[count - 1];
+      }
+      valueEnd ??= longest;
+    }
+    if (valueEnd === undefined || valueEnd <= lineEnd) continue;
+    if (sameLine.trim()) {
+      redacted += `${value.slice(cursor, valueStart)}[REDACTED]`;
+    } else {
+      const breakEnd = value[lineEnd] === "\r" && value[lineEnd + 1] === "\n" ? lineEnd + 2 : lineEnd + 1;
+      redacted += `${value.slice(cursor, breakEnd)}[REDACTED]`;
+    }
+    cursor = valueEnd;
+  }
+  return cursor === 0 ? value : `${redacted}${value.slice(cursor)}`;
+}
+
 /**
  * A secret-named setting whose value is an indented block on the following
  * lines, such as `PASSWORD:` or `PASSPHRASE:`, hides every line of that block,
- * not just the first.
+ * not just the first. A recovery phrase or code list under its name also
+ * hides when its lines are not indented.
  */
-export function redactSensitiveNextLineBlocks(value: string): string {
+export function redactSensitiveNextLineBlocks(text: string): string {
+  if (!text.includes(":") && !text.includes("=")) return text;
+  const value = redactUnindentedPhraseBlocks(text);
   if (!value.includes(":")) return value;
   let cursor = 0;
   let redacted = "";
@@ -1271,6 +1415,59 @@ function redactEnvironmentAssignments(value: string): string {
   return changed ? `${redacted}${value.slice(cursor)}` : value;
 }
 
+const ENDS_IN_REDACTION = /\[REDACTED(?: [A-Z -]+)?\]["'`]?[,;]?$/u;
+/**
+ * One opaque token of credential characters, such as the wrapped tail of a
+ * key: eight or more with a letter and a digit, or sixteen or more with at
+ * least two capitals and no digit, like `FAKEFAKEFAKEFAKE`.
+ */
+const OPAQUE_CONTINUATION_TOKEN =
+  /^(?:(?=[^\s]*\d)(?=[^\s]*[A-Za-z])[A-Za-z0-9+/=._~-]{8,}|(?=(?:[^A-Z\s]*[A-Z]){2})[A-Za-z0-9+/=._~-]{16,})["'`]?[,;]?$/u;
+/** A file path such as `src/config/env.ts` or a file name such as `README.md`. */
+const PATH_SHAPED_LINE =
+  /^(?:~|\.{1,2})?\/?(?:[A-Za-z0-9_.@-]+\/)*[A-Za-z0-9_.@-]*[A-Za-z_-]\.[a-z][a-z0-9]{0,7}[,;:.]?$/u;
+const FILE_NAME_LINE = /^[A-Za-z][A-Za-z_-]*\.[A-Za-z][A-Za-z0-9]{0,7}[,;:.]?$/u;
+/** A version such as `v2.3.1` or `1.4.0-beta.2`. */
+const VERSION_LINE = /^v?\d+\.\d+(?:\.\d+)?(?:[-+][0-9A-Za-z.-]+)?[,;:.]?$/u;
+
+/** Whether a line is a file path, file name or version on its own. */
+export function lineIsPathOrVersion(line: string): boolean {
+  const trimmed = line.trim();
+  if (VERSION_LINE.test(trimmed)) return true;
+  if (!trimmed.includes("/")) return FILE_NAME_LINE.test(trimmed);
+  return PATH_SHAPED_LINE.test(trimmed) && !/\/\//u.test(trimmed);
+}
+
+/**
+ * Whether `line` reads as the wrapped rest of a value that was hidden on the
+ * line before it, such as the second half of a key or token. Its first word is
+ * an opaque token; a path, file name or version is not one.
+ */
+export function isWrappedSecretTail(previousSafeLine: string | undefined, line: string): boolean {
+  if (previousSafeLine === undefined || !ENDS_IN_REDACTION.test(previousSafeLine)) return false;
+  const trimmed = line.trim();
+  if (!trimmed || lineIsPathOrVersion(trimmed)) return false;
+  return OPAQUE_CONTINUATION_TOKEN.test(trimmed.split(/\s+/u)[0]!);
+}
+
+/**
+ * Hide the wrapped rest of a value hidden on the line above, and the line
+ * after that while it is still part of it, in already-filtered text.
+ */
+function redactWrappedSecretTails(value: string): string {
+  if (!value.includes("[REDACTED")) return value;
+  const lines = value.split("\n");
+  let changed = false;
+  for (let index = 1; index < lines.length; index += 1) {
+    const line = lines[index]!;
+    const carriage = line.endsWith("\r") ? "\r" : "";
+    if (!isWrappedSecretTail(lines[index - 1]!.replace(/\r$/u, ""), line)) continue;
+    lines[index] = `[REDACTED]${carriage}`;
+    changed = true;
+  }
+  return changed ? lines.join("\n") : value;
+}
+
 function sanitizeVariant(value: string, includeEnvironment: boolean): string {
   // Subagent text only: the shared credential filter, which main-chat
   // compaction also uses, leaves prose blocks alone.
@@ -1282,7 +1479,8 @@ function sanitizeVariant(value: string, includeEnvironment: boolean): string {
       redactEnvironmentAssignments(blockSafe).replace(/(\[REDACTED ENVIRONMENT VALUE\])\]+/gu, "$1"),
     )
     : blockSafe;
-  return sanitizePaths(sanitizePaths(environmentSafe));
+  const pathSafe = sanitizePaths(sanitizePaths(environmentSafe));
+  return includeEnvironment ? redactWrappedSecretTails(pathSafe) : pathSafe;
 }
 
 function markdownContainsNodeType(value: unknown, types: ReadonlySet<string>): boolean {

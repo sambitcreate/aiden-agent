@@ -70,7 +70,7 @@ export async function runCliSubagent(agentDir: string, input: RunSubagentChildIn
             toolAbort.signal.addEventListener("abort", cancelled, { once: true });
             if (toolAbort.signal.aborted) cancelled();
             beforeTool(tool.name, event.id, args, { toolCall, args, assistantMessage, context: { messages, tools } }, toolAbort.signal)
-              .then(resolve, (error: unknown) => { refused = true; reject(error); }).finally(() => toolAbort.signal.removeEventListener("abort", cancelled));
+              .then(resolve, (error: unknown) => { if (!toolAbort.signal.aborted) refused = true; reject(error); }).finally(() => toolAbort.signal.removeEventListener("abort", cancelled));
           });
           if (toolAbort.signal.aborted) throw new Error("Subagent cancelled before tool execution.");
           input.telemetry?.toolStarted(tool.name);
@@ -80,7 +80,8 @@ export async function runCliSubagent(agentDir: string, input: RunSubagentChildIn
               event.args?.context === "fork" ? captureLiveSubagentContext({ chatId: input.v2Authority!.chatId, parentRunId: input.runId!, messages: event.messages, descendantContextWindow: input.runtime.model.contextWindow }) : undefined) }], details: {} }
             : await tool.execute(event.id, args, toolAbort.signal);
           if (Buffer.byteLength(JSON.stringify(result)) > 1024 * 1024) throw new Error("The child tool result exceeds its transport budget.");
-          if (recorded) record((transcript) => transcript.toolFinished(event.id, "completed", (result as { details?: unknown }).details));
+          // As in the main chat, a tool that ends after the helper was stopped shows as cancelled.
+          if (recorded) record((transcript) => transcript.toolFinished(event.id, toolAbort.signal.aborted ? "cancelled" : "completed", (result as { details?: unknown }).details));
           reply({ type: "tool-result", id: event.id, result });
         } catch (error) {
           // As in the main chat: a stop wins, then a refusal, then the failure.

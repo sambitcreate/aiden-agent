@@ -129,6 +129,8 @@ export class SubagentTranscriptRecorder {
   private failures = 0;
   /** Retries paused after repeated failures, until something changes. */
   private paused = false;
+  /** Whether the error of the current run of failures has been reported. */
+  private failureReported = false;
   /** The run is being stopped: tools that end from now on were cancelled. */
   private cancelRequested = false;
   /** Calls a permission or policy check refused before they ran. */
@@ -354,6 +356,9 @@ export class SubagentTranscriptRecorder {
 
   private async finalFlush(): Promise<void> {
     while (this.flushing) await this.flushing;
+    // A failed final save is always reported once, even when an earlier run
+    // of failed saves was already reported.
+    this.failureReported = false;
     for (let attempt = 0; attempt < SUBAGENT_TRANSCRIPT_FINAL_SAVE_ATTEMPTS && this.dirty; attempt += 1) {
       if (attempt > 0) {
         await new Promise<void>((resolve) => {
@@ -463,10 +468,14 @@ export class SubagentTranscriptRecorder {
       this.failures += 1;
       this.dirty = true;
       if (this.failures >= SUBAGENT_TRANSCRIPT_RETRIES_BEFORE_PAUSE) this.paused = true;
-      if (this.failures === 1) this.onError(error);
+      if (!this.failureReported) {
+        this.failureReported = true;
+        this.onError(error);
+      }
       return;
     }
     this.failures = 0;
+    this.failureReported = false;
     this.paused = false;
     const baseRevision = this.revision;
     this.revision = transcript.revision;

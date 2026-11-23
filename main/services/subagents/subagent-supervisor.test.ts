@@ -30,6 +30,7 @@ import {
 import { SubagentRuntimeRegistry, type SubagentChildSpec, type SubagentRuntimeChild } from "./child-agent-runtime.js";
 import {
   BOT_SUBAGENT_LIMIT_REACHED_RESULT,
+  flushPendingSubagentTranscripts,
   SubagentReplyClock,
   SubagentSupervisor,
   type PreparedSubagentRun,
@@ -3796,14 +3797,20 @@ test("each foreground subagent counts once, and a batch over budget counts nothi
   assert.deepEqual(sent, []);
 });
 
-function transcriptSaves(finalSaveMs: number) {
+/** A transcript sink; with `holdFinal`, the final save waits until `releaseFinal()`. */
+function transcriptSaves(options: { holdFinal?: boolean } = {}) {
   const saved: Array<{ transcript: SubagentTranscriptV1; final: boolean }> = [];
+  let releaseFinal = () => {};
+  const finalGate = options.holdFinal
+    ? new Promise<void>((resolve) => { releaseFinal = resolve; })
+    : Promise.resolve();
   return {
     saved,
     finals: () => saved.filter((entry) => entry.final),
+    releaseFinal: () => releaseFinal(),
     sink: {
       async persist(transcript: SubagentTranscriptV1, final: boolean) {
-        if (final) await new Promise((resolve) => setTimeout(resolve, finalSaveMs));
+        if (final) await finalGate;
         saved.push({ transcript, final });
       },
     },
@@ -3820,8 +3827,12 @@ function toolStatuses(transcript: SubagentTranscriptV1): Array<[string | undefin
 }
 
 for (const hangs of [false, true]) {
-  test(`a timed-out helper's result does not wait for its conversation's slow final save (${hangs ? "runner never returns" : "runner hands over partial work"})`, async () => {
-    const saves = transcriptSaves(500);
+  test(`a timed-out helper's result does not wait for its conversation's slow final save (${hangs ? "runner never returns" : "runner hands over partial work"})`, async (t) => {
+    const saves = transcriptSaves({ holdFinal: true });
+    // The held save and the supervisor's unref'd timers would otherwise let
+    // the event loop end mid-test.
+    const keepAlive = setInterval(() => {}, 1_000);
+    t.after(() => clearInterval(keepAlive));
     const supervisor = new SubagentSupervisor({
       generationId: `transcript-timeout-${hangs ? "hung" : "partial"}`,
       ...TEST_SUPERVISOR_SCOPE,
@@ -3863,7 +3874,16 @@ for (const hangs of [false, true]) {
     await supervisor.flush({ transcriptWaitMs: 20 });
     assert.equal(saves.finals().length, 0, "the capped wait returns before the slow save");
 
-    await supervisor.flush();
+    let flushed = false, quitWaitDone = false;
+    const fullFlush = supervisor.flush().then(() => { flushed = true; });
+    // Quitting waits for every chat's helper conversations, not one supervisor's.
+    const quitWait = flushPendingSubagentTranscripts().then(() => { quitWaitDone = true; });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    assert.equal(flushed, false, "a full flush waits while the final save is held");
+    assert.equal(quitWaitDone, false, "the quit wait waits while the final save is held");
+    assert.equal(saves.finals().length, 0);
+    saves.releaseFinal();
+    await Promise.all([fullFlush, quitWait]);
     const [final] = saves.finals();
     assert.ok(final, "a full flush waits for the final save");
     assert.equal(transcriptMessages(final.transcript)[0]?.text, "Read the soup section.");
@@ -3871,10 +3891,32 @@ for (const hangs of [false, true]) {
   });
 }
 
+test("a chat turn's capped wait for helper conversations still waits for the run store", async () => {
+  let releaseRunStore = () => {};
+  const runStoreGate = new Promise<void>((resolve) => { releaseRunStore = resolve; });
+  const supervisor = new SubagentSupervisor({
+    generationId: "transcript-run-store-gate",
+    ...TEST_SUPERVISOR_SCOPE,
+    runtime: runtime(),
+    thinkingLevel: "high",
+    workspaceRoot: "/workspace",
+    permission: "full",
+    inheritedCeiling: SUBAGENT_READ_TOOL_NAMES,
+    projector: { flush: () => runStoreGate, snapshot: () => [] } as unknown as SubagentEventProjector,
+  });
+  let flushed = false;
+  const turnEnd = supervisor.flush({ transcriptWaitMs: 1 }).then(() => { flushed = true; });
+  await new Promise((resolve) => setTimeout(resolve, 30));
+  assert.equal(flushed, false, "the capped wait applies to conversations only");
+  releaseRunStore();
+  await turnEnd;
+  assert.equal(flushed, true);
+});
+
 test("a helper's refused tool shows as blocked and a tool ending during its stop as cancelled", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-subagent-transcript-"));
   try {
-    const saves = transcriptSaves(0);
+    const saves = transcriptSaves();
     const recorder = new SubagentTranscriptRecorder({ runId: "run-refused", task: "Edit the cookbook.", sink: saves.sink });
     const parent = new AbortController();
     let spec: SubagentChildSpec | undefined;
@@ -3883,13 +3925,14 @@ test("a helper's refused tool shows as blocked and a tool ending during its stop
       await emit({ type: "message_start", message } as AgentEvent);
       await emit({ type: "message_end", message } as AgentEvent);
       const toolCall = { type: "toolCall" as const, id: "write-1", name: "write_file", arguments: { path: "cookbook.html" } };
-      // Pi asks the child's gate first; a refused call still ends with an error result.
+      // Pi announces the call, then asks the child's gate; a refused call
+      // still ends with an error result.
+      await emit({ type: "tool_execution_start", toolCallId: "write-1", toolName: "write_file", args: toolCall.arguments } as AgentEvent);
       const decision = await spec!.beforeToolCall!(
         { toolCall, args: toolCall.arguments, assistantMessage: message, context: { systemPrompt: "", messages: [], tools: [] } } as never,
         undefined,
       );
       assert.equal(decision?.block, true);
-      await emit({ type: "tool_execution_start", toolCallId: "write-1", toolName: "write_file", args: toolCall.arguments } as AgentEvent);
       await emit({ type: "tool_execution_end", toolCallId: "write-1", toolName: "write_file", isError: true, result: { content: [] } } as AgentEvent);
       await emit({ type: "tool_execution_start", toolCallId: "read-1", toolName: "read_file", args: { path: "salad.md" } } as AgentEvent);
       parent.abort(new Error("The person stopped the chat."));

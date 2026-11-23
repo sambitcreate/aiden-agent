@@ -1,5 +1,7 @@
 import {
   containsHighConfidenceSecretIncludingEncodings,
+  isWrappedSecretTail,
+  lineIsPathOrVersion,
   redactMultilineCredentialBlocks,
   redactSecretNamedSameLineValues,
   redactSensitiveNextLineBlocks,
@@ -13,17 +15,17 @@ const PRIVATE_KEY_BEGIN = /-----BEGIN [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?-----/gu;
 const PRIVATE_KEY_END = /-----END [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?-----/u;
 
 const ENDS_IN_REDACTION = /\[REDACTED(?: [A-Z -]+)?\]["'`]?[,;]?$/u;
-/** One opaque token of credential characters, such as the wrapped tail of a key. */
-const OPAQUE_CONTINUATION = /^(?=[^\s]*\d)(?=[^\s]*[A-Za-z])[A-Za-z0-9+/=._~-]{8,}["'`]?[,;]?$/u;
 
 /**
  * Whether a line reads as text of its own rather than as the rest of a value
  * wrapped from the line above: it is empty or only punctuation, has a space
- * inside it, or is one capitalised word ending in punctuation, like `Done.`.
+ * inside it, is one capitalised word ending in punctuation, like `Done.`, or
+ * is a file path, file name or version, like `src/config/env.ts` or `v2.3.1`.
  */
 function readsAsProse(line: string): boolean {
   const trimmed = line.trim();
-  return !/[A-Za-z0-9]/u.test(trimmed) || /\s/u.test(trimmed) || /^[A-Z][a-z]+[.!?]$/u.test(trimmed);
+  return !/[A-Za-z0-9]/u.test(trimmed) || /\s/u.test(trimmed) || /^[A-Z][a-z]+[.!?]$/u.test(trimmed) ||
+    lineIsPathOrVersion(trimmed);
 }
 
 /**
@@ -117,9 +119,9 @@ export function sanitizePartialFindingsForParent(reports: readonly string[]): st
     const directSafe = redactSecretNamedSameLineValues(sanitizeCredentialText(line));
     const previous = safeLines[safeLines.length - 1];
     // The opaque rest of a value wrapped from a line that was just hidden,
-    // such as the second half of a key or token, is hidden with it.
-    const wrappedTail = previous !== undefined && ENDS_IN_REDACTION.test(previous) &&
-      OPAQUE_CONTINUATION.test(line.trim());
+    // such as the second half of a key or token, is hidden with it, and so is
+    // the line after it while it still continues the value.
+    const wrappedTail = isWrappedSecretTail(previous, line);
     safeLines.push(wrappedTail || containsHighConfidenceSecretIncludingEncodings(directSafe)
       ? REDACTED_CREDENTIAL
       : directSafe);

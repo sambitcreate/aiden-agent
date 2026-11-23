@@ -321,6 +321,35 @@ test("the final save is retried a bounded number of times", async () => {
   assert.equal(attempts, 3);
 });
 
+test("a failed final save is reported even after an earlier failed save was", async () => {
+  const errors: unknown[] = [];
+  let finalAttempts = 0;
+  const recorder = new SubagentTranscriptRecorder({
+    runId: "run-1",
+    task: "Task.",
+    sink: {
+      persist: async (_transcript, final) => {
+        if (final) finalAttempts += 1;
+        throw new Error(final ? "final save failed" : "disk full");
+      },
+    },
+    onError: (error) => errors.push(error),
+    intervalMs: 1,
+  });
+  const keepAlive = setInterval(() => {}, 1_000);
+  try {
+    recorder.messageStarted();
+    recorder.textDelta("Hello.");
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    assert.deepEqual(errors.map((error) => (error as Error).message), ["disk full"]);
+    await recorder.finish("failed");
+  } finally {
+    clearInterval(keepAlive);
+  }
+  assert.equal(finalAttempts, 3);
+  assert.deepEqual(errors.map((error) => (error as Error).message), ["disk full", "final save failed"]);
+});
+
 test("a store that keeps failing is reported once and left alone until something changes", async () => {
   const clock = fakeClock();
   const errors: unknown[] = [];

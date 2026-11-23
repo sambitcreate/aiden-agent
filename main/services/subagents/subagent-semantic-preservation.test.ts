@@ -408,13 +408,60 @@ const WRAPPED_SECRETS = [
 ];
 
 for (const { name, text, halves } of WRAPPED_SECRETS) {
-  test(`both halves of ${name} wrapped over two lines are hidden from the helper's words`, () => {
-    const safe = sanitizeSubagentWorkText(`Found it:\n${text}\nDone.`);
-    for (const half of halves) assert.ok(!safe.includes(half), `${half} leaked: ${safe}`);
-    assert.match(safe, /^Found it:\n/u);
-    assert.match(safe, /\nDone\.$/u);
+  test(`both halves of ${name} wrapped over two lines are hidden from the helper's words and the panel`, () => {
+    const input = `Found it:\n${text}\nDone.`;
+    for (const safe of [sanitizeSubagentWorkText(input), sanitizeSubagentSnapshotText(input)]) {
+      for (const half of halves) assert.ok(!safe.includes(half), `${half} leaked: ${safe}`);
+      assert.match(safe, /^Found it:\n/u);
+      assert.match(safe, /\nDone\.$/u);
+    }
   });
 }
+
+test("a value wrapped over three lines, or with a space or no digit in its tail, is hidden from the helper's words and the panel", () => {
+  const key = ["sk", "proj", "FAKEFAKEFAKEFAKEFAKEFAKE0123456789abcdef"].join("-");
+  for (const [text, pieces] of [
+    [`key ${key.slice(0, 16)}\n${key.slice(16, 32)}\n${key.slice(32)}`, [key.slice(16, 32), key.slice(32)]],
+    ["API_SECRET=FAKEabcd0123456789FAKE\nefgh9876543210FAKEt\nail0123456789FAKEFAKE", ["efgh9876", "ail0123"]],
+    ["API_SECRET=FAKEabcd0123456789FAKE\nefghijklmnopqrstuvwxyzFAKEtail", ["efghijklmnop"]],
+    ["API_SECRET=FAKEabcd0123456789FAKE\nefgh9876 543210FAKEtail", ["efgh9876", "543210FAKE"]],
+  ] as const) {
+    for (const safe of [sanitizeSubagentWorkText(`${text}\nDone.`), sanitizeSubagentSnapshotText(`${text}\nDone.`)]) {
+      for (const piece of pieces) assert.ok(!safe.includes(piece), `${piece} leaked: ${safe}`);
+      assert.match(safe, /\nDone\.$/u);
+    }
+  }
+});
+
+test("a file path, file name or version after a hidden value stays readable in the helper's words", () => {
+  for (const [text, shown] of [
+    ["API_SECRET=FAKEabcd0123456789FAKE\nsrc/config/env.ts\nDone.", "src/config/env.ts"],
+    ["API_SECRET=FAKEabcd0123456789FAKE\nv2.3.1\nDone.", "v2.3.1"],
+    ["password: FAKEpw0123\nREADME.md", "README.md"],
+  ] as const) {
+    const safe = sanitizeSubagentWorkText(text);
+    assert.ok(!safe.includes("FAKEabcd0123") && !safe.includes("FAKEpw0123"), safe);
+    assert.deepEqual(safe.split("\n").slice(1, 2), [shown]);
+  }
+});
+
+test("token counts stay readable in the helper's words and the panel, while a key under the same name hides", () => {
+  for (const value of [
+    "max_tokens: 4096",
+    '"total_tokens": 532',
+    "input_tokens: 1,234",
+    "maxTokens: 8192",
+    "Set max_tokens: 4096 in the request",
+  ]) {
+    assert.equal(sanitizeSubagentWorkText(value), value);
+    assert.equal(sanitizeSubagentSnapshotText(value), value);
+  }
+  assert.equal(sanitizeSubagentWorkText("prompt_tokens=88"), "prompt_tokens=88");
+  for (const safe of [
+    sanitizeSubagentWorkText("max_tokens: sk-FAKEFAKEFAKEFAKEFAKE0123"),
+    sanitizeSubagentSnapshotText("max_tokens: sk-FAKEFAKEFAKEFAKEFAKE0123"),
+  ]) assert.ok(!safe.includes("FAKEFAKEFAKE"), safe);
+});
 
 test("text after a hidden value keeps reading as text, including a closing code fence", () => {
   assert.equal(sanitizeSubagentWorkText("API_SECRET=FAKEabcd0123456789FAKE\nDone."), "API_SECRET=[REDACTED]\nDone.");
@@ -445,6 +492,57 @@ for (const text of [
     }
   });
 }
+
+for (const text of [
+  `Secret recovery phrase: ${FAKE_PHRASE}`,
+  `My seed phrase: ${FAKE_PHRASE}`,
+  `Your recovery phrase: ${FAKE_PHRASE}`,
+  `Seed phrase: ${FAKE_PHRASE.split(" ").map((word, index) => `${index + 1}.${word}`).join(" ")}`,
+  `Seed phrase: ${FAKE_PHRASE.split(" ").map((word, index) => `${index + 1}-${word}`).join(" ")}`,
+  `Seed: ${FAKE_PHRASE.toUpperCase()}`,
+  `Seed: ${FAKE_PHRASE.split(" ").map((word) => `${word[0]!.toUpperCase()}${word.slice(1)}`).join(" ")}`,
+  `Seed words: ${FAKE_PHRASE}`,
+  `Mnemonic words: ${FAKE_PHRASE}`,
+  `Seed phrase:\n${FAKE_PHRASE.split(" ").map((word, index) => `${index + 1}. ${word}`).join("\n")}`,
+  `SEED_PHRASE:\n${FAKE_PHRASE.split(" ").join("\n")}`,
+  `Seed phrase:\n${FAKE_PHRASE.split(" ").slice(0, 6).join(" ")}\n${FAKE_PHRASE.split(" ").slice(6).join(" ")}`,
+  `Recovery phrase: ${FAKE_PHRASE.split(" ").slice(0, 6).join(" ")}\n${FAKE_PHRASE.split(" ").slice(6).join(" ")}`,
+]) {
+  test(`a recovery phrase after a leading word, in another case or layout is hidden: ${JSON.stringify(text.slice(0, 22))}`, () => {
+    const label = text.slice(0, text.indexOf(":") + 1);
+    for (const safe of [sanitizeSubagentWorkText(`Wallet notes.\n${text}\n\nDone.`), sanitizeSubagentSnapshotText(`Wallet notes.\n${text}\n\nDone.`)]) {
+      for (const word of ["abandon", "absurd", "access"]) {
+        assert.ok(!safe.toLowerCase().includes(word), `${word} leaked: ${safe}`);
+      }
+      assert.ok(safe.includes(label), `${label} lost: ${safe}`);
+      assert.match(safe, /^Wallet notes\.\n/u);
+      assert.match(safe, /\nDone\.$/u);
+    }
+  });
+}
+
+test("a phrase or code list on the lines under its name ends at the first line of other text", () => {
+  assert.equal(
+    sanitizeSubagentWorkText(`Seed phrase:\n${FAKE_PHRASE}\nthen we checked the balance`),
+    "Seed phrase:\n[REDACTED]\nthen we checked the balance",
+  );
+  for (const value of [
+    "Seed phrase:\nUse a hardware wallet.",
+    "Recovery codes:\nNone yet.",
+    "Seed words: pick twelve of them",
+    "Recovery codes are stored in the vault.",
+  ]) {
+    assert.equal(sanitizeSubagentWorkText(value), value);
+    assert.equal(sanitizeSubagentSnapshotText(value), value);
+  }
+});
+
+test("recovery codes on unindented lines under their name are hidden from the helper's words and the panel", () => {
+  const value = "Recovery codes:\n1234-5678\n2345-6789\n\nStore them safely.";
+  for (const safe of [sanitizeSubagentWorkText(value), sanitizeSubagentSnapshotText(value)]) {
+    assert.equal(safe, "Recovery codes:\n[REDACTED]\n\nStore them safely.");
+  }
+});
 
 test("recovery codes are hidden from the helper's words and the panel", () => {
   const value = "Recovery codes: FAKE-1a2b3c FAKE-4d5e6f";
@@ -477,8 +575,20 @@ test("short secret names still hide real codes, wherever they sit on the line", 
     ["OTP: 731905 (expires in 5 min)", "OTP: [REDACTED] (expires in 5 min)"],
     ["The CVV: 123 test card works", "The CVV: [REDACTED] test card works"],
     ["seed: FAKEabcdef0123456789xyz", "seed: [REDACTED]"],
+    ["totp: jbswy3dpehpk3pxp", "totp: [REDACTED]"],
+    ["otp: fakeotpcode", "otp: [REDACTED]"],
+    ["Signature: abcdef0123456789", "Signature: [REDACTED]"],
+    ["pin: hunter", "pin: [REDACTED]"],
+    ["PIN code: 4821", "PIN code: [REDACTED]"],
+    ["PIN number: 4821", "PIN number: [REDACTED]"],
+    ["My PIN: 4821", "My PIN: [REDACTED]"],
   ] as const) {
     assert.equal(sanitizeSubagentWorkText(value), expected);
+    // The panel may use its environment marker, but keeps the name and hides the code.
+    const prefix = expected.slice(0, expected.indexOf("[REDACTED"));
+    const panel = sanitizeSubagentSnapshotText(value);
+    assert.ok(panel.startsWith(`${prefix}[REDACTED`), panel);
+    assert.ok(!panel.includes(value.slice(prefix.length).split(" ")[0]!), panel);
   }
 });
 
@@ -496,6 +606,11 @@ test("prose and config that only mention a short secret name, a random seed or a
     "otp: 'string'",
     "PIN: required for unlock",
     "Passcode: 6 digits",
+    "totp: string",
+    "cvv: string;",
+    "Signature: see the docs",
+    "PIN code: see the docs",
+    "Use the PIN code flow for kiosks.",
   ]) {
     assert.equal(sanitizeSubagentWorkText(value), value);
   }

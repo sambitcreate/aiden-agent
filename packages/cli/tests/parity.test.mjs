@@ -1260,14 +1260,21 @@ test("a subagent that hits its deadline during an unanswered approval settles an
   t.after(() => { server.closeAllConnections(); server.close(); });
   api.atomicJson(join(dir, "models.json"), { providers: { "cli-test": { api: "openai-completions", baseUrl: `http://127.0.0.1:${server.address().port}/v1`, apiKey: "test-only", models: [{ id: "test", name: "Test", reasoning: false, input: ["text"], contextWindow: 32000, maxTokens: 4096, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } }] } } });
   const runtime = await api.createCliModelRuntime(dir); let effects = 0, gateSignal;
-  // The gate stands in for a "Subagent: allow read_file once?" prompt nobody answers.
-  const result = await api.runCliSubagent(dir, { runtime: { model: runtime.getModel("cli-test", "test") }, workspaceRoot: dir, permission: "ask", thinkingLevel: "off", context: { mode: "fresh", revisionHash: "gate", messages: [] }, request: { role: "scout", label: "Gate", task: "Read the note" }, policy: { deadlineMs: 4000 } }, [{
+  const saved = [];
+  const recorder = new api.SubagentTranscriptRecorder({ runId: "run-gate", task: "Read the note", sink: { persist: async (transcript, final) => { saved.push({ transcript, final }); } } });
+  // The gate stands in for a "Subagent: allow read_file once?" prompt nobody
+  // answers; like a real prompt, it gives up with the stop's reason.
+  const result = await api.runCliSubagent(dir, { runtime: { model: runtime.getModel("cli-test", "test") }, workspaceRoot: dir, permission: "ask", thinkingLevel: "off", context: { mode: "fresh", revisionHash: "gate", messages: [] }, request: { role: "scout", label: "Gate", task: "Read the note" }, policy: { deadlineMs: 4000 }, transcript: recorder }, [{
     name: "read_file", description: "Read the note", parameters: { type: "object", properties: { path: { type: "string" } }, required: ["path"] },
     execute: async () => { effects++; return { content: [{ type: "text", text: "Apricot" }], details: {} }; },
-  }], (_name, _id, _args, _context, signal) => { gateSignal = signal; return new Promise(() => {}); });
+  }], (_name, _id, _args, _context, signal) => { gateSignal = signal; return new Promise((_resolve, reject) => signal?.addEventListener("abort", () => reject(signal.reason), { once: true })); });
   assert.equal(result.status, "timed_out");
   assert.equal(effects, 0);
   assert.equal(gateSignal?.aborted, true);
+  await recorder.finish("cancelled");
+  // The saved conversation shows the stopped call as cancelled, not refused.
+  const steps = saved.at(-1).transcript.entries.flatMap((entry) => entry.steps ?? []).filter((step) => step.kind === "tool");
+  assert.deepEqual(steps.map((step) => step.status), ["cancelled"]);
 });
 
 test("shared auth coordinator commits a returned credential once and suppresses a cancelled login", async () => {

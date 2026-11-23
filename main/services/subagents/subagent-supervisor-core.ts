@@ -178,6 +178,17 @@ export function transcriptStatus(status: SubagentTaskResult["status"]): Subagent
   return "failed";
 }
 
+/** Every helper conversation's final save still in progress, in any chat or Bot. */
+const pendingTranscriptSaves = new Set<Promise<void>>();
+
+/**
+ * Wait for every helper conversation's final save still in progress, across
+ * all chats and Bots. It never rejects; quitting caps how long it waits.
+ */
+export async function flushPendingSubagentTranscripts(): Promise<void> {
+  while (pendingTranscriptSaves.size > 0) await Promise.allSettled([...pendingTranscriptSaves]);
+}
+
 /**
  * Records each child's conversation. A child's result is handed back without
  * waiting for its final save; the save finishes in the background, and
@@ -239,7 +250,11 @@ export class SubagentTranscriptRecordings {
       return;
     }
     this.pending.add(finishing);
-    void finishing.finally(() => this.pending.delete(finishing));
+    pendingTranscriptSaves.add(finishing);
+    void finishing.finally(() => {
+      this.pending.delete(finishing);
+      pendingTranscriptSaves.delete(finishing);
+    });
   }
 }
 
