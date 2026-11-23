@@ -18,7 +18,7 @@ Every `doc.activePageId` reader becomes an explicit `pageId` taken from the chat
 ## Global Constraints
 
 - Pre-1.0: no migration. Old per-chat canvas files are deleted on first start (§6.1, §11.6).
-- File: `userData/design-canvases/<workspaceId>.json`. The workspace id must pass `isWorkspaceArtifactWorkspaceId` (`renderer/shared/workspace-artifacts.ts:265`). Chats without a folder resolve through `persistedChatWorkspaceId` to `"default"` and share that canvas.
+- File: `userData/design-canvases/<workspaceId>.json`. The workspace id must pass `isWorkspaceArtifactWorkspaceId` (`renderer/shared/workspace-artifacts.ts:265`). Each No workspace chat has its own hidden workspace record (`noWorkspace: true`), so it gets its own canvas. Only legacy chats with no `workspaceId` resolve through `persistedChatWorkspaceId` to `"default"` and share that canvas. The renderer normalizes with `persistedChatWorkspaceId` too (amendment A11).
 - `version: 3`. `activePageId` and `pages[].viewport` are removed. `chatPages: Record<chatId, pageId>` is added: parsed and kept valid, but written by nothing until 1b.
 - Optional `chatId` on artifact frames and on comments, stamped when they are created.
 - Limits:
@@ -28,7 +28,7 @@ Every `doc.activePageId` reader becomes an explicit `pageId` taken from the chat
   - 16 MiB document cap unchanged.
 - Panning, zooming and switching pages never call `change()`, never save and are never undo steps.
 - `localStorage` key: `aiden.design.view.<workspaceId>.<chatId>`. Every read and write goes in try/catch, and the canvas renders correctly without storage.
-- `designCanvas:updated` payload: `{workspaceId, revision, aidenTurn?, step?}`. `designCanvas:focus` payload: `{chatId, pageId?, frameIds}`.
+- `designCanvas:updated` payload: `{workspaceId, chatId, revision, aidenTurn?, step?}`, where `chatId` is the chat whose action caused the change (A2). `designCanvas:focus` payload: `{chatId, pageId?, frameIds}`.
 - Handlers keep `chatId` as their argument and authority check: an attended chat, with the design-mode rule each handler has today.
 - Design mode stays desktop-only and out of the Remote projection.
 - AGENTS.md:
@@ -41,9 +41,54 @@ Every `doc.activePageId` reader becomes an explicit `pageId` taken from the chat
 
 1. **Two windows, one workspace.** A save from window A must reach window B on the same workspace through `{workspaceId}`, and B must refetch. Neither window may jump to the other's page. Test: Task 3 (handler broadcast) and Task 7 (sync filters on `workspaceId`).
 2. **The view names a deleted page** (another chat deleted it). The canvas shows the first page and does not crash. Tools default to the first page. Test: Task 1 (`viewPageId`) and Task 7 (the canvas shows the first page).
-3. **`localStorage` throws or holds junk** (private mode, a hand-edited value). The canvas opens on the first page at the default viewport. Test: Task 6.
-4. **A stale v2 file at a workspace path** (a downgrade and re-upgrade, or a hand copy). Parse refuses it, and the store sets it aside as corrupt instead of crashing. Test: Task 2.
+3. **`localStorage` throws or holds junk** (private mode, a hand-edited value). The canvas opens on the first page at the default viewport. Test: Task 7.
+4. **A stale v2 file at a workspace path** (a downgrade and re-upgrade, or a hand copy). Parse refuses it, and the store sets it aside as corrupt instead of crashing. Test: Task 3.
 5. **Chat deleted while another chat on the workspace has the canvas open.** The shared file survives, and the deleted chat's artifact frames show their missing state rather than an error. Test: Task 8.
+
+## Review amendments (2026-11-23)
+
+An adversarial review of this plan against the code found the problems below, each verified. They are part of the plan: where an amendment and a task disagree, the amendment wins. Each names the task that owns it and the test that pins it.
+
+- **A1. Aiden's page change counts at once, with or without a window** (Task 5, with a renderer part in Task 7).
+  - When a tool shows or focuses a page (`canvas_page show`, `add` with show, `canvas_focus`, `canvas_arrange`), main sets that chat's view page immediately: `DesignCanvasViews.showPage(chatId, pageId)` creates a view if none exists. Later tool calls in the same turn read it.
+  - View reports carry a renderer sequence number `seq` (per mounted canvas, increasing). Main remembers the `seq` that was current when Aiden showed a page and ignores any report with a `seq` at or below it whose `pageId` differs.
+  - The renderer applies a focus request's `pageId` even when it skips the fit because the person interacted within `FOCUS_QUIET_MS`.
+  - Test: `canvas_page add` with show, then `canvas_place_frame` with no page, puts the frame on the new page, both with a `focus` dep and without one.
+- **A2. Another chat's change is never this chat's undo step** (Tasks 3 and 7). `designCanvas:updated` carries the origin `chatId`. The renderer records `aidenTurn` and `step` only when `update.chatId === chatId`; otherwise it records `null` (a change carried into every step). Test (`use-design-canvas.test.tsx`): after an update with chat A's `aidenTurn`, undo in chat B leaves A's frames in place and B's redo stack survives.
+- **A3. Comment tray filtered by chat in 1a, not 1b** (Tasks 2 and 7).
+  - `queuedComments(doc, chatId)` and `markCommentsSent(doc, ids, sentAt, chatId)` consider only comments with `comment.chatId === chatId`. Comments without a `chatId` are none in v3, because the wipe removes v1/v2 documents.
+  - The tray, its badge and send all use the filtered list.
+  - Test: two chats each queue comments, and each tray and send shows only its own.
+- **A4. Main keeps a chat's last page after its canvas unmounts** (Tasks 4 and 5).
+  - `set(..., null)` marks the canvas unmounted but keeps the last `pageId` and viewport; `mounted()` counts only mounted canvases.
+  - The per-message `DesignViewState` (`canvas-summary.ts:20`, `parseDesignViewState`) gains an optional `pageId`. Tools and `canvasPromptLine` prefer it over the registry for that turn, as `viewSize` already does.
+  - Test: unmount, then a background placement for that chat lands on its last page.
+- **A5. Views keyed per window, ordered, and cleaned up** (Task 4).
+  - `DesignCanvasViews` stores views by `(chatId, senderId)`; `get(chatId)` returns the most recently reported mounted one, otherwise the last kept one.
+  - Reports with a `seq` older than the stored one for that sender are dropped.
+  - A `null` report skips `requireChat` (it only validates the id), so an unmount after delete still clears.
+  - `forget(chatId)` runs on chat delete, beside the other per-chat cleanups in `chat-application-service-main.ts`.
+  - Tests: two windows on one chat, close one, `get` returns the other's view; an out-of-order older report is ignored.
+- **A6. Artifact swap stays within its chat; the Code tab reads through the owner** (Tasks 6 and 8).
+  - `artifact-frames.ts`'s same-title swap only matches frames whose `chatId` equals the acting chat.
+  - `designCanvas:source` reads an artifact through `frame.chatId ?? chat.id`, with the same workspace check as preview and export.
+  - Tests: chat B's same-title visual places a new frame instead of swapping chat A's; the Code tab of A's artifact opened from B shows its source.
+- **A7. Focus without a page finds the frames' page** (Task 7). When a focus request has no `pageId`, the renderer takes it from the first focused frame's `pageId` in the document. Main's own senders (`designPagesOnEntry` in `chat-application-service-main.ts:62`, `placeImages` in `llm-client.ts`) also include `pageId`. Test: focus with frames on another page switches to it and fits them.
+- **A8. Attaching a No workspace chat keeps its canvas** (Task 8).
+  - `attachToWorkspace` (`chat-application-service.ts` ~493) merges the hidden workspace's canvas into the target workspace's canvas, then deletes the hidden file.
+  - The merge is `appendCanvasPages(target, source, newId, label)` in `pages.ts`: each source page with frames becomes a new target page named `"<chat title> · <page name>"`, frames and comments are given new ids, `groupId`/`frameId`/connector links are remapped, and `chatPages` is not copied.
+  - Within the limits it's all or nothing. If the result would exceed `pages`, `frames` or `comments`, the source file is kept as it is, and the attach still succeeds.
+  - Tests: two pages with a group and a comment merge with links intact; over the limit, the source file survives.
+- **A9. One workspace id per operation** (Task 3).
+  - The handler resolves the workspace once, from the chat it checked: `persistedChatWorkspaceId(chat.workspaceId)`.
+  - Store calls take that id. `DesignChatCanvases` methods return `{ doc | result, workspaceId }`, and the broadcast uses the returned id rather than resolving again.
+  - `saveDesignCanvas` sends the renderer's expected `workspaceId`; main answers `{ok: false, reason: "conflict", doc}` with the chat's current workspace document when it differs (a chat moved while its canvas flushed).
+  - Test: a save that names W1 for a chat now in W2 is a conflict, and W2's file is unchanged.
+- **A10. Entry placement checks the chat's page, not the whole canvas** (Task 6). `written-pages.ts`'s `onlyIfEmpty` tests `framesOnPage(doc, targetPage).length > 0`, where the target page is the chat's view page (A4). Test: chat B enters a workspace whose canvas has chat A's frames on page 1; B's view page is empty, and B's written pages are placed. Reword PRODUCT.md's "landing on an empty canvas" to "landing on the chat's empty page".
+- **A11. The renderer normalizes the workspace id** (Task 7). The update filter and the `localStorage` key use `persistedChatWorkspaceId(chat.workspaceId)`, so legacy chats match `"default"`.
+- **A12. One shared layout promise; the 1b handoff** (Task 3).
+  - `ensureLayout` is a single promise per store instance, so concurrent first calls on different workspace chains run the wipe once.
+  - 1b note: `viewPageId` will gain the `chatPages[chatId]` fallback between the view and the first page (§6.1).
 
 ---
 

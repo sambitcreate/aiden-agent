@@ -15,7 +15,7 @@ Why now: v1 draws HTML mockups under `design/`. People building real React apps 
 1. Frames show the **live interactive app**: dev-server routes, not HTML mockups.
 2. **One canvas per workspace.** Each design chat gets its own page on it, and Aiden can change which page a chat uses.
 3. App-frame network is **localhost only** for now.
-4. **Aiden can start and control everything** in design mode (dev server start, stop, restart, install and config) without per-call approval.
+4. **Aiden can start and control everything** in design mode (dev server start, stop, restart, install and config) without per-call approval. (Refined in §12 S2: one consent per workspace and app root before the first start, renewed when the script text changes; never per call.)
 5. A workspace with no web app: Aiden **asks before scaffolding** a small React app into the repo (§6.8).
 6. **Comment stays on C, exactly as today.** Inspect is a separate tool with its own key, X (§6.4.1).
 7. The dev server **starts by itself when the person turns design mode on** (toggle, ⇧⌘L, `/design`, or Enter on Aiden's card). It never starts just because Aiden relaunched (§6.2.3).
@@ -45,7 +45,7 @@ Standing preferences that apply: pre-1.0 means no migrations (delete old shapes)
 - Collaboration beyond what a shared workspace canvas gives (no multi-user presence).
 
 **Anti-goals** (a failure even if it technically works)
-- An app frame that reaches the internet, navigates the canvas away, or touches Aiden's own renderer.
+- An app frame whose renderer-side HTTP or WebSocket requests reach the internet, or that navigates the canvas away, touches Aiden's own renderer, or gets device permissions. Transports outside `webRequest` (WebRTC TURN over TCP) and the dev server's own server-side network are outside this guarantee; see §12 S5.
 - A dev server that keeps running after the person has left design mode everywhere in that workspace, or after quit.
 - Two chats or windows fighting over the shared canvas: page jumps, lost edits or save-conflict storms.
 - Aiden running arbitrary shell commands without approval under the "design mode" banner. Only the fixed dev-server actions skip approval (§6.2.4).
@@ -502,10 +502,10 @@ Each phase's PR updates the docs its own change makes stale (AGENTS.md). Phase 7
 - Bridge: run the real script in happy-dom (as v1 does) for inspect, measure, the source walk on a fake fiber, error capture and the once-guard.
 - E2E (Cua Space, plus the host for darwin paths):
   - A fixture Vite + React app in `tests/fixtures/design-live-app/` is started by `design_app` through the fake model. It has no dependencies of its own: the E2E setup symlinks its `node_modules` to the repo root's, which already carries `vite`, `@vitejs/plugin-react` and React 19. Detection then sees `node_modules` and skips the install, so E2E never touches the network. The install path is covered by unit tests against a fake `backgroundJobs`.
-  - Two routes appear live. An edit to a component updates both frames and shows the toast.
+  - Two routes appear live (3a). An edit to a component updates both frames and shows the toast (4).
   - The Inspect popover shows the right values.
   - A frame fetching `https://example.com` gets cancelled and shows "1 blocked".
-  - A thrown error shows Fix with Aiden.
+  - A thrown error shows Fix with Aiden (4).
   - Two chats on one workspace keep separate pages, with no page jumps.
 - Existing design specs move to the v3 file key.
 
@@ -515,22 +515,22 @@ Each row is one PR that leaves main shippable. A plan is written before each PR'
 
 | PR | Phase | Contents | Depends on | Size |
 |---|---|---|---|---|
-| 1a | Workspace canvas: document | §6.1: v3 schema (with `chatPages` parsed and the optional `chatId` on artifact frames and comments), workspace-keyed store, old per-chat files deleted, view state out of the document (renderer view store, main `DesignCanvasViews`, `designCanvas:view`), every `activePageId` reader moved to the chat's view, focus by IPC with a `pageId` instead of document writes, `designCanvas:updated {workspaceId, revision}`, artifact frames loaded through their owning chat, chat delete no longer deletes the shared file, design E2E moved to the v3 file key | — | L |
-| 1b | Workspace canvas: chat pages | §6.1: `chatPages` written (page claim on entry, renamed with the chat), `canvas_page use`, delete reassignment and `force`, comments tray filter, lifecycle (chat delete prunes its entry, queued comments and artifact frames; workspace remove and worktree delete or rollback delete the file), the two-chats E2E | 1a | M |
+| 1a | Workspace canvas: document | §6.1: v3 schema (with `chatPages` parsed and the optional `chatId` on artifact frames and comments), workspace-keyed store, old per-chat files deleted, view state out of the document (renderer view store, main `DesignCanvasViews`, `designCanvas:view`), every `activePageId` reader moved to the chat's view, focus by IPC with a `pageId` instead of document writes, `designCanvas:updated {workspaceId, revision}`, artifact frames loaded through their owning chat, comments tray filtered by chat, another chat's changes never this chat's undo steps, attaching a No workspace chat merges its canvas, chat delete no longer deletes the shared file, design E2E moved to the v3 file key | — | L |
+| 1b | Workspace canvas: chat pages | §6.1: `chatPages` written (page claim on entry, renamed with the chat), `canvas_page use`, delete reassignment and `force`, lifecycle (chat delete prunes its entry, queued comments and artifact frames; workspace remove and worktree delete or rollback delete the file), the two-chats E2E | 1a | M |
 | 2a | App server: detection | §6.2.1–6.2.2: `node-toolchain.ts` lifted out of `device-toolchain.ts`, `detectWebApp` and lockfile detection (pure) | 1b | M |
-| 2b | App server: process | §6.2.3–6.2.4: `DesignAppServers` on `backgroundJobs`, install, URL discovery, `design_app` tool and its reviewed approval exception, `design_app_started` event | 2a | L |
-| 2c | App server: UI | §6.2.3, §6.2.5: status chip and menu, read-only logs drawer, presence and the 60 s stop rule, Connect running server, the browser-panel listing | 2b | M |
-| 3a | Live frames | §6.3.1–6.3.5, §6.3.10: `app` kind, iframe and CSP, bridge injection and v2 bridge, default-session request dispatcher and loopback filter, navigation guard, blocked notice, export partition, the fixture app and live-frame E2E, the React 19 source-mapping check (§11) | 2c | XL |
-| 3b | Routes and skill | §6.3.6–6.3.7, §6.5: `discoverRoutes`, `.aiden/canvas.json`, Add ▸ Page from app, route-aware placement, the tool changes, skill and prompt rewrite, v1 mockup offers removed (`design-system.ts`, `design-system-offers.ts`), `design_app_frame_added` event | 3a | L |
+| 2b | App server: process | §6.2.3–6.2.4: `DesignAppServers` on `backgroundJobs` with a design job owner (S7), install with a completion stamp (S8), loopback binding (S14), URL discovery, start consent and permission gate (S2), `design_app` tool and its reviewed approval exception, presence and the 60 s stop rule (moved from 2c, S6), `design_app_started` event | 2a | L |
+| 2c | App server: UI | §6.2.3, §6.2.5: status chip and menu, read-only logs drawer, Connect running server (with S15's consent for repo-supplied URLs), the browser-panel listing | 2b | M |
+| 3a | Live frames | §6.3.1–6.3.5, §6.3.10: `app` kind, iframe (no `allow-modals`, S10) and CSP, a minimal `canvas_place_frame kind app` (S6), bridge injection and v2 bridge with untrusted-output handling (S11) and Vite-client HMR (S12), default-session request dispatcher with the fail-closed null-frame rule (S3), subframe redirect handling (S1), permission dispatcher shared with Gemini Live (S9), cookie handling for `file://` builds (S4), navigation guard, blocked notice, export on the default session (S13), the fixture app and live-frame E2E, the React 19 source-mapping check (§11) | 2c | XL |
+| 3b | Routes and skill | §6.3.6–6.3.7, §6.5: `discoverRoutes`, `.aiden/canvas.json`, Add ▸ Page from app, route-aware placement, the rest of the tool changes, skill and prompt rewrite for live apps (the v1 mockup path stays until 3d), `design_app_frame_added` event | 3a, DM | L |
 | 3c | Viewports and actions | §6.3.8–6.3.9: edge-drag reflow and breakpoint ticks, device menu, Add view at width, ⌘D variant, delete page to Trash | 3a | M |
-| 3d | Mock apps | §6.8: `resources/design-app-template/`, the two ask-first flows, stubs and aliases for `react-nonweb`, Node-missing and install-failed states | 3b | L |
-| DM | DESIGN.md | §6.9: pinned `@google/design.md/linter`, lookup and `apps[].designMd`, cached lint, `design_system` tool, prompt line, Draft DESIGN.md flow, the starter file in the mock template, `design_md_*` events | 2a (can run beside 3) | L |
+| 3d | Mock apps | §6.8: `resources/design-app-template/` with its starter `DESIGN.md` and `theme.css` (moved from DM, S6), the two ask-first flows, stubs and aliases for `react-nonweb`, Node-missing and install-failed states, and the v1 mockup path removed (`design-system.ts`, `design-system-offers.ts`, the skill text; moved from 3b, S6) | 3b, DM | L |
+| DM | DESIGN.md | §6.9: pinned `@google/design.md/linter`, lookup and `apps[].designMd`, cached lint, `design_system` tool (outputs fenced as data, S11), prompt line, Draft DESIGN.md flow, `design_md_*` events | 2a (lands before 3b) | L |
 | 4 | See and point | §6.4: Inspect (X), measure, element chips, change toasts, error frames with Fix with Aiden, ⌘F, minimap, Tidy up, Copy as image, `design_inspect`, `design_point_used` event | 3a (can run beside 3b) | L |
 | 5 | Explore and consistency | §6.6: directions and Adopt, token sources and drift, code drift against DESIGN.md, consistency check, Styles frame, `design_drift_checked` and `design_direction_adopted` events | 3b, DM, 4 | L |
-| 7 | Launch | §6.11: onboarding tile and `DesignModeArt` redraw, final pass over `docs/design-mode.md` and `docs/keyboard.md` | 5 | M |
+| 7 | Launch | §6.11: turn the live-app flag on by default (S6), onboarding tile and `DesignModeArt` redraw, final pass over `docs/design-mode.md` and `docs/keyboard.md` | 5 | M |
 | 6 | Component cards | §6.7: spike, own spec, build | independent, last | XL |
 
-1a and 1b are the foundation and land first. The 2 PRs and 3a are sequential. After 3a, 3b, 3c, 4 and DM can run in parallel, as long as no more than three or four agents are working at once.
+1a and 1b are the foundation and land first, unflagged. Everything from 2b to 5 ships behind `AIDEN_EXPERIMENTAL_DESIGN_LIVE` (default off) until Phase 7 turns it on, so main never shows a half-built live canvas and onboarding changes once, with the launch (S6). The 2 PRs and 3a are sequential. DM can run beside 2b–3a and must land before 3b. After 3a, 3b, 3c and 4 can run in parallel, as long as no more than three or four agents are working at once.
 
 ## 9. Risks and open questions
 
@@ -567,3 +567,34 @@ These were checked against the code and the registry before Phase 1 started.
    - never touched: any main-window request.
 
    The E2E checks the "1 blocked" label.
+
+## 12. Spec review amendments (2026-11-23)
+
+An adversarial review checked this spec against the code and Electron 43's typings. Each finding below was verified. Where an amendment and an earlier section disagree, the amendment wins. Each names the PR that owns it; §8's table already reflects them.
+
+- **S1. Subframe redirects (3a; blocker).** The main window's `will-redirect` handler (`main/index.ts` ~1945) calls `preventDefault()` and `openExternalUrl` for every redirect, subframes included. A live app's ordinary `/` → `/login` redirect would break the frame and open a browser tab. A `302` to an external URL would put page data on the internet through `shell.openExternal`. 3a limits that handler to `isMainFrame`. Subframe redirects go to the frame guard: loopback → loopback is allowed, anything else is cancelled and counted as blocked. Test rows: loopback → external redirect on a navigation and on a `fetch`.
+- **S2. Dev-server start consent (2b; blocker).** The script name is fixed, but its text is not: Aiden (or a prompt injection) can edit `"dev"` or the Vite config, then restart. Install runs dependency lifecycle scripts. So:
+  - **Consent:** before the first start for each workspace + app root, the person sees one consent card naming the resolved command and the script's text. Aiden stores a hash of the text and asks again whenever it changes. After that, starts, stops and restarts need no per-call approval (decision 4).
+  - **Script:** `design_app` may only use the script the person confirmed. `choose` changes it only through the same card.
+  - **Permission:** every start, the person's toggle included, is refused when the workspace permission is `read-only` or `none`.
+  - **Recorded exception:** `workspace-tool-approval.ts` records it as "per-call approval skipped after workspace consent".
+- **S3. Null-frame requests fail closed (3a; blocker).** Electron's `OnBeforeRequestListenerDetails` has no initiator, and `frame` is null after a frame navigates or is destroyed (keepalive fetch from a removed iframe, beacon on pagehide, service-worker fetch). On the default session, every non-loopback request with a null `frame` is cancelled. The only exceptions are on an audited allowlist of Aiden's own frameless traffic, with tests. Test rows: service-worker fetch, pagehide beacon, keepalive fetch after removing the iframe, WebSocket.
+- **S4. Cookies in packaged builds (3a).** Packaged builds load the renderer from `file://` (`window-paths.ts`), so a localhost iframe is cross-site, and `SameSite=Lax/Strict` cookies (the default) are rejected. Session-login apps can't sign in, but only in packaged builds: `npm run dev` hides it. 3a adds a cookie-login fixture tested in a `file://` build, and tries rewriting a registered app origin's `Set-Cookie` to `SameSite=None; Secure` in `onHeadersReceived`, which the dispatcher then also owns. If that fails, it's documented as a known limit in `docs/design-mode.md`.
+- **S5. What the network guarantee covers.** The filter covers renderer-side HTTP and WebSocket requests from app frames. It does not cover WebRTC TURN over TCP (no `webRequest` event; see `main/index.ts` ~1664) or the dev server's own server-side requests (SSR, proxies, rewrites). Both are known gaps; the §5.1 B proxy is the route to a full guarantee. §3's anti-goal is reworded to match.
+- **S6. Sequencing (all).** Changes to the PR order:
+  - presence and the 60 s stop move into 2b, so a tool-started server is never left running unseen;
+  - 3a gets a minimal `canvas_place_frame kind app`, so its E2E can place frames;
+  - the mock template's starter `DESIGN.md` moves to 3d, after DM;
+  - the v1 mockup path is removed in 3d, not 3b, so non-web workspaces can always design;
+  - DM lands before 3b, whose skill text uses `design_system`;
+  - the toast and Fix with Aiden E2E steps belong to 4;
+  - 2b–5 ship behind `AIDEN_EXPERIMENTAL_DESIGN_LIVE` until Phase 7 turns it on and updates onboarding.
+- **S7. A design job owner (2b).** `backgroundJobs` posts a job-ended notice that wakes the owning chat (`follow-through-main.ts` ~161–186), lists the job in that chat's `background_job` tool, and stops the job when the chat is deleted. For the dev server, that would start unasked turns, let the agent stop it behind `DesignAppServers`' back, and kill it for every chat when one chat is deleted. Jobs therefore get an owner kind `design`: no `onEnded` wake (`DesignAppServers` shows the end in its status), hidden from `background_job`, and a lifetime tied to workspace presence and quit, not to a chat.
+- **S8. Install completion stamp (2b).** "Does `node_modules` exist?" can't tell a stopped or killed install from a finished one. After an install exits 0, `DesignAppServers` records a stamp (app root + lockfile hash) under userData. A missing or stale stamp means reinstall. The status chip offers Retry after a failed install.
+- **S9. Permission dispatcher (3a).** The default session has no permission handler, so Electron grants by default. Gemini Live sets and then clears (`null`) its own handlers (`display-media-contract.ts`). 3a adds one default-session permission dispatcher that Gemini Live registers through. It denies every request and check from a frame under a registered app origin. Tested with Live bound and unbound.
+- **S10. No `allow-modals` (3a).** App frames use `sandbox="allow-scripts allow-same-origin allow-forms"`. Without this, `alert`/`confirm`/`prompt` loops could lock the Aiden window. The bridge reports suppressed dialogs in the frame status.
+- **S11. Bridge output is untrusted (3a, 4, DM).** The bridge runs in the page's main world, which can pre-empt or spoof it. Every bridge message is validated for shape and length. A `file:line` is accepted only if it resolves inside the app root. Error, source and inspect text reaches Aiden fenced as data (as `fenceAsData` does), and `design_inspect` results are labelled page-reported. The once-guard must not trust a page-set `__aidenBridge`: it checks a per-injection nonce.
+- **S12. HMR signal (3a, 4).** `vite:afterUpdate` reaches only module code, webpack's `module.hot` is per module, and Next 16 defaults to Turbopack. The bridge gets a Vite hot context by importing `/@vite/client` (respecting `base`) and calling `createHotContext`. Other frameworks count "the watcher saw a save, then the frame's DOM changed and settled" as updated.
+- **S13. Export (3a).** Export renders app frames in a hidden window on the default session, under the same dispatchers, so cookies and storage match the canvas. (The offline proxy pattern would block loopback.) Remove "for tweaks" from §6.3.10: tweaks are for `file` frames only (§6.3.3), so anti-goal 5's "tweaks keep working" applies to `file` frames.
+- **S14. Bind to loopback (2b).** Next.js and create-react-app bind `0.0.0.0` by default. When Aiden starts a server, it passes the framework's host flag or env (`--hostname 127.0.0.1`, `HOST=127.0.0.1`, Vite `--host 127.0.0.1`), so design mode never exposes the app to the local network.
+- **S15. Two allowlist openings closed (2c, 3a).** `aiden-design:` is removed from app frames' allowlist and added to the cancelled test rows; the bridge arrives through `executeJavaScript`, not that scheme. A repo-supplied `apps[].url` in `.aiden/canvas.json` needs the S2 consent before it is registered as an app origin.
