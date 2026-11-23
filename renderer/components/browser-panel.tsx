@@ -191,7 +191,8 @@ export function BrowserPanel({ workspaceId, active, onDock, integratedTabs = fal
 
   useLayer(grabActive, "panel", {
     name: "browser-grab",
-    onEscape: () => {
+    onEscape: (event) => {
+      event.preventDefault();
       if (tab) void run({ action: "grab", tabId: tab.id, enabled: false });
     },
   });

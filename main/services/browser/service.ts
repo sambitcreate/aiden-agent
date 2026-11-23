@@ -117,6 +117,7 @@ import { loadBrowserUrl } from "./navigation-load.js";
 import { configStore } from "../config-store.js";
 import { browserRecordingBytesMatch, browserRecordingsFolder, findBrowserRecording } from "./recordings.js";
 import { browserRecordingExtension } from "../../../renderer/shared/browser-recording.js";
+import { reportAnalyticsEvent } from "../analytics/analytics-report.js";
 import { writeFileAtomic } from "../durable-fs.js";
 import { projectDiagnosticError } from "../diagnostics-contract.js";
 import { writeDiagnosticEvent } from "../diagnostic-journal.js";
@@ -2577,10 +2578,11 @@ export class BrowserService {
         ).catch(() => undefined);
         if (tab.grab?.token !== token) return;
 
-        // Analytics hook point (wired with `browser_element_grabbed` once analytics-events merges):
-        // kind: sanitized.element.framework === "dom" ? "dom" : "react", source: grabSource
         const grabSource = tab.grab.source;
-        void grabSource;
+        reportAnalyticsEvent("browser_element_grabbed", {
+          kind: sanitized.element.framework === "dom" ? "dom" : "react",
+          source: grabSource,
+        });
 
         this.emit(tab.state.workspaceId, {
           type: "grab",

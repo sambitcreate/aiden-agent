@@ -17,6 +17,7 @@ import {
   grabbedElementsRepresentationBytes,
   type GrabbedElementContextV1,
 } from "../../renderer/shared/browser-element-grab.js";
+import { materializeGrabbedElementDraft } from "../../renderer/lib/browser-element-grab-delivery.js";
 import { parseChatCancelOrigin } from "../services/chat-cancel.js";
 import { ChatTurnAdmission } from "../services/chat-turn-admission.js";
 import { subagentsAllowedForGeneration } from "../services/subagents/eligibility.js";
@@ -464,4 +465,36 @@ test("parseChatFirstMessage allows empty content when grabbedElements are attach
       }),
     /Add a message or attachment/u,
   );
+});
+
+test("materializeGrabbedElementDraft output passes strict parseChatAppend and parseChatFirstMessage validation", () => {
+  const element = validGrabbedElement({ id: "el_draft_wire", thumbnailAttachmentId: undefined });
+  const draft = materializeGrabbedElementDraft(
+    {
+      element,
+      thumbnail: { data: TINY_PNG_BASE64, mimeType: "image/png", width: 1, height: 1 },
+    },
+    [],
+    [],
+  );
+  assert.equal(draft.accepted, true);
+  assert.equal(draft.attachments.length, 1);
+
+  const appended = parseChatAppend(
+    "chat-1",
+    { role: "user", content: "Tighten padding", attachments: draft.attachments, grabbedElements: draft.elements },
+    { turnId: "turn-draft-wire" },
+  );
+  assert.equal(appended.attachments?.length, 1);
+  assert.equal(appended.grabbedElements?.length, 1);
+  assert.equal(appended.grabbedElements?.[0]?.thumbnailAttachmentId, grabbedElementThumbnailId("el_draft_wire"));
+
+  const first = parseChatFirstMessage({
+    draftId: "22222222-2222-4222-8222-222222222222",
+    workspaceId: "workspace-1",
+    turnId: "turn-draft-first",
+    message: { role: "user", content: "", attachments: draft.attachments, grabbedElements: draft.elements },
+  });
+  assert.equal(first.attachments?.length, 1);
+  assert.equal(first.grabbedElements?.length, 1);
 });

@@ -401,7 +401,7 @@ export function GrabbedElementChip({
         }}
         onPointerEnter={clearHoverTimer}
         onPointerLeave={scheduleHoverClose}
-        className="w-[min(92vw,312px)] rounded-popover border-0 bg-popover p-3 text-primary shadow-popover outline-none"
+        className="max-h-[min(70vh,520px)] w-[min(92vw,312px)] overflow-y-auto rounded-popover border-0 bg-popover p-3 text-primary shadow-popover outline-none"
       >
         <div className="flex items-center justify-between gap-2">
           <div className="flex min-w-0 items-center gap-1.5">

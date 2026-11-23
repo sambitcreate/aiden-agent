@@ -80,12 +80,6 @@ export function grabbedElementThumbnailAttachments(
     mimeType: capture.thumbnail.mimeType,
     data: capture.thumbnail.data,
     size: validated.bytes,
-    ...(Number.isSafeInteger(capture.thumbnail.width) && capture.thumbnail.width > 0
-      ? { width: capture.thumbnail.width }
-      : {}),
-    ...(Number.isSafeInteger(capture.thumbnail.height) && capture.thumbnail.height > 0
-      ? { height: capture.thumbnail.height }
-      : {}),
   };
   return { attachments: [attachment], imageSkipped: false };
 }

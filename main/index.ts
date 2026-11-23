@@ -2427,6 +2427,9 @@ if (!ownsSingleInstanceLock) {
       // registered before the window loads: a page only reaches the schemes handled when it
       // loaded, so the canvas's own <img> frames would otherwise fail with an unknown scheme.
       if (designModeEnabled()) startDesignProtocol();
+      // Stored chat images load via aiden-attachment:// <img> tags in the main window, so the
+      // handler must exist before the document commits (same Electron URLLoaderFactory rule).
+      registerChatAttachmentProtocol();
       initialMainWindow = createMainWindow({ startupAdmissionHeld: true });
       // Observed below after reconciliation; never an unhandled rejection.
       initialMainWindow.catch(() => undefined);
@@ -2465,7 +2468,6 @@ if (!ownsSingleInstanceLock) {
       await displayImageArtifactStore.initialize();
       await generativeUiArtifactStore.initialize();
       registerGenerativeUiProtocol();
-      registerChatAttachmentProtocol();
       // Remove picture files left behind by chats deleted while Aiden was closed.
       chatStore.scheduleImageSweep();
       // Phones and other clients that cannot draw a visual get its snapshot.
