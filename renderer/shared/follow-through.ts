@@ -7,8 +7,12 @@ import type { BackgroundJobView } from "./background-jobs.js";
 
 export const FOLLOW_THROUGH_VERSION = 1;
 
-/** Updates one followed pull request may send to the chat. */
-export const MAX_PULL_REQUEST_FOLLOW_NOTICES = 10;
+/**
+ * Updates in a row that bring only comments before a follow stops, so a bot
+ * that answers every reply can't keep the agent busy forever. News about
+ * checks, a conflict or a new commit starts the count again.
+ */
+export const MAX_COMMENT_ONLY_FOLLOW_UPDATES = 10;
 /** Pull requests one chat may follow at once. */
 export const MAX_PULL_REQUEST_FOLLOWS_PER_CHAT = 3;
 /** Times a "done when" check runs before Aiden stops asking the agent to keep going. */
@@ -20,9 +24,12 @@ export type PullRequestFollowEndReason =
   | "closed"
   /** Nothing new for two weeks. */
   | "quiet"
-  /** Checks kept failing for an hour after the agent heard about them. */
+  /** Saved by older versions: checks kept failing for an hour after the agent heard about them. */
   | "failing"
+  /** Saved by older versions: the follow sent its tenth update. */
   | "notice-limit"
+  /** Ten updates in a row brought only comments. */
+  | "comment-limit"
   | "person"
   | "agent"
   | "access-changed"

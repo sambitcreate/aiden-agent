@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { describe, test } from "node:test";
 import type { AgentMessage, AgentTool } from "@earendil-works/pi-agent-core";
 import { Type } from "typebox";
-import { assembleChatPrompt, type ChatPromptAssemblyInput } from "./chat-prompt-assembly.js";
+import { assembleChatPrompt, buildWorkspaceChatBasePrompt, type ChatPromptAssemblyInput } from "./chat-prompt-assembly.js";
 import { createMemoryExtension } from "./memory-context.js";
 import type { MemoryFact, MemoryScope, MemoryStore } from "./memory-store.js";
 import { LOAD_TOOLS_TOOL_NAME } from "./on-demand-tools.js";
@@ -131,5 +131,23 @@ describe("chat prompt assembly", () => {
     const declared = names(assemble({ tools: [...everyday, tool("classify")] }).toolsFor([]));
     assert.ok(declared.includes("classify"));
     assert.ok(!declared.includes(LOAD_TOOLS_TOOL_NAME));
+  });
+});
+
+describe("workspace base prompt", () => {
+  const base = (permission: "full" | "ask" | "read-only", tools: string[]) =>
+    buildWorkspaceChatBasePrompt({
+      folderPath: "/workspace/project",
+      branch: "main",
+      permission,
+      tools: tools.map((name) => ({ name })),
+    }).then((result) => result.systemPrompt);
+
+  test("a chat that can follow pull requests is told to follow one when it sees work through", async () => {
+    for (const permission of ["full", "ask"] as const) {
+      assert.match(await base(permission, ["read_file", "follow_pull_request"]), /see through or merge work .* call follow_pull_request/u);
+    }
+    assert.doesNotMatch(await base("full", ["read_file"]), /follow_pull_request/u, "not without the tool");
+    assert.doesNotMatch(await base("read-only", ["read_file", "follow_pull_request"]), /follow_pull_request/u, "not in a read-only run");
   });
 });

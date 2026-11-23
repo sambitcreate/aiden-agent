@@ -1,7 +1,9 @@
 // GitHub reads for a followed pull request: one GraphQL read for the pull
 // request, its checks, comments and reviews; the end of a failed Actions job's
 // log; and who may write to the repository. Comment authors are trusted only
-// when they own the repository or GitHub says they can write to it.
+// when they own the repository, GitHub says they can write to it, or they are
+// a review bot: a GitHub app account not on the skip list of deploy, coverage
+// and dependency bots, which post status rather than findings.
 //
 // Before the full read, a probe asks GitHub with If-None-Match whether the
 // pull request, its head commit's check runs or its commit statuses changed.
@@ -21,6 +23,18 @@ const PERMISSION_TTL_MS = 60 * 60_000;
 const WRITE_ROLES = new Set(["admin", "maintain", "write"]);
 /** Associations that can come with write access; GitHub is asked to be sure. */
 const MAYBE_WRITE = new Set(["MEMBER", "COLLABORATOR"]);
+/**
+ * App accounts whose comments are deploy previews, coverage reports or
+ * dependency notes rather than review findings. Logins as GraphQL gives them
+ * (without the REST `[bot]` suffix), lowercase.
+ */
+export const SKIPPED_BOT_LOGINS: ReadonlySet<string> = new Set([
+  "vercel",
+  "netlify",
+  "codecov",
+  "github-actions",
+  "dependabot",
+]);
 
 const FOLLOW_QUERY = `query AidenFollowPullRequest($owner: String!, $name: String!, $number: Int!) {
   viewer { login }
@@ -29,9 +43,9 @@ const FOLLOW_QUERY = `query AidenFollowPullRequest($owner: String!, $name: Strin
     owner { login }
     pullRequest(number: $number) {
       ...AidenPullRequest
-      comments(last: 30) { nodes { id author { login } authorAssociation body createdAt url } }
-      reviews(last: 30) { nodes { id author { login } authorAssociation state body submittedAt url
-        comments(first: 20) { nodes { id author { login } authorAssociation body createdAt url path } } } }
+      comments(last: 30) { nodes { id author { __typename login } authorAssociation body createdAt url } }
+      reviews(last: 30) { nodes { id author { __typename login } authorAssociation state body submittedAt url
+        comments(first: 20) { nodes { id author { __typename login } authorAssociation body createdAt url path } } } }
     }
   }
 }
@@ -57,6 +71,8 @@ interface RawComment {
   id: string;
   kind: FollowedComment["kind"];
   author: string;
+  /** GitHub reports the author as an app account. */
+  bot: boolean;
   association: string;
   body: string;
   url?: string;
@@ -92,6 +108,7 @@ function rawComment(node: unknown, kind: FollowedComment["kind"], timeField: str
     id,
     kind,
     author,
+    bot: isRecord(node.author) && node.author.__typename === "Bot",
     association: boundedString(node.authorAssociation, 40) ?? "NONE",
     body: commentBody(node.body),
     ...(url ? { url } : {}),
@@ -155,6 +172,11 @@ function retryable(result: GitHubApiResult<unknown>): FollowReadResult {
     default:
       return { kind: "retry", message: "message" in result && result.message ? result.message : "GitHub could not be read." };
   }
+}
+
+/** An app account whose comments count as review findings. */
+export function isReviewBot(login: string): boolean {
+  return !SKIPPED_BOT_LOGINS.has(login.toLowerCase().replace(/\[bot\]$/u, ""));
 }
 
 export interface FollowProbe {
@@ -229,6 +251,7 @@ export class PullRequestFollowReader {
         kind: comment.kind,
         author: comment.author,
         trusted,
+        ...(comment.bot ? { bot: true } : {}),
         ...(viewer && comment.author.toLowerCase() === viewer.toLowerCase() ? { byViewer: true } : {}),
         body: comment.body,
         ...(comment.url ? { url: comment.url } : {}),
@@ -322,6 +345,7 @@ export class PullRequestFollowReader {
     signal?: AbortSignal,
   ): Promise<boolean> {
     const login = comment.author.toLowerCase();
+    if (comment.bot) return isReviewBot(login);
     if (comment.association === "OWNER" || login === repositoryOwner) return true;
     // The signed-in account's own comments: the person writing on GitHub.
     if (viewer && login === viewer.toLowerCase()) return true;
