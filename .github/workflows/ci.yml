@@ -307,6 +307,14 @@ jobs:
       - name: Install Linux test dependencies
         if: ${{ runner.os == 'Linux' }}
         run: sudo apt-get update && sudo apt-get install --yes rpm xvfb pkg-config libsecret-1-dev libselinux1-dev gnome-keyring dbus-x11
+      - name: Allow the browser sandbox on Linux
+        if: ${{ runner.os == 'Linux' }}
+        # Ubuntu 24.04 blocks unprivileged user namespaces through AppArmor, so
+        # a sandboxed headless Chrome (the CLI's server-visuals test) can't
+        # start and the render times out. Re-enable the namespace sandbox at
+        # the runner level, as the Linux E2E job does, rather than turning the
+        # browser's sandbox off.
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
       - name: Install locked dependencies
         run: npm ci
       - name: Install Playwright Chromium for containment
